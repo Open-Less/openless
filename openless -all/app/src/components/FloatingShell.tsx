@@ -13,7 +13,8 @@ import { History } from '../pages/History';
 import { Vocab } from '../pages/Vocab';
 import { Style } from '../pages/Style';
 import { APP_VERSION_LABEL } from '../lib/appVersion';
-import { getCredentials, openExternal } from '../lib/ipc';
+import { getHotkeyTriggerLabel } from '../lib/hotkey';
+import { getCredentials, getSettings, openExternal } from '../lib/ipc';
 import { OL_DATA } from '../lib/mockData';
 import {
   PROVIDER_SETUP_PROMPT_SEEN_KEY,
@@ -55,13 +56,17 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
   const { currentTab, setCurrentTab, settingsOpen, setSettingsOpen } = useAppState(initialTab, initialSettings);
   const [settingsInitialSection, setSettingsInitialSection] = useState<SettingsSectionId | undefined>();
   const [providerPromptOpen, setProviderPromptOpen] = useState(false);
+  const [hotkeyLabel, setHotkeyLabel] = useState(() => getHotkeyTriggerLabel(null));
   const Page = (NAV.find((n) => n.id === currentTab) ?? NAV[0]).cmp;
-  const hotkeyLabel = os === 'win' ? '右 Alt' : '右 Option';
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       const credentials = await getCredentials();
+      const prefs = await getSettings();
+      if (!cancelled) {
+        setHotkeyLabel(getHotkeyTriggerLabel(prefs.hotkey.trigger));
+      }
       const promptSeenValue = window.localStorage.getItem(PROVIDER_SETUP_PROMPT_SEEN_KEY);
       if (!cancelled && shouldShowProviderSetupPrompt(credentials, promptSeenValue)) {
         setProviderPromptOpen(true);

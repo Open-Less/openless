@@ -126,6 +126,7 @@ pub fn run() {
             commands::get_settings,
             commands::set_settings,
             commands::get_hotkey_status,
+            commands::get_hotkey_capability,
             commands::get_credentials,
             commands::set_credential,
             commands::list_history,
@@ -297,13 +298,21 @@ pub(crate) fn restore_main_window_key_if_active<R: Runtime>(app: &AppHandle<R>) 
         use objc2::msg_send;
         use objc2::runtime::{AnyClass, AnyObject, Bool};
         unsafe {
-            let Some(cls) = AnyClass::get("NSApplication") else { return };
+            let Some(cls) = AnyClass::get("NSApplication") else {
+                return;
+            };
             let ns_app: *mut AnyObject = msg_send![cls, sharedApplication];
-            if ns_app.is_null() { return; }
+            if ns_app.is_null() {
+                return;
+            }
             let is_active: Bool = msg_send![ns_app, isActive];
-            if !is_active.as_bool() { return; }
+            if !is_active.as_bool() {
+                return;
+            }
             let main_win: *mut AnyObject = msg_send![ns_app, mainWindow];
-            if main_win.is_null() { return; }
+            if main_win.is_null() {
+                return;
+            }
             let _: () = msg_send![main_win, makeKeyWindow];
         }
     });

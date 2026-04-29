@@ -2,9 +2,9 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { Icon } from '../components/Icon';
-import { detectOS } from '../components/WindowChrome';
-import { getCredentials, listHistory } from '../lib/ipc';
-import type { CredentialsStatus, DictationSession, PolishMode } from '../lib/types';
+import { getHotkeyTriggerLabel } from '../lib/hotkey';
+import { getCredentials, getSettings, listHistory } from '../lib/ipc';
+import type { CredentialsStatus, DictationSession, HotkeyBinding, PolishMode } from '../lib/types';
 import { Btn, Card, PageHeader, Pill } from './_atoms';
 
 const MODE_LABEL: Record<PolishMode, string> = {
@@ -24,12 +24,12 @@ export function Overview({ onOpenHistory }: OverviewProps) {
     volcengineConfigured: false,
     arkConfigured: false,
   });
-  const os = detectOS();
-  const hotkeyLabel = os === 'win' ? '右 Alt' : '右 Option';
+  const [hotkey, setHotkey] = useState<HotkeyBinding | null>(null);
 
   useEffect(() => {
     listHistory().then(setHistory);
     getCredentials().then(setCreds);
+    getSettings().then(p => setHotkey(p.hotkey));
   }, []);
 
   const metrics = useMemo(() => {
@@ -83,7 +83,7 @@ export function Overview({ onOpenHistory }: OverviewProps) {
               background: '#fff', borderRadius: 5,
               border: '0.5px solid var(--ol-line-strong)',
               color: 'var(--ol-ink)',
-            }}>{hotkeyLabel}</kbd>
+            }}>{getHotkeyTriggerLabel(hotkey?.trigger)}</kbd>
             开始录音
           </div>
         }
@@ -131,7 +131,7 @@ export function Overview({ onOpenHistory }: OverviewProps) {
           <div>
             {history.length === 0 && (
               <div style={{ padding: 24, textAlign: 'center', fontSize: 12, color: 'var(--ol-ink-4)' }}>
-                还没有记录。按 {hotkeyLabel} 开始第一次录音。
+                还没有记录。按 {getHotkeyTriggerLabel(hotkey?.trigger)} 开始第一次录音。
               </div>
             )}
             {history.slice(0, 5).map(s => (

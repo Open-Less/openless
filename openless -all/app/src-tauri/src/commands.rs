@@ -8,8 +8,8 @@ use crate::coordinator::Coordinator;
 use crate::permissions::{self, PermissionStatus};
 use crate::persistence::{CredentialAccount, CredentialsSnapshot, CredentialsVault};
 use crate::types::{
-    CredentialsStatus, DictationSession, DictionaryEntry, HotkeyStatus, PolishMode,
-    UserPreferences,
+    CredentialsStatus, DictationSession, DictionaryEntry, HotkeyCapability, HotkeyStatus,
+    PolishMode, UserPreferences,
 };
 
 type CoordinatorState<'a> = State<'a, Arc<Coordinator>>;
@@ -31,6 +31,11 @@ pub fn set_settings(coord: CoordinatorState<'_>, prefs: UserPreferences) -> Resu
 #[tauri::command]
 pub fn get_hotkey_status(coord: CoordinatorState<'_>) -> HotkeyStatus {
     coord.hotkey_status()
+}
+
+#[tauri::command]
+pub fn get_hotkey_capability(coord: CoordinatorState<'_>) -> HotkeyCapability {
+    coord.hotkey_capability()
 }
 
 #[tauri::command]

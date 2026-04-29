@@ -45,11 +45,30 @@ export interface HotkeyBinding {
   mode: HotkeyMode;
 }
 
+export type HotkeyAdapterKind = 'macEventTap' | 'windowsLowLevel' | 'rdev';
+
+export interface HotkeyCapability {
+  adapter: HotkeyAdapterKind;
+  availableTriggers: HotkeyTrigger[];
+  requiresAccessibilityPermission: boolean;
+  supportsModifierOnlyTrigger: boolean;
+  supportsSideSpecificModifiers: boolean;
+  explicitFallbackAvailable: boolean;
+  statusHint: string | null;
+}
+
+export interface HotkeyInstallError {
+  code: string;
+  message: string;
+}
+
 export type HotkeyStatusState = 'starting' | 'installed' | 'failed';
 
 export interface HotkeyStatus {
+  adapter: HotkeyAdapterKind;
   state: HotkeyStatusState;
   message: string | null;
+  lastError: HotkeyInstallError | null;
 }
 
 export interface UserPreferences {

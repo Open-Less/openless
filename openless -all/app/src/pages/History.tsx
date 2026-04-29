@@ -4,8 +4,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Icon } from '../components/Icon';
 import { detectOS } from '../components/WindowChrome';
-import { clearHistory, deleteHistoryEntry, listHistory } from '../lib/ipc';
-import type { DictationSession, PolishMode } from '../lib/types';
+import { getHotkeyTriggerLabel } from '../lib/hotkey';
+import { clearHistory, deleteHistoryEntry, getSettings, listHistory } from '../lib/ipc';
+import type { DictationSession, HotkeyBinding, PolishMode } from '../lib/types';
 import { Btn, Card, PageHeader, Pill } from './_atoms';
 
 const FILTERS: Array<{ id: 'all' | PolishMode; label: string }> = [
@@ -28,7 +29,7 @@ export function History() {
   const [items, setItems] = useState<DictationSession[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const hotkeyLabel = detectOS() === 'win' ? '右 Alt' : '右 Option';
+  const [hotkey, setHotkey] = useState<HotkeyBinding | null>(null);
 
   const refresh = async () => {
     const data = await listHistory();
@@ -41,6 +42,7 @@ export function History() {
 
   useEffect(() => {
     refresh();
+    getSettings().then(p => setHotkey(p.hotkey));
   }, []);
 
   const filtered = useMemo(
@@ -116,7 +118,7 @@ export function History() {
             {loading && <div style={{ padding: 16, fontSize: 12, color: 'var(--ol-ink-4)' }}>加载中…</div>}
             {!loading && filtered.length === 0 && (
               <div style={{ padding: 16, fontSize: 12, color: 'var(--ol-ink-4)' }}>
-                还没有历史记录。按 {hotkeyLabel} 录一段试试。
+                还没有历史记录。按 {getHotkeyTriggerLabel(hotkey?.trigger)} 录一段试试。
               </div>
             )}
             {filtered.map(s => (

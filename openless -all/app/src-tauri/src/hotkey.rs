@@ -4,24 +4,29 @@
 //!   `OpenLessHotkey/HotkeyMonitor.swift` 同源。**不能用 `rdev`**：rdev 在每个
 //!   事件回调里同步调 `TSMGetInputSourceProperty`，macOS 14+ 强制断言主线程，
 //!   非主线程触发 `dispatch_assert_queue_fail` → SIGTRAP abort（已踩坑）。
-//! - 其他平台：继续用 `rdev::listen`（Linux/Windows 的 listen 路径不依赖 TSM）。
+//! - Windows：原生 `WH_KEYBOARD_LL` low-level keyboard hook，保留 modifier-only
+//!   trigger（如右 Control / 右 Alt）的真实语义，不再把平台能力藏在 `rdev` 抽象里。
+//! - Linux / 其他：继续 best-effort 走 `rdev::listen`。
 //!
 //! 仅产出"边沿"事件，toggle vs hold 由 Coordinator 解释。
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::Sender;
-use std::sync::Arc;
-use std::thread;
 
 use parking_lot::RwLock;
 
-use crate::types::HotkeyBinding;
+use crate::types::{HotkeyAdapterKind, HotkeyBinding, HotkeyCapability, HotkeyInstallError};
 
 #[derive(Clone, Copy, Debug)]
 pub enum HotkeyEvent {
     Pressed,
     Released,
     Cancelled,
+}
+
+pub trait HotkeyAdapter: Send + Sync {
+    fn kind(&self) -> HotkeyAdapterKind;
+    fn update_binding(&self, binding: HotkeyBinding);
 }
 
 struct Shared {
@@ -31,38 +36,45 @@ struct Shared {
 }
 
 pub struct HotkeyMonitor {
-    shared: Arc<Shared>,
+    adapter: Box<dyn HotkeyAdapter>,
 }
 
 impl HotkeyMonitor {
     /// Spawn the listener thread and **wait synchronously** for it to confirm
-    /// the OS-level hook installed (CGEventTap on macOS / rdev::listen otherwise).
-    /// Returns Err if installation failed (typically Accessibility not granted on macOS),
-    /// so the caller can schedule a retry instead of silently dropping events.
-    pub fn start(binding: HotkeyBinding, tx: Sender<HotkeyEvent>) -> anyhow::Result<Self> {
-        let shared = Arc::new(Shared {
-            binding: RwLock::new(binding),
-            trigger_held: AtomicBool::new(false),
-        });
-
-        let thread_shared = Arc::clone(&shared);
-        let (status_tx, status_rx) = std::sync::mpsc::channel::<bool>();
-        thread::Builder::new()
-            .name("openless-hotkey".into())
-            .spawn(move || platform::run_listen_loop(thread_shared, tx, status_tx))?;
-
-        match status_rx.recv_timeout(std::time::Duration::from_secs(3)) {
-            Ok(true) => Ok(Self { shared }),
-            Ok(false) => Err(anyhow::anyhow!(
-                "hotkey hook 安装失败（macOS 多半是辅助功能权限未授予）"
-            )),
-            Err(_) => Err(anyhow::anyhow!("hotkey hook 启动超时")),
-        }
+    /// the OS-level hook installed so the caller can surface an actual adapter
+    /// status instead of silently dropping events.
+    pub fn start(
+        binding: HotkeyBinding,
+        tx: Sender<HotkeyEvent>,
+    ) -> Result<Self, HotkeyInstallError> {
+        Ok(Self {
+            adapter: platform::start_adapter(binding, tx)?,
+        })
     }
 
     pub fn update_binding(&self, binding: HotkeyBinding) {
-        *self.shared.binding.write() = binding;
-        self.shared.trigger_held.store(false, Ordering::SeqCst);
+        self.adapter.update_binding(binding);
+    }
+
+    pub fn kind(&self) -> HotkeyAdapterKind {
+        self.adapter.kind()
+    }
+
+    pub fn capability() -> HotkeyCapability {
+        HotkeyCapability::current()
+    }
+}
+
+fn install_error(code: &str, message: impl Into<String>) -> HotkeyInstallError {
+    HotkeyInstallError {
+        code: code.into(),
+        message: message.into(),
+    }
+}
+
+fn send_or_log(tx: &Sender<HotkeyEvent>, evt: HotkeyEvent) {
+    if let Err(e) = tx.send(evt) {
+        log::warn!("[hotkey] 事件发送失败: {e}");
     }
 }
 
@@ -75,8 +87,46 @@ mod platform {
     use std::sync::mpsc::Sender;
     use std::sync::Arc;
 
-    use super::{HotkeyEvent, Shared};
-    use crate::types::HotkeyTrigger;
+    use super::{install_error, send_or_log, HotkeyAdapter, HotkeyEvent, Shared};
+    use crate::types::{HotkeyAdapterKind, HotkeyBinding, HotkeyInstallError, HotkeyTrigger};
+
+    pub fn start_adapter(
+        binding: HotkeyBinding,
+        tx: Sender<HotkeyEvent>,
+    ) -> Result<Box<dyn HotkeyAdapter>, HotkeyInstallError> {
+        let shared = Arc::new(Shared {
+            binding: parking_lot::RwLock::new(binding),
+            trigger_held: std::sync::atomic::AtomicBool::new(false),
+        });
+
+        let thread_shared = Arc::clone(&shared);
+        let (status_tx, status_rx) = std::sync::mpsc::channel::<Result<(), HotkeyInstallError>>();
+        std::thread::Builder::new()
+            .name("openless-hotkey-mac-event-tap".into())
+            .spawn(move || run_listen_loop(thread_shared, tx, status_tx))
+            .map_err(|e| install_error("spawn_failed", format!("hotkey 线程启动失败: {e}")))?;
+
+        match status_rx.recv_timeout(std::time::Duration::from_secs(3)) {
+            Ok(Ok(())) => Ok(Box::new(MacHotkeyAdapter { shared })),
+            Ok(Err(err)) => Err(err),
+            Err(_) => Err(install_error("startup_timeout", "hotkey hook 启动超时")),
+        }
+    }
+
+    struct MacHotkeyAdapter {
+        shared: Arc<Shared>,
+    }
+
+    impl HotkeyAdapter for MacHotkeyAdapter {
+        fn kind(&self) -> HotkeyAdapterKind {
+            HotkeyAdapterKind::MacEventTap
+        }
+
+        fn update_binding(&self, binding: HotkeyBinding) {
+            *self.shared.binding.write() = binding;
+            self.shared.trigger_held.store(false, Ordering::SeqCst);
+        }
+    }
 
     // ── Raw CG/CF FFI ──────────────────────────────────────────────────────
 
@@ -160,24 +210,19 @@ mod platform {
         static kCFRunLoopCommonModes: CfStringRef;
     }
 
-    // ── Callback context ───────────────────────────────────────────────────
-
     struct CallbackContext {
         shared: Arc<Shared>,
         tx: Sender<HotkeyEvent>,
         tap: std::sync::Mutex<Option<CfMachPortRef>>,
     }
 
-    // CallbackContext crosses an FFI boundary as a raw pointer; the only field
-    // not auto-Send/Sync is the CfMachPortRef raw pointer, which is fine to
-    // share since CGEventTapEnable is thread-safe for our usage.
     unsafe impl Send for CallbackContext {}
     unsafe impl Sync for CallbackContext {}
 
-    pub fn run_listen_loop(
+    fn run_listen_loop(
         shared: Arc<Shared>,
         tx: Sender<HotkeyEvent>,
-        status_tx: std::sync::mpsc::Sender<bool>,
+        status_tx: std::sync::mpsc::Sender<Result<(), HotkeyInstallError>>,
     ) {
         let mask: CgEventMask = (1u64 << FLAGS_CHANGED) | (1u64 << KEY_DOWN);
         let context = Box::into_raw(Box::new(CallbackContext {
@@ -200,7 +245,10 @@ mod platform {
                     "[hotkey] CGEventTapCreate 失败 — Accessibility 权限未授予。Coordinator 会重试。"
                 );
                 let _ = Box::from_raw(context);
-                let _ = status_tx.send(false);
+                let _ = status_tx.send(Err(install_error(
+                    "accessibility_denied",
+                    "hotkey hook 安装失败（辅助功能权限未授予）",
+                )));
                 return;
             }
             *(*context).tap.lock().unwrap() = Some(tap);
@@ -211,7 +259,7 @@ mod platform {
             CGEventTapEnable(tap, true);
 
             log::info!("[hotkey] CGEventTap 已启动");
-            let _ = status_tx.send(true);
+            let _ = status_tx.send(Ok(()));
             CFRunLoopRun();
         }
     }
@@ -269,12 +317,6 @@ mod platform {
         }
     }
 
-    fn send_or_log(tx: &Sender<HotkeyEvent>, evt: HotkeyEvent) {
-        if let Err(e) = tx.send(evt) {
-            log::warn!("[hotkey] 事件发送失败: {e}");
-        }
-    }
-
     fn trigger_to_keycode(trigger: HotkeyTrigger) -> i64 {
         match trigger {
             HotkeyTrigger::LeftControl => 59,
@@ -298,9 +340,212 @@ mod platform {
     }
 }
 
-// ─────────────────────────── non-macOS implementation ───────────────────────────
+// ─────────────────────────── Windows implementation ───────────────────────────
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
+mod platform {
+    use std::sync::atomic::Ordering;
+    use std::sync::atomic::{AtomicPtr, Ordering as AtomicOrdering};
+    use std::sync::mpsc::Sender;
+    use std::sync::Arc;
+
+    use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
+    use windows::Win32::UI::Input::KeyboardAndMouse::KBDLLHOOKSTRUCT;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        CallNextHookEx, DispatchMessageW, GetMessageW, SetWindowsHookExW, TranslateMessage,
+        UnhookWindowsHookEx, HC_ACTION, HHOOK, MSG, WH_KEYBOARD_LL,
+    };
+
+    use super::{install_error, send_or_log, HotkeyAdapter, HotkeyEvent, Shared};
+    use crate::types::{HotkeyAdapterKind, HotkeyBinding, HotkeyInstallError, HotkeyTrigger};
+
+    const WM_KEYDOWN: usize = 0x0100;
+    const WM_KEYUP: usize = 0x0101;
+    const WM_SYSKEYDOWN: usize = 0x0104;
+    const WM_SYSKEYUP: usize = 0x0105;
+
+    const VK_ESCAPE: u32 = 0x1B;
+    const VK_LCONTROL: u32 = 0xA2;
+    const VK_RCONTROL: u32 = 0xA3;
+    const VK_RMENU: u32 = 0xA5;
+    const VK_RWIN: u32 = 0x5C;
+    const LLKHF_INJECTED: u32 = 0x0000_0010;
+
+    static HOOK_CONTEXT: AtomicPtr<CallbackContext> = AtomicPtr::new(std::ptr::null_mut());
+
+    pub fn start_adapter(
+        binding: HotkeyBinding,
+        tx: Sender<HotkeyEvent>,
+    ) -> Result<Box<dyn HotkeyAdapter>, HotkeyInstallError> {
+        let shared = Arc::new(Shared {
+            binding: parking_lot::RwLock::new(binding),
+            trigger_held: std::sync::atomic::AtomicBool::new(false),
+        });
+
+        let thread_shared = Arc::clone(&shared);
+        let (status_tx, status_rx) = std::sync::mpsc::channel::<Result<(), HotkeyInstallError>>();
+        std::thread::Builder::new()
+            .name("openless-hotkey-win-ll-hook".into())
+            .spawn(move || run_listen_loop(thread_shared, tx, status_tx))
+            .map_err(|e| install_error("spawn_failed", format!("hotkey 线程启动失败: {e}")))?;
+
+        match status_rx.recv_timeout(std::time::Duration::from_secs(3)) {
+            Ok(Ok(())) => Ok(Box::new(WindowsHotkeyAdapter { shared })),
+            Ok(Err(err)) => Err(err),
+            Err(_) => Err(install_error(
+                "startup_timeout",
+                "Windows hotkey hook 启动超时",
+            )),
+        }
+    }
+
+    struct WindowsHotkeyAdapter {
+        shared: Arc<Shared>,
+    }
+
+    impl HotkeyAdapter for WindowsHotkeyAdapter {
+        fn kind(&self) -> HotkeyAdapterKind {
+            HotkeyAdapterKind::WindowsLowLevel
+        }
+
+        fn update_binding(&self, binding: HotkeyBinding) {
+            *self.shared.binding.write() = binding;
+            self.shared.trigger_held.store(false, Ordering::SeqCst);
+        }
+    }
+
+    struct CallbackContext {
+        shared: Arc<Shared>,
+        tx: Sender<HotkeyEvent>,
+        hook: std::sync::Mutex<Option<HHOOK>>,
+    }
+
+    unsafe impl Send for CallbackContext {}
+    unsafe impl Sync for CallbackContext {}
+
+    fn run_listen_loop(
+        shared: Arc<Shared>,
+        tx: Sender<HotkeyEvent>,
+        status_tx: std::sync::mpsc::Sender<Result<(), HotkeyInstallError>>,
+    ) {
+        let context = Box::into_raw(Box::new(CallbackContext {
+            shared,
+            tx,
+            hook: std::sync::Mutex::new(None),
+        }));
+        HOOK_CONTEXT.store(context, AtomicOrdering::SeqCst);
+
+        unsafe {
+            let hook = SetWindowsHookExW(WH_KEYBOARD_LL, Some(low_level_keyboard_proc), None, 0);
+            match hook {
+                Ok(hook) => {
+                    *(*context).hook.lock().unwrap() = Some(hook);
+                    log::info!("[hotkey] Windows low-level keyboard hook 已启动");
+                    let _ = status_tx.send(Ok(()));
+                }
+                Err(err) => {
+                    HOOK_CONTEXT.store(std::ptr::null_mut(), AtomicOrdering::SeqCst);
+                    let _ = Box::from_raw(context);
+                    let _ = status_tx.send(Err(install_error(
+                        "hook_install_failed",
+                        format!("Windows low-level keyboard hook 安装失败: {err}"),
+                    )));
+                    return;
+                }
+            }
+
+            let mut message = MSG::default();
+            loop {
+                let result = GetMessageW(&mut message, None, 0, 0).0;
+                if result == -1 {
+                    log::error!("[hotkey] Windows GetMessageW 返回错误，hook 线程退出");
+                    break;
+                }
+                if result == 0 {
+                    log::warn!("[hotkey] Windows hook 消息循环收到退出消息");
+                    break;
+                }
+                let _ = TranslateMessage(&message);
+                let _ = DispatchMessageW(&message);
+            }
+
+            if let Some(hook) = (*context).hook.lock().unwrap().take() {
+                let _ = UnhookWindowsHookEx(hook);
+            }
+            HOOK_CONTEXT.store(std::ptr::null_mut(), AtomicOrdering::SeqCst);
+            let _ = Box::from_raw(context);
+        }
+    }
+
+    unsafe extern "system" fn low_level_keyboard_proc(
+        code: i32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
+        if code == HC_ACTION as i32 && lparam.0 != 0 {
+            if let Some(ctx) = callback_context() {
+                let keyboard = *(lparam.0 as *const KBDLLHOOKSTRUCT);
+                if keyboard.flags & LLKHF_INJECTED == 0 {
+                    dispatch_keyboard_event(ctx, keyboard.vkCode, wparam.0);
+                }
+            }
+        }
+
+        CallNextHookEx(None, code, wparam, lparam)
+    }
+
+    unsafe fn callback_context<'a>() -> Option<&'a CallbackContext> {
+        let ptr = HOOK_CONTEXT.load(AtomicOrdering::SeqCst);
+        if ptr.is_null() {
+            None
+        } else {
+            Some(&*ptr)
+        }
+    }
+
+    fn dispatch_keyboard_event(ctx: &CallbackContext, vk_code: u32, message: usize) {
+        if vk_code == VK_ESCAPE && (message == WM_KEYDOWN || message == WM_SYSKEYDOWN) {
+            send_or_log(&ctx.tx, HotkeyEvent::Cancelled);
+            return;
+        }
+
+        let trigger = ctx.shared.binding.read().trigger;
+        if vk_code != trigger_to_vk_code(trigger) {
+            return;
+        }
+
+        match message {
+            WM_KEYDOWN | WM_SYSKEYDOWN => {
+                let was_held = ctx.shared.trigger_held.swap(true, Ordering::SeqCst);
+                if !was_held {
+                    send_or_log(&ctx.tx, HotkeyEvent::Pressed);
+                }
+            }
+            WM_KEYUP | WM_SYSKEYUP => {
+                let was_held = ctx.shared.trigger_held.swap(false, Ordering::SeqCst);
+                if was_held {
+                    send_or_log(&ctx.tx, HotkeyEvent::Released);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn trigger_to_vk_code(trigger: HotkeyTrigger) -> u32 {
+        match trigger {
+            HotkeyTrigger::RightControl => VK_RCONTROL,
+            HotkeyTrigger::LeftControl => VK_LCONTROL,
+            HotkeyTrigger::RightOption | HotkeyTrigger::RightAlt => VK_RMENU,
+            HotkeyTrigger::RightCommand => VK_RWIN,
+            HotkeyTrigger::LeftOption => VK_RMENU,
+            HotkeyTrigger::Fn => VK_RCONTROL,
+        }
+    }
+}
+
+// ─────────────────────────── Linux / other implementation ───────────────────────────
+
+#[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
 mod platform {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::mpsc::Sender;
@@ -309,23 +554,59 @@ mod platform {
 
     use rdev::{listen, Event, EventType, Key};
 
-    use super::{HotkeyEvent, Shared};
-    use crate::types::HotkeyTrigger;
+    use super::{install_error, HotkeyAdapter, HotkeyEvent, Shared};
+    use crate::types::{HotkeyAdapterKind, HotkeyBinding, HotkeyInstallError, HotkeyTrigger};
 
-    pub fn run_listen_loop(
+    pub fn start_adapter(
+        binding: HotkeyBinding,
+        tx: Sender<HotkeyEvent>,
+    ) -> Result<Box<dyn HotkeyAdapter>, HotkeyInstallError> {
+        let shared = Arc::new(Shared {
+            binding: parking_lot::RwLock::new(binding),
+            trigger_held: std::sync::atomic::AtomicBool::new(false),
+        });
+
+        let thread_shared = Arc::clone(&shared);
+        let (status_tx, status_rx) = std::sync::mpsc::channel::<Result<(), HotkeyInstallError>>();
+        std::thread::Builder::new()
+            .name("openless-hotkey-rdev".into())
+            .spawn(move || run_listen_loop(thread_shared, tx, status_tx))
+            .map_err(|e| install_error("spawn_failed", format!("hotkey 线程启动失败: {e}")))?;
+
+        match status_rx.recv_timeout(std::time::Duration::from_secs(3)) {
+            Ok(Ok(())) => Ok(Box::new(RdevHotkeyAdapter { shared })),
+            Ok(Err(err)) => Err(err),
+            Err(_) => Err(install_error("startup_timeout", "hotkey hook 启动超时")),
+        }
+    }
+
+    struct RdevHotkeyAdapter {
+        shared: Arc<Shared>,
+    }
+
+    impl HotkeyAdapter for RdevHotkeyAdapter {
+        fn kind(&self) -> HotkeyAdapterKind {
+            HotkeyAdapterKind::Rdev
+        }
+
+        fn update_binding(&self, binding: HotkeyBinding) {
+            *self.shared.binding.write() = binding;
+            self.shared.trigger_held.store(false, Ordering::SeqCst);
+        }
+    }
+
+    fn run_listen_loop(
         shared: Arc<Shared>,
         tx: Sender<HotkeyEvent>,
-        status_tx: std::sync::mpsc::Sender<bool>,
+        status_tx: std::sync::mpsc::Sender<Result<(), HotkeyInstallError>>,
     ) {
-        // rdev 没有"安装即可知"的 API。给 listen 一个短窗口：
-        // 如果 hook 立即失败，向 supervisor 汇报失败；否则视为已进入监听循环。
         let status_sent = Arc::new(AtomicBool::new(false));
         let ready_status_sent = Arc::clone(&status_sent);
         let ready_status_tx = status_tx.clone();
         std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(350));
             if !ready_status_sent.swap(true, Ordering::SeqCst) {
-                let _ = ready_status_tx.send(true);
+                let _ = ready_status_tx.send(Ok(()));
             }
         });
         let cb_shared = Arc::clone(&shared);
@@ -334,7 +615,10 @@ mod platform {
         });
         if let Err(err) = result {
             if !status_sent.swap(true, Ordering::SeqCst) {
-                let _ = status_tx.send(false);
+                let _ = status_tx.send(Err(install_error(
+                    "listen_failed",
+                    format!("rdev::listen 启动失败: {err:?}"),
+                )));
             }
             log::error!("[hotkey] rdev::listen 启动失败: {:?}", err);
         }

@@ -23,7 +23,7 @@ use crate::persistence::{
 use crate::polish::{OpenAICompatibleConfig, OpenAICompatibleLLMProvider};
 use crate::recorder::Recorder;
 use crate::types::{
-    CapsulePayload, CapsuleState, DictationSession, HotkeyMode, HotkeyStatus,
+    CapsulePayload, CapsuleState, DictationSession, HotkeyCapability, HotkeyMode, HotkeyStatus,
     HotkeyStatusState, InsertStatus, PolishMode,
 };
 
@@ -125,6 +125,10 @@ impl Coordinator {
         self.inner.hotkey_status.lock().clone()
     }
 
+    pub fn hotkey_capability(&self) -> HotkeyCapability {
+        HotkeyMonitor::capability()
+    }
+
     pub async fn start_dictation(&self) -> Result<(), String> {
         begin_session(&self.inner).await
     }
@@ -149,25 +153,28 @@ impl Coordinator {
 
 fn hotkey_supervisor_loop(inner: Arc<Inner>) {
     let mut attempts: u32 = 0;
+    let capability = HotkeyMonitor::capability();
     loop {
         if inner.hotkey.lock().is_some() {
             return;
         }
         *inner.hotkey_status.lock() = HotkeyStatus {
+            adapter: capability.adapter,
             state: HotkeyStatusState::Starting,
-            message: Some(format!(
-                "正在安装全局快捷键监听（第 {} 次）",
-                attempts + 1
-            )),
+            message: Some(format!("正在安装全局快捷键监听（第 {} 次）", attempts + 1)),
+            last_error: None,
         };
         let (tx, rx) = mpsc::channel::<HotkeyEvent>();
         let binding = inner.prefs.get().hotkey;
         match HotkeyMonitor::start(binding, tx) {
             Ok(monitor) => {
+                let adapter = monitor.kind();
                 *inner.hotkey.lock() = Some(monitor);
                 *inner.hotkey_status.lock() = HotkeyStatus {
+                    adapter,
                     state: HotkeyStatusState::Installed,
-                    message: None,
+                    message: Some(format!("{} 已安装", adapter.display_name())),
+                    last_error: None,
                 };
                 log::info!(
                     "[coord] hotkey listener installed (after {} attempt(s))",
@@ -182,13 +189,17 @@ fn hotkey_supervisor_loop(inner: Arc<Inner>) {
             }
             Err(e) => {
                 attempts += 1;
+                let error_message = e.message.clone();
                 *inner.hotkey_status.lock() = HotkeyStatus {
+                    adapter: capability.adapter,
                     state: HotkeyStatusState::Failed,
-                    message: Some(e.to_string()),
+                    message: Some(error_message.clone()),
+                    last_error: Some(e),
                 };
                 if attempts <= 3 || attempts % 10 == 0 {
                     log::warn!(
-                        "[coord] hotkey listener attempt #{attempts} failed: {e}; retrying in 3s"
+                        "[coord] hotkey listener attempt #{attempts} failed: {}; retrying in 3s",
+                        error_message
                     );
                 }
                 std::thread::sleep(std::time::Duration::from_secs(3));

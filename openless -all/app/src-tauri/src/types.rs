@@ -118,11 +118,43 @@ pub enum HotkeyTrigger {
     RightAlt, // Windows synonym for RightOption
 }
 
+impl HotkeyTrigger {
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            HotkeyTrigger::RightOption => "右 Option",
+            HotkeyTrigger::LeftOption => "左 Option",
+            HotkeyTrigger::RightControl => "右 Control",
+            HotkeyTrigger::LeftControl => "左 Control",
+            HotkeyTrigger::RightCommand => "右 Command",
+            HotkeyTrigger::Fn => "Fn (地球键)",
+            HotkeyTrigger::RightAlt => "右 Alt",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum HotkeyMode {
     Toggle,
     Hold,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum HotkeyAdapterKind {
+    MacEventTap,
+    WindowsLowLevel,
+    Rdev,
+}
+
+impl HotkeyAdapterKind {
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            HotkeyAdapterKind::MacEventTap => "macOS Event Tap",
+            HotkeyAdapterKind::WindowsLowLevel => "Windows 低层键盘 hook",
+            HotkeyAdapterKind::Rdev => "rdev 监听器",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -134,9 +166,100 @@ pub struct HotkeyBinding {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct HotkeyCapability {
+    pub adapter: HotkeyAdapterKind,
+    pub available_triggers: Vec<HotkeyTrigger>,
+    pub requires_accessibility_permission: bool,
+    pub supports_modifier_only_trigger: bool,
+    pub supports_side_specific_modifiers: bool,
+    pub explicit_fallback_available: bool,
+    pub status_hint: Option<String>,
+}
+
+impl HotkeyCapability {
+    pub fn current() -> Self {
+        #[cfg(target_os = "macos")]
+        {
+            return Self {
+                adapter: HotkeyAdapterKind::MacEventTap,
+                available_triggers: vec![
+                    HotkeyTrigger::RightOption,
+                    HotkeyTrigger::LeftOption,
+                    HotkeyTrigger::RightControl,
+                    HotkeyTrigger::LeftControl,
+                    HotkeyTrigger::RightCommand,
+                    HotkeyTrigger::Fn,
+                ],
+                requires_accessibility_permission: true,
+                supports_modifier_only_trigger: true,
+                supports_side_specific_modifiers: true,
+                explicit_fallback_available: false,
+                status_hint: Some("授权辅助功能后，通常需要完全退出并重新打开 OpenLess。".into()),
+            };
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            return Self {
+                adapter: HotkeyAdapterKind::WindowsLowLevel,
+                available_triggers: vec![
+                    HotkeyTrigger::RightControl,
+                    HotkeyTrigger::RightAlt,
+                    HotkeyTrigger::LeftControl,
+                    HotkeyTrigger::RightCommand,
+                ],
+                requires_accessibility_permission: false,
+                supports_modifier_only_trigger: true,
+                supports_side_specific_modifiers: true,
+                explicit_fallback_available: false,
+                status_hint: Some(
+                    "默认建议使用“右 Control + 按住说话”；若无响应，可在权限页查看 hook 安装状态。"
+                        .into(),
+                ),
+            };
+        }
+
+        #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+        {
+            Self {
+                adapter: HotkeyAdapterKind::Rdev,
+                available_triggers: vec![
+                    HotkeyTrigger::RightAlt,
+                    HotkeyTrigger::RightControl,
+                    HotkeyTrigger::LeftControl,
+                ],
+                requires_accessibility_permission: false,
+                supports_modifier_only_trigger: true,
+                supports_side_specific_modifiers: true,
+                explicit_fallback_available: false,
+                status_hint: Some(
+                    "Linux 仅 best-effort：不同桌面环境 / Wayland 组合可能限制全局热键。".into(),
+                ),
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct HotkeyInstallError {
+    pub code: String,
+    pub message: String,
+}
+
+impl std::fmt::Display for HotkeyInstallError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} ({})", self.message, self.code)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct HotkeyStatus {
+    pub adapter: HotkeyAdapterKind,
     pub state: HotkeyStatusState,
     pub message: Option<String>,
+    pub last_error: Option<HotkeyInstallError>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -150,21 +273,26 @@ pub enum HotkeyStatusState {
 impl Default for HotkeyStatus {
     fn default() -> Self {
         Self {
+            adapter: HotkeyCapability::current().adapter,
             state: HotkeyStatusState::Starting,
             message: Some("正在安装全局快捷键监听".into()),
+            last_error: None,
         }
     }
 }
 
 impl Default for HotkeyBinding {
     fn default() -> Self {
-        // Right Option (mac) / Right Alt (win) — toggle by default per design.
+        #[cfg(target_os = "windows")]
+        {
+            return Self {
+                trigger: HotkeyTrigger::RightControl,
+                mode: HotkeyMode::Hold,
+            };
+        }
+
         Self {
-            trigger: if cfg!(target_os = "windows") {
-                HotkeyTrigger::RightAlt
-            } else {
-                HotkeyTrigger::RightOption
-            },
+            trigger: HotkeyTrigger::RightOption,
             mode: HotkeyMode::Toggle,
         }
     }

@@ -6,6 +6,7 @@ import type {
   CredentialsStatus,
   DictationSession,
   DictionaryEntry,
+  HotkeyCapability,
   HotkeyStatus,
   PermissionStatus,
   PolishMode,
@@ -35,7 +36,7 @@ export async function invokeOrMock<T>(
 
 // ── Mock fixtures ──────────────────────────────────────────────────────
 const mockSettings: UserPreferences = {
-  hotkey: { trigger: 'rightOption', mode: 'toggle' },
+  hotkey: { trigger: 'rightControl', mode: 'hold' },
   defaultMode: 'structured',
   enabledModes: ['raw', 'light', 'structured', 'formal'],
   launchAtLogin: false,
@@ -44,14 +45,26 @@ const mockSettings: UserPreferences = {
   activeLlmProvider: 'ark',
 };
 
+const mockHotkeyCapability: HotkeyCapability = {
+  adapter: 'windowsLowLevel',
+  availableTriggers: ['rightControl', 'rightAlt', 'leftControl', 'rightCommand'],
+  requiresAccessibilityPermission: false,
+  supportsModifierOnlyTrigger: true,
+  supportsSideSpecificModifiers: true,
+  explicitFallbackAvailable: false,
+  statusHint: '默认建议使用“右 Control + 按住说话”；若无响应，可在权限页查看 hook 安装状态。',
+};
+
 const mockCredentialsStatus: CredentialsStatus = {
   volcengineConfigured: true,
   arkConfigured: true,
 };
 
 const mockHotkeyStatus: HotkeyStatus = {
+  adapter: 'windowsLowLevel',
   state: 'installed',
-  message: null,
+  message: 'Windows 低层键盘 hook 已安装',
+  lastError: null,
 };
 
 const mockHistory: DictationSession[] = OL_DATA.history.map((h, i) => ({
@@ -88,6 +101,10 @@ export function setSettings(prefs: UserPreferences): Promise<void> {
 
 export function getHotkeyStatus(): Promise<HotkeyStatus> {
   return invokeOrMock('get_hotkey_status', undefined, () => mockHotkeyStatus);
+}
+
+export function getHotkeyCapability(): Promise<HotkeyCapability> {
+  return invokeOrMock('get_hotkey_capability', undefined, () => mockHotkeyCapability);
 }
 
 // ── Credentials ────────────────────────────────────────────────────────
