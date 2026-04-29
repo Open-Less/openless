@@ -285,15 +285,18 @@ impl Default for HotkeyBinding {
     fn default() -> Self {
         #[cfg(target_os = "windows")]
         {
-            return Self {
+            Self {
                 trigger: HotkeyTrigger::RightControl,
                 mode: HotkeyMode::Hold,
-            };
+            }
         }
 
-        Self {
-            trigger: HotkeyTrigger::RightOption,
-            mode: HotkeyMode::Toggle,
+        #[cfg(not(target_os = "windows"))]
+        {
+            Self {
+                trigger: HotkeyTrigger::RightOption,
+                mode: HotkeyMode::Toggle,
+            }
         }
     }
 }

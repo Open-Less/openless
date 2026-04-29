@@ -350,10 +350,9 @@ mod platform {
     use std::sync::Arc;
 
     use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
-    use windows::Win32::UI::Input::KeyboardAndMouse::KBDLLHOOKSTRUCT;
     use windows::Win32::UI::WindowsAndMessaging::{
         CallNextHookEx, DispatchMessageW, GetMessageW, SetWindowsHookExW, TranslateMessage,
-        UnhookWindowsHookEx, HC_ACTION, HHOOK, MSG, WH_KEYBOARD_LL,
+        UnhookWindowsHookEx, HC_ACTION, HHOOK, KBDLLHOOKSTRUCT, MSG, WH_KEYBOARD_LL,
     };
 
     use super::{install_error, send_or_log, HotkeyAdapter, HotkeyEvent, Shared};
@@ -485,7 +484,7 @@ mod platform {
         if code == HC_ACTION as i32 && lparam.0 != 0 {
             if let Some(ctx) = callback_context() {
                 let keyboard = *(lparam.0 as *const KBDLLHOOKSTRUCT);
-                if keyboard.flags & LLKHF_INJECTED == 0 {
+                if keyboard.flags.0 & LLKHF_INJECTED == 0 {
                     dispatch_keyboard_event(ctx, keyboard.vkCode, wparam.0);
                 }
             }
