@@ -502,37 +502,46 @@ function PermissionsSection() {
   const [hotkey, setHotkey] = useState<HotkeyStatus | null>(null);
   const { capability } = useHotkeySettings();
 
-  const refresh = async () => {
+  const refreshPermissions = async () => {
     const [a, m] = await Promise.all([
       checkAccessibilityPermission(),
       checkMicrophonePermission(),
     ]);
     setAccessibility(a);
     setMicrophone(m);
+  };
+
+  const refreshHotkey = async () => {
     setHotkey(await getHotkeyStatus());
   };
 
   useEffect(() => {
-    refresh();
-    const id = window.setInterval(refresh, 1000);
-    // 用户从系统设置切回来时立刻刷新（不等下一个 1s tick）
-    const onFocus = () => refresh();
+    refreshPermissions();
+    refreshHotkey();
+    const hotkeyId = window.setInterval(refreshHotkey, 1000);
+    // 麦克风检查会短暂打开输入流，避免每秒探测导致隐私指示器频繁闪烁。
+    const permissionId = window.setInterval(refreshPermissions, 10000);
+    const onFocus = () => {
+      refreshPermissions();
+      refreshHotkey();
+    };
     window.addEventListener('focus', onFocus);
     return () => {
-      window.clearInterval(id);
+      window.clearInterval(hotkeyId);
+      window.clearInterval(permissionId);
       window.removeEventListener('focus', onFocus);
     };
   }, []);
 
   const reRequestAccessibility = async () => {
     await requestAccessibilityPermission();
-    refresh();
+    refreshPermissions();
   };
 
   const reRequestMicrophone = async () => {
     if (microphone === 'denied' || microphone === 'restricted') {
       await openSystemSettings('microphone');
-      refresh();
+      refreshPermissions();
       return;
     }
     const status = await requestMicrophonePermission();
@@ -540,7 +549,7 @@ function PermissionsSection() {
     if (status === 'denied' || status === 'restricted') {
       await openSystemSettings('microphone');
     }
-    refresh();
+    refreshPermissions();
   };
 
   const desc = capability?.requiresAccessibilityPermission

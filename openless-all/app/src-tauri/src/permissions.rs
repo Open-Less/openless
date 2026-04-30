@@ -264,6 +264,11 @@ mod platform {
     /// Windows 的麦克风权限走系统设置 → 隐私 → 麦克风；
     /// 这里用 cpal 建立一次短生命周期输入流，避免只查设备格式时误报已授权。
     pub fn check_microphone() -> PermissionStatus {
+        if windows_microphone_registry_denied() {
+            log::warn!("[mic] Windows microphone privacy registry is denied");
+            return PermissionStatus::Denied;
+        }
+
         let host = cpal::default_host();
         let Some(device) = host.default_input_device() else {
             log::warn!("[mic] no default input device");
@@ -333,6 +338,51 @@ mod platform {
         std::thread::sleep(Duration::from_millis(120));
         drop(stream);
         Ok(())
+    }
+
+    fn windows_microphone_registry_denied() -> bool {
+        candidate_microphone_registry_paths()
+            .into_iter()
+            .any(|path| registry_value_is_deny(&path))
+    }
+
+    fn candidate_microphone_registry_paths() -> Vec<String> {
+        let mut paths = vec![
+            r"HKCU\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone".to_string(),
+            r"HKCU\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone\NonPackaged".to_string(),
+            r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone".to_string(),
+        ];
+
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(encoded) = exe.to_str().map(|path| path.replace('\\', "#")) {
+                paths.push(format!(
+                    r"HKCU\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone\NonPackaged\{encoded}"
+                ));
+            }
+        }
+
+        paths
+    }
+
+    fn registry_value_is_deny(path: &str) -> bool {
+        let output = match std::process::Command::new("reg")
+            .args(["query", path, "/v", "Value"])
+            .output()
+        {
+            Ok(output) => output,
+            Err(err) => {
+                log::warn!("[mic] reg query failed for {path}: {err}");
+                return false;
+            }
+        };
+
+        if !output.status.success() {
+            return false;
+        }
+
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .any(|line| line.contains("REG_SZ") && line.split_whitespace().any(|part| part == "Deny"))
     }
 }
 
