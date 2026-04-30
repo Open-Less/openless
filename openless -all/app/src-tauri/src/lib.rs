@@ -164,6 +164,10 @@ pub fn run() {
                     }
                 }
             }
+            RunEvent::Exit => {
+                let coordinator = app.state::<Arc<coordinator::Coordinator>>();
+                coordinator.stop_hotkey_listener();
+            }
             _ => {}
         });
 }

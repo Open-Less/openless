@@ -105,6 +105,10 @@ impl Coordinator {
             .ok();
     }
 
+    pub fn stop_hotkey_listener(&self) {
+        self.inner.hotkey.lock().take();
+    }
+
     pub fn history(&self) -> &HistoryStore {
         &self.inner.history
     }
