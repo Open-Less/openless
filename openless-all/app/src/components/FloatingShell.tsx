@@ -18,7 +18,7 @@ import { getHotkeyTriggerLabel } from '../lib/hotkey';
 import { getCredentials, openExternal } from '../lib/ipc';
 import { OL_DATA } from '../lib/mockData';
 import {
-  PROVIDER_SETUP_PROMPT_SEEN_KEY,
+  PROVIDER_SETUP_PROMPT_DEFERRED_KEY,
   shouldShowProviderSetupPrompt,
 } from '../lib/providerSetup';
 import type { SettingsSectionId } from '../pages/Settings';
@@ -70,8 +70,8 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
     let cancelled = false;
     (async () => {
       const credentials = await getCredentials();
-      const promptSeenValue = window.localStorage.getItem(PROVIDER_SETUP_PROMPT_SEEN_KEY);
-      if (!cancelled && shouldShowProviderSetupPrompt(credentials, promptSeenValue)) {
+      const promptDeferredValue = window.sessionStorage.getItem(PROVIDER_SETUP_PROMPT_DEFERRED_KEY);
+      if (!cancelled && shouldShowProviderSetupPrompt(credentials, promptDeferredValue)) {
         setProviderPromptOpen(true);
       }
     })();
@@ -81,7 +81,7 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
   }, []);
 
   const rememberProviderPrompt = () => {
-    window.localStorage.setItem(PROVIDER_SETUP_PROMPT_SEEN_KEY, '1');
+    window.sessionStorage.setItem(PROVIDER_SETUP_PROMPT_DEFERRED_KEY, '1');
     setProviderPromptOpen(false);
   };
 

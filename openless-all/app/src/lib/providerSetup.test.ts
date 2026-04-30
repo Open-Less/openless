@@ -42,7 +42,7 @@ assertEqual(
     '1',
   ),
   false,
-  'do not repeat first-run prompt after the user has seen it',
+  'do not repeat first-run prompt after the user has deferred it in this session',
 );
 
 assertEqual(

@@ -1,6 +1,6 @@
 import type { CredentialsStatus } from './types';
 
-export const PROVIDER_SETUP_PROMPT_SEEN_KEY = 'ol.providerSetupPromptSeen';
+export const PROVIDER_SETUP_PROMPT_DEFERRED_KEY = 'ol.providerSetupPromptDeferredThisSession';
 
 export function areProvidersConfigured(credentials: CredentialsStatus): boolean {
   return credentials.volcengineConfigured && credentials.arkConfigured;
@@ -8,7 +8,7 @@ export function areProvidersConfigured(credentials: CredentialsStatus): boolean 
 
 export function shouldShowProviderSetupPrompt(
   credentials: CredentialsStatus,
-  promptSeenValue: string | null,
+  promptDeferredValue: string | null,
 ): boolean {
-  return !areProvidersConfigured(credentials) && promptSeenValue !== '1';
+  return !areProvidersConfigured(credentials) && promptDeferredValue !== '1';
 }
