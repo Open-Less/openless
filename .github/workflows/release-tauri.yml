@@ -1,13 +1,18 @@
 name: Release Tauri (cross-platform)
 # 触发条件：
-#   - 推 v*-tauri 形式的 tag → 构建 Windows + Linux 并发布 GitHub Release
-#   - 手动 dispatch（用于测试构建，不发版）
+#   - 推 v*.*.*-tauri 形式的 tag（与老 Swift 版的 vX.Y.Z 区分开,不冲突）
+#   - 手动 dispatch（用于测试构建,不发版）
 #
-# macOS DMG 由本地 scripts/build-mac.sh 构建后手动上传到 Release，
-# 原因：本地构建可清除 xattr 隔离属性并经过实机测试，CI 构建无法保证。
+# 输出：
+#   macOS arm64 .dmg + Windows x64 .msi/.exe + Linux x64 .deb/.rpm/.AppImage，自动作为 GitHub Release 资产上传。
 #
-# Windows：无签名证书，Win 11 SmartScreen 会提示 "未识别的发布者"，用户点"仍要运行"即可。
-# 任意一个 platform 失败不影响另一个继续构建（fail-fast: false）。
+# macOS 分发：
+#   - 配好 APPLE_CERTIFICATE / APPLE_CERTIFICATE_PASSWORD / APPLE_ID /
+#     APPLE_PASSWORD / APPLE_TEAM_ID 后，Tauri 会做 Developer ID 签名和公证。
+#     用户从浏览器下载后不需要手工 xattr。
+#   - 未配置 Apple secrets 时自动回退 ad-hoc 签名，GitHub Actions 会打印 warning。
+#   - Windows 没签名（无证书）,Win 11 SmartScreen 会警告 "未识别的发布者",用户点"仍要运行"。
+#   - 任意一个 platform 失败不影响另一个继续构建（fail-fast: false）。
 
 on:
   push:
@@ -23,6 +28,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - platform: macos-latest
+            rust-target: aarch64-apple-darwin
           - platform: windows-latest
             rust-target: x86_64-pc-windows-msvc
           - platform: ubuntu-22.04
@@ -69,15 +76,117 @@ jobs:
         working-directory: 'openless-all/app'
         run: npm ci
 
+      - name: Check Apple signing availability
+        if: matrix.platform == 'macos-latest' && startsWith(github.ref, 'refs/tags/v') && endsWith(github.ref, '-tauri')
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          missing=()
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            if [ -z "${!name:-}" ]; then
+              missing+=("$name")
+            fi
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::warning::macOS release will use ad-hoc signing because Apple signing/notarization secrets are missing: ${missing[*]}"
+          fi
+
+      - name: Import Apple Developer ID certificate
+        if: matrix.platform == 'macos-latest'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          if [ -z "${APPLE_CERTIFICATE:-}" ] || [ -z "${APPLE_CERTIFICATE_PASSWORD:-}" ]; then
+            echo "No Apple certificate secrets configured; macOS build will use ad-hoc signing."
+            exit 0
+          fi
+
+          KEYCHAIN_PASSWORD="${KEYCHAIN_PASSWORD:-$(openssl rand -base64 32)}"
+          CERT_PATH="$RUNNER_TEMP/openless-certificate.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/openless-build.keychain-db"
+
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$CERT_PATH"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security default-keychain -s "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -t 3600 -u "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -k "$KEYCHAIN_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          DEVELOPER_ID_INFO="$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep 'Developer ID Application' | head -n 1)"
+          if [ -n "$DEVELOPER_ID_INFO" ]; then
+            CERT_INFO="$DEVELOPER_ID_INFO"
+          else
+            CERT_INFO="$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep -E 'Apple Distribution|Apple Development' | head -n 1)"
+          fi
+          if [ -z "$CERT_INFO" ]; then
+            echo "Apple certificate imported, but no usable code-signing identity was found."
+            security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+            exit 1
+          fi
+
+          CERT_ID="$(echo "$CERT_INFO" | awk -F'"' '{print $2}')"
+          echo "APPLE_SIGNING_IDENTITY=$CERT_ID" >> "$GITHUB_ENV"
+          echo "Imported Apple signing identity: $CERT_ID"
+
+      - name: Configure Apple notarization
+        if: matrix.platform == 'macos-latest'
+        shell: bash
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_PROVIDER_SHORT_NAME: ${{ secrets.APPLE_PROVIDER_SHORT_NAME }}
+        run: |
+          for name in APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID APPLE_PROVIDER_SHORT_NAME; do
+            value="${!name:-}"
+            if [ -n "$value" ]; then
+              echo "$name=$value" >> "$GITHUB_ENV"
+            fi
+          done
+
+      # ── macOS：用我们自己的 build-mac.sh，统一处理签名、公证和 artifact 清理 ──
+      - name: Build (macOS)
+        if: matrix.platform == 'macos-latest'
+        working-directory: 'openless-all/app'
+        env:
+          INSTALL: '0'        # CI 不要装到 /Applications,也不要 reset TCC
+        run: bash scripts/build-mac.sh
+
+      # ── Windows：仅 Windows 跑通用 tauri build（Linux 用下方专用 step，避免重复构建）──
       - name: Build (Windows)
         if: matrix.platform == 'windows-latest'
         working-directory: 'openless-all/app'
         run: npm run tauri build
 
+      # ── Linux：产 deb / rpm / AppImage ──
       - name: Build (Linux)
         if: matrix.platform == 'ubuntu-22.04'
         working-directory: 'openless-all/app'
         run: npm run tauri -- build --bundles deb,rpm,appimage
+
+      # ── 收集产物 ──
+      - name: List artifacts (debug)
+        shell: bash
+        working-directory: 'openless-all/app/src-tauri/target/release/bundle'
+        run: ls -la macos/ dmg/ nsis/ msi/ deb/ rpm/ appimage/ 2>/dev/null || true
+
+      - name: Upload macOS artifacts
+        if: matrix.platform == 'macos-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: openless-macos-arm64
+          path: |
+            openless-all/app/src-tauri/target/release/bundle/dmg/*.dmg
+          if-no-files-found: error
 
       - name: Upload Windows artifacts
         if: matrix.platform == 'windows-latest'
@@ -100,7 +209,7 @@ jobs:
             openless-all/app/src-tauri/target/release/bundle/appimage/*.AppImage
           if-no-files-found: error
 
-      # ── tag 推送时上传到 GitHub Release（macOS DMG 由本地手动上传）──
+      # ── tag 推送时,同步上传到 GitHub Release ──
       - name: Create / update release
         if: startsWith(github.ref, 'refs/tags/v') && endsWith(github.ref, '-tauri')
         uses: softprops/action-gh-release@v2
@@ -111,6 +220,7 @@ jobs:
           prerelease: false
           generate_release_notes: true
           files: |
+            openless-all/app/src-tauri/target/release/bundle/dmg/*.dmg
             openless-all/app/src-tauri/target/release/bundle/nsis/*.exe
             openless-all/app/src-tauri/target/release/bundle/msi/*.msi
             openless-all/app/src-tauri/target/release/bundle/deb/*.deb
