@@ -225,9 +225,10 @@ type LlmPresetId = typeof LLM_PRESETS[number]['id'];
 
 const ASR_DEFAULT_RESOURCE_ID = 'volc.bigasr.sauc.duration';
 
+// SiliconFlow ASR 暂未在后端实现（coordinator.rs 只路由 whisper / volcengine）。
+// 在后端接入前不暴露给用户，避免选了之后必然失败。重新启用见 issue #58 的 follow-up。
 const ASR_PRESETS = [
   { id: 'volcengine',  nameKey: 'asrVolcengine'  },
-  { id: 'siliconflow', nameKey: 'asrSiliconflow' },
   { id: 'whisper',     nameKey: 'asrWhisper'     },
 ] as const;
 
@@ -320,14 +321,6 @@ function ProvidersSection() {
             <CredentialField key={`${asrProvider}:access_key`} label="Access Key" account="volcengine.access_key" mono mask />
             <CredentialField key={`${asrProvider}:resource_id`} label="Resource ID" account="volcengine.resource_id" mono
               placeholder={ASR_DEFAULT_RESOURCE_ID} defaultValue={ASR_DEFAULT_RESOURCE_ID} />
-          </>
-        ) : asrProvider === 'siliconflow' ? (
-          <>
-            <CredentialField key={`${asrProvider}:api_key`} label="API Key" account="asr.api_key" mono mask />
-            <CredentialField key={`${asrProvider}:endpoint`} label="Base URL" account="asr.endpoint"
-              placeholder="https://api.siliconflow.cn/v1" defaultValue="https://api.siliconflow.cn/v1" />
-            <CredentialField key={`${asrProvider}:model`} label="Model" account="asr.model"
-              placeholder="FunAudioLLM/SenseVoiceSmall" defaultValue="FunAudioLLM/SenseVoiceSmall" />
           </>
         ) : (
           <>
