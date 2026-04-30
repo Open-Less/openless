@@ -12,7 +12,7 @@ jobs:
     runs-on: windows-latest
     defaults:
       run:
-        working-directory: openless -all/app
+        working-directory: openless-all/app
     steps:
       - uses: actions/checkout@v4
 
@@ -20,7 +20,7 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: openless -all/app/package-lock.json
+          cache-dependency-path: openless-all/app/package-lock.json
 
       - uses: dtolnay/rust-toolchain@stable
 

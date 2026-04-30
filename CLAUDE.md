@@ -11,16 +11,16 @@ The repository contains **two parallel implementations** of the same product:
 | Path | Stack | Status |
 | --- | --- | --- |
 | `Sources/`, `Tests/`, `Package.swift`, `scripts/`, `appcast.xml` | SwiftPM macOS-only (macOS 15+, Swift 5.9) | Legacy. Still ships Sparkle updates for `v*` tags so old users keep auto-updating. |
-| `openless -all/app/` (note the space) | Tauri 2 + Rust backend + React/TS frontend, macOS 12+ and Windows | **Active**. All current development happens here. |
+| `openless-all/app/` (no space) | Tauri 2 + Rust backend + React/TS frontend, macOS 12+ and Windows | **Active**. All current development happens here. |
 
-The Tauri port is a faithful module-for-module rewrite of the Swift app. **The Swift original is the behavior authority — when Rust and TS disagree, Swift wins.** When porting, open the Rust file and the matching `Sources/OpenLess<X>/...` Swift file side by side. UI must match `openless -all/design_handoff_openless/*.jsx` pixel-for-pixel; the JSX is reference-only, never imported.
+The Tauri port is a faithful module-for-module rewrite of the Swift app. **The Swift original is the behavior authority — when Rust and TS disagree, Swift wins.** When porting, open the Rust file and the matching `Sources/OpenLess<X>/...` Swift file side by side. UI must match `openless-all/design_handoff_openless/*.jsx` pixel-for-pixel; the JSX is reference-only, never imported.
 
 ## Build, Run, Test
 
 ### Tauri (current — start here)
 
 ```bash
-cd "openless -all/app"
+cd "openless-all/app"
 npm ci
 
 # Dev: vite at :1420 + tauri shell
@@ -49,8 +49,8 @@ cargo check --manifest-path src-tauri/Cargo.toml
 ```
 
 Generated artifacts:
-- `openless -all/app/src-tauri/target/release/bundle/macos/OpenLess.app`
-- `openless -all/app/src-tauri/target/release/bundle/dmg/OpenLess_<version>_aarch64.dmg`
+- `openless-all/app/src-tauri/target/release/bundle/macos/OpenLess.app`
+- `openless-all/app/src-tauri/target/release/bundle/dmg/OpenLess_<version>_aarch64.dmg`
 
 Logs: `~/Library/Logs/OpenLess/openless.log` (macOS) / `%LOCALAPPDATA%\OpenLess\Logs\openless.log` (Windows).
 
@@ -75,7 +75,7 @@ Logs: `~/Library/Logs/OpenLess/OpenLess.log`.
 `DictationCoordinator` (Swift) / `coordinator::Coordinator` (Rust) is the **single owner of session state**. Hotkey edges drive a small phase enum (`Idle → Starting → Listening → Processing`); recorder, ASR, polish, insertion, and history are wired here and nowhere else. Library/module code never calls across modules — they each depend only on shared types.
 
 ```
-Swift (Sources/OpenLess*)        Rust (openless -all/app/src-tauri/src)        Purpose
+Swift (Sources/OpenLess*)        Rust (openless-all/app/src-tauri/src)        Purpose
 ─────────────────────────        ──────────────────────────────────────        ────────────────────────────────
 OpenLessCore                     types.rs                                      Pure value types: DictationSession, PolishMode, HotkeyBinding, errors
 OpenLessHotkey                   hotkey.rs                                     Global hotkey monitor (modifier-key edges)
@@ -107,8 +107,8 @@ Invariants:
 
 ### Permissions, credentials, on-disk state
 
-- **Bundle ID `com.openless.app`** is shared between Swift and Tauri builds (hard-coded in `scripts/build-app.sh`, `openless -all/app/src-tauri/tauri.conf.json`, and `CredentialsVault.serviceName`). Changing it breaks Keychain lookups *and* every existing TCC grant.
-- **TCC**: Microphone + Accessibility + AppleEvents. Both apps declare `NSMicrophoneUsageDescription` / `NSAccessibilityUsageDescription` / `NSAppleEventsUsageDescription` in their Info.plist. Tauri's lives at `openless -all/app/src-tauri/Info.plist`. After a fresh build that resets TCC, the app must be **fully quit and relaunched** after granting Accessibility before the global hotkey tap installs.
+- **Bundle ID `com.openless.app`** is shared between Swift and Tauri builds (hard-coded in `scripts/build-app.sh`, `openless-all/app/src-tauri/tauri.conf.json`, and `CredentialsVault.serviceName`). Changing it breaks Keychain lookups *and* every existing TCC grant.
+- **TCC**: Microphone + Accessibility + AppleEvents. Both apps declare `NSMicrophoneUsageDescription` / `NSAccessibilityUsageDescription` / `NSAppleEventsUsageDescription` in their Info.plist. Tauri's lives at `openless-all/app/src-tauri/Info.plist`. After a fresh build that resets TCC, the app must be **fully quit and relaunched** after granting Accessibility before the global hotkey tap installs.
 - **Credentials** live in Keychain under accounts in `CredentialAccount` (`volcengine.app_key`, `volcengine.access_key`, `volcengine.resource_id`, `ark.api_key`, `ark.model_id`, `ark.endpoint`). The Rust port additionally reads the legacy plaintext fallback at `~/.openless/credentials.json` so users who configured the Swift app keep their creds without re-entering. Never hard-code keys.
 - **Per-user data**:
   - macOS: `~/Library/Application Support/OpenLess/{history.json, preferences.json, dictionary.json}` — same paths as the Swift app, capped at 200 history entries. **Do not rename `dictionary.json` to `vocab.json`** (drops user data).
@@ -122,7 +122,7 @@ Two separate flows, by design:
 - **Swift (Sparkle, old users):** `scripts/release.sh <version>` bumps `build-app.sh`, builds the `.app`, ditto-zips it, signs with Sparkle EdDSA private key (Keychain item, not in repo), appends `<item>` to `appcast.xml`, commits, tags `v<version>`, pushes, and creates the GitHub Release. The public EdDSA key in `build-app.sh` (`SPARKLE_PUBLIC_KEY`) and the appcast URL `https://raw.githubusercontent.com/appergb/openless/main/appcast.xml` are baked into shipped clients — changing either strands existing users.
 - **Tauri (cross-platform):** push a `v*-tauri` tag → `.github/workflows/release-tauri.yml` builds macOS arm64 `.dmg` and Windows x64 `.msi`. macOS Developer ID signing + notarization runs only when `APPLE_CERTIFICATE` / `APPLE_CERTIFICATE_PASSWORD` / `APPLE_ID` / `APPLE_PASSWORD` / `APPLE_TEAM_ID` secrets are set; otherwise it falls back to ad-hoc signing with a CI warning. Tauri tags use `-tauri` suffix specifically to not collide with Swift `vX.Y.Z` tags.
 
-When bumping versions, update **both** `version` fields: `openless -all/app/package.json` and `openless -all/app/src-tauri/tauri.conf.json` (and `Cargo.toml`). For Swift releases, bump `APP_VERSION` *and* `BUILD_NUMBER` in `scripts/build-app.sh`.
+When bumping versions, update **both** `version` fields: `openless-all/app/package.json` and `openless-all/app/src-tauri/tauri.conf.json` (and `Cargo.toml`). For Swift releases, bump `APP_VERSION` *and* `BUILD_NUMBER` in `scripts/build-app.sh`.
 
 ## Repo conventions
 
@@ -135,10 +135,10 @@ When bumping versions, update **both** `version` fields: `openless -all/app/pack
 ### Adding a new module
 
 Tauri (preferred):
-1. Add a `<name>.rs` (or directory) under `openless -all/app/src-tauri/src/`, importing only from `types`.
+1. Add a `<name>.rs` (or directory) under `openless-all/app/src-tauri/src/`, importing only from `types`.
 2. Register it in `lib.rs` (`mod <name>;`).
 3. Wire it into `coordinator.rs` and expose any frontend-callable surface via `commands.rs` + `invoke_handler!`.
-4. Add the matching TS wrapper in `openless -all/app/src/lib/ipc.ts` (with a mock branch for browser dev).
+4. Add the matching TS wrapper in `openless-all/app/src/lib/ipc.ts` (with a mock branch for browser dev).
 
 Swift (only if also patching the legacy app):
 1. Add target in `Package.swift` under `Sources/OpenLess<Name>`, depending only on `OpenLessCore`.

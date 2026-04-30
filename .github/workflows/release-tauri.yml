@@ -35,7 +35,7 @@ jobs:
         with:
           node-version: 20
           cache: npm
-          cache-dependency-path: 'openless -all/app/package-lock.json'
+          cache-dependency-path: 'openless-all/app/package-lock.json'
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -44,7 +44,7 @@ jobs:
       - name: Cache Cargo
         uses: swatinem/rust-cache@v2
         with:
-          workspaces: 'openless -all/app/src-tauri -> target'
+          workspaces: 'openless-all/app/src-tauri -> target'
 
       - name: Install Linux bundle deps
         if: matrix.platform == 'ubuntu-22.04'
@@ -66,17 +66,17 @@ jobs:
             wget
 
       - name: Install npm deps
-        working-directory: 'openless -all/app'
+        working-directory: 'openless-all/app'
         run: npm ci
 
       - name: Build (Windows)
         if: matrix.platform == 'windows-latest'
-        working-directory: 'openless -all/app'
+        working-directory: 'openless-all/app'
         run: npm run tauri build
 
       - name: Build (Linux)
         if: matrix.platform == 'ubuntu-22.04'
-        working-directory: 'openless -all/app'
+        working-directory: 'openless-all/app'
         run: npm run tauri -- build --bundles deb,rpm,appimage
 
       - name: Upload Windows artifacts
@@ -85,8 +85,8 @@ jobs:
         with:
           name: openless-windows-x64
           path: |
-            openless -all/app/src-tauri/target/release/bundle/nsis/*.exe
-            openless -all/app/src-tauri/target/release/bundle/msi/*.msi
+            openless-all/app/src-tauri/target/release/bundle/nsis/*.exe
+            openless-all/app/src-tauri/target/release/bundle/msi/*.msi
           if-no-files-found: error
 
       - name: Upload Linux artifacts
@@ -95,9 +95,9 @@ jobs:
         with:
           name: openless-linux-x64
           path: |
-            openless -all/app/src-tauri/target/release/bundle/deb/*.deb
-            openless -all/app/src-tauri/target/release/bundle/rpm/*.rpm
-            openless -all/app/src-tauri/target/release/bundle/appimage/*.AppImage
+            openless-all/app/src-tauri/target/release/bundle/deb/*.deb
+            openless-all/app/src-tauri/target/release/bundle/rpm/*.rpm
+            openless-all/app/src-tauri/target/release/bundle/appimage/*.AppImage
           if-no-files-found: error
 
       # ── tag 推送时上传到 GitHub Release（macOS DMG 由本地手动上传）──
@@ -111,8 +111,8 @@ jobs:
           prerelease: false
           generate_release_notes: true
           files: |
-            openless -all/app/src-tauri/target/release/bundle/nsis/*.exe
-            openless -all/app/src-tauri/target/release/bundle/msi/*.msi
-            openless -all/app/src-tauri/target/release/bundle/deb/*.deb
-            openless -all/app/src-tauri/target/release/bundle/rpm/*.rpm
-            openless -all/app/src-tauri/target/release/bundle/appimage/*.AppImage
+            openless-all/app/src-tauri/target/release/bundle/nsis/*.exe
+            openless-all/app/src-tauri/target/release/bundle/msi/*.msi
+            openless-all/app/src-tauri/target/release/bundle/deb/*.deb
+            openless-all/app/src-tauri/target/release/bundle/rpm/*.rpm
+            openless-all/app/src-tauri/target/release/bundle/appimage/*.AppImage

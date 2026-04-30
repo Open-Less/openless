@@ -123,10 +123,10 @@ Full end-user walkthrough: [USAGE.md](USAGE.md).
 
 ## Build from source (developers)
 
-The active codebase is in `openless -all/app/` (Tauri 2 + Rust + React/TS).
+The active codebase is in `openless-all/app/` (Tauri 2 + Rust + React/TS).
 
 ```bash
-cd "openless -all/app"
+cd "openless-all/app"
 npm ci
 
 # Dev: Vite at :1420 + Tauri shell
@@ -145,7 +145,7 @@ npm run build
 
 Logs: `~/Library/Logs/OpenLess/openless.log` (macOS) / `%LOCALAPPDATA%\OpenLess\Logs\openless.log` (Windows).
 
-**Windows build** — see [`openless -all/README.md`](openless%20-all/README.md) for MSVC vs GNU/MinGW routes.
+**Windows build** — see [`openless-all/README.md`](openless-all/README.md) for MSVC vs GNU/MinGW routes.
 
 **Swift (legacy, Sparkle updates only):**
 
@@ -197,7 +197,7 @@ The main window is organized as Home / History / Dictionary / Settings. The Dict
 
 ## Architecture
 
-The active implementation is Tauri 2 (`openless -all/app/`). The Swift/SwiftPM codebase under `Sources/` is legacy and still serves Sparkle auto-updates for existing users.
+The active implementation is Tauri 2 (`openless-all/app/`). The Swift/SwiftPM codebase under `Sources/` is legacy and still serves Sparkle auto-updates for existing users.
 
 **Tauri backend (Rust)** — each module depends only on `types.rs`:
 
@@ -232,7 +232,7 @@ Planned but not yet shipped:
 
 ## Maintainer release checklist
 
-- Bump version in `openless -all/app/package.json`, `src-tauri/tauri.conf.json`, and `src-tauri/Cargo.toml`.
+- Bump version in `openless-all/app/package.json`, `src-tauri/tauri.conf.json`, and `src-tauri/Cargo.toml`.
 - Run `INSTALL=0 ./scripts/build-mac.sh` and confirm the `.app` launches.
 - Verify on a clean macOS box: permission flow, hotkey, recording, ASR, polish, insertion, clipboard fallback.
 - Push a `v<version>-tauri` tag — CI builds and signs the macOS `.dmg` + Windows `.msi`.

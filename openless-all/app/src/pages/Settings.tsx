@@ -248,8 +248,7 @@ function ProvidersSection() {
     await setActiveAsrProvider(id);
     if (prefs) {
       const next = { ...prefs, activeAsrProvider: id };
-      setPrefsState(next);
-      await setSettings(next);
+      await updatePrefs(next);
     }
   };
 
