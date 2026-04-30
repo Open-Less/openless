@@ -9,9 +9,7 @@ import { getHotkeyStartStopLabel, getHotkeyTriggerLabel } from '../lib/hotkey';
 import {
   checkAccessibilityPermission,
   checkMicrophonePermission,
-  getHotkeyCapability,
   getHotkeyStatus,
-  getSettings,
   openExternal,
   openSystemSettings,
   readCredential,
@@ -19,7 +17,6 @@ import {
   requestMicrophonePermission,
   setActiveLlmProvider,
   setCredential,
-  setSettings,
 } from '../lib/ipc';
 import type {
   HotkeyCapability,
@@ -27,8 +24,8 @@ import type {
   HotkeyStatus,
   HotkeyTrigger,
   PermissionStatus,
-  UserPreferences,
 } from '../lib/types';
+import { useHotkeySettings } from '../state/HotkeySettingsContext';
 import { Btn, Card, PageHeader, Pill } from './_atoms';
 
 interface SettingsProps {
@@ -104,13 +101,7 @@ function SettingRow({ label, desc, children }: SettingRowProps) {
 }
 
 function RecordingSection() {
-  const [prefs, setPrefs] = useState<UserPreferences | null>(null);
-  const [capability, setCapability] = useState<HotkeyCapability | null>(null);
-
-  useEffect(() => {
-    getSettings().then(setPrefs);
-    getHotkeyCapability().then(setCapability);
-  }, []);
+  const { prefs, capability, updatePrefs: savePrefs } = useHotkeySettings();
 
   if (!prefs || !capability) {
     return (
@@ -120,17 +111,12 @@ function RecordingSection() {
     );
   }
 
-  const updatePrefs = async (next: UserPreferences) => {
-    setPrefs(next);
-    await setSettings(next);
-  };
-
   const onTriggerChange = (trigger: HotkeyTrigger) =>
-    updatePrefs({ ...prefs, hotkey: { ...prefs.hotkey, trigger } });
+    savePrefs({ ...prefs, hotkey: { ...prefs.hotkey, trigger } });
   const onModeChange = (mode: HotkeyMode) =>
-    updatePrefs({ ...prefs, hotkey: { ...prefs.hotkey, mode } });
+    savePrefs({ ...prefs, hotkey: { ...prefs.hotkey, mode } });
   const onShowCapsuleChange = (showCapsule: boolean) =>
-    updatePrefs({ ...prefs, showCapsule });
+    savePrefs({ ...prefs, showCapsule });
 
   const choices: Array<[HotkeyMode, string]> = [
     ['toggle', '切换式'],
@@ -224,24 +210,21 @@ type LlmPresetId = typeof LLM_PRESETS[number]['id'];
 const ASR_DEFAULT_RESOURCE_ID = 'volc.bigasr.sauc.duration';
 
 function ProvidersSection() {
-  const [prefs, setPrefsState] = useState<import('../lib/types').UserPreferences | null>(null);
+  const { prefs, updatePrefs } = useHotkeySettings();
   const [llmProvider, setLlmProvider] = useState<LlmPresetId>('ark');
 
   useEffect(() => {
-    getSettings().then(p => {
-      setPrefsState(p);
-      const known = LLM_PRESETS.find(x => x.id === p.activeLlmProvider);
-      setLlmProvider(known ? known.id : 'custom');
-    });
-  }, []);
+    if (!prefs) return;
+    const known = LLM_PRESETS.find(x => x.id === prefs.activeLlmProvider);
+    setLlmProvider(known ? known.id : 'custom');
+  }, [prefs]);
 
   const onLlmProviderChange = async (id: LlmPresetId) => {
     setLlmProvider(id);
     await setActiveLlmProvider(id);
     if (prefs) {
       const next = { ...prefs, activeLlmProvider: id };
-      setPrefsState(next);
-      await setSettings(next);
+      await updatePrefs(next);
     }
     const preset = LLM_PRESETS.find(p => p.id === id);
     if (preset?.baseUrl) {
@@ -384,15 +367,9 @@ const iconBtnStyle: CSSProperties = {
 };
 
 function ShortcutsSection() {
-  const [prefs, setPrefs] = useState<UserPreferences | null>(null);
-  const [capability, setCapability] = useState<HotkeyCapability | null>(null);
+  const { hotkey, capability } = useHotkeySettings();
 
-  useEffect(() => {
-    getSettings().then(setPrefs);
-    getHotkeyCapability().then(setCapability);
-  }, []);
-
-  if (!prefs || !capability) {
+  if (!hotkey || !capability) {
     return (
       <Card>
         <div style={{ fontSize: 12, color: 'var(--ol-ink-4)' }}>加载中…</div>
@@ -404,7 +381,7 @@ function ShortcutsSection() {
     ? '所有快捷键全局生效，需要在权限设置中开启辅助功能。'
     : '所有快捷键全局生效。若无响应，请在权限页查看全局快捷键监听状态。';
   const rows: Array<[string, string]> = [
-    ['开始 / 停止录音', getHotkeyStartStopLabel(prefs.hotkey)],
+    ['开始 / 停止录音', getHotkeyStartStopLabel(hotkey)],
     ['取消本次录音', 'Esc'],
     ['胶囊确认插入', '点击右侧 ✓'],
     ['切换上一次风格', capability.requiresAccessibilityPermission ? '⌘ ⇧ S' : '暂未支持'],
@@ -434,17 +411,15 @@ function PermissionsSection() {
   const [accessibility, setAccessibility] = useState<PermissionStatus | 'loading'>('loading');
   const [microphone, setMicrophone] = useState<PermissionStatus | 'loading'>('loading');
   const [hotkey, setHotkey] = useState<HotkeyStatus | null>(null);
-  const [capability, setCapability] = useState<HotkeyCapability | null>(null);
+  const { capability } = useHotkeySettings();
 
   const refresh = async () => {
-    const [a, m, c] = await Promise.all([
+    const [a, m] = await Promise.all([
       checkAccessibilityPermission(),
       checkMicrophonePermission(),
-      getHotkeyCapability(),
     ]);
     setAccessibility(a);
     setMicrophone(m);
-    setCapability(c);
     setHotkey(await getHotkeyStatus());
   };
 

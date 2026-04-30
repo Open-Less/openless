@@ -531,6 +531,12 @@ mod platform {
     }
 
     fn trigger_to_vk_code(trigger: HotkeyTrigger) -> u32 {
+        // Windows only gives us a small set of modifier virtual keys that can be
+        // used as reliable modifier-only global triggers, so the cross-platform
+        // trigger list intentionally collapses a few aliases onto the same
+        // physical Windows key:
+        // - LeftOption reuses RightAlt / VK_RMENU
+        // - Fn reuses RightControl / VK_RCONTROL
         match trigger {
             HotkeyTrigger::RightControl => VK_RCONTROL,
             HotkeyTrigger::LeftControl => VK_LCONTROL,

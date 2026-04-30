@@ -3,6 +3,7 @@ import { Capsule } from './components/Capsule';
 import { FloatingShell } from './components/FloatingShell';
 import { Onboarding } from './components/Onboarding';
 import { checkAccessibilityPermission, checkMicrophonePermission, isTauri } from './lib/ipc';
+import { HotkeySettingsProvider } from './state/HotkeySettingsContext';
 
 interface AppProps {
   isCapsule: boolean;
@@ -39,8 +40,9 @@ export function App({ isCapsule }: AppProps) {
   if (gate === 'checking') {
     return null;
   }
-  if (gate === 'onboarding') {
-    return <Onboarding onComplete={() => setGate('ready')} />;
-  }
-  return <FloatingShell />;
+  return (
+    <HotkeySettingsProvider>
+      {gate === 'onboarding' ? <Onboarding onComplete={() => setGate('ready')} /> : <FloatingShell />}
+    </HotkeySettingsProvider>
+  );
 }

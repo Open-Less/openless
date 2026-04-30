@@ -3,8 +3,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Icon } from '../components/Icon';
 import { getHotkeyTriggerLabel } from '../lib/hotkey';
-import { getCredentials, getSettings, listHistory } from '../lib/ipc';
-import type { CredentialsStatus, DictationSession, HotkeyBinding, PolishMode } from '../lib/types';
+import { getCredentials, listHistory } from '../lib/ipc';
+import type { CredentialsStatus, DictationSession, PolishMode } from '../lib/types';
+import { useHotkeySettings } from '../state/HotkeySettingsContext';
 import { Btn, Card, PageHeader, Pill } from './_atoms';
 
 const MODE_LABEL: Record<PolishMode, string> = {
@@ -24,12 +25,11 @@ export function Overview({ onOpenHistory }: OverviewProps) {
     volcengineConfigured: false,
     arkConfigured: false,
   });
-  const [hotkey, setHotkey] = useState<HotkeyBinding | null>(null);
+  const { hotkey } = useHotkeySettings();
 
   useEffect(() => {
     listHistory().then(setHistory);
     getCredentials().then(setCreds);
-    getSettings().then(p => setHotkey(p.hotkey));
   }, []);
 
   const metrics = useMemo(() => {

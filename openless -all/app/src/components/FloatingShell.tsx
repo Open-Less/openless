@@ -14,13 +14,14 @@ import { Vocab } from '../pages/Vocab';
 import { Style } from '../pages/Style';
 import { APP_VERSION_LABEL } from '../lib/appVersion';
 import { getHotkeyTriggerLabel } from '../lib/hotkey';
-import { getCredentials, getSettings, openExternal } from '../lib/ipc';
+import { getCredentials, openExternal } from '../lib/ipc';
 import { OL_DATA } from '../lib/mockData';
 import {
   PROVIDER_SETUP_PROMPT_SEEN_KEY,
   shouldShowProviderSetupPrompt,
 } from '../lib/providerSetup';
 import type { SettingsSectionId } from '../pages/Settings';
+import { useHotkeySettings } from '../state/HotkeySettingsContext';
 import { useAppState, type AppTab } from '../state/useAppState';
 
 interface NavItem {
@@ -56,17 +57,13 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
   const { currentTab, setCurrentTab, settingsOpen, setSettingsOpen } = useAppState(initialTab, initialSettings);
   const [settingsInitialSection, setSettingsInitialSection] = useState<SettingsSectionId | undefined>();
   const [providerPromptOpen, setProviderPromptOpen] = useState(false);
-  const [hotkeyLabel, setHotkeyLabel] = useState(() => getHotkeyTriggerLabel(null));
+  const { hotkey } = useHotkeySettings();
   const Page = (NAV.find((n) => n.id === currentTab) ?? NAV[0]).cmp;
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       const credentials = await getCredentials();
-      const prefs = await getSettings();
-      if (!cancelled) {
-        setHotkeyLabel(getHotkeyTriggerLabel(prefs.hotkey.trigger));
-      }
       const promptSeenValue = window.localStorage.getItem(PROVIDER_SETUP_PROMPT_SEEN_KEY);
       if (!cancelled && shouldShowProviderSetupPrompt(credentials, promptSeenValue)) {
         setProviderPromptOpen(true);
@@ -177,12 +174,12 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
             <div style={{ fontSize: 10.5, color: 'var(--ol-ink-4)', marginBottom: 6, letterSpacing: '0.02em' }}>录音快捷键</div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--ol-ink-2)' }}>
               <kbd style={{
-                padding: '2px 7px', fontSize: 10.5,
+              padding: '2px 7px', fontSize: 10.5,
                 background: '#fff', borderRadius: 5,
                 border: '0.5px solid var(--ol-line-strong)',
                 fontFamily: 'var(--ol-font-mono)', color: 'var(--ol-ink)',
                 boxShadow: '0 1px 0 rgba(0,0,0,.04)',
-              }}>{hotkeyLabel}</kbd>
+              }}>{getHotkeyTriggerLabel(hotkey?.trigger)}</kbd>
               <span style={{ color: 'var(--ol-ink-4)' }}>开始 / 停止</span>
             </div>
           </div>

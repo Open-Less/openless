@@ -7,13 +7,13 @@ import { useEffect, useState } from 'react';
 import {
   checkAccessibilityPermission,
   checkMicrophonePermission,
-  getHotkeyCapability,
   openSystemSettings,
   requestAccessibilityPermission,
   requestMicrophonePermission,
 } from '../lib/ipc';
 import { getHotkeyTriggerLabel } from '../lib/hotkey';
-import type { HotkeyCapability, PermissionStatus } from '../lib/types';
+import type { PermissionStatus } from '../lib/types';
+import { useHotkeySettings } from '../state/HotkeySettingsContext';
 
 interface OnboardingProps {
   onComplete: () => void;
@@ -22,18 +22,16 @@ interface OnboardingProps {
 export function Onboarding({ onComplete }: OnboardingProps) {
   const [accessibility, setAccessibility] = useState<PermissionStatus>('notDetermined');
   const [microphone, setMicrophone] = useState<PermissionStatus>('notDetermined');
-  const [capability, setCapability] = useState<HotkeyCapability | null>(null);
   const [busy, setBusy] = useState(false);
+  const { capability } = useHotkeySettings();
 
   const refresh = async () => {
-    const [a, m, c] = await Promise.all([
+    const [a, m] = await Promise.all([
       checkAccessibilityPermission(),
       checkMicrophonePermission(),
-      getHotkeyCapability(),
     ]);
     setAccessibility(a);
     setMicrophone(m);
-    setCapability(c);
     if ((a === 'granted' || a === 'notApplicable') && (m === 'granted' || m === 'notApplicable')) {
       onComplete();
     }

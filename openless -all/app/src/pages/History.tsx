@@ -5,8 +5,9 @@ import { useEffect, useMemo, useState } from 'react';
 import { Icon } from '../components/Icon';
 import { detectOS } from '../components/WindowChrome';
 import { getHotkeyTriggerLabel } from '../lib/hotkey';
-import { clearHistory, deleteHistoryEntry, getSettings, listHistory } from '../lib/ipc';
-import type { DictationSession, HotkeyBinding, PolishMode } from '../lib/types';
+import { clearHistory, deleteHistoryEntry, listHistory } from '../lib/ipc';
+import type { DictationSession, PolishMode } from '../lib/types';
+import { useHotkeySettings } from '../state/HotkeySettingsContext';
 import { Btn, Card, PageHeader, Pill } from './_atoms';
 
 const FILTERS: Array<{ id: 'all' | PolishMode; label: string }> = [
@@ -29,7 +30,7 @@ export function History() {
   const [items, setItems] = useState<DictationSession[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [hotkey, setHotkey] = useState<HotkeyBinding | null>(null);
+  const { hotkey } = useHotkeySettings();
 
   const refresh = async () => {
     const data = await listHistory();
@@ -42,7 +43,6 @@ export function History() {
 
   useEffect(() => {
     refresh();
-    getSettings().then(p => setHotkey(p.hotkey));
   }, []);
 
   const filtered = useMemo(
