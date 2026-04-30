@@ -326,6 +326,20 @@ async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
         return Ok(());
     }
 
+    if let Err(message) = ensure_asr_credentials() {
+        log::warn!("[coord] ASR credential gate failed: {message}");
+        emit_capsule(
+            inner,
+            CapsuleState::Error,
+            0.0,
+            0,
+            Some(message.clone()),
+            None,
+        );
+        inner.state.lock().phase = SessionPhase::Idle;
+        return Err(message);
+    }
+
     if let Err(message) = ensure_microphone_permission(inner) {
         log::warn!("[coord] microphone permission gate failed: {message}");
         emit_capsule(
@@ -556,10 +570,43 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     };
 
     // ASR 完成后 cancel 检查：用户在 transcribe 进行中按 Esc 时，这里就会命中。
+    // 优先级高于 empty 检查 — 用户取消 → 静默丢弃，不写失败历史也不弹错误胶囊。
     if inner.state.lock().cancelled {
         log::info!("[coord] cancel detected after ASR — discarding transcript");
         inner.state.lock().phase = SessionPhase::Idle;
         return Ok(());
+    }
+
+    // ASR 返回空转写护栏（来自 PR #66）：写一条 emptyTranscript 失败历史 + 错误胶囊，
+    // 与 main 上其它 error 路径保持一致（带 schedule_capsule_idle 让胶囊自动消失）。
+    if raw.text.trim().is_empty() {
+        let session = DictationSession {
+            id: Uuid::new_v4().to_string(),
+            created_at: Utc::now().to_rfc3339(),
+            raw_transcript: raw.text.clone(),
+            final_text: String::new(),
+            mode: inner.prefs.get().default_mode,
+            app_bundle_id: None,
+            app_name: None,
+            insert_status: InsertStatus::Failed,
+            error_code: Some("emptyTranscript".to_string()),
+            duration_ms: Some(raw.duration_ms),
+            dictionary_entry_count: Some(enabled_phrases(inner).len() as u32),
+        };
+        if let Err(e) = inner.history.append(session) {
+            log::error!("[coord] history append failed: {e}");
+        }
+        emit_capsule(
+            inner,
+            CapsuleState::Error,
+            0.0,
+            elapsed,
+            Some("ASR returned empty transcript".to_string()),
+            None,
+        );
+        inner.state.lock().phase = SessionPhase::Idle;
+        schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
+        return Err("ASR returned empty transcript".to_string());
     }
 
     emit_capsule(inner, CapsuleState::Polishing, 0.0, elapsed, None, None);
@@ -717,6 +764,27 @@ fn ensure_microphone_permission(inner: &Arc<Inner>) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!("需要麦克风权限，当前状态: {requested:?}"))
+    }
+}
+
+fn ensure_asr_credentials() -> Result<(), String> {
+    let active_asr = CredentialsVault::get_active_asr();
+    if active_asr == "whisper" {
+        let api_key = CredentialsVault::get(CredentialAccount::AsrApiKey)
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        if api_key.trim().is_empty() {
+            return Err("请先在设置中填写 Whisper ASR API Key".to_string());
+        }
+        return Ok(());
+    }
+
+    let creds = read_volc_credentials();
+    if creds.app_id.trim().is_empty() || creds.access_token.trim().is_empty() {
+        Err("请先在设置中填写火山引擎 ASR App Key 和 Access Key".to_string())
+    } else {
+        Ok(())
     }
 }
 
