@@ -94,26 +94,30 @@ pub fn run() {
 
             // 与 Swift `StatusBarIcon.swift` 行为一致：用全彩 AppIcon，**不**走 template 模式
             // （走 template 会被 macOS 染成单色 → 看起来像个黑方块）。
-            let _tray = TrayIconBuilder::with_id("main-tray")
-                .icon(app.default_window_icon().unwrap().clone())
-                .icon_as_template(false)
-                .menu(&menu)
-                .show_menu_on_left_click(false)
-                .on_menu_event(|app, event| match event.id.as_ref() {
-                    "toggle" => show_main_window(app),
-                    "quit" => app.exit(0),
-                    _ => {}
-                })
-                .on_tray_icon_event(|tray, event| {
-                    if let TrayIconEvent::Click {
-                        button: MouseButton::Left,
-                        ..
-                    } = event
-                    {
-                        show_main_window(tray.app_handle());
-                    }
-                })
-                .build(app)?;
+            if let Some(icon) = app.default_window_icon() {
+                let _tray = TrayIconBuilder::with_id("main-tray")
+                    .icon(icon.clone())
+                    .icon_as_template(false)
+                    .menu(&menu)
+                    .show_menu_on_left_click(false)
+                    .on_menu_event(|app, event| match event.id.as_ref() {
+                        "toggle" => show_main_window(app),
+                        "quit" => app.exit(0),
+                        _ => {}
+                    })
+                    .on_tray_icon_event(|tray, event| {
+                        if let TrayIconEvent::Click {
+                            button: MouseButton::Left,
+                            ..
+                        } = event
+                        {
+                            show_main_window(tray.app_handle());
+                        }
+                    })
+                    .build(app)?;
+            } else {
+                log::warn!("[startup] default window icon missing; tray icon disabled");
+            }
 
             // Spin up hotkey listener; coordinator owns the lifecycle.
             let app_handle = app.handle().clone();
