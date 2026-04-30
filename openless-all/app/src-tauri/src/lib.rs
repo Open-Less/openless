@@ -38,6 +38,13 @@ pub fn run() {
     let coordinator = Arc::new(coordinator::Coordinator::new());
 
     tauri::Builder::default()
+        // 单实例锁：第二个进程启动时立即退出，激活信号转给已运行实例的主窗口。
+        // 否则两份 OpenLess（如 /Applications/ + dev build）会各自抓全局热键，
+        // 导致按一次键、两个进程同时跑流水线、文本被插入两遍。见 issue #50。
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            log::info!("[single-instance] another instance launched, focusing existing main window");
+            show_main_window(app);
+        }))
         .plugin(tauri_plugin_shell::init())
         .manage(coordinator.clone())
         .setup(move |app| {
