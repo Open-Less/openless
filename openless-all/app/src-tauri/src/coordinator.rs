@@ -37,6 +37,11 @@ enum SessionPhase {
     Starting,
     Listening,
     Processing,
+    /// 已经过了最后一次 cancel 检查、即将 / 正在调用 inserter.insert 的窗口。
+    /// cancel_session 在此阶段拒绝介入：Cmd+V 模拟点击已开始或已发出，
+    /// 无法撤销，硬把 cancelled=true 也救不回来，只会让 UI 出现 cancelled
+    /// 但实际还是插入了的诡异状态。详见 PR 修 Codex audit HIGH #2。
+    Inserting,
 }
 
 enum ActiveAsr {
@@ -364,6 +369,15 @@ async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
             schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
             return Err(e.to_string());
         }
+        // open_session.await 期间用户可能按了 Esc / 改变心意。如果 cancel_session
+        // 已触发（cancelled=true 或 phase 被改回 Idle），别再装 ASR，直接善后。
+        // audit HIGH #1。
+        if cancel_raced_during_starting(inner) {
+            log::info!("[coord] cancel raced during ASR open_session — aborting begin");
+            asr.cancel();
+            inner.state.lock().phase = SessionPhase::Idle;
+            return Ok(());
+        }
         let c: Arc<dyn crate::recorder::AudioConsumer> = Arc::new(AsrBridge {
             asr: Arc::clone(&asr),
         });
@@ -410,18 +424,43 @@ async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
 
     match Recorder::start(consumer, level_handler) {
         Ok(rec) => {
-            *inner.recorder.lock() = Some(rec);
-            // 转 Listening 同时检查 Starting 期间是否积累了 pending_stop 边沿。
-            // hold 模式快速松开 / toggle 快速双击会到这里：握手刚完就要立即停。
-            let should_stop_immediately = {
+            // audit HIGH #1：转 Listening 之前在同一 lock 内检查 cancel race。
+            // 之前是无条件 phase=Listening，会把 cancel_session 在 await 期间设的 Idle
+            // 反向覆盖回 Listening → 用户的 cancel 边沿被吞掉。
+            let outcome = {
                 let mut state = inner.state.lock();
-                state.phase = SessionPhase::Listening;
-                std::mem::replace(&mut state.pending_stop, false)
+                if state.cancelled || state.phase != SessionPhase::Starting {
+                    BeginOutcome::CancelRaced
+                } else {
+                    state.phase = SessionPhase::Listening;
+                    let pending = std::mem::replace(&mut state.pending_stop, false);
+                    if pending {
+                        BeginOutcome::PendingStop
+                    } else {
+                        BeginOutcome::Started
+                    }
+                }
             };
-            log::info!("[coord] session started (asr={})", active_asr);
-            if should_stop_immediately {
-                log::info!("[coord] applying pending_stop edge → end_session immediately");
-                let _ = end_session(inner).await;
+            match outcome {
+                BeginOutcome::CancelRaced => {
+                    log::info!("[coord] cancel raced during recorder start — aborting begin");
+                    rec.stop();
+                    if let Some(asr) = inner.asr.lock().take() {
+                        match asr {
+                            ActiveAsr::Volcengine(v) => v.cancel(),
+                            ActiveAsr::Whisper(w) => w.cancel(),
+                        }
+                    }
+                    inner.state.lock().phase = SessionPhase::Idle;
+                }
+                BeginOutcome::Started | BeginOutcome::PendingStop => {
+                    *inner.recorder.lock() = Some(rec);
+                    log::info!("[coord] session started (asr={})", active_asr);
+                    if matches!(outcome, BeginOutcome::PendingStop) {
+                        log::info!("[coord] applying pending_stop edge → end_session immediately");
+                        let _ = end_session(inner).await;
+                    }
+                }
             }
         }
         Err(e) => {
@@ -530,10 +569,22 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     let hotword_strs = enabled_phrases(inner);
     let polished = polish_or_passthrough(&raw, mode, &hotword_strs).await;
 
-    // Polish 完成后再 check 一次：即使 polish 已经返回，只要还没插入，仍可丢弃。
-    if inner.state.lock().cancelled {
-        log::info!("[coord] cancel detected after polish — discarding output (chars={})", polished.chars().count());
-        inner.state.lock().phase = SessionPhase::Idle;
+    // 原子化最后一次 cancel 检查 + 转 Inserting：
+    // 在同一 lock 内决定「丢弃」还是「进入 Inserting」。一旦设到 Inserting，
+    // cancel_session 就拒绝介入（Cmd+V 已发出，撤销不掉）。这是 audit HIGH #2 的修复，
+    // 之前 check 与 inserter.insert 之间有窗口期。
+    let proceed_to_insert = {
+        let mut state = inner.state.lock();
+        if state.cancelled {
+            state.phase = SessionPhase::Idle;
+            false
+        } else {
+            state.phase = SessionPhase::Inserting;
+            true
+        }
+    };
+    if !proceed_to_insert {
+        log::info!("[coord] cancel detected before insert — discarding output (chars={})", polished.chars().count());
         return Ok(());
     }
 
@@ -604,6 +655,13 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
 fn cancel_session(inner: &Arc<Inner>) {
     let phase = inner.state.lock().phase;
     if phase == SessionPhase::Idle {
+        return;
+    }
+    // Inserting 阶段已经过了最后一次 cancel 检查 + 锁内转换，inserter.insert 即将
+    // 或正在执行 → Cmd+V 已发出无法撤销。这里硬设 cancelled=true 只会让 UI 显示
+    // "已取消" 但文本仍被插入，与用户预期相反。直接拒绝，让本次 session 走完。
+    if phase == SessionPhase::Inserting {
+        log::info!("[coord] cancel ignored — already in Inserting phase, can't undo paste");
         return;
     }
     // Processing 阶段 cancel 不能直接干掉 in-flight polish task（已经 await 了），
@@ -785,6 +843,25 @@ fn enabled_phrases(inner: &Arc<Inner>) -> Vec<String> {
 /// 终止态（Done / Cancelled / Error）后延迟 N ms 把胶囊改回 Idle，让浮窗自动消失。
 /// 用户点 ✕ / ✓ / 中途出错 / 按 Esc 都走这里，统一 2 秒。
 const CAPSULE_AUTO_HIDE_DELAY_MS: u64 = 2000;
+
+/// begin_session 中各 await 之间的 cancel race 检查结果。
+enum BeginOutcome {
+    /// 正常进入 Listening。
+    Started,
+    /// Starting 阶段积累了 pending_stop 边沿，应立即 end_session（hold 快速松开 / toggle 快速双击）。
+    PendingStop,
+    /// 期间 cancel_session 触发（cancelled=true 或 phase 被外部改回 Idle）。
+    /// 必须回滚 recorder + ASR 资源，不进 Listening。
+    CancelRaced,
+}
+
+/// 检查 begin_session 的 await 间隙是否被 cancel_session 打断。
+/// 必须在持有 state lock 的瞬间读，结果一拿就过期，所以用 helper 名字提醒只在
+/// 「准备做下一步副作用前」用。
+fn cancel_raced_during_starting(inner: &Arc<Inner>) -> bool {
+    let state = inner.state.lock();
+    state.cancelled || state.phase != SessionPhase::Starting
+}
 
 fn schedule_capsule_idle(inner: &Arc<Inner>, delay_ms: u64) {
     let inner_clone = Arc::clone(inner);
