@@ -17,7 +17,9 @@ export const zhCN = {
     show: '显示',
     hide: '隐藏',
     saved: '已保存',
+    saving: '保存中',
     copied: '已复制',
+    operationFailed: '操作失败',
     add: '添加',
   },
   capsule: {
@@ -187,6 +189,7 @@ export const zhCN = {
         asrWhisper: 'OpenAI Whisper（兼容）',
       },
       fillDefault: '填入默认值',
+      readFailed: '读取失败',
     },
     shortcuts: {
       title: '快捷键速查',

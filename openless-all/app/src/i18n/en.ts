@@ -19,7 +19,9 @@ export const en: typeof zhCN = {
     show: 'Show',
     hide: 'Hide',
     saved: 'Saved',
+    saving: 'Saving…',
     copied: 'Copied',
+    operationFailed: 'Operation failed',
     add: 'Add',
   },
   capsule: {
@@ -189,6 +191,7 @@ export const en: typeof zhCN = {
         asrWhisper: 'OpenAI Whisper (compatible)',
       },
       fillDefault: 'Fill default value',
+      readFailed: 'Read failed',
     },
     shortcuts: {
       title: 'Shortcut reference',
