@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="Resources/AppIcon.png" alt="OpenLess" width="160" />
+  <img src="openless-all/app/src-tauri/icons/128x128@2x.png" alt="OpenLess" width="160" />
 </p>
 
 <h1 align="center">OpenLess</h1>
