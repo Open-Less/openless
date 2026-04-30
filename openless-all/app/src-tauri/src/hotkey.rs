@@ -419,6 +419,7 @@ mod platform {
     const VK_RMENU: u32 = 0xA5;
     const VK_RWIN: u32 = 0x5C;
     const LLKHF_INJECTED: u32 = 0x0000_0010;
+    const ACCEPT_INJECTED_ENV: &str = "OPENLESS_ACCEPT_SYNTHETIC_HOTKEY_EVENTS";
 
     static HOOK_CONTEXT: AtomicPtr<CallbackContext> = AtomicPtr::new(std::ptr::null_mut());
 
@@ -531,7 +532,7 @@ mod platform {
         if code == HC_ACTION as i32 && lparam.0 != 0 {
             if let Some(ctx) = callback_context() {
                 let keyboard = *(lparam.0 as *const KBDLLHOOKSTRUCT);
-                if keyboard.flags.0 & LLKHF_INJECTED == 0 {
+                if keyboard.flags.0 & LLKHF_INJECTED == 0 || accept_injected_events() {
                     dispatch_keyboard_event(ctx, keyboard.vkCode, wparam.0);
                 }
             }
@@ -564,12 +565,14 @@ mod platform {
             WM_KEYDOWN | WM_SYSKEYDOWN => {
                 let was_held = ctx.shared.trigger_held.swap(true, Ordering::SeqCst);
                 if !was_held {
+                    log::info!("[hotkey] Windows trigger pressed vk={vk_code}");
                     send_or_log(&ctx.tx, HotkeyEvent::Pressed);
                 }
             }
             WM_KEYUP | WM_SYSKEYUP => {
                 let was_held = ctx.shared.trigger_held.swap(false, Ordering::SeqCst);
                 if was_held {
+                    log::info!("[hotkey] Windows trigger released vk={vk_code}");
                     send_or_log(&ctx.tx, HotkeyEvent::Released);
                 }
             }
@@ -592,6 +595,10 @@ mod platform {
             HotkeyTrigger::LeftOption => VK_RMENU,
             HotkeyTrigger::Fn => VK_RCONTROL,
         }
+    }
+
+    fn accept_injected_events() -> bool {
+        std::env::var(ACCEPT_INJECTED_ENV).ok().as_deref() == Some("1")
     }
 }
 
