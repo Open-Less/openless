@@ -69,10 +69,10 @@ powershell -ExecutionPolicy Bypass -File .\scripts\windows-preflight.ps1 -Toolch
 
 ### GNU / MinGW Route
 
-Use this route when MSVC/Windows SDK is unavailable. The current repository path
-contains a space in `openless-all`, and GNU/MinGW tooling can fail from paths
-with spaces while generating import libraries. Use the helper script; it mirrors
-the app to a no-space temporary directory before building.
+Use this route when MSVC/Windows SDK is unavailable. The app now lives under
+the no-space `openless-all` directory to avoid GNU/MinGW path quoting issues
+while generating import libraries. Use the helper script to keep the GNU build
+environment and target setup consistent.
 
 ```powershell
 cd app
