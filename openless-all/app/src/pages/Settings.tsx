@@ -336,6 +336,8 @@ function ProvidersSection() {
   );
 }
 
+type CredentialFieldStatus = 'idle' | 'saving' | 'saved' | 'readError' | 'saveError' | 'copied' | 'copyError';
+
 interface CredentialFieldProps {
   label: string;
   account: string;
@@ -351,7 +353,7 @@ function CredentialField({ label, account, placeholder, mono, mask, defaultValue
   const [revealed, setRevealed] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [dirty, setDirty] = useState(false);
-  const [status, setStatus] = useState<'idle' | 'saving' | 'saved' | 'readError' | 'saveError' | 'copied' | 'copyError'>('idle');
+  const [status, setStatus] = useState<CredentialFieldStatus>('idle');
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const statusRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -374,7 +376,7 @@ function CredentialField({ label, account, placeholder, mono, mask, defaultValue
       .catch(error => {
         if (cancelled) return;
         console.error('[settings] failed to read credential', account, error);
-        setLoaded(false);
+        setLoaded(true);
         setStatus('readError');
       });
     return () => {
@@ -389,7 +391,7 @@ function CredentialField({ label, account, placeholder, mono, mask, defaultValue
     };
   }, []);
 
-  const showTemporaryStatus = (next: typeof status) => {
+  const showTemporaryStatus = (next: CredentialFieldStatus) => {
     setStatus(next);
     if (statusRef.current) clearTimeout(statusRef.current);
     statusRef.current = window.setTimeout(() => setStatus('idle'), 1600);
