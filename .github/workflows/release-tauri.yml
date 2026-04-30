@@ -179,6 +179,24 @@ jobs:
         working-directory: 'openless-all/app/src-tauri/target/release/bundle'
         run: ls -la macos/ dmg/ nsis/ msi/ deb/ rpm/ appimage/ 2>/dev/null || true
 
+      # 防御性步骤：剥掉 macOS 产物上任何残留扩展属性 / quarantine。
+      # 理论上 GitHub Actions 输出的 .app/.dmg 不会带 com.apple.quarantine
+      # （xattr 也不会通过 actions/upload-artifact 跨机器持久化），但保留这一步
+      # 让"云端 artifact 一定干净"成为可验证的承诺。用户下载后再被本地浏览器
+      # 加 quarantine 时，按 release notes 的 `xattr -cr` 一行即可消除。
+      - name: Strip xattr / quarantine on macOS bundles
+        if: matrix.platform == 'macos-latest'
+        shell: bash
+        working-directory: 'openless-all/app/src-tauri/target/release/bundle'
+        run: |
+          for path in macos/*.app dmg/*.dmg; do
+            if [ -e "$path" ]; then
+              echo "▶ stripping xattr: $path"
+              xattr -cr "$path" || true
+              xattr -lr "$path" || true
+            fi
+          done
+
       - name: Upload macOS artifacts
         if: matrix.platform == 'macos-latest'
         uses: actions/upload-artifact@v4
