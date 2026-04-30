@@ -332,6 +332,7 @@ async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
             None,
         );
         inner.state.lock().phase = SessionPhase::Idle;
+        schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
         return Err(message);
     }
 
@@ -360,6 +361,7 @@ async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
                 None,
             );
             inner.state.lock().phase = SessionPhase::Idle;
+            schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
             return Err(e.to_string());
         }
         let c: Arc<dyn crate::recorder::AudioConsumer> = Arc::new(AsrBridge {
@@ -439,6 +441,7 @@ async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
                 None,
             );
             inner.state.lock().phase = SessionPhase::Idle;
+            schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
             return Err(e.to_string());
         }
     }
@@ -489,6 +492,7 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
                         None,
                     );
                     inner.state.lock().phase = SessionPhase::Idle;
+                    schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
                     return Err(e.to_string());
                 }
             }
@@ -506,6 +510,7 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
                     None,
                 );
                 inner.state.lock().phase = SessionPhase::Idle;
+                schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
                 return Err(e.to_string());
             }
         },
@@ -591,12 +596,7 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     );
 
     inner.state.lock().phase = SessionPhase::Idle;
-
-    let inner_clone = Arc::clone(inner);
-    async_runtime::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(700)).await;
-        emit_capsule(&inner_clone, CapsuleState::Idle, 0.0, 0, None, None);
-    });
+    schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
 
     Ok(())
 }
@@ -626,6 +626,7 @@ fn cancel_session(inner: &Arc<Inner>) {
     }
     emit_capsule(inner, CapsuleState::Cancelled, 0.0, 0, None, None);
     log::info!("[coord] session cancelled (was {phase:?})");
+    schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
 }
 
 // ─────────────────────────── helpers ───────────────────────────
@@ -779,6 +780,22 @@ fn enabled_phrases(inner: &Arc<Inner>) -> Vec<String> {
         .filter(|e| e.enabled)
         .map(|e| e.phrase)
         .collect()
+}
+
+/// 终止态（Done / Cancelled / Error）后延迟 N ms 把胶囊改回 Idle，让浮窗自动消失。
+/// 用户点 ✕ / ✓ / 中途出错 / 按 Esc 都走这里，统一 2 秒。
+const CAPSULE_AUTO_HIDE_DELAY_MS: u64 = 2000;
+
+fn schedule_capsule_idle(inner: &Arc<Inner>, delay_ms: u64) {
+    let inner_clone = Arc::clone(inner);
+    async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+        // 仅在仍然 Idle 时（即用户没在这 2s 内重新触发）才 hide。
+        // 否则可能把新启动的 Recording 状态意外覆盖回 Idle。
+        if inner_clone.state.lock().phase == SessionPhase::Idle {
+            emit_capsule(&inner_clone, CapsuleState::Idle, 0.0, 0, None, None);
+        }
+    });
 }
 
 fn emit_capsule(
