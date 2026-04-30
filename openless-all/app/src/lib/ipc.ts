@@ -216,6 +216,10 @@ export function triggerMicrophonePrompt(): Promise<void> {
   return invokeOrMock('trigger_microphone_prompt', undefined, () => undefined);
 }
 
+export function restartApp(): Promise<void> {
+  return invokeOrMock('restart_app', undefined, () => undefined);
+}
+
 export async function openExternal(url: string): Promise<void> {
   if (!isTauri) {
     window.open(url, '_blank', 'noopener,noreferrer');

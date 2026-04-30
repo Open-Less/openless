@@ -30,11 +30,20 @@ jobs:
         include:
           - platform: macos-latest
             rust-target: aarch64-apple-darwin
+            updater-target: darwin
+            updater-arch: aarch64
           - platform: windows-latest
             rust-target: x86_64-pc-windows-msvc
+            updater-target: windows
+            updater-arch: x86_64
           - platform: ubuntu-22.04
             rust-target: x86_64-unknown-linux-gnu
+            updater-target: linux
+            updater-arch: x86_64
     runs-on: ${{ matrix.platform }}
+    env:
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
 
@@ -75,6 +84,17 @@ jobs:
       - name: Install npm deps
         working-directory: 'openless-all/app'
         run: npm ci
+
+      - name: Check updater signing availability
+        if: startsWith(github.ref, 'refs/tags/v') && endsWith(github.ref, '-tauri')
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY is required for signed auto-update artifacts."
+            exit 1
+          fi
 
       - name: Check Apple signing availability
         if: matrix.platform == 'macos-latest' && startsWith(github.ref, 'refs/tags/v') && endsWith(github.ref, '-tauri')
@@ -159,19 +179,50 @@ jobs:
         working-directory: 'openless-all/app'
         env:
           INSTALL: '0'        # CI 不要装到 /Applications,也不要 reset TCC
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: bash scripts/build-mac.sh
 
       # ── Windows：仅 Windows 跑通用 tauri build（Linux 用下方专用 step，避免重复构建）──
       - name: Build (Windows)
         if: matrix.platform == 'windows-latest'
+        shell: bash
         working-directory: 'openless-all/app'
-        run: npm run tauri build
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+            npm run tauri -- build --config '{"bundle":{"createUpdaterArtifacts":true}}'
+          else
+            npm run tauri build
+          fi
 
       # ── Linux：产 deb / rpm / AppImage ──
       - name: Build (Linux)
         if: matrix.platform == 'ubuntu-22.04'
+        shell: bash
         working-directory: 'openless-all/app'
-        run: npm run tauri -- build --bundles deb,rpm,appimage
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+            npm run tauri -- build --bundles deb,rpm,appimage --config '{"bundle":{"createUpdaterArtifacts":true}}'
+          else
+            npm run tauri -- build --bundles deb,rpm,appimage
+          fi
+
+      - name: Write updater manifest
+        if: env.TAURI_SIGNING_PRIVATE_KEY != ''
+        shell: bash
+        working-directory: 'openless-all/app'
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          OPENLESS_UPDATE_TARGET: ${{ matrix.updater-target }}
+          OPENLESS_UPDATE_ARCH: ${{ matrix.updater-arch }}
+          OPENLESS_UPDATE_REPO: appergb/openless
+        run: node scripts/write-updater-manifest.mjs
 
       # ── 收集产物 ──
       - name: List artifacts (debug)
@@ -206,6 +257,17 @@ jobs:
             openless-all/app/src-tauri/target/release/bundle/dmg/*.dmg
           if-no-files-found: error
 
+      - name: Upload macOS updater artifacts
+        if: matrix.platform == 'macos-latest' && env.TAURI_SIGNING_PRIVATE_KEY != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: openless-macos-arm64-updater
+          path: |
+            openless-all/app/src-tauri/target/release/bundle/macos/*.app.tar.gz
+            openless-all/app/src-tauri/target/release/bundle/macos/*.app.tar.gz.sig
+            openless-all/app/src-tauri/target/release/bundle/latest-darwin-aarch64.json
+          if-no-files-found: error
+
       - name: Upload Windows artifacts
         if: matrix.platform == 'windows-latest'
         uses: actions/upload-artifact@v4
@@ -214,6 +276,17 @@ jobs:
           path: |
             openless-all/app/src-tauri/target/release/bundle/nsis/*.exe
             openless-all/app/src-tauri/target/release/bundle/msi/*.msi
+          if-no-files-found: error
+
+      - name: Upload Windows updater artifacts
+        if: matrix.platform == 'windows-latest' && env.TAURI_SIGNING_PRIVATE_KEY != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: openless-windows-x64-updater
+          path: |
+            openless-all/app/src-tauri/target/release/bundle/nsis/*.exe.sig
+            openless-all/app/src-tauri/target/release/bundle/msi/*.msi.sig
+            openless-all/app/src-tauri/target/release/bundle/latest-windows-x86_64.json
           if-no-files-found: error
 
       - name: Upload Linux artifacts
@@ -225,6 +298,16 @@ jobs:
             openless-all/app/src-tauri/target/release/bundle/deb/*.deb
             openless-all/app/src-tauri/target/release/bundle/rpm/*.rpm
             openless-all/app/src-tauri/target/release/bundle/appimage/*.AppImage
+          if-no-files-found: error
+
+      - name: Upload Linux updater artifacts
+        if: matrix.platform == 'ubuntu-22.04' && env.TAURI_SIGNING_PRIVATE_KEY != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: openless-linux-x64-updater
+          path: |
+            openless-all/app/src-tauri/target/release/bundle/appimage/*.AppImage.sig
+            openless-all/app/src-tauri/target/release/bundle/latest-linux-x86_64.json
           if-no-files-found: error
 
       # ── tag 推送时,同步上传到 GitHub Release ──
@@ -239,8 +322,14 @@ jobs:
           generate_release_notes: true
           files: |
             openless-all/app/src-tauri/target/release/bundle/dmg/*.dmg
+            openless-all/app/src-tauri/target/release/bundle/macos/*.app.tar.gz
+            openless-all/app/src-tauri/target/release/bundle/macos/*.app.tar.gz.sig
             openless-all/app/src-tauri/target/release/bundle/nsis/*.exe
+            openless-all/app/src-tauri/target/release/bundle/nsis/*.exe.sig
             openless-all/app/src-tauri/target/release/bundle/msi/*.msi
+            openless-all/app/src-tauri/target/release/bundle/msi/*.msi.sig
             openless-all/app/src-tauri/target/release/bundle/deb/*.deb
             openless-all/app/src-tauri/target/release/bundle/rpm/*.rpm
             openless-all/app/src-tauri/target/release/bundle/appimage/*.AppImage
+            openless-all/app/src-tauri/target/release/bundle/appimage/*.AppImage.sig
+            openless-all/app/src-tauri/target/release/bundle/latest-*.json

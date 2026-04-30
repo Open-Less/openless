@@ -46,6 +46,7 @@ pub fn run() {
             show_main_window(app);
         }))
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(coordinator.clone())
         .setup(move |app| {
             // Capsule 启动时定位到屏幕底部居中并隐藏；coordinator 按需显示。
@@ -165,6 +166,7 @@ pub fn run() {
             commands::read_credential,
             commands::set_active_asr_provider,
             commands::set_active_llm_provider,
+            restart_app,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -185,6 +187,11 @@ pub fn run() {
             }
             _ => {}
         });
+}
+
+#[tauri::command]
+fn restart_app(app: AppHandle) {
+    app.restart();
 }
 
 /// 把日志同时写到 stderr + ~/Library/Logs/OpenLess/openless.log（match Swift `Log.swift`）。

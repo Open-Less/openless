@@ -7,8 +7,7 @@
 import { useEffect, useState, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from './Icon';
-import { APP_VERSION_LABEL } from '../lib/appVersion';
-import { Settings as SettingsContent, type SettingsSectionId } from '../pages/Settings';
+import { AboutUpdateControl, Settings as SettingsContent, type SettingsSectionId } from '../pages/Settings';
 import { Row } from './ui/Row';
 import { openExternal } from '../lib/ipc';
 import {
@@ -219,17 +218,9 @@ function AboutMini() {
         <img src="AppIcon.png" alt="" style={{ width: 56, height: 56, borderRadius: 13, boxShadow: '0 4px 10px rgba(0,0,0,.10), 0 0 0 0.5px rgba(0,0,0,.06)' }} />
         <div>
           <div style={{ fontSize: 17, fontWeight: 600 }}>OpenLess</div>
-          <div style={{ fontSize: 12, color: 'var(--ol-ink-3)' }}>{t('modal.about.tagline')} · {APP_VERSION_LABEL}</div>
+          <AboutUpdateControl tagline={t('modal.about.tagline')} />
         </div>
       </div>
-      <Row label={t('modal.about.checkUpdate')}>
-        <button
-          style={btnGhost}
-          onClick={() => openExternal('https://github.com/appergb/openless/releases')}
-        >
-          {t('modal.about.checkUpdateBtn')}
-        </button>
-      </Row>
       <Row label={t('modal.about.docs')}>
         <button
           style={btnGhost}

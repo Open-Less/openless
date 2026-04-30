@@ -13,6 +13,7 @@ export const zhCN = {
     copy: '复制',
     delete: '删除',
     later: '稍后',
+    cancel: '取消',
     close: '关闭',
     show: '显示',
     hide: '隐藏',
@@ -241,6 +242,10 @@ export const zhCN = {
     about: {
       tagline: '自然说话，完美书写',
       checkUpdate: '检查更新',
+      checkUpdateBtn: '检查',
+      checkingUpdate: '检查中…',
+      upToDate: '当前已是最新版本。',
+      updateError: '检查或更新失败，请稍后重试。',
       openReleases: '打开 Releases',
       source: '源码',
       docs: '文档',
@@ -251,6 +256,31 @@ export const zhCN = {
       privacy: '隐私',
       privacyDesc: '所有识别结果仅保存在本机。云端 API 仅用于实时转写与润色，不会保留你的录音。',
       localFirst: '本地优先',
+      updateDialog: {
+        available: {
+          title: '发现新版本',
+          desc: '发现 OpenLess {{version}}，是否现在更新？',
+        },
+        downloading: {
+          title: '正在下载更新',
+          desc: '正在下载 OpenLess {{version}}，请保持应用打开。',
+        },
+        downloaded: {
+          title: '更新已准备好',
+          desc: 'OpenLess {{version}} 已安装完成。是否现在自动重启以应用更新？',
+        },
+        installing: {
+          title: '正在安装更新',
+          desc: '正在安装 OpenLess {{version}}，请保持应用打开。',
+        },
+        install: '现在更新',
+        downloadingLabel: '下载中…',
+        installingLabel: '安装中…',
+        later: '稍后手动重启',
+        restartNow: '现在重启',
+        progress: '{{progress}}% · {{downloaded}} / {{total}}',
+        progressUnknown: '已下载 {{downloaded}}',
+      },
     },
   },
   modal: {

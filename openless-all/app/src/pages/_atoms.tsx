@@ -103,9 +103,10 @@ interface BtnProps {
   icon?: string;
   style?: CSSProperties;
   onClick?: () => void;
+  disabled?: boolean;
 }
 
-export function Btn({ children, variant = 'ghost', size = 'md', icon, style, onClick }: BtnProps) {
+export function Btn({ children, variant = 'ghost', size = 'md', icon, style, onClick, disabled = false }: BtnProps) {
   const variants: Record<BtnVariant, { bg: string; color: string; bd: string; sh: string }> = {
     primary: { bg: 'var(--ol-ink)',     color: '#fff',                bd: 'transparent', sh: '0 1px 2px rgba(0,0,0,.08)' },
     blue:    { bg: 'var(--ol-blue)',    color: '#fff',                bd: 'transparent', sh: '0 1px 2px rgba(37,99,235,.18)' },
@@ -119,7 +120,8 @@ export function Btn({ children, variant = 'ghost', size = 'md', icon, style, onC
   };
   return (
     <button
-      onClick={onClick}
+      onClick={disabled ? undefined : onClick}
+      disabled={disabled}
       style={{
         display: 'inline-flex', alignItems: 'center', gap: 6,
         background: v.bg, color: v.color,
@@ -127,7 +129,8 @@ export function Btn({ children, variant = 'ghost', size = 'md', icon, style, onC
         borderRadius: 8,
         boxShadow: v.sh,
         fontFamily: 'inherit', fontWeight: 500,
-        cursor: 'default',
+        cursor: disabled ? 'not-allowed' : 'default',
+        opacity: disabled ? 0.55 : 1,
         transition: 'background 0.12s ease-out, color 0.12s ease-out, border-color 0.12s ease-out, box-shadow 0.12s ease-out, transform 0.08s ease-out',
         ...sizes[size],
         ...style,

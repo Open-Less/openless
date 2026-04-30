@@ -15,6 +15,7 @@ export const en: typeof zhCN = {
     copy: 'Copy',
     delete: 'Delete',
     later: 'Later',
+    cancel: 'Cancel',
     close: 'Close',
     show: 'Show',
     hide: 'Hide',
@@ -243,6 +244,10 @@ export const en: typeof zhCN = {
     about: {
       tagline: 'Speak naturally, write perfectly',
       checkUpdate: 'Check for updates',
+      checkUpdateBtn: 'Check',
+      checkingUpdate: 'Checking…',
+      upToDate: 'You are already on the latest version.',
+      updateError: 'Update check or install failed. Please try again later.',
       openReleases: 'Open Releases',
       source: 'Source',
       docs: 'Docs',
@@ -253,6 +258,31 @@ export const en: typeof zhCN = {
       privacy: 'Privacy',
       privacyDesc: 'All transcripts stay on this device. Cloud APIs are only called for real-time transcription/polish; no recordings are retained.',
       localFirst: 'Local-first',
+      updateDialog: {
+        available: {
+          title: 'Update available',
+          desc: 'OpenLess {{version}} is available. Update now?',
+        },
+        downloading: {
+          title: 'Downloading update',
+          desc: 'Downloading OpenLess {{version}}. Keep the app open.',
+        },
+        downloaded: {
+          title: 'Update ready',
+          desc: 'OpenLess {{version}} has been installed. Restart automatically now to apply it?',
+        },
+        installing: {
+          title: 'Installing update',
+          desc: 'Installing OpenLess {{version}}. Keep the app open.',
+        },
+        install: 'Update now',
+        downloadingLabel: 'Downloading…',
+        installingLabel: 'Installing…',
+        later: 'Restart manually later',
+        restartNow: 'Restart now',
+        progress: '{{progress}}% · {{downloaded}} / {{total}}',
+        progressUnknown: '{{downloaded}} downloaded',
+      },
     },
   },
   modal: {
