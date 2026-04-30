@@ -25,8 +25,13 @@ impl WhisperBatchASR {
 
     /// Stop collecting audio, encode the buffer as WAV, and POST to the
     /// Whisper transcriptions endpoint.
+    ///
+    /// 失败时**保留** PCM buffer，让上层有机会重试或在历史中至少留一个失败记录；
+    /// 之前的实现一进函数就 `mem::take` 把 buffer 清空，凭证错或网络中断都会
+    /// 让用户的录音直接消失。
     pub async fn transcribe(&self) -> Result<RawTranscript> {
-        let pcm = std::mem::take(&mut *self.buffer.lock());
+        // clone 而不是 take：~30s 16 kHz 16-bit 音频 ≈ 960 KB，会话末调用一次，可接受。
+        let pcm = self.buffer.lock().clone();
         if pcm.is_empty() {
             return Ok(RawTranscript {
                 text: String::new(),
@@ -34,6 +39,16 @@ impl WhisperBatchASR {
             });
         }
 
+        let result = self.transcribe_inner(&pcm).await;
+        // 仅在成功路径上才清 buffer。失败时 PCM 还在，coordinator 拿到 Err 但
+        // 用户重新触发 stop 时仍能再发一次，或日后增加重试入口时复用。
+        if result.is_ok() {
+            self.buffer.lock().clear();
+        }
+        result
+    }
+
+    async fn transcribe_inner(&self, pcm: &[u8]) -> Result<RawTranscript> {
         // 16 kHz mono 16-bit: 2 bytes per sample.
         let duration_ms = (pcm.len() as u64 / 2) * 1000 / 16_000;
 
@@ -41,7 +56,7 @@ impl WhisperBatchASR {
             anyhow::bail!("Whisper API key missing");
         }
 
-        let wav = encode_wav_16k_mono(&pcm);
+        let wav = encode_wav_16k_mono(pcm);
         let base_url = self.base_url.trim_end_matches('/');
         let url = format!("{}/audio/transcriptions", base_url);
 
