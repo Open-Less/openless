@@ -34,7 +34,7 @@ jobs:
       - name: Check PowerShell scripts
         shell: pwsh
         run: |
-          foreach ($script in @("./scripts/windows-preflight.ps1", "./scripts/windows-build-gnu.ps1")) {
+          foreach ($script in @("./scripts/windows-preflight.ps1", "./scripts/windows-build-gnu.ps1", "./scripts/windows-runtime-smoke.ps1")) {
             $errors = $null
             [System.Management.Automation.PSParser]::Tokenize((Get-Content -Raw $script), [ref]$errors) | Out-Null
             if ($errors) {
