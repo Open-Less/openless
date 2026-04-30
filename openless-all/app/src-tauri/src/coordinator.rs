@@ -47,6 +47,12 @@ enum ActiveAsr {
 struct SessionState {
     phase: SessionPhase,
     started_at: Instant,
+    /// Starting 阶段（ASR 握手中）按下 stop 边沿（toggle 第二次按 / hold 松开）→
+    /// 等握手完成 phase=Listening 后立刻 end_session，不丢边沿。issue #51。
+    pending_stop: bool,
+    /// 用户在 Processing 阶段按 Esc 取消：end_session 在 polish/insert 检查点跳过插入 +
+    /// 跳过 history.append。issue #52。
+    cancelled: bool,
 }
 
 impl Default for SessionState {
@@ -54,6 +60,8 @@ impl Default for SessionState {
         Self {
             phase: SessionPhase::Idle,
             started_at: Instant::now(),
+            pending_stop: false,
+            cancelled: false,
         }
     }
 }
@@ -261,6 +269,12 @@ async fn handle_pressed(inner: &Arc<Inner>) {
         (HotkeyMode::Hold, SessionPhase::Idle) => {
             let _ = begin_session(inner).await;
         }
+        // Toggle 模式 Starting 阶段第二次按 → 用户想停。
+        // 不能直接 end_session（ASR session 还没建好），存边沿，握手完成后立即触发。
+        (HotkeyMode::Toggle, SessionPhase::Starting) => {
+            inner.state.lock().pending_stop = true;
+            log::info!("[coord] toggle stop edge during Starting — queued");
+        }
         _ => {}
     }
 }
@@ -270,8 +284,16 @@ async fn handle_released(inner: &Arc<Inner>) {
     let phase = inner.state.lock().phase;
     log::info!("[coord] hotkey released (mode={mode:?}, phase={phase:?})");
     if mode == HotkeyMode::Hold {
-        if phase == SessionPhase::Listening {
-            let _ = end_session(inner).await;
+        match phase {
+            SessionPhase::Listening => {
+                let _ = end_session(inner).await;
+            }
+            // Hold 模式 Starting 阶段松开 → 用户想停。同上：握手完成后再 end。
+            SessionPhase::Starting => {
+                inner.state.lock().pending_stop = true;
+                log::info!("[coord] hold release edge during Starting — queued");
+            }
+            _ => {}
         }
     }
 }
@@ -286,6 +308,9 @@ async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
         }
         state.phase = SessionPhase::Starting;
         state.started_at = Instant::now();
+        // 新会话清掉旧 pending_stop / cancelled，避免上一会话遗留触发奇怪行为
+        state.pending_stop = false;
+        state.cancelled = false;
     }
 
     #[cfg(any(debug_assertions, test))]
@@ -384,8 +409,18 @@ async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
     match Recorder::start(consumer, level_handler) {
         Ok(rec) => {
             *inner.recorder.lock() = Some(rec);
-            inner.state.lock().phase = SessionPhase::Listening;
+            // 转 Listening 同时检查 Starting 期间是否积累了 pending_stop 边沿。
+            // hold 模式快速松开 / toggle 快速双击会到这里：握手刚完就要立即停。
+            let should_stop_immediately = {
+                let mut state = inner.state.lock();
+                state.phase = SessionPhase::Listening;
+                std::mem::replace(&mut state.pending_stop, false)
+            };
             log::info!("[coord] session started (asr={})", active_asr);
+            if should_stop_immediately {
+                log::info!("[coord] applying pending_stop edge → end_session immediately");
+                let _ = end_session(inner).await;
+            }
         }
         Err(e) => {
             log::error!("[coord] recorder start failed: {e}");
@@ -476,12 +511,26 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
         },
     };
 
+    // ASR 完成后 cancel 检查：用户在 transcribe 进行中按 Esc 时，这里就会命中。
+    if inner.state.lock().cancelled {
+        log::info!("[coord] cancel detected after ASR — discarding transcript");
+        inner.state.lock().phase = SessionPhase::Idle;
+        return Ok(());
+    }
+
     emit_capsule(inner, CapsuleState::Polishing, 0.0, elapsed, None, None);
 
     let prefs = inner.prefs.get();
     let mode = prefs.default_mode;
     let hotword_strs = enabled_phrases(inner);
     let polished = polish_or_passthrough(&raw, mode, &hotword_strs).await;
+
+    // Polish 完成后再 check 一次：即使 polish 已经返回，只要还没插入，仍可丢弃。
+    if inner.state.lock().cancelled {
+        log::info!("[coord] cancel detected after polish — discarding output (chars={})", polished.chars().count());
+        inner.state.lock().phase = SessionPhase::Idle;
+        return Ok(());
+    }
 
     let status = inner.inserter.insert(&polished);
     let inserted_chars = polished.chars().count() as u32;
@@ -557,6 +606,10 @@ fn cancel_session(inner: &Arc<Inner>) {
     if phase == SessionPhase::Idle {
         return;
     }
+    // Processing 阶段 cancel 不能直接干掉 in-flight polish task（已经 await 了），
+    // 但可以打 cancelled 标记，让 end_session 在插入前检查并丢弃结果。
+    inner.state.lock().cancelled = true;
+
     if let Some(rec) = inner.recorder.lock().take() {
         rec.stop();
     }
@@ -566,9 +619,13 @@ fn cancel_session(inner: &Arc<Inner>) {
             ActiveAsr::Whisper(w) => w.cancel(),
         }
     }
-    inner.state.lock().phase = SessionPhase::Idle;
+    // Processing 阶段保持 phase=Processing 让 end_session 自己走完检查 + 收尾；
+    // 其他阶段直接转 Idle。
+    if phase != SessionPhase::Processing {
+        inner.state.lock().phase = SessionPhase::Idle;
+    }
     emit_capsule(inner, CapsuleState::Cancelled, 0.0, 0, None, None);
-    log::info!("[coord] session cancelled");
+    log::info!("[coord] session cancelled (was {phase:?})");
 }
 
 // ─────────────────────────── helpers ───────────────────────────
