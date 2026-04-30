@@ -353,11 +353,35 @@ function CredentialField({ label, account, placeholder, mono, mask, defaultValue
   const { t } = useTranslation();
   const [value, setValue] = useState('');
   const [revealed, setRevealed] = useState(false);
-  const [saved, setSaved] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  const [status, setStatus] = useState<'idle' | 'saving' | 'saved' | 'saveError' | 'copied' | 'copyError'>('idle');
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    readCredential(account).then(v => setValue(v ?? ''));
+    let cancelled = false;
+    setLoaded(false);
+    setDirty(false);
+    setStatus('idle');
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current);
+      debounceRef.current = null;
+    }
+    readCredential(account)
+      .then(v => {
+        if (cancelled) return;
+        setValue(v ?? '');
+        setLoaded(true);
+      })
+      .catch(error => {
+        if (cancelled) return;
+        console.error('[settings] failed to read credential', account, error);
+        setLoaded(true);
+        setStatus('saveError');
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [account]);
 
   useEffect(() => {
@@ -367,19 +391,29 @@ function CredentialField({ label, account, placeholder, mono, mask, defaultValue
   }, []);
 
   const save = async (v: string) => {
-    await setCredential(account, v);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 1200);
+    if (!loaded) return;
+    setStatus('saving');
+    try {
+      await setCredential(account, v);
+      setDirty(false);
+      setStatus('saved');
+    } catch (error) {
+      console.error('[settings] failed to save credential', account, error);
+      setStatus('saveError');
+    }
+    window.setTimeout(() => setStatus('idle'), 1600);
   };
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const v = e.target.value;
     setValue(v);
+    setDirty(true);
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => save(v), 300);
   };
 
   const onBlur = () => {
+    if (!loaded || !dirty) return;
     if (debounceRef.current) {
       clearTimeout(debounceRef.current);
       debounceRef.current = null;
@@ -388,9 +422,25 @@ function CredentialField({ label, account, placeholder, mono, mask, defaultValue
   };
 
   const fillDefault = async () => {
-    if (!defaultValue) return;
+    if (!loaded || !defaultValue) return;
     setValue(defaultValue);
+    setDirty(true);
     await save(defaultValue);
+  };
+
+  const onCopy = async () => {
+    if (!value) return;
+    try {
+      if (!navigator.clipboard?.writeText) {
+        throw new Error('Clipboard API unavailable');
+      }
+      await navigator.clipboard.writeText(value);
+      setStatus('copied');
+    } catch (error) {
+      console.error('[settings] failed to copy credential', account, error);
+      setStatus('copyError');
+    }
+    window.setTimeout(() => setStatus('idle'), 1600);
   };
 
   const inputType = mask && !revealed ? 'password' : 'text';
@@ -404,10 +454,11 @@ function CredentialField({ label, account, placeholder, mono, mask, defaultValue
           placeholder={placeholder}
           onChange={handleChange}
           onBlur={onBlur}
+          disabled={!loaded}
           style={{ ...inputStyle, fontFamily: mono ? 'var(--ol-font-mono)' : 'inherit' }}
         />
         {defaultValue && !value && (
-          <button onClick={fillDefault} title={t('settings.providers.fillDefault')} style={iconBtnStyle}>
+          <button onClick={fillDefault} title={t('settings.providers.fillDefault')} style={iconBtnStyle} disabled={!loaded}>
             <Icon name="check" size={13} />
           </button>
         )}
@@ -421,15 +472,29 @@ function CredentialField({ label, account, placeholder, mono, mask, defaultValue
           </button>
         )}
         <button
-          onClick={() => navigator.clipboard?.writeText(value)}
+          onClick={onCopy}
           title={t('common.copy')}
           style={iconBtnStyle}
           disabled={!value}
         >
           <Icon name="copy" size={14} />
         </button>
-        {saved && (
-          <span style={{ fontSize: 11, color: 'var(--ol-ok)', whiteSpace: 'nowrap' }}>{t('common.saved')}</span>
+        {status !== 'idle' && (
+          <span
+            style={{
+              fontSize: 11,
+              color: status.endsWith('Error') ? 'var(--ol-warn)' : 'var(--ol-ok)',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {status === 'saving'
+              ? '保存中'
+              : status === 'saved'
+                ? t('common.saved')
+                : status === 'copied'
+                  ? '已复制'
+                  : '操作失败'}
+          </span>
         )}
       </div>
     </SettingRow>
