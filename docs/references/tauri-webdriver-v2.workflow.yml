@@ -1,0 +1,80 @@
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/webdriver-v2.yml"
+      - "v2/**"
+
+name: WebDriver (v2)
+
+jobs:
+  test:
+    name: Test
+    runs-on: ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [ubuntu-latest, windows-latest]
+        webdriver-test: [selenium, webdriverio]
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: install Tauri dependencies (Linux)
+        if: matrix.platform == 'ubuntu-latest'
+        run: >
+          sudo apt-get update &&
+          sudo apt-get install -y
+          webkit2gtk-4.1
+          libayatana-appindicator3-dev
+          webkit2gtk-driver
+          xvfb
+
+      - name: install msdgedriver (Windows)
+        if: matrix.platform == 'windows-latest'
+        run: |
+          cargo install --git https://github.com/chippers/msedgedriver-tool
+          & "$HOME/.cargo/bin/msedgedriver-tool.exe"
+          $PWD.Path >> $env:GITHUB_PATH
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: false
+          rustflags: ""
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: v2/src-tauri
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Node v20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "pnpm"
+          cache-dependency-path: |
+            v2/pnpm-lock.yaml
+            v2/webdriver/${{ matrix.webdriver-test }}/pnpm-lock.yaml
+
+      - name: install dependencies
+        run: pnpm install
+        working-directory: v2
+
+      - name: Install tauri-driver
+        run: cargo install tauri-driver --locked
+
+      - name: run tests using ${{ matrix.webdriver-test }} (Linux)
+        if: matrix.platform == 'ubuntu-latest'
+        run: |
+          pnpm install
+          xvfb-run pnpm test
+        working-directory: v2/webdriver/${{ matrix.webdriver-test }}
+
+      - name: run tests using ${{ matrix.webdriver-test }} (Windows)
+        if: matrix.platform == 'windows-latest'
+        run: |
+          pnpm install
+          pnpm test
+        working-directory: v2/webdriver/${{ matrix.webdriver-test }}
