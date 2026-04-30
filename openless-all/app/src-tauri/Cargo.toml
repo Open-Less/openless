@@ -1,6 +1,6 @@
 [package]
 name = "openless"
-version = "1.1.4"
+version = "1.2.1"
 description = "OpenLess — local voice input that types where your cursor is"
 authors = ["OpenLess"]
 edition = "2021"
