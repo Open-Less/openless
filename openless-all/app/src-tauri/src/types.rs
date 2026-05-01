@@ -131,7 +131,7 @@ impl Default for UserPreferences {
             launch_at_login: false,
             show_capsule: true,
             active_asr_provider: "volcengine".into(),
-            active_llm_provider: "ark".into(),
+            active_llm_provider: "deepseek".into(),
             restore_clipboard_after_paste: true,
             working_languages: default_working_languages(),
             translation_target_language: String::new(),

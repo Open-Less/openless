@@ -162,7 +162,7 @@ fn creds_default_asr() -> String {
     "volcengine".into()
 }
 fn creds_default_llm() -> String {
-    "ark".into()
+    "deepseek".into()
 }
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]

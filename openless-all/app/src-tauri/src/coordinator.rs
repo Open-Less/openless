@@ -34,6 +34,11 @@ use crate::types::{
     HotkeyStatusState, InsertStatus, PolishMode,
 };
 
+const DEFAULT_LLM_PROVIDER_ID: &str = "deepseek";
+const DEFAULT_LLM_PROVIDER_NAME: &str = "DeepSeek";
+const DEFAULT_LLM_BASE_URL: &str = "https://api.deepseek.com/v1";
+const DEFAULT_LLM_MODEL_ID: &str = "deepseek-v4-flash";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SessionPhase {
     Idle,
@@ -1492,22 +1497,7 @@ async fn polish_text(
     working_languages: &[String],
     front_app: Option<&str>,
 ) -> anyhow::Result<String> {
-    let api_key = CredentialsVault::get(CredentialAccount::ArkApiKey)?.unwrap_or_default();
-    if api_key.is_empty() {
-        anyhow::bail!("ark api key missing");
-    }
-    let model = CredentialsVault::get(CredentialAccount::ArkModelId)?
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "deepseek-v3-2".to_string());
-    let endpoint = CredentialsVault::get(CredentialAccount::ArkEndpoint)?
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "https://ark.cn-beijing.volces.com/api/v3/chat/completions".to_string());
-    let base_url = endpoint
-        .trim_end_matches("/chat/completions")
-        .trim_end_matches('/')
-        .to_string();
-
-    let config = OpenAICompatibleConfig::new("ark", "Doubao Ark", base_url, api_key, model);
+    let config = read_llm_config()?;
     let provider = OpenAICompatibleLLMProvider::new(config);
     Ok(provider
         .polish(raw, mode, hotwords, working_languages, front_app)
@@ -1537,22 +1527,7 @@ async fn translate_text(
     working_languages: &[String],
     front_app: Option<&str>,
 ) -> anyhow::Result<String> {
-    let api_key = CredentialsVault::get(CredentialAccount::ArkApiKey)?.unwrap_or_default();
-    if api_key.is_empty() {
-        anyhow::bail!("ark api key missing");
-    }
-    let model = CredentialsVault::get(CredentialAccount::ArkModelId)?
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "deepseek-v3-2".to_string());
-    let endpoint = CredentialsVault::get(CredentialAccount::ArkEndpoint)?
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "https://ark.cn-beijing.volces.com/api/v3/chat/completions".to_string());
-    let base_url = endpoint
-        .trim_end_matches("/chat/completions")
-        .trim_end_matches('/')
-        .to_string();
-
-    let config = OpenAICompatibleConfig::new("ark", "Doubao Ark", base_url, api_key, model);
+    let config = read_llm_config()?;
     let provider = OpenAICompatibleLLMProvider::new(config);
     Ok(provider
         .translate_to(raw, target_language, working_languages, front_app)
@@ -2031,25 +2006,35 @@ async fn answer_chat_dispatch<F>(
 where
     F: Fn(&str) + Send + Sync,
 {
-    let api_key = CredentialsVault::get(CredentialAccount::ArkApiKey)?.unwrap_or_default();
-    if api_key.is_empty() {
-        anyhow::bail!("ark api key missing");
-    }
-    let model = CredentialsVault::get(CredentialAccount::ArkModelId)?
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "deepseek-v3-2".to_string());
-    let endpoint = CredentialsVault::get(CredentialAccount::ArkEndpoint)?
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "https://ark.cn-beijing.volces.com/api/v3/chat/completions".to_string());
-    let base_url = endpoint
-        .trim_end_matches("/chat/completions")
-        .trim_end_matches('/')
-        .to_string();
-    let config = OpenAICompatibleConfig::new("ark", "Doubao Ark", base_url, api_key, model);
+    let config = read_llm_config()?;
     let provider = OpenAICompatibleLLMProvider::new(config);
     Ok(provider
         .answer_chat_streaming(messages, working_languages, front_app, on_delta)
         .await?)
+}
+
+fn read_llm_config() -> anyhow::Result<OpenAICompatibleConfig> {
+    let api_key = CredentialsVault::get(CredentialAccount::ArkApiKey)?.unwrap_or_default();
+    if api_key.is_empty() {
+        anyhow::bail!("llm api key missing");
+    }
+    let model = CredentialsVault::get(CredentialAccount::ArkModelId)?
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| DEFAULT_LLM_MODEL_ID.to_string());
+    let endpoint = CredentialsVault::get(CredentialAccount::ArkEndpoint)?
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| DEFAULT_LLM_BASE_URL.to_string());
+    let base_url = endpoint
+        .trim_end_matches("/chat/completions")
+        .trim_end_matches('/')
+        .to_string();
+    Ok(OpenAICompatibleConfig::new(
+        DEFAULT_LLM_PROVIDER_ID,
+        DEFAULT_LLM_PROVIDER_NAME,
+        base_url,
+        api_key,
+        model,
+    ))
 }
 
 #[cfg(test)]

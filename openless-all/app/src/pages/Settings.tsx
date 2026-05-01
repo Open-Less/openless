@@ -9,6 +9,7 @@ import { isDialogStatus, UpdateDialog, useAutoUpdate } from '../components/AutoU
 import { APP_VERSION_LABEL } from '../lib/appVersion';
 import { isHotkeyModeMigrationNoticeActive } from '../lib/hotkeyMigration';
 import { getHotkeyStartStopLabel, getHotkeyTriggerLabel } from '../lib/hotkey';
+import { DEFAULT_LLM_PRESET_ID, LLM_PRESETS, type LlmPresetId } from '../lib/llmPresets';
 import {
   checkAccessibilityPermission,
   checkMicrophonePermission,
@@ -262,16 +263,6 @@ function Toggle({ on, onToggle }: { on: boolean; onToggle?: (next: boolean) => v
   );
 }
 
-const LLM_PRESETS = [
-  { id: 'ark',          nameKey: 'ark',         baseUrl: 'https://ark.cn-beijing.volces.com/api/v3', modelPlaceholder: 'deepseek-v3-2' },
-  { id: 'deepseek',     nameKey: 'deepseek',    baseUrl: 'https://api.deepseek.com/v1',             modelPlaceholder: 'deepseek-chat' },
-  { id: 'siliconflow',  nameKey: 'siliconflow', baseUrl: 'https://api.siliconflow.cn/v1',           modelPlaceholder: 'Qwen/Qwen2.5-7B-Instruct' },
-  { id: 'openai',       nameKey: 'openai',      baseUrl: 'https://api.openai.com/v1',               modelPlaceholder: 'gpt-4o' },
-  { id: 'custom',       nameKey: 'custom',      baseUrl: '',                                        modelPlaceholder: '' },
-] as const;
-
-type LlmPresetId = typeof LLM_PRESETS[number]['id'];
-
 const ASR_DEFAULT_RESOURCE_ID = 'volc.bigasr.sauc.duration';
 
 // SiliconFlow ASR 暂未在后端实现（coordinator.rs 只路由 whisper / volcengine）。
@@ -286,7 +277,7 @@ type AsrPresetId = typeof ASR_PRESETS[number]['id'];
 function ProvidersSection() {
   const { t } = useTranslation();
   const { prefs, updatePrefs } = useHotkeySettings();
-  const [llmProvider, setLlmProvider] = useState<LlmPresetId>('ark');
+  const [llmProvider, setLlmProvider] = useState<LlmPresetId>(DEFAULT_LLM_PRESET_ID);
   const [asrProvider, setAsrProvider] = useState<AsrPresetId>('volcengine');
   const [llmModelRevision, setLlmModelRevision] = useState(0);
   const [asrModelRevision, setAsrModelRevision] = useState(0);
