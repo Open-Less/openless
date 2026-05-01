@@ -253,7 +253,7 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
               flex: 1, minWidth: 0,
               overflow: 'hidden',
               background: 'var(--ol-surface)',
-              borderRadius: os === 'mac' ? 20 : 10,
+              borderRadius: 'var(--ol-window-console-radius)',
               border: '0.5px solid rgba(0,0,0,0.06)',
               boxShadow: '0 1px 0 rgba(255,255,255,0.8) inset, 0 8px 24px -12px rgba(15,17,22,0.10), 0 2px 6px -2px rgba(15,17,22,0.06)',
               display: 'flex',

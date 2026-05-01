@@ -1,16 +1,3 @@
-// WindowChrome.tsx — frosted outer frame + raised inner console pattern.
-// The OUTER frame is a translucent shell with a tinted backdrop showing through.
-// The INNER content lives in a single raised card that floats above it.
-//
-// Layout per window:
-//   ┌─ frosted outer ───────────────────────────────┐
-//   │ [titlebar]                                    │
-//   │     ┌─ raised console (white, shadow) ─┐      │
-//   │     │  sidebar │ main                  │      │
-//   │     └──────────────────────────────────┘      │
-//   │ [icon footer]                                 │
-//   └───────────────────────────────────────────────┘
-
 import { useState, type CSSProperties, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -27,8 +14,9 @@ export function detectOS(): OS {
 
 const MAC_TITLEBAR_HEIGHT = 36;
 const MAC_SYSTEM_CONTROLS_RESERVED_WIDTH = 80;
-const MAC_WINDOW_RADIUS = 20;
-const WIN_WINDOW_RADIUS = 0;
+export const WIN_TITLEBAR_HEIGHT = 36;
+export const WIN_WINDOW_RADIUS = 10;
+export const WIN_CONSOLE_RADIUS = 10;
 const WIN_RESIZE_EDGE = 6;
 const WIN_RESIZE_CORNER = 14;
 
@@ -49,19 +37,32 @@ interface WindowChromeProps {
   height?: number | string;
 }
 
-export function WindowChrome({ os = 'mac', title = 'OpenLess', children, height = 800 }: WindowChromeProps) {
+export function WindowChrome({
+  os = 'mac',
+  title = 'OpenLess',
+  children,
+  height = 800,
+}: WindowChromeProps) {
+  const shellRadius = os === 'mac' ? 20 : WIN_WINDOW_RADIUS;
+  const consoleRadius = os === 'mac' ? 20 : WIN_CONSOLE_RADIUS;
+
   return (
     <div
       style={{
+        '--ol-window-shell-radius': `${shellRadius}px`,
+        '--ol-window-console-radius': `${consoleRadius}px`,
+        '--ol-window-titlebar-height': `${os === 'mac' ? MAC_TITLEBAR_HEIGHT : WIN_TITLEBAR_HEIGHT}px`,
         width: '100%',
         height,
         position: 'relative',
-        borderRadius: os === 'mac' ? MAC_WINDOW_RADIUS : WIN_WINDOW_RADIUS,
-        boxShadow: 'var(--ol-shadow-xl)',
+        borderRadius: 'var(--ol-window-shell-radius)',
+        boxShadow: os === 'win'
+          ? '0 22px 54px -28px rgba(15, 17, 22, 0.38), 0 10px 30px -20px rgba(15, 17, 22, 0.22), 0 0 0 0.5px rgba(0, 0, 0, 0.10)'
+          : 'var(--ol-shadow-xl)',
         overflow: 'hidden',
         display: 'flex',
         flexDirection: 'column',
-        border: '0.5px solid rgba(0,0,0,.10)',
+        border: os === 'win' ? '1px solid rgba(255,255,255,0.18)' : '0.5px solid rgba(0,0,0,.10)',
         background: `
           radial-gradient(120% 80% at 0% 0%, rgba(255,255,255,0.7) 0%, rgba(255,255,255,0) 60%),
           radial-gradient(100% 70% at 100% 100%, rgba(37,99,235,0.07) 0%, rgba(37,99,235,0) 55%),
@@ -69,12 +70,10 @@ export function WindowChrome({ os = 'mac', title = 'OpenLess', children, height 
         `,
         backdropFilter: 'blur(40px) saturate(180%)',
         WebkitBackdropFilter: 'blur(40px) saturate(180%)',
-      }}
+      } as CSSProperties}
     >
       {os === 'win' && <WinTitleBar title={title} />}
       {os === 'win' && <WindowsResizeHandles />}
-      {/* macOS：三色窗口按钮交给系统绘制和定位。这里只保留顶部拖动区，
-          并避开系统按钮热区，防止拖动层吞掉 close/minimize/zoom 点击。 */}
       {os === 'mac' && (
         <div
           data-tauri-drag-region
@@ -104,12 +103,14 @@ function WinTitleBar({ title }: WinTitleBarProps) {
   return (
     <div
       style={{
-        height: 36,
+        height: WIN_TITLEBAR_HEIGHT,
         flexShrink: 0,
         display: 'flex',
         alignItems: 'stretch',
         position: 'relative',
         zIndex: 70,
+        borderBottom: '0.5px solid rgba(0, 0, 0, 0.08)',
+        background: 'linear-gradient(180deg, rgba(255,255,255,0.20) 0%, rgba(255,255,255,0.08) 100%)',
       }}
     >
       <div
@@ -159,7 +160,7 @@ function WindowsResizeHandles() {
             if (event.button !== 0) return;
             event.preventDefault();
             event.stopPropagation();
-            void startWindowsResize(handle.direction);
+            void startResizeDragging(handle.direction);
           }}
           style={{
             position: 'absolute',
@@ -176,17 +177,17 @@ function WindowsResizeHandles() {
 interface WinTitleButtonProps {
   title: string;
   action: 'minimize' | 'toggleMaximize' | 'close';
-  children: ReactNode;
   tone?: 'default' | 'danger';
+  children: ReactNode;
 }
 
-function WinTitleButton({ title, action, children, tone = 'default' }: WinTitleButtonProps) {
+function WinTitleButton({ title, action, tone = 'default', children }: WinTitleButtonProps) {
   const [hovered, setHovered] = useState(false);
   const [pressed, setPressed] = useState(false);
   const danger = tone === 'danger';
   const background = pressed
-    ? danger ? '#c42b1c' : 'rgba(0,0,0,0.12)'
-    : hovered ? danger ? '#e81123' : 'rgba(0,0,0,0.08)'
+    ? danger ? '#c42b1c' : 'rgba(0, 0, 0, 0.12)'
+    : hovered ? danger ? '#e81123' : 'rgba(0, 0, 0, 0.08)'
       : 'transparent';
   const color = danger && (hovered || pressed) ? '#fff' : 'var(--ol-ink-3)';
 
@@ -194,6 +195,7 @@ function WinTitleButton({ title, action, children, tone = 'default' }: WinTitleB
     <button
       style={{ ...winBtnStyle, background, color }}
       title={title}
+      onClick={() => runWindowsWindowAction(action)}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => {
         setHovered(false);
@@ -201,14 +203,13 @@ function WinTitleButton({ title, action, children, tone = 'default' }: WinTitleB
       }}
       onMouseDown={() => setPressed(true)}
       onMouseUp={() => setPressed(false)}
-      onClick={() => runWindowsWindowAction(action)}
     >
       {children}
     </button>
   );
 }
 
-async function startWindowsResize(direction: ResizeDirection) {
+async function startResizeDragging(direction: ResizeDirection) {
   try {
     await getCurrentWindow().startResizeDragging(direction);
   } catch (error) {
