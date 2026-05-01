@@ -320,10 +320,29 @@ function ProvidersSection() {
         </SettingRow>
         {asrProvider === 'volcengine' ? (
           <>
-            <CredentialField key={`${asrProvider}:app_key`} label="App Key" account="volcengine.app_key" mono mask />
-            <CredentialField key={`${asrProvider}:access_key`} label="Access Key" account="volcengine.access_key" mono mask />
-            <CredentialField key={`${asrProvider}:resource_id`} label="Resource ID" account="volcengine.resource_id" mono
+            <CredentialField
+              key={`${asrProvider}:app_key`}
+              label={t('settings.providers.volcengineAppKeyLabel')}
+              account="volcengine.app_key"
+              mono
+              mask
+            />
+            <CredentialField
+              key={`${asrProvider}:access_key`}
+              label={t('settings.providers.volcengineAccessKeyLabel')}
+              account="volcengine.access_key"
+              mono
+              mask
+            />
+            <CredentialField
+              key={`${asrProvider}:resource_id`}
+              label={t('settings.providers.volcengineResourceIdLabel')}
+              account="volcengine.resource_id"
+              mono
               placeholder={ASR_DEFAULT_RESOURCE_ID} defaultValue={ASR_DEFAULT_RESOURCE_ID} />
+            <div style={{ marginTop: 2, fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.6 }}>
+              {t('settings.providers.volcengineMappingNote')}
+            </div>
           </>
         ) : (
           <>
