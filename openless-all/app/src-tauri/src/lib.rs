@@ -450,7 +450,7 @@ fn position_qa_window<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) -> ta
     let size = monitor.size();
     let logical_w = size.width as f64 / scale;
     let logical_h = size.height as f64 / scale;
-    let capsule_height = capsule_window_size(false).1;
+    let capsule_height = capsule_height_for_qa();
     let x = ((logical_w - QA_WINDOW_WIDTH) / 2.0).max(0.0);
     let y = (logical_h
         - DOCK_BOTTOM_PADDING_FOR_QA
@@ -570,59 +570,94 @@ pub(crate) fn position_capsule_bottom_center<R: tauri::Runtime>(
         Some(m) => m,
         None => return Ok(()),
     };
-    let (cap_w, cap_h) = capsule_window_size(translation_active);
-    window.set_size(LogicalSize::new(cap_w, cap_h))?;
+    let bounds = capsule_window_bounds(translation_active);
+    window.set_size(LogicalSize::new(bounds.width, bounds.height))?;
 
     let scale = monitor.scale_factor();
     let size = monitor.size();
     let logical_w = size.width as f64 / scale;
     let logical_h = size.height as f64 / scale;
-    let x = ((logical_w - cap_w) / 2.0).max(0.0);
-    let y = (logical_h - cap_h - 80.0).max(0.0);
+    let x = ((logical_w - bounds.width) / 2.0).max(0.0);
+    let y = (logical_h - capsule_visual_height(translation_active) - 80.0 - bounds.bottom_inset)
+        .max(0.0);
     window.set_position(LogicalPosition::new(x, y))?;
     Ok(())
 }
 
-fn capsule_window_size(translation_active: bool) -> (f64, f64) {
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct CapsuleWindowBounds {
+    width: f64,
+    height: f64,
+    bottom_inset: f64,
+}
+
+fn capsule_window_bounds(translation_active: bool) -> CapsuleWindowBounds {
     #[cfg(target_os = "windows")]
     {
-        let height = if translation_active { 110.0 } else { 52.0 };
-        (196.0, height)
+        CapsuleWindowBounds {
+            width: 220.0,
+            height: if translation_active { 118.0 } else { 84.0 },
+            bottom_inset: 12.0,
+        }
     }
 
     #[cfg(not(target_os = "windows"))]
     {
-        let height = if translation_active { 110.0 } else { 42.0 };
-        (176.0, height)
+        CapsuleWindowBounds {
+            width: 176.0,
+            height: if translation_active { 110.0 } else { 42.0 },
+            bottom_inset: 0.0,
+        }
+    }
+}
+
+fn capsule_visual_height(_translation_active: bool) -> f64 {
+    #[cfg(target_os = "windows")]
+    {
+        52.0
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        42.0
     }
 }
 
 fn capsule_height_for_qa() -> f64 {
-    capsule_window_size(false).1
+    capsule_visual_height(false)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{capsule_height_for_qa, capsule_window_size};
+    use super::{capsule_height_for_qa, capsule_visual_height, capsule_window_bounds};
 
     #[test]
-    fn capsule_window_size_matches_visible_pill_when_not_translating() {
-        let (width, height) = capsule_window_size(false);
+    fn capsule_window_bounds_leave_room_for_windows_shadow() {
+        let bounds = capsule_window_bounds(false);
         #[cfg(target_os = "windows")]
-        assert_eq!((width, height), (196.0, 52.0));
+        assert_eq!((bounds.width, bounds.height, bounds.bottom_inset), (220.0, 84.0, 12.0));
 
         #[cfg(not(target_os = "windows"))]
-        assert_eq!((width, height), (176.0, 42.0));
+        assert_eq!((bounds.width, bounds.height, bounds.bottom_inset), (176.0, 42.0, 0.0));
     }
 
     #[test]
-    fn capsule_window_size_expands_for_translation_badge() {
-        let (width, height) = capsule_window_size(true);
+    fn capsule_window_bounds_expand_for_translation_badge() {
+        let bounds = capsule_window_bounds(true);
         #[cfg(target_os = "windows")]
-        assert_eq!((width, height), (196.0, 110.0));
+        assert_eq!((bounds.width, bounds.height, bounds.bottom_inset), (220.0, 118.0, 12.0));
 
         #[cfg(not(target_os = "windows"))]
-        assert_eq!((width, height), (176.0, 110.0));
+        assert_eq!((bounds.width, bounds.height, bounds.bottom_inset), (176.0, 110.0, 0.0));
+    }
+
+    #[test]
+    fn capsule_visual_height_matches_frontend_pill() {
+        #[cfg(target_os = "windows")]
+        assert_eq!(capsule_visual_height(true), 52.0);
+
+        #[cfg(not(target_os = "windows"))]
+        assert_eq!(capsule_visual_height(true), 42.0);
     }
 
     #[test]

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { detectOS, type OS } from './WindowChrome';
 import {
+  getCapsuleHostMetrics,
   getCapsuleMessageLayout,
   getCapsulePillMetrics,
 } from '../lib/capsuleLayout';
@@ -259,11 +260,13 @@ function Pill({ os, state, level, insertedChars, message, onCancel, onConfirm }:
 export function Capsule() {
   const { t } = useTranslation();
   const os = detectOS();
+  const metrics = getCapsulePillMetrics(os);
+  const [translation, setTranslation] = useState<boolean>(false);
+  const hostMetrics = getCapsuleHostMetrics(os, translation);
   const [state, setState] = useState<CapsuleState>(isTauri ? 'idle' : 'recording');
   const [level, setLevel] = useState<number>(isTauri ? 0 : 0.6);
   const [insertedChars, setInsertedChars] = useState<number>(0);
   const [message, setMessage] = useState<string | undefined>();
-  const [translation, setTranslation] = useState<boolean>(false);
 
   useEffect(() => {
     if (!isTauri) return;
@@ -309,7 +312,11 @@ export function Capsule() {
         position: 'relative',
         display: 'flex',
         alignItems: 'center',
-        justifyContent: 'center',
+        justifyContent: os === 'win' ? 'flex-end' : 'center',
+        paddingTop: os === 'win'
+          ? Math.max(0, hostMetrics.height - metrics.height - hostMetrics.bottomInset)
+          : 0,
+        paddingBottom: os === 'win' ? hostMetrics.bottomInset : 0,
         background: 'transparent',
         animation: os === 'win' ? 'none' : 'capsule-in .22s cubic-bezier(.2,.9,.3,1.1)',
       }}
@@ -324,7 +331,7 @@ export function Capsule() {
           left: '50%',
           // bottom = 50%（pill 中线）+ pill 半高 21px（capsuleLayout mac=42）+ 8px 间隔。
           // 只有翻译徽章可见时才需要额外高度；普通录音/转写状态由后端缩到 pill 本体，避免透明死区。
-          bottom: 'calc(50% + 21px + 8px)',
+          bottom: `${hostMetrics.bottomInset + metrics.height + hostMetrics.badgeGap}px`,
           transform: 'translateX(-50%)',
           pointerEvents: 'none',
         }}
