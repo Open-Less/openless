@@ -91,6 +91,7 @@ pub fn run() {
                     if let Err(e) = apply_mica(&main, None) {
                         log::warn!("[main] mica failed: {e}");
                     }
+                    apply_windows_rounded_frame(&main);
                 }
                 if let Err(e) = main.show() {
                     log::warn!("[main] initial show failed: {e}");
@@ -189,9 +190,15 @@ pub fn run() {
             RunEvent::Reopen { .. } => show_main_window(app),
             RunEvent::WindowEvent { label, event, .. } => {
                 if label == "main" {
-                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    if let tauri::WindowEvent::CloseRequested { ref api, .. } = event {
                         api.prevent_close();
                         hide_main_window(app);
+                    }
+                    #[cfg(target_os = "windows")]
+                    if matches!(event, tauri::WindowEvent::Resized(_) | tauri::WindowEvent::ScaleFactorChanged { .. }) {
+                        if let Some(main) = app.get_webview_window("main") {
+                            apply_windows_rounded_frame(&main);
+                        }
                     }
                 }
             }
@@ -201,6 +208,97 @@ pub fn run() {
             }
             _ => {}
         });
+}
+
+#[cfg(target_os = "windows")]
+fn apply_windows_rounded_frame<R: Runtime>(window: &tauri::WebviewWindow<R>) {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows::Win32::Foundation::{BOOL, HWND, RECT};
+    use windows::Win32::Graphics::Dwm::{
+        DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
+    };
+    use windows::Win32::Graphics::Gdi::{CreateRoundRectRgn, SetWindowRgn, HRGN};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetWindowLongW, GetWindowRect, SetWindowLongW, SetWindowPos, GWL_STYLE, SWP_FRAMECHANGED,
+        SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WS_CAPTION, WS_THICKFRAME,
+    };
+
+    let handle = match window.window_handle().map(|h| h.as_raw()) {
+        Ok(RawWindowHandle::Win32(handle)) => handle,
+        Ok(other) => {
+            log::warn!("[main] unexpected raw window handle for DWM frame: {other:?}");
+            return;
+        }
+        Err(e) => {
+            log::warn!("[main] read raw window handle failed: {e}");
+            return;
+        }
+    };
+    let hwnd = HWND(handle.hwnd.get() as *mut core::ffi::c_void);
+
+    unsafe {
+        let style = GetWindowLongW(hwnd, GWL_STYLE);
+        let native_frame_bits = (WS_CAPTION.0 | WS_THICKFRAME.0) as i32;
+        if style & native_frame_bits != 0 {
+            SetWindowLongW(hwnd, GWL_STYLE, style & !native_frame_bits);
+            if let Err(e) = SetWindowPos(
+                hwnd,
+                HWND::default(),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED,
+            ) {
+                log::warn!("[main] refresh native frame after style update failed: {e}");
+            }
+        }
+
+        if window.is_maximized().unwrap_or(false) {
+            let _ = SetWindowRgn(hwnd, HRGN::default(), BOOL(1));
+            return;
+        }
+
+        let corner_preference = DWMWCP_ROUND;
+        if let Err(e) = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_WINDOW_CORNER_PREFERENCE,
+            &corner_preference as *const _ as *const core::ffi::c_void,
+            std::mem::size_of_val(&corner_preference) as u32,
+        ) {
+            log::warn!("[main] set DWM rounded corners failed: {e}");
+        }
+
+        // Remove DWM's fallback 1px light border; the React shell draws the visual stroke.
+        let border_color_none: u32 = 0xFFFFFFFE;
+        if let Err(e) = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_BORDER_COLOR,
+            &border_color_none as *const _ as *const core::ffi::c_void,
+            std::mem::size_of_val(&border_color_none) as u32,
+        ) {
+            log::warn!("[main] remove DWM border color failed: {e}");
+        }
+
+        let mut rect = RECT::default();
+        if let Err(e) = GetWindowRect(hwnd, &mut rect) {
+            log::warn!("[main] read window rect for rounded region failed: {e}");
+            return;
+        }
+        let width = rect.right - rect.left;
+        let height = rect.bottom - rect.top;
+        if width <= 0 || height <= 0 {
+            return;
+        }
+        let region = CreateRoundRectRgn(0, 0, width + 1, height + 1, 18, 18);
+        if region.is_invalid() {
+            log::warn!("[main] create rounded window region failed");
+            return;
+        }
+        if SetWindowRgn(hwnd, region, BOOL(1)) == 0 {
+            log::warn!("[main] apply rounded window region failed");
+        }
+    }
 }
 
 #[tauri::command]

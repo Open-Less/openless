@@ -26,6 +26,8 @@ export function detectOS(): OS {
 
 const MAC_TITLEBAR_HEIGHT = 36;
 const MAC_SYSTEM_CONTROLS_RESERVED_WIDTH = 80;
+const MAC_WINDOW_RADIUS = 20;
+const WIN_WINDOW_RADIUS = 0;
 
 interface WindowChromeProps {
   os?: OS;
@@ -41,7 +43,7 @@ export function WindowChrome({ os = 'mac', title = 'OpenLess', children, height 
         width: '100%',
         height,
         position: 'relative',
-        borderRadius: os === 'mac' ? 20 : 14,
+        borderRadius: os === 'mac' ? MAC_WINDOW_RADIUS : WIN_WINDOW_RADIUS,
         boxShadow: 'var(--ol-shadow-xl)',
         overflow: 'hidden',
         display: 'flex',

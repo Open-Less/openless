@@ -3,17 +3,19 @@ html, body, #root {
   width: 100%;
   margin: 0;
   padding: 0;
+  background: transparent;
+  overflow: hidden;
 }
 
 body {
   background: transparent;
   user-select: none;
   -webkit-user-select: none;
-  overflow: hidden;
 }
 
 #root {
   display: flex;
+  isolation: isolate;
 }
 
 button {
