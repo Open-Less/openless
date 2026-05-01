@@ -83,12 +83,17 @@ pub fn run() {
                 #[cfg(target_os = "windows")]
                 {
                     use window_vibrancy::apply_mica;
-                    if let Err(e) = apply_mica(&main, None) {
-                        log::warn!("[main] mica failed: {e}");
-                    }
+                    // The window starts hidden so Windows native chrome can be disabled before
+                    // the first show; doing this after the native frame is visible is unreliable.
                     if let Err(e) = main.set_decorations(false) {
                         log::warn!("[main] disable native decorations failed: {e}");
                     }
+                    if let Err(e) = apply_mica(&main, None) {
+                        log::warn!("[main] mica failed: {e}");
+                    }
+                }
+                if let Err(e) = main.show() {
+                    log::warn!("[main] initial show failed: {e}");
                 }
             }
 
