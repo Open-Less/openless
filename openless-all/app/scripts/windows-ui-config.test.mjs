@@ -43,11 +43,21 @@ assertMatch(
 );
 assertMatch(
   coordinatorRs,
-  /let accepts_cursor_events = matches!\(state, CapsuleState::Recording\);/,
-  'windows capsule should only accept clicks while actively recording',
+  /let visible = matches!\(\s*state,\s*CapsuleState::Recording \| CapsuleState::Transcribing \| CapsuleState::Polishing\s*\);/m,
+  'capsule should only stay visible during active recording or processing states',
 );
 assertMatch(
   coordinatorRs,
-  /window\.set_ignore_cursor_events\(!accepts_cursor_events\)/,
-  'windows capsule should pass clicks through in non-recording states',
+  /fn hide_capsule_window_if_present\(\)/,
+  'windows capsule lifecycle should include an explicit native hide helper',
+);
+assertMatch(
+  coordinatorRs,
+  /ShowWindow\(hwnd, SW_HIDE\)/,
+  'windows capsule hide helper should force the native window hidden',
+);
+assertMatch(
+  coordinatorRs,
+  /SetWindowPos\([\s\S]*?HWND_NOTOPMOST[\s\S]*?SWP_HIDEWINDOW/m,
+  'windows capsule hide helper should drop topmost participation when inactive',
 );

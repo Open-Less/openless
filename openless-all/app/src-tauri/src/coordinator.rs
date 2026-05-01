@@ -2433,6 +2433,42 @@ fn show_capsule_window_no_activate() -> bool {
     false
 }
 
+#[cfg(target_os = "windows")]
+fn hide_capsule_window_if_present() {
+    use std::iter::once;
+    use windows::core::PCWSTR;
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        FindWindowW, SetWindowPos, ShowWindow, HWND_NOTOPMOST, SW_HIDE, SWP_HIDEWINDOW,
+        SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    };
+
+    let title: Vec<u16> = "OpenLess Capsule".encode_utf16().chain(once(0)).collect();
+    let hwnd = match unsafe { FindWindowW(PCWSTR::null(), PCWSTR(title.as_ptr())) } {
+        Ok(hwnd) => hwnd,
+        Err(_) => return,
+    };
+    if hwnd == HWND::default() || hwnd.0.is_null() {
+        return;
+    }
+
+    let _ = unsafe { ShowWindow(hwnd, SW_HIDE) };
+    let _ = unsafe {
+        SetWindowPos(
+            hwnd,
+            HWND_NOTOPMOST,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_HIDEWINDOW,
+        )
+    };
+}
+
+#[cfg(not(target_os = "windows"))]
+fn hide_capsule_window_if_present() {}
+
 fn emit_capsule(
     inner: &Arc<Inner>,
     state: CapsuleState,
@@ -2454,17 +2490,11 @@ fn emit_capsule(
 
     let show_capsule = inner.prefs.get().show_capsule;
     if let Some(window) = app.get_webview_window("capsule") {
-        let visible = !matches!(state, CapsuleState::Idle);
+        let visible = matches!(
+            state,
+            CapsuleState::Recording | CapsuleState::Transcribing | CapsuleState::Polishing
+        );
         maybe_position_capsule_bottom_center(inner, &window, payload.translation);
-        #[cfg(target_os = "windows")]
-        {
-            // The capsule is always-on-top on Windows. Once recording stops, it must
-            // stop intercepting clicks meant for the app underneath.
-            let accepts_cursor_events = matches!(state, CapsuleState::Recording);
-            if let Err(e) = window.set_ignore_cursor_events(!accepts_cursor_events) {
-                log::warn!("[capsule] set_ignore_cursor_events failed: {e}");
-            }
-        }
         if show_capsule && visible {
             if cfg!(target_os = "windows") {
                 if !show_capsule_window_no_activate() {
@@ -2478,6 +2508,7 @@ fn emit_capsule(
             #[cfg(target_os = "macos")]
             crate::restore_main_window_key_if_active(&app);
         } else {
+            hide_capsule_window_if_present();
             let _ = window.hide();
         }
     }
