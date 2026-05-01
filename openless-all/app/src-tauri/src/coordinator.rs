@@ -2456,6 +2456,15 @@ fn emit_capsule(
     if let Some(window) = app.get_webview_window("capsule") {
         let visible = !matches!(state, CapsuleState::Idle);
         maybe_position_capsule_bottom_center(inner, &window, payload.translation);
+        #[cfg(target_os = "windows")]
+        {
+            // The capsule is always-on-top on Windows. Once recording stops, it must
+            // stop intercepting clicks meant for the app underneath.
+            let accepts_cursor_events = matches!(state, CapsuleState::Recording);
+            if let Err(e) = window.set_ignore_cursor_events(!accepts_cursor_events) {
+                log::warn!("[capsule] set_ignore_cursor_events failed: {e}");
+            }
+        }
         if show_capsule && visible {
             if cfg!(target_os = "windows") {
                 if !show_capsule_window_no_activate() {
