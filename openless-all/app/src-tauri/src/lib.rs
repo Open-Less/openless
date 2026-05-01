@@ -238,9 +238,9 @@ fn apply_windows_rounded_frame<R: Runtime>(window: &tauri::WebviewWindow<R>) {
 
     unsafe {
         let style = GetWindowLongW(hwnd, GWL_STYLE);
-        let native_frame_bits = (WS_CAPTION.0 | WS_THICKFRAME.0) as i32;
-        if style & native_frame_bits != 0 {
-            SetWindowLongW(hwnd, GWL_STYLE, style & !native_frame_bits);
+        let desired_style = (style | WS_THICKFRAME.0 as i32) & !(WS_CAPTION.0 as i32);
+        if style != desired_style {
+            SetWindowLongW(hwnd, GWL_STYLE, desired_style);
             if let Err(e) = SetWindowPos(
                 hwnd,
                 HWND::default(),
