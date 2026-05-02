@@ -432,14 +432,16 @@ fn configure_main_window_for_platform<R: Runtime>(window: &tauri::WebviewWindow<
     }
 
     #[cfg(target_os = "windows")]
-    use window_vibrancy::apply_mica;
-    if let Err(e) = window.set_decorations(false) {
-        log::warn!("[main] disable native decorations failed: {e}");
+    {
+        use window_vibrancy::apply_mica;
+        if let Err(e) = window.set_decorations(false) {
+            log::warn!("[main] disable native decorations failed: {e}");
+        }
+        if let Err(e) = apply_mica(window, None) {
+            log::warn!("[main] mica failed: {e}");
+        }
+        apply_windows_rounded_frame(window);
     }
-    if let Err(e) = apply_mica(window, None) {
-        log::warn!("[main] mica failed: {e}");
-    }
-    apply_windows_rounded_frame(window);
 }
 
 #[cfg(target_os = "windows")]
