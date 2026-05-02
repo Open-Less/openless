@@ -23,9 +23,9 @@ mod recorder;
 mod selection;
 mod types;
 
+use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(target_os = "macos")]
 use std::sync::mpsc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 #[cfg(target_os = "macos")]
 use std::time::Duration;
@@ -61,6 +61,8 @@ pub fn run() {
             // Capsule 启动时定位到屏幕底部居中并隐藏；coordinator 按需显示。
             // 与 Swift `CapsuleWindowController.repositionToBottomCenter` 同语义。
             if let Some(capsule) = app.get_webview_window("capsule") {
+                #[cfg(target_os = "windows")]
+                configure_capsule_window_for_platform(&capsule, false);
                 if let Err(e) = position_capsule_bottom_center(&capsule, false) {
                     log::warn!("[capsule] position failed: {e}");
                 }
@@ -88,33 +90,8 @@ pub fn run() {
             // decorations 留给运行时分平台决定：macOS 默认 true 用系统红黄绿；
             // Windows 这里关掉 native chrome 让 React 端 WinTitleBar 接管。
             if let Some(main) = app.get_webview_window("main") {
-                #[cfg(target_os = "macos")]
-                {
-                    use window_vibrancy::{
-                        apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectState,
-                    };
-                    if let Err(e) = apply_vibrancy(
-                        &main,
-                        NSVisualEffectMaterial::HudWindow,
-                        Some(NSVisualEffectState::Active),
-                        Some(20.0),
-                    ) {
-                        log::warn!("[main] vibrancy failed: {e}");
-                    }
-                }
+                configure_main_window_for_platform(&main);
                 #[cfg(target_os = "windows")]
-                {
-                    use window_vibrancy::apply_mica;
-                    // The window starts hidden so Windows native chrome can be disabled before
-                    // the first show; doing this after the native frame is visible is unreliable.
-                    if let Err(e) = main.set_decorations(false) {
-                        log::warn!("[main] disable native decorations failed: {e}");
-                    }
-                    if let Err(e) = apply_mica(&main, None) {
-                        log::warn!("[main] mica failed: {e}");
-                    }
-                    apply_windows_rounded_frame(&main);
-                }
                 if let Err(e) = main.show() {
                     log::warn!("[main] initial show failed: {e}");
                 }
@@ -167,9 +144,6 @@ pub fn run() {
             coordinator.start_hotkey_listener();
             // 同步启动 QA hotkey listener。和 dictation hotkey 平行，互不抢状态。
             coordinator.start_qa_hotkey_listener();
-            if std::env::var("OPENLESS_SHOW_MAIN_ON_START").ok().as_deref() == Some("1") {
-                show_main_window(app.handle());
-            }
 
             Ok(())
         })
@@ -225,7 +199,11 @@ pub fn run() {
                         hide_main_window(app);
                     }
                     #[cfg(target_os = "windows")]
-                    if matches!(event, tauri::WindowEvent::Resized(_) | tauri::WindowEvent::ScaleFactorChanged { .. }) {
+                    if matches!(
+                        event,
+                        tauri::WindowEvent::Resized(_)
+                            | tauri::WindowEvent::ScaleFactorChanged { .. }
+                    ) {
                         if let Some(main) = app.get_webview_window("main") {
                             apply_windows_rounded_frame(&main);
                         }
@@ -439,6 +417,103 @@ fn hide_main_window<R: Runtime>(app: &AppHandle<R>) {
     activate_menu_bar_mode(app);
 }
 
+fn configure_main_window_for_platform<R: Runtime>(window: &tauri::WebviewWindow<R>) {
+    #[cfg(target_os = "macos")]
+    {
+        use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectState};
+        if let Err(e) = apply_vibrancy(
+            window,
+            NSVisualEffectMaterial::HudWindow,
+            Some(NSVisualEffectState::Active),
+            Some(20.0),
+        ) {
+            log::warn!("[main] vibrancy failed: {e}");
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    use window_vibrancy::apply_mica;
+    if let Err(e) = window.set_decorations(false) {
+        log::warn!("[main] disable native decorations failed: {e}");
+    }
+    if let Err(e) = apply_mica(window, None) {
+        log::warn!("[main] mica failed: {e}");
+    }
+    apply_windows_rounded_frame(window);
+}
+
+#[cfg(target_os = "windows")]
+fn configure_capsule_window_for_platform<R: Runtime>(
+    window: &tauri::WebviewWindow<R>,
+    _translation_active: bool,
+) {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_BORDER_COLOR};
+    use windows::Win32::UI::WindowsAndMessaging::WS_EX_TOOLWINDOW;
+    use windows::Win32::{
+        Foundation::HWND,
+        UI::WindowsAndMessaging::{
+            GetWindowLongW, SetWindowLongW, SetWindowPos, GWL_EXSTYLE, GWL_STYLE, SWP_FRAMECHANGED,
+            SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WS_BORDER, WS_CAPTION, WS_DLGFRAME, WS_POPUP,
+            WS_THICKFRAME,
+        },
+    };
+
+    let handle = match window.window_handle().map(|h| h.as_raw()) {
+        Ok(RawWindowHandle::Win32(handle)) => handle,
+        Ok(other) => {
+            log::warn!("[capsule] unexpected raw window handle: {other:?}");
+            return;
+        }
+        Err(e) => {
+            log::warn!("[capsule] read raw window handle failed: {e}");
+            return;
+        }
+    };
+    let hwnd = HWND(handle.hwnd.get() as *mut core::ffi::c_void);
+
+    unsafe {
+        let style = GetWindowLongW(hwnd, GWL_STYLE);
+        let desired_style = (style
+            & !(WS_CAPTION.0 as i32
+                | WS_THICKFRAME.0 as i32
+                | WS_BORDER.0 as i32
+                | WS_DLGFRAME.0 as i32))
+            | WS_POPUP.0 as i32;
+        if style != desired_style {
+            SetWindowLongW(hwnd, GWL_STYLE, desired_style);
+            if let Err(e) = SetWindowPos(
+                hwnd,
+                HWND::default(),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED,
+            ) {
+                log::warn!("[capsule] refresh native frame after style update failed: {e}");
+            }
+        }
+
+        let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE);
+        let desired_ex_style = ex_style | WS_EX_TOOLWINDOW.0 as i32;
+        if ex_style != desired_ex_style {
+            SetWindowLongW(hwnd, GWL_EXSTYLE, desired_ex_style);
+        }
+
+        // Remove the default DWM light border so only the pill's own stroke remains.
+        let border_color_none: u32 = 0xFFFFFFFE;
+        if let Err(e) = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_BORDER_COLOR,
+            &border_color_none as *const _ as *const core::ffi::c_void,
+            std::mem::size_of_val(&border_color_none) as u32,
+        ) {
+            log::warn!("[capsule] remove DWM border color failed: {e}");
+        }
+    }
+}
+
 #[cfg(target_os = "macos")]
 fn activate_window_mode<R: Runtime>(app: &AppHandle<R>) {
     let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
@@ -572,9 +647,7 @@ fn position_qa_window<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) -> ta
 /// fallback 仍能从原 app 拿到选区）。
 pub(crate) fn show_qa_window<R: tauri::Runtime>(app: &AppHandle<R>, content_kind: &str) {
     let Some(window) = app.get_webview_window("qa") else {
-        log::info!(
-            "[qa] show 跳过：qa 窗口不存在 (content_kind={content_kind})"
-        );
+        log::info!("[qa] show 跳过：qa 窗口不存在 (content_kind={content_kind})");
         return;
     };
     // 仅首次 show 时居中；之后保留用户拖动后的位置。
@@ -719,6 +792,8 @@ pub(crate) fn position_capsule_bottom_center<R: tauri::Runtime>(
     };
     let bounds = capsule_window_bounds(translation_active);
     window.set_size(LogicalSize::new(bounds.width, bounds.height))?;
+    #[cfg(target_os = "windows")]
+    configure_capsule_window_for_platform(window, translation_active);
 
     let scale = monitor.scale_factor();
     let size = monitor.size();
@@ -742,9 +817,9 @@ fn capsule_window_bounds(translation_active: bool) -> CapsuleWindowBounds {
     #[cfg(target_os = "windows")]
     {
         CapsuleWindowBounds {
-            width: 220.0,
-            height: if translation_active { 118.0 } else { 84.0 },
-            bottom_inset: 12.0,
+            width: 234.0,
+            height: if translation_active { 102.0 } else { 62.0 },
+            bottom_inset: 0.0,
         }
     }
 
@@ -782,20 +857,32 @@ mod tests {
     fn capsule_window_bounds_leave_room_for_windows_shadow() {
         let bounds = capsule_window_bounds(false);
         #[cfg(target_os = "windows")]
-        assert_eq!((bounds.width, bounds.height, bounds.bottom_inset), (220.0, 84.0, 12.0));
+        assert_eq!(
+            (bounds.width, bounds.height, bounds.bottom_inset),
+            (234.0, 62.0, 0.0)
+        );
 
         #[cfg(not(target_os = "windows"))]
-        assert_eq!((bounds.width, bounds.height, bounds.bottom_inset), (176.0, 42.0, 0.0));
+        assert_eq!(
+            (bounds.width, bounds.height, bounds.bottom_inset),
+            (176.0, 42.0, 0.0)
+        );
     }
 
     #[test]
     fn capsule_window_bounds_expand_for_translation_badge() {
         let bounds = capsule_window_bounds(true);
         #[cfg(target_os = "windows")]
-        assert_eq!((bounds.width, bounds.height, bounds.bottom_inset), (220.0, 118.0, 12.0));
+        assert_eq!(
+            (bounds.width, bounds.height, bounds.bottom_inset),
+            (234.0, 102.0, 0.0)
+        );
 
         #[cfg(not(target_os = "windows"))]
-        assert_eq!((bounds.width, bounds.height, bounds.bottom_inset), (176.0, 110.0, 0.0));
+        assert_eq!(
+            (bounds.width, bounds.height, bounds.bottom_inset),
+            (176.0, 110.0, 0.0)
+        );
     }
 
     #[test]

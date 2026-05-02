@@ -33,8 +33,12 @@ assertEqual(capsuleWindow.width, 220, 'windows capsule config keeps translation-
 assertEqual(capsuleWindow.height, 110, 'windows capsule config keeps translation-capable height baseline');
 assertEqual(capsuleWindow.transparent, true, 'capsule window should keep transparent visuals');
 assertEqual(capsuleWindow.alwaysOnTop, true, 'capsule window should stay above the focused app while recording');
-assertEqual(mainWindow.decorations, false, 'windows main window should use only custom titlebar');
+assertEqual(mainWindow.decorations, true, 'shared main window config should preserve platform-native titlebars by default');
 assertEqual(mainWindow.visible, false, 'windows main window should stay hidden until the intended first show point');
+
+if (!/fn configure_main_window_for_platform<R: Runtime>\(window: &tauri::WebviewWindow<R>\)[\s\S]*?#\[cfg\(target_os = "windows"\)\][\s\S]*?window\.set_decorations\(false\)/.test(libRs)) {
+  throw new Error('windows runtime should own the frameless shell switch instead of the shared config layer');
+}
 
 if (!/function WindowsResizeHandles\(\)/.test(windowChromeTsx)) {
   throw new Error('windows frameless shell should expose explicit resize handles');

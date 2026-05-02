@@ -33,7 +33,7 @@ export function getCapsuleHostMetrics(
   translationActive: boolean,
 ): CapsuleHostMetrics {
   if (os === 'win') {
-    return { width: 220, height: translationActive ? 118 : 84, bottomInset: 12, badgeGap: 8 };
+    return { width: 196, height: translationActive ? 92 : 52, bottomInset: 0, badgeGap: 8 };
   }
 
   return { width: 176, height: translationActive ? 110 : 42, bottomInset: 0, badgeGap: 8 };
