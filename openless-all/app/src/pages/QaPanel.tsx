@@ -13,9 +13,8 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import { marked } from 'marked';
-import { isTauri, qaWindowDismiss, qaWindowPin, qaWindowStartDrag } from '../lib/ipc';
+import { isTauri, qaWindowDismiss, qaWindowPin } from '../lib/ipc';
 import type { QaChatMessage, QaStatePayload } from '../lib/types';
-import { detectOS } from '../components/WindowChrome';
 
 const SELECTION_PREVIEW_MAX = 60;
 
@@ -198,21 +197,12 @@ interface ToolbarProps {
 
 function Toolbar({ pinned, onTogglePin, onClose }: ToolbarProps) {
   const { t } = useTranslation();
-  const os = detectOS();
-  const onToolbarMouseDown = (event: React.MouseEvent<HTMLDivElement>) => {
-    if (event.button !== 0) return;
-    const target = event.target;
-    if (target instanceof HTMLElement && target.closest('button')) return;
-    if (os === 'win') {
-      return;
-    }
-    if (!isTauri) return;
-    event.preventDefault();
-    void startQaWindowDrag();
-  };
   return (
-    <div style={toolbarStyle} onMouseDown={onToolbarMouseDown}>
-      <div style={{ flex: 1, height: '100%' }} />
+    <div style={toolbarStyle} data-tauri-drag-region={isTauri ? 'true' : undefined}>
+      <div
+        style={{ flex: 1, height: '100%' }}
+        data-tauri-drag-region={isTauri ? 'true' : undefined}
+      />
       <IconBtn
         label={pinned ? t('qa.unpinTooltip') : t('qa.pinTooltip')}
         active={pinned}
@@ -253,7 +243,6 @@ function IconBtn({ label, active, onClick, children }: IconBtnProps) {
   return (
     <button
       onClick={onClick}
-      onMouseDown={event => event.stopPropagation()}
       title={label}
       aria-label={label}
       style={{
@@ -265,19 +254,6 @@ function IconBtn({ label, active, onClick, children }: IconBtnProps) {
       {children}
     </button>
   );
-}
-
-async function startQaWindowDrag() {
-  try {
-    if (detectOS() === 'win') {
-      await qaWindowStartDrag();
-      return;
-    }
-    const { getCurrentWindow } = await import('@tauri-apps/api/window');
-    await getCurrentWindow().startDragging();
-  } catch (error) {
-    console.warn('[qa] start dragging failed', error);
-  }
 }
 
 function EmptyHint({ t }: { t: ReturnType<typeof useTranslation>['t'] }) {
