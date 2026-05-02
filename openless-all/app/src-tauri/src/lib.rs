@@ -472,6 +472,10 @@ fn configure_capsule_window_for_platform<R: Runtime>(
     };
     let hwnd = HWND(handle.hwnd.get() as *mut core::ffi::c_void);
 
+    if let Err(e) = window.set_decorations(false) {
+        log::warn!("[capsule] disable native decorations failed: {e}");
+    }
+
     unsafe {
         let style = GetWindowLongW(hwnd, GWL_STYLE);
         let desired_style = (style
