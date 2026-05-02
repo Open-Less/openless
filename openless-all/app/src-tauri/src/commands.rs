@@ -516,6 +516,11 @@ pub fn qa_window_pin(coord: CoordinatorState<'_>, pinned: bool) {
     coord.qa_window_pin(pinned);
 }
 
+#[tauri::command]
+pub fn qa_window_start_drag(app: AppHandle) -> Result<(), String> {
+    crate::start_qa_window_drag(&app)
+}
+
 // ─────────────────────────── unused but exported (silences dead_code) ───────────────────────────
 
 #[allow(dead_code)]

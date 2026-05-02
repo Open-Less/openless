@@ -13,8 +13,9 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import { marked } from 'marked';
-import { isTauri, qaWindowDismiss, qaWindowPin } from '../lib/ipc';
+import { isTauri, qaWindowDismiss, qaWindowPin, qaWindowStartDrag } from '../lib/ipc';
 import type { QaChatMessage, QaStatePayload } from '../lib/types';
+import { detectOS } from '../components/WindowChrome';
 
 const SELECTION_PREVIEW_MAX = 60;
 
@@ -197,10 +198,20 @@ interface ToolbarProps {
 
 function Toolbar({ pinned, onTogglePin, onClose }: ToolbarProps) {
   const { t } = useTranslation();
-  // 拖动靠 NSWindow.movableByWindowBackground=YES（lib.rs::make_qa_window_draggable_macos）
-  // 在 AppKit 层处理。前端不需要 onMouseDown / data-tauri-drag-region。
+  const os = detectOS();
+  const onToolbarMouseDown = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    const target = event.target;
+    if (target instanceof HTMLElement && target.closest('button')) return;
+    if (os === 'win') {
+      return;
+    }
+    if (!isTauri) return;
+    event.preventDefault();
+    void startQaWindowDrag();
+  };
   return (
-    <div style={toolbarStyle}>
+    <div style={toolbarStyle} onMouseDown={onToolbarMouseDown}>
       <div style={{ flex: 1, height: '100%' }} />
       <IconBtn
         label={pinned ? t('qa.unpinTooltip') : t('qa.pinTooltip')}
@@ -242,6 +253,7 @@ function IconBtn({ label, active, onClick, children }: IconBtnProps) {
   return (
     <button
       onClick={onClick}
+      onMouseDown={event => event.stopPropagation()}
       title={label}
       aria-label={label}
       style={{
@@ -253,6 +265,19 @@ function IconBtn({ label, active, onClick, children }: IconBtnProps) {
       {children}
     </button>
   );
+}
+
+async function startQaWindowDrag() {
+  try {
+    if (detectOS() === 'win') {
+      await qaWindowStartDrag();
+      return;
+    }
+    const { getCurrentWindow } = await import('@tauri-apps/api/window');
+    await getCurrentWindow().startDragging();
+  } catch (error) {
+    console.warn('[qa] start dragging failed', error);
+  }
 }
 
 function EmptyHint({ t }: { t: ReturnType<typeof useTranslation>['t'] }) {

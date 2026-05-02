@@ -275,6 +275,10 @@ export function qaWindowPin(pinned: boolean): Promise<void> {
   return invokeOrMock('qa_window_pin', { pinned }, () => undefined);
 }
 
+export function qaWindowStartDrag(): Promise<void> {
+  return invokeOrMock('qa_window_start_drag', undefined, () => undefined);
+}
+
 export async function openExternal(url: string): Promise<void> {
   if (!isTauri) {
     window.open(url, '_blank', 'noopener,noreferrer');

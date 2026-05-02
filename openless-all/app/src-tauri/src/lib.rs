@@ -26,6 +26,8 @@ mod types;
 #[cfg(target_os = "macos")]
 use std::sync::mpsc;
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(target_os = "windows")]
+use std::sync::atomic::AtomicIsize;
 use std::sync::Arc;
 #[cfg(target_os = "macos")]
 use std::time::Duration;
@@ -33,6 +35,10 @@ use std::time::Duration;
 /// 第一次 show 时把 QA 浮窗摆到屏幕底部居中；之后的 show 不再 reposition，
 /// 让用户拖动后的位置在 hide → show 之间得以保持。详见 issue #118 v2。
 static QA_WINDOW_POSITIONED: AtomicBool = AtomicBool::new(false);
+#[cfg(target_os = "windows")]
+static QA_WNDPROC_INSTALLED: AtomicBool = AtomicBool::new(false);
+#[cfg(target_os = "windows")]
+static QA_ORIGINAL_WNDPROC: AtomicIsize = AtomicIsize::new(0);
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::{MouseButton, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, RunEvent, Runtime};
@@ -77,6 +83,8 @@ pub fn run() {
                 }
                 #[cfg(target_os = "macos")]
                 make_qa_window_draggable_macos(&qa);
+                #[cfg(target_os = "windows")]
+                install_qa_drag_hit_test(&qa);
                 let _ = qa.hide();
             } else {
                 log::info!("[qa] qa 窗口未在 tauri.conf.json 中声明，前端 agent 会补上");
@@ -516,6 +524,9 @@ pub(crate) fn show_qa_window<R: tauri::Runtime>(app: &AppHandle<R>, content_kind
     }
     #[cfg(target_os = "windows")]
     {
+        if let Err(e) = window.set_ignore_cursor_events(false) {
+            log::warn!("[qa] show: set_ignore_cursor_events(false) failed: {e}");
+        }
         if !show_qa_window_no_activate(&window) {
             log::warn!("[qa] show_no_activate failed; falling back to window.show()");
             if let Err(e) = window.show() {
@@ -565,6 +576,15 @@ fn make_qa_window_draggable_macos<R: tauri::Runtime>(window: &tauri::WebviewWind
 /// 隐藏 QA 窗口。供 commands::qa_window_dismiss / coordinator session 收尾共用。
 pub(crate) fn hide_qa_window<R: tauri::Runtime>(app: &AppHandle<R>) {
     if let Some(window) = app.get_webview_window("qa") {
+        #[cfg(target_os = "windows")]
+        {
+            if let Err(e) = window.set_ignore_cursor_events(true) {
+                log::warn!("[qa] hide: set_ignore_cursor_events(true) failed: {e}");
+            }
+            if hide_qa_window_non_participating() {
+                return;
+            }
+        }
         let _ = window.hide();
     }
 }
@@ -602,6 +622,119 @@ fn show_qa_window_no_activate<R: tauri::Runtime>(window: &tauri::WebviewWindow<R
         )
     };
     true
+}
+
+pub(crate) fn start_qa_window_drag<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    let window = app
+        .get_webview_window("qa")
+        .ok_or_else(|| "qa window not found".to_string())?;
+    window.start_dragging().map_err(|e| e.to_string())
+}
+
+#[cfg(target_os = "windows")]
+fn install_qa_drag_hit_test<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows::Win32::Foundation::{HWND, LRESULT};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        CallWindowProcW, GetClientRect, GetWindowRect, SetWindowLongPtrW, GWLP_WNDPROC,
+        HTCAPTION, HTCLIENT, WM_NCHITTEST, WNDPROC,
+    };
+
+    if QA_WNDPROC_INSTALLED.load(Ordering::SeqCst) {
+        return;
+    }
+
+    let Ok(handle) = window.window_handle() else {
+        return;
+    };
+    let RawWindowHandle::Win32(raw) = handle.as_raw() else {
+        return;
+    };
+    let hwnd = HWND(raw.hwnd.get() as *mut _);
+    if hwnd.0.is_null() {
+        return;
+    }
+
+    unsafe extern "system" fn qa_wndproc(
+        hwnd: HWND,
+        msg: u32,
+        wparam: windows::Win32::Foundation::WPARAM,
+        lparam: windows::Win32::Foundation::LPARAM,
+    ) -> LRESULT {
+        if msg == WM_NCHITTEST {
+            let mut rect = windows::Win32::Foundation::RECT::default();
+            let _ = GetClientRect(hwnd, &mut rect);
+            let mut window_rect = windows::Win32::Foundation::RECT::default();
+            let _ = GetWindowRect(hwnd, &mut window_rect);
+            let point_x = (lparam.0 & 0xffff) as i16 as i32 - window_rect.left;
+            let point_y = ((lparam.0 >> 16) & 0xffff) as i16 as i32 - window_rect.top;
+            let toolbar_height = 32;
+            let button_cluster_width = 72;
+            let draggable_right = (rect.right - button_cluster_width).max(0);
+            if point_y >= 0
+                && point_y < toolbar_height
+                && point_x >= 0
+                && point_x < draggable_right
+            {
+                return LRESULT(HTCAPTION as isize);
+            }
+            return LRESULT(HTCLIENT as isize);
+        }
+
+        let original = QA_ORIGINAL_WNDPROC.load(Ordering::SeqCst);
+        if original == 0 {
+            return LRESULT(0);
+        }
+        let proc: WNDPROC = Some(std::mem::transmute(original));
+        unsafe { CallWindowProcW(proc, hwnd, msg, wparam, lparam) }
+    }
+
+    let previous = unsafe {
+        SetWindowLongPtrW(hwnd, GWLP_WNDPROC, qa_wndproc as *const () as usize as isize)
+    };
+    if previous != 0 {
+        QA_ORIGINAL_WNDPROC.store(previous, Ordering::SeqCst);
+        QA_WNDPROC_INSTALLED.store(true, Ordering::SeqCst);
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn hide_qa_window_non_participating() -> bool {
+    use std::iter::once;
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        FindWindowW, SetWindowPos, ShowWindow, HWND_NOTOPMOST, SWP_HIDEWINDOW, SWP_NOACTIVATE,
+        SWP_NOMOVE, SWP_NOSIZE, SW_HIDE,
+    };
+    use windows::core::PCWSTR;
+
+    let title: Vec<u16> = "OpenLess QA".encode_utf16().chain(once(0)).collect();
+    let hwnd = match unsafe { FindWindowW(PCWSTR::null(), PCWSTR(title.as_ptr())) } {
+        Ok(hwnd) => hwnd,
+        Err(_) => return false,
+    };
+    if hwnd.0.is_null() {
+        return false;
+    }
+
+    let _ = unsafe { ShowWindow(hwnd, SW_HIDE) };
+    let _ = unsafe {
+        SetWindowPos(
+            hwnd,
+            HWND_NOTOPMOST,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_HIDEWINDOW,
+        )
+    };
+    true
+}
+
+#[cfg(not(target_os = "windows"))]
+fn hide_qa_window_non_participating() -> bool {
+    false
 }
 
 /// 把 capsule 窗口移到屏幕底部居中，与 Swift `CapsuleWindowController.repositionToBottomCenter` 同效。

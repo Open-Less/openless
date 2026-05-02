@@ -7,7 +7,6 @@ import {
   checkAccessibilityPermission,
   checkMicrophonePermission,
   getHotkeyStatus,
-  handleWindowHotkeyEvent,
   isTauri,
 } from './lib/ipc';
 import { QaPanel } from './pages/QaPanel';
@@ -109,21 +108,9 @@ export function App({ isCapsule, isQa }: AppProps) {
 
   useEffect(() => {
     if (!isTauri || os !== 'win') return;
-    const forwardKey = (event: KeyboardEvent) => {
-      if (!isWindowHotkeyCandidate(event)) return;
-      void handleWindowHotkeyEvent(
-        event.type as 'keydown' | 'keyup',
-        event.key,
-        event.code,
-        event.repeat,
-      ).catch(error => console.warn('[window-hotkey] forward failed', error));
-    };
-    window.addEventListener('keydown', forwardKey, true);
-    window.addEventListener('keyup', forwardKey, true);
-    return () => {
-      window.removeEventListener('keydown', forwardKey, true);
-      window.removeEventListener('keyup', forwardKey, true);
-    };
+    // Windows 听写 / QA lifecycle 由 backend low-level keyboard hook 单独拥有。
+    // 不再让前台 main window 额外转发 keydown/keyup，避免双事件源共同驱动同一状态机。
+    return;
   }, [os]);
 
   if (gate === 'checking') {
@@ -133,16 +120,6 @@ export function App({ isCapsule, isQa }: AppProps) {
     <HotkeySettingsProvider>
       {gate === 'onboarding' ? <Onboarding onComplete={() => setGate('ready')} /> : <FloatingShell />}
     </HotkeySettingsProvider>
-  );
-}
-
-function isWindowHotkeyCandidate(event: KeyboardEvent): boolean {
-  return (
-    event.key === 'Escape' ||
-    event.code === 'ControlRight' ||
-    event.code === 'ControlLeft' ||
-    event.code === 'AltRight' ||
-    event.code === 'MetaRight'
   );
 }
 
