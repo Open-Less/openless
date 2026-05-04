@@ -640,6 +640,7 @@ fn open_qa_panel(inner: &Arc<Inner>) {
             serde_json::json!({
                 "kind": "idle",
                 "messages": Vec::<crate::types::QaChatMessage>::new(),
+                "pinned": false,
             }),
         );
     }
@@ -2090,7 +2091,10 @@ async fn begin_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
     inner.qa_state.lock().selection = selection.clone();
 
     if let Some(app) = inner.app.lock().clone() {
-        let messages = inner.qa_state.lock().messages.clone();
+        let (messages, pinned) = {
+            let state = inner.qa_state.lock();
+            (state.messages.clone(), state.pinned)
+        };
         let _ = app.emit_to(
             "qa",
             "qa:state",
@@ -2098,6 +2102,7 @@ async fn begin_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
                 "kind": "recording",
                 "selection_preview": selection_preview_text,
                 "messages": messages,
+                "pinned": pinned,
             }),
         );
     }
@@ -2225,7 +2230,11 @@ async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
     emit_capsule(inner, CapsuleState::Transcribing, 0.0, 0, None, None);
 
     if let Some(app) = inner.app.lock().clone() {
-        let _ = app.emit_to("qa", "qa:state", serde_json::json!({ "kind": "loading" }));
+        let pinned = inner.qa_state.lock().pinned;
+        let _ = app.emit_to("qa", "qa:state", serde_json::json!({
+            "kind": "loading",
+            "pinned": pinned,
+        }));
     }
 
     if let Some(rec) = inner.qa_recorder.lock().take() {
@@ -2298,13 +2307,17 @@ async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
         });
 
     if let Some(app) = inner.app.lock().clone() {
-        let messages = inner.qa_state.lock().messages.clone();
+        let (messages, pinned) = {
+            let state = inner.qa_state.lock();
+            (state.messages.clone(), state.pinned)
+        };
         let _ = app.emit_to(
             "qa",
             "qa:state",
             serde_json::json!({
                 "kind": "thinking",
                 "messages": messages,
+                "pinned": pinned,
             }),
         );
     }
@@ -2386,13 +2399,17 @@ async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
         });
 
     if let Some(app) = inner.app.lock().clone() {
-        let messages = inner.qa_state.lock().messages.clone();
+        let (messages, pinned) = {
+            let state = inner.qa_state.lock();
+            (state.messages.clone(), state.pinned)
+        };
         let _ = app.emit_to(
             "qa",
             "qa:state",
             serde_json::json!({
                 "kind": "answer",
                 "messages": messages,
+                "pinned": pinned,
             }),
         );
     }
@@ -2433,7 +2450,10 @@ async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
 /// 让前端继续渲染历史对话。
 fn finish_qa_with_error(inner: &Arc<Inner>, message: String) {
     if let Some(app) = inner.app.lock().clone() {
-        let messages = inner.qa_state.lock().messages.clone();
+        let (messages, pinned) = {
+            let state = inner.qa_state.lock();
+            (state.messages.clone(), state.pinned)
+        };
         let _ = app.emit_to(
             "qa",
             "qa:state",
@@ -2441,6 +2461,7 @@ fn finish_qa_with_error(inner: &Arc<Inner>, message: String) {
                 "kind": "error",
                 "error": message,
                 "messages": messages,
+                "pinned": pinned,
             }),
         );
     }
@@ -2455,13 +2476,17 @@ fn finish_qa_with_error(inner: &Arc<Inner>, message: String) {
 /// Esc/X 或再按 QA hotkey 时才关）；多轮对话历史保留。胶囊也即刻收掉。
 fn finish_qa_idle_silently(inner: &Arc<Inner>) {
     if let Some(app) = inner.app.lock().clone() {
-        let messages = inner.qa_state.lock().messages.clone();
+        let (messages, pinned) = {
+            let state = inner.qa_state.lock();
+            (state.messages.clone(), state.pinned)
+        };
         let _ = app.emit_to(
             "qa",
             "qa:state",
             serde_json::json!({
                 "kind": "idle",
                 "messages": messages,
+                "pinned": pinned,
             }),
         );
     }

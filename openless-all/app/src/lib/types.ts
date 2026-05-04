@@ -141,6 +141,8 @@ export interface QaStatePayload {
   error?: string;
   /** answer_delta 事件时附带的本帧增量字符串。 */
   chunk?: string;
+  /** 后端权威：QA 面板是否已固定（pinned）。 */
+  pinned?: boolean;
 }
 
 /** 内置语言列表 — 前端 Settings UI 用，后端只接收原生名字符串拼 prompt。

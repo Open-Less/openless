@@ -59,6 +59,10 @@ export function QaPanel() {
           if (payload.messages) {
             setMessages(payload.messages);
           }
+          // 同步后端的 pinned 状态
+          if (payload.pinned !== undefined) {
+            setPinned(payload.pinned);
+          }
           switch (payload.kind) {
             case 'idle':
               setStatus('idle');
@@ -66,10 +70,6 @@ export function QaPanel() {
               setErrorMsg('');
               setStreamingAnswer('');
               setLevel(0);
-              // 窗口重新打开时重置 pinned 状态（后端 close_qa_panel 会重置为 false）
-              if (payload.messages && payload.messages.length === 0) {
-                setPinned(false);
-              }
               break;
             case 'recording':
               setStatus('recording');

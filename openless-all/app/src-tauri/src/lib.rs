@@ -695,7 +695,7 @@ pub(crate) fn hide_qa_window<R: tauri::Runtime>(app: &AppHandle<R>) {
     if let Some(window) = app.get_webview_window("qa") {
         #[cfg(target_os = "windows")]
         {
-            // Windows: 使用 Win32 API 确保窗口真正隐藏
+            // Windows: 优先使用 Win32 API 强制隐藏
             use raw_window_handle::{HasWindowHandle, RawWindowHandle};
             use windows::Win32::Foundation::HWND;
             use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE};
@@ -708,6 +708,8 @@ pub(crate) fn hide_qa_window<R: tauri::Runtime>(app: &AppHandle<R>) {
                     }
                 }
             }
+            // 继续调用 window.hide() 作为 fallback 和状态同步
+            let _ = window.hide();
         }
         #[cfg(not(target_os = "windows"))]
         {
