@@ -862,13 +862,6 @@ mod tests {
         );
     }
 
-        #[cfg(not(target_os = "windows"))]
-        assert_eq!(
-            (bounds.width, bounds.height, bounds.bottom_inset),
-            (220.0, 110.0, 0.0)
-        );
-    }
-
     #[test]
     fn capsule_visual_height_matches_frontend_pill() {
         #[cfg(target_os = "windows")]
