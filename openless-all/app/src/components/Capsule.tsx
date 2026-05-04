@@ -138,7 +138,7 @@ function CircleButton({ variant, enabled, onClick }: CircleButtonProps) {
           <path d="M1.5 1.5l8 8M9.5 1.5l-8 8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
         </svg>
       ) : (
-        <svg width="13" height="13" viewBox="0 0 13 13">
+        <svg width="11" height="11" viewBox="0 0 13 13">
           <path d="M2 6.5l3.2 3.5L11 3.5" stroke="currentColor" strokeWidth="1.7" fill="none" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       )}
@@ -226,7 +226,8 @@ function Pill({ os, state, level, insertedChars, message, onCancel, onConfirm }:
       style={{
         display: 'inline-flex',
         alignItems: 'center',
-        justifyContent: 'space-between',
+        justifyContent: 'center',
+        position: 'relative',
         gap: 8,
         padding: '0 8px',
         width: metrics.width,
@@ -248,11 +249,15 @@ function Pill({ os, state, level, insertedChars, message, onCancel, onConfirm }:
         filter: dropShadow,
       }}
     >
-      <CircleButton variant="cancel" enabled={enabled} onClick={onCancel} />
+      <div style={{ position: 'absolute', left: 8 }}>
+        <CircleButton variant="cancel" enabled={enabled} onClick={onCancel} />
+      </div>
       <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         {center}
       </div>
-      <CircleButton variant="confirm" enabled={enabled} onClick={onConfirm} />
+      <div style={{ position: 'absolute', right: 8 }}>
+        <CircleButton variant="confirm" enabled={enabled} onClick={onConfirm} />
+      </div>
     </div>
   );
 }
