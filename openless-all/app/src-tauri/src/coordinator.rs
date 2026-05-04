@@ -1224,36 +1224,56 @@ fn spawn_qa_recorder_error_monitor(inner: &Arc<Inner>, rx: mpsc::Receiver<Record
 }
 
 fn abort_recording_with_error(inner: &Arc<Inner>, message: String) {
-    let (elapsed, session_id) = {
+    let Some(abort) = ({
         let mut state = inner.state.lock();
-        if state.cancelled
-            || !matches!(
-                state.phase,
-                SessionPhase::Starting | SessionPhase::Listening
-            )
-        {
-            return;
-        }
-        state.cancelled = true;
-        state.phase = SessionPhase::Idle;
-        (
-            state.started_at.elapsed().as_millis() as u64,
-            state.session_id,
-        )
+        begin_recording_abort_before_restore(&mut state)
+    }) else {
+        return;
     };
 
-    discard_startup_resources_for_session(inner, session_id);
-    restore_prepared_windows_ime_session(inner, session_id);
+    discard_startup_resources_for_session(inner, abort.session_id);
+    restore_prepared_windows_ime_session(inner, abort.session_id);
+    {
+        let mut state = inner.state.lock();
+        publish_abort_idle_after_restore(&mut state, abort.session_id);
+    }
 
     emit_capsule(
         inner,
         CapsuleState::Error,
         0.0,
-        elapsed,
+        abort.elapsed,
         Some(message),
         None,
     );
     schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
+}
+
+struct RecordingAbort {
+    elapsed: u64,
+    session_id: u64,
+}
+
+fn begin_recording_abort_before_restore(state: &mut SessionState) -> Option<RecordingAbort> {
+    if state.cancelled
+        || !matches!(
+            state.phase,
+            SessionPhase::Starting | SessionPhase::Listening
+        )
+    {
+        return None;
+    }
+    state.cancelled = true;
+    Some(RecordingAbort {
+        elapsed: state.started_at.elapsed().as_millis() as u64,
+        session_id: state.session_id,
+    })
+}
+
+fn publish_abort_idle_after_restore(state: &mut SessionState, session_id: u64) {
+    if state.session_id == session_id {
+        state.phase = SessionPhase::Idle;
+    }
 }
 
 async fn start_recorder_and_enter_listening(
@@ -2654,6 +2674,40 @@ mod tests {
         assert!(state.cancelled);
         assert!(coordinator.inner.recorder.lock().is_none());
         assert!(coordinator.inner.asr.lock().is_none());
+    }
+
+    #[test]
+    fn abort_recording_keeps_session_non_idle_until_restore_can_run() {
+        let mut state = SessionState::default();
+        state.phase = SessionPhase::Listening;
+        state.cancelled = false;
+        state.session_id = 7;
+
+        let abort = begin_recording_abort_before_restore(&mut state).unwrap();
+
+        assert_eq!(abort.session_id, 7);
+        assert!(state.cancelled);
+        assert_eq!(state.phase, SessionPhase::Listening);
+
+        publish_abort_idle_after_restore(&mut state, abort.session_id);
+
+        assert_eq!(state.phase, SessionPhase::Idle);
+    }
+
+    #[tokio::test]
+    async fn pressed_edge_during_inserting_does_not_start_new_session() {
+        let coordinator = Coordinator::new();
+        {
+            let mut state = coordinator.inner.state.lock();
+            state.phase = SessionPhase::Inserting;
+            state.session_id = 41;
+        }
+
+        handle_pressed_edge(&coordinator.inner).await;
+
+        let state = coordinator.inner.state.lock();
+        assert_eq!(state.phase, SessionPhase::Inserting);
+        assert_eq!(state.session_id, 41);
     }
 
     #[tokio::test]
