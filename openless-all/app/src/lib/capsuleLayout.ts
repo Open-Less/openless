@@ -35,8 +35,8 @@ export function getCapsuleHostMetrics(
   translationActive: boolean,
 ): CapsuleHostMetrics {
   if (os === 'win') {
-    // width 从 220 增加到 280，给 drop-shadow(0 12px 24px) 足够的扩散空间
-    return { width: 280, height: translationActive ? 118 : 84, bottomInset: 12, badgeGap: 8 };
+    // Windows 不使用阴影，左右刚好容纳胶囊，上下留足空间
+    return { width: 212, height: translationActive ? 118 : 84, bottomInset: 16, badgeGap: 8 };
   }
   return { width: 176, height: 42, bottomInset: 0, badgeGap: 8 };
 }

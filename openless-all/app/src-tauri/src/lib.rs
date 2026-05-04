@@ -785,10 +785,13 @@ struct CapsuleWindowBounds {
 fn capsule_window_bounds(translation_active: bool) -> CapsuleWindowBounds {
     #[cfg(target_os = "windows")]
     {
+        // Windows 不使用阴影，窗口尺寸：
+        // 宽度：196 (pill) + 8*2 (padding) = 212
+        // 高度：52 (pill) + 上下各留 16px 空间 = 84
         CapsuleWindowBounds {
-            width: 280.0,  // 从 220 增加到 280，给阴影足够空间
+            width: 212.0,
             height: if translation_active { 118.0 } else { 84.0 },
-            bottom_inset: 12.0,
+            bottom_inset: 16.0,
         }
     }
 
@@ -849,6 +852,13 @@ mod tests {
             (bounds.width, bounds.height, bounds.bottom_inset),
             (212.0, 118.0, 16.0)
         );
+
+        #[cfg(not(target_os = "windows"))]
+        assert_eq!(
+            (bounds.width, bounds.height, bounds.bottom_inset),
+            (220.0, 110.0, 0.0)
+        );
+    }
 
         #[cfg(not(target_os = "windows"))]
         assert_eq!(

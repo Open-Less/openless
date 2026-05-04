@@ -218,7 +218,7 @@ function Pill({ os, state, level, insertedChars, message, onCancel, onConfirm }:
   const scale = os === 'win' ? 1 : 1 + ambient * 0.018;
   const shadowAlpha = 0.20 + ambient * 0.10;
   const dropShadow = os === 'win'
-    ? `drop-shadow(0 12px 24px rgba(0, 0, 0, ${(0.15 + ambient * 0.06).toFixed(3)}))`
+    ? 'none'  // Windows 不使用阴影，避免阻挡点击
     : 'none';
 
   return (
