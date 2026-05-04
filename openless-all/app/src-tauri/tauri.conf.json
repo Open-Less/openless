@@ -34,7 +34,7 @@
         "label": "capsule",
         "url": "index.html?window=capsule",
         "title": "OpenLess Capsule",
-        "width": 220,
+        "width": 280,
         "height": 110,
         "decorations": false,
         "transparent": true,

@@ -313,7 +313,7 @@ export function Capsule() {
         position: 'relative',
         display: 'flex',
         alignItems: 'center',
-        justifyContent: os === 'win' ? 'flex-end' : 'center',
+        justifyContent: 'center',  // Windows 也居中，因为已经增加了容器宽度
         paddingTop: os === 'win'
           ? Math.max(0, hostMetrics.height - metrics.height - hostMetrics.bottomInset)
           : 0,

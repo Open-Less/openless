@@ -693,7 +693,26 @@ fn make_qa_window_draggable_macos<R: tauri::Runtime>(window: &tauri::WebviewWind
 /// 隐藏 QA 窗口。供 commands::qa_window_dismiss / coordinator session 收尾共用。
 pub(crate) fn hide_qa_window<R: tauri::Runtime>(app: &AppHandle<R>) {
     if let Some(window) = app.get_webview_window("qa") {
-        let _ = window.hide();
+        #[cfg(target_os = "windows")]
+        {
+            // Windows: 使用 Win32 API 确保窗口真正隐藏
+            use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+            use windows::Win32::Foundation::HWND;
+            use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE};
+
+            if let Ok(handle) = window.window_handle() {
+                if let RawWindowHandle::Win32(raw) = handle.as_raw() {
+                    let hwnd = HWND(raw.hwnd.get() as *mut _);
+                    if !hwnd.0.is_null() {
+                        unsafe { ShowWindow(hwnd, SW_HIDE) };
+                    }
+                }
+            }
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = window.hide();
+        }
     }
 }
 
@@ -767,7 +786,7 @@ fn capsule_window_bounds(translation_active: bool) -> CapsuleWindowBounds {
     #[cfg(target_os = "windows")]
     {
         CapsuleWindowBounds {
-            width: 220.0,
+            width: 280.0,  // 从 220 增加到 280，给阴影足够空间
             height: if translation_active { 118.0 } else { 84.0 },
             bottom_inset: 12.0,
         }
@@ -812,7 +831,7 @@ mod tests {
         #[cfg(target_os = "windows")]
         assert_eq!(
             (bounds.width, bounds.height, bounds.bottom_inset),
-            (220.0, 84.0, 12.0)
+            (212.0, 84.0, 16.0)
         );
 
         #[cfg(not(target_os = "windows"))]
@@ -828,7 +847,7 @@ mod tests {
         #[cfg(target_os = "windows")]
         assert_eq!(
             (bounds.width, bounds.height, bounds.bottom_inset),
-            (220.0, 118.0, 12.0)
+            (212.0, 118.0, 16.0)
         );
 
         #[cfg(not(target_os = "windows"))]

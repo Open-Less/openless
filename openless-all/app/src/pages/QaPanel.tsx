@@ -66,6 +66,10 @@ export function QaPanel() {
               setErrorMsg('');
               setStreamingAnswer('');
               setLevel(0);
+              // 窗口重新打开时重置 pinned 状态（后端 close_qa_panel 会重置为 false）
+              if (payload.messages && payload.messages.length === 0) {
+                setPinned(false);
+              }
               break;
             case 'recording':
               setStatus('recording');
@@ -112,8 +116,8 @@ export function QaPanel() {
           }
         });
         const dismissHandle = await listen<unknown>('qa:dismiss', () => {
+          // 后端已经关闭窗口，前端只需重置状态，不要再次调用 qaWindowDismiss()
           setPinned(false);
-          void qaWindowDismiss();
         });
         // qa:level — 录音电平，节流 ~33ms/帧。详见 issue #162。
         const levelHandle = await listen<{ level: number }>('qa:level', event => {
@@ -261,7 +265,15 @@ function Toolbar({ pinned, onTogglePin, onClose }: ToolbarProps) {
   // 作为 button 子元素仍然正常 click。
   return (
     <div style={toolbarStyle}>
-      <div data-tauri-drag-region style={{ flex: 1, height: '100%' }} />
+      <div
+        data-tauri-drag-region
+        style={{
+          flex: 1,
+          height: '100%',
+          // 确保不阻挡按钮的点击事件
+          pointerEvents: 'auto',
+        }}
+      />
       <IconBtn
         label={pinned ? t('qa.unpinTooltip') : t('qa.pinTooltip')}
         active={pinned}
@@ -650,8 +662,12 @@ const iconBtnBaseStyle: CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
   justifyContent: 'center',
-  cursor: 'default',
+  cursor: 'pointer',
   padding: 0,
+  position: 'relative',
+  zIndex: 10,
+  // 明确禁止 drag-region 影响按钮
+  pointerEvents: 'auto',
   transition: 'background 0.16s var(--ol-motion-quick), color 0.16s var(--ol-motion-quick)',
 };
 
