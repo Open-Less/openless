@@ -461,6 +461,43 @@ const PARALLEL: usize = 8;
 const PER_CHUNK_ATTEMPTS: u32 = 4;
 const PARALLEL_FILES: usize = 3;
 
+/// `.partial` 文件的真实已下字节（不是 sparse 逻辑大小）。
+/// 有 `.partial.idx` → chunked 模式，按 idx 里 chunk 数还原；
+/// 没有 → append/single-stream 模式，partial 是 dense，meta.len() 即真实字节。
+pub fn partial_actual_size(partial: &Path) -> u64 {
+    let total_size = match std::fs::metadata(partial) {
+        Ok(m) => m.len(),
+        Err(_) => return 0,
+    };
+    if total_size == 0 {
+        return 0;
+    }
+    let idx_path = partial.with_extension("partial.idx");
+    if !idx_path.exists() {
+        return total_size;
+    }
+    let content = match std::fs::read_to_string(&idx_path) {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+    let mut seen: HashSet<usize> = HashSet::new();
+    let mut total: u64 = 0;
+    for line in content.lines() {
+        let Ok(idx) = line.trim().parse::<usize>() else { continue };
+        if !seen.insert(idx) {
+            continue;
+        }
+        let start = (idx as u64).saturating_mul(CHUNK_SIZE);
+        if start >= total_size {
+            continue;
+        }
+        // 最后一块可能不到 CHUNK_SIZE
+        let end = (start + CHUNK_SIZE).min(total_size);
+        total += end - start;
+    }
+    total
+}
+
 async fn download_one(
     client: &reqwest::Client,
     url: &str,
@@ -507,6 +544,12 @@ async fn download_one(
             .with_context(|| format!("create partial failed: {}", partial.display()))?;
         f.set_len(total_size)
             .with_context(|| format!("set_len partial failed: {}", partial.display()))?;
+    }
+    // 模式标记：sparse partial 必须配对 .partial.idx（哪怕空），
+    // 否则 walk_files 看到 partial 有但 idx 无，会把 sparse 全长当成已下完。
+    if !idx_path.exists() {
+        std::fs::write(&idx_path, b"")
+            .with_context(|| format!("touch partial.idx failed: {}", idx_path.display()))?;
     }
 
     // 4. 总计已下字节（用于初始化进度）

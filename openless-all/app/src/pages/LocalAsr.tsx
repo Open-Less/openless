@@ -143,7 +143,16 @@ export function LocalAsr() {
       const { listen } = await import('@tauri-apps/api/event');
       const off = await listen<LocalAsrDownloadProgress>('local-asr-download-progress', e => {
         const payload = e.payload;
-        setProgress(prev => ({ ...prev, [payload.modelId]: payload }));
+        if (payload.phase === 'cancelled') {
+          // 取消时清条目，bar 是否还显示交给 hasPartial 判断
+          setProgress(prev => {
+            const next = { ...prev };
+            delete next[payload.modelId];
+            return next;
+          });
+        } else {
+          setProgress(prev => ({ ...prev, [payload.modelId]: payload }));
+        }
         if (
           payload.phase === 'finished' ||
           payload.phase === 'cancelled' ||
@@ -185,18 +194,51 @@ export function LocalAsr() {
 
   const handleDownload = async (modelId: string) => {
     setBusyModelId(modelId);
+    setProgress(prev => ({
+      ...prev,
+      [modelId]: {
+        modelId,
+        file: '',
+        fileIndex: 0,
+        fileCount: remoteSizes[modelId]?.fileCount ?? 0,
+        bytesDownloaded: prev[modelId]?.bytesDownloaded ?? 0,
+        bytesTotal: remoteSizes[modelId]?.totalBytes ?? 0,
+        phase: 'started',
+        error: null,
+      },
+    }));
     try {
       await downloadLocalAsrModel(modelId, settings?.mirror);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+      setProgress(prev => {
+        const cur = prev[modelId];
+        if (cur?.phase === 'started') {
+          return { ...prev, [modelId]: { ...cur, phase: 'failed', error: e instanceof Error ? e.message : String(e) } };
+        }
+        return prev;
+      });
     } finally {
       setBusyModelId(null);
     }
   };
 
   const handleCancel = async (modelId: string) => {
+    // Progress 事件里的 bytesDownloaded 是后端 in_flight + already_done，是真实字节
+    const lastBytes = progress[modelId]?.bytesDownloaded ?? 0;
     try {
       await cancelLocalAsrDownload(modelId);
+      setProgress(prev => {
+        const next = { ...prev };
+        delete next[modelId];
+        return next;
+      });
+      // 乐观更新：让 hasPartial 立刻翻 true，不等 listener 200ms 后的 refresh
+      if (lastBytes > 0) {
+        setModels(prev =>
+          prev.map(m => (m.id === modelId ? { ...m, downloadedBytes: lastBytes } : m)),
+        );
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -458,8 +500,7 @@ function ModelRow({
   // 进度条要保留：有 partial 残留（downloadedBytes>0 但未完整）就一直显示，
   // 让用户看到上次下到哪里了，再点下载会从那里续。
   const hasPartial = !model.isDownloaded && model.downloadedBytes > 0;
-  const showProgress =
-    isDownloading || progress?.phase === 'failed' || progress?.phase === 'cancelled' || hasPartial;
+  const showProgress = isDownloading || progress?.phase === 'failed' || hasPartial;
 
   const sizeLabel = remoteSize?.loading
     ? t('localAsr.sizeLoading')
@@ -497,8 +538,6 @@ function ModelRow({
                     background:
                       progress?.phase === 'failed'
                         ? '#d04545'
-                        : progress?.phase === 'cancelled'
-                        ? 'var(--ol-ink-4)'
                         : 'var(--ol-accent-blue, #2c5cff)',
                     transition: 'width 120ms linear',
                   }}
@@ -507,8 +546,6 @@ function ModelRow({
               <div style={{ fontSize: 11, color: 'var(--ol-ink-4)', marginTop: 6 }}>
                 {progress?.phase === 'failed'
                   ? `${t('localAsr.failed')}: ${progress.error ?? ''}`
-                  : progress?.phase === 'cancelled'
-                  ? t('localAsr.cancelled')
                   : `${formatBytes(downloadedBytes)} / ${formatBytes(totalBytes)}` +
                     (progress?.file ? ` · ${progress.file}` : '')}
               </div>

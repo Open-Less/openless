@@ -82,15 +82,22 @@ fn walk_files<F: FnMut(u64)>(dir: &std::path::Path, on_size: &mut F) {
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        let name = entry.file_name();
-        // 哨兵文件本身体积忽略不计，但路径过滤更直白：保留所有非空文件。
+        let name_os = entry.file_name();
+        let name = name_os.to_string_lossy();
         if name == READY_SENTINEL {
+            continue;
+        }
+        // .partial.idx 是 chunk 完成索引，不算下载字节
+        if name.ends_with(".partial.idx") {
             continue;
         }
         match entry.file_type() {
             Ok(ft) if ft.is_dir() => walk_files(&path, on_size),
             Ok(ft) if ft.is_file() => {
-                if let Ok(meta) = entry.metadata() {
+                // .partial 在 chunked 模式下是 sparse 全长，meta.len() 不是真实字节
+                if name.ends_with(".partial") {
+                    on_size(super::download::partial_actual_size(&path));
+                } else if let Ok(meta) = entry.metadata() {
                     on_size(meta.len());
                 }
             }
