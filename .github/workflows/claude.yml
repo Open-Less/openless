@@ -1,5 +1,11 @@
 name: Claude Code
 
+# 触发策略：
+# - 默认不主动 review；任何 PR 打开 / 同步都不会自动调用模型，避免烧 OAuth token 额度。
+# - 评论 / review / issue 中出现 `@claude` 才触发，且发起者必须是仓库 OWNER（appergb）。
+# - 模型默认 claude-sonnet-4-6（量大、成本低）；评论里写 `--opus` 或包含 `claude-opus`
+#   字样会切到 claude-opus-4-7（用于需要更深推理的任务）。
+
 on:
   issue_comment:
     types: [created]
@@ -12,11 +18,13 @@ on:
 
 jobs:
   claude:
+    # 双重门禁：(1) 内容含 @claude  (2) 触发者是 OWNER。
+    # author_association == 'OWNER' 是 GitHub 内建字段，免一次 API 调用。
     if: |
-      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
-      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
-      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
-      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude') && github.event.comment.author_association == 'OWNER') ||
+      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude') && github.event.comment.author_association == 'OWNER') ||
+      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude') && github.event.review.author_association == 'OWNER') ||
+      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')) && github.event.issue.author_association == 'OWNER')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -30,21 +38,31 @@ jobs:
         with:
           fetch-depth: 1
 
+      - name: Pick model (default sonnet, opt-in opus)
+        id: pick_model
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          REVIEW_BODY: ${{ github.event.review.body }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+        run: |
+          set -eu
+          body="${COMMENT_BODY}${REVIEW_BODY}${ISSUE_BODY}${ISSUE_TITLE}"
+          if [[ "$body" == *"--opus"* ]] || [[ "$body" == *"claude-opus"* ]]; then
+            echo "model=claude-opus-4-7" >> "$GITHUB_OUTPUT"
+          else
+            echo "model=claude-sonnet-4-6" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Run Claude Code
         id: claude
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 
-          # This is an optional setting that allows Claude to read CI results on PRs
+          # 让 Claude 能看 CI 结果
           additional_permissions: |
             actions: read
 
-          # Optional: Give a custom prompt to Claude. If this is not specified, Claude will perform the instructions specified in the comment that tagged it.
-          # prompt: 'Update the pull request description to include a summary of changes.'
-
-          # Optional: Add claude_args to customize behavior and configuration
-          # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
-          # or https://code.claude.com/docs/en/cli-reference for available options
-          # claude_args: '--allowed-tools Bash(gh pr *)'
-
+          # 模型策略：默认 sonnet，评论里 --opus 才升级到 opus
+          claude_args: '--model ${{ steps.pick_model.outputs.model }}'
