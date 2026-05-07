@@ -24,14 +24,6 @@ jobs:
   build:
     permissions:
       contents: write
-    # 渠道由 tag 后缀决定：
-    #   v<v>-beta-tauri  → beta 渠道（GitHub Release 标 prerelease，
-    #                      manifest 文件名带 -beta 后缀，正式版用户的 endpoint 拿不到）
-    #   v<v>-tauri       → stable 渠道（正式版，文件名沿用旧约定，向后兼容）
-    # workflow_dispatch / 非 tag 触发时 github.ref_name 不是 tag 字符串，
-    # endsWith 返回 false，回退为 stable，不改变现有 dispatch 行为。
-    env:
-      OPENLESS_RELEASE_CHANNEL: ${{ endsWith(github.ref_name, '-beta-tauri') && 'beta' || 'stable' }}
     strategy:
       fail-fast: false
       matrix:
@@ -56,6 +48,13 @@ jobs:
     env:
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      # 渠道由 tag 后缀决定：
+      #   v<v>-beta-tauri  → beta 渠道（GitHub Release 标 prerelease，manifest 文件名带 -beta 后缀，
+      #                      正式版用户的 endpoint 拿不到）
+      #   v<v>-tauri       → stable 渠道（正式版，文件名沿用旧约定，向后兼容）
+      # workflow_dispatch / 非 tag 触发时 github.ref_name 不是 tag 字符串，
+      # endsWith 返回 false，回退为 stable，不改变现有 dispatch 行为。
+      OPENLESS_RELEASE_CHANNEL: ${{ endsWith(github.ref_name, '-beta-tauri') && 'beta' || 'stable' }}
     steps:
       - uses: actions/checkout@v4
         with:
