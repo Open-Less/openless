@@ -24,6 +24,14 @@ jobs:
   build:
     permissions:
       contents: write
+    # 渠道由 tag 后缀决定：
+    #   v<v>-beta-tauri  → beta 渠道（GitHub Release 标 prerelease，
+    #                      manifest 文件名带 -beta 后缀，正式版用户的 endpoint 拿不到）
+    #   v<v>-tauri       → stable 渠道（正式版，文件名沿用旧约定，向后兼容）
+    # workflow_dispatch / 非 tag 触发时 github.ref_name 不是 tag 字符串，
+    # endsWith 返回 false，回退为 stable，不改变现有 dispatch 行为。
+    env:
+      OPENLESS_RELEASE_CHANNEL: ${{ endsWith(github.ref_name, '-beta-tauri') && 'beta' || 'stable' }}
     strategy:
       fail-fast: false
       matrix:
@@ -370,6 +378,8 @@ jobs:
           OPENLESS_UPDATE_ARCH: ${{ matrix.updater-arch }}
           OPENLESS_UPDATE_REPO: appergb/openless
           OPENLESS_UPDATE_MIRROR_BASE_URL: https://fastgit.cc/https://github.com
+          # beta 渠道时输出 latest-{tgt}-{arch}-beta.json，stable 沿用旧文件名。
+          OPENLESS_RELEASE_CHANNEL: ${{ env.OPENLESS_RELEASE_CHANNEL }}
         run: node scripts/write-updater-manifest.mjs
 
       # ── 收集产物 ──
@@ -413,8 +423,7 @@ jobs:
           path: |
             openless-all/app/src-tauri/target/release/bundle/macos/*.app.tar.gz
             openless-all/app/src-tauri/target/release/bundle/macos/*.app.tar.gz.sig
-            openless-all/app/src-tauri/target/release/bundle/latest-darwin-${{ matrix.updater-arch }}.json
-            openless-all/app/src-tauri/target/release/bundle/latest-darwin-${{ matrix.updater-arch }}-mirror.json
+            openless-all/app/src-tauri/target/release/bundle/latest-darwin-${{ matrix.updater-arch }}*.json
           if-no-files-found: error
 
       - name: Upload Windows artifacts
@@ -435,8 +444,7 @@ jobs:
           path: |
             openless-all/app/src-tauri/target/release/bundle/nsis/*.exe.sig
             openless-all/app/src-tauri/target/release/bundle/msi/*.msi.sig
-            openless-all/app/src-tauri/target/release/bundle/latest-windows-x86_64.json
-            openless-all/app/src-tauri/target/release/bundle/latest-windows-x86_64-mirror.json
+            openless-all/app/src-tauri/target/release/bundle/latest-windows-x86_64*.json
           if-no-files-found: error
 
       - name: Upload Linux artifacts
@@ -457,8 +465,7 @@ jobs:
           name: openless-linux-x64-updater
           path: |
             openless-all/app/src-tauri/target/release/bundle/appimage/*.AppImage.sig
-            openless-all/app/src-tauri/target/release/bundle/latest-linux-x86_64.json
-            openless-all/app/src-tauri/target/release/bundle/latest-linux-x86_64-mirror.json
+            openless-all/app/src-tauri/target/release/bundle/latest-linux-x86_64*.json
           if-no-files-found: error
 
       # ── tag 推送时,同步上传到 GitHub Release ──
@@ -469,7 +476,10 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: 'OpenLess ${{ github.ref_name }}'
           draft: false
-          prerelease: false
+          # beta 渠道的 release 必须标 prerelease=true：GitHub UI 会折叠它，
+          # 普通用户看不到；同时只上传 latest-*-beta.json，正式版用户的
+          # endpoint（latest-*.json）永远不会被覆盖，保证 Beta 不溢出正式版。
+          prerelease: ${{ env.OPENLESS_RELEASE_CHANNEL == 'beta' }}
           # Matrix jobs all upload assets to the same release. Generate notes once
           # so macOS, Windows, and Linux jobs do not duplicate the release body.
           generate_release_notes: ${{ matrix.updater-target == 'darwin' && matrix.updater-arch == 'aarch64' }}
