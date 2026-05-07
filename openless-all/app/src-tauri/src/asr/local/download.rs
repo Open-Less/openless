@@ -467,7 +467,14 @@ const PARALLEL_FILES: usize = 3;
 pub fn partial_actual_size(partial: &Path) -> u64 {
     let total_size = match std::fs::metadata(partial) {
         Ok(m) => m.len(),
-        Err(_) => return 0,
+        Err(e) => {
+            eprintln!(
+                "[local-asr] partial_actual_size: stat partial failed ({}): {}",
+                partial.display(),
+                e
+            );
+            return 0;
+        }
     };
     if total_size == 0 {
         return 0;
@@ -478,7 +485,16 @@ pub fn partial_actual_size(partial: &Path) -> u64 {
     }
     let content = match std::fs::read_to_string(&idx_path) {
         Ok(s) => s,
-        Err(_) => return 0,
+        Err(e) => {
+            // idx 不可读 → 不知道哪些 chunk 已落盘，sparse 全长不可信，只能回 0。
+            // 但日志要留，否则进度条无故归零没法排查。
+            eprintln!(
+                "[local-asr] partial_actual_size: read idx failed ({}): {}",
+                idx_path.display(),
+                e
+            );
+            return 0;
+        }
     };
     let mut seen: HashSet<usize> = HashSet::new();
     let mut total: u64 = 0;

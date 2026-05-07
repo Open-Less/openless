@@ -194,6 +194,11 @@ export function LocalAsr() {
 
   const handleDownload = async (modelId: string) => {
     setBusyModelId(modelId);
+    // 重下载时，第一个后端事件到达前先用本地已知值占位，避免进度条从 0% 跳到真实位置。
+    // 优先级：上一次 progress（取消后已删，通常没有）→ models 里的 downloadedBytes（cancel 时乐观写入）
+    const model = models.find(m => m.id === modelId);
+    const initialDownloaded =
+      progress[modelId]?.bytesDownloaded ?? model?.downloadedBytes ?? 0;
     setProgress(prev => ({
       ...prev,
       [modelId]: {
@@ -201,7 +206,7 @@ export function LocalAsr() {
         file: '',
         fileIndex: 0,
         fileCount: remoteSizes[modelId]?.fileCount ?? 0,
-        bytesDownloaded: prev[modelId]?.bytesDownloaded ?? 0,
+        bytesDownloaded: initialDownloaded,
         bytesTotal: remoteSizes[modelId]?.totalBytes ?? 0,
         phase: 'started',
         error: null,
