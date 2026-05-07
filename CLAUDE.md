@@ -125,7 +125,27 @@ For maintainers:
 - Tag `v<version>-tauri` **on `main`**, not on `beta`. The release workflow keys off the tag, but tagging on `main` keeps the release commit linear with the always-releasable line.
 - Avoid direct pushes to `main` outside the `beta → main` merge — it bypasses the smoke-test gate.
 
-Channel distribution (in progress): per-channel updater endpoints + a Settings toggle for "join Beta channel" are tracked as a separate change. Until that lands, every release reaches every user; treat all `v*-tauri` tags as Stable-grade for now and avoid tagging anything from `beta` directly.
+Channel distribution (manual-download opt-in):
+
+- **Tag convention.** `v<v>-tauri` → Stable release (GitHub `prerelease=false`, manifest `latest-{tgt}-{arch}.json`). `v<v>-beta-tauri` → Beta release (GitHub `prerelease=true`, manifest `latest-{tgt}-{arch}-beta.json`). The two manifest filenames never overlap, so the in-app updater endpoint (which is fixed at compile time to the no-suffix file) cannot pick up Beta releases. This is the **physical isolation** that guarantees Beta does not leak to Stable users.
+- **Why not auto-update for Beta.** `tauri-plugin-updater` 2.10's `Builder` does not expose `endpoints()` — endpoints are only readable from `tauri.conf.json` at build time and cannot be swapped at runtime. Rather than fork the plugin or write a custom updater (~500 lines, high risk), Beta opt-in is implemented as a manual-download flow: Settings → About has a "Join Beta channel" toggle that, when on, calls `fetch_latest_beta_release` (GitHub Releases API), shows the latest pre-release tag, and routes the user to the GitHub release page to download manually. No installer signing/install path needs to be re-implemented.
+- **Where the wiring lives.** Pref field: `UserPreferences::update_channel` (`types.rs`). IPC: `get_update_channel` / `set_update_channel` / `fetch_latest_beta_release` (`commands.rs`). UI: `BetaChannelControl` inside `AboutMini` (`SettingsModal.tsx`). i18n: `settings.about.betaChannel*` keys.
+
+### Release verification checklist (run after every tag push)
+
+Run after pushing **either** a `v*-tauri` or `v*-beta-tauri` tag, **before** announcing the release:
+
+1. **GitHub Release page** matches expectation:
+   - Stable tag: not marked `Pre-release`, in the `releases/latest` redirect.
+   - Beta tag: marked `Pre-release`, **not** the target of `releases/latest`.
+2. **Release assets** are channel-correct:
+   - Stable tag includes `latest-{darwin,windows,linux}-{aarch64,x86_64}.json` + their `-mirror.json` siblings, **without** `-beta` suffix.
+   - Beta tag includes `latest-{tgt}-{arch}-beta.json` + `-beta-mirror.json`, **without** the no-suffix variant.
+3. **Stable user flow.** Install a Stable build, click `Settings → About → Check for updates`. After a Stable release: should offer the new version. After a Beta release only: should report "up to date" (Beta must not appear).
+4. **Beta user flow.** In the same Stable build, toggle on `Join Beta channel`. The latest Beta tag should appear (or "no Beta released yet"). Clicking the download button should open the corresponding GitHub release page.
+5. **Updater endpoint sanity.** `curl -fsSL https://github.com/appergb/openless/releases/latest/download/latest-darwin-aarch64.json` returns the Stable manifest (version field matches the latest Stable tag). It should never return a Beta version, regardless of which tag was pushed most recently.
+
+If any step fails, do not announce the release; investigate `release-tauri.yml` channel detection (`endsWith(github.ref_name, '-beta-tauri')`) and the `OPENLESS_RELEASE_CHANNEL` env propagation in the run logs.
 
 ## Repo conventions
 

@@ -45,6 +45,21 @@ pub enum OutputLanguagePreference {
     Ko,
 }
 
+/// Auto-update 渠道。决定 Settings → 关于 里展示哪一类版本信息。
+/// `Stable` 沿用 `tauri-plugin-updater` 的默认 endpoints（即 `tauri.conf.json`
+/// 里的 `latest-{{target}}-{{arch}}.json`），与发版 pipeline 对齐。
+/// `Beta` 不动 plugin endpoints —— 只解锁 Settings 里"手动下载最新 Beta"的入口
+/// （fetch GitHub `prerelease` + 跳浏览器），物理隔离 Beta 包不会通过 auto-update
+/// 推到正式版用户。详见 README 的"Contributing workflow"和 CLAUDE.md 的
+/// `Branch & release-channel workflow` 段落。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum UpdateChannel {
+    #[default]
+    Stable,
+    Beta,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum InsertStatus {
@@ -195,6 +210,10 @@ pub struct UserPreferences {
     /// Windows Foundry Local Whisper 模型在 runtime 中保持加载多久。
     #[serde(default = "default_local_asr_keep_loaded_secs")]
     pub foundry_local_asr_keep_loaded_secs: u32,
+    /// Auto-update 渠道偏好。stable = 跟正式版（默认）；beta = Settings 里多
+    /// 一个手动下载 Beta 的入口。不影响 plugin-updater 的自动检查路径。
+    #[serde(default)]
+    pub update_channel: UpdateChannel,
 }
 
 fn default_local_asr_model() -> String {
@@ -264,6 +283,8 @@ struct UserPreferencesWire {
     foundry_local_asr_language_hint: String,
     #[serde(default = "default_local_asr_keep_loaded_secs")]
     foundry_local_asr_keep_loaded_secs: u32,
+    #[serde(default)]
+    update_channel: UpdateChannel,
 }
 
 impl Default for UserPreferencesWire {
@@ -298,6 +319,7 @@ impl Default for UserPreferencesWire {
             foundry_local_asr_model: prefs.foundry_local_asr_model,
             foundry_local_asr_language_hint: prefs.foundry_local_asr_language_hint,
             foundry_local_asr_keep_loaded_secs: prefs.foundry_local_asr_keep_loaded_secs,
+            update_channel: prefs.update_channel,
         }
     }
 }
@@ -346,6 +368,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             foundry_local_asr_model: wire.foundry_local_asr_model,
             foundry_local_asr_language_hint: wire.foundry_local_asr_language_hint,
             foundry_local_asr_keep_loaded_secs: wire.foundry_local_asr_keep_loaded_secs,
+            update_channel: wire.update_channel,
         })
     }
 }
@@ -450,6 +473,7 @@ impl Default for UserPreferences {
             foundry_local_asr_model: default_foundry_local_asr_model(),
             foundry_local_asr_language_hint: String::new(),
             foundry_local_asr_keep_loaded_secs: default_local_asr_keep_loaded_secs(),
+            update_channel: UpdateChannel::default(),
         }
     }
 }

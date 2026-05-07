@@ -7,10 +7,18 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from './Icon';
-import { AboutUpdateControl, Settings as SettingsContent, type SettingsSectionId } from '../pages/Settings';
+import { AboutUpdateControl, Settings as SettingsContent, Toggle, type SettingsSectionId } from '../pages/Settings';
 import { Row } from './ui/Row';
 import { readFontScale, setFontScale, type FontScaleId } from '../lib/fontScale';
-import { exportErrorLog, openExternal } from '../lib/ipc';
+import {
+  exportErrorLog,
+  fetchLatestBetaRelease,
+  getUpdateChannel,
+  openExternal,
+  setUpdateChannel,
+  type LatestBetaRelease,
+  type UpdateChannel,
+} from '../lib/ipc';
 import {
   FOLLOW_SYSTEM,
   getLocalePreference,
@@ -375,7 +383,105 @@ function AboutMini() {
       <Row label={t('modal.about.privacy')} desc={t('modal.about.privacyDesc')}>
         <span style={{ fontSize: 11, padding: '3px 8px', borderRadius: 999, background: 'var(--ol-blue-soft)', color: 'var(--ol-blue)', fontWeight: 500 }}>{t('modal.about.localFirst')}</span>
       </Row>
+      <BetaChannelControl />
     </div>
+  );
+}
+
+// Beta 渠道开关：物理隔离的 opt-in，不接 auto-update。
+// - 关闭状态 = 正式版渠道，默认行为，用户从「检查更新」拿正式 release
+// - 打开 = 用户主动加入 Beta；写 prefs（无重启需要）+ 拉一次最新 prerelease 信息
+// - 点"打开 GitHub"跳浏览器到具体的 Beta release 页面，用户手动下载安装
+// 不在 Beta 渠道时不发起 GitHub API 请求，避免空切换浪费配额。
+function BetaChannelControl() {
+  const { t } = useTranslation();
+  const [channel, setChannel] = useState<UpdateChannel>('stable');
+  const [latest, setLatest] = useState<LatestBetaRelease | null>(null);
+  const [status, setStatus] = useState<'idle' | 'fetching' | 'empty' | 'error'>('idle');
+  const [errorMessage, setErrorMessage] = useState<string>('');
+
+  useEffect(() => {
+    let cancelled = false;
+    void getUpdateChannel()
+      .then(c => { if (!cancelled) setChannel(c); })
+      .catch(() => { /* fall back to stable already in initial state */ });
+    return () => { cancelled = true; };
+  }, []);
+
+  const fetchBeta = async () => {
+    setStatus('fetching');
+    setErrorMessage('');
+    try {
+      const info = await fetchLatestBetaRelease();
+      if (info == null) {
+        setLatest(null);
+        setStatus('empty');
+      } else {
+        setLatest(info);
+        setStatus('idle');
+      }
+    } catch (err) {
+      setStatus('error');
+      setErrorMessage(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const onToggle = async (next: boolean) => {
+    const target: UpdateChannel = next ? 'beta' : 'stable';
+    setChannel(target);
+    try {
+      await setUpdateChannel(target);
+    } catch (err) {
+      setStatus('error');
+      setErrorMessage(err instanceof Error ? err.message : String(err));
+      // 写入失败时回滚 UI，免得用户以为切成功了。
+      setChannel(target === 'beta' ? 'stable' : 'beta');
+      return;
+    }
+    if (target === 'beta') {
+      void fetchBeta();
+    } else {
+      setLatest(null);
+      setStatus('idle');
+      setErrorMessage('');
+    }
+  };
+
+  return (
+    <>
+      <Row label={t('settings.about.betaChannelLabel')} desc={t('settings.about.betaChannelDesc')}>
+        <Toggle on={channel === 'beta'} onToggle={onToggle} />
+      </Row>
+      {channel === 'beta' && (
+        <div style={{ fontSize: 11, color: 'var(--ol-ink-3)', marginTop: -4, marginBottom: 12, lineHeight: 1.6 }}>
+          {status === 'fetching' && <span>{t('settings.about.betaChannelFetching')}</span>}
+          {status === 'empty' && <span>{t('settings.about.betaChannelNoBeta')}</span>}
+          {status === 'error' && (
+            <span style={{ color: 'var(--ol-err)' }} title={errorMessage}>
+              {t('settings.about.betaChannelFetchError')}
+            </span>
+          )}
+          {status === 'idle' && latest && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <span>
+                {t('settings.about.betaChannelLatestPrefix')} <code style={{ fontFamily: 'var(--ol-font-mono)' }}>{latest.tagName}</code>
+              </span>
+              <button style={btnGhost} onClick={() => openExternal(latest.htmlUrl)}>
+                {t('settings.about.betaChannelDownloadBtn')}
+              </button>
+              <button style={btnGhost} onClick={fetchBeta} title={t('settings.about.betaChannelRefresh')}>
+                <Icon name="refresh" size={12} />
+              </button>
+            </div>
+          )}
+          {status === 'idle' && !latest && (
+            <button style={btnGhost} onClick={fetchBeta}>
+              {t('settings.about.betaChannelFetchBtn')}
+            </button>
+          )}
+        </div>
+      )}
+    </>
   );
 }
 

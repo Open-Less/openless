@@ -152,6 +152,29 @@ export function setSettings(prefs: UserPreferences): Promise<void> {
   return invokeOrMock('set_settings', { prefs }, () => undefined);
 }
 
+// ── Release channel (Beta opt-in) ──────────────────────────────────────
+// 渠道偏好与 fetch_latest_beta_release 实际效果只在 Tauri runtime 内有意义；
+// 浏览器开发模式下走 mock，避免设置页因 invoke 抛错而白屏。
+export type UpdateChannel = 'stable' | 'beta';
+
+export interface LatestBetaRelease {
+  tagName: string;
+  htmlUrl: string;
+  publishedAt: string;
+}
+
+export function getUpdateChannel(): Promise<UpdateChannel> {
+  return invokeOrMock('get_update_channel', undefined, () => 'stable' as UpdateChannel);
+}
+
+export function setUpdateChannel(channel: UpdateChannel): Promise<void> {
+  return invokeOrMock('set_update_channel', { channel }, () => undefined);
+}
+
+export function fetchLatestBetaRelease(): Promise<LatestBetaRelease | null> {
+  return invokeOrMock('fetch_latest_beta_release', undefined, () => null);
+}
+
 export function getHotkeyStatus(): Promise<HotkeyStatus> {
   return invokeOrMock('get_hotkey_status', undefined, () => mockHotkeyStatus);
 }

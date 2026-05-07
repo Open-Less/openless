@@ -21,7 +21,7 @@ use crate::recorder::{AudioConsumer, Recorder};
 use crate::types::{
     ChineseScriptPreference, ComboBinding, CredentialsStatus, DictationSession, DictionaryEntry,
     HotkeyCapability, HotkeyStatus, OutputLanguagePreference, PolishMode, ShortcutBinding,
-    UserPreferences, VocabPresetStore, WindowsImeStatus,
+    UpdateChannel, UserPreferences, VocabPresetStore, WindowsImeStatus,
 };
 
 type CoordinatorState<'a> = State<'a, Arc<Coordinator>>;
@@ -156,6 +156,100 @@ pub fn set_settings(
     }
     let _ = app.emit("prefs:changed", &prefs);
     Ok(())
+}
+
+// ─────────────────────────── release channel (Beta opt-in) ───────────────────────────
+//
+// 渠道偏好的写入路径跟 set_settings 复用 persist_settings：保持热键兜底归一化
+// 跟其他 prefs 写入一致，且写完后 emit "prefs:changed"，让前端跨 webview 同步。
+//
+// 注意：plugin-updater 2.10 的 Builder 不暴露 endpoints() 运行时 API，因此切到 Beta
+// 渠道**不会**改变 in-app「检查更新」的行为——它仍然只看正式版 manifest。Beta 用户
+// 通过 `fetch_latest_beta_release` 获取最新 prerelease，由前端跳浏览器手动下载，
+// 物理隔离 Beta 包不会通过 auto-update 推到正式版用户。详见 PR-B-2 description 与
+// CLAUDE.md `Branch & release-channel workflow` 段落。
+
+#[tauri::command]
+pub fn get_update_channel(coord: CoordinatorState<'_>) -> UpdateChannel {
+    coord.prefs().get().update_channel
+}
+
+#[tauri::command]
+pub fn set_update_channel(
+    coord: CoordinatorState<'_>,
+    app: AppHandle,
+    channel: UpdateChannel,
+) -> Result<(), String> {
+    let mut prefs = coord.prefs().get();
+    if prefs.update_channel == channel {
+        return Ok(());
+    }
+    prefs.update_channel = channel;
+    persist_settings(&*coord, prefs.clone())?;
+    let _ = app.emit("prefs:changed", &prefs);
+    Ok(())
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LatestBetaRelease {
+    pub tag_name: String,
+    pub html_url: String,
+    pub published_at: String,
+}
+
+/// 调 GitHub Releases API 拿最近 20 条 release，找出第一条 `prerelease=true` 且
+/// tag 以 `-beta-tauri` 结尾的。返回 `Ok(None)` 表示当前没有发布过 Beta 版。
+/// 网络/解析错误以 `Err(String)` 上报，让前端展示具体原因。
+#[tauri::command]
+pub async fn fetch_latest_beta_release() -> Result<Option<LatestBetaRelease>, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .user_agent(concat!("OpenLess/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .map_err(|e| format!("build http client: {e}"))?;
+    let resp = client
+        .get("https://api.github.com/repos/appergb/openless/releases?per_page=20")
+        .header("Accept", "application/vnd.github+json")
+        .send()
+        .await
+        .map_err(|e| format!("fetch releases: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("GitHub API status {}", resp.status()));
+    }
+    let releases: Vec<serde_json::Value> = resp
+        .json()
+        .await
+        .map_err(|e| format!("parse releases json: {e}"))?;
+    let latest = releases.into_iter().find(|r| {
+        let is_pre = r
+            .get("prerelease")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let tag_ok = r
+            .get("tag_name")
+            .and_then(|v| v.as_str())
+            .map(|s| s.ends_with("-beta-tauri"))
+            .unwrap_or(false);
+        is_pre && tag_ok
+    });
+    Ok(latest.map(|r| LatestBetaRelease {
+        tag_name: r
+            .get("tag_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        html_url: r
+            .get("html_url")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        published_at: r
+            .get("published_at")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+    }))
 }
 
 #[tauri::command]

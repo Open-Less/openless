@@ -1010,7 +1010,7 @@ function AutostartRow() {
   );
 }
 
-function Toggle({ on, onToggle }: { on: boolean; onToggle?: (next: boolean) => void }) {
+export function Toggle({ on, onToggle }: { on: boolean; onToggle?: (next: boolean) => void }) {
   return (
     <button
       onClick={() => onToggle?.(!on)}

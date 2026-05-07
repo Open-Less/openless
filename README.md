@@ -237,7 +237,7 @@ Rules of thumb:
 - **Beta work must not leak to Stable.** `main` only receives merges from `beta`, performed by maintainers after a successful two-platform smoke build. No direct pushes to `main`.
 - **Stable releases are cut from `main`** by pushing a `v<version>-tauri` tag — see the maintainer release checklist below.
 
-Beta release distribution (opt-in, not yet wired): Beta builds are intended for users who consciously join the Beta channel; the in-app updater currently treats every release as Stable, and a follow-up change will introduce per-channel updater endpoints + a Settings toggle.
+Beta release distribution (manual-download opt-in): the in-app updater always reads the Stable manifest, so regular users never get Beta builds via auto-update. Users who want to try Beta open **Settings → About**, flip "Join Beta channel", and download the latest Beta installer manually from the link the app fetches from GitHub. Tag convention: `v<version>-beta-tauri` produces the Beta release (marked GitHub pre-release; manifest written as `latest-{tgt}-{arch}-beta.json`); `v<version>-tauri` produces the Stable release. The two manifest files never overlap, so Stable users' updater feed cannot pick up Beta releases.
 
 ## Credentials
 

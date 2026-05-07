@@ -240,7 +240,7 @@ OpenLess 采用 **Beta / 正式版** 双渠道分支模型。
 - **Beta 不能溢出到正式版。** `main` 只接收来自 `beta` 的合并，由维护者在双端冒烟测试通过后执行；任何人不要直接 push `main`。
 - **正式版 Release 从 `main` 切出**，通过推送 `v<版本>-tauri` tag 触发，详见下方"维护者：发布检查"。
 
-Beta 包的分发（opt-in，尚未接入）：Beta 包面向主动加入 Beta 渠道的用户；当前 App 内 updater 把所有 release 都当作正式版处理，后续会在设置页加入"加入 Beta 渠道"开关，并把 updater endpoint 按渠道拆开。
+Beta 包的分发（手动下载式 opt-in）：App 内自动更新永远只读正式版 manifest，普通用户拿不到 Beta 包。想试 Beta 的用户去 **设置 → 关于**，打开「加入 Beta 渠道」开关，App 会从 GitHub 拉到最新 Beta release 信息并展示下载入口，由用户手动下载安装。Tag 约定：`v<版本>-beta-tauri` 出 Beta release（GitHub 标 pre-release，manifest 写到 `latest-{tgt}-{arch}-beta.json`）；`v<版本>-tauri` 出正式版。两组 manifest 文件名物理隔离，正式版用户的 endpoint 永远拿不到 Beta release。
 
 ## 凭据
 

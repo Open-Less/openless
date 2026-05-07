@@ -222,6 +222,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::get_settings,
             commands::set_settings,
+            commands::get_update_channel,
+            commands::set_update_channel,
+            commands::fetch_latest_beta_release,
             commands::get_hotkey_status,
             commands::get_hotkey_capability,
             commands::set_shortcut_recording_active,
