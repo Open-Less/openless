@@ -61,10 +61,16 @@
   <a href="https://chris233.qzz.io" target="_blank" rel="noopener">
     <img alt="Chris233" src="assets/people/Chris233.png" width="80" height="80" />
   </a>
+  &nbsp;&nbsp;
+  <a href="https://github.com/Cooper-X-Oak" target="_blank" rel="noopener">
+    <img alt="Cooper" src="assets/people/cooper.png" width="80" height="80" />
+  </a>
   <br/>
   <a href="https://tripmc.top/" target="_blank" rel="noopener">TRIP — tripmc.top</a>
   &nbsp;·&nbsp;
   <a href="https://chris233.qzz.io" target="_blank" rel="noopener">Chris233 — chris233.qzz.io</a>
+  &nbsp;·&nbsp;
+  <a href="https://github.com/Cooper-X-Oak" target="_blank" rel="noopener">Cooper — github.com/Cooper-X-Oak</a>
 </p>
 
 ---
