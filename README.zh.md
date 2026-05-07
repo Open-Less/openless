@@ -55,22 +55,22 @@
 
 <p align="center">
   <a href="https://tripmc.top/" target="_blank" rel="noopener">
-    <img alt="TRIP" src="assets/people/tripmc.png" width="80" height="80" />
+    <img alt="TRIP" src="https://wsrv.nl/?url=raw.githubusercontent.com/appergb/openless/beta/assets/people/tripmc.png&amp;w=128&amp;h=128&amp;fit=cover&amp;mask=circle" width="64" height="64" />
   </a>
   &nbsp;&nbsp;
   <a href="https://chris233.qzz.io" target="_blank" rel="noopener">
-    <img alt="Chris233" src="assets/people/Chris233.png" width="80" height="80" />
+    <img alt="Chris233" src="https://wsrv.nl/?url=raw.githubusercontent.com/appergb/openless/beta/assets/people/Chris233.png&amp;w=128&amp;h=128&amp;fit=cover&amp;mask=circle" width="64" height="64" />
   </a>
   &nbsp;&nbsp;
   <a href="https://github.com/Cooper-X-Oak" target="_blank" rel="noopener">
-    <img alt="Cooper" src="https://github.com/Cooper-X-Oak.png?size=160" width="80" height="80" />
+    <img alt="Cooper" src="https://wsrv.nl/?url=github.com/Cooper-X-Oak.png&amp;w=128&amp;h=128&amp;fit=cover&amp;mask=circle" width="64" height="64" />
   </a>
   <br/>
-  <a href="https://tripmc.top/" target="_blank" rel="noopener">TRIP — tripmc.top</a>
+  <a href="https://tripmc.top/" target="_blank" rel="noopener">TRIP</a>
   &nbsp;·&nbsp;
-  <a href="https://chris233.qzz.io" target="_blank" rel="noopener">Chris233 — chris233.qzz.io</a>
+  <a href="https://chris233.qzz.io" target="_blank" rel="noopener">Chris233</a>
   &nbsp;·&nbsp;
-  <a href="https://github.com/Cooper-X-Oak" target="_blank" rel="noopener">Cooper — github.com/Cooper-X-Oak</a>
+  <a href="https://github.com/Cooper-X-Oak" target="_blank" rel="noopener">Cooper</a>
 </p>
 
 ---
