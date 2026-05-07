@@ -335,7 +335,7 @@ OpenLess 走两条 release 渠道，分支名 = 渠道名（详见 [贡献流程
 
 ### 通用准备（两条渠道都要做）
 
-- 用 `scripts/bump-version.sh`（或手工）同步更新**全部 5 处**版本号：`package.json`、`package-lock.json`（root + nested）、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、`Cargo.lock`。CI 的 `Verify version sync` 步骤会拦截不同步的版本号。
+- 同步更新**全部 5 处**版本号：`package.json`、`package-lock.json`（root + `packages.""` 嵌套项）、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、`Cargo.lock`（找 `name = "openless"` 的那段）。CI 的 `Verify version sync` 步骤会拦截不同步的版本号。
 - 运行 `INSTALL=0 ./scripts/build-mac.sh`，确认 `.app` 可启动。
 - 在干净机器上跑冒烟：权限引导、快捷键、录音、ASR、润色、插入、剪贴板兜底。
 - 确认 repo 已配置 `TAURI_SIGNING_PRIVATE_KEY`，macOS 还需 Apple 签名/公证 secrets。

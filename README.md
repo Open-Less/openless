@@ -332,7 +332,7 @@ OpenLess ships two release channels. Branch name = channel name (see [Contributi
 
 ### Common prep (both channels)
 
-- Bump version in **all five** files via `scripts/bump-version.sh` (or by hand): `package.json`, `package-lock.json` (root + nested), `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, `Cargo.lock`. CI's `Verify version sync` step will fail the build otherwise.
+- Bump version in **all five** files: `package.json`, `package-lock.json` (root + nested entry under `packages.""`), `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, `Cargo.lock` (look for the `name = "openless"` block). CI's `Verify version sync` step will fail the build otherwise.
 - Run `INSTALL=0 ./scripts/build-mac.sh` and confirm the `.app` launches.
 - Smoke-test on a clean machine: permission flow, hotkey, recording, ASR, polish, insertion, clipboard fallback.
 - Confirm `TAURI_SIGNING_PRIVATE_KEY` and (for macOS) the Apple signing/notarization secrets are set on the repo.
