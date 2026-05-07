@@ -140,11 +140,16 @@ OpenLess 只做一件事：**把语音变成可用的书面文字（尤其是 AI
 
 - Tauri 2 + Rust 后端 + React/TS 前端；macOS 12+，Windows 10+。
 - **切换式 + 按住说话** 双模式录音；任意阶段按 `Esc` 都能取消（包括润色 / 插入中）。
-- 接入火山引擎流式 ASR + OpenAI Whisper 兼容批式 ASR；Ark / DeepSeek / OpenAI 兼容 Chat Completions 进行润色。
-- 4 种输出模式：原文、轻度润色、清晰结构（**AI prompt 模式**）、正式表达。
+- **云端 ASR**：火山引擎流式 ASR、OpenAI Whisper 兼容批式 ASR、Apple Speech（macOS）。
+- **本地 ASR**：内置 Qwen3-ASR（0.6B / 1.7B），通过 vendored `antirez/qwen-asr` 链接；Windows 端支持 Foundry Local Whisper。
+- **润色 Provider**：Ark / DeepSeek / OpenAI / Doubao / Anthropic 兼容的 Chat Completions，以及任意 OpenAI 兼容的自定义 endpoint。
+- 4 种输出模式：原文、轻度润色、清晰结构（**AI prompt 模式**）、正式表达。另含**翻译热键**——按下后说一段话直接转成目标语言插入（[#43](../../issues/43)）。
+- **划词语音问答（QA）面板** — 独立热键打开浮窗，对当前选中文本发起语音 Q&A（[#118](../../issues/118)）。
 - 主窗口按「概览 / 历史 / 词典 / 风格 / 设置」组织；托盘图标常驻；浮动状态胶囊。
-- **中英双语 UI** — 设置 → 语言 切换简体中文 / English（首启按系统语言自动）。
+- **多语言 UI** — 设置 → 语言 切换简体中文 / 繁體中文 / English / 日本語 / 한국어（首启按系统语言自动）。
 - **应用内自动更新** — 设置 → 关于 → 检查按钮；CI 用 Tauri updater 签名 manifest，客户端校验后下载安装。
+- **Beta 渠道（opt-in）** — 设置 → 关于 → 加入 Beta 渠道，会显示最新 prerelease 的下载入口供手动安装；Beta 包永远不会被自动推送给正式版用户（详见 [贡献流程](#贡献流程)）。
+- **分发渠道** — [Releases](../../releases) 直接下载 DMG/EXE，Homebrew Cask（`brew install --cask openless`），Windows 安装程序。
 - **单实例锁** — 防止两份 OpenLess 进程并存争抢同一热键边沿。
 - 词典条目作为 Volcengine ASR `context.hotwords` 注入 + 润色语义提示，每次会话累计命中数。
 - 平台原生全局快捷键：macOS 使用 CGEventTap，Windows 使用低层键盘钩子（`WH_KEYBOARD_LL`）。
@@ -290,7 +295,7 @@ OpenLess 的润色模型只做文本整理，不做问答、不做任务执行�
 
 ## 架构概览
 
-当前活跃实现是 Tauri 2（`openless-all/app/`）。自动更新走 Tauri updater 插件；CI 在每次 `v*-tauri` tag 自动签名 updater artifact + manifest。
+当前活跃实现是 Tauri 2（`openless-all/app/`）。Release 分两条渠道：**正式版**（`v<v>-tauri` tag，自动推送给所有用户）和 **Beta**（`v<v>-beta-tauri` tag，GitHub 标 pre-release，由 opt-in 用户手动下载）。CI 在每次 release tag 都签名 updater artifact + manifest。
 
 **Tauri 后端（Rust）** — 各模块只依赖 `types.rs`：
 
@@ -326,10 +331,31 @@ commands.rs      Tauri IPC 接口
 
 ## 维护者：发布检查
 
-- 同步更新 `openless-all/app/package.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml` 中的版本号。
+OpenLess 走两条 release 渠道，分支名 = 渠道名（详见 [贡献流程](#贡献流程)）。
+
+### 通用准备（两条渠道都要做）
+
+- 用 `scripts/bump-version.sh`（或手工）同步更新**全部 5 处**版本号：`package.json`、`package-lock.json`（root + nested）、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、`Cargo.lock`。CI 的 `Verify version sync` 步骤会拦截不同步的版本号。
 - 运行 `INSTALL=0 ./scripts/build-mac.sh`，确认 `.app` 可启动。
-- 在干净 macOS 机器上验证：权限引导、快捷键、录音、ASR、润色、插入、剪贴板兜底。
-- 推送 `v<version>-tauri` tag → CI 构建并签名 updater artifact + macOS `.dmg` + Windows `.msi`。需要 repo secret `TAURI_SIGNING_PRIVATE_KEY`（对应 `tauri.conf.json` 中的 pubkey）才能签名 updater 包。
+- 在干净机器上跑冒烟：权限引导、快捷键、录音、ASR、润色、插入、剪贴板兜底。
+- 确认 repo 已配置 `TAURI_SIGNING_PRIVATE_KEY`，macOS 还需 Apple 签名/公证 secrets。
+
+### Beta 渠道 — `v<v>-beta-tauri`
+
+1. 通过 PR review 把改动落到 `beta` 分支。
+2. **在 `beta` 上**打 tag：`git tag v<v>-beta-tauri && git push origin v<v>-beta-tauri`。
+3. CI 把 GitHub Release 标为 `Pre-release`，只上传 `latest-{tgt}-{arch}-beta.json` updater manifest；正式版用户的 `releases/latest` 重定向不受影响。
+4. 在合适的频道（issue 帖子、QQ 群）通知 opt-in Beta 用户：可以从 设置 → 关于 → 加入 Beta 渠道 拿到最新版本下载入口。
+
+### 正式版渠道 — `v<v>-tauri`
+
+1. Beta 经过足够时间 soak（或直接做最终的双端冒烟）后把 `beta` 合到 `main`。
+2. **在 `main` 上**打 tag：`git tag v<v>-tauri && git push origin v<v>-tauri`。
+3. CI 发布常规 GitHub Release 并上传 `latest-{tgt}-{arch}.json`（不带 `-beta` 后缀）。所有正式版用户通过应用内 updater 收到此版本。
+
+### 发版后验证（每次必跑）
+
+走 [`CLAUDE.md` → Branch & release-channel workflow → Channel distribution](CLAUDE.md) 里的 5 步 checklist：页面状态（pre-release 标记）、资产文件名按渠道正确、正式版用户流、Beta opt-in 流、原始 endpoint 抽查。
 
 ## 致谢
 
