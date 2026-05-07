@@ -32,15 +32,10 @@ jobs:
             rust-target: aarch64-apple-darwin
             updater-target: darwin
             updater-arch: aarch64
-          # 暂时搁置 Intel mac 构建：GitHub Actions 把 macos-13 标记为 deprecated
-          # runner，pool 容量紧张到每次 dispatch 都 queue 1-2h 拿不到分配，多次
-          # release 都因这个 job 卡住整个 run 的 conclusion。等 GH 把 macOS x86_64
-          # 迁移到非 deprecated runner（macos-14 / macos-15-large）或 macos-13
-          # pool 缓解后再恢复。Apple Silicon dmg 在 Intel mac 上跑 Rosetta 仍可用。
-          # - platform: macos-13
-          #   rust-target: x86_64-apple-darwin
-          #   updater-target: darwin
-          #   updater-arch: x86_64
+          - platform: macos-15-intel
+            rust-target: x86_64-apple-darwin
+            updater-target: darwin
+            updater-arch: x86_64
           - platform: windows-latest
             rust-target: x86_64-pc-windows-msvc
             updater-target: windows
