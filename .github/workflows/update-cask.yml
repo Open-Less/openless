@@ -1,0 +1,83 @@
+name: Update Cask on Release
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  update-cask:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    if: startsWith(github.event.release.tag_name, 'v') && endsWith(github.event.release.tag_name, '-tauri')
+    steps:
+      - name: Checkout tap repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          VERSION="${TAG#v}"
+          VERSION="${VERSION%-tauri}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Detected version: $VERSION"
+
+      - name: Fetch release assets SHA256
+        id: sha256
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          REPO="${{ github.repository }}"
+          
+          # Fetch release assets info
+          RESPONSE=$(gh api "repos/$REPO/releases/tags/v${VERSION}-tauri")
+          
+          # Extract SHA256 for aarch64 DMG
+          ARM64_SHA=$(echo "$RESPONSE" | jq -r '.assets[] | select(.name | contains("aarch64.dmg")) | .digest' | sed 's/sha256://')
+          
+          # Extract SHA256 for x64 DMG
+          X64_SHA=$(echo "$RESPONSE" | jq -r '.assets[] | select(.name | contains("_x64.dmg")) | .digest' | sed 's/sha256://')
+          
+          echo "arm64_sha=$ARM64_SHA" >> "$GITHUB_OUTPUT"
+          echo "x64_sha=$X64_SHA" >> "$GITHUB_OUTPUT"
+          
+          echo "aarch64 DMG SHA256: $ARM64_SHA"
+          echo "x64 DMG SHA256: $X64_SHA"
+
+      - name: Update Cask file
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          ARM64_SHA="${{ steps.sha256.outputs.arm64_sha }}"
+          X64_SHA="${{ steps.sha256.outputs.x64_sha }}"
+          CASK_FILE="Casks/openless.rb"
+          
+          # Update version
+          sed -i "s/version \"[^\"]*\"/version \"$VERSION\"/" "$CASK_FILE"
+          
+          # Update SHA256 values
+          sed -i "s/sha256 arm:   \"[^\"]*\"/sha256 arm:   \"$ARM64_SHA\"/" "$CASK_FILE"
+          sed -i "s/intel: \"[^\"]*\"/intel: \"$X64_SHA\"/" "$CASK_FILE"
+          
+          echo "Updated $CASK_FILE:"
+          cat "$CASK_FILE"
+
+      - name: Commit and push changes
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          
+          VERSION="${{ steps.version.outputs.version }}"
+          
+          git add Casks/openless.rb
+          
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+          
+          git commit -m "[cask] Update openless to $VERSION"
+          git push
