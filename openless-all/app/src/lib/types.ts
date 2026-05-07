@@ -161,6 +161,8 @@ export interface UserPreferences {
   localAsrKeepLoadedSecs: number;
   /** Windows Foundry Local Whisper 当前激活的模型 alias。 */
   foundryLocalAsrModel: string;
+  /** Windows Foundry Local native runtime 下载源。 */
+  foundryLocalRuntimeSource: string;
   /** Windows Foundry Local Whisper 语言 hint。空字符串表示自动检测。 */
   foundryLocalAsrLanguageHint: string;
   /** Windows Foundry Local Whisper 模型在 runtime 中保持加载的秒数。 */

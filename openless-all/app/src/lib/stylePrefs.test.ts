@@ -36,6 +36,7 @@ const previousPrefs: UserPreferences = {
   localAsrMirror: 'huggingface',
   localAsrKeepLoadedSecs: 300,
   foundryLocalAsrModel: '',
+  foundryLocalRuntimeSource: 'auto',
   foundryLocalAsrLanguageHint: '',
   foundryLocalAsrKeepLoadedSecs: 300,
 };

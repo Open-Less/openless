@@ -1566,14 +1566,20 @@ fn normalize_foundry_language_hint(language_hint: &str) -> Result<String, String
     }
 }
 
+fn normalize_foundry_runtime_source(source: &str) -> String {
+    crate::asr::local::foundry_native::normalize_runtime_source_str(source)
+}
+
 #[tauri::command]
-pub fn foundry_local_asr_status(
+pub async fn foundry_local_asr_status(
     coord: CoordinatorState<'_>,
     runtime: State<'_, Arc<FoundryLocalRuntime>>,
-) -> FoundryRuntimeStatus {
+) -> Result<FoundryRuntimeStatus, String> {
     let prefs = coord.prefs().get();
     let active_model = active_foundry_model_from_prefs(&prefs);
-    runtime.status_snapshot(&active_model)
+    Ok(runtime
+        .status_snapshot(&active_model, &prefs.foundry_local_runtime_source)
+        .await)
 }
 
 #[tauri::command]
@@ -1609,15 +1615,28 @@ pub fn foundry_local_asr_set_language_hint(
 }
 
 #[tauri::command]
+pub fn foundry_local_asr_set_runtime_source(
+    coord: CoordinatorState<'_>,
+    source: String,
+) -> Result<(), String> {
+    let mut prefs = coord.prefs().get();
+    prefs.foundry_local_runtime_source = normalize_foundry_runtime_source(&source);
+    coord.prefs().set(prefs).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn foundry_local_asr_prepare(
     app: AppHandle,
+    coord: CoordinatorState<'_>,
     runtime: State<'_, Arc<FoundryLocalRuntime>>,
     model_alias: String,
 ) -> Result<String, String> {
     validate_foundry_model_alias(&model_alias)?;
+    let prefs = coord.prefs().get();
+    let runtime_source = prefs.foundry_local_runtime_source.clone();
     let progress_app = app.clone();
     let result = runtime
-        .ensure_loaded_with_progress(&model_alias, move |payload| {
+        .ensure_loaded_with_progress(&model_alias, &runtime_source, move |payload| {
             emit_foundry_prepare_progress(&progress_app, payload);
         })
         .await;

@@ -28,6 +28,7 @@ import {
   releaseLocalAsrEngine,
   setFoundryLocalAsrLanguageHint,
   setFoundryLocalAsrModel,
+  setFoundryLocalRuntimeSource,
   setLocalAsrActiveModel,
   setLocalAsrKeepLoadedSecs,
   setLocalAsrMirror,
@@ -36,6 +37,7 @@ import {
   type FoundryLocalAsrLanguageHint,
   type FoundryLocalAsrModelAlias,
   type FoundryLocalAsrStatus,
+  type FoundryRuntimeSource,
   type FoundryPrepareProgress,
   type LocalAsrDownloadProgress,
   type LocalAsrEngineStatus,
@@ -103,6 +105,8 @@ export function LocalAsr() {
       setFoundryStatus({
         providerId: 'foundry-local-whisper',
         available: false,
+        runtimeReady: false,
+        runtimeSource: selectedFoundryRuntimeSource,
         activeModel: selectedFoundryAlias,
         loadedModelId: null,
         endpoint: null,
@@ -301,6 +305,20 @@ export function LocalAsr() {
         ...current,
         foundryLocalAsrLanguageHint: languageHint,
       }));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const handleFoundryRuntimeSourceChange = async (runtimeSource: FoundryRuntimeSource) => {
+    try {
+      setError(null);
+      await setFoundryLocalRuntimeSource(runtimeSource);
+      await updatePrefs(current => ({
+        ...current,
+        foundryLocalRuntimeSource: runtimeSource,
+      }));
+      await refreshFoundryStatus();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -505,7 +523,8 @@ export function LocalAsr() {
   };
 
   const engineAvailable = settings?.engineAvailable ?? false;
-  const foundryAvailable = foundryStatus?.available === true;
+  const foundryPlatformAvailable = isWindowsLikePlatform();
+  const foundryAvailable = foundryStatus?.available === true || (foundryPlatformAvailable && foundryStatus?.available !== false);
   const foundryDefault = prefs?.activeAsrProvider === 'foundry-local-whisper';
   const selectedFoundryModel = FOUNDRY_LOCAL_ASR_MODELS.find(
     model => model.alias === selectedFoundryAlias,
@@ -521,6 +540,9 @@ export function LocalAsr() {
     : t('localAsr.notDownloadedBadge');
   const selectedFoundryLanguageHint = normalizeFoundryLanguageHintForUi(
     prefs?.foundryLocalAsrLanguageHint ?? '',
+  );
+  const selectedFoundryRuntimeSource = normalizeFoundryRuntimeSourceForUi(
+    prefs?.foundryLocalRuntimeSource ?? foundryStatus?.runtimeSource ?? 'auto',
   );
   const foundryPrepareLabel =
     foundryBusy === 'prepare'
@@ -561,6 +583,11 @@ export function LocalAsr() {
                     ? t('localAsr.foundryAvailable')
                     : t('localAsr.foundryUnavailable')}
                 </Pill>
+                <Pill tone={foundryStatus?.runtimeReady ? 'ok' : 'outline'} size="sm">
+                  {foundryStatus?.runtimeReady
+                    ? t('localAsr.foundryRuntimeReady')
+                    : t('localAsr.foundryRuntimeMissing')}
+                </Pill>
               </div>
               <div style={{ fontSize: 13, color: 'var(--ol-ink-3)', lineHeight: 1.55 }}>
                 {t('localAsr.foundryDesc')}
@@ -598,6 +625,26 @@ export function LocalAsr() {
                 </select>
               </label>
               <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--ol-ink-4)' }}>
+                {t('localAsr.foundryRuntimeSourceLabel')}
+                <select
+                  value={selectedFoundryRuntimeSource}
+                  onChange={e => void handleFoundryRuntimeSourceChange(e.target.value as FoundryRuntimeSource)}
+                  disabled={foundryBusy !== null}
+                  style={{
+                    fontSize: 13,
+                    padding: '6px 10px',
+                    borderRadius: 8,
+                    border: '0.5px solid rgba(0,0,0,0.12)',
+                    background: 'var(--ol-surface)',
+                    color: 'var(--ol-ink)',
+                    minWidth: 200,
+                  }}>
+                  <option value="auto">{t('localAsr.foundryRuntimeSourceAuto')}</option>
+                  <option value="nuget">{t('localAsr.foundryRuntimeSourceNuget')}</option>
+                  <option value="ort-nightly">{t('localAsr.foundryRuntimeSourceOrtNightly')}</option>
+                </select>
+              </label>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--ol-ink-4)' }}>
                 {t('localAsr.foundryLanguageLabel')}
                 <select
                   value={selectedFoundryLanguageHint}
@@ -626,6 +673,11 @@ export function LocalAsr() {
               <strong>{selectedFoundryDisplayName}</strong>
               <span> · {selectedFoundrySizeLabel} · {selectedFoundryDownloadLabel}</span>
               <span> · {t(selectedFoundryModel.descKey)}</span>
+            </div>
+            <div>
+              <span style={{ color: 'var(--ol-ink-4)' }}>{t('localAsr.foundryRuntimeSourceLabel')}: </span>
+              {t(`localAsr.foundryRuntimeSource${selectedFoundryRuntimeSource === 'ort-nightly' ? 'OrtNightly' : selectedFoundryRuntimeSource === 'nuget' ? 'Nuget' : 'Auto'}`)}
+              <span> · {t('localAsr.foundryRuntimeSourceDesc')}</span>
             </div>
             <div>
               <span style={{ color: 'var(--ol-ink-4)' }}>{t('localAsr.foundryLanguageLabel')}: </span>
@@ -1107,6 +1159,16 @@ function isFoundryAlias(value: string): value is FoundryLocalAsrModelAlias {
 
 function normalizeFoundryLanguageHintForUi(value: string): FoundryLocalAsrLanguageHint {
   return value === 'zh' || value === 'en' ? value : '';
+}
+
+function normalizeFoundryRuntimeSourceForUi(value: string): FoundryRuntimeSource {
+  return value === 'nuget' || value === 'ort-nightly' ? value : 'auto';
+}
+
+function isWindowsLikePlatform(): boolean {
+  const nav = navigator as Navigator & { userAgentData?: { platform?: string } };
+  const platform = nav.userAgentData?.platform || navigator.platform || navigator.userAgent;
+  return /win/i.test(platform);
 }
 
 function formatFoundrySizeMb(fileSizeMb: number | null | undefined): string | null {

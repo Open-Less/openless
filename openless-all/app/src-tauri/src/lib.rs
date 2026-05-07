@@ -182,24 +182,19 @@ pub fn run() {
                     .on_menu_event(move |app, event| match event.id.as_ref() {
                         "toggle" => show_main_window(app),
                         "quit" => app.exit(0),
-                        id => handle_microphone_tray_menu_event(
-                            app,
-                            id,
-                        ),
+                        id => handle_microphone_tray_menu_event(app, id),
                     })
-                    .on_tray_icon_event(move |tray, event| {
-                        match event {
-                            TrayIconEvent::Enter { .. } => {
-                                if let Err(err) = refresh_tray_microphone_menu(tray.app_handle()) {
-                                    log::warn!("[tray] refresh microphone menu on hover failed: {err}");
-                                }
+                    .on_tray_icon_event(move |tray, event| match event {
+                        TrayIconEvent::Enter { .. } => {
+                            if let Err(err) = refresh_tray_microphone_menu(tray.app_handle()) {
+                                log::warn!("[tray] refresh microphone menu on hover failed: {err}");
                             }
-                            TrayIconEvent::Click {
-                                button: MouseButton::Left,
-                                ..
-                            } => show_main_window(tray.app_handle()),
-                            _ => {}
                         }
+                        TrayIconEvent::Click {
+                            button: MouseButton::Left,
+                            ..
+                        } => show_main_window(tray.app_handle()),
+                        _ => {}
                     })
                     .build(app)?;
                 start_tray_microphone_watcher(app.handle().clone());
@@ -291,6 +286,7 @@ pub fn run() {
             commands::foundry_local_asr_catalog,
             commands::foundry_local_asr_set_model,
             commands::foundry_local_asr_set_language_hint,
+            commands::foundry_local_asr_set_runtime_source,
             commands::foundry_local_asr_prepare,
             commands::foundry_local_asr_cancel_prepare,
             commands::foundry_local_asr_release,
@@ -384,8 +380,8 @@ fn build_microphone_tray_menu<M: Manager<tauri::Wry>>(
             Vec::new()
         }
     };
-    let selected_available = selected.trim().is_empty()
-        || devices.iter().any(|device| device.name == selected);
+    let selected_available =
+        selected.trim().is_empty() || devices.iter().any(|device| device.name == selected);
 
     let default_item = CheckMenuItemBuilder::with_id("mic-default", "系统默认麦克风")
         .checked(selected.trim().is_empty() || !selected_available)
@@ -403,23 +399,23 @@ fn build_microphone_tray_menu<M: Manager<tauri::Wry>>(
             .build(app)?;
         submenu = submenu.item(&empty);
     } else {
-            for (index, device) in devices.into_iter().enumerate() {
-                let id = format!("mic-device-{index}");
-                let label = if device.is_default {
-                    format!("{}（系统默认）", device.name)
-                } else {
-                    device.name.clone()
-                };
-                let item = CheckMenuItemBuilder::with_id(&id, label)
-                    .checked(selected == device.name)
-                    .build(app)?;
-                submenu = submenu.item(&item);
-                items.push(commands::TrayMicrophoneMenuItem {
-                    id,
-                    device_name: device.name,
-                    item,
-                });
-            }
+        for (index, device) in devices.into_iter().enumerate() {
+            let id = format!("mic-device-{index}");
+            let label = if device.is_default {
+                format!("{}（系统默认）", device.name)
+            } else {
+                device.name.clone()
+            };
+            let item = CheckMenuItemBuilder::with_id(&id, label)
+                .checked(selected == device.name)
+                .build(app)?;
+            submenu = submenu.item(&item);
+            items.push(commands::TrayMicrophoneMenuItem {
+                id,
+                device_name: device.name,
+                item,
+            });
+        }
     }
 
     Ok(MicrophoneTrayMenu {
@@ -474,20 +470,20 @@ fn start_tray_microphone_watcher(app: AppHandle) {
                 let refresh_app = app.clone();
                 let _ = app.run_on_main_thread(move || {
                     if let Err(err) = refresh_tray_microphone_menu(&refresh_app) {
-                        log::warn!("[tray] refresh microphone menu after device change failed: {err}");
+                        log::warn!(
+                            "[tray] refresh microphone menu after device change failed: {err}"
+                        );
                     }
                     let _ = refresh_app.emit("microphone:devices-changed", serde_json::json!({}));
                 });
             }
-        }) {
+        })
+    {
         log::warn!("[tray] start microphone watcher failed: {err}");
     }
 }
 
-fn handle_microphone_tray_menu_event(
-    app: &AppHandle,
-    id: &str,
-) {
+fn handle_microphone_tray_menu_event(app: &AppHandle, id: &str) {
     let tray_items = app.state::<commands::TrayMicrophoneMenuState>();
     let items = tray_items.lock();
     let Some(selected) = items.iter().find(|item| item.id == id) else {

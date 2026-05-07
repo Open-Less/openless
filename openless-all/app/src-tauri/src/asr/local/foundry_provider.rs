@@ -27,6 +27,7 @@ pub struct FoundryLocalWhisperAsr {
     #[cfg(target_os = "windows")]
     runtime: Arc<FoundryLocalRuntime>,
     model_alias: String,
+    runtime_source: String,
     language_hint: Option<String>,
     buffer: Mutex<Vec<u8>>,
     cancel_generation: AtomicU64,
@@ -37,11 +38,13 @@ impl FoundryLocalWhisperAsr {
     pub fn new(
         runtime: Arc<FoundryLocalRuntime>,
         model_alias: String,
+        runtime_source: String,
         language_hint: Option<String>,
     ) -> Self {
         Self {
             runtime,
             model_alias,
+            runtime_source,
             language_hint: normalize_language_hint(language_hint),
             buffer: Mutex::new(Vec::new()),
             cancel_generation: AtomicU64::new(0),
@@ -52,6 +55,7 @@ impl FoundryLocalWhisperAsr {
     pub fn new(model_alias: String, language_hint: Option<String>) -> Self {
         Self {
             model_alias,
+            runtime_source: "auto".into(),
             language_hint: normalize_language_hint(language_hint),
             buffer: Mutex::new(Vec::new()),
             cancel_generation: AtomicU64::new(0),
@@ -109,6 +113,7 @@ impl FoundryLocalWhisperAsr {
                 .runtime
                 .transcribe_audio_file(
                     &self.model_alias,
+                    &self.runtime_source,
                     self.language_hint(),
                     wav_file.path(),
                     audio_timeout,
@@ -259,6 +264,7 @@ mod tests {
             super::FoundryLocalWhisperAsr::new(
                 Arc::clone(&runtime),
                 "whisper-small".into(),
+                "auto".into(),
                 Some(" zh ".into()),
             ),
             runtime,

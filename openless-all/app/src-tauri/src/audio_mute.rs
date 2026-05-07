@@ -23,8 +23,10 @@ impl Drop for AudioMuteGuard {
 #[cfg(target_os = "windows")]
 mod platform {
     use windows::Win32::Foundation::{BOOL, RPC_E_CHANGED_MODE};
-    use windows::Win32::Media::Audio::{eConsole, eRender, IMMDeviceEnumerator, MMDeviceEnumerator};
     use windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume;
+    use windows::Win32::Media::Audio::{
+        eConsole, eRender, IMMDeviceEnumerator, MMDeviceEnumerator,
+    };
     use windows::Win32::System::Com::{
         CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_APARTMENTTHREADED,
     };

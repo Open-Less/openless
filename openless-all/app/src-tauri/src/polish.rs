@@ -10,9 +10,7 @@ use std::time::Duration;
 use serde_json::{json, Value};
 use thiserror::Error;
 
-use crate::types::{
-    ChineseScriptPreference, OutputLanguagePreference, PolishMode, QaChatMessage,
-};
+use crate::types::{ChineseScriptPreference, OutputLanguagePreference, PolishMode, QaChatMessage};
 
 const DEFAULT_TEMPERATURE: f32 = 0.3;
 const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
@@ -97,14 +95,12 @@ impl OpenAICompatibleLLMProvider {
         front_app: Option<&str>,
     ) -> Result<String, LLMError> {
         let mut system_prompt = compose_system_prompt(mode, hotwords);
-        if let Some(premise) =
-            context_premise(
-                working_languages,
-                chinese_script_preference,
-                output_language_preference,
-                front_app,
-            )
-        {
+        if let Some(premise) = context_premise(
+            working_languages,
+            chinese_script_preference,
+            output_language_preference,
+            front_app,
+        ) {
             system_prompt = format!("{}\n\n{}", premise, system_prompt);
         }
         let user_prompt = prompts::user_prompt(raw_text);
@@ -130,14 +126,12 @@ impl OpenAICompatibleLLMProvider {
         C: Fn() -> bool + Send + Sync,
     {
         let mut system_prompt = prompts::qa_system_prompt();
-        if let Some(premise) =
-            context_premise(
-                working_languages,
-                chinese_script_preference,
-                output_language_preference,
-                front_app,
-            )
-        {
+        if let Some(premise) = context_premise(
+            working_languages,
+            chinese_script_preference,
+            output_language_preference,
+            front_app,
+        ) {
             system_prompt = format!("{}\n\n{}", premise, system_prompt);
         }
         self.chat_completion_history_streaming(&system_prompt, messages, on_delta, should_cancel)
@@ -158,14 +152,12 @@ impl OpenAICompatibleLLMProvider {
         let mut system_prompt = prompts::translate_system_prompt(target_language);
         // 翻译模式必须以 target_language 为唯一输出语言约束，避免和 UI 驱动的
         // output_language_preference 发生冲突（例如 UI=ja, target=en）。
-        if let Some(premise) =
-            context_premise(
-                working_languages,
-                chinese_script_preference,
-                OutputLanguagePreference::Auto,
-                front_app,
-            )
-        {
+        if let Some(premise) = context_premise(
+            working_languages,
+            chinese_script_preference,
+            OutputLanguagePreference::Auto,
+            front_app,
+        ) {
             system_prompt = format!("{}\n\n{}", premise, system_prompt);
         }
         let user_prompt = prompts::user_prompt(raw_text);
@@ -441,12 +433,14 @@ fn context_premise(
         OutputLanguagePreference::ZhTw => {
             Some("最終輸出語言偏好：繁體中文。若回答可用中文表達，請優先使用繁體中文。".to_string())
         }
-        OutputLanguagePreference::En => {
-            Some("Output language preference: English. Prefer English when producing the final answer.".to_string())
-        }
-        OutputLanguagePreference::Ja => {
-            Some("出力言語の優先設定：日本語。最終回答は可能な限り日本語で出力してください。".to_string())
-        }
+        OutputLanguagePreference::En => Some(
+            "Output language preference: English. Prefer English when producing the final answer."
+                .to_string(),
+        ),
+        OutputLanguagePreference::Ja => Some(
+            "出力言語の優先設定：日本語。最終回答は可能な限り日本語で出力してください。"
+                .to_string(),
+        ),
         OutputLanguagePreference::Ko => {
             Some("출력 언어 선호: 한국어. 최종 답변은 가능하면 한국어로 작성해 주세요.".to_string())
         }

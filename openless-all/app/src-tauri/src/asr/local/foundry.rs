@@ -182,6 +182,8 @@ impl FoundryPrepareProgressPayload {
 pub struct FoundryRuntimeStatus {
     pub provider_id: String,
     pub available: bool,
+    pub runtime_ready: bool,
+    pub runtime_source: String,
     pub active_model: String,
     pub loaded_model_id: Option<String>,
     pub endpoint: Option<String>,
@@ -194,6 +196,8 @@ impl FoundryRuntimeStatus {
         Self {
             provider_id: PROVIDER_ID.into(),
             available: false,
+            runtime_ready: false,
+            runtime_source: "auto".into(),
             active_model,
             loaded_model_id: None,
             endpoint: None,
@@ -223,6 +227,8 @@ mod tests {
 
         assert_eq!(status.provider_id, PROVIDER_ID);
         assert!(!status.available);
+        assert!(!status.runtime_ready);
+        assert_eq!(status.runtime_source, "auto");
         assert_eq!(status.active_model, "whisper-base");
         assert_eq!(status.loaded_model_id, None);
         assert_eq!(status.endpoint, None);

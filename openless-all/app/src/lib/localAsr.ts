@@ -58,6 +58,8 @@ export interface LocalAsrDownloadProgress {
 export interface FoundryLocalAsrStatus {
   providerId: string;
   available: boolean;
+  runtimeReady: boolean;
+  runtimeSource: FoundryRuntimeSource;
   activeModel: string;
   loadedModelId: string | null;
   endpoint: string | null;
@@ -66,6 +68,7 @@ export interface FoundryLocalAsrStatus {
 
 export type FoundryLocalAsrModelAlias = 'whisper-small' | 'whisper-base' | 'whisper-tiny';
 export type FoundryLocalAsrLanguageHint = '' | 'zh' | 'en';
+export type FoundryRuntimeSource = 'auto' | 'nuget' | 'ort-nightly';
 
 export interface FoundryLocalAsrCatalogModel {
   alias: FoundryLocalAsrModelAlias;
@@ -259,6 +262,8 @@ export function getFoundryLocalAsrStatus(): Promise<FoundryLocalAsrStatus> {
   return invokeOrMock('foundry_local_asr_status', undefined, () => ({
     providerId: 'foundry-local-whisper',
     available: true,
+    runtimeReady: false,
+    runtimeSource: 'auto',
     activeModel: 'whisper-small',
     loadedModelId: null,
     endpoint: null,
@@ -278,6 +283,14 @@ export function setFoundryLocalAsrLanguageHint(languageHint: string): Promise<vo
   return invokeOrMock(
     'foundry_local_asr_set_language_hint',
     { languageHint },
+    () => undefined,
+  );
+}
+
+export function setFoundryLocalRuntimeSource(source: string): Promise<void> {
+  return invokeOrMock(
+    'foundry_local_asr_set_runtime_source',
+    { source },
     () => undefined,
   );
 }

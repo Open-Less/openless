@@ -6,6 +6,7 @@
 pub mod cache;
 pub mod download;
 pub mod foundry;
+pub mod foundry_native;
 pub mod foundry_provider;
 pub mod foundry_runtime;
 mod local_provider;

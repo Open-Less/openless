@@ -2031,6 +2031,7 @@ async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
         let local = Arc::new(FoundryLocalWhisperAsr::new(
             Arc::clone(&inner.foundry_local_runtime),
             model_alias,
+            prefs.foundry_local_runtime_source.clone(),
             language_hint,
         ));
         store_asr_for_session(
@@ -4079,6 +4080,7 @@ mod tests {
         let provider = Arc::new(crate::asr::local::FoundryLocalWhisperAsr::new(
             Arc::new(crate::asr::local::FoundryLocalRuntime::new()),
             crate::asr::local::foundry::DEFAULT_MODEL_ALIAS.to_string(),
+            "auto".to_string(),
             None,
         ));
         let active_asr = ActiveAsr::FoundryLocalWhisper(provider);

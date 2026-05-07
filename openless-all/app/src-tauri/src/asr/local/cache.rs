@@ -154,7 +154,10 @@ impl LocalAsrCache {
 fn pressure_relief_macos() {
     // SAFETY: 系统 API；NULL zone + goal=0 = 对所有 zone 尽量多地归还，无内存安全风险。
     let freed = unsafe { malloc_zone_pressure_relief(std::ptr::null_mut(), 0) };
-    log::info!("[local-asr cache] malloc_zone_pressure_relief freed ~{} bytes", freed);
+    log::info!(
+        "[local-asr cache] malloc_zone_pressure_relief freed ~{} bytes",
+        freed
+    );
 }
 
 #[cfg(target_os = "macos")]

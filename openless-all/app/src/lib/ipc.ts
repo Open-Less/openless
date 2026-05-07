@@ -70,6 +70,7 @@ const mockSettings: UserPreferences = {
   localAsrMirror: 'huggingface',
   localAsrKeepLoadedSecs: 300,
   foundryLocalAsrModel: 'whisper-small',
+  foundryLocalRuntimeSource: 'auto',
   foundryLocalAsrLanguageHint: '',
   foundryLocalAsrKeepLoadedSecs: 300,
 };
