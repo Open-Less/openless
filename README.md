@@ -208,6 +208,37 @@ Logs: `~/Library/Logs/OpenLess/openless.log` (macOS) / `%LOCALAPPDATA%\OpenLess\
 
 **Windows build** — see [`openless-all/README.md`](openless-all/README.md) for MSVC vs GNU/MinGW routes.
 
+## Contributing workflow
+
+OpenLess uses a two-channel branching model.
+
+- **`beta`** — the **Beta channel**. Default branch and integration buffer; all in-progress development lands here. Beta builds may exist but are **not pushed to regular users** — they only reach people who explicitly opt into the Beta channel.
+- **`main`** — the **Stable channel (正式版)**. Always-releasable. The build everyone gets by default.
+
+```text
+your fork / topic branch
+        │  (test locally on your target platform first)
+        ▼
+   PR → beta  ← AI review (one pass, advisory only)
+        │     ← maintainer lightweight glance (scope, cross-module impact)
+        ▼
+       merged into beta
+        │  (periodically, after a two-platform smoke build)
+        ▼
+       merged into main  →  tag `v<version>-tauri`  →  release CI → Stable users
+```
+
+Rules of thumb:
+
+- **Open PRs against `beta`, never against `main`.** GitHub already defaults the base branch to `beta` for new PRs.
+- **Verify the change on your target platform before opening the PR** — build green is necessary, manual verification is required.
+- **AI review runs once per PR and is advisory.** Don't loop on it. Apply your judgment.
+- **Keep AI rework rounds tight (1–2).** If a fix resists, ask a human or restart with fresh context — multi-round AI back-and-forth tends to do more harm than good here.
+- **Beta work must not leak to Stable.** `main` only receives merges from `beta`, performed by maintainers after a successful two-platform smoke build. No direct pushes to `main`.
+- **Stable releases are cut from `main`** by pushing a `v<version>-tauri` tag — see the maintainer release checklist below.
+
+Beta release distribution (opt-in, not yet wired): Beta builds are intended for users who consciously join the Beta channel; the in-app updater currently treats every release as Stable, and a follow-up change will introduce per-channel updater endpoints + a Settings toggle.
+
 ## Credentials
 
 Credentials live in the OS credential vault (service = `com.openless.app`): macOS Keychain, Windows Credential Manager, or Linux keyring. A legacy plaintext JSON file is read only as a migration source and removed after a successful vault write:

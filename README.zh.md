@@ -211,6 +211,37 @@ npm run build
 
 **Windows 构建** — MSVC 和 GNU/MinGW 两种路线详见 [`openless-all/README.md`](openless-all/README.md)。
 
+## 贡献流程
+
+OpenLess 采用 **Beta / 正式版** 双渠道分支模型。
+
+- **`beta`** —— **Beta 渠道（开发版）**。默认分支，也是日常集成缓冲区；所有进行中的开发都先落到这里。Beta 渠道可以直接出包，但**不会推送给普通用户**——只有主动切换到 Beta 渠道的用户才会拿到 Beta 包。
+- **`main`** —— **正式版渠道（Stable）**。始终保持可发布状态，普通用户默认拿到的就是这条线上的版本。
+
+```text
+你的 fork / topic 分支
+        │  （先在目标平台本地自测通过）
+        ▼
+   PR → beta   ← AI Review（一次性，仅供参考）
+        │     ← 维护者轻量过一眼（范围、跨模块影响）
+        ▼
+       合入 beta
+        │  （定期或里程碑节点，跑双端冒烟测试）
+        ▼
+       合入 main  →  打 tag `v<版本>-tauri`  →  Release CI → 推给正式版用户
+```
+
+核心规则：
+
+- **PR 一律打到 `beta`，不要直接打到 `main`。** GitHub 上新建 PR 的 base 已默认是 `beta`。
+- **开 PR 前先在目标平台跑通功能** —— build 绿是底线，必须做人工验证。
+- **AI Review 每个 PR 只跑一轮，结果仅供参考。** 不要围绕它反复改，最终判断权在贡献者和维护者手里。
+- **AI 改 Review 意见控制在 1–2 轮。** 卡住了直接换人工或重开对话上下文，避免多轮 AI 越改越乱。
+- **Beta 不能溢出到正式版。** `main` 只接收来自 `beta` 的合并，由维护者在双端冒烟测试通过后执行；任何人不要直接 push `main`。
+- **正式版 Release 从 `main` 切出**，通过推送 `v<版本>-tauri` tag 触发，详见下方"维护者：发布检查"。
+
+Beta 包的分发（opt-in，尚未接入）：Beta 包面向主动加入 Beta 渠道的用户；当前 App 内 updater 把所有 release 都当作正式版处理，后续会在设置页加入"加入 Beta 渠道"开关，并把 updater endpoint 按渠道拆开。
+
 ## 凭据
 
 凭据保存在系统凭据库（service = `com.openless.app`）：macOS Keychain、Windows Credential Manager 或 Linux keyring。旧版明文 JSON 只作为迁移来源读取，成功写入系统凭据库后会被删除：

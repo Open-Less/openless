@@ -105,6 +105,28 @@ Push a `v*-tauri` tag → `.github/workflows/release-tauri.yml` builds macOS arm
 
 When bumping versions, update **both** `version` fields: `openless-all/app/package.json` and `openless-all/app/src-tauri/tauri.conf.json` (and `Cargo.toml`).
 
+### Branch & release-channel workflow
+
+Two-channel branching. **Branch name = release channel.**
+
+- **`beta`** — **Beta channel** (开发版). Default branch, integration buffer. **All PRs target `beta`** (never `main`). Beta builds may exist but are not pushed to general users — only opt-in users on the Beta channel see them.
+- **`main`** — **Stable channel** (正式版). Always-releasable. Updated only by `beta → main` merges performed by maintainers after a two-platform smoke build. Release tags `v<version>-tauri` are pushed on `main` and trigger `release-tauri.yml` (tag-driven; unaffected by branch renames).
+
+Per-PR contract:
+
+- Run the change locally on your target platform before opening the PR (build green + manual verification of the affected feature).
+- `pr-agent.yml` runs one AI review pass per PR — treat it as advisory, do not iterate on it.
+- Keep AI rework rounds tight (1–2). If a fix resists, escalate to a human or restart with fresh context.
+- `ci.yml` runs on push/PR for both `main` and `beta`; no extra wiring needed when adding new branches off `beta`.
+
+For maintainers:
+
+- Merge `beta → main` only after the two-platform (macOS + Windows) smoke build passes. **Beta work must not leak to Stable** — that gate exists for a reason.
+- Tag `v<version>-tauri` **on `main`**, not on `beta`. The release workflow keys off the tag, but tagging on `main` keeps the release commit linear with the always-releasable line.
+- Avoid direct pushes to `main` outside the `beta → main` merge — it bypasses the smoke-test gate.
+
+Channel distribution (in progress): per-channel updater endpoints + a Settings toggle for "join Beta channel" are tracked as a separate change. Until that lands, every release reaches every user; treat all `v*-tauri` tags as Stable-grade for now and avoid tagging anything from `beta` directly.
+
 ## Repo conventions
 
 - **Comments, log messages, user-facing strings, and most docs are in Simplified Chinese.** UI strings additionally route through `react-i18next` (`src/i18n/{zh-CN,en}.ts`) so we ship English alongside; `zh-CN.ts` is source of truth.

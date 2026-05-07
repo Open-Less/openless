@@ -8,9 +8,9 @@ name: CI
 
 on:
   push:
-    branches: [main, dev]
+    branches: [main, beta]
   pull_request:
-    branches: [main, dev]
+    branches: [main, beta]
 
 jobs:
   cross-platform:
