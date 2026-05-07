@@ -2,7 +2,11 @@
   {
     "id": "programmer",
     "name": "程序员",
-    "phrases": ["PR", "CI", "tag", "release", "issue", "Rust", "TypeScript"]
+    "phrases": [
+      "PR", "CI", "tag", "release", "issue", "Rust", "TypeScript",
+      "Claude", "Codex", "Copilot", "Cursor", "Windsurf",
+      "Anthropic", "OpenAI", "GPT", "ChatGPT", "Gemini", "DeepSeek"
+    ]
   },
   {
     "id": "chef",

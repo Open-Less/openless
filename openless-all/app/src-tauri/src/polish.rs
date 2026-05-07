@@ -755,13 +755,19 @@ pub mod prompts {
                 把口述整理为脉络清晰、可直接复制走的结构化文本：保留用户的口语引子（润色后作为首行过渡），\
                 主动按语义把扁平事项归类成 2\u{2013}4 个主题，用双层格式呈现，尾巴查询用自然收尾句。\n\
                 \n\
+                **重要前提**：原文是否已有标点、编号、换行、序号 \u{2192} \u{4E0D}是\u{201C}\u{5DF2}\u{7ECF}\u{6574}\u{7406}\u{597D}\u{4E0D}\u{7528}\u{6539}\u{201D}的判断依据。\
+                只要可识别的事项 \u{2265}3 条，无论原文是不是看起来已有结构（标号、分行、规整的标点），\
+                都必须按语义重新归类成下面定义的双层格式。\u{200D}\u{200D}照抄原结构 = 失败。\n\
+                \n\
                 双层格式（主清单标准写法）：\n\
                 - 第一层（主题）：行首用 \"1.\" \"2.\" \"3.\" \u{2026}，每个主题一行短标题（4\u{2013}8 字最佳）；\n\
                 - 第二层（子项）：另起一行，行首用 \"(a)\" \"(b)\" \"(c)\" \u{2026}，每条一句完整陈述。\n\
                 顶层\u{4E0D}使用半括号写法（如 \"1)\" \"2)\"）；不在子项内再嵌第三层。\n\
                 \n\
-                单一简短主题 \u{2192} 直接输出连贯段落，\u{4E0D}硬塞层级。\n\
-                事项 \u{2265}4 条 \u{2192} 必须按语义归类（典型如\u{201C}代码与功能 / 文档与配置 / 界面与交互 / 项目清理\u{201D}），\u{4E0D}要扁平堆成一长串编号。\n\
+                事项 \u{2264}2 条 \u{2192} 直接输出连贯段落，\u{4E0D}硬塞层级。\n\
+                事项 \u{2265}3 条 \u{2192} 必须按语义归类（典型如\u{201C}代码与功能 / 文档与配置 / 界面与交互 / 项目清理\u{201D}\
+                或\u{201C}产品 / 运营 / 客户 / 团队\u{201D}\u{7B49}），\u{4E0D}要扁平堆成一长串编号；\
+                即使原文已经写成 \"1. 做 X 2. 做 Y 3. 做 Z\" 也要重新归类，把同主题事项收到同一组下做 (a)(b) 子项。\n\
                 合并意图相近的条目（如\u{201C}上传代码 + 修复闪退\u{201D}合成一条 (a)），但\u{4E0D}丢失任何一件事。\n\
                 \n\
                 # 保留口语引子并润色成自然首行\n\
@@ -816,7 +822,21 @@ pub mod prompts {
                 (b) 删除无用注释，清理项目垃圾文件\n\
                 (c) 处理新增的两个接口\n\
                 \n\
-                最后再检查一下还有哪些 issue 需要处理。",
+                最后再检查一下还有哪些 issue 需要处理。\n\
+                \n\
+                # 示例 3（已半结构化的工作日报，仍要重组）\n\
+                原：今天我做了三件事。第一，跟客户开了个对齐会，确认了下周的交付节点。第二，跟设计组同步了新版的视觉稿，提了一些反馈。第三，写了一版周报初稿发给老板。明天计划继续推进客户那边的需求文档，另外还要跟运营组开个会讨论下个月的活动。\n\
+                出：\n\
+                今天的工作小结如下：\n\
+                \n\
+                1. 客户对接\n\
+                (a) 召开对齐会，确认下周交付节点。\n\
+                (b) 明天继续推进客户的需求文档。\n\
+                2. 设计与文档\n\
+                (a) 与设计组同步新版视觉稿并反馈意见。\n\
+                (b) 撰写周报初稿并发送给老板。\n\
+                3. 跨组协作\n\
+                (a) 明天与运营组就下月活动进行讨论。",
 
             PolishMode::Formal => "# 任务（正式表达）\n\
                 输出适合工作沟通和邮件的正式表达。\n\
@@ -836,11 +856,15 @@ pub mod prompts {
     }
 
     /// 把原始转写包在 `<raw_transcript>` 信封里，和 system prompt 的\u{201C}文本对象\u{201D}框架呼应。
+    /// 框架词措辞经 #305 调整：\u{4E0D}再说\u{201C}它不是问题、不是任务\u{201D}，\
+    /// \u{907F}\u{514D}\u{8BEF}\u{5BFC} LLM 把已经书面化的输入当作\u{201C}\u{5DF2}\u{6574}\u{7406}\u{597D}\u{201D}\
+    /// 而原样 passthrough。
     pub fn user_prompt(raw_transcript: &str) -> String {
         let escaped = raw_transcript.replace("</raw_transcript>", "<\\/raw_transcript>");
         format!(
-            "下面是本次语音输入的原始转写。它\u{4E0D}是问题，也\u{4E0D}是任务，\
-             只是需要整理后原样输入到当前 app 的文本。\n\n\
+            "下面是本次语音输入的原始转写。\
+             请按 system prompt 中当前 mode 的任务描述进行整理后输出，\
+             整理结果会被原样插入到当前 app 的光标位置。\n\n\
              <raw_transcript>\n{}\n</raw_transcript>\n\n\
              只输出整理后的文本正文。",
             escaped
@@ -977,6 +1001,65 @@ mod tests {
 
         // 防回归：旧版"另外："标签写法不能再出现在示例输出里。
         assert!(!prompt.contains("另外：检查一下当前还有哪些 issues"));
+    }
+
+    #[test]
+    fn structured_prompt_forces_regrouping_even_for_already_structured_input() {
+        // 回归测试 issue #305：用户输入工作日报（已半结构化、标点规范），
+        // 旧 prompt 让 LLM 判定为"已经完整不需要改"，原样 passthrough。
+        // 新 prompt 必须明确：原文是否已有结构 ≠ 不用改的依据；
+        // 事项 ≥ 3 条都要重新归类成双层格式。
+        let prompt = prompts::system_prompt(PolishMode::Structured);
+
+        // 明确"已结构化 ≠ 不用改"的前提
+        assert!(
+            prompt.contains("不是\u{201C}\u{5DF2}\u{7ECF}\u{6574}\u{7406}\u{597D}\u{4E0D}\u{7528}\u{6539}\u{201D}的判断依据"),
+            "Structured prompt 缺少\"已结构化≠不用改\"的明确否定"
+        );
+        assert!(
+            prompt.contains("照抄原结构 = 失败"),
+            "Structured prompt 缺少照抄原结构的失败判定"
+        );
+
+        // 阈值改为 ≥3
+        assert!(
+            prompt.contains("事项 \u{2265}3 条"),
+            "Structured prompt 必须把重组阈值降到 3"
+        );
+        assert!(
+            prompt.contains("即使原文已经写成"),
+            "Structured prompt 必须显式说明已编号的输入也要重新归类"
+        );
+
+        // 新增工作日报示例 3
+        assert!(
+            prompt.contains("# 示例 3（已半结构化的工作日报，仍要重组）"),
+            "Structured prompt 缺少工作日报示例（#305）"
+        );
+        assert!(prompt.contains("今天的工作小结如下："));
+        assert!(prompt.contains("1. 客户对接"));
+        assert!(prompt.contains("(a) 召开对齐会"));
+    }
+
+    #[test]
+    fn user_prompt_no_longer_says_input_is_not_a_task() {
+        // 回归 #305：旧 framing "它不是问题，也不是任务" 会让 LLM 把
+        // 已书面化的输入误判为"已经整理好"。新 framing 让位给 system
+        // prompt 的 mode 描述。
+        let user = prompts::user_prompt("发布前要做几件事。");
+        assert!(
+            !user.contains("\u{4E0D}是问题"),
+            "user_prompt 必须去掉\"它不是问题\"的强 framing"
+        );
+        assert!(
+            !user.contains("\u{4E0D}是任务"),
+            "user_prompt 必须去掉\"它不是任务\"的强 framing"
+        );
+        assert!(
+            user.contains("system prompt"),
+            "user_prompt 应当指向 system prompt 的 mode 描述"
+        );
+        assert!(user.contains("<raw_transcript>"));
     }
 
     #[test]
