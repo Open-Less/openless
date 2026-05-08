@@ -126,20 +126,27 @@ jobs:
         if: runner.os != 'Windows'
         run: cargo test --manifest-path src-tauri/Cargo.toml --lib
 
+      - name: Install nightly Rust source for Windows unit tests
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: rustup toolchain install nightly --profile minimal --component rust-src --no-self-update
+
       - name: Run Rust backend unit tests (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           # 产品默认构建仍通过 cargo check 覆盖 Foundry 链接形态，单测门禁
           # 用无 Foundry native 链接的构建来真正执行 Windows 后端测试。
-          # GitHub runner 的普通 PATH 会先命中 Git 自带的 link.exe；
-          # 单测链接与执行都显式进入 VS DevCmd，确保走 MSVC 链接环境。
+          # 默认 Windows target 的 stable test harness 会在 runner 上因
+          # WaitOnAddress API-set 入口缺失而进程启动失败。单测执行改用
+          # nightly build-std 构建 win7 target 的 std 兼容路径；默认 Windows
+          # target 仍由上面的 stable cargo check 覆盖。
           $env:CARGO_TARGET_DIR = Join-Path (Get-Location) "src-tauri\target\windows-unit-tests"
           $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
           $vsInstall = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
           $vsDevCmd = Join-Path $vsInstall "Common7\Tools\VsDevCmd.bat"
           $targetDir = $env:CARGO_TARGET_DIR
-          $command = "call `"$vsDevCmd`" -arch=x64 -host_arch=x64 && set `"CARGO_TARGET_DIR=$targetDir`" && cargo test --manifest-path src-tauri/Cargo.toml --lib --no-default-features --features custom-protocol"
+          $command = "call `"$vsDevCmd`" -arch=x64 -host_arch=x64 && set `"CARGO_TARGET_DIR=$targetDir`" && cargo +nightly test -Z build-std=std,panic_unwind --target x86_64-win7-windows-msvc --manifest-path src-tauri/Cargo.toml --lib --no-default-features --features custom-protocol"
           & cmd.exe /d /s /c $command
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
