@@ -1274,6 +1274,15 @@ pub fn delete_custom_mode(
     }
     // enabled_modes から該当 Custom を除去
     prefs.enabled_modes.retain(|m| !matches!(m, PolishMode::Custom(cur_id) if *cur_id == id));
+    // app_mode_overrides からも該当 Custom を参照しているルールを除去。
+    // 残しておくと、app パターンマッチ時に存在しない custom id を mode として
+    // 採用してしまい、polish パイプライン側で id 文字列をそのまま prompt 名と
+    // して扱う / fallback もしないという dangling 状態になる。削除と同時に
+    // ルール自体を消す方がユーザー期待にも近い（カスタムスタイル消したのに
+    // そのアプリだけ「不明な mode」が残る、という状況を避ける）。
+    prefs
+        .app_mode_overrides
+        .retain(|o| !matches!(&o.mode, PolishMode::Custom(cur_id) if *cur_id == id));
     persist_settings(&*coord, prefs.clone())?;
     let _ = app.emit("prefs:changed", &prefs);
     Ok(())

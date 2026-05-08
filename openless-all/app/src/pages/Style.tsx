@@ -65,6 +65,9 @@ export function Style() {
   const [overrideError, setOverrideError] = useState<string | null>(null);
   // 500ms debounce 用の timer。直近の編集を 500ms 何もせず待ったら setAppModeOverrides を呼ぶ。
   const overrideDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // unmount / re-render で flush するため、最新の「未保存値」を保持する。
+  // null = 保留中の値が無い（直近の保存が完了済み or まだ何も編集していない）。
+  const pendingOverrideRef = useRef<AppModeOverride[] | null>(null);
 
   useEffect(() => {
     getSettings().then(p => {
@@ -73,26 +76,46 @@ export function Style() {
     });
   }, []);
 
-  // アンマウント時に保留中の debounce をクリア。残ったままだと unmount 後に invoke が走る。
+  // アンマウント時：保留中の debounce timer を止めるだけでなく、
+  // 未保存の最新値を即時 flush して invoke する。これをやらないと
+  // 「編集中にページ離脱 → 500ms に届かなかった編集が消える」現象が出る。
   useEffect(() => {
     return () => {
       if (overrideDebounceRef.current) {
         clearTimeout(overrideDebounceRef.current);
+        overrideDebounceRef.current = null;
+      }
+      const pending = pendingOverrideRef.current;
+      if (pending !== null) {
+        // fire-and-forget。unmount 後なので setState は呼ばない（呼ぶと
+        // React が「unmounted component に setState」と警告する）。
+        // エラーになっても次回 mount 時は最後に永続化されたものから始まる
+        // 程度の被害なので catch して握りつぶす。
+        setAppModeOverrides(pending).catch(err => {
+          console.warn('[style] unmount flush of app_mode_overrides failed', err);
+        });
+        pendingOverrideRef.current = null;
       }
     };
   }, []);
 
   const scheduleOverrideSave = (next: AppModeOverride[]) => {
+    pendingOverrideRef.current = next;
     if (overrideDebounceRef.current) {
       clearTimeout(overrideDebounceRef.current);
     }
     overrideDebounceRef.current = setTimeout(async () => {
+      overrideDebounceRef.current = null;
       try {
         await setAppModeOverrides(next);
         setOverrideError(null);
         // 後端が prefs:changed を emit しても今のページは listen していないので
         // ローカル prefs を即座に同期しておく（次の getSettings 呼び出しまで diverge しないため）。
         setPrefs(prev => (prev ? { ...prev, appModeOverrides: next } : prev));
+        // 保存が成功したらこの値はもう「保留中」ではない。
+        if (pendingOverrideRef.current === next) {
+          pendingOverrideRef.current = null;
+        }
       } catch (err) {
         setOverrideError(String(err));
       }
