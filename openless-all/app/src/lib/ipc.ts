@@ -3,6 +3,7 @@
 // the UI is still operable for visual review.
 
 import type {
+  AppModeOverride,
   ComboBinding,
   CredentialsStatus,
   DictationSession,
@@ -56,8 +57,11 @@ const mockSettings: UserPreferences = {
   activeLlmProvider: 'ark',
   restoreClipboardAfterPaste: true,
   allowNonTsfInsertionFallback: true,
+  customModes: [],
+  appModeOverrides: [],
   workingLanguages: ['简体中文'],
   translationTargetLanguage: '',
+  translateEnabled: true,
   qaHotkey: defaultQaShortcut(),
   chineseScriptPreference: 'auto',
   outputLanguagePreference: 'auto',
@@ -320,6 +324,35 @@ export function setStyleEnabled(mode: PolishMode, enabled: boolean): Promise<voi
   return invokeOrMock('set_style_enabled', { mode, enabled }, () => undefined);
 }
 
+// 既定（ハードコード）の polish system prompt を取得する。ビルトイン4 mode 専用。
+// Settings → Style ページで「prompt を見る」を押した時の参考表示用。
+// `mode` は `'raw' | 'light' | 'structured' | 'formal'`。
+export function getDefaultPolishPrompt(mode: string): Promise<string> {
+  return invokeOrMock('get_default_polish_prompt', { mode }, () => '');
+}
+
+// カスタム整形スタイルの追加。id は重複不可、name/prompt はそのまま保存される。
+export function addCustomMode(id: string, name: string, prompt: string): Promise<void> {
+  return invokeOrMock('add_custom_mode', { id, name, prompt }, () => undefined);
+}
+
+// カスタム整形スタイルの更新。id は不変、name/prompt のみ書き換わる。
+export function updateCustomMode(id: string, name: string, prompt: string): Promise<void> {
+  return invokeOrMock('update_custom_mode', { id, name, prompt }, () => undefined);
+}
+
+// カスタム整形スタイルの削除。default_mode が該当 id を指していたら Light に fallback、
+// enabled_modes からも該当 Custom が除去される。
+export function deleteCustomMode(id: string): Promise<void> {
+  return invokeOrMock('delete_custom_mode', { id }, () => undefined);
+}
+
+// アプリ別自動 mode 切替ルールの一括置換。フロントは編集中の配列丸ごとを送る。
+// 各 override の mode が `custom:<id>` の場合、id が customModes に存在することを後端が検証する。
+export function setAppModeOverrides(overrides: AppModeOverride[]): Promise<void> {
+  return invokeOrMock('set_app_mode_overrides', { overrides }, () => undefined);
+}
+
 // ── Permissions ────────────────────────────────────────────────────────
 export function checkAccessibilityPermission(): Promise<PermissionStatus> {
   return invokeOrMock('check_accessibility_permission', undefined, () => 'granted' as const);
@@ -387,6 +420,10 @@ export function setDictationHotkey(binding: ShortcutBinding): Promise<void> {
 
 export function setTranslationHotkey(binding: ShortcutBinding): Promise<void> {
   return invokeOrMock('set_translation_hotkey', { binding }, () => undefined);
+}
+
+export function setTranslateEnabled(enabled: boolean): Promise<void> {
+  return invokeOrMock('set_translate_enabled', { enabled }, () => undefined);
 }
 
 export function setSwitchStyleHotkey(binding: ShortcutBinding): Promise<void> {

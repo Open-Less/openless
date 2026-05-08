@@ -37,6 +37,7 @@ import {
   setOpenAppHotkey,
   setQaHotkey,
   setSwitchStyleHotkey,
+  setTranslateEnabled,
   setTranslationHotkey,
   startMicrophoneLevelMonitor,
   stopMicrophoneLevelMonitor,
@@ -68,7 +69,6 @@ import {
   type LocalAsrModelStatus,
   type LocalAsrSettings,
 } from '../lib/localAsr';
-
 /// Settings → ASR 选了 local-qwen3 时触发跳到「模型设置」页 + 关 Settings modal。
 /// FloatingShell 监听同名事件做 setCurrentTab('localAsr') + setSettingsOpen(false)。
 export const NAVIGATE_LOCAL_ASR_EVENT = 'openless:navigate-local-asr';
@@ -1789,6 +1789,18 @@ function ShortcutsSection() {
             {hotkey.mode === 'hold' ? t('hotkey.modeHoldSuffix') : t('hotkey.modeToggleSuffix')}
           </div>
         </div>
+      </SettingRow>
+      <SettingRow
+        label={t('translation.enable.title')}
+        desc={t('translation.enable.hint')}
+      >
+        <Toggle
+          on={prefs.translateEnabled}
+          onToggle={async (v: boolean) => {
+            await setTranslateEnabled(v);
+            await savePrefs({ ...prefs, translateEnabled: v });
+          }}
+        />
       </SettingRow>
       <SettingRow label={t('translation.hotkey.title', 'Translation shortcut')}>
         <ShortcutRecorder

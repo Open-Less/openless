@@ -6,7 +6,8 @@ import {
   getCapsuleMessageLayout,
   getCapsulePillMetrics,
 } from '../lib/capsuleLayout';
-import { invokeOrMock, isTauri } from '../lib/ipc';
+import { getSettings, invokeOrMock, isTauri } from '../lib/ipc';
+import { readQuietCompletion } from '../lib/quietMode';
 import type { CapsulePayload, CapsuleState } from '../lib/types';
 
 interface AudioBarsProps {
@@ -175,6 +176,11 @@ function Pill({ os, state, level, insertedChars, message, onCancel, onConfirm }:
   const metrics = getCapsulePillMetrics(os);
   const processingLayout = getCapsuleMessageLayout(os, 'processing');
   const enabled = state === 'recording';
+  // Quiet mode suppresses *all* transient capsule labels (the processing
+  // hint, the "N characters inserted" toast, the cancelled label) so the
+  // capsule just shows audio bars / dots and disappears silently. Errors
+  // are still shown — they're load-bearing.
+  const quiet = readQuietCompletion();
 
   let center: JSX.Element;
   switch (state) {
@@ -197,32 +203,38 @@ function Pill({ os, state, level, insertedChars, message, onCancel, onConfirm }:
           }}
         >
           <ProcessingDots />
-          <span
-            style={{
-              fontSize: 10.5,
-              fontWeight: 500,
-              color: 'var(--ol-ink-2)',
-              minWidth: 0,
-              textAlign: 'center',
-              lineHeight: processingLayout.allowWrap ? 1.15 : 1,
-              whiteSpace: processingLayout.allowWrap ? 'normal' : 'nowrap',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              display: '-webkit-box',
-              WebkitBoxOrient: 'vertical',
-              WebkitLineClamp: processingLayout.lineClamp,
-            }}
-          >
-            {t('capsule.thinking')}
-          </span>
+          {!quiet && (
+            <span
+              style={{
+                fontSize: 10.5,
+                fontWeight: 500,
+                color: 'var(--ol-ink-2)',
+                minWidth: 0,
+                textAlign: 'center',
+                lineHeight: processingLayout.allowWrap ? 1.15 : 1,
+                whiteSpace: processingLayout.allowWrap ? 'normal' : 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                display: '-webkit-box',
+                WebkitBoxOrient: 'vertical',
+                WebkitLineClamp: processingLayout.lineClamp,
+              }}
+            >
+              {t('capsule.thinking')}
+            </span>
+          )}
         </div>
       );
       break;
     case 'done':
-      center = <CenterText os={os} kind="default" text={message || t('capsule.inserted', { count: insertedChars })} />;
+      center = quiet
+        ? <span style={{ width: 1, height: 1 }} />
+        : <CenterText os={os} kind="default" text={message || t('capsule.inserted', { count: insertedChars })} />;
       break;
     case 'cancelled':
-      center = <CenterText os={os} kind="default" text={t('capsule.cancelled')} />;
+      center = quiet
+        ? <span style={{ width: 1, height: 1 }} />
+        : <CenterText os={os} kind="default" text={t('capsule.cancelled')} />;
       break;
     case 'error':
       center = <CenterText os={os} kind="error" text={message || t('capsule.error')} color="var(--ol-err)" />;
@@ -281,8 +293,32 @@ export function Capsule() {
   const [insertedChars, setInsertedChars] = useState<number>(0);
   const [message, setMessage] = useState<string | undefined>();
   const [translation, setTranslation] = useState<boolean>(false);
+  // 翻訳機能のグローバル on/off。起動時 1 回 getSettings() で読んで以降はフロント保持。
+  // 設定変更直後の即反映は次回起動でよい（実用上 OK）。
+  const [translateEnabled, setTranslateEnabled] = useState<boolean>(true);
   // Windows 端 host 在翻译模式从 84 长到 118；macOS / Linux 上 capsuleLayout 已固定 42 忽略此参数。
-  const hostMetrics = getCapsuleHostMetrics(os, translation);
+  const hostMetrics = getCapsuleHostMetrics(os, translation && translateEnabled);
+  // Quiet mode: Capsule()'s own translation-mode overlay also needs to be
+  // suppressed when the user has turned the quiet toggle on. Pill reads
+  // this independently for its own labels.
+  const quiet = readQuietCompletion();
+  const showTranslationOverlay = translation && !quiet && translateEnabled;
+
+  useEffect(() => {
+    if (!isTauri) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const prefs = await getSettings();
+        if (!cancelled) setTranslateEnabled(prefs.translateEnabled !== false);
+      } catch {
+        /* 取得失敗時はデフォルト true のまま */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (!isTauri) return;
@@ -375,8 +411,8 @@ export function Capsule() {
             letterSpacing: '0.02em',
             whiteSpace: 'nowrap',
             // 隐藏：从 pill 中线偏下出发；显示：归位到 wrapper（pill 上方 25px）
-            opacity: translation ? 1 : 0,
-            transform: translation ? 'translateY(0) scale(1)' : 'translateY(40px) scale(.88)',
+            opacity: showTranslationOverlay ? 1 : 0,
+            transform: showTranslationOverlay ? 'translateY(0) scale(1)' : 'translateY(40px) scale(.88)',
             transformOrigin: 'center bottom',
             transition: 'opacity .24s ease-out, transform .34s cubic-bezier(.2,.9,.3,1.1)',
             willChange: 'opacity, transform',
