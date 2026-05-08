@@ -15,6 +15,14 @@ if (rawChannel !== 'stable' && rawChannel !== 'beta') {
   throw new Error(`Invalid OPENLESS_RELEASE_CHANNEL: "${rawChannel}" (expected "stable" or "beta")`);
 }
 const channelSuffix = rawChannel === 'beta' ? '-beta' : '';
+// Beta 渠道里 manifest.url 必须指向具体 tag 路径，不能用 releases/latest——后者
+// 永远是最新非-prerelease（即 Stable），Beta 用户按 url 下载会拉到 Stable 包，
+// 文件名碰巧重名时下载错版本，文件名带版本号时直接 404。
+// Stable 渠道沿用 releases/latest，没问题。
+const releaseTag = process.env.OPENLESS_RELEASE_TAG || '';
+if (rawChannel === 'beta' && !releaseTag) {
+  throw new Error('OPENLESS_RELEASE_TAG is required when OPENLESS_RELEASE_CHANNEL=beta');
+}
 
 if (!target || !arch) {
   throw new Error('OPENLESS_UPDATE_TARGET and OPENLESS_UPDATE_ARCH are required');
@@ -64,8 +72,13 @@ if (!existsSync(signaturePath)) {
 const assetName = basename(artifact);
 const manifestName = `latest-${target}-${arch}${channelSuffix}.json`;
 const mirrorManifestName = `latest-${target}-${arch}${channelSuffix}-mirror.json`;
-const githubAssetUrl = `https://github.com/${repo}/releases/latest/download/${assetName}`;
-const mirrorAssetUrl = `${mirrorBaseUrl.replace(/\/$/, '')}/${repo}/releases/latest/download/${assetName}`;
+// Stable: releases/latest/download/<asset>（GitHub 自动重定向到最新非-prerelease）
+// Beta:   releases/download/<tag>/<asset>（指定具体 tag，不被 prerelease 折叠影响）
+const downloadPath = rawChannel === 'beta'
+  ? `releases/download/${releaseTag}/${assetName}`
+  : `releases/latest/download/${assetName}`;
+const githubAssetUrl = `https://github.com/${repo}/${downloadPath}`;
+const mirrorAssetUrl = `${mirrorBaseUrl.replace(/\/$/, '')}/${repo}/${downloadPath}`;
 const manifest = {
   version: packageJson.version,
   pub_date: new Date().toISOString(),

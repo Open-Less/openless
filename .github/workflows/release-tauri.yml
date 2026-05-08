@@ -379,6 +379,11 @@ jobs:
           OPENLESS_UPDATE_MIRROR_BASE_URL: https://fastgit.cc/https://github.com
           # beta 渠道时输出 latest-{tgt}-{arch}-beta.json，stable 沿用旧文件名。
           OPENLESS_RELEASE_CHANNEL: ${{ env.OPENLESS_RELEASE_CHANNEL }}
+          # Beta 渠道里脚本要把 manifest.url 写成 releases/download/<tag>/...
+          # 而不是 releases/latest（后者永远 = Stable，Beta 用户按 url 下载会拉到错文件）。
+          # workflow_dispatch 时 github.ref_name 不是 tag——但那种情况下 channel=stable，
+          # 脚本不会读这个字段，安全。
+          OPENLESS_RELEASE_TAG: ${{ github.ref_name }}
         run: node scripts/write-updater-manifest.mjs
 
       # ── 收集产物 ──
