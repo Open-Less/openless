@@ -126,27 +126,88 @@ jobs:
 
           # rustc 1.78+ 生成的 Windows 二进制会导入 WaitOnAddress 所在的
           # api-ms-win-core-synch-l1-2-0.dll。GitHub runner 上该 API-set
-          # 解析偶发缺 entrypoint；先 no-run 产出测试 exe，再把 Windows Kits
-          # 官方 x64 Redist stub 放到测试 exe 目录，最后仍然执行 cargo test。
+          # 解析偶发缺 entrypoint；先 no-run 产出测试 exe，再放置一个只转发
+          # WaitOnAddress/WakeByAddress* 到 KernelBase/kernel32 的测试目录 shim，
+          # 最后仍然执行 cargo test。
           cargo test @testArgs --no-run
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
           }
 
           $depsDir = Join-Path $env:CARGO_TARGET_DIR "debug\deps"
-          $windowsKitsRedist = Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\Redist"
-          $syncDll = $null
-          if (Test-Path $windowsKitsRedist) {
-            $syncDll = Get-ChildItem -Path $windowsKitsRedist -Recurse -Filter "api-ms-win-core-synch-l1-2-0.dll" -ErrorAction SilentlyContinue |
-              Where-Object { $_.FullName -match "\\x64\\" } |
-              Sort-Object FullName -Descending |
-              Select-Object -First 1
+          $shimSource = Join-Path $env:RUNNER_TEMP "openless-waitonaddress-shim.c"
+          @'
+          #define WIN32_LEAN_AND_MEAN
+          #include <windows.h>
+
+          typedef BOOL (WINAPI *WaitOnAddressFn)(volatile VOID *, PVOID, SIZE_T, DWORD);
+          typedef VOID (WINAPI *WakeByAddressFn)(PVOID);
+
+          static FARPROC resolve_export(const char *name) {
+              const wchar_t *modules[] = { L"KernelBase.dll", L"kernel32.dll" };
+              for (int i = 0; i < 2; ++i) {
+                  HMODULE module = GetModuleHandleW(modules[i]);
+                  if (!module) {
+                      module = LoadLibraryW(modules[i]);
+                  }
+                  if (module) {
+                      FARPROC proc = GetProcAddress(module, name);
+                      if (proc) {
+                          return proc;
+                      }
+                  }
+              }
+              return NULL;
           }
-          if ($syncDll) {
-            Write-Host "[ci] Copy Windows Kits API-set stub for Rust test harness: $($syncDll.FullName)"
-            Copy-Item -Path $syncDll.FullName -Destination $depsDir -Force
+
+          __declspec(dllexport) BOOL WINAPI WaitOnAddress(
+              volatile VOID *Address,
+              PVOID CompareAddress,
+              SIZE_T AddressSize,
+              DWORD dwMilliseconds
+          ) {
+              WaitOnAddressFn fn = (WaitOnAddressFn)resolve_export("WaitOnAddress");
+              if (!fn) {
+                  SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
+                  return FALSE;
+              }
+              return fn(Address, CompareAddress, AddressSize, dwMilliseconds);
+          }
+
+          __declspec(dllexport) VOID WINAPI WakeByAddressSingle(PVOID Address) {
+              WakeByAddressFn fn = (WakeByAddressFn)resolve_export("WakeByAddressSingle");
+              if (fn) {
+                  fn(Address);
+              }
+          }
+
+          __declspec(dllexport) VOID WINAPI WakeByAddressAll(PVOID Address) {
+              WakeByAddressFn fn = (WakeByAddressFn)resolve_export("WakeByAddressAll");
+              if (fn) {
+                  fn(Address);
+              }
+          }
+          '@ | Set-Content -Path $shimSource -Encoding ASCII
+
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsDevCmd = $null
+          if (Test-Path $vswhere) {
+            $installPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2>$null
+            if (-not [string]::IsNullOrWhiteSpace($installPath)) {
+              $vsDevCmd = Join-Path $installPath "Common7\Tools\VsDevCmd.bat"
+            }
+          }
+          if (-not $vsDevCmd -or -not (Test-Path $vsDevCmd)) {
+            throw "VsDevCmd.bat not found; cannot build Windows Rust test API-set shim."
+          }
+
+          $shimDll = Join-Path $depsDir "api-ms-win-core-synch-l1-2-0.dll"
+          $shimBuild = "call `"$vsDevCmd`" -arch=x64 -host_arch=x64 >nul && cl /nologo /LD `"$shimSource`" /Fe:`"$shimDll`" /link /NOLOGO"
+          cmd.exe /d /s /c $shimBuild
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
           } else {
-            Write-Host "[ci] Windows Kits API-set stub not found; running tests without local stub"
+            Write-Host "[ci] Built Windows Rust test API-set shim: $shimDll"
           }
 
           cargo test @testArgs
