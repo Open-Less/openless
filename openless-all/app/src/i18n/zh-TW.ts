@@ -326,6 +326,8 @@ export const zhTW: typeof zhCN = {
       historyRetentionDesc: '超過這個天數的歷史會在寫入新條目時被清理。0 = 不按時間清理（仍受 200 條上限）。默認 7 天。',
       polishContextWindowLabel: '對話上下文窗口（分鐘）',
       polishContextWindowDesc: '把最近 N 分鐘內已成功潤色的轉寫作為多輪上下文喂給 LLM，讓代詞與未完整句子能被正確解析。0 = 關閉，單輪獨立潤色。默認 5 分鐘；超過 60 分鐘意義不大。',
+      startMinimizedLabel: '啓動時靜默運行',
+      startMinimizedDesc: '打開後所有啓動路徑都不彈主窗口（包括開機自啓），App 僅在選單欄 / 托盤運行。需要主窗口時點托盤圖示打開。Windows 開機自啓場景常用。',
       startupAtBoot: '開機自啓',
       startupAtBootDesc: '登錄後自動啓動 OpenLess。macOS 寫 LaunchAgent，Linux 寫 ~/.config/autostart，Windows 寫 HKCU\\Run（不需要管理員）。詳見 issue #194。',
       startupAtBootError: '開機自啓切換失敗：{{message}}',

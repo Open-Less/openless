@@ -171,6 +171,9 @@ export interface UserPreferences {
   historyRetentionDays: number;
   /** 对话感知 polish 上下文窗口（分钟）。0 = 关闭。默认 5。详见 PR-A。 */
   polishContextWindowMinutes: number;
+  /** 启动时静默运行（不弹主窗口）。Windows 开机自启场景常用——只想要后台 + 托盘，
+   *  不想被主窗口打扰。开后所有启动路径都不弹窗，从菜单栏 / 托盘进入主窗口。默认 false。 */
+  startMinimized: boolean;
 }
 
 export interface MicrophoneDevice {

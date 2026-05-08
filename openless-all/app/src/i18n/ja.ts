@@ -328,6 +328,8 @@ export const ja: typeof zhCN = {
       historyRetentionDesc: 'この日数を超えた履歴は新しいエントリ書き込み時に削除されます。0 = 時間による削除なし（200 件上限は維持）。デフォルト 7 日。',
       polishContextWindowLabel: '会話コンテキスト窓（分）',
       polishContextWindowDesc: '直近 N 分間の整文済み転写をマルチターン文脈として LLM に渡し、代名詞や未完了の文を前のディクテーションと突き合わせて解釈できるようにします。0 = 無効（シングルターン整文）。デフォルト 5 分。60 分超は実質意味なし。',
+      startMinimizedLabel: '起動時にメインウィンドウを表示しない',
+      startMinimizedDesc: 'ON にすると、ログイン時の自動起動を含むすべての起動でメインウィンドウは表示されません。メニューバー / トレイのみで動作し、必要時にトレイアイコンをクリックしてメインウィンドウを開きます。Windows の自動起動と組み合わせて便利。',
       startupAtBoot: '起動時に自動起動',
       startupAtBootDesc: 'ログイン後に OpenLess を自動起動。macOS は LaunchAgent、Linux は ~/.config/autostart、Windows は HKCU\\Run（管理者不要）。詳細は issue #194。',
       startupAtBootError: '自動起動の切り替えに失敗：{{message}}',

@@ -283,6 +283,8 @@ function RecordingSection() {
     if (Number.isNaN(parsed)) return;
     void savePrefs({ ...prefs, polishContextWindowMinutes: clamp(parsed, 0, 60) });
   };
+  const onStartMinimizedChange = (startMinimized: boolean) =>
+    savePrefs({ ...prefs, startMinimized });
 
   const choices: Array<[HotkeyMode, string]> = [
     ['toggle', t('settings.recording.modeToggle')],
@@ -470,6 +472,12 @@ function RecordingSection() {
         />
       </SettingRow>
       <AutostartRow />
+      <SettingRow
+        label={t('settings.recording.startMinimizedLabel')}
+        desc={t('settings.recording.startMinimizedDesc')}
+      >
+        <Toggle on={prefs.startMinimized} onToggle={onStartMinimizedChange} />
+      </SettingRow>
       {capability.statusHint && (
         <div style={{ marginTop: 6, fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.5 }}>
           {capability.statusHint}

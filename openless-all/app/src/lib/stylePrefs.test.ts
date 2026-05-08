@@ -41,6 +41,7 @@ const previousPrefs: UserPreferences = {
   foundryLocalAsrKeepLoadedSecs: 300,
   historyRetentionDays: 7,
   polishContextWindowMinutes: 5,
+  startMinimized: false,
 };
 
 const nextPrefs: UserPreferences = {

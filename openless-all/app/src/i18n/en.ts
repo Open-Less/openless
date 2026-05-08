@@ -326,6 +326,8 @@ export const en: typeof zhCN = {
       historyRetentionDesc: 'History entries older than this many days are pruned when a new entry is written. 0 = no time-based pruning (still capped at 200). Default 7 days.',
       polishContextWindowLabel: 'Polish context window (minutes)',
       polishContextWindowDesc: 'Feed the LLM successfully-polished transcripts from the last N minutes as multi-turn context, so pronouns and unfinished sentences resolve against prior dictation. 0 = disabled (single-turn polish, legacy behavior). Default 5 minutes; values above 60 rarely help.',
+      startMinimizedLabel: 'Start minimized (no main window)',
+      startMinimizedDesc: 'When on, the main window never appears on launch (including login autostart) — OpenLess runs in the menu bar / tray only. Click the tray icon to open the main window when needed. Useful with Windows autostart.',
       startupAtBoot: 'Launch at login',
       startupAtBootDesc: 'Start OpenLess automatically when you sign in. macOS uses a LaunchAgent, Linux writes ~/.config/autostart, Windows writes HKCU\\Run (no admin required). See issue #194.',
       startupAtBootError: 'Failed to toggle launch at login: {{message}}',

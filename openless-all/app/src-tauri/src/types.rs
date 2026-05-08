@@ -226,6 +226,11 @@ pub struct UserPreferences {
     /// 0 = 关闭（每次润色独立单轮，跟历史行为一致）。默认 5 分钟。
     #[serde(default = "default_polish_context_window_minutes")]
     pub polish_context_window_minutes: u32,
+    /// 启动时静默运行（不弹主窗口）。开机自启用户用得多——本来想看托盘
+    /// 而不是被主窗口打扰。开关一开后所有启动路径都不弹窗（包括手动点击），
+    /// 用户改用托盘菜单访问主窗口。默认 false 跟历史行为一致。
+    #[serde(default)]
+    pub start_minimized: bool,
 }
 
 fn default_local_asr_model() -> String {
@@ -315,6 +320,8 @@ struct UserPreferencesWire {
     history_retention_days: u32,
     #[serde(default = "default_polish_context_window_minutes")]
     polish_context_window_minutes: u32,
+    #[serde(default)]
+    start_minimized: bool,
 }
 
 impl Default for UserPreferencesWire {
@@ -353,6 +360,7 @@ impl Default for UserPreferencesWire {
             update_channel: prefs.update_channel,
             history_retention_days: prefs.history_retention_days,
             polish_context_window_minutes: prefs.polish_context_window_minutes,
+            start_minimized: prefs.start_minimized,
         }
     }
 }
@@ -408,6 +416,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             update_channel: wire.update_channel,
             history_retention_days: wire.history_retention_days,
             polish_context_window_minutes: wire.polish_context_window_minutes,
+            start_minimized: wire.start_minimized,
         })
     }
 }
@@ -516,6 +525,7 @@ impl Default for UserPreferences {
             update_channel: UpdateChannel::default(),
             history_retention_days: default_history_retention_days(),
             polish_context_window_minutes: default_polish_context_window_minutes(),
+            start_minimized: false,
         }
     }
 }

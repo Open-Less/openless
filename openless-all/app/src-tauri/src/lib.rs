@@ -149,7 +149,17 @@ pub fn run() {
                     }
                     apply_windows_rounded_frame(&main);
                 }
-                if let Err(e) = main.show() {
+                // 静默启动开关：prefs.start_minimized = true → 不弹主窗口，
+                // 用户从菜单栏 / 托盘点击访问。开机自启时尤其有用，避免每次
+                // 登录都被主窗口打扰。OPENLESS_SHOW_MAIN_ON_START=1 仍保留
+                // 老的强制 show 路径（手动 dispatch 测试 / dev 用），优先级高
+                // 于 prefs。
+                let force_show = std::env::var("OPENLESS_SHOW_MAIN_ON_START").ok().as_deref()
+                    == Some("1");
+                let suppress_show = !force_show && coordinator.prefs().get().start_minimized;
+                if suppress_show {
+                    log::info!("[main] start_minimized=true → 跳过初始 show，等用户点托盘");
+                } else if let Err(e) = main.show() {
                     log::warn!("[main] initial show failed: {e}");
                 }
             }

@@ -328,6 +328,8 @@ export const ko: typeof zhCN = {
       historyRetentionDesc: '이 기간을 초과한 기록은 새 항목을 쓸 때 정리됩니다. 0 = 시간 기반 정리 비활성화(200건 상한은 유지). 기본 7일.',
       polishContextWindowLabel: '대화 컨텍스트 윈도(분)',
       polishContextWindowDesc: '최근 N분간 성공적으로 정리된 전사를 멀티턴 컨텍스트로 LLM 에 전달하여 대명사와 미완성 문장을 이전 받아쓰기와 대조해 해석할 수 있도록 합니다. 0 = 비활성화(단일턴 정리). 기본 5분; 60분 초과는 의미가 거의 없습니다.',
+      startMinimizedLabel: '시작 시 메인 창 숨기기',
+      startMinimizedDesc: '켜면 로그인 자동 시작을 포함한 모든 시작 경로에서 메인 창이 나타나지 않습니다. 메뉴 막대 / 트레이에서만 실행되며, 필요할 때 트레이 아이콘을 클릭해 메인 창을 엽니다. Windows 자동 시작과 함께 사용하면 편리합니다.',
       startupAtBoot: '부팅 시 자동 시작',
       startupAtBootDesc: '로그인 후 OpenLess 자동 시작. macOS 는 LaunchAgent, Linux 는 ~/.config/autostart, Windows 는 HKCU\\Run(관리자 불필요). issue #194 참조.',
       startupAtBootError: '자동 시작 전환 실패: {{message}}',
