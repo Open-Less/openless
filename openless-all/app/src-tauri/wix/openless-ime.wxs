@@ -45,8 +45,13 @@
       Return="ignore" />
 
     <InstallExecuteSequence>
-      <Custom Action="UnregisterOpenLessImeX86" Before="RemoveFiles"><![CDATA[REMOVE="ALL"]]></Custom>
-      <Custom Action="UnregisterOpenLessImeX64" Before="UnregisterOpenLessImeX86"><![CDATA[REMOVE="ALL"]]></Custom>
+      <!-- Issue #321: unregister the old DLL before InstallFiles whenever a
+           previous version is installed, so Windows Installer can overwrite
+           OpenLessIme.dll instead of failing on a sharing violation. The
+           previous condition (REMOVE="ALL") only fired during dedicated
+           uninstall and skipped the auto-update / minor-upgrade path. -->
+      <Custom Action="UnregisterOpenLessImeX86" Before="InstallFiles"><![CDATA[Installed AND NOT REMOVE]]></Custom>
+      <Custom Action="UnregisterOpenLessImeX64" Before="UnregisterOpenLessImeX86"><![CDATA[Installed AND NOT REMOVE]]></Custom>
       <Custom Action="RegisterOpenLessImeX64" After="InstallFiles"><![CDATA[NOT REMOVE]]></Custom>
       <Custom Action="RegisterOpenLessImeX86" After="RegisterOpenLessImeX64"><![CDATA[NOT REMOVE]]></Custom>
     </InstallExecuteSequence>

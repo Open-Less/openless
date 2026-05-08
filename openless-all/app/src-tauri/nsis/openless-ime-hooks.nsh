@@ -56,12 +56,34 @@
   !insertmacro OPENLESS_IME_ABORT_IF_FAILED $0 "x86 registration"
 !macroend
 
-!macro NSIS_HOOK_PREINSTALL
-  SetOutPath "$INSTDIR\windows-ime\x64"
-  File /oname=OpenLessIme.dll "$%OPENLESS_IME_DLL_X64%"
+!macro OPENLESS_IME_STAGE_AND_REPLACE PLATFORM_DIR ENV_VAR
+  ; Write new bytes to OpenLessIme.dll.new, then atomically replace the old file.
+  ; If the old DLL is still mapped into TSF client processes (browsers, IDEs,
+  ; chat apps, ...) and Delete fails, queue the rename for next reboot via
+  ; PendingFileRenameOperations. Issue #321.
+  SetOutPath "$INSTDIR\windows-ime\${PLATFORM_DIR}"
+  File /oname=OpenLessIme.dll.new "$%${ENV_VAR}%"
+  ClearErrors
+  Delete "$INSTDIR\windows-ime\${PLATFORM_DIR}\OpenLessIme.dll"
+  ${If} ${Errors}
+    DetailPrint "OpenLessIme.dll (${PLATFORM_DIR}) is in use; queuing replacement at next reboot"
+    Rename /REBOOTOK "$INSTDIR\windows-ime\${PLATFORM_DIR}\OpenLessIme.dll.new" "$INSTDIR\windows-ime\${PLATFORM_DIR}\OpenLessIme.dll"
+    SetRebootFlag true
+  ${Else}
+    Rename "$INSTDIR\windows-ime\${PLATFORM_DIR}\OpenLessIme.dll.new" "$INSTDIR\windows-ime\${PLATFORM_DIR}\OpenLessIme.dll"
+  ${EndIf}
+!macroend
 
-  SetOutPath "$INSTDIR\windows-ime\x86"
-  File /oname=OpenLessIme.dll "$%OPENLESS_IME_DLL_X86%"
+!macro NSIS_HOOK_PREINSTALL
+  ; Upgrade path: release the COM/TSF registration so new client processes won't
+  ; bind to the old DLL while we replace it. Fresh install: regsvr32 /u against
+  ; a missing DLL is harmless — the existing UNREGISTER macros log the exit code
+  ; and continue without aborting.
+  !insertmacro OPENLESS_IME_UNREGISTER_X86
+  !insertmacro OPENLESS_IME_UNREGISTER_X64
+
+  !insertmacro OPENLESS_IME_STAGE_AND_REPLACE "x64" "OPENLESS_IME_DLL_X64"
+  !insertmacro OPENLESS_IME_STAGE_AND_REPLACE "x86" "OPENLESS_IME_DLL_X86"
 
   SetOutPath "$INSTDIR"
 !macroend
