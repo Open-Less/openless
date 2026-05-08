@@ -30,8 +30,8 @@ jobs:
           - os: windows-2022
             label: Windows
             preflight: true
-            # 1.88 是当前锁文件依赖的最高 MSRV；避免 newest stable
-            # 生成的 test harness 在 Windows runner 上导入缺失 entrypoint。
+            # 1.88 是当前锁文件依赖的最高 MSRV；Windows 单测用这个版本
+            # 固定住编译器变量，便于定位 runner / API-set 兼容问题。
             rust: 1.88.0
           - os: ubuntu-latest
             label: Linux
@@ -110,14 +110,46 @@ jobs:
       - name: Run Rust backend unit tests (Windows)
         if: runner.os == 'Windows'
         run: |
-          # Foundry/WinML SDK 在 GitHub Windows Server runner 上会让 test
-          # harness 启动前因 native entrypoint 退出；产品默认构建仍通过
-          # cargo check 覆盖该链接形态，单测门禁用无 native Foundry 链接的
-          # 构建来真正执行 Windows 后端测试。
+          # Foundry/WinML SDK 以及 Rust 1.78+ 的 Windows test harness 在
+          # GitHub runner 上都可能让进程启动前因 native entrypoint 退出。
+          # 产品默认构建仍通过 cargo check 覆盖 Foundry 链接形态，单测门禁
+          # 用无 Foundry native 链接的构建来真正执行 Windows 后端测试。
           # 单测使用独立 target 目录，避免前面的默认特性 cargo check 产物
           # 影响无 Foundry native 链接的测试进程 DLL 搜索路径。
           $env:CARGO_TARGET_DIR = Join-Path (Get-Location) "src-tauri\target\windows-unit-tests"
-          cargo test --manifest-path src-tauri/Cargo.toml --lib --no-default-features --features custom-protocol
+          $testArgs = @(
+            "--manifest-path", "src-tauri/Cargo.toml",
+            "--lib",
+            "--no-default-features",
+            "--features", "custom-protocol"
+          )
+
+          # rustc 1.78+ 生成的 Windows 二进制会导入 WaitOnAddress 所在的
+          # api-ms-win-core-synch-l1-2-0.dll。GitHub runner 上该 API-set
+          # 解析偶发缺 entrypoint；先 no-run 产出测试 exe，再把 Windows Kits
+          # 官方 x64 Redist stub 放到测试 exe 目录，最后仍然执行 cargo test。
+          cargo test @testArgs --no-run
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+          $depsDir = Join-Path $env:CARGO_TARGET_DIR "debug\deps"
+          $windowsKitsRedist = Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\Redist"
+          $syncDll = $null
+          if (Test-Path $windowsKitsRedist) {
+            $syncDll = Get-ChildItem -Path $windowsKitsRedist -Recurse -Filter "api-ms-win-core-synch-l1-2-0.dll" -ErrorAction SilentlyContinue |
+              Where-Object { $_.FullName -match "\\x64\\" } |
+              Sort-Object FullName -Descending |
+              Select-Object -First 1
+          }
+          if ($syncDll) {
+            Write-Host "[ci] Copy Windows Kits API-set stub for Rust test harness: $($syncDll.FullName)"
+            Copy-Item -Path $syncDll.FullName -Destination $depsDir -Force
+          } else {
+            Write-Host "[ci] Windows Kits API-set stub not found; running tests without local stub"
+          }
+
+          cargo test @testArgs
           $testExit = $LASTEXITCODE
           if ($testExit -ne 0) {
             $testExe = Get-ChildItem -Path (Join-Path $env:CARGO_TARGET_DIR "debug\deps") -Filter "openless_lib-*.exe" |
