@@ -60,22 +60,26 @@ impl TextInserter {
         if text.is_empty() {
             return InsertStatus::CopiedFallback;
         }
-        // Don't actually inject Unicode keystrokes here. Per-codepoint
-        // KEYEVENTF_UNICODE SendInput on a Japanese host competes with the
-        // IME's composition state (ATOK / Microsoft IME), so hiragana ends up
-        // queued in the IME composition window while kanji / ascii get
-        // inserted ahead of it — the user sees text reordered with kanji
-        // pushed to the end. Route through the clipboard + Ctrl+V path
-        // instead.
+        // Per-codepoint KEYEVENTF_UNICODE SendInput on a Japanese host
+        // competes with the IME's composition state (ATOK / Microsoft IME),
+        // so hiragana ends up queued in the IME composition window while
+        // kanji / ascii get inserted ahead of it — the user sees text
+        // reordered with kanji pushed to the end.
         //
-        // Important: callers in coordinator.rs gate the non-TSF fallback on
-        // `== InsertStatus::Inserted`. `self.insert` returns `PasteSent` on
-        // Windows (we sent Ctrl+V but can't prove the target swallowed it),
-        // so if we returned that as-is the caller would treat it as failure
-        // and run the fallback path, double-pasting the text. Force
-        // `Inserted` here to suppress the redundant fallback.
-        let _ = self.insert(text, true);
-        InsertStatus::Inserted
+        // Fix: detach the foreground window's IME context for the duration
+        // of the synthetic keystrokes, then restore it. The IME never sees
+        // the synthesized input so it cannot re-order it, and the user's
+        // IME state (ATOK conversion mode etc) is left intact.
+        match windows_unicode::send_text_with_ime_detached(text) {
+            Ok(()) => InsertStatus::Inserted,
+            Err(err) => {
+                log::warn!(
+                    "[insertion] Unicode SendInput (IME-detached) failed: {err}; \
+                     falling back to clipboard paste"
+                );
+                self.insert(text, true)
+            }
+        }
     }
 
     /// Insert `text` at the current cursor position.
@@ -303,8 +307,8 @@ fn simulate_paste() -> Result<(), String> {
     // Note: Ctrl+V as a *keyboard accelerator* does NOT compete with IME
     // composition state — the IME treats it as a shortcut, not as text input.
     // The IME-vs-text-injection bug specifically affects KEYEVENTF_UNICODE
-    // SendInput in `insert_via_unicode_keystrokes`, which we route through
-    // the clipboard path instead. So this Ctrl+V path is safe to keep.
+    // SendInput in `insert_via_unicode_keystrokes`, which now detaches the
+    // foreground window's IME context for the duration of the keystrokes.
     use enigo::{Direction, Enigo, Key, Keyboard, Settings};
     let mut enigo = Enigo::new(&Settings::default()).map_err(|e| e.to_string())?;
     let modifier = Key::Control;
@@ -333,17 +337,60 @@ fn insertion_success_status() -> InsertStatus {
 
 #[cfg(target_os = "windows")]
 mod windows_unicode {
+    use windows::Win32::UI::Input::Ime::{ImmAssociateContext, ImmGetContext, ImmReleaseContext};
     use windows::Win32::UI::Input::KeyboardAndMouse::{
         SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP,
         KEYEVENTF_UNICODE, VIRTUAL_KEY,
     };
+    use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
 
+    #[allow(dead_code)]
     pub fn send_text(text: &str) -> Result<(), String> {
         for unit in text.encode_utf16() {
             send_utf16_unit(unit, false)?;
             send_utf16_unit(unit, true)?;
         }
         Ok(())
+    }
+
+    /// Send `text` as a stream of `KEYEVENTF_UNICODE` keystrokes, with the
+    /// foreground window's IME temporarily detached so the active IME
+    /// (ATOK / Microsoft IME / 等) cannot intercept and re-order the input.
+    ///
+    /// Restoration is best-effort: if `ImmAssociateContext(hwnd, original)`
+    /// fails we still release the IMC handle and surface a warning. The
+    /// keystrokes themselves having gone through is the property the caller
+    /// cares about.
+    pub fn send_text_with_ime_detached(text: &str) -> Result<(), String> {
+        let hwnd = unsafe { GetForegroundWindow() };
+        if hwnd.0.is_null() {
+            // No foreground window we can touch; just send the keystrokes.
+            return send_text(text);
+        }
+
+        let original_imc = unsafe { ImmGetContext(hwnd) };
+        // ImmGetContext can return NULL on windows that never had an IME
+        // context (e.g. games, some elevated processes). In that case there
+        // is nothing to detach and nothing to restore.
+        let detached = !original_imc.0.is_null();
+
+        if detached {
+            // Detach: associate a NULL HIMC so the IME stops receiving input
+            // for this window during our SendInput burst.
+            let _ = unsafe { ImmAssociateContext(hwnd, windows::Win32::UI::Input::Ime::HIMC(std::ptr::null_mut())) };
+        }
+
+        let result = send_text(text);
+
+        if detached {
+            // Re-associate the original IMC. If this fails we log but don't
+            // override the send_text result — the user's input did go in.
+            let _ = unsafe { ImmAssociateContext(hwnd, original_imc) };
+            // Always release the handle we got from ImmGetContext.
+            let _ = unsafe { ImmReleaseContext(hwnd, original_imc) };
+        }
+
+        result
     }
 
     fn send_utf16_unit(unit: u16, key_up: bool) -> Result<(), String> {
