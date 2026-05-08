@@ -11,14 +11,6 @@ import { AboutUpdateControl, Settings as SettingsContent, Toggle, type SettingsS
 import { Row } from './ui/Row';
 import { readFontScale, setFontScale, type FontScaleId } from '../lib/fontScale';
 import {
-  type FontFamilyId,
-  readFontFamily,
-  readFontFamilyCustom,
-  setFontFamily,
-  querySystemFonts,
-} from '../lib/fontFamily';
-import { readQuietCompletion, setQuietCompletion } from '../lib/quietMode';
-import {
   exportErrorLog,
   fetchLatestBetaRelease,
   getUpdateChannel,
@@ -230,17 +222,6 @@ function PersonalizeSection() {
     ['large', t('modal.personalize.fontLarge')],
   ];
 
-  // UI フォント（PolishMode の出力スタイルではなく、アプリ内 UI のフォントファミリ）。
-  // localStorage キーは fontFamily.ts 側で管理（`ol-font-family` / `ol-font-family-custom`）。
-  const [fontFamilyId, setFontFamilyIdState] = useState<FontFamilyId>(() => readFontFamily());
-  const [fontFamilyCustom, setFontFamilyCustomState] = useState<string>(() => readFontFamilyCustom());
-  const [systemFonts, setSystemFonts] = useState<string[]>([]);
-  const [systemFontsLoading, setSystemFontsLoading] = useState(false);
-  const [systemFontsError, setSystemFontsError] = useState<string | null>(null);
-
-  // サイレントモード — Capsule のテキストオーバーレイ抑制。`ol-quiet-completion` をそのまま使う。
-  const [quietMode, setQuietModeState] = useState<boolean>(() => readQuietCompletion());
-
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       <Row label={t('modal.personalize.language')}>
@@ -275,136 +256,6 @@ function PersonalizeSection() {
             );
           })}
         </div>
-      </Row>
-      <Row label={t('modal.personalize.fontFamilyLabel')} desc={t('modal.personalize.fontFamilyDesc')}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, width: '100%' }}>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-            <select
-              value={fontFamilyId}
-              onChange={e => {
-                const v = e.target.value;
-                if (v.startsWith('sys:')) {
-                  const name = v.slice(4);
-                  setFontFamilyIdState('custom');
-                  setFontFamilyCustomState(name);
-                  setFontFamily('custom', name);
-                  return;
-                }
-                const id = v as FontFamilyId;
-                setFontFamilyIdState(id);
-                setFontFamily(id, fontFamilyCustom);
-              }}
-              style={{
-                height: 32, padding: '0 10px',
-                border: '0.5px solid var(--ol-line-strong)',
-                borderRadius: 8, fontSize: 12.5,
-                fontFamily: 'inherit', outline: 'none',
-                background: 'var(--ol-surface-2)',
-                minWidth: 220, cursor: 'default',
-              }}
-            >
-              <option value="auto">{t('modal.personalize.fontFamilyAuto')}</option>
-              <option value="notoSansJp">Noto Sans JP（源ノ角ゴシック JP）</option>
-              <option value="yuGothic">游ゴシック</option>
-              <option value="meiryo">メイリオ</option>
-              <option value="hiragino">ヒラギノ角ゴ（macOS）</option>
-              <option value="custom">{t('modal.personalize.fontFamilyCustomLabel')}</option>
-              {systemFonts.length > 0 && (
-                <optgroup label={t('modal.personalize.fontInstalledLabel', { count: systemFonts.length })}>
-                  {systemFonts.map(name => (
-                    <option key={name} value={`sys:${name}`}>
-                      {name}
-                    </option>
-                  ))}
-                </optgroup>
-              )}
-            </select>
-            <button
-              onClick={async () => {
-                setSystemFontsLoading(true);
-                setSystemFontsError(null);
-                const fonts = await querySystemFonts();
-                setSystemFontsLoading(false);
-                if (fonts.length === 0) {
-                  setSystemFontsError(t('modal.personalize.fontLoadError'));
-                } else {
-                  setSystemFonts(fonts);
-                }
-              }}
-              disabled={systemFontsLoading}
-              style={btnGhost}
-            >
-              {systemFontsLoading
-                ? t('modal.personalize.fontLoading')
-                : systemFonts.length > 0
-                ? t('modal.personalize.fontReload', { count: systemFonts.length })
-                : t('modal.personalize.fontLoadAll')}
-            </button>
-          </div>
-          {fontFamilyId === 'custom' && (
-            <input
-              type="text"
-              value={fontFamilyCustom}
-              onChange={e => {
-                const name = e.target.value;
-                setFontFamilyCustomState(name);
-                setFontFamily('custom', name);
-              }}
-              placeholder={t('modal.personalize.fontFamilyCustomPlaceholder')}
-              style={{
-                padding: '6px 10px',
-                borderRadius: 8,
-                border: '0.5px solid var(--ol-line-strong)',
-                background: 'var(--ol-surface)',
-                color: 'var(--ol-ink)',
-                fontFamily: 'inherit',
-                fontSize: 12.5,
-                width: '100%',
-                maxWidth: 360,
-              }}
-            />
-          )}
-          {systemFontsError && (
-            <div role="alert" style={{ fontSize: 11, color: 'var(--ol-err)', lineHeight: 1.5 }}>
-              {systemFontsError}
-            </div>
-          )}
-        </div>
-      </Row>
-      <Row label={t('modal.personalize.quietLabel')} desc={t('modal.personalize.quietDesc')}>
-        <button
-          onClick={() => {
-            const next = !quietMode;
-            setQuietModeState(next);
-            setQuietCompletion(next);
-          }}
-          aria-label={t('modal.personalize.quietAria')}
-          style={{
-            position: 'relative',
-            flexShrink: 0,
-            width: 36,
-            height: 20,
-            borderRadius: 999,
-            border: 0,
-            background: quietMode ? 'var(--ol-blue)' : 'rgba(0,0,0,0.15)',
-            cursor: 'default',
-            transition: 'background 0.16s var(--ol-motion-quick)',
-          }}
-        >
-          <span
-            style={{
-              position: 'absolute',
-              top: 2,
-              left: quietMode ? 18 : 2,
-              width: 16,
-              height: 16,
-              borderRadius: 999,
-              background: '#fff',
-              boxShadow: '0 1px 2px rgba(0,0,0,.2)',
-              transition: 'left .16s var(--ol-motion-spring)',
-            }}
-          />
-        </button>
       </Row>
       <Row label={t('modal.personalize.blur')} desc={t('modal.personalize.blurDesc')}>
         <div style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>

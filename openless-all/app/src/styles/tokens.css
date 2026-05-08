@@ -1,5 +1,7 @@
 /* OpenLess design tokens — black + white + electric blue accent, glassy */
 
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
 :root {
   /* Palette — neutrals */
   --ol-white: #ffffff;
@@ -49,12 +51,8 @@
   --ol-r-2xl: 22px;
   --ol-r-pill: 999px;
 
-  /* Typography
-     ja: prefer Genshin Gothic (bundled) and Windows/Mac native Japanese fonts
-     before falling back to Chinese fonts; this prevents Japanese text from
-     being rendered with Chinese glyphs (e.g. "直" "骨" "户" shape variants)
-     on Windows when Microsoft YaHei would otherwise be selected. */
-  --ol-font-sans: 'Inter', 'Noto Sans JP', 'Genshin Gothic', 'Yu Gothic UI', 'Hiragino Sans', 'Meiryo', 'PingFang SC', 'Microsoft YaHei', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  /* Typography */
+  --ol-font-sans: 'Inter', 'PingFang SC', 'Microsoft YaHei', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
   --ol-font-mono: 'JetBrains Mono', 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
 
   /* Status colors (sparse use only) */
@@ -69,10 +67,7 @@
 
 body {
   margin: 0;
-  /* `--ol-font-sans-active` is set by src/lib/fontFamily.ts when the user
-     picks a non-default font in Style settings. Falls back to the default
-     cascade when unset. */
-  font-family: var(--ol-font-sans-active, var(--ol-font-sans));
+  font-family: var(--ol-font-sans);
   color: var(--ol-ink);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
