@@ -845,6 +845,16 @@ impl Coordinator {
         let working_languages = prefs.working_languages;
         let chinese_script_preference = prefs.chinese_script_preference;
         let output_language_preference = prefs.output_language_preference;
+        // Custom mode のときだけ custom_modes から prompt を引いてくる。
+        // 既存4 mode ではハードコード prompt（system_prompt 側でハンドリング）。
+        let prompt_override_owned: Option<String> = match &mode {
+            PolishMode::Custom(id) => prefs
+                .custom_modes
+                .iter()
+                .find(|m| m.id == *id)
+                .map(|m| m.prompt.clone()),
+            _ => None,
+        };
         // repolish 是历史记录里手动重新润色，不再绑定原 session 的前台 app；
         // 当下用户调起的 app 才是相关上下文（如果可拿）。
         let front_app = capture_frontmost_app();
@@ -859,6 +869,7 @@ impl Coordinator {
             output_language_preference,
             front_app.as_deref(),
             &[],
+            prompt_override_owned.as_deref(),
         )
         .await
         .map_err(|e| e.to_string())
@@ -1346,16 +1357,9 @@ fn handle_action_hotkey_pressed(inner: &Arc<Inner>, kind: ActionHotkeyKind) {
 
 fn switch_to_previous_style(inner: &Arc<Inner>) {
     let mut prefs = inner.prefs.get();
-    let order = [
-        PolishMode::Raw,
-        PolishMode::Light,
-        PolishMode::Structured,
-        PolishMode::Formal,
-    ];
-    let enabled: Vec<PolishMode> = order
-        .into_iter()
-        .filter(|mode| prefs.enabled_modes.contains(mode))
-        .collect();
+    // 既存4 mode + Custom mode を含む、enabled_modes の順番をそのまま使う。
+    // Custom mode は `custom_modes` の登録順に enabled_modes へ並ぶ前提。
+    let enabled: Vec<PolishMode> = prefs.enabled_modes.clone();
     if enabled.len() <= 1 {
         log::info!("[coord] switch style hotkey ignored: enabled style count <= 1");
         return;
@@ -1369,14 +1373,14 @@ fn switch_to_previous_style(inner: &Arc<Inner>) {
     } else {
         current_index - 1
     };
-    prefs.default_mode = enabled[next_index];
+    prefs.default_mode = enabled[next_index].clone();
+    let next_label = prefs
+        .default_mode
+        .display_name_with_customs(&prefs.custom_modes);
     if let Err(e) = inner.prefs.set(prefs.clone()) {
         log::warn!("[coord] switch style hotkey 保存失败: {e}");
     } else {
-        log::info!(
-            "[coord] switch style hotkey changed default mode to {}",
-            prefs.default_mode.display_name()
-        );
+        log::info!("[coord] switch style hotkey changed default mode to {next_label}");
     }
 }
 
@@ -2701,12 +2705,27 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     emit_capsule(inner, CapsuleState::Polishing, 0.0, elapsed, None, None);
 
     let prefs = inner.prefs.get();
-    let mode = prefs.default_mode;
     let hotword_strs = enabled_phrases(inner);
     let working_languages = prefs.working_languages.clone();
     let chinese_script_preference = prefs.chinese_script_preference;
     let output_language_preference = prefs.output_language_preference;
     let front_app = inner.state.lock().front_app.clone();
+    // アプリ別自動 mode 切替：app_mode_overrides を順次評価して最初にマッチした mode を採用。
+    // どのルールにもマッチしないなら default_mode（既存挙動）。
+    let mode = match crate::types::pick_mode_for_app(
+        front_app.as_deref(),
+        &prefs.app_mode_overrides,
+    ) {
+        Some(m) => {
+            log::info!(
+                "[coord] app override matched: front_app={:?} → mode={}",
+                front_app,
+                m.as_serde_string()
+            );
+            m
+        }
+        None => prefs.default_mode.clone(),
+    };
     let translation_target = prefs.translation_target_language.trim().to_string();
     let translation_active =
         inner.translation_modifier_seen.load(Ordering::SeqCst) && !translation_target.is_empty();
@@ -2754,15 +2773,26 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
         )
         .await
     } else {
+        // Custom mode のときだけ custom_modes から prompt 本文を引いてくる。
+        // 既存4 mode ではハードコード prompt を使うため None を渡す。
+        let prompt_override_owned: Option<String> = match &mode {
+            PolishMode::Custom(id) => prefs
+                .custom_modes
+                .iter()
+                .find(|m| m.id == *id)
+                .map(|m| m.prompt.clone()),
+            _ => None,
+        };
         polish_or_passthrough(
             &raw,
-            mode,
+            mode.clone(),
             &hotword_strs,
             &working_languages,
             chinese_script_preference,
             output_language_preference,
             front_app.as_deref(),
             &prior_turns,
+            prompt_override_owned.as_deref(),
         )
         .await
     };
@@ -3355,6 +3385,7 @@ fn ensure_qa_volcengine_credentials() -> Result<(), String> {
 
 /// 润色文本；失败时返回原文 + 失败原因，调用方据此弹错误胶囊 + 写历史 error_code。
 /// 之前固定返回 String，调用方拿不到失败信号 → 用户感知"为什么风格设置没生效"。issue #57。
+#[allow(clippy::too_many_arguments)]
 async fn polish_or_passthrough(
     raw: &RawTranscript,
     mode: PolishMode,
@@ -3364,6 +3395,7 @@ async fn polish_or_passthrough(
     output_language_preference: OutputLanguagePreference,
     front_app: Option<&str>,
     prior_turns: &[(String, String)],
+    prompt_override: Option<&str>,
 ) -> (String, Option<String>) {
     if mode == PolishMode::Raw {
         return (raw.text.clone(), None);
@@ -3377,6 +3409,7 @@ async fn polish_or_passthrough(
         output_language_preference,
         front_app,
         prior_turns,
+        prompt_override,
     )
     .await
     {
@@ -3389,6 +3422,7 @@ async fn polish_or_passthrough(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn polish_text(
     raw: &str,
     mode: PolishMode,
@@ -3398,6 +3432,7 @@ async fn polish_text(
     output_language_preference: OutputLanguagePreference,
     front_app: Option<&str>,
     prior_turns: &[(String, String)],
+    prompt_override: Option<&str>,
 ) -> anyhow::Result<String> {
     let api_key = CredentialsVault::get(CredentialAccount::ArkApiKey)?.unwrap_or_default();
     let model = CredentialsVault::get(CredentialAccount::ArkModelId)?
@@ -3421,6 +3456,7 @@ async fn polish_text(
             output_language_preference,
             front_app,
             prior_turns,
+            prompt_override,
         )
         .await?)
 }

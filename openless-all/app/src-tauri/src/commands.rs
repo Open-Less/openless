@@ -19,9 +19,10 @@ use crate::persistence::{CredentialAccount, CredentialsSnapshot, CredentialsVaul
 use crate::polish::{LLMError, OpenAICompatibleConfig, OpenAICompatibleLLMProvider};
 use crate::recorder::{AudioConsumer, Recorder};
 use crate::types::{
-    ChineseScriptPreference, ComboBinding, CredentialsStatus, DictationSession, DictionaryEntry,
-    HotkeyCapability, HotkeyStatus, OutputLanguagePreference, PolishMode, ShortcutBinding,
-    UpdateChannel, UserPreferences, VocabPresetStore, WindowsImeStatus,
+    AppModeOverride, ChineseScriptPreference, ComboBinding, CredentialsStatus, CustomMode,
+    DictationSession, DictionaryEntry, HotkeyCapability, HotkeyStatus, OutputLanguagePreference,
+    PolishMode, ShortcutBinding, UpdateChannel, UserPreferences, VocabPresetStore,
+    WindowsImeStatus,
 };
 
 type CoordinatorState<'a> = State<'a, Arc<Coordinator>>;
@@ -590,6 +591,7 @@ async fn validate_llm_provider() -> Result<(), String> {
             OutputLanguagePreference::Auto,
             None,
             &[],
+            None,
         )
         .await
         .map(|_| ())
@@ -926,6 +928,12 @@ pub fn set_default_polish_mode(
     mode: PolishMode,
 ) -> Result<(), String> {
     let mut prefs = coord.prefs().get();
+    // Custom mode の場合は id が custom_modes に存在することを検証
+    if let PolishMode::Custom(id) = &mode {
+        if !prefs.custom_modes.iter().any(|m| m.id == *id) {
+            return Err(format!("custom mode id '{id}' not found"));
+        }
+    }
     prefs.default_mode = mode;
     coord.prefs().set(prefs).map_err(|e| e.to_string())
 }
@@ -937,7 +945,13 @@ pub fn set_style_enabled(
     enabled: bool,
 ) -> Result<(), String> {
     let mut prefs = coord.prefs().get();
+    // Custom mode を有効化する場合は id が custom_modes に存在することを検証
     if enabled {
+        if let PolishMode::Custom(id) = &mode {
+            if !prefs.custom_modes.iter().any(|m| m.id == *id) {
+                return Err(format!("custom mode id '{id}' not found"));
+            }
+        }
         if !prefs.enabled_modes.contains(&mode) {
             prefs.enabled_modes.push(mode);
         }
@@ -1150,6 +1164,155 @@ pub fn set_translation_hotkey(
         return Err(e);
     }
     Ok(())
+}
+
+/// 翻訳機能のグローバル on/off。OFF にすると hotkey が誤発火しても
+/// 翻訳パイプラインと UI overlay は起動しない。設定はそのまま保持される。
+#[tauri::command]
+pub fn set_translate_enabled(
+    coord: CoordinatorState<'_>,
+    app: AppHandle,
+    enabled: bool,
+) -> Result<(), String> {
+    let mut prefs = coord.prefs().get();
+    if prefs.translate_enabled == enabled {
+        return Ok(());
+    }
+    prefs.translate_enabled = enabled;
+    persist_settings(&*coord, prefs.clone())?;
+    let _ = app.emit("prefs:changed", &prefs);
+    Ok(())
+}
+
+// ─────────────────────────── ビルトインprompt表示 + カスタムスタイル CRUD ───────────────────────────
+//
+// `get_default_polish_prompt` はビルトイン4 mode（raw/light/structured/formal）の既定 prompt を返す。
+// Settings → Style ページで「prompt を見る」を押した時の参考表示用。Custom mode は対象外。
+//
+// CustomMode 系コマンド：
+// - `add_custom_mode(id, name, prompt)` — 末尾に追加。重複 id はエラー。
+// - `update_custom_mode(id, name, prompt)` — 既存 id の name/prompt を更新。
+// - `delete_custom_mode(id)` — 削除 + enabled_modes / default_mode のフォールバック。
+
+#[tauri::command]
+pub fn get_default_polish_prompt(mode: String) -> Result<String, String> {
+    let parsed: PolishMode = mode
+        .clone()
+        .try_into()
+        .map_err(|e: String| e)?;
+    if let PolishMode::Custom(_) = parsed {
+        return Err("get_default_polish_prompt is for builtin modes only".to_string());
+    }
+    Ok(crate::polish::prompts::system_prompt(parsed, None))
+}
+
+#[tauri::command]
+pub fn add_custom_mode(
+    coord: CoordinatorState<'_>,
+    app: AppHandle,
+    id: String,
+    name: String,
+    prompt: String,
+) -> Result<(), String> {
+    let id_trim = id.trim().to_string();
+    if id_trim.is_empty() {
+        return Err("custom mode id is empty".to_string());
+    }
+    if id_trim.contains(':') {
+        return Err("custom mode id cannot contain ':'".to_string());
+    }
+    let mut prefs = coord.prefs().get();
+    if prefs.custom_modes.iter().any(|m| m.id == id_trim) {
+        return Err(format!("custom mode id '{id_trim}' already exists"));
+    }
+    prefs.custom_modes.push(CustomMode {
+        id: id_trim,
+        name,
+        prompt,
+    });
+    persist_settings(&*coord, prefs.clone())?;
+    let _ = app.emit("prefs:changed", &prefs);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn update_custom_mode(
+    coord: CoordinatorState<'_>,
+    app: AppHandle,
+    id: String,
+    name: String,
+    prompt: String,
+) -> Result<(), String> {
+    let mut prefs = coord.prefs().get();
+    let entry = prefs
+        .custom_modes
+        .iter_mut()
+        .find(|m| m.id == id)
+        .ok_or_else(|| format!("custom mode id '{id}' not found"))?;
+    entry.name = name;
+    entry.prompt = prompt;
+    persist_settings(&*coord, prefs.clone())?;
+    let _ = app.emit("prefs:changed", &prefs);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn delete_custom_mode(
+    coord: CoordinatorState<'_>,
+    app: AppHandle,
+    id: String,
+) -> Result<(), String> {
+    let mut prefs = coord.prefs().get();
+    let before = prefs.custom_modes.len();
+    prefs.custom_modes.retain(|m| m.id != id);
+    if prefs.custom_modes.len() == before {
+        return Err(format!("custom mode id '{id}' not found"));
+    }
+    // default_mode が消したカスタムmodeを参照していたら Light にフォールバック
+    if matches!(&prefs.default_mode, PolishMode::Custom(cur_id) if *cur_id == id) {
+        prefs.default_mode = PolishMode::Light;
+    }
+    // enabled_modes から該当 Custom を除去
+    prefs.enabled_modes.retain(|m| !matches!(m, PolishMode::Custom(cur_id) if *cur_id == id));
+    persist_settings(&*coord, prefs.clone())?;
+    let _ = app.emit("prefs:changed", &prefs);
+    Ok(())
+}
+
+// ─────────────────────────── アプリ別自動 mode 切替 ───────────────────────────
+//
+// `set_app_mode_overrides(overrides)` — 一括置換。フロントは編集中の配列丸ごとを
+// 送ってくる前提。各 override の `mode` が `Custom(id)` なら `custom_modes` に
+// 該当 id が存在することを検証してから保存する（dangling 参照を弾く）。
+// 空 `app_pattern`（trim 後）はそのまま保存可（UI 側で「未入力行」を持ったまま
+// 別行を編集するケースを許容したいため）。`pick_mode_for_app` は空パターンを
+// スキップするため実害は無い。
+
+#[tauri::command]
+pub fn set_app_mode_overrides(
+    coord: CoordinatorState<'_>,
+    app: AppHandle,
+    overrides: Vec<AppModeOverride>,
+) -> Result<(), String> {
+    let mut prefs = coord.prefs().get();
+    for ov in &overrides {
+        if let PolishMode::Custom(id) = &ov.mode {
+            if !prefs.custom_modes.iter().any(|m| m.id == *id) {
+                return Err(format!(
+                    "app_mode_override references unknown custom mode id '{id}'"
+                ));
+            }
+        }
+    }
+    prefs.app_mode_overrides = overrides;
+    persist_settings(&*coord, prefs.clone())?;
+    let _ = app.emit("prefs:changed", &prefs);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn get_app_mode_overrides(coord: CoordinatorState<'_>) -> Vec<AppModeOverride> {
+    coord.prefs().get().app_mode_overrides
 }
 
 #[tauri::command]
