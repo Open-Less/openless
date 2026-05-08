@@ -271,7 +271,6 @@ pub fn run() {
             commands::validate_shortcut_binding,
             commands::set_dictation_hotkey,
             commands::set_translation_hotkey,
-            commands::set_translate_enabled,
             commands::get_default_polish_prompt,
             commands::add_custom_mode,
             commands::update_custom_mode,

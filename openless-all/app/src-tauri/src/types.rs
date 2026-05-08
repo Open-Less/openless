@@ -271,10 +271,6 @@ pub struct UserPreferences {
     /// 最初にマッチしたルールの mode を採用する。マッチしない場合は `default_mode`。
     #[serde(default)]
     pub app_mode_overrides: Vec<AppModeOverride>,
-    /// 翻訳機能を有効にするか。false の時は translation_hotkey を登録しない／
-    /// hotkey が誤発火しても overlay/pipeline を起動しない。Settings UI 側のマスタートグル。
-    #[serde(default = "default_true")]
-    pub translate_enabled: bool,
     /// 用户的工作语言（多选，原生名）。会作为前提注入 LLM polish/translate 的 system prompt 头部，
     /// 让模型知道该用户在哪些语言间工作。详见 issue #4。
     #[serde(default = "default_working_languages")]
@@ -419,8 +415,12 @@ struct UserPreferencesWire {
     custom_modes: Option<Vec<CustomMode>>,
     #[serde(default)]
     app_mode_overrides: Option<Vec<AppModeOverride>>,
-    #[serde(default)]
-    translate_enabled: Option<bool>,
+    /// Legacy field. Older preferences.json may carry `translateEnabled` from
+    /// before we collapsed the master switch into
+    /// `translation_target_language == ""`. We accept it on the wire so old
+    /// configs deserialize, but no longer read it.
+    #[serde(default, rename = "translateEnabled")]
+    _legacy_translate_enabled: Option<bool>,
     working_languages: Vec<String>,
     translation_target_language: String,
     chinese_script_preference: ChineseScriptPreference,
@@ -474,7 +474,7 @@ impl Default for UserPreferencesWire {
             allow_non_tsf_insertion_fallback: prefs.allow_non_tsf_insertion_fallback,
             custom_modes: Some(prefs.custom_modes),
             app_mode_overrides: Some(prefs.app_mode_overrides),
-            translate_enabled: Some(prefs.translate_enabled),
+            _legacy_translate_enabled: None,
             working_languages: prefs.working_languages,
             translation_target_language: prefs.translation_target_language,
             chinese_script_preference: prefs.chinese_script_preference,
@@ -526,7 +526,6 @@ impl<'de> Deserialize<'de> for UserPreferences {
             allow_non_tsf_insertion_fallback: wire.allow_non_tsf_insertion_fallback,
             custom_modes: wire.custom_modes.unwrap_or_default(),
             app_mode_overrides: wire.app_mode_overrides.unwrap_or_default(),
-            translate_enabled: wire.translate_enabled.unwrap_or(true),
             working_languages: wire.working_languages,
             translation_target_language: wire.translation_target_language,
             chinese_script_preference: wire.chinese_script_preference,
@@ -645,7 +644,6 @@ impl Default for UserPreferences {
             allow_non_tsf_insertion_fallback: true,
             custom_modes: Vec::new(),
             app_mode_overrides: Vec::new(),
-            translate_enabled: true,
             working_languages: default_working_languages(),
             translation_target_language: String::new(),
             chinese_script_preference: ChineseScriptPreference::Auto,

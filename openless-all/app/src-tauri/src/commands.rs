@@ -1166,24 +1166,6 @@ pub fn set_translation_hotkey(
     Ok(())
 }
 
-/// 翻訳機能のグローバル on/off。OFF にすると hotkey が誤発火しても
-/// 翻訳パイプラインと UI overlay は起動しない。設定はそのまま保持される。
-#[tauri::command]
-pub fn set_translate_enabled(
-    coord: CoordinatorState<'_>,
-    app: AppHandle,
-    enabled: bool,
-) -> Result<(), String> {
-    let mut prefs = coord.prefs().get();
-    if prefs.translate_enabled == enabled {
-        return Ok(());
-    }
-    prefs.translate_enabled = enabled;
-    persist_settings(&*coord, prefs.clone())?;
-    let _ = app.emit("prefs:changed", &prefs);
-    Ok(())
-}
-
 // ─────────────────────────── ビルトインprompt表示 + カスタムスタイル CRUD ───────────────────────────
 //
 // `get_default_polish_prompt` はビルトイン4 mode（raw/light/structured/formal）の既定 prompt を返す。

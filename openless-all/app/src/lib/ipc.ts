@@ -61,7 +61,6 @@ const mockSettings: UserPreferences = {
   appModeOverrides: [],
   workingLanguages: ['简体中文'],
   translationTargetLanguage: '',
-  translateEnabled: true,
   qaHotkey: defaultQaShortcut(),
   chineseScriptPreference: 'auto',
   outputLanguagePreference: 'auto',
@@ -420,10 +419,6 @@ export function setDictationHotkey(binding: ShortcutBinding): Promise<void> {
 
 export function setTranslationHotkey(binding: ShortcutBinding): Promise<void> {
   return invokeOrMock('set_translation_hotkey', { binding }, () => undefined);
-}
-
-export function setTranslateEnabled(enabled: boolean): Promise<void> {
-  return invokeOrMock('set_translate_enabled', { enabled }, () => undefined);
 }
 
 export function setSwitchStyleHotkey(binding: ShortcutBinding): Promise<void> {

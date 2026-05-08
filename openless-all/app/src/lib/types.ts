@@ -169,10 +169,10 @@ export interface UserPreferences {
   appModeOverrides: AppModeOverride[];
   /** 用户的工作语言（多选，原生名）；作为前提注入 LLM polish/translate prompt 头部。 */
   workingLanguages: string[];
-  /** 翻译模式目标语言（单选，原生名）；空串 = 不启用 Shift 翻译。详见 issue #4。 */
+  /** 翻译模式目标语言（单选，原生名）；空串 = 不启用 Shift 翻译。
+   *  これがマスター ON/OFF：空文字列の時は翻訳機能全体がオフ扱い。
+   *  hotkey が誤発火しても翻訳パイプラインと UI overlay は起動しない。 */
   translationTargetLanguage: string;
-  /** 翻訳機能のグローバルなオン/オフ。OFF にすると hotkey が誤発火しても翻訳パイプラインと UI overlay は起動しない。 */
-  translateEnabled: boolean;
   /** 中文输出字形偏好：由界面语言（简/繁）自动同步，不单独暴露设置项。 */
   chineseScriptPreference: 'auto' | 'simplified' | 'traditional';
   /** 最终输出语言偏好：由界面语言自动同步，不单独暴露设置项。 */

@@ -37,7 +37,6 @@ import {
   setOpenAppHotkey,
   setQaHotkey,
   setSwitchStyleHotkey,
-  setTranslateEnabled,
   setTranslationHotkey,
   startMicrophoneLevelMonitor,
   stopMicrophoneLevelMonitor,
@@ -1795,10 +1794,37 @@ function ShortcutsSection() {
         desc={t('translation.enable.hint')}
       >
         <Toggle
-          on={prefs.translateEnabled}
+          on={prefs.translationTargetLanguage.trim() !== ''}
           onToggle={async (v: boolean) => {
-            await setTranslateEnabled(v);
-            await savePrefs({ ...prefs, translateEnabled: v });
+            // Enabled state is derived from `translationTargetLanguage`:
+            //   non-empty == enabled, empty == disabled.
+            // OFF clears the target, ON restores it to the last remembered
+            // value if we have one (kept in localStorage), otherwise to the
+            // first working language so the toggle never lands in an
+            // ambiguous "on but no target" state.
+            const STORAGE_KEY = 'openless.lastTranslationTarget';
+            if (v) {
+              const remembered =
+                (typeof window !== 'undefined'
+                  ? window.localStorage?.getItem(STORAGE_KEY)
+                  : null) ?? '';
+              const next =
+                remembered.trim() ||
+                prefs.workingLanguages[0] ||
+                'English';
+              await savePrefs({ ...prefs, translationTargetLanguage: next });
+            } else {
+              if (
+                typeof window !== 'undefined' &&
+                prefs.translationTargetLanguage.trim()
+              ) {
+                window.localStorage?.setItem(
+                  STORAGE_KEY,
+                  prefs.translationTargetLanguage,
+                );
+              }
+              await savePrefs({ ...prefs, translationTargetLanguage: '' });
+            }
           }}
         />
       </SettingRow>

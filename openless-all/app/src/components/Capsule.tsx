@@ -293,16 +293,17 @@ export function Capsule() {
   const [insertedChars, setInsertedChars] = useState<number>(0);
   const [message, setMessage] = useState<string | undefined>();
   const [translation, setTranslation] = useState<boolean>(false);
-  // 翻訳機能のグローバル on/off。起動時 1 回 getSettings() で読んで以降はフロント保持。
+  // 翻訳機能のマスター ON/OFF は `translation_target_language` が空かどうかで決まる。
+  // 起動時 1 回 getSettings() で読んで以降はフロント保持。
   // 設定変更直後の即反映は次回起動でよい（実用上 OK）。
-  const [translateEnabled, setTranslateEnabled] = useState<boolean>(true);
+  const [translationEnabled, setTranslationEnabled] = useState<boolean>(true);
   // Windows 端 host 在翻译模式从 84 长到 118；macOS / Linux 上 capsuleLayout 已固定 42 忽略此参数。
-  const hostMetrics = getCapsuleHostMetrics(os, translation && translateEnabled);
+  const hostMetrics = getCapsuleHostMetrics(os, translation && translationEnabled);
   // Quiet mode: Capsule()'s own translation-mode overlay also needs to be
   // suppressed when the user has turned the quiet toggle on. Pill reads
   // this independently for its own labels.
   const quiet = readQuietCompletion();
-  const showTranslationOverlay = translation && !quiet && translateEnabled;
+  const showTranslationOverlay = translation && !quiet && translationEnabled;
 
   useEffect(() => {
     if (!isTauri) return;
@@ -310,7 +311,11 @@ export function Capsule() {
     (async () => {
       try {
         const prefs = await getSettings();
-        if (!cancelled) setTranslateEnabled(prefs.translateEnabled !== false);
+        if (!cancelled)
+          setTranslationEnabled(
+            typeof prefs.translationTargetLanguage === 'string' &&
+              prefs.translationTargetLanguage.trim().length > 0
+          );
       } catch {
         /* 取得失敗時はデフォルト true のまま */
       }

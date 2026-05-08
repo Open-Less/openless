@@ -624,6 +624,18 @@ impl Coordinator {
 
     pub fn try_update_translation_hotkey_binding(&self) -> Result<(), String> {
         let prefs = self.inner.prefs.get();
+        // Translation feature is gated by `translation_target_language` being
+        // non-empty. When it's empty we treat translation as fully off and
+        // tear down any registered hotkey, so a stray modifier press cannot
+        // flash the translation overlay or run a translate pipeline.
+        if prefs.translation_target_language.trim().is_empty() {
+            take_translation_hotkey_on_main_thread(&self.inner);
+            self.update_modifier_shortcut_bindings();
+            log::info!(
+                "[coord] translation_target_language is empty; translation hotkey not registered"
+            );
+            return Ok(());
+        }
         if is_builtin_translation_shift(&prefs.translation_hotkey)
             || crate::shortcut_binding::legacy_modifier_trigger(&prefs.translation_hotkey).is_some()
         {
@@ -1157,7 +1169,18 @@ fn combo_hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<ComboHotkeyEve
 fn translation_hotkey_supervisor_loop(inner: Arc<Inner>) {
     let mut attempts: u32 = 0;
     loop {
-        let binding = inner.prefs.get().translation_hotkey;
+        let prefs_snapshot = inner.prefs.get();
+        let binding = prefs_snapshot.translation_hotkey.clone();
+        // If the user has not picked a target language, treat translation as
+        // off and don't keep a hotkey registered — even if a binding is
+        // configured. Without this, a stray combo press flashes the overlay
+        // and starts an empty-target translate that the pipeline then
+        // immediately drops.
+        if prefs_snapshot.translation_target_language.trim().is_empty() {
+            take_translation_hotkey_on_main_thread(&inner);
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            continue;
+        }
         if is_builtin_translation_shift(&binding)
             || crate::shortcut_binding::legacy_modifier_trigger(&binding).is_some()
         {

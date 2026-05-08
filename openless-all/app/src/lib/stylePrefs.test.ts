@@ -26,7 +26,6 @@ const previousPrefs: UserPreferences = {
   appModeOverrides: [],
   workingLanguages: ['简体中文'],
   translationTargetLanguage: '',
-  translateEnabled: true,
   chineseScriptPreference: 'auto',
   outputLanguagePreference: 'auto',
   qaHotkey: null,
