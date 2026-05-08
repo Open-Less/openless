@@ -118,93 +118,40 @@ jobs:
           # rustc 1.78+ 生成的 Windows 二进制会导入 WaitOnAddress 所在的
           # api-ms-win-core-synch-l1-2-0.dll。GitHub runner 上该 API-set
           # 解析缺 entrypoint 时，测试进程会在任何单测运行前退出。这里先
-          # no-run 产出测试 exe，再放置一个只转发 WaitOnAddress/WakeByAddress*
-          # 到 KernelBase/kernel32 的测试目录 shim，最后仍然执行 cargo test。
+          # no-run 产出测试 exe，再把该 import 指向 Server 2022 自带且导出
+          # WaitOnAddress 的 KernelBase.dll，最后仍然执行 cargo test。
           cargo test @testArgs --no-run
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
           }
 
           $depsDir = Join-Path $env:CARGO_TARGET_DIR "debug\deps"
-          $shimSource = Join-Path $env:RUNNER_TEMP "openless-waitonaddress-shim.c"
-          @'
-          #define WIN32_LEAN_AND_MEAN
-          #define WaitOnAddress OpenLessShimHeaderWaitOnAddress
-          #define WakeByAddressSingle OpenLessShimHeaderWakeByAddressSingle
-          #define WakeByAddressAll OpenLessShimHeaderWakeByAddressAll
-          #include <windows.h>
-          #undef WaitOnAddress
-          #undef WakeByAddressSingle
-          #undef WakeByAddressAll
-
-          typedef BOOL (WINAPI *WaitOnAddressFn)(volatile VOID *, PVOID, SIZE_T, DWORD);
-          typedef VOID (WINAPI *WakeByAddressFn)(PVOID);
-
-          static FARPROC resolve_export(const char *name) {
-              const wchar_t *modules[] = { L"KernelBase.dll", L"kernel32.dll" };
-              for (int i = 0; i < 2; ++i) {
-                  HMODULE module = GetModuleHandleW(modules[i]);
-                  if (!module) {
-                      module = LoadLibraryW(modules[i]);
-                  }
-                  if (module) {
-                      FARPROC proc = GetProcAddress(module, name);
-                      if (proc) {
-                          return proc;
-                      }
-                  }
-              }
-              return NULL;
-          }
-
-          __declspec(dllexport) BOOL WINAPI WaitOnAddress(
-              volatile VOID *Address,
-              PVOID CompareAddress,
-              SIZE_T AddressSize,
-              DWORD dwMilliseconds
-          ) {
-              WaitOnAddressFn fn = (WaitOnAddressFn)resolve_export("WaitOnAddress");
-              if (!fn) {
-                  SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-                  return FALSE;
-              }
-              return fn(Address, CompareAddress, AddressSize, dwMilliseconds);
-          }
-
-          __declspec(dllexport) VOID WINAPI WakeByAddressSingle(PVOID Address) {
-              WakeByAddressFn fn = (WakeByAddressFn)resolve_export("WakeByAddressSingle");
-              if (fn) {
-                  fn(Address);
-              }
-          }
-
-          __declspec(dllexport) VOID WINAPI WakeByAddressAll(PVOID Address) {
-              WakeByAddressFn fn = (WakeByAddressFn)resolve_export("WakeByAddressAll");
-              if (fn) {
-                  fn(Address);
-              }
-          }
-          '@ | Set-Content -Path $shimSource -Encoding ASCII
-
-          $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
-          $vsDevCmd = $null
-          if (Test-Path $vswhere) {
-            $installPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2>$null
-            if (-not [string]::IsNullOrWhiteSpace($installPath)) {
-              $vsDevCmd = Join-Path $installPath "Common7\Tools\VsDevCmd.bat"
+          $needleText = "api-ms-win-core-synch-l1-2-0.dll" + [char]0
+          $replacementText = "kernelbase.dll" + [char]0
+          $encoding = [System.Text.Encoding]::GetEncoding("iso-8859-1")
+          $needle = $encoding.GetBytes($needleText)
+          $replacement = New-Object byte[] $needle.Length
+          $replacementBytes = $encoding.GetBytes($replacementText)
+          [Array]::Copy($replacementBytes, $replacement, $replacementBytes.Length)
+          $patchedAny = $false
+          Get-ChildItem -Path $depsDir -Filter "openless_lib-*.exe" | ForEach-Object {
+            $bytes = [System.IO.File]::ReadAllBytes($_.FullName)
+            $text = $encoding.GetString($bytes)
+            $offset = $text.IndexOf($needleText, [System.StringComparison]::Ordinal)
+            $patchedThis = $false
+            while ($offset -ge 0) {
+              [Array]::Copy($replacement, 0, $bytes, $offset, $replacement.Length)
+              $patchedThis = $true
+              $patchedAny = $true
+              $offset = $text.IndexOf($needleText, $offset + $needle.Length, [System.StringComparison]::Ordinal)
+            }
+            if ($patchedThis) {
+              [System.IO.File]::WriteAllBytes($_.FullName, $bytes)
+              Write-Host "[ci] Patched Windows Rust test import to KernelBase.dll: $($_.FullName)"
             }
           }
-          if (-not $vsDevCmd -or -not (Test-Path $vsDevCmd)) {
-            throw "VsDevCmd.bat not found; cannot build Windows Rust test API-set shim."
-          }
-
-          $shimDll = Join-Path $depsDir "api-ms-win-core-synch-l1-2-0.dll"
-          $shimBuild = "call `"$vsDevCmd`" -arch=x64 -host_arch=x64 >nul && cl /nologo /LD `"$shimSource`" /Fe:`"$shimDll`" /link /NOLOGO"
-          cmd.exe /d /s /c $shimBuild
-          if ($LASTEXITCODE -ne 0) {
-            exit $LASTEXITCODE
-          } else {
-            Write-Host "[ci] Built Windows Rust test API-set shim: $shimDll"
+          if (-not $patchedAny) {
+            throw "api-ms-win-core-synch-l1-2-0.dll import not found in Windows Rust test executable."
           }
 
           cargo test @testArgs
