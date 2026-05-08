@@ -60,13 +60,22 @@ impl TextInserter {
         if text.is_empty() {
             return InsertStatus::CopiedFallback;
         }
-        match windows_unicode::send_text(text) {
-            Ok(()) => InsertStatus::Inserted,
-            Err(err) => {
-                log::warn!("[insertion] Unicode SendInput failed: {err}");
-                InsertStatus::CopiedFallback
-            }
-        }
+        // Don't actually inject Unicode keystrokes here. Per-codepoint
+        // KEYEVENTF_UNICODE SendInput on a Japanese host competes with the
+        // IME's composition state (ATOK / Microsoft IME), so hiragana ends up
+        // queued in the IME composition window while kanji / ascii get
+        // inserted ahead of it — the user sees text reordered with kanji
+        // pushed to the end. Route through the clipboard + Ctrl+V path
+        // instead.
+        //
+        // Important: callers in coordinator.rs gate the non-TSF fallback on
+        // `== InsertStatus::Inserted`. `self.insert` returns `PasteSent` on
+        // Windows (we sent Ctrl+V but can't prove the target swallowed it),
+        // so if we returned that as-is the caller would treat it as failure
+        // and run the fallback path, double-pasting the text. Force
+        // `Inserted` here to suppress the redundant fallback.
+        let _ = self.insert(text, true);
+        InsertStatus::Inserted
     }
 
     /// Insert `text` at the current cursor position.
@@ -290,6 +299,12 @@ fn simulate_paste() -> Result<(), String> {
 
 #[cfg(not(target_os = "macos"))]
 fn simulate_paste() -> Result<(), String> {
+    // Synthesize Ctrl+V (Cmd+V on macOS is handled separately above).
+    // Note: Ctrl+V as a *keyboard accelerator* does NOT compete with IME
+    // composition state — the IME treats it as a shortcut, not as text input.
+    // The IME-vs-text-injection bug specifically affects KEYEVENTF_UNICODE
+    // SendInput in `insert_via_unicode_keystrokes`, which we route through
+    // the clipboard path instead. So this Ctrl+V path is safe to keep.
     use enigo::{Direction, Enigo, Key, Keyboard, Settings};
     let mut enigo = Enigo::new(&Settings::default()).map_err(|e| e.to_string())?;
     let modifier = Key::Control;
