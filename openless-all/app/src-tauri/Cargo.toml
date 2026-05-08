@@ -78,7 +78,7 @@ objc2-app-kit = "0.2"
 libc = "0.2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-foundry-local-sdk = { version = "1.1.0", features = ["winml"] }
+foundry-local-sdk = { version = "1.1.0", features = ["winml"], optional = true }
 raw-window-handle = "0.6"
 windows = { version = "0.58", features = [
   "Win32_Foundation",
@@ -103,5 +103,6 @@ winreg = "0.52"
 window-vibrancy = "0.7"
 
 [features]
-default = ["custom-protocol"]
+default = ["custom-protocol", "foundry-local-runtime"]
 custom-protocol = ["tauri/custom-protocol"]
+foundry-local-runtime = ["dep:foundry-local-sdk"]

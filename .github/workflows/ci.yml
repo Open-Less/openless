@@ -23,7 +23,10 @@ jobs:
           - os: macos-latest
             label: macOS
             preflight: false
-          - os: windows-latest
+          # windows-latest 当前指向 Windows Server 2025；Rust lib test harness
+          # 在该镜像启动时会遇到 STATUS_ENTRYPOINT_NOT_FOUND。CI 先固定到
+          # Windows Server 2022，确保真正执行后端单测，而不是退回 --no-run。
+          - os: windows-2022
             label: Windows
             preflight: true
           - os: ubuntu-latest
@@ -95,12 +98,34 @@ jobs:
         if: runner.os != 'Windows'
         run: cargo test --manifest-path src-tauri/Cargo.toml --lib
 
-      - name: Compile Rust backend unit tests (Windows)
-        # Windows runner 能链接 lib test binary，但干净镜像缺少可选 native runtime
-        # DLL entrypoint 时，进程会在 test harness 启动前退出。这里保留 cfg/link
-        # 覆盖；共享单测在 macOS / Linux 上实际执行。
+      - name: Run Rust backend unit tests (Windows)
         if: runner.os == 'Windows'
-        run: cargo test --manifest-path src-tauri/Cargo.toml --lib --no-run
+        run: |
+          # Foundry/WinML SDK 在 GitHub Windows Server runner 上会让 test
+          # harness 启动前因 native entrypoint 退出；产品默认构建仍通过
+          # cargo check 覆盖该链接形态，单测门禁用无 native Foundry 链接的
+          # 构建来真正执行 Windows 后端测试。
+          cargo test --manifest-path src-tauri/Cargo.toml --lib --no-default-features --features custom-protocol
+          $testExit = $LASTEXITCODE
+          if ($testExit -ne 0) {
+            $testExe = Get-ChildItem -Path "src-tauri\target\debug\deps" -Filter "openless_lib-*.exe" |
+              Sort-Object LastWriteTime -Descending |
+              Select-Object -First 1
+            if ($testExe) {
+              Write-Host "[ci] failed test exe: $($testExe.FullName)"
+              $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+              if (Test-Path $vswhere) {
+                $dumpbin = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -find "VC\Tools\MSVC\**\bin\Hostx64\x64\dumpbin.exe" 2>$null | Select-Object -First 1
+                if ($dumpbin -and (Test-Path $dumpbin)) {
+                  Write-Host "[ci] dumpbin dependents"
+                  & $dumpbin /dependents $testExe.FullName
+                  Write-Host "[ci] dumpbin imports summary"
+                  & $dumpbin /imports $testExe.FullName | Select-String -Pattern "DLL Name|api-ms|VCRUNTIME|WebView2|Foundry|onnx|Mdd|WaitOnAddress|GetThreadDescription|LocalFree"
+                }
+              }
+            }
+            exit $testExit
+          }
 
       - name: Verify version sync across all 5 files
         # 两个平台都跑这个校验：Windows runner 自带 git-bash，跨 shell 表现一致。

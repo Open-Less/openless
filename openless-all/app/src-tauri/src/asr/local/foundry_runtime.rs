@@ -1,4 +1,4 @@
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", feature = "foundry-local-runtime"))]
 #[allow(dead_code)]
 mod imp {
     use std::path::{Path, PathBuf};
@@ -579,23 +579,27 @@ mod imp {
     }
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", feature = "foundry-local-runtime"))]
 pub use imp::FoundryLocalRuntime;
 
-#[cfg(not(target_os = "windows"))]
-pub struct FoundryLocalRuntime;
+#[cfg(any(not(target_os = "windows"), all(target_os = "windows", not(feature = "foundry-local-runtime"))))]
+pub struct FoundryLocalRuntime {
+    cancel_prepare: std::sync::atomic::AtomicBool,
+}
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(any(not(target_os = "windows"), all(target_os = "windows", not(feature = "foundry-local-runtime"))))]
 impl Default for FoundryLocalRuntime {
     fn default() -> Self {
         Self::new()
     }
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(any(not(target_os = "windows"), all(target_os = "windows", not(feature = "foundry-local-runtime"))))]
 impl FoundryLocalRuntime {
     pub fn new() -> Self {
-        Self
+        Self {
+            cancel_prepare: std::sync::atomic::AtomicBool::new(false),
+        }
     }
 
     pub async fn status_snapshot(
@@ -605,7 +609,7 @@ impl FoundryLocalRuntime {
     ) -> super::foundry::FoundryRuntimeStatus {
         let mut status = super::foundry::FoundryRuntimeStatus::unavailable(
             active_model.to_string(),
-            "Foundry Local Whisper is only available on Windows",
+            "Foundry Local Whisper is unavailable in this build",
         );
         status.runtime_source = super::foundry_native::normalize_runtime_source_str(runtime_source);
         status
@@ -616,7 +620,7 @@ impl FoundryLocalRuntime {
         alias: &str,
         _runtime_source: &str,
     ) -> anyhow::Result<String> {
-        anyhow::bail!("Foundry Local Whisper is only available on Windows: {alias}");
+        anyhow::bail!("Foundry Local Whisper is unavailable in this build: {alias}");
     }
 
     pub async fn ensure_loaded_with_progress<F>(
@@ -628,10 +632,19 @@ impl FoundryLocalRuntime {
     where
         F: Fn(super::foundry::FoundryPrepareProgressPayload) + Send + Sync + 'static,
     {
-        anyhow::bail!("Foundry Local Whisper is only available on Windows: {alias}");
+        anyhow::bail!("Foundry Local Whisper is unavailable in this build: {alias}");
     }
 
-    pub fn request_cancel_prepare(&self) {}
+    pub fn request_cancel_prepare(&self) {
+        self.cancel_prepare
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn cancel_prepare_requested_for_tests(&self) -> bool {
+        self.cancel_prepare
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
 
     pub async fn catalog_snapshot(
         &self,
@@ -647,7 +660,7 @@ impl FoundryLocalRuntime {
         _audio_path: &std::path::Path,
         _audio_timeout: std::time::Duration,
     ) -> anyhow::Result<String> {
-        anyhow::bail!("Foundry Local Whisper is only available on Windows: {alias}");
+        anyhow::bail!("Foundry Local Whisper is unavailable in this build: {alias}");
     }
 
     pub async fn release_now(&self) -> anyhow::Result<()> {
