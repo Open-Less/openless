@@ -23,15 +23,20 @@ jobs:
           - os: macos-latest
             label: macOS
             preflight: false
+            rust: stable
           # windows-latest 当前指向 Windows Server 2025；Rust lib test harness
           # 在该镜像启动时会遇到 STATUS_ENTRYPOINT_NOT_FOUND。CI 先固定到
           # Windows Server 2022，确保真正执行后端单测，而不是退回 --no-run。
           - os: windows-2022
             label: Windows
             preflight: true
+            # 1.88 是当前锁文件依赖的最高 MSRV；避免 newest stable
+            # 生成的 test harness 在 Windows runner 上导入缺失 entrypoint。
+            rust: 1.88.0
           - os: ubuntu-latest
             label: Linux
             preflight: false
+            rust: stable
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -50,6 +55,10 @@ jobs:
           cache-dependency-path: openless-all/app/package-lock.json
 
       - uses: dtolnay/rust-toolchain@stable
+        if: matrix.rust == 'stable'
+
+      - uses: dtolnay/rust-toolchain@1.88.0
+        if: matrix.rust == '1.88.0'
 
       - name: Install Linux check dependencies
         if: runner.os == 'Linux'
