@@ -94,8 +94,9 @@ impl OpenAICompatibleLLMProvider {
         output_language_preference: OutputLanguagePreference,
         front_app: Option<&str>,
         prior_turns: &[(String, String)],
+        prompt_override: Option<&str>,
     ) -> Result<String, LLMError> {
-        let mut system_prompt = compose_system_prompt(mode, hotwords);
+        let mut system_prompt = compose_system_prompt(mode, hotwords, prompt_override);
         if let Some(premise) = context_premise(
             working_languages,
             chinese_script_preference,
@@ -560,8 +561,12 @@ fn context_premise(
     Some(lines.join("\n"))
 }
 
-fn compose_system_prompt(mode: PolishMode, hotwords: &[String]) -> String {
-    let base = prompts::system_prompt(mode);
+fn compose_system_prompt(
+    mode: PolishMode,
+    hotwords: &[String],
+    override_text: Option<&str>,
+) -> String {
+    let base = prompts::system_prompt(mode, override_text);
     let cleaned: Vec<String> = hotwords
         .iter()
         .map(|h| h.trim().to_string())
@@ -812,7 +817,23 @@ pub mod prompts {
         禁止以\u{201C}根据你/您给的内容\u{201D}\u{201C}我整理如下\u{201D}\u{201C}以下是整理后的内容\u{201D}\u{201C}优化如下\u{201D}\u{201C}结构化整理如下\u{201D}等句式开头。\n\
         \u{4E0D}加解释、总结、客套话、代码围栏（\\`\\`\\`）或 markdown 元注释。";
 
-    pub fn system_prompt(mode: PolishMode) -> String {
+    /// `override_text` が `Some(s)` で `s` をトリムした結果が空でなければ、
+    /// そのままトリム済み文字列を返す（ROLE_BLOCK / 共通ルール / 出力規約の組み立てをスキップ）。
+    /// ユーザーが Settings → Style ページで上書きを保存した場合の経路。
+    /// `None` または空白のみ → 既存挙動（ハードコードの中国語 prompt）。
+    pub fn system_prompt(mode: PolishMode, override_text: Option<&str>) -> String {
+        if let Some(text) = override_text {
+            let trimmed = text.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
+            }
+        }
+        // Custom mode で override_text が空 or None だった場合は空 prompt を返す。
+        // 通常は呼び出し側（coordinator）で必ず override_text を渡すが、
+        // 万一 custom_modes から id が消えている場合のフォールバック。
+        if let PolishMode::Custom(_) = mode {
+            return String::new();
+        }
         let task_and_example = match mode {
             PolishMode::Raw => "# 任务（原文）\n\
                 仅做最小化整理：补全标点、必要分句。\n\
@@ -928,6 +949,8 @@ pub mod prompts {
                 # 示例\n\
                 原：那个老板我跟你说下今天的发布我们可能要推迟因为测试还没跑完\n\
                 出：今天的发布需要推迟，原因是测试尚未完成。",
+            // Custom は上の早期リターンで処理済み。ここは到達しない。
+            PolishMode::Custom(_) => return String::new(),
         };
 
         format!(
@@ -1173,7 +1196,7 @@ mod tests {
 
     #[test]
     fn structured_prompt_includes_dense_github_request_example() {
-        let prompt = prompts::system_prompt(PolishMode::Structured);
+        let prompt = prompts::system_prompt(PolishMode::Structured, None);
 
         // 任务段：必须教会模型保留口语引子、按主题归类、用 (a) 子项、自然尾巴
         assert!(prompt.contains("# 保留口语引子并润色成自然首行"));
@@ -1203,7 +1226,7 @@ mod tests {
         // 旧 prompt 让 LLM 判定为"已经完整不需要改"，原样 passthrough。
         // 新 prompt 必须明确：原文是否已有结构 ≠ 不用改的依据；
         // 事项 ≥ 3 条都要重新归类成双层格式。
-        let prompt = prompts::system_prompt(PolishMode::Structured);
+        let prompt = prompts::system_prompt(PolishMode::Structured, None);
 
         // 明确"已结构化 ≠ 不用改"的前提
         assert!(
@@ -1258,13 +1281,52 @@ mod tests {
 
     #[test]
     fn compose_system_prompt_prefers_correct_spelling_for_hotwords() {
-        let prompt =
-            compose_system_prompt(PolishMode::Light, &["GitHub".into(), "OpenLess".into()]);
+        let prompt = compose_system_prompt(
+            PolishMode::Light,
+            &["GitHub".into(), "OpenLess".into()],
+            None,
+        );
 
         assert!(prompt.contains("用户希望以下写法在输出中保持准确"));
         assert!(prompt.contains("同音 / 近形误识别时，优先按上述写法输出"));
         assert!(prompt.contains("- GitHub"));
         assert!(prompt.contains("- OpenLess"));
+    }
+
+    #[test]
+    fn system_prompt_override_replaces_default_text() {
+        // 上書きが指定されると、ROLE_BLOCK や COMMON_RULES の組み立てを
+        // 完全にスキップして上書き本文だけを返す（先頭末尾の空白は trim）。
+        let custom = "  カスタム指示：簡潔に整える。  ";
+        let prompt = prompts::system_prompt(PolishMode::Structured, Some(custom));
+        assert_eq!(prompt, "カスタム指示：簡潔に整える。");
+        // 既定 prompt の中身は混ざらない。
+        assert!(!prompt.contains("# 角色"));
+        assert!(!prompt.contains("根目录"));
+    }
+
+    #[test]
+    fn system_prompt_override_blank_falls_back_to_default() {
+        // 空白だけ／空文字 → 既定動作（None と同じ）。
+        let blank = prompts::system_prompt(PolishMode::Light, Some("   \n\t  "));
+        let none = prompts::system_prompt(PolishMode::Light, None);
+        assert_eq!(blank, none);
+    }
+
+    #[test]
+    fn compose_system_prompt_override_keeps_hotwords_appended() {
+        // 上書きされても hotwords ブロックは独立して追記される
+        // （ユーザー登録の専門用語誤認を引きずるのは、上書き有無に依存しない）。
+        let prompt = compose_system_prompt(
+            PolishMode::Light,
+            &["GitHub".into()],
+            Some("カスタム指示"),
+        );
+        assert!(prompt.starts_with("カスタム指示"));
+        assert!(prompt.contains("用户希望以下写法在输出中保持准确"));
+        assert!(prompt.contains("- GitHub"));
+        // 既定 prompt の本文は混ざらない。
+        assert!(!prompt.contains("# 角色"));
     }
 
     #[test]
@@ -1277,7 +1339,7 @@ mod tests {
             PolishMode::Structured,
             PolishMode::Formal,
         ] {
-            let prompt = prompts::system_prompt(mode);
+            let prompt = prompts::system_prompt(mode.clone(), None);
             assert!(
                 prompt.contains("5) 自动纠错"),
                 "{mode:?} prompt 缺少自动纠错规则"
@@ -1342,6 +1404,7 @@ mod tests {
                 OutputLanguagePreference::Auto,
                 None,
                 &[],
+                None,
             )
             .await
             .unwrap();
