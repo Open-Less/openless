@@ -105,14 +105,19 @@ jobs:
           # harness 启动前因 native entrypoint 退出；产品默认构建仍通过
           # cargo check 覆盖该链接形态，单测门禁用无 native Foundry 链接的
           # 构建来真正执行 Windows 后端测试。
+          # 单测使用独立 target 目录，避免前面的默认特性 cargo check 产物
+          # 影响无 Foundry native 链接的测试进程 DLL 搜索路径。
+          $env:CARGO_TARGET_DIR = Join-Path (Get-Location) "src-tauri\target\windows-unit-tests"
           cargo test --manifest-path src-tauri/Cargo.toml --lib --no-default-features --features custom-protocol
           $testExit = $LASTEXITCODE
           if ($testExit -ne 0) {
-            $testExe = Get-ChildItem -Path "src-tauri\target\debug\deps" -Filter "openless_lib-*.exe" |
+            $testExe = Get-ChildItem -Path (Join-Path $env:CARGO_TARGET_DIR "debug\deps") -Filter "openless_lib-*.exe" |
               Sort-Object LastWriteTime -Descending |
               Select-Object -First 1
             if ($testExe) {
               Write-Host "[ci] failed test exe: $($testExe.FullName)"
+              Write-Host "[ci] dlls beside failed test exe"
+              Get-ChildItem -Path $testExe.DirectoryName -Filter "*.dll" | Select-Object Name,Length | Format-Table -AutoSize
               $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
               if (Test-Path $vswhere) {
                 $dumpbin = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -find "VC\Tools\MSVC\**\bin\Hostx64\x64\dumpbin.exe" 2>$null | Select-Object -First 1
