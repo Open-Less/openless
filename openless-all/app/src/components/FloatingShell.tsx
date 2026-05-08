@@ -17,7 +17,7 @@ import { Style } from '../pages/Style';
 import { Translation } from '../pages/Translation';
 import { SelectionAsk } from '../pages/SelectionAsk';
 import { LocalAsr } from '../pages/LocalAsr';
-import { APP_VERSION_LABEL } from '../lib/appVersion';
+import { APP_VERSION_LABEL, IS_BETA_BUILD } from '../lib/appVersion';
 import {
   HOTKEY_MODE_MIGRATION_ACK_KEY,
   HOTKEY_MODE_MIGRATION_DEFERRED_KEY,
@@ -219,11 +219,6 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
               style={{ width: 22, height: 22, borderRadius: 5, boxShadow: '0 1px 2px rgba(0,0,0,.1), 0 0 0 0.5px rgba(0,0,0,.06)' }} />
 
             <div style={{ fontSize: 13.5, fontWeight: 600, letterSpacing: '-0.01em', color: 'var(--ol-ink)' }}>OpenLess</div>
-            <span style={{
-              marginLeft: 'auto', padding: '1px 6px', fontSize: 9.5, fontWeight: 600,
-              borderRadius: 4, background: 'rgba(0,0,0,0.06)', color: 'var(--ol-ink-3)',
-              letterSpacing: '0.04em',
-            }}>{APP_VERSION_LABEL}</span>
           </div>
 
           {/* nav */}
@@ -271,11 +266,14 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
             </div>
           </div>
 
-          {/* BETA 区域 — 去掉描边和实色背景，让它和底部 footer 一起浮在磨砂玻璃上 */}
-          <div style={{ marginTop: 8, padding: '10px 10px 4px' }}>
-            <div style={{ fontSize: 10.5, fontWeight: 600, color: 'var(--ol-blue)', letterSpacing: '0.04em', textTransform: 'uppercase' }}>{t('shell.betaTag')}</div>
-            <div style={{ fontSize: 11.5, color: 'var(--ol-ink-2)', marginTop: 4, lineHeight: 1.5 }}>{t('shell.betaNote')}</div>
-          </div>
+          {/* BETA 区域 — 仅在 Beta build（version 含 semver prerelease 段，如 1.2.24-1）显示。
+              正式版 build 完全不渲染这块，避免普通用户误以为正式版是 Beta。 */}
+          {IS_BETA_BUILD && (
+            <div style={{ marginTop: 8, padding: '10px 10px 4px' }}>
+              <div style={{ fontSize: 10.5, fontWeight: 600, color: 'var(--ol-blue)', letterSpacing: '0.04em', textTransform: 'uppercase' }}>{t('shell.betaTag')}</div>
+              <div style={{ fontSize: 11.5, color: 'var(--ol-ink-2)', marginTop: 4, lineHeight: 1.5 }}>{t('shell.betaNote')}</div>
+            </div>
+          )}
         </aside>
 
         {/* Main content — inset white card sitting on the frosted backplate.
