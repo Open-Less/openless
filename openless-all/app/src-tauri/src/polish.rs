@@ -200,15 +200,7 @@ impl OpenAICompatibleLLMProvider {
         user_prompt: &str,
     ) -> Result<String, LLMError> {
         let url = chat_completions_url(&self.config.base_url);
-        let mut messages: Vec<serde_json::Value> = Vec::with_capacity(prior_turns.len() * 2 + 2);
-        messages.push(json!({ "role": "system", "content": system_prompt }));
-        // prior_turns 按时间倒序（newest-first），需要反转成正序喂给 chat。
-        for (raw, polished) in prior_turns.iter().rev() {
-            messages.push(json!({ "role": "user", "content": prompts::user_prompt(raw) }));
-            messages.push(json!({ "role": "assistant", "content": polished }));
-        }
-        messages.push(json!({ "role": "user", "content": user_prompt }));
-
+        let messages = build_polish_history_messages(system_prompt, prior_turns, user_prompt);
         let body = json!({
             "model": self.config.model,
             "stream": false,
@@ -458,6 +450,35 @@ fn safe_str_slice(s: &str, end: usize) -> &str {
         cut -= 1;
     }
     &s[..cut]
+}
+
+/// 构造对话感知 polish 的 chat completions 消息数组。
+///
+/// 不变量：
+/// 1. **第 0 条**永远是 `system`（含 \[system_prompt\] 整段，含 polish_context_instruction
+///    "不要复读"指令——由调用方拼好传入）。
+/// 2. **prior_turns 按时间倒序**（最新在前）作为入参——这里反转成时间正序喂给 chat：
+///    最老的 prior 在前、最新的 prior 在后、当前要润色的 user_prompt 在最末。
+/// 3. **每对 prior 展开成 (role=user, role=assistant)**：raw 走 user_prompt 包装、
+///    polished 直接当 assistant 输出。LLM 据此把 polished 当成"我已经回答过的内容"，
+///    自然不会复读。
+/// 4. **最后一条** 永远是 role=user（当前要润色的 raw_text 包装后的 user_prompt）。
+///
+/// 抽出独立函数纯粹是为了可单测——见 polish::tests::build_polish_history_messages_*。
+fn build_polish_history_messages(
+    system_prompt: &str,
+    prior_turns: &[(String, String)],
+    user_prompt: &str,
+) -> Vec<serde_json::Value> {
+    let mut messages: Vec<serde_json::Value> = Vec::with_capacity(prior_turns.len() * 2 + 2);
+    messages.push(json!({ "role": "system", "content": system_prompt }));
+    // prior_turns 按时间倒序（newest-first），反转成正序喂给 chat。
+    for (raw, polished) in prior_turns.iter().rev() {
+        messages.push(json!({ "role": "user", "content": prompts::user_prompt(raw) }));
+        messages.push(json!({ "role": "assistant", "content": polished }));
+    }
+    messages.push(json!({ "role": "user", "content": user_prompt }));
+    messages
 }
 
 fn chat_completions_url(base_url: &str) -> String {
@@ -1016,6 +1037,106 @@ mod tests {
     use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::thread;
+
+    // ──────────────── 对话感知 polish 的 chat 消息构造 ────────────────
+    // 用户的核心顾虑：让 LLM 拿到上下文但**不要把上下文吐出来**。
+    // 这里的不变量保证「不复读」靠两层防御：
+    //   1. role=assistant 标记历史的 polished 输出，LLM 自然把它当成"已说过的"
+    //   2. system prompt 末尾追加 polish_context_instruction 显式禁止复读
+    // 下面 3 个 test 把构造路径锁死，未来回归就能立刻暴露。
+
+    #[test]
+    fn build_polish_history_messages_empty_prior_falls_back_to_two_messages() {
+        // prior_turns 空时只剩 system + user，跟单轮 chat_completion 同构。
+        let msgs = build_polish_history_messages("SYS", &[], "USER_NOW");
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[0]["role"], "system");
+        assert_eq!(msgs[0]["content"], "SYS");
+        assert_eq!(msgs[1]["role"], "user");
+        assert_eq!(msgs[1]["content"], "USER_NOW");
+    }
+
+    #[test]
+    fn build_polish_history_messages_orders_prior_oldest_to_newest_then_current() {
+        // 入参约定 prior_turns 是 newest-first（match HistoryStore::recent_within_minutes
+        // 的返回顺序）。chat 需要 oldest-first 的时间序，build_* 必须 reverse。
+        // 顺序错了 LLM 会看到「未来→过去→当前」错乱时间轴。
+        let prior = vec![
+            ("raw-newest".to_string(), "polish-newest".to_string()),
+            ("raw-mid".to_string(), "polish-mid".to_string()),
+            ("raw-oldest".to_string(), "polish-oldest".to_string()),
+        ];
+        let msgs = build_polish_history_messages("SYS", &prior, "USER_NOW");
+
+        // 1 system + 3 turns × 2 + 1 current = 8 条
+        assert_eq!(msgs.len(), 8, "应该是 system + 3×(user/assistant) + 当前 user");
+
+        // [0] system
+        assert_eq!(msgs[0]["role"], "system");
+        // [1,2] = oldest 那一对
+        assert_eq!(msgs[1]["role"], "user");
+        assert!(
+            msgs[1]["content"].as_str().unwrap().contains("raw-oldest"),
+            "第一条 user 应当是最老的 raw，包装在 user_prompt 里"
+        );
+        assert_eq!(msgs[2]["role"], "assistant");
+        assert_eq!(msgs[2]["content"], "polish-oldest");
+        // [3,4] = mid
+        assert_eq!(msgs[3]["role"], "user");
+        assert!(msgs[3]["content"].as_str().unwrap().contains("raw-mid"));
+        assert_eq!(msgs[4]["role"], "assistant");
+        assert_eq!(msgs[4]["content"], "polish-mid");
+        // [5,6] = newest 那一对
+        assert_eq!(msgs[5]["role"], "user");
+        assert!(msgs[5]["content"].as_str().unwrap().contains("raw-newest"));
+        assert_eq!(msgs[6]["role"], "assistant");
+        assert_eq!(msgs[6]["content"], "polish-newest");
+        // [7] = 当前要润色的 user
+        assert_eq!(msgs[7]["role"], "user");
+        assert_eq!(msgs[7]["content"], "USER_NOW");
+    }
+
+    #[test]
+    fn build_polish_history_messages_keeps_polished_text_at_assistant_role() {
+        // 关键不变量：历史 polish 必须在 assistant role 上，**不**能跟当前 user 混淆。
+        // 一旦把 polish 放进 user role（比如重构时 typo），LLM 会以为这是
+        // 用户新说的话，可能再润色一遍 → 输出复读上文，违反"不复读"目标。
+        let prior = vec![("我说点什么".into(), "我说点什么。".into())];
+        let msgs = build_polish_history_messages("SYS", &prior, "现在说的话");
+
+        // 第二条（idx=2）必须是 assistant + polished_text
+        assert_eq!(
+            msgs[2]["role"], "assistant",
+            "polished_text 必须挂在 assistant role；放到 user 会让 LLM 当成新输入再润色"
+        );
+        assert_eq!(msgs[2]["content"], "我说点什么。");
+
+        // 检查最末条仍然是当前 user prompt，没被混进 assistant
+        let last = msgs.last().expect("non-empty");
+        assert_eq!(last["role"], "user");
+        assert_eq!(last["content"], "现在说的话");
+    }
+
+    #[test]
+    fn polish_context_instruction_explicitly_forbids_repeating_prior_assistant_output() {
+        // 第二层防御：system prompt 必须含明确的「不要复读历史 assistant」指令。
+        // 仅靠 chat structure 不够——一些模型在长上下文里仍可能 echo prior turns。
+        // 文案可以改、但下面这些关键词不能丢。
+        let s = prompts::polish_context_instruction();
+        assert!(s.contains("不要"), "需要中文显式禁止指令");
+        assert!(
+            s.contains("复读") || s.contains("重复") || s.contains("不要把上文带进来"),
+            "需要明确禁止复读语义"
+        );
+        assert!(
+            s.contains("assistant") || s.contains("已经整理"),
+            "需要点名是 assistant role 的历史输出 / 整理后内容"
+        );
+        assert!(
+            s.contains("当前") && s.contains("最新"),
+            "需要明确：只输出当前最新一条"
+        );
+    }
 
     #[test]
     fn clean_polish_output_strips_think_tag_block() {
