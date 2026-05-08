@@ -995,12 +995,22 @@ impl Default for HotkeyStatus {
 
 impl Default for HotkeyBinding {
     fn default() -> Self {
+        // 注意：keys 必须是 None，不能预填具体 code。
+        //
+        // 原因：HotkeyBinding 用 `#[serde(default)]` **结构级 default**——反序列化时
+        // 整个 struct 先按 Default 填充再让 JSON 字段覆盖。如果这里 keys 预填了
+        // Some([...])，那么旧 prefs 里只写 `{"trigger":"rightControl","mode":"toggle"}`
+        // （不带 keys 字段）会被反序列化成 `{trigger=RightControl, keys=Some([默认值])}`
+        // 即 trigger 跟 keys 完全不一致——effective_codes() 直接信任 keys，导致
+        // 实际生效的快捷键跟用户当年选的 trigger 对不上。
+        // 现在 keys=None 时 effective_codes() 走 legacy_trigger_code(trigger) 路径，
+        // 跟 trigger 自动同步。
         #[cfg(target_os = "windows")]
         {
             Self {
                 trigger: HotkeyTrigger::RightControl,
                 mode: HotkeyMode::Toggle,
-                keys: Some(vec![HotkeyKey::new("ControlRight")]),
+                keys: None,
             }
         }
 
@@ -1009,7 +1019,7 @@ impl Default for HotkeyBinding {
             Self {
                 trigger: HotkeyTrigger::RightOption,
                 mode: HotkeyMode::Toggle,
-                keys: Some(vec![HotkeyKey::new("AltRight")]),
+                keys: None,
             }
         }
     }
