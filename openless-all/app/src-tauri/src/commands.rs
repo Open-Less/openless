@@ -198,58 +198,74 @@ pub struct LatestBetaRelease {
     pub published_at: String,
 }
 
-/// 调 GitHub Releases API 拿最近 20 条 release，找出第一条 `prerelease=true` 且
-/// tag 以 `-beta-tauri` 结尾的。返回 `Ok(None)` 表示当前没有发布过 Beta 版。
-/// 网络/解析错误以 `Err(String)` 上报，让前端展示具体原因。
+/// 拉 GitHub Releases atom feed 找最新 Beta release（tag 以 `-beta-tauri` 结尾）。
+///
+/// 历史：之前用 `api.github.com/repos/.../releases` REST 端点，**未认证 60 req/h/IP**，
+/// 多人多次切 Beta toggle 很容易撞 403 rate limit（用户报"获取 Beta 版本信息失败"
+/// 即是这个）。换成 `releases.atom` 后是公开页面 + CDN cache，没有同等 rate 限制。
+/// Atom feed 不显式标 prerelease，但项目约定 tag 后缀 `-beta-tauri` 必为 Beta，
+/// 所以只用 tag 后缀过滤就够了。
+///
+/// 返回 `Ok(None)` = 当前没发过 Beta 版；`Err(String)` = 网络/解析故障。
 #[tauri::command]
 pub async fn fetch_latest_beta_release() -> Result<Option<LatestBetaRelease>, String> {
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(15))
         .user_agent(concat!("OpenLess/", env!("CARGO_PKG_VERSION")))
         .build()
         .map_err(|e| format!("build http client: {e}"))?;
     let resp = client
-        .get("https://api.github.com/repos/appergb/openless/releases?per_page=20")
-        .header("Accept", "application/vnd.github+json")
+        .get("https://github.com/appergb/openless/releases.atom")
         .send()
         .await
-        .map_err(|e| format!("fetch releases: {e}"))?;
+        .map_err(|e| format!("fetch releases.atom: {e}"))?;
     if !resp.status().is_success() {
-        return Err(format!("GitHub API status {}", resp.status()));
+        return Err(format!("releases.atom status {}", resp.status()));
     }
-    let releases: Vec<serde_json::Value> = resp
-        .json()
+    let body = resp
+        .text()
         .await
-        .map_err(|e| format!("parse releases json: {e}"))?;
-    let latest = releases.into_iter().find(|r| {
-        let is_pre = r
-            .get("prerelease")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        let tag_ok = r
-            .get("tag_name")
-            .and_then(|v| v.as_str())
-            .map(|s| s.ends_with("-beta-tauri"))
-            .unwrap_or(false);
-        is_pre && tag_ok
-    });
-    Ok(latest.map(|r| LatestBetaRelease {
-        tag_name: r
-            .get("tag_name")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_string(),
-        html_url: r
-            .get("html_url")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_string(),
-        published_at: r
-            .get("published_at")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_string(),
-    }))
+        .map_err(|e| format!("read atom body: {e}"))?;
+    Ok(parse_latest_beta_from_atom(&body))
+}
+
+/// 简单字符串解析 atom feed，避免引 XML 库。每个 `<entry>...</entry>` 内含一行
+/// `<link rel="alternate" type="text/html" href=".../releases/tag/<tag>"/>`，
+/// 用 `/releases/tag/` 这个唯一锚点抓 tag。
+fn parse_latest_beta_from_atom(body: &str) -> Option<LatestBetaRelease> {
+    for entry in body.split("<entry>").skip(1) {
+        let entry_body = entry.split_once("</entry>").map(|(b, _)| b).unwrap_or(entry);
+        let needle = "/releases/tag/";
+        let tag_start = match entry_body.find(needle) {
+            Some(i) => i + needle.len(),
+            None => continue,
+        };
+        let tag_after = &entry_body[tag_start..];
+        let tag_end = tag_after
+            .find(|c: char| c == '"' || c == '<' || c == ' ' || c == '/')
+            .unwrap_or(tag_after.len());
+        let tag_name = tag_after[..tag_end].to_string();
+        if !tag_name.ends_with("-beta-tauri") {
+            continue;
+        }
+        let html_url = format!(
+            "https://github.com/appergb/openless/releases/tag/{tag_name}"
+        );
+        let published_at = extract_between(entry_body, "<updated>", "</updated>")
+            .unwrap_or_default();
+        return Some(LatestBetaRelease {
+            tag_name,
+            html_url,
+            published_at,
+        });
+    }
+    None
+}
+
+fn extract_between(haystack: &str, open: &str, close: &str) -> Option<String> {
+    let start = haystack.find(open)? + open.len();
+    let end = haystack[start..].find(close)?;
+    Some(haystack[start..start + end].to_string())
 }
 
 #[tauri::command]
@@ -1684,9 +1700,9 @@ mod tests {
         active_asr_is_keyless_for_validation, active_foundry_model_from_prefs,
         asr_configured_for_provider, asr_transcriptions_url, fetch_provider_models,
         llm_configured_for_provider, local_asr_release_plan_for_provider, models_url,
-        normalize_foundry_language_hint, parse_model_ids, persist_settings,
-        release_foundry_runtime_if_inactive, validate_foundry_model_alias, ProviderConfig,
-        SettingsWriter,
+        normalize_foundry_language_hint, parse_latest_beta_from_atom, parse_model_ids,
+        persist_settings, release_foundry_runtime_if_inactive, validate_foundry_model_alias,
+        ProviderConfig, SettingsWriter,
     };
     use crate::persistence::CredentialsSnapshot;
     use crate::types::{
@@ -2236,6 +2252,45 @@ mod tests {
             Err("打开应用快捷键不能和切换风格快捷键相同".into())
         );
         assert!(writer.saved.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn parse_latest_beta_from_atom_picks_first_beta_tagged_entry() {
+        // Fixture trimmed from real `releases.atom`：包含一条 stable + 一条 Beta。
+        // 解析必须跳过 stable（tag 不以 -beta-tauri 结尾），返回 Beta。
+        let body = r#"<?xml version="1.0"?>
+<feed>
+  <entry>
+    <id>tag:github.com,2008:Repository/X/v1.2.23-tauri</id>
+    <updated>2026-05-07T09:05:00Z</updated>
+    <link rel="alternate" type="text/html" href="https://github.com/appergb/openless/releases/tag/v1.2.23-tauri"/>
+    <title>OpenLess v1.2.23-tauri</title>
+  </entry>
+  <entry>
+    <id>tag:github.com,2008:Repository/X/v1.2.24-2-beta-tauri</id>
+    <updated>2026-05-08T01:27:23Z</updated>
+    <link rel="alternate" type="text/html" href="https://github.com/appergb/openless/releases/tag/v1.2.24-2-beta-tauri"/>
+    <title>OpenLess v1.2.24-2-beta-tauri</title>
+  </entry>
+</feed>"#;
+        let got = parse_latest_beta_from_atom(body).expect("must find a Beta entry");
+        assert_eq!(got.tag_name, "v1.2.24-2-beta-tauri");
+        assert_eq!(
+            got.html_url,
+            "https://github.com/appergb/openless/releases/tag/v1.2.24-2-beta-tauri"
+        );
+        assert_eq!(got.published_at, "2026-05-08T01:27:23Z");
+    }
+
+    #[test]
+    fn parse_latest_beta_from_atom_returns_none_when_only_stable_releases() {
+        let body = r#"<feed>
+  <entry>
+    <link rel="alternate" type="text/html" href="https://github.com/appergb/openless/releases/tag/v1.2.23-tauri"/>
+    <updated>2026-05-07T09:05:00Z</updated>
+  </entry>
+</feed>"#;
+        assert!(parse_latest_beta_from_atom(body).is_none());
     }
 
     #[tokio::test]
