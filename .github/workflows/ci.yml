@@ -49,10 +49,6 @@ jobs:
           cache-dependency-path: openless-all/app/package-lock.json
 
       - uses: dtolnay/rust-toolchain@stable
-        if: runner.os != 'Windows'
-
-      - uses: dtolnay/rust-toolchain@1.77.0
-        if: runner.os == 'Windows'
 
       - name: Install Linux check dependencies
         if: runner.os == 'Linux'
@@ -77,6 +73,11 @@ jobs:
         if: matrix.preflight
         shell: pwsh
         run: ./scripts/windows-preflight.ps1 -Toolchain msvc
+
+      - name: Install Windows unit-test target
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: rustup target add x86_64-win7-windows-msvc
 
       - name: Check PowerShell scripts
         if: matrix.preflight
@@ -107,12 +108,13 @@ jobs:
         run: |
           # 产品默认构建仍通过 cargo check 覆盖 Foundry 链接形态，单测门禁
           # 用无 Foundry native 链接的构建来真正执行 Windows 后端测试。
-          # Windows 测试固定到 Cargo.toml 声明的 MSRV 1.77，避开 rustc
-          # 1.78+ test harness 在 GitHub runner 上触发的 WaitOnAddress
-          # API-set loader 问题。
+          # Windows 单测使用 win7 target，让 std 走兼容路径，避开
+          # GitHub runner 上 Rust test harness 直接导入 WaitOnAddress 的
+          # API-set loader 问题；默认 Windows target 仍由 cargo check 覆盖。
           $env:CARGO_TARGET_DIR = Join-Path (Get-Location) "src-tauri\target\windows-unit-tests"
           cargo test `
             --manifest-path src-tauri/Cargo.toml `
+            --target x86_64-win7-windows-msvc `
             --lib `
             --no-default-features `
             --features custom-protocol
