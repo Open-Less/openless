@@ -119,7 +119,8 @@ jobs:
           # api-ms-win-core-synch-l1-2-0.dll。GitHub runner 上该 API-set
           # 解析缺 entrypoint 时，测试进程会在任何单测运行前退出。这里先
           # no-run 产出测试 exe，再把该 import 指向 Server 2022 自带且导出
-          # WaitOnAddress 的 KernelBase.dll，最后仍然执行 cargo test。
+          # WaitOnAddress 的 KernelBase.dll，然后直接执行已修补的 test
+          # harness；避免再次 cargo test 触发重新链接并覆盖补丁。
           cargo test @testArgs --no-run
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
@@ -133,7 +134,7 @@ jobs:
           $replacement = New-Object byte[] $needle.Length
           $replacementBytes = $encoding.GetBytes($replacementText)
           [Array]::Copy($replacementBytes, $replacement, $replacementBytes.Length)
-          $patchedAny = $false
+          $patchedExes = @()
           Get-ChildItem -Path $depsDir -Filter "openless_lib-*.exe" | ForEach-Object {
             $bytes = [System.IO.File]::ReadAllBytes($_.FullName)
             $text = $encoding.GetString($bytes)
@@ -142,19 +143,29 @@ jobs:
             while ($offset -ge 0) {
               [Array]::Copy($replacement, 0, $bytes, $offset, $replacement.Length)
               $patchedThis = $true
-              $patchedAny = $true
               $offset = $text.IndexOf($needleText, $offset + $needle.Length, [System.StringComparison]::Ordinal)
             }
             if ($patchedThis) {
               [System.IO.File]::WriteAllBytes($_.FullName, $bytes)
+              $patchedExes += $_.FullName
               Write-Host "[ci] Patched Windows Rust test import to KernelBase.dll: $($_.FullName)"
             }
           }
-          if (-not $patchedAny) {
+          if ($patchedExes.Count -eq 0) {
             throw "api-ms-win-core-synch-l1-2-0.dll import not found in Windows Rust test executable."
           }
 
-          cargo test @testArgs
+          foreach ($testExe in $patchedExes) {
+            $patchedText = $encoding.GetString([System.IO.File]::ReadAllBytes($testExe))
+            if ($patchedText.Contains($needleText)) {
+              throw "Windows Rust test executable still imports api-ms-win-core-synch-l1-2-0.dll: $testExe"
+            }
+            Write-Host "[ci] Running patched Windows Rust test executable: $testExe"
+            & $testExe
+            if ($LASTEXITCODE -ne 0) {
+              exit $LASTEXITCODE
+            }
+          }
 
       - name: Verify version sync across all 5 files
         # 两个平台都跑这个校验：Windows runner 自带 git-bash，跨 shell 表现一致。
