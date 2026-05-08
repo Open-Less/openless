@@ -126,30 +126,68 @@ jobs:
         if: runner.os != 'Windows'
         run: cargo test --manifest-path src-tauri/Cargo.toml --lib
 
-      - name: Install nightly Rust source for Windows unit tests
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: rustup toolchain install nightly --profile minimal --component rust-src --no-self-update
-
       - name: Run Rust backend unit tests (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           # 产品默认构建仍通过 cargo check 覆盖 Foundry 链接形态，单测门禁
           # 用无 Foundry native 链接的构建来真正执行 Windows 后端测试。
-          # 默认 Windows target 的 stable test harness 会在 runner 上因
-          # WaitOnAddress API-set 入口缺失而进程启动失败。单测执行改用
-          # nightly build-std 构建 win7 target 的 std 兼容路径；默认 Windows
-          # target 仍由上面的 stable cargo check 覆盖。
+          # stable test harness 在 runner 上会直接导入
+          # api-ms-win-core-synch-l1-2-0.dll/WaitOnAddress 并在单测开始前
+          # loader 失败。先 no-run 生成测试 exe，把该 import 指向更常规
+          # 的 Kernel32.dll，再直接运行已修补的 harness，避免 cargo 重新链接。
           $env:CARGO_TARGET_DIR = Join-Path (Get-Location) "src-tauri\target\windows-unit-tests"
           $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
           $vsInstall = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
           $vsDevCmd = Join-Path $vsInstall "Common7\Tools\VsDevCmd.bat"
           $targetDir = $env:CARGO_TARGET_DIR
-          $command = "call `"$vsDevCmd`" -arch=x64 -host_arch=x64 && set `"CARGO_TARGET_DIR=$targetDir`" && cargo +nightly test -Z build-std=std,panic_unwind --target x86_64-win7-windows-msvc --manifest-path src-tauri/Cargo.toml --lib --no-default-features --features custom-protocol"
-          & cmd.exe /d /s /c $command
+          $buildCommand = "call `"$vsDevCmd`" -arch=x64 -host_arch=x64 && set `"CARGO_TARGET_DIR=$targetDir`" && cargo test --manifest-path src-tauri/Cargo.toml --lib --no-default-features --features custom-protocol --no-run"
+          & cmd.exe /d /s /c $buildCommand
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
+          }
+
+          $depsDir = Join-Path $env:CARGO_TARGET_DIR "debug\deps"
+          $needleText = "api-ms-win-core-synch-l1-2-0.dll" + [char]0
+          $replacementText = "kernel32.dll" + [char]0
+          $encoding = [System.Text.Encoding]::GetEncoding("iso-8859-1")
+          $needle = $encoding.GetBytes($needleText)
+          $replacement = New-Object byte[] $needle.Length
+          $replacementBytes = $encoding.GetBytes($replacementText)
+          [Array]::Copy($replacementBytes, $replacement, $replacementBytes.Length)
+          $patchedExes = @()
+          Get-ChildItem -Path $depsDir -Filter "openless_lib-*.exe" | ForEach-Object {
+            $bytes = [System.IO.File]::ReadAllBytes($_.FullName)
+            $text = $encoding.GetString($bytes)
+            $offset = $text.IndexOf($needleText, [System.StringComparison]::Ordinal)
+            $patchedThis = $false
+            while ($offset -ge 0) {
+              [Array]::Copy($replacement, 0, $bytes, $offset, $replacement.Length)
+              $patchedThis = $true
+              $offset = $text.IndexOf($needleText, $offset + $needle.Length, [System.StringComparison]::Ordinal)
+            }
+            if ($patchedThis) {
+              [System.IO.File]::WriteAllBytes($_.FullName, $bytes)
+              $patchedExes += $_.FullName
+              Write-Host "[ci] Patched Windows Rust test import to Kernel32.dll: $($_.FullName)"
+            }
+          }
+          if ($patchedExes.Count -eq 0) {
+            throw "api-ms-win-core-synch-l1-2-0.dll import not found in Windows Rust test executable."
+          }
+
+          foreach ($testExe in $patchedExes) {
+            $patchedText = $encoding.GetString([System.IO.File]::ReadAllBytes($testExe))
+            if ($patchedText.Contains($needleText)) {
+              throw "Windows Rust test executable still imports api-ms-win-core-synch-l1-2-0.dll: $testExe"
+            }
+            Write-Host "[ci] Running patched Windows Rust test executable: $testExe"
+            & $testExe
+            if ($LASTEXITCODE -ne 0) {
+              $unsignedExit = $LASTEXITCODE -band 0xffffffff
+              Write-Host ("[ci] Patched Windows Rust test executable failed with exit 0x{0:X8}" -f $unsignedExit)
+              exit $LASTEXITCODE
+            }
           }
 
       - name: Verify version sync across all 5 files
