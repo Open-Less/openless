@@ -1,7 +1,7 @@
 {
   "name": "openless-app",
   "private": true,
-  "version": "1.2.24-2",
+  "version": "1.2.24-3",
   "type": "module",
   "scripts": {
     "dev": "vite",
