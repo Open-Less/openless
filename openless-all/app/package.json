@@ -11,6 +11,8 @@
     "check:hotkey-injection": "node scripts/check-hotkey-injection.mjs"
   },
   "dependencies": {
+    "@fontsource/inter": "^5.2.8",
+    "@fontsource/noto-sans-jp": "^5.2.9",
     "@tauri-apps/api": "^2.1.1",
     "@tauri-apps/plugin-autostart": "^2.5.1",
     "@tauri-apps/plugin-dialog": "^2.7.1",
