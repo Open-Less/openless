@@ -1,8 +1,36 @@
 // TypeScript mirror of src-tauri/src/types.rs.
 // All keys are camelCase (Rust serializes with #[serde(rename_all = "camelCase")]).
-// PolishMode is an exception — Rust uses lowercase serialization.
+// PolishMode is an exception — Rust uses lowercase serialization for builtin modes
+// and `'custom:<id>'` prefix form for user-defined custom modes.
 
-export type PolishMode = 'raw' | 'light' | 'structured' | 'formal';
+/**
+ * Polish style identifier. Builtin: `'raw' | 'light' | 'structured' | 'formal'`.
+ * User-defined custom modes serialize as `'custom:<id>'`.
+ * `string` widening covers Custom values without breaking existing literal comparisons
+ * like `mode === 'raw'`.
+ */
+export type PolishMode = 'raw' | 'light' | 'structured' | 'formal' | string;
+
+/**
+ * ユーザー定義カスタム整形スタイル。`prefs.customModes` に並ぶ。
+ * id は安定識別子、name は表示名、prompt は LLM の system prompt 本文。
+ */
+export interface CustomMode {
+  id: string;
+  name: string;
+  prompt: string;
+}
+
+/**
+ * アプリ別自動 mode 切替ルール。`prefs.appModeOverrides` の各要素。
+ * `appPattern` はプロセス名 substring（大文字小文字無視）。
+ * `mode` はビルトイン or `'custom:<id>'` 形式の文字列 ID。
+ * 配列の順序が優先順位そのまま：先頭から見て最初にマッチしたルールの mode が採用される。
+ */
+export interface AppModeOverride {
+  appPattern: string;
+  mode: PolishMode;
+}
 
 export type InsertStatus = 'inserted' | 'pasteSent' | 'copiedFallback' | 'failed';
 
@@ -132,10 +160,19 @@ export interface UserPreferences {
   restoreClipboardAfterPaste: boolean;
   /** Windows：TSF 失败后是否允许 SendInput / 粘贴类非 TSF 兜底。关闭后可验证是否真实 TSF 上屏。 */
   allowNonTsfInsertionFallback: boolean;
+  /** ユーザー定義カスタム整形スタイル一覧（順序保持）。
+   *  各要素 `{ id, name, prompt }`。`PolishMode` の `'custom:<id>'` 値から参照される。 */
+  customModes: CustomMode[];
+  /** アプリ別自動 mode 切替ルール（順序が優先順位）。
+   *  dictation の polish 直前にアクティブアプリ名と各 `appPattern` を順に比較し、
+   *  最初にマッチしたルールの mode が採用される。マッチしない場合は `defaultMode`。 */
+  appModeOverrides: AppModeOverride[];
   /** 用户的工作语言（多选，原生名）；作为前提注入 LLM polish/translate prompt 头部。 */
   workingLanguages: string[];
   /** 翻译模式目标语言（单选，原生名）；空串 = 不启用 Shift 翻译。详见 issue #4。 */
   translationTargetLanguage: string;
+  /** 翻訳機能のグローバルなオン/オフ。OFF にすると hotkey が誤発火しても翻訳パイプラインと UI overlay は起動しない。 */
+  translateEnabled: boolean;
   /** 中文输出字形偏好：由界面语言（简/繁）自动同步，不单独暴露设置项。 */
   chineseScriptPreference: 'auto' | 'simplified' | 'traditional';
   /** 最终输出语言偏好：由界面语言自动同步，不单独暴露设置项。 */

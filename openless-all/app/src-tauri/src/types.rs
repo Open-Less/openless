@@ -2,26 +2,137 @@
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-#[derive(Default)]
+/// 整形スタイル種別。
+/// - 既存4種は文字列 `"raw"` / `"light"` / `"structured"` / `"formal"` に serde される。
+/// - `Custom(id)` は `"custom:<id>"` 形式の prefix 文字列に serde される。
+///   id 自体に `:` を含むケースは無いと仮定（前端 UI 側でバリデート）。
+///
+/// Copy ではなく Clone のみ（Custom が String を持つため）。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(into = "String", try_from = "String")]
 pub enum PolishMode {
     Raw,
     #[default]
     Light,
     Structured,
     Formal,
+    Custom(String),
 }
 
 impl PolishMode {
-    pub fn display_name(&self) -> &'static str {
+    /// CustomMode の名前を解決して人間向け表示名を返す。Custom 時に
+    /// `custom_modes` に該当 id が無ければ id 文字列をそのまま返す。
+    pub fn display_name_with_customs(&self, custom_modes: &[CustomMode]) -> String {
         match self {
-            PolishMode::Raw => "原文",
-            PolishMode::Light => "轻度润色",
-            PolishMode::Structured => "清晰结构",
-            PolishMode::Formal => "正式表达",
+            PolishMode::Raw => "原文".to_string(),
+            PolishMode::Light => "轻度润色".to_string(),
+            PolishMode::Structured => "清晰结构".to_string(),
+            PolishMode::Formal => "正式表达".to_string(),
+            PolishMode::Custom(id) => custom_modes
+                .iter()
+                .find(|m| m.id == *id)
+                .map(|m| m.name.clone())
+                .unwrap_or_else(|| id.clone()),
         }
     }
+
+    /// CustomMode への参照無しで呼ばれる旧API互換。Custom は id を返す。
+    pub fn display_name(&self) -> String {
+        match self {
+            PolishMode::Raw => "原文".to_string(),
+            PolishMode::Light => "轻度润色".to_string(),
+            PolishMode::Structured => "清晰结构".to_string(),
+            PolishMode::Formal => "正式表达".to_string(),
+            PolishMode::Custom(id) => id.clone(),
+        }
+    }
+
+    /// serde 文字列表現を返す（"raw" / "light" / "structured" / "formal" / "custom:<id>"）。
+    pub fn as_serde_string(&self) -> String {
+        match self {
+            PolishMode::Raw => "raw".to_string(),
+            PolishMode::Light => "light".to_string(),
+            PolishMode::Structured => "structured".to_string(),
+            PolishMode::Formal => "formal".to_string(),
+            PolishMode::Custom(id) => format!("custom:{id}"),
+        }
+    }
+}
+
+impl From<PolishMode> for String {
+    fn from(mode: PolishMode) -> Self {
+        mode.as_serde_string()
+    }
+}
+
+impl TryFrom<String> for PolishMode {
+    type Error = String;
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        match value.as_str() {
+            "raw" => Ok(PolishMode::Raw),
+            "light" => Ok(PolishMode::Light),
+            "structured" => Ok(PolishMode::Structured),
+            "formal" => Ok(PolishMode::Formal),
+            other => {
+                if let Some(id) = other.strip_prefix("custom:") {
+                    if id.is_empty() {
+                        Err("custom mode id is empty".to_string())
+                    } else {
+                        Ok(PolishMode::Custom(id.to_string()))
+                    }
+                } else {
+                    Err(format!("unknown polish mode: {other}"))
+                }
+            }
+        }
+    }
+}
+
+/// ユーザー定義カスタム整形スタイル。`prefs.custom_modes` に `Vec<CustomMode>` で並ぶ。
+/// id は安定識別子（変更しない）、name は表示名、prompt は LLM への system prompt 本文。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CustomMode {
+    pub id: String,
+    pub name: String,
+    pub prompt: String,
+}
+
+/// アプリ別自動 mode 切替ルール。`prefs.app_mode_overrides` の各要素。
+/// `app_pattern` はプロセス名 substring（大文字小文字無視）に対するマッチパターン。
+/// 例：`"chrome"` は `"Google Chrome"` `"chrome.exe"` のいずれにも一致する。
+/// `mode` は通常の `PolishMode`（ビルトイン or `Custom(id)`）。
+/// 一覧の順序が優先順位そのまま：先頭から見て最初にマッチしたルールの mode を採用する。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AppModeOverride {
+    pub app_pattern: String,
+    pub mode: PolishMode,
+}
+
+/// `front_app` の文字列に対して `overrides` を順次評価し、最初にマッチした mode を返す。
+/// マッチルール：`override.app_pattern` を lowercase 化し、`app` の lowercase に substring として
+/// 含まれていれば命中。空 `app_pattern` はマッチさせない（誤爆防止）。
+///
+/// `app` が `None`/空文字列、または `overrides` が空 → `None`。
+pub fn pick_mode_for_app(
+    app: Option<&str>,
+    overrides: &[AppModeOverride],
+) -> Option<PolishMode> {
+    let app = app?.trim();
+    if app.is_empty() {
+        return None;
+    }
+    let app_lc = app.to_lowercase();
+    for ov in overrides {
+        let pat = ov.app_pattern.trim().to_lowercase();
+        if pat.is_empty() {
+            continue;
+        }
+        if app_lc.contains(&pat) {
+            return Some(ov.mode.clone());
+        }
+    }
+    None
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -149,6 +260,21 @@ pub struct UserPreferences {
     /// 默认开启以保持可用性；关闭后可验证文本是否真正由 TSF 上屏。
     #[serde(default = "default_true")]
     pub allow_non_tsf_insertion_fallback: bool,
+    /// ユーザー定義カスタム整形スタイル一覧（順序保持）。
+    /// 各要素は `{ id, name, prompt }`。`PolishMode::Custom(id)` から参照される。
+    /// 旧フィールド `polish_prompt_overrides` は廃止。serde にはフィールド未知のフラグは無いので
+    /// 旧 preferences.json に残った値は単に読み捨てされる。
+    #[serde(default)]
+    pub custom_modes: Vec<CustomMode>,
+    /// アプリ別自動 mode 切替ルール（順序が優先順位）。
+    /// dictation の polish 直前にアクティブアプリ名と各 `app_pattern` を比較して
+    /// 最初にマッチしたルールの mode を採用する。マッチしない場合は `default_mode`。
+    #[serde(default)]
+    pub app_mode_overrides: Vec<AppModeOverride>,
+    /// 翻訳機能を有効にするか。false の時は translation_hotkey を登録しない／
+    /// hotkey が誤発火しても overlay/pipeline を起動しない。Settings UI 側のマスタートグル。
+    #[serde(default = "default_true")]
+    pub translate_enabled: bool,
     /// 用户的工作语言（多选，原生名）。会作为前提注入 LLM polish/translate 的 system prompt 头部，
     /// 让模型知道该用户在哪些语言间工作。详见 issue #4。
     #[serde(default = "default_working_languages")]
@@ -289,6 +415,12 @@ struct UserPreferencesWire {
     active_llm_provider: String,
     restore_clipboard_after_paste: bool,
     allow_non_tsf_insertion_fallback: bool,
+    #[serde(default)]
+    custom_modes: Option<Vec<CustomMode>>,
+    #[serde(default)]
+    app_mode_overrides: Option<Vec<AppModeOverride>>,
+    #[serde(default)]
+    translate_enabled: Option<bool>,
     working_languages: Vec<String>,
     translation_target_language: String,
     chinese_script_preference: ChineseScriptPreference,
@@ -340,6 +472,9 @@ impl Default for UserPreferencesWire {
             active_llm_provider: prefs.active_llm_provider,
             restore_clipboard_after_paste: prefs.restore_clipboard_after_paste,
             allow_non_tsf_insertion_fallback: prefs.allow_non_tsf_insertion_fallback,
+            custom_modes: Some(prefs.custom_modes),
+            app_mode_overrides: Some(prefs.app_mode_overrides),
+            translate_enabled: Some(prefs.translate_enabled),
             working_languages: prefs.working_languages,
             translation_target_language: prefs.translation_target_language,
             chinese_script_preference: prefs.chinese_script_preference,
@@ -389,6 +524,9 @@ impl<'de> Deserialize<'de> for UserPreferences {
             active_llm_provider: wire.active_llm_provider,
             restore_clipboard_after_paste: wire.restore_clipboard_after_paste,
             allow_non_tsf_insertion_fallback: wire.allow_non_tsf_insertion_fallback,
+            custom_modes: wire.custom_modes.unwrap_or_default(),
+            app_mode_overrides: wire.app_mode_overrides.unwrap_or_default(),
+            translate_enabled: wire.translate_enabled.unwrap_or(true),
             working_languages: wire.working_languages,
             translation_target_language: wire.translation_target_language,
             chinese_script_preference: wire.chinese_script_preference,
@@ -505,6 +643,9 @@ impl Default for UserPreferences {
             active_llm_provider: "ark".into(),
             restore_clipboard_after_paste: true,
             allow_non_tsf_insertion_fallback: true,
+            custom_modes: Vec::new(),
+            app_mode_overrides: Vec::new(),
+            translate_enabled: true,
             working_languages: default_working_languages(),
             translation_target_language: String::new(),
             chinese_script_preference: ChineseScriptPreference::Auto,
@@ -1217,5 +1358,82 @@ mod tests {
                 .unwrap();
 
         assert!(binding.effective_codes().is_empty());
+    }
+
+    // ─────────── AppModeOverride / pick_mode_for_app ───────────
+
+    fn ov(pat: &str, mode: PolishMode) -> AppModeOverride {
+        AppModeOverride {
+            app_pattern: pat.to_string(),
+            mode,
+        }
+    }
+
+    #[test]
+    fn pick_mode_for_app_substring_matches_discord_exe() {
+        let overrides = vec![ov("discord", PolishMode::Formal)];
+        let picked = pick_mode_for_app(Some("Discord.exe"), &overrides);
+        assert_eq!(picked, Some(PolishMode::Formal));
+    }
+
+    #[test]
+    fn pick_mode_for_app_is_case_insensitive() {
+        let overrides = vec![ov("CHROME", PolishMode::Light)];
+        let picked = pick_mode_for_app(Some("Google Chrome"), &overrides);
+        assert_eq!(picked, Some(PolishMode::Light));
+    }
+
+    #[test]
+    fn pick_mode_for_app_returns_first_match_in_order() {
+        let overrides = vec![
+            ov("chrome", PolishMode::Light),
+            ov("google", PolishMode::Structured),
+        ];
+        let picked = pick_mode_for_app(Some("Google Chrome"), &overrides);
+        assert_eq!(picked, Some(PolishMode::Light));
+    }
+
+    #[test]
+    fn pick_mode_for_app_empty_overrides_yields_none() {
+        let picked = pick_mode_for_app(Some("AnyApp"), &[]);
+        assert_eq!(picked, None);
+    }
+
+    #[test]
+    fn pick_mode_for_app_no_match_yields_none() {
+        let overrides = vec![ov("slack", PolishMode::Formal)];
+        let picked = pick_mode_for_app(Some("Visual Studio Code"), &overrides);
+        assert_eq!(picked, None);
+    }
+
+    #[test]
+    fn pick_mode_for_app_empty_pattern_is_skipped() {
+        let overrides = vec![
+            ov("   ", PolishMode::Raw),
+            ov("code", PolishMode::Structured),
+        ];
+        let picked = pick_mode_for_app(Some("Visual Studio Code"), &overrides);
+        assert_eq!(picked, Some(PolishMode::Structured));
+    }
+
+    #[test]
+    fn pick_mode_for_app_supports_custom_mode() {
+        let overrides = vec![ov("notion", PolishMode::Custom("note-style".into()))];
+        let picked = pick_mode_for_app(Some("Notion.exe"), &overrides);
+        assert_eq!(picked, Some(PolishMode::Custom("note-style".into())));
+    }
+
+    #[test]
+    fn pick_mode_for_app_none_or_empty_app_yields_none() {
+        let overrides = vec![ov("anything", PolishMode::Light)];
+        assert_eq!(pick_mode_for_app(None, &overrides), None);
+        assert_eq!(pick_mode_for_app(Some(""), &overrides), None);
+        assert_eq!(pick_mode_for_app(Some("   "), &overrides), None);
+    }
+
+    #[test]
+    fn user_preferences_missing_app_mode_overrides_falls_back_to_empty() {
+        let prefs: UserPreferences = serde_json::from_str("{}").unwrap();
+        assert!(prefs.app_mode_overrides.is_empty());
     }
 }
