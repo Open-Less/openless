@@ -691,7 +691,6 @@ mod platform {
     use std::sync::Arc;
 
     use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
-    use windows::Win32::System::Threading::GetCurrentThreadId;
     use windows::Win32::UI::WindowsAndMessaging::{
         CallNextHookEx, DispatchMessageW, GetMessageW, PostThreadMessageW, SetWindowsHookExW,
         TranslateMessage, UnhookWindowsHookEx, HC_ACTION, HHOOK, KBDLLHOOKSTRUCT, MSG,
@@ -722,6 +721,12 @@ mod platform {
     const ACCEPT_INJECTED_ENV: &str = "OPENLESS_ACCEPT_SYNTHETIC_HOTKEY_EVENTS";
 
     static HOOK_CONTEXT: AtomicPtr<CallbackContext> = AtomicPtr::new(std::ptr::null_mut());
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        #[link_name = "GetCurrentThreadId"]
+        fn get_current_thread_id() -> u32;
+    }
 
     pub fn start_adapter(
         binding: HotkeyBinding,
@@ -786,7 +791,7 @@ mod platform {
     unsafe impl Sync for CallbackContext {}
 
     fn run_listen_loop(shared: Arc<Shared>, tx: Sender<HotkeyEvent>, status_tx: StartupTx<u32>) {
-        let thread_id = unsafe { GetCurrentThreadId() };
+        let thread_id = unsafe { get_current_thread_id() };
         let context = Box::into_raw(Box::new(CallbackContext {
             shared,
             tx,
