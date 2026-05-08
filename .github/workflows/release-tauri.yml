@@ -484,6 +484,26 @@ jobs:
           # 普通用户看不到；同时只上传 latest-*-beta.json，正式版用户的
           # endpoint（latest-*.json）永远不会被覆盖，保证 Beta 不溢出正式版。
           prerelease: ${{ env.OPENLESS_RELEASE_CHANNEL == 'beta' }}
+          # body 在 generated notes 之前 prepend——所有 matrix job 设同一份字符串，
+          # 多次调用 action 时内容一致、idempotent。提示 macOS Gatekeeper 绕过指令 +
+          # 渠道说明，每个 release 自动带上，用户不用回项目 README 翻就能看到。
+          body: |
+            ### macOS 用户首次安装提示
+
+            下载 DMG 拖入 `/Applications` 后，**必须**在终端运行：
+
+            ```bash
+            xattr -cr /Applications/OpenLess.app
+            ```
+
+            否则 Gatekeeper 会提示「OpenLess 已损坏」——这是因为当前 build 用 ad-hoc 签名、没做 Apple 公证。
+
+            ### 渠道说明
+
+            - 以 `-tauri` 结尾的 tag 是**正式版**（自动推送给所有 in-app 检查更新的用户）。
+            - 以 `-beta-tauri` 结尾的 tag 是 **Beta 版**（GitHub 标 pre-release，**不**通过 in-app updater 推送给正式版用户；只对在「设置 → 关于 → 加入 Beta 渠道」开关切到 Beta 的用户可见，且需要手动从此页面下载安装）。
+
+          append_body: true
           # Matrix jobs all upload assets to the same release. Generate notes once
           # so macOS, Windows, and Linux jobs do not duplicate the release body.
           generate_release_notes: ${{ matrix.updater-target == 'darwin' && matrix.updater-arch == 'aarch64' }}

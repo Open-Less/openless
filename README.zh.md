@@ -158,16 +158,19 @@ OpenLess 只做一件事：**把语音变成可用的书面文字（尤其是 AI
 
 到 [Releases](../../releases) 下载对应平台的安装包：
 - **Windows**：`OpenLess_<版本>_x64-setup.exe` — 运行安装程序
-- **macOS**：`OpenLess_<版本>_aarch64.dmg` — 打开后拖入「应用程序」
-- **macOS(brew install)**:
-```bash
-brew tap appergb/openless https://github.com/appergb/openless
-brew install --cask openless
-xattr -cr /Applications/OpenLess.app
+- **macOS**：`OpenLess_<版本>_aarch64.dmg`（Apple Silicon）或 `OpenLess_<版本>_x64.dmg`（Intel）— 打开后拖入「应用程序」，**然后必须在终端跑这一行绕过 Gatekeeper 的"已损坏"提示**（当前包是 ad-hoc 签名、未做 Apple 公证）：
+  ```bash
+  xattr -cr /Applications/OpenLess.app
+  ```
+- **macOS（Homebrew）**：
+  ```bash
+  brew tap appergb/openless https://github.com/appergb/openless
+  brew install --cask openless
+  xattr -cr /Applications/OpenLess.app
 
-# Upgrade to the latest version
-brew update && brew upgrade openless
-```
+  # 升级到最新版本
+  brew update && brew upgrade openless
+  ```
 
 首次启动需要授予权限：
 

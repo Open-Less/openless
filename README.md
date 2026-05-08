@@ -157,17 +157,20 @@ OpenLess does one thing: **turn speech into usable written text (especially AI p
 ## Download & install (end users)
 
 Go to [Releases](../../releases) and download:
-- **macOS**: `OpenLess_<version>_aarch64.dmg` — open, drag to `/Applications`
+- **macOS**: `OpenLess_<version>_aarch64.dmg` (Apple Silicon) or `OpenLess_<version>_x64.dmg` (Intel) — open, drag to `/Applications`, **then run this once in Terminal to bypass Gatekeeper "damaged" warning** (the build is ad-hoc signed, not Apple-notarized):
+  ```bash
+  xattr -cr /Applications/OpenLess.app
+  ```
 - **Windows**: `OpenLess_<version>_x64-setup.exe` — run the installer
-- **macOS(brew install)**:
-```bash
-brew tap appergb/openless https://github.com/appergb/openless
-brew install --cask openless
-xattr -cr /Applications/OpenLess.app
+- **macOS (Homebrew)**:
+  ```bash
+  brew tap appergb/openless https://github.com/appergb/openless
+  brew install --cask openless
+  xattr -cr /Applications/OpenLess.app
 
-# Upgrade to the latest version
-brew update && brew upgrade openless
-```
+  # Upgrade to the latest version
+  brew update && brew upgrade openless
+  ```
 
 On first launch, grant the permissions the app requests:
 
