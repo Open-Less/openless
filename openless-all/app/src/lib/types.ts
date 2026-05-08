@@ -165,6 +165,10 @@ export interface UserPreferences {
   foundryLocalAsrLanguageHint: string;
   /** Windows Foundry Local Whisper 模型在 runtime 中保持加载的秒数。 */
   foundryLocalAsrKeepLoadedSecs: number;
+  /** 历史记录保留天数。0 = 不按时间清理（仍受 200 条上限）。默认 7。 */
+  historyRetentionDays: number;
+  /** 对话感知 polish 上下文窗口（分钟）。0 = 关闭。默认 5。详见 PR-A。 */
+  polishContextWindowMinutes: number;
 }
 
 export interface MicrophoneDevice {

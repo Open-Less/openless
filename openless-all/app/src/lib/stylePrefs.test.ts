@@ -38,6 +38,8 @@ const previousPrefs: UserPreferences = {
   foundryLocalAsrModel: '',
   foundryLocalAsrLanguageHint: '',
   foundryLocalAsrKeepLoadedSecs: 300,
+  historyRetentionDays: 7,
+  polishContextWindowMinutes: 5,
 };
 
 const nextPrefs: UserPreferences = {

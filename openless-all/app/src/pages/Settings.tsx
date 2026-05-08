@@ -270,6 +270,19 @@ function RecordingSection() {
     savePrefs({ ...prefs, restoreClipboardAfterPaste });
   const onAllowNonTsfFallbackChange = (allowNonTsfInsertionFallback: boolean) =>
     savePrefs({ ...prefs, allowNonTsfInsertionFallback });
+  // 历史保留 / 对话感知 polish 上下文窗口都用裸 number input；空字符串时回滚到默认值。
+  // 范围限制：retention 0-365 天，context window 0-60 分钟（再大的值对实际对话场景没意义且白烧 token）。
+  const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
+  const onHistoryRetentionChange = (raw: string) => {
+    const parsed = raw === '' ? 0 : Number.parseInt(raw, 10);
+    if (Number.isNaN(parsed)) return;
+    void savePrefs({ ...prefs, historyRetentionDays: clamp(parsed, 0, 365) });
+  };
+  const onPolishContextWindowChange = (raw: string) => {
+    const parsed = raw === '' ? 0 : Number.parseInt(raw, 10);
+    if (Number.isNaN(parsed)) return;
+    void savePrefs({ ...prefs, polishContextWindowMinutes: clamp(parsed, 0, 60) });
+  };
 
   const choices: Array<[HotkeyMode, string]> = [
     ['toggle', t('settings.recording.modeToggle')],
@@ -430,6 +443,32 @@ function RecordingSection() {
           />
         </SettingRow>
       )}
+      <SettingRow
+        label={t('settings.recording.historyRetentionLabel')}
+        desc={t('settings.recording.historyRetentionDesc')}
+      >
+        <input
+          type="number"
+          min={0}
+          max={365}
+          value={prefs.historyRetentionDays}
+          onChange={e => onHistoryRetentionChange(e.target.value)}
+          style={{ ...inputStyle, width: 80, textAlign: 'right' }}
+        />
+      </SettingRow>
+      <SettingRow
+        label={t('settings.recording.polishContextWindowLabel')}
+        desc={t('settings.recording.polishContextWindowDesc')}
+      >
+        <input
+          type="number"
+          min={0}
+          max={60}
+          value={prefs.polishContextWindowMinutes}
+          onChange={e => onPolishContextWindowChange(e.target.value)}
+          style={{ ...inputStyle, width: 80, textAlign: 'right' }}
+        />
+      </SettingRow>
       <AutostartRow />
       {capability.statusHint && (
         <div style={{ marginTop: 6, fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.5 }}>

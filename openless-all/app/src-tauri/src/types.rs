@@ -214,10 +214,27 @@ pub struct UserPreferences {
     /// 一个手动下载 Beta 的入口。不影响 plugin-updater 的自动检查路径。
     #[serde(default)]
     pub update_channel: UpdateChannel,
+    /// 历史记录保留天数。0 = 不按时间清理（仅受 200 条上限）。默认 7 天。
+    /// 写入新条目时执行清理，避免后台轮询。
+    #[serde(default = "default_history_retention_days")]
+    pub history_retention_days: u32,
+    /// 对话感知 polish 的上下文窗口（分钟）：把最近 N 分钟的转写 + 已润色文本
+    /// 作为多轮上下文喂给 LLM，让代词 / 不完整句子能被正确解析。
+    /// 0 = 关闭（每次润色独立单轮，跟历史行为一致）。默认 5 分钟。
+    #[serde(default = "default_polish_context_window_minutes")]
+    pub polish_context_window_minutes: u32,
 }
 
 fn default_local_asr_model() -> String {
     "qwen3-asr-0.6b".into()
+}
+
+fn default_history_retention_days() -> u32 {
+    7
+}
+
+fn default_polish_context_window_minutes() -> u32 {
+    5
 }
 
 fn default_local_asr_mirror() -> String {
@@ -285,6 +302,10 @@ struct UserPreferencesWire {
     foundry_local_asr_keep_loaded_secs: u32,
     #[serde(default)]
     update_channel: UpdateChannel,
+    #[serde(default = "default_history_retention_days")]
+    history_retention_days: u32,
+    #[serde(default = "default_polish_context_window_minutes")]
+    polish_context_window_minutes: u32,
 }
 
 impl Default for UserPreferencesWire {
@@ -320,6 +341,8 @@ impl Default for UserPreferencesWire {
             foundry_local_asr_language_hint: prefs.foundry_local_asr_language_hint,
             foundry_local_asr_keep_loaded_secs: prefs.foundry_local_asr_keep_loaded_secs,
             update_channel: prefs.update_channel,
+            history_retention_days: prefs.history_retention_days,
+            polish_context_window_minutes: prefs.polish_context_window_minutes,
         }
     }
 }
@@ -369,6 +392,8 @@ impl<'de> Deserialize<'de> for UserPreferences {
             foundry_local_asr_language_hint: wire.foundry_local_asr_language_hint,
             foundry_local_asr_keep_loaded_secs: wire.foundry_local_asr_keep_loaded_secs,
             update_channel: wire.update_channel,
+            history_retention_days: wire.history_retention_days,
+            polish_context_window_minutes: wire.polish_context_window_minutes,
         })
     }
 }
@@ -474,6 +499,8 @@ impl Default for UserPreferences {
             foundry_local_asr_language_hint: String::new(),
             foundry_local_asr_keep_loaded_secs: default_local_asr_keep_loaded_secs(),
             update_channel: UpdateChannel::default(),
+            history_retention_days: default_history_retention_days(),
+            polish_context_window_minutes: default_polish_context_window_minutes(),
         }
     }
 }

@@ -72,6 +72,8 @@ const mockSettings: UserPreferences = {
   foundryLocalAsrModel: 'whisper-small',
   foundryLocalAsrLanguageHint: '',
   foundryLocalAsrKeepLoadedSecs: 300,
+  historyRetentionDays: 7,
+  polishContextWindowMinutes: 5,
 };
 
 const mockHotkeyCapability: HotkeyCapability = {

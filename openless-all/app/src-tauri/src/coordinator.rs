@@ -838,6 +838,8 @@ impl Coordinator {
         // repolish 是历史记录里手动重新润色，不再绑定原 session 的前台 app；
         // 当下用户调起的 app 才是相关上下文（如果可拿）。
         let front_app = capture_frontmost_app();
+        // repolish 是用户主动对单条历史"重新润色"，不应该被对话感知上下文影响——
+        // 用户改的就是这一条本身，不要把别的会话拿进来。所以始终走单轮路径。
         polish_text(
             &raw_text,
             mode,
@@ -846,6 +848,7 @@ impl Coordinator {
             chinese_script_preference,
             output_language_preference,
             front_app.as_deref(),
+            &[],
         )
         .await
         .map_err(|e| e.to_string())
@@ -2664,7 +2667,7 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
             duration_ms: Some(raw.duration_ms),
             dictionary_entry_count: Some(enabled_phrases(inner).len() as u32),
         };
-        if let Err(e) = inner.history.append(session) {
+        if let Err(e) = inner.history.append_with_retention(session, inner.prefs.get().history_retention_days) {
             log::error!("[coord] history append failed: {e}");
         }
         emit_capsule(
@@ -2693,6 +2696,33 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     let translation_target = prefs.translation_target_language.trim().to_string();
     let translation_active =
         inner.translation_modifier_seen.load(Ordering::SeqCst) && !translation_target.is_empty();
+    // 对话感知 polish：拉最近 N 分钟的会话作为 LLM 上下文。仅在非翻译路径且非 Raw mode
+    // 才有意义（Raw 不走 LLM、翻译走单轮独立 prompt）。窗口=0 时 prior_turns 是空 Vec，
+    // polish 路径自动退化成单轮单消息——跟历史行为一致。
+    let polish_context_window_minutes = prefs.polish_context_window_minutes;
+    let prior_turns: Vec<(String, String)> = if !translation_active
+        && mode != PolishMode::Raw
+        && polish_context_window_minutes > 0
+    {
+        match inner
+            .history
+            .recent_within_minutes(polish_context_window_minutes)
+        {
+            Ok(sessions) => sessions
+                .into_iter()
+                // 只取实际成功润色过的会话作为上下文：失败的会话 final_text 是 raw 兜底，
+                // 喂回 LLM 会让模型以为"上一轮我什么都没做"——没意义且占 token。
+                .filter(|s| s.error_code.is_none() && !s.final_text.trim().is_empty())
+                .map(|s| (s.raw_transcript, s.final_text))
+                .collect(),
+            Err(e) => {
+                log::warn!("[coord] fetch polish context failed: {e}; fall back to single-turn");
+                Vec::new()
+            }
+        }
+    } else {
+        Vec::new()
+    };
     let (polished, polish_error) = if translation_active {
         log::info!(
             "[coord] translation mode → target=\u{300C}{}\u{300D} working={:?} front_app={:?}",
@@ -2718,6 +2748,7 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
             chinese_script_preference,
             output_language_preference,
             front_app.as_deref(),
+            &prior_turns,
         )
         .await
     };
@@ -2838,7 +2869,7 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
         // 比"启用词条总数"更能反映本段口述命中了多少。u64 → u32 截断对单段听写足够。
         dictionary_entry_count: Some(total_hits.min(u32::MAX as u64) as u32),
     };
-    if let Err(e) = inner.history.append(session) {
+    if let Err(e) = inner.history.append_with_retention(session, inner.prefs.get().history_retention_days) {
         log::error!("[coord] history append failed: {e}");
     }
 
@@ -3318,6 +3349,7 @@ async fn polish_or_passthrough(
     chinese_script_preference: ChineseScriptPreference,
     output_language_preference: OutputLanguagePreference,
     front_app: Option<&str>,
+    prior_turns: &[(String, String)],
 ) -> (String, Option<String>) {
     if mode == PolishMode::Raw {
         return (raw.text.clone(), None);
@@ -3330,6 +3362,7 @@ async fn polish_or_passthrough(
         chinese_script_preference,
         output_language_preference,
         front_app,
+        prior_turns,
     )
     .await
     {
@@ -3350,6 +3383,7 @@ async fn polish_text(
     chinese_script_preference: ChineseScriptPreference,
     output_language_preference: OutputLanguagePreference,
     front_app: Option<&str>,
+    prior_turns: &[(String, String)],
 ) -> anyhow::Result<String> {
     let api_key = CredentialsVault::get(CredentialAccount::ArkApiKey)?.unwrap_or_default();
     let model = CredentialsVault::get(CredentialAccount::ArkModelId)?
@@ -3372,6 +3406,7 @@ async fn polish_text(
             chinese_script_preference,
             output_language_preference,
             front_app,
+            prior_turns,
         )
         .await?)
 }
@@ -3865,7 +3900,7 @@ async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
             duration_ms: Some(raw.duration_ms),
             dictionary_entry_count: None,
         };
-        if let Err(e) = inner.history.append(session) {
+        if let Err(e) = inner.history.append_with_retention(session, inner.prefs.get().history_retention_days) {
             log::error!("[coord] QA history append failed: {e}");
         }
     }

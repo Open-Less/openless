@@ -665,14 +665,56 @@ impl HistoryStore {
     }
 
     pub fn append(&self, session: DictationSession) -> Result<()> {
+        self.append_with_retention(session, 0)
+    }
+
+    /// `retention_days == 0` 跟旧 append 行为一致（不按时间清理）。
+    /// `> 0` 时在写入新条目后顺手把超过 N 天的会话裁掉，写入时就完成清理，
+    /// 不需要后台轮询。最后再受 200 条硬上限约束（HISTORY_CAP）。
+    pub fn append_with_retention(
+        &self,
+        session: DictationSession,
+        retention_days: u32,
+    ) -> Result<()> {
         let _guard = self.lock.lock();
         let mut sessions = self.read_locked()?;
         // Prepend so the newest session is at index 0, matching the Swift impl.
         sessions.insert(0, session);
+        if retention_days > 0 {
+            let cutoff =
+                chrono::Utc::now() - chrono::Duration::days(i64::from(retention_days));
+            sessions.retain(|s| {
+                chrono::DateTime::parse_from_rfc3339(&s.created_at)
+                    .map(|t| t.with_timezone(&chrono::Utc) >= cutoff)
+                    // 解析失败时保守保留——避免错误的时间戳让用户丢历史。
+                    .unwrap_or(true)
+            });
+        }
         if sessions.len() > HISTORY_CAP {
             sessions.truncate(HISTORY_CAP);
         }
         self.write_locked(&sessions)
+    }
+
+    /// 返回最近 N 分钟内的会话（newest-first）。`minutes == 0` → 空 Vec，
+    /// 调用方据此跳过对话感知 polish 路径。
+    pub fn recent_within_minutes(&self, minutes: u32) -> Result<Vec<DictationSession>> {
+        if minutes == 0 {
+            return Ok(Vec::new());
+        }
+        let _guard = self.lock.lock();
+        let sessions = self.read_locked()?;
+        let cutoff = chrono::Utc::now() - chrono::Duration::minutes(i64::from(minutes));
+        // sessions 是 newest-first，超出窗口的会话之后的都更老，take_while 即可。
+        let filtered: Vec<DictationSession> = sessions
+            .into_iter()
+            .take_while(|s| {
+                chrono::DateTime::parse_from_rfc3339(&s.created_at)
+                    .map(|t| t.with_timezone(&chrono::Utc) >= cutoff)
+                    .unwrap_or(false)
+            })
+            .collect();
+        Ok(filtered)
     }
 
     pub fn delete(&self, id: &str) -> Result<()> {

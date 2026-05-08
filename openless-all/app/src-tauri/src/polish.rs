@@ -95,6 +95,7 @@ impl OpenAICompatibleLLMProvider {
         chinese_script_preference: ChineseScriptPreference,
         output_language_preference: OutputLanguagePreference,
         front_app: Option<&str>,
+        prior_turns: &[(String, String)],
     ) -> Result<String, LLMError> {
         let mut system_prompt = compose_system_prompt(mode, hotwords);
         if let Some(premise) =
@@ -107,8 +108,22 @@ impl OpenAICompatibleLLMProvider {
         {
             system_prompt = format!("{}\n\n{}", premise, system_prompt);
         }
+        // 多轮上下文模式：把"上一轮的指令是什么、不要复读上一轮答案"明确写进
+        // system prompt，配合 chat structure 让 LLM 自然不重复历史输出。
+        if !prior_turns.is_empty() {
+            system_prompt = format!(
+                "{}\n\n{}",
+                system_prompt,
+                prompts::polish_context_instruction()
+            );
+        }
         let user_prompt = prompts::user_prompt(raw_text);
-        self.chat_completion(&system_prompt, &user_prompt).await
+        if prior_turns.is_empty() {
+            self.chat_completion(&system_prompt, &user_prompt).await
+        } else {
+            self.chat_completion_with_polish_history(&system_prompt, prior_turns, &user_prompt)
+                .await
+        }
     }
 
     /// 多轮划词追问，**流式**返回。`messages` 包含历史对话（user/assistant 交替），
@@ -172,6 +187,47 @@ impl OpenAICompatibleLLMProvider {
         self.chat_completion(&system_prompt, &user_prompt).await
     }
 
+    /// 多轮对话感知的 polish 路径。`prior_turns` 是按时间倒序（最新在前）的
+    /// `(raw_transcript, polished_text)` 序列；这里反转成时间正序、然后展开
+    /// 成 OpenAI chat completions 的多轮 `user` / `assistant` messages，最后一条
+    /// 是当前 user prompt。LLM 会自然把 prior assistant 输出当成"我已说过、
+    /// 不复读"。配合 system prompt 里的显式指令（prompts::polish_context_instruction）
+    /// 共同保证不复读上文，仅把上文当语义上下文。
+    async fn chat_completion_with_polish_history(
+        &self,
+        system_prompt: &str,
+        prior_turns: &[(String, String)],
+        user_prompt: &str,
+    ) -> Result<String, LLMError> {
+        let url = chat_completions_url(&self.config.base_url);
+        let mut messages: Vec<serde_json::Value> = Vec::with_capacity(prior_turns.len() * 2 + 2);
+        messages.push(json!({ "role": "system", "content": system_prompt }));
+        // prior_turns 按时间倒序（newest-first），需要反转成正序喂给 chat。
+        for (raw, polished) in prior_turns.iter().rev() {
+            messages.push(json!({ "role": "user", "content": prompts::user_prompt(raw) }));
+            messages.push(json!({ "role": "assistant", "content": polished }));
+        }
+        messages.push(json!({ "role": "user", "content": user_prompt }));
+
+        let body = json!({
+            "model": self.config.model,
+            "stream": false,
+            "temperature": self.config.temperature,
+            "messages": messages,
+        });
+
+        log::info!(
+            "[llm] POST {} provider={} model={} prior_turns={}",
+            url,
+            self.config.provider_id,
+            self.config.model,
+            prior_turns.len()
+        );
+
+        // 复用 send_and_extract 把 chat_completion 与本函数共享 HTTP / 解析路径。
+        self.send_chat_request(&url, &body).await
+    }
+
     async fn chat_completion(
         &self,
         system_prompt: &str,
@@ -195,9 +251,19 @@ impl OpenAICompatibleLLMProvider {
             self.config.model
         );
 
+        self.send_chat_request(&url, &body).await
+    }
+
+    /// 共用的 HTTP send + body 解析。chat_completion / chat_completion_with_polish_history
+    /// 各自构造好 body 后都调到这里，避免 30 行 send/parse 重复。
+    async fn send_chat_request(
+        &self,
+        url: &str,
+        body: &serde_json::Value,
+    ) -> Result<String, LLMError> {
         let mut request = self
             .client
-            .post(&url)
+            .post(url)
             .header("Content-Type", "application/json");
         if !self.config.api_key.trim().is_empty() {
             request = request.header("Authorization", format!("Bearer {}", self.config.api_key));
@@ -205,7 +271,7 @@ impl OpenAICompatibleLLMProvider {
         for (k, v) in &self.config.extra_headers {
             request = request.header(k.as_str(), v.as_str());
         }
-        let request = request.json(&body);
+        let request = request.json(body);
 
         let response = match request.send().await {
             Ok(r) => r,
@@ -871,6 +937,19 @@ pub mod prompts {
         )
     }
 
+    /// 对话感知 polish 模式下追加到 system prompt 末尾的指令——告诉 LLM 看到的
+    /// 历史 user / assistant turns 是为了**理解上下文**（代词、不完整句子的指代），
+    /// 而**不是**让它把上文复读出来。每次只输出当前 user message 的整理结果。
+    /// 详见 PR-A 的「对话感知润色」需求。
+    pub fn polish_context_instruction() -> &'static str {
+        "# 多轮上下文使用规则\n\
+         上面的对话历史是给你提供前文语境（代词指代、未完整句子等），\u{4EE5}\u{4FBF}\u{6B63}\u{786E}\u{7406}\u{89E3}\u{6700}\u{65B0}\
+         一条用户消息要表达的意思。\n\
+         **不要复读、改写或合并历史中已经整理过的内容**——历史里的 assistant 输出已经被插入到\
+         用户的文档里了，再次出现就是重复。每次只输出**当前最新一条** user message 的整理结果，\
+         不要把上文带进来。"
+    }
+
     /// 划词语音问答 system prompt — 用户选中一段文字后口头提问，要求基于选区给出简短答案。
     /// 详见 issue #118。
     pub fn qa_system_prompt() -> String {
@@ -1147,6 +1226,7 @@ mod tests {
                 ChineseScriptPreference::Auto,
                 OutputLanguagePreference::Auto,
                 None,
+                &[],
             )
             .await
             .unwrap();
