@@ -24,7 +24,9 @@ const NMPWAIT_NOWAIT: u32 = 0x00000001;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WindowsImeIpcError {
-    // TSF path is force-disabled until per-host lang_id is wired in. See windows_ime_session.rs::prepare_session.
+    // Constructed only on the non-Windows path of `submit_text`; on Windows the
+    // active arms map to NoReadyClient/Timeout/etc. Keep the variant for the
+    // cross-platform stub.
     #[allow(dead_code)]
     Unavailable(String),
     NoReadyClient,
@@ -115,8 +117,8 @@ pub struct ImeSubmitTarget {
     pub thread_id: u32,
 }
 
-// TSF path is force-disabled until per-host lang_id is wired in. See windows_ime_session.rs::prepare_session.
-// Fields here are kept for the future re-enable path; suppress dead_code for now.
+// Fields are exercised only via the test helpers below; keep dead_code allow
+// scoped narrowly so the production path stays warning-clean.
 #[derive(Clone)]
 pub struct WindowsImeIpcServer {
     #[allow(dead_code)]

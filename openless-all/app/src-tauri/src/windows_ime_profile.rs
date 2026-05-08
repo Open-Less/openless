@@ -1,11 +1,47 @@
-// 0x0804 (zh-CN) registers the TSF IME as a Chinese input method, which on a
-// Japanese (or any non-zh) Windows host hijacks IME state away from the user's
-// native IME (ATOK / Microsoft IME) and leaves it stuck after dictation. Use
-// the user's primary UI language instead. 0x0411 = Japanese; this should
-// eventually be selected per host language at runtime — see PR plan.
-pub const OPENLESS_TSF_LANG_ID: u16 = 0x0411;
 pub const OPENLESS_TEXT_SERVICE_CLSID_BRACED: &str = "{6B9F3F4F-5EE7-42D6-9C61-9F80B03A5D7D}";
 pub const OPENLESS_PROFILE_GUID_BRACED: &str = "{9B5F5E04-23F6-47DA-9A26-D221F6C3F02E}";
+
+/// Resolve the host UI lang id at runtime.
+///
+/// On Windows we ask `GetUserDefaultUILanguage`; on other platforms (and as a
+/// safe fallback) we return 0x0409 (en-US) so that callers downstream can do
+/// a "non-zh" branch decision without panicking.
+#[cfg(target_os = "windows")]
+pub fn host_ui_lang_id() -> u16 {
+    // SAFETY: GetUserDefaultUILanguage takes no arguments and always succeeds.
+    unsafe { windows::Win32::Globalization::GetUserDefaultUILanguage() }
+}
+
+#[cfg(not(target_os = "windows"))]
+#[allow(dead_code)]
+pub fn host_ui_lang_id() -> u16 {
+    0x0409
+}
+
+/// The lang id under which we activate the OpenLess TSF profile.
+///
+/// Historically this was a hard-coded `0x0804` (zh-CN), which on non-zh hosts
+/// (notably Japanese hosts running ATOK or Microsoft IME) caused the active
+/// IME to get hijacked into a Chinese-input profile. We now resolve this from
+/// the host UI language at runtime: zh hosts get `0x0804` so the existing
+/// activation path continues to work; non-zh hosts get their own host lang id.
+///
+/// Note: the bundled C++ TSF DLL still ships with `kOpenLessLangId = 0x0804`
+/// in `guids.h`. That's a follow-up — see the prepare_session log line in
+/// `windows_ime_session.rs`. With this PR Rust no longer fights the DLL on zh
+/// hosts (the values match), and on non-zh hosts the prepare path returns
+/// `unavailable()` before we ever reach this function.
+#[allow(dead_code)]
+pub fn openless_tsf_lang_id() -> u16 {
+    let host = host_ui_lang_id();
+    let primary = host & 0x03FF;
+    const PRIMARY_LANG_CHINESE: u16 = 0x04;
+    if primary == PRIMARY_LANG_CHINESE {
+        0x0804
+    } else {
+        host
+    }
+}
 
 use crate::types::{WindowsImeInstallState, WindowsImeStatus};
 
@@ -310,17 +346,18 @@ mod windows_impl {
     pub fn activate_openless_profile() -> WindowsImeProfileResult<()> {
         let clsid = parse_guid(OPENLESS_TEXT_SERVICE_CLSID_BRACED)?;
         let profile_guid = parse_guid(OPENLESS_PROFILE_GUID_BRACED)?;
+        let lang_id = openless_tsf_lang_id();
 
         with_input_processor_profiles(|profiles| unsafe {
-            profiles.EnableLanguageProfile(&clsid, OPENLESS_TSF_LANG_ID, &profile_guid, true)?;
-            profiles.ChangeCurrentLanguage(OPENLESS_TSF_LANG_ID)?;
-            profiles.ActivateLanguageProfile(&clsid, OPENLESS_TSF_LANG_ID, &profile_guid)
+            profiles.EnableLanguageProfile(&clsid, lang_id, &profile_guid, true)?;
+            profiles.ChangeCurrentLanguage(lang_id)?;
+            profiles.ActivateLanguageProfile(&clsid, lang_id, &profile_guid)
         })?;
 
         with_profile_manager(|manager| unsafe {
             manager.ActivateProfile(
                 TF_PROFILETYPE_INPUTPROCESSOR,
-                OPENLESS_TSF_LANG_ID,
+                lang_id,
                 &clsid,
                 &profile_guid,
                 null_hkl(),
@@ -369,7 +406,7 @@ mod windows_impl {
         let snapshot = capture_active_profile()?;
 
         Ok(matches!(snapshot.kind(), ImeProfileKind::TextService)
-            && snapshot.lang_id() == OPENLESS_TSF_LANG_ID
+            && snapshot.lang_id() == openless_tsf_lang_id()
             && snapshot.clsid().map(normalize_guid_string).as_deref()
                 == Some(OPENLESS_TEXT_SERVICE_CLSID_BRACED)
             && snapshot
@@ -682,7 +719,6 @@ mod windows_tests {
 
     #[test]
     fn openless_profile_identifiers_are_fixed() {
-        assert_eq!(OPENLESS_TSF_LANG_ID, 0x0804);
         assert_eq!(
             OPENLESS_TEXT_SERVICE_CLSID_BRACED,
             "{6B9F3F4F-5EE7-42D6-9C61-9F80B03A5D7D}"

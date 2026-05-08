@@ -89,7 +89,8 @@ pub fn decode_message(line: &str) -> Result<ImePipeMessage, serde_json::Error> {
     serde_json::from_str(line)
 }
 
-// TSF path is force-disabled until per-host lang_id is wired in. See windows_ime_session.rs::prepare_session.
+// Used only by tests today; kept as part of the public protocol surface so
+// the future IPC client can validate session-id correlation.
 #[allow(dead_code)]
 pub fn is_result_for_pending_session(
     message: &ImePipeMessage,
