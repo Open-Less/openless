@@ -24,8 +24,7 @@ jobs:
             label: macOS
             preflight: false
           # Rust 1.78+ 生成的 Windows 测试运行器会使用 WaitOnAddress。
-          # 先避开 windows-latest/Server 2025 的 runner 变量，固定到
-          # Server 2022，验证能否真正执行后端单测。
+          # 固定 Server 2022，减少 windows-latest/Server 2025 的镜像变量。
           - os: windows-2022
             label: Windows
             preflight: true
@@ -100,7 +99,115 @@ jobs:
 
       - name: Run Rust backend unit tests (Windows)
         if: runner.os == 'Windows'
-        run: cargo test --manifest-path src-tauri/Cargo.toml --lib --no-default-features --features custom-protocol
+        shell: pwsh
+        run: |
+          # Foundry/WinML SDK 以及 Rust 1.78+ 的 Windows test harness 在
+          # GitHub runner 上都可能让进程启动前因 native entrypoint 退出。
+          # 产品默认构建仍通过 cargo check 覆盖 Foundry 链接形态，单测门禁
+          # 用无 Foundry native 链接的构建来真正执行 Windows 后端测试。
+          # 单测使用独立 target 目录，避免前面的默认特性 cargo check 产物
+          # 影响无 Foundry native 链接的测试进程 DLL 搜索路径。
+          $env:CARGO_TARGET_DIR = Join-Path (Get-Location) "src-tauri\target\windows-unit-tests"
+          $testArgs = @(
+            "--manifest-path", "src-tauri/Cargo.toml",
+            "--lib",
+            "--no-default-features",
+            "--features", "custom-protocol"
+          )
+
+          # rustc 1.78+ 生成的 Windows 二进制会导入 WaitOnAddress 所在的
+          # api-ms-win-core-synch-l1-2-0.dll。GitHub runner 上该 API-set
+          # 解析缺 entrypoint 时，测试进程会在任何单测运行前退出。这里先
+          # no-run 产出测试 exe，再放置一个只转发 WaitOnAddress/WakeByAddress*
+          # 到 KernelBase/kernel32 的测试目录 shim，最后仍然执行 cargo test。
+          cargo test @testArgs --no-run
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+          $depsDir = Join-Path $env:CARGO_TARGET_DIR "debug\deps"
+          $shimSource = Join-Path $env:RUNNER_TEMP "openless-waitonaddress-shim.c"
+          @'
+          #define WIN32_LEAN_AND_MEAN
+          #define WaitOnAddress OpenLessShimHeaderWaitOnAddress
+          #define WakeByAddressSingle OpenLessShimHeaderWakeByAddressSingle
+          #define WakeByAddressAll OpenLessShimHeaderWakeByAddressAll
+          #include <windows.h>
+          #undef WaitOnAddress
+          #undef WakeByAddressSingle
+          #undef WakeByAddressAll
+
+          typedef BOOL (WINAPI *WaitOnAddressFn)(volatile VOID *, PVOID, SIZE_T, DWORD);
+          typedef VOID (WINAPI *WakeByAddressFn)(PVOID);
+
+          static FARPROC resolve_export(const char *name) {
+              const wchar_t *modules[] = { L"KernelBase.dll", L"kernel32.dll" };
+              for (int i = 0; i < 2; ++i) {
+                  HMODULE module = GetModuleHandleW(modules[i]);
+                  if (!module) {
+                      module = LoadLibraryW(modules[i]);
+                  }
+                  if (module) {
+                      FARPROC proc = GetProcAddress(module, name);
+                      if (proc) {
+                          return proc;
+                      }
+                  }
+              }
+              return NULL;
+          }
+
+          __declspec(dllexport) BOOL WINAPI WaitOnAddress(
+              volatile VOID *Address,
+              PVOID CompareAddress,
+              SIZE_T AddressSize,
+              DWORD dwMilliseconds
+          ) {
+              WaitOnAddressFn fn = (WaitOnAddressFn)resolve_export("WaitOnAddress");
+              if (!fn) {
+                  SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
+                  return FALSE;
+              }
+              return fn(Address, CompareAddress, AddressSize, dwMilliseconds);
+          }
+
+          __declspec(dllexport) VOID WINAPI WakeByAddressSingle(PVOID Address) {
+              WakeByAddressFn fn = (WakeByAddressFn)resolve_export("WakeByAddressSingle");
+              if (fn) {
+                  fn(Address);
+              }
+          }
+
+          __declspec(dllexport) VOID WINAPI WakeByAddressAll(PVOID Address) {
+              WakeByAddressFn fn = (WakeByAddressFn)resolve_export("WakeByAddressAll");
+              if (fn) {
+                  fn(Address);
+              }
+          }
+          '@ | Set-Content -Path $shimSource -Encoding ASCII
+
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsDevCmd = $null
+          if (Test-Path $vswhere) {
+            $installPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2>$null
+            if (-not [string]::IsNullOrWhiteSpace($installPath)) {
+              $vsDevCmd = Join-Path $installPath "Common7\Tools\VsDevCmd.bat"
+            }
+          }
+          if (-not $vsDevCmd -or -not (Test-Path $vsDevCmd)) {
+            throw "VsDevCmd.bat not found; cannot build Windows Rust test API-set shim."
+          }
+
+          $shimDll = Join-Path $depsDir "api-ms-win-core-synch-l1-2-0.dll"
+          $shimBuild = "call `"$vsDevCmd`" -arch=x64 -host_arch=x64 >nul && cl /nologo /LD `"$shimSource`" /Fe:`"$shimDll`" /link /NOLOGO"
+          cmd.exe /d /s /c $shimBuild
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          } else {
+            Write-Host "[ci] Built Windows Rust test API-set shim: $shimDll"
+          }
+
+          cargo test @testArgs
 
       - name: Verify version sync across all 5 files
         # 两个平台都跑这个校验：Windows runner 自带 git-bash，跨 shell 表现一致。
