@@ -24,6 +24,8 @@ const NMPWAIT_NOWAIT: u32 = 0x00000001;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WindowsImeIpcError {
+    // TSF path is force-disabled until per-host lang_id is wired in. See windows_ime_session.rs::prepare_session.
+    #[allow(dead_code)]
     Unavailable(String),
     NoReadyClient,
     Timeout,
@@ -113,13 +115,17 @@ pub struct ImeSubmitTarget {
     pub thread_id: u32,
 }
 
+// TSF path is force-disabled until per-host lang_id is wired in. See windows_ime_session.rs::prepare_session.
+// Fields here are kept for the future re-enable path; suppress dead_code for now.
 #[derive(Clone)]
 pub struct WindowsImeIpcServer {
+    #[allow(dead_code)]
     inner: std::sync::Arc<parking_lot::Mutex<WindowsImeIpcState>>,
 }
 
 #[derive(Debug, Default)]
 struct WindowsImeIpcState {
+    #[allow(dead_code)]
     ready_client_id: Option<String>,
 }
 
@@ -130,10 +136,12 @@ impl WindowsImeIpcServer {
         }
     }
 
+    #[allow(dead_code)]
     pub fn mark_client_ready_for_test(&self, client_id: String) {
         self.inner.lock().ready_client_id = Some(client_id);
     }
 
+    #[allow(dead_code)]
     pub fn has_ready_client(&self) -> bool {
         self.inner.lock().ready_client_id.is_some()
     }

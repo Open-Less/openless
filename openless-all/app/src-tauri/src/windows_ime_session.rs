@@ -5,8 +5,11 @@ use crate::windows_ime_profile::{
 };
 use crate::windows_ime_protocol::ImeSubmitStatus;
 
+// TSF path is force-disabled until per-host lang_id is wired in. See `prepare_session` below.
+// `Profile` variant and a few helper constructors are kept for the future re-enable path; suppress dead_code for now.
 #[derive(Debug)]
 pub enum WindowsImeSessionError {
+    #[allow(dead_code)]
     Profile(String),
     Ipc(String),
 }
@@ -46,6 +49,7 @@ impl PreparedWindowsImeSession {
         }
     }
 
+    #[allow(dead_code)]
     pub fn activation_failed(saved_profile: ImeProfileSnapshot) -> Self {
         Self {
             saved_profile: Some(saved_profile),
@@ -88,34 +92,18 @@ impl WindowsImeSessionController {
     }
 
     pub fn prepare_session(&self) -> PreparedWindowsImeSession {
-        #[cfg(target_os = "windows")]
-        {
-            let saved_profile = match self.profile_manager.capture_active_profile() {
-                Ok(snapshot) => snapshot,
-                Err(error) => {
-                    let error = WindowsImeSessionError::Profile(error.to_string());
-                    log::warn!("[windows-ime] capture active profile failed: {error}");
-                    return PreparedWindowsImeSession::unavailable();
-                }
-            };
-
-            match self.profile_manager.activate_openless_profile() {
-                Ok(()) => PreparedWindowsImeSession {
-                    saved_profile: Some(saved_profile),
-                    openless_activated: true,
-                },
-                Err(error) => {
-                    let error = WindowsImeSessionError::Profile(error.to_string());
-                    log::warn!("[windows-ime] activate OpenLess profile failed: {error}");
-                    PreparedWindowsImeSession::activation_failed(saved_profile)
-                }
-            }
-        }
-
-        #[cfg(not(target_os = "windows"))]
-        {
-            PreparedWindowsImeSession::unavailable()
-        }
+        // TSF path is force-disabled. The bundled C++ TSF DLL hard-codes
+        // lang_id 0x0804 (zh-CN) in guids.h, which on a Japanese host either
+        // (a) hijacks the active IME to a chinese-IME profile and leaves it
+        // stuck, or (b) fails activation and falls back via SendInput which
+        // also fights with ATOK. Forcing `unavailable()` routes everything
+        // through the clipboard+SendInput fallback in coordinator.rs. The
+        // proper fix is a per-host lang_id in both guids.h and
+        // windows_ime_profile.rs plus a DLL rebuild — track that as a
+        // separate PR.
+        let _ = &self.profile_manager;
+        let _ = &self.ipc;
+        PreparedWindowsImeSession::unavailable()
     }
 
     pub async fn submit_prepared(

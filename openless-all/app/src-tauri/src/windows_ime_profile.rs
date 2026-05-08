@@ -1,4 +1,9 @@
-pub const OPENLESS_TSF_LANG_ID: u16 = 0x0804;
+// 0x0804 (zh-CN) registers the TSF IME as a Chinese input method, which on a
+// Japanese (or any non-zh) Windows host hijacks IME state away from the user's
+// native IME (ATOK / Microsoft IME) and leaves it stuck after dictation. Use
+// the user's primary UI language instead. 0x0411 = Japanese; this should
+// eventually be selected per host language at runtime — see PR plan.
+pub const OPENLESS_TSF_LANG_ID: u16 = 0x0411;
 pub const OPENLESS_TEXT_SERVICE_CLSID_BRACED: &str = "{6B9F3F4F-5EE7-42D6-9C61-9F80B03A5D7D}";
 pub const OPENLESS_PROFILE_GUID_BRACED: &str = "{9B5F5E04-23F6-47DA-9A26-D221F6C3F02E}";
 
@@ -88,6 +93,8 @@ pub fn restore_decision(
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WindowsImeProfileError {
+    // TSF path is force-disabled until per-host lang_id is wired in. See windows_ime_session.rs::prepare_session.
+    #[allow(dead_code)]
     Unavailable(String),
     WindowsApi(String),
 }
@@ -130,10 +137,12 @@ impl WindowsImeProfileManager {
         Self
     }
 
+    #[allow(dead_code)]
     pub fn capture_active_profile(&self) -> WindowsImeProfileResult<ImeProfileSnapshot> {
         windows_impl::capture_active_profile()
     }
 
+    #[allow(dead_code)]
     pub fn activate_openless_profile(&self) -> WindowsImeProfileResult<()> {
         windows_impl::activate_openless_profile()
     }
@@ -207,6 +216,7 @@ mod windows_impl {
     const OPENLESS_TSF_KEYBOARD_CATEGORY_KEY: &str = r"Software\Microsoft\CTF\TIP\{6B9F3F4F-5EE7-42D6-9C61-9F80B03A5D7D}\Category\Category\{34745C63-B2F0-4784-8B67-5E12C8701A31}\{6B9F3F4F-5EE7-42D6-9C61-9F80B03A5D7D}";
     const OPENLESS_TSF_IMMERSIVE_CATEGORY_KEY: &str = r"Software\Microsoft\CTF\TIP\{6B9F3F4F-5EE7-42D6-9C61-9F80B03A5D7D}\Category\Category\{13A016DF-560B-46CD-947A-4C3AF1E0E35D}\{6B9F3F4F-5EE7-42D6-9C61-9F80B03A5D7D}";
     const OPENLESS_TSF_SYSTRAY_CATEGORY_KEY: &str = r"Software\Microsoft\CTF\TIP\{6B9F3F4F-5EE7-42D6-9C61-9F80B03A5D7D}\Category\Category\{25504FB4-7BAB-4BC1-9C69-CF81890F0EF5}\{6B9F3F4F-5EE7-42D6-9C61-9F80B03A5D7D}";
+    #[allow(dead_code)]
     const OPENLESS_PROFILE_ACTIVATION_FLAGS: u32 =
         TF_IPPMF_FORSESSION | TF_IPPMF_DONTCARECURRENTINPUTLANGUAGE | TF_IPPMF_ENABLEPROFILE;
     const PROFILE_RESTORE_FLAGS: u32 = TF_IPPMF_FORSESSION | TF_IPPMF_DONTCARECURRENTINPUTLANGUAGE;
@@ -296,6 +306,7 @@ mod windows_impl {
         )
     }
 
+    #[allow(dead_code)]
     pub fn activate_openless_profile() -> WindowsImeProfileResult<()> {
         let clsid = parse_guid(OPENLESS_TEXT_SERVICE_CLSID_BRACED)?;
         let profile_guid = parse_guid(OPENLESS_PROFILE_GUID_BRACED)?;
@@ -524,6 +535,7 @@ mod windows_impl {
         operation(&manager).map_err(windows_api_error("ITfInputProcessorProfileMgr operation"))
     }
 
+    #[allow(dead_code)]
     fn with_input_processor_profiles<T>(
         operation: impl FnOnce(&ITfInputProcessorProfiles) -> windows::core::Result<T>,
     ) -> WindowsImeProfileResult<T> {
