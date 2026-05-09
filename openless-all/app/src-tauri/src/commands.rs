@@ -150,10 +150,22 @@ pub fn set_settings(
     // 没有 HotkeySettingsContext，必须靠事件感知录音键变化，否则面板可见时
     // 用户改键会让浮窗里的 "{recordHotkey}" 文案一直停留在旧值。
     persist_settings(&*coord, prefs.clone())?;
-    if let Err(err) = crate::refresh_tray_microphone_menu(&app) {
-        log::warn!("[tray] refresh microphone menu after settings save failed: {err}");
-        sync_tray_microphone_selection(&tray_microphones.lock(), &prefs.microphone_device_name);
-    }
+    // refresh_tray_microphone_menu 内部会调用 NSStatusItem.set_menu，必须在主线程上跑。
+    // set_settings 本身是同步 Tauri command，在 IPC handler 线程上执行；从这里直接调
+    // 会触发 macOS 主线程断言或在 dispatch 队列上死锁，导致整个 UI 无响应（用户改
+    // 偏好后所有按键都没反应即此根因）。dispatch 到主线程后立即返回，IPC 线程不阻塞。
+    let app_for_main = app.clone();
+    let prefs_for_main = prefs.clone();
+    let _ = app.run_on_main_thread(move || {
+        if let Err(err) = crate::refresh_tray_microphone_menu(&app_for_main) {
+            log::warn!("[tray] refresh microphone menu after settings save failed: {err}");
+            let tray_state = app_for_main.state::<TrayMicrophoneMenuState>();
+            sync_tray_microphone_selection(&tray_state.lock(), &prefs_for_main.microphone_device_name);
+        }
+    });
+    // 抑制 unused 警告：tray_microphones 现在改在闭包里通过 app.state 取，
+    // 但函数签名保留 State 入参，以便 Tauri 在调用前注入。
+    let _ = tray_microphones;
     let _ = app.emit("prefs:changed", &prefs);
     Ok(())
 }
@@ -929,9 +941,14 @@ pub fn set_default_polish_mode(
     let mut prefs = coord.prefs().get();
     prefs.default_mode = mode;
     coord.prefs().set(prefs.clone()).map_err(|e| e.to_string())?;
-    if let Err(err) = crate::refresh_tray_microphone_menu(&app) {
-        log::warn!("[tray] refresh style menu after polish mode IPC change failed: {err}");
-    }
+    // 跟 set_settings 同样：refresh_tray_microphone_menu 里 tray.set_menu 改 NSStatusItem，
+    // 必须主线程；这里是同步 Tauri command 跑在 IPC 线程，直调会让 macOS 死锁。
+    let app_for_main = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        if let Err(err) = crate::refresh_tray_microphone_menu(&app_for_main) {
+            log::warn!("[tray] refresh style menu after polish mode IPC change failed: {err}");
+        }
+    });
     let _ = app.emit("prefs:changed", &prefs);
     let _ = app.emit_to("main", "prefs:changed", &prefs);
     Ok(())
