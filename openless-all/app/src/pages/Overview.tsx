@@ -124,34 +124,7 @@ export function Overview({ onOpenHistory }: OverviewProps) {
 
   return (
     <>
-      <PageHeader
-        kicker={t('overview.kicker')}
-        title={t('overview.title')}
-        desc={t('overview.desc')}
-        right={
-          <div
-            style={{
-              display: 'inline-flex', alignItems: 'center', gap: 8,
-              padding: '6px 12px',
-              borderRadius: 999,
-              border: '0.5px solid var(--ol-line-strong)',
-              background: 'var(--ol-surface-2)',
-              color: 'var(--ol-ink-3)',
-              fontSize: 12,
-            }}
-          >
-            <Icon name="cmd" size={12} />
-            {t('overview.pressPrefix')}
-            <kbd style={{
-              padding: '2px 7px', fontSize: 11, fontFamily: 'var(--ol-font-mono)',
-              background: '#fff', borderRadius: 5,
-              border: '0.5px solid var(--ol-line-strong)',
-              color: 'var(--ol-ink)',
-            }}>{prefs ? formatComboLabel(prefs.dictationHotkey) : ''}</kbd>
-            {t('overview.pressSuffix')}
-          </div>
-        }
-      />
+      <PageHeader title={t('overview.title')} />
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 18 }}>
         <ProviderCard

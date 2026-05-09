@@ -4,11 +4,13 @@
 // 开机自启）已从此弹窗移除，避免 "看似可点实际无效" 的负面体感。
 // 待 backend 就位后再补回（参见 issue #69）。
 
-import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from './Icon';
 import { AboutUpdateControl, Settings as SettingsContent, Toggle, type SettingsSectionId } from '../pages/Settings';
 import { Row } from './ui/Row';
+import { SavedToast } from './SavedToast';
+import { useSavedToastListener } from '../lib/savedEvent';
 import { readFontScale, setFontScale, type FontScaleId } from '../lib/fontScale';
 import {
   exportErrorLog,
@@ -55,6 +57,7 @@ const RELEASE_NOTES_URL = 'https://github.com/appergb/openless/releases';
 export function SettingsModal({ os: _os, onClose, initialSettingsSection }: SettingsModalProps) {
   const { t } = useTranslation();
   const [section, setSection] = useState<ModalSectionId>('settings');
+  const savedToast = useSavedToastListener();
   const groups: ModalGroup[] = [
     {
       items: [
@@ -70,6 +73,16 @@ export function SettingsModal({ os: _os, onClose, initialSettingsSection }: Sett
       ],
     },
   ];
+
+  // 与 sidebar nav 一致的滑动指示器：仅第一组（可选中）有 pill；外链组永远不 active 不画 pill。
+  const firstGroupRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const [pillRect, setPillRect] = useState<{ top: number; height: number } | null>(null);
+  useLayoutEffect(() => {
+    const idx = groups[0].items.findIndex(it => it.id === section);
+    const el = firstGroupRefs.current[idx];
+    if (!el) return;
+    setPillRect({ top: el.offsetTop, height: el.offsetHeight });
+  }, [section]);
 
   return (
     <div
@@ -109,12 +122,31 @@ export function SettingsModal({ os: _os, onClose, initialSettingsSection }: Sett
           }}>
 
           {groups.map((g, gi) => (
-            <div key={gi} style={{ display: 'flex', flexDirection: 'column', gap: 1, paddingTop: gi === 1 ? 8 : 0, borderTop: gi === 1 ? '0.5px solid var(--ol-line-soft)' : 'none' }}>
-              {g.items.map((it) => {
+            <div key={gi} style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 1, paddingTop: gi === 1 ? 8 : 0, borderTop: gi === 1 ? '0.5px solid var(--ol-line-soft)' : 'none' }}>
+              {gi === 0 && pillRect && (
+                <div
+                  aria-hidden
+                  style={{
+                    position: 'absolute',
+                    left: 0,
+                    right: 0,
+                    top: pillRect.top,
+                    height: pillRect.height,
+                    background: '#fff',
+                    borderRadius: 8,
+                    boxShadow: '0 1px 2px rgba(0,0,0,.05), 0 0 0 0.5px rgba(0,0,0,.06)',
+                    transition: 'top 0.36s var(--ol-motion-spring), height 0.36s var(--ol-motion-spring)',
+                    pointerEvents: 'none',
+                    zIndex: 0,
+                  }}
+                />
+              )}
+              {g.items.map((it, idx) => {
                 const active = section === it.id && !it.external;
                 return (
                   <button
                     key={it.id}
+                    ref={gi === 0 ? (el => { firstGroupRefs.current[idx] = el; }) : undefined}
                     onClick={() => {
                       if (it.external && it.href) {
                         void openExternal(it.href);
@@ -122,16 +154,17 @@ export function SettingsModal({ os: _os, onClose, initialSettingsSection }: Sett
                         setSection(it.id as ModalSectionId);
                       }
                     }}
+                    className={active ? 'ol-nav-btn ol-nav-btn-active' : 'ol-nav-btn'}
                     style={{
                       display: 'flex', alignItems: 'center', gap: 10,
                       padding: '7px 10px',
                       borderRadius: 8, border: 0,
-                      background: active ? '#fff' : 'transparent',
-                      color: active ? 'var(--ol-ink)' : 'var(--ol-ink-3)',
-                      fontFamily: 'inherit', fontSize: 13, fontWeight: active ? 600 : 500,
-                      boxShadow: active ? '0 1px 2px rgba(0,0,0,.05), 0 0 0 0.5px rgba(0,0,0,.06)' : 'none',
+                      background: 'transparent',
+                      fontFamily: 'inherit', fontSize: 13,
                       cursor: 'default', textAlign: 'left',
-                      transition: 'background 0.16s var(--ol-motion-quick), color 0.16s var(--ol-motion-quick)',
+                      position: 'relative',
+                      zIndex: 1,
+                      transition: 'color 0.16s var(--ol-motion-quick), background 0.16s var(--ol-motion-quick)',
                     }}>
 
                     <Icon name={it.icon} size={14} />
@@ -148,6 +181,13 @@ export function SettingsModal({ os: _os, onClose, initialSettingsSection }: Sett
             只有最里层的 scroll wrapper 真正滚动。这样模态左 sidebar、关闭按钮、
             section 标题都不会跟着内容一起飘。 */}
         <div style={{ flex: 1, minWidth: 0, overflow: 'hidden', position: 'relative', display: 'flex', flexDirection: 'column' }}>
+          {/* "已保存"toast 在内容区右上角；right:54 避开 28×28 关闭按钮 + 12px gap。
+              CredentialField 等通过 emitSaved 发事件，useSavedToastListener 接收。 */}
+          <SavedToast
+            saveState={savedToast.state}
+            message={savedToast.message}
+            offsetStyle={{ top: 16, right: 54 }}
+          />
           <button
             onClick={onClose}
             style={{

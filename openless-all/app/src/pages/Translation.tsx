@@ -7,12 +7,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Card, PageHeader } from './_atoms';
+import { SavedToast } from '../components/SavedToast';
 import { SUPPORTED_LANGUAGES } from '../lib/types';
 import { useHotkeySettings } from '../state/HotkeySettingsContext';
 import { formatComboLabel } from '../lib/hotkey';
-import { ShortcutRecorder } from '../components/ShortcutRecorder';
-import { setTranslationHotkey } from '../lib/ipc';
-import type { UserPreferences, ShortcutBinding } from '../lib/types';
+import type { UserPreferences } from '../lib/types';
 
 type SaveState = 'idle' | 'saving' | 'saved' | 'failed';
 
@@ -63,11 +62,7 @@ export function Translation() {
   if (!prefs) {
     return (
       <>
-        <PageHeader
-          kicker={t('translation.kicker')}
-          title={t('translation.title')}
-          desc={t('translation.desc')}
-        />
+        <PageHeader title={t('translation.title')} />
         <Card>
           {error ? (
             <div role="alert" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -120,20 +115,6 @@ export function Translation() {
       t('translation.save.targetFailed'),
     );
   };
-  const onTranslationHotkeySave = async (binding: ShortcutBinding) => {
-    showSaveStatus('saving', t('common.saving'));
-    try {
-      await setTranslationHotkey(binding);
-    } catch (error) {
-      console.error('[translation] failed to register translation hotkey', error);
-      showSaveStatus('failed', t('translation.save.hotkeyRegisterFailed'));
-      return;
-    }
-    await persistPrefs(
-      current => ({ ...current, translationHotkey: binding }),
-      t('translation.save.hotkeySaveFailed'),
-    );
-  };
 
   const triggerLabel = formatComboLabel(prefs.dictationHotkey);
   const translationHotkeyLabel = formatComboLabel(prefs.translationHotkey);
@@ -141,11 +122,7 @@ export function Translation() {
 
   return (
     <>
-      <PageHeader
-        kicker={t('translation.kicker')}
-        title={t('translation.title')}
-        desc={t('translation.desc')}
-      />
+      <PageHeader title={t('translation.title')} />
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         {error && (
@@ -188,31 +165,11 @@ export function Translation() {
           </div>
         )}
 
-        {saveState !== 'idle' && (
-          <div
-            role={saveState === 'failed' ? 'alert' : 'status'}
-            style={{
-              padding: '8px 12px',
-              borderRadius: 10,
-              border: saveState === 'failed'
-                ? '0.5px solid rgba(239,68,68,0.22)'
-                : '0.5px solid rgba(37,99,235,0.16)',
-              background: saveState === 'failed' ? 'rgba(239,68,68,0.07)' : 'rgba(37,99,235,0.06)',
-              color: saveState === 'failed' ? 'var(--ol-red, #ef4444)' : 'var(--ol-blue)',
-              fontSize: 11.5,
-              lineHeight: 1.5,
-            }}
-          >
-            {saveMessage}
-          </div>
-        )}
+        <SavedToast saveState={saveState} message={saveMessage} />
 
         {/* 1. 工作语言 */}
         <Card>
-          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>{t('translation.working.title')}</div>
-          <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', marginBottom: 12, lineHeight: 1.55 }}>
-            {t('translation.working.desc')}
-          </div>
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>{t('translation.working.title')}</div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
             {SUPPORTED_LANGUAGES.map(lang => {
               const checked = prefs.workingLanguages.includes(lang);
@@ -242,7 +199,7 @@ export function Translation() {
 
         {/* 2. 翻译目标语言 */}
         <Card>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
             <div style={{ fontSize: 13, fontWeight: 600 }}>{t('translation.target.title')}</div>
             <span
               style={{
@@ -258,9 +215,6 @@ export function Translation() {
             >
               {enabled ? t('translation.statusEnabled') : t('translation.statusDisabled')}
             </span>
-          </div>
-          <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', marginBottom: 12, lineHeight: 1.55 }}>
-            {t('translation.target.desc')}
           </div>
           <select
             value={prefs.translationTargetLanguage}
@@ -286,17 +240,6 @@ export function Translation() {
           </select>
         </Card>
 
-        <Card>
-          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>{t('translation.hotkey.title', 'Translation shortcut')}</div>
-          <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', marginBottom: 12, lineHeight: 1.55 }}>
-            {t('translation.hotkey.desc', 'Press this during recording to switch the current dictation into translation mode.')}
-          </div>
-          <ShortcutRecorder
-            value={prefs.translationHotkey}
-            onSave={onTranslationHotkeySave}
-          />
-        </Card>
-
         {/* 3. 使用方法 */}
         <Card>
           <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10 }}>{t('translation.howto.title')}</div>
@@ -307,37 +250,6 @@ export function Translation() {
             <li>{t('translation.howto.step4')}</li>
             <li>{t('translation.howto.step5')}</li>
           </ol>
-
-          <div
-            style={{
-              marginTop: 14,
-              padding: '10px 12px',
-              borderRadius: 10,
-              background: 'rgba(37,99,235,0.06)',
-              border: '0.5px solid rgba(37,99,235,0.15)',
-              fontSize: 11.5,
-              color: 'var(--ol-ink-2)',
-              lineHeight: 1.55,
-            }}
-          >
-            <div style={{ fontWeight: 600, color: 'var(--ol-blue)', marginBottom: 4 }}>{t('translation.howto.indicatorTitle')}</div>
-            {t('translation.howto.indicatorDesc')}
-          </div>
-
-          <div
-            style={{
-              marginTop: 10,
-              padding: '10px 12px',
-              borderRadius: 10,
-              background: 'rgba(0,0,0,0.04)',
-              fontSize: 11.5,
-              color: 'var(--ol-ink-3)',
-              lineHeight: 1.55,
-            }}
-          >
-            <div style={{ fontWeight: 600, color: 'var(--ol-ink-2)', marginBottom: 4 }}>{t('translation.howto.fallbackTitle')}</div>
-            {t('translation.howto.fallbackDesc')}
-          </div>
         </Card>
       </div>
     </>
