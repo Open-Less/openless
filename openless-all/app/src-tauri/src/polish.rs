@@ -1424,6 +1424,7 @@ mod tests {
                 "原文",
                 PolishMode::Raw,
                 &[],
+                "",
                 &[],
                 ChineseScriptPreference::Auto,
                 OutputLanguagePreference::Auto,
