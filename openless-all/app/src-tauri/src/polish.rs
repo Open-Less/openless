@@ -176,7 +176,7 @@ impl OpenAICompatibleLLMProvider {
         let trimmed_directives = universal_directives.trim();
         if !trimmed_directives.is_empty() {
             system_prompt = format!(
-                "{}\n\n通用规则（不论 polish/translate mode 如何，始终遵守）：\n{}",
+                "{}\n\n用户全局指令（用户在 Style 设置中编辑，polish/translate 共用）：\n{}",
                 system_prompt, trimmed_directives
             );
         }
@@ -587,7 +587,7 @@ fn compose_system_prompt(
     let trimmed_directives = universal_directives.trim();
     if !trimmed_directives.is_empty() {
         composed = format!(
-            "{}\n\n通用规则（不论 polish mode 如何，始终遵守，与上述模式指示并存）：\n{}",
+            "{}\n\n用户全局指令（用户在 Style 设置中编辑，所有 polish mode 共用，与上述模式指示并存）：\n{}",
             composed, trimmed_directives
         );
     }
@@ -1301,11 +1301,13 @@ mod tests {
 
     #[test]
     fn compose_system_prompt_no_universal_directives_keeps_legacy_output() {
-        // 空文字 = 既存挙動と完全一致：通用规则ブロックは出ない
+        // 空文字 = 既存挙動と完全一致：用户全局指令ブロックは出ない
+        // （built-in mode prompt 内の `# 通用规则` セクションとは衝突しないよう、
+        //  ヘッダ文字列は `用户全局指令` で固有化している）
         let with_empty = compose_system_prompt(PolishMode::Light, &[], "");
         let with_blank = compose_system_prompt(PolishMode::Light, &[], "   \n\t  ");
-        assert!(!with_empty.contains("通用规则"));
-        assert!(!with_blank.contains("通用规则"));
+        assert!(!with_empty.contains("用户全局指令"));
+        assert!(!with_blank.contains("用户全局指令"));
         assert_eq!(with_empty, with_blank);
     }
 
@@ -1314,7 +1316,7 @@ mod tests {
         let directives = "句読点は全角（、。）を使う\n！や？の後に全角スペースを1つ入れる";
         let prompt = compose_system_prompt(PolishMode::Light, &[], directives);
         assert!(
-            prompt.contains("通用规则"),
+            prompt.contains("用户全局指令"),
             "universal directive header should appear"
         );
         assert!(prompt.contains("句読点は全角"));
@@ -1323,7 +1325,7 @@ mod tests {
 
     #[test]
     fn compose_system_prompt_orders_directives_before_hotwords() {
-        // 注入順序の契約：mode prompt → 通用规则 → 热词。LLM が後半の指示を
+        // 注入順序の契約：mode prompt → 用户全局指令 → 热词。LLM が後半の指示を
         // 優先的に重視する性質上、辞書（最も具体）を末尾に配置する。
         let directives = "句読点は全角を使う";
         let prompt = compose_system_prompt(
@@ -1331,11 +1333,11 @@ mod tests {
             &["梁山泊".into()],
             directives,
         );
-        let directives_pos = prompt.find("通用规则").expect("directive header present");
-        let hotwords_pos = prompt.find("热词").expect("hotword header present");
+        let directives_pos = prompt.find("用户全局指令").expect("directive header present");
+        let hotwords_pos = prompt.find("热词（").expect("hotword header present");
         assert!(
             directives_pos < hotwords_pos,
-            "通用规则 must come before 热词 (directives at {directives_pos}, hotwords at {hotwords_pos})"
+            "用户全局指令 must come before 热词 (directives at {directives_pos}, hotwords at {hotwords_pos})"
         );
     }
 
