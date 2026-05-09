@@ -200,6 +200,9 @@ export const ko: typeof zhCN = {
     currentDefault: '현재 기본',
     ariaSetDefault: '기본으로 설정',
     saveFailed: '저장 실패: {{error}}',
+    universalDirectivesLabel: '모든 모드에 적용되는 공통 지시',
+    universalDirectivesDesc: '어떤 스타일을 선택하든 정리(polish) 시에 항상 적용되는 추가 지시입니다. 타이포그래피 규약이나 문체 규칙을 여기에 적어두면 Light / Structured / Formal 모두에 반영됩니다. 번역 출력에도 적용됩니다. Raw 모드는 LLM 을 거치지 않아 대상이 아닙니다. 비워두면 기존 동작과 완전히 일치합니다.',
+    universalDirectivesPlaceholder: '예:\n- 문장 부호는 전각을 사용\n- 느낌표나 물음표 뒤에 전각 공백을 하나 둠',
     modes: {
       raw: { name: '원문', desc: '구두점과 필요한 문장 구분만 보충하고 다시 쓰거나 확장하지 않습니다.', sample: '원래 구어체 유지. "음", "그게" 같은 입버릇은 제거하지만 문장을 재구성하지 않습니다.' },
       light: { name: '가벼운 정리', desc: '입버릇 제거, 구두점 보충, 자연스럽게 보낼 수 있는 텍스트로 정리합니다.', sample: '원고를 읽는 듯한 느낌이 들지 않도록 어조와 표현 습관은 남기되, 문장이 매끄럽게 흐르도록 합니다.' },

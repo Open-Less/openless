@@ -842,6 +842,7 @@ impl Coordinator {
     pub async fn repolish(&self, raw_text: String, mode: PolishMode) -> Result<String, String> {
         let hotwords = enabled_phrases(&self.inner);
         let prefs = self.inner.prefs.get();
+        let universal_directives = prefs.polish_universal_directives.clone();
         let working_languages = prefs.working_languages;
         let chinese_script_preference = prefs.chinese_script_preference;
         let output_language_preference = prefs.output_language_preference;
@@ -854,6 +855,7 @@ impl Coordinator {
             &raw_text,
             mode,
             &hotwords,
+            &universal_directives,
             &working_languages,
             chinese_script_preference,
             output_language_preference,
@@ -2703,6 +2705,7 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     let prefs = inner.prefs.get();
     let mode = prefs.default_mode;
     let hotword_strs = enabled_phrases(inner);
+    let universal_directives = prefs.polish_universal_directives.clone();
     let working_languages = prefs.working_languages.clone();
     let chinese_script_preference = prefs.chinese_script_preference;
     let output_language_preference = prefs.output_language_preference;
@@ -2747,6 +2750,7 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
         translate_or_passthrough(
             &raw,
             &translation_target,
+            &universal_directives,
             &working_languages,
             chinese_script_preference,
             output_language_preference,
@@ -2758,6 +2762,7 @@ async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
             &raw,
             mode,
             &hotword_strs,
+            &universal_directives,
             &working_languages,
             chinese_script_preference,
             output_language_preference,
@@ -3355,10 +3360,12 @@ fn ensure_qa_volcengine_credentials() -> Result<(), String> {
 
 /// 润色文本；失败时返回原文 + 失败原因，调用方据此弹错误胶囊 + 写历史 error_code。
 /// 之前固定返回 String，调用方拿不到失败信号 → 用户感知"为什么风格设置没生效"。issue #57。
+#[allow(clippy::too_many_arguments)]
 async fn polish_or_passthrough(
     raw: &RawTranscript,
     mode: PolishMode,
     hotwords: &[String],
+    universal_directives: &str,
     working_languages: &[String],
     chinese_script_preference: ChineseScriptPreference,
     output_language_preference: OutputLanguagePreference,
@@ -3372,6 +3379,7 @@ async fn polish_or_passthrough(
         &raw.text,
         mode,
         hotwords,
+        universal_directives,
         working_languages,
         chinese_script_preference,
         output_language_preference,
@@ -3389,10 +3397,12 @@ async fn polish_or_passthrough(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn polish_text(
     raw: &str,
     mode: PolishMode,
     hotwords: &[String],
+    universal_directives: &str,
     working_languages: &[String],
     chinese_script_preference: ChineseScriptPreference,
     output_language_preference: OutputLanguagePreference,
@@ -3416,6 +3426,7 @@ async fn polish_text(
             raw,
             mode,
             hotwords,
+            universal_directives,
             working_languages,
             chinese_script_preference,
             output_language_preference,
@@ -3426,9 +3437,11 @@ async fn polish_text(
 }
 
 /// 翻译路径——和 polish 一样失败时返回原文 + 失败原因，避免"不丢字"约定被违反（CLAUDE.md）。
+#[allow(clippy::too_many_arguments)]
 async fn translate_or_passthrough(
     raw: &RawTranscript,
     target_language: &str,
+    universal_directives: &str,
     working_languages: &[String],
     chinese_script_preference: ChineseScriptPreference,
     output_language_preference: OutputLanguagePreference,
@@ -3437,6 +3450,7 @@ async fn translate_or_passthrough(
     match translate_text(
         &raw.text,
         target_language,
+        universal_directives,
         working_languages,
         chinese_script_preference,
         output_language_preference,
@@ -3453,9 +3467,11 @@ async fn translate_or_passthrough(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn translate_text(
     raw: &str,
     target_language: &str,
+    universal_directives: &str,
     working_languages: &[String],
     chinese_script_preference: ChineseScriptPreference,
     output_language_preference: OutputLanguagePreference,
@@ -3477,6 +3493,7 @@ async fn translate_text(
         .translate_to(
             raw,
             target_language,
+            universal_directives,
             working_languages,
             chinese_script_preference,
             output_language_preference,

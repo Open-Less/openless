@@ -198,6 +198,9 @@ export const en: typeof zhCN = {
     currentDefault: 'Current default',
     ariaSetDefault: 'Set as default',
     saveFailed: 'Save failed: {{error}}',
+    universalDirectivesLabel: 'Universal directives (all modes)',
+    universalDirectivesDesc: 'Extra instructions that always apply during polish, regardless of which mode is selected. Use this for typography or stylebook rules — they layer on top of Light / Structured / Formal. Translation output respects them too. Raw mode skips the LLM, so it is unaffected. Leave empty for legacy behavior.',
+    universalDirectivesPlaceholder: 'e.g.\n- Use the Oxford comma\n- Wrap proper nouns in their official capitalization',
     modes: {
       raw: { name: 'Raw', desc: 'Only adds punctuation and natural breaks — no rewriting or expansion.', sample: "Keeps spoken cadence; fillers like 'um' or 'you know' get dropped, but sentences stay intact." },
       light: { name: 'Light polish', desc: 'Drops fillers, adds punctuation, and produces sendable natural prose.', sample: "Makes the transcript flow well without sounding scripted — your tone and habits remain." },

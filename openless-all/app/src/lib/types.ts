@@ -171,6 +171,10 @@ export interface UserPreferences {
   historyRetentionDays: number;
   /** 对话感知 polish 上下文窗口（分钟）。0 = 关闭。默认 5。详见 PR-A。 */
   polishContextWindowMinutes: number;
+  /** モード横断で常時適用される追加指示（タイポグラフィ規約等）。空文字 = 何も注入しない。
+   *  Style ページの textarea から編集；polish/translate の system prompt に注入される。
+   *  Raw モードは LLM を経由しないため対象外。 */
+  polishUniversalDirectives: string;
   /** 启动时静默运行（不弹主窗口）。Windows 开机自启场景常用——只想要后台 + 托盘，
    *  不想被主窗口打扰。开后所有启动路径都不弹窗，从菜单栏 / 托盘进入主窗口。默认 false。 */
   startMinimized: boolean;

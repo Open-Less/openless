@@ -200,6 +200,9 @@ export const ja: typeof zhCN = {
     currentDefault: '現在のデフォルト',
     ariaSetDefault: 'デフォルトに設定',
     saveFailed: '保存に失敗しました: {{error}}',
+    universalDirectivesLabel: '全モード共通の指示',
+    universalDirectivesDesc: 'どのスタイルを選んでも整文時に必ず適用される追加指示。タイポグラフィ規約や文体ルールをここに書いておくと、Light/Structured/Formal のすべてに反映されます。翻訳出力にも適用。Raw モードは LLM を経由しないため対象外。空欄なら何も追加されません（既存挙動と完全一致）。',
+    universalDirectivesPlaceholder: '例：\n- 句読点は全角（、。）を使う\n- ！や？の後に全角スペースを1つ入れる',
     modes: {
       raw: { name: '原文', desc: '句読点と必要な区切りのみ補い、書き換えや拡張はしません。', sample: '元の話し言葉を保持。「えー」「あの」などの口癖は除去しますが、文の組み替えはしません。' },
       light: { name: '軽い整文', desc: '口癖の除去、句読点の補完、自然な送信可能テキストへの整理。', sample: '原稿読み上げのようにならないよう、語気と表現の癖を残しつつ、文章をなめらかにします。' },

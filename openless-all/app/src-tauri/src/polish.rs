@@ -84,18 +84,20 @@ impl OpenAICompatibleLLMProvider {
         &self.config
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn polish(
         &self,
         raw_text: &str,
         mode: PolishMode,
         hotwords: &[String],
+        universal_directives: &str,
         working_languages: &[String],
         chinese_script_preference: ChineseScriptPreference,
         output_language_preference: OutputLanguagePreference,
         front_app: Option<&str>,
         prior_turns: &[(String, String)],
     ) -> Result<String, LLMError> {
-        let mut system_prompt = compose_system_prompt(mode, hotwords);
+        let mut system_prompt = compose_system_prompt(mode, hotwords, universal_directives);
         if let Some(premise) = context_premise(
             working_languages,
             chinese_script_preference,
@@ -155,10 +157,12 @@ impl OpenAICompatibleLLMProvider {
 
     /// 把转写翻译成 `target_language`（前端从内置语言列表里选出来的原生名）。
     /// `working_languages` 与 `front_app` 作为前提注入头部。详见 issue #4 与 #116。
+    #[allow(clippy::too_many_arguments)]
     pub async fn translate_to(
         &self,
         raw_text: &str,
         target_language: &str,
+        universal_directives: &str,
         working_languages: &[String],
         chinese_script_preference: ChineseScriptPreference,
         _output_language_preference: OutputLanguagePreference,
@@ -167,6 +171,15 @@ impl OpenAICompatibleLLMProvider {
         let mut system_prompt = prompts::translate_system_prompt(target_language);
         // 翻译模式必须以 target_language 为唯一输出语言约束，避免和 UI 驱动的
         // output_language_preference 发生冲突（例如 UI=ja, target=en）。
+        // Universal directives（タイポグラフィ規約等）も翻訳出力に適用する：
+        // 翻訳された日本語にも「句読点は全角」等のルールを効かせるため。
+        let trimmed_directives = universal_directives.trim();
+        if !trimmed_directives.is_empty() {
+            system_prompt = format!(
+                "{}\n\n通用规则（不论 polish/translate mode 如何，始终遵守）：\n{}",
+                system_prompt, trimmed_directives
+            );
+        }
         if let Some(premise) = context_premise(
             working_languages,
             chinese_script_preference,
@@ -560,15 +573,31 @@ fn context_premise(
     Some(lines.join("\n"))
 }
 
-fn compose_system_prompt(mode: PolishMode, hotwords: &[String]) -> String {
+fn compose_system_prompt(
+    mode: PolishMode,
+    hotwords: &[String],
+    universal_directives: &str,
+) -> String {
     let base = prompts::system_prompt(mode);
+    // Universal directives are appended after the mode-specific instructions
+    // and before the hotword block. Order matters: mode prompt establishes the
+    // overall voice, then user-defined cross-mode rules (e.g. typography
+    // conventions) layer on top, and finally the hotword glossary.
+    let mut composed = base;
+    let trimmed_directives = universal_directives.trim();
+    if !trimmed_directives.is_empty() {
+        composed = format!(
+            "{}\n\n通用规则（不论 polish mode 如何，始终遵守，与上述模式指示并存）：\n{}",
+            composed, trimmed_directives
+        );
+    }
     let cleaned: Vec<String> = hotwords
         .iter()
         .map(|h| h.trim().to_string())
         .filter(|h| !h.is_empty())
         .collect();
     if cleaned.is_empty() {
-        return base;
+        return composed;
     }
     let bullets = cleaned
         .iter()
@@ -577,7 +606,7 @@ fn compose_system_prompt(mode: PolishMode, hotwords: &[String]) -> String {
         .join("\n");
     format!(
         "{}\n\n热词（用户希望以下写法在输出中保持准确；当转写中出现这些词的同音 / 近形误识别时，优先按上述写法输出，不做无关词的机械替换）：\n{}",
-        base, bullets
+        composed, bullets
     )
 }
 
@@ -1258,13 +1287,71 @@ mod tests {
 
     #[test]
     fn compose_system_prompt_prefers_correct_spelling_for_hotwords() {
-        let prompt =
-            compose_system_prompt(PolishMode::Light, &["GitHub".into(), "OpenLess".into()]);
+        let prompt = compose_system_prompt(
+            PolishMode::Light,
+            &["GitHub".into(), "OpenLess".into()],
+            "",
+        );
 
         assert!(prompt.contains("用户希望以下写法在输出中保持准确"));
         assert!(prompt.contains("同音 / 近形误识别时，优先按上述写法输出"));
         assert!(prompt.contains("- GitHub"));
         assert!(prompt.contains("- OpenLess"));
+    }
+
+    #[test]
+    fn compose_system_prompt_no_universal_directives_keeps_legacy_output() {
+        // 空文字 = 既存挙動と完全一致：通用规则ブロックは出ない
+        let with_empty = compose_system_prompt(PolishMode::Light, &[], "");
+        let with_blank = compose_system_prompt(PolishMode::Light, &[], "   \n\t  ");
+        assert!(!with_empty.contains("通用规则"));
+        assert!(!with_blank.contains("通用规则"));
+        assert_eq!(with_empty, with_blank);
+    }
+
+    #[test]
+    fn compose_system_prompt_appends_universal_directives_when_present() {
+        let directives = "句読点は全角（、。）を使う\n！や？の後に全角スペースを1つ入れる";
+        let prompt = compose_system_prompt(PolishMode::Light, &[], directives);
+        assert!(
+            prompt.contains("通用规则"),
+            "universal directive header should appear"
+        );
+        assert!(prompt.contains("句読点は全角"));
+        assert!(prompt.contains("全角スペースを1つ"));
+    }
+
+    #[test]
+    fn compose_system_prompt_orders_directives_before_hotwords() {
+        // 注入順序の契約：mode prompt → 通用规则 → 热词。LLM が後半の指示を
+        // 優先的に重視する性質上、辞書（最も具体）を末尾に配置する。
+        let directives = "句読点は全角を使う";
+        let prompt = compose_system_prompt(
+            PolishMode::Light,
+            &["梁山泊".into()],
+            directives,
+        );
+        let directives_pos = prompt.find("通用规则").expect("directive header present");
+        let hotwords_pos = prompt.find("热词").expect("hotword header present");
+        assert!(
+            directives_pos < hotwords_pos,
+            "通用规则 must come before 热词 (directives at {directives_pos}, hotwords at {hotwords_pos})"
+        );
+    }
+
+    #[test]
+    fn compose_system_prompt_trims_universal_directives() {
+        // 前後空白は除去して整形する（行内の改行は保持）
+        let prompt = compose_system_prompt(
+            PolishMode::Light,
+            &[],
+            "  \n句読点は全角\nビックリマーク後に全角スペース\n  ",
+        );
+        // 整形後は trim 済みの本文だけが現れる
+        assert!(prompt.contains("句読点は全角"));
+        assert!(prompt.contains("ビックリマーク後に全角スペース"));
+        // 終端側の余計な空白が残っていない（次の段落に影響しない）
+        assert!(!prompt.ends_with("  "));
     }
 
     #[test]

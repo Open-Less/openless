@@ -102,6 +102,28 @@ export function Style() {
     if (saved) setSaveError(null);
   };
 
+  // Universal directives: persist to backend on blur (avoid 1 IPC per keystroke).
+  // Local state mirrors `prefs.polishUniversalDirectives` so typing feels instant;
+  // we commit on blur via setSettings() and rely on prefs:changed to re-sync.
+  const [universalDraft, setUniversalDraft] = useState<string>('');
+  useEffect(() => {
+    if (prefs) setUniversalDraft(prefs.polishUniversalDirectives ?? '');
+  }, [prefs?.polishUniversalDirectives]);
+  const onCommitUniversalDirectives = async () => {
+    if (!prefs) return;
+    const trimmed = universalDraft;
+    if ((prefs.polishUniversalDirectives ?? '') === trimmed) return;
+    const next = { ...prefs, polishUniversalDirectives: trimmed };
+    const saved = await persistStylePreferenceChange(
+      next,
+      () => setSettings(next),
+      setPrefs,
+      error => showSaveError('master', error),
+      rollbackWholeStylePreferences(prefs, next),
+    );
+    if (saved) setSaveError(null);
+  };
+
   if (!prefs) {
     return (
       <PageHeader
@@ -176,6 +198,44 @@ export function Style() {
           </div>
         }
       />
+      <div
+        style={{
+          padding: 16,
+          marginBottom: 16,
+          background: 'var(--ol-surface)',
+          border: '0.5px solid var(--ol-line)',
+          borderRadius: 'var(--ol-r-lg)',
+          boxShadow: 'var(--ol-shadow-sm)',
+        }}
+      >
+        <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--ol-ink)', marginBottom: 4 }}>
+          {t('style.universalDirectivesLabel')}
+        </div>
+        <div style={{ fontSize: 11.5, color: 'var(--ol-ink-3)', marginBottom: 10, lineHeight: 1.5 }}>
+          {t('style.universalDirectivesDesc')}
+        </div>
+        <textarea
+          value={universalDraft}
+          onChange={e => setUniversalDraft(e.target.value)}
+          onBlur={onCommitUniversalDirectives}
+          placeholder={t('style.universalDirectivesPlaceholder')}
+          rows={4}
+          style={{
+            width: '100%',
+            padding: 10,
+            fontSize: 12.5,
+            fontFamily: 'inherit',
+            lineHeight: 1.55,
+            color: 'var(--ol-ink)',
+            background: 'var(--ol-surface-2)',
+            border: '0.5px solid var(--ol-line)',
+            borderRadius: 8,
+            resize: 'vertical',
+            boxSizing: 'border-box',
+            outline: 'none',
+          }}
+        />
+      </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
         {STYLES.map(s => {
           const isDefault = prefs.defaultMode === s.id;

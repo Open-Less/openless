@@ -226,6 +226,15 @@ pub struct UserPreferences {
     /// 0 = 关闭（每次润色独立单轮，跟历史行为一致）。默认 5 分钟。
     #[serde(default = "default_polish_context_window_minutes")]
     pub polish_context_window_minutes: u32,
+    /// モード横断で常時適用される追加指示（タイポグラフィ規約等）。
+    /// polish system prompt の base prompt 直後・hotwords 直前に注入される。
+    /// 例：日本語ユーザーが「句読点は全角を使う」「！や？の後に全角スペース」と
+    /// 入れておくと、Light/Formal/Structured どのモードでも反映される。
+    /// 翻訳パスにも適用：translate_to() が出力する翻訳文も同じ規約に従う。
+    /// 空文字 = 何も注入しない（既存挙動と完全一致、回帰なし）。
+    /// Raw モードは LLM を経由しないため対象外。
+    #[serde(default)]
+    pub polish_universal_directives: String,
     /// 启动时静默运行（不弹主窗口）。开机自启用户用得多——本来想看托盘
     /// 而不是被主窗口打扰。开关一开后所有启动路径都不弹窗（包括手动点击），
     /// 用户改用托盘菜单访问主窗口。默认 false 跟历史行为一致。
@@ -321,6 +330,8 @@ struct UserPreferencesWire {
     #[serde(default = "default_polish_context_window_minutes")]
     polish_context_window_minutes: u32,
     #[serde(default)]
+    polish_universal_directives: String,
+    #[serde(default)]
     start_minimized: bool,
 }
 
@@ -360,6 +371,7 @@ impl Default for UserPreferencesWire {
             update_channel: prefs.update_channel,
             history_retention_days: prefs.history_retention_days,
             polish_context_window_minutes: prefs.polish_context_window_minutes,
+            polish_universal_directives: prefs.polish_universal_directives,
             start_minimized: prefs.start_minimized,
         }
     }
@@ -416,6 +428,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             update_channel: wire.update_channel,
             history_retention_days: wire.history_retention_days,
             polish_context_window_minutes: wire.polish_context_window_minutes,
+            polish_universal_directives: wire.polish_universal_directives,
             start_minimized: wire.start_minimized,
         })
     }
@@ -525,6 +538,7 @@ impl Default for UserPreferences {
             update_channel: UpdateChannel::default(),
             history_retention_days: default_history_retention_days(),
             polish_context_window_minutes: default_polish_context_window_minutes(),
+            polish_universal_directives: String::new(),
             start_minimized: false,
         }
     }

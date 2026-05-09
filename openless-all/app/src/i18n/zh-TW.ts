@@ -198,6 +198,9 @@ export const zhTW: typeof zhCN = {
     currentDefault: '當前默認',
     ariaSetDefault: '設爲默認',
     saveFailed: '保存失敗：{{error}}',
+    universalDirectivesLabel: '所有模式通用的指令',
+    universalDirectivesDesc: '不論選擇哪種 polish 模式都始終生效的額外指令。把排版規約、文風約束寫在這裡，Light / Structured / Formal 都會帶上。翻譯輸出同樣遵循。Raw 模式不經過 LLM，因此不受影響。留空 = 與舊版完全一致。',
+    universalDirectivesPlaceholder: '示例：\n- 中文段首使用全形縮進\n- 引號統一使用「」/『』',
     modes: {
       raw: { name: '原文', desc: '只補標點和必要分句，不改寫不擴寫。', sample: '保留原始口語；嗯、那個等口癖會被去除，但不會重組語句。' },
       light: { name: '輕度潤色', desc: '去口癖、補標點，整理爲可發送的自然文字。', sample: '讓轉寫聽起來不像念稿——保留語氣和表達習慣，但行文流暢。' },

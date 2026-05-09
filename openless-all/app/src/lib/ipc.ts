@@ -75,6 +75,7 @@ const mockSettings: UserPreferences = {
   foundryLocalAsrKeepLoadedSecs: 300,
   historyRetentionDays: 7,
   polishContextWindowMinutes: 5,
+  polishUniversalDirectives: '',
   startMinimized: false,
 };
 
