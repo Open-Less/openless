@@ -1289,66 +1289,85 @@ function ProvidersSection() {
     setLlmProvider(id);
     const seq = ++llmSwitchSeqRef.current;
     emitSaved('saving', t('common.saving'));
-    await setActiveLlmProvider(id);
-    if (seq !== llmSwitchSeqRef.current) return;
-    if (prefs) {
-      const next = { ...prefs, activeLlmProvider: id };
-      await updatePrefs(next);
+    try {
+      await setActiveLlmProvider(id);
       if (seq !== llmSwitchSeqRef.current) return;
-    }
-    const preset = LLM_PRESETS.find(p => p.id === id);
-    // 修 bug：所有 LLM provider 共用 `ark.endpoint` / `ark.model_id` 一对凭据槽
-    // （persistence.rs 没做 per-provider 隔离）。旧逻辑只在槽空时填默认值，
-    // 老用户切换 preset 时槽里早有旧值——dropdown 看着切了，polish 实际还是
-    // 打老 endpoint。改成：切到任何非 custom 预设都强制覆盖 endpoint 与 model
-    // 到该预设的默认值，让"切换"真切到位。custom 预设没有默认值，跳过。
-    if (preset && preset.id !== 'custom') {
-      if (preset.baseUrl) {
-        await setCredential('ark.endpoint', preset.baseUrl);
+      if (prefs) {
+        const next = { ...prefs, activeLlmProvider: id };
+        await updatePrefs(next);
         if (seq !== llmSwitchSeqRef.current) return;
       }
-      if (preset.modelPlaceholder) {
-        await setCredential('ark.model_id', preset.modelPlaceholder);
-        if (seq !== llmSwitchSeqRef.current) return;
+      const preset = LLM_PRESETS.find(p => p.id === id);
+      // 修 bug：所有 LLM provider 共用 `ark.endpoint` / `ark.model_id` 一对凭据槽
+      // （persistence.rs 没做 per-provider 隔离）。旧逻辑只在槽空时填默认值，
+      // 老用户切换 preset 时槽里早有旧值——dropdown 看着切了，polish 实际还是
+      // 打老 endpoint。改成：切到任何非 custom 预设都强制覆盖 endpoint 与 model
+      // 到该预设的默认值，让"切换"真切到位。custom 预设没有默认值，跳过。
+      if (preset && preset.id !== 'custom') {
+        if (preset.baseUrl) {
+          await setCredential('ark.endpoint', preset.baseUrl);
+          if (seq !== llmSwitchSeqRef.current) return;
+        }
+        if (preset.modelPlaceholder) {
+          await setCredential('ark.model_id', preset.modelPlaceholder);
+          if (seq !== llmSwitchSeqRef.current) return;
+        }
       }
+      setCommittedLlmProvider(id);
+      emitSaved('saved', t('common.saved'));
+    } catch (err) {
+      // seq 守卫：只有当前 call 还是最新时才把 saving 翻成 failed；
+      // 旧 call 早被 newer call 的 emitSaved('saving') 覆盖，再叠 failed 会
+      // 把 newer 正在跑的 saving 假伪成失败。
+      if (seq === llmSwitchSeqRef.current) {
+        emitSaved('failed', t('common.operationFailed'));
+      }
+      throw err;
     }
-    setCommittedLlmProvider(id);
-    emitSaved('saved', t('common.saved'));
   };
 
   const onAsrProviderChange = async (id: AsrPresetId) => {
     setAsrProvider(id);
     const seq = ++asrSwitchSeqRef.current;
     emitSaved('saving', t('common.saving'));
-    await setActiveAsrProvider(id);
-    if (seq !== asrSwitchSeqRef.current) return;
-    if (prefs) {
-      const next = { ...prefs, activeAsrProvider: id };
-      await updatePrefs(next);
+    try {
+      await setActiveAsrProvider(id);
       if (seq !== asrSwitchSeqRef.current) return;
-    }
-    // OpenAI 兼容厂商首次切换时预填 baseUrl / model 默认值，省得用户必踩
-    // 「跨厂商 model 名根本不一样」的坑；但用户已自定义后就不再覆盖。
-    // volcengine 走另一套凭据，跳过。
-    const preset = ASR_PRESETS.find(p => p.id === id);
-    if (preset && preset.baseUrl) {
-      const existing = await readCredential('asr.endpoint');
-      if (seq !== asrSwitchSeqRef.current) return;
-      if (!existing) {
-        await setCredential('asr.endpoint', preset.baseUrl);
+      if (prefs) {
+        const next = { ...prefs, activeAsrProvider: id };
+        await updatePrefs(next);
         if (seq !== asrSwitchSeqRef.current) return;
       }
-    }
-    if (preset && preset.model) {
-      const existing = await readCredential('asr.model');
-      if (seq !== asrSwitchSeqRef.current) return;
-      if (!existing) {
-        await setCredential('asr.model', preset.model);
+      // OpenAI 兼容厂商首次切换时预填 baseUrl / model 默认值，省得用户必踩
+      // 「跨厂商 model 名根本不一样」的坑；但用户已自定义后就不再覆盖。
+      // volcengine 走另一套凭据，跳过。
+      const preset = ASR_PRESETS.find(p => p.id === id);
+      if (preset && preset.baseUrl) {
+        const existing = await readCredential('asr.endpoint');
         if (seq !== asrSwitchSeqRef.current) return;
+        if (!existing) {
+          await setCredential('asr.endpoint', preset.baseUrl);
+          if (seq !== asrSwitchSeqRef.current) return;
+        }
       }
+      if (preset && preset.model) {
+        const existing = await readCredential('asr.model');
+        if (seq !== asrSwitchSeqRef.current) return;
+        if (!existing) {
+          await setCredential('asr.model', preset.model);
+          if (seq !== asrSwitchSeqRef.current) return;
+        }
+      }
+      setCommittedAsrProvider(id);
+      emitSaved('saved', t('common.saved'));
+    } catch (err) {
+      // seq 守卫同上 onLlmProviderChange：旧 call 不要把 newer call 的 saving
+      // 伪造成 failed。
+      if (seq === asrSwitchSeqRef.current) {
+        emitSaved('failed', t('common.operationFailed'));
+      }
+      throw err;
     }
-    setCommittedAsrProvider(id);
-    emitSaved('saved', t('common.saved'));
   };
 
   // preset 决定 placeholder 与 default —— 必须跟着 committed*Provider 走，
