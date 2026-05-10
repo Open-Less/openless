@@ -8,6 +8,7 @@ import { Icon } from '../components/Icon';
 import { ShortcutRecorder } from '../components/ShortcutRecorder';
 import { isDialogStatus, UpdateDialog, useAutoUpdate } from '../components/AutoUpdate';
 import { detectOS } from '../components/WindowChrome';
+import { LocalAsr } from './LocalAsr';
 import { APP_VERSION_LABEL } from '../lib/appVersion';
 import { isHotkeyModeMigrationNoticeActive } from '../lib/hotkeyMigration';
 import {
@@ -1425,7 +1426,10 @@ function ProvidersSection() {
             </div>
           </>
         ) : committedAsrProvider === 'local-qwen3' || committedAsrProvider === 'foundry-local-whisper' ? (
-          <LocalAsrProviderHint provider={committedAsrProvider} selectedProvider={asrProvider} />
+          // 用户已经在用本地 ASR——dropdown 行的 localAsrActiveNotice 已经把
+          // "在高级中切换或禁用"讲清楚了，body 不再重复 LocalAsrProviderHint。
+          // 模型管理 UI 唯一入口在 AdvancedSection 里的 <LocalAsr embedded />。
+          null
         ) : (
           <>
             <CredentialField key={`${committedAsrProvider}:api_key`} label={t('settings.providers.apiKeyLabel')} account="asr.api_key" mono mask />
@@ -1458,15 +1462,18 @@ function ProvidersSection() {
 
 /// 「高级」标签页——本地推理 / 实验性开关都集中在这里。
 ///
-/// 设计目的：把本地 ASR (local-qwen3 / foundry-local-whisper) 从主 Providers
-/// 下拉中藏起来，避免新手误开 CPU 推理（本地模式比云端慢若干秒、中文识别准确率
-/// 也更低，详见 localAsrPerformanceWarning）。启用本地推理需经过明显的系统级
-/// 确认对话框（@tauri-apps/plugin-dialog ask()），强迫用户读完警告。
+/// 设计：
+/// - 主 Providers 下拉只列云端选项；本地推理 (local-qwen3 / foundry-local-whisper)
+///   完全收纳到此栏，新手不会在主流程里误开 CPU 推理。
+/// - 启用本地推理时弹出**页面顶部**的 React 浮层 popup（不再用 Tauri 系统对话框，
+///   也不再常驻一段长警告文本）——一个框、一段短话、确认/取消。
+/// - 旧的「模型设置」独立页 (LocalAsr.tsx 作为 nav tab) 已下线，模型管理 UI
+///   通过 <LocalAsr embedded /> 内嵌在此处统一管理。
 ///
 /// 平台可见性：
-/// - macOS:  仅显示 Qwen3-ASR
-/// - Windows: 显示 Qwen3-ASR + Foundry Local Whisper
-/// - Linux:  显示「该平台暂未支持本地 ASR 模型集成」
+/// - macOS:  仅 Qwen3-ASR
+/// - Windows: Qwen3-ASR + Foundry Local Whisper
+/// - Linux:  「该平台暂未支持本地 ASR 模型集成」
 function AdvancedSection() {
   const { t } = useTranslation();
   const { prefs, updatePrefs } = useHotkeySettings();
@@ -1474,32 +1481,20 @@ function AdvancedSection() {
   const platformSupported = os === 'mac' || os === 'win';
   const switchSeqRef = useRef(0);
   const [busy, setBusy] = useState(false);
+  // 待确认的启用目标。!== null 时浮层 popup 显示在页面顶部；用户点确认 → 真切；
+  // 点取消 → 回到 null。一次只允许一个 popup（用户的"只一个框"硬要求）。
+  const [pendingTarget, setPendingTarget] = useState<AsrPresetId | null>(null);
 
   const activeAsrProvider = (prefs?.activeAsrProvider ?? 'volcengine') as AsrPresetId;
   const isOnLocalQwen3 = activeAsrProvider === 'local-qwen3';
   const isOnFoundry = activeAsrProvider === 'foundry-local-whisper';
   const isOnAnyLocal = isOnLocalQwen3 || isOnFoundry;
 
-  const switchTo = async (target: AsrPresetId, requireConfirm: boolean) => {
-    if (requireConfirm) {
-      // 系统级 ask 比浮层模态更醒目——用户硬要求"明显的弹窗"。kind:'warning' 让
-      // macOS 弹窗带 ⚠️ 图标 + Windows 弹窗带感叹号图标。
-      const { ask } = await import('@tauri-apps/plugin-dialog');
-      const targetNameKey =
-        target === 'local-qwen3' ? 'asrLocalQwen3'
-        : target === 'foundry-local-whisper' ? 'asrFoundryLocalWhisper'
-        : 'asrVolcengine';
-      const confirmed = await ask(
-        t('settings.advanced.confirmEnableLocalBody', {
-          target: t(`settings.providers.presets.${targetNameKey}`),
-        }),
-        {
-          title: t('settings.advanced.confirmEnableLocalTitle'),
-          kind: 'warning',
-        },
-      );
-      if (!confirmed) return;
-    }
+  const requestEnable = (target: AsrPresetId) => {
+    setPendingTarget(target);
+  };
+
+  const performSwitch = async (target: AsrPresetId) => {
     setBusy(true);
     const seq = ++switchSeqRef.current;
     try {
@@ -1509,91 +1504,129 @@ function AdvancedSection() {
         await updatePrefs({ ...prefs, activeAsrProvider: target });
       }
     } finally {
-      if (seq === switchSeqRef.current) setBusy(false);
+      if (seq === switchSeqRef.current) {
+        setBusy(false);
+        setPendingTarget(null);
+      }
     }
   };
 
+  const pendingNameKey =
+    pendingTarget === 'local-qwen3' ? 'asrLocalQwen3'
+    : pendingTarget === 'foundry-local-whisper' ? 'asrFoundryLocalWhisper'
+    : null;
+
   return (
-    <Card>
-      <div style={{ marginBottom: 10 }}>
-        <div style={{ fontSize: 13, fontWeight: 600 }}>{t('settings.advanced.localAsrTitle')}</div>
-        <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', marginTop: 2 }}>
-          {t('settings.advanced.localAsrDesc')}
-        </div>
-      </div>
-
-      {/* 警告：用户硬要求"黄色或红色字符明显标出"。
-          琥珀色文字 + 浅琥珀底 + 边框，比之前 ProvidersSection 里的暖灰底警告醒目得多。 */}
-      <div
-        style={{
-          padding: '12px 14px',
-          background: 'rgba(255, 188, 60, 0.12)',
-          border: '1px solid rgba(220, 110, 0, 0.45)',
-          borderRadius: 8,
-          fontSize: 13,
-          color: '#A04500',
-          fontWeight: 500,
-          lineHeight: 1.65,
-          marginBottom: 14,
-        }}>
-        ⚠️ {t('settings.advanced.localAsrWarningStrong')}
-      </div>
-
-      {!platformSupported ? (
-        <div style={{ fontSize: 12.5, color: 'var(--ol-ink-3)', lineHeight: 1.6, padding: '8px 0' }}>
-          {t('settings.advanced.platformNotSupported')}
-        </div>
-      ) : (
-        <>
-          <SettingRow
-            label={t('settings.providers.presets.asrLocalQwen3')}
-            desc={t('settings.advanced.qwen3Desc')}>
+    <>
+      {/* ─── 页面顶部确认浮层 ────────────────────────────────────────────
+          用户硬要求：启用本地推理时**只**弹一个框、直接出现在页面最上方。
+          琥珀边框 + 琥珀字醒目；不阻塞滚动；点取消返回不切。 */}
+      {pendingTarget && pendingNameKey && (
+        <Card
+          style={{
+            background: 'rgba(255, 188, 60, 0.12)',
+            border: '1px solid rgba(220, 110, 0, 0.55)',
+            marginBottom: 12,
+          }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: '#A04500', marginBottom: 6 }}>
+            ⚠️ {t('settings.advanced.confirmEnableLocalTitle')}
+          </div>
+          <div style={{ fontSize: 12.5, color: 'var(--ol-ink-2)', lineHeight: 1.6, marginBottom: 10 }}>
+            {t('settings.advanced.confirmEnableLocalBody', {
+              target: t(`settings.providers.presets.${pendingNameKey}`),
+            })}
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
             <Btn
-              variant={isOnLocalQwen3 ? 'ghost' : 'primary'}
+              variant="primary"
               size="sm"
-              disabled={busy || isOnLocalQwen3}
-              onClick={() => void switchTo('local-qwen3', true)}>
-              {isOnLocalQwen3 ? t('settings.advanced.alreadyActive') : t('settings.advanced.enable')}
+              disabled={busy}
+              onClick={() => void performSwitch(pendingTarget)}>
+              {t('settings.advanced.confirm')}
             </Btn>
-          </SettingRow>
+            <Btn variant="ghost" size="sm" disabled={busy} onClick={() => setPendingTarget(null)}>
+              {t('common.cancel')}
+            </Btn>
+          </div>
+        </Card>
+      )}
 
-          {os === 'win' && (
+      <Card>
+        <div style={{ marginBottom: 10 }}>
+          <div style={{ fontSize: 13, fontWeight: 600 }}>{t('settings.advanced.localAsrTitle')}</div>
+          <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', marginTop: 2 }}>
+            {t('settings.advanced.localAsrDesc')}
+          </div>
+        </div>
+
+        {/* 常驻短警告——一行字够了，详细解释留给点 Enable 后的页面顶部 popup。 */}
+        <div
+          style={{
+            padding: '8px 12px',
+            background: 'rgba(255, 188, 60, 0.14)',
+            border: '1px solid rgba(220, 110, 0, 0.4)',
+            borderRadius: 6,
+            fontSize: 12.5,
+            color: '#A04500',
+            fontWeight: 500,
+            marginBottom: 14,
+          }}>
+          ⚠️ {t('settings.advanced.localAsrWarningShort')}
+        </div>
+
+        {!platformSupported ? (
+          <div style={{ fontSize: 12.5, color: 'var(--ol-ink-3)', lineHeight: 1.6, padding: '8px 0' }}>
+            {t('settings.advanced.platformNotSupported')}
+          </div>
+        ) : (
+          <>
             <SettingRow
-              label={t('settings.providers.presets.asrFoundryLocalWhisper')}
-              desc={t('settings.advanced.foundryDesc')}>
+              label={t('settings.providers.presets.asrLocalQwen3')}
+              desc={t('settings.advanced.qwen3Desc')}>
               <Btn
-                variant={isOnFoundry ? 'ghost' : 'primary'}
+                variant={isOnLocalQwen3 ? 'ghost' : 'primary'}
                 size="sm"
-                disabled={busy || isOnFoundry}
-                onClick={() => void switchTo('foundry-local-whisper', true)}>
-                {isOnFoundry ? t('settings.advanced.alreadyActive') : t('settings.advanced.enable')}
+                disabled={busy || isOnLocalQwen3 || pendingTarget !== null}
+                onClick={() => requestEnable('local-qwen3')}>
+                {isOnLocalQwen3 ? t('settings.advanced.alreadyActive') : t('settings.advanced.enable')}
               </Btn>
             </SettingRow>
-          )}
 
-          {isOnAnyLocal && (
-            <>
+            {os === 'win' && (
+              <SettingRow
+                label={t('settings.providers.presets.asrFoundryLocalWhisper')}
+                desc={t('settings.advanced.foundryDesc')}>
+                <Btn
+                  variant={isOnFoundry ? 'ghost' : 'primary'}
+                  size="sm"
+                  disabled={busy || isOnFoundry || pendingTarget !== null}
+                  onClick={() => requestEnable('foundry-local-whisper')}>
+                  {isOnFoundry ? t('settings.advanced.alreadyActive') : t('settings.advanced.enable')}
+                </Btn>
+              </SettingRow>
+            )}
+
+            {isOnAnyLocal && (
               <SettingRow
                 label={t('settings.advanced.disableLocalLabel')}
                 desc={t('settings.advanced.disableLocalDesc')}>
                 <Btn
                   variant="primary"
                   size="sm"
-                  disabled={busy}
-                  onClick={() => void switchTo('volcengine', false)}>
+                  disabled={busy || pendingTarget !== null}
+                  onClick={() => void performSwitch('volcengine')}>
                   {t('settings.advanced.disable')}
                 </Btn>
               </SettingRow>
-              {/* 复用 ProvidersSection 已有的 LocalAsrProviderHint：模型下载状态 + 跳转「模型设置」入口 */}
-              <LocalAsrProviderHint
-                provider={activeAsrProvider as 'local-qwen3' | 'foundry-local-whisper'}
-                selectedProvider={activeAsrProvider as 'local-qwen3' | 'foundry-local-whisper'}
-              />
-            </>
-          )}
-        </>
-      )}
-    </Card>
+            )}
+          </>
+        )}
+      </Card>
+
+      {/* 模型管理 UI（镜像源 / 模型列表 / 下载 / 删除 / 设为默认 / Foundry Local）
+          inline 渲染——「模型设置」独立页已删，这里是唯一入口。 */}
+      {platformSupported && <LocalAsr embedded />}
+    </>
   );
 }
 

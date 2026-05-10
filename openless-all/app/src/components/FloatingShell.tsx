@@ -15,7 +15,8 @@ import { Vocab } from '../pages/Vocab';
 import { Style } from '../pages/Style';
 import { Translation } from '../pages/Translation';
 import { SelectionAsk } from '../pages/SelectionAsk';
-import { LocalAsr } from '../pages/LocalAsr';
+// LocalAsr 不再作为主 nav tab——本地 ASR 模型管理已合并到 Settings → Advanced 中
+// 通过 <LocalAsr embedded /> 渲染。这里之前的 import 与 NAV_BASE 条目都已移除。
 import { APP_VERSION_LABEL, IS_BETA_BUILD } from '../lib/appVersion';
 import {
   HOTKEY_MODE_MIGRATION_ACK_KEY,
@@ -28,7 +29,7 @@ import {
   PROVIDER_SETUP_PROMPT_DEFERRED_KEY,
   shouldShowProviderSetupPrompt,
 } from '../lib/providerSetup';
-import { NAVIGATE_LOCAL_ASR_EVENT, type SettingsSectionId } from '../pages/Settings';
+import { type SettingsSectionId } from '../pages/Settings';
 import { useAppState, type AppTab } from '../state/useAppState';
 
 interface NavItem {
@@ -45,7 +46,6 @@ const NAV_BASE: Array<Omit<NavItem, 'name'>> = [
   { id: 'style', icon: 'style', cmp: Style },
   { id: 'translation', icon: 'translate', cmp: Translation },
   { id: 'selectionAsk', icon: 'selectionAsk', cmp: SelectionAsk },
-  { id: 'localAsr', icon: 'archive', cmp: LocalAsr },
 ];
 
 interface FloatingShellProps {
@@ -128,15 +128,9 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
     }
   }, []);
 
-  // Settings → ASR 选 local-qwen3 时的"前往模型设置"事件 → 关 modal + 切 tab。
-  useEffect(() => {
-    const onNavigate = () => {
-      setSettingsOpen(false);
-      setCurrentTab('localAsr');
-    };
-    window.addEventListener(NAVIGATE_LOCAL_ASR_EVENT, onNavigate);
-    return () => window.removeEventListener(NAVIGATE_LOCAL_ASR_EVENT, onNavigate);
-  }, [setCurrentTab, setSettingsOpen]);
+  // 之前监听的 NAVIGATE_LOCAL_ASR_EVENT 已无意义——「模型设置」独立 tab 已下线，
+  // 模型管理 UI 现在通过 Settings → Advanced 的 <LocalAsr embedded /> 渲染，
+  // 用户在 Settings 内即可一站式管理，无需跨页跳转。
 
   const rememberProviderPrompt = () => {
     window.sessionStorage.setItem(PROVIDER_SETUP_PROMPT_DEFERRED_KEY, '1');
