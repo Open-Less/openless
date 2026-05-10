@@ -17,6 +17,7 @@
     "core:event:default",
     "shell:allow-open",
     "updater:default",
-    "autostart:default"
+    "autostart:default",
+    "dialog:default"
   ]
 }

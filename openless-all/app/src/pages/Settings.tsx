@@ -1388,7 +1388,9 @@ function ProvidersSection() {
             {t('settings.providers.llmDesc')}
           </div>
         </div>
-        <SettingRow label={t('settings.providers.providerLabel')} desc={t('settings.providers.llmProviderDesc')}>
+        {/* desc 已去掉——'选择后将自动填入 Base URL 默认值' 在 180px label 列必换行成两行，
+            视觉上 label 区出现"字体单独占一行"。下拉自身已经表达了"切换"含义，desc 冗余。 */}
+        <SettingRow label={t('settings.providers.providerLabel')}>
           <select
             value={llmProvider}
             onChange={e => onLlmProviderChange(e.target.value as LlmPresetId)}
@@ -1412,11 +1414,14 @@ function ProvidersSection() {
           <div style={{ fontSize: 13, fontWeight: 600 }}>{t('settings.providers.asrTitle')}</div>
           <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', marginTop: 2 }}>{t('settings.providers.asrDesc')}</div>
         </div>
-        <SettingRow label={t('settings.providers.providerLabel')} desc={t('settings.providers.asrProviderDesc')}>
+        {/* desc 同 LLM 行去掉，避免 180px label 列里换行。 */}
+        <SettingRow label={t('settings.providers.providerLabel')}>
           {(() => {
-            // 平台本机引擎：macOS=Qwen3，Windows=Foundry。该项始终在下拉里露出，
+            // 平台本机引擎：macOS=Qwen3，Windows=Foundry。本机项始终在下拉里露出，
             // 当用户未启用本地推理时呈 disabled——用户能看到"它存在 + 提示"，
-            // 但只能在 Advanced 启用；启用后整下拉锁住，本机项被选中（user req 2.a）。
+            // 但只能在 Advanced 启用；启用后整下拉锁住，**实际激活的** local 项被选中
+            // （pr_agent #403 fix：跨机器同步导致 macOS profile = foundry / Windows
+            // profile = qwen3 时，UI 不能假装是平台本机引擎而要忠实显示）。
             const platformLocalAsr: AsrPresetId | null =
               os === 'mac' ? 'local-qwen3' : os === 'win' ? 'foundry-local-whisper' : null;
             const platformLocalNameKey = platformLocalAsr === 'local-qwen3'
@@ -1425,10 +1430,19 @@ function ProvidersSection() {
                 ? 'asrFoundryLocalWhisper'
                 : null;
             const isLocked = committedAsrProvider === 'local-qwen3' || committedAsrProvider === 'foundry-local-whisper';
-            // active 是本地时，下拉显示本机 local 项被选中；非 active 时仍按
-            // asrProvider（云端选项）显示。selectedValue 必须在 <option> 列表里
-            // 存在，否则受控 <select> 会回退到第一项造成视觉假象。
-            const selectedValue: AsrPresetId = isLocked && platformLocalAsr ? platformLocalAsr : asrProvider;
+            // active 是本地时，selectedValue = 实际 committed 的 provider（不强制
+            // 覆盖成 platformLocalAsr）；非 active 时按 asrProvider（云端选项）显示。
+            const selectedValue: AsrPresetId = isLocked ? committedAsrProvider : asrProvider;
+            // 异常 local：当前激活的 local 不是本平台本机引擎（跨机器配置同步）。
+            // 必须把它也作为 disabled <option> 加进列表，否则受控 <select> 会回退
+            // 到第一项造成视觉假象。
+            const anomalousLocal: AsrPresetId | null =
+              isLocked && committedAsrProvider !== platformLocalAsr ? committedAsrProvider : null;
+            const anomalousNameKey = anomalousLocal === 'local-qwen3'
+              ? 'asrLocalQwen3'
+              : anomalousLocal === 'foundry-local-whisper'
+                ? 'asrFoundryLocalWhisper'
+                : null;
             return (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-start', minWidth: 0 }}>
                 <select
@@ -1445,8 +1459,13 @@ function ProvidersSection() {
                     <option key={p.id} value={p.id}>{t(`settings.providers.presets.${p.nameKey}`)}</option>
                   ))}
                   {platformLocalAsr && platformLocalNameKey && (
-                    <option key={platformLocalAsr} value={platformLocalAsr} disabled={!isLocked}>
+                    <option key={platformLocalAsr} value={platformLocalAsr} disabled>
                       {t(`settings.providers.presets.${platformLocalNameKey}`)}
+                    </option>
+                  )}
+                  {anomalousLocal && anomalousNameKey && (
+                    <option key={anomalousLocal} value={anomalousLocal} disabled>
+                      {t(`settings.providers.presets.${anomalousNameKey}`)}
                     </option>
                   )}
                 </select>
@@ -1662,23 +1681,19 @@ function AdvancedSection() {
           </div>
         ) : (
           <>
-            {/* Qwen3 行 —— macOS 可启用；Windows 后端是 stub，整行 disabled + notSupportedHere desc。 */}
+            {/* Qwen3 行 —— macOS Toggle 可点；Windows 后端是 stub，Toggle 始终 off + 不可点 + desc=notSupportedHere。 */}
             <SettingRow
               label={t('settings.providers.presets.asrLocalQwen3')}
               desc={isMac ? t('settings.advanced.qwen3Desc') : t('settings.advanced.notSupportedHere')}>
-              {isMac ? (
-                <Btn
-                  variant={isOnLocalQwen3 ? 'ghost' : 'primary'}
-                  size="sm"
-                  disabled={busy || isOnLocalQwen3 || pendingTarget !== null}
-                  onClick={() => requestEnable('local-qwen3')}>
-                  {isOnLocalQwen3 ? t('settings.advanced.alreadyActive') : t('settings.advanced.enable')}
-                </Btn>
-              ) : (
-                <Btn variant="ghost" size="sm" disabled>
-                  {t('settings.advanced.enable')}
-                </Btn>
-              )}
+              <div style={{ display: 'flex', justifyContent: 'flex-end', width: '100%' }}>
+                <Toggle
+                  on={isOnLocalQwen3}
+                  onToggle={isMac && !busy && pendingTarget === null ? (next) => {
+                    if (next) requestEnable('local-qwen3');
+                    else void performSwitch('volcengine');
+                  } : undefined}
+                />
+              </div>
             </SettingRow>
 
             {/* Foundry 行 —— 仅 Windows 露出（macOS 不展示 Windows 端模型内容）。 */}
@@ -1686,34 +1701,38 @@ function AdvancedSection() {
               <SettingRow
                 label={t('settings.providers.presets.asrFoundryLocalWhisper')}
                 desc={t('settings.advanced.foundryDesc')}>
-                <Btn
-                  variant={isOnFoundry ? 'ghost' : 'primary'}
-                  size="sm"
-                  disabled={busy || isOnFoundry || pendingTarget !== null}
-                  onClick={() => requestEnable('foundry-local-whisper')}>
-                  {isOnFoundry ? t('settings.advanced.alreadyActive') : t('settings.advanced.enable')}
-                </Btn>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', width: '100%' }}>
+                  <Toggle
+                    on={isOnFoundry}
+                    onToggle={!busy && pendingTarget === null ? (next) => {
+                      if (next) requestEnable('foundry-local-whisper');
+                      else void performSwitch('volcengine');
+                    } : undefined}
+                  />
+                </div>
               </SettingRow>
             )}
           </>
         )}
 
-        {/* 「禁用本地 ASR」按钮放在 platformSupported 分支之外——若用户在另一台
-            支持本地推理的机器上启用过 local-qwen3 / foundry，preferences 同步到
-            当前 Linux/不支持平台后会卡死（无 enable / disable UI 可点），polish
-            走老路径必失败。这里始终在 isOnAnyLocal 时露出 disable 入口，给用户
-            退路（PR #400 pr_agent advisory 的修法）。 */}
-        {isOnAnyLocal && (
+        {/* 「禁用本地 ASR」逃生入口——只在行内 Toggle 关不掉的场景露出：
+            - Linux / 不支持平台：根本没有任何引擎行
+            - 跨平台异常（macOS profile 同步到 foundry / Windows profile 同步到 qwen3）：
+              本机引擎 Toggle 是 off，关不动异常 active 的对方引擎
+            否则平台本机 Toggle 自身就能 off → 关停，重复 disable 行徒增视觉。 */}
+        {isOnAnyLocal && !((isMac && isOnLocalQwen3) || (isWin && isOnFoundry)) && (
           <SettingRow
             label={t('settings.advanced.disableLocalLabel')}
             desc={t('settings.advanced.disableLocalDesc')}>
-            <Btn
-              variant="primary"
-              size="sm"
-              disabled={busy || pendingTarget !== null}
-              onClick={() => void performSwitch('volcengine')}>
-              {t('settings.advanced.disable')}
-            </Btn>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', width: '100%' }}>
+              <Btn
+                variant="primary"
+                size="sm"
+                disabled={busy || pendingTarget !== null}
+                onClick={() => void performSwitch('volcengine')}>
+                {t('settings.advanced.disable')}
+              </Btn>
+            </div>
           </SettingRow>
         )}
       </Card>
@@ -2304,7 +2323,7 @@ function PermissionsSection() {
         {desc}
       </div>
       <SettingRow label={t('settings.permissions.micLabel')} desc={t('settings.permissions.micDesc')}>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'flex-end', width: '100%' }}>
           <PermissionPill status={microphone} />
           {microphone !== 'granted' && microphone !== 'notApplicable' && microphone !== 'loading' && (
             <Btn variant="ghost" size="sm" onClick={reRequestMicrophone}>
@@ -2329,13 +2348,13 @@ function PermissionsSection() {
         label={t('settings.permissions.hotkeyLabel')}
         desc={capability ? t('settings.permissions.hotkeyDescWithAdapter', { adapter: adapterDisplayName(capability.adapter) }) : t('settings.permissions.hotkeyDescPlain')}
       >
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', minWidth: 0 }}>
-          <HotkeyStatusPill status={hotkey} />
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', minWidth: 0, justifyContent: 'flex-end', width: '100%' }}>
           {hotkey?.message && (
             <span style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', overflow: 'hidden', textOverflow: 'ellipsis' }}>
               {hotkey.message}
             </span>
           )}
+          <HotkeyStatusPill status={hotkey} />
         </div>
       </SettingRow>
       {windowsIme?.state !== 'notWindows' && (
@@ -2343,18 +2362,20 @@ function PermissionsSection() {
           label={t('settings.permissions.windowsImeLabel')}
           desc={t('settings.permissions.windowsImeDesc')}
         >
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', minWidth: 0 }}>
-            <WindowsImeStatusPill status={windowsIme} />
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', minWidth: 0, justifyContent: 'flex-end', width: '100%' }}>
             {windowsIme && (
               <span style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                 {t(`settings.permissions.windowsIme.${windowsIme.state}`)}
               </span>
             )}
+            <WindowsImeStatusPill status={windowsIme} />
           </div>
         </SettingRow>
       )}
       <SettingRow label={t('settings.permissions.networkLabel')} desc={t('settings.permissions.networkDesc')}>
-        <Pill tone="ok"><Icon name="check" size={11} />{t('settings.permissions.networkOk')}</Pill>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', width: '100%' }}>
+          <Pill tone="ok"><Icon name="check" size={11} />{t('settings.permissions.networkOk')}</Pill>
+        </div>
       </SettingRow>
     </Card>
   );
