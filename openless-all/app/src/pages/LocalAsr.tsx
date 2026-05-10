@@ -772,6 +772,10 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
       </Card>
       )}
 
+      {/* Qwen3 模型管理区——Windows 隐藏（Qwen3 后端 macOS-only，Windows 看见镜像源/
+          下载/模型列表都是 dead UI）。Foundry 块自身已经被上方 IS_WINDOWS 守卫，
+          错误 Card（共享 setError，被 Foundry handler 也写）保持露出。 */}
+      {!IS_WINDOWS && (<>
       {!engineAvailable && (
         <Card style={{ marginBottom: 16, background: 'rgba(255, 235, 200, 0.4)' }}>
           <div style={{ fontSize: 13, color: 'var(--ol-ink-2)' }}>
@@ -870,6 +874,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
           </div>
         </Card>
       )}
+      </>)}
 
       {error && (
         <Card style={{ marginBottom: 16, background: 'rgba(255, 220, 220, 0.5)' }}>
@@ -877,6 +882,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
         </Card>
       )}
 
+      {!IS_WINDOWS && (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         {models.map(model => (
           <ModelRow
@@ -897,6 +903,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
           />
         ))}
       </div>
+      )}
     </Wrapper>
   );
 }
