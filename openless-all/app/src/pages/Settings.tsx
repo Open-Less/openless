@@ -1605,21 +1605,26 @@ function AdvancedSection() {
                 </Btn>
               </SettingRow>
             )}
-
-            {isOnAnyLocal && (
-              <SettingRow
-                label={t('settings.advanced.disableLocalLabel')}
-                desc={t('settings.advanced.disableLocalDesc')}>
-                <Btn
-                  variant="primary"
-                  size="sm"
-                  disabled={busy || pendingTarget !== null}
-                  onClick={() => void performSwitch('volcengine')}>
-                  {t('settings.advanced.disable')}
-                </Btn>
-              </SettingRow>
-            )}
           </>
+        )}
+
+        {/* 「禁用本地 ASR」按钮放在 platformSupported 分支之外——若用户在另一台
+            支持本地推理的机器上启用过 local-qwen3 / foundry，preferences 同步到
+            当前 Linux/不支持平台后会卡死（无 enable / disable UI 可点），polish
+            走老路径必失败。这里始终在 isOnAnyLocal 时露出 disable 入口，给用户
+            退路（PR #400 pr_agent advisory 的修法）。 */}
+        {isOnAnyLocal && (
+          <SettingRow
+            label={t('settings.advanced.disableLocalLabel')}
+            desc={t('settings.advanced.disableLocalDesc')}>
+            <Btn
+              variant="primary"
+              size="sm"
+              disabled={busy || pendingTarget !== null}
+              onClick={() => void performSwitch('volcengine')}>
+              {t('settings.advanced.disable')}
+            </Btn>
+          </SettingRow>
         )}
       </Card>
 
