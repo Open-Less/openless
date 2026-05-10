@@ -52,7 +52,13 @@ import { Btn, Card, PageHeader, Pill } from './_atoms';
 // Foundry Local Whisper 后端只在 Windows 编译实体（foundry_local_sdk 仅 Windows），
 // 非 Windows 平台 runtime 是 stub 永远 unavailable。前端这一页对应的卡片、状态拉取、
 // 事件订阅都必须按 OS 隔离，避免 macOS / Linux 用户看到 Windows 专属的 UI。
+//
+// 同理 Qwen3-ASR 后端只在 macOS 编译实体（qwen_engine / cache / local_provider 全是
+// `#[cfg(target_os = "macos")]`），Qwen3 模型管理 UI 也按 IS_MAC 守严——之前用
+// `!IS_WINDOWS` 会让假设的 Linux 渲染路径暴露死 UI（pr_agent #403 'Linux regression'
+// 修法）。
 const IS_WINDOWS = detectOS() === 'win';
+const IS_MAC = detectOS() === 'mac';
 
 interface RemoteSize {
   totalBytes: number;
@@ -772,10 +778,11 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
       </Card>
       )}
 
-      {/* Qwen3 模型管理区——Windows 隐藏（Qwen3 后端 macOS-only，Windows 看见镜像源/
-          下载/模型列表都是 dead UI）。Foundry 块自身已经被上方 IS_WINDOWS 守卫，
-          错误 Card（共享 setError，被 Foundry handler 也写）保持露出。 */}
-      {!IS_WINDOWS && (<>
+      {/* Qwen3 模型管理区——只在 macOS 渲染（后端 #[cfg(target_os = "macos")] 独占）。
+          Windows / Linux 看见镜像源 / 下载 / 模型列表都是 dead UI。Foundry 块自身已经
+          被上方 IS_WINDOWS 守卫，错误 Card（共享 setError，被 Foundry handler 也写）
+          保持无条件露出。 */}
+      {IS_MAC && (<>
       {!engineAvailable && (
         <Card style={{ marginBottom: 16, background: 'rgba(255, 235, 200, 0.4)' }}>
           <div style={{ fontSize: 13, color: 'var(--ol-ink-2)' }}>
@@ -882,7 +889,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
         </Card>
       )}
 
-      {!IS_WINDOWS && (
+      {IS_MAC && (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         {models.map(model => (
           <ModelRow
