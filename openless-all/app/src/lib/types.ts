@@ -263,6 +263,7 @@ export type CapsuleState =
   | 'recording'
   | 'transcribing'
   | 'polishing'
+  | 'inserting'
   | 'done'
   | 'cancelled'
   | 'error';

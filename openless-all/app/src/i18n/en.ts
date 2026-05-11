@@ -31,9 +31,13 @@ export const en: typeof zhCN = {
   },
   capsule: {
     thinking: 'Thinking…',
+    recordingElapsed: 'Recording {{time}}',
+    transcribing: 'Transcribing…',
+    polishing: 'Polishing…',
+    inserting: 'Inserting…',
     cancelled: 'Cancelled',
     error: 'Something went wrong',
-    inserted: 'Inserted {{count}}',
+    inserted: 'Inserted {{count}} chars',
     translating: 'Translating',
   },
   qa: {

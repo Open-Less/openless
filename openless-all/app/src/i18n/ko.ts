@@ -33,6 +33,10 @@ export const ko: typeof zhCN = {
   },
   capsule: {
     thinking: '생각 중',
+    recordingElapsed: '녹음 중 {{time}}',
+    transcribing: '인식 중…',
+    polishing: '다듬는 중…',
+    inserting: '입력 중…',
     cancelled: '취소됨',
     error: '오류 발생',
     inserted: '{{count}}자 입력됨',

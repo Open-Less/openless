@@ -76,6 +76,13 @@ function ProcessingDots() {
   );
 }
 
+function formatElapsed(ms: number) {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+}
+
 interface CenterTextProps {
   os: OS;
   kind: 'default' | 'processing' | 'error';
@@ -164,13 +171,14 @@ interface PillProps {
   os: OS;
   state: CapsuleState;
   level: number;
+  elapsedMs: number;
   insertedChars: number;
   message?: string;
   onCancel: () => void;
   onConfirm: () => void;
 }
 
-function Pill({ os, state, level, insertedChars, message, onCancel, onConfirm }: PillProps) {
+function Pill({ os, state, level, elapsedMs, insertedChars, message, onCancel, onConfirm }: PillProps) {
   const { t } = useTranslation();
   const metrics = getCapsulePillMetrics(os);
   const processingLayout = getCapsuleMessageLayout(os, 'processing');
@@ -179,10 +187,42 @@ function Pill({ os, state, level, insertedChars, message, onCancel, onConfirm }:
   let center: JSX.Element;
   switch (state) {
     case 'recording':
-      center = <AudioBars level={level} />;
+      center = (
+        <div
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 7,
+            width: '100%',
+            maxWidth: metrics.textWidth,
+            minWidth: 0,
+          }}
+        >
+          <AudioBars level={level} />
+          <span
+            style={{
+              fontSize: 10.5,
+              fontWeight: 600,
+              color: 'var(--ol-ink-2)',
+              whiteSpace: 'nowrap',
+              fontVariantNumeric: 'tabular-nums',
+            }}
+          >
+            {t('capsule.recordingElapsed', { time: formatElapsed(elapsedMs) })}
+          </span>
+        </div>
+      );
       break;
     case 'transcribing':
     case 'polishing':
+    case 'inserting': {
+      const processingText =
+        state === 'transcribing'
+          ? t('capsule.transcribing')
+          : state === 'polishing'
+            ? t('capsule.polishing')
+            : t('capsule.inserting');
       center = (
         <div
           style={{
@@ -213,11 +253,12 @@ function Pill({ os, state, level, insertedChars, message, onCancel, onConfirm }:
               WebkitLineClamp: processingLayout.lineClamp,
             }}
           >
-            {t('capsule.thinking')}
+            {processingText}
           </span>
         </div>
       );
       break;
+    }
     case 'done':
       center = <CenterText os={os} kind="default" text={message || t('capsule.inserted', { count: insertedChars })} />;
       break;
@@ -278,6 +319,7 @@ export function Capsule() {
   const metrics = getCapsulePillMetrics(os);
   const [state, setState] = useState<CapsuleState>(isTauri ? 'idle' : 'recording');
   const [level, setLevel] = useState<number>(isTauri ? 0 : 0.6);
+  const [elapsedMs, setElapsedMs] = useState<number>(0);
   const [insertedChars, setInsertedChars] = useState<number>(0);
   const [message, setMessage] = useState<string | undefined>();
   const [translation, setTranslation] = useState<boolean>(false);
@@ -294,6 +336,7 @@ export function Capsule() {
         const p = event.payload;
         setState(p.state);
         setLevel(p.level ?? 0);
+        setElapsedMs(p.elapsedMs ?? 0);
         setMessage(p.message ?? undefined);
         if (p.insertedChars != null) setInsertedChars(p.insertedChars);
         setTranslation(p.translation === true);
@@ -390,6 +433,7 @@ export function Capsule() {
         os={os}
         state={state}
         level={level}
+        elapsedMs={elapsedMs}
         insertedChars={insertedChars}
         message={message}
         onCancel={onCancel}

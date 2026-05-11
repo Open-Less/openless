@@ -1048,6 +1048,8 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
         return Ok(());
     }
 
+    emit_capsule(inner, CapsuleState::Inserting, 0.0, elapsed, None, None);
+
     let focus_target = inner.state.lock().focus_target;
     let focus_ready_for_paste = restore_focus_target_if_possible(focus_target);
     let prefs = inner.prefs.get();
@@ -1142,15 +1144,15 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
         Some("TSF 未上屏，已禁止非 TSF 兜底".to_string())
     } else if polish_error.is_some() {
         // polish 失败优先告知用户，即使 insert 成功也要让用户知道这版是原文
-        Some("润色失败，已插入原文".to_string())
+        Some(format!("润色失败，已插入识别文本 {inserted_chars} 字"))
     } else {
         match status {
-            InsertStatus::Inserted => None,
-            InsertStatus::PasteSent => Some("已尝试粘贴".to_string()),
+            InsertStatus::Inserted => Some(format!("已润色并插入 {inserted_chars} 字")),
+            InsertStatus::PasteSent => Some(format!("已润色，尝试插入 {inserted_chars} 字")),
             InsertStatus::CopiedFallback => Some(if cfg!(target_os = "windows") {
-                "已复制，请 Ctrl+V".to_string()
+                format!("已润色并复制 {inserted_chars} 字，请 Ctrl+V")
             } else {
-                "已复制，请粘贴".to_string()
+                format!("已润色并复制 {inserted_chars} 字，请粘贴")
             }),
             InsertStatus::Failed => Some("插入失败".to_string()),
         }
