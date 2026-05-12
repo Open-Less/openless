@@ -489,16 +489,16 @@ export const ko: typeof zhCN = {
       streamingInsertTitle: '스트리밍 입력',
       streamingInsertTitleLinux: '스트리밍 입력 (실험적)',
       streamingInsertDesc:
-        '활성화하면 정제된 텍스트가 SSE 도착에 맞춰 글자 단위로 커서에 입력되어 체감 지연이 크게 줄어듭니다. 조건: OpenAI 호환 LLM 제공자 (Ark / DeepSeek 등) + Raw / 번역 모드가 아님 + 포커스가 비밀번호 입력란 등 Secure Input 컨트롤이 아님. 조건 중 하나라도 충족되지 않으면 기존 일괄 붙여넣기 경로로 자동 폴백되어, OFF 와 동일한 동작을 합니다.',
-      streamingInsertLabel: '스트리밍 입력 사용',
+        '정제된 텍스트가 SSE 도착에 맞춰 글자 단위로 커서에 입력되어 체감 지연이 크게 줄어듭니다. 조건을 충족하지 못하면 (OpenAI 호환이 아닌 LLM, Raw / 번역 모드, Secure Input 포커스) 일괄 붙여넣기로 자동 폴백됩니다.',
+      streamingInsertLabel: '스트리밍 입력',
       streamingInsertHintMac:
-        '스트리밍 중에는 입력 소스가 일시적으로 ABC 로 전환됩니다 (중국어 / 일본어 IME 의 Unicode 문자 가로채기 방지). 세션 종료 시 자동으로 원래 입력 소스로 복귀합니다.',
+        '스트리밍 중 입력 소스를 ABC 로 임시 전환 (CJK IME 가로채기 방지). 세션 종료 시 자동 복원.',
       streamingInsertHintWindows:
-        'SendInput Unicode 로 문자 이벤트를 직접 전송하여 TSF / IME 를 우회합니다. 입력 소스 전환이 필요하지 않습니다.',
+        'SendInput Unicode 로 TSF / IME 를 우회. 입력 소스 전환 불필요.',
       streamingInsertHintLinux:
-        '실험적: enigo + XTest 로 키보드 이벤트를 합성합니다. X11 에서는 안정적이며, Wayland 에서는 compositor 가 libei 를 허용하는지에 따라 다르고, 실패 시 자동으로 일괄 삽입으로 폴백됩니다.',
-      streamingInsertSaveClipboardLabel: '클립보드에도 저장',
-      streamingInsertSaveClipboardHint: '스트리밍 입력 성공 후 최종 텍스트를 시스템 클립보드에 기록하여 Cmd+V 로 재붙여넣기를 할 수 있도록 합니다. 끄면 스트리밍 동안 클립보드를 일절 건드리지 않습니다.',
+        'enigo + XTest 로 키 합성. X11 안정; Wayland 는 compositor 의존이며 실패 시 자동 폴백.',
+      streamingInsertSaveClipboardLabel: '클립보드에 저장',
+      streamingInsertSaveClipboardHint: '삽입 성공 후 최종 텍스트를 클립보드에 기록하여 Cmd+V 로 다시 붙여넣을 수 있게 합니다. 끄면 클립보드를 건드리지 않습니다.',
       localAsrTitle: '로컬 ASR 모델 (실험적)',
       localAsrDesc: '전사를 클라우드에서 로컬 추론으로 전환합니다. 오프라인 / 프라이버시용에만 권장됩니다.',
       localAsrWarningShort: '로컬 추론은 느리며, 사양 부족 시 글자 누락이 발생할 수 있습니다.',

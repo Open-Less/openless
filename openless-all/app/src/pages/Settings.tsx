@@ -1,68 +1,42 @@
 // Settings.tsx — ported verbatim from design_handoff_openless/pages.jsx::Settings.
-// Internal sub-sections (Recording / Providers / Shortcuts / Permissions / Language / About)
-// keep their inline-style literals 1:1 with the source JSX.
+// Section 拆分见 settings/ 子目录；本文件保留 dispatcher + RecordingSection + ProvidersSection（含其内嵌助手），
+// 其他 section 已挪出。原导出 Toggle / AboutUpdateControl / SettingsSectionId 通过 re-export 维持向后兼容。
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../components/Icon';
 import { ShortcutRecorder } from '../components/ShortcutRecorder';
-import { isDialogStatus, UpdateDialog, useAutoUpdate } from '../components/AutoUpdate';
 import { detectOS } from '../components/WindowChrome';
-import { LocalAsr } from './LocalAsr';
-import { APP_VERSION_LABEL } from '../lib/appVersion';
 import { isHotkeyModeMigrationNoticeActive } from '../lib/hotkeyMigration';
 import {
-  defaultQaShortcut,
   getHotkeyBindingCodes,
   getHotkeyBindingLabel,
   getHotkeyCodeLabel,
 } from '../lib/hotkey';
 import { createHotkeyRecorderState, orderHotkeyCodes, updateHotkeyRecorderState } from '../lib/hotkeyRecorder';
 import {
-  checkAccessibilityPermission,
-  checkMicrophonePermission,
-  getHotkeyStatus,
-  getWindowsImeStatus,
   isTauri,
   listMicrophoneDevices,
   openExternal,
-  openSystemSettings,
   listProviderModels,
   readCredential,
-  requestAccessibilityPermission,
-  requestMicrophonePermission,
   setActiveAsrProvider,
   setActiveLlmProvider,
   setCredential,
   setDictationHotkey,
-  setOpenAppHotkey,
-  setQaHotkey,
-  setSwitchStyleHotkey,
-  setTranslationHotkey,
   startMicrophoneLevelMonitor,
   stopMicrophoneLevelMonitor,
   validateProviderCredentials,
 } from '../lib/ipc';
 import type {
-  HotkeyCapability,
   HotkeyBinding,
   HotkeyMode,
-  HotkeyStatus,
   HotkeyTrigger,
   MicrophoneDevice,
   PasteShortcut,
-  PermissionStatus,
-  WindowsImeStatus,
 } from '../lib/types';
 import { emitSaved } from '../lib/savedEvent';
 import { useHotkeySettings } from '../state/HotkeySettingsContext';
-import i18n, {
-  FOLLOW_SYSTEM,
-  getLocalePreference,
-  outputPrefsForLocale,
-  setLocalePreference,
-  type SupportedLocale,
-} from '../i18n';
 import { Btn, Card, Collapsible, PageHeader, Pill } from './_atoms';
 import {
   deleteLocalAsrModel,
@@ -71,6 +45,14 @@ import {
   type LocalAsrModelStatus,
   type LocalAsrSettings,
 } from '../lib/localAsr';
+import { SettingRow, Toggle, inputStyle, type AsrPresetId } from './settings/shared';
+import { AdvancedSection } from './settings/AdvancedSection';
+import { ShortcutsSection } from './settings/ShortcutsSection';
+import { PermissionsSection } from './settings/PermissionsSection';
+import { LanguageSection } from './settings/LanguageSection';
+
+export { Toggle } from './settings/shared';
+export { AboutUpdateControl } from './settings/AboutUpdateControl';
 
 /// Settings → ASR 选了 local-qwen3 时触发跳到「模型设置」页 + 关 Settings modal。
 /// FloatingShell 监听同名事件做 setCurrentTab('localAsr') + setSettingsOpen(false)。
@@ -206,25 +188,6 @@ export function Settings({ embedded = false, initialSection = 'recording' }: Set
         </div>
       </div>
     </>
-  );
-}
-
-interface SettingRowProps {
-  label: string;
-  desc?: string;
-  children: ReactNode;
-  controlWidth?: number | string;
-}
-
-function SettingRow({ label, desc, children, controlWidth }: SettingRowProps) {
-  return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 180px) minmax(0, 1fr)', gap: 16, padding: '14px 0', borderTop: '0.5px solid var(--ol-line-soft)' }}>
-      <div style={{ minWidth: 0 }}>
-        <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--ol-ink)' }}>{label}</div>
-        {desc && <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', marginTop: 4, lineHeight: 1.5 }}>{desc}</div>}
-      </div>
-      <div style={{ display: 'flex', alignItems: 'flex-start', minWidth: 0, width: controlWidth ?? 'auto' }}>{children}</div>
-    </div>
   );
 }
 
@@ -1134,28 +1097,6 @@ function AutostartRow() {
   );
 }
 
-export function Toggle({ on, onToggle }: { on: boolean; onToggle?: (next: boolean) => void }) {
-  return (
-    <button
-      onClick={() => onToggle?.(!on)}
-      style={{
-        position: 'relative', width: 32, height: 18, borderRadius: 999, border: 0,
-        background: on ? 'var(--ol-blue)' : 'rgba(0,0,0,0.15)',
-        cursor: 'default',
-        transition: 'background 0.16s var(--ol-motion-quick)',
-      }}
-    >
-      <span
-        style={{
-          position: 'absolute', top: 2, left: on ? 16 : 2,
-          width: 14, height: 14, borderRadius: 999, background: '#fff',
-          boxShadow: '0 1px 2px rgba(0,0,0,.25)', transition: 'left .16s var(--ol-motion-spring)',
-        }}
-      />
-    </button>
-  );
-}
-
 function LlmThinkingToggle({ enabled, onToggle }: { enabled: boolean; onToggle: (next: boolean) => void }) {
   const { t } = useTranslation();
   return (
@@ -1271,7 +1212,8 @@ const ASR_DEFAULT_RESOURCE_ID = 'volc.bigasr.sauc.duration';
 //   1. 在这里加一项 `{ id, nameKey, baseUrl, model }`；
 //   2. `coordinator.rs::is_whisper_compatible_provider` 加同名 id；
 //   3. 在 i18n 的 `settings.providers.presets.<nameKey>` 加文案。
-const ASR_PRESETS = [
+// `AsrPresetId` 定义在 settings/shared.ts，AdvancedSection / ProvidersSection 共用同一份。
+const ASR_PRESETS: ReadonlyArray<{ id: AsrPresetId; nameKey: string; baseUrl: string; model: string }> = [
   { id: 'volcengine',   nameKey: 'asrVolcengine',   baseUrl: '',                                              model: ''                              },
   { id: 'bailian',      nameKey: 'asrBailian',     baseUrl: 'wss://dashscope.aliyuncs.com/api-ws/v1/inference/', model: 'fun-asr-realtime'             },
   { id: 'siliconflow',  nameKey: 'asrSiliconflow',  baseUrl: 'https://api.siliconflow.cn/v1',                  model: 'FunAudioLLM/SenseVoiceSmall' },
@@ -1281,9 +1223,7 @@ const ASR_PRESETS = [
   { id: 'foundry-local-whisper', nameKey: 'asrFoundryLocalWhisper', baseUrl: '',                              model: ''                              },
   // 本地 Qwen3-ASR：无 baseUrl/model 配置，模型在「模型设置」页下载与切换。
   { id: 'local-qwen3',  nameKey: 'asrLocalQwen3',   baseUrl: '',                                              model: ''                              },
-] as const;
-
-type AsrPresetId = typeof ASR_PRESETS[number]['id'];
+];
 
 function ProvidersSection() {
   const { t } = useTranslation();
@@ -1611,259 +1551,6 @@ function ProvidersSection() {
   );
 }
 
-/// 「高级」标签页——本地推理 / 实验性开关都集中在这里。
-///
-/// 设计：
-/// - 主 Providers 下拉只列云端选项；本地推理 (local-qwen3 / foundry-local-whisper)
-///   完全收纳到此栏，新手不会在主流程里误开 CPU 推理。
-/// - 启用本地推理时弹出**屏幕中央**的 modal（背景模糊）——一个框、一段短话、确认/取消。
-/// - 旧的「模型设置」独立页 (LocalAsr.tsx 作为 nav tab) 已下线，模型管理 UI
-///   通过 <LocalAsr embedded /> 内嵌在此处统一管理。
-///
-/// 平台对称（每端只露本机有后端的引擎，另一端的引擎以 disabled 行 + "本平台暂不支持"提示露出）：
-/// - macOS:   Qwen3-ASR 主行可启用；Foundry **不显示**（macOS 不展示 Windows 端模型内容）。
-/// - Windows: Foundry 主行可启用；Qwen3 行 disabled，desc 为 notSupportedHere。
-/// - Linux:   「该平台暂未支持本地 ASR 模型集成」整段兜底。
-function AdvancedSection() {
-  const { t } = useTranslation();
-  const { prefs, updatePrefs } = useHotkeySettings();
-  const os = detectOS();
-  const isMac = os === 'mac';
-  const isWin = os === 'win';
-  const isLinux = os === 'linux';
-  const platformSupported = isMac || isWin;
-  const switchSeqRef = useRef(0);
-  const [busy, setBusy] = useState(false);
-  // 待确认的启用目标。!== null 时中央 modal 弹出 + 背景模糊；用户点确认 → 真切；
-  // 点取消 → 回到 null。一次只允许一个 modal。
-  const [pendingTarget, setPendingTarget] = useState<AsrPresetId | null>(null);
-
-  const activeAsrProvider = (prefs?.activeAsrProvider ?? 'volcengine') as AsrPresetId;
-  const isOnLocalQwen3 = activeAsrProvider === 'local-qwen3';
-  const isOnFoundry = activeAsrProvider === 'foundry-local-whisper';
-  const isOnAnyLocal = isOnLocalQwen3 || isOnFoundry;
-
-  const requestEnable = (target: AsrPresetId) => {
-    setPendingTarget(target);
-  };
-
-  const performSwitch = async (target: AsrPresetId) => {
-    setBusy(true);
-    const seq = ++switchSeqRef.current;
-    try {
-      await setActiveAsrProvider(target);
-      if (seq !== switchSeqRef.current) return;
-      if (prefs) {
-        await updatePrefs({ ...prefs, activeAsrProvider: target });
-      }
-    } finally {
-      if (seq === switchSeqRef.current) {
-        setBusy(false);
-        setPendingTarget(null);
-      }
-    }
-  };
-
-  const pendingNameKey =
-    pendingTarget === 'local-qwen3' ? 'asrLocalQwen3'
-    : pendingTarget === 'foundry-local-whisper' ? 'asrFoundryLocalWhisper'
-    : null;
-
-  return (
-    <>
-      {/* ─── 屏幕中央确认 modal（背景模糊） ─────────────────────────────
-          点击遮罩或取消按钮关闭；切换中（busy）禁止任何关闭路径以免半切失败。 */}
-      {pendingTarget && pendingNameKey && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(0, 0, 0, 0.32)',
-            backdropFilter: 'blur(8px)',
-            WebkitBackdropFilter: 'blur(8px)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1000,
-            padding: 16,
-          }}
-          onClick={(e) => {
-            if (e.target === e.currentTarget && !busy) setPendingTarget(null);
-          }}>
-          <Card
-            style={{
-              background: 'rgba(255, 188, 60, 0.12)',
-              border: '1px solid rgba(220, 110, 0, 0.55)',
-              maxWidth: 360,
-              width: '100%',
-            }}>
-            <div style={{ fontSize: 13, fontWeight: 600, color: '#A04500', marginBottom: 6 }}>
-              ⚠️ {t('settings.advanced.confirmEnableLocalTitle')}
-            </div>
-            <div style={{ fontSize: 12.5, color: 'var(--ol-ink-2)', lineHeight: 1.6, marginBottom: 10 }}>
-              {t('settings.advanced.confirmEnableLocalBody', {
-                target: t(`settings.providers.presets.${pendingNameKey}`),
-              })}
-            </div>
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-              <Btn variant="ghost" size="sm" disabled={busy} onClick={() => setPendingTarget(null)}>
-                {t('common.cancel')}
-              </Btn>
-              <Btn
-                variant="primary"
-                size="sm"
-                disabled={busy}
-                onClick={() => void performSwitch(pendingTarget)}>
-                {t('settings.advanced.confirm')}
-              </Btn>
-            </div>
-          </Card>
-        </div>
-      )}
-
-      {/* ─── 流式输入（全平台 opt-in） ───────────────────────────────────
-          润色 SSE 一边到达一边逐字模拟键盘事件落到光标。开启后用户感知到的处理
-          时延显著降低，但有几个限制（不满足时自动回落原一次性插入路径）：
-          - macOS：CGEvent Unicode + 临时切到 ABC 输入源（CJK / 日文 IME 拦截兜底）
-          - Windows：SendInput Unicode，绕过 TSF / IME，不需要切输入法
-          - Linux（实验）：enigo XTest；Wayland compositor 拒绝 libei 时失败回落
-          - 仅 OpenAI-compatible provider 实装；Gemini / Codex 透明降级
-          - 密码框 / 1Password / SSH prompt 等 Secure Input 框拒绝合成按键 → 失败回落
-          每个平台用各自的 hint key，互相不显示对方平台的细节。 */}
-      <Card>
-        <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>
-          {t(isLinux
-            ? 'settings.advanced.streamingInsertTitleLinux'
-            : 'settings.advanced.streamingInsertTitle')}
-        </div>
-        <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', marginBottom: 10 }}>
-          {t('settings.advanced.streamingInsertDesc')}
-        </div>
-        <SettingRow
-          label={t('settings.advanced.streamingInsertLabel')}
-          desc={t(
-            isMac
-              ? 'settings.advanced.streamingInsertHintMac'
-              : isWin
-                ? 'settings.advanced.streamingInsertHintWindows'
-                : 'settings.advanced.streamingInsertHintLinux'
-          )}>
-          <Toggle
-            on={!!prefs?.streamingInsert}
-            onToggle={(next) => {
-              if (prefs) void updatePrefs({ ...prefs, streamingInsert: next });
-            }}
-          />
-        </SettingRow>
-        <SettingRow
-          label={t('settings.advanced.streamingInsertSaveClipboardLabel')}
-          desc={t('settings.advanced.streamingInsertSaveClipboardHint')}>
-          <Toggle
-            on={!!prefs?.streamingInsertSaveClipboard}
-            onToggle={(next) => {
-              if (prefs) void updatePrefs({ ...prefs, streamingInsertSaveClipboard: next });
-            }}
-          />
-        </SettingRow>
-      </Card>
-
-      <Card>
-        {/* 标题 + 右上角 inline 警告小字（替换原琥珀大警告条）。 */}
-        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 14 }}>
-          <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: 13, fontWeight: 600 }}>{t('settings.advanced.localAsrTitle')}</div>
-            <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', marginTop: 2 }}>
-              {t('settings.advanced.localAsrDesc')}
-            </div>
-          </div>
-          <div style={{
-            fontSize: 11,
-            color: '#A04500',
-            fontWeight: 500,
-            lineHeight: 1.4,
-            textAlign: 'right',
-            flexShrink: 0,
-            maxWidth: '52%',
-            paddingTop: 2,
-          }}>
-            ⚠️ {t('settings.advanced.localAsrWarningShort')}
-          </div>
-        </div>
-
-        {!platformSupported ? (
-          <div style={{ fontSize: 12.5, color: 'var(--ol-ink-3)', lineHeight: 1.6, padding: '8px 0' }}>
-            {t('settings.advanced.platformNotSupported')}
-          </div>
-        ) : (
-          <>
-            {/* Qwen3 行 —— macOS Toggle 可点切换；Windows 后端是 stub，Toggle 始终 off
-                + 不可点 + desc=notSupportedHere，跟"本平台不可用"视觉一致。跨平台
-                异常（Windows profile 同步到 local-qwen3）时 active 状态靠下方独立
-                "禁用本地 ASR" 行兜底，避免 Toggle ON + desc 说不支持的自相矛盾感
-                （pr_agent #403 'Stale Windows state' 修法）。 */}
-            <SettingRow
-              label={t('settings.providers.presets.asrLocalQwen3')}
-              desc={isMac ? t('settings.advanced.qwen3Desc') : t('settings.advanced.notSupportedHere')}>
-              <div style={{ display: 'flex', justifyContent: 'flex-end', width: '100%' }}>
-                <Toggle
-                  on={isMac && isOnLocalQwen3}
-                  onToggle={isMac && !busy && pendingTarget === null ? (next) => {
-                    if (next) requestEnable('local-qwen3');
-                    else void performSwitch('volcengine');
-                  } : undefined}
-                />
-              </div>
-            </SettingRow>
-
-            {/* Foundry 行 —— 仅 Windows 露出（macOS 不展示 Windows 端模型内容）。 */}
-            {isWin && (
-              <SettingRow
-                label={t('settings.providers.presets.asrFoundryLocalWhisper')}
-                desc={t('settings.advanced.foundryDesc')}>
-                <div style={{ display: 'flex', justifyContent: 'flex-end', width: '100%' }}>
-                  <Toggle
-                    on={isOnFoundry}
-                    onToggle={!busy && pendingTarget === null ? (next) => {
-                      if (next) requestEnable('foundry-local-whisper');
-                      else void performSwitch('volcengine');
-                    } : undefined}
-                  />
-                </div>
-              </SettingRow>
-            )}
-          </>
-        )}
-
-        {/* 「禁用本地 ASR」逃生入口——只在行内 Toggle 关不掉的场景露出：
-            - Linux / 不支持平台：根本没有任何引擎行
-            - 跨平台异常（macOS profile 同步到 foundry / Windows profile 同步到 qwen3）：
-              本机引擎 Toggle 是 off，关不动异常 active 的对方引擎
-            否则平台本机 Toggle 自身就能 off → 关停，重复 disable 行徒增视觉。 */}
-        {isOnAnyLocal && !((isMac && isOnLocalQwen3) || (isWin && isOnFoundry)) && (
-          <SettingRow
-            label={t('settings.advanced.disableLocalLabel')}
-            desc={t('settings.advanced.disableLocalDesc')}>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', width: '100%' }}>
-              <Btn
-                variant="primary"
-                size="sm"
-                disabled={busy || pendingTarget !== null}
-                onClick={() => void performSwitch('volcengine')}>
-                {t('settings.advanced.disable')}
-              </Btn>
-            </div>
-          </SettingRow>
-        )}
-      </Card>
-
-      {/* 模型管理 UI（镜像源 / 模型列表 / 下载 / 删除 / 设为默认 / Foundry Local）
-          inline 渲染——「模型设置」独立页已删，这里是唯一入口。 */}
-      {platformSupported && <LocalAsr embedded />}
-    </>
-  );
-}
 
 type ProviderToolStatus = 'idle' | 'loading' | 'success' | 'empty' | 'error';
 
@@ -2164,15 +1851,6 @@ function CredentialField({ label, account, placeholder, mono, mask, defaultValue
   );
 }
 
-const inputStyle: CSSProperties = {
-  flex: 1, height: 32, padding: '0 10px',
-  border: '0.5px solid var(--ol-line-strong)',
-  borderRadius: 8, fontSize: 12.5,
-  fontFamily: 'inherit', outline: 'none',
-  background: 'var(--ol-surface-2)',
-  width: '100%', maxWidth: 360,
-  transition: 'background 0.16s var(--ol-motion-quick), border-color 0.16s var(--ol-motion-quick)',
-};
 const miniBtnStyle: CSSProperties = {
   height: 32, padding: '0 10px',
   border: '0.5px solid var(--ol-line-strong)',
@@ -2264,371 +1942,10 @@ const iconBtnStyle: CSSProperties = {
   transition: 'background 0.16s var(--ol-motion-quick), border-color 0.16s var(--ol-motion-quick), color 0.16s var(--ol-motion-quick)',
 };
 
-function ShortcutsSection() {
-  const { t } = useTranslation();
-  const { prefs, hotkey, capability, updatePrefs: savePrefs } = useHotkeySettings();
 
-  if (!prefs || !hotkey || !capability) {
-    return (
-      <Card>
-        <div style={{ fontSize: 12, color: 'var(--ol-ink-4)' }}>{t('common.loading')}</div>
-      </Card>
-    );
-  }
 
-  const desc = capability.requiresAccessibilityPermission
-    ? t('settings.shortcuts.descAcc')
-    : t('settings.shortcuts.descNoAcc');
-  const readonlyRows: Array<[string, string]> = [
-    [t('settings.shortcuts.cancel'), 'Esc'],
-    [t('settings.shortcuts.confirm'), t('settings.shortcuts.confirmHint')],
-  ];
-  return (
-    <Card>
-      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>{t('settings.shortcuts.title')}</div>
-      <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', marginBottom: 6 }}>{desc}</div>
-      <SettingRow label={t('settings.shortcuts.startStop')}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, width: '100%' }}>
-          <ShortcutRecorder
-            value={prefs.dictationHotkey}
-            alignRecordButton
-            onSave={async binding => {
-              await setDictationHotkey(binding);
-              await savePrefs({ ...prefs, dictationHotkey: binding });
-            }}
-          />
-          <div style={{ fontSize: 11, color: 'var(--ol-ink-4)' }}>
-            {hotkey.mode === 'hold' ? t('hotkey.modeHoldSuffix') : t('hotkey.modeToggleSuffix')}
-          </div>
-        </div>
-      </SettingRow>
-      <SettingRow label={t('translation.hotkey.title', 'Translation shortcut')}>
-        <ShortcutRecorder
-          value={prefs.translationHotkey}
-          alignRecordButton
-          onSave={async binding => {
-            await setTranslationHotkey(binding);
-            await savePrefs({ ...prefs, translationHotkey: binding });
-          }}
-        />
-      </SettingRow>
-      <SettingRow label={t('selectionAsk.hotkey.title')}>
-        {prefs.qaHotkey ? (
-          <ShortcutRecorder
-            value={prefs.qaHotkey}
-            alignRecordButton
-            onSave={async binding => {
-              await setQaHotkey(binding);
-              await savePrefs({ ...prefs, qaHotkey: binding });
-            }}
-          />
-        ) : (
-          <button
-            onClick={async () => {
-              const binding = defaultQaShortcut();
-              await setQaHotkey(binding);
-              await savePrefs({ ...prefs, qaHotkey: binding });
-            }}
-            style={{ fontSize: 12, padding: '5px 14px', background: 'var(--ol-blue)', color: '#fff', border: 0, borderRadius: 6, fontFamily: 'inherit', fontWeight: 500, cursor: 'default' }}
-          >
-            {t('selectionAsk.hotkey.enable', 'Enable')}
-          </button>
-        )}
-      </SettingRow>
-      <SettingRow label={t('settings.shortcuts.switchStyle')}>
-        <ShortcutRecorder
-          value={prefs.switchStyleHotkey}
-          alignRecordButton
-          onSave={async binding => {
-            await setSwitchStyleHotkey(binding);
-            await savePrefs({ ...prefs, switchStyleHotkey: binding });
-          }}
-        />
-      </SettingRow>
-      <SettingRow label={t('settings.shortcuts.openApp')}>
-        <ShortcutRecorder
-          value={prefs.openAppHotkey}
-          alignRecordButton
-          onSave={async binding => {
-            await setOpenAppHotkey(binding);
-            await savePrefs({ ...prefs, openAppHotkey: binding });
-          }}
-        />
-      </SettingRow>
-      {readonlyRows.map(([k, v]) => (
-        <SettingRow key={k} label={k}>
-          <kbd style={{
-            display: 'inline-flex', alignItems: 'center', gap: 4,
-            padding: '4px 10px', fontSize: 12, fontFamily: 'var(--ol-font-mono)',
-            borderRadius: 6, background: 'var(--ol-surface-2)',
-            border: '0.5px solid var(--ol-line-strong)',
-            boxShadow: '0 1px 0 rgba(0,0,0,0.04)',
-            color: 'var(--ol-ink-2)',
-          }}>{v}</kbd>
-        </SettingRow>
-      ))}
-    </Card>
-  );
-}
 
-function PermissionsSection() {
-  const { t } = useTranslation();
-  const [accessibility, setAccessibility] = useState<PermissionStatus | 'loading'>('loading');
-  const [microphone, setMicrophone] = useState<PermissionStatus | 'loading'>('loading');
-  const [hotkey, setHotkey] = useState<HotkeyStatus | null>(null);
-  const [windowsIme, setWindowsIme] = useState<WindowsImeStatus | null>(null);
-  const { capability } = useHotkeySettings();
 
-  const refreshPermissions = async () => {
-    const [a, m] = await Promise.all([
-      checkAccessibilityPermission(),
-      checkMicrophonePermission(),
-    ]);
-    setAccessibility(a);
-    setMicrophone(m);
-  };
-
-  const refreshHotkey = async () => {
-    setHotkey(await getHotkeyStatus());
-  };
-
-  const refreshWindowsIme = async () => {
-    setWindowsIme(await getWindowsImeStatus());
-  };
-
-  useEffect(() => {
-    refreshPermissions();
-    refreshHotkey();
-    refreshWindowsIme();
-    const hotkeyId = window.setInterval(refreshHotkey, 1000);
-    // 麦克风检查会短暂打开输入流，避免每秒探测导致隐私指示器频繁闪烁。
-    const permissionId = window.setInterval(refreshPermissions, 10000);
-    const onFocus = () => {
-      refreshPermissions();
-      refreshHotkey();
-      refreshWindowsIme();
-    };
-    window.addEventListener('focus', onFocus);
-    return () => {
-      window.clearInterval(hotkeyId);
-      window.clearInterval(permissionId);
-      window.removeEventListener('focus', onFocus);
-    };
-  }, []);
-
-  const reRequestAccessibility = async () => {
-    await requestAccessibilityPermission();
-    refreshPermissions();
-  };
-
-  const reRequestMicrophone = async () => {
-    if (microphone === 'denied' || microphone === 'restricted') {
-      await openSystemSettings('microphone');
-      refreshPermissions();
-      return;
-    }
-    const status = await requestMicrophonePermission();
-    setMicrophone(status);
-    if (status === 'denied' || status === 'restricted') {
-      await openSystemSettings('microphone');
-    }
-    refreshPermissions();
-  };
-
-  const desc = capability?.requiresAccessibilityPermission
-    ? t('settings.permissions.descAcc')
-    : t('settings.permissions.descNoAcc');
-
-  return (
-    <Card>
-      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>{t('settings.permissions.title')}</div>
-      <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', marginBottom: 6 }}>
-        {desc}
-      </div>
-      <SettingRow label={t('settings.permissions.micLabel')} desc={t('settings.permissions.micDesc')}>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'flex-end', width: '100%' }}>
-          <PermissionPill status={microphone} />
-          {microphone !== 'granted' && microphone !== 'notApplicable' && microphone !== 'loading' && (
-            <Btn variant="ghost" size="sm" onClick={reRequestMicrophone}>
-              {microphone === 'denied' || microphone === 'restricted' ? t('settings.permissions.openSystem') : t('settings.permissions.grant')}
-            </Btn>
-          )}
-        </div>
-      </SettingRow>
-      {capability?.requiresAccessibilityPermission && (
-        <SettingRow label={t('settings.permissions.accLabel')} desc={t('settings.permissions.accDesc')}>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <PermissionPill status={accessibility} />
-            {accessibility !== 'granted' && accessibility !== 'notApplicable' && (
-              <Btn variant="ghost" size="sm" onClick={reRequestAccessibility}>
-                {t('settings.permissions.grant')}
-              </Btn>
-            )}
-          </div>
-        </SettingRow>
-      )}
-      <SettingRow
-        label={t('settings.permissions.hotkeyLabel')}
-        desc={capability ? t('settings.permissions.hotkeyDescWithAdapter', { adapter: adapterDisplayName(capability.adapter) }) : t('settings.permissions.hotkeyDescPlain')}
-      >
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', minWidth: 0, justifyContent: 'flex-end', width: '100%' }}>
-          {hotkey?.message && (
-            <span style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-              {hotkey.message}
-            </span>
-          )}
-          <HotkeyStatusPill status={hotkey} />
-        </div>
-      </SettingRow>
-      {windowsIme?.state !== 'notWindows' && (
-        <SettingRow
-          label={t('settings.permissions.windowsImeLabel')}
-          desc={t('settings.permissions.windowsImeDesc')}
-        >
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', minWidth: 0, justifyContent: 'flex-end', width: '100%' }}>
-            {windowsIme && (
-              <span style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                {t(`settings.permissions.windowsIme.${windowsIme.state}`)}
-              </span>
-            )}
-            <WindowsImeStatusPill status={windowsIme} />
-          </div>
-        </SettingRow>
-      )}
-      <SettingRow label={t('settings.permissions.networkLabel')} desc={t('settings.permissions.networkDesc')}>
-        <div style={{ display: 'flex', justifyContent: 'flex-end', width: '100%' }}>
-          <Pill tone="ok"><Icon name="check" size={11} />{t('settings.permissions.networkOk')}</Pill>
-        </div>
-      </SettingRow>
-    </Card>
-  );
-}
-
-function PermissionPill({ status }: { status: PermissionStatus | 'loading' }) {
-  const { t } = useTranslation();
-  if (status === 'loading') {
-    return <Pill tone="default">{t('settings.permissions.checking')}</Pill>;
-  }
-  if (status === 'granted') {
-    return <Pill tone="ok"><Icon name="check" size={11} />{t('settings.permissions.granted')}</Pill>;
-  }
-  if (status === 'notApplicable') {
-    return <Pill tone="default">{t('settings.permissions.notApplicable')}</Pill>;
-  }
-  if (status === 'denied' || status === 'restricted') {
-    return <Pill tone="outline">{t('settings.permissions.denied')}</Pill>;
-  }
-  return <Pill tone="outline">{t('settings.permissions.indeterminate')}</Pill>;
-}
-
-function LanguageSection() {
-  const { t } = useTranslation();
-  const { updatePrefs } = useHotkeySettings();
-  const [pref, setPref] = useState<SupportedLocale | typeof FOLLOW_SYSTEM>(getLocalePreference());
-
-  const apply = async (next: SupportedLocale | typeof FOLLOW_SYSTEM) => {
-    setPref(next);
-    const resolved = await setLocalePreference(next);
-    const localePrefs = outputPrefsForLocale(resolved);
-    await updatePrefs(current => {
-      if (
-        current.chineseScriptPreference === localePrefs.chineseScriptPreference &&
-        current.outputLanguagePreference === localePrefs.outputLanguagePreference
-      ) {
-        return current;
-      }
-      return { ...current, ...localePrefs };
-    });
-  };
-
-  return (
-    <Card>
-      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>{t('settings.language.title')}</div>
-      <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', marginBottom: 6 }}>{t('settings.language.desc')}</div>
-      <SettingRow label={t('settings.language.label')} desc={t('settings.language.labelDesc')}>
-        <select
-          value={pref}
-          onChange={e => apply(e.target.value as SupportedLocale | typeof FOLLOW_SYSTEM)}
-          style={{ ...inputStyle, maxWidth: 220 }}
-        >
-          <option value={FOLLOW_SYSTEM}>{t('settings.language.followSystem')}</option>
-          <option value="zh-CN">{t('settings.language.zh')}</option>
-          <option value="zh-TW">{t('settings.language.zhTW')}</option>
-          <option value="en">{t('settings.language.en')}</option>
-          <option value="ja">{t('settings.language.ja')}</option>
-          <option value="ko">{t('settings.language.ko')}</option>
-        </select>
-      </SettingRow>
-      <div style={{ fontSize: 11, color: 'var(--ol-ink-4)', marginTop: 8, lineHeight: 1.6 }}>
-        {t('settings.language.restartHint')}
-      </div>
-    </Card>
-  );
-}
-
-// AboutSection 已移除：内容并入 SettingsModal 的 AboutMini，避免设置内外两个"关于"重复入口。
-
-export function AboutUpdateControl({ tagline }: { tagline: string }) {
-  const { t } = useTranslation();
-  const u = useAutoUpdate();
-  return (
-    <>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 2 }}>
-        <span style={{ fontSize: 12, color: 'var(--ol-ink-3)' }}>{tagline} 路 {APP_VERSION_LABEL}</span>
-        <Btn variant="ghost" size="sm" onClick={u.checkForUpdates} disabled={u.checking || u.busy}>
-          {u.checking ? t('settings.about.checkingUpdate') : t('settings.about.checkUpdateBtn')}
-        </Btn>
-      </div>
-      {(u.status === 'none' || u.status === 'error') && (
-        <div style={{ fontSize: 11, color: u.status === 'error' ? 'var(--ol-err)' : 'var(--ol-ink-4)', marginTop: 4 }}>
-          {u.status === 'none' ? t('settings.about.upToDate') : t('settings.about.updateError')}
-        </div>
-      )}
-      {isDialogStatus(u.status) && (
-        <UpdateDialog
-          status={u.status}
-          version={u.version}
-          progress={u.progress}
-          downloaded={u.downloaded}
-          contentLength={u.contentLength}
-          onInstall={u.installUpdate}
-          onClose={u.dismissDialog}
-        />
-      )}
-    </>
-  );
-}
-
-function HotkeyStatusPill({ status }: { status: HotkeyStatus | null }) {
-  const { t } = useTranslation();
-  if (!status) {
-    return <Pill tone="default">{t('settings.permissions.checking')}</Pill>;
-  }
-  if (status.state === 'installed') {
-    return <Pill tone="ok"><Icon name="check" size={11} />{t('settings.permissions.hotkeyInstalled')}</Pill>;
-  }
-  if (status.state === 'starting') {
-    return <Pill tone="default">{t('settings.permissions.hotkeyStarting')}</Pill>;
-  }
-  return <Pill tone="outline">{t('settings.permissions.hotkeyFailed')}</Pill>;
-}
-
-function WindowsImeStatusPill({ status }: { status: WindowsImeStatus | null }) {
-  const { t } = useTranslation();
-  if (!status) {
-    return <Pill tone="default">{t('settings.permissions.checking')}</Pill>;
-  }
-  if (status.state === 'installed') {
-    return <Pill tone="ok"><Icon name="check" size={11} />{t('settings.permissions.windowsImeInstalled')}</Pill>;
-  }
-  return <Pill tone="outline">{t('settings.permissions.windowsImeUnavailable')}</Pill>;
-}
-
-function adapterDisplayName(adapter: HotkeyCapability['adapter'] | HotkeyStatus['adapter']) {
-  if (adapter === 'macEventTap') return i18n.t('hotkey.adapter.macEventTap');
-  if (adapter === 'windowsLowLevel') return i18n.t('hotkey.adapter.windowsLowLevel');
-  return i18n.t('hotkey.adapter.rdev');
-}
 
 /// 本地 Qwen3-ASR 在 Settings → 服务商区里**不**让用户填空——展示当前激活模型
 /// 是否已下载、列出所有已下载模型 + 删除按钮，并提示性能/质量预期，引导跳到

@@ -487,16 +487,16 @@ export const en: typeof zhCN = {
       streamingInsertTitle: 'Streaming insertion',
       streamingInsertTitleLinux: 'Streaming insertion (experimental)',
       streamingInsertDesc:
-        'When on, polished output streams to the cursor character by character as the LLM SSE arrives — perceived latency drops noticeably. Requires an OpenAI-compatible LLM provider (Ark / DeepSeek / etc.), not Raw / translation mode, and focus that is not a Secure Input field (password / 1Password). When any condition fails the path transparently falls back to one-shot paste — identical to having the toggle off.',
-      streamingInsertLabel: 'Enable streaming insertion',
+        'Streams polished text to the cursor character by character, noticeably lowering perceived latency. Falls back to one-shot paste when the prerequisites are not met (non OpenAI-compatible LLM, Raw / translation mode, or Secure Input focus).',
+      streamingInsertLabel: 'Streaming insertion',
       streamingInsertHintMac:
-        'During streaming the input source is temporarily switched to ABC (so CJK / Japanese IMEs cannot intercept the Unicode keystrokes) and restored when the session ends.',
+        'Temporarily switches the input source to ABC so CJK IMEs cannot intercept keystrokes; restored on session end.',
       streamingInsertHintWindows:
-        'Uses SendInput Unicode to type characters directly, bypassing TSF / IME — no input-method switching needed.',
+        'SendInput Unicode types directly, bypassing TSF / IME — no input-method switching needed.',
       streamingInsertHintLinux:
-        'Experimental: uses enigo + XTest to synthesize keystrokes. Stable on X11; on Wayland it depends on whether the compositor grants libei access — failures fall back automatically to one-shot insertion.',
-      streamingInsertSaveClipboardLabel: 'Also copy to clipboard',
-      streamingInsertSaveClipboardHint: 'After a successful streaming insert, write the final text to the system clipboard so Cmd+V can paste it again. Off = streaming never touches the clipboard.',
+        'enigo + XTest synthesize keystrokes. Stable on X11; on Wayland it depends on the compositor — failures fall back automatically.',
+      streamingInsertSaveClipboardLabel: 'Copy to clipboard',
+      streamingInsertSaveClipboardHint: 'After a successful insert, write the final text to the clipboard so Cmd+V can paste it again. Off = clipboard is never touched.',
       localAsrTitle: 'Local ASR models (experimental)',
       localAsrDesc: 'Move transcription from cloud ASR to on-device inference. Offline / privacy-sensitive use only.',
       localAsrWarningShort: 'Local inference is slower; under-spec hardware may drop words.',

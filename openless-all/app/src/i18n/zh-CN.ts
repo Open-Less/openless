@@ -485,16 +485,16 @@ export const zhCN = {
       streamingInsertTitle: '流式输入',
       streamingInsertTitleLinux: '流式输入（实验）',
       streamingInsertDesc:
-        '开启后润色 SSE 边到达边逐字落到光标，感知延迟显著降低。需要满足：OpenAI 兼容 LLM 提供商（Ark / DeepSeek 等）+ 非 Raw / 翻译模式 + 焦点不是密码框等 Secure Input 控件。任何条件不满足都自动回落到原一次性粘贴路径，行为与关闭等价。',
-      streamingInsertLabel: '启用流式输入',
+        '润色一边到达一边逐字落到光标，显著降低感知延迟。条件不满足时（非 OpenAI 兼容 LLM、Raw / 翻译模式、Secure Input 焦点）自动回落到一次性粘贴。',
+      streamingInsertLabel: '流式输入',
       streamingInsertHintMac:
-        '流式期间临时切换到 ABC 输入源（规避中文 / 日文 IME 拦截 Unicode 字符），session 结束自动切回。',
+        '临时切到 ABC 输入源，避免 CJK IME 拦截，会话结束后自动切回。',
       streamingInsertHintWindows:
-        'SendInput Unicode 直接发字符事件，绕过 TSF / IME，不切输入法。',
+        'SendInput Unicode 直接送字符，绕过 TSF / IME，不切输入法。',
       streamingInsertHintLinux:
-        '实验性：enigo + XTest 模拟键盘事件，X11 稳定；Wayland 看 compositor 是否允许 libei，失败自动回落到一次性插入。',
-      streamingInsertSaveClipboardLabel: '同步写入剪贴板',
-      streamingInsertSaveClipboardHint: '流式输入成功后把这次的最终文本写到系统剪贴板，方便 Cmd+V 再次粘贴。关闭后流式过程完全不动剪贴板。',
+        'enigo + XTest 合成按键。X11 稳定；Wayland 取决于 compositor，失败自动回落。',
+      streamingInsertSaveClipboardLabel: '同步到剪贴板',
+      streamingInsertSaveClipboardHint: '插入成功后把最终文本写入剪贴板，方便 Cmd+V 再次粘贴；关闭后流式过程不动剪贴板。',
       localAsrTitle: '本地 ASR 模型（实验性）',
       localAsrDesc: '把转写从云端切到本机推理。仅推荐离线 / 隐私敏感场景。',
       localAsrWarningShort: '本地推理较慢，配置不足时可能吞字。',
