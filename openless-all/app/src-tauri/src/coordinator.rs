@@ -51,6 +51,10 @@ use crate::types::{
     HotkeyStatus, HotkeyStatusState, InsertStatus, OutputLanguagePreference, PolishMode,
 };
 #[cfg(target_os = "windows")]
+use crate::windows_external_edit::{
+    ExternalEditObservationOutcome, ExternalEditObservationRequest, WindowsExternalEditObserver,
+};
+#[cfg(target_os = "windows")]
 use crate::windows_ime_ipc::ImeSubmitTarget;
 #[cfg(target_os = "windows")]
 use crate::windows_ime_session::{PreparedWindowsImeSession, WindowsImeSessionController};
@@ -107,6 +111,8 @@ struct Inner {
     windows_ime: WindowsImeSessionController,
     #[cfg(target_os = "windows")]
     prepared_windows_ime_session: Arc<Mutex<Vec<PreparedWindowsImeSessionSlot>>>,
+    #[cfg(target_os = "windows")]
+    windows_external_edit: WindowsExternalEditObserver,
     state: Mutex<SessionState>,
     asr: Mutex<Option<SessionResource<ActiveAsr>>>,
     /// 本地 Qwen3-ASR 引擎缓存。跨会话复用，避免每次重加载 1.2GB+ 模型。
@@ -244,6 +250,7 @@ impl Coordinator {
                 inserter: TextInserter::new(),
                 windows_ime: WindowsImeSessionController::new(),
                 prepared_windows_ime_session: Arc::new(Mutex::new(Vec::new())),
+                windows_external_edit: WindowsExternalEditObserver::new(),
                 state: Mutex::new(SessionState::default()),
                 asr: Mutex::new(None),
                 recorder: Mutex::new(None),
@@ -3615,14 +3622,16 @@ fn schedule_capsule_idle(inner: &Arc<Inner>, delay_ms: u64) {
 
 #[cfg(target_os = "windows")]
 fn capture_focus_target() -> Option<usize> {
-    use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+    use windows::Win32::UI::WindowsAndMessaging::{GetAncestor, GetForegroundWindow, GA_ROOT};
 
     let foreground = unsafe { GetForegroundWindow() };
     if foreground.0.is_null() {
-        None
-    } else {
-        Some(foreground.0 as usize)
+        return None;
     }
+
+    let root = unsafe { GetAncestor(foreground, GA_ROOT) };
+    let target = if root.0.is_null() { foreground } else { root };
+    Some(target.0 as usize)
 }
 
 #[cfg(not(target_os = "windows"))]

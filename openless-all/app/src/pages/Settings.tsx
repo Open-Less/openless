@@ -1771,6 +1771,27 @@ function AdvancedSection() {
 
       <Card>
         {/* 标题 + 右上角 inline 警告小字（替换原琥珀大警告条）。 */}
+        {isWin && (
+          <div style={{ marginBottom: 14, paddingBottom: 14, borderBottom: '0.5px solid var(--ol-line-soft)' }}>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>
+              {t('settings.advanced.windowsExternalEditLearningTitle')}
+            </div>
+            <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', marginBottom: 10 }}>
+              {t('settings.advanced.windowsExternalEditLearningDesc')}
+            </div>
+            <SettingRow
+              label={t('settings.advanced.windowsExternalEditLearningLabel')}
+              desc={t('settings.advanced.windowsExternalEditLearningHint')}>
+              <Toggle
+                on={!!prefs?.windowsExternalEditLearning}
+                onToggle={(next) => {
+                  if (prefs) void updatePrefs({ ...prefs, windowsExternalEditLearning: next });
+                }}
+              />
+            </SettingRow>
+          </div>
+        )}
+
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 14 }}>
           <div style={{ minWidth: 0 }}>
             <div style={{ fontSize: 13, fontWeight: 600 }}>{t('settings.advanced.localAsrTitle')}</div>

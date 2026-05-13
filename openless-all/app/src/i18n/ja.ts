@@ -499,6 +499,12 @@ export const ja: typeof zhCN = {
         '実験的：enigo + XTest によるキーボードイベント合成。X11 では安定動作、Wayland では compositor が libei を許可するかどうかに依存し、失敗時は自動的に一括挿入にフォールバックします。',
       streamingInsertSaveClipboardLabel: 'クリップボードにも保存',
       streamingInsertSaveClipboardHint: 'ストリーミング入力成功後、最終テキストをシステムクリップボードに書き込んで Cmd+V で再貼り付けできるようにします。OFF にすると、ストリーミング処理はクリップボードに一切触れません。',
+      windowsExternalEditLearningTitle: 'Windows 外部編集の自動学習',
+      windowsExternalEditLearningDesc:
+        '挿入成功後、ごく短いローカル観察ウィンドウだけが開きます。その直後に同じテキストコントロール内で用語を手動修正すると、OpenLess は deterministic な old -> new 置換を推定してローカル correction rule として保存し、次回以降の音声入力で優先適用します。',
+      windowsExternalEditLearningLabel: '外部編集の自動学習を有効にする',
+      windowsExternalEditLearningHint:
+        '初回 productized release では Windows のみ対応です。観察は検証済みサポートシナリオに限定した best-effort で、観察・帰因・推定・保存のいずれかが失敗しても元の挿入結果には影響しません。学習済みルールは「Vocabulary -> Correction rules」で確認・無効化・削除できます。',
       localAsrTitle: 'ローカル ASR モデル（実験的）',
       localAsrDesc: '転写をクラウドから本機推論に切り替えます。オフライン／プライバシー重視向け。',
       localAsrWarningShort: 'ローカル推論は遅く、スペック不足では欠字の可能性があります。',

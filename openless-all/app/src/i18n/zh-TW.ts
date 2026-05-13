@@ -497,6 +497,12 @@ export const zhTW: typeof zhCN = {
         '實驗性：enigo + XTest 模擬鍵盤事件，X11 穩定；Wayland 看 compositor 是否允許 libei，失敗自動回落到一次性插入。',
       streamingInsertSaveClipboardLabel: '同步寫入剪貼簿',
       streamingInsertSaveClipboardHint: '流式輸入成功後把這次的最終文字寫到系統剪貼簿，方便 Cmd+V 再次貼上。關閉後流式過程完全不動剪貼簿。',
+      windowsExternalEditLearningTitle: 'Windows 外部編輯自動學習',
+      windowsExternalEditLearningDesc:
+        '插入成功後只在很短的本地觀察窗口內工作：如果你隨後在同一文字控制項裡手工改正了剛插入的術語，OpenLess 會嘗試提取確定性的 old -> new 替換，並寫入本地糾正规則，供後續聽寫優先命中。',
+      windowsExternalEditLearningLabel: '啟用外部編輯自動學習',
+      windowsExternalEditLearningHint:
+        '僅 Windows 首批支援。當前只在已驗證支援的外部編輯場景裡盡力觀察；觀察、歸因、抽取或寫入失敗都會靜默回退，不影響這次原始插入。已學到的規則可在「詞彙表 -> 糾正规則」裡查看、停用或刪除。',
       localAsrTitle: '本地 ASR 模型（實驗性）',
       localAsrDesc: '把轉寫從雲端切到本機推理。僅推薦離線 / 隱私敏感場景。',
       localAsrWarningShort: '本地推理較慢，配置不足時可能吞字。',

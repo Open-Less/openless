@@ -117,6 +117,7 @@ fn data_dir() -> Result<PathBuf> {
             .join("share")
             .join("OpenLess"))
     }
+
 }
 
 fn ensure_dir(dir: &Path) -> Result<()> {
@@ -1051,6 +1052,15 @@ pub struct CorrectionRuleStore {
     lock: Mutex<()>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum CorrectionRuleFile {
+    Array(Vec<CorrectionRule>),
+    Wrapped {
+        value: Vec<CorrectionRule>,
+    },
+}
+
 impl CorrectionRuleStore {
     pub fn new() -> Result<Self> {
         let dir = data_dir()?;
@@ -1072,6 +1082,43 @@ impl CorrectionRuleStore {
         validate_correction_rule_syntax(&pattern, &replacement)?;
         let _guard = self.lock.lock();
         let mut rules = self.read_locked()?;
+        let rule = CorrectionRule {
+            id: Uuid::new_v4().to_string(),
+            pattern,
+            replacement,
+            enabled: true,
+            created_at: Utc::now().to_rfc3339(),
+        };
+        rules.insert(0, rule.clone());
+        self.write_locked(&rules)?;
+        Ok(rule)
+    }
+
+    pub fn remember(&self, pattern: String, replacement: String) -> Result<CorrectionRule> {
+        let pattern = pattern.trim().to_string();
+        let replacement = replacement.trim().to_string();
+        validate_correction_rule_syntax(&pattern, &replacement)?;
+        let _guard = self.lock.lock();
+        let mut rules = self.read_locked()?;
+
+        if let Some(index) = rules
+            .iter()
+            .position(|rule| rule.pattern == pattern && rule.replacement == replacement)
+        {
+            if !rules[index].enabled {
+                rules[index].enabled = true;
+                self.write_locked(&rules)?;
+            }
+            return Ok(rules[index].clone());
+        }
+
+        if rules.iter().any(|rule| rule.pattern == pattern && rule.replacement != replacement) {
+            return Err(anyhow!(
+                "conflicting correction rule already exists for pattern {}",
+                pattern
+            ));
+        }
+
         let rule = CorrectionRule {
             id: Uuid::new_v4().to_string(),
             pattern,
@@ -1113,7 +1160,25 @@ impl CorrectionRuleStore {
     }
 
     fn read_locked(&self) -> Result<Vec<CorrectionRule>> {
-        read_or_default::<Vec<CorrectionRule>>(&self.path)
+        if !self.path.exists() {
+            return Ok(Vec::new());
+        }
+        let bytes =
+            fs::read(&self.path).with_context(|| format!("read failed: {}", self.path.display()))?;
+        if bytes.is_empty() {
+            return Ok(Vec::new());
+        }
+        match serde_json::from_slice::<CorrectionRuleFile>(&bytes)
+            .with_context(|| format!("decode failed: {}", self.path.display()))?
+        {
+            CorrectionRuleFile::Array(rules) => Ok(rules),
+            CorrectionRuleFile::Wrapped { value } => {
+                log::warn!(
+                    "[extedit] correction-rules.json used wrapped array format; normalizing on next write"
+                );
+                Ok(value)
+            }
+        }
     }
 
     fn write_locked(&self, rules: &[CorrectionRule]) -> Result<()> {
@@ -1288,7 +1353,7 @@ impl CredentialsVault {
 #[cfg(test)]
 mod tests {
     use super::{
-        chunk_json_payload, list_vocab_presets, save_vocab_presets,
+        chunk_json_payload, list_vocab_presets, save_vocab_presets, CorrectionRuleFile,
         validate_correction_rule_syntax, KEYRING_CHUNK_MAX_UTF16_UNITS,
     };
     use crate::types::{VocabPreset, VocabPresetStore};
@@ -1349,5 +1414,34 @@ mod tests {
         assert!(validate_correction_rule_syntax("{num}", "{num}例").is_err());
         assert!(validate_correction_rule_syntax("{num}到{num}粒", "{num}例").is_err());
         assert!(validate_correction_rule_syntax("几粒", "{num}例").is_err());
+    }
+
+    #[test]
+    fn correction_rule_file_accepts_powershell_wrapped_array_shape() {
+        let payload = r#"{
+  "value": [
+    {
+      "id": "rule-1",
+      "pattern": "粒",
+      "replacement": "例",
+      "enabled": false,
+      "createdAt": "2026-05-13T07:30:50.897734+00:00"
+    }
+  ],
+  "Count": 1
+}"#;
+        let parsed: CorrectionRuleFile =
+            serde_json::from_str(payload).expect("wrapped correction rule payload should parse");
+        match parsed {
+            CorrectionRuleFile::Wrapped { value } => {
+                assert_eq!(value.len(), 1);
+                assert_eq!(value[0].id, "rule-1");
+                assert_eq!(value[0].pattern, "粒");
+                assert_eq!(value[0].replacement, "例");
+                assert!(!value[0].enabled);
+                assert_eq!(value[0].created_at, "2026-05-13T07:30:50.897734+00:00");
+            }
+            CorrectionRuleFile::Array(_) => panic!("wrapped payload parsed as plain array"),
+        }
     }
 }

@@ -84,6 +84,7 @@ const mockSettings: UserPreferences = {
   updateChannel: 'stable',
   streamingInsert: false,
   streamingInsertSaveClipboard: true,
+  windowsExternalEditLearning: true,
 };
 
 const mockHotkeyCapability: HotkeyCapability = {

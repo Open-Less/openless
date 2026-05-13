@@ -290,6 +290,8 @@ pub struct UserPreferences {
     /// 默认 true（更接近用户习惯）。
     #[serde(default = "default_true")]
     pub streaming_insert_save_clipboard: bool,
+    #[serde(default = "default_windows_external_edit_learning_enabled")]
+    pub windows_external_edit_learning: bool,
 }
 
 fn default_local_asr_model() -> String {
@@ -318,6 +320,10 @@ fn default_foundry_local_asr_model() -> String {
 
 fn default_foundry_local_runtime_source() -> String {
     "auto".into()
+}
+
+fn default_windows_external_edit_learning_enabled() -> bool {
+    cfg!(target_os = "windows")
 }
 
 fn default_active_asr_provider() -> String {
@@ -389,6 +395,8 @@ struct UserPreferencesWire {
     streaming_insert: bool,
     #[serde(default = "default_true")]
     streaming_insert_save_clipboard: bool,
+    #[serde(default = "default_windows_external_edit_learning_enabled")]
+    windows_external_edit_learning: bool,
 }
 
 impl Default for UserPreferencesWire {
@@ -432,6 +440,7 @@ impl Default for UserPreferencesWire {
             start_minimized: prefs.start_minimized,
             streaming_insert: prefs.streaming_insert,
             streaming_insert_save_clipboard: prefs.streaming_insert_save_clipboard,
+            windows_external_edit_learning: prefs.windows_external_edit_learning,
         }
     }
 }
@@ -492,6 +501,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             start_minimized: wire.start_minimized,
             streaming_insert: wire.streaming_insert,
             streaming_insert_save_clipboard: wire.streaming_insert_save_clipboard,
+            windows_external_edit_learning: wire.windows_external_edit_learning,
         })
     }
 }
@@ -605,6 +615,7 @@ impl Default for UserPreferences {
             start_minimized: false,
             streaming_insert: false,
             streaming_insert_save_clipboard: true,
+            windows_external_edit_learning: default_windows_external_edit_learning_enabled(),
         }
     }
 }

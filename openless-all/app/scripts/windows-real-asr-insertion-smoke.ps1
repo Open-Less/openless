@@ -6,9 +6,10 @@ param(
   [string]$AsrProvider = "volcengine",
   [string]$Phrase = "OpenLess Windows real regression",
   [int]$TimeoutSeconds = 120,
-  [int]$VirtualKey = 0xA3,
+  [int]$VirtualKey = 0xA2,
   [string]$InjectedTranscriptText = "",
   [int]$ManualSpeechSeconds = 8,
+  [int]$PostSuccessDelaySeconds = 0,
   [switch]$ManualSpeech,
   [switch]$AllowClipboardFallback,
   [switch]$RequireJsonCredentials,
@@ -89,7 +90,7 @@ function Write-TextUtf8($Path, $Text) {
 }
 
 function Restore-ClipboardValue($Value) {
-  if ($null -eq $Value) {
+  if ($null -eq $Value -or ($Value -is [string] -and $Value.Length -eq 0)) {
     cmd /c "echo off | clip" | Out-Null
     return
   }
@@ -115,6 +116,15 @@ function Set-HoldHotkeyPreference($Path) {
     $prefs.hotkey | Add-Member -NotePropertyName mode -NotePropertyValue "hold"
   } else {
     $prefs.hotkey.mode = "hold"
+  }
+  $dictationBinding = [pscustomobject]@{
+    primary = "LeftControl"
+    modifiers = @()
+  }
+  if ($null -eq $prefs.PSObject.Properties["dictationHotkey"]) {
+    $prefs | Add-Member -NotePropertyName dictationHotkey -NotePropertyValue $dictationBinding
+  } else {
+    $prefs.dictationHotkey = $dictationBinding
   }
   if ($null -eq $prefs.defaultMode) { $prefs | Add-Member -NotePropertyName defaultMode -NotePropertyValue "light" }
   if ($null -eq $prefs.enabledModes) { $prefs | Add-Member -NotePropertyName enabledModes -NotePropertyValue @("light", "structured", "formal", "raw") }
@@ -292,6 +302,96 @@ function Get-OpenLessVaultCredentials {
   return $json
 }
 
+function Get-OpenLessVaultSnapshot {
+  $manifestJson = Get-OpenLessKeyringPassword "credentials.v1"
+  if ([string]::IsNullOrWhiteSpace($manifestJson)) {
+    return [pscustomobject]@{
+      HadVault = $false
+      ManifestJson = $null
+      ChunkAccounts = @()
+      ChunkValues = @()
+      VaultJson = $null
+      JsonValid = $false
+      Warning = $null
+    }
+  }
+
+  try {
+    $manifest = $manifestJson | ConvertFrom-Json
+  } catch {
+    return [pscustomobject]@{
+      HadVault = $true
+      ManifestJson = $manifestJson
+      ChunkAccounts = @()
+      ChunkValues = @()
+      VaultJson = $null
+      JsonValid = $false
+      Warning = "credential vault manifest is invalid JSON: $($_.Exception.Message)"
+    }
+  }
+
+  if ($manifest.openless_credentials_storage -ne "chunked" -or $manifest.version -ne 1) {
+    return [pscustomobject]@{
+      HadVault = $true
+      ManifestJson = $manifestJson
+      ChunkAccounts = @()
+      ChunkValues = @()
+      VaultJson = $null
+      JsonValid = $false
+      Warning = "unsupported credential vault manifest"
+    }
+  }
+
+  $chunkAccounts = @()
+  $chunkValues = @()
+  $chunksMissing = $false
+  for ($i = 0; $i -lt [int]$manifest.chunks; $i++) {
+    $account = if ($null -ne $manifest.PSObject.Properties["generation"] -and -not [string]::IsNullOrWhiteSpace($manifest.generation)) {
+      "credentials.v1.chunk.$($manifest.generation).$i"
+    } else {
+      "credentials.v1.chunk.$i"
+    }
+    $chunkValue = Get-OpenLessKeyringPassword $account
+    $chunkAccounts += $account
+    $chunkValues += $chunkValue
+    if ($null -eq $chunkValue) {
+      $chunksMissing = $true
+    }
+  }
+
+  if ($chunksMissing) {
+    return [pscustomobject]@{
+      HadVault = $true
+      ManifestJson = $manifestJson
+      ChunkAccounts = $chunkAccounts
+      ChunkValues = $chunkValues
+      VaultJson = $null
+      JsonValid = $false
+      Warning = "credential vault chunk is missing"
+    }
+  }
+
+  $vaultJson = ($chunkValues -join "")
+  try {
+    $null = $vaultJson | ConvertFrom-Json
+    $jsonValid = $true
+    $warning = $null
+  } catch {
+    $jsonValid = $false
+    $warning = "credential vault JSON is invalid: $($_.Exception.Message)"
+  }
+
+  return [pscustomobject]@{
+    HadVault = $true
+    ManifestJson = $manifestJson
+    ChunkAccounts = $chunkAccounts
+    ChunkValues = $chunkValues
+    VaultJson = $vaultJson
+    JsonValid = $jsonValid
+    Warning = $warning
+  }
+}
+
 function Set-OpenLessVaultCredentials($Json, $PreviousManifestJson) {
   $previousManifest = $null
   if (-not [string]::IsNullOrWhiteSpace($PreviousManifestJson)) {
@@ -328,25 +428,14 @@ function Restore-ActiveAsrCredential($Snapshot, $Path) {
     return
   }
   if ($Snapshot.HadVault) {
-    $manifest = $Snapshot.VaultManifestJson | ConvertFrom-Json
-    $chunks = Split-OpenLessCredentialJson $Snapshot.VaultJson
-    $usesGeneratedChunks = $null -ne $manifest.PSObject.Properties["generation"] -and -not [string]::IsNullOrWhiteSpace($manifest.generation)
-    for ($i = 0; $i -lt $chunks.Count; $i++) {
-      $account = if ($usesGeneratedChunks) {
-        "credentials.v1.chunk.$($manifest.generation).$i"
-      } else {
-        "credentials.v1.chunk.$i"
-      }
-      Set-OpenLessKeyringPassword $account $chunks[$i]
+    for ($i = 0; $i -lt $Snapshot.VaultChunkAccounts.Count; $i++) {
+      Set-OpenLessKeyringPassword $Snapshot.VaultChunkAccounts[$i] $Snapshot.VaultChunkValues[$i]
     }
     Set-OpenLessKeyringPassword "credentials.v1" $Snapshot.VaultManifestJson
-    if ($usesGeneratedChunks) {
-      for ($i = 0; $i -lt $Snapshot.WrittenVaultChunks; $i++) {
-        Remove-OpenLessKeyringPassword "credentials.v1.chunk.$i"
-      }
-    } else {
-      for ($i = $chunks.Count; $i -lt $Snapshot.WrittenVaultChunks; $i++) {
-        Remove-OpenLessKeyringPassword "credentials.v1.chunk.$i"
+    for ($i = 0; $i -lt $Snapshot.WrittenVaultChunks; $i++) {
+      $generatedAccount = "credentials.v1.chunk.$i"
+      if ($Snapshot.VaultChunkAccounts -notcontains $generatedAccount) {
+        Remove-OpenLessKeyringPassword $generatedAccount
       }
     }
   } else {
@@ -365,9 +454,15 @@ function Restore-ActiveAsrCredential($Snapshot, $Path) {
 
 function Set-ActiveAsrCredential($Path) {
   $previousLegacy = Read-TextUtf8 $Path
-  $previousManifest = Get-OpenLessKeyringPassword "credentials.v1"
-  $previousVault = Get-OpenLessVaultCredentials
-  $source = if (-not [string]::IsNullOrWhiteSpace($previousVault)) { $previousVault } else { $previousLegacy }
+  $vaultSnapshot = Get-OpenLessVaultSnapshot
+  if (-not [string]::IsNullOrWhiteSpace($vaultSnapshot.Warning)) {
+    Write-Warning "OpenLess credential vault is unreadable for smoke bootstrap; falling back to legacy/blank credentials. $($vaultSnapshot.Warning)"
+  }
+  $source = if ($vaultSnapshot.JsonValid -and -not [string]::IsNullOrWhiteSpace($vaultSnapshot.VaultJson)) {
+    $vaultSnapshot.VaultJson
+  } else {
+    $previousLegacy
+  }
   if ([string]::IsNullOrWhiteSpace($source)) {
     $credentials = [pscustomobject]@{
       version = 1
@@ -413,15 +508,16 @@ function Set-ActiveAsrCredential($Path) {
   }
   $json = $credentials | ConvertTo-Json -Depth 12 -Compress
   $chunks = Split-OpenLessCredentialJson $json
-  Set-OpenLessVaultCredentials $json $previousManifest
-  if ([string]::IsNullOrWhiteSpace($previousVault)) {
+  Set-OpenLessVaultCredentials $json $vaultSnapshot.ManifestJson
+  if (-not $vaultSnapshot.JsonValid) {
     Write-TextUtf8 $Path ($credentials | ConvertTo-Json -Depth 12)
   }
   return [pscustomobject]@{
     LegacyJson = $previousLegacy
-    VaultJson = $previousVault
-    VaultManifestJson = $previousManifest
-    HadVault = -not [string]::IsNullOrWhiteSpace($previousVault)
+    VaultManifestJson = $vaultSnapshot.ManifestJson
+    VaultChunkAccounts = @($vaultSnapshot.ChunkAccounts)
+    VaultChunkValues = @($vaultSnapshot.ChunkValues)
+    HadVault = [bool]$vaultSnapshot.HadVault
     WrittenVaultChunks = $chunks.Count
   }
 }
@@ -459,11 +555,15 @@ function Get-LatestHistory($Path) {
   return @($json) | Select-Object -First 1
 }
 
-function Wait-HistoryCountGreaterThan($Path, $Baseline, $TimeoutSeconds) {
+function Wait-HistoryAdvance($Path, $BaselineCount, $BaselineLatestId, $TimeoutSeconds) {
   $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
   while ((Get-Date) -lt $deadline) {
     $count = Get-HistoryCount $Path
-    if ($count -gt $Baseline) {
+    if ($count -gt $BaselineCount) {
+      return $true
+    }
+    $latest = Get-LatestHistory $Path
+    if ($null -ne $latest -and -not [string]::IsNullOrWhiteSpace($latest.id) -and $latest.id -ne $BaselineLatestId) {
       return $true
     }
     Start-Sleep -Milliseconds 500
@@ -483,23 +583,34 @@ function Send-KeyEdge($Vk, $KeyUp, $Extended = $true) {
   [OpenLessRegressionWin32]::keybd_event([byte]$Vk, [byte]$scanCode, $flags, [UIntPtr]::Zero)
 }
 
+function Test-ExtendedVirtualKey($Vk) {
+  return $Vk -in @(0xA3, 0xA5, 0x5C)
+}
+
 function Tap-Hotkey {
-  Send-KeyEdge $VirtualKey $false $true
+  $extended = Test-ExtendedVirtualKey $VirtualKey
+  Send-KeyEdge $VirtualKey $false $extended
   Start-Sleep -Milliseconds 180
-  Send-KeyEdge $VirtualKey $true $true
+  Send-KeyEdge $VirtualKey $true $extended
 }
 
 function Press-Hotkey {
-  Send-KeyEdge $VirtualKey $false $true
+  Send-KeyEdge $VirtualKey $false (Test-ExtendedVirtualKey $VirtualKey)
 }
 
 function Release-Hotkey {
-  Send-KeyEdge $VirtualKey $true $true
+  Send-KeyEdge $VirtualKey $true (Test-ExtendedVirtualKey $VirtualKey)
 }
 
 function Ensure-TargetFocused($TargetInfo) {
   if ($null -eq $TargetInfo) {
     return $false
+  }
+  if ($TargetInfo.TargetKind -eq "browser" -and $null -ne $TargetInfo.Process) {
+    if (-not (Focus-Window $TargetInfo.Process)) {
+      return $false
+    }
+    return (Focus-BrowserTextarea $TargetInfo.Process)
   }
   if ($TargetInfo.TargetTitle) {
     $wshell = New-Object -ComObject WScript.Shell
@@ -515,13 +626,77 @@ function Ensure-TargetFocused($TargetInfo) {
 }
 
 function Focus-Window($Process) {
-  if ($null -eq $Process -or $Process.MainWindowHandle -eq 0) {
+  if ($null -eq $Process) {
     return $false
   }
-  [OpenLessRegressionWin32]::ShowWindow($Process.MainWindowHandle, 9) | Out-Null
-  [OpenLessRegressionWin32]::SetForegroundWindow($Process.MainWindowHandle) | Out-Null
+  $handle = 0
+  if ($null -ne $Process.PSObject.Properties["MainWindowHandleOverride"]) {
+    $handle = [int64]$Process.MainWindowHandleOverride
+  } else {
+    $handle = [int64]$Process.MainWindowHandle
+  }
+  if ($handle -eq 0) {
+    return $false
+  }
+  [OpenLessRegressionWin32]::ShowWindow([IntPtr]$handle, 9) | Out-Null
+  [OpenLessRegressionWin32]::SetForegroundWindow([IntPtr]$handle) | Out-Null
   Start-Sleep -Milliseconds 500
   return $true
+}
+
+function Focus-BrowserTextarea($Process) {
+  if ($null -eq $Process) {
+    return $false
+  }
+  $focusScript = @"
+import sys
+import time
+from pywinauto import Application
+
+pid = int(sys.argv[1])
+app = Application(backend='uia').connect(process=pid)
+win = app.top_window()
+win.set_focus()
+time.sleep(0.2)
+
+candidate = None
+for descendant in win.descendants():
+    try:
+        if descendant.element_info.control_type != 'Edit':
+            continue
+        if descendant.class_name() == 'OmniboxViewViews':
+            continue
+        rect = descendant.rectangle()
+        if rect.width() <= 0 or rect.height() <= 0:
+            continue
+        candidate = descendant
+        if descendant.class_name() == '':
+            break
+    except Exception:
+        continue
+
+if candidate is None:
+    raise SystemExit(1)
+
+try:
+    candidate.set_focus()
+except Exception:
+    pass
+time.sleep(0.1)
+candidate.click_input()
+time.sleep(0.2)
+raise SystemExit(0)
+"@
+  $focusPath = Join-Path $env:TEMP "openless-browser-focus.py"
+  Write-TextUtf8 $focusPath $focusScript
+  try {
+    python -X utf8 $focusPath $Process.Id | Out-Null
+    return $true
+  } catch {
+    return $false
+  } finally {
+    Remove-Item -LiteralPath $focusPath -Force -ErrorAction SilentlyContinue
+  }
 }
 
 function Wait-ProcessWindow($ProcessName, $After, $TimeoutSeconds) {
@@ -537,6 +712,49 @@ function Wait-ProcessWindow($ProcessName, $After, $TimeoutSeconds) {
     Start-Sleep -Milliseconds 300
   }
   return $null
+}
+
+function Wait-BrowserWindow($TitleFragment, $TimeoutSeconds) {
+  $probeScript = @"
+import json
+import sys
+from pywinauto import Desktop
+
+title_fragment = sys.argv[1]
+for win in Desktop(backend='uia').windows():
+    try:
+        title = win.window_text()
+        if not title or title_fragment not in title:
+            continue
+        payload = {
+            "title": title,
+            "pid": win.process_id(),
+            "handle": int(win.handle),
+        }
+        print(json.dumps(payload, ensure_ascii=False))
+        raise SystemExit(0)
+    except Exception:
+        continue
+raise SystemExit(1)
+"@
+  $probePath = Join-Path $env:TEMP "openless-browser-window-probe.py"
+  Write-TextUtf8 $probePath $probeScript
+  try {
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+      try {
+        $json = python -X utf8 $probePath $TitleFragment
+        if (-not [string]::IsNullOrWhiteSpace($json)) {
+          return ($json | ConvertFrom-Json)
+        }
+      } catch {
+      }
+      Start-Sleep -Milliseconds 300
+    }
+    return $null
+  } finally {
+    Remove-Item -LiteralPath $probePath -Force -ErrorAction SilentlyContinue
+  }
 }
 
 function Resolve-BrowserPath {
@@ -654,9 +872,15 @@ function Start-InputTarget($TargetName) {
   if ($TargetName -eq "notepad") {
     $fixture = Join-Path $env:TEMP "openless-notepad-input-fixture.txt"
     Write-TextUtf8 $fixture ""
-    $process = Start-Process notepad.exe -ArgumentList $fixture -PassThru
-    Start-Sleep -Seconds 2
-    $title = "openless-notepad-input-fixture.txt - Notepad"
+    $launcher = Start-Process notepad.exe -ArgumentList $fixture -PassThru
+    $process = Wait-ProcessWindow "Notepad" $startedAt 15
+    if ($null -eq $process) {
+      throw "Notepad window process was not found."
+    }
+    $title = $process.MainWindowTitle
+    if ([string]::IsNullOrWhiteSpace($title)) {
+      $title = "openless-notepad-input-fixture.txt - Notepad"
+    }
     $activateScript = @"
 import sys, time, win32com.client
 title = sys.argv[1]
@@ -675,6 +899,9 @@ raise SystemExit(1)
       python $activatePath $title | Out-Null
     } finally {
       Remove-Item -LiteralPath $activatePath -Force -ErrorAction SilentlyContinue
+      if ($null -ne $launcher) {
+        $launcher | Out-Null
+      }
     }
     Start-Sleep -Milliseconds 800
     return [pscustomobject]@{
@@ -757,75 +984,272 @@ raise SystemExit(1)
   $fixture = New-BrowserInputFixture
   $url = ([System.Uri]$fixture).AbsoluteUri
   $processName = [System.IO.Path]::GetFileNameWithoutExtension($browserPath)
-  $profilePath = Join-Path $env:TEMP "openless-browser-smoke-profile"
-  Stop-BrowserProfileProcesses $profilePath
-  Remove-Item -LiteralPath $profilePath -Recurse -Force -ErrorAction SilentlyContinue
-  Start-Process -FilePath $browserPath -ArgumentList @(
+  $launcher = Start-Process -FilePath $browserPath -ArgumentList @(
+    "--guest",
     "--new-window",
-    "--user-data-dir=$profilePath",
     "--no-first-run",
+    "--no-default-browser-check",
     "--disable-extensions",
     $url
-  ) | Out-Null
-  $process = Wait-ProcessWindow $processName $startedAt 20
+  ) -PassThru
+  $window = Wait-BrowserWindow "OpenLess Browser Input Fixture" 20
+  if ($null -eq $window) {
+    throw "Browser window process was not found."
+  }
+  $process = Get-Process -Id $window.pid -ErrorAction Stop
+  $process | Add-Member -NotePropertyName MainWindowHandleOverride -NotePropertyValue ([int64]$window.handle) -Force
   if (-not (Focus-Window $process)) {
     throw "Browser window could not be focused."
   }
+  if (-not (Focus-BrowserTextarea $process)) {
+    throw "Browser textarea could not be focused."
+  }
   Start-Sleep -Seconds 1
-  return [pscustomobject]@{ Process = $process; FixturePath = $fixture; ProfilePath = $profilePath; TargetKind = "browser" }
+  return [pscustomobject]@{
+    Process = $process
+    FixturePath = $fixture
+    ProfilePath = $null
+    TargetKind = "browser"
+    TargetPid = $process.Id
+    TargetHandle = [int64]$window.handle
+    TargetTitle = $window.title
+  }
 }
 
 function Read-TargetContent($TargetInfo, $TargetName) {
   if ($TargetName -eq "notepad") {
     $readbackScript = @"
+import json
 import sys
+import time
 from pywinauto import Desktop
 
 pid = int(sys.argv[1])
-title = sys.argv[2]
-out = sys.argv[3]
-windows = [w for w in Desktop(backend='uia').windows() if getattr(w, 'process_id', lambda: None)() == pid]
-win = None
-for candidate in windows:
-    if candidate.window_text() == title:
-        win = candidate
-        break
-if win is None and windows:
-    win = windows[0]
-if win is None:
-    raise SystemExit(2)
-for descendant in win.descendants():
-    if descendant.class_name() == 'RichEditD2DPT':
-        value = descendant.window_text()
-        open(out, 'w', encoding='utf-8').write(value)
+out = sys.argv[2]
+debug_out = sys.argv[3]
+
+def collect_debug():
+    payload = {"pid": pid, "windows": []}
+    for win in [w for w in Desktop(backend='uia').windows() if getattr(w, 'process_id', lambda: None)() == pid]:
+        win_info = {
+            "title": "",
+            "class_name": "",
+            "descendants": [],
+        }
+        try:
+            win_info["title"] = win.window_text()
+        except Exception as exc:
+            win_info["title"] = f"<title error: {exc}>"
+        try:
+            win_info["class_name"] = win.class_name()
+        except Exception as exc:
+            win_info["class_name"] = f"<class error: {exc}>"
+        for descendant in win.descendants():
+            try:
+                cls = descendant.class_name()
+            except Exception as exc:
+                cls = f"<class error: {exc}>"
+            try:
+                control_type = descendant.element_info.control_type
+            except Exception as exc:
+                control_type = f"<type error: {exc}>"
+            try:
+                name = descendant.window_text()
+            except Exception as exc:
+                name = f"<name error: {exc}>"
+            try:
+                value = descendant.iface_value.CurrentValue
+            except Exception:
+                value = None
+            if cls == 'RichEditD2DPT' or control_type == 'Document':
+                win_info["descendants"].append({
+                    "class_name": cls,
+                    "control_type": control_type,
+                    "name": name,
+                    "value": value,
+                })
+        payload["windows"].append(win_info)
+    with open(debug_out, 'w', encoding='utf-8') as fh:
+        json.dump(payload, fh, ensure_ascii=False, indent=2)
+
+def read_notepad_text():
+    windows = [w for w in Desktop(backend='uia').windows() if getattr(w, 'process_id', lambda: None)() == pid]
+    if not windows:
+        return None
+
+    win = None
+    for candidate in windows:
+        try:
+            if candidate.class_name() == 'Notepad':
+                win = candidate
+                break
+        except Exception:
+            continue
+    if win is None:
+        win = windows[0]
+
+    for descendant in win.descendants():
+        try:
+            cls = descendant.class_name()
+            control_type = descendant.element_info.control_type
+        except Exception:
+            continue
+        if cls != 'RichEditD2DPT' and control_type != 'Document':
+            continue
+
+        for getter in (
+            lambda: descendant.iface_value.CurrentValue,
+            lambda: descendant.window_text(),
+            lambda: getattr(descendant.element_info, 'name', ''),
+        ):
+            try:
+                value = getter()
+            except Exception:
+                continue
+            if value is not None and str(value).strip():
+                return str(value)
+    return ''
+
+deadline = time.time() + 5
+last_text = None
+while time.time() < deadline:
+    last_text = read_notepad_text()
+    if last_text is None:
+        time.sleep(0.2)
+        continue
+    if last_text.strip():
+        open(out, 'w', encoding='utf-8').write(last_text)
         raise SystemExit(0)
+    time.sleep(0.2)
+
+if last_text is None:
+    collect_debug()
+    raise SystemExit(2)
+collect_debug()
+open(out, 'w', encoding='utf-8').write(last_text)
 raise SystemExit(1)
 "@
     $readbackPath = Join-Path $env:TEMP "openless-notepad-readback.py"
     $outputPath = Join-Path $env:TEMP "openless-notepad-readback.txt"
+    $debugPath = Join-Path $env:TEMP "openless-notepad-readback-debug.json"
     Write-TextUtf8 $readbackPath $readbackScript
     try {
       Remove-Item -LiteralPath $outputPath -Force -ErrorAction SilentlyContinue
-      python -X utf8 $readbackPath $TargetInfo.TargetPid $TargetInfo.TargetTitle $outputPath | Out-Null
-      Start-Sleep -Milliseconds 400
+      Remove-Item -LiteralPath $debugPath -Force -ErrorAction SilentlyContinue
+      python -X utf8 $readbackPath $TargetInfo.TargetPid $outputPath $debugPath | Out-Null
       if (Test-Path $outputPath) {
         return Get-Content -Raw -Encoding UTF8 $outputPath
+      }
+      if (Test-Path $debugPath) {
+        Write-Warning "notepad readback debug: $(Get-Content -Raw -Encoding UTF8 $debugPath)"
       }
       return $null
     } finally {
       Remove-Item -LiteralPath $readbackPath -Force -ErrorAction SilentlyContinue
       Remove-Item -LiteralPath $outputPath -Force -ErrorAction SilentlyContinue
+      Remove-Item -LiteralPath $debugPath -Force -ErrorAction SilentlyContinue
     }
   }
 
   if ($TargetName -eq "browser") {
-    Focus-Window $TargetInfo.Process | Out-Null
-    Start-Sleep -Milliseconds 400
-    Send-CtrlChord 0x41
-    Start-Sleep -Milliseconds 200
-    Send-CtrlChord 0x43
-    Start-Sleep -Milliseconds 400
-    return Get-Clipboard -Raw -ErrorAction SilentlyContinue
+    $readbackScript = @"
+import json
+import sys
+from pywinauto import Application
+
+pid = int(sys.argv[1])
+out = sys.argv[2]
+debug_out = sys.argv[3]
+
+app = Application(backend='uia').connect(process=pid)
+win = app.top_window()
+payload = {"pid": pid, "window": win.window_text(), "candidates": []}
+
+def rank(descendant):
+    cls = descendant.class_name()
+    if cls == 'OmniboxViewViews':
+        return -1
+    rect = descendant.rectangle()
+    area = max(rect.width(), 0) * max(rect.height(), 0)
+    score = area
+    if cls == '':
+        score += 1000000
+    return score
+
+candidates = []
+for descendant in win.descendants():
+    try:
+        if descendant.element_info.control_type != 'Edit':
+            continue
+        rect = descendant.rectangle()
+        value = ''
+        try:
+            value = descendant.iface_value.CurrentValue or ''
+        except Exception:
+            value = ''
+        info = {
+            "class_name": descendant.class_name(),
+            "name": descendant.window_text(),
+            "value": value,
+            "rect": [rect.left, rect.top, rect.right, rect.bottom],
+            "score": rank(descendant),
+        }
+        payload["candidates"].append(info)
+        if info["score"] >= 0:
+            candidates.append((info["score"], info, descendant))
+    except Exception:
+        continue
+
+with open(debug_out, 'w', encoding='utf-8') as fh:
+    json.dump(payload, fh, ensure_ascii=False, indent=2)
+
+if not candidates:
+    raise SystemExit(1)
+
+candidates.sort(key=lambda item: item[0], reverse=True)
+best_info = candidates[0][1]
+best = candidates[0][2]
+payload["selected"] = best_info
+
+for getter in (
+    lambda: best.iface_value.CurrentValue,
+    lambda: best.window_text(),
+    lambda: getattr(best.element_info, 'name', ''),
+):
+    try:
+        value = getter()
+    except Exception:
+        continue
+    if value is not None:
+        open(out, 'w', encoding='utf-8').write(str(value))
+        raise SystemExit(0)
+
+raise SystemExit(1)
+"@
+    $readbackPath = Join-Path $env:TEMP "openless-browser-readback.py"
+    $outputPath = Join-Path $env:TEMP "openless-browser-readback.txt"
+    $debugPath = Join-Path $env:TEMP "openless-browser-readback-debug.json"
+    Write-TextUtf8 $readbackPath $readbackScript
+    try {
+      Remove-Item -LiteralPath $outputPath -Force -ErrorAction SilentlyContinue
+      Remove-Item -LiteralPath $debugPath -Force -ErrorAction SilentlyContinue
+      python -X utf8 $readbackPath $TargetInfo.TargetPid $outputPath $debugPath | Out-Null
+      if (Test-Path $outputPath) {
+        $value = Get-Content -Raw -Encoding UTF8 $outputPath
+        if ([string]::IsNullOrWhiteSpace($value) -and (Test-Path $debugPath)) {
+          Write-Warning "browser readback debug: $(Get-Content -Raw -Encoding UTF8 $debugPath)"
+        }
+        return $value
+      }
+      if (Test-Path $debugPath) {
+        Write-Warning "browser readback debug: $(Get-Content -Raw -Encoding UTF8 $debugPath)"
+      }
+      return $null
+    } finally {
+      Remove-Item -LiteralPath $readbackPath -Force -ErrorAction SilentlyContinue
+      Remove-Item -LiteralPath $outputPath -Force -ErrorAction SilentlyContinue
+      Remove-Item -LiteralPath $debugPath -Force -ErrorAction SilentlyContinue
+    }
   }
 
   if ($TargetName -in @("wt-cmd", "wt-powershell")) {
@@ -926,6 +1350,8 @@ $clipboardCaptured = $false
 
 try {
   $baselineCount = Get-HistoryCount $historyPath
+  $baselineLatest = Get-LatestHistory $historyPath
+  $baselineLatestId = if ($null -ne $baselineLatest) { $baselineLatest.id } else { $null }
   $previousClipboard = Get-Clipboard -Raw -ErrorAction SilentlyContinue
   $clipboardCaptured = $true
   $previousPreferences = Set-HoldHotkeyPreference $preferencesPath
@@ -992,7 +1418,7 @@ try {
   Start-Sleep -Milliseconds 800
   Release-Hotkey
 
-  if (-not (Wait-HistoryCountGreaterThan $historyPath $baselineCount $TimeoutSeconds)) {
+  if (-not (Wait-HistoryAdvance $historyPath $baselineCount $baselineLatestId $TimeoutSeconds)) {
     throw "History did not receive a new dictation session within $TimeoutSeconds seconds."
   }
 
@@ -1028,6 +1454,10 @@ try {
   Write-Host "[ok] History updated. raw='$($latest.rawTranscript)'"
   Write-Host "[ok] Final text length=$($latest.finalText.Length), insertStatus=$($latest.insertStatus)"
   Write-Host "[ok] $Target readback length=$($targetText.Length)"
+  if ($PostSuccessDelaySeconds -gt 0) {
+    Write-Host "[hold] Keeping OpenLess and target alive for $PostSuccessDelaySeconds seconds after insertion verification."
+    Start-Sleep -Seconds $PostSuccessDelaySeconds
+  }
 
   if (Test-Path $logPath) {
     $logText = Get-Content -Raw -Encoding UTF8 $logPath

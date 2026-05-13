@@ -497,6 +497,12 @@ export const en: typeof zhCN = {
         'Experimental: uses enigo + XTest to synthesize keystrokes. Stable on X11; on Wayland it depends on whether the compositor grants libei access — failures fall back automatically to one-shot insertion.',
       streamingInsertSaveClipboardLabel: 'Also copy to clipboard',
       streamingInsertSaveClipboardHint: 'After a successful streaming insert, write the final text to the system clipboard so Cmd+V can paste it again. Off = streaming never touches the clipboard.',
+      windowsExternalEditLearningTitle: 'Windows external-edit auto learning',
+      windowsExternalEditLearningDesc:
+        'After a successful insert, OpenLess opens only a short local observation window. If you manually correct a term in the same text control right away, OpenLess tries to infer a deterministic old -> new replacement and stores it as a local correction rule for future dictation.',
+      windowsExternalEditLearningLabel: 'Enable external-edit auto learning',
+      windowsExternalEditLearningHint:
+        'Windows-only for the first productized release. Observation is best-effort and limited to verified supported scenarios; if observation, attribution, inference, or persistence fails, the run falls back silently and never affects the original insert. Learned rules remain visible in Vocabulary -> Correction rules, where you can disable or delete them.',
       localAsrTitle: 'Local ASR models (experimental)',
       localAsrDesc: 'Move transcription from cloud ASR to on-device inference. Offline / privacy-sensitive use only.',
       localAsrWarningShort: 'Local inference is slower; under-spec hardware may drop words.',

@@ -379,6 +379,9 @@ pub(super) fn request_stop_during_starting(inner: &Arc<Inner>, reason: &str) {
 }
 
 pub(super) async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    inner.windows_external_edit.cancel();
+
     let current_session_id = {
         let mut state = inner.state.lock();
         let Some(session_id) =
@@ -903,7 +906,36 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     };
 
     let uses_global_timeout = asr_transcribe_uses_global_timeout(&asr);
-    let raw = match asr {
+    #[cfg(any(debug_assertions, test))]
+    let debug_transcript = debug_transcript_override_text();
+    #[cfg(not(any(debug_assertions, test)))]
+    let debug_transcript: Option<String> = None;
+
+    let raw = if let Some(debug_text) = debug_transcript {
+        log::info!(
+            "[coord] bypassing ASR with debug transcript override (chars={})",
+            debug_text.chars().count()
+        );
+        match asr {
+            ActiveAsr::Volcengine(asr) => asr.cancel(),
+            ActiveAsr::Bailian(asr) => asr.cancel(),
+            #[cfg(target_os = "windows")]
+            ActiveAsr::FoundryLocalWhisper(_) => {
+                schedule_foundry_local_asr_release(inner, current_session_id);
+            }
+            #[cfg(target_os = "macos")]
+            ActiveAsr::Local(_) => {
+                inner.local_asr_cache.touch();
+                schedule_local_asr_release(inner);
+            }
+            ActiveAsr::Whisper(_) => {}
+        }
+        RawTranscript {
+            text: debug_text,
+            duration_ms: elapsed,
+        }
+    } else {
+        match asr {
         ActiveAsr::Volcengine(asr) => {
             debug_assert!(uses_global_timeout);
             if let Err(e) = asr.send_last_frame().await {
@@ -1120,6 +1152,7 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
                     return Err("local global timeout".to_string());
                 }
             }
+        }
         }
     };
 
@@ -1406,6 +1439,15 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     restore_prepared_windows_ime_session(inner, current_session_id);
     let inserted_chars = polished.chars().count() as u32;
 
+    #[cfg(target_os = "windows")]
+    maybe_arm_windows_external_edit_observer(
+        inner,
+        status,
+        focus_ready_for_paste,
+        &polished,
+        front_app.as_deref(),
+    );
+
     // 累计每条 enabled 词条在最终文本中的命中次数。
     // 用 polished（最终插入的文本）扫描，与用户实际看到的输出一致。
     let total_hits: u64 = match inner.vocab.record_hits(&polished) {
@@ -1511,6 +1553,95 @@ pub(super) fn dictation_error_code(
         Some("polishFailed")
     } else {
         None
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn maybe_arm_windows_external_edit_observer(
+    inner: &Arc<Inner>,
+    status: InsertStatus,
+    focus_ready_for_paste: bool,
+    final_text: &str,
+    front_app: Option<&str>,
+) {
+    let prefs = inner.prefs.get();
+    if !prefs.windows_external_edit_learning {
+        log::info!("[extedit] skip arm: preference disabled");
+        return;
+    }
+    if status != InsertStatus::Inserted {
+        log::info!("[extedit] skip arm: insert status is not Inserted ({status:?})");
+        return;
+    }
+    if !focus_ready_for_paste {
+        log::info!("[extedit] skip arm: focus target was not restored for paste");
+        return;
+    }
+    if final_text.trim().is_empty() {
+        log::info!("[extedit] skip arm: final text empty");
+        return;
+    }
+
+    let request = ExternalEditObservationRequest {
+        inserted_text: final_text.to_string(),
+        window_title: front_app.map(ToOwned::to_owned),
+    };
+    log::info!(
+        "[extedit] armed observer (chars={}, window={:?})",
+        final_text.chars().count(),
+        request.window_title
+    );
+    let inner_for_callback = Arc::clone(inner);
+    inner.windows_external_edit.arm(request, move |outcome| {
+        handle_windows_external_edit_outcome(&inner_for_callback, outcome);
+    });
+}
+
+#[cfg(target_os = "windows")]
+fn handle_windows_external_edit_outcome(
+    inner: &Arc<Inner>,
+    outcome: ExternalEditObservationOutcome,
+) {
+    match outcome {
+        ExternalEditObservationOutcome::Learned(learned) => {
+            log::info!(
+                "[extedit] learned rule {} -> {} (baseline_chars={}, observed_chars={})",
+                learned.pattern,
+                learned.replacement,
+                learned.baseline_text.chars().count(),
+                learned.observed_text.chars().count()
+            );
+            match inner
+                .correction_rules
+                .remember(learned.pattern.clone(), learned.replacement.clone())
+            {
+                Ok(rule) => {
+                    log::info!("[extedit] persisted rule id={}", rule.id);
+                    if let Some(app) = inner.app.lock().clone() {
+                        let _ = app.emit("vocab:updated", 0u64);
+                    }
+                }
+                Err(err) => {
+                    log::warn!(
+                        "[extedit] persist learned rule failed: {err}; baseline_chars={} observed_chars={}",
+                        learned.baseline_text.chars().count(),
+                        learned.observed_text.chars().count()
+                    );
+                }
+            }
+        }
+        ExternalEditObservationOutcome::NoChange => {
+            log::info!("[extedit] observation window elapsed without edits");
+        }
+        ExternalEditObservationOutcome::Skipped(reason) => {
+            log::info!("[extedit] observation skipped: {reason}");
+        }
+        ExternalEditObservationOutcome::Failed(err) => {
+            log::warn!("[extedit] observation failed: {err}");
+        }
+        ExternalEditObservationOutcome::Cancelled => {
+            log::info!("[extedit] observation cancelled");
+        }
     }
 }
 

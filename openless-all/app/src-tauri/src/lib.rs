@@ -30,6 +30,7 @@ mod selection;
 mod shortcut_binding;
 mod types;
 mod unicode_keystroke;
+mod windows_external_edit;
 mod windows_ime_ipc;
 mod windows_ime_profile;
 mod windows_ime_protocol;

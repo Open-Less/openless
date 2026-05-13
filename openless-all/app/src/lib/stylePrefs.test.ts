@@ -53,6 +53,7 @@ const previousPrefs: UserPreferences = {
   updateChannel: 'stable',
   streamingInsert: false,
   streamingInsertSaveClipboard: true,
+  windowsExternalEditLearning: false,
 };
 
 const nextPrefs: UserPreferences = {

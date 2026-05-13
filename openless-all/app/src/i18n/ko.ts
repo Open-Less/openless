@@ -499,6 +499,12 @@ export const ko: typeof zhCN = {
         '실험적: enigo + XTest 로 키보드 이벤트를 합성합니다. X11 에서는 안정적이며, Wayland 에서는 compositor 가 libei 를 허용하는지에 따라 다르고, 실패 시 자동으로 일괄 삽입으로 폴백됩니다.',
       streamingInsertSaveClipboardLabel: '클립보드에도 저장',
       streamingInsertSaveClipboardHint: '스트리밍 입력 성공 후 최종 텍스트를 시스템 클립보드에 기록하여 Cmd+V 로 재붙여넣기를 할 수 있도록 합니다. 끄면 스트리밍 동안 클립보드를 일절 건드리지 않습니다.',
+      windowsExternalEditLearningTitle: 'Windows 외부 편집 자동 학습',
+      windowsExternalEditLearningDesc:
+        '삽입이 성공하면 아주 짧은 로컬 관찰 창만 열립니다. 그 직후 같은 텍스트 컨트롤에서 용어를 수동으로 고치면 OpenLess 가 deterministic 한 old -> new 치환을 추론해 로컬 correction rule 로 저장하고, 이후 받아쓰기에서 우선 적용합니다.',
+      windowsExternalEditLearningLabel: '외부 편집 자동 학습 사용',
+      windowsExternalEditLearningHint:
+        '첫 productized release 에서는 Windows 만 지원합니다. 관찰은 검증된 지원 시나리오에 한정된 best-effort 이며, 관찰·귀속·추론·저장 중 어느 단계가 실패해도 원래 삽입 결과에는 영향을 주지 않습니다. 학습된 규칙은 "Vocabulary -> Correction rules" 에서 확인, 비활성화, 삭제할 수 있습니다.',
       localAsrTitle: '로컬 ASR 모델 (실험적)',
       localAsrDesc: '전사를 클라우드에서 로컬 추론으로 전환합니다. 오프라인 / 프라이버시용에만 권장됩니다.',
       localAsrWarningShort: '로컬 추론은 느리며, 사양 부족 시 글자 누락이 발생할 수 있습니다.',
