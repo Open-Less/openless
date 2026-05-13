@@ -13,6 +13,13 @@ interface AudioBarsProps {
   level: number;
 }
 
+function formatElapsed(ms: number) {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+}
+
 function AudioBars({ level }: AudioBarsProps) {
   const envelope = [0.55, 0.85, 1.0, 0.85, 0.55];
   const base = 2;
@@ -144,13 +151,14 @@ interface PillProps {
   os: OS;
   state: CapsuleState;
   level: number;
+  elapsedMs: number;
   insertedChars: number;
   message?: string;
   onCancel: () => void;
   onConfirm: () => void;
 }
 
-function Pill({ os, state, level, insertedChars, message, onCancel, onConfirm }: PillProps) {
+function Pill({ os, state, level, elapsedMs, insertedChars, message, onCancel, onConfirm }: PillProps) {
   const { t } = useTranslation();
   const metrics = getCapsulePillMetrics(os);
   const processingLayout = getCapsuleMessageLayout(os, 'processing');
@@ -173,7 +181,32 @@ function Pill({ os, state, level, insertedChars, message, onCancel, onConfirm }:
   let center: JSX.Element;
   switch (state) {
     case 'recording':
-      center = <AudioBars level={level} />;
+      center = (
+        <div
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 6,
+            width: '100%',
+            maxWidth: metrics.textWidth,
+            minWidth: 0,
+          }}
+        >
+          <AudioBars level={level} />
+          <span
+            style={{
+              fontSize: 10,
+              fontWeight: 600,
+              color: 'var(--ol-ink-2)',
+              whiteSpace: 'nowrap',
+              fontVariantNumeric: 'tabular-nums',
+            }}
+          >
+            {t('capsule.recordingElapsed', { time: formatElapsed(elapsedMs) })}
+          </span>
+        </div>
+      );
       break;
     case 'transcribing':
     case 'polishing':
@@ -296,6 +329,7 @@ export function Capsule() {
   const metrics = getCapsulePillMetrics(os);
   const [state, setState] = useState<CapsuleState>(INITIAL_VISIBLE_STATE);
   const [level, setLevel] = useState<number>(isTauri ? 0 : 0.6);
+  const [elapsedMs, setElapsedMs] = useState<number>(0);
   const [insertedChars, setInsertedChars] = useState<number>(0);
   const [message, setMessage] = useState<string | undefined>();
   const [translation, setTranslation] = useState<boolean>(false);
@@ -319,6 +353,7 @@ export function Capsule() {
         const p = event.payload;
         setState(p.state);
         setLevel(p.level ?? 0);
+        setElapsedMs(p.elapsedMs ?? 0);
         setMessage(p.message ?? undefined);
         if (p.insertedChars != null) setInsertedChars(p.insertedChars);
         setTranslation(p.translation === true);
@@ -456,6 +491,7 @@ export function Capsule() {
         os={os}
         state={renderedState}
         level={leaving ? 0 : level}
+        elapsedMs={elapsedMs}
         insertedChars={insertedChars}
         message={message}
         onCancel={onCancel}
