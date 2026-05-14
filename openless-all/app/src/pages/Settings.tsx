@@ -288,8 +288,8 @@ function RecordingSection() {
 
   const onModeChange = (mode: HotkeyMode) =>
     savePrefs({ ...prefs, hotkey: { ...prefs.hotkey, mode } });
-  const onShowCapsuleChange = (showCapsule: boolean) =>
-    savePrefs({ ...prefs, showCapsule });
+  const onShowCapsuleChange = (nextShowCapsule: boolean) =>
+    savePrefs({ ...prefs, showCapsule: nextShowCapsule });
   const onShowCapsuleElapsedTimeChange = (showCapsuleElapsedTime: boolean) =>
     savePrefs({ ...prefs, showCapsuleElapsedTime });
   const onMuteDuringRecordingChange = (muteDuringRecording: boolean) =>
