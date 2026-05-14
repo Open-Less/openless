@@ -22,6 +22,7 @@ const previousPrefs: UserPreferences = {
   enabledModes: ['raw', 'light', 'structured'],
   launchAtLogin: false,
   showCapsule: true,
+  showCapsuleElapsedTime: false,
   muteDuringRecording: false,
   microphoneDeviceName: '',
   activeAsrProvider: 'volcengine',

@@ -160,6 +160,9 @@ pub struct UserPreferences {
     pub enabled_modes: Vec<PolishMode>,
     pub launch_at_login: bool,
     pub show_capsule: bool,
+    /// 是否在录音胶囊中显示本次录音计时。默认关闭，保持既有胶囊视觉不变。
+    #[serde(default)]
+    pub show_capsule_elapsed_time: bool,
     /// 录音期间临时静音系统输出，停止/取消/出错后恢复原静音状态。
     #[serde(default)]
     pub mute_during_recording: bool,
@@ -341,6 +344,8 @@ struct UserPreferencesWire {
     launch_at_login: bool,
     show_capsule: bool,
     #[serde(default)]
+    show_capsule_elapsed_time: bool,
+    #[serde(default)]
     mute_during_recording: bool,
     #[serde(default)]
     microphone_device_name: String,
@@ -401,6 +406,7 @@ impl Default for UserPreferencesWire {
             enabled_modes: prefs.enabled_modes,
             launch_at_login: prefs.launch_at_login,
             show_capsule: prefs.show_capsule,
+            show_capsule_elapsed_time: prefs.show_capsule_elapsed_time,
             mute_during_recording: prefs.mute_during_recording,
             microphone_device_name: prefs.microphone_device_name,
             active_asr_provider: prefs.active_asr_provider,
@@ -454,6 +460,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             enabled_modes: wire.enabled_modes,
             launch_at_login: wire.launch_at_login,
             show_capsule: wire.show_capsule,
+            show_capsule_elapsed_time: wire.show_capsule_elapsed_time,
             mute_during_recording: wire.mute_during_recording,
             microphone_device_name: wire.microphone_device_name,
             active_asr_provider: wire.active_asr_provider,
@@ -574,6 +581,7 @@ impl Default for UserPreferences {
             ],
             launch_at_login: false,
             show_capsule: true,
+            show_capsule_elapsed_time: false,
             mute_during_recording: false,
             microphone_device_name: String::new(),
             active_asr_provider: default_active_asr_provider(),

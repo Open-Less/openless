@@ -323,6 +323,8 @@ export const en: typeof zhCN = {
       microphoneMonitorError: 'Failed to monitor input level: {{message}}',
       capsuleLabel: 'Recording capsule',
       capsuleDesc: 'Show a translucent capsule at the bottom of the screen while recording.',
+      capsuleElapsedTimeLabel: 'Show recording timer',
+      capsuleElapsedTimeDesc: 'Show elapsed recording time inside the capsule while recording.',
       muteDuringRecordingLabel: 'Mute while recording',
       muteDuringRecordingDesc: 'Temporarily mute system output during voice input to avoid speaker echo.',
       insertGroupTitle: 'Insertion & clipboard',

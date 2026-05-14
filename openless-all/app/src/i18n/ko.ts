@@ -325,6 +325,8 @@ export const ko: typeof zhCN = {
       microphoneMonitorError: '입력 레벨 모니터링 실패: {{message}}',
       capsuleLabel: '녹음 캡슐',
       capsuleDesc: '녹음 / 전사 중 화면 하단에 반투명 캡슐을 표시합니다.',
+      capsuleElapsedTimeLabel: '녹음 타이머 표시',
+      capsuleElapsedTimeDesc: '켜면 녹음 중 경과 시간을 캡슐 안에 표시합니다.',
       muteDuringRecordingLabel: '녹음 중 음소거',
       muteDuringRecordingDesc: '녹음 중 시스템 출력을 일시적으로 음소거하여 스피커 에코를 방지합니다.',
       insertGroupTitle: '삽입 및 클립보드',

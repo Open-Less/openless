@@ -53,6 +53,7 @@ const mockSettings: UserPreferences = {
   enabledModes: ['raw', 'light', 'structured', 'formal'],
   launchAtLogin: false,
   showCapsule: true,
+  showCapsuleElapsedTime: false,
   muteDuringRecording: false,
   microphoneDeviceName: '',
   activeAsrProvider: 'foundry-local-whisper',

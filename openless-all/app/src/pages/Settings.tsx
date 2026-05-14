@@ -290,6 +290,8 @@ function RecordingSection() {
     savePrefs({ ...prefs, hotkey: { ...prefs.hotkey, mode } });
   const onShowCapsuleChange = (showCapsule: boolean) =>
     savePrefs({ ...prefs, showCapsule });
+  const onShowCapsuleElapsedTimeChange = (showCapsuleElapsedTime: boolean) =>
+    savePrefs({ ...prefs, showCapsuleElapsedTime });
   const onMuteDuringRecordingChange = (muteDuringRecording: boolean) =>
     savePrefs({ ...prefs, muteDuringRecording });
   const onMicrophoneDeviceChange = (microphoneDeviceName: string) =>
@@ -453,6 +455,12 @@ function RecordingSection() {
       )}
       <SettingRow label={t('settings.recording.capsuleLabel')} desc={t('settings.recording.capsuleDesc')}>
         <Toggle on={prefs.showCapsule} onToggle={onShowCapsuleChange} />
+      </SettingRow>
+      <SettingRow
+        label={t('settings.recording.capsuleElapsedTimeLabel')}
+        desc={t('settings.recording.capsuleElapsedTimeDesc')}
+      >
+        <Toggle on={prefs.showCapsuleElapsedTime} onToggle={onShowCapsuleElapsedTimeChange} />
       </SettingRow>
       <SettingRow
         label={t('settings.recording.muteDuringRecordingLabel')}

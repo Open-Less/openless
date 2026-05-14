@@ -6,8 +6,8 @@ import {
   getCapsuleMessageLayout,
   getCapsulePillMetrics,
 } from '../lib/capsuleLayout';
-import { invokeOrMock, isTauri } from '../lib/ipc';
-import type { CapsulePayload, CapsuleState } from '../lib/types';
+import { getSettings, invokeOrMock, isTauri } from '../lib/ipc';
+import type { CapsulePayload, CapsuleState, UserPreferences } from '../lib/types';
 
 interface AudioBarsProps {
   level: number;
@@ -152,13 +152,14 @@ interface PillProps {
   state: CapsuleState;
   level: number;
   elapsedMs: number;
+  showElapsedTime: boolean;
   insertedChars: number;
   message?: string;
   onCancel: () => void;
   onConfirm: () => void;
 }
 
-function Pill({ os, state, level, elapsedMs, insertedChars, message, onCancel, onConfirm }: PillProps) {
+function Pill({ os, state, level, elapsedMs, showElapsedTime, insertedChars, message, onCancel, onConfirm }: PillProps) {
   const { t } = useTranslation();
   const metrics = getCapsulePillMetrics(os);
   const processingLayout = getCapsuleMessageLayout(os, 'processing');
@@ -181,7 +182,7 @@ function Pill({ os, state, level, elapsedMs, insertedChars, message, onCancel, o
   let center: JSX.Element;
   switch (state) {
     case 'recording':
-      center = (
+      center = showElapsedTime ? (
         <div
           style={{
             display: 'inline-flex',
@@ -206,6 +207,8 @@ function Pill({ os, state, level, elapsedMs, insertedChars, message, onCancel, o
             {t('capsule.recordingElapsed', { time: formatElapsed(elapsedMs) })}
           </span>
         </div>
+      ) : (
+        <AudioBars level={level} />
       );
       break;
     case 'transcribing':
@@ -330,6 +333,7 @@ export function Capsule() {
   const [state, setState] = useState<CapsuleState>(INITIAL_VISIBLE_STATE);
   const [level, setLevel] = useState<number>(isTauri ? 0 : 0.6);
   const [elapsedMs, setElapsedMs] = useState<number>(0);
+  const [showElapsedTime, setShowElapsedTime] = useState<boolean>(false);
   const [insertedChars, setInsertedChars] = useState<number>(0);
   const [message, setMessage] = useState<string | undefined>();
   const [translation, setTranslation] = useState<boolean>(false);
@@ -353,7 +357,11 @@ export function Capsule() {
         const p = event.payload;
         setState(p.state);
         setLevel(p.level ?? 0);
-        setElapsedMs(p.elapsedMs ?? 0);
+        if (p.state === 'idle') {
+          setElapsedMs(0);
+        } else if (p.elapsedMs != null) {
+          setElapsedMs(p.elapsedMs);
+        }
         setMessage(p.message ?? undefined);
         if (p.insertedChars != null) setInsertedChars(p.insertedChars);
         setTranslation(p.translation === true);
@@ -361,6 +369,37 @@ export function Capsule() {
       if (cancelled) handle();
       else unlisten = handle;
     })();
+    return () => {
+      cancelled = true;
+      if (unlisten) unlisten();
+    };
+  }, []);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+
+    void getSettings()
+      .then(prefs => {
+        if (!cancelled) setShowElapsedTime(prefs.showCapsuleElapsedTime === true);
+      })
+      .catch(error => {
+        console.warn('[capsule] failed to load preferences', error);
+      });
+
+    if (isTauri) {
+      (async () => {
+        const { listen } = await import('@tauri-apps/api/event');
+        const handle = await listen<UserPreferences>('prefs:changed', event => {
+          setShowElapsedTime(event.payload.showCapsuleElapsedTime === true);
+        });
+        if (cancelled) handle();
+        else unlisten = handle;
+      })().catch(error => {
+        console.warn('[capsule] prefs:changed listener setup failed', error);
+      });
+    }
+
     return () => {
       cancelled = true;
       if (unlisten) unlisten();
@@ -492,6 +531,7 @@ export function Capsule() {
         state={renderedState}
         level={leaving ? 0 : level}
         elapsedMs={elapsedMs}
+        showElapsedTime={showElapsedTime}
         insertedChars={insertedChars}
         message={message}
         onCancel={onCancel}

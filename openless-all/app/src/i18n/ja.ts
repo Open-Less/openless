@@ -325,6 +325,8 @@ export const ja: typeof zhCN = {
       microphoneMonitorError: '入力レベルの監視に失敗：{{message}}',
       capsuleLabel: '録音カプセル',
       capsuleDesc: '録音 / 転写中、画面下部に半透明のカプセルを表示。',
+      capsuleElapsedTimeLabel: '録音タイマーを表示',
+      capsuleElapsedTimeDesc: 'オンにすると、録音中の経過時間をカプセル内に表示します。',
       muteDuringRecordingLabel: '録音中はミュート',
       muteDuringRecordingDesc: '録音中にシステム出力を一時的にミュートし、スピーカーのエコーを防ぎます。',
       insertGroupTitle: '挿入とクリップボード',

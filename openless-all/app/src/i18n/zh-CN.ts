@@ -321,6 +321,8 @@ export const zhCN = {
       microphoneMonitorError: '输入电平监听失败：{{message}}',
       capsuleLabel: '录音胶囊',
       capsuleDesc: '录音 / 转写时显示屏幕底部胶囊。',
+      capsuleElapsedTimeLabel: '显示录音计时',
+      capsuleElapsedTimeDesc: '开启后在录音胶囊中显示本次录音时长。',
       muteDuringRecordingLabel: '录音时静音',
       muteDuringRecordingDesc: '录音期间临时静音系统输出，避免扬声器回音。',
       insertGroupTitle: '插入与剪贴板',

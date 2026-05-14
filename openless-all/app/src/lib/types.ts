@@ -141,6 +141,8 @@ export interface UserPreferences {
   enabledModes: PolishMode[];
   launchAtLogin: boolean;
   showCapsule: boolean;
+  /** 在录音胶囊中显示本次录音计时。默认关闭，保持原胶囊视觉不变。 */
+  showCapsuleElapsedTime: boolean;
   /** 录音期间临时静音系统输出，停止/取消/出错后恢复原静音状态。 */
   muteDuringRecording: boolean;
   /** 录音输入设备名称。空字符串 = 使用系统默认麦克风。 */
