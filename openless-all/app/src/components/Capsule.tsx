@@ -357,9 +357,7 @@ export function Capsule() {
         const p = event.payload;
         setState(p.state);
         setLevel(p.level ?? 0);
-        if (p.state === 'idle') {
-          setElapsedMs(0);
-        } else if (p.elapsedMs != null) {
+        if (p.elapsedMs != null) {
           setElapsedMs(p.elapsedMs);
         }
         setMessage(p.message ?? undefined);
@@ -425,6 +423,7 @@ export function Capsule() {
     const timer = setTimeout(() => {
       setLeaving(false);
       setLastVisibleState('idle');
+      setElapsedMs(0);
     }, EXIT_ANIM_MS);
     return () => clearTimeout(timer);
     // 故意只依赖 state —— lastVisibleState / leaving 是内部派生量，
