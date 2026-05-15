@@ -1,4 +1,5 @@
-pub const OPENLESS_TSF_LANG_ID: u16 = 0x0804;
+pub const OPENLESS_TSF_LANG_ID_SIMPLIFIED: u16 = 0x0804;
+pub const OPENLESS_TSF_LANG_ID_TRADITIONAL: u16 = 0x0404;
 pub const OPENLESS_TEXT_SERVICE_CLSID_BRACED: &str = "{6B9F3F4F-5EE7-42D6-9C61-9F80B03A5D7D}";
 pub const OPENLESS_PROFILE_GUID_BRACED: &str = "{9B5F5E04-23F6-47DA-9A26-D221F6C3F02E}";
 
@@ -187,6 +188,7 @@ mod windows_impl {
     use std::ptr;
     use windows::core::{GUID, HRESULT};
     use windows::Win32::Foundation::RPC_E_CHANGED_MODE;
+    use windows::Win32::Globalization::GetUserDefaultUILanguage;
     use windows::Win32::System::Com::{
         CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER,
         COINIT_APARTMENTTHREADED,
@@ -203,13 +205,53 @@ mod windows_impl {
 
     const OPENLESS_COM_INPROC_KEY: &str =
         r"Software\Classes\CLSID\{6B9F3F4F-5EE7-42D6-9C61-9F80B03A5D7D}\InprocServer32";
-    const OPENLESS_TSF_PROFILE_KEY: &str = r"Software\Microsoft\CTF\TIP\{6B9F3F4F-5EE7-42D6-9C61-9F80B03A5D7D}\LanguageProfile\0x00000804\{9B5F5E04-23F6-47DA-9A26-D221F6C3F02E}";
     const OPENLESS_TSF_KEYBOARD_CATEGORY_KEY: &str = r"Software\Microsoft\CTF\TIP\{6B9F3F4F-5EE7-42D6-9C61-9F80B03A5D7D}\Category\Category\{34745C63-B2F0-4784-8B67-5E12C8701A31}\{6B9F3F4F-5EE7-42D6-9C61-9F80B03A5D7D}";
     const OPENLESS_TSF_IMMERSIVE_CATEGORY_KEY: &str = r"Software\Microsoft\CTF\TIP\{6B9F3F4F-5EE7-42D6-9C61-9F80B03A5D7D}\Category\Category\{13A016DF-560B-46CD-947A-4C3AF1E0E35D}\{6B9F3F4F-5EE7-42D6-9C61-9F80B03A5D7D}";
     const OPENLESS_TSF_SYSTRAY_CATEGORY_KEY: &str = r"Software\Microsoft\CTF\TIP\{6B9F3F4F-5EE7-42D6-9C61-9F80B03A5D7D}\Category\Category\{25504FB4-7BAB-4BC1-9C69-CF81890F0EF5}\{6B9F3F4F-5EE7-42D6-9C61-9F80B03A5D7D}";
     const OPENLESS_PROFILE_ACTIVATION_FLAGS: u32 =
         TF_IPPMF_FORSESSION | TF_IPPMF_DONTCARECURRENTINPUTLANGUAGE | TF_IPPMF_ENABLEPROFILE;
     const PROFILE_RESTORE_FLAGS: u32 = TF_IPPMF_FORSESSION | TF_IPPMF_DONTCARECURRENTINPUTLANGUAGE;
+
+    fn openless_tsf_profile_key(lang_id: u16) -> String {
+        format!(
+            "Software\\Microsoft\\CTF\\TIP\\{}\\LanguageProfile\\0x{lang_id:08X}\\{}",
+            OPENLESS_TEXT_SERVICE_CLSID_BRACED,
+            OPENLESS_PROFILE_GUID_BRACED
+        )
+    }
+
+    fn preferred_openless_tsf_lang_id() -> u16 {
+        const LANG_CHINESE_PRIMARY: u16 = 0x04;
+        const SUBLANG_CHINESE_TRADITIONAL: u16 = 0x01;
+        const SUBLANG_CHINESE_HONGKONG: u16 = 0x03;
+        const SUBLANG_CHINESE_MACAU: u16 = 0x05;
+
+        let ui_lang = unsafe { GetUserDefaultUILanguage() };
+        let primary = ui_lang & 0x03ff;
+        let sublang = ui_lang >> 10;
+
+        if primary == LANG_CHINESE_PRIMARY
+            && matches!(
+                sublang,
+                SUBLANG_CHINESE_TRADITIONAL
+                    | SUBLANG_CHINESE_HONGKONG
+                    | SUBLANG_CHINESE_MACAU
+            )
+        {
+            OPENLESS_TSF_LANG_ID_TRADITIONAL
+        } else {
+            OPENLESS_TSF_LANG_ID_SIMPLIFIED
+        }
+    }
+
+    fn openless_tsf_lang_candidates() -> [u16; 2] {
+        let preferred = preferred_openless_tsf_lang_id();
+        if preferred == OPENLESS_TSF_LANG_ID_TRADITIONAL {
+            [OPENLESS_TSF_LANG_ID_TRADITIONAL, OPENLESS_TSF_LANG_ID_SIMPLIFIED]
+        } else {
+            [OPENLESS_TSF_LANG_ID_SIMPLIFIED, OPENLESS_TSF_LANG_ID_TRADITIONAL]
+        }
+    }
 
     pub(super) struct ComInitializeOwnership {
         pub(super) should_uninitialize: bool,
@@ -300,22 +342,39 @@ mod windows_impl {
         let clsid = parse_guid(OPENLESS_TEXT_SERVICE_CLSID_BRACED)?;
         let profile_guid = parse_guid(OPENLESS_PROFILE_GUID_BRACED)?;
 
-        with_input_processor_profiles(|profiles| unsafe {
-            profiles.EnableLanguageProfile(&clsid, OPENLESS_TSF_LANG_ID, &profile_guid, true)?;
-            profiles.ChangeCurrentLanguage(OPENLESS_TSF_LANG_ID)?;
-            profiles.ActivateLanguageProfile(&clsid, OPENLESS_TSF_LANG_ID, &profile_guid)
-        })?;
+        let mut last_error: Option<WindowsImeProfileError> = None;
+        for lang_id in openless_tsf_lang_candidates() {
+            let profile_result = with_input_processor_profiles(|profiles| unsafe {
+                profiles.EnableLanguageProfile(&clsid, lang_id, &profile_guid, true)?;
+                profiles.ChangeCurrentLanguage(lang_id)?;
+                profiles.ActivateLanguageProfile(&clsid, lang_id, &profile_guid)
+            });
+            if let Err(error) = profile_result {
+                last_error = Some(error);
+                continue;
+            }
 
-        with_profile_manager(|manager| unsafe {
-            manager.ActivateProfile(
-                TF_PROFILETYPE_INPUTPROCESSOR,
-                OPENLESS_TSF_LANG_ID,
-                &clsid,
-                &profile_guid,
-                null_hkl(),
-                OPENLESS_PROFILE_ACTIVATION_FLAGS,
+            let manager_result = with_profile_manager(|manager| unsafe {
+                manager.ActivateProfile(
+                    TF_PROFILETYPE_INPUTPROCESSOR,
+                    lang_id,
+                    &clsid,
+                    &profile_guid,
+                    null_hkl(),
+                    OPENLESS_PROFILE_ACTIVATION_FLAGS,
+                )
+            });
+            match manager_result {
+                Ok(()) => return Ok(()),
+                Err(error) => last_error = Some(error),
+            }
+        }
+
+        Err(last_error.unwrap_or_else(|| {
+            WindowsImeProfileError::WindowsApi(
+                "failed to activate OpenLess TSF profile for all language candidates".to_string(),
             )
-        })
+        }))
     }
 
     pub fn restore_profile(snapshot: &ImeProfileSnapshot) -> WindowsImeProfileResult<()> {
@@ -356,9 +415,12 @@ mod windows_impl {
 
     pub fn is_openless_profile_active() -> WindowsImeProfileResult<bool> {
         let snapshot = capture_active_profile()?;
+        let lang_matches = openless_tsf_lang_candidates()
+            .iter()
+            .any(|candidate| snapshot.lang_id() == *candidate);
 
         Ok(matches!(snapshot.kind(), ImeProfileKind::TextService)
-            && snapshot.lang_id() == OPENLESS_TSF_LANG_ID
+            && lang_matches
             && snapshot.clsid().map(normalize_guid_string).as_deref()
                 == Some(OPENLESS_TEXT_SERVICE_CLSID_BRACED)
             && snapshot
@@ -406,9 +468,10 @@ mod windows_impl {
         let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
         let com_key =
             hklm.open_subkey_with_flags(OPENLESS_COM_INPROC_KEY, KEY_READ | KEY_WOW64_64KEY);
-        let tip_key_exists = hklm
-            .open_subkey_with_flags(OPENLESS_TSF_PROFILE_KEY, KEY_READ | KEY_WOW64_64KEY)
-            .is_ok();
+        let tip_key_exists = openless_tsf_lang_candidates().iter().any(|lang_id| {
+            hklm.open_subkey_with_flags(openless_tsf_profile_key(*lang_id), KEY_READ | KEY_WOW64_64KEY)
+                .is_ok()
+        });
         let keyboard_category_exists = hklm
             .open_subkey_with_flags(
                 OPENLESS_TSF_KEYBOARD_CATEGORY_KEY,
@@ -670,7 +733,8 @@ mod windows_tests {
 
     #[test]
     fn openless_profile_identifiers_are_fixed() {
-        assert_eq!(OPENLESS_TSF_LANG_ID, 0x0804);
+        assert_eq!(OPENLESS_TSF_LANG_ID_SIMPLIFIED, 0x0804);
+        assert_eq!(OPENLESS_TSF_LANG_ID_TRADITIONAL, 0x0404);
         assert_eq!(
             OPENLESS_TEXT_SERVICE_CLSID_BRACED,
             "{6B9F3F4F-5EE7-42D6-9C61-9F80B03A5D7D}"

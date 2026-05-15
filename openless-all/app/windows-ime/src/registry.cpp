@@ -123,6 +123,23 @@ HRESULT CreateCategoryManager(ITfCategoryMgr** category_mgr) {
                           reinterpret_cast<void**>(category_mgr));
 }
 
+LANGID ResolveOpenLessLangId() {
+  const LANGID ui_lang = GetUserDefaultUILanguage();
+  const WORD primary = PRIMARYLANGID(ui_lang);
+  const WORD sub = SUBLANGID(ui_lang);
+
+  if (primary == LANG_CHINESE) {
+    if (sub == SUBLANG_CHINESE_TRADITIONAL || sub == SUBLANG_CHINESE_HONGKONG ||
+        sub == SUBLANG_CHINESE_MACAU) {
+      return kOpenLessLangIdTraditional;
+    }
+  }
+
+  // Keep Simplified Chinese as the default fallback for non-Chinese locales,
+  // so existing behavior remains stable outside zh-Hant systems.
+  return kOpenLessLangIdSimplified;
+}
+
 HRESULT RegisterLanguageProfile() {
   ScopedComInit com;
   HRESULT hr = com.hr();
@@ -136,18 +153,20 @@ HRESULT RegisterLanguageProfile() {
     return hr;
   }
 
+  const LANGID openless_lang_id = ResolveOpenLessLangId();
+
   profiles->Unregister(CLSID_OpenLessTextService);
 
   hr = profiles->Register(CLSID_OpenLessTextService);
   if (SUCCEEDED(hr)) {
     hr = profiles->AddLanguageProfile(
-        CLSID_OpenLessTextService, kOpenLessLangId, GUID_OpenLessProfile,
+        CLSID_OpenLessTextService, openless_lang_id, GUID_OpenLessProfile,
         const_cast<wchar_t*>(kOpenLessImeName),
         static_cast<ULONG>(ARRAYSIZE(kOpenLessImeName) - 1), nullptr, 0, 0);
   }
   if (SUCCEEDED(hr)) {
     hr = profiles->EnableLanguageProfile(CLSID_OpenLessTextService,
-                                         kOpenLessLangId, GUID_OpenLessProfile,
+                                         openless_lang_id, GUID_OpenLessProfile,
                                          TRUE);
   }
 
@@ -163,10 +182,12 @@ HRESULT RegisterLanguageProfile() {
     return hr;
   }
 
-  manager->UnregisterProfile(CLSID_OpenLessTextService, kOpenLessLangId,
+  manager->UnregisterProfile(CLSID_OpenLessTextService, kOpenLessLangIdSimplified,
+                             GUID_OpenLessProfile, 0);
+  manager->UnregisterProfile(CLSID_OpenLessTextService, kOpenLessLangIdTraditional,
                              GUID_OpenLessProfile, 0);
   hr = manager->RegisterProfile(
-      CLSID_OpenLessTextService, kOpenLessLangId, GUID_OpenLessProfile,
+      CLSID_OpenLessTextService, openless_lang_id, GUID_OpenLessProfile,
       kOpenLessImeName, static_cast<ULONG>(ARRAYSIZE(kOpenLessImeName) - 1),
       nullptr, 0, 0, nullptr, 0, TRUE,
       TF_IPP_CAPS_IMMERSIVESUPPORT | TF_IPP_CAPS_SYSTRAYSUPPORT);
@@ -230,7 +251,9 @@ HRESULT UnregisterLanguageProfile() {
   ITfInputProcessorProfileMgr* manager = nullptr;
   hr = CreateProfileManager(&manager);
   if (SUCCEEDED(hr)) {
-    manager->UnregisterProfile(CLSID_OpenLessTextService, kOpenLessLangId,
+    manager->UnregisterProfile(CLSID_OpenLessTextService, kOpenLessLangIdSimplified,
+                               GUID_OpenLessProfile, 0);
+    manager->UnregisterProfile(CLSID_OpenLessTextService, kOpenLessLangIdTraditional,
                                GUID_OpenLessProfile, 0);
     manager->Release();
   }

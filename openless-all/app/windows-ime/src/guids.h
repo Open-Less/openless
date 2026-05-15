@@ -18,4 +18,5 @@ inline constexpr GUID GUID_OpenLessProfile = {
 };
 
 inline constexpr wchar_t kOpenLessImeName[] = L"OpenLess Voice Input";
-inline constexpr LANGID kOpenLessLangId = 0x0804;
+inline constexpr LANGID kOpenLessLangIdSimplified = 0x0804;
+inline constexpr LANGID kOpenLessLangIdTraditional = 0x0404;

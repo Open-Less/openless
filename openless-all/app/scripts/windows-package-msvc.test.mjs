@@ -147,7 +147,8 @@ assert.match(imeInstallSmoke, /Start-Process -FilePath \$FilePath -ArgumentList 
 assert.match(imeInstallSmoke, /OpenLessImeSubmit/, "install smoke should preserve TSF backend context");
 assert.match(imeInstallSmoke, /Software\\Classes\\CLSID\\\{6B9F3F4F-5EE7-42D6-9C61-9F80B03A5D7D\}\\InprocServer32/, "install smoke should check x64 COM registration");
 assert.match(imeInstallSmoke, /Software\\WOW6432Node\\Classes\\CLSID\\\{6B9F3F4F-5EE7-42D6-9C61-9F80B03A5D7D\}\\InprocServer32/, "install smoke should check x86 COM registration");
-assert.match(imeInstallSmoke, /LanguageProfile\\0x00000804\\\{9B5F5E04-23F6-47DA-9A26-D221F6C3F02E\}/, "install smoke should check the TSF language profile");
+assert.match(imeInstallSmoke, /Resolve-OpenLessLangId/, "install smoke should resolve TSF language id from system locale");
+assert.match(imeInstallSmoke, /LanguageProfile\\\$LangId\\\{9B5F5E04-23F6-47DA-9A26-D221F6C3F02E\}/, "install smoke should check the TSF language profile using resolved language id");
 assert.match(imeInstallSmoke, /Category\\Category\\\{34745C63-B2F0-4784-8B67-5E12C8701A31\}/, "install smoke should check the keyboard TSF category");
 assert.match(imeInstallSmoke, /foreach \(\$key in \$ExpectedBackendKeys\) \{[\s\S]*Assert-RegistryKey -View Registry64 -SubKey \$key[\s\S]*\}/, "install smoke should assert every backend-required registry key exists");
 assert.doesNotMatch(imeInstallSmoke, /foreach \(\$key in \$ExpectedBackendKeys\) \{[\s\S]*Write-Host "\[trace\] backend-required key: HKLM\\\$key"[\s\S]*\}/, "install smoke must not only trace backend-required registry keys");
