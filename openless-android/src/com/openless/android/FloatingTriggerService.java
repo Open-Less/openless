@@ -50,6 +50,8 @@ public final class FloatingTriggerService extends Service implements AndroidDict
     private final Handler main = new Handler(Looper.getMainLooper());
     private int stateGeneration;
     private boolean dragging;
+    /** 0 = no active bubble press; set on ACTION_DOWN, cleared on ACTION_UP/CANCEL. */
+    private long bubbleGestureDownAtMs;
     private float downX;
     private float downY;
     private int startX;
@@ -212,6 +214,7 @@ public final class FloatingTriggerService extends Service implements AndroidDict
             case MotionEvent.ACTION_DOWN:
                 downX = event.getRawX(); downY = event.getRawY();
                 startX = params.x; startY = params.y; dragging = false;
+                bubbleGestureDownAtMs = System.currentTimeMillis();
                 return true;
             case MotionEvent.ACTION_MOVE:
                 float dx = event.getRawX() - downX;
@@ -225,10 +228,15 @@ public final class FloatingTriggerService extends Service implements AndroidDict
                 return true;
             case MotionEvent.ACTION_UP:
                 if (!dragging) {
-                    if (System.currentTimeMillis() - bubble.downAt >= LONG_PRESS_CANCEL_MS) {
+                    if (System.currentTimeMillis() - bubbleGestureDownAtMs >= LONG_PRESS_CANCEL_MS) {
                         coordinator.cancel();
                     } else { coordinator.toggle(); }
                 }
+                bubbleGestureDownAtMs = 0;
+                return true;
+            case MotionEvent.ACTION_CANCEL:
+                bubbleGestureDownAtMs = 0;
+                dragging = false;
                 return true;
             default: return true;
         }
@@ -286,7 +294,6 @@ public final class FloatingTriggerService extends Service implements AndroidDict
         private String statusText;
         private boolean showDot = true;
         private boolean dotOn = true;
-        long downAt;
 
         MicBubbleView(android.content.Context context) {
             super(context);
@@ -376,12 +383,6 @@ public final class FloatingTriggerService extends Service implements AndroidDict
                         90, 180, false, micPaint);
                 micPaint.setAlpha(255);
             }
-        }
-
-        @Override
-        public boolean onTouchEvent(MotionEvent event) {
-            if (event.getAction() == MotionEvent.ACTION_DOWN) downAt = System.currentTimeMillis();
-            return super.onTouchEvent(event);
         }
 
         private int dp(int value) { return (int) (value * getResources().getDisplayMetrics().density + 0.5f); }
