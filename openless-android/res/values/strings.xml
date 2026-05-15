@@ -1,0 +1,15 @@
+<resources>
+    <string name="app_name">OpenLess</string>
+    <string name="process_text_label">用 OpenLess 追问</string>
+    <string name="ime_name">OpenLess 键盘</string>
+    <string name="floating_channel_name">OpenLess 悬浮触发器</string>
+    <string name="floating_channel_description">保持 OpenLess 悬浮听写触发器可用。</string>
+    <string name="floating_notification_title">OpenLess</string>
+    <string name="floating_notification_text">悬浮听写触发器运行中</string>
+    <string name="floating_action_toggle">开始/停止听写</string>
+    <string name="floating_action_translate">翻译</string>
+    <string name="floating_action_qa">问答面板</string>
+    <string name="floating_action_qa_clipboard">剪贴板问答</string>
+    <string name="floating_action_cancel">取消</string>
+    <string name="floating_action_stop">停止</string>
+</resources>

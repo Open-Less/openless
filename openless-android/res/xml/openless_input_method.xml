@@ -1,0 +1,4 @@
+<input-method xmlns:android="http://schemas.android.com/apk/res/android"
+    android:isDefault="false"
+    android:label="@string/ime_name"
+    android:settingsActivity="com.openless.android.MainActivity" />

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="ol_canvas">#F7F7F8</color>
+    <color name="ol_surface">#FFFFFF</color>
+    <color name="ol_surface_2">#FAFAFA</color>
+    <color name="ol_line">#14000000</color>
+    <color name="ol_line_strong">#24000000</color>
+    <color name="ol_ink">#0A0A0B</color>
+    <color name="ol_ink_2">#2A2A2D</color>
+    <color name="ol_ink_3">#A0A0A3</color>
+    <color name="ol_ink_4">#6C6C70</color>
+    <color name="ol_blue">#2563EB</color>
+    <color name="ol_blue_hover">#1D4ED8</color>
+    <color name="ol_blue_soft">#EFF4FF</color>
+    <color name="ol_ok">#16A34A</color>
+    <color name="ol_warn">#D97706</color>
+    <color name="ol_err">#DC2626</color>
+</resources>

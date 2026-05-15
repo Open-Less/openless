@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="OpenLessTheme" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:statusBarColor">@color/ol_canvas</item>
+        <item name="android:navigationBarColor">@color/ol_canvas</item>
+        <item name="android:colorAccent">@color/ol_blue</item>
+        <item name="android:windowBackground">@color/ol_canvas</item>
+    </style>
+</resources>
