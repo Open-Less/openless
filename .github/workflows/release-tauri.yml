@@ -1,4 +1,5 @@
 name: Release Tauri (cross-platform)
+# meta: ensure Actions indexes this workflow on forks (no behavior change).
 # 触发条件：
 #   - 推 v*.*.*-tauri 形式的 tag（与老 Swift 版的 vX.Y.Z 区分开,不冲突）
 #   - 手动 dispatch（用于测试构建,不发版）
