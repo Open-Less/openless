@@ -29,6 +29,7 @@ mod qa_hotkey;
 mod recorder;
 mod selection;
 mod shortcut_binding;
+mod style_pack_resources;
 mod types;
 mod unicode_keystroke;
 mod windows_ime_ipc;

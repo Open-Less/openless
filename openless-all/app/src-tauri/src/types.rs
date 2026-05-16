@@ -1,5 +1,6 @@
 //! Shared value types crossing the IPC boundary.
 
+use ferrous_opencc::{config::BuiltinConfig, OpenCC};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -236,6 +237,19 @@ impl Default for StyleSystemPrompts {
     }
 }
 
+pub fn default_style_system_prompts_for_output_language(
+    output_language_preference: OutputLanguagePreference,
+) -> StyleSystemPrompts {
+    let mut prompts = StyleSystemPrompts::default();
+    if output_language_preference == OutputLanguagePreference::ZhTw {
+        prompts.raw = to_traditional_chinese(&prompts.raw);
+        prompts.light = to_traditional_chinese(&prompts.light);
+        prompts.structured = to_traditional_chinese(&prompts.structured);
+        prompts.formal = to_traditional_chinese(&prompts.formal);
+    }
+    prompts
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum StylePackKind {
@@ -341,8 +355,94 @@ pub fn default_active_style_pack_id() -> String {
     BUILTIN_STYLE_PACK_LIGHT_ID.to_string()
 }
 
-pub fn builtin_style_pack_for_mode(mode: PolishMode) -> StylePack {
-    match mode {
+pub fn to_traditional_chinese(text: &str) -> String {
+    match OpenCC::from_config(BuiltinConfig::S2t) {
+        Ok(opencc) => opencc.convert(text),
+        Err(_) => text.to_string(),
+    }
+}
+
+fn localize_style_pack_for_output_preference(
+    mut pack: StylePack,
+    output_language_preference: OutputLanguagePreference,
+) -> StylePack {
+    if output_language_preference == OutputLanguagePreference::ZhTw {
+        pack.name = to_traditional_chinese(&pack.name);
+        pack.description = to_traditional_chinese(&pack.description);
+        pack.prompt = to_traditional_chinese(&pack.prompt);
+        pack.tags = pack
+            .tags
+            .iter()
+            .map(|tag| to_traditional_chinese(tag))
+            .collect();
+        pack.examples = pack
+            .examples
+            .iter()
+            .map(|example| StylePackExample {
+                title: example
+                    .title
+                    .as_ref()
+                    .map(|title| to_traditional_chinese(title)),
+                input: to_traditional_chinese(&example.input),
+                output: to_traditional_chinese(&example.output),
+            })
+            .collect();
+    }
+    pack
+}
+
+pub fn builtin_style_pack_for_mode_with_output_language(
+    mode: PolishMode,
+    output_language_preference: OutputLanguagePreference,
+) -> StylePack {
+    // 決定語言代碼：zh-TW 用繁體 JSON，其他優先用簡體
+    let lang_code = match output_language_preference {
+        OutputLanguagePreference::ZhTw => "zh-TW",
+        OutputLanguagePreference::ZhCn => "zh-CN",
+        OutputLanguagePreference::En => "en",
+        OutputLanguagePreference::Ja => "ja",
+        OutputLanguagePreference::Ko => "ko",
+        OutputLanguagePreference::Auto => "zh-CN", // Auto 預設簡體
+    };
+
+    // 從 JSON 資源載入風格定義
+    let mode_key = match mode {
+        PolishMode::Raw => "raw",
+        PolishMode::Light => "light",
+        PolishMode::Structured => "structured",
+        PolishMode::Formal => "formal",
+    };
+
+    // 嘗試從 JSON 資源載入；若失敗則退回硬編常量
+    if let Some(json_def) = crate::style_pack_resources::load_style_pack_json_def(lang_code, mode_key) {
+        return StylePack {
+            id: builtin_style_pack_id(mode).into(),
+            name: json_def.name,
+            description: json_def.description,
+            author: Some("OpenLess".into()),
+            version: "1.0.0".into(),
+            kind: StylePackKind::Builtin,
+            base_mode: mode,
+            prompt: json_def.prompt,
+            examples: json_def.examples.into_iter().map(|ex| StylePackExample {
+                title: ex.title,
+                input: ex.input,
+                output: ex.output,
+            }).collect(),
+            tags: json_def.tags,
+            icon_path: None,
+            created_at: None,
+            updated_at: None,
+            enabled: true,
+            active: false,
+            recommended_model: None,
+            compatible_app_version: Some(env!("CARGO_PKG_VERSION").into()),
+        };
+    }
+    // JSON 載入失敗，退回硬編版本（見下方）
+
+    // 硬編退回版本（JSON 載入失敗時用）
+    let pack = match mode {
         PolishMode::Raw => StylePack {
             id: BUILTIN_STYLE_PACK_RAW_ID.into(),
             name: "原文".into(),
@@ -435,15 +535,27 @@ pub fn builtin_style_pack_for_mode(mode: PolishMode) -> StylePack {
             recommended_model: None,
             compatible_app_version: Some(env!("CARGO_PKG_VERSION").into()),
         },
-    }
+    };
+
+    localize_style_pack_for_output_preference(pack, output_language_preference)
+}
+
+pub fn builtin_style_pack_for_mode(mode: PolishMode) -> StylePack {
+    builtin_style_pack_for_mode_with_output_language(mode, OutputLanguagePreference::Auto)
 }
 
 pub fn builtin_style_packs() -> Vec<StylePack> {
+    builtin_style_packs_with_output_language(OutputLanguagePreference::Auto)
+}
+
+pub fn builtin_style_packs_with_output_language(
+    output_language_preference: OutputLanguagePreference,
+) -> Vec<StylePack> {
     vec![
-        builtin_style_pack_for_mode(PolishMode::Raw),
-        builtin_style_pack_for_mode(PolishMode::Light),
-        builtin_style_pack_for_mode(PolishMode::Structured),
-        builtin_style_pack_for_mode(PolishMode::Formal),
+        builtin_style_pack_for_mode_with_output_language(PolishMode::Raw, output_language_preference),
+        builtin_style_pack_for_mode_with_output_language(PolishMode::Light, output_language_preference),
+        builtin_style_pack_for_mode_with_output_language(PolishMode::Structured, output_language_preference),
+        builtin_style_pack_for_mode_with_output_language(PolishMode::Formal, output_language_preference),
     ]
 }
 

@@ -23,12 +23,14 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::types::{
-    builtin_style_pack_for_mode, builtin_style_pack_id, builtin_style_packs,
-    default_active_style_pack_id, CorrectionRule, CustomStylePrompts, DictationSession,
-    DictionaryEntry, PolishMode, StylePack, StylePackExample, StylePackKind, UserPreferences,
-    VocabPresetStore, BUILTIN_STYLE_PACK_LIGHT_ID,
+    builtin_style_pack_for_mode_with_output_language, builtin_style_pack_id,
+    builtin_style_packs_with_output_language,
+    default_active_style_pack_id, default_style_system_prompt_for_mode, CorrectionRule,
+    CustomStylePrompts, DictationSession, DictionaryEntry, PolishMode, StylePack,
+    StylePackExample, StylePackKind, UserPreferences, VocabPresetStore,
+    OutputLanguagePreference, to_traditional_chinese,
+    BUILTIN_STYLE_PACK_LIGHT_ID,
 };
-
 const HISTORY_CAP: usize = 200;
 const HISTORY_FILE: &str = "history.json";
 const PREFERENCES_FILE: &str = "preferences.json";
@@ -1068,7 +1070,11 @@ impl StylePackStore {
         Ok(updated)
     }
 
-    pub fn reset_builtin(&self, id: &str) -> Result<StylePack> {
+    pub fn reset_builtin(
+        &self,
+        id: &str,
+        output_language_preference: OutputLanguagePreference,
+    ) -> Result<StylePack> {
         let mode = builtin_mode_from_style_pack_id(id)
             .ok_or_else(|| anyhow!("style pack {} is not a builtin pack", id))?;
         let mut packs = self.state.lock();
@@ -1077,7 +1083,8 @@ impl StylePackStore {
             .position(|pack| pack.id == id)
             .ok_or_else(|| anyhow!("style pack {} not found", id))?;
         let existing = packs[index].clone();
-        let mut reset = builtin_style_pack_for_mode(mode);
+        let mut reset =
+            builtin_style_pack_for_mode_with_output_language(mode, output_language_preference);
         reset.enabled = existing.enabled;
         reset.created_at = existing
             .created_at
@@ -1273,11 +1280,18 @@ fn migrate_style_packs_from_preferences(
 ) -> bool {
     let mut changed = false;
     let legacy_prompts = prefs.style_system_prompts.clone();
-    for builtin in builtin_style_packs() {
+    for builtin in builtin_style_packs_with_output_language(prefs.output_language_preference) {
         if let Some(index) = packs.iter().position(|pack| pack.id == builtin.id) {
             let pack = &mut packs[index];
             if pack.kind != StylePackKind::Builtin {
                 pack.kind = StylePackKind::Builtin;
+                changed = true;
+            }
+            if migrate_legacy_builtin_style_pack_copy(
+                pack,
+                &builtin,
+                prefs.output_language_preference,
+            ) {
                 changed = true;
             }
             if pack.name.trim().is_empty() {
@@ -1322,7 +1336,11 @@ fn migrate_style_packs_from_preferences(
             }
         } else {
             let mut pack = builtin.clone();
-            pack.prompt = legacy_prompts.for_mode(pack.base_mode).to_string();
+            let legacy_prompt = legacy_prompts.for_mode(pack.base_mode);
+            let legacy_default_prompt = default_style_system_prompt_for_mode(pack.base_mode);
+            if legacy_prompt != legacy_default_prompt {
+                pack.prompt = legacy_prompt.to_string();
+            }
             pack.enabled = prefs.enabled_modes.contains(&pack.base_mode);
             pack.created_at = Some(Utc::now().to_rfc3339());
             pack.updated_at = Some(Utc::now().to_rfc3339());
@@ -1336,6 +1354,81 @@ fn migrate_style_packs_from_preferences(
             .then_with(|| left.name.cmp(&right.name))
     });
     changed
+}
+
+fn migrate_legacy_builtin_style_pack_copy(
+    pack: &mut StylePack,
+    builtin: &StylePack,
+    output_language_preference: OutputLanguagePreference,
+) -> bool {
+    let mut changed = false;
+
+    let legacy_builtin_cn =
+        builtin_style_pack_for_mode_with_output_language(pack.base_mode, OutputLanguagePreference::ZhCn);
+    let legacy_builtin_tw =
+        builtin_style_pack_for_mode_with_output_language(pack.base_mode, OutputLanguagePreference::ZhTw);
+
+    if (pack.name == legacy_builtin_cn.name || pack.name == legacy_builtin_tw.name)
+        && pack.name != builtin.name
+    {
+        pack.name = builtin.name.clone();
+        changed = true;
+    }
+
+    if (pack.description == legacy_builtin_cn.description
+        || pack.description == legacy_builtin_tw.description)
+        && pack.description != builtin.description
+    {
+        pack.description = builtin.description.clone();
+        changed = true;
+    }
+
+    if (pack.tags == legacy_builtin_cn.tags || pack.tags == legacy_builtin_tw.tags)
+        && pack.tags != builtin.tags
+    {
+        pack.tags = builtin.tags.clone();
+        changed = true;
+    }
+
+    let legacy_default_prompt = default_style_system_prompt_for_mode(pack.base_mode);
+    if (pack.prompt == legacy_default_prompt
+        || pack.prompt == legacy_builtin_cn.prompt
+        || pack.prompt == legacy_builtin_tw.prompt)
+        && pack.prompt != builtin.prompt
+    {
+        pack.prompt = builtin.prompt.clone();
+        changed = true;
+    }
+
+    if (pack.examples == legacy_builtin_cn.examples || pack.examples == legacy_builtin_tw.examples)
+        && pack.examples != builtin.examples
+    {
+        pack.examples = builtin.examples.clone();
+        changed = true;
+    }
+
+    if output_language_preference == OutputLanguagePreference::ZhTw
+        && pack.prompt != builtin.prompt
+        && (pack.prompt == legacy_default_prompt
+            || looks_like_legacy_simplified_default_prompt(&pack.prompt))
+    {
+        let converted_prompt = to_traditional_chinese(&pack.prompt);
+        if converted_prompt != pack.prompt {
+            pack.prompt = converted_prompt;
+            changed = true;
+        }
+    }
+
+    changed
+}
+
+fn looks_like_legacy_simplified_default_prompt(prompt: &str) -> bool {
+    // 旧版内建默认 prompt 的稳定锚点：允许换行/空格有差异，按关键段落判断。
+    prompt.contains("# 角色")
+        && prompt.contains("语音输入整理器")
+        && prompt.contains("# 通用规则")
+        && prompt.contains("# 输出")
+        && prompt.contains("反 AI 自述式表达")
 }
 
 fn style_pack_sort_key(pack: &StylePack) -> (u8, u8) {

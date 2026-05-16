@@ -71,126 +71,114 @@ function sanitizeZipFileName(name: string) {
 }
 
 export function Style() {
-  const { t, i18n } = useTranslation();
-  const isEnglish = i18n.language.toLowerCase().startsWith('en');
+  const { t } = useTranslation();
+  const tp = (key: string, options?: Record<string, unknown>) => t(`style.packs.${key}`, options);
+
+  const displayPackName = (pack: StylePack) => (
+    pack.kind === 'builtin' ? t(`style.modes.${pack.baseMode}.name`) : pack.name
+  );
+
+  const displayPackDescription = (pack: StylePack) => (
+    pack.kind === 'builtin' ? t(`style.modes.${pack.baseMode}.desc`) : pack.description
+  );
+
   const copy = {
-    kicker: 'STYLE PACKS',
-    title: isEnglish ? 'Style Packs' : '风格包',
-    desc: isEnglish
-      ? 'Manage local style packs.'
-      : '管理本地风格包。',
-    loadFailed: (message: string) => (isEnglish ? `Failed to load style packs: ${message}` : `加载风格包失败：${message}`),
-    importZip: isEnglish ? 'Import ZIP' : '导入 ZIP',
-    exportZip: isEnglish ? 'Export ZIP' : '导出 ZIP',
-    exportShort: isEnglish ? 'Export' : '导出',
-    builtin: isEnglish ? 'Built-in' : '内置',
-    imported: isEnglish ? 'Imported' : '导入',
-    active: isEnglish ? 'Active' : '当前',
-    enabled: isEnglish ? 'In Rotation' : '已加入轮换',
-    disabled: isEnglish ? 'Out of Rotation' : '未加入轮换',
-    activate: isEnglish ? 'Activate' : '激活',
-    enable: isEnglish ? 'Rotation ON' : '轮换 ON',
-    disable: isEnglish ? 'Rotation OFF' : '轮换 OFF',
-    edit: isEnglish ? 'Edit' : '编辑',
-    closeEditor: isEnglish ? 'Close' : '关闭',
-    unsaved: isEnglish ? 'Unsaved' : '未保存',
-    listTitle: isEnglish ? 'Local Packs' : '本地风格包',
-    listDesc: isEnglish
-      ? 'Browse and switch packs.'
-      : '浏览和切换风格包。',
-    listCount: (count: number) => (isEnglish ? `${count} packs` : `${count} 个风格包`),
-    save: isEnglish ? 'Save' : '保存',
-    revert: isEnglish ? 'Revert' : '撤销',
-    saveSuccess: isEnglish ? 'Style pack saved.' : '风格包已保存',
-    saveFailed: (message: string) => (isEnglish ? `Failed to save style pack: ${message}` : `保存风格包失败：${message}`),
-    activateSuccess: (name: string) => (isEnglish ? `Set "${name}" as current.` : `已将“${name}”设为当前风格`),
-    activateFailed: (message: string) => (isEnglish ? `Failed to set current style pack: ${message}` : `设为当前风格失败：${message}`),
-    enableSuccess: (name: string) => (isEnglish ? `Added "${name}" to rotation.` : `已将“${name}”加入轮换`),
-    disableSuccess: (name: string) => (isEnglish ? `Removed "${name}" from rotation.` : `已将“${name}”移出轮换`),
-    toggleFailed: (message: string) => (isEnglish ? `Failed to change rotation status: ${message}` : `切换轮换状态失败：${message}`),
-    importSuccess: (name: string) => (isEnglish ? `Imported "${name}".` : `已导入“${name}”`),
-    importFailed: (message: string) => (isEnglish ? `Failed to import ZIP: ${message}` : `导入 ZIP 失败：${message}`),
-    exportSuccess: (path: string) => (isEnglish ? `Exported to ${path}` : `已导出到 ${path}`),
-    exportFailed: (message: string) => (isEnglish ? `Failed to export ZIP: ${message}` : `导出 ZIP 失败：${message}`),
-    exportDirtyFirst: isEnglish ? 'Save this pack before exporting ZIP.' : '请先保存当前风格包，再导出 ZIP。',
-    resetBuiltin: isEnglish ? 'Reset' : '重置',
-    resetSuccess: (name: string) => (isEnglish ? `Reset "${name}".` : `已重置“${name}”`),
-    resetFailed: (message: string) => (isEnglish ? `Failed to reset pack: ${message}` : `重置风格包失败：${message}`),
-    deleteImported: isEnglish ? 'Delete' : '删除',
-    deleteConfirm: (name: string) => (isEnglish
-      ? `Delete "${name}"? This cannot be undone.`
-      : `确定删除“${name}”吗？删除后无法恢复。`),
-    deleteSuccess: (name: string) => (isEnglish ? `Deleted "${name}".` : `已删除“${name}”`),
-    deleteFailed: (message: string) => (isEnglish ? `Failed to delete pack: ${message}` : `删除风格包失败：${message}`),
-    summaryBuiltin: isEnglish ? 'Built-in Packs' : '内置风格',
-    summaryBuiltinHint: isEnglish ? 'Default product semantics with one-click reset.' : '跟随产品默认语义，可一键重置到官方基线。',
-    summaryImported: isEnglish ? 'Imported Packs' : '导入风格',
-    summaryImportedHint: isEnglish ? 'Installed from ZIP and fully portable.' : '来自 ZIP 包，可启用、编辑、导出和删除。',
-    summaryEnabled: isEnglish ? 'In Rotation' : '已加入轮换',
-    summaryCurrent: (name: string) => (isEnglish ? `Current: ${name}` : `当前启用：${name}`),
-    summaryCurrentEmpty: isEnglish ? 'No pack selected yet' : '还没有选中风格包',
-    editorTitle: isEnglish ? 'Edit Pack' : '编辑风格',
-    editorDesc: isEnglish
-      ? 'Edit this pack.'
-      : '编辑当前风格包。',
-    metaTitle: isEnglish ? 'Installation Info' : '安装信息',
-    metaSource: isEnglish ? 'Source' : '来源',
-    metaBaseMode: isEnglish ? 'Base Mode' : '基础模式',
-    metaStatus: isEnglish ? 'Rotation' : '轮换状态',
-    metaUpdatedAt: isEnglish ? 'Updated' : '更新时间',
-    fieldName: isEnglish ? 'Name' : '名称',
-    fieldAuthor: isEnglish ? 'Author' : '作者',
-    fieldAuthorPlaceholder: isEnglish ? 'Optional source label' : '可选，方便标注来源',
-    fieldVersion: isEnglish ? 'Version' : '版本',
-    fieldTags: isEnglish ? 'Tags' : '标签',
-    fieldTagsPlaceholder: isEnglish ? 'Comma-separated tags, e.g. community, voiceover, formal' : '用英文逗号分隔，例如 community, voiceover, formal',
-    fieldDescription: isEnglish ? 'Description' : '描述',
-    fieldModel: isEnglish ? 'Recommended Model (Metadata)' : '推荐模型（仅元数据）',
-    fieldModelPlaceholder: isEnglish ? 'Optional, e.g. gpt-4.1 / deepseek-v3' : '可选，例如 gpt-4.1 / deepseek-v3',
-    fieldModelHint: isEnglish
-      ? 'Metadata only. Does not switch model.'
-      : '仅作说明，不会切换实际模型。',
-    fieldCompatibility: isEnglish ? 'Compatible App Version' : '兼容版本',
-    fieldCompatibilityPlaceholder: isEnglish ? 'Optional, e.g. >=1.3.0' : '可选，例如 >=1.3.0',
-    fullPromptTitle: isEnglish ? 'System Prompt' : 'System Prompt',
-    fullPromptHint: isEnglish
-      ? 'The prompt owned by this pack.'
-      : '这就是这套风格包自己的 Prompt。',
-    runtimeTitle: isEnglish ? 'OpenLess Runtime Directives' : 'OpenLess 运行时附加指令',
-    runtimeDesc: isEnglish
-      ? 'Read-only runtime helpers.'
-      : '只读的运行时辅助项。',
-    runtimeDirectiveContextTitle: isEnglish ? 'Context premise' : '上下文前提',
-    runtimeDirectiveContextDesc: isEnglish ? 'From language and app context' : '来自语言与应用上下文',
-    runtimeDirectiveContextEmpty: isEnglish ? 'Not added in the current preview.' : '当前不会附加',
-    runtimeDirectiveHotwordTitle: isEnglish ? 'Hotword block' : '热词提示段',
-    runtimeDirectiveHotwordDesc: isEnglish ? 'From enabled hotwords' : '来自已启用热词',
-    runtimeDirectiveHotwordEmpty: isEnglish ? 'Not added in the current preview.' : '当前不会附加',
-    runtimeDirectiveHistoryTitle: isEnglish ? 'Multi-turn history guardrail' : '多轮历史保护段',
-    runtimeDirectiveHistoryDesc: isEnglish ? 'Only for live multi-turn polish' : '仅用于实时多轮 polish',
-    runtimeDirectiveHistoryEmpty: isEnglish ? 'Only added when prior turns exist.' : '只有存在 prior turns 时才会附加',
-    runtimeDirectiveActive: isEnglish ? 'Active' : '当前生效',
-    runtimeDirectiveInactive: isEnglish ? 'Inactive' : '当前未生效',
-    runtimePreviewFailed: (message: string) => (isEnglish ? `Failed to build runtime preview: ${message}` : `生成运行时预览失败：${message}`),
-    runtimePreviewOmittedFrontApp: isEnglish ? 'Preview omits the front-app label.' : '预览已省略前台 app 标签。',
-    examplesTitle: isEnglish ? 'Effect Examples' : '效果示例',
-    examplesDesc: isEnglish
-      ? 'Exported with the pack.'
-      : '会随风格包一起导出。',
-    addExample: isEnglish ? 'Add Example' : '新增示例',
-    examplesEmpty: isEnglish
-      ? 'No examples yet.'
-      : '还没有示例。',
-    exampleTitlePlaceholder: (index: number) => (isEnglish ? `Example ${index} title` : `示例 ${index} 标题`),
-    exampleInput: isEnglish ? 'Input' : '输入',
-    exampleOutput: isEnglish ? 'Output' : '输出',
-    examplesCount: (count: number) => (isEnglish ? `${count} examples` : `${count} 个示例`),
-    discardCloseConfirm: isEnglish
-      ? 'Discard unsaved changes and close the editor?'
-      : '关闭编辑面板前要放弃未保存修改吗？',
-    discardSwitchConfirm: (name: string) => (isEnglish
-      ? `Discard unsaved changes and switch to "${name}"?`
-      : `要放弃当前未保存修改，并切换到“${name}”吗？`),
+    kicker: tp('kicker'),
+    title: tp('title'),
+    desc: tp('desc'),
+    loadFailed: (message: string) => tp('loadFailed', { message }),
+    importZip: tp('importZip'),
+    exportZip: tp('exportZip'),
+    exportShort: tp('exportShort'),
+    builtin: tp('builtin'),
+    imported: tp('imported'),
+    active: tp('active'),
+    enabled: tp('enabled'),
+    disabled: tp('disabled'),
+    activate: tp('activate'),
+    enable: tp('enable'),
+    disable: tp('disable'),
+    edit: tp('edit'),
+    closeEditor: tp('closeEditor'),
+    unsaved: tp('unsaved'),
+    listTitle: tp('listTitle'),
+    listDesc: tp('listDesc'),
+    listCount: (count: number) => tp('listCount', { count }),
+    save: tp('save'),
+    revert: tp('revert'),
+    saveSuccess: tp('saveSuccess'),
+    saveFailed: (message: string) => tp('saveFailed', { message }),
+    activateSuccess: (name: string) => tp('activateSuccess', { name }),
+    activateFailed: (message: string) => tp('activateFailed', { message }),
+    enableSuccess: (name: string) => tp('enableSuccess', { name }),
+    disableSuccess: (name: string) => tp('disableSuccess', { name }),
+    toggleFailed: (message: string) => tp('toggleFailed', { message }),
+    importSuccess: (name: string) => tp('importSuccess', { name }),
+    importFailed: (message: string) => tp('importFailed', { message }),
+    exportSuccess: (path: string) => tp('exportSuccess', { path }),
+    exportFailed: (message: string) => tp('exportFailed', { message }),
+    exportDirtyFirst: tp('exportDirtyFirst'),
+    resetBuiltin: tp('resetBuiltin'),
+    resetSuccess: (name: string) => tp('resetSuccess', { name }),
+    resetFailed: (message: string) => tp('resetFailed', { message }),
+    deleteImported: tp('deleteImported'),
+    deleteConfirm: (name: string) => tp('deleteConfirm', { name }),
+    deleteSuccess: (name: string) => tp('deleteSuccess', { name }),
+    deleteFailed: (message: string) => tp('deleteFailed', { message }),
+    summaryBuiltin: tp('summaryBuiltin'),
+    summaryBuiltinHint: tp('summaryBuiltinHint'),
+    summaryImported: tp('summaryImported'),
+    summaryImportedHint: tp('summaryImportedHint'),
+    summaryEnabled: tp('summaryEnabled'),
+    summaryCurrent: (name: string) => tp('summaryCurrent', { name }),
+    summaryCurrentEmpty: tp('summaryCurrentEmpty'),
+    editorTitle: tp('editorTitle'),
+    editorDesc: tp('editorDesc'),
+    metaTitle: tp('metaTitle'),
+    metaSource: tp('metaSource'),
+    metaBaseMode: tp('metaBaseMode'),
+    metaStatus: tp('metaStatus'),
+    metaUpdatedAt: tp('metaUpdatedAt'),
+    fieldName: tp('fieldName'),
+    fieldAuthor: tp('fieldAuthor'),
+    fieldAuthorPlaceholder: tp('fieldAuthorPlaceholder'),
+    fieldVersion: tp('fieldVersion'),
+    fieldTags: tp('fieldTags'),
+    fieldTagsPlaceholder: tp('fieldTagsPlaceholder'),
+    fieldDescription: tp('fieldDescription'),
+    fieldModel: tp('fieldModel'),
+    fieldModelPlaceholder: tp('fieldModelPlaceholder'),
+    fieldModelHint: tp('fieldModelHint'),
+    fieldCompatibility: tp('fieldCompatibility'),
+    fieldCompatibilityPlaceholder: tp('fieldCompatibilityPlaceholder'),
+    fullPromptTitle: tp('fullPromptTitle'),
+    fullPromptHint: tp('fullPromptHint'),
+    runtimeTitle: tp('runtimeTitle'),
+    runtimeDesc: tp('runtimeDesc'),
+    runtimeDirectiveContextTitle: tp('runtimeDirectiveContextTitle'),
+    runtimeDirectiveContextDesc: tp('runtimeDirectiveContextDesc'),
+    runtimeDirectiveContextEmpty: tp('runtimeDirectiveContextEmpty'),
+    runtimeDirectiveHotwordTitle: tp('runtimeDirectiveHotwordTitle'),
+    runtimeDirectiveHotwordDesc: tp('runtimeDirectiveHotwordDesc'),
+    runtimeDirectiveHotwordEmpty: tp('runtimeDirectiveHotwordEmpty'),
+    runtimeDirectiveHistoryTitle: tp('runtimeDirectiveHistoryTitle'),
+    runtimeDirectiveHistoryDesc: tp('runtimeDirectiveHistoryDesc'),
+    runtimeDirectiveHistoryEmpty: tp('runtimeDirectiveHistoryEmpty'),
+    runtimeDirectiveActive: tp('runtimeDirectiveActive'),
+    runtimeDirectiveInactive: tp('runtimeDirectiveInactive'),
+    runtimePreviewFailed: (message: string) => tp('runtimePreviewFailed', { message }),
+    runtimePreviewOmittedFrontApp: tp('runtimePreviewOmittedFrontApp'),
+    examplesTitle: tp('examplesTitle'),
+    examplesDesc: tp('examplesDesc'),
+    addExample: tp('addExample'),
+    examplesEmpty: tp('examplesEmpty'),
+    exampleTitlePlaceholder: (index: number) => tp('exampleTitlePlaceholder', { index }),
+    exampleInput: tp('exampleInput'),
+    exampleOutput: tp('exampleOutput'),
+    examplesCount: (count: number) => tp('examplesCount', { count }),
+    promptCharCount: (count: number) => tp('promptCharCount', { count }),
+    discardCloseConfirm: tp('discardCloseConfirm'),
+    discardSwitchConfirm: (name: string) => tp('discardSwitchConfirm', { name }),
   };
 
   const [packs, setPacks] = useState<StylePack[]>([]);
@@ -306,7 +294,7 @@ export function Style() {
 
   const openEditorForPack = (pack: StylePack) => {
     if (editorOpen && dirty && selectedPack && selectedPack.id !== pack.id) {
-      if (!window.confirm(copy.discardSwitchConfirm(pack.name))) {
+      if (!window.confirm(copy.discardSwitchConfirm(displayPackName(pack)))) {
         return;
       }
     }
@@ -385,7 +373,7 @@ export function Style() {
     setBusy('activating');
     try {
       await setActiveStylePack(pack.id);
-      showSuccess(copy.activateSuccess(pack.name));
+      showSuccess(copy.activateSuccess(displayPackName(pack)));
       await loadPacks(pack.id);
     } catch (activateError) {
       setError(copy.activateFailed(String(activateError)));
@@ -398,7 +386,7 @@ export function Style() {
     setBusy('toggling');
     try {
       await setStylePackEnabled(pack.id, !pack.enabled);
-      showSuccess(pack.enabled ? copy.disableSuccess(pack.name) : copy.enableSuccess(pack.name));
+      showSuccess(pack.enabled ? copy.disableSuccess(displayPackName(pack)) : copy.enableSuccess(displayPackName(pack)));
       await loadPacks(pack.id);
     } catch (toggleError) {
       setError(copy.toggleFailed(String(toggleError)));
@@ -412,7 +400,7 @@ export function Style() {
     setBusy('resetting');
     try {
       await resetBuiltinStylePack(selectedPack.id);
-      showSuccess(copy.resetSuccess(selectedPack.name));
+      showSuccess(copy.resetSuccess(displayPackName(selectedPack)));
       await loadPacks(selectedPack.id);
     } catch (resetError) {
       setError(copy.resetFailed(String(resetError)));
@@ -423,13 +411,13 @@ export function Style() {
 
   const handleDeleteImported = async () => {
     if (!selectedPack || selectedPack.kind !== 'imported') return;
-    if (!window.confirm(copy.deleteConfirm(selectedPack.name))) {
+    if (!window.confirm(copy.deleteConfirm(displayPackName(selectedPack)))) {
       return;
     }
     setBusy('deleting');
     try {
       await deleteStylePack(selectedPack.id);
-      showSuccess(copy.deleteSuccess(selectedPack.name));
+      showSuccess(copy.deleteSuccess(displayPackName(selectedPack)));
       setEditorOpen(false);
       await loadPacks();
     } catch (deleteError) {
@@ -476,7 +464,7 @@ export function Style() {
     }
     setBusy('exporting');
     try {
-      const defaultName = `${sanitizeZipFileName(pack.name)}.zip`;
+      const defaultName = `${sanitizeZipFileName(displayPackName(pack))}.zip`;
       let targetPath: string | null = null;
       if (isTauri) {
         const { save } = await import('@tauri-apps/plugin-dialog');
@@ -539,7 +527,7 @@ export function Style() {
           </div>
           <div style={{ fontSize: 24, fontWeight: 600, color: 'var(--ol-ink)' }}>{enabledCount}</div>
           <div style={{ fontSize: 12, color: 'var(--ol-ink-3)', marginTop: 4 }}>
-            {activePack ? copy.summaryCurrent(activePack.name) : copy.summaryCurrentEmpty}
+            {activePack ? copy.summaryCurrent(displayPackName(activePack)) : copy.summaryCurrentEmpty}
           </div>
         </Card>
       </div>
@@ -602,7 +590,7 @@ export function Style() {
                   <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10, marginBottom: 10 }}>
                     <div style={{ minWidth: 0 }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                        <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--ol-ink)' }}>{pack.name}</div>
+                        <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--ol-ink)' }}>{displayPackName(pack)}</div>
                         <Pill tone={pack.kind === 'builtin' ? 'outline' : 'blue'} size="sm">
                           {pack.kind === 'builtin' ? copy.builtin : copy.imported}
                         </Pill>
@@ -627,7 +615,7 @@ export function Style() {
                           minHeight: 60,
                         }}
                       >
-                        {pack.description}
+                        {displayPackDescription(pack)}
                       </div>
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8, flexShrink: 0 }}>
@@ -868,7 +856,7 @@ export function Style() {
                   <label style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
                       <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--ol-ink)' }}>{copy.fullPromptTitle}</span>
-                      <Pill tone="default" size="sm">{isEnglish ? `${draft.prompt.length} chars` : `${draft.prompt.length} 字符`}</Pill>
+                      <Pill tone="default" size="sm">{copy.promptCharCount(draft.prompt.length)}</Pill>
                     </div>
                     <span style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.55 }}>{copy.fullPromptHint}</span>
                     <textarea

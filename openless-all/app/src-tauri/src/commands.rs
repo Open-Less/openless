@@ -25,10 +25,12 @@ use crate::polish::{
 };
 use crate::recorder::{AudioConsumer, Recorder};
 use crate::types::{
-    builtin_style_pack_id, default_active_style_pack_id, ChineseScriptPreference, ComboBinding,
+    builtin_style_pack_id, default_active_style_pack_id,
+    default_style_system_prompts_for_output_language, ChineseScriptPreference, ComboBinding,
     CorrectionRule, CredentialsStatus, DictationSession, DictionaryEntry, HotkeyCapability,
-    HotkeyStatus, OutputLanguagePreference, PolishMode, ShortcutBinding, StylePack, StylePackKind,
-    StylePackRuntimeDiagnostics, StyleSystemPrompts, UpdateChannel, UserPreferences,
+    HotkeyStatus, OutputLanguagePreference, PolishMode, ShortcutBinding, StylePack,
+    StylePackKind, StylePackRuntimeDiagnostics, StyleSystemPrompts, UpdateChannel,
+    UserPreferences,
     VocabPresetStore, WindowsImeStatus,
 };
 
@@ -62,8 +64,9 @@ pub fn get_settings(coord: CoordinatorState<'_>) -> UserPreferences {
 }
 
 #[tauri::command]
-pub fn get_default_style_system_prompts() -> StyleSystemPrompts {
-    StyleSystemPrompts::default()
+pub fn get_default_style_system_prompts(coord: CoordinatorState<'_>) -> StyleSystemPrompts {
+    let prefs = coord.prefs().get();
+    default_style_system_prompts_for_output_language(prefs.output_language_preference)
 }
 
 trait SettingsWriter {
@@ -1336,11 +1339,11 @@ pub fn reset_builtin_style_pack(
     id: String,
 ) -> Result<StylePack, String> {
     log::info!("[style-pack] command reset_builtin requested id={id}");
+    let prefs = coord.prefs().get();
     let saved = coord
         .style_packs()
-        .reset_builtin(&id)
+        .reset_builtin(&id, prefs.output_language_preference)
         .map_err(|e| e.to_string())?;
-    let prefs = coord.prefs().get();
     let _ = sync_style_pack_prefs_and_persist(&*coord, &app, prefs)?;
     Ok(saved)
 }
