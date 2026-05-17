@@ -1,14 +1,8 @@
-//! Cross-platform text insertion at the current cursor position.
+//! 跨平台光标位置文本插入。
 //!
-//! Strategy:
-//! 1. Always copy the text to the clipboard first (so the user can manually
-//!    `Cmd+V` / `Ctrl+V` if simulation fails).
-//! 2. On macOS, simulate Cmd+V via raw `CGEventPost` FFI — **不能用 enigo**：
-//!    enigo 在 macOS 上的 keycode_to_string 会同步调 `TSMGetInputSourceProperty`，
-//!    macOS 14+ 强制断言主线程，从 tokio worker 线程调就 SIGTRAP（已踩坑）。
-//!    Swift 原版 `TextInserter.simulatePaste()` 用的就是 CGEventCreateKeyboardEvent
-//!    → CGEventPost，跟我们这里完全同源。
-//! 3. 其他平台 (Windows/Linux) 仍用 enigo。
+//! 通用步骤：先写剪贴板（模拟失败时用户能手动粘贴）→ 模拟粘贴快捷键。
+//! - macOS：用 CoreGraphics CGEvent 直接 post Cmd+V。
+//! - Windows / Linux：用 enigo 按 `PasteShortcut` 模拟。
 
 #[cfg(not(target_os = "macos"))]
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -35,11 +29,9 @@ impl TextInserter {
         Self
     }
 
-    /// Insert `text` at the current cursor position.
-    /// `restore_clipboard_after_paste` 仅在 Windows/Linux 路径下决定 paste 之后是否恢复
-    /// 用户原剪贴板。macOS 走 AX 直写，参数被忽略。详见 issue #111。
-    /// `paste_shortcut` 决定 Windows/Linux 上模拟按下的粘贴快捷键。详见 issue #360：
-    /// kitty/alacritty 等终端只接受 Ctrl+Shift+V，硬编码 Ctrl+V 会被吞掉。
+    /// Windows/Linux 路径：写剪贴板 + 模拟 `paste_shortcut`。
+    /// - `restore_clipboard_after_paste`：粘贴后是否恢复用户原剪贴板。
+    /// - `paste_shortcut`：模拟按下的粘贴快捷键（如终端可能要 Ctrl+Shift+V）。
     #[cfg(not(target_os = "macos"))]
     pub fn insert(
         &self,
@@ -77,9 +69,7 @@ impl TextInserter {
         }
     }
 
-    /// Insert `text` at the current cursor position.
-    /// macOS 走 AX 直写 / Cmd+V：`_restore_clipboard_after_paste` 与 `_paste_shortcut`
-    /// 仅为跨平台调用方对齐签名而存在，本路径不读它们。
+    /// macOS 路径：写剪贴板 + post Cmd+V。两个 `_` 参数仅为对齐跨平台签名。
     #[cfg(target_os = "macos")]
     pub fn insert(
         &self,
@@ -96,8 +86,7 @@ impl TextInserter {
         macos_insert_status_after_paste(simulate_paste())
     }
 
-    /// Copy text without attempting a synthetic paste. Used when the platform cannot
-    /// prove the original input target is active enough to safely receive Ctrl/Cmd+V.
+    /// 只写剪贴板、不模拟粘贴。用于目标控件活跃状态无法验证时的兜底路径。
     pub fn copy_fallback(&self, text: &str) -> InsertStatus {
         if text.is_empty() {
             return InsertStatus::CopiedFallback;
@@ -207,7 +196,6 @@ fn insert_with_clipboard_restore(
     if restore_clipboard_after_paste {
         schedule_clipboard_restore(restore_plan);
     }
-    // 关掉 → 听写文本留在剪贴板里，simulate_paste 没真正落地时用户能手动 Ctrl+V 找回。
     insertion_success_status()
 }
 
@@ -321,8 +309,7 @@ fn simulate_paste() -> Result<(), String> {
     macos::post_cmd_v()
 }
 
-/// 把用户配置的 PasteShortcut 拆成 `(modifiers, primary)`。modifier 顺序决定 enigo
-/// 按下/释放顺序，跟物理键盘一致：先 Ctrl 再 Shift 再主键，释放反向。
+/// 把 `PasteShortcut` 拆成 `(modifiers, primary)`，顺序决定按下/释放顺序。
 #[cfg(not(target_os = "macos"))]
 fn paste_keys(shortcut: PasteShortcut) -> (Vec<enigo::Key>, enigo::Key) {
     use enigo::Key;
@@ -339,10 +326,8 @@ fn simulate_paste(shortcut: PasteShortcut) -> Result<(), String> {
     let (modifiers, primary) = paste_keys(shortcut);
     let mut enigo = Enigo::new(&Settings::default()).map_err(|e| e.to_string())?;
 
-    // 跟原版 simulate_paste 保持同一行为：按下 modifier → 点击主键 → 反向释放 modifier。
-    // 任何中途失败都尽量把已经按下的 modifier 反向释放回来，避免卡键。`pressed`
-    // 记录已经成功按下的 modifier 数；用切片 `modifiers[..pressed]` 控制释放范围
-    // —— 切片自带 DoubleEndedIterator，可以放心 `.rev()`。
+    // 顺序：按 modifier → 点击主键 → 反向释放 modifier。
+    // 任一步失败也把已按下的 modifier 反向释放回来，避免卡键。
     let mut pressed = 0usize;
     let mut first_err: Option<String> = None;
 
@@ -381,7 +366,6 @@ fn insertion_success_status() -> InsertStatus {
 
 #[cfg(not(target_os = "macos"))]
 fn insertion_success_status() -> InsertStatus {
-    // Windows/Linux 的 Ctrl+V 只能证明粘贴快捷键已发送，不能证明目标控件已接收。
     InsertStatus::PasteSent
 }
 
@@ -427,7 +411,8 @@ mod windows_unicode {
     }
 }
 
-// ─────────────────────────── macOS native CGEvent paste ───────────────────────────
+// ── macOS CGEvent paste ──
+// 直接调 CoreGraphics FFI 发送 Cmd+V，避开 enigo 在主线程外触发的 TSM 断言。
 
 #[cfg(target_os = "macos")]
 mod macos {
@@ -449,7 +434,7 @@ mod macos {
     const KCG_HID_EVENT_TAP: CGEventTapLocation = 0;
     const KCG_EVENT_SOURCE_STATE_HID_SYSTEM_STATE: CGEventSourceStateID = 1;
     const KCG_EVENT_FLAG_MASK_COMMAND: CGEventFlags = 0x00100000;
-    /// Virtual keycode for "V" on US/ANSI layouts (kVK_ANSI_V).
+    /// US/ANSI 键盘上 "V" 的虚拟键码（kVK_ANSI_V）。
     const KEY_V: CGKeyCode = 9;
 
     #[link(name = "CoreGraphics", kind = "framework")]
@@ -469,13 +454,11 @@ mod macos {
         fn CFRelease(cf: *const c_void);
     }
 
-    /// 与 Swift `TextInserter.simulatePaste()` 同源:
-    ///   下 V + 加 Cmd flag → post → 上 V + 加 Cmd flag → post
-    /// 全部走 C 层 CGEvent，不会触发 enigo 那条 TSM 主线程断言路径。
+    /// 模拟 Cmd+V：构造 V 的 down/up 事件，加 Cmd flag 后依次 post 到 HID 事件流。
     pub fn post_cmd_v() -> Result<(), String> {
         unsafe {
             let source = CGEventSourceCreate(KCG_EVENT_SOURCE_STATE_HID_SYSTEM_STATE);
-            // 即使 source 是空也能 post（Apple 文档允许 NULL source），所以不当致命错误。
+            // source 为 NULL 时 post 仍合法（Apple 文档允许），不视为致命错误。
             let down = CGEventCreateKeyboardEvent(source, KEY_V, true);
             let up = CGEventCreateKeyboardEvent(source, KEY_V, false);
             if down.is_null() || up.is_null() {
@@ -529,8 +512,7 @@ mod tests {
         assert!(!should_restore_clipboard(None, "dictated text"));
     }
 
-    /// issue #360: 用户配置的快捷键必须真的映射到对应按键，否则 Settings UI
-    /// 改了也没用。这里只检查 modifier 数量 + 主键，不依赖 enigo 内部 PartialEq。
+    /// 配置的快捷键必须真实映射到对应按键。只比较 modifier 数 + 主键，规避 enigo 内部 PartialEq。
     #[test]
     #[cfg(not(target_os = "macos"))]
     fn paste_keys_match_configured_shortcut() {

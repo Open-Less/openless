@@ -270,6 +270,7 @@ pub fn run() {
             commands::get_update_channel,
             commands::set_update_channel,
             commands::fetch_latest_beta_release,
+            commands::app_check_update_with_channel,
             commands::get_hotkey_status,
             commands::get_hotkey_capability,
             commands::is_wayland_cli_mode,

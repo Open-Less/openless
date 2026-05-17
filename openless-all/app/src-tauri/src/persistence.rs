@@ -260,15 +260,27 @@ pub fn foundry_logs_root() -> Result<PathBuf> {
     Ok(dir)
 }
 
-/// Atomic write: write to `*.tmp` first, then rename onto the target path.
+/// Atomic write: write to a unique `*.tmp-<uuid>` first, then rename onto the
+/// target path. The unique suffix lets concurrent writers each own their own
+/// tmp file, so a parallel rename never finds its source already taken.
 fn atomic_write(path: &Path, contents: &[u8]) -> Result<()> {
     if let Some(parent) = path.parent() {
         ensure_dir(parent)?;
     }
-    let tmp_path = path.with_extension("tmp");
+    let file_name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let tmp_path = path.with_file_name(format!(
+        "{file_name}.tmp-{}",
+        Uuid::new_v4().simple()
+    ));
     fs::write(&tmp_path, contents)
         .with_context(|| format!("write tmp failed: {}", tmp_path.display()))?;
-    fs::rename(&tmp_path, path).with_context(|| format!("rename failed: {}", path.display()))?;
+    if let Err(err) = fs::rename(&tmp_path, path) {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(err).with_context(|| format!("rename failed: {}", path.display()));
+    }
     Ok(())
 }
 

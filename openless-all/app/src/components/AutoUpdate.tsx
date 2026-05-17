@@ -1,13 +1,30 @@
 // 自动更新共用模块 — Settings 的"关于"section 和 footer 按钮共用同一套
 // 状态机 + 对话框 UI。两边各自调用 useAutoUpdate()，dialog 渲染条件相同。
+//
+// 渠道感知：check 不再走 plugin-updater 的 JS check()（它只看 tauri.conf 配的
+// Stable manifest URL），改为 invoke('app_check_update_with_channel')。
+// Rust 那边按 prefs.update_channel 决定 manifest URL；返回的 metadata 直接
+// `new Update(metadata)` 复用 plugin 的 download / install / close 实现，
+// 我们不重复造下载和签名校验。
 
 import { useEffect, useRef, useState } from 'react';
-import type { Update, DownloadEvent } from '@tauri-apps/plugin-updater';
+import { invoke } from '@tauri-apps/api/core';
+import type { DownloadEvent } from '@tauri-apps/plugin-updater';
+import { Update } from '@tauri-apps/plugin-updater';
 import { useTranslation } from 'react-i18next';
 import { isTauri, restartApp } from '../lib/ipc';
 import { Btn } from '../pages/_atoms';
 
 const UPDATE_CHECK_TIMEOUT_MS = 8_000; // 缩短超时，让镜像站慢的情况能更快 fallback
+
+interface AppUpdateMetadata {
+  rid: number;
+  currentVersion: string;
+  version: string;
+  date?: string | null;
+  body?: string | null;
+  rawJson: Record<string, unknown>;
+}
 
 export type UpdateStatus =
   | 'idle'
@@ -79,11 +96,28 @@ export function useAutoUpdate(): UseAutoUpdate {
         setStatus('none');
         return;
       }
-      const { check } = await import('@tauri-apps/plugin-updater');
-      const next = await check({ timeout: UPDATE_CHECK_TIMEOUT_MS });
+      // Rust 侧按 update_channel 拼 manifest URL：Stable → tauri.conf 默认；
+      // Beta → fetch_latest_beta_release 拼出 -beta manifest URL 后再 check。
+      const metadata = await invoke<AppUpdateMetadata | null>('app_check_update_with_channel', {
+        timeoutMs: UPDATE_CHECK_TIMEOUT_MS,
+      });
+      if (!metadata) {
+        setStatus('none');
+        return;
+      }
+      // metadata 形状跟 plugin 自己 check 返回的 UpdateMetadata 完全一致；
+      // new Update(metadata) 直接复用 plugin 的 download/install/close 实现。
+      const next = new Update({
+        rid: metadata.rid,
+        currentVersion: metadata.currentVersion,
+        version: metadata.version,
+        date: metadata.date ?? undefined,
+        body: metadata.body ?? undefined,
+        rawJson: metadata.rawJson,
+      });
       updateRef.current = next;
-      setVersion(next?.version ?? '');
-      setStatus(next ? 'available' : 'none');
+      setVersion(next.version);
+      setStatus('available');
     } catch (error) {
       console.error('[updater] failed to check update', error);
       setStatus('error');

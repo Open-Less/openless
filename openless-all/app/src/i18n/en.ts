@@ -782,7 +782,7 @@ export const en: typeof zhCN = {
       privacyDesc: 'All transcripts stay on this device. Cloud APIs are only called for real-time transcription/polish; no recordings are retained.',
       localFirst: 'Local-first',
       betaChannelLabel: 'Join Beta channel',
-      betaChannelDesc: 'Stable channel is the default. Enabling this exposes a manual download link to the latest Beta below; Beta builds are NOT pushed to regular users via auto-update — you have to download and install them yourself. May be unstable, only recommended if you are willing to test pre-release builds and report issues.',
+      betaChannelDesc: 'Stable channel is the default. When enabled, the app’s "Check for updates" auto-fetches the latest Beta release (with features not yet promoted to Stable). Beta builds are physically isolated from Stable manifests, so regular users are never affected. May be unstable; only recommended if you are willing to test pre-release builds and report issues.',
       betaChannelFetching: 'Fetching the latest Beta…',
       betaChannelFetchBtn: 'Look up latest Beta',
       betaChannelLatestPrefix: 'Latest Beta:',
@@ -790,6 +790,10 @@ export const en: typeof zhCN = {
       betaChannelRefresh: 'Refresh',
       betaChannelNoBeta: 'No Beta release has been published yet.',
       betaChannelFetchError: 'Failed to fetch Beta release info. Please try again later.',
+      betaChannelUpToDate: 'Up to date',
+      betaChannelUpdateNow: 'Update now',
+      betaChannelUpdateNowTitle: 'Check and download the latest Beta, then show the update dialog',
+      betaChannelChecking: 'Checking…',
       updateDialog: {
         available: {
           title: 'Update available',

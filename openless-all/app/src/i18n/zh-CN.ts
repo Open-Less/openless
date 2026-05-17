@@ -780,7 +780,7 @@ export const zhCN = {
       privacyDesc: '所有识别结果仅保存在本机。云端 API 仅用于实时转写与润色，不会保留你的录音。',
       localFirst: '本地优先',
       betaChannelLabel: '加入 Beta 渠道',
-      betaChannelDesc: '默认拿到的是正式版。打开后可在下方看到最新 Beta 版的下载入口；Beta 包不会通过自动更新推到普通用户，需要手动下载安装。可能不稳定，仅推荐愿意尝鲜与反馈问题的用户开启。',
+      betaChannelDesc: '默认拿到的是正式版。打开后，App 的「检查更新」会自动接收最新 Beta 版本（含未上 Stable 的功能）。Beta 包跟 Stable 渠道物理隔离，普通用户不会被波及。可能不稳定，仅推荐愿意尝鲜与反馈问题的用户开启。',
       betaChannelFetching: '正在获取最新 Beta 版本…',
       betaChannelFetchBtn: '查询最新 Beta',
       betaChannelLatestPrefix: '最新 Beta：',
@@ -788,6 +788,10 @@ export const zhCN = {
       betaChannelRefresh: '重新查询',
       betaChannelNoBeta: '暂无已发布的 Beta 版。',
       betaChannelFetchError: '获取 Beta 版本信息失败，请稍后重试。',
+      betaChannelUpToDate: '已是最新',
+      betaChannelUpdateNow: '立即更新',
+      betaChannelUpdateNowTitle: '检查并下载最新 Beta，然后弹出更新对话框',
+      betaChannelChecking: '检查中…',
       updateDialog: {
         available: {
           title: '发现新版本',

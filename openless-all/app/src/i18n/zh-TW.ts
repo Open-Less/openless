@@ -782,7 +782,7 @@ export const zhTW: typeof zhCN = {
       privacyDesc: '所有識別結果僅保存在本機。雲端 API 僅用於實時轉寫與潤色，不會保留你的錄音。',
       localFirst: '本地優先',
       betaChannelLabel: '加入 Beta 渠道',
-      betaChannelDesc: '預設拿到的是正式版。打開後可在下方看到最新 Beta 版的下載入口；Beta 包不會通過自動更新推送給普通用戶，需要手動下載安裝。可能不穩定，僅推薦願意嘗鮮並回報問題的用戶開啟。',
+      betaChannelDesc: '預設拿到的是正式版。打開後，App 的「檢查更新」會自動接收最新 Beta 版本（含未上 Stable 的功能）。Beta 包跟 Stable 渠道物理隔離，普通用戶不會被波及。可能不穩定，僅推薦願意嘗鮮並回報問題的用戶開啟。',
       betaChannelFetching: '正在獲取最新 Beta 版本…',
       betaChannelFetchBtn: '查詢最新 Beta',
       betaChannelLatestPrefix: '最新 Beta：',
@@ -790,6 +790,10 @@ export const zhTW: typeof zhCN = {
       betaChannelRefresh: '重新查詢',
       betaChannelNoBeta: '尚未發佈過 Beta 版。',
       betaChannelFetchError: '獲取 Beta 版本資訊失敗，請稍後重試。',
+      betaChannelUpToDate: '已是最新',
+      betaChannelUpdateNow: '立即更新',
+      betaChannelUpdateNowTitle: '檢查並下載最新 Beta，然後彈出更新對話框',
+      betaChannelChecking: '檢查中…',
       updateDialog: {
         available: {
           title: '發現新版本',

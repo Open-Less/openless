@@ -784,7 +784,7 @@ export const ja: typeof zhCN = {
       privacyDesc: 'すべての認識結果はローカルにのみ保存されます。クラウド API はリアルタイム転写と整文にのみ使用され、録音は保持されません。',
       localFirst: 'ローカル優先',
       betaChannelLabel: 'Beta チャンネルに参加',
-      betaChannelDesc: '既定は正式版です。オンにすると最新 Beta 版のダウンロードリンクが下に表示されます。Beta ビルドは自動更新で配布されず、手動でダウンロード・インストールする必要があります。不安定な場合があるため、検証とフィードバック協力に同意するユーザーのみ推奨。',
+      betaChannelDesc: '既定は正式版です。オンにすると、アプリの「更新を確認」が最新 Beta 版（Stable 未公開機能を含む）を自動取得します。Beta ビルドは Stable とマニフェストが物理的に分離されており、一般ユーザーへ波及しません。不安定な場合があるため、検証とフィードバック協力に同意するユーザーのみ推奨。',
       betaChannelFetching: '最新 Beta 版を取得中…',
       betaChannelFetchBtn: '最新 Beta を確認',
       betaChannelLatestPrefix: '最新 Beta：',
@@ -792,6 +792,10 @@ export const ja: typeof zhCN = {
       betaChannelRefresh: '再取得',
       betaChannelNoBeta: 'まだ Beta リリースは公開されていません。',
       betaChannelFetchError: 'Beta バージョン情報の取得に失敗しました。後で再試行してください。',
+      betaChannelUpToDate: '最新です',
+      betaChannelUpdateNow: '今すぐ更新',
+      betaChannelUpdateNowTitle: '最新 Beta を確認・ダウンロードし、更新ダイアログを表示します',
+      betaChannelChecking: '確認中…',
       updateDialog: {
         available: {
           title: '新しいバージョンがあります',
