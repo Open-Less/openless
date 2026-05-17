@@ -39,6 +39,17 @@ jobs:
         with:
           fetch-depth: 1
 
+      # Detach HEAD 释放 refs/heads/<default-branch> 这个本地分支名。
+      # 背景：claude-code-action 在 fork PR 上会执行
+      #   git fetch origin pull/<n>/head:<head-ref-name>
+      # 把 PR head 拉到与 fork 端 head 同名的本地分支。当 fork PR 的 head ref
+      # 与本仓库 base / 默认分支同名（例如 fork 也是 beta → beta）时，
+      # 上面那条 fetch 会撞上"当前已 checkout 的分支"而失败：
+      #   fatal: refusing to fetch into branch 'refs/heads/beta' checked out at ...
+      # 提前 detach 让本地分支名可以被 action 重新使用。
+      - name: Detach HEAD to free local branch ref
+        run: git checkout --detach
+
       - name: Pick model (default sonnet, opt-in opus)
         id: pick_model
         env:
