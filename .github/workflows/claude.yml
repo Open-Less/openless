@@ -2,7 +2,7 @@ name: Claude Code
 
 # 触发策略：
 # - 默认不主动 review；任何 PR 打开 / 同步都不会自动调用模型，避免烧 OAuth token 额度。
-# - 评论 / review / issue 中出现 `@claude` 才触发，且发起者必须是仓库 OWNER（appergb）。
+# - 评论 / review / issue 中出现 `@claude` 才触发，且发起者必须是 Open-Less 组织成员（OWNER 或 MEMBER）。
 # - 模型默认 claude-sonnet-4-6（量大、成本低）；评论里写 `--opus` 或包含 `claude-opus`
 #   字样会切到 claude-opus-4-7（用于需要更深推理的任务）。
 
@@ -18,13 +18,14 @@ on:
 
 jobs:
   claude:
-    # 双重门禁：(1) 内容含 @claude  (2) 触发者是 OWNER。
-    # author_association == 'OWNER' 是 GitHub 内建字段，免一次 API 调用。
+    # 双重门禁：(1) 内容含 @claude  (2) 触发者是 OWNER 或 MEMBER（Open-Less 组织成员）。
+    # 注：仓库已转入 Open-Less 组织后，author_association 对人类用户最高只会是 MEMBER，
+    # OWNER 此时只对个人账号下的同名仓库有效，这里保留是为了兼容仓库再次个人持有的情形。
     if: |
-      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude') && github.event.comment.author_association == 'OWNER') ||
-      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude') && github.event.comment.author_association == 'OWNER') ||
-      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude') && github.event.review.author_association == 'OWNER') ||
-      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')) && github.event.issue.author_association == 'OWNER')
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude') && contains(fromJson('["OWNER","MEMBER"]'), github.event.comment.author_association)) ||
+      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude') && contains(fromJson('["OWNER","MEMBER"]'), github.event.comment.author_association)) ||
+      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude') && contains(fromJson('["OWNER","MEMBER"]'), github.event.review.author_association)) ||
+      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')) && contains(fromJson('["OWNER","MEMBER"]'), github.event.issue.author_association))
     runs-on: ubuntu-latest
     permissions:
       contents: read
