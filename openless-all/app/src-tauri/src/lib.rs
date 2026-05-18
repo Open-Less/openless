@@ -131,12 +131,8 @@ pub fn run() {
                 }
                 #[cfg(target_os = "windows")]
                 {
-                    use window_vibrancy::apply_acrylic;
-                    if let Err(e) = apply_windows_capsule_acrylic_region(&capsule, false) {
-                        log::warn!("[capsule] acrylic region failed: {e}");
-                    }
-                    if let Err(e) = apply_acrylic(&capsule, Some((30, 32, 38, 140))) {
-                        log::warn!("[capsule] acrylic failed: {e}");
+                    if let Err(e) = apply_windows_capsule_material_region(&capsule, false) {
+                        log::warn!("[capsule] material region failed: {e}");
                     }
                 }
                 let _ = capsule.hide();
@@ -773,22 +769,13 @@ fn create_windows_capsule_round_region(
 }
 
 #[cfg(target_os = "windows")]
-fn apply_windows_capsule_acrylic_region<R: Runtime>(
-    window: &tauri::WebviewWindow<R>,
+fn create_windows_capsule_region(
+    bounds: CapsuleWindowBounds,
     translation_active: bool,
-) -> Result<(), String> {
-    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-    use windows::Win32::Foundation::HWND;
-    use windows::Win32::Graphics::Gdi::{CombineRgn, DeleteObject, SetWindowRgn, RGN_OR};
+    scale: f64,
+) -> Result<windows::Win32::Graphics::Gdi::HRGN, String> {
+    use windows::Win32::Graphics::Gdi::{CombineRgn, DeleteObject, RGN_OR};
 
-    let handle = match window.window_handle().map(|h| h.as_raw()) {
-        Ok(RawWindowHandle::Win32(handle)) => handle,
-        Ok(other) => return Err(format!("unexpected raw window handle: {other:?}")),
-        Err(e) => return Err(format!("read raw window handle failed: {e}")),
-    };
-    let hwnd = HWND(handle.hwnd.get() as *mut core::ffi::c_void);
-    let scale = window.scale_factor().unwrap_or(1.0);
-    let bounds = capsule_window_bounds(translation_active);
     let pill_x = (bounds.width - WINDOWS_CAPSULE_PILL_WIDTH) / 2.0;
     let pill_y = bounds.height - WINDOWS_CAPSULE_BOTTOM_INSET - WINDOWS_CAPSULE_PILL_HEIGHT;
     let region = create_windows_capsule_round_region(
@@ -822,7 +809,9 @@ fn apply_windows_capsule_acrylic_region<R: Runtime>(
             unsafe {
                 let _ = DeleteObject(region);
             }
-            return Err("CreateRoundRectRgn for translation badge returned an invalid region".into());
+            return Err(
+                "CreateRoundRectRgn for translation badge returned an invalid region".into(),
+            );
         }
         unsafe {
             let _ = CombineRgn(region, region, badge_region, RGN_OR);
@@ -830,10 +819,63 @@ fn apply_windows_capsule_acrylic_region<R: Runtime>(
         }
     }
 
-    let applied = unsafe { SetWindowRgn(hwnd, region, true) };
+    Ok(region)
+}
+
+#[cfg(target_os = "windows")]
+fn apply_windows_capsule_material_region<R: Runtime>(
+    window: &tauri::WebviewWindow<R>,
+    translation_active: bool,
+) -> Result<(), String> {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows::Win32::Foundation::{BOOL, HWND};
+    use windows::Win32::Graphics::Dwm::{
+        DwmEnableBlurBehindWindow, DwmSetWindowAttribute, DWMSBT_NONE, DWMWA_SYSTEMBACKDROP_TYPE,
+        DWM_BB_BLURREGION, DWM_BB_ENABLE, DWM_BLURBEHIND,
+    };
+    use windows::Win32::Graphics::Gdi::{DeleteObject, SetWindowRgn};
+
+    let handle = match window.window_handle().map(|h| h.as_raw()) {
+        Ok(RawWindowHandle::Win32(handle)) => handle,
+        Ok(other) => return Err(format!("unexpected raw window handle: {other:?}")),
+        Err(e) => return Err(format!("read raw window handle failed: {e}")),
+    };
+    let hwnd = HWND(handle.hwnd.get() as *mut core::ffi::c_void);
+    let bounds = capsule_window_bounds(translation_active);
+    let scale = window.scale_factor().unwrap_or(1.0);
+
+    // Win11's DWMWA_SYSTEMBACKDROP_TYPE / window-vibrancy Acrylic paints the full
+    // rectangular HWND and ignores SetWindowRgn, which creates a visible grey host
+    // behind the capsule. Use DWM's native blur-region path instead: it keeps a
+    // Windows material inside the rounded visible region while leaving host
+    // margins genuinely transparent.
+    let blur_region = create_windows_capsule_region(bounds, translation_active, scale)?;
+    let disable_backdrop = DWMSBT_NONE;
+    unsafe {
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_SYSTEMBACKDROP_TYPE,
+            &disable_backdrop as *const _ as *const core::ffi::c_void,
+            std::mem::size_of_val(&disable_backdrop) as u32,
+        );
+        let blur = DWM_BLURBEHIND {
+            dwFlags: DWM_BB_ENABLE | DWM_BB_BLURREGION,
+            fEnable: BOOL(1),
+            hRgnBlur: blur_region,
+            fTransitionOnMaximized: BOOL(0),
+        };
+        if let Err(e) = DwmEnableBlurBehindWindow(hwnd, &blur) {
+            let _ = DeleteObject(blur_region);
+            return Err(format!("DwmEnableBlurBehindWindow failed: {e}"));
+        }
+        let _ = DeleteObject(blur_region);
+    }
+
+    let paint_region = create_windows_capsule_region(bounds, translation_active, scale)?;
+    let applied = unsafe { SetWindowRgn(hwnd, paint_region, true) };
     if applied == 0 {
         unsafe {
-            let _ = DeleteObject(region);
+            let _ = DeleteObject(paint_region);
         }
         return Err("SetWindowRgn failed".into());
     }
@@ -1316,8 +1358,8 @@ pub(crate) fn position_capsule_bottom_center<R: tauri::Runtime>(
     let bounds = capsule_window_bounds(translation_active);
     window.set_size(LogicalSize::new(bounds.width, bounds.height))?;
     #[cfg(target_os = "windows")]
-    if let Err(e) = apply_windows_capsule_acrylic_region(window, translation_active) {
-        log::warn!("[capsule] acrylic region update failed: {e}");
+    if let Err(e) = apply_windows_capsule_material_region(window, translation_active) {
+        log::warn!("[capsule] material region update failed: {e}");
     }
 
     let scale = monitor.scale_factor();

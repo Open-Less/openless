@@ -6,26 +6,38 @@ function assertMatch(source, pattern, name) {
   }
 }
 
+function assertNotMatch(source, pattern, name) {
+  if (pattern.test(source)) {
+    throw new Error(`${name}: forbidden pattern ${pattern} found`);
+  }
+}
+
 const libRs = await readFile(new URL('../src-tauri/src/lib.rs', import.meta.url), 'utf-8');
 const capsuleTsx = await readFile(new URL('../src/components/Capsule.tsx', import.meta.url), 'utf-8');
 const capsuleLayoutTs = await readFile(new URL('../src/lib/capsuleLayout.ts', import.meta.url), 'utf-8');
 
 assertMatch(
   libRs,
-  /fn apply_windows_capsule_acrylic_region<R: Runtime>\([\s\S]*?SetWindowRgn\(hwnd,\s*region,\s*true\)/,
-  'windows capsule should clip its native Acrylic to pill/badge regions instead of tinting the whole host',
+  /fn apply_windows_capsule_material_region<R: Runtime>\([\s\S]*?DwmEnableBlurBehindWindow\(hwnd,\s*&blur\)[\s\S]*?SetWindowRgn\(hwnd,\s*paint_region,\s*true\)/,
+  'windows capsule should use a DWM blur region and a native paint region instead of tinting the whole host',
 );
 
 assertMatch(
   libRs,
-  /apply_windows_capsule_acrylic_region\(&capsule,\s*false\)[\s\S]*?apply_acrylic\(&capsule,\s*Some\(\(30,\s*32,\s*38,\s*140\)\)\)/,
-  'windows capsule should keep Acrylic, but only after the native host region is clipped',
+  /DwmSetWindowAttribute\([\s\S]*?DWMWA_SYSTEMBACKDROP_TYPE[\s\S]*?DWMSBT_NONE[\s\S]*?DWM_BB_ENABLE \| DWM_BB_BLURREGION/,
+  'windows capsule should explicitly disable full-window Win11 system backdrop before enabling region-scoped native blur',
+);
+
+assertNotMatch(
+  libRs,
+  /apply_acrylic\(&capsule,/,
+  'windows capsule must not use window-vibrancy Acrylic because it paints a rectangular grey host on Win11',
 );
 
 assertMatch(
   libRs,
-  /position_capsule_bottom_center[\s\S]*?apply_windows_capsule_acrylic_region\(window,\s*translation_active\)/,
-  'windows capsule should update the Acrylic region when translation mode changes the host height',
+  /position_capsule_bottom_center[\s\S]*?apply_windows_capsule_material_region\(window,\s*translation_active\)/,
+  'windows capsule should update the material region when translation mode changes the host height',
 );
 
 assertMatch(
@@ -49,7 +61,7 @@ assertMatch(
 assertMatch(
   capsuleTsx,
   /const useBackdrop = true;[\s\S]*?background: 'rgba\(255, 255, 255, 0\.85\)'/,
-  'windows capsule should keep the original translucent pill surface because native Acrylic is clipped, not removed',
+  'windows capsule should keep the original translucent pill surface because native material is region-scoped, not removed',
 );
 
 assertMatch(
