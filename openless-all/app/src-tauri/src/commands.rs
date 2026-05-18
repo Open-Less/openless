@@ -560,9 +560,12 @@ fn select_ready_beta_manifest_endpoints(
         return Ok(ready);
     }
 
+    // A mirror/CDN can fail while the canonical asset is still being uploaded.
+    // As long as any probed endpoint proves the platform manifest is still
+    // missing with 404, treat this check as a publishing window and stay quiet.
     if probes
         .iter()
-        .all(|probe| matches!(probe, BetaManifestProbe::PendingStatus(404)))
+        .any(|probe| matches!(probe, BetaManifestProbe::PendingStatus(404)))
     {
         return Ok(Vec::new());
     }
@@ -3810,6 +3813,18 @@ mod tests {
         let probes = vec![
             BetaManifestProbe::PendingStatus(404),
             BetaManifestProbe::PendingStatus(404),
+        ];
+
+        let ready = select_ready_beta_manifest_endpoints(&probes).unwrap();
+
+        assert!(ready.is_empty());
+    }
+
+    #[test]
+    fn beta_manifest_probe_treats_404_with_transient_failure_as_release_pending() {
+        let probes = vec![
+            BetaManifestProbe::PendingStatus(404),
+            BetaManifestProbe::Failed("mirror timeout".into()),
         ];
 
         let ready = select_ready_beta_manifest_endpoints(&probes).unwrap();
