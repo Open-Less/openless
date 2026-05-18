@@ -1,6 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { App } from "./App";
+import { detectOS } from "./components/WindowChrome";
 import i18n from "./i18n"; // 副作用：触发 i18next init
 import "./styles/tokens.css";
 import "./styles/global.css";
@@ -9,6 +10,13 @@ const params = new URLSearchParams(window.location.search);
 const windowKind = params.get("window");
 const isCapsule = windowKind === "capsule";
 const isQa = windowKind === "qa";
+const openlessWindowKind = isCapsule ? "capsule" : isQa ? "qa" : "main";
+const openlessPlatform = detectOS();
+
+document.documentElement.dataset.openlessWindow = openlessWindowKind;
+document.documentElement.dataset.openlessPlatform = openlessPlatform;
+document.body.dataset.openlessWindow = openlessWindowKind;
+document.body.dataset.openlessPlatform = openlessPlatform;
 
 const root = ReactDOM.createRoot(document.getElementById("root")!);
 

@@ -514,6 +514,8 @@ export const en: typeof zhCN = {
       modeDesc: 'Toggle = tap once to start, again to stop. Push-to-talk = hold to record.',
       modeToggle: 'Toggle',
       modeHold: 'Push-to-talk',
+      rightCtrlHoldWarningTitle: 'Right Ctrl may conflict with chat send shortcuts',
+      rightCtrlHoldWarningDesc: 'Push-to-talk reserves Right Ctrl while recording, so Right Ctrl+Enter in apps like QQ or WeChat may arrive as Enter only. Switch back to Toggle, or choose a shortcut that is not used for sending messages.',
       migrationNoticeTitle: 'Default recording mode is now Toggle',
       migrationNoticeDesc: 'This update changes the default; if you prefer push-to-talk, switch it back here.',
       microphoneLabel: 'Preferred microphone',

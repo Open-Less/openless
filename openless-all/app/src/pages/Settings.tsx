@@ -343,6 +343,10 @@ function RecordingSection() {
   const selectedMicrophoneLabel = effectiveMicrophoneDeviceName
     ? effectiveMicrophoneDeviceName
     : t('settings.recording.microphoneDefault');
+  const showRightCtrlHoldWarning = detectOS() === 'win'
+    && prefs.hotkey.mode === 'hold'
+    && prefs.dictationHotkey.primary === 'RightControl'
+    && prefs.dictationHotkey.modifiers.length === 0;
 
   return (
     <>
@@ -398,6 +402,25 @@ function RecordingSection() {
           ))}
         </div>
       </SettingRow>
+      {showRightCtrlHoldWarning && (
+        <div
+          style={{
+            marginTop: 2,
+            marginBottom: 10,
+            padding: '10px 12px',
+            borderRadius: 8,
+            background: 'rgba(245, 158, 11, 0.10)',
+            border: '0.5px solid rgba(245, 158, 11, 0.24)',
+          }}
+        >
+          <div style={{ fontSize: 12, fontWeight: 600, color: '#92400e', marginBottom: 3 }}>
+            {t('settings.recording.rightCtrlHoldWarningTitle')}
+          </div>
+          <div style={{ fontSize: 11.5, color: 'var(--ol-ink-3)', lineHeight: 1.55 }}>
+            {t('settings.recording.rightCtrlHoldWarningDesc')}
+          </div>
+        </div>
+      )}
       <SettingRow label={t('settings.recording.microphoneLabel')} desc={t('settings.recording.microphoneDesc')}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           <button

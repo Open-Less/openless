@@ -514,6 +514,8 @@ export const zhTW: typeof zhCN = {
       modeDesc: '切換式 = 按一次開始、再按一次結束；按住說話 = 按住開始、鬆開結束。',
       modeToggle: '切換式',
       modeHold: '按住說話',
+      rightCtrlHoldWarningTitle: '右 Ctrl 可能與聊天送出快捷鍵衝突',
+      rightCtrlHoldWarningDesc: '按住說話會在錄音期間佔用右 Ctrl，QQ / 微信裏的右 Ctrl+Enter 可能只收到 Enter。建議切回切換式，或改用不參與送出訊息的快捷鍵。',
       migrationNoticeTitle: '默認已改爲切換式說話',
       migrationNoticeDesc: '如果你之前改過快捷鍵觸發方式，請在這裏手動確認一次。本次更新調整了快捷鍵方式的默認值與讀取邏輯；如果你更習慣按住說話，可以重新切回“按住說話”。',
       comboRecordLabel: '錄製快捷鍵',

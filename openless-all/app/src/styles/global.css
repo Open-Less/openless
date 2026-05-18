@@ -7,6 +7,12 @@ html, body, #root {
   overflow: hidden;
 }
 
+html[data-openless-window="main"][data-openless-platform="win"],
+html[data-openless-window="main"][data-openless-platform="win"] body,
+html[data-openless-window="main"][data-openless-platform="win"] #root {
+  background: #f5f5f7;
+}
+
 body {
   background: transparent;
   user-select: none;

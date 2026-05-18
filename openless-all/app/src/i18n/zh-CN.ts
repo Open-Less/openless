@@ -512,6 +512,8 @@ export const zhCN = {
       modeDesc: '切换式按一次开始、再按一次结束；按住说话按下保持、松开结束。',
       modeToggle: '切换式',
       modeHold: '按住说话',
+      rightCtrlHoldWarningTitle: '右 Ctrl 可能与聊天发送快捷键冲突',
+      rightCtrlHoldWarningDesc: '按住说话会在录音期间占用右 Ctrl，QQ / 微信里的右 Ctrl+Enter 可能只收到 Enter。建议切回切换式，或改用不参与发送消息的快捷键。',
       migrationNoticeTitle: '默认已改为切换式说话',
       migrationNoticeDesc: '本次更新调整了默认值，如果习惯按住说话，请在此处切回。',
       microphoneLabel: '首选麦克风',

@@ -516,6 +516,8 @@ export const ko: typeof zhCN = {
       modeDesc: '토글 방식 = 한 번 누르면 시작, 다시 누르면 종료; 눌러서 말하기 = 누르고 있는 동안만 녹음.',
       modeToggle: '토글 방식',
       modeHold: '눌러서 말하기',
+      rightCtrlHoldWarningTitle: '오른쪽 Ctrl 이 채팅 전송 단축키와 충돌할 수 있습니다',
+      rightCtrlHoldWarningDesc: '눌러서 말하기는 녹음 중 오른쪽 Ctrl 을 예약하므로 QQ / WeChat 등의 오른쪽 Ctrl+Enter 가 Enter 만으로 전달될 수 있습니다. 토글 방식으로 돌아가거나 메시지 전송에 쓰지 않는 단축키를 선택하세요.',
       migrationNoticeTitle: '기본값이 토글 방식으로 변경됨',
       migrationNoticeDesc: '이전에 트리거 방식을 변경했다면 여기서 다시 한 번 확인해 주세요. 이번 업데이트는 단축키 방식의 기본값과 읽기 로직을 조정했습니다. "눌러서 말하기"가 더 익숙하다면 다시 전환할 수 있습니다.',
       microphoneLabel: '기본 선택 마이크',

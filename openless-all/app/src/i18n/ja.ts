@@ -516,6 +516,8 @@ export const ja: typeof zhCN = {
       modeDesc: 'トグル式 = 1 回押して開始、もう 1 回押して終了；押し続けて話す = 押している間だけ録音。',
       modeToggle: 'トグル式',
       modeHold: '押し続けて話す',
+      rightCtrlHoldWarningTitle: '右 Ctrl はチャット送信ショートカットと競合する場合があります',
+      rightCtrlHoldWarningDesc: '押し続けて話すでは録音中に右 Ctrl を予約するため、QQ / WeChat などの右 Ctrl+Enter が Enter だけとして届く場合があります。トグル式に戻すか、送信に使わないショートカットを選んでください。',
       migrationNoticeTitle: 'デフォルトがトグル式に変更されました',
       migrationNoticeDesc: '以前にトリガー方式を変更していた場合は、ここで再度確認してください。今回のアップデートではショートカット方式のデフォルト値と読み込みロジックが変更されています。「押し続けて話す」が好みであれば再度切り替えてください。',
       microphoneLabel: '優先マイク',
