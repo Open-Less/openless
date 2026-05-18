@@ -1305,11 +1305,17 @@ fn combo_hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<ComboHotkeyEve
         }
         let inner_cloned = Arc::clone(&inner);
         match evt {
+            // P0 #468/#475: 同 hotkey_bridge_loop —— Pressed/Released 必须串行 await，
+            // 否则 latch 竞态导致 combo 快捷键二次按键失效。
             ComboHotkeyEvent::Pressed => {
-                async_runtime::spawn(async move { handle_pressed_edge(&inner_cloned).await });
+                async_runtime::block_on(async {
+                    handle_pressed_edge(&inner_cloned).await;
+                });
             }
             ComboHotkeyEvent::Released => {
-                async_runtime::spawn(async move { handle_released_edge(&inner_cloned).await });
+                async_runtime::block_on(async {
+                    handle_released_edge(&inner_cloned).await;
+                });
             }
         }
     }
@@ -1697,11 +1703,25 @@ fn hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<HotkeyEvent>) {
         }
         let inner_cloned = Arc::clone(&inner);
         match evt {
+            // P0 #468/#475: Pressed/Released 必须串行处理，否则在 Windows 上 WH_KEYBOARD_LL
+            // 边沿间隔微秒级 → 两个独立 spawn 的 task 被 work-stealing 调度器并行执行 →
+            // `hotkey_trigger_held` latch 翻转顺序错乱 → 下次按键被静默吞掉
+            // (UI 关不掉 / 录音停不下来)。改为 bridge 线程内 block_on 顺序 await，
+            // recv 的 FIFO 顺序就是 handler 执行顺序。
+            // 注意：handle_pressed_edge / handle_released_edge 内部走 .await（含网络
+            // 握手），会暂时阻塞本 bridge 线程；Hold 模式短按时 Released 会排队在 channel
+            // 里直到 begin_session 完成，但 SessionPhase::Starting 已经有
+            // request_stop_during_starting 兜底，begin_session 完成进 Listening 后
+            // bridge 立刻 recv Released → end_session，行为正确，仅有短暂 stop 延迟。
             HotkeyEvent::Pressed => {
-                async_runtime::spawn(async move { handle_pressed_edge(&inner_cloned).await });
+                async_runtime::block_on(async {
+                    handle_pressed_edge(&inner_cloned).await;
+                });
             }
             HotkeyEvent::Released => {
-                async_runtime::spawn(async move { handle_released_edge(&inner_cloned).await });
+                async_runtime::block_on(async {
+                    handle_released_edge(&inner_cloned).await;
+                });
             }
             HotkeyEvent::Cancelled => {
                 cancel_session(&inner_cloned);
@@ -2091,7 +2111,10 @@ fn ensure_asr_credentials() -> Result<(), String> {
         {
             return Err("Foundry Local Whisper 当前仅支持 Windows".to_string());
         }
-        return Ok(());
+        #[cfg(target_os = "windows")]
+        {
+            return Ok(());
+        }
     }
 
     if is_whisper_compatible_provider(&active_asr) || is_bailian_provider(&active_asr) {
