@@ -26,8 +26,8 @@ export interface CapsuleMessageLayout {
 export function getCapsulePillMetrics(os: OS): CapsulePillMetrics {
   if (os === 'win') {
     // Windows metrics describe the visible outer footprint of the pill.
-    // 与 macOS pill 接近以保持视觉密度一致；保留 ~4-5% 余量适配 Windows 字体 metrics。
-    return { width: 180, height: 44, textWidth: 88, boxSizing: 'border-box' };
+    // 与 Rust capsule_window_bounds 保持一致：220px host = 196px pill + 12px side insets.
+    return { width: 196, height: 52, textWidth: 104, boxSizing: 'border-box' };
   }
 
   return { width: 176, height: 42, textWidth: 84, boxSizing: 'border-box' };

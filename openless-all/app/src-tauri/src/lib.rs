@@ -129,15 +129,12 @@ pub fn run() {
                 if let Err(e) = position_capsule_bottom_center(&capsule, false) {
                     log::warn!("[capsule] position failed: {e}");
                 }
-                // Windows 上 transparent:true 让窗口对桌面完全透明，Webview2 的
-                // backdrop-filter 只能模糊 DOM 内部，模糊不到 OS 桌面 → 胶囊背景
-                // 看起来就是「透到桌面」。这里给 Win10/Win11 都支持的 Acrylic 做兜底，
-                // 让 OS 提供毛玻璃材质，胶囊 rgba(255,255,255,0.85) 上面再叠 DOM 模糊。
-                // 失败不阻塞（老 Win10 / Win7 上 Acrylic 不可用），仅 warn。
                 #[cfg(target_os = "windows")]
                 {
                     use window_vibrancy::apply_acrylic;
-                    // 中性偏冷的浅灰半透，与胶囊白底叠合后保持可读性。
+                    if let Err(e) = apply_windows_capsule_acrylic_region(&capsule, false) {
+                        log::warn!("[capsule] acrylic region failed: {e}");
+                    }
                     if let Err(e) = apply_acrylic(&capsule, Some((30, 32, 38, 140))) {
                         log::warn!("[capsule] acrylic failed: {e}");
                     }
@@ -726,6 +723,123 @@ fn apply_windows_caption_color<R: Runtime>(window: &tauri::WebviewWindow<R>) {
     }
 }
 
+#[cfg(target_os = "windows")]
+const WINDOWS_CAPSULE_PILL_WIDTH: f64 = 196.0;
+#[cfg(target_os = "windows")]
+const WINDOWS_CAPSULE_PILL_HEIGHT: f64 = 52.0;
+#[cfg(target_os = "windows")]
+const WINDOWS_CAPSULE_SIDE_INSET: f64 = 12.0;
+#[cfg(target_os = "windows")]
+const WINDOWS_CAPSULE_BOTTOM_INSET: f64 = 12.0;
+#[cfg(target_os = "windows")]
+const WINDOWS_CAPSULE_BADGE_WIDTH: f64 = 132.0;
+#[cfg(target_os = "windows")]
+const WINDOWS_CAPSULE_BADGE_HEIGHT: f64 = 24.0;
+#[cfg(target_os = "windows")]
+const WINDOWS_CAPSULE_BADGE_GAP: f64 = 8.0;
+
+#[cfg(target_os = "windows")]
+#[derive(Clone, Copy)]
+struct WindowsCapsuleRegionRect {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    radius: f64,
+}
+
+#[cfg(target_os = "windows")]
+fn scale_region_coord(value: f64, scale: f64) -> i32 {
+    (value * scale).round() as i32
+}
+
+#[cfg(target_os = "windows")]
+fn create_windows_capsule_round_region(
+    rect: WindowsCapsuleRegionRect,
+    scale: f64,
+) -> windows::Win32::Graphics::Gdi::HRGN {
+    use windows::Win32::Graphics::Gdi::CreateRoundRectRgn;
+
+    unsafe {
+        CreateRoundRectRgn(
+            scale_region_coord(rect.x, scale),
+            scale_region_coord(rect.y, scale),
+            scale_region_coord(rect.x + rect.width, scale),
+            scale_region_coord(rect.y + rect.height, scale),
+            scale_region_coord(rect.radius * 2.0, scale),
+            scale_region_coord(rect.radius * 2.0, scale),
+        )
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn apply_windows_capsule_acrylic_region<R: Runtime>(
+    window: &tauri::WebviewWindow<R>,
+    translation_active: bool,
+) -> Result<(), String> {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::Graphics::Gdi::{CombineRgn, DeleteObject, SetWindowRgn, RGN_OR};
+
+    let handle = match window.window_handle().map(|h| h.as_raw()) {
+        Ok(RawWindowHandle::Win32(handle)) => handle,
+        Ok(other) => return Err(format!("unexpected raw window handle: {other:?}")),
+        Err(e) => return Err(format!("read raw window handle failed: {e}")),
+    };
+    let hwnd = HWND(handle.hwnd.get() as *mut core::ffi::c_void);
+    let scale = window.scale_factor().unwrap_or(1.0);
+    let bounds = capsule_window_bounds(translation_active);
+    let pill_x = (bounds.width - WINDOWS_CAPSULE_PILL_WIDTH) / 2.0;
+    let pill_y = bounds.height - WINDOWS_CAPSULE_BOTTOM_INSET - WINDOWS_CAPSULE_PILL_HEIGHT;
+    let region = create_windows_capsule_round_region(
+        WindowsCapsuleRegionRect {
+            x: pill_x,
+            y: pill_y,
+            width: WINDOWS_CAPSULE_PILL_WIDTH,
+            height: WINDOWS_CAPSULE_PILL_HEIGHT,
+            radius: WINDOWS_CAPSULE_PILL_HEIGHT / 2.0,
+        },
+        scale,
+    );
+    if region.is_invalid() {
+        return Err("CreateRoundRectRgn for pill returned an invalid region".into());
+    }
+
+    if translation_active {
+        let badge_x = (bounds.width - WINDOWS_CAPSULE_BADGE_WIDTH) / 2.0;
+        let badge_y = pill_y - WINDOWS_CAPSULE_BADGE_GAP - WINDOWS_CAPSULE_BADGE_HEIGHT;
+        let badge_region = create_windows_capsule_round_region(
+            WindowsCapsuleRegionRect {
+                x: badge_x,
+                y: badge_y,
+                width: WINDOWS_CAPSULE_BADGE_WIDTH,
+                height: WINDOWS_CAPSULE_BADGE_HEIGHT,
+                radius: WINDOWS_CAPSULE_BADGE_HEIGHT / 2.0,
+            },
+            scale,
+        );
+        if badge_region.is_invalid() {
+            unsafe {
+                let _ = DeleteObject(region);
+            }
+            return Err("CreateRoundRectRgn for translation badge returned an invalid region".into());
+        }
+        unsafe {
+            let _ = CombineRgn(region, region, badge_region, RGN_OR);
+            let _ = DeleteObject(badge_region);
+        }
+    }
+
+    let applied = unsafe { SetWindowRgn(hwnd, region, true) };
+    if applied == 0 {
+        unsafe {
+            let _ = DeleteObject(region);
+        }
+        return Err("SetWindowRgn failed".into());
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn restart_app(app: AppHandle) {
     // macOS：自动更新会让新装的 .app 带 com.apple.quarantine（无论 Tauri updater
@@ -1201,6 +1315,10 @@ pub(crate) fn position_capsule_bottom_center<R: tauri::Runtime>(
     };
     let bounds = capsule_window_bounds(translation_active);
     window.set_size(LogicalSize::new(bounds.width, bounds.height))?;
+    #[cfg(target_os = "windows")]
+    if let Err(e) = apply_windows_capsule_acrylic_region(window, translation_active) {
+        log::warn!("[capsule] acrylic region update failed: {e}");
+    }
 
     let scale = monitor.scale_factor();
     let size = monitor.size();
@@ -1223,14 +1341,12 @@ struct CapsuleWindowBounds {
 fn capsule_window_bounds(translation_active: bool) -> CapsuleWindowBounds {
     #[cfg(target_os = "windows")]
     {
-        const WINDOWS_CAPSULE_PILL_WIDTH: f64 = 196.0;
-        const WINDOWS_CAPSULE_SIDE_INSET: f64 = 12.0;
         CapsuleWindowBounds {
             // Keep the existing Windows hitbox width, but express it as
             // pill width (196) + symmetric 12px side insets for shadow room.
             width: WINDOWS_CAPSULE_PILL_WIDTH + WINDOWS_CAPSULE_SIDE_INSET * 2.0,
             height: if translation_active { 118.0 } else { 84.0 },
-            bottom_inset: 12.0,
+            bottom_inset: WINDOWS_CAPSULE_BOTTOM_INSET,
         }
     }
 
@@ -1250,7 +1366,7 @@ fn capsule_window_bounds(translation_active: bool) -> CapsuleWindowBounds {
 fn capsule_visual_height(_translation_active: bool) -> f64 {
     #[cfg(target_os = "windows")]
     {
-        52.0
+        WINDOWS_CAPSULE_PILL_HEIGHT
     }
 
     #[cfg(not(target_os = "windows"))]
