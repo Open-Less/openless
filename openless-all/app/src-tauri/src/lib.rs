@@ -129,6 +129,19 @@ pub fn run() {
                 if let Err(e) = position_capsule_bottom_center(&capsule, false) {
                     log::warn!("[capsule] position failed: {e}");
                 }
+                // Windows 上 transparent:true 让窗口对桌面完全透明，Webview2 的
+                // backdrop-filter 只能模糊 DOM 内部，模糊不到 OS 桌面 → 胶囊背景
+                // 看起来就是「透到桌面」。这里给 Win10/Win11 都支持的 Acrylic 做兜底，
+                // 让 OS 提供毛玻璃材质，胶囊 rgba(255,255,255,0.85) 上面再叠 DOM 模糊。
+                // 失败不阻塞（老 Win10 / Win7 上 Acrylic 不可用），仅 warn。
+                #[cfg(target_os = "windows")]
+                {
+                    use window_vibrancy::apply_acrylic;
+                    // 中性偏冷的浅灰半透，与胶囊白底叠合后保持可读性。
+                    if let Err(e) = apply_acrylic(&capsule, Some((30, 32, 38, 140))) {
+                        log::warn!("[capsule] acrylic failed: {e}");
+                    }
+                }
                 let _ = capsule.hide();
             }
 
@@ -142,6 +155,16 @@ pub fn run() {
                 }
                 #[cfg(target_os = "macos")]
                 make_qa_window_draggable_macos(&qa);
+                // 同 capsule：Windows 下 QA 浮窗也走 Acrylic 兜底。QA 面板自身
+                // 已经把 alpha 拉到 0.97（QaPanel.tsx:623），主要是防止 0.03 缝隙
+                // 透到桌面、以及 Win10 上完全无毛玻璃感的兜底。
+                #[cfg(target_os = "windows")]
+                {
+                    use window_vibrancy::apply_acrylic;
+                    if let Err(e) = apply_acrylic(&qa, Some((30, 32, 38, 140))) {
+                        log::warn!("[qa] acrylic failed: {e}");
+                    }
+                }
                 let _ = qa.hide();
             } else {
                 log::info!("[qa] qa 窗口未在 tauri.conf.json 中声明，前端 agent 会补上");
