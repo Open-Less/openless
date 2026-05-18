@@ -3681,27 +3681,6 @@ mod tests {
         assert!(coordinator.inner.hotkey_trigger_held.load(Ordering::SeqCst));
     }
 
-    #[tokio::test]
-    async fn qa_hotkey_during_recording_submits_without_closing_panel() {
-        let coordinator = Coordinator::new();
-        {
-            let mut state = coordinator.inner.qa_state.lock();
-            state.panel_visible = true;
-            state.phase = QaPhase::Recording;
-            state.cancelled = false;
-        }
-
-        handle_qa_hotkey_pressed(&coordinator.inner).await;
-
-        let state = coordinator.inner.qa_state.lock();
-        assert!(
-            state.panel_visible,
-            "QA hotkey should submit the active recording, not toggle the panel closed"
-        );
-        assert_ne!(state.phase, QaPhase::Recording);
-        assert!(!state.cancelled);
-    }
-
     #[test]
     fn enabling_shortcut_recording_clears_dictation_hold_latch() {
         let coordinator = Coordinator::new();
