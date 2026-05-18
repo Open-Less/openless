@@ -109,22 +109,3 @@ a { color: inherit; text-decoration: none; }
   }
 }
 
-/* P0 fallback: Windows / 旧浏览器没有 backdrop-filter 时，半透白底会直接
-   透到桌面（OS material 没接上 / 用户关了透明）。这里给依赖 backdrop 营造
-   可读性的 root 容器一个实色兜底。
-   注意：Capsule.tsx / FloatingShell.tsx 多数样式走 inline style，CSS 选择器
-   无法覆盖 inline；这层只是二级防护。一级防护是 Rust 侧 apply_acrylic。 */
-@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  html, body {
-    background: var(--ol-surface, #f6f7fb);
-  }
-}
-
-/* Win11「设置 → 颜色 → 透明效果关闭」、macOS Reduce Transparency 时，
-   不应再让任何窗口背景保持半透状态。给 html/body 拉一层不透明底，
-   配合上面的 inline-style 限制，至少桌面不会直接透过来。 */
-@media (prefers-reduced-transparency: reduce) {
-  html, body {
-    background: var(--ol-surface, #f6f7fb);
-  }
-}
