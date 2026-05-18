@@ -2,13 +2,18 @@ fn main() {
     #[cfg(target_os = "macos")]
     build_qwen_asr_macos();
 
-    #[cfg(target_os = "windows")]
-    embed_common_controls_v6_manifest_for_tests();
+    if target_is_windows_msvc() {
+        embed_common_controls_v6_manifest_for_tests();
+    }
 
     tauri_build::build();
 }
 
-#[cfg(target_os = "windows")]
+fn target_is_windows_msvc() -> bool {
+    std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
+        && std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc")
+}
+
 fn embed_common_controls_v6_manifest_for_tests() {
     // Unit test harness 不走 Tauri app manifest；没有 Common Controls v6 时会在
     // comctl32!TaskDialogIndirect 的 loader 阶段直接 0xc0000139。
