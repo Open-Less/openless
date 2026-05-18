@@ -53,11 +53,18 @@ export function App({ isCapsule, isQa }: AppProps) {
           const prefs = await getSettings();
           if (prefs.startMinimized) return;
         } catch (err) {
-          // 安全侧默认 = 不弹窗。autostart 早期 IPC 抖动会让 getSettings() 偶发
-          // 失败，旧逻辑（fall through to show）会在用户明明开了静默启动时仍把
-          // 主窗口弹出来 —— issue #468 复现路径。宁可让用户从 tray 手动唤起，
-          // 也不要在 autostart 抖动时强 show 一个白色 / 透明主窗口。
-          console.warn('[startup] read startMinimized failed; staying hidden to avoid #468', err);
+          // 安全侧默认 = 不弹窗。Rust 端 get_settings 签名是
+          // `pub fn get_settings(...) -> UserPreferences`（非 Result），所以
+          // 该 catch 唯一会被触发的场景是 Tauri IPC 基础设施抖动（autostart 早期
+          // __TAURI_INTERNALS__ 还没就绪）。旧逻辑 fall-through to show 会在用户
+          // 开了静默启动时仍把主窗口弹出来 —— #468 复现路径。
+          //
+          // 此时 tray 已由 Rust 端 setup() 在 webview 加载前注册完成，是稳定的
+          // 兜底入口；宁可让用户从 tray 手动唤起，也不要在抖动时强 show 一个白色
+          // / 透明主窗口。首次安装的"prefs 不存在"场景不走这里 —— Rust 端会返回
+          // 默认 UserPreferences。
+          const detail = err instanceof Error ? err.message : String(err);
+          console.warn('[startup] read startMinimized failed; staying hidden to avoid #468:', detail, err);
           return;
         }
         const { getCurrentWindow } = await import('@tauri-apps/api/window');
