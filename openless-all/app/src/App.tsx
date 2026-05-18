@@ -53,9 +53,12 @@ export function App({ isCapsule, isQa }: AppProps) {
           const prefs = await getSettings();
           if (prefs.startMinimized) return;
         } catch (err) {
-          // 读 prefs 失败兜底走原有 show 行为：让权限探测失败的用户也能进 UI，
-          // 避免透明 / 空白窗口前卡死（issue #163 引入这个 show 的原始意图）。
-          console.warn('[startup] read startMinimized failed, falling back to show', err);
+          // 安全侧默认 = 不弹窗。autostart 早期 IPC 抖动会让 getSettings() 偶发
+          // 失败，旧逻辑（fall through to show）会在用户明明开了静默启动时仍把
+          // 主窗口弹出来 —— issue #468 复现路径。宁可让用户从 tray 手动唤起，
+          // 也不要在 autostart 抖动时强 show 一个白色 / 透明主窗口。
+          console.warn('[startup] read startMinimized failed; staying hidden to avoid #468', err);
+          return;
         }
         const { getCurrentWindow } = await import('@tauri-apps/api/window');
         if (cancelled) return;
