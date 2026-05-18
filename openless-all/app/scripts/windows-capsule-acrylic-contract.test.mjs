@@ -16,34 +16,16 @@ const libRs = await readFile(new URL('../src-tauri/src/lib.rs', import.meta.url)
 const capsuleTsx = await readFile(new URL('../src/components/Capsule.tsx', import.meta.url), 'utf-8');
 const capsuleLayoutTs = await readFile(new URL('../src/lib/capsuleLayout.ts', import.meta.url), 'utf-8');
 
-assertMatch(
-  libRs,
-  /fn apply_windows_capsule_material_region<R: Runtime>\([\s\S]*?DwmEnableBlurBehindWindow\(hwnd,\s*&blur\)[\s\S]*?SetWindowRgn\(hwnd,\s*paint_region,\s*true\)/,
-  'windows capsule should use a DWM blur region and a native paint region instead of tinting the whole host',
-);
-
-assertMatch(
-  libRs,
-  /DwmSetWindowAttribute\([\s\S]*?DWMWA_SYSTEMBACKDROP_TYPE[\s\S]*?DWMSBT_NONE[\s\S]*?DWM_BB_ENABLE \| DWM_BB_BLURREGION/,
-  'windows capsule should explicitly disable full-window Win11 system backdrop before enabling region-scoped native blur',
-);
-
 assertNotMatch(
   libRs,
   /apply_acrylic\(&capsule,/,
   'windows capsule must not use window-vibrancy Acrylic because it paints a rectangular grey host on Win11',
 );
 
-assertMatch(
+assertNotMatch(
   libRs,
-  /position_capsule_bottom_center[\s\S]*?apply_windows_capsule_material_region\(window,\s*translation_active\)/,
-  'windows capsule should update the material region when translation mode changes the host height',
-);
-
-assertMatch(
-  libRs,
-  /CombineRgn\(region,\s*region,\s*badge_region,\s*RGN_OR\)/,
-  'windows translation badge should be included as a separate rounded native region',
+  /DwmEnableBlurBehindWindow|DWMWA_SYSTEMBACKDROP_TYPE|SetWindowRgn/,
+  'windows capsule must not use HWND-level DWM material or native regions; the DOM pill owns the visible shape',
 );
 
 assertMatch(
@@ -54,14 +36,14 @@ assertMatch(
 
 assertMatch(
   capsuleLayoutTs,
-  /return \{ width: 196, height: 52, textWidth: 104, boxSizing: 'border-box' \};[\s\S]*?const horizontalInset = 12;[\s\S]*?width: pill\.width \+ horizontalInset \* 2,[\s\S]*?height: translationActive \? 118 : 84,[\s\S]*?bottomInset: 12,/,
-  'windows capsule host must keep transparent margins for shadow, badge, and animation room',
+  /return \{ width: 180, height: 44, textWidth: 88, boxSizing: 'border-box' \};[\s\S]*?const horizontalInset = 12;[\s\S]*?width: 220,[\s\S]*?height: translationActive \? 118 : 84,[\s\S]*?bottomInset: 12,/,
+  'windows capsule should keep the original compact DOM pill inside a transparent native host',
 );
 
 assertMatch(
   capsuleTsx,
-  /const useBackdrop = true;[\s\S]*?background: 'rgba\(255, 255, 255, 0\.85\)'/,
-  'windows capsule should keep the original translucent pill surface because native material is region-scoped, not removed',
+  /const useBackdrop = os !== 'win';[\s\S]*?background: os === 'win' \? 'rgba\(255, 255, 255, 0\.96\)' : 'rgba\(255, 255, 255, 0\.85\)'/,
+  'windows capsule pill should use an opaque DOM surface instead of WebView2 backdrop-filter over a transparent host',
 );
 
 assertMatch(

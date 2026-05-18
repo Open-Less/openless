@@ -11,9 +11,9 @@ function assertEqual<T>(actual: T, expected: T, name: string) {
 }
 
 const winMetrics = getCapsulePillMetrics('win');
-assertEqual(winMetrics.width, 196, 'windows capsule widens pill');
-assertEqual(winMetrics.height, 52, 'windows capsule increases pill height');
-assertEqual(winMetrics.textWidth, 104, 'windows capsule keeps side controls clear');
+assertEqual(winMetrics.width, 180, 'windows capsule keeps original pill width');
+assertEqual(winMetrics.height, 44, 'windows capsule keeps original pill height');
+assertEqual(winMetrics.textWidth, 88, 'windows capsule keeps original text slot');
 assertEqual(winMetrics.boxSizing, 'border-box', 'windows capsule pill width is an outer border-box metric');
 
 const winHost = getCapsuleHostMetrics('win', false);
@@ -22,14 +22,19 @@ assertEqual(winHost.height, 84, 'windows capsule host keeps regular height');
 assertEqual(winHost.horizontalInset, 12, 'windows capsule host keeps symmetric shadow insets');
 assertEqual(winHost.boxSizing, 'border-box', 'windows capsule host inset is reserved inside the native width');
 assertEqual(
-  winHost.width,
-  winMetrics.width + winHost.horizontalInset * 2,
-  'windows capsule host width derives from pill width plus symmetric side insets',
+  winHost.width - winHost.horizontalInset * 2,
+  196,
+  'windows capsule host leaves extra centering room around the original pill',
 );
 assertEqual(
-  winHost.width - winHost.horizontalInset * 2,
+  winHost.width - winHost.horizontalInset * 2 - winMetrics.width,
+  16,
+  'windows capsule host keeps the visible pill compact inside the transparent host',
+);
+assertEqual(
   winMetrics.width,
-  'windows capsule host keeps the visible pill width after reserving side insets',
+  180,
+  'windows capsule pill is independent from the host hitbox width',
 );
 
 const winHostWithTranslation = getCapsuleHostMetrics('win', true);

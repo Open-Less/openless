@@ -26,8 +26,8 @@ export interface CapsuleMessageLayout {
 export function getCapsulePillMetrics(os: OS): CapsulePillMetrics {
   if (os === 'win') {
     // Windows metrics describe the visible outer footprint of the pill.
-    // 与 Rust capsule_window_bounds 保持一致：220px host = 196px pill + 12px side insets.
-    return { width: 196, height: 52, textWidth: 104, boxSizing: 'border-box' };
+    // Keep the original compact capsule shape; the native host owns only transparent room.
+    return { width: 180, height: 44, textWidth: 88, boxSizing: 'border-box' };
   }
 
   return { width: 176, height: 42, textWidth: 84, boxSizing: 'border-box' };
@@ -41,9 +41,8 @@ export function getCapsuleHostMetrics(
 ): CapsuleHostMetrics {
   if (os === 'win') {
     const horizontalInset = 12;
-    const pill = getCapsulePillMetrics(os);
     return {
-      width: pill.width + horizontalInset * 2,
+      width: 220,
       height: translationActive ? 118 : 84,
       horizontalInset,
       bottomInset: 12,

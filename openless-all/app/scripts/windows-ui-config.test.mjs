@@ -108,7 +108,11 @@ if (!/export function getCapsuleHostMetrics\(\s*os: OS,\s*translationActive: boo
   throw new Error('capsule layout should define explicit host metrics separate from the visible pill metrics');
 }
 
-if (!/if \(os === 'win'\)\s*\{[\s\S]*?const horizontalInset = 12;[\s\S]*?const pill = getCapsulePillMetrics\(os\);[\s\S]*?width: pill\.width \+ horizontalInset \* 2,[\s\S]*?height: translationActive \? 118 : 84,[\s\S]*?horizontalInset,[\s\S]*?bottomInset: 12,[\s\S]*?badgeGap: 8,[\s\S]*?boxSizing: 'border-box',[\s\S]*?\}/.test(capsuleLayoutTs)) {
+if (!/if \(os === 'win'\)\s*\{[\s\S]*?return \{ width: 180, height: 44, textWidth: 88, boxSizing: 'border-box' \};[\s\S]*?\}/.test(capsuleLayoutTs)) {
+  throw new Error('windows capsule should keep the original compact visible pill metrics');
+}
+
+if (!/if \(os === 'win'\)\s*\{[\s\S]*?const horizontalInset = 12;[\s\S]*?width: 220,[\s\S]*?height: translationActive \? 118 : 84,[\s\S]*?horizontalInset,[\s\S]*?bottomInset: 12,[\s\S]*?badgeGap: 8,[\s\S]*?boxSizing: 'border-box',[\s\S]*?\}/.test(capsuleLayoutTs)) {
   throw new Error('windows capsule host metrics should leave room for shadow and badge geometry');
 }
 
@@ -132,7 +136,7 @@ if (!/hostMetrics\.bottomInset \+ metrics\.height \+ hostMetrics\.badgeGap/.test
   throw new Error('windows translation badge should anchor from the shared host inset instead of a fixed center-based offset');
 }
 
-if (!/#\[cfg\(target_os = "windows"\)\][\s\S]*?const WINDOWS_CAPSULE_PILL_WIDTH: f64 = 196\.0;[\s\S]*?const WINDOWS_CAPSULE_SIDE_INSET: f64 = 12\.0;[\s\S]*?width: WINDOWS_CAPSULE_PILL_WIDTH \+ WINDOWS_CAPSULE_SIDE_INSET \* 2\.0,[\s\S]*?height: if translation_active \{ 118\.0 \} else \{ 84\.0 \},[\s\S]*?bottom_inset: 12\.0,/.test(libRs)) {
+if (!/#\[cfg\(target_os = "windows"\)\]\s*\{[\s\S]*?const WINDOWS_CAPSULE_SIDE_INSET: f64 = 12\.0;[\s\S]*?width: 220\.0,[\s\S]*?height: if translation_active \{ 118\.0 \} else \{ 84\.0 \},[\s\S]*?bottom_inset: WINDOWS_CAPSULE_SIDE_INSET,/.test(libRs)) {
   throw new Error('windows runtime capsule bounds should leave room for the native shadow while keeping a fixed visual pill');
 }
 

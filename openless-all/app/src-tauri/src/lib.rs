@@ -129,12 +129,9 @@ pub fn run() {
                 if let Err(e) = position_capsule_bottom_center(&capsule, false) {
                     log::warn!("[capsule] position failed: {e}");
                 }
-                #[cfg(target_os = "windows")]
-                {
-                    if let Err(e) = apply_windows_capsule_material_region(&capsule, false) {
-                        log::warn!("[capsule] material region failed: {e}");
-                    }
-                }
+                // Keep the Windows capsule host fully transparent. The native host is larger
+                // than the visible pill to reserve shadow, badge, and animation room; applying
+                // a HWND-level material here paints those transparent margins as a gray box.
                 let _ = capsule.hide();
             }
 
@@ -148,9 +145,8 @@ pub fn run() {
                 }
                 #[cfg(target_os = "macos")]
                 make_qa_window_draggable_macos(&qa);
-                // 同 capsule：Windows 下 QA 浮窗也走 Acrylic 兜底。QA 面板自身
-                // 已经把 alpha 拉到 0.97（QaPanel.tsx:623），主要是防止 0.03 缝隙
-                // 透到桌面、以及 Win10 上完全无毛玻璃感的兜底。
+                // QA fills its native host, so Windows Acrylic remains a useful fallback here.
+                // Capsule is different: its host has transparent margins around a smaller pill.
                 #[cfg(target_os = "windows")]
                 {
                     use window_vibrancy::apply_acrylic;
@@ -719,169 +715,6 @@ fn apply_windows_caption_color<R: Runtime>(window: &tauri::WebviewWindow<R>) {
     }
 }
 
-#[cfg(target_os = "windows")]
-const WINDOWS_CAPSULE_PILL_WIDTH: f64 = 196.0;
-#[cfg(target_os = "windows")]
-const WINDOWS_CAPSULE_PILL_HEIGHT: f64 = 52.0;
-#[cfg(target_os = "windows")]
-const WINDOWS_CAPSULE_SIDE_INSET: f64 = 12.0;
-#[cfg(target_os = "windows")]
-const WINDOWS_CAPSULE_BOTTOM_INSET: f64 = 12.0;
-#[cfg(target_os = "windows")]
-const WINDOWS_CAPSULE_BADGE_WIDTH: f64 = 132.0;
-#[cfg(target_os = "windows")]
-const WINDOWS_CAPSULE_BADGE_HEIGHT: f64 = 24.0;
-#[cfg(target_os = "windows")]
-const WINDOWS_CAPSULE_BADGE_GAP: f64 = 8.0;
-
-#[cfg(target_os = "windows")]
-#[derive(Clone, Copy)]
-struct WindowsCapsuleRegionRect {
-    x: f64,
-    y: f64,
-    width: f64,
-    height: f64,
-    radius: f64,
-}
-
-#[cfg(target_os = "windows")]
-fn scale_region_coord(value: f64, scale: f64) -> i32 {
-    (value * scale).round() as i32
-}
-
-#[cfg(target_os = "windows")]
-fn create_windows_capsule_round_region(
-    rect: WindowsCapsuleRegionRect,
-    scale: f64,
-) -> windows::Win32::Graphics::Gdi::HRGN {
-    use windows::Win32::Graphics::Gdi::CreateRoundRectRgn;
-
-    unsafe {
-        CreateRoundRectRgn(
-            scale_region_coord(rect.x, scale),
-            scale_region_coord(rect.y, scale),
-            scale_region_coord(rect.x + rect.width, scale),
-            scale_region_coord(rect.y + rect.height, scale),
-            scale_region_coord(rect.radius * 2.0, scale),
-            scale_region_coord(rect.radius * 2.0, scale),
-        )
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn create_windows_capsule_region(
-    bounds: CapsuleWindowBounds,
-    translation_active: bool,
-    scale: f64,
-) -> Result<windows::Win32::Graphics::Gdi::HRGN, String> {
-    use windows::Win32::Graphics::Gdi::{CombineRgn, DeleteObject, RGN_OR};
-
-    let pill_x = (bounds.width - WINDOWS_CAPSULE_PILL_WIDTH) / 2.0;
-    let pill_y = bounds.height - WINDOWS_CAPSULE_BOTTOM_INSET - WINDOWS_CAPSULE_PILL_HEIGHT;
-    let region = create_windows_capsule_round_region(
-        WindowsCapsuleRegionRect {
-            x: pill_x,
-            y: pill_y,
-            width: WINDOWS_CAPSULE_PILL_WIDTH,
-            height: WINDOWS_CAPSULE_PILL_HEIGHT,
-            radius: WINDOWS_CAPSULE_PILL_HEIGHT / 2.0,
-        },
-        scale,
-    );
-    if region.is_invalid() {
-        return Err("CreateRoundRectRgn for pill returned an invalid region".into());
-    }
-
-    if translation_active {
-        let badge_x = (bounds.width - WINDOWS_CAPSULE_BADGE_WIDTH) / 2.0;
-        let badge_y = pill_y - WINDOWS_CAPSULE_BADGE_GAP - WINDOWS_CAPSULE_BADGE_HEIGHT;
-        let badge_region = create_windows_capsule_round_region(
-            WindowsCapsuleRegionRect {
-                x: badge_x,
-                y: badge_y,
-                width: WINDOWS_CAPSULE_BADGE_WIDTH,
-                height: WINDOWS_CAPSULE_BADGE_HEIGHT,
-                radius: WINDOWS_CAPSULE_BADGE_HEIGHT / 2.0,
-            },
-            scale,
-        );
-        if badge_region.is_invalid() {
-            unsafe {
-                let _ = DeleteObject(region);
-            }
-            return Err(
-                "CreateRoundRectRgn for translation badge returned an invalid region".into(),
-            );
-        }
-        unsafe {
-            let _ = CombineRgn(region, region, badge_region, RGN_OR);
-            let _ = DeleteObject(badge_region);
-        }
-    }
-
-    Ok(region)
-}
-
-#[cfg(target_os = "windows")]
-fn apply_windows_capsule_material_region<R: Runtime>(
-    window: &tauri::WebviewWindow<R>,
-    translation_active: bool,
-) -> Result<(), String> {
-    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-    use windows::Win32::Foundation::{BOOL, HWND};
-    use windows::Win32::Graphics::Dwm::{
-        DwmEnableBlurBehindWindow, DwmSetWindowAttribute, DWMSBT_NONE, DWMWA_SYSTEMBACKDROP_TYPE,
-        DWM_BB_BLURREGION, DWM_BB_ENABLE, DWM_BLURBEHIND,
-    };
-    use windows::Win32::Graphics::Gdi::{DeleteObject, SetWindowRgn};
-
-    let handle = match window.window_handle().map(|h| h.as_raw()) {
-        Ok(RawWindowHandle::Win32(handle)) => handle,
-        Ok(other) => return Err(format!("unexpected raw window handle: {other:?}")),
-        Err(e) => return Err(format!("read raw window handle failed: {e}")),
-    };
-    let hwnd = HWND(handle.hwnd.get() as *mut core::ffi::c_void);
-    let bounds = capsule_window_bounds(translation_active);
-    let scale = window.scale_factor().unwrap_or(1.0);
-
-    // Win11's DWMWA_SYSTEMBACKDROP_TYPE / window-vibrancy Acrylic paints the full
-    // rectangular HWND and ignores SetWindowRgn, which creates a visible grey host
-    // behind the capsule. Use DWM's native blur-region path instead: it keeps a
-    // Windows material inside the rounded visible region while leaving host
-    // margins genuinely transparent.
-    let blur_region = create_windows_capsule_region(bounds, translation_active, scale)?;
-    let disable_backdrop = DWMSBT_NONE;
-    unsafe {
-        let _ = DwmSetWindowAttribute(
-            hwnd,
-            DWMWA_SYSTEMBACKDROP_TYPE,
-            &disable_backdrop as *const _ as *const core::ffi::c_void,
-            std::mem::size_of_val(&disable_backdrop) as u32,
-        );
-        let blur = DWM_BLURBEHIND {
-            dwFlags: DWM_BB_ENABLE | DWM_BB_BLURREGION,
-            fEnable: BOOL(1),
-            hRgnBlur: blur_region,
-            fTransitionOnMaximized: BOOL(0),
-        };
-        if let Err(e) = DwmEnableBlurBehindWindow(hwnd, &blur) {
-            let _ = DeleteObject(blur_region);
-            return Err(format!("DwmEnableBlurBehindWindow failed: {e}"));
-        }
-        let _ = DeleteObject(blur_region);
-    }
-
-    let paint_region = create_windows_capsule_region(bounds, translation_active, scale)?;
-    let applied = unsafe { SetWindowRgn(hwnd, paint_region, true) };
-    if applied == 0 {
-        unsafe {
-            let _ = DeleteObject(paint_region);
-        }
-        return Err("SetWindowRgn failed".into());
-    }
-    Ok(())
-}
-
 #[tauri::command]
 fn restart_app(app: AppHandle) {
     // macOS：自动更新会让新装的 .app 带 com.apple.quarantine（无论 Tauri updater
@@ -1357,10 +1190,6 @@ pub(crate) fn position_capsule_bottom_center<R: tauri::Runtime>(
     };
     let bounds = capsule_window_bounds(translation_active);
     window.set_size(LogicalSize::new(bounds.width, bounds.height))?;
-    #[cfg(target_os = "windows")]
-    if let Err(e) = apply_windows_capsule_material_region(window, translation_active) {
-        log::warn!("[capsule] material region update failed: {e}");
-    }
 
     let scale = monitor.scale_factor();
     let size = monitor.size();
@@ -1383,12 +1212,13 @@ struct CapsuleWindowBounds {
 fn capsule_window_bounds(translation_active: bool) -> CapsuleWindowBounds {
     #[cfg(target_os = "windows")]
     {
+        const WINDOWS_CAPSULE_SIDE_INSET: f64 = 12.0;
         CapsuleWindowBounds {
-            // Keep the existing Windows hitbox width, but express it as
-            // pill width (196) + symmetric 12px side insets for shadow room.
-            width: WINDOWS_CAPSULE_PILL_WIDTH + WINDOWS_CAPSULE_SIDE_INSET * 2.0,
+            // Keep the existing Windows hitbox width while reserving transparent
+            // margins for the DOM pill shadow and translation badge animation.
+            width: 220.0,
             height: if translation_active { 118.0 } else { 84.0 },
-            bottom_inset: WINDOWS_CAPSULE_BOTTOM_INSET,
+            bottom_inset: WINDOWS_CAPSULE_SIDE_INSET,
         }
     }
 
@@ -1408,7 +1238,7 @@ fn capsule_window_bounds(translation_active: bool) -> CapsuleWindowBounds {
 fn capsule_visual_height(_translation_active: bool) -> f64 {
     #[cfg(target_os = "windows")]
     {
-        WINDOWS_CAPSULE_PILL_HEIGHT
+        52.0
     }
 
     #[cfg(not(target_os = "windows"))]
