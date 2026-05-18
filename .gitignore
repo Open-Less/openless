@@ -79,3 +79,6 @@ docs/github-tracking/
 docs/superpowers/
 docs/windows-lifecycle-tracking/
 docs/windows-ui-tracking/
+
+# 用于本地语音推理的参考文件。
+CapsWriter
