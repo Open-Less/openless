@@ -1,7 +1,7 @@
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use crate::coordinator_state::request_stop_during_starting_state;
+use crate::coordinator_state::{request_stop_during_starting_state, StopDuringStartingOutcome};
 use crate::correction::apply_correction_rules;
 use crate::types::HotkeyMode;
 
@@ -330,9 +330,7 @@ fn streaming_insert_eligible(
     mode: PolishMode,
     raw_uses_llm: bool,
 ) -> bool {
-    streaming_insert_enabled
-        && !translation_active
-        && (mode != PolishMode::Raw || raw_uses_llm)
+    streaming_insert_enabled && !translation_active && (mode != PolishMode::Raw || raw_uses_llm)
 }
 
 fn default_done_message(status: InsertStatus, polish_failed: bool) -> Option<String> {
@@ -450,14 +448,23 @@ pub(super) async fn handle_released(inner: &Arc<Inner>) {
 }
 
 pub(super) fn request_stop_during_starting(inner: &Arc<Inner>, reason: &str) {
-    {
+    let outcome = {
         let mut state = inner.state.lock();
-        if !request_stop_during_starting_state(&mut state) {
-            return;
+        request_stop_during_starting_state(&mut state)
+    };
+    match outcome {
+        Some(StopDuringStartingOutcome::Queued) => {
+            log::info!("[coord] {reason} during Starting — queued");
+            stop_recorder_if_pending_start_stop(inner);
         }
+        Some(StopDuringStartingOutcome::AlreadyPending) => {
+            log::info!(
+                "[coord] {reason} during Starting — pending_stop already queued; cancelling"
+            );
+            cancel_session(inner);
+        }
+        None => {}
     }
-    log::info!("[coord] {reason} during Starting — queued");
-    stop_recorder_if_pending_start_stop(inner);
 }
 
 pub(super) async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
@@ -601,6 +608,26 @@ pub(super) async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
             ActiveAsr::Bailian(Arc::clone(&asr)),
         );
         start_recorder_for_starting(inner, current_session_id, &active_asr, consumer).await?;
+        match startup_race_status_for_starting(inner, current_session_id) {
+            StartupRaceStatus::ActiveStarting => {}
+            StartupRaceStatus::CancelRaced => {
+                log::info!("[coord] cancel raced before Bailian ASR open_session — aborting begin");
+                asr.cancel();
+                discard_startup_resources_for_session(inner, current_session_id);
+                restore_prepared_windows_ime_session(inner, current_session_id);
+                set_phase_idle_if_session_matches(inner, current_session_id);
+                return Ok(());
+            }
+            StartupRaceStatus::StaleContinuation => {
+                log::info!(
+                    "[coord] stale Bailian startup before open_session from session {current_session_id} — ignoring"
+                );
+                asr.cancel();
+                discard_startup_resources_for_session(inner, current_session_id);
+                restore_prepared_windows_ime_session(inner, current_session_id);
+                return Ok(());
+            }
+        }
 
         if let Err(e) = asr.open_session().await {
             log::error!("[coord] open Bailian ASR session failed: {e}");
@@ -700,6 +727,26 @@ pub(super) async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
             ActiveAsr::Volcengine(Arc::clone(&asr)),
         );
         start_recorder_for_starting(inner, current_session_id, &active_asr, consumer).await?;
+        match startup_race_status_for_starting(inner, current_session_id) {
+            StartupRaceStatus::ActiveStarting => {}
+            StartupRaceStatus::CancelRaced => {
+                log::info!("[coord] cancel raced before ASR open_session — aborting begin");
+                asr.cancel();
+                discard_startup_resources_for_session(inner, current_session_id);
+                restore_prepared_windows_ime_session(inner, current_session_id);
+                set_phase_idle_if_session_matches(inner, current_session_id);
+                return Ok(());
+            }
+            StartupRaceStatus::StaleContinuation => {
+                log::info!(
+                    "[coord] stale startup before ASR open_session from session {current_session_id} — ignoring"
+                );
+                asr.cancel();
+                discard_startup_resources_for_session(inner, current_session_id);
+                restore_prepared_windows_ime_session(inner, current_session_id);
+                return Ok(());
+            }
+        }
 
         if let Err(e) = asr.open_session().await {
             log::error!("[coord] open ASR session failed: {e}");
@@ -1696,8 +1743,8 @@ fn append_typed_prefix(target: &mut String, delta: &str, typed_chars: usize) -> 
 #[cfg(test)]
 mod tests {
     use super::{
-        append_typed_prefix, default_done_message, dictation_error_code,
-        finalize_polished_text, streaming_insert_eligible,
+        append_typed_prefix, default_done_message, dictation_error_code, finalize_polished_text,
+        streaming_insert_eligible,
     };
     use crate::types::{ChineseScriptPreference, CorrectionRule, InsertStatus, PolishMode};
 

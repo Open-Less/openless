@@ -667,6 +667,11 @@ impl Coordinator {
 
     fn update_action_hotkey_binding(&self, kind: ActionHotkeyKind) {
         let binding = action_hotkey_binding(&self.inner, kind);
+        if is_unconfigured_shortcut(&binding) {
+            take_action_hotkey_on_main_thread(&self.inner, kind);
+            log::info!("[coord] action hotkey {kind:?} disabled");
+            return;
+        }
         if is_modifier_only_shortcut(&binding) {
             take_action_hotkey_on_main_thread(&self.inner, kind);
             log::warn!("[coord] action hotkey {kind:?} 使用了不支持的 modifier-only 绑定，已关闭");
@@ -1424,6 +1429,11 @@ fn action_hotkey_supervisor_loop(inner: Arc<Inner>, kind: ActionHotkeyKind) {
             return;
         }
         let binding = action_hotkey_binding(&inner, kind);
+        if is_unconfigured_shortcut(&binding) {
+            take_action_hotkey_on_main_thread(&inner, kind);
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            continue;
+        }
         if is_modifier_only_shortcut(&binding) {
             take_action_hotkey_on_main_thread(&inner, kind);
             std::thread::sleep(std::time::Duration::from_secs(5));
@@ -1656,7 +1666,10 @@ fn sync_custom_dictation_to_plugin(inner: &Arc<Inner>) {
         return;
     }
     match crate::linux_fcitx::set_custom_dictation_trigger(&key_string) {
-        Ok(()) => log::info!("[fcitx] Synced custom dictation trigger '{}' to plugin", key_string),
+        Ok(()) => log::info!(
+            "[fcitx] Synced custom dictation trigger '{}' to plugin",
+            key_string
+        ),
         Err(e) => log::warn!("[fcitx] Failed to sync custom dictation trigger: {e}"),
     }
 }
@@ -1746,14 +1759,18 @@ fn reset_shortcut_held_state(inner: &Arc<Inner>) {
             }
         }
     }
-    if !is_modifier_only_shortcut(&prefs.switch_style_hotkey) {
+    if !is_unconfigured_shortcut(&prefs.switch_style_hotkey)
+        && !is_modifier_only_shortcut(&prefs.switch_style_hotkey)
+    {
         if let Some(monitor) = inner.switch_style_hotkey.lock().as_ref() {
             if let Err(e) = monitor.update_binding(prefs.switch_style_hotkey.clone()) {
                 log::warn!("[coord] reset switch-style hotkey latch failed: {e}");
             }
         }
     }
-    if !is_modifier_only_shortcut(&prefs.open_app_hotkey) {
+    if !is_unconfigured_shortcut(&prefs.open_app_hotkey)
+        && !is_modifier_only_shortcut(&prefs.open_app_hotkey)
+    {
         if let Some(monitor) = inner.open_app_hotkey.lock().as_ref() {
             if let Err(e) = monitor.update_binding(prefs.open_app_hotkey.clone()) {
                 log::warn!("[coord] reset open-app hotkey latch failed: {e}");
@@ -3233,6 +3250,17 @@ mod tests {
         Uuid::from_u128(n)
     }
 
+    #[test]
+    fn empty_action_shortcut_is_unconfigured() {
+        let binding = crate::types::ShortcutBinding {
+            primary: " ".into(),
+            modifiers: vec!["ctrl".into()],
+        };
+
+        assert!(is_unconfigured_shortcut(&binding));
+        assert!(!is_modifier_only_shortcut(&binding));
+    }
+
     #[tokio::test]
     async fn hotkey_injection_gate_logs_pressed_and_cancels() {
         let _ = env_logger::builder()
@@ -3510,6 +3538,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn repeated_manual_stop_during_starting_cancels() {
+        let coordinator = Coordinator::new();
+        {
+            let mut state = coordinator.inner.state.lock();
+            state.phase = SessionPhase::Starting;
+            state.pending_stop = true;
+            state.cancelled = false;
+            state.session_id = session_id(123);
+        }
+
+        coordinator.stop_dictation().await.unwrap();
+
+        let state = coordinator.inner.state.lock();
+        assert_eq!(state.phase, SessionPhase::Idle);
+        assert!(state.cancelled);
+    }
+
+    #[tokio::test]
     async fn stop_dictation_from_listening_without_asr_returns_idle() {
         let coordinator = Coordinator::new();
         {
@@ -3633,6 +3679,27 @@ mod tests {
             SessionPhase::Listening
         );
         assert!(coordinator.inner.hotkey_trigger_held.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn qa_hotkey_during_recording_submits_without_closing_panel() {
+        let coordinator = Coordinator::new();
+        {
+            let mut state = coordinator.inner.qa_state.lock();
+            state.panel_visible = true;
+            state.phase = QaPhase::Recording;
+            state.cancelled = false;
+        }
+
+        handle_qa_hotkey_pressed(&coordinator.inner).await;
+
+        let state = coordinator.inner.qa_state.lock();
+        assert!(
+            state.panel_visible,
+            "QA hotkey should submit the active recording, not toggle the panel closed"
+        );
+        assert_ne!(state.phase, QaPhase::Recording);
+        assert!(!state.cancelled);
     }
 
     #[test]

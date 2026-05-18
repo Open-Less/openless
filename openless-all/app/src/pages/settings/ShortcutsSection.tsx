@@ -89,6 +89,7 @@ export function ShortcutsSection() {
         <ShortcutRecorder
           value={prefs.switchStyleHotkey}
           alignRecordButton
+          allowUnset
           onSave={async binding => {
             await setSwitchStyleHotkey(binding);
             await savePrefs({ ...prefs, switchStyleHotkey: binding });
@@ -99,6 +100,7 @@ export function ShortcutsSection() {
         <ShortcutRecorder
           value={prefs.openAppHotkey}
           alignRecordButton
+          allowUnset
           onSave={async binding => {
             await setOpenAppHotkey(binding);
             await savePrefs({ ...prefs, openAppHotkey: binding });

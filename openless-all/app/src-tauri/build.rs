@@ -2,7 +2,22 @@ fn main() {
     #[cfg(target_os = "macos")]
     build_qwen_asr_macos();
 
+    #[cfg(target_os = "windows")]
+    embed_common_controls_v6_manifest_for_tests();
+
     tauri_build::build();
+}
+
+#[cfg(target_os = "windows")]
+fn embed_common_controls_v6_manifest_for_tests() {
+    // Unit test harness 不走 Tauri app manifest；没有 Common Controls v6 时会在
+    // comctl32!TaskDialogIndirect 的 loader 阶段直接 0xc0000139。
+    let manifest = std::path::Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap())
+        .join("windows")
+        .join("common-controls-v6.manifest");
+    println!("cargo:rerun-if-changed={}", manifest.display());
+    println!("cargo:rustc-link-arg=/MANIFEST:EMBED");
+    println!("cargo:rustc-link-arg=/MANIFESTINPUT:{}", manifest.display());
 }
 
 /// 编译 vendored Open-Less/qwen-asr 的 C 源（仅 macOS）。

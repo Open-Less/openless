@@ -84,12 +84,23 @@ pub(crate) fn begin_session_state(
 }
 
 /// stop_dictation / hold release 在 Starting 阶段只记录 pending_stop，等待启动完成后处理。
-pub(crate) fn request_stop_during_starting_state(state: &mut SessionState) -> bool {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StopDuringStartingOutcome {
+    Queued,
+    AlreadyPending,
+}
+
+pub(crate) fn request_stop_during_starting_state(
+    state: &mut SessionState,
+) -> Option<StopDuringStartingOutcome> {
     if state.phase != SessionPhase::Starting {
-        return false;
+        return None;
+    }
+    if state.pending_stop {
+        return Some(StopDuringStartingOutcome::AlreadyPending);
     }
     state.pending_stop = true;
-    true
+    Some(StopDuringStartingOutcome::Queued)
 }
 
 /// begin_session 中各 await 之间的 cancel race 检查结果。
@@ -270,13 +281,31 @@ mod tests {
             ..Default::default()
         };
 
-        assert!(request_stop_during_starting_state(&mut state));
+        assert_eq!(
+            request_stop_during_starting_state(&mut state),
+            Some(StopDuringStartingOutcome::Queued)
+        );
         assert!(state.pending_stop);
 
         state.phase = SessionPhase::Listening;
         state.pending_stop = false;
-        assert!(!request_stop_during_starting_state(&mut state));
+        assert_eq!(request_stop_during_starting_state(&mut state), None);
         assert!(!state.pending_stop);
+    }
+
+    #[test]
+    fn repeated_stop_during_starting_reports_already_pending() {
+        let mut state = SessionState {
+            phase: SessionPhase::Starting,
+            pending_stop: true,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            request_stop_during_starting_state(&mut state),
+            Some(StopDuringStartingOutcome::AlreadyPending)
+        );
+        assert!(state.pending_stop);
     }
 
     #[test]

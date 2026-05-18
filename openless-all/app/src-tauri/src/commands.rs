@@ -140,6 +140,7 @@ fn persist_settings<T: SettingsWriter>(
     coord: &T,
     mut prefs: UserPreferences,
 ) -> Result<(), String> {
+    normalize_action_shortcuts(&mut prefs);
     sync_dictation_hotkey_legacy_fields(&mut prefs);
     reject_hotkey_collisions(&prefs)?;
     coord.write_settings(prefs)?;
@@ -161,6 +162,7 @@ pub fn set_settings(
 ) -> Result<(), String> {
     let packs = coord.style_packs().list().map_err(|e| e.to_string())?;
     sync_style_pack_preferences(&mut prefs, &packs);
+    normalize_action_shortcuts(&mut prefs);
     // 广播给所有 webview。issue #205：QaPanel 跑在独立 webview，
     // 没有 HotkeySettingsContext，必须靠事件感知录音键变化，否则面板可见时
     // 用户改键会让浮窗里的 "{recordHotkey}" 文案一直停留在旧值。
@@ -424,7 +426,9 @@ pub async fn app_check_update_with_channel<R: tauri::Runtime>(
         builder = builder.timeout(std::time::Duration::from_millis(ms));
     }
     if matches!(channel, UpdateChannel::Beta) {
-        let urls = resolve_beta_manifest_endpoints().await?;
+        let Some(urls) = resolve_beta_manifest_endpoints().await? else {
+            return Ok(None);
+        };
         builder = builder
             .endpoints(urls)
             .map_err(|e| format!("set beta endpoints: {e}"))?;
@@ -454,24 +458,125 @@ pub async fn app_check_update_with_channel<R: tauri::Runtime>(
 /// 把 fetch_latest_beta_release 找到的最新 prerelease tag 拼成 -beta manifest URL 对。
 /// 顺序：先镜像（fastgit.cc 代理 GitHub），后直连 —— 跟 tauri.conf 现有 Stable
 /// endpoints 一致，让国内访问优先打到 CDN。
-async fn resolve_beta_manifest_endpoints() -> Result<Vec<url::Url>, String> {
+async fn resolve_beta_manifest_endpoints() -> Result<Option<Vec<url::Url>>, String> {
     let Some(latest) = fetch_latest_beta_release().await? else {
         return Err("尚未发布过 Beta 版本".to_string());
     };
     let tag = latest.tag_name;
-    // {{target}} / {{arch}} 占位符由 plugin 在 check 时替换。Rust raw string 用 r#""#
-    // 不需要转义双花括号，比 format! 干净。
+    let templated = beta_manifest_endpoints_for(&tag, "{{target}}", "{{arch}}")?;
+    let (target, arch) = current_updater_target_arch();
+    let concrete = beta_manifest_endpoints_for(&tag, target, arch)?;
+
+    // GitHub exposes a release/tag before every matrix job has uploaded its
+    // platform-specific updater manifest. In that short window the Atom feed is
+    // already visible, but latest-<target>-<arch>-beta.json still returns 404.
+    // Probe the concrete URLs first so background checks do not surface noisy
+    // updater errors while the release is still being assembled.
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .user_agent(concat!("OpenLess/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .map_err(|e| format!("build beta manifest probe client: {e}"))?;
+    let probes = probe_beta_manifest_endpoints(&client, &concrete).await;
+    let ready_indexes = select_ready_beta_manifest_endpoints(&probes)?;
+    if ready_indexes.is_empty() {
+        log::info!(
+            "[updater] beta manifest for {tag} is not published for {target}-{arch} yet; skipping this check"
+        );
+        return Ok(None);
+    }
+
+    let urls = ready_indexes
+        .into_iter()
+        .filter_map(|i| templated.get(i).cloned())
+        .collect();
+    Ok(Some(urls))
+}
+
+fn beta_manifest_endpoints_for(
+    tag: &str,
+    target: &str,
+    arch: &str,
+) -> Result<Vec<url::Url>, String> {
     let mirror = format!(
-        "https://fastgit.cc/https://github.com/appergb/openless/releases/download/{tag}/latest-{{{{target}}}}-{{{{arch}}}}-beta-mirror.json"
+        "https://fastgit.cc/https://github.com/appergb/openless/releases/download/{tag}/latest-{target}-{arch}-beta-mirror.json"
     );
     let direct = format!(
-        "https://github.com/appergb/openless/releases/download/{tag}/latest-{{{{target}}}}-{{{{arch}}}}-beta.json"
+        "https://github.com/appergb/openless/releases/download/{tag}/latest-{target}-{arch}-beta.json"
     );
-    let mirror_url =
-        url::Url::parse(&mirror).map_err(|e| format!("parse beta mirror url: {e}"))?;
-    let direct_url =
-        url::Url::parse(&direct).map_err(|e| format!("parse beta direct url: {e}"))?;
+    let mirror_url = url::Url::parse(&mirror).map_err(|e| format!("parse beta mirror url: {e}"))?;
+    let direct_url = url::Url::parse(&direct).map_err(|e| format!("parse beta direct url: {e}"))?;
     Ok(vec![mirror_url, direct_url])
+}
+
+fn current_updater_target_arch() -> (&'static str, &'static str) {
+    let target = if cfg!(target_os = "windows") {
+        "windows"
+    } else if cfg!(target_os = "macos") {
+        "darwin"
+    } else if cfg!(target_os = "linux") {
+        "linux"
+    } else {
+        std::env::consts::OS
+    };
+    (target, std::env::consts::ARCH)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum BetaManifestProbe {
+    Available,
+    PendingStatus(u16),
+    Failed(String),
+}
+
+async fn probe_beta_manifest_endpoints(
+    client: &reqwest::Client,
+    endpoints: &[url::Url],
+) -> Vec<BetaManifestProbe> {
+    let mut probes = Vec::with_capacity(endpoints.len());
+    for endpoint in endpoints {
+        let probe = match client.get(endpoint.clone()).send().await {
+            Ok(resp) if resp.status().is_success() => BetaManifestProbe::Available,
+            Ok(resp) if resp.status().as_u16() == 404 => {
+                BetaManifestProbe::PendingStatus(resp.status().as_u16())
+            }
+            Ok(resp) => BetaManifestProbe::Failed(format!("{endpoint} returned {}", resp.status())),
+            Err(error) => BetaManifestProbe::Failed(format!("{endpoint}: {error}")),
+        };
+        probes.push(probe);
+    }
+    probes
+}
+
+fn select_ready_beta_manifest_endpoints(
+    probes: &[BetaManifestProbe],
+) -> Result<Vec<usize>, String> {
+    let ready: Vec<usize> = probes
+        .iter()
+        .enumerate()
+        .filter_map(|(i, probe)| matches!(probe, BetaManifestProbe::Available).then_some(i))
+        .collect();
+    if !ready.is_empty() {
+        return Ok(ready);
+    }
+
+    if probes
+        .iter()
+        .all(|probe| matches!(probe, BetaManifestProbe::PendingStatus(404)))
+    {
+        return Ok(Vec::new());
+    }
+
+    let details = probes
+        .iter()
+        .map(|probe| match probe {
+            BetaManifestProbe::Available => "available".to_string(),
+            BetaManifestProbe::PendingStatus(status) => format!("pending status {status}"),
+            BetaManifestProbe::Failed(error) => error.clone(),
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    Err(format!("beta manifest endpoints unavailable: {details}"))
 }
 
 #[tauri::command]
@@ -1261,7 +1366,8 @@ fn is_valid_local_pack_id(s: &str) -> bool {
     if s.is_empty() || s.len() > 128 {
         return false;
     }
-    s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-' || b == b'_')
+    s.bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-' || b == b'_')
 }
 
 // ─────────────────────────── vocab ───────────────────────────
@@ -1812,6 +1918,14 @@ pub fn set_switch_style_hotkey(
     coord: CoordinatorState<'_>,
     binding: ShortcutBinding,
 ) -> Result<(), String> {
+    let binding = normalize_action_shortcut(binding);
+    if is_unconfigured_shortcut(&binding) {
+        let mut prefs = coord.prefs().get();
+        prefs.switch_style_hotkey = binding;
+        coord.prefs().set(prefs).map_err(|e| e.to_string())?;
+        coord.update_switch_style_hotkey_binding();
+        return Ok(());
+    }
     crate::shortcut_binding::validate_binding(&binding).map_err(|e| e.to_string())?;
     reject_modifier_only_action_shortcut(&binding)?;
     let mut prefs = coord.prefs().get();
@@ -1832,6 +1946,14 @@ pub fn set_open_app_hotkey(
     coord: CoordinatorState<'_>,
     binding: ShortcutBinding,
 ) -> Result<(), String> {
+    let binding = normalize_action_shortcut(binding);
+    if is_unconfigured_shortcut(&binding) {
+        let mut prefs = coord.prefs().get();
+        prefs.open_app_hotkey = binding;
+        coord.prefs().set(prefs).map_err(|e| e.to_string())?;
+        coord.update_open_app_hotkey_binding();
+        return Ok(());
+    }
     crate::shortcut_binding::validate_binding(&binding).map_err(|e| e.to_string())?;
     reject_modifier_only_action_shortcut(&binding)?;
     let mut prefs = coord.prefs().get();
@@ -1848,6 +1970,9 @@ pub fn set_open_app_hotkey(
 }
 
 fn reject_modifier_only_action_shortcut(binding: &ShortcutBinding) -> Result<(), String> {
+    if is_unconfigured_shortcut(binding) {
+        return Ok(());
+    }
     if binding.modifiers.is_empty()
         && (binding.primary.eq_ignore_ascii_case("shift")
             || crate::shortcut_binding::legacy_modifier_trigger(binding).is_some())
@@ -1855,6 +1980,23 @@ fn reject_modifier_only_action_shortcut(binding: &ShortcutBinding) -> Result<(),
         return Err("该快捷键需要使用组合键或非修饰主键".into());
     }
     Ok(())
+}
+
+fn is_unconfigured_shortcut(binding: &ShortcutBinding) -> bool {
+    binding.primary.trim().is_empty()
+}
+
+fn normalize_action_shortcut(mut binding: ShortcutBinding) -> ShortcutBinding {
+    if is_unconfigured_shortcut(&binding) {
+        binding.primary.clear();
+        binding.modifiers.clear();
+    }
+    binding
+}
+
+fn normalize_action_shortcuts(prefs: &mut UserPreferences) {
+    prefs.switch_style_hotkey = normalize_action_shortcut(prefs.switch_style_hotkey.clone());
+    prefs.open_app_hotkey = normalize_action_shortcut(prefs.open_app_hotkey.clone());
 }
 
 #[tauri::command]
@@ -1932,6 +2074,9 @@ fn reject_hotkey_overlap(
     right: &ShortcutBinding,
     message: &'static str,
 ) -> Result<(), String> {
+    if is_unconfigured_shortcut(left) || is_unconfigured_shortcut(right) {
+        return Ok(());
+    }
     if shortcut_bindings_overlap(left, right) {
         return Err(message.into());
     }
@@ -2472,8 +2617,10 @@ pub async fn marketplace_list(
         let body = resp.text().await.unwrap_or_default();
         return Err(format!("marketplace HTTP {status}: {body}"));
     }
-    let items: Vec<MarketplaceListItem> =
-        resp.json().await.map_err(|e| format!("parse failed: {e}"))?;
+    let items: Vec<MarketplaceListItem> = resp
+        .json()
+        .await
+        .map_err(|e| format!("parse failed: {e}"))?;
     Ok(items)
 }
 
@@ -2792,11 +2939,13 @@ fn get_github_oauth_client_id() -> Result<String, String> {
     if !GITHUB_OAUTH_CLIENT_ID.is_empty() {
         return Ok(GITHUB_OAUTH_CLIENT_ID.to_string());
     }
-    Err("GitHub OAuth 未配置。请去 https://github.com/settings/applications/new 注册一个 OAuth App\
+    Err(
+        "GitHub OAuth 未配置。请去 https://github.com/settings/applications/new 注册一个 OAuth App\
         （必须勾 Enable Device Flow），把 client_id 填到 \
         openless-all/app/src-tauri/src/commands.rs 的 GITHUB_OAUTH_CLIENT_ID 常量，\
         或在启动前设置环境变量 GITHUB_OAUTH_CLIENT_ID=<your_client_id>。"
-        .to_string())
+            .to_string(),
+    )
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -2913,12 +3062,13 @@ pub async fn github_device_flow_poll(
 mod tests {
     use super::{
         active_asr_is_keyless_for_validation, active_foundry_model_from_prefs,
-        asr_configured_for_provider, asr_transcriptions_url, fetch_provider_models,
-        is_gemini_base_url, is_valid_local_pack_id, is_valid_session_id,
+        asr_configured_for_provider, asr_transcriptions_url, beta_manifest_endpoints_for,
+        fetch_provider_models, is_gemini_base_url, is_valid_local_pack_id, is_valid_session_id,
         llm_configured_for_provider, local_asr_release_plan_for_provider, models_url,
         normalize_foundry_language_hint, parse_gemini_model_ids, parse_latest_beta_from_atom,
         parse_model_ids, persist_settings, release_foundry_runtime_if_inactive,
-        validate_foundry_model_alias, ProviderConfig, SettingsWriter,
+        select_ready_beta_manifest_endpoints, validate_foundry_model_alias, BetaManifestProbe,
+        ProviderConfig, SettingsWriter,
     };
     use crate::persistence::CredentialsSnapshot;
     use crate::types::{
@@ -3389,6 +3539,33 @@ mod tests {
     }
 
     #[test]
+    fn action_shortcut_normalizes_empty_primary_to_disabled() {
+        let binding = super::normalize_action_shortcut(ShortcutBinding {
+            primary: " ".into(),
+            modifiers: vec!["ctrl".into(), "shift".into()],
+        });
+
+        assert_eq!(binding.primary, "");
+        assert!(binding.modifiers.is_empty());
+        assert!(super::reject_modifier_only_action_shortcut(&binding).is_ok());
+    }
+
+    #[test]
+    fn action_shortcut_allows_disabled_bindings_to_overlap() {
+        let disabled = ShortcutBinding {
+            primary: "".into(),
+            modifiers: vec![],
+        };
+        let active = ShortcutBinding {
+            primary: "O".into(),
+            modifiers: vec!["ctrl".into(), "shift".into()],
+        };
+
+        assert!(super::reject_switch_style_open_app_hotkey_overlap(&disabled, &active).is_ok());
+        assert!(super::reject_dictation_open_app_hotkey_overlap(&active, &disabled).is_ok());
+    }
+
+    #[test]
     fn combo_hotkey_bare_shift_rejection_matches_dictation_setter() {
         let binding = ShortcutBinding {
             primary: "Shift".into(),
@@ -3552,6 +3729,30 @@ mod tests {
     }
 
     #[test]
+    fn persist_settings_normalizes_disabled_action_hotkeys() {
+        let writer = FakeSettingsWriter::default();
+        let prefs = UserPreferences {
+            switch_style_hotkey: ShortcutBinding {
+                primary: " ".into(),
+                modifiers: vec!["ctrl".into()],
+            },
+            open_app_hotkey: ShortcutBinding {
+                primary: "".into(),
+                modifiers: vec!["shift".into()],
+            },
+            ..Default::default()
+        };
+
+        persist_settings(&writer, prefs).unwrap();
+
+        let saved = writer.saved.lock().unwrap().clone().unwrap();
+        assert_eq!(saved.switch_style_hotkey.primary, "");
+        assert!(saved.switch_style_hotkey.modifiers.is_empty());
+        assert_eq!(saved.open_app_hotkey.primary, "");
+        assert!(saved.open_app_hotkey.modifiers.is_empty());
+    }
+
+    #[test]
     fn parse_latest_beta_from_atom_picks_first_beta_tagged_entry() {
         // Fixture trimmed from real `releases.atom`：包含一条 stable + 一条 Beta。
         // 解析必须跳过 stable（tag 不以 -beta-tauri 结尾），返回 Beta。
@@ -3588,6 +3789,58 @@ mod tests {
   </entry>
 </feed>"#;
         assert!(parse_latest_beta_from_atom(body).is_none());
+    }
+
+    #[test]
+    fn beta_manifest_endpoints_include_beta_suffix_and_mirror_pair() {
+        let urls = beta_manifest_endpoints_for("v1.3.4-4-beta-tauri", "windows", "x86_64").unwrap();
+
+        assert_eq!(
+            urls[0].as_str(),
+            "https://fastgit.cc/https://github.com/appergb/openless/releases/download/v1.3.4-4-beta-tauri/latest-windows-x86_64-beta-mirror.json"
+        );
+        assert_eq!(
+            urls[1].as_str(),
+            "https://github.com/appergb/openless/releases/download/v1.3.4-4-beta-tauri/latest-windows-x86_64-beta.json"
+        );
+    }
+
+    #[test]
+    fn beta_manifest_probe_treats_all_404_as_release_pending() {
+        let probes = vec![
+            BetaManifestProbe::PendingStatus(404),
+            BetaManifestProbe::PendingStatus(404),
+        ];
+
+        let ready = select_ready_beta_manifest_endpoints(&probes).unwrap();
+
+        assert!(ready.is_empty());
+    }
+
+    #[test]
+    fn beta_manifest_probe_keeps_only_reachable_endpoints() {
+        let probes = vec![
+            BetaManifestProbe::PendingStatus(404),
+            BetaManifestProbe::Available,
+        ];
+
+        let ready = select_ready_beta_manifest_endpoints(&probes).unwrap();
+
+        assert_eq!(ready, vec![1]);
+    }
+
+    #[test]
+    fn beta_manifest_probe_reports_real_network_failures() {
+        let probes = vec![
+            BetaManifestProbe::Failed("mirror timeout".into()),
+            BetaManifestProbe::Failed("direct dns failure".into()),
+        ];
+
+        let err = select_ready_beta_manifest_endpoints(&probes).unwrap_err();
+
+        assert!(err.contains("beta manifest endpoints unavailable"));
+        assert!(err.contains("mirror timeout"));
+        assert!(err.contains("direct dns failure"));
     }
 
     #[tokio::test]
@@ -3648,13 +3901,17 @@ mod tests {
         // 长度对但含 `/`：dash 位置错或非 hex 字符都不通过
         assert!(!is_valid_session_id("550e8400-e29b-41d4-a716-44665544/000"));
         assert!(!is_valid_session_id("550e8400_e29b_41d4_a716_446655440000")); // 用 _ 代 -
-        // 非 hex 字符
+                                                                               // 非 hex 字符
         assert!(!is_valid_session_id("550e8400-e29b-41d4-a716-44665544000g"));
         // 长度不对（35 / 37）
         assert!(!is_valid_session_id("550e8400-e29b-41d4-a716-44665544000"));
-        assert!(!is_valid_session_id("550e8400-e29b-41d4-a716-4466554400000"));
+        assert!(!is_valid_session_id(
+            "550e8400-e29b-41d4-a716-4466554400000"
+        ));
         // NUL 字节
-        assert!(!is_valid_session_id("550e8400-e29b-41d4-a716-44665544\x00000"));
+        assert!(!is_valid_session_id(
+            "550e8400-e29b-41d4-a716-44665544\x00000"
+        ));
         // 百分号编码与绝对路径
         assert!(!is_valid_session_id("%2e%2e/recordings/x"));
         assert!(!is_valid_session_id("/Users/attacker/secret.wav"));
@@ -3665,7 +3922,9 @@ mod tests {
         assert!(is_valid_local_pack_id("builtin.light"));
         assert!(is_valid_local_pack_id("builtin.structured"));
         assert!(is_valid_local_pack_id("custom.meeting"));
-        assert!(is_valid_local_pack_id("550e8400-e29b-41d4-a716-446655440000"));
+        assert!(is_valid_local_pack_id(
+            "550e8400-e29b-41d4-a716-446655440000"
+        ));
         assert!(is_valid_local_pack_id("my_pack_v2"));
         assert!(is_valid_local_pack_id("Pack-2026.05"));
     }

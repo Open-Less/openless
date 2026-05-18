@@ -9,11 +9,13 @@ export function ShortcutRecorder({
   onSave,
   alignRecordButton = false,
   disabled = false,
+  allowUnset = false,
 }: {
   value: ShortcutBinding;
   onSave: (binding: ShortcutBinding) => Promise<void>;
   alignRecordButton?: boolean;
   disabled?: boolean;
+  allowUnset?: boolean;
 }) {
   const { t } = useTranslation();
   const [recording, setRecording] = useState(false);
@@ -56,6 +58,18 @@ export function ShortcutRecorder({
       setError(null);
     } catch {
       setError(t('settings.recording.comboConflict'));
+    }
+  };
+
+  const clearShortcut = async () => {
+    if (disabled) return;
+    try {
+      await onSave({ primary: '', modifiers: [] });
+      clearPendingModifier();
+      setRecording(false);
+      setError(null);
+    } catch {
+      setError(t('common.operationFailed'));
     }
   };
 
@@ -125,12 +139,27 @@ export function ShortcutRecorder({
     opacity: disabled ? 0.68 : 1,
     marginLeft: alignRecordButton ? 'auto' : undefined,
   };
+  const clearButtonStyle: CSSProperties = {
+    fontSize: 12,
+    padding: '5px 10px',
+    background: 'transparent',
+    color: 'var(--ol-ink-3)',
+    border: '0.5px solid var(--ol-line-strong)',
+    borderRadius: 6,
+    fontFamily: 'inherit',
+    fontWeight: 500,
+    cursor: disabled ? 'default' : 'pointer',
+    opacity: disabled || !value.primary.trim() ? 0.55 : 1,
+  };
+  const displayLabel = value.primary.trim()
+    ? formatComboLabel(value)
+    : t('hotkey.unset', 'Unset');
 
   return (
     <div style={rootStyle}>
       <div style={recorderRowStyle}>
         <span style={{ padding: '4px 10px', borderRadius: 6, background: 'rgba(0,0,0,0.06)', fontSize: 13, fontFamily: 'var(--ol-font-mono)', fontWeight: 500, color: 'var(--ol-ink)' }}>
-          {formatComboLabel(value)}
+          {displayLabel}
         </span>
         <button
           onClick={() => {
@@ -144,6 +173,15 @@ export function ShortcutRecorder({
         >
           {recording ? t('settings.recording.comboRecordHint') : t('settings.recording.comboRecordBtn')}
         </button>
+        {allowUnset && Boolean(value.primary.trim()) && (
+          <button
+            onClick={() => void clearShortcut()}
+            disabled={disabled}
+            style={clearButtonStyle}
+          >
+            {t('settings.advanced.disable', 'Disable')}
+          </button>
+        )}
       </div>
       {recording && (
         <div
