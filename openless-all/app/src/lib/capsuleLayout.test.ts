@@ -1,5 +1,6 @@
 import {
   getCapsuleHostMetrics,
+  getCapsuleInputEnvelopeMetrics,
   getCapsuleMessageLayout,
   getCapsulePillMetrics,
 } from './capsuleLayout.ts';
@@ -37,6 +38,15 @@ assertEqual(winHostWithTranslation.width, 220, 'windows translation capsule keep
 assertEqual(winHostWithTranslation.height, 118, 'windows translation capsule grows vertically only');
 assertEqual(winHostWithTranslation.horizontalInset, 12, 'windows translation capsule keeps symmetric side insets');
 assertEqual(winHostWithTranslation.boxSizing, 'border-box', 'windows translation host keeps the same inset-reserving box model');
+
+const winEnvelope = getCapsuleInputEnvelopeMetrics('win');
+assertEqual(winEnvelope.width, 196, 'windows native input envelope covers the rendered pill width');
+assertEqual(winEnvelope.height, 52, 'windows native input envelope covers the rendered pill height');
+assertEqual(winEnvelope.radius, 26, 'windows native input envelope uses a full pill radius');
+assertEqual(winEnvelope.bottomInset, 12, 'windows native input envelope anchors from the host bottom inset');
+assertEqual(winEnvelope.badgeWidth, 132, 'windows native input envelope tracks translation badge width');
+assertEqual(winEnvelope.badgeHeight, 24, 'windows native input envelope tracks translation badge height');
+assertEqual(winEnvelope.badgeGap, 8, 'windows native input envelope tracks translation badge gap');
 
 const macMetrics = getCapsulePillMetrics('mac');
 assertEqual(macMetrics.width, 176, 'mac capsule keeps existing pill width');

@@ -133,15 +133,12 @@ pub fn run() {
                 // backdrop-filter 只能模糊 DOM 内部，模糊不到 OS 桌面 → 胶囊背景
                 // 看起来就是「透到桌面」。这里给 Win10/Win11 都支持的 Acrylic 做兜底，
                 // 让 OS 提供毛玻璃材质，胶囊 rgba(255,255,255,0.85) 上面再叠 DOM 模糊。
-                // 失败不阻塞（老 Win10 / Win7 上 Acrylic 不可用），仅 warn。
+                // Windows capsule contract: the native HWND is only a transparent
+                // carrier/input envelope. The DOM pill owns the visible surface;
+                // Acrylic/Mica/DWM materials on this host paint the transparent
+                // carrier as a gray rectangle.
                 #[cfg(target_os = "windows")]
-                {
-                    use window_vibrancy::apply_acrylic;
-                    // 中性偏冷的浅灰半透，与胶囊白底叠合后保持可读性。
-                    if let Err(e) = apply_acrylic(&capsule, Some((30, 32, 38, 140))) {
-                        log::warn!("[capsule] acrylic failed: {e}");
-                    }
-                }
+                configure_windows_capsule_container_region(&capsule, false);
                 let _ = capsule.hide();
             }
 
@@ -726,6 +723,205 @@ fn apply_windows_caption_color<R: Runtime>(window: &tauri::WebviewWindow<R>) {
     }
 }
 
+#[cfg(target_os = "windows")]
+#[derive(Clone, Copy, Debug)]
+struct WindowsCapsuleRegionRect {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    radius: f64,
+}
+
+#[cfg(target_os = "windows")]
+fn windows_capsule_pill_region_rect(bounds: CapsuleWindowBounds) -> WindowsCapsuleRegionRect {
+    const PILL_WIDTH: f64 = 196.0;
+    const PILL_HEIGHT: f64 = 52.0;
+    const BOTTOM_INSET: f64 = 12.0;
+
+    WindowsCapsuleRegionRect {
+        x: (bounds.width - PILL_WIDTH) / 2.0,
+        y: bounds.height - BOTTOM_INSET - PILL_HEIGHT,
+        width: PILL_WIDTH,
+        height: PILL_HEIGHT,
+        radius: PILL_HEIGHT / 2.0,
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn windows_capsule_translation_badge_region_rect(
+    bounds: CapsuleWindowBounds,
+) -> WindowsCapsuleRegionRect {
+    const BADGE_WIDTH: f64 = 132.0;
+    const BADGE_HEIGHT: f64 = 24.0;
+    const BADGE_GAP: f64 = 8.0;
+
+    let pill = windows_capsule_pill_region_rect(bounds);
+    WindowsCapsuleRegionRect {
+        x: (bounds.width - BADGE_WIDTH) / 2.0,
+        y: (pill.y - BADGE_GAP - BADGE_HEIGHT).max(0.0),
+        width: BADGE_WIDTH,
+        height: BADGE_HEIGHT,
+        radius: BADGE_HEIGHT / 2.0,
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn windows_capsule_region_rects(
+    bounds: CapsuleWindowBounds,
+    translation_active: bool,
+) -> Vec<WindowsCapsuleRegionRect> {
+    let mut rects = Vec::with_capacity(if translation_active { 2 } else { 1 });
+    if translation_active {
+        rects.push(windows_capsule_translation_badge_region_rect(bounds));
+    }
+    rects.push(windows_capsule_pill_region_rect(bounds));
+    rects
+}
+
+#[cfg(all(target_os = "windows", test))]
+fn windows_capsule_rounded_rect_contains_point(
+    rect: WindowsCapsuleRegionRect,
+    x: f64,
+    y: f64,
+) -> bool {
+    if x < rect.x || x > rect.x + rect.width || y < rect.y || y > rect.y + rect.height {
+        return false;
+    }
+
+    let radius = rect.radius.min(rect.width / 2.0).min(rect.height / 2.0);
+    let nearest_x = if x < rect.x + radius {
+        rect.x + radius
+    } else if x > rect.x + rect.width - radius {
+        rect.x + rect.width - radius
+    } else {
+        x
+    };
+    let nearest_y = if y < rect.y + radius {
+        rect.y + radius
+    } else if y > rect.y + rect.height - radius {
+        rect.y + rect.height - radius
+    } else {
+        y
+    };
+    let dx = x - nearest_x;
+    let dy = y - nearest_y;
+    dx * dx + dy * dy <= radius * radius
+}
+
+#[cfg(all(target_os = "windows", test))]
+fn windows_capsule_region_contains_point(
+    bounds: CapsuleWindowBounds,
+    translation_active: bool,
+    x: f64,
+    y: f64,
+) -> bool {
+    windows_capsule_region_rects(bounds, translation_active)
+        .into_iter()
+        .any(|rect| windows_capsule_rounded_rect_contains_point(rect, x, y))
+}
+
+#[cfg(target_os = "windows")]
+fn windows_capsule_region_px(value: f64, scale: f64, outward: bool) -> i32 {
+    let scaled = value * scale;
+    if outward {
+        scaled.ceil() as i32
+    } else {
+        scaled.floor() as i32
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn windows_capsule_create_region(
+    bounds: CapsuleWindowBounds,
+    translation_active: bool,
+    scale_x: f64,
+    scale_y: f64,
+) -> windows::Win32::Graphics::Gdi::HRGN {
+    use windows::Win32::Graphics::Gdi::{
+        CombineRgn, CreateRoundRectRgn, DeleteObject, HRGN, RGN_ERROR, RGN_OR,
+    };
+
+    let mut combined = HRGN::default();
+    for rect in windows_capsule_region_rects(bounds, translation_active) {
+        let x1 = windows_capsule_region_px(rect.x, scale_x, false);
+        let y1 = windows_capsule_region_px(rect.y, scale_y, false);
+        let x2 = windows_capsule_region_px(rect.x + rect.width, scale_x, true);
+        let y2 = windows_capsule_region_px(rect.y + rect.height, scale_y, true);
+        let round_w = ((rect.radius * 2.0 * scale_x).round() as i32).max(1);
+        let round_h = ((rect.radius * 2.0 * scale_y).round() as i32).max(1);
+        let region = unsafe { CreateRoundRectRgn(x1, y1, x2, y2, round_w, round_h) };
+        if region.is_invalid() {
+            log::warn!("[capsule] create rounded container region failed");
+            continue;
+        }
+
+        if combined.is_invalid() {
+            combined = region;
+        } else {
+            let result = unsafe { CombineRgn(combined, combined, region, RGN_OR) };
+            let _ = unsafe { DeleteObject(region) };
+            if result == RGN_ERROR {
+                log::warn!("[capsule] combine container regions failed");
+                let _ = unsafe { DeleteObject(combined) };
+                return HRGN::default();
+            }
+        }
+    }
+    combined
+}
+
+#[cfg(target_os = "windows")]
+fn configure_windows_capsule_container_region<R: Runtime>(
+    window: &tauri::WebviewWindow<R>,
+    translation_active: bool,
+) {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows::Win32::Foundation::{BOOL, HWND, RECT};
+    use windows::Win32::Graphics::Gdi::{DeleteObject, SetWindowRgn};
+    use windows::Win32::UI::WindowsAndMessaging::GetWindowRect;
+
+    let handle = match window.window_handle().map(|h| h.as_raw()) {
+        Ok(RawWindowHandle::Win32(handle)) => handle,
+        Ok(other) => {
+            log::warn!("[capsule] unexpected raw window handle for container region: {other:?}");
+            return;
+        }
+        Err(e) => {
+            log::warn!("[capsule] read raw window handle for container region failed: {e}");
+            return;
+        }
+    };
+    let hwnd = HWND(handle.hwnd.get() as *mut core::ffi::c_void);
+    let bounds = capsule_window_bounds(translation_active);
+    let mut rect = RECT::default();
+    let (scale_x, scale_y) = if unsafe { GetWindowRect(hwnd, &mut rect) }.is_ok() {
+        let width = (rect.right - rect.left).max(1) as f64;
+        let height = (rect.bottom - rect.top).max(1) as f64;
+        (width / bounds.width.max(1.0), height / bounds.height.max(1.0))
+    } else {
+        (1.0, 1.0)
+    };
+
+    let region = windows_capsule_create_region(bounds, translation_active, scale_x, scale_y);
+    if region.is_invalid() {
+        return;
+    }
+
+    if unsafe { SetWindowRgn(hwnd, region, BOOL(1)) } == 0 {
+        let _ = unsafe { DeleteObject(region) };
+        log::warn!("[capsule] apply container region failed");
+    }
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn refresh_windows_capsule_container_region<R: Runtime>(
+    window: &tauri::WebviewWindow<R>,
+    translation_active: bool,
+) {
+    configure_windows_capsule_container_region(window, translation_active);
+}
+
 #[tauri::command]
 fn restart_app(app: AppHandle) {
     // macOS：自动更新会让新装的 .app 带 com.apple.quarantine（无论 Tauri updater
@@ -1201,6 +1397,8 @@ pub(crate) fn position_capsule_bottom_center<R: tauri::Runtime>(
     };
     let bounds = capsule_window_bounds(translation_active);
     window.set_size(LogicalSize::new(bounds.width, bounds.height))?;
+    #[cfg(target_os = "windows")]
+    configure_windows_capsule_container_region(window, translation_active);
 
     let scale = monitor.scale_factor();
     let size = monitor.size();
@@ -1361,6 +1559,31 @@ mod tests {
 
         #[cfg(not(target_os = "windows"))]
         assert_eq!(capsule_visual_height(true), 96.0);
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn capsule_container_region_consumes_only_rendered_pill_envelope() {
+        let bounds = capsule_window_bounds(false);
+
+        assert!(!super::windows_capsule_region_contains_point(bounds, false, 4.0, 4.0));
+        assert!(!super::windows_capsule_region_contains_point(bounds, false, 4.0, 50.0));
+        assert!(super::windows_capsule_region_contains_point(bounds, false, 110.0, 50.0));
+        assert!(super::windows_capsule_region_contains_point(bounds, false, 20.0, 50.0));
+        assert!(super::windows_capsule_region_contains_point(bounds, false, 200.0, 50.0));
+        assert!(!super::windows_capsule_region_contains_point(bounds, false, 10.0, 50.0));
+        assert!(!super::windows_capsule_region_contains_point(bounds, false, 110.0, 14.0));
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn capsule_container_region_tracks_translation_badge_and_pill() {
+        let bounds = capsule_window_bounds(true);
+
+        assert!(super::windows_capsule_region_contains_point(bounds, true, 110.0, 46.0));
+        assert!(super::windows_capsule_region_contains_point(bounds, true, 110.0, 84.0));
+        assert!(!super::windows_capsule_region_contains_point(bounds, true, 16.0, 84.0));
+        assert!(!super::windows_capsule_region_contains_point(bounds, true, 110.0, 50.0));
     }
 
     #[test]

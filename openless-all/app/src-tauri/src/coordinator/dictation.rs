@@ -486,6 +486,11 @@ pub(super) async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
 
     #[cfg(any(debug_assertions, test))]
     if hotkey_injection_dry_run_enabled() {
+        if capsule_hitl_translation_fixture_enabled() {
+            inner
+                .translation_modifier_seen
+                .store(true, Ordering::SeqCst);
+        }
         emit_capsule(inner, CapsuleState::Recording, 0.0, 0, None, None);
         inner.state.lock().phase = SessionPhase::Listening;
         log::info!("[coord] session started (hotkey-injection dry-run)");

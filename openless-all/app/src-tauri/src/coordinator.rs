@@ -2047,6 +2047,14 @@ fn hotkey_injection_dry_run_enabled() -> bool {
 }
 
 #[cfg(any(debug_assertions, test))]
+fn capsule_hitl_translation_fixture_enabled() -> bool {
+    std::env::var("OPENLESS_CAPSULE_HITL_TRANSLATION")
+        .ok()
+        .as_deref()
+        == Some("1")
+}
+
+#[cfg(any(debug_assertions, test))]
 fn debug_transcript_override_text() -> Option<String> {
     let path = std::env::var_os("OPENLESS_DEBUG_TRANSCRIPT_FILE")?;
     let text = std::fs::read_to_string(path).ok()?;
@@ -4412,6 +4420,8 @@ fn emit_capsule(
                 );
             }
             show_capsule_window_for_recording(&app_for_main, &window);
+            #[cfg(target_os = "windows")]
+            crate::refresh_windows_capsule_container_region(&window, translation);
             // macOS/Windows 优先走 no-activate show，避免录音胶囊抢走当前工作 app 焦点。
             // 若 fallback 到 show()，OpenLess 已是前台 app 时再把 key window 还给 main。
             #[cfg(target_os = "macos")]

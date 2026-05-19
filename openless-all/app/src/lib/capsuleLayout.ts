@@ -18,6 +18,16 @@ export interface CapsuleHostMetrics {
   boxSizing: 'border-box' | 'content-box';
 }
 
+export interface CapsuleInputEnvelopeMetrics {
+  width: number;
+  height: number;
+  radius: number;
+  bottomInset: number;
+  badgeWidth: number;
+  badgeHeight: number;
+  badgeGap: number;
+}
+
 export interface CapsuleMessageLayout {
   allowWrap: boolean;
   lineClamp: number;
@@ -27,7 +37,7 @@ export function getCapsulePillMetrics(os: OS): CapsulePillMetrics {
   if (os === 'win') {
     // Windows metrics describe the visible outer footprint of the pill.
     // 与 macOS pill 接近以保持视觉密度一致；保留 ~4-5% 余量适配 Windows 字体 metrics。
-    return { width: 180, height: 44, textWidth: 88, boxSizing: 'border-box' };
+    return { width: 196, height: 52, textWidth: 104, boxSizing: 'border-box' };
   }
 
   return { width: 176, height: 42, textWidth: 84, boxSizing: 'border-box' };
@@ -58,6 +68,31 @@ export function getCapsuleHostMetrics(
     bottomInset: 0,
     badgeGap: 8,
     boxSizing: 'border-box',
+  };
+}
+
+export function getCapsuleInputEnvelopeMetrics(os: OS): CapsuleInputEnvelopeMetrics {
+  if (os === 'win') {
+    return {
+      width: 196,
+      height: 52,
+      radius: 26,
+      bottomInset: 12,
+      badgeWidth: 132,
+      badgeHeight: 24,
+      badgeGap: 8,
+    };
+  }
+
+  const pill = getCapsulePillMetrics(os);
+  return {
+    width: pill.width,
+    height: pill.height,
+    radius: pill.height / 2,
+    bottomInset: 0,
+    badgeWidth: 132,
+    badgeHeight: 24,
+    badgeGap: 8,
   };
 }
 
