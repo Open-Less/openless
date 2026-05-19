@@ -107,7 +107,7 @@ OpenLess 是一个跨平台（macOS & Windows）语音输入应用，对标 [Typ
 OpenLess 想做的是同一类体验，但是：
 
 - **完全开源、本地优先**。代码在仓库里，所有数据写在你的机器上。
-- **自带云凭据**。火山引擎 ASR + Ark / DeepSeek 兼容 chat-completions，不强绑某家。
+- **自备云凭据**。火山引擎 ASR + Ark / DeepSeek 兼容 chat-completions，不强绑某家。
 - **专门为 AI prompt 优化**。「清晰结构」模式会把零散口语补成有上下文、有约束、有要求的 prompt，复制粘贴就能直接喂给 ChatGPT / Claude / Cursor。
 - **不会替你回答**。模型只整理你的话，不会把「我们这个应用还有哪些功能没做？」变成一份功能清单——只会补成一句通顺的问题，让你拿去问真正的 AI。
 
@@ -131,8 +131,8 @@ OpenLess 只做一件事：**把语音变成可用的书面文字（尤其是 AI
 
 | 工具 | 形态 | OpenLess 的差异 |
 | --- | --- | --- |
-| [Typeless](https://www.typeless.com/) | 闭源 macOS / Windows / iOS，订阅制 | 开源；专门暴露 AI prompt 模式；自带 ASR + LLM 凭据；数据和词典留在本机 |
-| [Wispr Flow](https://wisprflow.ai) | 闭源 macOS / Windows，订阅制 | 开源；自带 ASR + LLM 凭据；提示词处理原则透明可改 |
+| [Typeless](https://www.typeless.com/) | 闭源 macOS / Windows / iOS，订阅制 | 开源；专门暴露 AI prompt 模式；自备 ASR + LLM 凭据；数据和词典留在本机 |
+| [Wispr Flow](https://wisprflow.ai) | 闭源 macOS / Windows，订阅制 | 开源；自备 ASR + LLM 凭据；提示词处理原则透明可改 |
 | [Lazy](https://heylazy.com) | 闭源笔记/捕获工具 | 不做笔记容器，专做「插入到任意输入框」 |
 | [Superwhisper](https://superwhisper.com) | 闭源 macOS，订阅制 | 开源；目前云端 ASR 优先，本地 ASR 在 roadmap |
 

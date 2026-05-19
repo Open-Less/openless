@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../components/Icon';
+import { ONBOARDING_COMPLETE_KEY } from '../components/Onboarding';
 import { ShortcutRecorder } from '../components/ShortcutRecorder';
 import { detectOS } from '../components/WindowChrome';
 import { isHotkeyModeMigrationNoticeActive } from '../lib/hotkeyMigration';
@@ -62,14 +63,15 @@ export const NAVIGATE_LOCAL_ASR_EVENT = 'openless:navigate-local-asr';
 interface SettingsProps {
   embedded?: boolean;
   initialSection?: SettingsSectionId;
+  onStartOnboarding?: () => void;
 }
 // "关于" tab 已移除（内容并入外层 SettingsModal 的 About 页，避免设置内外重复入口）。
-export type SettingsSectionId = 'recording' | 'providers' | 'shortcuts' | 'permissions' | 'language' | 'advanced';
+export type SettingsSectionId = 'setup' | 'recording' | 'providers' | 'shortcuts' | 'permissions' | 'language' | 'advanced';
 
 // 「高级」放最末——本地推理 / 实验性开关都集中到这一栏，避免新手用户在主流程
 // 里误开 CPU 推理（之前提案：把 local-qwen3 / foundry-local-whisper 从主 ASR
 // 下拉藏进高级）。位置末尾也是「实验性」语义在 macOS 系统偏好里的惯用位置。
-const SECTION_ORDER: SettingsSectionId[] = ['recording', 'providers', 'shortcuts', 'permissions', 'language', 'advanced'];
+const SECTION_ORDER: SettingsSectionId[] = ['setup', 'recording', 'providers', 'shortcuts', 'permissions', 'language', 'advanced'];
 
 async function autostartIsEnabled(): Promise<boolean> {
   const { invoke } = await import('@tauri-apps/api/core');
@@ -86,7 +88,7 @@ async function autostartDisable(): Promise<void> {
   await invoke('plugin:autostart|disable');
 }
 
-export function Settings({ embedded = false, initialSection = 'recording' }: SettingsProps) {
+export function Settings({ embedded = false, initialSection = 'recording', onStartOnboarding }: SettingsProps) {
   const { t } = useTranslation();
   const [section, setSection] = useState<SettingsSectionId>(initialSection);
 
@@ -180,6 +182,7 @@ export function Settings({ embedded = false, initialSection = 'recording' }: Set
             ...(embedded ? { minHeight: 0, overflow: 'auto', paddingRight: 4, paddingBottom: 16 } : {}),
           }}
         >
+          {section === 'setup' && <SetupSection onStartOnboarding={onStartOnboarding} />}
           {section === 'recording' && <RecordingSection />}
           {section === 'providers' && <ProvidersSection />}
           {section === 'shortcuts' && <ShortcutsSection />}
@@ -189,6 +192,56 @@ export function Settings({ embedded = false, initialSection = 'recording' }: Set
         </div>
       </div>
     </>
+  );
+}
+
+function SetupSection({ onStartOnboarding }: { onStartOnboarding?: () => void }) {
+  const { t } = useTranslation();
+  const { prefs, updatePrefs } = useHotkeySettings();
+  const [busy, setBusy] = useState(false);
+
+  const start = async () => {
+    if (!onStartOnboarding || busy) return;
+    setBusy(true);
+    try {
+      if (prefs) {
+        await updatePrefs(current => ({
+          ...current,
+          onboardingVersion: 0,
+        }));
+      }
+      try {
+        window.localStorage.removeItem(ONBOARDING_COMPLETE_KEY);
+      } catch {
+        // Persisted preferences decide the gate; localStorage is only legacy cleanup.
+      }
+      onStartOnboarding();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16 }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>{t('settings.setup.title')}</div>
+          <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.5 }}>
+            {t('settings.setup.desc')}
+          </div>
+        </div>
+        <Btn
+          variant="blue"
+          size="sm"
+          icon="sparkle"
+          disabled={!onStartOnboarding || busy}
+          onClick={() => void start()}
+          style={{ flexShrink: 0 }}
+        >
+          {busy ? t('common.loading') : t('settings.setup.open')}
+        </Btn>
+      </div>
+    </Card>
   );
 }
 
@@ -343,6 +396,10 @@ function RecordingSection() {
   const selectedMicrophoneLabel = effectiveMicrophoneDeviceName
     ? effectiveMicrophoneDeviceName
     : t('settings.recording.microphoneDefault');
+  const showRightCtrlHoldWarning = detectOS() === 'win'
+    && prefs.hotkey.mode === 'hold'
+    && prefs.dictationHotkey.primary === 'RightControl'
+    && prefs.dictationHotkey.modifiers.length === 0;
 
   return (
     <>
@@ -398,6 +455,25 @@ function RecordingSection() {
           ))}
         </div>
       </SettingRow>
+      {showRightCtrlHoldWarning && (
+        <div
+          style={{
+            marginTop: 2,
+            marginBottom: 10,
+            padding: '10px 12px',
+            borderRadius: 8,
+            background: 'rgba(245, 158, 11, 0.10)',
+            border: '0.5px solid rgba(245, 158, 11, 0.24)',
+          }}
+        >
+          <div style={{ fontSize: 12, fontWeight: 600, color: '#92400e', marginBottom: 3 }}>
+            {t('settings.recording.rightCtrlHoldWarningTitle')}
+          </div>
+          <div style={{ fontSize: 11.5, color: 'var(--ol-ink-3)', lineHeight: 1.55 }}>
+            {t('settings.recording.rightCtrlHoldWarningDesc')}
+          </div>
+        </div>
+      )}
       <SettingRow label={t('settings.recording.microphoneLabel')} desc={t('settings.recording.microphoneDesc')}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           <button
@@ -1294,7 +1370,7 @@ const LLM_PRESETS = [
 
 type LlmPresetId = typeof LLM_PRESETS[number]['id'];
 
-const ASR_DEFAULT_RESOURCE_ID = 'volc.bigasr.sauc.duration';
+const ASR_DEFAULT_RESOURCE_ID = 'volc.seedasr.sauc.duration';
 
 // `volcengine` / `bailian` 走自建流式客户端；其余走 OpenAI 兼容
 // `/audio/transcriptions`（`coordinator.rs::is_whisper_compatible_provider`）。
@@ -1585,7 +1661,9 @@ function ProvidersSection() {
               label={t('settings.providers.volcengineResourceIdLabel')}
               account="volcengine.resource_id"
               mono
-              placeholder={ASR_DEFAULT_RESOURCE_ID} defaultValue={ASR_DEFAULT_RESOURCE_ID} />
+              placeholder={ASR_DEFAULT_RESOURCE_ID}
+              defaultValue={ASR_DEFAULT_RESOURCE_ID}
+            />
             <div style={{ marginTop: 2, fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.6 }}>
               {t('settings.providers.volcengineMappingNote')}
             </div>

@@ -2,7 +2,12 @@ import { useEffect, useState } from 'react';
 import { AutoUpdateGate } from './components/AutoUpdateGate';
 import { Capsule } from './components/Capsule';
 import { FloatingShell } from './components/FloatingShell';
-import { Onboarding } from './components/Onboarding';
+import {
+  ONBOARDING_COMPLETE_KEY,
+  Onboarding,
+  REQUIRED_ONBOARDING_VERSION,
+  type OnboardingCompleteOptions,
+} from './components/Onboarding';
 import { detectOS } from './components/WindowChrome';
 import {
   checkAccessibilityPermission,
@@ -12,12 +17,15 @@ import {
   handleWindowHotkeyEvent,
   isTauri,
 } from './lib/ipc';
+import type { PermissionStatus, UserPreferences } from './lib/types';
 import {
   isWindowHotkeyKeyboardCandidate,
   windowMouseHotkeyCode,
 } from './lib/windowHotkeyFallback';
 import { QaPanel } from './pages/QaPanel';
+import type { SettingsSectionId } from './pages/Settings';
 import { HotkeySettingsProvider } from './state/HotkeySettingsContext';
+import { PROVIDER_SETUP_PROMPT_DEFERRED_KEY } from './lib/providerSetup';
 
 interface AppProps {
   isCapsule: boolean;
@@ -35,8 +43,8 @@ export function App({ isCapsule, isQa }: AppProps) {
   }
 
   const os = detectOS();
-  // Windows 启动不应被权限探测阻塞首屏。
-  const [gate, setGate] = useState<Gate>(isTauri ? 'checking' : 'ready');
+  const [gate, setGate] = useState<Gate>('checking');
+  const [postOnboardingSettingsSection, setPostOnboardingSettingsSection] = useState<SettingsSectionId | undefined>();
 
   useEffect(() => {
     if (!isTauri) return;
@@ -51,7 +59,7 @@ export function App({ isCapsule, isQa }: AppProps) {
         // 的最后一条路径（Rust log 里看不到，因为走的是 plugin-window 的 IPC）。
         try {
           const prefs = await getSettings();
-          if (prefs.startMinimized) return;
+          if (prefs.startMinimized && gate !== 'onboarding') return;
         } catch (err) {
           // 安全侧默认 = 不弹窗。Rust 端 get_settings 签名是
           // `pub fn get_settings(...) -> UserPreferences`（非 Result），所以
@@ -81,55 +89,26 @@ export function App({ isCapsule, isQa }: AppProps) {
   }, [gate, os]);
 
   useEffect(() => {
-    if (!isTauri) return;
     let cancelled = false;
 
-    if (os === 'win') {
-      // 超时保护：50 次 × 200ms = 10s。hotkey hook 永远 starting（被反作弊 / EDR
-      // / UAC 拦）时不让 UI 死锁灰屏，过 10s 强 setGate('ready') 让用户进
-      // Permissions 页看 hotkey_status.lastError 处理。详见 issue #163。
-      const POLL_INTERVAL_MS = 200;
-      const POLL_MAX_ATTEMPTS = 50;
-      const pollHotkeyStatus = async () => {
-        let attempts = 0;
-        while (!cancelled && attempts < POLL_MAX_ATTEMPTS) {
-          attempts += 1;
-          const status = await getHotkeyStatus();
-          if (cancelled) return;
-          if (status.state !== 'starting') {
-            setGate('ready');
-            return;
-          }
-          await new Promise(resolve => window.setTimeout(resolve, POLL_INTERVAL_MS));
-        }
-        if (!cancelled) {
-          console.warn(
-            `[startup] hotkey gate timed out after ${POLL_MAX_ATTEMPTS * POLL_INTERVAL_MS}ms; forcing ready so user can reach Permissions page`
-          );
-          setGate('ready');
-        }
-      };
-      void pollHotkeyStatus().catch(error => {
-        console.warn('[startup] hotkey status polling failed', error);
-        if (!cancelled) {
-          setGate('ready');
-        }
-      });
-      return () => {
-        cancelled = true;
-      };
-    }
+    const decideGate = async () => {
+      if (isTauri && os === 'win') {
+        await waitForWindowsHotkeyGate(() => cancelled);
+        if (cancelled) return;
+      }
+      const nextGate = await resolveStartupGate();
+      if (!cancelled) {
+        setGate(nextGate);
+      }
+    };
 
-    (async () => {
-      const [a, m] = await Promise.all([
-        checkAccessibilityPermission(),
-        checkMicrophonePermission(),
-      ]);
-      if (cancelled) return;
-      const aOk = a === 'granted' || a === 'notApplicable';
-      const mOk = m === 'granted' || m === 'notApplicable';
-      setGate(aOk && mOk ? 'ready' : 'onboarding');
-    })();
+    void decideGate().catch(error => {
+      console.warn('[startup] startup gate failed, showing onboarding fallback', error);
+      if (!cancelled) {
+        setGate('onboarding');
+      }
+    });
+
     return () => {
       cancelled = true;
     };
@@ -171,12 +150,94 @@ export function App({ isCapsule, isQa }: AppProps) {
   if (gate === 'checking') {
     return <StartupShell />;
   }
+  const startOnboarding = () => {
+    try {
+      window.localStorage.removeItem(ONBOARDING_COMPLETE_KEY);
+    } catch {
+      // Ignore unavailable localStorage; persisted preferences are the source of truth.
+    }
+    setPostOnboardingSettingsSection(undefined);
+    setGate('onboarding');
+  };
+  const finishOnboarding = (options?: OnboardingCompleteOptions) => {
+    const nextSection = options?.openSettingsSection;
+    setPostOnboardingSettingsSection(nextSection);
+    if (nextSection) {
+      try {
+        window.sessionStorage.setItem(PROVIDER_SETUP_PROMPT_DEFERRED_KEY, '1');
+      } catch {
+        // Avoid covering the settings jump with the provider setup prompt when sessionStorage is unavailable.
+      }
+    }
+    setGate('ready');
+  };
   return (
     <HotkeySettingsProvider>
-      {gate === 'onboarding' ? <Onboarding onComplete={() => setGate('ready')} /> : <FloatingShell />}
+      {gate === 'onboarding'
+        ? <Onboarding onComplete={finishOnboarding} />
+        : (
+          <FloatingShell
+            initialSettings={postOnboardingSettingsSection !== undefined}
+            initialSettingsSection={postOnboardingSettingsSection}
+            onStartOnboarding={startOnboarding}
+          />
+        )}
       {gate === 'ready' && <AutoUpdateGate />}
     </HotkeySettingsProvider>
   );
+}
+
+async function waitForWindowsHotkeyGate(isCancelled: () => boolean) {
+  const POLL_INTERVAL_MS = 200;
+  const POLL_MAX_ATTEMPTS = 50;
+  let attempts = 0;
+  while (!isCancelled() && attempts < POLL_MAX_ATTEMPTS) {
+    attempts += 1;
+    const status = await getHotkeyStatus();
+    if (status.state !== 'starting') return;
+    await new Promise(resolve => window.setTimeout(resolve, POLL_INTERVAL_MS));
+  }
+  if (!isCancelled()) {
+    console.warn(
+      `[startup] hotkey gate timed out after ${POLL_MAX_ATTEMPTS * POLL_INTERVAL_MS}ms; continuing to startup onboarding decision`
+    );
+  }
+}
+
+async function resolveStartupGate(): Promise<Gate> {
+  const prefs = await getSettings().catch(() => null);
+  if (!onboardingMarkedComplete(prefs)) {
+    return 'onboarding';
+  }
+
+  const [accessibility, microphone] = await Promise.allSettled([
+    checkAccessibilityPermission(),
+    checkMicrophonePermission(),
+  ]);
+
+  const aOk = accessibility.status === 'fulfilled'
+    ? permissionReady(accessibility.value)
+    : false;
+  const mOk = microphone.status === 'fulfilled'
+    ? permissionReady(microphone.value)
+    : false;
+  if (!aOk || !mOk) return 'onboarding';
+  return 'ready';
+}
+
+function permissionReady(status: PermissionStatus) {
+  return status === 'granted' || status === 'notApplicable';
+}
+
+function onboardingMarkedComplete(prefs: Pick<UserPreferences, 'onboardingVersion'> | null) {
+  if (prefs) {
+    return prefs.onboardingVersion >= REQUIRED_ONBOARDING_VERSION;
+  }
+  try {
+    return window.localStorage.getItem(ONBOARDING_COMPLETE_KEY) === '1';
+  } catch {
+    return false;
+  }
 }
 
 function StartupShell() {

@@ -30,6 +30,7 @@ const previousPrefs: UserPreferences = {
   customStylePrompts: { raw: '', light: '', structured: '', formal: '' },
   launchAtLogin: false,
   showCapsule: true,
+  onboardingVersion: 0,
   muteDuringRecording: false,
   microphoneDeviceName: '',
   activeAsrProvider: 'volcengine',

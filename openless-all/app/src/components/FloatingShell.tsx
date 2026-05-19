@@ -53,21 +53,47 @@ interface FloatingShellProps {
   os?: OS;
   initialTab?: AppTab;
   initialSettings?: boolean;
+  initialSettingsSection?: SettingsSectionId;
+  onStartOnboarding?: () => void;
 }
 
-export function FloatingShell({ os: osProp, initialTab = 'overview', initialSettings = false }: FloatingShellProps) {
+export function FloatingShell({
+  os: osProp,
+  initialTab = 'overview',
+  initialSettings = false,
+  initialSettingsSection,
+  onStartOnboarding,
+}: FloatingShellProps) {
   const os = osProp ?? detectOS();
   return (
     <WindowChrome os={os} title="OpenLess" height="100%">
-      <FloatingShellBody os={os} initialTab={initialTab} initialSettings={initialSettings} />
+      <FloatingShellBody
+        os={os}
+        initialTab={initialTab}
+        initialSettings={initialSettings}
+        initialSettingsSection={initialSettingsSection}
+        onStartOnboarding={onStartOnboarding}
+      />
     </WindowChrome>
   );
 }
 
-function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initialTab: AppTab; initialSettings: boolean }) {
+function FloatingShellBody({
+  os,
+  initialTab,
+  initialSettings,
+  initialSettingsSection,
+  onStartOnboarding,
+}: {
+  os: OS;
+  initialTab: AppTab;
+  initialSettings: boolean;
+  initialSettingsSection?: SettingsSectionId;
+  onStartOnboarding?: () => void;
+}) {
   const { t } = useTranslation();
   const { currentTab, setCurrentTab, settingsOpen, setSettingsOpen } = useAppState(initialTab, initialSettings);
-  const [settingsInitialSection, setSettingsInitialSection] = useState<SettingsSectionId | undefined>();
+  const [settingsInitialSection, setSettingsInitialSection] = useState<SettingsSectionId | undefined>(initialSettingsSection);
   const [providerPromptOpen, setProviderPromptOpen] = useState(false);
   const [hotkeyModePromptOpen, setHotkeyModePromptOpen] = useState(false);
 
@@ -387,6 +413,7 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
           os={os}
           initialSettingsSection={settingsInitialSection}
           onClose={() => setSettingsOpen(false)}
+          onStartOnboarding={onStartOnboarding}
         />
       }
 

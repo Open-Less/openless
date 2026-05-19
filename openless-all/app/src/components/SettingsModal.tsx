@@ -57,6 +57,7 @@ interface SettingsModalProps {
   os: OS;
   onClose: () => void;
   initialSettingsSection?: SettingsSectionId;
+  onStartOnboarding?: () => void;
 }
 
 // 稳定 ID（与 i18n key 一致，方便 modal.sections.* 渲染）。
@@ -76,7 +77,12 @@ interface ModalGroup {
 const HELP_URL = 'https://github.com/appergb/openless#readme';
 const RELEASE_NOTES_URL = 'https://github.com/appergb/openless/releases';
 
-export function SettingsModal({ os: _os, onClose, initialSettingsSection }: SettingsModalProps) {
+export function SettingsModal({
+  os: _os,
+  onClose,
+  initialSettingsSection,
+  onStartOnboarding,
+}: SettingsModalProps) {
   const { t } = useTranslation();
   const [section, setSection] = useState<ModalSectionId>('settings');
   const savedToast = useSavedToastListener();
@@ -232,7 +238,11 @@ export function SettingsModal({ os: _os, onClose, initialSettingsSection }: Sett
           {section === 'settings' ? (
             // SettingsContent 自己接管 flex:1 + 内部右栏 scroll，外层不能再加 overflow:auto。
             <div style={{ flex: 1, minHeight: 0, padding: '10px 28px 28px', display: 'flex', flexDirection: 'column' }}>
-              <SettingsContent embedded initialSection={initialSettingsSection} />
+              <SettingsContent
+                embedded
+                initialSection={initialSettingsSection}
+                onStartOnboarding={onStartOnboarding}
+              />
             </div>
           ) : (
             // personalize / about 短内容：单一 scroll wrapper，超出时本块滚动。

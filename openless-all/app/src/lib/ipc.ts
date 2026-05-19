@@ -69,9 +69,10 @@ let mockSettings: UserPreferences = {
   customStylePrompts: { raw: '', light: '', structured: '', formal: '' },
   launchAtLogin: false,
   showCapsule: true,
+  onboardingVersion: 0,
   muteDuringRecording: false,
   microphoneDeviceName: '',
-  activeAsrProvider: 'foundry-local-whisper',
+  activeAsrProvider: 'volcengine',
   activeLlmProvider: 'ark',
   llmThinkingEnabled: false,
   restoreClipboardAfterPaste: true,
@@ -378,14 +379,43 @@ const mockHotkeyCapability: HotkeyCapability = {
   statusHint: '默认建议使用“右Ctrl + 单击”；若更习惯按住说话，可在录音设置里切回“按住”。若无响应，可在权限页查看 hook 安装状态。',
 };
 
-const mockCredentialsStatus: CredentialsStatus = {
-  activeAsrProvider: 'foundry-local-whisper',
+const mockCredentialValues: Record<string, string> = {};
+
+let mockCredentialsStatus: CredentialsStatus = {
+  activeAsrProvider: 'volcengine',
   activeLlmProvider: 'ark',
-  asrConfigured: true,
-  llmConfigured: true,
-  volcengineConfigured: true,
-  arkConfigured: true,
+  asrConfigured: false,
+  llmConfigured: false,
+  volcengineConfigured: false,
+  arkConfigured: false,
 };
+
+function syncMockCredentialsStatus() {
+  const volcengineConfigured = Boolean(
+    mockCredentialValues['volcengine.app_key']?.trim()
+    && mockCredentialValues['volcengine.access_key']?.trim()
+  );
+  const genericAsrConfigured = Boolean(
+    mockCredentialValues['asr.api_key']?.trim()
+    && mockCredentialValues['asr.endpoint']?.trim()
+    && mockCredentialValues['asr.model']?.trim()
+  );
+  const bailianConfigured = Boolean(mockCredentialValues['asr.api_key']?.trim());
+  const arkConfigured = Boolean(mockCredentialValues['ark.api_key']?.trim());
+  mockCredentialsStatus = {
+    ...mockCredentialsStatus,
+    asrConfigured: mockCredentialsStatus.activeAsrProvider === 'volcengine'
+      ? volcengineConfigured
+      : mockCredentialsStatus.activeAsrProvider === 'bailian'
+        ? bailianConfigured
+        : genericAsrConfigured,
+    llmConfigured: mockCredentialsStatus.activeLlmProvider === 'ark'
+      ? arkConfigured
+      : mockCredentialsStatus.llmConfigured,
+    volcengineConfigured,
+    arkConfigured,
+  };
+}
 
 export interface ProviderCheckResult {
   ok: boolean;
@@ -529,19 +559,33 @@ export function getCredentials(): Promise<CredentialsStatus> {
 }
 
 export function setCredential(account: string, value: string): Promise<void> {
-  return invokeOrMock('set_credential', { account, value }, () => undefined);
+  return invokeOrMock('set_credential', { account, value }, () => {
+    mockCredentialValues[account] = value;
+    syncMockCredentialsStatus();
+    return undefined;
+  });
 }
 
 export function setActiveAsrProvider(provider: string): Promise<void> {
-  return invokeOrMock('set_active_asr_provider', { provider }, () => undefined);
+  return invokeOrMock('set_active_asr_provider', { provider }, () => {
+    mockCredentialsStatus = { ...mockCredentialsStatus, activeAsrProvider: provider };
+    mockSettings = { ...mockSettings, activeAsrProvider: provider };
+    syncMockCredentialsStatus();
+    return undefined;
+  });
 }
 
 export function setActiveLlmProvider(provider: string): Promise<void> {
-  return invokeOrMock('set_active_llm_provider', { provider }, () => undefined);
+  return invokeOrMock('set_active_llm_provider', { provider }, () => {
+    mockCredentialsStatus = { ...mockCredentialsStatus, activeLlmProvider: provider };
+    mockSettings = { ...mockSettings, activeLlmProvider: provider };
+    syncMockCredentialsStatus();
+    return undefined;
+  });
 }
 
 export function readCredential(account: string): Promise<string | null> {
-  return invokeOrMock<string | null>('read_credential', { account }, () => null);
+  return invokeOrMock<string | null>('read_credential', { account }, () => mockCredentialValues[account] ?? null);
 }
 
 export function validateProviderCredentials(kind: 'llm' | 'asr'): Promise<ProviderCheckResult> {

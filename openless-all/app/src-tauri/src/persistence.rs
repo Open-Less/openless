@@ -388,14 +388,7 @@ impl Default for CredsActive {
 }
 
 fn creds_default_asr() -> String {
-    #[cfg(target_os = "windows")]
-    {
-        return crate::asr::local::foundry::PROVIDER_ID.into();
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        "volcengine".into()
-    }
+    "volcengine".into()
 }
 fn creds_default_llm() -> String {
     "ark".into()
@@ -2260,12 +2253,17 @@ impl CredentialsVault {
 #[cfg(test)]
 mod tests {
     use super::{
-        chunk_json_payload, list_vocab_presets, read_preferences, save_vocab_presets,
+        chunk_json_payload, creds_default_asr, list_vocab_presets, read_preferences, save_vocab_presets,
         sync_style_pack_preferences, validate_correction_rule_syntax, KEYRING_CHUNK_MAX_UTF16_UNITS,
     };
     use crate::types::{builtin_style_packs, CustomStylePrompts, VocabPreset, VocabPresetStore};
     use std::fs;
     use std::path::PathBuf;
+
+    #[test]
+    fn credentials_default_asr_starts_on_cloud_provider() {
+        assert_eq!(creds_default_asr(), "volcengine");
+    }
 
     #[test]
     fn credential_payload_chunks_stay_under_windows_blob_limit() {

@@ -752,7 +752,7 @@ const ProvidersSection = () => {
         </div>
         <SettingRow label="APP ID"><input defaultValue="1140349910" style={inputStyle} /></SettingRow>
         <SettingRow label="Access Token"><KeyField value="••••••••••••••••••••" /></SettingRow>
-        <SettingRow label="Resource ID"><input defaultValue="volc.bigasr.sauc.duration" style={{ ...inputStyle, fontFamily: 'var(--ol-font-mono)' }} /></SettingRow>
+        <SettingRow label="Resource ID"><input defaultValue="volc.seedasr.sauc.duration" style={{ ...inputStyle, fontFamily: 'var(--ol-font-mono)' }} /></SettingRow>
       </Card>
     </>
   );

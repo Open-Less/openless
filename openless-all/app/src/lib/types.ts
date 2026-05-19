@@ -216,6 +216,7 @@ export interface UserPreferences {
   customStylePrompts: CustomStylePrompts;
   launchAtLogin: boolean;
   showCapsule: boolean;
+  onboardingVersion: number;
   /** 录音期间临时静音系统输出，停止/取消/出错后恢复原静音状态。 */
   muteDuringRecording: boolean;
   /** 录音输入设备名称。空字符串 = 使用系统默认麦克风。 */

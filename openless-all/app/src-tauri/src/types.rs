@@ -522,6 +522,8 @@ pub struct UserPreferences {
     pub custom_style_prompts: CustomStylePrompts,
     pub launch_at_login: bool,
     pub show_capsule: bool,
+    #[serde(default)]
+    pub onboarding_version: u32,
     /// 录音期间临时静音系统输出，停止/取消/出错后恢复原静音状态。
     #[serde(default)]
     pub mute_during_recording: bool,
@@ -717,14 +719,7 @@ fn default_foundry_local_runtime_source() -> String {
 }
 
 fn default_active_asr_provider() -> String {
-    #[cfg(target_os = "windows")]
-    {
-        return crate::asr::local::foundry::PROVIDER_ID.into();
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        "volcengine".into()
-    }
+    "volcengine".into()
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -742,6 +737,8 @@ struct UserPreferencesWire {
     custom_style_prompts: CustomStylePrompts,
     launch_at_login: bool,
     show_capsule: bool,
+    #[serde(default)]
+    onboarding_version: u32,
     #[serde(default)]
     mute_during_recording: bool,
     #[serde(default)]
@@ -820,6 +817,7 @@ impl Default for UserPreferencesWire {
             custom_style_prompts: prefs.custom_style_prompts,
             launch_at_login: prefs.launch_at_login,
             show_capsule: prefs.show_capsule,
+            onboarding_version: prefs.onboarding_version,
             mute_during_recording: prefs.mute_during_recording,
             microphone_device_name: prefs.microphone_device_name,
             active_asr_provider: prefs.active_asr_provider,
@@ -895,6 +893,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             custom_style_prompts: wire.custom_style_prompts,
             launch_at_login: wire.launch_at_login,
             show_capsule: wire.show_capsule,
+            onboarding_version: wire.onboarding_version,
             mute_during_recording: wire.mute_during_recording,
             microphone_device_name: wire.microphone_device_name,
             active_asr_provider: wire.active_asr_provider,
@@ -1582,6 +1581,7 @@ impl Default for UserPreferences {
             custom_style_prompts: CustomStylePrompts::default(),
             launch_at_login: false,
             show_capsule: true,
+            onboarding_version: 0,
             mute_during_recording: false,
             microphone_device_name: String::new(),
             active_asr_provider: default_active_asr_provider(),
@@ -2212,6 +2212,13 @@ mod tests {
         let prefs = UserPreferences::default();
 
         assert!(prefs.allow_non_tsf_insertion_fallback);
+    }
+
+    #[test]
+    fn active_asr_provider_defaults_to_cloud_provider() {
+        let prefs = UserPreferences::default();
+
+        assert_eq!(prefs.active_asr_provider, "volcengine");
     }
 
     #[test]
