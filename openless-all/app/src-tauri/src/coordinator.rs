@@ -1905,7 +1905,7 @@ fn spawn_qa_recorder_error_monitor(inner: &Arc<Inner>, rx: mpsc::Receiver<Record
         .ok();
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", test))]
 fn store_prepared_windows_ime_session(
     slots: &mut Vec<PreparedWindowsImeSessionSlot>,
     session_id: SessionId,
@@ -1972,20 +1972,21 @@ async fn insert_with_windows_ime_first(
     paste_shortcut: PasteShortcut,
     ime_target: Option<ImeSubmitTarget>,
 ) -> InsertStatus {
+    if allow_non_tsf_insertion_fallback {
+        log::info!("[windows-ime] non-TSF insertion enabled; skipping TSF activation");
+        return insert_via_non_tsf_fallback(inner, polished, restore_clipboard, paste_shortcut);
+    }
+
     let prepared = {
         let mut slot = inner.prepared_windows_ime_session.lock();
         take_matching_prepared_windows_ime_session(&mut slot, session_id)
     };
-    let Some(prepared) = prepared else {
-        log::warn!("[windows-ime] no prepared TSF session for this dictation");
-        if should_try_non_tsf_insertion_fallback(
-            allow_non_tsf_insertion_fallback,
-            InsertStatus::Failed,
-        ) {
-            return insert_via_non_tsf_fallback(inner, polished, restore_clipboard, paste_shortcut);
+    let prepared = match prepared {
+        Some(prepared) => prepared,
+        None => {
+            log::info!("[windows-ime] preparing TSF session for required TSF insert");
+            inner.windows_ime.prepare_session()
         }
-        log::warn!("[windows-ime] non-TSF insertion fallback is disabled; failing insert");
-        return InsertStatus::Failed;
     };
 
     let request = crate::windows_ime_ipc::ImeSubmitRequest {
@@ -2036,19 +2037,13 @@ fn insert_via_non_tsf_fallback(
 
     match status {
         InsertStatus::Inserted => {
-            log::warn!(
-                "[windows-ime] TSF unavailable; inserted via paced Unicode SendInput fallback"
-            );
+            log::info!("[windows-ime] inserted via paced Unicode SendInput");
         }
         InsertStatus::CopiedFallback => {
-            log::warn!(
-                "[windows-ime] TSF unavailable; Unicode SendInput failed, left text on clipboard"
-            );
+            log::warn!("[windows-ime] Unicode SendInput failed, left text on clipboard");
         }
         InsertStatus::PasteSent | InsertStatus::Failed => {
-            log::warn!(
-                "[windows-ime] TSF unavailable; Unicode SendInput fallback failed and copy fallback failed"
-            );
+            log::warn!("[windows-ime] Unicode SendInput failed and copy fallback failed");
         }
     }
 

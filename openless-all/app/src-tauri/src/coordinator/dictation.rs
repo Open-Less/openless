@@ -535,12 +535,6 @@ pub(super) async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
         }
         session_id
     };
-    #[cfg(target_os = "windows")]
-    {
-        let prepared = inner.windows_ime.prepare_session();
-        let mut slots = inner.prepared_windows_ime_session.lock();
-        store_prepared_windows_ime_session(&mut slots, current_session_id, prepared);
-    }
     // 翻译模式标志重置；hotkey 监听器在 Shift down 时再 set true。
     inner
         .translation_modifier_seen
