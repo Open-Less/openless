@@ -400,6 +400,7 @@ export interface SherpaOnnxCatalogModel {
     alias: SherpaOnnxModelAlias
     displayName: string
     cached: boolean
+    downloadedBytes: number
     fileSizeMb: number | null
 }
 
@@ -449,24 +450,28 @@ export function getSherpaOnnxAsrCatalog(): Promise<SherpaOnnxCatalogModel[]> {
             alias: "sense-voice-small-zh" as const,
             displayName: "SenseVoice Small",
             cached: false,
+            downloadedBytes: 0,
             fileSizeMb: 230,
         },
         {
             alias: "paraformer-zh" as const,
             displayName: "Paraformer ZH",
             cached: false,
+            downloadedBytes: 0,
             fileSizeMb: 220,
         },
         {
             alias: "whisper-small-multi" as const,
             displayName: "Whisper Small",
             cached: false,
+            downloadedBytes: 0,
             fileSizeMb: 480,
         },
         {
             alias: "qwen3-asr-0.6b-int8" as const,
             displayName: "Qwen3-ASR 0.6B INT8",
             cached: false,
+            downloadedBytes: 0,
             fileSizeMb: 700,
         },
     ])
@@ -490,11 +495,11 @@ export function setSherpaOnnxAsrLanguageHint(
     )
 }
 
-export function prepareSherpaOnnxAsr(modelAlias?: string): Promise<void> {
+export function prepareSherpaOnnxAsr(modelAlias: string): Promise<string> {
     return invokeOrMock(
         "sherpa_onnx_asr_prepare",
-        modelAlias ? { modelAlias } : undefined,
-        () => undefined,
+        { modelAlias },
+        () => `mock-${modelAlias}`,
     )
 }
 
@@ -510,20 +515,14 @@ export function releaseSherpaOnnxAsr(): Promise<void> {
     return invokeOrMock("sherpa_onnx_asr_release", undefined, () => undefined)
 }
 
-export function getSherpaOnnxAsrModelDir(modelAlias?: string): Promise<string> {
-    return invokeOrMock(
-        "sherpa_onnx_asr_model_dir",
-        modelAlias ? { modelAlias } : undefined,
-        () => "",
-    )
+export function getSherpaOnnxAsrModelDir(modelAlias: string): Promise<string> {
+    return invokeOrMock("sherpa_onnx_asr_model_dir", { modelAlias }, () => "")
 }
 
-export function revealSherpaOnnxAsrModelDir(
-    modelAlias?: string,
-): Promise<void> {
+export function revealSherpaOnnxAsrModelDir(modelAlias: string): Promise<void> {
     return invokeOrMock(
         "sherpa_onnx_asr_reveal_model_dir",
-        modelAlias ? { modelAlias } : undefined,
+        { modelAlias },
         () => undefined,
     )
 }
@@ -539,7 +538,12 @@ export function deleteSherpaOnnxAsrModel(modelAlias: string): Promise<void> {
 export interface SherpaOnnxRemoteInfo {
     modelAlias: string
     mirror: string
-    files: { path: string; sizeBytes: number }[]
+    files: {
+        path: string
+        localPath: string
+        size: number
+        sha256?: string | null
+    }[]
     totalBytes: number
 }
 
@@ -570,12 +574,10 @@ export function downloadSherpaOnnxAsrModel(
     )
 }
 
-export function cancelSherpaOnnxAsrDownload(
-    modelAlias?: string,
-): Promise<void> {
+export function cancelSherpaOnnxAsrDownload(modelAlias: string): Promise<void> {
     return invokeOrMock(
         "sherpa_onnx_asr_cancel_download",
-        modelAlias ? { modelAlias } : undefined,
+        { modelAlias },
         () => undefined,
     )
 }

@@ -761,6 +761,16 @@ impl Coordinator {
     pub fn prefs(&self) -> &PreferencesStore {
         &self.inner.prefs
     }
+    pub fn sync_active_asr_provider_from_preferences(&self) -> Result<(), String> {
+        let provider = self.inner.prefs.get().active_asr_provider;
+        self.sync_active_asr_provider_to_vault(&provider)
+    }
+    pub fn sync_active_asr_provider_to_vault(&self, provider: &str) -> Result<(), String> {
+        if CredentialsVault::get_active_asr() == provider {
+            return Ok(());
+        }
+        CredentialsVault::set_active_asr_provider(provider).map_err(|e| e.to_string())
+    }
     pub fn style_packs(&self) -> &StylePackStore {
         &self.inner.style_packs
     }

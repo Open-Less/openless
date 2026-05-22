@@ -1296,6 +1296,7 @@ const ASR_PRESETS: ReadonlyArray<{ id: AsrPresetId; nameKey: string; baseUrl: st
   { id: 'groq',         nameKey: 'asrGroq',         baseUrl: 'https://api.groq.com/openai/v1',                 model: 'whisper-large-v3-turbo'      },
   { id: 'whisper',      nameKey: 'asrWhisper',      baseUrl: 'https://api.openai.com/v1',                      model: 'whisper-1'                   },
   { id: 'foundry-local-whisper', nameKey: 'asrFoundryLocalWhisper', baseUrl: '',                              model: ''                              },
+  { id: 'sherpa-onnx-local', nameKey: 'asrSherpaOnnxLocal', baseUrl: '',                                       model: ''                              },
   // 本地 Qwen3-ASR：无 baseUrl/model 配置，模型在「模型设置」页下载与切换。
   { id: 'local-qwen3',  nameKey: 'asrLocalQwen3',   baseUrl: '',                                              model: ''                              },
 ];
@@ -1322,7 +1323,7 @@ function ProvidersSection() {
   // 主 ASR 下拉只列云端选项；本地推理（local-qwen3 / foundry-local-whisper）
   // 移到「高级」标签页，防止新手误开 CPU 推理。详见 AdvancedSection。
   const visibleAsrPresets = ASR_PRESETS.filter(
-    p => p.id !== 'foundry-local-whisper' && p.id !== 'local-qwen3',
+    p => p.id !== 'foundry-local-whisper' && p.id !== 'sherpa-onnx-local' && p.id !== 'local-qwen3',
   );
 
   useEffect(() => {
@@ -1501,7 +1502,8 @@ function ProvidersSection() {
           {(() => {
             const isLocked =
               committedAsrProvider === 'local-qwen3' ||
-              committedAsrProvider === 'foundry-local-whisper';
+              committedAsrProvider === 'foundry-local-whisper' ||
+              committedAsrProvider === 'sherpa-onnx-local';
             const selectedValue: AsrPresetId = isLocked ? committedAsrProvider : asrProvider;
             // 跨机器同步异常兜底：committed 是本地但不在 visibleAsrPresets 里时，受控
             // select 会回退到首项造成假象 —— 补一个 disabled option 让 select 找到当前值。
@@ -1513,7 +1515,9 @@ function ProvidersSection() {
               ? 'asrLocalQwen3'
               : anomalousLocal === 'foundry-local-whisper'
                 ? 'asrFoundryLocalWhisper'
-                : null;
+                : anomalousLocal === 'sherpa-onnx-local'
+                  ? 'asrSherpaOnnxLocal'
+                  : null;
             return (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-start', minWidth: 0 }}>
                 <SelectLite
@@ -1571,7 +1575,7 @@ function ProvidersSection() {
               {t('settings.providers.volcengineMappingNote')}
             </div>
           </>
-        ) : committedAsrProvider === 'local-qwen3' || committedAsrProvider === 'foundry-local-whisper' ? (
+        ) : committedAsrProvider === 'local-qwen3' || committedAsrProvider === 'foundry-local-whisper' || committedAsrProvider === 'sherpa-onnx-local' ? (
           // 用户已经在用本地 ASR——dropdown 行的 localAsrActiveNotice 已经把
           // "在高级中切换或禁用"讲清楚了，body 不再重复 LocalAsrProviderHint。
           // 模型管理 UI 唯一入口在 AdvancedSection 里的 <LocalAsr embedded />。

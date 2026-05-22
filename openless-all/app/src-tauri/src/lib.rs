@@ -71,6 +71,10 @@ pub fn run() {
     ));
     #[cfg(not(target_os = "windows"))]
     let coordinator = Arc::new(coordinator::Coordinator::new());
+    #[cfg(target_os = "windows")]
+    if let Err(error) = coordinator.sync_active_asr_provider_from_preferences() {
+        log::warn!("[startup] sync active ASR provider from preferences failed: {error}");
+    }
     let local_asr_download_manager = Arc::new(asr::local::DownloadManager::new());
 
     tauri::Builder::default()

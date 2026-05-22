@@ -77,6 +77,7 @@ pub fn get_default_style_system_prompts() -> StyleSystemPrompts {
 trait SettingsWriter {
     fn read_settings(&self) -> UserPreferences;
     fn write_settings(&self, prefs: UserPreferences) -> Result<(), String>;
+    fn sync_active_asr_provider(&self, provider: &str) -> Result<(), String>;
     fn refresh_dictation_hotkey(&self);
     fn refresh_qa_hotkey(&self);
     fn refresh_combo_hotkey(&self);
@@ -92,6 +93,10 @@ impl SettingsWriter for Coordinator {
 
     fn write_settings(&self, prefs: UserPreferences) -> Result<(), String> {
         self.prefs().set(prefs).map_err(|e| e.to_string())
+    }
+
+    fn sync_active_asr_provider(&self, provider: &str) -> Result<(), String> {
+        self.sync_active_asr_provider_to_vault(provider)
     }
 
     fn refresh_dictation_hotkey(&self) {
@@ -126,6 +131,10 @@ impl<T: SettingsWriter + ?Sized> SettingsWriter for Arc<T> {
 
     fn write_settings(&self, prefs: UserPreferences) -> Result<(), String> {
         (**self).write_settings(prefs)
+    }
+
+    fn sync_active_asr_provider(&self, provider: &str) -> Result<(), String> {
+        (**self).sync_active_asr_provider(provider)
     }
 
     fn refresh_dictation_hotkey(&self) {
@@ -167,7 +176,12 @@ fn persist_settings<T: SettingsWriter>(
     let translation_changed = previous.translation_hotkey != prefs.translation_hotkey;
     let switch_style_changed = previous.switch_style_hotkey != prefs.switch_style_hotkey;
     let open_app_changed = previous.open_app_hotkey != prefs.open_app_hotkey;
+    let active_asr_provider_changed = previous.active_asr_provider != prefs.active_asr_provider;
+    let active_asr_provider = prefs.active_asr_provider.clone();
     coord.write_settings(prefs)?;
+    if active_asr_provider_changed {
+        coord.sync_active_asr_provider(&active_asr_provider)?;
+    }
     if dictation_shortcut_changed || dictation_mode_changed {
         coord.refresh_dictation_hotkey();
     }
@@ -3290,6 +3304,7 @@ mod tests {
     #[derive(Default)]
     struct FakeSettingsWriter {
         saved: Mutex<Option<UserPreferences>>,
+        active_asr_provider_syncs: Mutex<Vec<String>>,
         dictation_refreshes: Mutex<u32>,
         qa_refreshes: Mutex<u32>,
         combo_refreshes: Mutex<u32>,
@@ -3561,6 +3576,14 @@ mod tests {
             Ok(())
         }
 
+        fn sync_active_asr_provider(&self, provider: &str) -> Result<(), String> {
+            self.active_asr_provider_syncs
+                .lock()
+                .unwrap()
+                .push(provider.to_string());
+            Ok(())
+        }
+
         fn refresh_dictation_hotkey(&self) {
             *self.dictation_refreshes.lock().unwrap() += 1;
         }
@@ -3749,7 +3772,7 @@ mod tests {
     }
 
     #[test]
-    fn persist_settings_skips_hotkey_refresh_when_shortcuts_unchanged() {
+    fn persist_settings_syncs_active_asr_provider_without_hotkey_refresh() {
         let writer = FakeSettingsWriter::default();
         let previous = UserPreferences::default();
         *writer.saved.lock().unwrap() = Some(previous.clone());
@@ -3775,6 +3798,10 @@ mod tests {
             .expect("settings saved");
         assert_eq!(saved.active_asr_provider, prefs.active_asr_provider);
         assert_eq!(saved.microphone_device_name, prefs.microphone_device_name);
+        assert_eq!(
+            writer.active_asr_provider_syncs.lock().unwrap().clone(),
+            vec![prefs.active_asr_provider.clone()]
+        );
         assert_eq!(*writer.dictation_refreshes.lock().unwrap(), 0);
         assert_eq!(*writer.combo_refreshes.lock().unwrap(), 0);
         assert_eq!(*writer.qa_refreshes.lock().unwrap(), 0);

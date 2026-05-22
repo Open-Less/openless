@@ -255,23 +255,31 @@ fn downloaded_release_archive_bytes(
     archive: sherpa::SherpaReleaseArchive,
 ) -> u64 {
     let dest = dir.join(archive.file_name);
+    let (extracted, extracted_complete) = extracted_release_archive_bytes(dir, model_alias);
+    if extracted_complete {
+        return extracted;
+    }
     if let Ok(meta) = std::fs::metadata(&dest) {
         return meta.len();
     }
     let partial = partial_actual_size(&dest.with_extension("partial"));
-    if partial > 0 {
-        return partial;
-    }
+    partial.max(extracted)
+}
+
+fn extracted_release_archive_bytes(dir: &Path, model_alias: &str) -> (u64, bool) {
     if let Ok(files) = sherpa::required_files_for_alias(model_alias) {
-        let total: u64 = files
-            .iter()
-            .map(|f| path_size_recursive(&dir.join(f)))
-            .sum();
-        if total > 0 {
-            return total;
+        let mut total = 0;
+        let mut complete = true;
+        for file in files {
+            let path = dir.join(file);
+            total += path_size_recursive(&path);
+            if !sherpa::required_path_is_valid(model_alias, file, &path) {
+                complete = false;
+            }
         }
+        return (total, complete);
     }
-    0
+    (0, false)
 }
 
 fn path_size_recursive(path: &Path) -> u64 {
@@ -546,15 +554,26 @@ async fn run_release_archive_download(
             },
         );
     });
-    let result = download_one(
-        &client,
-        archive.url,
-        &archive_path,
-        total_bytes,
-        Arc::clone(&cancel),
-        on_progress,
-    )
-    .await;
+    let archive_file = info
+        .files
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("release archive file info missing"))?;
+    let result = if archive_file_is_verified(&archive_path, archive_file) {
+        Ok(())
+    } else {
+        if archive_path.exists() {
+            remove_path_if_exists(&archive_path)?;
+        }
+        download_one(
+            &client,
+            archive.url,
+            &archive_path,
+            total_bytes,
+            Arc::clone(&cancel),
+            on_progress,
+        )
+        .await
+    };
     if cancel.load(Ordering::SeqCst) {
         emit_cancelled(app, model_alias, file_count, total_bytes);
         return Ok(());
@@ -563,10 +582,14 @@ async fn run_release_archive_download(
         emit_failed(app, model_alias, file_count, total_bytes, &error);
         return Err(error);
     }
+    if let Err(error) = verify_file(&archive_path, archive_file) {
+        emit_failed(app, model_alias, file_count, total_bytes, &error);
+        return Err(error);
+    }
     let archive_path_for_extract = archive_path.clone();
     let dir_for_extract = dir.to_path_buf();
     let model_alias_for_extract = model_alias.to_string();
-    tauri::async_runtime::spawn_blocking(move || {
+    let extract_result = tauri::async_runtime::spawn_blocking(move || {
         extract_release_archive(
             &archive_path_for_extract,
             &dir_for_extract,
@@ -575,7 +598,14 @@ async fn run_release_archive_download(
         )
     })
     .await
-    .map_err(|error| anyhow::anyhow!("extract join failed: {error:#}"))??;
+    .map_err(|error| anyhow::anyhow!("extract join failed: {error:#}"))
+    .and_then(|result| result);
+    if let Err(error) = extract_result {
+        emit_failed(app, model_alias, file_count, total_bytes, &error);
+        return Err(error);
+    }
+    let cached_bytes = downloaded_bytes(model_alias);
+    let finished_total_bytes = total_bytes.max(cached_bytes);
     emit(
         app,
         DownloadProgress {
@@ -583,8 +613,8 @@ async fn run_release_archive_download(
             file: String::new(),
             file_index: file_count,
             file_count,
-            bytes_downloaded: total_bytes,
-            bytes_total: total_bytes,
+            bytes_downloaded: cached_bytes,
+            bytes_total: finished_total_bytes,
             phase: DownloadPhase::Finished,
             error: None,
         },
@@ -612,7 +642,14 @@ fn extract_release_archive(
     if !root.exists() {
         anyhow::bail!("archive root missing: {}", root.display());
     }
-    for required in sherpa::required_files_for_alias(model_alias)? {
+    let required_files = sherpa::required_files_for_alias(model_alias)?;
+    for required in required_files {
+        let src = root.join(required);
+        if !sherpa::required_path_is_valid(model_alias, required, &src) {
+            anyhow::bail!("archive required path missing: {}", src.display());
+        }
+    }
+    for required in required_files {
         let src = root.join(required);
         let dest = dir.join(required);
         move_path(&src, &dest)?;
@@ -696,6 +733,10 @@ fn remove_path_if_exists(path: &Path) -> Result<()> {
 
 fn file_is_verified(path: &Path, file: &SherpaRemoteFile) -> bool {
     path.exists() && verify_file(path, file).is_ok()
+}
+
+fn archive_file_is_verified(path: &Path, file: &SherpaRemoteFile) -> bool {
+    path.exists() && (file.size > 0 || file.sha256.is_some()) && verify_file(path, file).is_ok()
 }
 
 fn verify_file(path: &Path, file: &SherpaRemoteFile) -> Result<()> {
@@ -785,4 +826,53 @@ fn emit_failed(
             error: Some(format!("{error:#}")),
         },
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    struct TempModelDir(PathBuf);
+
+    impl TempModelDir {
+        fn new(label: &str) -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "openless-sherpa-download-{label}-{}",
+                uuid::Uuid::new_v4()
+            ));
+            fs::create_dir_all(&path).expect("create temp model dir");
+            Self(path)
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempModelDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn release_archive_downloaded_bytes_uses_extracted_assets_after_archive_removed() {
+        let alias = "qwen3-asr-0.6b-int8";
+        let archive = sherpa::release_archive_for_alias(alias).expect("release archive");
+        let dir = TempModelDir::new("release-archive-extracted");
+        fs::write(dir.path().join("conv_frontend.onnx"), b"abc").expect("write conv frontend");
+        fs::write(dir.path().join("encoder.int8.onnx"), b"encod").expect("write encoder");
+        fs::write(dir.path().join("decoder.int8.onnx"), b"decoder").expect("write decoder");
+        fs::create_dir_all(dir.path().join("tokenizer")).expect("create tokenizer dir");
+        fs::write(dir.path().join("tokenizer").join("tokenizer.json"), b"tok")
+            .expect("write tokenizer file");
+
+        assert!(!dir.path().join(archive.file_name).exists());
+        assert_eq!(
+            downloaded_release_archive_bytes(dir.path(), alias, archive),
+            18
+        );
+    }
 }

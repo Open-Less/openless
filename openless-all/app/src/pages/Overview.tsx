@@ -31,6 +31,7 @@ const ASR_NAME_KEY_BY_ID: Record<string, string> = {
   groq: 'asrGroq',
   whisper: 'asrWhisper',
   'foundry-local-whisper': 'asrFoundryLocalWhisper',
+  'sherpa-onnx-local': 'asrSherpaOnnxLocal',
   'local-qwen3': 'asrLocalQwen3',
 };
 
@@ -74,8 +75,8 @@ export function Overview({ onOpenHistory }: OverviewProps) {
       });
   }, []);
 
-  useEffect(() => {
-    refreshHistory();
+  const refreshCredentials = useCallback(() => {
+    setCredsError(false);
     getCredentials()
       .then(status => {
         setCreds(status);
@@ -85,7 +86,15 @@ export function Overview({ onOpenHistory }: OverviewProps) {
         console.error('[overview] failed to load credentials status', error);
         setCredsError(true);
       });
+  }, []);
+
+  useEffect(() => {
+    refreshHistory();
   }, [refreshHistory]);
+
+  useEffect(() => {
+    refreshCredentials();
+  }, [refreshCredentials, prefs?.activeAsrProvider, prefs?.activeLlmProvider]);
 
   const metrics = useMemo(() => {
     const today = new Date();

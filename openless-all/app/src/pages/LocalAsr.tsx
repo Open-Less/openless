@@ -1243,6 +1243,10 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
         selectedSherpaCatalog?.cached !== true &&
         selectedSherpaDownloadProgress?.phase !== "finished" &&
         (selectedSherpaDownloadProgress?.bytesDownloaded ?? 0) > 0
+    const canDeleteSelectedSherpa =
+        selectedSherpaCatalog?.cached === true ||
+        hasSherpaPartial ||
+        (selectedSherpaCatalog?.downloadedBytes ?? 0) > 0
     const showSherpaDownloadProgress =
         isSherpaDownloading ||
         selectedSherpaDownloadProgress?.phase === "failed" ||
@@ -2140,8 +2144,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
                                 size="sm"
                                 disabled={
                                     sherpaBusy !== null ||
-                                    (selectedSherpaCatalog?.cached !== true &&
-                                        !hasSherpaPartial)
+                                    !canDeleteSelectedSherpa
                                 }
                                 onClick={() => void handleDeleteSherpa()}
                             >

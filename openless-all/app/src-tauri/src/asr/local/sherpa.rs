@@ -5,7 +5,7 @@
 //!
 //! 推理接入见 `sherpa_runtime.rs`（M2）。
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use serde::Serialize;
@@ -128,6 +128,18 @@ pub fn required_files_for_alias(alias: &str) -> Result<&'static [&'static str]> 
     }
 }
 
+pub fn required_path_is_valid(alias: &str, required: &str, path: &Path) -> bool {
+    if required_path_is_dir(alias, required) {
+        path.is_dir()
+    } else {
+        path.is_file()
+    }
+}
+
+fn required_path_is_dir(alias: &str, required: &str) -> bool {
+    matches!((alias, required), ("qwen3-asr-0.6b-int8", "tokenizer"))
+}
+
 pub fn download_files_for_alias(alias: &str) -> Result<&'static [(&'static str, &'static str)]> {
     match alias {
         "sense-voice-small-zh" => Ok(&[
@@ -184,6 +196,7 @@ pub struct SherpaCatalogModel {
     pub mode: SherpaMode,
     pub languages: Vec<String>,
     pub cached: bool,
+    pub downloaded_bytes: u64,
     pub file_size_mb: Option<u64>,
 }
 
@@ -197,6 +210,7 @@ impl SherpaCatalogModel {
             mode: model.mode,
             languages: model.languages.iter().map(|s| s.to_string()).collect(),
             cached: false,
+            downloaded_bytes: 0,
             file_size_mb: None,
         }
     }

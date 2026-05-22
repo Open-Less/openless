@@ -96,8 +96,15 @@ impl SherpaOnnxRuntime {
         for model in &mut catalog {
             let dir = sherpa::model_dir_for_alias(&model.alias)?;
             model.cached = sherpa::required_files_for_alias(&model.alias)
-                .map(|files| files.iter().all(|file| dir.join(file).exists()))
+                .map(|files| {
+                    files.iter().all(|file| {
+                        let path = dir.join(file);
+                        sherpa::required_path_is_valid(&model.alias, file, &path)
+                    })
+                })
                 .unwrap_or(false);
+            model.downloaded_bytes =
+                crate::asr::local::sherpa_download::downloaded_bytes(&model.alias);
             model.file_size_mb = model_dir_size_mb(&dir);
         }
         Ok(catalog)
@@ -256,7 +263,7 @@ fn validate_alias(alias: &str) -> Result<()> {
 fn ensure_required_files(alias: &str, dir: &Path) -> Result<()> {
     for file in sherpa::required_files_for_alias(alias)? {
         let path = dir.join(file);
-        if !path.exists() {
+        if !sherpa::required_path_is_valid(alias, file, &path) {
             anyhow::bail!(
                 "sherpa-onnx model file missing: {}. Place model files under {}",
                 file,
