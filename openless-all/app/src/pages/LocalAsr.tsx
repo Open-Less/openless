@@ -976,8 +976,11 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
         if (!sherpaAvailable) return
         const modelAlias = selectedSherpaAlias
         const remoteSize = sherpaRemoteSizes[modelAlias]
+        const model = sherpaCatalog.find((item) => item.alias === modelAlias)
         const initialDownloaded =
-            sherpaDownloadProgress[modelAlias]?.bytesDownloaded ?? 0
+            sherpaDownloadProgress[modelAlias]?.bytesDownloaded ??
+            model?.downloadedBytes ??
+            0
         setSherpaBusy("download")
         setSherpaDownloadCancelRequested(false)
         setSherpaDownloadProgress((prev) => ({
@@ -1236,21 +1239,47 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
     const selectedSherpaRemoteSize = sherpaRemoteSizes[selectedSherpaAlias]
     const selectedSherpaDownloadProgress =
         sherpaDownloadProgress[selectedSherpaAlias]
+    const selectedSherpaDownloadedBytes =
+        selectedSherpaCatalog?.downloadedBytes ?? 0
+    const selectedSherpaProgressBytes =
+        selectedSherpaDownloadProgress?.bytesDownloaded ?? 0
+    const selectedSherpaPartialBytes = Math.max(
+        selectedSherpaProgressBytes,
+        selectedSherpaDownloadedBytes,
+    )
+    const selectedSherpaCatalogHasDir =
+        typeof selectedSherpaCatalog?.fileSizeMb === "number"
     const isSherpaDownloading =
         selectedSherpaDownloadProgress?.phase === "started" ||
         selectedSherpaDownloadProgress?.phase === "progress"
     const hasSherpaPartial =
         selectedSherpaCatalog?.cached !== true &&
         selectedSherpaDownloadProgress?.phase !== "finished" &&
-        (selectedSherpaDownloadProgress?.bytesDownloaded ?? 0) > 0
-    const canDeleteSelectedSherpa =
+        selectedSherpaPartialBytes > 0
+    const selectedSherpaHasLocalFiles =
         selectedSherpaCatalog?.cached === true ||
-        hasSherpaPartial ||
-        (selectedSherpaCatalog?.downloadedBytes ?? 0) > 0
+        selectedSherpaDownloadedBytes > 0 ||
+        selectedSherpaCatalogHasDir
+    const canDeleteSelectedSherpa =
+        selectedSherpaHasLocalFiles || hasSherpaPartial
     const showSherpaDownloadProgress =
         isSherpaDownloading ||
         selectedSherpaDownloadProgress?.phase === "failed" ||
         hasSherpaPartial
+    const selectedSherpaDownloadProgressForDisplay =
+        selectedSherpaDownloadProgress ??
+        (hasSherpaPartial
+            ? {
+                  modelId: selectedSherpaAlias,
+                  file: "",
+                  fileIndex: 0,
+                  fileCount: selectedSherpaRemoteSize?.fileCount ?? 0,
+                  bytesDownloaded: selectedSherpaDownloadedBytes,
+                  bytesTotal: selectedSherpaRemoteSize?.totalBytes ?? 0,
+                  phase: "progress" as const,
+                  error: null,
+              }
+            : undefined)
     const selectedSherpaSizeMb = formatFoundrySizeMb(
         selectedSherpaCatalog?.fileSizeMb,
     )
@@ -2033,7 +2062,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
 
                         {showSherpaDownloadProgress && (
                             <DownloadProgressBlock
-                                progress={selectedSherpaDownloadProgress}
+                                progress={selectedSherpaDownloadProgressForDisplay}
                                 remoteSize={selectedSherpaRemoteSize}
                                 cancelRequested={sherpaDownloadCancelRequested}
                             />
@@ -2063,8 +2092,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
                                 size="sm"
                                 disabled={
                                     sherpaBusy !== null ||
-                                    !sherpaAvailable ||
-                                    selectedSherpaCatalog?.cached !== true
+                                    !sherpaAvailable
                                 }
                                 onClick={() => void handlePrepareSherpa()}
                             >

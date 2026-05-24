@@ -142,7 +142,10 @@ fn required_path_is_dir(alias: &str, required: &str) -> bool {
 
 fn required_dir_is_valid(alias: &str, required: &str, path: &Path) -> bool {
     match (alias, required) {
-        ("qwen3-asr-0.6b-int8", "tokenizer") => path.join("tokenizer.json").is_file(),
+        ("qwen3-asr-0.6b-int8", "tokenizer") => {
+            path.join("tokenizer.json").is_file()
+                || (path.join("vocab.json").is_file() && path.join("merges.txt").is_file())
+        }
         _ => false,
     }
 }
@@ -345,7 +348,7 @@ mod tests {
     }
 
     #[test]
-    fn qwen3_tokenizer_requires_tokenizer_json() {
+    fn qwen3_tokenizer_accepts_supported_layouts() {
         let dir = std::env::temp_dir().join(format!(
             "openless-sherpa-tokenizer-{}",
             uuid::Uuid::new_v4()
@@ -359,6 +362,21 @@ mod tests {
         ));
 
         fs::write(dir.join("tokenizer.json"), b"{}").expect("write tokenizer json");
+        assert!(required_path_is_valid(
+            "qwen3-asr-0.6b-int8",
+            "tokenizer",
+            &dir
+        ));
+
+        fs::remove_file(dir.join("tokenizer.json")).expect("remove tokenizer json");
+        fs::write(dir.join("vocab.json"), b"{}").expect("write vocab json");
+        assert!(!required_path_is_valid(
+            "qwen3-asr-0.6b-int8",
+            "tokenizer",
+            &dir
+        ));
+
+        fs::write(dir.join("merges.txt"), b"#version: 0.2").expect("write merges txt");
         assert!(required_path_is_valid(
             "qwen3-asr-0.6b-int8",
             "tokenizer",
