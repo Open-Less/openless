@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { detectOS, type OS } from './WindowChrome';
 import {
@@ -146,15 +146,17 @@ interface PillProps {
   level: number;
   insertedChars: number;
   message?: string;
+  streamingText?: string;
   onCancel: () => void;
   onConfirm: () => void;
 }
 
-function Pill({ os, state, level, insertedChars, message, onCancel, onConfirm }: PillProps) {
+function Pill({ os, state, level, insertedChars, message, streamingText, onCancel, onConfirm }: PillProps) {
   const { t } = useTranslation();
   const metrics = getCapsulePillMetrics(os);
   const processingLayout = getCapsuleMessageLayout(os, 'processing');
   const enabled = state === 'recording';
+  const liveText = streamingText?.trim();
 
   // "thinking" 扫光速度：进入 transcribing/polishing 的头 2 秒走快速（0.9s/cycle，提示
   // 「流式刚开始」），之后切回慢速（2.4s）作为稳态。切回 idle / done / 其他 state 也复位
@@ -173,11 +175,15 @@ function Pill({ os, state, level, insertedChars, message, onCancel, onConfirm }:
   let center: JSX.Element;
   switch (state) {
     case 'recording':
-      center = <AudioBars level={level} />;
+      center = liveText
+        ? <CenterText os={os} kind="default" text={liveText} color="var(--ol-ink-2)" />
+        : <AudioBars level={level} />;
       break;
     case 'transcribing':
     case 'polishing':
-      center = (
+      center = liveText ? (
+        <CenterText os={os} kind="processing" text={liveText} color="var(--ol-ink-2)" />
+      ) : (
         <div
           style={{
             display: 'inline-flex',
@@ -289,6 +295,10 @@ const EXIT_ANIM_MS = 360;
 // 浏览器 dev 模式从 recording 开始以便直接看到胶囊。
 const INITIAL_VISIBLE_STATE: CapsuleState = isTauri ? 'idle' : 'recording';
 
+function isStreamingVisibleState(state: CapsuleState): boolean {
+  return state === 'recording' || state === 'transcribing' || state === 'polishing';
+}
+
 export function Capsule() {
   const { t } = useTranslation();
   const os = detectOS();
@@ -298,6 +308,7 @@ export function Capsule() {
   const [insertedChars, setInsertedChars] = useState<number>(0);
   const [message, setMessage] = useState<string | undefined>();
   const [translation, setTranslation] = useState<boolean>(false);
+  const [streamingText, setStreamingText] = useState<string>('');
   // `leaving` 与 `lastVisibleState` 协同实现「退出动画」：
   // - 当 state 从非 idle 变成 idle 时，不立即卸载，而是把 leaving 置为 true 并保留
   //   最后一帧的可见 state（lastVisibleState），让胶囊用 capsule-out 动画收缩淡出。
@@ -305,6 +316,7 @@ export function Capsule() {
   // - 若期间 state 又切回非 idle（例如用户连按热键），立刻中止 leaving 并恢复显示。
   const [leaving, setLeaving] = useState<boolean>(false);
   const [lastVisibleState, setLastVisibleState] = useState<CapsuleState>(INITIAL_VISIBLE_STATE);
+  const stateRef = useRef<CapsuleState>(INITIAL_VISIBLE_STATE);
   // Windows 端 host 在翻译模式从 84 长到 118；macOS / Linux 上 capsuleLayout 已固定 42 忽略此参数。
   const hostMetrics = getCapsuleHostMetrics(os, translation);
 
@@ -316,11 +328,16 @@ export function Capsule() {
       const { listen } = await import('@tauri-apps/api/event');
       const handle = await listen<CapsulePayload>('capsule:state', event => {
         const p = event.payload;
+        const previousState = stateRef.current;
+        stateRef.current = p.state;
         setState(p.state);
         setLevel(p.level ?? 0);
         setMessage(p.message ?? undefined);
         if (p.insertedChars != null) setInsertedChars(p.insertedChars);
         setTranslation(p.translation === true);
+        if (p.state === 'recording' && previousState !== 'recording') {
+          setStreamingText('');
+        }
       });
       if (cancelled) handle();
       else unlisten = handle;
@@ -330,6 +347,34 @@ export function Capsule() {
       if (unlisten) unlisten();
     };
   }, []);
+
+  useEffect(() => {
+    if (!isTauri) return;
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    (async () => {
+      const { listen } = await import('@tauri-apps/api/event');
+      const handle = await listen<string>('local-asr-token', event => {
+        const piece = event.payload ?? '';
+        if (!piece) return;
+        if (!isStreamingVisibleState(stateRef.current)) return;
+        setStreamingText(current => `${current}${piece}`.trimStart());
+      });
+      if (cancelled) handle();
+      else unlisten = handle;
+    })();
+    return () => {
+      cancelled = true;
+      if (unlisten) unlisten();
+    };
+  }, []);
+
+  useEffect(() => {
+    stateRef.current = state;
+    if (!isStreamingVisibleState(state)) {
+      setStreamingText('');
+    }
+  }, [state]);
 
   // 退出动画调度：在 state 真正进入 idle 时，先用 capsule-out 播放 EXIT_ANIM_MS，再卸载。
   // 设计要点：
@@ -457,6 +502,7 @@ export function Capsule() {
         level={leaving ? 0 : level}
         insertedChars={insertedChars}
         message={message}
+        streamingText={streamingText}
         onCancel={onCancel}
         onConfirm={onConfirm}
       />

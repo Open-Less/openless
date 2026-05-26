@@ -305,6 +305,10 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
                 activeModel: selectedSherpaAlias,
                 loadedModelId: null,
                 error: message,
+                lastPrepareMs: null,
+                lastTranscribeMs: null,
+                lastAudioMs: null,
+                lastError: message,
             })
         }
     }
@@ -1236,6 +1240,12 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
     )
     const selectedSherpaDisplayName =
         selectedSherpaCatalog?.displayName ?? t(selectedSherpaModel.labelKey)
+    const selectedSherpaMode =
+        selectedSherpaCatalog?.mode ?? selectedSherpaModel.mode
+    const selectedSherpaModeLabel =
+        selectedSherpaMode === "online"
+            ? t("localAsr.sherpaModeOnline")
+            : t("localAsr.sherpaModeOffline")
     const selectedSherpaRemoteSize = sherpaRemoteSizes[selectedSherpaAlias]
     const selectedSherpaDownloadProgress =
         sherpaDownloadProgress[selectedSherpaAlias]
@@ -1306,9 +1316,14 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
                     : sizeMb
                       ? t("localAsr.foundryApproxSizeMb", { mb: sizeMb })
                       : ""
+                const mode = catalog?.mode ?? model.mode
+                const modeLabel =
+                    mode === "online"
+                        ? t("localAsr.sherpaModeOnline")
+                        : t("localAsr.sherpaModeOffline")
                 return {
                     value: model.alias,
-                    label: `${t(model.labelKey)}${
+                    label: `${t(model.labelKey)} · ${modeLabel}${
                         sizeLabel ? ` · ${sizeLabel}` : ""
                     }`,
                 }
@@ -1352,6 +1367,25 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
             : sherpaProgress?.phase === "failed"
               ? t("localAsr.foundryRetryPrepare")
               : t("localAsr.sherpaPrepare")
+    const sherpaDiagnostics = [
+        formatDurationMs(sherpaStatus?.lastPrepareMs)
+            ? t("localAsr.sherpaDiagPrepare", {
+                  value: formatDurationMs(sherpaStatus?.lastPrepareMs),
+              })
+            : null,
+        formatDurationMs(sherpaStatus?.lastTranscribeMs)
+            ? t("localAsr.sherpaDiagTranscribe", {
+                  value: formatDurationMs(sherpaStatus?.lastTranscribeMs),
+              })
+            : null,
+        formatDurationMs(sherpaStatus?.lastAudioMs)
+            ? t("localAsr.sherpaDiagAudio", {
+                  value: formatDurationMs(sherpaStatus?.lastAudioMs),
+              })
+            : null,
+    ]
+        .filter(Boolean)
+        .join(" · ")
 
     // embedded=true 嵌入「高级」设置：跳过外层 page padding/height、PageHeader，
     // 与独立警告 Card——AdvancedSection 自己负责标题与短警告 + 启用时的浮层 popup，
@@ -2021,7 +2055,8 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
                                 <strong>{selectedSherpaDisplayName}</strong>
                                 <span>
                                     {" "}
-                                    · {selectedSherpaSizeLabel} ·{" "}
+                                    · {selectedSherpaModeLabel} ·{" "}
+                                    {selectedSherpaSizeLabel} ·{" "}
                                     {selectedSherpaDownloadLabel}
                                 </span>
                                 <span> · {t(selectedSherpaModel.descKey)}</span>
@@ -2039,6 +2074,18 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
                                 {sherpaStatus?.loadedModelId ??
                                     t("localAsr.foundryNotLoaded")}
                             </div>
+                            {sherpaDiagnostics && (
+                                <div>
+                                    <span
+                                        style={{
+                                            color: "var(--ol-ink-4)",
+                                        }}
+                                    >
+                                        {t("localAsr.sherpaDiagnostics")}:{" "}
+                                    </span>
+                                    {sherpaDiagnostics}
+                                </div>
+                            )}
                             {sherpaStatus?.error && (
                                 <div style={{ color: "#9b2c2c" }}>
                                     <span>{t("localAsr.sherpaError")}: </span>
@@ -3012,6 +3059,13 @@ function formatFoundrySizeMb(
 ): string | null {
     if (typeof fileSizeMb !== "number" || fileSizeMb <= 0) return null
     return Math.round(fileSizeMb).toLocaleString()
+}
+
+function formatDurationMs(ms: number | null | undefined): string | null {
+    if (typeof ms !== "number" || !Number.isFinite(ms) || ms < 0) return null
+    if (ms < 1000) return `${Math.round(ms)} ms`
+    const seconds = ms / 1000
+    return `${seconds < 10 ? seconds.toFixed(1) : Math.round(seconds).toString()} s`
 }
 
 function formatBytes(n: number): string {

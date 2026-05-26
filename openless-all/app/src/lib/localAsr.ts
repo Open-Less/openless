@@ -384,8 +384,10 @@ export type SherpaOnnxModelAlias =
     | "paraformer-zh"
     | "whisper-small-multi"
     | "qwen3-asr-0.6b-int8"
+    | "zipformer-bilingual-zh-en-streaming"
 
 export type SherpaOnnxMirror = "huggingface" | "hf-mirror" | "github-release"
+export type SherpaOnnxMode = "offline" | "online"
 
 export interface SherpaOnnxAsrStatus {
     providerId: string
@@ -394,11 +396,18 @@ export interface SherpaOnnxAsrStatus {
     activeModel: string
     loadedModelId: string | null
     error: string | null
+    lastPrepareMs: number | null
+    lastTranscribeMs: number | null
+    lastAudioMs: number | null
+    lastError: string | null
 }
 
 export interface SherpaOnnxCatalogModel {
     alias: SherpaOnnxModelAlias
     displayName: string
+    family?: string
+    mode: SherpaOnnxMode
+    languages?: string[]
     cached: boolean
     downloadedBytes: number
     fileSizeMb: number | null
@@ -406,6 +415,7 @@ export interface SherpaOnnxCatalogModel {
 
 export interface SherpaOnnxModelOption {
     alias: SherpaOnnxModelAlias
+    mode: SherpaOnnxMode
     labelKey: string
     descKey: string
 }
@@ -413,23 +423,33 @@ export interface SherpaOnnxModelOption {
 export const SHERPA_ONNX_ASR_MODELS: SherpaOnnxModelOption[] = [
     {
         alias: "sense-voice-small-zh",
+        mode: "offline",
         labelKey: "localAsr.sherpaModelSenseVoice",
         descKey: "localAsr.sherpaModelSenseVoiceDesc",
     },
     {
         alias: "paraformer-zh",
+        mode: "offline",
         labelKey: "localAsr.sherpaModelParaformer",
         descKey: "localAsr.sherpaModelParaformerDesc",
     },
     {
         alias: "whisper-small-multi",
+        mode: "offline",
         labelKey: "localAsr.sherpaModelWhisper",
         descKey: "localAsr.sherpaModelWhisperDesc",
     },
     {
         alias: "qwen3-asr-0.6b-int8",
+        mode: "offline",
         labelKey: "localAsr.sherpaModelQwen3",
         descKey: "localAsr.sherpaModelQwen3Desc",
+    },
+    {
+        alias: "zipformer-bilingual-zh-en-streaming",
+        mode: "online",
+        labelKey: "localAsr.sherpaModelZipformerStreaming",
+        descKey: "localAsr.sherpaModelZipformerStreamingDesc",
     },
 ]
 
@@ -441,6 +461,10 @@ export function getSherpaOnnxAsrStatus(): Promise<SherpaOnnxAsrStatus> {
         activeModel: "sense-voice-small-zh",
         loadedModelId: null,
         error: null,
+        lastPrepareMs: null,
+        lastTranscribeMs: null,
+        lastAudioMs: null,
+        lastError: null,
     }))
 }
 
@@ -449,6 +473,7 @@ export function getSherpaOnnxAsrCatalog(): Promise<SherpaOnnxCatalogModel[]> {
         {
             alias: "sense-voice-small-zh" as const,
             displayName: "SenseVoice Small",
+            mode: "offline",
             cached: false,
             downloadedBytes: 0,
             fileSizeMb: 230,
@@ -456,6 +481,7 @@ export function getSherpaOnnxAsrCatalog(): Promise<SherpaOnnxCatalogModel[]> {
         {
             alias: "paraformer-zh" as const,
             displayName: "Paraformer ZH",
+            mode: "offline",
             cached: false,
             downloadedBytes: 0,
             fileSizeMb: 220,
@@ -463,6 +489,7 @@ export function getSherpaOnnxAsrCatalog(): Promise<SherpaOnnxCatalogModel[]> {
         {
             alias: "whisper-small-multi" as const,
             displayName: "Whisper Small",
+            mode: "offline",
             cached: false,
             downloadedBytes: 0,
             fileSizeMb: 480,
@@ -470,9 +497,18 @@ export function getSherpaOnnxAsrCatalog(): Promise<SherpaOnnxCatalogModel[]> {
         {
             alias: "qwen3-asr-0.6b-int8" as const,
             displayName: "Qwen3-ASR 0.6B INT8",
+            mode: "offline",
             cached: false,
             downloadedBytes: 0,
             fileSizeMb: 700,
+        },
+        {
+            alias: "zipformer-bilingual-zh-en-streaming" as const,
+            displayName: "Zipformer Streaming bilingual",
+            mode: "online",
+            cached: false,
+            downloadedBytes: 0,
+            fileSizeMb: 380,
         },
     ])
 }
