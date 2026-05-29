@@ -807,6 +807,12 @@ pub async fn set_active_asr_provider(
         return Ok(());
     }
     CredentialsVault::set_active_asr_provider(&provider).map_err(|e| e.to_string())?;
+    // 同步更新偏好文件，确保 Keychain 和 preferences.json 不同步。
+    // 前端 onAsrProviderChange 也会调 updatePrefs()，但那是另一条异步路径；
+    // 本行保证无论前端是否调了 updatePrefs，文件始终与 Keychain 一致。
+    let mut prefs = coord.read_settings();
+    prefs.active_asr_provider = provider.clone();
+    let _ = coord.write_settings(prefs);
     let release_plan = local_asr_release_plan_for_provider(&provider);
     if provider == crate::asr::local::PROVIDER_ID {
         // 切到本地 ASR → 后台预加载模型，下次按 hotkey 时不必等数秒。
