@@ -812,7 +812,9 @@ pub async fn set_active_asr_provider(
     // 本行保证无论前端是否调了 updatePrefs，文件始终与 Keychain 一致。
     let mut prefs = coord.read_settings();
     prefs.active_asr_provider = provider.clone();
-    let _ = coord.write_settings(prefs);
+    if let Err(e) = coord.write_settings(prefs) {
+        log::warn!("[set_active_asr_provider] sync preferences.json failed: {e}");
+    }
     let release_plan = local_asr_release_plan_for_provider(&provider);
     if provider == crate::asr::local::PROVIDER_ID {
         // 切到本地 ASR → 后台预加载模型，下次按 hotkey 时不必等数秒。
@@ -830,8 +832,17 @@ pub async fn set_active_asr_provider(
 }
 
 #[tauri::command]
-pub fn set_active_llm_provider(provider: String) -> Result<(), String> {
-    CredentialsVault::set_active_llm_provider(&provider).map_err(|e| e.to_string())
+pub fn set_active_llm_provider(
+    coord: CoordinatorState<'_>,
+    provider: String,
+) -> Result<(), String> {
+    CredentialsVault::set_active_llm_provider(&provider).map_err(|e| e.to_string())?;
+    let mut prefs = coord.read_settings();
+    prefs.active_llm_provider = provider.clone();
+    if let Err(e) = coord.write_settings(prefs) {
+        log::warn!("[set_active_llm_provider] sync preferences.json failed: {e}");
+    }
+    Ok(())
 }
 
 /// 读出某个账号的实际值（用于设置页预填表单）。
