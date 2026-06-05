@@ -130,6 +130,7 @@ const ASR_DEFAULT_RESOURCE_ID = 'volc.seedasr.sauc.duration';
 
 // `volcengine` / `bailian` 走自建流式客户端；其余走 OpenAI 兼容
 // `/audio/transcriptions`（`coordinator.rs::is_whisper_compatible_provider`）。
+// `mimo` 走 `/v1/chat/completions` 端点（`coordinator.rs::active_asr_provider_kind`）。
 // 新增兼容厂商：
 //   1. 在这里加一项 `{ id, nameKey, baseUrl, model }`；
 //   2. `coordinator.rs::is_whisper_compatible_provider` 加同名 id；
@@ -138,6 +139,7 @@ const ASR_DEFAULT_RESOURCE_ID = 'volc.seedasr.sauc.duration';
 const ASR_PRESETS: ReadonlyArray<{ id: AsrPresetId; nameKey: string; baseUrl: string; model: string }> = [
   { id: 'volcengine',   nameKey: 'asrVolcengine',   baseUrl: '',                                              model: ''                              },
   { id: 'bailian',      nameKey: 'asrBailian',     baseUrl: 'wss://dashscope.aliyuncs.com/api-ws/v1/inference/', model: 'fun-asr-realtime'             },
+  { id: 'mimo',         nameKey: 'asrMimo',         baseUrl: 'https://api.xiaomimimo.com/v1',                  model: 'mimo-v2.5-asr'                },
   { id: 'siliconflow',  nameKey: 'asrSiliconflow',  baseUrl: 'https://api.siliconflow.cn/v1',                  model: 'FunAudioLLM/SenseVoiceSmall' },
   { id: 'zhipu',        nameKey: 'asrZhipu',        baseUrl: 'https://open.bigmodel.cn/api/paas/v4',           model: 'glm-asr-2512'                },
   { id: 'groq',         nameKey: 'asrGroq',         baseUrl: 'https://api.groq.com/openai/v1',                 model: 'whisper-large-v3-turbo'      },

@@ -175,6 +175,7 @@ export const inputStyle: CSSProperties = {
 export type AsrPresetId =
     | "volcengine"
     | "bailian"
+    | "mimo"
     | "siliconflow"
     | "zhipu"
     | "groq"

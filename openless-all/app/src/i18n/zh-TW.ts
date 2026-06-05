@@ -614,6 +614,7 @@ export const zhTW: typeof zhCN = {
         custom: '自定義',
         asrVolcengine: '火山引擎 bigasr',
         asrBailian: '阿里雲百煉即時 ASR',
+        asrMimo: '小米 MiMo ASR',
         asrSiliconflow: '硅基流動 SenseVoice',
         asrZhipu: '智譜 GLM-ASR',
         asrGroq: 'Groq Whisper-large-v3',

@@ -612,6 +612,7 @@ export const zhCN = {
         custom: '自定义',
         asrVolcengine: '火山引擎 bigasr',
         asrBailian: '阿里云百炼实时 ASR',
+        asrMimo: '小米 MiMo ASR',
         asrSiliconflow: '硅基流动 SenseVoice',
         asrZhipu: '智谱 GLM-ASR',
         asrGroq: 'Groq Whisper-large-v3',

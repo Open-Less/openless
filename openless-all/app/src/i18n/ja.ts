@@ -616,6 +616,7 @@ export const ja: typeof zhCN = {
         custom: 'カスタム',
         asrVolcengine: 'Volcengine bigasr',
         asrBailian: 'Alibaba Bailian リアルタイム ASR',
+        asrMimo: 'Xiaomi MiMo ASR',
         asrSiliconflow: 'SiliconFlow SenseVoice',
         asrZhipu: 'Zhipu GLM-ASR',
         asrGroq: 'Groq Whisper-large-v3',

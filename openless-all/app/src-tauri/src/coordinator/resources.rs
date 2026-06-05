@@ -68,6 +68,7 @@ pub(super) fn cancel_active_asr(asr: ActiveAsr) {
         ActiveAsr::Volcengine(v) => v.cancel(),
         ActiveAsr::Whisper(w) => w.cancel(),
         ActiveAsr::Bailian(b) => b.cancel(),
+        ActiveAsr::MiMo(m) => m.cancel(),
         #[cfg(target_os = "windows")]
         ActiveAsr::FoundryLocalWhisper(local) => local.cancel(),
         #[cfg(target_os = "windows")]

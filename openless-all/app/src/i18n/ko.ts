@@ -616,6 +616,7 @@ export const ko: typeof zhCN = {
         custom: '사용자 정의',
         asrVolcengine: 'Volcengine bigasr',
         asrBailian: 'Alibaba Bailian 실시간 ASR',
+        asrMimo: 'Xiaomi MiMo ASR',
         asrSiliconflow: 'SiliconFlow SenseVoice',
         asrZhipu: 'Zhipu GLM-ASR',
         asrGroq: 'Groq Whisper-large-v3',
