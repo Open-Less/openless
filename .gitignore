@@ -54,6 +54,7 @@ docs/plans/
 /CLAUDE.md
 /AGENTS.md
 /issue-*-plan.md
+/.playwright-cli/
 
 # .github 内部协作 + 审计报告（ISSUE_TEMPLATE / workflows / pr template 仍保留发布）
 .github/COOPER_*.md
