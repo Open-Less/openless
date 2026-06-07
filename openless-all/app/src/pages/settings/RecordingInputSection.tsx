@@ -12,7 +12,8 @@ import {
   listMicrophoneDevices,
   setDictationHotkey,
 } from '../../lib/ipc';
-import type { HotkeyMode, MicrophoneDevice, PasteShortcut } from '../../lib/types';
+import { getPlatformCapabilities } from '../../lib/platform';
+import type { HotkeyMode, MicrophoneDevice, PasteShortcut, PlatformCapabilities } from '../../lib/types';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
 import { SelectLite } from '../../components/ui/SelectLite';
 import { Card, Collapsible } from '../_atoms';
@@ -39,9 +40,14 @@ export function RecordingInputSection() {
   const { t } = useTranslation();
   const os = detectOS();
   const { prefs, capability, updatePrefs: savePrefs } = useHotkeySettings();
+  const [platformCaps, setPlatformCaps] = useState<PlatformCapabilities | null>(null);
   const [microphoneDevices, setMicrophoneDevices] = useState<MicrophoneDevice[]>([]);
   const [microphoneDevicesLoaded, setMicrophoneDevicesLoaded] = useState(false);
   const [microphoneDevicesError, setMicrophoneDevicesError] = useState<string | null>(null);
+
+  useEffect(() => {
+    void getPlatformCapabilities().then(setPlatformCaps);
+  }, []);
 
   const loadMicrophoneDevices = useCallback(async (
     signal?: { cancelled: boolean },
@@ -104,6 +110,11 @@ export function RecordingInputSection() {
     );
   }
 
+  const isAndroid = platformCaps?.platform === 'android';
+  const showDesktopHotkey = platformCaps?.supportsDesktopHotkey === true;
+  const showDesktopInsert = showDesktopHotkey && os !== 'linux';
+  const showDesktopStartup = showDesktopHotkey;
+
   const onModeChange = (mode: HotkeyMode) =>
     savePrefs({ ...prefs, hotkey: { ...prefs.hotkey, mode } });
   const onShowCapsuleChange = (showCapsule: boolean) =>
@@ -146,7 +157,7 @@ export function RecordingInputSection() {
             {t('settings.recording.title')}
           </div>
         </div>
-        {isHotkeyModeMigrationNoticeActive() && (
+        {isHotkeyModeMigrationNoticeActive() && showDesktopHotkey && (
           <div
             style={{
               marginTop: 4,
@@ -165,6 +176,7 @@ export function RecordingInputSection() {
             </div>
           </div>
         )}
+        {showDesktopHotkey && (
         <SettingRow label={t('settings.recording.hotkeyLabel')}>
           <ShortcutRecorder
             value={prefs.dictationHotkey}
@@ -174,6 +186,8 @@ export function RecordingInputSection() {
             }}
           />
         </SettingRow>
+        )}
+        {showDesktopHotkey && (
         <SettingRow label={t('settings.recording.modeLabel')}>
           <div style={{ display: 'inline-flex', padding: 2, borderRadius: 8, background: 'rgba(0,0,0,0.05)' }}>
             {choices.map(([v, l]) => (
@@ -195,6 +209,7 @@ export function RecordingInputSection() {
             ))}
           </div>
         </SettingRow>
+        )}
         <SettingRow label={t('settings.recording.microphoneLabel')}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             <MicrophoneSelect
@@ -210,7 +225,7 @@ export function RecordingInputSection() {
             )}
           </div>
         </SettingRow>
-        {os !== 'linux' && (
+        {os !== 'linux' && !isAndroid && (
         <SettingRow label={t('settings.recording.capsuleLabel')}>
           <Toggle on={prefs.showCapsule} onToggle={onShowCapsuleChange} />
         </SettingRow>
@@ -255,7 +270,7 @@ export function RecordingInputSection() {
       </Card>
 
       {/* ─── 插入与剪贴板（折叠，仅 macOS / Windows） ──────────────── */}
-      {os !== 'linux' && (
+      {showDesktopInsert && (
       <Collapsible title={t('settings.recording.insertGroupTitle')}>
         <SettingRow label={t('settings.recording.restoreClipboardLabel')}>
           <Toggle on={prefs.restoreClipboardAfterPaste} onToggle={onRestoreClipboardChange} />
@@ -300,6 +315,7 @@ export function RecordingInputSection() {
       </Collapsible>
       )}
       {/* ─── 启动（折叠） ──────────────────────────────────────────── */}
+      {showDesktopStartup && (
       <Collapsible title={t('settings.recording.startupGroupTitle')}>
         <AutostartRow />
         <SettingRow label={t('settings.recording.startMinimizedLabel')}>
@@ -314,6 +330,7 @@ export function RecordingInputSection() {
           </div>
         )}
       </Collapsible>
+      )}
     </>
   );
 }

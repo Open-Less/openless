@@ -221,6 +221,8 @@ export const zhCN = {
     actionRequestMic: '弹出授权',
     accessibilityHint: '授权后必须**完全退出 OpenLess** 再重新打开（macOS TCC 规则）。',
     footerHint: '授权全部完成后此引导自动关闭。如果一直不消失，从菜单栏 OpenLess → 退出，重新打开 App。',
+    androidContinue: '先进入应用',
+    androidFooterHint: '听写需要麦克风权限。可点击上方「弹出授权」，或先进入应用后在概览页继续授权。',
   },
   overview: {
     kicker: 'DASHBOARD',
@@ -256,6 +258,20 @@ export const zhCN = {
     recentLoadFailed: '无法读取最近识别，请重试。',
     historyRetry: '重试',
     weekDays: ['日', '一', '二', '三', '四', '五', '六'],
+    inAppDictation: {
+      title: '应用内录音',
+      start: '开始录音',
+      stop: '停止录音',
+      idle: '点击开始录音',
+      recording: '录音中…',
+      processing: '处理中…',
+    },
+    androidMicBanner: {
+      title: '需要麦克风权限',
+      desc: '授权麦克风后可使用应用内录音与语音输入。',
+      grant: '弹出授权',
+      openSettings: '打开系统设置',
+    },
   },
   history: {
     kicker: 'HISTORY',
@@ -767,6 +783,7 @@ export const zhCN = {
       disable: '停用',
       confirmHint: '点击右侧 ✓',
       notSupported: '暂未支持',
+      androidReadOnly: 'Android 不支持全局快捷键，请在概览页使用录音按钮。',
     },
     permissions: {
       title: '权限',
@@ -797,6 +814,10 @@ export const zhCN = {
       windowsImeDesc: '语音输入时临时切到 OpenLess TSF，绕过剪贴板限制。',
       windowsImeInstalled: '已安装',
       windowsImeUnavailable: '不可用',
+      androidImeLabel: '输入法 (IME)',
+      androidImePlaceholder: '即将推出 — 请在系统设置中启用 OpenLess 输入法',
+      androidOverlayLabel: '悬浮窗',
+      androidOverlayPlaceholder: '即将推出 — 请在系统设置中授予悬浮窗权限',
       windowsIme: {
         installed: '已安装，按需切到 OpenLess 输入法。',
         notInstalled: '未安装，走剪贴板 / WM_PASTE 兜底。',
@@ -980,6 +1001,7 @@ export const zhCN = {
       macEventTap: 'macOS Event Tap',
       windowsLowLevel: 'Windows 低层键盘 hook',
       fcitx5: 'fcitx5 输入法插件',
+      unavailable: '不可用',
     },
   },
   localAsr: {

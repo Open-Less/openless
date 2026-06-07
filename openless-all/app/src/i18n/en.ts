@@ -223,6 +223,8 @@ export const en: typeof zhCN = {
     actionRequestMic: 'Request access',
     accessibilityHint: 'After granting, you must **fully quit OpenLess** and reopen it (a macOS TCC requirement).',
     footerHint: 'This onboarding closes automatically once both permissions are granted. If it persists, quit OpenLess from the menu bar and relaunch.',
+    androidContinue: 'Continue to app',
+    androidFooterHint: 'Microphone access is required for dictation. Tap Request access above, or continue and grant it later from Overview.',
   },
   overview: {
     kicker: 'DASHBOARD',
@@ -258,6 +260,20 @@ export const en: typeof zhCN = {
     recentLoadFailed: 'Could not load recent transcripts. Please retry.',
     historyRetry: 'Retry',
     weekDays: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'],
+    inAppDictation: {
+      title: 'In-app dictation',
+      start: 'Start recording',
+      stop: 'Stop recording',
+      idle: 'Tap to start recording',
+      recording: 'Recording…',
+      processing: 'Processing…',
+    },
+    androidMicBanner: {
+      title: 'Microphone permission needed',
+      desc: 'Grant microphone access to use in-app dictation and voice input.',
+      grant: 'Request access',
+      openSettings: 'Open settings',
+    },
   },
   history: {
     kicker: 'HISTORY',
@@ -769,6 +785,7 @@ export const en: typeof zhCN = {
       disable: 'Disable',
       confirmHint: 'Click ✓ on the capsule',
       notSupported: 'Not yet supported',
+      androidReadOnly: 'Global shortcuts are not available on Android. Use the record button on the overview page.',
     },
     permissions: {
       title: 'Permissions',
@@ -799,6 +816,10 @@ export const en: typeof zhCN = {
       windowsImeDesc: 'Temporarily switches to the OpenLess TSF IME during voice sessions to avoid clipboard insertion limits.',
       windowsImeInstalled: 'Installed',
       windowsImeUnavailable: 'Unavailable',
+      androidImeLabel: 'Input method (IME)',
+      androidImePlaceholder: 'Coming soon — enable OpenLess keyboard in system settings',
+      androidOverlayLabel: 'Floating overlay',
+      androidOverlayPlaceholder: 'Coming soon — grant overlay permission in system settings',
       windowsIme: {
         installed: 'Installed. Voice input temporarily switches to the OpenLess IME.',
         notInstalled: 'Not installed. OpenLess is using the clipboard/WM_PASTE fallback.',
@@ -982,6 +1003,7 @@ export const en: typeof zhCN = {
       macEventTap: 'macOS Event Tap',
       windowsLowLevel: 'Windows low-level keyboard hook',
       fcitx5: 'fcitx5 input method plugin',
+      unavailable: 'Unavailable',
     },
   },
   localAsr: {

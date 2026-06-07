@@ -2231,44 +2231,57 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
             polish_error
         );
         InsertStatus::Inserted
-    } else if focus_ready_for_paste {
-        #[cfg(target_os = "windows")]
-        {
-            let ime_target = capture_ime_submit_target();
-            insert_with_windows_ime_first(
-                inner,
-                current_session_id,
-                &polished,
-                restore_clipboard,
-                allow_non_tsf_insertion_fallback,
-                paste_shortcut,
-                ime_target,
-            )
-            .await
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            inner
-                .inserter
-                .insert(&polished, restore_clipboard, paste_shortcut)
-        }
     } else {
-        #[cfg(target_os = "linux")]
+        #[cfg(target_os = "android")]
         {
-            // Linux: fcitx5 commitString 无需窗口焦点，始终尝试插入。
-            inner
-                .inserter
-                .insert(&polished, restore_clipboard, paste_shortcut)
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-            log::warn!(
-                "[coord] original insertion target is not foreground; copied output without paste"
-            );
-            if allow_non_tsf_insertion_fallback {
-                inner.inserter.copy_fallback(&polished)
+            let result = crate::android_ime::commit_text(&polished);
+            if result.committed {
+                InsertStatus::Inserted
             } else {
-                InsertStatus::Failed
+                log::warn!("[coord] android IME commit failed: {}", result.message);
+                inner.inserter.copy_fallback(&polished)
+            }
+        }
+        #[cfg(not(target_os = "android"))]
+        if focus_ready_for_paste {
+            #[cfg(target_os = "windows")]
+            {
+                let ime_target = capture_ime_submit_target();
+                insert_with_windows_ime_first(
+                    inner,
+                    current_session_id,
+                    &polished,
+                    restore_clipboard,
+                    allow_non_tsf_insertion_fallback,
+                    paste_shortcut,
+                    ime_target,
+                )
+                .await
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                inner
+                    .inserter
+                    .insert(&polished, restore_clipboard, paste_shortcut)
+            }
+        } else {
+            #[cfg(target_os = "linux")]
+            {
+                // Linux: fcitx5 commitString 无需窗口焦点，始终尝试插入。
+                inner
+                    .inserter
+                    .insert(&polished, restore_clipboard, paste_shortcut)
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                log::warn!(
+                    "[coord] original insertion target is not foreground; copied output without paste"
+                );
+                if allow_non_tsf_insertion_fallback {
+                    inner.inserter.copy_fallback(&polished)
+                } else {
+                    InsertStatus::Failed
+                }
             }
         }
     };
@@ -2762,5 +2775,10 @@ mod tests {
     #[cfg(target_os = "linux")]
     fn platform_type_error() -> crate::unicode_keystroke::TypeError {
         crate::unicode_keystroke::TypeError::EnigoText("fail".into())
+    }
+
+    #[cfg(target_os = "android")]
+    fn platform_type_error() -> crate::unicode_keystroke::TypeError {
+        crate::unicode_keystroke::TypeError::Unavailable
     }
 }

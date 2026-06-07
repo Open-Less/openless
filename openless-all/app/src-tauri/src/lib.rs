@@ -18,12 +18,22 @@ mod asr;
 mod audio_mute;
 mod cli;
 mod coding_agent;
+#[cfg(not(mobile))]
+mod combo_hotkey;
+#[cfg(mobile)]
+#[path = "mobile_stubs/combo_hotkey.rs"]
 mod combo_hotkey;
 mod commands;
 mod coordinator;
 mod coordinator_state;
 mod correction;
+#[cfg(not(mobile))]
 mod global_hotkey_runtime;
+#[cfg(not(mobile))]
+#[path = "hotkey.rs"]
+mod hotkey;
+#[cfg(mobile)]
+#[path = "mobile_stubs/hotkey.rs"]
 mod hotkey;
 mod insertion;
 #[cfg(target_os = "linux")]
@@ -33,15 +43,40 @@ mod net;
 mod permissions;
 mod persistence;
 mod polish;
+#[cfg(not(mobile))]
+mod qa_hotkey;
+#[cfg(mobile)]
+#[path = "mobile_stubs/qa_hotkey.rs"]
 mod qa_hotkey;
 mod recorder;
+#[cfg(not(mobile))]
+#[path = "selection.rs"]
 mod selection;
+#[cfg(mobile)]
+#[path = "mobile_stubs/selection.rs"]
+mod selection;
+#[cfg(not(mobile))]
+mod shortcut_binding;
+#[cfg(mobile)]
+#[path = "mobile_stubs/shortcut_binding.rs"]
 mod shortcut_binding;
 mod types;
+#[cfg(not(mobile))]
 mod unicode_keystroke;
+#[cfg(mobile)]
+#[path = "mobile_stubs/unicode_keystroke.rs"]
+mod unicode_keystroke;
+mod android_ime;
+mod android_overlay;
+#[cfg(mobile)]
+mod mobile_runtime;
+#[cfg(target_os = "windows")]
 mod windows_ime_ipc;
+#[cfg(target_os = "windows")]
 mod windows_ime_profile;
+#[cfg(target_os = "windows")]
 mod windows_ime_protocol;
+#[cfg(target_os = "windows")]
 mod windows_ime_session;
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -57,10 +92,13 @@ const OPENLESS_BUNDLE_ID: &str = "com.openless.app";
 /// 第一次 show 时把 QA 浮窗摆到屏幕底部居中；之后的 show 不再 reposition，
 /// 让用户拖动后的位置在 hide → show 之间得以保持。详见 issue #118 v2。
 static QA_WINDOW_POSITIONED: AtomicBool = AtomicBool::new(false);
+#[cfg(not(mobile))]
 static TRAY_MICROPHONE_WATCHER_STOPPING: AtomicBool = AtomicBool::new(false);
+#[cfg(not(mobile))]
 use tauri::menu::{
     CheckMenuItemBuilder, Menu, MenuBuilder, MenuItemBuilder, Submenu, SubmenuBuilder,
 };
+#[cfg(not(mobile))]
 use tauri::tray::{MouseButton, TrayIconBuilder, TrayIconEvent};
 use tauri::{
     AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, PhysicalPosition, PhysicalSize,
@@ -71,6 +109,248 @@ use crate::types::PolishMode;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(mobile)]
+    {
+        mobile_runtime::run();
+        return;
+    }
+    #[cfg(not(mobile))]
+    run_desktop();
+}
+
+macro_rules! app_invoke_handler_desktop {
+    () => {
+        tauri::generate_handler![
+            commands::get_settings,
+            commands::get_default_style_system_prompts,
+            commands::set_settings,
+            commands::get_update_channel,
+            commands::set_update_channel,
+            commands::fetch_latest_beta_release,
+            commands::app_check_update_with_channel,
+            commands::check_network,
+            commands::get_hotkey_status,
+            commands::get_hotkey_capability,
+            commands::set_shortcut_recording_active,
+            commands::get_windows_ime_status,
+            commands::get_platform_capabilities,
+            commands::get_android_ime_status,
+            commands::get_android_overlay_status,
+            commands::request_android_overlay_permission,
+            commands::list_microphone_devices,
+            commands::start_microphone_level_monitor,
+            commands::stop_microphone_level_monitor,
+            commands::get_credentials,
+            commands::set_credential,
+            commands::list_history,
+            commands::delete_history_entry,
+            commands::clear_history,
+            commands::read_audio_recording,
+            commands::marketplace_list,
+            commands::marketplace_detail,
+            commands::marketplace_install,
+            commands::marketplace_upload,
+            commands::marketplace_like,
+            commands::marketplace_my_likes,
+            commands::marketplace_my_packs,
+            commands::marketplace_delete,
+            commands::github_device_flow_start,
+            commands::github_device_flow_poll,
+            commands::list_vocab,
+            commands::add_vocab,
+            commands::remove_vocab,
+            commands::set_vocab_enabled,
+            commands::list_correction_rules,
+            commands::add_correction_rule,
+            commands::remove_correction_rule,
+            commands::set_correction_rule_enabled,
+            commands::list_vocab_presets,
+            commands::save_vocab_presets,
+            commands::start_dictation,
+            commands::stop_dictation,
+            commands::cancel_dictation,
+            coding_agent::commands::coding_agent_detect,
+            coding_agent::commands::coding_agent_run_test,
+            coding_agent::commands::coding_agent_cancel_test,
+            coding_agent::commands::coding_agent_command_risk,
+            commands::handle_window_hotkey_event,
+            #[cfg(debug_assertions)]
+            commands::inject_hotkey_click_for_dev,
+            commands::repolish,
+            commands::list_style_packs,
+            commands::create_style_pack_from_template,
+            commands::save_style_pack,
+            commands::preview_style_pack_runtime,
+            commands::set_active_style_pack,
+            commands::set_style_pack_enabled,
+            commands::reset_builtin_style_pack,
+            commands::delete_style_pack,
+            commands::import_style_pack_from_zip,
+            commands::export_style_pack_to_zip,
+            commands::set_default_polish_mode,
+            commands::set_style_enabled,
+            commands::check_accessibility_permission,
+            commands::request_accessibility_permission,
+            commands::check_microphone_permission,
+            commands::request_microphone_permission,
+            commands::open_system_settings,
+            commands::trigger_microphone_prompt,
+            commands::read_credential,
+            commands::set_active_asr_provider,
+            commands::set_active_llm_provider,
+            commands::get_qa_hotkey_label,
+            commands::set_qa_hotkey,
+            commands::validate_shortcut_binding,
+            commands::set_dictation_hotkey,
+            commands::set_translation_hotkey,
+            commands::set_switch_style_hotkey,
+            commands::set_open_app_hotkey,
+            commands::qa_window_dismiss,
+            commands::qa_window_pin,
+            commands::less_computer_window_dismiss,
+            commands::less_computer_window_resize,
+            commands::less_computer_approve,
+            commands::validate_combo_hotkey,
+            commands::set_combo_hotkey,
+            commands::validate_provider_credentials,
+            commands::list_provider_models,
+            commands::local_asr_get_settings,
+            commands::local_asr_storage_settings,
+            commands::local_asr_set_models_base_dir,
+            commands::local_asr_set_active_model,
+            commands::local_asr_set_mirror,
+            commands::local_asr_list_models,
+            commands::local_asr_fetch_remote_info,
+            commands::local_asr_download_model,
+            commands::local_asr_cancel_download,
+            commands::local_asr_delete_model,
+            commands::local_asr_model_dir,
+            commands::local_asr_reveal_model_dir,
+            commands::local_asr_reveal_models_root,
+            commands::local_asr_test_model,
+            commands::local_asr_engine_status,
+            commands::local_asr_release_engine,
+            commands::local_asr_preload,
+            commands::local_asr_set_keep_loaded_secs,
+            commands::foundry_local_asr_status,
+            commands::foundry_local_asr_catalog,
+            commands::foundry_local_asr_set_model,
+            commands::foundry_local_asr_set_language_hint,
+            commands::foundry_local_asr_set_runtime_source,
+            commands::foundry_local_asr_prepare,
+            commands::foundry_local_asr_cancel_prepare,
+            commands::foundry_local_asr_release,
+            commands::foundry_local_asr_model_dir,
+            commands::foundry_local_asr_delete_model,
+            commands::foundry_local_asr_reveal_model_dir,
+            #[cfg(target_os = "windows")]
+            commands::sherpa_onnx_asr_status,
+            #[cfg(target_os = "windows")]
+            commands::sherpa_onnx_asr_catalog,
+            #[cfg(target_os = "windows")]
+            commands::sherpa_onnx_asr_fetch_remote_info,
+            #[cfg(target_os = "windows")]
+            commands::sherpa_onnx_asr_download_model,
+            #[cfg(target_os = "windows")]
+            commands::sherpa_onnx_asr_cancel_download,
+            #[cfg(target_os = "windows")]
+            commands::sherpa_onnx_asr_set_model,
+            #[cfg(target_os = "windows")]
+            commands::sherpa_onnx_asr_set_language_hint,
+            #[cfg(target_os = "windows")]
+            commands::sherpa_onnx_asr_prepare,
+            #[cfg(target_os = "windows")]
+            commands::sherpa_onnx_asr_cancel_prepare,
+            #[cfg(target_os = "windows")]
+            commands::sherpa_onnx_asr_release,
+            #[cfg(target_os = "windows")]
+            commands::sherpa_onnx_asr_model_dir,
+            #[cfg(target_os = "windows")]
+            commands::sherpa_onnx_asr_delete_model,
+            #[cfg(target_os = "windows")]
+            commands::sherpa_onnx_asr_reveal_model_dir,
+            commands::export_error_log,
+            restart_app,
+        ]
+    };
+}
+
+/// Android/iOS: only commands usable without desktop hotkeys, tray, updater, or local ASR.
+macro_rules! app_invoke_handler_mobile {
+    () => {
+        tauri::generate_handler![
+            commands::get_settings,
+            commands::get_default_style_system_prompts,
+            commands::set_settings,
+            commands::check_network,
+            commands::get_platform_capabilities,
+            commands::get_android_ime_status,
+            commands::get_android_overlay_status,
+            commands::request_android_overlay_permission,
+            commands::list_microphone_devices,
+            commands::start_microphone_level_monitor,
+            commands::stop_microphone_level_monitor,
+            commands::get_credentials,
+            commands::set_credential,
+            commands::read_credential,
+            commands::set_active_asr_provider,
+            commands::set_active_llm_provider,
+            commands::validate_provider_credentials,
+            commands::list_provider_models,
+            commands::list_history,
+            commands::delete_history_entry,
+            commands::clear_history,
+            commands::read_audio_recording,
+            commands::marketplace_list,
+            commands::marketplace_detail,
+            commands::marketplace_install,
+            commands::marketplace_upload,
+            commands::marketplace_like,
+            commands::marketplace_my_likes,
+            commands::marketplace_my_packs,
+            commands::marketplace_delete,
+            commands::github_device_flow_start,
+            commands::github_device_flow_poll,
+            commands::list_vocab,
+            commands::add_vocab,
+            commands::remove_vocab,
+            commands::set_vocab_enabled,
+            commands::list_correction_rules,
+            commands::add_correction_rule,
+            commands::remove_correction_rule,
+            commands::set_correction_rule_enabled,
+            commands::list_vocab_presets,
+            commands::save_vocab_presets,
+            commands::start_dictation,
+            commands::stop_dictation,
+            commands::cancel_dictation,
+            commands::repolish,
+            commands::list_style_packs,
+            commands::create_style_pack_from_template,
+            commands::save_style_pack,
+            commands::preview_style_pack_runtime,
+            commands::set_active_style_pack,
+            commands::set_style_pack_enabled,
+            commands::reset_builtin_style_pack,
+            commands::delete_style_pack,
+            commands::import_style_pack_from_zip,
+            commands::export_style_pack_to_zip,
+            commands::set_default_polish_mode,
+            commands::set_style_enabled,
+            commands::check_accessibility_permission,
+            commands::request_accessibility_permission,
+            commands::check_microphone_permission,
+            commands::request_microphone_permission,
+            commands::open_system_settings,
+            commands::trigger_microphone_prompt,
+            commands::export_error_log,
+            restart_app,
+        ]
+    };
+}
+
+#[cfg(not(mobile))]
+fn run_desktop() {
     let foundry_local_runtime = Arc::new(asr::local::FoundryLocalRuntime::new());
     let sherpa_onnx_runtime = Arc::new(asr::local::SherpaOnnxRuntime::new());
     let sherpa_download_manager =
@@ -343,154 +623,7 @@ pub fn run() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
-            commands::get_settings,
-            commands::get_default_style_system_prompts,
-            commands::set_settings,
-            commands::get_update_channel,
-            commands::set_update_channel,
-            commands::fetch_latest_beta_release,
-            commands::app_check_update_with_channel,
-            commands::check_network,
-            commands::get_hotkey_status,
-            commands::get_hotkey_capability,
-            commands::set_shortcut_recording_active,
-            commands::get_windows_ime_status,
-            commands::list_microphone_devices,
-            commands::start_microphone_level_monitor,
-            commands::stop_microphone_level_monitor,
-            commands::get_credentials,
-            commands::set_credential,
-            commands::list_history,
-            commands::delete_history_entry,
-            commands::clear_history,
-            commands::read_audio_recording,
-            commands::marketplace_list,
-            commands::marketplace_detail,
-            commands::marketplace_install,
-            commands::marketplace_upload,
-            commands::marketplace_like,
-            commands::marketplace_my_likes,
-            commands::marketplace_my_packs,
-            commands::marketplace_delete,
-            commands::github_device_flow_start,
-            commands::github_device_flow_poll,
-            commands::list_vocab,
-            commands::add_vocab,
-            commands::remove_vocab,
-            commands::set_vocab_enabled,
-            commands::list_correction_rules,
-            commands::add_correction_rule,
-            commands::remove_correction_rule,
-            commands::set_correction_rule_enabled,
-            commands::list_vocab_presets,
-            commands::save_vocab_presets,
-            commands::start_dictation,
-            commands::stop_dictation,
-            commands::cancel_dictation,
-            coding_agent::commands::coding_agent_detect,
-            coding_agent::commands::coding_agent_run_test,
-            coding_agent::commands::coding_agent_cancel_test,
-            coding_agent::commands::coding_agent_command_risk,
-            commands::handle_window_hotkey_event,
-            #[cfg(debug_assertions)]
-            commands::inject_hotkey_click_for_dev,
-            commands::repolish,
-            commands::list_style_packs,
-            commands::create_style_pack_from_template,
-            commands::save_style_pack,
-            commands::preview_style_pack_runtime,
-            commands::set_active_style_pack,
-            commands::set_style_pack_enabled,
-            commands::reset_builtin_style_pack,
-            commands::delete_style_pack,
-            commands::import_style_pack_from_zip,
-            commands::export_style_pack_to_zip,
-            commands::set_default_polish_mode,
-            commands::set_style_enabled,
-            commands::check_accessibility_permission,
-            commands::request_accessibility_permission,
-            commands::check_microphone_permission,
-            commands::request_microphone_permission,
-            commands::open_system_settings,
-            commands::trigger_microphone_prompt,
-            commands::read_credential,
-            commands::set_active_asr_provider,
-            commands::set_active_llm_provider,
-            commands::get_qa_hotkey_label,
-            commands::set_qa_hotkey,
-            commands::validate_shortcut_binding,
-            commands::set_dictation_hotkey,
-            commands::set_translation_hotkey,
-            commands::set_switch_style_hotkey,
-            commands::set_open_app_hotkey,
-            commands::qa_window_dismiss,
-            commands::qa_window_pin,
-            commands::less_computer_window_dismiss,
-            commands::less_computer_window_resize,
-            commands::less_computer_approve,
-            commands::validate_combo_hotkey,
-            commands::set_combo_hotkey,
-            commands::validate_provider_credentials,
-            commands::list_provider_models,
-            commands::local_asr_get_settings,
-            commands::local_asr_storage_settings,
-            commands::local_asr_set_models_base_dir,
-            commands::local_asr_set_active_model,
-            commands::local_asr_set_mirror,
-            commands::local_asr_list_models,
-            commands::local_asr_fetch_remote_info,
-            commands::local_asr_download_model,
-            commands::local_asr_cancel_download,
-            commands::local_asr_delete_model,
-            commands::local_asr_model_dir,
-            commands::local_asr_reveal_model_dir,
-            commands::local_asr_reveal_models_root,
-            commands::local_asr_test_model,
-            commands::local_asr_engine_status,
-            commands::local_asr_release_engine,
-            commands::local_asr_preload,
-            commands::local_asr_set_keep_loaded_secs,
-            commands::foundry_local_asr_status,
-            commands::foundry_local_asr_catalog,
-            commands::foundry_local_asr_set_model,
-            commands::foundry_local_asr_set_language_hint,
-            commands::foundry_local_asr_set_runtime_source,
-            commands::foundry_local_asr_prepare,
-            commands::foundry_local_asr_cancel_prepare,
-            commands::foundry_local_asr_release,
-            commands::foundry_local_asr_model_dir,
-            commands::foundry_local_asr_delete_model,
-            commands::foundry_local_asr_reveal_model_dir,
-            #[cfg(target_os = "windows")]
-            commands::sherpa_onnx_asr_status,
-            #[cfg(target_os = "windows")]
-            commands::sherpa_onnx_asr_catalog,
-            #[cfg(target_os = "windows")]
-            commands::sherpa_onnx_asr_fetch_remote_info,
-            #[cfg(target_os = "windows")]
-            commands::sherpa_onnx_asr_download_model,
-            #[cfg(target_os = "windows")]
-            commands::sherpa_onnx_asr_cancel_download,
-            #[cfg(target_os = "windows")]
-            commands::sherpa_onnx_asr_set_model,
-            #[cfg(target_os = "windows")]
-            commands::sherpa_onnx_asr_set_language_hint,
-            #[cfg(target_os = "windows")]
-            commands::sherpa_onnx_asr_prepare,
-            #[cfg(target_os = "windows")]
-            commands::sherpa_onnx_asr_cancel_prepare,
-            #[cfg(target_os = "windows")]
-            commands::sherpa_onnx_asr_release,
-            #[cfg(target_os = "windows")]
-            commands::sherpa_onnx_asr_model_dir,
-            #[cfg(target_os = "windows")]
-            commands::sherpa_onnx_asr_delete_model,
-            #[cfg(target_os = "windows")]
-            commands::sherpa_onnx_asr_reveal_model_dir,
-            commands::export_error_log,
-            restart_app,
-        ])
+        .invoke_handler(app_invoke_handler_desktop!())
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| match event {
@@ -531,21 +664,25 @@ pub fn run() {
         });
 }
 
+#[cfg(not(mobile))]
 struct MicrophoneTrayMenu {
     submenu: Submenu<tauri::Wry>,
     items: Vec<commands::TrayMicrophoneMenuItem>,
 }
 
+#[cfg(not(mobile))]
 struct StyleTrayMenu {
     submenu: Submenu<tauri::Wry>,
 }
 
+#[cfg(not(mobile))]
 struct TrayMenu {
     menu: Menu<tauri::Wry>,
     microphone_items: Vec<commands::TrayMicrophoneMenuItem>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg(not(mobile))]
 struct TrayPolishModeMenuEntry {
     id: String,
     label: &'static str,
@@ -554,9 +691,13 @@ struct TrayPolishModeMenuEntry {
 }
 
 fn tray_style_menu_enabled() -> bool {
-    cfg!(target_os = "windows")
+    #[cfg(all(not(mobile), target_os = "windows"))]
+    return true;
+    #[cfg(not(all(not(mobile), target_os = "windows")))]
+    false
 }
 
+#[cfg(not(mobile))]
 fn tray_polish_mode_menu_entries(selected: PolishMode) -> Vec<TrayPolishModeMenuEntry> {
     [
         (PolishMode::Raw, "style-raw"),
@@ -574,6 +715,7 @@ fn tray_polish_mode_menu_entries(selected: PolishMode) -> Vec<TrayPolishModeMenu
     .collect()
 }
 
+#[cfg(not(mobile))]
 fn parse_tray_polish_mode_id(id: &str) -> Option<PolishMode> {
     match id {
         "style-raw" => Some(PolishMode::Raw),
@@ -584,6 +726,7 @@ fn parse_tray_polish_mode_id(id: &str) -> Option<PolishMode> {
     }
 }
 
+#[cfg(not(mobile))]
 fn build_tray_menu<M: Manager<tauri::Wry>>(
     app: &M,
     coordinator: &Arc<coordinator::Coordinator>,
@@ -609,6 +752,7 @@ fn build_tray_menu<M: Manager<tauri::Wry>>(
     })
 }
 
+#[cfg(not(mobile))]
 fn build_style_tray_menu<M: Manager<tauri::Wry>>(
     app: &M,
     coordinator: &Arc<coordinator::Coordinator>,
@@ -631,6 +775,7 @@ fn build_style_tray_menu<M: Manager<tauri::Wry>>(
     })
 }
 
+#[cfg(not(mobile))]
 fn build_microphone_tray_menu<M: Manager<tauri::Wry>>(
     app: &M,
     coordinator: &Arc<coordinator::Coordinator>,
@@ -689,6 +834,7 @@ fn build_microphone_tray_menu<M: Manager<tauri::Wry>>(
     })
 }
 
+#[cfg(not(mobile))]
 pub(crate) fn refresh_tray_microphone_menu(app: &AppHandle) -> tauri::Result<()> {
     let coordinator = app.state::<Arc<coordinator::Coordinator>>();
     let tray_menu = build_tray_menu(app, &coordinator)?;
@@ -700,6 +846,7 @@ pub(crate) fn refresh_tray_microphone_menu(app: &AppHandle) -> tauri::Result<()>
     Ok(())
 }
 
+#[cfg(not(mobile))]
 fn microphone_device_signature() -> Option<Vec<(String, bool)>> {
     match recorder::list_input_devices() {
         Ok(devices) => Some(
@@ -715,6 +862,7 @@ fn microphone_device_signature() -> Option<Vec<(String, bool)>> {
     }
 }
 
+#[cfg(not(mobile))]
 fn start_tray_microphone_watcher(app: AppHandle) {
     TRAY_MICROPHONE_WATCHER_STOPPING.store(false, Ordering::Relaxed);
     if let Err(err) = std::thread::Builder::new()
@@ -748,6 +896,7 @@ fn start_tray_microphone_watcher(app: AppHandle) {
     }
 }
 
+#[cfg(not(mobile))]
 fn handle_microphone_tray_menu_event(app: &AppHandle, id: &str) {
     let tray_items = app.state::<commands::TrayMicrophoneMenuState>();
     let items = tray_items.lock();
@@ -767,6 +916,7 @@ fn handle_microphone_tray_menu_event(app: &AppHandle, id: &str) {
     commands::sync_tray_microphone_selection(&items, &selected.device_name);
 }
 
+#[cfg(not(mobile))]
 fn handle_style_tray_menu_event(app: &AppHandle, id: &str) -> bool {
     let Some(mode) = parse_tray_polish_mode_id(id) else {
         return false;
@@ -780,6 +930,11 @@ fn handle_style_tray_menu_event(app: &AppHandle, id: &str) -> bool {
         log::warn!("[tray] refresh style menu after polish mode change failed: {err}");
     }
     true
+}
+
+#[cfg(mobile)]
+pub(crate) fn refresh_tray_microphone_menu(_app: &AppHandle) -> tauri::Result<()> {
+    Ok(())
 }
 
 /// 把 Win11 原生标题栏底色刷成白色，与应用 sidebar 视觉统一。需要 Win11 22H2+
@@ -947,7 +1102,7 @@ pub fn log_dir_path() -> std::path::PathBuf {
                 .join("Logs");
         }
     }
-    #[cfg(all(unix, not(target_os = "macos")))]
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
     {
         if let Ok(home) = std::env::var("HOME") {
             return std::path::PathBuf::from(home)
@@ -955,6 +1110,12 @@ pub fn log_dir_path() -> std::path::PathBuf {
                 .join("share")
                 .join("OpenLess")
                 .join("logs");
+        }
+    }
+    #[cfg(target_os = "android")]
+    {
+        if let Ok(dir) = std::env::var("TAURI_ANDROID_APP_DATA_DIR") {
+            return std::path::PathBuf::from(dir).join("logs");
         }
     }
     std::env::temp_dir().join("OpenLess")

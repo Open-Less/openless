@@ -2,6 +2,9 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
 const host = process.env.TAURI_DEV_HOST;
+const isMobileDev =
+  process.env.TAURI_ENV_PLATFORM === "android" ||
+  process.env.TAURI_ENV_PLATFORM === "ios";
 
 export default defineConfig(async () => ({
   plugins: [react()],
@@ -9,10 +12,12 @@ export default defineConfig(async () => ({
   server: {
     port: 1420,
     strictPort: true,
-    host: host || false,
-    hmr: host
-      ? { protocol: "ws", host, port: 1421 }
-      : undefined,
+    host: isMobileDev ? "0.0.0.0" : host || false,
+    hmr: isMobileDev
+      ? { protocol: "ws", host: host || "0.0.0.0", port: 1421 }
+      : host
+        ? { protocol: "ws", host, port: 1421 }
+        : undefined,
     watch: { ignored: ["**/src-tauri/**"] },
   },
   envPrefix: ["VITE_", "TAURI_"],

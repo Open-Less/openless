@@ -9,9 +9,11 @@ import {
   checkMicrophonePermission,
   getHotkeyStatus,
   getSettings,
+  getPlatformCapabilities,
   handleWindowHotkeyEvent,
   isTauri,
 } from './lib/ipc';
+import type { PlatformCapabilities } from './lib/types';
 import {
   isWindowHotkeyKeyboardCandidate,
   windowMouseHotkeyCode,
@@ -49,7 +51,7 @@ export function App({ isCapsule, isQa, isLessComputer, isLessComputerGlow, force
   const os = forcedOs ?? detectOS();
   // Windows 启动不应被权限探测阻塞首屏。
   const [gate, setGate] = useState<Gate>('ready');
-
+  const [platformCaps, setPlatformCaps] = useState<PlatformCapabilities | null>(null);
   useEffect(() => {
     applyAppTheme(readAppTheme());
     const syncTheme = (event: StorageEvent) => {
@@ -58,6 +60,11 @@ export function App({ isCapsule, isQa, isLessComputer, isLessComputerGlow, force
     };
     window.addEventListener('storage', syncTheme);
     return () => window.removeEventListener('storage', syncTheme);
+  }, []);
+
+  useEffect(() => {
+    if (!isTauri) return;
+    void getPlatformCapabilities().then(setPlatformCaps);
   }, []);
 
   useEffect(() => {
@@ -105,13 +112,26 @@ export function App({ isCapsule, isQa, isLessComputer, isLessComputerGlow, force
     if (!isTauri) return;
     let cancelled = false;
 
-    if (os === 'win') {
-      // 超时保护：50 次 × 200ms = 10s。hotkey hook 永远 starting（被反作弊 / EDR
-      // / UAC 拦）时不让 UI 死锁灰屏，过 10s 强 setGate('ready') 让用户进
-      // Permissions 页看 hotkey_status.lastError 处理。详见 issue #163。
-      const POLL_INTERVAL_MS = 200;
-      const POLL_MAX_ATTEMPTS = 50;
-      const pollHotkeyStatus = async () => {
+    void (async () => {
+      const caps = await getPlatformCapabilities();
+      if (cancelled) return;
+
+      if (caps.platform === 'android') {
+        const m = await checkMicrophonePermission();
+        if (cancelled) return;
+        // notDetermined is non-blocking on Android — show grant flow in-app instead
+        // of trapping users on onboarding while JNI/runtime permission is pending.
+        const blocked = m === 'denied' || m === 'restricted';
+        setGate(blocked ? 'onboarding' : 'ready');
+        return;
+      }
+
+      if (os === 'win') {
+        // 超时保护：50 次 × 200ms = 10s。hotkey hook 永远 starting（被反作弊 / EDR
+        // / UAC 拦）时不让 UI 死锁灰屏，过 10s 强 setGate('ready') 让用户进
+        // Permissions 页看 hotkey_status.lastError 处理。详见 issue #163。
+        const POLL_INTERVAL_MS = 200;
+        const POLL_MAX_ATTEMPTS = 50;
         let attempts = 0;
         while (!cancelled && attempts < POLL_MAX_ATTEMPTS) {
           attempts += 1;
@@ -129,19 +149,9 @@ export function App({ isCapsule, isQa, isLessComputer, isLessComputerGlow, force
           );
           setGate('ready');
         }
-      };
-      void pollHotkeyStatus().catch(error => {
-        console.warn('[startup] hotkey status polling failed', error);
-        if (!cancelled) {
-          setGate('ready');
-        }
-      });
-      return () => {
-        cancelled = true;
-      };
-    }
+        return;
+      }
 
-    (async () => {
       const [a, m] = await Promise.all([
         checkAccessibilityPermission(),
         checkMicrophonePermission(),
@@ -150,7 +160,13 @@ export function App({ isCapsule, isQa, isLessComputer, isLessComputerGlow, force
       const aOk = a === 'granted' || a === 'notApplicable';
       const mOk = m === 'granted' || m === 'notApplicable';
       setGate(aOk && mOk ? 'ready' : 'onboarding');
-    })();
+    })().catch(error => {
+      console.warn('[startup] permission gate failed', error);
+      if (!cancelled) {
+        setGate('ready');
+      }
+    });
+
     return () => {
       cancelled = true;
     };
@@ -192,7 +208,7 @@ export function App({ isCapsule, isQa, isLessComputer, isLessComputerGlow, force
   return (
     <HotkeySettingsProvider>
       {gate === 'onboarding' ? <Onboarding onComplete={() => setGate('ready')} /> : <FloatingShell os={os} />}
-      {gate === 'ready' && <AutoUpdateGate />}
+      {gate === 'ready' && platformCaps?.supportsAutoUpdate === true && <AutoUpdateGate />}
     </HotkeySettingsProvider>
   );
 }

@@ -1989,6 +1989,8 @@ pub enum HotkeyAdapterKind {
     MacEventTap,
     WindowsLowLevel,
     Fcitx5,
+    /// Mobile platforms do not expose desktop global hotkey adapters.
+    Unavailable,
 }
 
 impl HotkeyAdapterKind {
@@ -1997,6 +1999,7 @@ impl HotkeyAdapterKind {
             HotkeyAdapterKind::MacEventTap => "macOS Event Tap",
             HotkeyAdapterKind::WindowsLowLevel => "Windows 低层键盘 hook",
             HotkeyAdapterKind::Fcitx5 => "fcitx5 输入法插件",
+            HotkeyAdapterKind::Unavailable => "不可用",
         }
     }
 }
@@ -2152,6 +2155,21 @@ pub struct HotkeyCapability {
 
 impl HotkeyCapability {
     pub fn current() -> Self {
+        #[cfg(mobile)]
+        {
+            return Self {
+                adapter: HotkeyAdapterKind::Unavailable,
+                available_triggers: Vec::new(),
+                requires_accessibility_permission: false,
+                supports_modifier_only_trigger: false,
+                supports_side_specific_modifiers: false,
+                explicit_fallback_available: false,
+                status_hint: Some(
+                    "移动端不支持全局热键；请使用应用内录音按钮或悬浮窗（需授权）。".into(),
+                ),
+            };
+        }
+
         #[cfg(target_os = "macos")]
         {
             Self {
@@ -2256,6 +2274,101 @@ pub struct WindowsImeStatus {
     pub using_tsf_backend: bool,
     pub message: String,
     pub dll_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum AndroidImeState {
+    Enabled,
+    NotEnabled,
+    NotAndroid,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AndroidImeStatus {
+    pub state: AndroidImeState,
+    pub enabled: bool,
+    pub selected: bool,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum AndroidOverlayPermissionState {
+    Granted,
+    NotGranted,
+    NotAndroid,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AndroidOverlayStatus {
+    pub permission: AndroidOverlayPermissionState,
+    pub overlay_visible: bool,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PlatformCapabilities {
+    pub platform: String,
+    pub supports_ime_input: bool,
+    pub supports_overlay: bool,
+    pub supports_desktop_hotkey: bool,
+    pub supports_tray: bool,
+    pub supports_local_asr: bool,
+    pub supports_in_app_dictation: bool,
+    pub supports_auto_update: bool,
+}
+
+impl PlatformCapabilities {
+    pub fn current() -> Self {
+        #[cfg(target_os = "android")]
+        {
+            Self {
+                platform: "android".to_string(),
+                supports_ime_input: true,
+                supports_overlay: true,
+                supports_desktop_hotkey: false,
+                supports_tray: false,
+                supports_local_asr: false,
+                supports_in_app_dictation: true,
+                supports_auto_update: false,
+            }
+        }
+
+        #[cfg(all(
+            any(target_os = "android", target_os = "ios"),
+            not(target_os = "android")
+        ))]
+        {
+            Self {
+                platform: "mobile".to_string(),
+                supports_ime_input: false,
+                supports_overlay: false,
+                supports_desktop_hotkey: false,
+                supports_tray: false,
+                supports_local_asr: false,
+                supports_in_app_dictation: false,
+                supports_auto_update: false,
+            }
+        }
+
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        {
+            Self {
+                platform: "desktop".to_string(),
+                supports_ime_input: cfg!(target_os = "windows"),
+                supports_overlay: true,
+                supports_desktop_hotkey: true,
+                supports_tray: true,
+                supports_local_asr: cfg!(any(target_os = "macos", target_os = "windows")),
+                supports_in_app_dictation: false,
+                supports_auto_update: true,
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

@@ -4,8 +4,25 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../components/Icon';
 import { formatComboLabel } from '../lib/hotkey';
-import { getCredentials, listHistory } from '../lib/ipc';
-import type { CredentialsStatus, DictationSession, PolishMode } from '../lib/types';
+import {
+  checkMicrophonePermission,
+  getCredentials,
+  getPlatformCapabilities,
+  listHistory,
+  openSystemSettings,
+  requestMicrophonePermission,
+  startDictation,
+  stopDictation,
+} from '../lib/ipc';
+import type {
+  CapsulePayload,
+  CapsuleState,
+  CredentialsStatus,
+  DictationSession,
+  PermissionStatus,
+  PlatformCapabilities,
+  PolishMode,
+} from '../lib/types';
 import { useHotkeySettings } from '../state/HotkeySettingsContext';
 import { Btn, Card, PageHeader, Pill } from './_atoms';
 
@@ -175,6 +192,9 @@ export function Overview({ onOpenHistory }: OverviewProps) {
         title={t('overview.title')}
         desc={t('overview.metricTotalTrend')}
       />
+
+      <AndroidMicGrantBanner />
+      <InAppDictationControl />
 
       <div
         className="ol-overview-hero"
@@ -392,4 +412,184 @@ function weekDayLabels(names: string[]): string[] {
     out.push(names[(today - i + 7) % 7]);
   }
   return out;
+}
+
+function AndroidMicGrantBanner() {
+  const { t } = useTranslation();
+  const [platformCaps, setPlatformCaps] = useState<PlatformCapabilities | null>(null);
+  const [microphone, setMicrophone] = useState<PermissionStatus | 'loading'>('loading');
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    void getPlatformCapabilities().then(setPlatformCaps);
+  }, []);
+
+  const refreshMic = useCallback(async () => {
+    setMicrophone(await checkMicrophonePermission());
+  }, []);
+
+  useEffect(() => {
+    if (platformCaps?.platform !== 'android') return;
+    void refreshMic();
+    const onFocus = () => { void refreshMic(); };
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, [platformCaps?.platform, refreshMic]);
+
+  if (platformCaps?.platform !== 'android') return null;
+  if (microphone === 'loading' || microphone === 'granted' || microphone === 'notApplicable') {
+    return null;
+  }
+
+  const onGrant = async () => {
+    setBusy(true);
+    try {
+      if (microphone === 'denied' || microphone === 'restricted') {
+        await openSystemSettings('microphone');
+      } else {
+        const status = await requestMicrophonePermission();
+        setMicrophone(status);
+        if (status === 'denied' || status === 'restricted') {
+          await openSystemSettings('microphone');
+        }
+      }
+    } finally {
+      setBusy(false);
+      void refreshMic();
+    }
+  };
+
+  return (
+    <Card
+      padding={14}
+      style={{
+        marginBottom: 14,
+        display: 'flex',
+        alignItems: 'center',
+        gap: 12,
+        background: 'var(--ol-blue-soft)',
+        border: '0.5px solid rgba(37,99,235,0.18)',
+      }}
+    >
+      <Icon name="mic" size={18} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--ol-ink)' }}>
+          {t('overview.androidMicBanner.title')}
+        </div>
+        <div style={{ fontSize: 12, color: 'var(--ol-ink-3)', marginTop: 2, lineHeight: 1.5 }}>
+          {t('overview.androidMicBanner.desc')}
+        </div>
+      </div>
+      <Btn variant="primary" size="sm" onClick={() => void onGrant()} disabled={busy}>
+        {microphone === 'denied' || microphone === 'restricted'
+          ? t('overview.androidMicBanner.openSettings')
+          : t('overview.androidMicBanner.grant')}
+      </Btn>
+    </Card>
+  );
+}
+
+function InAppDictationControl() {
+  const { t } = useTranslation();
+  const [platformCaps, setPlatformCaps] = useState<PlatformCapabilities | null>(null);
+  const [capsuleState, setCapsuleState] = useState<CapsuleState>('idle');
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    void getPlatformCapabilities().then(setPlatformCaps);
+  }, []);
+
+  useEffect(() => {
+    if (!platformCaps?.supportsInAppDictation) return;
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    void (async () => {
+      try {
+        const { listen } = await import('@tauri-apps/api/event');
+        const handle = await listen<CapsulePayload>('capsule:state', (event) => {
+          if (cancelled) return;
+          setCapsuleState(event.payload.state);
+        });
+        if (cancelled) {
+          handle();
+        } else {
+          unlisten = handle;
+        }
+      } catch {
+        // browser dev mock
+      }
+    })();
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [platformCaps?.supportsInAppDictation]);
+
+  if (!platformCaps?.supportsInAppDictation) {
+    return null;
+  }
+
+  const recording = capsuleState === 'recording';
+  const processing = capsuleState === 'transcribing' || capsuleState === 'polishing';
+  const statusLabel = recording
+    ? t('overview.inAppDictation.recording')
+    : processing
+      ? t('overview.inAppDictation.processing')
+      : t('overview.inAppDictation.idle');
+
+  const onToggle = async () => {
+    if (busy || processing) return;
+    setBusy(true);
+    try {
+      if (recording) {
+        await stopDictation();
+      } else {
+        await startDictation();
+      }
+    } catch (error) {
+      console.error('[overview] in-app dictation toggle failed', error);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card padding={16} style={{ marginBottom: 20, display: 'flex', alignItems: 'center', gap: 14 }}>
+      <button
+        type="button"
+        onClick={() => void onToggle()}
+        disabled={busy || processing}
+        aria-label={recording ? t('overview.inAppDictation.stop') : t('overview.inAppDictation.start')}
+        style={{
+          width: 52,
+          height: 52,
+          borderRadius: 999,
+          border: 0,
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          background: recording ? 'var(--ol-err, #ef4444)' : 'var(--ol-blue)',
+          color: '#fff',
+          cursor: busy || processing ? 'not-allowed' : 'default',
+          opacity: busy || processing ? 0.7 : 1,
+          transition: 'background 0.16s var(--ol-motion-quick), opacity 0.16s var(--ol-motion-quick)',
+        }}
+      >
+        {recording ? (
+          <span style={{ width: 16, height: 16, borderRadius: 3, background: '#fff', display: 'block' }} />
+        ) : (
+          <Icon name="mic" size={20} />
+        )}
+      </button>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--ol-ink)' }}>
+          {t('overview.inAppDictation.title')}
+        </div>
+        <div style={{ fontSize: 12, color: 'var(--ol-ink-3)', marginTop: 2 }}>
+          {statusLabel}
+        </div>
+      </div>
+      <Pill tone={recording ? 'outline' : 'ok'} size="sm">{statusLabel}</Pill>
+    </Card>
+  );
 }

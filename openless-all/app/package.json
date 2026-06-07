@@ -8,6 +8,9 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
+    "tauri:android:init": "tauri android init",
+    "tauri:android:dev": "tauri android dev",
+    "tauri:android:build": "tauri android build --apk",
     "check:aura-skin": "node scripts/aura-skin-contract.test.mjs",
     "check:macos-capsule-spaces": "node scripts/macos-capsule-spaces-contract.test.mjs",
     "check:hotkey-injection": "node scripts/check-hotkey-injection.mjs"

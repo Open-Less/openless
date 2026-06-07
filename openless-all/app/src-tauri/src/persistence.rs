@@ -48,6 +48,8 @@ const LEGACY_CREDS_FILE: &str = "credentials.json";
 
 const KEYRING_CREDENTIALS_ACCOUNT: &str = "credentials.v1";
 const KEYRING_CREDENTIALS_CHUNK_PREFIX: &str = "credentials.v1.chunk.";
+#[cfg(target_os = "android")]
+const ANDROID_CREDENTIALS_FILE: &str = "credentials.enc.json";
 // Windows Credential Manager caps one credential blob at 2560 bytes. keyring stores
 // passwords as UTF-16 on Windows, so keep each JSON chunk comfortably below that.
 const KEYRING_CHUNK_MAX_UTF16_UNITS: usize = 1000;
@@ -111,7 +113,7 @@ fn data_dir() -> Result<PathBuf> {
         Ok(PathBuf::from(appdata).join("OpenLess"))
     }
 
-    #[cfg(all(unix, not(target_os = "macos")))]
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
     {
         if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
             if !xdg.is_empty() {
@@ -123,6 +125,14 @@ fn data_dir() -> Result<PathBuf> {
             .join(".local")
             .join("share")
             .join("OpenLess"))
+    }
+
+    #[cfg(target_os = "android")]
+    {
+        if let Ok(dir) = std::env::var("TAURI_ANDROID_APP_DATA_DIR") {
+            return Ok(PathBuf::from(dir).join("OpenLess"));
+        }
+        Ok(std::env::temp_dir().join("OpenLess"))
     }
 }
 
@@ -640,13 +650,52 @@ fn credentials_path() -> Result<PathBuf> {
     }
 }
 
+#[cfg(not(target_os = "android"))]
 fn keyring_entry() -> Result<keyring::Entry> {
     keyring_entry_for(KEYRING_CREDENTIALS_ACCOUNT)
 }
 
+#[cfg(not(target_os = "android"))]
 fn keyring_entry_for(account: &str) -> Result<keyring::Entry> {
     keyring::Entry::new(CredentialsVault::SERVICE_NAME, account)
         .context("open system credential vault")
+}
+
+#[cfg(target_os = "android")]
+fn android_credentials_path() -> Result<PathBuf> {
+    Ok(data_dir()?.join(ANDROID_CREDENTIALS_FILE))
+}
+
+#[cfg(target_os = "android")]
+fn load_android_credentials() -> Result<Option<CredsRoot>> {
+    let path = android_credentials_path()?;
+    if !path.exists() {
+        return Ok(None);
+    }
+    let bytes = fs::read(&path).with_context(|| format!("read failed: {}", path.display()))?;
+    if bytes.is_empty() {
+        return Ok(None);
+    }
+    // Stub: base64 envelope — replace with Keystore-backed AES when JNI lands.
+    use base64::Engine;
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(bytes)
+        .context("decode android credentials envelope")?;
+    let root = serde_json::from_slice::<CredsRoot>(&decoded)
+        .context("parse android credentials json")?;
+    Ok(Some(root))
+}
+
+#[cfg(target_os = "android")]
+fn save_android_credentials(root: &CredsRoot) -> Result<()> {
+    let cleaned = clean_credentials(root);
+    let json = serde_json::to_string(&cleaned).context("encode credentials failed")?;
+    use base64::Engine;
+    let encoded = base64::engine::general_purpose::STANDARD.encode(json.as_bytes());
+    let path = android_credentials_path()?;
+    ensure_dir(path.parent().unwrap_or_else(|| Path::new(".")))?;
+    fs::write(&path, encoded).with_context(|| format!("write failed: {}", path.display()))?;
+    Ok(())
 }
 
 fn clean_credentials(root: &CredsRoot) -> CredsRoot {
@@ -742,6 +791,7 @@ fn read_chunk_manifest(json: &str) -> Option<CredsChunkManifest> {
     }
 }
 
+#[cfg(not(target_os = "android"))]
 fn get_keyring_password(account: &str) -> Result<Option<String>> {
     match keyring_entry_for(account)?.get_password() {
         Ok(value) => Ok(Some(value)),
@@ -752,6 +802,7 @@ fn get_keyring_password(account: &str) -> Result<Option<String>> {
     }
 }
 
+#[cfg(not(target_os = "android"))]
 fn delete_keyring_password(account: &str) {
     match keyring_entry_for(account).and_then(|entry| {
         entry
@@ -762,6 +813,7 @@ fn delete_keyring_password(account: &str) {
     }
 }
 
+#[cfg(not(target_os = "android"))]
 fn load_keyring_credentials() -> Result<Option<CredsRoot>> {
     let Some(json_or_manifest) = get_keyring_password(KEYRING_CREDENTIALS_ACCOUNT)? else {
         return Ok(None);
@@ -782,6 +834,7 @@ fn load_keyring_credentials() -> Result<Option<CredsRoot>> {
         .context("decode system credential vault payload")
 }
 
+#[cfg(not(target_os = "android"))]
 fn load_legacy_keyring_credentials() -> CredsRoot {
     match load_legacy_keyring_credentials_for_update() {
         Ok(root) => root,
@@ -792,6 +845,7 @@ fn load_legacy_keyring_credentials() -> CredsRoot {
     }
 }
 
+#[cfg(not(target_os = "android"))]
 fn load_legacy_keyring_credentials_for_update() -> Result<CredsRoot> {
     let mut root = CredsRoot::default();
     for account in CredentialAccount::all() {
@@ -805,6 +859,7 @@ fn load_legacy_keyring_credentials_for_update() -> Result<CredsRoot> {
     Ok(clean_credentials(&root))
 }
 
+#[cfg(not(target_os = "android"))]
 fn remove_legacy_keyring_credentials() {
     for account in CredentialAccount::all() {
         delete_keyring_password(account.keyring_account());
@@ -826,9 +881,12 @@ fn load_legacy_sources_without_migration() -> CredsRoot {
         return legacy;
     }
 
-    let legacy_vault = load_legacy_keyring_credentials();
-    if legacy_vault_has_credentials(&legacy_vault) {
-        return legacy_vault;
+    #[cfg(not(target_os = "android"))]
+    {
+        let legacy_vault = load_legacy_keyring_credentials();
+        if legacy_vault_has_credentials(&legacy_vault) {
+            return legacy_vault;
+        }
     }
 
     CredsRoot::default()
@@ -847,15 +905,19 @@ fn migrate_legacy_sources() -> CredsRoot {
 fn migrate_legacy_sources_for_update() -> Result<CredsRoot> {
     if let Some(legacy) = load_legacy_credentials() {
         save_credentials(&legacy)?;
+        #[cfg(not(target_os = "android"))]
         remove_legacy_keyring_credentials();
         return Ok(legacy);
     }
 
-    let legacy_vault = load_legacy_keyring_credentials_for_update()?;
-    if legacy_vault_has_credentials(&legacy_vault) {
-        save_credentials(&legacy_vault)?;
-        remove_legacy_keyring_credentials();
-        return Ok(legacy_vault);
+    #[cfg(not(target_os = "android"))]
+    {
+        let legacy_vault = load_legacy_keyring_credentials_for_update()?;
+        if legacy_vault_has_credentials(&legacy_vault) {
+            save_credentials(&legacy_vault)?;
+            remove_legacy_keyring_credentials();
+            return Ok(legacy_vault);
+        }
     }
 
     Ok(CredsRoot::default())
@@ -865,6 +927,22 @@ fn load_credentials() -> CredsRoot {
     if let Some(cached) = credentials_cache().lock().as_ref().cloned() {
         return cached;
     }
+
+    #[cfg(target_os = "android")]
+    {
+        let root = match load_android_credentials() {
+            Ok(Some(root)) => root,
+            Ok(None) => CredsRoot::default(),
+            Err(e) => {
+                log::warn!("[vault] android credential read failed: {e}");
+                CredsRoot::default()
+            }
+        };
+        store_credentials_cache(&root);
+        return root;
+    }
+
+    #[cfg(not(target_os = "android"))]
     match load_keyring_credentials() {
         Ok(Some(root)) => {
             // 不在这里调 remove_legacy_keyring_credentials() —— 它内部对每个
@@ -901,6 +979,18 @@ fn load_credentials_for_update() -> Result<CredsRoot> {
     if let Some(cached) = credentials_cache().lock().as_ref().cloned() {
         return Ok(cached);
     }
+
+    #[cfg(target_os = "android")]
+    {
+        let root = match load_android_credentials()? {
+            Some(root) => root,
+            None => CredsRoot::default(),
+        };
+        store_credentials_cache(&root);
+        return Ok(root);
+    }
+
+    #[cfg(not(target_os = "android"))]
     match load_keyring_credentials() {
         Ok(Some(root)) => {
             // 同 load_credentials：不再每次 update 都尝试 delete legacy keyring
@@ -924,6 +1014,16 @@ fn load_credentials_for_update() -> Result<CredsRoot> {
 
 fn save_credentials(root: &CredsRoot) -> Result<()> {
     let cleaned = clean_credentials(root);
+
+    #[cfg(target_os = "android")]
+    {
+        save_android_credentials(&cleaned)?;
+        store_credentials_cache(&cleaned);
+        return Ok(());
+    }
+
+    #[cfg(not(target_os = "android"))]
+    {
     let json = serde_json::to_string(&cleaned).context("encode credentials failed")?;
     let previous_manifest = get_keyring_password(KEYRING_CREDENTIALS_ACCOUNT)
         .ok()
@@ -977,6 +1077,7 @@ fn save_credentials(root: &CredsRoot) -> Result<()> {
     // 见 CREDENTIALS_CACHE 的 doc。
     store_credentials_cache(&cleaned);
     Ok(())
+    }
 }
 
 fn lookup_account(root: &CredsRoot, account: CredentialAccount) -> Option<String> {

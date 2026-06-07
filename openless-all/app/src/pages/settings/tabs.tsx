@@ -2,6 +2,7 @@
 // 真正的逻辑都在各 *Section 文件里，这里只负责"哪些 section 归到哪个 tab"。
 
 import { useTranslation } from 'react-i18next';
+import { useEffect, useState } from 'react';
 import { RecordingInputSection } from './RecordingInputSection';
 import { ShortcutsSection } from './ShortcutsSection';
 import { LanguageSection } from './LanguageSection';
@@ -15,13 +16,23 @@ import { CodingAgentSection } from './CodingAgentSection';
 import { ClaudeConsoleSection } from './ClaudeConsoleSection';
 import { BetaChannelSection } from './BetaChannelSection';
 import { detectOS } from '../../components/WindowChrome';
+import { getPlatformCapabilities } from '../../lib/platform';
+import type { PlatformCapabilities } from '../../lib/types';
 
 // 通用：录音与输入 · 快捷键 · 语言。
 export function GeneralTab() {
+  const [platformCaps, setPlatformCaps] = useState<PlatformCapabilities | null>(null);
+
+  useEffect(() => {
+    void getPlatformCapabilities().then(setPlatformCaps);
+  }, []);
+
+  const showDesktopShortcuts = platformCaps?.supportsDesktopHotkey === true;
+
   return (
     <>
       <RecordingInputSection />
-      <ShortcutsSection />
+      {showDesktopShortcuts && <ShortcutsSection />}
       <LanguageSection />
     </>
   );
@@ -72,13 +83,21 @@ export function PrivacyTab() {
 // 高级：本地模型 · 调试工具 · 加入 Beta 渠道（固定在最下面）。
 export function AdvancedTab() {
   const os = detectOS();
+  const [platformCaps, setPlatformCaps] = useState<PlatformCapabilities | null>(null);
+
+  useEffect(() => {
+    void getPlatformCapabilities().then(setPlatformCaps);
+  }, []);
+
+  const showDesktopAdvanced = platformCaps?.platform === 'desktop';
+
   return (
     <>
-      <LocalModelSection />
-      <DebugToolsSection />
-      {os !== 'win' && <CodingAgentSection />}
-      {os !== 'win' && <ClaudeConsoleSection />}
-      <BetaChannelSection />
+      {showDesktopAdvanced && <LocalModelSection />}
+      {showDesktopAdvanced && <DebugToolsSection />}
+      {showDesktopAdvanced && os !== 'win' && <CodingAgentSection />}
+      {showDesktopAdvanced && os !== 'win' && <ClaudeConsoleSection />}
+      {platformCaps?.supportsAutoUpdate === true && <BetaChannelSection />}
     </>
   );
 }

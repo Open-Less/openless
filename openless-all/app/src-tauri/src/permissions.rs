@@ -244,9 +244,197 @@ mod platform {
     }
 }
 
-// ─────────────────────────── Windows / 其他 ───────────────────────────
+// ─────────────────────────── Android ───────────────────────────
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "android")]
+mod platform {
+    use super::PermissionStatus;
+    use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+    use cpal::{SampleFormat, StreamConfig};
+    use std::time::Duration;
+
+    const RECORD_AUDIO_PERMISSION: &str = "android.permission.RECORD_AUDIO";
+
+    pub fn check_accessibility() -> PermissionStatus {
+        PermissionStatus::NotApplicable
+    }
+
+    pub fn request_accessibility() -> PermissionStatus {
+        PermissionStatus::NotApplicable
+    }
+
+    /// Android 麦克风：JNI 查 runtime permission，再用 cpal 短探针确认可用。
+    pub fn check_microphone() -> PermissionStatus {
+        match android_check_record_audio_permission() {
+            Ok(PermissionStatus::Granted) => probe_microphone_with_cpal(),
+            Ok(other) => other,
+            Err(err) => {
+                log::warn!("[mic] Android permission JNI check failed: {err}; falling back to cpal probe");
+                probe_microphone_with_cpal()
+            }
+        }
+    }
+
+    pub fn request_microphone() -> PermissionStatus {
+        match android_request_record_audio_permission() {
+            Ok(()) => {
+                std::thread::sleep(Duration::from_millis(250));
+                check_microphone()
+            }
+            Err(err) => {
+                log::warn!("[mic] Android permission request failed: {err}");
+                // 避免 onboarding 永远卡在 NotDetermined：请求失败时回落 cpal 探针，
+                // 仍不可用则返回 Denied 而不是 NotDetermined。
+                match probe_microphone_with_cpal() {
+                    PermissionStatus::NotDetermined => PermissionStatus::Denied,
+                    other => other,
+                }
+            }
+        }
+    }
+
+    fn probe_microphone_with_cpal() -> PermissionStatus {
+        let host = cpal::default_host();
+        let Some(device) = host.default_input_device() else {
+            log::warn!("[mic] Android: no default input device");
+            return PermissionStatus::Denied;
+        };
+        let supported = match device.default_input_config() {
+            Ok(config) => config,
+            Err(err) => return classify_audio_probe_error(err.to_string()),
+        };
+        let sample_format = supported.sample_format();
+        let config: StreamConfig = supported.config();
+        match probe_input_stream(&device, &config, sample_format) {
+            Ok(()) => PermissionStatus::Granted,
+            Err(message) => classify_audio_probe_error(message),
+        }
+    }
+
+    fn classify_audio_probe_error(message: String) -> PermissionStatus {
+        let lower = message.to_lowercase();
+        log::warn!("[mic] Android input probe failed: {message}");
+        if lower.contains("denied")
+            || lower.contains("permission")
+            || lower.contains("authoriz")
+            || lower.contains("access")
+        {
+            PermissionStatus::Denied
+        } else if lower.contains("not determined") || lower.contains("notdetermined") {
+            PermissionStatus::NotDetermined
+        } else {
+            PermissionStatus::Denied
+        }
+    }
+
+    fn probe_input_stream(
+        device: &cpal::Device,
+        config: &StreamConfig,
+        sample_format: SampleFormat,
+    ) -> Result<(), String> {
+        let err_cb = |err| log::warn!("[mic] Android probe stream error: {err}");
+
+        macro_rules! build_probe {
+            ($t:ty) => {
+                device
+                    .build_input_stream::<$t, _, _>(
+                        config,
+                        move |_data: &[$t], _info| {},
+                        err_cb,
+                        None,
+                    )
+                    .map_err(|e| e.to_string())
+            };
+        }
+
+        let stream = match sample_format {
+            SampleFormat::F32 => build_probe!(f32),
+            SampleFormat::I16 => build_probe!(i16),
+            SampleFormat::U16 => build_probe!(u16),
+            SampleFormat::I32 => build_probe!(i32),
+            SampleFormat::I8 => build_probe!(i8),
+            SampleFormat::U8 => build_probe!(u8),
+            other => Err(format!("unsupported sample format: {other:?}")),
+        }?;
+
+        stream.play().map_err(|e| e.to_string())?;
+        std::thread::sleep(Duration::from_millis(120));
+        drop(stream);
+        Ok(())
+    }
+
+    fn android_check_record_audio_permission() -> Result<PermissionStatus, String> {
+        with_main_activity(|env, activity| {
+            let permission = env
+                .new_string(RECORD_AUDIO_PERMISSION)
+                .map_err(|e| format!("new permission string: {e}"))?;
+
+            let granted = env
+                .call_method(
+                    activity,
+                    "checkSelfPermission",
+                    "(Ljava/lang/String;)I",
+                    &[jni::objects::JValue::Object(&permission)],
+                )
+                .map_err(|e| format!("Activity.checkSelfPermission: {e}"))?
+                .i()
+                .map_err(|e| format!("checkSelfPermission result: {e}"))?;
+
+            // PackageManager.PERMISSION_GRANTED == 0
+            Ok(if granted == 0 {
+                PermissionStatus::Granted
+            } else {
+                PermissionStatus::Denied
+            })
+        })
+    }
+
+    fn android_request_record_audio_permission() -> Result<(), String> {
+        with_main_activity(|env, activity| {
+            let permission = env
+                .new_string(RECORD_AUDIO_PERMISSION)
+                .map_err(|e| format!("new permission string: {e}"))?;
+            let permissions = env
+                .new_object_array(1, "java/lang/String", &permission)
+                .map_err(|e| format!("new permission array: {e}"))?;
+
+            env.call_method(
+                activity,
+                "requestPermissions",
+                "([Ljava/lang/String;I)V",
+                &[
+                    jni::objects::JValue::Object(&permissions),
+                    jni::objects::JValue::Int(0x4f50_4c53), // "OPLS"
+                ],
+            )
+            .map_err(|e| format!("Activity.requestPermissions: {e}"))?;
+            Ok(())
+        })
+    }
+
+    fn with_main_activity<F, R>(f: F) -> Result<R, String>
+    where
+        F: FnOnce(&mut jni::JNIEnv, jni::objects::JObject) -> Result<R, String>,
+    {
+        let ctx = ndk_context::android_context();
+        let vm = unsafe {
+            jni::JavaVM::from_raw(ctx.vm().cast())
+                .map_err(|e| format!("JavaVM from raw: {e}"))?
+        };
+        let mut env = vm
+            .attach_current_thread()
+            .map_err(|e| format!("attach JNI thread: {e}"))?;
+        let activity = unsafe { jni::objects::JObject::from_raw(ctx.context() as jni::sys::jobject) };
+        if activity.is_null() {
+            return Err("Android activity handle is null".into());
+        }
+        f(&mut env, activity)
+    }
+}
+
+// ─────────────────────────── Windows / Linux / 其他 ───────────────────────────
+
+#[cfg(all(not(target_os = "macos"), not(target_os = "android")))]
 mod platform {
     use super::PermissionStatus;
     use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};

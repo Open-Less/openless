@@ -6,7 +6,8 @@
 
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { getUpdateChannel, setUpdateChannel, type UpdateChannel } from '../../lib/ipc';
+import { getPlatformCapabilities, getUpdateChannel, setUpdateChannel, type UpdateChannel } from '../../lib/ipc';
+import type { PlatformCapabilities } from '../../lib/types';
 import { Card } from '../_atoms';
 import { SectionTitle, Toggle } from './shared';
 import { CheckUpdateButton } from './CheckUpdateButton';
@@ -14,6 +15,11 @@ import { CheckUpdateButton } from './CheckUpdateButton';
 export function BetaChannelSection() {
   const { t } = useTranslation();
   const [channel, setChannel] = useState<UpdateChannel>('stable');
+  const [platformCaps, setPlatformCaps] = useState<PlatformCapabilities | null>(null);
+
+  useEffect(() => {
+    void getPlatformCapabilities().then(setPlatformCaps);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -33,6 +39,8 @@ export function BetaChannelSection() {
       setChannel(target === 'beta' ? 'stable' : 'beta');
     }
   };
+
+  if (platformCaps?.supportsAutoUpdate !== true) return null;
 
   return (
     <Card>

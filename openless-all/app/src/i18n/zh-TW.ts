@@ -223,6 +223,8 @@ export const zhTW: typeof zhCN = {
     actionRequestMic: '彈出授權',
     accessibilityHint: '授權後必須**完全退出 OpenLess** 再重新打開（macOS TCC 規則）。',
     footerHint: '授權全部完成後此引導自動關閉。如果一直不消失，從菜單欄 OpenLess → 退出，重新打開 App。',
+    androidContinue: '先進入應用',
+    androidFooterHint: '聽寫需要麥克風權限。可點擊上方「彈出授權」，或先進入應用後在概覽頁繼續授權。',
   },
   overview: {
     kicker: 'DASHBOARD',
@@ -258,6 +260,20 @@ export const zhTW: typeof zhCN = {
     recentLoadFailed: '無法讀取最近識別，請重試。',
     historyRetry: '重試',
     weekDays: ['日', '一', '二', '三', '四', '五', '六'],
+    inAppDictation: {
+      title: '應用內錄音',
+      start: '開始錄音',
+      stop: '停止錄音',
+      idle: '點擊開始錄音',
+      recording: '錄音中…',
+      processing: '處理中…',
+    },
+    androidMicBanner: {
+      title: '需要麥克風權限',
+      desc: '授權麥克風後可使用應用內錄音與語音輸入。',
+      grant: '彈出授權',
+      openSettings: '打開系統設置',
+    },
   },
   history: {
     kicker: 'HISTORY',
@@ -769,6 +785,7 @@ export const zhTW: typeof zhCN = {
       disable: '停用',
       confirmHint: '點擊右側 ✓',
       notSupported: '暫未支持',
+      androidReadOnly: 'Android 不支援全域快捷鍵，請在概覽頁使用錄音按鈕。',
     },
     permissions: {
       title: '權限',
@@ -799,6 +816,10 @@ export const zhTW: typeof zhCN = {
       windowsImeDesc: '用於在語音會話期間臨時切換到 OpenLess TSF 輸入法，避免剪貼板插入限制。',
       windowsImeInstalled: '已安裝',
       windowsImeUnavailable: '不可用',
+      androidImeLabel: '輸入法 (IME)',
+      androidImePlaceholder: '即將推出 — 請在系統設定中啟用 OpenLess 輸入法',
+      androidOverlayLabel: '懸浮窗',
+      androidOverlayPlaceholder: '即將推出 — 請在系統設定中授予懸浮窗權限',
       windowsIme: {
         installed: '已安裝。語音輸入時會臨時切換到 OpenLess 輸入法。',
         notInstalled: '未安裝。OpenLess 正在使用剪貼板 / WM_PASTE 兜底。',
@@ -982,6 +1003,7 @@ export const zhTW: typeof zhCN = {
       macEventTap: 'macOS Event Tap',
       windowsLowLevel: 'Windows 低層鍵盤 hook',
       fcitx5: 'fcitx5 輸入法插件',
+      unavailable: '不可用',
     },
   },
   localAsr: {

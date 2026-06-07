@@ -15,6 +15,7 @@ import type {
     HotkeyStatus,
     MicrophoneDevice,
     PermissionStatus,
+    PlatformCapabilities,
     CodingAgentPermissionMode,
     PolishMode,
     QaHotkeyBinding,
@@ -29,13 +30,16 @@ import type {
     VocabPresetStore,
     WindowsImeStatus,
 } from "./types"
-export type { UpdateChannel } from "./types"
+export type { UpdateChannel, PlatformCapabilities } from "./types"
 import { OL_DATA } from "./mockData"
 import {
     defaultAppShortcutModifiers,
     defaultQaShortcut,
     formatComboLabel,
 } from "./hotkey"
+import {
+    getPlatformCapabilities as loadPlatformCapabilities,
+} from "./platform"
 
 declare global {
     interface Window {
@@ -46,6 +50,47 @@ declare global {
 const isTauri =
     globalThis.window !== undefined &&
     "__TAURI_INTERNALS__" in globalThis.window
+
+let platformCapsPromise: Promise<PlatformCapabilities> | null = null
+
+async function platformCapabilities(): Promise<PlatformCapabilities> {
+    platformCapsPromise ??= loadPlatformCapabilities()
+    return platformCapsPromise
+}
+
+export async function getPlatformCapabilities(): Promise<PlatformCapabilities> {
+    return platformCapabilities()
+}
+
+export { isAndroid, isDesktop, isMobile } from "./platform"
+
+const androidHotkeyCapability: HotkeyCapability = {
+    adapter: "unavailable",
+    availableTriggers: [],
+    requiresAccessibilityPermission: false,
+    supportsModifierOnlyTrigger: false,
+    supportsSideSpecificModifiers: false,
+    explicitFallbackAvailable: false,
+    statusHint:
+        "移动端不支持全局热键；请使用应用内录音按钮或悬浮窗（需授权）。",
+}
+
+const androidHotkeyStatus: HotkeyStatus = {
+    adapter: "unavailable",
+    state: "failed",
+    message: "移动端不支持全局热键",
+    lastError: {
+        code: "unavailable",
+        message: "Global hotkeys are not available on mobile",
+    },
+}
+
+const androidWindowsImeStatus: WindowsImeStatus = {
+    state: "notWindows",
+    usingTsfBackend: false,
+    message: "Not available on Android",
+    dllPath: null,
+}
 
 export async function invokeOrMock<T>(
     cmd: string,
@@ -545,40 +590,95 @@ export interface LatestBetaRelease {
     publishedAt: string
 }
 
+export interface AppUpdateMetadata {
+    rid: number
+    currentVersion: string
+    version: string
+    date?: string | null
+    body?: string | null
+    rawJson: Record<string, unknown>
+}
+
 export function getUpdateChannel(): Promise<UpdateChannel> {
-    return invokeOrMock(
-        "get_update_channel",
-        undefined,
-        () => "stable" as UpdateChannel,
-    )
+    return platformCapabilities().then((caps) => {
+        if (!caps.supportsAutoUpdate) {
+            return "stable" as UpdateChannel
+        }
+        return invokeOrMock(
+            "get_update_channel",
+            undefined,
+            () => "stable" as UpdateChannel,
+        )
+    })
 }
 
 export function setUpdateChannel(channel: UpdateChannel): Promise<void> {
-    return invokeOrMock("set_update_channel", { channel }, () => undefined)
+    return platformCapabilities().then((caps) => {
+        if (!caps.supportsAutoUpdate) {
+            return undefined
+        }
+        return invokeOrMock("set_update_channel", { channel }, () => undefined)
+    })
 }
 
 export function fetchLatestBetaRelease(): Promise<LatestBetaRelease | null> {
-    return invokeOrMock("fetch_latest_beta_release", undefined, () => null)
+    return platformCapabilities().then((caps) => {
+        if (!caps.supportsAutoUpdate) {
+            return null
+        }
+        return invokeOrMock("fetch_latest_beta_release", undefined, () => null)
+    })
+}
+
+export function appCheckUpdateWithChannel(
+    timeoutMs: number,
+    channel?: UpdateChannel | null,
+): Promise<AppUpdateMetadata | null> {
+    return platformCapabilities().then((caps) => {
+        if (!caps.supportsAutoUpdate) {
+            return null
+        }
+        return invokeOrMock(
+            "app_check_update_with_channel",
+            { timeoutMs, channel: channel ?? null },
+            () => null,
+        )
+    })
 }
 
 export function getHotkeyStatus(): Promise<HotkeyStatus> {
-    return invokeOrMock("get_hotkey_status", undefined, () => mockHotkeyStatus)
+    return platformCapabilities().then((caps) => {
+        if (!caps.supportsDesktopHotkey) {
+            return androidHotkeyStatus
+        }
+        return invokeOrMock("get_hotkey_status", undefined, () => mockHotkeyStatus)
+    })
 }
 
 export function getHotkeyCapability(): Promise<HotkeyCapability> {
-    return invokeOrMock(
-        "get_hotkey_capability",
-        undefined,
-        () => mockHotkeyCapability,
-    )
+    return platformCapabilities().then((caps) => {
+        if (!caps.supportsDesktopHotkey) {
+            return androidHotkeyCapability
+        }
+        return invokeOrMock(
+            "get_hotkey_capability",
+            undefined,
+            () => mockHotkeyCapability,
+        )
+    })
 }
 
 export function getWindowsImeStatus(): Promise<WindowsImeStatus> {
-    return invokeOrMock(
-        "get_windows_ime_status",
-        undefined,
-        () => mockWindowsImeStatus,
-    )
+    return platformCapabilities().then((caps) => {
+        if (caps.platform === "android") {
+            return androidWindowsImeStatus
+        }
+        return invokeOrMock(
+            "get_windows_ime_status",
+            undefined,
+            () => mockWindowsImeStatus,
+        )
+    })
 }
 
 export interface NetworkCheckResult {
@@ -804,11 +904,16 @@ export function handleWindowHotkeyEvent(
     code: string,
     repeat: boolean,
 ): Promise<void> {
-    return invokeOrMock(
-        "handle_window_hotkey_event",
-        { event_type: eventType, key, code, repeat },
-        () => undefined,
-    )
+    return platformCapabilities().then((caps) => {
+        if (!caps.supportsDesktopHotkey) {
+            return undefined
+        }
+        return invokeOrMock(
+            "handle_window_hotkey_event",
+            { event_type: eventType, key, code, repeat },
+            () => undefined,
+        )
+    })
 }
 
 // ── Polish ─────────────────────────────────────────────────────────────

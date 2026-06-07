@@ -15,9 +15,11 @@ import {
   requestMicrophonePermission,
 } from '../../lib/ipc';
 import type { NetworkCheckResult } from '../../lib/ipc';
+import { getPlatformCapabilities } from '../../lib/platform';
 import type {
   HotkeyStatus,
   PermissionStatus,
+  PlatformCapabilities,
   WindowsImeStatus,
 } from '../../lib/types';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
@@ -31,7 +33,12 @@ export function PermissionsSection() {
   const [hotkey, setHotkey] = useState<HotkeyStatus | null>(null);
   const [windowsIme, setWindowsIme] = useState<WindowsImeStatus | null>(null);
   const [network, setNetwork] = useState<NetworkCheckResult | null>(null);
+  const [platformCaps, setPlatformCaps] = useState<PlatformCapabilities | null>(null);
   const { capability } = useHotkeySettings();
+
+  useEffect(() => {
+    void getPlatformCapabilities().then(setPlatformCaps);
+  }, []);
 
   const refreshPermissions = async () => {
     const [a, m] = await Promise.all([
@@ -60,27 +67,37 @@ export function PermissionsSection() {
 
   useEffect(() => {
     refreshPermissions();
-    refreshHotkey();
-    refreshWindowsIme();
+    if (platformCaps?.supportsDesktopHotkey === true) {
+      refreshHotkey();
+    }
+    if (platformCaps?.platform !== 'android') {
+      refreshWindowsIme();
+    }
     refreshNetwork();
-    const hotkeyId = window.setInterval(refreshHotkey, 1000);
+    const hotkeyId = platformCaps?.supportsDesktopHotkey === true
+      ? window.setInterval(refreshHotkey, 1000)
+      : undefined;
     // 麦克风检查会短暂打开输入流，避免每秒探测导致隐私指示器频繁闪烁。
     const permissionId = window.setInterval(refreshPermissions, 10000);
     const networkId = window.setInterval(refreshNetwork, 30000);
     const onFocus = () => {
       refreshPermissions();
-      refreshHotkey();
-      refreshWindowsIme();
+      if (platformCaps?.supportsDesktopHotkey === true) {
+        refreshHotkey();
+      }
+      if (platformCaps?.platform !== 'android') {
+        refreshWindowsIme();
+      }
       refreshNetwork();
     };
     window.addEventListener('focus', onFocus);
     return () => {
-      window.clearInterval(hotkeyId);
+      if (hotkeyId !== undefined) window.clearInterval(hotkeyId);
       window.clearInterval(permissionId);
       window.clearInterval(networkId);
       window.removeEventListener('focus', onFocus);
     };
-  }, []);
+  }, [platformCaps?.platform, platformCaps?.supportsDesktopHotkey]);
 
   const reRequestAccessibility = async () => {
     await requestAccessibilityPermission();
@@ -114,7 +131,7 @@ export function PermissionsSection() {
           )}
         </div>
       </SettingRow>
-      {capability?.requiresAccessibilityPermission && (
+      {capability?.requiresAccessibilityPermission && platformCaps?.platform !== 'android' && (
         <SettingRow label={t('settings.permissions.accLabel')}>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'flex-end', width: '100%' }}>
             <PermissionPill status={accessibility} />
@@ -126,6 +143,7 @@ export function PermissionsSection() {
           </div>
         </SettingRow>
       )}
+      {platformCaps?.supportsDesktopHotkey === true && (
       <SettingRow label={t('settings.permissions.hotkeyLabel')}>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', minWidth: 0, justifyContent: 'flex-end', width: '100%' }}>
           {hotkey?.message && (
@@ -140,7 +158,18 @@ export function PermissionsSection() {
           <HotkeyStatusPill status={hotkey} />
         </div>
       </SettingRow>
-      {windowsIme?.state !== 'notWindows' && (
+      )}
+      {platformCaps?.supportsImeInput && platformCaps.platform === 'android' && (
+        <SettingRow label={t('settings.permissions.androidImeLabel')}>
+          <Pill tone="default">{t('settings.permissions.androidImePlaceholder')}</Pill>
+        </SettingRow>
+      )}
+      {platformCaps?.supportsOverlay && platformCaps.platform === 'android' && (
+        <SettingRow label={t('settings.permissions.androidOverlayLabel')}>
+          <Pill tone="default">{t('settings.permissions.androidOverlayPlaceholder')}</Pill>
+        </SettingRow>
+      )}
+      {windowsIme?.state !== 'notWindows' && platformCaps?.platform !== 'android' && (
         <SettingRow label={t('settings.permissions.windowsImeLabel')}>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', minWidth: 0, justifyContent: 'flex-end', width: '100%' }}>
             {windowsIme && (

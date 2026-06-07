@@ -26,7 +26,7 @@ import {
   shouldShowHotkeyModeMigrationPrompt,
 } from '../lib/hotkeyMigration';
 import { applyFontScale, readFontScale } from '../lib/fontScale';
-import { getCredentials } from '../lib/ipc';
+import { getCredentials, getPlatformCapabilities } from '../lib/ipc';
 import {
   PROVIDER_SETUP_PROMPT_DEFERRED_KEY,
   shouldShowProviderSetupPrompt,
@@ -131,11 +131,18 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
   }, []);
 
   useEffect(() => {
-    const acknowledgedValue = window.localStorage.getItem(HOTKEY_MODE_MIGRATION_ACK_KEY);
-    const deferredValue = window.sessionStorage.getItem(HOTKEY_MODE_MIGRATION_DEFERRED_KEY);
-    if (shouldShowHotkeyModeMigrationPrompt(acknowledgedValue, deferredValue)) {
-      setHotkeyModePromptOpen(true);
-    }
+    let cancelled = false;
+    void getPlatformCapabilities().then((caps) => {
+      if (cancelled || caps.platform === 'android') return;
+      const acknowledgedValue = window.localStorage.getItem(HOTKEY_MODE_MIGRATION_ACK_KEY);
+      const deferredValue = window.sessionStorage.getItem(HOTKEY_MODE_MIGRATION_DEFERRED_KEY);
+      if (shouldShowHotkeyModeMigrationPrompt(acknowledgedValue, deferredValue)) {
+        setHotkeyModePromptOpen(true);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // 之前监听的 NAVIGATE_LOCAL_ASR_EVENT 已无意义——「模型设置」独立 tab 已下线，

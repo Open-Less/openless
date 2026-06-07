@@ -2,10 +2,12 @@
 // 自 Settings.tsx 的 AdvancedSection 拆出（流式输入已挪到「录音与输入」）。
 // 含 Qwen3（macOS）/ Foundry Local + sherpa-onnx（Windows）三条本地引擎。
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import type { PlatformCapabilities } from '../../lib/types';
 import { useTranslation } from 'react-i18next';
 import { LocalAsr } from '../LocalAsr';
 import { detectOS } from '../../components/WindowChrome';
+import { getPlatformCapabilities } from '../../lib/platform';
 import { setActiveAsrProvider } from '../../lib/ipc';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
 import { Btn, Card } from '../_atoms';
@@ -17,7 +19,13 @@ export function LocalModelSection() {
   const os = detectOS();
   const isMac = os === 'mac';
   const isWin = os === 'win';
-  const platformSupported = isMac || isWin;
+  const [platformCaps, setPlatformCaps] = useState<PlatformCapabilities | null>(null);
+
+  useEffect(() => {
+    void getPlatformCapabilities().then(setPlatformCaps);
+  }, []);
+
+  const platformSupported = platformCaps?.supportsLocalAsr === true;
   const switchSeqRef = useRef(0);
   const [busy, setBusy] = useState(false);
   // 待确认的启用目标。!== null 时中央 modal 弹出 + 背景模糊；用户点确认 → 真切；

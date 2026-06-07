@@ -8,12 +8,13 @@ import { useTranslation } from 'react-i18next';
 import {
   checkAccessibilityPermission,
   checkMicrophonePermission,
+  getPlatformCapabilities,
   openSystemSettings,
   requestAccessibilityPermission,
   requestMicrophonePermission,
 } from '../lib/ipc';
 import { getHotkeyTriggerLabel } from '../lib/hotkey';
-import type { PermissionStatus } from '../lib/types';
+import type { PermissionStatus, PlatformCapabilities } from '../lib/types';
 import { useHotkeySettings } from '../state/HotkeySettingsContext';
 
 interface OnboardingProps {
@@ -27,6 +28,15 @@ export function Onboarding({ onComplete }: OnboardingProps) {
   const [busy, setBusy] = useState(false);
   const refreshTimeoutRef = useRef<number | null>(null);
   const { capability } = useHotkeySettings();
+  const [platformCaps, setPlatformCaps] = useState<PlatformCapabilities | null>(null);
+
+  useEffect(() => {
+    void getPlatformCapabilities().then(setPlatformCaps);
+  }, []);
+
+  const isAndroid = platformCaps?.platform === 'android';
+  const requiresAccessibility =
+    !isAndroid && !!capability?.requiresAccessibilityPermission;
 
   const refresh = async () => {
     const [a, m] = await Promise.all([
@@ -35,12 +45,15 @@ export function Onboarding({ onComplete }: OnboardingProps) {
     ]);
     setAccessibility(a);
     setMicrophone(m);
-    if ((a === 'granted' || a === 'notApplicable') && (m === 'granted' || m === 'notApplicable')) {
+    const aOk = !requiresAccessibility || a === 'granted' || a === 'notApplicable';
+    const mOk = m === 'granted' || m === 'notApplicable';
+    if (aOk && mOk) {
       onComplete();
     }
   };
 
   useEffect(() => {
+    if (!platformCaps) return;
     refresh();
     const id = window.setInterval(refresh, 1000);
     // 用户从系统设置切回来时立刻刷新
@@ -51,7 +64,7 @@ export function Onboarding({ onComplete }: OnboardingProps) {
       window.removeEventListener('focus', onFocus);
       if (refreshTimeoutRef.current) clearTimeout(refreshTimeoutRef.current);
     };
-  }, []);
+  }, [isAndroid, requiresAccessibility]);
 
   const onGrantAccessibility = async () => {
     setBusy(true);
@@ -81,6 +94,24 @@ export function Onboarding({ onComplete }: OnboardingProps) {
     if (refreshTimeoutRef.current) clearTimeout(refreshTimeoutRef.current);
     refreshTimeoutRef.current = window.setTimeout(refresh, 800);
   };
+
+  if (!platformCaps) {
+    return (
+      <div
+        style={{
+          flex: 1,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          fontFamily: 'var(--ol-font-sans)',
+          color: 'var(--ol-ink-3)',
+          fontSize: 13,
+        }}
+      >
+        {t('common.loading')}
+      </div>
+    );
+  }
 
   return (
     <div
@@ -128,6 +159,7 @@ export function Onboarding({ onComplete }: OnboardingProps) {
           </div>
         </div>
 
+        {requiresAccessibility && (
         <PermissionStep
           index={1}
           title={capability?.requiresAccessibilityPermission ? t('onboarding.accessibilityTitle') : t('onboarding.hotkeyTitle')}
@@ -148,9 +180,10 @@ export function Onboarding({ onComplete }: OnboardingProps) {
           disabled={busy || !capability?.requiresAccessibilityPermission || accessibility === 'granted' || accessibility === 'notApplicable'}
           hint={capability?.requiresAccessibilityPermission ? t('onboarding.accessibilityHint') : undefined}
         />
+        )}
 
         <PermissionStep
-          index={2}
+          index={requiresAccessibility ? 2 : 1}
           title={t('onboarding.micTitle')}
           desc={t('onboarding.micDesc')}
           status={microphone}
@@ -165,6 +198,29 @@ export function Onboarding({ onComplete }: OnboardingProps) {
           disabled={busy || microphone === 'granted'}
         />
 
+        {isAndroid && microphone !== 'granted' && microphone !== 'notApplicable' && (
+          <button
+            type="button"
+            onClick={onComplete}
+            disabled={busy}
+            style={{
+              marginTop: 14,
+              width: '100%',
+              padding: '10px 14px',
+              fontSize: 12.5,
+              fontWeight: 500,
+              fontFamily: 'inherit',
+              border: '0.5px solid var(--ol-line-strong)',
+              borderRadius: 8,
+              background: 'var(--ol-surface-2)',
+              color: 'var(--ol-ink-2)',
+              cursor: busy ? 'not-allowed' : 'default',
+            }}
+          >
+            {t('onboarding.androidContinue')}
+          </button>
+        )}
+
         <div
           style={{
             marginTop: 18,
@@ -176,7 +232,7 @@ export function Onboarding({ onComplete }: OnboardingProps) {
             lineHeight: 1.6,
           }}
         >
-          {t('onboarding.footerHint')}
+          {isAndroid ? t('onboarding.androidFooterHint') : t('onboarding.footerHint')}
         </div>
       </div>
     </div>

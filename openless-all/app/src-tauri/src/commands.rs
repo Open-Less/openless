@@ -8,18 +8,22 @@ use serde::Serialize;
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, Manager, State, Window};
 
+#[cfg(not(mobile))]
 use crate::asr::local::foundry::{
     model_alias_is_known, FoundryCatalogModel, FoundryPrepareProgressPayload, FoundryRuntimeStatus,
     DEFAULT_MODEL_ALIAS, PROVIDER_ID as FOUNDRY_LOCAL_PROVIDER_ID,
 };
+#[cfg(not(mobile))]
 use crate::asr::local::sherpa::{
     model_alias_is_known as sherpa_model_alias_is_known, SherpaCatalogModel,
     SherpaPrepareProgressPayload, SherpaRuntimeStatus,
     DEFAULT_MODEL_ALIAS as SHERPA_DEFAULT_MODEL_ALIAS,
 };
+#[cfg(not(mobile))]
 use crate::asr::local::sherpa_download::{
     fetch_remote_info as fetch_sherpa_remote_info, SherpaDownloadManager, SherpaRemoteInfo,
 };
+#[cfg(not(mobile))]
 use crate::asr::local::{FoundryLocalRuntime, SherpaOnnxRuntime};
 use crate::coordinator::Coordinator;
 use crate::net;
@@ -36,22 +40,30 @@ use crate::polish::{
 use crate::recorder::{AudioConsumer, Recorder};
 use crate::types::{
     builtin_style_pack_id, default_active_style_pack_id, ChineseScriptPreference, ComboBinding,
-    CorrectionRule, CredentialsStatus, DictationSession, DictionaryEntry, HotkeyCapability,
+    CorrectionRule, CredentialsStatus, DictationSession, DictionaryEntry, HotkeyAdapterKind,
+    HotkeyCapability,
     HotkeyStatus, OutputLanguagePreference, PolishMode, ShortcutBinding, StylePack, StylePackKind,
     StylePackRuntimeDiagnostics, StyleSystemPrompts, UpdateChannel, UserPreferences,
-    VocabPresetStore, WindowsImeStatus,
+    VocabPresetStore, AndroidImeStatus, AndroidOverlayStatus,
+    PlatformCapabilities, HotkeyInstallError, HotkeyStatusState,
 };
+#[cfg(not(mobile))]
+use crate::types::WindowsImeStatus;
 
 type CoordinatorState<'a> = State<'a, Arc<Coordinator>>;
 pub type MicrophoneMonitorState = Mutex<Option<Recorder>>;
+
+#[cfg(not(mobile))]
 pub type TrayMicrophoneMenuState = Mutex<Vec<TrayMicrophoneMenuItem>>;
 
+#[cfg(not(mobile))]
 pub struct TrayMicrophoneMenuItem {
     pub id: String,
     pub device_name: String,
     pub item: tauri::menu::CheckMenuItem<tauri::Wry>,
 }
 
+#[cfg(not(mobile))]
 pub fn sync_tray_microphone_selection(items: &[TrayMicrophoneMenuItem], device_name: &str) {
     for item in items {
         let _ = item.item.set_checked(item.device_name == device_name);
@@ -239,7 +251,7 @@ fn persist_settings<T: SettingsWriter>(
 pub fn set_settings(
     coord: CoordinatorState<'_>,
     app: AppHandle,
-    tray_microphones: State<'_, TrayMicrophoneMenuState>,
+    #[cfg(not(mobile))] tray_microphones: State<'_, TrayMicrophoneMenuState>,
     mut prefs: UserPreferences,
 ) -> Result<(), String> {
     let packs = coord.style_packs().list().map_err(|e| e.to_string())?;
@@ -248,36 +260,44 @@ pub fn set_settings(
     // 没有 HotkeySettingsContext，必须靠事件感知录音键变化，否则面板可见时
     // 用户改键会让浮窗里的 "{recordHotkey}" 文案一直停留在旧值。
     persist_settings(&*coord, prefs.clone())?;
-    // refresh_tray_microphone_menu 内部会调用 NSStatusItem.set_menu，必须在主线程上跑。
-    // set_settings 本身是同步 Tauri command，在 IPC handler 线程上执行；从这里直接调
-    // 会触发 macOS 主线程断言或在 dispatch 队列上死锁，导致整个 UI 无响应（用户改
-    // 偏好后所有按键都没反应即此根因）。dispatch 到主线程后立即返回，IPC 线程不阻塞。
-    let app_for_main = app.clone();
-    let prefs_for_main = prefs.clone();
-    let _ = app.run_on_main_thread(move || {
-        if let Err(err) = crate::refresh_tray_microphone_menu(&app_for_main) {
-            log::warn!("[tray] refresh microphone menu after settings save failed: {err}");
-            let tray_state = app_for_main.state::<TrayMicrophoneMenuState>();
-            sync_tray_microphone_selection(
-                &tray_state.lock(),
-                &prefs_for_main.microphone_device_name,
-            );
-        }
-    });
-    // 抑制 unused 警告：tray_microphones 现在改在闭包里通过 app.state 取，
-    // 但函数签名保留 State 入参，以便 Tauri 在调用前注入。
-    let _ = tray_microphones;
+    #[cfg(not(mobile))]
+    {
+        // refresh_tray_microphone_menu 内部会调用 NSStatusItem.set_menu，必须在主线程上跑。
+        // set_settings 本身是同步 Tauri command，在 IPC handler 线程上执行；从这里直接调
+        // 会触发 macOS 主线程断言或在 dispatch 队列上死锁，导致整个 UI 无响应（用户改
+        // 偏好后所有按键都没反应即此根因）。dispatch 到主线程后立即返回，IPC 线程不阻塞。
+        let app_for_main = app.clone();
+        let prefs_for_main = prefs.clone();
+        let _ = app.run_on_main_thread(move || {
+            if let Err(err) = crate::refresh_tray_microphone_menu(&app_for_main) {
+                log::warn!("[tray] refresh microphone menu after settings save failed: {err}");
+                let tray_state = app_for_main.state::<TrayMicrophoneMenuState>();
+                sync_tray_microphone_selection(
+                    &tray_state.lock(),
+                    &prefs_for_main.microphone_device_name,
+                );
+            }
+        });
+        let _ = tray_microphones;
+    }
     let _ = app.emit("prefs:changed", &prefs);
     Ok(())
 }
 
 fn refresh_tray_menu_async(app: &AppHandle) {
-    let app_for_main = app.clone();
-    let _ = app.run_on_main_thread(move || {
-        if let Err(err) = crate::refresh_tray_microphone_menu(&app_for_main) {
-            log::warn!("[tray] refresh after style change failed: {err}");
-        }
-    });
+    #[cfg(not(mobile))]
+    {
+        let app_for_main = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            if let Err(err) = crate::refresh_tray_microphone_menu(&app_for_main) {
+                log::warn!("[tray] refresh after style change failed: {err}");
+            }
+        });
+    }
+    #[cfg(mobile)]
+    {
+        let _ = app;
+    }
 }
 
 fn emit_prefs_changed(app: &AppHandle, prefs: &UserPreferences) {
@@ -475,6 +495,7 @@ fn extract_between(haystack: &str, open: &str, close: &str) -> Option<String> {
 // 里是分开的两份文件 —— 即使代码逻辑写错把 Beta URL 传给 Stable 用户，HTTP 也是
 // 直接 404，绝不会拿到错档。
 
+#[cfg(not(mobile))]
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppUpdateMetadata {
@@ -492,6 +513,7 @@ pub struct AppUpdateMetadata {
 /// 渠道：显式传入 `channel` 时用它（关于页固定查 Stable、高级页 Beta 区查 Beta）；
 /// 不传则回落到 `prefs.update_channel`（后台 AutoUpdateGate 自动检查走这条）。
 /// 返回 None = 当前是最新；Some(metadata) = 有新版可装。
+#[cfg(not(mobile))]
 #[tauri::command]
 pub async fn app_check_update_with_channel<R: tauri::Runtime>(
     coord: CoordinatorState<'_>,
@@ -537,6 +559,7 @@ pub async fn app_check_update_with_channel<R: tauri::Runtime>(
 /// 把 fetch_latest_beta_release 找到的最新 prerelease tag 拼成 -beta manifest URL 对。
 /// 顺序：先镜像（fastgit.cc 代理 GitHub），后直连 —— 跟 tauri.conf 现有 Stable
 /// endpoints 一致，让国内访问优先打到 CDN。
+#[cfg(not(mobile))]
 async fn resolve_beta_manifest_endpoints() -> Result<Vec<url::Url>, String> {
     let Some(latest) = fetch_latest_beta_release().await? else {
         return Err("尚未发布过 Beta 版本".to_string());
@@ -591,20 +614,68 @@ pub async fn check_network() -> NetworkCheckResult {
 
 #[tauri::command]
 pub fn get_hotkey_status(coord: CoordinatorState<'_>) -> HotkeyStatus {
+    #[cfg(mobile)]
+    {
+        let _ = coord;
+        return HotkeyStatus {
+            adapter: HotkeyAdapterKind::Unavailable,
+            state: HotkeyStatusState::Failed,
+            message: Some("移动端不支持全局热键".into()),
+            last_error: Some(HotkeyInstallError {
+                code: "unavailable".into(),
+                message: "Global hotkeys are not available on mobile".into(),
+            }),
+        };
+    }
+    #[cfg(not(mobile))]
     coord.hotkey_status()
 }
 
 #[tauri::command]
 pub fn get_hotkey_capability(coord: CoordinatorState<'_>) -> HotkeyCapability {
+    #[cfg(mobile)]
+    {
+        let _ = coord;
+        return HotkeyCapability::current();
+    }
+    #[cfg(not(mobile))]
     coord.hotkey_capability()
 }
 
 #[tauri::command]
+pub fn get_platform_capabilities() -> PlatformCapabilities {
+    PlatformCapabilities::current()
+}
+
+#[tauri::command]
+pub fn get_android_ime_status() -> AndroidImeStatus {
+    crate::android_ime::get_android_ime_status()
+}
+
+#[tauri::command]
+pub fn get_android_overlay_status() -> AndroidOverlayStatus {
+    crate::android_overlay::get_android_overlay_status()
+}
+
+#[tauri::command]
+pub fn request_android_overlay_permission(
+) -> crate::android_overlay::AndroidOverlayPermissionResult {
+    crate::android_overlay::request_android_overlay_permission()
+}
+
+#[tauri::command]
 pub fn set_shortcut_recording_active(coord: CoordinatorState<'_>, active: bool) {
+    #[cfg(mobile)]
+    {
+        let _ = (coord, active);
+        return;
+    }
+    #[cfg(not(mobile))]
     coord.set_shortcut_recording_active(active);
 }
 
 #[tauri::command]
+#[cfg(not(mobile))]
 pub fn get_windows_ime_status() -> WindowsImeStatus {
     crate::windows_ime_profile::get_windows_ime_status()
 }
@@ -686,9 +757,10 @@ fn asr_configured_for_provider(provider: &str, snap: &CredentialsSnapshot) -> bo
     if provider == "volcengine" {
         return volcengine_configured(snap);
     }
-    if provider == crate::asr::local::PROVIDER_ID
-        || active_foundry_asr_is_supported(provider)
-        || active_sherpa_asr_is_supported(provider)
+    if !cfg!(mobile)
+        && (provider == crate::asr::local::PROVIDER_ID
+            || active_foundry_asr_is_supported(provider)
+            || active_sherpa_asr_is_supported(provider))
     {
         // 本地 ASR 不依赖云端凭据。
         return true;
@@ -757,12 +829,14 @@ fn configured(field: &Option<String>) -> bool {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(not(mobile))]
 struct LocalAsrReleasePlan {
     qwen: bool,
     foundry: bool,
     sherpa: bool,
 }
 
+#[cfg(not(mobile))]
 fn local_asr_release_plan_for_provider(provider: &str) -> LocalAsrReleasePlan {
     LocalAsrReleasePlan {
         qwen: provider != crate::asr::local::PROVIDER_ID,
@@ -771,6 +845,7 @@ fn local_asr_release_plan_for_provider(provider: &str) -> LocalAsrReleasePlan {
     }
 }
 
+#[cfg(not(mobile))]
 async fn release_foundry_runtime_if_inactive(
     runtime: &Arc<FoundryLocalRuntime>,
     release_foundry: bool,
@@ -783,6 +858,7 @@ async fn release_foundry_runtime_if_inactive(
     }
 }
 
+#[cfg(not(mobile))]
 async fn release_sherpa_runtime_if_inactive(
     runtime: &Arc<SherpaOnnxRuntime>,
     release_sherpa: bool,
@@ -811,6 +887,25 @@ pub fn set_credential(window: Window, account: String, value: String) -> Result<
     Ok(())
 }
 
+#[cfg(mobile)]
+#[tauri::command]
+pub async fn set_active_asr_provider(
+    _coord: CoordinatorState<'_>,
+    provider: String,
+) -> Result<(), String> {
+    if provider == crate::asr::local::PROVIDER_ID
+        || provider == crate::asr::local::sherpa::PROVIDER_ID
+        || provider == crate::asr::local::foundry::PROVIDER_ID
+    {
+        return Err("Local ASR is not available on mobile".to_string());
+    }
+    if CredentialsVault::get_active_asr() == provider {
+        return Ok(());
+    }
+    CredentialsVault::set_active_asr_provider(&provider).map_err(|e| e.to_string())
+}
+
+#[cfg(not(mobile))]
 #[tauri::command]
 pub async fn set_active_asr_provider(
     coord: CoordinatorState<'_>,
@@ -1104,17 +1199,18 @@ async fn validate_bailian_asr_provider() -> Result<(), String> {
 }
 
 fn active_asr_is_keyless_for_validation(provider: &str) -> bool {
-    provider == crate::asr::local::PROVIDER_ID
-        || active_foundry_asr_is_supported(provider)
-        || active_sherpa_asr_is_supported(provider)
+    !cfg!(mobile)
+        && (provider == crate::asr::local::PROVIDER_ID
+            || active_foundry_asr_is_supported(provider)
+            || active_sherpa_asr_is_supported(provider))
 }
 
 fn active_foundry_asr_is_supported(provider: &str) -> bool {
-    #[cfg(target_os = "windows")]
+    #[cfg(all(not(mobile), target_os = "windows"))]
     {
         provider == FOUNDRY_LOCAL_PROVIDER_ID
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(all(not(mobile), target_os = "windows")))]
     {
         let _ = provider;
         false
@@ -1122,11 +1218,11 @@ fn active_foundry_asr_is_supported(provider: &str) -> bool {
 }
 
 fn active_sherpa_asr_is_supported(provider: &str) -> bool {
-    #[cfg(target_os = "windows")]
+    #[cfg(all(not(mobile), target_os = "windows"))]
     {
         provider == crate::asr::local::sherpa::PROVIDER_ID
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(all(not(mobile), target_os = "windows")))]
     {
         let _ = provider;
         false
@@ -2380,11 +2476,13 @@ fn shortcut_bindings_overlap(left: &ShortcutBinding, right: &ShortcutBinding) ->
 
 // ─────────────────────────── local ASR (Qwen3-ASR) ───────────────────────────
 
+#[cfg(not(mobile))]
 use crate::asr::local::{
     download::{fetch_remote_info, RemoteInfo},
     DownloadManager, Mirror, ModelId, ModelStatus, PROVIDER_ID as LOCAL_PROVIDER_ID,
 };
 
+#[cfg(not(mobile))]
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalAsrSettings {
@@ -2397,6 +2495,7 @@ pub struct LocalAsrSettings {
     pub engine_available: bool,
 }
 
+#[cfg(not(mobile))]
 #[tauri::command]
 pub fn local_asr_get_settings(coord: CoordinatorState<'_>) -> LocalAsrSettings {
     let prefs = coord.prefs().get();
@@ -2414,6 +2513,7 @@ pub fn local_asr_get_settings(coord: CoordinatorState<'_>) -> LocalAsrSettings {
     }
 }
 
+#[cfg(not(mobile))]
 fn non_empty_string(value: String) -> Option<String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -2423,6 +2523,7 @@ fn non_empty_string(value: String) -> Option<String> {
     }
 }
 
+#[cfg(not(mobile))]
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalAsrStorageSettings {
@@ -2431,6 +2532,7 @@ pub struct LocalAsrStorageSettings {
     pub is_default: bool,
 }
 
+#[cfg(not(mobile))]
 #[tauri::command]
 pub fn local_asr_storage_settings(
     coord: CoordinatorState<'_>,
@@ -2448,6 +2550,7 @@ pub fn local_asr_storage_settings(
     })
 }
 
+#[cfg(not(mobile))]
 #[tauri::command]
 pub async fn local_asr_set_models_base_dir(
     coord: CoordinatorState<'_>,
@@ -2496,6 +2599,7 @@ pub async fn local_asr_set_models_base_dir(
     local_asr_storage_settings(coord)
 }
 
+#[cfg(not(mobile))]
 fn same_path_for_command(left: &std::path::Path, right: &std::path::Path) -> bool {
     match (left.canonicalize(), right.canonicalize()) {
         (Ok(left), Ok(right)) => left == right,
@@ -2503,6 +2607,7 @@ fn same_path_for_command(left: &std::path::Path, right: &std::path::Path) -> boo
     }
 }
 
+#[cfg(not(mobile))]
 async fn quiesce_local_asr_storage_users(
     coord: &Arc<Coordinator>,
     qwen_manager: &Arc<DownloadManager>,
@@ -2543,6 +2648,7 @@ async fn quiesce_local_asr_storage_users(
     Err("local ASR downloads are still stopping; retry after cancellation finishes".to_string())
 }
 
+#[cfg(not(mobile))]
 #[tauri::command]
 pub fn local_asr_set_active_model(
     coord: CoordinatorState<'_>,
@@ -2556,6 +2662,7 @@ pub fn local_asr_set_active_model(
     coord.prefs().set(prefs).map_err(|e| e.to_string())
 }
 
+#[cfg(not(mobile))]
 #[tauri::command]
 pub fn local_asr_set_mirror(coord: CoordinatorState<'_>, mirror: String) -> Result<(), String> {
     let _normalized = Mirror::from_str(&mirror);
@@ -2564,6 +2671,7 @@ pub fn local_asr_set_mirror(coord: CoordinatorState<'_>, mirror: String) -> Resu
     coord.prefs().set(prefs).map_err(|e| e.to_string())
 }
 
+#[cfg(not(mobile))]
 #[tauri::command]
 pub fn local_asr_list_models() -> Vec<ModelStatus> {
     crate::asr::local::models::list_status()
@@ -2571,6 +2679,7 @@ pub fn local_asr_list_models() -> Vec<ModelStatus> {
 
 /// 实时去 HuggingFace API 拉某个模型的真实文件清单 + 总尺寸；
 /// 前端在显示模型卡时调一次，避免硬编码尺寸过期。
+#[cfg(not(mobile))]
 #[tauri::command]
 pub async fn local_asr_fetch_remote_info(
     model_id: String,
@@ -2581,6 +2690,7 @@ pub async fn local_asr_fetch_remote_info(
     fetch_remote_info(id, m).await.map_err(|e| format!("{e:#}"))
 }
 
+#[cfg(not(mobile))]
 #[tauri::command]
 pub fn local_asr_download_model(
     app: AppHandle,
@@ -2594,6 +2704,7 @@ pub fn local_asr_download_model(
     Ok(())
 }
 
+#[cfg(not(mobile))]
 #[tauri::command]
 pub fn local_asr_cancel_download(
     manager: State<'_, Arc<DownloadManager>>,
@@ -2604,6 +2715,7 @@ pub fn local_asr_cancel_download(
     Ok(())
 }
 
+#[cfg(not(mobile))]
 #[tauri::command]
 pub fn local_asr_delete_model(coord: CoordinatorState<'_>, model_id: String) -> Result<(), String> {
     let id = ModelId::from_str(&model_id).ok_or_else(|| format!("unknown model id: {model_id}"))?;
@@ -2615,6 +2727,7 @@ pub fn local_asr_delete_model(coord: CoordinatorState<'_>, model_id: String) -> 
     crate::asr::local::models::delete_model(id).map_err(|e| e.to_string())
 }
 
+#[cfg(not(mobile))]
 #[tauri::command]
 pub fn local_asr_model_dir(model_id: String) -> Result<String, String> {
     let id = ModelId::from_str(&model_id).ok_or_else(|| format!("unknown model id: {model_id}"))?;
@@ -2623,6 +2736,7 @@ pub fn local_asr_model_dir(model_id: String) -> Result<String, String> {
         .map_err(|e| format!("{e:#}"))
 }
 
+#[cfg(not(mobile))]
 #[tauri::command]
 pub fn local_asr_reveal_model_dir(model_id: String) -> Result<(), String> {
     let id = ModelId::from_str(&model_id).ok_or_else(|| format!("unknown model id: {model_id}"))?;
@@ -2631,6 +2745,7 @@ pub fn local_asr_reveal_model_dir(model_id: String) -> Result<(), String> {
     open_path_in_file_manager(&dir)
 }
 
+#[cfg(not(mobile))]
 #[tauri::command]
 pub fn local_asr_reveal_models_root(coord: CoordinatorState<'_>) -> Result<(), String> {
     let prefs = coord.prefs().get();
@@ -2640,6 +2755,7 @@ pub fn local_asr_reveal_models_root(coord: CoordinatorState<'_>) -> Result<(), S
     open_path_in_file_manager(&dir)
 }
 
+#[cfg(not(mobile))]
 #[tauri::command]
 pub async fn local_asr_test_model(
     model_id: String,
@@ -2650,6 +2766,7 @@ pub async fn local_asr_test_model(
         .map_err(|e| format!("{e:#}"))
 }
 
+#[cfg(not(mobile))]
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalAsrEngineStatus {
@@ -2658,6 +2775,7 @@ pub struct LocalAsrEngineStatus {
     pub keep_loaded_secs: u32,
 }
 
+#[cfg(not(mobile))]
 #[tauri::command]
 pub fn local_asr_engine_status(coord: CoordinatorState<'_>) -> LocalAsrEngineStatus {
     let prefs = coord.prefs().get();
@@ -2668,16 +2786,19 @@ pub fn local_asr_engine_status(coord: CoordinatorState<'_>) -> LocalAsrEngineSta
     }
 }
 
+#[cfg(not(mobile))]
 #[tauri::command]
 pub fn local_asr_release_engine(coord: CoordinatorState<'_>) {
     coord.release_local_asr_engine();
 }
 
+#[cfg(not(mobile))]
 #[tauri::command]
 pub fn local_asr_preload(coord: tauri::State<'_, std::sync::Arc<crate::coordinator::Coordinator>>) {
     coord.preload_local_asr_in_background();
 }
 
+#[cfg(not(mobile))]
 #[tauri::command]
 pub fn local_asr_set_keep_loaded_secs(
     coord: CoordinatorState<'_>,
@@ -2690,6 +2811,7 @@ pub fn local_asr_set_keep_loaded_secs(
 
 // ───────────────────── Windows local ASR (Foundry Local Whisper) ─────────────────────
 
+#[cfg(not(mobile))]
 fn active_foundry_model_from_prefs(prefs: &UserPreferences) -> String {
     if model_alias_is_known(&prefs.foundry_local_asr_model) {
         prefs.foundry_local_asr_model.clone()
@@ -2698,6 +2820,7 @@ fn active_foundry_model_from_prefs(prefs: &UserPreferences) -> String {
     }
 }
 
+#[cfg(not(mobile))]
 fn validate_foundry_model_alias(model_alias: &str) -> Result<(), String> {
     if model_alias_is_known(model_alias) {
         Ok(())
@@ -2708,6 +2831,7 @@ fn validate_foundry_model_alias(model_alias: &str) -> Result<(), String> {
     }
 }
 
+#[cfg(not(mobile))]
 fn normalize_foundry_language_hint(language_hint: &str) -> Result<String, String> {
     let normalized = language_hint.trim().to_string();
     if normalized.is_empty()
@@ -2719,10 +2843,12 @@ fn normalize_foundry_language_hint(language_hint: &str) -> Result<String, String
     }
 }
 
+#[cfg(not(mobile))]
 fn normalize_foundry_runtime_source(source: &str) -> String {
     crate::asr::local::foundry_native::normalize_runtime_source_str(source)
 }
 
+#[cfg(not(mobile))]
 #[tauri::command]
 pub async fn foundry_local_asr_status(
     coord: CoordinatorState<'_>,
@@ -2735,6 +2861,7 @@ pub async fn foundry_local_asr_status(
         .await)
 }
 
+#[cfg(not(mobile))]
 #[tauri::command]
 pub async fn foundry_local_asr_catalog(
     runtime: State<'_, Arc<FoundryLocalRuntime>>,
@@ -2745,6 +2872,7 @@ pub async fn foundry_local_asr_catalog(
         .map_err(|e| format!("{e:#}"))
 }
 
+#[cfg(not(mobile))]
 #[tauri::command]
 pub fn foundry_local_asr_set_model(
     coord: CoordinatorState<'_>,
@@ -2759,6 +2887,7 @@ pub fn foundry_local_asr_set_model(
     coord.prefs().set(prefs).map_err(|e| e.to_string())
 }
 
+#[cfg(not(mobile))]
 #[tauri::command]
 pub fn foundry_local_asr_set_language_hint(
     coord: CoordinatorState<'_>,
@@ -2773,6 +2902,7 @@ pub fn foundry_local_asr_set_language_hint(
     coord.prefs().set(prefs).map_err(|e| e.to_string())
 }
 
+#[cfg(not(mobile))]
 #[tauri::command]
 pub fn foundry_local_asr_set_runtime_source(
     coord: CoordinatorState<'_>,
@@ -2787,6 +2917,7 @@ pub fn foundry_local_asr_set_runtime_source(
     coord.prefs().set(prefs).map_err(|e| e.to_string())
 }
 
+#[cfg(not(mobile))]
 #[tauri::command]
 pub async fn foundry_local_asr_prepare(
     app: AppHandle,
@@ -2820,6 +2951,7 @@ pub async fn foundry_local_asr_prepare(
     }
 }
 
+#[cfg(not(mobile))]
 #[tauri::command]
 pub fn foundry_local_asr_cancel_prepare(
     runtime: State<'_, Arc<FoundryLocalRuntime>>,
@@ -2828,6 +2960,7 @@ pub fn foundry_local_asr_cancel_prepare(
     Ok(())
 }
 
+#[cfg(not(mobile))]
 #[tauri::command]
 pub async fn foundry_local_asr_release(
     runtime: State<'_, Arc<FoundryLocalRuntime>>,
@@ -2835,6 +2968,7 @@ pub async fn foundry_local_asr_release(
     runtime.release_now().await.map_err(|e| format!("{e:#}"))
 }
 
+#[cfg(not(mobile))]
 #[tauri::command]
 pub async fn foundry_local_asr_model_dir(
     runtime: State<'_, Arc<FoundryLocalRuntime>>,
@@ -2848,6 +2982,7 @@ pub async fn foundry_local_asr_model_dir(
         .map_err(|e| format!("{e:#}"))
 }
 
+#[cfg(not(mobile))]
 #[tauri::command]
 pub async fn foundry_local_asr_delete_model(
     runtime: State<'_, Arc<FoundryLocalRuntime>>,
@@ -2860,6 +2995,7 @@ pub async fn foundry_local_asr_delete_model(
         .map_err(|e| format!("{e:#}"))
 }
 
+#[cfg(not(mobile))]
 #[tauri::command]
 pub async fn foundry_local_asr_reveal_model_dir(
     runtime: State<'_, Arc<FoundryLocalRuntime>>,
@@ -2873,6 +3009,7 @@ pub async fn foundry_local_asr_reveal_model_dir(
     open_path_in_file_manager(&dir)
 }
 
+#[cfg(not(mobile))]
 fn emit_foundry_prepare_progress(app: &AppHandle, payload: FoundryPrepareProgressPayload) {
     if let Err(error) = app.emit("foundry-local-asr-prepare-progress", payload) {
         log::warn!("[foundry-asr] emit prepare progress failed: {error}");
@@ -2885,6 +3022,7 @@ fn emit_foundry_prepare_progress(app: &AppHandle, payload: FoundryPrepareProgres
 // catalog / 下载 / prepare / release / 删除 / 状态查询，推理由 coordinator 的
 // 听写链路触发。offline 模型停止录音后 batch decode；online 模型录音时输出 partial。
 
+#[cfg(not(mobile))]
 fn active_sherpa_model_from_prefs(prefs: &UserPreferences) -> String {
     if sherpa_model_alias_is_known(&prefs.sherpa_onnx_model) {
         prefs.sherpa_onnx_model.clone()
@@ -2893,6 +3031,7 @@ fn active_sherpa_model_from_prefs(prefs: &UserPreferences) -> String {
     }
 }
 
+#[cfg(not(mobile))]
 fn validate_sherpa_model_alias(model_alias: &str) -> Result<(), String> {
     if sherpa_model_alias_is_known(model_alias) {
         Ok(())
@@ -2901,6 +3040,7 @@ fn validate_sherpa_model_alias(model_alias: &str) -> Result<(), String> {
     }
 }
 
+#[cfg(not(mobile))]
 fn normalize_sherpa_language_hint(language_hint: &str) -> Result<String, String> {
     let normalized = language_hint.trim().to_lowercase();
     if normalized.is_empty()
@@ -2914,6 +3054,7 @@ fn normalize_sherpa_language_hint(language_hint: &str) -> Result<String, String>
     }
 }
 
+#[cfg(not(mobile))]
 #[tauri::command]
 pub async fn sherpa_onnx_asr_status(
     coord: CoordinatorState<'_>,
@@ -2924,6 +3065,7 @@ pub async fn sherpa_onnx_asr_status(
     Ok(runtime.status_snapshot(&active_model).await)
 }
 
+#[cfg(not(mobile))]
 #[tauri::command]
 pub async fn sherpa_onnx_asr_catalog(
     runtime: State<'_, Arc<SherpaOnnxRuntime>>,
@@ -2934,6 +3076,7 @@ pub async fn sherpa_onnx_asr_catalog(
         .map_err(|e| format!("{e:#}"))
 }
 
+#[cfg(not(mobile))]
 #[tauri::command]
 pub async fn sherpa_onnx_asr_fetch_remote_info(
     model_alias: String,
@@ -2946,6 +3089,7 @@ pub async fn sherpa_onnx_asr_fetch_remote_info(
         .map_err(|e| format!("{e:#}"))
 }
 
+#[cfg(not(mobile))]
 #[tauri::command]
 pub fn sherpa_onnx_asr_download_model(
     app: AppHandle,
@@ -2959,6 +3103,7 @@ pub fn sherpa_onnx_asr_download_model(
     Ok(())
 }
 
+#[cfg(not(mobile))]
 #[tauri::command]
 pub fn sherpa_onnx_asr_cancel_download(
     manager: State<'_, Arc<SherpaDownloadManager>>,
@@ -2969,6 +3114,7 @@ pub fn sherpa_onnx_asr_cancel_download(
     Ok(())
 }
 
+#[cfg(not(mobile))]
 #[tauri::command]
 pub fn sherpa_onnx_asr_set_model(
     coord: CoordinatorState<'_>,
@@ -2983,6 +3129,7 @@ pub fn sherpa_onnx_asr_set_model(
     coord.prefs().set(prefs).map_err(|e| e.to_string())
 }
 
+#[cfg(not(mobile))]
 #[tauri::command]
 pub fn sherpa_onnx_asr_set_language_hint(
     coord: CoordinatorState<'_>,
@@ -2997,6 +3144,7 @@ pub fn sherpa_onnx_asr_set_language_hint(
     coord.prefs().set(prefs).map_err(|e| e.to_string())
 }
 
+#[cfg(not(mobile))]
 #[tauri::command]
 pub async fn sherpa_onnx_asr_prepare(
     app: AppHandle,
@@ -3027,6 +3175,7 @@ pub async fn sherpa_onnx_asr_prepare(
     }
 }
 
+#[cfg(not(mobile))]
 #[tauri::command]
 pub fn sherpa_onnx_asr_cancel_prepare(
     runtime: State<'_, Arc<SherpaOnnxRuntime>>,
@@ -3035,6 +3184,7 @@ pub fn sherpa_onnx_asr_cancel_prepare(
     Ok(())
 }
 
+#[cfg(not(mobile))]
 #[tauri::command]
 pub async fn sherpa_onnx_asr_release(
     runtime: State<'_, Arc<SherpaOnnxRuntime>>,
@@ -3042,6 +3192,7 @@ pub async fn sherpa_onnx_asr_release(
     runtime.release_now().await.map_err(|e| format!("{e:#}"))
 }
 
+#[cfg(not(mobile))]
 #[tauri::command]
 pub fn sherpa_onnx_asr_model_dir(model_alias: String) -> Result<String, String> {
     validate_sherpa_model_alias(&model_alias)?;
@@ -3050,6 +3201,7 @@ pub fn sherpa_onnx_asr_model_dir(model_alias: String) -> Result<String, String> 
         .map_err(|e| format!("{e:#}"))
 }
 
+#[cfg(not(mobile))]
 #[tauri::command]
 pub async fn sherpa_onnx_asr_delete_model(
     runtime: State<'_, Arc<SherpaOnnxRuntime>>,
@@ -3062,6 +3214,7 @@ pub async fn sherpa_onnx_asr_delete_model(
         .map_err(|e| format!("{e:#}"))
 }
 
+#[cfg(not(mobile))]
 #[tauri::command]
 pub fn sherpa_onnx_asr_reveal_model_dir(model_alias: String) -> Result<(), String> {
     validate_sherpa_model_alias(&model_alias)?;
@@ -3070,7 +3223,7 @@ pub fn sherpa_onnx_asr_reveal_model_dir(model_alias: String) -> Result<(), Strin
     open_path_in_file_manager(&dir)
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(all(not(mobile), target_os = "windows"))]
 fn open_path_in_file_manager(path: &std::path::Path) -> Result<(), String> {
     use windows::core::PCWSTR;
     use windows::Win32::UI::Shell::ShellExecuteW;
@@ -3099,7 +3252,7 @@ fn open_path_in_file_manager(path: &std::path::Path) -> Result<(), String> {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(not(mobile), target_os = "macos"))]
 fn open_path_in_file_manager(path: &std::path::Path) -> Result<(), String> {
     std::process::Command::new("open")
         .arg(path)
@@ -3108,7 +3261,7 @@ fn open_path_in_file_manager(path: &std::path::Path) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(all(not(mobile), unix, not(target_os = "macos"), not(target_os = "android")))]
 fn open_path_in_file_manager(path: &std::path::Path) -> Result<(), String> {
     std::process::Command::new("xdg-open")
         .arg(path)
@@ -3117,6 +3270,7 @@ fn open_path_in_file_manager(path: &std::path::Path) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+#[cfg(not(mobile))]
 fn emit_sherpa_prepare_progress(app: &AppHandle, payload: SherpaPrepareProgressPayload) {
     if let Err(error) = app.emit("sherpa-onnx-asr-prepare-progress", payload) {
         log::warn!("[sherpa-asr] emit prepare progress failed: {error}");

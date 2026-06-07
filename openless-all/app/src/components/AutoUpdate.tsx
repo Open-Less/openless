@@ -2,29 +2,20 @@
 // 状态机 + 对话框 UI。两边各自调用 useAutoUpdate()，dialog 渲染条件相同。
 //
 // 渠道感知：check 不再走 plugin-updater 的 JS check()（它只看 tauri.conf 配的
-// Stable manifest URL），改为 invoke('app_check_update_with_channel')。
+// Stable manifest URL），改为 appCheckUpdateWithChannel()（ipc 层按
+// supportsAutoUpdate 在 Android 上 no-op）。
 // Rust 那边按 prefs.update_channel 决定 manifest URL；返回的 metadata 直接
 // `new Update(metadata)` 复用 plugin 的 download / install / close 实现，
 // 我们不重复造下载和签名校验。
 
 import { useEffect, useRef, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import type { DownloadEvent } from '@tauri-apps/plugin-updater';
 import { Update } from '@tauri-apps/plugin-updater';
 import { useTranslation } from 'react-i18next';
-import { isTauri, restartApp, type UpdateChannel } from '../lib/ipc';
+import { appCheckUpdateWithChannel, isTauri, restartApp, type AppUpdateMetadata, type UpdateChannel } from '../lib/ipc';
 import { Btn } from '../pages/_atoms';
 
 const UPDATE_CHECK_TIMEOUT_MS = 15_000;
-
-interface AppUpdateMetadata {
-  rid: number;
-  currentVersion: string;
-  version: string;
-  date?: string | null;
-  body?: string | null;
-  rawJson: Record<string, unknown>;
-}
 
 export type UpdateStatus =
   | 'idle'
@@ -102,10 +93,10 @@ export function useAutoUpdate(): UseAutoUpdate {
       }
       // Rust 侧按 update_channel 拼 manifest URL：Stable → tauri.conf 默认；
       // Beta → fetch_latest_beta_release 拼出 -beta manifest URL 后再 check。
-      const metadata = await invoke<AppUpdateMetadata | null>('app_check_update_with_channel', {
-        timeoutMs: UPDATE_CHECK_TIMEOUT_MS,
-        channel: channel ?? null,
-      });
+      const metadata = await appCheckUpdateWithChannel(
+        UPDATE_CHECK_TIMEOUT_MS,
+        channel ?? null,
+      );
       if (!metadata) {
         setStatus('none');
         return;

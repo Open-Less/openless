@@ -1,5 +1,6 @@
 // 快捷键设置：开始/停止、翻译、问答、切风格、唤起 App、以及只读取消/确认提示。
 
+import { useEffect, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ShortcutRecorder } from '../../components/ShortcutRecorder';
@@ -11,6 +12,8 @@ import {
   setSwitchStyleHotkey,
   setTranslationHotkey,
 } from '../../lib/ipc';
+import { getPlatformCapabilities } from '../../lib/platform';
+import type { PlatformCapabilities } from '../../lib/types';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
 import { Card } from '../_atoms';
 import { SettingRow } from './shared';
@@ -33,6 +36,11 @@ export function ShortcutsSection() {
   const { t } = useTranslation();
   const os = detectOS();
   const { prefs, hotkey, capability, updatePrefs: savePrefs } = useHotkeySettings();
+  const [platformCaps, setPlatformCaps] = useState<PlatformCapabilities | null>(null);
+
+  useEffect(() => {
+    void getPlatformCapabilities().then(setPlatformCaps);
+  }, []);
 
   if (!prefs || !hotkey || !capability) {
     return (
@@ -40,6 +48,10 @@ export function ShortcutsSection() {
         <div style={{ fontSize: 12, color: 'var(--ol-ink-4)' }}>{t('common.loading')}</div>
       </Card>
     );
+  }
+
+  if (platformCaps && !platformCaps.supportsDesktopHotkey) {
+    return null;
   }
 
   const readonlyRows: Array<[string, string]> = [

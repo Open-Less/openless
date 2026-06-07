@@ -225,6 +225,8 @@ export const ko: typeof zhCN = {
     actionRequestMic: '권한 대화상자 표시',
     accessibilityHint: '허용 후에는 **OpenLess 를 완전히 종료** 한 다음 다시 실행해야 합니다(macOS TCC 규칙).',
     footerHint: '모든 권한이 부여되면 이 가이드는 자동으로 닫힙니다. 닫히지 않으면 메뉴 막대의 OpenLess → 종료 후 앱을 다시 실행해 주세요.',
+    androidContinue: '앱으로 계속',
+    androidFooterHint: '받아쓰기에는 마이크 권한이 필요합니다. 위의 권한 요청을 탭하거나, 앱으로 먼저 들어가 개요 페이지에서 나중에 허용할 수 있습니다.',
   },
   overview: {
     kicker: 'DASHBOARD',
@@ -260,6 +262,20 @@ export const ko: typeof zhCN = {
     recentLoadFailed: '최근 인식 기록을 불러올 수 없습니다. 다시 시도해 주세요.',
     historyRetry: '다시 시도',
     weekDays: ['일', '월', '화', '수', '목', '금', '토'],
+    inAppDictation: {
+      title: '앱 내 받아쓰기',
+      start: '녹음 시작',
+      stop: '녹음 중지',
+      idle: '탭하여 녹음 시작',
+      recording: '녹음 중…',
+      processing: '처리 중…',
+    },
+    androidMicBanner: {
+      title: '마이크 권한이 필요합니다',
+      desc: '마이크를 허용하면 앱 내 받아쓰기와 음성 입력을 사용할 수 있습니다.',
+      grant: '권한 요청',
+      openSettings: '설정 열기',
+    },
   },
   history: {
     kicker: 'HISTORY',
@@ -771,6 +787,7 @@ export const ko: typeof zhCN = {
       disable: '비활성화',
       confirmHint: '오른쪽 ✓ 클릭',
       notSupported: '지원되지 않음',
+      androidReadOnly: 'Android에서는 전역 단축키를 사용할 수 없습니다. 개요 페이지의 녹음 버튼을 사용하세요.',
     },
     permissions: {
       title: '권한',
@@ -801,6 +818,10 @@ export const ko: typeof zhCN = {
       windowsImeDesc: '음성 세션 동안 OpenLess TSF 입력기로 일시적으로 전환하여 클립보드 입력 제한을 회피하기 위해 사용.',
       windowsImeInstalled: '설치됨',
       windowsImeUnavailable: '사용 불가',
+      androidImeLabel: '입력기 (IME)',
+      androidImePlaceholder: '곧 제공 — 시스템 설정에서 OpenLess 키보드 활성화',
+      androidOverlayLabel: '플로팅 오버레이',
+      androidOverlayPlaceholder: '곧 제공 — 시스템 설정에서 오버레이 권한 부여',
       windowsIme: {
         installed: '설치됨. 음성 입력 시 OpenLess 입력기로 일시 전환됩니다.',
         notInstalled: '설치되지 않음. OpenLess 는 현재 클립보드 / WM_PASTE 폴백을 사용합니다.',
@@ -984,6 +1005,7 @@ export const ko: typeof zhCN = {
       macEventTap: 'macOS Event Tap',
       windowsLowLevel: 'Windows 저수준 키보드 후크',
       fcitx5: 'fcitx5 입력기 플러그인',
+      unavailable: '사용 불가',
     },
   },
   localAsr: {

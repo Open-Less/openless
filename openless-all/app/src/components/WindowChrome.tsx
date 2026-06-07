@@ -1,6 +1,6 @@
 import { type CSSProperties, type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 
-export type OS = 'mac' | 'win' | 'linux';
+export type OS = 'mac' | 'win' | 'linux' | 'android';
 
 export function detectOS(): OS {
   if (typeof navigator === 'undefined') return 'mac';
@@ -9,6 +9,7 @@ export function detectOS(): OS {
   ).userAgentData?.platform ?? '';
   const hints = `${navigator.userAgent || ''} ${navigator.platform || ''} ${uaDataPlatform}`;
   if (/Mac|iPhone|iPad|iPod/.test(hints)) return 'mac';
+  if (/Android/i.test(hints)) return 'android';
   if (/Windows|Win32|Win64/.test(hints)) return 'win';
   if (/Linux|X11|Wayland/.test(hints)) return 'linux';
   return 'mac';
@@ -33,8 +34,8 @@ export function WindowChrome({
 }: WindowChromeProps) {
   // Windows: decorations:true 时外层不画圆角/边框/阴影/标题栏，避免与原生窗口重叠。
   // Linux: decorations:false 时外层画 14px 圆角 + 自定义标题栏。
-  const shellRadius = os === 'mac' ? 0 : os === 'win' ? 0 : 14;
-  const consoleRadius = os === 'mac' ? 20 : os === 'win' ? WIN_CONSOLE_RADIUS : 14;
+  const shellRadius = os === 'mac' ? 0 : os === 'win' || os === 'android' ? 0 : 14;
+  const consoleRadius = os === 'mac' ? 20 : os === 'win' ? WIN_CONSOLE_RADIUS : os === 'android' ? 0 : 14;
   const titlebarHeight = os === 'mac' ? MAC_TITLEBAR_HEIGHT : os === 'linux' ? LINUX_TITLEBAR_HEIGHT : 0;
 
   // macOS / Windows 共用半透明玻璃 background + backdropFilter。

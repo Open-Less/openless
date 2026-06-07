@@ -7,7 +7,8 @@ import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../../components/Icon';
 import { Row } from '../../components/ui/Row';
-import { openExternal } from '../../lib/ipc';
+import { getPlatformCapabilities, openExternal } from '../../lib/ipc';
+import type { PlatformCapabilities } from '../../lib/types';
 import { APP_VERSION_LABEL } from '../../lib/appVersion';
 import { readAppTheme, setAppTheme, type AppThemeId } from '../../lib/appTheme';
 import { readFontScale, setFontScale, type FontScaleId } from '../../lib/fontScale';
@@ -18,7 +19,12 @@ import { CheckUpdateButton } from './CheckUpdateButton';
 export function AboutSection() {
   const { t } = useTranslation();
   const [qqCopied, setQqCopied] = useState(false);
+  const [platformCaps, setPlatformCaps] = useState<PlatformCapabilities | null>(null);
   const qqCopiedRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    void getPlatformCapabilities().then(setPlatformCaps);
+  }, []);
 
   useEffect(() => () => {
     if (qqCopiedRef.current) clearTimeout(qqCopiedRef.current);
@@ -48,7 +54,9 @@ export function AboutSection() {
             </div>
           </div>
           {/* 图标右上方：查正式版的检查更新按钮。Beta 渠道在「高级」页。 */}
-          <CheckUpdateButton channel="stable" />
+          {platformCaps?.supportsAutoUpdate === true && (
+            <CheckUpdateButton channel="stable" />
+          )}
         </div>
       </Card>
 

@@ -128,6 +128,9 @@
       "infoPlist": "Info.plist",
       "entitlements": "Entitlements.plist"
     },
+    "android": {
+      "minSdkVersion": 26
+    },
     "windows": {
       "nsis": {
         "installMode": "perMachine",

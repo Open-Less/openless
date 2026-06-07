@@ -225,6 +225,8 @@ export const ja: typeof zhCN = {
     actionRequestMic: '許可ダイアログを表示',
     accessibilityHint: '許可後は **OpenLess を完全に終了** してから再起動してください（macOS TCC の仕様）。',
     footerHint: 'すべての権限が揃うとこのガイドは自動で閉じます。閉じない場合はメニューバーの OpenLess → 終了 から再起動してください。',
+    androidContinue: 'アプリに進む',
+    androidFooterHint: '音声入力にはマイク権限が必要です。上の「許可ダイアログを表示」をタップするか、先にアプリへ進み、概要ページで後から許可してください。',
   },
   overview: {
     kicker: 'DASHBOARD',
@@ -260,6 +262,20 @@ export const ja: typeof zhCN = {
     recentLoadFailed: '最近の認識を読み込めません。再試行してください。',
     historyRetry: '再試行',
     weekDays: ['日', '月', '火', '水', '木', '金', '土'],
+    inAppDictation: {
+      title: 'アプリ内音声入力',
+      start: '録音開始',
+      stop: '録音停止',
+      idle: 'タップして録音開始',
+      recording: '録音中…',
+      processing: '処理中…',
+    },
+    androidMicBanner: {
+      title: 'マイク権限が必要です',
+      desc: 'マイクを許可すると、アプリ内音声入力が使えます。',
+      grant: '許可ダイアログを表示',
+      openSettings: '設定を開く',
+    },
   },
   history: {
     kicker: 'HISTORY',
@@ -771,6 +787,7 @@ export const ja: typeof zhCN = {
       disable: '無効化',
       confirmHint: '右側の ✓ をクリック',
       notSupported: '未対応',
+      androidReadOnly: 'Android ではグローバルショートカットは使えません。概要ページの録音ボタンを使ってください。',
     },
     permissions: {
       title: '権限',
@@ -801,6 +818,10 @@ export const ja: typeof zhCN = {
       windowsImeDesc: '音声セッション中に OpenLess TSF IME へ一時的に切り替え、クリップボード入力の制限を回避します。',
       windowsImeInstalled: 'インストール済み',
       windowsImeUnavailable: '利用不可',
+      androidImeLabel: '入力メソッド (IME)',
+      androidImePlaceholder: '近日対応 — システム設定で OpenLess キーボードを有効化',
+      androidOverlayLabel: 'フローティングオーバーレイ',
+      androidOverlayPlaceholder: '近日対応 — システム設定でオーバーレイ権限を付与',
       windowsIme: {
         installed: 'インストール済み。音声入力時に OpenLess IME へ一時的に切り替えます。',
         notInstalled: '未インストール。OpenLess は現在クリップボード / WM_PASTE フォールバックを使用しています。',
@@ -984,6 +1005,7 @@ export const ja: typeof zhCN = {
       macEventTap: 'macOS Event Tap',
       windowsLowLevel: 'Windows 低レベルキーボードフック',
       fcitx5: 'fcitx5 インプットメソッドプラグイン',
+      unavailable: '利用不可',
     },
   },
   localAsr: {

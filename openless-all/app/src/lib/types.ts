@@ -78,7 +78,7 @@ export interface HotkeyBinding {
   keys?: HotkeyKey[] | null;
 }
 
-export type HotkeyAdapterKind = 'macEventTap' | 'windowsLowLevel' | 'fcitx5';
+export type HotkeyAdapterKind = 'macEventTap' | 'windowsLowLevel' | 'fcitx5' | 'unavailable';
 
 export interface HotkeyCapability {
   adapter: HotkeyAdapterKind;
@@ -487,3 +487,18 @@ export type PermissionStatus =
   | 'notDetermined'
   | 'restricted'
   | 'notApplicable';
+
+/** Runtime platform kind returned by `get_platform_capabilities`. */
+export type PlatformKind = 'desktop' | 'android' | 'mobile';
+
+/** Feature flags for desktop vs Android APK UI gating. Mirrors src-tauri PlatformCapabilities. */
+export interface PlatformCapabilities {
+  platform: PlatformKind;
+  supportsDesktopHotkey: boolean;
+  supportsTray: boolean;
+  supportsOverlay: boolean;
+  supportsImeInput: boolean;
+  supportsLocalAsr: boolean;
+  supportsInAppDictation: boolean;
+  supportsAutoUpdate: boolean;
+}

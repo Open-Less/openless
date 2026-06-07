@@ -1,0 +1,19 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "identifier": "com.openless.app",
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "OpenLess",
+        "width": 1240,
+        "height": 800,
+        "minWidth": 360,
+        "minHeight": 640,
+        "resizable": true,
+        "decorations": true,
+        "visible": true
+      }
+    ]
+  }
+}
