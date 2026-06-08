@@ -14,10 +14,9 @@ fn main() {
 
 /// cpal → oboe → oboe-sys 会编译 C++；最终 cdylib 需显式链接 NDK libc++。
 fn link_android_cpp_runtime() {
-    // 通过 link-arg 走 NDK 工具链 sysroot；-lc++_static 对应 plan 中的 c++_static。
-    println!("cargo:rustc-link-arg=-Wl,--whole-archive");
-    println!("cargo:rustc-link-arg=-lc++_static");
-    println!("cargo:rustc-link-arg=-Wl,--no-whole-archive");
+    // oboe-ext 已部分静态链入 libc++；补链 c++abi 提供 __cxa_pure_virtual 等 ABI 符号。
+    println!("cargo:rustc-link-lib=c++_static");
+    println!("cargo:rustc-link-lib=c++abi");
 }
 
 #[cfg(target_os = "windows")]
