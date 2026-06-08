@@ -25,7 +25,7 @@ import type {
 import { useHotkeySettings } from '../state/HotkeySettingsContext';
 import { Btn, Card, PageHeader, Pill } from './_atoms';
 import { useMobileLayout } from '../lib/useMobileLayout';
-import { requestAndroidMicrophoneAccess } from '../lib/androidMicrophonePermission';
+import { checkAndroidMicrophoneAccess, requestAndroidMicrophoneAccess } from '../lib/androidMicrophonePermission';
 
 function useModeLabels(): Record<PolishMode, string> {
   const { t } = useTranslation();
@@ -431,8 +431,12 @@ function AndroidMicGrantBanner() {
   }, []);
 
   const refreshMic = useCallback(async () => {
+    if (platformCaps?.platform === 'android') {
+      setMicrophone(await checkAndroidMicrophoneAccess());
+      return;
+    }
     setMicrophone(await checkMicrophonePermission());
-  }, []);
+  }, [platformCaps?.platform]);
 
   useEffect(() => {
     if (platformCaps?.platform !== 'android') return;

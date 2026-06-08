@@ -16,7 +16,7 @@ import {
 } from '../../lib/ipc';
 import type { NetworkCheckResult } from '../../lib/ipc';
 import { getPlatformCapabilities } from '../../lib/platform';
-import { requestAndroidMicrophoneAccess } from '../../lib/androidMicrophonePermission';
+import { checkAndroidMicrophoneAccess, requestAndroidMicrophoneAccess } from '../../lib/androidMicrophonePermission';
 import type {
   HotkeyStatus,
   PermissionStatus,
@@ -44,7 +44,9 @@ export function PermissionsSection() {
   const refreshPermissions = async () => {
     const [a, m] = await Promise.all([
       checkAccessibilityPermission(),
-      checkMicrophonePermission(),
+      platformCaps?.platform === 'android'
+        ? checkAndroidMicrophoneAccess()
+        : checkMicrophonePermission(),
     ]);
     setAccessibility(a);
     setMicrophone(m);
