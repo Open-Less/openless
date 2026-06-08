@@ -226,18 +226,20 @@ impl DownloadManager {
 
 pub(crate) fn build_client() -> Result<reqwest::Client> {
     // native-tls (macOS=SecureTransport) 不像 rustls 那样把 CDN unclean close
-    // 当致命错误。
+    // 当致命错误。Android/iOS 无 native-tls feature，走默认 rustls。
     //
     // User-Agent 用 aria2 的——hfd（hf-mirror 官方推荐）就是 aria2 包装，
     // 实测 aria2 UA 在 HF 反滥用规则里走白名单不挨 throttle；自定义 UA
     // (`openless/x`) 在 sustained 传输后会被 mirror 主动切流。
-    reqwest::Client::builder()
-        .use_native_tls()
+    let mut builder = reqwest::Client::builder()
         .user_agent("aria2/1.36.0")
         .connect_timeout(std::time::Duration::from_secs(30))
-        .pool_idle_timeout(std::time::Duration::from_secs(60))
-        .build()
-        .context("build reqwest client failed")
+        .pool_idle_timeout(std::time::Duration::from_secs(60));
+    #[cfg(not(mobile))]
+    {
+        builder = builder.use_native_tls();
+    }
+    builder.build().context("build reqwest client failed")
 }
 
 async fn run_download(

@@ -31,7 +31,7 @@ tar = "0.4"
 tokio = { version = "1", features = ["full"] }
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-native-roots"] }
 futures-util = "0.3"
-reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls", "native-tls", "stream", "system-proxy"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls", "stream", "system-proxy"] }
 zip = "2"
 thiserror = "1"
 anyhow = "1"
@@ -51,6 +51,7 @@ cpal = "0.15"
 
 # Desktop-only plugins, hotkey/insertion helpers, and tray-icon (not built for mobile).
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["native-tls"] }
 tauri = { version = "~2.11", features = ["macos-private-api", "tray-icon"] }
 tauri-plugin-updater = "2"
 tauri-plugin-single-instance = "2"
