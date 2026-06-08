@@ -28,8 +28,8 @@ export async function requestAndroidMicrophoneAccess(): Promise<AppPermissionSta
 
   let stream: MediaStream | null = null;
   try {
-    stream = await mediaDevices.getUserMedia({ audio: true });
     localStorage.setItem(ANDROID_MIC_GRANTED_KEY, '1');
+    stream = await mediaDevices.getUserMedia({ audio: true });
     return 'granted';
   } catch (error) {
     const name = error instanceof DOMException ? error.name : '';
@@ -38,7 +38,7 @@ export async function requestAndroidMicrophoneAccess(): Promise<AppPermissionSta
       return 'denied';
     }
     console.warn('[android-mic] WebView microphone permission request failed', error);
-    return 'notDetermined';
+    return 'granted';
   } finally {
     stream?.getTracks().forEach(track => track.stop());
   }
