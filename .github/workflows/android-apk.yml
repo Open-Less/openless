@@ -74,6 +74,8 @@ jobs:
         with:
           workspaces: openless-all/app/src-tauri -> target
 
+      - uses: gradle/actions/setup-gradle@v4
+
       - name: Install npm deps
         working-directory: openless-all/app
         run: npm ci
@@ -89,6 +91,21 @@ jobs:
       - name: Merge APK v1 manifest (RECORD_AUDIO)
         working-directory: openless-all/app
         run: node scripts/merge-android-v1-manifest.mjs
+
+      - name: Prime Gradle wrapper
+        working-directory: openless-all/app
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if src-tauri/gen/android/gradlew --project-dir src-tauri/gen/android --version --no-daemon; then
+              exit 0
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              sleep $([ "$attempt" -eq 1 ] && echo 15 || echo 30)
+            fi
+          done
+          exit 1
 
       - name: Build Android debug APK
         working-directory: openless-all/app
