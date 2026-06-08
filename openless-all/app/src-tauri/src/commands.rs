@@ -699,11 +699,28 @@ pub fn get_windows_ime_status() -> WindowsImeStatus {
 }
 
 #[tauri::command]
+#[cfg(mobile)]
+pub fn list_microphone_devices() -> Result<Vec<crate::recorder::MicrophoneDevice>, String> {
+    Ok(Vec::new())
+}
+
+#[tauri::command]
+#[cfg(not(mobile))]
 pub fn list_microphone_devices() -> Result<Vec<crate::recorder::MicrophoneDevice>, String> {
     crate::recorder::list_input_devices().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
+#[cfg(mobile)]
+pub async fn start_microphone_level_monitor(
+    _app: AppHandle,
+    _device_name: String,
+) -> Result<(), String> {
+    Ok(())
+}
+
+#[tauri::command]
+#[cfg(not(mobile))]
 pub async fn start_microphone_level_monitor(
     app: AppHandle,
     device_name: String,
