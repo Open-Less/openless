@@ -16,6 +16,7 @@ import { openExternal } from '../lib/ipc';
 import type { OS } from './WindowChrome';
 import { GeneralTab, ServicesTab, PrivacyTab, AdvancedTab } from '../pages/settings/tabs';
 import { AboutSection } from '../pages/settings/AboutSection';
+import { useMobileLayout } from '../lib/useMobileLayout';
 
 // 稳定 tab ID（与 i18n key `modal.sections.*` 一致）。
 export type SettingsSectionId =
@@ -58,16 +59,21 @@ export function SettingsModal({ os: _os, onClose, initialSettingsSection }: Sett
   const { t } = useTranslation();
   const [section, setSection] = useState<SettingsSectionId>(initialSettingsSection ?? 'general');
   const savedToast = useSavedToastListener();
+  const mobile = useMobileLayout();
 
   // 与 sidebar nav 一致的滑动指示器：仅 tab 组有 pill；外链组永远不画 pill。
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const [pillRect, setPillRect] = useState<{ top: number; height: number } | null>(null);
   useLayoutEffect(() => {
+    if (mobile) {
+      setPillRect(null);
+      return;
+    }
     const idx = TAB_ITEMS.findIndex(it => it.id === section);
     const el = tabRefs.current[idx];
     if (!el) return;
     setPillRect({ top: el.offsetTop, height: el.offsetHeight });
-  }, [section]);
+  }, [section, mobile]);
 
   return (
     <div
@@ -78,7 +84,7 @@ export function SettingsModal({ os: _os, onClose, initialSettingsSection }: Sett
         backdropFilter: 'blur(8px) saturate(140%)',
         WebkitBackdropFilter: 'blur(8px) saturate(140%)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-        padding: 28,
+        padding: mobile ? 0 : 28,
         zIndex: 50,
         animation: 'ol-modal-backdrop-in 0.18s var(--ol-motion-soft)',
       }}>
@@ -90,8 +96,9 @@ export function SettingsModal({ os: _os, onClose, initialSettingsSection }: Sett
           width: '100%',
           maxWidth: 920,
           height: '100%',
-          maxHeight: 620,
+          maxHeight: mobile ? 'none' : 620,
           display: 'flex',
+          flexDirection: mobile ? 'column' : 'row',
           overflow: 'hidden',
           animation: 'ol-modal-card-in 0.24s var(--ol-motion-spring)',
           position: 'relative',
@@ -101,14 +108,24 @@ export function SettingsModal({ os: _os, onClose, initialSettingsSection }: Sett
         <aside
           className="ol-aura-settings-rail"
           style={{
-            width: 214,
+            width: mobile ? '100%' : 214,
             flexShrink: 0,
             display: 'flex',
-            flexDirection: 'column',
+            flexDirection: mobile ? 'row' : 'column',
           }}>
 
           {/* tab 组 */}
-          <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 1 }}>
+          <div
+            className="ol-thinscroll"
+            style={{
+              position: 'relative',
+              display: 'flex',
+              flexDirection: mobile ? 'row' : 'column',
+              gap: 1,
+              minWidth: 0,
+              overflowX: mobile ? 'auto' : undefined,
+            }}
+          >
             {pillRect && (
               <div
                 className="ol-aura-settings-pill"
@@ -133,7 +150,7 @@ export function SettingsModal({ os: _os, onClose, initialSettingsSection }: Sett
                   ref={el => { tabRefs.current[idx] = el; }}
                   onClick={() => setSection(it.id as SettingsSectionId)}
                   className={active ? 'ol-nav-btn ol-nav-btn-active ol-aura-settings-nav-btn' : 'ol-nav-btn ol-aura-settings-nav-btn'}
-                  style={navBtnStyle}>
+                  style={{ ...navBtnStyle, flexShrink: 0 }}>
                   <Icon name={it.icon} size={14} />
                   <span style={{ flex: 1 }}>{t(`modal.sections.${it.id}`)}</span>
                 </button>
@@ -148,7 +165,7 @@ export function SettingsModal({ os: _os, onClose, initialSettingsSection }: Sett
                 key={it.id}
                 onClick={() => { if (it.href) void openExternal(it.href); }}
                 className="ol-nav-btn ol-aura-settings-nav-btn"
-                style={navBtnStyle}>
+                style={{ ...navBtnStyle, flexShrink: 0 }}>
                 <Icon name={it.icon} size={14} />
                 <span style={{ flex: 1 }}>{t(`modal.sections.${it.id}`)}</span>
                 <Icon name="external" size={11} />
@@ -197,7 +214,14 @@ export function SettingsModal({ os: _os, onClose, initialSettingsSection }: Sett
 
           <div
             className="ol-thinscroll"
-            style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '10px 28px 28px' }}>
+            style={{
+              flex: 1,
+              minHeight: 0,
+              overflow: 'auto',
+              padding: mobile
+                ? '8px 14px calc(18px + env(safe-area-inset-bottom, 0px))'
+                : '10px 28px 28px',
+            }}>
             {/* key=section 让切 tab 时整块重挂载，ol-tab-fade 轻微淡入。 */}
             <div
               key={section}
@@ -214,15 +238,16 @@ export function SettingsModal({ os: _os, onClose, initialSettingsSection }: Sett
       <style>{`
         .ol-aura-settings {
           background: var(--ol-panel-bg);
-          border-radius: var(--ol-shell-radius);
+          border-radius: ${mobile ? '0' : 'var(--ol-shell-radius)'};
           border: 1px solid var(--ol-panel-border);
           box-shadow: var(--ol-panel-shadow);
         }
         .ol-aura-settings-rail {
-          padding: 20px 14px;
-          gap: 16px;
+          padding: ${mobile ? 'calc(10px + env(safe-area-inset-top, 0px)) 10px 8px' : '20px 14px'};
+          gap: ${mobile ? '8px' : '16px'};
           background: var(--ol-settings-rail-bg);
-          border-right: 1px solid var(--ol-settings-rail-border);
+          border-right: ${mobile ? '0' : '1px solid var(--ol-settings-rail-border)'};
+          border-bottom: ${mobile ? '1px solid var(--ol-settings-rail-border)' : '0'};
         }
         .ol-aura-settings-pill {
           background: var(--ol-sidebar-pill-bg);
@@ -231,7 +256,7 @@ export function SettingsModal({ os: _os, onClose, initialSettingsSection }: Sett
           box-shadow: none;
         }
         .ol-aura-settings-nav-btn {
-          padding: 7px 10px;
+          padding: ${mobile ? '8px 11px' : '7px 10px'};
           border-radius: 12px;
           border: 0;
           background: transparent;
@@ -243,12 +268,19 @@ export function SettingsModal({ os: _os, onClose, initialSettingsSection }: Sett
           z-index: 1;
           transition: color 0.16s var(--ol-motion-quick), background 0.16s var(--ol-motion-quick);
         }
+        .ol-aura-settings-nav-btn.ol-nav-btn-active {
+          background: ${mobile ? 'var(--ol-sidebar-pill-bg)' : 'transparent'};
+          border: ${mobile ? '1px solid var(--ol-sidebar-pill-border)' : '0'};
+        }
         .ol-aura-settings-links {
           display: flex;
-          flex-direction: column;
+          flex-direction: ${mobile ? 'row' : 'column'};
           gap: 1px;
-          padding-top: 10px;
-          border-top: 1px solid var(--ol-settings-links-border);
+          padding-top: ${mobile ? '0' : '10px'};
+          padding-left: ${mobile ? '8px' : '0'};
+          border-top: ${mobile ? '0' : '1px solid var(--ol-settings-links-border)'};
+          border-left: ${mobile ? '1px solid var(--ol-settings-links-border)' : '0'};
+          overflow-x: ${mobile ? 'auto' : 'visible'};
         }
         .ol-aura-settings-content {
           background: var(--ol-settings-content-bg);
@@ -262,8 +294,8 @@ export function SettingsModal({ os: _os, onClose, initialSettingsSection }: Sett
           background: var(--ol-settings-close-hover-bg);
         }
         .ol-aura-settings-title {
-          padding: 24px 28px 10px;
-          font-size: 22px;
+          padding: ${mobile ? '16px 48px 8px 16px' : '24px 28px 10px'};
+          font-size: ${mobile ? '20px' : '22px'};
           font-weight: 600;
           letter-spacing: -0.02em;
           font-family: var(--ol-font-display);

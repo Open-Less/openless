@@ -4,6 +4,7 @@
 
 import { useState, type CSSProperties, type ReactNode } from 'react';
 import { Icon } from '../components/Icon';
+import { useMobileLayout } from '../lib/useMobileLayout';
 
 interface PageHeaderProps {
   kicker?: string;
@@ -14,13 +15,23 @@ interface PageHeaderProps {
 }
 
 export function PageHeader({ kicker, title, desc, right, titleRight }: PageHeaderProps) {
+  const mobile = useMobileLayout();
   return (
-    <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 24, marginBottom: 28 }}>
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: mobile ? 'column' : 'row',
+        alignItems: mobile ? 'stretch' : 'flex-start',
+        justifyContent: 'space-between',
+        gap: mobile ? 12 : 24,
+        marginBottom: mobile ? 18 : 28,
+      }}
+    >
       <div style={{ minWidth: 0 }}>
         {kicker && (
           <div
             style={{
-              fontSize: 11,
+              fontSize: mobile ? 10 : 11,
               fontWeight: 600,
               letterSpacing: '.14em',
               textTransform: 'uppercase',
@@ -36,20 +47,25 @@ export function PageHeader({ kicker, title, desc, right, titleRight }: PageHeade
           <h1
             style={{
               margin: 0,
-              fontSize: 34,
+              fontSize: mobile ? 28 : 34,
               fontWeight: 600,
-              letterSpacing: '-0.04em',
+              letterSpacing: '-0.03em',
               color: 'var(--ol-ink)',
               fontFamily: 'var(--ol-font-display)',
+              lineHeight: mobile ? 1.08 : undefined,
             }}
           >
             {title}
           </h1>
           {titleRight}
         </div>
-        {desc && <p style={{ margin: '10px 0 0', fontSize: 13.5, color: 'var(--ol-ink-3)', maxWidth: 680, lineHeight: 1.6 }}>{desc}</p>}
+        {desc && <p style={{ margin: mobile ? '8px 0 0' : '10px 0 0', fontSize: mobile ? 12.5 : 13.5, color: 'var(--ol-ink-3)', maxWidth: 680, lineHeight: 1.6 }}>{desc}</p>}
       </div>
-      {right}
+      {right && (
+        <div style={{ display: 'flex', justifyContent: mobile ? 'flex-start' : 'flex-end', flexWrap: 'wrap', gap: 8 }}>
+          {right}
+        </div>
+      )}
     </div>
   );
 }

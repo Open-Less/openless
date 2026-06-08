@@ -33,6 +33,7 @@ import {
 } from '../lib/providerSetup';
 import { type SettingsSectionId } from './SettingsModal';
 import { useAppState, type AppTab } from '../state/useAppState';
+import { useMobileLayout } from '../lib/useMobileLayout';
 
 interface NavItem {
   id: AppTab;
@@ -71,6 +72,7 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
   const [settingsInitialSection, setSettingsInitialSection] = useState<SettingsSectionId | undefined>();
   const [providerPromptOpen, setProviderPromptOpen] = useState(false);
   const [hotkeyModePromptOpen, setHotkeyModePromptOpen] = useState(false);
+  const mobileLayout = useMobileLayout();
 
   // tab 切换的 cross-fade：旧页 blur+fade out（180ms），结束后挂载新页（走 ol-page-slide enter）。
   // displayTab 是实际渲染的 tab，currentTab 是用户点中的目标 tab。
@@ -96,12 +98,17 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
     [t],
   );
   const Page = (NAV.find((n) => n.id === displayTab) ?? NAV[0]).cmp;
+  const activeNav = NAV.find(n => n.id === currentTab) ?? NAV[0];
 
   // sidebar nav 滑动指示器：测量当前 active button 的 offsetTop / height，
   // 用一个 absolute pill 平滑滑过去，而不是每个按钮各自瞬切背景色。
   const navItemRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const [pillRect, setPillRect] = useState<{ top: number; height: number } | null>(null);
   useLayoutEffect(() => {
+    if (mobileLayout) {
+      setPillRect(null);
+      return;
+    }
     if (settingsOpen) {
       setPillRect(null);
       return;
@@ -114,7 +121,7 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
     const el = navItemRefs.current[idx];
     if (!el) return;
     setPillRect({ top: el.offsetTop, height: el.offsetHeight });
-  }, [currentTab, settingsOpen, NAV]);
+  }, [currentTab, settingsOpen, NAV, mobileLayout]);
 
   useEffect(() => {
     let cancelled = false;
@@ -198,21 +205,45 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
         style={{
           flex: 1, minHeight: 0,
           display: 'flex',
+          flexDirection: mobileLayout ? 'column' : 'row',
           background: 'transparent',
           overflow: 'hidden',
           position: 'relative',
           zIndex: 1,
         }}>
 
-        {/* Sidebar — 透明地坐在外层磨砂底板上，让 LOGO/导航/快捷键/BETA/footer 共用同一片磨砂玻璃 */}
-        <aside
-          className="ol-aura-sidebar"
-          style={{
-            width: 196,
-            flexShrink: 0,
-            display: 'flex',
-            flexDirection: 'column',
-          }}>
+        {mobileLayout ? (
+          <div className="ol-aura-mobile-topbar">
+            <div className="ol-aura-mobile-brand">
+              <img
+                className="ol-aura-mobile-brand-mark"
+                src="AppIcon.png"
+                alt="OpenLess"
+              />
+              <div style={{ minWidth: 0 }}>
+                <div className="ol-aura-mobile-brand-title">OpenLess</div>
+                <div className="ol-aura-mobile-brand-section">{activeNav.name}</div>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => openSettings()}
+              className={settingsOpen ? 'ol-aura-mobile-settings ol-aura-mobile-settings-active' : 'ol-aura-mobile-settings'}
+              aria-label={t('shell.footer.settings')}
+            >
+              <Icon name="settings" size={17} />
+            </button>
+          </div>
+        ) : (
+          /* Sidebar — 透明地坐在外层磨砂底板上，让 LOGO/导航/快捷键/BETA/footer 共用同一片磨砂玻璃 */
+          <aside
+            className="ol-aura-sidebar"
+            style={{
+              width: 196,
+              flexShrink: 0,
+              display: 'flex',
+              flexDirection: 'column',
+            }}>
 
           {/* brand */}
           <div className="ol-aura-sidebar-brand">
@@ -292,10 +323,19 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
               <span style={{ flex: 1 }}>{t('shell.footer.settings')}</span>
             </button>
           </div>
-        </aside>
+          </aside>
+        )}
 
         {/* Main content — Linux 禁用透明窗口后使用不透明面；其他平台保留玻璃层。 */}
-        <div style={{ flex: 1, minWidth: 0, padding: '4px 8px 6px 0', display: 'flex' }}>
+        <div
+          style={{
+            flex: 1,
+            minWidth: 0,
+            minHeight: 0,
+            padding: mobileLayout ? '0' : '4px 8px 6px 0',
+            display: 'flex',
+          }}
+        >
           <main
             className="ol-console-main ol-aura-panel ol-aura-console-main"
             style={{
@@ -325,7 +365,9 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
               style={{
                 flex: 1, minHeight: 0,
                 overflow: 'auto',
-                padding: '24px 28px 32px',
+                padding: mobileLayout
+                  ? '16px 14px 18px'
+                  : '24px 28px 32px',
                 // position:relative 让页面里的"已保存"toast 用 absolute top:16 right:16
                 // 锚到这块控制台卡的右上角，而不是横在页头变成长横幅。
                 position: 'relative',
@@ -346,6 +388,25 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
             </div>
           </main>
         </div>
+
+        {mobileLayout && (
+          <nav className="ol-aura-mobile-nav" aria-label="OpenLess">
+            {NAV.map(n => {
+              const active = !settingsOpen && currentTab === n.id;
+              return (
+                <button
+                  key={n.id}
+                  type="button"
+                  onClick={() => setCurrentTab(n.id)}
+                  className={active ? 'ol-aura-mobile-nav-btn ol-aura-mobile-nav-btn-active' : 'ol-aura-mobile-nav-btn'}
+                >
+                  <Icon name={n.icon} size={18} />
+                  <span>{n.name}</span>
+                </button>
+              );
+            })}
+          </nav>
+        )}
       </div>
 
       {/* Settings modal — rendered inside this window */}
@@ -481,7 +542,94 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
           box-shadow: none;
         }
         .ol-aura-console-main {
-          border-radius: var(--ol-panel-radius);
+          border-radius: ${mobileLayout ? '0' : 'var(--ol-panel-radius)'};
+        }
+        .ol-aura-mobile-topbar {
+          flex-shrink: 0;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          padding: calc(10px + env(safe-area-inset-top, 0px)) 14px 10px;
+          border-bottom: 1px solid var(--ol-sidebar-border);
+          background: var(--ol-sidebar-bg);
+        }
+        .ol-aura-mobile-brand {
+          min-width: 0;
+          display: flex;
+          align-items: center;
+          gap: 10px;
+        }
+        .ol-aura-mobile-brand-mark {
+          width: 30px;
+          height: 30px;
+          border-radius: 8px;
+          flex-shrink: 0;
+        }
+        .ol-aura-mobile-brand-title {
+          font-size: 14px;
+          font-weight: 700;
+          color: var(--ol-ink);
+          line-height: 1.15;
+        }
+        .ol-aura-mobile-brand-section {
+          margin-top: 2px;
+          font-size: 11px;
+          color: var(--ol-ink-4);
+          font-family: var(--ol-font-mono);
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        .ol-aura-mobile-settings {
+          width: 36px;
+          height: 36px;
+          flex-shrink: 0;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          border-radius: 12px;
+          color: var(--ol-ink-3);
+          background: var(--ol-sidebar-settings-bg);
+          border: 1px solid var(--ol-sidebar-settings-border);
+        }
+        .ol-aura-mobile-settings-active {
+          color: var(--ol-ink);
+          background: var(--ol-sidebar-settings-active-bg);
+        }
+        .ol-aura-mobile-nav {
+          flex-shrink: 0;
+          display: grid;
+          grid-template-columns: repeat(${NAV.length}, minmax(0, 1fr));
+          gap: 2px;
+          padding: 7px 8px calc(7px + env(safe-area-inset-bottom, 0px));
+          border-top: 1px solid var(--ol-sidebar-border);
+          background: var(--ol-sidebar-bg);
+        }
+        .ol-aura-mobile-nav-btn {
+          min-width: 0;
+          height: 50px;
+          display: inline-flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          gap: 4px;
+          border-radius: 12px;
+          color: var(--ol-ink-4);
+          font-size: 10px;
+          font-weight: 600;
+          line-height: 1.1;
+        }
+        .ol-aura-mobile-nav-btn span {
+          max-width: 100%;
+          overflow: hidden;
+          white-space: nowrap;
+          text-overflow: ellipsis;
+        }
+        .ol-aura-mobile-nav-btn-active {
+          color: var(--ol-ink);
+          background: var(--ol-sidebar-pill-bg);
+          border: 1px solid var(--ol-sidebar-pill-border);
         }
         .ol-nav-btn.ol-nav-btn-active {
           color: var(--ol-ink);
