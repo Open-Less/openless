@@ -2,6 +2,7 @@
   "$schema": "../gen/schemas/mobile-schema.json",
   "identifier": "mobile",
   "description": "Capabilities for OpenLess Android main window",
+  "platforms": ["android"],
   "windows": ["main"],
   "permissions": [
     "core:default",

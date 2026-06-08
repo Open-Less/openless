@@ -220,6 +220,10 @@ Rust ↔ Kotlin 通信：Tauri mobile plugin / `jni`（脚手架阶段为桩，i
 
 GitHub Actions workflow: [`.github/workflows/android-apk.yml`](../.github/workflows/android-apk.yml)
 
+### Capability platform isolation
+
+Desktop permissions live in `capabilities/default.json` with `"platforms": ["macos", "windows", "linux"]`, so updater, autostart, and multi-window permissions do not apply on Android. Android uses `capabilities/mobile.json` with `"platforms": ["android"]` for the main-window permission set only (no updater/autostart).
+
 ### Triggers
 
 | Trigger | Behavior |
