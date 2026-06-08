@@ -126,6 +126,8 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
   useEffect(() => {
     let cancelled = false;
     (async () => {
+      const caps = await getPlatformCapabilities();
+      if (cancelled || caps.platform === 'android') return;
       const credentials = await getCredentials();
       const promptDeferredValue = window.sessionStorage.getItem(PROVIDER_SETUP_PROMPT_DEFERRED_KEY);
       if (!cancelled && shouldShowProviderSetupPrompt(credentials, promptDeferredValue)) {
