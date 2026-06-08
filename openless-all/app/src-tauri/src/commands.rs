@@ -247,40 +247,58 @@ fn persist_settings<T: SettingsWriter>(
     Ok(())
 }
 
-#[tauri::command]
-pub fn set_settings(
-    coord: CoordinatorState<'_>,
-    app: AppHandle,
-    #[cfg(not(mobile))] tray_microphones: State<'_, TrayMicrophoneMenuState>,
+fn set_settings_common(
+    coord: &Coordinator,
+    app: &AppHandle,
     mut prefs: UserPreferences,
-) -> Result<(), String> {
+) -> Result<UserPreferences, String> {
     let packs = coord.style_packs().list().map_err(|e| e.to_string())?;
     sync_style_pack_preferences(&mut prefs, &packs);
     // 广播给所有 webview。issue #205：QaPanel 跑在独立 webview，
     // 没有 HotkeySettingsContext，必须靠事件感知录音键变化，否则面板可见时
     // 用户改键会让浮窗里的 "{recordHotkey}" 文案一直停留在旧值。
-    persist_settings(&*coord, prefs.clone())?;
-    #[cfg(not(mobile))]
-    {
-        // refresh_tray_microphone_menu 内部会调用 NSStatusItem.set_menu，必须在主线程上跑。
-        // set_settings 本身是同步 Tauri command，在 IPC handler 线程上执行；从这里直接调
-        // 会触发 macOS 主线程断言或在 dispatch 队列上死锁，导致整个 UI 无响应（用户改
-        // 偏好后所有按键都没反应即此根因）。dispatch 到主线程后立即返回，IPC 线程不阻塞。
-        let app_for_main = app.clone();
-        let prefs_for_main = prefs.clone();
-        let _ = app.run_on_main_thread(move || {
-            if let Err(err) = crate::refresh_tray_microphone_menu(&app_for_main) {
-                log::warn!("[tray] refresh microphone menu after settings save failed: {err}");
-                let tray_state = app_for_main.state::<TrayMicrophoneMenuState>();
-                sync_tray_microphone_selection(
-                    &tray_state.lock(),
-                    &prefs_for_main.microphone_device_name,
-                );
-            }
-        });
-        let _ = tray_microphones;
-    }
+    persist_settings(coord, prefs.clone())?;
     let _ = app.emit("prefs:changed", &prefs);
+    Ok(prefs)
+}
+
+#[cfg(not(mobile))]
+#[tauri::command]
+pub fn set_settings(
+    coord: CoordinatorState<'_>,
+    app: AppHandle,
+    tray_microphones: State<'_, TrayMicrophoneMenuState>,
+    prefs: UserPreferences,
+) -> Result<(), String> {
+    let prefs = set_settings_common(&*coord, &app, prefs)?;
+    // refresh_tray_microphone_menu 内部会调用 NSStatusItem.set_menu，必须在主线程上跑。
+    // set_settings 本身是同步 Tauri command，在 IPC handler 线程上执行；从这里直接调
+    // 会触发 macOS 主线程断言或在 dispatch 队列上死锁，导致整个 UI 无响应（用户改
+    // 偏好后所有按键都没反应即此根因）。dispatch 到主线程后立即返回，IPC 线程不阻塞。
+    let app_for_main = app.clone();
+    let prefs_for_main = prefs.clone();
+    let _ = app.run_on_main_thread(move || {
+        if let Err(err) = crate::refresh_tray_microphone_menu(&app_for_main) {
+            log::warn!("[tray] refresh microphone menu after settings save failed: {err}");
+            let tray_state = app_for_main.state::<TrayMicrophoneMenuState>();
+            sync_tray_microphone_selection(
+                &tray_state.lock(),
+                &prefs_for_main.microphone_device_name,
+            );
+        }
+    });
+    let _ = tray_microphones;
+    Ok(())
+}
+
+#[cfg(mobile)]
+#[tauri::command]
+pub fn set_settings(
+    coord: CoordinatorState<'_>,
+    app: AppHandle,
+    prefs: UserPreferences,
+) -> Result<(), String> {
+    set_settings_common(&*coord, &app, prefs)?;
     Ok(())
 }
 
