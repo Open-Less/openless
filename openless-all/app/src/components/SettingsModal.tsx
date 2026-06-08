@@ -2,7 +2,7 @@
 //
 // 重构（2026-05）：原本是「外层弹窗侧栏 + 设置页内层侧栏」双层嵌套，用户点
 // 「设置」还要再面对第二个侧栏。现在拍平成单层 —— 通用 / 服务 / 隐私 / 高级 /
-// 个性化 / 关于 六个 tab + 帮助外链组。每个 tab 的内容见 pages/settings/。
+// 个性化 / 关于 六个 tab。每个 tab 的内容见 pages/settings/。
 //
 // 设计原则：每个可见控件都必须可用。没有后端支撑的占位（账号 / 主题切换 等）
 // 不在此弹窗出现。
@@ -12,7 +12,6 @@ import { useTranslation } from 'react-i18next';
 import { Icon } from './Icon';
 import { SavedToast } from './SavedToast';
 import { useSavedToastListener } from '../lib/savedEvent';
-import { openExternal } from '../lib/ipc';
 import type { OS } from './WindowChrome';
 import { GeneralTab, ServicesTab, PrivacyTab, AdvancedTab } from '../pages/settings/tabs';
 import { AboutSection } from '../pages/settings/AboutSection';
@@ -35,24 +34,14 @@ interface SettingsModalProps {
 interface ModalNavItem {
   id: string;
   icon: string;
-  external?: boolean;
-  href?: string;
 }
 
-const HELP_URL = 'https://github.com/appergb/openless#readme';
-const RELEASE_NOTES_URL = 'https://github.com/appergb/openless/releases';
-
-// 第一组：可选中的 tab；第二组：外部链接（永远不 active）。
 const TAB_ITEMS: ModalNavItem[] = [
   { id: 'general', icon: 'settings' },
   { id: 'services', icon: 'cloud' },
   { id: 'privacy', icon: 'shield' },
   { id: 'advanced', icon: 'bolt' },
   { id: 'about', icon: 'info' },
-];
-const LINK_ITEMS: ModalNavItem[] = [
-  { id: 'helpCenter', icon: 'help', external: true, href: HELP_URL },
-  { id: 'releaseNotes', icon: 'doc', external: true, href: RELEASE_NOTES_URL },
 ];
 
 export function SettingsModal({ os: _os, onClose, initialSettingsSection }: SettingsModalProps) {
@@ -123,6 +112,7 @@ export function SettingsModal({ os: _os, onClose, initialSettingsSection }: Sett
               flexDirection: mobile ? 'row' : 'column',
               gap: 1,
               minWidth: 0,
+              flex: mobile ? '1 1 auto' : undefined,
               overflowX: mobile ? 'auto' : undefined,
             }}
           >
@@ -156,21 +146,6 @@ export function SettingsModal({ os: _os, onClose, initialSettingsSection }: Sett
                 </button>
               );
             })}
-          </div>
-
-          {/* 外链组 */}
-          <div className="ol-aura-settings-links">
-            {LINK_ITEMS.map(it => (
-              <button
-                key={it.id}
-                onClick={() => { if (it.href) void openExternal(it.href); }}
-                className="ol-nav-btn ol-aura-settings-nav-btn"
-                style={{ ...navBtnStyle, flexShrink: 0 }}>
-                <Icon name={it.icon} size={14} />
-                <span style={{ flex: 1 }}>{t(`modal.sections.${it.id}`)}</span>
-                <Icon name="external" size={11} />
-              </button>
-            ))}
           </div>
         </aside>
 

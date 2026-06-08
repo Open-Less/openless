@@ -2,6 +2,7 @@
 // AsrPresetId 也放在这里，让 settings/ 下各 section 都从同一处来源拿。
 
 import type { CSSProperties, ReactNode } from "react"
+import { useMobileLayout } from "../../lib/useMobileLayout"
 
 export function SectionTitle({
     children,
@@ -61,13 +62,14 @@ export function SettingRow({
     children,
     controlWidth,
 }: SettingRowProps) {
+    const mobile = useMobileLayout()
     return (
         <div
             style={{
                 display: "grid",
-                gridTemplateColumns: "minmax(0, 180px) minmax(0, 1fr)",
-                gap: 16,
-                padding: "14px 0",
+                gridTemplateColumns: mobile ? "minmax(0, 1fr)" : "minmax(0, 180px) minmax(0, 1fr)",
+                gap: mobile ? 8 : 16,
+                padding: mobile ? "12px 0" : "14px 0",
                 borderTop: "0.5px solid var(--ol-line-soft)",
                 alignItems: desc ? "flex-start" : "center",
             }}
@@ -105,7 +107,10 @@ export function SettingRow({
                     display: "flex",
                     alignItems: "center",
                     minWidth: 0,
-                    width: controlWidth ?? "auto",
+                    width: mobile ? "100%" : controlWidth ?? "auto",
+                    maxWidth: "100%",
+                    flexWrap: mobile ? "wrap" : "nowrap",
+                    gap: mobile ? 6 : undefined,
                 }}
             >
                 {children}

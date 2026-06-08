@@ -122,7 +122,7 @@ export function PermissionsSection() {
     <Card>
       <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>{t('settings.permissions.title')}</div>
       <SettingRow label={t('settings.permissions.micLabel')}>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'flex-end', width: '100%' }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'flex-end', width: '100%', flexWrap: 'wrap', minWidth: 0 }}>
           <PermissionPill status={microphone} />
           {microphone !== 'granted' && microphone !== 'notApplicable' && microphone !== 'loading' && (
             <Btn variant="ghost" size="sm" onClick={reRequestMicrophone}>
@@ -133,7 +133,7 @@ export function PermissionsSection() {
       </SettingRow>
       {capability?.requiresAccessibilityPermission && platformCaps?.platform !== 'android' && (
         <SettingRow label={t('settings.permissions.accLabel')}>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'flex-end', width: '100%' }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'flex-end', width: '100%', flexWrap: 'wrap', minWidth: 0 }}>
             <PermissionPill status={accessibility} />
             {accessibility !== 'granted' && accessibility !== 'notApplicable' && (
               <Btn variant="ghost" size="sm" onClick={reRequestAccessibility}>
@@ -145,7 +145,7 @@ export function PermissionsSection() {
       )}
       {platformCaps?.supportsDesktopHotkey === true && (
       <SettingRow label={t('settings.permissions.hotkeyLabel')}>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', minWidth: 0, justifyContent: 'flex-end', width: '100%' }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', minWidth: 0, justifyContent: 'flex-end', width: '100%', flexWrap: 'wrap' }}>
           {hotkey?.message && (
             <span style={{
               fontSize: 11.5, color: 'var(--ol-ink-4)',
@@ -171,7 +171,7 @@ export function PermissionsSection() {
       )}
       {windowsIme?.state !== 'notWindows' && platformCaps?.platform !== 'android' && (
         <SettingRow label={t('settings.permissions.windowsImeLabel')}>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', minWidth: 0, justifyContent: 'flex-end', width: '100%' }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', minWidth: 0, justifyContent: 'flex-end', width: '100%', flexWrap: 'wrap' }}>
             {windowsIme && (
               <span style={{
                 fontSize: 11.5, color: 'var(--ol-ink-4)',
@@ -186,7 +186,7 @@ export function PermissionsSection() {
         </SettingRow>
       )}
       <SettingRow label={t('settings.permissions.networkLabel')}>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'flex-end', width: '100%' }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'flex-end', width: '100%', flexWrap: 'wrap', minWidth: 0 }}>
           {network && network.latencyMs != null && (
             <span style={{ fontSize: 11, color: 'var(--ol-ink-4)' }}>
               {network.latencyMs}ms

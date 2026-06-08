@@ -16,6 +16,9 @@ import { Card } from '../_atoms';
 import { SectionTitle } from './shared';
 import { CheckUpdateButton } from './CheckUpdateButton';
 
+const HELP_URL = 'https://github.com/appergb/openless#readme';
+const RELEASE_NOTES_URL = 'https://github.com/appergb/openless/releases';
+
 export function AboutSection() {
   const { t } = useTranslation();
   const [qqCopied, setQqCopied] = useState(false);
@@ -76,8 +79,18 @@ export function AboutSection() {
           </button>
         </Row>
         <Row label={t('modal.about.docs')}>
-          <button style={btnGhost} onClick={() => openExternal('https://github.com/appergb/openless#readme')}>
+          <button style={btnGhost} onClick={() => openExternal(HELP_URL)}>
             {t('modal.about.docsBtn')}
+          </button>
+        </Row>
+        <Row label={t('modal.sections.helpCenter')}>
+          <button style={btnGhost} onClick={() => openExternal(HELP_URL)}>
+            {t('modal.sections.helpCenter')}
+          </button>
+        </Row>
+        <Row label={t('modal.sections.releaseNotes')}>
+          <button style={btnGhost} onClick={() => openExternal(RELEASE_NOTES_URL)}>
+            {t('modal.sections.releaseNotes')}
           </button>
         </Row>
         <Row label={t('modal.about.feedback')}>
@@ -202,5 +215,6 @@ const btnGhost: CSSProperties = {
   border: '0.5px solid var(--ol-line-strong)',
   background: 'var(--ol-control-solid)', color: 'var(--ol-ink-2)',
   cursor: 'default', fontFamily: 'inherit',
+  maxWidth: '100%',
   transition: 'background 0.16s var(--ol-motion-quick), border-color 0.16s var(--ol-motion-quick)',
 };

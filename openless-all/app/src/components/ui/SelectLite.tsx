@@ -29,6 +29,7 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 import { Icon } from '../Icon';
+import { useMobileLayout } from '../../lib/useMobileLayout';
 
 export interface SelectOption {
   value: string;
@@ -81,6 +82,7 @@ export function SelectLite({
   ariaLabel,
   onOpenChange,
 }: SelectLiteProps) {
+  const mobile = useMobileLayout();
   const [open, setOpen] = useState(false);
   // leaving 让 popover 在卸载前播完 exit keyframe（用户报"没有收缩动画"——之前直接 unmount）
   const [leaving, setLeaving] = useState(false);
@@ -264,6 +266,14 @@ export function SelectLite({
   const triggerStyle: CSSProperties = {
     ...DEFAULT_TRIGGER_STYLE,
     ...style,
+    boxSizing: 'border-box',
+    ...(mobile
+      ? {
+          width: style?.width ?? '100%',
+          minWidth: 0,
+          maxWidth: '100%',
+        }
+      : null),
     opacity: disabled ? 0.5 : 1,
     cursor: disabled ? 'not-allowed' : 'default',
   };
