@@ -249,9 +249,6 @@ mod platform {
 #[cfg(target_os = "android")]
 mod platform {
     use super::PermissionStatus;
-    use std::time::Duration;
-
-    const RECORD_AUDIO_PERMISSION: &str = "android.permission.RECORD_AUDIO";
 
     pub fn check_accessibility() -> PermissionStatus {
         PermissionStatus::NotApplicable
@@ -265,94 +262,11 @@ mod platform {
     /// 实际录音能力由用户触发 dictation 时的 Recorder::start 决定，避免权限轮询进入
     /// Android audio 探测路径后在 JavaBridge IPC 边界 panic。
     pub fn check_microphone() -> PermissionStatus {
-        match android_check_record_audio_permission() {
-            Ok(other) => other,
-            Err(err) => {
-                log::warn!("[mic] Android permission JNI check failed: {err}");
-                PermissionStatus::NotDetermined
-            }
-        }
+        PermissionStatus::NotDetermined
     }
 
     pub fn request_microphone() -> PermissionStatus {
-        match android_request_record_audio_permission() {
-            Ok(()) => {
-                std::thread::sleep(Duration::from_millis(250));
-                check_microphone()
-            }
-            Err(err) => {
-                log::warn!("[mic] Android permission request failed: {err}");
-                PermissionStatus::NotDetermined
-            }
-        }
-    }
-
-    fn android_check_record_audio_permission() -> Result<PermissionStatus, String> {
-        with_main_activity(|env, activity| {
-            let permission = env
-                .new_string(RECORD_AUDIO_PERMISSION)
-                .map_err(|e| format!("new permission string: {e}"))?;
-
-            let granted = env
-                .call_method(
-                    activity,
-                    "checkSelfPermission",
-                    "(Ljava/lang/String;)I",
-                    &[jni::objects::JValue::Object(&permission)],
-                )
-                .map_err(|e| format!("Activity.checkSelfPermission: {e}"))?
-                .i()
-                .map_err(|e| format!("checkSelfPermission result: {e}"))?;
-
-            // PackageManager.PERMISSION_GRANTED == 0
-            Ok(if granted == 0 {
-                PermissionStatus::Granted
-            } else {
-                PermissionStatus::Denied
-            })
-        })
-    }
-
-    fn android_request_record_audio_permission() -> Result<(), String> {
-        with_main_activity(|env, activity| {
-            let permission = env
-                .new_string(RECORD_AUDIO_PERMISSION)
-                .map_err(|e| format!("new permission string: {e}"))?;
-            let permissions = env
-                .new_object_array(1, "java/lang/String", &permission)
-                .map_err(|e| format!("new permission array: {e}"))?;
-
-            env.call_method(
-                activity,
-                "requestPermissions",
-                "([Ljava/lang/String;I)V",
-                &[
-                    jni::objects::JValue::Object(&permissions),
-                    jni::objects::JValue::Int(0x4f50_4c53), // "OPLS"
-                ],
-            )
-            .map_err(|e| format!("Activity.requestPermissions: {e}"))?;
-            Ok(())
-        })
-    }
-
-    fn with_main_activity<F, R>(f: F) -> Result<R, String>
-    where
-        F: FnOnce(&mut jni::JNIEnv, jni::objects::JObject) -> Result<R, String>,
-    {
-        let ctx = ndk_context::android_context();
-        let vm = unsafe {
-            jni::JavaVM::from_raw(ctx.vm().cast())
-                .map_err(|e| format!("JavaVM from raw: {e}"))?
-        };
-        let mut env = vm
-            .attach_current_thread()
-            .map_err(|e| format!("attach JNI thread: {e}"))?;
-        let activity = unsafe { jni::objects::JObject::from_raw(ctx.context() as jni::sys::jobject) };
-        if activity.is_null() {
-            return Err("Android activity handle is null".into());
-        }
-        f(&mut env, activity)
+        PermissionStatus::NotDetermined
     }
 }
 
