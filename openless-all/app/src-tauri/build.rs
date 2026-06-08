@@ -5,7 +5,16 @@ fn main() {
     #[cfg(target_os = "macos")]
     build_qwen_asr_macos();
 
+    #[cfg(target_os = "android")]
+    link_android_cpp_runtime();
+
     tauri_build::build();
+}
+
+/// cpal → oboe → oboe-sys 会编译 C++；最终 cdylib 需显式链接 NDK libc++。
+#[cfg(target_os = "android")]
+fn link_android_cpp_runtime() {
+    println!("cargo:rustc-link-lib=c++_static");
 }
 
 #[cfg(target_os = "windows")]
