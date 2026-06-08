@@ -10,7 +10,6 @@ import {
   getPlatformCapabilities,
   listHistory,
   openSystemSettings,
-  requestMicrophonePermission,
   startDictation,
   stopDictation,
 } from '../lib/ipc';
@@ -26,6 +25,7 @@ import type {
 import { useHotkeySettings } from '../state/HotkeySettingsContext';
 import { Btn, Card, PageHeader, Pill } from './_atoms';
 import { useMobileLayout } from '../lib/useMobileLayout';
+import { requestAndroidMicrophoneAccess } from '../lib/androidMicrophonePermission';
 
 function useModeLabels(): Record<PolishMode, string> {
   const { t } = useTranslation();
@@ -453,7 +453,7 @@ function AndroidMicGrantBanner() {
       if (microphone === 'denied' || microphone === 'restricted') {
         await openSystemSettings('microphone');
       } else {
-        const status = await requestMicrophonePermission();
+        const status = await requestAndroidMicrophoneAccess();
         setMicrophone(status);
         if (status === 'denied' || status === 'restricted') {
           await openSystemSettings('microphone');
@@ -554,6 +554,10 @@ function InAppDictationControl() {
       if (recording) {
         await stopDictation();
       } else {
+        if (platformCaps?.platform === 'android') {
+          const status = await requestAndroidMicrophoneAccess();
+          if (status !== 'granted') return;
+        }
         await startDictation();
       }
     } catch (error) {

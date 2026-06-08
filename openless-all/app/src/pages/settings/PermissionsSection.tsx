@@ -16,6 +16,7 @@ import {
 } from '../../lib/ipc';
 import type { NetworkCheckResult } from '../../lib/ipc';
 import { getPlatformCapabilities } from '../../lib/platform';
+import { requestAndroidMicrophoneAccess } from '../../lib/androidMicrophonePermission';
 import type {
   HotkeyStatus,
   PermissionStatus,
@@ -110,7 +111,9 @@ export function PermissionsSection() {
       refreshPermissions();
       return;
     }
-    const status = await requestMicrophonePermission();
+    const status = platformCaps?.platform === 'android'
+      ? await requestAndroidMicrophoneAccess()
+      : await requestMicrophonePermission();
     setMicrophone(status);
     if (status === 'denied' || status === 'restricted') {
       await openSystemSettings('microphone');
