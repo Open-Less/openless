@@ -682,6 +682,11 @@ pub fn request_android_overlay_permission(
 }
 
 #[tauri::command]
+pub fn open_external_url(url: String) -> Result<(), String> {
+    crate::external_url::open_external_url(&url)
+}
+
+#[tauri::command]
 pub fn set_shortcut_recording_active(coord: CoordinatorState<'_>, active: bool) {
     #[cfg(mobile)]
     {

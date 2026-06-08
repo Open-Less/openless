@@ -1263,8 +1263,21 @@ export async function openExternal(url: string): Promise<void> {
         window.open(url, "_blank", "noopener,noreferrer")
         return
     }
-    const { open } = await import("@tauri-apps/plugin-shell")
-    await open(url)
+    try {
+        const { open } = await import("@tauri-apps/plugin-shell")
+        await open(url)
+        return
+    } catch (error) {
+        console.warn("[external-open] shell plugin failed", error)
+    }
+    try {
+        const { invoke } = await import("@tauri-apps/api/core")
+        await invoke("open_external_url", { url })
+        return
+    } catch (error) {
+        console.warn("[external-open] native fallback failed", error)
+    }
+    window.open(url, "_blank", "noopener,noreferrer")
 }
 
 /**

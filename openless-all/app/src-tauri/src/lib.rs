@@ -27,6 +27,7 @@ mod commands;
 mod coordinator;
 mod coordinator_state;
 mod correction;
+mod external_url;
 #[cfg(not(mobile))]
 mod global_hotkey_runtime;
 #[cfg(not(mobile))]
@@ -137,6 +138,7 @@ macro_rules! app_invoke_handler_desktop {
             commands::get_android_ime_status,
             commands::get_android_overlay_status,
             commands::request_android_overlay_permission,
+            commands::open_external_url,
             commands::list_microphone_devices,
             commands::start_microphone_level_monitor,
             commands::stop_microphone_level_monitor,
@@ -288,6 +290,7 @@ macro_rules! app_invoke_handler_mobile {
             $crate::commands::get_android_ime_status,
             $crate::commands::get_android_overlay_status,
             $crate::commands::request_android_overlay_permission,
+            $crate::commands::open_external_url,
             $crate::commands::list_microphone_devices,
             $crate::commands::start_microphone_level_monitor,
             $crate::commands::stop_microphone_level_monitor,
