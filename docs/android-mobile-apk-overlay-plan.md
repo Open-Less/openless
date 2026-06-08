@@ -182,6 +182,8 @@ Rust ↔ Kotlin 通信：Tauri mobile plugin / `jni`（脚手架阶段为桩，i
 |---|---|
 | `docs/android-mobile-apk-overlay-plan.md` | 扩展为完整实施规划（本文档） |
 | `openless-all/app/package.json` | `tauri:android:*` scripts |
+| `.github/workflows/android-apk.yml` | Android debug APK CI |
+| `openless-all/app/scripts/merge-android-v1-manifest.mjs` | v1 manifest merge (RECORD_AUDIO) |
 | `openless-all/app/vite.config.ts` | mobile dev server / HMR |
 | `openless-all/app/src-tauri/tauri.conf.json` | `bundle.android` |
 | `openless-all/app/src-tauri/tauri.android.conf.json` | 单 main 窗口 |
@@ -214,6 +216,53 @@ Rust ↔ Kotlin 通信：Tauri mobile plugin / `jni`（脚手架阶段为桩，i
 
 ---
 
+## Android APK CI Workflow
+
+GitHub Actions workflow: [`.github/workflows/android-apk.yml`](../.github/workflows/android-apk.yml)
+
+### Triggers
+
+| Trigger | Behavior |
+|---|---|
+| `workflow_dispatch` | Build debug APK → upload Actions artifact only |
+| Push tag `v*-tauri` | Build debug APK → upload artifact **and** attach APK to the existing GitHub Release for that tag |
+
+Tag-triggered runs share the same `v*-tauri` convention as [`.github/workflows/release-tauri.yml`](../.github/workflows/release-tauri.yml). The Android job is independent and does not modify the desktop release workflow.
+
+### Debug APK policy
+
+- CI builds **debug** APKs (`tauri android build --apk --debug`) for faster iteration and to avoid release-signing requirements in v1.
+- Actions artifact name: `openless-android-debug`.
+- On-disk APK filename:
+  - Tag runs (`v*-tauri`): `OpenLess-android-debug-<tag>.apk` (e.g. `OpenLess-android-debug-v1.0.0-tauri.apk`)
+  - Manual dispatch: `OpenLess-android-debug-run-<run_number>.apk` (not branch name)
+
+### Command chain (CI)
+
+```bash
+cd openless-all/app
+npm ci && npm run build
+CI=true npm run tauri -- android init --ci
+node scripts/merge-android-v1-manifest.mjs
+CI=true npm run tauri:android:build
+```
+
+Local equivalent (after Android SDK/NDK setup):
+
+```bash
+cd openless-all/app
+npm run build
+npm run tauri:android:init
+npm run merge:android-v1-manifest
+npm run tauri:android:build
+```
+
+### Manifest merge (v1 only)
+
+`scripts/merge-android-v1-manifest.mjs` merges **only** `RECORD_AUDIO` from `android-scaffolding/AndroidManifest.v1.snippet.xml` into the generated `src-tauri/gen/android/app/src/main/AndroidManifest.xml`. The script is idempotent (skips if permission already present). v2 (IME) and v3 (overlay) manifest snippets are **not** merged in this workflow.
+
+---
+
 ## 8. 验收标准
 
 ### 构建验证
@@ -222,8 +271,12 @@ Rust ↔ Kotlin 通信：Tauri mobile plugin / `jni`（脚手架阶段为桩，i
 cd openless-all/app
 npm run build
 cargo check --manifest-path src-tauri/Cargo.toml
-# 需 Android SDK：
+# 需 Android SDK / NDK（与 CI 一致：debug APK）：
+npm run tauri:android:init
+npm run merge:android-v1-manifest
 npm run tauri:android:build
+# 等价于 CI 的 debug 构建：
+# CI=true npm run tauri -- android init --ci && node scripts/merge-android-v1-manifest.mjs && CI=true npm run tauri:android:build
 ```
 
 ### APK v1

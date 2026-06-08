@@ -1,0 +1,134 @@
+name: Android APK (debug)
+
+# Triggers:
+#   - push v*-tauri tag → build debug APK, upload artifact + attach to GitHub Release
+#   - workflow_dispatch → build debug APK, upload artifact only (no release)
+#
+# v1 scope: in-app dictation APK with RECORD_AUDIO merged from android-scaffolding.
+# IME v2 / overlay v3 manifest snippets are intentionally out of scope.
+
+on:
+  push:
+    tags:
+      - 'v*-tauri'
+  workflow_dispatch:
+
+jobs:
+  build-android-apk:
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    env:
+      CI: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Java 17 (Zulu)
+        uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install NDK and accept SDK licenses
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager "ndk;26.1.10909125"
+          ndk_dir="$ANDROID_HOME/ndk/26.1.10909125"
+          if [ ! -d "$ndk_dir" ]; then
+            echo "::error::NDK not found at $ndk_dir"
+            exit 1
+          fi
+          echo "ANDROID_NDK_HOME=$ndk_dir" >> "$GITHUB_ENV"
+          echo "NDK_HOME=$ndk_dir" >> "$GITHUB_ENV"
+          set +o pipefail
+          yes | sdkmanager --licenses
+          sdkmanager_exit=${PIPESTATUS[1]}
+          set -o pipefail
+          if [ "$sdkmanager_exit" -ne 0 ]; then
+            echo "::error::sdkmanager --licenses failed with exit code $sdkmanager_exit"
+            exit "$sdkmanager_exit"
+          fi
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: openless-all/app/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: >-
+            aarch64-linux-android,
+            armv7-linux-androideabi,
+            i686-linux-android,
+            x86_64-linux-android
+
+      - name: Cache Cargo
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: openless-all/app/src-tauri -> target
+
+      - name: Install npm deps
+        working-directory: openless-all/app
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: openless-all/app
+        run: npm run build
+
+      - name: Initialize Android project
+        working-directory: openless-all/app
+        run: npm run tauri -- android init --ci
+
+      - name: Merge APK v1 manifest (RECORD_AUDIO)
+        working-directory: openless-all/app
+        run: node scripts/merge-android-v1-manifest.mjs
+
+      - name: Build Android debug APK
+        working-directory: openless-all/app
+        run: npm run tauri:android:build
+
+      - name: Collect debug APK
+        id: apk
+        shell: bash
+        working-directory: openless-all/app
+        run: |
+          set -euo pipefail
+          apk_path="$(find src-tauri/gen/android -type f -name '*.apk' -path '*/outputs/*' | sort | head -n 1)"
+          if [ -z "$apk_path" ]; then
+            echo "::error::No APK found under src-tauri/gen/android/**/outputs/"
+            find src-tauri/gen/android -type f -name '*.apk' 2>/dev/null || true
+            exit 1
+          fi
+          if [[ "${{ github.ref }}" == refs/tags/v* ]] && [[ "${{ github.ref_name }}" == *-tauri ]]; then
+            label="${{ github.ref_name }}"
+          else
+            label="run-${{ github.run_number }}"
+          fi
+          dest="$RUNNER_TEMP/OpenLess-android-debug-${label}.apk"
+          cp "$apk_path" "$dest"
+          echo "path=$dest" >> "$GITHUB_OUTPUT"
+          echo "Collected APK: $apk_path → $dest"
+
+      - name: Upload Android APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: openless-android-debug
+          path: ${{ steps.apk.outputs.path }}
+          if-no-files-found: error
+
+      - name: Attach APK to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v') && endsWith(github.ref, '-tauri')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: OpenLess ${{ github.ref_name }}
+          draft: false
+          prerelease: ${{ endsWith(github.ref_name, '-beta-tauri') }}
+          files: ${{ steps.apk.outputs.path }}
