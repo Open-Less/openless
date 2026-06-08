@@ -230,7 +230,8 @@ async fn run_streaming_polish(
             };
             // 把 final_text 写回剪贴板（默认 on，macOS/Windows 适用）。
             // Linux：fcitx5 插件已直写文字到目标 app，跳过剪贴板避免破坏用户数据。
-            #[cfg(not(target_os = "linux"))]
+            // Android/iOS：无 arboard 剪贴板路径，v1 依赖 IME commit。
+            #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "ios")))]
             if inner.prefs.get().streaming_insert_save_clipboard {
                 match arboard::Clipboard::new() {
                     Ok(mut cb) => match cb.set_text(final_text.clone()) {

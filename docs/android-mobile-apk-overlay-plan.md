@@ -76,9 +76,11 @@ openless-all/app/
 │  desktop     │  mobile (Android)                         │
 │  hotkey/tray │  in-app dictation + cloud ASR           │
 │  capsule/qa  │  android_ime (v2) / android_overlay(v3) │
-│  TSF/AX/粘贴 │  copy fallback (v1)                     │
+│  TSF/AX/粘贴 │  IME commit (v1); clipboard TBD        │
 └──────────────┴──────────────────────────────────────────┘
 ```
+
+> **v1 剪贴板**：APK v1 不使用 Android 剪贴板兜底（未接 arboard）；跨 App 文本输入依赖后续 IME/JNI 接线。
 
 ---
 

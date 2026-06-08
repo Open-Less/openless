@@ -204,6 +204,7 @@ static NEXT_CLIPBOARD_RESTORE_ID: AtomicU64 = AtomicU64::new(1);
 static PENDING_CLIPBOARD_RESTORE: Lazy<Mutex<Option<PendingClipboardRestore>>> =
     Lazy::new(|| Mutex::new(None));
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn copy_to_clipboard(text: &str) -> bool {
     let mut clipboard = match arboard::Clipboard::new() {
         Ok(c) => c,
@@ -217,6 +218,12 @@ fn copy_to_clipboard(text: &str) -> bool {
         return false;
     }
     true
+}
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+fn copy_to_clipboard(_text: &str) -> bool {
+    log::warn!("[insertion] mobile clipboard fallback unavailable");
+    false
 }
 
 #[cfg(all(not(target_os = "macos"), not(target_os = "android")))]
