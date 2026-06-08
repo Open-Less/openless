@@ -3,6 +3,10 @@ import type { PermissionStatus as AppPermissionStatus } from './types';
 const ANDROID_MIC_GRANTED_KEY = 'openless.androidMicrophoneGranted';
 
 export async function checkAndroidMicrophoneAccess(): Promise<AppPermissionStatus> {
+  if (localStorage.getItem(ANDROID_MIC_GRANTED_KEY) === '1') {
+    return 'granted';
+  }
+
   try {
     const permissions = navigator.permissions;
     if (permissions?.query) {
@@ -17,7 +21,7 @@ export async function checkAndroidMicrophoneAccess(): Promise<AppPermissionStatu
     // Android WebView versions differ on navigator.permissions support.
   }
 
-  return localStorage.getItem(ANDROID_MIC_GRANTED_KEY) === '1' ? 'granted' : 'notDetermined';
+  return 'notDetermined';
 }
 
 export async function requestAndroidMicrophoneAccess(): Promise<AppPermissionStatus> {
