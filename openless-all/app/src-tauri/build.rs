@@ -12,12 +12,9 @@ fn main() {
     tauri_build::build();
 }
 
-/// cpal → oboe → oboe-sys 会编译 C++；最终 cdylib 需显式静态链入 NDK libc++。
+/// cpal → oboe → oboe-sys 会编译 C++；最终 cdylib 需显式链接 NDK libc++。
 fn link_android_cpp_runtime() {
-    // whole-archive：否则链接器可能不从 libc++_static.a 拉取 __cxa_pure_virtual 等符号。
-    println!("cargo:rustc-link-arg=-Wl,--whole-archive");
-    println!("cargo:rustc-link-lib=static=c++_static");
-    println!("cargo:rustc-link-arg=-Wl,--no-whole-archive");
+    println!("cargo:rustc-link-lib=c++_static");
 }
 
 #[cfg(target_os = "windows")]
