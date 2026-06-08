@@ -2,7 +2,7 @@
 
 use serde::Serialize;
 
-use crate::types::{AndroidOverlayPermissionState, AndroidOverlayStatus};
+use crate::types::AndroidOverlayStatus;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -19,6 +19,8 @@ pub fn get_android_overlay_status() -> AndroidOverlayStatus {
 
     #[cfg(not(target_os = "android"))]
     {
+        use crate::types::AndroidOverlayPermissionState;
+
         AndroidOverlayStatus {
             permission: AndroidOverlayPermissionState::NotAndroid,
             overlay_visible: false,

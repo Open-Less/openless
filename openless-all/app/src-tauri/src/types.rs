@@ -2214,7 +2214,7 @@ impl HotkeyCapability {
             };
         }
 
-        #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+        #[cfg(all(not(target_os = "macos"), not(target_os = "windows"), not(mobile)))]
         {
             Self {
                 adapter: HotkeyAdapterKind::Fcitx5,

@@ -5,7 +5,7 @@
 
 use serde::Serialize;
 
-use crate::types::{AndroidImeState, AndroidImeStatus};
+use crate::types::AndroidImeStatus;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -22,6 +22,8 @@ pub fn get_android_ime_status() -> AndroidImeStatus {
 
     #[cfg(not(target_os = "android"))]
     {
+        use crate::types::AndroidImeState;
+
         AndroidImeStatus {
             state: AndroidImeState::NotAndroid,
             enabled: false,

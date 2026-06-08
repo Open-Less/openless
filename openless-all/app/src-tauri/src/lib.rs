@@ -276,6 +276,7 @@ macro_rules! app_invoke_handler_desktop {
 }
 
 /// Android/iOS: only commands usable without desktop hotkeys, tray, updater, or local ASR.
+#[macro_export]
 macro_rules! app_invoke_handler_mobile {
     () => {
         tauri::generate_handler![
@@ -1125,6 +1126,7 @@ pub(crate) fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
     activate_window_mode(app);
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.show();
+        #[cfg(not(mobile))]
         let _ = w.unminimize();
         let _ = w.set_focus();
     }

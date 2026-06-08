@@ -5,14 +5,14 @@
 //! - macOS：用 CoreGraphics CGEvent 直接 post Cmd+V。
 //! - Windows / Linux：用 enigo 按 `PasteShortcut` 模拟。
 
-#[cfg(all(not(target_os = "macos"), not(target_os = "android")))]
+#[cfg(not(any(target_os = "macos", target_os = "android", target_os = "ios")))]
 use std::sync::atomic::{AtomicU64, Ordering};
-#[cfg(all(not(target_os = "macos"), not(target_os = "android")))]
+#[cfg(not(any(target_os = "macos", target_os = "android", target_os = "ios")))]
 use std::time::Duration;
 
-#[cfg(all(not(target_os = "macos"), not(target_os = "android")))]
+#[cfg(not(any(target_os = "macos", target_os = "android", target_os = "ios")))]
 use once_cell::sync::Lazy;
-#[cfg(all(not(target_os = "macos"), not(target_os = "android")))]
+#[cfg(not(any(target_os = "macos", target_os = "android", target_os = "ios")))]
 use parking_lot::Mutex;
 
 use crate::types::{InsertStatus, PasteShortcut};
@@ -20,7 +20,7 @@ use crate::types::{InsertStatus, PasteShortcut};
 #[cfg(target_os = "windows")]
 const CLIPBOARD_RESTORE_DELAY: Duration = Duration::from_millis(750);
 
-#[cfg(all(not(target_os = "macos"), not(target_os = "android")))]
+#[cfg(not(any(target_os = "macos", target_os = "android", target_os = "ios")))]
 const CLIPBOARD_RESTORE_DELAY: Duration = Duration::from_millis(750);
 
 pub struct TextInserter;
@@ -63,7 +63,7 @@ impl TextInserter {
         insert_with_clipboard_restore(text, restore_clipboard_after_paste, paste_shortcut)
     }
 
-    #[cfg(all(not(target_os = "macos"), not(target_os = "android")))]
+    #[cfg(not(any(target_os = "macos", target_os = "android", target_os = "ios")))]
     pub fn insert_via_clipboard_fallback(
         &self,
         text: &str,
@@ -183,24 +183,24 @@ impl Default for TextInserter {
     }
 }
 
-#[cfg(all(not(target_os = "macos"), not(target_os = "android")))]
+#[cfg(not(any(target_os = "macos", target_os = "android", target_os = "ios")))]
 #[derive(Debug)]
 struct ClipboardRestorePlan {
     inserted_text: String,
     previous_text: Option<String>,
 }
 
-#[cfg(all(not(target_os = "macos"), not(target_os = "android")))]
+#[cfg(not(any(target_os = "macos", target_os = "android", target_os = "ios")))]
 #[derive(Debug, Clone)]
 struct PendingClipboardRestore {
     latest_restore_id: u64,
     original_text: Option<String>,
 }
 
-#[cfg(all(not(target_os = "macos"), not(target_os = "android")))]
+#[cfg(not(any(target_os = "macos", target_os = "android", target_os = "ios")))]
 static NEXT_CLIPBOARD_RESTORE_ID: AtomicU64 = AtomicU64::new(1);
 
-#[cfg(all(not(target_os = "macos"), not(target_os = "android")))]
+#[cfg(not(any(target_os = "macos", target_os = "android", target_os = "ios")))]
 static PENDING_CLIPBOARD_RESTORE: Lazy<Mutex<Option<PendingClipboardRestore>>> =
     Lazy::new(|| Mutex::new(None));
 
@@ -226,7 +226,7 @@ fn copy_to_clipboard(_text: &str) -> bool {
     false
 }
 
-#[cfg(all(not(target_os = "macos"), not(target_os = "android")))]
+#[cfg(not(any(target_os = "macos", target_os = "android", target_os = "ios")))]
 fn copy_to_clipboard_with_restore_plan(text: &str) -> Result<ClipboardRestorePlan, String> {
     let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
     let previous_text = match clipboard.get_text() {
@@ -248,7 +248,7 @@ fn copy_to_clipboard_with_restore_plan(text: &str) -> Result<ClipboardRestorePla
     })
 }
 
-#[cfg(all(not(target_os = "macos"), not(target_os = "android")))]
+#[cfg(not(any(target_os = "macos", target_os = "android", target_os = "ios")))]
 fn insert_with_clipboard_restore(
     text: &str,
     restore_clipboard_after_paste: bool,
@@ -273,7 +273,7 @@ fn insert_with_clipboard_restore(
     insertion_success_status()
 }
 
-#[cfg(all(not(target_os = "macos"), not(target_os = "android")))]
+#[cfg(not(any(target_os = "macos", target_os = "android", target_os = "ios")))]
 fn schedule_clipboard_restore(plan: ClipboardRestorePlan) {
     let (restore_id, original_text) =
         remember_pending_clipboard_restore(plan.previous_text.clone());
@@ -282,7 +282,7 @@ fn schedule_clipboard_restore(plan: ClipboardRestorePlan) {
     });
 }
 
-#[cfg(all(not(target_os = "macos"), not(target_os = "android")))]
+#[cfg(not(any(target_os = "macos", target_os = "android", target_os = "ios")))]
 fn remember_pending_clipboard_restore(previous_text: Option<String>) -> (u64, Option<String>) {
     let restore_id = NEXT_CLIPBOARD_RESTORE_ID.fetch_add(1, Ordering::SeqCst);
     let original_text = {
@@ -300,7 +300,7 @@ fn remember_pending_clipboard_restore(previous_text: Option<String>) -> (u64, Op
     (restore_id, original_text)
 }
 
-#[cfg(all(not(target_os = "macos"), not(target_os = "android")))]
+#[cfg(not(any(target_os = "macos", target_os = "android", target_os = "ios")))]
 fn restore_clipboard_after_delay(
     plan: ClipboardRestorePlan,
     original_text: Option<String>,
@@ -351,7 +351,7 @@ fn restore_clipboard_after_delay(
     clear_pending_clipboard_restore(restore_id);
 }
 
-#[cfg(all(not(target_os = "macos"), not(target_os = "android")))]
+#[cfg(not(any(target_os = "macos", target_os = "android", target_os = "ios")))]
 fn is_latest_clipboard_restore(restore_id: u64) -> bool {
     matches!(
         PENDING_CLIPBOARD_RESTORE.lock().as_ref(),
@@ -359,7 +359,7 @@ fn is_latest_clipboard_restore(restore_id: u64) -> bool {
     )
 }
 
-#[cfg(all(not(target_os = "macos"), not(target_os = "android")))]
+#[cfg(not(any(target_os = "macos", target_os = "android", target_os = "ios")))]
 fn clear_pending_clipboard_restore(restore_id: u64) {
     let mut pending = PENDING_CLIPBOARD_RESTORE.lock();
     if matches!(pending.as_ref(), Some(batch) if batch.latest_restore_id == restore_id) {
@@ -367,7 +367,7 @@ fn clear_pending_clipboard_restore(restore_id: u64) {
     }
 }
 
-#[cfg(all(not(target_os = "macos"), not(target_os = "android")))]
+#[cfg(not(any(target_os = "macos", target_os = "android", target_os = "ios")))]
 fn should_restore_clipboard(current_text: Option<&str>, inserted_text: &str) -> bool {
     matches!(current_text, Some(current) if current == inserted_text)
 }
@@ -384,7 +384,7 @@ fn simulate_paste() -> Result<(), String> {
 }
 
 /// 把 `PasteShortcut` 拆成 `(modifiers, primary)`，顺序决定按下/释放顺序。
-#[cfg(all(not(target_os = "macos"), not(target_os = "android")))]
+#[cfg(not(any(target_os = "macos", target_os = "android", target_os = "ios")))]
 fn paste_keys(shortcut: PasteShortcut) -> (Vec<enigo::Key>, enigo::Key) {
     use enigo::Key;
     match shortcut {
@@ -394,7 +394,7 @@ fn paste_keys(shortcut: PasteShortcut) -> (Vec<enigo::Key>, enigo::Key) {
     }
 }
 
-#[cfg(all(not(target_os = "macos"), not(target_os = "android")))]
+#[cfg(not(any(target_os = "macos", target_os = "android", target_os = "ios")))]
 fn simulate_paste(shortcut: PasteShortcut) -> Result<(), String> {
     use enigo::{Direction, Enigo, Keyboard, Settings};
     let (modifiers, primary) = paste_keys(shortcut);
@@ -438,7 +438,7 @@ fn insertion_success_status() -> InsertStatus {
     InsertStatus::Inserted
 }
 
-#[cfg(all(not(target_os = "macos"), not(target_os = "android")))]
+#[cfg(not(any(target_os = "macos", target_os = "android", target_os = "ios")))]
 fn insertion_success_status() -> InsertStatus {
     InsertStatus::PasteSent
 }
@@ -588,7 +588,7 @@ mod tests {
     use std::time::Duration;
 
     #[test]
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "android", target_os = "ios")))]
     fn restore_only_when_clipboard_still_holds_inserted_text() {
         assert!(should_restore_clipboard(
             Some("dictated text"),
@@ -603,7 +603,7 @@ mod tests {
 
     /// 配置的快捷键必须真实映射到对应按键。只比较 modifier 数 + 主键，规避 enigo 内部 PartialEq。
     #[test]
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "android", target_os = "ios")))]
     fn paste_keys_match_configured_shortcut() {
         use enigo::Key;
 
@@ -632,7 +632,7 @@ mod tests {
             inserter.insert("", true, PasteShortcut::CtrlV),
             InsertStatus::CopiedFallback
         );
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "android", target_os = "ios")))]
         {
             assert_eq!(
                 inserter.insert_via_clipboard_fallback("", true, PasteShortcut::CtrlV),
@@ -718,7 +718,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "android", target_os = "ios")))]
     fn pending_clipboard_restore_keeps_first_original_until_latest_restore() {
         *PENDING_CLIPBOARD_RESTORE.lock() = None;
 
@@ -740,7 +740,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "android", target_os = "ios")))]
     fn clipboard_restore_skips_when_clipboard_no_longer_matches_inserted_text() {
         assert!(should_restore_clipboard(
             Some("dictated text"),

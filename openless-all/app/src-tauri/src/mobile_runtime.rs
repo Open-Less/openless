@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tauri::{AppHandle, Manager, RunEvent};
 
 use crate::coordinator::Coordinator;
-use crate::commands::{self, MicrophoneMonitorState};
+use crate::commands::MicrophoneMonitorState;
 
 pub fn run() {
     let coordinator = Arc::new(Coordinator::new());
