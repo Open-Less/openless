@@ -8,6 +8,9 @@ import android.content.Intent
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
+import android.content.pm.PackageManager
+import android.content.pm.ServiceInfo
+import android.Manifest
 import android.os.Build
 import android.os.IBinder
 import android.view.Gravity
@@ -46,13 +49,24 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         super.onCreate()
         instance = this
         OpenLessOverlayBridge.listener = this
-        startForeground(NOTIFICATION_ID, buildNotification())
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_SHOW -> showOverlay()
-            ACTION_HIDE -> hideOverlay()
+            ACTION_SHOW -> {
+                ensureForeground()
+                showOverlay()
+            }
+            ACTION_HIDE -> {
+                hideOverlay()
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                } else {
+                    @Suppress("DEPRECATION")
+                    stopForeground(true)
+                }
+                stopSelf()
+            }
             ACTION_TOGGLE_EXPAND -> toggleExpanded()
         }
         return START_STICKY
@@ -73,6 +87,7 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         when (state) {
             "recording" -> {
                 recording = true
+                promoteRecordingForeground()
                 statusView.text = "录音中…"
                 recordButton.text = "■"
             }
@@ -250,7 +265,36 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         }
     }
 
-    private fun buildNotification(): Notification {
+    private fun ensureForeground() {
+        val notification = buildNotification("悬浮窗运行中")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(
+                NOTIFICATION_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_NONE,
+            )
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
+    }
+
+    private fun promoteRecordingForeground() {
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            return
+        }
+        val notification = buildNotification("录音中")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(
+                NOTIFICATION_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE,
+            )
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
+    }
+
+    private fun buildNotification(contentText: String): Notification {
         val channelId = "openless_overlay"
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val nm = getSystemService(NotificationManager::class.java)
@@ -260,7 +304,7 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         }
         return Notification.Builder(this, channelId)
             .setContentTitle("OpenLess")
-            .setContentText("悬浮窗运行中")
+            .setContentText(contentText)
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .build()
     }
