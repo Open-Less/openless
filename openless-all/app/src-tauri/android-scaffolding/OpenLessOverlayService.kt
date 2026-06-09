@@ -366,6 +366,9 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
     }
 
     private fun isKeyboardTriggerMode(): Boolean {
+        OpenLessAndroidPreferences.overlayTriggerMode(this)?.let { mode ->
+            return mode == "keyboard"
+        }
         return try {
             OpenLessNative.nativeGetOverlayTriggerMode() == "keyboard"
         } catch (error: Throwable) {

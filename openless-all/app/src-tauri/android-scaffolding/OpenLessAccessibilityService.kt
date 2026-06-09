@@ -70,9 +70,24 @@ class OpenLessAccessibilityService : AccessibilityService() {
     }
 
     private fun shouldTrackKeyboard(): Boolean {
+        val localMode = OpenLessAndroidPreferences.overlayTriggerMode(this)
+        if (localMode == "keyboard") {
+            return true
+        }
+        if (localMode == "always" || localMode == "background") {
+            return isOverlayVisible()
+        }
         return try {
             OpenLessNative.nativeGetOverlayTriggerMode() == "keyboard" ||
                 OpenLessNative.nativeIsOverlayVisible()
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    private fun isOverlayVisible(): Boolean {
+        return try {
+            OpenLessNative.nativeIsOverlayVisible()
         } catch (_: Throwable) {
             false
         }

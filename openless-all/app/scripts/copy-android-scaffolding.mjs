@@ -12,6 +12,7 @@ const resXmlDest = join(genRoot, 'res/xml');
 
 const KOTLIN_FILES = [
   'OpenLessNative.kt',
+  'OpenLessAndroidPreferences.kt',
   'OpenLessApplication.kt',
   'OpenLessOverlayService.kt',
   'OpenLessOverlayBridge.kt',
