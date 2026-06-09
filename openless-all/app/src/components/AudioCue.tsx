@@ -1,9 +1,9 @@
 // 录音提示音：监听 capsule:state 事件，在"开始录音"边沿播放合成提示音。
 // 独立组件，不依赖胶囊窗口显示——Linux 上胶囊隐藏也能正常工作。
-// 全平台通用，在 FloatingShellBody 中渲染。
+// Android Web Audio 输出会触发部分设备的录音输入路由切换，移动端禁用。
 
 import { useEffect, useRef } from 'react';
-import { isTauri } from '../lib/ipc';
+import { isAndroid, isTauri } from '../lib/ipc';
 import { playRecordStartCue, primeAudioCue, stopAudioCue } from '../lib/audioCue';
 import type { CapsuleState, UserPreferences } from '../lib/types';
 
@@ -18,10 +18,11 @@ interface CapsulePayload {
 export function AudioCueListener() {
   const audioCueEnabledRef = useRef<boolean>(true);
   const prevStateRef = useRef<CapsuleState>('idle' as CapsuleState);
+  const audioCueRuntimeEnabled = !isAndroid();
 
   // 读取设置（默认开启）
   useEffect(() => {
-    if (!isTauri) return;
+    if (!isTauri || !audioCueRuntimeEnabled) return;
     let cancelled = false;
     (async () => {
       try {
@@ -33,11 +34,11 @@ export function AudioCueListener() {
       }
     })();
     return () => { cancelled = true; };
-  }, []);
+  }, [audioCueRuntimeEnabled]);
 
   // 监听设置变更
   useEffect(() => {
-    if (!isTauri) return;
+    if (!isTauri || !audioCueRuntimeEnabled) return;
     let unlisten: (() => void) | undefined;
     let cancelled = false;
     (async () => {
@@ -48,17 +49,17 @@ export function AudioCueListener() {
       }).then(fn => { if (!cancelled) unlisten = fn; }).catch(() => {});
     })();
     return () => { cancelled = true; unlisten?.(); };
-  }, []);
+  }, [audioCueRuntimeEnabled]);
 
   // 预热 AudioContext
   useEffect(() => {
-    if (!isTauri) return;
+    if (!isTauri || !audioCueRuntimeEnabled) return;
     primeAudioCue();
-  }, []);
+  }, [audioCueRuntimeEnabled]);
 
   // 监听 capsule 状态边沿
   useEffect(() => {
-    if (!isTauri) return;
+    if (!isTauri || !audioCueRuntimeEnabled) return;
     let unlisten: (() => void) | undefined;
     let cancelled = false;
     (async () => {
@@ -75,7 +76,7 @@ export function AudioCueListener() {
       }).then(fn => { if (!cancelled) unlisten = fn; }).catch(() => {});
     })();
     return () => { cancelled = true; unlisten?.(); };
-  }, []);
+  }, [audioCueRuntimeEnabled]);
 
   return null;
 }
