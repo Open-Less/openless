@@ -271,9 +271,9 @@ pub mod android {
         Ok(true)
     }
 
-    pub fn notify_overlay_bridge(
-        env: &mut JNIEnv,
-        context: &JObject,
+    pub fn notify_overlay_bridge<'local>(
+        env: &mut JNIEnv<'local>,
+        context: &JObject<'local>,
         state: &str,
         message: Option<&str>,
     ) -> Result<(), String> {
@@ -292,9 +292,9 @@ pub mod android {
         )
     }
 
-    pub fn show_overlay_toast(
-        env: &mut JNIEnv,
-        context: &JObject,
+    pub fn show_overlay_toast<'local>(
+        env: &mut JNIEnv<'local>,
+        context: &JObject<'local>,
         message: &str,
     ) -> Result<(), String> {
         let message_obj = jobject_str(env, message)?;
