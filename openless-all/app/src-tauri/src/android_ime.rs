@@ -1,7 +1,4 @@
 //! Android IME integration — status queries and text commit path.
-//!
-//! JNI wiring lands after `tauri android init`; until then these functions return
-//! honest stub states so the frontend can gate cross-app input UI.
 
 use serde::Serialize;
 
@@ -33,6 +30,20 @@ pub fn get_android_ime_status() -> AndroidImeStatus {
     }
 }
 
+pub fn request_android_ime_settings() -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        crate::android_jni::android::with_android_env(|mut ctx| {
+            crate::android_jni::android::launch_input_method_settings(&mut ctx.env, &ctx.context)
+        })
+    }
+
+    #[cfg(not(target_os = "android"))]
+    {
+        Err("Android IME settings are only available on Android".to_string())
+    }
+}
+
 /// Commit recognized text into the active input connection via OpenLessImeService.
 pub fn commit_text(text: &str) -> AndroidImeCommitResult {
     #[cfg(target_os = "android")]
@@ -56,12 +67,36 @@ mod android_impl {
     use crate::types::{AndroidImeState, AndroidImeStatus as Status};
 
     pub fn get_android_ime_status() -> AndroidImeStatus {
-        // TODO: JNI → check InputMethodManager if OpenLessImeService is enabled/selected.
-        Status {
-            state: AndroidImeState::NotEnabled,
-            enabled: false,
-            selected: false,
-            message: "OpenLess 输入法尚未启用（Kotlin/JNI 接线后更新状态）".to_string(),
+        match crate::android_jni::android::with_android_env(|mut ctx| {
+            crate::android_jni::android::ime_status(&mut ctx.env, &ctx.context)
+        }) {
+            Ok((enabled, selected)) => {
+                let state = if selected {
+                    AndroidImeState::Enabled
+                } else if enabled {
+                    AndroidImeState::NotEnabled
+                } else {
+                    AndroidImeState::NotEnabled
+                };
+                Status {
+                    state,
+                    enabled,
+                    selected,
+                    message: if selected {
+                        "OpenLess 输入法已选中".to_string()
+                    } else if enabled {
+                        "OpenLess 输入法已启用，但未选中".to_string()
+                    } else {
+                        "请在系统设置中启用 OpenLess 输入法".to_string()
+                    },
+                }
+            }
+            Err(error) => Status {
+                state: AndroidImeState::NotEnabled,
+                enabled: false,
+                selected: false,
+                message: error,
+            },
         }
     }
 
@@ -72,15 +107,21 @@ mod android_impl {
                 message: "empty text".to_string(),
             };
         }
-        // TODO: JNI → OpenLessImeService.commitText(text)
-        log::info!(
-            "[android-ime] commit stub (chars={}): JNI not wired yet",
-            text.chars().count()
-        );
-        AndroidImeCommitResult {
-            committed: false,
-            message: "IME service not connected — enable OpenLess keyboard in system settings"
-                .to_string(),
+        match crate::android_jni::android::with_android_env(|mut ctx| {
+            crate::android_jni::android::ime_commit_text(&mut ctx.env, text)
+        }) {
+            Ok(true) => AndroidImeCommitResult {
+                committed: true,
+                message: "committed via OpenLess IME".to_string(),
+            },
+            Ok(false) => AndroidImeCommitResult {
+                committed: false,
+                message: "IME service not connected — enable/select OpenLess keyboard".to_string(),
+            },
+            Err(error) => AndroidImeCommitResult {
+                committed: false,
+                message: error,
+            },
         }
     }
 }

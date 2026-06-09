@@ -69,6 +69,13 @@ mod unicode_keystroke;
 mod unicode_keystroke;
 mod android_ime;
 mod android_overlay;
+mod android_accessibility;
+#[cfg(target_os = "android")]
+mod android_insert;
+#[cfg(target_os = "android")]
+mod android_jni;
+#[cfg(target_os = "android")]
+mod android_native_bridge;
 #[cfg(mobile)]
 mod mobile_runtime;
 #[cfg(target_os = "windows")]
@@ -138,6 +145,11 @@ macro_rules! app_invoke_handler_desktop {
             commands::get_android_ime_status,
             commands::get_android_overlay_status,
             commands::request_android_overlay_permission,
+            commands::show_android_overlay,
+            commands::hide_android_overlay,
+            commands::get_android_accessibility_status,
+            commands::request_android_accessibility_permission,
+            commands::request_android_ime_settings,
             commands::open_external_url,
             commands::list_microphone_devices,
             commands::start_microphone_level_monitor,
@@ -290,6 +302,11 @@ macro_rules! app_invoke_handler_mobile {
             $crate::commands::get_android_ime_status,
             $crate::commands::get_android_overlay_status,
             $crate::commands::request_android_overlay_permission,
+            $crate::commands::show_android_overlay,
+            $crate::commands::hide_android_overlay,
+            $crate::commands::get_android_accessibility_status,
+            $crate::commands::request_android_accessibility_permission,
+            $crate::commands::request_android_ime_settings,
             $crate::commands::open_external_url,
             $crate::commands::list_microphone_devices,
             $crate::commands::start_microphone_level_monitor,

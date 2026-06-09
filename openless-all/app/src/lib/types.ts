@@ -338,6 +338,32 @@ export interface UserPreferences {
   marketplaceBaseUrl: string;
   /** Marketplace dev-mode 模拟登录用户名（GitHub login 风格）。生产换 OAuth token 后此字段废弃。 */
   marketplaceDevLogin: string;
+  /** Android: cross-app dictation insert strategy. */
+  androidInsertStrategy: AndroidInsertStrategy;
+  /** Android: floating overlay visibility trigger mode. */
+  androidOverlayTrigger: AndroidOverlayTrigger;
+}
+
+export type AndroidInsertStrategy = 'auto' | 'ime' | 'accessibility' | 'clipboard';
+export type AndroidOverlayTrigger = 'background' | 'keyboard' | 'always';
+
+export interface AndroidImeStatus {
+  state: 'enabled' | 'notEnabled' | 'notAndroid';
+  enabled: boolean;
+  selected: boolean;
+  message: string;
+}
+
+export interface AndroidOverlayStatus {
+  permission: 'granted' | 'notGranted' | 'notAndroid';
+  overlayVisible: boolean;
+  message: string;
+}
+
+export interface AndroidAccessibilityStatus {
+  state: 'enabled' | 'notEnabled' | 'notAndroid';
+  enabled: boolean;
+  message: string;
 }
 
 export interface MarketplaceListItem {

@@ -221,9 +221,24 @@ fn copy_to_clipboard(text: &str) -> bool {
 }
 
 #[cfg(any(target_os = "android", target_os = "ios"))]
-fn copy_to_clipboard(_text: &str) -> bool {
-    log::warn!("[insertion] mobile clipboard fallback unavailable");
-    false
+fn copy_to_clipboard(text: &str) -> bool {
+    #[cfg(target_os = "android")]
+    {
+        return crate::android_jni::android::with_android_env(|mut ctx| {
+            crate::android_jni::android::copy_to_clipboard(&mut ctx.env, &ctx.context, text)
+        })
+        .unwrap_or_else(|error| {
+            log::error!("[insertion] android clipboard failed: {error}");
+            false
+        });
+    }
+
+    #[cfg(target_os = "ios")]
+    {
+        let _ = text;
+        log::warn!("[insertion] mobile clipboard fallback unavailable");
+        false
+    }
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "android", target_os = "ios")))]

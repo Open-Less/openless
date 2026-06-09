@@ -749,6 +749,12 @@ pub struct UserPreferences {
     /// 上传 / 点赞需要带这个 header；空时上传被后端 401。
     #[serde(default)]
     pub marketplace_dev_login: String,
+    /// Android: text insertion strategy for cross-app dictation results.
+    #[serde(default = "default_android_insert_strategy")]
+    pub android_insert_strategy: AndroidInsertStrategy,
+    /// Android: when to show the floating overlay control.
+    #[serde(default = "default_android_overlay_trigger")]
+    pub android_overlay_trigger: AndroidOverlayTrigger,
 }
 
 fn default_local_asr_model() -> String {
@@ -898,6 +904,10 @@ struct UserPreferencesWire {
     marketplace_base_url: String,
     #[serde(default)]
     marketplace_dev_login: String,
+    #[serde(default = "default_android_insert_strategy")]
+    android_insert_strategy: AndroidInsertStrategy,
+    #[serde(default = "default_android_overlay_trigger")]
+    android_overlay_trigger: AndroidOverlayTrigger,
 }
 
 impl Default for UserPreferencesWire {
@@ -965,6 +975,8 @@ impl Default for UserPreferencesWire {
             audio_recording_max_entries: prefs.audio_recording_max_entries,
             marketplace_base_url: prefs.marketplace_base_url,
             marketplace_dev_login: prefs.marketplace_dev_login,
+            android_insert_strategy: prefs.android_insert_strategy,
+            android_overlay_trigger: prefs.android_overlay_trigger,
         }
     }
 }
@@ -1061,6 +1073,8 @@ impl<'de> Deserialize<'de> for UserPreferences {
             audio_recording_max_entries: wire.audio_recording_max_entries,
             marketplace_base_url: wire.marketplace_base_url,
             marketplace_dev_login: wire.marketplace_dev_login,
+            android_insert_strategy: wire.android_insert_strategy,
+            android_overlay_trigger: wire.android_overlay_trigger,
         })
     }
 }
@@ -1781,6 +1795,8 @@ impl Default for UserPreferences {
             audio_recording_max_entries: None,
             marketplace_base_url: String::new(),
             marketplace_dev_login: String::new(),
+            android_insert_strategy: default_android_insert_strategy(),
+            android_overlay_trigger: default_android_overlay_trigger(),
         }
     }
 }
@@ -2274,6 +2290,47 @@ pub struct WindowsImeStatus {
     pub using_tsf_backend: bool,
     pub message: String,
     pub dll_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum AndroidInsertStrategy {
+    Auto,
+    Ime,
+    Accessibility,
+    Clipboard,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum AndroidOverlayTrigger {
+    Background,
+    Keyboard,
+    Always,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum AndroidAccessibilityState {
+    Enabled,
+    NotEnabled,
+    NotAndroid,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AndroidAccessibilityStatus {
+    pub state: AndroidAccessibilityState,
+    pub enabled: bool,
+    pub message: String,
+}
+
+fn default_android_insert_strategy() -> AndroidInsertStrategy {
+    AndroidInsertStrategy::Auto
+}
+
+fn default_android_overlay_trigger() -> AndroidOverlayTrigger {
+    AndroidOverlayTrigger::Background
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

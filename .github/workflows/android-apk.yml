@@ -4,8 +4,7 @@ name: Android APK (debug)
 #   - push v*-tauri tag → build debug APK, upload artifact + attach to GitHub Release
 #   - workflow_dispatch → build debug APK, upload artifact only (no release)
 #
-# v1 scope: in-app dictation APK with microphone permissions merged from android-scaffolding.
-# IME v2 / overlay v3 manifest snippets are intentionally out of scope.
+# Scope: in-app dictation + overlay recording (v2 IME + v3 overlay + accessibility).
 
 on:
   push:
@@ -88,9 +87,17 @@ jobs:
         working-directory: openless-all/app
         run: npm run tauri -- android init --ci
 
+      - name: Copy Android scaffolding (Kotlin + XML)
+        working-directory: openless-all/app
+        run: node scripts/copy-android-scaffolding.mjs
+
       - name: Merge APK v1 manifest permissions
         working-directory: openless-all/app
         run: node scripts/merge-android-v1-manifest.mjs
+
+      - name: Merge overlay / IME manifest entries
+        working-directory: openless-all/app
+        run: node scripts/merge-android-overlay-manifest.mjs
 
       - name: Prime Gradle wrapper
         working-directory: openless-all/app

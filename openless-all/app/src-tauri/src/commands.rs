@@ -259,6 +259,8 @@ fn set_settings_common(
     // 用户改键会让浮窗里的 "{recordHotkey}" 文案一直停留在旧值。
     persist_settings(coord, prefs.clone())?;
     let _ = app.emit("prefs:changed", &prefs);
+    #[cfg(target_os = "android")]
+    coord.apply_android_overlay_trigger();
     Ok(prefs)
 }
 
@@ -679,6 +681,32 @@ pub fn get_android_overlay_status() -> AndroidOverlayStatus {
 pub fn request_android_overlay_permission(
 ) -> crate::android_overlay::AndroidOverlayPermissionResult {
     crate::android_overlay::request_android_overlay_permission()
+}
+
+#[tauri::command]
+pub fn show_android_overlay() -> Result<(), String> {
+    crate::android_overlay::show_android_overlay()
+}
+
+#[tauri::command]
+pub fn hide_android_overlay() -> Result<(), String> {
+    crate::android_overlay::hide_android_overlay()
+}
+
+#[tauri::command]
+pub fn get_android_accessibility_status() -> crate::types::AndroidAccessibilityStatus {
+    crate::android_accessibility::get_android_accessibility_status()
+}
+
+#[tauri::command]
+pub fn request_android_accessibility_permission(
+) -> crate::android_accessibility::AndroidAccessibilityPermissionResult {
+    crate::android_accessibility::request_android_accessibility_permission()
+}
+
+#[tauri::command]
+pub fn request_android_ime_settings() -> Result<(), String> {
+    crate::android_ime::request_android_ime_settings()
 }
 
 #[tauri::command]

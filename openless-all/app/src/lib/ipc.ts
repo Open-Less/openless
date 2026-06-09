@@ -29,6 +29,11 @@ import type {
     UserPreferences,
     VocabPresetStore,
     WindowsImeStatus,
+    AndroidImeStatus,
+    AndroidOverlayStatus,
+    AndroidAccessibilityStatus,
+    AndroidInsertStrategy,
+    AndroidOverlayTrigger,
 } from "./types"
 export type { UpdateChannel, PlatformCapabilities } from "./types"
 import { OL_DATA } from "./mockData"
@@ -60,6 +65,57 @@ async function platformCapabilities(): Promise<PlatformCapabilities> {
 
 export async function getPlatformCapabilities(): Promise<PlatformCapabilities> {
     return platformCapabilities()
+}
+
+export function getAndroidImeStatus(): Promise<AndroidImeStatus> {
+    return invokeOrMock("get_android_ime_status", undefined, () => ({
+        state: "notAndroid",
+        enabled: false,
+        selected: false,
+        message: "Android IME is only available on Android",
+    }))
+}
+
+export function getAndroidOverlayStatus(): Promise<AndroidOverlayStatus> {
+    return invokeOrMock("get_android_overlay_status", undefined, () => ({
+        permission: "notAndroid",
+        overlayVisible: false,
+        message: "Android overlay is only available on Android",
+    }))
+}
+
+export function requestAndroidOverlayPermission(): Promise<{ launched: boolean; message: string }> {
+    return invokeOrMock("request_android_overlay_permission", undefined, () => ({
+        launched: false,
+        message: "Mock: overlay permission unavailable in browser preview",
+    }))
+}
+
+export function showAndroidOverlay(): Promise<void> {
+    return invokeOrMock("show_android_overlay", undefined, () => undefined)
+}
+
+export function hideAndroidOverlay(): Promise<void> {
+    return invokeOrMock("hide_android_overlay", undefined, () => undefined)
+}
+
+export function getAndroidAccessibilityStatus(): Promise<AndroidAccessibilityStatus> {
+    return invokeOrMock("get_android_accessibility_status", undefined, () => ({
+        state: "notAndroid",
+        enabled: false,
+        message: "Android accessibility is only available on Android",
+    }))
+}
+
+export function requestAndroidAccessibilityPermission(): Promise<{ launched: boolean; message: string }> {
+    return invokeOrMock("request_android_accessibility_permission", undefined, () => ({
+        launched: false,
+        message: "Mock: accessibility settings unavailable in browser preview",
+    }))
+}
+
+export function requestAndroidImeSettings(): Promise<void> {
+    return invokeOrMock("request_android_ime_settings", undefined, () => undefined)
 }
 
 export { isAndroid, isDesktop, isMobile } from "./platform"
@@ -177,6 +233,8 @@ let mockSettings: UserPreferences = {
     audioRecordingMaxEntries: null,
     marketplaceBaseUrl: "https://apic.openless.top",
     marketplaceDevLogin: "",
+    androidInsertStrategy: "auto",
+    androidOverlayTrigger: "background",
 }
 
 const mockFullStylePrompts: StyleSystemPrompts = {

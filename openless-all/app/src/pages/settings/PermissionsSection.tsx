@@ -8,19 +8,33 @@ import {
   checkAccessibilityPermission,
   checkMicrophonePermission,
   checkNetwork,
+  getAndroidAccessibilityStatus,
+  getAndroidImeStatus,
+  getAndroidOverlayStatus,
   getHotkeyStatus,
+  getSettings,
   getWindowsImeStatus,
   openSystemSettings,
   requestAccessibilityPermission,
+  requestAndroidAccessibilityPermission,
+  requestAndroidImeSettings,
+  requestAndroidOverlayPermission,
   requestMicrophonePermission,
+  setSettings,
 } from '../../lib/ipc';
 import type { NetworkCheckResult } from '../../lib/ipc';
 import { getPlatformCapabilities } from '../../lib/platform';
 import { checkAndroidMicrophoneAccess, requestAndroidMicrophoneAccess } from '../../lib/androidMicrophonePermission';
 import type {
+  AndroidAccessibilityStatus,
+  AndroidImeStatus,
+  AndroidInsertStrategy,
+  AndroidOverlayStatus,
+  AndroidOverlayTrigger,
   HotkeyStatus,
   PermissionStatus,
   PlatformCapabilities,
+  UserPreferences,
   WindowsImeStatus,
 } from '../../lib/types';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
@@ -35,11 +49,32 @@ export function PermissionsSection() {
   const [windowsIme, setWindowsIme] = useState<WindowsImeStatus | null>(null);
   const [network, setNetwork] = useState<NetworkCheckResult | null>(null);
   const [platformCaps, setPlatformCaps] = useState<PlatformCapabilities | null>(null);
+  const [androidIme, setAndroidIme] = useState<AndroidImeStatus | null>(null);
+  const [androidOverlay, setAndroidOverlay] = useState<AndroidOverlayStatus | null>(null);
+  const [androidAccessibility, setAndroidAccessibility] = useState<AndroidAccessibilityStatus | null>(null);
+  const [androidPrefs, setAndroidPrefs] = useState<Pick<UserPreferences, 'androidInsertStrategy' | 'androidOverlayTrigger'> | null>(null);
   const { capability } = useHotkeySettings();
 
   useEffect(() => {
     void getPlatformCapabilities().then(setPlatformCaps);
   }, []);
+
+  const refreshAndroid = async () => {
+    if (platformCaps?.platform !== 'android') return;
+    const [ime, overlay, accessibility, settings] = await Promise.all([
+      getAndroidImeStatus(),
+      getAndroidOverlayStatus(),
+      getAndroidAccessibilityStatus(),
+      getSettings(),
+    ]);
+    setAndroidIme(ime);
+    setAndroidOverlay(overlay);
+    setAndroidAccessibility(accessibility);
+    setAndroidPrefs({
+      androidInsertStrategy: settings.androidInsertStrategy,
+      androidOverlayTrigger: settings.androidOverlayTrigger,
+    });
+  };
 
   const refreshPermissions = async () => {
     const [a, m] = await Promise.all([
@@ -75,6 +110,8 @@ export function PermissionsSection() {
     }
     if (platformCaps?.platform !== 'android') {
       refreshWindowsIme();
+    } else {
+      refreshAndroid();
     }
     refreshNetwork();
     const hotkeyId = platformCaps?.supportsDesktopHotkey === true
@@ -90,6 +127,8 @@ export function PermissionsSection() {
       }
       if (platformCaps?.platform !== 'android') {
         refreshWindowsIme();
+      } else {
+        refreshAndroid();
       }
       refreshNetwork();
     };
@@ -121,6 +160,17 @@ export function PermissionsSection() {
       await openSystemSettings('microphone');
     }
     refreshPermissions();
+  };
+
+  const updateAndroidPref = async <K extends 'androidInsertStrategy' | 'androidOverlayTrigger'>(key: K, value: UserPreferences[K]) => {
+    const settings = await getSettings();
+    const next = { ...settings, [key]: value };
+    await setSettings(next);
+    setAndroidPrefs({
+      androidInsertStrategy: next.androidInsertStrategy,
+      androidOverlayTrigger: next.androidOverlayTrigger,
+    });
+    await refreshAndroid();
   };
 
   return (
@@ -166,13 +216,85 @@ export function PermissionsSection() {
       )}
       {platformCaps?.supportsImeInput && platformCaps.platform === 'android' && (
         <SettingRow label={t('settings.permissions.androidImeLabel')}>
-          <Pill tone="default">{t('settings.permissions.androidImePlaceholder')}</Pill>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'flex-end', width: '100%', flexWrap: 'wrap', minWidth: 0 }}>
+            {androidIme?.message && (
+              <span style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', maxWidth: 220, textAlign: 'right' }}>
+                {androidIme.message}
+              </span>
+            )}
+            <AndroidImeStatusPill status={androidIme} />
+            <Btn variant="ghost" size="sm" onClick={() => { void requestAndroidImeSettings().then(refreshAndroid); }}>
+              {t('settings.permissions.openSystem')}
+            </Btn>
+          </div>
         </SettingRow>
       )}
       {platformCaps?.supportsOverlay && platformCaps.platform === 'android' && (
-        <SettingRow label={t('settings.permissions.androidOverlayLabel')}>
-          <Pill tone="default">{t('settings.permissions.androidOverlayPlaceholder')}</Pill>
-        </SettingRow>
+        <>
+          <SettingRow label={t('settings.permissions.androidOverlayLabel')}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'flex-end', width: '100%', flexWrap: 'wrap', minWidth: 0 }}>
+              {androidOverlay?.message && (
+                <span style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', maxWidth: 220, textAlign: 'right' }}>
+                  {androidOverlay.message}
+                </span>
+              )}
+              <AndroidOverlayStatusPill status={androidOverlay} />
+              {androidOverlay?.permission !== 'granted' && (
+                <Btn variant="ghost" size="sm" onClick={() => { void requestAndroidOverlayPermission().then(refreshAndroid); }}>
+                  {t('settings.permissions.grant')}
+                </Btn>
+              )}
+            </div>
+          </SettingRow>
+          <SettingRow label={t('settings.permissions.androidAccessibilityLabel')}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'flex-end', width: '100%', flexWrap: 'wrap', minWidth: 0 }}>
+              {androidAccessibility?.message && (
+                <span style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', maxWidth: 220, textAlign: 'right' }}>
+                  {androidAccessibility.message}
+                </span>
+              )}
+              <AndroidAccessibilityStatusPill status={androidAccessibility} />
+              {!androidAccessibility?.enabled && (
+                <Btn variant="ghost" size="sm" onClick={() => { void requestAndroidAccessibilityPermission().then(refreshAndroid); }}>
+                  {t('settings.permissions.openSystem')}
+                </Btn>
+              )}
+            </div>
+          </SettingRow>
+          <SettingRow label={t('settings.permissions.androidInsertStrategyLabel')}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-end', width: '100%' }}>
+              <select
+                value={androidPrefs?.androidInsertStrategy ?? 'auto'}
+                onChange={(event) => { void updateAndroidPref('androidInsertStrategy', event.target.value as AndroidInsertStrategy); }}
+                style={{ minWidth: 180, maxWidth: '100%' }}
+              >
+                <option value="auto">{t('settings.permissions.androidInsertStrategy.auto')}</option>
+                <option value="ime">{t('settings.permissions.androidInsertStrategy.ime')}</option>
+                <option value="accessibility">{t('settings.permissions.androidInsertStrategy.accessibility')}</option>
+                <option value="clipboard">{t('settings.permissions.androidInsertStrategy.clipboard')}</option>
+              </select>
+              <span style={{ fontSize: 11, color: 'var(--ol-ink-4)', textAlign: 'right' }}>
+                {t(`settings.permissions.androidInsertStrategyHint.${androidPrefs?.androidInsertStrategy ?? 'auto'}`)}
+              </span>
+            </div>
+          </SettingRow>
+          <SettingRow label={t('settings.permissions.androidOverlayTriggerLabel')}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-end', width: '100%' }}>
+              <select
+                value={androidPrefs?.androidOverlayTrigger ?? 'background'}
+                onChange={(event) => { void updateAndroidPref('androidOverlayTrigger', event.target.value as AndroidOverlayTrigger); }}
+                style={{ minWidth: 180, maxWidth: '100%' }}
+              >
+                <option value="background">{t('settings.permissions.androidOverlayTrigger.background')}</option>
+                <option value="keyboard">{t('settings.permissions.androidOverlayTrigger.keyboard')}</option>
+                <option value="always">{t('settings.permissions.androidOverlayTrigger.always')}</option>
+              </select>
+              <span style={{ fontSize: 11, color: 'var(--ol-ink-4)', textAlign: 'right' }}>
+                {t(`settings.permissions.androidOverlayTriggerHint.${androidPrefs?.androidOverlayTrigger ?? 'background'}`)}
+              </span>
+            </div>
+          </SettingRow>
+        </>
       )}
       {windowsIme?.state !== 'notWindows' && platformCaps?.platform !== 'android' && (
         <SettingRow label={t('settings.permissions.windowsImeLabel')}>
@@ -260,4 +382,34 @@ function NetworkStatusPill({ status }: { status: NetworkCheckResult | null }) {
     return <Pill tone="ok"><Icon name="check" size={11} />{t('settings.permissions.networkOk')}</Pill>;
   }
   return <Pill tone="outline">{t('settings.permissions.networkOffline') ?? '不可用'}</Pill>;
+}
+
+function AndroidImeStatusPill({ status }: { status: AndroidImeStatus | null }) {
+  const { t } = useTranslation();
+  if (!status) return <Pill tone="default">{t('settings.permissions.checking')}</Pill>;
+  if (status.selected) {
+    return <Pill tone="ok"><Icon name="check" size={11} />{t('settings.permissions.androidImeSelected')}</Pill>;
+  }
+  if (status.enabled) {
+    return <Pill tone="default">{t('settings.permissions.androidImeEnabled')}</Pill>;
+  }
+  return <Pill tone="outline">{t('settings.permissions.androidImeDisabled')}</Pill>;
+}
+
+function AndroidOverlayStatusPill({ status }: { status: AndroidOverlayStatus | null }) {
+  const { t } = useTranslation();
+  if (!status) return <Pill tone="default">{t('settings.permissions.checking')}</Pill>;
+  if (status.permission === 'granted') {
+    return <Pill tone="ok"><Icon name="check" size={11} />{t('settings.permissions.granted')}</Pill>;
+  }
+  return <Pill tone="outline">{t('settings.permissions.denied')}</Pill>;
+}
+
+function AndroidAccessibilityStatusPill({ status }: { status: AndroidAccessibilityStatus | null }) {
+  const { t } = useTranslation();
+  if (!status) return <Pill tone="default">{t('settings.permissions.checking')}</Pill>;
+  if (status.enabled) {
+    return <Pill tone="ok"><Icon name="check" size={11} />{t('settings.permissions.granted')}</Pill>;
+  }
+  return <Pill tone="outline">{t('settings.permissions.denied')}</Pill>;
 }

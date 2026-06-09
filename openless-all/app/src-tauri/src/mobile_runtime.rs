@@ -25,6 +25,11 @@ pub fn run() {
             }
 
             coordinator.bind_app(app.handle().clone());
+            #[cfg(target_os = "android")]
+            {
+                crate::android_native_bridge::register_android_coordinator(coordinator.clone());
+                coordinator.apply_android_overlay_trigger();
+            }
             Ok(())
         })
         .invoke_handler(crate::app_invoke_handler_mobile!())

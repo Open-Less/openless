@@ -490,6 +490,29 @@ impl Coordinator {
         *self.inner.app.lock() = Some(handle);
     }
 
+    pub fn android_insert_strategy(&self) -> crate::types::AndroidInsertStrategy {
+        self.inner.prefs.get().android_insert_strategy
+    }
+
+    pub fn android_overlay_trigger(&self) -> crate::types::AndroidOverlayTrigger {
+        self.inner.prefs.get().android_overlay_trigger
+    }
+
+    pub fn apply_android_overlay_trigger(&self) {
+        #[cfg(target_os = "android")]
+        {
+            use crate::types::AndroidOverlayTrigger;
+            match self.android_overlay_trigger() {
+                AndroidOverlayTrigger::Always => {
+                    let _ = crate::android_overlay::show_android_overlay();
+                }
+                AndroidOverlayTrigger::Background | AndroidOverlayTrigger::Keyboard => {
+                    let _ = crate::android_overlay::hide_android_overlay();
+                }
+            }
+        }
+    }
+
     /// 让所有 hotkey supervisor loop（dictation / qa / combo / translation /
     /// switch_style / open_app）在下一轮 sleep / poll 后退出。生产场景下进程退出
     /// 一并 reap 所有线程，但 integration test 和未来 RunEvent::Exit 钩子需要
@@ -5674,6 +5697,9 @@ fn emit_capsule(
         translation,
         operating,
     };
+
+    #[cfg(target_os = "android")]
+    crate::android_native_bridge::notify_capsule_state(&payload);
 
     // visible / translation 是「这一帧 capsule:state event 的 payload」内容 ——
     // 必须在 call-site（即音频线程触发 emit_capsule 时）就算定，否则 main thread

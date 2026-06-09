@@ -1,0 +1,171 @@
+#!/usr/bin/env node
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import process from 'node:process';
+import { fileURLToPath } from 'node:url';
+
+const appRoot = fileURLToPath(new URL('..', import.meta.url));
+const scaffoldingRoot = join(appRoot, 'src-tauri/android-scaffolding');
+const genRoot = join(appRoot, 'src-tauri/gen/android/app/src/main');
+const kotlinDest = join(genRoot, 'java/com/openless/app');
+const resXmlDest = join(genRoot, 'res/xml');
+
+const KOTLIN_FILES = [
+  'OpenLessNative.kt',
+  'OpenLessApplication.kt',
+  'OpenLessImeService.kt',
+  'OpenLessOverlayService.kt',
+  'OpenLessOverlayBridge.kt',
+  'OpenLessAccessibilityService.kt',
+  'OverlayPermissionActivity.kt',
+];
+
+const XML_FILES = [
+  ['res/xml/openless_ime_method.xml', 'openless_ime_method.xml'],
+  ['res/xml/openless_accessibility_config.xml', 'openless_accessibility_config.xml'],
+];
+
+const GENERATED_IME_METHOD = `<?xml version="1.0" encoding="utf-8"?>
+<input-method xmlns:android="http://schemas.android.com/apk/res/android"
+    android:settingsActivity="com.openless.app.MainActivity"
+    android:supportsSwitchingToNextInputMethod="true">
+    <subtype
+        android:label="@string/openless_ime_label"
+        android:imeSubtypeLocale="zh_CN"
+        android:imeSubtypeMode="voice" />
+</input-method>
+`;
+
+const GENERATED_ACCESSIBILITY_CONFIG = `<?xml version="1.0" encoding="utf-8"?>
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowStateChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagRetrieveInteractiveWindows"
+    android:canRetrieveWindowContent="true"
+    android:description="@string/openless_accessibility_description"
+    android:notificationTimeout="100"
+    android:settingsActivity="com.openless.app.MainActivity" />
+`;
+
+const GENERATED_STRINGS_SNIPPET = `
+    <string name="openless_ime_label">OpenLess</string>
+    <string name="openless_accessibility_description">OpenLess uses accessibility to detect the keyboard and paste dictation results without switching your current keyboard.</string>
+`;
+
+function printHelp() {
+  console.log(`Usage: node scripts/copy-android-scaffolding.mjs [options]
+
+Copy Kotlin scaffolding and XML resources into gen/android after \`tauri android init\`.
+
+Options:
+  --dry-run   Print planned copies without writing
+  --help      Show this help text
+`);
+}
+
+function parseArgs(argv) {
+  let dryRun = false;
+  for (const arg of argv) {
+    if (arg === '--help' || arg === '-h') {
+      printHelp();
+      process.exit(0);
+    }
+    if (arg === '--dry-run') {
+      dryRun = true;
+      continue;
+    }
+    throw new Error(`Unknown argument: ${arg}`);
+  }
+  return { dryRun };
+}
+
+function ensureDir(path, dryRun) {
+  if (dryRun || existsSync(path)) {
+    return;
+  }
+  mkdirSync(path, { recursive: true });
+}
+
+function mergeStringsXml(dryRun) {
+  const stringsPath = join(genRoot, 'res/values/strings.xml');
+  if (!existsSync(stringsPath)) {
+    const content = `<?xml version="1.0" encoding="utf-8"?>
+<resources>${GENERATED_STRINGS_SNIPPET}
+</resources>
+`;
+    if (dryRun) {
+      console.log(`[dry-run] Would create ${stringsPath}`);
+      return;
+    }
+    ensureDir(dirname(stringsPath), dryRun);
+    writeFileSync(stringsPath, content, 'utf8');
+    console.log(`Created ${stringsPath}`);
+    return;
+  }
+
+  const existing = readFileSync(stringsPath, 'utf8');
+  if (existing.includes('openless_ime_label')) {
+    console.log(`OpenLess strings already present in ${stringsPath}; skipping.`);
+    return;
+  }
+
+  const updated = existing.replace('</resources>', `${GENERATED_STRINGS_SNIPPET}\n</resources>`);
+  if (dryRun) {
+    console.log(`[dry-run] Would merge OpenLess strings into ${stringsPath}`);
+    return;
+  }
+  writeFileSync(stringsPath, updated, 'utf8');
+  console.log(`Merged OpenLess strings into ${stringsPath}`);
+}
+
+function main() {
+  const { dryRun } = parseArgs(process.argv.slice(2));
+
+  if (!existsSync(join(appRoot, 'src-tauri/gen/android'))) {
+    throw new Error(
+      `Generated Android project not found under src-tauri/gen/android.\nRun "npm run tauri -- android init --ci" first.`,
+    );
+  }
+
+  ensureDir(kotlinDest, dryRun);
+  ensureDir(resXmlDest, dryRun);
+
+  for (const file of KOTLIN_FILES) {
+    const src = join(scaffoldingRoot, file);
+    const dest = join(kotlinDest, file);
+    if (!existsSync(src)) {
+      throw new Error(`Missing scaffolding file: ${src}`);
+    }
+    if (dryRun) {
+      console.log(`[dry-run] Would copy ${src} -> ${dest}`);
+      continue;
+    }
+    copyFileSync(src, dest);
+    console.log(`Copied ${file}`);
+  }
+
+  for (const [relSrc, destName] of XML_FILES) {
+    const src = join(scaffoldingRoot, relSrc);
+    const dest = join(resXmlDest, destName);
+    const content = existsSync(src)
+      ? readFileSync(src, 'utf8')
+      : destName === 'openless_ime_method.xml'
+        ? GENERATED_IME_METHOD
+        : GENERATED_ACCESSIBILITY_CONFIG;
+    if (dryRun) {
+      console.log(`[dry-run] Would write ${dest}`);
+      continue;
+    }
+    writeFileSync(dest, content, 'utf8');
+    console.log(`Wrote ${destName}`);
+  }
+
+  mergeStringsXml(dryRun);
+}
+
+try {
+  main();
+} catch (error) {
+  console.error(error instanceof Error ? error.message : error);
+  process.exit(1);
+}

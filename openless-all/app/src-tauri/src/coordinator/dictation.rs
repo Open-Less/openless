@@ -2235,13 +2235,11 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     } else {
         #[cfg(target_os = "android")]
         {
-            let result = crate::android_ime::commit_text(&polished);
-            if result.committed {
-                InsertStatus::Inserted
-            } else {
-                log::warn!("[coord] android IME commit failed: {}", result.message);
-                inner.inserter.copy_fallback(&polished)
-            }
+            crate::android_insert::android_insert_with_strategy(
+                &inner.inserter,
+                &polished,
+                inner.prefs.get().android_insert_strategy,
+            )
         }
         #[cfg(not(target_os = "android"))]
         if focus_ready_for_paste {
