@@ -54,7 +54,6 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_SHOW -> {
-                ensureForeground()
                 showOverlay()
             }
             ACTION_HIDE -> {
@@ -195,6 +194,7 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
                 if (recording) {
                     OpenLessNative.nativeStopDictation()
                 } else {
+                    promoteRecordingForeground()
                     expanded = true
                     panelView.visibility = View.VISIBLE
                     pillView.visibility = View.GONE
@@ -262,19 +262,6 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
             shape = GradientDrawable.RECTANGLE
             cornerRadius = 24f
             setColor(color)
-        }
-    }
-
-    private fun ensureForeground() {
-        val notification = buildNotification("悬浮窗运行中")
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(
-                NOTIFICATION_ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_NONE,
-            )
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
         }
     }
 

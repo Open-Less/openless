@@ -55,8 +55,8 @@ fn try_accessibility(inserter: &TextInserter, text: &str) -> Option<InsertStatus
 fn clipboard_fallback(inserter: &TextInserter, text: &str) -> InsertStatus {
     let status = inserter.copy_fallback(text);
     if matches!(status, InsertStatus::CopiedFallback) {
-        let _ = crate::android_jni::android::with_android_env(|env, _context| {
-            crate::android_jni::android::show_overlay_toast(env, "已复制到剪贴板")
+        let _ = crate::android_jni::android::with_android_env(|env, context| {
+            crate::android_jni::android::show_overlay_toast(env, context, "已复制到剪贴板")
         });
     }
     status

@@ -2,7 +2,7 @@
 
 #[cfg(target_os = "android")]
 pub mod android {
-    use jni::objects::{JObject, JString, JValue};
+    use jni::objects::{JClass, JObject, JString, JValue};
     use jni::JNIEnv;
     use jni::JavaVM;
 
@@ -46,6 +46,47 @@ pub mod android {
         let class = env
             .find_class(class_name)
             .map_err(|error| format!("find class {class_name}: {error}"))?;
+        env.call_static_method(class, method, sig, args)
+            .map_err(|error| format!("call {class_name}.{method}: {error}"))?;
+        Ok(())
+    }
+
+    fn load_context_class<'local>(
+        env: &mut JNIEnv<'local>,
+        context: &JObject<'local>,
+        class_name: &str,
+    ) -> Result<JClass<'local>, String> {
+        let class_loader = env
+            .call_method(
+                context,
+                "getClassLoader",
+                "()Ljava/lang/ClassLoader;",
+                &[],
+            )
+            .and_then(|value| value.l())
+            .map_err(|error| format!("get Context class loader: {error}"))?;
+        let class_name_obj = jobject_str(env, class_name)?;
+        let class_obj = env
+            .call_method(
+                &class_loader,
+                "loadClass",
+                "(Ljava/lang/String;)Ljava/lang/Class;",
+                &[JValue::Object(&class_name_obj)],
+            )
+            .and_then(|value| value.l())
+            .map_err(|error| format!("load app class {class_name}: {error}"))?;
+        Ok(JClass::from(class_obj))
+    }
+
+    fn call_static_void_with_context_class(
+        env: &mut JNIEnv,
+        context: &JObject,
+        class_name: &str,
+        method: &str,
+        sig: &str,
+        args: &[JValue],
+    ) -> Result<(), String> {
+        let class = load_context_class(env, context, class_name)?;
         env.call_static_method(class, method, sig, args)
             .map_err(|error| format!("call {class_name}.{method}: {error}"))?;
         Ok(())
@@ -230,12 +271,18 @@ pub mod android {
         Ok(true)
     }
 
-    pub fn notify_overlay_bridge(env: &mut JNIEnv, state: &str, message: Option<&str>) -> Result<(), String> {
+    pub fn notify_overlay_bridge(
+        env: &mut JNIEnv,
+        context: &JObject,
+        state: &str,
+        message: Option<&str>,
+    ) -> Result<(), String> {
         let state_obj = jobject_str(env, state)?;
         let message_obj = jobject_str(env, message.unwrap_or(""))?;
-        call_static_void(
+        call_static_void_with_context_class(
             env,
-            "com/openless/app/OpenLessOverlayBridge",
+            context,
+            "com.openless.app.OpenLessOverlayBridge",
             "onCapsuleStateChanged",
             "(Ljava/lang/String;Ljava/lang/String;)V",
             &[
@@ -245,11 +292,16 @@ pub mod android {
         )
     }
 
-    pub fn show_overlay_toast(env: &mut JNIEnv, message: &str) -> Result<(), String> {
+    pub fn show_overlay_toast(
+        env: &mut JNIEnv,
+        context: &JObject,
+        message: &str,
+    ) -> Result<(), String> {
         let message_obj = jobject_str(env, message)?;
-        call_static_void(
+        call_static_void_with_context_class(
             env,
-            "com/openless/app/OpenLessOverlayBridge",
+            context,
+            "com.openless.app.OpenLessOverlayBridge",
             "showToast",
             "(Ljava/lang/String;)V",
             &[JValue::Object(&message_obj)],

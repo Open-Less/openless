@@ -18,8 +18,8 @@ pub fn notify_capsule_state(payload: &CapsulePayload) {
     {
         let state = capsule_state_name(payload.state);
         let message = payload.message.as_deref();
-        if let Err(error) = crate::android_jni::android::with_android_env(|env, _context| {
-            crate::android_jni::android::notify_overlay_bridge(env, state, message)
+        if let Err(error) = crate::android_jni::android::with_android_env(|env, context| {
+            crate::android_jni::android::notify_overlay_bridge(env, context, state, message)
         }) {
             log::warn!("[android-native] notify overlay bridge failed: {error}");
         }
