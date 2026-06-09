@@ -258,15 +258,15 @@ mod platform {
         PermissionStatus::NotApplicable
     }
 
-    /// Android 麦克风：启动期只查 runtime permission。
-    /// 实际录音能力由用户触发 dictation 时的 Recorder::start 决定，避免权限轮询进入
-    /// Android audio 探测路径后在 JavaBridge IPC 边界 panic。
+    /// Android 麦克风：runtime permission 由前端 WebView/系统授权流程触发并维护。
+    /// Rust 侧没有稳定的直接 query hook；这里避免在已授权后被桌面权限门禁拦截。
+    /// 真实录音能力仍由用户触发 dictation 时的 Recorder::start 决定。
     pub fn check_microphone() -> PermissionStatus {
-        PermissionStatus::NotDetermined
+        PermissionStatus::Granted
     }
 
     pub fn request_microphone() -> PermissionStatus {
-        PermissionStatus::NotDetermined
+        check_microphone()
     }
 }
 
