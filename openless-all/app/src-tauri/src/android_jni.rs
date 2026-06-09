@@ -145,23 +145,20 @@ pub mod android {
             &[JValue::Object(&action_obj)],
         )
         .map_err(|error| format!("set service action: {error}"))?;
-        if android_sdk_int(env)? >= 26 {
-            env.call_method(
-                context,
-                "startForegroundService",
-                "(Landroid/content/Intent;)Landroid/content/ComponentName;",
-                &[JValue::Object(&intent)],
-            )
-            .map_err(|error| format!("startForegroundService: {error}"))?;
+        let start_method = if action.ends_with(".HIDE") {
+            "startService"
+        } else if android_sdk_int(env)? >= 26 {
+            "startForegroundService"
         } else {
-            env.call_method(
-                context,
-                "startService",
-                "(Landroid/content/Intent;)Landroid/content/ComponentName;",
-                &[JValue::Object(&intent)],
-            )
-            .map_err(|error| format!("startService: {error}"))?;
-        }
+            "startService"
+        };
+        env.call_method(
+            context,
+            start_method,
+            "(Landroid/content/Intent;)Landroid/content/ComponentName;",
+            &[JValue::Object(&intent)],
+        )
+        .map_err(|error| format!("{start_method}: {error}"))?;
         Ok(())
     }
 
