@@ -23,7 +23,7 @@ Merge the v1 snippet permissions into that file before building APK v1.
 
 ## Manifest snippets
 
-- **v1** (`AndroidManifest.v1.snippet.xml`): `RECORD_AUDIO` for in-app dictation — required for APK v1.
+- **v1** (`AndroidManifest.v1.snippet.xml`): `RECORD_AUDIO` and `MODIFY_AUDIO_SETTINGS` for in-app dictation — required for APK v1.
 - **v2** (`AndroidManifest.v2.snippet.xml`): IME service declaration — **not complete / future**.
 - **v3** (`AndroidManifest.v3.snippet.xml`): overlay + foreground service — **not complete / future**.
 

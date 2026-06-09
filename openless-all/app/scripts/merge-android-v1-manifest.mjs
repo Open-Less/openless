@@ -10,14 +10,13 @@ const sourcePath = fileURLToPath(
   new URL('../src-tauri/android-scaffolding/AndroidManifest.v1.snippet.xml', import.meta.url),
 );
 
-const RECORD_AUDIO_RE = /android\.permission\.RECORD_AUDIO/;
 const PERMISSION_LINE_RE =
-  /<uses-permission[^>]*android:name="android\.permission\.RECORD_AUDIO"[^>]*\/?>/;
+  /<uses-permission[^>]*android:name="([^"]+)"[^>]*\/?>/g;
 
 function printHelp() {
   console.log(`Usage: node scripts/merge-android-v1-manifest.mjs [options]
 
-Merge APK v1 RECORD_AUDIO permission from android-scaffolding into the generated
+Merge APK v1 permissions from android-scaffolding into the generated
 AndroidManifest.xml (post \`tauri android init\`).
 
 Options:
@@ -45,29 +44,39 @@ function parseArgs(argv) {
   return { dryRun };
 }
 
-function extractRecordAudioPermission(snippetXml) {
-  const match = snippetXml.match(PERMISSION_LINE_RE);
-  if (!match) {
+function extractPermissionLines(snippetXml) {
+  const lines = [];
+  for (const match of snippetXml.matchAll(PERMISSION_LINE_RE)) {
+    lines.push({ name: match[1], line: match[0] });
+  }
+  if (lines.length === 0) {
     throw new Error(
-      `Source manifest snippet does not contain RECORD_AUDIO permission: ${sourcePath}`,
+      `Source manifest snippet does not contain any uses-permission entries: ${sourcePath}`,
     );
   }
-  return match[0];
+  return lines;
 }
 
-function mergeRecordAudioPermission(manifestXml, permissionLine) {
-  if (RECORD_AUDIO_RE.test(manifestXml)) {
+function permissionExists(manifestXml, permissionName) {
+  const escaped = permissionName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`<uses-permission[^>]*android:name="${escaped}"[^>]*\\/?>`).test(manifestXml);
+}
+
+function mergePermissionLines(manifestXml, permissionLines) {
+  const missing = permissionLines.filter((permission) => !permissionExists(manifestXml, permission.name));
+  if (missing.length === 0) {
     return { changed: false, content: manifestXml };
   }
+
+  const insertionBlock = (indent) => missing.map((permission) => `${indent}${permission.line}`).join('\n') + '\n';
 
   const applicationIdx = manifestXml.indexOf('<application');
   if (applicationIdx !== -1) {
     const indentMatch = manifestXml.slice(0, applicationIdx).match(/(^|\n)([ \t]*)<[^/][^\n]*$/);
     const indent = indentMatch?.[2] ?? '    ';
-    const insertion = `${indent}${permissionLine}\n`;
     return {
       changed: true,
-      content: `${manifestXml.slice(0, applicationIdx)}${insertion}${manifestXml.slice(applicationIdx)}`,
+      content: `${manifestXml.slice(0, applicationIdx)}${insertionBlock(indent)}${manifestXml.slice(applicationIdx)}`,
     };
   }
 
@@ -77,10 +86,9 @@ function mergeRecordAudioPermission(manifestXml, permissionLine) {
   }
 
   const indent = '    ';
-  const insertion = `${indent}${permissionLine}\n`;
   return {
     changed: true,
-    content: `${manifestXml.slice(0, closingManifestIdx)}${insertion}${manifestXml.slice(closingManifestIdx)}`,
+    content: `${manifestXml.slice(0, closingManifestIdx)}${insertionBlock(indent)}${manifestXml.slice(closingManifestIdx)}`,
   };
 }
 
@@ -96,23 +104,25 @@ function main() {
     throw new Error(`Source manifest snippet not found: ${sourcePath}`);
   }
 
-  const permissionLine = extractRecordAudioPermission(readFileSync(sourcePath, 'utf8'));
+  const permissionLines = extractPermissionLines(readFileSync(sourcePath, 'utf8'));
   const manifestXml = readFileSync(targetPath, 'utf8');
-  const { changed, content } = mergeRecordAudioPermission(manifestXml, permissionLine);
+  const { changed, content } = mergePermissionLines(manifestXml, permissionLines);
 
   if (!changed) {
-    console.log(`RECORD_AUDIO already present in ${targetPath}; skipping merge.`);
+    console.log(`APK v1 permissions already present in ${targetPath}; skipping merge.`);
     return;
   }
 
   if (dryRun) {
-    console.log(`[dry-run] Would merge RECORD_AUDIO into ${targetPath}`);
-    console.log(`[dry-run] Permission line: ${permissionLine}`);
+    console.log(`[dry-run] Would merge APK v1 permissions into ${targetPath}`);
+    for (const permission of permissionLines) {
+      console.log(`[dry-run] Permission line: ${permission.line}`);
+    }
     return;
   }
 
   writeFileSync(targetPath, content, 'utf8');
-  console.log(`Merged RECORD_AUDIO into ${targetPath}`);
+  console.log(`Merged APK v1 permissions into ${targetPath}`);
 }
 
 try {

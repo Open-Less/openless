@@ -4,7 +4,7 @@ name: Android APK (debug)
 #   - push v*-tauri tag → build debug APK, upload artifact + attach to GitHub Release
 #   - workflow_dispatch → build debug APK, upload artifact only (no release)
 #
-# v1 scope: in-app dictation APK with RECORD_AUDIO merged from android-scaffolding.
+# v1 scope: in-app dictation APK with microphone permissions merged from android-scaffolding.
 # IME v2 / overlay v3 manifest snippets are intentionally out of scope.
 
 on:
@@ -88,7 +88,7 @@ jobs:
         working-directory: openless-all/app
         run: npm run tauri -- android init --ci
 
-      - name: Merge APK v1 manifest (RECORD_AUDIO)
+      - name: Merge APK v1 manifest permissions
         working-directory: openless-all/app
         run: node scripts/merge-android-v1-manifest.mjs
 
