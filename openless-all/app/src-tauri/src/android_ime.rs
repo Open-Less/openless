@@ -107,8 +107,8 @@ mod android_impl {
                 message: "empty text".to_string(),
             };
         }
-        match crate::android_jni::android::with_android_env(|env, _context| {
-            crate::android_jni::android::ime_commit_text(env, text)
+        match crate::android_jni::android::with_android_env(|env, context| {
+            crate::android_jni::android::ime_commit_text(env, context, text)
         }) {
             Ok(true) => AndroidImeCommitResult {
                 committed: true,

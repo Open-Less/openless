@@ -95,8 +95,8 @@ mod android_impl {
     }
 
     pub fn paste_via_accessibility() -> bool {
-        crate::android_jni::android::with_android_env(|env, _context| {
-            crate::android_jni::android::accessibility_paste(env)
+        crate::android_jni::android::with_android_env(|env, context| {
+            crate::android_jni::android::accessibility_paste(env, context)
         })
         .unwrap_or(false)
     }

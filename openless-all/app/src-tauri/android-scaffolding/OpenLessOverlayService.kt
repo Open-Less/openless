@@ -13,6 +13,7 @@ import android.content.pm.ServiceInfo
 import android.Manifest
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -56,6 +57,13 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
             ACTION_SHOW -> {
                 showOverlay()
             }
+            ACTION_START_RECORDING -> {
+                showOverlay()
+                expanded = true
+                panelView.visibility = View.VISIBLE
+                pillView.visibility = View.GONE
+                startRecordingFromOverlay(allowForegroundLaunch = false)
+            }
             ACTION_HIDE -> {
                 hideOverlay()
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
@@ -86,9 +94,13 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         when (state) {
             "recording" -> {
                 recording = true
-                promoteRecordingForeground()
+                if (!tryPromoteRecordingForeground()) {
+                    OpenLessNative.nativeCancelDictation()
+                    return
+                }
                 statusView.text = "录音中…"
                 recordButton.text = "■"
+                recordButton.isEnabled = true
             }
             "transcribing", "polishing" -> {
                 recording = false
@@ -194,11 +206,7 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
                 if (recording) {
                     OpenLessNative.nativeStopDictation()
                 } else {
-                    promoteRecordingForeground()
-                    expanded = true
-                    panelView.visibility = View.VISIBLE
-                    pillView.visibility = View.GONE
-                    OpenLessNative.nativeStartDictation()
+                    startRecordingFromOverlay(allowForegroundLaunch = true)
                 }
             }
         }
@@ -265,19 +273,53 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         }
     }
 
-    private fun promoteRecordingForeground() {
-        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+    private fun startRecordingFromOverlay(allowForegroundLaunch: Boolean) {
+        expanded = true
+        panelView.visibility = View.VISIBLE
+        pillView.visibility = View.GONE
+        if (tryPromoteRecordingForeground()) {
+            OpenLessNative.nativeStartDictation()
             return
         }
-        val notification = buildNotification("录音中")
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(
-                NOTIFICATION_ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE,
+        if (!allowForegroundLaunch) {
+            statusView.text = "系统限制后台录音，请回到 OpenLess 后再开始"
+            recordButton.isEnabled = true
+            return
+        }
+        statusView.text = "正在切到前台启动录音…"
+        recordButton.isEnabled = false
+        try {
+            startActivity(
+                Intent(this, OpenLessOverlayRecordingActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
             )
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
+        } catch (error: RuntimeException) {
+            Log.w(TAG, "launch foreground recording activity failed", error)
+            statusView.text = "系统限制后台录音，请回到 OpenLess 后再开始"
+            recordButton.isEnabled = true
+        }
+    }
+
+    private fun tryPromoteRecordingForeground(): Boolean {
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            statusView.text = "请先授予麦克风权限"
+            return false
+        }
+        val notification = buildNotification("录音中")
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(
+                    NOTIFICATION_ID,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE,
+                )
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+            true
+        } catch (error: SecurityException) {
+            Log.w(TAG, "microphone foreground service not allowed from current state", error)
+            false
         }
     }
 
@@ -300,7 +342,9 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         const val ACTION_SHOW = "com.openless.app.overlay.SHOW"
         const val ACTION_HIDE = "com.openless.app.overlay.HIDE"
         const val ACTION_TOGGLE_EXPAND = "com.openless.app.overlay.TOGGLE_EXPAND"
+        const val ACTION_START_RECORDING = "com.openless.app.overlay.START_RECORDING"
         private const val NOTIFICATION_ID = 42001
+        private const val TAG = "OpenLessOverlayService"
 
         @Volatile
         var instance: OpenLessOverlayService? = null

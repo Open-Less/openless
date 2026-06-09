@@ -15,6 +15,7 @@ const KOTLIN_FILES = [
   'OpenLessApplication.kt',
   'OpenLessImeService.kt',
   'OpenLessOverlayService.kt',
+  'OpenLessOverlayRecordingActivity.kt',
   'OpenLessOverlayBridge.kt',
   'OpenLessAccessibilityService.kt',
   'OverlayPermissionActivity.kt',

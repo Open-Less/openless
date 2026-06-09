@@ -21,21 +21,6 @@ pub mod android {
         f(&mut env, &context)
     }
 
-    pub fn call_static_bool(
-        env: &mut JNIEnv,
-        class_name: &str,
-        method: &str,
-        sig: &str,
-        args: &[JValue],
-    ) -> Result<bool, String> {
-        let class = env
-            .find_class(class_name)
-            .map_err(|error| format!("find class {class_name}: {error}"))?;
-        env.call_static_method(class, method, sig, args)
-            .and_then(|value| value.z())
-            .map_err(|error| format!("call {class_name}.{method}: {error}"))
-    }
-
     pub fn call_static_void(
         env: &mut JNIEnv,
         class_name: &str,
@@ -57,12 +42,7 @@ pub mod android {
         class_name: &str,
     ) -> Result<JClass<'local>, String> {
         let class_loader = env
-            .call_method(
-                context,
-                "getClassLoader",
-                "()Ljava/lang/ClassLoader;",
-                &[],
-            )
+            .call_method(context, "getClassLoader", "()Ljava/lang/ClassLoader;", &[])
             .and_then(|value| value.l())
             .map_err(|error| format!("get Context class loader: {error}"))?;
         let class_name_obj = jobject_str(env, class_name)?;
@@ -92,12 +72,32 @@ pub mod android {
         Ok(())
     }
 
-    pub fn jstring<'local>(env: &mut JNIEnv<'local>, value: &str) -> Result<JString<'local>, String> {
+    fn call_static_bool_with_context_class<'local>(
+        env: &mut JNIEnv<'local>,
+        context: &JObject<'local>,
+        class_name: &str,
+        method: &str,
+        sig: &str,
+        args: &[JValue],
+    ) -> Result<bool, String> {
+        let class = load_context_class(env, context, class_name)?;
+        env.call_static_method(class, method, sig, args)
+            .and_then(|value| value.z())
+            .map_err(|error| format!("call {class_name}.{method}: {error}"))
+    }
+
+    pub fn jstring<'local>(
+        env: &mut JNIEnv<'local>,
+        value: &str,
+    ) -> Result<JString<'local>, String> {
         env.new_string(value)
             .map_err(|error| format!("create jstring: {error}"))
     }
 
-    fn jobject_str<'local>(env: &mut JNIEnv<'local>, value: &str) -> Result<JObject<'local>, String> {
+    fn jobject_str<'local>(
+        env: &mut JNIEnv<'local>,
+        value: &str,
+    ) -> Result<JObject<'local>, String> {
         Ok(jstring(env, value)?.into())
     }
 
@@ -121,10 +121,7 @@ pub mod android {
             .new_object(
                 "android/content/ComponentName",
                 "(Landroid/content/Context;Ljava/lang/String;)V",
-                &[
-                    JValue::Object(context),
-                    JValue::Object(&class_name_obj),
-                ],
+                &[JValue::Object(context), JValue::Object(&class_name_obj)],
             )
             .map_err(|error| format!("create component name: {error}"))?;
         env.call_method(
@@ -165,10 +162,7 @@ pub mod android {
             .new_object(
                 "android/content/ComponentName",
                 "(Landroid/content/Context;Ljava/lang/String;)V",
-                &[
-                    JValue::Object(context),
-                    JValue::Object(&service_class_obj),
-                ],
+                &[JValue::Object(context), JValue::Object(&service_class_obj)],
             )
             .map_err(|error| format!("create component name: {error}"))?;
         env.call_method(
@@ -223,7 +217,11 @@ pub mod android {
             .map_err(|error| format!("read SDK_INT: {error}"))
     }
 
-    pub fn copy_to_clipboard(env: &mut JNIEnv, context: &JObject, text: &str) -> Result<bool, String> {
+    pub fn copy_to_clipboard(
+        env: &mut JNIEnv,
+        context: &JObject,
+        text: &str,
+    ) -> Result<bool, String> {
         let clipboard_name = jobject_str(env, "clipboard")?;
         let clipboard = env
             .call_method(
@@ -241,10 +239,7 @@ pub mod android {
                 "android/content/ClipData",
                 "newPlainText",
                 "(Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Landroid/content/ClipData$Item;",
-                &[
-                    JValue::Object(&label),
-                    JValue::Object(&text_obj),
-                ],
+                &[JValue::Object(&label), JValue::Object(&text_obj)],
             )
             .and_then(|value| value.l())
             .map_err(|error| format!("newPlainText: {error}"))?;
@@ -253,10 +248,7 @@ pub mod android {
                 "android/content/ClipData",
                 "newPlainText",
                 "(Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Landroid/content/ClipData;",
-                &[
-                    JValue::Object(&label),
-                    JValue::Object(&text_obj),
-                ],
+                &[JValue::Object(&label), JValue::Object(&text_obj)],
             )
             .and_then(|value| value.l())
             .map_err(|error| format!("new ClipData: {error}"))?;
@@ -285,10 +277,7 @@ pub mod android {
             "com.openless.app.OpenLessOverlayBridge",
             "onCapsuleStateChanged",
             "(Ljava/lang/String;Ljava/lang/String;)V",
-            &[
-                JValue::Object(&state_obj),
-                JValue::Object(&message_obj),
-            ],
+            &[JValue::Object(&state_obj), JValue::Object(&message_obj)],
         )
     }
 
@@ -308,38 +297,54 @@ pub mod android {
         )
     }
 
-    pub fn ime_commit_text(env: &mut JNIEnv, text: &str) -> Result<bool, String> {
+    pub fn ime_commit_text<'local>(
+        env: &mut JNIEnv<'local>,
+        context: &JObject<'local>,
+        text: &str,
+    ) -> Result<bool, String> {
         let text_obj = jobject_str(env, text)?;
-        call_static_bool(
+        call_static_bool_with_context_class(
             env,
-            "com/openless/app/OpenLessImeService",
+            context,
+            "com.openless.app.OpenLessImeService",
             "commitText",
             "(Ljava/lang/String;)Z",
             &[JValue::Object(&text_obj)],
         )
     }
 
-    pub fn accessibility_paste(env: &mut JNIEnv) -> Result<bool, String> {
-        call_static_bool(
+    pub fn accessibility_paste<'local>(
+        env: &mut JNIEnv<'local>,
+        context: &JObject<'local>,
+    ) -> Result<bool, String> {
+        call_static_bool_with_context_class(
             env,
-            "com/openless/app/OpenLessAccessibilityService",
+            context,
+            "com.openless.app.OpenLessAccessibilityService",
             "pasteToFocusedField",
             "()Z",
             &[],
         )
     }
 
-    pub fn accessibility_enabled(env: &mut JNIEnv, context: &JObject) -> Result<bool, String> {
-        call_static_bool(
+    pub fn accessibility_enabled<'local>(
+        env: &mut JNIEnv<'local>,
+        context: &JObject<'local>,
+    ) -> Result<bool, String> {
+        call_static_bool_with_context_class(
             env,
-            "com/openless/app/OpenLessAccessibilityService",
+            context,
+            "com.openless.app.OpenLessAccessibilityService",
             "isEnabled",
             "(Landroid/content/Context;)Z",
             &[JValue::Object(context)],
         )
     }
 
-    pub fn launch_accessibility_settings(env: &mut JNIEnv, context: &JObject) -> Result<(), String> {
+    pub fn launch_accessibility_settings(
+        env: &mut JNIEnv,
+        context: &JObject,
+    ) -> Result<(), String> {
         let action_obj = jobject_str(env, "android.settings.ACCESSIBILITY_SETTINGS")?;
         let intent = env
             .new_object(
@@ -442,12 +447,7 @@ pub mod android {
             .map_err(|error| format!("list.size: {error}"))?;
         for index in 0..size {
             let item = env
-                .call_method(
-                    list,
-                    "get",
-                    "(I)Ljava/lang/Object;",
-                    &[JValue::Int(index)],
-                )
+                .call_method(list, "get", "(I)Ljava/lang/Object;", &[JValue::Int(index)])
                 .and_then(|value| value.l())
                 .map_err(|error| format!("list.get: {error}"))?;
             let item_id_obj = env
@@ -469,6 +469,10 @@ pub mod android {
     }
 
     pub fn export_jboolean(value: bool) -> jni::sys::jboolean {
-        if value { 1 } else { 0 }
+        if value {
+            1
+        } else {
+            0
+        }
     }
 }
