@@ -4,7 +4,7 @@ name: Android APK (debug)
 #   - push v*-tauri tag → build debug APK, upload artifact + attach to GitHub Release
 #   - workflow_dispatch → build debug APK, upload artifact only (no release)
 #
-# Scope: in-app dictation + overlay recording (v2 IME + v3 overlay + accessibility).
+# Scope: in-app dictation + overlay recording + accessibility paste.
 
 on:
   push:
@@ -95,7 +95,7 @@ jobs:
         working-directory: openless-all/app
         run: node scripts/merge-android-v1-manifest.mjs
 
-      - name: Merge overlay / IME manifest entries
+      - name: Merge overlay / accessibility manifest entries
         working-directory: openless-all/app
         run: node scripts/merge-android-overlay-manifest.mjs
 
@@ -117,6 +117,15 @@ jobs:
       - name: Build Android debug APK
         working-directory: openless-all/app
         run: npm run tauri:android:build
+
+      - name: Free disk before artifact upload
+        shell: bash
+        working-directory: openless-all/app
+        run: |
+          set -euo pipefail
+          rm -rf src-tauri/target
+          rm -rf ~/.cargo/registry ~/.cargo/git ~/.gradle/caches
+          df -h
 
       - name: Collect debug APK
         id: apk

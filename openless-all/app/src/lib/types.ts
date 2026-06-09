@@ -344,15 +344,8 @@ export interface UserPreferences {
   androidOverlayTrigger: AndroidOverlayTrigger;
 }
 
-export type AndroidInsertStrategy = 'auto' | 'ime' | 'accessibility' | 'clipboard';
+export type AndroidInsertStrategy = 'accessibility' | 'clipboard';
 export type AndroidOverlayTrigger = 'background' | 'keyboard' | 'always';
-
-export interface AndroidImeStatus {
-  state: 'enabled' | 'notEnabled' | 'notAndroid';
-  enabled: boolean;
-  selected: boolean;
-  message: string;
-}
 
 export interface AndroidOverlayStatus {
   permission: 'granted' | 'notGranted' | 'notAndroid';

@@ -101,13 +101,6 @@ pub mod android {
         Ok(jstring(env, value)?.into())
     }
 
-    fn java_string(env: &mut JNIEnv, obj: JObject) -> Result<String, String> {
-        let jstr = JString::from(obj);
-        env.get_string(&jstr)
-            .map(|value| value.into())
-            .map_err(|error| format!("decode jstring: {error}"))
-    }
-
     pub fn start_activity_class(
         env: &mut JNIEnv,
         context: &JObject,
@@ -287,22 +280,6 @@ pub mod android {
         )
     }
 
-    pub fn ime_commit_text<'local>(
-        env: &mut JNIEnv<'local>,
-        context: &JObject<'local>,
-        text: &str,
-    ) -> Result<bool, String> {
-        let text_obj = jobject_str(env, text)?;
-        call_static_bool_with_context_class(
-            env,
-            context,
-            "com.openless.app.OpenLessImeService",
-            "commitText",
-            "(Ljava/lang/String;)Z",
-            &[JValue::Object(&text_obj)],
-        )
-    }
-
     pub fn accessibility_paste<'local>(
         env: &mut JNIEnv<'local>,
         context: &JObject<'local>,
@@ -358,98 +335,6 @@ pub mod android {
         )
         .map_err(|error| format!("start accessibility settings: {error}"))?;
         Ok(())
-    }
-
-    pub fn launch_input_method_settings(env: &mut JNIEnv, context: &JObject) -> Result<(), String> {
-        let action_obj = jobject_str(env, "android.settings.INPUT_METHOD_SETTINGS")?;
-        let intent = env
-            .new_object(
-                "android/content/Intent",
-                "(Ljava/lang/String;)V",
-                &[JValue::Object(&action_obj)],
-            )
-            .map_err(|error| format!("create IME settings intent: {error}"))?;
-        env.call_method(
-            &intent,
-            "addFlags",
-            "(I)Landroid/content/Intent;",
-            &[JValue::Int(0x10000000)],
-        )
-        .map_err(|error| format!("set intent flags: {error}"))?;
-        env.call_method(
-            context,
-            "startActivity",
-            "(Landroid/content/Intent;)V",
-            &[JValue::Object(&intent)],
-        )
-        .map_err(|error| format!("start IME settings: {error}"))?;
-        Ok(())
-    }
-
-    pub fn ime_status(env: &mut JNIEnv, context: &JObject) -> Result<(bool, bool), String> {
-        let service_name = jobject_str(env, "input_method")?;
-        let imm = env
-            .call_method(
-                context,
-                "getSystemService",
-                "(Ljava/lang/String;)Ljava/lang/Object;",
-                &[JValue::Object(&service_name)],
-            )
-            .and_then(|value| value.l())
-            .map_err(|error| format!("get InputMethodManager: {error}"))?;
-        let package_obj = env
-            .call_method(context, "getPackageName", "()Ljava/lang/String;", &[])
-            .and_then(|value| value.l())
-            .map_err(|error| format!("getPackageName: {error}"))?;
-        let package = java_string(env, package_obj)?;
-        let service_id = format!("{package}/.OpenLessImeService");
-        let enabled_list = env
-            .call_method(&imm, "getEnabledInputMethodList", "()Ljava/util/List;", &[])
-            .and_then(|value| value.l())
-            .map_err(|error| format!("getEnabledInputMethodList: {error}"))?;
-        let enabled = list_contains_id(env, &enabled_list, &service_id)?;
-        let current = env
-            .call_method(
-                &imm,
-                "getCurrentInputMethodInfo",
-                "()Landroid/view/inputmethod/InputMethodInfo;",
-                &[],
-            )
-            .and_then(|value| value.l())
-            .map_err(|error| format!("getCurrentInputMethodInfo: {error}"))?;
-        let selected = if current.is_null() {
-            false
-        } else {
-            let id_obj = env
-                .call_method(&current, "getId", "()Ljava/lang/String;", &[])
-                .and_then(|value| value.l())
-                .map_err(|error| format!("getId: {error}"))?;
-            let id = java_string(env, id_obj)?;
-            id == service_id
-        };
-        Ok((enabled, selected))
-    }
-
-    fn list_contains_id(env: &mut JNIEnv, list: &JObject, id: &str) -> Result<bool, String> {
-        let size = env
-            .call_method(list, "size", "()I", &[])
-            .and_then(|value| value.i())
-            .map_err(|error| format!("list.size: {error}"))?;
-        for index in 0..size {
-            let item = env
-                .call_method(list, "get", "(I)Ljava/lang/Object;", &[JValue::Int(index)])
-                .and_then(|value| value.l())
-                .map_err(|error| format!("list.get: {error}"))?;
-            let item_id_obj = env
-                .call_method(&item, "getId", "()Ljava/lang/String;", &[])
-                .and_then(|value| value.l())
-                .map_err(|error| format!("InputMethodInfo.getId: {error}"))?;
-            let item_id = java_string(env, item_id_obj)?;
-            if item_id == id {
-                return Ok(true);
-            }
-        }
-        Ok(false)
     }
 
     pub fn export_jstring(env: &mut JNIEnv, value: &str) -> jni::sys::jstring {

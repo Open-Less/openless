@@ -62,7 +62,7 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
                 expanded = true
                 panelView.visibility = View.VISIBLE
                 pillView.visibility = View.GONE
-                startRecordingFromOverlay(allowForegroundLaunch = false)
+                startRecordingFromOverlay()
             }
             ACTION_HIDE -> {
                 hideOverlay()
@@ -181,10 +181,11 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         return TextView(this).apply {
             text = "OL"
             setTextColor(Color.WHITE)
-            textSize = 14f
+            textSize = 18f
             gravity = Gravity.CENTER
             background = circleDrawable(Color.parseColor("#2563EB"))
-            setPadding(24, 16, 24, 16)
+            minWidth = dp(64)
+            minHeight = dp(64)
             setOnClickListener {
                 toggleExpanded()
             }
@@ -199,21 +200,27 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         }
         recordButton = TextView(this).apply {
             text = "●"
-            textSize = 28f
+            textSize = 34f
             setTextColor(Color.parseColor("#EF4444"))
             gravity = Gravity.CENTER
+            background = circleDrawable(Color.parseColor("#1FFFFFFF"))
+            minWidth = dp(72)
+            minHeight = dp(72)
             setOnClickListener {
                 if (recording) {
                     OpenLessNative.nativeStopDictation()
                 } else {
-                    startRecordingFromOverlay(allowForegroundLaunch = true)
+                    startRecordingFromOverlay()
                 }
             }
         }
         val collapse = TextView(this).apply {
             text = "—"
             setTextColor(Color.WHITE)
-            textSize = 16f
+            textSize = 20f
+            gravity = Gravity.CENTER
+            minWidth = dp(56)
+            minHeight = dp(44)
             setOnClickListener {
                 expanded = false
                 panelView.visibility = View.GONE
@@ -226,7 +233,9 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
             setPadding(24, 20, 24, 20)
             addView(collapse)
             addView(statusView)
-            addView(recordButton)
+            addView(recordButton, LinearLayout.LayoutParams(dp(72), dp(72)).apply {
+                topMargin = dp(8)
+            })
         }
     }
 
@@ -273,7 +282,7 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         }
     }
 
-    private fun startRecordingFromOverlay(allowForegroundLaunch: Boolean) {
+    private fun startRecordingFromOverlay() {
         expanded = true
         panelView.visibility = View.VISIBLE
         pillView.visibility = View.GONE
@@ -281,23 +290,8 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
             OpenLessNative.nativeStartDictation()
             return
         }
-        if (!allowForegroundLaunch) {
-            statusView.text = "系统限制后台录音，请回到 OpenLess 后再开始"
-            recordButton.isEnabled = true
-            return
-        }
-        statusView.text = "正在切到前台启动录音…"
-        recordButton.isEnabled = false
-        try {
-            startActivity(
-                Intent(this, OpenLessOverlayRecordingActivity::class.java)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-            )
-        } catch (error: RuntimeException) {
-            Log.w(TAG, "launch foreground recording activity failed", error)
-            statusView.text = "系统限制后台录音，请回到 OpenLess 后再开始"
-            recordButton.isEnabled = true
-        }
+        statusView.text = "系统限制后台录音，请在 OpenLess 内开始"
+        recordButton.isEnabled = true
     }
 
     private fun tryPromoteRecordingForeground(): Boolean {
@@ -336,6 +330,10 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
             .setContentText(contentText)
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .build()
+    }
+
+    private fun dp(value: Int): Int {
+        return (value * resources.displayMetrics.density).toInt()
     }
 
     companion object {

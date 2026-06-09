@@ -822,19 +822,16 @@ export const en: typeof zhCN = {
       androidImeDisabled: 'Not enabled',
       androidOverlayLabel: 'Floating overlay',
       androidAccessibilityLabel: 'Accessibility service',
+      androidAccessibilityImpact: 'Enable it to output results to the current input field without switching keyboards. If disabled, results are copied to the clipboard for manual paste.',
       androidInsertStrategyLabel: 'Text insertion strategy',
       androidOverlayTriggerLabel: 'Overlay visibility',
       androidInsertStrategy: {
-        auto: 'Auto (recommended)',
-        ime: 'OpenLess keyboard',
-        accessibility: 'Accessibility paste',
+        accessibility: 'Auto output to input field',
         clipboard: 'Clipboard only',
       },
       androidInsertStrategyHint: {
-        auto: 'Try IME commit, then accessibility paste, then clipboard fallback.',
-        ime: 'Low latency, but requires enabling/selecting the OpenLess keyboard.',
-        accessibility: 'Keeps your current keyboard, but needs accessibility permission.',
-        clipboard: 'Most reliable with fewest permissions; user pastes manually.',
+        accessibility: 'Requires accessibility; falls back to clipboard when unavailable.',
+        clipboard: 'No accessibility permission required; copies only for manual paste.',
       },
       androidOverlayTrigger: {
         background: 'When app is backgrounded',

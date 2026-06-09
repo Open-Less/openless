@@ -13,29 +13,15 @@ const resXmlDest = join(genRoot, 'res/xml');
 const KOTLIN_FILES = [
   'OpenLessNative.kt',
   'OpenLessApplication.kt',
-  'OpenLessImeService.kt',
   'OpenLessOverlayService.kt',
-  'OpenLessOverlayRecordingActivity.kt',
   'OpenLessOverlayBridge.kt',
   'OpenLessAccessibilityService.kt',
   'OverlayPermissionActivity.kt',
 ];
 
 const XML_FILES = [
-  ['res/xml/openless_ime_method.xml', 'openless_ime_method.xml'],
   ['res/xml/openless_accessibility_config.xml', 'openless_accessibility_config.xml'],
 ];
-
-const GENERATED_IME_METHOD = `<?xml version="1.0" encoding="utf-8"?>
-<input-method xmlns:android="http://schemas.android.com/apk/res/android"
-    android:settingsActivity="com.openless.app.MainActivity"
-    android:supportsSwitchingToNextInputMethod="true">
-    <subtype
-        android:label="@string/openless_ime_label"
-        android:imeSubtypeLocale="zh_CN"
-        android:imeSubtypeMode="voice" />
-</input-method>
-`;
 
 const GENERATED_ACCESSIBILITY_CONFIG = `<?xml version="1.0" encoding="utf-8"?>
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
@@ -49,7 +35,6 @@ const GENERATED_ACCESSIBILITY_CONFIG = `<?xml version="1.0" encoding="utf-8"?>
 `;
 
 const GENERATED_STRINGS_SNIPPET = `
-    <string name="openless_ime_label">OpenLess</string>
     <string name="openless_accessibility_description">OpenLess uses accessibility to detect the keyboard and paste dictation results without switching your current keyboard.</string>
 `;
 
@@ -105,7 +90,7 @@ function mergeStringsXml(dryRun) {
   }
 
   const existing = readFileSync(stringsPath, 'utf8');
-  if (existing.includes('openless_ime_label')) {
+  if (existing.includes('openless_accessibility_description')) {
     console.log(`OpenLess strings already present in ${stringsPath}; skipping.`);
     return;
   }
@@ -150,9 +135,7 @@ function main() {
     const dest = join(resXmlDest, destName);
     const content = existsSync(src)
       ? readFileSync(src, 'utf8')
-      : destName === 'openless_ime_method.xml'
-        ? GENERATED_IME_METHOD
-        : GENERATED_ACCESSIBILITY_CONFIG;
+      : GENERATED_ACCESSIBILITY_CONFIG;
     if (dryRun) {
       console.log(`[dry-run] Would write ${dest}`);
       continue;

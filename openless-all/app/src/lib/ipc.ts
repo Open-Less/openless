@@ -29,7 +29,6 @@ import type {
     UserPreferences,
     VocabPresetStore,
     WindowsImeStatus,
-    AndroidImeStatus,
     AndroidOverlayStatus,
     AndroidAccessibilityStatus,
     AndroidInsertStrategy,
@@ -65,15 +64,6 @@ async function platformCapabilities(): Promise<PlatformCapabilities> {
 
 export async function getPlatformCapabilities(): Promise<PlatformCapabilities> {
     return platformCapabilities()
-}
-
-export function getAndroidImeStatus(): Promise<AndroidImeStatus> {
-    return invokeOrMock("get_android_ime_status", undefined, () => ({
-        state: "notAndroid",
-        enabled: false,
-        selected: false,
-        message: "Android IME is only available on Android",
-    }))
 }
 
 export function getAndroidOverlayStatus(): Promise<AndroidOverlayStatus> {
@@ -112,10 +102,6 @@ export function requestAndroidAccessibilityPermission(): Promise<{ launched: boo
         launched: false,
         message: "Mock: accessibility settings unavailable in browser preview",
     }))
-}
-
-export function requestAndroidImeSettings(): Promise<void> {
-    return invokeOrMock("request_android_ime_settings", undefined, () => undefined)
 }
 
 export { isAndroid, isDesktop, isMobile } from "./platform"
@@ -233,7 +219,7 @@ let mockSettings: UserPreferences = {
     audioRecordingMaxEntries: null,
     marketplaceBaseUrl: "https://apic.openless.top",
     marketplaceDevLogin: "",
-    androidInsertStrategy: "auto",
+    androidInsertStrategy: "accessibility",
     androidOverlayTrigger: "background",
 }
 

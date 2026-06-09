@@ -822,10 +822,11 @@ export const zhTW: typeof zhCN = {
       androidImeDisabled: '未啟用',
       androidOverlayLabel: '懸浮窗',
       androidAccessibilityLabel: '無障礙服務',
+      androidAccessibilityImpact: '開啟後可在不切換鍵盤的情況下把結果輸出到目前輸入框；未開啟時仍會複製到剪貼簿，需要手動貼上。',
       androidInsertStrategyLabel: '文字插入策略',
       androidOverlayTriggerLabel: '懸浮窗顯示時機',
-      androidInsertStrategy: { auto: '自動（推薦）', ime: 'OpenLess 輸入法', accessibility: '無障礙貼上', clipboard: '僅剪貼簿' },
-      androidInsertStrategyHint: { auto: '依序嘗試 IME、無障礙貼上、剪貼簿', ime: '需啟用 OpenLess 鍵盤', accessibility: '不切換鍵盤', clipboard: '需手動貼上' },
+      androidInsertStrategy: { accessibility: '自動輸出到輸入框', clipboard: '僅剪貼簿' },
+      androidInsertStrategyHint: { accessibility: '需要開啟無障礙服務；不可用時會複製到剪貼簿。', clipboard: '不需要無障礙權限，只複製到剪貼簿，由你手動貼上。' },
       androidOverlayTrigger: { background: '退到背景', keyboard: '鍵盤彈出時', always: '常駐' },
       androidOverlayTriggerHint: { background: '省電', keyboard: '需無障礙', always: '一直佔屏' },
       windowsIme: {

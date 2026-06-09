@@ -80,7 +80,7 @@ const previousPrefs: UserPreferences = {
   audioRecordingMaxEntries: null,
   marketplaceBaseUrl: '',
   marketplaceDevLogin: '',
-  androidInsertStrategy: 'auto',
+  androidInsertStrategy: 'accessibility',
   androidOverlayTrigger: 'background',
 };
 

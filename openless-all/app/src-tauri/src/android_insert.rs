@@ -14,25 +14,11 @@ pub fn android_insert_with_strategy(
     }
 
     match strategy {
-        AndroidInsertStrategy::Ime => {
-            try_ime(text).unwrap_or_else(|| clipboard_fallback(inserter, text))
-        }
-        AndroidInsertStrategy::Accessibility => try_accessibility(inserter, text)
-            .unwrap_or_else(|| clipboard_fallback(inserter, text)),
         AndroidInsertStrategy::Clipboard => clipboard_fallback(inserter, text),
-        AndroidInsertStrategy::Auto => try_ime(text)
-            .or_else(|| try_accessibility(inserter, text))
+        AndroidInsertStrategy::Accessibility
+        | AndroidInsertStrategy::Auto
+        | AndroidInsertStrategy::Ime => try_accessibility(inserter, text)
             .unwrap_or_else(|| clipboard_fallback(inserter, text)),
-    }
-}
-
-fn try_ime(text: &str) -> Option<InsertStatus> {
-    let result = crate::android_ime::commit_text(text);
-    if result.committed {
-        Some(InsertStatus::Inserted)
-    } else {
-        log::info!("[android-insert] IME commit unavailable: {}", result.message);
-        None
     }
 }
 

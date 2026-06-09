@@ -9,7 +9,6 @@ import {
   checkMicrophonePermission,
   checkNetwork,
   getAndroidAccessibilityStatus,
-  getAndroidImeStatus,
   getAndroidOverlayStatus,
   getHotkeyStatus,
   getSettings,
@@ -17,7 +16,6 @@ import {
   openSystemSettings,
   requestAccessibilityPermission,
   requestAndroidAccessibilityPermission,
-  requestAndroidImeSettings,
   requestAndroidOverlayPermission,
   requestMicrophonePermission,
   setSettings,
@@ -27,7 +25,6 @@ import { getPlatformCapabilities } from '../../lib/platform';
 import { checkAndroidMicrophoneAccess, requestAndroidMicrophoneAccess } from '../../lib/androidMicrophonePermission';
 import type {
   AndroidAccessibilityStatus,
-  AndroidImeStatus,
   AndroidInsertStrategy,
   AndroidOverlayStatus,
   AndroidOverlayTrigger,
@@ -49,7 +46,6 @@ export function PermissionsSection() {
   const [windowsIme, setWindowsIme] = useState<WindowsImeStatus | null>(null);
   const [network, setNetwork] = useState<NetworkCheckResult | null>(null);
   const [platformCaps, setPlatformCaps] = useState<PlatformCapabilities | null>(null);
-  const [androidIme, setAndroidIme] = useState<AndroidImeStatus | null>(null);
   const [androidOverlay, setAndroidOverlay] = useState<AndroidOverlayStatus | null>(null);
   const [androidAccessibility, setAndroidAccessibility] = useState<AndroidAccessibilityStatus | null>(null);
   const [androidPrefs, setAndroidPrefs] = useState<Pick<UserPreferences, 'androidInsertStrategy' | 'androidOverlayTrigger'> | null>(null);
@@ -61,13 +57,11 @@ export function PermissionsSection() {
 
   const refreshAndroid = async () => {
     if (platformCaps?.platform !== 'android') return;
-    const [ime, overlay, accessibility, settings] = await Promise.all([
-      getAndroidImeStatus(),
+    const [overlay, accessibility, settings] = await Promise.all([
       getAndroidOverlayStatus(),
       getAndroidAccessibilityStatus(),
       getSettings(),
     ]);
-    setAndroidIme(ime);
     setAndroidOverlay(overlay);
     setAndroidAccessibility(accessibility);
     setAndroidPrefs({
@@ -214,21 +208,6 @@ export function PermissionsSection() {
         </div>
       </SettingRow>
       )}
-      {platformCaps?.supportsImeInput && platformCaps.platform === 'android' && (
-        <SettingRow label={t('settings.permissions.androidImeLabel')}>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'flex-end', width: '100%', flexWrap: 'wrap', minWidth: 0 }}>
-            {androidIme?.message && (
-              <span style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', maxWidth: 220, textAlign: 'right' }}>
-                {androidIme.message}
-              </span>
-            )}
-            <AndroidImeStatusPill status={androidIme} />
-            <Btn variant="ghost" size="sm" onClick={() => { void requestAndroidImeSettings().then(refreshAndroid); }}>
-              {t('settings.permissions.openSystem')}
-            </Btn>
-          </div>
-        </SettingRow>
-      )}
       {platformCaps?.supportsOverlay && platformCaps.platform === 'android' && (
         <>
           <SettingRow label={t('settings.permissions.androidOverlayLabel')}>
@@ -247,34 +226,37 @@ export function PermissionsSection() {
             </div>
           </SettingRow>
           <SettingRow label={t('settings.permissions.androidAccessibilityLabel')}>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'flex-end', width: '100%', flexWrap: 'wrap', minWidth: 0 }}>
-              {androidAccessibility?.message && (
-                <span style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', maxWidth: 220, textAlign: 'right' }}>
-                  {androidAccessibility.message}
-                </span>
-              )}
-              <AndroidAccessibilityStatusPill status={androidAccessibility} />
-              {!androidAccessibility?.enabled && (
-                <Btn variant="ghost" size="sm" onClick={() => { void requestAndroidAccessibilityPermission().then(refreshAndroid); }}>
-                  {t('settings.permissions.openSystem')}
-                </Btn>
-              )}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-end', width: '100%', minWidth: 0 }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'flex-end', width: '100%', flexWrap: 'wrap', minWidth: 0 }}>
+                {androidAccessibility?.message && (
+                  <span style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', maxWidth: 220, textAlign: 'right' }}>
+                    {androidAccessibility.message}
+                  </span>
+                )}
+                <AndroidAccessibilityStatusPill status={androidAccessibility} />
+                {!androidAccessibility?.enabled && (
+                  <Btn variant="ghost" size="sm" onClick={() => { void requestAndroidAccessibilityPermission().then(refreshAndroid); }}>
+                    {t('settings.permissions.openSystem')}
+                  </Btn>
+                )}
+              </div>
+              <span style={{ fontSize: 11, color: 'var(--ol-ink-4)', maxWidth: 300, textAlign: 'right' }}>
+                {t('settings.permissions.androidAccessibilityImpact')}
+              </span>
             </div>
           </SettingRow>
           <SettingRow label={t('settings.permissions.androidInsertStrategyLabel')}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-end', width: '100%' }}>
               <select
-                value={androidPrefs?.androidInsertStrategy ?? 'auto'}
+                value={androidPrefs?.androidInsertStrategy ?? 'accessibility'}
                 onChange={(event) => { void updateAndroidPref('androidInsertStrategy', event.target.value as AndroidInsertStrategy); }}
                 style={{ minWidth: 180, maxWidth: '100%' }}
               >
-                <option value="auto">{t('settings.permissions.androidInsertStrategy.auto')}</option>
-                <option value="ime">{t('settings.permissions.androidInsertStrategy.ime')}</option>
                 <option value="accessibility">{t('settings.permissions.androidInsertStrategy.accessibility')}</option>
                 <option value="clipboard">{t('settings.permissions.androidInsertStrategy.clipboard')}</option>
               </select>
               <span style={{ fontSize: 11, color: 'var(--ol-ink-4)', textAlign: 'right' }}>
-                {t(`settings.permissions.androidInsertStrategyHint.${androidPrefs?.androidInsertStrategy ?? 'auto'}`)}
+                {t(`settings.permissions.androidInsertStrategyHint.${androidPrefs?.androidInsertStrategy ?? 'accessibility'}`)}
               </span>
             </div>
           </SettingRow>
@@ -382,18 +364,6 @@ function NetworkStatusPill({ status }: { status: NetworkCheckResult | null }) {
     return <Pill tone="ok"><Icon name="check" size={11} />{t('settings.permissions.networkOk')}</Pill>;
   }
   return <Pill tone="outline">{t('settings.permissions.networkOffline') ?? '不可用'}</Pill>;
-}
-
-function AndroidImeStatusPill({ status }: { status: AndroidImeStatus | null }) {
-  const { t } = useTranslation();
-  if (!status) return <Pill tone="default">{t('settings.permissions.checking')}</Pill>;
-  if (status.selected) {
-    return <Pill tone="ok"><Icon name="check" size={11} />{t('settings.permissions.androidImeSelected')}</Pill>;
-  }
-  if (status.enabled) {
-    return <Pill tone="default">{t('settings.permissions.androidImeEnabled')}</Pill>;
-  }
-  return <Pill tone="outline">{t('settings.permissions.androidImeDisabled')}</Pill>;
 }
 
 function AndroidOverlayStatusPill({ status }: { status: AndroidOverlayStatus | null }) {

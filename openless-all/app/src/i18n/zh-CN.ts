@@ -820,19 +820,16 @@ export const zhCN = {
       androidImeDisabled: '未启用',
       androidOverlayLabel: '悬浮窗',
       androidAccessibilityLabel: '无障碍服务',
+      androidAccessibilityImpact: '开启后可在不切换键盘的情况下把结果输出到当前输入框；不开启时仍会复制到剪贴板，需要手动粘贴。',
       androidInsertStrategyLabel: '文本插入策略',
       androidOverlayTriggerLabel: '悬浮窗显示时机',
       androidInsertStrategy: {
-        auto: '自动（推荐）',
-        ime: 'OpenLess 输入法',
-        accessibility: '无障碍粘贴',
+        accessibility: '自动输出到输入框',
         clipboard: '仅剪贴板',
       },
       androidInsertStrategyHint: {
-        auto: '优先输入法直写，失败再尝试无障碍粘贴，最后复制到剪贴板。',
-        ime: '延迟低，但需要在系统里启用/切换 OpenLess 键盘。',
-        accessibility: '不切换当前键盘，但需无障碍授权，部分 App 可能禁粘贴。',
-        clipboard: '最稳、权限最少，但需要手动粘贴。',
+        accessibility: '需要开启无障碍服务；不可用时会复制到剪贴板。',
+        clipboard: '不需要无障碍权限，结果只复制到剪贴板，由你手动粘贴。',
       },
       androidOverlayTrigger: {
         background: '应用退到后台',

@@ -824,10 +824,11 @@ export const ja: typeof zhCN = {
       androidImeDisabled: '無効',
       androidOverlayLabel: 'フローティングオーバーレイ',
       androidAccessibilityLabel: 'アクセシビリティ',
+      androidAccessibilityImpact: '有効にすると、キーボードを切り替えずに現在の入力欄へ結果を出力します。無効の場合はクリップボードへコピーし、手動で貼り付けます。',
       androidInsertStrategyLabel: '挿入方式',
       androidOverlayTriggerLabel: '表示タイミング',
-      androidInsertStrategy: { auto: '自動', ime: 'IME', accessibility: 'アクセシビリティ', clipboard: 'クリップボード' },
-      androidInsertStrategyHint: { auto: '自動で最適な方式を試行', ime: 'OpenLess キーボードが必要', accessibility: '現在のキーボードを維持', clipboard: '手動ペースト' },
+      androidInsertStrategy: { accessibility: '入力欄へ自動出力', clipboard: 'クリップボードのみ' },
+      androidInsertStrategyHint: { accessibility: 'アクセシビリティが必要です。使えない場合はクリップボードにコピーします。', clipboard: 'アクセシビリティ権限は不要です。コピー後に手動で貼り付けます。' },
       androidOverlayTrigger: { background: 'バックグラウンド', keyboard: 'キーボード表示時', always: '常時' },
       androidOverlayTriggerHint: { background: 'シンプル', keyboard: 'アクセシビリティ必要', always: '常に表示' },
       windowsIme: {

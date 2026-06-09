@@ -107,7 +107,7 @@ impl TextInserter {
         macos_insert_status_after_paste(simulate_paste())
     }
 
-    /// Android：优先 IME commit，失败则写剪贴板兜底。
+    /// Android：跨应用输入由 dictation 流程按用户策略处理；通用插入只写剪贴板兜底。
     #[cfg(target_os = "android")]
     pub fn insert(
         &self,
@@ -118,13 +118,7 @@ impl TextInserter {
         if text.is_empty() {
             return InsertStatus::CopiedFallback;
         }
-        let result = crate::android_ime::commit_text(text);
-        if result.committed {
-            InsertStatus::Inserted
-        } else {
-            log::warn!("[insertion] android IME commit failed: {}", result.message);
-            self.copy_fallback(text)
-        }
+        self.copy_fallback(text)
     }
 
     /// 只写剪贴板、不模拟粘贴。用于目标控件活跃状态无法验证时的兜底路径。

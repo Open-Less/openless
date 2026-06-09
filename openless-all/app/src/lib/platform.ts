@@ -65,7 +65,7 @@ export function inferPlatformCapabilities(): PlatformCapabilities {
       supportsDesktopHotkey: false,
       supportsTray: false,
       supportsOverlay: true,
-      supportsImeInput: true,
+      supportsImeInput: false,
       supportsLocalAsr: false,
       supportsInAppDictation: true,
       supportsAutoUpdate: false,

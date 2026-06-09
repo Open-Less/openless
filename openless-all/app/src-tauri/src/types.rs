@@ -1073,9 +1073,18 @@ impl<'de> Deserialize<'de> for UserPreferences {
             audio_recording_max_entries: wire.audio_recording_max_entries,
             marketplace_base_url: wire.marketplace_base_url,
             marketplace_dev_login: wire.marketplace_dev_login,
-            android_insert_strategy: wire.android_insert_strategy,
+            android_insert_strategy: normalize_android_insert_strategy(wire.android_insert_strategy),
             android_overlay_trigger: wire.android_overlay_trigger,
         })
+    }
+}
+
+fn normalize_android_insert_strategy(strategy: AndroidInsertStrategy) -> AndroidInsertStrategy {
+    match strategy {
+        AndroidInsertStrategy::Auto | AndroidInsertStrategy::Ime => {
+            AndroidInsertStrategy::Accessibility
+        }
+        strategy => strategy,
     }
 }
 
@@ -2326,28 +2335,11 @@ pub struct AndroidAccessibilityStatus {
 }
 
 fn default_android_insert_strategy() -> AndroidInsertStrategy {
-    AndroidInsertStrategy::Auto
+    AndroidInsertStrategy::Accessibility
 }
 
 fn default_android_overlay_trigger() -> AndroidOverlayTrigger {
     AndroidOverlayTrigger::Background
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum AndroidImeState {
-    Enabled,
-    NotEnabled,
-    NotAndroid,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct AndroidImeStatus {
-    pub state: AndroidImeState,
-    pub enabled: bool,
-    pub selected: bool,
-    pub message: String,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -2385,7 +2377,7 @@ impl PlatformCapabilities {
         {
             Self {
                 platform: "android".to_string(),
-                supports_ime_input: true,
+                supports_ime_input: false,
                 supports_overlay: true,
                 supports_desktop_hotkey: false,
                 supports_tray: false,

@@ -824,10 +824,11 @@ export const ko: typeof zhCN = {
       androidImeDisabled: '비활성',
       androidOverlayLabel: '플로팅 오버레이',
       androidAccessibilityLabel: '접근성 서비스',
+      androidAccessibilityImpact: '켜면 키보드를 전환하지 않고 현재 입력칸에 결과를 출력합니다. 끄면 클립보드에 복사되며 직접 붙여넣어야 합니다.',
       androidInsertStrategyLabel: '텍스트 삽입 방식',
       androidOverlayTriggerLabel: '오버레이 표시',
-      androidInsertStrategy: { auto: '자동', ime: 'IME', accessibility: '접근성 붙여넣기', clipboard: '클립보드만' },
-      androidInsertStrategyHint: { auto: '자동 폴백', ime: 'OpenLess 키보드 필요', accessibility: '현재 키보드 유지', clipboard: '수동 붙여넣기' },
+      androidInsertStrategy: { accessibility: '입력칸에 자동 출력', clipboard: '클립보드만' },
+      androidInsertStrategyHint: { accessibility: '접근성 서비스가 필요합니다. 사용할 수 없으면 클립보드에 복사합니다.', clipboard: '접근성 권한이 필요 없으며 직접 붙여넣습니다.' },
       androidOverlayTrigger: { background: '백그라운드', keyboard: '키보드 표시 시', always: '항상' },
       androidOverlayTriggerHint: { background: '단순', keyboard: '접근성 필요', always: '항상 표시' },
       windowsIme: {

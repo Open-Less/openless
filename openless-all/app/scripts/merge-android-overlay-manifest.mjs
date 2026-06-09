@@ -20,17 +20,6 @@ const APPLICATION_SNIPPET = `
 
 const SERVICE_SNIPPETS = [
   `<service
-            android:name=".OpenLessImeService"
-            android:exported="true"
-            android:permission="android.permission.BIND_INPUT_METHOD">
-            <intent-filter>
-                <action android:name="android.view.InputMethod" />
-            </intent-filter>
-            <meta-data
-                android:name="android.view.im"
-                android:resource="@xml/openless_ime_method" />
-        </service>`,
-  `<service
             android:name=".OpenLessOverlayService"
             android:exported="false"
             android:foregroundServiceType="microphone" />`,
@@ -49,18 +38,12 @@ const SERVICE_SNIPPETS = [
             android:name=".OverlayPermissionActivity"
             android:exported="false"
             android:theme="@android:style/Theme.Translucent.NoTitleBar" />`,
-  `<activity
-            android:name=".OpenLessOverlayRecordingActivity"
-            android:excludeFromRecents="true"
-            android:exported="false"
-            android:noHistory="true"
-            android:theme="@android:style/Theme.Translucent.NoTitleBar" />`,
 ];
 
 function printHelp() {
   console.log(`Usage: node scripts/merge-android-overlay-manifest.mjs [options]
 
-Merge overlay / IME / accessibility declarations into generated AndroidManifest.xml.
+Merge overlay / accessibility declarations into generated AndroidManifest.xml.
 
 Options:
   --dry-run   Print planned changes without writing
@@ -171,7 +154,7 @@ function main() {
   }
 
   writeFileSync(targetPath, content, 'utf8');
-  console.log(`Merged overlay / IME / accessibility entries into ${targetPath}`);
+  console.log(`Merged overlay / accessibility entries into ${targetPath}`);
 }
 
 try {

@@ -44,7 +44,7 @@ use crate::types::{
     HotkeyCapability,
     HotkeyStatus, OutputLanguagePreference, PolishMode, ShortcutBinding, StylePack, StylePackKind,
     StylePackRuntimeDiagnostics, StyleSystemPrompts, UpdateChannel, UserPreferences,
-    VocabPresetStore, AndroidImeStatus, AndroidOverlayStatus,
+    VocabPresetStore, AndroidOverlayStatus,
     PlatformCapabilities, HotkeyInstallError, HotkeyStatusState,
 };
 #[cfg(not(mobile))]
@@ -668,11 +668,6 @@ pub fn get_platform_capabilities() -> PlatformCapabilities {
 }
 
 #[tauri::command]
-pub fn get_android_ime_status() -> AndroidImeStatus {
-    crate::android_ime::get_android_ime_status()
-}
-
-#[tauri::command]
 pub fn get_android_overlay_status() -> AndroidOverlayStatus {
     crate::android_overlay::get_android_overlay_status()
 }
@@ -704,10 +699,6 @@ pub fn request_android_accessibility_permission(
     crate::android_accessibility::request_android_accessibility_permission()
 }
 
-#[tauri::command]
-pub fn request_android_ime_settings() -> Result<(), String> {
-    crate::android_ime::request_android_ime_settings()
-}
 
 #[tauri::command]
 pub fn open_external_url(url: String) -> Result<(), String> {
