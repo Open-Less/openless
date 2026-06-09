@@ -78,9 +78,9 @@ pub mod android {
         Ok(JClass::from(class_obj))
     }
 
-    fn call_static_void_with_context_class(
-        env: &mut JNIEnv,
-        context: &JObject,
+    fn call_static_void_with_context_class<'local>(
+        env: &mut JNIEnv<'local>,
+        context: &JObject<'local>,
         class_name: &str,
         method: &str,
         sig: &str,
