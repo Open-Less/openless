@@ -33,6 +33,18 @@ video-materials/
 node_modules/
 dist/
 target/
+# 本地从 CI / Actions 下载的 APK 及解压目录（非源码）
+ci-artifacts/
+*.apk
+
+# Android 真机调试产物（日志 / 截图 / adb 导出 / 数据备份 / 临时还原目录）
+android-crash*.log
+android-run*.log
+openless-package.txt
+openless-android-run*.png
+openless-appdata*.tar
+tmp-run*/
+
 .cargo/registry/
 .cargo/git/
 
