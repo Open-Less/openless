@@ -6,13 +6,8 @@ pub mod android {
     use jni::JNIEnv;
     use jni::JavaVM;
 
-    pub struct AndroidEnv<'a> {
-        pub env: &'a mut JNIEnv<'a>,
-        pub context: JObject<'a>,
-    }
-
     pub fn with_android_env<R>(
-        f: impl for<'a> FnOnce(AndroidEnv<'a>) -> Result<R, String>,
+        f: impl for<'local> FnOnce(&mut JNIEnv<'local>, &JObject<'local>) -> Result<R, String>,
     ) -> Result<R, String> {
         let android_context = ndk_context::android_context();
         let vm = unsafe {
@@ -23,10 +18,7 @@ pub mod android {
             .attach_current_thread()
             .map_err(|error| format!("attach Android thread: {error}"))?;
         let context = unsafe { JObject::from_raw(android_context.context() as jni::sys::jobject) };
-        f(AndroidEnv {
-            env: &mut env,
-            context,
-        })
+        f(&mut env, &context)
     }
 
     pub fn call_static_bool(

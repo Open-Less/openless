@@ -18,8 +18,8 @@ pub fn notify_capsule_state(payload: &CapsulePayload) {
     {
         let state = capsule_state_name(payload.state);
         let message = payload.message.as_deref();
-        if let Err(error) = crate::android_jni::android::with_android_env(|mut ctx| {
-            crate::android_jni::android::notify_overlay_bridge(&mut ctx.env, state, message)
+        if let Err(error) = crate::android_jni::android::with_android_env(|env, _context| {
+            crate::android_jni::android::notify_overlay_bridge(env, state, message)
         }) {
             log::warn!("[android-native] notify overlay bridge failed: {error}");
         }
@@ -30,10 +30,10 @@ pub fn notify_capsule_state(payload: &CapsulePayload) {
 pub fn show_overlay() -> Result<(), String> {
     #[cfg(target_os = "android")]
     {
-        crate::android_jni::android::with_android_env(|mut ctx| {
+        crate::android_jni::android::with_android_env(|env, context| {
             crate::android_jni::android::start_service_action(
-                &mut ctx.env,
-                &ctx.context,
+                env,
+                context,
                 "com.openless.app.OpenLessOverlayService",
                 "com.openless.app.overlay.SHOW",
             )?;
@@ -47,10 +47,10 @@ pub fn show_overlay() -> Result<(), String> {
 pub fn hide_overlay() -> Result<(), String> {
     #[cfg(target_os = "android")]
     {
-        crate::android_jni::android::with_android_env(|mut ctx| {
+        crate::android_jni::android::with_android_env(|env, context| {
             crate::android_jni::android::start_service_action(
-                &mut ctx.env,
-                &ctx.context,
+                env,
+                context,
                 "com.openless.app.OpenLessOverlayService",
                 "com.openless.app.overlay.HIDE",
             )?;
@@ -166,8 +166,8 @@ mod jni_exports {
         _env: *mut JNIEnv,
         _class: JClass,
     ) -> jboolean {
-        let visible = crate::android_jni::android::with_android_env(|mut ctx| {
-            crate::android_jni::android::can_draw_overlays(&mut ctx.env, &ctx.context)
+        let visible = crate::android_jni::android::with_android_env(|env, context| {
+            crate::android_jni::android::can_draw_overlays(env, context)
         })
         .unwrap_or(false);
         crate::android_jni::android::export_jboolean(visible)
@@ -186,11 +186,9 @@ mod jni_exports {
         _env: *mut JNIEnv,
         _class: JClass,
     ) -> jstring {
-        crate::android_jni::android::with_android_env(|mut ctx| {
-            Ok(crate::android_jni::android::export_jstring(
-                &mut ctx.env,
-                overlay_trigger_mode_name(),
-            ))
+        let mode = overlay_trigger_mode_name().to_string();
+        crate::android_jni::android::with_android_env(|env, _context| {
+            Ok(crate::android_jni::android::export_jstring(env, &mode))
         })
         .unwrap_or(std::ptr::null_mut())
     }

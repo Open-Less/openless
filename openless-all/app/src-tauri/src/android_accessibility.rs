@@ -58,8 +58,8 @@ mod android_impl {
     use crate::types::{AndroidAccessibilityState, AndroidAccessibilityStatus as Status};
 
     pub fn get_android_accessibility_status() -> AndroidAccessibilityStatus {
-        match crate::android_jni::android::with_android_env(|mut ctx| {
-            crate::android_jni::android::accessibility_enabled(&mut ctx.env, &ctx.context)
+        match crate::android_jni::android::with_android_env(|env, context| {
+            crate::android_jni::android::accessibility_enabled(env, context)
         }) {
             Ok(true) => Status {
                 state: AndroidAccessibilityState::Enabled,
@@ -80,8 +80,8 @@ mod android_impl {
     }
 
     pub fn request_android_accessibility_permission() -> AndroidAccessibilityPermissionResult {
-        match crate::android_jni::android::with_android_env(|mut ctx| {
-            crate::android_jni::android::launch_accessibility_settings(&mut ctx.env, &ctx.context)
+        match crate::android_jni::android::with_android_env(|env, context| {
+            crate::android_jni::android::launch_accessibility_settings(env, context)
         }) {
             Ok(()) => AndroidAccessibilityPermissionResult {
                 launched: true,
@@ -95,8 +95,8 @@ mod android_impl {
     }
 
     pub fn paste_via_accessibility() -> bool {
-        crate::android_jni::android::with_android_env(|mut ctx| {
-            crate::android_jni::android::accessibility_paste(&mut ctx.env)
+        crate::android_jni::android::with_android_env(|env, _context| {
+            crate::android_jni::android::accessibility_paste(env)
         })
         .unwrap_or(false)
     }

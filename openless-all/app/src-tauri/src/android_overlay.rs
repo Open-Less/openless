@@ -72,8 +72,8 @@ mod android_impl {
     use crate::types::{AndroidOverlayPermissionState, AndroidOverlayStatus as Status};
 
     pub fn get_android_overlay_status() -> AndroidOverlayStatus {
-        let granted = crate::android_jni::android::with_android_env(|mut ctx| {
-            crate::android_jni::android::can_draw_overlays(&mut ctx.env, &ctx.context)
+        let granted = crate::android_jni::android::with_android_env(|env, context| {
+            crate::android_jni::android::can_draw_overlays(env, context)
         })
         .unwrap_or(false);
         Status {
@@ -92,10 +92,10 @@ mod android_impl {
     }
 
     pub fn request_android_overlay_permission() -> AndroidOverlayPermissionResult {
-        match crate::android_jni::android::with_android_env(|mut ctx| {
+        match crate::android_jni::android::with_android_env(|env, context| {
             crate::android_jni::android::start_activity_class(
-                &mut ctx.env,
-                &ctx.context,
+                env,
+                context,
                 "com.openless.app.OverlayPermissionActivity",
             )
         }) {

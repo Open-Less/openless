@@ -33,8 +33,8 @@ pub fn get_android_ime_status() -> AndroidImeStatus {
 pub fn request_android_ime_settings() -> Result<(), String> {
     #[cfg(target_os = "android")]
     {
-        crate::android_jni::android::with_android_env(|mut ctx| {
-            crate::android_jni::android::launch_input_method_settings(&mut ctx.env, &ctx.context)
+        crate::android_jni::android::with_android_env(|env, context| {
+            crate::android_jni::android::launch_input_method_settings(env, context)
         })
     }
 
@@ -67,8 +67,8 @@ mod android_impl {
     use crate::types::{AndroidImeState, AndroidImeStatus as Status};
 
     pub fn get_android_ime_status() -> AndroidImeStatus {
-        match crate::android_jni::android::with_android_env(|mut ctx| {
-            crate::android_jni::android::ime_status(&mut ctx.env, &ctx.context)
+        match crate::android_jni::android::with_android_env(|env, context| {
+            crate::android_jni::android::ime_status(env, context)
         }) {
             Ok((enabled, selected)) => {
                 let state = if selected {
@@ -107,8 +107,8 @@ mod android_impl {
                 message: "empty text".to_string(),
             };
         }
-        match crate::android_jni::android::with_android_env(|mut ctx| {
-            crate::android_jni::android::ime_commit_text(&mut ctx.env, text)
+        match crate::android_jni::android::with_android_env(|env, _context| {
+            crate::android_jni::android::ime_commit_text(env, text)
         }) {
             Ok(true) => AndroidImeCommitResult {
                 committed: true,
