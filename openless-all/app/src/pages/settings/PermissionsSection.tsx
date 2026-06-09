@@ -19,6 +19,7 @@ import {
   requestAndroidOverlayPermission,
   requestMicrophonePermission,
   setSettings,
+  showAndroidOverlay,
 } from '../../lib/ipc';
 import type { NetworkCheckResult } from '../../lib/ipc';
 import { getPlatformCapabilities } from '../../lib/platform';
@@ -68,6 +69,15 @@ export function PermissionsSection() {
       androidInsertStrategy: settings.androidInsertStrategy,
       androidOverlayTrigger: settings.androidOverlayTrigger,
     });
+    if (
+      settings.androidOverlayTrigger === 'keyboard' &&
+      !accessibility.enabled &&
+      overlay.permission === 'granted' &&
+      !overlay.overlayVisible
+    ) {
+      await showAndroidOverlay();
+      setAndroidOverlay(await getAndroidOverlayStatus());
+    }
   };
 
   const refreshPermissions = async () => {
@@ -113,6 +123,9 @@ export function PermissionsSection() {
       : undefined;
     // 麦克风检查会短暂打开输入流，避免每秒探测导致隐私指示器频繁闪烁。
     const permissionId = window.setInterval(refreshPermissions, 10000);
+    const androidId = platformCaps?.platform === 'android'
+      ? window.setInterval(refreshAndroid, 3000)
+      : undefined;
     const networkId = window.setInterval(refreshNetwork, 30000);
     const onFocus = () => {
       refreshPermissions();
@@ -130,6 +143,7 @@ export function PermissionsSection() {
     return () => {
       if (hotkeyId !== undefined) window.clearInterval(hotkeyId);
       window.clearInterval(permissionId);
+      if (androidId !== undefined) window.clearInterval(androidId);
       window.clearInterval(networkId);
       window.removeEventListener('focus', onFocus);
     };

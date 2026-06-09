@@ -3,6 +3,7 @@ package com.openless.app
 import android.app.Activity
 import android.app.Application
 import android.os.Bundle
+import android.util.Log
 
 /**
  * Registers activity lifecycle hooks for overlay background trigger mode.
@@ -30,7 +31,8 @@ class OpenLessApplication : Application() {
     }
 
     private fun maybeShowOverlayOnBackground() {
-        if (OpenLessNative.nativeGetOverlayTriggerMode() != "background") {
+        val trigger = effectiveOverlayTriggerMode()
+        if (trigger != "background" && trigger != "always") {
             return
         }
         if (!OpenLessNative.nativeCanDrawOverlays(this)) {
@@ -40,11 +42,31 @@ class OpenLessApplication : Application() {
     }
 
     private fun maybeHideOverlayOnForeground() {
-        if (OpenLessNative.nativeGetOverlayTriggerMode() == "always") {
+        if (effectiveOverlayTriggerMode() == "always") {
+            if (OpenLessNative.nativeCanDrawOverlays(this) && !OpenLessNative.nativeIsOverlayVisible()) {
+                OpenLessNative.nativeShowOverlay(this)
+            }
             return
         }
         if (OpenLessNative.nativeIsOverlayVisible()) {
             OpenLessNative.nativeHideOverlay(this)
         }
+    }
+
+    private fun effectiveOverlayTriggerMode(): String {
+        val configured = OpenLessAndroidPreferences.overlayTriggerMode(this) ?: try {
+            OpenLessNative.nativeGetOverlayTriggerMode()
+        } catch (error: Throwable) {
+            Log.w(TAG, "overlay trigger mode unavailable", error)
+            "background"
+        }
+        if (configured == "keyboard" && !OpenLessAccessibilityService.isEnabled(this)) {
+            return "always"
+        }
+        return configured
+    }
+
+    companion object {
+        private const val TAG = "OpenLessApplication"
     }
 }

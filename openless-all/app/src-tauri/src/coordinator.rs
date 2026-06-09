@@ -506,6 +506,11 @@ impl Coordinator {
                 AndroidOverlayTrigger::Always => {
                     let _ = crate::android_overlay::show_android_overlay();
                 }
+                AndroidOverlayTrigger::Keyboard
+                    if !crate::android_accessibility::get_android_accessibility_status().enabled =>
+                {
+                    let _ = crate::android_overlay::show_android_overlay();
+                }
                 AndroidOverlayTrigger::Background | AndroidOverlayTrigger::Keyboard => {
                     let _ = crate::android_overlay::hide_android_overlay();
                 }

@@ -40,6 +40,7 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
     private var paramStartY = 0
     private var dragging = false
 
+    private lateinit var iconContainer: FrameLayout
     private lateinit var iconButton: ImageView
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -143,13 +144,20 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         }
         layoutParams = params
 
-        val root = FrameLayout(this)
+        val root = FrameLayout(this).apply {
+            contentDescription = "OpenLess"
+            isClickable = true
+            isFocusable = false
+            setPadding(dp(ICON_PADDING_DP), dp(ICON_PADDING_DP), dp(ICON_PADDING_DP), dp(ICON_PADDING_DP))
+            setOnClickListener { handleIconClick() }
+        }
+        iconContainer = root
         iconButton = buildIconButton()
         root.addView(
             iconButton,
-            FrameLayout.LayoutParams(dp(ICON_SIZE_DP), dp(ICON_SIZE_DP), Gravity.CENTER),
+            FrameLayout.LayoutParams(dp(ICON_IMAGE_SIZE_DP), dp(ICON_IMAGE_SIZE_DP), Gravity.CENTER),
         )
-        attachDragHandler(iconButton, params)
+        attachDragHandler(root, params)
         windowManager?.addView(root, params)
         rootView = root
         applyVisualState(
@@ -172,11 +180,10 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         return ImageView(this).apply {
             setImageResource(R.mipmap.ic_launcher)
             scaleType = ImageView.ScaleType.CENTER_INSIDE
-            setPadding(dp(6), dp(6), dp(6), dp(6))
+            setPadding(0, 0, 0, 0)
             contentDescription = "OpenLess"
-            isClickable = true
+            isClickable = false
             isFocusable = false
-            setOnClickListener { handleIconClick() }
         }
     }
 
@@ -241,7 +248,7 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
     }
 
     private fun applyVisualState(state: OverlayVisualState) {
-        if (!::iconButton.isInitialized) return
+        if (!::iconContainer.isInitialized || !::iconButton.isInitialized) return
         val (alpha, fill, stroke, strokeWidth, enabled) = when (state) {
             OverlayVisualState.Idle -> VisualStyle(
                 alpha = 0.58f,
@@ -272,9 +279,10 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
                 enabled = true,
             )
         }
-        iconButton.alpha = alpha
+        iconContainer.alpha = alpha
+        iconContainer.isEnabled = enabled
+        iconContainer.background = circleDrawable(fill, stroke, dp(strokeWidth))
         iconButton.isEnabled = enabled
-        iconButton.background = circleDrawable(fill, stroke, dp(strokeWidth))
     }
 
     private fun startRecordingFromOverlay() {
@@ -410,6 +418,8 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         const val EXTRA_KEYBOARD_TOP = "keyboard_top"
         const val EXTRA_KEYBOARD_BOTTOM = "keyboard_bottom"
         private const val ICON_SIZE_DP = 72
+        private const val ICON_IMAGE_SIZE_DP = 56
+        private const val ICON_PADDING_DP = 8
         private const val DRAG_SLOP_PX = 8
         private const val PREFS_NAME = "openless_overlay"
         private const val PREF_KEY_X = "overlay_x"

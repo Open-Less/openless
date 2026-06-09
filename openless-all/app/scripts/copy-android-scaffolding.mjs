@@ -1,13 +1,15 @@
 #!/usr/bin/env node
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 const appRoot = fileURLToPath(new URL('..', import.meta.url));
 const scaffoldingRoot = join(appRoot, 'src-tauri/android-scaffolding');
+const androidIconRoot = join(appRoot, 'src-tauri/icons/android');
 const genRoot = join(appRoot, 'src-tauri/gen/android/app/src/main');
 const kotlinDest = join(genRoot, 'java/com/openless/app');
+const resDest = join(genRoot, 'res');
 const resXmlDest = join(genRoot, 'res/xml');
 
 const KOTLIN_FILES = [
@@ -105,6 +107,29 @@ function mergeStringsXml(dryRun) {
   console.log(`Merged OpenLess strings into ${stringsPath}`);
 }
 
+function copyDirectoryContents(srcRoot, destRoot, dryRun) {
+  if (!existsSync(srcRoot)) {
+    throw new Error(`Missing Android icon resources: ${srcRoot}`);
+  }
+
+  ensureDir(destRoot, dryRun);
+  for (const entry of readdirSync(srcRoot)) {
+    const src = join(srcRoot, entry);
+    const dest = join(destRoot, entry);
+    if (statSync(src).isDirectory()) {
+      copyDirectoryContents(src, dest, dryRun);
+      continue;
+    }
+    if (dryRun) {
+      console.log(`[dry-run] Would copy ${src} -> ${dest}`);
+      continue;
+    }
+    ensureDir(dirname(dest), dryRun);
+    copyFileSync(src, dest);
+    console.log(`Copied ${dest}`);
+  }
+}
+
 function main() {
   const { dryRun } = parseArgs(process.argv.slice(2));
 
@@ -116,6 +141,7 @@ function main() {
 
   ensureDir(kotlinDest, dryRun);
   ensureDir(resXmlDest, dryRun);
+  copyDirectoryContents(androidIconRoot, resDest, dryRun);
 
   for (const file of KOTLIN_FILES) {
     const src = join(scaffoldingRoot, file);

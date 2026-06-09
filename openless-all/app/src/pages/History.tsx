@@ -205,9 +205,9 @@ export function History() {
                   onClick={() => setFilter(f.id)}
                   style={{
                     padding: '3px 9px', fontSize: 11, borderRadius: 999,
-                    border: '0.5px solid ' + (filter === f.id ? 'var(--ol-ink)' : 'var(--ol-line-strong)'),
-                    background: filter === f.id ? 'var(--ol-ink)' : 'transparent',
-                    color: filter === f.id ? '#fff' : 'var(--ol-ink-3)',
+                    border: '0.5px solid ' + (filter === f.id ? 'var(--ol-pill-selected-border)' : 'var(--ol-line-strong)'),
+                    background: filter === f.id ? 'var(--ol-pill-selected-bg)' : 'transparent',
+                    color: filter === f.id ? 'var(--ol-pill-selected-ink)' : 'var(--ol-ink-3)',
                     cursor: 'default', fontFamily: 'inherit', fontWeight: 500,
                     transition: 'background 0.16s var(--ol-motion-quick), color 0.16s var(--ol-motion-quick), border-color 0.16s var(--ol-motion-quick)',
                   }}

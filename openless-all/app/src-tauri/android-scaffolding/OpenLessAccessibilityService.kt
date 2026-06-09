@@ -3,6 +3,8 @@ package com.openless.app
 import android.accessibilityservice.AccessibilityService
 import android.content.Intent
 import android.graphics.Rect
+import android.os.Handler
+import android.os.Looper
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
@@ -11,11 +13,14 @@ import android.view.accessibility.AccessibilityWindowInfo
  * Detects IME windows for overlay keyboard trigger mode and performs paste insertion.
  */
 class OpenLessAccessibilityService : AccessibilityService() {
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val keyboardRefreshRunnable = Runnable { updateKeyboardOverlayState() }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
         updateKeyboardOverlayState()
+        scheduleKeyboardOverlayRefresh()
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -23,17 +28,28 @@ class OpenLessAccessibilityService : AccessibilityService() {
         when (event.eventType) {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
             AccessibilityEvent.TYPE_WINDOWS_CHANGED,
-            AccessibilityEvent.TYPE_VIEW_FOCUSED -> updateKeyboardOverlayState()
+            AccessibilityEvent.TYPE_VIEW_FOCUSED -> {
+                updateKeyboardOverlayState()
+                scheduleKeyboardOverlayRefresh()
+            }
         }
     }
 
     override fun onInterrupt() = Unit
 
     override fun onDestroy() {
+        mainHandler.removeCallbacks(keyboardRefreshRunnable)
         if (instance === this) {
             instance = null
         }
         super.onDestroy()
+    }
+
+    private fun scheduleKeyboardOverlayRefresh() {
+        mainHandler.removeCallbacks(keyboardRefreshRunnable)
+        for (delayMs in KEYBOARD_REFRESH_DELAYS_MS) {
+            mainHandler.postDelayed(keyboardRefreshRunnable, delayMs)
+        }
     }
 
     private fun updateKeyboardOverlayState() {
@@ -131,5 +147,7 @@ class OpenLessAccessibilityService : AccessibilityService() {
             ) ?: return false
             return services.contains("${context.packageName}/${OpenLessAccessibilityService::class.java.name}")
         }
+
+        private val KEYBOARD_REFRESH_DELAYS_MS = longArrayOf(120L, 360L, 900L, 1600L)
     }
 }
