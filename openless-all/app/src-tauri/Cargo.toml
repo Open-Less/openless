@@ -80,6 +80,7 @@ features = ["linux-native-sync-persistent", "crypto-rust"]
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "0.21"
 ndk-context = "0.1"
+tao = "0.35"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.5"

@@ -18,6 +18,7 @@ pub fn run() {
         .setup(move |app| {
             crate::init_file_logger();
             log::info!("=== OpenLess mobile 启动 ===");
+            initialize_android_ndk_context_for_audio();
 
             if let Some(main) = app.get_webview_window("main") {
                 let _ = main.show();
@@ -45,3 +46,28 @@ pub(crate) fn show_main_window(app: &AppHandle) {
         let _ = w.set_focus();
     }
 }
+
+#[cfg(target_os = "android")]
+fn initialize_android_ndk_context_for_audio() {
+    static INIT: std::sync::Once = std::sync::Once::new();
+
+    INIT.call_once(|| {
+        let Some(context) = tao::platform::android::main_android_context() else {
+            log::warn!("[android] tao Android context unavailable; audio backend may fail");
+            return;
+        };
+
+        let result = std::panic::catch_unwind(|| unsafe {
+            ndk_context::initialize_android_context(context.java_vm, context.context_jobject);
+        });
+
+        if result.is_ok() {
+            log::info!("[android] initialized ndk-context for audio backend");
+        } else {
+            log::warn!("[android] ndk-context was already initialized or rejected initialization");
+        }
+    });
+}
+
+#[cfg(not(target_os = "android"))]
+fn initialize_android_ndk_context_for_audio() {}
