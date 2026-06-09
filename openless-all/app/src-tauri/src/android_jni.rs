@@ -56,7 +56,7 @@ pub mod android {
             .map_err(|error| format!("create jstring: {error}"))
     }
 
-    fn jval_str<'local>(env: &mut JNIEnv<'local>, value: &str) -> Result<JValue<'local>, String> {
+    fn jval_str<'local>(env: &mut JNIEnv<'local>, value: &str) -> Result<JValue<'local, 'local>, String> {
         Ok(JValue::Object(&jstring(env, value)?.into()))
     }
 
