@@ -234,15 +234,6 @@ pub mod android {
             .map_err(|error| format!("get clipboard service: {error}"))?;
         let label = jobject_str(env, "OpenLess")?;
         let text_obj = jobject_str(env, text)?;
-        let item = env
-            .call_static_method(
-                "android/content/ClipData",
-                "newPlainText",
-                "(Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Landroid/content/ClipData$Item;",
-                &[JValue::Object(&label), JValue::Object(&text_obj)],
-            )
-            .and_then(|value| value.l())
-            .map_err(|error| format!("newPlainText: {error}"))?;
         let clip = env
             .call_static_method(
                 "android/content/ClipData",
@@ -252,7 +243,6 @@ pub mod android {
             )
             .and_then(|value| value.l())
             .map_err(|error| format!("new ClipData: {error}"))?;
-        let _ = item;
         env.call_method(
             &clipboard,
             "setPrimaryClip",
