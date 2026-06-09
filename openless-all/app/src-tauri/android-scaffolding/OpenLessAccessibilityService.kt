@@ -44,7 +44,7 @@ class OpenLessAccessibilityService : AccessibilityService() {
         super.onDestroy()
     }
 
-    fun pasteToFocusedField(): Boolean {
+    private fun performPasteToFocusedField(): Boolean {
         val root = rootInActiveWindow ?: return false
         val focused = root.findFocus(AccessibilityEvent.TYPE_VIEW_FOCUSED)
             ?: root.findFocus(AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED)
@@ -65,7 +65,7 @@ class OpenLessAccessibilityService : AccessibilityService() {
 
         @JvmStatic
         fun pasteToFocusedField(): Boolean {
-            return instance?.pasteToFocusedField() == true
+            return instance?.performPasteToFocusedField() == true
         }
 
         @JvmStatic
