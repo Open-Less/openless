@@ -63,10 +63,12 @@ class OpenLessAccessibilityService : AccessibilityService() {
         var instance: OpenLessAccessibilityService? = null
             private set
 
+        @JvmStatic
         fun pasteToFocusedField(): Boolean {
             return instance?.pasteToFocusedField() == true
         }
 
+        @JvmStatic
         fun isEnabled(context: android.content.Context): Boolean {
             val enabled = android.provider.Settings.Secure.getInt(
                 context.contentResolver,

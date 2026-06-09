@@ -15,6 +15,7 @@ class OpenLessImeService : InputMethodService() {
         var instance: OpenLessImeService? = null
             private set
 
+        @JvmStatic
         fun commitText(text: String): Boolean {
             val service = instance ?: return false
             val ic = service.currentInputConnection ?: return false
