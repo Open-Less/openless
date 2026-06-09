@@ -2,8 +2,10 @@ package com.openless.app
 
 import android.accessibilityservice.AccessibilityService
 import android.content.Intent
+import android.graphics.Rect
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityWindowInfo
 
 /**
  * Detects IME windows for overlay keyboard trigger mode and performs paste insertion.
@@ -13,26 +15,16 @@ class OpenLessAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
+        updateKeyboardOverlayState()
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
-        if (event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
-            return
+        when (event.eventType) {
+            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
+            AccessibilityEvent.TYPE_WINDOWS_CHANGED,
+            AccessibilityEvent.TYPE_VIEW_FOCUSED -> updateKeyboardOverlayState()
         }
-        val className = event.className?.toString().orEmpty()
-        if (!className.contains("InputMethod", ignoreCase = true)) {
-            return
-        }
-        if (OpenLessNative.nativeGetOverlayTriggerMode() != "keyboard") {
-            return
-        }
-        if (!OpenLessNative.nativeCanDrawOverlays(this)) {
-            return
-        }
-        startService(
-            Intent(this, OpenLessOverlayService::class.java).setAction(OpenLessOverlayService.ACTION_SHOW),
-        )
     }
 
     override fun onInterrupt() = Unit
@@ -44,10 +36,51 @@ class OpenLessAccessibilityService : AccessibilityService() {
         super.onDestroy()
     }
 
+    private fun updateKeyboardOverlayState() {
+        if (!isKeyboardTriggerMode()) {
+            return
+        }
+        if (!OpenLessNative.nativeCanDrawOverlays(this)) {
+            return
+        }
+        val imeBounds = findInputMethodBounds()
+        val intent = Intent(this, OpenLessOverlayService::class.java).apply {
+            action = OpenLessOverlayService.ACTION_KEYBOARD_CHANGED
+            putExtra(OpenLessOverlayService.EXTRA_KEYBOARD_VISIBLE, imeBounds != null)
+            imeBounds?.let {
+                putExtra(OpenLessOverlayService.EXTRA_KEYBOARD_TOP, it.top)
+                putExtra(OpenLessOverlayService.EXTRA_KEYBOARD_BOTTOM, it.bottom)
+            }
+        }
+        startService(intent)
+    }
+
+    private fun findInputMethodBounds(): Rect? {
+        for (window in windows) {
+            if (window.type != AccessibilityWindowInfo.TYPE_INPUT_METHOD) {
+                continue
+            }
+            val bounds = Rect()
+            window.getBoundsInScreen(bounds)
+            if (!bounds.isEmpty) {
+                return bounds
+            }
+        }
+        return null
+    }
+
+    private fun isKeyboardTriggerMode(): Boolean {
+        return try {
+            OpenLessNative.nativeGetOverlayTriggerMode() == "keyboard"
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
     private fun performPasteToFocusedField(): Boolean {
         val root = rootInActiveWindow ?: return false
-        val focused = root.findFocus(AccessibilityEvent.TYPE_VIEW_FOCUSED)
-            ?: root.findFocus(AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED)
+        val focused = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+            ?: root.findFocus(AccessibilityNodeInfo.FOCUS_ACCESSIBILITY)
             ?: return false
         if (!focused.isEditable) {
             focused.recycle()

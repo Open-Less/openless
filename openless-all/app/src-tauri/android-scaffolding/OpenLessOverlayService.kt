@@ -1,16 +1,16 @@
 package com.openless.app
 
+import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.content.pm.ServiceInfo
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
-import android.content.pm.PackageManager
-import android.content.pm.ServiceInfo
-import android.Manifest
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
@@ -19,8 +19,8 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.widget.FrameLayout
-import android.widget.LinearLayout
-import android.widget.TextView
+import android.widget.ImageView
+import android.widget.Toast
 import kotlin.math.abs
 
 /**
@@ -31,18 +31,18 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
     private var windowManager: WindowManager? = null
     private var rootView: FrameLayout? = null
     private var layoutParams: WindowManager.LayoutParams? = null
-    private var expanded = false
     private var recording = false
+    private var processing = false
+    private var keyboardVisible = false
+    private var lastKeyboardTop = 0
+    private var normalY = 120
     private var dragStartX = 0
     private var dragStartY = 0
     private var paramStartX = 0
     private var paramStartY = 0
     private var dragging = false
 
-    private lateinit var pillView: TextView
-    private lateinit var panelView: LinearLayout
-    private lateinit var statusView: TextView
-    private lateinit var recordButton: TextView
+    private lateinit var iconButton: ImageView
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -54,14 +54,9 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_SHOW -> {
-                showOverlay()
-            }
+            ACTION_SHOW -> showOverlay()
             ACTION_START_RECORDING -> {
                 showOverlay()
-                expanded = true
-                panelView.visibility = View.VISIBLE
-                pillView.visibility = View.GONE
                 startRecordingFromOverlay()
             }
             ACTION_HIDE -> {
@@ -74,7 +69,8 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
                 }
                 stopSelf()
             }
-            ACTION_TOGGLE_EXPAND -> toggleExpanded()
+            ACTION_TOGGLE_EXPAND -> handleIconClick()
+            ACTION_KEYBOARD_CHANGED -> handleKeyboardChanged(intent)
         }
         return START_STICKY
     }
@@ -94,43 +90,44 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         when (state) {
             "recording" -> {
                 recording = true
+                processing = false
                 if (!tryPromoteRecordingForeground()) {
                     OpenLessNative.nativeCancelDictation()
                     return
                 }
-                statusView.text = "录音中…"
-                recordButton.text = "■"
-                recordButton.isEnabled = true
+                applyVisualState(OverlayVisualState.Recording)
             }
             "transcribing", "polishing" -> {
                 recording = false
-                statusView.text = if (state == "transcribing") "识别中…" else "润色中…"
-                recordButton.text = "…"
-                recordButton.isEnabled = false
+                processing = true
+                applyVisualState(OverlayVisualState.Processing)
             }
             "done" -> {
                 recording = false
-                statusView.text = message ?: "完成"
-                recordButton.text = "●"
-                recordButton.isEnabled = true
+                processing = false
+                applyVisualState(OverlayVisualState.Idle)
             }
             "error" -> {
                 recording = false
-                statusView.text = message ?: "出错"
-                recordButton.text = "●"
-                recordButton.isEnabled = true
+                processing = false
+                applyVisualState(OverlayVisualState.Error)
+                message?.takeIf { it.isNotBlank() }?.let { showToast(it) }
             }
             "cancelled", "idle" -> {
                 recording = false
-                statusView.text = "就绪"
-                recordButton.text = "●"
-                recordButton.isEnabled = true
+                processing = false
+                applyVisualState(OverlayVisualState.Idle)
             }
         }
     }
 
     private fun showOverlay() {
-        if (rootView != null) return
+        if (rootView != null) {
+            if (keyboardVisible) {
+                rootView?.post { moveAboveKeyboard(lastKeyboardTop) }
+            }
+            return
+        }
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -147,20 +144,30 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
             PixelFormat.TRANSLUCENT,
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = 24
-            y = 120
+            x = dp(24)
+            y = normalY
         }
         layoutParams = params
 
         val root = FrameLayout(this)
-        pillView = buildPillView()
-        panelView = buildPanelView()
-        panelView.visibility = View.GONE
-        root.addView(pillView)
-        root.addView(panelView)
-        attachDragHandler(root, params)
+        iconButton = buildIconButton()
+        root.addView(
+            iconButton,
+            FrameLayout.LayoutParams(dp(ICON_SIZE_DP), dp(ICON_SIZE_DP), Gravity.CENTER),
+        )
+        attachDragHandler(iconButton, params)
         windowManager?.addView(root, params)
         rootView = root
+        applyVisualState(
+            when {
+                recording -> OverlayVisualState.Recording
+                processing -> OverlayVisualState.Processing
+                else -> OverlayVisualState.Idle
+            },
+        )
+        if (keyboardVisible) {
+            root.post { moveAboveKeyboard(lastKeyboardTop) }
+        }
     }
 
     private fun hideOverlay() {
@@ -168,79 +175,70 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         windowManager?.removeView(view)
         rootView = null
         layoutParams = null
-        expanded = false
     }
 
-    private fun toggleExpanded() {
-        expanded = !expanded
-        pillView.visibility = if (expanded) View.GONE else View.VISIBLE
-        panelView.visibility = if (expanded) View.VISIBLE else View.GONE
-    }
-
-    private fun buildPillView(): TextView {
-        return TextView(this).apply {
-            text = "OL"
-            setTextColor(Color.WHITE)
-            textSize = 18f
-            gravity = Gravity.CENTER
-            background = circleDrawable(Color.parseColor("#2563EB"))
-            minWidth = dp(64)
-            minHeight = dp(64)
-            setOnClickListener {
-                toggleExpanded()
-            }
+    private fun buildIconButton(): ImageView {
+        return ImageView(this).apply {
+            setImageResource(R.mipmap.ic_launcher_foreground)
+            scaleType = ImageView.ScaleType.CENTER_INSIDE
+            setPadding(dp(10), dp(10), dp(10), dp(10))
+            contentDescription = "OpenLess"
+            isClickable = true
+            isFocusable = false
+            setOnClickListener { handleIconClick() }
         }
     }
 
-    private fun buildPanelView(): LinearLayout {
-        statusView = TextView(this).apply {
-            text = "就绪"
-            setTextColor(Color.WHITE)
-            textSize = 12f
-        }
-        recordButton = TextView(this).apply {
-            text = "●"
-            textSize = 34f
-            setTextColor(Color.parseColor("#EF4444"))
-            gravity = Gravity.CENTER
-            background = circleDrawable(Color.parseColor("#1FFFFFFF"))
-            minWidth = dp(72)
-            minHeight = dp(72)
-            setOnClickListener {
-                if (recording) {
-                    OpenLessNative.nativeStopDictation()
-                } else {
-                    startRecordingFromOverlay()
-                }
-            }
-        }
-        val collapse = TextView(this).apply {
-            text = "—"
-            setTextColor(Color.WHITE)
-            textSize = 20f
-            gravity = Gravity.CENTER
-            minWidth = dp(56)
-            minHeight = dp(44)
-            setOnClickListener {
-                expanded = false
-                panelView.visibility = View.GONE
-                pillView.visibility = View.VISIBLE
-            }
-        }
-        return LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            background = roundedDrawable(Color.parseColor("#CC111827"))
-            setPadding(24, 20, 24, 20)
-            addView(collapse)
-            addView(statusView)
-            addView(recordButton, LinearLayout.LayoutParams(dp(72), dp(72)).apply {
-                topMargin = dp(8)
-            })
+    private fun handleIconClick() {
+        if (processing) return
+        if (recording) {
+            OpenLessNative.nativeStopDictation()
+        } else {
+            startRecordingFromOverlay()
         }
     }
 
-    private fun attachDragHandler(root: View, params: WindowManager.LayoutParams) {
-        root.setOnTouchListener { _, event ->
+    private fun handleKeyboardChanged(intent: Intent) {
+        if (!isKeyboardTriggerMode()) return
+        val visible = intent.getBooleanExtra(EXTRA_KEYBOARD_VISIBLE, false)
+        keyboardVisible = visible
+        if (visible) {
+            lastKeyboardTop = intent.getIntExtra(EXTRA_KEYBOARD_TOP, 0)
+            showOverlay()
+            rootView?.post { moveAboveKeyboard(lastKeyboardTop) }
+            return
+        }
+        if (recording || processing) {
+            restoreNormalPosition()
+            return
+        }
+        hideOverlay()
+    }
+
+    private fun moveAboveKeyboard(keyboardTop: Int) {
+        val params = layoutParams ?: return
+        val root = rootView ?: return
+        if (keyboardTop <= 0) return
+        val iconSize = overlaySize()
+        val minY = dp(8)
+        val maxY = (keyboardTop - iconSize - dp(12)).coerceAtLeast(minY)
+        if (params.y > maxY || params.y < minY) {
+            params.y = params.y.coerceIn(minY, maxY)
+        }
+        val maxX = (resources.displayMetrics.widthPixels - iconSize - dp(8)).coerceAtLeast(dp(8))
+        params.x = params.x.coerceIn(dp(8), maxX)
+        windowManager?.updateViewLayout(root, params)
+    }
+
+    private fun restoreNormalPosition() {
+        val params = layoutParams ?: return
+        val root = rootView ?: return
+        params.y = normalY
+        windowManager?.updateViewLayout(root, params)
+    }
+
+    private fun attachDragHandler(view: View, params: WindowManager.LayoutParams) {
+        view.setOnTouchListener { touchedView, event ->
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     dragging = false
@@ -248,55 +246,85 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
                     dragStartY = event.rawY.toInt()
                     paramStartX = params.x
                     paramStartY = params.y
-                    false
+                    true
                 }
                 MotionEvent.ACTION_MOVE -> {
                     val dx = event.rawX.toInt() - dragStartX
                     val dy = event.rawY.toInt() - dragStartY
-                    if (abs(dx) > 8 || abs(dy) > 8) {
+                    if (abs(dx) > DRAG_SLOP_PX || abs(dy) > DRAG_SLOP_PX) {
                         dragging = true
                         params.x = paramStartX + dx
                         params.y = paramStartY + dy
-                        windowManager?.updateViewLayout(root, params)
+                        if (keyboardVisible) {
+                            moveAboveKeyboard(lastKeyboardTop)
+                        } else {
+                            normalY = params.y
+                            rootView?.let { windowManager?.updateViewLayout(it, params) }
+                        }
                     }
                     true
                 }
-                MotionEvent.ACTION_UP -> dragging
+                MotionEvent.ACTION_UP -> {
+                    if (!dragging) {
+                        touchedView.performClick()
+                    }
+                    true
+                }
+                MotionEvent.ACTION_CANCEL -> true
                 else -> false
             }
         }
     }
 
-    private fun circleDrawable(color: Int): GradientDrawable {
-        return GradientDrawable().apply {
-            shape = GradientDrawable.OVAL
-            setColor(color)
+    private fun applyVisualState(state: OverlayVisualState) {
+        if (!::iconButton.isInitialized) return
+        val (alpha, fill, stroke, strokeWidth, enabled) = when (state) {
+            OverlayVisualState.Idle -> VisualStyle(
+                alpha = 0.58f,
+                fill = Color.parseColor("#66202A36"),
+                stroke = Color.parseColor("#66FFFFFF"),
+                strokeWidth = 1,
+                enabled = true,
+            )
+            OverlayVisualState.Recording -> VisualStyle(
+                alpha = 1f,
+                fill = Color.parseColor("#E6111827"),
+                stroke = Color.parseColor("#F43F5E"),
+                strokeWidth = 3,
+                enabled = true,
+            )
+            OverlayVisualState.Processing -> VisualStyle(
+                alpha = 0.86f,
+                fill = Color.parseColor("#D1111827"),
+                stroke = Color.parseColor("#38BDF8"),
+                strokeWidth = 2,
+                enabled = true,
+            )
+            OverlayVisualState.Error -> VisualStyle(
+                alpha = 0.95f,
+                fill = Color.parseColor("#E67F1D1D"),
+                stroke = Color.parseColor("#EF4444"),
+                strokeWidth = 2,
+                enabled = true,
+            )
         }
-    }
-
-    private fun roundedDrawable(color: Int): GradientDrawable {
-        return GradientDrawable().apply {
-            shape = GradientDrawable.RECTANGLE
-            cornerRadius = 24f
-            setColor(color)
-        }
+        iconButton.alpha = alpha
+        iconButton.isEnabled = enabled
+        iconButton.background = circleDrawable(fill, stroke, dp(strokeWidth))
     }
 
     private fun startRecordingFromOverlay() {
-        expanded = true
-        panelView.visibility = View.VISIBLE
-        pillView.visibility = View.GONE
+        showOverlay()
         if (tryPromoteRecordingForeground()) {
             OpenLessNative.nativeStartDictation()
             return
         }
-        statusView.text = "系统限制后台录音，请在 OpenLess 内开始"
-        recordButton.isEnabled = true
+        applyVisualState(OverlayVisualState.Error)
     }
 
     private fun tryPromoteRecordingForeground(): Boolean {
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            statusView.text = "请先授予麦克风权限"
+            showToast("请先授予麦克风权限")
             return false
         }
         val notification = buildNotification("录音中")
@@ -313,6 +341,7 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
             true
         } catch (error: SecurityException) {
             Log.w(TAG, "microphone foreground service not allowed from current state", error)
+            showToast("系统限制后台录音，请在 OpenLess 内开始")
             false
         }
     }
@@ -328,12 +357,54 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         return Notification.Builder(this, channelId)
             .setContentTitle("OpenLess")
             .setContentText(contentText)
-            .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+            .setSmallIcon(R.mipmap.ic_launcher_foreground)
             .build()
+    }
+
+    private fun circleDrawable(color: Int, strokeColor: Int, strokeWidth: Int): GradientDrawable {
+        return GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(color)
+            setStroke(strokeWidth, strokeColor)
+        }
+    }
+
+    private fun overlaySize(): Int {
+        val root = rootView
+        val measured = maxOf(root?.width ?: 0, root?.height ?: 0)
+        return measured.takeIf { it > 0 } ?: dp(ICON_SIZE_DP)
+    }
+
+    private fun isKeyboardTriggerMode(): Boolean {
+        return try {
+            OpenLessNative.nativeGetOverlayTriggerMode() == "keyboard"
+        } catch (error: Throwable) {
+            Log.w(TAG, "overlay trigger mode unavailable", error)
+            false
+        }
+    }
+
+    private fun showToast(message: String) {
+        Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
     }
 
     private fun dp(value: Int): Int {
         return (value * resources.displayMetrics.density).toInt()
+    }
+
+    private data class VisualStyle(
+        val alpha: Float,
+        val fill: Int,
+        val stroke: Int,
+        val strokeWidth: Int,
+        val enabled: Boolean,
+    )
+
+    private enum class OverlayVisualState {
+        Idle,
+        Recording,
+        Processing,
+        Error,
     }
 
     companion object {
@@ -341,6 +412,12 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         const val ACTION_HIDE = "com.openless.app.overlay.HIDE"
         const val ACTION_TOGGLE_EXPAND = "com.openless.app.overlay.TOGGLE_EXPAND"
         const val ACTION_START_RECORDING = "com.openless.app.overlay.START_RECORDING"
+        const val ACTION_KEYBOARD_CHANGED = "com.openless.app.overlay.KEYBOARD_CHANGED"
+        const val EXTRA_KEYBOARD_VISIBLE = "keyboard_visible"
+        const val EXTRA_KEYBOARD_TOP = "keyboard_top"
+        const val EXTRA_KEYBOARD_BOTTOM = "keyboard_bottom"
+        private const val ICON_SIZE_DP = 72
+        private const val DRAG_SLOP_PX = 8
         private const val NOTIFICATION_ID = 42001
         private const val TAG = "OpenLessOverlayService"
 
