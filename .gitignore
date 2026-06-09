@@ -43,6 +43,7 @@ android-run*.log
 openless-package.txt
 openless-android-run*.png
 openless-appdata*.tar
+openless-run*-ui.xml
 tmp-run*/
 
 .cargo/registry/
