@@ -7,7 +7,7 @@ pub mod android {
     use jni::JavaVM;
 
     pub struct AndroidEnv<'a> {
-        pub env: JNIEnv<'a>,
+        pub env: &'a mut JNIEnv<'a>,
         pub context: JObject<'a>,
     }
 
@@ -23,7 +23,10 @@ pub mod android {
             .attach_current_thread()
             .map_err(|error| format!("attach Android thread: {error}"))?;
         let context = unsafe { JObject::from_raw(android_context.context() as jni::sys::jobject) };
-        f(AndroidEnv { env, context })
+        f(AndroidEnv {
+            env: &mut env,
+            context,
+        })
     }
 
     pub fn call_static_bool(
@@ -56,9 +59,16 @@ pub mod android {
         Ok(())
     }
 
-    pub fn jstring(env: &mut JNIEnv, value: &str) -> Result<JString, String> {
+    pub fn jstring<'local>(env: &mut JNIEnv<'local>, value: &str) -> Result<JString<'local>, String> {
         env.new_string(value)
             .map_err(|error| format!("create jstring: {error}"))
+    }
+
+    fn java_string(env: &mut JNIEnv, obj: JObject) -> Result<String, String> {
+        let jstr = JString::from(obj);
+        env.get_string(&jstr)
+            .map(|value| value.into())
+            .map_err(|error| format!("decode jstring: {error}"))
     }
 
     pub fn start_activity_class(
@@ -66,23 +76,26 @@ pub mod android {
         context: &JObject,
         class_name: &str,
     ) -> Result<(), String> {
-        let class = env
-            .find_class(class_name)
-            .map_err(|error| format!("find activity class: {error}"))?;
         let intent = env
+            .new_object("android/content/Intent", "()V", &[])
+            .map_err(|error| format!("create activity intent: {error}"))?;
+        let component = env
             .new_object(
-                "android/content/Intent",
-                "(Landroid/content/Context;Ljava/lang/Class;)V",
+                "android/content/ComponentName",
+                "(Landroid/content/Context;Ljava/lang/String;)V",
                 &[
                     JValue::Object(context),
-                    JValue::Object(&{
-                        env.call_static_method(class, "class", "()Ljava/lang/Class;", &[])
-                            .and_then(|value| value.l())
-                            .map_err(|error| format!("resolve activity class object: {error}"))?
-                    }),
+                    JValue::Object(&jstring(env, class_name)?),
                 ],
             )
-            .map_err(|error| format!("create activity intent: {error}"))?;
+            .map_err(|error| format!("create component name: {error}"))?;
+        env.call_method(
+            &intent,
+            "setComponent",
+            "(Landroid/content/ComponentName;)Landroid/content/Intent;",
+            &[JValue::Object(&component)],
+        )
+        .map_err(|error| format!("set activity component: {error}"))?;
         env.call_method(
             &intent,
             "addFlags",
@@ -337,13 +350,11 @@ pub mod android {
             )
             .and_then(|value| value.l())
             .map_err(|error| format!("get InputMethodManager: {error}"))?;
-        let package = env
+        let package_obj = env
             .call_method(context, "getPackageName", "()Ljava/lang/String;", &[])
             .and_then(|value| value.l())
             .map_err(|error| format!("getPackageName: {error}"))?;
-        let package = env
-            .get_string(&JString::from(package))
-            .map_err(|error| format!("decode package name: {error}"))?;
+        let package = java_string(env, package_obj)?;
         let service_id = format!("{package}/.OpenLessImeService");
         let enabled_list = env
             .call_method(&imm, "getEnabledInputMethodList", "()Ljava/util/List;", &[])
@@ -362,13 +373,11 @@ pub mod android {
         let selected = if current.is_null() {
             false
         } else {
-            let id = env
+            let id_obj = env
                 .call_method(&current, "getId", "()Ljava/lang/String;", &[])
                 .and_then(|value| value.l())
                 .map_err(|error| format!("getId: {error}"))?;
-            let id = env
-                .get_string(&JString::from(id))
-                .map_err(|error| format!("decode ime id: {error}"))?;
+            let id = java_string(env, id_obj)?;
             id == service_id
         };
         Ok((enabled, selected))
@@ -389,13 +398,11 @@ pub mod android {
                 )
                 .and_then(|value| value.l())
                 .map_err(|error| format!("list.get: {error}"))?;
-            let item_id = env
+            let item_id_obj = env
                 .call_method(&item, "getId", "()Ljava/lang/String;", &[])
                 .and_then(|value| value.l())
                 .map_err(|error| format!("InputMethodInfo.getId: {error}"))?;
-            let item_id = env
-                .get_string(&JString::from(item_id))
-                .map_err(|error| format!("decode InputMethodInfo id: {error}"))?;
+            let item_id = java_string(env, item_id_obj)?;
             if item_id == id {
                 return Ok(true);
             }
