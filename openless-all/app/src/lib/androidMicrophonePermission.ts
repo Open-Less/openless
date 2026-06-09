@@ -25,6 +25,27 @@ export async function checkAndroidMicrophoneAccess(): Promise<AppPermissionStatu
 }
 
 export async function requestAndroidMicrophoneAccess(): Promise<AppPermissionStatus> {
+  if (localStorage.getItem(ANDROID_MIC_GRANTED_KEY) === '1') {
+    return 'granted';
+  }
+
+  try {
+    const permissions = navigator.permissions;
+    if (permissions?.query) {
+      const status = await permissions.query({ name: 'microphone' as PermissionName });
+      if (status.state === 'granted') {
+        localStorage.setItem(ANDROID_MIC_GRANTED_KEY, '1');
+        return 'granted';
+      }
+      if (status.state === 'denied') {
+        localStorage.removeItem(ANDROID_MIC_GRANTED_KEY);
+        return 'denied';
+      }
+    }
+  } catch {
+    // Android WebView versions differ on navigator.permissions support.
+  }
+
   const mediaDevices = navigator.mediaDevices;
   if (!mediaDevices?.getUserMedia) {
     return 'notDetermined';

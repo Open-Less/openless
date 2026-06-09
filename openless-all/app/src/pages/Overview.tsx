@@ -559,7 +559,10 @@ function InAppDictationControl() {
         await stopDictation();
       } else {
         if (platformCaps?.platform === 'android') {
-          const status = await requestAndroidMicrophoneAccess();
+          const current = await checkAndroidMicrophoneAccess();
+          const status = current === 'granted'
+            ? current
+            : await requestAndroidMicrophoneAccess();
           if (status !== 'granted') return;
         }
         await startDictation();
