@@ -56,6 +56,10 @@ pub mod android {
             .map_err(|error| format!("create jstring: {error}"))
     }
 
+    fn jval_str<'local>(env: &mut JNIEnv<'local>, value: &str) -> Result<JValue<'local>, String> {
+        Ok(JValue::Object(&jstring(env, value)?.into()))
+    }
+
     fn java_string(env: &mut JNIEnv, obj: JObject) -> Result<String, String> {
         let jstr = JString::from(obj);
         env.get_string(&jstr)
@@ -77,7 +81,7 @@ pub mod android {
                 "(Landroid/content/Context;Ljava/lang/String;)V",
                 &[
                     JValue::Object(context),
-                    JValue::Object(&jstring(env, class_name)?),
+                    jval_str(env, class_name)?,
                 ],
             )
             .map_err(|error| format!("create component name: {error}"))?;
@@ -120,7 +124,7 @@ pub mod android {
                 "(Landroid/content/Context;Ljava/lang/String;)V",
                 &[
                     JValue::Object(context),
-                    JValue::Object(&jstring(env, service_class)?),
+                    jval_str(env, service_class)?,
                 ],
             )
             .map_err(|error| format!("create component name: {error}"))?;
@@ -135,7 +139,7 @@ pub mod android {
             &intent,
             "setAction",
             "(Ljava/lang/String;)Landroid/content/Intent;",
-            &[JValue::Object(&jstring(env, action)?)],
+            &[jval_str(env, action)?],
         )
         .map_err(|error| format!("set service action: {error}"))?;
         if android_sdk_int(env)? >= 26 {
@@ -184,7 +188,7 @@ pub mod android {
                 context,
                 "getSystemService",
                 "(Ljava/lang/String;)Ljava/lang/Object;",
-                &[JValue::Object(&jstring(env, "clipboard")?)],
+                &[jval_str(env, "clipboard")?],
             )
             .and_then(|value| value.l())
             .map_err(|error| format!("get clipboard service: {error}"))?;
@@ -194,8 +198,8 @@ pub mod android {
                 "newPlainText",
                 "(Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Landroid/content/ClipData$Item;",
                 &[
-                    JValue::Object(&jstring(env, "OpenLess")?),
-                    JValue::Object(&jstring(env, text)?),
+                    jval_str(env, "OpenLess")?,
+                    jval_str(env, text)?,
                 ],
             )
             .and_then(|value| value.l())
@@ -206,8 +210,8 @@ pub mod android {
                 "newPlainText",
                 "(Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Landroid/content/ClipData;",
                 &[
-                    JValue::Object(&jstring(env, "OpenLess")?),
-                    JValue::Object(&jstring(env, text)?),
+                    jval_str(env, "OpenLess")?,
+                    jval_str(env, text)?,
                 ],
             )
             .and_then(|value| value.l())
@@ -230,8 +234,8 @@ pub mod android {
             "onCapsuleStateChanged",
             "(Ljava/lang/String;Ljava/lang/String;)V",
             &[
-                JValue::Object(&jstring(env, state)?),
-                JValue::Object(&jstring(env, message.unwrap_or(""))?),
+                jval_str(env, state)?,
+                jval_str(env, message.unwrap_or(""))?,
             ],
         )
     }
@@ -242,7 +246,7 @@ pub mod android {
             "com/openless/app/OpenLessOverlayBridge",
             "showToast",
             "(Ljava/lang/String;)V",
-            &[JValue::Object(&jstring(env, message)?)],
+            &[jval_str(env, message)?],
         )
     }
 
@@ -252,7 +256,7 @@ pub mod android {
             "com/openless/app/OpenLessImeService",
             "commitText",
             "(Ljava/lang/String;)Z",
-            &[JValue::Object(&jstring(env, text)?)],
+            &[jval_str(env, text)?],
         )
     }
 
@@ -281,10 +285,7 @@ pub mod android {
             .new_object(
                 "android/content/Intent",
                 "(Ljava/lang/String;)V",
-                &[JValue::Object(&jstring(
-                    env,
-                    "android.settings.ACCESSIBILITY_SETTINGS",
-                )?)],
+                &[jval_str(env, "android.settings.ACCESSIBILITY_SETTINGS")?],
             )
             .map_err(|error| format!("create accessibility settings intent: {error}"))?;
         env.call_method(
@@ -309,10 +310,7 @@ pub mod android {
             .new_object(
                 "android/content/Intent",
                 "(Ljava/lang/String;)V",
-                &[JValue::Object(&jstring(
-                    env,
-                    "android.settings.INPUT_METHOD_SETTINGS",
-                )?)],
+                &[jval_str(env, "android.settings.INPUT_METHOD_SETTINGS")?],
             )
             .map_err(|error| format!("create IME settings intent: {error}"))?;
         env.call_method(
@@ -338,7 +336,7 @@ pub mod android {
                 context,
                 "getSystemService",
                 "(Ljava/lang/String;)Ljava/lang/Object;",
-                &[JValue::Object(&jstring(env, "input_method")?)],
+                &[jval_str(env, "input_method")?],
             )
             .and_then(|value| value.l())
             .map_err(|error| format!("get InputMethodManager: {error}"))?;
