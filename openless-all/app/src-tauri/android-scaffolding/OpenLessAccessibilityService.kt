@@ -27,7 +27,7 @@ class OpenLessAccessibilityService : AccessibilityService() {
         if (OpenLessNative.nativeGetOverlayTriggerMode() != "keyboard") {
             return
         }
-        if (!OpenLessNative.nativeCanDrawOverlays()) {
+        if (!OpenLessNative.nativeCanDrawOverlays(this)) {
             return
         }
         startService(

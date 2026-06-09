@@ -31,14 +31,7 @@ pub fn show_overlay() -> Result<(), String> {
     #[cfg(target_os = "android")]
     {
         crate::android_jni::android::with_android_env(|env, context| {
-            crate::android_jni::android::start_service_action(
-                env,
-                context,
-                "com.openless.app.OpenLessOverlayService",
-                "com.openless.app.overlay.SHOW",
-            )?;
-            OVERLAY_VISIBLE.store(true, std::sync::atomic::Ordering::SeqCst);
-            Ok(())
+            show_overlay_with_context(env, context)
         })?;
     }
     Ok(())
@@ -48,16 +41,33 @@ pub fn hide_overlay() -> Result<(), String> {
     #[cfg(target_os = "android")]
     {
         crate::android_jni::android::with_android_env(|env, context| {
-            crate::android_jni::android::start_service_action(
-                env,
-                context,
-                "com.openless.app.OpenLessOverlayService",
-                "com.openless.app.overlay.HIDE",
-            )?;
-            OVERLAY_VISIBLE.store(false, std::sync::atomic::Ordering::SeqCst);
-            Ok(())
+            hide_overlay_with_context(env, context)
         })?;
     }
+    Ok(())
+}
+
+#[cfg(target_os = "android")]
+fn show_overlay_with_context(env: &mut jni::JNIEnv, context: &jni::objects::JObject) -> Result<(), String> {
+    crate::android_jni::android::start_service_action(
+        env,
+        context,
+        "com.openless.app.OpenLessOverlayService",
+        "com.openless.app.overlay.SHOW",
+    )?;
+    OVERLAY_VISIBLE.store(true, std::sync::atomic::Ordering::SeqCst);
+    Ok(())
+}
+
+#[cfg(target_os = "android")]
+fn hide_overlay_with_context(env: &mut jni::JNIEnv, context: &jni::objects::JObject) -> Result<(), String> {
+    crate::android_jni::android::start_service_action(
+        env,
+        context,
+        "com.openless.app.OpenLessOverlayService",
+        "com.openless.app.overlay.HIDE",
+    )?;
+    OVERLAY_VISIBLE.store(false, std::sync::atomic::Ordering::SeqCst);
     Ok(())
 }
 
@@ -118,8 +128,19 @@ fn capsule_state_name(state: CapsuleState) -> &'static str {
 #[cfg(target_os = "android")]
 mod jni_exports {
     use super::*;
-    use jni::objects::JClass;
+    use jni::objects::{JClass, JObject};
     use jni::sys::{jboolean, jstring, JNIEnv};
+    use jni::JNIEnv as JniEnv;
+
+    unsafe fn with_jni_context<R>(
+        env_ptr: *mut JNIEnv,
+        context: JObject,
+        f: impl for<'local> FnOnce(&mut JniEnv<'local>, &JObject<'local>) -> Result<R, String>,
+    ) -> Result<R, String> {
+        let mut env = JniEnv::from_raw(env_ptr)
+            .map_err(|error| format!("attach JNI env: {error}"))?;
+        f(&mut env, &context)
+    }
 
     #[no_mangle]
     pub unsafe extern "system" fn Java_com_openless_app_OpenLessNative_nativeStartDictation(
@@ -147,26 +168,33 @@ mod jni_exports {
 
     #[no_mangle]
     pub unsafe extern "system" fn Java_com_openless_app_OpenLessNative_nativeShowOverlay(
-        _env: *mut JNIEnv,
+        env: *mut JNIEnv,
         _class: JClass,
+        context: JObject,
     ) {
-        let _ = show_overlay();
+        let _ = with_jni_context(env, context, |env, context| {
+            show_overlay_with_context(env, context)
+        });
     }
 
     #[no_mangle]
     pub unsafe extern "system" fn Java_com_openless_app_OpenLessNative_nativeHideOverlay(
-        _env: *mut JNIEnv,
+        env: *mut JNIEnv,
         _class: JClass,
+        context: JObject,
     ) {
-        let _ = hide_overlay();
+        let _ = with_jni_context(env, context, |env, context| {
+            hide_overlay_with_context(env, context)
+        });
     }
 
     #[no_mangle]
     pub unsafe extern "system" fn Java_com_openless_app_OpenLessNative_nativeCanDrawOverlays(
-        _env: *mut JNIEnv,
+        env: *mut JNIEnv,
         _class: JClass,
+        context: JObject,
     ) -> jboolean {
-        let visible = crate::android_jni::android::with_android_env(|env, context| {
+        let visible = with_jni_context(env, context, |env, context| {
             crate::android_jni::android::can_draw_overlays(env, context)
         })
         .unwrap_or(false);
@@ -183,23 +211,26 @@ mod jni_exports {
 
     #[no_mangle]
     pub unsafe extern "system" fn Java_com_openless_app_OpenLessNative_nativeGetOverlayTriggerMode(
-        _env: *mut JNIEnv,
+        env: *mut JNIEnv,
         _class: JClass,
     ) -> jstring {
-        let mode = overlay_trigger_mode_name().to_string();
-        crate::android_jni::android::with_android_env(|env, _context| {
-            Ok(crate::android_jni::android::export_jstring(env, &mode))
-        })
-        .unwrap_or(std::ptr::null_mut())
+        let mode = overlay_trigger_mode_name();
+        match JniEnv::from_raw(env) {
+            Ok(mut env) => crate::android_jni::android::export_jstring(&mut env, mode),
+            Err(_) => std::ptr::null_mut(),
+        }
     }
 
     #[no_mangle]
     pub unsafe extern "system" fn Java_com_openless_app_OpenLessNative_nativeNotifyOverlayPermissionChanged(
-        _env: *mut JNIEnv,
+        env: *mut JNIEnv,
         _class: JClass,
+        context: JObject,
     ) {
         if overlay_trigger_mode_name() == "always" {
-            let _ = show_overlay();
+            let _ = with_jni_context(env, context, |env, context| {
+                show_overlay_with_context(env, context)
+            });
         }
     }
 }

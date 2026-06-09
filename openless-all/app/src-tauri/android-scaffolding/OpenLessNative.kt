@@ -20,13 +20,13 @@ object OpenLessNative {
 
     @JvmStatic external fun nativeGetOverlayTriggerMode(): String
 
-    @JvmStatic external fun nativeCanDrawOverlays(): Boolean
+    @JvmStatic external fun nativeCanDrawOverlays(context: android.content.Context): Boolean
 
-    @JvmStatic external fun nativeShowOverlay()
+    @JvmStatic external fun nativeShowOverlay(context: android.content.Context)
 
-    @JvmStatic external fun nativeHideOverlay()
+    @JvmStatic external fun nativeHideOverlay(context: android.content.Context)
 
     @JvmStatic external fun nativeIsOverlayVisible(): Boolean
 
-    @JvmStatic external fun nativeNotifyOverlayPermissionChanged()
+    @JvmStatic external fun nativeNotifyOverlayPermissionChanged(context: android.content.Context)
 }

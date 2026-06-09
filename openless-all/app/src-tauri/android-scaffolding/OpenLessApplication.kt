@@ -33,10 +33,10 @@ class OpenLessApplication : Application() {
         if (OpenLessNative.nativeGetOverlayTriggerMode() != "background") {
             return
         }
-        if (!OpenLessNative.nativeCanDrawOverlays()) {
+        if (!OpenLessNative.nativeCanDrawOverlays(this)) {
             return
         }
-        OpenLessNative.nativeShowOverlay()
+        OpenLessNative.nativeShowOverlay(this)
     }
 
     private fun maybeHideOverlayOnForeground() {
@@ -44,7 +44,7 @@ class OpenLessApplication : Application() {
             return
         }
         if (OpenLessNative.nativeIsOverlayVisible()) {
-            OpenLessNative.nativeHideOverlay()
+            OpenLessNative.nativeHideOverlay(this)
         }
     }
 }
