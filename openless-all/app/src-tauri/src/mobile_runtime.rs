@@ -52,7 +52,7 @@ fn initialize_android_ndk_context_for_audio() {
     static INIT: std::sync::Once = std::sync::Once::new();
 
     INIT.call_once(|| {
-        let Some(context) = tao::platform::android::main_android_context() else {
+        let Some(context) = tao::platform::android::prelude::main_android_context() else {
             log::warn!("[android] tao Android context unavailable; audio backend may fail");
             return;
         };
