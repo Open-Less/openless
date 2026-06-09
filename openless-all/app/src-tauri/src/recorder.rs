@@ -311,7 +311,8 @@ fn build_input_stream(
         .map_err(|e| classify_default_config_err(e.to_string()))?;
 
     let sample_format = supported.sample_format();
-    let config: StreamConfig = supported.config();
+    let default_config: StreamConfig = supported.config();
+    let config = stable_input_config_for_platform(&default_config);
     let input_sr = config.sample_rate.0;
     let channels = config.channels as usize;
 
@@ -324,19 +325,57 @@ fn build_input_stream(
     );
 
     let state = Arc::new(StreamState::new());
-    let stream = build_stream_for_format(
+    let stream = match build_stream_for_format(
         &device,
         &config,
         sample_format,
-        consumer,
-        level_handler,
-        archiver,
+        Arc::clone(&consumer),
+        Arc::clone(&level_handler),
+        archiver.clone(),
         Arc::clone(&state),
         input_sr,
         channels,
-        runtime_error_tx,
-    )?;
+        runtime_error_tx.clone(),
+    ) {
+        Ok(stream) => stream,
+        Err(err) if config != default_config => {
+            log::warn!(
+                "[recorder] stable input config failed; falling back to default config: {err}"
+            );
+            build_stream_for_format(
+                &device,
+                &default_config,
+                sample_format,
+                consumer,
+                level_handler,
+                archiver,
+                Arc::clone(&state),
+                default_config.sample_rate.0,
+                default_config.channels as usize,
+                runtime_error_tx,
+            )?
+        }
+        Err(err) => return Err(err),
+    };
     Ok((stream, state))
+}
+
+#[cfg(target_os = "android")]
+fn stable_input_config_for_platform(default_config: &StreamConfig) -> StreamConfig {
+    let mut config = default_config.clone();
+    if config.channels > 1 {
+        log::info!(
+            "[recorder] android forcing mono input channels: {} -> 1",
+            config.channels
+        );
+        config.channels = 1;
+    }
+    config
+}
+
+#[cfg(not(target_os = "android"))]
+fn stable_input_config_for_platform(default_config: &StreamConfig) -> StreamConfig {
+    default_config.clone()
 }
 
 fn select_input_device(
