@@ -37,7 +37,7 @@ class OpenLessAccessibilityService : AccessibilityService() {
     }
 
     private fun updateKeyboardOverlayState() {
-        if (!isKeyboardTriggerMode()) {
+        if (!shouldTrackKeyboard()) {
             return
         }
         if (!OpenLessNative.nativeCanDrawOverlays(this)) {
@@ -69,9 +69,10 @@ class OpenLessAccessibilityService : AccessibilityService() {
         return null
     }
 
-    private fun isKeyboardTriggerMode(): Boolean {
+    private fun shouldTrackKeyboard(): Boolean {
         return try {
-            OpenLessNative.nativeGetOverlayTriggerMode() == "keyboard"
+            OpenLessNative.nativeGetOverlayTriggerMode() == "keyboard" ||
+                OpenLessNative.nativeIsOverlayVisible()
         } catch (_: Throwable) {
             false
         }

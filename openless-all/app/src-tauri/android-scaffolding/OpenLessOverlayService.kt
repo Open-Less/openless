@@ -34,8 +34,6 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
     private var recording = false
     private var processing = false
     private var keyboardVisible = false
-    private var lastKeyboardTop = 0
-    private var normalY = 120
     private var dragStartX = 0
     private var dragStartY = 0
     private var paramStartX = 0
@@ -122,13 +120,9 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
     }
 
     private fun showOverlay() {
-        if (rootView != null) {
-            if (keyboardVisible) {
-                rootView?.post { moveAboveKeyboard(lastKeyboardTop) }
-            }
-            return
-        }
+        if (rootView != null) return
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+        val savedPosition = loadSavedPosition()
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -144,8 +138,8 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
             PixelFormat.TRANSLUCENT,
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = dp(24)
-            y = normalY
+            x = savedPosition.first
+            y = savedPosition.second
         }
         layoutParams = params
 
@@ -165,9 +159,6 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
                 else -> OverlayVisualState.Idle
             },
         )
-        if (keyboardVisible) {
-            root.post { moveAboveKeyboard(lastKeyboardTop) }
-        }
     }
 
     private fun hideOverlay() {
@@ -179,9 +170,9 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
 
     private fun buildIconButton(): ImageView {
         return ImageView(this).apply {
-            setImageResource(R.mipmap.ic_launcher_foreground)
+            setImageResource(R.mipmap.ic_launcher)
             scaleType = ImageView.ScaleType.CENTER_INSIDE
-            setPadding(dp(10), dp(10), dp(10), dp(10))
+            setPadding(dp(6), dp(6), dp(6), dp(6))
             contentDescription = "OpenLess"
             isClickable = true
             isFocusable = false
@@ -199,42 +190,17 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
     }
 
     private fun handleKeyboardChanged(intent: Intent) {
-        if (!isKeyboardTriggerMode()) return
+        val keyboardTrigger = isKeyboardTriggerMode()
+        if (!keyboardTrigger && rootView == null) return
         val visible = intent.getBooleanExtra(EXTRA_KEYBOARD_VISIBLE, false)
         keyboardVisible = visible
-        if (visible) {
-            lastKeyboardTop = intent.getIntExtra(EXTRA_KEYBOARD_TOP, 0)
+        if (visible && keyboardTrigger) {
             showOverlay()
-            rootView?.post { moveAboveKeyboard(lastKeyboardTop) }
             return
         }
-        if (recording || processing) {
-            restoreNormalPosition()
-            return
+        if (!visible && keyboardTrigger && !recording && !processing) {
+            hideOverlay()
         }
-        hideOverlay()
-    }
-
-    private fun moveAboveKeyboard(keyboardTop: Int) {
-        val params = layoutParams ?: return
-        val root = rootView ?: return
-        if (keyboardTop <= 0) return
-        val iconSize = overlaySize()
-        val minY = dp(8)
-        val maxY = (keyboardTop - iconSize - dp(12)).coerceAtLeast(minY)
-        if (params.y > maxY || params.y < minY) {
-            params.y = params.y.coerceIn(minY, maxY)
-        }
-        val maxX = (resources.displayMetrics.widthPixels - iconSize - dp(8)).coerceAtLeast(dp(8))
-        params.x = params.x.coerceIn(dp(8), maxX)
-        windowManager?.updateViewLayout(root, params)
-    }
-
-    private fun restoreNormalPosition() {
-        val params = layoutParams ?: return
-        val root = rootView ?: return
-        params.y = normalY
-        windowManager?.updateViewLayout(root, params)
     }
 
     private fun attachDragHandler(view: View, params: WindowManager.LayoutParams) {
@@ -255,18 +221,16 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
                         dragging = true
                         params.x = paramStartX + dx
                         params.y = paramStartY + dy
-                        if (keyboardVisible) {
-                            moveAboveKeyboard(lastKeyboardTop)
-                        } else {
-                            normalY = params.y
-                            rootView?.let { windowManager?.updateViewLayout(it, params) }
-                        }
+                        clampToScreen(params)
+                        rootView?.let { windowManager?.updateViewLayout(it, params) }
                     }
                     true
                 }
                 MotionEvent.ACTION_UP -> {
                     if (!dragging) {
                         touchedView.performClick()
+                    } else {
+                        savePosition(params.x, params.y)
                     }
                     true
                 }
@@ -357,7 +321,7 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         return Notification.Builder(this, channelId)
             .setContentTitle("OpenLess")
             .setContentText(contentText)
-            .setSmallIcon(R.mipmap.ic_launcher_foreground)
+            .setSmallIcon(R.mipmap.ic_launcher)
             .build()
     }
 
@@ -373,6 +337,32 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         val root = rootView
         val measured = maxOf(root?.width ?: 0, root?.height ?: 0)
         return measured.takeIf { it > 0 } ?: dp(ICON_SIZE_DP)
+    }
+
+    private fun clampToScreen(params: WindowManager.LayoutParams) {
+        val iconSize = overlaySize()
+        val margin = dp(8)
+        val maxX = (resources.displayMetrics.widthPixels - iconSize - margin).coerceAtLeast(margin)
+        val maxY = (resources.displayMetrics.heightPixels - iconSize - margin).coerceAtLeast(margin)
+        params.x = params.x.coerceIn(margin, maxX)
+        params.y = params.y.coerceIn(margin, maxY)
+    }
+
+    private fun loadSavedPosition(): Pair<Int, Int> {
+        val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+        val defaultX = dp(24)
+        val defaultY = dp(120)
+        val x = prefs.getInt(PREF_KEY_X, defaultX)
+        val y = prefs.getInt(PREF_KEY_Y, defaultY)
+        return x to y
+    }
+
+    private fun savePosition(x: Int, y: Int) {
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            .edit()
+            .putInt(PREF_KEY_X, x)
+            .putInt(PREF_KEY_Y, y)
+            .apply()
     }
 
     private fun isKeyboardTriggerMode(): Boolean {
@@ -418,6 +408,9 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         const val EXTRA_KEYBOARD_BOTTOM = "keyboard_bottom"
         private const val ICON_SIZE_DP = 72
         private const val DRAG_SLOP_PX = 8
+        private const val PREFS_NAME = "openless_overlay"
+        private const val PREF_KEY_X = "overlay_x"
+        private const val PREF_KEY_Y = "overlay_y"
         private const val NOTIFICATION_ID = 42001
         private const val TAG = "OpenLessOverlayService"
 
