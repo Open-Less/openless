@@ -125,7 +125,10 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
     }
 
     private fun showOverlay() {
-        if (rootView != null) return
+        if (rootView != null) {
+            Log.d(TAG, "overlay already shown")
+            return
+        }
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         val savedPosition = loadSavedPosition()
         val params = WindowManager.LayoutParams(
@@ -162,8 +165,15 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
             FrameLayout.LayoutParams(dp(ICON_IMAGE_SIZE_DP), dp(ICON_IMAGE_SIZE_DP), Gravity.CENTER),
         )
         attachDragHandler(root, params)
-        windowManager?.addView(root, params)
+        try {
+            windowManager?.addView(root, params)
+        } catch (error: Throwable) {
+            Log.w(TAG, "show overlay failed", error)
+            layoutParams = null
+            return
+        }
         rootView = root
+        Log.d(TAG, "overlay shown x=${params.x} y=${params.y}")
         applyVisualState(
             when {
                 recording -> OverlayVisualState.Recording
@@ -175,7 +185,12 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
 
     private fun hideOverlay() {
         val view = rootView ?: return
-        windowManager?.removeView(view)
+        try {
+            windowManager?.removeView(view)
+            Log.d(TAG, "overlay hidden")
+        } catch (error: Throwable) {
+            Log.w(TAG, "hide overlay failed", error)
+        }
         rootView = null
         layoutParams = null
     }
@@ -208,15 +223,14 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
     }
 
     private fun handleKeyboardChanged(intent: Intent) {
-        val keyboardTrigger = isKeyboardTriggerMode()
-        if (!keyboardTrigger && rootView == null) return
         val visible = intent.getBooleanExtra(EXTRA_KEYBOARD_VISIBLE, false)
         keyboardVisible = visible
-        if (visible && keyboardTrigger) {
+        Log.d(TAG, "keyboard changed visible=$visible")
+        if (visible) {
             showOverlay()
             return
         }
-        if (!visible && keyboardTrigger && !recording && !processing) {
+        if (!recording && !processing) {
             hideOverlay()
         }
     }
