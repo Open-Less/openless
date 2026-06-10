@@ -14,6 +14,7 @@
 //! - coordinator: dictation state machine glue
 //! - commands: Tauri IPC surface
 
+mod types;
 mod android;
 mod asr;
 mod audio_mute;
@@ -64,7 +65,6 @@ mod shortcut_binding;
 #[cfg(mobile)]
 #[path = "mobile_stubs/shortcut_binding.rs"]
 mod shortcut_binding;
-mod types;
 #[cfg(not(mobile))]
 mod unicode_keystroke;
 #[cfg(mobile)]

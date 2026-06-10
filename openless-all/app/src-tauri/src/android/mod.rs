@@ -6,7 +6,7 @@ pub mod insert;
 pub mod jni;
 pub mod native_bridge;
 pub mod overlay;
-pub mod types;
+pub use crate::types::android_types as types;
 
 pub use accessibility::{
     get_android_accessibility_status, paste_via_accessibility,

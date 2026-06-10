@@ -3,12 +3,15 @@
 
 use serde::{Deserialize, Serialize};
 
-pub use crate::android::types::{
+#[path = "android/types.rs"]
+pub mod android_types;
+
+pub use android_types::{
     AndroidAccessibilityState, AndroidAccessibilityStatus, AndroidInsertStrategy,
     AndroidOverlayActivationMode, AndroidOverlayLeftSwipeAction, AndroidOverlayPermissionState,
     AndroidOverlayStatus, AndroidOverlayTrigger,
 };
-use crate::android::types::{
+use android_types::{
     default_android_insert_strategy, default_android_overlay_activation_mode,
     default_android_overlay_left_swipe_action, default_android_overlay_size_dp,
     default_android_overlay_trigger, normalize_android_insert_strategy,
