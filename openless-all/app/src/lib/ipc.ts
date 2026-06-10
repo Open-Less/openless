@@ -1233,6 +1233,10 @@ export function qaWindowPin(pinned: boolean): Promise<void> {
     return invokeOrMock("qa_window_pin", { pinned }, () => undefined)
 }
 
+export function qaToggleRecording(): Promise<void> {
+    return invokeOrMock("qa_toggle_recording", undefined, () => undefined)
+}
+
 // ── Less Computer 浮窗 ────────────────────────────────────────────────
 /** 用户点 ✕ / 按 Esc 关闭 Less Computer 浮窗（隐藏窗口）。 */
 export function lessComputerWindowDismiss(): Promise<void> {

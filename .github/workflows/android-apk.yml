@@ -129,33 +129,105 @@ jobs:
           rm -rf ~/.cargo/registry ~/.cargo/git ~/.gradle/caches
           df -h
 
-      - name: Collect debug APK
+      - name: Collect split debug APKs
         id: apk
         shell: bash
         working-directory: openless-all/app
         run: |
           set -euo pipefail
-          apk_path="$(find src-tauri/gen/android -type f -name '*.apk' -path '*/outputs/*' | sort | head -n 1)"
-          if [ -z "$apk_path" ]; then
-            echo "::error::No APK found under src-tauri/gen/android/**/outputs/"
-            find src-tauri/gen/android -type f -name '*.apk' 2>/dev/null || true
-            exit 1
-          fi
           if [[ "${{ github.ref }}" == refs/tags/v* ]] && [[ "${{ github.ref_name }}" == *-tauri ]]; then
             label="${{ github.ref_name }}"
           else
             label="run-${{ github.run_number }}"
           fi
-          dest="$RUNNER_TEMP/OpenLess-android-debug-${label}.apk"
-          cp "$apk_path" "$dest"
-          echo "path=$dest" >> "$GITHUB_OUTPUT"
-          echo "Collected APK: $apk_path → $dest"
+          export OPENLESS_APK_LABEL="$label"
+          python - <<'PY'
+          import os
+          import shutil
+          import sys
+          import zipfile
+          from pathlib import Path
 
-      - name: Upload Android APK artifact
+          expected = {
+              "arm64-v8a": "arm64_v8a",
+              "armeabi-v7a": "armeabi_v7a",
+              "x86": "x86",
+              "x86_64": "x86_64",
+          }
+          root = Path("src-tauri/gen/android")
+          label = os.environ["OPENLESS_APK_LABEL"]
+          out_dir = Path(os.environ["RUNNER_TEMP"]) / "openless-android-debug-split"
+          out_dir.mkdir(parents=True, exist_ok=True)
+          found = {}
+          candidates = [
+              apk for apk in sorted(root.rglob("*.apk"))
+              if "outputs" in apk.parts
+          ]
+          if not candidates:
+              print("::error::No APK found under src-tauri/gen/android/**/outputs/")
+              for apk in sorted(root.rglob("*.apk")):
+                  print(apk)
+              sys.exit(1)
+          for apk in candidates:
+              with zipfile.ZipFile(apk) as archive:
+                  abis = sorted({
+                      name.split("/")[1]
+                      for name in archive.namelist()
+                      if name.startswith("lib/") and len(name.split("/")) >= 3
+                  })
+              if len(abis) != 1:
+                  print(f"::error::{apk} contains ABI directories {abis}; expected exactly one ABI per APK")
+                  sys.exit(1)
+              abi = abis[0]
+              if abi not in expected:
+                  print(f"::error::{apk} contains unexpected ABI {abi}")
+                  sys.exit(1)
+              if abi in found:
+                  print(f"::error::Duplicate APKs for ABI {abi}: {found[abi]} and {apk}")
+                  sys.exit(1)
+              dest = out_dir / f"OpenLess-android-debug-{abi}-{label}.apk"
+              shutil.copy2(apk, dest)
+              found[abi] = dest
+              print(f"Collected {abi}: {apk} -> {dest}")
+          missing = sorted(set(expected) - set(found))
+          if missing:
+              print(f"::error::Missing split APKs for ABI(s): {', '.join(missing)}")
+              sys.exit(1)
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              for abi, key in expected.items():
+                  output.write(f"{key}_path={found[abi]}\n")
+              output.write("release_files<<EOF\n")
+              for abi in expected:
+                  output.write(f"{found[abi]}\n")
+              output.write("EOF\n")
+          PY
+
+      - name: Upload Android APK artifact (arm64-v8a)
         uses: actions/upload-artifact@v4
         with:
-          name: openless-android-debug
-          path: ${{ steps.apk.outputs.path }}
+          name: openless-android-debug-arm64-v8a
+          path: ${{ steps.apk.outputs.arm64_v8a_path }}
+          if-no-files-found: error
+
+      - name: Upload Android APK artifact (armeabi-v7a)
+        uses: actions/upload-artifact@v4
+        with:
+          name: openless-android-debug-armeabi-v7a
+          path: ${{ steps.apk.outputs.armeabi_v7a_path }}
+          if-no-files-found: error
+
+      - name: Upload Android APK artifact (x86)
+        uses: actions/upload-artifact@v4
+        with:
+          name: openless-android-debug-x86
+          path: ${{ steps.apk.outputs.x86_path }}
+          if-no-files-found: error
+
+      - name: Upload Android APK artifact (x86_64)
+        uses: actions/upload-artifact@v4
+        with:
+          name: openless-android-debug-x86_64
+          path: ${{ steps.apk.outputs.x86_64_path }}
           if-no-files-found: error
 
       - name: Attach APK to GitHub Release
@@ -166,4 +238,4 @@ jobs:
           name: OpenLess ${{ github.ref_name }}
           draft: false
           prerelease: ${{ endsWith(github.ref_name, '-beta-tauri') }}
-          files: ${{ steps.apk.outputs.path }}
+          files: ${{ steps.apk.outputs.release_files }}

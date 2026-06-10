@@ -133,6 +133,45 @@ class OpenLessAccessibilityService : AccessibilityService() {
         return pasted
     }
 
+    private fun captureSelectedTextFromFocusedNode(): String {
+        val root = rootInActiveWindow ?: return ""
+        val focused = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+            ?: root.findFocus(AccessibilityNodeInfo.FOCUS_ACCESSIBILITY)
+        focused?.let {
+            return try {
+                selectedTextFromNode(it)
+            } finally {
+                it.recycle()
+            }
+        }
+        return selectedTextFromTree(root)
+    }
+
+    private fun selectedTextFromTree(node: AccessibilityNodeInfo?): String {
+        if (node == null) return ""
+        selectedTextFromNode(node).takeIf { it.isNotBlank() }?.let { return it }
+        for (index in 0 until node.childCount) {
+            val child = node.getChild(index) ?: continue
+            try {
+                selectedTextFromTree(child).takeIf { it.isNotBlank() }?.let { return it }
+            } finally {
+                child.recycle()
+            }
+        }
+        return ""
+    }
+
+    private fun selectedTextFromNode(node: AccessibilityNodeInfo): String {
+        val text = node.text?.toString() ?: return ""
+        val start = node.textSelectionStart
+        val end = node.textSelectionEnd
+        if (start < 0 || end < 0 || start == end) return ""
+        val from = minOf(start, end).coerceIn(0, text.length)
+        val to = maxOf(start, end).coerceIn(0, text.length)
+        if (from >= to) return ""
+        return text.substring(from, to)
+    }
+
     private fun markServiceAlive() {
         getSharedPreferences(PREFS_NAME, prefsMode())
             .edit()
@@ -149,6 +188,11 @@ class OpenLessAccessibilityService : AccessibilityService() {
         fun pasteToFocusedField(): Boolean {
             instance?.let { return it.performPasteToFocusedField() }
             return sendPasteRequestToAccessibilityProcess()
+        }
+
+        @JvmStatic
+        fun captureSelectedText(): String {
+            return instance?.captureSelectedTextFromFocusedNode().orEmpty()
         }
 
         @JvmStatic

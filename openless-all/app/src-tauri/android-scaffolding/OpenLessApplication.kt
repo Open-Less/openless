@@ -36,8 +36,7 @@ class OpenLessApplication : Application() {
     private fun maybeShowOverlayOnBackground() {
         val configured = configuredOverlayTriggerMode()
         val shouldShow = configured == "background" ||
-            configured == "always" ||
-            (configured == "keyboard" && !OpenLessAccessibilityService.isOperational(this))
+            configured == "always"
         if (!shouldShow) {
             return
         }

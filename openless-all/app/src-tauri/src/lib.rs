@@ -14,6 +14,14 @@
 //! - coordinator: dictation state machine glue
 //! - commands: Tauri IPC surface
 
+mod android_accessibility;
+#[cfg(target_os = "android")]
+mod android_insert;
+#[cfg(target_os = "android")]
+mod android_jni;
+#[cfg(target_os = "android")]
+mod android_native_bridge;
+mod android_overlay;
 mod asr;
 mod audio_mute;
 mod cli;
@@ -40,6 +48,8 @@ mod insertion;
 #[cfg(target_os = "linux")]
 mod linux_fcitx;
 mod llm_gemini;
+#[cfg(mobile)]
+mod mobile_runtime;
 mod net;
 mod permissions;
 mod persistence;
@@ -67,16 +77,6 @@ mod unicode_keystroke;
 #[cfg(mobile)]
 #[path = "mobile_stubs/unicode_keystroke.rs"]
 mod unicode_keystroke;
-mod android_overlay;
-mod android_accessibility;
-#[cfg(target_os = "android")]
-mod android_insert;
-#[cfg(target_os = "android")]
-mod android_jni;
-#[cfg(target_os = "android")]
-mod android_native_bridge;
-#[cfg(mobile)]
-mod mobile_runtime;
 #[cfg(target_os = "windows")]
 mod windows_ime_ipc;
 #[cfg(target_os = "windows")]
@@ -340,6 +340,9 @@ macro_rules! app_invoke_handler_mobile {
             $crate::commands::start_dictation,
             $crate::commands::stop_dictation,
             $crate::commands::cancel_dictation,
+            $crate::commands::qa_window_dismiss,
+            $crate::commands::qa_window_pin,
+            $crate::commands::qa_toggle_recording,
             $crate::commands::repolish,
             $crate::commands::list_style_packs,
             $crate::commands::create_style_pack_from_template,
@@ -1413,6 +1416,16 @@ fn position_qa_window<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) -> ta
 /// 让前端 React 视图自行决定渲染哪一种。**不**抢前台 app 焦点（保证 Cmd+C
 /// fallback 仍能从原 app 拿到选区）。
 pub(crate) fn show_qa_window<R: tauri::Runtime>(app: &AppHandle<R>, content_kind: &str) {
+    #[cfg(target_os = "android")]
+    {
+        let _ = app.emit_to(
+            "main",
+            "qa:state",
+            serde_json::json!({ "kind": content_kind }),
+        );
+        return;
+    }
+
     let Some(window) = app.get_webview_window("qa") else {
         log::info!("[qa] show 跳过：qa 窗口不存在 (content_kind={content_kind})");
         return;
@@ -1505,6 +1518,12 @@ fn make_qa_window_draggable_macos<R: tauri::Runtime>(window: &tauri::WebviewWind
 
 /// 隐藏 QA 窗口。供 commands::qa_window_dismiss / coordinator session 收尾共用。
 pub(crate) fn hide_qa_window<R: tauri::Runtime>(app: &AppHandle<R>) {
+    #[cfg(target_os = "android")]
+    {
+        let _ = app.emit_to("main", "qa:dismiss", serde_json::json!({}));
+        return;
+    }
+
     if let Some(window) = app.get_webview_window("qa") {
         let _ = window.hide();
     }

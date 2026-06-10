@@ -12,6 +12,7 @@ import {
   getPlatformCapabilities,
   handleWindowHotkeyEvent,
   isTauri,
+  qaWindowDismiss,
 } from './lib/ipc';
 import type { PlatformCapabilities } from './lib/types';
 import {
@@ -52,6 +53,7 @@ export function App({ isCapsule, isQa, isLessComputer, isLessComputerGlow, force
   // Windows 启动不应被权限探测阻塞首屏。
   const [gate, setGate] = useState<Gate>('ready');
   const [platformCaps, setPlatformCaps] = useState<PlatformCapabilities | null>(null);
+  const [mobileQaOpen, setMobileQaOpen] = useState(false);
   useEffect(() => {
     applyAppTheme(readAppTheme());
     const syncTheme = (event: StorageEvent) => {
@@ -66,6 +68,51 @@ export function App({ isCapsule, isQa, isLessComputer, isLessComputerGlow, force
     if (!isTauri) return;
     void getPlatformCapabilities().then(setPlatformCaps);
   }, []);
+
+  useEffect(() => {
+    if (!isTauri || platformCaps?.platform !== 'android') return;
+    let unlistenState: (() => void) | undefined;
+    let unlistenDismiss: (() => void) | undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        const { listen } = await import('@tauri-apps/api/event');
+        const stateHandle = await listen('qa:state', () => {
+          setMobileQaOpen(true);
+        });
+        const dismissHandle = await listen('qa:dismiss', () => {
+          setMobileQaOpen(false);
+        });
+        if (cancelled) {
+          stateHandle();
+          dismissHandle();
+        } else {
+          unlistenState = stateHandle;
+          unlistenDismiss = dismissHandle;
+        }
+      } catch (error) {
+        console.warn('[qa] mobile route listener setup failed', error);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      unlistenState?.();
+      unlistenDismiss?.();
+    };
+  }, [platformCaps?.platform]);
+
+  useEffect(() => {
+    if (!mobileQaOpen || platformCaps?.platform !== 'android') return;
+    window.history.pushState({ openlessQa: true }, '', window.location.href);
+    const onPopState = () => {
+      setMobileQaOpen(false);
+      void qaWindowDismiss().catch(error => console.warn('[qa] mobile back dismiss failed', error));
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => {
+      window.removeEventListener('popstate', onPopState);
+    };
+  }, [mobileQaOpen, platformCaps?.platform]);
 
   useEffect(() => {
     if (!isTauri) return;
@@ -207,7 +254,24 @@ export function App({ isCapsule, isQa, isLessComputer, isLessComputerGlow, force
 
   return (
     <HotkeySettingsProvider>
-      {gate === 'onboarding' ? <Onboarding onComplete={() => setGate('ready')} /> : <FloatingShell os={os} />}
+      {platformCaps?.platform === 'android' && (
+        <div style={{ display: mobileQaOpen ? 'block' : 'none', height: '100%' }}>
+          <QaPanel
+            embedded
+            onRequestClose={() => {
+              setMobileQaOpen(false);
+              if (window.history.state?.openlessQa === true) {
+                window.history.back();
+              }
+            }}
+          />
+        </div>
+      )}
+      {!mobileQaOpen && (gate === 'onboarding' ? (
+        <Onboarding onComplete={() => setGate('ready')} />
+      ) : (
+        <FloatingShell os={os} />
+      ))}
       {gate === 'ready' && platformCaps?.supportsAutoUpdate === true && <AutoUpdateGate />}
     </HotkeySettingsProvider>
   );

@@ -35,6 +35,7 @@ use crate::coordinator_state::{
     publish_abort_idle_after_restore, start_processing_if_listening, startup_race_status,
     BeginOutcome, SessionId, SessionPhase, SessionState, StartupRaceStatus,
 };
+use crate::correction::apply_correction_rules;
 use crate::hotkey::{HotkeyEvent, HotkeyMonitor};
 use crate::insertion::TextInserter;
 use crate::persistence::{
@@ -73,13 +74,16 @@ use dictation::{
 };
 #[cfg(any(debug_assertions, test))]
 use dictation::{handle_pressed, handle_released};
-use qa::{close_qa_panel, handle_qa_hotkey_pressed, QaPhase, QaSessionState};
+use qa::{
+    close_qa_panel, handle_qa_hotkey_pressed, handle_qa_option_edge, open_qa_panel, QaPhase,
+    QaSessionState,
+};
 #[cfg(test)]
 use resources::discard_startup_resources_for_session;
 use resources::{
     acquire_recording_mute, cancel_active_asr, release_recording_mute,
     selected_microphone_device_name, stop_microphone_preview_monitor, stop_qa_recorder,
-    SessionResource, SharedRecordingMuteState,
+    take_asr_for_session, take_recorder_for_session, SessionResource, SharedRecordingMuteState,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1011,6 +1015,15 @@ impl Coordinator {
         begin_session(&self.inner).await
     }
 
+    pub async fn start_dictation_with_translation(&self) -> Result<(), String> {
+        begin_session(&self.inner).await?;
+        self.inner
+            .translation_modifier_seen
+            .store(true, Ordering::SeqCst);
+        log::info!("[coord] android overlay translation dictation started");
+        Ok(())
+    }
+
     pub async fn stop_dictation(&self) -> Result<(), String> {
         if self.inner.state.lock().phase == SessionPhase::Starting {
             request_stop_during_starting(&self.inner, "manual stop");
@@ -1019,8 +1032,28 @@ impl Coordinator {
         end_session(&self.inner).await
     }
 
+    pub async fn stop_dictation_with_translation(&self, translation: bool) -> Result<(), String> {
+        if translation {
+            mark_translation_modifier_seen(&self.inner);
+        }
+        self.stop_dictation().await
+    }
+
     pub fn cancel_dictation(&self) {
         cancel_session(&self.inner);
+    }
+
+    pub fn switch_to_previous_style_pack(&self) {
+        switch_to_previous_style(&self.inner);
+    }
+
+    pub async fn open_qa_from_overlay(&self) -> Result<(), String> {
+        open_qa_panel(&self.inner);
+        begin_qa_session(&self.inner).await
+    }
+
+    pub async fn finalize_qa_from_overlay(&self) -> Result<(), String> {
+        finalize_dictation_as_qa_question(&self.inner).await
     }
 
     /// 返回当前听写阶段（read-only 快照），供 CLI 入口在 dispatch toggle 时决策。
@@ -1035,6 +1068,10 @@ impl Coordinator {
     /// Processing → 忽略。桌面快捷键 → CLI 转发的备用进入点。
     pub async fn cli_toggle_qa_panel(&self) {
         handle_qa_hotkey_pressed(&self.inner).await;
+    }
+
+    pub async fn qa_toggle_recording(&self) {
+        handle_qa_option_edge(&self.inner).await;
     }
 
     pub fn set_shortcut_recording_active(&self, active: bool) {
@@ -3613,6 +3650,429 @@ fn enabled_hotwords(inner: &Arc<Inner>) -> Vec<DictionaryHotword> {
 }
 
 // ─────────────────────────── QA session lifecycle ───────────────────────────
+
+async fn finalize_dictation_as_qa_question(inner: &Arc<Inner>) -> Result<(), String> {
+    open_qa_panel(inner);
+    {
+        let mut state = inner.qa_state.lock();
+        state.phase = QaPhase::Processing;
+        state.cancelled = false;
+        state.session_id = new_session_id();
+        state.front_app = capture_frontmost_app();
+        state.selection = None;
+    }
+    inner.qa_stream_cancelled.store(false, Ordering::SeqCst);
+
+    let selection = capture_selection();
+    let selection_preview_text = selection.as_ref().map(|s| s.text.clone());
+    inner.qa_state.lock().selection = selection;
+
+    if let Some(app) = inner.app.lock().clone() {
+        let messages = inner.qa_state.lock().messages.clone();
+        let _ = app.emit_to(
+            "qa",
+            "qa:state",
+            serde_json::json!({
+                "kind": "loading",
+                "selection_preview": selection_preview_text,
+                "messages": messages,
+            }),
+        );
+    }
+
+    let raw = match take_current_dictation_transcript_for_qa(inner).await {
+        Ok(Some(raw)) => raw,
+        Ok(None) => {
+            finish_qa_idle_silently(inner);
+            return Ok(());
+        }
+        Err(error) => {
+            finish_qa_with_error(inner, error.clone());
+            return Err(error);
+        }
+    };
+    answer_qa_question_text(inner, raw.text.trim().to_string(), raw.duration_ms).await
+}
+
+async fn take_current_dictation_transcript_for_qa(
+    inner: &Arc<Inner>,
+) -> Result<Option<RawTranscript>, String> {
+    wait_for_dictation_listening(inner).await?;
+
+    let current_session_id = {
+        let mut state = inner.state.lock();
+        let Some(session_id) = start_processing_if_listening(&mut state) else {
+            return Ok(None);
+        };
+        session_id
+    };
+
+    let elapsed = inner.state.lock().started_at.elapsed().as_millis() as u64;
+    emit_capsule(inner, CapsuleState::Transcribing, 0.0, elapsed, None, None);
+
+    if let Some(rec) = take_recorder_for_session(inner, current_session_id) {
+        rec.stop();
+        release_recording_mute(inner, "dictation");
+    }
+
+    let Some(asr) = take_asr_for_session(inner, current_session_id) else {
+        restore_prepared_windows_ime_session(inner, current_session_id);
+        set_phase_idle_if_session_matches(inner, current_session_id);
+        return Ok(None);
+    };
+
+    let mut raw = match transcribe_overlay_dictation_asr(inner, current_session_id, asr).await {
+        Ok(raw) => raw,
+        Err(error) => {
+            restore_prepared_windows_ime_session(inner, current_session_id);
+            set_phase_idle_if_session_matches(inner, current_session_id);
+            finish_qa_with_error(inner, format!("识别失败: {error}"));
+            return Err(error);
+        }
+    };
+
+    if inner.state.lock().cancelled {
+        log::info!("[coord] overlay QA: cancel detected after ASR — discarding transcript");
+        restore_prepared_windows_ime_session(inner, current_session_id);
+        {
+            let mut state = inner.state.lock();
+            state.phase = SessionPhase::Idle;
+            state.focus_target = None;
+        }
+        return Ok(None);
+    }
+
+    #[cfg(any(debug_assertions, test))]
+    if raw.text.trim().is_empty() {
+        if let Some(debug_text) = debug_transcript_override_text() {
+            raw.text = debug_text;
+        }
+    }
+
+    if raw.text.trim().is_empty() {
+        restore_prepared_windows_ime_session(inner, current_session_id);
+        set_phase_idle_if_session_matches(inner, current_session_id);
+        finish_qa_idle_silently(inner);
+        return Ok(None);
+    }
+
+    if let Ok(rules) = inner.correction_rules.list() {
+        let corrected = apply_correction_rules(&raw.text, &rules);
+        if corrected != raw.text {
+            raw.text = corrected;
+        }
+    }
+
+    restore_prepared_windows_ime_session(inner, current_session_id);
+    {
+        let mut state = inner.state.lock();
+        state.phase = SessionPhase::Idle;
+        state.focus_target = None;
+    }
+    Ok(Some(raw))
+}
+
+async fn wait_for_dictation_listening(inner: &Arc<Inner>) -> Result<(), String> {
+    const MAX_WAIT_MS: u64 = 3_000;
+    const STEP_MS: u64 = 20;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(MAX_WAIT_MS);
+
+    loop {
+        let phase = { inner.state.lock().phase };
+        match phase {
+            SessionPhase::Starting if std::time::Instant::now() < deadline => {
+                tokio::time::sleep(std::time::Duration::from_millis(STEP_MS)).await;
+            }
+            SessionPhase::Starting => {
+                return Err("dictation startup timed out before QA finalize".to_string());
+            }
+            _ => return Ok(()),
+        }
+    }
+}
+
+async fn transcribe_overlay_dictation_asr(
+    _inner: &Arc<Inner>,
+    _current_session_id: SessionId,
+    asr: ActiveAsr,
+) -> Result<RawTranscript, String> {
+    let uses_global_timeout = asr_transcribe_uses_global_timeout(&asr);
+    match asr {
+        ActiveAsr::Volcengine(asr) => {
+            debug_assert!(uses_global_timeout);
+            if let Err(error) = asr.send_last_frame().await {
+                log::error!("[coord] overlay QA: send last frame failed: {error}");
+            }
+            let timeout_duration = std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS);
+            match tokio::time::timeout(timeout_duration, asr.await_final_result()).await {
+                Ok(Ok(raw)) => Ok(raw),
+                Ok(Err(error)) => Err(error.to_string()),
+                Err(_) => {
+                    asr.cancel();
+                    Err("global timeout".to_string())
+                }
+            }
+        }
+        ActiveAsr::Bailian(asr) => {
+            debug_assert!(uses_global_timeout);
+            if let Err(error) = asr.send_last_frame().await {
+                log::error!("[coord] overlay QA: Bailian send last frame failed: {error}");
+            }
+            let timeout_duration = std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS);
+            match tokio::time::timeout(timeout_duration, asr.await_final_result()).await {
+                Ok(Ok(raw)) => Ok(raw),
+                Ok(Err(error)) => Err(error.to_string()),
+                Err(_) => {
+                    asr.cancel();
+                    Err("bailian global timeout".to_string())
+                }
+            }
+        }
+        ActiveAsr::Whisper(whisper) => {
+            debug_assert!(uses_global_timeout);
+            let timeout_duration = std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS);
+            match tokio::time::timeout(timeout_duration, whisper.transcribe()).await {
+                Ok(Ok(raw)) => Ok(raw),
+                Ok(Err(error)) => Err(error.to_string()),
+                Err(_) => Err("whisper global timeout".to_string()),
+            }
+        }
+        ActiveAsr::Mimo(mimo) => {
+            debug_assert!(uses_global_timeout);
+            let timeout_duration = std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS);
+            match tokio::time::timeout(timeout_duration, mimo.transcribe()).await {
+                Ok(Ok(raw)) => Ok(raw),
+                Ok(Err(error)) => Err(error.to_string()),
+                Err(_) => Err("mimo global timeout".to_string()),
+            }
+        }
+        #[cfg(target_os = "windows")]
+        ActiveAsr::FoundryLocalWhisper(local) => {
+            debug_assert!(!uses_global_timeout);
+            match local
+                .transcribe(foundry_audio_transcribe_timeout_duration())
+                .await
+            {
+                Ok(raw) => {
+                    schedule_foundry_local_asr_release(
+                        _inner,
+                        AsrReleaseSession::Dictation(_current_session_id),
+                    );
+                    Ok(raw)
+                }
+                Err(error) => {
+                    schedule_foundry_local_asr_release(
+                        _inner,
+                        AsrReleaseSession::Dictation(_current_session_id),
+                    );
+                    Err(error.to_string())
+                }
+            }
+        }
+        #[cfg(target_os = "windows")]
+        ActiveAsr::SherpaOnnxLocal(local) => {
+            debug_assert!(!uses_global_timeout);
+            match local
+                .transcribe(sherpa_audio_transcribe_timeout_duration())
+                .await
+            {
+                Ok(raw) => {
+                    schedule_sherpa_onnx_release(
+                        _inner,
+                        AsrReleaseSession::Dictation(_current_session_id),
+                    );
+                    Ok(raw)
+                }
+                Err(error) => {
+                    schedule_sherpa_onnx_release(
+                        _inner,
+                        AsrReleaseSession::Dictation(_current_session_id),
+                    );
+                    Err(error.to_string())
+                }
+            }
+        }
+        #[cfg(target_os = "macos")]
+        ActiveAsr::Local(local) => {
+            debug_assert!(uses_global_timeout);
+            let audio_secs = (local.buffer_duration_ms() as f64) / 1000.0;
+            let timeout_duration = local_qwen_transcribe_timeout(audio_secs);
+            let result = tokio::time::timeout(timeout_duration, local.transcribe()).await;
+            _inner.local_asr_cache.touch();
+            schedule_local_asr_release(_inner);
+            match result {
+                Ok(Ok(raw)) => Ok(raw),
+                Ok(Err(error)) => Err(error.to_string()),
+                Err(_) => Err("local qwen transcribe timeout".to_string()),
+            }
+        }
+    }
+}
+
+async fn answer_qa_question_text(
+    inner: &Arc<Inner>,
+    question: String,
+    duration_ms: u64,
+) -> Result<(), String> {
+    if question.trim().is_empty() {
+        finish_qa_idle_silently(inner);
+        return Ok(());
+    }
+
+    let user_content = {
+        let st = inner.qa_state.lock();
+        let is_first_turn = st.messages.is_empty();
+        let sel_text = st
+            .selection
+            .as_ref()
+            .map(|s| s.text.clone())
+            .unwrap_or_default();
+        if is_first_turn && !sel_text.trim().is_empty() {
+            format!(
+                "# 选区原文\n{}\n\n# 我的问题\n{}",
+                sel_text.trim(),
+                question
+            )
+        } else {
+            question.clone()
+        }
+    };
+
+    inner
+        .qa_state
+        .lock()
+        .messages
+        .push(crate::types::QaChatMessage {
+            role: "user".to_string(),
+            content: user_content,
+        });
+
+    if let Some(app) = inner.app.lock().clone() {
+        let messages = inner.qa_state.lock().messages.clone();
+        let _ = app.emit_to(
+            "qa",
+            "qa:state",
+            serde_json::json!({
+                "kind": "thinking",
+                "messages": messages,
+            }),
+        );
+    }
+
+    emit_capsule(inner, CapsuleState::Polishing, 0.0, 0, None, None);
+
+    let prefs = inner.prefs.get();
+    let working_languages = prefs.working_languages.clone();
+    let chinese_script_preference = prefs.chinese_script_preference;
+    let output_language_preference = prefs.output_language_preference;
+    let llm_thinking_enabled = prefs.llm_thinking_enabled;
+    let (messages_for_llm, front_app) = {
+        let st = inner.qa_state.lock();
+        (st.messages.clone(), st.front_app.clone())
+    };
+
+    let captured_session_id = inner.qa_state.lock().session_id;
+    let inner_for_delta = Arc::clone(inner);
+    let on_delta = move |chunk: &str| {
+        let cur_id = inner_for_delta.qa_state.lock().session_id;
+        if cur_id != captured_session_id {
+            return;
+        }
+        if let Some(app) = inner_for_delta.app.lock().clone() {
+            let _ = app.emit_to(
+                "qa",
+                "qa:state",
+                serde_json::json!({
+                    "kind": "answer_delta",
+                    "chunk": chunk,
+                }),
+            );
+        }
+    };
+
+    let cancel_flag = Arc::clone(&inner.qa_stream_cancelled);
+    let should_cancel = move || cancel_flag.load(Ordering::Relaxed);
+
+    let answer = match answer_chat_dispatch(
+        &messages_for_llm,
+        &working_languages,
+        chinese_script_preference,
+        output_language_preference,
+        llm_thinking_enabled,
+        front_app.as_deref(),
+        on_delta,
+        should_cancel,
+    )
+    .await
+    {
+        Ok(answer) => answer,
+        Err(error) => {
+            inner.qa_state.lock().messages.pop();
+            finish_qa_with_error(inner, format!("回答失败: {error}"));
+            return Err(error.to_string());
+        }
+    };
+
+    if inner.qa_state.lock().cancelled {
+        inner.qa_state.lock().messages.pop();
+        finish_qa_idle_silently(inner);
+        return Ok(());
+    }
+
+    inner
+        .qa_state
+        .lock()
+        .messages
+        .push(crate::types::QaChatMessage {
+            role: "assistant".to_string(),
+            content: answer.clone(),
+        });
+
+    if let Some(app) = inner.app.lock().clone() {
+        let messages = inner.qa_state.lock().messages.clone();
+        let _ = app.emit_to(
+            "qa",
+            "qa:state",
+            serde_json::json!({
+                "kind": "answer",
+                "messages": messages,
+            }),
+        );
+    }
+
+    emit_capsule(inner, CapsuleState::Idle, 0.0, 0, None, None);
+
+    if prefs.qa_save_history {
+        let session = DictationSession {
+            id: Uuid::new_v4().to_string(),
+            created_at: Utc::now().to_rfc3339(),
+            raw_transcript: question.clone(),
+            final_text: answer,
+            mode: PolishMode::Raw,
+            style_pack_id: None,
+            translation_active: false,
+            polish_source: None,
+            app_bundle_id: None,
+            app_name: front_app,
+            insert_status: InsertStatus::CopiedFallback,
+            error_code: Some("qaSession".to_string()),
+            duration_ms: Some(duration_ms),
+            dictionary_entry_count: None,
+            has_audio_recording: None,
+        };
+        let prefs_snapshot = inner.prefs.get();
+        if let Err(error) = inner.history.append_with_retention(
+            session,
+            prefs_snapshot.history_retention_days,
+            prefs_snapshot.history_max_entries,
+        ) {
+            log::error!("[coord] overlay QA history append failed: {error}");
+        }
+    }
+
+    inner.qa_state.lock().phase = QaPhase::Idle;
+    Ok(())
+}
 
 /// 划词语音问答会话（issue #118）。
 ///

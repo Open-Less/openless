@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use tauri::{AppHandle, Manager, RunEvent};
 
-use crate::coordinator::Coordinator;
 use crate::commands::MicrophoneMonitorState;
+use crate::coordinator::Coordinator;
 
 pub fn run() {
     let coordinator = Arc::new(Coordinator::new());
@@ -22,6 +22,9 @@ pub fn run() {
 
             if let Some(main) = app.get_webview_window("main") {
                 let _ = main.show();
+            }
+            if let Some(qa) = app.get_webview_window("qa") {
+                let _ = qa.hide();
             }
 
             coordinator.bind_app(app.handle().clone());

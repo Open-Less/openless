@@ -34,11 +34,15 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
     private var recording = false
     private var processing = false
     private var keyboardVisible = false
+    private var armed = false
     private var dragStartX = 0
     private var dragStartY = 0
     private var paramStartX = 0
     private var paramStartY = 0
     private var dragging = false
+    private var longPressRecording = false
+    private var pendingSwipe: SwipeDirection? = null
+    private var swipeConsumed = false
 
     private lateinit var iconContainer: FrameLayout
     private lateinit var iconButton: ImageView
@@ -112,18 +116,19 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
             "done" -> {
                 recording = false
                 processing = false
-                applyVisualState(OverlayVisualState.Idle)
+                setArmed(false)
             }
             "error" -> {
                 recording = false
                 processing = false
+                setArmed(false)
                 applyVisualState(OverlayVisualState.Error)
                 message?.takeIf { it.isNotBlank() }?.let { showToast(it) }
             }
             "cancelled", "idle" -> {
                 recording = false
                 processing = false
-                applyVisualState(OverlayVisualState.Idle)
+                setArmed(false)
             }
         }
     }
@@ -191,6 +196,7 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
             when {
                 recording -> OverlayVisualState.Recording
                 processing -> OverlayVisualState.Processing
+                armed -> OverlayVisualState.Armed
                 else -> OverlayVisualState.Idle
             },
         )
@@ -261,17 +267,13 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
     private fun handleIconClick() {
         if (processing) return
         if (recording) {
-            try {
-                OpenLessNative.nativeStopDictation()
-            } catch (error: Throwable) {
-                Log.w(TAG, "stop dictation bridge unavailable", error)
-                recording = false
-                applyVisualState(OverlayVisualState.Error)
-                showToast("语音服务未就绪，请打开 OpenLess 后重试")
-            }
-        } else {
-            startRecordingFromOverlay()
+            stopRecordingFromOverlay()
+            return
         }
+        if (!isTapActivationMode()) {
+            return
+        }
+        startRecordingFromOverlay()
     }
 
     private fun handleKeyboardChanged(intent: Intent) {
@@ -292,16 +294,33 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     dragging = false
+                    swipeConsumed = false
+                    longPressRecording = false
+                    pendingSwipe = null
+                    if (processing) {
+                        return@setOnTouchListener true
+                    }
                     dragStartX = event.rawX.toInt()
                     dragStartY = event.rawY.toInt()
                     paramStartX = params.x
                     paramStartY = params.y
+                    if (!isTapActivationMode() && !recording && !processing) {
+                        longPressRecording = true
+                        startRecordingFromOverlay()
+                    }
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
                     val dx = event.rawX.toInt() - dragStartX
                     val dy = event.rawY.toInt() - dragStartY
-                    if (abs(dx) > DRAG_SLOP_PX || abs(dy) > DRAG_SLOP_PX) {
+                    val swipe = detectHorizontalSwipe(dx, dy)
+                    if ((recording || armed || longPressRecording) && swipe != null && !swipeConsumed) {
+                        pendingSwipe = swipe
+                        swipeConsumed = true
+                        applySwipePreview(swipe)
+                        return@setOnTouchListener true
+                    }
+                    if (!processing && !armed && !recording && !longPressRecording && (abs(dx) > DRAG_SLOP_PX || abs(dy) > DRAG_SLOP_PX)) {
                         dragging = true
                         params.x = paramStartX + dx
                         params.y = paramStartY + dy
@@ -312,13 +331,33 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
                 }
                 MotionEvent.ACTION_UP -> {
                     if (!dragging) {
-                        touchedView.performClick()
+                        val swipe = pendingSwipe
+                        if (swipe != null) {
+                            commitSwipe(swipe)
+                        } else if (longPressRecording || (!isTapActivationMode() && recording)) {
+                            stopRecordingFromOverlay()
+                        } else if (!isTapActivationMode()) {
+                            setArmed(false)
+                        } else if (!swipeConsumed) {
+                            touchedView.performClick()
+                        }
                     } else {
                         savePosition(params.x, params.y)
                     }
+                    longPressRecording = false
+                    pendingSwipe = null
+                    swipeConsumed = false
                     true
                 }
-                MotionEvent.ACTION_CANCEL -> true
+                MotionEvent.ACTION_CANCEL -> {
+                    if (longPressRecording || (!isTapActivationMode() && recording)) {
+                        stopRecordingFromOverlay()
+                    }
+                    longPressRecording = false
+                    pendingSwipe = null
+                    swipeConsumed = false
+                    true
+                }
                 else -> false
             }
         }
@@ -332,6 +371,13 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
                 fill = Color.parseColor("#66202A36"),
                 stroke = Color.parseColor("#66FFFFFF"),
                 strokeWidth = 1,
+                enabled = true,
+            )
+            OverlayVisualState.Armed -> VisualStyle(
+                alpha = 1f,
+                fill = Color.parseColor("#E6111827"),
+                stroke = Color.parseColor("#38BDF8"),
+                strokeWidth = 3,
                 enabled = true,
             )
             OverlayVisualState.Recording -> VisualStyle(
@@ -362,19 +408,124 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         iconButton.isEnabled = enabled
     }
 
-    private fun startRecordingFromOverlay() {
+    private fun setArmed(value: Boolean) {
+        armed = value
+        if (!recording && !processing) {
+            applyVisualState(if (value) OverlayVisualState.Armed else OverlayVisualState.Idle)
+        }
+    }
+
+    private fun detectHorizontalSwipe(dx: Int, dy: Int): SwipeDirection? {
+        if (abs(dx) < dp(SWIPE_THRESHOLD_DP)) return null
+        if (abs(dy) > abs(dx) * SWIPE_VERTICAL_RATIO) return null
+        return if (dx < 0) SwipeDirection.Left else SwipeDirection.Right
+    }
+
+    private fun applySwipePreview(direction: SwipeDirection) {
+        when (direction) {
+            SwipeDirection.Left -> applyVisualState(OverlayVisualState.Armed)
+            SwipeDirection.Right -> applyVisualState(OverlayVisualState.Processing)
+        }
+    }
+
+    private fun commitSwipe(direction: SwipeDirection) {
+        when (direction) {
+            SwipeDirection.Left -> handleLeftSwipe()
+            SwipeDirection.Right -> finalizeQaFromOverlay()
+        }
+    }
+
+    private fun handleLeftSwipe() {
+        when (OpenLessAndroidPreferences.overlayLeftSwipeAction(this)) {
+            "style_pack" -> {
+                switchStylePackFromOverlay()
+                if (recording) {
+                    stopRecordingFromOverlay()
+                }
+            }
+            else -> stopRecordingFromOverlay(translation = true)
+        }
+    }
+
+    private fun switchStylePackFromOverlay() {
+        try {
+            OpenLessNative.nativeSwitchStylePack()
+            setArmed(false)
+        } catch (error: Throwable) {
+            Log.w(TAG, "switch style pack bridge unavailable", error)
+            applyVisualState(OverlayVisualState.Error)
+            showToast("语音服务未就绪，请打开 OpenLess 后重试")
+        }
+    }
+
+    private fun openQaFromOverlay() {
+        try {
+            OpenLessNative.nativeOpenQaFromOverlay()
+            setArmed(false)
+        } catch (error: Throwable) {
+            Log.w(TAG, "open QA bridge unavailable", error)
+            applyVisualState(OverlayVisualState.Error)
+            showToast("问答服务未就绪，请打开 OpenLess 后重试")
+        }
+    }
+
+    private fun finalizeQaFromOverlay() {
+        try {
+            OpenLessNative.nativeFinalizeQaFromOverlay()
+            recording = false
+            processing = true
+            setArmed(false)
+            applyVisualState(OverlayVisualState.Processing)
+        } catch (error: Throwable) {
+            Log.w(TAG, "finalize QA bridge unavailable", error)
+            processing = false
+            applyVisualState(OverlayVisualState.Error)
+            showToast("问答服务未就绪，请打开 OpenLess 后重试")
+        }
+    }
+
+    private fun startRecordingFromOverlay(translation: Boolean = false) {
         showOverlay()
         if (tryPromoteRecordingForeground()) {
             try {
-                OpenLessNative.nativeStartDictation()
+                if (translation) {
+                    OpenLessNative.nativeStartDictationWithTranslation(true)
+                } else {
+                    OpenLessNative.nativeStartDictation()
+                }
+                recording = true
+                processing = false
+                setArmed(false)
+                applyVisualState(OverlayVisualState.Recording)
             } catch (error: Throwable) {
                 Log.w(TAG, "start dictation bridge unavailable", error)
+                recording = false
+                processing = false
                 applyVisualState(OverlayVisualState.Error)
                 showToast("语音服务未就绪，请打开 OpenLess 后重试")
             }
             return
         }
         applyVisualState(OverlayVisualState.Error)
+    }
+
+    private fun stopRecordingFromOverlay(translation: Boolean = false) {
+        try {
+            recording = false
+            processing = true
+            applyVisualState(OverlayVisualState.Processing)
+            if (translation) {
+                OpenLessNative.nativeStopDictationWithTranslation(true)
+            } else {
+                OpenLessNative.nativeStopDictation()
+            }
+        } catch (error: Throwable) {
+            Log.w(TAG, "stop dictation bridge unavailable", error)
+            recording = false
+            processing = false
+            applyVisualState(OverlayVisualState.Error)
+            showToast("语音服务未就绪，请打开 OpenLess 后重试")
+        }
     }
 
     private fun tryPromoteRecordingForeground(): Boolean {
@@ -456,8 +607,8 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
             .apply()
     }
 
-    private fun isKeyboardTriggerMode(): Boolean {
-        return OpenLessAndroidPreferences.overlayTriggerMode(this) == "keyboard"
+    private fun isTapActivationMode(): Boolean {
+        return OpenLessAndroidPreferences.overlayActivationMode(this) == "tap"
     }
 
     private fun showToast(message: String) {
@@ -478,9 +629,15 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
 
     private enum class OverlayVisualState {
         Idle,
+        Armed,
         Recording,
         Processing,
         Error,
+    }
+
+    private enum class SwipeDirection {
+        Left,
+        Right,
     }
 
     companion object {
@@ -496,6 +653,8 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         private const val ICON_IMAGE_SIZE_DP = 56
         private const val ICON_PADDING_DP = 8
         private const val DRAG_SLOP_PX = 8
+        private const val SWIPE_THRESHOLD_DP = 56
+        private const val SWIPE_VERTICAL_RATIO = 0.6f
         private const val PREFS_NAME = "openless_overlay"
         private const val PREF_KEY_X = "overlay_x"
         private const val PREF_KEY_Y = "overlay_y"

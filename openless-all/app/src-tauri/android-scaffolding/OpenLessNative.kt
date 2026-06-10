@@ -14,9 +14,19 @@ object OpenLessNative {
 
     @JvmStatic external fun nativeStartDictation()
 
+    @JvmStatic external fun nativeStartDictationWithTranslation(translation: Boolean)
+
     @JvmStatic external fun nativeStopDictation()
 
+    @JvmStatic external fun nativeStopDictationWithTranslation(translation: Boolean)
+
     @JvmStatic external fun nativeCancelDictation()
+
+    @JvmStatic external fun nativeSwitchStylePack()
+
+    @JvmStatic external fun nativeOpenQaFromOverlay()
+
+    @JvmStatic external fun nativeFinalizeQaFromOverlay()
 
     @JvmStatic external fun nativeGetOverlayTriggerMode(): String
 

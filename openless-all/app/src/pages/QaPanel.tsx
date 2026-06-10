@@ -12,8 +12,15 @@
 
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
-import { getSettings, isTauri, qaWindowDismiss, qaWindowPin } from '../lib/ipc';
-import type { QaChatMessage, QaStatePayload, UserPreferences } from '../lib/types';
+import {
+  getPlatformCapabilities,
+  getSettings,
+  isTauri,
+  qaToggleRecording,
+  qaWindowDismiss,
+  qaWindowPin,
+} from '../lib/ipc';
+import type { PlatformCapabilities, QaChatMessage, QaStatePayload, UserPreferences } from '../lib/types';
 import { getHotkeyBindingLabel } from '../lib/hotkey';
 import { renderQaMarkdown, renderQaPlainText } from '../lib/qaMarkdown';
 
@@ -21,7 +28,12 @@ const SELECTION_PREVIEW_MAX = 60;
 
 type Status = 'idle' | 'recording' | 'thinking' | 'error';
 
-export function QaPanel() {
+interface QaPanelProps {
+  embedded?: boolean;
+  onRequestClose?: () => void;
+}
+
+export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {}) {
   const { t, i18n } = useTranslation();
   const [messages, setMessages] = useState<QaChatMessage[]>([]);
   const [status, setStatus] = useState<Status>('idle');
@@ -32,6 +44,7 @@ export function QaPanel() {
   const [streamingAnswer, setStreamingAnswer] = useState<string>('');
   /** 录音电平：0..1。后端每帧 33ms 通过 qa:level emit。详见 issue #162。 */
   const [level, setLevel] = useState<number>(0);
+  const [platformCaps, setPlatformCaps] = useState<PlatformCapabilities | null>(null);
   /** 用户当前的录音热键 label（如 "右 Option" / "Right Alt"）。issue #205：
    *  原版硬编码 "Option"，Windows 用户没这个键，文案失真。读 prefs 后由 i18n
    *  插值动态显示，平台与用户配置都能跟上。 */
@@ -40,6 +53,10 @@ export function QaPanel() {
   );
   const tRef = useRef(t);
   tRef.current = t;
+  const embeddedRef = useRef(embedded);
+  embeddedRef.current = embedded;
+  const onRequestCloseRef = useRef(onRequestClose);
+  onRequestCloseRef.current = onRequestClose;
 
   // ── 后端事件订阅（mount 时订阅一次，永不重订阅）──────────────────
   useEffect(() => {
@@ -111,7 +128,11 @@ export function QaPanel() {
         });
         const dismissHandle = await listen<unknown>('qa:dismiss', () => {
           setPinned(false);
-          void qaWindowDismiss();
+          if (embeddedRef.current) {
+            onRequestCloseRef.current?.();
+          } else {
+            void qaWindowDismiss();
+          }
         });
         // qa:level — 录音电平，节流 ~33ms/帧。详见 issue #162。
         const levelHandle = await listen<{ level: number }>('qa:level', event => {
@@ -153,11 +174,12 @@ export function QaPanel() {
       if (event.key === 'Escape') {
         event.preventDefault();
         void qaWindowDismiss();
+        onRequestClose?.();
       }
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, []);
+  }, [onRequestClose]);
 
   // ── 读取用户当前的录音热键 label，给 i18n 插值用（issue #205）。
   // QaPanel 跑在独立 webview（label="qa"），没有 HotkeySettingsContext
@@ -182,6 +204,25 @@ export function QaPanel() {
     };
   }, [i18n.language]);
 
+  useEffect(() => {
+    let cancelled = false;
+    void getPlatformCapabilities()
+      .then(caps => {
+        if (!cancelled) setPlatformCaps(caps);
+      })
+      .catch(err => {
+        console.warn('[QaPanel] load platform capabilities failed', err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const mobileRecordButton = platformCaps?.supportsDesktopHotkey === false;
+  const recordControlLabel = mobileRecordButton
+    ? t('qa.mobileRecordLabel')
+    : recordHotkeyLabel;
+
   const onTogglePin = () => {
     const next = !pinned;
     setPinned(next);
@@ -190,6 +231,7 @@ export function QaPanel() {
 
   const onClose = () => {
     void qaWindowDismiss();
+    onRequestClose?.();
   };
 
   // ── 自动滚动到底（新消息进来时）────────────────────────────────────
@@ -201,18 +243,18 @@ export function QaPanel() {
   }, [messages, status]);
 
   return (
-    <div className="ol-frost" style={shellStyle}>
-      <Toolbar pinned={pinned} onTogglePin={onTogglePin} onClose={onClose} />
+    <div className="ol-frost" style={embedded ? embeddedShellStyle : shellStyle}>
+      <Toolbar pinned={pinned} onTogglePin={onTogglePin} onClose={onClose} embedded={embedded} />
       <div ref={scrollRef} style={contentStyle}>
         {messages.length === 0 && status === 'idle' && (
-          <EmptyHint t={t} recordHotkey={recordHotkeyLabel} />
+          <EmptyHint t={t} recordHotkey={recordControlLabel} />
         )}
         {messages.length === 0 && status === 'recording' && (
           <RecordingHeader
             preview={selectionPreview}
             t={t}
             level={level}
-            recordHotkey={recordHotkeyLabel}
+            recordHotkey={recordControlLabel}
           />
         )}
         <MessageList messages={messages} />
@@ -222,7 +264,7 @@ export function QaPanel() {
             t={t}
             preview={selectionPreview}
             level={level}
-            recordHotkey={recordHotkeyLabel}
+            recordHotkey={recordControlLabel}
           />
         )}
         {streamingAnswer && (
@@ -232,10 +274,20 @@ export function QaPanel() {
           <TurnIndicator kind="thinking" t={t} />
         )}
         {status === 'error' && (
-          <ErrorRow message={errorMsg} t={t} recordHotkey={recordHotkeyLabel} />
+          <ErrorRow message={errorMsg} t={t} recordHotkey={recordControlLabel} />
         )}
       </div>
-      <StatusBar status={status} t={t} recordHotkey={recordHotkeyLabel} />
+      {mobileRecordButton && (
+        <MobileRecordButton
+          status={status}
+          t={t}
+          onClick={() => {
+            if (status === 'thinking') return;
+            void qaToggleRecording();
+          }}
+        />
+      )}
+      <StatusBar status={status} t={t} recordHotkey={recordControlLabel} />
     </div>
   );
 }
@@ -246,9 +298,10 @@ interface ToolbarProps {
   pinned: boolean;
   onTogglePin: () => void;
   onClose: () => void;
+  embedded?: boolean;
 }
 
-function Toolbar({ pinned, onTogglePin, onClose }: ToolbarProps) {
+function Toolbar({ pinned, onTogglePin, onClose, embedded = false }: ToolbarProps) {
   const { t } = useTranslation();
   // 拖动 (issue #205)：
   // - macOS: lib.rs::make_qa_window_draggable_macos 在 NSWindow 层把整窗口设
@@ -258,7 +311,7 @@ function Toolbar({ pinned, onTogglePin, onClose }: ToolbarProps) {
   // 两条路径并存不冲突；data-tauri-drag-region 放在 toolbar 的空白 spacer 上，IconBtn
   // 作为 button 子元素仍然正常 click。
   return (
-    <div style={toolbarStyle}>
+    <div style={embedded ? embeddedToolbarStyle : toolbarStyle}>
       <div data-tauri-drag-region style={{ flex: 1, height: '100%' }} />
       <IconBtn
         label={pinned ? t('qa.unpinTooltip') : t('qa.pinTooltip')}
@@ -588,6 +641,35 @@ function StatusBar({
   );
 }
 
+function MobileRecordButton({
+  status,
+  t,
+  onClick,
+}: {
+  status: Status;
+  t: ReturnType<typeof useTranslation>['t'];
+  onClick: () => void;
+}) {
+  const disabled = status === 'thinking';
+  const recording = status === 'recording';
+  return (
+    <div style={mobileRecordDockStyle}>
+      <button
+        type="button"
+        onClick={onClick}
+        disabled={disabled}
+        style={{
+          ...mobileRecordButtonStyle,
+          background: recording ? 'var(--ol-err)' : 'var(--ol-blue)',
+          opacity: disabled ? 0.48 : 1,
+        }}
+      >
+        {recording ? t('qa.mobileRecordStop') : t('qa.mobileRecordStart')}
+      </button>
+    </div>
+  );
+}
+
 function SkeletonLine({ width }: { width: string }) {
   return (
     <div
@@ -624,6 +706,14 @@ const shellStyle: CSSProperties = {
   boxShadow: 'var(--ol-shadow-lg), inset 0 1px 0 0 rgba(255, 255, 255, 0.9)',
   fontFamily: 'var(--ol-font-sans)',
   color: 'var(--ol-ink)',
+};
+
+const embeddedShellStyle: CSSProperties = {
+  ...shellStyle,
+  borderRadius: 0,
+  border: 0,
+  boxShadow: 'none',
+  minHeight: '100vh',
 };
 
 const toolbarStyle: CSSProperties = {
@@ -756,6 +846,30 @@ const statusBarStyle: CSSProperties = {
   padding: '0 16px',
   borderTop: '0.5px solid rgba(0, 0, 0, 0.06)',
   background: 'rgba(255,255,255,0.4)',
+};
+
+const embeddedToolbarStyle: CSSProperties = {
+  ...toolbarStyle,
+  height: 'calc(44px + env(safe-area-inset-top, 0px))',
+  padding: 'env(safe-area-inset-top, 0px) 14px 0 14px',
+  cursor: 'default',
+};
+
+const mobileRecordDockStyle: CSSProperties = {
+  flexShrink: 0,
+  padding: '10px 16px 0',
+  display: 'flex',
+};
+
+const mobileRecordButtonStyle: CSSProperties = {
+  width: '100%',
+  minHeight: 42,
+  border: 0,
+  borderRadius: 10,
+  color: '#fff',
+  fontSize: 14,
+  fontWeight: 700,
+  fontFamily: 'var(--ol-font-sans)',
 };
 
 const globalCss = `

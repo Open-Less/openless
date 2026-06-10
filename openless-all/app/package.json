@@ -10,7 +10,7 @@
     "tauri": "tauri",
     "tauri:android:init": "tauri android init",
     "tauri:android:dev": "tauri android dev",
-    "tauri:android:build": "tauri android build --apk --debug",
+    "tauri:android:build": "tauri android build --apk --debug --target aarch64 armv7 i686 x86_64 --split-per-abi",
     "merge:android-v1-manifest": "node scripts/merge-android-v1-manifest.mjs",
     "merge:android-overlay-manifest": "node scripts/merge-android-overlay-manifest.mjs",
     "copy:android-scaffolding": "node scripts/copy-android-scaffolding.mjs",

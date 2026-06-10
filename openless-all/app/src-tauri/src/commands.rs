@@ -38,17 +38,16 @@ use crate::polish::{
     CODEX_OAUTH_PROVIDER_ID,
 };
 use crate::recorder::{AudioConsumer, Recorder};
-use crate::types::{
-    builtin_style_pack_id, default_active_style_pack_id, ChineseScriptPreference, ComboBinding,
-    CorrectionRule, CredentialsStatus, DictationSession, DictionaryEntry, HotkeyAdapterKind,
-    HotkeyCapability,
-    HotkeyStatus, OutputLanguagePreference, PolishMode, ShortcutBinding, StylePack, StylePackKind,
-    StylePackRuntimeDiagnostics, StyleSystemPrompts, UpdateChannel, UserPreferences,
-    VocabPresetStore, AndroidOverlayStatus,
-    PlatformCapabilities, HotkeyInstallError, HotkeyStatusState,
-};
 #[cfg(not(mobile))]
 use crate::types::WindowsImeStatus;
+use crate::types::{
+    builtin_style_pack_id, default_active_style_pack_id, AndroidOverlayStatus,
+    ChineseScriptPreference, ComboBinding, CorrectionRule, CredentialsStatus, DictationSession,
+    DictionaryEntry, HotkeyAdapterKind, HotkeyCapability, HotkeyInstallError, HotkeyStatus,
+    HotkeyStatusState, OutputLanguagePreference, PlatformCapabilities, PolishMode, ShortcutBinding,
+    StylePack, StylePackKind, StylePackRuntimeDiagnostics, StyleSystemPrompts, UpdateChannel,
+    UserPreferences, VocabPresetStore,
+};
 
 type CoordinatorState<'a> = State<'a, Arc<Coordinator>>;
 pub type MicrophoneMonitorState = Mutex<Option<Recorder>>;
@@ -674,8 +673,8 @@ pub fn get_android_overlay_status() -> AndroidOverlayStatus {
 }
 
 #[tauri::command]
-pub fn request_android_overlay_permission(
-) -> crate::android_overlay::AndroidOverlayPermissionResult {
+pub fn request_android_overlay_permission() -> crate::android_overlay::AndroidOverlayPermissionResult
+{
     crate::android_overlay::request_android_overlay_permission()
 }
 
@@ -699,7 +698,6 @@ pub fn request_android_accessibility_permission(
 ) -> crate::android_accessibility::AndroidAccessibilityPermissionResult {
     crate::android_accessibility::request_android_accessibility_permission()
 }
-
 
 #[tauri::command]
 pub fn open_external_url(url: String) -> Result<(), String> {
@@ -2108,6 +2106,13 @@ pub fn qa_window_pin(coord: CoordinatorState<'_>, pinned: bool) {
     coord.qa_window_pin(pinned);
 }
 
+/// 移动端 QA 面板录音按钮：Idle -> begin_qa_session，Recording -> end_qa_session。
+#[tauri::command]
+pub async fn qa_toggle_recording(coord: CoordinatorState<'_>) -> Result<(), String> {
+    coord.qa_toggle_recording().await;
+    Ok(())
+}
+
 /// 用户点 ✕ / 按 Esc 关 Less Computer 浮窗。
 #[tauri::command]
 pub fn less_computer_window_dismiss(coord: CoordinatorState<'_>) {
@@ -3321,7 +3326,12 @@ fn open_path_in_file_manager(path: &std::path::Path) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-#[cfg(all(not(mobile), unix, not(target_os = "macos"), not(target_os = "android")))]
+#[cfg(all(
+    not(mobile),
+    unix,
+    not(target_os = "macos"),
+    not(target_os = "android")
+))]
 fn open_path_in_file_manager(path: &std::path::Path) -> Result<(), String> {
     std::process::Command::new("xdg-open")
         .arg(path)

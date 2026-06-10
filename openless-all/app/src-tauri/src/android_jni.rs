@@ -294,6 +294,36 @@ pub mod android {
         )
     }
 
+    pub fn accessibility_selected_text<'local>(
+        env: &mut JNIEnv<'local>,
+        context: &JObject<'local>,
+    ) -> Result<Option<String>, String> {
+        let class = load_context_class(
+            env,
+            context,
+            "com.openless.app.OpenLessAccessibilityService",
+        )?;
+        let value = env
+            .call_static_method(class, "captureSelectedText", "()Ljava/lang/String;", &[])
+            .and_then(|value| value.l())
+            .map_err(|error| {
+                format!("call com.openless.app.OpenLessAccessibilityService.captureSelectedText: {error}")
+            })?;
+        if value.is_null() {
+            return Ok(None);
+        }
+        let text = env
+            .get_string(&JString::from(value))
+            .map_err(|error| format!("read selected text jstring: {error}"))?
+            .to_string_lossy()
+            .into_owned();
+        if text.trim().is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(text))
+        }
+    }
+
     pub fn accessibility_enabled<'local>(
         env: &mut JNIEnv<'local>,
         context: &JObject<'local>,

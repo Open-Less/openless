@@ -6,8 +6,7 @@ use crate::coordinator::Coordinator;
 use crate::types::{CapsulePayload, CapsuleState};
 
 static COORDINATOR: OnceLock<Arc<Coordinator>> = OnceLock::new();
-static OVERLAY_VISIBLE: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+static OVERLAY_VISIBLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 pub fn register_android_coordinator(coordinator: Arc<Coordinator>) {
     let _ = COORDINATOR.set(coordinator);
@@ -51,7 +50,10 @@ pub fn hide_overlay() -> Result<(), String> {
 }
 
 #[cfg(target_os = "android")]
-fn show_overlay_with_context(env: &mut jni::JNIEnv, context: &jni::objects::JObject) -> Result<(), String> {
+fn show_overlay_with_context(
+    env: &mut jni::JNIEnv,
+    context: &jni::objects::JObject,
+) -> Result<(), String> {
     crate::android_jni::android::start_service_action(
         env,
         context,
@@ -63,7 +65,10 @@ fn show_overlay_with_context(env: &mut jni::JNIEnv, context: &jni::objects::JObj
 }
 
 #[cfg(target_os = "android")]
-fn hide_overlay_with_context(env: &mut jni::JNIEnv, context: &jni::objects::JObject) -> Result<(), String> {
+fn hide_overlay_with_context(
+    env: &mut jni::JNIEnv,
+    context: &jni::objects::JObject,
+) -> Result<(), String> {
     crate::android_jni::android::start_service_action(
         env,
         context,
@@ -89,22 +94,53 @@ pub fn overlay_trigger_mode_name() -> &'static str {
     }
 }
 
-fn spawn_dictation(start: bool) {
+fn spawn_start_dictation(translation: bool) {
     let Some(coordinator) = COORDINATOR.get().cloned() else {
         log::warn!("[android-native] coordinator unavailable");
         return;
     };
     tauri::async_runtime::spawn(async move {
-        let result = if start {
-            coordinator.start_dictation().await
+        let result = if translation {
+            coordinator.start_dictation_with_translation().await
         } else {
-            coordinator.stop_dictation().await
+            coordinator.start_dictation().await
         };
         if let Err(error) = result {
             log::warn!(
                 "[android-native] {} failed: {error}",
-                if start { "start_dictation" } else { "stop_dictation" }
+                if translation {
+                    "start_dictation_with_translation"
+                } else {
+                    "start_dictation"
+                }
             );
+        }
+    });
+}
+
+fn spawn_stop_dictation() {
+    let Some(coordinator) = COORDINATOR.get().cloned() else {
+        log::warn!("[android-native] coordinator unavailable");
+        return;
+    };
+    tauri::async_runtime::spawn(async move {
+        if let Err(error) = coordinator.stop_dictation().await {
+            log::warn!("[android-native] stop_dictation failed: {error}");
+        }
+    });
+}
+
+fn spawn_stop_dictation_with_translation(translation: bool) {
+    let Some(coordinator) = COORDINATOR.get().cloned() else {
+        log::warn!("[android-native] coordinator unavailable");
+        return;
+    };
+    tauri::async_runtime::spawn(async move {
+        if let Err(error) = coordinator
+            .stop_dictation_with_translation(translation)
+            .await
+        {
+            log::warn!("[android-native] stop_dictation_with_translation failed: {error}");
         }
     });
 }
@@ -114,6 +150,38 @@ fn spawn_cancel_dictation() {
         return;
     };
     coordinator.cancel_dictation();
+}
+
+fn spawn_switch_style_pack() {
+    let Some(coordinator) = COORDINATOR.get().cloned() else {
+        log::warn!("[android-native] coordinator unavailable");
+        return;
+    };
+    coordinator.switch_to_previous_style_pack();
+}
+
+fn spawn_open_qa_from_overlay() {
+    let Some(coordinator) = COORDINATOR.get().cloned() else {
+        log::warn!("[android-native] coordinator unavailable");
+        return;
+    };
+    tauri::async_runtime::spawn(async move {
+        if let Err(error) = coordinator.open_qa_from_overlay().await {
+            log::warn!("[android-native] open_qa_from_overlay failed: {error}");
+        }
+    });
+}
+
+fn spawn_finalize_qa_from_overlay() {
+    let Some(coordinator) = COORDINATOR.get().cloned() else {
+        log::warn!("[android-native] coordinator unavailable");
+        return;
+    };
+    tauri::async_runtime::spawn(async move {
+        if let Err(error) = coordinator.finalize_qa_from_overlay().await {
+            log::warn!("[android-native] finalize_qa_from_overlay failed: {error}");
+        }
+    });
 }
 
 fn capsule_state_name(state: CapsuleState) -> &'static str {
@@ -140,8 +208,8 @@ mod jni_exports {
         context: JObject,
         f: impl for<'local> FnOnce(&mut JniEnv<'local>, &JObject<'local>) -> Result<R, String>,
     ) -> Result<R, String> {
-        let mut env = JniEnv::from_raw(env_ptr)
-            .map_err(|error| format!("attach JNI env: {error}"))?;
+        let mut env =
+            JniEnv::from_raw(env_ptr).map_err(|error| format!("attach JNI env: {error}"))?;
         f(&mut env, &context)
     }
 
@@ -150,7 +218,16 @@ mod jni_exports {
         _env: *mut JNIEnv,
         _class: JClass,
     ) {
-        spawn_dictation(true);
+        spawn_start_dictation(false);
+    }
+
+    #[no_mangle]
+    pub unsafe extern "system" fn Java_com_openless_app_OpenLessNative_nativeStartDictationWithTranslation(
+        _env: *mut JNIEnv,
+        _class: JClass,
+        translation: jboolean,
+    ) {
+        spawn_start_dictation(translation != 0);
     }
 
     #[no_mangle]
@@ -158,7 +235,16 @@ mod jni_exports {
         _env: *mut JNIEnv,
         _class: JClass,
     ) {
-        spawn_dictation(false);
+        spawn_stop_dictation();
+    }
+
+    #[no_mangle]
+    pub unsafe extern "system" fn Java_com_openless_app_OpenLessNative_nativeStopDictationWithTranslation(
+        _env: *mut JNIEnv,
+        _class: JClass,
+        translation: jboolean,
+    ) {
+        spawn_stop_dictation_with_translation(translation != 0);
     }
 
     #[no_mangle]
@@ -167,6 +253,30 @@ mod jni_exports {
         _class: JClass,
     ) {
         spawn_cancel_dictation();
+    }
+
+    #[no_mangle]
+    pub unsafe extern "system" fn Java_com_openless_app_OpenLessNative_nativeSwitchStylePack(
+        _env: *mut JNIEnv,
+        _class: JClass,
+    ) {
+        spawn_switch_style_pack();
+    }
+
+    #[no_mangle]
+    pub unsafe extern "system" fn Java_com_openless_app_OpenLessNative_nativeOpenQaFromOverlay(
+        _env: *mut JNIEnv,
+        _class: JClass,
+    ) {
+        spawn_open_qa_from_overlay();
+    }
+
+    #[no_mangle]
+    pub unsafe extern "system" fn Java_com_openless_app_OpenLessNative_nativeFinalizeQaFromOverlay(
+        _env: *mut JNIEnv,
+        _class: JClass,
+    ) {
+        spawn_finalize_qa_from_overlay();
     }
 
     #[no_mangle]
