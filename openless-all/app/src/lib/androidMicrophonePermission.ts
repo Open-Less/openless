@@ -1,8 +1,23 @@
 import type { PermissionStatus as AppPermissionStatus } from './types';
+import { checkMicrophonePermission, requestMicrophonePermission } from './ipc';
 
 const ANDROID_MIC_GRANTED_KEY = 'openless.androidMicrophoneGranted';
 
 export async function checkAndroidMicrophoneAccess(): Promise<AppPermissionStatus> {
+  try {
+    const nativeStatus = await checkMicrophonePermission();
+    if (nativeStatus === 'granted' || nativeStatus === 'notApplicable') {
+      localStorage.setItem(ANDROID_MIC_GRANTED_KEY, '1');
+      return 'granted';
+    }
+    if (nativeStatus === 'denied' || nativeStatus === 'restricted') {
+      localStorage.removeItem(ANDROID_MIC_GRANTED_KEY);
+      return nativeStatus;
+    }
+  } catch {
+    // Fall through to WebView-local checks below.
+  }
+
   if (localStorage.getItem(ANDROID_MIC_GRANTED_KEY) === '1') {
     return 'granted';
   }
@@ -25,6 +40,20 @@ export async function checkAndroidMicrophoneAccess(): Promise<AppPermissionStatu
 }
 
 export async function requestAndroidMicrophoneAccess(): Promise<AppPermissionStatus> {
+  try {
+    const nativeStatus = await requestMicrophonePermission();
+    if (nativeStatus === 'granted' || nativeStatus === 'notApplicable') {
+      localStorage.setItem(ANDROID_MIC_GRANTED_KEY, '1');
+      return 'granted';
+    }
+    if (nativeStatus === 'denied' || nativeStatus === 'restricted') {
+      localStorage.removeItem(ANDROID_MIC_GRANTED_KEY);
+      return nativeStatus;
+    }
+  } catch {
+    // Fall through to WebView-local checks below.
+  }
+
   if (localStorage.getItem(ANDROID_MIC_GRANTED_KEY) === '1') {
     return 'granted';
   }
