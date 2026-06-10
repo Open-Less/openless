@@ -52,6 +52,10 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        Log.i(
+            TAG,
+            "onStartCommand action=${intent?.action} startId=$startId rootAttached=${rootView?.isAttachedToWindow}",
+        )
         when (intent?.action) {
             ACTION_SHOW -> showOverlay()
             ACTION_START_RECORDING -> {
@@ -125,8 +129,17 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
     }
 
     private fun showOverlay() {
+        rootView?.let { existing ->
+            if (!existing.isAttachedToWindow) {
+                Log.i(TAG, "clearing detached overlay root")
+                rootView = null
+                layoutParams = null
+            } else {
+                Log.i(TAG, "overlay already shown")
+                return
+            }
+        }
         if (rootView != null) {
-            Log.d(TAG, "overlay already shown")
             return
         }
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
@@ -173,7 +186,7 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
             return
         }
         rootView = root
-        Log.d(TAG, "overlay shown x=${params.x} y=${params.y}")
+        Log.i(TAG, "overlay shown x=${params.x} y=${params.y}")
         applyVisualState(
             when {
                 recording -> OverlayVisualState.Recording
@@ -187,7 +200,7 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         val view = rootView ?: return
         try {
             windowManager?.removeView(view)
-            Log.d(TAG, "overlay hidden")
+            Log.i(TAG, "overlay hidden")
         } catch (error: Throwable) {
             Log.w(TAG, "hide overlay failed", error)
         }
@@ -225,7 +238,7 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
     private fun handleKeyboardChanged(intent: Intent) {
         val visible = intent.getBooleanExtra(EXTRA_KEYBOARD_VISIBLE, false)
         keyboardVisible = visible
-        Log.d(TAG, "keyboard changed visible=$visible")
+        Log.i(TAG, "keyboard changed visible=$visible")
         if (visible) {
             showOverlay()
             return

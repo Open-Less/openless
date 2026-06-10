@@ -74,6 +74,7 @@ class OpenLessAccessibilityService : AccessibilityService() {
             }
         }
         try {
+            Log.i(TAG, "keyboard overlay event visible=${imeBounds != null} bounds=$imeBounds")
             startService(intent)
         } catch (error: Throwable) {
             Log.w(TAG, "send keyboard overlay event failed", error)
