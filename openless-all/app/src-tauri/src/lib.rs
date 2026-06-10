@@ -365,6 +365,7 @@ pub fn run() {
             commands::delete_history_entry,
             commands::clear_history,
             commands::read_audio_recording,
+            commands::retranscribe_history_entry,
             commands::marketplace_list,
             commands::marketplace_detail,
             commands::marketplace_install,

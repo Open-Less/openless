@@ -83,6 +83,8 @@ pub(crate) use capsule::*;
 pub(crate) use dictation_end::*;
 pub(crate) use dictation_session::*;
 pub(crate) use dictation_streaming::*;
+// #613: re-export credential readers for retranscribe_history_entry IPC command.
+pub(crate) use llm_pipeline::{read_bailian_credentials, read_mimo_credentials, read_volc_credentials, read_whisper_credentials};
 pub(crate) use dictation_voice_agent::*;
 pub(crate) use hotkey_supervisors::*;
 pub(crate) use ime_insertion::*;

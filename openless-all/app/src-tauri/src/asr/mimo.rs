@@ -54,6 +54,11 @@ impl MimoBatchASR {
         result
     }
 
+    /// #613: 从外部 PCM 数据直接转写（不经过内部 buffer）。用于历史重转录场景。
+    pub async fn transcribe_pcm(&self, pcm: &[u8]) -> Result<RawTranscript> {
+        self.transcribe_inner(pcm).await
+    }
+
     async fn transcribe_inner(&self, pcm: &[u8]) -> Result<RawTranscript> {
         if self.api_key.trim().is_empty() {
             anyhow::bail!("MiMo API key missing");

@@ -6,6 +6,41 @@ use crate::correction::apply_correction_rules;
 use super::resources::*;
 use super::*;
 
+/// #613: ASR 转录失败时向 history 写入一条失败条目，保留录音供用户在历史页中重试。
+/// 复用录音时的 session_id 以保证 WAV 文件名对齐；用两类 error_code 区分超时/引擎失败。
+fn append_failed_history_entry(
+    inner: &Arc<Inner>,
+    session_id: Uuid,
+    elapsed_ms: u64,
+    error_code: &str,
+) {
+    let session = DictationSession {
+        id: session_id.to_string(),
+        created_at: chrono::Utc::now().to_rfc3339(),
+        raw_transcript: String::new(),
+        final_text: String::new(),
+        mode: inner.prefs.get().default_mode,
+        style_pack_id: None,
+        translation_active: false,
+        polish_source: None,
+        app_bundle_id: None,
+        app_name: None,
+        insert_status: InsertStatus::Failed,
+        error_code: Some(error_code.to_string()),
+        duration_ms: Some(elapsed_ms),
+        dictionary_entry_count: None,
+        has_audio_recording: Some(inner.audio_archive_active.load(Ordering::Relaxed)),
+    };
+    let prefs_snapshot = inner.prefs.get();
+    if let Err(e) = inner.history.append_with_retention(
+        session,
+        prefs_snapshot.history_retention_days,
+        prefs_snapshot.history_max_entries,
+    ) {
+        log::error!("[coord] history append on ASR failure failed: {e}");
+    }
+}
+
 pub(crate) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     let current_session_id = {
         let mut state = inner.state.lock();
@@ -54,6 +89,12 @@ pub(crate) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
                         Some(format!("识别失败: {e}")),
                         None,
                     );
+                    append_failed_history_entry(
+                        inner,
+                        current_session_id,
+                        elapsed,
+                        "transcribeFailed",
+                    );
                     restore_prepared_windows_ime_session(inner, current_session_id);
                     inner.state.lock().phase = SessionPhase::Idle;
                     schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
@@ -74,6 +115,12 @@ pub(crate) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
                         elapsed,
                         Some("识别超时".to_string()),
                         None,
+                    );
+                    append_failed_history_entry(
+                        inner,
+                        current_session_id,
+                        elapsed,
+                        "transcribeTimeout",
                     );
                     restore_prepared_windows_ime_session(inner, current_session_id);
                     inner.state.lock().phase = SessionPhase::Idle;
@@ -98,6 +145,12 @@ pub(crate) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
                         Some(format!("识别失败: {e}")),
                         None,
                     );
+                    append_failed_history_entry(
+                        inner,
+                        current_session_id,
+                        elapsed,
+                        "transcribeFailed",
+                    );
                     restore_prepared_windows_ime_session(inner, current_session_id);
                     inner.state.lock().phase = SessionPhase::Idle;
                     schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
@@ -115,6 +168,12 @@ pub(crate) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
                         elapsed,
                         Some("识别超时".to_string()),
                         None,
+                    );
+                    append_failed_history_entry(
+                        inner,
+                        current_session_id,
+                        elapsed,
+                        "transcribeTimeout",
                     );
                     restore_prepared_windows_ime_session(inner, current_session_id);
                     inner.state.lock().phase = SessionPhase::Idle;
@@ -138,6 +197,12 @@ pub(crate) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
                         Some(format!("识别失败: {e}")),
                         None,
                     );
+                    append_failed_history_entry(
+                        inner,
+                        current_session_id,
+                        elapsed,
+                        "transcribeFailed",
+                    );
                     restore_prepared_windows_ime_session(inner, current_session_id);
                     inner.state.lock().phase = SessionPhase::Idle;
                     schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
@@ -155,6 +220,12 @@ pub(crate) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
                         elapsed,
                         Some("识别超时".to_string()),
                         None,
+                    );
+                    append_failed_history_entry(
+                        inner,
+                        current_session_id,
+                        elapsed,
+                        "transcribeTimeout",
                     );
                     restore_prepared_windows_ime_session(inner, current_session_id);
                     inner.state.lock().phase = SessionPhase::Idle;
@@ -181,6 +252,12 @@ pub(crate) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
                         Some(format!("识别失败: {e}")),
                         None,
                     );
+                    append_failed_history_entry(
+                        inner,
+                        current_session_id,
+                        elapsed,
+                        "transcribeFailed",
+                    );
                     restore_prepared_windows_ime_session(inner, current_session_id);
                     inner.state.lock().phase = SessionPhase::Idle;
                     schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
@@ -199,6 +276,12 @@ pub(crate) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
                         elapsed,
                         Some("识别超时".to_string()),
                         None,
+                    );
+                    append_failed_history_entry(
+                        inner,
+                        current_session_id,
+                        elapsed,
+                        "transcribeTimeout",
                     );
                     restore_prepared_windows_ime_session(inner, current_session_id);
                     inner.state.lock().phase = SessionPhase::Idle;
@@ -246,6 +329,12 @@ pub(crate) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
                         elapsed,
                         Some(format!("本地识别失败: {e}")),
                         None,
+                    );
+                    append_failed_history_entry(
+                        inner,
+                        current_session_id,
+                        elapsed,
+                        "transcribeFailed",
                     );
                     restore_prepared_windows_ime_session(inner, current_session_id);
                     inner.state.lock().phase = SessionPhase::Idle;
@@ -296,6 +385,12 @@ pub(crate) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
                         Some(format!("本地识别失败: {e}")),
                         None,
                     );
+                    append_failed_history_entry(
+                        inner,
+                        current_session_id,
+                        elapsed,
+                        "transcribeFailed",
+                    );
                     restore_prepared_windows_ime_session(inner, current_session_id);
                     inner.state.lock().phase = SessionPhase::Idle;
                     schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
@@ -333,6 +428,12 @@ pub(crate) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
                         Some(format!("本地识别失败: {e}")),
                         None,
                     );
+                    append_failed_history_entry(
+                        inner,
+                        current_session_id,
+                        elapsed,
+                        "transcribeFailed",
+                    );
                     restore_prepared_windows_ime_session(inner, current_session_id);
                     inner.state.lock().phase = SessionPhase::Idle;
                     schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
@@ -351,6 +452,12 @@ pub(crate) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
                         elapsed,
                         Some("识别超时".to_string()),
                         None,
+                    );
+                    append_failed_history_entry(
+                        inner,
+                        current_session_id,
+                        elapsed,
+                        "transcribeTimeout",
                     );
                     restore_prepared_windows_ime_session(inner, current_session_id);
                     inner.state.lock().phase = SessionPhase::Idle;
@@ -395,7 +502,7 @@ pub(crate) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
 
     if raw.text.trim().is_empty() {
         let session = DictationSession {
-            id: Uuid::new_v4().to_string(),
+            id: current_session_id.to_string(),
             created_at: Utc::now().to_rfc3339(),
             raw_transcript: raw.text.clone(),
             final_text: String::new(),

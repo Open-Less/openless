@@ -448,14 +448,17 @@ pub(crate) async fn start_recorder_for_starting(
     let microphone_device_name = selected_microphone_device_name(inner);
     stop_microphone_preview_monitor(inner, "dictation recorder");
     acquire_recording_mute(inner, "dictation").await;
-    let audio_archive_path = if inner.prefs.get().record_audio_for_debug {
+    let prefs_snapshot = inner.prefs.get();
+    // #613: 录音存档条件扩展——调试开关 OR 失败时自动保留。两者任何一个开启都应写盘。
+    let should_archive =
+        prefs_snapshot.record_audio_for_debug || prefs_snapshot.auto_retain_recording_on_failure;
+    let audio_archive_path = if should_archive {
         // 用 coordinator 的 SessionId 作为文件名，跟 history 那条记录 id 对齐（见
         // 下游 polish 收尾时 `history_session_id = current_session_id.to_string()`）。
-        // 顺手把超龄 / 超量录音清理一下，避免 debug 开关常开时磁盘膨胀。
-        let prefs = inner.prefs.get();
+        // 顺手把超龄 / 超量录音清理一下，避免开关常开时磁盘膨胀。
         let _ = crate::persistence::prune_recordings(
-            prefs.history_retention_days,
-            prefs.audio_recording_max_entries,
+            prefs_snapshot.history_retention_days,
+            prefs_snapshot.audio_recording_max_entries,
         );
         crate::persistence::recording_path_for_session(&session_id.to_string()).ok()
     } else {

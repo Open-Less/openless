@@ -1349,6 +1349,33 @@ impl HistoryStore {
         self.write_locked(&Vec::<DictationSession>::new())
     }
 
+    /// #613: 按 id 查找单条历史记录。用于重转录时定位原条目。
+    pub fn find_entry(&self, id: &str) -> Result<Option<DictationSession>> {
+        let _guard = self.lock.lock();
+        let sessions = self.read_locked()?;
+        Ok(sessions.into_iter().find(|s| s.id == id))
+    }
+
+    /// #613: 按 id 更新单条历史记录（重转录成功后覆写 rawTranscript / finalText 等字段）。
+    /// 若原条目不存在则静默 no-op（日志记录），防止并发删除。
+    pub fn update_entry(&self, id: &str, updated: DictationSession) -> Result<()> {
+        let _guard = self.lock.lock();
+        let mut sessions = self.read_locked()?;
+        let mut found = false;
+        for s in &mut sessions {
+            if s.id == id {
+                *s = updated;
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            log::warn!("[history] update_entry: session {id} not found (may have been deleted)");
+            return Ok(());
+        }
+        self.write_locked(&sessions)
+    }
+
     /// issue #609 F-03：读 history 前先做 HMAC 完整性校验。
     ///
     /// - HMAC 密钥不可用（keyring 缺失等）→ 退化为不校验，按内容直接读（保持可用）。

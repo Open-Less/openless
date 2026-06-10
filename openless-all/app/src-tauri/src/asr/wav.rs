@@ -1,5 +1,63 @@
 //! WAV helpers for ASR providers that accept complete audio files.
 
+/// Decode a RIFF WAV file to 16-bit PCM samples. Returns `Err` if the WAV header is
+/// invalid, the format is not 16-bit mono PCM, or the sample rate is not supported.
+/// Used by retranscribe to extract raw PCM from archived recording files.
+pub fn decode_wav_to_pcm_i16(wav_bytes: &[u8]) -> Result<Vec<i16>, String> {
+    if wav_bytes.len() < 44 {
+        return Err("wav too short for valid header".into());
+    }
+    if &wav_bytes[0..4] != b"RIFF" || &wav_bytes[8..12] != b"WAVE" {
+        return Err("not a valid RIFF WAV file".into());
+    }
+    if &wav_bytes[12..16] != b"fmt " {
+        return Err("missing fmt chunk".into());
+    }
+    let audio_format = u16::from_le_bytes([wav_bytes[20], wav_bytes[21]]);
+    if audio_format != 1 {
+        return Err(format!("unsupported audio format {audio_format} (expected PCM=1)"));
+    }
+    let num_channels = u16::from_le_bytes([wav_bytes[22], wav_bytes[23]]);
+    let sample_rate = u32::from_le_bytes([wav_bytes[24], wav_bytes[25], wav_bytes[26], wav_bytes[27]]);
+    let bits_per_sample = u16::from_le_bytes([wav_bytes[34], wav_bytes[35]]);
+    if num_channels != 1 || bits_per_sample != 16 {
+        return Err(format!(
+            "expected mono 16-bit PCM, got {num_channels}ch {bits_per_sample}-bit"
+        ));
+    }
+    // Accept 8k/16k/48k; resampling not needed for most ASR APIs (they handle it server-side).
+    if sample_rate != 8000 && sample_rate != 16_000 && sample_rate != 44_100 && sample_rate != 48_000 {
+        log::warn!("[wav] unusual sample rate {sample_rate} Hz — ASR may reject");
+    }
+    // Find the data chunk (skip past fmt chunk).
+    let mut offset = 36;
+    while offset + 8 <= wav_bytes.len() {
+        let chunk_id = &wav_bytes[offset..offset + 4];
+        let chunk_size = u32::from_le_bytes([
+            wav_bytes[offset + 4],
+            wav_bytes[offset + 5],
+            wav_bytes[offset + 6],
+            wav_bytes[offset + 7],
+        ]) as usize;
+        if chunk_id == b"data" {
+            let data_start = offset + 8;
+            let data_end = (data_start + chunk_size).min(wav_bytes.len());
+            let pcm_bytes = &wav_bytes[data_start..data_end];
+            let samples: Vec<i16> = pcm_bytes
+                .chunks_exact(2)
+                .map(|chunk| i16::from_le_bytes([chunk[0], chunk[1]]))
+                .collect();
+            return Ok(samples);
+        }
+        offset += 8 + chunk_size;
+        // Align to 2-byte boundary as per WAV spec.
+        if chunk_size % 2 != 0 {
+            offset += 1;
+        }
+    }
+    Err("no data chunk found in WAV".into())
+}
+
 /// Encode 16 kHz / mono / 16-bit little-endian PCM samples as a RIFF WAV file.
 pub fn encode_wav_16k_mono(samples: &[i16]) -> Vec<u8> {
     let sample_rate: u32 = 16_000;

@@ -706,6 +706,34 @@ export function readAudioRecording(sessionId: string): Promise<Uint8Array> {
     })
 }
 
+/** #613: 对一条转录失败的历史条目重试 ASR 转写。后端读取归档 WAV、
+ *  用当前 ASR 提供商重新转写，成功后更新 rawTranscript 并清除 errorCode
+ *  返回更新后的 DictationSession；失败时原条目不修改。 */
+export function retranscribeHistoryEntry(sessionId: string): Promise<DictationSession> {
+    return invokeOrMock(
+        "retranscribe_history_entry",
+        { sessionId },
+        () =>
+            ({
+                id: sessionId,
+                createdAt: new Date().toISOString(),
+                rawTranscript: '[mock] 重新转录完成',
+                finalText: '[mock] 重新转录完成',
+                mode: 'raw' as const,
+                stylePackId: null,
+                translationActive: false,
+                polishSource: null,
+                appBundleId: null,
+                appName: null,
+                insertStatus: 'inserted' as const,
+                errorCode: null,
+                durationMs: 30000,
+                dictionaryEntryCount: null,
+                hasAudioRecording: true,
+            }) as DictationSession,
+    )
+}
+
 // ── Vocab ──────────────────────────────────────────────────────────────
 export function listVocab(): Promise<DictionaryEntry[]> {
     return invokeOrMock("list_vocab", undefined, () => mockVocab)
