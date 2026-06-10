@@ -1,5 +1,9 @@
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+
+const appRoot = fileURLToPath(new URL(".", import.meta.url));
 
 const host = process.env.TAURI_DEV_HOST;
 const isMobileDev =
@@ -8,6 +12,11 @@ const isMobileDev =
 
 export default defineConfig(async () => ({
   plugins: [react()],
+  resolve: {
+    alias: {
+      "@android": path.resolve(appRoot, "android/frontend"),
+    },
+  },
   clearScreen: false,
   server: {
     port: 1420,

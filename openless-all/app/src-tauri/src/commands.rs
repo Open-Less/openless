@@ -672,34 +672,34 @@ pub fn get_platform_capabilities() -> PlatformCapabilities {
 
 #[tauri::command]
 pub fn get_android_overlay_status() -> AndroidOverlayStatus {
-    crate::android_overlay::get_android_overlay_status()
+    crate::android::get_android_overlay_status()
 }
 
 #[tauri::command]
-pub fn request_android_overlay_permission() -> crate::android_overlay::AndroidOverlayPermissionResult
+pub fn request_android_overlay_permission() -> crate::android::AndroidOverlayPermissionResult
 {
-    crate::android_overlay::request_android_overlay_permission()
+    crate::android::request_android_overlay_permission()
 }
 
 #[tauri::command]
 pub fn show_android_overlay() -> Result<(), String> {
-    crate::android_overlay::show_android_overlay()
+    crate::android::show_android_overlay()
 }
 
 #[tauri::command]
 pub fn hide_android_overlay() -> Result<(), String> {
-    crate::android_overlay::hide_android_overlay()
+    crate::android::hide_android_overlay()
 }
 
 #[tauri::command]
 pub fn get_android_accessibility_status() -> crate::types::AndroidAccessibilityStatus {
-    crate::android_accessibility::get_android_accessibility_status()
+    crate::android::get_android_accessibility_status()
 }
 
 #[tauri::command]
 pub fn request_android_accessibility_permission(
-) -> crate::android_accessibility::AndroidAccessibilityPermissionResult {
-    crate::android_accessibility::request_android_accessibility_permission()
+) -> crate::android::AndroidAccessibilityPermissionResult {
+    crate::android::request_android_accessibility_permission()
 }
 
 #[tauri::command]

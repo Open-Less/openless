@@ -2,7 +2,7 @@
 
 use serde::Serialize;
 
-use crate::types::AndroidOverlayStatus;
+use crate::android::types::AndroidOverlayStatus;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -19,7 +19,7 @@ pub fn get_android_overlay_status() -> AndroidOverlayStatus {
 
     #[cfg(not(target_os = "android"))]
     {
-        use crate::types::AndroidOverlayPermissionState;
+        use crate::android::types::AndroidOverlayPermissionState;
 
         AndroidOverlayStatus {
             permission: AndroidOverlayPermissionState::NotAndroid,
@@ -47,7 +47,7 @@ pub fn request_android_overlay_permission() -> AndroidOverlayPermissionResult {
 pub fn show_android_overlay() -> Result<(), String> {
     #[cfg(target_os = "android")]
     {
-        return crate::android_native_bridge::show_overlay();
+        return crate::android::native_bridge::show_overlay();
     }
     #[cfg(not(target_os = "android"))]
     {
@@ -58,7 +58,7 @@ pub fn show_android_overlay() -> Result<(), String> {
 pub fn hide_android_overlay() -> Result<(), String> {
     #[cfg(target_os = "android")]
     {
-        return crate::android_native_bridge::hide_overlay();
+        return crate::android::native_bridge::hide_overlay();
     }
     #[cfg(not(target_os = "android"))]
     {
@@ -69,7 +69,7 @@ pub fn hide_android_overlay() -> Result<(), String> {
 pub fn refresh_android_overlay_if_visible() -> Result<(), String> {
     #[cfg(target_os = "android")]
     {
-        return crate::android_native_bridge::refresh_overlay_if_visible();
+        return crate::android::native_bridge::refresh_overlay_if_visible();
     }
     #[cfg(not(target_os = "android"))]
     {
@@ -80,11 +80,11 @@ pub fn refresh_android_overlay_if_visible() -> Result<(), String> {
 #[cfg(target_os = "android")]
 mod android_impl {
     use super::{AndroidOverlayPermissionResult, AndroidOverlayStatus};
-    use crate::types::{AndroidOverlayPermissionState, AndroidOverlayStatus as Status};
+    use crate::android::types::{AndroidOverlayPermissionState, AndroidOverlayStatus as Status};
 
     pub fn get_android_overlay_status() -> AndroidOverlayStatus {
-        let granted = crate::android_jni::android::with_android_env(|env, context| {
-            crate::android_jni::android::can_draw_overlays(env, context)
+        let granted = crate::android::jni::android::with_android_env(|env, context| {
+            crate::android::jni::android::can_draw_overlays(env, context)
         })
         .unwrap_or(false);
         Status {
@@ -93,7 +93,7 @@ mod android_impl {
             } else {
                 AndroidOverlayPermissionState::NotGranted
             },
-            overlay_visible: crate::android_native_bridge::is_overlay_visible(),
+            overlay_visible: crate::android::native_bridge::is_overlay_visible(),
             message: if granted {
                 "悬浮窗权限已授予".to_string()
             } else {
@@ -103,8 +103,8 @@ mod android_impl {
     }
 
     pub fn request_android_overlay_permission() -> AndroidOverlayPermissionResult {
-        match crate::android_jni::android::with_android_env(|env, context| {
-            crate::android_jni::android::start_activity_class(
+        match crate::android::jni::android::with_android_env(|env, context| {
+            crate::android::jni::android::start_activity_class(
                 env,
                 context,
                 "com.openless.app.OverlayPermissionActivity",

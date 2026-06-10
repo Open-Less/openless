@@ -2235,7 +2235,7 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     } else {
         #[cfg(target_os = "android")]
         {
-            crate::android_insert::android_insert_with_strategy(
+            crate::android::android_insert_with_strategy(
                 &inner.inserter,
                 &polished,
                 inner.prefs.get().android_insert_strategy,

@@ -2,7 +2,7 @@
 
 use serde::Serialize;
 
-use crate::types::{AndroidAccessibilityState, AndroidAccessibilityStatus};
+use crate::android::types::{AndroidAccessibilityState, AndroidAccessibilityStatus};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -55,11 +55,11 @@ pub fn paste_via_accessibility() -> bool {
 #[cfg(target_os = "android")]
 mod android_impl {
     use super::{AndroidAccessibilityPermissionResult, AndroidAccessibilityStatus};
-    use crate::types::{AndroidAccessibilityState, AndroidAccessibilityStatus as Status};
+    use crate::android::types::{AndroidAccessibilityState, AndroidAccessibilityStatus as Status};
 
     pub fn get_android_accessibility_status() -> AndroidAccessibilityStatus {
-        let enabled = match crate::android_jni::android::with_android_env(|env, context| {
-            crate::android_jni::android::accessibility_enabled(env, context)
+        let enabled = match crate::android::jni::android::with_android_env(|env, context| {
+            crate::android::jni::android::accessibility_enabled(env, context)
         }) {
             Ok(enabled) => enabled,
             Err(error) => {
@@ -78,8 +78,8 @@ mod android_impl {
             };
         }
 
-        match crate::android_jni::android::with_android_env(|env, context| {
-            crate::android_jni::android::accessibility_operational(env, context)
+        match crate::android::jni::android::with_android_env(|env, context| {
+            crate::android::jni::android::accessibility_operational(env, context)
         }) {
             Ok(true) => Status {
                 state: AndroidAccessibilityState::Enabled,
@@ -100,8 +100,8 @@ mod android_impl {
     }
 
     pub fn request_android_accessibility_permission() -> AndroidAccessibilityPermissionResult {
-        match crate::android_jni::android::with_android_env(|env, context| {
-            crate::android_jni::android::launch_accessibility_settings(env, context)
+        match crate::android::jni::android::with_android_env(|env, context| {
+            crate::android::jni::android::launch_accessibility_settings(env, context)
         }) {
             Ok(()) => AndroidAccessibilityPermissionResult {
                 launched: true,
@@ -115,8 +115,8 @@ mod android_impl {
     }
 
     pub fn paste_via_accessibility() -> bool {
-        crate::android_jni::android::with_android_env(|env, context| {
-            crate::android_jni::android::accessibility_paste(env, context)
+        crate::android::jni::android::with_android_env(|env, context| {
+            crate::android::jni::android::accessibility_paste(env, context)
         })
         .unwrap_or(false)
     }

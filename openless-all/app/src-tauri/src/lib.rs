@@ -14,14 +14,7 @@
 //! - coordinator: dictation state machine glue
 //! - commands: Tauri IPC surface
 
-mod android_accessibility;
-#[cfg(target_os = "android")]
-mod android_insert;
-#[cfg(target_os = "android")]
-mod android_jni;
-#[cfg(target_os = "android")]
-mod android_native_bridge;
-mod android_overlay;
+mod android;
 mod asr;
 mod audio_mute;
 mod cli;
@@ -1422,8 +1415,8 @@ pub(crate) fn show_qa_window<R: tauri::Runtime>(app: &AppHandle<R>, content_kind
         const FLAG_ACTIVITY_SINGLE_TOP: i32 = 0x20000000;
         let flags =
             FLAG_ACTIVITY_NEW_TASK | FLAG_ACTIVITY_REORDER_TO_FRONT | FLAG_ACTIVITY_SINGLE_TOP;
-        match crate::android_jni::android::with_android_env(|env, context| {
-            crate::android_jni::android::start_activity_class_with_flags(
+        match crate::android::jni::android::with_android_env(|env, context| {
+            crate::android::jni::android::start_activity_class_with_flags(
                 env,
                 context,
                 "com.openless.app.MainActivity",

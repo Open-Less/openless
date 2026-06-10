@@ -13,8 +13,8 @@ pub struct SelectionContext {
 
 #[cfg(target_os = "android")]
 pub fn capture_selection() -> Option<SelectionContext> {
-    let text = match crate::android_jni::android::with_android_env(|env, context| {
-        crate::android_jni::android::accessibility_selected_text(env, context)
+    let text = match crate::android::jni::android::with_android_env(|env, context| {
+        crate::android::jni::android::accessibility_selected_text(env, context)
     }) {
         Ok(Some(text)) => text,
         Ok(None) => return None,

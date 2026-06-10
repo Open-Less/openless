@@ -17,8 +17,8 @@ pub fn notify_capsule_state(payload: &CapsulePayload) {
     {
         let state = capsule_state_name(payload.state);
         let message = payload.message.as_deref();
-        if let Err(error) = crate::android_jni::android::with_android_env(|env, context| {
-            crate::android_jni::android::notify_overlay_bridge(env, context, state, message)
+        if let Err(error) = crate::android::jni::android::with_android_env(|env, context| {
+            crate::android::jni::android::notify_overlay_bridge(env, context, state, message)
         }) {
             log::warn!("[android-native] notify overlay bridge failed: {error}");
         }
@@ -29,7 +29,7 @@ pub fn notify_capsule_state(payload: &CapsulePayload) {
 pub fn show_overlay() -> Result<(), String> {
     #[cfg(target_os = "android")]
     {
-        crate::android_jni::android::with_android_env(|env, context| {
+        crate::android::jni::android::with_android_env(|env, context| {
             show_overlay_with_context(env, context)
         })?;
     }
@@ -42,7 +42,7 @@ pub fn hide_overlay() -> Result<(), String> {
     }
     #[cfg(target_os = "android")]
     {
-        crate::android_jni::android::with_android_env(|env, context| {
+        crate::android::jni::android::with_android_env(|env, context| {
             hide_overlay_with_context(env, context)
         })?;
     }
@@ -61,7 +61,7 @@ fn show_overlay_with_context(
     env: &mut jni::JNIEnv,
     context: &jni::objects::JObject,
 ) -> Result<(), String> {
-    crate::android_jni::android::start_service_action(
+    crate::android::jni::android::start_service_action(
         env,
         context,
         "com.openless.app.OpenLessOverlayService",
@@ -76,7 +76,7 @@ fn hide_overlay_with_context(
     env: &mut jni::JNIEnv,
     context: &jni::objects::JObject,
 ) -> Result<(), String> {
-    crate::android_jni::android::start_service_action(
+    crate::android::jni::android::start_service_action(
         env,
         context,
         "com.openless.app.OpenLessOverlayService",
@@ -317,10 +317,10 @@ mod jni_exports {
         context: JObject,
     ) -> jboolean {
         let visible = with_jni_context(env, context, |env, context| {
-            crate::android_jni::android::can_draw_overlays(env, context)
+            crate::android::jni::android::can_draw_overlays(env, context)
         })
         .unwrap_or(false);
-        crate::android_jni::android::export_jboolean(visible)
+        crate::android::jni::android::export_jboolean(visible)
     }
 
     #[no_mangle]
@@ -328,7 +328,7 @@ mod jni_exports {
         _env: *mut JNIEnv,
         _class: JClass,
     ) -> jboolean {
-        crate::android_jni::android::export_jboolean(is_overlay_visible())
+        crate::android::jni::android::export_jboolean(is_overlay_visible())
     }
 
     #[no_mangle]
@@ -338,7 +338,7 @@ mod jni_exports {
     ) -> jstring {
         let mode = overlay_trigger_mode_name();
         match JniEnv::from_raw(env) {
-            Ok(mut env) => crate::android_jni::android::export_jstring(&mut env, mode),
+            Ok(mut env) => crate::android::jni::android::export_jstring(&mut env, mode),
             Err(_) => std::ptr::null_mut(),
         }
     }

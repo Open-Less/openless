@@ -519,10 +519,10 @@ impl Coordinator {
             use crate::types::AndroidOverlayTrigger;
             match self.android_overlay_trigger() {
                 AndroidOverlayTrigger::Always => {
-                    let _ = crate::android_overlay::show_android_overlay();
+                    let _ = crate::android::show_android_overlay();
                 }
                 AndroidOverlayTrigger::Background | AndroidOverlayTrigger::Keyboard => {
-                    let _ = crate::android_overlay::hide_android_overlay();
+                    let _ = crate::android::hide_android_overlay();
                 }
             }
         }
@@ -531,7 +531,7 @@ impl Coordinator {
     pub fn apply_android_overlay_size(&self) {
         #[cfg(target_os = "android")]
         {
-            let _ = crate::android_overlay::refresh_android_overlay_if_visible();
+            let _ = crate::android::refresh_android_overlay_if_visible();
         }
     }
 
@@ -6194,7 +6194,7 @@ fn emit_capsule(
     };
 
     #[cfg(target_os = "android")]
-    crate::android_native_bridge::notify_capsule_state(&payload);
+    crate::android::notify_capsule_state(&payload);
 
     // visible / translation 是「这一帧 capsule:state event 的 payload」内容 ——
     // 必须在 call-site（即音频线程触发 emit_capsule 时）就算定，否则 main thread

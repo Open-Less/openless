@@ -3,6 +3,18 @@
 
 use serde::{Deserialize, Serialize};
 
+pub use crate::android::types::{
+    AndroidAccessibilityState, AndroidAccessibilityStatus, AndroidInsertStrategy,
+    AndroidOverlayActivationMode, AndroidOverlayLeftSwipeAction, AndroidOverlayPermissionState,
+    AndroidOverlayStatus, AndroidOverlayTrigger,
+};
+use crate::android::types::{
+    default_android_insert_strategy, default_android_overlay_activation_mode,
+    default_android_overlay_left_swipe_action, default_android_overlay_size_dp,
+    default_android_overlay_trigger, normalize_android_insert_strategy,
+    normalize_android_overlay_size_dp,
+};
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 #[derive(Default)]
@@ -1101,15 +1113,6 @@ impl<'de> Deserialize<'de> for UserPreferences {
                 wire.android_overlay_size_dp,
             ),
         })
-    }
-}
-
-fn normalize_android_insert_strategy(strategy: AndroidInsertStrategy) -> AndroidInsertStrategy {
-    match strategy {
-        AndroidInsertStrategy::Auto | AndroidInsertStrategy::Ime => {
-            AndroidInsertStrategy::Accessibility
-        }
-        strategy => strategy,
     }
 }
 
@@ -2327,102 +2330,6 @@ pub struct WindowsImeStatus {
     pub using_tsf_backend: bool,
     pub message: String,
     pub dll_path: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum AndroidInsertStrategy {
-    Auto,
-    Ime,
-    Accessibility,
-    Clipboard,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum AndroidOverlayTrigger {
-    Background,
-    Keyboard,
-    Always,
-}
-
-impl AndroidOverlayTrigger {
-    pub fn normalized(self) -> Self {
-        match self {
-            AndroidOverlayTrigger::Keyboard => AndroidOverlayTrigger::Background,
-            trigger => trigger,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum AndroidOverlayActivationMode {
-    Tap,
-    LongPress,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum AndroidOverlayLeftSwipeAction {
-    Translation,
-    StylePack,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum AndroidAccessibilityState {
-    Enabled,
-    NotEnabled,
-    NotAndroid,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct AndroidAccessibilityStatus {
-    pub state: AndroidAccessibilityState,
-    pub enabled: bool,
-    pub message: String,
-}
-
-fn default_android_insert_strategy() -> AndroidInsertStrategy {
-    AndroidInsertStrategy::Accessibility
-}
-
-fn default_android_overlay_trigger() -> AndroidOverlayTrigger {
-    AndroidOverlayTrigger::Background
-}
-
-fn default_android_overlay_activation_mode() -> AndroidOverlayActivationMode {
-    AndroidOverlayActivationMode::Tap
-}
-
-fn default_android_overlay_left_swipe_action() -> AndroidOverlayLeftSwipeAction {
-    AndroidOverlayLeftSwipeAction::Translation
-}
-
-fn default_android_overlay_size_dp() -> u32 {
-    72
-}
-
-fn normalize_android_overlay_size_dp(size_dp: u32) -> u32 {
-    size_dp.clamp(48, 120)
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum AndroidOverlayPermissionState {
-    Granted,
-    NotGranted,
-    NotAndroid,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct AndroidOverlayStatus {
-    pub permission: AndroidOverlayPermissionState,
-    pub overlay_visible: bool,
-    pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

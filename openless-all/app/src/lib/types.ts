@@ -2,6 +2,24 @@
 // All keys are camelCase (Rust serializes with #[serde(rename_all = "camelCase")]).
 // PolishMode is an exception — Rust uses lowercase serialization.
 
+import type {
+  AndroidAccessibilityStatus,
+  AndroidInsertStrategy,
+  AndroidOverlayActivationMode,
+  AndroidOverlayLeftSwipeAction,
+  AndroidOverlayStatus,
+  AndroidOverlayTrigger,
+} from '../../android/frontend/lib/androidTypes';
+
+export type {
+  AndroidAccessibilityStatus,
+  AndroidInsertStrategy,
+  AndroidOverlayActivationMode,
+  AndroidOverlayLeftSwipeAction,
+  AndroidOverlayStatus,
+  AndroidOverlayTrigger,
+};
+
 export type PolishMode = 'raw' | 'light' | 'structured' | 'formal';
 
 export type InsertStatus = 'inserted' | 'pasteSent' | 'copiedFallback' | 'failed';
@@ -348,23 +366,6 @@ export interface UserPreferences {
   androidOverlayLeftSwipeAction: AndroidOverlayLeftSwipeAction;
   /** Android: floating overlay control diameter in dp. */
   androidOverlaySizeDp: number;
-}
-
-export type AndroidInsertStrategy = 'accessibility' | 'clipboard';
-export type AndroidOverlayTrigger = 'background' | 'keyboard' | 'always';
-export type AndroidOverlayActivationMode = 'tap' | 'long_press';
-export type AndroidOverlayLeftSwipeAction = 'translation' | 'style_pack';
-
-export interface AndroidOverlayStatus {
-  permission: 'granted' | 'notGranted' | 'notAndroid';
-  overlayVisible: boolean;
-  message: string;
-}
-
-export interface AndroidAccessibilityStatus {
-  state: 'enabled' | 'notEnabled' | 'notAndroid';
-  enabled: boolean;
-  message: string;
 }
 
 export interface MarketplaceListItem {

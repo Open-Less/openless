@@ -7,7 +7,7 @@ const targetPath = fileURLToPath(
   new URL('../src-tauri/gen/android/app/src/main/AndroidManifest.xml', import.meta.url),
 );
 const sourcePath = fileURLToPath(
-  new URL('../src-tauri/android-scaffolding/AndroidManifest.v1.snippet.xml', import.meta.url),
+  new URL('../android/manifests/AndroidManifest.v1.snippet.xml', import.meta.url),
 );
 
 const PERMISSION_LINE_RE =
@@ -16,7 +16,7 @@ const PERMISSION_LINE_RE =
 function printHelp() {
   console.log(`Usage: node scripts/merge-android-v1-manifest.mjs [options]
 
-Merge APK v1 permissions from android-scaffolding into the generated
+Merge APK v1 permissions from android/manifests into the generated
 AndroidManifest.xml (post \`tauri android init\`).
 
 Options:

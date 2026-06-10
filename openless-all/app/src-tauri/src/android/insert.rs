@@ -2,7 +2,8 @@
 
 #![cfg(target_os = "android")]
 use crate::insertion::TextInserter;
-use crate::types::{AndroidInsertStrategy, InsertStatus};
+use crate::android::types::AndroidInsertStrategy;
+use crate::types::InsertStatus;
 
 pub fn android_insert_with_strategy(
     inserter: &TextInserter,
@@ -24,14 +25,14 @@ pub fn android_insert_with_strategy(
 }
 
 fn try_accessibility(inserter: &TextInserter, text: &str) -> Option<InsertStatus> {
-    if !crate::android_accessibility::get_android_accessibility_status().enabled {
+    if !crate::android::accessibility::get_android_accessibility_status().enabled {
         log::info!("[android-insert] accessibility service not enabled");
         return None;
     }
     if !matches!(inserter.copy_fallback(text), InsertStatus::CopiedFallback) {
         return None;
     }
-    if crate::android_accessibility::paste_via_accessibility() {
+    if crate::android::accessibility::paste_via_accessibility() {
         Some(InsertStatus::Inserted)
     } else {
         log::warn!("[android-insert] accessibility paste failed; text remains on clipboard");
@@ -42,8 +43,8 @@ fn try_accessibility(inserter: &TextInserter, text: &str) -> Option<InsertStatus
 fn clipboard_fallback(inserter: &TextInserter, text: &str) -> InsertStatus {
     let status = inserter.copy_fallback(text);
     if matches!(status, InsertStatus::CopiedFallback) {
-        let _ = crate::android_jni::android::with_android_env(|env, context| {
-            crate::android_jni::android::show_overlay_toast(env, context, "已复制到剪贴板")
+        let _ = crate::android::jni::android::with_android_env(|env, context| {
+            crate::android::jni::android::show_overlay_toast(env, context, "已复制到剪贴板")
         });
     }
     status

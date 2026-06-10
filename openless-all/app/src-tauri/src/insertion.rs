@@ -215,8 +215,8 @@ fn copy_to_clipboard(text: &str) -> bool {
 fn copy_to_clipboard(text: &str) -> bool {
     #[cfg(target_os = "android")]
     {
-        return crate::android_jni::android::with_android_env(|env, context| {
-            crate::android_jni::android::copy_to_clipboard(env, context, text)
+        return crate::android::jni::android::with_android_env(|env, context| {
+            crate::android::jni::android::copy_to_clipboard(env, context, text)
         })
         .unwrap_or_else(|error| {
             log::error!("[insertion] android clipboard failed: {error}");

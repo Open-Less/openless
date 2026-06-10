@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<input-method xmlns:android="http://schemas.android.com/apk/res/android"
+    android:settingsActivity="com.openless.app.MainActivity"
+    android:supportsSwitchingToNextInputMethod="true">
+    <subtype
+        android:label="@string/openless_ime_label"
+        android:imeSubtypeLocale="zh_CN"
+        android:imeSubtypeMode="voice" />
+</input-method>

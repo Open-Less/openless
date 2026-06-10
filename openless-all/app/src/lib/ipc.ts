@@ -29,10 +29,6 @@ import type {
     UserPreferences,
     VocabPresetStore,
     WindowsImeStatus,
-    AndroidOverlayStatus,
-    AndroidAccessibilityStatus,
-    AndroidInsertStrategy,
-    AndroidOverlayTrigger,
 } from "./types"
 export type { UpdateChannel, PlatformCapabilities } from "./types"
 import { OL_DATA } from "./mockData"
@@ -66,43 +62,14 @@ export async function getPlatformCapabilities(): Promise<PlatformCapabilities> {
     return platformCapabilities()
 }
 
-export function getAndroidOverlayStatus(): Promise<AndroidOverlayStatus> {
-    return invokeOrMock("get_android_overlay_status", undefined, () => ({
-        permission: "notAndroid",
-        overlayVisible: false,
-        message: "Android overlay is only available on Android",
-    }))
-}
-
-export function requestAndroidOverlayPermission(): Promise<{ launched: boolean; message: string }> {
-    return invokeOrMock("request_android_overlay_permission", undefined, () => ({
-        launched: false,
-        message: "Mock: overlay permission unavailable in browser preview",
-    }))
-}
-
-export function showAndroidOverlay(): Promise<void> {
-    return invokeOrMock("show_android_overlay", undefined, () => undefined)
-}
-
-export function hideAndroidOverlay(): Promise<void> {
-    return invokeOrMock("hide_android_overlay", undefined, () => undefined)
-}
-
-export function getAndroidAccessibilityStatus(): Promise<AndroidAccessibilityStatus> {
-    return invokeOrMock("get_android_accessibility_status", undefined, () => ({
-        state: "notAndroid",
-        enabled: false,
-        message: "Android accessibility is only available on Android",
-    }))
-}
-
-export function requestAndroidAccessibilityPermission(): Promise<{ launched: boolean; message: string }> {
-    return invokeOrMock("request_android_accessibility_permission", undefined, () => ({
-        launched: false,
-        message: "Mock: accessibility settings unavailable in browser preview",
-    }))
-}
+export {
+  getAndroidOverlayStatus,
+  requestAndroidOverlayPermission,
+  showAndroidOverlay,
+  hideAndroidOverlay,
+  getAndroidAccessibilityStatus,
+  requestAndroidAccessibilityPermission,
+} from '../../android/frontend/lib/androidIpc';
 
 export { isAndroid, isDesktop, isMobile } from "./platform"
 

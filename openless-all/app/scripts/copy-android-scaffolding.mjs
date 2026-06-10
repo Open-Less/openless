@@ -5,7 +5,8 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 const appRoot = fileURLToPath(new URL('..', import.meta.url));
-const scaffoldingRoot = join(appRoot, 'src-tauri/android-scaffolding');
+const kotlinRoot = join(appRoot, 'android/kotlin');
+const manifestsRoot = join(appRoot, 'android/manifests');
 const androidIconRoot = join(appRoot, 'src-tauri/icons/android');
 const genRoot = join(appRoot, 'src-tauri/gen/android/app/src/main');
 const kotlinDest = join(genRoot, 'java/com/openless/app');
@@ -146,7 +147,7 @@ function main() {
   copyDirectoryContents(androidIconRoot, resDest, dryRun);
 
   for (const file of KOTLIN_FILES) {
-    const src = join(scaffoldingRoot, file);
+    const src = join(kotlinRoot, file);
     const dest = join(kotlinDest, file);
     if (!existsSync(src)) {
       throw new Error(`Missing scaffolding file: ${src}`);
@@ -160,7 +161,7 @@ function main() {
   }
 
   for (const [relSrc, destName] of XML_FILES) {
-    const src = join(scaffoldingRoot, relSrc);
+    const src = join(manifestsRoot, relSrc);
     const dest = join(resXmlDest, destName);
     const content = existsSync(src)
       ? readFileSync(src, 'utf8')
