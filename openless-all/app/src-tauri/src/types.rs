@@ -1097,7 +1097,9 @@ impl<'de> Deserialize<'de> for UserPreferences {
             android_overlay_trigger: wire.android_overlay_trigger.normalized(),
             android_overlay_activation_mode: wire.android_overlay_activation_mode,
             android_overlay_left_swipe_action: wire.android_overlay_left_swipe_action,
-            android_overlay_size_dp: normalize_android_overlay_size_dp(wire.android_overlay_size_dp),
+            android_overlay_size_dp: normalize_android_overlay_size_dp(
+                wire.android_overlay_size_dp,
+            ),
         })
     }
 }

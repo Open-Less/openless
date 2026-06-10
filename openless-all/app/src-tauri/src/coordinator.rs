@@ -3704,6 +3704,7 @@ async fn finalize_dictation_as_qa_question(inner: &Arc<Inner>) -> Result<(), Str
     let raw = match take_current_dictation_transcript_for_qa(inner).await {
         Ok(Some(raw)) => raw,
         Ok(None) => {
+            log::info!("[coord] QA finalize from overlay: no transcript produced");
             finish_qa_idle_silently(inner);
             return Ok(());
         }
@@ -3712,6 +3713,11 @@ async fn finalize_dictation_as_qa_question(inner: &Arc<Inner>) -> Result<(), Str
             return Err(error);
         }
     };
+    log::info!(
+        "[coord] QA finalize from overlay: transcript ready chars={} duration_ms={}",
+        raw.text.chars().count(),
+        raw.duration_ms
+    );
     answer_qa_question_text(inner, raw.text.trim().to_string(), raw.duration_ms).await
 }
 

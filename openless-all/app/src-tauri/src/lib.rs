@@ -1418,6 +1418,22 @@ fn position_qa_window<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) -> ta
 pub(crate) fn show_qa_window<R: tauri::Runtime>(app: &AppHandle<R>, content_kind: &str) {
     #[cfg(target_os = "android")]
     {
+        const FLAG_ACTIVITY_NEW_TASK: i32 = 0x10000000;
+        const FLAG_ACTIVITY_REORDER_TO_FRONT: i32 = 0x00020000;
+        const FLAG_ACTIVITY_SINGLE_TOP: i32 = 0x20000000;
+        let flags =
+            FLAG_ACTIVITY_NEW_TASK | FLAG_ACTIVITY_REORDER_TO_FRONT | FLAG_ACTIVITY_SINGLE_TOP;
+        match crate::android_jni::android::with_android_env(|env, context| {
+            crate::android_jni::android::start_activity_class_with_flags(
+                env,
+                context,
+                "com.openless.app.MainActivity",
+                flags,
+            )
+        }) {
+            Ok(()) => log::info!("[qa] android requested MainActivity foreground for QA"),
+            Err(error) => log::warn!("[qa] android failed to foreground MainActivity: {error}"),
+        }
         log::info!("[qa] android emit qa:state to main kind={content_kind}");
         let _ = app.emit_to(
             "main",

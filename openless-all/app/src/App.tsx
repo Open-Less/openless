@@ -78,9 +78,11 @@ export function App({ isCapsule, isQa, isLessComputer, isLessComputerGlow, force
       try {
         const { listen } = await import('@tauri-apps/api/event');
         const stateHandle = await listen('qa:state', () => {
+          console.info('[qa] android qa:state received; opening embedded panel');
           setMobileQaOpen(true);
         });
         const dismissHandle = await listen('qa:dismiss', () => {
+          console.info('[qa] android qa:dismiss received; closing embedded panel');
           setMobileQaOpen(false);
         });
         if (cancelled) {

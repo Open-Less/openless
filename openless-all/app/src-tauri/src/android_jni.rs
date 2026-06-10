@@ -106,6 +106,15 @@ pub mod android {
         context: &JObject,
         class_name: &str,
     ) -> Result<(), String> {
+        start_activity_class_with_flags(env, context, class_name, 0x10000000)
+    }
+
+    pub fn start_activity_class_with_flags(
+        env: &mut JNIEnv,
+        context: &JObject,
+        class_name: &str,
+        flags: i32,
+    ) -> Result<(), String> {
         let intent = env
             .new_object("android/content/Intent", "()V", &[])
             .map_err(|error| format!("create activity intent: {error}"))?;
@@ -128,7 +137,7 @@ pub mod android {
             &intent,
             "addFlags",
             "(I)Landroid/content/Intent;",
-            &[JValue::Int(0x10000000)],
+            &[JValue::Int(flags)],
         )
         .map_err(|error| format!("set intent flags: {error}"))?;
         env.call_method(
