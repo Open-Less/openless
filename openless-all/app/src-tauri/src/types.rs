@@ -761,6 +761,9 @@ pub struct UserPreferences {
     /// Android: action performed by left swiping while the overlay is armed.
     #[serde(default = "default_android_overlay_left_swipe_action")]
     pub android_overlay_left_swipe_action: AndroidOverlayLeftSwipeAction,
+    /// Android: floating overlay control diameter in dp.
+    #[serde(default = "default_android_overlay_size_dp")]
+    pub android_overlay_size_dp: u32,
 }
 
 fn default_local_asr_model() -> String {
@@ -918,6 +921,8 @@ struct UserPreferencesWire {
     android_overlay_activation_mode: AndroidOverlayActivationMode,
     #[serde(default = "default_android_overlay_left_swipe_action")]
     android_overlay_left_swipe_action: AndroidOverlayLeftSwipeAction,
+    #[serde(default = "default_android_overlay_size_dp")]
+    android_overlay_size_dp: u32,
 }
 
 impl Default for UserPreferencesWire {
@@ -989,6 +994,7 @@ impl Default for UserPreferencesWire {
             android_overlay_trigger: prefs.android_overlay_trigger,
             android_overlay_activation_mode: prefs.android_overlay_activation_mode,
             android_overlay_left_swipe_action: prefs.android_overlay_left_swipe_action,
+            android_overlay_size_dp: prefs.android_overlay_size_dp,
         }
     }
 }
@@ -1091,6 +1097,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             android_overlay_trigger: wire.android_overlay_trigger.normalized(),
             android_overlay_activation_mode: wire.android_overlay_activation_mode,
             android_overlay_left_swipe_action: wire.android_overlay_left_swipe_action,
+            android_overlay_size_dp: normalize_android_overlay_size_dp(wire.android_overlay_size_dp),
         })
     }
 }
@@ -1824,6 +1831,7 @@ impl Default for UserPreferences {
             android_overlay_trigger: default_android_overlay_trigger(),
             android_overlay_activation_mode: default_android_overlay_activation_mode(),
             android_overlay_left_swipe_action: default_android_overlay_left_swipe_action(),
+            android_overlay_size_dp: default_android_overlay_size_dp(),
         }
     }
 }
@@ -2389,6 +2397,14 @@ fn default_android_overlay_activation_mode() -> AndroidOverlayActivationMode {
 
 fn default_android_overlay_left_swipe_action() -> AndroidOverlayLeftSwipeAction {
     AndroidOverlayLeftSwipeAction::Translation
+}
+
+fn default_android_overlay_size_dp() -> u32 {
+    72
+}
+
+fn normalize_android_overlay_size_dp(size_dp: u32) -> u32 {
+    size_dp.clamp(48, 120)
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

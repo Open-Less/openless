@@ -79,6 +79,7 @@ export function PermissionsSection() {
       androidOverlayTrigger: migratedSettings.androidOverlayTrigger,
       androidOverlayActivationMode: migratedSettings.androidOverlayActivationMode,
       androidOverlayLeftSwipeAction: migratedSettings.androidOverlayLeftSwipeAction,
+      androidOverlaySizeDp: migratedSettings.androidOverlaySizeDp,
     });
   };
 
@@ -187,6 +188,7 @@ export function PermissionsSection() {
       androidOverlayTrigger: next.androidOverlayTrigger,
       androidOverlayActivationMode: next.androidOverlayActivationMode,
       androidOverlayLeftSwipeAction: next.androidOverlayLeftSwipeAction,
+      androidOverlaySizeDp: next.androidOverlaySizeDp,
     });
     await refreshAndroid();
   };
@@ -333,6 +335,29 @@ export function PermissionsSection() {
               </span>
             </div>
           </SettingRow>
+          <SettingRow label={t('settings.permissions.androidOverlaySizeLabel')}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-end', width: '100%' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 180, maxWidth: '100%' }}>
+                <input
+                  type="range"
+                  min={48}
+                  max={120}
+                  step={4}
+                  value={androidPrefs?.androidOverlaySizeDp ?? 72}
+                  onChange={(event) => {
+                    void updateAndroidPref('androidOverlaySizeDp', clampAndroidOverlaySize(Number(event.target.value)));
+                  }}
+                  style={{ width: 132 }}
+                />
+                <span style={{ fontSize: 12, color: 'var(--ol-ink-3)', minWidth: 42, textAlign: 'right' }}>
+                  {androidPrefs?.androidOverlaySizeDp ?? 72} dp
+                </span>
+              </div>
+              <span style={{ fontSize: 11, color: 'var(--ol-ink-4)', textAlign: 'right' }}>
+                {t('settings.permissions.androidOverlaySizeHint')}
+              </span>
+            </div>
+          </SettingRow>
         </>
       )}
       {windowsIme?.state !== 'notWindows' && platformCaps?.platform !== 'android' && (
@@ -374,10 +399,16 @@ type AndroidPreferenceKey =
   | 'androidInsertStrategy'
   | 'androidOverlayTrigger'
   | 'androidOverlayActivationMode'
-  | 'androidOverlayLeftSwipeAction';
+  | 'androidOverlayLeftSwipeAction'
+  | 'androidOverlaySizeDp';
 
 function normalizeAndroidOverlayTrigger(trigger: AndroidOverlayTrigger): AndroidOverlayTrigger {
   return trigger === 'keyboard' ? 'background' : trigger;
+}
+
+function clampAndroidOverlaySize(size: number): number {
+  if (!Number.isFinite(size)) return 72;
+  return Math.min(120, Math.max(48, Math.round(size / 4) * 4));
 }
 
 function PermissionPill({ status }: { status: PermissionStatus | 'loading' }) {

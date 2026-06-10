@@ -66,6 +66,17 @@ pub fn hide_android_overlay() -> Result<(), String> {
     }
 }
 
+pub fn refresh_android_overlay_if_visible() -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        return crate::android_native_bridge::refresh_overlay_if_visible();
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        Err("Android overlay is only available on Android".to_string())
+    }
+}
+
 #[cfg(target_os = "android")]
 mod android_impl {
     use super::{AndroidOverlayPermissionResult, AndroidOverlayStatus};

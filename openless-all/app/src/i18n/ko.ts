@@ -832,6 +832,8 @@ export const ko: typeof zhCN = {
       androidOverlayTriggerLabel: '오버레이 표시',
       androidOverlayActivationModeLabel: '오버레이 활성화',
       androidOverlayLeftSwipeActionLabel: '왼쪽 스와이프 동작',
+      androidOverlaySizeLabel: '오버레이 크기',
+      androidOverlaySizeHint: '플로팅 버튼 지름을 조정하고 현재 위치를 유지합니다.',
       androidInsertStrategy: { accessibility: '입력칸에 자동 출력', clipboard: '클립보드만' },
       androidInsertStrategyHint: { accessibility: '접근성 서비스가 필요합니다. 사용할 수 없으면 클립보드에 복사합니다.', clipboard: '접근성 권한이 필요 없으며 직접 붙여넣습니다.' },
       androidOverlayTrigger: { background: '백그라운드', keyboard: '키보드 표시 시', always: '항상' },

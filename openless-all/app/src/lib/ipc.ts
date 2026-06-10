@@ -223,6 +223,7 @@ let mockSettings: UserPreferences = {
     androidOverlayTrigger: "background",
     androidOverlayActivationMode: "tap",
     androidOverlayLeftSwipeAction: "translation",
+    androidOverlaySizeDp: 72,
 }
 
 const mockFullStylePrompts: StyleSystemPrompts = {

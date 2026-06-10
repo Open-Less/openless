@@ -1418,6 +1418,7 @@ fn position_qa_window<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) -> ta
 pub(crate) fn show_qa_window<R: tauri::Runtime>(app: &AppHandle<R>, content_kind: &str) {
     #[cfg(target_os = "android")]
     {
+        log::info!("[qa] android emit qa:state to main kind={content_kind}");
         let _ = app.emit_to(
             "main",
             "qa:state",

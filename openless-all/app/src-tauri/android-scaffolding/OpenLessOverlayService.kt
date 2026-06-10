@@ -141,6 +141,11 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
             layoutParams = existing.layoutParams as? WindowManager.LayoutParams
             iconContainer = existing
             (existing.getChildAt(0) as? ImageView)?.let { iconButton = it }
+            applyOverlaySize(existing)
+            layoutParams?.let { params ->
+                clampToScreen(params)
+                windowManager?.updateViewLayout(existing, params)
+            }
             Log.i(TAG, "overlay already shown roots=${overlayRoots.size}")
             return
         }
@@ -170,15 +175,15 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
             contentDescription = "OpenLess"
             isClickable = true
             isFocusable = false
-            setPadding(dp(ICON_PADDING_DP), dp(ICON_PADDING_DP), dp(ICON_PADDING_DP), dp(ICON_PADDING_DP))
             setOnClickListener { handleIconClick() }
         }
         iconContainer = root
         iconButton = buildIconButton()
         root.addView(
             iconButton,
-            FrameLayout.LayoutParams(dp(ICON_IMAGE_SIZE_DP), dp(ICON_IMAGE_SIZE_DP), Gravity.CENTER),
+            FrameLayout.LayoutParams(1, 1, Gravity.CENTER),
         )
+        applyOverlaySize(root)
         attachDragHandler(root, params)
         try {
             windowManager?.addView(root, params)
@@ -262,6 +267,27 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
             isClickable = false
             isFocusable = false
         }
+    }
+
+    private fun applyOverlaySize(container: FrameLayout) {
+        if (!::iconButton.isInitialized) return
+        val sizeDp = OpenLessAndroidPreferences.overlaySizeDp(this)
+        val paddingDp = overlayPaddingDp(sizeDp)
+        val imageSizePx = dp((sizeDp - paddingDp * 2).coerceAtLeast(MIN_ICON_IMAGE_SIZE_DP))
+        val paddingPx = dp(paddingDp)
+        container.setPadding(paddingPx, paddingPx, paddingPx, paddingPx)
+        (iconButton.layoutParams as? FrameLayout.LayoutParams)?.let { childParams ->
+            childParams.width = imageSizePx
+            childParams.height = imageSizePx
+            childParams.gravity = Gravity.CENTER
+            iconButton.layoutParams = childParams
+        }
+        container.requestLayout()
+        Log.i(TAG, "overlay size applied sizeDp=$sizeDp imagePx=$imageSizePx")
+    }
+
+    private fun overlayPaddingDp(sizeDp: Int): Int {
+        return (sizeDp * ICON_PADDING_DP / DEFAULT_ICON_SIZE_DP).coerceIn(6, 16)
     }
 
     private fun handleIconClick() {
@@ -429,6 +455,7 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
     }
 
     private fun commitSwipe(direction: SwipeDirection) {
+        Log.i(TAG, "commit swipe direction=$direction recording=$recording processing=$processing")
         when (direction) {
             SwipeDirection.Left -> handleLeftSwipe()
             SwipeDirection.Right -> finalizeQaFromOverlay()
@@ -460,6 +487,7 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
 
     private fun openQaFromOverlay() {
         try {
+            Log.i(TAG, "open QA from overlay")
             OpenLessNative.nativeOpenQaFromOverlay()
             setArmed(false)
         } catch (error: Throwable) {
@@ -471,6 +499,7 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
 
     private fun finalizeQaFromOverlay() {
         try {
+            Log.i(TAG, "finalize QA from overlay")
             OpenLessNative.nativeFinalizeQaFromOverlay()
             recording = false
             processing = true
@@ -578,7 +607,7 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
     private fun overlaySize(): Int {
         val root = rootView
         val measured = maxOf(root?.width ?: 0, root?.height ?: 0)
-        return measured.takeIf { it > 0 } ?: dp(ICON_SIZE_DP)
+        return measured.takeIf { it > 0 } ?: dp(OpenLessAndroidPreferences.overlaySizeDp(this))
     }
 
     private fun clampToScreen(params: WindowManager.LayoutParams) {
@@ -649,8 +678,8 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         const val EXTRA_KEYBOARD_VISIBLE = "keyboard_visible"
         const val EXTRA_KEYBOARD_TOP = "keyboard_top"
         const val EXTRA_KEYBOARD_BOTTOM = "keyboard_bottom"
-        private const val ICON_SIZE_DP = 72
-        private const val ICON_IMAGE_SIZE_DP = 56
+        private const val DEFAULT_ICON_SIZE_DP = 72
+        private const val MIN_ICON_IMAGE_SIZE_DP = 32
         private const val ICON_PADDING_DP = 8
         private const val DRAG_SLOP_PX = 8
         private const val SWIPE_THRESHOLD_DP = 56

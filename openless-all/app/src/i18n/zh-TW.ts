@@ -830,6 +830,8 @@ export const zhTW: typeof zhCN = {
       androidOverlayTriggerLabel: '懸浮窗顯示時機',
       androidOverlayActivationModeLabel: '懸浮窗啟用方式',
       androidOverlayLeftSwipeActionLabel: '左滑動作',
+      androidOverlaySizeLabel: '懸浮窗大小',
+      androidOverlaySizeHint: '調整懸浮按鈕直徑，儲存後在目前懸浮窗上生效並保留位置。',
       androidInsertStrategy: { accessibility: '自動輸出到輸入框', clipboard: '僅剪貼簿' },
       androidInsertStrategyHint: { accessibility: '需要開啟無障礙服務；不可用時會複製到剪貼簿。', clipboard: '不需要無障礙權限，只複製到剪貼簿，由你手動貼上。' },
       androidOverlayTrigger: { background: '退到背景', keyboard: '鍵盤彈出時', always: '常駐' },

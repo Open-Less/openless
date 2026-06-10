@@ -260,7 +260,10 @@ fn set_settings_common(
     persist_settings(coord, prefs.clone())?;
     let _ = app.emit("prefs:changed", &prefs);
     #[cfg(target_os = "android")]
-    coord.apply_android_overlay_trigger();
+    {
+        coord.apply_android_overlay_trigger();
+        coord.apply_android_overlay_size();
+    }
     Ok(prefs)
 }
 

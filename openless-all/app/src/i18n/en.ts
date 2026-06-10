@@ -830,6 +830,8 @@ export const en: typeof zhCN = {
       androidOverlayTriggerLabel: 'Overlay visibility',
       androidOverlayActivationModeLabel: 'Overlay activation',
       androidOverlayLeftSwipeActionLabel: 'Left swipe action',
+      androidOverlaySizeLabel: 'Overlay size',
+      androidOverlaySizeHint: 'Adjusts the floating button diameter and keeps its current position.',
       androidInsertStrategy: {
         accessibility: 'Auto output to input field',
         clipboard: 'Clipboard only',

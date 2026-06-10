@@ -828,6 +828,8 @@ export const zhCN = {
       androidOverlayTriggerLabel: '悬浮窗显示时机',
       androidOverlayActivationModeLabel: '悬浮窗激活方式',
       androidOverlayLeftSwipeActionLabel: '左滑动作',
+      androidOverlaySizeLabel: '悬浮窗大小',
+      androidOverlaySizeHint: '调整悬浮按钮直径，保存后在当前悬浮窗上生效并保留位置。',
       androidInsertStrategy: {
         accessibility: '自动输出到输入框',
         clipboard: '仅剪贴板',

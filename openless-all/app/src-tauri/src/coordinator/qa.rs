@@ -8,7 +8,7 @@ use crate::types::CapsuleState;
 
 use super::{
     begin_qa_session, cancel_qa_session, capture_focus_target, capture_frontmost_app, emit_capsule,
-    end_qa_session, Inner,
+    end_qa_session, qa_event_target, Inner,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -108,7 +108,7 @@ pub(super) fn open_qa_panel(inner: &Arc<Inner>) {
     if let Some(app) = inner.app.lock().clone() {
         crate::show_qa_window(&app, "idle");
         let _ = app.emit_to(
-            "qa",
+            qa_event_target(),
             "qa:state",
             serde_json::json!({
                 "kind": "idle",

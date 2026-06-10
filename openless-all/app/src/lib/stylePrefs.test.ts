@@ -84,6 +84,7 @@ const previousPrefs: UserPreferences = {
   androidOverlayTrigger: 'background',
   androidOverlayActivationMode: 'tap',
   androidOverlayLeftSwipeAction: 'translation',
+  androidOverlaySizeDp: 72,
 };
 
 const nextPrefs: UserPreferences = {

@@ -832,6 +832,8 @@ export const ja: typeof zhCN = {
       androidOverlayTriggerLabel: '表示タイミング',
       androidOverlayActivationModeLabel: '起動方法',
       androidOverlayLeftSwipeActionLabel: '左スワイプ動作',
+      androidOverlaySizeLabel: 'オーバーレイサイズ',
+      androidOverlaySizeHint: 'フローティングボタンの直径を調整し、現在位置を保持します。',
       androidInsertStrategy: { accessibility: '入力欄へ自動出力', clipboard: 'クリップボードのみ' },
       androidInsertStrategyHint: { accessibility: 'アクセシビリティが必要です。使えない場合はクリップボードにコピーします。', clipboard: 'アクセシビリティ権限は不要です。コピー後に手動で貼り付けます。' },
       androidOverlayTrigger: { background: 'バックグラウンド', keyboard: 'キーボード表示時', always: '常時' },

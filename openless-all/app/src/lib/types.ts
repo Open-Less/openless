@@ -346,6 +346,8 @@ export interface UserPreferences {
   androidOverlayActivationMode: AndroidOverlayActivationMode;
   /** Android: action performed by left swiping while the overlay is armed. */
   androidOverlayLeftSwipeAction: AndroidOverlayLeftSwipeAction;
+  /** Android: floating overlay control diameter in dp. */
+  androidOverlaySizeDp: number;
 }
 
 export type AndroidInsertStrategy = 'accessibility' | 'clipboard';

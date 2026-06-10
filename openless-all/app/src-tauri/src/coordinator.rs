@@ -66,6 +66,17 @@ mod dictation;
 mod qa;
 mod resources;
 
+pub(super) fn qa_event_target() -> &'static str {
+    #[cfg(target_os = "android")]
+    {
+        "main"
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        "qa"
+    }
+}
+
 #[cfg(test)]
 use dictation::dictation_error_code;
 use dictation::{
@@ -514,6 +525,13 @@ impl Coordinator {
                     let _ = crate::android_overlay::hide_android_overlay();
                 }
             }
+        }
+    }
+
+    pub fn apply_android_overlay_size(&self) {
+        #[cfg(target_os = "android")]
+        {
+            let _ = crate::android_overlay::refresh_android_overlay_if_visible();
         }
     }
 
@@ -1048,11 +1066,13 @@ impl Coordinator {
     }
 
     pub async fn open_qa_from_overlay(&self) -> Result<(), String> {
+        log::info!("[coord] overlay QA open requested");
         open_qa_panel(&self.inner);
         begin_qa_session(&self.inner).await
     }
 
     pub async fn finalize_qa_from_overlay(&self) -> Result<(), String> {
+        log::info!("[coord] overlay QA finalize requested");
         finalize_dictation_as_qa_question(&self.inner).await
     }
 
@@ -3652,6 +3672,7 @@ fn enabled_hotwords(inner: &Arc<Inner>) -> Vec<DictionaryHotword> {
 // ─────────────────────────── QA session lifecycle ───────────────────────────
 
 async fn finalize_dictation_as_qa_question(inner: &Arc<Inner>) -> Result<(), String> {
+    log::info!("[coord] QA finalize from overlay: opening panel and waiting for ASR result");
     open_qa_panel(inner);
     {
         let mut state = inner.qa_state.lock();
@@ -3670,7 +3691,7 @@ async fn finalize_dictation_as_qa_question(inner: &Arc<Inner>) -> Result<(), Str
     if let Some(app) = inner.app.lock().clone() {
         let messages = inner.qa_state.lock().messages.clone();
         let _ = app.emit_to(
-            "qa",
+            qa_event_target(),
             "qa:state",
             serde_json::json!({
                 "kind": "loading",
@@ -3950,7 +3971,7 @@ async fn answer_qa_question_text(
     if let Some(app) = inner.app.lock().clone() {
         let messages = inner.qa_state.lock().messages.clone();
         let _ = app.emit_to(
-            "qa",
+            qa_event_target(),
             "qa:state",
             serde_json::json!({
                 "kind": "thinking",
@@ -3980,7 +4001,7 @@ async fn answer_qa_question_text(
         }
         if let Some(app) = inner_for_delta.app.lock().clone() {
             let _ = app.emit_to(
-                "qa",
+                qa_event_target(),
                 "qa:state",
                 serde_json::json!({
                     "kind": "answer_delta",
@@ -4031,7 +4052,7 @@ async fn answer_qa_question_text(
     if let Some(app) = inner.app.lock().clone() {
         let messages = inner.qa_state.lock().messages.clone();
         let _ = app.emit_to(
-            "qa",
+            qa_event_target(),
             "qa:state",
             serde_json::json!({
                 "kind": "answer",
@@ -4139,7 +4160,7 @@ async fn begin_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
     if let Some(app) = inner.app.lock().clone() {
         let messages = inner.qa_state.lock().messages.clone();
         let _ = app.emit_to(
-            "qa",
+            qa_event_target(),
             "qa:state",
             serde_json::json!({
                 "kind": "recording",
@@ -4176,7 +4197,7 @@ async fn begin_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
     *inner.qa_asr.lock() = Some(qa_asr.active_asr());
 
     // QA recorder 不需要 RMS 节流到胶囊；前端 QA 浮窗有自己的电平视图，
-    // 这里发一份事件给 "qa" label 用就够了。
+    // Android 的 QA 面板嵌在 main WebView；桌面端仍发给独立 qa 窗口。
     let inner_for_level = Arc::clone(inner);
     let last_emit_at = Arc::new(Mutex::new(None::<Instant>));
     const LEVEL_EMIT_MIN_INTERVAL_MS: u64 = 33;
@@ -4196,7 +4217,11 @@ async fn begin_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
             *last = Some(now);
         }
         if let Some(app) = inner_for_level.app.lock().clone() {
-            let _ = app.emit_to("qa", "qa:level", serde_json::json!({ "level": level }));
+            let _ = app.emit_to(
+                qa_event_target(),
+                "qa:level",
+                serde_json::json!({ "level": level }),
+            );
         }
         // 同步把电平推给底部胶囊，让 QA 录音也有跟主听写一致的可视反馈。
         emit_capsule(
@@ -4278,7 +4303,11 @@ async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
     emit_capsule(inner, CapsuleState::Transcribing, 0.0, 0, None, None);
 
     if let Some(app) = inner.app.lock().clone() {
-        let _ = app.emit_to("qa", "qa:state", serde_json::json!({ "kind": "loading" }));
+        let _ = app.emit_to(
+            qa_event_target(),
+            "qa:state",
+            serde_json::json!({ "kind": "loading" }),
+        );
     }
 
     stop_qa_recorder(inner);
@@ -4515,7 +4544,7 @@ async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
     if let Some(app) = inner.app.lock().clone() {
         let messages = inner.qa_state.lock().messages.clone();
         let _ = app.emit_to(
-            "qa",
+            qa_event_target(),
             "qa:state",
             serde_json::json!({
                 "kind": "thinking",
@@ -4552,7 +4581,7 @@ async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
         }
         if let Some(app) = inner_for_delta.app.lock().clone() {
             let _ = app.emit_to(
-                "qa",
+                qa_event_target(),
                 "qa:state",
                 serde_json::json!({
                     "kind": "answer_delta",
@@ -4609,7 +4638,7 @@ async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
     if let Some(app) = inner.app.lock().clone() {
         let messages = inner.qa_state.lock().messages.clone();
         let _ = app.emit_to(
-            "qa",
+            qa_event_target(),
             "qa:state",
             serde_json::json!({
                 "kind": "answer",
@@ -4666,7 +4695,7 @@ fn finish_qa_with_error(inner: &Arc<Inner>, message: String) {
     if let Some(app) = inner.app.lock().clone() {
         let messages = inner.qa_state.lock().messages.clone();
         let _ = app.emit_to(
-            "qa",
+            qa_event_target(),
             "qa:state",
             serde_json::json!({
                 "kind": "error",
@@ -4688,7 +4717,7 @@ fn finish_qa_idle_silently(inner: &Arc<Inner>) {
     if let Some(app) = inner.app.lock().clone() {
         let messages = inner.qa_state.lock().messages.clone();
         let _ = app.emit_to(
-            "qa",
+            qa_event_target(),
             "qa:state",
             serde_json::json!({
                 "kind": "idle",

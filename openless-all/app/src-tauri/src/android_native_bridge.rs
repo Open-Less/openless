@@ -49,6 +49,13 @@ pub fn hide_overlay() -> Result<(), String> {
     Ok(())
 }
 
+pub fn refresh_overlay_if_visible() -> Result<(), String> {
+    if !is_overlay_visible() {
+        return Ok(());
+    }
+    show_overlay()
+}
+
 #[cfg(target_os = "android")]
 fn show_overlay_with_context(
     env: &mut jni::JNIEnv,
@@ -165,6 +172,7 @@ fn spawn_open_qa_from_overlay() {
         log::warn!("[android-native] coordinator unavailable");
         return;
     };
+    log::info!("[android-native] open_qa_from_overlay requested");
     tauri::async_runtime::spawn(async move {
         if let Err(error) = coordinator.open_qa_from_overlay().await {
             log::warn!("[android-native] open_qa_from_overlay failed: {error}");
@@ -177,6 +185,7 @@ fn spawn_finalize_qa_from_overlay() {
         log::warn!("[android-native] coordinator unavailable");
         return;
     };
+    log::info!("[android-native] finalize_qa_from_overlay requested");
     tauri::async_runtime::spawn(async move {
         if let Err(error) = coordinator.finalize_qa_from_overlay().await {
             log::warn!("[android-native] finalize_qa_from_overlay failed: {error}");
