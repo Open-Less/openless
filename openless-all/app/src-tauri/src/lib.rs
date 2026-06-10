@@ -146,7 +146,15 @@ pub fn run() {
                 if let Err(e) = position_capsule_bottom_center(&capsule, false) {
                     log::warn!("[capsule] position failed: {e}");
                 }
-                let _ = capsule.hide();
+                #[cfg(target_os = "macos")]
+                {
+                    crate::coordinator::prepare_capsule_window_for_overlay(&capsule);
+                    let _ = crate::coordinator::hide_capsule_window_preserving_space(&capsule);
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    let _ = capsule.hide();
+                }
             }
 
             // QA 浮窗（issue #118）：紧贴胶囊上方 8pt、屏幕底部居中、380×440。

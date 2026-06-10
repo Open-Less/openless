@@ -4537,6 +4537,48 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "macos")]
+    fn macos_capsule_collection_behavior_joins_spaces_without_conflicts() {
+        let behavior = macos_capsule_collection_behavior(0);
+
+        assert!(
+            behavior & (1 << 0) != 0,
+            "capsule HUD should join all Spaces"
+        );
+        assert_eq!(
+            behavior & (1 << 1),
+            0,
+            "MoveToActiveSpace keeps the HUD out of another app's fullscreen Space"
+        );
+        assert!(behavior & (1 << 3) != 0, "must be transient overlay");
+        assert_eq!(
+            behavior & (1 << 4),
+            0,
+            "Stationary can conflict with independent display Spaces"
+        );
+        assert!(behavior & (1 << 6) != 0, "must stay out of window cycling");
+        assert!(
+            behavior & (1 << 8) != 0,
+            "must appear over fullscreen Spaces"
+        );
+        assert!(
+            macos_capsule_window_level() >= 1500,
+            "capsule must use AssistiveTechHigh-level overlay stacking"
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn macos_capsule_style_mask_is_nonactivating_panel_like() {
+        let style_mask = macos_capsule_style_mask(0);
+
+        assert!(
+            style_mask & (1 << 7) != 0,
+            "capsule should stay non-activating"
+        );
+    }
+
+    #[test]
     #[cfg(target_os = "windows")]
     fn prepared_windows_ime_slot_is_taken_only_for_matching_session() {
         let mut slots = vec![PreparedWindowsImeSessionSlot {
@@ -5127,37 +5169,122 @@ fn show_capsule_window_no_activate<R: tauri::Runtime>(
 }
 
 #[cfg(target_os = "macos")]
+fn macos_capsule_collection_behavior(current: usize) -> usize {
+    const CAN_JOIN_ALL_SPACES: usize = 1 << 0;
+    const MOVE_TO_ACTIVE_SPACE: usize = 1 << 1;
+    const TRANSIENT: usize = 1 << 3;
+    const STATIONARY: usize = 1 << 4;
+    const IGNORES_CYCLE: usize = 1 << 6;
+    const FULL_SCREEN_AUXILIARY: usize = 1 << 8;
+
+    // Mirror Electron's visibleOnAllWorkspaces/fullscreen auxiliary HUD path.
+    // `MoveToActiveSpace` keeps the ordinary Tauri NSWindow tied to the app's
+    // own Space instead of joining another app's native fullscreen Space.
+    let cleared = current & !MOVE_TO_ACTIVE_SPACE & !STATIONARY;
+    cleared | CAN_JOIN_ALL_SPACES | TRANSIENT | IGNORES_CYCLE | FULL_SCREEN_AUXILIARY
+}
+
+#[cfg(target_os = "macos")]
+fn macos_capsule_window_level() -> isize {
+    const K_CG_ASSISTIVE_TECH_HIGH_WINDOW_LEVEL_KEY: i32 = 20;
+
+    #[link(name = "ApplicationServices", kind = "framework")]
+    extern "C" {
+        fn CGWindowLevelForKey(key: i32) -> i32;
+    }
+
+    // Status-level windows can still be composited behind another app's native
+    // fullscreen Space. AssistiveTechHigh is the system overlay level used by
+    // transient accessibility HUDs.
+    unsafe { CGWindowLevelForKey(K_CG_ASSISTIVE_TECH_HIGH_WINDOW_LEVEL_KEY) as isize }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_capsule_style_mask(current: usize) -> usize {
+    const NONACTIVATING_PANEL: usize = 1 << 7;
+
+    current | NONACTIVATING_PANEL
+}
+
+#[cfg(target_os = "macos")]
+fn configure_macos_capsule_window_for_overlay<R: tauri::Runtime>(
+    window: &tauri::WebviewWindow<R>,
+) -> Option<*mut objc2::runtime::AnyObject> {
+    use objc2::msg_send;
+    use objc2::runtime::AnyObject;
+
+    let Ok(handle) = window.ns_window() else {
+        log::warn!("[capsule] macOS overlay configure failed: ns_window unavailable");
+        return None;
+    };
+    let ns_window = handle as *mut AnyObject;
+    if ns_window.is_null() {
+        log::warn!("[capsule] macOS overlay configure failed: ns_window null");
+        return None;
+    }
+
+    unsafe {
+        let before_behavior: usize = msg_send![ns_window, collectionBehavior];
+        let before_style_mask: usize = msg_send![ns_window, styleMask];
+        let after_behavior = macos_capsule_collection_behavior(before_behavior);
+        let after_style_mask = macos_capsule_style_mask(before_style_mask);
+        let level = macos_capsule_window_level();
+        let _: () = msg_send![ns_window, setStyleMask: after_style_mask];
+        let _: () = msg_send![ns_window, setCollectionBehavior: after_behavior];
+        let _: () = msg_send![ns_window, setLevel: level];
+        let _: () = msg_send![ns_window, setCanHide: false];
+        let _: () = msg_send![ns_window, setHidesOnDeactivate: false];
+        let _: () = msg_send![ns_window, setReleasedWhenClosed: false];
+        let _: () = msg_send![ns_window, setIgnoresMouseEvents: true];
+        Some(ns_window)
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn prepare_capsule_window_for_overlay<R: tauri::Runtime>(
+    window: &tauri::WebviewWindow<R>,
+) -> bool {
+    configure_macos_capsule_window_for_overlay(window).is_some()
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn hide_capsule_window_preserving_space<R: tauri::Runtime>(
+    window: &tauri::WebviewWindow<R>,
+) -> bool {
+    use objc2::msg_send;
+
+    let Some(ns_window) = configure_macos_capsule_window_for_overlay(window) else {
+        return false;
+    };
+    unsafe {
+        let _: () = msg_send![ns_window, orderOut: std::ptr::null::<objc2::runtime::AnyObject>()];
+    }
+    true
+}
+
+#[cfg(target_os = "macos")]
 fn show_capsule_window_no_activate<R: tauri::Runtime>(
     _app: &AppHandle<R>,
     window: &tauri::WebviewWindow<R>,
 ) -> bool {
     use objc2::msg_send;
-    use objc2::runtime::AnyObject;
 
-    let Ok(handle) = window.ns_window() else {
+    // emit_capsule 已经把窗口操作 marshal 到 Tauri 主线程；这里不能调用
+    // set_focus()/NSApp.activate，否则 AeroSpace 会把 workspace 切回 OpenLess
+    // 主窗口所在空间。胶囊是 HUD，不是主窗口：通过 all-Spaces +
+    // fullscreen auxiliary 行为挂到用户当前 fullscreen Space。
+    let was_visible = window.is_visible().unwrap_or(false);
+    let Some(ns_window) = configure_macos_capsule_window_for_overlay(window) else {
         return false;
     };
-    let ns_window = handle as *mut AnyObject;
-    if ns_window.is_null() {
-        return false;
-    }
-
-    // emit_capsule 已经把窗口操作 marshal 到 Tauri 主线程；这里不能再调用
-    // window.show()/set_focus()/NSApp.activate，否则 AeroSpace 会把 workspace 切回
-    // OpenLess 主窗口所在空间。先让胶囊加入所有 Spaces，再用
-    // orderFrontRegardless 做无激活展示。
-    if let Err(e) = window.set_visible_on_all_workspaces(true) {
-        log::warn!("[capsule] set visible on all macOS Spaces failed: {e}");
-    }
 
     unsafe {
-        const NS_WINDOW_COLLECTION_BEHAVIOR_CAN_JOIN_ALL_SPACES: usize = 1 << 0;
-        const NS_WINDOW_COLLECTION_BEHAVIOR_FULL_SCREEN_AUXILIARY: usize = 1 << 8;
-        let behavior: usize = msg_send![ns_window, collectionBehavior];
-        let behavior = behavior
-            | NS_WINDOW_COLLECTION_BEHAVIOR_CAN_JOIN_ALL_SPACES
-            | NS_WINDOW_COLLECTION_BEHAVIOR_FULL_SCREEN_AUXILIARY;
-        let _: () = msg_send![ns_window, setCollectionBehavior: behavior];
+        if !was_visible {
+            if let Err(e) = window.show() {
+                log::warn!("[capsule] macOS no_activate pre-show failed: {e}");
+            }
+        }
+
         let _: () = msg_send![ns_window, orderFrontRegardless];
     }
     true
@@ -5396,6 +5523,13 @@ fn emit_capsule(
                 );
             }
             hide_capsule_window_if_present();
+            #[cfg(target_os = "macos")]
+            {
+                if !hide_capsule_window_preserving_space(&window) {
+                    let _ = window.hide();
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
             let _ = window.hide();
         }
         }
