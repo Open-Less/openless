@@ -17,9 +17,6 @@ use parking_lot::Mutex;
 
 use crate::types::{InsertStatus, PasteShortcut};
 
-#[cfg(target_os = "windows")]
-const CLIPBOARD_RESTORE_DELAY: Duration = Duration::from_millis(750);
-
 #[cfg(not(any(target_os = "macos", target_os = "android", target_os = "ios")))]
 const CLIPBOARD_RESTORE_DELAY: Duration = Duration::from_millis(750);
 
