@@ -17,12 +17,18 @@ import android.view.accessibility.AccessibilityWindowInfo
  */
 class OpenLessAccessibilityService : AccessibilityService() {
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val heartbeatRunnable = object : Runnable {
+        override fun run() {
+            markServiceAlive()
+            mainHandler.postDelayed(this, HEARTBEAT_INTERVAL_MS)
+        }
+    }
     private val keyboardRefreshRunnable = Runnable { updateKeyboardOverlayState() }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
-        markServiceAlive()
+        startHeartbeat()
         updateKeyboardOverlayState()
         scheduleKeyboardOverlayRefresh()
     }
@@ -43,6 +49,7 @@ class OpenLessAccessibilityService : AccessibilityService() {
     override fun onInterrupt() = Unit
 
     override fun onDestroy() {
+        mainHandler.removeCallbacks(heartbeatRunnable)
         mainHandler.removeCallbacks(keyboardRefreshRunnable)
         if (instance === this) {
             instance = null
@@ -55,6 +62,11 @@ class OpenLessAccessibilityService : AccessibilityService() {
         for (delayMs in KEYBOARD_REFRESH_DELAYS_MS) {
             mainHandler.postDelayed(keyboardRefreshRunnable, delayMs)
         }
+    }
+
+    private fun startHeartbeat() {
+        mainHandler.removeCallbacks(heartbeatRunnable)
+        heartbeatRunnable.run()
     }
 
     private fun updateKeyboardOverlayState() {
@@ -190,6 +202,7 @@ class OpenLessAccessibilityService : AccessibilityService() {
         private const val TAG = "OpenLessAccessibility"
         private const val PREFS_NAME = "openless_accessibility"
         private const val PREF_KEY_LAST_HEARTBEAT = "last_heartbeat"
+        private const val HEARTBEAT_INTERVAL_MS = 5_000L
         private const val HEARTBEAT_STALE_MS = 15_000L
     }
 }
