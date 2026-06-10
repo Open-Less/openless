@@ -18,7 +18,9 @@ cc = "1.1"
 [dependencies]
 # 锁 ~2.11 因为 npm @tauri-apps/api 与 plugin-dialog 都已升 2.11；
 # tauri build 跨 minor 一致性检查会拒绝 npm 2.11 + Rust 2.10 的组合。
-tauri = { version = "~2.11", features = [] }
+# macos-private-api must live in [dependencies] so tauri_build can match tauri.conf.json
+# macOSPrivateApi; tray-icon stays desktop-only in the target table below.
+tauri = { version = "~2.11", features = ["macos-private-api"] }
 tauri-plugin-shell = "2"
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
