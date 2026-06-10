@@ -13,12 +13,14 @@ const resDest = join(genRoot, 'res');
 const resXmlDest = join(genRoot, 'res/xml');
 
 const KOTLIN_FILES = [
+  'OpenLessAppContext.kt',
   'OpenLessNative.kt',
   'OpenLessAndroidPreferences.kt',
   'OpenLessApplication.kt',
   'OpenLessOverlayService.kt',
   'OpenLessOverlayBridge.kt',
   'OpenLessAccessibilityService.kt',
+  'OpenLessAccessibilityCommandReceiver.kt',
   'OverlayPermissionActivity.kt',
 ];
 

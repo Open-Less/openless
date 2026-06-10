@@ -91,7 +91,11 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
                 recording = true
                 processing = false
                 if (!tryPromoteRecordingForeground()) {
-                    OpenLessNative.nativeCancelDictation()
+                    try {
+                        OpenLessNative.nativeCancelDictation()
+                    } catch (error: Throwable) {
+                        Log.w(TAG, "cancel dictation bridge unavailable", error)
+                    }
                     return
                 }
                 applyVisualState(OverlayVisualState.Recording)
@@ -190,7 +194,14 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
     private fun handleIconClick() {
         if (processing) return
         if (recording) {
-            OpenLessNative.nativeStopDictation()
+            try {
+                OpenLessNative.nativeStopDictation()
+            } catch (error: Throwable) {
+                Log.w(TAG, "stop dictation bridge unavailable", error)
+                recording = false
+                applyVisualState(OverlayVisualState.Error)
+                showToast("语音服务未就绪，请打开 OpenLess 后重试")
+            }
         } else {
             startRecordingFromOverlay()
         }
@@ -288,7 +299,13 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
     private fun startRecordingFromOverlay() {
         showOverlay()
         if (tryPromoteRecordingForeground()) {
-            OpenLessNative.nativeStartDictation()
+            try {
+                OpenLessNative.nativeStartDictation()
+            } catch (error: Throwable) {
+                Log.w(TAG, "start dictation bridge unavailable", error)
+                applyVisualState(OverlayVisualState.Error)
+                showToast("语音服务未就绪，请打开 OpenLess 后重试")
+            }
             return
         }
         applyVisualState(OverlayVisualState.Error)
@@ -374,15 +391,7 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
     }
 
     private fun isKeyboardTriggerMode(): Boolean {
-        OpenLessAndroidPreferences.overlayTriggerMode(this)?.let { mode ->
-            return mode == "keyboard"
-        }
-        return try {
-            OpenLessNative.nativeGetOverlayTriggerMode() == "keyboard"
-        } catch (error: Throwable) {
-            Log.w(TAG, "overlay trigger mode unavailable", error)
-            false
-        }
+        return OpenLessAndroidPreferences.overlayTriggerMode(this) == "keyboard"
     }
 
     private fun showToast(message: String) {

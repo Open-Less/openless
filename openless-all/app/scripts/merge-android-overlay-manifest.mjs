@@ -25,6 +25,7 @@ const SERVICE_SNIPPETS = [
             android:foregroundServiceType="microphone" />`,
   `<service
             android:name=".OpenLessAccessibilityService"
+            android:process=":accessibility"
             android:exported="false"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
             <intent-filter>
@@ -34,6 +35,10 @@ const SERVICE_SNIPPETS = [
                 android:name="android.accessibilityservice"
                 android:resource="@xml/openless_accessibility_config" />
         </service>`,
+  `<receiver
+            android:name=".OpenLessAccessibilityCommandReceiver"
+            android:process=":accessibility"
+            android:exported="false" />`,
   `<activity
             android:name=".OverlayPermissionActivity"
             android:exported="false"

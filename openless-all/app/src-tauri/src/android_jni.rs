@@ -308,6 +308,20 @@ pub mod android {
         )
     }
 
+    pub fn accessibility_operational<'local>(
+        env: &mut JNIEnv<'local>,
+        context: &JObject<'local>,
+    ) -> Result<bool, String> {
+        call_static_bool_with_context_class(
+            env,
+            context,
+            "com.openless.app.OpenLessAccessibilityService",
+            "isOperational",
+            "(Landroid/content/Context;)Z",
+            &[JValue::Object(context)],
+        )
+    }
+
     pub fn launch_accessibility_settings(
         env: &mut JNIEnv,
         context: &JObject,

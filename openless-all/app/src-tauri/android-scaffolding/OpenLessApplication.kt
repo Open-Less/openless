@@ -2,7 +2,9 @@ package com.openless.app
 
 import android.app.Activity
 import android.app.Application
+import android.content.Intent
 import android.os.Bundle
+import android.provider.Settings
 import android.util.Log
 
 /**
@@ -11,6 +13,7 @@ import android.util.Log
 class OpenLessApplication : Application() {
     override fun onCreate() {
         super.onCreate()
+        OpenLessAppContext.initialize(this)
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
             override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = Unit
             override fun onActivityStarted(activity: Activity) {
@@ -35,35 +38,46 @@ class OpenLessApplication : Application() {
         if (trigger != "background" && trigger != "always") {
             return
         }
-        if (!OpenLessNative.nativeCanDrawOverlays(this)) {
+        if (!canDrawOverlays()) {
             return
         }
-        OpenLessNative.nativeShowOverlay(this)
+        sendOverlayAction(OpenLessOverlayService.ACTION_SHOW)
     }
 
     private fun maybeHideOverlayOnForeground() {
         if (effectiveOverlayTriggerMode() == "always") {
-            if (OpenLessNative.nativeCanDrawOverlays(this) && !OpenLessNative.nativeIsOverlayVisible()) {
-                OpenLessNative.nativeShowOverlay(this)
+            if (canDrawOverlays()) {
+                sendOverlayAction(OpenLessOverlayService.ACTION_SHOW)
             }
             return
         }
-        if (OpenLessNative.nativeIsOverlayVisible()) {
-            OpenLessNative.nativeHideOverlay(this)
-        }
+        sendOverlayAction(OpenLessOverlayService.ACTION_HIDE)
     }
 
     private fun effectiveOverlayTriggerMode(): String {
-        val configured = OpenLessAndroidPreferences.overlayTriggerMode(this) ?: try {
-            OpenLessNative.nativeGetOverlayTriggerMode()
-        } catch (error: Throwable) {
-            Log.w(TAG, "overlay trigger mode unavailable", error)
-            "background"
-        }
-        if (configured == "keyboard" && !OpenLessAccessibilityService.isEnabled(this)) {
+        val configured = OpenLessAndroidPreferences.overlayTriggerMode(this) ?: "background"
+        if (configured == "keyboard" && !OpenLessAccessibilityService.isOperational(this)) {
             return "always"
         }
         return configured
+    }
+
+    private fun canDrawOverlays(): Boolean {
+        return if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+            Settings.canDrawOverlays(this)
+        } else {
+            true
+        }
+    }
+
+    private fun sendOverlayAction(action: String) {
+        try {
+            startService(Intent(this, OpenLessOverlayService::class.java).apply {
+                this.action = action
+            })
+        } catch (error: Throwable) {
+            Log.w(TAG, "overlay action failed: $action", error)
+        }
     }
 
     companion object {

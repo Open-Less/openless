@@ -58,8 +58,28 @@ mod android_impl {
     use crate::types::{AndroidAccessibilityState, AndroidAccessibilityStatus as Status};
 
     pub fn get_android_accessibility_status() -> AndroidAccessibilityStatus {
-        match crate::android_jni::android::with_android_env(|env, context| {
+        let enabled = match crate::android_jni::android::with_android_env(|env, context| {
             crate::android_jni::android::accessibility_enabled(env, context)
+        }) {
+            Ok(enabled) => enabled,
+            Err(error) => {
+                return Status {
+                    state: AndroidAccessibilityState::NotEnabled,
+                    enabled: false,
+                    message: error,
+                };
+            }
+        };
+        if !enabled {
+            return Status {
+                state: AndroidAccessibilityState::NotEnabled,
+                enabled: false,
+                message: "请在系统设置中启用 OpenLess 无障碍服务".to_string(),
+            };
+        }
+
+        match crate::android_jni::android::with_android_env(|env, context| {
+            crate::android_jni::android::accessibility_operational(env, context)
         }) {
             Ok(true) => Status {
                 state: AndroidAccessibilityState::Enabled,
@@ -69,7 +89,7 @@ mod android_impl {
             Ok(false) => Status {
                 state: AndroidAccessibilityState::NotEnabled,
                 enabled: false,
-                message: "请在系统设置中启用 OpenLess 无障碍服务".to_string(),
+                message: "无障碍服务已开启，但当前未运行或已被系统标记为故障，请重新开启 OpenLess 无障碍服务".to_string(),
             },
             Err(error) => Status {
                 state: AndroidAccessibilityState::NotEnabled,
