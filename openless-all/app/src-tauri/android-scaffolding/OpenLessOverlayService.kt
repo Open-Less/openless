@@ -129,20 +129,17 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
     }
 
     private fun showOverlay() {
-        rootView?.let { existing ->
-            if (!existing.isAttachedToWindow) {
-                Log.i(TAG, "clearing detached overlay root")
-                rootView = null
-                layoutParams = null
-            } else {
-                Log.i(TAG, "overlay already shown")
-                return
-            }
-        }
-        if (rootView != null) {
+        windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+        reconcileOverlayRoots()
+        overlayRoots.lastOrNull()?.let { existing ->
+            rootView = existing
+            layoutParams = existing.layoutParams as? WindowManager.LayoutParams
+            iconContainer = existing
+            (existing.getChildAt(0) as? ImageView)?.let { iconButton = it }
+            Log.i(TAG, "overlay already shown roots=${overlayRoots.size}")
             return
         }
-        windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+
         val savedPosition = loadSavedPosition()
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -186,7 +183,10 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
             return
         }
         rootView = root
-        Log.i(TAG, "overlay shown x=${params.x} y=${params.y}")
+        synchronized(overlayRoots) {
+            overlayRoots.add(root)
+        }
+        Log.i(TAG, "overlay shown x=${params.x} y=${params.y} roots=${overlayRoots.size}")
         applyVisualState(
             when {
                 recording -> OverlayVisualState.Recording
@@ -197,15 +197,54 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
     }
 
     private fun hideOverlay() {
-        val view = rootView ?: return
-        try {
-            windowManager?.removeView(view)
-            Log.i(TAG, "overlay hidden")
-        } catch (error: Throwable) {
-            Log.w(TAG, "hide overlay failed", error)
+        windowManager = windowManager ?: getSystemService(WINDOW_SERVICE) as WindowManager
+        val views = synchronized(overlayRoots) {
+            (overlayRoots + listOfNotNull(rootView)).distinct().also {
+                overlayRoots.clear()
+            }
+        }
+        views.forEach { view ->
+            removeOverlayRoot(view)
         }
         rootView = null
         layoutParams = null
+        if (views.isNotEmpty()) {
+            Log.i(TAG, "overlay hidden roots=${views.size}")
+        }
+    }
+
+    private fun reconcileOverlayRoots() {
+        val roots = synchronized(overlayRoots) {
+            overlayRoots.filter { it.isAttachedToWindow }.also {
+                overlayRoots.clear()
+                overlayRoots.addAll(it)
+            }
+        }
+        if (roots.isEmpty()) {
+            rootView = null
+            layoutParams = null
+            return
+        }
+        roots.dropLast(1).forEach { staleRoot ->
+            removeOverlayRoot(staleRoot)
+            synchronized(overlayRoots) {
+                overlayRoots.remove(staleRoot)
+            }
+        }
+        val activeRoot = roots.last()
+        rootView = activeRoot
+        layoutParams = activeRoot.layoutParams as? WindowManager.LayoutParams
+        Log.i(TAG, "reconciled overlay roots kept=1 removed=${roots.size - 1}")
+    }
+
+    private fun removeOverlayRoot(view: FrameLayout) {
+        try {
+            if (view.isAttachedToWindow) {
+                windowManager?.removeViewImmediate(view)
+            }
+        } catch (error: Throwable) {
+            Log.w(TAG, "remove overlay root failed", error)
+        }
     }
 
     private fun buildIconButton(): ImageView {
@@ -462,6 +501,8 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         private const val PREF_KEY_Y = "overlay_y"
         private const val NOTIFICATION_ID = 42001
         private const val TAG = "OpenLessOverlayService"
+
+        private val overlayRoots = mutableListOf<FrameLayout>()
 
         @Volatile
         var instance: OpenLessOverlayService? = null
