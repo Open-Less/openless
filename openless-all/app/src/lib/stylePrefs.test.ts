@@ -82,6 +82,8 @@ const previousPrefs: UserPreferences = {
   marketplaceDevLogin: '',
   androidInsertStrategy: 'accessibility',
   androidOverlayTrigger: 'background',
+  androidOverlayActivationMode: 'tap',
+  androidOverlayLeftSwipeAction: 'translation',
 };
 
 const nextPrefs: UserPreferences = {

@@ -342,10 +342,16 @@ export interface UserPreferences {
   androidInsertStrategy: AndroidInsertStrategy;
   /** Android: floating overlay visibility trigger mode. */
   androidOverlayTrigger: AndroidOverlayTrigger;
+  /** Android: how the floating overlay enters the armed interaction state. */
+  androidOverlayActivationMode: AndroidOverlayActivationMode;
+  /** Android: action performed by left swiping while the overlay is armed. */
+  androidOverlayLeftSwipeAction: AndroidOverlayLeftSwipeAction;
 }
 
 export type AndroidInsertStrategy = 'accessibility' | 'clipboard';
 export type AndroidOverlayTrigger = 'background' | 'keyboard' | 'always';
+export type AndroidOverlayActivationMode = 'tap' | 'long_press';
+export type AndroidOverlayLeftSwipeAction = 'translation' | 'style_pack';
 
 export interface AndroidOverlayStatus {
   permission: 'granted' | 'notGranted' | 'notAndroid';

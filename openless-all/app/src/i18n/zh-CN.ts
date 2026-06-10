@@ -823,6 +823,8 @@ export const zhCN = {
       androidAccessibilityImpact: '开启后可在不切换键盘的情况下把结果输出到当前输入框；不开启时仍会复制到剪贴板，需要手动粘贴。',
       androidInsertStrategyLabel: '文本插入策略',
       androidOverlayTriggerLabel: '悬浮窗显示时机',
+      androidOverlayActivationModeLabel: '悬浮窗激活方式',
+      androidOverlayLeftSwipeActionLabel: '左滑动作',
       androidInsertStrategy: {
         accessibility: '自动输出到输入框',
         clipboard: '仅剪贴板',
@@ -843,6 +845,22 @@ export const zhCN = {
       },
       androidOverlayTriggerDisabled: {
         keyboard: '“弹出键盘时”暂缓开放，后续将以悬浮窗手势替代键盘检测。',
+      },
+      androidOverlayActivationMode: {
+        tap: '点按激活',
+        long_press: '长按激活',
+      },
+      androidOverlayActivationModeHint: {
+        tap: '第一次点按进入激活态，第二次点按开始普通听写。',
+        long_press: '按住进入激活态；松开时结束当前录音或问答轮次。',
+      },
+      androidOverlayLeftSwipeAction: {
+        translation: '翻译听写',
+        style_pack: '切换风格包',
+      },
+      androidOverlayLeftSwipeActionHint: {
+        translation: '激活态左滑后按翻译模式录音。',
+        style_pack: '激活态左滑后切换到上一个风格包。',
       },
       windowsIme: {
         installed: '已安装，按需切到 OpenLess 输入法。',

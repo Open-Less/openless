@@ -25,6 +25,8 @@ import { getPlatformCapabilities } from '../../lib/platform';
 import { checkAndroidMicrophoneAccess, requestAndroidMicrophoneAccess } from '../../lib/androidMicrophonePermission';
 import type {
   AndroidAccessibilityStatus,
+  AndroidOverlayActivationMode,
+  AndroidOverlayLeftSwipeAction,
   AndroidInsertStrategy,
   AndroidOverlayStatus,
   AndroidOverlayTrigger,
@@ -48,7 +50,7 @@ export function PermissionsSection() {
   const [platformCaps, setPlatformCaps] = useState<PlatformCapabilities | null>(null);
   const [androidOverlay, setAndroidOverlay] = useState<AndroidOverlayStatus | null>(null);
   const [androidAccessibility, setAndroidAccessibility] = useState<AndroidAccessibilityStatus | null>(null);
-  const [androidPrefs, setAndroidPrefs] = useState<Pick<UserPreferences, 'androidInsertStrategy' | 'androidOverlayTrigger'> | null>(null);
+  const [androidPrefs, setAndroidPrefs] = useState<Pick<UserPreferences, AndroidPreferenceKey> | null>(null);
   const { capability } = useHotkeySettings();
 
   useEffect(() => {
@@ -75,6 +77,8 @@ export function PermissionsSection() {
     setAndroidPrefs({
       androidInsertStrategy: migratedSettings.androidInsertStrategy,
       androidOverlayTrigger: migratedSettings.androidOverlayTrigger,
+      androidOverlayActivationMode: migratedSettings.androidOverlayActivationMode,
+      androidOverlayLeftSwipeAction: migratedSettings.androidOverlayLeftSwipeAction,
     });
   };
 
@@ -168,7 +172,7 @@ export function PermissionsSection() {
     refreshPermissions();
   };
 
-  const updateAndroidPref = async <K extends 'androidInsertStrategy' | 'androidOverlayTrigger'>(key: K, value: UserPreferences[K]) => {
+  const updateAndroidPref = async <K extends AndroidPreferenceKey>(key: K, value: UserPreferences[K]) => {
     const settings = await getSettings();
     const nextValue = key === 'androidOverlayTrigger'
       ? normalizeAndroidOverlayTrigger(value as AndroidOverlayTrigger)
@@ -181,6 +185,8 @@ export function PermissionsSection() {
     setAndroidPrefs({
       androidInsertStrategy: next.androidInsertStrategy,
       androidOverlayTrigger: next.androidOverlayTrigger,
+      androidOverlayActivationMode: next.androidOverlayActivationMode,
+      androidOverlayLeftSwipeAction: next.androidOverlayLeftSwipeAction,
     });
     await refreshAndroid();
   };
@@ -297,6 +303,36 @@ export function PermissionsSection() {
               </span>
             </div>
           </SettingRow>
+          <SettingRow label={t('settings.permissions.androidOverlayActivationModeLabel')}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-end', width: '100%' }}>
+              <select
+                value={androidPrefs?.androidOverlayActivationMode ?? 'tap'}
+                onChange={(event) => { void updateAndroidPref('androidOverlayActivationMode', event.target.value as AndroidOverlayActivationMode); }}
+                style={{ minWidth: 180, maxWidth: '100%' }}
+              >
+                <option value="tap">{t('settings.permissions.androidOverlayActivationMode.tap')}</option>
+                <option value="long_press">{t('settings.permissions.androidOverlayActivationMode.long_press')}</option>
+              </select>
+              <span style={{ fontSize: 11, color: 'var(--ol-ink-4)', textAlign: 'right' }}>
+                {t(`settings.permissions.androidOverlayActivationModeHint.${androidPrefs?.androidOverlayActivationMode ?? 'tap'}`)}
+              </span>
+            </div>
+          </SettingRow>
+          <SettingRow label={t('settings.permissions.androidOverlayLeftSwipeActionLabel')}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-end', width: '100%' }}>
+              <select
+                value={androidPrefs?.androidOverlayLeftSwipeAction ?? 'translation'}
+                onChange={(event) => { void updateAndroidPref('androidOverlayLeftSwipeAction', event.target.value as AndroidOverlayLeftSwipeAction); }}
+                style={{ minWidth: 180, maxWidth: '100%' }}
+              >
+                <option value="translation">{t('settings.permissions.androidOverlayLeftSwipeAction.translation')}</option>
+                <option value="style_pack">{t('settings.permissions.androidOverlayLeftSwipeAction.style_pack')}</option>
+              </select>
+              <span style={{ fontSize: 11, color: 'var(--ol-ink-4)', textAlign: 'right' }}>
+                {t(`settings.permissions.androidOverlayLeftSwipeActionHint.${androidPrefs?.androidOverlayLeftSwipeAction ?? 'translation'}`)}
+              </span>
+            </div>
+          </SettingRow>
         </>
       )}
       {windowsIme?.state !== 'notWindows' && platformCaps?.platform !== 'android' && (
@@ -333,6 +369,12 @@ export function PermissionsSection() {
     </Card>
   );
 }
+
+type AndroidPreferenceKey =
+  | 'androidInsertStrategy'
+  | 'androidOverlayTrigger'
+  | 'androidOverlayActivationMode'
+  | 'androidOverlayLeftSwipeAction';
 
 function normalizeAndroidOverlayTrigger(trigger: AndroidOverlayTrigger): AndroidOverlayTrigger {
   return trigger === 'keyboard' ? 'background' : trigger;

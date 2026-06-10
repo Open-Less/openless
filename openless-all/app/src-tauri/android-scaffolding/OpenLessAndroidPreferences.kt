@@ -13,7 +13,11 @@ object OpenLessAndroidPreferences {
     private const val APP_DIR = "OpenLess"
     private const val PREFERENCES_FILE = "preferences.json"
     private const val KEY_OVERLAY_TRIGGER = "androidOverlayTrigger"
+    private const val KEY_OVERLAY_ACTIVATION_MODE = "androidOverlayActivationMode"
+    private const val KEY_OVERLAY_LEFT_SWIPE_ACTION = "androidOverlayLeftSwipeAction"
     private val VALID_OVERLAY_TRIGGERS = setOf("background", "always")
+    private val VALID_OVERLAY_ACTIVATION_MODES = setOf("tap", "long_press")
+    private val VALID_OVERLAY_LEFT_SWIPE_ACTIONS = setOf("translation", "style_pack")
 
     fun overlayTriggerMode(context: Context): String? {
         val value = readPreferenceString(context, KEY_OVERLAY_TRIGGER) ?: return null
@@ -21,6 +25,18 @@ object OpenLessAndroidPreferences {
             return "background"
         }
         return value.takeIf { it in VALID_OVERLAY_TRIGGERS }
+    }
+
+    fun overlayActivationMode(context: Context): String {
+        return readPreferenceString(context, KEY_OVERLAY_ACTIVATION_MODE)
+            ?.takeIf { it in VALID_OVERLAY_ACTIVATION_MODES }
+            ?: "tap"
+    }
+
+    fun overlayLeftSwipeAction(context: Context): String {
+        return readPreferenceString(context, KEY_OVERLAY_LEFT_SWIPE_ACTION)
+            ?.takeIf { it in VALID_OVERLAY_LEFT_SWIPE_ACTIONS }
+            ?: "translation"
     }
 
     private fun readPreferenceString(context: Context, key: String): String? {

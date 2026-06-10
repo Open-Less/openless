@@ -755,6 +755,12 @@ pub struct UserPreferences {
     /// Android: when to show the floating overlay control.
     #[serde(default = "default_android_overlay_trigger")]
     pub android_overlay_trigger: AndroidOverlayTrigger,
+    /// Android: how the floating overlay enters the armed interaction state.
+    #[serde(default = "default_android_overlay_activation_mode")]
+    pub android_overlay_activation_mode: AndroidOverlayActivationMode,
+    /// Android: action performed by left swiping while the overlay is armed.
+    #[serde(default = "default_android_overlay_left_swipe_action")]
+    pub android_overlay_left_swipe_action: AndroidOverlayLeftSwipeAction,
 }
 
 fn default_local_asr_model() -> String {
@@ -908,6 +914,10 @@ struct UserPreferencesWire {
     android_insert_strategy: AndroidInsertStrategy,
     #[serde(default = "default_android_overlay_trigger")]
     android_overlay_trigger: AndroidOverlayTrigger,
+    #[serde(default = "default_android_overlay_activation_mode")]
+    android_overlay_activation_mode: AndroidOverlayActivationMode,
+    #[serde(default = "default_android_overlay_left_swipe_action")]
+    android_overlay_left_swipe_action: AndroidOverlayLeftSwipeAction,
 }
 
 impl Default for UserPreferencesWire {
@@ -977,6 +987,8 @@ impl Default for UserPreferencesWire {
             marketplace_dev_login: prefs.marketplace_dev_login,
             android_insert_strategy: prefs.android_insert_strategy,
             android_overlay_trigger: prefs.android_overlay_trigger,
+            android_overlay_activation_mode: prefs.android_overlay_activation_mode,
+            android_overlay_left_swipe_action: prefs.android_overlay_left_swipe_action,
         }
     }
 }
@@ -1077,6 +1089,8 @@ impl<'de> Deserialize<'de> for UserPreferences {
                 wire.android_insert_strategy,
             ),
             android_overlay_trigger: wire.android_overlay_trigger.normalized(),
+            android_overlay_activation_mode: wire.android_overlay_activation_mode,
+            android_overlay_left_swipe_action: wire.android_overlay_left_swipe_action,
         })
     }
 }
@@ -1808,6 +1822,8 @@ impl Default for UserPreferences {
             marketplace_dev_login: String::new(),
             android_insert_strategy: default_android_insert_strategy(),
             android_overlay_trigger: default_android_overlay_trigger(),
+            android_overlay_activation_mode: default_android_overlay_activation_mode(),
+            android_overlay_left_swipe_action: default_android_overlay_left_swipe_action(),
         }
     }
 }
@@ -2330,6 +2346,20 @@ impl AndroidOverlayTrigger {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AndroidOverlayActivationMode {
+    Tap,
+    LongPress,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AndroidOverlayLeftSwipeAction {
+    Translation,
+    StylePack,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum AndroidAccessibilityState {
     Enabled,
@@ -2351,6 +2381,14 @@ fn default_android_insert_strategy() -> AndroidInsertStrategy {
 
 fn default_android_overlay_trigger() -> AndroidOverlayTrigger {
     AndroidOverlayTrigger::Background
+}
+
+fn default_android_overlay_activation_mode() -> AndroidOverlayActivationMode {
+    AndroidOverlayActivationMode::Tap
+}
+
+fn default_android_overlay_left_swipe_action() -> AndroidOverlayLeftSwipeAction {
+    AndroidOverlayLeftSwipeAction::Translation
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

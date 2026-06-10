@@ -825,6 +825,8 @@ export const en: typeof zhCN = {
       androidAccessibilityImpact: 'Enable it to output results to the current input field without switching keyboards. If disabled, results are copied to the clipboard for manual paste.',
       androidInsertStrategyLabel: 'Text insertion strategy',
       androidOverlayTriggerLabel: 'Overlay visibility',
+      androidOverlayActivationModeLabel: 'Overlay activation',
+      androidOverlayLeftSwipeActionLabel: 'Left swipe action',
       androidInsertStrategy: {
         accessibility: 'Auto output to input field',
         clipboard: 'Clipboard only',
@@ -845,6 +847,22 @@ export const en: typeof zhCN = {
       },
       androidOverlayTriggerDisabled: {
         keyboard: 'Keyboard-triggered display is shelved. Overlay gestures will replace keyboard detection.',
+      },
+      androidOverlayActivationMode: {
+        tap: 'Tap to arm',
+        long_press: 'Long press to arm',
+      },
+      androidOverlayActivationModeHint: {
+        tap: 'First tap arms the overlay; second tap starts normal dictation.',
+        long_press: 'Hold to arm the overlay; release stops the current recording or QA turn.',
+      },
+      androidOverlayLeftSwipeAction: {
+        translation: 'Translation dictation',
+        style_pack: 'Switch style pack',
+      },
+      androidOverlayLeftSwipeActionHint: {
+        translation: 'Left swipe while armed starts translation dictation.',
+        style_pack: 'Left swipe while armed switches to the previous style pack.',
       },
       windowsIme: {
         installed: 'Installed. Voice input temporarily switches to the OpenLess IME.',

@@ -221,6 +221,8 @@ let mockSettings: UserPreferences = {
     marketplaceDevLogin: "",
     androidInsertStrategy: "accessibility",
     androidOverlayTrigger: "background",
+    androidOverlayActivationMode: "tap",
+    androidOverlayLeftSwipeAction: "translation",
 }
 
 const mockFullStylePrompts: StyleSystemPrompts = {
