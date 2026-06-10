@@ -840,8 +840,11 @@ export const en: typeof zhCN = {
       },
       androidOverlayTriggerHint: {
         background: 'Simple and battery-friendly; no overlay while typing in other apps.',
-        keyboard: 'Shows when an input field opens the keyboard; needs accessibility.',
+        keyboard: 'This mode is shelved. Existing settings are moved back to background.',
         always: 'Always available, but permanently on screen.',
+      },
+      androidOverlayTriggerDisabled: {
+        keyboard: 'Keyboard-triggered display is shelved. Overlay gestures will replace keyboard detection.',
       },
       windowsIme: {
         installed: 'Installed. Voice input temporarily switches to the OpenLess IME.',

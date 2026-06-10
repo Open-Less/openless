@@ -830,7 +830,8 @@ export const ja: typeof zhCN = {
       androidInsertStrategy: { accessibility: '入力欄へ自動出力', clipboard: 'クリップボードのみ' },
       androidInsertStrategyHint: { accessibility: 'アクセシビリティが必要です。使えない場合はクリップボードにコピーします。', clipboard: 'アクセシビリティ権限は不要です。コピー後に手動で貼り付けます。' },
       androidOverlayTrigger: { background: 'バックグラウンド', keyboard: 'キーボード表示時', always: '常時' },
-      androidOverlayTriggerHint: { background: 'シンプル', keyboard: 'アクセシビリティ必要', always: '常に表示' },
+      androidOverlayTriggerHint: { background: 'シンプル', keyboard: 'このモードは保留中です。既存設定はバックグラウンドに戻します。', always: '常に表示' },
+      androidOverlayTriggerDisabled: { keyboard: 'キーボード表示時の表示は保留中です。今後はフローティングウィンドウのジェスチャーで置き換えます。' },
       windowsIme: {
         installed: 'インストール済み。音声入力時に OpenLess IME へ一時的に切り替えます。',
         notInstalled: '未インストール。OpenLess は現在クリップボード / WM_PASTE フォールバックを使用しています。',

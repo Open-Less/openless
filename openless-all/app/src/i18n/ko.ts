@@ -830,7 +830,8 @@ export const ko: typeof zhCN = {
       androidInsertStrategy: { accessibility: '입력칸에 자동 출력', clipboard: '클립보드만' },
       androidInsertStrategyHint: { accessibility: '접근성 서비스가 필요합니다. 사용할 수 없으면 클립보드에 복사합니다.', clipboard: '접근성 권한이 필요 없으며 직접 붙여넣습니다.' },
       androidOverlayTrigger: { background: '백그라운드', keyboard: '키보드 표시 시', always: '항상' },
-      androidOverlayTriggerHint: { background: '단순', keyboard: '접근성 필요', always: '항상 표시' },
+      androidOverlayTriggerHint: { background: '단순', keyboard: '이 모드는 보류되었습니다. 기존 설정은 백그라운드로 되돌립니다.', always: '항상 표시' },
+      androidOverlayTriggerDisabled: { keyboard: '키보드 표시 감지는 보류되었습니다. 이후 오버레이 제스처로 대체합니다.' },
       windowsIme: {
         installed: '설치됨. 음성 입력 시 OpenLess 입력기로 일시 전환됩니다.',
         notInstalled: '설치되지 않음. OpenLess 는 현재 클립보드 / WM_PASTE 폴백을 사용합니다.',

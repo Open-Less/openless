@@ -192,6 +192,7 @@ fn persist_settings<T: SettingsWriter>(
     let mut previous = coord.read_settings();
     sync_dictation_hotkey_legacy_fields(&mut previous);
     sync_dictation_hotkey_legacy_fields(&mut prefs);
+    prefs.android_overlay_trigger = prefs.android_overlay_trigger.normalized();
     reject_hotkey_collisions(&prefs)?;
     let dictation_shortcut_changed = previous.dictation_hotkey != prefs.dictation_hotkey;
     let dictation_mode_changed = previous.hotkey.mode != prefs.hotkey.mode;

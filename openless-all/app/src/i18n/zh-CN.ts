@@ -838,8 +838,11 @@ export const zhCN = {
       },
       androidOverlayTriggerHint: {
         background: '省电、实现简单；其他 App 输入时不会自动出现。',
-        keyboard: '符合“点输入框出键盘即显示”，需无障碍检测输入法窗口。',
+        keyboard: '该模式已暂缓，历史配置会自动改为“应用退到后台”。',
         always: '入口始终可见，但会一直占屏。',
+      },
+      androidOverlayTriggerDisabled: {
+        keyboard: '“弹出键盘时”暂缓开放，后续将以悬浮窗手势替代键盘检测。',
       },
       windowsIme: {
         installed: '已安装，按需切到 OpenLess 输入法。',

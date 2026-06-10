@@ -13,10 +13,13 @@ object OpenLessAndroidPreferences {
     private const val APP_DIR = "OpenLess"
     private const val PREFERENCES_FILE = "preferences.json"
     private const val KEY_OVERLAY_TRIGGER = "androidOverlayTrigger"
-    private val VALID_OVERLAY_TRIGGERS = setOf("background", "keyboard", "always")
+    private val VALID_OVERLAY_TRIGGERS = setOf("background", "always")
 
     fun overlayTriggerMode(context: Context): String? {
         val value = readPreferenceString(context, KEY_OVERLAY_TRIGGER) ?: return null
+        if (value == "keyboard") {
+            return "background"
+        }
         return value.takeIf { it in VALID_OVERLAY_TRIGGERS }
     }
 

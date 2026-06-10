@@ -1073,8 +1073,10 @@ impl<'de> Deserialize<'de> for UserPreferences {
             audio_recording_max_entries: wire.audio_recording_max_entries,
             marketplace_base_url: wire.marketplace_base_url,
             marketplace_dev_login: wire.marketplace_dev_login,
-            android_insert_strategy: normalize_android_insert_strategy(wire.android_insert_strategy),
-            android_overlay_trigger: wire.android_overlay_trigger,
+            android_insert_strategy: normalize_android_insert_strategy(
+                wire.android_insert_strategy,
+            ),
+            android_overlay_trigger: wire.android_overlay_trigger.normalized(),
         })
     }
 }
@@ -2316,6 +2318,15 @@ pub enum AndroidOverlayTrigger {
     Background,
     Keyboard,
     Always,
+}
+
+impl AndroidOverlayTrigger {
+    pub fn normalized(self) -> Self {
+        match self {
+            AndroidOverlayTrigger::Keyboard => AndroidOverlayTrigger::Background,
+            trigger => trigger,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

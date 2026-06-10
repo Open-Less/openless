@@ -828,7 +828,8 @@ export const zhTW: typeof zhCN = {
       androidInsertStrategy: { accessibility: '自動輸出到輸入框', clipboard: '僅剪貼簿' },
       androidInsertStrategyHint: { accessibility: '需要開啟無障礙服務；不可用時會複製到剪貼簿。', clipboard: '不需要無障礙權限，只複製到剪貼簿，由你手動貼上。' },
       androidOverlayTrigger: { background: '退到背景', keyboard: '鍵盤彈出時', always: '常駐' },
-      androidOverlayTriggerHint: { background: '省電', keyboard: '需無障礙', always: '一直佔屏' },
+      androidOverlayTriggerHint: { background: '省電', keyboard: '此模式已暫緩，既有設定會改回退到背景。', always: '一直佔屏' },
+      androidOverlayTriggerDisabled: { keyboard: '「鍵盤彈出時」暫緩開放，後續將以懸浮窗手勢取代鍵盤偵測。' },
       windowsIme: {
         installed: '已安裝。語音輸入時會臨時切換到 OpenLess 輸入法。',
         notInstalled: '未安裝。OpenLess 正在使用剪貼板 / WM_PASTE 兜底。',

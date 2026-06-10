@@ -19,7 +19,6 @@ import {
   requestAndroidOverlayPermission,
   requestMicrophonePermission,
   setSettings,
-  showAndroidOverlay,
 } from '../../lib/ipc';
 import type { NetworkCheckResult } from '../../lib/ipc';
 import { getPlatformCapabilities } from '../../lib/platform';
@@ -63,21 +62,20 @@ export function PermissionsSection() {
       getAndroidAccessibilityStatus(),
       getSettings(),
     ]);
+    let migratedSettings = settings;
+    if (settings.androidOverlayTrigger === 'keyboard') {
+      migratedSettings = {
+        ...settings,
+        androidOverlayTrigger: normalizeAndroidOverlayTrigger(settings.androidOverlayTrigger),
+      };
+      await setSettings(migratedSettings);
+    }
     setAndroidOverlay(overlay);
     setAndroidAccessibility(accessibility);
     setAndroidPrefs({
-      androidInsertStrategy: settings.androidInsertStrategy,
-      androidOverlayTrigger: settings.androidOverlayTrigger,
+      androidInsertStrategy: migratedSettings.androidInsertStrategy,
+      androidOverlayTrigger: migratedSettings.androidOverlayTrigger,
     });
-    if (
-      settings.androidOverlayTrigger === 'keyboard' &&
-      !accessibility.enabled &&
-      overlay.permission === 'granted' &&
-      !overlay.overlayVisible
-    ) {
-      await showAndroidOverlay();
-      setAndroidOverlay(await getAndroidOverlayStatus());
-    }
   };
 
   const refreshPermissions = async () => {
@@ -172,7 +170,13 @@ export function PermissionsSection() {
 
   const updateAndroidPref = async <K extends 'androidInsertStrategy' | 'androidOverlayTrigger'>(key: K, value: UserPreferences[K]) => {
     const settings = await getSettings();
-    const next = { ...settings, [key]: value };
+    const nextValue = key === 'androidOverlayTrigger'
+      ? normalizeAndroidOverlayTrigger(value as AndroidOverlayTrigger)
+      : value;
+    const next = {
+      ...settings,
+      [key]: nextValue,
+    };
     await setSettings(next);
     setAndroidPrefs({
       androidInsertStrategy: next.androidInsertStrategy,
@@ -282,11 +286,14 @@ export function PermissionsSection() {
                 style={{ minWidth: 180, maxWidth: '100%' }}
               >
                 <option value="background">{t('settings.permissions.androidOverlayTrigger.background')}</option>
-                <option value="keyboard">{t('settings.permissions.androidOverlayTrigger.keyboard')}</option>
+                <option value="keyboard" disabled>{t('settings.permissions.androidOverlayTrigger.keyboard')}</option>
                 <option value="always">{t('settings.permissions.androidOverlayTrigger.always')}</option>
               </select>
               <span style={{ fontSize: 11, color: 'var(--ol-ink-4)', textAlign: 'right' }}>
                 {t(`settings.permissions.androidOverlayTriggerHint.${androidPrefs?.androidOverlayTrigger ?? 'background'}`)}
+              </span>
+              <span style={{ fontSize: 11, color: 'var(--ol-ink-4)', textAlign: 'right' }}>
+                {t('settings.permissions.androidOverlayTriggerDisabled.keyboard')}
               </span>
             </div>
           </SettingRow>
@@ -325,6 +332,10 @@ export function PermissionsSection() {
       </SettingRow>
     </Card>
   );
+}
+
+function normalizeAndroidOverlayTrigger(trigger: AndroidOverlayTrigger): AndroidOverlayTrigger {
+  return trigger === 'keyboard' ? 'background' : trigger;
 }
 
 function PermissionPill({ status }: { status: PermissionStatus | 'loading' }) {

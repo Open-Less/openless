@@ -495,7 +495,7 @@ impl Coordinator {
     }
 
     pub fn android_overlay_trigger(&self) -> crate::types::AndroidOverlayTrigger {
-        self.inner.prefs.get().android_overlay_trigger
+        self.inner.prefs.get().android_overlay_trigger.normalized()
     }
 
     pub fn apply_android_overlay_trigger(&self) {
@@ -504,11 +504,6 @@ impl Coordinator {
             use crate::types::AndroidOverlayTrigger;
             match self.android_overlay_trigger() {
                 AndroidOverlayTrigger::Always => {
-                    let _ = crate::android_overlay::show_android_overlay();
-                }
-                AndroidOverlayTrigger::Keyboard
-                    if !crate::android_accessibility::get_android_accessibility_status().enabled =>
-                {
                     let _ = crate::android_overlay::show_android_overlay();
                 }
                 AndroidOverlayTrigger::Background | AndroidOverlayTrigger::Keyboard => {
