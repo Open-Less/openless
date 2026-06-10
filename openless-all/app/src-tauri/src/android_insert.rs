@@ -17,8 +17,9 @@ pub fn android_insert_with_strategy(
         AndroidInsertStrategy::Clipboard => clipboard_fallback(inserter, text),
         AndroidInsertStrategy::Accessibility
         | AndroidInsertStrategy::Auto
-        | AndroidInsertStrategy::Ime => try_accessibility(inserter, text)
-            .unwrap_or_else(|| clipboard_fallback(inserter, text)),
+        | AndroidInsertStrategy::Ime => {
+            try_accessibility(inserter, text).unwrap_or_else(|| clipboard_fallback(inserter, text))
+        }
     }
 }
 

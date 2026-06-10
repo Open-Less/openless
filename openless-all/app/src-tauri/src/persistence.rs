@@ -681,8 +681,8 @@ fn load_android_credentials() -> Result<Option<CredsRoot>> {
     let decoded = base64::engine::general_purpose::STANDARD
         .decode(bytes)
         .context("decode android credentials envelope")?;
-    let root = serde_json::from_slice::<CredsRoot>(&decoded)
-        .context("parse android credentials json")?;
+    let root =
+        serde_json::from_slice::<CredsRoot>(&decoded).context("parse android credentials json")?;
     Ok(Some(root))
 }
 
@@ -1024,59 +1024,59 @@ fn save_credentials(root: &CredsRoot) -> Result<()> {
 
     #[cfg(not(target_os = "android"))]
     {
-    let json = serde_json::to_string(&cleaned).context("encode credentials failed")?;
-    let previous_manifest = get_keyring_password(KEYRING_CREDENTIALS_ACCOUNT)
-        .ok()
-        .flatten()
-        .and_then(|value| read_chunk_manifest(&value));
-    let chunks = chunk_json_payload(&json);
+        let json = serde_json::to_string(&cleaned).context("encode credentials failed")?;
+        let previous_manifest = get_keyring_password(KEYRING_CREDENTIALS_ACCOUNT)
+            .ok()
+            .flatten()
+            .and_then(|value| read_chunk_manifest(&value));
+        let chunks = chunk_json_payload(&json);
 
-    // 先写所有 chunks（稳定名），再写 manifest —— 保证 partial-write 不会让
-    // manifest 指向不完整 chunks。stable name 让 macOS Keychain ACL 一次允许后
-    // 长期有效，不再因 UUID 轮换反复弹窗（这是 PR #277 早期 UUID-rotation
-    // 设计的回退）。
-    for (index, chunk) in chunks.iter().enumerate() {
-        let account = chunk_account(None, index);
-        keyring_entry_for(&account)?
-            .set_password(chunk)
-            .with_context(|| format!("write system credential vault chunk {index}"))?;
-    }
+        // 先写所有 chunks（稳定名），再写 manifest —— 保证 partial-write 不会让
+        // manifest 指向不完整 chunks。stable name 让 macOS Keychain ACL 一次允许后
+        // 长期有效，不再因 UUID 轮换反复弹窗（这是 PR #277 早期 UUID-rotation
+        // 设计的回退）。
+        for (index, chunk) in chunks.iter().enumerate() {
+            let account = chunk_account(None, index);
+            keyring_entry_for(&account)?
+                .set_password(chunk)
+                .with_context(|| format!("write system credential vault chunk {index}"))?;
+        }
 
-    let manifest = CredsChunkManifest {
-        openless_credentials_storage: "chunked".to_string(),
-        version: 1,
-        generation: None,
-        chunks: chunks.len(),
-    };
-    let manifest_json =
-        serde_json::to_string(&manifest).context("encode credential manifest failed")?;
-    keyring_entry()?
-        .set_password(&manifest_json)
-        .context("write system credential vault manifest")?;
+        let manifest = CredsChunkManifest {
+            openless_credentials_storage: "chunked".to_string(),
+            version: 1,
+            generation: None,
+            chunks: chunks.len(),
+        };
+        let manifest_json =
+            serde_json::to_string(&manifest).context("encode credential manifest failed")?;
+        keyring_entry()?
+            .set_password(&manifest_json)
+            .context("write system credential vault manifest")?;
 
-    // 清理旧 chunks：
-    // 1) 旧 manifest 用 UUID generation → 那一代 chunks 全删（迁移到 stable name）
-    // 2) 旧 manifest 也是 stable name，但 chunks 数量比这次多 → 删多余的 idx
-    if let Some(previous) = previous_manifest {
-        match previous.generation.as_deref() {
-            Some(prev_gen) => {
-                for index in 0..previous.chunks {
-                    delete_keyring_password(&chunk_account(Some(prev_gen), index));
+        // 清理旧 chunks：
+        // 1) 旧 manifest 用 UUID generation → 那一代 chunks 全删（迁移到 stable name）
+        // 2) 旧 manifest 也是 stable name，但 chunks 数量比这次多 → 删多余的 idx
+        if let Some(previous) = previous_manifest {
+            match previous.generation.as_deref() {
+                Some(prev_gen) => {
+                    for index in 0..previous.chunks {
+                        delete_keyring_password(&chunk_account(Some(prev_gen), index));
+                    }
                 }
-            }
-            None => {
-                for index in chunks.len()..previous.chunks {
-                    delete_keyring_password(&chunk_account(None, index));
+                None => {
+                    for index in chunks.len()..previous.chunks {
+                        delete_keyring_password(&chunk_account(None, index));
+                    }
                 }
             }
         }
-    }
 
-    remove_legacy_credentials_file_best_effort();
-    // 写完成功后立刻刷新 process cache —— 同进程后续读不再回 Keychain。
-    // 见 CREDENTIALS_CACHE 的 doc。
-    store_credentials_cache(&cleaned);
-    Ok(())
+        remove_legacy_credentials_file_best_effort();
+        // 写完成功后立刻刷新 process cache —— 同进程后续读不再回 Keychain。
+        // 见 CREDENTIALS_CACHE 的 doc。
+        store_credentials_cache(&cleaned);
+        Ok(())
     }
 }
 

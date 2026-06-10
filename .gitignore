@@ -7,7 +7,7 @@ Package.resolved
 xcuserdata/
 DerivedData/
 ChatGPT Image*.jpg
-
+.cursor
 # Local config / secrets
 *.env
 config.local.json
@@ -38,10 +38,19 @@ ci-artifacts/
 *.apk
 
 # Android 真机调试产物（日志 / 截图 / adb 导出 / 数据备份 / 临时还原目录）
+diagnostics/
+android-logs/
+test-captures/
+extracted/
 android-crash*.log
 android-run*.log
-openless-package.txt
+qa-*.log
+qa-*.png
+openless-package*.txt
+openless-screenshot*.png
 openless-android-run*.png
+/openless_*.png
+/run*.png
 openless-appdata*.tar
 openless-run*-ui.xml
 tmp-run*/
