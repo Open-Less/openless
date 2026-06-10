@@ -34,8 +34,11 @@ class OpenLessApplication : Application() {
     }
 
     private fun maybeShowOverlayOnBackground() {
-        val trigger = effectiveOverlayTriggerMode()
-        if (trigger != "background" && trigger != "always") {
+        val configured = configuredOverlayTriggerMode()
+        val shouldShow = configured == "background" ||
+            configured == "always" ||
+            (configured == "keyboard" && !OpenLessAccessibilityService.isOperational(this))
+        if (!shouldShow) {
             return
         }
         if (!canDrawOverlays()) {
@@ -45,7 +48,7 @@ class OpenLessApplication : Application() {
     }
 
     private fun maybeHideOverlayOnForeground() {
-        if (effectiveOverlayTriggerMode() == "always") {
+        if (configuredOverlayTriggerMode() == "always") {
             if (canDrawOverlays()) {
                 sendOverlayAction(OpenLessOverlayService.ACTION_SHOW)
             }
@@ -54,12 +57,8 @@ class OpenLessApplication : Application() {
         sendOverlayAction(OpenLessOverlayService.ACTION_HIDE)
     }
 
-    private fun effectiveOverlayTriggerMode(): String {
-        val configured = OpenLessAndroidPreferences.overlayTriggerMode(this) ?: "background"
-        if (configured == "keyboard" && !OpenLessAccessibilityService.isOperational(this)) {
-            return "always"
-        }
-        return configured
+    private fun configuredOverlayTriggerMode(): String {
+        return OpenLessAndroidPreferences.overlayTriggerMode(this) ?: "background"
     }
 
     private fun canDrawOverlays(): Boolean {
