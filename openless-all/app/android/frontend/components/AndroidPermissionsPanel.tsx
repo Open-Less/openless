@@ -15,6 +15,7 @@ import type {
   AndroidAccessibilityStatus,
   AndroidInsertStrategy,
   AndroidOverlayActivationMode,
+  AndroidOverlayCancelSwipeDirection,
   AndroidOverlayLeftSwipeAction,
   AndroidOverlayStatus,
   AndroidOverlayTrigger,
@@ -52,6 +53,7 @@ export function AndroidPermissionsPanel() {
       androidOverlayTrigger: migratedSettings.androidOverlayTrigger,
       androidOverlayActivationMode: migratedSettings.androidOverlayActivationMode,
       androidOverlayLeftSwipeAction: migratedSettings.androidOverlayLeftSwipeAction,
+      androidOverlayCancelSwipeDirection: migratedSettings.androidOverlayCancelSwipeDirection,
       androidOverlaySizeDp: migratedSettings.androidOverlaySizeDp,
     });
   };
@@ -82,6 +84,7 @@ export function AndroidPermissionsPanel() {
       androidOverlayTrigger: next.androidOverlayTrigger,
       androidOverlayActivationMode: next.androidOverlayActivationMode,
       androidOverlayLeftSwipeAction: next.androidOverlayLeftSwipeAction,
+      androidOverlayCancelSwipeDirection: next.androidOverlayCancelSwipeDirection,
       androidOverlaySizeDp: next.androidOverlaySizeDp,
     });
     await refreshAndroid();
@@ -185,6 +188,21 @@ export function AndroidPermissionsPanel() {
           </select>
           <span style={{ fontSize: 11, color: 'var(--ol-ink-4)', textAlign: 'right' }}>
             {t(`settings.permissions.androidOverlayLeftSwipeActionHint.${androidPrefs?.androidOverlayLeftSwipeAction ?? 'translation'}`)}
+          </span>
+        </div>
+      </SettingRow>
+      <SettingRow label={t('settings.permissions.androidOverlayCancelSwipeDirectionLabel')}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-end', width: '100%' }}>
+          <select
+            value={androidPrefs?.androidOverlayCancelSwipeDirection ?? 'up'}
+            onChange={(event) => { void updateAndroidPref('androidOverlayCancelSwipeDirection', event.target.value as AndroidOverlayCancelSwipeDirection); }}
+            style={{ minWidth: 180, maxWidth: '100%' }}
+          >
+            <option value="up">{t('settings.permissions.androidOverlayCancelSwipeDirection.up')}</option>
+            <option value="down">{t('settings.permissions.androidOverlayCancelSwipeDirection.down')}</option>
+          </select>
+          <span style={{ fontSize: 11, color: 'var(--ol-ink-4)', textAlign: 'right' }}>
+            {t(`settings.permissions.androidOverlayCancelSwipeDirectionHint.${androidPrefs?.androidOverlayCancelSwipeDirection ?? 'up'}`)}
           </span>
         </div>
       </SettingRow>

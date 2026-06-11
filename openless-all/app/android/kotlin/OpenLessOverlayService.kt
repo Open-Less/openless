@@ -133,7 +133,7 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         }
     }
 
-    private fun showOverlay() {
+    private fun showOverlay() = withOverlayLock {
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         reconcileOverlayRoots()
         overlayRoots.lastOrNull()?.let { existing ->
@@ -143,11 +143,12 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
             (existing.getChildAt(0) as? ImageView)?.let { iconButton = it }
             applyOverlaySize(existing)
             layoutParams?.let { params ->
+                attachDragHandler(existing, params)
                 clampToScreen(params)
                 windowManager?.updateViewLayout(existing, params)
             }
             Log.i(TAG, "overlay already shown roots=${overlayRoots.size}")
-            return
+            return@withOverlayLock
         }
 
         val savedPosition = loadSavedPosition()
@@ -190,7 +191,7 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         } catch (error: Throwable) {
             Log.w(TAG, "show overlay failed", error)
             layoutParams = null
-            return
+            return@withOverlayLock
         }
         rootView = root
         synchronized(overlayRoots) {
@@ -207,7 +208,7 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         )
     }
 
-    private fun hideOverlay() {
+    private fun hideOverlay() = withOverlayLock {
         windowManager = windowManager ?: getSystemService(WINDOW_SERVICE) as WindowManager
         val views = synchronized(overlayRoots) {
             (overlayRoots + listOfNotNull(rootView)).distinct().also {
@@ -226,7 +227,7 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
 
     private fun reconcileOverlayRoots() {
         val roots = synchronized(overlayRoots) {
-            overlayRoots.filter { it.isAttachedToWindow }.also {
+            (overlayRoots + listOfNotNull(rootView)).distinct().filter { it.isAttachedToWindow }.also {
                 overlayRoots.clear()
                 overlayRoots.addAll(it)
             }
@@ -243,6 +244,10 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
             }
         }
         val activeRoot = roots.last()
+        synchronized(overlayRoots) {
+            overlayRoots.clear()
+            overlayRoots.add(activeRoot)
+        }
         rootView = activeRoot
         layoutParams = activeRoot.layoutParams as? WindowManager.LayoutParams
         Log.i(TAG, "reconciled overlay roots kept=1 removed=${roots.size - 1}")
@@ -339,6 +344,13 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
                 MotionEvent.ACTION_MOVE -> {
                     val dx = event.rawX.toInt() - dragStartX
                     val dy = event.rawY.toInt() - dragStartY
+                    val verticalSwipe = detectVerticalSwipe(dx, dy)
+                    if (recording && verticalSwipe != null && matchesConfiguredCancelSwipe(verticalSwipe) && !swipeConsumed) {
+                        pendingSwipe = verticalSwipe
+                        swipeConsumed = true
+                        applySwipePreview(verticalSwipe)
+                        return@setOnTouchListener true
+                    }
                     val swipe = detectHorizontalSwipe(dx, dy)
                     if ((recording || armed || longPressRecording) && swipe != null && !swipeConsumed) {
                         pendingSwipe = swipe
@@ -447,10 +459,24 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         return if (dx < 0) SwipeDirection.Left else SwipeDirection.Right
     }
 
+    private fun detectVerticalSwipe(dx: Int, dy: Int): SwipeDirection? {
+        if (abs(dy) < dp(SWIPE_THRESHOLD_DP)) return null
+        if (abs(dx) > abs(dy) * SWIPE_VERTICAL_RATIO) return null
+        return if (dy < 0) SwipeDirection.Up else SwipeDirection.Down
+    }
+
+    private fun matchesConfiguredCancelSwipe(direction: SwipeDirection): Boolean {
+        val configured = OpenLessAndroidPreferences.overlayCancelSwipeDirection(this)
+        return (direction == SwipeDirection.Up && configured == "up") ||
+            (direction == SwipeDirection.Down && configured == "down")
+    }
+
     private fun applySwipePreview(direction: SwipeDirection) {
         when (direction) {
             SwipeDirection.Left -> applyVisualState(OverlayVisualState.Armed)
             SwipeDirection.Right -> applyVisualState(OverlayVisualState.Processing)
+            SwipeDirection.Up,
+            SwipeDirection.Down -> applyVisualState(OverlayVisualState.Error)
         }
     }
 
@@ -459,6 +485,27 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         when (direction) {
             SwipeDirection.Left -> handleLeftSwipe()
             SwipeDirection.Right -> finalizeQaFromOverlay()
+            SwipeDirection.Up,
+            SwipeDirection.Down -> cancelRecordingFromOverlay(direction)
+        }
+    }
+
+    private fun cancelRecordingFromOverlay(direction: SwipeDirection) {
+        if (!recording || !matchesConfiguredCancelSwipe(direction)) {
+            return
+        }
+        try {
+            OpenLessNative.nativeCancelDictation()
+            recording = false
+            processing = false
+            longPressRecording = false
+            setArmed(false)
+            applyVisualState(OverlayVisualState.Idle)
+            Log.i(TAG, "recording cancelled from overlay direction=$direction")
+        } catch (error: Throwable) {
+            Log.w(TAG, "cancel dictation bridge unavailable", error)
+            applyVisualState(OverlayVisualState.Error)
+            showToast("语音服务未就绪，请打开 OpenLess 后重试")
         }
     }
 
@@ -648,6 +695,12 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         return (value * resources.displayMetrics.density).toInt()
     }
 
+    private inline fun <T> withOverlayLock(block: () -> T): T {
+        return synchronized(overlayLock) {
+            block()
+        }
+    }
+
     private data class VisualStyle(
         val alpha: Float,
         val fill: Int,
@@ -667,6 +720,8 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
     private enum class SwipeDirection {
         Left,
         Right,
+        Up,
+        Down,
     }
 
     companion object {
@@ -690,6 +745,7 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         private const val NOTIFICATION_ID = 42001
         private const val TAG = "OpenLessOverlayService"
 
+        private val overlayLock = Any()
         private val overlayRoots = mutableListOf<FrameLayout>()
 
         @Volatile

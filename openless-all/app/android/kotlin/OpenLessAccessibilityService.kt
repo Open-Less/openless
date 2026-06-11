@@ -1,16 +1,22 @@
 package com.openless.app
 
 import android.accessibilityservice.AccessibilityService
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.graphics.Rect
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.ResultReceiver
 import android.provider.Settings
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Detects IME windows for overlay keyboard trigger mode and performs paste insertion.
@@ -24,6 +30,7 @@ class OpenLessAccessibilityService : AccessibilityService() {
         }
     }
     private val keyboardRefreshRunnable = Runnable { updateKeyboardOverlayState() }
+    private var lastEditableFocus: AccessibilityNodeInfo? = null
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -40,6 +47,7 @@ class OpenLessAccessibilityService : AccessibilityService() {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
             AccessibilityEvent.TYPE_WINDOWS_CHANGED,
             AccessibilityEvent.TYPE_VIEW_FOCUSED -> {
+                rememberFocusedEditable(event)
                 updateKeyboardOverlayState()
                 scheduleKeyboardOverlayRefresh()
             }
@@ -51,6 +59,8 @@ class OpenLessAccessibilityService : AccessibilityService() {
     override fun onDestroy() {
         mainHandler.removeCallbacks(heartbeatRunnable)
         mainHandler.removeCallbacks(keyboardRefreshRunnable)
+        lastEditableFocus?.recycle()
+        lastEditableFocus = null
         if (instance === this) {
             instance = null
         }
@@ -120,17 +130,110 @@ class OpenLessAccessibilityService : AccessibilityService() {
     }
 
     private fun performPasteToFocusedField(): Boolean {
-        val root = rootInActiveWindow ?: return false
-        val focused = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
-            ?: root.findFocus(AccessibilityNodeInfo.FOCUS_ACCESSIBILITY)
-            ?: return false
-        if (!focused.isEditable) {
-            focused.recycle()
-            return false
+        val target = findEditableTarget() ?: return false
+        return try {
+            target.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+            pasteWithRetryOrSetText(target)
+        } finally {
+            target.recycle()
         }
-        val pasted = focused.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+    }
+
+    private fun rememberFocusedEditable(event: AccessibilityEvent) {
+        val source = event.source ?: return
+        try {
+            if (!source.isEditable) return
+            lastEditableFocus?.recycle()
+            lastEditableFocus = AccessibilityNodeInfo.obtain(source)
+        } finally {
+            source.recycle()
+        }
+    }
+
+    private fun findEditableTarget(): AccessibilityNodeInfo? {
+        lastEditableFocus?.let { cached ->
+            if (cached.refresh() && cached.isEditable) {
+                return AccessibilityNodeInfo.obtain(cached)
+            }
+        }
+        val root = rootInActiveWindow ?: return null
+        editableFocusedNode(root, AccessibilityNodeInfo.FOCUS_INPUT)?.let { return it }
+        editableFocusedNode(root, AccessibilityNodeInfo.FOCUS_ACCESSIBILITY)?.let { return it }
+        return findEditableInTree(root, 0)
+    }
+
+    private fun editableFocusedNode(root: AccessibilityNodeInfo, focusType: Int): AccessibilityNodeInfo? {
+        val focused = root.findFocus(focusType) ?: return null
+        if (focused.isEditable) {
+            return focused
+        }
         focused.recycle()
-        return pasted
+        return null
+    }
+
+    private fun findEditableInTree(node: AccessibilityNodeInfo, depth: Int): AccessibilityNodeInfo? {
+        if (depth > MAX_EDITABLE_SEARCH_DEPTH) return null
+        var firstEditable: AccessibilityNodeInfo? = null
+        if (node.isEditable) {
+            if (node.isFocused) {
+                return AccessibilityNodeInfo.obtain(node)
+            }
+            firstEditable = AccessibilityNodeInfo.obtain(node)
+        }
+        for (index in 0 until node.childCount) {
+            val child = node.getChild(index) ?: continue
+            try {
+                findEditableInTree(child, depth + 1)?.let { found ->
+                    firstEditable?.recycle()
+                    return found
+                }
+            } finally {
+                child.recycle()
+            }
+        }
+        return firstEditable
+    }
+
+    private fun pasteWithRetryOrSetText(target: AccessibilityNodeInfo): Boolean {
+        sleepQuietly(PASTE_INITIAL_DELAY_MS)
+        repeat(PASTE_RETRY_COUNT) { attempt ->
+            if (target.performAction(AccessibilityNodeInfo.ACTION_PASTE)) {
+                Log.i(TAG, "paste=true attempt=${attempt + 1} package=${target.packageName}")
+                return true
+            }
+            sleepQuietly(PASTE_RETRY_DELAY_MS)
+        }
+        val setText = appendClipboardTextWithSetText(target)
+        Log.i(TAG, "paste=false setText=$setText package=${target.packageName}")
+        return setText
+    }
+
+    private fun appendClipboardTextWithSetText(target: AccessibilityNodeInfo): Boolean {
+        if (target.isPassword) return false
+        val clipboardText = clipboardText().takeIf { it.isNotEmpty() } ?: return false
+        val existingText = target.text?.toString().orEmpty()
+        val args = Bundle().apply {
+            putCharSequence(
+                AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
+                existingText + clipboardText,
+            )
+        }
+        return target.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+    }
+
+    private fun clipboardText(): String {
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return ""
+        val clip = clipboard.primaryClip ?: return ""
+        if (clip.itemCount <= 0) return ""
+        return clip.getItemAt(0)?.coerceToText(this)?.toString().orEmpty()
+    }
+
+    private fun sleepQuietly(delayMs: Long) {
+        try {
+            Thread.sleep(delayMs)
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+        }
     }
 
     private fun captureSelectedTextFromFocusedNode(): String {
@@ -227,12 +330,25 @@ class OpenLessAccessibilityService : AccessibilityService() {
         private fun sendPasteRequestToAccessibilityProcess(): Boolean {
             val context = OpenLessAppContext.context ?: return false
             if (!isOperational(context)) return false
+            val latch = CountDownLatch(1)
+            val success = AtomicBoolean(false)
+            val receiver = object : ResultReceiver(null) {
+                override fun onReceiveResult(resultCode: Int, resultData: Bundle?) {
+                    success.set(resultCode == OpenLessAccessibilityCommandReceiver.RESULT_PASTE_SUCCESS)
+                    latch.countDown()
+                }
+            }
             return try {
                 val intent = Intent(context, OpenLessAccessibilityCommandReceiver::class.java).apply {
                     action = OpenLessAccessibilityCommandReceiver.ACTION_PASTE
+                    putExtra(OpenLessAccessibilityCommandReceiver.EXTRA_RESULT_RECEIVER, receiver)
                 }
                 context.sendBroadcast(intent)
-                true
+                if (!latch.await(PASTE_COMMAND_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
+                    Log.w(TAG, "accessibility paste result timed out")
+                    return false
+                }
+                success.get()
             } catch (error: Throwable) {
                 Log.w(TAG, "send accessibility paste request failed", error)
                 false
@@ -243,6 +359,11 @@ class OpenLessAccessibilityService : AccessibilityService() {
         private fun prefsMode(): Int = Context.MODE_PRIVATE or Context.MODE_MULTI_PROCESS
 
         private val KEYBOARD_REFRESH_DELAYS_MS = longArrayOf(120L, 360L, 900L, 1600L)
+        private const val MAX_EDITABLE_SEARCH_DEPTH = 4
+        private const val PASTE_INITIAL_DELAY_MS = 50L
+        private const val PASTE_RETRY_COUNT = 3
+        private const val PASTE_RETRY_DELAY_MS = 80L
+        private const val PASTE_COMMAND_TIMEOUT_MS = 800L
         private const val TAG = "OpenLessAccessibility"
         private const val PREFS_NAME = "openless_accessibility"
         private const val PREF_KEY_LAST_HEARTBEAT = "last_heartbeat"

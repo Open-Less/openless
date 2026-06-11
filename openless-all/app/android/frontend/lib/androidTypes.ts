@@ -4,6 +4,7 @@ export type AndroidInsertStrategy = 'accessibility' | 'clipboard';
 export type AndroidOverlayTrigger = 'background' | 'keyboard' | 'always';
 export type AndroidOverlayActivationMode = 'tap' | 'long_press';
 export type AndroidOverlayLeftSwipeAction = 'translation' | 'style_pack';
+export type AndroidOverlayCancelSwipeDirection = 'up' | 'down';
 
 export interface AndroidOverlayStatus {
   permission: 'granted' | 'notGranted' | 'notAndroid';
@@ -22,6 +23,7 @@ export type AndroidPreferenceKey =
   | 'androidOverlayTrigger'
   | 'androidOverlayActivationMode'
   | 'androidOverlayLeftSwipeAction'
+  | 'androidOverlayCancelSwipeDirection'
   | 'androidOverlaySizeDp';
 
 export function normalizeAndroidOverlayTrigger(

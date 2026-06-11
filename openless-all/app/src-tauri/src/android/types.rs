@@ -43,6 +43,13 @@ pub enum AndroidOverlayLeftSwipeAction {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AndroidOverlayCancelSwipeDirection {
+    Up,
+    Down,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum AndroidAccessibilityState {
     Enabled,
@@ -72,6 +79,10 @@ pub fn default_android_overlay_activation_mode() -> AndroidOverlayActivationMode
 
 pub fn default_android_overlay_left_swipe_action() -> AndroidOverlayLeftSwipeAction {
     AndroidOverlayLeftSwipeAction::Translation
+}
+
+pub fn default_android_overlay_cancel_swipe_direction() -> AndroidOverlayCancelSwipeDirection {
+    AndroidOverlayCancelSwipeDirection::Up
 }
 
 pub fn default_android_overlay_size_dp() -> u32 {

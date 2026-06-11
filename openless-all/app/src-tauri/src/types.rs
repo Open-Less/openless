@@ -6,16 +6,17 @@ use serde::{Deserialize, Serialize};
 #[path = "android/types.rs"]
 pub mod android_types;
 
-pub use android_types::{
-    AndroidAccessibilityState, AndroidAccessibilityStatus, AndroidInsertStrategy,
-    AndroidOverlayActivationMode, AndroidOverlayLeftSwipeAction, AndroidOverlayPermissionState,
-    AndroidOverlayStatus, AndroidOverlayTrigger,
-};
 use android_types::{
     default_android_insert_strategy, default_android_overlay_activation_mode,
-    default_android_overlay_left_swipe_action, default_android_overlay_size_dp,
-    default_android_overlay_trigger, normalize_android_insert_strategy,
-    normalize_android_overlay_size_dp,
+    default_android_overlay_cancel_swipe_direction, default_android_overlay_left_swipe_action,
+    default_android_overlay_size_dp, default_android_overlay_trigger,
+    normalize_android_insert_strategy, normalize_android_overlay_size_dp,
+};
+pub use android_types::{
+    AndroidAccessibilityState, AndroidAccessibilityStatus, AndroidInsertStrategy,
+    AndroidOverlayActivationMode, AndroidOverlayCancelSwipeDirection,
+    AndroidOverlayLeftSwipeAction, AndroidOverlayPermissionState, AndroidOverlayStatus,
+    AndroidOverlayTrigger,
 };
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -776,6 +777,9 @@ pub struct UserPreferences {
     /// Android: action performed by left swiping while the overlay is armed.
     #[serde(default = "default_android_overlay_left_swipe_action")]
     pub android_overlay_left_swipe_action: AndroidOverlayLeftSwipeAction,
+    /// Android: vertical swipe direction that cancels recording.
+    #[serde(default = "default_android_overlay_cancel_swipe_direction")]
+    pub android_overlay_cancel_swipe_direction: AndroidOverlayCancelSwipeDirection,
     /// Android: floating overlay control diameter in dp.
     #[serde(default = "default_android_overlay_size_dp")]
     pub android_overlay_size_dp: u32,
@@ -936,6 +940,8 @@ struct UserPreferencesWire {
     android_overlay_activation_mode: AndroidOverlayActivationMode,
     #[serde(default = "default_android_overlay_left_swipe_action")]
     android_overlay_left_swipe_action: AndroidOverlayLeftSwipeAction,
+    #[serde(default = "default_android_overlay_cancel_swipe_direction")]
+    android_overlay_cancel_swipe_direction: AndroidOverlayCancelSwipeDirection,
     #[serde(default = "default_android_overlay_size_dp")]
     android_overlay_size_dp: u32,
 }
@@ -1009,6 +1015,7 @@ impl Default for UserPreferencesWire {
             android_overlay_trigger: prefs.android_overlay_trigger,
             android_overlay_activation_mode: prefs.android_overlay_activation_mode,
             android_overlay_left_swipe_action: prefs.android_overlay_left_swipe_action,
+            android_overlay_cancel_swipe_direction: prefs.android_overlay_cancel_swipe_direction,
             android_overlay_size_dp: prefs.android_overlay_size_dp,
         }
     }
@@ -1112,6 +1119,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             android_overlay_trigger: wire.android_overlay_trigger.normalized(),
             android_overlay_activation_mode: wire.android_overlay_activation_mode,
             android_overlay_left_swipe_action: wire.android_overlay_left_swipe_action,
+            android_overlay_cancel_swipe_direction: wire.android_overlay_cancel_swipe_direction,
             android_overlay_size_dp: normalize_android_overlay_size_dp(
                 wire.android_overlay_size_dp,
             ),
@@ -1839,6 +1847,8 @@ impl Default for UserPreferences {
             android_overlay_trigger: default_android_overlay_trigger(),
             android_overlay_activation_mode: default_android_overlay_activation_mode(),
             android_overlay_left_swipe_action: default_android_overlay_left_swipe_action(),
+            android_overlay_cancel_swipe_direction: default_android_overlay_cancel_swipe_direction(
+            ),
             android_overlay_size_dp: default_android_overlay_size_dp(),
         }
     }

@@ -12,7 +12,7 @@ export async function checkAndroidMicrophoneAccess(): Promise<AppPermissionStatu
     }
     if (nativeStatus === 'denied' || nativeStatus === 'restricted') {
       localStorage.removeItem(ANDROID_MIC_GRANTED_KEY);
-      return nativeStatus;
+      return 'denied';
     }
   } catch {
     // Fall through to WebView-local checks below.
@@ -48,7 +48,6 @@ export async function requestAndroidMicrophoneAccess(): Promise<AppPermissionSta
     }
     if (nativeStatus === 'denied' || nativeStatus === 'restricted') {
       localStorage.removeItem(ANDROID_MIC_GRANTED_KEY);
-      return nativeStatus;
     }
   } catch {
     // Fall through to WebView-local checks below.
@@ -87,7 +86,11 @@ export async function requestAndroidMicrophoneAccess(): Promise<AppPermissionSta
     return 'granted';
   } catch (error) {
     console.warn('[android-mic] WebView microphone permission request failed', error);
-    return 'granted';
+    localStorage.removeItem(ANDROID_MIC_GRANTED_KEY);
+    if (error instanceof DOMException && error.name === 'NotAllowedError') {
+      return 'denied';
+    }
+    return 'notDetermined';
   } finally {
     stream?.getTracks().forEach(track => track.stop());
   }

@@ -6,6 +6,7 @@ import type {
   AndroidAccessibilityStatus,
   AndroidInsertStrategy,
   AndroidOverlayActivationMode,
+  AndroidOverlayCancelSwipeDirection,
   AndroidOverlayLeftSwipeAction,
   AndroidOverlayStatus,
   AndroidOverlayTrigger,
@@ -15,6 +16,7 @@ export type {
   AndroidAccessibilityStatus,
   AndroidInsertStrategy,
   AndroidOverlayActivationMode,
+  AndroidOverlayCancelSwipeDirection,
   AndroidOverlayLeftSwipeAction,
   AndroidOverlayStatus,
   AndroidOverlayTrigger,
@@ -364,6 +366,8 @@ export interface UserPreferences {
   androidOverlayActivationMode: AndroidOverlayActivationMode;
   /** Android: action performed by left swiping while the overlay is armed. */
   androidOverlayLeftSwipeAction: AndroidOverlayLeftSwipeAction;
+  /** Android: vertical swipe direction that cancels recording. */
+  androidOverlayCancelSwipeDirection: AndroidOverlayCancelSwipeDirection;
   /** Android: floating overlay control diameter in dp. */
   androidOverlaySizeDp: number;
 }

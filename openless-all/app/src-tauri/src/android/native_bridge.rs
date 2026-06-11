@@ -37,9 +37,6 @@ pub fn show_overlay() -> Result<(), String> {
 }
 
 pub fn hide_overlay() -> Result<(), String> {
-    if !is_overlay_visible() {
-        return Ok(());
-    }
     #[cfg(target_os = "android")]
     {
         crate::android::jni::android::with_android_env(|env, context| {

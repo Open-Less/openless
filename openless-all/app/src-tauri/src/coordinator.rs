@@ -519,6 +519,7 @@ impl Coordinator {
             use crate::types::AndroidOverlayTrigger;
             match self.android_overlay_trigger() {
                 AndroidOverlayTrigger::Always => {
+                    let _ = crate::android::hide_android_overlay();
                     let _ = crate::android::show_android_overlay();
                 }
                 AndroidOverlayTrigger::Background | AndroidOverlayTrigger::Keyboard => {

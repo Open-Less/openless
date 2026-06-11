@@ -190,6 +190,7 @@ let mockSettings: UserPreferences = {
     androidOverlayTrigger: "background",
     androidOverlayActivationMode: "tap",
     androidOverlayLeftSwipeAction: "translation",
+    androidOverlayCancelSwipeDirection: "up",
     androidOverlaySizeDp: 72,
 }
 

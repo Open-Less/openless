@@ -832,6 +832,7 @@ export const ja: typeof zhCN = {
       androidOverlayTriggerLabel: '表示タイミング',
       androidOverlayActivationModeLabel: '起動方法',
       androidOverlayLeftSwipeActionLabel: '左スワイプ動作',
+      androidOverlayCancelSwipeDirectionLabel: 'キャンセル方向',
       androidOverlaySizeLabel: 'オーバーレイサイズ',
       androidOverlaySizeHint: 'フローティングボタンの直径を調整し、現在位置を保持します。',
       androidInsertStrategy: { accessibility: '入力欄へ自動出力', clipboard: 'クリップボードのみ' },
@@ -843,6 +844,8 @@ export const ja: typeof zhCN = {
       androidOverlayActivationModeHint: { tap: '1回目のタップで待機状態に入り、2回目のタップで通常の音声入力を開始します。', long_press: '押している間だけ待機状態に入り、離すと現在の録音またはQAターンを終了します。' },
       androidOverlayLeftSwipeAction: { translation: '翻訳入力', style_pack: 'スタイルパック切替' },
       androidOverlayLeftSwipeActionHint: { translation: '待機状態で左スワイプすると翻訳入力を開始します。', style_pack: '待機状態で左スワイプすると前のスタイルパックへ切り替えます。' },
+      androidOverlayCancelSwipeDirection: { up: '上へスワイプ', down: '下へスワイプ' },
+      androidOverlayCancelSwipeDirectionHint: { up: '録音中に上へスワイプすると、文字起こしや挿入をせずにキャンセルします。', down: '録音中に下へスワイプすると、文字起こしや挿入をせずにキャンセルします。' },
       windowsIme: {
         installed: 'インストール済み。音声入力時に OpenLess IME へ一時的に切り替えます。',
         notInstalled: '未インストール。OpenLess は現在クリップボード / WM_PASTE フォールバックを使用しています。',

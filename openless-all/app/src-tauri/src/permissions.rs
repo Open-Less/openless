@@ -258,11 +258,21 @@ mod platform {
         PermissionStatus::NotApplicable
     }
 
-    /// Android 麦克风：runtime permission 由前端 WebView/系统授权流程触发并维护。
-    /// Rust 侧没有稳定的直接 query hook；这里避免在已授权后被桌面权限门禁拦截。
-    /// 真实录音能力仍由用户触发 dictation 时的 Recorder::start 决定。
     pub fn check_microphone() -> PermissionStatus {
-        PermissionStatus::Granted
+        match crate::android::jni::android::with_android_env(|env, context| {
+            crate::android::jni::android::check_self_permission(
+                env,
+                context,
+                "android.permission.RECORD_AUDIO",
+            )
+        }) {
+            Ok(true) => PermissionStatus::Granted,
+            Ok(false) => PermissionStatus::Denied,
+            Err(error) => {
+                log::warn!("[mic] Android RECORD_AUDIO permission check failed: {error}");
+                PermissionStatus::NotDetermined
+            }
+        }
     }
 
     pub fn request_microphone() -> PermissionStatus {

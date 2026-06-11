@@ -830,6 +830,7 @@ export const zhTW: typeof zhCN = {
       androidOverlayTriggerLabel: '懸浮窗顯示時機',
       androidOverlayActivationModeLabel: '懸浮窗啟用方式',
       androidOverlayLeftSwipeActionLabel: '左滑動作',
+      androidOverlayCancelSwipeDirectionLabel: '取消錄音滑向',
       androidOverlaySizeLabel: '懸浮窗大小',
       androidOverlaySizeHint: '調整懸浮按鈕直徑，儲存後在目前懸浮窗上生效並保留位置。',
       androidInsertStrategy: { accessibility: '自動輸出到輸入框', clipboard: '僅剪貼簿' },
@@ -841,6 +842,8 @@ export const zhTW: typeof zhCN = {
       androidOverlayActivationModeHint: { tap: '第一次點按進入啟用狀態，第二次點按開始普通聽寫。', long_press: '按住進入啟用狀態；放開時結束目前錄音或問答輪次。' },
       androidOverlayLeftSwipeAction: { translation: '翻譯聽寫', style_pack: '切換風格包' },
       androidOverlayLeftSwipeActionHint: { translation: '啟用狀態左滑後按翻譯模式錄音。', style_pack: '啟用狀態左滑後切換到上一個風格包。' },
+      androidOverlayCancelSwipeDirection: { up: '向上滑', down: '向下滑' },
+      androidOverlayCancelSwipeDirectionHint: { up: '錄音中向上滑取消本次聽寫，不轉寫、不插入。', down: '錄音中向下滑取消本次聽寫，不轉寫、不插入。' },
       windowsIme: {
         installed: '已安裝。語音輸入時會臨時切換到 OpenLess 輸入法。',
         notInstalled: '未安裝。OpenLess 正在使用剪貼板 / WM_PASTE 兜底。',

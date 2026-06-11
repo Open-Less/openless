@@ -828,6 +828,7 @@ export const zhCN = {
       androidOverlayTriggerLabel: '悬浮窗显示时机',
       androidOverlayActivationModeLabel: '悬浮窗激活方式',
       androidOverlayLeftSwipeActionLabel: '左滑动作',
+      androidOverlayCancelSwipeDirectionLabel: '取消录音滑向',
       androidOverlaySizeLabel: '悬浮窗大小',
       androidOverlaySizeHint: '调整悬浮按钮直径，保存后在当前悬浮窗上生效并保留位置。',
       androidInsertStrategy: {
@@ -866,6 +867,14 @@ export const zhCN = {
       androidOverlayLeftSwipeActionHint: {
         translation: '激活态左滑后按翻译模式录音。',
         style_pack: '激活态左滑后切换到上一个风格包。',
+      },
+      androidOverlayCancelSwipeDirection: {
+        up: '向上滑',
+        down: '向下滑',
+      },
+      androidOverlayCancelSwipeDirectionHint: {
+        up: '录音中向上滑取消本次听写，不转写、不插入。',
+        down: '录音中向下滑取消本次听写，不转写、不插入。',
       },
       windowsIme: {
         installed: '已安装，按需切到 OpenLess 输入法。',

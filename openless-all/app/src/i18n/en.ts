@@ -830,6 +830,7 @@ export const en: typeof zhCN = {
       androidOverlayTriggerLabel: 'Overlay visibility',
       androidOverlayActivationModeLabel: 'Overlay activation',
       androidOverlayLeftSwipeActionLabel: 'Left swipe action',
+      androidOverlayCancelSwipeDirectionLabel: 'Cancel swipe direction',
       androidOverlaySizeLabel: 'Overlay size',
       androidOverlaySizeHint: 'Adjusts the floating button diameter and keeps its current position.',
       androidInsertStrategy: {
@@ -868,6 +869,14 @@ export const en: typeof zhCN = {
       androidOverlayLeftSwipeActionHint: {
         translation: 'Left swipe while armed starts translation dictation.',
         style_pack: 'Left swipe while armed switches to the previous style pack.',
+      },
+      androidOverlayCancelSwipeDirection: {
+        up: 'Swipe up',
+        down: 'Swipe down',
+      },
+      androidOverlayCancelSwipeDirectionHint: {
+        up: 'Swipe up while recording to cancel without transcription or insertion.',
+        down: 'Swipe down while recording to cancel without transcription or insertion.',
       },
       windowsIme: {
         installed: 'Installed. Voice input temporarily switches to the OpenLess IME.',

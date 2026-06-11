@@ -15,6 +15,7 @@ object OpenLessAndroidPreferences {
     private const val KEY_OVERLAY_TRIGGER = "androidOverlayTrigger"
     private const val KEY_OVERLAY_ACTIVATION_MODE = "androidOverlayActivationMode"
     private const val KEY_OVERLAY_LEFT_SWIPE_ACTION = "androidOverlayLeftSwipeAction"
+    private const val KEY_OVERLAY_CANCEL_SWIPE_DIRECTION = "androidOverlayCancelSwipeDirection"
     private const val KEY_OVERLAY_SIZE_DP = "androidOverlaySizeDp"
     private const val DEFAULT_OVERLAY_SIZE_DP = 72
     private const val MIN_OVERLAY_SIZE_DP = 48
@@ -22,6 +23,7 @@ object OpenLessAndroidPreferences {
     private val VALID_OVERLAY_TRIGGERS = setOf("background", "always")
     private val VALID_OVERLAY_ACTIVATION_MODES = setOf("tap", "long_press")
     private val VALID_OVERLAY_LEFT_SWIPE_ACTIONS = setOf("translation", "style_pack")
+    private val VALID_OVERLAY_CANCEL_SWIPE_DIRECTIONS = setOf("up", "down")
 
     fun overlayTriggerMode(context: Context): String? {
         val value = readPreferenceString(context, KEY_OVERLAY_TRIGGER) ?: return null
@@ -41,6 +43,12 @@ object OpenLessAndroidPreferences {
         return readPreferenceString(context, KEY_OVERLAY_LEFT_SWIPE_ACTION)
             ?.takeIf { it in VALID_OVERLAY_LEFT_SWIPE_ACTIONS }
             ?: "translation"
+    }
+
+    fun overlayCancelSwipeDirection(context: Context): String {
+        return readPreferenceString(context, KEY_OVERLAY_CANCEL_SWIPE_DIRECTION)
+            ?.takeIf { it in VALID_OVERLAY_CANCEL_SWIPE_DIRECTIONS }
+            ?: "up"
     }
 
     fun overlaySizeDp(context: Context): Int {

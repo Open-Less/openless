@@ -213,6 +213,27 @@ pub mod android {
         .map_err(|error| format!("Settings.canDrawOverlays: {error}"))
     }
 
+    pub fn check_self_permission(
+        env: &mut JNIEnv,
+        context: &JObject,
+        permission: &str,
+    ) -> Result<bool, String> {
+        if android_sdk_int(env)? < 23 {
+            return Ok(true);
+        }
+        let permission_obj = jobject_str(env, permission)?;
+        let result = env
+            .call_method(
+                context,
+                "checkSelfPermission",
+                "(Ljava/lang/String;)I",
+                &[JValue::Object(&permission_obj)],
+            )
+            .and_then(|value| value.i())
+            .map_err(|error| format!("Context.checkSelfPermission({permission}): {error}"))?;
+        Ok(result == 0)
+    }
+
     pub fn android_sdk_int(env: &mut JNIEnv) -> Result<i32, String> {
         env.get_static_field("android/os/Build$VERSION", "SDK_INT", "I")
             .and_then(|value| value.i())

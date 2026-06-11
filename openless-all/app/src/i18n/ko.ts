@@ -832,6 +832,7 @@ export const ko: typeof zhCN = {
       androidOverlayTriggerLabel: '오버레이 표시',
       androidOverlayActivationModeLabel: '오버레이 활성화',
       androidOverlayLeftSwipeActionLabel: '왼쪽 스와이프 동작',
+      androidOverlayCancelSwipeDirectionLabel: '취소 스와이프 방향',
       androidOverlaySizeLabel: '오버레이 크기',
       androidOverlaySizeHint: '플로팅 버튼 지름을 조정하고 현재 위치를 유지합니다.',
       androidInsertStrategy: { accessibility: '입력칸에 자동 출력', clipboard: '클립보드만' },
@@ -843,6 +844,8 @@ export const ko: typeof zhCN = {
       androidOverlayActivationModeHint: { tap: '첫 탭은 대기 상태로 전환하고, 두 번째 탭은 일반 받아쓰기를 시작합니다.', long_press: '누르고 있는 동안 대기 상태가 되며, 손을 떼면 현재 녹음 또는 QA 턴을 종료합니다.' },
       androidOverlayLeftSwipeAction: { translation: '번역 받아쓰기', style_pack: '스타일 팩 전환' },
       androidOverlayLeftSwipeActionHint: { translation: '대기 상태에서 왼쪽으로 밀면 번역 받아쓰기를 시작합니다.', style_pack: '대기 상태에서 왼쪽으로 밀면 이전 스타일 팩으로 전환합니다.' },
+      androidOverlayCancelSwipeDirection: { up: '위로 스와이프', down: '아래로 스와이프' },
+      androidOverlayCancelSwipeDirectionHint: { up: '녹음 중 위로 밀면 전사와 삽입 없이 취소합니다.', down: '녹음 중 아래로 밀면 전사와 삽입 없이 취소합니다.' },
       windowsIme: {
         installed: '설치됨. 음성 입력 시 OpenLess 입력기로 일시 전환됩니다.',
         notInstalled: '설치되지 않음. OpenLess 는 현재 클립보드 / WM_PASTE 폴백을 사용합니다.',
