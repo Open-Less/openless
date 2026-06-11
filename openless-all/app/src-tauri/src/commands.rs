@@ -254,6 +254,7 @@ fn set_settings_common(
 ) -> Result<UserPreferences, String> {
     let packs = coord.style_packs().list().map_err(|e| e.to_string())?;
     sync_style_pack_preferences(&mut prefs, &packs);
+    let previous = coord.prefs().get();
     // 广播给所有 webview。issue #205：QaPanel 跑在独立 webview，
     // 没有 HotkeySettingsContext，必须靠事件感知录音键变化，否则面板可见时
     // 用户改键会让浮窗里的 "{recordHotkey}" 文案一直停留在旧值。
@@ -261,8 +262,7 @@ fn set_settings_common(
     let _ = app.emit("prefs:changed", &prefs);
     #[cfg(target_os = "android")]
     {
-        coord.apply_android_overlay_trigger();
-        coord.apply_android_overlay_size();
+        coord.apply_android_overlay_settings_change(&previous, &prefs);
     }
     Ok(prefs)
 }

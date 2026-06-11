@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../../../src/components/Icon';
 import { getSettings, setSettings } from '../../../src/lib/ipc';
@@ -26,6 +26,39 @@ import {
   normalizeAndroidOverlayTrigger,
 } from '../lib/androidTypes';
 
+type AndroidPrefsSlice = Pick<UserPreferences, AndroidPreferenceKey>;
+
+function pickAndroidPrefs(settings: UserPreferences): AndroidPrefsSlice {
+  return {
+    androidInsertStrategy: settings.androidInsertStrategy,
+    androidOverlayTrigger: settings.androidOverlayTrigger,
+    androidOverlayActivationMode: settings.androidOverlayActivationMode,
+    androidOverlayLeftSwipeAction: settings.androidOverlayLeftSwipeAction,
+    androidOverlayCancelSwipeDirection: settings.androidOverlayCancelSwipeDirection,
+    androidOverlaySizeDp: settings.androidOverlaySizeDp,
+  };
+}
+
+let androidOverlaySaveQueue = Promise.resolve();
+
+function enqueueAndroidOverlaySave<T>(task: () => Promise<T>): Promise<T> {
+  const run = androidOverlaySaveQueue.then(task);
+  androidOverlaySaveQueue = run.then(() => undefined, () => undefined);
+  return run;
+}
+
+function persistAndroidOverlayPrefs(patch: Partial<UserPreferences>): Promise<AndroidPrefsSlice> {
+  return enqueueAndroidOverlaySave(async () => {
+    const settings = await getSettings();
+    const next = {
+      ...settings,
+      ...patch,
+    };
+    await setSettings(next);
+    return pickAndroidPrefs(next);
+  });
+}
+
 type AndroidPermissionsPanelMode = 'all' | 'accessibility' | 'overlayPermission' | 'overlayConfig';
 
 interface AndroidPermissionsPanelProps {
@@ -37,6 +70,9 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
   const [androidOverlay, setAndroidOverlay] = useState<AndroidOverlayStatus | null>(null);
   const [androidAccessibility, setAndroidAccessibility] = useState<AndroidAccessibilityStatus | null>(null);
   const [androidPrefs, setAndroidPrefs] = useState<Pick<UserPreferences, AndroidPreferenceKey> | null>(null);
+  const [sizeDraft, setSizeDraft] = useState<number | null>(null);
+  const sizeDebounceRef = useRef<number | null>(null);
+  const sizePendingRef = useRef(false);
 
   const refreshAndroid = async () => {
     const [overlay, accessibility, settings] = await Promise.all([
@@ -46,22 +82,14 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
     ]);
     let migratedSettings = settings;
     if (settings.androidOverlayTrigger === 'keyboard') {
-      migratedSettings = {
-        ...settings,
+      const migratedPrefs = await persistAndroidOverlayPrefs({
         androidOverlayTrigger: normalizeAndroidOverlayTrigger(settings.androidOverlayTrigger),
-      };
-      await setSettings(migratedSettings);
+      });
+      migratedSettings = { ...settings, ...migratedPrefs };
     }
     setAndroidOverlay(overlay);
     setAndroidAccessibility(accessibility);
-    setAndroidPrefs({
-      androidInsertStrategy: migratedSettings.androidInsertStrategy,
-      androidOverlayTrigger: migratedSettings.androidOverlayTrigger,
-      androidOverlayActivationMode: migratedSettings.androidOverlayActivationMode,
-      androidOverlayLeftSwipeAction: migratedSettings.androidOverlayLeftSwipeAction,
-      androidOverlayCancelSwipeDirection: migratedSettings.androidOverlayCancelSwipeDirection,
-      androidOverlaySizeDp: migratedSettings.androidOverlaySizeDp,
-    });
+    setAndroidPrefs(pickAndroidPrefs(migratedSettings));
   };
 
   useEffect(() => {
@@ -75,25 +103,104 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
     };
   }, []);
 
-  const updateAndroidPref = async <K extends AndroidPreferenceKey>(key: K, value: UserPreferences[K]) => {
-    const settings = await getSettings();
-    const nextValue = key === 'androidOverlayTrigger'
-      ? normalizeAndroidOverlayTrigger(value as AndroidOverlayTrigger)
-      : value;
-    const next = {
-      ...settings,
-      [key]: nextValue,
+  useEffect(() => {
+    if (sizePendingRef.current) return;
+    if (androidPrefs?.androidOverlaySizeDp != null) {
+      setSizeDraft(androidPrefs.androidOverlaySizeDp);
+    }
+  }, [androidPrefs?.androidOverlaySizeDp]);
+
+  useEffect(() => {
+    return () => {
+      if (sizeDebounceRef.current) clearTimeout(sizeDebounceRef.current);
     };
-    await setSettings(next);
-    setAndroidPrefs({
-      androidInsertStrategy: next.androidInsertStrategy,
-      androidOverlayTrigger: next.androidOverlayTrigger,
-      androidOverlayActivationMode: next.androidOverlayActivationMode,
-      androidOverlayLeftSwipeAction: next.androidOverlayLeftSwipeAction,
-      androidOverlayCancelSwipeDirection: next.androidOverlayCancelSwipeDirection,
-      androidOverlaySizeDp: next.androidOverlaySizeDp,
-    });
-    await refreshAndroid();
+  }, []);
+
+  const saveAndroidOverlaySize = async (value: number) => {
+    const clamped = clampAndroidOverlaySize(value);
+    try {
+      const nextPrefs = await persistAndroidOverlayPrefs({ androidOverlaySizeDp: clamped });
+      setAndroidPrefs((prev) => (prev ? { ...prev, ...nextPrefs } : nextPrefs));
+      setSizeDraft(clamped);
+    } catch (error) {
+      console.error('[android] failed to save overlay size', error);
+      const settings = await getSettings();
+      const rolledBack = settings.androidOverlaySizeDp;
+      const safeDraft = rolledBack != null ? clampAndroidOverlaySize(rolledBack) : null;
+      setAndroidPrefs((prev) => (prev ? { ...prev, androidOverlaySizeDp: rolledBack } : null));
+      setSizeDraft(safeDraft);
+    } finally {
+      sizePendingRef.current = false;
+    }
+  };
+
+  const scheduleAndroidOverlaySizeSave = (value: number) => {
+    if (sizeDebounceRef.current) clearTimeout(sizeDebounceRef.current);
+    sizeDebounceRef.current = window.setTimeout(() => {
+      sizeDebounceRef.current = null;
+      void saveAndroidOverlaySize(value);
+    }, 200);
+  };
+
+  const flushAndroidOverlaySizeSave = (value: number) => {
+    const hasDebounce = sizeDebounceRef.current != null;
+    const hasPending = sizePendingRef.current;
+    if (!hasDebounce && !hasPending) return;
+
+    if (sizeDebounceRef.current) {
+      clearTimeout(sizeDebounceRef.current);
+      sizeDebounceRef.current = null;
+    }
+
+    const clamped = clampAndroidOverlaySize(value);
+    const committed = androidPrefs?.androidOverlaySizeDp;
+    if (committed != null && clamped === committed) {
+      sizePendingRef.current = false;
+      return;
+    }
+
+    void saveAndroidOverlaySize(clamped);
+  };
+
+  const handleAndroidOverlaySizeChange = (value: number) => {
+    const clamped = clampAndroidOverlaySize(value);
+    sizePendingRef.current = true;
+    setSizeDraft(clamped);
+    scheduleAndroidOverlaySizeSave(clamped);
+  };
+
+  const updateAndroidPref = async <K extends AndroidPreferenceKey>(key: K, value: UserPreferences[K]) => {
+    if (key !== 'androidOverlaySizeDp' && sizeDebounceRef.current) {
+      clearTimeout(sizeDebounceRef.current);
+      sizeDebounceRef.current = null;
+    }
+
+    const patch: Partial<UserPreferences> = {
+      [key]: key === 'androidOverlayTrigger'
+        ? normalizeAndroidOverlayTrigger(value as AndroidOverlayTrigger)
+        : value,
+    };
+
+    if (key !== 'androidOverlaySizeDp') {
+      const committedSize = androidPrefs?.androidOverlaySizeDp;
+      const draftSize = sizeDraft;
+      if (sizePendingRef.current || (draftSize != null && draftSize !== committedSize)) {
+        patch.androidOverlaySizeDp = clampAndroidOverlaySize(draftSize ?? committedSize ?? 72);
+      }
+      sizePendingRef.current = false;
+    }
+
+    try {
+      const nextPrefs = await persistAndroidOverlayPrefs(patch);
+      setAndroidPrefs(nextPrefs);
+      if (patch.androidOverlaySizeDp != null) {
+        setSizeDraft(nextPrefs.androidOverlaySizeDp);
+      }
+      await refreshAndroid();
+    } catch (error) {
+      console.error('[android] failed to save overlay pref', error);
+      await refreshAndroid();
+    }
   };
 
   const showOverlayPermission = mode === 'all' || mode === 'overlayPermission';
@@ -230,14 +337,23 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
               min={48}
               max={120}
               step={4}
-              value={androidPrefs?.androidOverlaySizeDp ?? 72}
+              value={sizeDraft ?? androidPrefs?.androidOverlaySizeDp ?? 72}
               onChange={(event) => {
-                void updateAndroidPref('androidOverlaySizeDp', clampAndroidOverlaySize(Number(event.target.value)));
+                handleAndroidOverlaySizeChange(Number(event.target.value));
+              }}
+              onPointerUp={(event) => {
+                flushAndroidOverlaySizeSave(Number(event.currentTarget.value));
+              }}
+              onTouchEnd={(event) => {
+                flushAndroidOverlaySizeSave(Number(event.currentTarget.value));
+              }}
+              onBlur={(event) => {
+                flushAndroidOverlaySizeSave(Number(event.currentTarget.value));
               }}
               style={{ width: 132 }}
             />
             <span style={{ fontSize: 12, color: 'var(--ol-ink-3)', minWidth: 42, textAlign: 'right' }}>
-              {androidPrefs?.androidOverlaySizeDp ?? 72} dp
+              {sizeDraft ?? androidPrefs?.androidOverlaySizeDp ?? 72} dp
             </span>
           </div>
           <span style={{ fontSize: 11, color: 'var(--ol-ink-4)', textAlign: 'right' }}>

@@ -46,11 +46,37 @@ pub fn hide_overlay() -> Result<(), String> {
     Ok(())
 }
 
-pub fn refresh_overlay_if_visible() -> Result<(), String> {
-    if !is_overlay_visible() {
-        return Ok(());
+pub fn replace_overlay() -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        crate::android::jni::android::with_android_env(|env, context| {
+            replace_overlay_with_context(env, context)
+        })?;
     }
-    show_overlay()
+    Ok(())
+}
+
+pub fn refresh_overlay_layout() -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        crate::android::jni::android::with_android_env(|env, context| {
+            crate::android::jni::android::start_service_action(
+                env,
+                context,
+                "com.openless.app.OpenLessOverlayService",
+                "com.openless.app.overlay.REFRESH_LAYOUT",
+            )
+        })?;
+    }
+    Ok(())
+}
+
+pub fn refresh_overlay_if_visible() -> Result<(), String> {
+    if is_overlay_visible() {
+        refresh_overlay_layout()
+    } else {
+        Ok(())
+    }
 }
 
 #[cfg(target_os = "android")]
@@ -80,6 +106,21 @@ fn hide_overlay_with_context(
         "com.openless.app.overlay.HIDE",
     )?;
     OVERLAY_VISIBLE.store(false, std::sync::atomic::Ordering::SeqCst);
+    Ok(())
+}
+
+#[cfg(target_os = "android")]
+fn replace_overlay_with_context(
+    env: &mut jni::JNIEnv,
+    context: &jni::objects::JObject,
+) -> Result<(), String> {
+    crate::android::jni::android::start_service_action(
+        env,
+        context,
+        "com.openless.app.OpenLessOverlayService",
+        "com.openless.app.overlay.REPLACE_OVERLAY",
+    )?;
+    OVERLAY_VISIBLE.store(true, std::sync::atomic::Ordering::SeqCst);
     Ok(())
 }
 

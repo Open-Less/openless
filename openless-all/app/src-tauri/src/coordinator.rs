@@ -513,14 +513,78 @@ impl Coordinator {
         self.inner.prefs.get().android_overlay_trigger.normalized()
     }
 
-    pub fn apply_android_overlay_trigger(&self) {
+    pub fn apply_android_overlay_settings_change(
+        &self,
+        previous: &crate::types::UserPreferences,
+        next: &crate::types::UserPreferences,
+    ) {
+        #[cfg(target_os = "android")]
+        {
+            use crate::types::android_types::{
+                classify_android_overlay_settings_change, AndroidOverlaySettingsAction,
+            };
+            match classify_android_overlay_settings_change(previous, next) {
+                AndroidOverlaySettingsAction::None => {}
+                AndroidOverlaySettingsAction::RefreshLayout => {
+                    self.refresh_android_overlay_layout();
+                }
+                AndroidOverlaySettingsAction::Transition { from, to } => {
+                    self.transition_android_overlay_trigger(from, to);
+                }
+            }
+        }
+        let _ = (previous, next);
+    }
+
+    pub fn transition_android_overlay_trigger(
+        &self,
+        from: crate::types::AndroidOverlayTrigger,
+        to: crate::types::AndroidOverlayTrigger,
+    ) {
+        #[cfg(target_os = "android")]
+        {
+            use crate::types::AndroidOverlayTrigger;
+            fn overlay_trigger_log_name(trigger: AndroidOverlayTrigger) -> &'static str {
+                match trigger.normalized() {
+                    AndroidOverlayTrigger::Background => "background",
+                    AndroidOverlayTrigger::Keyboard => "keyboard",
+                    AndroidOverlayTrigger::Always => "always",
+                }
+            }
+            if from == to {
+                return;
+            }
+            log::info!(
+                "[coord] overlay transition from={} to={}",
+                overlay_trigger_log_name(from),
+                overlay_trigger_log_name(to),
+            );
+            match (from, to) {
+                (
+                    AndroidOverlayTrigger::Background | AndroidOverlayTrigger::Keyboard,
+                    AndroidOverlayTrigger::Always,
+                ) => {
+                    let _ = crate::android::replace_android_overlay();
+                }
+                (
+                    AndroidOverlayTrigger::Always,
+                    AndroidOverlayTrigger::Background | AndroidOverlayTrigger::Keyboard,
+                ) => {
+                    let _ = crate::android::hide_android_overlay();
+                }
+                _ => {}
+            }
+        }
+        let _ = (from, to);
+    }
+
+    pub fn apply_android_overlay_on_startup(&self) {
         #[cfg(target_os = "android")]
         {
             use crate::types::AndroidOverlayTrigger;
             match self.android_overlay_trigger() {
                 AndroidOverlayTrigger::Always => {
-                    let _ = crate::android::hide_android_overlay();
-                    let _ = crate::android::show_android_overlay();
+                    let _ = crate::android::replace_android_overlay();
                 }
                 AndroidOverlayTrigger::Background | AndroidOverlayTrigger::Keyboard => {
                     let _ = crate::android::hide_android_overlay();
@@ -529,10 +593,10 @@ impl Coordinator {
         }
     }
 
-    pub fn apply_android_overlay_size(&self) {
+    pub fn refresh_android_overlay_layout(&self) {
         #[cfg(target_os = "android")]
         {
-            let _ = crate::android::refresh_android_overlay_if_visible();
+            let _ = crate::android::refresh_android_overlay_layout();
         }
     }
 

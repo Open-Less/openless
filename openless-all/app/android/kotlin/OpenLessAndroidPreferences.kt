@@ -33,6 +33,11 @@ object OpenLessAndroidPreferences {
         return value.takeIf { it in VALID_OVERLAY_TRIGGERS }
     }
 
+    /** True when preferences still store legacy `"keyboard"` (before migration). */
+    fun isKeyboardOverlayTrigger(context: Context): Boolean {
+        return readPreferenceString(context, KEY_OVERLAY_TRIGGER) == "keyboard"
+    }
+
     fun overlayActivationMode(context: Context): String {
         return readPreferenceString(context, KEY_OVERLAY_ACTIVATION_MODE)
             ?.takeIf { it in VALID_OVERLAY_ACTIVATION_MODES }

@@ -118,7 +118,7 @@ class OpenLessAccessibilityService : AccessibilityService() {
     }
 
     private fun shouldTrackKeyboard(): Boolean {
-        return OpenLessAndroidPreferences.overlayTriggerMode(this) == "keyboard"
+        return OpenLessAndroidPreferences.isKeyboardOverlayTrigger(this)
     }
 
     private fun canDrawOverlays(): Boolean {

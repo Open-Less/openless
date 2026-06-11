@@ -4,7 +4,7 @@ name: Android APK (debug)
 #   - push v*-tauri tag → build debug APK, upload artifact + attach to GitHub Release
 #   - workflow_dispatch → build debug APK, upload artifact only (no release)
 #
-# Scope: in-app dictation + overlay recording + accessibility paste.
+# Scope: full overlay/accessibility APK for ADB testing (v1 RECORD_AUDIO + overlay manifest merge).
 
 on:
   push:
@@ -97,7 +97,7 @@ jobs:
         working-directory: openless-all/app
         run: node scripts/merge-android-v1-manifest.mjs
 
-      - name: Merge overlay / accessibility manifest entries
+      - name: Merge overlay / accessibility manifest
         working-directory: openless-all/app
         run: node scripts/merge-android-overlay-manifest.mjs
 

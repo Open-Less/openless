@@ -48,16 +48,30 @@ Manifest 合并脚本：
 
 ## 构建与 CI
 
+**CI（overlay / 无障碍 ADB 测试 APK）** — 合并 v1 麦克风权限 + overlay / 无障碍 manifest，用于真机 ADB 测试完整悬浮窗与无障碍能力（非仅应用内听写）：
+
 ```bash
 cd openless-all/app
-npm run tauri:android:init      # 生成 gen/android/
+npm ci && npm run build
+CI=true npm run tauri -- android init --ci
+node scripts/copy-android-scaffolding.mjs
+node scripts/merge-android-v1-manifest.mjs
+node scripts/merge-android-overlay-manifest.mjs
+CI=true npm run tauri:android:build
+```
+
+Workflow： [`.github/workflows/android-apk.yml`](../../.github/workflows/android-apk.yml)
+
+**本地 overlay / 无障碍开发（v3）** — 与 CI 相同的 manifest 合并链，使用本地 init / copy 脚本：
+
+```bash
+cd openless-all/app
+npm run tauri:android:init
 npm run copy:android-scaffolding
 node scripts/merge-android-v1-manifest.mjs
 node scripts/merge-android-overlay-manifest.mjs
 npm run tauri:android:build
 ```
-
-CI： [`.github/workflows/android-apk.yml`](../../.github/workflows/android-apk.yml)
 
 ## 相关文档
 

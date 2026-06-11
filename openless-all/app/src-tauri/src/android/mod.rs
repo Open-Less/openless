@@ -16,9 +16,10 @@ pub use accessibility::{
 pub use insert::android_insert_with_strategy;
 pub use native_bridge::{
     hide_overlay, is_overlay_visible, notify_capsule_state, refresh_overlay_if_visible,
-    register_android_coordinator, show_overlay,
+    refresh_overlay_layout, register_android_coordinator, replace_overlay, show_overlay,
 };
 pub use overlay::{
     get_android_overlay_status, hide_android_overlay, refresh_android_overlay_if_visible,
-    request_android_overlay_permission, show_android_overlay, AndroidOverlayPermissionResult,
+    refresh_android_overlay_layout, replace_android_overlay, request_android_overlay_permission,
+    show_android_overlay, AndroidOverlayPermissionResult,
 };

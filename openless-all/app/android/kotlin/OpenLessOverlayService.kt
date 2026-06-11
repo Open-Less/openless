@@ -13,6 +13,7 @@ import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.IBinder
+import android.provider.Settings
 import android.util.Log
 import android.view.Gravity
 import android.view.MotionEvent
@@ -74,10 +75,12 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
                     @Suppress("DEPRECATION")
                     stopForeground(true)
                 }
-                stopSelf()
+                stopSelf(startId)
             }
+            ACTION_REPLACE_OVERLAY -> replaceOverlay()
             ACTION_TOGGLE_EXPAND -> handleIconClick()
             ACTION_KEYBOARD_CHANGED -> handleKeyboardChanged(intent)
+            ACTION_REFRESH_LAYOUT -> refreshOverlayLayout()
         }
         return START_STICKY
     }
@@ -137,20 +140,67 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         reconcileOverlayRoots()
         overlayRoots.lastOrNull()?.let { existing ->
-            rootView = existing
-            layoutParams = existing.layoutParams as? WindowManager.LayoutParams
-            iconContainer = existing
-            (existing.getChildAt(0) as? ImageView)?.let { iconButton = it }
-            applyOverlaySize(existing)
-            layoutParams?.let { params ->
-                attachDragHandler(existing, params)
-                clampToScreen(params)
-                windowManager?.updateViewLayout(existing, params)
+            val params = existing.layoutParams as? WindowManager.LayoutParams
+            if (params != null) {
+                refreshExistingOverlayLayout(existing, params)
+                Log.i(TAG, "overlay already shown roots=${overlayRoots.size}")
+                return@withOverlayLock
             }
-            Log.i(TAG, "overlay already shown roots=${overlayRoots.size}")
+            removeOverlayRoot(existing)
+            synchronized(overlayRoots) {
+                overlayRoots.remove(existing)
+            }
+            if (rootView === existing) {
+                rootView = null
+                layoutParams = null
+            }
+        }
+        attachNewOverlayRoot()
+    }
+
+    private fun replaceOverlay() = withOverlayLock {
+        windowManager = windowManager ?: getSystemService(WINDOW_SERVICE) as WindowManager
+        reconcileOverlayRoots()
+        val removed = clearAllOverlayRoots()
+        if (removed > 0) {
+            Log.i(TAG, "overlay replace cleared removed=$removed")
+        }
+        if (!canDrawOverlays()) {
+            Log.i(TAG, "overlay replace skipped no overlay permission")
             return@withOverlayLock
         }
+        if (!attachNewOverlayRoot()) {
+            return@withOverlayLock
+        }
+        if (recording) {
+            tryPromoteRecordingForeground()
+        }
+        Log.i(TAG, "overlay replaced roots=1")
+    }
 
+    private fun hideOverlay() = withOverlayLock {
+        val removed = clearAllOverlayRoots()
+        if (removed > 0) {
+            Log.i(TAG, "overlay hidden removed=$removed")
+        }
+    }
+
+    private fun clearAllOverlayRoots(): Int {
+        windowManager = windowManager ?: getSystemService(WINDOW_SERVICE) as WindowManager
+        val views = synchronized(overlayRoots) {
+            (overlayRoots + listOfNotNull(rootView)).distinct().also {
+                overlayRoots.clear()
+            }
+        }
+        views.forEach { view ->
+            removeOverlayRoot(view)
+        }
+        rootView = null
+        layoutParams = null
+        return views.size
+    }
+
+    private fun attachNewOverlayRoot(): Boolean {
         val savedPosition = loadSavedPosition()
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -186,43 +236,67 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         )
         applyOverlaySize(root)
         attachDragHandler(root, params)
-        try {
+        return try {
             windowManager?.addView(root, params)
+            rootView = root
+            synchronized(overlayRoots) {
+                overlayRoots.add(root)
+            }
+            Log.i(TAG, "overlay shown x=${params.x} y=${params.y} roots=${overlayRoots.size}")
+            applyVisualState(
+                when {
+                    recording -> OverlayVisualState.Recording
+                    processing -> OverlayVisualState.Processing
+                    armed -> OverlayVisualState.Armed
+                    else -> OverlayVisualState.Idle
+                },
+            )
+            true
         } catch (error: Throwable) {
             Log.w(TAG, "show overlay failed", error)
             layoutParams = null
-            return@withOverlayLock
+            false
         }
-        rootView = root
-        synchronized(overlayRoots) {
-            overlayRoots.add(root)
-        }
-        Log.i(TAG, "overlay shown x=${params.x} y=${params.y} roots=${overlayRoots.size}")
-        applyVisualState(
-            when {
-                recording -> OverlayVisualState.Recording
-                processing -> OverlayVisualState.Processing
-                armed -> OverlayVisualState.Armed
-                else -> OverlayVisualState.Idle
-            },
-        )
     }
 
-    private fun hideOverlay() = withOverlayLock {
+    private fun canDrawOverlays(): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            Settings.canDrawOverlays(this)
+        } else {
+            true
+        }
+    }
+
+    private fun refreshExistingOverlayLayout(
+        root: FrameLayout,
+        params: WindowManager.LayoutParams,
+    ) {
+        rootView = root
+        layoutParams = params
+        iconContainer = root
+        (root.getChildAt(0) as? ImageView)?.let { iconButton = it }
+        applyOverlaySize(root)
+        attachDragHandler(root, params)
+        clampToScreen(params)
+        windowManager?.updateViewLayout(root, params)
+    }
+
+    private fun refreshOverlayLayout() = withOverlayLock {
         windowManager = windowManager ?: getSystemService(WINDOW_SERVICE) as WindowManager
-        val views = synchronized(overlayRoots) {
-            (overlayRoots + listOfNotNull(rootView)).distinct().also {
-                overlayRoots.clear()
-            }
+        reconcileOverlayRoots()
+        val root = overlayRoots.lastOrNull() ?: rootView
+        if (root == null || !root.isAttachedToWindow) {
+            Log.i(TAG, "overlay refresh skipped roots=0")
+            return@withOverlayLock
         }
-        views.forEach { view ->
-            removeOverlayRoot(view)
+        val params = root.layoutParams as? WindowManager.LayoutParams
+        if (params == null) {
+            Log.i(TAG, "overlay refresh skipped roots=0")
+            return@withOverlayLock
         }
-        rootView = null
-        layoutParams = null
-        if (views.isNotEmpty()) {
-            Log.i(TAG, "overlay hidden roots=${views.size}")
-        }
+        refreshExistingOverlayLayout(root, params)
+        val sizeDp = OpenLessAndroidPreferences.overlaySizeDp(this)
+        Log.i(TAG, "overlay layout refreshed sizeDp=$sizeDp roots=1")
     }
 
     private fun reconcileOverlayRoots() {
@@ -727,6 +801,8 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
     companion object {
         const val ACTION_SHOW = "com.openless.app.overlay.SHOW"
         const val ACTION_HIDE = "com.openless.app.overlay.HIDE"
+        const val ACTION_REPLACE_OVERLAY = "com.openless.app.overlay.REPLACE_OVERLAY"
+        const val ACTION_REFRESH_LAYOUT = "com.openless.app.overlay.REFRESH_LAYOUT"
         const val ACTION_TOGGLE_EXPAND = "com.openless.app.overlay.TOGGLE_EXPAND"
         const val ACTION_START_RECORDING = "com.openless.app.overlay.START_RECORDING"
         const val ACTION_KEYBOARD_CHANGED = "com.openless.app.overlay.KEYBOARD_CHANGED"
