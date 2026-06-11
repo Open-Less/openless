@@ -28,6 +28,8 @@ import { useHotkeySettings } from '../../state/HotkeySettingsContext';
 import { Btn, Card, Pill } from '../_atoms';
 import { SettingRow } from './shared';
 
+const ANDROID_SETUP_WIZARD_COMPLETE_KEY = 'openless.androidSetupWizardComplete';
+
 export function PermissionsSection() {
   const { t } = useTranslation();
   const [accessibility, setAccessibility] = useState<PermissionStatus | 'loading'>('loading');
@@ -109,24 +111,39 @@ export function PermissionsSection() {
   };
 
   const reRequestMicrophone = async () => {
-    if (microphone === 'denied' || microphone === 'restricted') {
+    const isAndroid = platformCaps?.platform === 'android';
+    if (isAndroid && (microphone === 'denied' || microphone === 'restricted')) {
       await openSystemSettings('microphone');
-      refreshPermissions();
+      await refreshPermissions();
       return;
     }
-    const status = platformCaps?.platform === 'android'
+    const status = isAndroid
       ? await requestAndroidMicrophoneAccess()
       : await requestMicrophonePermission();
     setMicrophone(status);
-    if (status === 'denied' || status === 'restricted') {
+    if (!isAndroid && (status === 'denied' || status === 'restricted')) {
       await openSystemSettings('microphone');
     }
-    refreshPermissions();
+    await refreshPermissions();
   };
 
   return (
     <Card>
-      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>{t('settings.permissions.title')}</div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 6 }}>
+        <div style={{ fontSize: 13, fontWeight: 600 }}>{t('settings.permissions.title')}</div>
+        {platformCaps?.platform === 'android' && (
+          <Btn
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              localStorage.removeItem(ANDROID_SETUP_WIZARD_COMPLETE_KEY);
+              window.location.reload();
+            }}
+          >
+            {t('settings.permissions.rerunAndroidSetup')}
+          </Btn>
+        )}
+      </div>
       <SettingRow label={t('settings.permissions.micLabel')}>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'flex-end', width: '100%', flexWrap: 'wrap', minWidth: 0 }}>
           <PermissionPill status={microphone} />

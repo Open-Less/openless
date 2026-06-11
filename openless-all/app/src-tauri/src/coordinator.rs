@@ -1095,6 +1095,10 @@ impl Coordinator {
         handle_qa_option_edge(&self.inner).await;
     }
 
+    pub async fn qa_submit_text(&self, text: String) -> Result<(), String> {
+        submit_qa_text_question(&self.inner, text).await
+    }
+
     pub fn set_shortcut_recording_active(&self, active: bool) {
         self.inner
             .shortcut_recording_active
@@ -3673,6 +3677,10 @@ fn enabled_hotwords(inner: &Arc<Inner>) -> Vec<DictionaryHotword> {
 // ─────────────────────────── QA session lifecycle ───────────────────────────
 
 async fn finalize_dictation_as_qa_question(inner: &Arc<Inner>) -> Result<(), String> {
+    log::info!("[coord] QA finalize from overlay: capturing selection before opening panel");
+    let selection = capture_selection();
+    let selection_preview_text = selection.as_ref().map(|s| s.text.clone());
+
     log::info!("[coord] QA finalize from overlay: opening panel and waiting for ASR result");
     open_qa_panel(inner);
     {
@@ -3681,13 +3689,9 @@ async fn finalize_dictation_as_qa_question(inner: &Arc<Inner>) -> Result<(), Str
         state.cancelled = false;
         state.session_id = new_session_id();
         state.front_app = capture_frontmost_app();
-        state.selection = None;
+        state.selection = selection;
     }
     inner.qa_stream_cancelled.store(false, Ordering::SeqCst);
-
-    let selection = capture_selection();
-    let selection_preview_text = selection.as_ref().map(|s| s.text.clone());
-    inner.qa_state.lock().selection = selection;
 
     if let Some(app) = inner.app.lock().clone() {
         let messages = inner.qa_state.lock().messages.clone();
@@ -3720,6 +3724,54 @@ async fn finalize_dictation_as_qa_question(inner: &Arc<Inner>) -> Result<(), Str
         raw.duration_ms
     );
     answer_qa_question_text(inner, raw.text.trim().to_string(), raw.duration_ms).await
+}
+
+async fn submit_qa_text_question(inner: &Arc<Inner>, text: String) -> Result<(), String> {
+    let question = text.trim().to_string();
+    if question.is_empty() {
+        return Ok(());
+    }
+
+    {
+        let mut state = inner.qa_state.lock();
+        if !state.panel_visible {
+            state.panel_visible = true;
+            state.messages.clear();
+            state.front_app = capture_frontmost_app();
+            state.qa_focus_target = capture_focus_target();
+        }
+        if state.phase != QaPhase::Idle {
+            return Err("QA is busy".to_string());
+        }
+        state.phase = QaPhase::Processing;
+        state.cancelled = false;
+        state.session_id = new_session_id();
+        if state.selection.is_none() {
+            state.selection = capture_selection();
+        }
+    }
+    inner.qa_stream_cancelled.store(false, Ordering::SeqCst);
+
+    let selection_preview_text = inner
+        .qa_state
+        .lock()
+        .selection
+        .as_ref()
+        .map(|selection| selection.text.clone());
+    if let Some(app) = inner.app.lock().clone() {
+        let messages = inner.qa_state.lock().messages.clone();
+        let _ = app.emit_to(
+            qa_event_target(),
+            "qa:state",
+            serde_json::json!({
+                "kind": "thinking",
+                "selection_preview": selection_preview_text,
+                "messages": messages,
+            }),
+        );
+    }
+
+    answer_qa_question_text(inner, question, 0).await
 }
 
 async fn take_current_dictation_transcript_for_qa(

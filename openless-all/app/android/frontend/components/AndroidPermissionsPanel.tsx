@@ -26,7 +26,13 @@ import {
   normalizeAndroidOverlayTrigger,
 } from '../lib/androidTypes';
 
-export function AndroidPermissionsPanel() {
+type AndroidPermissionsPanelMode = 'all' | 'accessibility' | 'overlayPermission' | 'overlayConfig';
+
+interface AndroidPermissionsPanelProps {
+  mode?: AndroidPermissionsPanelMode;
+}
+
+export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPanelProps) {
   const { t } = useTranslation();
   const [androidOverlay, setAndroidOverlay] = useState<AndroidOverlayStatus | null>(null);
   const [androidAccessibility, setAndroidAccessibility] = useState<AndroidAccessibilityStatus | null>(null);
@@ -90,8 +96,13 @@ export function AndroidPermissionsPanel() {
     await refreshAndroid();
   };
 
+  const showOverlayPermission = mode === 'all' || mode === 'overlayPermission';
+  const showAccessibility = mode === 'all' || mode === 'accessibility';
+  const showOverlayConfig = mode === 'all' || mode === 'overlayConfig';
+
   return (
     <>
+      {showOverlayPermission && (
       <SettingRow label={t('settings.permissions.androidOverlayLabel')}>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'flex-end', width: '100%', flexWrap: 'wrap', minWidth: 0 }}>
           {androidOverlay?.message && (
@@ -107,6 +118,8 @@ export function AndroidPermissionsPanel() {
           )}
         </div>
       </SettingRow>
+      )}
+      {showAccessibility && (
       <SettingRow label={t('settings.permissions.androidAccessibilityLabel')}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-end', width: '100%', minWidth: 0 }}>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'flex-end', width: '100%', flexWrap: 'wrap', minWidth: 0 }}>
@@ -127,6 +140,9 @@ export function AndroidPermissionsPanel() {
           </span>
         </div>
       </SettingRow>
+      )}
+      {showOverlayConfig && (
+      <>
       <SettingRow label={t('settings.permissions.androidInsertStrategyLabel')}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-end', width: '100%' }}>
           <select
@@ -229,6 +245,8 @@ export function AndroidPermissionsPanel() {
           </span>
         </div>
       </SettingRow>
+      </>
+      )}
     </>
   );
 }

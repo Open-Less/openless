@@ -16,6 +16,7 @@ import {
   getPlatformCapabilities,
   getSettings,
   isTauri,
+  qaSubmitText,
   qaToggleRecording,
   qaWindowDismiss,
   qaWindowPin,
@@ -39,6 +40,7 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
   const [status, setStatus] = useState<Status>('idle');
   const [errorMsg, setErrorMsg] = useState<string>('');
   const [selectionPreview, setSelectionPreview] = useState<string>('');
+  const [composerText, setComposerText] = useState<string>('');
   const [pinned, setPinned] = useState(false);
   /** 流式 LLM 答案：answer_delta 累积、answer 事件来时清空（最终内容已落到 messages）。 */
   const [streamingAnswer, setStreamingAnswer] = useState<string>('');
@@ -92,14 +94,18 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
               // ASR 在 finalize、user message 还没 push 的过渡帧。提前切到 thinking
               // 视图避免 UI 卡 recording 几百 ms 反馈缺失。详见 issue #161。
               setStatus('thinking');
-              setSelectionPreview('');
+              if (payload.selection_preview != null) {
+                setSelectionPreview(payload.selection_preview);
+              }
               setErrorMsg('');
               setStreamingAnswer('');
               setLevel(0);
               break;
             case 'thinking':
               setStatus('thinking');
-              setSelectionPreview('');
+              if (payload.selection_preview != null) {
+                setSelectionPreview(payload.selection_preview);
+              }
               setErrorMsg('');
               setStreamingAnswer('');
               setLevel(0);
@@ -112,7 +118,6 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
               break;
             case 'answer':
               setStatus('idle');
-              setSelectionPreview('');
               setErrorMsg('');
               // messages 已被上面的 setMessages 落定，清掉流式 buffer 避免和最终气泡重影。
               setStreamingAnswer('');
@@ -128,6 +133,8 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
         });
         const dismissHandle = await listen<unknown>('qa:dismiss', () => {
           setPinned(false);
+          setSelectionPreview('');
+          setComposerText('');
           if (embeddedRef.current) {
             onRequestCloseRef.current?.();
           } else {
@@ -234,6 +241,17 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
     onRequestClose?.();
   };
 
+  const onSubmitText = () => {
+    const text = composerText.trim();
+    if (!text || status === 'thinking' || status === 'recording') return;
+    setComposerText('');
+    void qaSubmitText(text).catch(error => {
+      console.error('[QaPanel] qa_submit_text failed', error);
+      setErrorMsg(error instanceof Error ? error.message : String(error));
+      setStatus('error');
+    });
+  };
+
   // ── 自动滚动到底（新消息进来时）────────────────────────────────────
   const scrollRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -287,6 +305,13 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
           }}
         />
       )}
+      <QaComposer
+        value={composerText}
+        disabled={status === 'thinking' || status === 'recording'}
+        t={t}
+        onChange={setComposerText}
+        onSubmit={onSubmitText}
+      />
       <StatusBar status={status} t={t} recordHotkey={recordControlLabel} />
     </div>
   );
@@ -670,6 +695,54 @@ function MobileRecordButton({
   );
 }
 
+function QaComposer({
+  value,
+  disabled,
+  t,
+  onChange,
+  onSubmit,
+}: {
+  value: string;
+  disabled: boolean;
+  t: ReturnType<typeof useTranslation>['t'];
+  onChange: (value: string) => void;
+  onSubmit: () => void;
+}) {
+  const canSubmit = value.trim().length > 0 && !disabled;
+  return (
+    <div style={composerStyle}>
+      <textarea
+        value={value}
+        disabled={disabled}
+        rows={2}
+        placeholder={t('qa.composerPlaceholder')}
+        onChange={event => onChange(event.currentTarget.value)}
+        onKeyDown={event => {
+          if (event.key === 'Enter' && !event.shiftKey) {
+            event.preventDefault();
+            if (canSubmit) onSubmit();
+          }
+        }}
+        style={composerTextareaStyle}
+      />
+      <button
+        type="button"
+        disabled={!canSubmit}
+        onClick={onSubmit}
+        aria-label={t('qa.composerSend')}
+        title={t('qa.composerSend')}
+        style={{
+          ...composerSendStyle,
+          opacity: canSubmit ? 1 : 0.45,
+          cursor: canSubmit ? 'pointer' : 'default',
+        }}
+      >
+        {t('qa.composerSend')}
+      </button>
+    </div>
+  );
+}
+
 function SkeletonLine({ width }: { width: string }) {
   return (
     <div
@@ -870,6 +943,46 @@ const mobileRecordButtonStyle: CSSProperties = {
   fontSize: 14,
   fontWeight: 700,
   fontFamily: 'var(--ol-font-sans)',
+};
+
+const composerStyle: CSSProperties = {
+  flexShrink: 0,
+  display: 'grid',
+  gridTemplateColumns: 'minmax(0, 1fr) auto',
+  alignItems: 'end',
+  gap: 8,
+  padding: '10px 12px',
+  borderTop: '0.5px solid rgba(0, 0, 0, 0.06)',
+  background: 'rgba(255,255,255,0.48)',
+};
+
+const composerTextareaStyle: CSSProperties = {
+  width: '100%',
+  minHeight: 40,
+  maxHeight: 88,
+  resize: 'vertical',
+  border: '0.5px solid rgba(0,0,0,0.12)',
+  borderRadius: 8,
+  padding: '8px 9px',
+  fontFamily: 'var(--ol-font-sans)',
+  fontSize: 13,
+  lineHeight: 1.45,
+  color: 'var(--ol-ink)',
+  background: 'rgba(255,255,255,0.78)',
+  outline: 'none',
+};
+
+const composerSendStyle: CSSProperties = {
+  minHeight: 40,
+  minWidth: 58,
+  border: 0,
+  borderRadius: 8,
+  padding: '0 12px',
+  background: 'var(--ol-blue)',
+  color: '#fff',
+  fontFamily: 'var(--ol-font-sans)',
+  fontSize: 13,
+  fontWeight: 700,
 };
 
 const globalCss = `

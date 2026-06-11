@@ -14,7 +14,6 @@
 //! - coordinator: dictation state machine glue
 //! - commands: Tauri IPC surface
 
-mod types;
 mod android;
 mod asr;
 mod audio_mute;
@@ -65,6 +64,7 @@ mod shortcut_binding;
 #[cfg(mobile)]
 #[path = "mobile_stubs/shortcut_binding.rs"]
 mod shortcut_binding;
+mod types;
 #[cfg(not(mobile))]
 mod unicode_keystroke;
 #[cfg(mobile)]
@@ -335,6 +335,7 @@ macro_rules! app_invoke_handler_mobile {
             $crate::commands::qa_window_dismiss,
             $crate::commands::qa_window_pin,
             $crate::commands::qa_toggle_recording,
+            $crate::commands::qa_submit_text,
             $crate::commands::repolish,
             $crate::commands::list_style_packs,
             $crate::commands::create_style_pack_from_template,

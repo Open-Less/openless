@@ -276,7 +276,16 @@ mod platform {
     }
 
     pub fn request_microphone() -> PermissionStatus {
-        check_microphone()
+        match crate::android::jni::android::with_android_env(|env, context| {
+            crate::android::jni::android::request_record_audio_permission(env, context)
+        }) {
+            Ok(true) => PermissionStatus::Granted,
+            Ok(false) => PermissionStatus::NotDetermined,
+            Err(error) => {
+                log::warn!("[mic] Android RECORD_AUDIO permission request failed: {error}");
+                check_microphone()
+            }
+        }
     }
 }
 

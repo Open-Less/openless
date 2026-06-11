@@ -467,6 +467,9 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
           height: 26px;
           border-radius: 8px;
           box-shadow: none;
+          box-sizing: border-box;
+          padding: 3px;
+          object-fit: contain;
         }
         .ol-aura-sidebar-brand-title {
           font-size: 14px;
@@ -567,6 +570,9 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
           height: 30px;
           border-radius: 8px;
           flex-shrink: 0;
+          box-sizing: border-box;
+          padding: 3px;
+          object-fit: contain;
         }
         .ol-aura-mobile-brand-title {
           font-size: 14px;

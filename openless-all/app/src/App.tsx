@@ -34,6 +34,7 @@ interface AppProps {
 }
 
 type Gate = 'onboarding' | 'ready';
+const ANDROID_SETUP_WIZARD_COMPLETE_KEY = 'openless.androidSetupWizardComplete';
 
 export function App({ isCapsule, isQa, isLessComputer, isLessComputerGlow, forcedOs }: AppProps) {
   if (isCapsule) {
@@ -54,6 +55,12 @@ export function App({ isCapsule, isQa, isLessComputer, isLessComputerGlow, force
   const [gate, setGate] = useState<Gate>('ready');
   const [platformCaps, setPlatformCaps] = useState<PlatformCapabilities | null>(null);
   const [mobileQaOpen, setMobileQaOpen] = useState(false);
+  const completeOnboarding = () => {
+    if (platformCaps?.platform === 'android') {
+      localStorage.setItem(ANDROID_SETUP_WIZARD_COMPLETE_KEY, '1');
+    }
+    setGate('ready');
+  };
   useEffect(() => {
     applyAppTheme(readAppTheme());
     const syncTheme = (event: StorageEvent) => {
@@ -166,6 +173,10 @@ export function App({ isCapsule, isQa, isLessComputer, isLessComputerGlow, force
       if (cancelled) return;
 
       if (caps.platform === 'android') {
+        if (localStorage.getItem(ANDROID_SETUP_WIZARD_COMPLETE_KEY) !== '1') {
+          setGate('onboarding');
+          return;
+        }
         const m = await checkMicrophonePermission();
         if (cancelled) return;
         // notDetermined is non-blocking on Android — show grant flow in-app instead
@@ -270,7 +281,7 @@ export function App({ isCapsule, isQa, isLessComputer, isLessComputerGlow, force
         </div>
       )}
       {!mobileQaOpen && (gate === 'onboarding' ? (
-        <Onboarding onComplete={() => setGate('ready')} />
+        <Onboarding onComplete={completeOnboarding} />
       ) : (
         <FloatingShell os={os} />
       ))}

@@ -9,7 +9,6 @@ import {
   getCredentials,
   getPlatformCapabilities,
   listHistory,
-  openSystemSettings,
   startDictation,
   stopDictation,
 } from '../lib/ipc';
@@ -454,15 +453,7 @@ function AndroidMicGrantBanner() {
   const onGrant = async () => {
     setBusy(true);
     try {
-      if (microphone === 'denied' || microphone === 'restricted') {
-        await openSystemSettings('microphone');
-      } else {
-        const status = await requestAndroidMicrophoneAccess();
-        setMicrophone(status);
-        if (status === 'denied' || status === 'restricted') {
-          await openSystemSettings('microphone');
-        }
-      }
+      setMicrophone(await requestAndroidMicrophoneAccess());
     } finally {
       setBusy(false);
       void refreshMic();
@@ -494,9 +485,7 @@ function AndroidMicGrantBanner() {
         </div>
       </div>
       <Btn variant="primary" size="sm" onClick={() => void onGrant()} disabled={busy} style={{ justifyContent: 'center', width: mobile ? '100%' : undefined }}>
-        {microphone === 'denied' || microphone === 'restricted'
-          ? t('overview.androidMicBanner.openSettings')
-          : t('overview.androidMicBanner.grant')}
+        {t('overview.androidMicBanner.grant')}
       </Btn>
     </Card>
   );

@@ -172,7 +172,13 @@ const ASR_PRESETS: ReadonlyArray<{ id: AsrPresetId; nameKey: string; baseUrl: st
   { id: 'local-qwen3',  nameKey: 'asrLocalQwen3',   baseUrl: '',                                              model: ''                              },
 ];
 
-export function ProvidersSection() {
+type ProvidersSectionKind = 'all' | 'llm' | 'asr';
+
+interface ProvidersSectionProps {
+  kind?: ProvidersSectionKind;
+}
+
+export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
   const { t } = useTranslation();
   const { prefs, updatePrefs } = useHotkeySettings();
   const mobile = useMobileLayout();
@@ -329,11 +335,16 @@ export function ProvidersSection() {
   const preset = LLM_PRESETS.find(p => p.id === committedLlmProvider) ?? LLM_PRESETS[LLM_PRESETS.length - 1];
   const codexOAuthSelected = committedLlmProvider === 'codex_oauth';
   const asrPreset = visibleAsrPresets.find(p => p.id === committedAsrProvider);
+  const showLlm = kind === 'all' || kind === 'llm';
+  const showAsr = kind === 'all' || kind === 'asr';
   return (
     <>
+      {kind === 'all' && (
       <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.6, marginBottom: 10 }}>
         {t('settings.providers.credentialStorageNotice')}
       </div>
+      )}
+      {showLlm && (
       <Card>
         <div style={{ marginBottom: 10 }}>
           <SectionTitle>{t('settings.providers.llmTitle')}</SectionTitle>
@@ -374,7 +385,9 @@ export function ProvidersSection() {
         />
         <ProviderTools key={committedLlmProvider} kind="llm" modelAccount="ark.model_id" onModelSelected={() => setLlmModelRevision(v => v + 1)} />
       </Card>
+      )}
 
+      {showAsr && (
       <Card>
         <div style={{ marginBottom: 10 }}>
           <SectionTitle>{t('settings.providers.asrTitle')}</SectionTitle>
@@ -489,6 +502,7 @@ export function ProvidersSection() {
           </>
         )}
       </Card>
+      )}
     </>
   );
 }

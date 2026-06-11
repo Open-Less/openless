@@ -1,8 +1,8 @@
 //! Android cross-app text insertion strategies.
 
 #![cfg(target_os = "android")]
-use crate::insertion::TextInserter;
 use crate::android::types::AndroidInsertStrategy;
+use crate::insertion::TextInserter;
 use crate::types::InsertStatus;
 
 pub fn android_insert_with_strategy(

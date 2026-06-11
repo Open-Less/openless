@@ -265,7 +265,7 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
 
     private fun buildIconButton(): ImageView {
         return ImageView(this).apply {
-            setImageResource(R.mipmap.ic_launcher)
+            setImageResource(R.drawable.ic_overlay_logo)
             scaleType = ImageView.ScaleType.CENTER_INSIDE
             setPadding(0, 0, 0, 0)
             contentDescription = "OpenLess"
@@ -292,7 +292,7 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
     }
 
     private fun overlayPaddingDp(sizeDp: Int): Int {
-        return (sizeDp * ICON_PADDING_DP / DEFAULT_ICON_SIZE_DP).coerceIn(6, 16)
+        return (sizeDp * ICON_PADDING_DP / DEFAULT_ICON_SIZE_DP).coerceIn(8, 20)
     }
 
     private fun handleIconClick() {
@@ -735,7 +735,7 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         const val EXTRA_KEYBOARD_BOTTOM = "keyboard_bottom"
         private const val DEFAULT_ICON_SIZE_DP = 72
         private const val MIN_ICON_IMAGE_SIZE_DP = 32
-        private const val ICON_PADDING_DP = 8
+        private const val ICON_PADDING_DP = 12
         private const val DRAG_SLOP_PX = 8
         private const val SWIPE_THRESHOLD_DP = 56
         private const val SWIPE_VERTICAL_RATIO = 0.6f

@@ -676,8 +676,7 @@ pub fn get_android_overlay_status() -> AndroidOverlayStatus {
 }
 
 #[tauri::command]
-pub fn request_android_overlay_permission() -> crate::android::AndroidOverlayPermissionResult
-{
+pub fn request_android_overlay_permission() -> crate::android::AndroidOverlayPermissionResult {
     crate::android::request_android_overlay_permission()
 }
 
@@ -1978,7 +1977,7 @@ pub fn request_microphone_permission(app: AppHandle) -> PermissionStatus {
     crate::request_microphone_from_foreground(&app)
 }
 
-/// 跳到 macOS 系统设置的指定隐私面板。pane: "accessibility" | "microphone".
+/// 跳到系统设置的指定权限面板。pane: "accessibility" | "microphone" | "overlay".
 #[tauri::command]
 pub fn open_system_settings(pane: String) -> Result<(), String> {
     #[cfg(target_os = "macos")]
@@ -2034,10 +2033,25 @@ pub fn open_system_settings(pane: String) -> Result<(), String> {
             Ok(())
         }
     }
-    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+    #[cfg(target_os = "android")]
+    {
+        crate::android::jni::android::with_android_env(|env, context| match pane.as_str() {
+            "microphone" => crate::android::jni::android::launch_app_details_settings(env, context),
+            "accessibility" => {
+                crate::android::jni::android::launch_accessibility_settings(env, context)
+            }
+            "overlay" => crate::android::jni::android::launch_overlay_settings(env, context),
+            _ => crate::android::jni::android::launch_app_details_settings(env, context),
+        })
+    }
+    #[cfg(all(
+        not(target_os = "macos"),
+        not(target_os = "windows"),
+        not(target_os = "android")
+    ))]
     {
         let _ = pane;
-        Err("open_system_settings is only supported on macOS and Windows".to_string())
+        Err("open_system_settings is not supported on this platform".to_string())
     }
 }
 
@@ -2114,6 +2128,12 @@ pub fn qa_window_pin(coord: CoordinatorState<'_>, pinned: bool) {
 pub async fn qa_toggle_recording(coord: CoordinatorState<'_>) -> Result<(), String> {
     coord.qa_toggle_recording().await;
     Ok(())
+}
+
+/// QA 面板键盘输入：复用语音 QA 的 LLM 管线，只替换问题来源。
+#[tauri::command]
+pub async fn qa_submit_text(coord: CoordinatorState<'_>, text: String) -> Result<(), String> {
+    coord.qa_submit_text(text).await
 }
 
 /// 用户点 ✕ / 按 Esc 关 Less Computer 浮窗。

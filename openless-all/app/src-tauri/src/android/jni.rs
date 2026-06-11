@@ -234,6 +234,71 @@ pub mod android {
         Ok(result == 0)
     }
 
+    pub fn request_record_audio_permission<'local>(
+        env: &mut JNIEnv<'local>,
+        context: &JObject<'local>,
+    ) -> Result<bool, String> {
+        call_static_bool_with_context_class(
+            env,
+            context,
+            "com.openless.app.OpenLessPermissionBridge",
+            "requestRecordAudioPermission",
+            "(Landroid/content/Context;)Z",
+            &[JValue::Object(context)],
+        )
+    }
+
+    pub fn launch_app_details_settings(env: &mut JNIEnv, context: &JObject) -> Result<(), String> {
+        let action_obj = jobject_str(env, "android.settings.APPLICATION_DETAILS_SETTINGS")?;
+        let null_obj = JObject::null();
+        let package_name = env
+            .call_method(context, "getPackageName", "()Ljava/lang/String;", &[])
+            .and_then(|value| value.l())
+            .map_err(|error| format!("Context.getPackageName: {error}"))?;
+        let package_prefix = jobject_str(env, "package")?;
+        let uri = env
+            .call_static_method(
+                "android/net/Uri",
+                "fromParts",
+                "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Landroid/net/Uri;",
+                &[
+                    JValue::Object(&package_prefix),
+                    JValue::Object(&package_name),
+                    JValue::Object(&null_obj),
+                ],
+            )
+            .and_then(|value| value.l())
+            .map_err(|error| format!("Uri.fromParts(package): {error}"))?;
+        start_settings_intent(env, context, &action_obj, Some(&uri))
+    }
+
+    pub fn launch_overlay_settings(env: &mut JNIEnv, context: &JObject) -> Result<(), String> {
+        if android_sdk_int(env)? < 23 {
+            return Ok(());
+        }
+        let action_obj = jobject_str(env, "android.settings.action.MANAGE_OVERLAY_PERMISSION")?;
+        let null_obj = JObject::null();
+        let package_name = env
+            .call_method(context, "getPackageName", "()Ljava/lang/String;", &[])
+            .and_then(|value| value.l())
+            .map_err(|error| format!("Context.getPackageName: {error}"))?;
+        let package_prefix = jobject_str(env, "package")?;
+        let uri = env
+            .call_static_method(
+                "android/net/Uri",
+                "fromParts",
+                "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Landroid/net/Uri;",
+                &[
+                    JValue::Object(&package_prefix),
+                    JValue::Object(&package_name),
+                    JValue::Object(&null_obj),
+                ],
+            )
+            .and_then(|value| value.l())
+            .map_err(|error| format!("Uri.fromParts(package): {error}"))?;
+        start_settings_intent(env, context, &action_obj, Some(&uri))
+    }
+
     pub fn android_sdk_int(env: &mut JNIEnv) -> Result<i32, String> {
         env.get_static_field("android/os/Build$VERSION", "SDK_INT", "I")
             .and_then(|value| value.i())
@@ -387,13 +452,31 @@ pub mod android {
         context: &JObject,
     ) -> Result<(), String> {
         let action_obj = jobject_str(env, "android.settings.ACCESSIBILITY_SETTINGS")?;
+        start_settings_intent(env, context, &action_obj, None)
+    }
+
+    fn start_settings_intent(
+        env: &mut JNIEnv,
+        context: &JObject,
+        action_obj: &JObject,
+        data_uri: Option<&JObject>,
+    ) -> Result<(), String> {
         let intent = env
             .new_object(
                 "android/content/Intent",
                 "(Ljava/lang/String;)V",
                 &[JValue::Object(&action_obj)],
             )
-            .map_err(|error| format!("create accessibility settings intent: {error}"))?;
+            .map_err(|error| format!("create settings intent: {error}"))?;
+        if let Some(uri) = data_uri {
+            env.call_method(
+                &intent,
+                "setData",
+                "(Landroid/net/Uri;)Landroid/content/Intent;",
+                &[JValue::Object(uri)],
+            )
+            .map_err(|error| format!("set settings intent data: {error}"))?;
+        }
         env.call_method(
             &intent,
             "addFlags",
@@ -407,7 +490,7 @@ pub mod android {
             "(Landroid/content/Intent;)V",
             &[JValue::Object(&intent)],
         )
-        .map_err(|error| format!("start accessibility settings: {error}"))?;
+        .map_err(|error| format!("start settings activity: {error}"))?;
         Ok(())
     }
 

@@ -43,6 +43,10 @@ const SERVICE_SNIPPETS = [
             android:name=".OverlayPermissionActivity"
             android:exported="false"
             android:theme="@android:style/Theme.Translucent.NoTitleBar" />`,
+  `<activity
+            android:name=".MicrophonePermissionActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />`,
 ];
 
 function printHelp() {

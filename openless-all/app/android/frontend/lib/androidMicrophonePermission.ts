@@ -2,6 +2,7 @@ import type { PermissionStatus as AppPermissionStatus } from '../../../src/lib/t
 import { checkMicrophonePermission, requestMicrophonePermission } from '../../../src/lib/ipc';
 
 const ANDROID_MIC_GRANTED_KEY = 'openless.androidMicrophoneGranted';
+const ANDROID_MIC_REQUESTED_KEY = 'openless.androidMicrophoneRequested';
 
 export async function checkAndroidMicrophoneAccess(): Promise<AppPermissionStatus> {
   try {
@@ -12,7 +13,7 @@ export async function checkAndroidMicrophoneAccess(): Promise<AppPermissionStatu
     }
     if (nativeStatus === 'denied' || nativeStatus === 'restricted') {
       localStorage.removeItem(ANDROID_MIC_GRANTED_KEY);
-      return 'denied';
+      return localStorage.getItem(ANDROID_MIC_REQUESTED_KEY) === '1' ? 'denied' : 'notDetermined';
     }
   } catch {
     // Fall through to WebView-local checks below.
@@ -41,6 +42,7 @@ export async function checkAndroidMicrophoneAccess(): Promise<AppPermissionStatu
 
 export async function requestAndroidMicrophoneAccess(): Promise<AppPermissionStatus> {
   try {
+    localStorage.setItem(ANDROID_MIC_REQUESTED_KEY, '1');
     const nativeStatus = await requestMicrophonePermission();
     if (nativeStatus === 'granted' || nativeStatus === 'notApplicable') {
       localStorage.setItem(ANDROID_MIC_GRANTED_KEY, '1');
@@ -48,6 +50,9 @@ export async function requestAndroidMicrophoneAccess(): Promise<AppPermissionSta
     }
     if (nativeStatus === 'denied' || nativeStatus === 'restricted') {
       localStorage.removeItem(ANDROID_MIC_GRANTED_KEY);
+    }
+    if (nativeStatus === 'notDetermined') {
+      return 'notDetermined';
     }
   } catch {
     // Fall through to WebView-local checks below.
@@ -67,6 +72,7 @@ export async function requestAndroidMicrophoneAccess(): Promise<AppPermissionSta
       }
       if (status.state === 'denied') {
         localStorage.removeItem(ANDROID_MIC_GRANTED_KEY);
+        localStorage.setItem(ANDROID_MIC_REQUESTED_KEY, '1');
         return 'denied';
       }
     }
@@ -81,6 +87,7 @@ export async function requestAndroidMicrophoneAccess(): Promise<AppPermissionSta
 
   let stream: MediaStream | null = null;
   try {
+    localStorage.setItem(ANDROID_MIC_REQUESTED_KEY, '1');
     localStorage.setItem(ANDROID_MIC_GRANTED_KEY, '1');
     stream = await mediaDevices.getUserMedia({ audio: true });
     return 'granted';

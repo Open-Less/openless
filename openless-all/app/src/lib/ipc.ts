@@ -1168,7 +1168,7 @@ export function requestMicrophonePermission(): Promise<PermissionStatus> {
 }
 
 export function openSystemSettings(
-    pane: "accessibility" | "microphone",
+    pane: "accessibility" | "microphone" | "overlay",
 ): Promise<void> {
     return invokeOrMock("open_system_settings", { pane }, () => undefined)
 }
@@ -1204,6 +1204,10 @@ export function qaWindowPin(pinned: boolean): Promise<void> {
 
 export function qaToggleRecording(): Promise<void> {
     return invokeOrMock("qa_toggle_recording", undefined, () => undefined)
+}
+
+export function qaSubmitText(text: string): Promise<void> {
+    return invokeOrMock("qa_submit_text", { text }, () => undefined)
 }
 
 // ── Less Computer 浮窗 ────────────────────────────────────────────────
