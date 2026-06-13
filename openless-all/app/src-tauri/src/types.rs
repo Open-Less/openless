@@ -92,6 +92,15 @@ pub enum UpdateChannel {
     Beta,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum ThemeMode {
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum InsertStatus {
@@ -721,6 +730,9 @@ pub struct UserPreferences {
     /// 用户改用托盘菜单访问主窗口。默认 false 跟历史行为一致。
     #[serde(default)]
     pub start_minimized: bool,
+    /// UI theme: follow OS, force light, or force dark. Frontend applies via data-ol-theme.
+    #[serde(default)]
+    pub theme_mode: ThemeMode,
     /// 流式输入：润色 SSE 一边到达一边逐字模拟键盘事件输出到当前焦点。开启后用户感知到
     /// 的处理时延显著降低（润色 LLM 第一个 token 即开始落字）。
     ///
@@ -942,6 +954,8 @@ struct UserPreferencesWire {
     polish_context_window_minutes: u32,
     #[serde(default)]
     start_minimized: bool,
+    #[serde(default)]
+    theme_mode: ThemeMode,
     #[serde(default = "default_true")]
     streaming_insert: bool,
     #[serde(default)]
@@ -1034,6 +1048,7 @@ impl Default for UserPreferencesWire {
             history_retention_days: prefs.history_retention_days,
             polish_context_window_minutes: prefs.polish_context_window_minutes,
             start_minimized: prefs.start_minimized,
+            theme_mode: prefs.theme_mode,
             streaming_insert: prefs.streaming_insert,
             streaming_insert_default_migrated: prefs.streaming_insert_default_migrated,
             streaming_insert_save_clipboard: prefs.streaming_insert_save_clipboard,
@@ -1140,6 +1155,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             history_retention_days: wire.history_retention_days,
             polish_context_window_minutes: wire.polish_context_window_minutes,
             start_minimized: wire.start_minimized,
+            theme_mode: wire.theme_mode,
             streaming_insert,
             streaming_insert_default_migrated: true,
             streaming_insert_save_clipboard: wire.streaming_insert_save_clipboard,
@@ -1874,6 +1890,7 @@ impl Default for UserPreferences {
             history_retention_days: default_history_retention_days(),
             polish_context_window_minutes: default_polish_context_window_minutes(),
             start_minimized: false,
+            theme_mode: ThemeMode::default(),
             streaming_insert: true,
             streaming_insert_default_migrated: true,
             streaming_insert_save_clipboard: true,

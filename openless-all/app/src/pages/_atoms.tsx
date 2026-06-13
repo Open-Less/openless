@@ -53,7 +53,7 @@ export function Card({ children, style, padding = 18, glassy = false, className 
     <div
       className={className}
       style={{
-        background: glassy ? 'rgba(255,255,255,0.55)' : 'var(--ol-surface)',
+        background: glassy ? 'var(--ol-glass-bg)' : 'var(--ol-surface)',
         backdropFilter: glassy ? 'blur(20px) saturate(160%)' : undefined,
         WebkitBackdropFilter: glassy ? 'blur(20px) saturate(160%)' : undefined,
         border: '0.5px solid var(--ol-line)',
@@ -80,11 +80,11 @@ interface PillProps {
 
 export function Pill({ children, tone = 'default', size = 'md', style }: PillProps) {
   const tones: Record<PillTone, { bg: string; color: string; bd: string }> = {
-    default: { bg: 'rgba(0,0,0,0.05)',   color: 'var(--ol-ink-2)',  bd: 'transparent' },
-    blue:    { bg: 'var(--ol-blue-soft)',color: 'var(--ol-blue)',   bd: 'transparent' },
-    ok:      { bg: 'var(--ol-ok-soft)',  color: 'var(--ol-ok)',     bd: 'transparent' },
-    outline: { bg: 'transparent',        color: 'var(--ol-ink-3)',  bd: 'var(--ol-line-strong)' },
-    dark:    { bg: 'var(--ol-ink)',      color: '#fff',             bd: 'transparent' },
+    default: { bg: 'var(--ol-pill-bg)', color: 'var(--ol-ink-2)', bd: 'transparent' },
+    blue:    { bg: 'var(--ol-pill-blue-bg)', color: 'var(--ol-blue)', bd: 'transparent' },
+    ok:      { bg: 'var(--ol-pill-ok-bg)', color: 'var(--ol-ok)', bd: 'transparent' },
+    outline: { bg: 'transparent', color: 'var(--ol-ink-3)', bd: 'var(--ol-line-strong)' },
+    dark:    { bg: 'var(--ol-pill-selected-bg)', color: 'var(--ol-pill-selected-ink)', bd: 'transparent' },
   };
   const t = tones[tone];
   const sz = size === 'sm'
@@ -125,10 +125,10 @@ interface BtnProps {
 
 export function Btn({ children, variant = 'ghost', size = 'md', icon, style, onClick, disabled = false }: BtnProps) {
   const variants: Record<BtnVariant, { bg: string; color: string; bd: string; sh: string }> = {
-    primary: { bg: 'var(--ol-ink)',     color: '#fff',                bd: 'transparent', sh: '0 1px 2px rgba(0,0,0,.08)' },
-    blue:    { bg: 'var(--ol-blue)',    color: '#fff',                bd: 'transparent', sh: '0 1px 2px rgba(37,99,235,.18)' },
-    ghost:   { bg: 'transparent',       color: 'var(--ol-ink-2)',     bd: 'var(--ol-line-strong)', sh: 'none' },
-    soft:    { bg: 'rgba(0,0,0,0.04)',  color: 'var(--ol-ink-2)',     bd: 'transparent', sh: 'none' },
+    primary: { bg: 'var(--ol-primary-solid-bg)', color: 'var(--ol-primary-solid-ink)', bd: 'transparent', sh: 'var(--ol-shadow-sm)' },
+    blue:    { bg: 'var(--ol-accent-solid-bg)', color: 'var(--ol-accent-solid-ink)', bd: 'transparent', sh: 'var(--ol-shadow-sm)' },
+    ghost:   { bg: 'transparent', color: 'var(--ol-ink-2)', bd: 'var(--ol-line-strong)', sh: 'none' },
+    soft:    { bg: 'var(--ol-control-muted)', color: 'var(--ol-ink-2)', bd: 'transparent', sh: 'none' },
   };
   const v = variants[variant];
   const sizes: Record<BtnSize, { padding: string; fontSize: number }> = {

@@ -120,3 +120,20 @@ export async function getPlatformCapabilities(): Promise<PlatformCapabilities> {
 export function getCachedPlatformCapabilities(): PlatformCapabilities | null {
   return cachedCapabilities;
 }
+
+/** Sync Windows 11 native title bar with in-app dark/light tokens. No-op off Windows. */
+export async function syncWindowsCaptionTheme(dark: boolean): Promise<void> {
+  if (detectOS() !== 'win') return;
+  if (
+    globalThis.window === undefined ||
+    !('__TAURI_INTERNALS__' in globalThis.window)
+  ) {
+    return;
+  }
+  try {
+    const { invoke } = await import('@tauri-apps/api/core');
+    await invoke('set_windows_caption_theme', { dark });
+  } catch (error) {
+    console.warn('[platform] set_windows_caption_theme failed', error);
+  }
+}

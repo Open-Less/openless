@@ -559,8 +559,8 @@ function PermissionStep({ index, title, desc, status, actionLabel, onAction, dis
           fontFamily: 'inherit',
           border: 0,
           borderRadius: 8,
-          background: granted ? 'var(--ol-surface-2)' : 'var(--ol-ink)',
-          color: granted ? 'var(--ol-ink-3)' : '#fff',
+          background: granted ? 'var(--ol-surface-2)' : 'var(--ol-primary-solid-bg)',
+          color: granted ? 'var(--ol-ink-3)' : 'var(--ol-primary-solid-ink)',
           cursor: disabled ? 'not-allowed' : 'default',
           opacity: disabled && !granted ? 0.6 : 1,
           transition: 'background 0.16s var(--ol-motion-quick), color 0.16s var(--ol-motion-quick), opacity 0.18s var(--ol-motion-soft), transform 0.12s var(--ol-motion-quick)',
@@ -581,8 +581,8 @@ const primaryButtonStyle = {
   fontFamily: 'inherit',
   border: 0,
   borderRadius: 10,
-  background: 'var(--ol-ink)',
-  color: '#fff',
+  background: 'var(--ol-primary-solid-bg)',
+  color: 'var(--ol-primary-solid-ink)',
   cursor: 'default',
 } as const;
 

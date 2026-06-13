@@ -4,8 +4,7 @@
 // 「设置」还要再面对第二个侧栏。现在拍平成单层 —— 通用 / 服务 / 隐私 / 高级 /
 // 个性化 / 关于 六个 tab + 帮助外链组。每个 tab 的内容见 pages/settings/。
 //
-// 设计原则：每个可见控件都必须可用。没有后端支撑的占位（账号 / 主题切换 等）
-// 不在此弹窗出现。
+// 设计原则：每个可见控件都必须可用。
 
 import { useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -81,7 +80,7 @@ export function SettingsModal({ os: _os, onClose, initialSettingsSection }: Sett
       style={{
         position: mobile ? 'fixed' : 'absolute',
         inset: 0,
-        background: mobile ? 'var(--ol-surface)' : 'rgba(15,17,22,0.32)',
+        background: mobile ? 'var(--ol-surface)' : 'var(--ol-overlay-bg)',
         backdropFilter: mobile ? 'none' : 'blur(8px) saturate(140%)',
         WebkitBackdropFilter: mobile ? 'none' : 'blur(8px) saturate(140%)',
         display: 'flex',
@@ -93,6 +92,8 @@ export function SettingsModal({ os: _os, onClose, initialSettingsSection }: Sett
       }}>
 
       <div
+        className="ol-aura-settings"
+        data-ol-mobile={mobile ? 'true' : undefined}
         onClick={(e) => e.stopPropagation()}
         style={{
           width: '100%',
@@ -101,8 +102,8 @@ export function SettingsModal({ os: _os, onClose, initialSettingsSection }: Sett
           maxHeight: mobile ? undefined : 600,
           background: 'var(--ol-surface)',
           borderRadius: mobile ? 0 : 14,
-          border: mobile ? 'none' : '0.5px solid rgba(0,0,0,.08)',
-          boxShadow: mobile ? 'none' : '0 30px 80px -20px rgba(15,17,22,.35), 0 0 0 0.5px rgba(0,0,0,.06)',
+          border: mobile ? 'none' : '0.5px solid var(--ol-line)',
+          boxShadow: mobile ? 'none' : 'var(--ol-shadow-xl)',
           display: 'flex',
           flexDirection: mobile ? 'column' : 'row',
           overflow: 'hidden',
@@ -151,7 +152,7 @@ export function SettingsModal({ os: _os, onClose, initialSettingsSection }: Sett
         <aside
           style={{
             width: 200, flexShrink: 0,
-            background: 'rgba(247,247,250,0.7)',
+            background: 'var(--ol-settings-rail-bg)',
             borderRight: '0.5px solid var(--ol-line-soft)',
             padding: '18px 12px',
             display: 'flex', flexDirection: 'column', gap: 14,
@@ -168,7 +169,7 @@ export function SettingsModal({ os: _os, onClose, initialSettingsSection }: Sett
                   right: 0,
                   top: pillRect.top,
                   height: pillRect.height,
-                  background: '#fff',
+                  background: 'var(--ol-segmented-active-bg)',
                   borderRadius: 8,
                   boxShadow: '0 1px 2px rgba(0,0,0,.05), 0 0 0 0.5px rgba(0,0,0,.06)',
                   transition: 'top 0.36s var(--ol-motion-spring), height 0.36s var(--ol-motion-spring)',

@@ -13,6 +13,16 @@ html[data-ol-platform="linux"] #root {
   background: var(--ol-surface);
 }
 
+html[data-ol-platform="android"],
+html[data-ol-platform="android"] body,
+html[data-ol-platform="android"] #root {
+  background: var(--ol-surface);
+}
+
+html {
+  color-scheme: light dark;
+}
+
 body {
   background: transparent;
   user-select: none;
@@ -145,14 +155,7 @@ a { color: inherit; text-decoration: none; }
 .ol-frost {
   position: relative;
   isolation: isolate;
-  /* 体渐变 + 左上高光扫面 —— 半透明白底（~0.9），给磨砂面体积感而不是死平。 */
-  background:
-    radial-gradient(135% 86% at 15% -10%,
-      rgba(255, 255, 255, 0.97) 0%,
-      rgba(255, 255, 255, 0) 56%),
-    linear-gradient(161deg,
-      rgba(255, 255, 255, 0.93) 0%,
-      rgba(244, 247, 252, 0.88) 100%);
+  background: var(--ol-frost-bg);
 }
 
 .ol-frost::before {
@@ -176,4 +179,51 @@ html[data-ol-platform="linux"] .ol-frost {
 
 html[data-ol-platform="linux"] .ol-frost::before {
   content: none;
+}
+
+html[data-ol-platform="android"] .ol-frost {
+  background: var(--ol-surface);
+}
+
+html[data-ol-platform="android"] .ol-frost::before {
+  content: none;
+}
+
+.ol-app-shell-bg {
+  background: var(--ol-app-shell-bg);
+}
+
+.ol-aura-panel {
+  background: var(--ol-panel-bg);
+  border: 0.5px solid var(--ol-panel-border);
+  box-shadow: var(--ol-panel-shadow);
+}
+
+.ol-aura-card {
+  background: var(--ol-card-bg);
+  border: 0.5px solid var(--ol-card-border);
+  box-shadow: var(--ol-card-shadow);
+}
+
+.ol-aura-settings {
+  background: var(--ol-settings-content-bg);
+}
+
+.ol-aura-settings[data-ol-mobile="true"] {
+  border-radius: var(--ol-panel-radius) var(--ol-panel-radius) 0 0;
+}
+
+.ol-overview-hero {
+  background: var(--ol-card-bg);
+  border: 0.5px solid var(--ol-card-border);
+}
+
+.ol-capsule-pill {
+  background: var(--ol-capsule-pill-bg) !important;
+  border-color: var(--ol-capsule-pill-border) !important;
+}
+
+html[data-ol-platform="linux"] .ol-capsule-pill,
+html[data-ol-platform="android"] .ol-capsule-pill {
+  background: var(--ol-capsule-pill-bg) !important;
 }

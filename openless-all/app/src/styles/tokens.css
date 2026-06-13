@@ -4,11 +4,22 @@
   /* QaPanel（划词追问）保留新代码引用的 6 个 solid/radius token —— 旧 UI 回退后
      补回这几个，避免该页元素丢色。用 var() 间接引用基础色，深浅模式自动跟随。 */
   --ol-accent-solid-bg: var(--ol-blue);
+  --ol-accent-solid-bg-hover: var(--ol-blue-hover);
   --ol-accent-solid-ink: var(--ol-on-accent);
+  --ol-primary-solid-bg: var(--ol-ink);
+  --ol-primary-solid-ink: var(--ol-on-accent);
   --ol-danger-solid-bg: var(--ol-err);
   --ol-danger-solid-ink: #ffffff;
   --ol-control-radius: 8px;
   --ol-bubble-radius: var(--ol-r-lg);
+  --ol-input-ink: var(--ol-ink);
+  --ol-frost-bg:
+    radial-gradient(135% 86% at 15% -10%,
+      rgba(255, 255, 255, 0.97) 0%,
+      rgba(255, 255, 255, 0) 56%),
+    linear-gradient(161deg,
+      rgba(255, 255, 255, 0.93) 0%,
+      rgba(244, 247, 252, 0.88) 100%);
   /* Shared palette */
   --ol-white: #ffffff;
   --ol-canvas: #f7f7f8;
@@ -33,7 +44,7 @@
   --ol-ink: #0a0a0b;
   --ol-ink-2: #2a2a2d;
   --ol-ink-3: rgba(10, 10, 11, 0.62);
-  --ol-ink-4: rgba(10, 10, 11, 0.42);
+  --ol-ink-4: rgba(10, 10, 11, 0.58);
   --ol-ink-5: rgba(10, 10, 11, 0.24);
 
   /* Blue accent */
@@ -189,9 +200,38 @@
   --ol-style-editor-bg: linear-gradient(180deg, rgba(255,255,255,0.92), rgba(247,249,252,0.82));
   --ol-style-editor-border: rgba(255,255,255,0.74);
   --ol-style-editor-shadow: 0 32px 96px -32px rgba(15,23,42,0.34);
+
+  /* Desktop capsule: always dark pill + light icons (independent of app theme). */
+  --ol-capsule-pill-bg: #1a1a1e;
+  --ol-capsule-pill-border: rgba(255, 255, 255, 0.10);
+  --ol-capsule-pill-shadow: 0 18px 50px -10px rgba(0, 0, 0, 0.42), 0 0 0 0.5px rgba(0, 0, 0, 0.24);
+  --ol-capsule-pill-inset: inset 0 1px 0 0 rgba(255, 255, 255, 0.08);
+  --ol-capsule-btn-bg: #2a2a2f;
+  --ol-capsule-btn-bg-confirm: #2e2e33;
+  --ol-capsule-btn-ink: #f4f7fb;
+  --ol-capsule-btn-border: rgba(255, 255, 255, 0.12);
+  --ol-capsule-center-ink: rgba(244, 247, 251, 0.72);
+  --ol-capsule-confirm-bg: var(--ol-capsule-btn-bg-confirm);
+  --ol-capsule-confirm-ink: var(--ol-capsule-btn-ink);
 }
 
 [data-ol-theme='dark'] {
+  --ol-accent-solid-bg: #2563eb;
+  --ol-accent-solid-bg-hover: #3b82f6;
+  --ol-accent-solid-ink: #f8fbff;
+  --ol-primary-solid-bg: #2563eb;
+  --ol-primary-solid-ink: #f8fbff;
+  --ol-danger-solid-bg: #dc2626;
+  --ol-danger-solid-ink: #ffffff;
+  --ol-input-ink: #f4f7fb;
+  --ol-frost-bg:
+    radial-gradient(135% 86% at 15% -10%,
+      rgba(255, 255, 255, 0.06) 0%,
+      rgba(255, 255, 255, 0) 56%),
+    linear-gradient(161deg,
+      rgba(26, 26, 30, 0.96) 0%,
+      rgba(20, 20, 24, 0.92) 100%);
+
   --ol-white: #11141a;
   --ol-canvas: #0b0e13;
   --ol-surface: #141922;
@@ -330,6 +370,18 @@
   --ol-style-editor-bg: linear-gradient(180deg, rgba(27,27,30,0.96), rgba(23,23,26,0.94));
   --ol-style-editor-border: rgba(255,255,255,0.07);
   --ol-style-editor-shadow: none;
+
+  --ol-capsule-pill-bg: #1a1a1e;
+  --ol-capsule-pill-border: rgba(255, 255, 255, 0.10);
+  --ol-capsule-pill-shadow: 0 18px 50px -10px rgba(0, 0, 0, 0.42), 0 0 0 0.5px rgba(0, 0, 0, 0.24);
+  --ol-capsule-pill-inset: inset 0 1px 0 0 rgba(255, 255, 255, 0.08);
+  --ol-capsule-btn-bg: #2a2a2f;
+  --ol-capsule-btn-bg-confirm: #2e2e33;
+  --ol-capsule-btn-ink: #f4f7fb;
+  --ol-capsule-btn-border: rgba(255, 255, 255, 0.12);
+  --ol-capsule-center-ink: rgba(244, 247, 251, 0.72);
+  --ol-capsule-confirm-bg: var(--ol-capsule-btn-bg-confirm);
+  --ol-capsule-confirm-ink: var(--ol-capsule-btn-ink);
 }
 
 * { box-sizing: border-box; }
@@ -355,7 +407,15 @@ body {
   border-radius: 3px;
 }
 .ol-thinscroll::-webkit-scrollbar-thumb:hover { background: rgba(0, 0, 0, 0.28); }
-.ol-thinscroll { scrollbar-width: thin; scrollbar-color: rgba(0, 0, 0, 0.18) transparent; }
+[data-ol-theme='dark'] .ol-thinscroll::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
+}
+[data-ol-theme='dark'] .ol-thinscroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.28);
+}
+[data-ol-theme='dark'] .ol-thinscroll {
+  scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+}
 
 /* Glass surface */
 .ol-glass {

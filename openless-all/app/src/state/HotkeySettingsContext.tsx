@@ -20,6 +20,7 @@ import type {
     UserPreferences,
 } from "../lib/types"
 import i18n, { outputPrefsForLocale, type SupportedLocale } from "../i18n"
+import { applyThemeFromPreference } from "../lib/themeMode"
 
 interface HotkeySettingsContextValue {
     prefs: UserPreferences | null
@@ -59,6 +60,7 @@ export function HotkeySettingsProvider({ children }: { children: ReactNode }) {
             let nextError: string | null = null
             if (prefsResult.status === "fulfilled") {
                 setPrefs(prefsResult.value)
+                applyThemeFromPreference(prefsResult.value.themeMode ?? "system")
             } else {
                 console.error(
                     "[hotkey-settings] failed to load preferences",
@@ -118,6 +120,7 @@ export function HotkeySettingsProvider({ children }: { children: ReactNode }) {
                         if (!nextPrefs) return
                         latestPrefsRef.current = nextPrefs
                         setPrefs(nextPrefs)
+                        applyThemeFromPreference(nextPrefs.themeMode ?? "system")
                     },
                 )
                 if (cancelled) {

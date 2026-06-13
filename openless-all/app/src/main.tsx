@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import { App } from "./App";
 import { detectOS } from "./components/WindowChrome";
 import i18n from "./i18n"; // 副作用：触发 i18next init
+import { initThemeMode } from "./lib/themeMode";
 import "./styles/tokens.css";
 import "./styles/global.css";
 
@@ -17,6 +18,7 @@ const isLessComputerGlow = windowKind === "less-computer-glow";
 const osQuery = params.get("os") as OS | null;
 const os = osQuery ?? detectOS();
 document.documentElement.dataset.olPlatform = os;
+initThemeMode();
 
 const root = ReactDOM.createRoot(document.getElementById("root")!);
 

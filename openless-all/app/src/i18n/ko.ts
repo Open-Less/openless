@@ -928,6 +928,13 @@ export const ko: typeof zhCN = {
       ko: '한국어 (Beta)',
       restartHint: '일부 네이티브 메뉴(트레이 등)는 앱 재시작 후 반영될 수 있습니다.',
     },
+    theme: {
+      title: '모양',
+      label: '테마',
+      system: '시스템 따르기',
+      light: '라이트',
+      dark: '다크',
+    },
     remoteInput: {
       title: '원격 입력',
       enableLabel: '원격 입력 활성화',

@@ -960,6 +960,13 @@ export const en: typeof zhCN = {
       ko: '한국어 (Beta)',
       restartHint: 'Some native menus (system tray, etc.) may require an app restart to fully switch.',
     },
+    theme: {
+      title: 'Appearance',
+      label: 'Theme',
+      system: 'Follow system',
+      light: 'Light',
+      dark: 'Dark',
+    },
     remoteInput: {
       title: 'Remote Input',
       enableLabel: 'Enable remote input',

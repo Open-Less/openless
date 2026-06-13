@@ -928,6 +928,13 @@ export const ja: typeof zhCN = {
       ko: '한국어 (Beta)',
       restartHint: '一部のネイティブメニュー（トレイ等）は再起動後に反映されます。',
     },
+    theme: {
+      title: '外観',
+      label: 'テーマ',
+      system: 'システムに従う',
+      light: 'ライト',
+      dark: 'ダーク',
+    },
     remoteInput: {
       title: 'リモート入力',
       enableLabel: 'リモート入力を有効化',

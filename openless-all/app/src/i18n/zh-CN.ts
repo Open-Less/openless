@@ -958,6 +958,13 @@ export const zhCN = {
       ko: '한국어 (Beta)',
       restartHint: '部分原生菜单（系统托盘等）可能需要重启 App 才会切换。',
     },
+    theme: {
+      title: '外观',
+      label: '主题',
+      system: '跟随系统',
+      light: '浅色',
+      dark: '深色',
+    },
     remoteInput: {
       title: '远程输入',
       enableLabel: '启用远程输入',

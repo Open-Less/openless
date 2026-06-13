@@ -168,6 +168,8 @@ export interface WindowsImeStatus {
  *  手动下载 Beta 的入口。不影响 plugin-updater 的自动检查路径。 */
 export type UpdateChannel = 'stable' | 'beta';
 
+export type ThemeMode = 'system' | 'light' | 'dark';
+
 export interface CustomStylePrompts {
   raw: string;
   light: string;
@@ -330,6 +332,8 @@ export interface UserPreferences {
   /** 启动时静默运行（不弹主窗口）。Windows 开机自启场景常用——只想要后台 + 托盘，
    *  不想被主窗口打扰。开后所有启动路径都不弹窗，从菜单栏 / 托盘进入主窗口。默认 false。 */
   startMinimized: boolean;
+  /** UI theme preference: follow OS, light, or dark. */
+  themeMode: ThemeMode;
   /** 自动更新渠道。'stable'（默认）= plugin-updater 仅检查正式版；
    *  'beta' = Settings → About 出现手动下载 Beta 的入口。 */
   updateChannel: UpdateChannel;

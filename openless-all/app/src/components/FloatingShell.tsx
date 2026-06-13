@@ -206,10 +206,10 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
 
       {/* Main shell — flush with the frosted backplate (no separate float). */}
       <div
+        className="ol-app-shell-bg"
         style={{
           flex: 1, minHeight: 0,
           display: 'flex',
-          background: 'transparent',
           overflow: 'hidden',
           position: 'relative',
           zIndex: 1,
@@ -218,6 +218,7 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
         {/* Sidebar — desktop / wide only */}
         {!mobile && (
         <aside
+          className="ol-aura-sidebar"
           style={{
             width: 188,
             flexShrink: 0,
@@ -346,16 +347,17 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
         {/* Main content — Linux 禁用透明窗口后使用不透明面；mobile 全宽无玻璃层。 */}
         <div style={{ flex: 1, minWidth: 0, padding: mobile ? 0 : '4px 8px 8px 0', display: 'flex' }}>
           <main
-            className="ol-console-main"
+            className="ol-console-main ol-aura-panel"
             style={{
               flex: 1, minWidth: 0,
               overflow: 'hidden',
-              background: useOpaqueMain ? 'var(--ol-surface)' : 'rgba(255, 255, 255, 0.62)',
+              background: useOpaqueMain ? 'var(--ol-panel-bg)' : 'var(--ol-aura-surface)',
               backdropFilter: useOpaqueMain ? 'none' : 'blur(18px) saturate(170%)',
               WebkitBackdropFilter: useOpaqueMain ? 'none' : 'blur(18px) saturate(170%)',
-              borderRadius: mobile ? 0 : 'var(--ol-window-console-radius)',
-              border: mobile ? 'none' : '0.5px solid rgba(0,0,0,0.06)',
-              boxShadow: mobile ? 'none' : '0 1px 0 rgba(255,255,255,0.8) inset, 0 8px 24px -12px rgba(15,17,22,0.10), 0 2px 6px -2px rgba(15,17,22,0.06)',
+              borderRadius: 'var(--ol-r-lg)',
+              ...(mobile ? { borderRadius: 0 } : {}),
+              border: mobile ? 'none' : '0.5px solid var(--ol-panel-border)',
+              boxShadow: mobile ? 'none' : 'var(--ol-panel-shadow)',
               display: 'flex',
               flexDirection: 'column',
             }}
@@ -471,7 +473,7 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
           font-weight: 600;
         }
         .ol-nav-btn:not(.ol-nav-btn-active):hover {
-          background: rgba(0,0,0,0.04);
+          background: var(--ol-nav-hover-bg);
           color: var(--ol-ink);
         }
         @keyframes ol-page-slide {
@@ -740,8 +742,8 @@ function ProviderSetupPrompt({ onLater, onOpenSettings }: { onLater: () => void;
               padding: '0 14px',
               borderRadius: 8,
               border: 0,
-              background: 'var(--ol-ink)',
-              color: '#fff',
+              background: 'var(--ol-primary-solid-bg)',
+              color: 'var(--ol-primary-solid-ink)',
               fontFamily: 'inherit',
               fontSize: 12.5,
               fontWeight: 500,
@@ -833,8 +835,8 @@ function HotkeyModeMigrationPrompt({ onLater, onOpenSettings }: { onLater: () =>
               padding: '0 14px',
               borderRadius: 8,
               border: 0,
-              background: 'var(--ol-ink)',
-              color: '#fff',
+              background: 'var(--ol-primary-solid-bg)',
+              color: 'var(--ol-primary-solid-ink)',
               fontFamily: 'inherit',
               fontSize: 12.5,
               fontWeight: 500,

@@ -38,14 +38,6 @@ export function WindowChrome({
   const consoleRadius = os === 'mac' ? 20 : os === 'win' ? WIN_CONSOLE_RADIUS : os === 'android' ? 0 : 14;
   const titlebarHeight = os === 'mac' ? MAC_TITLEBAR_HEIGHT : os === 'linux' ? LINUX_TITLEBAR_HEIGHT : 0;
 
-  // macOS / Windows 共用半透明玻璃 background + backdropFilter。
-  // macOS: NSVisualEffectView 提供材质；Windows: Tauri apply_mica 提供 Mica；
-  // Linux: 透明窗口 / WebKitGTK 合成层不稳定，走不透明 surface。
-  const background = `
-    radial-gradient(120% 80% at 0% 0%, rgba(255,255,255,0.55) 0%, rgba(255,255,255,0) 60%),
-    radial-gradient(100% 70% at 100% 100%, rgba(37,99,235,0.07) 0%, rgba(37,99,235,0) 55%),
-    linear-gradient(180deg, rgba(245,245,247,0.92) 0%, rgba(232,232,236,0.92) 100%)
-  `;
   const useSolidSurface = os === 'linux' || os === 'android';
 
   return (
@@ -63,8 +55,8 @@ export function WindowChrome({
         overflow: 'hidden',
         display: 'flex',
         flexDirection: 'column',
-        border: os === 'win' ? 'none' : os === 'mac' ? 'none' : '0.5px solid rgba(0,0,0,.10)',
-        background: useSolidSurface ? 'var(--ol-surface)' : background,
+        border: os === 'win' ? 'none' : os === 'mac' ? 'none' : '0.5px solid var(--ol-window-border)',
+        background: useSolidSurface ? 'var(--ol-surface)' : 'var(--ol-window-bg)',
         backdropFilter: useSolidSurface ? 'none' : 'blur(var(--ol-glass-blur-strong)) saturate(190%)',
         WebkitBackdropFilter: useSolidSurface ? 'none' : 'blur(var(--ol-glass-blur-strong)) saturate(190%)',
         animation: os === 'win' ? undefined : 'ol-window-enter 0.42s var(--ol-motion-spring) both',
