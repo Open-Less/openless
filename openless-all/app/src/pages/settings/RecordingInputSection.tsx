@@ -17,7 +17,7 @@ import type { HotkeyMode, MicrophoneDevice, PasteShortcut, PlatformCapabilities 
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
 import { SelectLite } from '../../components/ui/SelectLite';
 import { Card, Collapsible } from '../_atoms';
-import { SettingRow, Toggle, inputStyle } from './shared';
+import { SettingRow, Toggle, inputStyle, segmentedTrackStyle } from './shared';
 import { MicrophoneSelect } from './MicrophoneSelect';
 import { detectOS } from '../../components/WindowChrome';
 
@@ -189,7 +189,7 @@ export function RecordingInputSection() {
         )}
         {showDesktopHotkey && (
         <SettingRow label={t('settings.recording.modeLabel')}>
-          <div style={{ display: 'inline-flex', padding: 2, borderRadius: 8, background: 'rgba(0,0,0,0.05)' }}>
+          <div style={segmentedTrackStyle}>
             {choices.map(([v, l]) => (
               <button
                 key={v}
@@ -197,9 +197,9 @@ export function RecordingInputSection() {
                 style={{
                   padding: '5px 14px', fontSize: 12, fontWeight: 500,
                   border: 0, borderRadius: 6, fontFamily: 'inherit',
-                  background: prefs.hotkey.mode === v ? '#fff' : 'transparent',
+                  background: prefs.hotkey.mode === v ? 'var(--ol-segmented-active-bg)' : 'transparent',
                   color: prefs.hotkey.mode === v ? 'var(--ol-ink)' : 'var(--ol-ink-3)',
-                  boxShadow: prefs.hotkey.mode === v ? '0 1px 2px rgba(0,0,0,.08)' : 'none',
+                  boxShadow: prefs.hotkey.mode === v ? 'var(--ol-segmented-active-shadow)' : 'none',
                   cursor: 'default',
                   transition: 'background 0.16s var(--ol-motion-quick), color 0.16s var(--ol-motion-quick), box-shadow 0.18s var(--ol-motion-soft)',
                 }}

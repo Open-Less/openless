@@ -3,7 +3,7 @@
 // 「加入 Beta 渠道」已挪到「高级」页底部（见 BetaChannelSection），这里图标旁
 // 只保留查正式版的「检查更新」按钮。
 
-import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../../components/Icon';
 import { Row } from '../../components/ui/Row';
@@ -11,7 +11,7 @@ import { getPlatformCapabilities, openExternal } from '../../lib/ipc';
 import type { PlatformCapabilities } from '../../lib/types';
 import { APP_VERSION_LABEL } from '../../lib/appVersion';
 import { Card } from '../_atoms';
-import { SectionTitle } from './shared';
+import { btnGhostStyle, SectionTitle } from './shared';
 import { CheckUpdateButton } from './CheckUpdateButton';
 
 const HELP_URL = 'https://github.com/appergb/openless#readme';
@@ -67,27 +67,27 @@ export function AboutSection() {
       <Card>
         <SectionTitle>{t('settings.about.linksTitle')}</SectionTitle>
         <Row label={t('modal.about.source')}>
-          <button style={btnGhost} onClick={() => openExternal('https://github.com/appergb/openless')}>
+          <button style={btnGhostStyle} onClick={() => openExternal('https://github.com/appergb/openless')}>
             GitHub
           </button>
         </Row>
         <Row label={t('modal.about.docs')}>
-          <button style={btnGhost} onClick={() => openExternal(HELP_URL)}>
+          <button style={btnGhostStyle} onClick={() => openExternal(HELP_URL)}>
             {t('modal.about.docsBtn')}
           </button>
         </Row>
         <Row label={t('modal.sections.helpCenter')}>
-          <button style={btnGhost} onClick={() => openExternal(HELP_URL)}>
+          <button style={btnGhostStyle} onClick={() => openExternal(HELP_URL)}>
             {t('modal.sections.helpCenter')}
           </button>
         </Row>
         <Row label={t('modal.sections.releaseNotes')}>
-          <button style={btnGhost} onClick={() => openExternal(RELEASE_NOTES_URL)}>
+          <button style={btnGhostStyle} onClick={() => openExternal(RELEASE_NOTES_URL)}>
             {t('modal.sections.releaseNotes')}
           </button>
         </Row>
         <Row label={t('modal.about.feedback')}>
-          <button style={btnGhost} onClick={() => openExternal('https://github.com/appergb/openless/issues')}>
+          <button style={btnGhostStyle} onClick={() => openExternal('https://github.com/appergb/openless/issues')}>
             {t('modal.about.feedbackBtn')}
           </button>
         </Row>
@@ -100,7 +100,7 @@ export function AboutSection() {
               boxShadow: '0 1px 0 rgba(0,0,0,0.04)',
               color: 'var(--ol-ink-2)',
             }}>1078960553</kbd>
-            <button onClick={copyQq} title={t('modal.about.copyQq')} style={btnGhost}>
+            <button onClick={copyQq} title={t('modal.about.copyQq')} style={btnGhostStyle}>
               <Icon name="copy" size={14} />
             </button>
             {qqCopied && <span style={{ fontSize: 11, color: 'var(--ol-ok)', whiteSpace: 'nowrap' }}>{t('common.copied')}</span>}
@@ -111,11 +111,3 @@ export function AboutSection() {
   );
 }
 
-const btnGhost: CSSProperties = {
-  padding: '5px 10px', fontSize: 12, borderRadius: 6,
-  border: '0.5px solid var(--ol-line-strong)',
-  background: '#fff', color: 'var(--ol-ink-2)',
-  cursor: 'default', fontFamily: 'inherit',
-  maxWidth: '100%',
-  transition: 'background 0.16s var(--ol-motion-quick), border-color 0.16s var(--ol-motion-quick)',
-};

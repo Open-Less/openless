@@ -201,18 +201,20 @@
   --ol-style-editor-border: rgba(255,255,255,0.74);
   --ol-style-editor-shadow: 0 32px 96px -32px rgba(15,23,42,0.34);
 
-  /* Desktop capsule: always dark pill + light icons (independent of app theme). */
-  --ol-capsule-pill-bg: #1a1a1e;
-  --ol-capsule-pill-border: rgba(255, 255, 255, 0.10);
-  --ol-capsule-pill-shadow: 0 18px 50px -10px rgba(0, 0, 0, 0.42), 0 0 0 0.5px rgba(0, 0, 0, 0.24);
-  --ol-capsule-pill-inset: inset 0 1px 0 0 rgba(255, 255, 255, 0.08);
-  --ol-capsule-btn-bg: #2a2a2f;
-  --ol-capsule-btn-bg-confirm: #2e2e33;
-  --ol-capsule-btn-ink: #f4f7fb;
-  --ol-capsule-btn-border: rgba(255, 255, 255, 0.12);
-  --ol-capsule-center-ink: rgba(244, 247, 251, 0.72);
+  /* Desktop capsule: follows app theme (light frosted pill / dark solid pill). */
+  --ol-capsule-pill-bg: rgba(255, 255, 255, 0.90);
+  --ol-capsule-pill-border: rgba(0, 0, 0, 0.10);
+  --ol-capsule-pill-shadow: 0 18px 50px -10px rgba(15, 17, 22, 0.16), 0 0 0 0.5px rgba(0, 0, 0, 0.06);
+  --ol-capsule-pill-inset: inset 0 1px 0 0 rgba(255, 255, 255, 0.72);
+  --ol-capsule-btn-bg: rgba(0, 0, 0, 0.06);
+  --ol-capsule-btn-bg-confirm: rgba(0, 0, 0, 0.08);
+  --ol-capsule-btn-ink: #2a2a2d;
+  --ol-capsule-btn-border: rgba(0, 0, 0, 0.10);
+  --ol-capsule-center-ink: rgba(10, 10, 11, 0.72);
   --ol-capsule-confirm-bg: var(--ol-capsule-btn-bg-confirm);
   --ol-capsule-confirm-ink: var(--ol-capsule-btn-ink);
+  --ol-capsule-badge-bg: rgba(255, 255, 255, 0.82);
+  --ol-capsule-badge-border: rgba(37, 99, 235, 0.25);
 }
 
 [data-ol-theme='dark'] {
@@ -319,7 +321,7 @@
   --ol-control-muted: rgba(255,255,255,0.05);
   --ol-control-muted-strong: rgba(255,255,255,0.08);
   --ol-control-border: rgba(255,255,255,0.08);
-  --ol-control-solid: rgba(24,31,41,0.96);
+  --ol-control-solid: rgba(28, 34, 44, 0.98);
   --ol-control-elevated: rgba(21,27,36,0.98);
   --ol-control-shadow: none;
   --ol-pill-bg: rgba(255,255,255,0.05);
@@ -336,8 +338,8 @@
   --ol-pill-selected-ink: #f4f7fb;
   --ol-pill-selected-border: rgba(96,165,250,0.40);
   --ol-segmented-bg: rgba(255,255,255,0.06);
-  --ol-segmented-active-bg: rgba(255,255,255,0.12);
-  --ol-segmented-active-shadow: none;
+  --ol-segmented-active-bg: rgba(36, 42, 54, 0.98);
+  --ol-segmented-active-shadow: 0 1px 2px rgba(0, 0, 0, 0.28), 0 0 0 0.5px rgba(255, 255, 255, 0.06);
   --ol-toggle-off-bg: rgba(255,255,255,0.16);
   --ol-toggle-knob: #f8fbff;
   --ol-overlay-bg: rgba(4, 8, 14, 0.58);
@@ -382,6 +384,8 @@
   --ol-capsule-center-ink: rgba(244, 247, 251, 0.72);
   --ol-capsule-confirm-bg: var(--ol-capsule-btn-bg-confirm);
   --ol-capsule-confirm-ink: var(--ol-capsule-btn-ink);
+  --ol-capsule-badge-bg: rgba(26, 26, 30, 0.94);
+  --ol-capsule-badge-border: rgba(96, 165, 250, 0.28);
 }
 
 * { box-sizing: border-box; }

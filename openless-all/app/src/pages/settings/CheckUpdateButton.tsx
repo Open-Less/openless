@@ -5,7 +5,8 @@
 // 呈现 2.5s 后自动回到 idle，绝不另起文字块、不改变所在卡片高度 —— 杜绝
 // 「渲染框突然变大 / 抽搐」。发现新版则弹出固定定位的 UpdateDialog。
 
-import { useEffect, type CSSProperties } from 'react';
+import { useEffect } from 'react';
+import { btnGhostStyle } from './shared';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../../components/Icon';
 import { isDialogStatus, UpdateDialog, useAutoUpdate } from '../../components/AutoUpdate';
@@ -45,7 +46,7 @@ export function CheckUpdateButton({ channel }: { channel: UpdateChannel }) {
               ? t('settings.about.upToDate')
               : undefined
         }
-        style={{ ...checkBtnStyle, color, opacity: checking || busy ? 0.7 : 1 }}
+        style={{ ...btnGhostStyle, color, opacity: checking || busy ? 0.7 : 1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, minWidth: 84 }}
       >
         <Icon
           name={iconName}
@@ -69,12 +70,3 @@ export function CheckUpdateButton({ channel }: { channel: UpdateChannel }) {
   );
 }
 
-const checkBtnStyle: CSSProperties = {
-  padding: '5px 10px', fontSize: 12, borderRadius: 6,
-  border: '0.5px solid var(--ol-line-strong)',
-  background: '#fff',
-  cursor: 'default', fontFamily: 'inherit',
-  display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-  minWidth: 84,
-  transition: 'background 0.16s var(--ol-motion-quick), border-color 0.16s var(--ol-motion-quick), color 0.16s var(--ol-motion-quick)',
-};
