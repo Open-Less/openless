@@ -230,8 +230,8 @@ Desktop permissions live in `capabilities/default.json` with `"platforms": ["mac
 
 | Trigger | Build mode | Behavior |
 |---|---|---|
-| `workflow_dispatch` | **debug** | Build 4 split debug APKs → upload Actions artifacts only |
-| Push tag `v*-tauri` / `v*-beta-tauri` | **release** | Signed release APKs + minisign `.sig` + `latest-android-{arch}[-beta].json` → attach to GitHub Release |
+| `workflow_dispatch` | **release** if `ANDROID_KEYSTORE_*` secrets configured; else **debug (unsigned)** | Upload Actions artifacts; non-blocking fallback with job summary notice when unsigned |
+| Push tag `v*-tauri` / `v*-beta-tauri` | **release** (required secrets) | Signed release APKs + minisign `.sig` + `latest-android-{arch}[-beta].json` → attach to GitHub Release |
 
 `OPENLESS_RELEASE_CHANNEL` matches desktop `release-tauri.yml`: `-beta-tauri` → beta (prerelease manifests); otherwise stable.
 
