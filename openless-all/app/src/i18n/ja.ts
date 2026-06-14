@@ -975,6 +975,7 @@ export const ja: typeof zhCN = {
       localFirst: 'ローカル優先',
       linksTitle: 'ドキュメント',
       betaChannelLabel: 'Beta チャンネルに参加',
+      betaChannelToggleLabel: 'Beta チャンネルを有効化',
       betaChannelDesc: 'オンにするとバックグラウンド自動更新が Beta に従います。オフで正式版に戻ります。下のボタンでいつでも Beta を手動確認できます。',
       autoUpdateSectionTitle: '自動更新',
       autoUpdateCheckLabelAndroid: '自動確認してダウンロード',

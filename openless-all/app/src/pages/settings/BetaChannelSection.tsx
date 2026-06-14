@@ -7,7 +7,7 @@ import { useTranslation } from 'react-i18next';
 import { getPlatformCapabilities, getUpdateChannel, setUpdateChannel, type UpdateChannel } from '../../lib/ipc';
 import type { PlatformCapabilities } from '../../lib/types';
 import { Card } from '../_atoms';
-import { SectionTitle, Toggle } from './shared';
+import { SectionTitle, SettingRow, Toggle } from './shared';
 import { CheckUpdateButton } from './CheckUpdateButton';
 
 export function BetaChannelSection() {
@@ -42,16 +42,14 @@ export function BetaChannelSection() {
   return (
     <Card>
       <SectionTitle>{t('settings.about.betaChannelLabel')}</SectionTitle>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 12, paddingTop: 2 }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-          <span style={{ fontSize: 12.5, color: 'var(--ol-ink-3)', lineHeight: 1.55 }}>
-            {t('settings.about.betaChannelDesc')}
-          </span>
-          <Toggle on={channel === 'beta'} onToggle={onToggle} />
-        </div>
-        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-          <CheckUpdateButton channel="beta" />
-        </div>
+      <p style={{ fontSize: 12.5, color: 'var(--ol-ink-3)', lineHeight: 1.55, margin: '0 0 4px' }}>
+        {t('settings.about.betaChannelDesc')}
+      </p>
+      <SettingRow label={t('settings.about.betaChannelToggleLabel')}>
+        <Toggle on={channel === 'beta'} onToggle={onToggle} />
+      </SettingRow>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', paddingTop: 4 }}>
+        <CheckUpdateButton channel="beta" />
       </div>
     </Card>
   );

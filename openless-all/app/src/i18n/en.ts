@@ -1007,6 +1007,7 @@ export const en: typeof zhCN = {
       localFirst: 'Local-first',
       linksTitle: 'Documentation',
       betaChannelLabel: 'Join Beta channel',
+      betaChannelToggleLabel: 'Enable Beta channel',
       betaChannelDesc: 'When on, background auto-update follows Beta; when off, it uses stable. Use the button below to manually check Beta anytime.',
       autoUpdateSectionTitle: 'Auto-update',
       autoUpdateCheckLabelAndroid: 'Auto-check and download updates',

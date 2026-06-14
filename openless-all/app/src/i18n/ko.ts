@@ -975,6 +975,7 @@ export const ko: typeof zhCN = {
       localFirst: '로컬 우선',
       linksTitle: '문서 링크',
       betaChannelLabel: 'Beta 채널 참여',
+      betaChannelToggleLabel: 'Beta 채널 사용',
       betaChannelDesc: '켜면 백그라운드 자동 업데이트가 Beta를 따릅니다. 끄면 정식판으로 돌아갑니다. 아래 버튼으로 언제든 Beta를 수동 확인할 수 있습니다.',
       autoUpdateSectionTitle: '자동 업데이트',
       autoUpdateCheckLabelAndroid: '자동 확인 및 다운로드',

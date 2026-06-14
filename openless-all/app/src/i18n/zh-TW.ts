@@ -973,6 +973,7 @@ export const zhTW: typeof zhCN = {
       localFirst: '本地優先',
       linksTitle: '文件連結',
       betaChannelLabel: '加入 Beta 渠道',
+      betaChannelToggleLabel: '啟用 Beta 渠道',
       betaChannelDesc: '開啟後，背景自動更新將跟隨 Beta 渠道；關閉則回到正式版。下方按鈕可隨時手動檢查 Beta 更新。',
       autoUpdateSectionTitle: '自動更新',
       autoUpdateCheckLabelAndroid: '自動檢查並下載更新',

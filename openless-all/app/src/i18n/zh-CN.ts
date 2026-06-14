@@ -1005,6 +1005,7 @@ export const zhCN = {
       localFirst: '本地优先',
       linksTitle: '文档链接',
       betaChannelLabel: '加入 Beta 渠道',
+      betaChannelToggleLabel: '启用 Beta 渠道',
       betaChannelDesc: '开启后，后台自动更新将跟随 Beta 渠道；关闭则回到正式版。下方按钮可随时手动检查 Beta 更新。',
       autoUpdateSectionTitle: '自动更新',
       autoUpdateCheckLabelAndroid: '自动检查并下载更新',
