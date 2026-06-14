@@ -3,6 +3,7 @@
 pub mod accessibility;
 #[cfg(target_os = "android")]
 pub mod insert;
+pub mod updater_logic;
 #[cfg(target_os = "android")]
 pub mod updater;
 pub mod jni;

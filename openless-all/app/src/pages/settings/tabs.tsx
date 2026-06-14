@@ -16,6 +16,7 @@ import { DebugToolsSection } from './DebugToolsSection';
 import { CodingAgentSection } from './CodingAgentSection';
 import { ClaudeConsoleSection } from './ClaudeConsoleSection';
 import { BetaChannelSection } from './BetaChannelSection';
+import { AutoUpdateSection } from './AutoUpdateSection';
 import { detectOS } from '../../components/WindowChrome';
 import { getPlatformCapabilities } from '../../lib/platform';
 import type { PlatformCapabilities } from '../../lib/types';
@@ -100,6 +101,7 @@ export function AdvancedTab() {
       {showDesktopAdvanced && <DebugToolsSection />}
       {showDesktopAdvanced && os !== 'win' && <CodingAgentSection />}
       {showDesktopAdvanced && os !== 'win' && <ClaudeConsoleSection />}
+      {platformCaps?.supportsAutoUpdate === true && <AutoUpdateSection />}
       {platformCaps?.supportsAutoUpdate === true && <BetaChannelSection />}
     </>
   );

@@ -8,6 +8,10 @@ mod android_impl {
     use serde::Deserialize;
     use tauri::{AppHandle, Emitter};
 
+    use crate::android::updater_logic::{
+        beta_manifest_urls, format_manifest_error, map_abi_to_arch, stable_manifest_urls,
+        version_is_newer,
+    };
     use crate::commands::{
         fetch_latest_beta_release, parse_latest_beta_from_atom, AppUpdateMetadata,
     };
@@ -15,8 +19,6 @@ mod android_impl {
     use crate::types::UpdateChannel;
 
     const PUBKEY_B64: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDFERUFBODAzNTY0QzMyM0YKUldRL01reFdBNmpxSGE1K0JadlpONXNWTzhJcGZCRGxjUVdIWExNNFJpeUNsSGZwazdlQThhemkK";
-    const MIRROR_BASE: &str = "https://fastgit.cc/https://github.com/appergb/openless";
-    const DIRECT_BASE: &str = "https://github.com/appergb/openless";
 
     #[derive(Debug, Deserialize)]
     struct UpdaterManifest {
@@ -67,38 +69,6 @@ mod android_impl {
         })
     }
 
-    fn map_abi_to_arch(abi: &str) -> &'static str {
-        match abi {
-            "arm64-v8a" => "aarch64",
-            "armeabi-v7a" => "armv7",
-            "x86" => "i686",
-            "x86_64" => "x86_64",
-            _ => "aarch64",
-        }
-    }
-
-    fn version_is_newer(remote: &str, current: &str) -> bool {
-        fn parts(v: &str) -> Vec<u32> {
-            v.split(|c| c == '.' || c == '-')
-                .filter_map(|p| p.parse().ok())
-                .collect()
-        }
-        let remote_parts = parts(remote);
-        let current_parts = parts(current);
-        let max = remote_parts.len().max(current_parts.len());
-        for i in 0..max {
-            let r = remote_parts.get(i).copied().unwrap_or(0);
-            let c = current_parts.get(i).copied().unwrap_or(0);
-            if r > c {
-                return true;
-            }
-            if r < c {
-                return false;
-            }
-        }
-        false
-    }
-
     async fn fetch_manifest(url: &str) -> Result<UpdaterManifest, String> {
         let resp = net::send_with_retry(|| {
             net::http()
@@ -108,36 +78,23 @@ mod android_impl {
         .await
         .map_err(|e| format!("fetch manifest: {e}"))?;
         if !resp.status().is_success() {
-            return Err(format!("manifest status {}", resp.status()));
+            return Err(format_manifest_error(resp.status().as_u16(), url));
         }
         resp.json::<UpdaterManifest>()
             .await
             .map_err(|e| format!("parse manifest: {e}"))
     }
 
-    async fn resolve_stable_manifest_urls(arch: &str) -> Vec<String> {
-        vec![
-            format!("{MIRROR_BASE}/releases/latest/download/latest-android-{arch}-mirror.json"),
-            format!("{DIRECT_BASE}/releases/latest/download/latest-android-{arch}.json"),
-        ]
-    }
-
-    async fn resolve_beta_manifest_urls(arch: &str) -> Result<Vec<String>, String> {
-        let Some(latest) = fetch_latest_beta_release().await? else {
-            return Err("尚未发布过 Beta 版本".to_string());
-        };
-        let tag = latest.tag_name;
-        Ok(vec![
-            format!("{MIRROR_BASE}/releases/download/{tag}/latest-android-{arch}-beta-mirror.json"),
-            format!("{DIRECT_BASE}/releases/download/{tag}/latest-android-{arch}-beta.json"),
-        ])
-    }
-
     pub async fn check_update(channel: UpdateChannel) -> Result<Option<AppUpdateMetadata>, String> {
         let arch = device_arch()?;
         let urls = match channel {
-            UpdateChannel::Stable => resolve_stable_manifest_urls(arch).await,
-            UpdateChannel::Beta => resolve_beta_manifest_urls(arch).await?,
+            UpdateChannel::Stable => stable_manifest_urls(arch),
+            UpdateChannel::Beta => {
+                let Some(latest) = fetch_latest_beta_release().await? else {
+                    return Err("尚未发布过 Beta 版本".to_string());
+                };
+                beta_manifest_urls(arch, &latest.tag_name)
+            }
         };
         let current = env!("CARGO_PKG_VERSION").to_string();
         let mut last_err = String::new();
