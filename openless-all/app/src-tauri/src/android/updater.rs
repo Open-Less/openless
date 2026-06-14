@@ -41,13 +41,9 @@ mod android_impl {
 
     fn device_arch() -> Result<&'static str, String> {
         crate::android::jni::android::with_android_env(|env, _context| {
+            // SUPPORTED_ABIS is a static field, not a method — call_static_method crashes.
             let abis_obj = env
-                .call_static_method(
-                    "android/os/Build",
-                    "SUPPORTED_ABIS",
-                    "()[Ljava/lang/String;",
-                    &[],
-                )
+                .get_static_field("android/os/Build", "SUPPORTED_ABIS", "[Ljava/lang/String;")
                 .and_then(|value| value.l())
                 .map_err(|e| format!("read SUPPORTED_ABIS: {e}"))?;
             let abis_array = jni::objects::JObjectArray::from(abis_obj);
