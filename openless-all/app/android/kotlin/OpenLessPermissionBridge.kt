@@ -6,13 +6,16 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.util.Log
+import androidx.annotation.Keep
 import java.util.concurrent.atomic.AtomicBoolean
 
+@Keep
 object OpenLessPermissionBridge {
     private const val TAG = "OpenLessPermissionBridge"
 
     private val requestInFlight = AtomicBoolean(false)
 
+    @Keep
     @JvmStatic
     fun requestRecordAudioPermission(context: Context): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {

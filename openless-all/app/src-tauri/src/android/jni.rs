@@ -182,13 +182,12 @@ pub mod android {
             &[JValue::Object(&action_obj)],
         )
         .map_err(|error| format!("set service action: {error}"))?;
-        let start_method = if action.ends_with(".HIDE") || action.ends_with(".SHOW") {
-            "startService"
-        } else if android_sdk_int(env)? >= 26 {
-            "startForegroundService"
-        } else {
-            "startService"
-        };
+        let start_method =
+            if action.ends_with(".START_RECORDING") && android_sdk_int(env)? >= 26 {
+                "startForegroundService"
+            } else {
+                "startService"
+            };
         env.call_method(
             context,
             start_method,
