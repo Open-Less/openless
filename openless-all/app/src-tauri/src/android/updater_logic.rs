@@ -109,7 +109,7 @@ mod tests {
         let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let conf_path = manifest_dir.join("tauri.conf.json");
         let conf_text = std::fs::read_to_string(&conf_path)
-            .unwrap_or_else(|e| panic!("read {}: {e}", conf_path));
+            .unwrap_or_else(|e| panic!("read {}: {e}", conf_path.display()));
         let conf: serde_json::Value =
             serde_json::from_str(&conf_text).expect("parse tauri.conf.json");
         let conf_pubkey = conf
