@@ -3,6 +3,14 @@
 pub const MIRROR_BASE: &str = "https://fastgit.cc/https://github.com/appergb/openless";
 pub const DIRECT_BASE: &str = "https://github.com/appergb/openless";
 
+/// Must match `plugins.updater.pubkey` in `tauri.conf.json` (TAURI_SIGNING_PRIVATE_KEY pair).
+pub const UPDATER_PUBKEY_B64: &str =
+    "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDZGNEI1OTk0RjMzMzk0QTkKUldTcGxEUHpsRmxMYjRnMFdZNkFyaVozaHN2SUNwZ01mMDlFS0RMWnNQNisrWjF6czZQQk1RQysK";
+
+/// Returned when Kotlin `installApk` cannot open the system installer (e.g. missing install permission).
+pub const INSTALLER_NOT_OPENED_MSG: &str =
+    "无法打开系统安装器：请先在系统设置中允许 OpenLess 安装未知应用，然后重新点击更新";
+
 pub fn map_abi_to_arch(abi: &str) -> &'static str {
     match abi {
         "arm64-v8a" => "aarch64",
@@ -94,5 +102,22 @@ mod tests {
     #[test]
     fn map_abi_to_arch_maps_arm64() {
         assert_eq!(map_abi_to_arch("arm64-v8a"), "aarch64");
+    }
+
+    #[test]
+    fn updater_pubkey_matches_tauri_conf() {
+        let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let conf_path = manifest_dir.join("tauri.conf.json");
+        let conf_text = std::fs::read_to_string(&conf_path)
+            .unwrap_or_else(|e| panic!("read {}: {e}", conf_path));
+        let conf: serde_json::Value =
+            serde_json::from_str(&conf_text).expect("parse tauri.conf.json");
+        let conf_pubkey = conf
+            .get("plugins")
+            .and_then(|p| p.get("updater"))
+            .and_then(|u| u.get("pubkey"))
+            .and_then(|v| v.as_str())
+            .expect("plugins.updater.pubkey in tauri.conf.json");
+        assert_eq!(conf_pubkey, UPDATER_PUBKEY_B64);
     }
 }

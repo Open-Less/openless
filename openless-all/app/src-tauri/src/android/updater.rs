@@ -10,15 +10,13 @@ mod android_impl {
 
     use crate::android::updater_logic::{
         beta_manifest_urls, format_manifest_error, map_abi_to_arch, stable_manifest_urls,
-        version_is_newer,
+        UPDATER_PUBKEY_B64, INSTALLER_NOT_OPENED_MSG, version_is_newer,
     };
     use crate::commands::{
         fetch_latest_beta_release, parse_latest_beta_from_atom, AppUpdateMetadata,
     };
     use crate::net;
     use crate::types::UpdateChannel;
-
-    const PUBKEY_B64: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDFERUFBODAzNTY0QzMyM0YKUldRL01reFdBNmpxSGE1K0JadlpONXNWTzhJcGZCRGxjUVdIWExNNFJpeUNsSGZwazdlQThhemkK";
 
     #[derive(Debug, Deserialize)]
     struct UpdaterManifest {
@@ -128,7 +126,7 @@ mod android_impl {
 
     fn verify_signature(apk_bytes: &[u8], signature_b64: &str) -> Result<(), String> {
         let public_key =
-            PublicKey::from_base64(PUBKEY_B64).map_err(|e| format!("parse updater pubkey: {e}"))?;
+            PublicKey::from_base64(UPDATER_PUBKEY_B64).map_err(|e| format!("parse updater pubkey: {e}"))?;
         let signature =
             Signature::decode(signature_b64.trim()).map_err(|e| format!("decode signature: {e}"))?;
         public_key
@@ -207,10 +205,13 @@ mod android_impl {
             .to_str()
             .ok_or_else(|| "apk path is not UTF-8".to_string())?
             .to_string();
-        crate::android::jni::android::with_android_env(|env, context| {
+        let opened = crate::android::jni::android::with_android_env(|env, context| {
             let path_obj = crate::android::jni::android::jobject_str(env, &path)?;
             crate::android::jni::android::install_apk_from_path(env, context, &path_obj)
         })?;
+        if !opened {
+            return Err(INSTALLER_NOT_OPENED_MSG.to_string());
+        }
         Ok(())
     }
 

@@ -101,8 +101,8 @@ export function AdvancedTab() {
       {showDesktopAdvanced && <DebugToolsSection />}
       {showDesktopAdvanced && os !== 'win' && <CodingAgentSection />}
       {showDesktopAdvanced && os !== 'win' && <ClaudeConsoleSection />}
-      {platformCaps?.supportsAutoUpdate === true && <AutoUpdateSection />}
       {platformCaps?.supportsAutoUpdate === true && <BetaChannelSection />}
+      {platformCaps?.supportsAutoUpdate === true && <AutoUpdateSection />}
     </>
   );
 }
