@@ -61,7 +61,7 @@ const DEFAULT_TRIGGER_STYLE: CSSProperties = {
   fontFamily: 'inherit',
   borderRadius: 8,
   border: '0.5px solid var(--ol-line-strong)',
-  background: 'var(--ol-surface-2)',
+  background: 'var(--ol-select-trigger-bg)',
   color: 'var(--ol-ink)',
   cursor: 'default',
   outline: 'none',
@@ -313,11 +313,11 @@ export function SelectLite({
             overflowY: 'auto',
             padding: 4,
             borderRadius: 10,
-            border: '0.5px solid rgba(0, 0, 0, 0.10)',
-            background: 'rgba(252, 252, 254, 0.94)',
+            border: '0.5px solid var(--ol-select-popover-border)',
+            background: 'var(--ol-select-popover-bg)',
             backdropFilter: 'blur(20px) saturate(180%)',
             WebkitBackdropFilter: 'blur(20px) saturate(180%)',
-            boxShadow: '0 12px 30px -10px rgba(15, 17, 22, 0.25), 0 0 0 0.5px rgba(0, 0, 0, 0.06)',
+            boxShadow: 'var(--ol-select-popover-shadow)',
             zIndex: 9999,
             fontFamily: 'inherit',
             fontSize: 12.5,
@@ -351,7 +351,7 @@ export function SelectLite({
                   cursor: option.disabled ? 'not-allowed' : 'default',
                   opacity: option.disabled ? 0.45 : 1,
                   background: isHighlighted && !option.disabled
-                    ? 'rgba(37, 99, 235, 0.10)'
+                    ? 'var(--ol-select-option-hover-bg)'
                     : 'transparent',
                   color: isSelected ? 'var(--ol-blue)' : 'var(--ol-ink)',
                   fontWeight: isSelected ? 600 : 500,

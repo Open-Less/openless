@@ -128,6 +128,16 @@ export function Toggle({
     )
 }
 
+export function chipSelectedStyle(selected: boolean): CSSProperties {
+    return {
+        background: selected ? "var(--ol-pill-selected-bg)" : "transparent",
+        border: selected
+            ? "0.5px solid var(--ol-pill-selected-border)"
+            : "0.5px solid var(--ol-line-strong)",
+        color: selected ? "var(--ol-pill-selected-ink)" : "var(--ol-ink-3)",
+    }
+}
+
 export const btnGhostStyle: CSSProperties = {
     padding: "5px 10px",
     fontSize: 12,

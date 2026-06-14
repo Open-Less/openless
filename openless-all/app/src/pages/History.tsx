@@ -11,6 +11,7 @@ import { useMobileLayout } from '../lib/useMobileLayout';
 import type { DictationSession, PolishMode } from '../lib/types';
 import { useHotkeySettings } from '../state/HotkeySettingsContext';
 import { Btn, Card, PageHeader, Pill } from './_atoms';
+import { chipSelectedStyle } from './settings/shared';
 
 function useFilters(): Array<{ id: 'all' | PolishMode; label: string }> {
   const { t } = useTranslation();
@@ -199,9 +200,7 @@ export function History() {
                   onClick={() => setFilter(f.id)}
                   style={{
                     padding: '3px 9px', fontSize: 11, borderRadius: 999,
-                    border: '0.5px solid ' + (filter === f.id ? 'var(--ol-ink)' : 'var(--ol-line-strong)'),
-                    background: filter === f.id ? 'var(--ol-ink)' : 'transparent',
-                    color: filter === f.id ? '#fff' : 'var(--ol-ink-3)',
+                    ...chipSelectedStyle(filter === f.id),
                     cursor: 'default', fontFamily: 'inherit', fontWeight: 500,
                     transition: 'background 0.16s var(--ol-motion-quick), color 0.16s var(--ol-motion-quick), border-color 0.16s var(--ol-motion-quick)',
                   }}

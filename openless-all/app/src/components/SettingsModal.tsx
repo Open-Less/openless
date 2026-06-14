@@ -16,6 +16,7 @@ import { useMobileLayout } from '../lib/useMobileLayout';
 import type { OS } from './WindowChrome';
 import { GeneralTab, ServicesTab, PrivacyTab, AdvancedTab } from '../pages/settings/tabs';
 import { AboutSection } from '../pages/settings/AboutSection';
+import { chipSelectedStyle } from '../pages/settings/shared';
 
 // 稳定 tab ID（与 i18n key `modal.sections.*` 一致）。
 export type SettingsSectionId =
@@ -304,13 +305,11 @@ function mobileTabChipStyle(active: boolean): CSSProperties {
     flexShrink: 0,
     padding: '6px 12px',
     borderRadius: 999,
-    border: active ? '0.5px solid var(--ol-ink)' : '0.5px solid var(--ol-line-strong)',
-    background: active ? 'var(--ol-ink)' : 'transparent',
-    color: active ? '#fff' : 'var(--ol-ink-3)',
     fontFamily: 'inherit',
     fontSize: 12,
     fontWeight: active ? 600 : 500,
     cursor: 'default',
+    ...chipSelectedStyle(active),
   };
 }
 

@@ -331,7 +331,7 @@ function WeekChart({ data }: { data: number[] }) {
                 height: `${(v / max) * 80}px`,
                 minHeight: 2,
                 borderRadius: 4,
-                background: isToday ? 'var(--ol-blue)' : 'var(--ol-ink)',
+                background: isToday ? 'var(--ol-blue)' : 'var(--ol-ink-4)',
                 opacity: v === 0 ? 0.15 : isToday ? 1 : 0.85,
                 transition: 'height 0.18s var(--ol-motion-soft), opacity 0.18s var(--ol-motion-soft)',
               }}

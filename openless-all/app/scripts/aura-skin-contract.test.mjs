@@ -186,7 +186,7 @@ assertUsesClassName(
   'sample should accept className usage',
 );
 
-const [tokens, globalCss, shell, settingsModal, overview, settingsTabs, themeMode, stylePage, sourceFiles, remoteStyle] = await Promise.all([
+const [tokens, globalCss, shell, settingsModal, overview, settingsTabs, themeMode, stylePage, sourceFiles, remoteStyle, selectLite, translationPage] = await Promise.all([
   read('src/styles/tokens.css'),
   read('src/styles/global.css'),
   read('src/components/FloatingShell.tsx'),
@@ -197,6 +197,8 @@ const [tokens, globalCss, shell, settingsModal, overview, settingsTabs, themeMod
   read('src/pages/Style.tsx'),
   walkSourceFiles(srcRoot),
   read('src-tauri/src/remote_server/assets/style.css'),
+  read('src/components/ui/SelectLite.tsx'),
+  read('src/pages/Translation.tsx'),
 ]);
 
 assert.match(tokens, /--ol-shell-radius:/, 'tokens.css must define --ol-shell-radius');
@@ -363,6 +365,28 @@ assert.match(
   'tokens.css must define --ol-capsule-confirm-ink in dark theme',
 );
 
+assert.match(tokens, /--ol-select-trigger-bg:/, 'tokens.css must define --ol-select-trigger-bg');
+assert.match(tokens, /--ol-select-popover-bg:/, 'tokens.css must define --ol-select-popover-bg');
+assert.match(
+  tokens,
+  /\[data-ol-theme='dark'\][\s\S]*--ol-select-popover-bg:/,
+  'tokens.css must define --ol-select-popover-bg in dark theme',
+);
+
+assert.match(selectLite, /--ol-select-trigger-bg/, 'SelectLite must use --ol-select-trigger-bg');
+assert.match(selectLite, /--ol-select-popover-bg/, 'SelectLite must use --ol-select-popover-bg');
+assert.match(selectLite, /--ol-select-option-hover-bg/, 'SelectLite must use --ol-select-option-hover-bg');
+assert.doesNotMatch(
+  selectLite,
+  /rgba\(\s*252\s*,/,
+  'SelectLite must not hardcode light popover rgba backgrounds',
+);
+assert.doesNotMatch(
+  translationPage,
+  /background:\s*'#fff'/,
+  'Translation.tsx must not override SelectLite with hardcoded #fff background',
+);
+
 assert.match(globalCss, /\.ol-app-shell-bg\b/, 'global.css must expose .ol-app-shell-bg');
 assert.match(globalCss, /\.ol-aura-panel\b/, 'global.css must expose .ol-aura-panel');
 assert.doesNotMatch(globalCss, /@keyframes ol-aura-halo/, 'global.css must not add an animated halo');
@@ -433,7 +457,8 @@ const illegalCssStringPatterns = [
   /background:\s*'var\([^)]+\)';/,
 ];
 
-const forbiddenInlineInkBackground = /background:\s*'var\(--ol-ink\)'/;
+const forbiddenInlineInkBackground =
+  /background:\s*'var\(--ol-ink\)'|background:\s*[^,\n;{]+?\?\s*'var\(--ol-ink\)'/;
 
 const forbiddenBlueOnAccentCombo =
   /background:[\s\S]{0,200}var\(--ol-blue\)[\s\S]{0,500}?color:[\s\S]{0,200}var\(--ol-on-accent\)|color:[\s\S]{0,200}var\(--ol-on-accent\)[\s\S]{0,500}?background:[\s\S]{0,200}var\(--ol-blue\)/;

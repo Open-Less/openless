@@ -228,7 +228,7 @@ export function Translation() {
             options={targetOptions}
             placeholder={t('translation.target.disabled')}
             ariaLabel={t('translation.target.title')}
-            style={{ width: '100%', maxWidth: 360, fontSize: 13, background: '#fff' }}
+            style={{ width: '100%', maxWidth: 360, fontSize: 13 }}
           />
         </Card>
 
