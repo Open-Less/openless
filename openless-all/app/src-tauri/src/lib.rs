@@ -28,6 +28,10 @@ mod commands;
 mod coordinator;
 mod coordinator_state;
 mod correction;
+// 托盘麦克风设备变更监听：macOS CoreAudio / Windows MMDevice 原生通知（空闲零唤醒），
+// Linux 退化为纯轮询兜底。仅桌面端。详见 issue #470。
+#[cfg(not(mobile))]
+mod device_watch;
 mod external_url;
 #[cfg(not(mobile))]
 mod global_hotkey_runtime;
@@ -902,21 +906,74 @@ fn microphone_device_signature() -> Option<Vec<(String, bool)>> {
     }
 }
 
+/// 在主线程上刷新托盘麦克风子菜单并通知前端。供 OS 原生设备变更回调与慢速兜底轮询
+/// 共用同一条收尾路径。已在主线程或被 `run_on_main_thread` 派发后调用。
+#[cfg(not(mobile))]
+fn refresh_microphone_on_main(app: &AppHandle) {
+    if let Err(err) = refresh_tray_microphone_menu(app) {
+        log::warn!("[tray] refresh microphone menu after device change failed: {err}");
+    }
+    let _ = app.emit("microphone:devices-changed", serde_json::json!({}));
+}
+
+/// 设备变更去抖闭包：被 OS 原生通知回调（macOS CoreAudio / Windows MMDevice）调用。
+/// 复用 `microphone_device_signature()` 去抖——签名没变就零副作用直接返回；变了才
+/// `run_on_main_thread` 派发刷新+emit。OS 通知可能合并/重复触发，去抖确保只在真正
+/// 变化时刷新。`last_signature` 用 `Mutex` 保护，因为回调可能从不同的 CoreAudio/COM
+/// 线程并发进入。
+#[cfg(not(mobile))]
+fn make_microphone_change_handler(app: AppHandle) -> impl Fn() + Send + Sync + 'static {
+    let last_signature = parking_lot::Mutex::new(microphone_device_signature());
+    move || {
+        let signature = microphone_device_signature();
+        {
+            let mut guard = last_signature.lock();
+            if signature == *guard {
+                return;
+            }
+            *guard = signature;
+        }
+        let refresh_app = app.clone();
+        let _ = app.run_on_main_thread(move || refresh_microphone_on_main(&refresh_app));
+    }
+}
+
 #[cfg(not(mobile))]
 fn start_tray_microphone_watcher(app: AppHandle) {
     TRAY_MICROPHONE_WATCHER_STOPPING.store(false, Ordering::Relaxed);
+
+    // 1) OS 原生设备变更通知（issue #470 的最优方案）：空闲零唤醒。
+    //    macOS → CoreAudio AudioObjectAddPropertyListener；Windows → IMMNotificationClient。
+    //    Linux 无原生路径，返回 false，纯靠下面的慢速兜底。
+    //    注册失败（OSStatus≠0 / RegisterEndpoint Err）只 warn，不 panic——兜底轮询保证
+    //    三平台都「永远能检测到设备」。
+    let native_registered =
+        device_watch::spawn_native_watcher(app.clone(), make_microphone_change_handler(app.clone()));
+    if native_registered {
+        log::info!("[tray] OS native microphone device watcher registered");
+    } else {
+        log::info!(
+            "[tray] no OS native microphone device watcher (unsupported platform or registration failed); relying on slow poll fallback"
+        );
+    }
+
+    // 2) 全平台慢速兜底：60s 无条件轮询，复用 signature 去抖（签名没变就 continue，零
+    //    副作用）。原生通知失败时由它保证设备变更最终被检测到；原生通知正常时它只是
+    //    极低频的安全网，几乎从不真正刷新。
     if let Err(err) = std::thread::Builder::new()
-        .name("openless-tray-mic-watch".into())
+        .name("openless-tray-mic-poll".into())
         .spawn(move || {
             let mut last_signature = microphone_device_signature();
             while !TRAY_MICROPHONE_WATCHER_STOPPING.load(Ordering::Relaxed) {
-                // 10s, not 1.5s. `list_input_devices()` is a relatively costly
-                // CoreAudio/WASAPI enumeration and this ran every 1.5s forever —
-                // the single biggest idle wakeup. The tray menu refreshes on hover
-                // and the settings page reacts to `microphone:devices-changed`, so
-                // ~10s detection latency is fine. (Proper fix: subscribe to an OS
-                // device-change notification instead of polling.)
-                std::thread::sleep(Duration::from_millis(10_000));
+                // 60s（而非 10s）：原生通知承担实时检测，这条线程只是兜底，把它拉到 60s
+                // 进一步压低空闲唤醒。1s 一片的睡眠让退出 flag 最多 1s 内生效，避免退出时
+                // 长时间挂起线程。
+                for _ in 0..60 {
+                    if TRAY_MICROPHONE_WATCHER_STOPPING.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    std::thread::sleep(Duration::from_secs(1));
+                }
                 if TRAY_MICROPHONE_WATCHER_STOPPING.load(Ordering::Relaxed) {
                     break;
                 }
@@ -925,20 +982,12 @@ fn start_tray_microphone_watcher(app: AppHandle) {
                     continue;
                 }
                 last_signature = signature;
-                let app = app.clone();
                 let refresh_app = app.clone();
-                let _ = app.run_on_main_thread(move || {
-                    if let Err(err) = refresh_tray_microphone_menu(&refresh_app) {
-                        log::warn!(
-                            "[tray] refresh microphone menu after device change failed: {err}"
-                        );
-                    }
-                    let _ = refresh_app.emit("microphone:devices-changed", serde_json::json!({}));
-                });
+                let _ = app.run_on_main_thread(move || refresh_microphone_on_main(&refresh_app));
             }
         })
     {
-        log::warn!("[tray] start microphone watcher failed: {err}");
+        log::warn!("[tray] start microphone poll fallback failed: {err}");
     }
 }
 

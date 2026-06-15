@@ -104,6 +104,10 @@ minisign-verify = "0.2"
 block2 = "0.5"
 core-foundation = "0.10"
 core-graphics = "0.24"
+# issue #470：托盘麦克风设备变更改用 CoreAudio AudioObjectAddPropertyListener 原生通知
+# （替代 10s 轮询，空闲零唤醒）。符号本就在依赖树（cpal → coreaudio-sys 0.2），提升为
+# 直接依赖零额外编译成本。
+coreaudio-sys = "0.2"
 objc2 = "0.5"
 objc2-foundation = "0.2"
 objc2-app-kit = "0.2"
