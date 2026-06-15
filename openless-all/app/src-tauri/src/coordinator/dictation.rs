@@ -2387,6 +2387,13 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     // 跟 history 这条 DictationSession.id 同名，前端凭 id 就能找到对应录音文件。
     let history_session_id = current_session_id.to_string();
     let history_created_at = Utc::now().to_rfc3339();
+    let done_message = if tsf_required_insert_failed {
+        Some("TSF 未上屏，已禁止非 TSF 兜底".to_string())
+    } else if error_code.as_deref() == Some(POLISH_UNCHANGED_ERROR_CODE) {
+        Some("本次润色未产生变化，可在历史中重新润色".to_string())
+    } else {
+        default_done_message(status, polish_error.is_some())
+    };
     let session = DictationSession {
         id: history_session_id.clone(),
         created_at: history_created_at.clone(),
@@ -2415,13 +2422,6 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     ) {
         log::error!("[coord] history append failed: {e}");
     }
-    let done_message = if tsf_required_insert_failed {
-        Some("TSF 未上屏，已禁止非 TSF 兜底".to_string())
-    } else if error_code.as_deref() == Some(POLISH_UNCHANGED_ERROR_CODE) {
-        Some("本次润色未产生变化，可在历史中重新润色".to_string())
-    } else {
-        default_done_message(status, polish_error.is_some())
-    };
 
     emit_capsule(
         inner,
