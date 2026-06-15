@@ -357,6 +357,8 @@ export interface UserPreferences {
   /** 是否为每次会话保留原始麦克风音频文件（wav），用于排查 ASR 误识别 / 麦克风灵敏度。
    *  默认 false。开启后会占磁盘空间，受 historyRetentionDays 同样的清理策略约束。 */
   recordAudioForDebug: boolean;
+  /** 润色未变化检测 + 历史重新润色。默认 false。 */
+  polishUnchangedEnabled: boolean;
   /** recordings/ 里保留的最近 wav 文件数。null = 跟随 200 硬上限；1..=200 之间为用户自定义。
    *  跟 historyMaxEntries 解耦——「文本档案多但 wav 只留最近 5 条」是合法组合。 */
   audioRecordingMaxEntries: number | null;

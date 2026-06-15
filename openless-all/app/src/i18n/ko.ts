@@ -324,6 +324,10 @@ export const ko: typeof zhCN = {
     retranscribe: '다시 인식',
     retranscribing: '인식 중…',
     retranscribeFailed: '다시 인식 실패: {{err}}',
+    polishUnchanged: '다듬기 미변화',
+    repolish: '다시 다듬기',
+    repolishing: '다듬는 중…',
+    repolishFailed: '다시 다듬기 실패: {{err}}',
     rawLabel: '원문',
     rawEmpty: '(비어 있음)',
     selectHint: '왼쪽에서 하나를 선택하여 자세히 보기.',
@@ -564,6 +568,8 @@ export const ko: typeof zhCN = {
     dataStorage: {
       title: '데이터 저장',
       desc: '이 기기에 보관되는 대화 기록과 컨텍스트.',
+      polishUnchangedEnabledLabel: '다듬기 미변화 감지',
+      polishUnchangedEnabledDesc: '켜면 원문 모드가 아닐 때 다듬기 결과가 원문과 같으면 「다듬기 미변화」로 표시하고 기록에서 다시 다듬을 수 있습니다.',
     },
     codingConsole: {
       title: 'Claude 콘솔',

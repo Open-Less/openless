@@ -322,6 +322,10 @@ export const zhTW: typeof zhCN = {
     retranscribe: '重新轉錄',
     retranscribing: '轉錄中…',
     retranscribeFailed: '重新轉錄失敗：{{err}}',
+    polishUnchanged: '潤色未變化',
+    repolish: '重新潤色',
+    repolishing: '潤色中…',
+    repolishFailed: '重新潤色失敗：{{err}}',
     rawLabel: '原文',
     rawEmpty: '（空）',
     selectHint: '左側選一條查看詳情。',
@@ -562,6 +566,8 @@ export const zhTW: typeof zhCN = {
     dataStorage: {
       title: '資料儲存',
       desc: '本機保留的歷史會話與對話上下文。',
+      polishUnchangedEnabledLabel: '潤色未變化檢測',
+      polishUnchangedEnabledDesc: '開啟後，非原文模式下若潤色結果與原文一致會標記「潤色未變化」，並可在歷史中重新潤色。',
     },
     codingConsole: {
       title: 'Claude 主控台',

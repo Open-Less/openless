@@ -322,6 +322,10 @@ export const en: typeof zhCN = {
     retranscribe: 'Retranscribe',
     retranscribing: 'Transcribing…',
     retranscribeFailed: 'Retranscribe failed: {{err}}',
+    polishUnchanged: 'Polish unchanged',
+    repolish: 'Re-polish',
+    repolishing: 'Re-polishing…',
+    repolishFailed: 'Re-polish failed: {{err}}',
     rawLabel: 'Raw',
     rawEmpty: '(empty)',
     selectHint: 'Select an entry on the left to see details.',
@@ -562,6 +566,8 @@ export const en: typeof zhCN = {
     dataStorage: {
       title: 'Data storage',
       desc: 'Conversation history and context kept on this device.',
+      polishUnchangedEnabledLabel: 'Detect unchanged polish',
+      polishUnchangedEnabledDesc: 'When enabled, non-raw polish that matches the raw transcript is marked as unchanged, and you can repolish from History.',
     },
     codingConsole: {
       title: 'Claude Console',

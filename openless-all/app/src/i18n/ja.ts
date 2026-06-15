@@ -324,6 +324,10 @@ export const ja: typeof zhCN = {
     retranscribe: '再認識',
     retranscribing: '認識中…',
     retranscribeFailed: '再認識に失敗：{{err}}',
+    polishUnchanged: '潤色未変化',
+    repolish: '再潤色',
+    repolishing: '潤色中…',
+    repolishFailed: '再潤色に失敗：{{err}}',
     rawLabel: '原文',
     rawEmpty: '（空）',
     selectHint: '左側から 1 件選択して詳細を表示。',
@@ -564,6 +568,8 @@ export const ja: typeof zhCN = {
     dataStorage: {
       title: 'データ保存',
       desc: 'この端末に保存される会話履歴とコンテキスト。',
+      polishUnchangedEnabledLabel: '潤色未変化の検出',
+      polishUnchangedEnabledDesc: '有効にすると、原文モード以外で潤色結果が原文と同じ場合に「潤色未変化」とマークし、履歴から再潤色できます。',
     },
     codingConsole: {
       title: 'Claude コンソール',

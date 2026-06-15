@@ -108,3 +108,12 @@ pub async fn retranscribe_recording(
     }
     Ok(entry)
 }
+
+/// 对一条历史条目按原风格包（或 mode 内置 fallback）重新润色并原地回写（issue #653）。
+#[tauri::command]
+pub async fn repolish_history_entry(
+    coord: CoordinatorState<'_>,
+    session_id: String,
+) -> Result<DictationSession, String> {
+    coord.repolish_history_entry(session_id).await
+}

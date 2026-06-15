@@ -773,6 +773,9 @@ pub struct UserPreferences {
     /// 受 `history_retention_days` 同样的清理策略约束。
     #[serde(default)]
     pub record_audio_for_debug: bool,
+    /// 润色未变化检测与历史重新润色。默认 false：用户需在设置中手动开启。
+    #[serde(default)]
+    pub polish_unchanged_enabled: bool,
     /// `recordings/` 里保留的最近 wav 文件数（按 mtime 倒序保留最新的）。
     /// `None` = 跟随 `HISTORY_CAP` (200)；`Some(n)` 时 clamp 到 1..=200。
     /// 调用点：每次开新会话前裁旧。让用户在「文本历史保留 200 条但 wav 只留最近 5 条」
@@ -967,6 +970,8 @@ struct UserPreferencesWire {
     #[serde(default)]
     record_audio_for_debug: bool,
     #[serde(default)]
+    polish_unchanged_enabled: bool,
+    #[serde(default)]
     audio_recording_max_entries: Option<u32>,
     #[serde(default)]
     marketplace_base_url: String,
@@ -1053,6 +1058,7 @@ impl Default for UserPreferencesWire {
             auto_update_check: prefs.auto_update_check,
             history_max_entries: prefs.history_max_entries,
             record_audio_for_debug: prefs.record_audio_for_debug,
+            polish_unchanged_enabled: prefs.polish_unchanged_enabled,
             audio_recording_max_entries: prefs.audio_recording_max_entries,
             marketplace_base_url: prefs.marketplace_base_url,
             marketplace_dev_login: prefs.marketplace_dev_login,
@@ -1160,6 +1166,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             auto_update_check: wire.auto_update_check,
             history_max_entries: wire.history_max_entries,
             record_audio_for_debug: wire.record_audio_for_debug,
+            polish_unchanged_enabled: wire.polish_unchanged_enabled,
             audio_recording_max_entries: wire.audio_recording_max_entries,
             marketplace_base_url: wire.marketplace_base_url,
             marketplace_dev_login: wire.marketplace_dev_login,
@@ -1895,6 +1902,7 @@ impl Default for UserPreferences {
             auto_update_check: true,
             history_max_entries: None,
             record_audio_for_debug: false,
+            polish_unchanged_enabled: false,
             audio_recording_max_entries: None,
             marketplace_base_url: String::new(),
             marketplace_dev_login: String::new(),

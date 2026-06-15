@@ -320,6 +320,10 @@ export const zhCN = {
     retranscribe: '重新转录',
     retranscribing: '转录中…',
     retranscribeFailed: '重新转录失败：{{err}}',
+    polishUnchanged: '润色未变化',
+    repolish: '重新润色',
+    repolishing: '润色中…',
+    repolishFailed: '重新润色失败：{{err}}',
     rawLabel: '原文',
     rawEmpty: '（空）',
     selectHint: '左侧选一条查看详情。',
@@ -560,6 +564,8 @@ export const zhCN = {
     dataStorage: {
       title: '数据存储',
       desc: '本机保留的历史会话与对话上下文。',
+      polishUnchangedEnabledLabel: '润色未变化检测',
+      polishUnchangedEnabledDesc: '开启后，非原文模式下若润色结果与原文一致会标记「润色未变化」，并可在历史中重新润色。',
     },
     codingConsole: {
       title: 'Claude 控制台',

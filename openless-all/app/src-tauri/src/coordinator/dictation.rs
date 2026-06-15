@@ -393,7 +393,7 @@ where
     }
 }
 
-fn finalize_polished_text(
+pub(super) fn finalize_polished_text(
     polished: String,
     translation_active: bool,
     _raw_uses_llm: bool,
@@ -2364,20 +2364,29 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
 
     // polish 失败时在 history 里标记 polishFailed，让用户能在历史详情看到为什么这次输出
     // 不是预期的 mode 风格。即使失败也不丢词 — final_text 仍是原文（保留"用户的话不丢"语义）。
-    let error_code = dictation_error_code(
+    let mut error_code = dictation_error_code(
         status,
         polish_error.is_some(),
         focus_ready_for_paste,
         allow_non_tsf_insertion_fallback,
     )
     .map(str::to_string);
+    let prefs_snapshot = inner.prefs.get();
+    error_code = resolve_polish_unchanged_error_code(
+        prefs_snapshot.polish_unchanged_enabled,
+        error_code,
+        mode,
+        translation_active,
+        &polish_error,
+        &raw.text,
+        &polished,
+    );
     let tsf_required_insert_failed = error_code.as_deref() == Some("windowsImeTsfRequired");
 
     // 与 coordinator 内部 SessionId 对齐：方便 recorder 旁路写盘的 `<session_id>.wav`
     // 跟 history 这条 DictationSession.id 同名，前端凭 id 就能找到对应录音文件。
     let history_session_id = current_session_id.to_string();
     let history_created_at = Utc::now().to_rfc3339();
-    let prefs_snapshot = inner.prefs.get();
     let session = DictationSession {
         id: history_session_id.clone(),
         created_at: history_created_at.clone(),
@@ -2408,6 +2417,8 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     }
     let done_message = if tsf_required_insert_failed {
         Some("TSF 未上屏，已禁止非 TSF 兜底".to_string())
+    } else if error_code.as_deref() == Some(POLISH_UNCHANGED_ERROR_CODE) {
+        Some("本次润色未产生变化，可在历史中重新润色".to_string())
     } else {
         default_done_message(status, polish_error.is_some())
     };
@@ -2436,6 +2447,89 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
 
     Ok(())
+}
+
+pub(super) const POLISH_UNCHANGED_ERROR_CODE: &str = "polishUnchanged";
+
+fn is_zero_width_char(ch: char) -> bool {
+    matches!(ch, '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{FEFF}' | '\u{2060}')
+}
+
+pub(super) fn normalize_for_polish_compare(text: &str) -> String {
+    let mut out = String::new();
+    let mut last_was_space = false;
+    for ch in text.trim().chars() {
+        if is_zero_width_char(ch) {
+            continue;
+        }
+        if ch.is_whitespace() {
+            if !last_was_space && !out.is_empty() {
+                out.push(' ');
+                last_was_space = true;
+            }
+        } else {
+            out.push(ch);
+            last_was_space = false;
+        }
+    }
+    out
+}
+
+pub(super) fn is_polish_unchanged(raw: &str, final_text: &str) -> bool {
+    normalize_for_polish_compare(raw) == normalize_for_polish_compare(final_text)
+}
+
+pub(super) fn resolve_polish_unchanged_error_code(
+    feature_enabled: bool,
+    existing: Option<String>,
+    mode: PolishMode,
+    translation_active: bool,
+    polish_error: &Option<String>,
+    raw: &str,
+    final_text: &str,
+) -> Option<String> {
+    if existing.is_some() {
+        return existing;
+    }
+    if !feature_enabled
+        || mode == PolishMode::Raw
+        || translation_active
+        || polish_error.is_some()
+        || !is_polish_unchanged(raw, final_text)
+    {
+        return None;
+    }
+    Some(POLISH_UNCHANGED_ERROR_CODE.to_string())
+}
+
+/// 历史重新润色写回 `error_code` 时：插入失败等非润色错误保留；`None` /
+/// `polishUnchanged` / `polishFailed` 由本次重试结果重新计算。
+pub(super) fn is_repolish_mutable_error_code(code: Option<&str>) -> bool {
+    matches!(code, None | Some(POLISH_UNCHANGED_ERROR_CODE) | Some("polishFailed"))
+}
+
+pub(super) fn resolve_repolish_history_error_code(
+    feature_enabled: bool,
+    existing: Option<String>,
+    mode: PolishMode,
+    translation_active: bool,
+    polish_error: &Option<String>,
+    raw: &str,
+    final_text: &str,
+) -> Option<String> {
+    if let Some(code) = existing.as_deref().filter(|code| !is_repolish_mutable_error_code(Some(code)))
+    {
+        return Some(code.to_string());
+    }
+    resolve_polish_unchanged_error_code(
+        feature_enabled,
+        None,
+        mode,
+        translation_active,
+        polish_error,
+        raw,
+        final_text,
+    )
 }
 
 pub(super) fn dictation_error_code(
@@ -2541,7 +2635,9 @@ mod tests {
     use super::{
         append_typed_prefix, batch_asr_chunk_limit_ms, default_done_message,
         drain_streaming_insert_deltas_with, eligible_polish_context_turns, finalize_polished_text,
-        flush_streaming_insert_buffer_with, streaming_insert_eligible,
+        flush_streaming_insert_buffer_with, is_polish_unchanged, normalize_for_polish_compare,
+        resolve_polish_unchanged_error_code, resolve_repolish_history_error_code,
+        streaming_insert_eligible, POLISH_UNCHANGED_ERROR_CODE,
     };
     use crate::types::{
         ChineseScriptPreference, CorrectionRule, DictationSession, InsertStatus, PolishMode,
@@ -2817,6 +2913,173 @@ mod tests {
         assert_eq!(typed, "a你🙂");
         assert!(pending.is_empty());
         assert!(failure.is_some());
+    }
+
+    #[test]
+    fn normalize_for_polish_compare_collapses_whitespace_and_zero_width() {
+        assert_eq!(
+            normalize_for_polish_compare("  hello\u{200B}  world \n"),
+            "hello world"
+        );
+    }
+
+    #[test]
+    fn is_polish_unchanged_detects_equivalent_text() {
+        assert!(is_polish_unchanged("你好世界", "你好世界"));
+        assert!(is_polish_unchanged("  hello ", "hello"));
+        assert!(!is_polish_unchanged("你好", "您好"));
+    }
+
+    #[test]
+    fn resolve_polish_unchanged_respects_feature_toggle_and_priority() {
+        assert_eq!(
+            resolve_polish_unchanged_error_code(
+                false,
+                None,
+                PolishMode::Structured,
+                false,
+                &None,
+                "same",
+                "same",
+            ),
+            None
+        );
+        assert_eq!(
+            resolve_polish_unchanged_error_code(
+                true,
+                Some("polishFailed".into()),
+                PolishMode::Structured,
+                false,
+                &None,
+                "same",
+                "same",
+            ),
+            Some("polishFailed".into())
+        );
+        assert_eq!(
+            resolve_polish_unchanged_error_code(
+                true,
+                None,
+                PolishMode::Raw,
+                false,
+                &None,
+                "same",
+                "same",
+            ),
+            None
+        );
+        assert_eq!(
+            resolve_polish_unchanged_error_code(
+                true,
+                None,
+                PolishMode::Structured,
+                false,
+                &None,
+                "hello",
+                "world",
+            ),
+            None
+        );
+        assert_eq!(
+            resolve_polish_unchanged_error_code(
+                true,
+                None,
+                PolishMode::Structured,
+                false,
+                &None,
+                "same text",
+                "same text",
+            )
+            .as_deref(),
+            Some(POLISH_UNCHANGED_ERROR_CODE)
+        );
+    }
+
+    #[test]
+    fn resolve_repolish_history_preserves_insert_errors() {
+        assert_eq!(
+            resolve_repolish_history_error_code(
+                true,
+                Some("focusRestoreFailed".into()),
+                PolishMode::Structured,
+                false,
+                &None,
+                "same",
+                "changed output",
+            )
+            .as_deref(),
+            Some("focusRestoreFailed")
+        );
+        assert_eq!(
+            resolve_repolish_history_error_code(
+                true,
+                Some("windowsImeTsfRequired".into()),
+                PolishMode::Light,
+                false,
+                &None,
+                "same",
+                "changed output",
+            )
+            .as_deref(),
+            Some("windowsImeTsfRequired")
+        );
+    }
+
+    #[test]
+    fn resolve_repolish_history_recalculates_polish_related_codes() {
+        assert_eq!(
+            resolve_repolish_history_error_code(
+                true,
+                Some(POLISH_UNCHANGED_ERROR_CODE.into()),
+                PolishMode::Structured,
+                false,
+                &None,
+                "same",
+                "changed output",
+            ),
+            None
+        );
+        assert_eq!(
+            resolve_repolish_history_error_code(
+                true,
+                Some("polishFailed".into()),
+                PolishMode::Structured,
+                false,
+                &None,
+                "same",
+                "changed output",
+            ),
+            None
+        );
+        assert_eq!(
+            resolve_repolish_history_error_code(
+                true,
+                Some(POLISH_UNCHANGED_ERROR_CODE.into()),
+                PolishMode::Structured,
+                false,
+                &None,
+                "same text",
+                "same text",
+            )
+            .as_deref(),
+            Some(POLISH_UNCHANGED_ERROR_CODE)
+        );
+    }
+
+    #[test]
+    fn resolve_repolish_history_rejects_translation_via_mutable_path() {
+        assert_eq!(
+            resolve_repolish_history_error_code(
+                true,
+                None,
+                PolishMode::Structured,
+                true,
+                &None,
+                "same",
+                "same",
+            ),
+            None
+        );
     }
 
     #[cfg(target_os = "macos")]

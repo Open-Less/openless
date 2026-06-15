@@ -184,6 +184,7 @@ let mockSettings: UserPreferences = {
     autoUpdateCheck: true,
     historyMaxEntries: null,
     recordAudioForDebug: false,
+    polishUnchangedEnabled: false,
     audioRecordingMaxEntries: null,
     marketplaceBaseUrl: "https://apic.openless.top",
     marketplaceDevLogin: "",
@@ -881,6 +882,23 @@ export function retranscribeRecording(sessionId: string): Promise<DictationSessi
         "retranscribe_recording",
         { sessionId },
         () => mockHistory[0],
+    ) as Promise<DictationSession>
+}
+
+/** 对一条历史条目按原风格包重新润色并原地回写（issue #653）。需开启 polishUnchangedEnabled。 */
+export function repolishHistoryEntry(sessionId: string): Promise<DictationSession> {
+    return invokeOrMock(
+        "repolish_history_entry",
+        { sessionId },
+        () => {
+            const entry = mockHistory.find((s) => s.id === sessionId) ?? mockHistory[0]
+            if (!entry) throw new Error("history entry not found")
+            return {
+                ...entry,
+                finalText: `${entry.finalText} (repolished)`,
+                errorCode: null,
+            }
+        },
     ) as Promise<DictationSession>
 }
 

@@ -6,7 +6,7 @@ import { useTranslation } from 'react-i18next';
 import { Icon } from '../components/Icon';
 import { detectOS } from '../components/WindowChrome';
 import { formatComboLabel } from '../lib/hotkey';
-import { clearHistory, deleteHistoryEntry, listHistory, readAudioRecording } from '../lib/ipc';
+import { clearHistory, deleteHistoryEntry, listHistory, readAudioRecording, repolishHistoryEntry } from '../lib/ipc';
 import { useMobileLayout } from '../lib/useMobileLayout';
 import type { DictationSession, PolishMode } from '../lib/types';
 import { useHotkeySettings } from '../state/HotkeySettingsContext';
@@ -63,6 +63,8 @@ export function History() {
   const { prefs } = useHotkeySettings();
   const mobile = useMobileLayout();
   const [mobileDetailOpen, setMobileDetailOpen] = useState(false);
+  const [repolishingId, setRepolishingId] = useState<string | null>(null);
+  const polishUnchangedFeatureEnabled = prefs?.polishUnchangedEnabled === true;
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -167,6 +169,21 @@ export function History() {
     }
   };
 
+  const onRepolish = async () => {
+    if (!item || item.mode === 'raw' || item.translationActive || !polishUnchangedFeatureEnabled) return;
+    setRepolishingId(item.id);
+    setActionError(null);
+    try {
+      const updated = await repolishHistoryEntry(item.id);
+      setItems(prev => prev.map(s => (s.id === updated.id ? updated : s)));
+    } catch (error) {
+      console.error('[history] failed to repolish history entry', error);
+      setActionError(t('history.repolishFailed', { err: errorMessage(error) }));
+    } finally {
+      setRepolishingId(null);
+    }
+  };
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
       <PageHeader
@@ -254,7 +271,12 @@ export function History() {
                 <div style={{ fontSize: 12, color: 'var(--ol-ink-2)', lineHeight: 1.45, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
                   {s.finalText.split('\n')[0]}
                 </div>
-                <div><Pill size="sm" tone={s.mode === 'raw' ? 'outline' : 'default'}>{MODE_LABEL[s.mode]}</Pill></div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                  <Pill size="sm" tone={s.mode === 'raw' ? 'outline' : 'default'}>{MODE_LABEL[s.mode]}</Pill>
+                  {polishUnchangedFeatureEnabled && s.errorCode === 'polishUnchanged' && (
+                    <Pill size="sm" tone="outline">{t('history.polishUnchanged')}</Pill>
+                  )}
+                </div>
               </button>
             ))}
           </div>
@@ -292,6 +314,33 @@ export function History() {
                   onMissing={() => markAudioMissing(item.id)}
                   key={item.id}
                 />
+              )}
+              {polishUnchangedFeatureEnabled && item.errorCode === 'polishUnchanged' && (
+                <div style={{
+                  marginBottom: 12,
+                  padding: '10px 12px',
+                  borderRadius: 8,
+                  background: 'rgba(245,158,11,0.08)',
+                  border: '0.5px solid rgba(245,158,11,0.25)',
+                  fontSize: 12,
+                  lineHeight: 1.5,
+                  color: 'var(--ol-ink-2)',
+                }}>
+                  {t('history.polishUnchanged')}
+                </div>
+              )}
+              {polishUnchangedFeatureEnabled && item.mode !== 'raw' && !item.translationActive && (
+                <div style={{ marginBottom: 12, display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                  <Btn
+                    icon="refresh"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => void onRepolish()}
+                    disabled={repolishingId === item.id}
+                  >
+                    {repolishingId === item.id ? t('history.repolishing') : t('history.repolish')}
+                  </Btn>
+                </div>
               )}
               <div style={{ display: 'grid', gridTemplateColumns: mobile ? '1fr' : '1fr 1fr', gap: 12 }}>
                 <div style={{ padding: 14, border: '0.5px solid var(--ol-line)', borderRadius: 10, background: 'var(--ol-surface-2)' }}>

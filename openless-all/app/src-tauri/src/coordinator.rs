@@ -54,8 +54,9 @@ use crate::selection::capture_selection;
 #[cfg(target_os = "windows")]
 use crate::types::PasteShortcut;
 use crate::types::{
-    CapsulePayload, CapsuleState, ChineseScriptPreference, DictationSession, HotkeyCapability,
-    HotkeyStatus, HotkeyStatusState, InsertStatus, OutputLanguagePreference, PolishMode,
+    builtin_style_pack_for_mode, CapsulePayload, CapsuleState, ChineseScriptPreference,
+    DictationSession, HotkeyCapability, HotkeyStatus, HotkeyStatusState, InsertStatus,
+    OutputLanguagePreference, PolishMode, StylePack,
 };
 #[cfg(target_os = "windows")]
 use crate::windows_ime_ipc::ImeSubmitTarget;
@@ -80,8 +81,8 @@ pub(super) fn qa_event_target() -> &'static str {
 #[cfg(test)]
 use dictation::dictation_error_code;
 use dictation::{
-    begin_session, cancel_session, end_session, handle_pressed_edge, handle_released_edge,
-    request_stop_during_starting,
+    begin_session, cancel_session, end_session, finalize_polished_text, handle_pressed_edge,
+    handle_released_edge, request_stop_during_starting, resolve_repolish_history_error_code,
 };
 #[cfg(any(debug_assertions, test))]
 use dictation::{handle_pressed, handle_released};
@@ -1388,13 +1389,29 @@ impl Coordinator {
     }
 
     pub async fn repolish(&self, raw_text: String, mode: PolishMode) -> Result<String, String> {
-        let hotwords = enabled_phrases(&self.inner);
         let prefs = self.inner.prefs.get();
         let pack = self
             .inner
             .style_packs
             .get_or_default_active(&prefs.active_style_pack_id)
             .map_err(|e| e.to_string())?;
+        log::info!(
+            "[style-pack] repolish dispatch active_pack={} kind={:?} effective_mode={:?} legacy_mode={:?}",
+            pack.id,
+            pack.kind,
+            pack.base_mode,
+            mode,
+        );
+        self.repolish_with_style_pack(&raw_text, &pack).await
+    }
+
+    pub async fn repolish_with_style_pack(
+        &self,
+        raw_text: &str,
+        pack: &StylePack,
+    ) -> Result<String, String> {
+        let hotwords = enabled_phrases(&self.inner);
+        let prefs = self.inner.prefs.get();
         let style_system_prompt = pack.prompt.clone();
         let working_languages = prefs.working_languages;
         let chinese_script_preference = prefs.chinese_script_preference;
@@ -1402,30 +1419,25 @@ impl Coordinator {
         let llm_thinking_enabled = prefs.llm_thinking_enabled;
         let effective_mode = pack.base_mode;
         log::info!(
-            "[style-pack] repolish dispatch active_pack={} kind={:?} effective_mode={:?} legacy_mode={:?} raw_chars={} prompt_chars={} hotwords={} thinking={}",
+            "[style-pack] repolish_with_style_pack pack={} kind={:?} effective_mode={:?} raw_chars={} prompt_chars={} hotwords={} thinking={}",
             pack.id,
             pack.kind,
             effective_mode,
-            mode,
             raw_text.chars().count(),
             style_system_prompt.chars().count(),
             hotwords.len(),
             llm_thinking_enabled
         );
-        if effective_mode == PolishMode::Raw && !raw_style_pack_uses_llm(&pack) {
+        if effective_mode == PolishMode::Raw && !raw_style_pack_uses_llm(pack) {
             log::info!(
                 "[style-pack] repolish bypass llm active_pack={} reason=default_builtin_raw",
                 pack.id
             );
-            return Ok(raw_text);
+            return Ok(raw_text.to_string());
         }
-        // repolish 是历史记录里手动重新润色，不再绑定原 session 的前台 app；
-        // 当下用户调起的 app 才是相关上下文（如果可拿）。
         let front_app = capture_frontmost_app();
-        // repolish 是用户主动对单条历史"重新润色"，不应该被对话感知上下文影响——
-        // 用户改的就是这一条本身，不要把别的会话拿进来。所以始终走单轮路径。
         polish_text(
-            &raw_text,
+            raw_text,
             effective_mode,
             &hotwords,
             &style_system_prompt,
@@ -1438,6 +1450,73 @@ impl Coordinator {
         )
         .await
         .map_err(|e| e.to_string())
+    }
+
+    pub async fn repolish_history_entry(
+        &self,
+        session_id: String,
+    ) -> Result<DictationSession, String> {
+        let prefs = self.inner.prefs.get();
+        if !prefs.polish_unchanged_enabled {
+            return Err("polish unchanged feature is disabled".into());
+        }
+
+        let mut entry = self
+            .history()
+            .list()
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .find(|s| s.id == session_id)
+            .ok_or_else(|| "history entry not found".to_string())?;
+
+        if entry.mode == PolishMode::Raw {
+            return Err("cannot repolish raw mode history entry".into());
+        }
+        if entry.translation_active {
+            return Err("cannot repolish translation history entry".into());
+        }
+
+        let pack = resolve_style_pack_for_history_entry(&self.inner.style_packs, &entry);
+        let polished = self
+            .repolish_with_style_pack(&entry.raw_transcript, &pack)
+            .await?;
+        let correction_rules = self
+            .inner
+            .correction_rules
+            .list()
+            .map_err(|e| e.to_string())?;
+        let polished = finalize_polished_text(
+            polished,
+            entry.translation_active,
+            raw_style_pack_uses_llm(&pack),
+            pack.base_mode,
+            &None,
+            prefs.chinese_script_preference,
+            &correction_rules,
+            false,
+        );
+
+        entry.final_text = polished.clone();
+        entry.style_pack_id = Some(pack.id.clone());
+        let prior_error_code = entry.error_code.clone();
+        entry.error_code = resolve_repolish_history_error_code(
+            prefs.polish_unchanged_enabled,
+            prior_error_code,
+            pack.base_mode,
+            entry.translation_active,
+            &None,
+            &entry.raw_transcript,
+            &polished,
+        );
+
+        let updated = self
+            .history()
+            .update_entry(entry.clone())
+            .map_err(|e| e.to_string())?;
+        if !updated {
+            return Err("history entry not found".into());
+        }
+        Ok(entry)
     }
 
     pub async fn retranscribe_pcm(&self, pcm: Vec<u8>) -> Result<String, String> {
@@ -6154,6 +6233,18 @@ mod tests {
 
         assert!(coordinator.inner.asr.lock().is_none());
     }
+}
+
+fn resolve_style_pack_for_history_entry(
+    style_packs: &StylePackStore,
+    entry: &DictationSession,
+) -> StylePack {
+    if let Some(id) = entry.style_pack_id.as_deref() {
+        if let Ok(pack) = style_packs.get(id) {
+            return pack;
+        }
+    }
+    builtin_style_pack_for_mode(entry.mode)
 }
 
 fn enabled_phrases(inner: &Arc<Inner>) -> Vec<String> {

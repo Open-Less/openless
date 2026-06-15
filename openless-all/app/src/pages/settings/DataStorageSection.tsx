@@ -4,7 +4,7 @@
 import { useTranslation } from 'react-i18next';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
 import { Card } from '../_atoms';
-import { SettingRow, SectionTitle, inputStyle } from './shared';
+import { SettingRow, SectionTitle, Toggle, inputStyle } from './shared';
 
 // 范围限制：retention 0-365 天，context window 0-60 分钟（再大对实际对话场景没意义且白烧 token）。
 const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
@@ -77,6 +77,15 @@ export function DataStorageSection() {
           value={prefs.polishContextWindowMinutes}
           onChange={e => onPolishContextWindowChange(e.target.value)}
           style={{ ...inputStyle, width: 80, textAlign: 'right' }}
+        />
+      </SettingRow>
+      <SettingRow
+        label={t('settings.dataStorage.polishUnchangedEnabledLabel')}
+        desc={t('settings.dataStorage.polishUnchangedEnabledDesc')}
+      >
+        <Toggle
+          on={prefs.polishUnchangedEnabled}
+          onToggle={(next) => void savePrefs({ ...prefs, polishUnchangedEnabled: next })}
         />
       </SettingRow>
     </Card>
