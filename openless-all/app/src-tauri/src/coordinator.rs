@@ -2142,22 +2142,22 @@ fn combo_hotkey_supervisor_loop(inner: Arc<Inner>) {
         // 读当前 prefs
         let prefs = inner.prefs.get();
         if crate::shortcut_binding::legacy_modifier_trigger(&prefs.dictation_hotkey).is_some() {
-            // 不是 Custom → 睡着等 prefs 改动
+            // 不是 Custom → 卸载后退出守护
             take_combo_hotkey_on_main_thread(&inner);
-            std::thread::sleep(std::time::Duration::from_secs(5));
-            continue;
+            // 对齐主 supervisor 的 exit-on-success：装/卸交给 update_combo_hotkey_binding 主动路径，issue #470
+            return;
         }
 
         let binding = prefs.dictation_hotkey.clone();
         if is_unconfigured_shortcut(&binding) {
             take_combo_hotkey_on_main_thread(&inner);
-            std::thread::sleep(std::time::Duration::from_secs(5));
-            continue;
+            // 对齐主 supervisor 的 exit-on-success：装/卸交给 update_combo_hotkey_binding 主动路径，issue #470
+            return;
         }
 
         if inner.combo_hotkey.lock().is_some() {
-            std::thread::sleep(std::time::Duration::from_secs(5));
-            continue;
+            // 对齐主 supervisor 的 exit-on-success：装/卸交给 update_combo_hotkey_binding 主动路径，issue #470
+            return;
         }
 
         let app = inner.app.lock().clone();
@@ -2255,13 +2255,13 @@ fn translation_hotkey_supervisor_loop(inner: Arc<Inner>) {
                 let (qa_trigger, translation_trigger) = modifier_shortcut_triggers(&inner);
                 monitor.update_modifier_shortcuts(qa_trigger, translation_trigger);
             }
-            std::thread::sleep(std::time::Duration::from_secs(5));
-            continue;
+            // 对齐主 supervisor 的 exit-on-success：装/卸交给 try_update_translation_hotkey_binding 主动路径，issue #470
+            return;
         }
 
         if inner.translation_hotkey.lock().is_some() {
-            std::thread::sleep(std::time::Duration::from_secs(5));
-            continue;
+            // 对齐主 supervisor 的 exit-on-success：装/卸交给 try_update_translation_hotkey_binding 主动路径，issue #470
+            return;
         }
 
         let app = match inner.app.lock().clone() {
@@ -2348,21 +2348,21 @@ fn action_hotkey_supervisor_loop(inner: Arc<Inner>, kind: ActionHotkeyKind) {
         if inner.shutdown.load(Ordering::SeqCst) {
             return;
         }
-        // None = 用户主动停用：反注册并睡着等 prefs 改动（由 update 路径唤醒）。
+        // None = 用户主动停用：反注册后退出守护（由 update_action_hotkey_binding 主动路径重装）。
         let Some(binding) = action_hotkey_binding(&inner, kind) else {
             take_action_hotkey_on_main_thread(&inner, kind);
-            std::thread::sleep(std::time::Duration::from_secs(5));
-            continue;
+            // 对齐主 supervisor 的 exit-on-success：装/卸交给 update_action_hotkey_binding 主动路径，issue #470
+            return;
         };
         if is_modifier_only_shortcut(&binding) {
             take_action_hotkey_on_main_thread(&inner, kind);
-            std::thread::sleep(std::time::Duration::from_secs(5));
-            continue;
+            // 对齐主 supervisor 的 exit-on-success：装/卸交给 update_action_hotkey_binding 主动路径，issue #470
+            return;
         }
 
         if action_hotkey_slot(&inner, kind).lock().is_some() {
-            std::thread::sleep(std::time::Duration::from_secs(5));
-            continue;
+            // 对齐主 supervisor 的 exit-on-success：装/卸交给 update_action_hotkey_binding 主动路径，issue #470
+            return;
         }
 
         let app = match inner.app.lock().clone() {
