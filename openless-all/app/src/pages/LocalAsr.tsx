@@ -180,7 +180,6 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
     const foundryRefreshTimer = useRef<number | null>(null)
     const sherpaRefreshTimer = useRef<number | null>(null)
     const sherpaDownloadRefreshTimer = useRef<number | null>(null)
-    const engineStatusTimer = useRef<number | null>(null)
     const foundrySelectionDirty = useRef(false)
     const selectedFoundryAliasRef =
         useRef<FoundryLocalAsrModelAlias>("whisper-small")
@@ -506,15 +505,39 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
 
     useEffect(() => {
         void refresh()
-        // 引擎状态每 5s 轮询一次，让 UI 能看到 release 计时器到点后的状态变化
-        engineStatusTimer.current = window.setInterval(() => {
-            void refreshEngineStatus()
-        }, 5000)
         return () => {
-            if (engineStatusTimer.current !== null) {
-                window.clearInterval(engineStatusTimer.current)
-            }
             if (scrollGuardCleanup.current) scrollGuardCleanup.current()
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [])
+
+    // 引擎状态改由后端主动 emit（加载/释放/keepLoadedSecs 变更），前端零轮询。
+    // 挂载时仍拉一次初值，之后 listen `local-asr:engine-changed` 增量更新。
+    // 仅 Tauri 环境（浏览器 dev mock 无事件）。
+    useEffect(() => {
+        if (!isTauri) return
+        void refreshEngineStatus()
+        let unlisten: undefined | (() => void)
+        let cancelled = false
+        ;(async () => {
+            const { listen } = await import("@tauri-apps/api/event")
+            const off = await listen<LocalAsrEngineStatus>(
+                "local-asr:engine-changed",
+                (e) => {
+                    setEngineStatus(e.payload)
+                },
+            )
+            if (cancelled) {
+                off()
+            } else {
+                unlisten = off
+            }
+        })().catch((err) =>
+            console.warn("[localAsr] engine status subscribe failed", err),
+        )
+        return () => {
+            cancelled = true
+            if (unlisten) unlisten()
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [])
@@ -1363,9 +1386,8 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
 
     const handlePreload = async () => {
         try {
+            // 加载完成后后端会 emit `local-asr:engine-changed`，前端零轮询更新状态。
             await preloadLocalAsr()
-            // 触发预加载后给后端几秒，再查状态
-            window.setTimeout(() => void refreshEngineStatus(), 1500)
         } catch (e) {
             setError(e instanceof Error ? e.message : String(e))
         }

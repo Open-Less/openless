@@ -270,7 +270,7 @@ pub async fn local_asr_test_model(
         .map_err(|e| format!("{e:#}"))
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalAsrEngineStatus {
     pub loaded: bool,
@@ -305,5 +305,7 @@ pub fn local_asr_set_keep_loaded_secs(
 ) -> Result<(), String> {
     let mut prefs = coord.prefs().get();
     prefs.local_asr_keep_loaded_secs = seconds;
-    coord.prefs().set(prefs).map_err(|e| e.to_string())
+    coord.prefs().set(prefs).map_err(|e| e.to_string())?;
+    coord.emit_local_asr_engine_status();
+    Ok(())
 }
