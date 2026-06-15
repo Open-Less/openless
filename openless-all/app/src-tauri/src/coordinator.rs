@@ -985,11 +985,11 @@ impl Coordinator {
     }
 
     /// QA 浮窗当前状态快照。按需创建的 WebView 冷启动时前端拉一次补状态。
-    pub fn qa_window_state(&self) -> crate::commands::qa::QaStateSnapshot {
+    pub fn qa_window_state(&self) -> crate::commands::QaStateSnapshot {
         const SELECTION_PREVIEW_MAX: usize = 60;
         let state = self.inner.qa_state.lock();
         if !state.panel_visible {
-            return crate::commands::qa::QaStateSnapshot {
+            return crate::commands::QaStateSnapshot {
                 kind: "idle".into(),
                 messages: Vec::new(),
                 selection_preview: None,
@@ -1008,7 +1008,7 @@ impl Coordinator {
             QaPhase::Processing => "thinking",
         }
         .to_string();
-        crate::commands::qa::QaStateSnapshot {
+        crate::commands::QaStateSnapshot {
             kind,
             messages: state.messages.clone(),
             selection_preview,
