@@ -2181,6 +2181,8 @@ pub(crate) fn show_less_computer_glow<R: tauri::Runtime>(app: &AppHandle<R>) {
     }
     // 点击穿透：纯视觉浮层，绝不拦截鼠标。
     let _ = window.set_ignore_cursor_events(true);
+    // issue #470：通知 glow 前端「可见」，恢复发光动画（隐藏时会 emit(false) 卸载发光层以释放 GPU）。
+    let _ = window.emit("less-computer-glow:active", true);
     let window_clone = window.clone();
     let _ = app.run_on_main_thread(move || {
         use objc2::msg_send;
@@ -2215,6 +2217,9 @@ pub(crate) fn show_less_computer_glow<R: tauri::Runtime>(_app: &AppHandle<R>) {}
 #[cfg(target_os = "macos")]
 pub(crate) fn hide_less_computer_glow<R: tauri::Runtime>(app: &AppHandle<R>) {
     if let Some(window) = app.get_webview_window("less-computer-glow") {
+        // issue #470：先通知前端「不可见」卸载全屏发光层(4 条无限动画)，webview 隐藏后即零 GPU；
+        // 否则 .hide() 后 webview 仍持续合成发光层（Windows 尤其不释放动画）。
+        let _ = window.emit("less-computer-glow:active", false);
         let _ = window.hide();
     }
 }
