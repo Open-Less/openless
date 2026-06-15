@@ -449,6 +449,14 @@ export interface QaStatePayload {
   chunk?: string;
 }
 
+/** `get_qa_window_state` 命令返回的快照（按需创建 WebView 冷启动 hydrate）。 */
+export interface QaStateSnapshot {
+  kind: QaStateKind;
+  messages: QaChatMessage[];
+  selection_preview?: string | null;
+  pinned: boolean;
+}
+
 /**
  * Less Computer 语音 Agent 浮窗事件（窗口 label = "less-computer"，事件名
  * `less-computer:event`）。后端按 `kind` 标记，前端据此把交互渲染成聊天结构。

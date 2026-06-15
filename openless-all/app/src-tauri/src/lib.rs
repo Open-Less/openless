@@ -210,6 +210,7 @@ macro_rules! app_invoke_handler_desktop {
             commands::set_active_asr_provider,
             commands::set_active_llm_provider,
             commands::get_qa_hotkey_label,
+            commands::get_qa_window_state,
             commands::set_qa_hotkey,
             commands::validate_shortcut_binding,
             commands::set_dictation_hotkey,
@@ -489,27 +490,9 @@ fn run_desktop() {
                 let _ = capsule.hide();
             }
 
-            // QA 浮窗（issue #118）：紧贴胶囊上方 8pt、屏幕底部居中、380×440。
-            // 启动时 hide()，等 coordinator 在 open_qa_panel 时再 show + 首次定位。
-            // tauri.conf.json 里需要声明 label="qa" 的窗口（前端 agent 负责）；
-            // 这里 get_webview_window 返回 None 时直接跳过，不影响主流程。
-            if let Some(qa) = app.get_webview_window("qa") {
-                if let Err(e) = position_qa_window(&qa) {
-                    log::warn!("[qa] position failed: {e}");
-                }
-                #[cfg(target_os = "macos")]
-                make_qa_window_draggable_macos(&qa);
-                let _ = qa.hide();
-            } else {
-                log::info!("[qa] qa 窗口未在 tauri.conf.json 中声明，前端 agent 会补上");
-            }
-
-            // Less Computer 语音 Agent 浮窗（macOS only）。启动时隐藏；coordinator
-            // 在 Less Computer 会话开始时再 show + 定位。非 macOS 上该窗口虽在
-            // tauri.conf.json 声明，但前端不渲染入口、后端不 emit，保持隐藏惰性。
-            if let Some(lc) = app.get_webview_window("less-computer") {
-                let _ = lc.hide();
-            }
+            // QA / Less Computer 浮窗在 tauri.conf.json 中设 create:false，启动不建 WebView；
+            // 首次 show 时由 ensure_webview_window 按需创建并 configure。
+            log::info!("[windows] qa / less-computer / less-computer-glow 按需创建（create:false）");
 
             // 主窗口磨砂：macOS 用 NSVisualEffectView，Windows 用 Mica。
             // 没这一层的话 transparent: true 让窗口透明 → 背后只是空，不是磨砂。
@@ -1806,6 +1789,73 @@ fn clamp_to_monitor(
     (clamped_x, clamped_y)
 }
 
+/// 从 tauri.conf.json 查找 label 对应的窗口配置（含 create:false 的按需窗口）。
+fn window_config_by_label<'a, R: tauri::Runtime>(
+    app: &'a AppHandle<R>,
+    label: &str,
+) -> Option<&'a tauri::utils::config::WindowConfig> {
+    app.config()
+        .app
+        .windows
+        .iter()
+        .find(|w| w.label == label)
+}
+
+/// 按需创建 WebView 窗口：已存在则返回，否则 from_config + build + configure。
+fn ensure_webview_window<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    label: &str,
+) -> Option<tauri::WebviewWindow<R>> {
+    if let Some(window) = app.get_webview_window(label) {
+        return Some(window);
+    }
+    let config = window_config_by_label(app, label)?;
+    let window = match tauri::WebviewWindowBuilder::from_config(app, config) {
+        Ok(builder) => match builder.build() {
+            Ok(window) => window,
+            Err(e) => {
+                log::warn!("[{label}] build failed: {e}");
+                return None;
+            }
+        },
+        Err(e) => {
+            log::warn!("[{label}] from_config failed: {e}");
+            return None;
+        }
+    };
+    configure_window_after_create(label, &window);
+    Some(window)
+}
+
+/// 新建窗口后的 per-label 初始化（从原 setup() 迁入）。
+fn configure_window_after_create<R: tauri::Runtime>(
+    label: &str,
+    window: &tauri::WebviewWindow<R>,
+) {
+    match label {
+        "qa" => {
+            if let Err(e) = position_qa_window(window) {
+                log::warn!("[qa] position failed: {e}");
+            }
+            #[cfg(target_os = "macos")]
+            make_qa_window_draggable_macos(window);
+            let _ = window.hide();
+        }
+        "less-computer" => {
+            let _ = window.hide();
+        }
+        "less-computer-glow" => {}
+        _ => {}
+    }
+}
+
+/// 销毁按需窗口，释放 WebView2 renderer。
+fn destroy_webview_window<R: tauri::Runtime>(app: &AppHandle<R>, label: &str) {
+    if let Some(window) = app.get_webview_window(label) {
+        let _ = window.destroy();
+    }
+}
+
 /// 把 QA 浮窗放到屏幕底部居中、紧贴胶囊上方。tauri 启动期 + show 之前都会调一次，
 /// 防止用户切换显示器后位置错乱。
 fn position_qa_window<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) -> tauri::Result<()> {
@@ -1861,8 +1911,8 @@ pub(crate) fn show_qa_window<R: tauri::Runtime>(app: &AppHandle<R>, content_kind
         return;
     }
 
-    let Some(window) = app.get_webview_window("qa") else {
-        log::info!("[qa] show 跳过：qa 窗口不存在 (content_kind={content_kind})");
+    let Some(window) = ensure_webview_window(app, "qa") else {
+        log::info!("[qa] show 跳过：qa 窗口创建失败 (content_kind={content_kind})");
         return;
     };
     // 仅首次 show 时居中；之后保留用户拖动后的位置。
@@ -1960,7 +2010,8 @@ pub(crate) fn hide_qa_window<R: tauri::Runtime>(app: &AppHandle<R>) {
     }
 
     if let Some(window) = app.get_webview_window("qa") {
-        let _ = window.hide();
+        QA_WINDOW_POSITIONED.store(false, Ordering::Relaxed);
+        let _ = window.destroy();
     }
 }
 
@@ -2014,8 +2065,8 @@ fn position_less_computer_window<R: tauri::Runtime>(
 /// 显示 Less Computer 浮窗（不抢前台 app 焦点，与 QA 同手法）。`macos` 专用。
 #[cfg(target_os = "macos")]
 pub(crate) fn show_less_computer_window<R: tauri::Runtime>(app: &AppHandle<R>) {
-    let Some(window) = app.get_webview_window("less-computer") else {
-        log::info!("[less-computer] show 跳过：窗口不存在");
+    let Some(window) = ensure_webview_window(app, "less-computer") else {
+        log::info!("[less-computer] show 跳过：窗口创建失败");
         return;
     };
     if let Err(e) = position_less_computer_window(&window, LESS_COMPUTER_WINDOW_MIN_HEIGHT) {
@@ -2051,9 +2102,7 @@ pub(crate) fn show_less_computer_window<R: tauri::Runtime>(_app: &AppHandle<R>) 
 /// 隐藏 Less Computer 浮窗。供 dismiss 命令 / session 收尾共用。
 #[cfg(target_os = "macos")]
 pub(crate) fn hide_less_computer_window<R: tauri::Runtime>(app: &AppHandle<R>) {
-    if let Some(window) = app.get_webview_window("less-computer") {
-        let _ = window.hide();
-    }
+    destroy_webview_window(app, "less-computer");
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -2062,7 +2111,7 @@ pub(crate) fn hide_less_computer_window<R: tauri::Runtime>(_app: &AppHandle<R>) 
 /// 显示全屏彩虹描边浮层：盖满当前显示器、点击穿透、置顶。Agent 工作时点亮整屏边缘。
 #[cfg(target_os = "macos")]
 pub(crate) fn show_less_computer_glow<R: tauri::Runtime>(app: &AppHandle<R>) {
-    let Some(window) = app.get_webview_window("less-computer-glow") else {
+    let Some(window) = ensure_webview_window(app, "less-computer-glow") else {
         return;
     };
     // 盖满当前（否则主）显示器，含菜单栏/Dock 区域。关键：用「逻辑坐标」(物理/缩放) ——
@@ -2120,9 +2169,7 @@ pub(crate) fn show_less_computer_glow<R: tauri::Runtime>(_app: &AppHandle<R>) {}
 /// 隐藏全屏彩虹描边浮层。
 #[cfg(target_os = "macos")]
 pub(crate) fn hide_less_computer_glow<R: tauri::Runtime>(app: &AppHandle<R>) {
-    if let Some(window) = app.get_webview_window("less-computer-glow") {
-        let _ = window.hide();
-    }
+    destroy_webview_window(app, "less-computer-glow");
 }
 
 #[cfg(not(target_os = "macos"))]

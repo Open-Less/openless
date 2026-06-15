@@ -15,6 +15,7 @@ import { useTranslation } from 'react-i18next';
 import { useRafThrottle } from '../lib/useRafThrottle';
 import {
   getPlatformCapabilities,
+  getQaWindowState,
   getSettings,
   isTauri,
   qaSubmitText,
@@ -22,13 +23,84 @@ import {
   qaWindowDismiss,
   qaWindowPin,
 } from '../lib/ipc';
-import type { PlatformCapabilities, QaChatMessage, QaStatePayload, UserPreferences } from '../lib/types';
+import type { PlatformCapabilities, QaChatMessage, QaStatePayload, QaStateSnapshot, UserPreferences } from '../lib/types';
 import { getHotkeyBindingLabel } from '../lib/hotkey';
 import { renderQaMarkdown, renderQaPlainText } from '../lib/qaMarkdown';
 
 const SELECTION_PREVIEW_MAX = 60;
 
 type Status = 'idle' | 'recording' | 'thinking' | 'error';
+
+function applyQaStatePayload(
+  payload: QaStatePayload | QaStateSnapshot,
+  setters: {
+    setMessages: (v: QaChatMessage[] | ((prev: QaChatMessage[]) => QaChatMessage[])) => void;
+    setStatus: (v: Status) => void;
+    setSelectionPreview: (v: string) => void;
+    setErrorMsg: (v: string) => void;
+    setStreamingAnswer: (v: string | ((prev: string) => string)) => void;
+    setLevel: (v: number) => void;
+    setPinned: (v: boolean) => void;
+  },
+  t: (key: string) => string,
+) {
+  if ('pinned' in payload && payload.pinned != null) {
+    setters.setPinned(payload.pinned);
+  }
+  if (payload.messages) {
+    setters.setMessages(payload.messages);
+  }
+  switch (payload.kind) {
+    case 'idle':
+      setters.setStatus('idle');
+      setters.setSelectionPreview('');
+      setters.setErrorMsg('');
+      setters.setStreamingAnswer('');
+      setters.setLevel(0);
+      break;
+    case 'recording':
+      setters.setStatus('recording');
+      setters.setSelectionPreview(payload.selection_preview ?? '');
+      setters.setErrorMsg('');
+      setters.setStreamingAnswer('');
+      break;
+    case 'loading':
+      setters.setStatus('thinking');
+      if (payload.selection_preview != null) {
+        setters.setSelectionPreview(payload.selection_preview);
+      }
+      setters.setErrorMsg('');
+      setters.setStreamingAnswer('');
+      setters.setLevel(0);
+      break;
+    case 'thinking':
+      setters.setStatus('thinking');
+      if (payload.selection_preview != null) {
+        setters.setSelectionPreview(payload.selection_preview);
+      }
+      setters.setErrorMsg('');
+      setters.setStreamingAnswer('');
+      setters.setLevel(0);
+      break;
+    case 'answer_delta':
+      if ('chunk' in payload && payload.chunk) {
+        setters.setStreamingAnswer(prev => prev + payload.chunk);
+      }
+      break;
+    case 'answer':
+      setters.setStatus('idle');
+      setters.setErrorMsg('');
+      setters.setStreamingAnswer('');
+      setters.setLevel(0);
+      break;
+    case 'error':
+      setters.setStatus('error');
+      setters.setErrorMsg(('error' in payload && payload.error) ? payload.error : t('qa.error'));
+      setters.setStreamingAnswer('');
+      setters.setLevel(0);
+      break;
+  }
+}
 
 interface QaPanelProps {
   embedded?: boolean;
@@ -73,64 +145,15 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
       try {
         const { listen } = await import('@tauri-apps/api/event');
         const stateHandle = await listen<QaStatePayload>('qa:state', event => {
-          const payload = event.payload;
-          if (payload.messages) {
-            setMessages(payload.messages);
-          }
-          switch (payload.kind) {
-            case 'idle':
-              setStatus('idle');
-              setSelectionPreview('');
-              setErrorMsg('');
-              setStreamingAnswer('');
-              setLevel(0);
-              break;
-            case 'recording':
-              setStatus('recording');
-              setSelectionPreview(payload.selection_preview ?? '');
-              setErrorMsg('');
-              setStreamingAnswer('');
-              break;
-            case 'loading':
-              // ASR 在 finalize、user message 还没 push 的过渡帧。提前切到 thinking
-              // 视图避免 UI 卡 recording 几百 ms 反馈缺失。详见 issue #161。
-              setStatus('thinking');
-              if (payload.selection_preview != null) {
-                setSelectionPreview(payload.selection_preview);
-              }
-              setErrorMsg('');
-              setStreamingAnswer('');
-              setLevel(0);
-              break;
-            case 'thinking':
-              setStatus('thinking');
-              if (payload.selection_preview != null) {
-                setSelectionPreview(payload.selection_preview);
-              }
-              setErrorMsg('');
-              setStreamingAnswer('');
-              setLevel(0);
-              break;
-            case 'answer_delta':
-              // 流式增量。仍保持 thinking 状态——直到 answer 事件落定后才回 idle。
-              if (payload.chunk) {
-                setStreamingAnswer(prev => prev + payload.chunk);
-              }
-              break;
-            case 'answer':
-              setStatus('idle');
-              setErrorMsg('');
-              // messages 已被上面的 setMessages 落定，清掉流式 buffer 避免和最终气泡重影。
-              setStreamingAnswer('');
-              setLevel(0);
-              break;
-            case 'error':
-              setStatus('error');
-              setErrorMsg(payload.error ?? tRef.current('qa.error'));
-              setStreamingAnswer('');
-              setLevel(0);
-              break;
-          }
+          applyQaStatePayload(event.payload, {
+            setMessages,
+            setStatus,
+            setSelectionPreview,
+            setErrorMsg,
+            setStreamingAnswer,
+            setLevel,
+            setPinned,
+          }, tRef.current);
         });
         const dismissHandle = await listen<unknown>('qa:dismiss', () => {
           setPinned(false);
@@ -162,6 +185,25 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
           unlistenDismiss = dismissHandle;
           unlistenLevel = levelHandle;
           unlistenPrefs = prefsHandle;
+          // 按需创建的独立 QA webview 可能错过 show 前的 emit；listener 就绪后拉一次快照。
+          if (!embeddedRef.current) {
+            try {
+              const snapshot = await getQaWindowState();
+              if (!cancelled) {
+                applyQaStatePayload(snapshot, {
+                  setMessages,
+                  setStatus,
+                  setSelectionPreview,
+                  setErrorMsg,
+                  setStreamingAnswer,
+                  setLevel,
+                  setPinned,
+                }, tRef.current);
+              }
+            } catch (err) {
+              console.warn('[QaPanel] getQaWindowState failed', err);
+            }
+          }
         }
       } catch (error) {
         console.error('[QaPanel] listener setup failed', error);

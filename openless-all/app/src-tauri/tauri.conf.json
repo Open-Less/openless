@@ -49,6 +49,7 @@
       },
       {
         "label": "qa",
+        "create": false,
         "url": "index.html?window=qa",
         "title": "OpenLess QA",
         "width": 380,
@@ -66,6 +67,7 @@
       },
       {
         "label": "less-computer",
+        "create": false,
         "url": "index.html?window=less-computer",
         "title": "OpenLess Less Computer",
         "width": 400,
@@ -83,6 +85,7 @@
       },
       {
         "label": "less-computer-glow",
+        "create": false,
         "url": "index.html?window=less-computer-glow",
         "title": "OpenLess Less Computer Glow",
         "width": 800,

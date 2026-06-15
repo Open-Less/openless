@@ -984,6 +984,38 @@ impl Coordinator {
             .unwrap_or_default()
     }
 
+    /// QA 浮窗当前状态快照。按需创建的 WebView 冷启动时前端拉一次补状态。
+    pub fn qa_window_state(&self) -> crate::commands::qa::QaStateSnapshot {
+        const SELECTION_PREVIEW_MAX: usize = 60;
+        let state = self.inner.qa_state.lock();
+        if !state.panel_visible {
+            return crate::commands::qa::QaStateSnapshot {
+                kind: "idle".into(),
+                messages: Vec::new(),
+                selection_preview: None,
+                pinned: false,
+            };
+        }
+        let selection_preview = state.selection.as_ref().map(|s| {
+            s.text
+                .chars()
+                .take(SELECTION_PREVIEW_MAX)
+                .collect::<String>()
+        });
+        let kind = match state.phase {
+            QaPhase::Idle => "idle",
+            QaPhase::Recording => "recording",
+            QaPhase::Processing => "thinking",
+        }
+        .to_string();
+        crate::commands::qa::QaStateSnapshot {
+            kind,
+            messages: state.messages.clone(),
+            selection_preview,
+            pinned: state.pinned,
+        }
+    }
+
     /// 用户点 ✕ / 按 Esc 关 QA 浮窗时调。等价于：取消任何进行中的录音 +
     /// 清空多轮对话历史 + 隐藏窗口。详见 issue #118 v2。
     pub fn qa_window_dismiss(&self) {

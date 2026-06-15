@@ -1,5 +1,18 @@
 use super::*;
 
+#[derive(serde::Serialize)]
+pub struct QaStateSnapshot {
+    pub kind: String,
+    pub messages: Vec<crate::types::QaChatMessage>,
+    pub selection_preview: Option<String>,
+    pub pinned: bool,
+}
+
+#[tauri::command]
+pub fn get_qa_window_state(coord: CoordinatorState<'_>) -> QaStateSnapshot {
+    coord.qa_window_state()
+}
+
 #[tauri::command]
 pub fn get_qa_hotkey_label(coord: CoordinatorState<'_>) -> String {
     coord.qa_hotkey_label()

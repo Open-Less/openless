@@ -4,18 +4,19 @@
 //
 // Ported verbatim from design_handoff_openless/variants.jsx::FloatingShell.
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentType, type CSSProperties } from 'react';
+import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type LazyExoticComponent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from './Icon';
 import { WindowChrome, detectOS, type OS } from './WindowChrome';
 import { AudioCueListener } from "./AudioCue";
-import { SettingsModal } from './SettingsModal';
 import { Overview } from '../pages/Overview';
-import { History } from '../pages/History';
-import { Vocab } from '../pages/Vocab';
-import { Style } from '../pages/Style';
-import { Translation } from '../pages/Translation';
-import { SelectionAsk } from '../pages/SelectionAsk';
+// 非首屏 tab 与设置弹窗懒加载，减小 main webview 初始 JS 解析量。
+const HistoryPage = lazy(() => import('../pages/History').then(m => ({ default: m.History })));
+const VocabPage = lazy(() => import('../pages/Vocab').then(m => ({ default: m.Vocab })));
+const StylePage = lazy(() => import('../pages/Style').then(m => ({ default: m.Style })));
+const TranslationPage = lazy(() => import('../pages/Translation').then(m => ({ default: m.Translation })));
+const SelectionAskPage = lazy(() => import('../pages/SelectionAsk').then(m => ({ default: m.SelectionAsk })));
+const SettingsModal = lazy(() => import('./SettingsModal').then(m => ({ default: m.SettingsModal })));
 // 风格市场不再作为独立 nav tab —— 已整合为 Style 页面内 modal（入口在「风格包」标题右侧）。
 // LocalAsr 不再作为主 nav tab——本地 ASR 模型管理已合并到 Settings → Advanced 中
 // 通过 <LocalAsr embedded /> 渲染。这里之前的 import 与 NAV_BASE 条目都已移除。
@@ -38,20 +39,27 @@ import { useAppState, type AppTab } from '../state/useAppState';
 
 const MORE_TAB_IDS: AppTab[] = ['vocab', 'translation', 'selectionAsk'];
 
+const LAZY_TAB_PAGES: Partial<Record<AppTab, LazyExoticComponent<() => JSX.Element>>> = {
+  history: HistoryPage,
+  vocab: VocabPage,
+  style: StylePage,
+  translation: TranslationPage,
+  selectionAsk: SelectionAskPage,
+};
+
 interface NavItem {
   id: AppTab;
   name: string;
   icon: string;
-  cmp: ComponentType;
 }
 
 const NAV_BASE: Array<Omit<NavItem, 'name'>> = [
-  { id: 'overview', icon: 'overview', cmp: Overview },
-  { id: 'history', icon: 'history', cmp: History },
-  { id: 'vocab', icon: 'vocab', cmp: Vocab },
-  { id: 'style', icon: 'style', cmp: Style },
-  { id: 'translation', icon: 'translate', cmp: Translation },
-  { id: 'selectionAsk', icon: 'selectionAsk', cmp: SelectionAsk },
+  { id: 'overview', icon: 'overview' },
+  { id: 'history', icon: 'history' },
+  { id: 'vocab', icon: 'vocab' },
+  { id: 'style', icon: 'style' },
+  { id: 'translation', icon: 'translate' },
+  { id: 'selectionAsk', icon: 'selectionAsk' },
 ];
 
 interface FloatingShellProps {
@@ -101,7 +109,7 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
     () => NAV_BASE.map(b => ({ ...b, name: t(`nav.${b.id}`) })),
     [t],
   );
-  const Page = (NAV.find((n) => n.id === displayTab) ?? NAV[0]).cmp;
+  const LazyPage = displayTab === 'overview' ? null : LAZY_TAB_PAGES[displayTab];
 
   // sidebar nav 滑动指示器：测量当前 active button 的 offsetTop / height，
   // 用一个 absolute pill 平滑滑过去，而不是每个按钮各自瞬切背景色。
@@ -402,9 +410,11 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
             >
               {displayTab === 'overview' ? (
                 <Overview onOpenHistory={() => setCurrentTab('history')} />
-              ) : (
-                <Page />
-              )}
+              ) : LazyPage ? (
+                <Suspense fallback={null}>
+                  <LazyPage />
+                </Suspense>
+              ) : null}
             </div>
           </main>
         </div>
@@ -434,14 +444,16 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
       )}
 
       {/* Settings modal — rendered inside this window */}
-      {settingsOpen &&
-        <SettingsModal
-          key={settingsInitialSection ?? 'default'}
-          os={os}
-          initialSettingsSection={settingsInitialSection}
-          onClose={() => setSettingsOpen(false)}
-        />
-      }
+      {settingsOpen && (
+        <Suspense fallback={null}>
+          <SettingsModal
+            key={settingsInitialSection ?? 'default'}
+            os={os}
+            initialSettingsSection={settingsInitialSection}
+            onClose={() => setSettingsOpen(false)}
+          />
+        </Suspense>
+      )}
 
       {providerPromptOpen ? (
         <ProviderSetupPrompt

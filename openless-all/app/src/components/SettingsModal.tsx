@@ -6,7 +6,7 @@
 //
 // 设计原则：每个可见控件都必须可用。
 
-import { useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
+import { lazy, Suspense, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from './Icon';
 import { SavedToast } from './SavedToast';
@@ -14,9 +14,13 @@ import { useSavedToastListener } from '../lib/savedEvent';
 import { openExternal } from '../lib/ipc';
 import { useMobileLayout } from '../lib/useMobileLayout';
 import type { OS } from './WindowChrome';
-import { GeneralTab, ServicesTab, PrivacyTab, AdvancedTab } from '../pages/settings/tabs';
-import { AboutSection } from '../pages/settings/AboutSection';
+import { GeneralTab } from '../pages/settings/GeneralTab';
 import { chipSelectedStyle } from '../pages/settings/shared';
+
+const ServicesTab = lazy(() => import('../pages/settings/ServicesTab').then(m => ({ default: m.ServicesTab })));
+const PrivacyTab = lazy(() => import('../pages/settings/PrivacyTab').then(m => ({ default: m.PrivacyTab })));
+const AdvancedTab = lazy(() => import('../pages/settings/AdvancedTab').then(m => ({ default: m.AdvancedTab })));
+const AboutSection = lazy(() => import('../pages/settings/AboutSection').then(m => ({ default: m.AboutSection })));
 
 // 稳定 tab ID（与 i18n key `modal.sections.*` 一致）。
 export type SettingsSectionId =
@@ -257,10 +261,26 @@ export function SettingsModal({ os: _os, onClose, initialSettingsSection }: Sett
               key={section}
               style={{ display: 'flex', flexDirection: 'column', gap: 12, animation: 'ol-tab-fade 0.2s var(--ol-motion-soft)' }}>
               {section === 'general' && <GeneralTab />}
-              {section === 'services' && <ServicesTab />}
-              {section === 'privacy' && <PrivacyTab />}
-              {section === 'advanced' && <AdvancedTab />}
-              {section === 'about' && <AboutSection />}
+              {section === 'services' && (
+                <Suspense fallback={null}>
+                  <ServicesTab />
+                </Suspense>
+              )}
+              {section === 'privacy' && (
+                <Suspense fallback={null}>
+                  <PrivacyTab />
+                </Suspense>
+              )}
+              {section === 'advanced' && (
+                <Suspense fallback={null}>
+                  <AdvancedTab />
+                </Suspense>
+              )}
+              {section === 'about' && (
+                <Suspense fallback={null}>
+                  <AboutSection />
+                </Suspense>
+              )}
             </div>
             {mobile && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 20, paddingTop: 16, borderTop: '0.5px solid var(--ol-line-soft)' }}>

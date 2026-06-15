@@ -19,6 +19,7 @@ import type {
     CodingAgentPermissionMode,
     PolishMode,
     QaHotkeyBinding,
+    QaStateSnapshot,
     ShortcutBinding,
     StylePack,
     StylePackExample,
@@ -1268,6 +1269,19 @@ export function restartApp(): Promise<void> {
 export function getQaHotkeyLabel(): Promise<string> {
     return invokeOrMock("get_qa_hotkey_label", undefined, () =>
         formatComboLabel(defaultQaShortcut()),
+    )
+}
+
+export function getQaWindowState(): Promise<QaStateSnapshot> {
+    return invokeOrMock(
+        "get_qa_window_state",
+        undefined,
+        () => ({
+            kind: "idle" as const,
+            messages: [],
+            selection_preview: null,
+            pinned: false,
+        }),
     )
 }
 
