@@ -80,13 +80,11 @@ export function PermissionsSection() {
       refreshWindowsIme();
     }
     refreshNetwork();
-    const hotkeyId = platformCaps?.supportsDesktopHotkey === true
-      ? window.setInterval(refreshHotkey, 1000)
-      : undefined;
+    // issue #470：热键状态改为纯事件驱动，去掉每秒轮询，靠下方 focus/visibilitychange 刷新。
     // 麦克风检查会短暂打开输入流，避免每秒探测导致隐私指示器频繁闪烁。
     const permissionId = window.setInterval(refreshPermissions, 10000);
     const networkId = window.setInterval(refreshNetwork, 30000);
-    const onFocus = () => {
+    const refreshAll = () => {
       refreshPermissions();
       if (platformCaps?.supportsDesktopHotkey === true) {
         refreshHotkey();
@@ -96,12 +94,15 @@ export function PermissionsSection() {
       }
       refreshNetwork();
     };
+    const onFocus = () => refreshAll();
+    const onVisibility = () => { if (document.visibilityState === 'visible') refreshAll(); };
     window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisibility);
     return () => {
-      if (hotkeyId !== undefined) window.clearInterval(hotkeyId);
       window.clearInterval(permissionId);
       window.clearInterval(networkId);
       window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisibility);
     };
   }, [platformCaps?.platform, platformCaps?.supportsDesktopHotkey]);
 

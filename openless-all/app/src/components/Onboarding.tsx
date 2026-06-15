@@ -220,12 +220,14 @@ function AndroidMicrophoneStep() {
 
   useEffect(() => {
     void refresh();
-    const id = window.setInterval(refresh, 3000);
+    // issue #470：纯事件驱动，去掉高频轮询。窗口重新聚焦或重新可见时刷新（授权必经系统设置再切回）。
     const onFocus = () => { void refresh(); };
+    const onVisibility = () => { if (document.visibilityState === 'visible') void refresh(); };
     window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisibility);
     return () => {
-      window.clearInterval(id);
       window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisibility);
     };
   }, []);
 
@@ -300,12 +302,14 @@ function DesktopOnboarding({
 
   useEffect(() => {
     refresh();
-    const id = window.setInterval(refresh, 1000);
+    // issue #470：纯事件驱动，去掉每秒轮询。授权必经系统设置 App，切回 OpenLess 必触发 focus/visibilitychange。
     const onFocus = () => refresh();
+    const onVisibility = () => { if (document.visibilityState === 'visible') refresh(); };
     window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisibility);
     return () => {
-      window.clearInterval(id);
       window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisibility);
       if (refreshTimeoutRef.current) clearTimeout(refreshTimeoutRef.current);
     };
   }, [requiresAccessibility]);
@@ -318,6 +322,10 @@ function DesktopOnboarding({
     } finally {
       setBusy(false);
     }
+    // issue #470：与麦克风路径对称——授权动作返回后立即刷新，并挂一次 800ms 兜底覆盖 app 内按钮发起的授予。
+    void refresh();
+    if (refreshTimeoutRef.current) clearTimeout(refreshTimeoutRef.current);
+    refreshTimeoutRef.current = window.setTimeout(refresh, 800);
   };
 
   const onRequestMicrophone = async () => {
