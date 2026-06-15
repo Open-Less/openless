@@ -481,8 +481,8 @@ export function Capsule() {
             fontWeight: 600,
             color: 'var(--ol-blue)',
             background: 'var(--ol-capsule-badge-bg)',
-            backdropFilter: 'blur(20px) saturate(180%)',
-            WebkitBackdropFilter: 'blur(20px) saturate(180%)',
+            // issue #470：去掉无效的 backdrop-filter —— webview 模糊不了透明窗口背后的桌面
+            // （Tauri 上游限制，同本文件上方 pill 注释），纯空耗合成，删除零视觉变化。
             border: '0.5px solid var(--ol-capsule-badge-border)',
             boxShadow: '0 4px 12px -4px rgba(37, 99, 235, 0.25), 0 0 0 0.5px rgba(0,0,0,0.04)',
             letterSpacing: '0.02em',
