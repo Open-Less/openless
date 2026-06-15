@@ -201,7 +201,8 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
     }
 
     const scheduleScrollGuardRestore = () => {
-        window.setTimeout(restoreScrollGuard, 0)
+        // issue #470：立即帧由下面的 rAF + 嵌套 rAF 覆盖（≈0~32ms），故移除等价的 setTimeout(…,0)；
+        // 80ms / 200ms 两枪保留，用于兜住 rAF 之后才发生的异步重排（如图片晚加载）。
         window.setTimeout(restoreScrollGuard, 80)
         window.setTimeout(restoreScrollGuard, 200)
         window.requestAnimationFrame(() => {

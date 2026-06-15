@@ -386,8 +386,9 @@ export function Marketplace() {
       setUploadOriginPackId(null);
       setUploadTargetName(null);
       setSelectedUploadPackId(null);
-      // 后续 polling 用服务端真实数据校准（审核状态可能 pending→approved/rejected）。
-      window.setTimeout(() => { void refresh(); void refreshMyPacks(); }, 1500);
+      // issue #470：上传后给后端一点时间落库 + 跑审核，再用服务端真实数据校准一次
+      // （审核状态可能 pending→approved/rejected）。乐观更新已即时反映「我的发布」，
+      // 这里只需单次兜底刷新；取较长延时（5s）确保后端最终一致后能查到，去掉冗余的 1.5s 那次。
       window.setTimeout(() => { void refresh(); void refreshMyPacks(); }, 5000);
     } catch (error) {
       setActionMsg({ kind: 'err', text: t('marketplace.errors.upload', { err: errorMessage(error) }) });
