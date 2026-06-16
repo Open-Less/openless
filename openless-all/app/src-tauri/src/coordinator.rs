@@ -3233,7 +3233,9 @@ fn ensure_local_qwen3_model_ready() -> Result<(), String> {
 /// 引擎加载/释放/keepLoadedSecs 变化时主动推给前端，前端 listen
 /// `local-asr:engine-changed` 即可零轮询同步 UI（issue #470 / #6）。
 /// 只反映 Qwen3 这一路（loaded_model_id / prefs），不碰 Foundry / Sherpa。
-/// 仅用跨平台符号，保证 Windows / Linux 也能编译。
+/// 仅用桌面端跨平台符号；Android 无本地 ASR 引擎（LocalAsrEngineStatus 不在该 target
+/// 编译），单独给 no-op stub（见下），让各调用点在所有平台统一编译。
+#[cfg(not(target_os = "android"))]
 fn emit_local_asr_engine_status(inner: &Arc<Inner>) {
     let model_id = inner.local_asr_cache.loaded_model_id();
     let keep_loaded_secs = inner.prefs.get().local_asr_keep_loaded_secs;
@@ -3246,6 +3248,10 @@ fn emit_local_asr_engine_status(inner: &Arc<Inner>) {
         let _ = app.emit("local-asr:engine-changed", &status);
     }
 }
+
+/// Android no-op：该 target 不编译 LocalAsrEngineStatus / 本地 ASR 引擎。issue #470 / #6。
+#[cfg(target_os = "android")]
+fn emit_local_asr_engine_status(_inner: &Arc<Inner>) {}
 
 /// 一次 dictation 结束后，按 prefs.local_asr_keep_loaded_secs 决定何时释放
 /// 内存里的 Qwen3-ASR 引擎。0 = 立即释放；其它值 = sleep N 秒后看 last_used。
