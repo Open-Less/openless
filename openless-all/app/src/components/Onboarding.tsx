@@ -301,10 +301,10 @@ function DesktopOnboarding({
   };
 
   useEffect(() => {
-    refresh();
+    void refresh();
     // issue #470：纯事件驱动，去掉每秒轮询。授权必经系统设置 App，切回 OpenLess 必触发 focus/visibilitychange。
-    const onFocus = () => refresh();
-    const onVisibility = () => { if (document.visibilityState === 'visible') refresh(); };
+    const onFocus = () => { void refresh(); };
+    const onVisibility = () => { if (document.visibilityState === 'visible') void refresh(); };
     window.addEventListener('focus', onFocus);
     document.addEventListener('visibilitychange', onVisibility);
     return () => {
