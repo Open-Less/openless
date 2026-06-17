@@ -2,10 +2,12 @@ package com.openless.app
 
 import android.os.Handler
 import android.os.Looper
+import androidx.annotation.Keep
 
 /**
  * Rust calls back into this object to refresh overlay UI state.
  */
+@Keep
 object OpenLessOverlayBridge {
     private val mainHandler = Handler(Looper.getMainLooper())
 
@@ -16,6 +18,7 @@ object OpenLessOverlayBridge {
         fun onCapsuleStateChanged(state: String, message: String?)
     }
 
+    @Keep
     @JvmStatic
     fun onCapsuleStateChanged(state: String, message: String?) {
         mainHandler.post {
@@ -23,6 +26,7 @@ object OpenLessOverlayBridge {
         }
     }
 
+    @Keep
     @JvmStatic
     fun showToast(message: String) {
         mainHandler.post {

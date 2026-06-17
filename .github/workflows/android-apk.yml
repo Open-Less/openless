@@ -1,8 +1,9 @@
 name: Android APK (debug)
 
 # Triggers:
-#   - push v*-tauri tag → release APK (signed), updater manifest, attach to GitHub Release
-#   - workflow_dispatch → debug APK only, upload artifact (no release)
+#   - push v*-tauri tag → signed release APK + minisign + updater manifest → GitHub Release
+#   - workflow_dispatch → signed release APK when ANDROID_KEYSTORE_* secrets exist
+#     (overlay install + user data preserved); otherwise unsigned debug APK (annotated, non-blocking)
 #
 # Scope: full overlay/accessibility APK for ADB testing and tag releases.
 
@@ -30,17 +31,47 @@ jobs:
       - name: Detect build mode
         id: mode
         shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
+          set -euo pipefail
+          is_tag=false
           if [[ "${{ github.ref }}" == refs/tags/v* ]] && [[ "${{ github.ref_name }}" == *-tauri ]]; then
+            is_tag=true
+          fi
+          echo "is_tag_release=$is_tag" >> "$GITHUB_OUTPUT"
+
+          has_keystore=true
+          for name in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+            if [ -z "${!name:-}" ]; then
+              has_keystore=false
+              break
+            fi
+          done
+
+          if $is_tag; then
             echo "mode=release" >> "$GITHUB_OUTPUT"
             echo "label=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+            echo "signing=tag-release" >> "$GITHUB_OUTPUT"
+            echo "signing_label=Tag release with release keystore" >> "$GITHUB_OUTPUT"
+          elif $has_keystore; then
+            echo "mode=release" >> "$GITHUB_OUTPUT"
+            echo "label=dispatch-run-${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+            echo "signing=dispatch-release" >> "$GITHUB_OUTPUT"
+            echo "signing_label=Manual dispatch with release keystore (overlay install OK)" >> "$GITHUB_OUTPUT"
           else
             echo "mode=debug" >> "$GITHUB_OUTPUT"
-            echo "label=run-${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+            echo "label=unsigned-run-${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+            echo "signing=debug-fallback" >> "$GITHUB_OUTPUT"
+            echo "signing_label=Unsigned debug fallback (no keystore secrets)" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Unsigned debug APK::ANDROID_KEYSTORE_* secrets not configured. Building debug APK without release signing. Overlay install and user data preservation require the release keystore; uninstall before installing if replacing a signed build."
           fi
 
       - name: Check updater signing availability (tag release)
-        if: steps.mode.outputs.mode == 'release'
+        if: steps.mode.outputs.is_tag_release == 'true'
         shell: bash
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -51,7 +82,7 @@ jobs:
           fi
 
       - name: Check Android keystore secrets (tag release)
-        if: steps.mode.outputs.mode == 'release'
+        if: steps.mode.outputs.is_tag_release == 'true'
         shell: bash
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -281,7 +312,7 @@ jobs:
           PY
 
       - name: Sign release APKs (minisign)
-        if: steps.mode.outputs.mode == 'release'
+        if: steps.mode.outputs.is_tag_release == 'true'
         working-directory: openless-all/app
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -295,7 +326,7 @@ jobs:
             "${{ steps.apk.outputs.x86_64_path }}"
 
       - name: Write Android updater manifests
-        if: steps.mode.outputs.mode == 'release'
+        if: steps.mode.outputs.is_tag_release == 'true'
         working-directory: openless-all/app
         env:
           OPENLESS_UPDATE_APK_DIR: ${{ steps.apk.outputs.out_dir }}
@@ -311,7 +342,7 @@ jobs:
           done
 
       - name: Append release files (manifests + signatures)
-        if: steps.mode.outputs.mode == 'release'
+        if: steps.mode.outputs.is_tag_release == 'true'
         id: release_assets
         shell: bash
         run: |
@@ -356,7 +387,7 @@ jobs:
           if-no-files-found: error
 
       - name: Prepare Android release body
-        if: steps.mode.outputs.mode == 'release'
+        if: steps.mode.outputs.is_tag_release == 'true'
         shell: bash
         run: |
           cat > "$RUNNER_TEMP/android-release-body.md" << 'EOF'
@@ -374,7 +405,7 @@ jobs:
           EOF
 
       - name: Attach Android assets to GitHub Release
-        if: steps.mode.outputs.mode == 'release'
+        if: steps.mode.outputs.is_tag_release == 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
@@ -384,3 +415,26 @@ jobs:
           append_body: true
           body_path: ${{ runner.temp }}/android-release-body.md
           files: ${{ steps.release_assets.outputs.files }}
+
+      - name: Write build summary
+        if: always() && steps.mode.outputs.signing != ''
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" << EOF
+          ### Android APK build
+
+          | Field | Value |
+          |-------|-------|
+          | Gradle mode | \`${{ steps.mode.outputs.mode }}\` |
+          | Signing | ${{ steps.mode.outputs.signing_label }} |
+          | Artifact label | \`${{ steps.mode.outputs.label }}\` |
+
+          EOF
+          if [ "${{ steps.mode.outputs.signing }}" = "debug-fallback" ]; then
+            cat >> "$GITHUB_STEP_SUMMARY" << 'EOF'
+          > **Unsigned debug APK.** Debug builds use a CI-only signature. Use `adb install -r` only when replacing the same debug build. To upgrade from a signed release without losing user data, configure `ANDROID_KEYSTORE_*` repo secrets and re-run this workflow.
+          EOF
+          elif [ "${{ steps.mode.outputs.signing }}" = "dispatch-release" ]; then
+            cat >> "$GITHUB_STEP_SUMMARY" << 'EOF'
+          > **Signed release APK** (manual dispatch). Same keystore as tag releases — supports overlay install and preserves user data when upgrading from an existing signed install.
+          EOF
+          fi

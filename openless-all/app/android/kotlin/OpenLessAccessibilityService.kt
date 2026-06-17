@@ -14,6 +14,7 @@ import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
+import androidx.annotation.Keep
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -288,12 +289,14 @@ class OpenLessAccessibilityService : AccessibilityService() {
             private set
 
         @JvmStatic
+        @Keep
         fun pasteToFocusedField(): Boolean {
             instance?.let { return it.performPasteToFocusedField() }
             return sendPasteRequestToAccessibilityProcess()
         }
 
         @JvmStatic
+        @Keep
         fun captureSelectedText(): String {
             return instance?.captureSelectedTextFromFocusedNode().orEmpty()
         }

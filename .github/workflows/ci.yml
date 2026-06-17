@@ -74,6 +74,9 @@ jobs:
         # generate_context! requires frontendDist (../dist) to exist on Android too.
         run: npm run build
 
+      - name: Check Android updater pubkey matches tauri.conf.json
+        run: npm run check:android-updater-pubkey
+
       - name: Check Tauri backend (Android target)
         run: cargo check --manifest-path src-tauri/Cargo.toml --target aarch64-linux-android
 

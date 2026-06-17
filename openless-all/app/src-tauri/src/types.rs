@@ -77,13 +77,10 @@ pub enum PasteShortcut {
     ShiftInsert,
 }
 
-/// Auto-update 渠道。决定 Settings → 关于 里展示哪一类版本信息。
-/// `Stable` 沿用 `tauri-plugin-updater` 的默认 endpoints（即 `tauri.conf.json`
-/// 里的 `latest-{{target}}-{{arch}}.json`），与发版 pipeline 对齐。
-/// `Beta` 不动 plugin endpoints —— 只解锁 Settings 里"手动下载最新 Beta"的入口
-/// （fetch GitHub `prerelease` + 跳浏览器），物理隔离 Beta 包不会通过 auto-update
-/// 推到正式版用户。详见 README 的"Contributing workflow"和 CLAUDE.md 的
-/// `Branch & release-channel workflow` 段落。
+/// Auto-update 渠道。决定后台 AutoUpdateGate 拉哪条 manifest。
+/// `Stable` = `latest-android-{arch}.json`（或桌面 plugin-updater 正式版 endpoints）。
+/// `Beta` = `latest-android-{arch}-beta.json`（或桌面 beta endpoints）。
+/// Settings 里手动「检查正式版 / 检查 Beta」按钮显式传 channel，不受此 pref 影响。
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum UpdateChannel {
@@ -708,8 +705,8 @@ pub struct UserPreferences {
     /// foundry/qwen3 一致。
     #[serde(default = "default_local_asr_keep_loaded_secs")]
     pub sherpa_onnx_keep_loaded_secs: u32,
-    /// Auto-update 渠道偏好。stable = 跟正式版（默认）；beta = Settings 里多
-    /// 一个手动下载 Beta 的入口。不影响 plugin-updater 的自动检查路径。
+    /// Auto-update 渠道。stable = 后台自动更新查正式版 manifest；beta = 查 Beta manifest。
+    /// 手动检查按钮显式指定 channel，与此 pref 解耦。
     #[serde(default)]
     pub update_channel: UpdateChannel,
     /// 历史记录保留天数。0 = 不按时间清理（仅受 200 条上限）。默认 7 天。
@@ -758,8 +755,9 @@ pub struct UserPreferences {
     /// 默认 true（更接近用户习惯）。
     #[serde(default = "default_true")]
     pub streaming_insert_save_clipboard: bool,
-    /// 主窗口启动 + 后台每 60 分钟自动检查云端新版本。默认 true。
-    /// 用户在 Settings → 关于 里可关。关闭后仅手动「检查更新」按钮可用。
+    /// 主窗口启动 + 后台每 60 分钟自动检查更新。默认 true。
+    /// Android 开启后自动检查并下载，校验后打开系统安装器；桌面仅自动检查 + 用户确认安装。
+    /// 关闭后仅 Settings 手动「检查更新」按钮可用。
     #[serde(default = "default_true")]
     pub auto_update_check: bool,
     /// 历史记录上限（条数）。`None` = 使用代码内 200 条硬上限；
