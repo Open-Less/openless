@@ -62,6 +62,8 @@ type AndroidUpdatePayload = {
 export function useAutoUpdate(): UseAutoUpdate {
   const updateRef = useRef<Update | null>(null);
   const androidUpdateRef = useRef<AndroidUpdatePayload | null>(null);
+  /** True only while this hook instance initiated an Android download/install. */
+  const androidDownloadActiveRef = useRef(false);
   const [status, setStatus] = useState<UpdateStatus>('idle');
   const [version, setVersion] = useState('');
   const [downloaded, setDownloaded] = useState(0);
@@ -99,6 +101,7 @@ export function useAutoUpdate(): UseAutoUpdate {
       contentLength: number | null;
       phase: string;
     }>('android-update:progress', (event) => {
+      if (!androidDownloadActiveRef.current) return;
       setDownloaded(event.payload.downloaded);
       setContentLength(event.payload.contentLength);
       if (event.payload.phase === 'installing') {
@@ -134,6 +137,7 @@ export function useAutoUpdate(): UseAutoUpdate {
     if (!payload) return;
     resetProgress();
     setStatus('downloading');
+    androidDownloadActiveRef.current = true;
     try {
       await appDownloadAndInstallAndroidUpdate(payload);
       androidUpdateRef.current = null;
@@ -144,6 +148,8 @@ export function useAutoUpdate(): UseAutoUpdate {
       setErrorMessage(msg);
       setStatus('error');
       throw error;
+    } finally {
+      androidDownloadActiveRef.current = false;
     }
   };
 
