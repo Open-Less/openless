@@ -3,7 +3,7 @@
 // 入口在 Style 页面「风格包」标题右侧，由 Style.tsx 控制 open/close。
 // 顶部 pill 显示当前「登录身份」（dev 模式 = marketplaceDevLogin），未填时引导跳 Settings。
 
-import { useEffect } from 'react';
+import { useEffect, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from './Icon';
 import { Marketplace } from '../pages/Marketplace';
@@ -12,6 +12,29 @@ import { useHotkeySettings } from '../state/HotkeySettingsContext';
 interface MarketplaceModalProps {
   onClose: () => void;
 }
+
+const modalChipDarkStyle: CSSProperties = {
+  background: 'var(--ol-pill-selected-bg)',
+  color: 'var(--ol-pill-selected-ink)',
+  border: '0.5px solid var(--ol-pill-selected-border)',
+  boxShadow: 'var(--ol-shadow-sm)',
+};
+
+const modalCloseBtnStyle: CSSProperties = {
+  ...modalChipDarkStyle,
+  position: 'absolute',
+  top: 16,
+  right: 16,
+  zIndex: 3,
+  width: 32,
+  height: 32,
+  borderRadius: 8,
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  cursor: 'default',
+  transition: 'opacity 0.16s var(--ol-motion-quick)',
+};
 
 export function MarketplaceModal({ onClose }: MarketplaceModalProps) {
   const { t } = useTranslation();
@@ -71,14 +94,16 @@ export function MarketplaceModal({ onClose }: MarketplaceModalProps) {
             style={{
               display: 'inline-flex', alignItems: 'center', gap: 6,
               padding: '4px 10px', borderRadius: 999,
-              border: loggedIn ? '0.5px solid var(--ol-line)' : '0.5px solid rgba(239,68,68,0.32)',
-              background: loggedIn ? 'rgba(255,255,255,0.85)' : 'rgba(239,68,68,0.08)',
-              color: loggedIn ? 'var(--ol-ink-2)' : 'var(--ol-red, #ef4444)',
               fontSize: 11.5, fontWeight: 500,
               cursor: 'default',
-              boxShadow: '0 1px 2px rgba(15,17,22,0.05)',
-              backdropFilter: 'blur(8px) saturate(140%)',
-              WebkitBackdropFilter: 'blur(8px) saturate(140%)',
+              ...(loggedIn
+                ? modalChipDarkStyle
+                : {
+                    border: '0.5px solid rgba(239,68,68,0.32)',
+                    background: 'rgba(239,68,68,0.08)',
+                    color: 'var(--ol-red, #ef4444)',
+                    boxShadow: '0 1px 2px rgba(15,17,22,0.05)',
+                  }),
             }}
           >
             <Icon name="user" size={11} />
@@ -88,27 +113,12 @@ export function MarketplaceModal({ onClose }: MarketplaceModalProps) {
 
         <button
           onClick={onClose}
-          style={{
-            position: 'absolute', top: 16, right: 16, zIndex: 3,
-            width: 32, height: 32,
-            border: '0.5px solid var(--ol-line)',
-            borderRadius: 8,
-            background: 'rgba(255,255,255,0.85)',
-            color: 'var(--ol-ink-2)',
-            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-            cursor: 'default',
-            boxShadow: '0 1px 2px rgba(15,17,22,0.05)',
-            backdropFilter: 'blur(8px) saturate(140%)',
-            WebkitBackdropFilter: 'blur(8px) saturate(140%)',
-            transition: 'background 0.16s var(--ol-motion-quick), color 0.16s var(--ol-motion-quick)',
-          }}
+          style={modalCloseBtnStyle}
           onMouseEnter={(e) => {
-            (e.currentTarget as HTMLButtonElement).style.background = 'var(--ol-surface)';
-            (e.currentTarget as HTMLButtonElement).style.color = 'var(--ol-ink)';
+            (e.currentTarget as HTMLButtonElement).style.opacity = '0.85';
           }}
           onMouseLeave={(e) => {
-            (e.currentTarget as HTMLButtonElement).style.background = 'rgba(255,255,255,0.85)';
-            (e.currentTarget as HTMLButtonElement).style.color = 'var(--ol-ink-2)';
+            (e.currentTarget as HTMLButtonElement).style.opacity = '1';
           }}
           aria-label={t('common.close')}
           title={t('common.close')}
