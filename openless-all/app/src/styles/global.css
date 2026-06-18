@@ -213,11 +213,6 @@ html[data-ol-platform="android"] .ol-frost::before {
   border-radius: var(--ol-panel-radius) var(--ol-panel-radius) 0 0;
 }
 
-.ol-overview-hero {
-  background: var(--ol-card-bg);
-  border: 0.5px solid var(--ol-card-border);
-}
-
 .ol-capsule-pill {
   background: var(--ol-capsule-pill-bg) !important;
   border-color: var(--ol-capsule-pill-border) !important;

@@ -101,7 +101,7 @@ export function SettingsModal({ os: _os, onClose, initialSettingsSection }: Sett
           maxWidth: mobile ? undefined : 880,
           height: '100%',
           maxHeight: mobile ? undefined : 600,
-          background: 'var(--ol-surface)',
+          background: 'var(--ol-settings-content-bg)',
           borderRadius: mobile ? 0 : 14,
           border: mobile ? 'none' : '0.5px solid var(--ol-line)',
           boxShadow: mobile ? 'none' : 'var(--ol-shadow-xl)',
@@ -172,7 +172,7 @@ export function SettingsModal({ os: _os, onClose, initialSettingsSection }: Sett
                   height: pillRect.height,
                   background: 'var(--ol-segmented-active-bg)',
                   borderRadius: 8,
-                  boxShadow: '0 1px 2px rgba(0,0,0,.05), 0 0 0 0.5px rgba(0,0,0,.06)',
+                  boxShadow: 'var(--ol-segmented-active-shadow)',
                   transition: 'top 0.36s var(--ol-motion-spring), height 0.36s var(--ol-motion-spring)',
                   pointerEvents: 'none',
                   zIndex: 0,
@@ -231,7 +231,7 @@ export function SettingsModal({ os: _os, onClose, initialSettingsSection }: Sett
               cursor: 'default',
               transition: 'background 0.16s var(--ol-motion-quick)',
             }}
-            onMouseEnter={e => (e.currentTarget.style.background = 'rgba(0,0,0,0.05)')}
+            onMouseEnter={e => (e.currentTarget.style.background = 'var(--ol-settings-close-hover-bg)')}
             onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
             title={t('common.close')}>
             <Icon name="close" size={14} />
