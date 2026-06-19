@@ -93,7 +93,10 @@ pub(super) fn ensure_asr_credentials() -> Result<(), String> {
         }
     }
 
-    if is_whisper_compatible_provider(&active_asr) || is_bailian_provider(&active_asr) {
+    if is_whisper_compatible_provider(&active_asr)
+        || is_bailian_provider(&active_asr)
+        || is_mimo_provider(&active_asr)
+    {
         let api_key = CredentialsVault::get(CredentialAccount::AsrApiKey)
             .ok()
             .flatten()
