@@ -1,15 +1,13 @@
-// 高级 → 加入 Beta 渠道。单独成一节，固定放在「高级」页最下面。
-//
-// 打开后写 prefs.update_channel='beta'：后台 AutoUpdateGate 自动更新随之走 Beta，
-// 同时本节出现「检查更新」按钮 —— 手动查测试版更新（CheckUpdateButton channel='beta'）。
-// 关于页的检查更新按钮固定查正式版（channel='stable'），两者互不影响。
+// 高级 → Beta 渠道。Toggle 控制后台 AutoUpdateGate 跟随 stable/beta；
+// 「检查 Beta 更新」按钮始终可用，与 Toggle 状态无关。
+// 关于页的「检查正式版更新」固定查 stable，两者互不影响。
 
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { getPlatformCapabilities, getUpdateChannel, setUpdateChannel, type UpdateChannel } from '../../lib/ipc';
 import type { PlatformCapabilities } from '../../lib/types';
 import { Card } from '../_atoms';
-import { SectionTitle, Toggle } from './shared';
+import { SectionTitle, SettingRow, Toggle } from './shared';
 import { CheckUpdateButton } from './CheckUpdateButton';
 
 export function BetaChannelSection() {
@@ -35,7 +33,6 @@ export function BetaChannelSection() {
     try {
       await setUpdateChannel(target);
     } catch {
-      // 写入失败时回滚 UI，免得用户以为切成功了。
       setChannel(target === 'beta' ? 'stable' : 'beta');
     }
   };
@@ -45,14 +42,14 @@ export function BetaChannelSection() {
   return (
     <Card>
       <SectionTitle>{t('settings.about.betaChannelLabel')}</SectionTitle>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, paddingTop: 2 }}>
-        <span style={{ fontSize: 12.5, color: 'var(--ol-ink-3)' }}>
-          {t('settings.about.betaChannelDesc')}
-        </span>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
-          {channel === 'beta' && <CheckUpdateButton channel="beta" />}
-          <Toggle on={channel === 'beta'} onToggle={onToggle} />
-        </div>
+      <p style={{ fontSize: 12.5, color: 'var(--ol-ink-3)', lineHeight: 1.55, margin: '0 0 4px' }}>
+        {t('settings.about.betaChannelDesc')}
+      </p>
+      <SettingRow label={t('settings.about.betaChannelToggleLabel')}>
+        <Toggle on={channel === 'beta'} onToggle={onToggle} />
+      </SettingRow>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', paddingTop: 4 }}>
+        <CheckUpdateButton channel="beta" />
       </div>
     </Card>
   );

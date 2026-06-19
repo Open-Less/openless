@@ -65,7 +65,11 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
             ACTION_SHOW -> showOverlay()
             ACTION_START_RECORDING -> {
                 showOverlay()
-                startRecordingFromOverlay()
+                if (!tryPromoteRecordingForeground()) {
+                    abortRecordingStart(startId)
+                    return START_NOT_STICKY
+                }
+                beginDictationFromOverlay()
             }
             ACTION_HIDE -> {
                 hideOverlay()
@@ -636,26 +640,41 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         }
     }
 
+    private fun abortRecordingStart(startId: Int) {
+        recording = false
+        processing = false
+        try {
+            OpenLessNative.nativeCancelDictation()
+        } catch (error: Throwable) {
+            Log.w(TAG, "cancel dictation after foreground failure", error)
+        }
+        stopSelf(startId)
+    }
+
+    private fun beginDictationFromOverlay(translation: Boolean = false) {
+        try {
+            if (translation) {
+                OpenLessNative.nativeStartDictationWithTranslation(true)
+            } else {
+                OpenLessNative.nativeStartDictation()
+            }
+            recording = true
+            processing = false
+            setArmed(false)
+            applyVisualState(OverlayVisualState.Recording)
+        } catch (error: Throwable) {
+            Log.w(TAG, "start dictation bridge unavailable", error)
+            recording = false
+            processing = false
+            applyVisualState(OverlayVisualState.Error)
+            showToast("语音服务未就绪，请打开 OpenLess 后重试")
+        }
+    }
+
     private fun startRecordingFromOverlay(translation: Boolean = false) {
         showOverlay()
         if (tryPromoteRecordingForeground()) {
-            try {
-                if (translation) {
-                    OpenLessNative.nativeStartDictationWithTranslation(true)
-                } else {
-                    OpenLessNative.nativeStartDictation()
-                }
-                recording = true
-                processing = false
-                setArmed(false)
-                applyVisualState(OverlayVisualState.Recording)
-            } catch (error: Throwable) {
-                Log.w(TAG, "start dictation bridge unavailable", error)
-                recording = false
-                processing = false
-                applyVisualState(OverlayVisualState.Error)
-                showToast("语音服务未就绪，请打开 OpenLess 后重试")
-            }
+            beginDictationFromOverlay(translation)
             return
         }
         applyVisualState(OverlayVisualState.Error)

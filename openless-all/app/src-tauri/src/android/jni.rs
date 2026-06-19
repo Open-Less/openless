@@ -188,17 +188,8 @@ pub mod android {
             &[JValue::Object(&action_obj)],
         )
         .map_err(|error| format!("set service action: {error}"))?;
-        // REPLACE_OVERLAY 和 REFRESH_LAYOUT 与 SHOW/HIDE 一样，发送到已在运行的服务，
-        // 不应使用 startForegroundService（Android 12+ 在后台调用会抛
-        // ForegroundServiceStartNotAllowedException）。
         let start_method =
-            if action.ends_with(".HIDE")
-                || action.ends_with(".SHOW")
-                || action.ends_with(".REPLACE_OVERLAY")
-                || action.ends_with(".REFRESH_LAYOUT")
-            {
-                "startService"
-            } else if android_sdk_int(env)? >= 26 {
+            if action.ends_with(".START_RECORDING") && android_sdk_int(env)? >= 26 {
                 "startForegroundService"
             } else {
                 "startService"
@@ -504,32 +495,146 @@ pub mod android {
         }
     }
 
+    const ACCESSIBILITY_SERVICE_CLASS: &str = "com.openless.app.OpenLessAccessibilityService";
+    const ACCESSIBILITY_PREFS_NAME: &str = "openless_accessibility";
+    const ACCESSIBILITY_HEARTBEAT_KEY: &str = "last_heartbeat";
+    const ACCESSIBILITY_HEARTBEAT_STALE_MS: i64 = 15_000;
+
+    fn content_resolver<'local>(
+        env: &mut JNIEnv<'local>,
+        context: &JObject<'local>,
+    ) -> Result<JObject<'local>, String> {
+        env.call_method(context, "getContentResolver", "()Landroid/content/ContentResolver;", &[])
+            .and_then(|value| value.l())
+            .map_err(|error| format!("Context.getContentResolver: {error}"))
+    }
+
+    fn jstring_object_to_option<'local>(
+        env: &mut JNIEnv<'local>,
+        value: JObject<'local>,
+    ) -> Result<Option<String>, String> {
+        if value.is_null() {
+            return Ok(None);
+        }
+        let text = env
+            .get_string(&JString::from(value))
+            .map_err(|error| format!("read jstring: {error}"))?
+            .to_string_lossy()
+            .into_owned();
+        Ok(Some(text))
+    }
+
+    fn settings_secure_get_int<'local>(
+        env: &mut JNIEnv<'local>,
+        context: &JObject<'local>,
+        key: &str,
+        default: i32,
+    ) -> Result<i32, String> {
+        let resolver = content_resolver(env, context)?;
+        let key_obj = jobject_str(env, key)?;
+        env.call_static_method(
+            "android/provider/Settings$Secure",
+            "getInt",
+            "(Landroid/content/ContentResolver;Ljava/lang/String;I)I",
+            &[
+                JValue::Object(&resolver),
+                JValue::Object(&key_obj),
+                JValue::Int(default),
+            ],
+        )
+        .and_then(|value| value.i())
+        .map_err(|error| format!("Settings.Secure.getInt({key}): {error}"))
+    }
+
+    fn settings_secure_get_string<'local>(
+        env: &mut JNIEnv<'local>,
+        context: &JObject<'local>,
+        key: &str,
+    ) -> Result<Option<String>, String> {
+        let resolver = content_resolver(env, context)?;
+        let key_obj = jobject_str(env, key)?;
+        let value = env
+            .call_static_method(
+                "android/provider/Settings$Secure",
+                "getString",
+                "(Landroid/content/ContentResolver;Ljava/lang/String;)Ljava/lang/String;",
+                &[JValue::Object(&resolver), JValue::Object(&key_obj)],
+            )
+            .and_then(|value| value.l())
+            .map_err(|error| format!("Settings.Secure.getString({key}): {error}"))?;
+        jstring_object_to_option(env, value)
+    }
+
+    fn accessibility_service_component_id<'local>(
+        env: &mut JNIEnv<'local>,
+        context: &JObject<'local>,
+    ) -> Result<String, String> {
+        let package_name = env
+            .call_method(context, "getPackageName", "()Ljava/lang/String;", &[])
+            .and_then(|value| value.l())
+            .map_err(|error| format!("Context.getPackageName: {error}"))?;
+        let package = env
+            .get_string(&JString::from(package_name))
+            .map_err(|error| format!("read package name: {error}"))?
+            .to_string_lossy()
+            .into_owned();
+        Ok(format!("{package}/{ACCESSIBILITY_SERVICE_CLASS}"))
+    }
+
     pub fn accessibility_enabled<'local>(
         env: &mut JNIEnv<'local>,
         context: &JObject<'local>,
     ) -> Result<bool, String> {
-        call_static_bool_with_context_class(
-            env,
-            context,
-            "com.openless.app.OpenLessAccessibilityService",
-            "isEnabled",
-            "(Landroid/content/Context;)Z",
-            &[JValue::Object(context)],
-        )
+        // Read Settings.Secure directly — avoids Kotlin @JvmStatic drift on older APK dex.
+        if settings_secure_get_int(env, context, "accessibility_enabled", 0)? != 1 {
+            return Ok(false);
+        }
+        let services = settings_secure_get_string(env, context, "enabled_accessibility_services")?
+            .unwrap_or_default();
+        let component_id = accessibility_service_component_id(env, context)?;
+        Ok(services.contains(&component_id))
     }
 
     pub fn accessibility_operational<'local>(
         env: &mut JNIEnv<'local>,
         context: &JObject<'local>,
     ) -> Result<bool, String> {
-        call_static_bool_with_context_class(
-            env,
-            context,
-            "com.openless.app.OpenLessAccessibilityService",
-            "isOperational",
-            "(Landroid/content/Context;)Z",
-            &[JValue::Object(context)],
-        )
+        if !accessibility_enabled(env, context)? {
+            return Ok(false);
+        }
+        let prefs_name = jobject_str(env, ACCESSIBILITY_PREFS_NAME)?;
+        let prefs = env
+            .call_method(
+                context,
+                "getSharedPreferences",
+                "(Ljava/lang/String;I)Landroid/content/SharedPreferences;",
+                &[JValue::Object(&prefs_name), JValue::Int(0)],
+            )
+            .and_then(|value| value.l())
+            .map_err(|error| format!("Context.getSharedPreferences: {error}"))?;
+        let heartbeat_key = jobject_str(env, ACCESSIBILITY_HEARTBEAT_KEY)?;
+        let last_heartbeat = env
+            .call_method(
+                &prefs,
+                "getLong",
+                "(Ljava/lang/String;J)J",
+                &[JValue::Object(&heartbeat_key), JValue::Long(0)],
+            )
+            .and_then(|value| value.j())
+            .map_err(|error| format!("SharedPreferences.getLong: {error}"))?;
+        if last_heartbeat <= 0 {
+            return Ok(false);
+        }
+        let now = env
+            .call_static_method(
+                "java/lang/System",
+                "currentTimeMillis",
+                "()J",
+                &[],
+            )
+            .and_then(|value| value.j())
+            .map_err(|error| format!("System.currentTimeMillis: {error}"))?;
+        Ok(now.saturating_sub(last_heartbeat) <= ACCESSIBILITY_HEARTBEAT_STALE_MS)
     }
 
     pub fn launch_accessibility_settings(

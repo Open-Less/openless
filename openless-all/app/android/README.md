@@ -22,6 +22,8 @@ src-tauri/src/android/   # Rust 运行时模块（crate::android）
 | `overlay.rs` | 悬浮窗权限与 show/hide |
 | `accessibility.rs` | 无障碍服务状态与 paste |
 | `insert.rs` | 跨 App 文本插入策略 |
+| `updater.rs` | 应用内更新（manifest 拉取、minisign 校验、系统安装器） |
+| `updater_logic.rs` | 更新 URL / 版本比较纯函数（全平台可测） |
 | `types.rs` | Android 偏好与状态类型 |
 
 主 crate 通过 `mod android;` 引入，常用 API 经 `crate::android::` 扁平 re-export。

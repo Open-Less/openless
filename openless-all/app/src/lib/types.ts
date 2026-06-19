@@ -164,8 +164,8 @@ export interface WindowsImeStatus {
   dllPath: string | null;
 }
 
-/** Auto-update 渠道偏好。stable = 跟正式版（默认）；beta = Settings 里多一个
- *  手动下载 Beta 的入口。不影响 plugin-updater 的自动检查路径。 */
+/** 后台自动更新渠道。stable = 查正式版 manifest（默认）；beta = 查
+ *  latest-android-{arch}-beta.json。手动「检查正式版/Beta 更新」按钮不受此字段影响。 */
 export type UpdateChannel = 'stable' | 'beta';
 
 export type ThemeMode = 'system' | 'light' | 'dark';
@@ -334,8 +334,8 @@ export interface UserPreferences {
   startMinimized: boolean;
   /** UI theme preference: follow OS, light, or dark. */
   themeMode: ThemeMode;
-  /** 自动更新渠道。'stable'（默认）= plugin-updater 仅检查正式版；
-   *  'beta' = Settings → About 出现手动下载 Beta 的入口。 */
+  /** 后台自动更新渠道。stable（默认）= AutoUpdateGate 查正式版 manifest；
+   *  beta = 查 Beta manifest。About / Advanced 的手动检查按钮各自固定 stable/beta。 */
   updateChannel: UpdateChannel;
   /** 流式输入：润色 SSE 一边到达一边逐字模拟键盘事件输出到当前焦点。开启后用户感知到
    *  的处理时延显著降低。v1 限定 macOS + OpenAI-compatible provider，其他配置自动回落
@@ -347,8 +347,10 @@ export interface UserPreferences {
   /** 流式输入成功后是否把最终润色文本写回剪贴板。开启后 Cmd+V 还能重复粘贴该次输出，
    *  与一次性路径行为对齐。默认 true。 */
   streamingInsertSaveClipboard: boolean;
-  /** 主窗口启动 + 后台每 60 分钟自动检查云端新版本。默认 true。
-   *  关闭后仅 Settings → 关于 的「检查更新」手动按钮可用。 */
+  /** 主窗口启动 + 后台每 60 分钟自动检查更新。默认 true。
+   *  Android：开启后自动检查并下载，校验后打开系统安装器。
+   *  桌面：开启后自动检查，发现更新弹窗由用户确认安装。
+   *  关闭后仅 Settings 手动「检查更新」按钮可用。 */
   autoUpdateCheck: boolean;
   /** 历史记录上限（条数）。null = 走默认 200；5..=200 之间为用户自定义。 */
   historyMaxEntries: number | null;

@@ -1,9 +1,10 @@
-// 自动更新共用模块 — Settings 的"关于"section 和 footer 按钮共用同一套
-// 状态机 + 对话框 UI。两边各自调用 useAutoUpdate()，dialog 渲染条件相同。
+// 自动更新共用模块 — Settings 的"关于"section 和 AutoUpdateGate 共用同一套
+// 状态机 + 对话框 UI。各自调用 useAutoUpdate()，dialog 渲染条件相同。
 //
 // 渠道感知：check 走 appCheckUpdateWithChannel()（Rust 按渠道拼 manifest URL）。
 // 桌面：download/install 复用 plugin-updater 的 Update 类。
 // Android：download/install 走 appDownloadAndInstallAndroidUpdate（minisign + 系统安装器）。
+// Android 后台 Gate：发现更新后 autoInstallAndroid 跳过确认，直接下载并打开系统安装器。
 
 import { useEffect, useRef, useState } from 'react';
 import type { DownloadEvent } from '@tauri-apps/plugin-updater';
@@ -42,6 +43,11 @@ export type UpdateStatus =
   // 后台自动检查失败也不弹框；只有 installError 才让弹框留在原地显示错误 + 手动下载兜底。
   | 'installError';
 
+export type CheckUpdateOptions = {
+  /** Android only: skip confirmation dialog and download + open system installer. */
+  autoInstallAndroid?: boolean;
+};
+
 export interface UseAutoUpdate {
   status: UpdateStatus;
   version: string;
@@ -51,7 +57,7 @@ export interface UseAutoUpdate {
   checking: boolean;
   busy: boolean;
   errorMessage: string | null;
-  checkForUpdates: (channel?: UpdateChannel) => Promise<void>;
+  checkForUpdates: (channel?: UpdateChannel, options?: CheckUpdateOptions) => Promise<void>;
   installUpdate: () => Promise<void>;
   dismissDialog: () => Promise<void>;
 }
@@ -65,6 +71,8 @@ type AndroidUpdatePayload = {
 export function useAutoUpdate(): UseAutoUpdate {
   const updateRef = useRef<Update | null>(null);
   const androidUpdateRef = useRef<AndroidUpdatePayload | null>(null);
+  /** True only while this hook instance initiated an Android download/install. */
+  const androidDownloadActiveRef = useRef(false);
   const [status, setStatus] = useState<UpdateStatus>('idle');
   const [version, setVersion] = useState('');
   const [downloaded, setDownloaded] = useState(0);
@@ -102,6 +110,7 @@ export function useAutoUpdate(): UseAutoUpdate {
       contentLength: number | null;
       phase: string;
     }>('android-update:progress', (event) => {
+      if (!androidDownloadActiveRef.current) return;
       setDownloaded(event.payload.downloaded);
       setContentLength(event.payload.contentLength);
       if (event.payload.phase === 'installing') {
@@ -132,68 +141,30 @@ export function useAutoUpdate(): UseAutoUpdate {
     androidUpdateRef.current = { url, signature, version: metadata.version };
   };
 
-  const checkForUpdates = async (channel?: UpdateChannel) => {
-    setStatus('checking');
-    setVersion('');
-    setErrorMessage(null);
+  const installAndroidUpdate = async () => {
+    const payload = androidUpdateRef.current;
+    if (!payload) return;
     resetProgress();
-    await closeUpdate();
+    setStatus('downloading');
+    androidDownloadActiveRef.current = true;
     try {
-      if (!isTauri) {
-        setStatus('none');
-        return;
-      }
-      const metadata = await appCheckUpdateWithChannel(
-        UPDATE_CHECK_TIMEOUT_MS,
-        channel ?? null,
-      );
-      if (!metadata) {
-        setStatus('none');
-        return;
-      }
-      if (isAndroid()) {
-        storeAndroidMetadata(metadata);
-        setVersion(metadata.version);
-        setStatus('available');
-        return;
-      }
-      const next = new Update({
-        rid: metadata.rid,
-        currentVersion: metadata.currentVersion,
-        version: metadata.version,
-        date: metadata.date ?? undefined,
-        body: metadata.body ?? undefined,
-        rawJson: metadata.rawJson,
-      });
-      updateRef.current = next;
-      setVersion(next.version);
-      setStatus('available');
+      await appDownloadAndInstallAndroidUpdate(payload);
+      androidUpdateRef.current = null;
+      setStatus('downloaded');
     } catch (error) {
-      console.error('[updater] failed to check update', error);
+      console.error('[updater] failed to install android update', error);
       const msg = error instanceof Error ? error.message : String(error);
-      void logClientError(`[updater] check failed: ${msg}`);
+      void logClientError(`[updater] android install failed (v${payload.version}): ${msg}`);
       setErrorMessage(msg);
-      setStatus('error');
+      setStatus('installError');
+    } finally {
+      androidDownloadActiveRef.current = false;
     }
   };
 
   const installUpdate = async () => {
     if (isAndroid()) {
-      const payload = androidUpdateRef.current;
-      if (!payload) return;
-      resetProgress();
-      setStatus('downloading');
-      try {
-        await appDownloadAndInstallAndroidUpdate(payload);
-        androidUpdateRef.current = null;
-        setStatus('downloaded');
-      } catch (error) {
-        console.error('[updater] failed to install android update', error);
-        const msg = error instanceof Error ? error.message : String(error);
-        void logClientError(`[updater] android install failed (v${payload.version}): ${msg}`);
-        setErrorMessage(msg);
-        setStatus('installError');
-      }
+      await installAndroidUpdate();
       return;
     }
 
@@ -223,6 +194,59 @@ export function useAutoUpdate(): UseAutoUpdate {
       setErrorMessage(msg);
       await closeUpdate();
       setStatus('installError');
+    }
+  };
+
+  const checkForUpdates = async (channel?: UpdateChannel, options?: CheckUpdateOptions) => {
+    setStatus('checking');
+    setVersion('');
+    setErrorMessage(null);
+    resetProgress();
+    await closeUpdate();
+    try {
+      if (!isTauri) {
+        setStatus('none');
+        return;
+      }
+      const metadata = await appCheckUpdateWithChannel(
+        UPDATE_CHECK_TIMEOUT_MS,
+        channel ?? null,
+      );
+      if (!metadata) {
+        setStatus('none');
+        return;
+      }
+      if (isAndroid()) {
+        storeAndroidMetadata(metadata);
+        setVersion(metadata.version);
+        if (options?.autoInstallAndroid) {
+          try {
+            await installAndroidUpdate();
+          } catch (error) {
+            console.warn('[auto-update] android auto-install failed', error);
+          }
+          return;
+        }
+        setStatus('available');
+        return;
+      }
+      const next = new Update({
+        rid: metadata.rid,
+        currentVersion: metadata.currentVersion,
+        version: metadata.version,
+        date: metadata.date ?? undefined,
+        body: metadata.body ?? undefined,
+        rawJson: metadata.rawJson,
+      });
+      updateRef.current = next;
+      setVersion(next.version);
+      setStatus('available');
+    } catch (error) {
+      console.error('[updater] failed to check update', error);
+      const msg = error instanceof Error ? error.message : String(error);
+      void logClientError(`[updater] check failed: ${msg}`);
+      setErrorMessage(msg);
+      setStatus('error');
     }
   };
 
@@ -277,10 +301,17 @@ export function UpdateDialog({
   const installing = status === 'installing';
   const installError = status === 'installError';
   const androidInstalled = isAndroid() && status === 'downloaded';
+  const installLabel = isAndroid()
+    ? t('settings.about.updateDialog.androidInstall')
+    : t('settings.about.updateDialog.install');
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.18)', display: 'grid', placeItems: 'center', zIndex: 40 }}>
       <div style={{ width: 360, borderRadius: 16, background: 'var(--ol-surface)', border: '0.5px solid var(--ol-line-strong)', boxShadow: '0 18px 42px rgba(0,0,0,0.18)', padding: 18 }}>
-        <div style={{ fontSize: 15, fontWeight: 650, marginBottom: 8 }}>{t(`settings.about.updateDialog.${status}.title`)}</div>
+        <div style={{ fontSize: 15, fontWeight: 650, marginBottom: 8 }}>
+          {androidInstalled
+            ? t('settings.about.updateDialog.androidInstalled.title')
+            : t(`settings.about.updateDialog.${status}.title`)}
+        </div>
         <div style={{ fontSize: 12, color: 'var(--ol-ink-3)', lineHeight: 1.6, marginBottom: 14, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
           {androidInstalled
             ? t('settings.about.updateDialog.androidInstalled.desc', { version, defaultValue: '系统安装器已打开，请按提示完成安装。安装后重新打开 OpenLess 即可使用 {{version}}。' })
@@ -304,7 +335,7 @@ export function UpdateDialog({
         )}
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
           {status === 'available' && <Btn size="sm" onClick={onClose}>{t('common.cancel')}</Btn>}
-          {status === 'available' && <Btn variant="blue" size="sm" onClick={onInstall}>{t('settings.about.updateDialog.install')}</Btn>}
+          {status === 'available' && <Btn variant="blue" size="sm" onClick={onInstall}>{installLabel}</Btn>}
           {(downloading || installing) && <Btn size="sm" disabled>{installing ? t('settings.about.updateDialog.installingLabel') : t('settings.about.updateDialog.downloadingLabel')}</Btn>}
           {status === 'downloaded' && <Btn size="sm" onClick={onClose}>{t('settings.about.updateDialog.later')}</Btn>}
           {status === 'downloaded' && !androidInstalled && <Btn variant="blue" size="sm" onClick={restartApp}>{t('settings.about.updateDialog.restartNow')}</Btn>}
