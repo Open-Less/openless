@@ -996,7 +996,23 @@ mod platform {
             }
             _ => {}
         }
-        true
+        should_suppress_trigger(trigger)
+    }
+
+    fn should_suppress_trigger(trigger: HotkeyTrigger) -> bool {
+        // Modifier-only hotkeys on Windows are safer when the physical key state
+        // is still allowed to flow through to the foreground app. Swallowing the
+        // down/up edges for Ctrl/Alt can leave shell and Chromium-family apps in
+        // odd input states while OpenLess later submits text through TSF.
+        !matches!(
+            trigger,
+            HotkeyTrigger::LeftControl
+                | HotkeyTrigger::RightControl
+                | HotkeyTrigger::LeftOption
+                | HotkeyTrigger::RightOption
+                | HotkeyTrigger::RightAlt
+                | HotkeyTrigger::Fn
+        )
     }
 
     fn handle_optional_modifier_trigger(
@@ -1091,10 +1107,10 @@ mod platform {
             let shared = shared(HotkeyTrigger::RightControl);
             let (ctx, rx) = callback_context(shared);
 
-            assert!(dispatch_keyboard_event(&ctx, VK_RCONTROL, WM_KEYDOWN));
-            assert!(dispatch_keyboard_event(&ctx, VK_RCONTROL, WM_KEYDOWN));
-            assert!(dispatch_keyboard_event(&ctx, VK_RCONTROL, WM_KEYUP));
-            assert!(dispatch_keyboard_event(&ctx, VK_RCONTROL, WM_KEYUP));
+            assert!(!dispatch_keyboard_event(&ctx, VK_RCONTROL, WM_KEYDOWN));
+            assert!(!dispatch_keyboard_event(&ctx, VK_RCONTROL, WM_KEYDOWN));
+            assert!(!dispatch_keyboard_event(&ctx, VK_RCONTROL, WM_KEYUP));
+            assert!(!dispatch_keyboard_event(&ctx, VK_RCONTROL, WM_KEYUP));
 
             assert_eq!(
                 drain(&rx),
@@ -1108,10 +1124,10 @@ mod platform {
             let (ctx, rx) = callback_context(shared);
 
             assert!(!dispatch_keyboard_event(&ctx, VK_LCONTROL, WM_KEYDOWN));
-            assert!(dispatch_keyboard_event(&ctx, VK_RCONTROL, WM_KEYUP));
-            assert!(dispatch_keyboard_event(&ctx, VK_RCONTROL, WM_KEYDOWN));
-            assert!(dispatch_keyboard_event(&ctx, VK_RCONTROL, WM_KEYUP));
-            assert!(dispatch_keyboard_event(&ctx, VK_RCONTROL, WM_KEYDOWN));
+            assert!(!dispatch_keyboard_event(&ctx, VK_RCONTROL, WM_KEYUP));
+            assert!(!dispatch_keyboard_event(&ctx, VK_RCONTROL, WM_KEYDOWN));
+            assert!(!dispatch_keyboard_event(&ctx, VK_RCONTROL, WM_KEYUP));
+            assert!(!dispatch_keyboard_event(&ctx, VK_RCONTROL, WM_KEYDOWN));
 
             assert_eq!(
                 drain(&rx),
@@ -1155,8 +1171,8 @@ mod platform {
             let (left_ctx, left_rx) = callback_context(left_shared);
 
             assert!(!dispatch_keyboard_event(&left_ctx, VK_RMENU, WM_KEYDOWN));
-            assert!(dispatch_keyboard_event(&left_ctx, VK_LMENU, WM_KEYDOWN));
-            assert!(dispatch_keyboard_event(&left_ctx, VK_LMENU, WM_KEYUP));
+            assert!(!dispatch_keyboard_event(&left_ctx, VK_LMENU, WM_KEYDOWN));
+            assert!(!dispatch_keyboard_event(&left_ctx, VK_LMENU, WM_KEYUP));
             assert_eq!(
                 drain(&left_rx),
                 vec![HotkeyEvent::Pressed, HotkeyEvent::Released]
@@ -1169,7 +1185,7 @@ mod platform {
                 VK_LMENU,
                 WM_KEYDOWN
             ));
-            assert!(dispatch_keyboard_event(
+            assert!(!dispatch_keyboard_event(
                 &right_option_ctx,
                 VK_RMENU,
                 WM_KEYDOWN
@@ -1183,7 +1199,7 @@ mod platform {
                 VK_LMENU,
                 WM_KEYDOWN
             ));
-            assert!(dispatch_keyboard_event(
+            assert!(!dispatch_keyboard_event(
                 &right_alt_ctx,
                 VK_RMENU,
                 WM_KEYDOWN

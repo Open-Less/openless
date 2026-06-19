@@ -10,6 +10,39 @@ HINSTANCE g_module = nullptr;
 LONG g_lock_count = 0;
 LONG g_object_count = 0;
 
+namespace {
+
+bool IsBlockedShellProcess() {
+  wchar_t path[MAX_PATH] = {};
+  const DWORD length = GetModuleFileNameW(nullptr, path, ARRAYSIZE(path));
+  if (length == 0 || length >= ARRAYSIZE(path)) {
+    return false;
+  }
+
+  const wchar_t* name = path;
+  for (const wchar_t* cursor = path; *cursor != L'\0'; ++cursor) {
+    if (*cursor == L'\\' || *cursor == L'/') {
+      name = cursor + 1;
+    }
+  }
+
+  constexpr const wchar_t* kBlockedProcesses[] = {
+      L"explorer.exe",
+      L"searchhost.exe",
+      L"startmenuexperiencehost.exe",
+      L"shellexperiencehost.exe",
+      L"textinputhost.exe",
+  };
+  for (const wchar_t* blocked : kBlockedProcesses) {
+    if (_wcsicmp(name, blocked) == 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+}  // namespace
+
 BOOL APIENTRY DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved) {
   UNREFERENCED_PARAMETER(reserved);
 
@@ -19,6 +52,9 @@ BOOL APIENTRY DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved) {
   // 静态 CRT 的 thread-local 资源泄漏 / 行为不稳定，反而把这次想修的崩溃问题
   // 重新引回来。详见 Microsoft 文档 DisableThreadLibraryCalls 备注。
   if (reason == DLL_PROCESS_ATTACH) {
+    if (IsBlockedShellProcess()) {
+      return FALSE;
+    }
     g_module = instance;
   }
 
@@ -36,6 +72,10 @@ STDAPI DllGetClassObject(REFCLSID clsid, REFIID iid, void** object) {
   *object = nullptr;
 
   if (clsid != CLSID_OpenLessTextService) {
+    return CLASS_E_CLASSNOTAVAILABLE;
+  }
+
+  if (IsBlockedShellProcess()) {
     return CLASS_E_CLASSNOTAVAILABLE;
   }
 

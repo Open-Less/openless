@@ -41,6 +41,23 @@ HRESULT WaitForAsyncEditCompletion(
   return HRESULT_FROM_WIN32(GetLastError());
 }
 
+bool IsExplorerProcess() {
+  wchar_t path[MAX_PATH] = {};
+  const DWORD length = GetModuleFileNameW(nullptr, path, ARRAYSIZE(path));
+  if (length == 0 || length >= ARRAYSIZE(path)) {
+    return false;
+  }
+
+  const wchar_t* name = path;
+  for (const wchar_t* cursor = path; *cursor != L'\0'; ++cursor) {
+    if (*cursor == L'\\' || *cursor == L'/') {
+      name = cursor + 1;
+    }
+  }
+
+  return _wcsicmp(name, L"explorer.exe") == 0;
+}
+
 }  // namespace
 
 OpenLessTextService::OpenLessTextService() {
@@ -92,6 +109,11 @@ STDMETHODIMP OpenLessTextService::ActivateEx(ITfThreadMgr* thread_mgr,
 
   if (thread_mgr == nullptr) {
     return E_INVALIDARG;
+  }
+
+  if (IsExplorerProcess()) {
+    Deactivate();
+    return HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED);
   }
 
   Deactivate();
