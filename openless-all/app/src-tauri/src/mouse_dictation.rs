@@ -174,7 +174,7 @@ pub mod platform {
         unsafe {
             let hook = SetWindowsHookExW(WH_MOUSE_LL, Some(low_level_mouse_proc), None, 0)
                 .map_err(|e| format!("mouse hook install failed: {e}"))?;
-            *guard = Some(hook.0);
+            *guard = Some(hook.0 as isize);
         }
         Ok(())
     }
@@ -198,7 +198,7 @@ pub mod platform {
     ) -> LRESULT {
         if code == HC_ACTION as i32 && lparam.0 != 0 {
             let msg = wparam.0 as u32;
-            let mouse = *(lparam.0 as *const MSLLHOOKSTRUCT);
+            let mouse = std::ptr::read(lparam.0 as *const MSLLHOOKSTRUCT);
             match msg {
                 WM_MBUTTONDOWN => handle_button(MouseButton::Middle, true),
                 WM_MBUTTONUP => handle_button(MouseButton::Middle, false),
@@ -216,6 +216,7 @@ pub mod platform {
     }
 
     #[repr(C)]
+    #[derive(Copy, Clone)]
     struct MSLLHOOKSTRUCT {
         pt: windows::Win32::Foundation::POINT,
         mouseData: u32,

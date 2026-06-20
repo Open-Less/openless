@@ -134,7 +134,7 @@ impl SideAwareComboState {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SideModifier {
     CmdLeft,
     CmdRight,
