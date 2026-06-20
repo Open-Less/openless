@@ -36,6 +36,12 @@ mod asr {
 
 #[path = "../../src/coordinator_state.rs"]
 mod coordinator_state;
+#[path = "../../src/global_hotkey_runtime.rs"]
+mod global_hotkey_runtime;
+#[path = "../../src/combo_hotkey.rs"]
+mod combo_hotkey;
+#[path = "../../src/side_aware_combo.rs"]
+mod side_aware_combo;
 #[path = "../../src/hotkey.rs"]
 mod hotkey;
 #[cfg(not(target_os = "macos"))]
