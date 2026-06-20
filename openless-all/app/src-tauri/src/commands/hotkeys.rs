@@ -40,6 +40,7 @@ pub fn set_translation_hotkey(
     binding: ShortcutBinding,
 ) -> Result<(), String> {
     crate::shortcut_binding::validate_binding(&binding).map_err(|e| e.to_string())?;
+    crate::shortcut_binding::reject_side_specific_non_dictation(&binding)?;
     let previous = coord.prefs().get();
     reject_dictation_translation_hotkey_overlap(&previous.dictation_hotkey, &binding)?;
     if let Some(qa_hotkey) = previous.qa_hotkey.as_ref() {
@@ -76,6 +77,7 @@ pub fn set_switch_style_hotkey(
 ) -> Result<(), String> {
     if let Some(binding) = binding.as_ref() {
         crate::shortcut_binding::validate_binding(binding).map_err(|e| e.to_string())?;
+        crate::shortcut_binding::reject_side_specific_non_dictation(binding)?;
         reject_modifier_only_action_shortcut(binding)?;
     }
     let mut prefs = coord.prefs().get();
@@ -106,6 +108,7 @@ pub fn set_open_app_hotkey(
 ) -> Result<(), String> {
     if let Some(binding) = binding.as_ref() {
         crate::shortcut_binding::validate_binding(binding).map_err(|e| e.to_string())?;
+        crate::shortcut_binding::reject_side_specific_non_dictation(binding)?;
         reject_modifier_only_action_shortcut(binding)?;
     }
     let mut prefs = coord.prefs().get();
@@ -229,6 +232,7 @@ fn reject_hotkey_overlap(
 }
 
 pub(crate) fn reject_hotkey_collisions(prefs: &UserPreferences) -> Result<(), String> {
+    reject_non_dictation_side_specific_shortcuts(prefs)?;
     // 停用（None）的 action 快捷键不参与任何冲突检测。
     let switch_style = prefs.switch_style_hotkey.as_ref();
     let open_app = prefs.open_app_hotkey.as_ref();
@@ -270,6 +274,25 @@ pub(crate) fn reject_hotkey_collisions(prefs: &UserPreferences) -> Result<(), St
     }
     if let (Some(switch_style), Some(open_app)) = (switch_style, open_app) {
         reject_switch_style_open_app_hotkey_overlap(switch_style, open_app)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn reject_non_dictation_side_specific_shortcuts(
+    prefs: &UserPreferences,
+) -> Result<(), String> {
+    crate::shortcut_binding::reject_side_specific_non_dictation(&prefs.translation_hotkey)?;
+    if let Some(binding) = prefs.qa_hotkey.as_ref() {
+        crate::shortcut_binding::reject_side_specific_non_dictation(binding)?;
+    }
+    if let Some(binding) = prefs.switch_style_hotkey.as_ref() {
+        crate::shortcut_binding::reject_side_specific_non_dictation(binding)?;
+    }
+    if let Some(binding) = prefs.open_app_hotkey.as_ref() {
+        crate::shortcut_binding::reject_side_specific_non_dictation(binding)?;
+    }
+    if let Some(binding) = prefs.coding_agent_voice_hotkey.as_ref() {
+        crate::shortcut_binding::reject_side_specific_non_dictation(binding)?;
     }
     Ok(())
 }
@@ -405,21 +428,7 @@ fn reject_less_computer_open_app_hotkey_overlap(
 }
 
 fn shortcut_bindings_overlap(left: &ShortcutBinding, right: &ShortcutBinding) -> bool {
-    let left_legacy = crate::shortcut_binding::legacy_modifier_trigger(left);
-    let right_legacy = crate::shortcut_binding::legacy_modifier_trigger(right);
-    match (left_legacy, right_legacy) {
-        (Some(left), Some(right)) => left == right,
-        (Some(_), None) | (None, Some(_)) => false,
-        (None, None) => {
-            let Ok(left) = crate::shortcut_binding::parse_global_hotkey(left) else {
-                return false;
-            };
-            let Ok(right) = crate::shortcut_binding::parse_global_hotkey(right) else {
-                return false;
-            };
-            left == right
-        }
-    }
+    crate::shortcut_binding::bindings_overlap(left, right)
 }
 
 #[cfg(test)]
@@ -433,9 +442,6 @@ mod tests {
         }
     }
 
-    /// 锁定碰撞矩阵：每个动作键与 Less Computer 键相同都必须被 reject_hotkey_collisions
-    /// 拒绝。5 个快捷 setter（set_dictation/translation/switch_style/open_app/qa_hotkey）
-    /// 此前漏校验 coding_agent_voice_hotkey，已接入对应的 less_computer 校验。
     #[test]
     fn each_action_hotkey_collides_with_less_computer() {
         let lc = key("LeftControl");
@@ -473,5 +479,62 @@ mod tests {
 
         // 复位后再次全不同 → 通过。
         assert!(reject_hotkey_collisions(&prefs).is_ok());
+    }
+
+    #[test]
+    fn side_specific_dictation_overlaps_generic_qa_hotkey() {
+        let mut prefs = UserPreferences {
+            dictation_hotkey: ShortcutBinding {
+                primary: "D".into(),
+                modifiers: vec!["cmd-left".into()],
+            },
+            qa_hotkey: Some(ShortcutBinding {
+                primary: "D".into(),
+                modifiers: vec!["cmd".into()],
+            }),
+            ..Default::default()
+        };
+        #[cfg(target_os = "windows")]
+        {
+            assert!(reject_hotkey_collisions(&prefs).is_ok());
+            prefs.qa_hotkey = Some(ShortcutBinding {
+                primary: "D".into(),
+                modifiers: vec!["super".into()],
+            });
+            assert!(reject_hotkey_collisions(&prefs).is_err());
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            assert!(reject_hotkey_collisions(&prefs).is_err());
+        }
+        prefs.qa_hotkey = Some(ShortcutBinding {
+            primary: "D".into(),
+            modifiers: vec!["cmd".into(), "shift".into()],
+        });
+        assert!(reject_hotkey_collisions(&prefs).is_ok());
+    }
+
+    #[test]
+    fn rejects_side_specific_qa_hotkey_on_save() {
+        let prefs = UserPreferences {
+            qa_hotkey: Some(ShortcutBinding {
+                primary: "D".into(),
+                modifiers: vec!["cmd-left".into()],
+            }),
+            ..Default::default()
+        };
+        assert!(reject_non_dictation_side_specific_shortcuts(&prefs).is_err());
+    }
+
+    #[test]
+    fn accepts_side_specific_dictation_hotkey_on_save() {
+        let prefs = UserPreferences {
+            dictation_hotkey: ShortcutBinding {
+                primary: "D".into(),
+                modifiers: vec!["cmd-left".into()],
+            },
+            ..Default::default()
+        };
+        assert!(reject_non_dictation_side_specific_shortcuts(&prefs).is_ok());
     }
 }

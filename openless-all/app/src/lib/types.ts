@@ -81,6 +81,9 @@ export type HotkeyTrigger =
   | 'rightControl'
   | 'leftControl'
   | 'rightCommand'
+  | 'leftCommand'
+  | 'leftShift'
+  | 'rightShift'
   | 'fn'
   | 'rightAlt'
   | 'mediaPlayPause'
@@ -125,9 +128,9 @@ export interface HotkeyStatus {
 }
 
 export interface ShortcutBinding {
-  /** 主键，例如 "D" / "Space" / "F1" / "RightOption" / "Shift" */
+  /** 主键，例如 "D" / "Space" / "F1" / "RightOption" / "LeftShift" */
   primary: string;
-  /** 修饰符列表，元素小写："cmd" | "shift" | "alt" | "ctrl"。 */
+  /** 修饰符：泛化 tag（cmd/ctrl/…）或侧别 tag（cmd-left/ctrl-right/…）。 */
   modifiers: string[];
 }
 
@@ -384,6 +387,10 @@ export interface UserPreferences {
   androidOverlayCancelSwipeDirection: AndroidOverlayCancelSwipeDirection;
   /** Android: floating overlay control diameter in dp. */
   androidOverlaySizeDp: number;
+  /** 桌面端：鼠标中键（滚轮按下）触发听写。默认 false。 */
+  mouseMiddleButtonDictation: boolean;
+  /** 桌面端：鼠标侧键（前进/后退）触发听写。默认 false。 */
+  mouseSideButtonDictation: boolean;
 }
 
 export interface MarketplaceListItem {

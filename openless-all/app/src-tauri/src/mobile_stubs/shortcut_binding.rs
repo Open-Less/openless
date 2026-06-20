@@ -16,6 +16,14 @@ pub fn parse_global_hotkey(_binding: &ShortcutBinding) -> Result<(), ShortcutBin
     Err(ShortcutBindingError::Unavailable)
 }
 
+pub fn is_side_specific_modifier_tag(_raw: &str) -> bool {
+    false
+}
+
+pub fn binding_requires_side_aware_hook(_binding: &ShortcutBinding) -> bool {
+    false
+}
+
 pub fn legacy_modifier_trigger(_binding: &ShortcutBinding) -> Option<HotkeyTrigger> {
     None
 }
@@ -27,6 +35,9 @@ pub fn binding_from_legacy_trigger(trigger: HotkeyTrigger) -> ShortcutBinding {
         HotkeyTrigger::RightControl => "RightControl",
         HotkeyTrigger::LeftControl => "LeftControl",
         HotkeyTrigger::RightCommand => "RightCommand",
+        HotkeyTrigger::LeftCommand => "LeftCommand",
+        HotkeyTrigger::LeftShift => "LeftShift",
+        HotkeyTrigger::RightShift => "RightShift",
         HotkeyTrigger::Fn => "Fn",
         HotkeyTrigger::MediaPlayPause => "MediaPlayPause",
         HotkeyTrigger::Custom => "RightOption",

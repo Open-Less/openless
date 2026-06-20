@@ -7,6 +7,8 @@
 
 use super::*;
 
+use crate::hold_source_tracker::TriggerSource;
+
 // ─────────────────────────── hotkey bridging ───────────────────────────
 
 pub(super) fn hotkey_supervisor_loop(inner: Arc<Inner>) {
@@ -488,21 +490,50 @@ pub(super) fn combo_hotkey_supervisor_loop(inner: Arc<Inner>) {
         // 读当前 prefs
         let prefs = inner.prefs.get();
         if crate::shortcut_binding::legacy_modifier_trigger(&prefs.dictation_hotkey).is_some() {
-            // 不是 Custom → 卸载后退出守护
             take_combo_hotkey_on_main_thread(&inner);
-            // 对齐主 supervisor 的 exit-on-success：装/卸交给 update_combo_hotkey_binding 主动路径，issue #470
+            inner.side_aware_combo.lock().take();
             return;
         }
 
         let binding = prefs.dictation_hotkey.clone();
         if is_unconfigured_shortcut(&binding) {
             take_combo_hotkey_on_main_thread(&inner);
-            // 对齐主 supervisor 的 exit-on-success：装/卸交给 update_combo_hotkey_binding 主动路径，issue #470
+            inner.side_aware_combo.lock().take();
             return;
         }
 
+        if crate::shortcut_binding::binding_requires_side_aware_hook(&binding) {
+            take_combo_hotkey_on_main_thread(&inner);
+            if inner.side_aware_combo.lock().is_some() {
+                return;
+            }
+            let (tx, rx) = mpsc::channel::<ComboHotkeyEvent>();
+            match crate::side_aware_combo::SideAwareComboMonitor::start(binding, tx) {
+                Ok(monitor) => {
+                    *inner.side_aware_combo.lock() = Some(monitor);
+                    let inner_clone = Arc::clone(&inner);
+                    std::thread::Builder::new()
+                        .name("openless-side-combo-bridge".into())
+                        .spawn(move || combo_hotkey_bridge_loop(inner_clone, rx))
+                        .ok();
+                    #[cfg(target_os = "linux")]
+                    refresh_linux_evdev_monitor(&inner);
+                    return;
+                }
+                Err(e) => {
+                    attempts += 1;
+                    if attempts <= 3 || attempts % 10 == 0 {
+                        log::warn!("[coord] side-aware combo 第 {attempts} 次注册失败: {e}; 3s 后重试");
+                    }
+                    std::thread::sleep(std::time::Duration::from_secs(3));
+                    continue;
+                }
+            }
+        }
+
+        inner.side_aware_combo.lock().take();
+
         if inner.combo_hotkey.lock().is_some() {
-            // 对齐主 supervisor 的 exit-on-success：装/卸交给 update_combo_hotkey_binding 主动路径，issue #470
             return;
         }
 
@@ -550,7 +581,10 @@ pub(super) fn combo_hotkey_supervisor_loop(inner: Arc<Inner>) {
                     .name("openless-combo-hotkey-bridge".into())
                     .spawn(move || combo_hotkey_bridge_loop(inner_clone, rx))
                     .ok();
+                #[cfg(target_os = "linux")]
+                sync_custom_dictation_to_plugin(&inner);
                 attempts = 0;
+                return;
             }
             Err(e) => {
                 attempts += 1;
@@ -574,12 +608,20 @@ pub(super) fn combo_hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<Com
             // 否则 latch 竞态导致 combo 快捷键二次按键失效。
             ComboHotkeyEvent::Pressed => {
                 async_runtime::block_on(async {
-                    handle_pressed_edge(&inner_cloned).await;
+                    handle_pressed_edge(
+                        &inner_cloned,
+                        TriggerSource::KeyboardDictation,
+                    )
+                    .await;
                 });
             }
             ComboHotkeyEvent::Released => {
                 async_runtime::block_on(async {
-                    handle_released_edge(&inner_cloned).await;
+                    handle_released_edge(
+                        &inner_cloned,
+                        TriggerSource::KeyboardDictation,
+                    )
+                    .await;
                 });
             }
         }
@@ -999,12 +1041,20 @@ pub(super) fn hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<HotkeyEve
             // bridge 立刻 recv Released → end_session，行为正确，仅有短暂 stop 延迟。
             HotkeyEvent::Pressed => {
                 async_runtime::block_on(async {
-                    handle_pressed_edge(&inner_cloned).await;
+                    handle_pressed_edge(
+                        &inner_cloned,
+                        TriggerSource::KeyboardDictation,
+                    )
+                    .await;
                 });
             }
             HotkeyEvent::Released => {
                 async_runtime::block_on(async {
-                    handle_released_edge(&inner_cloned).await;
+                    handle_released_edge(
+                        &inner_cloned,
+                        TriggerSource::KeyboardDictation,
+                    )
+                    .await;
                 });
             }
             HotkeyEvent::Cancelled => {
@@ -1030,6 +1080,7 @@ pub(super) fn hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<HotkeyEve
 
 pub(super) fn reset_shortcut_held_state(inner: &Arc<Inner>) {
     inner.hotkey_trigger_held.store(false, Ordering::SeqCst);
+    inner.hold_sources.reset();
     if let Some(monitor) = inner.hotkey.lock().as_ref() {
         monitor.reset_held_state();
     }
@@ -1132,11 +1183,11 @@ pub(super) async fn handle_window_hotkey_event(
                 log::info!(
                     "[window-hotkey] pressed trigger={trigger:?} code={code} repeat={repeat}"
                 );
-                handle_pressed_edge(inner).await;
+                handle_pressed_edge(inner, TriggerSource::KeyboardDictation).await;
             }
             "keyup" => {
                 log::info!("[window-hotkey] released trigger={trigger:?} code={code}");
-                handle_released_edge(inner).await;
+                handle_released_edge(inner, TriggerSource::KeyboardDictation).await;
             }
             _ => {}
         }
@@ -1160,10 +1211,157 @@ pub(super) fn window_key_matches_trigger(trigger: crate::types::HotkeyTrigger, k
         }
         HotkeyTrigger::LeftOption => (key == "Alt" || key == "AltGraph") && code == "AltLeft",
         HotkeyTrigger::RightCommand => key == "Meta" && code == "MetaRight",
+        HotkeyTrigger::LeftCommand => key == "Meta" && code == "MetaLeft",
+        HotkeyTrigger::LeftShift => key == "Shift" && code == "ShiftLeft",
+        HotkeyTrigger::RightShift => key == "Shift" && code == "ShiftRight",
         HotkeyTrigger::Fn => key == "Control" && code == "ControlRight",
         // MediaPlayPause 走 WH_KEYBOARD_LL，不走 window hotkey fallback
         HotkeyTrigger::MediaPlayPause => false,
         // Custom 走 global-hotkey crate，不走 window hotkey fallback
         HotkeyTrigger::Custom => false,
     }
+}
+
+pub(super) fn mouse_dictation_bridge_loop(
+    inner: Arc<Inner>,
+    rx: mpsc::Receiver<(HotkeyEvent, TriggerSource)>,
+) {
+    while let Ok((evt, source)) = rx.recv() {
+        if inner.shortcut_recording_active.load(Ordering::SeqCst) {
+            continue;
+        }
+        let inner_cloned = Arc::clone(&inner);
+        match evt {
+            HotkeyEvent::Pressed => {
+                async_runtime::block_on(async {
+                    handle_pressed_edge(&inner_cloned, source).await;
+                });
+            }
+            HotkeyEvent::Released => {
+                async_runtime::block_on(async {
+                    handle_released_edge(&inner_cloned, source).await;
+                });
+            }
+            _ => {}
+        }
+    }
+}
+
+pub(super) fn mouse_dictation_supervisor_loop(inner: Arc<Inner>) {
+    loop {
+        if inner.shutdown.load(Ordering::SeqCst) {
+            return;
+        }
+        let prefs = inner.prefs.get();
+        let config = crate::mouse_dictation::MouseDictationConfig {
+            middle_enabled: prefs.mouse_middle_button_dictation,
+            side_enabled: prefs.mouse_side_button_dictation,
+        };
+        let needs_side_combo = crate::shortcut_binding::binding_requires_side_aware_hook(
+            &prefs.dictation_hotkey,
+        );
+        let needs_mouse = config.middle_enabled || config.side_enabled;
+
+        #[cfg(target_os = "linux")]
+        if needs_side_combo && !needs_mouse {
+            refresh_linux_evdev_monitor(&inner);
+            if inner.linux_evdev.lock().is_some() {
+                return;
+            }
+            log::warn!("[coord] linux evdev monitor for side combo failed; retry in 3s");
+            std::thread::sleep(std::time::Duration::from_secs(3));
+            continue;
+        }
+
+        #[cfg(not(target_os = "linux"))]
+        if !needs_mouse {
+            inner.mouse_dictation.lock().take();
+            return;
+        }
+
+        #[cfg(target_os = "linux")]
+        if !needs_mouse && !needs_side_combo {
+            inner.mouse_dictation.lock().take();
+            inner.linux_evdev.lock().take();
+            return;
+        }
+
+        if inner.mouse_dictation.lock().is_some() {
+            crate::mouse_dictation::MouseDictationMonitor::update_config(config);
+            #[cfg(target_os = "linux")]
+            refresh_linux_evdev_monitor(&inner);
+            return;
+        }
+
+        let (tx, rx) = mpsc::channel::<(HotkeyEvent, TriggerSource)>();
+        match start_mouse_dictation_monitor(config, tx.clone()) {
+            Ok(monitor) => {
+                *inner.mouse_dictation.lock() = Some(monitor);
+                let inner_clone = Arc::clone(&inner);
+                std::thread::Builder::new()
+                    .name("openless-mouse-dictation-bridge".into())
+                    .spawn(move || mouse_dictation_bridge_loop(inner_clone, rx))
+                    .ok();
+                #[cfg(target_os = "linux")]
+                refresh_linux_evdev_monitor(&inner);
+                return;
+            }
+            Err(err) => {
+                log::warn!("[coord] mouse dictation monitor failed: {err}; retry in 3s");
+                std::thread::sleep(std::time::Duration::from_secs(3));
+            }
+        }
+    }
+}
+
+fn start_mouse_dictation_monitor(
+    config: crate::mouse_dictation::MouseDictationConfig,
+    tx: mpsc::Sender<(HotkeyEvent, TriggerSource)>,
+) -> Result<crate::mouse_dictation::MouseDictationMonitor, String> {
+    #[cfg(target_os = "windows")]
+    crate::mouse_dictation::platform::ensure_hook_thread()?;
+    crate::mouse_dictation::MouseDictationMonitor::start(config, tx)
+}
+
+#[cfg(target_os = "linux")]
+pub(super) fn refresh_linux_evdev_monitor(inner: &Arc<Inner>) {
+    inner.linux_evdev.lock().take();
+    try_start_linux_evdev_monitor(inner);
+}
+
+#[cfg(target_os = "linux")]
+pub(super) fn try_start_linux_evdev_monitor(inner: &Arc<Inner>) {
+    let config = crate::linux_evdev_input::config_from_prefs(&inner.prefs.get());
+    if !crate::linux_evdev_input::monitor_needed(&config) {
+        crate::linux_evdev_input::set_status_message(None);
+        return;
+    }
+    let (tx, rx) = mpsc::channel::<(HotkeyEvent, TriggerSource)>();
+    match crate::linux_evdev_input::LinuxEvdevMonitor::start(config, tx.clone()) {
+        Ok(monitor) => {
+            *inner.linux_evdev.lock() = Some(monitor);
+            let inner_clone = Arc::clone(inner);
+            std::thread::Builder::new()
+                .name("openless-linux-evdev-mouse-bridge".into())
+                .spawn(move || mouse_dictation_bridge_loop(inner_clone, rx))
+                .ok();
+        }
+        Err(err) => {
+            log::warn!("[coord] linux evdev monitor failed: {err}");
+            crate::linux_evdev_input::set_status_message(Some(format!(
+                "{err} 鼠标/侧别组合键需读取 /dev/input/event*；若无权限请将用户加入 input 组（sudo usermod -aG input $USER）后重新登录。"
+            )));
+        }
+    }
+}
+
+pub(super) fn update_mouse_dictation_binding_now(inner: &Arc<Inner>) {
+    inner.mouse_dictation.lock().take();
+    #[cfg(target_os = "linux")]
+    refresh_linux_evdev_monitor(inner);
+    let inner_clone = Arc::clone(inner);
+    std::thread::Builder::new()
+        .name("openless-mouse-dictation-supervisor".into())
+        .spawn(move || mouse_dictation_supervisor_loop(inner_clone))
+        .ok();
 }

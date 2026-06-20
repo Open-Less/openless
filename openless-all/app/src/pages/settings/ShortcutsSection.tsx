@@ -66,6 +66,8 @@ export function ShortcutsSection() {
           <ShortcutRecorder
             value={prefs.dictationHotkey}
             alignRecordButton
+            sideSpecificModifiers
+            modifierPresets={capability?.availableTriggers ?? []}
             onSave={async binding => {
               await setDictationHotkey(binding);
               await savePrefs({ ...prefs, dictationHotkey: binding });

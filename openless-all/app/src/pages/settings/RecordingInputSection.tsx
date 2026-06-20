@@ -180,10 +180,28 @@ export function RecordingInputSection() {
         <SettingRow label={t('settings.recording.hotkeyLabel')}>
           <ShortcutRecorder
             value={prefs.dictationHotkey}
+            modifierPresets={capability?.availableTriggers ?? []}
+            sideSpecificModifiers
             onSave={async binding => {
               await setDictationHotkey(binding);
               await savePrefs({ ...prefs, dictationHotkey: binding });
             }}
+          />
+        </SettingRow>
+        )}
+        {showDesktopHotkey && (
+        <SettingRow label={t('settings.recording.mouseMiddleLabel', '鼠标中键唤起识别')}>
+          <Toggle
+            on={prefs.mouseMiddleButtonDictation}
+            onToggle={(next) => void savePrefs({ ...prefs, mouseMiddleButtonDictation: next })}
+          />
+        </SettingRow>
+        )}
+        {showDesktopHotkey && (
+        <SettingRow label={t('settings.recording.mouseSideLabel', '鼠标侧键唤起识别')}>
+          <Toggle
+            on={prefs.mouseSideButtonDictation}
+            onToggle={(next) => void savePrefs({ ...prefs, mouseSideButtonDictation: next })}
           />
         </SettingRow>
         )}

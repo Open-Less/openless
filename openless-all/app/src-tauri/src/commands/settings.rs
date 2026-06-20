@@ -17,6 +17,7 @@ pub(crate) trait SettingsWriter {
     fn refresh_dictation_hotkey(&self);
     fn refresh_qa_hotkey(&self);
     fn refresh_combo_hotkey(&self);
+    fn refresh_mouse_dictation(&self);
     fn refresh_translation_hotkey(&self);
     fn refresh_switch_style_hotkey(&self);
     fn refresh_open_app_hotkey(&self);
@@ -46,6 +47,10 @@ impl SettingsWriter for Coordinator {
 
     fn refresh_combo_hotkey(&self) {
         self.update_combo_hotkey_binding();
+    }
+
+    fn refresh_mouse_dictation(&self) {
+        self.update_mouse_dictation_binding();
     }
 
     fn refresh_translation_hotkey(&self) {
@@ -90,6 +95,10 @@ impl<T: SettingsWriter + ?Sized> SettingsWriter for Arc<T> {
         (**self).refresh_combo_hotkey();
     }
 
+    fn refresh_mouse_dictation(&self) {
+        (**self).refresh_mouse_dictation();
+    }
+
     fn refresh_translation_hotkey(&self) {
         (**self).refresh_translation_hotkey();
     }
@@ -121,6 +130,9 @@ pub(crate) fn persist_settings<T: SettingsWriter>(
     let translation_changed = previous.translation_hotkey != prefs.translation_hotkey;
     let switch_style_changed = previous.switch_style_hotkey != prefs.switch_style_hotkey;
     let open_app_changed = previous.open_app_hotkey != prefs.open_app_hotkey;
+    let mouse_dictation_changed = previous.mouse_middle_button_dictation
+        != prefs.mouse_middle_button_dictation
+        || previous.mouse_side_button_dictation != prefs.mouse_side_button_dictation;
     let coding_agent_changed = previous.coding_agent_enabled != prefs.coding_agent_enabled
         || previous.coding_agent_voice_hotkey != prefs.coding_agent_voice_hotkey;
     let active_asr_provider_changed = previous.active_asr_provider != prefs.active_asr_provider;
@@ -150,6 +162,9 @@ pub(crate) fn persist_settings<T: SettingsWriter>(
     }
     if dictation_shortcut_changed {
         coord.refresh_combo_hotkey();
+    }
+    if mouse_dictation_changed {
+        coord.refresh_mouse_dictation();
     }
     if qa_changed {
         coord.refresh_qa_hotkey();

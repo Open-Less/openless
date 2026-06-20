@@ -8,6 +8,7 @@ use crate::types::HotkeyMode;
 use super::qa::handle_qa_option_edge;
 use super::resources::*;
 use super::*;
+use crate::hold_source_tracker::TriggerSource;
 
 /// 同一个 hotkey 边沿之间的最小间隔。低于此阈值的连按整体作为误触丢弃 ——
 /// 避免微动开关回弹 / 用户手抖双击造成的空转写报错和 ASR session 抢资源。
@@ -458,10 +459,23 @@ fn default_done_message(status: InsertStatus, polish_failed: bool) -> Option<Str
     }
 }
 
-pub(super) async fn handle_pressed_edge(inner: &Arc<Inner>) {
-    let was_held = inner.hotkey_trigger_held.swap(true, Ordering::SeqCst);
-    if !was_held {
-        // 防抖：相邻 < HOTKEY_DEBOUNCE 的边沿直接丢弃，记到 log 方便排查。
+pub(super) async fn handle_pressed_edge(
+    inner: &Arc<Inner>,
+    source: TriggerSource,
+) {
+    let mode = inner.prefs.get().hotkey.mode;
+    if mode == HotkeyMode::Hold {
+        if !inner.hold_sources.press(source) {
+            return;
+        }
+        if inner.hold_sources.active_count() != 1 {
+            return;
+        }
+    } else if inner.hotkey_trigger_held.swap(true, Ordering::SeqCst) {
+        return;
+    }
+
+    // 防抖：相邻 < HOTKEY_DEBOUNCE 的边沿直接丢弃，记到 log 方便排查。
         // 与 `hotkey_trigger_held` 互补：held 防 press-without-release，本检查防
         // press-release-press 三连过快。每个有效边沿都会更新时间戳。
         let now = std::time::Instant::now();
@@ -494,7 +508,6 @@ pub(super) async fn handle_pressed_edge(inner: &Arc<Inner>) {
         } else {
             handle_pressed(inner).await;
         }
-    }
 }
 
 /// 「排队接力」放行窗口（ms）。识别中按下热键想录下一条时,那个 Pressed 在处理期间就被缓进
@@ -560,20 +573,30 @@ pub(super) async fn handle_pressed(inner: &Arc<Inner>) {
     }
 }
 
-pub(super) async fn handle_released_edge(inner: &Arc<Inner>) {
-    let was_held = inner.hotkey_trigger_held.swap(false, Ordering::SeqCst);
-    if was_held {
-        // QA 浮窗可见时，Option 行为是 press-toggle（不分 hold/release），release 边沿忽略。
-        // 与 handle_pressed_edge 的路由对称：dictation session 在跑时 Pressed 已经被路由到
-        // dictation，那 Released 必须也路由到 dictation —— 否则 Hold 模式松开热键时
-        // end_session 不会触发，dictation 永远停不下来。审计 3.3.1。
-        let dictation_active = !matches!(inner.state.lock().phase, SessionPhase::Idle);
-        let panel_visible = inner.qa_state.lock().panel_visible;
-        if panel_visible && !dictation_active {
+pub(super) async fn handle_released_edge(
+    inner: &Arc<Inner>,
+    source: TriggerSource,
+) {
+    let mode = inner.prefs.get().hotkey.mode;
+    if mode == HotkeyMode::Hold {
+        let remaining = inner.hold_sources.release(source);
+        if remaining != 0 {
             return;
         }
-        handle_released(inner).await;
+    } else if !inner.hotkey_trigger_held.swap(false, Ordering::SeqCst) {
+        return;
     }
+
+    // QA 浮窗可见时，Option 行为是 press-toggle（不分 hold/release），release 边沿忽略。
+    // 与 handle_pressed_edge 的路由对称：dictation session 在跑时 Pressed 已经被路由到
+    // dictation，那 Released 必须也路由到 dictation —— 否则 Hold 模式松开热键时
+    // end_session 不会触发，dictation 永远停不下来。审计 3.3.1。
+    let dictation_active = !matches!(inner.state.lock().phase, SessionPhase::Idle);
+    let panel_visible = inner.qa_state.lock().panel_visible;
+    if panel_visible && !dictation_active {
+        return;
+    }
+    handle_released(inner).await;
 }
 
 pub(super) async fn handle_released(inner: &Arc<Inner>) {
