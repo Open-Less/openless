@@ -96,7 +96,7 @@ assert.deepEqual(tauriConfig.bundle.windows.wix.componentRefs, [
   "OpenLessImeDllX86Component",
 ]);
 assert.equal(tauriConfig.bundle.windows.nsis.installMode, "perMachine", "NSIS must force a machine-wide install because TSF registration is machine-wide");
-assert.equal(tauriConfig.bundle.windows.nsis.installerHooks, "nsis/openless-ime-hooks.nsh", "NSIS must install and register the TSF DLLs");
+assert.equal(tauriConfig.bundle.windows.nsis.installerHooks, "nsis/openless-ime-hooks.nsh", "NSIS must stage the optional TSF DLLs and clean legacy registration");
 
 assert.match(imeSolution, /Release\|Win32/, "IME solution should include a Win32 Release configuration");
 assert.match(imeProject, /Release\|Win32/, "IME project should include a Win32 Release configuration");
@@ -113,16 +113,16 @@ assert.match(wixFragment, /Component Id="OpenLessImeDllX64Component"/, "WiX frag
 assert.match(wixFragment, /Component Id="OpenLessImeDllX86Component"/, "WiX fragment should define the x86 TSF DLL component");
 assert.match(wixFragment, /Source="src-tauri\\target\\windows-ime-msvc\\x64\\Release\\OpenLessIme\.dll"/, "WiX fragment should consume the package-built x64 IME DLL");
 assert.match(wixFragment, /Source="src-tauri\\target\\windows-ime-msvc\\x86\\Release\\OpenLessIme\.dll"/, "WiX fragment should consume the package-built x86 IME DLL");
-assert.match(wixFragment, /regsvr32\.exe/, "MSI should register and unregister the TSF DLL");
-assert.match(wixFragment, /\[System64Folder\]regsvr32\.exe/, "MSI should register the x64 IME with 64-bit regsvr32");
-assert.match(wixFragment, /\[WindowsFolder\]SysWOW64\\regsvr32\.exe/, "MSI should register the x86 IME with 32-bit regsvr32");
-assert.match(wixFragment, /RegisterOpenLessImeX64/, "MSI should register x64 OpenLess IME during install");
-assert.match(wixFragment, /RegisterOpenLessImeX86/, "MSI should register x86 OpenLess IME during install");
-assert.match(wixFragment, /UnregisterOpenLessImeX64/, "MSI should unregister x64 OpenLess IME during uninstall");
-assert.match(wixFragment, /UnregisterOpenLessImeX86/, "MSI should unregister x86 OpenLess IME during uninstall");
+assert.match(wixFragment, /regsvr32\.exe/, "MSI should retain regsvr32 custom actions for cleanup/diagnostics");
+assert.match(wixFragment, /\[System64Folder\]regsvr32\.exe/, "MSI should know how to unregister the x64 IME with 64-bit regsvr32");
+assert.match(wixFragment, /\[WindowsFolder\]SysWOW64\\regsvr32\.exe/, "MSI should know how to unregister the x86 IME with 32-bit regsvr32");
+assert.doesNotMatch(wixFragment, /<Custom Action="RegisterOpenLessImeX64"/, "MSI should not register x64 OpenLess IME during install by default");
+assert.doesNotMatch(wixFragment, /<Custom Action="RegisterOpenLessImeX86"/, "MSI should not register x86 OpenLess IME during install by default");
+assert.match(wixFragment, /<Custom Action="UnregisterOpenLessImeX64"/, "MSI should clean legacy x64 OpenLess IME registration during upgrade");
+assert.match(wixFragment, /<Custom Action="UnregisterOpenLessImeX86"/, "MSI should clean legacy x86 OpenLess IME registration during upgrade");
 
 assert.match(nsisHook, /NSIS_HOOK_PREINSTALL/, "NSIS should copy IME DLLs before install completes");
-assert.match(nsisHook, /NSIS_HOOK_POSTINSTALL/, "NSIS should register IME DLLs after files are installed");
+assert.match(nsisHook, /NSIS_HOOK_POSTINSTALL/, "NSIS should define a postinstall hook");
 assert.match(nsisHook, /NSIS_HOOK_PREUNINSTALL/, "NSIS should unregister IME DLLs before uninstall removes them");
 assert.match(nsisHook, /OPENLESS_IME_STAGE_AND_REPLACE "x64" "OPENLESS_IME_DLL_X64"/, "NSIS should consume the CI-built x64 IME DLL");
 assert.match(nsisHook, /OPENLESS_IME_STAGE_AND_REPLACE "x86" "OPENLESS_IME_DLL_X86"/, "NSIS should consume the CI-built x86 IME DLL");
@@ -131,10 +131,9 @@ assert.match(nsisHook, /File \/oname=OpenLessIme\.dll\.new "\$%\$\{ENV_VAR\}%"/,
 assert.match(nsisHook, /Sysnative\\regsvr32\.exe/, "NSIS should use 64-bit regsvr32 for the x64 IME");
 assert.match(nsisHook, /SysWOW64\\regsvr32\.exe/, "NSIS should use 32-bit regsvr32 for the x86 IME");
 assert.match(nsisHook, /System32\\regsvr32\.exe[\s\S]*windows-ime\\x86\\OpenLessIme\.dll/, "NSIS should use System32 regsvr32 for the x86 IME on 32-bit Windows");
-assert.match(nsisHook, /Abort/, "NSIS install should fail if TSF registration fails");
-assert.match(nsisHook, /OPENLESS_IME_ABORT_IF_FAILED \$0 "x64 registration"/, "NSIS install should fail if x64 TSF registration fails");
-assert.match(nsisHook, /OPENLESS_IME_ABORT_IF_FAILED \$0 "x86 registration"/, "NSIS install should fail if x86 TSF registration fails");
-assert.match(nsisHook, /OPENLESS_IME_REGISTER_X86[\s\S]*\$\{If\} \$0 != 0[\s\S]*StrCpy \$1 \$0[\s\S]*OPENLESS_IME_UNREGISTER_X64[\s\S]*StrCpy \$0 \$1[\s\S]*OPENLESS_IME_ABORT_IF_FAILED \$0 "x86 registration"/, "NSIS install should roll back x64 registration before aborting on x86 registration failure");
+assert.match(nsisHook, /TSF IME registration skipped/, "NSIS should skip default TSF registration");
+assert.doesNotMatch(nsisHook, /NSIS_HOOK_POSTINSTALL[\s\S]*OPENLESS_IME_REGISTER_X64[\s\S]*!macroend/, "NSIS postinstall should not register the x64 TSF IME");
+assert.doesNotMatch(nsisHook, /NSIS_HOOK_POSTINSTALL[\s\S]*OPENLESS_IME_REGISTER_X86[\s\S]*!macroend/, "NSIS postinstall should not register the x86 TSF IME");
 assert.doesNotMatch(nsisHook, /OPENLESS_IME_ABORT_IF_FAILED \$0 "x64 unregistration"/, "NSIS uninstall should not fail if x64 TSF unregistration fails");
 assert.doesNotMatch(nsisHook, /OPENLESS_IME_ABORT_IF_FAILED \$0 "x86 unregistration"/, "NSIS uninstall should not fail if x86 TSF unregistration fails");
 assert.match(nsisHook, /OpenLess x64 TSF IME unregister exit code \$0/, "NSIS uninstall should log x64 TSF unregistration failures");
@@ -144,13 +143,12 @@ assert.match(imeInstallSmoke, /\[ValidateSet\("nsis", "msi"\)\]/, "install smoke
 assert.match(imeInstallSmoke, /Join-ProcessArguments/, "install smoke should quote process arguments before Start-Process");
 assert.match(imeInstallSmoke, /\$commandLine = Join-ProcessArguments \$ArgumentList/, "install smoke should build a single quoted command line");
 assert.match(imeInstallSmoke, /Start-Process -FilePath \$FilePath -ArgumentList \$commandLine/, "install smoke should pass a single quoted command line to Start-Process");
-assert.match(imeInstallSmoke, /OpenLessImeSubmit/, "install smoke should preserve TSF backend context");
-assert.match(imeInstallSmoke, /Software\\Classes\\CLSID\\\{6B9F3F4F-5EE7-42D6-9C61-9F80B03A5D7D\}\\InprocServer32/, "install smoke should check x64 COM registration");
-assert.match(imeInstallSmoke, /Software\\WOW6432Node\\Classes\\CLSID\\\{6B9F3F4F-5EE7-42D6-9C61-9F80B03A5D7D\}\\InprocServer32/, "install smoke should check x86 COM registration");
-assert.match(imeInstallSmoke, /LanguageProfile\\0x00000804\\\{9B5F5E04-23F6-47DA-9A26-D221F6C3F02E\}/, "install smoke should check the TSF language profile");
-assert.match(imeInstallSmoke, /Category\\Category\\\{34745C63-B2F0-4784-8B67-5E12C8701A31\}/, "install smoke should check the keyboard TSF category");
-assert.match(imeInstallSmoke, /foreach \(\$key in \$ExpectedBackendKeys\) \{[\s\S]*Assert-RegistryKey -View Registry64 -SubKey \$key[\s\S]*\}/, "install smoke should assert every backend-required registry key exists");
-assert.doesNotMatch(imeInstallSmoke, /foreach \(\$key in \$ExpectedBackendKeys\) \{[\s\S]*Write-Host "\[trace\] backend-required key: HKLM\\\$key"[\s\S]*\}/, "install smoke must not only trace backend-required registry keys");
+assert.match(imeInstallSmoke, /ExpectedUnregisteredKeys/, "install smoke should track TSF keys that must stay absent by default");
+assert.match(imeInstallSmoke, /Software\\Classes\\CLSID\\\{6B9F3F4F-5EE7-42D6-9C61-9F80B03A5D7D\}\\InprocServer32/, "install smoke should check x64 COM registration absence");
+assert.match(imeInstallSmoke, /Software\\WOW6432Node\\Classes\\CLSID\\\{6B9F3F4F-5EE7-42D6-9C61-9F80B03A5D7D\}\\InprocServer32/, "install smoke should check x86 COM registration absence");
+assert.match(imeInstallSmoke, /LanguageProfile\\0x00000804\\\{9B5F5E04-23F6-47DA-9A26-D221F6C3F02E\}/, "install smoke should check the TSF language profile absence");
+assert.match(imeInstallSmoke, /Category\\Category\\\{34745C63-B2F0-4784-8B67-5E12C8701A31\}/, "install smoke should check the keyboard TSF category absence");
+assert.match(imeInstallSmoke, /Assert-RegistryKeyAbsent -View Registry64 -SubKey \$key/, "install smoke should assert every default-disabled TSF registry key is absent");
 assert.match(ciWorkflow, /windows-ime-install-smoke\.ps1[\s\S]*-InstallerKind nsis/, "CI should install and verify the NSIS artifact");
 assert.match(ciWorkflow, /windows-ime-install-smoke\.ps1[\s\S]*-InstallerKind msi/, "CI should install and verify the MSI artifact");
 assert.match(ciWorkflow, /InstallerKind nsis[\s\S]*\$LASTEXITCODE -ne 0[\s\S]*NSIS installer smoke failed/, "CI should fail immediately when the NSIS smoke run fails");

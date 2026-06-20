@@ -49,6 +49,7 @@ export let mockSettings: UserPreferences = {
     restoreClipboardAfterPaste: true,
     pasteShortcut: "ctrlV",
     allowNonTsfInsertionFallback: true,
+    windowsTsfBackendEnabled: false,
     workingLanguages: ["简体中文"],
     translationTargetLanguage: "",
     qaHotkey: defaultQaShortcut(),

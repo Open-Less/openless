@@ -16,9 +16,9 @@ $KeyboardCategoryGuid = "{34745C63-B2F0-4784-8B67-5E12C8701A31}"
 $ImmersiveCategoryGuid = "{13A016DF-560B-46CD-947A-4C3AF1E0E35D}"
 $SystrayCategoryGuid = "{25504FB4-7BAB-4BC1-9C69-CF81890F0EF5}"
 
-# Keep this script aligned with the backend status check and the TSF IPC path
-# used by OpenLessImeSubmit-* named pipes.
-$ExpectedBackendKeys = @(
+# Keep this script aligned with the default Windows backend: OpenLess ships the
+# TSF DLLs for optional diagnostics, but installers must not register the TIP.
+$ExpectedUnregisteredKeys = @(
   "Software\Classes\CLSID\{6B9F3F4F-5EE7-42D6-9C61-9F80B03A5D7D}\InprocServer32",
   "Software\WOW6432Node\Classes\CLSID\{6B9F3F4F-5EE7-42D6-9C61-9F80B03A5D7D}\InprocServer32",
   "Software\Microsoft\CTF\TIP\{6B9F3F4F-5EE7-42D6-9C61-9F80B03A5D7D}\LanguageProfile\0x00000804\{9B5F5E04-23F6-47DA-9A26-D221F6C3F02E}",
@@ -103,7 +103,7 @@ function Assert-RegistryKey {
   Write-Host "[ok] $Label registry key present ($View)"
 }
 
-function Get-DefaultRegistryValue {
+function Assert-RegistryKeyAbsent {
   param(
     [Parameter(Mandatory = $true)]
     [Microsoft.Win32.RegistryView]$View,
@@ -114,54 +114,41 @@ function Get-DefaultRegistryValue {
   )
 
   $key = Open-LocalMachineSubKey -View $View -SubKey $SubKey
-  if ($null -eq $key) {
-    throw "Missing $Label registry key ($View): HKLM\$SubKey"
-  }
-  try {
-    $value = [string]$key.GetValue("")
-    if ([string]::IsNullOrWhiteSpace($value)) {
-      throw "$Label default registry value is empty ($View): HKLM\$SubKey"
-    }
-    return $value
-  } finally {
+  if ($null -ne $key) {
     $key.Close()
+    throw "Unexpected $Label registry key ($View): HKLM\$SubKey"
   }
+  Write-Host "[ok] $Label registry key absent ($View)"
 }
 
 function Assert-OpenLessImeInstalled {
-  $comKey = "Software\Classes\CLSID\$TextServiceClsid\InprocServer32"
-  $x64Dll = Get-DefaultRegistryValue -View Registry64 -SubKey $comKey -Label "x64 COM"
-  $x86Dll = Get-DefaultRegistryValue -View Registry32 -SubKey $comKey -Label "x86 COM"
+  $installRootCandidates = @(
+    (Join-Path $env:ProgramFiles "OpenLess")
+  )
+  if ($env:ProgramFiles -ne ${env:ProgramFiles(x86)}) {
+    $installRootCandidates += (Join-Path ${env:ProgramFiles(x86)} "OpenLess")
+  }
 
-  foreach ($dll in @($x64Dll, $x86Dll)) {
+  $installRoot = $installRootCandidates |
+    Where-Object { Test-Path -LiteralPath (Join-Path $_ "openless.exe") -PathType Leaf } |
+    Select-Object -First 1
+  if ([string]::IsNullOrWhiteSpace($installRoot)) {
+    throw "Installed OpenLess executable not found under: $($installRootCandidates -join ', ')"
+  }
+
+  $expectedX64 = Join-Path $installRoot "windows-ime\x64\OpenLessIme.dll"
+  $expectedX86 = Join-Path $installRoot "windows-ime\x86\OpenLessIme.dll"
+  foreach ($dll in @($expectedX64, $expectedX86)) {
     if (-not (Test-Path -LiteralPath $dll -PathType Leaf)) {
-      throw "Registered IME DLL path does not exist: $dll"
+      throw "Packaged optional IME DLL path does not exist: $dll"
     }
   }
 
-  $installRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $x64Dll))
-  $expectedX64 = Join-Path $installRoot "windows-ime\x64\OpenLessIme.dll"
-  $expectedX86 = Join-Path $installRoot "windows-ime\x86\OpenLessIme.dll"
-  if ($x64Dll -ne $expectedX64) {
-    throw "x64 COM DLL path points outside the installed IME directory. Expected '$expectedX64', got '$x64Dll'"
-  }
-  if ($x86Dll -ne $expectedX86) {
-    throw "x86 COM DLL path points outside the installed IME directory. Expected '$expectedX86', got '$x86Dll'"
-  }
-  if (-not (Test-Path -LiteralPath (Join-Path $installRoot "openless.exe") -PathType Leaf)) {
-    throw "Installed OpenLess executable not found under $installRoot"
+  foreach ($key in $ExpectedUnregisteredKeys) {
+    Assert-RegistryKeyAbsent -View Registry64 -SubKey $key -Label "default-disabled TSF"
   }
 
-  Assert-RegistryKey -View Registry64 -SubKey "Software\Microsoft\CTF\TIP\$TextServiceClsid\LanguageProfile\$LangId\$ProfileGuid" -Label "TSF language profile"
-  Assert-RegistryKey -View Registry64 -SubKey "Software\Microsoft\CTF\TIP\$TextServiceClsid\Category\Category\$KeyboardCategoryGuid\$TextServiceClsid" -Label "TSF keyboard category"
-  Assert-RegistryKey -View Registry64 -SubKey "Software\Microsoft\CTF\TIP\$TextServiceClsid\Category\Category\$ImmersiveCategoryGuid\$TextServiceClsid" -Label "TSF immersive category"
-  Assert-RegistryKey -View Registry64 -SubKey "Software\Microsoft\CTF\TIP\$TextServiceClsid\Category\Category\$SystrayCategoryGuid\$TextServiceClsid" -Label "TSF systray category"
-
-  foreach ($key in $ExpectedBackendKeys) {
-    Assert-RegistryKey -View Registry64 -SubKey $key -Label "backend-required"
-  }
-
-  Write-Host "[ok] Windows IME backend would report installed"
+  Write-Host "[ok] OpenLess installed with TSF registration disabled by default"
   return $installRoot
 }
 

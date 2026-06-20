@@ -589,6 +589,11 @@ pub struct UserPreferences {
     /// 默认开启以保持可用性；关闭后可验证文本是否真正由 TSF 上屏。
     #[serde(default = "default_true")]
     pub allow_non_tsf_insertion_fallback: bool,
+    /// Windows: opt back into the in-process TSF IME backend. Disabled by
+    /// default because Chromium/Electron hosts can hang when a TIP DLL joins
+    /// their TSF/COM message chain.
+    #[serde(default)]
+    pub windows_tsf_backend_enabled: bool,
     /// 用户的工作语言（多选，原生名）。会作为前提注入 LLM polish/translate 的 system prompt 头部，
     /// 让模型知道该用户在哪些语言间工作。详见 issue #4。
     #[serde(default = "default_working_languages")]
@@ -885,6 +890,8 @@ struct UserPreferencesWire {
     #[serde(default)]
     paste_shortcut: PasteShortcut,
     allow_non_tsf_insertion_fallback: bool,
+    #[serde(default)]
+    windows_tsf_backend_enabled: bool,
     working_languages: Vec<String>,
     translation_target_language: String,
     chinese_script_preference: ChineseScriptPreference,
@@ -1006,6 +1013,7 @@ impl Default for UserPreferencesWire {
             restore_clipboard_after_paste: prefs.restore_clipboard_after_paste,
             paste_shortcut: prefs.paste_shortcut,
             allow_non_tsf_insertion_fallback: prefs.allow_non_tsf_insertion_fallback,
+            windows_tsf_backend_enabled: prefs.windows_tsf_backend_enabled,
             working_languages: prefs.working_languages,
             translation_target_language: prefs.translation_target_language,
             chinese_script_preference: prefs.chinese_script_preference,
@@ -1106,6 +1114,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             restore_clipboard_after_paste: wire.restore_clipboard_after_paste,
             paste_shortcut: wire.paste_shortcut,
             allow_non_tsf_insertion_fallback: wire.allow_non_tsf_insertion_fallback,
+            windows_tsf_backend_enabled: wire.windows_tsf_backend_enabled,
             working_languages: wire.working_languages,
             translation_target_language: wire.translation_target_language,
             chinese_script_preference: wire.chinese_script_preference,
@@ -1849,6 +1858,7 @@ impl Default for UserPreferences {
             restore_clipboard_after_paste: true,
             paste_shortcut: PasteShortcut::default(),
             allow_non_tsf_insertion_fallback: true,
+            windows_tsf_backend_enabled: false,
             working_languages: default_working_languages(),
             translation_target_language: String::new(),
             chinese_script_preference: ChineseScriptPreference::Auto,
@@ -2590,6 +2600,20 @@ mod tests {
         let prefs: UserPreferences = serde_json::from_str("{}").unwrap();
 
         assert!(prefs.allow_non_tsf_insertion_fallback);
+    }
+
+    #[test]
+    fn windows_tsf_backend_defaults_to_disabled() {
+        let prefs = UserPreferences::default();
+
+        assert!(!prefs.windows_tsf_backend_enabled);
+    }
+
+    #[test]
+    fn missing_windows_tsf_backend_pref_defaults_to_disabled() {
+        let prefs: UserPreferences = serde_json::from_str("{}").unwrap();
+
+        assert!(!prefs.windows_tsf_backend_enabled);
     }
 
     #[test]

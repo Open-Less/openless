@@ -1765,19 +1765,13 @@ fn insert_via_non_tsf_fallback(
 
     match status {
         InsertStatus::Inserted => {
-            log::warn!(
-                "[windows-ime] TSF unavailable; inserted via paced Unicode SendInput fallback"
-            );
+            log::info!("[windows-ime] inserted via paced Unicode SendInput");
         }
         InsertStatus::CopiedFallback => {
-            log::warn!(
-                "[windows-ime] TSF unavailable; Unicode SendInput failed, left text on clipboard"
-            );
+            log::warn!("[windows-ime] Unicode SendInput failed, left text on clipboard");
         }
         InsertStatus::PasteSent | InsertStatus::Failed => {
-            log::warn!(
-                "[windows-ime] TSF unavailable; Unicode SendInput fallback failed and copy fallback failed"
-            );
+            log::warn!("[windows-ime] Unicode SendInput failed and copy fallback failed");
         }
     }
 
@@ -1860,8 +1854,6 @@ mod non_tsf_fallback_tests {
 }
 
 // ─────────────────────────── helpers ───────────────────────────
-
-
 
 fn read_whisper_credentials() -> (String, String, String) {
     let api_key = CredentialsVault::get(CredentialAccount::AsrApiKey)
@@ -1958,7 +1950,6 @@ fn enabled_hotwords(inner: &Arc<Inner>) -> Vec<DictionaryHotword> {
         })
         .collect()
 }
-
 
 /// 读 Gemini 凭据。所有 LLM provider 共用 ark.* 槽位（persistence 没做 per-provider
 /// 隔离），所以这里也是从 `ArkApiKey` / `ArkModelId` / `ArkEndpoint` 三个槽读，
@@ -3036,7 +3027,6 @@ fn schedule_capsule_idle(inner: &Arc<Inner>, delay_ms: u64) {
         }
     });
 }
-
 
 // ─────────────────────────── audio bridge ───────────────────────────
 

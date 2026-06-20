@@ -408,13 +408,15 @@ mod windows_impl {
             RegistrationInspection::Installed { dll_path } => WindowsImeStatus {
                 state: WindowsImeInstallState::Installed,
                 using_tsf_backend: true,
-                message: "OpenLess TSF IME registration is present".to_string(),
+                message: "Experimental OpenLess TSF IME registration is present".to_string(),
                 dll_path: Some(dll_path),
             },
             RegistrationInspection::NotInstalled => WindowsImeStatus {
                 state: WindowsImeInstallState::NotInstalled,
                 using_tsf_backend: false,
-                message: "OpenLess TSF IME registration was not found".to_string(),
+                message:
+                    "OpenLess TSF IME is not registered; Windows uses Unicode SendInput by default"
+                        .to_string(),
                 dll_path: None,
             },
             RegistrationInspection::Broken { dll_path, reason } => WindowsImeStatus {

@@ -57,8 +57,6 @@
            uninstall and skipped the auto-update / minor-upgrade path. -->
       <Custom Action="UnregisterOpenLessImeX86" Before="InstallFiles"><![CDATA[Installed AND NOT REMOVE]]></Custom>
       <Custom Action="UnregisterOpenLessImeX64" Before="UnregisterOpenLessImeX86"><![CDATA[Installed AND NOT REMOVE]]></Custom>
-      <Custom Action="RegisterOpenLessImeX64" After="InstallFiles"><![CDATA[NOT REMOVE]]></Custom>
-      <Custom Action="RegisterOpenLessImeX86" After="RegisterOpenLessImeX64"><![CDATA[NOT REMOVE]]></Custom>
     </InstallExecuteSequence>
   </Fragment>
 </Wix>

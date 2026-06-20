@@ -89,8 +89,7 @@
 !macroend
 
 !macro NSIS_HOOK_POSTINSTALL
-  !insertmacro OPENLESS_IME_REGISTER_X64
-  !insertmacro OPENLESS_IME_REGISTER_X86
+  DetailPrint "OpenLess TSF IME registration skipped; Windows uses Unicode SendInput by default"
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL
