@@ -202,7 +202,7 @@ fn send_event(tx: &Sender<ComboHotkeyEvent>, evt: ComboHotkeyEvent) {
 }
 
 pub fn handle_side_modifier(side: SideModifier, pressed: bool) {
-    let Some(evt) = with_active(|active| {
+    if let Some(evt) = with_active(|active| {
         let mut state = active.state.lock();
         if pressed {
             state.set_side(side, true);
@@ -210,20 +210,20 @@ pub fn handle_side_modifier(side: SideModifier, pressed: bool) {
         } else {
             state.on_modifier_release(side)
         }
-    }) else {
-        return;
-    };
-    if let Some(evt) = evt {
+    })
+    .flatten()
+    {
         with_active(|active| send_event(&active.tx, evt));
     }
 }
 
 pub fn handle_primary_key(primary: &str, pressed: bool) {
-    let evt = with_active(|active| {
+    if let Some(evt) = with_active(|active| {
         let mut state = active.state.lock();
         state.on_primary(primary, pressed)
-    });
-    if let Some(evt) = evt {
+    })
+    .flatten()
+    {
         with_active(|active| send_event(&active.tx, evt));
     }
 }

@@ -806,6 +806,7 @@ mod platform {
     const VK_LMENU: u32 = 0xA4;
     const VK_RMENU: u32 = 0xA5;
     const VK_RWIN: u32 = 0x5C;
+    const VK_LWIN: u32 = 0x5B;
     const VK_MEDIA_PLAY_PAUSE: u32 = 0xB3;
     const LLKHF_INJECTED: u32 = 0x0000_0010;
     const ACCEPT_INJECTED_ENV: &str = "OPENLESS_ACCEPT_SYNTHETIC_HOTKEY_EVENTS";

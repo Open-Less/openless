@@ -179,7 +179,7 @@ mod imp {
             }
             match device.fetch_events() {
                 Ok(events) => {
-                    for event in events.flatten() {
+                    for event in events {
                         dispatch_event(
                             &event,
                             config,

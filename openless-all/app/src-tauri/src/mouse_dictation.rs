@@ -122,13 +122,14 @@ pub enum MouseButton {
 #[cfg(target_os = "windows")]
 pub mod platform {
     use super::*;
+    use std::sync::Mutex;
     use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
     use windows::Win32::UI::WindowsAndMessaging::{
-        CallNextHookEx, HC_ACTION, HHOOK, WH_MOUSE_LL, WM_MBUTTONDOWN, WM_MBUTTONUP,
-        WM_XBUTTONDOWN, WM_XBUTTONUP, XBUTTON1, XBUTTON2,
+        CallNextHookEx, HC_ACTION, SetWindowsHookExW, UnhookWindowsHookEx, HHOOK, WH_MOUSE_LL,
+        WM_MBUTTONDOWN, WM_MBUTTONUP, WM_XBUTTONDOWN, WM_XBUTTONUP, XBUTTON1, XBUTTON2,
     };
 
-    static MOUSE_HOOK: OnceLock<RwLock<Option<HHOOK>>> = OnceLock::new();
+    static MOUSE_HOOK: OnceLock<Mutex<Option<isize>>> = OnceLock::new();
     static HOOK_THREAD_STARTED: OnceLock<()> = OnceLock::new();
 
     pub fn ensure_hook_thread() -> Result<(), String> {
@@ -165,30 +166,25 @@ pub mod platform {
     }
 
     pub fn install_hook() -> Result<(), String> {
-        let slot = MOUSE_HOOK.get_or_init(|| RwLock::new(None));
-        let mut guard = slot.write().map_err(|e| e.to_string())?;
+        let slot = MOUSE_HOOK.get_or_init(|| Mutex::new(None));
+        let mut guard = slot.lock().map_err(|e| e.to_string())?;
         if guard.is_some() {
             return Ok(());
         }
         unsafe {
-            let hook = windows::Win32::UI::WindowsAndMessaging::SetWindowsHookExW(
-                WH_MOUSE_LL,
-                Some(low_level_mouse_proc),
-                None,
-                0,
-            )
-            .map_err(|e| format!("mouse hook install failed: {e}"))?;
-            *guard = Some(hook);
+            let hook = SetWindowsHookExW(WH_MOUSE_LL, Some(low_level_mouse_proc), None, 0)
+                .map_err(|e| format!("mouse hook install failed: {e}"))?;
+            *guard = Some(hook.0);
         }
         Ok(())
     }
 
     pub fn uninstall_hook() {
         if let Some(slot) = MOUSE_HOOK.get() {
-            if let Ok(mut guard) = slot.write() {
+            if let Ok(mut guard) = slot.lock() {
                 if let Some(hook) = guard.take() {
                     unsafe {
-                        let _ = windows::Win32::UI::WindowsAndMessaging::UnhookWindowsHookEx(hook);
+                        let _ = UnhookWindowsHookEx(HHOOK(hook as *mut core::ffi::c_void));
                     }
                 }
             }
@@ -201,7 +197,7 @@ pub mod platform {
         lparam: LPARAM,
     ) -> LRESULT {
         if code == HC_ACTION as i32 && lparam.0 != 0 {
-            let msg = wparam.0;
+            let msg = wparam.0 as u32;
             let mouse = *(lparam.0 as *const MSLLHOOKSTRUCT);
             match msg {
                 WM_MBUTTONDOWN => handle_button(MouseButton::Middle, true),
@@ -209,7 +205,7 @@ pub mod platform {
                 WM_XBUTTONDOWN | WM_XBUTTONUP => {
                     let hi = ((mouse.mouseData >> 16) & 0xFFFF) as u16;
                     if hi == XBUTTON1 as u16 || hi == XBUTTON2 as u16 {
-                        let pressed = msg == WM_XBUTTONDOWN.0 as usize;
+                        let pressed = msg == WM_XBUTTONDOWN;
                         handle_button(MouseButton::Side, pressed);
                     }
                 }

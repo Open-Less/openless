@@ -67,7 +67,7 @@ fn physical_modifier_class(raw: &str) -> String {
 }
 
 fn physical_class_from_generic_tag(tag: &str) -> String {
-    match tag.as_str() {
+    match tag {
         "ctrl" | "control" => "Control".to_string(),
         "alt" | "option" | "opt" => "Alt".to_string(),
         "shift" => "Shift".to_string(),
