@@ -12,16 +12,25 @@ use crate::types::HotkeyMode;
 
 /// 在可能已有 tokio runtime 的线程上安全地执行异步块。
 /// 测试环境中（tokio::test）调用 `async_runtime::block_on` 会 panic，
-/// 因此优先尝试 `Handle::current().block_on`。
+/// 而 `tokio::task::block_in_place` 又要求 multi-thread runtime。
+/// 使用 `futures::executor::block_on` 作为通用回退，它不依赖 tokio。
 fn block_on_async<F>(f: F)
 where
     F: std::future::Future,
 {
     if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        tokio::task::block_in_place(|| handle.block_on(f));
-    } else {
-        async_runtime::block_on(f);
+        // 尝试用 tokio Handle 直接 block_on；单线程 runtime 上这也会 panic，
+        // 所以捕获 panic 并回退到 futures executor。
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            handle.block_on(f)
+        }));
+        match result {
+            Ok(v) => return v,
+            Err(_) => {}
+        }
     }
+    // 回退：使用 futures executor（不依赖 tokio runtime）
+    futures::executor::block_on(f)
 }
 
 // ─────────────────────────── hotkey bridging ───────────────────────────
