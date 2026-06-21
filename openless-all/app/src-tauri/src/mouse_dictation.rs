@@ -47,14 +47,14 @@ impl MouseDictationMonitor {
         if let Some(slot) = ACTIVE_MOUSE.get() {
             if let Ok(mut guard) = slot.write() {
                 if let Some(state) = guard.as_mut() {
+                    if state.middle_enabled && !config.middle_enabled {
+                        release_held_if_held(state, &state.middle_held, TriggerSource::MouseMiddle);
+                    }
+                    if state.side_enabled && !config.side_enabled {
+                        release_held_if_held(state, &state.side_held, TriggerSource::MouseSide);
+                    }
                     state.middle_enabled = config.middle_enabled;
                     state.side_enabled = config.side_enabled;
-                    if !config.middle_enabled {
-                        state.middle_held.store(false, Ordering::SeqCst);
-                    }
-                    if !config.side_enabled {
-                        state.side_held.store(false, Ordering::SeqCst);
-                    }
                 }
             }
         }
@@ -65,9 +65,31 @@ impl Drop for MouseDictationMonitor {
     fn drop(&mut self) {
         if let Some(slot) = ACTIVE_MOUSE.get() {
             if let Ok(mut guard) = slot.write() {
+                if let Some(state) = guard.as_mut() {
+                    release_held_sources(state, true, true);
+                }
                 *guard = None;
             }
         }
+    }
+}
+
+fn release_held_if_held(
+    state: &MouseMonitorState,
+    held: &AtomicBool,
+    source: TriggerSource,
+) {
+    if held.swap(false, Ordering::SeqCst) {
+        send_edge(state, HotkeyEvent::Released, source);
+    }
+}
+
+fn release_held_sources(state: &MouseMonitorState, middle: bool, side: bool) {
+    if middle {
+        release_held_if_held(state, &state.middle_held, TriggerSource::MouseMiddle);
+    }
+    if side {
+        release_held_if_held(state, &state.side_held, TriggerSource::MouseSide);
     }
 }
 
@@ -240,5 +262,95 @@ pub mod platform {
         if let Some(button) = button {
             handle_button(button, pressed);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{mpsc, Mutex};
+
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn clear_active_monitor() {
+        if let Some(slot) = ACTIVE_MOUSE.get() {
+            if let Ok(mut guard) = slot.write() {
+                if let Some(state) = guard.take() {
+                    release_held_sources(&state, true, true);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn disabling_held_middle_emits_release() {
+        let _lock = TEST_LOCK.lock().unwrap();
+        clear_active_monitor();
+
+        let (tx, rx) = mpsc::channel();
+        let _monitor = MouseDictationMonitor::start(
+            MouseDictationConfig {
+                middle_enabled: true,
+                side_enabled: false,
+            },
+            tx,
+        )
+        .unwrap();
+
+        handle_button(MouseButton::Middle, true);
+        assert_eq!(
+            rx.recv().unwrap(),
+            (HotkeyEvent::Pressed, TriggerSource::MouseMiddle)
+        );
+
+        MouseDictationMonitor::update_config(MouseDictationConfig {
+            middle_enabled: false,
+            side_enabled: false,
+        });
+        assert_eq!(
+            rx.recv().unwrap(),
+            (HotkeyEvent::Released, TriggerSource::MouseMiddle)
+        );
+
+        clear_active_monitor();
+    }
+
+    #[test]
+    fn dropping_monitor_emits_release_for_held_sources() {
+        let _lock = TEST_LOCK.lock().unwrap();
+        clear_active_monitor();
+
+        let (tx, rx) = mpsc::channel();
+        let monitor = MouseDictationMonitor::start(
+            MouseDictationConfig {
+                middle_enabled: true,
+                side_enabled: true,
+            },
+            tx,
+        )
+        .unwrap();
+
+        handle_button(MouseButton::Middle, true);
+        handle_button(MouseButton::Side, true);
+        assert_eq!(
+            rx.recv().unwrap(),
+            (HotkeyEvent::Pressed, TriggerSource::MouseMiddle)
+        );
+        assert_eq!(
+            rx.recv().unwrap(),
+            (HotkeyEvent::Pressed, TriggerSource::MouseSide)
+        );
+
+        drop(monitor);
+
+        let mut releases = Vec::new();
+        while let Ok(evt) = rx.try_recv() {
+            releases.push(evt);
+        }
+        assert_eq!(releases.len(), 2);
+        assert!(releases.contains(&(HotkeyEvent::Released, TriggerSource::MouseMiddle)));
+        assert!(releases.contains(&(HotkeyEvent::Released, TriggerSource::MouseSide)));
+
+        clear_active_monitor();
     }
 }
