@@ -1355,6 +1355,7 @@ fn start_mouse_dictation_monitor(
 
 #[cfg(target_os = "linux")]
 pub(super) fn refresh_linux_evdev_monitor(inner: &Arc<Inner>) {
+    sync_release_mouse_hold_sources(inner);
     inner.linux_evdev.lock().take();
     try_start_linux_evdev_monitor(inner);
 }
