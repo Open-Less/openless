@@ -7,6 +7,8 @@
 
 use super::*;
 
+use crate::hold_source_tracker::TriggerSource;
+
 // ─────────────────────────── hotkey bridging ───────────────────────────
 
 pub(super) fn hotkey_supervisor_loop(inner: Arc<Inner>) {
@@ -604,12 +606,20 @@ pub(super) fn combo_hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<Com
             // 否则 latch 竞态导致 combo 快捷键二次按键失效。
             ComboHotkeyEvent::Pressed => {
                 async_runtime::block_on(async {
-                    handle_pressed_edge(&inner_cloned).await;
+                    handle_pressed_edge(
+                        &inner_cloned,
+                        TriggerSource::KeyboardDictation,
+                    )
+                    .await;
                 });
             }
             ComboHotkeyEvent::Released => {
                 async_runtime::block_on(async {
-                    handle_released_edge(&inner_cloned).await;
+                    handle_released_edge(
+                        &inner_cloned,
+                        TriggerSource::KeyboardDictation,
+                    )
+                    .await;
                 });
             }
         }
@@ -1029,12 +1039,20 @@ pub(super) fn hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<HotkeyEve
             // bridge 立刻 recv Released → end_session，行为正确，仅有短暂 stop 延迟。
             HotkeyEvent::Pressed => {
                 async_runtime::block_on(async {
-                    handle_pressed_edge(&inner_cloned).await;
+                    handle_pressed_edge(
+                        &inner_cloned,
+                        TriggerSource::KeyboardDictation,
+                    )
+                    .await;
                 });
             }
             HotkeyEvent::Released => {
                 async_runtime::block_on(async {
-                    handle_released_edge(&inner_cloned).await;
+                    handle_released_edge(
+                        &inner_cloned,
+                        TriggerSource::KeyboardDictation,
+                    )
+                    .await;
                 });
             }
             HotkeyEvent::Cancelled => {
@@ -1060,6 +1078,7 @@ pub(super) fn hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<HotkeyEve
 
 pub(super) fn reset_shortcut_held_state(inner: &Arc<Inner>) {
     inner.hotkey_trigger_held.store(false, Ordering::SeqCst);
+    inner.hold_sources.reset();
     if let Some(monitor) = inner.hotkey.lock().as_ref() {
         monitor.reset_held_state();
     }
@@ -1162,11 +1181,11 @@ pub(super) async fn handle_window_hotkey_event(
                 log::info!(
                     "[window-hotkey] pressed trigger={trigger:?} code={code} repeat={repeat}"
                 );
-                handle_pressed_edge(inner).await;
+                handle_pressed_edge(inner, TriggerSource::KeyboardDictation).await;
             }
             "keyup" => {
                 log::info!("[window-hotkey] released trigger={trigger:?} code={code}");
-                handle_released_edge(inner).await;
+                handle_released_edge(inner, TriggerSource::KeyboardDictation).await;
             }
             _ => {}
         }
@@ -1199,4 +1218,95 @@ pub(super) fn window_key_matches_trigger(trigger: crate::types::HotkeyTrigger, k
         // Custom 走 global-hotkey crate，不走 window hotkey fallback
         HotkeyTrigger::Custom => false,
     }
+}
+
+pub(super) fn mouse_dictation_bridge_loop(
+    inner: Arc<Inner>,
+    rx: mpsc::Receiver<(HotkeyEvent, TriggerSource)>,
+) {
+    while let Ok((evt, source)) = rx.recv() {
+        if inner.shortcut_recording_active.load(Ordering::SeqCst) {
+            continue;
+        }
+        let inner_cloned = Arc::clone(&inner);
+        match evt {
+            HotkeyEvent::Pressed => {
+                async_runtime::block_on(async {
+                    handle_pressed_edge(&inner_cloned, source).await;
+                });
+            }
+            HotkeyEvent::Released => {
+                async_runtime::block_on(async {
+                    handle_released_edge(&inner_cloned, source).await;
+                });
+            }
+            _ => {}
+        }
+    }
+}
+
+pub(super) fn mouse_dictation_supervisor_loop(inner: Arc<Inner>) {
+    loop {
+        if inner.shutdown.load(Ordering::SeqCst) {
+            return;
+        }
+        let prefs = inner.prefs.get();
+        let config = crate::mouse_dictation::MouseDictationConfig {
+            middle_enabled: prefs.mouse_middle_button_dictation,
+            side_enabled: prefs.mouse_side_button_dictation,
+        };
+        let needs_mouse = config.middle_enabled || config.side_enabled;
+
+        #[cfg(not(target_os = "linux"))]
+        if !needs_mouse {
+            inner.mouse_dictation.lock().take();
+            return;
+        }
+
+        #[cfg(target_os = "linux")]
+        if !needs_mouse {
+            inner.mouse_dictation.lock().take();
+            return;
+        }
+
+        if inner.mouse_dictation.lock().is_some() {
+            crate::mouse_dictation::MouseDictationMonitor::update_config(config);
+            return;
+        }
+
+        let (tx, rx) = mpsc::channel::<(HotkeyEvent, TriggerSource)>();
+        match start_mouse_dictation_monitor(config, tx.clone()) {
+            Ok(monitor) => {
+                *inner.mouse_dictation.lock() = Some(monitor);
+                let inner_clone = Arc::clone(&inner);
+                std::thread::Builder::new()
+                    .name("openless-mouse-dictation-bridge".into())
+                    .spawn(move || mouse_dictation_bridge_loop(inner_clone, rx))
+                    .ok();
+                return;
+            }
+            Err(err) => {
+                log::warn!("[coord] mouse dictation monitor failed: {err}; retry in 3s");
+                std::thread::sleep(std::time::Duration::from_secs(3));
+            }
+        }
+    }
+}
+
+fn start_mouse_dictation_monitor(
+    config: crate::mouse_dictation::MouseDictationConfig,
+    tx: mpsc::Sender<(HotkeyEvent, TriggerSource)>,
+) -> Result<crate::mouse_dictation::MouseDictationMonitor, String> {
+    #[cfg(target_os = "windows")]
+    crate::mouse_dictation::platform::ensure_hook_thread()?;
+    crate::mouse_dictation::MouseDictationMonitor::start(config, tx)
+}
+
+pub(super) fn update_mouse_dictation_binding_now(inner: &Arc<Inner>) {
+    inner.mouse_dictation.lock().take();
+    let inner_clone = Arc::clone(inner);
+    std::thread::Builder::new()
+        .name("openless-mouse-dictation-supervisor".into())
+        .spawn(move || mouse_dictation_supervisor_loop(inner_clone))
+        .ok();
 }

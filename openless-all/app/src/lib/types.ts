@@ -403,6 +403,10 @@ export interface UserPreferences {
   androidOverlayCancelSwipeDirection: AndroidOverlayCancelSwipeDirection;
   /** Android: floating overlay control diameter in dp. */
   androidOverlaySizeDp: number;
+  /** 桌面端：鼠标中键（滚轮按下）触发听写。默认 false。 */
+  mouseMiddleButtonDictation: boolean;
+  /** 桌面端：鼠标侧键（前进/后退）触发听写。默认 false。 */
+  mouseSideButtonDictation: boolean;
 }
 
 export interface MarketplaceListItem {

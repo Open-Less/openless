@@ -220,6 +220,22 @@ export function RecordingInputSection() {
         </SettingRow>
         )}
         {showDesktopHotkey && (
+        <SettingRow label={t('settings.recording.mouseMiddleLabel', '鼠标中键唤起识别')}>
+          <Toggle
+            on={prefs.mouseMiddleButtonDictation}
+            onToggle={(next) => void savePrefs({ ...prefs, mouseMiddleButtonDictation: next })}
+          />
+        </SettingRow>
+        )}
+        {showDesktopHotkey && (
+        <SettingRow label={t('settings.recording.mouseSideLabel', '鼠标侧键唤起识别')}>
+          <Toggle
+            on={prefs.mouseSideButtonDictation}
+            onToggle={(next) => void savePrefs({ ...prefs, mouseSideButtonDictation: next })}
+          />
+        </SettingRow>
+        )}
+        {showDesktopHotkey && (
         <SettingRow label={t('settings.recording.modeLabel')}>
           <div style={segmentedTrackStyle}>
             {choices.map(([v, l]) => (

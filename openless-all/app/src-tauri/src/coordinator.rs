@@ -283,6 +283,8 @@ struct Inner {
     /// 代替 modifier-only 的 hotkey monitor。`None` 表示不使用自定义组合键或还没成功安装。
     combo_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
     side_aware_combo: Mutex<Option<crate::side_aware_combo::SideAwareComboMonitor>>,
+    mouse_dictation: Mutex<Option<crate::mouse_dictation::MouseDictationMonitor>>,
+    hold_sources: crate::hold_source_tracker::HoldSourceTracker,
     translation_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
     switch_style_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
     open_app_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
@@ -405,6 +407,8 @@ impl Coordinator {
                     shortcut_recording_active: AtomicBool::new(false),
                     combo_hotkey: Mutex::new(None),
                     side_aware_combo: Mutex::new(None),
+                    mouse_dictation: Mutex::new(None),
+                    hold_sources: crate::hold_source_tracker::HoldSourceTracker::new(),
                     translation_hotkey: Mutex::new(None),
                     switch_style_hotkey: Mutex::new(None),
                     open_app_hotkey: Mutex::new(None),
@@ -498,6 +502,8 @@ impl Coordinator {
                 shortcut_recording_active: AtomicBool::new(false),
                 combo_hotkey: Mutex::new(None),
                 side_aware_combo: Mutex::new(None),
+                mouse_dictation: Mutex::new(None),
+                hold_sources: crate::hold_source_tracker::HoldSourceTracker::new(),
                 translation_hotkey: Mutex::new(None),
                 switch_style_hotkey: Mutex::new(None),
                 open_app_hotkey: Mutex::new(None),
@@ -767,6 +773,18 @@ impl Coordinator {
             .name("openless-combo-hotkey-supervisor".into())
             .spawn(move || combo_hotkey_supervisor_loop(inner))
             .ok();
+    }
+
+    pub fn start_mouse_dictation_listener(&self) {
+        let inner = Arc::clone(&self.inner);
+        std::thread::Builder::new()
+            .name("openless-mouse-dictation-supervisor".into())
+            .spawn(move || mouse_dictation_supervisor_loop(inner))
+            .ok();
+    }
+
+    pub fn update_mouse_dictation_binding(&self) {
+        update_mouse_dictation_binding_now(&self.inner);
     }
 
     pub fn stop_combo_hotkey_listener(&self) {
@@ -2062,6 +2080,7 @@ mod tests {
     use super::dictation::abort_recording_with_error;
     use super::dictation::{handle_pressed_edge, handle_released_edge};
     use super::*;
+    use crate::hold_source_tracker::TriggerSource;
     use crate::types::{HotkeyMode, HotkeyTrigger};
     use once_cell::sync::Lazy;
 
@@ -2159,6 +2178,46 @@ mod tests {
             Some(CapsuleState::Recording),
             "按下 Less Computer 键必须进入录音并弹出可见胶囊"
         );
+        std::env::remove_var("OPENLESS_HOTKEY_INJECTION_DRY_RUN");
+    }
+
+    #[tokio::test]
+    async fn hold_mode_ends_only_after_last_source_released() {
+        let _guard = ENV_LOCK.lock().await;
+        std::env::set_var("OPENLESS_HOTKEY_INJECTION_DRY_RUN", "1");
+
+        let coordinator = Coordinator::new();
+        {
+            let mut prefs = coordinator.inner.prefs.get();
+            prefs.hotkey.mode = HotkeyMode::Hold;
+            coordinator.inner.prefs.set(prefs).unwrap();
+        }
+
+        handle_pressed_edge(&coordinator.inner, TriggerSource::KeyboardDictation).await;
+        assert_eq!(
+            coordinator.inner.state.lock().phase,
+            SessionPhase::Listening
+        );
+        assert_eq!(coordinator.inner.hold_sources.active_count(), 1);
+
+        handle_pressed_edge(&coordinator.inner, TriggerSource::MouseMiddle).await;
+        assert_eq!(coordinator.inner.hold_sources.active_count(), 2);
+        assert_eq!(
+            coordinator.inner.state.lock().phase,
+            SessionPhase::Listening
+        );
+
+        handle_released_edge(&coordinator.inner, TriggerSource::KeyboardDictation).await;
+        assert_eq!(coordinator.inner.hold_sources.active_count(), 1);
+        assert_eq!(
+            coordinator.inner.state.lock().phase,
+            SessionPhase::Listening
+        );
+
+        handle_released_edge(&coordinator.inner, TriggerSource::MouseMiddle).await;
+        assert_eq!(coordinator.inner.hold_sources.active_count(), 0);
+        assert_eq!(coordinator.inner.state.lock().phase, SessionPhase::Idle);
+
         std::env::remove_var("OPENLESS_HOTKEY_INJECTION_DRY_RUN");
     }
 

@@ -865,6 +865,12 @@ pub struct UserPreferences {
     /// Android: floating overlay control diameter in dp.
     #[serde(default = "default_android_overlay_size_dp")]
     pub android_overlay_size_dp: u32,
+    /// 桌面端：按下鼠标中键（滚轮）触发听写。与键盘快捷键独立，默认关闭。
+    #[serde(default)]
+    pub mouse_middle_button_dictation: bool,
+    /// 桌面端：按下鼠标侧键（前进/后退）触发听写。与键盘快捷键独立，默认关闭。
+    #[serde(default)]
+    pub mouse_side_button_dictation: bool,
 }
 
 fn default_local_asr_model() -> String {
@@ -1062,6 +1068,10 @@ struct UserPreferencesWire {
     android_overlay_cancel_swipe_direction: AndroidOverlayCancelSwipeDirection,
     #[serde(default = "default_android_overlay_size_dp")]
     android_overlay_size_dp: u32,
+    #[serde(default)]
+    mouse_middle_button_dictation: bool,
+    #[serde(default)]
+    mouse_side_button_dictation: bool,
 }
 
 impl Default for UserPreferencesWire {
@@ -1145,6 +1155,8 @@ impl Default for UserPreferencesWire {
             android_overlay_left_swipe_action: prefs.android_overlay_left_swipe_action,
             android_overlay_cancel_swipe_direction: prefs.android_overlay_cancel_swipe_direction,
             android_overlay_size_dp: prefs.android_overlay_size_dp,
+            mouse_middle_button_dictation: prefs.mouse_middle_button_dictation,
+            mouse_side_button_dictation: prefs.mouse_side_button_dictation,
         }
     }
 }
@@ -1267,6 +1279,8 @@ impl<'de> Deserialize<'de> for UserPreferences {
             android_overlay_size_dp: normalize_android_overlay_size_dp(
                 wire.android_overlay_size_dp,
             ),
+            mouse_middle_button_dictation: wire.mouse_middle_button_dictation,
+            mouse_side_button_dictation: wire.mouse_side_button_dictation,
         })
     }
 }
@@ -2004,6 +2018,8 @@ impl Default for UserPreferences {
             android_overlay_cancel_swipe_direction: default_android_overlay_cancel_swipe_direction(
             ),
             android_overlay_size_dp: default_android_overlay_size_dp(),
+            mouse_middle_button_dictation: false,
+            mouse_side_button_dictation: false,
         }
     }
 }

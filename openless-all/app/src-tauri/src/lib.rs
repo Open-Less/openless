@@ -67,6 +67,12 @@ mod selection;
 mod selection;
 #[cfg(not(mobile))]
 mod shortcut_binding;
+mod hold_source_tracker;
+#[cfg(not(mobile))]
+mod mouse_dictation;
+#[cfg(mobile)]
+#[path = "mobile_stubs/mouse_dictation.rs"]
+mod mouse_dictation;
 #[cfg(not(mobile))]
 mod side_aware_combo;
 #[cfg(mobile)]
@@ -707,6 +713,7 @@ fn run_desktop() {
                 coordinator.start_translation_hotkey_listener();
                 coordinator.start_switch_style_hotkey_listener();
                 coordinator.start_open_app_hotkey_listener();
+                coordinator.start_mouse_dictation_listener();
             }
             #[cfg(target_os = "macos")]
             RunEvent::Reopen { .. } => show_main_window(app),

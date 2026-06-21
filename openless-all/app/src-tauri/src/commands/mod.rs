@@ -267,6 +267,7 @@ mod tests {
         switch_style_refreshes: Mutex<u32>,
         open_app_refreshes: Mutex<u32>,
         coding_agent_refreshes: Mutex<u32>,
+        mouse_dictation_refreshes: Mutex<u32>,
     }
 
     fn snapshot() -> CredentialsSnapshot {
@@ -635,6 +636,10 @@ mod tests {
 
         fn refresh_coding_agent_hotkey(&self) {
             *self.coding_agent_refreshes.lock().unwrap() += 1;
+        }
+
+        fn refresh_mouse_dictation(&self) {
+            *self.mouse_dictation_refreshes.lock().unwrap() += 1;
         }
     }
 
