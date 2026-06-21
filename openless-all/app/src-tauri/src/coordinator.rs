@@ -2329,6 +2329,7 @@ mod tests {
             prefs.hotkey.mode = HotkeyMode::Toggle;
             coordinator.inner.prefs.set(prefs).unwrap();
         }
+        clear_active_hold_sources_on_hotkey_rebind_async(&coordinator.inner).await;
         coordinator.update_hotkey_binding();
 
         assert_eq!(coordinator.inner.hold_sources.active_count(), 0);
