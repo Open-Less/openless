@@ -2680,7 +2680,7 @@ mod tests {
             state.session_id = session_id(41);
         }
 
-        handle_pressed_edge(&coordinator.inner).await;
+        handle_pressed_edge(&coordinator.inner, TriggerSource::KeyboardDictation).await;
 
         let state = coordinator.inner.state.lock();
         assert_eq!(state.phase, SessionPhase::Inserting);
@@ -2708,7 +2708,7 @@ mod tests {
             .hotkey_trigger_held
             .store(true, Ordering::SeqCst);
 
-        handle_pressed_edge(&coordinator.inner).await;
+        handle_pressed_edge(&coordinator.inner, TriggerSource::KeyboardDictation).await;
 
         assert_eq!(
             coordinator.inner.state.lock().phase,
