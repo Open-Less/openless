@@ -1131,6 +1131,7 @@ impl Coordinator {
     }
 
     pub fn update_hotkey_binding(&self) {
+        clear_active_hold_sources_on_hotkey_rebind(&self.inner);
         let prefs = self.inner.prefs.get();
         let dictation_trigger =
             crate::shortcut_binding::legacy_modifier_trigger(&prefs.dictation_hotkey);
@@ -2298,6 +2299,38 @@ mod tests {
         );
 
         handle_released_edge(&coordinator.inner, TriggerSource::KeyboardDictation).await;
+        assert_eq!(coordinator.inner.hold_sources.active_count(), 0);
+        assert_eq!(coordinator.inner.state.lock().phase, SessionPhase::Idle);
+
+        std::env::remove_var("OPENLESS_HOTKEY_INJECTION_DRY_RUN");
+    }
+
+    #[tokio::test]
+    async fn hold_mode_hotkey_rebind_while_holding_clears_sources_and_ends_session() {
+        let _guard = ENV_LOCK.lock().await;
+        std::env::set_var("OPENLESS_HOTKEY_INJECTION_DRY_RUN", "1");
+
+        let coordinator = Coordinator::new();
+        {
+            let mut prefs = coordinator.inner.prefs.get();
+            prefs.hotkey.mode = HotkeyMode::Hold;
+            coordinator.inner.prefs.set(prefs).unwrap();
+        }
+
+        handle_pressed_edge(&coordinator.inner, TriggerSource::MouseMiddle).await;
+        assert_eq!(
+            coordinator.inner.state.lock().phase,
+            SessionPhase::Listening
+        );
+        assert_eq!(coordinator.inner.hold_sources.active_count(), 1);
+
+        {
+            let mut prefs = coordinator.inner.prefs.get();
+            prefs.hotkey.mode = HotkeyMode::Toggle;
+            coordinator.inner.prefs.set(prefs).unwrap();
+        }
+        coordinator.update_hotkey_binding();
+
         assert_eq!(coordinator.inner.hold_sources.active_count(), 0);
         assert_eq!(coordinator.inner.state.lock().phase, SessionPhase::Idle);
 
