@@ -2238,7 +2238,7 @@ mod tests {
         );
         assert_eq!(coordinator.inner.hold_sources.active_count(), 1);
 
-        sync_release_mouse_hold_sources(&coordinator.inner);
+        release_mouse_hold_sources(&coordinator.inner).await;
 
         assert_eq!(coordinator.inner.hold_sources.active_count(), 0);
         assert_eq!(coordinator.inner.state.lock().phase, SessionPhase::Idle);
@@ -2290,7 +2290,7 @@ mod tests {
             SessionPhase::Listening
         );
 
-        sync_release_mouse_hold_sources(&coordinator.inner);
+        release_mouse_hold_sources(&coordinator.inner).await;
 
         assert_eq!(coordinator.inner.hold_sources.active_count(), 1);
         assert_eq!(

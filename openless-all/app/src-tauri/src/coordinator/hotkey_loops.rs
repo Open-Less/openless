@@ -1221,7 +1221,7 @@ pub(super) fn window_key_matches_trigger(trigger: crate::types::HotkeyTrigger, k
     }
 }
 
-pub(super) fn sync_release_mouse_hold_sources(inner: &Arc<Inner>) {
+pub(super) async fn release_mouse_hold_sources(inner: &Arc<Inner>) {
     let mode = inner.prefs.get().hotkey.mode;
     if mode != HotkeyMode::Hold {
         return;
@@ -1232,21 +1232,22 @@ pub(super) fn sync_release_mouse_hold_sources(inner: &Arc<Inner>) {
         return;
     }
     let phase = inner.state.lock().phase;
-    let inner_clone = Arc::clone(inner);
-    async_runtime::block_on(async {
-        match phase {
-            SessionPhase::Listening => {
-                let _ = end_session(&inner_clone).await;
-            }
-            SessionPhase::Starting => {
-                request_stop_during_starting(
-                    &inner_clone,
-                    "mouse dictation disabled while held",
-                );
-            }
-            _ => {}
+    match phase {
+        SessionPhase::Listening => {
+            let _ = end_session(inner).await;
         }
-    });
+        SessionPhase::Starting => {
+            request_stop_during_starting(
+                inner,
+                "mouse dictation disabled while held",
+            );
+        }
+        _ => {}
+    }
+}
+
+pub(super) fn sync_release_mouse_hold_sources(inner: &Arc<Inner>) {
+    async_runtime::block_on(release_mouse_hold_sources(inner));
 }
 
 /// Clears all active Hold sources when dictation hotkey/mode is rebound mid-hold.
