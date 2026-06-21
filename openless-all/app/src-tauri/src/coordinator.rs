@@ -2219,6 +2219,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn hold_mode_mouse_disable_while_holding_ends_session() {
+        let _guard = ENV_LOCK.lock().await;
+        std::env::set_var("OPENLESS_HOTKEY_INJECTION_DRY_RUN", "1");
+
+        let coordinator = Coordinator::new();
+        {
+            let mut prefs = coordinator.inner.prefs.get();
+            prefs.hotkey.mode = HotkeyMode::Hold;
+            coordinator.inner.prefs.set(prefs).unwrap();
+        }
+
+        handle_pressed_edge(&coordinator.inner, TriggerSource::MouseMiddle).await;
+        assert_eq!(
+            coordinator.inner.state.lock().phase,
+            SessionPhase::Listening
+        );
+        assert_eq!(coordinator.inner.hold_sources.active_count(), 1);
+
+        sync_release_mouse_hold_sources(&coordinator.inner);
+
+        assert_eq!(coordinator.inner.hold_sources.active_count(), 0);
+        assert_eq!(coordinator.inner.state.lock().phase, SessionPhase::Idle);
+
+        std::env::remove_var("OPENLESS_HOTKEY_INJECTION_DRY_RUN");
+    }
+
+    #[tokio::test]
+    async fn hold_mode_concurrent_press_starts_once() {
+        let _guard = ENV_LOCK.lock().await;
+        std::env::set_var("OPENLESS_HOTKEY_INJECTION_DRY_RUN", "1");
+
+        let coordinator = Coordinator::new();
+        {
+            let mut prefs = coordinator.inner.prefs.get();
+            prefs.hotkey.mode = HotkeyMode::Hold;
+            coordinator.inner.prefs.set(prefs).unwrap();
+        }
+
+        handle_pressed_edge(&coordinator.inner, TriggerSource::KeyboardDictation).await;
+        handle_pressed_edge(&coordinator.inner, TriggerSource::MouseMiddle).await;
+
+        assert_eq!(
+            coordinator.inner.state.lock().phase,
+            SessionPhase::Listening
+        );
+        assert_eq!(coordinator.inner.hold_sources.active_count(), 2);
+
+        std::env::remove_var("OPENLESS_HOTKEY_INJECTION_DRY_RUN");
+    }
+
+    #[tokio::test]
     async fn begin_session_dry_run_enters_listening_and_clears_stale_edges() {
         let _guard = ENV_LOCK.lock().await;
         std::env::set_var("OPENLESS_HOTKEY_INJECTION_DRY_RUN", "1");

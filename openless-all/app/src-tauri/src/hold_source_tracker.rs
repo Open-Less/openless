@@ -35,14 +35,14 @@ impl HoldSourceTracker {
         self.active_count.store(0, Ordering::SeqCst);
     }
 
-    /// Returns `true` on a fresh press edge for this source.
-    pub fn press(&self, source: TriggerSource) -> bool {
+    /// Returns the active count **before** increment on a fresh press edge.
+    /// Duplicate press edges for the same source return `None`.
+    pub fn press(&self, source: TriggerSource) -> Option<u32> {
         let slot = self.slot(source);
         if slot.swap(true, Ordering::SeqCst) {
-            return false;
+            return None;
         }
-        self.active_count.fetch_add(1, Ordering::SeqCst);
-        true
+        Some(self.active_count.fetch_add(1, Ordering::SeqCst))
     }
 
     /// Returns the remaining active source count after release.
@@ -81,12 +81,12 @@ mod tests {
     #[test]
     fn hold_source_count_tracks_multiple_sources() {
         let tracker = HoldSourceTracker::new();
-        assert!(tracker.press(TriggerSource::KeyboardDictation));
+        assert_eq!(tracker.press(TriggerSource::KeyboardDictation), Some(0));
         assert_eq!(tracker.active_count(), 1);
-        assert!(!tracker.press(TriggerSource::KeyboardDictation));
+        assert_eq!(tracker.press(TriggerSource::KeyboardDictation), None);
         assert_eq!(tracker.active_count(), 1);
 
-        assert!(tracker.press(TriggerSource::MouseMiddle));
+        assert_eq!(tracker.press(TriggerSource::MouseMiddle), Some(1));
         assert_eq!(tracker.active_count(), 2);
 
         assert_eq!(
@@ -99,7 +99,7 @@ mod tests {
     #[test]
     fn last_release_returns_zero() {
         let tracker = HoldSourceTracker::new();
-        assert!(tracker.press(TriggerSource::KeyboardDictation));
+        assert_eq!(tracker.press(TriggerSource::KeyboardDictation), Some(0));
         assert_eq!(tracker.release(TriggerSource::KeyboardDictation), 0);
         assert_eq!(tracker.active_count(), 0);
     }
@@ -107,7 +107,7 @@ mod tests {
     #[test]
     fn duplicate_release_is_no_op() {
         let tracker = HoldSourceTracker::new();
-        assert!(tracker.press(TriggerSource::MouseSide));
+        assert_eq!(tracker.press(TriggerSource::MouseSide), Some(0));
         assert_eq!(tracker.release(TriggerSource::MouseSide), 0);
         assert_eq!(tracker.release(TriggerSource::MouseSide), 0);
         assert_eq!(tracker.active_count(), 0);
@@ -116,8 +116,8 @@ mod tests {
     #[test]
     fn keyboard_and_mouse_hold_tracks_independently() {
         let tracker = HoldSourceTracker::new();
-        assert!(tracker.press(TriggerSource::KeyboardDictation));
-        assert!(tracker.press(TriggerSource::MouseMiddle));
+        assert_eq!(tracker.press(TriggerSource::KeyboardDictation), Some(0));
+        assert_eq!(tracker.press(TriggerSource::MouseMiddle), Some(1));
         assert_eq!(tracker.active_count(), 2);
         assert_eq!(tracker.release(TriggerSource::KeyboardDictation), 1);
         assert_eq!(tracker.release(TriggerSource::MouseMiddle), 0);

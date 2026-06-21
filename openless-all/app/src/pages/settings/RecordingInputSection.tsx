@@ -221,7 +221,10 @@ export function RecordingInputSection() {
         </SettingRow>
         )}
         {showMouseDictation && (
-        <SettingRow label={t('settings.recording.mouseMiddleLabel', '鼠标中键唤起识别')}>
+        <SettingRow
+          label={t('settings.recording.mouseMiddleLabel', '鼠标中键唤起识别')}
+          desc={t('settings.recording.mouseMiddleDesc', '按下鼠标滚轮（中键）开始/停止语音识别，与键盘快捷键独立。')}
+        >
           <Toggle
             on={prefs.mouseMiddleButtonDictation}
             onToggle={(next) => void savePrefs({ ...prefs, mouseMiddleButtonDictation: next })}
@@ -229,7 +232,10 @@ export function RecordingInputSection() {
         </SettingRow>
         )}
         {showMouseDictation && (
-        <SettingRow label={t('settings.recording.mouseSideLabel', '鼠标侧键唤起识别')}>
+        <SettingRow
+          label={t('settings.recording.mouseSideLabel', '鼠标侧键唤起识别')}
+          desc={t('settings.recording.mouseSideDesc', '按下鼠标侧键（前进/后退）开始/停止语音识别，与键盘快捷键独立。')}
+        >
           <Toggle
             on={prefs.mouseSideButtonDictation}
             onToggle={(next) => void savePrefs({ ...prefs, mouseSideButtonDictation: next })}

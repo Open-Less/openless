@@ -553,10 +553,10 @@ pub(super) async fn handle_pressed_edge(
 ) {
     let mode = inner.prefs.get().hotkey.mode;
     if mode == HotkeyMode::Hold {
-        if !inner.hold_sources.press(source) {
+        let Some(prev_count) = inner.hold_sources.press(source) else {
             return;
-        }
-        if inner.hold_sources.active_count() != 1 {
+        };
+        if prev_count != 0 {
             return;
         }
     } else if inner.hotkey_trigger_held.swap(true, Ordering::SeqCst) {
@@ -580,6 +580,11 @@ pub(super) async fn handle_pressed_edge(
                 "[coord] hotkey pressed edge debounced (< {} ms since last dispatch)",
                 HOTKEY_DEBOUNCE.as_millis()
             );
+            if mode == HotkeyMode::Hold {
+                inner.hold_sources.release(source);
+            } else {
+                inner.hotkey_trigger_held.store(false, Ordering::SeqCst);
+            }
             return;
         }
 
