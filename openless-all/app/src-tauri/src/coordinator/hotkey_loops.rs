@@ -1248,13 +1248,12 @@ pub(super) async fn release_mouse_hold_sources(inner: &Arc<Inner>) {
 
 pub(super) fn sync_release_mouse_hold_sources(inner: &Arc<Inner>) {
     if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        let (tx, rx) = std::sync::mpsc::channel();
         let inner_clone = Arc::clone(inner);
-        handle.spawn(async move {
-            release_mouse_hold_sources(&inner_clone).await;
-            let _ = tx.send(());
-        });
-        let _ = rx.recv();
+        std::thread::spawn(move || {
+            handle.block_on(release_mouse_hold_sources(&inner_clone));
+        })
+        .join()
+        .unwrap();
     } else {
         async_runtime::block_on(release_mouse_hold_sources(inner));
     }
@@ -1285,13 +1284,12 @@ pub(super) async fn clear_active_hold_sources_on_hotkey_rebind_async(inner: &Arc
 
 pub(super) fn clear_active_hold_sources_on_hotkey_rebind(inner: &Arc<Inner>) {
     if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        let (tx, rx) = std::sync::mpsc::channel();
         let inner_clone = Arc::clone(inner);
-        handle.spawn(async move {
-            clear_active_hold_sources_on_hotkey_rebind_async(&inner_clone).await;
-            let _ = tx.send(());
-        });
-        let _ = rx.recv();
+        std::thread::spawn(move || {
+            handle.block_on(clear_active_hold_sources_on_hotkey_rebind_async(&inner_clone));
+        })
+        .join()
+        .unwrap();
     } else {
         async_runtime::block_on(clear_active_hold_sources_on_hotkey_rebind_async(inner));
     }
