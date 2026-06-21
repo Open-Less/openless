@@ -1247,7 +1247,7 @@ pub(super) async fn release_mouse_hold_sources(inner: &Arc<Inner>) {
 }
 
 pub(super) fn sync_release_mouse_hold_sources(inner: &Arc<Inner>) {
-    async_runtime::block_on(release_mouse_hold_sources(inner));
+    futures::executor::block_on(release_mouse_hold_sources(inner));
 }
 
 /// Clears all active Hold sources when dictation hotkey/mode is rebound mid-hold.
@@ -1274,7 +1274,7 @@ pub(super) async fn clear_active_hold_sources_on_hotkey_rebind_async(inner: &Arc
 }
 
 pub(super) fn clear_active_hold_sources_on_hotkey_rebind(inner: &Arc<Inner>) {
-    async_runtime::block_on(clear_active_hold_sources_on_hotkey_rebind_async(inner));
+    futures::executor::block_on(clear_active_hold_sources_on_hotkey_rebind_async(inner));
 }
 
 pub(super) fn mouse_dictation_bridge_loop(
