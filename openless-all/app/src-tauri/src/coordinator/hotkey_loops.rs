@@ -1220,6 +1220,34 @@ pub(super) fn window_key_matches_trigger(trigger: crate::types::HotkeyTrigger, k
     }
 }
 
+pub(super) fn sync_release_mouse_hold_sources(inner: &Arc<Inner>) {
+    let mode = inner.prefs.get().hotkey.mode;
+    if mode != HotkeyMode::Hold {
+        return;
+    }
+    inner.hold_sources.release(TriggerSource::MouseMiddle);
+    inner.hold_sources.release(TriggerSource::MouseSide);
+    if inner.hold_sources.active_count() != 0 {
+        return;
+    }
+    let phase = inner.state.lock().phase;
+    let inner_clone = Arc::clone(inner);
+    async_runtime::block_on(async {
+        match phase {
+            SessionPhase::Listening => {
+                let _ = end_session(&inner_clone).await;
+            }
+            SessionPhase::Starting => {
+                request_stop_during_starting(
+                    &inner_clone,
+                    "mouse dictation disabled while held",
+                );
+            }
+            _ => {}
+        }
+    });
+}
+
 pub(super) fn mouse_dictation_bridge_loop(
     inner: Arc<Inner>,
     rx: mpsc::Receiver<(HotkeyEvent, TriggerSource)>,
@@ -1259,12 +1287,14 @@ pub(super) fn mouse_dictation_supervisor_loop(inner: Arc<Inner>) {
 
         #[cfg(not(target_os = "linux"))]
         if !needs_mouse {
+            sync_release_mouse_hold_sources(&inner);
             inner.mouse_dictation.lock().take();
             return;
         }
 
         #[cfg(target_os = "linux")]
         if !needs_mouse {
+            sync_release_mouse_hold_sources(&inner);
             inner.mouse_dictation.lock().take();
             return;
         }
@@ -1303,6 +1333,7 @@ fn start_mouse_dictation_monitor(
 }
 
 pub(super) fn update_mouse_dictation_binding_now(inner: &Arc<Inner>) {
+    sync_release_mouse_hold_sources(inner);
     inner.mouse_dictation.lock().take();
     let inner_clone = Arc::clone(inner);
     std::thread::Builder::new()
