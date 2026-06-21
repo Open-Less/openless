@@ -125,9 +125,9 @@ export interface HotkeyStatus {
 }
 
 export interface ShortcutBinding {
-  /** 主键，例如 "D" / "Space" / "F1" / "RightOption" / "LeftShift" */
+  /** 主键，例如 "D" / "Space" / "F1" / "RightOption" / "Shift" */
   primary: string;
-  /** 修饰符：泛化 tag（cmd/ctrl/…）或侧别 tag（cmd-left/ctrl-right/…）。 */
+  /** 修饰符 tag，例如 "cmd" | "shift" | "alt" | "ctrl" */
   modifiers: string[];
 }
 
