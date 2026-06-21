@@ -16,7 +16,7 @@ use crate::types::HotkeyMode;
 /// 使用 `futures::executor::block_on` 作为通用回退，它不依赖 tokio。
 fn block_on_async<F>(f: F)
 where
-    F: std::future::Future,
+    F: std::future::Future<Output = ()>,
 {
     if let Ok(handle) = tokio::runtime::Handle::try_current() {
         // 尝试用 tokio Handle 直接 block_on；单线程 runtime 上这也会 panic，
@@ -24,13 +24,12 @@ where
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             handle.block_on(f)
         }));
-        match result {
-            Ok(v) => return v,
-            Err(_) => {}
+        if result.is_ok() {
+            return;
         }
     }
     // 回退：使用 futures executor（不依赖 tokio runtime）
-    futures::executor::block_on(f)
+    futures::executor::block_on(f);
 }
 
 // ─────────────────────────── hotkey bridging ───────────────────────────
