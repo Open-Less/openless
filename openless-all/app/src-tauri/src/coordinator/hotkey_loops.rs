@@ -1250,6 +1250,32 @@ pub(super) fn sync_release_mouse_hold_sources(inner: &Arc<Inner>) {
     });
 }
 
+/// Clears all active Hold sources when dictation hotkey/mode is rebound mid-hold.
+/// Prefs may already reflect the new mode, so this must not gate on `HotkeyMode::Hold`.
+pub(super) fn clear_active_hold_sources_on_hotkey_rebind(inner: &Arc<Inner>) {
+    if inner.hold_sources.active_count() == 0 {
+        return;
+    }
+    inner.hold_sources.reset();
+    inner.hotkey_trigger_held.store(false, Ordering::SeqCst);
+    let phase = inner.state.lock().phase;
+    let inner_clone = Arc::clone(inner);
+    async_runtime::block_on(async {
+        match phase {
+            SessionPhase::Listening => {
+                let _ = end_session(&inner_clone).await;
+            }
+            SessionPhase::Starting => {
+                request_stop_during_starting(
+                    &inner_clone,
+                    "hotkey binding changed while hold sources active",
+                );
+            }
+            _ => {}
+        }
+    });
+}
+
 pub(super) fn mouse_dictation_bridge_loop(
     inner: Arc<Inner>,
     rx: mpsc::Receiver<(HotkeyEvent, TriggerSource)>,
