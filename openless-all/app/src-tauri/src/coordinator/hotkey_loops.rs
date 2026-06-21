@@ -10,6 +10,20 @@ use super::*;
 use crate::hold_source_tracker::TriggerSource;
 use crate::types::HotkeyMode;
 
+/// 在可能已有 tokio runtime 的线程上安全地执行异步块。
+/// 测试环境中（tokio::test）调用 `async_runtime::block_on` 会 panic，
+/// 因此优先尝试 `Handle::current().block_on`。
+fn block_on_async<F>(f: F)
+where
+    F: std::future::Future,
+{
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        tokio::task::block_in_place(|| handle.block_on(f));
+    } else {
+        async_runtime::block_on(f);
+    }
+}
+
 // ─────────────────────────── hotkey bridging ───────────────────────────
 
 pub(super) fn hotkey_supervisor_loop(inner: Arc<Inner>) {
@@ -1235,7 +1249,7 @@ pub(super) fn sync_release_mouse_hold_sources(inner: &Arc<Inner>) {
     }
     let phase = inner.state.lock().phase;
     let inner_clone = Arc::clone(inner);
-    async_runtime::block_on(async {
+    block_on_async(async {
         match phase {
             SessionPhase::Listening => {
                 let _ = end_session(&inner_clone).await;
@@ -1261,7 +1275,7 @@ pub(super) fn clear_active_hold_sources_on_hotkey_rebind(inner: &Arc<Inner>) {
     inner.hotkey_trigger_held.store(false, Ordering::SeqCst);
     let phase = inner.state.lock().phase;
     let inner_clone = Arc::clone(inner);
-    async_runtime::block_on(async {
+    block_on_async(async {
         match phase {
             SessionPhase::Listening => {
                 let _ = end_session(&inner_clone).await;
