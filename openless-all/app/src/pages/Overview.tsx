@@ -1,6 +1,6 @@
 // Overview.tsx — 真实指标，从 listHistory + getCredentials 派生。
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../components/Icon';
 import { formatComboLabel } from '../lib/hotkey';
@@ -52,6 +52,10 @@ const LLM_NAME_KEY_BY_ID: Record<string, string> = {
   custom: 'custom',
 };
 
+type ActivityMode = 'daily' | 'weekly' | 'cumulative';
+
+const ACTIVITY_MODES: ActivityMode[] = ['daily', 'weekly', 'cumulative'];
+
 export function Overview({ onOpenHistory }: OverviewProps) {
   const { t } = useTranslation();
   const mobile = useMobileLayout();
@@ -67,6 +71,7 @@ export function Overview({ onOpenHistory }: OverviewProps) {
     volcengineConfigured: false,
     arkConfigured: false,
   });
+  const [activityMode, setActivityMode] = useState<ActivityMode>('daily');
   const { prefs } = useHotkeySettings();
   const credentialsRequestSeq = useRef(0);
 
@@ -159,6 +164,17 @@ export function Overview({ onOpenHistory }: OverviewProps) {
     return buckets;
   }, [history]);
 
+  const monthNames = useMemo(
+    () => t('overview.monthNames', { returnObjects: true }) as string[],
+    [t],
+  );
+
+  const yearlyActivity = useMemo(
+    () => buildYearlyActivity(history, monthNames, activityMode),
+    [history, monthNames, activityMode],
+  );
+  const showActivityHeatmap = prefs?.showOverviewActivityHeatmap !== false;
+
   const asrProviderId = creds.activeAsrProvider || 'volcengine';
   const llmProviderId = creds.activeLlmProvider || 'ark';
   const asrNameKey = ASR_NAME_KEY_BY_ID[asrProviderId];
@@ -189,18 +205,16 @@ export function Overview({ onOpenHistory }: OverviewProps) {
         />
       </div>
 
-      <div className="ol-overview-hero" style={{ display: 'grid', gridTemplateColumns: mobile ? 'repeat(2, 1fr)' : 'repeat(4, 1fr)', gap: 12, marginBottom: 18 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: mobile ? 'repeat(2, 1fr)' : 'repeat(4, 1fr)', gap: 12, marginBottom: 18 }}>
         <Metric icon="hash" label={t('overview.metricChars')} value={historyError ? '—' : metrics.charsToday.toLocaleString()} trend={historyError ? t('overview.historyLoadError') : t('overview.metricSegments', { count: metrics.segmentsToday })} />
         <Metric icon="mic" label={t('overview.metricDuration')} value={historyError ? '—' : formatDuration(metrics.totalDurationMs, t)} trend={historyError ? t('overview.historyLoadError') : ''} />
         <Metric icon="clock" label={t('overview.metricAvg')} value={historyError ? '—' : formatDuration(metrics.avgLatencyMs, t)} trend={historyError ? t('overview.historyLoadError') : metrics.segmentsToday > 0 ? t('overview.metricAvgTrend') : t('overview.metricNoData')} />
         <Metric icon="bolt" label={t('overview.metricTotal')} value={historyError ? '—' : String(history.length)} trend={historyError ? t('overview.historyLoadError') : t('overview.metricTotalTrend')} accent />
       </div>
 
-      {/* 底部一行 = flex:1 撑满剩余高度（父 wrapper 是 display:flex/column）。
-          只有「最近识别」内部允许滚动；其他卡片按内容自然高度，不破裂底部圆角。
-          issue #243 follow-up：去掉外层 overflow 后底部圆角被裁的视觉问题。 */}
-      <div style={{ display: 'grid', gridTemplateColumns: mobile ? '1fr' : '1fr 1.4fr', gap: 12, flex: mobile ? undefined : 1, minHeight: mobile ? undefined : 0 }}>
-        <Card padding={18} style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+      {/* 近 7 天和最近识别固定一个可读高度；最近识别内部滚动，避免和年度活动互相遮挡。 */}
+      <div style={{ display: 'grid', gridTemplateColumns: mobile ? '1fr' : '1fr 1.4fr', gap: 12, flexShrink: 0, height: mobile ? undefined : 210 }}>
+        <Card padding={18} style={{ display: 'flex', flexDirection: 'column', height: mobile ? undefined : '100%', minHeight: 0, overflow: 'hidden' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
             <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--ol-ink-2)' }}>{t('overview.weekTitle')}</span>
             <span style={{ fontSize: 11, color: 'var(--ol-ink-4)' }}>{t('overview.weekUnit')}</span>
@@ -212,12 +226,15 @@ export function Overview({ onOpenHistory }: OverviewProps) {
           ) : (
             <WeekChart data={weekly} />
           )}
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: 'var(--ol-ink-4)', marginTop: 8 }}>
-            {weekDayLabels(t('overview.weekDays', { returnObjects: true }) as string[]).map((d, i) => <span key={i}>{d}</span>)}
+          <div style={{ display: 'grid', gridTemplateColumns: '28px minmax(0, 1fr)', gap: 8, fontSize: 10, color: 'var(--ol-ink-4)', marginTop: 8 }}>
+            <span aria-hidden="true" />
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0, 1fr))', gap: 8 }}>
+              {weekDayLabels(t('overview.weekDays', { returnObjects: true }) as string[]).map((d, i) => <span key={i} style={{ textAlign: 'center' }}>{d}</span>)}
+            </div>
           </div>
         </Card>
 
-        <Card padding={0} style={{ display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden' }}>
+        <Card padding={0} style={{ display: 'flex', flexDirection: 'column', height: mobile ? undefined : '100%', minHeight: 0, overflow: 'hidden' }}>
           <div style={{ padding: '14px 18px', borderBottom: '0.5px solid var(--ol-line)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
             <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--ol-ink-2)' }}>{t('overview.recentTitle')}</span>
             <Btn size="sm" variant="ghost" onClick={onOpenHistory}>{t('overview.recentAll')}</Btn>
@@ -243,6 +260,15 @@ export function Overview({ onOpenHistory }: OverviewProps) {
           </div>
         </Card>
       </div>
+
+      {showActivityHeatmap && (
+        <ActivityHeatmapCard
+          activity={yearlyActivity}
+          mode={activityMode}
+          onModeChange={setActivityMode}
+          historyError={historyError}
+        />
+      )}
     </>
   );
 }
@@ -318,27 +344,423 @@ function Metric({ icon, label, value, trend, accent }: MetricProps) {
 
 function WeekChart({ data }: { data: number[] }) {
   const max = Math.max(...data, 1);
+  const mid = Math.ceil(max / 2);
   return (
-    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8, height: 100 }}>
-      {data.map((v, i) => {
-        const isToday = i === 6;
-        return (
-          <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
-            <div style={{ fontSize: 9.5, color: isToday ? 'var(--ol-blue)' : 'var(--ol-ink-4)', fontWeight: isToday ? 600 : 400 }}>{v}</div>
-            <div
-              style={{
-                width: '100%',
-                height: `${(v / max) * 80}px`,
-                minHeight: 2,
-                borderRadius: 4,
-                background: isToday ? 'var(--ol-blue)' : 'var(--ol-ink-4)',
-                opacity: v === 0 ? 0.15 : isToday ? 1 : 0.85,
-                transition: 'height 0.18s var(--ol-motion-soft), opacity 0.18s var(--ol-motion-soft)',
-              }}
-            />
+    <div style={{ display: 'grid', gridTemplateColumns: '28px minmax(0, 1fr)', gap: 8, height: 108 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', alignItems: 'flex-end', fontSize: 9.5, color: 'var(--ol-ink-4)', lineHeight: 1 }}>
+        <span>{max}</span>
+        <span>{mid}</span>
+        <span>0</span>
+      </div>
+      <div style={{ position: 'relative', display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0, 1fr))', alignItems: 'end', gap: 8, height: 108, paddingTop: 12, borderBottom: '0.5px solid var(--ol-line)' }}>
+        <span aria-hidden="true" style={{ position: 'absolute', left: 0, right: 0, top: 12, borderTop: '0.5px solid color-mix(in srgb, var(--ol-ink) 8%, transparent)' }} />
+        <span aria-hidden="true" style={{ position: 'absolute', left: 0, right: 0, top: 58, borderTop: '0.5px solid color-mix(in srgb, var(--ol-ink) 6%, transparent)' }} />
+        {data.map((v, i) => {
+          const isToday = i === 6;
+          const barHeight = v > 0 ? Math.max(6, (v / max) * 74) : 3;
+          return (
+            <div key={i} style={{ position: 'relative', zIndex: 1, flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-end', gap: 4 }}>
+              <div style={{ fontSize: 9.5, color: isToday ? 'var(--ol-blue)' : 'var(--ol-ink-4)', fontWeight: isToday ? 700 : 500 }}>{v}</div>
+              <div
+                style={{
+                  width: '100%',
+                  height: barHeight,
+                  borderRadius: '4px 4px 1px 1px',
+                  background: isToday ? 'var(--ol-blue)' : 'color-mix(in srgb, var(--ol-blue) 58%, var(--ol-surface))',
+                  opacity: v === 0 ? 0.22 : 1,
+                  transition: 'height 0.18s var(--ol-motion-soft), opacity 0.18s var(--ol-motion-soft)',
+                }}
+              />
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+interface DayActivity {
+  key: string;
+  date: Date;
+  rawCount: number;
+  rawChars: number;
+  count: number;
+  chars: number;
+  level: number;
+  inRange: boolean;
+}
+
+interface WeekActivity {
+  key: string;
+  startDate: Date;
+  endDate: Date;
+  count: number;
+  chars: number;
+  cumulativeCount: number;
+  cumulativeChars: number;
+  value: number;
+  valueChars: number;
+  level: number;
+  inRange: boolean;
+}
+
+interface MonthLabel {
+  weekIndex: number;
+  label: string;
+}
+
+interface YearlyActivity {
+  cells: DayActivity[];
+  weeks: number;
+  weekColumns: number;
+  activeDays: number;
+  maxCount: number;
+  maxWeekValue: number;
+  weekBars: WeekActivity[];
+  monthLabels: MonthLabel[];
+  weekMonthLabels: MonthLabel[];
+}
+
+function ActivityHeatmapCard({
+  activity,
+  mode,
+  onModeChange,
+  historyError,
+}: {
+  activity: YearlyActivity;
+  mode: ActivityMode;
+  onModeChange: (mode: ActivityMode) => void;
+  historyError: boolean;
+}) {
+  const { t } = useTranslation();
+  const mobile = useMobileLayout();
+  const cardRef = useRef<HTMLDivElement | null>(null);
+  const [hoveredKey, setHoveredKey] = useState<string | null>(null);
+  const [hoverPoint, setHoverPoint] = useState<{ x: number; y: number; align: 'left' | 'center' | 'right' } | null>(null);
+  const cellSize = 12;
+  const cellGap = 4;
+  const dayGridWidth = activity.weeks * cellSize + Math.max(0, activity.weeks - 1) * cellGap;
+  const weekGridWidth = activity.weekColumns * cellSize + Math.max(0, activity.weekColumns - 1) * cellGap;
+  const hoveredDay = mode === 'daily' && hoveredKey
+    ? activity.cells.find(cell => cell.key === hoveredKey) ?? null
+    : null;
+  const hoveredWeek = mode !== 'daily' && hoveredKey
+    ? activity.weekBars.find(week => week.key === hoveredKey) ?? null
+    : null;
+  const summaryArgs = hoveredDay
+    ? activityDaySummaryArgs(hoveredDay)
+    : hoveredWeek && mode !== 'daily'
+      ? activityWeekSummaryArgs(mode, hoveredWeek)
+      : null;
+  const summaryText = summaryArgs ? t(summaryArgs.key, summaryArgs.options) : null;
+  const showTooltip = Boolean(summaryText && hoverPoint);
+  const handleHover = useCallback((key: string, event: PointerEvent<HTMLElement>) => {
+    const cardRect = cardRef.current?.getBoundingClientRect();
+    const targetRect = event.currentTarget.getBoundingClientRect();
+    if (!cardRect) return;
+    const x = targetRect.left + targetRect.width / 2 - cardRect.left;
+    const y = targetRect.top - cardRect.top;
+    const align = x < 140 ? 'left' : x > cardRect.width - 140 ? 'right' : 'center';
+    setHoveredKey(key);
+    setHoverPoint({ x, y, align });
+  }, []);
+  const clearHover = useCallback(() => {
+    setHoveredKey(null);
+    setHoverPoint(null);
+  }, []);
+
+  return (
+    <Card padding={18} style={{ marginTop: 12, overflow: 'hidden', flexShrink: 0, position: 'relative' }}>
+      <div ref={cardRef} style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }} />
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: mobile ? '1fr' : 'minmax(0, 1fr) auto',
+          alignItems: 'center',
+          gap: mobile ? 10 : 14,
+          marginBottom: 16,
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, justifySelf: 'start' }}>
+          <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--ol-ink-2)' }}>{t('overview.activityTitle')}</span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: mobile ? 'flex-start' : 'flex-end', gap: 4, justifySelf: mobile ? 'start' : 'end' }}>
+          {ACTIVITY_MODES.map(activityMode => {
+            const selected = activityMode === mode;
+            return (
+              <button
+                key={activityMode}
+                type="button"
+                onClick={() => onModeChange(activityMode)}
+                aria-pressed={selected}
+                style={{
+                  height: 28,
+                  padding: '0 8px',
+                  border: '0.5px solid transparent',
+                  borderRadius: 7,
+                  background: selected ? 'color-mix(in srgb, var(--ol-ink) 8%, transparent)' : 'transparent',
+                  color: selected ? 'var(--ol-ink)' : 'var(--ol-ink-4)',
+                  fontSize: 12,
+                  fontWeight: selected ? 700 : 600,
+                  cursor: 'pointer',
+                  transition: 'background 0.16s var(--ol-motion-quick), color 0.16s var(--ol-motion-quick)',
+                }}
+              >
+                {t(`overview.activityMode.${activityMode}`)}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {historyError ? (
+        <div style={{ minHeight: 116, display: 'flex', alignItems: 'center', justifyContent: 'center', textAlign: 'center', fontSize: 12, color: 'var(--ol-ink-4)' }}>{t('overview.historyLoadError')}</div>
+      ) : activity.activeDays === 0 ? (
+        <div style={{ minHeight: 116, display: 'flex', alignItems: 'center', justifyContent: 'center', textAlign: 'center', fontSize: 12, color: 'var(--ol-ink-4)' }}>{t('overview.activityEmpty')}</div>
+      ) : mode === 'daily' ? (
+        <ActivityDailyGrid
+          mode={mode}
+          activity={activity}
+          cellSize={cellSize}
+          cellGap={cellGap}
+          minGridWidth={dayGridWidth}
+          hoveredKey={hoveredKey}
+          onHover={handleHover}
+          onLeave={clearHover}
+        />
+      ) : (
+        <ActivityWeekGrid
+          activity={activity}
+          mode={mode}
+          cellSize={cellSize}
+          cellGap={cellGap}
+          minGridWidth={weekGridWidth}
+          hoveredKey={hoveredKey}
+          onHover={handleHover}
+          onLeave={clearHover}
+        />
+      )}
+      {showTooltip && hoverPoint && (
+        <div
+          style={{
+            position: 'absolute',
+            left: hoverPoint.x,
+            top: Math.max(34, hoverPoint.y - 3),
+            transform: hoverPoint.align === 'left'
+              ? 'translate(0, -100%)'
+              : hoverPoint.align === 'right'
+                ? 'translate(-100%, -100%)'
+                : 'translate(-50%, -100%)',
+            zIndex: 2,
+            maxWidth: 320,
+            padding: '6px 12px',
+            border: '0.5px solid color-mix(in srgb, var(--ol-ink) 10%, transparent)',
+            borderRadius: 999,
+            background: 'var(--ol-surface)',
+            color: 'var(--ol-ink)',
+            boxShadow: '0 8px 24px color-mix(in srgb, var(--ol-ink) 12%, transparent)',
+            fontSize: 12,
+            fontWeight: 500,
+            whiteSpace: 'nowrap',
+            pointerEvents: 'none',
+          }}
+        >
+          {summaryText}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function ActivityDailyGrid({
+  mode,
+  activity,
+  cellSize,
+  cellGap,
+  minGridWidth,
+  hoveredKey,
+  onHover,
+  onLeave,
+}: {
+  mode: ActivityMode;
+  activity: YearlyActivity;
+  cellSize: number;
+  cellGap: number;
+  minGridWidth: number;
+  hoveredKey: string | null;
+  onHover: (key: string, event: PointerEvent<HTMLElement>) => void;
+  onLeave: () => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div onPointerLeave={onLeave}>
+      <div className="ol-thinscroll" style={{ overflowX: 'auto', overflowY: 'hidden', paddingBottom: 2, flex: 1 }}>
+        <div style={{ minWidth: minGridWidth, width: 'max-content' }}>
+          <div
+            aria-label={t('overview.activityTitle')}
+            style={{
+              display: 'grid',
+              gridTemplateColumns: `repeat(${activity.weeks}, ${cellSize}px)`,
+              gridTemplateRows: `repeat(7, ${cellSize}px)`,
+              gridAutoFlow: 'column',
+              gap: cellGap,
+            }}
+          >
+            {activity.cells.map(cell => {
+              const selected = hoveredKey === cell.key;
+              const cellSummary = activityDaySummaryArgs(cell);
+              const weekIndex = Math.floor(differenceInDays(cell.date, activity.cells[0]?.date ?? cell.date) / 7);
+              return (
+                <div
+                  key={`${mode}-${cell.key}`}
+                  title={cell.inRange ? t(cellSummary.key, cellSummary.options) : undefined}
+                  onPointerEnter={(event) => {
+                    if (cell.inRange) onHover(cell.key, event);
+                  }}
+                  onPointerMove={(event) => {
+                    if (cell.inRange) onHover(cell.key, event);
+                  }}
+                  style={{
+                    width: cellSize,
+                    height: cellSize,
+                    borderRadius: 4,
+                    background: activityColor(cell.level),
+                    opacity: cell.inRange ? 1 : 0,
+                    boxShadow: cell.inRange
+                      ? selected
+                        ? '0 0 0 1.5px color-mix(in srgb, var(--ol-ink) 42%, transparent) inset'
+                        : '0 0 0 0.5px color-mix(in srgb, var(--ol-ink) 10%, transparent) inset'
+                      : 'none',
+                    cursor: cell.inRange ? 'default' : 'auto',
+                    transform: 'scale(1)',
+                    animation: cell.inRange ? `ol-activity-cell-in 0.22s var(--ol-motion-soft) ${Math.min(Math.max(0, weekIndex) * 5, 260)}ms both` : undefined,
+                    transition: 'background 0.16s var(--ol-motion-quick), transform 0.12s var(--ol-motion-quick), box-shadow 0.12s var(--ol-motion-quick)',
+                  }}
+                />
+              );
+            })}
           </div>
-        );
-      })}
+          <ActivityMonthLabels labels={activity.monthLabels} weeks={activity.weeks} cellSize={cellSize} cellGap={cellGap} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ActivityWeekGrid({
+  activity,
+  mode,
+  cellSize,
+  cellGap,
+  minGridWidth,
+  hoveredKey,
+  onHover,
+  onLeave,
+}: {
+  activity: YearlyActivity;
+  mode: Exclude<ActivityMode, 'daily'>;
+  cellSize: number;
+  cellGap: number;
+  minGridWidth: number;
+  hoveredKey: string | null;
+  onHover: (key: string, event: PointerEvent<HTMLElement>) => void;
+  onLeave: () => void;
+}) {
+  const { t } = useTranslation();
+
+  return (
+    <div onPointerLeave={onLeave}>
+      <div className="ol-thinscroll" style={{ overflowX: 'auto', overflowY: 'hidden', paddingBottom: 2, flex: 1 }}>
+      <div style={{ minWidth: minGridWidth, width: 'max-content' }}>
+        <div
+          aria-label={t(`overview.activityMode.${mode}`)}
+          style={{
+            display: 'grid',
+            gridTemplateColumns: `repeat(${activity.weekColumns}, ${cellSize}px)`,
+            gridTemplateRows: `repeat(7, ${cellSize}px)`,
+            gridAutoFlow: 'column',
+            gap: cellGap,
+          }}
+        >
+          {activity.weekBars.flatMap((week, weekIndex) => {
+            const summary = activityWeekSummaryArgs(mode, week);
+            const filledCells = activityDiscreteCells(week.value, activity.maxWeekValue);
+            return Array.from({ length: 7 }).map((_, rowIndex) => {
+              const selected = hoveredKey === week.key;
+              const filled = rowIndex >= 7 - filledCells;
+              return (
+              <div
+                key={`${mode}-${week.key}-${rowIndex}`}
+                title={week.inRange ? t(summary.key, summary.options) : undefined}
+                onPointerEnter={(event) => {
+                  if (week.inRange) onHover(week.key, event);
+                }}
+                onPointerMove={(event) => {
+                  if (week.inRange) onHover(week.key, event);
+                }}
+                style={{
+                  width: cellSize,
+                  height: cellSize,
+                  borderRadius: 4,
+                  background: filled ? activityColor(week.level) : activityColor(0),
+                  opacity: week.inRange ? 1 : 0,
+                  boxShadow: week.inRange
+                    ? selected
+                      ? '0 0 0 1.5px color-mix(in srgb, var(--ol-ink) 42%, transparent) inset'
+                      : '0 0 0 0.5px color-mix(in srgb, var(--ol-ink) 10%, transparent) inset'
+                    : 'none',
+                  cursor: week.inRange ? 'default' : 'auto',
+                  transform: 'scale(1)',
+                  animation: week.inRange ? `ol-activity-cell-in 0.22s var(--ol-motion-soft) ${Math.min(weekIndex * 5, 260)}ms both` : undefined,
+                  transition: 'background 0.16s var(--ol-motion-quick), transform 0.12s var(--ol-motion-quick), box-shadow 0.12s var(--ol-motion-quick)',
+                }}
+              />
+              );
+            });
+          })}
+        </div>
+        <ActivityMonthLabels labels={activity.weekMonthLabels} weeks={activity.weekColumns} cellSize={cellSize} cellGap={cellGap} />
+      </div>
+      </div>
+    </div>
+  );
+}
+
+function ActivityMonthLabels({
+  labels,
+  weeks,
+  cellSize,
+  cellGap,
+}: {
+  labels: MonthLabel[];
+  weeks: number;
+  cellSize: number;
+  cellGap: number;
+}) {
+  return (
+    <div
+      style={{
+        display: 'grid',
+        gridTemplateColumns: `repeat(${weeks}, ${cellSize}px)`,
+        columnGap: cellGap,
+        minHeight: 18,
+        marginTop: 12,
+        color: 'var(--ol-ink-4)',
+        fontSize: 11,
+      }}
+    >
+      {labels.map(label => (
+        <span
+          key={`${label.weekIndex}-${label.label}`}
+          style={{
+            gridColumn: `${label.weekIndex + 1} / span 2`,
+            whiteSpace: 'nowrap',
+            lineHeight: '16px',
+          }}
+        >
+          {label.label}
+        </span>
+      ))}
     </div>
   );
 }
@@ -361,6 +783,223 @@ function RecentRow({ session, modeLabel }: { session: DictationSession; modeLabe
       </span>
     </div>
   );
+}
+
+function buildYearlyActivity(history: DictationSession[], monthNames: string[], mode: ActivityMode): YearlyActivity {
+  const today = startOfLocalDay(new Date());
+  const rangeStart = addDays(today, -364);
+  const gridStart = rangeStart;
+  const weeks = Math.ceil((differenceInDays(today, gridStart) + 1) / 7);
+  const weekGridStart = startOfWeek(rangeStart);
+  const weekColumns = Math.ceil((differenceInDays(today, weekGridStart) + 1) / 7);
+  const byDay = new Map<string, { count: number; chars: number }>();
+
+  history.forEach(session => {
+    const date = startOfLocalDay(new Date(session.createdAt));
+    if (isNaN(date.getTime()) || date < rangeStart || date > today) return;
+    const key = localDateKey(date);
+    const current = byDay.get(key) ?? { count: 0, chars: 0 };
+    current.count += 1;
+    current.chars += session.finalText.length;
+    byDay.set(key, current);
+  });
+
+  const rawCells: Array<Omit<DayActivity, 'count' | 'chars' | 'level'>> = [];
+  for (let i = 0; i < weeks * 7; i += 1) {
+    const date = addDays(gridStart, i);
+    const inRange = date >= rangeStart && date <= today;
+    const key = localDateKey(date);
+    const stats = inRange ? byDay.get(key) : undefined;
+    rawCells.push({
+      key,
+      date,
+      rawCount: stats?.count ?? 0,
+      rawChars: stats?.chars ?? 0,
+      inRange,
+    });
+  }
+
+  let cumulativeCount = 0;
+  let cumulativeChars = 0;
+  const metricCells = rawCells.map(cell => ({
+    ...cell,
+    count: cell.inRange ? cell.rawCount : 0,
+    chars: cell.inRange ? cell.rawChars : 0,
+  }));
+
+  const maxCount = Math.max(...metricCells.filter(cell => cell.inRange).map(cell => cell.count), 0);
+  const cells = metricCells.map(cell => ({
+    ...cell,
+    level: cell.inRange ? activityLevel(cell.count, maxCount) : 0,
+  }));
+
+  const rawWeeks: Array<Omit<WeekActivity, 'level'>> = [];
+  for (let weekIndex = 0; weekIndex < weekColumns; weekIndex += 1) {
+    const startDate = addDays(weekGridStart, weekIndex * 7);
+    const endDate = addDays(startDate, 6);
+    const inRange = endDate >= rangeStart && startDate <= today;
+    let stats = { count: 0, chars: 0 };
+    for (let offset = 0; offset < 7; offset += 1) {
+      const date = addDays(startDate, offset);
+      if (date < rangeStart || date > today) continue;
+      const dayStats = byDay.get(localDateKey(date));
+      if (!dayStats) continue;
+      stats = { count: stats.count + dayStats.count, chars: stats.chars + dayStats.chars };
+    }
+    if (inRange) {
+      cumulativeCount += stats.count;
+      cumulativeChars += stats.chars;
+    }
+    const value = mode === 'cumulative' ? cumulativeCount : stats.count;
+    const valueChars = mode === 'cumulative' ? cumulativeChars : stats.chars;
+    rawWeeks.push({
+      key: localDateKey(startDate),
+      startDate,
+      endDate: endDate > today ? today : endDate,
+      count: inRange ? stats.count : 0,
+      chars: inRange ? stats.chars : 0,
+      cumulativeCount: inRange ? cumulativeCount : 0,
+      cumulativeChars: inRange ? cumulativeChars : 0,
+      value: inRange ? value : 0,
+      valueChars: inRange ? valueChars : 0,
+      inRange,
+    });
+  }
+
+  const maxWeekValue = Math.max(...rawWeeks.filter(week => week.inRange).map(week => week.value), 0);
+  const weekBars = rawWeeks.map(week => ({
+    ...week,
+    level: week.inRange ? activityLevel(week.value, maxWeekValue) : 0,
+  }));
+
+  const monthLabels: MonthLabel[] = [];
+  let lastMonth = -1;
+  for (let weekIndex = 0; weekIndex < weeks; weekIndex += 1) {
+    const weekCells = cells.slice(weekIndex * 7, weekIndex * 7 + 7).filter(cell => cell.inRange);
+    const candidate = weekCells.find(cell => cell.date.getDate() === 1);
+    if (!candidate) continue;
+    const month = candidate.date.getMonth();
+    if (month === lastMonth) continue;
+    lastMonth = month;
+    monthLabels.push({
+      weekIndex,
+      label: monthNames[month] ?? String(month + 1),
+    });
+  }
+  const weekMonthLabels: MonthLabel[] = [];
+  let lastWeekMonth = -1;
+  for (let weekIndex = 0; weekIndex < weekColumns; weekIndex += 1) {
+    let candidate: Date | null = null;
+    const weekStart = addDays(weekGridStart, weekIndex * 7);
+    for (let offset = 0; offset < 7; offset += 1) {
+      const date = addDays(weekStart, offset);
+      if (date >= rangeStart && date <= today && date.getDate() === 1) {
+        candidate = date;
+        break;
+      }
+    }
+    if (!candidate) continue;
+    const month = candidate.getMonth();
+    if (month === lastWeekMonth) continue;
+    lastWeekMonth = month;
+    weekMonthLabels.push({
+      weekIndex,
+      label: monthNames[month] ?? String(month + 1),
+    });
+  }
+
+  return {
+    cells,
+    weeks,
+    weekColumns,
+    activeDays: rawCells.filter(cell => cell.inRange && cell.rawCount > 0).length,
+    maxCount,
+    maxWeekValue,
+    weekBars,
+    monthLabels,
+    weekMonthLabels,
+  };
+}
+
+function activityLevel(count: number, maxCount: number): number {
+  if (count <= 0 || maxCount <= 0) return 0;
+  const ratio = count / maxCount;
+  if (ratio <= 0.25) return 1;
+  if (ratio <= 0.5) return 2;
+  if (ratio <= 0.75) return 3;
+  return 4;
+}
+
+function activityDiscreteCells(value: number, maxValue: number): number {
+  if (value <= 0 || maxValue <= 0) return 0;
+  return Math.min(7, Math.max(1, Math.ceil((value / maxValue) * 7)));
+}
+
+function activityColor(level: number): string {
+  const base = 'var(--ol-blue)';
+  switch (level) {
+    case 1:
+      return `color-mix(in srgb, ${base} 26%, var(--ol-surface))`;
+    case 2:
+      return `color-mix(in srgb, ${base} 44%, var(--ol-surface))`;
+    case 3:
+      return `color-mix(in srgb, ${base} 68%, var(--ol-surface))`;
+    case 4:
+      return base;
+    default:
+      return 'color-mix(in srgb, var(--ol-ink) 8%, var(--ol-surface))';
+  }
+}
+
+function activityDaySummaryArgs(cell: DayActivity): { key: string; options: Record<string, string | number> } {
+  const date = formatHeatmapMonthDay(cell.date);
+  return {
+    key: 'overview.activitySummaryDaily',
+    options: { date, count: cell.rawCount.toLocaleString(), chars: cell.rawChars.toLocaleString() },
+  };
+}
+
+function activityWeekSummaryArgs(mode: Exclude<ActivityMode, 'daily'>, week: WeekActivity): { key: string; options: Record<string, string | number> } {
+  const start = formatHeatmapDisplayDate(week.startDate);
+  if (mode === 'weekly') {
+    return {
+      key: 'overview.activitySummaryWeekly',
+      options: { start, count: week.count.toLocaleString(), chars: week.chars.toLocaleString() },
+    };
+  }
+  return {
+    key: 'overview.activitySummaryCumulative',
+    options: { start, count: week.cumulativeCount.toLocaleString(), chars: week.cumulativeChars.toLocaleString() },
+  };
+}
+
+function startOfLocalDay(date: Date): Date {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+function startOfWeek(date: Date): Date {
+  return addDays(startOfLocalDay(date), -((date.getDay() + 6) % 7));
+}
+
+function addDays(date: Date, days: number): Date {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate() + days);
+}
+
+function differenceInDays(a: Date, b: Date): number {
+  return Math.round((startOfLocalDay(a).getTime() - startOfLocalDay(b).getTime()) / 86400000);
+}
+
+function localDateKey(date: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+function formatHeatmapDisplayDate(date: Date): string {
+  return date.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
+}
+
+function formatHeatmapMonthDay(date: Date): string {
+  return date.toLocaleDateString(undefined, { month: 'long', day: 'numeric' });
 }
 
 function formatTime(iso: string): string {

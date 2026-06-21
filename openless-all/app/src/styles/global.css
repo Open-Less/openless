@@ -122,6 +122,11 @@ a { color: inherit; text-decoration: none; }
   to { transform: rotate(360deg); }
 }
 
+@keyframes ol-activity-cell-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
 @keyframes ol-modal-drawer-in {
   from {
     opacity: 0;

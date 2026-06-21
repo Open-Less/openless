@@ -71,6 +71,7 @@ const previousPrefs: UserPreferences = {
   polishContextWindowMinutes: 5,
   startMinimized: false,
   themeMode: 'system',
+  showOverviewActivityHeatmap: true,
   updateChannel: 'stable',
   streamingInsert: true,
   streamingInsertDefaultMigrated: true,

@@ -84,6 +84,7 @@ export let mockSettings: UserPreferences = {
     polishContextWindowMinutes: 5,
     startMinimized: false,
     themeMode: "system",
+    showOverviewActivityHeatmap: true,
     updateChannel: "stable",
     streamingInsert: true,
     streamingInsertDefaultMigrated: true,
@@ -431,23 +432,40 @@ export const mockMicrophoneDevices: MicrophoneDevice[] = [
     { name: "USB Microphone", isDefault: false },
 ]
 
-export const mockHistory: DictationSession[] = OL_DATA.history.map((h, i) => ({
-    id: `mock-${i}`,
-    createdAt: new Date().toISOString(),
-    rawTranscript: h.preview,
-    finalText: h.preview,
-    mode: "structured",
-    stylePackId: "builtin.structured",
-    translationActive: false,
-    polishSource: null,
-    appBundleId: null,
-    appName: "VS Code",
-    insertStatus: "inserted",
-    errorCode: null,
-    durationMs: 600,
-    dictionaryEntryCount: 28,
-    hasAudioRecording: null,
-}))
+const mockHistoryOffsets = [0, 0, 0, 1, 1, 2, 3, 3, 4, 5, 6, 15, 32, 54, 91, 130, 178, 230, 292, 340]
+const mockHistoryModes: PolishMode[] = ["structured", "light", "raw", "formal"]
+const mockHistoryApps = ["VS Code", "Obsidian", "Chrome", "微信", "Word"]
+
+function mockCreatedAt(dayOffset: number, index: number): string {
+    const source = OL_DATA.history[index % OL_DATA.history.length]
+    const [hours = 12, minutes = 0] = source.time.split(":").map(Number)
+    const date = new Date()
+    date.setDate(date.getDate() - dayOffset)
+    date.setHours(hours, minutes, 0, 0)
+    return date.toISOString()
+}
+
+export const mockHistory: DictationSession[] = mockHistoryOffsets.map((dayOffset, i) => {
+    const h = OL_DATA.history[i % OL_DATA.history.length]
+    const mode = mockHistoryModes[i % mockHistoryModes.length]
+    return {
+        id: `mock-${dayOffset}-${i}`,
+        createdAt: mockCreatedAt(dayOffset, i),
+        rawTranscript: h.preview,
+        finalText: h.preview,
+        mode,
+        stylePackId: `builtin.${mode}`,
+        translationActive: false,
+        polishSource: null,
+        appBundleId: null,
+        appName: mockHistoryApps[i % mockHistoryApps.length],
+        insertStatus: "inserted",
+        errorCode: null,
+        durationMs: 9000 + (i % 6) * 1800,
+        dictionaryEntryCount: 12 + (i % 5) * 4,
+        hasAudioRecording: null,
+    }
+})
 
 export const mockVocab: DictionaryEntry[] = OL_DATA.vocab.map((v, i) => ({
     id: `vocab-${i}`,

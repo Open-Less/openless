@@ -334,6 +334,8 @@ export interface UserPreferences {
   startMinimized: boolean;
   /** UI theme preference: follow OS, light, or dark. */
   themeMode: ThemeMode;
+  /** Show the annual activity heatmap on the Overview page. Default true. */
+  showOverviewActivityHeatmap: boolean;
   /** 自动更新渠道。'stable'（默认）= plugin-updater 仅检查正式版；
    *  'beta' = Settings → About 出现手动下载 Beta 的入口。 */
   updateChannel: UpdateChannel;
