@@ -8,6 +8,7 @@
 use super::*;
 
 use crate::hold_source_tracker::TriggerSource;
+use crate::types::HotkeyMode;
 
 // ─────────────────────────── hotkey bridging ───────────────────────────
 
