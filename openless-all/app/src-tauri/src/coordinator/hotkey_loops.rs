@@ -18,17 +18,8 @@ fn block_on_async<F>(f: F)
 where
     F: std::future::Future<Output = ()>,
 {
-    if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        // 尝试用 tokio Handle 直接 block_on；单线程 runtime 上这也会 panic，
-        // 所以捕获 panic 并回退到 futures executor。
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            handle.block_on(f)
-        }));
-        if result.is_ok() {
-            return;
-        }
-    }
-    // 回退：使用 futures executor（不依赖 tokio runtime）
+    // 直接优先使用 futures executor，因为它不依赖任何 tokio runtime 状态，
+    // 可以安全地在已有 runtime 的线程上调用。
     futures::executor::block_on(f);
 }
 
