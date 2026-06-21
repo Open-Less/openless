@@ -78,6 +78,11 @@ mod side_aware_combo;
 #[cfg(mobile)]
 #[path = "mobile_stubs/side_aware_combo.rs"]
 mod side_aware_combo;
+#[cfg(not(mobile))]
+mod linux_evdev_input;
+#[cfg(mobile)]
+#[path = "mobile_stubs/linux_evdev_input.rs"]
+mod linux_evdev_input;
 #[cfg(mobile)]
 #[path = "mobile_stubs/shortcut_binding.rs"]
 mod shortcut_binding;

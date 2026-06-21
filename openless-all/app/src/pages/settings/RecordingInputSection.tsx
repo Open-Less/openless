@@ -132,7 +132,7 @@ export function RecordingInputSection() {
   const isAndroid = platformCaps?.platform === 'android';
   const showDesktopHotkey = platformCaps?.supportsDesktopHotkey === true;
   const showDesktopInsert = showDesktopHotkey && os !== 'linux';
-  const showMouseDictation = showDesktopHotkey && os !== 'linux';
+  const showMouseDictation = showDesktopHotkey;
   const showDesktopStartup = showDesktopHotkey;
 
   const onModeChange = (mode: HotkeyMode) =>

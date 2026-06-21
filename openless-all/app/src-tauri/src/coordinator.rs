@@ -284,6 +284,8 @@ struct Inner {
     combo_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
     side_aware_combo: Mutex<Option<crate::side_aware_combo::SideAwareComboMonitor>>,
     mouse_dictation: Mutex<Option<crate::mouse_dictation::MouseDictationMonitor>>,
+    #[cfg(target_os = "linux")]
+    linux_evdev: Mutex<Option<crate::linux_evdev_input::LinuxEvdevMonitor>>,
     hold_sources: crate::hold_source_tracker::HoldSourceTracker,
     translation_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
     switch_style_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
@@ -408,6 +410,8 @@ impl Coordinator {
                     combo_hotkey: Mutex::new(None),
                     side_aware_combo: Mutex::new(None),
                     mouse_dictation: Mutex::new(None),
+                    #[cfg(target_os = "linux")]
+                    linux_evdev: Mutex::new(None),
                     hold_sources: crate::hold_source_tracker::HoldSourceTracker::new(),
                     translation_hotkey: Mutex::new(None),
                     switch_style_hotkey: Mutex::new(None),
@@ -503,6 +507,8 @@ impl Coordinator {
                 combo_hotkey: Mutex::new(None),
                 side_aware_combo: Mutex::new(None),
                 mouse_dictation: Mutex::new(None),
+                #[cfg(target_os = "linux")]
+                linux_evdev: Mutex::new(None),
                 hold_sources: crate::hold_source_tracker::HoldSourceTracker::new(),
                 translation_hotkey: Mutex::new(None),
                 switch_style_hotkey: Mutex::new(None),
@@ -833,6 +839,8 @@ impl Coordinator {
         if crate::shortcut_binding::legacy_modifier_trigger(&prefs.dictation_hotkey).is_some() {
             take_combo_hotkey_on_main_thread(&self.inner);
             self.inner.side_aware_combo.lock().take();
+            #[cfg(target_os = "linux")]
+            refresh_linux_evdev_monitor(&self.inner);
             log::info!("[coord] combo hotkey 已关闭（modifier-only）");
             return;
         }
@@ -840,6 +848,8 @@ impl Coordinator {
         if is_unconfigured_shortcut(&binding) {
             take_combo_hotkey_on_main_thread(&self.inner);
             self.inner.side_aware_combo.lock().take();
+            #[cfg(target_os = "linux")]
+            refresh_linux_evdev_monitor(&self.inner);
             log::info!("[coord] combo hotkey 已关闭（无绑定）");
             return;
         }
@@ -862,6 +872,8 @@ impl Coordinator {
                     log::warn!("[coord] update side-aware combo binding 失败: {e}");
                 }
             }
+            #[cfg(target_os = "linux")]
+            refresh_linux_evdev_monitor(&self.inner);
             return;
         }
 
@@ -869,6 +881,8 @@ impl Coordinator {
         let app = self.inner.app.lock().clone();
         let Some(app) = app else {
             log::warn!("[coord] update combo hotkey binding: AppHandle 未 bind，跳过");
+            #[cfg(target_os = "linux")]
+            refresh_linux_evdev_monitor(&self.inner);
             return;
         };
         let inner_clone = Arc::clone(&self.inner);
@@ -900,6 +914,8 @@ impl Coordinator {
                 }
             }
         });
+        #[cfg(target_os = "linux")]
+        refresh_linux_evdev_monitor(&self.inner);
     }
 
     /// 用户在设置里改了 QA 组合键时调用。先持久化（由 prefs.set 完成），
@@ -1224,7 +1240,15 @@ impl Coordinator {
     }
 
     pub fn hotkey_capability(&self) -> HotkeyCapability {
-        HotkeyMonitor::capability()
+        let mut cap = HotkeyMonitor::capability();
+        #[cfg(all(not(mobile), target_os = "linux"))]
+        if let Some(msg) = crate::linux_evdev_input::status_message() {
+            cap.status_hint = Some(match cap.status_hint {
+                Some(base) if !base.is_empty() => format!("{base}\n{msg}"),
+                _ => msg,
+            });
+        }
+        cap
     }
 
     pub async fn start_dictation(&self) -> Result<(), String> {

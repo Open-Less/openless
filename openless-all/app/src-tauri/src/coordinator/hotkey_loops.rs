@@ -516,6 +516,8 @@ pub(super) fn combo_hotkey_supervisor_loop(inner: Arc<Inner>) {
                         .name("openless-side-combo-bridge".into())
                         .spawn(move || combo_hotkey_bridge_loop(inner_clone, rx))
                         .ok();
+                    #[cfg(target_os = "linux")]
+                    refresh_linux_evdev_monitor(&inner);
                     return;
                 }
                 Err(e) => {
@@ -1283,7 +1285,21 @@ pub(super) fn mouse_dictation_supervisor_loop(inner: Arc<Inner>) {
             middle_enabled: prefs.mouse_middle_button_dictation,
             side_enabled: prefs.mouse_side_button_dictation,
         };
+        let needs_side_combo = crate::shortcut_binding::binding_requires_side_aware_hook(
+            &prefs.dictation_hotkey,
+        );
         let needs_mouse = config.middle_enabled || config.side_enabled;
+
+        #[cfg(target_os = "linux")]
+        if needs_side_combo && !needs_mouse {
+            refresh_linux_evdev_monitor(&inner);
+            if inner.linux_evdev.lock().is_some() {
+                return;
+            }
+            log::warn!("[coord] linux evdev monitor for side combo failed; retry in 3s");
+            std::thread::sleep(std::time::Duration::from_secs(3));
+            continue;
+        }
 
         #[cfg(not(target_os = "linux"))]
         if !needs_mouse {
@@ -1293,14 +1309,17 @@ pub(super) fn mouse_dictation_supervisor_loop(inner: Arc<Inner>) {
         }
 
         #[cfg(target_os = "linux")]
-        if !needs_mouse {
+        if !needs_mouse && !needs_side_combo {
             sync_release_mouse_hold_sources(&inner);
             inner.mouse_dictation.lock().take();
+            inner.linux_evdev.lock().take();
             return;
         }
 
         if inner.mouse_dictation.lock().is_some() {
             crate::mouse_dictation::MouseDictationMonitor::update_config(config);
+            #[cfg(target_os = "linux")]
+            refresh_linux_evdev_monitor(&inner);
             return;
         }
 
@@ -1313,6 +1332,8 @@ pub(super) fn mouse_dictation_supervisor_loop(inner: Arc<Inner>) {
                     .name("openless-mouse-dictation-bridge".into())
                     .spawn(move || mouse_dictation_bridge_loop(inner_clone, rx))
                     .ok();
+                #[cfg(target_os = "linux")]
+                refresh_linux_evdev_monitor(&inner);
                 return;
             }
             Err(err) => {
@@ -1332,9 +1353,43 @@ fn start_mouse_dictation_monitor(
     crate::mouse_dictation::MouseDictationMonitor::start(config, tx)
 }
 
+#[cfg(target_os = "linux")]
+pub(super) fn refresh_linux_evdev_monitor(inner: &Arc<Inner>) {
+    inner.linux_evdev.lock().take();
+    try_start_linux_evdev_monitor(inner);
+}
+
+#[cfg(target_os = "linux")]
+pub(super) fn try_start_linux_evdev_monitor(inner: &Arc<Inner>) {
+    let config = crate::linux_evdev_input::config_from_prefs(&inner.prefs.get());
+    if !crate::linux_evdev_input::monitor_needed(&config) {
+        crate::linux_evdev_input::set_status_message(None);
+        return;
+    }
+    let (tx, rx) = mpsc::channel::<(HotkeyEvent, TriggerSource)>();
+    match crate::linux_evdev_input::LinuxEvdevMonitor::start(config, tx.clone()) {
+        Ok(monitor) => {
+            *inner.linux_evdev.lock() = Some(monitor);
+            let inner_clone = Arc::clone(inner);
+            std::thread::Builder::new()
+                .name("openless-linux-evdev-mouse-bridge".into())
+                .spawn(move || mouse_dictation_bridge_loop(inner_clone, rx))
+                .ok();
+        }
+        Err(err) => {
+            log::warn!("[coord] linux evdev monitor failed: {err}");
+            crate::linux_evdev_input::set_status_message(Some(format!(
+                "{err} 鼠标/侧别组合键需读取 /dev/input/event*；若无权限请将用户加入 input 组（sudo usermod -aG input $USER）后重新登录。"
+            )));
+        }
+    }
+}
+
 pub(super) fn update_mouse_dictation_binding_now(inner: &Arc<Inner>) {
     sync_release_mouse_hold_sources(inner);
     inner.mouse_dictation.lock().take();
+    #[cfg(target_os = "linux")]
+    refresh_linux_evdev_monitor(inner);
     let inner_clone = Arc::clone(inner);
     std::thread::Builder::new()
         .name("openless-mouse-dictation-supervisor".into())
