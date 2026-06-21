@@ -19,7 +19,7 @@ use crate::global_hotkey_runtime::{GlobalHotkeyRuntime, RegisteredHotkey};
 use crate::shortcut_binding::{parse_global_hotkey, ShortcutBindingError};
 use crate::types::ShortcutBinding;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ComboHotkeyEvent {
     /// 用户按下了配置的组合键。
     Pressed,

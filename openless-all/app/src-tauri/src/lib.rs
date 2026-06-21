@@ -67,6 +67,11 @@ mod selection;
 mod selection;
 #[cfg(not(mobile))]
 mod shortcut_binding;
+#[cfg(not(mobile))]
+mod side_aware_combo;
+#[cfg(mobile)]
+#[path = "mobile_stubs/side_aware_combo.rs"]
+mod side_aware_combo;
 #[cfg(mobile)]
 #[path = "mobile_stubs/shortcut_binding.rs"]
 mod shortcut_binding;

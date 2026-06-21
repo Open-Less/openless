@@ -398,6 +398,7 @@ mod platform {
     const TAP_OPTION_DEFAULT: CgEventTapOptions = 0;
 
     const KEY_DOWN: CgEventType = 10;
+    const KEY_UP: CgEventType = 11;
     const FLAGS_CHANGED: CgEventType = 12;
     const TAP_DISABLED_BY_TIMEOUT: CgEventType = 0xFFFF_FFFE;
     const TAP_DISABLED_BY_USER_INPUT: CgEventType = 0xFFFF_FFFF;
@@ -464,7 +465,9 @@ mod platform {
         tx: Sender<HotkeyEvent>,
         status_tx: StartupTx<Arc<MacShutdownHandles>>,
     ) {
-        let mask: CgEventMask = (1u64 << FLAGS_CHANGED) | (1u64 << KEY_DOWN);
+        let mask: CgEventMask = (1u64 << FLAGS_CHANGED)
+            | (1u64 << KEY_DOWN)
+            | (1u64 << KEY_UP);
         let handles = Arc::new(MacShutdownHandles {
             tap: std::sync::Mutex::new(None),
             runloop: std::sync::Mutex::new(None),
@@ -531,7 +534,15 @@ mod platform {
                 return event;
             }
             FLAGS_CHANGED => handle_flags_changed(ctx, event),
-            KEY_DOWN => handle_key_down(ctx, event),
+            KEY_DOWN => {
+                handle_key_down(ctx, event);
+                let keycode = unsafe { CGEventGetIntegerValueField(event, KEYBOARD_EVENT_KEYCODE) };
+                crate::side_aware_combo::platform::dispatch_keycode(keycode, false, 0, true);
+            }
+            KEY_UP => {
+                let keycode = unsafe { CGEventGetIntegerValueField(event, KEYBOARD_EVENT_KEYCODE) };
+                crate::side_aware_combo::platform::dispatch_keycode(keycode, false, 0, false);
+            }
             _ => {}
         }
         event
@@ -555,6 +566,7 @@ mod platform {
         }
 
         let keycode = unsafe { CGEventGetIntegerValueField(event, KEYBOARD_EVENT_KEYCODE) };
+        crate::side_aware_combo::platform::dispatch_keycode(keycode, true, flags, false);
         handle_optional_modifier_trigger(
             ctx,
             keycode,
@@ -631,6 +643,9 @@ mod platform {
             HotkeyTrigger::LeftOption => 58,
             HotkeyTrigger::RightOption | HotkeyTrigger::RightAlt => 61,
             HotkeyTrigger::RightCommand => 54,
+            HotkeyTrigger::LeftCommand => 55,
+            HotkeyTrigger::LeftShift => 56,
+            HotkeyTrigger::RightShift => 60,
             HotkeyTrigger::Fn => 63,
             HotkeyTrigger::MediaPlayPause => 0,
             HotkeyTrigger::Custom => unreachable!("custom combo hotkeys use ComboHotkeyMonitor"),
@@ -640,7 +655,8 @@ mod platform {
     fn trigger_to_flag_mask(trigger: HotkeyTrigger) -> CgEventFlags {
         match trigger {
             HotkeyTrigger::LeftControl | HotkeyTrigger::RightControl => FLAG_MASK_CONTROL,
-            HotkeyTrigger::RightCommand => FLAG_MASK_COMMAND,
+            HotkeyTrigger::LeftCommand | HotkeyTrigger::RightCommand => FLAG_MASK_COMMAND,
+            HotkeyTrigger::LeftShift | HotkeyTrigger::RightShift => FLAG_MASK_SHIFT,
             HotkeyTrigger::LeftOption | HotkeyTrigger::RightOption | HotkeyTrigger::RightAlt => {
                 FLAG_MASK_ALTERNATE
             }
@@ -779,6 +795,7 @@ mod platform {
     const VK_LMENU: u32 = 0xA4;
     const VK_RMENU: u32 = 0xA5;
     const VK_RWIN: u32 = 0x5C;
+    const VK_LWIN: u32 = 0x5B;
     const VK_MEDIA_PLAY_PAUSE: u32 = 0xB3;
     const LLKHF_INJECTED: u32 = 0x0000_0010;
     const ACCEPT_INJECTED_ENV: &str = "OPENLESS_ACCEPT_SYNTHETIC_HOTKEY_EVENTS";
@@ -932,6 +949,9 @@ mod platform {
             return false;
         }
 
+        let pressed = matches!(message, WM_KEYDOWN | WM_SYSKEYDOWN);
+        crate::side_aware_combo::platform::dispatch_vk(vk_code, pressed);
+
         // Shift（任一侧）= 翻译模式修饰键。在录音过程中任意时刻按下都生效。详见 issue #4。
         if matches!(vk_code, VK_SHIFT | VK_LSHIFT | VK_RSHIFT) {
             match message {
@@ -1036,6 +1056,9 @@ mod platform {
             HotkeyTrigger::LeftControl => VK_LCONTROL,
             HotkeyTrigger::RightOption | HotkeyTrigger::RightAlt => VK_RMENU,
             HotkeyTrigger::RightCommand => VK_RWIN,
+            HotkeyTrigger::LeftCommand => VK_LWIN,
+            HotkeyTrigger::LeftShift => VK_LSHIFT,
+            HotkeyTrigger::RightShift => VK_RSHIFT,
             HotkeyTrigger::LeftOption => VK_LMENU,
             HotkeyTrigger::Fn => VK_RCONTROL,
             HotkeyTrigger::MediaPlayPause => VK_MEDIA_PLAY_PAUSE,
@@ -1189,6 +1212,35 @@ mod platform {
                 WM_KEYDOWN
             ));
             assert_eq!(drain(&right_alt_rx), vec![HotkeyEvent::Pressed]);
+        }
+
+        #[test]
+        fn windows_shift_side_combo_receives_pressed_via_dispatch_keyboard_event() {
+            use crate::combo_hotkey::ComboHotkeyEvent;
+            use crate::side_aware_combo::SideAwareComboMonitor;
+            use crate::types::ShortcutBinding;
+
+            let (combo_tx, combo_rx) = mpsc::channel();
+            let binding = ShortcutBinding {
+                primary: "D".into(),
+                modifiers: vec!["shift-left".into()],
+            };
+            let monitor = SideAwareComboMonitor::start(binding, combo_tx).expect("start monitor");
+
+            let shared = shared(HotkeyTrigger::Custom);
+            let (ctx, hotkey_rx) = callback_context(shared);
+
+            dispatch_keyboard_event(&ctx, VK_LSHIFT, WM_KEYDOWN);
+            dispatch_keyboard_event(&ctx, 0x44, WM_KEYDOWN);
+
+            assert_eq!(combo_rx.recv().unwrap(), ComboHotkeyEvent::Pressed);
+            assert!(
+                hotkey_rx
+                    .try_iter()
+                    .any(|evt| evt == HotkeyEvent::TranslationModifierPressed)
+            );
+
+            drop(monitor);
         }
     }
 }

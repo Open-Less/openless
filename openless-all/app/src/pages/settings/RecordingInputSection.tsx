@@ -180,6 +180,8 @@ export function RecordingInputSection() {
         <SettingRow label={t('settings.recording.hotkeyLabel')}>
           <ShortcutRecorder
             value={prefs.dictationHotkey}
+            modifierPresets={capability?.availableTriggers ?? []}
+            sideSpecificModifiers
             onSave={async binding => {
               await setDictationHotkey(binding);
               await savePrefs({ ...prefs, dictationHotkey: binding });

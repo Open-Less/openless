@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
-import { currentPlatform, formatComboLabel } from '../lib/hotkey';
+import { formatComboLabel, getHotkeyTriggerLabel, modifiersFromPressedCodes, shortcutFromLegacyTrigger } from '../lib/hotkey';
 import { setShortcutRecordingActive, validateShortcutBinding } from '../lib/ipc';
-import type { ShortcutBinding } from '../lib/types';
+import type { HotkeyTrigger, ShortcutBinding } from '../lib/types';
 
 export function ShortcutRecorder({
   value,
@@ -12,6 +12,8 @@ export function ShortcutRecorder({
   onDisable,
   disableLabel,
   comboOnly = false,
+  modifierPresets = [],
+  sideSpecificModifiers = false,
 }: {
   value: ShortcutBinding;
   onSave: (binding: ShortcutBinding) => Promise<void>;
@@ -22,12 +24,21 @@ export function ShortcutRecorder({
   disableLabel?: string;
   /** 仅允许组合键（修饰键+主键 / 功能键）；拒绝单修饰键，因为全局热键无法注册它。 */
   comboOnly?: boolean;
+  /** 平台可用的单修饰键快捷选项（如 Fn，WebView 无法录制）。 */
+  modifierPresets?: HotkeyTrigger[];
+  /** 听写 start/stop 专用：录制 cmd-left / ctrl-right 等侧向修饰键。 */
+  sideSpecificModifiers?: boolean;
 }) {
   const { t } = useTranslation();
   const [recording, setRecording] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const pendingModifier = useRef<ShortcutBinding | null>(null);
   const pendingTimer = useRef<number | null>(null);
+  const pressedCodes = useRef<Set<string>>(new Set());
+
+  const clearPressedCodes = () => {
+    pressedCodes.current.clear();
+  };
 
   const clearPendingModifier = () => {
     if (pendingTimer.current !== null) {
@@ -37,8 +48,13 @@ export function ShortcutRecorder({
     pendingModifier.current = null;
   };
 
-  useEffect(() => () => {
+  const resetRecordingState = () => {
     clearPendingModifier();
+    clearPressedCodes();
+  };
+
+  useEffect(() => () => {
+    resetRecordingState();
     void setShortcutRecordingActive(false);
   }, []);
 
@@ -52,14 +68,14 @@ export function ShortcutRecorder({
   useEffect(() => {
     if (!disabled || !recording) return;
     setRecording(false);
-    clearPendingModifier();
+    resetRecordingState();
   }, [disabled, recording]);
 
   const finish = async (binding: ShortcutBinding) => {
     try {
       await validateShortcutBinding(binding);
       await onSave(binding);
-      clearPendingModifier();
+      resetRecordingState();
       setRecording(false);
       setError(null);
     } catch {
@@ -74,13 +90,12 @@ export function ShortcutRecorder({
     if (e.key === 'Escape') {
       setRecording(false);
       setError(null);
-      clearPendingModifier();
+      resetRecordingState();
       return;
     }
     if (isModifierKey(e.key)) {
-      // comboOnly：快速 Agent 等全局热键不支持单修饰键，提示用户配真正的组合键。
+      pressedCodes.current.add(e.code);
       if (comboOnly) {
-        setError(t('settings.recording.comboNeedKey', '请配组合键（如 ⌘⇧J），不支持单独的修饰键'));
         return;
       }
       const primary = modifierPrimaryFromCode(e.code, e.key);
@@ -97,13 +112,17 @@ export function ShortcutRecorder({
     }
     clearPendingModifier();
     const primary = primaryFromKeyboardEvent(e);
-    if (primary) void finish({ primary, modifiers: modifiersFromKeyboardEvent(e) });
+    if (primary) {
+      void finish({ primary, modifiers: modifiersFromPressedCodes(pressedCodes.current, sideSpecificModifiers) });
+    }
   };
 
   const onKeyUp = (e: KeyboardEvent<HTMLDivElement>) => {
     if (!recording || disabled || !isModifierKey(e.key)) return;
     e.preventDefault();
     e.stopPropagation();
+    pressedCodes.current.delete(e.code);
+    if (comboOnly) return;
     const primary = modifierPrimaryFromCode(e.code, e.key);
     if (primary && pendingModifier.current?.primary === primary) {
       const binding = pendingModifier.current;
@@ -137,7 +156,6 @@ export function ShortcutRecorder({
     cursor: recording || disabled ? 'default' : 'pointer',
     opacity: disabled ? 0.68 : 1,
   };
-  // 「停用」旋钮：与「录制快捷键」同高、紧贴在它左边，组成两个并排的小旋钮。
   const disableKnobStyle: CSSProperties = {
     fontSize: 12,
     padding: '5px 12px',
@@ -149,13 +167,24 @@ export function ShortcutRecorder({
     fontWeight: 500,
     cursor: recording ? 'default' : 'pointer',
   };
-  // 录制按钮（+ 可选停用旋钮）成组靠右，保证「停用」永远贴着「录制」。
   const controlsGroupStyle: CSSProperties = {
     display: 'inline-flex',
     alignItems: 'center',
     gap: 8,
     marginLeft: alignRecordButton ? 'auto' : undefined,
   };
+  const presetChipStyle: CSSProperties = {
+    fontSize: 11,
+    padding: '4px 10px',
+    borderRadius: 999,
+    border: '0.5px solid var(--ol-line-strong)',
+    background: 'transparent',
+    color: 'var(--ol-ink-3)',
+    fontFamily: 'inherit',
+    cursor: disabled || recording ? 'default' : 'pointer',
+  };
+
+  const presetTriggers = modifierPresets.filter(t => t !== 'custom' && t !== 'mediaPlayPause');
 
   return (
     <div style={rootStyle}>
@@ -181,7 +210,7 @@ export function ShortcutRecorder({
               if (disabled) return;
               setRecording(true);
               setError(null);
-              clearPendingModifier();
+              resetRecordingState();
             }}
             disabled={recording || disabled}
             style={recordButtonStyle}
@@ -190,6 +219,24 @@ export function ShortcutRecorder({
           </button>
         </div>
       </div>
+      {!comboOnly && presetTriggers.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          <span style={{ fontSize: 11, color: 'var(--ol-ink-4)', alignSelf: 'center' }}>
+            {t('settings.recording.modifierPresetsLabel', '常用单键：')}
+          </span>
+          {presetTriggers.map(trigger => (
+            <button
+              key={trigger}
+              type="button"
+              disabled={disabled || recording}
+              style={presetChipStyle}
+              onClick={() => void finish(shortcutFromLegacyTrigger(trigger))}
+            >
+              {getHotkeyTriggerLabel(trigger)}
+            </button>
+          ))}
+        </div>
+      )}
       {recording && (
         <div
           tabIndex={-1}
@@ -207,26 +254,20 @@ export function ShortcutRecorder({
   );
 }
 
-function modifiersFromKeyboardEvent(e: KeyboardEvent): string[] {
-  const modifiers: string[] = [];
-  if (e.metaKey && e.key !== 'Meta') modifiers.push(currentPlatform().isMac ? 'cmd' : 'super');
-  if (e.ctrlKey && e.key !== 'Control') modifiers.push('ctrl');
-  if (e.altKey && e.key !== 'Alt') modifiers.push('alt');
-  if (e.shiftKey && e.key !== 'Shift') modifiers.push('shift');
-  return modifiers;
-}
-
 function isModifierKey(key: string): boolean {
   return key === 'Control' || key === 'Alt' || key === 'Shift' || key === 'Meta';
 }
 
 function modifierPrimaryFromCode(code: string, key: string): string {
-  if (key === 'Shift') return 'Shift';
+  if (code === 'ShiftLeft') return 'LeftShift';
+  if (code === 'ShiftRight') return 'RightShift';
   if (code === 'ControlRight') return 'RightControl';
   if (code === 'ControlLeft') return 'LeftControl';
   if (code === 'AltRight') return 'RightOption';
   if (code === 'AltLeft') return 'LeftOption';
-  if (code === 'MetaRight' || code === 'MetaLeft') return 'RightCommand';
+  if (code === 'MetaRight') return 'RightCommand';
+  if (code === 'MetaLeft') return 'LeftCommand';
+  if (key === 'Shift') return 'Shift';
   return '';
 }
 
