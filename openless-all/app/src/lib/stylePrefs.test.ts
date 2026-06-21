@@ -96,6 +96,8 @@ const previousPrefs: UserPreferences = {
   androidOverlayLeftSwipeAction: 'translation',
   androidOverlayCancelSwipeDirection: 'up',
   androidOverlaySizeDp: 72,
+  mouseMiddleButtonDictation: false,
+  mouseSideButtonDictation: false,
 };
 
 const nextPrefs: UserPreferences = {

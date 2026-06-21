@@ -109,6 +109,8 @@ export let mockSettings: UserPreferences = {
     androidOverlayLeftSwipeAction: "translation",
     androidOverlayCancelSwipeDirection: "up",
     androidOverlaySizeDp: 72,
+    mouseMiddleButtonDictation: false,
+    mouseSideButtonDictation: false,
 }
 
 const mockFullStylePrompts: StyleSystemPrompts = {
@@ -398,6 +400,9 @@ export const mockHotkeyCapability: HotkeyCapability = {
         "rightAlt",
         "leftControl",
         "rightCommand",
+        "leftCommand",
+        "leftShift",
+        "rightShift",
         "custom",
     ],
     requiresAccessibilityPermission: false,

@@ -400,10 +400,13 @@ mod platform {
     const KEY_DOWN: CgEventType = 10;
     const KEY_UP: CgEventType = 11;
     const FLAGS_CHANGED: CgEventType = 12;
+    const OTHER_MOUSE_DOWN: CgEventType = 25;
+    const OTHER_MOUSE_UP: CgEventType = 26;
     const TAP_DISABLED_BY_TIMEOUT: CgEventType = 0xFFFF_FFFE;
     const TAP_DISABLED_BY_USER_INPUT: CgEventType = 0xFFFF_FFFF;
 
     const KEYBOARD_EVENT_KEYCODE: CgEventField = 9;
+    const MOUSE_EVENT_BUTTON_NUMBER: CgEventField = 3;
 
     const FLAG_MASK_SHIFT: CgEventFlags = 0x0002_0000;
     const FLAG_MASK_CONTROL: CgEventFlags = 0x0004_0000;
@@ -467,8 +470,9 @@ mod platform {
     ) {
         let mask: CgEventMask = (1u64 << FLAGS_CHANGED)
             | (1u64 << KEY_DOWN)
-            | (1u64 << KEY_UP);
-        let handles = Arc::new(MacShutdownHandles {
+            | (1u64 << KEY_UP)
+            | (1u64 << OTHER_MOUSE_DOWN)
+            | (1u64 << OTHER_MOUSE_UP);        let handles = Arc::new(MacShutdownHandles {
             tap: std::sync::Mutex::new(None),
             runloop: std::sync::Mutex::new(None),
         });
@@ -543,7 +547,12 @@ mod platform {
                 let keycode = unsafe { CGEventGetIntegerValueField(event, KEYBOARD_EVENT_KEYCODE) };
                 crate::side_aware_combo::platform::dispatch_keycode(keycode, false, 0, false);
             }
-            _ => {}
+            OTHER_MOUSE_DOWN | OTHER_MOUSE_UP => {
+                let button =
+                    unsafe { CGEventGetIntegerValueField(event, MOUSE_EVENT_BUTTON_NUMBER) };
+                let pressed = event_type == OTHER_MOUSE_DOWN;
+                crate::mouse_dictation::platform::dispatch_button_number(button, pressed);
+            }            _ => {}
         }
         event
     }
