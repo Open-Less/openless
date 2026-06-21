@@ -1155,6 +1155,8 @@ impl Default for UserPreferencesWire {
             android_overlay_left_swipe_action: prefs.android_overlay_left_swipe_action,
             android_overlay_cancel_swipe_direction: prefs.android_overlay_cancel_swipe_direction,
             android_overlay_size_dp: prefs.android_overlay_size_dp,
+            mouse_middle_button_dictation: prefs.mouse_middle_button_dictation,
+            mouse_side_button_dictation: prefs.mouse_side_button_dictation,
         }
     }
 }
@@ -1277,6 +1279,8 @@ impl<'de> Deserialize<'de> for UserPreferences {
             android_overlay_size_dp: normalize_android_overlay_size_dp(
                 wire.android_overlay_size_dp,
             ),
+            mouse_middle_button_dictation: wire.mouse_middle_button_dictation,
+            mouse_side_button_dictation: wire.mouse_side_button_dictation,
         })
     }
 }
@@ -2014,6 +2018,8 @@ impl Default for UserPreferences {
             android_overlay_cancel_swipe_direction: default_android_overlay_cancel_swipe_direction(
             ),
             android_overlay_size_dp: default_android_overlay_size_dp(),
+            mouse_middle_button_dictation: false,
+            mouse_side_button_dictation: false,
         }
     }
 }

@@ -132,6 +132,7 @@ export function RecordingInputSection() {
   const isAndroid = platformCaps?.platform === 'android';
   const showDesktopHotkey = platformCaps?.supportsDesktopHotkey === true;
   const showDesktopInsert = showDesktopHotkey && os !== 'linux';
+  const showMouseDictation = showDesktopHotkey && os !== 'linux';
   const showDesktopStartup = showDesktopHotkey;
 
   const onModeChange = (mode: HotkeyMode) =>
@@ -219,7 +220,7 @@ export function RecordingInputSection() {
           />
         </SettingRow>
         )}
-        {showDesktopHotkey && (
+        {showMouseDictation && (
         <SettingRow label={t('settings.recording.mouseMiddleLabel', '鼠标中键唤起识别')}>
           <Toggle
             on={prefs.mouseMiddleButtonDictation}
@@ -227,7 +228,7 @@ export function RecordingInputSection() {
           />
         </SettingRow>
         )}
-        {showDesktopHotkey && (
+        {showMouseDictation && (
         <SettingRow label={t('settings.recording.mouseSideLabel', '鼠标侧键唤起识别')}>
           <Toggle
             on={prefs.mouseSideButtonDictation}
