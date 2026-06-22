@@ -325,8 +325,10 @@ export interface UserPreferences {
   sherpaOnnxLanguageHint: string;
   /** Windows sherpa-onnx 模型在 runtime 中保持加载的秒数。 */
   sherpaOnnxKeepLoadedSecs: number;
-  /** 历史记录保留天数。0 = 不按时间清理（仍受 200 条上限）。默认 7。 */
+  /** 历史记录保留天数。0 = 不按时间清理。默认 0（不限天数）。 */
   historyRetentionDays: number;
+  /** 旧默认 7 天是否已迁移到不限。 */
+  historyRetentionDefaultMigrated: boolean;
   /** 对话感知 polish 上下文窗口（分钟）。0 = 关闭。默认 5。详见 PR-A。 */
   polishContextWindowMinutes: number;
   /** 启动时静默运行（不弹主窗口）。Windows 开机自启场景常用——只想要后台 + 托盘，
@@ -352,7 +354,7 @@ export interface UserPreferences {
   /** 主窗口启动 + 后台每 60 分钟自动检查云端新版本。默认 true。
    *  关闭后仅 Settings → 关于 的「检查更新」手动按钮可用。 */
   autoUpdateCheck: boolean;
-  /** 历史记录上限（条数）。null = 走默认 200；5..=200 之间为用户自定义。 */
+  /** 历史记录上限（条数）。null = 不按条数清理。 */
   historyMaxEntries: number | null;
   /** 是否为每次会话保留原始麦克风音频文件（wav），用于排查 ASR 误识别 / 麦克风灵敏度。
    *  默认 false。开启后会占磁盘空间，受 historyRetentionDays 同样的清理策略约束。 */

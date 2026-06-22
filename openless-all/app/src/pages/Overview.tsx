@@ -384,8 +384,10 @@ interface DayActivity {
   date: Date;
   rawCount: number;
   rawChars: number;
+  rawDurationMs: number;
   count: number;
   chars: number;
+  durationMs: number;
   level: number;
   inRange: boolean;
 }
@@ -396,8 +398,10 @@ interface WeekActivity {
   endDate: Date;
   count: number;
   chars: number;
+  durationMs: number;
   cumulativeCount: number;
   cumulativeChars: number;
+  cumulativeDurationMs: number;
   value: number;
   valueChars: number;
   level: number;
@@ -448,9 +452,9 @@ function ActivityHeatmapCard({
     ? activity.weekBars.find(week => week.key === hoveredKey) ?? null
     : null;
   const summaryArgs = hoveredDay
-    ? activityDaySummaryArgs(hoveredDay)
+    ? activityDaySummaryArgs(hoveredDay, t)
     : hoveredWeek && mode !== 'daily'
-      ? activityWeekSummaryArgs(mode, hoveredWeek)
+      ? activityWeekSummaryArgs(mode, hoveredWeek, t)
       : null;
   const summaryText = summaryArgs ? t(summaryArgs.key, summaryArgs.options) : null;
   const showTooltip = Boolean(summaryText && hoverPoint);
@@ -608,7 +612,7 @@ function ActivityDailyGrid({
           >
             {activity.cells.map(cell => {
               const selected = hoveredKey === cell.key;
-              const cellSummary = activityDaySummaryArgs(cell);
+              const cellSummary = activityDaySummaryArgs(cell, t);
               const weekIndex = Math.floor(differenceInDays(cell.date, activity.cells[0]?.date ?? cell.date) / 7);
               return (
                 <div
@@ -683,7 +687,7 @@ function ActivityWeekGrid({
           }}
         >
           {activity.weekBars.flatMap((week, weekIndex) => {
-            const summary = activityWeekSummaryArgs(mode, week);
+            const summary = activityWeekSummaryArgs(mode, week, t);
             const filledCells = activityDiscreteCells(week.value, activity.maxWeekValue);
             return Array.from({ length: 7 }).map((_, rowIndex) => {
               const selected = hoveredKey === week.key;
@@ -792,19 +796,20 @@ function buildYearlyActivity(history: DictationSession[], monthNames: string[], 
   const weeks = Math.ceil((differenceInDays(today, gridStart) + 1) / 7);
   const weekGridStart = startOfWeek(rangeStart);
   const weekColumns = Math.ceil((differenceInDays(today, weekGridStart) + 1) / 7);
-  const byDay = new Map<string, { count: number; chars: number }>();
+  const byDay = new Map<string, { count: number; chars: number; durationMs: number }>();
 
   history.forEach(session => {
     const date = startOfLocalDay(new Date(session.createdAt));
     if (isNaN(date.getTime()) || date < rangeStart || date > today) return;
     const key = localDateKey(date);
-    const current = byDay.get(key) ?? { count: 0, chars: 0 };
+    const current = byDay.get(key) ?? { count: 0, chars: 0, durationMs: 0 };
     current.count += 1;
     current.chars += session.finalText.length;
+    current.durationMs += session.durationMs ?? 0;
     byDay.set(key, current);
   });
 
-  const rawCells: Array<Omit<DayActivity, 'count' | 'chars' | 'level'>> = [];
+  const rawCells: Array<Omit<DayActivity, 'count' | 'chars' | 'durationMs' | 'level'>> = [];
   for (let i = 0; i < weeks * 7; i += 1) {
     const date = addDays(gridStart, i);
     const inRange = date >= rangeStart && date <= today;
@@ -815,16 +820,19 @@ function buildYearlyActivity(history: DictationSession[], monthNames: string[], 
       date,
       rawCount: stats?.count ?? 0,
       rawChars: stats?.chars ?? 0,
+      rawDurationMs: stats?.durationMs ?? 0,
       inRange,
     });
   }
 
   let cumulativeCount = 0;
   let cumulativeChars = 0;
+  let cumulativeDurationMs = 0;
   const metricCells = rawCells.map(cell => ({
     ...cell,
     count: cell.inRange ? cell.rawCount : 0,
     chars: cell.inRange ? cell.rawChars : 0,
+    durationMs: cell.inRange ? cell.rawDurationMs : 0,
   }));
 
   const maxCount = Math.max(...metricCells.filter(cell => cell.inRange).map(cell => cell.count), 0);
@@ -838,17 +846,22 @@ function buildYearlyActivity(history: DictationSession[], monthNames: string[], 
     const startDate = addDays(weekGridStart, weekIndex * 7);
     const endDate = addDays(startDate, 6);
     const inRange = endDate >= rangeStart && startDate <= today;
-    let stats = { count: 0, chars: 0 };
+    let stats = { count: 0, chars: 0, durationMs: 0 };
     for (let offset = 0; offset < 7; offset += 1) {
       const date = addDays(startDate, offset);
       if (date < rangeStart || date > today) continue;
       const dayStats = byDay.get(localDateKey(date));
       if (!dayStats) continue;
-      stats = { count: stats.count + dayStats.count, chars: stats.chars + dayStats.chars };
+      stats = {
+        count: stats.count + dayStats.count,
+        chars: stats.chars + dayStats.chars,
+        durationMs: stats.durationMs + dayStats.durationMs,
+      };
     }
     if (inRange) {
       cumulativeCount += stats.count;
       cumulativeChars += stats.chars;
+      cumulativeDurationMs += stats.durationMs;
     }
     const value = mode === 'cumulative' ? cumulativeCount : stats.count;
     const valueChars = mode === 'cumulative' ? cumulativeChars : stats.chars;
@@ -858,8 +871,10 @@ function buildYearlyActivity(history: DictationSession[], monthNames: string[], 
       endDate: endDate > today ? today : endDate,
       count: inRange ? stats.count : 0,
       chars: inRange ? stats.chars : 0,
+      durationMs: inRange ? stats.durationMs : 0,
       cumulativeCount: inRange ? cumulativeCount : 0,
       cumulativeChars: inRange ? cumulativeChars : 0,
+      cumulativeDurationMs: inRange ? cumulativeDurationMs : 0,
       value: inRange ? value : 0,
       valueChars: inRange ? valueChars : 0,
       inRange,
@@ -951,25 +966,40 @@ function activityColor(level: number): string {
   }
 }
 
-function activityDaySummaryArgs(cell: DayActivity): { key: string; options: Record<string, string | number> } {
+function activityDaySummaryArgs(cell: DayActivity, t: ReturnType<typeof useTranslation>['t']): { key: string; options: Record<string, string | number> } {
   const date = formatHeatmapMonthDay(cell.date);
   return {
     key: 'overview.activitySummaryDaily',
-    options: { date, count: cell.rawCount.toLocaleString(), chars: cell.rawChars.toLocaleString() },
+    options: {
+      date,
+      count: cell.rawCount.toLocaleString(),
+      chars: cell.rawChars.toLocaleString(),
+      duration: formatDuration(cell.rawDurationMs, t),
+    },
   };
 }
 
-function activityWeekSummaryArgs(mode: Exclude<ActivityMode, 'daily'>, week: WeekActivity): { key: string; options: Record<string, string | number> } {
+function activityWeekSummaryArgs(mode: Exclude<ActivityMode, 'daily'>, week: WeekActivity, t: ReturnType<typeof useTranslation>['t']): { key: string; options: Record<string, string | number> } {
   const start = formatHeatmapDisplayDate(week.startDate);
   if (mode === 'weekly') {
     return {
       key: 'overview.activitySummaryWeekly',
-      options: { start, count: week.count.toLocaleString(), chars: week.chars.toLocaleString() },
+      options: {
+        start,
+        count: week.count.toLocaleString(),
+        chars: week.chars.toLocaleString(),
+        duration: formatDuration(week.durationMs, t),
+      },
     };
   }
   return {
     key: 'overview.activitySummaryCumulative',
-    options: { start, count: week.cumulativeCount.toLocaleString(), chars: week.cumulativeChars.toLocaleString() },
+    options: {
+      start,
+      count: week.cumulativeCount.toLocaleString(),
+      chars: week.cumulativeChars.toLocaleString(),
+      duration: formatDuration(week.cumulativeDurationMs, t),
+    },
   };
 }
 
@@ -1013,10 +1043,11 @@ function formatTime(iso: string): string {
 }
 
 function formatDuration(ms: number, t: ReturnType<typeof useTranslation>['t']): string {
-  if (ms <= 0) return '—';
+  if (ms <= 0) return t('common.durationSeconds', { value: '0' });
   const sec = ms / 1000;
   if (sec < 60) return t('common.durationSeconds', { value: sec.toFixed(1) });
-  return `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
+  if (sec < 3600) return t('common.durationMinutes', { value: (sec / 60).toFixed(1) });
+  return t('common.durationHours', { value: (sec / 3600).toFixed(1) });
 }
 
 function weekDayLabels(names: string[]): string[] {
