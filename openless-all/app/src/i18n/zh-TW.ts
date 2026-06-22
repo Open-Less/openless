@@ -684,6 +684,8 @@ export const zhTW: typeof zhCN = {
       pasteShortcutShiftInsert: 'Shift+Insert（xterm / urxvt）',
       allowNonTsfFallbackLabel: '允許非 TSF 兜底',
       allowNonTsfFallbackDesc: 'Windows：TSF 失敗時使用分批 Unicode SendInput；如果仍失敗，再複製到剪貼簿。',
+      windowsSendInputOnlyLabel: '始終使用 SendInput（不切換輸入法）',
+      windowsSendInputOnlyDesc: '聽寫期間不切換到 OpenLess TSF 輸入法，直接用 Unicode 按鍵模擬插入。若插入失敗，仍受下方「允許非 TSF 兜底」控制是否複製到剪貼簿。部分應用（如 Word）可能不如 TSF 穩定。',
       historyGroupTitle: '歷史與上下文',
       historyRetentionLabel: '歷史保留天數',
       historyRetentionDesc: '超過保留天數的歷史在寫入新條目時被清理；0 = 不按時間清理。',

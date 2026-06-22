@@ -1068,9 +1068,11 @@ pub(super) async fn begin_session_as(
     };
     #[cfg(target_os = "windows")]
     {
-        let prepared = inner.windows_ime.prepare_session();
-        let mut slots = inner.prepared_windows_ime_session.lock();
-        store_prepared_windows_ime_session(&mut slots, current_session_id, prepared);
+        if !inner.prefs.get().windows_sendinput_insertion_only {
+            let prepared = inner.windows_ime.prepare_session();
+            let mut slots = inner.prepared_windows_ime_session.lock();
+            store_prepared_windows_ime_session(&mut slots, current_session_id, prepared);
+        }
     }
     // 翻译模式标志重置；hotkey 监听器在 Shift down 时再 set true。
     inner
@@ -2419,6 +2421,7 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     let prefs = inner.prefs.get();
     let restore_clipboard = prefs.restore_clipboard_after_paste;
     let allow_non_tsf_insertion_fallback = prefs.allow_non_tsf_insertion_fallback;
+    let windows_sendinput_insertion_only = prefs.windows_sendinput_insertion_only;
     let paste_shortcut = prefs.paste_shortcut;
     // 流式路径下，字符已经通过 Unicode keystroke 落到光标处，跳过 inserter.insert。
     let status = if already_streamed {
@@ -2441,17 +2444,30 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
         if focus_ready_for_paste {
             #[cfg(target_os = "windows")]
             {
-                let ime_target = capture_ime_submit_target();
-                insert_with_windows_ime_first(
-                    inner,
-                    current_session_id,
-                    &polished,
-                    restore_clipboard,
-                    allow_non_tsf_insertion_fallback,
-                    paste_shortcut,
-                    ime_target,
-                )
-                .await
+                if windows_sendinput_insertion_only {
+                    if allow_non_tsf_insertion_fallback {
+                        insert_via_non_tsf_fallback(
+                            inner,
+                            &polished,
+                            restore_clipboard,
+                            paste_shortcut,
+                        )
+                    } else {
+                        inner.inserter.insert_via_unicode_keystrokes(&polished)
+                    }
+                } else {
+                    let ime_target = capture_ime_submit_target();
+                    insert_with_windows_ime_first(
+                        inner,
+                        current_session_id,
+                        &polished,
+                        restore_clipboard,
+                        allow_non_tsf_insertion_fallback,
+                        paste_shortcut,
+                        ime_target,
+                    )
+                    .await
+                }
             }
             #[cfg(not(target_os = "windows"))]
             {
@@ -2507,6 +2523,7 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
         polish_error.is_some(),
         focus_ready_for_paste,
         allow_non_tsf_insertion_fallback,
+        windows_sendinput_insertion_only,
     )
     .map(str::to_string);
     let tsf_required_insert_failed = error_code.as_deref() == Some("windowsImeTsfRequired");
@@ -2591,12 +2608,14 @@ pub(super) fn dictation_error_code(
     polish_failed: bool,
     focus_ready_for_paste: bool,
     allow_non_tsf_insertion_fallback: bool,
+    windows_sendinput_insertion_only: bool,
 ) -> Option<&'static str> {
     if !focus_ready_for_paste && status == InsertStatus::Failed {
         Some("focusRestoreFailed")
     } else if cfg!(target_os = "windows")
         && focus_ready_for_paste
         && !allow_non_tsf_insertion_fallback
+        && !windows_sendinput_insertion_only
         && status == InsertStatus::Failed
     {
         Some("windowsImeTsfRequired")

@@ -686,6 +686,8 @@ export const ko: typeof zhCN = {
       comboConflict: '이 단축키 조합은 사용할 수 없습니다',
       allowNonTsfFallbackLabel: '비 TSF 폴백 허용',
       allowNonTsfFallbackDesc: 'Windows: TSF 입력이 실패하면 분할된 Unicode SendInput을 사용하고, 그래도 실패하면 텍스트를 클립보드에 복사합니다.',
+      windowsSendInputOnlyLabel: '항상 SendInput 사용(입력기 전환 없음)',
+      windowsSendInputOnlyDesc: '받아쓰기 중 OpenLess TSF 입력기로 전환하지 않고 Unicode 키 입력 시뮬레이션으로 직접 삽입합니다. 삽입에 실패하면 아래 「비 TSF 폴백 허용」으로 클립보드 복사 여부를 제어합니다. 일부 앱(Word 등)은 TSF보다 불안정할 수 있습니다.',
       historyGroupTitle: '기록 및 컨텍스트',
       historyRetentionLabel: '기록 보관 기간(일)',
       historyRetentionDesc: '보관 기간을 초과한 기록은 새 항목 작성 시 정리됩니다. 0 = 시간 기반 정리 비활성화.',

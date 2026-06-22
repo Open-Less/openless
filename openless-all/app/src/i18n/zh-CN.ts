@@ -682,6 +682,8 @@ export const zhCN = {
       comboConflict: '该快捷键组合不可用',
       allowNonTsfFallbackLabel: '允许非 TSF 兜底',
       allowNonTsfFallbackDesc: 'Windows：TSF 失败时使用分批 Unicode SendInput；如果仍失败，再复制到剪贴板。',
+      windowsSendInputOnlyLabel: '始终使用 SendInput（不切换输入法）',
+      windowsSendInputOnlyDesc: '听写期间不切换到 OpenLess TSF 输入法，直接用 Unicode 按键模拟插入。若插入失败，仍受下方「允许非 TSF 兜底」控制是否复制到剪贴板。部分应用（如 Word）可能不如 TSF 稳定。',
       historyGroupTitle: '历史与上下文',
       historyRetentionLabel: '历史保留天数',
       historyRetentionDesc: '超过保留天数的历史在写入新条目时被清理；0 = 不按时间清理。',

@@ -131,6 +131,8 @@ export function RecordingInputSection() {
     savePrefs({ ...prefs, pasteShortcut });
   const onAllowNonTsfFallbackChange = (allowNonTsfInsertionFallback: boolean) =>
     savePrefs({ ...prefs, allowNonTsfInsertionFallback });
+  const onWindowsSendInputOnlyChange = (windowsSendInputInsertionOnly: boolean) =>
+    savePrefs({ ...prefs, windowsSendInputInsertionOnly });
   const onStartMinimizedChange = (startMinimized: boolean) =>
     savePrefs({ ...prefs, startMinimized });
   const onAutoUpdateCheckChange = (autoUpdateCheck: boolean) =>
@@ -287,6 +289,17 @@ export function RecordingInputSection() {
               ]}
               ariaLabel={t('settings.recording.pasteShortcutLabel')}
               style={{ ...inputStyle, maxWidth: 220 }}
+            />
+          </SettingRow>
+        )}
+        {capability.adapter === 'windowsLowLevel' && (
+          <SettingRow
+            label={t('settings.recording.windowsSendInputOnlyLabel')}
+            desc={t('settings.recording.windowsSendInputOnlyDesc')}
+          >
+            <Toggle
+              on={prefs.windowsSendInputInsertionOnly}
+              onToggle={onWindowsSendInputOnlyChange}
             />
           </SettingRow>
         )}

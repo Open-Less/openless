@@ -586,6 +586,10 @@ pub struct UserPreferences {
     /// 默认开启以保持可用性；关闭后可验证文本是否真正由 TSF 上屏。
     #[serde(default = "default_true")]
     pub allow_non_tsf_insertion_fallback: bool,
+    /// Windows: 始终用 SendInput Unicode 插入，不切换 OpenLess TSF 输入法。
+    /// 适用于输入法无法正确还原的用户。默认 false 保持 TSF 优先。
+    #[serde(default)]
+    pub windows_sendinput_insertion_only: bool,
     /// 用户的工作语言（多选，原生名）。会作为前提注入 LLM polish/translate 的 system prompt 头部，
     /// 让模型知道该用户在哪些语言间工作。详见 issue #4。
     #[serde(default = "default_working_languages")]
@@ -883,6 +887,8 @@ struct UserPreferencesWire {
     #[serde(default)]
     paste_shortcut: PasteShortcut,
     allow_non_tsf_insertion_fallback: bool,
+    #[serde(default)]
+    windows_sendinput_insertion_only: bool,
     working_languages: Vec<String>,
     translation_target_language: String,
     chinese_script_preference: ChineseScriptPreference,
@@ -1004,6 +1010,7 @@ impl Default for UserPreferencesWire {
             restore_clipboard_after_paste: prefs.restore_clipboard_after_paste,
             paste_shortcut: prefs.paste_shortcut,
             allow_non_tsf_insertion_fallback: prefs.allow_non_tsf_insertion_fallback,
+            windows_sendinput_insertion_only: prefs.windows_sendinput_insertion_only,
             working_languages: prefs.working_languages,
             translation_target_language: prefs.translation_target_language,
             chinese_script_preference: prefs.chinese_script_preference,
@@ -1104,6 +1111,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             restore_clipboard_after_paste: wire.restore_clipboard_after_paste,
             paste_shortcut: wire.paste_shortcut,
             allow_non_tsf_insertion_fallback: wire.allow_non_tsf_insertion_fallback,
+            windows_sendinput_insertion_only: wire.windows_sendinput_insertion_only,
             working_languages: wire.working_languages,
             translation_target_language: wire.translation_target_language,
             chinese_script_preference: wire.chinese_script_preference,
@@ -1847,6 +1855,7 @@ impl Default for UserPreferences {
             restore_clipboard_after_paste: true,
             paste_shortcut: PasteShortcut::default(),
             allow_non_tsf_insertion_fallback: true,
+            windows_sendinput_insertion_only: false,
             working_languages: default_working_languages(),
             translation_target_language: String::new(),
             chinese_script_preference: ChineseScriptPreference::Auto,
@@ -2588,6 +2597,26 @@ mod tests {
         let prefs: UserPreferences = serde_json::from_str("{}").unwrap();
 
         assert!(prefs.allow_non_tsf_insertion_fallback);
+    }
+
+    #[test]
+    fn windows_sendinput_insertion_only_defaults_to_disabled() {
+        let prefs = UserPreferences::default();
+        assert!(!prefs.windows_sendinput_insertion_only);
+
+        let prefs: UserPreferences = serde_json::from_str("{}").unwrap();
+        assert!(!prefs.windows_sendinput_insertion_only);
+    }
+
+    #[test]
+    fn windows_sendinput_insertion_only_pref_round_trips_explicit_true() {
+        let enabled = UserPreferences {
+            windows_sendinput_insertion_only: true,
+            ..UserPreferences::default()
+        };
+        let json = serde_json::to_string(&enabled).unwrap();
+        let restored: UserPreferences = serde_json::from_str(&json).unwrap();
+        assert!(restored.windows_sendinput_insertion_only);
     }
 
     #[test]

@@ -686,6 +686,8 @@ export const ja: typeof zhCN = {
       comboConflict: 'このショートカットの組み合わせは使用できません',
       allowNonTsfFallbackLabel: '非 TSF フォールバックを許可',
       allowNonTsfFallbackDesc: 'Windows：TSF 入力が失敗した時は分割した Unicode SendInput を使い、それも失敗した場合はクリップボードへコピーします。',
+      windowsSendInputOnlyLabel: '常に SendInput を使用（IME 切替なし）',
+      windowsSendInputOnlyDesc: '聴写中に OpenLess TSF IME へ切り替えず、Unicode キー入力シミュレーションで直接挿入します。挿入に失敗した場合は、下の「非 TSF フォールバックを許可」でクリップボードへのコピー可否を制御します。一部のアプリ（Word など）は TSF より不安定な場合があります。',
       historyGroupTitle: '履歴とコンテキスト',
       historyRetentionLabel: '履歴保持期間（日）',
       historyRetentionDesc: '保持日数を超えた履歴は新規書き込み時に削除されます。0 = 時間で削除しない。',

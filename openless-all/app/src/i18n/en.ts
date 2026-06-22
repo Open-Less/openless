@@ -684,6 +684,8 @@ export const en: typeof zhCN = {
       comboConflict: 'This shortcut combination is not available',
       allowNonTsfFallbackLabel: 'Allow non-TSF fallback',
       allowNonTsfFallbackDesc: 'Windows: when TSF insertion fails, use paced Unicode SendInput; if that still fails, copy the text to the clipboard.',
+      windowsSendInputOnlyLabel: 'Always use SendInput (no IME switch)',
+      windowsSendInputOnlyDesc: 'Do not switch to the OpenLess TSF IME during dictation; insert text via Unicode keystroke simulation instead. If insertion fails, the “Allow non-TSF fallback” option below still controls clipboard fallback. Some apps (e.g. Word) may be less reliable than TSF.',
       historyGroupTitle: 'History & context',
       historyRetentionLabel: 'History retention (days)',
       historyRetentionDesc: 'Entries older than this are pruned on new writes; 0 = no time-based pruning.',
