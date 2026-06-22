@@ -588,7 +588,11 @@ pub struct UserPreferences {
     pub allow_non_tsf_insertion_fallback: bool,
     /// Windows: 始终用 SendInput Unicode 插入，不切换 OpenLess TSF 输入法。
     /// 适用于输入法无法正确还原的用户。默认 false 保持 TSF 优先。
-    #[serde(default)]
+    #[serde(
+        default,
+        rename = "windowsSendInputInsertionOnly",
+        alias = "windowsSendinputInsertionOnly"
+    )]
     pub windows_sendinput_insertion_only: bool,
     /// 用户的工作语言（多选，原生名）。会作为前提注入 LLM polish/translate 的 system prompt 头部，
     /// 让模型知道该用户在哪些语言间工作。详见 issue #4。
@@ -887,7 +891,11 @@ struct UserPreferencesWire {
     #[serde(default)]
     paste_shortcut: PasteShortcut,
     allow_non_tsf_insertion_fallback: bool,
-    #[serde(default)]
+    #[serde(
+        default,
+        rename = "windowsSendInputInsertionOnly",
+        alias = "windowsSendinputInsertionOnly"
+    )]
     windows_sendinput_insertion_only: bool,
     working_languages: Vec<String>,
     translation_target_language: String,
@@ -2609,12 +2617,38 @@ mod tests {
     }
 
     #[test]
+    fn windows_sendinput_insertion_only_deserializes_frontend_wire_key() {
+        let prefs: UserPreferences =
+            serde_json::from_str(r#"{"windowsSendInputInsertionOnly": true}"#).unwrap();
+        assert!(prefs.windows_sendinput_insertion_only);
+    }
+
+    #[test]
+    fn windows_sendinput_insertion_only_deserializes_legacy_wrong_camel_key() {
+        let prefs: UserPreferences =
+            serde_json::from_str(r#"{"windowsSendinputInsertionOnly": true}"#).unwrap();
+        assert!(prefs.windows_sendinput_insertion_only);
+    }
+
+    #[test]
+    fn windows_sendinput_insertion_only_serializes_frontend_wire_key() {
+        let enabled = UserPreferences {
+            windows_sendinput_insertion_only: true,
+            ..UserPreferences::default()
+        };
+        let json = serde_json::to_string(&enabled).unwrap();
+        assert!(json.contains(r#""windowsSendInputInsertionOnly":true"#));
+        assert!(!json.contains("windowsSendinputInsertionOnly"));
+    }
+
+    #[test]
     fn windows_sendinput_insertion_only_pref_round_trips_explicit_true() {
         let enabled = UserPreferences {
             windows_sendinput_insertion_only: true,
             ..UserPreferences::default()
         };
         let json = serde_json::to_string(&enabled).unwrap();
+        assert!(json.contains(r#""windowsSendInputInsertionOnly":true"#));
         let restored: UserPreferences = serde_json::from_str(&json).unwrap();
         assert!(restored.windows_sendinput_insertion_only);
     }
