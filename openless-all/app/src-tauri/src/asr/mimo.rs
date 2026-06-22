@@ -1,13 +1,16 @@
 //! Xiaomi MiMo ASR client.
 //!
-//! MiMo ASR uses the official OpenAI-compatible `/chat/completions` endpoint
-//! with `messages[].content[].input_audio`, not Whisper's
-//! `/audio/transcriptions` protocol.
+//! This provider is patched for self-hosted vLLM-Omni MiMo-V2.5-ASR.
+//! It sends OpenAI-compatible `/v1/chat/completions` requests with
+//! `messages[].content[].audio_url`, which is accepted by vLLM-Omni.
+//! Xiaomi official endpoints may still work when the base URL and API key are
+//! configured, but the primary target of this fork is local/private deployment.
 
 use anyhow::{Context, Result};
 use base64::Engine;
 use parking_lot::Mutex;
 use serde_json::Value;
+use std::time::Instant;
 
 use crate::asr::wav::encode_wav_16k_mono;
 use crate::asr::RawTranscript;
@@ -55,24 +58,38 @@ impl MimoBatchASR {
     }
 
     async fn transcribe_inner(&self, pcm: &[u8]) -> Result<RawTranscript> {
-        if self.api_key.trim().is_empty() {
-            anyhow::bail!("MiMo API key missing");
-        }
-
         let duration_ms = pcm_duration_ms(pcm);
         let chunks = split_pcm_by_duration(pcm, MIMO_MAX_CHUNK_DURATION_MS);
-        let mut texts = Vec::with_capacity(chunks.len());
-        for chunk in chunks {
-            texts.push(self.transcribe_chunk(chunk).await?);
+        let url = mimo_chat_completions_url(&self.base_url)?;
+        log::info!(
+            "[mimo-asr] start transcription model={} endpoint={} duration_ms={} pcm_bytes={} chunks={} auth={}",
+            self.model,
+            url,
+            duration_ms,
+            pcm.len(),
+            chunks.len(),
+            if self.api_key.trim().is_empty() { "disabled" } else { "enabled" }
+        );
+        if self.api_key.trim().is_empty() && self.base_url.contains("xiaomimimo.com") {
+            log::warn!("[mimo-asr] Xiaomi official endpoint usually requires API key; self-hosted vLLM can leave it empty");
         }
 
-        Ok(RawTranscript {
-            text: join_transcript_chunks(&texts),
-            duration_ms,
-        })
+        let started = Instant::now();
+        let mut texts = Vec::with_capacity(chunks.len());
+        for (index, chunk) in chunks.iter().enumerate() {
+            texts.push(self.transcribe_chunk(index + 1, chunks.len(), chunk).await?);
+        }
+
+        let text = join_transcript_chunks(&texts);
+        log::info!(
+            "[mimo-asr] transcription finished elapsed_ms={} text_chars={}",
+            started.elapsed().as_millis(),
+            text.chars().count()
+        );
+        Ok(RawTranscript { text, duration_ms })
     }
 
-    async fn transcribe_chunk(&self, pcm: &[u8]) -> Result<String> {
+    async fn transcribe_chunk(&self, chunk_index: usize, chunk_count: usize, pcm: &[u8]) -> Result<String> {
         let samples: Vec<i16> = pcm
             .chunks_exact(2)
             .map(|chunk| i16::from_le_bytes([chunk[0], chunk[1]]))
@@ -80,23 +97,52 @@ impl MimoBatchASR {
         let wav = encode_wav_16k_mono(&samples);
         let body = mimo_chat_body(&self.model, &wav);
         let url = mimo_chat_completions_url(&self.base_url)?;
+        let body_bytes = serde_json::to_vec(&body).unwrap_or_default().len();
+        log::info!(
+            "[mimo-asr] POST chunk={}/{} url={} pcm_bytes={} wav_bytes={} json_bytes={}",
+            chunk_index,
+            chunk_count,
+            url,
+            pcm.len(),
+            wav.len(),
+            body_bytes
+        );
+
         let client = reqwest::Client::new();
-        let resp = client
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", self.api_key.trim()))
-            .json(&body)
+        let mut req = client.post(&url).json(&body);
+        if !self.api_key.trim().is_empty() {
+            req = req.header("Authorization", format!("Bearer {}", self.api_key.trim()));
+        }
+
+        let started = Instant::now();
+        let resp = req
             .send()
             .await
             .context("MiMo ASR HTTP request failed")?;
+        let status = resp.status();
+        let elapsed_ms = started.elapsed().as_millis();
+        log::info!(
+            "[mimo-asr] response chunk={}/{} status={} elapsed_ms={}",
+            chunk_index,
+            chunk_count,
+            status,
+            elapsed_ms
+        );
 
-        if !resp.status().is_success() {
-            let status = resp.status();
+        if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
             anyhow::bail!("MiMo ASR API error {}: {}", status, body);
         }
 
         let json: Value = resp.json().await.context("parse MiMo ASR response")?;
-        Ok(extract_mimo_text(&json).trim().to_string())
+        let text = extract_mimo_text(&json).trim().to_string();
+        log::info!(
+            "[mimo-asr] parsed chunk={}/{} text_chars={}",
+            chunk_index,
+            chunk_count,
+            text.chars().count()
+        );
+        Ok(text)
     }
 
     pub fn cancel(&self) {
@@ -111,13 +157,26 @@ impl crate::recorder::AudioConsumer for MimoBatchASR {
 }
 
 pub fn mimo_chat_completions_url(base_url: &str) -> Result<String> {
-    let parsed = reqwest::Url::parse(base_url.trim()).context("parse MiMo base URL")?;
+    let raw = base_url.trim();
+    let raw = if raw.is_empty() {
+        DEFAULT_ENDPOINT.to_string()
+    } else if raw.starts_with("http://") || raw.starts_with("https://") {
+        raw.to_string()
+    } else {
+        format!("http://{raw}")
+    };
+
+    let parsed = reqwest::Url::parse(&raw).context("parse MiMo base URL")?;
     let mut url = parsed.clone();
     let path = parsed.path().trim_end_matches('/');
     let next_path = if path.ends_with("/chat/completions") {
         path.to_string()
     } else if path.ends_with("/chat") {
         format!("{path}/completions")
+    } else if path.ends_with("/v1") {
+        format!("{path}/chat/completions")
+    } else if path.is_empty() || path == "/" {
+        "/v1/chat/completions".to_string()
     } else {
         format!("{path}/chat/completions")
     };
@@ -135,14 +194,22 @@ pub fn mimo_chat_body(model: &str, wav: &[u8]) -> Value {
         "stream": false,
         "messages": [{
             "role": "user",
-            "content": [{
-                "type": "input_audio",
-                "input_audio": {
-                    "data": audio_data,
-                    "format": "wav",
+            "content": [
+                {
+                    "type": "audio_url",
+                    "audio_url": {
+                        "url": audio_data,
+                    },
                 },
-            }],
+                {
+                    "type": "text",
+                    "text": "请把这段音频完整转写成文字，只输出转写结果。语言自动识别。",
+                },
+            ],
         }],
+        "modalities": ["text"],
+        "temperature": 0,
+        "max_tokens": 2048,
     })
 }
 
@@ -269,6 +336,10 @@ mod tests {
     #[test]
     fn mimo_url_targets_chat_completions() {
         assert_eq!(
+            mimo_chat_completions_url("36.147.35.14:30081").unwrap(),
+            "http://36.147.35.14:30081/v1/chat/completions"
+        );
+        assert_eq!(
             mimo_chat_completions_url("https://api.xiaomimimo.com/v1").unwrap(),
             "https://api.xiaomimimo.com/v1/chat/completions"
         );
@@ -279,14 +350,14 @@ mod tests {
     }
 
     #[test]
-    fn mimo_body_uses_official_input_audio_shape() {
+    fn mimo_body_uses_vllm_omni_audio_url_shape() {
         let body = mimo_chat_body(DEFAULT_MODEL, b"wav");
         assert_eq!(body["model"], DEFAULT_MODEL);
         assert_eq!(body["stream"], false);
+        assert_eq!(body["modalities"][0], "text");
         let audio = &body["messages"][0]["content"][0];
-        assert_eq!(audio["type"], "input_audio");
-        assert_eq!(audio["input_audio"]["format"], "wav");
-        assert!(audio["input_audio"]["data"]
+        assert_eq!(audio["type"], "audio_url");
+        assert!(audio["audio_url"]["url"]
             .as_str()
             .unwrap()
             .starts_with("data:audio/wav;base64,"));
@@ -342,11 +413,11 @@ mod tests {
             let request = read_http_request(&mut stream);
             let request_text = String::from_utf8_lossy(&request);
             let lower = request_text.to_ascii_lowercase();
-            assert!(request_text.starts_with("POST /chat/completions HTTP/1.1"));
+            assert!(request_text.starts_with("POST /v1/chat/completions HTTP/1.1"));
             assert!(lower.contains("authorization: bearer key"));
             assert!(lower.contains("content-type: application/json"));
-            assert!(request_text.contains(r#""model":"mimo-v2.5-asr""#));
-            assert!(request_text.contains(r#""type":"input_audio""#));
+            assert!(request_text.contains(r#"\"model\":\"mimo-v2.5-asr\""#));
+            assert!(request_text.contains(r#"\"type\":\"audio_url\""#));
             assert!(request_text.contains("data:audio/wav;base64,"));
             write_json_response(
                 &mut stream,
@@ -364,6 +435,49 @@ mod tests {
 
         assert_eq!(transcript.text, "mimo ok");
         assert_eq!(transcript.duration_ms, 1_000);
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn mimo_allows_empty_api_key_for_self_hosted_vllm() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                        assert!(Instant::now() < deadline, "timed out waiting for MiMo ASR test request");
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(err) => panic!("accept MiMo ASR test request failed: {err}"),
+                }
+            };
+            stream.set_nonblocking(false).unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            let request = read_http_request(&mut stream);
+            let request_text = String::from_utf8_lossy(&request);
+            let lower = request_text.to_ascii_lowercase();
+            assert!(request_text.starts_with("POST /v1/chat/completions HTTP/1.1"));
+            assert!(!lower.contains("authorization:"));
+            assert!(request_text.contains(r#"\"type\":\"audio_url\""#));
+            write_json_response(
+                &mut stream,
+                r#"{"choices":[{"message":{"content":"vllm ok"}}]}"#,
+            );
+        });
+
+        let asr = MimoBatchASR::new(
+            String::new(),
+            format!("http://{}", addr),
+            DEFAULT_MODEL.to_string(),
+        );
+        asr.consume_pcm_chunk(&vec![0u8; 32_000]);
+        let transcript = asr.transcribe().await.unwrap();
+
+        assert_eq!(transcript.text, "vllm ok");
         server.join().unwrap();
     }
 
@@ -394,8 +508,8 @@ mod tests {
                     .unwrap();
                 let request = read_http_request(&mut stream);
                 let request_text = String::from_utf8_lossy(&request);
-                assert!(request_text.starts_with("POST /chat/completions HTTP/1.1"));
-                assert!(request_text.contains(r#""model":"mimo-v2.5-asr""#));
+                assert!(request_text.starts_with("POST /v1/chat/completions HTTP/1.1"));
+                assert!(request_text.contains(r#"\"model\":\"mimo-v2.5-asr\""#));
                 assert!(request_text.contains("data:audio/wav;base64,"));
                 assert!(
                     request_text.len() < 10 * 1024 * 1024,
