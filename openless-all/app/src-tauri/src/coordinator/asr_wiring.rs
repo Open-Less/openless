@@ -71,6 +71,17 @@ pub(super) fn ensure_asr_credentials() -> Result<(), String> {
         }
     }
 
+    if crate::asr::local::is_apple_speech(&active_asr) {
+        #[cfg(not(target_os = "macos"))]
+        {
+            return Err("Apple Speech 当前仅支持 macOS".to_string());
+        }
+        #[cfg(target_os = "macos")]
+        {
+            return Ok(());
+        }
+    }
+
     if crate::asr::local::foundry::is_foundry_local_whisper(&active_asr) {
         #[cfg(not(target_os = "windows"))]
         {

@@ -14,6 +14,24 @@ use super::*;
 const HOTKEY_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(250);
 const STREAMING_INSERT_FLUSH_INTERVAL: std::time::Duration = std::time::Duration::from_millis(12);
 
+#[cfg(target_os = "macos")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MacosKeylessDictationProvider {
+    LocalQwen3,
+    AppleSpeech,
+}
+
+#[cfg(target_os = "macos")]
+fn macos_keyless_dictation_provider(active_asr: &str) -> Option<MacosKeylessDictationProvider> {
+    if crate::asr::local::is_local_qwen3(active_asr) {
+        Some(MacosKeylessDictationProvider::LocalQwen3)
+    } else if crate::asr::local::is_apple_speech(active_asr) {
+        Some(MacosKeylessDictationProvider::AppleSpeech)
+    } else {
+        None
+    }
+}
+
 /// Less Computer 浮窗的 Tauri 事件名（前端 LessComputerPanel 订阅）。
 const LESS_COMPUTER_EVENT: &str = "less-computer:event";
 
@@ -1215,33 +1233,58 @@ pub(super) async fn begin_session_as(
     }
 
     #[cfg(target_os = "macos")]
-    if crate::asr::local::is_local_qwen3(&active_asr) {
-        let local = match build_local_qwen3(inner).await {
-            Ok(l) => l,
-            Err(e) => {
-                log::error!("[coord] 本地 Qwen3-ASR 初始化失败: {e:#}");
-                emit_capsule(
+    if let Some(provider) = macos_keyless_dictation_provider(&active_asr) {
+        match provider {
+            MacosKeylessDictationProvider::LocalQwen3 => {
+                let local = match build_local_qwen3(inner).await {
+                    Ok(l) => l,
+                    Err(e) => {
+                        log::error!("[coord] 本地 Qwen3-ASR 初始化失败: {e:#}");
+                        emit_capsule(
+                            inner,
+                            CapsuleState::Error,
+                            0.0,
+                            0,
+                            Some(format!("本地模型初始化失败: {e}")),
+                            None,
+                        );
+                        restore_prepared_windows_ime_session(inner, current_session_id);
+                        inner.state.lock().phase = SessionPhase::Idle;
+                        schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
+                        return Err(format!("local ASR init failed: {e}"));
+                    }
+                };
+                store_asr_for_session(
                     inner,
-                    CapsuleState::Error,
-                    0.0,
-                    0,
-                    Some(format!("本地模型初始化失败: {e}")),
-                    None,
+                    current_session_id,
+                    ActiveAsr::Local(Arc::clone(&local)),
                 );
-                restore_prepared_windows_ime_session(inner, current_session_id);
-                inner.state.lock().phase = SessionPhase::Idle;
-                schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
-                return Err(format!("local ASR init failed: {e}"));
+                let consumer: Arc<dyn crate::recorder::AudioConsumer> = local;
+                start_recorder_and_enter_listening(
+                    inner,
+                    current_session_id,
+                    &active_asr,
+                    consumer,
+                )
+                .await?;
             }
-        };
-        store_asr_for_session(
-            inner,
-            current_session_id,
-            ActiveAsr::Local(Arc::clone(&local)),
-        );
-        let consumer: Arc<dyn crate::recorder::AudioConsumer> = local;
-        start_recorder_and_enter_listening(inner, current_session_id, &active_asr, consumer)
-            .await?;
+            MacosKeylessDictationProvider::AppleSpeech => {
+                let local = build_apple_speech();
+                store_asr_for_session(
+                    inner,
+                    current_session_id,
+                    ActiveAsr::AppleSpeech(Arc::clone(&local)),
+                );
+                let consumer: Arc<dyn crate::recorder::AudioConsumer> = local;
+                start_recorder_and_enter_listening(
+                    inner,
+                    current_session_id,
+                    &active_asr,
+                    consumer,
+                )
+                .await?;
+            }
+        }
         return Ok(());
     }
 
@@ -2700,6 +2743,8 @@ mod tests {
         finalize_polished_text, flush_streaming_insert_buffer_with, pcm_duration_ms,
         pcm_from_wav_bytes, streaming_insert_eligible,
     };
+    #[cfg(target_os = "macos")]
+    use super::{macos_keyless_dictation_provider, MacosKeylessDictationProvider};
     use crate::types::{
         ChineseScriptPreference, CorrectionRule, DictationSession, InsertStatus, PolishMode,
     };
@@ -2794,6 +2839,20 @@ mod tests {
         let sid = Uuid::new_v4();
         let session = build_transcribe_failed_session(sid, 1, PolishMode::Structured, false);
         assert_eq!(session.has_audio_recording, Some(false));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_keyless_dictation_provider_routes_apple_speech_locally() {
+        assert_eq!(
+            macos_keyless_dictation_provider(crate::asr::local::APPLE_SPEECH_PROVIDER_ID),
+            Some(MacosKeylessDictationProvider::AppleSpeech)
+        );
+        assert_eq!(
+            macos_keyless_dictation_provider(crate::asr::local::PROVIDER_ID),
+            Some(MacosKeylessDictationProvider::LocalQwen3)
+        );
+        assert_eq!(macos_keyless_dictation_provider("volcengine"), None);
     }
 
     #[test]
