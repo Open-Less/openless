@@ -465,6 +465,17 @@ fn run_desktop() {
             init_file_logger();
             log::info!("=== OpenLess 启动 ===");
 
+            #[cfg(target_os = "windows")]
+            if let Err(err) =
+                crate::windows_ime_profile::apply_windows_openless_keyboard_list_pref(
+                    &coordinator.prefs().get(),
+                )
+            {
+                log::warn!(
+                    "[windows-ime] apply keyboard list visibility pref on startup failed: {err}"
+                );
+            }
+
             // Capsule 启动时定位到屏幕底部居中并隐藏；coordinator 按需显示。
             // 与 Swift `CapsuleWindowController.repositionToBottomCenter` 同语义。
             if let Some(capsule) = app.get_webview_window("capsule") {

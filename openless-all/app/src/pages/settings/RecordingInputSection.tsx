@@ -6,6 +6,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ShortcutRecorder } from '../../components/ShortcutRecorder';
 import { playRecordStartCue } from '../../lib/audioCue';
+import { emitSaved } from '../../lib/savedEvent';
 import { isHotkeyModeMigrationNoticeActive } from '../../lib/hotkeyMigration';
 import {
   isTauri,
@@ -13,7 +14,7 @@ import {
   setDictationHotkey,
 } from '../../lib/ipc';
 import { getPlatformCapabilities } from '../../lib/platform';
-import type { HotkeyMode, MicrophoneDevice, PasteShortcut, PlatformCapabilities } from '../../lib/types';
+import type { HotkeyMode, MicrophoneDevice, PasteShortcut, PlatformCapabilities, UserPreferences } from '../../lib/types';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
 import { SelectLite } from '../../components/ui/SelectLite';
 import { Card, Collapsible } from '../_atoms';
@@ -39,7 +40,7 @@ async function autostartDisable(): Promise<void> {
 export function RecordingInputSection() {
   const { t } = useTranslation();
   const os = detectOS();
-  const { prefs, capability, updatePrefs: savePrefs } = useHotkeySettings();
+  const { prefs, capability, updatePrefs: savePrefs, refresh } = useHotkeySettings();
   const [platformCaps, setPlatformCaps] = useState<PlatformCapabilities | null>(null);
   const [microphoneDevices, setMicrophoneDevices] = useState<MicrophoneDevice[]>([]);
   const [microphoneDevicesLoaded, setMicrophoneDevicesLoaded] = useState(false);
@@ -102,6 +103,16 @@ export function RecordingInputSection() {
     };
   }, [loadMicrophoneDevices]);
 
+  const saveKeyboardListAffectingPrefs = useCallback(async (nextPrefs: UserPreferences) => {
+    try {
+      await savePrefs(nextPrefs);
+    } catch (error) {
+      console.error('[settings] keyboard list visibility pref save failed', error);
+      emitSaved('failed', t('settings.recording.windowsShowOpenlessInKeyboardListError'));
+      await refresh();
+    }
+  }, [savePrefs, refresh, t]);
+
   if (!prefs || !capability) {
     return (
       <Card>
@@ -132,7 +143,10 @@ export function RecordingInputSection() {
   const onAllowNonTsfFallbackChange = (allowNonTsfInsertionFallback: boolean) =>
     savePrefs({ ...prefs, allowNonTsfInsertionFallback });
   const onWindowsSendInputOnlyChange = (windowsSendInputInsertionOnly: boolean) =>
-    savePrefs({ ...prefs, windowsSendInputInsertionOnly });
+    void saveKeyboardListAffectingPrefs({ ...prefs, windowsSendInputInsertionOnly });
+  const onWindowsShowOpenlessInKeyboardListChange = (
+    windowsShowOpenlessInKeyboardList: boolean,
+  ) => void saveKeyboardListAffectingPrefs({ ...prefs, windowsShowOpenlessInKeyboardList });
   const onStartMinimizedChange = (startMinimized: boolean) =>
     savePrefs({ ...prefs, startMinimized });
   const onAutoUpdateCheckChange = (autoUpdateCheck: boolean) =>
@@ -300,6 +314,17 @@ export function RecordingInputSection() {
             <Toggle
               on={prefs.windowsSendInputInsertionOnly}
               onToggle={onWindowsSendInputOnlyChange}
+            />
+          </SettingRow>
+        )}
+        {capability.adapter === 'windowsLowLevel' && prefs.windowsSendInputInsertionOnly && (
+          <SettingRow
+            label={t('settings.recording.windowsShowOpenlessInKeyboardListLabel')}
+            desc={t('settings.recording.windowsShowOpenlessInKeyboardListDesc')}
+          >
+            <Toggle
+              on={prefs.windowsShowOpenlessInKeyboardList}
+              onToggle={(next) => void onWindowsShowOpenlessInKeyboardListChange(next)}
             />
           </SettingRow>
         )}

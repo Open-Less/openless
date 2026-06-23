@@ -50,6 +50,7 @@ export let mockSettings: UserPreferences = {
     pasteShortcut: "ctrlV",
     allowNonTsfInsertionFallback: true,
     windowsSendInputInsertionOnly: false,
+    windowsShowOpenlessInKeyboardList: true,
     workingLanguages: ["简体中文"],
     translationTargetLanguage: "",
     qaHotkey: defaultQaShortcut(),

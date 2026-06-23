@@ -109,7 +109,19 @@ impl<T: SettingsWriter + ?Sized> SettingsWriter for Arc<T> {
 
 pub(crate) fn persist_settings<T: SettingsWriter>(
     coord: &T,
+    prefs: UserPreferences,
+) -> Result<(), String> {
+    persist_settings_with_keyboard_apply(
+        coord,
+        prefs,
+        crate::windows_ime_profile::apply_windows_openless_keyboard_list_pref,
+    )
+}
+
+pub(crate) fn persist_settings_with_keyboard_apply<T: SettingsWriter>(
+    coord: &T,
     mut prefs: UserPreferences,
+    apply_keyboard_list: impl Fn(&UserPreferences) -> Result<(), String>,
 ) -> Result<(), String> {
     let mut previous = coord.read_settings();
     sync_dictation_hotkey_legacy_fields(&mut previous);
@@ -123,24 +135,68 @@ pub(crate) fn persist_settings<T: SettingsWriter>(
     let open_app_changed = previous.open_app_hotkey != prefs.open_app_hotkey;
     let coding_agent_changed = previous.coding_agent_enabled != prefs.coding_agent_enabled
         || previous.coding_agent_voice_hotkey != prefs.coding_agent_voice_hotkey;
+    let windows_keyboard_list_changed = previous.windows_sendinput_insertion_only
+        != prefs.windows_sendinput_insertion_only
+        || previous.windows_show_openless_in_keyboard_list
+            != prefs.windows_show_openless_in_keyboard_list;
     let active_asr_provider_changed = previous.active_asr_provider != prefs.active_asr_provider;
     let active_asr_provider = prefs.active_asr_provider.clone();
-    if active_asr_provider_changed {
-        coord.sync_active_asr_provider(&active_asr_provider)?;
+
+    if windows_keyboard_list_changed {
+        apply_keyboard_list(&prefs)?;
     }
+
+    if active_asr_provider_changed {
+        if let Err(asr_err) = coord.sync_active_asr_provider(&active_asr_provider) {
+            if windows_keyboard_list_changed {
+                if let Err(kb_rollback_err) = apply_keyboard_list(&previous) {
+                    return Err(format!(
+                        "{asr_err}; additionally failed to rollback keyboard list visibility: {kb_rollback_err}"
+                    ));
+                }
+                log::warn!(
+                    "[windows-ime] rolled back keyboard list visibility after ASR provider sync failure"
+                );
+            }
+            return Err(asr_err);
+        }
+    }
+
     if let Err(error) = coord.write_settings(prefs.clone()) {
         if active_asr_provider_changed {
-            if let Err(rollback_error) =
-                coord.sync_active_asr_provider(&previous.active_asr_provider)
-            {
-                coord.write_settings(prefs).map_err(|roll_forward_error| {
-                    format!(
-                        "{error}; additionally failed to restore active ASR provider: {rollback_error}; additionally failed to preserve active ASR provider consistency: {roll_forward_error}"
-                    )
-                })?;
-            } else {
-                return Err(error);
+            match coord.sync_active_asr_provider(&previous.active_asr_provider) {
+                Ok(()) => {
+                    if windows_keyboard_list_changed {
+                        if let Err(rollback_err) = apply_keyboard_list(&previous) {
+                            return Err(format!(
+                                "{error}; additionally failed to rollback keyboard list visibility: {rollback_err}"
+                            ));
+                        }
+                        log::warn!(
+                            "[windows-ime] rolled back keyboard list visibility after settings write failure"
+                        );
+                    }
+                    return Err(error);
+                }
+                Err(rollback_error) => {
+                    // ASR vault 无法回滚时 roll-forward prefs；键盘列表保持新状态，避免三者分叉。
+                    coord.write_settings(prefs).map_err(|roll_forward_error| {
+                        format!(
+                            "{error}; additionally failed to restore active ASR provider: {rollback_error}; additionally failed to preserve active ASR provider consistency: {roll_forward_error}"
+                        )
+                    })?;
+                }
             }
+        } else if windows_keyboard_list_changed {
+            if let Err(rollback_err) = apply_keyboard_list(&previous) {
+                return Err(format!(
+                    "{error}; additionally failed to rollback keyboard list visibility: {rollback_err}"
+                ));
+            }
+            log::warn!(
+                "[windows-ime] rolled back keyboard list visibility after settings write failure"
+            );
+            return Err(error);
         } else {
             return Err(error);
         }
@@ -462,6 +518,213 @@ pub async fn app_check_update_with_channel(
     {
         let _ = (coord, channel);
         Err("应用内更新仅支持 Android".to_string())
+    }
+}
+
+#[cfg(test)]
+mod persist_settings_tests {
+    use super::*;
+    use std::cell::RefCell;
+
+    struct MockWriter {
+        prefs: RefCell<UserPreferences>,
+        write_calls: RefCell<u32>,
+        asr_sync_calls: RefCell<Vec<String>>,
+        /// 前 N 次 write_settings 调用返回失败；0 = 从不失败。
+        write_fail_count: u32,
+        fail_forward_asr_sync: bool,
+        fail_rollback_asr_sync: bool,
+    }
+
+    impl MockWriter {
+        fn new(prefs: UserPreferences) -> Self {
+            Self {
+                prefs: RefCell::new(prefs),
+                write_calls: RefCell::new(0),
+                asr_sync_calls: RefCell::new(Vec::new()),
+                write_fail_count: 0,
+                fail_forward_asr_sync: false,
+                fail_rollback_asr_sync: false,
+            }
+        }
+    }
+
+    impl SettingsWriter for MockWriter {
+        fn read_settings(&self) -> UserPreferences {
+            self.prefs.borrow().clone()
+        }
+
+        fn write_settings(&self, prefs: UserPreferences) -> Result<(), String> {
+            let mut calls = self.write_calls.borrow_mut();
+            *calls += 1;
+            if *calls <= self.write_fail_count {
+                return Err("write failed".into());
+            }
+            *self.prefs.borrow_mut() = prefs;
+            Ok(())
+        }
+
+        fn sync_active_asr_provider(&self, provider: &str) -> Result<(), String> {
+            self.asr_sync_calls.borrow_mut().push(provider.to_string());
+            let stored = self.prefs.borrow().active_asr_provider.clone();
+            if self.fail_forward_asr_sync && provider != stored {
+                return Err("asr forward sync failed".into());
+            }
+            if self.fail_rollback_asr_sync && provider == stored {
+                return Err("asr rollback sync failed".into());
+            }
+            Ok(())
+        }
+
+        fn refresh_dictation_hotkey(&self) {}
+        fn refresh_qa_hotkey(&self) {}
+        fn refresh_combo_hotkey(&self) {}
+        fn refresh_translation_hotkey(&self) {}
+        fn refresh_switch_style_hotkey(&self) {}
+        fn refresh_open_app_hotkey(&self) {}
+        fn refresh_coding_agent_hotkey(&self) {}
+    }
+
+    #[test]
+    fn keyboard_apply_failure_does_not_sync_asr_or_write_prefs() {
+        let writer = MockWriter::new(UserPreferences::default());
+        let mut next = writer.read_settings();
+        next.windows_sendinput_insertion_only = true;
+        next.windows_show_openless_in_keyboard_list = false;
+        next.active_asr_provider = "other-asr".into();
+
+        let result = persist_settings_with_keyboard_apply(&writer, next, |_| {
+            Err("apply failed".into())
+        });
+
+        assert!(result.is_err());
+        assert_eq!(*writer.write_calls.borrow(), 0);
+        assert!(writer.asr_sync_calls.borrow().is_empty());
+        assert!(writer.read_settings().windows_show_openless_in_keyboard_list);
+    }
+
+    #[test]
+    fn keyboard_apply_success_writes_prefs() {
+        let writer = MockWriter::new(UserPreferences::default());
+        let mut next = writer.read_settings();
+        next.windows_sendinput_insertion_only = true;
+        next.windows_show_openless_in_keyboard_list = false;
+
+        let result = persist_settings_with_keyboard_apply(&writer, next.clone(), |_| Ok(()));
+
+        assert!(result.is_ok());
+        assert_eq!(*writer.write_calls.borrow(), 1);
+        assert!(!writer.read_settings().windows_show_openless_in_keyboard_list);
+    }
+
+    #[test]
+    fn asr_sync_failure_rolls_back_keyboard_list() {
+        let writer = MockWriter {
+            prefs: RefCell::new(UserPreferences::default()),
+            write_calls: RefCell::new(0),
+            asr_sync_calls: RefCell::new(Vec::new()),
+            write_fail_count: 0,
+            fail_forward_asr_sync: true,
+            fail_rollback_asr_sync: false,
+        };
+        let mut next = writer.read_settings();
+        next.windows_sendinput_insertion_only = true;
+        next.windows_show_openless_in_keyboard_list = false;
+        next.active_asr_provider = "other-asr".into();
+
+        let apply_calls = RefCell::new(0);
+        let result = persist_settings_with_keyboard_apply(&writer, next, |_| {
+            *apply_calls.borrow_mut() += 1;
+            Ok(())
+        });
+
+        assert!(result.is_err());
+        assert_eq!(*writer.write_calls.borrow(), 0);
+        assert_eq!(*apply_calls.borrow(), 2);
+        assert!(writer.read_settings().windows_show_openless_in_keyboard_list);
+    }
+
+    #[test]
+    fn keyboard_write_failure_rolls_back_profile_without_asr_change() {
+        let writer = MockWriter {
+            prefs: RefCell::new(UserPreferences::default()),
+            write_calls: RefCell::new(0),
+            asr_sync_calls: RefCell::new(Vec::new()),
+            write_fail_count: 1,
+            fail_forward_asr_sync: false,
+            fail_rollback_asr_sync: false,
+        };
+        let mut next = writer.read_settings();
+        next.windows_sendinput_insertion_only = true;
+        next.windows_show_openless_in_keyboard_list = false;
+
+        let rollback_calls = RefCell::new(0);
+        let result = persist_settings_with_keyboard_apply(&writer, next, |prefs| {
+            if prefs.windows_show_openless_in_keyboard_list {
+                *rollback_calls.borrow_mut() += 1;
+            }
+            Ok(())
+        });
+
+        assert!(result.is_err());
+        assert_eq!(*writer.write_calls.borrow(), 1);
+        assert_eq!(*rollback_calls.borrow(), 1);
+        assert!(writer.asr_sync_calls.borrow().is_empty());
+    }
+
+    #[test]
+    fn keyboard_write_failure_rolls_back_profile_when_asr_rollback_succeeds() {
+        let writer = MockWriter {
+            prefs: RefCell::new(UserPreferences::default()),
+            write_calls: RefCell::new(0),
+            asr_sync_calls: RefCell::new(Vec::new()),
+            write_fail_count: 1,
+            fail_forward_asr_sync: false,
+            fail_rollback_asr_sync: false,
+        };
+        let mut next = writer.read_settings();
+        next.windows_sendinput_insertion_only = true;
+        next.windows_show_openless_in_keyboard_list = false;
+        next.active_asr_provider = "other-asr".into();
+
+        let rollback_calls = RefCell::new(0);
+        let result = persist_settings_with_keyboard_apply(&writer, next, |prefs| {
+            if prefs.windows_show_openless_in_keyboard_list {
+                *rollback_calls.borrow_mut() += 1;
+            }
+            Ok(())
+        });
+
+        assert!(result.is_err());
+        assert_eq!(*writer.write_calls.borrow(), 1);
+        assert_eq!(*rollback_calls.borrow(), 1);
+    }
+
+    #[test]
+    fn keyboard_write_failure_keeps_new_keyboard_when_asr_roll_forward_succeeds() {
+        let writer = MockWriter {
+            prefs: RefCell::new(UserPreferences::default()),
+            write_calls: RefCell::new(0),
+            asr_sync_calls: RefCell::new(Vec::new()),
+            write_fail_count: 1,
+            fail_forward_asr_sync: false,
+            fail_rollback_asr_sync: true,
+        };
+        let mut next = writer.read_settings();
+        next.windows_sendinput_insertion_only = true;
+        next.windows_show_openless_in_keyboard_list = false;
+        next.active_asr_provider = "other-asr".into();
+
+        let apply_calls = RefCell::new(0);
+        let result = persist_settings_with_keyboard_apply(&writer, next.clone(), |_| {
+            *apply_calls.borrow_mut() += 1;
+            Ok(())
+        });
+
+        assert!(result.is_ok());
+        assert_eq!(*writer.write_calls.borrow(), 2);
+        assert_eq!(*apply_calls.borrow(), 1);
+        assert!(!writer.read_settings().windows_show_openless_in_keyboard_list);
     }
 }
 

@@ -3,7 +3,7 @@ pub const OPENLESS_TSF_LANG_ID: u16 = 0x0804;
 pub const OPENLESS_TEXT_SERVICE_CLSID_BRACED: &str = "{6B9F3F4F-5EE7-42D6-9C61-9F80B03A5D7D}";
 pub const OPENLESS_PROFILE_GUID_BRACED: &str = "{9B5F5E04-23F6-47DA-9A26-D221F6C3F02E}";
 
-use crate::types::{WindowsImeInstallState, WindowsImeStatus};
+use crate::types::{UserPreferences, WindowsImeInstallState, WindowsImeStatus};
 
 #[cfg(target_os = "windows")]
 fn parse_guid(value: &str) -> WindowsImeProfileResult<windows::core::GUID> {
@@ -122,6 +122,66 @@ pub fn get_windows_ime_status() -> WindowsImeStatus {
     }
 }
 
+/// 根据偏好决定 OpenLess 语言配置文件是否应在用户键盘列表中启用。
+pub fn desired_openless_language_profile_enabled(prefs: &UserPreferences) -> bool {
+    if !prefs.windows_sendinput_insertion_only {
+        return true;
+    }
+    prefs.windows_show_openless_in_keyboard_list
+}
+
+#[cfg(target_os = "windows")]
+pub fn set_openless_language_profile_enabled(enabled: bool) -> WindowsImeProfileResult<()> {
+    windows_impl::set_openless_language_profile_enabled(enabled)
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn set_openless_language_profile_enabled(_enabled: bool) -> WindowsImeProfileResult<()> {
+    Err(WindowsImeProfileError::Unavailable(
+        "Windows TSF profiles are only available on Windows".to_string(),
+    ))
+}
+
+#[cfg(target_os = "windows")]
+pub fn is_openless_language_profile_enabled() -> WindowsImeProfileResult<bool> {
+    windows_impl::is_openless_language_profile_enabled()
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn is_openless_language_profile_enabled() -> WindowsImeProfileResult<bool> {
+    Err(WindowsImeProfileError::Unavailable(
+        "Windows TSF profiles are only available on Windows".to_string(),
+    ))
+}
+
+/// 将「SendInput + 键盘列表可见性」偏好同步到当前用户的 TSF 语言配置文件。
+pub fn apply_windows_openless_keyboard_list_pref(prefs: &UserPreferences) -> Result<(), String> {
+    let desired = desired_openless_language_profile_enabled(prefs);
+    #[cfg(target_os = "windows")]
+    {
+        let status = get_windows_ime_status();
+        if status.state != WindowsImeInstallState::Installed {
+            if desired {
+                return Ok(());
+            }
+            return Err(
+                "OpenLess TSF IME is not installed; cannot hide it from the keyboard list"
+                    .to_string(),
+            );
+        }
+        set_openless_language_profile_enabled(desired).map_err(|err| {
+            let message = err.to_string();
+            log::warn!("[windows-ime] apply keyboard list visibility pref failed: {message}");
+            message
+        })
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = desired;
+        Ok(())
+    }
+}
+
 #[cfg(target_os = "windows")]
 pub struct WindowsImeProfileManager;
 
@@ -193,6 +253,7 @@ mod windows_impl {
         COINIT_APARTMENTTHREADED,
     };
     use windows::Win32::UI::Input::KeyboardAndMouse::HKL;
+    use windows::Win32::Foundation::BOOL;
     use windows::Win32::UI::TextServices::{
         CLSID_TF_InputProcessorProfiles, ITfInputProcessorProfileMgr, ITfInputProcessorProfiles,
         GUID_TFCAT_TIP_KEYBOARD, TF_INPUTPROCESSORPROFILE, TF_IPPMF_DONTCARECURRENTINPUTLANGUAGE,
@@ -401,6 +462,35 @@ mod windows_impl {
                 .map(normalize_guid_string)
                 .as_deref()
                 == Some(OPENLESS_PROFILE_GUID_BRACED))
+    }
+
+    pub fn set_openless_language_profile_enabled(enabled: bool) -> WindowsImeProfileResult<()> {
+        let clsid = parse_guid(OPENLESS_TEXT_SERVICE_CLSID_BRACED)?;
+        let profile_guid = parse_guid(OPENLESS_PROFILE_GUID_BRACED)?;
+        let enable_flag = BOOL::from(enabled);
+
+        with_input_processor_profiles(|profiles| unsafe {
+            profiles.EnableLanguageProfile(
+                &clsid,
+                OPENLESS_TSF_LANG_ID,
+                &profile_guid,
+                enable_flag,
+            )
+        })
+    }
+
+    pub fn is_openless_language_profile_enabled() -> WindowsImeProfileResult<bool> {
+        let clsid = parse_guid(OPENLESS_TEXT_SERVICE_CLSID_BRACED)?;
+        let profile_guid = parse_guid(OPENLESS_PROFILE_GUID_BRACED)?;
+
+        with_input_processor_profiles(|profiles| unsafe {
+            let enabled = profiles.IsEnabledLanguageProfile(
+                &clsid,
+                OPENLESS_TSF_LANG_ID,
+                &profile_guid,
+            )?;
+            Ok(enabled.as_bool())
+        })
     }
 
     pub fn get_windows_ime_status() -> WindowsImeStatus {
@@ -691,6 +781,30 @@ mod tests {
             restore_decision(Some(&text_service_snapshot()), false, false),
             ProfileRestoreDecision::KeepCurrentProfile
         );
+    }
+
+    #[test]
+    fn desired_openless_language_profile_enabled_follows_sendinput_and_visibility_pref() {
+        let tsf_only = UserPreferences {
+            windows_sendinput_insertion_only: false,
+            windows_show_openless_in_keyboard_list: false,
+            ..UserPreferences::default()
+        };
+        assert!(desired_openless_language_profile_enabled(&tsf_only));
+
+        let sendinput_show = UserPreferences {
+            windows_sendinput_insertion_only: true,
+            windows_show_openless_in_keyboard_list: true,
+            ..UserPreferences::default()
+        };
+        assert!(desired_openless_language_profile_enabled(&sendinput_show));
+
+        let sendinput_hide = UserPreferences {
+            windows_sendinput_insertion_only: true,
+            windows_show_openless_in_keyboard_list: false,
+            ..UserPreferences::default()
+        };
+        assert!(!desired_openless_language_profile_enabled(&sendinput_hide));
     }
 }
 

@@ -594,6 +594,13 @@ pub struct UserPreferences {
         alias = "windowsSendinputInsertionOnly"
     )]
     pub windows_sendinput_insertion_only: bool,
+    /// Windows：SendInput 模式下是否在系统键盘列表（Win+Space）中显示 OpenLess TSF 输入法。
+    /// 默认 true 保持现有行为；关闭后用户级禁用语言配置文件，无需管理员权限。
+    #[serde(
+        default = "default_true",
+        rename = "windowsShowOpenlessInKeyboardList"
+    )]
+    pub windows_show_openless_in_keyboard_list: bool,
     /// 用户的工作语言（多选，原生名）。会作为前提注入 LLM polish/translate 的 system prompt 头部，
     /// 让模型知道该用户在哪些语言间工作。详见 issue #4。
     #[serde(default = "default_working_languages")]
@@ -897,6 +904,8 @@ struct UserPreferencesWire {
         alias = "windowsSendinputInsertionOnly"
     )]
     windows_sendinput_insertion_only: bool,
+    #[serde(default = "default_true", rename = "windowsShowOpenlessInKeyboardList")]
+    windows_show_openless_in_keyboard_list: bool,
     working_languages: Vec<String>,
     translation_target_language: String,
     chinese_script_preference: ChineseScriptPreference,
@@ -1019,6 +1028,7 @@ impl Default for UserPreferencesWire {
             paste_shortcut: prefs.paste_shortcut,
             allow_non_tsf_insertion_fallback: prefs.allow_non_tsf_insertion_fallback,
             windows_sendinput_insertion_only: prefs.windows_sendinput_insertion_only,
+            windows_show_openless_in_keyboard_list: prefs.windows_show_openless_in_keyboard_list,
             working_languages: prefs.working_languages,
             translation_target_language: prefs.translation_target_language,
             chinese_script_preference: prefs.chinese_script_preference,
@@ -1120,6 +1130,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             paste_shortcut: wire.paste_shortcut,
             allow_non_tsf_insertion_fallback: wire.allow_non_tsf_insertion_fallback,
             windows_sendinput_insertion_only: wire.windows_sendinput_insertion_only,
+            windows_show_openless_in_keyboard_list: wire.windows_show_openless_in_keyboard_list,
             working_languages: wire.working_languages,
             translation_target_language: wire.translation_target_language,
             chinese_script_preference: wire.chinese_script_preference,
@@ -1864,6 +1875,7 @@ impl Default for UserPreferences {
             paste_shortcut: PasteShortcut::default(),
             allow_non_tsf_insertion_fallback: true,
             windows_sendinput_insertion_only: false,
+            windows_show_openless_in_keyboard_list: true,
             working_languages: default_working_languages(),
             translation_target_language: String::new(),
             chinese_script_preference: ChineseScriptPreference::Auto,
@@ -2651,6 +2663,32 @@ mod tests {
         assert!(json.contains(r#""windowsSendInputInsertionOnly":true"#));
         let restored: UserPreferences = serde_json::from_str(&json).unwrap();
         assert!(restored.windows_sendinput_insertion_only);
+    }
+
+    #[test]
+    fn windows_show_openless_in_keyboard_list_defaults_to_enabled() {
+        let prefs = UserPreferences::default();
+        assert!(prefs.windows_show_openless_in_keyboard_list);
+
+        let prefs: UserPreferences = serde_json::from_str("{}").unwrap();
+        assert!(prefs.windows_show_openless_in_keyboard_list);
+    }
+
+    #[test]
+    fn windows_show_openless_in_keyboard_list_deserializes_frontend_wire_key() {
+        let prefs: UserPreferences =
+            serde_json::from_str(r#"{"windowsShowOpenlessInKeyboardList": false}"#).unwrap();
+        assert!(!prefs.windows_show_openless_in_keyboard_list);
+    }
+
+    #[test]
+    fn windows_show_openless_in_keyboard_list_serializes_frontend_wire_key() {
+        let hidden = UserPreferences {
+            windows_show_openless_in_keyboard_list: false,
+            ..UserPreferences::default()
+        };
+        let json = serde_json::to_string(&hidden).unwrap();
+        assert!(json.contains(r#""windowsShowOpenlessInKeyboardList":false"#));
     }
 
     #[test]

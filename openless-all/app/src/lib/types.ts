@@ -270,6 +270,8 @@ export interface UserPreferences {
   allowNonTsfInsertionFallback: boolean;
   /** Windows：始终用 SendInput Unicode 插入，听写期间不切换 OpenLess TSF 输入法。 */
   windowsSendInputInsertionOnly: boolean;
+  /** Windows：SendInput 模式下是否在系统键盘列表（Win+Space）中显示 OpenLess。 */
+  windowsShowOpenlessInKeyboardList: boolean;
   /** 用户的工作语言（多选，原生名）；作为前提注入 LLM polish/translate prompt 头部。 */
   workingLanguages: string[];
   /** 翻译模式目标语言（单选，原生名）；空串 = 不启用 Shift 翻译。详见 issue #4。 */
