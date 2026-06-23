@@ -17,7 +17,7 @@
 //!
 //! "ark.api_key"/"volcengine.app_key" 等账户名按 Swift 语义路由到 active provider。
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -200,6 +200,79 @@ impl CredsLlmEntry {
                 .map(|h| h.is_empty())
                 .unwrap_or(true)
     }
+}
+
+fn active_llm_extra_headers(root: &CredsRoot) -> HashMap<String, String> {
+    root.providers
+        .llm
+        .get(&root.active.llm)
+        .and_then(|entry| entry.extraHeaders.clone())
+        .unwrap_or_default()
+}
+
+fn active_llm_extra_headers_json(root: &CredsRoot) -> Result<Option<String>> {
+    let headers = active_llm_extra_headers(root);
+    if headers.is_empty() {
+        return Ok(None);
+    }
+    let ordered = headers.into_iter().collect::<BTreeMap<_, _>>();
+    serde_json::to_string(&ordered)
+        .map(Some)
+        .context("encode LLM extra headers")
+}
+
+fn parse_extra_headers_json(value: &str) -> Result<HashMap<String, String>> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let raw: HashMap<String, serde_json::Value> =
+        serde_json::from_str(trimmed).context("extra headers must be a JSON object")?;
+    let mut headers = HashMap::new();
+    for (key, value) in raw {
+        let key = key.trim();
+        if key.is_empty() {
+            anyhow::bail!("extra header name cannot be empty");
+        }
+        if !is_valid_header_name(key) {
+            anyhow::bail!("invalid extra header name: {key}");
+        }
+        let Some(value) = value.as_str() else {
+            anyhow::bail!("extra header value for {key} must be a string");
+        };
+        if value.contains('\r') || value.contains('\n') {
+            anyhow::bail!("extra header value for {key} cannot contain line breaks");
+        }
+        headers.insert(key.to_string(), value.to_string());
+    }
+    Ok(headers)
+}
+
+fn is_valid_header_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.bytes().all(|b| {
+            matches!(
+                b,
+                b'!' | b'#'
+                    | b'$'
+                    | b'%'
+                    | b'&'
+                    | b'\''
+                    | b'*'
+                    | b'+'
+                    | b'-'
+                    | b'.'
+                    | b'^'
+                    | b'_'
+                    | b'`'
+                    | b'|'
+                    | b'~'
+                    | b'0'..=b'9'
+                    | b'a'..=b'z'
+                    | b'A'..=b'Z'
+            )
+        })
 }
 
 fn credentials_path() -> Result<PathBuf> {
@@ -839,6 +912,29 @@ impl CredentialsVault {
     pub fn get_active_llm() -> String {
         let _guard = credentials_lock().lock();
         load_credentials().active.llm
+    }
+
+    pub fn get_active_llm_extra_headers() -> HashMap<String, String> {
+        let _guard = credentials_lock().lock();
+        active_llm_extra_headers(&load_credentials())
+    }
+
+    pub fn get_active_llm_extra_headers_json() -> Result<Option<String>> {
+        let _guard = credentials_lock().lock();
+        active_llm_extra_headers_json(&load_credentials())
+    }
+
+    pub fn set_active_llm_extra_headers_json(value: &str) -> Result<()> {
+        let _guard = credentials_lock().lock();
+        let headers = parse_extra_headers_json(value)?;
+        let mut root = load_credentials_for_update()?;
+        let entry = root.providers.llm.entry(root.active.llm.clone()).or_default();
+        entry.extraHeaders = if headers.is_empty() {
+            None
+        } else {
+            Some(headers)
+        };
+        save_credentials(&root)
     }
 
     pub fn snapshot() -> CredentialsSnapshot {

@@ -769,6 +769,8 @@ export const zhTW: typeof zhCN = {
       apiKeyLabel: 'API 密鑰',
       baseUrlLabel: '接口地址',
       modelLabel: '模型',
+      extraHeadersLabel: '額外 Headers',
+      extraHeadersPlaceholder: '{"custom-head":"..."}',
       thinkingModeLabel: '思考',
       thinkingModeOn: '開啟',
       thinkingModeOff: '關閉',

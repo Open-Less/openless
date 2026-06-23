@@ -376,6 +376,16 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
             <CredentialField key={`${committedLlmProvider}:api_key`} label={t('settings.providers.apiKeyLabel')} account="ark.api_key" mono mask />
             <CredentialField key={`${committedLlmProvider}:endpoint`} label={t('settings.providers.baseUrlLabel')} account="ark.endpoint"
               placeholder={preset.baseUrl || 'https://your-endpoint/v1'} />
+            {committedLlmProvider === 'custom' && (
+              <CredentialField
+                key={`${committedLlmProvider}:extra_headers`}
+                label={t('settings.providers.extraHeadersLabel')}
+                account="ark.extra_headers"
+                placeholder={t('settings.providers.extraHeadersPlaceholder')}
+                mono
+                mask
+              />
+            )}
           </>
         )}
         <CredentialField key={`${committedLlmProvider}:model:${llmModelRevision}`} label={t('settings.providers.modelLabel')} account="ark.model_id"

@@ -2003,7 +2003,8 @@ fn build_active_llm_provider(llm_thinking_enabled: bool) -> anyhow::Result<Activ
         .trim_end_matches('/')
         .to_string();
     let config = OpenAICompatibleConfig::new(active, "OpenLess LLM", base_url, api_key, model)
-        .with_thinking_enabled(llm_thinking_enabled);
+        .with_thinking_enabled(llm_thinking_enabled)
+        .with_extra_headers(CredentialsVault::get_active_llm_extra_headers());
     Ok(ActiveLLMProvider::OpenAI(OpenAICompatibleLLMProvider::new(
         config,
     )))

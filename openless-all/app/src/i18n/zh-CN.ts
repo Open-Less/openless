@@ -767,6 +767,8 @@ export const zhCN = {
       apiKeyLabel: 'API 密钥',
       baseUrlLabel: '接口地址',
       modelLabel: '模型',
+      extraHeadersLabel: '额外 Headers',
+      extraHeadersPlaceholder: '{"custom-head":"..."}',
       thinkingModeLabel: '思考',
       thinkingModeOn: '开启',
       thinkingModeOff: '关闭',

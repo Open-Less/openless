@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::HashMap;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -55,6 +56,7 @@ pub async fn list_provider_models(kind: String) -> Result<ProviderModelsResult, 
 pub(crate) struct ProviderConfig {
     pub(crate) base_url: String,
     pub(crate) api_key: String,
+    pub(crate) extra_headers: HashMap<String, String>,
 }
 
 fn read_openai_provider_config(kind: &str) -> Result<ProviderConfig, String> {
@@ -77,6 +79,11 @@ fn read_openai_provider_config(kind: &str) -> Result<ProviderConfig, String> {
     let base_url = CredentialsVault::get(endpoint_account)
         .map_err(|e| e.to_string())?
         .unwrap_or_default();
+    let extra_headers = if kind == "llm" {
+        CredentialsVault::get_active_llm_extra_headers()
+    } else {
+        HashMap::new()
+    };
     if api_key_required && api_key.trim().is_empty() {
         return Err("API Key 为空".to_string());
     }
@@ -90,7 +97,11 @@ fn read_openai_provider_config(kind: &str) -> Result<ProviderConfig, String> {
     // (asr/llm) 连通性测试与 list_provider_models 模型列表两条 HTTP 路径。
     crate::coordinator::validate_llm_endpoint(&base_url)
         .map_err(|_| "endpointInvalid".to_string())?;
-    Ok(ProviderConfig { base_url, api_key })
+    Ok(ProviderConfig {
+        base_url,
+        api_key,
+        extra_headers,
+    })
 }
 
 async fn validate_llm_provider() -> Result<(), String> {
@@ -142,7 +153,8 @@ async fn validate_llm_provider() -> Result<(), String> {
             config.api_key,
             model,
         )
-        .with_thinking_enabled(llm_thinking_enabled),
+        .with_thinking_enabled(llm_thinking_enabled)
+        .with_extra_headers(config.extra_headers),
     );
     provider
         .polish(
@@ -418,6 +430,9 @@ pub(crate) async fn fetch_provider_models(config: &ProviderConfig) -> Result<Vec
         } else {
             request = request.header("Authorization", format!("Bearer {}", config.api_key));
         }
+    }
+    for (k, v) in &config.extra_headers {
+        request = request.header(k.as_str(), v.as_str());
     }
     let response = request.send().await.map_err(|e| {
         if e.is_timeout() {

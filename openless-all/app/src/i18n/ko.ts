@@ -771,6 +771,8 @@ export const ko: typeof zhCN = {
       apiKeyLabel: 'API 키',
       baseUrlLabel: '엔드포인트',
       modelLabel: '모델',
+      extraHeadersLabel: '추가 Headers',
+      extraHeadersPlaceholder: '{"custom-head":"..."}',
       thinkingModeLabel: '사고',
       thinkingModeOn: '켜짐',
       thinkingModeOff: '꺼짐',
