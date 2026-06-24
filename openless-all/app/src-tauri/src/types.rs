@@ -630,7 +630,7 @@ pub struct UserPreferences {
     #[serde(default)]
     pub windows_insertion_mode: WindowsInsertionMode,
     /// Windows SendInput 路径的换行模拟方式。
-    #[serde(default)]
+    #[serde(default, rename = "windowsSendInputNewlineMode")]
     pub windows_sendinput_newline_mode: WindowsSendInputNewlineMode,
     /// 旧版 wire 兼容：`true` 等价于 `windows_insertion_mode = SendInput`。
     #[serde(
@@ -945,7 +945,11 @@ struct UserPreferencesWire {
     allow_non_tsf_insertion_fallback: bool,
     #[serde(default)]
     windows_insertion_mode: WindowsInsertionMode,
-    #[serde(default)]
+    #[serde(
+        default,
+        rename = "windowsSendInputNewlineMode",
+        alias = "windowsSendinputNewlineMode"
+    )]
     windows_sendinput_newline_mode: WindowsSendInputNewlineMode,
     #[serde(
         default,
@@ -2732,6 +2736,18 @@ mod tests {
             prefs.windows_sendinput_newline_mode,
             WindowsSendInputNewlineMode::ShiftEnter
         );
+    }
+
+    #[test]
+    fn windows_sendinput_newline_mode_serializes_frontend_wire_key() {
+        let prefs = UserPreferences {
+            windows_insertion_mode: WindowsInsertionMode::SendInput,
+            windows_sendinput_newline_mode: WindowsSendInputNewlineMode::ShiftEnter,
+            ..UserPreferences::default()
+        };
+        let json = serde_json::to_string(&prefs).unwrap();
+        assert!(json.contains(r#""windowsSendInputNewlineMode":"shiftEnter""#));
+        assert!(!json.contains("windowsSendinputNewlineMode"));
     }
 
     #[test]
