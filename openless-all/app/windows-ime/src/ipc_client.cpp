@@ -336,10 +336,15 @@ std::wstring EscapeJsonString(const std::wstring& value) {
 
 }  // namespace
 
-OpenLessPipeServer::OpenLessPipeServer() = default;
+OpenLessPipeServer::OpenLessPipeServer()
+    : shutdown_event_(CreateEventW(nullptr, TRUE, FALSE, nullptr)) {}
 
 OpenLessPipeServer::~OpenLessPipeServer() {
   Stop();
+  if (shutdown_event_ != nullptr) {
+    CloseHandle(shutdown_event_);
+    shutdown_event_ = nullptr;
+  }
 }
 
 void OpenLessPipeServer::Start(OpenLessTextService* service) {
@@ -348,6 +353,11 @@ void OpenLessPipeServer::Start(OpenLessTextService* service) {
   }
 
   stop_requested_.store(false);
+
+  if (shutdown_event_ != nullptr) {
+    ResetEvent(shutdown_event_);
+  }
+
   pipe_name_ = PipeNameForCurrentThread();
   service_ = service;
   service_->AddRef();
@@ -356,10 +366,19 @@ void OpenLessPipeServer::Start(OpenLessTextService* service) {
 
 void OpenLessPipeServer::Stop() {
   stop_requested_.store(true);
+
+  if (shutdown_event_ != nullptr) {
+    SetEvent(shutdown_event_);
+  }
+
   if (thread_.joinable()) {
     CancelSynchronousIo(thread_.native_handle());
     WakePipe();
     thread_.join();
+  }
+
+  if (shutdown_event_ != nullptr) {
+    ResetEvent(shutdown_event_);
   }
 
   if (service_ != nullptr) {
@@ -458,7 +477,8 @@ void OpenLessPipeServer::HandleSubmitLine(HANDLE pipe, const std::string& line) 
   }
 
   const HRESULT hr =
-      service_->SubmitTextFromPipe(message.session_id, message.text);
+      service_->SubmitTextFromPipe(message.session_id, message.text,
+                                   shutdown_event_);
   if (SUCCEEDED(hr)) {
     WriteResult(pipe, message.session_id, L"committed", nullptr);
   } else {

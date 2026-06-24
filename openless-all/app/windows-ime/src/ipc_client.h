@@ -32,6 +32,7 @@ class OpenLessPipeServer {
   std::thread thread_;
   std::mutex pipe_mutex_;
   HANDLE pipe_handle_ = INVALID_HANDLE_VALUE;
+  HANDLE shutdown_event_ = nullptr;
   std::wstring pipe_name_;
   OpenLessTextService* service_ = nullptr;
 };

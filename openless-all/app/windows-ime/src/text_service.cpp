@@ -20,6 +20,7 @@ struct SubmitTextRequest {
   std::shared_ptr<OpenLessAsyncEditState> async_completion;
   bool wait_for_async_completion = false;
   HRESULT result = E_UNEXPECTED;
+  HANDLE completion_event = nullptr;
 };
 
 HRESULT WaitForAsyncEditCompletion(
@@ -133,7 +134,8 @@ STDMETHODIMP OpenLessTextService::Deactivate() {
 
 HRESULT OpenLessTextService::SubmitTextFromPipe(
     const std::wstring& session_id,
-    const std::wstring& text) {
+    const std::wstring& text,
+    HANDLE shutdown_event) {
   if (GetCurrentThreadId() == owner_thread_id_) {
     return CommitTextOnOwnerThread(session_id, text, nullptr, nullptr);
   }
@@ -145,21 +147,49 @@ HRESULT OpenLessTextService::SubmitTextFromPipe(
   SubmitTextRequest request;
   request.session_id = &session_id;
   request.text = &text;
-  DWORD_PTR message_result = 0;
-  const LRESULT sent = SendMessageTimeoutW(
-      message_window_, kSubmitTextMessage, 0,
-      reinterpret_cast<LPARAM>(&request), SMTO_ABORTIFHUNG,
-      kSubmitTextTimeoutMs, &message_result);
-  if (sent == 0) {
+  request.completion_event =
+      CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  if (request.completion_event == nullptr) {
+    return HRESULT_FROM_WIN32(GetLastError());
+  }
+
+  if (!PostMessageW(message_window_, kSubmitTextMessage, 0,
+                    reinterpret_cast<LPARAM>(&request))) {
     const DWORD error = GetLastError();
-    return HRESULT_FROM_WIN32(error != ERROR_SUCCESS ? error : ERROR_TIMEOUT);
+    CloseHandle(request.completion_event);
+    return HRESULT_FROM_WIN32(error);
   }
 
-  if (request.wait_for_async_completion) {
-    return WaitForAsyncEditCompletion(request.async_completion);
+  HANDLE wait_handles[2] = {};
+  DWORD wait_count = 0;
+
+  wait_handles[wait_count] = request.completion_event;
+  ++wait_count;
+
+  if (shutdown_event != nullptr) {
+    wait_handles[wait_count] = shutdown_event;
+    ++wait_count;
   }
 
-  return request.result;
+  const DWORD wait_result = WaitForMultipleObjects(
+      wait_count, wait_handles, FALSE, kSubmitTextTimeoutMs);
+
+  HRESULT result;
+  if (wait_result == WAIT_OBJECT_0) {
+    result = request.result;
+    if (request.wait_for_async_completion) {
+      result = WaitForAsyncEditCompletion(request.async_completion);
+    }
+  } else if (wait_count > 1 && wait_result == WAIT_OBJECT_0 + 1) {
+    result = HRESULT_FROM_WIN32(ERROR_CANCELLED);
+  } else if (wait_result == WAIT_TIMEOUT) {
+    result = HRESULT_FROM_WIN32(ERROR_TIMEOUT);
+  } else {
+    result = HRESULT_FROM_WIN32(GetLastError());
+  }
+
+  CloseHandle(request.completion_event);
+  return result;
 }
 
 HRESULT OpenLessTextService::StartIpcServer() {
@@ -325,6 +355,9 @@ LRESULT CALLBACK OpenLessTextService::MessageWindowProc(HWND window,
     request->result = service->CommitTextOnOwnerThread(
         *request->session_id, *request->text, &request->async_completion,
         &request->wait_for_async_completion);
+    if (request->completion_event != nullptr) {
+      SetEvent(request->completion_event);
+    }
     return 1;
   }
 

@@ -27,7 +27,8 @@ class OpenLessTextService final : public ITfTextInputProcessorEx {
                           DWORD flags) override;
 
   HRESULT SubmitTextFromPipe(const std::wstring& session_id,
-                             const std::wstring& text);
+                             const std::wstring& text,
+                             HANDLE shutdown_event = nullptr);
 
  private:
   HRESULT StartIpcServer();
