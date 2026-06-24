@@ -8,11 +8,13 @@
 #![allow(dead_code, unused_variables)]
 
 #[cfg(target_os = "windows")]
-mod tauri {
-    pub struct AppHandle<R: Runtime>(std::marker::PhantomData<R>);
+extern crate self as tauri;
 
-    pub trait Runtime {}
-}
+#[cfg(target_os = "windows")]
+pub struct AppHandle<R: Runtime>(std::marker::PhantomData<R>);
+
+#[cfg(target_os = "windows")]
+pub trait Runtime {}
 
 mod asr {
     pub mod local {
