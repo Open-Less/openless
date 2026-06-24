@@ -7,6 +7,13 @@
 
 #![allow(dead_code, unused_variables)]
 
+#[cfg(target_os = "windows")]
+mod tauri {
+    pub struct AppHandle<R: Runtime>(std::marker::PhantomData<R>);
+
+    pub trait Runtime {}
+}
+
 mod asr {
     pub mod local {
         pub mod foundry {
@@ -47,3 +54,6 @@ mod recorder;
 mod shortcut_binding;
 #[path = "../../src/types.rs"]
 mod types;
+#[cfg(target_os = "windows")]
+#[path = "../../src/unicode_keystroke.rs"]
+mod unicode_keystroke;

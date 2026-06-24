@@ -3108,6 +3108,7 @@ mod tests {
         ));
     }
 
+    #[cfg(target_os = "windows")]
     #[test]
     fn streaming_disabled_for_windows_tsf_insertion_mode() {
         assert!(!streaming_insert_eligible(
@@ -3120,6 +3121,7 @@ mod tests {
         ));
     }
 
+    #[cfg(target_os = "windows")]
     #[test]
     fn streaming_disabled_for_windows_paste_insertion_mode() {
         assert!(!streaming_insert_eligible(
@@ -3130,6 +3132,24 @@ mod tests {
             ChineseScriptPreference::Auto,
             crate::types::WindowsInsertionMode::Paste,
         ));
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn streaming_ignores_windows_insertion_mode_on_non_windows() {
+        for mode in [
+            crate::types::WindowsInsertionMode::Tsf,
+            crate::types::WindowsInsertionMode::Paste,
+        ] {
+            assert!(streaming_insert_eligible(
+                true,
+                false,
+                PolishMode::Light,
+                false,
+                ChineseScriptPreference::Auto,
+                mode,
+            ));
+        }
     }
 
     #[test]
