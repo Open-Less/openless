@@ -313,11 +313,12 @@ mod macos_impl {
 #[cfg(target_os = "windows")]
 mod windows_impl {
     use super::{TisError, TypeError};
+    use crate::types::WindowsSendInputNewlineMode;
     use std::time::Duration;
     use tauri::{AppHandle, Runtime};
     use windows::Win32::UI::Input::KeyboardAndMouse::{
         SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP,
-        KEYEVENTF_UNICODE, VIRTUAL_KEY,
+        KEYEVENTF_UNICODE, VIRTUAL_KEY, VK_RETURN, VK_SHIFT, VK_TAB,
     };
 
     const SENDINPUT_CHUNK_CHARS: usize = 16;
@@ -326,7 +327,27 @@ mod windows_impl {
     /// Windows / Linux 上没有 input source 概念，token 留空。Send/Sync 自动派生。
     pub struct PreviousInputSource;
 
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct WindowsSendInputOptions {
+        pub newline_mode: WindowsSendInputNewlineMode,
+    }
+
+    impl Default for WindowsSendInputOptions {
+        fn default() -> Self {
+            Self {
+                newline_mode: WindowsSendInputNewlineMode::Enter,
+            }
+        }
+    }
+
     pub fn type_unicode_chunk(text: &str) -> Result<usize, TypeError> {
+        type_unicode_chunk_with_options(text, WindowsSendInputOptions::default())
+    }
+
+    pub fn type_unicode_chunk_with_options(
+        text: &str,
+        options: WindowsSendInputOptions,
+    ) -> Result<usize, TypeError> {
         if text.is_empty() {
             return Ok(0);
         }
@@ -334,17 +355,36 @@ mod windows_impl {
         let mut sent_in_chunk = 0usize;
         let mut chars = text.chars().peekable();
         while let Some(ch) = chars.next() {
-            let mut buf = [0u16; 2];
-            for unit in ch.encode_utf16(&mut buf) {
-                if let Err(e) = send_utf16_unit(*unit, false) {
-                    return Err(partial_or_original(typed_chars, e));
-                }
-                if let Err(e) = send_utf16_unit(*unit, true) {
-                    return Err(partial_or_original(typed_chars, e));
-                }
+            if ch == '\r' {
+                continue;
             }
-            typed_chars += 1;
-            sent_in_chunk += 1;
+
+            if ch == '\n' {
+                if let Err(e) = send_newline(options.newline_mode) {
+                    return Err(partial_or_original(typed_chars, e));
+                }
+                typed_chars += 1;
+                sent_in_chunk += 1;
+            } else if ch == '\t' {
+                if let Err(e) = press_vk(VK_TAB) {
+                    return Err(partial_or_original(typed_chars, e));
+                }
+                typed_chars += 1;
+                sent_in_chunk += 1;
+            } else {
+                let mut buf = [0u16; 2];
+                for unit in ch.encode_utf16(&mut buf) {
+                    if let Err(e) = send_utf16_unit(*unit, false) {
+                        return Err(partial_or_original(typed_chars, e));
+                    }
+                    if let Err(e) = send_utf16_unit(*unit, true) {
+                        return Err(partial_or_original(typed_chars, e));
+                    }
+                }
+                typed_chars += 1;
+                sent_in_chunk += 1;
+            }
+
             if sent_in_chunk >= SENDINPUT_CHUNK_CHARS && chars.peek().is_some() {
                 std::thread::sleep(SENDINPUT_CHUNK_DELAY);
                 sent_in_chunk = 0;
@@ -361,6 +401,57 @@ mod windows_impl {
                 typed_chars,
                 source: Box::new(source),
             }
+        }
+    }
+
+    fn send_newline(mode: WindowsSendInputNewlineMode) -> Result<(), TypeError> {
+        match mode {
+            WindowsSendInputNewlineMode::Enter => press_vk(VK_RETURN),
+            WindowsSendInputNewlineMode::ShiftEnter => press_shift_enter(),
+            WindowsSendInputNewlineMode::CrLf => {
+                send_utf16_unit(0x000D, false)?;
+                send_utf16_unit(0x000D, true)?;
+                send_utf16_unit(0x000A, false)?;
+                send_utf16_unit(0x000A, true)
+            }
+        }
+    }
+
+    fn press_shift_enter() -> Result<(), TypeError> {
+        send_vk(VK_SHIFT, false)?;
+        press_vk(VK_RETURN)?;
+        send_vk(VK_SHIFT, true)
+    }
+
+    fn press_vk(vk: VIRTUAL_KEY) -> Result<(), TypeError> {
+        send_vk(vk, false)?;
+        send_vk(vk, true)
+    }
+
+    fn send_vk(vk: VIRTUAL_KEY, key_up: bool) -> Result<(), TypeError> {
+        let mut flags = KEYBD_EVENT_FLAGS(0);
+        if key_up {
+            flags |= KEYEVENTF_KEYUP;
+        }
+        let input = INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: vk,
+                    wScan: 0,
+                    dwFlags: flags,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        };
+        let sent = unsafe { SendInput(&[input], std::mem::size_of::<INPUT>() as i32) };
+        if sent == 1 {
+            Ok(())
+        } else {
+            Err(TypeError::SendInputFailed(
+                std::io::Error::last_os_error().to_string(),
+            ))
         }
     }
 
@@ -405,6 +496,24 @@ mod windows_impl {
         _prev: Option<PreviousInputSource>,
     ) -> Result<(), TisError> {
         Ok(())
+    }
+
+    #[cfg(test)]
+    pub(super) fn classify_sendinput_char(ch: char) -> SendInputCharKind {
+        match ch {
+            '\r' => SendInputCharKind::Skip,
+            '\n' => SendInputCharKind::Newline,
+            '\t' => SendInputCharKind::Tab,
+            _ => SendInputCharKind::Unicode,
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) enum SendInputCharKind {
+        Skip,
+        Newline,
+        Tab,
+        Unicode,
     }
 }
 
@@ -481,6 +590,49 @@ mod tests {
     fn platform_error() -> TypeError {
         TypeError::EnigoText("fail".into())
     }
+
+    #[test]
+    fn expected_sendinput_typed_chars_skips_carriage_return() {
+        assert_eq!(super::expected_sendinput_typed_chars("a\r\nb"), 3);
+        assert_eq!(super::expected_sendinput_typed_chars("hello"), 5);
+        assert_eq!(super::expected_sendinput_typed_chars("\r\r\n"), 1);
+    }
+
+    #[cfg(target_os = "windows")]
+    mod windows_sendinput_char_tests {
+        use super::super::windows_impl::{classify_sendinput_char, SendInputCharKind};
+
+        #[test]
+        fn classify_skips_carriage_return() {
+            assert!(matches!(
+                classify_sendinput_char('\r'),
+                SendInputCharKind::Skip
+            ));
+        }
+
+        #[test]
+        fn classify_newline_and_tab() {
+            assert!(matches!(
+                classify_sendinput_char('\n'),
+                SendInputCharKind::Newline
+            ));
+            assert!(matches!(classify_sendinput_char('\t'), SendInputCharKind::Tab));
+        }
+
+        #[test]
+        fn classify_regular_text_as_unicode() {
+            assert!(matches!(
+                classify_sendinput_char('你'),
+                SendInputCharKind::Unicode
+            ));
+        }
+    }
+}
+
+/// Windows SendInput 路径上 `type_unicode_chunk` 计入的 typed char 数。
+/// `\r` 会被跳过（CRLF 只产生一次换行），因此不能与 `text.chars().count()` 直接比较。
+pub fn expected_sendinput_typed_chars(text: &str) -> usize {
+    text.chars().filter(|ch| *ch != '\r').count()
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -495,7 +647,8 @@ pub use macos_impl::{
 #[cfg(target_os = "windows")]
 #[allow(unused_imports)]
 pub use windows_impl::{
-    restore_input_source, switch_to_ascii, type_unicode_chunk, PreviousInputSource,
+    restore_input_source, switch_to_ascii, type_unicode_chunk, type_unicode_chunk_with_options,
+    PreviousInputSource, WindowsSendInputOptions,
 };
 
 #[cfg(target_os = "linux")]

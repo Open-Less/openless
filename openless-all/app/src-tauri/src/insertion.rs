@@ -74,17 +74,18 @@ impl TextInserter {
     }
 
     #[cfg(target_os = "windows")]
-    pub fn insert_via_unicode_keystrokes(&self, text: &str) -> InsertStatus {
+    pub fn insert_via_unicode_keystrokes(
+        &self,
+        text: &str,
+        options: crate::unicode_keystroke::WindowsSendInputOptions,
+    ) -> InsertStatus {
         if text.is_empty() {
             return InsertStatus::CopiedFallback;
         }
-        match windows_unicode::send_text(text) {
-            Ok(()) => InsertStatus::Inserted,
-            Err(err) => {
-                log::warn!("[insertion] Unicode SendInput failed: {err}");
-                InsertStatus::CopiedFallback
-            }
-        }
+        map_sendinput_type_result(
+            text,
+            crate::unicode_keystroke::type_unicode_chunk_with_options(text, options),
+        )
     }
 
     /// macOS 路径：保存原剪贴板 → 写转写文字 → post Cmd+V → 按需恢复原剪贴板。
@@ -176,6 +177,27 @@ where
 impl Default for TextInserter {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn map_sendinput_type_result(
+    text: &str,
+    result: Result<usize, crate::unicode_keystroke::TypeError>,
+) -> InsertStatus {
+    let expected = crate::unicode_keystroke::expected_sendinput_typed_chars(text);
+    match result {
+        Ok(typed_chars) if typed_chars == expected => InsertStatus::Inserted,
+        Ok(typed_chars) => {
+            log::warn!(
+                "[insertion] Unicode SendInput typed only {typed_chars}/{expected} chars"
+            );
+            InsertStatus::CopiedFallback
+        }
+        Err(err) => {
+            log::warn!("[insertion] Unicode SendInput failed: {err}");
+            InsertStatus::CopiedFallback
+        }
     }
 }
 
@@ -454,63 +476,6 @@ fn insertion_success_status() -> InsertStatus {
     InsertStatus::PasteSent
 }
 
-#[cfg(target_os = "windows")]
-mod windows_unicode {
-    use std::time::Duration;
-
-    use windows::Win32::UI::Input::KeyboardAndMouse::{
-        SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP,
-        KEYEVENTF_UNICODE, VIRTUAL_KEY,
-    };
-
-    const SENDINPUT_CHUNK_CHARS: usize = 16;
-    const SENDINPUT_CHUNK_DELAY: Duration = Duration::from_millis(12);
-
-    pub fn send_text(text: &str) -> Result<(), String> {
-        let mut sent_in_chunk = 0usize;
-        let mut chars = text.chars().peekable();
-        while let Some(ch) = chars.next() {
-            let mut buf = [0u16; 2];
-            for unit in ch.encode_utf16(&mut buf) {
-                send_utf16_unit(*unit, false)?;
-                send_utf16_unit(*unit, true)?;
-            }
-            sent_in_chunk += 1;
-            if sent_in_chunk >= SENDINPUT_CHUNK_CHARS && chars.peek().is_some() {
-                std::thread::sleep(SENDINPUT_CHUNK_DELAY);
-                sent_in_chunk = 0;
-            }
-        }
-        Ok(())
-    }
-
-    fn send_utf16_unit(unit: u16, key_up: bool) -> Result<(), String> {
-        let flags = if key_up {
-            KEYEVENTF_UNICODE | KEYEVENTF_KEYUP
-        } else {
-            KEYEVENTF_UNICODE
-        };
-        let input = INPUT {
-            r#type: INPUT_KEYBOARD,
-            Anonymous: INPUT_0 {
-                ki: KEYBDINPUT {
-                    wVk: VIRTUAL_KEY(0),
-                    wScan: unit,
-                    dwFlags: KEYBD_EVENT_FLAGS(flags.0),
-                    time: 0,
-                    dwExtraInfo: 0,
-                },
-            },
-        };
-        let sent = unsafe { SendInput(&[input], std::mem::size_of::<INPUT>() as i32) };
-        if sent == 1 {
-            Ok(())
-        } else {
-            Err(std::io::Error::last_os_error().to_string())
-        }
-    }
-}
-
 // ── macOS CGEvent paste ──
 // 直接调 CoreGraphics FFI 发送 Cmd+V，避开 enigo 在主线程外触发的 TSM 断言。
 
@@ -633,6 +598,23 @@ mod tests {
         assert_eq!(mods.len(), 1);
         assert!(matches!(mods[0], Key::Shift));
         assert!(matches!(primary, Key::Insert));
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn crlf_sendinput_success_uses_expected_typed_count() {
+        let text = "a\r\nb";
+        let status = map_sendinput_type_result(text, Ok(3));
+        assert_eq!(status, InsertStatus::Inserted);
+        assert_ne!(text.chars().count(), 3);
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn crlf_sendinput_partial_mismatch_falls_back_to_clipboard() {
+        let text = "a\r\nb";
+        let status = map_sendinput_type_result(text, Ok(text.chars().count()));
+        assert_eq!(status, InsertStatus::CopiedFallback);
     }
 
     #[test]

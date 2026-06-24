@@ -39,6 +39,8 @@ const previousPrefs: UserPreferences = {
   restoreClipboardAfterPaste: true,
   pasteShortcut: 'ctrlV',
   allowNonTsfInsertionFallback: true,
+  windowsInsertionMode: 'tsf',
+  windowsSendInputNewlineMode: 'enter',
   windowsSendInputInsertionOnly: false,
   workingLanguages: ['简体中文'],
   translationTargetLanguage: '',

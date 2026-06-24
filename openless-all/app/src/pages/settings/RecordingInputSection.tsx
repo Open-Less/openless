@@ -13,7 +13,7 @@ import {
   setDictationHotkey,
 } from '../../lib/ipc';
 import { getPlatformCapabilities } from '../../lib/platform';
-import type { HotkeyMode, MicrophoneDevice, PasteShortcut, PlatformCapabilities } from '../../lib/types';
+import type { HotkeyMode, MicrophoneDevice, PasteShortcut, PlatformCapabilities, WindowsInsertionMode, WindowsSendInputNewlineMode } from '../../lib/types';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
 import { SelectLite } from '../../components/ui/SelectLite';
 import { Card, Collapsible } from '../_atoms';
@@ -131,8 +131,14 @@ export function RecordingInputSection() {
     savePrefs({ ...prefs, pasteShortcut });
   const onAllowNonTsfFallbackChange = (allowNonTsfInsertionFallback: boolean) =>
     savePrefs({ ...prefs, allowNonTsfInsertionFallback });
-  const onWindowsSendInputOnlyChange = (windowsSendInputInsertionOnly: boolean) =>
-    savePrefs({ ...prefs, windowsSendInputInsertionOnly });
+  const onWindowsInsertionModeChange = (windowsInsertionMode: WindowsInsertionMode) =>
+    savePrefs({
+      ...prefs,
+      windowsInsertionMode,
+      windowsSendInputInsertionOnly: windowsInsertionMode === 'sendInput',
+    });
+  const onWindowsSendInputNewlineModeChange = (windowsSendInputNewlineMode: WindowsSendInputNewlineMode) =>
+    savePrefs({ ...prefs, windowsSendInputNewlineMode });
   const onStartMinimizedChange = (startMinimized: boolean) =>
     savePrefs({ ...prefs, startMinimized });
   const onAutoUpdateCheckChange = (autoUpdateCheck: boolean) =>
@@ -294,12 +300,38 @@ export function RecordingInputSection() {
         )}
         {capability.adapter === 'windowsLowLevel' && (
           <SettingRow
-            label={t('settings.recording.windowsSendInputOnlyLabel')}
-            desc={t('settings.recording.windowsSendInputOnlyDesc')}
+            label={t('settings.recording.windowsInsertionModeLabel')}
+            desc={t('settings.recording.windowsInsertionModeDesc')}
           >
-            <Toggle
-              on={prefs.windowsSendInputInsertionOnly}
-              onToggle={onWindowsSendInputOnlyChange}
+            <SelectLite
+              value={prefs.windowsInsertionMode ?? (prefs.windowsSendInputInsertionOnly ? 'sendInput' : 'tsf')}
+              onChange={next => onWindowsInsertionModeChange(next as WindowsInsertionMode)}
+              options={[
+                { value: 'tsf', label: t('settings.recording.windowsInsertionModeTsf') },
+                { value: 'sendInput', label: t('settings.recording.windowsInsertionModeSendInput') },
+                { value: 'paste', label: t('settings.recording.windowsInsertionModePaste') },
+              ]}
+              ariaLabel={t('settings.recording.windowsInsertionModeLabel')}
+              style={{ ...inputStyle, maxWidth: 260 }}
+            />
+          </SettingRow>
+        )}
+        {capability.adapter === 'windowsLowLevel'
+          && (prefs.windowsInsertionMode === 'sendInput' || prefs.windowsSendInputInsertionOnly) && (
+          <SettingRow
+            label={t('settings.recording.windowsSendInputNewlineModeLabel')}
+            desc={t('settings.recording.windowsSendInputNewlineModeDesc')}
+          >
+            <SelectLite
+              value={prefs.windowsSendInputNewlineMode ?? 'enter'}
+              onChange={next => onWindowsSendInputNewlineModeChange(next as WindowsSendInputNewlineMode)}
+              options={[
+                { value: 'enter', label: t('settings.recording.windowsSendInputNewlineModeEnter') },
+                { value: 'shiftEnter', label: t('settings.recording.windowsSendInputNewlineModeShiftEnter') },
+                { value: 'crlf', label: t('settings.recording.windowsSendInputNewlineModeCrLf') },
+              ]}
+              ariaLabel={t('settings.recording.windowsSendInputNewlineModeLabel')}
+              style={{ ...inputStyle, maxWidth: 260 }}
             />
           </SettingRow>
         )}
