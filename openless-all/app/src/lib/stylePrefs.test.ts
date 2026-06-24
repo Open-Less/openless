@@ -68,7 +68,7 @@ const previousPrefs: UserPreferences = {
   sherpaOnnxModel: 'sense-voice-small-zh',
   sherpaOnnxLanguageHint: '',
   sherpaOnnxKeepLoadedSecs: 300,
-  historyRetentionDays: 7,
+  historyRetentionDays: 0,
   polishContextWindowMinutes: 5,
   startMinimized: false,
   themeMode: 'system',

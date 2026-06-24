@@ -6,7 +6,7 @@ import { useHotkeySettings } from '../../state/HotkeySettingsContext';
 import { Card } from '../_atoms';
 import { SettingRow, SectionTitle, inputStyle } from './shared';
 
-// 范围限制：retention 0-365 天，context window 0-60 分钟（再大对实际对话场景没意义且白烧 token）。
+// 范围限制：context window 0-60 分钟（再大对实际对话场景没意义且白烧 token）。
 const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
 
 export function DataStorageSection() {
@@ -21,28 +21,27 @@ export function DataStorageSection() {
     );
   }
 
-  // 空字符串时回滚到默认值。
+  // 空字符串 / 0 = 不限；输入框用文字占位，不把 0 展示成一个普通天数。
   const onHistoryRetentionChange = (raw: string) => {
     const parsed = raw === '' ? 0 : Number.parseInt(raw, 10);
     if (Number.isNaN(parsed)) return;
-    void savePrefs({ ...prefs, historyRetentionDays: clamp(parsed, 0, 365) });
+    void savePrefs({ ...prefs, historyRetentionDays: Math.max(0, parsed) });
   };
   const onPolishContextWindowChange = (raw: string) => {
     const parsed = raw === '' ? 0 : Number.parseInt(raw, 10);
     if (Number.isNaN(parsed)) return;
     void savePrefs({ ...prefs, polishContextWindowMinutes: clamp(parsed, 0, 60) });
   };
-  // 历史条数 200 是当前 HISTORY_CAP（persistence.rs:32），下限 5 是避免用户填 0 导致
-  // 写一条就立刻被清光；空字符串视为不限制，落回 null → 后端走 200 默认。
+  // 空字符串 / 0 = 不限。
   const onHistoryMaxEntriesChange = (raw: string) => {
     const trimmed = raw.trim();
-    if (trimmed === '') {
+    if (trimmed === '' || trimmed === '0') {
       void savePrefs({ ...prefs, historyMaxEntries: null });
       return;
     }
     const parsed = Number.parseInt(trimmed, 10);
     if (Number.isNaN(parsed)) return;
-    void savePrefs({ ...prefs, historyMaxEntries: clamp(parsed, 5, 200) });
+    void savePrefs({ ...prefs, historyMaxEntries: Math.max(1, parsed) });
   };
 
   return (
@@ -52,8 +51,8 @@ export function DataStorageSection() {
         <input
           type="number"
           min={0}
-          max={365}
-          value={prefs.historyRetentionDays}
+          placeholder={t('common.unlimited')}
+          value={prefs.historyRetentionDays === 0 ? '' : prefs.historyRetentionDays}
           onChange={e => onHistoryRetentionChange(e.target.value)}
           style={{ ...inputStyle, width: 80, textAlign: 'right' }}
         />
@@ -61,9 +60,8 @@ export function DataStorageSection() {
       <SettingRow label={t('settings.recording.historyMaxEntriesLabel')}>
         <input
           type="number"
-          min={5}
-          max={200}
-          placeholder="200"
+          min={1}
+          placeholder={t('common.unlimited')}
           value={prefs.historyMaxEntries ?? ''}
           onChange={e => onHistoryMaxEntriesChange(e.target.value)}
           style={{ ...inputStyle, width: 80, textAlign: 'right' }}

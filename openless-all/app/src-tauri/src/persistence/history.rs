@@ -1,12 +1,12 @@
 #![cfg_attr(target_os = "linux", allow(dead_code, unused_variables))]
-//! Dictation history store: newest-first JSON list with retention + count caps.
+//! Dictation history store: newest-first JSON list with optional retention + count caps.
 
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use parking_lot::Mutex;
 
-use super::{atomic_write, data_dir, ensure_dir, read_or_default, HISTORY_CAP};
+use super::{atomic_write, data_dir, ensure_dir, read_or_default};
 use crate::types::DictationSession;
 
 const HISTORY_FILE: &str = "history.json";
@@ -43,9 +43,7 @@ impl HistoryStore {
 
     /// `retention_days == 0` 跟旧 append 行为一致（不按时间清理）。
     /// `> 0` 时在写入新条目后顺手把超过 N 天的会话裁掉，写入时就完成清理，
-    /// 不需要后台轮询。最后再受条数上限约束：
-    /// - `max_entries == None` → HISTORY_CAP (200)
-    /// - `max_entries == Some(n)` → clamp 到 5..=HISTORY_CAP，避免用户填 0 / 极大值。
+    /// 不需要后台轮询。`max_entries == None` 时不按条数裁剪。
     pub fn append_with_retention(
         &self,
         session: DictationSession,
@@ -65,11 +63,11 @@ impl HistoryStore {
                     .unwrap_or(true)
             });
         }
-        let cap = max_entries
-            .map(|n| (n as usize).clamp(5, HISTORY_CAP))
-            .unwrap_or(HISTORY_CAP);
-        if sessions.len() > cap {
-            sessions.truncate(cap);
+        if let Some(max_entries) = max_entries {
+            let cap = (max_entries as usize).max(1);
+            if sessions.len() > cap {
+                sessions.truncate(cap);
+            }
         }
         self.write_locked(&sessions)
     }

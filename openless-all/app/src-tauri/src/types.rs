@@ -713,10 +713,14 @@ pub struct UserPreferences {
     /// 手动检查按钮显式指定 channel，与此 pref 解耦。
     #[serde(default)]
     pub update_channel: UpdateChannel,
-    /// 历史记录保留天数。0 = 不按时间清理（仅受 200 条上限）。默认 7 天。
+    /// 历史记录保留天数。0 = 不按时间清理。默认 0（不限天数）。
     /// 写入新条目时执行清理，避免后台轮询。
     #[serde(default = "default_history_retention_days")]
     pub history_retention_days: u32,
+    /// 老版本会把默认 7 天写进 preferences.json。缺少此标记且值仍为 7 时，
+    /// 升级后迁到 0（不限）；用户显式设置的其他天数保留。
+    #[serde(default)]
+    pub history_retention_default_migrated: bool,
     /// 对话感知 polish 的上下文窗口（分钟）：把最近 N 分钟的转写 + 已润色文本
     /// 作为多轮上下文喂给 LLM，让代词 / 不完整句子能被正确解析。
     /// 0 = 关闭（每次润色独立单轮，跟历史行为一致）。默认 5 分钟。
@@ -764,13 +768,13 @@ pub struct UserPreferences {
     /// 关闭后仅 Settings 手动「检查更新」按钮可用。
     #[serde(default = "default_true")]
     pub auto_update_check: bool,
-    /// 历史记录上限（条数）。`None` = 使用代码内 200 条硬上限；
-    /// `Some(n)` 表示用户在 Settings 自定义了上限（5..=200 之间）。
+    /// 历史记录上限（条数）。`None` = 不按条数清理；
+    /// `Some(n)` 表示用户在 Settings 自定义了上限。
     #[serde(default)]
     pub history_max_entries: Option<u32>,
     /// 是否为每次会话保留原始麦克风音频文件（wav）到 `recordings/` 目录，
     /// 用于排查 ASR 误识别 / 麦克风灵敏度问题。默认 false。开启会占磁盘空间，
-    /// 受 `history_retention_days` 同样的清理策略约束。
+    /// 文本历史不限天数时，录音仍按旧默认天数清理。
     #[serde(default)]
     pub record_audio_for_debug: bool,
     /// `recordings/` 里保留的最近 wav 文件数（按 mtime 倒序保留最新的）。
@@ -820,7 +824,7 @@ fn default_remote_input_mode() -> String {
 }
 
 fn default_history_retention_days() -> u32 {
-    7
+    0
 }
 
 fn default_polish_context_window_minutes() -> u32 {
@@ -950,6 +954,8 @@ struct UserPreferencesWire {
     update_channel: UpdateChannel,
     #[serde(default = "default_history_retention_days")]
     history_retention_days: u32,
+    #[serde(default)]
+    history_retention_default_migrated: bool,
     #[serde(default = "default_polish_context_window_minutes")]
     polish_context_window_minutes: u32,
     #[serde(default)]
@@ -1047,6 +1053,7 @@ impl Default for UserPreferencesWire {
             sherpa_onnx_keep_loaded_secs: prefs.sherpa_onnx_keep_loaded_secs,
             update_channel: prefs.update_channel,
             history_retention_days: prefs.history_retention_days,
+            history_retention_default_migrated: prefs.history_retention_default_migrated,
             polish_context_window_minutes: prefs.polish_context_window_minutes,
             start_minimized: prefs.start_minimized,
             theme_mode: prefs.theme_mode,
@@ -1086,6 +1093,13 @@ impl<'de> Deserialize<'de> for UserPreferences {
         } else {
             true
         };
+        let history_retention_default_migrated = wire.history_retention_default_migrated;
+        let history_retention_days =
+            if !history_retention_default_migrated && wire.history_retention_days == 7 {
+                0
+            } else {
+                wire.history_retention_days
+            };
 
         Ok(Self {
             hotkey: wire.hotkey,
@@ -1154,7 +1168,8 @@ impl<'de> Deserialize<'de> for UserPreferences {
             sherpa_onnx_language_hint: wire.sherpa_onnx_language_hint,
             sherpa_onnx_keep_loaded_secs: wire.sherpa_onnx_keep_loaded_secs,
             update_channel: wire.update_channel,
-            history_retention_days: wire.history_retention_days,
+            history_retention_days,
+            history_retention_default_migrated: true,
             polish_context_window_minutes: wire.polish_context_window_minutes,
             start_minimized: wire.start_minimized,
             theme_mode: wire.theme_mode,
@@ -1891,6 +1906,7 @@ impl Default for UserPreferences {
             sherpa_onnx_keep_loaded_secs: default_local_asr_keep_loaded_secs(),
             update_channel: UpdateChannel::default(),
             history_retention_days: default_history_retention_days(),
+            history_retention_default_migrated: true,
             polish_context_window_minutes: default_polish_context_window_minutes(),
             start_minimized: false,
             theme_mode: ThemeMode::default(),

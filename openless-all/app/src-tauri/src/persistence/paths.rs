@@ -166,7 +166,7 @@ pub fn local_models_root() -> Result<PathBuf> {
 
 /// 录音归档目录：`<data_dir>/recordings/`。
 /// 仅当用户开 `prefs.record_audio_for_debug` 时才会有内容（每次会话一个 `<session_id>.wav`）。
-/// 同样受 `history_retention_days` 清理（写入新文件时顺手裁旧的）。
+/// 默认仍按旧策略清理录音文件，避免文本历史不限后 wav 无限增长。
 pub fn recordings_root() -> Result<PathBuf> {
     let dir = data_dir()?.join("recordings");
     ensure_dir(&dir)?;
@@ -174,7 +174,8 @@ pub fn recordings_root() -> Result<PathBuf> {
 }
 
 /// 双重 cap 清理 `recordings/*.wav`：
-/// - `retention_days > 0` → 把超过 N 天的删掉（沿用 history 的 retention 逻辑）。
+/// - `retention_days > 0` → 把超过 N 天的删掉。
+/// - `retention_days == 0` → 文本历史不限天数，但录音仍按 7 天默认清理。
 /// - `max_entries == Some(n)` → 按 mtime 倒序保留最新的 n 条（clamp 到 1..=HISTORY_CAP）；
 ///   `None` 时退回 HISTORY_CAP (200) 硬上限，避免无限增长。
 /// 调用方：每次新建一条录音前。失败仅打 warn，避免影响主路径。
@@ -189,6 +190,7 @@ pub fn prune_recordings(retention_days: u32, max_entries: Option<u32>) -> Result
 
     // 第一步：按天清理。仅扫 .wav，跟第二步保持一致；metadata 读不到的文件按"过期"处理
     // —— fs 损坏 / 未来格式不一致的孤儿文件应当被回收而不是无限累积。
+    let retention_days = if retention_days == 0 { 7 } else { retention_days };
     if retention_days > 0 {
         let cutoff = std::time::SystemTime::now()
             - std::time::Duration::from_secs(u64::from(retention_days) * 24 * 3600);

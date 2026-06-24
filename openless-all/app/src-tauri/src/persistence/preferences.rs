@@ -1,6 +1,6 @@
 #![cfg_attr(target_os = "linux", allow(dead_code, unused_variables))]
 //! User preferences store: a single JSON document held in memory behind a lock,
-//! with a one-time `streamingInsert` default migration on load.
+//! with one-time default migrations on load.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -25,22 +25,31 @@ fn read_preferences(path: &Path) -> Result<UserPreferences> {
     // issue #440：老版本可能已把旧默认 `streamingInsert:false` 写进 preferences.json。
     // 反序列化会在内存里迁到 true，但还必须把迁移标记落盘，否则每次启动都停留在
     // “旧文件”状态，无法表达用户后续手动关闭后的 durable opt-out。
-    let streaming_default_migrated = serde_json::from_slice::<serde_json::Value>(&bytes)
-        .ok()
+    let raw = serde_json::from_slice::<serde_json::Value>(&bytes).ok();
+    let streaming_default_migrated = raw
+        .as_ref()
         .and_then(|value| {
             value
                 .get("streamingInsertDefaultMigrated")
                 .and_then(|flag| flag.as_bool())
         })
         .unwrap_or(false);
-    if !streaming_default_migrated {
+    let history_retention_default_migrated = raw
+        .as_ref()
+        .and_then(|value| {
+            value
+                .get("historyRetentionDefaultMigrated")
+                .and_then(|flag| flag.as_bool())
+        })
+        .unwrap_or(false);
+    if !streaming_default_migrated || !history_retention_default_migrated {
         match serde_json::to_vec_pretty(&prefs)
             .context("encode prefs failed")
             .and_then(|json| atomic_write(path, &json))
         {
-            Ok(()) => log::info!("[prefs] migrated streamingInsert default marker"),
+            Ok(()) => log::info!("[prefs] migrated preferences default markers"),
             Err(err) => log::warn!(
-                "[prefs] failed to persist streamingInsert migration marker for {}: {}",
+                "[prefs] failed to persist preferences migration markers for {}: {}",
                 path.display(),
                 err
             ),
@@ -123,6 +132,7 @@ mod tests {
         let prefs = read_preferences(&path).expect("read prefs");
         assert!(prefs.streaming_insert);
         assert!(prefs.streaming_insert_default_migrated);
+        assert!(prefs.history_retention_default_migrated);
 
         let saved: serde_json::Value =
             serde_json::from_slice(&fs::read(&path).expect("read saved prefs"))
@@ -136,6 +146,46 @@ mod tests {
         assert_eq!(
             saved
                 .get("streamingInsertDefaultMigrated")
+                .and_then(|value| value.as_bool()),
+            Some(true)
+        );
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn legacy_history_retention_default_is_migrated_to_unlimited() {
+        let tmp: PathBuf = std::env::temp_dir().join(format!(
+            "openless-history-retention-prefs-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&tmp).expect("create temp dir");
+        let path = tmp.join("preferences.json");
+        fs::write(
+            &path,
+            r#"{
+                "historyRetentionDays": 7,
+                "streamingInsertDefaultMigrated": true
+            }"#,
+        )
+        .expect("write legacy prefs");
+
+        let prefs = read_preferences(&path).expect("read prefs");
+        assert_eq!(prefs.history_retention_days, 0);
+        assert!(prefs.history_retention_default_migrated);
+
+        let saved: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).expect("read saved prefs"))
+                .expect("decode saved prefs");
+        assert_eq!(
+            saved
+                .get("historyRetentionDays")
+                .and_then(|value| value.as_u64()),
+            Some(0)
+        );
+        assert_eq!(
+            saved
+                .get("historyRetentionDefaultMigrated")
                 .and_then(|value| value.as_bool()),
             Some(true)
         );

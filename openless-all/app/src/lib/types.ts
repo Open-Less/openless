@@ -327,7 +327,7 @@ export interface UserPreferences {
   sherpaOnnxLanguageHint: string;
   /** Windows sherpa-onnx 模型在 runtime 中保持加载的秒数。 */
   sherpaOnnxKeepLoadedSecs: number;
-  /** 历史记录保留天数。0 = 不按时间清理（仍受 200 条上限）。默认 7。 */
+  /** 历史记录保留天数。0 = 不按时间清理。默认 0（不限天数）。 */
   historyRetentionDays: number;
   /** 对话感知 polish 上下文窗口（分钟）。0 = 关闭。默认 5。详见 PR-A。 */
   polishContextWindowMinutes: number;
@@ -354,10 +354,10 @@ export interface UserPreferences {
    *  桌面：开启后自动检查，发现更新弹窗由用户确认安装。
    *  关闭后仅 Settings 手动「检查更新」按钮可用。 */
   autoUpdateCheck: boolean;
-  /** 历史记录上限（条数）。null = 走默认 200；5..=200 之间为用户自定义。 */
+  /** 历史记录上限（条数）。null = 不按条数清理。 */
   historyMaxEntries: number | null;
   /** 是否为每次会话保留原始麦克风音频文件（wav），用于排查 ASR 误识别 / 麦克风灵敏度。
-   *  默认 false。开启后会占磁盘空间，受 historyRetentionDays 同样的清理策略约束。 */
+   *  默认 false。开启后会占磁盘空间，文本历史不限天数时录音仍按旧默认天数清理。 */
   recordAudioForDebug: boolean;
   /** recordings/ 里保留的最近 wav 文件数。null = 跟随 200 硬上限；1..=200 之间为用户自定义。
    *  跟 historyMaxEntries 解耦——「文本档案多但 wav 只留最近 5 条」是合法组合。 */
