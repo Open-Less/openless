@@ -49,6 +49,8 @@ export let mockSettings: UserPreferences = {
     restoreClipboardAfterPaste: true,
     pasteShortcut: "ctrlV",
     allowNonTsfInsertionFallback: true,
+    windowsInsertionMode: "tsf",
+    windowsSendInputNewlineMode: "enter",
     windowsSendInputInsertionOnly: false,
     windowsShowOpenlessInKeyboardList: true,
     workingLanguages: ["简体中文"],

@@ -151,6 +151,12 @@ export type CodingAgentPermissionMode =
  *  详见 issue #360。 */
 export type PasteShortcut = 'ctrlV' | 'ctrlShiftV' | 'shiftInsert';
 
+/** Windows 听写文本插入策略。 */
+export type WindowsInsertionMode = 'tsf' | 'sendInput' | 'paste';
+
+/** Windows SendInput 路径的换行模拟方式。 */
+export type WindowsSendInputNewlineMode = 'enter' | 'shiftEnter' | 'crlf';
+
 export type WindowsImeInstallState =
   | 'installed'
   | 'notInstalled'
@@ -268,7 +274,11 @@ export interface UserPreferences {
   pasteShortcut: PasteShortcut;
   /** Windows：TSF 失败后是否允许快捷键粘贴 / 剪贴板兜底。仅在剪贴板写失败时才再试 SendInput。关闭后可验证是否真实 TSF 上屏。 */
   allowNonTsfInsertionFallback: boolean;
-  /** Windows：始终用 SendInput Unicode 插入，听写期间不切换 OpenLess TSF 输入法。 */
+  /** Windows：听写插入策略（TSF / SendInput / 剪贴板粘贴）。 */
+  windowsInsertionMode: WindowsInsertionMode;
+  /** Windows SendInput 路径的换行模拟方式。 */
+  windowsSendInputNewlineMode: WindowsSendInputNewlineMode;
+  /** 旧版兼容：`true` 等价于 `windowsInsertionMode === 'sendInput'`。 */
   windowsSendInputInsertionOnly: boolean;
   /** Windows：SendInput 模式下是否在系统键盘列表（Win+Space）中显示 OpenLess。 */
   windowsShowOpenlessInKeyboardList: boolean;

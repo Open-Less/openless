@@ -77,6 +77,26 @@ pub enum PasteShortcut {
     ShiftInsert,
 }
 
+/// Windows 听写文本插入策略。默认 TSF 输入法；SendInput 逐字模拟；Paste 走剪贴板 + 模拟粘贴键。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum WindowsInsertionMode {
+    #[default]
+    Tsf,
+    SendInput,
+    Paste,
+}
+
+/// Windows SendInput 路径的换行模拟方式。仅 `WindowsInsertionMode::SendInput` 生效。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum WindowsSendInputNewlineMode {
+    #[default]
+    Enter,
+    ShiftEnter,
+    CrLf,
+}
+
 /// Auto-update 渠道。决定后台 AutoUpdateGate 拉哪条 manifest。
 /// `Stable` = `latest-android-{arch}.json`（或桌面 plugin-updater 正式版 endpoints）。
 /// `Beta` = `latest-android-{arch}-beta.json`（或桌面 beta endpoints）。
@@ -539,6 +559,26 @@ fn default_true() -> bool {
     true
 }
 
+fn resolve_windows_insertion_mode(
+    mode: WindowsInsertionMode,
+    legacy_sendinput_only: bool,
+) -> WindowsInsertionMode {
+    if mode != WindowsInsertionMode::Tsf {
+        mode
+    } else if legacy_sendinput_only {
+        WindowsInsertionMode::SendInput
+    } else {
+        WindowsInsertionMode::Tsf
+    }
+}
+
+fn resolve_windows_sendinput_insertion_only_legacy(
+    mode: WindowsInsertionMode,
+    legacy_sendinput_only: bool,
+) -> bool {
+    resolve_windows_insertion_mode(mode, legacy_sendinput_only) == WindowsInsertionMode::SendInput
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct UserPreferences {
@@ -586,8 +626,13 @@ pub struct UserPreferences {
     /// 默认开启以保持可用性；关闭后可验证文本是否真正由 TSF 上屏。
     #[serde(default = "default_true")]
     pub allow_non_tsf_insertion_fallback: bool,
-    /// Windows: 始终用 SendInput Unicode 插入，不切换 OpenLess TSF 输入法。
-    /// 适用于输入法无法正确还原的用户。默认 false 保持 TSF 优先。
+    /// Windows 听写插入策略：TSF / SendInput / 剪贴板粘贴。
+    #[serde(default)]
+    pub windows_insertion_mode: WindowsInsertionMode,
+    /// Windows SendInput 路径的换行模拟方式。
+    #[serde(default)]
+    pub windows_sendinput_newline_mode: WindowsSendInputNewlineMode,
+    /// 旧版 wire 兼容：`true` 等价于 `windows_insertion_mode = SendInput`。
     #[serde(
         default,
         rename = "windowsSendInputInsertionOnly",
@@ -898,6 +943,10 @@ struct UserPreferencesWire {
     #[serde(default)]
     paste_shortcut: PasteShortcut,
     allow_non_tsf_insertion_fallback: bool,
+    #[serde(default)]
+    windows_insertion_mode: WindowsInsertionMode,
+    #[serde(default)]
+    windows_sendinput_newline_mode: WindowsSendInputNewlineMode,
     #[serde(
         default,
         rename = "windowsSendInputInsertionOnly",
@@ -1027,6 +1076,8 @@ impl Default for UserPreferencesWire {
             restore_clipboard_after_paste: prefs.restore_clipboard_after_paste,
             paste_shortcut: prefs.paste_shortcut,
             allow_non_tsf_insertion_fallback: prefs.allow_non_tsf_insertion_fallback,
+            windows_insertion_mode: prefs.windows_insertion_mode,
+            windows_sendinput_newline_mode: prefs.windows_sendinput_newline_mode,
             windows_sendinput_insertion_only: prefs.windows_sendinput_insertion_only,
             windows_show_openless_in_keyboard_list: prefs.windows_show_openless_in_keyboard_list,
             working_languages: prefs.working_languages,
@@ -1129,7 +1180,15 @@ impl<'de> Deserialize<'de> for UserPreferences {
             restore_clipboard_after_paste: wire.restore_clipboard_after_paste,
             paste_shortcut: wire.paste_shortcut,
             allow_non_tsf_insertion_fallback: wire.allow_non_tsf_insertion_fallback,
-            windows_sendinput_insertion_only: wire.windows_sendinput_insertion_only,
+            windows_insertion_mode: resolve_windows_insertion_mode(
+                wire.windows_insertion_mode,
+                wire.windows_sendinput_insertion_only,
+            ),
+            windows_sendinput_newline_mode: wire.windows_sendinput_newline_mode,
+            windows_sendinput_insertion_only: resolve_windows_sendinput_insertion_only_legacy(
+                wire.windows_insertion_mode,
+                wire.windows_sendinput_insertion_only,
+            ),
             windows_show_openless_in_keyboard_list: wire.windows_show_openless_in_keyboard_list,
             working_languages: wire.working_languages,
             translation_target_language: wire.translation_target_language,
@@ -1874,6 +1933,8 @@ impl Default for UserPreferences {
             restore_clipboard_after_paste: true,
             paste_shortcut: PasteShortcut::default(),
             allow_non_tsf_insertion_fallback: true,
+            windows_insertion_mode: WindowsInsertionMode::default(),
+            windows_sendinput_newline_mode: WindowsSendInputNewlineMode::default(),
             windows_sendinput_insertion_only: false,
             windows_show_openless_in_keyboard_list: true,
             working_languages: default_working_languages(),
@@ -2623,9 +2684,11 @@ mod tests {
     fn windows_sendinput_insertion_only_defaults_to_disabled() {
         let prefs = UserPreferences::default();
         assert!(!prefs.windows_sendinput_insertion_only);
+        assert_eq!(prefs.windows_insertion_mode, WindowsInsertionMode::Tsf);
 
         let prefs: UserPreferences = serde_json::from_str("{}").unwrap();
         assert!(!prefs.windows_sendinput_insertion_only);
+        assert_eq!(prefs.windows_insertion_mode, WindowsInsertionMode::Tsf);
     }
 
     #[test]
@@ -2633,6 +2696,7 @@ mod tests {
         let prefs: UserPreferences =
             serde_json::from_str(r#"{"windowsSendInputInsertionOnly": true}"#).unwrap();
         assert!(prefs.windows_sendinput_insertion_only);
+        assert_eq!(prefs.windows_insertion_mode, WindowsInsertionMode::SendInput);
     }
 
     #[test]
@@ -2640,11 +2704,40 @@ mod tests {
         let prefs: UserPreferences =
             serde_json::from_str(r#"{"windowsSendinputInsertionOnly": true}"#).unwrap();
         assert!(prefs.windows_sendinput_insertion_only);
+        assert_eq!(prefs.windows_insertion_mode, WindowsInsertionMode::SendInput);
+    }
+
+    #[test]
+    fn windows_insertion_mode_deserializes_explicit_paste() {
+        let prefs: UserPreferences =
+            serde_json::from_str(r#"{"windowsInsertionMode":"paste"}"#).unwrap();
+        assert_eq!(prefs.windows_insertion_mode, WindowsInsertionMode::Paste);
+        assert!(!prefs.windows_sendinput_insertion_only);
+    }
+
+    #[test]
+    fn windows_sendinput_newline_mode_defaults_to_enter() {
+        let prefs: UserPreferences = serde_json::from_str("{}").unwrap();
+        assert_eq!(
+            prefs.windows_sendinput_newline_mode,
+            WindowsSendInputNewlineMode::Enter
+        );
+    }
+
+    #[test]
+    fn windows_sendinput_newline_mode_deserializes_shift_enter() {
+        let prefs: UserPreferences =
+            serde_json::from_str(r#"{"windowsSendInputNewlineMode":"shiftEnter"}"#).unwrap();
+        assert_eq!(
+            prefs.windows_sendinput_newline_mode,
+            WindowsSendInputNewlineMode::ShiftEnter
+        );
     }
 
     #[test]
     fn windows_sendinput_insertion_only_serializes_frontend_wire_key() {
         let enabled = UserPreferences {
+            windows_insertion_mode: WindowsInsertionMode::SendInput,
             windows_sendinput_insertion_only: true,
             ..UserPreferences::default()
         };
@@ -2656,13 +2749,16 @@ mod tests {
     #[test]
     fn windows_sendinput_insertion_only_pref_round_trips_explicit_true() {
         let enabled = UserPreferences {
+            windows_insertion_mode: WindowsInsertionMode::SendInput,
             windows_sendinput_insertion_only: true,
             ..UserPreferences::default()
         };
         let json = serde_json::to_string(&enabled).unwrap();
         assert!(json.contains(r#""windowsSendInputInsertionOnly":true"#));
+        assert!(json.contains(r#""windowsInsertionMode":"sendInput""#));
         let restored: UserPreferences = serde_json::from_str(&json).unwrap();
         assert!(restored.windows_sendinput_insertion_only);
+        assert_eq!(restored.windows_insertion_mode, WindowsInsertionMode::SendInput);
     }
 
     #[test]
