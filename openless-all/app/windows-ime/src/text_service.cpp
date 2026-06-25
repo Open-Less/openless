@@ -1,5 +1,6 @@
 #include "text_service.h"
 
+#include <atomic>
 #include <memory>
 #include <new>
 
@@ -15,12 +16,25 @@ constexpr UINT kSubmitTextMessage = WM_APP + 1;
 constexpr UINT kSubmitTextTimeoutMs = 2000;
 
 struct SubmitTextRequest {
-  const std::wstring* session_id = nullptr;
-  const std::wstring* text = nullptr;
+  // Owned copies — not pointers into another thread's stack.
+  std::wstring session_id;
+  std::wstring text;
   std::shared_ptr<OpenLessAsyncEditState> async_completion;
   bool wait_for_async_completion = false;
   HRESULT result = E_UNEXPECTED;
   HANDLE completion_event = nullptr;
+  // Two owners at creation: pipe thread (waiting on completion_event) and
+  // the queued window message.  Each owner calls Release() when done; the
+  // last one to Release() closes the event and deletes the request.
+  std::atomic<int> ref_count{2};
+  void Release() {
+    if (ref_count.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+      if (completion_event != nullptr) {
+        CloseHandle(completion_event);
+      }
+      delete this;
+    }
+  }
 };
 
 HRESULT WaitForAsyncEditCompletion(
@@ -144,26 +158,32 @@ HRESULT OpenLessTextService::SubmitTextFromPipe(
     return E_UNEXPECTED;
   }
 
-  SubmitTextRequest request;
-  request.session_id = &session_id;
-  request.text = &text;
-  request.completion_event =
+  auto* request = new (std::nothrow) SubmitTextRequest;
+  if (request == nullptr) {
+    return E_OUTOFMEMORY;
+  }
+
+  request->session_id = session_id;
+  request->text = text;
+  request->completion_event =
       CreateEventW(nullptr, TRUE, FALSE, nullptr);
-  if (request.completion_event == nullptr) {
+  if (request->completion_event == nullptr) {
+    delete request;
     return HRESULT_FROM_WIN32(GetLastError());
   }
 
   if (!PostMessageW(message_window_, kSubmitTextMessage, 0,
-                    reinterpret_cast<LPARAM>(&request))) {
+                    reinterpret_cast<LPARAM>(request))) {
     const DWORD error = GetLastError();
-    CloseHandle(request.completion_event);
+    CloseHandle(request->completion_event);
+    delete request;
     return HRESULT_FROM_WIN32(error);
   }
 
   HANDLE wait_handles[2] = {};
   DWORD wait_count = 0;
 
-  wait_handles[wait_count] = request.completion_event;
+  wait_handles[wait_count] = request->completion_event;
   ++wait_count;
 
   if (shutdown_event != nullptr) {
@@ -176,9 +196,9 @@ HRESULT OpenLessTextService::SubmitTextFromPipe(
 
   HRESULT result;
   if (wait_result == WAIT_OBJECT_0) {
-    result = request.result;
-    if (request.wait_for_async_completion) {
-      result = WaitForAsyncEditCompletion(request.async_completion);
+    result = request->result;
+    if (request->wait_for_async_completion) {
+      result = WaitForAsyncEditCompletion(request->async_completion);
     }
   } else if (wait_count > 1 && wait_result == WAIT_OBJECT_0 + 1) {
     result = HRESULT_FROM_WIN32(ERROR_CANCELLED);
@@ -188,7 +208,9 @@ HRESULT OpenLessTextService::SubmitTextFromPipe(
     result = HRESULT_FROM_WIN32(GetLastError());
   }
 
-  CloseHandle(request.completion_event);
+  // Release the pipe-thread reference.  The message-thread reference, if
+  // still outstanding (timeout / shutdown paths), will clean up later.
+  request->Release();
   return result;
 }
 
@@ -230,6 +252,18 @@ HRESULT OpenLessTextService::EnsureMessageWindow() {
 
 void OpenLessTextService::DestroyMessageWindow() {
   if (message_window_ != nullptr) {
+    // Drain any kSubmitTextMessage still in the queue so the associated
+    // SubmitTextRequest references are released before the window is gone.
+    // These are left over when SubmitTextFromPipe exited via timeout or
+    // shutdown before the owner thread could dispatch the message.
+    MSG msg;
+    while (PeekMessageW(&msg, message_window_, kSubmitTextMessage,
+                        kSubmitTextMessage, PM_REMOVE)) {
+      auto* request = reinterpret_cast<SubmitTextRequest*>(msg.lParam);
+      if (request != nullptr) {
+        request->Release();
+      }
+    }
     DestroyWindow(message_window_);
     message_window_ = nullptr;
   }
@@ -347,17 +381,21 @@ LRESULT CALLBACK OpenLessTextService::MessageWindowProc(HWND window,
       GetWindowLongPtrW(window, GWLP_USERDATA));
   if (message == kSubmitTextMessage && service != nullptr) {
     auto* request = reinterpret_cast<SubmitTextRequest*>(lparam);
-    if (request == nullptr || request->session_id == nullptr ||
-        request->text == nullptr) {
+    if (request == nullptr || request->session_id.empty() ||
+        request->text.empty()) {
+      if (request != nullptr) {
+        request->Release();
+      }
       return 0;
     }
 
     request->result = service->CommitTextOnOwnerThread(
-        *request->session_id, *request->text, &request->async_completion,
+        request->session_id, request->text, &request->async_completion,
         &request->wait_for_async_completion);
     if (request->completion_event != nullptr) {
       SetEvent(request->completion_event);
     }
+    request->Release();
     return 1;
   }
 
