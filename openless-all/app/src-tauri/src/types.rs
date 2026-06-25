@@ -2018,6 +2018,8 @@ impl Default for UserPreferences {
             android_overlay_cancel_swipe_direction: default_android_overlay_cancel_swipe_direction(
             ),
             android_overlay_size_dp: default_android_overlay_size_dp(),
+            mouse_middle_button_dictation: false,
+            mouse_side_button_dictation: false,
         }
     }
 }
