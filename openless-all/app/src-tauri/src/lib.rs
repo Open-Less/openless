@@ -77,17 +77,7 @@ mod side_aware_combo;
 mod mouse_dictation;
 #[cfg(mobile)]
 #[path = "mobile_stubs/mouse_dictation.rs"]
-mod mouse_dictation;#[cfg(mobile)]
-#[path = "mobile_stubs/side_aware_combo.rs"]
-mod side_aware_combo;
-=======
-mod hold_source_tracker;
-#[cfg(not(mobile))]
 mod mouse_dictation;
-#[cfg(mobile)]
-#[path = "mobile_stubs/mouse_dictation.rs"]
-mod mouse_dictation;
->>>>>>> 095758b (feat(dictation): mouse middle/side buttons with Hold refcount)
 #[cfg(mobile)]
 #[path = "mobile_stubs/shortcut_binding.rs"]
 mod shortcut_binding;
