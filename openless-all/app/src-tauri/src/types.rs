@@ -807,6 +807,16 @@ pub struct UserPreferences {
     pub android_overlay_size_dp: u32,
 }
 
+impl UserPreferences {
+    pub(crate) fn preserve_style_preferences_from(&mut self, current: &Self) {
+        self.default_mode = current.default_mode;
+        self.enabled_modes = current.enabled_modes.clone();
+        self.active_style_pack_id = current.active_style_pack_id.clone();
+        self.style_system_prompts = current.style_system_prompts.clone();
+        self.custom_style_prompts = current.custom_style_prompts.clone();
+    }
+}
+
 fn default_local_asr_model() -> String {
     "qwen3-asr-0.6b".into()
 }

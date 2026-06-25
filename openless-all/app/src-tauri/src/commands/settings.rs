@@ -13,6 +13,14 @@ pub fn get_default_style_system_prompts() -> StyleSystemPrompts {
 pub(crate) trait SettingsWriter {
     fn read_settings(&self) -> UserPreferences;
     fn write_settings(&self, prefs: UserPreferences) -> Result<(), String>;
+    fn write_settings_preserving_current_style_preferences(
+        &self,
+        mut prefs: UserPreferences,
+    ) -> Result<(), String> {
+        let current = self.read_settings();
+        prefs.preserve_style_preferences_from(&current);
+        self.write_settings(prefs)
+    }
     fn sync_active_asr_provider(&self, provider: &str) -> Result<(), String>;
     fn refresh_dictation_hotkey(&self);
     fn refresh_qa_hotkey(&self);
@@ -30,6 +38,15 @@ impl SettingsWriter for Coordinator {
 
     fn write_settings(&self, prefs: UserPreferences) -> Result<(), String> {
         self.prefs().set(prefs).map_err(|e| e.to_string())
+    }
+
+    fn write_settings_preserving_current_style_preferences(
+        &self,
+        prefs: UserPreferences,
+    ) -> Result<(), String> {
+        self.prefs()
+            .set_preserving_current_style_preferences(prefs)
+            .map_err(|e| e.to_string())
     }
 
     fn sync_active_asr_provider(&self, provider: &str) -> Result<(), String> {
@@ -72,6 +89,13 @@ impl<T: SettingsWriter + ?Sized> SettingsWriter for Arc<T> {
 
     fn write_settings(&self, prefs: UserPreferences) -> Result<(), String> {
         (**self).write_settings(prefs)
+    }
+
+    fn write_settings_preserving_current_style_preferences(
+        &self,
+        prefs: UserPreferences,
+    ) -> Result<(), String> {
+        (**self).write_settings_preserving_current_style_preferences(prefs)
     }
 
     fn sync_active_asr_provider(&self, provider: &str) -> Result<(), String> {
@@ -128,16 +152,18 @@ pub(crate) fn persist_settings<T: SettingsWriter>(
     if active_asr_provider_changed {
         coord.sync_active_asr_provider(&active_asr_provider)?;
     }
-    if let Err(error) = coord.write_settings(prefs.clone()) {
+    if let Err(error) = coord.write_settings_preserving_current_style_preferences(prefs.clone()) {
         if active_asr_provider_changed {
             if let Err(rollback_error) =
                 coord.sync_active_asr_provider(&previous.active_asr_provider)
             {
-                coord.write_settings(prefs).map_err(|roll_forward_error| {
-                    format!(
-                        "{error}; additionally failed to restore active ASR provider: {rollback_error}; additionally failed to preserve active ASR provider consistency: {roll_forward_error}"
-                    )
-                })?;
+                coord
+                    .write_settings_preserving_current_style_preferences(prefs)
+                    .map_err(|roll_forward_error| {
+                        format!(
+                            "{error}; additionally failed to restore active ASR provider: {rollback_error}; additionally failed to preserve active ASR provider consistency: {roll_forward_error}"
+                        )
+                    })?;
             } else {
                 return Err(error);
             }
@@ -185,7 +211,8 @@ pub fn set_settings(
     // 广播给所有 webview。issue #205：QaPanel 跑在独立 webview，
     // 没有 HotkeySettingsContext，必须靠事件感知录音键变化，否则面板可见时
     // 用户改键会让浮窗里的 "{recordHotkey}" 文案一直停留在旧值。
-    persist_settings(&*coord, prefs.clone())?;
+    persist_settings(&*coord, prefs)?;
+    let prefs = coord.prefs().get();
     #[cfg(target_os = "android")]
     coord.apply_android_overlay_settings_change(&remote_prev, &prefs);
     // refresh_tray_microphone_menu 内部会调用 NSStatusItem.set_menu，必须在主线程上跑。
@@ -228,12 +255,116 @@ pub fn set_settings(
     let packs = coord.style_packs().list().map_err(|e| e.to_string())?;
     sync_style_pack_preferences(&mut prefs, &packs);
     prefs.android_overlay_trigger = prefs.android_overlay_trigger.normalized();
-    persist_settings(&*coord, prefs.clone())?;
+    persist_settings(&*coord, prefs)?;
+    let prefs = coord.prefs().get();
     #[cfg(target_os = "android")]
     coord.apply_android_overlay_settings_change(&previous, &prefs);
     let _ = app.emit("prefs:changed", &prefs);
     let _ = app.emit_to("main", "prefs:changed", &prefs);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    #[derive(Default)]
+    struct RaceSettingsWriter {
+        reads: Mutex<Vec<UserPreferences>>,
+        saved: Mutex<Option<UserPreferences>>,
+    }
+
+    impl SettingsWriter for RaceSettingsWriter {
+        fn read_settings(&self) -> UserPreferences {
+            let mut reads = self.reads.lock().unwrap();
+            if reads.is_empty() {
+                return self.saved.lock().unwrap().clone().unwrap_or_default();
+            }
+            reads.remove(0)
+        }
+
+        fn write_settings(&self, prefs: UserPreferences) -> Result<(), String> {
+            *self.saved.lock().unwrap() = Some(prefs);
+            Ok(())
+        }
+
+        fn sync_active_asr_provider(&self, _provider: &str) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn refresh_dictation_hotkey(&self) {}
+
+        fn refresh_qa_hotkey(&self) {}
+
+        fn refresh_combo_hotkey(&self) {}
+
+        fn refresh_translation_hotkey(&self) {}
+
+        fn refresh_switch_style_hotkey(&self) {}
+
+        fn refresh_open_app_hotkey(&self) {}
+
+        fn refresh_coding_agent_hotkey(&self) {}
+    }
+
+    #[test]
+    fn settings_save_preserves_current_style_preferences_before_write() {
+        let packs = crate::types::builtin_style_packs();
+        let current = UserPreferences {
+            default_mode: PolishMode::Light,
+            active_style_pack_id: builtin_style_pack_id(PolishMode::Light).to_string(),
+            ..UserPreferences::default()
+        };
+        let mut stale_settings_payload = UserPreferences {
+            default_mode: PolishMode::Formal,
+            active_style_pack_id: builtin_style_pack_id(PolishMode::Formal).to_string(),
+            ..UserPreferences::default()
+        };
+
+        stale_settings_payload.preserve_style_preferences_from(&current);
+        sync_style_pack_preferences(&mut stale_settings_payload, &packs);
+
+        assert_eq!(
+            stale_settings_payload.active_style_pack_id,
+            builtin_style_pack_id(PolishMode::Light)
+        );
+        assert_eq!(stale_settings_payload.default_mode, PolishMode::Light);
+    }
+
+    #[test]
+    fn persist_settings_keeps_style_change_that_lands_before_write() {
+        let active_before_request = UserPreferences {
+            default_mode: PolishMode::Formal,
+            active_style_pack_id: builtin_style_pack_id(PolishMode::Formal).to_string(),
+            ..UserPreferences::default()
+        };
+        let active_before_write = UserPreferences {
+            default_mode: PolishMode::Light,
+            active_style_pack_id: builtin_style_pack_id(PolishMode::Light).to_string(),
+            ..UserPreferences::default()
+        };
+        let stale_payload = UserPreferences {
+            default_mode: PolishMode::Formal,
+            active_style_pack_id: builtin_style_pack_id(PolishMode::Formal).to_string(),
+            microphone_device_name: "External Mic".to_string(),
+            ..UserPreferences::default()
+        };
+        let writer = RaceSettingsWriter {
+            reads: Mutex::new(vec![active_before_request, active_before_write]),
+            saved: Mutex::new(None),
+        };
+
+        persist_settings(&writer, stale_payload).unwrap();
+
+        let saved = writer.saved.lock().unwrap().clone().expect("prefs saved");
+        assert_eq!(
+            saved.active_style_pack_id,
+            builtin_style_pack_id(PolishMode::Light)
+        );
+        assert_eq!(saved.default_mode, PolishMode::Light);
+        assert_eq!(saved.microphone_device_name, "External Mic");
+    }
 }
 
 // ─────────────────────────── release channel (Beta opt-in) ───────────────────────────
@@ -265,8 +396,8 @@ pub fn set_update_channel(
         return Ok(());
     }
     prefs.update_channel = channel;
-    persist_settings(&*coord, prefs.clone())?;
-    let _ = app.emit("prefs:changed", &prefs);
+    persist_settings(&*coord, prefs)?;
+    let _ = app.emit("prefs:changed", &coord.prefs().get());
     Ok(())
 }
 
