@@ -1355,7 +1355,7 @@ mod tests {
             let request_text = String::from_utf8_lossy(&request);
             assert!(request_text
                 .to_ascii_lowercase()
-                .contains("ocp-apim-subscription-key: secret"));
+                .contains("x-openless-test-token: secret"));
             assert!(!request_text.contains("Authorization: Bearer"));
 
             let body = r#"{"data":[{"id":"m1"}]}"#;
@@ -1370,12 +1370,9 @@ mod tests {
         let models = fetch_provider_models(&ProviderConfig {
             base_url: format!("http://{}", addr),
             api_key: String::new(),
-            extra_headers: [(
-                "custom-head".to_string(),
-                "secret".to_string(),
-            )]
-            .into_iter()
-            .collect(),
+            extra_headers: [("x-openless-test-token".to_string(), "secret".to_string())]
+                .into_iter()
+                .collect(),
         })
         .await
         .unwrap();

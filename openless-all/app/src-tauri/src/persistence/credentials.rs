@@ -40,6 +40,13 @@ const KEYRING_CREDENTIALS_ACCOUNT: &str = "credentials.v1";
 const KEYRING_CREDENTIALS_CHUNK_PREFIX: &str = "credentials.v1.chunk.";
 #[cfg(target_os = "android")]
 const ANDROID_CREDENTIALS_FILE: &str = "credentials.enc.json";
+const RESERVED_EXTRA_HEADER_NAMES: &[&str] = &[
+    "authorization",
+    "content-type",
+    "accept",
+    "host",
+    "content-length",
+];
 // Windows Credential Manager caps one credential blob at 2560 bytes. keyring stores
 // passwords as UTF-16 on Windows, so keep each JSON chunk comfortably below that.
 const KEYRING_CHUNK_MAX_UTF16_UNITS: usize = 1000;
@@ -238,6 +245,9 @@ fn parse_extra_headers_json(value: &str) -> Result<HashMap<String, String>> {
         if !is_valid_header_name(key) {
             anyhow::bail!("invalid extra header name: {key}");
         }
+        if is_reserved_extra_header_name(key) {
+            anyhow::bail!("reserved extra header name cannot be overridden: {key}");
+        }
         let Some(value) = value.as_str() else {
             anyhow::bail!("extra header value for {key} must be a string");
         };
@@ -273,6 +283,12 @@ fn is_valid_header_name(name: &str) -> bool {
                     | b'A'..=b'Z'
             )
         })
+}
+
+fn is_reserved_extra_header_name(name: &str) -> bool {
+    RESERVED_EXTRA_HEADER_NAMES
+        .iter()
+        .any(|reserved| name.eq_ignore_ascii_case(reserved))
 }
 
 fn credentials_path() -> Result<PathBuf> {
@@ -956,7 +972,7 @@ impl CredentialsVault {
 
 #[cfg(test)]
 mod tests {
-    use super::{chunk_json_payload, KEYRING_CHUNK_MAX_UTF16_UNITS};
+    use super::{chunk_json_payload, parse_extra_headers_json, KEYRING_CHUNK_MAX_UTF16_UNITS};
 
     #[test]
     fn credential_payload_chunks_stay_under_windows_blob_limit() {
@@ -972,5 +988,23 @@ mod tests {
         assert!(chunks
             .iter()
             .all(|chunk| chunk.encode_utf16().count() <= KEYRING_CHUNK_MAX_UTF16_UNITS));
+    }
+
+    #[test]
+    fn parse_extra_headers_json_rejects_reserved_header_names() {
+        for name in [
+            "Authorization",
+            "content-type",
+            "ACCEPT",
+            "Host",
+            "Content-Length",
+        ] {
+            let value = format!(r#"{{"{name}":"secret"}}"#);
+            let err = parse_extra_headers_json(&value).unwrap_err().to_string();
+            assert!(
+                err.contains("reserved extra header name"),
+                "unexpected error for {name}: {err}"
+            );
+        }
     }
 }
