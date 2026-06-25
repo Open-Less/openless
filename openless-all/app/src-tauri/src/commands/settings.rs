@@ -594,6 +594,7 @@ mod persist_settings_tests {
         fn refresh_dictation_hotkey(&self) {}
         fn refresh_qa_hotkey(&self) {}
         fn refresh_combo_hotkey(&self) {}
+        fn refresh_mouse_dictation(&self) {}
         fn refresh_translation_hotkey(&self) {}
         fn refresh_switch_style_hotkey(&self) {}
         fn refresh_open_app_hotkey(&self) {}
