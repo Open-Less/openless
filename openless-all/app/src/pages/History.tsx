@@ -6,7 +6,7 @@ import { useTranslation } from 'react-i18next';
 import { Icon } from '../components/Icon';
 import { detectOS } from '../components/WindowChrome';
 import { formatComboLabel } from '../lib/hotkey';
-import { clearHistory, deleteHistoryEntry, listHistory, readAudioRecording } from '../lib/ipc';
+import { clearHistory, deleteHistoryEntry, listHistory, readAudioRecording, retranscribeRecording } from '../lib/ipc';
 import { useMobileLayout } from '../lib/useMobileLayout';
 import type { DictationSession, PolishMode } from '../lib/types';
 import { useHotkeySettings } from '../state/HotkeySettingsContext';
@@ -48,6 +48,9 @@ export function History() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [justCopied, setJustCopied] = useState(false);
+  const [justCopiedRaw, setJustCopiedRaw] = useState(false);
+  // 「重新转录」进行中：禁用按钮 + 显示「转录中…」，避免重复点击发起多次 ASR。
+  const [retranscribing, setRetranscribing] = useState(false);
   // 录音文件 lazily-detected missing 状态：retention / 条数 cap 清理后磁盘上 wav
   // 可能已被删，但 history 条目 hasAudioRecording 仍写 true。任一组件
   // （播放 / 导出）首次 IPC 拿到 'recording not found' 时把 id 加进来，
@@ -158,12 +161,31 @@ export function History() {
       if (!navigator.clipboard?.writeText) {
         throw new Error('clipboard unavailable');
       }
-      await navigator.clipboard.writeText(item.finalText);
+      // 润色失败/未产出时 finalText 为空，回退到原文，避免「复制」按钮复制空字符串
+      // 导致原文无法从 UI 取回（polish 失败时仍能拿到识别原文）。
+      await navigator.clipboard.writeText(item.finalText.trim() ? item.finalText : item.rawTranscript);
       setActionError(null);
       setJustCopied(true);
       window.setTimeout(() => setJustCopied(false), 1500);
     } catch (error) {
       console.error('[history] failed to copy entry', error);
+      setActionError(t('history.copyFailed', { err: errorMessage(error) }));
+    }
+  };
+
+  // 原文（识别结果）单独复制：润色失败或用户只想要未润色文本时使用。
+  const onCopyRaw = async () => {
+    if (!item) return;
+    try {
+      if (!navigator.clipboard?.writeText) {
+        throw new Error('clipboard unavailable');
+      }
+      await navigator.clipboard.writeText(item.rawTranscript);
+      setActionError(null);
+      setJustCopiedRaw(true);
+      window.setTimeout(() => setJustCopiedRaw(false), 1500);
+    } catch (error) {
+      console.error('[history] failed to copy raw transcript', error);
       setActionError(t('history.copyFailed', { err: errorMessage(error) }));
     }
   };
@@ -195,6 +217,31 @@ export function History() {
         return;
       }
       setActionError(t('history.exportFailed', { err: msg }));
+    }
+  };
+
+  // 对一条「转录失败 / 没识别到语音」的历史用当前 ASR provider 重新转录（issue #613）。
+  // 后端读 recordings/<id>.wav → 重转 → 原地回写该条 rawTranscript/finalText、清 errorCode，
+  // 返回整条记录；前端据此局部刷新。失败保留 + 自动重试已让这些条目的录音留得住，这里给
+  // 持久失败（重试也没救回来）一个手动重转入口。
+  const onRetranscribe = async () => {
+    if (!item || !item.hasAudioRecording) return;
+    setRetranscribing(true);
+    setActionError(null);
+    try {
+      const updated = await retranscribeRecording(item.id);
+      setItems(prev => prev.map(s => (s.id === updated.id ? updated : s)));
+    } catch (error) {
+      console.error('[history] retranscribe failed', error);
+      const msg = errorMessage(error);
+      // wav 已被 retention / 条数 cap 清理：隐藏入口，不报错（用户没干错事）。
+      if (msg.includes('recording not found') || msg.includes('not found')) {
+        markAudioMissing(item.id);
+        return;
+      }
+      setActionError(t('history.retranscribeFailed', { err: msg }));
+    } finally {
+      setRetranscribing(false);
     }
   };
 
@@ -331,6 +378,13 @@ export function History() {
                   {item.hasAudioRecording && !audioMissingIds.has(item.id) && (
                     <Btn icon="download" variant="ghost" size="sm" onClick={() => void onExportAudio()}>{t('history.exportRecording')}</Btn>
                   )}
+                  {item.hasAudioRecording
+                    && !audioMissingIds.has(item.id)
+                    && (item.errorCode === 'transcribeFailed' || item.errorCode === 'emptyTranscript') && (
+                    <Btn icon="refresh" variant="ghost" size="sm" disabled={retranscribing} onClick={() => void onRetranscribe()}>
+                      {retranscribing ? t('history.retranscribing') : t('history.retranscribe')}
+                    </Btn>
+                  )}
                   <Btn icon="trash" variant="ghost" size="sm" onClick={onDelete}>{t('common.delete')}</Btn>
                 </div>
               </div>
@@ -343,7 +397,14 @@ export function History() {
               )}
               <div style={{ display: 'grid', gridTemplateColumns: mobile ? '1fr' : '1fr 1fr', gap: 12 }}>
                 <div style={{ padding: 14, border: '0.5px solid var(--ol-line)', borderRadius: 10, background: 'var(--ol-surface-2)' }}>
-                  <Pill size="sm" tone="outline" style={{ marginBottom: 10 }}>{t('history.rawLabel')}</Pill>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 10 }}>
+                    <Pill size="sm" tone="outline">{t('history.rawLabel')}</Pill>
+                    {item.rawTranscript && (
+                      <Btn icon={justCopiedRaw ? 'check' : 'copy'} variant="ghost" size="sm" onClick={() => void onCopyRaw()}>
+                        {justCopiedRaw ? t('common.copied') : t('common.copy')}
+                      </Btn>
+                    )}
+                  </div>
                   <p style={{ margin: 0, fontSize: 13, lineHeight: 1.7, color: 'var(--ol-ink-2)', whiteSpace: 'pre-wrap' }}>
                     {item.rawTranscript || t('history.rawEmpty')}
                   </p>

@@ -15,6 +15,7 @@ pub fn set_qa_hotkey(
 ) -> Result<(), String> {
     if let Some(binding) = binding.as_ref() {
         crate::shortcut_binding::validate_binding(binding).map_err(|e| e.to_string())?;
+        crate::shortcut_binding::reject_side_specific_non_dictation(binding)?;
         if binding.modifiers.is_empty() && binding.primary.eq_ignore_ascii_case("shift") {
             return Err("Shift 单键目前只能用于翻译快捷键".into());
         }

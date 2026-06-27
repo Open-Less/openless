@@ -5,13 +5,17 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
+import androidx.annotation.Keep
 import androidx.core.content.FileProvider
 import java.io.File
 
 /**
  * Triggers system package installer for a downloaded APK via FileProvider.
  */
+@Keep
 object OpenLessUpdateInstaller {
+    @Keep
+    @JvmStatic
     fun installApk(context: Context, apkPath: String): Boolean {
         val apkFile = File(apkPath)
         if (!apkFile.exists()) {

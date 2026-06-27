@@ -46,7 +46,7 @@ export function AudioCueListener() {
       listen<UserPreferences>('prefs:changed', (event) => {
         const next = event.payload;
         if (next) audioCueEnabledRef.current = next.audioCueOnRecord !== false;
-      }).then(fn => { if (!cancelled) unlisten = fn; }).catch(() => {});
+      }).then(fn => { if (cancelled) fn(); else unlisten = fn; }).catch(() => {});
     })();
     return () => { cancelled = true; unlisten?.(); };
   }, [audioCueRuntimeEnabled]);
@@ -73,7 +73,7 @@ export function AudioCueListener() {
         } else if (state !== 'recording' && prev === 'recording') {
           stopAudioCue();
         }
-      }).then(fn => { if (!cancelled) unlisten = fn; }).catch(() => {});
+      }).then(fn => { if (cancelled) fn(); else unlisten = fn; }).catch(() => {});
     })();
     return () => { cancelled = true; unlisten?.(); };
   }, [audioCueRuntimeEnabled]);

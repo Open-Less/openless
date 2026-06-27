@@ -181,6 +181,12 @@ function legacyTriggerCode(trigger: HotkeyTrigger | null | undefined): string | 
       return 'ControlLeft';
     case 'rightCommand':
       return 'MetaRight';
+    case 'leftCommand':
+      return 'MetaLeft';
+    case 'leftShift':
+      return 'ShiftLeft';
+    case 'rightShift':
+      return 'ShiftRight';
     case 'fn':
       return 'Fn';
     case 'mediaPlayPause':
@@ -190,16 +196,40 @@ function legacyTriggerCode(trigger: HotkeyTrigger | null | undefined): string | 
   }
 }
 
+export function shortcutFromLegacyTrigger(trigger: HotkeyTrigger): ShortcutBinding {
+  const map: Record<Exclude<HotkeyTrigger, 'custom'>, string> = {
+    rightOption: 'RightOption',
+    leftOption: 'LeftOption',
+    rightControl: 'RightControl',
+    leftControl: 'LeftControl',
+    rightCommand: 'RightCommand',
+    leftCommand: 'LeftCommand',
+    leftShift: 'LeftShift',
+    rightShift: 'RightShift',
+    fn: 'Fn',
+    rightAlt: 'RightOption',
+    mediaPlayPause: 'MediaPlayPause',
+  };
+  return {
+    primary: map[trigger as Exclude<HotkeyTrigger, 'custom'>] ?? 'RightOption',
+    modifiers: [],
+  };
+}
+
 /** 把 ComboBinding 或 QaHotkeyBinding 格式化为可读标签，如 "⌘⇧D" / "Ctrl+Shift+D"。 */
 export function formatComboLabel(binding: ComboBinding | QaHotkeyBinding | ShortcutBinding): string {
   const parts: string[] = [];
   const platform = currentPlatform();
 
   // 固定输出顺序：Ctrl/Cmd → Alt/Option → Shift → Super
-  const modifierOrder = ['cmd', 'ctrl', 'alt', 'shift', 'super'] as const;
+  const modifierOrder = [
+    'cmd-left', 'cmd-right', 'cmd', 'ctrl-left', 'ctrl-right', 'ctrl',
+    'alt-left', 'alt-right', 'alt', 'shift-left', 'shift-right', 'shift',
+    'super-left', 'super-right', 'super',
+  ] as const;
   for (const tag of modifierOrder) {
     if (binding.modifiers.some(m => m.toLowerCase() === tag)) {
-      parts.push(modifierDisplayName(tag, platform));
+      parts.push(sideModifierDisplayName(tag, platform));
     }
   }
 
@@ -217,7 +247,80 @@ export function currentPlatform(): { isMac: boolean; isWindows: boolean } {
   };
 }
 
+/** Build side-specific modifier tags from Web KeyboardEvent.code values. */
+export function sideModifiersFromPressedCodes(codes: Iterable<string>): string[] {
+  const set = codes instanceof Set ? codes : new Set(codes);
+  const modifiers: string[] = [];
+  if (set.has('MetaLeft')) modifiers.push('cmd-left');
+  else if (set.has('MetaRight')) modifiers.push('cmd-right');
+  if (set.has('ControlLeft')) modifiers.push('ctrl-left');
+  else if (set.has('ControlRight')) modifiers.push('ctrl-right');
+  if (set.has('AltLeft')) modifiers.push('alt-left');
+  else if (set.has('AltRight')) modifiers.push('alt-right');
+  if (set.has('ShiftLeft')) modifiers.push('shift-left');
+  else if (set.has('ShiftRight')) modifiers.push('shift-right');
+  return modifiers;
+}
+
+/** Build generic modifier tags (cmd/super/ctrl/alt/shift) from pressed key codes. */
+export function genericModifiersFromPressedCodes(codes: Iterable<string>): string[] {
+  const set = codes instanceof Set ? codes : new Set(codes);
+  const modifiers: string[] = [];
+  const { isMac } = currentPlatform();
+  if (isMac) {
+    if (set.has('MetaLeft') || set.has('MetaRight')) modifiers.push('cmd');
+  } else if (
+    set.has('MetaLeft')
+    || set.has('MetaRight')
+    || set.has('OSLeft')
+    || set.has('OSRight')
+  ) {
+    modifiers.push('super');
+  }
+  if (set.has('ControlLeft') || set.has('ControlRight')) modifiers.push('ctrl');
+  if (set.has('AltLeft') || set.has('AltRight')) modifiers.push('alt');
+  if (set.has('ShiftLeft') || set.has('ShiftRight')) modifiers.push('shift');
+  return modifiers;
+}
+
+export function modifiersFromPressedCodes(
+  codes: Iterable<string>,
+  sideSpecific = false,
+): string[] {
+  return sideSpecific
+    ? sideModifiersFromPressedCodes(codes)
+    : genericModifiersFromPressedCodes(codes);
+}
+
 function modifierDisplayName(tag: string, platform: { isMac: boolean; isWindows: boolean }): string {
+  return sideModifierDisplayName(tag, platform);
+}
+
+function sideModifierDisplayName(tag: string, platform: { isMac: boolean; isWindows: boolean }): string {
+  const sideLabels: Record<string, string> = platform.isMac
+    ? {
+        'cmd-left': '左 ⌘',
+        'cmd-right': '右 ⌘',
+        'ctrl-left': '左 ⌃',
+        'ctrl-right': '右 ⌃',
+        'alt-left': '左 ⌥',
+        'alt-right': '右 ⌥',
+        'shift-left': '左 ⇧',
+        'shift-right': '右 ⇧',
+      }
+    : {
+        'cmd-left': platform.isWindows ? '左 Win' : '左 Super',
+        'cmd-right': platform.isWindows ? '右 Win' : '右 Super',
+        'ctrl-left': '左 Ctrl',
+        'ctrl-right': '右 Ctrl',
+        'alt-left': '左 Alt',
+        'alt-right': '右 Alt',
+        'shift-left': '左 Shift',
+        'shift-right': '右 Shift',
+        'super-left': platform.isWindows ? '左 Win' : '左 Super',
+        'super-right': platform.isWindows ? '右 Win' : '右 Super',
+      };
+  if (sideLabels[tag]) return sideLabels[tag];
   if (platform.isMac) {
     switch (tag) {
       case 'cmd': return '\u2318';
@@ -274,6 +377,9 @@ function formatPrimary(primary: string): string {
     case 'rightcontrol': return isMac ? 'Right ⌃' : 'Right Ctrl';
     case 'leftcontrol': return isMac ? 'Left ⌃' : 'Left Ctrl';
     case 'rightcommand': return isMac ? 'Right ⌘' : (currentPlatform().isWindows ? 'Right Win' : 'Right Super');
+    case 'leftcommand': return isMac ? 'Left ⌘' : (currentPlatform().isWindows ? 'Left Win' : 'Left Super');
+    case 'leftshift': return isMac ? 'Left ⇧' : 'Left Shift';
+    case 'rightshift': return isMac ? 'Right ⇧' : 'Right Shift';
     case 'fn': return 'Fn';
     case 'mediaplaypause': return '⏯ Media';
     case 'shift': return isMac ? '⇧' : 'Shift';

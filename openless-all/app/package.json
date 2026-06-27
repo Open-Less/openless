@@ -1,7 +1,7 @@
 {
   "name": "openless-app",
   "private": true,
-  "version": "1.3.10",
+  "version": "1.3.13-Beta.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -18,7 +18,9 @@
     "copy:android-scaffolding": "node scripts/copy-android-scaffolding.mjs",
     "check:macos-capsule-spaces": "node scripts/macos-capsule-spaces-contract.test.mjs",
     "check:hotkey-injection": "node scripts/check-hotkey-injection.mjs",
-    "check:windows-startup-lifecycle": "node scripts/windows-startup-lifecycle-contract.test.mjs"
+    "check:hotkey-side-modifiers": "npx tsx src/lib/hotkeySideModifiers.test.ts",
+    "check:windows-startup-lifecycle": "node scripts/windows-startup-lifecycle-contract.test.mjs",
+    "check:android-updater-pubkey": "node scripts/check-android-updater-pubkey.mjs"
   },
   "dependencies": {
     "@formkit/auto-animate": "^0.9.0",

@@ -2,8 +2,10 @@
 // 「按住说话键」在 通用 → 快捷键 里配置（见 ShortcutsSection），这里不再重复。
 // 配置经 UserPreferences 持久化；启用后 coordinator 才注册热键。
 
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { detectOS } from '../../components/WindowChrome'
+import { codingAgentDetectOpencode, type OpenCodeDetection } from '../../lib/ipc'
 import type { CodingAgentPermissionMode, CodingAgentProviderId } from '../../lib/types'
 import { useHotkeySettings } from '../../state/HotkeySettingsContext'
 import { Card } from '../_atoms'
@@ -20,6 +22,24 @@ export function CodingAgentSection() {
   const { t } = useTranslation()
   const { prefs, updatePrefs: savePrefs } = useHotkeySettings()
   const os = detectOS()
+
+  // OpenCode 安装检测：仅当启用 + 选了 OpenCode 后端时探测一次，用于提示是否需先安装。
+  const [opencode, setOpencode] = useState<OpenCodeDetection | null>(null)
+  const useOpencode = prefs?.codingAgentEnabled && prefs?.codingAgentProvider === 'opencode-cli'
+  useEffect(() => {
+    if (!useOpencode) {
+      setOpencode(null)
+      return
+    }
+    let alive = true
+    // 把配置的可执行路径传给检测，用户改了路径后能重新探测对应二进制。
+    void codingAgentDetectOpencode(prefs?.codingAgentExe ?? undefined).then(d => {
+      if (alive) setOpencode(d)
+    })
+    return () => {
+      alive = false
+    }
+  }, [useOpencode, prefs?.codingAgentExe])
 
   if (os === 'win') return null
 
@@ -60,9 +80,25 @@ export function CodingAgentSection() {
               style={{ ...inputStyle, maxWidth: 240, cursor: 'pointer' }}
             >
               <option value="claude-code-cli">Claude Code</option>
-              <option value="opencode-cli">{t('settings.codingAgent.providerOpenCodeSoon')}</option>
+              <option value="opencode-cli">OpenCode</option>
             </select>
           </SettingRow>
+
+          {/* OpenCode 后端：提示安装/登录状态。issue #579。 */}
+          {useOpencode && opencode && (
+            <div
+              style={{
+                fontSize: 12,
+                lineHeight: 1.6,
+                color: opencode.installed ? 'var(--ol-ink-3)' : 'var(--ol-warn, #b8860b)',
+                margin: '-4px 0 8px',
+              }}
+            >
+              {opencode.installed
+                ? t('settings.codingAgent.opencodeReady', { version: opencode.version ?? '?' })
+                : t('settings.codingAgent.opencodeMissing')}
+            </div>
+          )}
 
           <SettingRow label={t('settings.codingConsole.permissionMode')}>
             <select
@@ -108,6 +144,20 @@ export function CodingAgentSection() {
               onChange={e => {
                 const v = e.target.value.trim()
                 void savePrefs({ ...prefs, codingAgentWorkdir: v === '' ? null : v })
+              }}
+              style={inputStyle}
+            />
+          </SettingRow>
+
+          <SettingRow label={t('settings.codingAgent.exe')}>
+            <input
+              type="text"
+              value={prefs.codingAgentExe ?? ''}
+              placeholder={prefs.codingAgentProvider === 'opencode-cli' ? 'opencode' : 'claude'}
+              spellCheck={false}
+              onChange={e => {
+                const v = e.target.value.trim()
+                void savePrefs({ ...prefs, codingAgentExe: v === '' ? null : v })
               }}
               style={inputStyle}
             />

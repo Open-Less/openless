@@ -12,6 +12,7 @@ pub mod args;
 pub mod commands;
 pub mod detect;
 pub mod guard;
+pub mod opencode;
 pub mod stream;
 
 use std::path::Path;
@@ -23,8 +24,11 @@ use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 
-pub use args::{build_claude_args, CodingAgentPermissionMode, CodingAgentRequest};
+pub use args::{
+    build_claude_args, CodingAgentPermissionMode, CodingAgentProvider, CodingAgentRequest,
+};
 pub use detect::McpServerStatus;
+pub use opencode::run_opencode_agent;
 pub use stream::{parse_stream_json_line, CodingAgentEvent};
 
 /// 无头 Claude 的「自动化前置说明」。
@@ -68,7 +72,7 @@ pub enum CodingAgentError {
 
 /// 给 GUI 进程补 PATH / HOME：macOS 从 Finder 启动的进程不继承登录 shell 环境，
 /// `claude` 常装在 `~/.local/bin`、Homebrew 在 `/opt/homebrew/bin`。
-fn augment_env(cmd: &mut Command) {
+pub(super) fn augment_env(cmd: &mut Command) {
     let mut path = std::env::var("PATH").unwrap_or_default();
     if let Some(home_os) = std::env::var_os("HOME") {
         let home = home_os.to_string_lossy().to_string();
@@ -91,7 +95,7 @@ fn augment_env(cmd: &mut Command) {
     cmd.env("PATH", path);
 }
 
-fn augmented_command(exe: &str) -> Command {
+pub(super) fn augmented_command(exe: &str) -> Command {
     let mut cmd = Command::new(exe);
     augment_env(&mut cmd);
     cmd
@@ -138,7 +142,7 @@ pub async fn claude_mcp_list(exe: &str) -> Vec<McpServerStatus> {
     }
 }
 
-async fn wait_cancel(cancel: &Arc<AtomicBool>) {
+pub(super) async fn wait_cancel(cancel: &Arc<AtomicBool>) {
     loop {
         if cancel.load(Ordering::Relaxed) {
             return;

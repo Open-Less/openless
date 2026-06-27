@@ -5,6 +5,34 @@
 
 use std::path::PathBuf;
 
+/// 后端 coding agent 提供商，对应 `UserPreferences.coding_agent_provider` 的取值。
+/// 未知/缺省一律回落 Claude（既有默认），不破坏现有用户。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CodingAgentProvider {
+    /// Claude Code CLI（`claude`）。默认。
+    ClaudeCodeCli,
+    /// OpenCode CLI（`opencode`），issue #579。
+    OpenCodeCli,
+}
+
+impl CodingAgentProvider {
+    /// 从 prefs 字符串解析。`"opencode-cli"` → OpenCode；其余（含 `"claude-code-cli"`）→ Claude。
+    pub fn from_pref(s: &str) -> Self {
+        match s.trim() {
+            "opencode-cli" => Self::OpenCodeCli,
+            _ => Self::ClaudeCodeCli,
+        }
+    }
+
+    /// 该 provider 默认的可执行文件名。
+    pub fn default_exe(self) -> &'static str {
+        match self {
+            Self::ClaudeCodeCli => "claude",
+            Self::OpenCodeCli => "opencode",
+        }
+    }
+}
+
 /// Claude Code 权限模式，对应 CLI `--permission-mode` 的取值（已对本机 v2.1.161 核实）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -229,5 +257,32 @@ mod tests {
         assert!(arg_value(&args, "--model").is_none());
         assert!(arg_value(&args, "--max-budget-usd").is_none());
         assert!(!args.contains(&"--no-session-persistence".to_string()));
+    }
+
+    #[test]
+    fn provider_parses_from_pref_with_claude_fallback() {
+        assert_eq!(
+            CodingAgentProvider::from_pref("opencode-cli"),
+            CodingAgentProvider::OpenCodeCli
+        );
+        assert_eq!(
+            CodingAgentProvider::from_pref("claude-code-cli"),
+            CodingAgentProvider::ClaudeCodeCli
+        );
+        // 未知/空 → 回落 Claude（不破坏现有用户）。
+        assert_eq!(
+            CodingAgentProvider::from_pref(""),
+            CodingAgentProvider::ClaudeCodeCli
+        );
+        assert_eq!(
+            CodingAgentProvider::from_pref("something-else"),
+            CodingAgentProvider::ClaudeCodeCli
+        );
+    }
+
+    #[test]
+    fn provider_default_exe() {
+        assert_eq!(CodingAgentProvider::ClaudeCodeCli.default_exe(), "claude");
+        assert_eq!(CodingAgentProvider::OpenCodeCli.default_exe(), "opencode");
     }
 }

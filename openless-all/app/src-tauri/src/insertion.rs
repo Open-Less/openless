@@ -5,19 +5,19 @@
 //! - macOS：用 CoreGraphics CGEvent 直接 post Cmd+V。
 //! - Windows / Linux：用 enigo 按 `PasteShortcut` 模拟。
 
-#[cfg(not(any(target_os = "macos", target_os = "android", target_os = "ios")))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use std::sync::atomic::{AtomicU64, Ordering};
-#[cfg(not(any(target_os = "macos", target_os = "android", target_os = "ios")))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use std::time::Duration;
 
-#[cfg(not(any(target_os = "macos", target_os = "android", target_os = "ios")))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use once_cell::sync::Lazy;
-#[cfg(not(any(target_os = "macos", target_os = "android", target_os = "ios")))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use parking_lot::Mutex;
 
 use crate::types::{InsertStatus, PasteShortcut};
 
-#[cfg(not(any(target_os = "macos", target_os = "android", target_os = "ios")))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 const CLIPBOARD_RESTORE_DELAY: Duration = Duration::from_millis(750);
 
 pub struct TextInserter;
@@ -74,34 +74,51 @@ impl TextInserter {
     }
 
     #[cfg(target_os = "windows")]
-    pub fn insert_via_unicode_keystrokes(&self, text: &str) -> InsertStatus {
+    pub fn insert_via_unicode_keystrokes(
+        &self,
+        text: &str,
+        options: crate::unicode_keystroke::WindowsSendInputOptions,
+    ) -> InsertStatus {
         if text.is_empty() {
             return InsertStatus::CopiedFallback;
         }
-        match windows_unicode::send_text(text) {
-            Ok(()) => InsertStatus::Inserted,
-            Err(err) => {
-                log::warn!("[insertion] Unicode SendInput failed: {err}");
-                InsertStatus::CopiedFallback
-            }
-        }
+        map_sendinput_type_result(
+            text,
+            crate::unicode_keystroke::type_unicode_chunk_with_options(text, options),
+        )
     }
 
-    /// macOS 路径：写剪贴板 + post Cmd+V。两个 `_` 参数仅为对齐跨平台签名。
+    /// macOS 路径：保存原剪贴板 → 写转写文字 → post Cmd+V → 按需恢复原剪贴板。
+    /// `_paste_shortcut` 在 macOS 不使用（固定 Cmd+V），仅为对齐跨平台签名。
     #[cfg(target_os = "macos")]
     pub fn insert(
         &self,
         text: &str,
-        _restore_clipboard_after_paste: bool,
+        restore_clipboard_after_paste: bool,
         _paste_shortcut: PasteShortcut,
     ) -> InsertStatus {
         if text.is_empty() {
             return InsertStatus::CopiedFallback;
         }
-        if !copy_to_clipboard(text) {
-            return InsertStatus::Failed;
+        // issue #525：先记下用户原剪贴板，粘贴成功且「恢复剪贴板」开关开启时再恢复，避免覆盖
+        // 用户手动复制的内容。此前 macOS 完全不实现恢复（恢复机制曾被 cfg 排除），导致设置里
+        // 的开关在 macOS 上无效——无论开关如何，剪贴板都被留成转写文字。
+        let restore_plan = match copy_to_clipboard_with_restore_plan(text) {
+            Ok(plan) => plan,
+            Err(err) => {
+                log::error!("[insertion] clipboard write failed: {}", err);
+                return InsertStatus::Failed;
+            }
+        };
+        if let Err(err) = simulate_paste() {
+            log::warn!("[insertion] simulated paste failed: {}", err);
+            // 粘贴失败：把转写文字留在剪贴板供用户手动粘贴，不恢复。
+            return InsertStatus::CopiedFallback;
         }
-        macos_insert_status_after_paste(simulate_paste())
+        if restore_clipboard_after_paste {
+            schedule_clipboard_restore(restore_plan);
+        }
+        insertion_success_status()
     }
 
     /// Android：跨应用输入由 dictation 流程按用户策略处理；通用插入只写剪贴板兜底。
@@ -157,41 +174,51 @@ where
     }
 }
 
-#[cfg(target_os = "macos")]
-fn macos_insert_status_after_paste(result: Result<(), String>) -> InsertStatus {
-    match result {
-        Ok(()) => insertion_success_status(),
-        Err(err) => {
-            log::warn!("[insertion] simulated paste failed: {}", err);
-            InsertStatus::CopiedFallback
-        }
-    }
-}
-
 impl Default for TextInserter {
     fn default() -> Self {
         Self::new()
     }
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "android", target_os = "ios")))]
+#[cfg(target_os = "windows")]
+fn map_sendinput_type_result(
+    text: &str,
+    result: Result<usize, crate::unicode_keystroke::TypeError>,
+) -> InsertStatus {
+    let expected = crate::unicode_keystroke::expected_sendinput_typed_chars(text);
+    match result {
+        Ok(typed_chars) if typed_chars == expected => InsertStatus::Inserted,
+        Ok(typed_chars) => {
+            log::warn!(
+                "[insertion] Unicode SendInput typed only {typed_chars}/{expected} chars"
+            );
+            InsertStatus::CopiedFallback
+        }
+        Err(err) => {
+            log::warn!("[insertion] Unicode SendInput failed: {err}");
+            InsertStatus::CopiedFallback
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[derive(Debug)]
 struct ClipboardRestorePlan {
     inserted_text: String,
     previous_text: Option<String>,
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "android", target_os = "ios")))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[derive(Debug, Clone)]
 struct PendingClipboardRestore {
     latest_restore_id: u64,
     original_text: Option<String>,
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "android", target_os = "ios")))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 static NEXT_CLIPBOARD_RESTORE_ID: AtomicU64 = AtomicU64::new(1);
 
-#[cfg(not(any(target_os = "macos", target_os = "android", target_os = "ios")))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 static PENDING_CLIPBOARD_RESTORE: Lazy<Mutex<Option<PendingClipboardRestore>>> =
     Lazy::new(|| Mutex::new(None));
 
@@ -232,7 +259,7 @@ fn copy_to_clipboard(text: &str) -> bool {
     }
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "android", target_os = "ios")))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn copy_to_clipboard_with_restore_plan(text: &str) -> Result<ClipboardRestorePlan, String> {
     let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
     let previous_text = match clipboard.get_text() {
@@ -279,7 +306,7 @@ fn insert_with_clipboard_restore(
     insertion_success_status()
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "android", target_os = "ios")))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn schedule_clipboard_restore(plan: ClipboardRestorePlan) {
     let (restore_id, original_text) =
         remember_pending_clipboard_restore(plan.previous_text.clone());
@@ -288,7 +315,7 @@ fn schedule_clipboard_restore(plan: ClipboardRestorePlan) {
     });
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "android", target_os = "ios")))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn remember_pending_clipboard_restore(previous_text: Option<String>) -> (u64, Option<String>) {
     let restore_id = NEXT_CLIPBOARD_RESTORE_ID.fetch_add(1, Ordering::SeqCst);
     let original_text = {
@@ -306,7 +333,7 @@ fn remember_pending_clipboard_restore(previous_text: Option<String>) -> (u64, Op
     (restore_id, original_text)
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "android", target_os = "ios")))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn restore_clipboard_after_delay(
     plan: ClipboardRestorePlan,
     original_text: Option<String>,
@@ -357,7 +384,7 @@ fn restore_clipboard_after_delay(
     clear_pending_clipboard_restore(restore_id);
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "android", target_os = "ios")))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn is_latest_clipboard_restore(restore_id: u64) -> bool {
     matches!(
         PENDING_CLIPBOARD_RESTORE.lock().as_ref(),
@@ -365,7 +392,7 @@ fn is_latest_clipboard_restore(restore_id: u64) -> bool {
     )
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "android", target_os = "ios")))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn clear_pending_clipboard_restore(restore_id: u64) {
     let mut pending = PENDING_CLIPBOARD_RESTORE.lock();
     if matches!(pending.as_ref(), Some(batch) if batch.latest_restore_id == restore_id) {
@@ -373,7 +400,7 @@ fn clear_pending_clipboard_restore(restore_id: u64) {
     }
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "android", target_os = "ios")))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn should_restore_clipboard(current_text: Option<&str>, inserted_text: &str) -> bool {
     matches!(current_text, Some(current) if current == inserted_text)
 }
@@ -447,63 +474,6 @@ fn insertion_success_status() -> InsertStatus {
 #[cfg(not(any(target_os = "macos", target_os = "android", target_os = "ios")))]
 fn insertion_success_status() -> InsertStatus {
     InsertStatus::PasteSent
-}
-
-#[cfg(target_os = "windows")]
-mod windows_unicode {
-    use std::time::Duration;
-
-    use windows::Win32::UI::Input::KeyboardAndMouse::{
-        SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP,
-        KEYEVENTF_UNICODE, VIRTUAL_KEY,
-    };
-
-    const SENDINPUT_CHUNK_CHARS: usize = 16;
-    const SENDINPUT_CHUNK_DELAY: Duration = Duration::from_millis(12);
-
-    pub fn send_text(text: &str) -> Result<(), String> {
-        let mut sent_in_chunk = 0usize;
-        let mut chars = text.chars().peekable();
-        while let Some(ch) = chars.next() {
-            let mut buf = [0u16; 2];
-            for unit in ch.encode_utf16(&mut buf) {
-                send_utf16_unit(*unit, false)?;
-                send_utf16_unit(*unit, true)?;
-            }
-            sent_in_chunk += 1;
-            if sent_in_chunk >= SENDINPUT_CHUNK_CHARS && chars.peek().is_some() {
-                std::thread::sleep(SENDINPUT_CHUNK_DELAY);
-                sent_in_chunk = 0;
-            }
-        }
-        Ok(())
-    }
-
-    fn send_utf16_unit(unit: u16, key_up: bool) -> Result<(), String> {
-        let flags = if key_up {
-            KEYEVENTF_UNICODE | KEYEVENTF_KEYUP
-        } else {
-            KEYEVENTF_UNICODE
-        };
-        let input = INPUT {
-            r#type: INPUT_KEYBOARD,
-            Anonymous: INPUT_0 {
-                ki: KEYBDINPUT {
-                    wVk: VIRTUAL_KEY(0),
-                    wScan: unit,
-                    dwFlags: KEYBD_EVENT_FLAGS(flags.0),
-                    time: 0,
-                    dwExtraInfo: 0,
-                },
-            },
-        };
-        let sent = unsafe { SendInput(&[input], std::mem::size_of::<INPUT>() as i32) };
-        if sent == 1 {
-            Ok(())
-        } else {
-            Err(std::io::Error::last_os_error().to_string())
-        }
-    }
 }
 
 // ── macOS CGEvent paste ──
@@ -594,7 +564,7 @@ mod tests {
     use std::time::Duration;
 
     #[test]
-    #[cfg(not(any(target_os = "macos", target_os = "android", target_os = "ios")))]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     fn restore_only_when_clipboard_still_holds_inserted_text() {
         assert!(should_restore_clipboard(
             Some("dictated text"),
@@ -628,6 +598,23 @@ mod tests {
         assert_eq!(mods.len(), 1);
         assert!(matches!(mods[0], Key::Shift));
         assert!(matches!(primary, Key::Insert));
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn crlf_sendinput_success_uses_expected_typed_count() {
+        let text = "a\r\nb";
+        let status = map_sendinput_type_result(text, Ok(3));
+        assert_eq!(status, InsertStatus::Inserted);
+        assert_ne!(text.chars().count(), 3);
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn crlf_sendinput_partial_mismatch_falls_back_to_clipboard() {
+        let text = "a\r\nb";
+        let status = map_sendinput_type_result(text, Ok(text.chars().count()));
+        assert_eq!(status, InsertStatus::CopiedFallback);
     }
 
     #[test]
@@ -724,7 +711,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(any(target_os = "macos", target_os = "android", target_os = "ios")))]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     fn pending_clipboard_restore_keeps_first_original_until_latest_restore() {
         *PENDING_CLIPBOARD_RESTORE.lock() = None;
 
@@ -746,7 +733,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(any(target_os = "macos", target_os = "android", target_os = "ios")))]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     fn clipboard_restore_skips_when_clipboard_no_longer_matches_inserted_text() {
         assert!(should_restore_clipboard(
             Some("dictated text"),
@@ -761,15 +748,18 @@ mod tests {
 
     #[test]
     #[cfg(target_os = "macos")]
-    fn macos_direct_write_or_paste_failure_keeps_copied_fallback_available() {
-        assert_eq!(
-            macos_insert_status_after_paste(Ok(())),
-            InsertStatus::Inserted
-        );
-        assert_eq!(
-            macos_insert_status_after_paste(Err("AX direct write unavailable".to_string())),
-            InsertStatus::CopiedFallback
-        );
+    fn macos_paste_success_reports_inserted_and_guards_restore() {
+        // 粘贴成功 → Inserted；恢复仅在剪贴板仍是刚插入的转写文字时进行（issue #525），
+        // 即「恢复剪贴板」开关在 macOS 上真正生效。
+        assert_eq!(insertion_success_status(), InsertStatus::Inserted);
+        assert!(should_restore_clipboard(
+            Some("dictated text"),
+            "dictated text"
+        ));
+        assert!(!should_restore_clipboard(
+            Some("user changed clipboard"),
+            "dictated text"
+        ));
     }
 
     #[test]

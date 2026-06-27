@@ -1,9 +1,5 @@
 // 检查更新按钮 —— 关于页查正式版（channel='stable'）、高级页 Beta 区查测试版
-// （channel='beta'），共用此组件。
-//
-// 检查中：按钮内图标转圈。结果（已是最新 / 失败）只在按钮内以图标 + 颜色短暂
-// 呈现 2.5s 后自动回到 idle，绝不另起文字块、不改变所在卡片高度 —— 杜绝
-// 「渲染框突然变大 / 抽搐」。发现新版则弹出固定定位的 UpdateDialog。
+// （channel='beta'），共用此组件。channel 显式传入，不受 prefs.updateChannel 影响。
 
 import { useEffect } from 'react';
 import { btnGhostStyle } from './shared';
@@ -23,8 +19,6 @@ export function CheckUpdateButton({ channel }: { channel: UpdateChannel }) {
       return () => window.clearTimeout(id);
     }
     return undefined;
-    // 只按 status 触发：useAutoUpdate 每次渲染都返回新 updater 对象，把它放进
-    // 依赖会让父组件每次重渲染都把 2.5s 自动收起计时器清掉重置。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status]);
 
@@ -32,7 +26,10 @@ export function CheckUpdateButton({ channel }: { channel: UpdateChannel }) {
   const failed = status === 'error';
   const iconName = upToDate ? 'check' : 'refresh';
   const color = upToDate ? 'var(--ol-ok)' : failed ? 'var(--ol-err)' : 'var(--ol-ink-2)';
-  const label = checking ? t('settings.about.checkingUpdate') : t('settings.about.checkUpdateBtn');
+  const labelKey = channel === 'beta'
+    ? 'settings.about.checkBetaUpdateBtn'
+    : 'settings.about.checkStableUpdateBtn';
+  const label = checking ? t('settings.about.checkingUpdate') : t(labelKey);
 
   return (
     <>
@@ -62,6 +59,7 @@ export function CheckUpdateButton({ channel }: { channel: UpdateChannel }) {
           progress={updater.progress}
           downloaded={updater.downloaded}
           contentLength={updater.contentLength}
+          errorMessage={updater.errorMessage}
           onInstall={() => void updater.installUpdate()}
           onClose={() => void updater.dismissDialog()}
         />
@@ -69,4 +67,3 @@ export function CheckUpdateButton({ channel }: { channel: UpdateChannel }) {
     </>
   );
 }
-

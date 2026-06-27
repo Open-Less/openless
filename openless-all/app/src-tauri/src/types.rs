@@ -77,13 +77,30 @@ pub enum PasteShortcut {
     ShiftInsert,
 }
 
-/// Auto-update 渠道。决定 Settings → 关于 里展示哪一类版本信息。
-/// `Stable` 沿用 `tauri-plugin-updater` 的默认 endpoints（即 `tauri.conf.json`
-/// 里的 `latest-{{target}}-{{arch}}.json`），与发版 pipeline 对齐。
-/// `Beta` 不动 plugin endpoints —— 只解锁 Settings 里"手动下载最新 Beta"的入口
-/// （fetch GitHub `prerelease` + 跳浏览器），物理隔离 Beta 包不会通过 auto-update
-/// 推到正式版用户。详见 README 的"Contributing workflow"和 CLAUDE.md 的
-/// `Branch & release-channel workflow` 段落。
+/// Windows 听写文本插入策略。默认 TSF 输入法；SendInput 逐字模拟；Paste 走剪贴板 + 模拟粘贴键。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum WindowsInsertionMode {
+    #[default]
+    Tsf,
+    SendInput,
+    Paste,
+}
+
+/// Windows SendInput 路径的换行模拟方式。仅 `WindowsInsertionMode::SendInput` 生效。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum WindowsSendInputNewlineMode {
+    #[default]
+    Enter,
+    ShiftEnter,
+    CrLf,
+}
+
+/// Auto-update 渠道。决定后台 AutoUpdateGate 拉哪条 manifest。
+/// `Stable` = `latest-android-{arch}.json`（或桌面 plugin-updater 正式版 endpoints）。
+/// `Beta` = `latest-android-{arch}-beta.json`（或桌面 beta endpoints）。
+/// Settings 里手动「检查正式版 / 检查 Beta」按钮显式传 channel，不受此 pref 影响。
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum UpdateChannel {
@@ -542,6 +559,26 @@ fn default_true() -> bool {
     true
 }
 
+fn resolve_windows_insertion_mode(
+    mode: WindowsInsertionMode,
+    legacy_sendinput_only: bool,
+) -> WindowsInsertionMode {
+    if mode != WindowsInsertionMode::Tsf {
+        mode
+    } else if legacy_sendinput_only {
+        WindowsInsertionMode::SendInput
+    } else {
+        WindowsInsertionMode::Tsf
+    }
+}
+
+fn resolve_windows_sendinput_insertion_only_legacy(
+    mode: WindowsInsertionMode,
+    legacy_sendinput_only: bool,
+) -> bool {
+    resolve_windows_insertion_mode(mode, legacy_sendinput_only) == WindowsInsertionMode::SendInput
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct UserPreferences {
@@ -589,6 +626,26 @@ pub struct UserPreferences {
     /// 默认开启以保持可用性；关闭后可验证文本是否真正由 TSF 上屏。
     #[serde(default = "default_true")]
     pub allow_non_tsf_insertion_fallback: bool,
+    /// Windows 听写插入策略：TSF / SendInput / 剪贴板粘贴。
+    #[serde(default)]
+    pub windows_insertion_mode: WindowsInsertionMode,
+    /// Windows SendInput 路径的换行模拟方式。
+    #[serde(default, rename = "windowsSendInputNewlineMode")]
+    pub windows_sendinput_newline_mode: WindowsSendInputNewlineMode,
+    /// 旧版 wire 兼容：`true` 等价于 `windows_insertion_mode = SendInput`。
+    #[serde(
+        default,
+        rename = "windowsSendInputInsertionOnly",
+        alias = "windowsSendinputInsertionOnly"
+    )]
+    pub windows_sendinput_insertion_only: bool,
+    /// Windows：SendInput 模式下是否在系统键盘列表（Win+Space）中显示 OpenLess TSF 输入法。
+    /// 默认 true 保持现有行为；关闭后用户级禁用语言配置文件，无需管理员权限。
+    #[serde(
+        default = "default_true",
+        rename = "windowsShowOpenlessInKeyboardList"
+    )]
+    pub windows_show_openless_in_keyboard_list: bool,
     /// 用户的工作语言（多选，原生名）。会作为前提注入 LLM polish/translate 的 system prompt 头部，
     /// 让模型知道该用户在哪些语言间工作。详见 issue #4。
     #[serde(default = "default_working_languages")]
@@ -647,6 +704,10 @@ pub struct UserPreferences {
     /// Agent 工作目录（`None` = 临时目录）。
     #[serde(default)]
     pub coding_agent_workdir: Option<String>,
+    /// Agent 可执行文件路径/命令（`None` 或空白 = 按后端取默认 `claude` / `opencode`）。
+    /// 供用户在「高级 → Less Computer」填自定义路径（例如未加入 PATH 的 opencode 二进制）。
+    #[serde(default)]
+    pub coding_agent_exe: Option<String>,
     /// Less Computer 语音触发键。macOS 生效；支持单修饰键（左/右 Control、左/右 Option、Fn）
     /// 和普通组合键。`None` = 停用。
     #[serde(default = "default_coding_agent_voice_hotkey")]
@@ -708,8 +769,8 @@ pub struct UserPreferences {
     /// foundry/qwen3 一致。
     #[serde(default = "default_local_asr_keep_loaded_secs")]
     pub sherpa_onnx_keep_loaded_secs: u32,
-    /// Auto-update 渠道偏好。stable = 跟正式版（默认）；beta = Settings 里多
-    /// 一个手动下载 Beta 的入口。不影响 plugin-updater 的自动检查路径。
+    /// Auto-update 渠道。stable = 后台自动更新查正式版 manifest；beta = 查 Beta manifest。
+    /// 手动检查按钮显式指定 channel，与此 pref 解耦。
     #[serde(default)]
     pub update_channel: UpdateChannel,
     /// 历史记录保留天数。0 = 不按时间清理（仅受 200 条上限）。默认 0（不限天数）。
@@ -765,8 +826,9 @@ pub struct UserPreferences {
     /// 默认 true（更接近用户习惯）。
     #[serde(default = "default_true")]
     pub streaming_insert_save_clipboard: bool,
-    /// 主窗口启动 + 后台每 60 分钟自动检查云端新版本。默认 true。
-    /// 用户在 Settings → 关于 里可关。关闭后仅手动「检查更新」按钮可用。
+    /// 主窗口启动 + 后台每 60 分钟自动检查更新。默认 true。
+    /// Android 开启后自动检查并下载，校验后打开系统安装器；桌面仅自动检查 + 用户确认安装。
+    /// 关闭后仅 Settings 手动「检查更新」按钮可用。
     #[serde(default = "default_true")]
     pub auto_update_check: bool,
     /// 历史记录上限（条数）。`None` = 不按条数清理；
@@ -892,6 +954,22 @@ struct UserPreferencesWire {
     #[serde(default)]
     paste_shortcut: PasteShortcut,
     allow_non_tsf_insertion_fallback: bool,
+    #[serde(default)]
+    windows_insertion_mode: WindowsInsertionMode,
+    #[serde(
+        default,
+        rename = "windowsSendInputNewlineMode",
+        alias = "windowsSendinputNewlineMode"
+    )]
+    windows_sendinput_newline_mode: WindowsSendInputNewlineMode,
+    #[serde(
+        default,
+        rename = "windowsSendInputInsertionOnly",
+        alias = "windowsSendinputInsertionOnly"
+    )]
+    windows_sendinput_insertion_only: bool,
+    #[serde(default = "default_true", rename = "windowsShowOpenlessInKeyboardList")]
+    windows_show_openless_in_keyboard_list: bool,
     working_languages: Vec<String>,
     translation_target_language: String,
     chinese_script_preference: ChineseScriptPreference,
@@ -913,6 +991,8 @@ struct UserPreferencesWire {
     coding_agent_permission_mode: String,
     #[serde(default)]
     coding_agent_workdir: Option<String>,
+    #[serde(default)]
+    coding_agent_exe: Option<String>,
     #[serde(default = "default_coding_agent_voice_hotkey")]
     coding_agent_voice_hotkey: Option<ShortcutBinding>,
     #[serde(default = "default_coding_agent_panel_hotkey")]
@@ -1017,6 +1097,10 @@ impl Default for UserPreferencesWire {
             restore_clipboard_after_paste: prefs.restore_clipboard_after_paste,
             paste_shortcut: prefs.paste_shortcut,
             allow_non_tsf_insertion_fallback: prefs.allow_non_tsf_insertion_fallback,
+            windows_insertion_mode: prefs.windows_insertion_mode,
+            windows_sendinput_newline_mode: prefs.windows_sendinput_newline_mode,
+            windows_sendinput_insertion_only: prefs.windows_sendinput_insertion_only,
+            windows_show_openless_in_keyboard_list: prefs.windows_show_openless_in_keyboard_list,
             working_languages: prefs.working_languages,
             translation_target_language: prefs.translation_target_language,
             chinese_script_preference: prefs.chinese_script_preference,
@@ -1033,6 +1117,7 @@ impl Default for UserPreferencesWire {
             coding_agent_model: prefs.coding_agent_model,
             coding_agent_permission_mode: prefs.coding_agent_permission_mode,
             coding_agent_workdir: prefs.coding_agent_workdir,
+            coding_agent_exe: prefs.coding_agent_exe,
             coding_agent_voice_hotkey: prefs.coding_agent_voice_hotkey,
             coding_agent_panel_hotkey: prefs.coding_agent_panel_hotkey,
             coding_agent_quick_hotkey: prefs.coding_agent_quick_hotkey,
@@ -1126,6 +1211,16 @@ impl<'de> Deserialize<'de> for UserPreferences {
             restore_clipboard_after_paste: wire.restore_clipboard_after_paste,
             paste_shortcut: wire.paste_shortcut,
             allow_non_tsf_insertion_fallback: wire.allow_non_tsf_insertion_fallback,
+            windows_insertion_mode: resolve_windows_insertion_mode(
+                wire.windows_insertion_mode,
+                wire.windows_sendinput_insertion_only,
+            ),
+            windows_sendinput_newline_mode: wire.windows_sendinput_newline_mode,
+            windows_sendinput_insertion_only: resolve_windows_sendinput_insertion_only_legacy(
+                wire.windows_insertion_mode,
+                wire.windows_sendinput_insertion_only,
+            ),
+            windows_show_openless_in_keyboard_list: wire.windows_show_openless_in_keyboard_list,
             working_languages: wire.working_languages,
             translation_target_language: wire.translation_target_language,
             chinese_script_preference: wire.chinese_script_preference,
@@ -1137,6 +1232,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             coding_agent_model: wire.coding_agent_model,
             coding_agent_permission_mode: wire.coding_agent_permission_mode,
             coding_agent_workdir: wire.coding_agent_workdir,
+            coding_agent_exe: wire.coding_agent_exe,
             coding_agent_voice_hotkey: wire.coding_agent_voice_hotkey,
             coding_agent_panel_hotkey: wire.coding_agent_panel_hotkey,
             coding_agent_quick_hotkey: wire.coding_agent_quick_hotkey,
@@ -1871,6 +1967,10 @@ impl Default for UserPreferences {
             restore_clipboard_after_paste: true,
             paste_shortcut: PasteShortcut::default(),
             allow_non_tsf_insertion_fallback: true,
+            windows_insertion_mode: WindowsInsertionMode::default(),
+            windows_sendinput_newline_mode: WindowsSendInputNewlineMode::default(),
+            windows_sendinput_insertion_only: false,
+            windows_show_openless_in_keyboard_list: true,
             working_languages: default_working_languages(),
             translation_target_language: String::new(),
             chinese_script_preference: ChineseScriptPreference::Auto,
@@ -1886,6 +1986,7 @@ impl Default for UserPreferences {
             coding_agent_model: None,
             coding_agent_permission_mode: default_coding_agent_permission_mode(),
             coding_agent_workdir: None,
+            coding_agent_exe: None,
             coding_agent_voice_hotkey: default_coding_agent_voice_hotkey(),
             coding_agent_panel_hotkey: default_coding_agent_panel_hotkey(),
             coding_agent_quick_hotkey: None,
@@ -2099,6 +2200,9 @@ pub enum HotkeyTrigger {
     RightControl,
     LeftControl,
     RightCommand,
+    LeftCommand,
+    LeftShift,
+    RightShift,
     Fn,
     RightAlt, // Windows synonym for RightOption
     MediaPlayPause,
@@ -2113,6 +2217,9 @@ impl HotkeyTrigger {
             HotkeyTrigger::RightControl => "右 Control",
             HotkeyTrigger::LeftControl => "左 Control",
             HotkeyTrigger::RightCommand => "右 Command",
+            HotkeyTrigger::LeftCommand => "左 Command",
+            HotkeyTrigger::LeftShift => "左 Shift",
+            HotkeyTrigger::RightShift => "右 Shift",
             HotkeyTrigger::Fn => "Fn (地球键)",
             HotkeyTrigger::RightAlt => "右 Alt",
             HotkeyTrigger::MediaPlayPause => "⏯ Media 播放/暂停",
@@ -2206,6 +2313,9 @@ fn legacy_trigger_code(trigger: HotkeyTrigger) -> &'static str {
         HotkeyTrigger::RightControl => "ControlRight",
         HotkeyTrigger::LeftControl => "ControlLeft",
         HotkeyTrigger::RightCommand => "MetaRight",
+        HotkeyTrigger::LeftCommand => "MetaLeft",
+        HotkeyTrigger::LeftShift => "ShiftLeft",
+        HotkeyTrigger::RightShift => "ShiftRight",
         #[cfg(target_os = "windows")]
         HotkeyTrigger::Fn => "ControlRight",
         #[cfg(not(target_os = "windows"))]
@@ -2326,6 +2436,9 @@ impl HotkeyCapability {
                     HotkeyTrigger::RightControl,
                     HotkeyTrigger::LeftControl,
                     HotkeyTrigger::RightCommand,
+                    HotkeyTrigger::LeftCommand,
+                    HotkeyTrigger::LeftShift,
+                    HotkeyTrigger::RightShift,
                     HotkeyTrigger::Fn,
                     HotkeyTrigger::Custom,
                 ],
@@ -2346,6 +2459,9 @@ impl HotkeyCapability {
                     HotkeyTrigger::RightAlt,
                     HotkeyTrigger::LeftControl,
                     HotkeyTrigger::RightCommand,
+                    HotkeyTrigger::LeftCommand,
+                    HotkeyTrigger::LeftShift,
+                    HotkeyTrigger::RightShift,
                     HotkeyTrigger::MediaPlayPause,
                     HotkeyTrigger::Custom,
                 ],
@@ -2368,6 +2484,9 @@ impl HotkeyCapability {
                     HotkeyTrigger::RightAlt,
                     HotkeyTrigger::RightControl,
                     HotkeyTrigger::LeftControl,
+                    HotkeyTrigger::LeftCommand,
+                    HotkeyTrigger::LeftShift,
+                    HotkeyTrigger::RightShift,
                     HotkeyTrigger::Custom,
                 ],
                 requires_accessibility_permission: false,
@@ -2375,7 +2494,8 @@ impl HotkeyCapability {
                 supports_side_specific_modifiers: true,
                 explicit_fallback_available: false,
                 status_hint: Some(
-                    "Linux 使用 fcitx5 插件监听热键和提交文字；无需桌面环境额外配置。".into(),
+                    "Linux 使用 fcitx5 插件监听热键和提交文字。鼠标/侧别组合键需 evdev 读取 /dev/input/event*；若无权限请将用户加入 input 组（sudo usermod -aG input $USER）后重新登录。"
+                        .into(),
                 ),
             }
         }
@@ -2614,6 +2734,125 @@ mod tests {
         let prefs: UserPreferences = serde_json::from_str("{}").unwrap();
 
         assert!(prefs.allow_non_tsf_insertion_fallback);
+    }
+
+    #[test]
+    fn windows_sendinput_insertion_only_defaults_to_disabled() {
+        let prefs = UserPreferences::default();
+        assert!(!prefs.windows_sendinput_insertion_only);
+        assert_eq!(prefs.windows_insertion_mode, WindowsInsertionMode::Tsf);
+
+        let prefs: UserPreferences = serde_json::from_str("{}").unwrap();
+        assert!(!prefs.windows_sendinput_insertion_only);
+        assert_eq!(prefs.windows_insertion_mode, WindowsInsertionMode::Tsf);
+    }
+
+    #[test]
+    fn windows_sendinput_insertion_only_deserializes_frontend_wire_key() {
+        let prefs: UserPreferences =
+            serde_json::from_str(r#"{"windowsSendInputInsertionOnly": true}"#).unwrap();
+        assert!(prefs.windows_sendinput_insertion_only);
+        assert_eq!(prefs.windows_insertion_mode, WindowsInsertionMode::SendInput);
+    }
+
+    #[test]
+    fn windows_sendinput_insertion_only_deserializes_legacy_wrong_camel_key() {
+        let prefs: UserPreferences =
+            serde_json::from_str(r#"{"windowsSendinputInsertionOnly": true}"#).unwrap();
+        assert!(prefs.windows_sendinput_insertion_only);
+        assert_eq!(prefs.windows_insertion_mode, WindowsInsertionMode::SendInput);
+    }
+
+    #[test]
+    fn windows_insertion_mode_deserializes_explicit_paste() {
+        let prefs: UserPreferences =
+            serde_json::from_str(r#"{"windowsInsertionMode":"paste"}"#).unwrap();
+        assert_eq!(prefs.windows_insertion_mode, WindowsInsertionMode::Paste);
+        assert!(!prefs.windows_sendinput_insertion_only);
+    }
+
+    #[test]
+    fn windows_sendinput_newline_mode_defaults_to_enter() {
+        let prefs: UserPreferences = serde_json::from_str("{}").unwrap();
+        assert_eq!(
+            prefs.windows_sendinput_newline_mode,
+            WindowsSendInputNewlineMode::Enter
+        );
+    }
+
+    #[test]
+    fn windows_sendinput_newline_mode_deserializes_shift_enter() {
+        let prefs: UserPreferences =
+            serde_json::from_str(r#"{"windowsSendInputNewlineMode":"shiftEnter"}"#).unwrap();
+        assert_eq!(
+            prefs.windows_sendinput_newline_mode,
+            WindowsSendInputNewlineMode::ShiftEnter
+        );
+    }
+
+    #[test]
+    fn windows_sendinput_newline_mode_serializes_frontend_wire_key() {
+        let prefs = UserPreferences {
+            windows_insertion_mode: WindowsInsertionMode::SendInput,
+            windows_sendinput_newline_mode: WindowsSendInputNewlineMode::ShiftEnter,
+            ..UserPreferences::default()
+        };
+        let json = serde_json::to_string(&prefs).unwrap();
+        assert!(json.contains(r#""windowsSendInputNewlineMode":"shiftEnter""#));
+        assert!(!json.contains("windowsSendinputNewlineMode"));
+    }
+
+    #[test]
+    fn windows_sendinput_insertion_only_serializes_frontend_wire_key() {
+        let enabled = UserPreferences {
+            windows_insertion_mode: WindowsInsertionMode::SendInput,
+            windows_sendinput_insertion_only: true,
+            ..UserPreferences::default()
+        };
+        let json = serde_json::to_string(&enabled).unwrap();
+        assert!(json.contains(r#""windowsSendInputInsertionOnly":true"#));
+        assert!(!json.contains("windowsSendinputInsertionOnly"));
+    }
+
+    #[test]
+    fn windows_sendinput_insertion_only_pref_round_trips_explicit_true() {
+        let enabled = UserPreferences {
+            windows_insertion_mode: WindowsInsertionMode::SendInput,
+            windows_sendinput_insertion_only: true,
+            ..UserPreferences::default()
+        };
+        let json = serde_json::to_string(&enabled).unwrap();
+        assert!(json.contains(r#""windowsSendInputInsertionOnly":true"#));
+        assert!(json.contains(r#""windowsInsertionMode":"sendInput""#));
+        let restored: UserPreferences = serde_json::from_str(&json).unwrap();
+        assert!(restored.windows_sendinput_insertion_only);
+        assert_eq!(restored.windows_insertion_mode, WindowsInsertionMode::SendInput);
+    }
+
+    #[test]
+    fn windows_show_openless_in_keyboard_list_defaults_to_enabled() {
+        let prefs = UserPreferences::default();
+        assert!(prefs.windows_show_openless_in_keyboard_list);
+
+        let prefs: UserPreferences = serde_json::from_str("{}").unwrap();
+        assert!(prefs.windows_show_openless_in_keyboard_list);
+    }
+
+    #[test]
+    fn windows_show_openless_in_keyboard_list_deserializes_frontend_wire_key() {
+        let prefs: UserPreferences =
+            serde_json::from_str(r#"{"windowsShowOpenlessInKeyboardList": false}"#).unwrap();
+        assert!(!prefs.windows_show_openless_in_keyboard_list);
+    }
+
+    #[test]
+    fn windows_show_openless_in_keyboard_list_serializes_frontend_wire_key() {
+        let hidden = UserPreferences {
+            windows_show_openless_in_keyboard_list: false,
+            ..UserPreferences::default()
+        };
+        let json = serde_json::to_string(&hidden).unwrap();
+        assert!(json.contains(r#""windowsShowOpenlessInKeyboardList":false"#));
     }
 
     #[test]

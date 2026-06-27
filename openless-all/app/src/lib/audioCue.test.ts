@@ -3,6 +3,7 @@
 // 播放/停止依赖 Web Audio 运行时，不在此单测覆盖；这里只钉住可被回归的音符规划。
 
 import {
+  audioContextActionForState,
   cueTotalDurationMs,
   recordStartCueTones,
   shouldPlayDeferredCue,
@@ -105,6 +106,39 @@ function assertEqual<T>(actual: T, expected: T, name: string) {
     }),
     true,
     'cue at exactly the threshold still plays',
+  );
+}
+
+{
+  // 「用久了没声音」的回归钉子：closed 的 ctx 必须重建，否则提示音/试听永久静默。
+  assertEqual(
+    audioContextActionForState('closed'),
+    'recreate',
+    'closed context must be recreated',
+  );
+  // running 可直接排期。
+  assertEqual(
+    audioContextActionForState('running'),
+    'ready',
+    'running context is ready to schedule',
+  );
+  // suspended 先 resume 再排期（WKWebView/WebView2 常态）。
+  assertEqual(
+    audioContextActionForState('suspended'),
+    'resume',
+    'suspended context needs resume',
+  );
+  // WebKit 非标准 interrupted（音频会话被抢占）同样需要 resume，不能当 running 直接排期。
+  assertEqual(
+    audioContextActionForState('interrupted'),
+    'resume',
+    'interrupted context needs resume',
+  );
+  // 任何未知非运行态都保守地走 resume（宁可尝试唤醒也不静默漏音）。
+  assertEqual(
+    audioContextActionForState('some-future-state'),
+    'resume',
+    'unknown non-running state falls back to resume',
   );
 }
 

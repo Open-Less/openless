@@ -15,8 +15,8 @@ pub fn clear_history(coord: CoordinatorState<'_>) -> Result<(), String> {
     coord.history().clear().map_err(|e| e.to_string())
 }
 
-/// 读取某次会话的原始麦克风 wav 字节流。仅当用户开过
-/// `prefs.record_audio_for_debug` 并且这条 session 是开关打开后录的，才会有文件。
+/// 读取某次会话的原始麦克风 wav 字节流。文件存在的条件：debug 用户的任意会话，或任意
+/// 「转录失败 / empty」会话（失败保留）——成功的非 debug 会话录音会在插入后删掉。
 /// 文件名规约：`<data_dir>/recordings/<session_id>.wav`，与 DictationSession.id 同名。
 ///
 /// 路径校验：session_id **必须**严格匹配 UUID-v4 字面（36 字符 = 8-4-4-4-12 + 4 个 `-`，

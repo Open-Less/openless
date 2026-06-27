@@ -1,31 +1,38 @@
 // Less Computer 全屏彩虹边缘亮条（独立窗口 window=less-computer-glow）。
-// 只画贴边光带，不铺暗场；彩色弧段沿边缘流动，模拟 Apple Intelligence 的粗细变化。
+// 只画贴边光带，不铺暗场；彩色光环沿边缘流动，模拟 Apple Intelligence 的发光描边。
 // 纯视觉：pointer-events:none，后端再 set_ignore_cursor_events(true)。仅 macOS 显示。
+//
+// 发光技法移植自 EdgeGlow（github.com/vector4wang/EdgeGlow，MIT）：核心是「4 层模糊堆叠」——
+// 最内一条 0 模糊的锐利彩虹实线，外面叠 3 层逐渐变宽、变虚的光晕，得到霓虹灯管式发光。
+// 配色采用 EdgeGlow 的 iridescent（Apple Intelligence 高饱和霓虹）主题。
 
 import { useEffect, useState } from 'react';
 
+// EdgeGlow iridescent 主题（紫→蓝→青→绿→金→橙→红→粉→紫），沿环 360° 均匀铺开。
+const SPECTRUM = `conic-gradient(from var(--lcg-angle),
+  #a633f2 0deg,
+  #594dff 30deg,
+  #2680ff 60deg,
+  #0db3fa 90deg,
+  #1ad9e6 120deg,
+  #33e6bf 150deg,
+  #80d966 180deg,
+  #ccb31a 210deg,
+  #ff801a 240deg,
+  #ff4059 270deg,
+  #f22699 300deg,
+  #bf40d9 330deg,
+  #a633f2 360deg)`;
+
 const glowCss = `
 @property --lcg-angle { syntax: '<angle>'; initial-value: 0deg; inherits: false; }
-@keyframes lcg-spin    { to { --lcg-angle: 360deg; } }
-@keyframes lcg-breathe { 0%, 100% { opacity: .72; } 50% { opacity: .92; } }
-@keyframes lcg-flow    { 0%, 100% { opacity: .44; } 48% { opacity: .74; } }
+@keyframes lcg-spin     { to { --lcg-angle: 360deg; } }
+@keyframes lcg-breathe  { 0%, 100% { opacity: var(--lcg-o); } 50% { opacity: calc(var(--lcg-o) + .14); } }
 
 html, body, #root { background: transparent !important; margin: 0; height: 100%; overflow: hidden; }
 
-/* 全屏裁剪容器：圆角贴合屏幕物理圆角；overflow:hidden 把外溢模糊裁在屏幕边缘。 */
+/* 全屏裁剪容器：圆角贴合屏幕物理圆角；overflow:hidden 把外溢模糊裁在屏幕边缘内侧。 */
 .lcg-root {
-  --lcg-spectrum: conic-gradient(from calc(var(--lcg-angle) - 74deg),
-    #4e9dff 0deg,
-    #6cc9ff 40deg,
-    #9d82ff 82deg,
-    #e77dff 124deg,
-    #ff7aa8 162deg,
-    #ff9765 198deg,
-    #ffe070 236deg,
-    #bff47a 266deg,
-    #63e8a2 304deg,
-    #63d4ff 334deg,
-    #4e9dff 360deg);
   position: fixed;
   inset: 0;
   pointer-events: none;
@@ -33,57 +40,68 @@ html, body, #root { background: transparent !important; margin: 0; height: 100%;
   border-radius: var(--lcg-radius, 42px);
 }
 
-.lcg-edge,
-.lcg-flow {
+/* 4 层都是同一个「边框环」：用 mask-composite 只保留 padding 那一圈，padding 即环的粗细。 */
+.lcg-line,
+.lcg-glow-1,
+.lcg-glow-2,
+.lcg-glow-3 {
   position: absolute;
+  inset: -1px;
+  border-radius: calc(var(--lcg-radius, 42px) + 1px);
+  background: ${SPECTRUM};
   -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
           mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
   -webkit-mask-composite: xor;
           mask-composite: exclude;
   pointer-events: none;
-  will-change: transform, filter, opacity, --lcg-angle;
+  will-change: filter, opacity, --lcg-angle;
 }
 
-/* 贴边主光带：只保留边缘亮条，避免在屏幕中央铺暗场或彩雾。 */
-.lcg-edge {
-  inset: -4px;
-  border-radius: calc(var(--lcg-radius, 42px) + 4px);
-  padding: 12px;
-  background: var(--lcg-spectrum);
-  filter: blur(1.1px) saturate(1.36) brightness(1.08)
-    drop-shadow(0 0 7px rgba(95, 185, 255, .44))
-    drop-shadow(0 0 10px rgba(255, 126, 168, .30));
-  opacity: .84;
-  animation: lcg-spin 7.5s linear infinite, lcg-breathe 4.8s ease-in-out infinite;
+/* 第 4 层 → 最细的彩虹实线（EdgeGlow blur=0 的那层）：几乎不模糊，颜色最实，定义边缘。 */
+.lcg-line {
+  --lcg-o: 1;
+  padding: 2.5px;
+  filter: saturate(1.32) brightness(1.06) blur(.5px)
+    drop-shadow(0 0 4px rgba(150, 120, 255, .55));
+  opacity: 1;
+  animation: lcg-spin 8s linear infinite;
 }
 
-/* 彩色粗细流动层：仍然是边缘 ring，不向中间铺开。 */
-.lcg-flow {
-  inset: -7px;
-  border-radius: calc(var(--lcg-radius, 42px) + 7px);
-  padding: 18px;
-  background: conic-gradient(from calc(var(--lcg-angle) + 28deg),
-    rgba(31,140,255,0) 0deg,
-    rgba(91,166,255,.74) 28deg,
-    rgba(167,134,255,.58) 54deg,
-    rgba(240,92,255,0) 82deg,
-    rgba(240,92,255,0) 132deg,
-    rgba(255,138,94,.70) 164deg,
-    rgba(255,220,103,.52) 192deg,
-    rgba(217,255,63,0) 222deg,
-    rgba(217,255,63,0) 266deg,
-    rgba(100,232,164,.68) 294deg,
-    rgba(93,210,255,.56) 326deg,
-    rgba(31,140,255,0) 360deg);
-  filter: blur(4.5px) saturate(1.42) brightness(1.08);
-  opacity: .58;
+/* 第 3 层 → 内层亮边（EdgeGlow blur≈2）。 */
+.lcg-glow-1 {
+  --lcg-o: .85;
+  padding: 5px;
+  filter: saturate(1.28) brightness(1.05) blur(3px);
+  opacity: .85;
   mix-blend-mode: screen;
-  animation: lcg-spin 6.8s linear infinite reverse, lcg-flow 3.8s ease-in-out infinite;
+  animation: lcg-spin 8s linear infinite, lcg-breathe 4.6s ease-in-out infinite;
+}
+
+/* 第 2 层 → 中层光晕（EdgeGlow blur≈8）。 */
+.lcg-glow-2 {
+  --lcg-o: .56;
+  padding: 11px;
+  filter: saturate(1.22) brightness(1.04) blur(8px);
+  opacity: .56;
+  mix-blend-mode: screen;
+  animation: lcg-spin 8s linear infinite, lcg-breathe 5.6s ease-in-out infinite;
+}
+
+/* 第 1 层 → 最宽外晕（EdgeGlow blur≈12），向屏内柔和散开。 */
+.lcg-glow-3 {
+  --lcg-o: .4;
+  padding: 20px;
+  filter: saturate(1.18) brightness(1.03) blur(15px);
+  opacity: .4;
+  mix-blend-mode: screen;
+  animation: lcg-spin 8s linear infinite, lcg-breathe 6.8s ease-in-out infinite;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .lcg-edge,
-  .lcg-flow { animation: none; }
+  .lcg-line,
+  .lcg-glow-1,
+  .lcg-glow-2,
+  .lcg-glow-3 { animation: none; }
 }
 `;
 
@@ -95,7 +113,7 @@ if (typeof document !== 'undefined' && !document.getElementById('less-computer-g
 }
 
 export function LessComputerGlow() {
-  // issue #470：窗口 .hide() 后 webview 不会自动停掉这 4 条无限动画（Windows 尤其不释放），
+  // issue #470：窗口 .hide() 后 webview 不会自动停掉这些无限动画（Windows 尤其不释放），
   // 全屏发光层持续占 GPU 合成。改由后端 show/hide 主动 emit 可见状态驱动：不可见时直接卸载
   // 发光层（无元素 → 零 GPU），可见时原样渲染——显示时视觉零变化。
   const [active, setActive] = useState(true);
@@ -126,8 +144,10 @@ export function LessComputerGlow() {
   if (!active) return null;
   return (
     <div className="lcg-root" aria-hidden>
-      <span className="lcg-flow" />
-      <span className="lcg-edge" />
+      <span className="lcg-glow-3" />
+      <span className="lcg-glow-2" />
+      <span className="lcg-glow-1" />
+      <span className="lcg-line" />
     </div>
   );
 }

@@ -488,21 +488,48 @@ pub(super) fn combo_hotkey_supervisor_loop(inner: Arc<Inner>) {
         // 读当前 prefs
         let prefs = inner.prefs.get();
         if crate::shortcut_binding::legacy_modifier_trigger(&prefs.dictation_hotkey).is_some() {
-            // 不是 Custom → 卸载后退出守护
             take_combo_hotkey_on_main_thread(&inner);
-            // 对齐主 supervisor 的 exit-on-success：装/卸交给 update_combo_hotkey_binding 主动路径，issue #470
+            inner.side_aware_combo.lock().take();
             return;
         }
 
         let binding = prefs.dictation_hotkey.clone();
         if is_unconfigured_shortcut(&binding) {
             take_combo_hotkey_on_main_thread(&inner);
-            // 对齐主 supervisor 的 exit-on-success：装/卸交给 update_combo_hotkey_binding 主动路径，issue #470
+            inner.side_aware_combo.lock().take();
             return;
         }
 
+        if crate::shortcut_binding::binding_requires_side_aware_hook(&binding) {
+            take_combo_hotkey_on_main_thread(&inner);
+            if inner.side_aware_combo.lock().is_some() {
+                return;
+            }
+            let (tx, rx) = mpsc::channel::<ComboHotkeyEvent>();
+            match crate::side_aware_combo::SideAwareComboMonitor::start(binding, tx) {
+                Ok(monitor) => {
+                    *inner.side_aware_combo.lock() = Some(monitor);
+                    let inner_clone = Arc::clone(&inner);
+                    std::thread::Builder::new()
+                        .name("openless-side-combo-bridge".into())
+                        .spawn(move || combo_hotkey_bridge_loop(inner_clone, rx))
+                        .ok();
+                    return;
+                }
+                Err(e) => {
+                    attempts += 1;
+                    if attempts <= 3 || attempts % 10 == 0 {
+                        log::warn!("[coord] side-aware combo 第 {attempts} 次注册失败: {e}; 3s 后重试");
+                    }
+                    std::thread::sleep(std::time::Duration::from_secs(3));
+                    continue;
+                }
+            }
+        }
+
+        inner.side_aware_combo.lock().take();
+
         if inner.combo_hotkey.lock().is_some() {
-            // 对齐主 supervisor 的 exit-on-success：装/卸交给 update_combo_hotkey_binding 主动路径，issue #470
             return;
         }
 
@@ -550,7 +577,10 @@ pub(super) fn combo_hotkey_supervisor_loop(inner: Arc<Inner>) {
                     .name("openless-combo-hotkey-bridge".into())
                     .spawn(move || combo_hotkey_bridge_loop(inner_clone, rx))
                     .ok();
+                #[cfg(target_os = "linux")]
+                sync_custom_dictation_to_plugin(&inner);
                 attempts = 0;
+                return;
             }
             Err(e) => {
                 attempts += 1;
@@ -1160,6 +1190,9 @@ pub(super) fn window_key_matches_trigger(trigger: crate::types::HotkeyTrigger, k
         }
         HotkeyTrigger::LeftOption => (key == "Alt" || key == "AltGraph") && code == "AltLeft",
         HotkeyTrigger::RightCommand => key == "Meta" && code == "MetaRight",
+        HotkeyTrigger::LeftCommand => key == "Meta" && code == "MetaLeft",
+        HotkeyTrigger::LeftShift => key == "Shift" && code == "ShiftLeft",
+        HotkeyTrigger::RightShift => key == "Shift" && code == "ShiftRight",
         HotkeyTrigger::Fn => key == "Control" && code == "ControlRight",
         // MediaPlayPause 走 WH_KEYBOARD_LL，不走 window hotkey fallback
         HotkeyTrigger::MediaPlayPause => false,

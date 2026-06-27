@@ -11,6 +11,7 @@ import {
   openSystemSettings,
   requestAccessibilityPermission,
   requestMicrophonePermission,
+  resetAccessibilityPermissionAndRestartApp,
 } from '../lib/ipc';
 import { getHotkeyTriggerLabel } from '../lib/hotkey';
 import type { PermissionStatus, PlatformCapabilities } from '../lib/types';
@@ -281,6 +282,8 @@ function DesktopOnboarding({
   const [accessibility, setAccessibility] = useState<PermissionStatus>('notDetermined');
   const [microphone, setMicrophone] = useState<PermissionStatus>('notDetermined');
   const [busy, setBusy] = useState(false);
+  // 区分「尚未尝试弹 TCC 对话框」和「TCC 已拒绝」两种 denied 状态。
+  const [tccPromptShown, setTccPromptShown] = useState(false);
   const refreshTimeoutRef = useRef<number | null>(null);
   const { capability } = useHotkeySettings();
 
@@ -322,12 +325,16 @@ function DesktopOnboarding({
   const onGrantAccessibility = async () => {
     setBusy(true);
     try {
-      await requestAccessibilityPermission();
-      await openSystemSettings('accessibility');
+      const result = await requestAccessibilityPermission();
+      setTccPromptShown(true);
+      // 如果 TCC 弹窗用户点了「允许」，权限已授予，不需要再打开系统设置。
+      // 仅在 TCC 拒绝或之前已拒绝（不会再弹窗）时才打开系统设置引导用户手动开启。
+      if (result !== 'granted') {
+        await openSystemSettings('accessibility');
+      }
     } finally {
       setBusy(false);
     }
-    // issue #470：与麦克风路径对称——授权动作返回后立即刷新，并挂一次 800ms 兜底覆盖 app 内按钮发起的授予。
     void refresh();
     if (refreshTimeoutRef.current) clearTimeout(refreshTimeoutRef.current);
     refreshTimeoutRef.current = window.setTimeout(refresh, 800);
@@ -368,26 +375,50 @@ function DesktopOnboarding({
         <BrandHeader title={t('onboarding.welcome')} desc={t('onboarding.intro')} />
 
         {(requiresAccessibility || accessibility === 'denied') && (
-          <PermissionStep
-            index={1}
-            title={capability?.requiresAccessibilityPermission ? t('onboarding.accessibilityTitle') : t('onboarding.hotkeyTitle')}
-            desc={capability?.requiresAccessibilityPermission
-              ? t('onboarding.accessibilityDesc', { trigger: getHotkeyTriggerLabel(capability.availableTriggers[0]) })
-              : capability?.statusHint ?? t('onboarding.hotkeyDesc')}
-            status={accessibility}
-            actionLabel={
-              !capability?.requiresAccessibilityPermission || accessibility === 'notApplicable'
-                ? t('onboarding.actionNotApplicable')
-                : accessibility === 'granted'
-                  ? t('onboarding.actionGranted')
-                  : accessibility === 'denied'
-                    ? t('onboarding.actionOpenSystem')
-                    : t('onboarding.actionGrant')
-            }
-            onAction={onGrantAccessibility}
-            disabled={busy || accessibility === 'granted' || accessibility === 'notApplicable'}
-            hint={capability?.requiresAccessibilityPermission ? t('onboarding.accessibilityHint') : undefined}
-          />
+          <>
+            <PermissionStep
+              index={1}
+              title={capability?.requiresAccessibilityPermission ? t('onboarding.accessibilityTitle') : t('onboarding.hotkeyTitle')}
+              desc={capability?.requiresAccessibilityPermission
+                ? t('onboarding.accessibilityDesc', { trigger: getHotkeyTriggerLabel(capability.availableTriggers[0]) })
+                : capability?.statusHint ?? t('onboarding.hotkeyDesc')}
+              status={accessibility}
+              actionLabel={
+                !capability?.requiresAccessibilityPermission || accessibility === 'notApplicable'
+                  ? t('onboarding.actionNotApplicable')
+                  : accessibility === 'granted'
+                    ? t('onboarding.actionGranted')
+                    : accessibility === 'denied' && tccPromptShown
+                      ? t('onboarding.actionOpenSystem')
+                      : t('onboarding.actionGrant')
+              }
+              onAction={onGrantAccessibility}
+              disabled={busy || accessibility === 'granted' || accessibility === 'notApplicable'}
+              hint={capability?.requiresAccessibilityPermission ? t('onboarding.accessibilityHint') : undefined}
+            />
+            {accessibility === 'denied' && tccPromptShown && (
+              <div style={{ marginTop: 10, paddingTop: 10, borderTop: '0.5px solid var(--ol-line-soft)' }}>
+                <button
+                  type="button"
+                  onClick={() => { resetAccessibilityPermissionAndRestartApp().catch(console.error); }}
+                  style={{
+                    width: '100%',
+                    padding: '8px 14px',
+                    fontSize: 12.5,
+                    fontWeight: 500,
+                    fontFamily: 'inherit',
+                    border: '0.5px solid var(--ol-line-strong)',
+                    borderRadius: 8,
+                    background: 'var(--ol-surface)',
+                    color: 'var(--ol-ink-2)',
+                    cursor: 'default',
+                  }}
+                >
+                  {t('onboarding.actionRestart')}
+                </button>
+              </div>
+            )}
+          </>
         )}
 
         <PermissionStep

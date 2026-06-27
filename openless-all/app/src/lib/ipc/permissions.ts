@@ -46,3 +46,11 @@ export function triggerMicrophonePrompt(): Promise<void> {
 export function restartApp(): Promise<void> {
     return invokeOrMock("restart_app", undefined, () => undefined)
 }
+
+export function resetAccessibilityPermissionAndRestartApp(): Promise<void> {
+    return invokeOrMock(
+        "reset_accessibility_permission_and_restart_app",
+        undefined,
+        () => undefined,
+    )
+}

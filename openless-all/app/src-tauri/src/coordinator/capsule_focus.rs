@@ -590,10 +590,10 @@ pub(super) struct CapsuleLayoutState {
 /// 返回胶囊「应该摆放到的显示器」的标识信息。
 ///
 /// 它看的显示器必须和 `position_capsule_bottom_center` 实际定位用的一致：
-/// Windows 看「正在输入的 App 所在显示器」，其它平台看胶囊自己的显示器。
-/// 这是「是否需要重新定位」去重缓存（`maybe_position_capsule_bottom_center`）
-/// 的 key，如果这里看错了显示器，就会出现「输入焦点移到另一块屏、胶囊却没
-/// 跟过去」的 bug。
+/// Windows 看「正在输入的 App 所在显示器」，macOS 看「鼠标光标所在显示器」，
+/// 其它平台看胶囊自己的显示器。这是「是否需要重新定位」去重缓存
+/// （`maybe_position_capsule_bottom_center`）的 key，如果这里看错了显示器，
+/// 就会出现「焦点/光标移到另一块屏、胶囊却没跟过去」的 bug。
 pub(super) fn capsule_layout_snapshot<R: tauri::Runtime>(
     window: &tauri::WebviewWindow<R>,
     translation_active: bool,
@@ -614,6 +614,23 @@ pub(super) fn capsule_layout_snapshot<R: tauri::Runtime>(
             });
         }
         // 仅当 Win32 取不到前台显示器时，落回下面的 current_monitor。
+    }
+    // macOS：以「鼠标光标所在显示器」为基准，必须和
+    // position_capsule_bottom_center 实际定位用的同一块屏；否则光标移到另一块
+    // 屏时这里仍读到胶囊旧屏 → 误判「没变化」→ 跳过重新定位 → 胶囊锁死在第一块屏。
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(mon) = crate::capsule_target_monitor(window) {
+            return Some(CapsuleLayoutState {
+                translation_active,
+                monitor_x: mon.physical_x,
+                monitor_y: mon.physical_y,
+                monitor_width: mon.physical_width,
+                monitor_height: mon.physical_height,
+                scale_bits: mon.scale.to_bits(),
+            });
+        }
+        // 取不到光标 / AX 位置时落回下面的 current_monitor。
     }
     let monitor = window.current_monitor().ok().flatten()?;
     Some(CapsuleLayoutState {

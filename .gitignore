@@ -38,6 +38,13 @@ target/
 ci-artifacts/
 *.apk
 
+# UI smoke / Playwright 截图与报告（本地校验用，非源码）
+openless-all/ui-check-screenshots/
+test-results/
+playwright-report/
+playwright/.cache/
+blob-report/
+
 # Android 真机调试产物（日志 / 截图 / adb 导出 / 数据备份 / 临时还原目录）
 diagnostics/
 android-logs/

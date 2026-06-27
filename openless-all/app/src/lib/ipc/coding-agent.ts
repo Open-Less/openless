@@ -18,6 +18,26 @@ export interface ClaudeDetection {
     hasComputerUse: boolean
 }
 
+/** OpenCode CLI 检测结果（issue #579）。 */
+export interface OpenCodeDetection {
+    installed: boolean
+    version: string | null
+    exe: string
+}
+
+/** 检测 `opencode` 是否安装（语音 Agent 选 OpenCode 后端时设置页据此提示）。 */
+export function codingAgentDetectOpencode(exe?: string): Promise<OpenCodeDetection> {
+    return invokeOrMock(
+        "coding_agent_detect_opencode",
+        { exe },
+        () => ({
+            installed: false,
+            version: null,
+            exe: exe || "opencode",
+        }),
+    )
+}
+
 /** 无头 Claude 运行事件，由后端 `coding-agent:test` 流式推送（tag 为 `kind`）。 */
 export type CodingAgentEvent =
     | { kind: "started"; session_id: string }

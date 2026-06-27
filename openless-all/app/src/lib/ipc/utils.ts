@@ -47,3 +47,16 @@ export async function exportErrorLog(
     )
     return target
 }
+
+/**
+ * 把前端关键错误（如自动更新 install 失败）转发到 Rust 文件日志（openless.log）。
+ * webview 的 console.error 不会落进 openless.log，单独走 IPC，便于用户「导出日志」
+ * 后我们拿到失败的真实原因。永不抛错——日志失败不应再影响调用方的错误处理。
+ */
+export async function logClientError(message: string): Promise<void> {
+    try {
+        await invokeOrMock<void>("log_client_error", { message }, () => undefined)
+    } catch (error) {
+        console.warn("[log-client-error] failed to forward error to app log", error)
+    }
+}

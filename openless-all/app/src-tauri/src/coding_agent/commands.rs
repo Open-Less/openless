@@ -12,6 +12,7 @@ use tauri::{AppHandle, Emitter, Window};
 
 use super::detect::{has_computer_use_mcp, McpServerStatus};
 use super::guard::build_guard_settings_json;
+use super::opencode::detect_opencode;
 use super::{
     claude_mcp_list, create_git_snapshot, detect_claude, run_claude_agent,
     CodingAgentPermissionMode, CodingAgentRequest,
@@ -119,6 +120,45 @@ pub async fn coding_agent_detect(
         exe,
         mcp_servers,
         has_computer_use,
+    })
+}
+
+/// OpenCode 检测结果（回前端，camelCase）。issue #579。
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenCodeDetectionWire {
+    /// 是否检测到可运行的 opencode。
+    pub installed: bool,
+    /// 版本号（如 "0.x.y"）。
+    pub version: Option<String>,
+    /// 实际使用的可执行文件名/路径。
+    pub exe: String,
+}
+
+/// 检测 `opencode` 是否安装、版本。语音 Agent 选了 OpenCode 后端时，设置页据此提示
+/// 用户是否需要先 `npm i -g opencode-ai` / 登录。
+#[tauri::command]
+pub async fn coding_agent_detect_opencode(
+    window: Window,
+    exe: Option<String>,
+) -> Result<OpenCodeDetectionWire, String> {
+    ensure_main_window(&window)?;
+    let exe = exe
+        .map(|e| e.trim().to_string())
+        .filter(|e| !e.is_empty())
+        .unwrap_or_else(|| "opencode".to_string());
+    // 拒绝路径遍历和相对路径（--version 探测仅允许裸名或绝对路径）。
+    if exe.contains("..") {
+        return Err("不允许的可执行文件路径: 包含 '..'".into());
+    }
+    if (exe.contains('/') || exe.contains('\\')) && !std::path::Path::new(&exe).is_absolute() {
+        return Err("不允许的相对路径，仅接受裸可执行文件名或绝对路径".into());
+    }
+    let version = detect_opencode(&exe).await;
+    Ok(OpenCodeDetectionWire {
+        installed: version.is_some(),
+        version,
+        exe,
     })
 }
 

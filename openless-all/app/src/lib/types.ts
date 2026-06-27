@@ -81,6 +81,9 @@ export type HotkeyTrigger =
   | 'rightControl'
   | 'leftControl'
   | 'rightCommand'
+  | 'leftCommand'
+  | 'leftShift'
+  | 'rightShift'
   | 'fn'
   | 'rightAlt'
   | 'mediaPlayPause'
@@ -125,9 +128,9 @@ export interface HotkeyStatus {
 }
 
 export interface ShortcutBinding {
-  /** 主键，例如 "D" / "Space" / "F1" / "RightOption" / "Shift" */
+  /** 主键，例如 "D" / "Space" / "F1" / "RightOption" / "LeftShift" */
   primary: string;
-  /** 修饰符列表，元素小写："cmd" | "shift" | "alt" | "ctrl"。 */
+  /** 修饰符：泛化 tag（cmd/ctrl/…）或侧别 tag（cmd-left/ctrl-right/…）。 */
   modifiers: string[];
 }
 
@@ -151,6 +154,12 @@ export type CodingAgentPermissionMode =
  *  详见 issue #360。 */
 export type PasteShortcut = 'ctrlV' | 'ctrlShiftV' | 'shiftInsert';
 
+/** Windows 听写文本插入策略。 */
+export type WindowsInsertionMode = 'tsf' | 'sendInput' | 'paste';
+
+/** Windows SendInput 路径的换行模拟方式。 */
+export type WindowsSendInputNewlineMode = 'enter' | 'shiftEnter' | 'crlf';
+
 export type WindowsImeInstallState =
   | 'installed'
   | 'notInstalled'
@@ -164,8 +173,8 @@ export interface WindowsImeStatus {
   dllPath: string | null;
 }
 
-/** Auto-update 渠道偏好。stable = 跟正式版（默认）；beta = Settings 里多一个
- *  手动下载 Beta 的入口。不影响 plugin-updater 的自动检查路径。 */
+/** 后台自动更新渠道。stable = 查正式版 manifest（默认）；beta = 查
+ *  latest-android-{arch}-beta.json。手动「检查正式版/Beta 更新」按钮不受此字段影响。 */
 export type UpdateChannel = 'stable' | 'beta';
 
 export type ThemeMode = 'system' | 'light' | 'dark';
@@ -268,6 +277,14 @@ export interface UserPreferences {
   pasteShortcut: PasteShortcut;
   /** Windows：TSF 失败后是否允许快捷键粘贴 / 剪贴板兜底。仅在剪贴板写失败时才再试 SendInput。关闭后可验证是否真实 TSF 上屏。 */
   allowNonTsfInsertionFallback: boolean;
+  /** Windows：听写插入策略（TSF / SendInput / 剪贴板粘贴）。 */
+  windowsInsertionMode: WindowsInsertionMode;
+  /** Windows SendInput 路径的换行模拟方式。 */
+  windowsSendInputNewlineMode: WindowsSendInputNewlineMode;
+  /** 旧版兼容：`true` 等价于 `windowsInsertionMode === 'sendInput'`。 */
+  windowsSendInputInsertionOnly: boolean;
+  /** Windows：SendInput 模式下是否在系统键盘列表（Win+Space）中显示 OpenLess。 */
+  windowsShowOpenlessInKeyboardList: boolean;
   /** 用户的工作语言（多选，原生名）；作为前提注入 LLM polish/translate prompt 头部。 */
   workingLanguages: string[];
   /** 翻译模式目标语言（单选，原生名）；空串 = 不启用 Shift 翻译。详见 issue #4。 */
@@ -298,6 +315,8 @@ export interface UserPreferences {
   codingAgentPermissionMode: CodingAgentPermissionMode;
   /** Agent 工作目录，null = 临时目录。 */
   codingAgentWorkdir: string | null;
+  /** Agent 可执行文件路径/命令，null 或空 = 按后端取默认（claude / opencode）。 */
+  codingAgentExe: string | null;
   /** Less Computer 按住说话快捷键。null = 停用；目前仅 macOS 显示/生效。 */
   codingAgentVoiceHotkey: ShortcutBinding | null;
   /** 热键 1：语音 Agent 面板键。null = 停用。 */
@@ -336,10 +355,8 @@ export interface UserPreferences {
   startMinimized: boolean;
   /** UI theme preference: follow OS, light, or dark. */
   themeMode: ThemeMode;
-  /** Show the annual activity heatmap on the Overview page. Default true. */
-  showOverviewActivityHeatmap: boolean;
-  /** 自动更新渠道。'stable'（默认）= plugin-updater 仅检查正式版；
-   *  'beta' = Settings → About 出现手动下载 Beta 的入口。 */
+  /** 后台自动更新渠道。stable（默认）= AutoUpdateGate 查正式版 manifest；
+   *  beta = 查 Beta manifest。About / Advanced 的手动检查按钮各自固定 stable/beta。 */
   updateChannel: UpdateChannel;
   /** 流式输入：润色 SSE 一边到达一边逐字模拟键盘事件输出到当前焦点。开启后用户感知到
    *  的处理时延显著降低。v1 限定 macOS + OpenAI-compatible provider，其他配置自动回落
@@ -351,8 +368,10 @@ export interface UserPreferences {
   /** 流式输入成功后是否把最终润色文本写回剪贴板。开启后 Cmd+V 还能重复粘贴该次输出，
    *  与一次性路径行为对齐。默认 true。 */
   streamingInsertSaveClipboard: boolean;
-  /** 主窗口启动 + 后台每 60 分钟自动检查云端新版本。默认 true。
-   *  关闭后仅 Settings → 关于 的「检查更新」手动按钮可用。 */
+  /** 主窗口启动 + 后台每 60 分钟自动检查更新。默认 true。
+   *  Android：开启后自动检查并下载，校验后打开系统安装器。
+   *  桌面：开启后自动检查，发现更新弹窗由用户确认安装。
+   *  关闭后仅 Settings 手动「检查更新」按钮可用。 */
   autoUpdateCheck: boolean;
   /** 历史记录上限（条数）。null = 不按条数清理。 */
   historyMaxEntries: number | null;

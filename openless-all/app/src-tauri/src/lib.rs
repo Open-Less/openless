@@ -67,6 +67,11 @@ mod selection;
 mod selection;
 #[cfg(not(mobile))]
 mod shortcut_binding;
+#[cfg(not(mobile))]
+mod side_aware_combo;
+#[cfg(mobile)]
+#[path = "mobile_stubs/side_aware_combo.rs"]
+mod side_aware_combo;
 #[cfg(mobile)]
 #[path = "mobile_stubs/shortcut_binding.rs"]
 mod shortcut_binding;
@@ -187,6 +192,7 @@ macro_rules! app_invoke_handler_desktop {
             commands::stop_dictation,
             commands::cancel_dictation,
             coding_agent::commands::coding_agent_detect,
+            coding_agent::commands::coding_agent_detect_opencode,
             coding_agent::commands::coding_agent_run_test,
             coding_agent::commands::coding_agent_cancel_test,
             coding_agent::commands::coding_agent_command_risk,
@@ -288,6 +294,8 @@ macro_rules! app_invoke_handler_desktop {
             commands::sherpa_onnx_asr_reveal_model_dir,
             commands::export_error_log,
             restart_app,
+            reset_accessibility_permission_and_restart_app,
+            log_client_error,
             set_windows_caption_theme,
         ]
     };
@@ -378,6 +386,8 @@ macro_rules! app_invoke_handler_mobile {
             $crate::commands::app_check_update_with_channel,
             $crate::commands::app_download_and_install_android_update,
             $crate::restart_app,
+            $crate::reset_accessibility_permission_and_restart_app,
+            $crate::log_client_error,
         ]
     };
 }
@@ -462,6 +472,17 @@ fn run_desktop() {
         .setup(move |app| {
             init_file_logger();
             log::info!("=== OpenLess 启动 ===");
+
+            #[cfg(target_os = "windows")]
+            if let Err(err) =
+                crate::windows_ime_profile::apply_windows_openless_keyboard_list_pref(
+                    &coordinator.prefs().get(),
+                )
+            {
+                log::warn!(
+                    "[windows-ime] apply keyboard list visibility pref on startup failed: {err}"
+                );
+            }
 
             // Capsule 启动时定位到屏幕底部居中并隐藏；coordinator 按需显示。
             // 与 Swift `CapsuleWindowController.repositionToBottomCenter` 同语义。
@@ -589,13 +610,17 @@ fn run_desktop() {
                 }
             }
 
-            // 启动时主动弹 Accessibility 授权框（与 Swift `AppDelegate` 行为一致）。
-            // 用户首次必看到系统提示；已授权则静默返回。
-            #[cfg(target_os = "macos")]
-            {
-                let status = permissions::request_accessibility();
-                log::info!("[startup] Accessibility status = {:?}", status);
-            }
+            // Accessibility 授权不再在 setup() 中触发。
+            //
+            // 原因：setup() 在 AppKit event loop 就绪之前执行，此时
+            // AXIsProcessTrustedWithOptions 调用的 XPC 通信依赖 run loop，
+            // 在部分 macOS 版本上可能导致 TCC 弹窗不弹出但已被 TCC 标记为
+            // "已展示"——之后前端 onboarding 再次调用时不再弹窗，只能走系统设置+
+            // 重启恢复，用户就会卡死在 onboarding 页。
+            //
+            // 现在由前端 onboarding 页面在用户点击「授权辅助功能」按钮时触发，
+            // 符合 Apple HIG："在解释用途之后再弹出权限请求"。
+            // 已授权用户不受影响（AXIsProcessTrusted 返回 true，引导页直接跳过）。
 
             // AppImage / 便携版：fcitx5 插件缺了就从 bundled resources 自动安装
             // 到 ~/.local/ 下面。不会覆盖系统已有的插件。
@@ -1115,6 +1140,21 @@ fn set_windows_caption_theme(app: AppHandle, dark: bool) {
 
 #[tauri::command]
 fn restart_app(app: AppHandle) {
+    prepare_for_restart();
+    #[cfg(target_os = "macos")]
+    reset_tcc_for_beta_restart();
+    app.restart();
+}
+
+#[tauri::command]
+fn reset_accessibility_permission_and_restart_app(app: AppHandle) {
+    prepare_for_restart();
+    #[cfg(target_os = "macos")]
+    reset_tcc_service_for_restart("Accessibility", "accessibility recovery");
+    app.restart();
+}
+
+fn prepare_for_restart() {
     // macOS：自动更新会让新装的 .app 带 com.apple.quarantine（无论 Tauri updater
     // 怎么解包，下载流由 LaunchServices 接管，输出物可能仍带 xattr）。如果不
     // strip，重启后 Gatekeeper 会拦着说"OpenLess 已损坏 / 来自未识别开发者"，
@@ -1135,9 +1175,26 @@ fn restart_app(app: AppHandle) {
             log::info!("[updater] stripped xattr on {:?} before restart", bundle);
         }
     }
-    #[cfg(target_os = "macos")]
-    reset_tcc_for_beta_restart();
-    app.restart();
+}
+
+/// 把前端的关键错误（如自动更新 install 失败）转发到 Rust 文件日志（openless.log）。
+/// webview 的 console.error 不会进 openless.log，单独留一个 IPC，便于用户「导出日志」
+/// 后我们拿到自动更新失败的真实原因。
+#[tauri::command]
+fn log_client_error(message: String) {
+    // message 由前端 webview 可控，可能很长或含换行（伪造日志行）。先把换行折成空格、
+    // 再按 UTF-8 字符边界截断，避免单条日志过大或污染日志格式。
+    const MAX_LEN: usize = 2048;
+    let mut sanitized = message.replace(['\n', '\r'], " ");
+    if sanitized.len() > MAX_LEN {
+        let mut end = MAX_LEN;
+        while !sanitized.is_char_boundary(end) {
+            end -= 1;
+        }
+        sanitized.truncate(end);
+        sanitized.push_str("…(truncated)");
+    }
+    log::error!("[client] {sanitized}");
 }
 
 #[cfg(target_os = "macos")]
@@ -1149,8 +1206,8 @@ fn reset_tcc_for_beta_restart() {
 
     // Beta builds are currently ad-hoc signed. Their code hash changes across builds, so
     // old TCC rows can leave System Settings checked while AXIsProcessTrusted() is false.
-    reset_tcc_service_for_beta_restart("Accessibility");
-    reset_tcc_service_for_beta_restart("Microphone");
+    reset_tcc_service_for_restart("Accessibility", "beta ad-hoc identity refresh");
+    reset_tcc_service_for_restart("Microphone", "beta ad-hoc identity refresh");
 }
 
 #[cfg(target_os = "macos")]
@@ -1159,19 +1216,19 @@ fn is_beta_build() -> bool {
 }
 
 #[cfg(target_os = "macos")]
-fn reset_tcc_service_for_beta_restart(service: &str) {
+fn reset_tcc_service_for_restart(service: &str, reason: &str) {
     match std::process::Command::new("/usr/bin/tccutil")
         .args(["reset", service, OPENLESS_BUNDLE_ID])
         .status()
     {
         Ok(status) if status.success() => {
-            log::info!("[updater] reset TCC {service} before beta restart");
+            log::info!("[tcc] reset {service} before restart ({reason})");
         }
         Ok(status) => {
-            log::warn!("[updater] reset TCC {service} before beta restart exited with {status}");
+            log::warn!("[tcc] reset {service} before restart ({reason}) exited with {status}");
         }
         Err(e) => {
-            log::warn!("[updater] reset TCC {service} before beta restart failed: {e}");
+            log::warn!("[tcc] reset {service} before restart ({reason}) failed: {e}");
         }
     }
 }
@@ -1552,17 +1609,34 @@ impl CapsuleTargetMonitor {
     }
 }
 
-/// macOS：把「当前 focused input / caret」映射到显示器。
+/// macOS：决定胶囊应该摆到哪块显示器。
 ///
-/// 不能用 capsule window 的 current_monitor：窗口隐藏时它仍停留在上一次出现的屏，
-/// 多屏输入会因此被缓存误判为“不需要移动”。这里先用 AX 取 caret/输入框位置，
-/// 再在 Tauri 的 monitor 坐标系里选包含该点的屏；如果点短暂落在所有屏外，
-/// 退到最近的屏，避免虚拟桌面负坐标/屏幕排列边缘导致完全不显示。
+/// 跟随**鼠标光标所在的屏**——这是用户的操作/视线焦点，也是唯一始终可用、
+/// 无需任何权限的信号，多显示器 + 多 Space 下都能稳定命中。光标取不到时
+/// （理论上不会）才退回 AX focused-input/caret 位置。
+///
+/// 关键：不能用 capsule window 自己的 current_monitor——窗口隐藏时它仍停留在
+/// 上一次出现的屏，多屏会被缓存误判为“不需要移动”，把胶囊锁死在第一块屏。
+/// 选屏时先找包含该点的屏；点短暂落在所有屏外则退到最近的屏，避免虚拟桌面
+/// 负坐标 / 屏幕排列边缘导致完全不显示。定位与 layout 去重缓存共用本函数，
+/// 二者看的必须是同一块屏。
 #[cfg(target_os = "macos")]
-pub(crate) fn focused_input_target_monitor<R: tauri::Runtime>(
+pub(crate) fn capsule_target_monitor<R: tauri::Runtime>(
     window: &tauri::WebviewWindow<R>,
 ) -> Option<CapsuleTargetMonitor> {
-    let (x, y) = macos_focused_input_anchor_point()?;
+    let (x, y) = macos_mouse_cursor_point().or_else(macos_focused_input_anchor_point)?;
+    monitor_for_anchor_point(window, x, y)
+}
+
+/// 在 Tauri 的 monitor 坐标系里，选出包含逻辑坐标点 `(x, y)` 的显示器；
+/// 点落在所有屏之外时退到最近的屏。坐标系同 AX / CGEvent 的全局显示空间
+/// （左上原点，points）。
+#[cfg(target_os = "macos")]
+fn monitor_for_anchor_point<R: tauri::Runtime>(
+    window: &tauri::WebviewWindow<R>,
+    x: f64,
+    y: f64,
+) -> Option<CapsuleTargetMonitor> {
     let monitors = window.available_monitors().ok()?;
     let mut nearest: Option<(f64, CapsuleTargetMonitor)> = None;
 
@@ -1586,6 +1660,11 @@ pub(crate) fn focused_input_target_monitor<R: tauri::Runtime>(
     }
 
     nearest.map(|(_, target)| target)
+}
+
+#[cfg(target_os = "macos")]
+fn macos_mouse_cursor_point() -> Option<(f64, f64)> {
+    macos_capsule_ax::mouse_cursor_point()
 }
 
 #[cfg(target_os = "macos")]
@@ -1670,6 +1749,30 @@ mod macos_capsule_ax {
             let width = rect.size.width.max(1.0);
             let height = rect.size.height.max(1.0);
             Some((rect.origin.x + width / 2.0, rect.origin.y + height / 2.0))
+        }
+    }
+
+    type CGEventRef = *const c_void;
+    type CGEventSourceRef = *const c_void;
+
+    #[link(name = "CoreGraphics", kind = "framework")]
+    extern "C" {
+        fn CGEventCreate(source: CGEventSourceRef) -> CGEventRef;
+        fn CGEventGetLocation(event: CGEventRef) -> CGPoint;
+    }
+
+    /// 当前鼠标光标在「全局显示坐标系」(左上原点，points) 的位置。该坐标系与 AX
+    /// caret 完全一致，可直接拿去和 `logical_frame` 比较选屏。`CGEventGetLocation`
+    /// 始终可用、不需要任何权限，所以作为胶囊跟随屏幕的首选信号。
+    pub(super) fn mouse_cursor_point() -> Option<(f64, f64)> {
+        unsafe {
+            let event = CGEventCreate(std::ptr::null());
+            if event.is_null() {
+                return None;
+            }
+            let point = CGEventGetLocation(event);
+            CFRelease(event as CFTypeRef);
+            Some((point.x, point.y))
         }
     }
 
@@ -2464,11 +2567,11 @@ pub(crate) fn position_capsule_bottom_center<R: tauri::Runtime>(
         // 仅当 Win32 取不到前台显示器时，落回下面的 current_monitor 逻辑。
     }
 
-    // macOS：跟随当前 focused input / caret 所在显示器，而不是胶囊窗口
-    // 上一次停留的显示器。这样外接屏上输入时，隐藏态胶囊也能先移动再出现。
+    // macOS：跟随鼠标光标所在显示器，而不是胶囊窗口上一次停留的显示器。
+    // 这样在任意外接屏 / 任意 Space 上触发时，隐藏态胶囊也能先移动再出现。
     #[cfg(target_os = "macos")]
     {
-        if let Some(mon) = focused_input_target_monitor(window) {
+        if let Some(mon) = capsule_target_monitor(window) {
             window.set_size(LogicalSize::new(bounds.width, bounds.height))?;
             let frame = mon.logical_frame();
             let (x, y) = bottom_visual_position(

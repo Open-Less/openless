@@ -113,7 +113,8 @@ function LinuxTitlebar() {
           if (!cancelled) setMaximized(m);
         }).catch(() => {});
       }).then((fn) => {
-        if (!cancelled) unlisten = fn;
+        if (cancelled) fn();
+        else unlisten = fn;
       }).catch(() => {});
     }).catch(() => {});
     return () => {

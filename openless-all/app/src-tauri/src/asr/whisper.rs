@@ -87,6 +87,12 @@ impl WhisperBatchASR {
     /// Whisper transcriptions endpoint.
     ///
     /// 失败时**保留** PCM buffer，让上层有机会重试或在历史中至少留一个失败记录；
+    /// 当前缓冲音频时长（毫秒）。Coordinator 在 transcribe() 调用前读取，
+    /// 用于计算 Whisper / OpenRouter 的动态超时。不消费缓冲。
+    pub fn buffer_duration_ms(&self) -> u64 {
+        pcm_duration_ms(&self.buffer.lock())
+    }
+
     /// 之前的实现一进函数就 `mem::take` 把 buffer 清空，凭证错或网络中断都会
     /// 让用户的录音直接消失。
     pub async fn transcribe(&self) -> Result<RawTranscript> {

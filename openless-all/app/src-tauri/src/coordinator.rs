@@ -282,6 +282,7 @@ struct Inner {
     /// 自定义组合键监听器（global-hotkey crate）。当 `prefs.hotkey.trigger == Custom` 时
     /// 代替 modifier-only 的 hotkey monitor。`None` 表示不使用自定义组合键或还没成功安装。
     combo_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
+    side_aware_combo: Mutex<Option<crate::side_aware_combo::SideAwareComboMonitor>>,
     translation_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
     switch_style_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
     open_app_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
@@ -403,6 +404,7 @@ impl Coordinator {
                     session_cooldown_until: Mutex::new(None),
                     shortcut_recording_active: AtomicBool::new(false),
                     combo_hotkey: Mutex::new(None),
+                    side_aware_combo: Mutex::new(None),
                     translation_hotkey: Mutex::new(None),
                     switch_style_hotkey: Mutex::new(None),
                     open_app_hotkey: Mutex::new(None),
@@ -495,6 +497,7 @@ impl Coordinator {
                 session_cooldown_until: Mutex::new(None),
                 shortcut_recording_active: AtomicBool::new(false),
                 combo_hotkey: Mutex::new(None),
+                side_aware_combo: Mutex::new(None),
                 translation_hotkey: Mutex::new(None),
                 switch_style_hotkey: Mutex::new(None),
                 open_app_hotkey: Mutex::new(None),
@@ -810,18 +813,41 @@ impl Coordinator {
     pub fn update_combo_hotkey_binding(&self) {
         let prefs = self.inner.prefs.get();
         if crate::shortcut_binding::legacy_modifier_trigger(&prefs.dictation_hotkey).is_some() {
-            // 修饰键单键由 HotkeyMonitor 处理，组合键 monitor 要释放。
             take_combo_hotkey_on_main_thread(&self.inner);
+            self.inner.side_aware_combo.lock().take();
             log::info!("[coord] combo hotkey 已关闭（modifier-only）");
             return;
         }
         let binding = prefs.dictation_hotkey.clone();
         if is_unconfigured_shortcut(&binding) {
-            // Custom 但没录到有效主键：清掉旧 monitor，避免旧快捷键继续生效。
             take_combo_hotkey_on_main_thread(&self.inner);
+            self.inner.side_aware_combo.lock().take();
             log::info!("[coord] combo hotkey 已关闭（无绑定）");
             return;
-        };
+        }
+
+        if crate::shortcut_binding::binding_requires_side_aware_hook(&binding) {
+            take_combo_hotkey_on_main_thread(&self.inner);
+            self.inner.side_aware_combo.lock().take();
+            let (tx, rx) = mpsc::channel::<ComboHotkeyEvent>();
+            match crate::side_aware_combo::SideAwareComboMonitor::start(binding, tx) {
+                Ok(monitor) => {
+                    *self.inner.side_aware_combo.lock() = Some(monitor);
+                    let bridge_inner = Arc::clone(&self.inner);
+                    std::thread::Builder::new()
+                        .name("openless-side-combo-bridge".into())
+                        .spawn(move || combo_hotkey_bridge_loop(bridge_inner, rx))
+                        .ok();
+                    log::info!("[coord] side-aware combo hotkey listener installed (via update)");
+                }
+                Err(e) => {
+                    log::warn!("[coord] update side-aware combo binding 失败: {e}");
+                }
+            }
+            return;
+        }
+
+        self.inner.side_aware_combo.lock().take();
         let app = self.inner.app.lock().clone();
         let Some(app) = app else {
             log::warn!("[coord] update combo hotkey binding: AppHandle 未 bind，跳过");
@@ -1752,14 +1778,20 @@ fn should_try_non_tsf_insertion_fallback(
 }
 
 #[cfg(target_os = "windows")]
-fn insert_via_non_tsf_fallback(
+pub(super) fn insert_via_non_tsf_fallback(
     inner: &Arc<Inner>,
     polished: &str,
     _restore_clipboard: bool,
     _paste_shortcut: PasteShortcut,
 ) -> InsertStatus {
+    let prefs = inner.prefs.get();
+    let sendinput_options = crate::unicode_keystroke::WindowsSendInputOptions {
+        newline_mode: prefs.windows_sendinput_newline_mode,
+    };
     let status = finish_non_tsf_insertion_fallback(
-        || inner.inserter.insert_via_unicode_keystrokes(polished),
+        || inner
+            .inserter
+            .insert_via_unicode_keystrokes(polished, sendinput_options),
         || inner.inserter.copy_fallback(polished),
     );
 
@@ -2028,6 +2060,7 @@ fn resolve_ark_endpoint_with_policy(
 #[cfg(test)]
 mod tests {
     use super::dictation::abort_recording_with_error;
+    use super::dictation::{handle_pressed_edge, handle_released_edge};
     use super::*;
     use crate::types::{HotkeyMode, HotkeyTrigger};
     use once_cell::sync::Lazy;
@@ -2326,7 +2359,7 @@ mod tests {
 
     #[test]
     fn local_qwen_timeout_floors_at_global_timeout_for_short_audio() {
-        // 5s 录音：5 × 0.6 = 3, +10 = 13, max(15) = 15。短录音保留 15s 兜底。
+        // 5s 录音：5 × 0.6 = 3, +10 = 13, max(30) = 30。短录音兜底。
         assert_eq!(
             local_qwen_transcribe_timeout(5.0),
             std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS)
@@ -2344,19 +2377,47 @@ mod tests {
 
     #[test]
     fn local_qwen_timeout_ceils_partial_seconds() {
-        // 10.1s 录音：10.1 × 0.6 = 6.06, ceil = 7, +10 = 17, max(15) = 17。
+        // 10.1s 录音：10.1 × 0.6 = 6.06, ceil = 7, +10 = 17, max(30) = 30。
+        // COORDINATOR_GLOBAL_TIMEOUT_SECS 提升到 30 后，短音频统一被兜底值覆盖。
         assert_eq!(
             local_qwen_transcribe_timeout(10.1),
-            std::time::Duration::from_secs(17)
+            std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS)
         );
     }
 
     #[test]
     fn local_qwen_timeout_handles_zero_duration() {
-        // 0 时长（空 buffer 边界）：0 × 0.6 = 0, +10 = 10, max(15) = 15。
+        // 0 时长（空 buffer 边界）：0 × 0.6 = 0, +10 = 10, max(30) = 30。
         assert_eq!(
             local_qwen_transcribe_timeout(0.0),
             std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS)
+        );
+    }
+
+    #[test]
+    fn whisper_timeout_floors_at_global_timeout_for_short_audio() {
+        // 10s 录音：10 × 0.5 = 5, +20 = 25, max(30) = 30。短音频兜底。
+        assert_eq!(
+            whisper_transcribe_timeout(10.0),
+            std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS)
+        );
+    }
+
+    #[test]
+    fn whisper_timeout_scales_with_audio_duration() {
+        // 60s 录音：60 × 0.5 = 30, +20 = 50。覆盖多分片 HTTP 请求。
+        assert_eq!(
+            whisper_transcribe_timeout(60.0),
+            std::time::Duration::from_secs(50)
+        );
+    }
+
+    #[test]
+    fn whisper_timeout_ceils_partial_seconds() {
+        // 45.3s 录音：45.3 × 0.5 = 22.65, ceil = 23, +20 = 43, max(30) = 43。
+        assert_eq!(
+            whisper_transcribe_timeout(45.3),
+            std::time::Duration::from_secs(43)
         );
     }
 
@@ -2739,7 +2800,13 @@ mod tests {
     #[test]
     fn focus_restore_failure_uses_specific_error_code_when_insert_fails() {
         assert_eq!(
-            dictation_error_code(InsertStatus::Failed, false, false, false),
+            dictation_error_code(
+                InsertStatus::Failed,
+                false,
+                false,
+                false,
+                crate::types::WindowsInsertionMode::Tsf,
+            ),
             Some("focusRestoreFailed")
         );
     }
@@ -2756,8 +2823,28 @@ mod tests {
     #[cfg(target_os = "windows")]
     fn tsf_required_failure_keeps_tsf_error_when_focus_was_ready() {
         assert_eq!(
-            dictation_error_code(InsertStatus::Failed, false, true, false),
+            dictation_error_code(
+                InsertStatus::Failed,
+                false,
+                true,
+                false,
+                crate::types::WindowsInsertionMode::Tsf,
+            ),
             Some("windowsImeTsfRequired")
+        );
+    }
+
+    #[test]
+    fn sendinput_only_mode_skips_tsf_required_error() {
+        assert_eq!(
+            dictation_error_code(
+                InsertStatus::Failed,
+                false,
+                true,
+                false,
+                crate::types::WindowsInsertionMode::SendInput,
+            ),
+            None
         );
     }
 
@@ -2897,9 +2984,9 @@ const CAPSULE_AUTO_HIDE_DELAY_MS: u64 = 2000;
 const POST_SESSION_COOLDOWN_MS: u64 = 600;
 
 /// Coordinator 全局超时保护：防止 ASR await_final_result() 永远挂起。
-/// 设置为 15 秒（比 ASR 的 12 秒 FINAL_RESULT_TIMEOUT 稍长），
-/// 只在 ASR 超时机制失效时作为最后的防线触发。
-const COORDINATOR_GLOBAL_TIMEOUT_SECS: u64 = 15;
+/// 设置为 30 秒，为云端 batch ASR（OpenRouter Whisper 等）提供足够的
+/// 网络超时预算；只在 ASR 自身超时机制失效时作为最后的防线触发。
+const COORDINATOR_GLOBAL_TIMEOUT_SECS: u64 = 30;
 
 #[cfg(target_os = "windows")]
 fn foundry_audio_transcribe_timeout_duration() -> std::time::Duration {
@@ -2913,6 +3000,17 @@ fn foundry_audio_transcribe_timeout_duration() -> std::time::Duration {
 fn local_qwen_transcribe_timeout(audio_secs: f64) -> std::time::Duration {
     let secs = ((audio_secs * 0.6).ceil() as u64)
         .saturating_add(10)
+        .max(COORDINATOR_GLOBAL_TIMEOUT_SECS);
+    std::time::Duration::from_secs(secs)
+}
+
+/// Whisper / OpenRouter 云端 batch ASR 的动态转写超时。OpenRouter 按 30s
+/// 分片，每片是一次 HTTP round-trip；网络抖动、排队、base64 body 都会
+/// 拉长耗时。公式 max(30, ceil(audio_s × 0.5) + 20)：30s 是全局兜底；
+/// 长录音按音频长度的 0.5 倍 + 20s 余量，覆盖多分片串行请求 + 网络波动。
+fn whisper_transcribe_timeout(audio_secs: f64) -> std::time::Duration {
+    let secs = ((audio_secs * 0.5).ceil() as u64)
+        .saturating_add(20)
         .max(COORDINATOR_GLOBAL_TIMEOUT_SECS);
     std::time::Duration::from_secs(secs)
 }

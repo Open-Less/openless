@@ -81,6 +81,26 @@ export function shouldPlayDeferredCue(params: {
   return true;
 }
 
+/** 提示音播放前对持有的 AudioContext 该做的处置。 */
+export type AudioContextAction = 'ready' | 'resume' | 'recreate';
+
+/**
+ * 依据 AudioContext 的运行期状态决定如何处置它。纯函数，便于单测，是「用久了没声音」
+ * 这个 bug 的修复核心：
+ *  - 'closed'  → 'recreate'：已关闭的 ctx 无法复活（resume() 必拒、createOscillator() 必抛），
+ *                必须丢弃重建。长时间使用中频繁录音抢占音频会话，WKWebView/WebView2 的
+ *                共享 ctx 可能被系统关闭却从不重建——于是「开始提示音」和设置页「试听」
+ *                双双永久静默（两个窗口各自持有一份 ctx，都会这样退化）。
+ *  - 'running' → 'ready'：可直接排期合成。
+ *  - 其余（'suspended' / WebKit 非标准 'interrupted' / 任何未知非运行态）→ 'resume'：
+ *                先异步 resume 唤醒再排期。
+ */
+export function audioContextActionForState(state: string): AudioContextAction {
+  if (state === 'closed') return 'recreate';
+  if (state === 'running') return 'ready';
+  return 'resume';
+}
+
 function resolveAudioContextCtor(): AudioContextCtor | null {
   if (typeof window === 'undefined') return null;
   // window.AudioContext 来自全局声明；webkit 前缀单独用结构化类型拿，避免 any。
@@ -91,6 +111,12 @@ function resolveAudioContextCtor(): AudioContextCtor | null {
 function getContext(): AudioContext | null {
   const Ctor = resolveAudioContextCtor();
   if (!Ctor) return null;
+  // 已 closed 的 ctx 无法复活，丢弃后重建——否则后续所有提示音永久静默（本 bug 根因）。
+  // 旧 ctx 上挂着的 activeVoices 也一并清空，避免去叠音时操作已失效节点。
+  if (sharedCtx && audioContextActionForState(sharedCtx.state) === 'recreate') {
+    sharedCtx = null;
+    activeVoices = [];
+  }
   if (!sharedCtx) {
     try {
       sharedCtx = new Ctor();
@@ -174,9 +200,10 @@ function scheduleCueVoices(ctx: AudioContext): void {
  * resume 宽松，预热通常能让常见路径走同步分支。胶囊窗口挂载时调用一次即可。
  */
 export function primeAudioCue(): void {
+  // getContext 会把 closed 的 ctx 重建掉；这里只需把 suspended/interrupted 唤醒。
   const ctx = getContext();
   if (!ctx) return;
-  if (ctx.state === 'suspended') {
+  if (audioContextActionForState(ctx.state) === 'resume') {
     ctx.resume().catch(() => undefined);
   }
 }
@@ -186,9 +213,10 @@ export function playRecordStartCue(): void {
   const ctx = getContext();
   if (!ctx) return;
 
-  // WKWebView / WebView2 的 AudioContext 常处于 suspended：必须先 resume 再排期，
-  // 不能在 resume 未完成时就用冻结的 currentTime 排节点。resume() 失败也不抛（无声降级）。
-  if (ctx.state === 'suspended') {
+  // WKWebView / WebView2 的 AudioContext 常处于 suspended（或被音频会话抢占后的非标准
+  // interrupted）：必须先 resume 再排期，不能在 resume 未完成时就用冻结的 currentTime 排
+  // 节点。resume() 失败也不抛（无声降级）。closed 的情况已在 getContext 重建掉了。
+  if (audioContextActionForState(ctx.state) === 'resume') {
     const myPlay = ++playSeq;
     const stopAtRequest = stopSeq;
     const requestedAt = nowMs();
