@@ -393,6 +393,7 @@ impl VolcengineStreamingASR {
             "enable_itn": true,
             "enable_punc": true,
             "show_utterances": true,
+            "enable_speaker_info": true,
         });
         if let Some(context) = hotword_context(&self.hotwords) {
             request["context"] = Value::String(context);
@@ -474,13 +475,59 @@ impl VolcengineStreamingASR {
             .to_string();
 
         if let Some(utterances) = result.get("utterances").and_then(|v| v.as_array()) {
-            // 优先用 utterances 拼接的文本（包含全部分段，不论 definite 与否）
-            let pieces: Vec<&str> = utterances
+            // --- 声纹过滤：只保留主要说话人（说话时长最长的） ---
+            // 1. 统计每个 speaker 的说话时长
+            let mut speaker_durations: std::collections::HashMap<String, u64> =
+                std::collections::HashMap::new();
+            for u in utterances.iter() {
+                if let (Some(speaker), Some(start), Some(end)) = (
+                    u.get("speaker").and_then(|s| s.as_str()),
+                    u.get("start_time").and_then(|t| t.as_u64()),
+                    u.get("end_time").and_then(|t| t.as_u64()),
+                ) {
+                    let dur = end.saturating_sub(start);
+                    *speaker_durations.entry(speaker.to_string()).or_insert(0) += dur;
+                }
+            }
+
+            // 2. 找到说话时长最长的 speaker（即"主要说话人"）
+            let primary_speaker: Option<String> = speaker_durations
                 .iter()
-                .filter_map(|u| u.get("text").and_then(|t| t.as_str()))
-                .collect();
+                .max_by_key(|(_, &dur)| dur)
+                .map(|(s, _)| s.clone());
+
+            // 3. 只拼接主要说话人的文本；如果没有任何 speaker 标签，回退到全量拼接
+            let pieces: Vec<&str> = if let Some(ref primary) = primary_speaker {
+                utterances
+                    .iter()
+                    .filter(|u| {
+                        u.get("speaker")
+                            .and_then(|s| s.as_str())
+                            .map(|s| s == primary.as_str())
+                            .unwrap_or(true) // 无 speaker 字段的 utterance 保留
+                    })
+                    .filter_map(|u| u.get("text").and_then(|t| t.as_str()))
+                    .collect()
+            } else {
+                utterances
+                    .iter()
+                    .filter_map(|u| u.get("text").and_then(|t| t.as_str()))
+                    .collect()
+            };
+
             if !pieces.is_empty() {
                 full_text = pieces.join("");
+                if let Some(ref primary) = primary_speaker {
+                    let filtered_count = utterances.len().saturating_sub(pieces.len());
+                    if filtered_count > 0 {
+                        log::info!(
+                            "[asr] speaker filter: primary={}, kept={}, filtered={}",
+                            primary,
+                            pieces.len(),
+                            filtered_count
+                        );
+                    }
+                }
             }
         }
 
