@@ -24,6 +24,7 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use uuid::Uuid;
 
+mod activity_stats;
 mod correction;
 mod credentials;
 mod dictionary;
@@ -32,6 +33,7 @@ mod paths;
 mod preferences;
 mod style_pack;
 
+pub use activity_stats::*;
 pub use correction::*;
 pub use credentials::*;
 pub use dictionary::*;

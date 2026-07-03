@@ -154,7 +154,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_history_retention_default_is_migrated_to_unlimited() {
+    fn legacy_history_retention_default_is_migrated_to_365() {
         let tmp: PathBuf = std::env::temp_dir().join(format!(
             "openless-history-retention-prefs-test-{}",
             uuid::Uuid::new_v4()
@@ -171,7 +171,7 @@ mod tests {
         .expect("write legacy prefs");
 
         let prefs = read_preferences(&path).expect("read prefs");
-        assert_eq!(prefs.history_retention_days, 0);
+        assert_eq!(prefs.history_retention_days, 365);
         assert!(prefs.history_retention_default_migrated);
 
         let saved: serde_json::Value =
@@ -181,7 +181,7 @@ mod tests {
             saved
                 .get("historyRetentionDays")
                 .and_then(|value| value.as_u64()),
-            Some(0)
+            Some(365)
         );
         assert_eq!(
             saved

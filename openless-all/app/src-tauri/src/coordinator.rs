@@ -39,8 +39,8 @@ use crate::correction::apply_correction_rules;
 use crate::hotkey::{HotkeyEvent, HotkeyMonitor};
 use crate::insertion::TextInserter;
 use crate::persistence::{
-    sync_style_pack_preferences, CorrectionRuleStore, CredentialAccount, CredentialsVault,
-    DictionaryStore, HistoryStore, PreferencesStore, StylePackStore,
+    sync_style_pack_preferences, ActivityStatsStore, CorrectionRuleStore, CredentialAccount,
+    CredentialsVault, DictionaryStore, HistoryStore, PreferencesStore, StylePackStore,
 };
 
 use crate::llm_gemini::{GeminiConfig, GeminiProvider};
@@ -238,6 +238,7 @@ pub struct Coordinator {
 struct Inner {
     app: Mutex<Option<AppHandle>>,
     history: HistoryStore,
+    activity_stats: ActivityStatsStore,
     prefs: PreferencesStore,
     style_packs: StylePackStore,
     vocab: DictionaryStore,
@@ -382,11 +383,16 @@ impl Coordinator {
                 log::error!("[coord] CorrectionRuleStore init failed: {e}; 降级为空纠错规则");
                 CorrectionRuleStore::new_fallback()
             });
+            let activity_stats = ActivityStatsStore::new().unwrap_or_else(|e| {
+                log::error!("[coord] ActivityStatsStore init failed: {e}; 降级为空日活统计");
+                ActivityStatsStore::new_fallback()
+            });
 
             Self {
                 inner: Arc::new(Inner {
                     app: Mutex::new(None),
                     history,
+                    activity_stats,
                     prefs,
                     style_packs,
                     vocab,
@@ -473,11 +479,16 @@ impl Coordinator {
             log::error!("[coord] CorrectionRuleStore init failed: {e}; 降级为空纠错规则");
             CorrectionRuleStore::new_fallback()
         });
+        let activity_stats = ActivityStatsStore::new().unwrap_or_else(|e| {
+            log::error!("[coord] ActivityStatsStore init failed: {e}; 降级为空日活统计");
+            ActivityStatsStore::new_fallback()
+        });
 
         Self {
             inner: Arc::new(Inner {
                 app: Mutex::new(None),
                 history,
+                activity_stats,
                 prefs,
                 style_packs,
                 vocab,
@@ -1090,6 +1101,10 @@ impl Coordinator {
 
     pub fn history(&self) -> &HistoryStore {
         &self.inner.history
+    }
+
+    pub fn activity_stats(&self) -> &ActivityStatsStore {
+        &self.inner.activity_stats
     }
 
     pub fn prefs(&self) -> &PreferencesStore {

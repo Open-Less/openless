@@ -166,6 +166,7 @@ macro_rules! app_invoke_handler_desktop {
             commands::list_history,
             commands::delete_history_entry,
             commands::clear_history,
+            commands::list_activity_stats,
             commands::read_audio_recording,
             commands::retranscribe_recording,
             commands::marketplace_list,

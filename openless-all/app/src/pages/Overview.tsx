@@ -4,9 +4,9 @@ import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent } 
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../components/Icon';
 import { formatComboLabel } from '../lib/hotkey';
-import { getCredentials, listHistory } from '../lib/ipc';
+import { getCredentials, listHistory, listActivityStats } from '../lib/ipc';
 import { useMobileLayout } from '../lib/useMobileLayout';
-import type { CredentialsStatus, DictationSession, PolishMode } from '../lib/types';
+import type { CredentialsStatus, DailyActivityStat, DictationSession, PolishMode } from '../lib/types';
 import { useHotkeySettings } from '../state/HotkeySettingsContext';
 import { Btn, Card, PageHeader, Pill } from './_atoms';
 
@@ -61,6 +61,7 @@ export function Overview({ onOpenHistory }: OverviewProps) {
   const mobile = useMobileLayout();
   const modeLabel = useModeLabels();
   const [history, setHistory] = useState<DictationSession[]>([]);
+  const [activityStats, setActivityStats] = useState<DailyActivityStat[]>([]);
   const [historyError, setHistoryError] = useState(false);
   const [credsError, setCredsError] = useState(false);
   const [creds, setCreds] = useState<CredentialsStatus>({
@@ -106,6 +107,18 @@ export function Overview({ onOpenHistory }: OverviewProps) {
     refreshHistory();
   }, [refreshHistory]);
 
+  const refreshActivityStats = useCallback(() => {
+    listActivityStats()
+      .then(setActivityStats)
+      .catch((error: unknown) => {
+        console.error('[overview] failed to load activity stats', error);
+      });
+  }, []);
+
+  useEffect(() => {
+    refreshActivityStats();
+  }, [refreshActivityStats]);
+
   useEffect(() => {
     refreshCredentials();
   }, [refreshCredentials, prefs?.activeAsrProvider, prefs?.activeLlmProvider]);
@@ -139,6 +152,16 @@ export function Overview({ onOpenHistory }: OverviewProps) {
   }, [refreshCredentials]);
 
   const metrics = useMemo(() => {
+    if (activityStats.length > 0) {
+      const todayStr = localDateKey(new Date());
+      const stat = activityStats.find(s => s.date === todayStr);
+      const segmentsToday = stat?.sessionCount ?? 0;
+      const charsToday = stat?.totalChars ?? 0;
+      const totalDurationMs = stat?.totalDurationMs ?? 0;
+      const avgLatencyMs = segmentsToday > 0 ? totalDurationMs / segmentsToday : 0;
+      return { charsToday, segmentsToday, totalDurationMs, avgLatencyMs };
+    }
+    // fallback: compute from history while activityStats is still loading
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const todays = history.filter(s => new Date(s.createdAt) >= today);
@@ -147,22 +170,32 @@ export function Overview({ onOpenHistory }: OverviewProps) {
     const totalDurationMs = todays.reduce((acc, s) => acc + (s.durationMs ?? 0), 0);
     const avgLatencyMs = segmentsToday > 0 ? totalDurationMs / segmentsToday : 0;
     return { charsToday, segmentsToday, totalDurationMs, avgLatencyMs };
-  }, [history]);
+  }, [history, activityStats]);
 
-  // 周历:过去 7 天每天的条数
+  // 周历:过去 7 天每天的使用次数
   const weekly = useMemo(() => {
     const buckets = Array(7).fill(0);
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    history.forEach(s => {
-      const d = new Date(s.createdAt);
-      const diff = Math.floor((today.getTime() - d.setHours(0, 0, 0, 0)) / 86400000);
-      if (diff >= 0 && diff < 7) {
-        buckets[6 - diff] += 1;
+    if (activityStats.length > 0) {
+      for (let i = 0; i < 7; i++) {
+        const date = addDays(today, -(6 - i));
+        const key = localDateKey(date);
+        const stat = activityStats.find(s => s.date === key);
+        buckets[i] = stat?.sessionCount ?? 0;
       }
-    });
+    } else {
+      // fallback: compute from history while activityStats is still loading
+      history.forEach(s => {
+        const d = new Date(s.createdAt);
+        const diff = Math.floor((today.getTime() - d.setHours(0, 0, 0, 0)) / 86400000);
+        if (diff >= 0 && diff < 7) {
+          buckets[6 - diff] += 1;
+        }
+      });
+    }
     return buckets;
-  }, [history]);
+  }, [history, activityStats]);
 
   const monthNames = useMemo(
     () => t('overview.monthNames', { returnObjects: true }) as string[],
@@ -170,8 +203,8 @@ export function Overview({ onOpenHistory }: OverviewProps) {
   );
 
   const yearlyActivity = useMemo(
-    () => buildYearlyActivity(history, monthNames, activityMode),
-    [history, monthNames, activityMode],
+    () => buildYearlyActivity(activityStats, history, monthNames, activityMode),
+    [activityStats, history, monthNames, activityMode],
   );
   const showActivityHeatmap = prefs?.showOverviewActivityHeatmap !== false;
 
@@ -209,7 +242,13 @@ export function Overview({ onOpenHistory }: OverviewProps) {
         <Metric icon="hash" label={t('overview.metricChars')} value={historyError ? '—' : metrics.charsToday.toLocaleString()} trend={historyError ? t('overview.historyLoadError') : t('overview.metricSegments', { count: metrics.segmentsToday })} />
         <Metric icon="mic" label={t('overview.metricDuration')} value={historyError ? '—' : formatDuration(metrics.totalDurationMs, t)} trend={historyError ? t('overview.historyLoadError') : ''} />
         <Metric icon="clock" label={t('overview.metricAvg')} value={historyError ? '—' : formatDuration(metrics.avgLatencyMs, t)} trend={historyError ? t('overview.historyLoadError') : metrics.segmentsToday > 0 ? t('overview.metricAvgTrend') : t('overview.metricNoData')} />
-        <Metric icon="bolt" label={t('overview.metricTotal')} value={historyError ? '—' : String(history.length)} trend={historyError ? t('overview.historyLoadError') : t('overview.metricTotalTrend')} accent />
+        <Metric icon="bolt" label={t('overview.metricTotal')} value={historyError ? '—' : metrics.segmentsToday.toLocaleString()} trend={
+          historyError
+            ? t('overview.historyLoadError')
+            : prefs?.historyMaxEntries != null && metrics.segmentsToday > prefs.historyMaxEntries
+              ? t('overview.metricTotalExceeded')
+              : t('overview.metricTotalArchived', { count: history.length })
+        } accent />
       </div>
 
       {/* 近 7 天和最近识别固定一个可读高度；最近识别内部滚动，避免和年度活动互相遮挡。 */}
@@ -556,16 +595,16 @@ function ActivityHeatmapCard({
                 ? 'translate(-100%, -100%)'
                 : 'translate(-50%, -100%)',
             zIndex: 2,
-            maxWidth: 320,
-            padding: '6px 12px',
+            maxWidth: 260,
+            padding: '8px 12px',
             border: '0.5px solid color-mix(in srgb, var(--ol-ink) 10%, transparent)',
-            borderRadius: 999,
+            borderRadius: 8,
             background: 'var(--ol-surface)',
             color: 'var(--ol-ink)',
             boxShadow: '0 8px 24px color-mix(in srgb, var(--ol-ink) 12%, transparent)',
-            fontSize: 12,
+            fontSize: 11.5,
             fontWeight: 500,
-            whiteSpace: 'nowrap',
+            lineHeight: 1.4,
             pointerEvents: 'none',
           }}
         >
@@ -757,8 +796,9 @@ function ActivityMonthLabels({
         <span
           key={`${label.weekIndex}-${label.label}`}
           style={{
-            gridColumn: `${label.weekIndex + 1} / span 2`,
+            gridColumn: `${label.weekIndex + 1}`,
             whiteSpace: 'nowrap',
+            overflow: 'visible',
             lineHeight: '16px',
           }}
         >
@@ -789,7 +829,12 @@ function RecentRow({ session, modeLabel }: { session: DictationSession; modeLabe
   );
 }
 
-function buildYearlyActivity(history: DictationSession[], monthNames: string[], mode: ActivityMode): YearlyActivity {
+function buildYearlyActivity(
+  dailyStats: DailyActivityStat[],
+  initialHistory: DictationSession[],
+  monthNames: string[],
+  mode: ActivityMode,
+): YearlyActivity {
   const today = startOfLocalDay(new Date());
   const rangeStart = addDays(today, -364);
   const gridStart = rangeStart;
@@ -798,16 +843,29 @@ function buildYearlyActivity(history: DictationSession[], monthNames: string[], 
   const weekColumns = Math.ceil((differenceInDays(today, weekGridStart) + 1) / 7);
   const byDay = new Map<string, { count: number; chars: number; durationMs: number }>();
 
-  history.forEach(session => {
-    const date = startOfLocalDay(new Date(session.createdAt));
-    if (isNaN(date.getTime()) || date < rangeStart || date > today) return;
-    const key = localDateKey(date);
-    const current = byDay.get(key) ?? { count: 0, chars: 0, durationMs: 0 };
-    current.count += 1;
-    current.chars += session.finalText.length;
-    current.durationMs += session.durationMs ?? 0;
-    byDay.set(key, current);
-  });
+  const todayStr = localDateKey(today);
+  if (dailyStats.length > 0) {
+    for (const stat of dailyStats) {
+      if (stat.date < localDateKey(rangeStart) || stat.date > todayStr) continue;
+      byDay.set(stat.date, {
+        count: stat.sessionCount,
+        chars: stat.totalChars,
+        durationMs: stat.totalDurationMs,
+      });
+    }
+  } else {
+    // fallback: iterate history while activityStats is still loading
+    initialHistory.forEach(session => {
+      const date = startOfLocalDay(new Date(session.createdAt));
+      if (isNaN(date.getTime()) || date < rangeStart || date > today) return;
+      const key = localDateKey(date);
+      const current = byDay.get(key) ?? { count: 0, chars: 0, durationMs: 0 };
+      current.count += 1;
+      current.chars += session.finalText.length;
+      current.durationMs += session.durationMs ?? 0;
+      byDay.set(key, current);
+    });
+  }
 
   const rawCells: Array<Omit<DayActivity, 'count' | 'chars' | 'durationMs' | 'level'>> = [];
   for (let i = 0; i < weeks * 7; i += 1) {
@@ -887,40 +945,32 @@ function buildYearlyActivity(history: DictationSession[], monthNames: string[], 
     level: week.inRange ? activityLevel(week.value, maxWeekValue) : 0,
   }));
 
-  const monthLabels: MonthLabel[] = [];
-  let lastMonth = -1;
-  for (let weekIndex = 0; weekIndex < weeks; weekIndex += 1) {
-    const weekCells = cells.slice(weekIndex * 7, weekIndex * 7 + 7).filter(cell => cell.inRange);
-    const candidate = weekCells.find(cell => cell.date.getDate() === 1);
-    if (!candidate) continue;
-    const month = candidate.date.getMonth();
-    if (month === lastMonth) continue;
-    lastMonth = month;
-    monthLabels.push({
-      weekIndex,
-      label: monthNames[month] ?? String(month + 1),
-    });
-  }
-  const weekMonthLabels: MonthLabel[] = [];
-  let lastWeekMonth = -1;
+  // 收集范围内每个月的起始/结束列 → 取中间列作为标签位置，使月份标签均匀分布
+  const monthRanges = new Map<number, { firstCol: number; lastCol: number }>();
   for (let weekIndex = 0; weekIndex < weekColumns; weekIndex += 1) {
-    let candidate: Date | null = null;
     const weekStart = addDays(weekGridStart, weekIndex * 7);
     for (let offset = 0; offset < 7; offset += 1) {
       const date = addDays(weekStart, offset);
-      if (date >= rangeStart && date <= today && date.getDate() === 1) {
-        candidate = date;
-        break;
+      if (date < rangeStart || date > today) continue;
+      const month = date.getMonth();
+      const range = monthRanges.get(month);
+      if (range) {
+        range.firstCol = Math.min(range.firstCol, weekIndex);
+        range.lastCol = Math.max(range.lastCol, weekIndex);
+      } else {
+        monthRanges.set(month, { firstCol: weekIndex, lastCol: weekIndex });
       }
     }
-    if (!candidate) continue;
-    const month = candidate.getMonth();
-    if (month === lastWeekMonth) continue;
-    lastWeekMonth = month;
-    weekMonthLabels.push({
-      weekIndex,
-      label: monthNames[month] ?? String(month + 1),
-    });
+  }
+  const monthLabels: MonthLabel[] = [];
+  const weekMonthLabels: MonthLabel[] = [];
+  for (const [month, { firstCol, lastCol }] of monthRanges) {
+    const label = monthNames[month] ?? String(month + 1);
+    const midCol = Math.floor((firstCol + lastCol) / 2);
+    if (midCol < weeks) {
+      monthLabels.push({ weekIndex: midCol, label });
+    }
+    weekMonthLabels.push({ weekIndex: midCol, label });
   }
 
   return {
@@ -1029,7 +1079,7 @@ function formatHeatmapDisplayDate(date: Date): string {
 }
 
 function formatHeatmapMonthDay(date: Date): string {
-  return date.toLocaleDateString(undefined, { month: 'long', day: 'numeric' });
+  return date.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
 }
 
 function formatTime(iso: string): string {

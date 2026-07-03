@@ -832,8 +832,8 @@ pub struct UserPreferences {
     #[serde(default = "default_true")]
     pub auto_update_check: bool,
     /// 历史记录上限（条数）。`None` = 不按条数清理；
-    /// `Some(n)` 表示用户在 Settings 自定义了上限。
-    #[serde(default)]
+    /// `Some(n)` 表示用户在 Settings 自定义了上限。默认 200 条。
+    #[serde(default = "default_history_max_entries")]
     pub history_max_entries: Option<u32>,
     /// 是否为每次会话保留原始麦克风音频文件（wav）到 `recordings/` 目录，
     /// 用于排查 ASR 误识别 / 麦克风灵敏度问题。默认 false。开启会占磁盘空间，
@@ -887,7 +887,11 @@ fn default_remote_input_mode() -> String {
 }
 
 fn default_history_retention_days() -> u32 {
-    0
+    365
+}
+
+fn default_history_max_entries() -> Option<u32> {
+    Some(200)
 }
 
 fn default_polish_context_window_minutes() -> u32 {
@@ -1051,7 +1055,7 @@ struct UserPreferencesWire {
     streaming_insert_save_clipboard: bool,
     #[serde(default = "default_true")]
     auto_update_check: bool,
-    #[serde(default)]
+    #[serde(default = "default_history_max_entries")]
     history_max_entries: Option<u32>,
     #[serde(default)]
     record_audio_for_debug: bool,
@@ -1182,7 +1186,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
         let history_retention_default_migrated = wire.history_retention_default_migrated;
         let history_retention_days =
             if !history_retention_default_migrated && wire.history_retention_days == 7 {
-                0
+                365
             } else {
                 wire.history_retention_days
             };
@@ -2016,7 +2020,7 @@ impl Default for UserPreferences {
             streaming_insert_default_migrated: true,
             streaming_insert_save_clipboard: true,
             auto_update_check: true,
-            history_max_entries: None,
+            history_max_entries: default_history_max_entries(),
             record_audio_for_debug: false,
             audio_recording_max_entries: None,
             marketplace_base_url: String::new(),

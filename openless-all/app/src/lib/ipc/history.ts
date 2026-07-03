@@ -1,6 +1,6 @@
-import type { DictationSession } from "../types"
+import type { DictationSession, DailyActivityStat } from "../types"
 import { invokeOrMock } from "./shared"
-import { mockHistory } from "./mock-data"
+import { mockHistory, mockActivityStats } from "./mock-data"
 
 export function listHistory(): Promise<DictationSession[]> {
     return invokeOrMock("list_history", undefined, () => mockHistory)
@@ -39,4 +39,9 @@ export function retranscribeRecording(sessionId: string): Promise<DictationSessi
         { sessionId },
         () => mockHistory[0],
     ) as Promise<DictationSession>
+}
+
+/** 返回全部日活统计数据（每日使用次数、字数、时长），按日期升序。 */
+export function listActivityStats(): Promise<DailyActivityStat[]> {
+    return invokeOrMock("list_activity_stats", undefined, () => mockActivityStats)
 }

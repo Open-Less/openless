@@ -39,6 +39,7 @@ export {
     clearHistory,
     readAudioRecording,
     retranscribeRecording,
+    listActivityStats,
 } from "./history"
 
 // vocab

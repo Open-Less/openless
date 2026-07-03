@@ -43,8 +43,8 @@ pub(crate) use crate::coordinator::Coordinator;
 pub(crate) use crate::net;
 pub(crate) use crate::permissions::{self, PermissionStatus};
 pub(crate) use crate::persistence::{
-    sync_style_pack_preferences, CredentialAccount, CredentialsSnapshot, CredentialsVault,
-    PreferencesStore,
+    sync_style_pack_preferences, ActivityStatsStore, CredentialAccount, CredentialsSnapshot,
+    CredentialsVault, DailyActivityStat, PreferencesStore,
 };
 pub(crate) use crate::polish::{
     http_client_builder, CodexOAuthConfig, CodexOAuthCredentials, CodexOAuthLLMProvider, LLMError,

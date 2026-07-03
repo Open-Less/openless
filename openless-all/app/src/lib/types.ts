@@ -248,6 +248,14 @@ export interface StylePackRuntimeDiagnostics {
   previewOmitsFrontApp: boolean;
 }
 
+/** 日活统计：用于年度活动热力图，与历史记录文字内容解耦。 */
+export interface DailyActivityStat {
+  date: string;
+  sessionCount: number;
+  totalChars: number;
+  totalDurationMs: number;
+}
+
 export interface UserPreferences {
   hotkey: HotkeyBinding;
   dictationHotkey: ShortcutBinding;
@@ -355,6 +363,8 @@ export interface UserPreferences {
   startMinimized: boolean;
   /** UI theme preference: follow OS, light, or dark. */
   themeMode: ThemeMode;
+  /** Show the annual activity heatmap on the Overview page. Default true. */
+  showOverviewActivityHeatmap: boolean;
   /** 后台自动更新渠道。stable（默认）= AutoUpdateGate 查正式版 manifest；
    *  beta = 查 Beta manifest。About / Advanced 的手动检查按钮各自固定 stable/beta。 */
   updateChannel: UpdateChannel;
@@ -373,7 +383,7 @@ export interface UserPreferences {
    *  桌面：开启后自动检查，发现更新弹窗由用户确认安装。
    *  关闭后仅 Settings 手动「检查更新」按钮可用。 */
   autoUpdateCheck: boolean;
-  /** 历史记录上限（条数）。null = 不按条数清理。 */
+  /** 历史记录上限（条数）。null = 不按条数清理。默认 200。 */
   historyMaxEntries: number | null;
   /** 是否为每次会话保留原始麦克风音频文件（wav），用于排查 ASR 误识别 / 麦克风灵敏度。
    *  默认 false。开启后会占磁盘空间，受 historyRetentionDays 同样的清理策略约束。 */

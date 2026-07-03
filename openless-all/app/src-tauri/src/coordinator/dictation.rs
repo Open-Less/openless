@@ -1858,6 +1858,8 @@ fn write_transcribe_failed_history(inner: &Arc<Inner>, session_id: SessionId, du
     ) {
         log::error!("[coord] transcribeFailed history append failed: {e}");
     }
+    let date_key = &session.created_at[..10];
+    let _ = inner.activity_stats.add_session(date_key, session.final_text.len() as u64, session.duration_ms.unwrap_or(0));
 }
 
 /// ASR 转录失败 / 超时的统一收尾，替代之前散落在每个引擎分支里重复 5 行的失败尾巴：
@@ -2341,6 +2343,8 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
         ) {
             log::error!("[coord] history append failed: {e}");
         }
+        let date_key = &session.created_at[..10];
+        let _ = inner.activity_stats.add_session(date_key, session.final_text.len() as u64, session.duration_ms.unwrap_or(0));
         emit_capsule(
             inner,
             CapsuleState::Error,
@@ -2729,6 +2733,8 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     ) {
         log::error!("[coord] history append failed: {e}");
     }
+    let date_key = &session.created_at[..10];
+    let _ = inner.activity_stats.add_session(date_key, session.final_text.len() as u64, session.duration_ms.unwrap_or(0));
 
     // 远程输入：把本次最终文字回传给手机端。remote_server 的 WS handler 订阅了
     // "remote:result"（mod.rs:614），但此前全仓从未 emit，导致手机结果区永远空（#691）。

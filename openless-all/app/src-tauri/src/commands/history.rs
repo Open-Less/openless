@@ -15,6 +15,13 @@ pub fn clear_history(coord: CoordinatorState<'_>) -> Result<(), String> {
     coord.history().clear().map_err(|e| e.to_string())
 }
 
+/// 返回全部日活统计数据（每日使用次数、字数、时长），按日期升序。
+/// 数据源为 `activity_stats.json`，与 `history.json` 解耦，不受历史条数上限影响。
+#[tauri::command]
+pub fn list_activity_stats(coord: CoordinatorState<'_>) -> Result<Vec<DailyActivityStat>, String> {
+    coord.activity_stats().list().map_err(|e| e.to_string())
+}
+
 /// 读取某次会话的原始麦克风 wav 字节流。文件存在的条件：debug 用户的任意会话，或任意
 /// 「转录失败 / empty」会话（失败保留）——成功的非 debug 会话录音会在插入后删掉。
 /// 文件名规约：`<data_dir>/recordings/<session_id>.wav`，与 DictationSession.id 同名。

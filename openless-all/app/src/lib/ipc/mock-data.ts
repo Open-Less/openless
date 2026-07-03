@@ -1,5 +1,6 @@
 import type {
     CorrectionRule,
+    DailyActivityStat,
     DictationSession,
     DictionaryEntry,
     HotkeyCapability,
@@ -85,7 +86,7 @@ export let mockSettings: UserPreferences = {
     sherpaOnnxModel: "sense-voice-small-zh",
     sherpaOnnxLanguageHint: "",
     sherpaOnnxKeepLoadedSecs: 300,
-    historyRetentionDays: 0,
+    historyRetentionDays: 365,
     historyRetentionDefaultMigrated: true,
     polishContextWindowMinutes: 5,
     startMinimized: false,
@@ -96,7 +97,7 @@ export let mockSettings: UserPreferences = {
     streamingInsertDefaultMigrated: true,
     streamingInsertSaveClipboard: true,
     autoUpdateCheck: true,
-    historyMaxEntries: null,
+    historyMaxEntries: 200,
     recordAudioForDebug: false,
     audioRecordingMaxEntries: null,
     marketplaceBaseUrl: "https://apic.openless.top",
@@ -651,3 +652,48 @@ export function mockImportStylePackFromZip(zipPath: string): StylePack {
     syncMockSettingsFromStylePacks()
     return cloneStylePack(pack)
 }
+
+/** 用本地时区生成 YYYY-MM-DD 字符串，避免 toISOString() 的 UTC 偏移。 */
+function localDateString(date: Date): string {
+  const y = date.getFullYear()
+  const m = String(date.getMonth() + 1).padStart(2, '0')
+  const d = String(date.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
+}
+
+/** 模拟一整年的日活统计数据，用于开发环境热力图。 */
+export const mockActivityStats: DailyActivityStat[] = (() => {
+  const stats: DailyActivityStat[] = []
+  const today = new Date()
+  for (let i = 364; i >= 0; i--) {
+    const date = new Date(today)
+    date.setDate(date.getDate() - i)
+    const dateStr = localDateString(date)
+    // 随机生成 0-20 条记录，周末少一些，工作日多一些
+    const dayOfWeek = date.getDay()
+    const base = dayOfWeek === 0 || dayOfWeek === 6 ? 2 : 8
+    const count = Math.max(0, Math.round(base + (Math.random() - 0.5) * base))
+    if (count === 0) {
+      stats.push({ date: dateStr, sessionCount: 0, totalChars: 0, totalDurationMs: 0 })
+      continue
+    }
+    const chars = count * Math.round(200 + Math.random() * 300)
+    const durationMs = count * Math.round(8000 + Math.random() * 4000)
+    stats.push({ date: dateStr, sessionCount: count, totalChars: chars, totalDurationMs: durationMs })
+  }
+  // 追加 100 条今日随机数据，模拟高频使用
+  const todayStr = localDateString(today)
+  const todayIndex = stats.findIndex(s => s.date === todayStr)
+  if (todayIndex >= 0) {
+    const extraSessions = 100
+    const extraChars = Math.round(extraSessions * (200 + Math.random() * 300))
+    const extraDuration = Math.round(extraSessions * (8000 + Math.random() * 4000))
+    stats[todayIndex] = {
+      ...stats[todayIndex],
+      sessionCount: stats[todayIndex].sessionCount + extraSessions,
+      totalChars: stats[todayIndex].totalChars + extraChars,
+      totalDurationMs: stats[todayIndex].totalDurationMs + extraDuration,
+    }
+  }
+  return stats
+})()

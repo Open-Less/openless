@@ -496,6 +496,8 @@ pub(super) async fn answer_qa_question_text(
         ) {
             log::error!("[coord] overlay QA history append failed: {error}");
         }
+        let date_key = &session.created_at[..10];
+        let _ = inner.activity_stats.add_session(date_key, session.final_text.len() as u64, session.duration_ms.unwrap_or(0));
     }
 
     inner.qa_state.lock().phase = QaPhase::Idle;
@@ -1106,6 +1108,8 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
         ) {
             log::error!("[coord] QA history append failed: {e}");
         }
+        let date_key = &session.created_at[..10];
+        let _ = inner.activity_stats.add_session(date_key, session.final_text.len() as u64, session.duration_ms.unwrap_or(0));
     }
 
     inner.qa_state.lock().phase = QaPhase::Idle;
