@@ -103,6 +103,19 @@ impl SherpaOnnxAsr {
         self.language_hint.as_deref()
     }
 
+    /// 当前缓冲音频时长（毫秒）。Offline 读 PCM buffer；Online 读 worker 已接收
+    /// 的 PCM 字节数。不消费缓冲。
+    pub fn buffer_duration_ms(&self) -> u64 {
+        match &self.mode {
+            SherpaProviderMode::Offline { buffer } => pcm_duration_ms(&buffer.lock()),
+            SherpaProviderMode::Online { worker } => worker
+                .lock()
+                .as_ref()
+                .map(|worker| pcm_duration_ms_from_bytes(worker.audio_bytes.load(Ordering::SeqCst)))
+                .unwrap_or(0),
+        }
+    }
+
     pub async fn transcribe(&self, audio_timeout: Duration) -> Result<RawTranscript> {
         match &self.mode {
             SherpaProviderMode::Offline { buffer } => {
@@ -386,6 +399,18 @@ mod tests {
         provider.consume_pcm_chunk(&[5, 6]);
         match &provider.mode {
             SherpaProviderMode::Offline { buffer } => assert_eq!(buffer.lock().len(), 6),
+            SherpaProviderMode::Online { .. } => panic!("expected offline provider"),
+        }
+    }
+
+    #[test]
+    fn offline_buffer_duration_reports_16k_pcm_duration_without_consuming() {
+        let provider = make_provider();
+        provider.consume_pcm_chunk(&vec![0u8; 32_000]);
+
+        assert_eq!(provider.buffer_duration_ms(), 1000);
+        match &provider.mode {
+            SherpaProviderMode::Offline { buffer } => assert_eq!(buffer.lock().len(), 32_000),
             SherpaProviderMode::Online { .. } => panic!("expected offline provider"),
         }
     }

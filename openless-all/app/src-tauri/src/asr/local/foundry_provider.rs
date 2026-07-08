@@ -23,6 +23,10 @@ use crate::asr::RawTranscript;
 #[cfg(target_os = "windows")]
 use super::foundry_runtime::FoundryLocalRuntime;
 
+/// Foundry Local Whisper 属于 Whisper 系模型，原生解码窗口约 30s。每次 SDK
+/// 请求保持在窗口内，再由 OpenLess 合并分片文本，避免长听写只返回第一段。
+const FOUNDRY_WHISPER_CHUNK_LIMIT_MS: u64 = 30_000;
+
 pub struct FoundryLocalWhisperAsr {
     #[cfg(target_os = "windows")]
     runtime: Arc<FoundryLocalRuntime>,
@@ -70,6 +74,12 @@ impl FoundryLocalWhisperAsr {
         self.language_hint.as_deref()
     }
 
+    /// 当前缓冲音频时长（毫秒）。Coordinator 在 transcribe() 调用前读取，
+    /// 用来给 Foundry Local Whisper 计算动态超时。不消费缓冲。
+    pub fn buffer_duration_ms(&self) -> u64 {
+        pcm_duration_ms(&self.buffer.lock())
+    }
+
     pub async fn transcribe(&self, audio_timeout: std::time::Duration) -> Result<RawTranscript> {
         let cancel_generation = self.cancel_generation.load(Ordering::SeqCst);
         let pcm = self.buffer.lock().clone();
@@ -108,26 +118,45 @@ impl FoundryLocalWhisperAsr {
 
         #[cfg(target_os = "windows")]
         {
-            let wav_file = TempWavFile::create(pcm)?;
-            let text = self
-                .runtime
-                .transcribe_audio_file(
-                    &self.model_alias,
-                    &self.runtime_source,
-                    self.language_hint(),
-                    wav_file.path(),
-                    audio_timeout,
-                )
-                .await
-                .with_context(|| {
-                    format!(
-                        "transcribe audio file with Foundry Local Whisper model {}",
-                        self.model_alias
+            let chunks = crate::asr::whisper::split_pcm_by_duration(
+                pcm,
+                Some(FOUNDRY_WHISPER_CHUNK_LIMIT_MS),
+            );
+            if chunks.len() > 1 {
+                log::info!(
+                    "[foundry-asr] splitting {:.2}s audio into {} chunks (limit={}ms)",
+                    duration_ms as f64 / 1000.0,
+                    chunks.len(),
+                    FOUNDRY_WHISPER_CHUNK_LIMIT_MS
+                );
+            }
+
+            let mut texts = Vec::with_capacity(chunks.len());
+            for (index, chunk) in chunks.iter().enumerate() {
+                let wav_file = TempWavFile::create(chunk)?;
+                let text = self
+                    .runtime
+                    .transcribe_audio_file(
+                        &self.model_alias,
+                        &self.runtime_source,
+                        self.language_hint(),
+                        wav_file.path(),
+                        audio_timeout,
                     )
-                })?;
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "transcribe Foundry Local Whisper chunk {}/{} with model {}",
+                            index + 1,
+                            chunks.len(),
+                            self.model_alias
+                        )
+                    })?;
+                texts.push(trim_transcript_text(&text));
+            }
 
             Ok(RawTranscript {
-                text: trim_transcript_text(&text),
+                text: crate::asr::whisper::join_transcript_chunks(&texts),
                 duration_ms,
             })
         }
@@ -291,6 +320,33 @@ mod tests {
         assert_eq!(&wav[0..4], b"RIFF");
         assert_eq!(u32::from_le_bytes(wav[40..44].try_into().unwrap()), 4);
         assert_eq!(&wav[44..], &[0x01, 0x00, 0xff, 0x7f]);
+    }
+
+    #[test]
+    fn foundry_provider_splits_long_pcm_at_whisper_window() {
+        let pcm = vec![0u8; 32_000 * 65];
+        let chunks = crate::asr::whisper::split_pcm_by_duration(
+            &pcm,
+            Some(super::FOUNDRY_WHISPER_CHUNK_LIMIT_MS),
+        );
+
+        assert_eq!(chunks.len(), 3);
+        assert_eq!(chunks[0].len(), 32_000 * 30);
+        assert_eq!(chunks[1].len(), 32_000 * 30);
+        assert_eq!(chunks[2].len(), 32_000 * 5);
+    }
+
+    #[test]
+    fn foundry_provider_reports_buffer_duration_without_consuming() {
+        #[cfg(target_os = "windows")]
+        let (provider, _) = test_provider();
+        #[cfg(not(target_os = "windows"))]
+        let provider = test_provider();
+
+        provider.consume_pcm_chunk(&vec![0u8; 32_000]);
+
+        assert_eq!(provider.buffer_duration_ms(), 1000);
+        assert_eq!(provider.buffer.lock().len(), 32_000);
     }
 
     #[cfg(target_os = "windows")]

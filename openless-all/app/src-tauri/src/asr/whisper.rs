@@ -294,7 +294,7 @@ fn pcm_duration_ms(pcm: &[u8]) -> u64 {
     super::pcm::pcm_duration_ms(pcm)
 }
 
-fn split_pcm_by_duration(pcm: &[u8], max_chunk_duration_ms: Option<u64>) -> Vec<&[u8]> {
+pub(crate) fn split_pcm_by_duration(pcm: &[u8], max_chunk_duration_ms: Option<u64>) -> Vec<&[u8]> {
     let Some(max_chunk_duration_ms) = max_chunk_duration_ms else {
         return vec![pcm];
     };
@@ -328,7 +328,7 @@ fn transcription_url(base_url: &str) -> Result<String> {
     Ok(url.to_string())
 }
 
-fn join_transcript_chunks(chunks: &[String]) -> String {
+pub(crate) fn join_transcript_chunks(chunks: &[String]) -> String {
     let mut joined = String::new();
     for chunk in chunks.iter().map(|chunk| chunk.trim()) {
         if chunk.is_empty() {
