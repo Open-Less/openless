@@ -839,6 +839,7 @@ export const ja: typeof zhCN = {
       providerHttpStatus: 'サプライヤーが {{status}} を返しました。API Key 権限またはエンドポイントを確認してください。',
       endpointMustUseHttps: 'HTTP Endpoint も使用できますが、API Key と音声内容が通信中に漏えいする可能性があります。',
       endpointInvalid: 'Endpoint の形式が無効です。',
+      bailianEndpointSchemeInvalid: 'Bailian リアルタイム ASR は DashScope の WebSocket ゲートウェイを使用します。エンドポイントは wss:// で始まる必要があります（既定: wss://dashscope.aliyuncs.com/api-ws/v1/inference/）。https:// の互換モード URL はここでは使用できません。',
       responseTooLarge: 'サプライヤーの応答が大きすぎるため、安全のため検証を停止しました。',
       asrInvalidJson: 'ASR の応答が有効な JSON ではありません。',
       asrMissingTextField: 'ASR の応答に text フィールドがありません。',

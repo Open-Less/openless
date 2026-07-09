@@ -621,6 +621,7 @@ function providerErrorMessage(error: unknown, t: ReturnType<typeof useTranslatio
   }
   if (message === 'endpointMustUseHttps') return t('settings.providers.endpointMustUseHttps');
   if (message === 'endpointInvalid') return t('settings.providers.endpointInvalid');
+  if (message === 'bailianEndpointSchemeInvalid') return t('settings.providers.bailianEndpointSchemeInvalid');
   if (message === 'providerResponseTooLarge') return t('settings.providers.responseTooLarge');
   if (message === 'asrInvalidJson') return t('settings.providers.asrInvalidJson');
   if (message === 'asrMissingTextField') return t('settings.providers.asrMissingTextField');

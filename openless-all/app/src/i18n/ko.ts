@@ -839,6 +839,7 @@ export const ko: typeof zhCN = {
       providerHttpStatus: '공급자가 {{status}} 를 반환했습니다. API Key 권한 또는 Endpoint 를 확인해 주세요.',
       endpointMustUseHttps: 'HTTP Endpoint 를 사용할 수 있지만, API Key 와 음성 내용이 전송 중 유출될 수 있습니다.',
       endpointInvalid: 'Endpoint 형식이 올바르지 않습니다.',
+      bailianEndpointSchemeInvalid: 'Bailian 실시간 ASR은 DashScope WebSocket 게이트웨이를 사용합니다. 엔드포인트는 wss://로 시작해야 합니다(기본값: wss://dashscope.aliyuncs.com/api-ws/v1/inference/). https:// 호환 모드 주소는 여기서 사용할 수 없습니다.',
       responseTooLarge: '공급자 응답이 너무 커서 안전을 위해 검증을 중단했습니다.',
       asrInvalidJson: 'ASR 응답이 유효한 JSON 이 아닙니다.',
       asrMissingTextField: 'ASR 응답에 text 필드가 없습니다.',

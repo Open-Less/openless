@@ -835,6 +835,7 @@ export const zhCN = {
       providerHttpStatus: '供应商接口返回 {{status}}，请检查 API Key 权限或 Endpoint。',
       endpointMustUseHttps: '允许使用 HTTP Endpoint，但请注意：API Key 和音频内容可能在传输中泄漏。',
       endpointInvalid: 'Endpoint 格式不合法。',
+      bailianEndpointSchemeInvalid: '百炼实时 ASR 走 DashScope WebSocket 网关，接口地址必须以 wss:// 开头（默认 wss://dashscope.aliyuncs.com/api-ws/v1/inference/）；https:// 的兼容模式地址在此不可用。',
       responseTooLarge: '供应商响应过大，已停止验证以保证安全。',
       asrInvalidJson: 'ASR 响应不是有效 JSON。',
       asrMissingTextField: 'ASR 响应缺少 text 字段。',

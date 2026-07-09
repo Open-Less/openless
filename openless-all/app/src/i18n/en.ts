@@ -837,6 +837,7 @@ export const en: typeof zhCN = {
       providerHttpStatus: 'Provider returned HTTP {{status}}. Check the API key permissions or endpoint.',
       endpointMustUseHttps: 'HTTP endpoints are allowed, but API keys and audio content may leak in transit.',
       endpointInvalid: 'Endpoint format is invalid.',
+      bailianEndpointSchemeInvalid: 'Bailian realtime ASR uses the DashScope WebSocket gateway: the endpoint must start with wss:// (default: wss://dashscope.aliyuncs.com/api-ws/v1/inference/). An https:// compatible-mode URL will not work here.',
       responseTooLarge: 'Provider response is too large to validate safely.',
       asrInvalidJson: 'ASR response is not valid JSON.',
       asrMissingTextField: 'ASR response is missing the text field.',

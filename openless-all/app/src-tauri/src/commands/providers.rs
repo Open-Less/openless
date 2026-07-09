@@ -28,6 +28,11 @@ pub async fn validate_provider_credentials(kind: String) -> Result<ProviderCheck
 #[tauri::command]
 pub async fn list_provider_models(kind: String) -> Result<ProviderModelsResult, String> {
     if kind == "asr" && CredentialsVault::get_active_asr() == crate::asr::bailian::PROVIDER_ID {
+        // Bailian 实时 ASR 没有模型列表 HTTP 接口，列表只能是静态的。但直接返回
+        // 硬编码列表会让「拉取模型」在 Key / endpoint 全错时也显示成功，给用户
+        // "已连通"的错觉（其他厂商这颗按钮是真实带 Key GET /models）。先跑一次
+        // 与「验证」相同的 WebSocket 连通性检查，语义对齐后再返回静态列表。
+        validate_bailian_asr_provider().await?;
         return Ok(ProviderModelsResult {
             models: vec![crate::asr::bailian::DEFAULT_MODEL.to_string()],
         });
@@ -229,6 +234,12 @@ async fn validate_bailian_asr_provider() -> Result<(), String> {
         .map_err(|e| e.to_string())?
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| crate::asr::bailian::DEFAULT_ENDPOINT.to_string());
+    // 协议头先行校验：填成 https://（百炼兼容模式 / 专属域名地址）时，WebSocket
+    // 握手报的 "URL scheme not supported" 会被前端兜底成笼统的「操作失败」，
+    // 用户无从定位。这里拦下并返回专用错误码，前端映射成可操作的提示。
+    if !crate::asr::bailian::endpoint_scheme_is_websocket(&endpoint) {
+        return Err("bailianEndpointSchemeInvalid".to_string());
+    }
     let model = CredentialsVault::get(CredentialAccount::AsrModel)
         .map_err(|e| e.to_string())?
         .filter(|s| !s.trim().is_empty())
@@ -245,9 +256,12 @@ async fn validate_bailian_asr_provider() -> Result<(), String> {
         },
     ));
     asr.open_session().await.map_err(|e| e.to_string())?;
+    // 验证音频必须 ≥200ms：只发 1 个 100ms 静音块时 DashScope 必然返回
+    // task-failed: EmptyAudio，导致有效凭据也永远验证失败（2026-07 实测边界：
+    // 100ms 拒、200ms 起收）。取 500ms 留余量，与 Mimo 验证的 250ms 同量级。
     crate::asr::AudioConsumer::consume_pcm_chunk(
         &*asr,
-        &vec![0u8; crate::asr::bailian::TARGET_AUDIO_CHUNK_BYTES],
+        &vec![0u8; crate::asr::bailian::TARGET_AUDIO_CHUNK_BYTES * 5],
     );
     asr.send_last_frame().await.map_err(|e| e.to_string())?;
     asr.await_final_result()
