@@ -88,6 +88,13 @@ body {
 .ol-thinscroll::-webkit-scrollbar-thumb:hover { background: rgba(0, 0, 0, 0.28); }
 .ol-thinscroll { scrollbar-width: thin; scrollbar-color: rgba(0, 0, 0, 0.18) transparent; }
 
+/* issue #580：设置弹窗打开时停用背景滚动层，规避 WebKitGTK 滚动条穿透合成。 */
+[data-ol-settings-open] .ol-thinscroll {
+  overflow: hidden !important;
+  scrollbar-width: none;
+}
+[data-ol-settings-open] .ol-thinscroll::-webkit-scrollbar { display: none; }
+
 /* Glass surface */
 .ol-glass {
   background: var(--ol-glass-bg);

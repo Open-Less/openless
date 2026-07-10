@@ -175,6 +175,7 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
 
       {/* Main shell — flush with the frosted backplate (no separate float). */}
       <div
+        data-ol-settings-open={settingsOpen ? 'true' : undefined}
         style={{
           flex: 1, minHeight: 0,
           display: 'flex',
