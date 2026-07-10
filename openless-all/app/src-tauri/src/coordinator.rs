@@ -1,3 +1,7 @@
+#![cfg_attr(
+    target_os = "linux",
+    allow(dead_code, unused_imports, unused_variables)
+)]
 //! Dictation coordinator.
 //!
 //! Mirrors the Swift `DictationCoordinator` state machine. Single owner of
@@ -5,7 +9,7 @@
 //! insertion, persists history, emits `capsule:state` events to the capsule
 //! window.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::Instant;
@@ -17,9 +21,11 @@ use tauri::{async_runtime, AppHandle, Emitter, Manager};
 use uuid::Uuid;
 
 #[cfg(target_os = "windows")]
-use crate::asr::local::{foundry, FoundryLocalRuntime, FoundryLocalWhisperAsr};
+use crate::asr::local::{
+    foundry, sherpa, FoundryLocalRuntime, FoundryLocalWhisperAsr, SherpaOnnxAsr, SherpaOnnxRuntime,
+};
 use crate::asr::{
-    BailianCredentials, BailianRealtimeASR, DictionaryHotword, RawTranscript,
+    BailianCredentials, BailianRealtimeASR, DictionaryHotword, MimoBatchASR, RawTranscript,
     VolcengineCredentials, VolcengineStreamingASR, WhisperBatchASR,
 };
 use crate::combo_hotkey::{ComboHotkeyError, ComboHotkeyEvent, ComboHotkeyMonitor};
@@ -29,11 +35,12 @@ use crate::coordinator_state::{
     publish_abort_idle_after_restore, start_processing_if_listening, startup_race_status,
     BeginOutcome, SessionId, SessionPhase, SessionState, StartupRaceStatus,
 };
+use crate::correction::apply_correction_rules;
 use crate::hotkey::{HotkeyEvent, HotkeyMonitor};
 use crate::insertion::TextInserter;
 use crate::persistence::{
-    CorrectionRuleStore, CredentialAccount, CredentialsVault, DictionaryStore, HistoryStore,
-    PreferencesStore,
+    sync_style_pack_preferences, ActivityStore, CorrectionRuleStore, CredentialAccount,
+    CredentialsVault, DictionaryStore, HistoryStore, PreferencesStore, StylePackStore,
 };
 
 use crate::llm_gemini::{GeminiConfig, GeminiProvider};
@@ -55,40 +62,175 @@ use crate::windows_ime_ipc::ImeSubmitTarget;
 #[cfg(target_os = "windows")]
 use crate::windows_ime_session::{PreparedWindowsImeSession, WindowsImeSessionController};
 
+mod asr_wiring;
+mod capsule_focus;
 mod dictation;
+mod hotkey_loops;
+mod polish_flow;
 mod qa;
+mod qa_session;
 mod resources;
+
+use asr_wiring::*;
+use capsule_focus::*;
+use hotkey_loops::*;
+use polish_flow::*;
+use qa_session::*;
+
+// less_computer_sync 命令的数据源（浮窗 webview 冷加载竞态补偿，见 dictation.rs）。
+pub(crate) use dictation::less_computer_event_backlog;
+
+pub(super) fn qa_event_target() -> &'static str {
+    #[cfg(target_os = "android")]
+    {
+        "main"
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        "qa"
+    }
+}
 
 #[cfg(test)]
 use dictation::dictation_error_code;
 use dictation::{
-    begin_session, cancel_session, end_session, handle_pressed, handle_pressed_edge,
-    handle_released, handle_released_edge, request_stop_during_starting,
+    begin_session, begin_session_as, cancel_session, end_session, handle_pressed_edge,
+    handle_released_edge, request_stop_during_starting,
 };
-use qa::{close_qa_panel, handle_qa_hotkey_pressed, QaPhase, QaSessionState};
+#[cfg(any(debug_assertions, test))]
+use dictation::{handle_pressed, handle_released};
+use qa::{
+    close_qa_panel, handle_qa_hotkey_pressed, handle_qa_option_edge, open_qa_panel, QaPhase,
+    QaSessionState,
+};
 #[cfg(test)]
 use resources::discard_startup_resources_for_session;
 use resources::{
-    acquire_recording_mute, release_recording_mute, selected_microphone_device_name,
-    stop_microphone_preview_monitor, stop_qa_recorder, SessionResource, SharedRecordingMuteState,
+    acquire_recording_mute, cancel_active_asr, release_recording_mute,
+    selected_microphone_device_name, stop_microphone_preview_monitor, stop_qa_recorder,
+    take_asr_for_session, take_recorder_for_session, SessionResource, SharedRecordingMuteState,
 };
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CapsuleShowStrategy {
+    NoActivate,
+    FallbackShow,
+}
+
+fn capsule_show_strategy_for_platform() -> CapsuleShowStrategy {
+    // ⚠️ 如果改下面的 cfg 列表，**必须**同步更新单元测试
+    // `capsule_show_strategy_matches_platform_activation_contract` 的两组 cfg —
+    // 否则 Linux CI 直接红（PR #451 即是这种漏改）。
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    {
+        CapsuleShowStrategy::NoActivate
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        CapsuleShowStrategy::FallbackShow
+    }
+}
+
+static CAPSULE_NO_ACTIVATE_FALLBACK_WARNED: AtomicBool = AtomicBool::new(false);
+static CAPSULE_SUPPRESSED_BY_TOGGLE_LOGGED: AtomicBool = AtomicBool::new(false);
+static CAPSULE_FIRST_SHOW_LOGGED: AtomicBool = AtomicBool::new(false);
+// #470 诊断 v2：capsule webview 句柄取不到时的一次性门，区分「窗口压根没创建」(A0)。
+static CAPSULE_WINDOW_MISSING_LOGGED: AtomicBool = AtomicBool::new(false);
+
+/// 给 #470 诊断日志用的 capsule 状态短名。显式枚举每个变体到 &'static str，
+/// 不走 `Debug` —— 哪天 CapsuleState 加了 `String` 字段，`:?` 会把 ASR / polish
+/// 内容意外灌进日志（pr_agent 提的 forward-looking 隐患）；这里只输出状态名。
+fn capsule_state_log_name(state: CapsuleState) -> &'static str {
+    match state {
+        CapsuleState::Idle => "idle",
+        CapsuleState::Recording => "recording",
+        CapsuleState::Transcribing => "transcribing",
+        CapsuleState::Polishing => "polishing",
+        CapsuleState::Done => "done",
+        CapsuleState::Cancelled => "cancelled",
+        CapsuleState::Error => "error",
+    }
+}
+
+fn show_capsule_window_for_recording<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    window: &tauri::WebviewWindow<R>,
+) {
+    let mut needs_fallback = true;
+    if capsule_show_strategy_for_platform() == CapsuleShowStrategy::NoActivate {
+        needs_fallback = !show_capsule_window_no_activate(app, window);
+        if needs_fallback && !CAPSULE_NO_ACTIVATE_FALLBACK_WARNED.swap(true, Ordering::SeqCst) {
+            // 产品取舍：no-activate 是 macOS/AeroSpace 的主路径；但如果 ns_window
+            // 暂不可用，仍优先保住录音反馈，不让用户以为听写没启动。fallback 可能
+            // 重新触发 workspace 跳转，只在 no-activate 失败时作为降级路径。
+            log::warn!("[capsule] no-activate show failed; falling back to window.show()");
+        }
+    }
+
+    if needs_fallback {
+        if let Err(e) = window.show() {
+            log::warn!("[capsule] show fallback failed: {e}");
+        }
+    }
+}
+
+#[derive(Clone)]
 enum ActiveAsr {
     Volcengine(Arc<VolcengineStreamingASR>),
     Whisper(Arc<WhisperBatchASR>),
+    Mimo(Arc<MimoBatchASR>),
     Bailian(Arc<BailianRealtimeASR>),
     #[cfg(target_os = "windows")]
     FoundryLocalWhisper(Arc<FoundryLocalWhisperAsr>),
+    /// Windows sherpa-onnx 本地 ASR（offline batch + 实验 online streaming）。
+    #[cfg(target_os = "windows")]
+    SherpaOnnxLocal(Arc<SherpaOnnxAsr>),
     /// 本地 Qwen3-ASR；只在 macOS + 模型已下载时可达。
     #[cfg(target_os = "macos")]
     Local(Arc<crate::asr::local::LocalQwenAsr>),
+    /// Apple Speech（SFSpeechRecognizer）系统本地 ASR；只在 macOS 可达。
+    #[cfg(target_os = "macos")]
+    AppleSpeech(Arc<crate::asr::local::AppleSpeechAsr>),
 }
 
 fn asr_transcribe_uses_global_timeout(asr: &ActiveAsr) -> bool {
     match asr {
         #[cfg(target_os = "windows")]
         ActiveAsr::FoundryLocalWhisper(_) => false,
+        // sherpa-onnx 首次加载 / 下载 / 推理的耗时类似 Foundry，不走
+        // COORDINATOR_GLOBAL_TIMEOUT；各 provider 自己里面控制細粒度超时。
+        #[cfg(target_os = "windows")]
+        ActiveAsr::SherpaOnnxLocal(_) => false,
         _ => true,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ActiveAsrProviderKind {
+    Bailian,
+    Mimo,
+    WhisperCompatible,
+    Volcengine,
+}
+
+fn active_asr_provider_kind(id: &str) -> ActiveAsrProviderKind {
+    if is_bailian_provider(id) {
+        ActiveAsrProviderKind::Bailian
+    } else if is_mimo_provider(id) {
+        ActiveAsrProviderKind::Mimo
+    } else if is_whisper_compatible_provider(id) {
+        ActiveAsrProviderKind::WhisperCompatible
+    } else {
+        ActiveAsrProviderKind::Volcengine
+    }
+}
+
+fn batch_asr_chunk_limit_ms(provider_id: &str) -> Option<u64> {
+    match provider_id {
+        // OpenRouter 把音频 base64 进 JSON body，体积比二进制大 ~33%，长录音易撞
+        // body/时长上限，保守按 30s 切分（与 zhipu 同）。
+        "zhipu" | "openrouter" => Some(30_000),
+        _ => None,
     }
 }
 
@@ -99,7 +241,10 @@ pub struct Coordinator {
 struct Inner {
     app: Mutex<Option<AppHandle>>,
     history: HistoryStore,
+    /// 每日活动计数（热力图数据源），与 history 的保留策略解耦。
+    activity: ActivityStore,
     prefs: PreferencesStore,
+    style_packs: StylePackStore,
     vocab: DictionaryStore,
     correction_rules: CorrectionRuleStore,
     inserter: TextInserter,
@@ -114,7 +259,17 @@ struct Inner {
     local_asr_cache: Arc<crate::asr::local::LocalAsrCache>,
     #[cfg(target_os = "windows")]
     foundry_local_runtime: Arc<FoundryLocalRuntime>,
+    /// Windows sherpa-onnx 本地 ASR runtime。与 Foundry 同处一个
+    /// 位置、同一 lifecycle 语义；上层通过 `ActiveAsr::SherpaOnnxLocal` 后只调
+    /// runtime，不会跨模块调。
+    #[cfg(target_os = "windows")]
+    sherpa_onnx_runtime: Arc<SherpaOnnxRuntime>,
     recorder: Mutex<Option<SessionResource<Recorder>>>,
+    /// 当前 dictation / QA session 的 wav 归档是否真的被写到磁盘上。
+    /// 由 Recorder::start 返回值 (archive_active) 写入；history.append 路径读取，
+    /// 决定 DictationSession.has_audio_recording 字段。比单纯读 prefs.record_audio_for_debug
+    /// 更准确：用户开了开关但路径无法创建（权限 / 磁盘满）也算 false。
+    audio_archive_active: AtomicBool,
     recording_mute: Mutex<SharedRecordingMuteState>,
     hotkey: Mutex<Option<HotkeyMonitor>>,
     hotkey_status: Mutex<HotkeyStatus>,
@@ -124,10 +279,15 @@ struct Inner {
     /// 与 `hotkey_trigger_held` 互补 —— held 防 press-without-release，本字段防
     /// press-release-press 三连过快。
     last_hotkey_dispatch_at: Mutex<Option<std::time::Instant>>,
+    /// end_session 成功收尾后将 phase 设为 Idle 时记录的时间戳 + POST_SESSION_COOLDOWN_MS。
+    /// handle_pressed 在 (Toggle, Idle) 分支检查此字段：未过期则忽略该次按键，
+    /// 防止胶囊离场动画期间误激活新听写（issue #545）。
+    session_cooldown_until: Mutex<Option<std::time::Instant>>,
     shortcut_recording_active: AtomicBool,
     /// 自定义组合键监听器（global-hotkey crate）。当 `prefs.hotkey.trigger == Custom` 时
     /// 代替 modifier-only 的 hotkey monitor。`None` 表示不使用自定义组合键或还没成功安装。
     combo_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
+    side_aware_combo: Mutex<Option<crate::side_aware_combo::SideAwareComboMonitor>>,
     translation_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
     switch_style_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
     open_app_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
@@ -139,13 +299,24 @@ struct Inner {
     /// 划词语音问答（issue #118）：与 dictation hotkey 平行的全局快捷键
     /// 监听器（global-hotkey crate）。`None` 表示功能关闭或还没成功安装。
     qa_hotkey: Mutex<Option<QaHotkeyMonitor>>,
+    coding_agent_modifier_hotkey: Mutex<Option<HotkeyMonitor>>,
+    coding_agent_combo_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
+    /// 最近一次 emit_capsule 下发的 state，纯内省/测试用途（在 app 句柄校验之前写入，
+    /// 因此无 GUI 的测试环境也能断言「按下热键 → 弹了哪种胶囊」）。写入是单次廉价
+    /// 加锁，对 ~30Hz 录音回调可忽略。
+    last_capsule_state: Mutex<Option<CapsuleState>>,
     /// QA 单独的 session 状态，与 dictation 的 SessionPhase 不冲突。
     qa_state: Mutex<QaSessionState>,
     /// 最近一次应用到 capsule 窗口的几何状态。避免录音 level tick 反复触发
     /// resize / reposition。
     capsule_layout: Mutex<Option<CapsuleLayoutState>>,
-    /// QA 用的 ASR 句柄（始终是 Volcengine 流式）。
-    qa_asr: Mutex<Option<Arc<VolcengineStreamingASR>>>,
+    /// 预备态标志：按下热键即"乐观显示"胶囊（带入场动画），此时麦克风还在 cpal
+    /// init 窗口内、没有第一帧 PCM。为 true 时 emit_capsule 把 Recording payload 的
+    /// `warming` 打成 true（前端渲染"待命"光效）；`level_handler` 首次触发（PCM 真的
+    /// 流入）后置 false，光条"点亮"进入正式录音。begin_session 每次入场重置为 true。
+    capsule_warming: AtomicBool,
+    /// QA 用的 ASR 句柄。必须跟 active_asr_provider 保持一致，避免浮窗走不同入口。
+    qa_asr: Mutex<Option<ActiveAsr>>,
     /// QA 用的 Recorder 句柄。
     qa_recorder: Mutex<Option<Recorder>>,
     /// QA SSE 流取消标志。begin_qa_session 重置为 false；cancel_qa_session 设 true；
@@ -157,6 +328,23 @@ struct Inner {
     /// supervisor 线程，但 integration test 和未来 RunEvent::Exit 钩子需要这条
     /// 显式退出路径。审计 3.1.2。
     shutdown: AtomicBool,
+    #[cfg(not(mobile))]
+    remote_audio_sink: Mutex<Option<Arc<dyn crate::recorder::AudioConsumer>>>,
+    #[cfg(not(mobile))]
+    remote_server: Mutex<Option<crate::remote_server::RemoteServerHandle>>,
+    #[cfg(not(mobile))]
+    remote_refresh_gen: AtomicU64,
+    #[cfg(not(mobile))]
+    remote_refresh_lock: tokio::sync::Mutex<()>,
+    #[cfg(not(mobile))]
+    remote_pin: Mutex<Option<String>>,
+    #[cfg(not(mobile))]
+    remote_locale: Mutex<String>,
+    #[cfg(not(mobile))]
+    remote_no_insert: AtomicBool,
+    /// Less Computer 连续对话：true=浮窗里已有进行中的会话，下一轮 `claude --continue` 续上下文；
+    /// 关闭浮窗（dismiss）复位为 false，下次说话开新会话。
+    less_computer_conversation: AtomicBool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -176,69 +364,145 @@ impl Coordinator {
     pub fn new() -> Self {
         #[cfg(target_os = "windows")]
         {
-            Self::new_with_foundry_runtime(Arc::new(FoundryLocalRuntime::new()))
+            Self::new_with_local_runtimes(
+                Arc::new(FoundryLocalRuntime::new()),
+                Arc::new(SherpaOnnxRuntime::new()),
+            )
         }
 
         #[cfg(not(target_os = "windows"))]
         {
             let history = HistoryStore::new().unwrap_or_else(|e| {
-                log::error!("[coord] HistoryStore init failed: {e}; falling back to empty");
-                HistoryStore::new().expect("history store init")
+                log::error!("[coord] HistoryStore init failed: {e}; 降级为空历史记录");
+                HistoryStore::new_fallback()
             });
-            let prefs = PreferencesStore::new().expect("preferences store init");
-            let vocab = DictionaryStore::new().expect("dictionary store init");
-            let correction_rules = CorrectionRuleStore::new().expect("correction rule store init");
+            let prefs = PreferencesStore::new().unwrap_or_else(|e| {
+                log::error!("[coord] PreferencesStore init failed: {e}; 降级为默认偏好设置");
+                PreferencesStore::new_fallback()
+            });
+            let style_packs = StylePackStore::new(&prefs).unwrap_or_else(|e| {
+                log::error!("[coord] StylePackStore init failed: {e}; 降级为空样式包列表");
+                StylePackStore::new_fallback()
+            });
+            let vocab = DictionaryStore::new().unwrap_or_else(|e| {
+                log::error!("[coord] DictionaryStore init failed: {e}; 降级为空词库");
+                DictionaryStore::new_fallback()
+            });
+            let correction_rules = CorrectionRuleStore::new().unwrap_or_else(|e| {
+                log::error!("[coord] CorrectionRuleStore init failed: {e}; 降级为空纠错规则");
+                CorrectionRuleStore::new_fallback()
+            });
+
+            let activity = ActivityStore::load().unwrap_or_else(|e| {
+                log::error!("[coord] ActivityStore init failed: {e}; 活动计数降级为内存态");
+                ActivityStore::new_fallback()
+            });
 
             Self {
                 inner: Arc::new(Inner {
                     app: Mutex::new(None),
                     history,
+                    activity,
                     prefs,
+                    style_packs,
                     vocab,
                     correction_rules,
                     inserter: TextInserter::new(),
                     state: Mutex::new(SessionState::default()),
                     asr: Mutex::new(None),
                     recorder: Mutex::new(None),
+                    audio_archive_active: AtomicBool::new(false),
                     recording_mute: Mutex::new(SharedRecordingMuteState::new()),
                     hotkey: Mutex::new(None),
                     hotkey_status: Mutex::new(HotkeyStatus::default()),
                     hotkey_trigger_held: AtomicBool::new(false),
                     last_hotkey_dispatch_at: Mutex::new(None),
+                    session_cooldown_until: Mutex::new(None),
                     shortcut_recording_active: AtomicBool::new(false),
                     combo_hotkey: Mutex::new(None),
+                    side_aware_combo: Mutex::new(None),
                     translation_hotkey: Mutex::new(None),
                     switch_style_hotkey: Mutex::new(None),
                     open_app_hotkey: Mutex::new(None),
                     translation_modifier_seen: AtomicBool::new(false),
                     qa_hotkey: Mutex::new(None),
+                    coding_agent_modifier_hotkey: Mutex::new(None),
+                    coding_agent_combo_hotkey: Mutex::new(None),
+                    last_capsule_state: Mutex::new(None),
                     qa_state: Mutex::new(QaSessionState::default()),
                     capsule_layout: Mutex::new(None),
+                    capsule_warming: AtomicBool::new(false),
                     qa_asr: Mutex::new(None),
                     qa_recorder: Mutex::new(None),
                     qa_stream_cancelled: Arc::new(AtomicBool::new(false)),
                     local_asr_cache: Arc::new(crate::asr::local::LocalAsrCache::new()),
                     shutdown: AtomicBool::new(false),
+                    #[cfg(not(mobile))]
+                    remote_audio_sink: Mutex::new(None),
+                    #[cfg(not(mobile))]
+                    remote_server: Mutex::new(None),
+                    #[cfg(not(mobile))]
+                    remote_refresh_gen: AtomicU64::new(0),
+                    #[cfg(not(mobile))]
+                    remote_refresh_lock: tokio::sync::Mutex::new(()),
+                    #[cfg(not(mobile))]
+                    remote_pin: Mutex::new(None),
+                    #[cfg(not(mobile))]
+                    remote_locale: Mutex::new(String::from("zh-CN")),
+                    #[cfg(not(mobile))]
+                    remote_no_insert: AtomicBool::new(false),
+                    less_computer_conversation: AtomicBool::new(false),
                 }),
             }
         }
     }
 
+    /// 保留旧构造函数：现有调用点（含单元测试）只传 Foundry runtime。
+    /// sherpa-onnx runtime 这里创建默认 offline batch 实例；入产后（lib.rs）请走
+    /// `new_with_local_runtimes`，确保 Tauri State 共享同一个 Arc。
     #[cfg(target_os = "windows")]
     pub fn new_with_foundry_runtime(foundry_local_runtime: Arc<FoundryLocalRuntime>) -> Self {
+        Self::new_with_local_runtimes(foundry_local_runtime, Arc::new(SherpaOnnxRuntime::new()))
+    }
+
+    #[cfg(target_os = "windows")]
+    pub fn new_with_local_runtimes(
+        foundry_local_runtime: Arc<FoundryLocalRuntime>,
+        sherpa_onnx_runtime: Arc<SherpaOnnxRuntime>,
+    ) -> Self {
         let history = HistoryStore::new().unwrap_or_else(|e| {
-            log::error!("[coord] HistoryStore init failed: {e}; falling back to empty");
-            HistoryStore::new().expect("history store init")
+            log::error!("[coord] HistoryStore init failed: {e}; 降级为空历史记录");
+            HistoryStore::new_fallback()
         });
-        let prefs = PreferencesStore::new().expect("preferences store init");
-        let vocab = DictionaryStore::new().expect("dictionary store init");
-        let correction_rules = CorrectionRuleStore::new().expect("correction rule store init");
+        let prefs = PreferencesStore::new().unwrap_or_else(|e| {
+            log::error!("[coord] PreferencesStore init failed: {e}; 降级为默认偏好设置");
+            PreferencesStore::new_fallback()
+        });
+        let style_packs = StylePackStore::new(&prefs).unwrap_or_else(|e| {
+            log::error!("[coord] StylePackStore init failed: {e}; 降级为空样式包列表");
+            StylePackStore::new_fallback()
+        });
+        let vocab = DictionaryStore::new().unwrap_or_else(|e| {
+            log::error!("[coord] DictionaryStore init failed: {e}; 降级为空词库");
+            DictionaryStore::new_fallback()
+        });
+        let correction_rules = CorrectionRuleStore::new().unwrap_or_else(|e| {
+            log::error!("[coord] CorrectionRuleStore init failed: {e}; 降级为空纠错规则");
+            CorrectionRuleStore::new_fallback()
+        });
+
+        let activity = ActivityStore::load().unwrap_or_else(|e| {
+            log::error!("[coord] ActivityStore init failed: {e}; 活动计数降级为内存态");
+            ActivityStore::new_fallback()
+        });
 
         Self {
             inner: Arc::new(Inner {
                 app: Mutex::new(None),
                 history,
+                activity,
                 prefs,
+                style_packs,
                 vocab,
                 correction_rules,
                 inserter: TextInserter::new(),
@@ -247,26 +511,49 @@ impl Coordinator {
                 state: Mutex::new(SessionState::default()),
                 asr: Mutex::new(None),
                 recorder: Mutex::new(None),
+                audio_archive_active: AtomicBool::new(false),
                 recording_mute: Mutex::new(SharedRecordingMuteState::new()),
                 hotkey: Mutex::new(None),
                 hotkey_status: Mutex::new(HotkeyStatus::default()),
                 hotkey_trigger_held: AtomicBool::new(false),
                 last_hotkey_dispatch_at: Mutex::new(None),
+                session_cooldown_until: Mutex::new(None),
                 shortcut_recording_active: AtomicBool::new(false),
                 combo_hotkey: Mutex::new(None),
+                side_aware_combo: Mutex::new(None),
                 translation_hotkey: Mutex::new(None),
                 switch_style_hotkey: Mutex::new(None),
                 open_app_hotkey: Mutex::new(None),
                 translation_modifier_seen: AtomicBool::new(false),
                 qa_hotkey: Mutex::new(None),
+                coding_agent_modifier_hotkey: Mutex::new(None),
+                coding_agent_combo_hotkey: Mutex::new(None),
+                last_capsule_state: Mutex::new(None),
                 qa_state: Mutex::new(QaSessionState::default()),
                 capsule_layout: Mutex::new(None),
+                capsule_warming: AtomicBool::new(false),
                 qa_asr: Mutex::new(None),
                 qa_recorder: Mutex::new(None),
                 qa_stream_cancelled: Arc::new(AtomicBool::new(false)),
                 local_asr_cache: Arc::new(crate::asr::local::LocalAsrCache::new()),
                 foundry_local_runtime,
+                sherpa_onnx_runtime,
                 shutdown: AtomicBool::new(false),
+                #[cfg(not(mobile))]
+                remote_audio_sink: Mutex::new(None),
+                #[cfg(not(mobile))]
+                remote_server: Mutex::new(None),
+                #[cfg(not(mobile))]
+                remote_refresh_gen: AtomicU64::new(0),
+                #[cfg(not(mobile))]
+                remote_refresh_lock: tokio::sync::Mutex::new(()),
+                #[cfg(not(mobile))]
+                remote_pin: Mutex::new(None),
+                #[cfg(not(mobile))]
+                remote_locale: Mutex::new(String::from("zh-CN")),
+                #[cfg(not(mobile))]
+                remote_no_insert: AtomicBool::new(false),
+                less_computer_conversation: AtomicBool::new(false),
             }),
         }
     }
@@ -304,6 +591,8 @@ impl Coordinator {
                     }
                 })
                 .await;
+                // 预热加载完后推一次状态，前端零轮询更新「已加载」。
+                emit_local_asr_engine_status(&inner);
             });
         }
         #[cfg(not(target_os = "macos"))]
@@ -315,14 +604,115 @@ impl Coordinator {
     /// 释放当前缓存的本地 ASR 引擎（用户主动点 / 或 删除模型时调）。
     pub fn release_local_asr_engine(&self) {
         self.inner.local_asr_cache.release_now();
+        emit_local_asr_engine_status(&self.inner);
     }
 
     pub fn local_asr_loaded_model(&self) -> Option<String> {
         self.inner.local_asr_cache.loaded_model_id()
     }
 
+    /// 主动把当前本地 ASR 引擎状态推给前端（keepLoadedSecs 变更等命令侧调用）。
+    pub fn emit_local_asr_engine_status(&self) {
+        emit_local_asr_engine_status(&self.inner);
+    }
+
     pub fn bind_app(&self, handle: AppHandle) {
         *self.inner.app.lock() = Some(handle);
+    }
+
+    pub fn android_insert_strategy(&self) -> crate::types::AndroidInsertStrategy {
+        self.inner.prefs.get().android_insert_strategy
+    }
+
+    pub fn android_overlay_trigger(&self) -> crate::types::AndroidOverlayTrigger {
+        self.inner.prefs.get().android_overlay_trigger.normalized()
+    }
+
+    pub fn apply_android_overlay_settings_change(
+        &self,
+        previous: &crate::types::UserPreferences,
+        next: &crate::types::UserPreferences,
+    ) {
+        #[cfg(target_os = "android")]
+        {
+            use crate::types::android_types::{
+                classify_android_overlay_settings_change, AndroidOverlaySettingsAction,
+            };
+            match classify_android_overlay_settings_change(previous, next) {
+                AndroidOverlaySettingsAction::None => {}
+                AndroidOverlaySettingsAction::RefreshLayout => {
+                    self.refresh_android_overlay_layout();
+                }
+                AndroidOverlaySettingsAction::Transition { from, to } => {
+                    self.transition_android_overlay_trigger(from, to);
+                }
+            }
+        }
+        let _ = (previous, next);
+    }
+
+    pub fn transition_android_overlay_trigger(
+        &self,
+        from: crate::types::AndroidOverlayTrigger,
+        to: crate::types::AndroidOverlayTrigger,
+    ) {
+        #[cfg(target_os = "android")]
+        {
+            use crate::types::AndroidOverlayTrigger;
+            fn overlay_trigger_log_name(trigger: AndroidOverlayTrigger) -> &'static str {
+                match trigger.normalized() {
+                    AndroidOverlayTrigger::Background => "background",
+                    AndroidOverlayTrigger::Keyboard => "keyboard",
+                    AndroidOverlayTrigger::Always => "always",
+                }
+            }
+            if from == to {
+                return;
+            }
+            log::info!(
+                "[coord] overlay transition from={} to={}",
+                overlay_trigger_log_name(from),
+                overlay_trigger_log_name(to),
+            );
+            match (from, to) {
+                (
+                    AndroidOverlayTrigger::Background | AndroidOverlayTrigger::Keyboard,
+                    AndroidOverlayTrigger::Always,
+                ) => {
+                    let _ = crate::android::replace_android_overlay();
+                }
+                (
+                    AndroidOverlayTrigger::Always,
+                    AndroidOverlayTrigger::Background | AndroidOverlayTrigger::Keyboard,
+                ) => {
+                    let _ = crate::android::hide_android_overlay();
+                }
+                _ => {}
+            }
+        }
+        let _ = (from, to);
+    }
+
+    pub fn apply_android_overlay_on_startup(&self) {
+        #[cfg(target_os = "android")]
+        {
+            use crate::types::AndroidOverlayTrigger;
+            match self.android_overlay_trigger() {
+                AndroidOverlayTrigger::Always => {
+                    let _ = crate::android::replace_android_overlay();
+                }
+                AndroidOverlayTrigger::Background | AndroidOverlayTrigger::Keyboard => {
+                    let _ = crate::android::hide_android_overlay();
+                }
+            }
+        }
+    }
+
+    pub fn refresh_android_overlay_layout(&self) {
+        #[cfg(target_os = "android")]
+        {
+            let _ = crate::android::refresh_android_overlay_layout();
+        }
     }
 
     /// 让所有 hotkey supervisor loop（dictation / qa / combo / translation /
@@ -356,6 +746,24 @@ impl Coordinator {
             .name("openless-qa-hotkey-supervisor".into())
             .spawn(move || qa_hotkey_supervisor_loop(inner))
             .ok();
+    }
+
+    /// 启动「快速 Agent」双热键 supervisor。与 QA hotkey 平行；功能默认关闭，
+    /// 仅在 `coding_agent_enabled` 时注册。
+    pub fn start_coding_agent_hotkey_listener(&self) {
+        let inner = Arc::clone(&self.inner);
+        std::thread::Builder::new()
+            .name("openless-coding-agent-hotkey-supervisor".into())
+            .spawn(move || coding_agent_hotkey_supervisor_loop(inner))
+            .ok();
+    }
+
+    pub fn stop_coding_agent_hotkey_listener(&self) {
+        take_coding_agent_hotkeys_on_main_thread(&self.inner);
+    }
+
+    pub fn update_coding_agent_hotkey_binding(&self) {
+        update_coding_agent_hotkey_binding_now(&self.inner);
     }
 
     pub fn stop_qa_hotkey_listener(&self) {
@@ -429,18 +837,41 @@ impl Coordinator {
     pub fn update_combo_hotkey_binding(&self) {
         let prefs = self.inner.prefs.get();
         if crate::shortcut_binding::legacy_modifier_trigger(&prefs.dictation_hotkey).is_some() {
-            // 修饰键单键由 HotkeyMonitor 处理，组合键 monitor 要释放。
             take_combo_hotkey_on_main_thread(&self.inner);
+            self.inner.side_aware_combo.lock().take();
             log::info!("[coord] combo hotkey 已关闭（modifier-only）");
             return;
         }
         let binding = prefs.dictation_hotkey.clone();
         if is_unconfigured_shortcut(&binding) {
-            // Custom 但没录到有效主键：清掉旧 monitor，避免旧快捷键继续生效。
             take_combo_hotkey_on_main_thread(&self.inner);
+            self.inner.side_aware_combo.lock().take();
             log::info!("[coord] combo hotkey 已关闭（无绑定）");
             return;
-        };
+        }
+
+        if crate::shortcut_binding::binding_requires_side_aware_hook(&binding) {
+            take_combo_hotkey_on_main_thread(&self.inner);
+            self.inner.side_aware_combo.lock().take();
+            let (tx, rx) = mpsc::channel::<ComboHotkeyEvent>();
+            match crate::side_aware_combo::SideAwareComboMonitor::start(binding, tx) {
+                Ok(monitor) => {
+                    *self.inner.side_aware_combo.lock() = Some(monitor);
+                    let bridge_inner = Arc::clone(&self.inner);
+                    std::thread::Builder::new()
+                        .name("openless-side-combo-bridge".into())
+                        .spawn(move || combo_hotkey_bridge_loop(bridge_inner, rx))
+                        .ok();
+                    log::info!("[coord] side-aware combo hotkey listener installed (via update)");
+                }
+                Err(e) => {
+                    log::warn!("[coord] update side-aware combo binding 失败: {e}");
+                }
+            }
+            return;
+        }
+
+        self.inner.side_aware_combo.lock().take();
         let app = self.inner.app.lock().clone();
         let Some(app) = app else {
             log::warn!("[coord] update combo hotkey binding: AppHandle 未 bind，跳过");
@@ -467,6 +898,8 @@ impl Coordinator {
                         .name("openless-combo-hotkey-bridge".into())
                         .spawn(move || combo_hotkey_bridge_loop(bridge_inner, rx))
                         .ok();
+                    #[cfg(target_os = "linux")]
+                    sync_custom_dictation_to_plugin(&inner_clone);
                 }
                 Err(e) => {
                     log::warn!("[coord] update combo hotkey binding 失败: {e}");
@@ -591,7 +1024,12 @@ impl Coordinator {
     }
 
     fn update_action_hotkey_binding(&self, kind: ActionHotkeyKind) {
-        let binding = action_hotkey_binding(&self.inner, kind);
+        // None = 用户主动停用：反注册全局键，立即生效。
+        let Some(binding) = action_hotkey_binding(&self.inner, kind) else {
+            take_action_hotkey_on_main_thread(&self.inner, kind);
+            log::info!("[coord] action hotkey {kind:?} 已停用（用户清空）");
+            return;
+        };
         if is_modifier_only_shortcut(&binding) {
             take_action_hotkey_on_main_thread(&self.inner, kind);
             log::warn!("[coord] action hotkey {kind:?} 使用了不支持的 modifier-only 绑定，已关闭");
@@ -644,17 +1082,65 @@ impl Coordinator {
         close_qa_panel(&self.inner);
     }
 
-    /// 用户点 📌 切换 pinned 状态。pinned=true 时浮窗不自动隐藏。
-    pub fn qa_window_pin(&self, pinned: bool) {
-        self.inner.qa_state.lock().pinned = pinned;
-        log::info!("[coord] QA window pinned={pinned}");
+
+    /// 用户点 ✕ / 按 Esc 关 Less Computer 浮窗：隐藏窗口 + 结束连续对话
+    /// （下次说话开新会话，不再 --continue 续旧上下文）。
+    pub fn less_computer_window_dismiss(&self) {
+        self.inner
+            .less_computer_conversation
+            .store(false, Ordering::SeqCst);
+        if let Some(app) = self.inner.app.lock().clone() {
+            crate::hide_less_computer_window(&app);
+            crate::hide_less_computer_glow(&app);
+        }
+    }
+
+    /// 内联审批卡的 Approve / Deny 回执：解析等待中的 token。
+    pub fn less_computer_approve(&self, token: &str, approved: bool) {
+        dictation::resolve_less_computer_approval(token, approved);
+    }
+
+    /// 浮窗打字输入：文字指令直接进入 Less Computer 执行链（与语音转写同一条
+    /// 路径——同样的护栏钳制 / 审批循环 / 连续会话语义），跳过录音与 ASR。
+    pub fn less_computer_submit_text(&self, text: String) {
+        let text = text.trim().to_string();
+        if text.is_empty() {
+            return;
+        }
+        let inner = Arc::clone(&self.inner);
+        tokio::spawn(async move {
+            let session_id = crate::coordinator_state::new_session_id();
+            if let Err(e) =
+                dictation::run_voice_agent_transcript(&inner, session_id, text, 0).await
+            {
+                log::warn!("[less-computer] text submit run failed: {e}");
+            }
+        });
     }
 
     pub fn history(&self) -> &HistoryStore {
         &self.inner.history
     }
+
+    pub fn activity(&self) -> &ActivityStore {
+        &self.inner.activity
+    }
+
     pub fn prefs(&self) -> &PreferencesStore {
         &self.inner.prefs
+    }
+    pub fn sync_active_asr_provider_from_preferences(&self) -> Result<(), String> {
+        let provider = self.inner.prefs.get().active_asr_provider;
+        self.sync_active_asr_provider_to_vault(&provider)
+    }
+    pub fn sync_active_asr_provider_to_vault(&self, provider: &str) -> Result<(), String> {
+        if CredentialsVault::get_active_asr() == provider {
+            return Ok(());
+        }
+        CredentialsVault::set_active_asr_provider(provider).map_err(|e| e.to_string())
+    }
+    pub fn style_packs(&self) -> &StylePackStore {
+        &self.inner.style_packs
     }
     pub fn vocab(&self) -> &DictionaryStore {
         &self.inner.vocab
@@ -683,10 +1169,20 @@ impl Coordinator {
 
     fn ensure_modifier_hotkey_monitor(&self, binding: crate::types::HotkeyBinding) {
         if let Some(monitor) = self.inner.hotkey.lock().as_ref() {
+            #[cfg(target_os = "linux")]
+            let plugin_binding = binding.clone();
             monitor.update_binding(binding);
+            #[cfg(target_os = "linux")]
+            if plugin_binding.trigger == crate::types::HotkeyTrigger::Custom {
+                sync_custom_dictation_to_plugin(&self.inner);
+            } else {
+                crate::linux_fcitx::sync_binding_to_plugin(&plugin_binding);
+            }
             return;
         }
         let (tx, rx) = mpsc::channel::<HotkeyEvent>();
+        #[cfg(target_os = "linux")]
+        let (fcitx_tx, fcitx_binding) = (tx.clone(), binding.clone());
         match HotkeyMonitor::start(binding, tx) {
             Ok(monitor) => {
                 let adapter = monitor.kind();
@@ -702,6 +1198,24 @@ impl Coordinator {
                     .name("openless-hotkey-bridge".into())
                     .spawn(move || hotkey_bridge_loop(inner_clone, rx))
                     .ok();
+                // Linux: 启动 fcitx5 插件信号监听作为热键源。
+                #[cfg(target_os = "linux")]
+                {
+                    let (qa_trigger, translation_trigger) = modifier_shortcut_triggers(&self.inner);
+                    let custom_key = custom_dictation_key_string(&self.inner);
+                    crate::linux_fcitx::start_dictation_signal_listener(
+                        fcitx_tx,
+                        fcitx_binding.clone(),
+                        qa_trigger,
+                        translation_trigger,
+                        custom_key,
+                    );
+                    if fcitx_binding.trigger == crate::types::HotkeyTrigger::Custom {
+                        sync_custom_dictation_to_plugin(&self.inner);
+                    } else {
+                        crate::linux_fcitx::sync_binding_to_plugin(&fcitx_binding);
+                    }
+                }
             }
             Err(e) => {
                 *self.inner.hotkey_status.lock() = HotkeyStatus {
@@ -733,6 +1247,15 @@ impl Coordinator {
         begin_session(&self.inner).await
     }
 
+    pub async fn start_dictation_with_translation(&self) -> Result<(), String> {
+        begin_session(&self.inner).await?;
+        self.inner
+            .translation_modifier_seen
+            .store(true, Ordering::SeqCst);
+        log::info!("[coord] android overlay translation dictation started");
+        Ok(())
+    }
+
     pub async fn stop_dictation(&self) -> Result<(), String> {
         if self.inner.state.lock().phase == SessionPhase::Starting {
             request_stop_during_starting(&self.inner, "manual stop");
@@ -741,8 +1264,201 @@ impl Coordinator {
         end_session(&self.inner).await
     }
 
+    pub async fn stop_dictation_with_translation(&self, translation: bool) -> Result<(), String> {
+        if translation {
+            mark_translation_modifier_seen(&self.inner);
+        }
+        self.stop_dictation().await
+    }
+
     pub fn cancel_dictation(&self) {
         cancel_session(&self.inner);
+    }
+
+    #[cfg(not(mobile))]
+    pub fn set_remote_no_insert(&self, no_insert: bool) {
+        self.inner
+            .remote_no_insert
+            .store(no_insert, Ordering::SeqCst);
+    }
+
+    #[cfg(not(mobile))]
+    pub async fn start_remote_dictation(&self) -> Result<(), String> {
+        begin_session(&self.inner).await
+    }
+
+    #[cfg(not(mobile))]
+    pub fn feed_remote_pcm(&self, pcm: &[u8]) {
+        let phase = self.inner.state.lock().phase;
+        if phase != SessionPhase::Listening && phase != SessionPhase::Starting {
+            return;
+        }
+        let sink = self.inner.remote_audio_sink.lock().clone();
+        if let Some(consumer) = sink {
+            consumer.consume_pcm_chunk(pcm);
+        }
+    }
+
+    #[cfg(not(mobile))]
+    pub async fn stop_remote_dictation(&self) -> Result<(), String> {
+        if self.inner.state.lock().phase == SessionPhase::Starting {
+            request_stop_during_starting(&self.inner, "remote stop");
+            return Ok(());
+        }
+        end_session(&self.inner).await
+    }
+
+    #[cfg(not(mobile))]
+    pub fn cancel_remote_dictation(&self) {
+        cancel_session(&self.inner);
+        *self.inner.remote_audio_sink.lock() = None;
+    }
+
+    #[cfg(not(mobile))]
+    pub fn remote_input_status(&self) -> crate::remote_server::RemoteInputStatus {
+        let prefs = self.inner.prefs.get();
+        let handle = self.inner.remote_server.lock();
+        let running = handle.is_some();
+        let port = handle
+            .as_ref()
+            .map(|h| h.bound_port)
+            .unwrap_or(prefs.remote_input_port);
+        let pin = self.inner.remote_pin.lock().clone().unwrap_or_default();
+        let urls = if running {
+            crate::remote_server::access_urls(port)
+        } else {
+            Vec::new()
+        };
+        crate::remote_server::RemoteInputStatus {
+            running,
+            port,
+            pin,
+            urls,
+        }
+    }
+
+    #[cfg(not(mobile))]
+    pub fn regenerate_remote_pin(self: &Arc<Self>) -> String {
+        let pin = crate::remote_server::generate_pin();
+        *self.inner.remote_pin.lock() = Some(pin.clone());
+        if let Some(app) = self.inner.app.lock().clone() {
+            crate::remote_server::save_pin(&app, &pin);
+        }
+        self.refresh_remote_server();
+        pin
+    }
+
+    #[cfg(not(mobile))]
+    pub fn set_remote_locale(&self, locale: String) {
+        const SUPPORTED: [&str; 5] = ["zh-CN", "zh-TW", "en", "ja", "ko"];
+        if SUPPORTED.contains(&locale.as_str()) {
+            *self.inner.remote_locale.lock() = locale;
+        }
+    }
+
+    #[cfg(not(mobile))]
+    pub fn remote_locale(&self) -> String {
+        self.inner.remote_locale.lock().clone()
+    }
+
+    #[cfg(not(mobile))]
+    pub fn refresh_remote_server(self: &Arc<Self>) {
+        let coord = Arc::clone(self);
+        let gen = self.inner.remote_refresh_gen.fetch_add(1, Ordering::SeqCst) + 1;
+        tauri::async_runtime::spawn(async move {
+            let _serial = coord.inner.remote_refresh_lock.lock().await;
+            if coord.inner.remote_refresh_gen.load(Ordering::SeqCst) != gen {
+                return;
+            }
+            let old = coord.inner.remote_server.lock().take();
+            if let Some(handle) = old {
+                handle.shutdown().await;
+            }
+            let prefs = coord.inner.prefs.get();
+            let app = coord.inner.app.lock().clone();
+            if !prefs.remote_input_enabled {
+                if let Some(app) = &app {
+                    let _ = app.emit(
+                        "remote-input:running",
+                        serde_json::json!({"running": false}),
+                    );
+                }
+                return;
+            }
+            let Some(app) = app else {
+                return;
+            };
+            let pin = {
+                let mut guard = coord.inner.remote_pin.lock();
+                if guard.is_none() {
+                    *guard = Some(crate::remote_server::load_or_create_pin(&app));
+                }
+                guard.clone().unwrap_or_default()
+            };
+            let port = prefs.remote_input_port;
+            match crate::remote_server::start(crate::remote_server::RemoteServerConfig {
+                port,
+                pin: pin.clone(),
+                coordinator: Arc::clone(&coord),
+                app: app.clone(),
+            })
+            .await
+            {
+                Ok(handle) => {
+                    let urls = crate::remote_server::access_urls(port);
+                    *coord.inner.remote_server.lock() = Some(handle);
+                    let _ = app.emit(
+                        "remote-input:running",
+                        serde_json::json!({"running": true, "port": port, "urls": urls, "pin": pin}),
+                    );
+                    log::info!("[remote-input] server started on port {port}");
+                }
+                Err(e) => {
+                    let _ = app.emit(
+                        "remote-input:error",
+                        serde_json::json!({"reason": e, "port": port}),
+                    );
+                    log::error!("[remote-input] server start failed: {e}");
+                }
+            }
+        });
+    }
+
+    pub fn switch_to_previous_style_pack(&self) {
+        switch_to_previous_style(&self.inner);
+    }
+
+    pub async fn open_qa_from_overlay(&self) -> Result<(), String> {
+        log::info!("[coord] overlay QA open requested");
+        open_qa_panel(&self.inner);
+        begin_qa_session(&self.inner).await
+    }
+
+    pub async fn finalize_qa_from_overlay(&self) -> Result<(), String> {
+        log::info!("[coord] overlay QA finalize requested");
+        finalize_dictation_as_qa_question(&self.inner).await
+    }
+
+    /// 返回当前听写阶段（read-only 快照），供 CLI 入口在 dispatch toggle 时决策。
+    /// 与原热键边沿走的 `handle_pressed` 分支完全相同的判定逻辑：Idle → start，
+    /// Listening → stop。可用于桌面快捷键 → CLI 转发的备用触发路径。
+    pub fn dictation_phase_for_cli(&self) -> SessionPhase {
+        self.inner.state.lock().phase
+    }
+
+    /// CLI 入口的 QA toggle：直接复用 modifier-only QA 热键边沿的处理函数。
+    /// 与 `handle_qa_hotkey_pressed` 同语义 — Idle → 开浮窗 / Recording → 收尾 /
+    /// Processing → 忽略。桌面快捷键 → CLI 转发的备用进入点。
+    pub async fn cli_toggle_qa_panel(&self) {
+        handle_qa_hotkey_pressed(&self.inner).await;
+    }
+
+    pub async fn qa_toggle_recording(&self) {
+        handle_qa_option_edge(&self.inner).await;
+    }
+
+    pub async fn qa_submit_text(&self, text: String) -> Result<(), String> {
+        submit_qa_text_question(&self.inner, text).await
     }
 
     pub fn set_shortcut_recording_active(&self, active: bool) {
@@ -777,10 +1493,35 @@ impl Coordinator {
     pub async fn repolish(&self, raw_text: String, mode: PolishMode) -> Result<String, String> {
         let hotwords = enabled_phrases(&self.inner);
         let prefs = self.inner.prefs.get();
+        let pack = self
+            .inner
+            .style_packs
+            .get_or_default_active(&prefs.active_style_pack_id)
+            .map_err(|e| e.to_string())?;
+        let style_system_prompt = pack.prompt.clone();
         let working_languages = prefs.working_languages;
         let chinese_script_preference = prefs.chinese_script_preference;
         let output_language_preference = prefs.output_language_preference;
         let llm_thinking_enabled = prefs.llm_thinking_enabled;
+        let effective_mode = pack.base_mode;
+        log::info!(
+            "[style-pack] repolish dispatch active_pack={} kind={:?} effective_mode={:?} legacy_mode={:?} raw_chars={} prompt_chars={} hotwords={} thinking={}",
+            pack.id,
+            pack.kind,
+            effective_mode,
+            mode,
+            raw_text.chars().count(),
+            style_system_prompt.chars().count(),
+            hotwords.len(),
+            llm_thinking_enabled
+        );
+        if effective_mode == PolishMode::Raw && !raw_style_pack_uses_llm(&pack) {
+            log::info!(
+                "[style-pack] repolish bypass llm active_pack={} reason=default_builtin_raw",
+                pack.id
+            );
+            return Ok(raw_text);
+        }
         // repolish 是历史记录里手动重新润色，不再绑定原 session 的前台 app；
         // 当下用户调起的 app 才是相关上下文（如果可拿）。
         let front_app = capture_frontmost_app();
@@ -788,8 +1529,9 @@ impl Coordinator {
         // 用户改的就是这一条本身，不要把别的会话拿进来。所以始终走单轮路径。
         polish_text(
             &raw_text,
-            mode,
+            effective_mode,
             &hotwords,
+            &style_system_prompt,
             &working_languages,
             chinese_script_preference,
             output_language_preference,
@@ -800,809 +1542,127 @@ impl Coordinator {
         .await
         .map_err(|e| e.to_string())
     }
-}
 
-// ─────────────────────────── hotkey bridging ───────────────────────────
-
-fn hotkey_supervisor_loop(inner: Arc<Inner>) {
-    let mut attempts: u32 = 0;
-    let capability = HotkeyMonitor::capability();
-    loop {
-        if inner.shutdown.load(Ordering::SeqCst) {
-            return;
-        }
-        let prefs = inner.prefs.get();
-
-        if inner.hotkey.lock().is_some() {
-            return;
-        }
-        *inner.hotkey_status.lock() = HotkeyStatus {
-            adapter: capability.adapter,
-            state: HotkeyStatusState::Starting,
-            message: Some(format!("正在安装全局快捷键监听（第 {} 次）", attempts + 1)),
-            last_error: None,
+    pub async fn retranscribe_pcm(&self, pcm: Vec<u8>) -> Result<String, String> {
+        let inner = &self.inner;
+        let active_asr = CredentialsVault::get_active_asr();
+        let start = build_qa_asr_start(inner, &active_asr).await?;
+        start.open_streaming_session().await?;
+        let consumer = start.recorder_consumer();
+        consumer.consume_pcm_chunk(&pcm);
+        let timeout = std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS);
+        let raw = match start.active_asr() {
+            ActiveAsr::Volcengine(asr) => {
+                asr.send_last_frame().await.map_err(|e| e.to_string())?;
+                tokio::time::timeout(timeout, asr.await_final_result())
+                    .await
+                    .map_err(|_| "重新转录超时".to_string())?
+                    .map_err(|e| e.to_string())?
+            }
+            ActiveAsr::Bailian(asr) => {
+                asr.send_last_frame().await.map_err(|e| e.to_string())?;
+                tokio::time::timeout(timeout, asr.await_final_result())
+                    .await
+                    .map_err(|_| "重新转录超时".to_string())?
+                    .map_err(|e| e.to_string())?
+            }
+            ActiveAsr::Whisper(w) => tokio::time::timeout(timeout, w.transcribe())
+                .await
+                .map_err(|_| "重新转录超时".to_string())?
+                .map_err(|e| e.to_string())?,
+            ActiveAsr::Mimo(m) => tokio::time::timeout(timeout, m.transcribe())
+                .await
+                .map_err(|_| "重新转录超时".to_string())?
+                .map_err(|e| e.to_string())?,
+            #[cfg(target_os = "windows")]
+            ActiveAsr::FoundryLocalWhisper(local) => local
+                .transcribe(foundry_audio_transcribe_timeout_duration())
+                .await
+                .map_err(|e| e.to_string())?,
+            #[cfg(target_os = "windows")]
+            ActiveAsr::SherpaOnnxLocal(local) => local
+                .transcribe(sherpa_audio_transcribe_timeout_duration())
+                .await
+                .map_err(|e| e.to_string())?,
+            #[cfg(target_os = "macos")]
+            ActiveAsr::Local(local) => {
+                let dur =
+                    local_qwen_transcribe_timeout((local.buffer_duration_ms() as f64) / 1000.0);
+                inner.local_asr_cache.touch();
+                let out = tokio::time::timeout(dur, local.transcribe())
+                    .await
+                    .map_err(|_| "重新转录超时".to_string())?
+                    .map_err(|e| e.to_string())?;
+                schedule_local_asr_release(inner);
+                out
+            }
+            #[cfg(target_os = "macos")]
+            ActiveAsr::AppleSpeech(local) => tokio::time::timeout(timeout, local.transcribe())
+                .await
+                .map_err(|_| "重新转录超时".to_string())?
+                .map_err(|e| e.to_string())?,
         };
-        let (tx, rx) = mpsc::channel::<HotkeyEvent>();
-        let trigger = crate::shortcut_binding::legacy_modifier_trigger(&prefs.dictation_hotkey)
-            .unwrap_or(crate::types::HotkeyTrigger::Custom);
-        let binding = crate::types::HotkeyBinding {
-            trigger,
-            mode: prefs.hotkey.mode,
-            keys: None,
-        };
-        match HotkeyMonitor::start(binding, tx) {
-            Ok(monitor) => {
-                let adapter = monitor.kind();
-                *inner.hotkey.lock() = Some(monitor);
-                if let Some(monitor) = inner.hotkey.lock().as_ref() {
-                    let (qa_trigger, translation_trigger) = modifier_shortcut_triggers(&inner);
-                    monitor.update_modifier_shortcuts(qa_trigger, translation_trigger);
-                }
-                *inner.hotkey_status.lock() = HotkeyStatus {
-                    adapter,
-                    state: HotkeyStatusState::Installed,
-                    message: Some(format!("{} 已安装", adapter.display_name())),
-                    last_error: None,
-                };
-                log::info!(
-                    "[coord] hotkey listener installed (after {} attempt(s))",
-                    attempts + 1
-                );
-                let inner_clone = Arc::clone(&inner);
-                std::thread::Builder::new()
-                    .name("openless-hotkey-bridge".into())
-                    .spawn(move || hotkey_bridge_loop(inner_clone, rx))
-                    .ok();
-                return;
-            }
-            Err(e) => {
-                attempts += 1;
-                let error_message = e.message.clone();
-                *inner.hotkey_status.lock() = HotkeyStatus {
-                    adapter: capability.adapter,
-                    state: HotkeyStatusState::Failed,
-                    message: Some(error_message.clone()),
-                    last_error: Some(e),
-                };
-                if attempts <= 3 || attempts % 10 == 0 {
-                    log::warn!(
-                        "[coord] hotkey listener attempt #{attempts} failed: {}; retrying in 3s",
-                        error_message
-                    );
-                }
-                std::thread::sleep(std::time::Duration::from_secs(3));
-            }
-        }
+        Ok(raw.text)
     }
-}
 
-// ─────────────────────────── QA hotkey supervisor ───────────────────────────
-
-fn qa_hotkey_supervisor_loop(inner: Arc<Inner>) {
-    let mut attempts: u32 = 0;
-    loop {
-        if inner.shutdown.load(Ordering::SeqCst) {
-            return;
-        }
-        // 用户已经把 QA 关掉就睡着等 prefs 改动；改动通过 update_qa_hotkey_binding 唤醒。
-        let binding = match inner.prefs.get().qa_hotkey.clone() {
-            Some(b) => b,
-            None => {
-                inner.qa_hotkey.lock().take();
-                std::thread::sleep(std::time::Duration::from_secs(5));
-                continue;
-            }
-        };
-        if crate::shortcut_binding::legacy_modifier_trigger(&binding).is_some() {
-            inner.qa_hotkey.lock().take();
-            if let Some(monitor) = inner.hotkey.lock().as_ref() {
-                let (qa_trigger, translation_trigger) = modifier_shortcut_triggers(&inner);
-                monitor.update_modifier_shortcuts(qa_trigger, translation_trigger);
-            }
-            std::thread::sleep(std::time::Duration::from_secs(5));
-            continue;
-        }
-
-        if inner.qa_hotkey.lock().is_some() {
-            // 已注册成功 → 不重复装；睡 5s 复查（ binding 变化由 update 路径手动触发 ）。
-            std::thread::sleep(std::time::Duration::from_secs(5));
-            continue;
-        }
-
-        // global-hotkey crate 在 macOS 走 Carbon RegisterEventHotKey，要求 manager
-        // 在主线程构造，否则 register() 看起来 Ok 但事件根本不会派发——这是 issue #118
-        // PR #119 第一版漏掉的关键步骤，导致用户按了 hotkey 完全无反应。这里通过
-        // run_on_main_thread 把 QaHotkeyMonitor::start 跳到主线程跑，结果再回 channel。
-        let app = inner.app.lock().clone();
-        let app = match app {
-            Some(a) => a,
-            None => {
-                // 启动期 AppHandle 还没 bind，再等。
-                std::thread::sleep(std::time::Duration::from_secs(1));
-                continue;
-            }
-        };
-
-        let (tx, rx) = mpsc::channel::<QaHotkeyEvent>();
-        let (init_tx, init_rx) = mpsc::sync_channel::<Result<QaHotkeyMonitor, QaHotkeyError>>(1);
-        let binding_for_main = binding.clone();
-        let _ = app.run_on_main_thread(move || {
-            let result = QaHotkeyMonitor::start(binding_for_main, tx);
-            let _ = init_tx.send(result);
-        });
-
-        // run_on_main_thread 是 fire-and-forget；等主线程跑完结果回来。给 5s 上限避免
-        // 主线程繁忙时 supervisor 永久阻塞。
-        let init_result = match init_rx.recv_timeout(std::time::Duration::from_secs(5)) {
-            Ok(r) => r,
-            Err(_) => {
-                attempts += 1;
-                if attempts <= 3 || attempts % 10 == 0 {
-                    log::warn!(
-                        "[coord] QA hotkey 第 {attempts} 次注册超时（主线程未回执）；3s 后重试"
-                    );
-                }
-                std::thread::sleep(std::time::Duration::from_secs(3));
-                continue;
-            }
-        };
-
-        match init_result {
-            Ok(monitor) => {
-                *inner.qa_hotkey.lock() = Some(monitor);
-                log::info!(
-                    "[coord] QA hotkey listener installed on main thread (after {} attempt(s))",
-                    attempts + 1
-                );
-                let inner_clone = Arc::clone(&inner);
-                std::thread::Builder::new()
-                    .name("openless-qa-hotkey-bridge".into())
-                    .spawn(move || qa_hotkey_bridge_loop(inner_clone, rx))
-                    .ok();
-                attempts = 0;
-            }
-            Err(e) => {
-                attempts += 1;
-                if attempts <= 3 || attempts % 10 == 0 {
-                    log::warn!("[coord] QA hotkey 第 {attempts} 次注册失败: {e}; 3s 后重试");
-                }
-                std::thread::sleep(std::time::Duration::from_secs(3));
-            }
-        }
-    }
-}
-
-fn qa_hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<QaHotkeyEvent>) {
-    while let Ok(evt) = rx.recv() {
-        if inner.shortcut_recording_active.load(Ordering::SeqCst) {
-            continue;
-        }
-        let inner_cloned = Arc::clone(&inner);
-        match evt {
-            QaHotkeyEvent::Pressed => {
-                async_runtime::spawn(async move { handle_qa_hotkey_pressed(&inner_cloned).await });
-            }
-        }
-    }
-}
-
-// ─────────────────────────── combo hotkey supervisor ───────────────────────────
-
-fn combo_hotkey_supervisor_loop(inner: Arc<Inner>) {
-    let mut attempts: u32 = 0;
-    loop {
-        if inner.shutdown.load(Ordering::SeqCst) {
-            return;
-        }
-        // 读当前 prefs
-        let prefs = inner.prefs.get();
-        if crate::shortcut_binding::legacy_modifier_trigger(&prefs.dictation_hotkey).is_some() {
-            // 不是 Custom → 睡着等 prefs 改动
-            take_combo_hotkey_on_main_thread(&inner);
-            std::thread::sleep(std::time::Duration::from_secs(5));
-            continue;
-        }
-
-        let binding = prefs.dictation_hotkey.clone();
-        if is_unconfigured_shortcut(&binding) {
-            take_combo_hotkey_on_main_thread(&inner);
-            std::thread::sleep(std::time::Duration::from_secs(5));
-            continue;
-        }
-
-        if inner.combo_hotkey.lock().is_some() {
-            std::thread::sleep(std::time::Duration::from_secs(5));
-            continue;
-        }
-
-        let app = inner.app.lock().clone();
-        let app = match app {
-            Some(a) => a,
-            None => {
-                std::thread::sleep(std::time::Duration::from_secs(1));
-                continue;
-            }
-        };
-
-        let (tx, rx) = mpsc::channel::<ComboHotkeyEvent>();
-        let (init_tx, init_rx) =
-            mpsc::sync_channel::<Result<ComboHotkeyMonitor, ComboHotkeyError>>(1);
-        let binding_for_main = binding.clone();
-        let _ = app.run_on_main_thread(move || {
-            let result = ComboHotkeyMonitor::start(binding_for_main, tx);
-            let _ = init_tx.send(result);
-        });
-
-        let init_result = match init_rx.recv_timeout(std::time::Duration::from_secs(5)) {
-            Ok(r) => r,
-            Err(_) => {
-                attempts += 1;
-                if attempts <= 3 || attempts % 10 == 0 {
-                    log::warn!(
-                        "[coord] combo hotkey 第 {attempts} 次注册超时（主线程未回执）；3s 后重试"
-                    );
-                }
-                std::thread::sleep(std::time::Duration::from_secs(3));
-                continue;
-            }
-        };
-
-        match init_result {
-            Ok(monitor) => {
-                *inner.combo_hotkey.lock() = Some(monitor);
-                log::info!(
-                    "[coord] combo hotkey listener installed on main thread (after {} attempt(s))",
-                    attempts + 1
-                );
-                let inner_clone = Arc::clone(&inner);
-                std::thread::Builder::new()
-                    .name("openless-combo-hotkey-bridge".into())
-                    .spawn(move || combo_hotkey_bridge_loop(inner_clone, rx))
-                    .ok();
-                attempts = 0;
-            }
-            Err(e) => {
-                attempts += 1;
-                if attempts <= 3 || attempts % 10 == 0 {
-                    log::warn!("[coord] combo hotkey 第 {attempts} 次注册失败: {e}; 3s 后重试");
-                }
-                std::thread::sleep(std::time::Duration::from_secs(3));
-            }
-        }
-    }
-}
-
-fn combo_hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<ComboHotkeyEvent>) {
-    while let Ok(evt) = rx.recv() {
-        if inner.shortcut_recording_active.load(Ordering::SeqCst) {
-            continue;
-        }
-        let inner_cloned = Arc::clone(&inner);
-        match evt {
-            ComboHotkeyEvent::Pressed => {
-                async_runtime::spawn(async move { handle_pressed_edge(&inner_cloned).await });
-            }
-            ComboHotkeyEvent::Released => {
-                async_runtime::spawn(async move { handle_released_edge(&inner_cloned).await });
-            }
-        }
-    }
-}
-
-fn translation_hotkey_supervisor_loop(inner: Arc<Inner>) {
-    let mut attempts: u32 = 0;
-    loop {
-        if inner.shutdown.load(Ordering::SeqCst) {
-            return;
-        }
-        let binding = inner.prefs.get().translation_hotkey;
-        if is_builtin_translation_shift(&binding)
-            || crate::shortcut_binding::legacy_modifier_trigger(&binding).is_some()
-        {
-            take_translation_hotkey_on_main_thread(&inner);
-            if let Some(monitor) = inner.hotkey.lock().as_ref() {
-                let (qa_trigger, translation_trigger) = modifier_shortcut_triggers(&inner);
-                monitor.update_modifier_shortcuts(qa_trigger, translation_trigger);
-            }
-            std::thread::sleep(std::time::Duration::from_secs(5));
-            continue;
-        }
-
-        if inner.translation_hotkey.lock().is_some() {
-            std::thread::sleep(std::time::Duration::from_secs(5));
-            continue;
-        }
-
-        let app = match inner.app.lock().clone() {
-            Some(a) => a,
-            None => {
-                std::thread::sleep(std::time::Duration::from_secs(1));
-                continue;
-            }
-        };
-
-        let (tx, rx) = mpsc::channel::<ComboHotkeyEvent>();
-        let (init_tx, init_rx) =
-            mpsc::sync_channel::<Result<ComboHotkeyMonitor, ComboHotkeyError>>(1);
-        let binding_for_main = binding.clone();
-        let _ = app.run_on_main_thread(move || {
-            let result = ComboHotkeyMonitor::start(binding_for_main, tx);
-            let _ = init_tx.send(result);
-        });
-
-        let init_result = match init_rx.recv_timeout(std::time::Duration::from_secs(5)) {
-            Ok(r) => r,
-            Err(_) => {
-                attempts += 1;
-                std::thread::sleep(std::time::Duration::from_secs(3));
-                continue;
-            }
-        };
-
-        match init_result {
-            Ok(monitor) => {
-                *inner.translation_hotkey.lock() = Some(monitor);
-                let inner_clone = Arc::clone(&inner);
-                std::thread::Builder::new()
-                    .name("openless-translation-hotkey-bridge".into())
-                    .spawn(move || translation_hotkey_bridge_loop(inner_clone, rx))
-                    .ok();
-                attempts = 0;
-            }
-            Err(e) => {
-                attempts += 1;
-                if attempts <= 3 || attempts % 10 == 0 {
-                    log::warn!(
-                        "[coord] translation hotkey 第 {attempts} 次注册失败: {e}; 3s 后重试"
-                    );
-                }
-                std::thread::sleep(std::time::Duration::from_secs(3));
-            }
-        }
-    }
-}
-
-fn update_translation_hotkey_on_main_thread(
-    inner: Arc<Inner>,
-    binding: crate::types::ShortcutBinding,
-) -> Result<(), ComboHotkeyError> {
-    if let Some(monitor) = inner.translation_hotkey.lock().as_ref() {
-        return monitor.update_binding(binding);
-    }
-    let (tx, rx) = mpsc::channel::<ComboHotkeyEvent>();
-    let monitor = ComboHotkeyMonitor::start(binding, tx)?;
-    *inner.translation_hotkey.lock() = Some(monitor);
-    let bridge_inner = Arc::clone(&inner);
-    std::thread::Builder::new()
-        .name("openless-translation-hotkey-bridge".into())
-        .spawn(move || translation_hotkey_bridge_loop(bridge_inner, rx))
-        .map_err(|e| ComboHotkeyError::RegisterFailed(format!("spawn bridge thread: {e}")))?;
-    Ok(())
-}
-
-fn translation_hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<ComboHotkeyEvent>) {
-    while let Ok(evt) = rx.recv() {
-        if inner.shortcut_recording_active.load(Ordering::SeqCst) {
-            continue;
-        }
-        if matches!(evt, ComboHotkeyEvent::Pressed) {
-            mark_translation_modifier_seen(&inner);
-        }
-    }
-}
-
-fn action_hotkey_supervisor_loop(inner: Arc<Inner>, kind: ActionHotkeyKind) {
-    let mut attempts: u32 = 0;
-    loop {
-        if inner.shutdown.load(Ordering::SeqCst) {
-            return;
-        }
-        let binding = action_hotkey_binding(&inner, kind);
-        if is_modifier_only_shortcut(&binding) {
-            take_action_hotkey_on_main_thread(&inner, kind);
-            std::thread::sleep(std::time::Duration::from_secs(5));
-            continue;
-        }
-
-        if action_hotkey_slot(&inner, kind).lock().is_some() {
-            std::thread::sleep(std::time::Duration::from_secs(5));
-            continue;
-        }
-
-        let app = match inner.app.lock().clone() {
-            Some(a) => a,
-            None => {
-                std::thread::sleep(std::time::Duration::from_secs(1));
-                continue;
-            }
-        };
-
-        let (tx, rx) = mpsc::channel::<ComboHotkeyEvent>();
-        let (init_tx, init_rx) =
-            mpsc::sync_channel::<Result<ComboHotkeyMonitor, ComboHotkeyError>>(1);
-        let binding_for_main = binding.clone();
-        let _ = app.run_on_main_thread(move || {
-            let result = ComboHotkeyMonitor::start(binding_for_main, tx);
-            let _ = init_tx.send(result);
-        });
-
-        let init_result = match init_rx.recv_timeout(std::time::Duration::from_secs(5)) {
-            Ok(r) => r,
-            Err(_) => {
-                attempts += 1;
-                if attempts <= 3 || attempts % 10 == 0 {
-                    log::warn!(
-                        "[coord] action hotkey {kind:?} 第 {attempts} 次注册超时；3s 后重试"
-                    );
-                }
-                std::thread::sleep(std::time::Duration::from_secs(3));
-                continue;
-            }
-        };
-
-        match init_result {
-            Ok(monitor) => {
-                *action_hotkey_slot(&inner, kind).lock() = Some(monitor);
-                log::info!(
-                    "[coord] action hotkey {kind:?} listener installed after {} attempt(s)",
-                    attempts + 1
-                );
-                let inner_clone = Arc::clone(&inner);
-                std::thread::Builder::new()
-                    .name(action_hotkey_bridge_thread_name(kind).into())
-                    .spawn(move || action_hotkey_bridge_loop(inner_clone, rx, kind))
-                    .ok();
-                attempts = 0;
-            }
-            Err(e) => {
-                attempts += 1;
-                if attempts <= 3 || attempts % 10 == 0 {
-                    log::warn!(
-                        "[coord] action hotkey {kind:?} 第 {attempts} 次注册失败: {e}; 3s 后重试"
-                    );
-                }
-                std::thread::sleep(std::time::Duration::from_secs(3));
-            }
-        }
-    }
-}
-
-fn action_hotkey_bridge_loop(
-    inner: Arc<Inner>,
-    rx: mpsc::Receiver<ComboHotkeyEvent>,
-    kind: ActionHotkeyKind,
-) {
-    while let Ok(evt) = rx.recv() {
-        if inner.shortcut_recording_active.load(Ordering::SeqCst) {
-            continue;
-        }
-        if matches!(evt, ComboHotkeyEvent::Pressed) {
-            handle_action_hotkey_pressed(&inner, kind);
-        }
-    }
-}
-
-fn handle_action_hotkey_pressed(inner: &Arc<Inner>, kind: ActionHotkeyKind) {
-    match kind {
-        ActionHotkeyKind::SwitchStyle => switch_to_previous_style(inner),
-        ActionHotkeyKind::OpenApp => {
-            if let Some(app) = inner.app.lock().clone() {
-                let app_for_main = app.clone();
-                let _ = app.run_on_main_thread(move || {
-                    crate::show_main_window(&app_for_main);
-                });
-            }
-        }
-    }
-}
-
-fn switch_to_previous_style(inner: &Arc<Inner>) {
-    let mut prefs = inner.prefs.get();
-    let order = [
-        PolishMode::Raw,
-        PolishMode::Light,
-        PolishMode::Structured,
-        PolishMode::Formal,
-    ];
-    let enabled: Vec<PolishMode> = order
-        .into_iter()
-        .filter(|mode| prefs.enabled_modes.contains(mode))
-        .collect();
-    if enabled.len() <= 1 {
-        log::info!("[coord] switch style hotkey ignored: enabled style count <= 1");
-        return;
-    }
-    let current_index = enabled
-        .iter()
-        .position(|mode| *mode == prefs.default_mode)
-        .unwrap_or(0);
-    let next_index = if current_index == 0 {
-        enabled.len() - 1
-    } else {
-        current_index - 1
-    };
-    prefs.default_mode = enabled[next_index];
-    if let Err(e) = inner.prefs.set(prefs.clone()) {
-        log::warn!("[coord] switch style hotkey 保存失败: {e}");
-    } else {
-        log::info!(
-            "[coord] switch style hotkey changed default mode to {}",
-            prefs.default_mode.display_name()
+    pub fn preview_style_pack_runtime(
+        &self,
+        style_pack: &crate::types::StylePack,
+    ) -> crate::types::StylePackRuntimeDiagnostics {
+        let prefs = self.inner.prefs.get();
+        let hotwords = enabled_phrases(&self.inner);
+        let single_turn = crate::polish::assemble_polish_system_prompt(
+            &style_pack.prompt,
+            &hotwords,
+            &prefs.working_languages,
+            prefs.chinese_script_preference,
+            prefs.output_language_preference,
+            None,
+            false,
         );
-    }
-}
-
-fn take_combo_hotkey_on_main_thread(inner: &Arc<Inner>) {
-    let app = inner.app.lock().clone();
-    if let Some(app) = app {
-        let inner = Arc::clone(inner);
-        let _ = app.run_on_main_thread(move || {
-            inner.combo_hotkey.lock().take();
-        });
-    } else {
-        inner.combo_hotkey.lock().take();
-    }
-}
-
-fn take_translation_hotkey_on_main_thread(inner: &Arc<Inner>) {
-    let app = inner.app.lock().clone();
-    if let Some(app) = app {
-        let inner = Arc::clone(inner);
-        let _ = app.run_on_main_thread(move || {
-            inner.translation_hotkey.lock().take();
-        });
-    } else {
-        inner.translation_hotkey.lock().take();
-    }
-}
-
-fn take_action_hotkey_on_main_thread(inner: &Arc<Inner>, kind: ActionHotkeyKind) {
-    let app = inner.app.lock().clone();
-    if let Some(app) = app {
-        let inner = Arc::clone(inner);
-        let _ = app.run_on_main_thread(move || {
-            action_hotkey_slot(&inner, kind).lock().take();
-        });
-    } else {
-        action_hotkey_slot(inner, kind).lock().take();
-    }
-}
-
-fn action_hotkey_slot(
-    inner: &Arc<Inner>,
-    kind: ActionHotkeyKind,
-) -> &Mutex<Option<ComboHotkeyMonitor>> {
-    match kind {
-        ActionHotkeyKind::SwitchStyle => &inner.switch_style_hotkey,
-        ActionHotkeyKind::OpenApp => &inner.open_app_hotkey,
-    }
-}
-
-fn action_hotkey_binding(
-    inner: &Arc<Inner>,
-    kind: ActionHotkeyKind,
-) -> crate::types::ShortcutBinding {
-    let prefs = inner.prefs.get();
-    match kind {
-        ActionHotkeyKind::SwitchStyle => prefs.switch_style_hotkey,
-        ActionHotkeyKind::OpenApp => prefs.open_app_hotkey,
-    }
-}
-
-fn is_modifier_only_shortcut(binding: &crate::types::ShortcutBinding) -> bool {
-    binding.modifiers.is_empty()
-        && (binding.primary.eq_ignore_ascii_case("shift")
-            || crate::shortcut_binding::legacy_modifier_trigger(binding).is_some())
-}
-
-fn is_unconfigured_shortcut(binding: &crate::types::ShortcutBinding) -> bool {
-    binding.primary.trim().is_empty()
-}
-
-fn action_hotkey_bridge_thread_name(kind: ActionHotkeyKind) -> &'static str {
-    match kind {
-        ActionHotkeyKind::SwitchStyle => "openless-switch-style-hotkey-bridge",
-        ActionHotkeyKind::OpenApp => "openless-open-app-hotkey-bridge",
-    }
-}
-
-fn is_builtin_translation_shift(binding: &crate::types::ShortcutBinding) -> bool {
-    binding.modifiers.is_empty() && binding.primary.eq_ignore_ascii_case("shift")
-}
-
-fn modifier_shortcut_triggers(
-    inner: &Arc<Inner>,
-) -> (
-    Option<crate::types::HotkeyTrigger>,
-    Option<crate::types::HotkeyTrigger>,
-) {
-    let prefs = inner.prefs.get();
-    let qa_trigger = prefs
-        .qa_hotkey
-        .as_ref()
-        .and_then(crate::shortcut_binding::legacy_modifier_trigger);
-    let translation_trigger = if is_builtin_translation_shift(&prefs.translation_hotkey) {
-        None
-    } else {
-        crate::shortcut_binding::legacy_modifier_trigger(&prefs.translation_hotkey)
-    };
-    (qa_trigger, translation_trigger)
-}
-
-fn mark_translation_modifier_seen(inner: &Arc<Inner>) {
-    let phase = inner.state.lock().phase;
-    if matches!(phase, SessionPhase::Starting | SessionPhase::Listening) {
-        inner
-            .translation_modifier_seen
-            .store(true, Ordering::SeqCst);
-        log::info!("[coord] translation modifier seen during {phase:?}");
-    }
-}
-
-fn hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<HotkeyEvent>) {
-    while let Ok(evt) = rx.recv() {
-        if inner.shortcut_recording_active.load(Ordering::SeqCst) {
-            continue;
-        }
-        let inner_cloned = Arc::clone(&inner);
-        match evt {
-            HotkeyEvent::Pressed => {
-                async_runtime::spawn(async move { handle_pressed_edge(&inner_cloned).await });
-            }
-            HotkeyEvent::Released => {
-                async_runtime::spawn(async move { handle_released_edge(&inner_cloned).await });
-            }
-            HotkeyEvent::Cancelled => {
-                cancel_session(&inner_cloned);
-            }
-            HotkeyEvent::TranslationModifierPressed => {
-                let translation_hotkey = inner_cloned.prefs.get().translation_hotkey;
-                if is_builtin_translation_shift(&translation_hotkey)
-                    || crate::shortcut_binding::legacy_modifier_trigger(&translation_hotkey)
-                        .is_some()
-                {
-                    mark_translation_modifier_seen(&inner_cloned);
-                }
-            }
-            HotkeyEvent::QaShortcutPressed => {
-                async_runtime::spawn(async move { handle_qa_hotkey_pressed(&inner_cloned).await });
-            }
+        let multi_turn = crate::polish::assemble_polish_system_prompt(
+            &style_pack.prompt,
+            &hotwords,
+            &prefs.working_languages,
+            prefs.chinese_script_preference,
+            prefs.output_language_preference,
+            None,
+            true,
+        );
+        crate::types::StylePackRuntimeDiagnostics {
+            pack_id: style_pack.id.clone(),
+            pack_name: style_pack.name.clone(),
+            pack_prompt: style_pack.prompt.clone(),
+            pack_prompt_chars: style_pack.prompt.chars().count(),
+            context_premise: single_turn.context_premise.clone(),
+            context_premise_chars: single_turn.context_premise.chars().count(),
+            hotword_block: single_turn.hotword_block.clone(),
+            hotword_block_chars: single_turn.hotword_block.chars().count(),
+            history_instruction: multi_turn.history_instruction.clone(),
+            history_instruction_chars: multi_turn.history_instruction.chars().count(),
+            single_turn_prompt: single_turn.effective_system_prompt.clone(),
+            single_turn_prompt_chars: single_turn.effective_system_prompt.chars().count(),
+            multi_turn_prompt: multi_turn.effective_system_prompt.clone(),
+            multi_turn_prompt_chars: multi_turn.effective_system_prompt.chars().count(),
+            working_languages: prefs.working_languages,
+            hotwords,
+            context_window_minutes: prefs.polish_context_window_minutes,
+            includes_context_premise: single_turn.includes_context_premise,
+            includes_hotword_block: single_turn.includes_hotword_block,
+            includes_history_instruction: multi_turn.includes_history_instruction,
+            preview_omits_front_app: true,
         }
     }
 }
 
-fn reset_shortcut_held_state(inner: &Arc<Inner>) {
-    inner.hotkey_trigger_held.store(false, Ordering::SeqCst);
-    if let Some(monitor) = inner.hotkey.lock().as_ref() {
-        monitor.reset_held_state();
-    }
-    let prefs = inner.prefs.get();
-    if let Some(binding) = prefs.qa_hotkey.as_ref() {
-        if crate::shortcut_binding::legacy_modifier_trigger(binding).is_none() {
-            if let Some(monitor) = inner.qa_hotkey.lock().as_ref() {
-                if let Err(e) = monitor.update_binding(binding.clone()) {
-                    log::warn!("[coord] reset QA hotkey latch failed: {e}");
-                }
-            }
-        }
-    }
-    if !is_builtin_translation_shift(&prefs.translation_hotkey)
-        && crate::shortcut_binding::legacy_modifier_trigger(&prefs.translation_hotkey).is_none()
-    {
-        if let Some(monitor) = inner.translation_hotkey.lock().as_ref() {
-            if let Err(e) = monitor.update_binding(prefs.translation_hotkey.clone()) {
-                log::warn!("[coord] reset translation hotkey latch failed: {e}");
-            }
-        }
-    }
-    if !is_modifier_only_shortcut(&prefs.switch_style_hotkey) {
-        if let Some(monitor) = inner.switch_style_hotkey.lock().as_ref() {
-            if let Err(e) = monitor.update_binding(prefs.switch_style_hotkey.clone()) {
-                log::warn!("[coord] reset switch-style hotkey latch failed: {e}");
-            }
-        }
-    }
-    if !is_modifier_only_shortcut(&prefs.open_app_hotkey) {
-        if let Some(monitor) = inner.open_app_hotkey.lock().as_ref() {
-            if let Err(e) = monitor.update_binding(prefs.open_app_hotkey.clone()) {
-                log::warn!("[coord] reset open-app hotkey latch failed: {e}");
-            }
-        }
-    }
+fn raw_style_pack_uses_llm(pack: &crate::types::StylePack) -> bool {
+    !(pack.kind == crate::types::StylePackKind::Builtin
+        && pack.id == crate::types::BUILTIN_STYLE_PACK_RAW_ID
+        && pack.prompt == crate::types::StyleSystemPrompts::default().raw)
 }
 
-async fn handle_window_hotkey_event(
-    inner: &Arc<Inner>,
-    event_type: String,
-    key: String,
-    code: String,
-    repeat: bool,
-) -> Result<(), String> {
-    if inner.shortcut_recording_active.load(Ordering::SeqCst) {
-        return Ok(());
-    }
-    if event_type == "keydown" && key == "Escape" {
-        // Esc 路由（issue #161）：QA 浮窗可见时优先取消 QA（不动 dictation）；
-        // 否则走 dictation 取消通路。之前无条件 cancel_session 导致 QA 浮窗
-        // 按 Esc 杀的是 dictation 而 QA 流还在烧 token。
-        let qa_active = {
-            let st = inner.qa_state.lock();
-            st.panel_visible || st.phase != QaPhase::Idle
-        };
-        if qa_active {
-            close_qa_panel(inner);
-        } else {
-            cancel_session(inner);
-        }
-        return Ok(());
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = (inner, event_type, key, code, repeat);
-        Ok(())
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        if !window_hotkey_fallback_enabled() {
-            if event_type == "keydown" && !repeat {
-                log::info!(
-                    "[window-hotkey] ignored because Windows lifecycle owner is the low-level hook"
-                );
-            }
-            return Ok(());
-        }
-
-        let Some(trigger) =
-            crate::shortcut_binding::legacy_modifier_trigger(&inner.prefs.get().dictation_hotkey)
-        else {
-            return Ok(());
-        };
-        if !window_key_matches_trigger(trigger, &key, &code) {
-            return Ok(());
-        }
-
-        match event_type.as_str() {
-            "keydown" => {
-                if repeat {
-                    return Ok(());
-                }
-                log::info!(
-                    "[window-hotkey] pressed trigger={trigger:?} code={code} repeat={repeat}"
-                );
-                handle_pressed_edge(inner).await;
-            }
-            "keyup" => {
-                log::info!("[window-hotkey] released trigger={trigger:?} code={code}");
-                handle_released_edge(inner).await;
-            }
-            _ => {}
-        }
-        Ok(())
-    }
-}
-
-fn window_hotkey_fallback_enabled() -> bool {
-    crate::types::HotkeyCapability::current().explicit_fallback_available
-}
-
-#[cfg(any(target_os = "windows", test))]
-fn window_key_matches_trigger(trigger: crate::types::HotkeyTrigger, key: &str, code: &str) -> bool {
-    use crate::types::HotkeyTrigger;
-
-    match trigger {
-        HotkeyTrigger::RightControl => key == "Control" && code == "ControlRight",
-        HotkeyTrigger::LeftControl => key == "Control" && code == "ControlLeft",
-        HotkeyTrigger::RightOption | HotkeyTrigger::RightAlt => {
-            (key == "Alt" || key == "AltGraph") && code == "AltRight"
-        }
-        HotkeyTrigger::LeftOption => (key == "Alt" || key == "AltGraph") && code == "AltLeft",
-        HotkeyTrigger::RightCommand => key == "Meta" && code == "MetaRight",
-        HotkeyTrigger::Fn => key == "Control" && code == "ControlRight",
-        // Custom 走 global-hotkey crate，不走 window hotkey fallback
-        HotkeyTrigger::Custom => false,
-    }
+fn raw_mode_uses_llm(style_system_prompt: &str) -> bool {
+    style_system_prompt != crate::types::StyleSystemPrompts::default().raw
 }
 
 // ─────────────────────────── session lifecycle ───────────────────────────
@@ -1752,523 +1812,120 @@ fn should_try_non_tsf_insertion_fallback(
 }
 
 #[cfg(target_os = "windows")]
-fn insert_via_non_tsf_fallback(
+pub(super) fn insert_via_non_tsf_fallback(
     inner: &Arc<Inner>,
     polished: &str,
-    restore_clipboard: bool,
-    paste_shortcut: PasteShortcut,
+    _restore_clipboard: bool,
+    _paste_shortcut: PasteShortcut,
 ) -> InsertStatus {
-    if inner.inserter.insert_via_unicode_keystrokes(polished) == InsertStatus::Inserted {
-        log::info!("[windows-ime] TSF unavailable; inserted via Unicode SendInput");
-        InsertStatus::Inserted
-    } else {
-        inner
+    let prefs = inner.prefs.get();
+    let sendinput_options = dictation::windows_sendinput_options_from_prefs(&prefs);
+    let status = finish_non_tsf_insertion_fallback(
+        || inner
             .inserter
-            .insert_via_clipboard_fallback(polished, restore_clipboard, paste_shortcut)
+            .insert_via_unicode_keystrokes(polished, sendinput_options),
+        || inner.inserter.copy_fallback(polished),
+    );
+
+    match status {
+        InsertStatus::Inserted => {
+            log::warn!(
+                "[windows-ime] TSF unavailable; inserted via paced Unicode SendInput fallback"
+            );
+        }
+        InsertStatus::CopiedFallback => {
+            log::warn!(
+                "[windows-ime] TSF unavailable; Unicode SendInput failed, left text on clipboard"
+            );
+        }
+        InsertStatus::PasteSent | InsertStatus::Failed => {
+            log::warn!(
+                "[windows-ime] TSF unavailable; Unicode SendInput fallback failed and copy fallback failed"
+            );
+        }
+    }
+
+    status
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn finish_non_tsf_insertion_fallback<U, C>(
+    mut unicode_fallback: U,
+    mut copy_only_fallback: C,
+) -> InsertStatus
+where
+    U: FnMut() -> InsertStatus,
+    C: FnMut() -> InsertStatus,
+{
+    match unicode_fallback() {
+        InsertStatus::Inserted => InsertStatus::Inserted,
+        InsertStatus::PasteSent | InsertStatus::CopiedFallback | InsertStatus::Failed => {
+            match copy_only_fallback() {
+                InsertStatus::CopiedFallback => InsertStatus::CopiedFallback,
+                // TextInserter::copy_fallback is copy-only: success is CopiedFallback.
+                // Treat any other status as failure so this helper never invents an insert.
+                InsertStatus::Inserted | InsertStatus::PasteSent | InsertStatus::Failed => {
+                    InsertStatus::Failed
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod non_tsf_fallback_tests {
+    use super::finish_non_tsf_insertion_fallback;
+    use crate::types::InsertStatus;
+
+    #[test]
+    fn unicode_fallback_runs_before_copy_fallback() {
+        let mut copy_called = false;
+        let status = finish_non_tsf_insertion_fallback(
+            || InsertStatus::Inserted,
+            || {
+                copy_called = true;
+                InsertStatus::CopiedFallback
+            },
+        );
+
+        assert_eq!(status, InsertStatus::Inserted);
+        assert!(!copy_called);
+    }
+
+    #[test]
+    fn copy_fallback_runs_after_unicode_failure() {
+        let mut copy_called = false;
+        let status = finish_non_tsf_insertion_fallback(
+            || InsertStatus::Failed,
+            || {
+                copy_called = true;
+                InsertStatus::CopiedFallback
+            },
+        );
+
+        assert_eq!(status, InsertStatus::CopiedFallback);
+        assert!(copy_called);
+    }
+
+    #[test]
+    fn double_failure_does_not_pretend_text_was_copied() {
+        let mut copy_called = false;
+        let status = finish_non_tsf_insertion_fallback(
+            || InsertStatus::Failed,
+            || {
+                copy_called = true;
+                InsertStatus::Failed
+            },
+        );
+
+        assert_eq!(status, InsertStatus::Failed);
+        assert!(copy_called);
     }
 }
 
 // ─────────────────────────── helpers ───────────────────────────
 
-#[cfg(any(debug_assertions, test))]
-fn hotkey_injection_dry_run_enabled() -> bool {
-    std::env::var_os("OPENLESS_HOTKEY_INJECTION_DRY_RUN").is_some()
-}
 
-#[cfg(any(debug_assertions, test))]
-fn debug_transcript_override_text() -> Option<String> {
-    let path = std::env::var_os("OPENLESS_DEBUG_TRANSCRIPT_FILE")?;
-    let text = std::fs::read_to_string(path).ok()?;
-    let trimmed = text.trim().to_string();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed)
-    }
-}
-
-fn ensure_microphone_permission(_inner: &Arc<Inner>) -> Result<(), String> {
-    use crate::permissions::{self, PermissionStatus};
-
-    #[cfg(target_os = "windows")]
-    {
-        if permissions::windows_microphone_access_explicitly_denied() {
-            return Err("需要麦克风权限，当前状态: Denied".to_string());
-        }
-        return Ok(());
-    }
-
-    let status = permissions::check_microphone();
-    if matches!(
-        status,
-        PermissionStatus::Granted | PermissionStatus::NotApplicable
-    ) {
-        return Ok(());
-    }
-
-    // 听写路径不抢前台焦点：缺 mic 权限时直接请求系统授权，不再先 show_main_window。
-    // 用户在设置页手动点“请求权限”仍走 request_microphone_from_foreground，那是显式操作。
-    // 这里若系统不弹框，后续会通过 capsule error 引导用户主动去权限页处理。详见 #166。
-    let requested = permissions::request_microphone();
-    if matches!(
-        requested,
-        PermissionStatus::Granted | PermissionStatus::NotApplicable
-    ) {
-        Ok(())
-    } else {
-        Err(format!("需要麦克风权限，当前状态: {requested:?}"))
-    }
-}
-
-fn ensure_asr_credentials() -> Result<(), String> {
-    let active_asr = CredentialsVault::get_active_asr();
-
-    // 本地 Qwen3-ASR 没有"凭据"概念，但需要：(a) macOS 平台 (b) 模型已下载。
-    if crate::asr::local::is_local_qwen3(&active_asr) {
-        #[cfg(not(target_os = "macos"))]
-        {
-            return Err("本地 ASR 当前仅支持 macOS（Windows 见 issue #256）".to_string());
-        }
-        #[cfg(target_os = "macos")]
-        {
-            return ensure_local_qwen3_model_ready();
-        }
-    }
-
-    if crate::asr::local::foundry::is_foundry_local_whisper(&active_asr) {
-        #[cfg(not(target_os = "windows"))]
-        {
-            return Err("Foundry Local Whisper 当前仅支持 Windows".to_string());
-        }
-        return Ok(());
-    }
-
-    if is_whisper_compatible_provider(&active_asr) || is_bailian_provider(&active_asr) {
-        let api_key = CredentialsVault::get(CredentialAccount::AsrApiKey)
-            .ok()
-            .flatten()
-            .unwrap_or_default();
-        if api_key.trim().is_empty() {
-            return Err("请先在设置中填写 ASR 服务商 API Key".to_string());
-        }
-        return Ok(());
-    }
-
-    let creds = read_volc_credentials();
-    if creds.app_id.trim().is_empty() || creds.access_token.trim().is_empty() {
-        Err("请先在设置中填写火山引擎 ASR App Key 和 Access Key".to_string())
-    } else {
-        Ok(())
-    }
-}
-
-#[cfg(test)]
-fn is_keyless_local_asr_provider(id: &str) -> bool {
-    if crate::asr::local::is_local_qwen3(id) {
-        return true;
-    }
-    #[cfg(target_os = "windows")]
-    {
-        crate::asr::local::foundry::is_foundry_local_whisper(id)
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = id;
-        false
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn ensure_local_qwen3_model_ready() -> Result<(), String> {
-    let prefs = || -> Result<crate::types::UserPreferences, String> {
-        // 这里没法拿到 inner，直接读 preferences.json 即可（Coordinator 写盘后总是同步的）。
-        crate::persistence::PreferencesStore::new()
-            .map_err(|e| e.to_string())
-            .map(|s| s.get())
-    }()?;
-    let model_id = crate::asr::local::ModelId::from_str(&prefs.local_asr_active_model)
-        .ok_or_else(|| format!("未知的本地模型 id: {}", prefs.local_asr_active_model))?;
-    if !crate::asr::local::models::is_downloaded(model_id) {
-        return Err(format!(
-            "本地模型 {} 未下载完整，请到 设置 → 模型设置 中下载",
-            model_id.as_str()
-        ));
-    }
-    Ok(())
-}
-
-/// 一次 dictation 结束后，按 prefs.local_asr_keep_loaded_secs 决定何时释放
-/// 内存里的 Qwen3-ASR 引擎。0 = 立即释放；其它值 = sleep N 秒后看 last_used。
-/// 多次会话叠加多个 sleep 任务，每个独立 check：只要中间又被使用过就跳过释放。
-fn schedule_local_asr_release(inner: &Arc<Inner>) {
-    let keep_secs = inner.prefs.get().local_asr_keep_loaded_secs;
-    let cache = Arc::clone(&inner.local_asr_cache);
-    if keep_secs == 0 {
-        cache.release_now();
-        return;
-    }
-    let dur = std::time::Duration::from_secs(keep_secs as u64);
-    tauri::async_runtime::spawn(async move {
-        tokio::time::sleep(dur).await;
-        cache.release_if_idle(dur);
-    });
-}
-
-#[cfg(target_os = "windows")]
-fn foundry_local_asr_release_keep_secs(inner: &Arc<Inner>) -> u32 {
-    inner.prefs.get().foundry_local_asr_keep_loaded_secs
-}
-
-#[cfg(target_os = "windows")]
-fn foundry_release_session_is_current(inner: &Arc<Inner>, session_id: SessionId) -> bool {
-    inner.state.lock().session_id == session_id
-}
-
-#[cfg(target_os = "windows")]
-fn schedule_foundry_local_asr_release(inner: &Arc<Inner>, session_id: SessionId) {
-    let keep_secs = foundry_local_asr_release_keep_secs(inner);
-    let runtime = Arc::clone(&inner.foundry_local_runtime);
-    let inner = Arc::clone(inner);
-    tauri::async_runtime::spawn(async move {
-        if keep_secs > 0 {
-            tokio::time::sleep(std::time::Duration::from_secs(keep_secs as u64)).await;
-        }
-        if !foundry_release_session_is_current(&inner, session_id) {
-            return;
-        }
-        if let Err(error) = runtime.release_now().await {
-            log::warn!("[foundry-asr] scheduled release failed: {error:#}");
-        }
-    });
-}
-
-#[cfg(target_os = "macos")]
-async fn build_local_qwen3(
-    inner: &Arc<Inner>,
-) -> anyhow::Result<Arc<crate::asr::local::LocalQwenAsr>> {
-    let prefs = inner.prefs.get();
-    let model_id = crate::asr::local::ModelId::from_str(&prefs.local_asr_active_model)
-        .ok_or_else(|| anyhow::anyhow!("未知本地模型 id: {}", prefs.local_asr_active_model))?;
-    let dir = crate::asr::local::models::model_dir(model_id)?;
-    let app = inner
-        .app
-        .lock()
-        .clone()
-        .ok_or_else(|| anyhow::anyhow!("AppHandle 未绑定"))?;
-    // 走缓存：如果已有同 id 的引擎在内存里就直接复用，避免每次会话都重加载
-    // 1.2GB+ 模型。第一次加载阻塞数秒，spawn_blocking 不卡 tokio runtime。
-    let cache = Arc::clone(&inner.local_asr_cache);
-    let mid = model_id.as_str().to_string();
-    let engine = tauri::async_runtime::spawn_blocking(move || cache.get_or_load(&mid, &dir))
-        .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking join failed: {e:#}"))??;
-    Ok(Arc::new(crate::asr::local::LocalQwenAsr::new(app, engine)))
-}
-
-/// `whisper` 是 OpenAI 原生；`siliconflow` / `zhipu` / `groq` 都暴露
-/// OpenAI 兼容的 `/audio/transcriptions`，统一走 `WhisperBatchASR`。
-/// 新增 OpenAI 兼容 ASR 时只需在这里加一项。
-///
-/// 注：DashScope 的 Qwen3-ASR-Flash 不在此列——它用 MultiModalConversation
-/// (messages=[{content:[{audio:...}]}]) 协议，不是 Whisper multipart，需要
-/// 单独 ASR 客户端，留给 V2。
-fn is_whisper_compatible_provider(id: &str) -> bool {
-    matches!(id, "whisper" | "siliconflow" | "zhipu" | "groq")
-}
-
-fn is_bailian_provider(id: &str) -> bool {
-    id == crate::asr::bailian::PROVIDER_ID
-}
-
-fn apply_chinese_script_preference(text: &str, pref: ChineseScriptPreference) -> String {
-    if text.is_empty() {
-        return String::new();
-    }
-    let config = match pref {
-        ChineseScriptPreference::Simplified => Some(BuiltinConfig::T2s),
-        ChineseScriptPreference::Traditional => Some(BuiltinConfig::S2t),
-        ChineseScriptPreference::Auto => None,
-    };
-    let Some(config) = config else {
-        return text.to_string();
-    };
-    match OpenCC::from_config(config) {
-        Ok(converter) => converter.convert(text),
-        Err(err) => {
-            log::warn!("[coord] OpenCC init failed, skip script conversion: {err}");
-            text.to_string()
-        }
-    }
-}
-
-/// QA 路径专用：begin_qa_session 永远走 Volcengine 流式（低延迟要求），所以
-/// 凭据校验也只看 Volcengine 字段，不依赖 active_asr。dictation 路径请用
-/// `ensure_asr_credentials`。
-fn ensure_qa_volcengine_credentials() -> Result<(), String> {
-    let creds = read_volc_credentials();
-    if creds.app_id.trim().is_empty() || creds.access_token.trim().is_empty() {
-        Err("请先在设置中填写火山引擎 ASR App Key 和 Access Key".to_string())
-    } else {
-        Ok(())
-    }
-}
-
-/// 润色文本；失败时返回原文 + 失败原因，调用方据此弹错误胶囊 + 写历史 error_code。
-/// 之前固定返回 String，调用方拿不到失败信号 → 用户感知"为什么风格设置没生效"。issue #57。
-/// 流式润色的三态结果。让上层（dictation pipeline）能区分「已经流出去了」、
-/// 「降级到一次性」和「真失败了走 raw 兜底」三种 case。
-pub enum StreamingPolishOutcome {
-    /// 流式润色成功，`String` 是已经一边流一边交给 `on_delta` 的全部文本（用于写
-    /// history、做词条命中统计）。调用方不应再 `inserter.insert(&text)`，因为字符
-    /// 已经通过键盘事件落到光标处。
-    Streamed(String),
-    /// 当前配置不支持流式：用户没开 streaming_insert / Gemini provider / Codex
-    /// provider / Raw 模式 / 翻译模式 / 不是 macOS。调用方应回到现有的
-    /// `polish_or_passthrough` 一次性路径，跟历史行为完全一致。
-    UnsupportedFallback,
-    /// 流式过程中失败（HTTP / 解析 / 空流等）。`String` 是失败原因，调用方应当
-    /// 走 raw 兜底（同 `polish_or_passthrough` 失败分支的语义）。
-    Failed(String),
-}
-
-/// 流式润色入口。在不支持流式的所有 case 都返回 `UnsupportedFallback`，让调用方
-/// 透明降级。不修改任何持久化 / 焦点 / 光标状态。
-///
-/// `on_delta` 每收到一个 SSE chunk 就被调用一次（同步），调用方负责把 chunk 实际
-/// 模拟键盘事件落到光标 —— 见 `coordinator/dictation.rs` 的流式分支。
-/// `should_cancel` 用户取消时返回 true，立即 break SSE 读循环避免烧 quota。
-pub async fn polish_or_passthrough_streaming<F, C>(
-    raw: &RawTranscript,
-    mode: PolishMode,
-    hotwords: &[String],
-    working_languages: &[String],
-    chinese_script_preference: ChineseScriptPreference,
-    output_language_preference: OutputLanguagePreference,
-    llm_thinking_enabled: bool,
-    front_app: Option<&str>,
-    prior_turns: &[(String, String)],
-    on_delta: F,
-    should_cancel: C,
-) -> StreamingPolishOutcome
-where
-    F: Fn(&str) + Send + Sync,
-    C: Fn() -> bool + Send + Sync,
-{
-    if mode == PolishMode::Raw {
-        log::info!("[coord] streaming polish skipped: mode=Raw, fall back to one-shot");
-        return StreamingPolishOutcome::UnsupportedFallback;
-    }
-    let active_llm = CredentialsVault::get_active_llm();
-    if active_llm == "gemini" {
-        log::info!(
-            "[coord] streaming polish skipped: active LLM provider=gemini (v1 not implemented), fall back to one-shot"
-        );
-        return StreamingPolishOutcome::UnsupportedFallback;
-    }
-    let provider = match build_active_llm_provider(llm_thinking_enabled) {
-        Ok(p) => p,
-        Err(e) => {
-            log::error!("[coord] streaming polish: build provider failed: {e}");
-            return StreamingPolishOutcome::Failed(e.to_string());
-        }
-    };
-    if !provider.supports_streaming_polish() {
-        log::info!(
-            "[coord] streaming polish skipped: provider does not support streaming (likely codex OAuth), fall back to one-shot"
-        );
-        return StreamingPolishOutcome::UnsupportedFallback;
-    }
-    log::info!(
-        "[coord] streaming polish START: provider=openai-compatible mode={:?} raw_chars={} prior_turns={}",
-        mode,
-        raw.text.chars().count(),
-        prior_turns.len()
-    );
-    match provider
-        .polish_streaming(
-            &raw.text,
-            mode,
-            hotwords,
-            working_languages,
-            chinese_script_preference,
-            output_language_preference,
-            front_app,
-            prior_turns,
-            on_delta,
-            should_cancel,
-        )
-        .await
-    {
-        Ok(text) => {
-            log::info!(
-                "[coord] streaming polish OK: final_chars={}",
-                text.chars().count()
-            );
-            StreamingPolishOutcome::Streamed(text)
-        }
-        Err(e) => {
-            let reason = e.to_string();
-            log::error!("[coord] streaming polish FAILED: {reason}");
-            StreamingPolishOutcome::Failed(reason)
-        }
-    }
-}
-
-async fn polish_or_passthrough(
-    raw: &RawTranscript,
-    mode: PolishMode,
-    hotwords: &[String],
-    working_languages: &[String],
-    chinese_script_preference: ChineseScriptPreference,
-    output_language_preference: OutputLanguagePreference,
-    llm_thinking_enabled: bool,
-    front_app: Option<&str>,
-    prior_turns: &[(String, String)],
-) -> (String, Option<String>) {
-    if mode == PolishMode::Raw {
-        return (raw.text.clone(), None);
-    }
-    match polish_text(
-        &raw.text,
-        mode,
-        hotwords,
-        working_languages,
-        chinese_script_preference,
-        output_language_preference,
-        llm_thinking_enabled,
-        front_app,
-        prior_turns,
-    )
-    .await
-    {
-        Ok(s) => (s, None),
-        Err(e) => {
-            let reason = e.to_string();
-            log::error!("[coord] polish failed, falling back to raw: {reason}");
-            (raw.text.clone(), Some(reason))
-        }
-    }
-}
-
-async fn polish_text(
-    raw: &str,
-    mode: PolishMode,
-    hotwords: &[String],
-    working_languages: &[String],
-    chinese_script_preference: ChineseScriptPreference,
-    output_language_preference: OutputLanguagePreference,
-    llm_thinking_enabled: bool,
-    front_app: Option<&str>,
-    prior_turns: &[(String, String)],
-) -> anyhow::Result<String> {
-    // 谷歌 Gemini 分支：所有 LLM provider 共用 ark.* 凭据槽，唯独 Gemini 走原生
-    // generateContent / 自带 thinkingConfig 控制；其余 provider 走 OpenAI
-    // 兼容协议，并在该路径里按 provider/channel 下发对应的思考开关。
-    let active_llm = CredentialsVault::get_active_llm();
-    if active_llm == "gemini" {
-        let (api_key, model, base_url) = read_gemini_credentials()?;
-        let provider = GeminiProvider::new(
-            GeminiConfig::new(api_key, model, base_url).with_thinking_enabled(llm_thinking_enabled),
-        );
-        return Ok(provider
-            .polish(
-                raw,
-                mode,
-                hotwords,
-                working_languages,
-                chinese_script_preference,
-                output_language_preference,
-                front_app,
-                prior_turns,
-            )
-            .await?);
-    }
-
-    let provider = build_active_llm_provider(llm_thinking_enabled)?;
-    Ok(provider
-        .polish(
-            raw,
-            mode,
-            hotwords,
-            working_languages,
-            chinese_script_preference,
-            output_language_preference,
-            front_app,
-            prior_turns,
-        )
-        .await?)
-}
-
-/// 翻译路径——和 polish 一样失败时返回原文 + 失败原因，避免"不丢字"约定被违反（CLAUDE.md）。
-async fn translate_or_passthrough(
-    raw: &RawTranscript,
-    target_language: &str,
-    working_languages: &[String],
-    chinese_script_preference: ChineseScriptPreference,
-    output_language_preference: OutputLanguagePreference,
-    llm_thinking_enabled: bool,
-    front_app: Option<&str>,
-) -> (String, Option<String>) {
-    match translate_text(
-        &raw.text,
-        target_language,
-        working_languages,
-        chinese_script_preference,
-        output_language_preference,
-        llm_thinking_enabled,
-        front_app,
-    )
-    .await
-    {
-        Ok(s) => (s, None),
-        Err(e) => {
-            let reason = e.to_string();
-            log::error!("[coord] translate failed, falling back to raw: {reason}");
-            (raw.text.clone(), Some(reason))
-        }
-    }
-}
-
-async fn translate_text(
-    raw: &str,
-    target_language: &str,
-    working_languages: &[String],
-    chinese_script_preference: ChineseScriptPreference,
-    output_language_preference: OutputLanguagePreference,
-    llm_thinking_enabled: bool,
-    front_app: Option<&str>,
-) -> anyhow::Result<String> {
-    // 见 polish_text 顶部注释——同样的 Gemini / OpenAI-compatible 路由逻辑。
-    let active_llm = CredentialsVault::get_active_llm();
-    if active_llm == "gemini" {
-        let (api_key, model, base_url) = read_gemini_credentials()?;
-        let provider = GeminiProvider::new(
-            GeminiConfig::new(api_key, model, base_url).with_thinking_enabled(llm_thinking_enabled),
-        );
-        return Ok(provider
-            .translate_to(
-                raw,
-                target_language,
-                working_languages,
-                chinese_script_preference,
-                output_language_preference,
-                front_app,
-            )
-            .await?);
-    }
-
-    let provider = build_active_llm_provider(llm_thinking_enabled)?;
-    Ok(provider
-        .translate_to(
-            raw,
-            target_language,
-            working_languages,
-            chinese_script_preference,
-            output_language_preference,
-            front_app,
-        )
-        .await?)
-}
 
 fn read_whisper_credentials() -> (String, String, String) {
     let api_key = CredentialsVault::get(CredentialAccount::AsrApiKey)
@@ -2284,6 +1941,24 @@ fn read_whisper_credentials() -> (String, String, String) {
         .flatten()
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "whisper-1".to_string());
+    (api_key, base_url, model)
+}
+
+fn read_mimo_credentials() -> (String, String, String) {
+    let api_key = CredentialsVault::get(CredentialAccount::AsrApiKey)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let base_url = CredentialsVault::get(CredentialAccount::AsrEndpoint)
+        .ok()
+        .flatten()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| crate::asr::mimo::DEFAULT_ENDPOINT.to_string());
+    let model = CredentialsVault::get(CredentialAccount::AsrModel)
+        .ok()
+        .flatten()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| crate::asr::mimo::DEFAULT_MODEL.to_string());
     (api_key, base_url, model)
 }
 
@@ -2348,513 +2023,6 @@ fn enabled_hotwords(inner: &Arc<Inner>) -> Vec<DictionaryHotword> {
         .collect()
 }
 
-// ─────────────────────────── QA session lifecycle ───────────────────────────
-
-/// 划词语音问答会话（issue #118）。
-///
-/// 与 dictation 完全分离：
-/// - 不进 SessionPhase（互不抢锁）
-/// - 不写 history.json（除非 prefs.qa_save_history=true 才旁路写一条 placeholder）
-/// - 用独立的 qa_recorder + qa_asr，复用现有 Volcengine ASR 通路
-async fn begin_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
-    {
-        let mut state = inner.qa_state.lock();
-        if !state.panel_visible {
-            // 防御：浮窗没开就被叫到这里说明路由错了，直接退出。
-            return Ok(());
-        }
-        if state.phase != QaPhase::Idle {
-            return Ok(());
-        }
-        state.phase = QaPhase::Recording;
-        state.cancelled = false;
-        state.session_id = new_session_id();
-        state.front_app = capture_frontmost_app();
-        state.selection = None;
-    }
-    // 重置 SSE 取消标志：上一轮可能 set 过的 true 留着会让本轮流式立即 break。
-    inner.qa_stream_cancelled.store(false, Ordering::SeqCst);
-
-    // 抓选区。每轮按 Option 都重新抓一次：用户多轮提问中可以重新选别处文字。
-    // 浮窗 focus:false，原 app 仍是 frontmost，AX/Cmd+C fallback 都能拿到。
-    let selection = capture_selection();
-    let selection_preview_text = selection.as_ref().map(|s| s.text.clone());
-    inner.qa_state.lock().selection = selection.clone();
-
-    if let Some(app) = inner.app.lock().clone() {
-        let messages = inner.qa_state.lock().messages.clone();
-        let _ = app.emit_to(
-            "qa",
-            "qa:state",
-            serde_json::json!({
-                "kind": "recording",
-                "selection_preview": selection_preview_text,
-                "messages": messages,
-            }),
-        );
-    }
-
-    // 2. 凭据缺失走静默 fallback：与 dictation 一致的"用户的话不丢"约定。
-    //    缺火山凭据 → 后续 Recorder 仍会跑，只是 ASR 拿不到结果，end_qa_session
-    //    会发 idle 事件关浮窗。
-    //    注意：QA 强制走 Volcengine 流式（见下方注释），所以这里必须直接校验
-    //    Volcengine 字段，不能复用 `ensure_asr_credentials`——后者会按用户在设置
-    //    里选的 active_asr 走 OpenAI 兼容分支，让 QA 把 `asr.api_key` 当成必要项，
-    //    或在 Volcengine 凭据其实为空时误判通过。Codex P1，PR #213。
-    if let Err(message) = ensure_qa_volcengine_credentials() {
-        log::warn!("[coord] QA: ASR credentials missing: {message}");
-        finish_qa_with_error(inner, format!("缺少 ASR 凭据：{message}"));
-        return Err(message);
-    }
-
-    if let Err(message) = ensure_microphone_permission(inner) {
-        log::warn!("[coord] QA: microphone permission gate failed: {message}");
-        finish_qa_with_error(inner, message.clone());
-        return Err(message);
-    }
-
-    // 3. 启动 Recorder + ASR（强制走 Volcengine 流式：QA 必须低延迟）。
-    let hotwords = enabled_hotwords(inner);
-    let creds = read_volc_credentials();
-    let asr = Arc::new(VolcengineStreamingASR::new(creds, hotwords));
-    let bridge = Arc::new(DeferredAsrBridge::new());
-    let consumer: Arc<dyn crate::recorder::AudioConsumer> = bridge.clone();
-    *inner.qa_asr.lock() = Some(Arc::clone(&asr));
-
-    // QA recorder 不需要 RMS 节流到胶囊；前端 QA 浮窗有自己的电平视图，
-    // 这里发一份事件给 "qa" label 用就够了。
-    let inner_for_level = Arc::clone(inner);
-    let last_emit_at = Arc::new(Mutex::new(None::<Instant>));
-    const LEVEL_EMIT_MIN_INTERVAL_MS: u64 = 33;
-    let level_handler: Arc<dyn Fn(f32) + Send + Sync> = Arc::new(move |level| {
-        let phase = inner_for_level.qa_state.lock().phase;
-        if phase != QaPhase::Recording {
-            return;
-        }
-        let now = Instant::now();
-        {
-            let mut last = last_emit_at.lock();
-            if let Some(prev) = *last {
-                if now.duration_since(prev).as_millis() < LEVEL_EMIT_MIN_INTERVAL_MS as u128 {
-                    return;
-                }
-            }
-            *last = Some(now);
-        }
-        if let Some(app) = inner_for_level.app.lock().clone() {
-            let _ = app.emit_to("qa", "qa:level", serde_json::json!({ "level": level }));
-        }
-        // 同步把电平推给底部胶囊，让 QA 录音也有跟主听写一致的可视反馈。
-        emit_capsule(
-            &inner_for_level,
-            CapsuleState::Recording,
-            level,
-            0,
-            None,
-            None,
-        );
-    });
-
-    let microphone_device_name = selected_microphone_device_name(inner);
-    stop_microphone_preview_monitor(inner, "QA recorder");
-    acquire_recording_mute(inner, "qa").await;
-    match Recorder::start(microphone_device_name, consumer, level_handler) {
-        Ok((rec, runtime_errors)) => {
-            *inner.qa_recorder.lock() = Some(rec);
-            // QA 也跟主听写一样监听 cpal runtime error。设备中途消失 / panic 时
-            // 不能让 QA 永远卡在 Recording 没反馈。详见 issue #168。
-            spawn_qa_recorder_error_monitor(inner, runtime_errors);
-        }
-        Err(e) => {
-            log::error!("[coord] QA recorder start failed: {e}");
-            inner.qa_asr.lock().take();
-            release_recording_mute(inner, "qa");
-            finish_qa_with_error(inner, format!("录音启动失败: {e}"));
-            return Err(e.to_string());
-        }
-    }
-
-    if let Err(e) = asr.open_session().await {
-        log::error!("[coord] QA: open ASR session failed: {e}");
-        stop_qa_recorder(inner);
-        if let Some(asr) = inner.qa_asr.lock().take() {
-            asr.cancel();
-        }
-        finish_qa_with_error(inner, format!("ASR 连接失败: {e}"));
-        return Err(e.to_string());
-    }
-
-    // cancel race：在 await 期间用户可能 dismiss 了浮窗。
-    if inner.qa_state.lock().cancelled {
-        log::info!("[coord] QA cancel raced during open_session — aborting begin");
-        asr.cancel();
-        stop_qa_recorder(inner);
-        inner.qa_state.lock().phase = QaPhase::Idle;
-        return Ok(());
-    }
-
-    let target: Arc<dyn crate::asr::AudioConsumer> = asr;
-    let flushed = bridge.attach(target);
-    log::info!("[coord] QA ASR connected; flushed {flushed} deferred audio bytes");
-
-    // 显式弹胶囊到 Recording。level_handler 后续会持续推电平，胶囊里"录音中…"
-    // 的视觉反馈跟主听写完全一致。
-    emit_capsule(inner, CapsuleState::Recording, 0.0, 0, None, None);
-
-    Ok(())
-}
-
-async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
-    {
-        let mut state = inner.qa_state.lock();
-        if state.phase != QaPhase::Recording {
-            return Ok(());
-        }
-        state.phase = QaPhase::Processing;
-    }
-
-    // 胶囊进入 Transcribing：用户视觉上看到"识别中"。
-    emit_capsule(inner, CapsuleState::Transcribing, 0.0, 0, None, None);
-
-    if let Some(app) = inner.app.lock().clone() {
-        let _ = app.emit_to("qa", "qa:state", serde_json::json!({ "kind": "loading" }));
-    }
-
-    stop_qa_recorder(inner);
-
-    let asr = match inner.qa_asr.lock().take() {
-        Some(a) => a,
-        None => {
-            inner.qa_state.lock().phase = QaPhase::Idle;
-            return Ok(());
-        }
-    };
-
-    if let Err(e) = asr.send_last_frame().await {
-        log::error!("[coord] QA: send last frame failed: {e}");
-    }
-    // 添加全局超时保护：防止 await_final_result() 永远挂起
-    let timeout_duration = std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS);
-    let raw = match tokio::time::timeout(timeout_duration, asr.await_final_result()).await {
-        Ok(Ok(r)) => r,
-        Ok(Err(e)) => {
-            log::error!("[coord] QA: await final failed: {e}");
-            finish_qa_with_error(inner, format!("识别失败: {e}"));
-            return Err(e.to_string());
-        }
-        Err(_) => {
-            // 全局超时：最后的防线
-            log::error!(
-                "[coord] QA: 全局超时 {} 秒 - 强制恢复",
-                COORDINATOR_GLOBAL_TIMEOUT_SECS
-            );
-            // 清理 ASR session，避免资源泄漏
-            asr.cancel();
-            finish_qa_with_error(inner, "识别超时".to_string());
-            return Err("global timeout".to_string());
-        }
-    };
-
-    // cancel race：用户在 transcribe 中按 Esc / dismiss → 静默退出。
-    if inner.qa_state.lock().cancelled {
-        log::info!("[coord] QA cancel detected after ASR — discarding transcript");
-        finish_qa_idle_silently(inner);
-        return Ok(());
-    }
-
-    let question = raw.text.trim().to_string();
-    if question.is_empty() {
-        // 静默录音：不调 LLM，不弹错误，直接关浮窗。
-        log::info!("[coord] QA: empty transcript → silent dismiss");
-        finish_qa_idle_silently(inner);
-        return Ok(());
-    }
-
-    // 拼这一轮的 user 消息：第一轮（messages 还空）把选区原文嵌进去；
-    // 之后的轮次只送提问，让 LLM 顺着上下文回答。详见 issue #118 v2。
-    let user_content = {
-        let st = inner.qa_state.lock();
-        let is_first_turn = st.messages.is_empty();
-        let sel_text = st
-            .selection
-            .as_ref()
-            .map(|s| s.text.clone())
-            .unwrap_or_default();
-        if is_first_turn && !sel_text.trim().is_empty() {
-            format!(
-                "# 选区原文\n{}\n\n# 我的问题\n{}",
-                sel_text.trim(),
-                question
-            )
-        } else {
-            question.clone()
-        }
-    };
-
-    inner
-        .qa_state
-        .lock()
-        .messages
-        .push(crate::types::QaChatMessage {
-            role: "user".to_string(),
-            content: user_content,
-        });
-
-    if let Some(app) = inner.app.lock().clone() {
-        let messages = inner.qa_state.lock().messages.clone();
-        let _ = app.emit_to(
-            "qa",
-            "qa:state",
-            serde_json::json!({
-                "kind": "thinking",
-                "messages": messages,
-            }),
-        );
-    }
-
-    // 胶囊：思考阶段（复用 dictation 的 Polishing 状态——视觉上是"润色中"，QA 借用一下）。
-    emit_capsule(inner, CapsuleState::Polishing, 0.0, 0, None, None);
-
-    let prefs = inner.prefs.get();
-    let working_languages = prefs.working_languages.clone();
-    let chinese_script_preference = prefs.chinese_script_preference;
-    let output_language_preference = prefs.output_language_preference;
-    let llm_thinking_enabled = prefs.llm_thinking_enabled;
-    let (messages_for_llm, front_app) = {
-        let st = inner.qa_state.lock();
-        (st.messages.clone(), st.front_app.clone())
-    };
-
-    // 流式回调：每个 SSE delta 立刻推一帧 qa:state{kind:"answer_delta"} 给前端，
-    // 浮窗里气泡边收边长。最终的 messages 由 answer 事件统一下发（保证一致性）。
-    //
-    // session_id 守卫（issue #161）：闭包捕获本会话 id；用户取消 → 关浮窗 → 开新浮窗
-    // 开新一轮时，旧的 in-flight LLM 流仍可能 emit chunk，必须在 emit 前比对当前
-    // qa_state.session_id == 捕获 id，否则跳过——避免旧会话的字漏进新气泡。
-    let captured_session_id = inner.qa_state.lock().session_id;
-    let inner_for_delta = Arc::clone(inner);
-    let on_delta = move |chunk: &str| {
-        let cur_id = inner_for_delta.qa_state.lock().session_id;
-        if cur_id != captured_session_id {
-            return; // 旧 session 漏来的 chunk，丢弃
-        }
-        if let Some(app) = inner_for_delta.app.lock().clone() {
-            let _ = app.emit_to(
-                "qa",
-                "qa:state",
-                serde_json::json!({
-                    "kind": "answer_delta",
-                    "chunk": chunk,
-                }),
-            );
-        }
-    };
-
-    // SSE 流取消旗标：cancel_qa_session / close_qa_panel 会 set true，
-    // polish 的 SSE loop 每帧检查 → break，释放 HTTP body。详见 issue #161。
-    let cancel_flag = Arc::clone(&inner.qa_stream_cancelled);
-    let should_cancel = move || cancel_flag.load(Ordering::Relaxed);
-
-    let answer = match answer_chat_dispatch(
-        &messages_for_llm,
-        &working_languages,
-        chinese_script_preference,
-        output_language_preference,
-        llm_thinking_enabled,
-        front_app.as_deref(),
-        on_delta,
-        should_cancel,
-    )
-    .await
-    {
-        Ok(s) => s,
-        Err(e) => {
-            log::error!("[coord] QA: LLM answer failed: {e}");
-            // 把刚 push 的 user 消息回滚，避免 retry 重复
-            inner.qa_state.lock().messages.pop();
-            finish_qa_with_error(inner, format!("回答失败: {e}"));
-            return Err(e.to_string());
-        }
-    };
-
-    if inner.qa_state.lock().cancelled {
-        log::info!("[coord] QA cancel detected before answer — discarding");
-        // 同样回滚未配对的 user 消息
-        inner.qa_state.lock().messages.pop();
-        finish_qa_idle_silently(inner);
-        return Ok(());
-    }
-
-    inner
-        .qa_state
-        .lock()
-        .messages
-        .push(crate::types::QaChatMessage {
-            role: "assistant".to_string(),
-            content: answer.clone(),
-        });
-
-    if let Some(app) = inner.app.lock().clone() {
-        let messages = inner.qa_state.lock().messages.clone();
-        let _ = app.emit_to(
-            "qa",
-            "qa:state",
-            serde_json::json!({
-                "kind": "answer",
-                "messages": messages,
-            }),
-        );
-    }
-
-    // 胶囊直接收掉。QA 不走 insertion，没"已粘贴 N 字"语义；浮窗里答案就是用户的反馈。
-    // （之前用 Done 状态会被 capsule UI 错误地渲染上一次 dictation 残留的 message/insertedChars。）
-    emit_capsule(inner, CapsuleState::Idle, 0.0, 0, None, None);
-
-    // 可选：写一条 history（QA 类型）。当前 DictationSession schema 不能直接表达
-    // "QuestionAnswer" 类型，因此简单做法：勾选 qa_save_history 时写一条
-    // mode=Raw、error_code=Some("qaSession") 的 placeholder，避免污染 schema 同时
-    // 让用户能在历史里翻到这次问答的字面值。详见 issue #118。
-    if prefs.qa_save_history {
-        let session = DictationSession {
-            id: Uuid::new_v4().to_string(),
-            created_at: Utc::now().to_rfc3339(),
-            raw_transcript: question.clone(),
-            final_text: answer.clone(),
-            mode: PolishMode::Raw,
-            app_bundle_id: None,
-            app_name: front_app.clone(),
-            insert_status: InsertStatus::CopiedFallback,
-            error_code: Some("qaSession".to_string()),
-            duration_ms: Some(raw.duration_ms),
-            dictionary_entry_count: None,
-        };
-        if let Err(e) = inner
-            .history
-            .append_with_retention(session, inner.prefs.get().history_retention_days)
-        {
-            log::error!("[coord] QA history append failed: {e}");
-        }
-    }
-
-    inner.qa_state.lock().phase = QaPhase::Idle;
-    Ok(())
-}
-
-/// 把出错状态送到前端浮窗 + 胶囊错误闪一下 + 复位 phase。
-/// 浮窗保持可见（v2：错误后用户可以再按 Option 重试）；messages 一并送过去
-/// 让前端继续渲染历史对话。
-fn finish_qa_with_error(inner: &Arc<Inner>, message: String) {
-    stop_qa_recorder(inner);
-    if let Some(app) = inner.app.lock().clone() {
-        let messages = inner.qa_state.lock().messages.clone();
-        let _ = app.emit_to(
-            "qa",
-            "qa:state",
-            serde_json::json!({
-                "kind": "error",
-                "error": message,
-                "messages": messages,
-            }),
-        );
-    }
-    emit_capsule(inner, CapsuleState::Error, 0.0, 0, Some(message), None);
-    schedule_capsule_idle(inner, 1500);
-    let mut state = inner.qa_state.lock();
-    state.phase = QaPhase::Idle;
-    state.cancelled = false;
-}
-
-/// 静默收尾：发 idle 事件给前端，phase 复位。**不关浮窗**（v2：浮窗只在用户
-/// Esc/X 或再按 QA hotkey 时才关）；多轮对话历史保留。胶囊也即刻收掉。
-fn finish_qa_idle_silently(inner: &Arc<Inner>) {
-    if let Some(app) = inner.app.lock().clone() {
-        let messages = inner.qa_state.lock().messages.clone();
-        let _ = app.emit_to(
-            "qa",
-            "qa:state",
-            serde_json::json!({
-                "kind": "idle",
-                "messages": messages,
-            }),
-        );
-    }
-    emit_capsule(inner, CapsuleState::Idle, 0.0, 0, None, None);
-    let mut state = inner.qa_state.lock();
-    state.phase = QaPhase::Idle;
-    state.cancelled = false;
-    state.selection = None;
-}
-
-fn cancel_qa_session(inner: &Arc<Inner>) {
-    let phase = inner.qa_state.lock().phase;
-    if phase == QaPhase::Idle {
-        return;
-    }
-    inner.qa_state.lock().cancelled = true;
-    // SSE 流取消旗标——polish::chat_completion_history_streaming 的 loop 每帧检查
-    // 这个 flag，true 时立即 break 不再 drain HTTP body，避免取消后 LLM 仍烧 token。
-    // 详见 issue #161。
-    inner.qa_stream_cancelled.store(true, Ordering::SeqCst);
-    stop_qa_recorder(inner);
-    if let Some(asr) = inner.qa_asr.lock().take() {
-        asr.cancel();
-    }
-    // Processing 阶段保持 phase 让 end_qa_session 自然走完 cancel 检查；
-    // 否则直接复位。
-    if phase != QaPhase::Processing {
-        inner.qa_state.lock().phase = QaPhase::Idle;
-    }
-    log::info!("[coord] QA session cancelled (was {phase:?})");
-}
-
-async fn answer_chat_dispatch<F, C>(
-    messages: &[crate::types::QaChatMessage],
-    working_languages: &[String],
-    chinese_script_preference: ChineseScriptPreference,
-    output_language_preference: OutputLanguagePreference,
-    llm_thinking_enabled: bool,
-    front_app: Option<&str>,
-    on_delta: F,
-    should_cancel: C,
-) -> anyhow::Result<String>
-where
-    F: Fn(&str) + Send + Sync,
-    C: Fn() -> bool + Send + Sync,
-{
-    // 见 polish_text 顶部注释——同样的 Gemini / OpenAI-compatible 路由逻辑，
-    // QA 流式回答走 Gemini 原生 :streamGenerateContent?alt=sse。
-    let active_llm = CredentialsVault::get_active_llm();
-    if active_llm == "gemini" {
-        let (api_key, model, base_url) = read_gemini_credentials()?;
-        let provider = GeminiProvider::new(
-            GeminiConfig::new(api_key, model, base_url).with_thinking_enabled(llm_thinking_enabled),
-        );
-        return Ok(provider
-            .answer_chat_streaming(
-                messages,
-                working_languages,
-                chinese_script_preference,
-                output_language_preference,
-                front_app,
-                on_delta,
-                should_cancel,
-            )
-            .await?);
-    }
-
-    let provider = build_active_llm_provider(llm_thinking_enabled)?;
-    Ok(provider
-        .answer_chat_streaming(
-            messages,
-            working_languages,
-            chinese_script_preference,
-            output_language_preference,
-            front_app,
-            on_delta,
-            should_cancel,
-        )
-        .await?)
-}
 
 /// 读 Gemini 凭据。所有 LLM provider 共用 ark.* 槽位（persistence 没做 per-provider
 /// 隔离），所以这里也是从 `ArkApiKey` / `ArkModelId` / `ArkEndpoint` 三个槽读，
@@ -2899,7 +2067,8 @@ fn build_active_llm_provider(llm_thinking_enabled: bool) -> anyhow::Result<Activ
         .trim_end_matches('/')
         .to_string();
     let config = OpenAICompatibleConfig::new(active, "OpenLess LLM", base_url, api_key, model)
-        .with_thinking_enabled(llm_thinking_enabled);
+        .with_thinking_enabled(llm_thinking_enabled)
+        .with_extra_headers(CredentialsVault::get_active_llm_extra_headers());
     Ok(ActiveLLMProvider::OpenAI(OpenAICompatibleLLMProvider::new(
         config,
     )))
@@ -2924,6 +2093,7 @@ fn resolve_ark_endpoint_with_policy(
 #[cfg(test)]
 mod tests {
     use super::dictation::abort_recording_with_error;
+    use super::dictation::{handle_pressed_edge, handle_released_edge};
     use super::*;
     use crate::types::{HotkeyMode, HotkeyTrigger};
     use once_cell::sync::Lazy;
@@ -2932,6 +2102,54 @@ mod tests {
 
     fn session_id(n: u128) -> SessionId {
         Uuid::from_u128(n)
+    }
+
+    #[test]
+    fn split_polish_translate_parses_both_sections() {
+        let out = format!(
+            "{POLISH_TRANSLATE_SRC_MARKER}\n你好，世界。\n{POLISH_TRANSLATE_TGT_MARKER}\nHello, world."
+        );
+        let (source, translation) = split_polish_translate_output(&out).expect("both markers");
+        assert_eq!(source.as_deref(), Some("你好，世界。"));
+        assert_eq!(translation, "Hello, world.");
+    }
+
+    #[test]
+    fn split_polish_translate_no_translation_marker_returns_none_for_fallback() {
+        // 完全没有译文标记 → None，调用方据此退回专用翻译拿干净译文。
+        assert_eq!(split_polish_translate_output("  Hello, world.  "), None);
+    }
+
+    #[test]
+    fn split_polish_translate_empty_translation_returns_none_for_fallback() {
+        // 有译文标记但内容为空（截断 / 只吐标记）→ None，避免空串当成功译文插入光标。
+        let out =
+            format!("{POLISH_TRANSLATE_SRC_MARKER}\n你好。\n{POLISH_TRANSLATE_TGT_MARKER}\n   ");
+        assert_eq!(split_polish_translate_output(&out), None);
+    }
+
+    #[test]
+    fn split_polish_translate_only_translation_marker_keeps_clean_translation() {
+        let out = format!("noise{POLISH_TRANSLATE_TGT_MARKER}\nHola");
+        let (source, translation) = split_polish_translate_output(&out).expect("tgt marker");
+        assert_eq!(source, None);
+        assert_eq!(translation, "Hola");
+    }
+
+    #[test]
+    fn split_polish_translate_empty_source_section_is_none() {
+        let out = format!("{POLISH_TRANSLATE_SRC_MARKER}\n   \n{POLISH_TRANSLATE_TGT_MARKER}\nHi");
+        let (source, translation) = split_polish_translate_output(&out).expect("tgt marker");
+        assert_eq!(source, None);
+        assert_eq!(translation, "Hi");
+    }
+
+    #[test]
+    fn build_polish_translate_prompt_contains_markers_and_target() {
+        let p = build_polish_translate_system_prompt("日本語");
+        assert!(p.contains(POLISH_TRANSLATE_SRC_MARKER));
+        assert!(p.contains(POLISH_TRANSLATE_TGT_MARKER));
+        assert!(p.contains("日本語"));
     }
 
     #[tokio::test]
@@ -2947,6 +2165,33 @@ mod tests {
         coordinator.inject_hotkey_click_for_dev().await.unwrap();
 
         assert_eq!(coordinator.inner.state.lock().phase, SessionPhase::Idle);
+        std::env::remove_var("OPENLESS_HOTKEY_INJECTION_DRY_RUN");
+    }
+
+    /// 复现并验证目标 2(a)：按下 Less Computer 键必须弹出可见胶囊。
+    /// 这里直接驱动 bridge 会调用的 handler，断言 begin_session 确实下发了可见胶囊。
+    #[tokio::test]
+    async fn less_computer_press_emits_visible_capsule() {
+        let _guard = ENV_LOCK.lock().await;
+        std::env::set_var("OPENLESS_HOTKEY_INJECTION_DRY_RUN", "1");
+
+        let coordinator = Coordinator::new();
+        {
+            let mut prefs = coordinator.inner.prefs.get();
+            prefs.coding_agent_enabled = true;
+            coordinator.inner.prefs.set(prefs).unwrap();
+        }
+        // 前置：还没弹过任何胶囊。
+        assert!(coordinator.inner.last_capsule_state.lock().is_none());
+
+        // 等价于「按下 Less Computer 键」：bridge_loop 收到 Pressed 后就是调这个 handler。
+        super::handle_less_computer_pressed(&coordinator.inner).await;
+
+        assert_eq!(
+            *coordinator.inner.last_capsule_state.lock(),
+            Some(CapsuleState::Recording),
+            "按下 Less Computer 键必须进入录音并弹出可见胶囊"
+        );
         std::env::remove_var("OPENLESS_HOTKEY_INJECTION_DRY_RUN");
     }
 
@@ -3029,18 +2274,83 @@ mod tests {
     }
 
     #[test]
-    fn foundry_local_provider_is_keyless_and_not_whisper_compatible() {
+    fn windows_local_providers_are_keyless_and_not_whisper_compatible() {
         #[cfg(target_os = "windows")]
         assert!(is_keyless_local_asr_provider(
             crate::asr::local::foundry::PROVIDER_ID
+        ));
+        #[cfg(target_os = "windows")]
+        assert!(is_keyless_local_asr_provider(
+            crate::asr::local::sherpa::PROVIDER_ID
         ));
         #[cfg(not(target_os = "windows"))]
         assert!(!is_keyless_local_asr_provider(
             crate::asr::local::foundry::PROVIDER_ID
         ));
+        #[cfg(not(target_os = "windows"))]
+        assert!(!is_keyless_local_asr_provider(
+            crate::asr::local::sherpa::PROVIDER_ID
+        ));
         assert!(!is_whisper_compatible_provider(
             crate::asr::local::foundry::PROVIDER_ID
         ));
+        assert!(!is_whisper_compatible_provider(
+            crate::asr::local::sherpa::PROVIDER_ID
+        ));
+        assert!(!is_whisper_compatible_provider(
+            crate::asr::mimo::PROVIDER_ID
+        ));
+    }
+
+    #[test]
+    fn verbose_json_enabled_only_for_whisper_family() {
+        // verbose_json + 幻听过滤只对返回完整 Whisper 指标的 provider 开启。
+        assert!(whisper_supports_verbose_json("whisper"));
+        assert!(whisper_supports_verbose_json("groq"));
+        // SiliconFlow(SenseVoice/TeleSpeech) / Zhipu(GLM-ASR) 保持旧的 json 行为。
+        assert!(!whisper_supports_verbose_json("siliconflow"));
+        assert!(!whisper_supports_verbose_json("zhipu"));
+    }
+
+    #[test]
+    fn openrouter_is_whisper_compatible_json_provider() {
+        use crate::asr::whisper::AsrRequestFormat;
+        // issue #582：OpenRouter 走 whisper 兼容路由，但请求体是 JSON+base64。
+        assert!(is_whisper_compatible_provider("openrouter"));
+        assert_eq!(
+            whisper_request_format("openrouter"),
+            AsrRequestFormat::OpenRouterJson
+        );
+        // 其余兼容厂商保持 multipart。
+        assert_eq!(
+            whisper_request_format("whisper"),
+            AsrRequestFormat::Multipart
+        );
+        assert_eq!(whisper_request_format("groq"), AsrRequestFormat::Multipart);
+        // OpenRouter 的 JSON 协议不吃 response_format，verbose_json 保持关闭。
+        assert!(!whisper_supports_verbose_json("openrouter"));
+        // base64 膨胀，长录音保守按 30s 切分。
+        assert_eq!(batch_asr_chunk_limit_ms("openrouter"), Some(30_000));
+    }
+
+    #[test]
+    fn qa_asr_provider_kind_tracks_active_provider() {
+        assert_eq!(
+            active_asr_provider_kind(crate::asr::bailian::PROVIDER_ID),
+            ActiveAsrProviderKind::Bailian
+        );
+        assert_eq!(
+            active_asr_provider_kind("whisper"),
+            ActiveAsrProviderKind::WhisperCompatible
+        );
+        assert_eq!(
+            active_asr_provider_kind(crate::asr::mimo::PROVIDER_ID),
+            ActiveAsrProviderKind::Mimo
+        );
+        assert_eq!(
+            active_asr_provider_kind("volcengine"),
+            ActiveAsrProviderKind::Volcengine
+        );
     }
 
     #[cfg(target_os = "windows")]
@@ -3080,6 +2390,70 @@ mod tests {
         );
     }
 
+    #[test]
+    fn local_qwen_timeout_floors_at_global_timeout_for_short_audio() {
+        // 5s 录音：5 × 0.6 = 3, +10 = 13, max(30) = 30。短录音兜底。
+        assert_eq!(
+            local_qwen_transcribe_timeout(5.0),
+            std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS)
+        );
+    }
+
+    #[test]
+    fn local_qwen_timeout_scales_with_audio_duration() {
+        // 60s 录音：60 × 0.6 = 36, +10 = 46s。覆盖 RTF ≈ 0.5 的边界。
+        assert_eq!(
+            local_qwen_transcribe_timeout(60.0),
+            std::time::Duration::from_secs(46)
+        );
+    }
+
+    #[test]
+    fn local_qwen_timeout_ceils_partial_seconds() {
+        // 10.1s 录音：10.1 × 0.6 = 6.06, ceil = 7, +10 = 17, max(30) = 30。
+        // COORDINATOR_GLOBAL_TIMEOUT_SECS 提升到 30 后，短音频统一被兜底值覆盖。
+        assert_eq!(
+            local_qwen_transcribe_timeout(10.1),
+            std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS)
+        );
+    }
+
+    #[test]
+    fn local_qwen_timeout_handles_zero_duration() {
+        // 0 时长（空 buffer 边界）：0 × 0.6 = 0, +10 = 10, max(30) = 30。
+        assert_eq!(
+            local_qwen_transcribe_timeout(0.0),
+            std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS)
+        );
+    }
+
+    #[test]
+    fn whisper_timeout_floors_at_global_timeout_for_short_audio() {
+        // 10s 录音：10 × 0.5 = 5, +20 = 25, max(30) = 30。短音频兜底。
+        assert_eq!(
+            whisper_transcribe_timeout(10.0),
+            std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS)
+        );
+    }
+
+    #[test]
+    fn whisper_timeout_scales_with_audio_duration() {
+        // 60s 录音：60 × 0.5 = 30, +20 = 50。覆盖多分片 HTTP 请求。
+        assert_eq!(
+            whisper_transcribe_timeout(60.0),
+            std::time::Duration::from_secs(50)
+        );
+    }
+
+    #[test]
+    fn whisper_timeout_ceils_partial_seconds() {
+        // 45.3s 录音：45.3 × 0.5 = 22.65, ceil = 23, +20 = 43, max(30) = 43。
+        assert_eq!(
+            whisper_transcribe_timeout(45.3),
+            std::time::Duration::from_secs(43)
+        );
+    }
+
     #[cfg(target_os = "windows")]
     #[test]
     fn foundry_release_uses_foundry_keep_loaded_preference() {
@@ -3095,21 +2469,41 @@ mod tests {
 
     #[cfg(target_os = "windows")]
     #[test]
-    fn foundry_release_guard_rejects_stale_session() {
+    fn foundry_release_guard_rejects_stale_dictation_session() {
         let runtime = Arc::new(crate::asr::local::FoundryLocalRuntime::new());
         let coordinator = Coordinator::new_with_foundry_runtime(runtime);
         let old_session_id = coordinator.inner.state.lock().session_id;
 
-        assert!(foundry_release_session_is_current(
+        assert!(asr_release_session_is_current(
             &coordinator.inner,
-            old_session_id
+            AsrReleaseSession::Dictation(old_session_id)
         ));
 
         coordinator.inner.state.lock().session_id = new_session_id();
 
-        assert!(!foundry_release_session_is_current(
+        assert!(!asr_release_session_is_current(
             &coordinator.inner,
-            old_session_id
+            AsrReleaseSession::Dictation(old_session_id)
+        ));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn local_asr_release_guard_rejects_stale_qa_session() {
+        let runtime = Arc::new(crate::asr::local::FoundryLocalRuntime::new());
+        let coordinator = Coordinator::new_with_foundry_runtime(runtime);
+        let old_session_id = coordinator.inner.qa_state.lock().session_id;
+
+        assert!(asr_release_session_is_current(
+            &coordinator.inner,
+            AsrReleaseSession::Qa(old_session_id)
+        ));
+
+        coordinator.inner.qa_state.lock().session_id = new_session_id();
+
+        assert!(!asr_release_session_is_current(
+            &coordinator.inner,
+            AsrReleaseSession::Qa(old_session_id)
         ));
     }
 
@@ -3322,6 +2716,24 @@ mod tests {
     }
 
     #[test]
+    fn capsule_show_strategy_matches_platform_activation_contract() {
+        // 平台列表必须与 capsule_show_strategy_for_platform 的 cfg 完全一致：
+        // 改实现里的 #[cfg] 时，一并改这两个 #[cfg]，否则 Linux CI 直接红
+        // （fcitx5 PR #451 把 Linux 加进 NoActivate 但漏改本测试，CI 失败）。
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        assert_eq!(
+            capsule_show_strategy_for_platform(),
+            CapsuleShowStrategy::NoActivate
+        );
+
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        assert_eq!(
+            capsule_show_strategy_for_platform(),
+            CapsuleShowStrategy::FallbackShow
+        );
+    }
+
+    #[test]
     #[cfg(target_os = "windows")]
     fn prepared_windows_ime_slot_is_taken_only_for_matching_session() {
         let mut slots = vec![PreparedWindowsImeSessionSlot {
@@ -3421,7 +2833,13 @@ mod tests {
     #[test]
     fn focus_restore_failure_uses_specific_error_code_when_insert_fails() {
         assert_eq!(
-            dictation_error_code(InsertStatus::Failed, false, false, false),
+            dictation_error_code(
+                InsertStatus::Failed,
+                false,
+                false,
+                false,
+                crate::types::WindowsInsertionMode::Tsf,
+            ),
             Some("focusRestoreFailed")
         );
     }
@@ -3438,8 +2856,28 @@ mod tests {
     #[cfg(target_os = "windows")]
     fn tsf_required_failure_keeps_tsf_error_when_focus_was_ready() {
         assert_eq!(
-            dictation_error_code(InsertStatus::Failed, false, true, false),
+            dictation_error_code(
+                InsertStatus::Failed,
+                false,
+                true,
+                false,
+                crate::types::WindowsInsertionMode::Tsf,
+            ),
             Some("windowsImeTsfRequired")
+        );
+    }
+
+    #[test]
+    fn sendinput_only_mode_skips_tsf_required_error() {
+        assert_eq!(
+            dictation_error_code(
+                InsertStatus::Failed,
+                false,
+                true,
+                false,
+                crate::types::WindowsInsertionMode::SendInput,
+            ),
+            None
         );
     }
 
@@ -3532,6 +2970,8 @@ mod tests {
             "http://localhost".to_string(),
             "model".to_string(),
             None,
+            None,
+            false,
         ));
         *coordinator.inner.asr.lock() = Some(SessionResource::new(
             session_id(2),
@@ -3571,14 +3011,129 @@ fn enabled_phrases(inner: &Arc<Inner>) -> Vec<String> {
 /// 用户点 ✕ / ✓ / 中途出错 / 按 Esc 都走这里，统一 2 秒。
 const CAPSULE_AUTO_HIDE_DELAY_MS: u64 = 2000;
 
+/// Toggle 模式下，end_session 将 phase 设为 Idle 后在此时间内禁止新的 begin_session。
+/// 避免用户三连按时第 3 次按下误激活新听写（此时胶囊仍在离场动画周期内）。
+/// 值取 capsule EXIT_ANIM_MS (360ms) + 余量 ≈ 600ms。
+const POST_SESSION_COOLDOWN_MS: u64 = 600;
+
 /// Coordinator 全局超时保护：防止 ASR await_final_result() 永远挂起。
-/// 设置为 15 秒（比 ASR 的 12 秒 FINAL_RESULT_TIMEOUT 稍长），
-/// 只在 ASR 超时机制失效时作为最后的防线触发。
-const COORDINATOR_GLOBAL_TIMEOUT_SECS: u64 = 15;
+/// 设置为 30 秒，为云端 batch ASR（OpenRouter Whisper 等）提供足够的
+/// 网络超时预算；只在 ASR 自身超时机制失效时作为最后的防线触发。
+const COORDINATOR_GLOBAL_TIMEOUT_SECS: u64 = 30;
 
 #[cfg(target_os = "windows")]
 fn foundry_audio_transcribe_timeout_duration() -> std::time::Duration {
     std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS)
+}
+
+/// 本地 Qwen3-ASR 的动态转写超时。固定 15 秒在长录音（≥ 30s）+ 慢机器
+/// （RTF ≈ 0.3–0.5）上必然超时把整段内容丢掉。改用 max(15, ceil(audio_s
+/// × 0.6) + 10)：基础保留 15s 兜住短录音；长录音按音频长度的 0.6 倍 +
+/// 10s 余量，覆盖 RTF ≤ 0.5 的机器。
+fn local_qwen_transcribe_timeout(audio_secs: f64) -> std::time::Duration {
+    let secs = ((audio_secs * 0.6).ceil() as u64)
+        .saturating_add(10)
+        .max(COORDINATOR_GLOBAL_TIMEOUT_SECS);
+    std::time::Duration::from_secs(secs)
+}
+
+/// Whisper / OpenRouter 云端 batch ASR 的动态转写超时。OpenRouter 按 30s
+/// 分片，每片是一次 HTTP round-trip；网络抖动、排队、base64 body 都会
+/// 拉长耗时。公式 max(30, ceil(audio_s × 0.5) + 20)：30s 是全局兜底；
+/// 长录音按音频长度的 0.5 倍 + 20s 余量，覆盖多分片串行请求 + 网络波动。
+fn whisper_transcribe_timeout(audio_secs: f64) -> std::time::Duration {
+    let secs = ((audio_secs * 0.5).ceil() as u64)
+        .saturating_add(20)
+        .max(COORDINATOR_GLOBAL_TIMEOUT_SECS);
+    std::time::Duration::from_secs(secs)
+}
+
+/// sherpa-onnx offline batch 暂与 Foundry 同档；后续按 Windows 真机 CPU/模型
+/// 实测结果再调整。
+#[cfg(target_os = "windows")]
+fn sherpa_audio_transcribe_timeout_duration() -> std::time::Duration {
+    std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS)
+}
+
+pub(crate) fn validate_llm_endpoint(raw: &str) -> anyhow::Result<()> {
+    use std::net::IpAddr;
+
+    let url =
+        url::Url::parse(raw).map_err(|e| anyhow::anyhow!("LLM endpoint 不是合法 URL：{e}"))?;
+    let host = url
+        .host_str()
+        .ok_or_else(|| anyhow::anyhow!("LLM endpoint 缺少主机名"))?
+        .to_ascii_lowercase();
+
+    const METADATA_HOSTS: [&str; 2] = ["metadata.google.internal", "169.254.169.254"];
+    if METADATA_HOSTS.iter().any(|m| host.contains(m)) {
+        anyhow::bail!("LLM endpoint 指向云元数据服务，已拒绝：{host}");
+    }
+
+    let scheme = url.scheme();
+    let bare_host = host
+        .strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(host.as_str());
+
+    let Ok(ip) = bare_host.parse::<IpAddr>() else {
+        if bare_host == "localhost" {
+            return Ok(());
+        }
+        if scheme != "https" {
+            anyhow::bail!("LLM endpoint 必须使用 https（仅 localhost / 局域网允许 http）：{raw}");
+        }
+        return Ok(());
+    };
+
+    let canonical = match ip {
+        IpAddr::V6(v6) => v6.to_ipv4_mapped().map(IpAddr::V4).unwrap_or(ip),
+        v4 => v4,
+    };
+
+    let is_lan = match canonical {
+        IpAddr::V4(v4) => ip_v4_is_lan(v4),
+        IpAddr::V6(v6) => ip_v6_is_lan(v6),
+    };
+    if is_lan {
+        return Ok(());
+    }
+
+    let is_blocked = match canonical {
+        IpAddr::V4(v4) => ip_v4_is_blocked(v4),
+        IpAddr::V6(v6) => ip_v6_is_blocked(v6),
+    };
+    if is_blocked {
+        anyhow::bail!("LLM endpoint 指向保留/危险地址，已拒绝（防 SSRF）：{ip}");
+    }
+
+    if scheme != "https" {
+        anyhow::bail!("LLM endpoint 必须使用 https（仅 localhost / 局域网允许 http）：{raw}");
+    }
+
+    Ok(())
+}
+
+fn ip_v4_is_lan(ip: std::net::Ipv4Addr) -> bool {
+    ip.is_loopback() || ip.is_private()
+}
+
+fn ip_v4_is_blocked(ip: std::net::Ipv4Addr) -> bool {
+    let octets = ip.octets();
+    let is_cgnat = octets[0] == 100 && (64..=127).contains(&octets[1]);
+    ip.is_link_local() || ip.is_unspecified() || ip.is_broadcast() || is_cgnat
+}
+
+fn ip_v6_is_lan(ip: std::net::Ipv6Addr) -> bool {
+    let segs = ip.segments();
+    let is_ula = (segs[0] & 0xfe00) == 0xfc00;
+    ip.is_loopback() || is_ula
+}
+
+fn ip_v6_is_blocked(ip: std::net::Ipv6Addr) -> bool {
+    let segs = ip.segments();
+    let is_link_local = (segs[0] & 0xffc0) == 0xfe80;
+    ip.is_unspecified() || is_link_local
 }
 
 /// 检查 begin_session 的 await 间隙是否被 cancel_session 打断。
@@ -3613,384 +3168,6 @@ fn schedule_capsule_idle(inner: &Arc<Inner>, delay_ms: u64) {
     });
 }
 
-#[cfg(target_os = "windows")]
-fn capture_focus_target() -> Option<usize> {
-    use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
-
-    let foreground = unsafe { GetForegroundWindow() };
-    if foreground.0.is_null() {
-        None
-    } else {
-        Some(foreground.0 as usize)
-    }
-}
-
-#[cfg(not(target_os = "windows"))]
-fn capture_focus_target() -> Option<usize> {
-    None
-}
-
-/// 捕获用户开始 dictation 时的前台 app 标签（"localizedName (bundle.id)"），用作 LLM
-/// polish/translate 的上下文前提，让模型按 app 调风格。详见 issue #116。
-///
-/// macOS 走 NSWorkspace.frontmostApplication（公开 API，无需额外权限）；
-/// Windows 复用前台 HWND 拿窗口标题；Linux/其他平台返回 None。
-#[cfg(target_os = "macos")]
-fn capture_frontmost_app() -> Option<String> {
-    use objc2::msg_send;
-    use objc2::runtime::{AnyClass, AnyObject};
-
-    unsafe {
-        let cls = AnyClass::get("NSWorkspace")?;
-        let workspace: *mut AnyObject = msg_send![cls, sharedWorkspace];
-        if workspace.is_null() {
-            return None;
-        }
-        let app: *mut AnyObject = msg_send![workspace, frontmostApplication];
-        if app.is_null() {
-            return None;
-        }
-        let name_obj: *mut AnyObject = msg_send![app, localizedName];
-        let bundle_obj: *mut AnyObject = msg_send![app, bundleIdentifier];
-        let name = nsstring_to_string(name_obj);
-        let bundle = nsstring_to_string(bundle_obj);
-        match (name, bundle) {
-            (Some(n), Some(b)) => Some(format!("{n} ({b})")),
-            (Some(n), None) => Some(n),
-            (None, Some(b)) => Some(b),
-            (None, None) => None,
-        }
-    }
-}
-
-#[cfg(target_os = "macos")]
-unsafe fn nsstring_to_string(ns_string: *mut objc2::runtime::AnyObject) -> Option<String> {
-    use objc2::msg_send;
-    if ns_string.is_null() {
-        return None;
-    }
-    let utf8: *const std::os::raw::c_char = unsafe { msg_send![ns_string, UTF8String] };
-    if utf8.is_null() {
-        return None;
-    }
-    let cstr = unsafe { std::ffi::CStr::from_ptr(utf8) };
-    let s = cstr.to_string_lossy().into_owned();
-    if s.is_empty() {
-        None
-    } else {
-        Some(s)
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn capture_frontmost_app() -> Option<String> {
-    use windows::Win32::UI::WindowsAndMessaging::{
-        GetForegroundWindow, GetWindowTextLengthW, GetWindowTextW,
-    };
-
-    unsafe {
-        let hwnd = GetForegroundWindow();
-        if hwnd.0.is_null() {
-            return None;
-        }
-        let len = GetWindowTextLengthW(hwnd);
-        if len <= 0 {
-            return None;
-        }
-        let mut buf = vec![0u16; (len + 1) as usize];
-        let copied = GetWindowTextW(hwnd, &mut buf);
-        if copied <= 0 {
-            return None;
-        }
-        let title = String::from_utf16_lossy(&buf[..copied as usize]);
-        if title.is_empty() {
-            None
-        } else {
-            Some(title)
-        }
-    }
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
-fn capture_frontmost_app() -> Option<String> {
-    None
-}
-
-#[cfg(target_os = "windows")]
-fn restore_focus_target_if_possible(target: Option<usize>) -> bool {
-    use std::ffi::c_void;
-    use windows::Win32::Foundation::HWND;
-    use windows::Win32::UI::WindowsAndMessaging::{
-        GetForegroundWindow, IsIconic, IsWindow, SetForegroundWindow, ShowWindow, SW_RESTORE,
-    };
-
-    let Some(raw_target) = target else {
-        log::warn!("[coord] no original Windows insertion target captured");
-        return false;
-    };
-    let hwnd = HWND(raw_target as *mut c_void);
-    if hwnd.0.is_null() {
-        return false;
-    }
-    if !unsafe { IsWindow(hwnd).as_bool() } {
-        log::warn!("[coord] original Windows insertion target is no longer a valid window");
-        return false;
-    }
-
-    let foreground = unsafe { GetForegroundWindow() };
-    if foreground == hwnd {
-        return true;
-    }
-
-    if unsafe { IsIconic(hwnd).as_bool() } {
-        let _ = unsafe { ShowWindow(hwnd, SW_RESTORE) };
-    }
-    let _ = unsafe { SetForegroundWindow(hwnd) };
-    std::thread::sleep(std::time::Duration::from_millis(60));
-
-    let foreground = unsafe { GetForegroundWindow() };
-    if foreground != hwnd {
-        log::warn!("[coord] failed to restore original Windows insertion target before paste");
-        return false;
-    }
-    true
-}
-
-#[cfg(not(target_os = "windows"))]
-fn restore_focus_target_if_possible(_target: Option<usize>) -> bool {
-    true
-}
-
-#[cfg(target_os = "windows")]
-fn windows_hwnd_is_present(hwnd: windows::Win32::Foundation::HWND) -> bool {
-    hwnd != windows::Win32::Foundation::HWND::default()
-}
-
-#[cfg(target_os = "windows")]
-fn capture_ime_submit_target() -> Option<ImeSubmitTarget> {
-    use windows::Win32::UI::WindowsAndMessaging::{
-        GetForegroundWindow, GetGUIThreadInfo, GetWindowThreadProcessId, GUITHREADINFO,
-    };
-
-    let foreground = unsafe { GetForegroundWindow() };
-    if !windows_hwnd_is_present(foreground) {
-        return None;
-    }
-
-    let mut foreground_process_id = 0;
-    let foreground_thread_id =
-        unsafe { GetWindowThreadProcessId(foreground, Some(&mut foreground_process_id)) };
-    if foreground_thread_id == 0 {
-        return None;
-    }
-
-    let mut gui_info = GUITHREADINFO {
-        cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
-        ..Default::default()
-    };
-    let target_window = if unsafe { GetGUIThreadInfo(foreground_thread_id, &mut gui_info).is_ok() }
-        && windows_hwnd_is_present(gui_info.hwndFocus)
-    {
-        gui_info.hwndFocus
-    } else {
-        foreground
-    };
-
-    let mut process_id = 0;
-    let thread_id = unsafe { GetWindowThreadProcessId(target_window, Some(&mut process_id)) };
-    if process_id == 0 || thread_id == 0 {
-        return None;
-    }
-
-    Some(ImeSubmitTarget {
-        process_id,
-        thread_id,
-    })
-}
-
-#[cfg(target_os = "windows")]
-fn show_capsule_window_no_activate<R: tauri::Runtime>(
-    _app: &AppHandle<R>,
-    window: &tauri::WebviewWindow<R>,
-) -> bool {
-    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-    use windows::Win32::Foundation::HWND;
-    use windows::Win32::UI::WindowsAndMessaging::{
-        SetWindowPos, ShowWindow, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-        SWP_SHOWWINDOW, SW_SHOWNOACTIVATE,
-    };
-
-    let Ok(handle) = window.window_handle() else {
-        return false;
-    };
-    let RawWindowHandle::Win32(raw) = handle.as_raw() else {
-        return false;
-    };
-    let hwnd = HWND(raw.hwnd.get() as *mut _);
-
-    let _ = unsafe { ShowWindow(hwnd, SW_SHOWNOACTIVATE) };
-    let _ = unsafe {
-        SetWindowPos(
-            hwnd,
-            HWND_TOPMOST,
-            0,
-            0,
-            0,
-            0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
-        )
-    };
-    true
-}
-
-// macOS / Linux 上不走 no-activate 路径：胶囊由 emit_capsule 的 fallback
-// `window.show()` 直接显示，再用 restore_main_window_key_if_active 把焦点还给
-// 主窗口。这是 1.2.11 的实现 — 单独走 orderFrontRegardless 会让胶囊在 webview
-// 未完整初始化时偶发不可见。
-#[cfg(not(target_os = "windows"))]
-fn show_capsule_window_no_activate<R: tauri::Runtime>(
-    _app: &AppHandle<R>,
-    _window: &tauri::WebviewWindow<R>,
-) -> bool {
-    false
-}
-
-#[cfg(target_os = "windows")]
-fn hide_capsule_window_if_present() {
-    use std::iter::once;
-    use windows::core::PCWSTR;
-    use windows::Win32::Foundation::HWND;
-    use windows::Win32::UI::WindowsAndMessaging::{
-        FindWindowW, SetWindowPos, ShowWindow, HWND_NOTOPMOST, SWP_HIDEWINDOW, SWP_NOACTIVATE,
-        SWP_NOMOVE, SWP_NOSIZE, SW_HIDE,
-    };
-
-    let title: Vec<u16> = "OpenLess Capsule".encode_utf16().chain(once(0)).collect();
-    let hwnd = match unsafe { FindWindowW(PCWSTR::null(), PCWSTR(title.as_ptr())) } {
-        Ok(hwnd) => hwnd,
-        Err(_) => return,
-    };
-    if hwnd == HWND::default() || hwnd.0.is_null() {
-        return;
-    }
-
-    let _ = unsafe { ShowWindow(hwnd, SW_HIDE) };
-    let _ = unsafe {
-        SetWindowPos(
-            hwnd,
-            HWND_NOTOPMOST,
-            0,
-            0,
-            0,
-            0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_HIDEWINDOW,
-        )
-    };
-}
-
-#[cfg(not(target_os = "windows"))]
-fn hide_capsule_window_if_present() {}
-
-fn emit_capsule(
-    inner: &Arc<Inner>,
-    state: CapsuleState,
-    level: f32,
-    elapsed_ms: u64,
-    message: Option<String>,
-    inserted_chars: Option<u32>,
-) {
-    let app_opt = inner.app.lock().clone();
-    let Some(app) = app_opt else { return };
-    let translation = inner.translation_modifier_seen.load(Ordering::SeqCst);
-    let payload = CapsulePayload {
-        state,
-        level,
-        elapsed_ms,
-        message,
-        inserted_chars,
-        translation,
-    };
-
-    // visible / translation 是「这一帧 capsule:state event 的 payload」内容 ——
-    // 必须在 call-site（即音频线程触发 emit_capsule 时）就算定，否则 main thread
-    // 闭包里读到的将是「下一帧」的 state，跟实际下发给 JS 的 payload 不一致。
-    let visible = !matches!(state, CapsuleState::Idle);
-
-    // emit_capsule 会被 cpal process_callback（音频回调线程）调用 ~30 Hz —— 在该
-    // 线程上调用 NSWindow / HWND API 会撞 macOS dispatch_assert_queue_fail SIGTRAP
-    // 或者 Win32 SendMessage 死锁。把 window.show/hide + 位置调整 marshal 到主线程；
-    // app.emit_to 走 Tauri 内部事件总线，本身线程安全，保留同步调用。详见 audit 3.2.2。
-    //
-    // show_capsule（用户偏好）在主线程执行时再读 —— 用户可以在录音过程中改设置，
-    // 闭包入队到真正跑之间窗口上限是一两帧（~16-33ms），用最新值消除 stale-pref
-    // 闪烁。pr_agent 关注点 — 见 audit follow-up。
-    let inner_for_main = Arc::clone(inner);
-    let app_for_main = app.clone();
-    let _ = app.run_on_main_thread(move || {
-        let Some(window) = app_for_main.get_webview_window("capsule") else {
-            return;
-        };
-        let show_capsule = inner_for_main.prefs.get().show_capsule;
-        // 三平台统一：Done / Cancelled / Error 状态保留 ~1.5s toast
-        // （schedule_capsule_idle 之后会回 Idle 隐藏）。
-        // Windows 上 linger 的真实问题（截图选中 / 死区 / 拖拽卡顿）由 #140 加的
-        // `hide_capsule_window_if_present()` Win32 hard-hide 在 visible=false 分支
-        // 处理，不依赖把 Done/Cancelled/Error 打成 invisible。详见 PR #140 评论。
-        maybe_position_capsule_bottom_center(&inner_for_main, &window, translation);
-        if show_capsule && visible {
-            if !show_capsule_window_no_activate(&app_for_main, &window) {
-                let _ = window.show();
-            }
-            // macOS/Windows 优先走 no-activate show，避免录音胶囊抢走主窗口点击焦点。
-            // 若 fallback 到 show()，OpenLess 已是前台 app 时再把 key window 还给 main。
-            #[cfg(target_os = "macos")]
-            crate::restore_main_window_key_if_active(&app_for_main);
-        } else {
-            hide_capsule_window_if_present();
-            let _ = window.hide();
-        }
-    });
-
-    let _ = app.emit_to("capsule", "capsule:state", payload);
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct CapsuleLayoutState {
-    translation_active: bool,
-    monitor_x: i32,
-    monitor_y: i32,
-    monitor_width: u32,
-    monitor_height: u32,
-    scale_bits: u64,
-}
-
-fn maybe_position_capsule_bottom_center<R: tauri::Runtime>(
-    inner: &Arc<Inner>,
-    window: &tauri::WebviewWindow<R>,
-    translation_active: bool,
-) {
-    let Some(monitor) = window.current_monitor().ok().flatten() else {
-        return;
-    };
-    let next = CapsuleLayoutState {
-        translation_active,
-        monitor_x: monitor.position().x,
-        monitor_y: monitor.position().y,
-        monitor_width: monitor.size().width,
-        monitor_height: monitor.size().height,
-        scale_bits: monitor.scale_factor().to_bits(),
-    };
-    {
-        let last = inner.capsule_layout.lock();
-        if last.as_ref() == Some(&next) {
-            return;
-        }
-    }
-    if crate::position_capsule_bottom_center(window, translation_active).is_ok() {
-        let mut last = inner.capsule_layout.lock();
-        *last = Some(next);
-    }
-}
 
 // ─────────────────────────── audio bridge ───────────────────────────
 

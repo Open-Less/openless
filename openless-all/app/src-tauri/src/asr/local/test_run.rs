@@ -1,3 +1,4 @@
+#![cfg_attr(target_os = "linux", allow(dead_code, unused_variables))]
 //! 本地 Qwen3-ASR 一键"加载 + 测试"实现。
 //!
 //! 流程：
@@ -17,7 +18,9 @@ use std::time::Instant;
 use anyhow::Result;
 use serde::Serialize;
 
-use super::models::{model_dir, ModelId};
+#[cfg(target_os = "macos")]
+use super::models::model_dir;
+use super::models::ModelId;
 
 /// 内嵌测试音频。原始文件 `vendor/qwen-asr/samples/test_speech.wav`
 /// 内容："Hello. This is a test of the Voxtrail speech-to-text system."
@@ -42,6 +45,46 @@ pub async fn run_test(model_id: ModelId) -> Result<TestResult> {
     let dir = model_dir(model_id)?;
     if !dir.exists() {
         anyhow::bail!("模型目录不存在：{}（请先下载）", dir.display());
+    }
+
+    // ── 模型文件完整性检查 ────────────────────────────────────────────
+    // 在调 C FFI 之前先检查关键文件是否齐全、尺寸是否合理，避免因下载不完整
+    // 或文件损坏导致 C 端 qwen_load / qwen_transcribe_audio segfault 杀死进程。
+    // 需要的文件清单见 QwenAsrEngine::load() 注释。
+    let required_files = ["config.json", "vocab.json", "merges.txt"];
+    for fname in &required_files {
+        let path = dir.join(fname);
+        if !path.exists() {
+            anyhow::bail!(
+                "模型文件缺失：{fname}，请重新下载（预期路径：{}）",
+                path.display()
+            );
+        }
+        let meta = std::fs::metadata(&path)
+            .map_err(|e| anyhow::anyhow!("读取 {fname} 元数据失败：{e}"))?;
+        if meta.len() == 0 {
+            anyhow::bail!("模型文件为空：{fname}，请重新下载");
+        }
+    }
+    // safetensors 可能是单文件 model.safetensors 或分片 model-00001-of-NNNN.safetensors
+    let has_safetensors: Vec<_> = std::fs::read_dir(&dir)
+        .map_err(|e| anyhow::anyhow!("读取模型目录失败：{e}"))?
+        .filter_map(|entry| entry.ok())
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "safetensors"))
+        .collect();
+    if has_safetensors.is_empty() {
+        anyhow::bail!("模型目录中没有 .safetensors 权重文件，请重新下载");
+    }
+    for entry in &has_safetensors {
+        let meta = std::fs::metadata(entry.path())
+            .map_err(|e| anyhow::anyhow!("读取 {} 元数据失败：{e}", entry.path().display()))?;
+        if meta.len() < 1024 {
+            anyhow::bail!(
+                "权重文件太小（{} bytes）：{}，请重新下载",
+                meta.len(),
+                entry.path().display()
+            );
+        }
     }
 
     let samples = decode_wav_16k_mono(TEST_WAV)?;

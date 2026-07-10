@@ -1,0 +1,615 @@
+/* ===== OpenLess 远程输入 — 移动端样式 =====
+ * 配色 / 圆角 / 阴影 / 字体对齐 PC 端 design tokens(src/styles/tokens.css):
+ * 黑 + 白 + 电光蓝,浅色 glassy 风格(与桌面端保持一致)。
+ */
+
+:root {
+  /* 中性色 */
+  --bg: #f7f7f8;
+  --surface: #ffffff;
+  --surface-2: #fafafa;
+  --line: rgba(0, 0, 0, 0.08);
+  --line-strong: rgba(0, 0, 0, 0.14);
+
+  /* 墨色文字 */
+  --ink: #0a0a0b;
+  --ink-2: #2a2a2d;
+  --ink-3: rgba(10, 10, 11, 0.62);
+  --ink-4: rgba(10, 10, 11, 0.58);
+
+  /* 蓝色强调 */
+  --blue: #2563eb;
+  --blue-hover: #1d4ed8;
+  --blue-soft: #eff4ff;
+  --blue-ring: rgba(37, 99, 235, 0.22);
+  --on-accent: #ffffff;
+  --accent-solid-bg: var(--blue);
+  --accent-solid-bg-hover: var(--blue-hover);
+  --accent-solid-ink: var(--on-accent);
+
+  /* 状态色 */
+  --ok: #16a34a;
+  --ok-soft: #ecfdf5;
+  --warn: #d97706;
+  --danger: #dc2626;
+
+  /* 阴影 */
+  --shadow-sm: 0 1px 2px rgba(15, 17, 22, 0.04), 0 0 0 0.5px rgba(0, 0, 0, 0.04);
+  --shadow-md: 0 1px 2px rgba(15, 17, 22, 0.05), 0 6px 24px -12px rgba(15, 17, 22, 0.10), 0 0 0 0.5px rgba(0, 0, 0, 0.04);
+  --shadow-lg: 0 20px 60px -20px rgba(15, 17, 22, 0.18), 0 8px 32px -16px rgba(15, 17, 22, 0.10), 0 0 0 0.5px rgba(0, 0, 0, 0.06);
+
+  /* 圆角 */
+  --control-radius: 8px;
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 14px;
+  --r-xl: 18px;
+  --bubble-radius: var(--r-lg);
+  --modal-radius: var(--r-xl);
+  --r-2xl: 22px;
+  --r-pill: 999px;
+
+  /* 字体 */
+  --font-sans: system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", Roboto, Helvetica, Arial, sans-serif;
+
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+[data-ol-theme='dark'] {
+  --bg: #0b0e13;
+  --surface: #141922;
+  --surface-2: #1a202b;
+  --line: rgba(255, 255, 255, 0.09);
+  --line-strong: rgba(255, 255, 255, 0.16);
+  --ink: #f4f7fb;
+  --ink-2: #d8dfeb;
+  --ink-3: rgba(244, 247, 251, 0.74);
+  --ink-4: rgba(244, 247, 251, 0.58);
+  --blue: #60a5fa;
+  --blue-hover: #3b82f6;
+  --blue-soft: rgba(96, 165, 250, 0.14);
+  --blue-ring: rgba(96, 165, 250, 0.30);
+  --on-accent: #f8fbff;
+  --accent-solid-bg: #2563eb;
+  --accent-solid-bg-hover: #3b82f6;
+  --accent-solid-ink: #f8fbff;
+}
+
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* 关键:很多元素用 hidden 属性控制显隐,但元素自带 display(flex/inline-flex)会覆盖浏览器
+   默认的 [hidden]{display:none},导致空框照常显示。这条强制 hidden 优先(结果框/三点/图标都靠它)。 */
+[hidden] { display: none !important; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+body {
+  background:
+    radial-gradient(120% 80% at 50% -10%, #eef2fb 0%, var(--bg) 55%) fixed,
+    var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: 'cv11', 'ss01', 'ss03';
+  user-select: none;
+  -webkit-user-select: none;
+  overscroll-behavior: none;
+}
+
+#app {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding-bottom: calc(24px + var(--safe-bottom));
+}
+
+/* ===== 屏幕切换 ===== */
+.screen {
+  display: none;
+  flex: 1;
+  flex-direction: column;
+  padding: 24px 20px;
+  animation: fadeIn .25s ease;
+}
+.screen.active {
+  display: flex;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ===== 品牌头 ===== */
+.brand {
+  text-align: center;
+  margin: 28px 0 22px;
+}
+.brand-logo-img {
+  width: 72px;
+  height: 72px;
+  border-radius: var(--r-xl);
+  object-fit: cover;
+  box-shadow: var(--shadow-lg);
+}
+.brand-title {
+  font-size: 22px;
+  font-weight: 700;
+  margin: 16px 0 4px;
+  letter-spacing: .2px;
+  color: var(--ink);
+}
+.brand-sub {
+  margin: 0;
+  color: var(--ink-3);
+  font-size: 14px;
+}
+
+/* ===== 卡片 ===== */
+.card {
+  background: var(--surface);
+  border: 0.5px solid var(--line);
+  border-radius: var(--r-2xl);
+  padding: 22px 20px;
+  box-shadow: var(--shadow-lg);
+}
+.card-center {
+  text-align: center;
+}
+
+.field-label {
+  display: block;
+  font-size: 13px;
+  color: var(--ink-3);
+  margin-bottom: 10px;
+}
+
+/* ===== PIN 输入 ===== */
+.pin-input {
+  width: 100%;
+  font-size: 30px;
+  letter-spacing: 14px;
+  text-align: center;
+  padding: 16px 12px;
+  color: var(--ink);
+  background: var(--surface-2);
+  border: 1.5px solid var(--line-strong);
+  border-radius: var(--r-lg);
+  outline: none;
+  font-variant-numeric: tabular-nums;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+.pin-input::placeholder {
+  color: var(--ink-4);
+  letter-spacing: 14px;
+}
+.pin-input:focus {
+  border-color: var(--blue);
+  box-shadow: 0 0 0 3px var(--blue-ring);
+}
+
+/* ===== 按钮 ===== */
+.btn {
+  -webkit-appearance: none;
+  appearance: none;
+  display: block;
+  width: 100%;
+  margin-top: 16px;
+  padding: 15px 18px;
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--on-accent);
+  border: none;
+  border-radius: var(--r-lg);
+  cursor: pointer;
+  transition: transform .08s ease, background .15s ease, opacity .15s ease;
+}
+.btn:active { transform: scale(.98); }
+.btn:disabled { opacity: .5; cursor: default; }
+
+.btn-primary {
+  background: var(--accent-solid-bg);
+  box-shadow: 0 6px 18px -6px var(--blue-ring);
+}
+.btn-primary:active { background: var(--accent-solid-bg-hover); }
+
+.hint-error {
+  color: var(--danger);
+  font-size: 13px;
+  margin: 12px 2px 0;
+  min-height: 1em;
+}
+
+/* ===== 连接帮助(配对屏) ===== */
+.help {
+  margin-top: 18px;
+  padding: 16px 16px 18px;
+  border-radius: var(--r-xl);
+  background: var(--surface-2);
+  border: 0.5px solid var(--line);
+}
+.help-title {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ink-2);
+  margin-bottom: 10px;
+}
+.help-step {
+  font-size: 12.5px;
+  color: var(--ink-3);
+  line-height: 1.65;
+  margin: 0 0 9px;
+}
+.help-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+}
+.help-link {
+  display: inline-block;
+  padding: 9px 16px;
+  border-radius: var(--control-radius);
+  border: none;
+  background: var(--accent-solid-bg);
+  color: var(--accent-solid-ink);
+  font-size: 13px;
+  font-weight: 600;
+  font-family: inherit;
+  text-decoration: none;
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+}
+.help-link:active { background: var(--accent-solid-bg-hover); }
+.help-link-ghost {
+  background: var(--surface);
+  color: var(--blue);
+  border: 1px solid var(--blue);
+}
+.help-link-ghost:active { background: var(--blue-soft); }
+
+/* ===== 录音屏头部 ===== */
+.rec-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-bottom: 8px;
+}
+.app-icon {
+  width: 26px;
+  height: 26px;
+  border-radius: var(--control-radius);
+  flex: none;
+  box-shadow: var(--shadow-sm);
+}
+.rec-header-title {
+  font-weight: 700;
+  font-size: 16px;
+  letter-spacing: .2px;
+  color: var(--ink);
+}
+.mode-switch {
+  margin-left: auto;
+  display: inline-flex;
+  background: var(--surface-2);
+  border: 0.5px solid var(--line);
+  border-radius: var(--r-lg);
+  padding: 3px;
+  gap: 2px;
+}
+.mode-btn {
+  -webkit-appearance: none;
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--ink-3);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 7px 14px;
+  border-radius: var(--control-radius);
+  cursor: pointer;
+  transition: background .15s ease, color .15s ease;
+}
+.mode-btn.active {
+  background: var(--accent-solid-bg);
+  color: var(--accent-solid-ink);
+}
+
+/* ===== 录音主区 ===== */
+.rec-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 26px;
+}
+
+/* 录音大按钮 —— 默认蓝色实心(对齐 PC 主操作蓝),录音中转红 */
+.record-btn {
+  position: relative;
+  width: 168px;
+  height: 168px;
+  border-radius: 50%;
+  border: none;
+  cursor: pointer;
+  color: var(--accent-solid-ink);
+  background: linear-gradient(180deg, var(--accent-solid-bg-hover) 0%, var(--accent-solid-bg) 100%);
+  box-shadow:
+    0 16px 36px -10px rgba(37, 99, 235, .5),
+    inset 0 1px 0 rgba(255, 255, 255, .25);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  transition: transform .1s ease, box-shadow .2s ease, background .2s ease;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.record-btn:active { transform: scale(.97); }
+
+.record-btn-ring {
+  position: absolute;
+  inset: -6px;
+  border-radius: 50%;
+  border: 2px solid rgba(37, 99, 235, .35);
+  opacity: 0;
+  pointer-events: none;
+}
+.record-btn-icon {
+  width: 60px;
+  height: 60px;
+  object-fit: contain;
+  line-height: 1;
+  transition: transform .15s ease;
+}
+.record-btn-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, .92);
+  letter-spacing: .3px;
+}
+
+/* 录音中:红色 + 呼吸脉冲动画 */
+.record-btn.recording {
+  background: linear-gradient(180deg, #f87171 0%, #dc2626 100%);
+  box-shadow: 0 16px 36px -10px rgba(220, 38, 38, .5);
+  animation: breathe 1.6s ease-in-out infinite;
+}
+.record-btn.recording .record-btn-label { color: var(--on-accent); }
+.record-btn.recording .record-btn-ring {
+  opacity: 1;
+  border-color: rgba(220, 38, 38, .4);
+  animation: pulseRing 1.6s ease-out infinite;
+}
+
+@keyframes breathe {
+  0%, 100% { transform: scale(1); }
+  50%      { transform: scale(1.04); }
+}
+@keyframes pulseRing {
+  0%   { transform: scale(1);   opacity: .7; }
+  70%  { transform: scale(1.28); opacity: 0; }
+  100% { transform: scale(1.28); opacity: 0; }
+}
+
+/* 忙/禁用态 */
+.record-btn.busy {
+  opacity: .5;
+  cursor: default;
+  animation: none;
+}
+
+/* ===== 音量条 ===== */
+.level-wrap {
+  width: 78%;
+  max-width: 320px;
+  height: 8px;
+  border-radius: var(--r-pill);
+  background: #e9ebf0;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, .07);
+  overflow: hidden;
+  /* 平时淡化成一个浅凹槽;录音时才高亮(下方规则),避免像一根无意义的白条 */
+  opacity: .45;
+  transition: opacity .2s ease;
+}
+.record-btn.recording ~ .level-wrap {
+  opacity: 1;
+}
+.level-bar {
+  height: 100%;
+  width: 0%;
+  border-radius: var(--r-pill);
+  background: linear-gradient(90deg, var(--ok), var(--blue));
+  transition: width .08s linear;
+}
+
+/* ===== 状态条 ===== */
+.status-bar {
+  min-height: 28px;
+  padding: 8px 18px;
+  border-radius: var(--r-pill);
+  background: var(--surface);
+  border: 0.5px solid var(--line);
+  box-shadow: var(--shadow-sm);
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink);
+  text-align: center;
+  max-width: 90%;
+}
+.status-bar.is-error { color: var(--danger); border-color: rgba(220, 38, 38, .35); }
+.status-bar.is-ok    { color: var(--ok);     border-color: rgba(22, 163, 74, .35); }
+.status-bar.is-work  { color: var(--blue);   border-color: var(--blue-ring); }
+
+/* 状态图标(如完成对勾) */
+.status-icon {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+  vertical-align: -3px;
+  margin-right: 3px;
+}
+
+/* 识别中三点加载动效(替代旋转 emoji) */
+.dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-right: 5px;
+  vertical-align: middle;
+  color: var(--blue);
+}
+.dots i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  display: inline-block;
+  animation: dotPulse 1.2s infinite ease-in-out both;
+}
+.dots i:nth-child(1) { animation-delay: -.32s; }
+.dots i:nth-child(2) { animation-delay: -.16s; }
+@keyframes dotPulse {
+  0%, 80%, 100% { transform: scale(.5); opacity: .35; }
+  40%           { transform: scale(1);  opacity: 1; }
+}
+
+/* ===== 识别结果文字(电脑回传) ===== */
+.result-wrap {
+  max-width: 90%;
+  margin-top: 2px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  animation: fadeIn .25s ease;
+}
+.result-text {
+  padding: 12px 16px;
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  border: 0.5px solid var(--line);
+  box-shadow: var(--shadow-sm);
+  font-size: 15px;
+  line-height: 1.55;
+  color: var(--ink);
+  text-align: left;
+  white-space: pre-wrap;
+  word-break: break-word;
+  /* 结果文字允许选中复制(其余 UI 默认禁选) */
+  user-select: text;
+  -webkit-user-select: text;
+}
+.result-copy {
+  align-self: flex-end;
+  -webkit-appearance: none;
+  appearance: none;
+  border: 1px solid var(--blue);
+  background: var(--blue-soft);
+  color: var(--blue);
+  font-size: 13px;
+  font-weight: 600;
+  font-family: inherit;
+  padding: 8px 18px;
+  border-radius: var(--r-lg);
+  cursor: pointer;
+  transition: background .15s ease, color .15s ease;
+}
+.result-copy:active { background: var(--accent-solid-bg); color: var(--accent-solid-ink); }
+.result-copy.copied { background: var(--ok-soft); border-color: var(--ok); color: var(--ok); }
+
+/* ===== 提示文字 ===== */
+.rec-tip {
+  text-align: center;
+  color: var(--ink-4);
+  font-size: 13px;
+  margin: 18px 0 0;
+}
+
+/* ===== 电脑落字开关 ===== */
+.insert-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin: 14px 0 0;
+  font-size: 13px;
+  color: var(--ink-3);
+  cursor: pointer;
+}
+.insert-switch {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+.insert-track {
+  position: relative;
+  width: 42px;
+  height: 24px;
+  border-radius: 999px;
+  background: var(--line-strong);
+  transition: background .2s ease;
+  flex: none;
+}
+.insert-track::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .25);
+  transition: transform .2s ease;
+}
+.insert-switch:checked ~ .insert-track {
+  background: var(--blue);
+}
+.insert-switch:checked ~ .insert-track::after {
+  transform: translateX(18px);
+}
+
+/* ===== 断线屏 ===== */
+.offline-icon { font-size: 48px; }
+.offline-title { font-size: 20px; margin: 12px 0 6px; color: var(--ink); }
+.offline-sub { color: var(--ink-3); font-size: 14px; margin: 0 0 8px; }
+
+/* ===== 底部证书提示(固定) ===== */
+.cert-tip {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 12px 16px calc(12px + var(--safe-bottom));
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink-4);
+  background: rgba(255, 255, 255, .92);
+  backdrop-filter: blur(12px) saturate(160%);
+  -webkit-backdrop-filter: blur(12px) saturate(160%);
+  border-top: 0.5px solid var(--line);
+  text-align: center;
+}
+
+/* 小屏微调 */
+@media (max-height: 640px) {
+  .brand { margin: 14px 0; }
+  .brand-logo-img { width: 56px; height: 56px; }
+  .record-btn { width: 148px; height: 148px; }
+  .record-btn-icon { width: 52px; height: 52px; }
+}

@@ -5,6 +5,7 @@
 //! matches OpenLess' recorder output directly. The Qwen OpenAI Realtime line is
 //! a different protocol and is intentionally left for a follow-up provider.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -94,7 +95,12 @@ struct SyncState {
     start: Option<Instant>,
     final_tx: Option<oneshot::Sender<Result<RawTranscript, BailianASRError>>>,
     send_tx: Option<mpsc::UnboundedSender<SendItem>>,
-    final_segments: Vec<String>,
+    /// sentence_id → text，按 sentence_id 排序拼接得到最终文本。
+    /// 同一 sentence_id 的后到结果覆盖前一个，消除累积文本导致的重复。
+    final_segments: BTreeMap<i64, String>,
+    /// sentence_id → interim 文本，sentence_end == false 时更新，
+    /// 收到同 sentence_id 的 final 结果时将内容移入 final_segments。
+    partial_segments: BTreeMap<i64, String>,
     last_result_text: String,
 }
 
@@ -360,6 +366,16 @@ impl BailianRealtimeASR {
         let Some(sentence) = sentence else {
             return;
         };
+
+        // 跳过 heartbeat 事件（不含识别文本）
+        if sentence
+            .get("heartbeat")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            return;
+        }
+
         let Some(text) = sentence.get("text").and_then(Value::as_str) else {
             return;
         };
@@ -367,11 +383,39 @@ impl BailianRealtimeASR {
         if trimmed.is_empty() {
             return;
         }
-        let is_sentence_final = sentence.get("end_time").is_some();
+
+        // 使用 API 文档标注的 sentence_end 作为 finality 判断。
+        // end_time > 0 仅在 sentence_end 字段完全不存在时作为兼容 fallback，
+        // 因为 DashScope 的 interim 结果也包含正数的 end_time（随音频推进增长），
+        // 直接 fallback 会导致 interim 结果被误判为 final，重现累积文本重复。
+        let sentence_end_val = sentence.get("sentence_end");
+        let sentence_end = sentence_end_val.and_then(Value::as_bool).unwrap_or(false);
+        let end_time = sentence
+            .get("end_time")
+            .and_then(Value::as_i64)
+            .unwrap_or(0);
+        let is_sentence_final = match sentence_end_val {
+            Some(_) => sentence_end,
+            None => end_time > 0,
+        };
+
+        let sentence_id = sentence
+            .get("sentence_id")
+            .and_then(Value::as_i64)
+            .unwrap_or(0);
+
         let mut st = self.state.lock();
         st.last_result_text = trimmed.to_string();
-        if is_sentence_final && st.final_segments.last().map(|s| s.as_str()) != Some(trimmed) {
-            st.final_segments.push(trimmed.to_string());
+
+        if is_sentence_final {
+            // 所有 final 结果（含 sentence_id == 0）都存入 final_segments。
+            // BTreeMap 覆盖语义保证同一 sentence_id 不会重复追加。
+            st.final_segments.insert(sentence_id, trimmed.to_string());
+            // 清理该句的 interim 缓存
+            st.partial_segments.remove(&sentence_id);
+        } else {
+            // interim 结果暂存 partial，同一 sentence_id 后到覆盖前到
+            st.partial_segments.insert(sentence_id, trimmed.to_string());
         }
     }
 
@@ -386,7 +430,8 @@ impl BailianRealtimeASR {
             let text = if st.final_segments.is_empty() {
                 st.last_result_text.clone()
             } else {
-                st.final_segments.join("")
+                let segments: Vec<String> = st.final_segments.values().cloned().collect();
+                merge_segments(&segments)
             };
             let duration_ms = if st.bytes_received > 0 {
                 st.bytes_received / BYTES_PER_MS
@@ -406,7 +451,9 @@ impl BailianRealtimeASR {
     fn finish_with_partial_or_error(&self, error: BailianASRError) {
         let has_partial = {
             let st = self.state.lock();
-            !st.last_result_text.trim().is_empty() || !st.final_segments.is_empty()
+            !st.last_result_text.trim().is_empty()
+                || !st.final_segments.is_empty()
+                || !st.partial_segments.is_empty()
         };
         if has_partial {
             // 与 Volcengine 保持一致：连接异常但已有 partial 时优先兜底返回，避免丢失用户已识别出的内容。
@@ -472,6 +519,34 @@ fn drain_audio_chunks(buffer: &mut Vec<u8>) -> Vec<Vec<u8>> {
         chunks.push(buffer.drain(..TARGET_AUDIO_CHUNK_BYTES).collect());
     }
     chunks
+}
+
+/// 带重叠检测的文本段拼接：如果后一段的开头与前一段的末尾存在重叠，
+/// 只追加不重叠的尾部，避免因 API 重放或重复事件导致的累积文本重复。
+///
+/// 最小重叠长度为 2 个字符，避免单字巧合匹配（如"今天"+"天气"）。
+/// 例如 ["你好吗", "好吗我们"] → "你好吗我们"
+fn merge_segments(segments: &[String]) -> String {
+    let mut result = String::new();
+    for seg in segments {
+        if result.is_empty() {
+            result = seg.clone();
+            continue;
+        }
+        let result_chars: Vec<char> = result.chars().collect();
+        let seg_chars: Vec<char> = seg.chars().collect();
+        let max_overlap = result_chars.len().min(seg_chars.len());
+        let mut overlap = 0;
+        for n in (2..=max_overlap).rev() {
+            if result_chars[result_chars.len() - n..] == seg_chars[..n] {
+                overlap = n;
+                break;
+            }
+        }
+        let tail: String = seg_chars[overlap..].iter().collect();
+        result.push_str(&tail);
+    }
+    result
 }
 
 fn run_task_message(task_id: &str, model: &str, vocabulary_id: Option<&str>) -> String {
@@ -548,6 +623,262 @@ async fn close_writer(writer: &SharedWriter) -> Result<(), BailianASRError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---- helpers ----
+
+    fn make_result_event(sentence_id: i64, text: &str, is_final: bool) -> Value {
+        json!({
+            "payload": {
+                "output": {
+                    "sentence": {
+                        "sentence_id": sentence_id,
+                        "text": text,
+                        "sentence_end": is_final,
+                        // end_time 始终为正数，匹配 DashScope 真实 API 行为：
+                        // interim 和 final 都携带正数的 end_time。
+                        "end_time": 1000 + sentence_id * 100
+                    }
+                }
+            }
+        })
+    }
+
+    fn make_heartbeat_event() -> Value {
+        json!({
+            "payload": {
+                "output": {
+                    "sentence": {
+                        "heartbeat": true
+                    }
+                }
+            }
+        })
+    }
+
+    fn create_test_asr() -> BailianRealtimeASR {
+        BailianRealtimeASR::new(BailianCredentials {
+            api_key: "sk-test".to_string(),
+            endpoint: String::new(),
+            model: String::new(),
+            vocabulary_id: None,
+        })
+    }
+
+    // ---- merge_segments ----
+
+    #[test]
+    fn merge_segments_dedupes_overlap() {
+        let segments = vec!["你好吗".to_string(), "好吗我们".to_string()];
+        assert_eq!(merge_segments(&segments), "你好吗我们");
+    }
+
+    #[test]
+    fn merge_segments_no_overlap() {
+        let segments = vec!["今天".to_string(), "天气真好".to_string()];
+        assert_eq!(merge_segments(&segments), "今天天气真好");
+    }
+
+    #[test]
+    fn merge_segments_single_segment() {
+        let segments = vec!["仅一段".to_string()];
+        assert_eq!(merge_segments(&segments), "仅一段");
+    }
+
+    #[test]
+    fn merge_segments_empty_input() {
+        let segments: Vec<String> = vec![];
+        assert_eq!(merge_segments(&segments), "");
+    }
+
+    #[test]
+    fn merge_segments_full_overlap() {
+        let segments = vec!["重复重复".to_string(), "重复重复".to_string()];
+        assert_eq!(merge_segments(&segments), "重复重复");
+    }
+
+    #[test]
+    fn merge_segments_three_segments_chain() {
+        let segments = vec![
+            "今天天气".to_string(),
+            "天气真不错".to_string(),
+            "不错我们出去玩".to_string(),
+        ];
+        assert_eq!(merge_segments(&segments), "今天天气真不错我们出去玩");
+    }
+
+    // ---- record_result: heartbeat ----
+
+    #[test]
+    fn heartbeat_event_is_skipped() {
+        let asr = create_test_asr();
+        asr.record_result(&make_heartbeat_event());
+        let st = asr.state.lock();
+        assert!(st.last_result_text.is_empty());
+        assert!(st.final_segments.is_empty());
+        assert!(st.partial_segments.is_empty());
+    }
+
+    // ---- record_result: partial / interim ----
+
+    #[test]
+    fn partial_results_same_sentence_id_overwrite() {
+        let asr = create_test_asr();
+        asr.record_result(&make_result_event(1, "你", false));
+        asr.record_result(&make_result_event(1, "你好", false));
+        asr.record_result(&make_result_event(1, "你好吗", false));
+        let st = asr.state.lock();
+        assert!(st.final_segments.is_empty(), "no final yet");
+        assert_eq!(st.partial_segments.len(), 1);
+        assert_eq!(st.partial_segments.get(&1).unwrap(), "你好吗");
+    }
+
+    #[test]
+    fn final_result_replaces_partial_same_sentence_id() {
+        let asr = create_test_asr();
+        asr.record_result(&make_result_event(1, "你", false));
+        asr.record_result(&make_result_event(1, "你好", false));
+        asr.record_result(&make_result_event(1, "你好吗", true));
+        let st = asr.state.lock();
+        assert_eq!(st.final_segments.len(), 1);
+        assert_eq!(st.final_segments.get(&1).unwrap(), "你好吗");
+        assert!(st.partial_segments.is_empty(), "partial not cleaned up");
+    }
+
+    #[test]
+    fn interim_with_positive_end_time_not_mistaken_for_final() {
+        // DashScope 真实 API 中 interim 结果同时带有 sentence_end: false
+        // 和正数的 end_time，验证这不会被误判为 final。
+        let asr = create_test_asr();
+        asr.record_result(&make_result_event(1, "中间结果", false));
+        let st = asr.state.lock();
+        assert!(
+            st.final_segments.is_empty(),
+            "interim with end_time > 0 but sentence_end=false should not be final"
+        );
+        assert_eq!(st.partial_segments.len(), 1);
+        assert_eq!(st.partial_segments.get(&1).unwrap(), "中间结果");
+    }
+
+    // ---- record_result: duplicate final ----
+
+    #[test]
+    fn duplicate_final_event_not_duplicated() {
+        let asr = create_test_asr();
+        asr.record_result(&make_result_event(1, "你好吗", true));
+        asr.record_result(&make_result_event(1, "你好吗", true));
+        let st = asr.state.lock();
+        assert_eq!(st.final_segments.len(), 1);
+        assert_eq!(st.final_segments.get(&1).unwrap(), "你好吗");
+    }
+
+    #[test]
+    fn duplicate_final_event_updated_text() {
+        let asr = create_test_asr();
+        asr.record_result(&make_result_event(1, "旧版本", true));
+        asr.record_result(&make_result_event(1, "新版本", true));
+        let st = asr.state.lock();
+        assert_eq!(st.final_segments.len(), 1);
+        assert_eq!(st.final_segments.get(&1).unwrap(), "新版本");
+    }
+
+    // ---- record_result: sentence_id == 0 ----
+
+    #[test]
+    fn final_with_zero_sentence_id_not_dropped() {
+        let asr = create_test_asr();
+        let event = json!({
+            "payload": {
+                "output": {
+                    "sentence": {
+                        "text": "短句",
+                        "sentence_end": true,
+                        "end_time": 500
+                    }
+                }
+            }
+        });
+        asr.record_result(&event);
+        let st = asr.state.lock();
+        assert_eq!(st.final_segments.len(), 1);
+        assert!(st.final_segments.contains_key(&0));
+        assert_eq!(st.final_segments.get(&0).unwrap(), "短句");
+    }
+
+    // ---- record_result: multiple sentence IDs ----
+
+    #[test]
+    fn multiple_sentence_ids_tracked_separately() {
+        let asr = create_test_asr();
+        asr.record_result(&make_result_event(1, "第一句", true));
+        asr.record_result(&make_result_event(2, "第二句", true));
+        asr.record_result(&make_result_event(3, "第三句", true));
+        let st = asr.state.lock();
+        assert_eq!(st.final_segments.len(), 3);
+        // BTreeMap keeps insertion order
+        let texts: Vec<&String> = st.final_segments.values().collect();
+        assert_eq!(texts, vec!["第一句", "第二句", "第三句"]);
+    }
+
+    #[test]
+    fn mixed_partial_and_final_interleaved() {
+        let asr = create_test_asr();
+        // sentence 1: interim updates
+        asr.record_result(&make_result_event(1, "我", false));
+        asr.record_result(&make_result_event(1, "我想", false));
+        // sentence 2: interim updates
+        asr.record_result(&make_result_event(2, "测", false));
+        asr.record_result(&make_result_event(2, "测试", false));
+        // sentence 1 final
+        asr.record_result(&make_result_event(1, "我想吃饭", true));
+        // sentence 2 final
+        asr.record_result(&make_result_event(2, "测试一下", true));
+        let st = asr.state.lock();
+        assert_eq!(st.final_segments.len(), 2);
+        assert_eq!(st.final_segments.get(&1).unwrap(), "我想吃饭");
+        assert_eq!(st.final_segments.get(&2).unwrap(), "测试一下");
+        assert!(st.partial_segments.is_empty(), "partials not cleaned up");
+    }
+
+    // ---- finish_success ----
+
+    #[test]
+    fn finish_success_assembles_segments_with_merge_guard() {
+        let asr = create_test_asr();
+        asr.record_result(&make_result_event(1, "今天天气", true));
+        asr.record_result(&make_result_event(2, "天气真不错", true));
+        asr.record_result(&make_result_event(3, "不错吧", true));
+
+        let (tx, mut rx) = oneshot::channel();
+        {
+            let mut st = asr.state.lock();
+            st.final_tx = Some(tx);
+            st.bytes_received = 10000;
+        }
+
+        asr.finish_success();
+        let result = rx.try_recv().unwrap().unwrap();
+        assert_eq!(result.text, "今天天气真不错吧");
+    }
+
+    #[test]
+    fn finish_success_fallback_to_last_result_text() {
+        let asr = create_test_asr();
+        // interim only, no final segments
+        asr.record_result(&make_result_event(1, "中间结果", false));
+
+        let (tx, mut rx) = oneshot::channel();
+        {
+            let mut st = asr.state.lock();
+            st.final_tx = Some(tx);
+            st.bytes_received = 10000;
+        }
+
+        asr.finish_success();
+        let result = rx.try_recv().unwrap().unwrap();
+        assert_eq!(result.text, "中间结果");
+    }
+
+    // ---- existing tests kept ----
 
     #[test]
     fn credentials_apply_default_endpoint_and_model() {

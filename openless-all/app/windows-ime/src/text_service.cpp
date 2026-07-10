@@ -12,7 +12,7 @@ namespace {
 
 constexpr wchar_t kMessageWindowClassName[] = L"OpenLessImeMessageWindow";
 constexpr UINT kSubmitTextMessage = WM_APP + 1;
-constexpr UINT kSubmitTextTimeoutMs = 3000;
+constexpr UINT kSubmitTextTimeoutMs = 2000;
 
 struct SubmitTextRequest {
   const std::wstring* session_id = nullptr;

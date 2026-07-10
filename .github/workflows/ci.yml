@@ -11,8 +11,75 @@ on:
     branches: [main, beta]
   pull_request:
     branches: [main, beta]
+  workflow_dispatch:
 
 jobs:
+  android-check:
+    name: Android cargo check
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: openless-all/app
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Android SDK + NDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+
+      - name: Install NDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager "ndk;26.1.10909125"
+          ndk_dir="$ANDROID_HOME/ndk/26.1.10909125"
+          echo "ANDROID_NDK_HOME=$ndk_dir" >> "$GITHUB_ENV"
+          echo "NDK_HOME=$ndk_dir" >> "$GITHUB_ENV"
+          set +o pipefail
+          yes | sdkmanager --licenses
+          set -o pipefail
+
+      - name: Configure NDK toolchain for cargo
+        shell: bash
+        run: |
+          set -euo pipefail
+          prebuilt="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
+          echo "CC_aarch64_linux_android=$prebuilt/bin/aarch64-linux-android24-clang" >> "$GITHUB_ENV"
+          echo "CXX_aarch64_linux_android=$prebuilt/bin/aarch64-linux-android24-clang++" >> "$GITHUB_ENV"
+          echo "AR_aarch64_linux_android=$prebuilt/bin/llvm-ar" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$prebuilt/bin/aarch64-linux-android24-clang" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: openless-all/app/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Install Linux check dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential curl file libssl-dev wget
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build frontend (tsc + vite)
+        # generate_context! requires frontendDist (../dist) to exist on Android too.
+        run: npm run build
+
+      - name: Check Android updater pubkey matches tauri.conf.json
+        run: npm run check:android-updater-pubkey
+
+      - name: Check Tauri backend (Android target)
+        run: cargo check --manifest-path src-tauri/Cargo.toml --target aarch64-linux-android
+
   cross-platform:
     name: ${{ matrix.label }} checks
     strategy:
@@ -84,6 +151,9 @@ jobs:
               exit 1
             }
           }
+
+      - name: Check macOS capsule Spaces contract
+        run: npm run check:macos-capsule-spaces
 
       - name: Build frontend (tsc + vite)
         run: npm run build

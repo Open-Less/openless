@@ -9,7 +9,6 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
-use std::time::Duration;
 
 use global_hotkey::hotkey::HotKey;
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager};
@@ -54,9 +53,10 @@ impl GlobalHotkeyRuntime {
             .cloned()
     }
 
-    /// Signal the dispatcher loop to exit at its next 250 ms tick. Idempotent.
-    /// Currently called only from tests; production app shutdown lets the OS
-    /// reap the process. Audit 3.4.4.
+    /// Signal the dispatcher loop to exit before it handles the next hotkey
+    /// event. Idempotent. Currently called only from tests; production app
+    /// shutdown lets the OS reap the (detached, blocked-on-recv) thread.
+    /// Audit 3.4.4.
     #[allow(dead_code)]
     pub fn request_shutdown(&self) {
         self.shutdown.store(true, Ordering::SeqCst);
@@ -114,9 +114,12 @@ fn start_dispatcher(runtime: Arc<GlobalHotkeyRuntime>) {
                 if runtime.shutdown.load(Ordering::SeqCst) {
                     return;
                 }
-                match receiver.recv_timeout(Duration::from_millis(250)) {
+                // Block until a hotkey actually fires rather than waking 4×/sec to
+                // re-check a flag that only flips in tests. The shutdown check above
+                // still runs after every delivered event.
+                match receiver.recv() {
                     Ok(event) => runtime.dispatch(event),
-                    Err(_) => continue,
+                    Err(_) => return, // all senders dropped — nothing left to dispatch
                 }
             }
         })

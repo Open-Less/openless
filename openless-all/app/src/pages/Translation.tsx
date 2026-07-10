@@ -4,10 +4,11 @@
 //   - 选一个翻译目标语言（单选；选"不启用"则 Shift 不触发翻译）
 //   - 看完整使用说明（怎么触发、按钮位置、胶囊显示）
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Card, PageHeader } from './_atoms';
 import { SavedToast } from '../components/SavedToast';
+import { SelectLite } from '../components/ui/SelectLite';
 import { SUPPORTED_LANGUAGES } from '../lib/types';
 import { useHotkeySettings } from '../state/HotkeySettingsContext';
 import { formatComboLabel } from '../lib/hotkey';
@@ -120,6 +121,11 @@ export function Translation() {
   const translationHotkeyLabel = formatComboLabel(prefs.translationHotkey);
   const enabled = prefs.translationTargetLanguage.trim() !== '';
 
+  const targetOptions = useMemo(() => ([
+    { value: '', label: t('translation.target.disabled') },
+    ...SUPPORTED_LANGUAGES.map(lang => ({ value: lang, label: lang })),
+  ]), [t]);
+
   return (
     <>
       <PageHeader title={t('translation.title')} />
@@ -216,28 +222,14 @@ export function Translation() {
               {enabled ? t('translation.statusEnabled') : t('translation.statusDisabled')}
             </span>
           </div>
-          <select
+          <SelectLite
             value={prefs.translationTargetLanguage}
-            onChange={e => onTargetChange(e.target.value)}
-            style={{
-              width: '100%',
-              maxWidth: 360,
-              height: 32,
-              padding: '0 10px',
-              fontSize: 13,
-              border: '0.5px solid var(--ol-line-strong)',
-              borderRadius: 8,
-              background: '#fff',
-              color: 'var(--ol-ink)',
-              fontFamily: 'inherit',
-              cursor: 'default',
-            }}
-          >
-            <option value="">{t('translation.target.disabled')}</option>
-            {SUPPORTED_LANGUAGES.map(lang => (
-              <option key={lang} value={lang}>{lang}</option>
-            ))}
-          </select>
+            onChange={onTargetChange}
+            options={targetOptions}
+            placeholder={t('translation.target.disabled')}
+            ariaLabel={t('translation.target.title')}
+            style={{ width: '100%', maxWidth: 360, fontSize: 13 }}
+          />
         </Card>
 
         {/* 3. 使用方法 */}

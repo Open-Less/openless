@@ -8,5 +8,7 @@
   <string>OpenLess 需要辅助功能权限来监听全局快捷键并把识别结果粘贴到当前光标位置。</string>
   <key>NSAppleEventsUsageDescription</key>
   <string>OpenLess 需要发送按键事件，把识别结果粘贴到当前光标位置。</string>
+  <key>NSSpeechRecognitionUsageDescription</key>
+  <string>OpenLess 使用 macOS 系统语音识别来在本地把你的语音转成文字（无需联网、无需凭据）。</string>
 </dict>
 </plist>

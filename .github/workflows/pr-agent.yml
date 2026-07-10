@@ -6,6 +6,7 @@ on:
   # 本 workflow 不 checkout / 执行 PR 分支代码，只让 digest-pinned PR-Agent 镜像通过 GitHub API 读取 diff。
   pull_request_target:
     types: [opened, reopened, ready_for_review, synchronize]
+
   issue_comment:
     types: [created]
 
@@ -24,6 +25,7 @@ jobs:
           )
         )
       }}
+
     runs-on: ubuntu-latest
 
     permissions:
@@ -36,16 +38,19 @@ jobs:
       - name: Run PR Agent
         # Pin the actual PR-Agent container image because this job can access repo Secrets.
         uses: docker://pragent/pr-agent@sha256:a0b36966ca3a197ca739fa1e65c16703076fc1c744cd423ca203b8c21707d71c
+
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-          # 同时兼容 PR-Agent 旧写法和 OpenAI-like 新写法
-          OPENAI_KEY: ${{ secrets.OPENAI_KEY }}
-          OPENAI__KEY: ${{ secrets.OPENAI_KEY }}
-          OPENAI.API_BASE: "https://cpa.chris233.qzz.io/v1"
-          OPENAI__API_BASE: "https://cpa.chris233.qzz.io/v1"
-          OPENAI_API_BASE: "https://cpa.chris233.qzz.io/v1"
-          OPENAI_BASE_URL: "https://cpa.chris233.qzz.io/v1"
+          # DeepSeek API Key
+          OPENAI_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          OPENAI__KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+
+          # DeepSeek 官方 OpenAI-Compatible API
+          OPENAI.API_BASE: "https://api.deepseek.com/v1"
+          OPENAI__API_BASE: "https://api.deepseek.com/v1"
+          OPENAI_API_BASE: "https://api.deepseek.com/v1"
+          OPENAI_BASE_URL: "https://api.deepseek.com/v1"
 
           # 中文输出
           pr_reviewer.response_language: "zh-CN"
@@ -53,11 +58,12 @@ jobs:
           pr_code_suggestions.response_language: "zh-CN"
 
           # 模型配置
-          config.model: "openai/deepseek-v4-pro"
-          config.fallback_models: '["openai/gpt-5.4-mini"]'
+          config.model: "openai/deepseek-v4-flash"
+          config.fallback_models: '["openai/deepseek-v4-flash"]'
           config.custom_model_max_tokens: "1048576"
-          # GPT-5 fallback 不接受 temperature=0.2，保持 1 避免 LiteLLM 参数错误。
-          config.temperature: "1"
+
+          # DeepSeek 支持 temperature
+          config.temperature: "0.2"
 
           # 自动执行配置
           github_action_config.auto_review: "true"

@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="%%OL_LANG%%">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="#0f1115">
+  <title>OpenLess</title>
+  <link rel="stylesheet" href="/style.css">
+  <script>window.__OL_LANG__ = "%%OL_LANG%%";</script>
+</head>
+<body>
+  <div id="app">
+    <!-- ===== 首屏:PIN 配对 ===== -->
+    <section id="screen-pin" class="screen active">
+      <div class="brand">
+        <img class="brand-logo-img" src="/icon.png" alt="OpenLess" />
+        <h1 class="brand-title" data-i18n="brandTitle">OpenLess 远程输入</h1>
+        <p class="brand-sub" data-i18n="brandSub">在手机上录音，实时输入到电脑</p>
+      </div>
+
+      <div class="card">
+        <label class="field-label" for="pin-input" data-i18n="pinFieldLabel">配对码(电脑上显示的 6 位数字)</label>
+        <input
+          id="pin-input"
+          class="pin-input"
+          type="text"
+          inputmode="numeric"
+          autocomplete="off"
+          maxlength="6"
+          pattern="[0-9]*"
+          placeholder="••••••" />
+        <p id="pin-error" class="hint-error" hidden></p>
+        <button id="btn-connect" class="btn btn-primary" data-i18n="btnConnect">连接</button>
+      </div>
+
+      <!-- 连接帮助：证书信任引导（手机上直接照做）。暂时隐藏（用户要求），需要时去掉 hidden 即可恢复。 -->
+      <div class="help" hidden>
+        <div class="help-title" data-i18n="helpTitle">连不上？多半是手机没信任证书</div>
+        <p class="help-step" data-i18n="helpAndroid">① 安卓 / 一般情况：用浏览器无痕模式打开本页，出现“不安全”警告时选“继续前往”，再输入配对码连接。</p>
+        <p class="help-step" data-i18n="helpIos">② iOS Safari 必须装证书：点下方按钮下载并安装描述文件，然后到「设置 → 通用 → 关于本机 → 证书信任设置」里打开它的“完全信任”，再回来连接。</p>
+        <div class="help-actions">
+          <a class="help-link" href="/cert.cer" data-i18n="helpDownloadCert">⬇ 下载并安装证书</a>
+          <button type="button" class="help-link help-link-ghost" id="copy-cert-link" data-i18n="helpCopyLink">⧉ 复制链接</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== 录音屏 ===== -->
+    <section id="screen-rec" class="screen">
+      <header class="rec-header">
+        <img class="app-icon" id="app-icon" src="/icon.png" alt="OpenLess" />
+        <span class="rec-header-title">OpenLess</span>
+        <div class="mode-switch" id="mode-switch" role="group" aria-label="录音方式">
+          <button class="mode-btn" data-mode="toggle" type="button" data-i18n="modeToggle">点按</button>
+          <button class="mode-btn" data-mode="hold" type="button" data-i18n="modeHold">按住</button>
+        </div>
+      </header>
+
+      <div class="rec-main">
+        <button id="btn-record" class="record-btn" type="button" aria-label="录音按钮">
+          <span class="record-btn-ring"></span>
+          <img class="record-btn-icon" src="/mic.png" alt="" />
+          <span class="record-btn-label" id="record-label">点击开始</span>
+        </button>
+
+        <div class="level-wrap" aria-hidden="true">
+          <div class="level-bar" id="level-bar"></div>
+        </div>
+
+        <div class="status-bar" id="status-bar">
+          <img class="status-icon" id="status-icon" alt="" hidden />
+          <span class="dots" id="status-dots" aria-hidden="true" hidden><i></i><i></i><i></i></span>
+          <span class="status-text" id="status-text">准备就绪</span>
+        </div>
+
+        <!-- 电脑落字完成后回传的最终文字,让手机端直接看到这次识别/输入的结果 -->
+        <div class="result-wrap" id="result-wrap" hidden>
+          <div class="result-text" id="result-text"></div>
+          <button class="result-copy" id="result-copy" type="button" data-i18n="copy">复制</button>
+        </div>
+      </div>
+
+      <p class="rec-tip" id="rec-tip">点击大按钮开始录音，再次点击结束并识别。</p>
+
+      <!-- 电脑落字开关：关掉则这次只把文字回传到手机,不落到电脑光标 -->
+      <label class="insert-toggle">
+        <span class="insert-toggle-text" data-i18n="insertLabel">电脑落字</span>
+        <input type="checkbox" id="insert-switch" class="insert-switch" checked />
+        <span class="insert-track" aria-hidden="true"></span>
+      </label>
+    </section>
+
+    <!-- ===== 断线屏 ===== -->
+    <section id="screen-offline" class="screen">
+      <div class="card card-center">
+        <div class="offline-icon">📵</div>
+        <h2 class="offline-title" data-i18n="offlineTitle">连接已断开</h2>
+        <p class="offline-sub" id="offline-reason">与电脑的连接已中断。</p>
+        <button id="btn-reconnect" class="btn btn-primary" data-i18n="btnReconnect">重新连接</button>
+      </div>
+    </section>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

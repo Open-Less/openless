@@ -119,6 +119,15 @@ Windows：在「设置 → 权限」中检查监听器状态。
 **Q: 文字没有插入，只是复制到了剪贴板？**  
 当目标输入框不支持辅助功能写入时（如某些安全限制的应用），OpenLess 会自动回退到剪贴板复制，手动粘贴即可。
 
+**Q: 在 Windows 玩 Minecraft 等全屏游戏时，OpenLess capsule 不弹出 / 字符无法输入？**  
+这是 **Windows 操作系统层面的限制**，OpenLess 应用本身无法绕过（详见 [issue #457](https://github.com/Open-Less/openless/issues/457)）：
+
+- **独占全屏（exclusive fullscreen）**：标准应用窗口（包括 OpenLess capsule）**不会绘制在独占全屏 DirectX/OpenGL 应用之上**。请把游戏切换到 **无边框窗口化全屏（Borderless Windowed Fullscreen）**。Minecraft：视频设置 → 全屏 关闭（保持窗口最大化即可）。
+- **管理员权限不一致（UIPI）**：若游戏以管理员身份运行而 OpenLess 不是，Windows 阻止 OpenLess 接收游戏前台的按键，hotkey 完全不触发。让两者权限对齐（要么都以管理员运行，要么都以普通用户运行）。
+- **游戏聊天框未打开**：识别字符通过模拟键盘事件落字。Minecraft 中必须先按 `T` 打开聊天框，OpenLess 的输入才会落到聊天里。
+
+macOS 不存在独占全屏（所有"全屏"都是带 Spaces 的无边框窗口），所以此限制不适用。
+
 **Q: 润色结果和预期不符？**  
 尝试切换输出模式，或在词典中添加相关专有名词。
 

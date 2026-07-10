@@ -1,53 +1,150 @@
-// QaPanel.tsx — 划词追问浮窗 v2（issue #118 v2）。
+// QaPanel.tsx — 划词追问浮窗 v3（issue #118 v2）。
 //
-// 触发链路（v2 双 hotkey）：
-//   1) 用户按 Cmd+Shift+;（默认）→ 后端 toggle 浮窗可见性。
-//      显示时发 `qa:state { kind: "idle", messages: [] }`。
-//   2) 浮窗可见时，用户按 rightOption（主听写键的复用）→ 录音；
-//      再按一次 → ASR + LLM；后端推 `qa:state { kind: "answer", messages: [...] }`。
-//   3) 答案后用户可继续按 Option 多轮提问，messages 累积。
+// 结构 = 官方 shadcn base 组件文档 message-scroller-demo **同款骨架**：
+//   MessageScrollerProvider → Card（CardHeader 标题/副行/CardAction ✕ →
+//   CardContent(p-0) 内 MessageScroller / Empty 空状态 → CardFooter 内
+//   InputGroup 输入组）。组件源码 1:1 来自官方 registry（components/chat/ui/）。
 //
-// 关闭：Esc / Close 按钮 / 再按 Cmd+Shift+; → qa_window_dismiss → 后端清历史 + 隐藏窗口。
-// **不再自动关**（v1 的 blur / 30s 超时去掉）：用户多轮思考时浮窗保持。
+// 「交流」形态（用户拍板）：官方 **Message** 带头像 —— 右侧用户消息挂 GitHub
+// 头像（未登录 = GitHub 图标），左侧助手消息挂**旋转中的**胶囊思考头像
+// （orbFeed 共享渲染源镜像）。
+//
+// 语音状态**只在输入区**表达（用户拍板：不进面板上部）：
+//   录音 = 输入组绕圈红光；转译思考（问题还没落到对话里）= 绕圈黑光；
+//   问题落定发出后光停，此时才在对话里出现助手思考行 —— 头像永远不先于
+//   用户的话出现（修「AI 头像先出来、动画抽搐」）。
+//
+// 触发链路：
+//   1) 用户按 Cmd+Shift+;（默认）→ 后端 toggle 浮窗可见性；显示时发
+//      `qa:state { kind: "idle", messages: [] }` 与 `chat-panel:shown`（入场动画）。
+//   2) 提问两条并存路径：文字（输入框 Enter → qa_submit_text）与语音
+//      （麦克风按钮 / 听写键 → 录音 → ASR + LLM）。
+//   3) 答案后可继续多轮追问，messages 累积。
+//
+// 关闭：Esc / ✕ / 再按 Cmd+Shift+; → qa_window_dismiss → 后端发
+// `chat-panel:closing`（退场动画）→ 240ms 后隐藏窗口并清历史。
 
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
-import { getSettings, isTauri, qaWindowDismiss, qaWindowPin } from '../lib/ipc';
-import type { QaChatMessage, QaStatePayload, UserPreferences } from '../lib/types';
-import { getHotkeyBindingLabel } from '../lib/hotkey';
-import { renderQaMarkdown, renderQaPlainText } from '../lib/qaMarkdown';
+import {
+  ArrowUpIcon,
+  MessageCircleDashedIcon,
+  MicIcon,
+  SquareIcon,
+  XIcon,
+} from 'lucide-react';
+import {
+  MessageScroller,
+  MessageScrollerButton,
+  MessageScrollerContent,
+  MessageScrollerItem,
+  MessageScrollerProvider,
+  MessageScrollerViewport,
+} from '../components/chat/ui/message-scroller';
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from '../components/chat/ui/card';
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from '../components/chat/ui/empty';
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+} from '../components/chat/ui/input-group';
+import { Message, MessageAvatar, MessageContent } from '../components/chat/ui/message';
+import { Bubble, BubbleContent } from '../components/chat/ui/bubble';
+import { Button } from '../components/chat/ui/button';
+import { OrbAvatar, UserAvatar, useGithubLogin } from '../components/chat/avatars';
+import { AssistantMarkdown } from '../components/chat/markdown';
+import { useChatPanelLifecycle } from '../components/chat/lifecycle';
+import { cn } from '../components/chat/lib/utils';
+import {
+  chatPanelFocusKeyboard,
+  isTauri,
+  qaSubmitText,
+  qaToggleRecording,
+  qaWindowDismiss,
+} from '../lib/ipc';
+import type { QaChatMessage, QaStatePayload } from '../lib/types';
+import '../components/chat/chat.css';
 
 const SELECTION_PREVIEW_MAX = 60;
 
 type Status = 'idle' | 'recording' | 'thinking' | 'error';
 
-export function QaPanel() {
-  const { t, i18n } = useTranslation();
-  const [messages, setMessages] = useState<QaChatMessage[]>([]);
+interface QaPanelProps {
+  embedded?: boolean;
+  onRequestClose?: () => void;
+}
+
+// 浏览器预览（vite dev，非 Tauri）：?window=qa&demo=1 注入两轮演示对话，方便调样式。
+function getPreviewMessages(): QaChatMessage[] {
+  if (isTauri || typeof window === 'undefined') return [];
+  if (new URLSearchParams(window.location.search).get('demo') !== '1') return [];
+  return [
+    {
+      role: 'user',
+      content:
+        '# 选区原文\nThe mitochondria is the powerhouse of the cell.\n\n# 我的问题\n这句话为什么会成为梗？',
+    },
+    {
+      role: 'assistant',
+      content:
+        '这句话出自初中生物课本，因为**被反复要求背诵**而深入人心。它简短好记、几乎人人见过，于是在英文互联网上被当作“唯一记得的知识点”反复调侃——任何需要往里塞一句正经知识的场合都能用它。',
+    },
+    {
+      role: 'user',
+      content: '那更严谨的说法是什么？',
+    },
+    {
+      role: 'assistant',
+      content:
+        '线粒体主要通过**氧化磷酸化**生成 ATP，是细胞的“能量工厂”没错，但：\n\n1. 它不是唯一的能量来源（糖酵解在细胞质里进行）\n2. 它还参与钙离子调控、凋亡信号等\n\n所以课本那句是简化版，方便记忆但不完整。',
+    },
+  ];
+}
+
+/** macOS movableByWindowBackground 拖动把手（header 区域整条可拖，普通箭头指针）。 */
+const drag = { 'data-tauri-drag-region': true } as const;
+
+export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {}) {
+  const { t } = useTranslation();
+  const [messages, setMessages] = useState<QaChatMessage[]>(getPreviewMessages);
   const [status, setStatus] = useState<Status>('idle');
   const [errorMsg, setErrorMsg] = useState<string>('');
   const [selectionPreview, setSelectionPreview] = useState<string>('');
-  const [pinned, setPinned] = useState(false);
+  const [composerText, setComposerText] = useState<string>('');
   /** 流式 LLM 答案：answer_delta 累积、answer 事件来时清空（最终内容已落到 messages）。 */
   const [streamingAnswer, setStreamingAnswer] = useState<string>('');
-  /** 录音电平：0..1。后端每帧 33ms 通过 qa:level emit。详见 issue #162。 */
-  const [level, setLevel] = useState<number>(0);
-  /** 用户当前的录音热键 label（如 "右 Option" / "Right Alt"）。issue #205：
-   *  原版硬编码 "Option"，Windows 用户没这个键，文案失真。读 prefs 后由 i18n
-   *  插值动态显示，平台与用户配置都能跟上。 */
-  const [recordHotkeyLabel, setRecordHotkeyLabel] = useState<string>(() =>
-    i18n.t('hotkey.fallback'),
-  );
+  const { enterEpoch, closing } = useChatPanelLifecycle();
   const tRef = useRef(t);
   tRef.current = t;
+  const embeddedRef = useRef(embedded);
+  embeddedRef.current = embedded;
+  const onRequestCloseRef = useRef(onRequestClose);
+  onRequestCloseRef.current = onRequestClose;
+
+  // 新轮次信号：用户消息条数变化 = 新提问发出，也用它刷新 GitHub 头像。
+  const userTurnCount = messages.filter(m => m.role === 'user').length;
+  const githubLogin = useGithubLogin(userTurnCount);
 
   // ── 后端事件订阅（mount 时订阅一次，永不重订阅）──────────────────
   useEffect(() => {
     if (!isTauri) return;
     let unlistenState: (() => void) | undefined;
     let unlistenDismiss: (() => void) | undefined;
-    let unlistenLevel: (() => void) | undefined;
-    let unlistenPrefs: (() => void) | undefined;
     let cancelled = false;
     (async () => {
       try {
@@ -63,7 +160,6 @@ export function QaPanel() {
               setSelectionPreview('');
               setErrorMsg('');
               setStreamingAnswer('');
-              setLevel(0);
               break;
             case 'recording':
               setStatus('recording');
@@ -75,17 +171,19 @@ export function QaPanel() {
               // ASR 在 finalize、user message 还没 push 的过渡帧。提前切到 thinking
               // 视图避免 UI 卡 recording 几百 ms 反馈缺失。详见 issue #161。
               setStatus('thinking');
-              setSelectionPreview('');
+              if (payload.selection_preview != null) {
+                setSelectionPreview(payload.selection_preview);
+              }
               setErrorMsg('');
               setStreamingAnswer('');
-              setLevel(0);
               break;
             case 'thinking':
               setStatus('thinking');
-              setSelectionPreview('');
+              if (payload.selection_preview != null) {
+                setSelectionPreview(payload.selection_preview);
+              }
               setErrorMsg('');
               setStreamingAnswer('');
-              setLevel(0);
               break;
             case 'answer_delta':
               // 流式增量。仍保持 thinking 状态——直到 answer 事件落定后才回 idle。
@@ -95,44 +193,32 @@ export function QaPanel() {
               break;
             case 'answer':
               setStatus('idle');
-              setSelectionPreview('');
               setErrorMsg('');
               // messages 已被上面的 setMessages 落定，清掉流式 buffer 避免和最终气泡重影。
               setStreamingAnswer('');
-              setLevel(0);
               break;
             case 'error':
               setStatus('error');
               setErrorMsg(payload.error ?? tRef.current('qa.error'));
               setStreamingAnswer('');
-              setLevel(0);
               break;
           }
         });
         const dismissHandle = await listen<unknown>('qa:dismiss', () => {
-          setPinned(false);
-          void qaWindowDismiss();
-        });
-        // qa:level — 录音电平，节流 ~33ms/帧。详见 issue #162。
-        const levelHandle = await listen<{ level: number }>('qa:level', event => {
-          setLevel(event.payload.level ?? 0);
-        });
-        // prefs:changed — 后端在 set_settings 后广播。issue #205：QA 浮窗在独立
-        // webview，没有 HotkeySettingsContext；如果用户在主窗口改了录音键，
-        // 浮窗里的 "{recordHotkey}" 文案必须立刻跟上，否则会一直停在旧值。
-        const prefsHandle = await listen<UserPreferences>('prefs:changed', event => {
-          setRecordHotkeyLabel(getHotkeyBindingLabel(event.payload?.hotkey));
+          setSelectionPreview('');
+          setComposerText('');
+          if (embeddedRef.current) {
+            onRequestCloseRef.current?.();
+          } else {
+            void qaWindowDismiss();
+          }
         });
         if (cancelled) {
           stateHandle();
           dismissHandle();
-          levelHandle();
-          prefsHandle();
         } else {
           unlistenState = stateHandle;
           unlistenDismiss = dismissHandle;
-          unlistenLevel = levelHandle;
-          unlistenPrefs = prefsHandle;
         }
       } catch (error) {
         console.error('[QaPanel] listener setup failed', error);
@@ -142,8 +228,6 @@ export function QaPanel() {
       cancelled = true;
       unlistenState?.();
       unlistenDismiss?.();
-      unlistenLevel?.();
-      unlistenPrefs?.();
     };
   }, []);
 
@@ -153,322 +237,313 @@ export function QaPanel() {
       if (event.key === 'Escape') {
         event.preventDefault();
         void qaWindowDismiss();
+        onRequestClose?.();
       }
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, []);
-
-  // ── 读取用户当前的录音热键 label，给 i18n 插值用（issue #205）。
-  // QaPanel 跑在独立 webview（label="qa"），没有 HotkeySettingsContext
-  // 注入，所以直接走 IPC 拿一次 prefs。语言切换时 i18n.t('hotkey.fallback')
-  // 也要跟着重算，所以 i18n.language 入依赖。
-  useEffect(() => {
-    if (!isTauri) {
-      setRecordHotkeyLabel(i18n.t('hotkey.fallback'));
-      return;
-    }
-    let cancelled = false;
-    void getSettings()
-      .then(prefs => {
-        if (cancelled) return;
-        setRecordHotkeyLabel(getHotkeyBindingLabel(prefs.hotkey));
-      })
-      .catch(err => {
-        console.warn('[QaPanel] load hotkey label failed', err);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [i18n.language]);
-
-  const onTogglePin = () => {
-    const next = !pinned;
-    setPinned(next);
-    void qaWindowPin(next);
-  };
+  }, [onRequestClose]);
 
   const onClose = () => {
     void qaWindowDismiss();
+    onRequestClose?.();
   };
 
-  // ── 自动滚动到底（新消息进来时）────────────────────────────────────
-  const scrollRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    el.scrollTop = el.scrollHeight;
-  }, [messages, status]);
+  const onSubmitText = () => {
+    const text = composerText.trim();
+    if (!text || status === 'thinking' || status === 'recording') return;
+    setComposerText('');
+    void qaSubmitText(text).catch(error => {
+      console.error('[QaPanel] qa_submit_text failed', error);
+      setErrorMsg(error instanceof Error ? error.message : String(error));
+      setStatus('error');
+    });
+  };
+
+  const onToggleRecording = () => {
+    if (status === 'thinking') return;
+    void qaToggleRecording().catch(error => {
+      console.error('[QaPanel] qa_toggle_recording failed', error);
+    });
+  };
+
+  const lastRole = messages[messages.length - 1]?.role;
+  // 问题是否已落进对话（转译完成 + 提交）。落定前头像不出现、黑光在输入框跑。
+  const questionLanded = lastRole === 'user' || streamingAnswer.length > 0;
+  // 输入组环形光：录音红光 → 转译思考黑光 → 问题落定即停（用户拍板的三段式）。
+  const ring =
+    status === 'recording'
+      ? 'recording'
+      : status === 'thinking' && !questionLanded
+        ? 'thinking'
+        : undefined;
+  // 助手思考行：问题已在对话里、答案还没开始流出时才出现（头像不先于用户的话）。
+  const thinkingRow = status === 'thinking' && !streamingAnswer && lastRole === 'user';
+  const showEmpty =
+    messages.length === 0 && !streamingAnswer && !thinkingRow && status !== 'error';
+
+  // ── 官方 message-scroller-demo 同款骨架 ─────────────────────────────
+  return (
+    <MessageScrollerProvider
+      autoScroll
+      defaultScrollPosition="last-anchor"
+      scrollPreviousItemPeek={18}
+    >
+      <Card
+        key={enterEpoch}
+        className={cn(
+          'olchat-shell olchat-shell-in h-screen w-full gap-0',
+          embedded && 'min-h-screen rounded-none shadow-none ring-0',
+          closing && 'olchat-shell-out',
+        )}
+      >
+        <CardHeader {...(embedded ? {} : drag)} className="gap-1 border-b">
+          <CardTitle {...(embedded ? {} : drag)}>{t('qa.title')}</CardTitle>
+          {/* 副行固定欢迎语：录音/思考状态不进面板上部（用户拍板），语音反馈全在输入区。 */}
+          <CardDescription {...(embedded ? {} : drag)}>{t('qa.headerHint')}</CardDescription>
+          <CardAction>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={onClose}
+              onMouseDown={event => {
+                event.preventDefault();
+                event.stopPropagation();
+              }}
+              title={t('qa.closeTooltip')}
+              aria-label={t('qa.closeTooltip')}
+            >
+              <XIcon />
+            </Button>
+          </CardAction>
+        </CardHeader>
+        <CardContent className="flex-1 overflow-hidden p-0">
+          {showEmpty ? (
+            <Empty className="h-full">
+              <EmptyHeader>
+                <EmptyMedia variant="icon">
+                  <MessageCircleDashedIcon />
+                </EmptyMedia>
+                <EmptyTitle>{t('qa.emptyTitle')}</EmptyTitle>
+                <EmptyDescription>{t('qa.emptyDesc')}</EmptyDescription>
+              </EmptyHeader>
+            </Empty>
+          ) : (
+            <MessageScroller>
+              <MessageScrollerViewport>
+                <MessageScrollerContent
+                  aria-busy={status === 'thinking' || undefined}
+                  className="p-(--card-spacing)"
+                >
+                  {messages.map((message, i) => (
+                    <MessageRow key={i} index={i} message={message} githubLogin={githubLogin} />
+                  ))}
+                  {streamingAnswer && (
+                    <MessageScrollerItem messageId="streaming">
+                      <Message>
+                        <AiAvatar />
+                        <MessageContent>
+                          <AssistantMarkdown markdown={streamingAnswer} streaming />
+                        </MessageContent>
+                      </Message>
+                    </MessageScrollerItem>
+                  )}
+                  {thinkingRow && (
+                    <MessageScrollerItem messageId="thinking" className="olchat-enter">
+                      <Message role="status">
+                        <AiAvatar />
+                        <MessageContent className="justify-center">
+                          <span className="shimmer w-fit text-xs font-medium">
+                            {t('qa.thinking')}
+                          </span>
+                        </MessageContent>
+                      </Message>
+                    </MessageScrollerItem>
+                  )}
+                  {status === 'error' && (
+                    <MessageScrollerItem messageId="error" className="olchat-enter">
+                      <Bubble variant="destructive">
+                        <BubbleContent>
+                          <div>{errorMsg}</div>
+                          <div className="mt-1 text-[11.5px] opacity-70">
+                            {t('qa.errorRetryHint')}
+                          </div>
+                        </BubbleContent>
+                      </Bubble>
+                    </MessageScrollerItem>
+                  )}
+                </MessageScrollerContent>
+              </MessageScrollerViewport>
+              <MessageScrollerButton aria-label={t('qa.jumpToLatest')} />
+            </MessageScroller>
+          )}
+        </CardContent>
+        <CardFooter className="flex-col gap-2">
+          {status === 'recording' && selectionPreview && (
+            <SelectionChip text={selectionPreview} t={t} />
+          )}
+          <Composer
+            value={composerText}
+            status={status}
+            ring={ring}
+            embedded={embedded}
+            onChange={setComposerText}
+            onSubmit={onSubmitText}
+            onToggleRecording={onToggleRecording}
+            t={t}
+          />
+        </CardFooter>
+      </Card>
+    </MessageScrollerProvider>
+  );
+}
+
+// ── 底部输入区：官方 demo 同款 InputGroup，打字 + 语音两种形式完整 ────
+//
+// · 打字：Enter 走表单提交；IME 组合中的 Enter（选字确认）不触发（isComposing/
+//   keyCode 229 守卫）。点进输入框时 chat_panel_focus_keyboard 让非激活面板
+//   成为 key window（不激活 app，主窗口不动）。
+// · 语音：麦克风按钮开/停录音；录音红光、转译黑光绕输入组一圈圈跑
+//   （olchat-ring），输入框本体保持可见。
+function Composer({
+  value,
+  status,
+  ring,
+  embedded,
+  onChange,
+  onSubmit,
+  onToggleRecording,
+  t,
+}: {
+  value: string;
+  status: Status;
+  ring: 'recording' | 'thinking' | undefined;
+  embedded: boolean;
+  onChange: (value: string) => void;
+  onSubmit: () => void;
+  onToggleRecording: () => void;
+  t: ReturnType<typeof useTranslation>['t'];
+}) {
+  // IME 组合期间的 Enter 是「选字确认」不是「发送」。keydown 里 isComposing
+  // 已覆盖大部分场景，keyCode 229 兜底 WebKit 老行为。
+  const composingRef = useRef(false);
+  const recording = status === 'recording';
+  const busy = status === 'thinking' || recording;
+
+  const onKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (event.key !== 'Enter') return;
+    if (composingRef.current || event.nativeEvent.isComposing || event.keyCode === 229) {
+      event.preventDefault();
+    }
+  };
 
   return (
-    <div style={shellStyle}>
-      <Toolbar pinned={pinned} onTogglePin={onTogglePin} onClose={onClose} />
-      <div ref={scrollRef} style={contentStyle}>
-        {messages.length === 0 && status === 'idle' && (
-          <EmptyHint t={t} recordHotkey={recordHotkeyLabel} />
-        )}
-        {messages.length === 0 && status === 'recording' && (
-          <RecordingHeader
-            preview={selectionPreview}
-            t={t}
-            level={level}
-            recordHotkey={recordHotkeyLabel}
-          />
-        )}
-        <MessageList messages={messages} />
-        {status === 'recording' && messages.length > 0 && (
-          <TurnIndicator
-            kind="recording"
-            t={t}
-            preview={selectionPreview}
-            level={level}
-            recordHotkey={recordHotkeyLabel}
-          />
-        )}
-        {streamingAnswer && (
-          <StreamingAssistantBubble markdown={streamingAnswer} />
-        )}
-        {status === 'thinking' && !streamingAnswer && (
-          <TurnIndicator kind="thinking" t={t} />
-        )}
-        {status === 'error' && (
-          <ErrorRow message={errorMsg} t={t} recordHotkey={recordHotkeyLabel} />
-        )}
-      </div>
-      <StatusBar status={status} t={t} recordHotkey={recordHotkeyLabel} />
-    </div>
+    <form
+      onSubmit={event => {
+        event.preventDefault();
+        onSubmit();
+      }}
+      className="w-full"
+    >
+      <InputGroup className="olchat-ring" data-ring={ring}>
+        <InputGroupInput
+          value={value}
+          placeholder={t('qa.composerPlaceholder')}
+          onChange={event => onChange(event.currentTarget.value)}
+          onKeyDown={onKeyDown}
+          onCompositionStart={() => {
+            composingRef.current = true;
+          }}
+          onCompositionEnd={() => {
+            composingRef.current = false;
+          }}
+          onFocus={embedded ? undefined : () => void chatPanelFocusKeyboard()}
+          onPointerDown={embedded ? undefined : () => void chatPanelFocusKeyboard()}
+        />
+        <InputGroupAddon align="block-end" className="pt-1">
+          <InputGroupButton
+            type="button"
+            size="icon-sm"
+            variant={recording ? 'destructive' : 'ghost'}
+            disabled={status === 'thinking'}
+            onClick={onToggleRecording}
+            aria-pressed={recording}
+            aria-label={recording ? t('qa.micStop') : t('qa.micLabel')}
+            title={recording ? t('qa.micStop') : t('qa.micLabel')}
+          >
+            {recording ? <SquareIcon /> : <MicIcon />}
+          </InputGroupButton>
+          <InputGroupButton
+            type="submit"
+            variant="default"
+            size="icon-sm"
+            className="ml-auto"
+            disabled={busy || !value.trim()}
+          >
+            <ArrowUpIcon />
+            <span className="sr-only">{t('qa.composerSend')}</span>
+          </InputGroupButton>
+        </InputGroupAddon>
+      </InputGroup>
+    </form>
   );
 }
 
 // ── 子组件 ────────────────────────────────────────────────────────────
 
-interface ToolbarProps {
-  pinned: boolean;
-  onTogglePin: () => void;
-  onClose: () => void;
-}
-
-function Toolbar({ pinned, onTogglePin, onClose }: ToolbarProps) {
-  const { t } = useTranslation();
-  // 拖动 (issue #205)：
-  // - macOS: lib.rs::make_qa_window_draggable_macos 在 NSWindow 层把整窗口设
-  //   movableByWindowBackground=YES，所以 macOS 上整片背景都可拖。
-  // - Windows: NSWindow 走不了；用 Tauri 标准 data-tauri-drag-region —— mousedown
-  //   走 startDragging() → WM_NCLBUTTONDOWN(HTCAPTION)，在 focus:false 浮窗上也能用。
-  // 两条路径并存不冲突；data-tauri-drag-region 放在 toolbar 的空白 spacer 上，IconBtn
-  // 作为 button 子元素仍然正常 click。
+/** 助手头像：**旋转中的**胶囊思考动画（共享渲染源镜像，全部消息头像都在转）。 */
+function AiAvatar() {
   return (
-    <div style={toolbarStyle}>
-      <div data-tauri-drag-region style={{ flex: 1, height: '100%' }} />
-      <IconBtn
-        label={pinned ? t('qa.unpinTooltip') : t('qa.pinTooltip')}
-        active={pinned}
-        onClick={onTogglePin}
-      >
-        <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
-          <path
-            d="M10.5 2L14 5.5L11.5 8L9.5 7L7 9.5L6.5 9L4 11.5L3 13L4.5 11.5L7 9L6.5 8.5L9 6L8 4L10.5 2Z"
-            stroke="currentColor"
-            strokeWidth="1.2"
-            strokeLinejoin="round"
-            fill={pinned ? 'currentColor' : 'none'}
-          />
-        </svg>
-      </IconBtn>
-      <IconBtn label={t('qa.closeTooltip')} onClick={onClose}>
-        <svg width="11" height="11" viewBox="0 0 11 11">
-          <path
-            d="M1.5 1.5l8 8M9.5 1.5l-8 8"
-            stroke="currentColor"
-            strokeWidth="1.6"
-            strokeLinecap="round"
-          />
-        </svg>
-      </IconBtn>
-    </div>
+    <MessageAvatar className="size-8 bg-[#0b0b0f]">
+      <OrbAvatar size={32} />
+    </MessageAvatar>
   );
 }
 
-interface IconBtnProps {
-  label: string;
-  active?: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}
-
-function IconBtn({ label, active, onClick, children }: IconBtnProps) {
-  return (
-    <button
-      onClick={onClick}
-      title={label}
-      aria-label={label}
-      style={{
-        ...iconBtnBaseStyle,
-        color: active ? 'var(--ol-blue)' : 'var(--ol-ink-3)',
-        background: active ? 'rgba(37,99,235,0.12)' : 'transparent',
-      }}
-    >
-      {children}
-    </button>
-  );
-}
-
-function EmptyHint({
-  t,
-  recordHotkey,
+function MessageRow({
+  index,
+  message,
+  githubLogin,
 }: {
-  t: ReturnType<typeof useTranslation>['t'];
-  recordHotkey: string;
+  index: number;
+  message: QaChatMessage;
+  githubLogin: string;
 }) {
-  return (
-    <div style={emptyHintStyle}>
-      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6, color: 'var(--ol-ink)' }}>
-        {t('qa.emptyTitle', { recordHotkey })}
-      </div>
-      <div style={{ fontSize: 12, color: 'var(--ol-ink-3)', lineHeight: 1.6 }}>
-        {t('qa.emptyDesc', { recordHotkey })}
-      </div>
-    </div>
-  );
-}
-
-function RecordingHeader({
-  preview,
-  t,
-  level,
-  recordHotkey,
-}: {
-  preview: string;
-  t: ReturnType<typeof useTranslation>['t'];
-  level: number;
-  recordHotkey: string;
-}) {
-  const truncated = useMemo(() => truncate(preview, SELECTION_PREVIEW_MAX), [preview]);
-  return (
-    <div style={recordingHeaderStyle}>
-      {truncated && (
-        <div style={previewStyle}>
-          <span style={{ color: 'var(--ol-ink-4)', marginRight: 4 }}>
-            {t('qa.selectionPreview')}
-          </span>
-          <span style={{ color: 'var(--ol-ink-2)' }}>{truncated}</span>
-        </div>
-      )}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--ol-ink-2)' }}>
-        <span style={recordingDotStyle} />
-        {t('qa.recordingHint', { recordHotkey })}
-      </div>
-      <LevelBar level={level} />
-    </div>
-  );
-}
-
-/** QA 录音电平条。后端 qa:level 每帧 ~33ms 推一次 0..1。详见 issue #162。 */
-function LevelBar({ level }: { level: number }) {
-  const pct = Math.min(100, Math.max(0, level * 100));
-  return (
-    <div
-      style={{
-        height: 4,
-        width: '100%',
-        background: 'rgba(0,0,0,0.06)',
-        borderRadius: 2,
-        overflow: 'hidden',
-      }}
-    >
-      <div
-        style={{
-          height: '100%',
-          width: `${pct}%`,
-          background: 'var(--ol-blue)',
-          transition: 'width 0.08s var(--ol-motion-quick)',
-        }}
-      />
-    </div>
-  );
-}
-
-function MessageList({ messages }: { messages: QaChatMessage[] }) {
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      {messages.map((m, i) => (
-        <MessageRow key={i} message={m} />
-      ))}
-    </div>
-  );
-}
-
-function MessageRow({ message }: { message: QaChatMessage }) {
-  // 钩子顺序与 message.role 无关：先无条件 useMemo（user 消息时 html 不渲染但计算无害）。
-  const html = useMemo(() => {
-    if (message.role !== 'assistant') return '';
-    try {
-      return renderQaMarkdown(message.content);
-    } catch (error) {
-      console.error('[qa] failed to render markdown', error);
-      return renderQaPlainText(String(message.content ?? ''));
-    }
-  }, [message.content, message.role]);
-
   if (message.role === 'user') {
-    // 第一轮可能含 "# 选区原文 ... # 我的问题 ..." → 抽出问题部分单独显示，
-    // 选区作为引用块淡显在上面。
+    // 第一轮可能含 "# 选区原文 ... # 我的问题 ..." → 抽出问题单独显示，选区作引用块淡显在上。
     const { selection, question } = splitFirstTurnUser(message.content);
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
-        {selection && (
-          <div style={selectionQuoteStyle}>
-            <span style={{ color: 'var(--ol-ink-4)', marginRight: 4 }}>“</span>
-            {truncate(selection, 120)}
-            <span style={{ color: 'var(--ol-ink-4)', marginLeft: 4 }}>”</span>
-          </div>
-        )}
-        <div style={userBubbleStyle}>{question}</div>
-      </div>
+      // 用户消息 = 新轮次锚点行（MessageScrollerItem scrollAnchor），右挂 GitHub 头像。
+      <MessageScrollerItem messageId={`m${index}`} scrollAnchor className="olchat-enter">
+        <Message align="end">
+          <MessageAvatar>
+            <UserAvatar login={githubLogin} />
+          </MessageAvatar>
+          <MessageContent>
+            {selection && (
+              <Bubble variant="muted" align="end" data-slot="selection">
+                <BubbleContent className="text-xs text-muted-foreground italic">
+                  “{truncate(selection, 120)}”
+                </BubbleContent>
+              </Bubble>
+            )}
+            <Bubble align="end">
+              <BubbleContent>{question}</BubbleContent>
+            </Bubble>
+          </MessageContent>
+        </Message>
+      </MessageScrollerItem>
     );
   }
   return (
-    <div
-      className="qa-answer"
-      style={assistantBubbleStyle}
-      // eslint-disable-next-line react/no-danger
-      dangerouslySetInnerHTML={{ __html: html }}
-    />
-  );
-}
-
-/** 流式 LLM 答案的 in-progress 气泡。跟 assistant 最终气泡同款样式，结尾加一颗
- *  闪烁的 caret 让用户看出还在生成。markdown 边到边渲染，未闭合的代码块不会炸 —
- *  marked 在不完整输入上是宽容的（开 token 没找到闭 token 就当 inline）。 */
-function StreamingAssistantBubble({ markdown }: { markdown: string }) {
-  const html = useMemo(() => {
-    try {
-      return renderQaMarkdown(markdown);
-    } catch (error) {
-      console.error('[qa] failed to render streaming markdown', error);
-      return renderQaPlainText(String(markdown ?? ''));
-    }
-  }, [markdown]);
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 4 }}>
-      <div
-        className="qa-answer"
-        style={assistantBubbleStyle}
-        // eslint-disable-next-line react/no-danger
-        dangerouslySetInnerHTML={{ __html: html }}
-      />
-      <span
-        style={{
-          display: 'inline-block',
-          width: 6,
-          height: 12,
-          background: 'var(--ol-blue)',
-          marginLeft: 12,
-          animation: 'qa-pulse 0.9s var(--ol-motion-soft) infinite',
-          borderRadius: 1,
-        }}
-      />
-    </div>
+    <MessageScrollerItem messageId={`m${index}`} className="olchat-enter">
+      <Message>
+        <AiAvatar />
+        <MessageContent>
+          <AssistantMarkdown markdown={message.content} />
+        </MessageContent>
+      </Message>
+    </MessageScrollerItem>
   );
 }
 
@@ -479,328 +554,18 @@ function splitFirstTurnUser(content: string): { selection: string; question: str
   return { selection: m[1].trim(), question: m[2].trim() };
 }
 
-function TurnIndicator({
-  kind,
-  preview,
-  t,
-  level,
-  recordHotkey,
-}: {
-  kind: 'recording' | 'thinking';
-  preview?: string;
-  t: ReturnType<typeof useTranslation>['t'];
-  level?: number;
-  recordHotkey?: string;
-}) {
-  if (kind === 'recording') {
-    const truncated = preview ? truncate(preview, SELECTION_PREVIEW_MAX) : '';
-    return (
-      <div style={turnIndicatorStyle}>
-        {truncated && (
-          <div style={previewInlineStyle}>
-            <span style={{ color: 'var(--ol-ink-4)', marginRight: 4 }}>
-              {t('qa.selectionPreview')}
-            </span>
-            <span style={{ color: 'var(--ol-ink-2)' }}>{truncated}</span>
-          </div>
-        )}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--ol-ink-2)' }}>
-          <span style={recordingDotStyle} />
-          {t('qa.recordingHint', { recordHotkey: recordHotkey ?? '' })}
-        </div>
-        <LevelBar level={level ?? 0} />
-      </div>
-    );
-  }
+/** 录音时的选区上下文条：贴在输入区上方，让用户看到「在追问哪段文字」。 */
+function SelectionChip({ text, t }: { text: string; t: ReturnType<typeof useTranslation>['t'] }) {
+  const truncated = useMemo(() => truncate(text, SELECTION_PREVIEW_MAX), [text]);
   return (
-    <div style={turnIndicatorStyle}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--ol-ink-3)' }}>
-        <SkeletonLine width="60%" />
-      </div>
-      <div style={{ fontSize: 12, color: 'var(--ol-ink-3)', fontWeight: 500 }}>
-        {t('qa.thinking')}
-      </div>
+    <div className="olchat-enter flex w-full items-center rounded-xl bg-muted px-3 py-1.5 text-[11.5px] leading-normal">
+      <span className="mr-1.5 shrink-0 text-muted-foreground">{t('qa.selectionPreview')}</span>
+      <span className="truncate text-foreground/80">{truncated}</span>
     </div>
-  );
-}
-
-function ErrorRow({
-  message,
-  t,
-  recordHotkey,
-}: {
-  message: string;
-  t: ReturnType<typeof useTranslation>['t'];
-  recordHotkey: string;
-}) {
-  return (
-    <div style={errorRowStyle}>
-      <div style={{ fontSize: 12.5, color: 'var(--ol-err)', lineHeight: 1.55 }}>{message}</div>
-      <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)' }}>
-        {t('qa.errorRetryHint', { recordHotkey })}
-      </div>
-    </div>
-  );
-}
-
-function StatusBar({
-  status,
-  t,
-  recordHotkey,
-}: {
-  status: Status;
-  t: ReturnType<typeof useTranslation>['t'];
-  recordHotkey: string;
-}) {
-  let label = '';
-  let dotColor = 'transparent';
-  switch (status) {
-    case 'idle':
-      label = t('qa.statusIdle', { recordHotkey });
-      dotColor = 'rgba(0,0,0,0.18)';
-      break;
-    case 'recording':
-      label = t('qa.statusRecording');
-      dotColor = 'var(--ol-err)';
-      break;
-    case 'thinking':
-      label = t('qa.statusThinking');
-      dotColor = 'var(--ol-blue)';
-      break;
-    case 'error':
-      label = t('qa.statusError');
-      dotColor = 'var(--ol-err)';
-      break;
-  }
-  return (
-    <div style={statusBarStyle}>
-      <span
-        style={{
-          width: 7,
-          height: 7,
-          borderRadius: '50%',
-          background: dotColor,
-          flexShrink: 0,
-        }}
-      />
-      <span style={{ fontSize: 11.5, color: 'var(--ol-ink-3)', fontWeight: 500 }}>{label}</span>
-    </div>
-  );
-}
-
-function SkeletonLine({ width }: { width: string }) {
-  return (
-    <div
-      style={{
-        height: 8,
-        width,
-        borderRadius: 4,
-        background:
-          'linear-gradient(90deg, rgba(0,0,0,0.06) 0%, rgba(0,0,0,0.12) 50%, rgba(0,0,0,0.06) 100%)',
-        backgroundSize: '200% 100%',
-        animation: 'qa-skeleton 1.4s var(--ol-motion-soft) infinite',
-      }}
-    />
   );
 }
 
 function truncate(text: string, max: number): string {
   if (text.length <= max) return text;
   return `${text.slice(0, max)}…`;
-}
-
-// ── 样式 ──────────────────────────────────────────────────────────────
-
-const shellStyle: CSSProperties = {
-  width: '100%',
-  height: '100vh',
-  display: 'flex',
-  flexDirection: 'column',
-  borderRadius: 14,
-  overflow: 'hidden',
-  // 浮窗 focus:false 在 macOS 上会让 backdrop-filter 不工作（透到桌面文字），所以
-  // 改成接近不透明的实色背景。blur 仅作锦上添花，不再依赖它保证可读性。
-  background: 'rgba(255, 255, 255, 0.97)',
-  backdropFilter: 'blur(24px) saturate(180%)',
-  WebkitBackdropFilter: 'blur(24px) saturate(180%)',
-  border: '0.5px solid rgba(0, 0, 0, 0.08)',
-  boxShadow: 'var(--ol-shadow-lg)',
-  fontFamily: 'var(--ol-font-sans)',
-  color: 'var(--ol-ink)',
-};
-
-const toolbarStyle: CSSProperties = {
-  height: 32,
-  display: 'flex',
-  alignItems: 'center',
-  gap: 4,
-  padding: '0 8px',
-  borderBottom: '0.5px solid rgba(0, 0, 0, 0.06)',
-  flexShrink: 0,
-  cursor: 'grab',
-};
-
-const iconBtnBaseStyle: CSSProperties = {
-  width: 22,
-  height: 22,
-  border: 0,
-  borderRadius: 6,
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  cursor: 'default',
-  padding: 0,
-  transition: 'background 0.16s var(--ol-motion-quick), color 0.16s var(--ol-motion-quick)',
-};
-
-const contentStyle: CSSProperties = {
-  flex: 1,
-  minHeight: 0,
-  overflow: 'auto',
-  padding: '14px 16px',
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 12,
-};
-
-const emptyHintStyle: CSSProperties = {
-  margin: 'auto 0',
-  textAlign: 'center',
-  padding: '0 8px',
-};
-
-const recordingHeaderStyle: CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 8,
-};
-
-const previewStyle: CSSProperties = {
-  fontSize: 11.5,
-  lineHeight: 1.5,
-  padding: '8px 10px',
-  borderRadius: 8,
-  background: 'rgba(0, 0, 0, 0.035)',
-  border: '0.5px solid rgba(0, 0, 0, 0.06)',
-};
-
-const previewInlineStyle: CSSProperties = {
-  ...previewStyle,
-  marginBottom: 4,
-};
-
-const turnIndicatorStyle: CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 6,
-};
-
-const userBubbleStyle: CSSProperties = {
-  maxWidth: '80%',
-  padding: '8px 12px',
-  borderRadius: 14,
-  borderBottomRightRadius: 4,
-  background: 'var(--ol-blue)',
-  color: '#fff',
-  fontSize: 13,
-  lineHeight: 1.55,
-  wordBreak: 'break-word',
-};
-
-const selectionQuoteStyle: CSSProperties = {
-  maxWidth: '80%',
-  padding: '6px 10px',
-  borderRadius: 10,
-  background: 'rgba(0,0,0,0.04)',
-  border: '0.5px solid rgba(0,0,0,0.06)',
-  fontSize: 11.5,
-  color: 'var(--ol-ink-3)',
-  fontStyle: 'italic',
-  lineHeight: 1.5,
-};
-
-const assistantBubbleStyle: CSSProperties = {
-  maxWidth: '92%',
-  padding: '8px 12px',
-  borderRadius: 14,
-  borderBottomLeftRadius: 4,
-  background: 'rgba(0,0,0,0.04)',
-  fontSize: 13,
-  lineHeight: 1.6,
-  color: 'var(--ol-ink)',
-  wordBreak: 'break-word',
-  alignSelf: 'flex-start',
-};
-
-const errorRowStyle: CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 4,
-  padding: '8px 12px',
-  borderRadius: 10,
-  background: 'rgba(220,38,38,0.06)',
-  border: '0.5px solid rgba(220,38,38,0.18)',
-};
-
-const recordingDotStyle: CSSProperties = {
-  width: 8,
-  height: 8,
-  borderRadius: '50%',
-  background: 'var(--ol-err)',
-  animation: 'qa-pulse 1.2s var(--ol-motion-soft) infinite',
-};
-
-const statusBarStyle: CSSProperties = {
-  height: 28,
-  flexShrink: 0,
-  display: 'flex',
-  alignItems: 'center',
-  gap: 8,
-  padding: '0 14px',
-  borderTop: '0.5px solid rgba(0, 0, 0, 0.06)',
-  background: 'rgba(255,255,255,0.4)',
-};
-
-const globalCss = `
-@keyframes qa-skeleton {
-  0%   { background-position: 200% 0; filter: blur(.2px); }
-  50%  { filter: blur(0); }
-  100% { background-position: -200% 0; filter: blur(.2px); }
-}
-@keyframes qa-pulse {
-  0%, 100% { opacity: 1; filter: blur(0); transform: scale(1); }
-  50%      { opacity: 0.35; filter: blur(.7px); transform: scale(.94); }
-}
-.qa-answer p        { margin: 0 0 6px; }
-.qa-answer p:last-child { margin-bottom: 0; }
-.qa-answer h1,
-.qa-answer h2,
-.qa-answer h3       { margin: 10px 0 5px; font-weight: 600; line-height: 1.35; }
-.qa-answer h1       { font-size: 15px; }
-.qa-answer h2       { font-size: 14px; }
-.qa-answer h3       { font-size: 13px; }
-.qa-answer ul,
-.qa-answer ol       { margin: 0 0 6px; padding-left: 18px; }
-.qa-answer li       { margin: 2px 0; }
-.qa-answer code     { font-family: var(--ol-font-mono); font-size: 12px;
-                      padding: 1px 5px; border-radius: 4px;
-                      background: rgba(0,0,0,0.05); }
-.qa-answer pre      { margin: 0 0 6px; padding: 8px 10px;
-                      border-radius: 8px; background: rgba(0,0,0,0.05);
-                      overflow-x: auto; }
-.qa-answer pre code { padding: 0; background: transparent; }
-.qa-answer a        { color: var(--ol-blue); text-decoration: none; }
-.qa-answer a:hover  { text-decoration: underline; }
-.qa-answer blockquote { margin: 0 0 6px; padding: 4px 0 4px 8px;
-                        border-left: 2px solid rgba(0,0,0,0.15);
-                        color: var(--ol-ink-3); }
-.qa-answer hr       { border: 0; border-top: 0.5px solid rgba(0,0,0,0.10);
-                      margin: 8px 0; }
-`;
-
-if (typeof document !== 'undefined' && !document.getElementById('qa-panel-style')) {
-  const tag = document.createElement('style');
-  tag.id = 'qa-panel-style';
-  tag.textContent = globalCss;
-  document.head.appendChild(tag);
 }

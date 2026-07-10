@@ -9,7 +9,12 @@
           </Component>
         </Directory>
         <Directory Id="OpenLessImeX86Directory" Name="x86">
-          <Component Id="OpenLessImeDllX86Component" Guid="{A2E61B9A-4034-4ABF-A42F-964A9B1F08BB}" Win64="no">
+          <!-- The x86 TSF DLL is intentionally packaged inside the x64 MSI
+               under INSTALLDIR\windows-ime\x86 and registered with
+               SysWOW64\regsvr32 below. Mark the MSI component as 64-bit so
+               WiX accepts it under the x64 INSTALLDIR; this does not change
+               the architecture of the DLL payload. -->
+          <Component Id="OpenLessImeDllX86Component" Guid="{A2E61B9A-4034-4ABF-A42F-964A9B1F08BB}" Win64="yes">
             <File Id="OpenLessImeDllX86" Name="OpenLessIme.dll" Source="src-tauri\target\windows-ime-msvc\x86\Release\OpenLessIme.dll" KeyPath="yes" />
           </Component>
         </Directory>

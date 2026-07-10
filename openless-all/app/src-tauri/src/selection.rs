@@ -1,3 +1,7 @@
+#![cfg_attr(
+    target_os = "linux",
+    allow(dead_code, unused_imports, unused_variables)
+)]
 //! 跨平台「划词捕获」工具：在用户触发 QA 快捷键时尝试拿到当前前台 app 的选区文本。
 //!
 //! 三级 fallback：
@@ -5,7 +9,7 @@
 //!    走辅助功能 API 直读焦点元素的选区，**不**触碰剪贴板。
 //! 2. **macOS / Windows** Cmd+C / Ctrl+C：snapshot 用户原剪贴板 → 模拟复制 → 80ms
 //!    后读出新内容 → 还原原剪贴板。
-//! 3. **Linux**：返回 `None`（X11/Wayland AX 模式不统一，留作 best-effort 后续）。
+//! 3. **Linux**：返回 `None`（AX 模式不统一，留作 best-effort 后续）。
 //!
 //! 截断策略：超过 4000 字符的选区只保留首 2000 + 尾 2000 + `[…truncated…]` 标记，
 //! 避免给 LLM 灌过长 context。

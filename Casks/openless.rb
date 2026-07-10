@@ -1,9 +1,9 @@
 cask "openless" do
   arch arm: "aarch64", intel: "x64"
 
-  version "1.2.23"
-  sha256 arm:   "c6544555150459ba616ba43b27e226a88da40c5349c8e19f71a0bedfce7050b4",
-         intel: "ffcf84f5510ffe369277ddf9980b930fb5fb72a5e799020af4cf4720905625e1"
+  version "1.3.12"
+  sha256 arm:   "d6cd007e7a08ae840e93a174c6a3b125608ca4da8d56305b8eac6d3137f02b74",
+         intel: "82e67ee081206fefcc3cb93698308fc425737deca1fdac679862c1c3d6d602e6"
 
   url "https://github.com/appergb/openless/releases/download/v#{version}-tauri/OpenLess_#{version}_#{arch}.dmg"
   name "OpenLess"

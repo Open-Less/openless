@@ -67,11 +67,16 @@ pub(super) fn cancel_active_asr(asr: ActiveAsr) {
     match asr {
         ActiveAsr::Volcengine(v) => v.cancel(),
         ActiveAsr::Whisper(w) => w.cancel(),
+        ActiveAsr::Mimo(m) => m.cancel(),
         ActiveAsr::Bailian(b) => b.cancel(),
         #[cfg(target_os = "windows")]
         ActiveAsr::FoundryLocalWhisper(local) => local.cancel(),
+        #[cfg(target_os = "windows")]
+        ActiveAsr::SherpaOnnxLocal(local) => local.cancel(),
         #[cfg(target_os = "macos")]
         ActiveAsr::Local(local) => local.cancel(),
+        #[cfg(target_os = "macos")]
+        ActiveAsr::AppleSpeech(local) => local.cancel(),
     }
 }
 
@@ -99,14 +104,21 @@ pub(super) fn selected_microphone_device_name(inner: &Arc<Inner>) -> Option<Stri
 }
 
 pub(super) fn stop_microphone_preview_monitor(inner: &Arc<Inner>, owner: &str) {
-    let Some(app) = inner.app.lock().as_ref().cloned() else {
-        return;
-    };
-    let state = app.state::<crate::commands::MicrophoneMonitorState>();
-    let recorder = state.lock().take();
-    if let Some(recorder) = recorder {
-        log::info!("[recorder] stopping microphone preview monitor before {owner}");
-        recorder.stop();
+    #[cfg(mobile)]
+    {
+        let _ = (inner, owner);
+    }
+    #[cfg(not(mobile))]
+    {
+        let Some(app) = inner.app.lock().as_ref().cloned() else {
+            return;
+        };
+        let state = app.state::<crate::commands::MicrophoneMonitorState>();
+        let recorder = state.lock().take();
+        if let Some(recorder) = recorder {
+            log::info!("[recorder] stopping microphone preview monitor before {owner}");
+            recorder.stop();
+        }
     }
 }
 
@@ -232,5 +244,42 @@ pub(super) fn stop_recorder_if_pending_start_stop(inner: &Arc<Inner>) {
         let elapsed = inner.state.lock().started_at.elapsed().as_millis() as u64;
         emit_capsule(inner, CapsuleState::Transcribing, 0.0, elapsed, None, None);
         log::info!("[coord] stopped recorder while ASR is still connecting");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // issue #609 F-05：给零覆盖的纯函数补单测。take_session_resource 是 session_id
+    // 守卫的核心——只在 id 匹配时取走资源，避免 stale session 的资源被错误复用。
+    use super::{take_session_resource, SessionResource};
+    use uuid::Uuid;
+
+    fn sid(n: u128) -> Uuid {
+        Uuid::from_u128(n)
+    }
+
+    #[test]
+    fn take_session_resource_returns_resource_on_id_match() {
+        let id = sid(1);
+        let mut slot = Some(SessionResource::new(id, "payload"));
+        let taken = take_session_resource(&mut slot, id);
+        assert_eq!(taken, Some("payload"));
+        // 取走后槽位应为空。
+        assert!(slot.is_none());
+    }
+
+    #[test]
+    fn take_session_resource_keeps_resource_on_id_mismatch() {
+        let mut slot = Some(SessionResource::new(sid(1), "payload"));
+        let taken = take_session_resource(&mut slot, sid(2));
+        assert_eq!(taken, None, "id 不匹配不应取走（stale session 守卫）");
+        // 资源仍在槽里，留给真正的 owner。
+        assert!(slot.is_some());
+    }
+
+    #[test]
+    fn take_session_resource_empty_slot_returns_none() {
+        let mut slot: Option<SessionResource<&str>> = None;
+        assert_eq!(take_session_resource(&mut slot, sid(1)), None);
     }
 }

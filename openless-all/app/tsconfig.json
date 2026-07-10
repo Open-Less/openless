@@ -14,8 +14,12 @@
     "strict": true,
     "noUnusedLocals": false,
     "noUnusedParameters": false,
-    "noFallthroughCasesInSwitch": true
+    "noFallthroughCasesInSwitch": true,
+    "baseUrl": ".",
+    "paths": {
+      "@android/*": ["android/frontend/*"]
+    }
   },
-  "include": ["src"],
+  "include": ["src", "android/frontend"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }

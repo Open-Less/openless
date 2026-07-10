@@ -1,10 +1,11 @@
+#![allow(dead_code, unused_imports, unused_variables)]
 use std::time::Duration;
 
 use crate::windows_ime_protocol::ImeSubmitStatus;
 
 pub const IME_CLIENT_WAIT_TIMEOUT: Duration = Duration::from_millis(700);
-const IME_OWNER_THREAD_MESSAGE_TIMEOUT_MS: u64 = 3000;
-const IME_ASYNC_EDIT_SESSION_TIMEOUT_MS: u64 = 3000;
+const IME_OWNER_THREAD_MESSAGE_TIMEOUT_MS: u64 = 2000;
+const IME_ASYNC_EDIT_SESSION_TIMEOUT_MS: u64 = 2000;
 const IME_SUBMIT_TIMEOUT_MARGIN_MS: u64 = 1000;
 const IME_NATIVE_ASYNC_COMMIT_TIMEOUT_MS: u64 =
     IME_OWNER_THREAD_MESSAGE_TIMEOUT_MS + IME_ASYNC_EDIT_SESSION_TIMEOUT_MS;
@@ -393,6 +394,11 @@ mod tests {
     #[test]
     fn submit_timeout_covers_native_async_commit_path() {
         assert!(IME_SUBMIT_TIMEOUT > Duration::from_millis(IME_NATIVE_ASYNC_COMMIT_TIMEOUT_MS));
+    }
+
+    #[test]
+    fn submit_timeout_stays_within_followup_stall_budget() {
+        assert_eq!(IME_SUBMIT_TIMEOUT, Duration::from_millis(5000));
     }
 
     #[test]

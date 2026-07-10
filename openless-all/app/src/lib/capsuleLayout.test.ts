@@ -11,41 +11,43 @@ function assertEqual<T>(actual: T, expected: T, name: string) {
 }
 
 const winMetrics = getCapsulePillMetrics('win');
-assertEqual(winMetrics.width, 196, 'windows capsule widens pill');
-assertEqual(winMetrics.height, 52, 'windows capsule increases pill height');
-assertEqual(winMetrics.textWidth, 104, 'windows capsule keeps side controls clear');
-assertEqual(winMetrics.boxSizing, 'border-box', 'windows capsule pill width is an outer border-box metric');
+assertEqual(winMetrics.width, 460, 'windows voice orb stage uses the demo-scale width');
+assertEqual(winMetrics.height, 180, 'windows voice orb stage uses the demo-scale height');
+assertEqual(winMetrics.textWidth, 400, 'windows voice orb text stays inside the stage');
+assertEqual(winMetrics.boxSizing, 'border-box', 'windows voice orb stage width is an outer border-box metric');
 
 const winHost = getCapsuleHostMetrics('win', false);
-assertEqual(winHost.width, 220, 'windows capsule host keeps the current outer hitbox width');
-assertEqual(winHost.height, 84, 'windows capsule host keeps regular height');
-assertEqual(winHost.horizontalInset, 12, 'windows capsule host keeps symmetric shadow insets');
-assertEqual(winHost.boxSizing, 'border-box', 'windows capsule host inset is reserved inside the native width');
-assertEqual(
-  winHost.width,
-  winMetrics.width + winHost.horizontalInset * 2,
-  'windows capsule host width derives from pill width plus symmetric side insets',
-);
+assertEqual(winHost.width, 460, 'windows voice orb host matches stage width');
+assertEqual(winHost.height, 180, 'windows voice orb host matches stage height');
+assertEqual(winHost.horizontalInset, 0, 'windows voice orb host has no side button inset');
+assertEqual(winHost.boxSizing, 'border-box', 'windows voice orb host keeps border-box sizing');
 assertEqual(
   winHost.width - winHost.horizontalInset * 2,
   winMetrics.width,
-  'windows capsule host keeps the visible pill width after reserving side insets',
+  'windows voice orb host keeps the visible stage width after reserving side insets',
+);
+assertEqual(
+  winHost.height - winHost.bottomInset,
+  winMetrics.height,
+  'windows voice orb host keeps the visible stage height after reserving bottom inset',
 );
 
 const winHostWithTranslation = getCapsuleHostMetrics('win', true);
-assertEqual(winHostWithTranslation.width, 220, 'windows translation capsule keeps the same outer width');
-assertEqual(winHostWithTranslation.height, 118, 'windows translation capsule grows vertically only');
-assertEqual(winHostWithTranslation.horizontalInset, 12, 'windows translation capsule keeps symmetric side insets');
-assertEqual(winHostWithTranslation.boxSizing, 'border-box', 'windows translation host keeps the same inset-reserving box model');
+assertEqual(winHostWithTranslation.width, 460, 'windows translation voice orb keeps the same outer width');
+assertEqual(winHostWithTranslation.height, 180, 'windows translation voice orb keeps the same outer height');
+assertEqual(winHostWithTranslation.horizontalInset, 0, 'windows translation voice orb has no side button inset');
+assertEqual(winHostWithTranslation.boxSizing, 'border-box', 'windows translation host keeps border-box sizing');
 
 const macMetrics = getCapsulePillMetrics('mac');
-assertEqual(macMetrics.width, 176, 'mac capsule keeps existing pill width');
-assertEqual(macMetrics.height, 42, 'mac capsule keeps existing pill height');
-assertEqual(macMetrics.textWidth, 84, 'mac capsule keeps existing text slot');
-assertEqual(macMetrics.boxSizing, 'border-box', 'mac capsule keeps the existing border-box pill model');
+assertEqual(macMetrics.width, 460, 'mac voice orb stage uses the demo-scale width');
+assertEqual(macMetrics.height, 180, 'mac voice orb stage uses the demo-scale height');
+assertEqual(macMetrics.textWidth, 400, 'mac voice orb text stays inside the stage');
+assertEqual(macMetrics.boxSizing, 'border-box', 'mac voice orb stage keeps border-box sizing');
 
 const macHost = getCapsuleHostMetrics('mac', false);
-assertEqual(macHost.boxSizing, 'border-box', 'mac capsule host keeps the existing border-box box model');
+assertEqual(macHost.width, 460, 'mac voice orb host matches stage width');
+assertEqual(macHost.height, 180, 'mac voice orb host matches stage height');
+assertEqual(macHost.boxSizing, 'border-box', 'mac voice orb host keeps border-box sizing');
 
 const winErrorLayout = getCapsuleMessageLayout('win', 'error');
 assertEqual(winErrorLayout.lineClamp, 2, 'windows error message allows two lines');

@@ -1,8 +1,6 @@
-import { useState, type CSSProperties, type ReactNode } from 'react';
-import { useTranslation } from 'react-i18next';
-import { getCurrentWindow } from '@tauri-apps/api/window';
+import { type CSSProperties, type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 
-export type OS = 'mac' | 'win' | 'linux';
+export type OS = 'mac' | 'win' | 'linux' | 'android';
 
 export function detectOS(): OS {
   if (typeof navigator === 'undefined') return 'mac';
@@ -11,6 +9,7 @@ export function detectOS(): OS {
   ).userAgentData?.platform ?? '';
   const hints = `${navigator.userAgent || ''} ${navigator.platform || ''} ${uaDataPlatform}`;
   if (/Mac|iPhone|iPad|iPod/.test(hints)) return 'mac';
+  if (/Android/i.test(hints)) return 'android';
   if (/Windows|Win32|Win64/.test(hints)) return 'win';
   if (/Linux|X11|Wayland/.test(hints)) return 'linux';
   return 'mac';
@@ -18,21 +17,8 @@ export function detectOS(): OS {
 
 const MAC_TITLEBAR_HEIGHT = 28;
 const MAC_SYSTEM_CONTROLS_RESERVED_WIDTH = 76;
-export const WIN_TITLEBAR_HEIGHT = 36;
-export const WIN_WINDOW_RADIUS = 10;
-export const WIN_CONSOLE_RADIUS = 10;
-const WIN_RESIZE_EDGE = 6;
-const WIN_RESIZE_CORNER = 14;
-
-type ResizeDirection =
-  | 'East'
-  | 'North'
-  | 'NorthEast'
-  | 'NorthWest'
-  | 'South'
-  | 'SouthEast'
-  | 'SouthWest'
-  | 'West';
+const LINUX_TITLEBAR_HEIGHT = 36;
+const WIN_CONSOLE_RADIUS = 10;
 
 interface WindowChromeProps {
   os?: OS;
@@ -43,48 +29,41 @@ interface WindowChromeProps {
 
 export function WindowChrome({
   os = 'mac',
-  title = 'OpenLess',
   children,
   height = 800,
 }: WindowChromeProps) {
-  const shellRadius = os === 'mac' ? 0 : os === 'win' ? WIN_WINDOW_RADIUS : 14;
-  const consoleRadius = os === 'mac' ? 20 : os === 'win' ? WIN_CONSOLE_RADIUS : 14;
+  // Windows: decorations:true 时外层不画圆角/边框/阴影/标题栏，避免与原生窗口重叠。
+  // Linux: decorations:false 时外层画 14px 圆角 + 自定义标题栏。
+  const shellRadius = os === 'mac' ? 0 : os === 'win' || os === 'android' ? 0 : 14;
+  const consoleRadius = os === 'mac' ? 20 : os === 'win' ? WIN_CONSOLE_RADIUS : os === 'android' ? 0 : 14;
+  const titlebarHeight = os === 'mac' ? MAC_TITLEBAR_HEIGHT : os === 'linux' ? LINUX_TITLEBAR_HEIGHT : 0;
+
+  const useSolidSurface = os === 'linux' || os === 'android';
 
   return (
     <div
+      className="ol-winchrome"
       style={{
         '--ol-window-shell-radius': `${shellRadius}px`,
         '--ol-window-console-radius': `${consoleRadius}px`,
-        '--ol-window-titlebar-height': `${os === 'mac' ? MAC_TITLEBAR_HEIGHT : WIN_TITLEBAR_HEIGHT}px`,
+        '--ol-window-titlebar-height': `${titlebarHeight}px`,
         width: '100%',
         height,
         position: 'relative',
         borderRadius: 'var(--ol-window-shell-radius)',
-        boxShadow: os === 'win'
-          ? '0 22px 54px -28px rgba(15, 17, 22, 0.38), 0 10px 30px -20px rgba(15, 17, 22, 0.22), 0 0 0 0.5px rgba(0, 0, 0, 0.10)'
-          : 'var(--ol-shadow-xl)',
+        boxShadow: os === 'win' ? 'none' : 'var(--ol-shadow-xl)',
         overflow: 'hidden',
         display: 'flex',
         flexDirection: 'column',
-        border: os === 'mac'
-          ? 'none'
-          : os === 'win'
-            ? '1px solid rgba(255,255,255,0.18)'
-            : '0.5px solid rgba(0,0,0,.10)',
-        background: `
-          radial-gradient(120% 80% at 0% 0%, rgba(255,255,255,0.7) 0%, rgba(255,255,255,0) 60%),
-          radial-gradient(100% 70% at 100% 100%, rgba(37,99,235,0.07) 0%, rgba(37,99,235,0) 55%),
-          linear-gradient(180deg, rgba(245,245,247,0.92) 0%, rgba(232,232,236,0.92) 100%)
-        `,
-        backdropFilter: 'blur(var(--ol-glass-blur-strong)) saturate(190%)',
-        WebkitBackdropFilter: 'blur(var(--ol-glass-blur-strong)) saturate(190%)',
+        border: os === 'win' ? 'none' : os === 'mac' ? 'none' : '0.5px solid var(--ol-window-border)',
+        background: useSolidSurface ? 'var(--ol-surface)' : 'var(--ol-window-bg)',
+        backdropFilter: useSolidSurface ? 'none' : 'blur(var(--ol-glass-blur-strong)) saturate(190%)',
+        WebkitBackdropFilter: useSolidSurface ? 'none' : 'blur(var(--ol-glass-blur-strong)) saturate(190%)',
         animation: os === 'win' ? undefined : 'ol-window-enter 0.42s var(--ol-motion-spring) both',
         transition: 'box-shadow 0.28s var(--ol-motion-soft), border-color 0.28s var(--ol-motion-soft), backdrop-filter 0.28s var(--ol-motion-soft)',
         willChange: 'opacity, transform, filter',
       } as CSSProperties}
     >
-      {os === 'win' && <WinTitleBar title={title} />}
-      {os === 'win' && <WindowsResizeHandles />}
       {os === 'mac' && (
         <div
           data-tauri-drag-region
@@ -98,6 +77,10 @@ export function WindowChrome({
           }}
         />
       )}
+      {os === 'linux' && <LinuxTitlebar />}
+      {os === 'linux' && (
+        <style>{`.ol-linux-close-btn:hover{background:rgba(220,38,38,0.12)!important;color:rgb(220,38,38)!important}`}</style>
+      )}
       <div style={{ flex: 1, minHeight: 0, display: 'flex', position: 'relative' }}>
         {children}
       </div>
@@ -105,153 +88,147 @@ export function WindowChrome({
   );
 }
 
-interface WinTitleBarProps {
-  title: string;
-}
+// ── Linux custom titlebar — mirrors cc-switch's approach ──
 
-function WinTitleBar({ title }: WinTitleBarProps) {
-  const { t } = useTranslation();
+type TauriWindow = import('@tauri-apps/api/window').Window;
+
+function LinuxTitlebar() {
+  const [maximized, setMaximized] = useState(false);
+  const winRef = useRef<TauriWindow | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    import('@tauri-apps/api/window').then(({ getCurrentWindow }) => {
+      if (cancelled) return;
+      const w = getCurrentWindow();
+      winRef.current = w;
+      w.isMaximized().then((m) => {
+        if (!cancelled) setMaximized(m);
+      }).catch(() => {});
+      // Keep icon in sync when user maximizes via double-click / keyboard shortcut
+      w.listen('tauri://resize', () => {
+        if (cancelled) return;
+        w.isMaximized().then((m) => {
+          if (!cancelled) setMaximized(m);
+        }).catch(() => {});
+      }).then((fn) => {
+        if (cancelled) fn();
+        else unlisten = fn;
+      }).catch(() => {});
+    }).catch(() => {});
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
+  const onMinimize = useCallback(() => {
+    winRef.current?.minimize().catch(() => {});
+  }, []);
+
+  const onToggleMaximize = useCallback(() => {
+    const w = winRef.current;
+    if (!w) return;
+    w.toggleMaximize().catch(() => {});
+    // Re-query after window manager processes the toggle, in case WM rejects it
+    setTimeout(() => {
+      w.isMaximized().then(setMaximized).catch(() => {});
+    }, 300);
+  }, []);
+
+  const onClose = useCallback(() => {
+    winRef.current?.close().catch(() => {});
+  }, []);
+
   return (
     <div
+      data-tauri-drag-region
+      className="ol-linux-titlebar"
       style={{
-        height: WIN_TITLEBAR_HEIGHT,
+        height: LINUX_TITLEBAR_HEIGHT,
         flexShrink: 0,
         display: 'flex',
-        alignItems: 'stretch',
-        position: 'relative',
-        zIndex: 70,
-        borderBottom: '0.5px solid rgba(0, 0, 0, 0.08)',
-        background: 'linear-gradient(180deg, rgba(255,255,255,0.20) 0%, rgba(255,255,255,0.08) 100%)',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        padding: '0 6px 0 14px',
+        background: 'var(--ol-surface)',
+        backdropFilter: 'none',
+        WebkitBackdropFilter: 'none',
+        borderBottom: '0.5px solid rgba(0,0,0,0.08)',
+        color: 'var(--ol-ink-3)',
+        fontSize: 13,
+        fontWeight: 500,
+        cursor: 'default',
+        userSelect: 'none',
+        zIndex: 50,
       }}
     >
+      <span style={{ color: 'var(--ol-ink-2)' }}>OpenLess</span>
       <div
-        data-tauri-drag-region
-        style={{ flex: 1, display: 'flex', alignItems: 'center', padding: '0 14px', gap: 10 }}
+        style={{ display: 'flex', gap: 4, pointerEvents: 'auto' }}
+        onMouseDown={(e) => e.stopPropagation()}
       >
-        <img src="AppIcon.png" alt="" style={{ width: 14, height: 14, borderRadius: 3 }} />
-        <span style={{ fontSize: 12, color: 'var(--ol-ink-3)', fontWeight: 500 }}>{title}</span>
-      </div>
-      <div style={{ display: 'flex', pointerEvents: 'auto' }}>
-        <WinTitleButton title={t('windowChrome.minimize')} action="minimize">
-          <svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 5h10" stroke="currentColor" strokeWidth="1" /></svg>
-        </WinTitleButton>
-        <WinTitleButton title={t('windowChrome.maximize')} action="toggleMaximize">
-          <svg width="10" height="10" viewBox="0 0 10 10"><rect x="0.5" y="0.5" width="9" height="9" stroke="currentColor" strokeWidth="1" fill="none" /></svg>
-        </WinTitleButton>
-        <WinTitleButton title={t('windowChrome.close')} action="close" tone="danger">
-          <svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 0L10 10M10 0L0 10" stroke="currentColor" strokeWidth="1" /></svg>
-        </WinTitleButton>
+        <button onClick={onMinimize} aria-label="Minimize" style={ctrlBtn}>
+          <MinimizeSvg />
+        </button>
+        <button onClick={onToggleMaximize} aria-label={maximized ? 'Restore' : 'Maximize'} style={ctrlBtn}>
+          {maximized ? <RestoreSvg /> : <MaximizeSvg />}
+        </button>
+        <button
+          onClick={onClose}
+          aria-label="Close"
+          className="ol-linux-close-btn"
+          style={ctrlBtn}
+        >
+          <CloseSvg />
+        </button>
       </div>
     </div>
   );
 }
 
-function WindowsResizeHandles() {
-  const handles: Array<{
-    direction: ResizeDirection;
-    cursor: CSSProperties['cursor'];
-    style: CSSProperties;
-  }> = [
-    { direction: 'North', cursor: 'ns-resize', style: { top: 0, left: WIN_RESIZE_CORNER, right: WIN_RESIZE_CORNER, height: WIN_RESIZE_EDGE } },
-    { direction: 'South', cursor: 'ns-resize', style: { bottom: 0, left: WIN_RESIZE_CORNER, right: WIN_RESIZE_CORNER, height: WIN_RESIZE_EDGE } },
-    { direction: 'West', cursor: 'ew-resize', style: { top: WIN_RESIZE_CORNER, bottom: WIN_RESIZE_CORNER, left: 0, width: WIN_RESIZE_EDGE } },
-    { direction: 'East', cursor: 'ew-resize', style: { top: WIN_RESIZE_CORNER, bottom: WIN_RESIZE_CORNER, right: 0, width: WIN_RESIZE_EDGE } },
-    { direction: 'NorthWest', cursor: 'nwse-resize', style: { top: 0, left: 0, width: WIN_RESIZE_CORNER, height: WIN_RESIZE_CORNER } },
-    { direction: 'NorthEast', cursor: 'nesw-resize', style: { top: 0, right: 0, width: WIN_RESIZE_CORNER, height: WIN_RESIZE_CORNER } },
-    { direction: 'SouthWest', cursor: 'nesw-resize', style: { bottom: 0, left: 0, width: WIN_RESIZE_CORNER, height: WIN_RESIZE_CORNER } },
-    { direction: 'SouthEast', cursor: 'nwse-resize', style: { bottom: 0, right: 0, width: WIN_RESIZE_CORNER, height: WIN_RESIZE_CORNER } },
-  ];
+// ── inline SVG icons (no lucide-react dep) ──
 
-  return (
-    <div aria-hidden style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 60 }}>
-      {handles.map(handle => (
-        <div
-          key={handle.direction}
-          onMouseDown={event => {
-            if (event.button !== 0) return;
-            event.preventDefault();
-            event.stopPropagation();
-            void startResizeDragging(handle.direction);
-          }}
-          style={{
-            position: 'absolute',
-            pointerEvents: 'auto',
-            cursor: handle.cursor,
-            ...handle.style,
-          }}
-        />
-      ))}
-    </div>
-  );
-}
-
-interface WinTitleButtonProps {
-  title: string;
-  action: 'minimize' | 'toggleMaximize' | 'close';
-  tone?: 'default' | 'danger';
-  children: ReactNode;
-}
-
-function WinTitleButton({ title, action, tone = 'default', children }: WinTitleButtonProps) {
-  const [hovered, setHovered] = useState(false);
-  const [pressed, setPressed] = useState(false);
-  const danger = tone === 'danger';
-  const background = pressed
-    ? danger ? '#c42b1c' : 'rgba(0, 0, 0, 0.12)'
-    : hovered ? danger ? '#e81123' : 'rgba(0, 0, 0, 0.08)'
-      : 'transparent';
-  const color = danger && (hovered || pressed) ? '#fff' : 'var(--ol-ink-3)';
-
-  return (
-    <button
-      style={{ ...winBtnStyle, background, color }}
-      title={title}
-      onClick={() => runWindowsWindowAction(action)}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => {
-        setHovered(false);
-        setPressed(false);
-      }}
-      onMouseDown={() => setPressed(true)}
-      onMouseUp={() => setPressed(false)}
-    >
-      {children}
-    </button>
-  );
-}
-
-async function startResizeDragging(direction: ResizeDirection) {
-  try {
-    await getCurrentWindow().startResizeDragging(direction);
-  } catch (error) {
-    console.warn(`[window] Windows resize ${direction} failed`, error);
-  }
-}
-
-async function runWindowsWindowAction(action: 'minimize' | 'toggleMaximize' | 'close') {
-  try {
-    const currentWindow = getCurrentWindow();
-    if (action === 'minimize') {
-      await currentWindow.minimize();
-    } else if (action === 'toggleMaximize') {
-      await currentWindow.toggleMaximize();
-    } else {
-      await currentWindow.close();
-    }
-  } catch (error) {
-    console.warn(`[window] Windows title button ${action} failed`, error);
-  }
-}
-
-const winBtnStyle: CSSProperties = {
-  width: 46,
-  height: '100%',
-  border: 0,
-  background: 'transparent',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  color: 'var(--ol-ink-3)',
-  cursor: 'default',
-  transition: 'background 0.16s var(--ol-motion-quick), color 0.16s var(--ol-motion-quick)',
+const svgWrap: CSSProperties = { width: 12, height: 12, display: 'block' };
+const ctrlBtn: CSSProperties = {
+  width: 30, height: 24,
+  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+  borderRadius: 5, border: 0, padding: 0,
+  background: 'transparent', color: 'var(--ol-ink-3)',
+  fontFamily: 'inherit', cursor: 'default',
+  transition: 'background 0.12s, color 0.12s',
 };
+
+function MinimizeSvg() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style={svgWrap}>
+      <rect x="2" y="5.5" width="8" height="1" rx="0.5" fill="currentColor" />
+    </svg>
+  );
+}
+
+function MaximizeSvg() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style={svgWrap}>
+      <rect x="2" y="2" width="8" height="8" rx="1.5" stroke="currentColor" strokeWidth="1.1" />
+    </svg>
+  );
+}
+
+function RestoreSvg() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style={svgWrap}>
+      <rect x="3.6" y="0.6" width="7.2" height="7.2" rx="1.3" stroke="currentColor" strokeWidth="1.1" />
+      <rect x="0.6" y="3.6" width="7.2" height="7.2" rx="1.3" fill="var(--ol-surface, #fff)" stroke="currentColor" strokeWidth="1.1" />
+    </svg>
+  );
+}
+
+function CloseSvg() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style={svgWrap}>
+      <path d="M2.8 2.8l6.4 6.4M9.2 2.8l-6.4 6.4" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" />
+    </svg>
+  );
+}

@@ -1,8 +1,9 @@
+#![allow(dead_code, unused_imports, unused_variables)]
 pub const OPENLESS_TSF_LANG_ID: u16 = 0x0804;
 pub const OPENLESS_TEXT_SERVICE_CLSID_BRACED: &str = "{6B9F3F4F-5EE7-42D6-9C61-9F80B03A5D7D}";
 pub const OPENLESS_PROFILE_GUID_BRACED: &str = "{9B5F5E04-23F6-47DA-9A26-D221F6C3F02E}";
 
-use crate::types::{WindowsImeInstallState, WindowsImeStatus};
+use crate::types::{UserPreferences, WindowsImeInstallState, WindowsImeStatus};
 
 #[cfg(target_os = "windows")]
 fn parse_guid(value: &str) -> WindowsImeProfileResult<windows::core::GUID> {
@@ -121,6 +122,85 @@ pub fn get_windows_ime_status() -> WindowsImeStatus {
     }
 }
 
+/// 根据偏好决定 OpenLess 语言配置文件是否应在用户键盘列表中启用。
+pub fn desired_openless_language_profile_enabled(prefs: &UserPreferences) -> bool {
+    if !prefs.windows_sendinput_insertion_only {
+        return true;
+    }
+    prefs.windows_show_openless_in_keyboard_list
+}
+
+#[cfg(target_os = "windows")]
+pub fn set_openless_language_profile_enabled(enabled: bool) -> WindowsImeProfileResult<()> {
+    windows_impl::set_openless_language_profile_enabled(enabled)
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn set_openless_language_profile_enabled(_enabled: bool) -> WindowsImeProfileResult<()> {
+    Err(WindowsImeProfileError::Unavailable(
+        "Windows TSF profiles are only available on Windows".to_string(),
+    ))
+}
+
+#[cfg(target_os = "windows")]
+pub fn is_openless_language_profile_enabled() -> WindowsImeProfileResult<bool> {
+    windows_impl::is_openless_language_profile_enabled()
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn is_openless_language_profile_enabled() -> WindowsImeProfileResult<bool> {
+    Err(WindowsImeProfileError::Unavailable(
+        "Windows TSF profiles are only available on Windows".to_string(),
+    ))
+}
+
+/// TSF IME 未装（或注册损坏）时「键盘列表可见性」偏好的短路结果。
+///
+/// 返回 `Some(result)` 表示无需触碰注册表即可结束；`None` 表示已安装，需要走真正的
+/// `EnableLanguageProfile` 变更。抽成纯函数，使「未安装」这一分支能在任意平台上被测试
+/// 覆盖到（`apply_windows_openless_keyboard_list_pref` 依赖 Windows 注册表，macOS/CI
+/// 无法命中其内部分支）。
+///
+/// 关键语义：TSF IME 未安装时，键盘列表里根本没有 OpenLess 条目——
+/// - `desired == false`（不显示）是天然已满足的空操作；
+/// - `desired == true`（显示）也只能是 no-op（没东西可启用）。
+///
+/// 两支都必须是 `Ok(())`。此前「不显示 + 未安装」错误地返回 `Err`，经 settings.rs 的
+/// `apply_keyboard_list(&prefs)?` 传播，导致整个设置保存事务回滚（用户勾「仅 SendInput
+/// 插入」+「不在键盘列表显示」且未装 TSF IME 时，之后任何设置都存不进）。
+fn keyboard_list_pref_short_circuit(
+    install_state: WindowsImeInstallState,
+    _desired: bool,
+) -> Option<Result<(), String>> {
+    if install_state == WindowsImeInstallState::Installed {
+        None
+    } else {
+        Some(Ok(()))
+    }
+}
+
+/// 将「SendInput + 键盘列表可见性」偏好同步到当前用户的 TSF 语言配置文件。
+pub fn apply_windows_openless_keyboard_list_pref(prefs: &UserPreferences) -> Result<(), String> {
+    let desired = desired_openless_language_profile_enabled(prefs);
+    #[cfg(target_os = "windows")]
+    {
+        let status = get_windows_ime_status();
+        if let Some(result) = keyboard_list_pref_short_circuit(status.state, desired) {
+            return result;
+        }
+        set_openless_language_profile_enabled(desired).map_err(|err| {
+            let message = err.to_string();
+            log::warn!("[windows-ime] apply keyboard list visibility pref failed: {message}");
+            message
+        })
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = desired;
+        Ok(())
+    }
+}
+
 #[cfg(target_os = "windows")]
 pub struct WindowsImeProfileManager;
 
@@ -192,6 +272,7 @@ mod windows_impl {
         COINIT_APARTMENTTHREADED,
     };
     use windows::Win32::UI::Input::KeyboardAndMouse::HKL;
+    use windows::Win32::Foundation::BOOL;
     use windows::Win32::UI::TextServices::{
         CLSID_TF_InputProcessorProfiles, ITfInputProcessorProfileMgr, ITfInputProcessorProfiles,
         GUID_TFCAT_TIP_KEYBOARD, TF_INPUTPROCESSORPROFILE, TF_IPPMF_DONTCARECURRENTINPUTLANGUAGE,
@@ -319,37 +400,71 @@ mod windows_impl {
     }
 
     pub fn restore_profile(snapshot: &ImeProfileSnapshot) -> WindowsImeProfileResult<()> {
+        // 必须与 activate_openless_profile 路径对称：激活同时调了 legacy
+        // ITfInputProcessorProfiles 的 ChangeCurrentLanguage + ActivateLanguageProfile，
+        // 单独调现代 ITfInputProcessorProfileMgr::ActivateProfile 不会更新 legacy
+        // current language / active profile 状态，OS 仍认 OpenLess 是当前输入法 →
+        // 用户的输入法切不回去。issue #469。
+        //
+        // 现代 ActivateProfile 失败降级为 warn：legacy 两步成功后，OS 视觉层已经把用户
+        // 原 IME 切回（语言指示器、键盘事件路由都走 legacy 视图）；现代 API 失败只是内部
+        // bookkeeping 不同步，不会让用户看到"还停在 OpenLess"。所以这一步降级为 warn，
+        // 不让 caller 把"已经切回了但 bookkeeping 慢"误判成"切回完全失败"。pr_agent
+        // partial-restore 关注点回应。
         match snapshot.kind() {
             ImeProfileKind::TextService => {
                 let clsid = parse_required_guid("text service CLSID", snapshot.clsid())?;
                 let profile_guid =
                     parse_required_guid("text service profile GUID", snapshot.profile_guid())?;
+                let lang_id = snapshot.lang_id();
 
-                with_profile_manager(|manager| unsafe {
+                with_input_processor_profiles(|profiles| unsafe {
+                    profiles.ChangeCurrentLanguage(lang_id)?;
+                    profiles.ActivateLanguageProfile(&clsid, lang_id, &profile_guid)
+                })?;
+
+                let modern_result = with_profile_manager(|manager| unsafe {
                     manager.ActivateProfile(
                         TF_PROFILETYPE_INPUTPROCESSOR,
-                        snapshot.lang_id(),
+                        lang_id,
                         &clsid,
                         &profile_guid,
                         null_hkl(),
                         PROFILE_RESTORE_FLAGS,
                     )
-                })
+                });
+                if let Err(err) = modern_result {
+                    log::warn!(
+                        "[windows-ime] legacy restore OK but modern ActivateProfile failed: {err}"
+                    );
+                }
+                Ok(())
             }
             ImeProfileKind::KeyboardLayout => {
                 let hkl = HKL(snapshot.hkl().unwrap_or_default() as *mut c_void);
                 let zero_guid = GUID::zeroed();
+                let lang_id = snapshot.lang_id();
 
-                with_profile_manager(|manager| unsafe {
+                with_input_processor_profiles(|profiles| unsafe {
+                    profiles.ChangeCurrentLanguage(lang_id)
+                })?;
+
+                let modern_result = with_profile_manager(|manager| unsafe {
                     manager.ActivateProfile(
                         TF_PROFILETYPE_KEYBOARDLAYOUT,
-                        snapshot.lang_id(),
+                        lang_id,
                         &zero_guid,
                         &zero_guid,
                         hkl,
                         PROFILE_RESTORE_FLAGS,
                     )
-                })
+                });
+                if let Err(err) = modern_result {
+                    log::warn!(
+                        "[windows-ime] legacy restore OK but modern ActivateProfile (keyboard) failed: {err}"
+                    );
+                }
+                Ok(())
             }
         }
     }
@@ -366,6 +481,35 @@ mod windows_impl {
                 .map(normalize_guid_string)
                 .as_deref()
                 == Some(OPENLESS_PROFILE_GUID_BRACED))
+    }
+
+    pub fn set_openless_language_profile_enabled(enabled: bool) -> WindowsImeProfileResult<()> {
+        let clsid = parse_guid(OPENLESS_TEXT_SERVICE_CLSID_BRACED)?;
+        let profile_guid = parse_guid(OPENLESS_PROFILE_GUID_BRACED)?;
+        let enable_flag = BOOL::from(enabled);
+
+        with_input_processor_profiles(|profiles| unsafe {
+            profiles.EnableLanguageProfile(
+                &clsid,
+                OPENLESS_TSF_LANG_ID,
+                &profile_guid,
+                enable_flag,
+            )
+        })
+    }
+
+    pub fn is_openless_language_profile_enabled() -> WindowsImeProfileResult<bool> {
+        let clsid = parse_guid(OPENLESS_TEXT_SERVICE_CLSID_BRACED)?;
+        let profile_guid = parse_guid(OPENLESS_PROFILE_GUID_BRACED)?;
+
+        with_input_processor_profiles(|profiles| unsafe {
+            let enabled = profiles.IsEnabledLanguageProfile(
+                &clsid,
+                OPENLESS_TSF_LANG_ID,
+                &profile_guid,
+            )?;
+            Ok(enabled.as_bool())
+        })
     }
 
     pub fn get_windows_ime_status() -> WindowsImeStatus {
@@ -655,6 +799,86 @@ mod tests {
         assert_eq!(
             restore_decision(Some(&text_service_snapshot()), false, false),
             ProfileRestoreDecision::KeepCurrentProfile
+        );
+    }
+
+    #[test]
+    fn desired_openless_language_profile_enabled_follows_sendinput_and_visibility_pref() {
+        let tsf_only = UserPreferences {
+            windows_sendinput_insertion_only: false,
+            windows_show_openless_in_keyboard_list: false,
+            ..UserPreferences::default()
+        };
+        assert!(desired_openless_language_profile_enabled(&tsf_only));
+
+        let sendinput_show = UserPreferences {
+            windows_sendinput_insertion_only: true,
+            windows_show_openless_in_keyboard_list: true,
+            ..UserPreferences::default()
+        };
+        assert!(desired_openless_language_profile_enabled(&sendinput_show));
+
+        let sendinput_hide = UserPreferences {
+            windows_sendinput_insertion_only: true,
+            windows_show_openless_in_keyboard_list: false,
+            ..UserPreferences::default()
+        };
+        assert!(!desired_openless_language_profile_enabled(&sendinput_hide));
+    }
+
+    // ── Fix: TSF IME 未安装时「键盘列表可见性」偏好不应报错 ──
+    // 之前 `desired == false`（不显示）+ 未安装错误地返回 Err，经 settings.rs 的
+    // apply_keyboard_list(&prefs)? 传播导致整个设置保存事务回滚。这是回归护栏。
+
+    #[test]
+    fn uninstalled_hide_request_is_noop_ok() {
+        // 用户想让 OpenLess 不出现在键盘列表，但 TSF IME 没装 → 天然已满足 → Ok(())。
+        assert_eq!(
+            keyboard_list_pref_short_circuit(WindowsImeInstallState::NotInstalled, false),
+            Some(Ok(()))
+        );
+    }
+
+    #[test]
+    fn uninstalled_show_request_is_noop_ok() {
+        // 用户想显示但没装 → 只能 no-op（没东西可启用）→ Ok(())。
+        assert_eq!(
+            keyboard_list_pref_short_circuit(WindowsImeInstallState::NotInstalled, true),
+            Some(Ok(()))
+        );
+    }
+
+    #[test]
+    fn broken_registration_short_circuits_ok_for_both_desired_values() {
+        // 注册损坏同样视为「列表里没有可信条目」→ 两支都短路成 Ok(())，绝不 Err。
+        assert_eq!(
+            keyboard_list_pref_short_circuit(WindowsImeInstallState::RegistrationBroken, false),
+            Some(Ok(()))
+        );
+        assert_eq!(
+            keyboard_list_pref_short_circuit(WindowsImeInstallState::RegistrationBroken, true),
+            Some(Ok(()))
+        );
+    }
+
+    #[test]
+    fn not_windows_state_short_circuits_ok() {
+        assert_eq!(
+            keyboard_list_pref_short_circuit(WindowsImeInstallState::NotWindows, false),
+            Some(Ok(()))
+        );
+    }
+
+    #[test]
+    fn installed_state_proceeds_to_real_profile_mutation() {
+        // 已安装 → 不短路，交给真正的 EnableLanguageProfile 变更。
+        assert_eq!(
+            keyboard_list_pref_short_circuit(WindowsImeInstallState::Installed, false),
+            None
+        );
+        assert_eq!(
+            keyboard_list_pref_short_circuit(WindowsImeInstallState::Installed, true),
+            None
         );
     }
 }

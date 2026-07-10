@@ -1,3 +1,4 @@
+#![cfg_attr(target_os = "linux", allow(dead_code, unused_variables))]
 //! 火山引擎大模型流式 ASR 二进制帧编解码。
 //!
 //! 帧结构通常为：4 字节 header + 可选 sequence + 4 字节大端 payload size + payload。

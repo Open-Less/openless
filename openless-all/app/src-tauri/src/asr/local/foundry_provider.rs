@@ -1,4 +1,4 @@
-#![allow(dead_code)] // Task 6 接入 coordinator 后这些路径会变成运行时路径。
+#![allow(dead_code, unused_variables)] // Task 6 接入 coordinator 后这些路径会变成运行时路径。
 
 #[cfg(target_os = "windows")]
 use std::fs::{self, OpenOptions};
@@ -148,7 +148,7 @@ impl crate::recorder::AudioConsumer for FoundryLocalWhisperAsr {
 }
 
 fn pcm_duration_ms(pcm: &[u8]) -> u64 {
-    (pcm.len() as u64 / 2) * 1000 / 16_000
+    crate::asr::pcm::pcm_duration_ms(pcm)
 }
 
 fn pcm_to_wav(pcm: &[u8]) -> Vec<u8> {

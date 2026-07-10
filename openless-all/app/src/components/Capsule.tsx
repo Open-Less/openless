@@ -1,301 +1,250 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import { detectOS, type OS } from './WindowChrome';
+import { SiriGL, warmUpSiriShaders } from './SiriGL';
 import {
   getCapsuleHostMetrics,
-  getCapsuleMessageLayout,
   getCapsulePillMetrics,
 } from '../lib/capsuleLayout';
-import { invokeOrMock, isTauri } from '../lib/ipc';
+import { isTauri } from '../lib/ipc';
 import type { CapsulePayload, CapsuleState } from '../lib/types';
 
-interface AudioBarsProps {
-  level: number;
+// 胶囊 keyframes 注入一次到 document.head，而不是放在组件 JSX 里。否则录音时音量
+// 每帧（~60Hz）setLevel 都会让 React 重新创建/reconcile 这个 <style> 元素 —— 纯属
+// 浪费，因为这些 keyframes 是静态的。与 QaPanel / LessComputerPanel 注入方式一致。
+const CAPSULE_KEYFRAMES = `
+  @keyframes capsule-in {
+    from { opacity: 0; transform: scale(.46) translateY(18px); }
+    70%  { opacity: 1; transform: scale(1.035) translateY(-1px); }
+    to   { opacity: 1; transform: scale(1)    translateY(0); }
+  }
+  @keyframes capsule-out {
+    from { opacity: 1; transform: scale(1)   translateY(0); }
+    to   { opacity: 0; transform: scale(.46) translateY(18px); }
+  }
+  /* 思考圆点（fluid dots）出场：纯淡入接住光条汇聚成的光点 —— 圆点自身的
+     「从圆心散开」动画由 shader 的 uGather 驱动，这里不做任何缩放冲击。 */
+  @keyframes siri-orb-in {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+  }
+`;
+
+if (typeof document !== 'undefined' && !document.getElementById('capsule-keyframes')) {
+  const tag = document.createElement('style');
+  tag.id = 'capsule-keyframes';
+  tag.textContent = CAPSULE_KEYFRAMES;
+  document.head.appendChild(tag);
 }
 
-function AudioBars({ level }: AudioBarsProps) {
-  const envelope = [0.55, 0.85, 1.0, 0.85, 0.55];
-  const base = 2;
-  const max = 24;
-  const voice = Math.min(1, Math.max(0, level));
-  const silenceGate = 0.012;
-  const responseCeiling = 0.34;
-  const gatedVoice = Math.min(1, Math.max(0, (voice - silenceGate) / (responseCeiling - silenceGate)));
-  const easedVoice = gatedVoice * gatedVoice * (3 - 2 * gatedVoice);
-  const visualVoice = Math.pow(easedVoice, 0.42);
-  return (
-    <div
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 3,
-        width: 42,
-        height: max,
-      }}
-    >
-      {envelope.map((env, i) => (
-        <span
-          key={i}
-          style={{
-            display: 'inline-block',
-            width: 3,
-            height: base + (max - base) * visualVoice * env,
-            borderRadius: 999,
-            background: 'var(--ol-blue)',
-            opacity: 0.82,
-            transformOrigin: 'center',
-            // 0.08s 在 60Hz audio-level 更新下太快，每次 re-render 都重启 transition，
-            // 视觉上是阶梯式跳变。延长到 0.18s 让多次 update 在曲线内平滑混合，
-            // easeOutExpo-like 缓动让圆点→长条的形变自然顺滑（用户原话"圆形跳成矩形"）。
-            transition: 'height 0.18s cubic-bezier(0.22, 1, 0.36, 1)',
-          }}
-        />
-      ))}
-    </div>
-  );
-}
-
-interface CenterTextProps {
-  os: OS;
-  kind: 'default' | 'processing' | 'error';
-  text: string;
-  color?: string;
-}
-
-function CenterText({ os, kind, text, color = 'var(--ol-ink-3)' }: CenterTextProps) {
-  const metrics = getCapsulePillMetrics(os);
-  const layout = getCapsuleMessageLayout(os, kind);
-  return (
-    <span
-      style={{
-        fontSize: 11,
-        fontWeight: 500,
-        color,
-        width: '100%',
-        maxWidth: metrics.textWidth,
-        minWidth: 0,
-        textAlign: 'center',
-        lineHeight: layout.allowWrap ? 1.2 : 1,
-        whiteSpace: layout.allowWrap ? 'normal' : 'nowrap',
-        overflow: 'hidden',
-        textOverflow: 'ellipsis',
-        display: '-webkit-box',
-        WebkitBoxOrient: 'vertical',
-        WebkitLineClamp: layout.lineClamp,
-      }}
-    >
-      {text}
-    </span>
-  );
-}
-
-interface CircleButtonProps {
-  variant: 'cancel' | 'confirm';
-  enabled: boolean;
-  onClick: () => void;
-}
-
-function CircleButton({ variant, enabled, onClick }: CircleButtonProps) {
-  const { t } = useTranslation();
-  const isCancel = variant === 'cancel';
-  const os = detectOS();
-  const useBackdrop = os !== 'win' && isCancel;
-  return (
-    <button
-      onClick={enabled ? onClick : undefined}
-      aria-label={isCancel ? t('common.cancel') : t('settings.shortcuts.confirm')}
-      disabled={!enabled}
-      style={{
-        width: 28,
-        height: 28,
-        borderRadius: 999,
-        background: isCancel ? 'rgba(255, 255, 255, 0.55)' : 'rgba(255, 255, 255, 0.92)',
-        backdropFilter: useBackdrop ? 'blur(12px) saturate(160%)' : 'none',
-        WebkitBackdropFilter: useBackdrop ? 'blur(12px) saturate(160%)' : 'none',
-        color: 'var(--ol-ink)',
-        border: '0.8px solid rgba(0, 0, 0, 0.08)',
-        display: 'inline-flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        cursor: enabled ? 'default' : 'not-allowed',
-        opacity: enabled ? 1 : 0.42,
-        visibility: 'visible',
-        flexShrink: 0,
-        padding: 0,
-        boxShadow: '0 1px 2px rgba(0, 0, 0, 0.06)',
-        transition: 'opacity 0.18s var(--ol-motion-soft), background 0.16s var(--ol-motion-quick), transform 0.12s var(--ol-motion-quick)',
-      }}
-    >
-      {isCancel ? (
-        <svg width="11" height="11" viewBox="0 0 11 11">
-          <path d="M1.5 1.5l8 8M9.5 1.5l-8 8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-        </svg>
-      ) : (
-        <svg width="13" height="13" viewBox="0 0 13 13">
-          <path d="M2 6.5l3.2 3.5L11 3.5" stroke="currentColor" strokeWidth="1.7" fill="none" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
-      )}
-    </button>
-  );
-}
-
-interface PillProps {
+interface VoiceOrbStageProps {
   os: OS;
   state: CapsuleState;
   level: number;
-  insertedChars: number;
+  /** 预备态：录音光条渲染成「待命」呼吸形态，不接真实电平。见 CapsulePayload.warming。 */
+  warming?: boolean;
+  /** 预备→就绪的平均耗时（ms），驱动展开动画的预测节奏。见 SiriGL warmupMs。 */
+  warmupMs?: number;
   message?: string;
-  onCancel: () => void;
-  onConfirm: () => void;
 }
 
-function Pill({ os, state, level, insertedChars, message, onCancel, onConfirm }: PillProps) {
+/**
+ * 纯光效舞台（siri-glsl 完整克隆，无壳无按钮无底）：
+ *   - recording：彩虹光谱声波横贯舞台，振幅随真实麦克风电平起伏；
+ *   - transcribing / polishing：波形从两端向中间收缩汇聚，流体圆点环淡入加速转动；
+ *   - done / cancelled：转速回落标准，六点合并成中央一颗圆，由外层 capsule-out 淡出；
+ *   - error：冻结光效 + 浮一行发光红字说明原因（唯一保留的文字信息）。
+ * 刻意没有任何垫底/暗晕（用户拍板）：白底界面上宁可对比度弱，也不要黑色遮挡。
+ */
+function VoiceOrbStage({ os, state, level, warming, warmupMs, message }: VoiceOrbStageProps) {
   const { t } = useTranslation();
-  const metrics = getCapsulePillMetrics(os);
-  const processingLayout = getCapsuleMessageLayout(os, 'processing');
-  const enabled = state === 'recording';
+  const metrics = useMemo(() => getCapsulePillMetrics(os), [os]);
 
-  // "thinking" 扫光速度：进入 transcribing/polishing 的头 2 秒走快速（0.9s/cycle，提示
-  // 「流式刚开始」），之后切回慢速（2.4s）作为稳态。切回 idle / done / 其他 state 也复位
-  // 为 fast，下次进入时从头开始 burst。
-  const [shineFast, setShineFast] = useState(true);
+  // done / cancelled / error 冻结最后形态淡出，不再切换 phase。
+  const lastPhaseRef = useRef<'wave' | 'orb'>('wave');
+  let phase = lastPhaseRef.current;
+  if (state === 'recording') phase = 'wave';
+  else if (state === 'transcribing' || state === 'polishing') phase = 'orb';
+  lastPhaseRef.current = phase;
+  const isOrb = phase === 'orb';
+
+  // 性能：波形淡出彻底结束（.55s delay + .6s duration）后卸载它的绘制循环 ——
+  // 思考期间不再为一块不可见的 canvas 每帧跑 fragment。回到录音态立即重挂
+  //（shader 编译已被驱动缓存，重建近零耗时）。
+  const [waveAlive, setWaveAlive] = useState(true);
   useEffect(() => {
-    if (state === 'transcribing' || state === 'polishing') {
-      setShineFast(true);
-      const t = setTimeout(() => setShineFast(false), 2000);
-      return () => clearTimeout(t);
+    if (!isOrb) {
+      setWaveAlive(true);
+      return undefined;
     }
-    setShineFast(true);
-    return undefined;
-  }, [state]);
-
-  let center: JSX.Element;
-  switch (state) {
-    case 'recording':
-      center = <AudioBars level={level} />;
-      break;
-    case 'transcribing':
-    case 'polishing':
-      center = (
-        <div
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            // 左右 4px 内边距 + 外层 gap 已经让 "thinking" ↔ ✗/✓ 视觉间距落在 ~4-5px。
-            padding: '0 4px',
-            width: '100%',
-            maxWidth: metrics.textWidth,
-            minWidth: 0,
-            justifyContent: 'center',
-            // state 进入动画 —— 用户从 recording 切到 polishing 时多一道淡入提示，
-            // 比纯切换 center 内容更容易被感知。
-            animation: 'cap-state-enter 220ms var(--ol-motion-soft) both',
-          }}
-        >
-          <span
-            style={{
-              // 放大 11 → 14 让 thinking 在胶囊里更显眼。
-              fontSize: 14,
-              // 字重 500：用户反馈 700 太粗。500 是 medium 视觉重量，扫光更稳。
-              fontWeight: 500,
-              letterSpacing: 0.5,
-              // 字号 14 + 字重 500 时小写 g/y/p 等下伸字符在 line-height: 1 下会被
-              // clip。给 line-height 一点冗余 + 上下 1px padding，descender 不再被切。
-              paddingBlock: 1,
-              // 扫光：渐变中段用更饱和的 ol-blue（不靠透明度），尾段保留 ink-3 作收尾，
-              // 整条 stripe 比之前更醒目（用户反馈"扫光不够明显"）。
-              color: 'var(--ol-ink-2)',
-              backgroundImage:
-                'linear-gradient(100deg, var(--ol-ink-3) 0%, var(--ol-ink-3) 35%, var(--ol-blue) 50%, var(--ol-ink-3) 65%, var(--ol-ink-3) 100%)',
-              backgroundSize: '220% auto',
-              WebkitBackgroundClip: 'text',
-              backgroundClip: 'text',
-              WebkitTextFillColor: 'transparent',
-              // 进入流式的头 ~2 秒用 0.9s 高速扫光（视觉提示「刚开始」），之后 React 副作用
-              // 切到 2.4s 慢速。duration 变化时浏览器不重启动画，会平滑减速。
-              animation: `cap-shine ${shineFast ? '0.9s' : '2.4s'} linear infinite`,
-              minWidth: 0,
-              textAlign: 'center',
-              lineHeight: processingLayout.allowWrap ? 1.3 : 1.25,
-              whiteSpace: processingLayout.allowWrap ? 'normal' : 'nowrap',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              display: '-webkit-box',
-              WebkitBoxOrient: 'vertical',
-              WebkitLineClamp: processingLayout.lineClamp,
-            }}
-          >
-            {t('capsule.thinking')}
-          </span>
-        </div>
-      );
-      break;
-    case 'done':
-      center = <CenterText os={os} kind="default" text={message || t('capsule.inserted', { count: insertedChars })} />;
-      break;
-    case 'cancelled':
-      center = <CenterText os={os} kind="default" text={t('capsule.cancelled')} />;
-      break;
-    case 'error':
-      center = <CenterText os={os} kind="error" text={message || t('capsule.error')} color="var(--ol-err)" />;
-      break;
-    default:
-      center = <AudioBars level={0} />;
-  }
-
-  const ambient = state === 'recording' ? Math.min(1, Math.max(0, level)) : 0;
-  const scale = os === 'win' ? 1 : 1 + ambient * 0.018;
-  const shadowAlpha = 0.20 + ambient * 0.10;
-  const useBackdrop = os !== 'win';
+    const timer = setTimeout(() => setWaveAlive(false), 1300);
+    return () => clearTimeout(timer);
+  }, [isOrb]);
 
   return (
     <div
       style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        gap: 4,
-        padding: '0 8px',
         width: metrics.width,
         height: metrics.height,
         boxSizing: metrics.boxSizing,
-        borderRadius: 999,
-        background: 'rgba(255, 255, 255, 0.62)',
-        backdropFilter: useBackdrop ? 'blur(28px) saturate(180%)' : 'none',
-        WebkitBackdropFilter: useBackdrop ? 'blur(28px) saturate(180%)' : 'none',
-        border: '1px solid rgba(255, 255, 255, 0.55)',
-        boxShadow: os === 'win'
-          ? `0 10px 24px -14px rgba(0, 0, 0, ${(0.24 + ambient * 0.06).toFixed(3)}), 0 0 0 0.5px rgba(0, 0, 0, 0.08), inset 0 0.5px 0 rgba(255, 255, 255, 0.55)`
-          : `0 18px 50px -10px rgba(0, 0, 0, ${shadowAlpha.toFixed(3)}), 0 0 0 0.5px rgba(0, 0, 0, 0.08), inset 0 0.5px 0 rgba(255, 255, 255, 0.55)`,
-        color: 'var(--ol-ink)',
         fontFamily: 'var(--ol-font-sans)',
-        transform: `scale(${scale.toFixed(4)})`,
-        transformOrigin: 'center',
-        transition: 'transform 0.08s var(--ol-motion-quick), box-shadow 0.08s var(--ol-motion-quick)',
-        willChange: 'transform, box-shadow',
+        position: 'relative',
+        pointerEvents: 'none',
       }}
     >
-      <CircleButton variant="cancel" enabled={enabled} onClick={onCancel} />
-      <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        {center}
-      </div>
-      <CircleButton variant="confirm" enabled={enabled} onClick={onConfirm} />
+      {waveAlive && (
+        <SiriGL
+          mode="wave"
+          level={level}
+          resolved={!isOrb}
+          warming={warming}
+          warmupMs={warmupMs}
+          style={{
+            position: 'absolute',
+            inset: 0,
+            width: '100%',
+            height: '100%',
+            // 收缩汇聚进行时波形保持可见，收成中央光点后再淡出，与圆点环的淡入交叠。
+            opacity: isOrb ? 0 : 1,
+            transition: isOrb ? 'opacity .6s ease-out .55s' : 'opacity .25s ease-out',
+          }}
+        />
+      )}
+      {isOrb && (
+        <SiriGL
+          mode="orb"
+          // 思考中（LLM 接收）加速转动；插入/取消/出错时回落到标准速度，
+          // 同时六点合并成中央一颗圆，随外层淡出一起消失。
+          speed={state === 'transcribing' || state === 'polishing' ? 1.5 : 1.0}
+          merging={state !== 'transcribing' && state !== 'polishing'}
+          style={{
+            position: 'absolute',
+            left: '50%',
+            top: '50%',
+            width: 170,
+            height: 170,
+            marginLeft: -85,
+            marginTop: -85,
+            animation: 'siri-orb-in .7s ease-out .3s both',
+          }}
+        />
+      )}
+      {state === 'error' && (
+        <span style={errorGlowTextStyle}>{message || t('capsule.error')}</span>
+      )}
     </div>
   );
 }
 
-export function Capsule() {
+const errorGlowTextStyle: CSSProperties = {
+  position: 'absolute',
+  bottom: 24,
+  left: '50%',
+  transform: 'translateX(-50%)',
+  maxWidth: 400,
+  fontSize: 12,
+  fontWeight: 600,
+  lineHeight: 1.4,
+  textAlign: 'center',
+  color: '#ff7a70',
+  textShadow: '0 0 14px rgba(255,70,60,0.5), 0 1px 6px rgba(0,0,0,0.6)',
+  whiteSpace: 'nowrap',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+};
+
+// 与 @keyframes capsule-out 的 0.52s 时长一致——必须同步，否则定时器先于
+// 动画结束就 unmount → 用户看到半截动画被截断。
+const EXIT_ANIM_MS = 520;
+
+// 胶囊「预备→就绪」的平均耗时（ms），驱动入场展开动画的预测节奏（见 SiriGL warmProgress）：
+// 每次录音就绪后按 EMA 更新并存 localStorage 跨会话学习。默认 150ms，clamp [60,600]。
+const WARMUP_MS_KEY = 'ol-capsule-warmup-ms';
+const WARMUP_MS_DEFAULT = 150;
+function readWarmupMs(): number {
+  if (typeof localStorage === 'undefined') return WARMUP_MS_DEFAULT;
+  const raw = Number(localStorage.getItem(WARMUP_MS_KEY));
+  return Number.isFinite(raw) && raw > 0 ? Math.min(600, Math.max(60, raw)) : WARMUP_MS_DEFAULT;
+}
+// #470 诊断 v2：模块级一次性门，只在 webview 收到第一个 capsule:state 事件时打 log。
+let capsuleStateFirstLogged = false;
+
+const CAPSULE_PREVIEW_STATES: CapsuleState[] = [
+  'idle',
+  'recording',
+  'transcribing',
+  'polishing',
+  'done',
+  'cancelled',
+  'error',
+];
+
+function getPreviewCapsulePayload() {
+  if (isTauri || typeof window === 'undefined') {
+    return {
+      state: 'idle' as CapsuleState,
+      level: 0,
+      message: undefined,
+      translation: false,
+      warming: false,
+    };
+  }
+
+  const params = new URLSearchParams(window.location.search);
+  const stateParam = params.get('state');
+  const previewState = CAPSULE_PREVIEW_STATES.includes(stateParam as CapsuleState)
+    ? (stateParam as CapsuleState)
+    : 'recording';
+  const previewLevel = Number(params.get('level') ?? 0.6);
+  return {
+    state: previewState,
+    level: Number.isFinite(previewLevel) ? Math.min(1, Math.max(0, previewLevel)) : 0.6,
+    message: params.get('message') ?? undefined,
+    translation: params.get('translation') === '1',
+    warming: params.get('warming') === '1',
+  };
+}
+
+interface CapsuleProps {
+  os?: OS | null;
+}
+
+export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   const { t } = useTranslation();
-  const os = detectOS();
+  const os = forcedOs ?? detectOS();
+  const preview = useMemo(() => getPreviewCapsulePayload(), []);
   const metrics = getCapsulePillMetrics(os);
-  const [state, setState] = useState<CapsuleState>(isTauri ? 'idle' : 'recording');
-  const [level, setLevel] = useState<number>(isTauri ? 0 : 0.6);
-  const [insertedChars, setInsertedChars] = useState<number>(0);
-  const [message, setMessage] = useState<string | undefined>();
-  const [translation, setTranslation] = useState<boolean>(false);
-  // Windows 端 host 在翻译模式从 84 长到 118；macOS / Linux 上 capsuleLayout 已固定 42 忽略此参数。
+  const [state, setState] = useState<CapsuleState>(preview.state);
+  const [level, setLevel] = useState<number>(preview.level);
+  const [message, setMessage] = useState<string | undefined>(preview.message);
+  const [translation, setTranslation] = useState<boolean>(preview.translation);
+  // 预备态：麦克风尚未吐第一帧 PCM。true 时录音光条走「待命」呼吸形态（见 SiriGL warming）。
+  const [warming, setWarming] = useState<boolean>(preview.warming);
+  // 预备→就绪耗时的移动平均，驱动光条展开动画的预测节奏（见 SiriGL warmProgress）。
+  const [warmupMs, setWarmupMs] = useState<number>(() => readWarmupMs());
+  const warmStartRef = useRef<number | null>(null);
+  // `leaving` 与 `lastVisibleState` 协同实现「退出动画」：
+  // - 当 state 从非 idle 变成 idle 时，不立即卸载，而是把 leaving 置为 true 并保留
+  //   最后一帧的可见 state（lastVisibleState），让语音 orb 用 capsule-out 动画收缩淡出。
+  // - 动画结束（EXIT_ANIM_MS）后再把 leaving 置回 false，组件回到「真正未挂载」分支。
+  // - 若期间 state 又切回非 idle（例如用户连按热键），立刻中止 leaving 并恢复显示。
+  const [leaving, setLeaving] = useState<boolean>(false);
+  const [lastVisibleState, setLastVisibleState] = useState<CapsuleState>(preview.state);
+  // 前端 host 与原生窗口保持同一份透明语音 orb 舞台尺寸。
   const hostMetrics = getCapsuleHostMetrics(os, translation);
+  const badgeBottom = Math.round(metrics.height * 0.73);
+
+  // 空闲预热 shader 编译缓存：首次按下热键时光条不用现场编译（响应延迟反馈）。
+  useEffect(() => {
+    const idle = (window as Window & { requestIdleCallback?: (cb: () => void) => number })
+      .requestIdleCallback;
+    if (idle) {
+      idle(() => warmUpSiriShaders());
+      return;
+    }
+    const timer = setTimeout(() => warmUpSiriShaders(), 1200);
+    return () => clearTimeout(timer);
+  }, []);
 
   useEffect(() => {
     if (!isTauri) return;
@@ -305,11 +254,17 @@ export function Capsule() {
       const { listen } = await import('@tauri-apps/api/event');
       const handle = await listen<CapsulePayload>('capsule:state', event => {
         const p = event.payload;
+        if (!capsuleStateFirstLogged) {
+          capsuleStateFirstLogged = true;
+          // #470 诊断 v2：确认 capsule webview 确实收到了后端事件 —— 区分「后端没
+          // emit」与「emit 了但窗口没显示/没渲染」。配合后端 [capsule] 日志定位根因。
+          console.info('[capsule] first capsule:state received in webview, state=', p.state);
+        }
         setState(p.state);
         setLevel(p.level ?? 0);
         setMessage(p.message ?? undefined);
-        if (p.insertedChars != null) setInsertedChars(p.insertedChars);
         setTranslation(p.translation === true);
+        setWarming(p.warming === true);
       });
       if (cancelled) handle();
       else unlisten = handle;
@@ -320,18 +275,57 @@ export function Capsule() {
     };
   }, []);
 
+  // 退出动画调度：在 state 真正进入 idle 时，先用 capsule-out 播放 EXIT_ANIM_MS，再卸载。
+  // 设计要点：
+  // 1. 进入非 idle：清掉 leaving，记录最新可见 state；
+  // 2. 进入 idle 且之前可见：开启 leaving 并启动定时器；
+  // 3. 期间又被打回非 idle：cleanup 直接 clearTimeout，定时器不会触发，
+  //    新一轮 effect 会立即恢复可见态，避免错误地把可见状态切到 idle。
+  useEffect(() => {
+    if (state !== 'idle') {
+      // 立即恢复可见，并取消上一轮可能挂着的离场。
+      if (leaving) setLeaving(false);
+      setLastVisibleState(state);
+      return undefined;
+    }
+    // state === 'idle'：判断是不是从可见态过渡过来。
+    if (lastVisibleState === 'idle') return undefined;
+    setLeaving(true);
+    const timer = setTimeout(() => {
+      setLeaving(false);
+      setLastVisibleState('idle');
+    }, EXIT_ANIM_MS);
+    return () => clearTimeout(timer);
+    // 故意只依赖 state —— lastVisibleState / leaving 是内部派生量，
+    // 把它们加进依赖会让定时器被反复重建。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state]);
 
-  const onCancel = () => {
-    void invokeOrMock<void>('cancel_dictation', undefined, () => undefined);
-  };
+  // 学习「预备态持续多久」= 麦克风就绪耗时，EMA 更新 warmupMs（预测展开的基准时长）。
+  useEffect(() => {
+    if (warming) {
+      warmStartRef.current = performance.now();
+      return;
+    }
+    if (warmStartRef.current == null) return;
+    const loadMs = performance.now() - warmStartRef.current;
+    warmStartRef.current = null;
+    // 过滤异常样本：<20ms 多半不是真入场；>3s 多半首次 TCC / 卡顿，不代表常态。
+    if (loadMs < 20 || loadMs > 3000) return;
+    setWarmupMs(prev => {
+      const next = Math.min(600, Math.max(60, prev * 0.7 + loadMs * 0.3));
+      try { localStorage.setItem(WARMUP_MS_KEY, String(Math.round(next))); } catch { /* ignore */ }
+      return next;
+    });
+  }, [warming]);
 
-  const onConfirm = () => {
-    void invokeOrMock<void>('stop_dictation', undefined, () => undefined);
-  };
-
-  if (state === 'idle') {
+  // 真正卸载：state 已是 idle，且不在离场动画中。
+  if (state === 'idle' && !leaving) {
     return <div style={{ width: 0, height: 0 }} />;
   }
+
+  // 离场时用 lastVisibleState 渲染最后一帧内容，避免把 idle 当作无波形状态。
+  const renderedState: CapsuleState = state === 'idle' ? lastVisibleState : state;
 
   return (
     <div
@@ -350,7 +344,13 @@ export function Capsule() {
           : 0,
         paddingBottom: os === 'win' ? hostMetrics.bottomInset : 0,
         background: 'transparent',
-        animation: os === 'win' ? 'none' : 'capsule-in .22s cubic-bezier(.2,.9,.3,1.1)',
+        animation: leaving
+          ? 'capsule-out .52s cubic-bezier(.55,.06,.68,.19) forwards'
+          // .68s 的入场被反馈「按下之后有延迟」：压到 .38s，曲线保持轻微弹性，
+          // 光条几乎跟手出现。
+          : 'capsule-in .38s cubic-bezier(.3,1.2,.4,1) both',
+        transformOrigin: 'center',
+        willChange: 'transform, opacity',
       }}
     >
       {/* "正在翻译" 徽章 — 嵌套两层：
@@ -361,11 +361,7 @@ export function Capsule() {
         style={{
           position: 'absolute',
           left: '50%',
-          // macOS / Linux：胶囊窗口 220×110、pill 居中，badge 锚到 pill 中线上方 21+8。
-          // Windows：host 比 pill 多出左右 12px / 底部 12px 的阴影空间，pill 仍保持居中。
-          bottom: os === 'win'
-            ? `${hostMetrics.bottomInset + metrics.height + hostMetrics.badgeGap}px`
-            : 'calc(50% + 21px + 8px)',
+          bottom: `${badgeBottom}px`,
           transform: 'translateX(-50%)',
           pointerEvents: 'none',
         }}
@@ -375,19 +371,14 @@ export function Capsule() {
             display: 'inline-flex',
             alignItems: 'center',
             gap: 5,
-            padding: '3px 10px',
-            borderRadius: 999,
             fontSize: 10.5,
             fontWeight: 600,
-            color: 'var(--ol-blue)',
-            background: 'rgba(255, 255, 255, 0.78)',
-            backdropFilter: 'blur(20px) saturate(180%)',
-            WebkitBackdropFilter: 'blur(20px) saturate(180%)',
-            border: '0.5px solid rgba(37, 99, 235, 0.25)',
-            boxShadow: '0 4px 12px -4px rgba(37, 99, 235, 0.25), 0 0 0 0.5px rgba(0,0,0,0.04)',
+            // 纯光效语言：无壳发光小字，与波形同一气质（浮空 + 冷蓝光晕）。
+            color: 'rgba(190, 212, 255, 0.95)',
+            textShadow: '0 0 14px rgba(90, 140, 255, 0.85), 0 1px 6px rgba(0, 0, 0, 0.45)',
             letterSpacing: '0.02em',
             whiteSpace: 'nowrap',
-            // 隐藏：从 pill 中线偏下出发；显示：归位到 wrapper（pill 上方 25px）
+            // 隐藏：从光条附近偏下出发；显示：归位到光条上方。
             opacity: translation ? 1 : 0,
             transform: translation ? 'translateY(0) scale(1)' : 'translateY(40px) scale(.88)',
             transformOrigin: 'center bottom',
@@ -395,33 +386,26 @@ export function Capsule() {
             willChange: 'opacity, transform',
           }}
         >
-          <span style={{ width: 5, height: 5, borderRadius: 999, background: 'var(--ol-blue)' }} />
+          <span
+            style={{
+              width: 5,
+              height: 5,
+              borderRadius: 999,
+              background: 'rgba(150, 185, 255, 0.95)',
+              boxShadow: '0 0 8px rgba(90, 140, 255, 0.9)',
+            }}
+          />
           {t('capsule.translating')}
         </div>
       </div>
-      <Pill
+      <VoiceOrbStage
         os={os}
-        state={state}
-        level={level}
-        insertedChars={insertedChars}
+        state={renderedState}
+        level={leaving ? 0 : level}
+        warming={!leaving && warming}
+        warmupMs={warmupMs}
         message={message}
-        onCancel={onCancel}
-        onConfirm={onConfirm}
       />
-      <style>{`
-        @keyframes capsule-in {
-          from { opacity: 0; transform: translateY(6px) scale(.96); }
-          to   { opacity: 1; transform: translateY(0) scale(1); }
-        }
-        @keyframes cap-shine {
-          0%   { background-position: 200% center; }
-          100% { background-position: -200% center; }
-        }
-        @keyframes cap-state-enter {
-          from { opacity: 0; transform: translateY(2px); }
-          to   { opacity: 1; transform: translateY(0); }
-        }
-      `}</style>
     </div>
   );
 }

@@ -175,6 +175,9 @@ mod tests {
         };
         let parsed = parse_binding(&binding).expect("letter binding parses");
         assert_eq!(parsed.key, Code::KeyK);
+        #[cfg(target_os = "windows")]
+        assert!(parsed.mods.contains(Modifiers::CONTROL));
+        #[cfg(not(target_os = "windows"))]
         assert!(parsed.mods.contains(Modifiers::SUPER));
         assert!(parsed.mods.contains(Modifiers::ALT));
     }

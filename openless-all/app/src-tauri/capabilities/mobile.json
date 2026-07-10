@@ -1,0 +1,18 @@
+{
+  "$schema": "../gen/schemas/mobile-schema.json",
+  "identifier": "mobile",
+  "description": "Capabilities for OpenLess Android main window",
+  "platforms": ["android"],
+  "windows": ["main", "qa"],
+  "permissions": [
+    "core:default",
+    "core:window:default",
+    "core:window:allow-show",
+    "core:window:allow-hide",
+    "core:window:allow-set-focus",
+    "core:webview:default",
+    "core:event:default",
+    "shell:allow-open",
+    "dialog:default"
+  ]
+}

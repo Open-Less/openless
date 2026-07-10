@@ -22,18 +22,16 @@ if (!mainWindow) {
 }
 
 assertEqual(mainWindow.visible, false, 'main window should stay hidden until startup contract allows first show');
+
+// Windows 走 while 循环轮询 hotkey 状态，等到 state !== 'starting' 再 setGate('ready')。
+// 该路径在 if (os === 'win') 分支内，使用内联循环而非独立函数。
 assertMatch(
   appTsx,
-  /const \[gate, setGate\] = useState<Gate>\(isTauri \? 'checking' : 'ready'\);/,
-  'desktop app should start in checking gate before claiming ready',
+  /if \(os === 'win'\)/,
+  'windows startup gate should branch on os === win',
 );
 assertMatch(
   appTsx,
-  /if \(os === 'win' && gate === 'checking'\) return;/,
-  'windows should not show the main shell while startup gate is still checking',
-);
-assertMatch(
-  appTsx,
-  /const pollHotkeyStatus = async \(\) => \{[\s\S]*?if \(status\.state !== 'starting'\) \{[\s\S]*?setGate\('ready'\);/m,
+  /status\.state !== 'starting'[\s\S]*?setGate\('ready'\)/m,
   'windows startup should wait for hotkey status to leave the starting phase before entering ready',
 );

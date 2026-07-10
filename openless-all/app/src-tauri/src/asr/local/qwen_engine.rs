@@ -59,7 +59,13 @@ impl QwenAsrEngine {
     where
         F: FnMut(&str) + Send + 'static,
     {
-        let mut slot = self.token_handler.lock().expect("token_handler poisoned");
+        // 用 std::sync::Mutex（非 parking_lot）是因为这个锁可能在 C FFI 回调
+        // token_trampoline 中被 handler 间接访问；若 handler panic，std Mutex
+        // 会 poison。此处用 into_inner() 恢复而非 panic，避免进程崩溃。
+        let mut slot = self
+            .token_handler
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
 
         // 先把 C 端那一侧切干净，再 drop 旧 Box，避免 C 在替换瞬间还持有旧指针。
         unsafe { qwen_set_token_callback(self.ctx, None, ptr::null_mut()) };
@@ -78,6 +84,9 @@ impl QwenAsrEngine {
 
     /// 批式转写：一次性给完整音频（mono f32 16kHz）。
     pub fn transcribe_audio(&self, samples: &[f32]) -> Result<String> {
+        if self.ctx.is_null() {
+            anyhow::bail!("engine already freed — cannot transcribe");
+        }
         // SAFETY: samples 在调用期间存活；返回是 C `malloc` 出的字符串。
         let raw =
             unsafe { qwen_transcribe_audio(self.ctx, samples.as_ptr(), samples.len() as i32) };
@@ -94,6 +103,9 @@ impl QwenAsrEngine {
     /// 流式转写：内部按 2s chunk 切片，token 通过 `set_token_handler` 注册的
     /// 回调实时吐出；返回值是最终完整文本。
     pub fn transcribe_stream(&self, samples: &[f32]) -> Result<String> {
+        if self.ctx.is_null() {
+            anyhow::bail!("engine already freed — cannot transcribe");
+        }
         let raw =
             unsafe { qwen_transcribe_stream(self.ctx, samples.as_ptr(), samples.len() as i32) };
         if raw.is_null() {

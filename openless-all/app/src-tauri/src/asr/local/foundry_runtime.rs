@@ -1,3 +1,4 @@
+#![cfg_attr(target_os = "linux", allow(dead_code, unused_variables))]
 #[cfg(target_os = "windows")]
 #[allow(dead_code)]
 mod imp {
@@ -114,7 +115,7 @@ mod imp {
 
         pub async fn catalog_snapshot(&self) -> Result<Vec<FoundryCatalogModel>> {
             let _lifecycle = self.lifecycle.lock().await;
-            if !foundry_native::runtime_ready() {
+            if !foundry_native::runtime_ready() || self.state.lock().manager.is_none() {
                 return Ok(crate::asr::local::foundry::static_catalog_models());
             }
             let manager = self.manager()?;
@@ -174,6 +175,47 @@ mod imp {
         pub async fn release_now(&self) -> Result<()> {
             let _lifecycle = self.lifecycle.lock().await;
             self.release_now_locked().await
+        }
+
+        pub fn storage_configuration_locked(&self) -> bool {
+            self.state.lock().manager.is_some()
+        }
+
+        pub async fn model_dir_for_alias(&self, alias: &str) -> Result<PathBuf> {
+            let _lifecycle = self.lifecycle.lock().await;
+            if self.state.lock().manager.is_none() {
+                return crate::persistence::foundry_model_cache_root();
+            }
+            let manager = self.manager()?;
+            let model = manager
+                .catalog()
+                .get_model(alias)
+                .await
+                .with_context(|| format!("get Foundry model {alias}"))?;
+            model
+                .path()
+                .await
+                .with_context(|| format!("get Foundry model path {alias}"))
+        }
+
+        pub async fn delete_model(&self, alias: &str) -> Result<()> {
+            let _lifecycle = self.lifecycle.lock().await;
+            let manager = self.manager()?;
+            let model = manager
+                .catalog()
+                .get_model(alias)
+                .await
+                .with_context(|| format!("get Foundry model {alias}"))?;
+            let loaded = self.cached_loaded_model(alias);
+            if let Some(loaded) = loaded.as_ref() {
+                Self::unload_model(loaded).await?;
+                self.clear_loaded_if_model_id(&loaded.model_id);
+            }
+            model
+                .remove_from_cache()
+                .await
+                .with_context(|| format!("remove Foundry model cache {alias}"))?;
+            Ok(())
         }
 
         async fn ensure_loaded_locked(
@@ -652,6 +694,18 @@ impl FoundryLocalRuntime {
 
     pub async fn release_now(&self) -> anyhow::Result<()> {
         Ok(())
+    }
+
+    pub fn storage_configuration_locked(&self) -> bool {
+        false
+    }
+
+    pub async fn model_dir_for_alias(&self, alias: &str) -> anyhow::Result<std::path::PathBuf> {
+        anyhow::bail!("Foundry Local Whisper is only available on Windows: {alias}");
+    }
+
+    pub async fn delete_model(&self, alias: &str) -> anyhow::Result<()> {
+        anyhow::bail!("Foundry Local Whisper is only available on Windows: {alias}");
     }
 }
 

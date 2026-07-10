@@ -4,22 +4,35 @@
 
 import { useState, type CSSProperties, type ReactNode } from 'react';
 import { Icon } from '../components/Icon';
+import { useMobileLayout } from '../lib/useMobileLayout';
 
 interface PageHeaderProps {
   kicker?: string;
   title: string;
   desc?: string;
   right?: ReactNode;
+  titleRight?: ReactNode;
 }
 
-export function PageHeader({ kicker, title, desc, right }: PageHeaderProps) {
+export function PageHeader({ kicker, title, desc, right, titleRight }: PageHeaderProps) {
+  const mobile = useMobileLayout();
   return (
-    <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 24, marginBottom: 24 }}>
+    <div style={{
+      display: 'flex',
+      alignItems: 'flex-start',
+      justifyContent: 'space-between',
+      gap: mobile ? 12 : 24,
+      marginBottom: mobile ? 16 : 24,
+      flexWrap: mobile ? 'wrap' : 'nowrap',
+    }}>
       <div style={{ minWidth: 0 }}>
         {kicker && (
           <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--ol-ink-4)', marginBottom: 8 }}>{kicker}</div>
         )}
-        <h1 style={{ margin: 0, fontSize: 26, fontWeight: 600, letterSpacing: '-0.02em', color: 'var(--ol-ink)' }}>{title}</h1>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <h1 style={{ margin: 0, fontSize: mobile ? 22 : 26, fontWeight: 600, letterSpacing: '-0.02em', color: 'var(--ol-ink)' }}>{title}</h1>
+          {titleRight}
+        </div>
         {desc && <p style={{ margin: '8px 0 0', fontSize: 13, color: 'var(--ol-ink-3)', maxWidth: 640, lineHeight: 1.55 }}>{desc}</p>}
       </div>
       {right}
@@ -40,7 +53,7 @@ export function Card({ children, style, padding = 18, glassy = false, className 
     <div
       className={className}
       style={{
-        background: glassy ? 'rgba(255,255,255,0.55)' : 'var(--ol-surface)',
+        background: glassy ? 'var(--ol-glass-bg)' : 'var(--ol-surface)',
         backdropFilter: glassy ? 'blur(20px) saturate(160%)' : undefined,
         WebkitBackdropFilter: glassy ? 'blur(20px) saturate(160%)' : undefined,
         border: '0.5px solid var(--ol-line)',
@@ -67,11 +80,11 @@ interface PillProps {
 
 export function Pill({ children, tone = 'default', size = 'md', style }: PillProps) {
   const tones: Record<PillTone, { bg: string; color: string; bd: string }> = {
-    default: { bg: 'rgba(0,0,0,0.05)',   color: 'var(--ol-ink-2)',  bd: 'transparent' },
-    blue:    { bg: 'var(--ol-blue-soft)',color: 'var(--ol-blue)',   bd: 'transparent' },
-    ok:      { bg: 'var(--ol-ok-soft)',  color: 'var(--ol-ok)',     bd: 'transparent' },
-    outline: { bg: 'transparent',        color: 'var(--ol-ink-3)',  bd: 'var(--ol-line-strong)' },
-    dark:    { bg: 'var(--ol-ink)',      color: '#fff',             bd: 'transparent' },
+    default: { bg: 'var(--ol-pill-bg)', color: 'var(--ol-ink-2)', bd: 'transparent' },
+    blue:    { bg: 'var(--ol-pill-blue-bg)', color: 'var(--ol-blue)', bd: 'transparent' },
+    ok:      { bg: 'var(--ol-pill-ok-bg)', color: 'var(--ol-ok)', bd: 'transparent' },
+    outline: { bg: 'transparent', color: 'var(--ol-ink-3)', bd: 'var(--ol-line-strong)' },
+    dark:    { bg: 'var(--ol-pill-selected-bg)', color: 'var(--ol-pill-selected-ink)', bd: 'transparent' },
   };
   const t = tones[tone];
   const sz = size === 'sm'
@@ -86,6 +99,8 @@ export function Pill({ children, tone = 'default', size = 'md', style }: PillPro
         color: t.color,
         border: t.bd === 'transparent' ? '0.5px solid transparent' : `0.5px solid ${t.bd}`,
         fontWeight: 500,
+        whiteSpace: 'nowrap',
+        flexShrink: 0,
         ...sz,
         ...style,
       }}
@@ -110,10 +125,10 @@ interface BtnProps {
 
 export function Btn({ children, variant = 'ghost', size = 'md', icon, style, onClick, disabled = false }: BtnProps) {
   const variants: Record<BtnVariant, { bg: string; color: string; bd: string; sh: string }> = {
-    primary: { bg: 'var(--ol-ink)',     color: '#fff',                bd: 'transparent', sh: '0 1px 2px rgba(0,0,0,.08)' },
-    blue:    { bg: 'var(--ol-blue)',    color: '#fff',                bd: 'transparent', sh: '0 1px 2px rgba(37,99,235,.18)' },
-    ghost:   { bg: 'transparent',       color: 'var(--ol-ink-2)',     bd: 'var(--ol-line-strong)', sh: 'none' },
-    soft:    { bg: 'rgba(0,0,0,0.04)',  color: 'var(--ol-ink-2)',     bd: 'transparent', sh: 'none' },
+    primary: { bg: 'var(--ol-primary-solid-bg)', color: 'var(--ol-primary-solid-ink)', bd: 'transparent', sh: 'var(--ol-shadow-sm)' },
+    blue:    { bg: 'var(--ol-accent-solid-bg)', color: 'var(--ol-accent-solid-ink)', bd: 'transparent', sh: 'var(--ol-shadow-sm)' },
+    ghost:   { bg: 'transparent', color: 'var(--ol-ink-2)', bd: 'var(--ol-line-strong)', sh: 'none' },
+    soft:    { bg: 'var(--ol-control-muted)', color: 'var(--ol-ink-2)', bd: 'transparent', sh: 'none' },
   };
   const v = variants[variant];
   const sizes: Record<BtnSize, { padding: string; fontSize: number }> = {
@@ -131,7 +146,7 @@ export function Btn({ children, variant = 'ghost', size = 'md', icon, style, onC
         borderRadius: 8,
         boxShadow: v.sh,
         fontFamily: 'inherit', fontWeight: 500,
-        cursor: disabled ? 'not-allowed' : 'default',
+        cursor: disabled ? 'not-allowed' : 'pointer',
         opacity: disabled ? 0.55 : 1,
         transition: 'background 0.16s var(--ol-motion-quick), color 0.16s var(--ol-motion-quick), border-color 0.16s var(--ol-motion-quick), box-shadow 0.18s var(--ol-motion-soft), transform 0.12s var(--ol-motion-quick)',
         ...sizes[size],

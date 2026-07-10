@@ -224,20 +224,43 @@ impl DownloadManager {
     }
 }
 
-fn build_client() -> Result<reqwest::Client> {
+pub(crate) fn build_client() -> Result<reqwest::Client> {
     // native-tls (macOS=SecureTransport) 不像 rustls 那样把 CDN unclean close
-    // 当致命错误。
+    // 当致命错误。Android/iOS 无 native-tls feature，走默认 rustls。
     //
     // User-Agent 用 aria2 的——hfd（hf-mirror 官方推荐）就是 aria2 包装，
     // 实测 aria2 UA 在 HF 反滥用规则里走白名单不挨 throttle；自定义 UA
     // (`openless/x`) 在 sustained 传输后会被 mirror 主动切流。
-    reqwest::Client::builder()
-        .use_native_tls()
+    let mut builder = reqwest::Client::builder()
         .user_agent("aria2/1.36.0")
         .connect_timeout(std::time::Duration::from_secs(30))
-        .pool_idle_timeout(std::time::Duration::from_secs(60))
-        .build()
-        .context("build reqwest client failed")
+        .pool_idle_timeout(std::time::Duration::from_secs(60));
+    #[cfg(not(mobile))]
+    {
+        builder = builder.use_native_tls();
+    }
+    builder.build().context("build reqwest client failed")
+}
+
+/// 判定一个「已存在」的目标文件是否完整可信，纯函数便于单测（#686）。
+/// - 大小一致 → 完整；
+/// - 大小不符（截断 / 损坏 / 超大）→ 不完整，应删除重下；
+/// - `expected_size == 0`（HF 未给出大小）→ 退回旧行为「存在即信任」，避免对未知大小
+///   的文件反复重下。
+fn existing_file_is_complete(actual_size: u64, expected_size: u64) -> bool {
+    if expected_size == 0 {
+        return true;
+    }
+    actual_size == expected_size
+}
+
+/// 读盘取实际大小后按 [`existing_file_is_complete`] 判定。元数据取不到（文件刚被删 / 无权限）
+/// 视为不完整。读盘方式与 `partial_actual_size` 一致。
+fn dest_file_is_complete(dest: &Path, expected_size: u64) -> bool {
+    match std::fs::metadata(dest) {
+        Ok(m) => existing_file_is_complete(m.len(), expected_size),
+        Err(_) => false,
+    }
 }
 
 async fn run_download(
@@ -306,7 +329,9 @@ async fn run_download(
         .iter()
         .map(|f| {
             let d = dir.join(&f.path);
-            if d.exists() {
+            // 只把「已存在且大小完整」的文件计入已完成字节，与下面的跳过判定一致：
+            // 截断/损坏的残留文件会被重下，不应计入进度基线（#686）。
+            if dest_file_is_complete(&d, f.size) {
                 f.size
             } else {
                 0
@@ -320,8 +345,18 @@ async fn run_download(
     for (idx, file) in info.files.iter().enumerate() {
         let dest = dir.join(&file.path);
         if dest.exists() {
-            // 已经下完的（目录里直接存在 dest 文件）跳过；前面 already_done_bytes 已计入
-            continue;
+            if dest_file_is_complete(&dest, file.size) {
+                // 已存在且大小完整 → 跳过；前面 already_done_bytes 已计入。
+                continue;
+            }
+            // 已存在但大小不符（上次下载被中断 / 文件被外部损坏）→ 删除残留重下，
+            // 否则截断文件会被信任为完整、模型加载时才以含糊错误失败（#686）。
+            log::warn!(
+                "[asr-dl] {} exists but size mismatch (expected {}), re-downloading",
+                file.path,
+                file.size
+            );
+            let _ = std::fs::remove_file(&dest);
         }
         let url = format!(
             "{}/{}/resolve/main/{}",
@@ -476,6 +511,9 @@ const PARALLEL_FILES: usize = 3;
 pub fn partial_actual_size(partial: &Path) -> u64 {
     let total_size = match std::fs::metadata(partial) {
         Ok(m) => m.len(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return 0;
+        }
         Err(e) => {
             eprintln!(
                 "[local-asr] partial_actual_size: stat partial failed ({}): {}",
@@ -525,7 +563,7 @@ pub fn partial_actual_size(partial: &Path) -> u64 {
     total
 }
 
-async fn download_one(
+pub(crate) async fn download_one(
     client: &reqwest::Client,
     url: &str,
     dest: &Path,
@@ -563,7 +601,7 @@ async fn download_one(
 
     // 1. 计算 chunk 计划
     let chunks: Vec<(usize, u64, u64)> = chunk_plan(total_size);
-    let total_chunks = chunks.len();
+    let _total_chunks = chunks.len();
 
     // 2. 读已完成的 chunk 索引
     let done_set = read_idx(&idx_path);
@@ -992,4 +1030,31 @@ fn emit_cancelled(
             error: None,
         },
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::existing_file_is_complete;
+
+    #[test]
+    fn complete_when_size_matches() {
+        assert!(existing_file_is_complete(1024, 1024));
+    }
+
+    #[test]
+    fn incomplete_when_truncated() {
+        assert!(!existing_file_is_complete(512, 1024));
+    }
+
+    #[test]
+    fn incomplete_when_oversized() {
+        assert!(!existing_file_is_complete(2048, 1024));
+    }
+
+    #[test]
+    fn trusts_existence_when_expected_size_unknown() {
+        // HF 未给大小（size == 0）时退回「存在即信任」，避免反复重下。
+        assert!(existing_file_is_complete(0, 0));
+        assert!(existing_file_is_complete(999, 0));
+    }
 }

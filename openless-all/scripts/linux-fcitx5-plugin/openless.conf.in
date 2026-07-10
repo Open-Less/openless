@@ -1,0 +1,15 @@
+[Addon]
+Name=OpenLess
+Name[zh_CN]=OpenLess 听写辅助
+Comment=OpenLess dictation commit helper — exposes CommitText DBus method and dictation hotkey
+Comment[zh_CN]=供 OpenLess 听写提交文字的 DBus 接口及快捷键监听
+Category=Module
+Type=SharedLibrary
+Library=libopenless
+Version=1.0.0
+OnDemand=False
+Configurable=False
+
+[Addon/Dependencies]
+0=core:@Fcitx5Core_VERSION@
+1=dbus

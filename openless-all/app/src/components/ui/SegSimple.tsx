@@ -1,6 +1,7 @@
 // SegSimple — segmented control used in the Settings modal sub-sections.
 
 import { useState } from 'react';
+import { segmentedTrackStyle } from '../../pages/settings/shared';
 
 interface SegSimpleProps {
   options: string[];
@@ -10,7 +11,7 @@ interface SegSimpleProps {
 export function SegSimple({ options, active }: SegSimpleProps) {
   const [v, setV] = useState(active);
   return (
-    <div style={{ display: 'inline-flex', padding: 2, borderRadius: 8, background: 'rgba(0,0,0,0.05)' }}>
+    <div style={segmentedTrackStyle}>
       {options.map((o) => (
         <button
           key={o}
@@ -18,9 +19,9 @@ export function SegSimple({ options, active }: SegSimpleProps) {
           style={{
             padding: '5px 12px', fontSize: 12, fontWeight: 500, border: 0, borderRadius: 6,
             fontFamily: 'inherit',
-            background: v === o ? '#fff' : 'transparent',
+            background: v === o ? 'var(--ol-segmented-active-bg)' : 'transparent',
             color: v === o ? 'var(--ol-ink)' : 'var(--ol-ink-3)',
-            boxShadow: v === o ? '0 1px 2px rgba(0,0,0,.08)' : 'none',
+            boxShadow: v === o ? 'var(--ol-segmented-active-shadow)' : 'none',
             cursor: 'default',
           }}
         >

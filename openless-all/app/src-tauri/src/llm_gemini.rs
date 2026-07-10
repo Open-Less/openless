@@ -70,10 +70,15 @@ pub struct GeminiProvider {
 
 impl GeminiProvider {
     pub fn new(config: GeminiConfig) -> Self {
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(config.request_timeout_secs))
-            .build()
-            .unwrap_or_else(|_| reqwest::Client::new());
+        // Reuse a cached client keyed by timeout so the connection pool survives
+        // across utterances instead of re-handshaking every polish.
+        let timeout = config.request_timeout_secs;
+        let client = crate::net::cached_client((timeout, false), || {
+            reqwest::Client::builder()
+                .timeout(Duration::from_secs(timeout))
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new())
+        });
         Self { config, client }
     }
 
@@ -82,6 +87,7 @@ impl GeminiProvider {
         raw_text: &str,
         mode: PolishMode,
         hotwords: &[String],
+        style_system_prompt: &str,
         working_languages: &[String],
         chinese_script_preference: ChineseScriptPreference,
         output_language_preference: OutputLanguagePreference,
@@ -92,6 +98,7 @@ impl GeminiProvider {
             raw_text,
             mode,
             hotwords,
+            style_system_prompt,
             working_languages,
             chinese_script_preference,
             output_language_preference,

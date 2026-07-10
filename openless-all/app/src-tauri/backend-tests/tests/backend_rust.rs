@@ -7,6 +7,15 @@
 
 #![allow(dead_code, unused_variables)]
 
+#[cfg(target_os = "windows")]
+extern crate self as tauri;
+
+#[cfg(target_os = "windows")]
+pub struct AppHandle<R: Runtime>(std::marker::PhantomData<R>);
+
+#[cfg(target_os = "windows")]
+pub trait Runtime {}
+
 mod asr {
     pub mod local {
         pub mod foundry {
@@ -22,11 +31,26 @@ mod asr {
                 }
             }
         }
+
+        pub mod sherpa {
+            pub const DEFAULT_MODEL_ALIAS: &str = "sense-voice-small-zh";
+            pub const PROVIDER_ID: &str = "sherpa-onnx-local";
+
+            pub fn is_sherpa_onnx_local(id: &str) -> bool {
+                id == PROVIDER_ID
+            }
+        }
     }
 }
 
 #[path = "../../src/coordinator_state.rs"]
 mod coordinator_state;
+#[path = "../../src/global_hotkey_runtime.rs"]
+mod global_hotkey_runtime;
+#[path = "../../src/combo_hotkey.rs"]
+mod combo_hotkey;
+#[path = "../../src/side_aware_combo.rs"]
+mod side_aware_combo;
 #[path = "../../src/hotkey.rs"]
 mod hotkey;
 #[cfg(not(target_os = "macos"))]
@@ -38,3 +62,6 @@ mod recorder;
 mod shortcut_binding;
 #[path = "../../src/types.rs"]
 mod types;
+#[cfg(target_os = "windows")]
+#[path = "../../src/unicode_keystroke.rs"]
+mod unicode_keystroke;

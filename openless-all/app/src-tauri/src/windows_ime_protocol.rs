@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports, unused_variables)]
 use serde::{Deserialize, Serialize};
 
 pub const OPENLESS_IME_PROTOCOL_VERSION: u32 = 1;

@@ -19,7 +19,7 @@ use crate::global_hotkey_runtime::{GlobalHotkeyRuntime, RegisteredHotkey};
 use crate::shortcut_binding::{parse_global_hotkey, ShortcutBindingError};
 use crate::types::ShortcutBinding;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ComboHotkeyEvent {
     /// 用户按下了配置的组合键。
     Pressed,
@@ -168,6 +168,9 @@ mod tests {
             modifiers: vec!["cmd".into(), "shift".into()],
         };
         let parsed = parse_binding(&binding).expect("binding parses");
+        #[cfg(target_os = "windows")]
+        assert!(parsed.mods.contains(Modifiers::CONTROL));
+        #[cfg(not(target_os = "windows"))]
         assert!(parsed.mods.contains(Modifiers::SUPER));
         assert!(parsed.mods.contains(Modifiers::SHIFT));
         assert_eq!(parsed.key, Code::KeyD);

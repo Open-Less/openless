@@ -8,17 +8,11 @@ const target = process.env.OPENLESS_UPDATE_TARGET;
 const arch = process.env.OPENLESS_UPDATE_ARCH;
 const repo = process.env.OPENLESS_UPDATE_REPO || 'appergb/openless';
 const mirrorBaseUrl = process.env.OPENLESS_UPDATE_MIRROR_BASE_URL || 'https://fastgit.cc/https://github.com';
-// 渠道决定 manifest 文件名后缀：stable → 旧文件名（向后兼容）；beta → 加 -beta 后缀，
-// 让 stable 用户的 endpoint 永远拿不到 beta 包。空 / 未设置 = stable。
 const rawChannel = (process.env.OPENLESS_RELEASE_CHANNEL || 'stable').toLowerCase();
 if (rawChannel !== 'stable' && rawChannel !== 'beta') {
   throw new Error(`Invalid OPENLESS_RELEASE_CHANNEL: "${rawChannel}" (expected "stable" or "beta")`);
 }
 const channelSuffix = rawChannel === 'beta' ? '-beta' : '';
-// Beta 渠道里 manifest.url 必须指向具体 tag 路径，不能用 releases/latest——后者
-// 永远是最新非-prerelease（即 Stable），Beta 用户按 url 下载会拉到 Stable 包，
-// 文件名碰巧重名时下载错版本，文件名带版本号时直接 404。
-// Stable 渠道沿用 releases/latest，没问题。
 const releaseTag = process.env.OPENLESS_RELEASE_TAG || '';
 if (rawChannel === 'beta' && !releaseTag) {
   throw new Error('OPENLESS_RELEASE_TAG is required when OPENLESS_RELEASE_CHANNEL=beta');
@@ -29,7 +23,27 @@ if (!target || !arch) {
 }
 
 const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
-const bundleDir = fileURLToPath(new URL('../src-tauri/target/release/bundle/', import.meta.url));
+
+/** Map Gradle ABI folder names to updater manifest arch (Tauri {{arch}} convention). */
+const ANDROID_ABI_TO_ARCH = {
+  'arm64-v8a': 'aarch64',
+  'armeabi-v7a': 'armv7',
+  x86: 'i686',
+  x86_64: 'x86_64',
+};
+
+function resolveBundleDir() {
+  if (target === 'android') {
+    const apkDir = process.env.OPENLESS_UPDATE_APK_DIR;
+    if (!apkDir) {
+      throw new Error('OPENLESS_UPDATE_APK_DIR is required when OPENLESS_UPDATE_TARGET=android');
+    }
+    return apkDir;
+  }
+  return fileURLToPath(new URL('../src-tauri/target/release/bundle/', import.meta.url));
+}
+
+const bundleDir = resolveBundleDir();
 
 const candidatesByTarget = {
   darwin: [
@@ -38,7 +52,29 @@ const candidatesByTarget = {
   ],
   windows: ['nsis/OpenLess_*_x64-setup.exe', 'nsis/OpenLess*_x64-setup.exe'],
   linux: ['appimage/OpenLess_*.AppImage', 'appimage/OpenLess*.AppImage'],
+  android: [],
 };
+
+function findAndroidApk() {
+  const version = packageJson.version;
+  const abiEntry = Object.entries(ANDROID_ABI_TO_ARCH).find(([, manifestArch]) => manifestArch === arch);
+  if (!abiEntry) {
+    throw new Error(`Unknown android updater arch: ${arch}`);
+  }
+  const [abi] = abiEntry;
+  const expectedName = `OpenLess_${version}_${abi}.apk`;
+  const direct = join(bundleDir, expectedName);
+  if (existsSync(direct)) {
+    return direct;
+  }
+  const match = readdirSync(bundleDir)
+    .filter((name) => name.endsWith('.apk') && name.includes(abi))
+    .sort()[0];
+  if (match) {
+    return join(bundleDir, match);
+  }
+  throw new Error(`No Android APK found for arch ${arch} (abi ${abi}) in ${bundleDir}`);
+}
 
 function findFirst(patterns) {
   for (const pattern of patterns) {
@@ -59,7 +95,7 @@ function findFirst(patterns) {
   }
 }
 
-const artifact = findFirst(candidatesByTarget[target] || []);
+const artifact = target === 'android' ? findAndroidApk() : findFirst(candidatesByTarget[target] || []);
 if (!artifact) {
   throw new Error(`No updater artifact found for ${target} in ${bundleDir}`);
 }
@@ -72,8 +108,6 @@ if (!existsSync(signaturePath)) {
 const assetName = basename(artifact);
 const manifestName = `latest-${target}-${arch}${channelSuffix}.json`;
 const mirrorManifestName = `latest-${target}-${arch}${channelSuffix}-mirror.json`;
-// Stable: releases/latest/download/<asset>（GitHub 自动重定向到最新非-prerelease）
-// Beta:   releases/download/<tag>/<asset>（指定具体 tag，不被 prerelease 折叠影响）
 const downloadPath = rawChannel === 'beta'
   ? `releases/download/${releaseTag}/${assetName}`
   : `releases/latest/download/${assetName}`;
@@ -90,6 +124,7 @@ const mirrorManifest = {
   url: mirrorAssetUrl,
 };
 
-writeFileSync(join(bundleDir, manifestName), `${JSON.stringify(manifest, null, 2)}\n`);
-writeFileSync(join(bundleDir, mirrorManifestName), `${JSON.stringify(mirrorManifest, null, 2)}\n`);
+const outDir = target === 'android' ? bundleDir : bundleDir;
+writeFileSync(join(outDir, manifestName), `${JSON.stringify(manifest, null, 2)}\n`);
+writeFileSync(join(outDir, mirrorManifestName), `${JSON.stringify(mirrorManifest, null, 2)}\n`);
 console.log(`Wrote ${manifestName} and ${mirrorManifestName} for ${assetName}`);

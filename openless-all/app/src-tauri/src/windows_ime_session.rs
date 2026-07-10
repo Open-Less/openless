@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports, unused_variables)]
 use crate::types::InsertStatus;
 use crate::windows_ime_ipc::{ImeSubmitRequest, WindowsImeIpcServer};
 use crate::windows_ime_profile::{

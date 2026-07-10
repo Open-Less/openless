@@ -1,4 +1,5 @@
 name: Release Tauri (cross-platform)
+# meta: ensure Actions indexes this workflow on forks (no behavior change).
 # 触发条件：
 #   - 推 v*.*.*-tauri 形式的 tag（与老 Swift 版的 vX.Y.Z 区分开,不冲突）
 #   - 手动 dispatch（用于测试构建,不发版）
@@ -49,12 +50,13 @@ jobs:
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
       # 渠道由 tag 后缀决定：
-      #   v<v>-beta-tauri  → beta 渠道（GitHub Release 标 prerelease，manifest 文件名带 -beta 后缀，
+      #   v<v>-beta-tauri / v<v>-Beta.N-tauri
+      #                    → beta 渠道（GitHub Release 标 prerelease，manifest 文件名带 -beta 后缀，
       #                      正式版用户的 endpoint 拿不到）
       #   v<v>-tauri       → stable 渠道（正式版，文件名沿用旧约定，向后兼容）
       # workflow_dispatch / 非 tag 触发时 github.ref_name 不是 tag 字符串，
       # endsWith 返回 false，回退为 stable，不改变现有 dispatch 行为。
-      OPENLESS_RELEASE_CHANNEL: ${{ endsWith(github.ref_name, '-beta-tauri') && 'beta' || 'stable' }}
+      OPENLESS_RELEASE_CHANNEL: ${{ (endsWith(github.ref_name, '-beta-tauri') || contains(github.ref_name, '-Beta.')) && 'beta' || 'stable' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -252,16 +254,32 @@ jobs:
           # 所以单一 `tauri build` 永远拿不到 NSIS 的 .exe.sig。
           # Pass 1：NSIS 独立跑——必须成功，产出 *_x64-setup.exe(.sig) 给 updater。
           # Pass 2：MSI 独立跑——允许失败，Repair 步骤兜底 light.exe 重链。
+          # Beta 版跳过 MSI：Windows Installer / WiX 无法表示 `1.2.3-Beta.1`
+          # 这类非纯数字 prerelease 标识，稳定版仍然照常产出 MSI。
           if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
             npm run tauri -- build --bundles nsis --config '{"bundle":{"createUpdaterArtifacts":true}}'
             nsis_exit=$?
-            npm run tauri -- build --bundles msi --config '{"bundle":{"createUpdaterArtifacts":true}}'
-            msi_exit=$?
+            if [ "${OPENLESS_RELEASE_CHANNEL:-stable}" = "beta" ]; then
+              echo "OPENLESS_SKIP_WINDOWS_MSI=1" >> "$GITHUB_ENV"
+              echo "[info] Skipping MSI bundle for beta release channel."
+              msi_exit=0
+            else
+              echo "OPENLESS_SKIP_WINDOWS_MSI=0" >> "$GITHUB_ENV"
+              npm run tauri -- build --bundles msi --config '{"bundle":{"createUpdaterArtifacts":true}}'
+              msi_exit=$?
+            fi
           else
             npm run tauri -- build --bundles nsis
             nsis_exit=$?
-            npm run tauri -- build --bundles msi
-            msi_exit=$?
+            if [ "${OPENLESS_RELEASE_CHANNEL:-stable}" = "beta" ]; then
+              echo "OPENLESS_SKIP_WINDOWS_MSI=1" >> "$GITHUB_ENV"
+              echo "[info] Skipping MSI bundle for beta release channel."
+              msi_exit=0
+            else
+              echo "OPENLESS_SKIP_WINDOWS_MSI=0" >> "$GITHUB_ENV"
+              npm run tauri -- build --bundles msi
+              msi_exit=$?
+            fi
           fi
           echo "TAURI_BUILD_EXIT=$msi_exit" >> "$GITHUB_ENV"
           # NSIS 是 updater 的硬依赖，挂了就直接 fail step。
@@ -281,6 +299,10 @@ jobs:
         working-directory: 'openless-all/app'
         run: |
           $exitCode = $env:TAURI_BUILD_EXIT
+          if ($env:OPENLESS_SKIP_WINDOWS_MSI -eq '1') {
+            Write-Host "[ok] Skipping MSI repair for beta release channel."
+            return
+          }
           $appRoot = (Resolve-Path .).Path
           $msi = Get-ChildItem "src-tauri\target\release\bundle\msi\*.msi" -ErrorAction SilentlyContinue | Select-Object -First 1
           if ($msi) {
@@ -327,20 +349,92 @@ jobs:
         working-directory: 'openless-all/app'
         run: |
           $nsis = Get-ChildItem "src-tauri\target\release\bundle\nsis\*.exe" -ErrorAction Stop | Select-Object -First 1
-          $msi = Get-ChildItem "src-tauri\target\release\bundle\msi\*.msi" -ErrorAction Stop | Select-Object -First 1
           if (-not $nsis) { throw "NSIS installer not found." }
-          if (-not $msi) { throw "MSI installer not found." }
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows-ime-install-smoke.ps1 -InstallerPath $nsis.FullName -InstallerKind nsis
           if ($LASTEXITCODE -ne 0) {
             throw "NSIS installer smoke failed with exit $LASTEXITCODE"
           }
+          if ($env:OPENLESS_SKIP_WINDOWS_MSI -eq '1') {
+            Write-Host "[ok] Skipping MSI smoke for beta release channel."
+            return
+          }
+          $msi = Get-ChildItem "src-tauri\target\release\bundle\msi\*.msi" -ErrorAction Stop | Select-Object -First 1
+          if (-not $msi) { throw "MSI installer not found." }
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows-ime-install-smoke.ps1 -InstallerPath $msi.FullName -InstallerKind msi
           if ($LASTEXITCODE -ne 0) {
             throw "MSI installer smoke failed with exit $LASTEXITCODE"
           }
 
-      # ── Linux：产 deb / rpm / AppImage ──
-      # bundle.resources 里的 Windows TSF DLL 占位对 Linux 包没意义，用空 map 覆盖跳过。
+      # ── Linux：先编译 fcitx5 插件，再产 deb / rpm / AppImage ──
+      - name: Build fcitx5 plugin
+        if: matrix.platform == 'ubuntu-22.04'
+        shell: bash
+        working-directory: 'openless-all/scripts/linux-fcitx5-plugin'
+        run: |
+          # v1.3.4-3 之后 Ubuntu 22.04 universe 把 fcitx5-dev 这个 meta 包移除了
+          # （v1.3.4-4/-5/-6 在此步连挂三次，错误 "Unable to locate package fcitx5-dev"）。
+          # v1.3.4-6 加的 apt-cache search 诊断显示，22.04 jammy 实际只剩拆分后的
+          # libfcitx5{core,utils,config}-dev / fcitx5-modules-dev 等子包，
+          # 但 fcitx5-dev 这个 umbrella 包确认已不在源里。
+          #
+          # CMakeLists.txt 实际只需要：
+          #   find_package(Fcitx5Core)    → libfcitx5core-dev
+          #   find_package(Fcitx5Utils)   → libfcitx5utils-dev
+          #   find_package(Fcitx5Module)  → fcitx5-modules-dev
+          # 另外 fcitx5 自己的 CMake config 文件依赖 KDE ECM。
+          # 保留 add-apt-repository universe + 本步骤内 apt-get update 作为通用防御。
+          sudo add-apt-repository -y universe || true
+          sudo apt-get update
+          if ! sudo apt-get install -y \
+              cmake \
+              extra-cmake-modules \
+              libfcitx5core-dev \
+              libfcitx5utils-dev \
+              libfcitx5config-dev \
+              fcitx5-modules-dev; then
+            echo "::error::fcitx5 dev packages install failed. Diagnostics ↓"
+            echo "--- apt-cache search fcitx5 ---"
+            apt-cache search fcitx5 || true
+            echo "--- /etc/os-release ---"
+            cat /etc/os-release || true
+            echo "--- /etc/apt/sources.list.d ---"
+            ls -la /etc/apt/sources.list.d/ || true
+            exit 1
+          fi
+          mkdir -p build && cd build
+          # 显式 CMAKE_INSTALL_PREFIX=/usr：fcitx5 在 Ubuntu 上的运行时插件搜索
+          # 路径是 /usr/lib/<arch>/fcitx5/，默认 prefix=/usr/local 会让 .deb 把
+          # 插件安到 /usr/local/lib/fcitx5/，fcitx5 永远找不到。
+          # 历史上 v1.3.4-3 也是这条 bug 路径，只是 cmake -LA 那行先挂掉，没人意识到。
+          cmake .. -DCMAKE_INSTALL_PREFIX=/usr 2>&1 | tee cmake-configure.log
+          make
+          # v1.3.4-7 暴露：fcitx5 5.0.14 把 FCITX_INSTALL_* 设为普通变量而非 CACHE，
+          # `cmake -LA` 抓不到 → grep 退码 1 → set -e -o pipefail 整步退出。
+          # 改从 configure 阶段 message(STATUS ...) 的输出抓（CMakeLists.txt 已经打印）。
+          FCITX_ADDON_DIR=$(grep "FCITX_INSTALL_ADDONDIR:" cmake-configure.log \
+            | tail -1 | sed -E 's/^[^:]*: ([^ ]+).*/\1/')
+          FCITX_PKGDATA_DIR=$(grep "FCITX_INSTALL_PKGDATADIR:" cmake-configure.log \
+            | tail -1 | sed -E 's/^[^:]*: ([^ ]+).*/\1/')
+          if [ -z "$FCITX_ADDON_DIR" ] || [ -z "$FCITX_PKGDATA_DIR" ]; then
+            echo "::error::Failed to extract FCITX_INSTALL_* paths from cmake configure log"
+            echo "--- cmake-configure.log (last 50 lines) ---"
+            tail -50 cmake-configure.log
+            exit 1
+          fi
+          echo "Detected: addon=$FCITX_ADDON_DIR  pkgdata=$FCITX_PKGDATA_DIR"
+          echo "FCITX_ADDON_DIR=$FCITX_ADDON_DIR" >> "$GITHUB_ENV"
+          echo "FCITX_ADDON_CONF_DIR=${FCITX_PKGDATA_DIR}/addon" >> "$GITHUB_ENV"
+          # 对 RPM 目标映射路径：Debian multiarch（如 /usr/lib/x86_64-linux-gnu）
+          # -> /usr/lib64（RPM 标准）。conf 路径跨发行版一致。
+          RPM_ADDON_DIR=$(echo "$FCITX_ADDON_DIR" \
+            | sed 's|/usr/lib/[^/]*/fcitx5|/usr/lib64/fcitx5|;s|/usr/lib/x86_64-linux-gnu/fcitx5|/usr/lib64/fcitx5|')
+          echo "FCITX_RPM_ADDON_DIR=$RPM_ADDON_DIR" >> "$GITHUB_ENV"
+          # 把插件 .so + .conf 复制到 src-tauri/linux-fcitx5-plugin/ 下面，
+          # 供 tauri deb/rpm bundler 的 files 配置使用。
+          mkdir -p "$GITHUB_WORKSPACE/openless-all/app/src-tauri/linux-fcitx5-plugin"
+          cp libopenless.so "$GITHUB_WORKSPACE/openless-all/app/src-tauri/linux-fcitx5-plugin/"
+          cp openless.conf "$GITHUB_WORKSPACE/openless-all/app/src-tauri/linux-fcitx5-plugin/"
+
       - name: Build (Linux)
         if: matrix.platform == 'ubuntu-22.04'
         shell: bash
@@ -349,13 +443,41 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
+          # deb/rpm：通过 files 映射把插件安装到系统 fcitx5 路径。
+          # AppImage：通过 bundle.resources 把 .so 打进包内，运行时由
+          #   ensure_plugin_installed() 自动安装到 ~/.local/ 下。
+          # 插件 .so + .conf 由上一步 Build fcitx5 plugin 生成并复制到
+          # src-tauri/linux-fcitx5-plugin/ 下。
+          cat > /tmp/tauri-linux-config.json << CONFIG_EOF
+          {
+            "bundle": {
+              "resources": ["linux-fcitx5-plugin/libopenless.so"],
+              "linux": {
+                "deb": {
+                  "depends": ["fcitx5", "fcitx5-module-dbus", "libdbus-1-3"],
+                  "files": {
+                    "${FCITX_ADDON_DIR}/libopenless.so": "linux-fcitx5-plugin/libopenless.so",
+                    "${FCITX_ADDON_CONF_DIR}/openless.conf": "linux-fcitx5-plugin/openless.conf"
+                  }
+                },
+                "rpm": {
+                  "depends": ["fcitx5", "fcitx5-module-dbus"],
+                  "files": {
+                    "${FCITX_RPM_ADDON_DIR}/libopenless.so": "linux-fcitx5-plugin/libopenless.so",
+                    "${FCITX_ADDON_CONF_DIR}/openless.conf": "linux-fcitx5-plugin/openless.conf"
+                  }
+                }
+              }
+            }
+          }
+          CONFIG_EOF
           if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
-            npm run tauri -- build --bundles deb,rpm,appimage \
-              --config '{"bundle":{"resources":{},"createUpdaterArtifacts":true}}'
+            jq '.bundle.createUpdaterArtifacts = true' /tmp/tauri-linux-config.json > /tmp/tauri-linux-config-signed.json
+            CONFIG_FILE=/tmp/tauri-linux-config-signed.json
           else
-            npm run tauri -- build --bundles deb,rpm,appimage \
-              --config '{"bundle":{"resources":{}}}'
+            CONFIG_FILE=/tmp/tauri-linux-config.json
           fi
+          npm run tauri -- build --bundles deb,rpm,appimage --config "$CONFIG_FILE"
 
       - name: Disambiguate macOS updater bundle filename
         if: startsWith(matrix.platform, 'macos') && env.TAURI_SIGNING_PRIVATE_KEY != ''
@@ -453,6 +575,16 @@ jobs:
             openless-all/app/src-tauri/target/release/bundle/latest-windows-x86_64*.json
           if-no-files-found: error
 
+      - name: Upload fcitx5 plugin artifact (standalone)
+        if: matrix.platform == 'ubuntu-22.04'
+        uses: actions/upload-artifact@v4
+        with:
+          name: openless-fcitx5-plugin-linux-x64
+          path: |
+            ${{ github.workspace }}/openless-all/scripts/linux-fcitx5-plugin/build/libopenless.so
+            ${{ github.workspace }}/openless-all/scripts/linux-fcitx5-plugin/build/openless.conf
+          if-no-files-found: error
+
       - name: Upload Linux artifacts
         if: matrix.platform == 'ubuntu-22.04'
         uses: actions/upload-artifact@v4
@@ -475,6 +607,38 @@ jobs:
           if-no-files-found: error
 
       # ── tag 推送时,同步上传到 GitHub Release ──
+      # 只有 leader job (darwin/aarch64) 把 release body 写到文件,其余 matrix job
+      # 的 body_path 留空,softprops/action-gh-release@v2 在 body 为空时会保留
+      # existing release body 不动,避免每个 matrix job 都 append 一遍同样的 prelude
+      # 导致 release notes 重复 N 次 (v1.3.4-tauri 出现 4 次的 root cause:
+      # 4 个 matrix job × append_body=true × 共享同一份 body)。
+      - name: Prepare release body prelude
+        if: matrix.updater-target == 'darwin' && matrix.updater-arch == 'aarch64' && startsWith(github.ref, 'refs/tags/v') && endsWith(github.ref, '-tauri')
+        shell: bash
+        run: |
+          cat > "$RUNNER_TEMP/release-body.md" << 'EOF'
+          ### macOS 用户首次安装提示
+
+          下载 DMG 拖入 `/Applications` 后，**必须**在终端运行：
+
+          ```bash
+          xattr -cr /Applications/OpenLess.app
+          ```
+
+          否则 Gatekeeper 会提示「OpenLess 已损坏」——这是因为当前 build 用 ad-hoc 签名、没做 Apple 公证。
+
+          ### 渠道说明
+
+          - 以 `-tauri` 结尾的 tag 是**正式版**（自动推送给所有 in-app 检查更新的用户）。
+          - 以 `-beta-tauri` 结尾或包含 `-Beta.N-tauri` 的 tag 是 **Beta 版**（GitHub 标 pre-release，**不**通过 in-app updater 推送给正式版用户；只对在「设置 → 关于 → 加入 Beta 渠道」开关切到 Beta 的用户可见，且需要手动从此页面下载安装）。
+
+          ### 行为变更提示
+
+          - 流式输入默认开启；不兼容场景会自动回落到一次性插入。可在「设置 → 高级」关闭。
+          - 流式输入成功后默认把最终文本同步到剪贴板，方便再次粘贴；可在「设置 → 高级」关闭。
+          EOF
+          echo "OPENLESS_RELEASE_BODY_PATH=$RUNNER_TEMP/release-body.md" >> "$GITHUB_ENV"
+
       - name: Create / update release
         if: startsWith(github.ref, 'refs/tags/v') && endsWith(github.ref, '-tauri')
         uses: softprops/action-gh-release@v2
@@ -486,28 +650,14 @@ jobs:
           # 普通用户看不到；同时只上传 latest-*-beta.json，正式版用户的
           # endpoint（latest-*.json）永远不会被覆盖，保证 Beta 不溢出正式版。
           prerelease: ${{ env.OPENLESS_RELEASE_CHANNEL == 'beta' }}
-          # body 在 generated notes 之前 prepend——所有 matrix job 设同一份字符串，
-          # 多次调用 action 时内容一致、idempotent。提示 macOS Gatekeeper 绕过指令 +
-          # 渠道说明，每个 release 自动带上，用户不用回项目 README 翻就能看到。
-          body: |
-            ### macOS 用户首次安装提示
-
-            下载 DMG 拖入 `/Applications` 后，**必须**在终端运行：
-
-            ```bash
-            xattr -cr /Applications/OpenLess.app
-            ```
-
-            否则 Gatekeeper 会提示「OpenLess 已损坏」——这是因为当前 build 用 ad-hoc 签名、没做 Apple 公证。
-
-            ### 渠道说明
-
-            - 以 `-tauri` 结尾的 tag 是**正式版**（自动推送给所有 in-app 检查更新的用户）。
-            - 以 `-beta-tauri` 结尾的 tag 是 **Beta 版**（GitHub 标 pre-release，**不**通过 in-app updater 推送给正式版用户；只对在「设置 → 关于 → 加入 Beta 渠道」开关切到 Beta 的用户可见，且需要手动从此页面下载安装）。
-
-          append_body: true
-          # Matrix jobs all upload assets to the same release. Generate notes once
-          # so macOS, Windows, and Linux jobs do not duplicate the release body.
+          # 非 leader job 的 OPENLESS_RELEASE_BODY_PATH 是空字符串,softprops 在
+          # body 为空时走 `body || existing.body` 分支保留既有内容,不会覆盖。
+          # leader job 用默认 append_body=false,每次完整覆盖 release body 为
+          # "prelude + generated notes",re-run 同一 tag 时也保持 idempotent
+          # (append_body=true 会让 re-run 把上轮 body 拼到前面、再次复制)。
+          body_path: ${{ env.OPENLESS_RELEASE_BODY_PATH }}
+          # generate_release_notes 也只在 leader 跑:避免 4 个 matrix jobs
+          # 产生 4 份相同的 What's Changed 段。
           generate_release_notes: ${{ matrix.updater-target == 'darwin' && matrix.updater-arch == 'aarch64' }}
           files: |
             openless-all/app/src-tauri/target/release/bundle/dmg/*.dmg
@@ -522,3 +672,97 @@ jobs:
             openless-all/app/src-tauri/target/release/bundle/appimage/*.AppImage
             openless-all/app/src-tauri/target/release/bundle/appimage/*.AppImage.sig
             openless-all/app/src-tauri/target/release/bundle/latest-*.json
+            # fcitx5 插件独立下载：供 AppImage 用户或手动安装
+            openless-all/scripts/linux-fcitx5-plugin/build/libopenless.so
+            openless-all/scripts/linux-fcitx5-plugin/build/openless.conf
+
+  # ── 正式版发布后，自动更新 Homebrew cask ──
+  # 为什么放进这条流水线，而不是单独的 `release: published` 工作流：softprops 用默认
+  # GITHUB_TOKEN 创建的 Release 不会触发 `release` 事件的其它工作流（GitHub 防递归），
+  # 所以独立的 update-cask 工作流永远不会被自动触发（历史上只在一次手动场景跑过且失败）。
+  # 用 needs: build 串在构建之后、同一条流水线里，才能保证每次正式发版都自动更新 cask。
+  #
+  # 仅正式版：v*-tauri 且非 -beta-tauri。beta 不碰 Homebrew，避免把预发布版推给
+  # `brew install --cask openless` 的用户。cask 文件在默认分支（beta）上，提交回该分支。
+  update-homebrew-cask:
+    name: Update Homebrew cask (stable only)
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    if: >-
+      startsWith(github.ref, 'refs/tags/v')
+      && endsWith(github.ref, '-tauri')
+      && !endsWith(github.ref, '-beta-tauri')
+      && !contains(github.ref_name, '-Beta.')
+    steps:
+      - name: Checkout default branch (cask 住在这里)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve version + DMG sha256 from the release
+        id: meta
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          version="${version%-tauri}"
+
+          # 直接下载 DMG 自己算 sha256，不依赖 GitHub 资产 digest 字段的时序/可用性。
+          mkdir -p "$RUNNER_TEMP/dmg"
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --dir "$RUNNER_TEMP/dmg" \
+            --pattern '*aarch64.dmg' --pattern '*_x64.dmg'
+
+          arm_sha="$(sha256sum "$RUNNER_TEMP"/dmg/*aarch64.dmg | cut -d' ' -f1)"
+          intel_sha="$(sha256sum "$RUNNER_TEMP"/dmg/*_x64.dmg | cut -d' ' -f1)"
+
+          {
+            echo "version=$version"
+            echo "arm_sha=$arm_sha"
+            echo "intel_sha=$intel_sha"
+          } >> "$GITHUB_OUTPUT"
+          echo "cask → version=$version arm=$arm_sha intel=$intel_sha"
+
+      - name: Update Casks/openless.rb
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          ARM_SHA: ${{ steps.meta.outputs.arm_sha }}
+          INTEL_SHA: ${{ steps.meta.outputs.intel_sha }}
+        run: |
+          set -euo pipefail
+          cask="Casks/openless.rb"
+          # ⚠️ cask 第 2 行 `arch arm: "aarch64", intel: "x64"` 也含 `intel: "..."`，
+          # 裸 `s/intel: "..."/` 会把 arch 指令一起改成哈希 → Intel 用户 brew 装包 404。
+          # 所以 intel 的 sed 用 `^[[:space:]]*intel:` 锚定 sha256 块那一行；arm 的 sed
+          # 靠 `sha256 arm:   ` 前缀天然只命中 sha256 行。捕获组 \1 保留原缩进。
+          sed -i "s/version \"[^\"]*\"/version \"$VERSION\"/" "$cask"
+          sed -i "s/sha256 arm:   \"[^\"]*\"/sha256 arm:   \"$ARM_SHA\"/" "$cask"
+          sed -i "s/^\([[:space:]]*\)intel: \"[^\"]*\"/\1intel: \"$INTEL_SHA\"/" "$cask"
+          # 防呆：arch 指令必须原样保留，且本次 sha256 必须确实写进去了，否则让 job 失败。
+          grep -q 'arch arm: "aarch64", intel: "x64"' "$cask" \
+            || { echo "::error::arch 指令被 sed 误伤"; exit 1; }
+          grep -q "\"$ARM_SHA\"" "$cask" && grep -q "\"$INTEL_SHA\"" "$cask" \
+            || { echo "::error::sha256 未正确写入 cask"; exit 1; }
+          echo "----- updated $cask -----"
+          cat "$cask"
+
+      - name: Commit & push cask bump
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/openless.rb
+          if git diff --cached --quiet; then
+            echo "cask 已是 $VERSION，无需提交"
+            exit 0
+          fi
+          # [skip ci]：cask 文本改动不需要再跑一遍跨平台 ci.yml。
+          git commit -m "[cask] openless $VERSION (auto from release) [skip ci]"
+          git push

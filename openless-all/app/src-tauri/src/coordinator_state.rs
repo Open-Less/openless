@@ -48,6 +48,9 @@ pub(crate) struct SessionState {
     /// 用户开始 dictation 时所处的前台 app 标签（"Mail (com.apple.mail)" / Windows 窗口标题）。
     /// 用作 LLM polish/translate 的上下文前提，让模型按 app 调风格。详见 issue #116。
     pub(crate) front_app: Option<String>,
+    /// Less Computer 语音模式：专用 Agent 键按下后置 true。end_session 在拿到转写后
+    /// 据此分流——不走润色插入，转而把转写交给 Claude 跑任务、结果弹胶囊。默认 false。
+    pub(crate) voice_agent: bool,
 }
 
 impl Default for SessionState {
@@ -60,6 +63,7 @@ impl Default for SessionState {
             focus_target: None,
             session_id: initial_session_id(),
             front_app: None,
+            voice_agent: false,
         }
     }
 }
@@ -80,6 +84,8 @@ pub(crate) fn begin_session_state(
     state.focus_target = focus_target;
     state.session_id = new_session_id();
     state.front_app = front_app;
+    // 每个新会话默认是普通听写；Less Computer 专用入口会显式把它标为语音 Agent。
+    state.voice_agent = false;
     Some(state.session_id)
 }
 
@@ -245,6 +251,18 @@ mod tests {
         );
         assert_eq!(state.session_id, id);
         assert_ne!(id, initial_session_id());
+    }
+
+    #[test]
+    fn begin_session_resets_voice_agent_flag() {
+        // 安全护栏：上一会话残留的 voice_agent=true 绝不能让下一次普通听写被误判成
+        // Cloud Agent（否则听写内容会被发去跑 Claude 而不是插入光标）。
+        let mut state = SessionState {
+            voice_agent: true,
+            ..Default::default()
+        };
+        begin_session_state(&mut state, None, None).unwrap();
+        assert!(!state.voice_agent, "新会话必须从普通听写开始");
     }
 
     #[test]

@@ -7,10 +7,11 @@ Package.resolved
 xcuserdata/
 DerivedData/
 ChatGPT Image*.jpg
-
+.cursor
 # Local config / secrets
 *.env
 config.local.json
+.local-secrets/
 # Tauri updater 签名私钥（绝不上传 — 公钥在 tauri.conf.json，私钥放 GitHub Secret）
 *.key
 *.key.pub
@@ -33,6 +34,35 @@ video-materials/
 node_modules/
 dist/
 target/
+# 本地从 CI / Actions 下载的 APK 及解压目录（非源码）
+ci-artifacts/
+*.apk
+
+# UI smoke / Playwright 截图与报告（本地校验用，非源码）
+openless-all/ui-check-screenshots/
+test-results/
+playwright-report/
+playwright/.cache/
+blob-report/
+
+# Android 真机调试产物（日志 / 截图 / adb 导出 / 数据备份 / 临时还原目录）
+diagnostics/
+android-logs/
+test-captures/
+extracted/
+android-crash*.log
+android-run*.log
+qa-*.log
+qa-*.png
+openless-package*.txt
+openless-screenshot*.png
+openless-android-run*.png
+/openless_*.png
+/run*.png
+openless-appdata*.tar
+openless-run*-ui.xml
+tmp-run*/
+
 .cargo/registry/
 .cargo/git/
 
@@ -45,3 +75,40 @@ openless-all/app/windows-ime/obj/
 
 # Planning docs are kept local only, not published to the public repo.
 docs/plans/
+
+# Internal AI 协作 + 规划 + 审计文档：本地保留，绝不发布到公共仓库。
+# 之前误入库的整套已在 chore/remove-internal-docs 中 git rm --cached，
+# 这里加规则避免再次被 `git add` 拉回来。
+
+# 根目录 AI 协作指南
+/CLAUDE.md
+/AGENTS.md
+/issue-*-plan.md
+
+# .github 内部协作 + 审计报告（ISSUE_TEMPLATE / workflows / pr template 仍保留发布）
+.github/COOPER_*.md
+.github/BUILD_TEST_REPORT.md
+.github/MULTI_SCALE_AUDIT.md
+.github/P1_TEST_REPORT.md
+.github/TEST_VERIFICATION.md
+.github/WATCHDOG_RISK_ANALYSIS.md
+.github/audit-reports/
+.github/finding-reports/
+.github/issues/EPIC-*.md
+
+# docs/ 下的规划 / 审计 / 内部 tracking（用户文档如 volcengine-setup / tauri-csp 保留）
+docs/audit-*.md
+docs/logic-review-*.md
+docs/qa-reasoning-roadmap.md
+docs/style-pack-marketplace.md
+docs/auto-update-download-acceleration.md
+docs/2026-*-investigation.md
+docs/*-research.md
+docs/windows-upstream-pr-workflow.md
+docs/github-tracking/
+docs/superpowers/
+docs/windows-lifecycle-tracking/
+docs/windows-ui-tracking/
+
+# 用于本地语音推理的参考文件。
+CapsWriter

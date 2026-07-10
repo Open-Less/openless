@@ -16,6 +16,7 @@ import {
 } from '../lib/ipc';
 import type { CorrectionRule, DictionaryEntry, VocabPreset } from '../lib/types';
 import { DEFAULT_VOCAB_PRESETS, loadVocabPresets, persistVocabPresets } from '../lib/vocabPresets';
+import { useMobileLayout } from '../lib/useMobileLayout';
 import { Btn, Card, Collapsible, PageHeader } from './_atoms';
 
 const NEW_PRESET_DRAFT_ID = '__new__';
@@ -35,6 +36,7 @@ function isSupportedCorrectionRule(pattern: string, replacement: string) {
 
 export function Vocab() {
   const { t } = useTranslation();
+  const mobile = useMobileLayout();
   const [entries, setEntries] = useState<DictionaryEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -317,21 +319,21 @@ export function Vocab() {
           desc={t('vocab.corrections.tip')}
         >
           <div style={{ display: 'grid', gap: 10 }}>
-            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto minmax(0, 1fr) auto', gap: 8, alignItems: 'center' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: mobile ? '1fr' : 'minmax(0, 1fr) auto minmax(0, 1fr) auto', gap: 8, alignItems: mobile ? 'stretch' : 'center' }}>
               <input
                 value={rulePatternDraft}
                 onChange={e => setRulePatternDraft(e.target.value)}
                 placeholder={t('vocab.corrections.patternPlaceholder')}
                 style={{ height: 32, padding: '0 10px', border: '0.5px solid var(--ol-line-strong)', borderRadius: 8, background: 'var(--ol-surface-2)' }}
               />
-              <span style={{ color: 'var(--ol-ink-4)', fontSize: 12 }}>→</span>
+              {!mobile && <span style={{ color: 'var(--ol-ink-4)', fontSize: 12 }}>→</span>}
               <input
                 value={ruleReplacementDraft}
                 onChange={e => setRuleReplacementDraft(e.target.value)}
                 placeholder={t('vocab.corrections.replacementPlaceholder')}
                 style={{ height: 32, padding: '0 10px', border: '0.5px solid var(--ol-line-strong)', borderRadius: 8, background: 'var(--ol-surface-2)' }}
               />
-              <Btn size="sm" variant="primary" onClick={() => void onAddCorrectionRule()}>{t('common.add')}</Btn>
+              <Btn size="sm" variant="primary" onClick={() => void onAddCorrectionRule()} style={mobile ? { justifySelf: 'start' } : undefined}>{t('common.add')}</Btn>
             </div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, minHeight: correctionRules.length ? undefined : 20 }}>
               {correctionRules.length === 0 && (
@@ -450,6 +452,10 @@ function VocabChip({ entry, onRemove, onToggle }: VocabChipProps) {
   return (
     <span
       style={{
+        // 父 flex 容器 minHeight: 80 会让 flex item 在 align-self 默认 stretch 下被拉到
+        // 80px 高，chip borderRadius: 999 把高度变大渲染成"超大椭圆"。alignSelf:flex-start
+        // 阻止拉伸，chip 始终保持 content 高度。
+        alignSelf: 'flex-start',
         display: 'inline-flex', alignItems: 'center', gap: 6,
         padding: '5px 10px 5px 12px',
         borderRadius: 999,

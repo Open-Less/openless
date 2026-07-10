@@ -20,6 +20,16 @@ pub const MODELS: &[FoundryWhisperModel] = &[
         quality_tier: "balanced",
     },
     FoundryWhisperModel {
+        alias: "whisper-medium",
+        display_name: "Whisper Medium",
+        quality_tier: "high-quality",
+    },
+    FoundryWhisperModel {
+        alias: "whisper-large-v3-turbo",
+        display_name: "Whisper Large V3 Turbo",
+        quality_tier: "max-quality",
+    },
+    FoundryWhisperModel {
         alias: "whisper-base",
         display_name: "Whisper Base",
         quality_tier: "low-resource",
@@ -244,7 +254,13 @@ mod tests {
                 .iter()
                 .map(|model| model.alias.as_str())
                 .collect::<Vec<_>>(),
-            vec!["whisper-small", "whisper-base", "whisper-tiny"]
+            vec![
+                "whisper-small",
+                "whisper-medium",
+                "whisper-large-v3-turbo",
+                "whisper-base",
+                "whisper-tiny"
+            ]
         );
         assert!(catalog.iter().all(|model| !model.cached));
     }

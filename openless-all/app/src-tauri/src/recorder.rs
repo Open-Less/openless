@@ -10,6 +10,7 @@
 //! - cpal `Stream` 是 `!Send`，所以独立线程持有它。
 //! - 主线程通过 `AtomicBool` 通知"该停了"，并 `join` 线程；线程内 `drop` Stream。
 
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
@@ -60,19 +61,37 @@ pub struct Recorder {
 impl Recorder {
     /// 启动采集。`consumer` 收到 16 kHz/Mono/Int16-LE 的 PCM；
     /// `level_handler` 收到 0..1 的 RMS 电平。
+    /// `audio_archive_path` 不为 None 时，同样的 16 kHz/Mono/Int16-LE 旁路写入 WAV 文件，
+    /// 用于 debug 麦克风灵敏度 / ASR 误识别。Drop 时自动回填 RIFF / data 长度。
+    ///
+    /// 返回值第三个 `bool` = "archive 实际成功创建"：caller 写 history 时应当用这个值
+    /// 决定 `has_audio_recording`，而不是 prefs 开关。开关打开但写盘失败（路径不存在 /
+    /// 权限不足 / 磁盘满）时仍返回 false，避免前端渲染播放按钮后端却 404。
     ///
     /// 实际的 cpal Stream 在独立线程里构造、播放、最终析构——因为它 `!Send`。
     pub fn start(
         microphone_device_name: Option<String>,
         consumer: Arc<dyn AudioConsumer>,
         level_handler: Arc<dyn Fn(f32) + Send + Sync>,
-    ) -> Result<(Self, Receiver<RecorderError>), RecorderError> {
+        audio_archive_path: Option<PathBuf>,
+    ) -> Result<(Self, Receiver<RecorderError>, bool), RecorderError> {
         // 启动信号：子线程构造 Stream 完成后通过 startup_tx 报告结果。
         let (startup_tx, startup_rx) = channel::<Result<(), RecorderError>>();
         // 运行期错误：Stream 已成功启动后，cpal 通过 err_cb 异步上报。
         let (runtime_error_tx, runtime_error_rx) = channel::<RecorderError>();
         let stop_flag = Arc::new(AtomicBool::new(false));
         let stop_for_thread = Arc::clone(&stop_flag);
+
+        // 同步路径上尝试创建 WavArchiver——成功 / 失败都立刻知道，传给 caller 决定
+        // 是否在 history 标 has_audio_recording。失败仅 log::warn 不抛错，主路径继续。
+        let archiver = audio_archive_path.and_then(|path| match WavArchiver::create(&path) {
+            Ok(arch) => Some(Arc::new(Mutex::new(arch))),
+            Err(err) => {
+                log::warn!("[recorder] wav archive create failed at {path:?}: {err}");
+                None
+            }
+        });
+        let archive_active = archiver.is_some();
 
         let join_handle = thread::Builder::new()
             .name("openless-recorder".into())
@@ -81,6 +100,7 @@ impl Recorder {
                     microphone_device_name,
                     consumer,
                     level_handler,
+                    archiver,
                     stop_for_thread,
                     startup_tx,
                     runtime_error_tx,
@@ -101,6 +121,7 @@ impl Recorder {
                 join_handle: Mutex::new(Some(join_handle)),
             },
             runtime_error_rx,
+            archive_active,
         ))
     }
 
@@ -144,10 +165,13 @@ pub fn list_input_devices() -> Result<Vec<MicrophoneDevice>, RecorderError> {
 }
 
 /// 音频线程主体：构造 Stream → 通过 startup_tx 报告 → 循环到 stop_flag。
+/// `archiver` 由 caller 在同步路径上已经尝试创建好（成功 → Some / 失败 → None），
+/// 这里只负责把它穿透到 build_input_stream 给 cpal callback 用。
 fn run_audio_thread(
     microphone_device_name: Option<String>,
     consumer: Arc<dyn AudioConsumer>,
     level_handler: Arc<dyn Fn(f32) + Send + Sync>,
+    archiver: Option<Arc<Mutex<WavArchiver>>>,
     stop_flag: Arc<AtomicBool>,
     startup_tx: Sender<Result<(), RecorderError>>,
     runtime_error_tx: Sender<RecorderError>,
@@ -156,6 +180,7 @@ fn run_audio_thread(
         microphone_device_name,
         consumer,
         level_handler,
+        archiver,
         runtime_error_tx.clone(),
     ) {
         Ok(s) => s,
@@ -275,6 +300,7 @@ fn build_input_stream(
     microphone_device_name: Option<String>,
     consumer: Arc<dyn AudioConsumer>,
     level_handler: Arc<dyn Fn(f32) + Send + Sync>,
+    archiver: Option<Arc<Mutex<WavArchiver>>>,
     runtime_error_tx: Sender<RecorderError>,
 ) -> Result<(cpal::Stream, Arc<StreamState>), RecorderError> {
     let host = cpal::default_host();
@@ -285,7 +311,8 @@ fn build_input_stream(
         .map_err(|e| classify_default_config_err(e.to_string()))?;
 
     let sample_format = supported.sample_format();
-    let config: StreamConfig = supported.config();
+    let default_config: StreamConfig = supported.config();
+    let config = stable_input_config_for_platform(&default_config);
     let input_sr = config.sample_rate.0;
     let channels = config.channels as usize;
 
@@ -298,18 +325,57 @@ fn build_input_stream(
     );
 
     let state = Arc::new(StreamState::new());
-    let stream = build_stream_for_format(
+    let stream = match build_stream_for_format(
         &device,
         &config,
         sample_format,
-        consumer,
-        level_handler,
+        Arc::clone(&consumer),
+        Arc::clone(&level_handler),
+        archiver.clone(),
         Arc::clone(&state),
         input_sr,
         channels,
-        runtime_error_tx,
-    )?;
+        runtime_error_tx.clone(),
+    ) {
+        Ok(stream) => stream,
+        Err(err) if config != default_config => {
+            log::warn!(
+                "[recorder] stable input config failed; falling back to default config: {err}"
+            );
+            build_stream_for_format(
+                &device,
+                &default_config,
+                sample_format,
+                consumer,
+                level_handler,
+                archiver,
+                Arc::clone(&state),
+                default_config.sample_rate.0,
+                default_config.channels as usize,
+                runtime_error_tx,
+            )?
+        }
+        Err(err) => return Err(err),
+    };
     Ok((stream, state))
+}
+
+#[cfg(target_os = "android")]
+fn stable_input_config_for_platform(default_config: &StreamConfig) -> StreamConfig {
+    let mut config = default_config.clone();
+    if config.channels > 1 {
+        log::info!(
+            "[recorder] android forcing mono input channels: {} -> 1",
+            config.channels
+        );
+        config.channels = 1;
+    }
+    config
+}
+
+#[cfg(not(target_os = "android"))]
+fn stable_input_config_for_platform(default_config: &StreamConfig) -> StreamConfig {
+    default_config.clone()
 }
 
 fn select_input_device(
@@ -368,6 +434,7 @@ fn build_stream_for_format(
     sample_format: SampleFormat,
     consumer: Arc<dyn AudioConsumer>,
     level_handler: Arc<dyn Fn(f32) + Send + Sync>,
+    archiver: Option<Arc<Mutex<WavArchiver>>>,
     state: Arc<StreamState>,
     input_sr: u32,
     channels: usize,
@@ -377,6 +444,7 @@ fn build_stream_for_format(
         ($t:ty, $to_f32:expr) => {{
             let consumer = Arc::clone(&consumer);
             let level_handler = Arc::clone(&level_handler);
+            let archiver = archiver.clone();
             let state = Arc::clone(&state);
             let runtime_error_tx = runtime_error_tx.clone();
             let err_cb = move |err| {
@@ -398,6 +466,7 @@ fn build_stream_for_format(
                             input_sr,
                             consumer.as_ref(),
                             level_handler.as_ref(),
+                            archiver.as_deref(),
                             &state,
                         );
                     },
@@ -461,6 +530,7 @@ fn process_callback(
     input_sr: u32,
     consumer: &dyn AudioConsumer,
     level_handler: &(dyn Fn(f32) + Send + Sync),
+    archiver: Option<&Mutex<WavArchiver>>,
     state: &StreamState,
 ) {
     if interleaved.is_empty() || channels == 0 {
@@ -479,6 +549,9 @@ fn process_callback(
     let level = (output_rms * LEVEL_RMS_GAIN).clamp(0.0, 1.0);
 
     consumer.consume_pcm_chunk(&pcm_bytes);
+    if let Some(arch) = archiver {
+        arch.lock().append(&pcm_bytes);
+    }
     level_handler(level);
 
     // 更新最后一次成功调用的时间戳（用于 liveness 检测）
@@ -620,6 +693,69 @@ fn update_peak(slot: &AtomicUsize, current: f32) {
     }
 }
 
+/// 16 kHz / mono / 16-bit PCM WAV 的简易追加写入器。
+/// 构造时写一个 data_size=0 的 header 占位，每次 append 把 i16 PCM bytes 追加到文件，
+/// Drop 时 seek 回 0 把 RIFF / data 长度字段回填——避免依赖外部 finalize 调用点。
+struct WavArchiver {
+    file: std::fs::File,
+    bytes_written: u32,
+}
+
+impl WavArchiver {
+    fn create(path: &Path) -> std::io::Result<Self> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let mut file = std::fs::File::create(path)?;
+        use std::io::Write;
+        file.write_all(&build_wav_header(0))?;
+        Ok(Self {
+            file,
+            bytes_written: 0,
+        })
+    }
+
+    fn append(&mut self, pcm_bytes: &[u8]) {
+        use std::io::Write;
+        if self.file.write_all(pcm_bytes).is_ok() {
+            self.bytes_written = self
+                .bytes_written
+                .saturating_add(pcm_bytes.len().min(u32::MAX as usize) as u32);
+        }
+    }
+}
+
+impl Drop for WavArchiver {
+    fn drop(&mut self) {
+        use std::io::{Seek, SeekFrom, Write};
+        let header = build_wav_header(self.bytes_written);
+        if self.file.seek(SeekFrom::Start(0)).is_ok() {
+            let _ = self.file.write_all(&header);
+            let _ = self.file.sync_all();
+        }
+    }
+}
+
+fn build_wav_header(data_size: u32) -> [u8; 44] {
+    // RIFF/WAVE PCM 标准 44-byte header，16 kHz / mono / 16-bit 写死。
+    let total_size = data_size.saturating_add(36);
+    let mut h = [0u8; 44];
+    h[0..4].copy_from_slice(b"RIFF");
+    h[4..8].copy_from_slice(&total_size.to_le_bytes());
+    h[8..12].copy_from_slice(b"WAVE");
+    h[12..16].copy_from_slice(b"fmt ");
+    h[16..20].copy_from_slice(&16u32.to_le_bytes()); // fmt chunk size
+    h[20..22].copy_from_slice(&1u16.to_le_bytes()); // PCM
+    h[22..24].copy_from_slice(&1u16.to_le_bytes()); // mono
+    h[24..28].copy_from_slice(&(TARGET_SAMPLE_RATE).to_le_bytes());
+    h[28..32].copy_from_slice(&(TARGET_SAMPLE_RATE * 2).to_le_bytes()); // byte rate (sr * block_align)
+    h[32..34].copy_from_slice(&2u16.to_le_bytes()); // block align
+    h[34..36].copy_from_slice(&16u16.to_le_bytes()); // bits per sample
+    h[36..40].copy_from_slice(b"data");
+    h[40..44].copy_from_slice(&data_size.to_le_bytes());
+    h
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -703,6 +839,7 @@ mod tests {
             8_000,
             &consumer,
             &move |level| levels_for_handler.lock().unwrap().push(level),
+            None,
             &state,
         );
 
@@ -726,6 +863,7 @@ mod tests {
             TARGET_SAMPLE_RATE,
             &consumer,
             &move |level| levels_for_handler.lock().unwrap().push(level),
+            None,
             &state,
         );
 
@@ -749,6 +887,7 @@ mod tests {
             TARGET_SAMPLE_RATE,
             &consumer,
             &move |level| levels_for_handler.lock().unwrap().push(level),
+            None,
             &state,
         );
 
@@ -773,6 +912,7 @@ mod tests {
             TARGET_SAMPLE_RATE,
             &consumer,
             &move |level| levels_for_handler.lock().unwrap().push(level),
+            None,
             &state,
         );
         process_callback(
@@ -781,6 +921,7 @@ mod tests {
             TARGET_SAMPLE_RATE,
             &consumer,
             &move |level| levels.lock().unwrap().push(level),
+            None,
             &state,
         );
 

@@ -1,3 +1,7 @@
+#![cfg_attr(
+    target_os = "linux",
+    allow(dead_code, unused_imports, unused_variables)
+)]
 //! 本地 Qwen3-ASR 引擎缓存。
 //!
 //! 用途：避免每次 dictation 都重加载 1.2GB+ 模型。引擎一次 load 后驻留在内存，

@@ -16,6 +16,11 @@ export function readFontScale(): FontScaleId {
     const v = window.localStorage.getItem(FONT_SCALE_KEY);
     if (v === 'small' || v === 'medium' || v === 'large') return v;
   } catch { /* localStorage 不可用：忽略，落回默认 */ }
+  // Windows 默认 'large'（用户反馈 medium 在 Windows 上字号偏小）；其他平台保持 medium。
+  if (typeof navigator !== 'undefined') {
+    const hint = `${navigator.userAgent || ''} ${navigator.platform || ''}`;
+    if (/Windows|Win32|Win64/.test(hint)) return 'large';
+  }
   return 'medium';
 }
 

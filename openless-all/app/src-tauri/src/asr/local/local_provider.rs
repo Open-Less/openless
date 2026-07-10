@@ -41,6 +41,13 @@ impl LocalQwenAsr {
         }
     }
 
+    /// 当前缓冲音频时长（毫秒）。Coordinator 在 transcribe() 调用前读取，
+    /// 用来给本地 Qwen ASR 计算动态超时（max(15, ceil(audio_s × 0.6) + 10)）。
+    /// 不消费缓冲。
+    pub fn buffer_duration_ms(&self) -> u64 {
+        (self.buffer.lock().len() as u64 / 2) * 1000 / 16_000
+    }
+
     /// stop 时调用：把 buffer 的 i16 PCM 转 f32，跑流式转写，token 实时
     /// 通过事件吐到前端胶囊；最终文本一起返回供 polish/insert。
     pub async fn transcribe(self: Arc<Self>) -> Result<RawTranscript> {
@@ -52,7 +59,13 @@ impl LocalQwenAsr {
             });
         }
         let duration_ms = (pcm_bytes.len() as u64 / 2) * 1000 / 16_000;
-        let samples_f32 = i16_le_bytes_to_f32(&pcm_bytes);
+        let mut samples_f32 = i16_le_bytes_to_f32(&pcm_bytes);
+        // `transcribe_stream` 内部按 2s chunk 切片；末 chunk < 2s 且缓冲没有
+        // 静默尾巴时，C 引擎不会把它当作"语音已结束"，该 chunk 的转写结果
+        // 会被丢弃，导致末段内容消失。这里追加 0.5s 静默（@16kHz = 8000 个
+        // f32 零值）作为收尾信号。`duration_ms` 仍按原始缓冲长度计算（上面
+        // 一行），padding 不计入。
+        samples_f32.extend(std::iter::repeat(0.0f32).take(8_000));
 
         // 注册 token 回调：每个稳定 token 抛 `local-asr-token` 事件。
         // capsule 前端按 sessionId 累积显示。

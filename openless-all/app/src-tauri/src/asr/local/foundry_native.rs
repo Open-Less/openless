@@ -600,12 +600,12 @@ if ($readyForFoundryX64) { exit 0 } else { exit 1 }
         fn windows_app_runtime_detection_requires_complete_package_set() {
             let script = super::windows_app_runtime_detection_script();
 
-            assert!(script.contains("Microsoft.WindowsAppRuntime.1.8"));
+            assert!(script.contains("Microsoft\\.WindowsAppRuntime\\.1\\.8"));
             assert!(script.contains("frameworkX86"));
             assert!(script.contains("frameworkX64"));
             assert!(script.contains("readyForFoundryX64"));
             assert!(script.contains("completeX64MachineRuntime"));
-            assert!(script.contains("Main.1.8"));
+            assert!(script.contains("Main\\.1\\.8"));
             assert!(script.contains("Singleton"));
             assert!(script.contains("ddlmX86"));
             assert!(script.contains("ddlmX64"));
