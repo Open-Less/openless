@@ -37,6 +37,20 @@ pub async fn list_provider_models(kind: String) -> Result<ProviderModelsResult, 
             models: vec![crate::asr::bailian::DEFAULT_MODEL.to_string()],
         });
     }
+    if kind == "asr"
+        && CredentialsVault::get_active_asr() == crate::asr::qwen_realtime::PROVIDER_ID
+    {
+        // 与 bailian 同理：Realtime 网关无模型列表接口，先做真实连通性检查，
+        // 列表为官方文档在案的稳定别名 + 快照版本。
+        validate_qwen3_realtime_asr_provider().await?;
+        return Ok(ProviderModelsResult {
+            models: vec![
+                crate::asr::qwen_realtime::DEFAULT_MODEL.to_string(),
+                "qwen3-asr-flash-realtime-2026-02-10".to_string(),
+                "qwen3-asr-flash-realtime-2025-10-27".to_string(),
+            ],
+        });
+    }
     if kind == "asr" && CredentialsVault::get_active_asr() == crate::asr::mimo::PROVIDER_ID {
         return Ok(ProviderModelsResult {
             models: vec![crate::asr::mimo::DEFAULT_MODEL.to_string()],
@@ -192,6 +206,9 @@ async fn validate_asr_provider() -> Result<(), String> {
     if active_asr == crate::asr::bailian::PROVIDER_ID {
         return validate_bailian_asr_provider().await;
     }
+    if active_asr == crate::asr::qwen_realtime::PROVIDER_ID {
+        return validate_qwen3_realtime_asr_provider().await;
+    }
     if active_asr == crate::asr::mimo::PROVIDER_ID {
         return validate_mimo_asr_provider().await;
     }
@@ -262,6 +279,45 @@ async fn validate_bailian_asr_provider() -> Result<(), String> {
     crate::asr::AudioConsumer::consume_pcm_chunk(
         &*asr,
         &vec![0u8; crate::asr::bailian::TARGET_AUDIO_CHUNK_BYTES * 5],
+    );
+    asr.send_last_frame().await.map_err(|e| e.to_string())?;
+    asr.await_final_result()
+        .await
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+async fn validate_qwen3_realtime_asr_provider() -> Result<(), String> {
+    let api_key = CredentialsVault::get(CredentialAccount::AsrApiKey)
+        .map_err(|e| e.to_string())?
+        .unwrap_or_default();
+    if api_key.trim().is_empty() {
+        return Err("API Key 为空".to_string());
+    }
+    let endpoint = CredentialsVault::get(CredentialAccount::AsrEndpoint)
+        .map_err(|e| e.to_string())?
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| crate::asr::qwen_realtime::DEFAULT_ENDPOINT.to_string());
+    if !crate::asr::bailian::endpoint_scheme_is_websocket(&endpoint) {
+        return Err("qwen3EndpointSchemeInvalid".to_string());
+    }
+    let model = CredentialsVault::get(CredentialAccount::AsrModel)
+        .map_err(|e| e.to_string())?
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| crate::asr::qwen_realtime::DEFAULT_MODEL.to_string());
+    let asr = std::sync::Arc::new(crate::asr::Qwen3RealtimeASR::new(
+        crate::asr::Qwen3RealtimeCredentials {
+            api_key,
+            endpoint,
+            model,
+        },
+    ));
+    asr.open_session().await.map_err(|e| e.to_string())?;
+    // Realtime 协议对纯静音 + finish 干净返回 session.finished（2026-07 实测），
+    // 无经典协议 <200ms 必报 EmptyAudio 的问题；发 500ms 与 bailian 验证对齐。
+    crate::asr::AudioConsumer::consume_pcm_chunk(
+        &*asr,
+        &vec![0u8; crate::asr::qwen_realtime::TARGET_AUDIO_CHUNK_BYTES * 5],
     );
     asr.send_last_frame().await.map_err(|e| e.to_string())?;
     asr.await_final_result()

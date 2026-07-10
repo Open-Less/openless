@@ -10,12 +10,14 @@ mod frame;
 pub mod local;
 pub mod mimo;
 pub mod pcm;
+pub mod qwen_realtime;
 pub mod volcengine;
 pub mod wav;
 pub mod whisper;
 
 pub use bailian::{BailianCredentials, BailianRealtimeASR};
 pub use mimo::MimoBatchASR;
+pub use qwen_realtime::{Qwen3RealtimeASR, Qwen3RealtimeCredentials};
 pub use volcengine::{VolcengineCredentials, VolcengineStreamingASR};
 pub use whisper::WhisperBatchASR;
 

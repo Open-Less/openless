@@ -155,6 +155,10 @@ const ASR_DEFAULT_RESOURCE_ID = 'volc.seedasr.sauc.duration';
 const ASR_PRESETS: ReadonlyArray<{ id: AsrPresetId; nameKey: string; baseUrl: string; model: string }> = [
   { id: 'volcengine',   nameKey: 'asrVolcengine',   baseUrl: '',                                              model: ''                              },
   { id: 'bailian',      nameKey: 'asrBailian',     baseUrl: 'wss://dashscope.aliyuncs.com/api-ws/v1/inference/', model: 'fun-asr-realtime'             },
+  // Qwen3-ASR-Flash 实时：OpenAI Realtime 风格 WS（/api-ws/v1/realtime），
+  // 与上面经典 inference 协议不同，由 asr/qwen_realtime.rs 专用 client 处理。
+  // 业务空间专属域名（wss://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/api-ws/v1/realtime）同样可用。
+  { id: 'bailian-qwen3-realtime', nameKey: 'asrBailianQwen3', baseUrl: 'wss://dashscope.aliyuncs.com/api-ws/v1/realtime', model: 'qwen3-asr-flash-realtime' },
   { id: 'siliconflow',  nameKey: 'asrSiliconflow',  baseUrl: 'https://api.siliconflow.cn/v1',                  model: 'FunAudioLLM/SenseVoiceSmall' },
   { id: 'zhipu',        nameKey: 'asrZhipu',        baseUrl: 'https://open.bigmodel.cn/api/paas/v4',           model: 'glm-asr-2512'                },
   { id: 'groq',         nameKey: 'asrGroq',         baseUrl: 'https://api.groq.com/openai/v1',                 model: 'whisper-large-v3-turbo'      },
@@ -622,6 +626,7 @@ function providerErrorMessage(error: unknown, t: ReturnType<typeof useTranslatio
   if (message === 'endpointMustUseHttps') return t('settings.providers.endpointMustUseHttps');
   if (message === 'endpointInvalid') return t('settings.providers.endpointInvalid');
   if (message === 'bailianEndpointSchemeInvalid') return t('settings.providers.bailianEndpointSchemeInvalid');
+  if (message === 'qwen3EndpointSchemeInvalid') return t('settings.providers.qwen3EndpointSchemeInvalid');
   if (message === 'providerResponseTooLarge') return t('settings.providers.responseTooLarge');
   if (message === 'asrInvalidJson') return t('settings.providers.asrInvalidJson');
   if (message === 'asrMissingTextField') return t('settings.providers.asrMissingTextField');

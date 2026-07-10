@@ -46,7 +46,9 @@ pub(crate) fn asr_configured_for_provider(provider: &str, snap: &CredentialsSnap
         // 本地 ASR 不依赖云端凭据。
         return true;
     }
-    if provider == crate::asr::bailian::PROVIDER_ID {
+    if provider == crate::asr::bailian::PROVIDER_ID
+        || provider == crate::asr::qwen_realtime::PROVIDER_ID
+    {
         return configured(&snap.asr_api_key);
     }
     if provider == crate::asr::mimo::PROVIDER_ID {

@@ -106,6 +106,7 @@ pub(super) fn ensure_asr_credentials() -> Result<(), String> {
 
     if is_whisper_compatible_provider(&active_asr)
         || is_bailian_provider(&active_asr)
+        || is_qwen3_realtime_provider(&active_asr)
         || is_mimo_provider(&active_asr)
     {
         let api_key = CredentialsVault::get(CredentialAccount::AsrApiKey)
@@ -351,6 +352,10 @@ pub(super) fn is_bailian_provider(id: &str) -> bool {
     id == crate::asr::bailian::PROVIDER_ID
 }
 
+pub(super) fn is_qwen3_realtime_provider(id: &str) -> bool {
+    id == crate::asr::qwen_realtime::PROVIDER_ID
+}
+
 pub(super) fn is_mimo_provider(id: &str) -> bool {
     id == crate::asr::mimo::PROVIDER_ID
 }
@@ -385,6 +390,10 @@ pub(super) enum QaAsrStart {
         asr: Arc<BailianRealtimeASR>,
         bridge: Arc<DeferredAsrBridge>,
     },
+    Qwen3Realtime {
+        asr: Arc<Qwen3RealtimeASR>,
+        bridge: Arc<DeferredAsrBridge>,
+    },
     Ready {
         active: ActiveAsr,
         consumer: Arc<dyn crate::recorder::AudioConsumer>,
@@ -396,6 +405,7 @@ impl QaAsrStart {
         match self {
             QaAsrStart::Volcengine { asr, .. } => ActiveAsr::Volcengine(Arc::clone(asr)),
             QaAsrStart::Bailian { asr, .. } => ActiveAsr::Bailian(Arc::clone(asr)),
+            QaAsrStart::Qwen3Realtime { asr, .. } => ActiveAsr::Qwen3Realtime(Arc::clone(asr)),
             QaAsrStart::Ready { active, .. } => active.clone(),
         }
     }
@@ -404,6 +414,7 @@ impl QaAsrStart {
         match self {
             QaAsrStart::Volcengine { bridge, .. } => Arc::clone(bridge) as _,
             QaAsrStart::Bailian { bridge, .. } => Arc::clone(bridge) as _,
+            QaAsrStart::Qwen3Realtime { bridge, .. } => Arc::clone(bridge) as _,
             QaAsrStart::Ready { consumer, .. } => Arc::clone(consumer),
         }
     }
@@ -423,6 +434,15 @@ impl QaAsrStart {
                 let flushed = bridge.attach(target);
                 log::info!(
                     "[coord] QA Bailian ASR connected; flushed {flushed} deferred audio bytes"
+                );
+                Ok(())
+            }
+            QaAsrStart::Qwen3Realtime { asr, bridge } => {
+                asr.open_session().await.map_err(|e| e.to_string())?;
+                let target: Arc<dyn crate::asr::AudioConsumer> = Arc::clone(asr) as _;
+                let flushed = bridge.attach(target);
+                log::info!(
+                    "[coord] QA Qwen3 realtime ASR connected; flushed {flushed} deferred audio bytes"
                 );
                 Ok(())
             }
@@ -513,6 +533,10 @@ pub(super) async fn build_qa_asr_start(inner: &Arc<Inner>, active_asr: &str) -> 
     match active_asr_provider_kind(active_asr) {
         ActiveAsrProviderKind::Bailian => Ok(QaAsrStart::Bailian {
             asr: Arc::new(BailianRealtimeASR::new(read_bailian_credentials())),
+            bridge: Arc::new(DeferredAsrBridge::new()),
+        }),
+        ActiveAsrProviderKind::Qwen3Realtime => Ok(QaAsrStart::Qwen3Realtime {
+            asr: Arc::new(Qwen3RealtimeASR::new(read_qwen3_realtime_credentials())),
             bridge: Arc::new(DeferredAsrBridge::new()),
         }),
         ActiveAsrProviderKind::Mimo => {

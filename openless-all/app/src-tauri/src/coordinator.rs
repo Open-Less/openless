@@ -25,8 +25,9 @@ use crate::asr::local::{
     foundry, sherpa, FoundryLocalRuntime, FoundryLocalWhisperAsr, SherpaOnnxAsr, SherpaOnnxRuntime,
 };
 use crate::asr::{
-    BailianCredentials, BailianRealtimeASR, DictionaryHotword, MimoBatchASR, RawTranscript,
-    VolcengineCredentials, VolcengineStreamingASR, WhisperBatchASR,
+    BailianCredentials, BailianRealtimeASR, DictionaryHotword, MimoBatchASR, Qwen3RealtimeASR,
+    Qwen3RealtimeCredentials, RawTranscript, VolcengineCredentials, VolcengineStreamingASR,
+    WhisperBatchASR,
 };
 use crate::combo_hotkey::{ComboHotkeyError, ComboHotkeyEvent, ComboHotkeyMonitor};
 use crate::coordinator_state::{
@@ -180,6 +181,8 @@ enum ActiveAsr {
     Whisper(Arc<WhisperBatchASR>),
     Mimo(Arc<MimoBatchASR>),
     Bailian(Arc<BailianRealtimeASR>),
+    /// 百炼 Qwen3-ASR-Flash 实时（OpenAI Realtime 风格 WS 协议）。
+    Qwen3Realtime(Arc<Qwen3RealtimeASR>),
     #[cfg(target_os = "windows")]
     FoundryLocalWhisper(Arc<FoundryLocalWhisperAsr>),
     /// Windows sherpa-onnx 本地 ASR（offline batch + 实验 online streaming）。
@@ -208,6 +211,7 @@ fn asr_transcribe_uses_global_timeout(asr: &ActiveAsr) -> bool {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ActiveAsrProviderKind {
     Bailian,
+    Qwen3Realtime,
     Mimo,
     WhisperCompatible,
     Volcengine,
@@ -216,6 +220,8 @@ enum ActiveAsrProviderKind {
 fn active_asr_provider_kind(id: &str) -> ActiveAsrProviderKind {
     if is_bailian_provider(id) {
         ActiveAsrProviderKind::Bailian
+    } else if is_qwen3_realtime_provider(id) {
+        ActiveAsrProviderKind::Qwen3Realtime
     } else if is_mimo_provider(id) {
         ActiveAsrProviderKind::Mimo
     } else if is_whisper_compatible_provider(id) {
@@ -1566,6 +1572,13 @@ impl Coordinator {
                     .map_err(|_| "重新转录超时".to_string())?
                     .map_err(|e| e.to_string())?
             }
+            ActiveAsr::Qwen3Realtime(asr) => {
+                asr.send_last_frame().await.map_err(|e| e.to_string())?;
+                tokio::time::timeout(timeout, asr.await_final_result())
+                    .await
+                    .map_err(|_| "重新转录超时".to_string())?
+                    .map_err(|e| e.to_string())?
+            }
             ActiveAsr::Whisper(w) => tokio::time::timeout(timeout, w.transcribe())
                 .await
                 .map_err(|_| "重新转录超时".to_string())?
@@ -1989,6 +2002,28 @@ fn read_bailian_credentials() -> BailianCredentials {
     }
 }
 
+fn read_qwen3_realtime_credentials() -> Qwen3RealtimeCredentials {
+    let api_key = CredentialsVault::get(CredentialAccount::AsrApiKey)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let endpoint = CredentialsVault::get(CredentialAccount::AsrEndpoint)
+        .ok()
+        .flatten()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| crate::asr::qwen_realtime::DEFAULT_ENDPOINT.to_string());
+    let model = CredentialsVault::get(CredentialAccount::AsrModel)
+        .ok()
+        .flatten()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| crate::asr::qwen_realtime::DEFAULT_MODEL.to_string());
+    Qwen3RealtimeCredentials {
+        api_key,
+        endpoint,
+        model,
+    }
+}
+
 fn read_volc_credentials() -> VolcengineCredentials {
     let app_id = CredentialsVault::get(CredentialAccount::VolcengineAppKey)
         .ok()
@@ -2338,6 +2373,10 @@ mod tests {
         assert_eq!(
             active_asr_provider_kind(crate::asr::bailian::PROVIDER_ID),
             ActiveAsrProviderKind::Bailian
+        );
+        assert_eq!(
+            active_asr_provider_kind(crate::asr::qwen_realtime::PROVIDER_ID),
+            ActiveAsrProviderKind::Qwen3Realtime
         );
         assert_eq!(
             active_asr_provider_kind("whisper"),
