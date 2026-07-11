@@ -1,0 +1,341 @@
+/* chat.css — 统一聊天面板（QA 划词追问 / Less Computer）的 Tailwind v4 入口。
+ *
+ * 官方 shadcn base-rhea 组件（ui/ 下 1:1 内嵌）需要 tailwind utilities + shadcn
+ * 主题变量。为了不影响既有 UI：
+ *   · 不引 preflight（全局 reset 会重置主窗口样式）；等效的最小 reset 圈在
+ *     .olchat-shell 作用域内。
+ *   · utilities 只扫描 chat/ 目录与两个面板文件（source(none) + @source）。
+ *   · 主题变量固定浅色（背景米白，用户拍板：与思考动画的深色光点区分），
+ *     不跟随 app 深色模式。
+ */
+
+/* utilities 不套 @layer：app 的 global.css 是无层样式（button/a 等全局 reset），
+ * 无层规则永远压过任何 @layer 内的规则 —— utilities 也保持无层、且本文件随
+ * 聊天 chunk 在 global.css 之后加载，同特异性冲突按出现顺序由 utilities 胜出。 */
+@layer theme, base;
+@import 'tailwindcss/theme.css' layer(theme);
+@import 'tailwindcss/utilities.css' source(none);
+/* 官方 base-rhea style 的两个 CSS 依赖（与 `shadcn init` 写入完全一致）：
+ * tw-animate-css 动画 utilities + shadcn/tailwind.css（官方 shimmer /
+ * scroll-fade / scrollbar 等 @utility 与 @custom-variant 定义，按需生成）。 */
+@import 'tw-animate-css';
+@import 'shadcn/tailwind.css';
+
+@source './';
+@source '../../pages/QaPanel.tsx';
+@source '../../pages/LessComputerPanel.tsx';
+
+/* ─── shadcn 主题变量（zinc，浅色固定；纯白 —— 用户拍板与官方 demo 卡片一致）── */
+:root {
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.141 0.005 285.823);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.141 0.005 285.823);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.141 0.005 285.823);
+  --primary: oklch(0.21 0.006 285.885);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.967 0.001 286.375);
+  --secondary-foreground: oklch(0.21 0.006 285.885);
+  --muted: oklch(0.955 0.002 286.375);
+  --muted-foreground: oklch(0.552 0.016 285.938);
+  --accent: oklch(0.967 0.001 286.375);
+  --accent-foreground: oklch(0.21 0.006 285.885);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.911 0.006 286.32);
+  --input: oklch(0.92 0.004 286.32);
+  --ring: oklch(0.705 0.015 286.067);
+  --radius: 0.625rem;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+/* ─── 作用域最小 reset（preflight 的等效子集，只在聊天面板内生效）────── */
+@layer base {
+  .olchat-shell,
+  .olchat-shell *,
+  .olchat-shell *::before,
+  .olchat-shell *::after {
+    box-sizing: border-box;
+    border-width: 0;
+    border-style: solid;
+    border-color: var(--color-border, currentColor);
+  }
+  .olchat-shell :where(h1, h2, h3, h4, p, ul, ol, li, blockquote, pre, figure) {
+    margin: 0;
+    padding: 0;
+  }
+  .olchat-shell :where(button, input, textarea, select) {
+    font: inherit;
+    color: inherit;
+    letter-spacing: inherit;
+  }
+  .olchat-shell :where(button) {
+    background-color: transparent;
+    background-image: none;
+    text-transform: none;
+    -webkit-appearance: button;
+    cursor: pointer;
+  }
+  .olchat-shell :where(img, svg, canvas) {
+    display: block;
+    vertical-align: middle;
+  }
+  .olchat-shell :where(a) {
+    color: inherit;
+    text-decoration: inherit;
+  }
+
+  /* 壳：固定浅色（color-scheme 锁 light，深色模式下也保持米白）。 */
+  .olchat-shell {
+    color-scheme: light;
+    font-family: var(--ol-font-sans, system-ui, -apple-system, sans-serif);
+    /* 消息正文可读可选（body 全局 user-select:none 在面板内恢复）。 */
+  }
+  .olchat-shell [data-slot='bubble-content'],
+  .olchat-shell .olchat-answer,
+  .olchat-shell [data-slot='marker-content'] {
+    user-select: text;
+    -webkit-user-select: text;
+    cursor: text;
+  }
+}
+
+/* ─── 动画（原 QA/LC 面板动画原样保留：入场 / 流式光标）──────────────── */
+@keyframes olchat-shell-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+.olchat-shell-in {
+  animation: olchat-shell-in 0.34s var(--ol-motion-spring, cubic-bezier(0.16, 1, 0.3, 1)) both;
+}
+
+/* 退场：关闭时后端先发 chat-panel:closing，前端加本类播 0.22s 退场，240ms 后
+ * 窗口才真正 hide —— 「从哪里来回哪里去」，与入场对称。定义在 -in 之后，
+ * 两类同时在场时以后者为准。 */
+@keyframes olchat-shell-out {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(10px) scale(0.985);
+  }
+}
+.olchat-shell-out {
+  animation: olchat-shell-out 0.22s cubic-bezier(0.4, 0, 1, 1) both;
+}
+
+@keyframes olchat-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.olchat-enter {
+  animation: olchat-enter 0.3s var(--ol-motion-soft, cubic-bezier(0.16, 1, 0.3, 1)) both;
+}
+
+/* ─── 输入组环形跑光（语音状态唯一指示位 —— 用户拍板：录音/思考不进面板上部）──
+ * 录音 = 红光绕输入框一圈圈跑；转译思考 = 黑光；发送落定后停（去掉 data-ring）。
+ * 做法：::after 盖在 InputGroup 边缘，conic-gradient 彗尾 + @property 角度动画，
+ * mask 抠成 2px 环，只亮边不遮内容。 */
+@property --olchat-ring-angle {
+  syntax: '<angle>';
+  inherits: false;
+  initial-value: 0deg;
+}
+.olchat-ring {
+  position: relative;
+}
+.olchat-ring[data-ring]::after {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: calc(var(--radius-2xl) + 2px);
+  padding: 2px;
+  background: conic-gradient(
+    from var(--olchat-ring-angle),
+    transparent 0deg 250deg,
+    var(--olchat-ring-color) 320deg 344deg,
+    transparent 360deg
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  animation: olchat-ring-spin 1.1s linear infinite;
+  pointer-events: none;
+}
+.olchat-ring[data-ring='recording'] {
+  --olchat-ring-color: oklch(0.637 0.237 25.331); /* red-500 */
+}
+.olchat-ring[data-ring='thinking'] {
+  --olchat-ring-color: var(--color-foreground);
+}
+@keyframes olchat-ring-spin {
+  to {
+    --olchat-ring-angle: 360deg;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .olchat-ring[data-ring]::after {
+    animation: none;
+    background: conic-gradient(var(--olchat-ring-color) 0 100%);
+    opacity: 0.55;
+  }
+}
+
+@keyframes olchat-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.35;
+    transform: scale(0.94);
+  }
+}
+.olchat-caret {
+  display: inline-block;
+  width: 6px;
+  height: 12px;
+  background: var(--color-foreground);
+  animation: olchat-pulse 0.9s ease-in-out infinite;
+  border-radius: 1px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .olchat-shell-in,
+  .olchat-enter,
+  .olchat-caret {
+    animation: none;
+  }
+}
+
+/* ─── 胶囊同款思考动画的承托（SiriGL orb 白色光点需要深色底才可见）──── */
+.olchat-orb-stage {
+  position: relative;
+  overflow: hidden;
+  background: #0b0b0f;
+  border-radius: 16px;
+  flex-shrink: 0;
+}
+.olchat-orb-stage > div {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+/* ─── 助手 markdown 正文（原 qa-answer / lc-answer 合并，token 换 shadcn）── */
+.olchat-answer {
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  color: var(--color-foreground);
+  word-break: break-word;
+}
+.olchat-answer p {
+  margin: 0 0 6px;
+}
+.olchat-answer p:last-child {
+  margin-bottom: 0;
+}
+.olchat-answer h1,
+.olchat-answer h2,
+.olchat-answer h3 {
+  margin: 10px 0 5px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+.olchat-answer h1 {
+  font-size: 0.9375rem;
+}
+.olchat-answer h2 {
+  font-size: 0.875rem;
+}
+.olchat-answer h3 {
+  font-size: 0.8125rem;
+}
+.olchat-answer ul,
+.olchat-answer ol {
+  margin: 0 0 6px;
+  padding-left: 18px;
+}
+.olchat-answer li {
+  margin: 2px 0;
+}
+.olchat-answer code {
+  font-family: var(--ol-font-mono, ui-monospace, monospace);
+  font-size: 0.75rem;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--color-muted);
+}
+.olchat-answer pre {
+  margin: 0 0 6px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--color-muted);
+  overflow-x: auto;
+}
+.olchat-answer pre code {
+  padding: 0;
+  background: transparent;
+}
+.olchat-answer a {
+  color: var(--color-foreground);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.olchat-answer blockquote {
+  margin: 0 0 6px;
+  padding: 4px 0 4px 8px;
+  border-left: 2px solid var(--color-border);
+  color: var(--color-muted-foreground);
+}
+.olchat-answer hr {
+  border: 0;
+  border-top: 1px solid var(--color-border);
+  margin: 8px 0;
+}

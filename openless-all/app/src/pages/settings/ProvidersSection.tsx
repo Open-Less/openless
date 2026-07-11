@@ -376,6 +376,16 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
             <CredentialField key={`${committedLlmProvider}:api_key`} label={t('settings.providers.apiKeyLabel')} account="ark.api_key" mono mask />
             <CredentialField key={`${committedLlmProvider}:endpoint`} label={t('settings.providers.baseUrlLabel')} account="ark.endpoint"
               placeholder={preset.baseUrl || 'https://your-endpoint/v1'} />
+            {committedLlmProvider === 'custom' && (
+              <CredentialField
+                key={`${committedLlmProvider}:extra_headers`}
+                label={t('settings.providers.extraHeadersLabel')}
+                account="ark.extra_headers"
+                placeholder={t('settings.providers.extraHeadersPlaceholder')}
+                mono
+                mask
+              />
+            )}
           </>
         )}
         <CredentialField key={`${committedLlmProvider}:model:${llmModelRevision}`} label={t('settings.providers.modelLabel')} account="ark.model_id"
@@ -611,6 +621,7 @@ function providerErrorMessage(error: unknown, t: ReturnType<typeof useTranslatio
   }
   if (message === 'endpointMustUseHttps') return t('settings.providers.endpointMustUseHttps');
   if (message === 'endpointInvalid') return t('settings.providers.endpointInvalid');
+  if (message === 'bailianEndpointSchemeInvalid') return t('settings.providers.bailianEndpointSchemeInvalid');
   if (message === 'providerResponseTooLarge') return t('settings.providers.responseTooLarge');
   if (message === 'asrInvalidJson') return t('settings.providers.asrInvalidJson');
   if (message === 'asrMissingTextField') return t('settings.providers.asrMissingTextField');
@@ -830,7 +841,7 @@ const miniBtnStyle: CSSProperties = {
   height: 32, padding: '0 12px',
   border: '0.5px solid var(--ol-line-strong)',
   borderRadius: 8, background: 'var(--ol-surface)',
-  boxShadow: '0 1px 2px rgba(0,0,0,0.04), 0 0 0 0.5px rgba(255,255,255,0.2) inset',
+  boxShadow: '0 1px 2px rgba(0,0,0,0.04)',
   color: 'var(--ol-ink-2)', cursor: 'default', flexShrink: 0,
   fontSize: 12.5, fontWeight: 500, letterSpacing: '0.01em',
   transition: 'background 0.16s var(--ol-motion-quick), border-color 0.16s var(--ol-motion-quick), color 0.16s var(--ol-motion-quick), box-shadow 0.16s var(--ol-motion-quick)',
@@ -840,7 +851,7 @@ const iconBtnStyle: CSSProperties = {
   width: 32, height: 32,
   border: '0.5px solid var(--ol-line-strong)',
   borderRadius: 8, background: 'var(--ol-surface)',
-  boxShadow: '0 1px 2px rgba(0,0,0,0.04), 0 0 0 0.5px rgba(255,255,255,0.2) inset',
+  boxShadow: '0 1px 2px rgba(0,0,0,0.04)',
   display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
   color: 'var(--ol-ink-3)', cursor: 'default', flexShrink: 0,
   transition: 'background 0.16s var(--ol-motion-quick), border-color 0.16s var(--ol-motion-quick), color 0.16s var(--ol-motion-quick), transform 0.12s var(--ol-motion-quick)',

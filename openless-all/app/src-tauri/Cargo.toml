@@ -1,6 +1,6 @@
 [package]
 name = "openless"
-version = "1.3.12"
+version = "1.3.14"
 description = "OpenLess — local voice input that types where your cursor is"
 authors = ["OpenLess"]
 edition = "2021"
@@ -21,7 +21,8 @@ cc = "1.1"
 # macos-private-api must live in [dependencies] so tauri_build can match tauri.conf.json
 # macOSPrivateApi; tray-icon stays desktop-only in the target table below.
 tauri = { version = "~2.11", features = ["macos-private-api"] }
-tauri-plugin-shell = "2"
+# 锁 >=2.3.5 修复 GHSA-c9pr-q8gx-3mgp：tauri-plugin-shell `open` 端点作用域校验绕过（CRITICAL，issue #668）。
+tauri-plugin-shell = "2.3.5"
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -108,7 +109,7 @@ core-graphics = "0.24"
 # （替代 10s 轮询，空闲零唤醒）。符号本就在依赖树（cpal → coreaudio-sys 0.2），提升为
 # 直接依赖零额外编译成本。
 coreaudio-sys = "0.2"
-objc2 = "0.5"
+objc2 = { version = "0.5", features = ["exception"] }
 objc2-foundation = "0.2"
 objc2-app-kit = "0.2"
 # qwen-asr 用 malloc 分配返回字符串，必须用 C `free()` 释放。

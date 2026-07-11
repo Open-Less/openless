@@ -112,9 +112,22 @@ Place your cursor in any text field — ChatGPT, Claude, Cursor, Notion, an emai
 
 Unlike dictation tools that simply emit a word-for-word transcript, OpenLess's headline capability is its **AI-prompt mode**: you speak freely, and it adds structure, captures your constraints, and produces a context-rich prompt that you can paste directly into ChatGPT, Claude, or Cursor.
 
+## From tool to infrastructure
+
+Advanced systems all do the same thing: **they turn today's communication into tomorrow's default rules.** The Internet won not because HTTP was faster, but because no one negotiates how data is transmitted anymore. Git won not because the code was better, but because teams stopped coordinating versions every day. Stripe won not because payments were faster, but because developers stopped coordinating with banks.
+
+What OpenLess does is not "faster dictation" — it **eliminates every act of coordination between a thought and clean text.** Turning what's in your head into usable text used to mean deciding, over and over: what tone for this one? how is that name spelled? which input field, copy or paste? where does the model's key live, and who has access? OpenLess **sediments** those repeated negotiations, layer by layer, into defaults:
+
+- **Tone** sediments into a **style pack** — named, switchable, live at a keystroke, never re-decided.
+- **Proper nouns** sediment into **dictionary hotwords** — recognized by the ASR, hinted to the polish model, never re-corrected.
+- **Where text lands** sediments into a **single insertion protocol** — hold → speak → it appears at the cursor, with an automatic clipboard fallback.
+- **Model and credentials** sediment into the **OS vault** — authorized once at launch, never renegotiated.
+
+That is what **authorizing the infrastructure once, at launch** means: on first run you grant the microphone, accessibility, and cloud credentials exactly once; from that moment, "speak → clean text at the cursor" is no longer a negotiation you run each time, but a default protocol you can forget is even there. Judge OpenLess not by how much faster it is, but by how much **coordination it removes.**
+
 ## ✨ What's new
 
-Two features define how OpenLess feels in daily use:
+Two capabilities that sediment yet more of the coordination you used to repeat every day into defaults:
 
 - 🎨 **Style Pack Marketplace.** OpenLess no longer ships a single fixed "polish" voice. Build your own **style packs** with custom system prompts, switch between them with a hotkey, and **install community packs in one click** — or publish your own to share. When a style is tuned to your exact task (cold emails, commit messages, 小红书 posts, formal reports, your team's tone), the output is not merely cleaner — it is *noticeably better*, because the model is finally writing the way you intend.
 - ⚡ **Streaming insertion.** Text now flows to your cursor **character by character** as it is polished, rather than making you wait for the complete result. Perceived latency drops sharply, so dictation feels nearly as fast as thinking — and it automatically falls back to a one-shot paste when an application cannot accept streamed keystrokes.
@@ -186,6 +199,8 @@ OpenLess does one thing: it **turns speech into usable written text — AI promp
 | [Superwhisper](https://superwhisper.com) | Closed-source macOS, subscription | Open source; cloud ASR today, local ASR on the roadmap |
 
 ## Status (v1.3.6)
+
+Every item below is one more layer sedimented into a default — a capability you authorize once and then never manage again. This is the infrastructure you stand on after launch:
 
 - Tauri 2 backend in Rust with a React/TypeScript frontend. macOS 12+, Windows 10+.
 - 🎨 **Style Pack Marketplace** — browse, install, and like community **style packs** from the in-app Marketplace, and publish your own (custom system prompt per pack, switchable by hotkey). Backed by a moderated marketplace backend; uploads are reviewed before they go public.

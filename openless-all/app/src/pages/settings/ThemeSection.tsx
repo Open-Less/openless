@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
 import { SelectLite } from '../../components/ui/SelectLite';
 import { Card } from '../_atoms';
-import { SettingRow } from './shared';
+import { SettingRow, Toggle } from './shared';
 import {
   readThemePreference,
   setThemePreference,
@@ -53,6 +53,17 @@ export function ThemeSection() {
           style={{ maxWidth: 220, minWidth: 200 }}
         />
       </SettingRow>
+      {/* 概览页年度活动热力图开关：关闭只隐藏卡片，活动计数照常记录。 */}
+      {prefs && (
+        <SettingRow label={t('settings.theme.activityHeatmapLabel')}>
+          <Toggle
+            on={prefs.showOverviewActivityHeatmap !== false}
+            onToggle={next =>
+              void updatePrefs(current => ({ ...current, showOverviewActivityHeatmap: next }))
+            }
+          />
+        </SettingRow>
+      )}
     </Card>
   );
 }

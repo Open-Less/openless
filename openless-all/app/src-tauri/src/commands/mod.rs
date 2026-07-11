@@ -56,7 +56,8 @@ pub(crate) use crate::recorder::{AudioConsumer, Recorder};
 #[cfg(not(mobile))]
 pub(crate) use crate::types::WindowsImeStatus;
 pub(crate) use crate::types::{
-    builtin_style_pack_id, default_active_style_pack_id, AndroidAccessibilityStatus,
+    builtin_style_pack_id, default_active_style_pack_id, ActivityDay,
+    AndroidAccessibilityStatus,
     AndroidOverlayStatus, ChineseScriptPreference, ComboBinding, CorrectionRule, CredentialsStatus,
     DictationSession, DictionaryEntry, HotkeyCapability, HotkeyStatus, OutputLanguagePreference,
     PolishMode, ShortcutBinding, StylePack, StylePackKind, StylePackRuntimeDiagnostics,
@@ -1324,11 +1325,60 @@ mod tests {
         let models = fetch_provider_models(&ProviderConfig {
             base_url: format!("http://{}", addr),
             api_key: String::new(),
+            extra_headers: Default::default(),
         })
         .await
         .unwrap();
 
         assert_eq!(models, vec!["m1".to_string(), "m2".to_string()]);
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn fetch_provider_models_sends_extra_headers() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 8192];
+            let mut request = Vec::new();
+            loop {
+                let n = stream.read(&mut buf).unwrap();
+                if n == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buf[..n]);
+                if request.windows(4).any(|w| w == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let request_text = String::from_utf8_lossy(&request);
+            assert!(request_text
+                .to_ascii_lowercase()
+                .contains("x-openless-test-token: secret"));
+            assert!(!request_text.contains("Authorization: Bearer"));
+
+            let body = r#"{"data":[{"id":"m1"}]}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+        });
+
+        let models = fetch_provider_models(&ProviderConfig {
+            base_url: format!("http://{}", addr),
+            api_key: String::new(),
+            extra_headers: [("x-openless-test-token".to_string(), "secret".to_string())]
+                .into_iter()
+                .collect(),
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(models, vec!["m1".to_string()]);
         server.join().unwrap();
     }
 

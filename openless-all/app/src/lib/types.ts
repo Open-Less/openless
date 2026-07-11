@@ -26,6 +26,12 @@ export type PolishMode = 'raw' | 'light' | 'structured' | 'formal';
 
 export type InsertStatus = 'inserted' | 'pasteSent' | 'copiedFallback' | 'failed';
 
+/** 概览页年度活动热力图的单日计数（date = 本地日期 YYYY-MM-DD）。 */
+export interface ActivityDay {
+  date: string;
+  count: number;
+}
+
 export interface DictationSession {
   id: string;
   createdAt: string; // ISO-8601
@@ -154,6 +160,12 @@ export type CodingAgentPermissionMode =
  *  详见 issue #360。 */
 export type PasteShortcut = 'ctrlV' | 'ctrlShiftV' | 'shiftInsert';
 
+/** Windows 听写文本插入策略。 */
+export type WindowsInsertionMode = 'tsf' | 'sendInput' | 'paste';
+
+/** Windows SendInput 路径的换行模拟方式。 */
+export type WindowsSendInputNewlineMode = 'enter' | 'shiftEnter' | 'crlf';
+
 export type WindowsImeInstallState =
   | 'installed'
   | 'notInstalled'
@@ -271,6 +283,14 @@ export interface UserPreferences {
   pasteShortcut: PasteShortcut;
   /** Windows：TSF 失败后是否允许快捷键粘贴 / 剪贴板兜底。仅在剪贴板写失败时才再试 SendInput。关闭后可验证是否真实 TSF 上屏。 */
   allowNonTsfInsertionFallback: boolean;
+  /** Windows：听写插入策略（TSF / SendInput / 剪贴板粘贴）。 */
+  windowsInsertionMode: WindowsInsertionMode;
+  /** Windows SendInput 路径的换行模拟方式。 */
+  windowsSendInputNewlineMode: WindowsSendInputNewlineMode;
+  /** 旧版兼容：`true` 等价于 `windowsInsertionMode === 'sendInput'`。 */
+  windowsSendInputInsertionOnly: boolean;
+  /** Windows：SendInput 模式下是否在系统键盘列表（Win+Space）中显示 OpenLess。 */
+  windowsShowOpenlessInKeyboardList: boolean;
   /** 用户的工作语言（多选，原生名）；作为前提注入 LLM polish/translate prompt 头部。 */
   workingLanguages: string[];
   /** 翻译模式目标语言（单选，原生名）；空串 = 不启用 Shift 翻译。详见 issue #4。 */
@@ -352,6 +372,8 @@ export interface UserPreferences {
   /** 流式输入成功后是否把最终润色文本写回剪贴板。开启后 Cmd+V 还能重复粘贴该次输出，
    *  与一次性路径行为对齐。默认 true。 */
   streamingInsertSaveClipboard: boolean;
+  /** 概览页是否显示「年度活动」热力图卡。默认 true；关闭只隐藏卡片，活动计数照常记录。 */
+  showOverviewActivityHeatmap: boolean;
   /** 主窗口启动 + 后台每 60 分钟自动检查更新。默认 true。
    *  Android：开启后自动检查并下载，校验后打开系统安装器。
    *  桌面：开启后自动检查，发现更新弹窗由用户确认安装。
@@ -456,7 +478,7 @@ export interface QaStatePayload {
  * Less Computer 语音 Agent 浮窗事件（窗口 label = "less-computer"，事件名
  * `less-computer:event`）。后端按 `kind` 标记，前端据此把交互渲染成聊天结构。
  */
-export type LessComputerEvent =
+export type LessComputerEvent = (
   /** 一轮用户气泡（语音指令转写）。fresh=true 表示新会话（清空历史）；否则追加为后续轮次。 */
   | { kind: 'user'; text: string; fresh?: boolean }
   /** Agent 启动，进入运行态。 */
@@ -465,6 +487,8 @@ export type LessComputerEvent =
   | { kind: 'delta'; text: string }
   /** 工具调用提示（来自 CodingAgentEvent::ToolUse，如 "Bash"）。 */
   | { kind: 'tool'; name: string }
+  /** 会话上下文被压缩（来自 CodingAgentEvent::Compaction），输出流对应位置内嵌提示。 */
+  | { kind: 'compaction' }
   /** 内联审批卡：高风险动作被护栏拦下，等用户 Approve / Deny。 */
   | { kind: 'approval'; token: string; command: string; reason: string }
   /** 运行完成：最终结果 + 成本（美元）。 */
@@ -472,7 +496,12 @@ export type LessComputerEvent =
   /** 用户从胶囊取消正在运行的 Agent。 */
   | { kind: 'cancelled' }
   /** 运行出错。 */
-  | { kind: 'error'; message: string };
+  | { kind: 'error'; message: string }
+) & {
+  /** 单调事件序号（后端 emit 时编）。用于 less_computer_sync 重放与实时流去重；
+   *  缓冲锁异常时后端可能省略，无 seq 的事件前端无条件应用。 */
+  seq?: number;
+};
 
 /** 内置语言列表 — 前端 Settings UI 用，后端只接收原生名字符串拼 prompt。
  *  添加新语言时直接在这里加一项（原生名），无需修改后端。 */
@@ -513,6 +542,12 @@ export interface CapsulePayload {
   translation: boolean;
   /** 当前是否是 Less Computer 会话：处理态文案显示 "using" 而非 "thinking"。 */
   operating?: boolean;
+  /**
+   * 预备态：胶囊已「乐观显示」（按下热键即弹出并播入场动画），但麦克风还没吐第一帧
+   * PCM。为 true 时录音光条渲染成「待命」形态（柔和呼吸、不接真实电平），暗示用户稍候
+   * 再开口；麦克风就绪后翻 false，光条点亮进入正式录音。只对 recording 有意义。
+   */
+  warming?: boolean;
 }
 
 export interface CredentialsStatus {

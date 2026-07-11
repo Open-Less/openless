@@ -1,4 +1,5 @@
 import type {
+    ActivityDay,
     CorrectionRule,
     DictationSession,
     DictionaryEntry,
@@ -49,6 +50,10 @@ export let mockSettings: UserPreferences = {
     restoreClipboardAfterPaste: true,
     pasteShortcut: "ctrlV",
     allowNonTsfInsertionFallback: true,
+    windowsInsertionMode: "tsf",
+    windowsSendInputNewlineMode: "enter",
+    windowsSendInputInsertionOnly: false,
+    windowsShowOpenlessInKeyboardList: true,
     workingLanguages: ["简体中文"],
     translationTargetLanguage: "",
     qaHotkey: defaultQaShortcut(),
@@ -89,6 +94,7 @@ export let mockSettings: UserPreferences = {
     streamingInsert: true,
     streamingInsertDefaultMigrated: true,
     streamingInsertSaveClipboard: true,
+    showOverviewActivityHeatmap: true,
     autoUpdateCheck: true,
     historyMaxEntries: null,
     recordAudioForDebug: false,
@@ -628,3 +634,21 @@ export function mockImportStylePackFromZip(zipPath: string): StylePack {
     syncMockSettingsFromStylePacks()
     return cloneStylePack(pack)
 }
+
+// ── 活动热力图（浏览器 dev 演示数据）────────────────────────────────────
+// 过去一年稀疏分布的日计数，铺出有疏密对比的热力图。种子取日期序号的伪随机，
+// 刷新之间保持稳定。
+export const mockActivityDays: ActivityDay[] = (() => {
+    const days: ActivityDay[] = []
+    const today = new Date()
+    for (let i = 364; i >= 0; i -= 1) {
+        const d = new Date(today)
+        d.setDate(today.getDate() - i)
+        const seed = Math.abs(Math.sin(i * 12.9898) * 43758.5453) % 1
+        if (seed < 0.55) continue
+        const count = Math.max(1, Math.round(seed * 22) - 8)
+        const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`
+        days.push({ date: iso, count })
+    }
+    return days
+})()

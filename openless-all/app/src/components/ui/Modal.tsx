@@ -5,6 +5,7 @@
 // transform，不碰 blur），与设置弹窗、各市场弹窗保持一致。
 
 import type { ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 
 interface ModalProps {
   children: ReactNode;
@@ -16,7 +17,12 @@ interface ModalProps {
 }
 
 export function Modal({ children, onClose, zIndex = 50, width = 'min(560px, 100%)' }: ModalProps) {
-  return (
+  // Portal 到 document.body：弹窗常从设置 / 市场等面板内部触发，而窗口 chrome
+  // （WindowChrome）和页面容器带常驻 `will-change: transform`，会创建 containing
+  // block —— 直接渲染的话 backdrop 的 `position: fixed` 会相对那个祖先而非视口定位，
+  // 遮罩盖不住整窗（只压暗触发它的那块面板，比如 GitHub 登录浮在亮着的设置页上）。
+  // Portal 出去后 fixed 相对视口，遮罩铺满全局。与 Tooltip / SelectLite 同款做法。
+  return createPortal(
     <div
       onClick={onClose}
       style={{
@@ -46,6 +52,7 @@ export function Modal({ children, onClose, zIndex = 50, width = 'min(560px, 100%
       >
         {children}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

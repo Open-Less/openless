@@ -17,6 +17,7 @@ import {
   resetAccessibilityPermissionAndRestartApp,
 } from '../../lib/ipc';
 import type { NetworkCheckResult } from '../../lib/ipc';
+import { emitSaved } from '../../lib/savedEvent';
 import { getPlatformCapabilities } from '../../lib/platform';
 import { checkAndroidMicrophoneAccess, requestAndroidMicrophoneAccess } from '@android/lib/androidMicrophonePermission';
 import type {
@@ -170,8 +171,13 @@ export function PermissionsSection() {
               </Btn>
             )}
             {accessibility === 'denied' && (
-              <Btn variant="ghost" size="sm" onClick={() => { resetAccessibilityPermissionAndRestartApp().catch(console.error); }}>
-                {t('settings.permissions.restart') ?? '重启'}
+              <Btn variant="ghost" size="sm" onClick={() => {
+                resetAccessibilityPermissionAndRestartApp().catch((error) => {
+                  console.error('[settings] reset accessibility permission failed', error);
+                  emitSaved('failed', t('common.operationFailed'));
+                });
+              }}>
+                {t('settings.permissions.restart')}
               </Btn>
             )}
           </div>

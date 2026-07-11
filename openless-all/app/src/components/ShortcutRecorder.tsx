@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
-import { formatComboLabel, getHotkeyTriggerLabel, modifiersFromPressedCodes, shortcutFromLegacyTrigger } from '../lib/hotkey';
+import { formatComboParts, getHotkeyTriggerLabel, modifiersFromPressedCodes, shortcutFromLegacyTrigger } from '../lib/hotkey';
+import { KbdGroup } from './Kbd';
 import { setShortcutRecordingActive, validateShortcutBinding } from '../lib/ipc';
 import type { HotkeyTrigger, ShortcutBinding } from '../lib/types';
 
@@ -189,9 +190,8 @@ export function ShortcutRecorder({
   return (
     <div style={rootStyle}>
       <div style={recorderRowStyle}>
-        <span style={{ padding: '4px 10px', borderRadius: 6, background: 'rgba(0,0,0,0.06)', fontSize: 13, fontFamily: 'var(--ol-font-mono)', fontWeight: 500, color: 'var(--ol-ink)' }}>
-          {formatComboLabel(value)}
-        </span>
+        {/* 键帽逐键展示（Kbd 组件，用户拍板的快捷键展示标准），替代整块灰底文本。 */}
+        <KbdGroup keys={formatComboParts(value)} />
         <div style={controlsGroupStyle}>
           {onDisable && (
             <button

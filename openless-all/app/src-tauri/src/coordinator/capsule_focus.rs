@@ -387,11 +387,16 @@ pub(super) fn emit_capsule(
     inserted_chars: Option<u32>,
 ) {
     // 在 app 句柄校验之前记录，便于无 GUI 的测试断言「按下热键 → 弹了哪种胶囊」。
-    *inner.last_capsule_state.lock() = Some(state);
+    // replace 顺带取回上一帧 state，用于判断本次是不是「入场帧」（见下方 defer_capsule_emit）。
+    let prev_state = inner.last_capsule_state.lock().replace(state);
     let app_opt = inner.app.lock().clone();
     let Some(app) = app_opt else { return };
     let translation = inner.translation_modifier_seen.load(Ordering::SeqCst);
     let operating = inner.state.lock().voice_agent;
+    // 预备态只对 Recording 有意义：麦克风还没吐第一帧 PCM 时（capsule_warming=true）把
+    // warming 打成 true，前端渲染「待命」光效；level_handler 首触发后翻 false → 光条点亮。
+    let warming = matches!(state, CapsuleState::Recording)
+        && inner.capsule_warming.load(Ordering::SeqCst);
     let payload = CapsulePayload {
         state,
         level,
@@ -400,6 +405,7 @@ pub(super) fn emit_capsule(
         inserted_chars,
         translation,
         operating,
+        warming,
     };
 
     #[cfg(target_os = "android")]
@@ -409,6 +415,13 @@ pub(super) fn emit_capsule(
     // 必须在 call-site（即音频线程触发 emit_capsule 时）就算定，否则 main thread
     // 闭包里读到的将是「下一帧」的 state，跟实际下发给 JS 的 payload 不一致。
     let visible = !matches!(state, CapsuleState::Idle);
+    // 入场帧：胶囊从不可见第一次变可见。按平时的「同步 emit + 异步 show」，前端会在窗口
+    // 还隐藏时就起播 capsule-in，等窗口真 show 出来动画早已播完 → 用户看到胶囊「凭空出
+    // 现」而非「滑入」。修法：入场帧把发给 capsule 窗口的事件推迟到主线程闭包里、
+    // window.show 之后再 emit，保证前端起播入场动画时窗口已可见、动画完整可见。Linux 不
+    // 走胶囊窗口（文字经 fcitx5 直接 commit），保持原同步 emit 不变。
+    let was_visible = matches!(prev_state, Some(s) if !matches!(s, CapsuleState::Idle));
+    let defer_capsule_emit = visible && !was_visible && cfg!(not(target_os = "linux"));
 
     // Linux: 通过 fcitx5 插件在候选词列表下方显示听写状态，不干扰输入法预编辑。
     // 只在文本变化时调用 DBus，避免录音中 ~30Hz 的音频电平回调重复调用。
@@ -509,6 +522,13 @@ pub(super) fn emit_capsule(
     // 闪烁。pr_agent 关注点 — 见 audit follow-up。
     let inner_for_main = Arc::clone(inner);
     let app_for_main = app.clone();
+    // 入场帧要在 window.show 之后、闭包内部把 state 回发给前端，需要 payload 的独立副本
+    // move 进闭包；非入场帧走闭包外的即时同步 emit（下方），这里就是 None。
+    let payload_for_deferred_emit = if defer_capsule_emit {
+        Some(payload.clone())
+    } else {
+        None
+    };
     let _ = app.run_on_main_thread(move || {
         let Some(window) = app_for_main.get_webview_window("capsule") else {
             // #470 诊断 v2：比 A/B/C 更靠前的暗点 A0 —— capsule webview 句柄取不到
@@ -568,12 +588,22 @@ pub(super) fn emit_capsule(
             hide_capsule_window_if_present();
             let _ = window.hide();
         }
+        // 入场帧：窗口刚 show（或本次用户关了胶囊显示走了 hide 分支），此刻再把 state 发给
+        // capsule 前端 —— 前端起播 capsule-in 时窗口已可见，入场动画从头完整播放。
+        if let Some(payload) = payload_for_deferred_emit.as_ref() {
+            let _ = app_for_main.emit_to("capsule", "capsule:state", payload);
+        }
         }
     });
 
-    let _ = app.emit_to("capsule", "capsule:state", &payload);
+    // 非入场帧（含 Linux、录音中的 level 更新、离场/终态）保持即时同步 emit，最低延迟；
+    // 入场帧已在上面的主线程闭包里、window.show 之后 emit 过，这里跳过避免重复下发。
+    if !defer_capsule_emit {
+        let _ = app.emit_to("capsule", "capsule:state", &payload);
+    }
     // 主窗口也需要 capsule:state 事件：AudioCueListener 用它触发录音提示音。
-    // Linux 上胶囊隐藏时提示音仍应工作，所以同时发给 main 窗口。
+    // Linux 上胶囊隐藏时提示音仍应工作，所以同时发给 main 窗口。始终即时，与胶囊窗口
+    // 显示时机解耦。
     let _ = app.emit_to("main", "capsule:state", &payload);
 }
 

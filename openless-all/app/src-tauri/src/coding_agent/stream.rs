@@ -15,6 +15,8 @@ pub enum CodingAgentEvent {
     Delta { session_id: String, text: String },
     /// agent 触发了某个工具（如 Bash / Edit）。
     ToolUse { session_id: String, name: String },
+    /// 会话上下文被压缩（`system/compact_boundary`）。前端在消息流对应位置内嵌提示。
+    Compaction { session_id: String },
     /// 运行完成的最终结果。
     Completed {
         session_id: String,
@@ -64,6 +66,16 @@ pub fn parse_stream_json_line(session_id: &str, line: &str) -> Option<CodingAgen
                 }
             }
             None
+        }
+        "system" => {
+            // 上下文压缩：headless claude 压缩会话历史时发一行 system/compact_boundary。
+            // 其余 system 行（init 等）继续忽略。
+            if v.get("subtype")?.as_str()? != "compact_boundary" {
+                return None;
+            }
+            Some(CodingAgentEvent::Compaction {
+                session_id: session_id.to_string(),
+            })
         }
         "result" => {
             let is_error = v.get("is_error").and_then(|b| b.as_bool()).unwrap_or(false);
@@ -150,6 +162,17 @@ mod tests {
             Some(CodingAgentEvent::Error {
                 session_id: "s1".into(),
                 message: "boom".into()
+            })
+        );
+    }
+
+    #[test]
+    fn parses_compact_boundary() {
+        let line = r#"{"type":"system","subtype":"compact_boundary","compact_metadata":{"trigger":"auto","pre_tokens":50000}}"#;
+        assert_eq!(
+            parse_stream_json_line("s1", line),
+            Some(CodingAgentEvent::Compaction {
+                session_id: "s1".into()
             })
         );
     }

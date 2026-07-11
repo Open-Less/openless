@@ -17,7 +17,9 @@
 
 #![cfg(target_os = "macos")]
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -38,17 +40,56 @@ const SF_AUTH_AUTHORIZED: i64 = 3;
 /// 等待识别 / 授权回调的兜底超时。识别本身另有 coordinator 侧动态超时；
 /// 这里只防 block 永不回调导致线程永久阻塞。
 const RECOGNITION_WAIT: Duration = Duration::from_secs(60);
+/// 识别等待的轮询步长。把 `recv_timeout(RECOGNITION_WAIT)` 的一次性阻塞拆成每
+/// `RECOGNITION_POLL` 一轮：每轮之间检查 `cancel_flag`，取消 / 上层超时后阻塞线程
+/// 最多再等这一步长（~100ms）就退出，而不是傻等满 `RECOGNITION_WAIT`（60s）。
+const RECOGNITION_POLL: Duration = Duration::from_millis(100);
 const AUTHORIZATION_WAIT: Duration = Duration::from_secs(30);
+/// 识别引擎就绪（isAvailable）的轮询等待：刚 init 的 recognizer 常瞬时不可用（异步
+/// 加载语言资源），稍等即就绪。等满仍不可用才报错——修「有时用不了」的竞态。
+const AVAILABILITY_WAIT: Duration = Duration::from_secs(3);
+const AVAILABILITY_POLL: Duration = Duration::from_millis(100);
+
+/// `SFSpeechRecognitionTask` 的裸指针包装，仅为把 task 句柄从 spawn_blocking 线程
+/// 存进 `AppleSpeechAsr::active_task`，供任意线程（含 tokio 上取消的线程）调用
+/// `-[SFSpeechRecognitionTask cancel]` 终止识别。
+///
+/// SAFETY: `SFSpeechRecognitionTask` 是标准的 objc/ARC 对象，其 `cancel` 属于
+/// Speech.framework 文档承诺可从任意线程安全调用的操作（内部转派到自身队列）；
+/// 我们对该指针只做两件事——存入 `active_task`、以及调用 `cancel`——不做解引用、
+/// 不改内部状态。指针仅在对应识别请求存活期间被持有：`recognize_file` 返回前会把
+/// `active_task` 置回 `None`，此时 recognizer / request 仍在同一栈帧强引用存活，
+/// task 不会被提前释放。因此跨线程传递该裸指针并调用 `cancel` 不违反内存/线程安全。
+/// 不实现 `Sync`——它只在 `Mutex` 保护下被取出后使用，无需并发共享引用。
+struct SendableTask(*mut AnyObject);
+
+// SAFETY: 见 `SendableTask` 文档注释——底层 SFSpeechRecognitionTask 线程安全，
+// `cancel` 可跨线程调用，包装体只承载指针用于「存」与「取消」。
+unsafe impl Send for SendableTask {}
 
 pub struct AppleSpeechAsr {
     /// 16-bit LE PCM 字节缓冲（recorder 推什么我们存什么）。与 LocalQwenAsr 同形。
     buffer: Mutex<Vec<u8>>,
+    /// 识别 locale（Apple 标识符，如 "zh-CN"）。None = 用系统默认。由用户工作语言映射
+    /// 而来 —— SFSpeechRecognizer 一个实例只认一种语言，不显式指定就落到系统首选语言
+    /// （常是英文），中文语音会被英文引擎识别成英文且理解错误（用户报告的根因）。
+    locale: Option<String>,
+    /// 取消标志。`cancel()` 置位；`recognize_file` 的等待轮询每轮检查，置位即放弃
+    /// 等待并真正 `cancel` 底层识别任务 —— 让被上层动态超时抛弃 / 被 `cancel()` 的
+    /// spawn_blocking 阻塞线程在 ~100ms 内退出，而不是傻等满 `RECOGNITION_WAIT`。
+    cancel_flag: Arc<AtomicBool>,
+    /// 当前在飞的识别任务句柄。`recognize_file` 拿到 task 即存入，返回前清空；
+    /// `cancel()` 从这里取出并调用 `-[SFSpeechRecognitionTask cancel]` 终止识别。
+    active_task: Arc<Mutex<Option<SendableTask>>>,
 }
 
 impl AppleSpeechAsr {
-    pub fn new() -> Self {
+    pub fn new(locale: Option<String>) -> Self {
         Self {
             buffer: Mutex::new(Vec::new()),
+            locale,
+            cancel_flag: Arc::new(AtomicBool::new(false)),
+            active_task: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -73,12 +114,24 @@ impl AppleSpeechAsr {
             });
         }
         let duration_ms = (pcm.len() as u64 / 2) * 1000 / 16_000;
+        let locale = self.locale.clone();
+
+        // 本次识别开始前复位取消标志：上一会话若以取消收尾，标志可能仍为 true。
+        self.cancel_flag.store(false, Ordering::SeqCst);
+        let cancel_flag = Arc::clone(&self.cancel_flag);
+        let active_task = Arc::clone(&self.active_task);
 
         // SFSpeechRecognizer 是阻塞且基于 objc runloop 的同步桥接；放到
         // spawn_blocking 不占 tokio runtime。与 LocalQwenAsr 走同一个 Tauri
         // 持有的 runtime handle。
         let result = tauri::async_runtime::spawn_blocking(move || {
-            transcribe_pcm_blocking(&pcm, duration_ms)
+            transcribe_pcm_blocking(
+                &pcm,
+                duration_ms,
+                locale.as_deref(),
+                &cancel_flag,
+                &active_task,
+            )
         })
         .await
         .context("apple-speech transcribe spawn_blocking join 失败")?;
@@ -90,13 +143,24 @@ impl AppleSpeechAsr {
     }
 
     pub fn cancel(&self) {
+        // 先置位取消标志：等待轮询下一轮（~100ms 内）看到即放弃等待并退出阻塞线程。
+        self.cancel_flag.store(true, Ordering::SeqCst);
+        // 再真正终止在飞的识别任务（若有）。取出句柄后立即调用 cancel。
+        if let Some(task) = self.active_task.lock().take() {
+            // SAFETY: `task.0` 是 `recognitionTaskWithRequest:` 返回的
+            // SFSpeechRecognitionTask 指针。`-[SFSpeechRecognitionTask cancel]` 无参、
+            // 无返回值，是 Speech.framework 承诺可从任意线程调用的操作。此处仅调用
+            // cancel、不解引用指针；调用后不再使用该句柄（已 take 出 Option）。
+            let _: () = unsafe { msg_send![task.0, cancel] };
+            log::info!("[apple-speech] recognition task cancelled");
+        }
         self.buffer.lock().clear();
     }
 }
 
 impl Default for AppleSpeechAsr {
     fn default() -> Self {
-        Self::new()
+        Self::new(None)
     }
 }
 
@@ -108,7 +172,13 @@ impl crate::recorder::AudioConsumer for AppleSpeechAsr {
 
 /// 把 PCM 写成临时 wav，确保授权，跑批处理识别，删临时文件，返回结果。
 /// 在 spawn_blocking 线程内同步执行。
-fn transcribe_pcm_blocking(pcm: &[u8], duration_ms: u64) -> Result<RawTranscript> {
+fn transcribe_pcm_blocking(
+    pcm: &[u8],
+    duration_ms: u64,
+    locale: Option<&str>,
+    cancel_flag: &AtomicBool,
+    active_task: &Mutex<Option<SendableTask>>,
+) -> Result<RawTranscript> {
     ensure_authorized()?;
 
     let samples: Vec<i16> = pcm
@@ -129,7 +199,7 @@ fn transcribe_pcm_blocking(pcm: &[u8], duration_ms: u64) -> Result<RawTranscript
     let path_str = path
         .to_str()
         .ok_or_else(|| anyhow!("临时 wav 路径含非 UTF-8 字符: {}", path.display()))?;
-    let text = recognize_file(path_str)?;
+    let text = recognize_file(path_str, locale, cancel_flag, active_task)?;
 
     Ok(RawTranscript { text, duration_ms })
 }
@@ -183,18 +253,31 @@ fn ensure_authorized() -> Result<()> {
 
 /// 用 `SFSpeechURLRecognitionRequest` 对给定 wav 文件做一次批处理识别，
 /// 把 `recognitionTaskWithRequest:resultHandler:` 的异步回调同步化。
-fn recognize_file(wav_path: &str) -> Result<String> {
-    let recognizer = create_recognizer()?;
+///
+/// 等待不再是一次性 `recv_timeout(RECOGNITION_WAIT)`，而是每 `RECOGNITION_POLL`
+/// 一轮的轮询：每轮检查 `cancel_flag`，置位则 `cancel` 底层任务并返回「已取消」错误，
+/// 让上层动态超时抛弃 / `cancel()` 触发时阻塞线程在 ~100ms 内退出。返回前无论成败
+/// 都清空 `active_task`（RAII guard 兜底 `?` 早退）。
+fn recognize_file(
+    wav_path: &str,
+    locale: Option<&str>,
+    cancel_flag: &AtomicBool,
+    active_task: &Mutex<Option<SendableTask>>,
+) -> Result<String> {
+    let recognizer = create_recognizer(locale)?;
 
-    // recognizer.isAvailable —— 识别引擎当前是否可用（首次可能在下载语言资源）。
-    // SAFETY: `recognizer` 是有效的 `SFSpeechRecognizer` 实例；`isAvailable` 无参，返回 BOOL。
-    let available: Bool = unsafe { msg_send![recognizer, isAvailable] };
-    if !available.as_bool() {
-        bail!("当前语言的语音识别暂不可用（系统可能正在准备识别资源，请稍后重试）");
-    }
+    // 识别引擎就绪等待（isAvailable 竞态）：SFSpeechRecognizer 刚 init 时引擎往往还没
+    // 就绪（异步加载语言资源），isAvailable 瞬时为 false、稍等即 true。之前一见 false
+    // 就 bail —— 这正是「有时用不了」的主因。改为轮询等待最多几秒再判定。
+    wait_until_available(recognizer)?;
 
     let url = file_url(wav_path)?;
     let request = create_url_request(url)?;
+
+    // on-device 优先：设备支持当前语言的设备端识别就强制 on-device —— 音频不出本机
+    // （隐私）、离线可用、不受网络波动/限流影响（消除「有时连不上服务器」）。不支持的
+    // 语言回退系统默认（可能走网络）以保底能用。
+    configure_on_device(recognizer, request);
 
     let (tx, rx) = mpsc::channel::<RecognitionOutcome>();
     // resultHandler: void(^)(SFSpeechRecognitionResult *result, NSError *error)
@@ -209,8 +292,9 @@ fn recognize_file(wav_path: &str) -> Result<String> {
     log::info!("[apple-speech] starting recognitionTaskWithRequest");
     // SAFETY: `recognizer` 有效；`request` 是有效的 `SFSpeechURLRecognitionRequest`；
     // `&*block` 是稳定 block 指针，block 本体被 `block` 持有至本作用域结束。
-    // 返回的 `SFSpeechRecognitionTask` 我们不持有（自身被 recognizer 强引用直到完成）。
-    let _task: *mut AnyObject = unsafe {
+    // 返回的 `SFSpeechRecognitionTask` 自身被 recognizer 强引用直到完成；我们额外把
+    // 句柄存进 `active_task` 供 `cancel()` 从别的线程终止它（见 SendableTask 文档）。
+    let task: *mut AnyObject = unsafe {
         msg_send![
             recognizer,
             recognitionTaskWithRequest: request,
@@ -218,11 +302,85 @@ fn recognize_file(wav_path: &str) -> Result<String> {
         ]
     };
 
-    match rx.recv_timeout(RECOGNITION_WAIT) {
-        Ok(RecognitionOutcome::Final(text)) => Ok(text),
-        Ok(RecognitionOutcome::Failed(message)) => bail!("语音识别失败: {message}"),
-        Ok(RecognitionOutcome::Pending) => unreachable!("Pending 不会被发送"),
-        Err(err) => bail!("等待语音识别结果超时或失败: {err}"),
+    // 存句柄供 cancel()；guard 保证本函数任意退出路径都把它清回 None，避免悬挂。
+    *active_task.lock() = Some(SendableTask(task));
+    let _task_guard = ActiveTaskGuard(active_task);
+
+    // 轮询等待：每轮 recv 最多 RECOGNITION_POLL，累计超过 RECOGNITION_WAIT 则超时。
+    // 每轮先查 cancel_flag —— 置位即真正 cancel 任务并返回「已取消」错误、放弃等待。
+    let deadline = std::time::Instant::now() + RECOGNITION_WAIT;
+    loop {
+        if cancel_flag.load(Ordering::SeqCst) {
+            // 若 cancel() 尚未取走句柄（例如超时路径只置了 flag 没调 cancel），这里补发
+            // 一次 cancel，确保底层识别任务被真正终止，而不是留它在后台跑满。
+            if let Some(t) = active_task.lock().take() {
+                // SAFETY: 见 SendableTask 文档 —— `cancel` 无参、可跨线程调用，仅调用不解引用。
+                let _: () = unsafe { msg_send![t.0, cancel] };
+            }
+            bail!("语音识别已取消");
+        }
+        match rx.recv_timeout(RECOGNITION_POLL) {
+            Ok(RecognitionOutcome::Final(text)) => return Ok(text),
+            Ok(RecognitionOutcome::Failed(message)) => bail!("语音识别失败: {message}"),
+            Ok(RecognitionOutcome::Pending) => unreachable!("Pending 不会被发送"),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                if std::time::Instant::now() >= deadline {
+                    bail!("等待语音识别结果超时");
+                }
+                // 未到总时限：继续下一轮（回到循环顶部再查 cancel_flag）。
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                bail!("等待语音识别结果失败：回调通道已断开");
+            }
+        }
+    }
+}
+
+/// 保证 `recognize_file` 任意退出路径（含 `?` 早退、正常返回、取消/超时）都把
+/// `active_task` 清回 `None`，避免悬挂的 task 句柄被后续 `cancel()` 误用。
+struct ActiveTaskGuard<'a>(&'a Mutex<Option<SendableTask>>);
+
+impl Drop for ActiveTaskGuard<'_> {
+    fn drop(&mut self) {
+        *self.0.lock() = None;
+    }
+}
+
+/// 轮询等待识别引擎就绪。init 后 isAvailable 可能瞬时 false（异步加载资源），稍等
+/// 即 true；等满 AVAILABILITY_WAIT 仍不可用才报错并引导。
+fn wait_until_available(recognizer: *mut AnyObject) -> Result<()> {
+    let deadline = std::time::Instant::now() + AVAILABILITY_WAIT;
+    loop {
+        // SAFETY: `recognizer` 有效；`isAvailable` 无参返回 BOOL。
+        let available: Bool = unsafe { msg_send![recognizer, isAvailable] };
+        if available.as_bool() {
+            return Ok(());
+        }
+        if std::time::Instant::now() >= deadline {
+            bail!(
+                "当前语言的语音识别暂不可用：系统可能仍在准备识别资源，或需在 系统设置 → 键盘 → 听写 中下载对应语言。可稍后重试，或改用其它 ASR。"
+            );
+        }
+        std::thread::sleep(AVAILABILITY_POLL);
+    }
+}
+
+/// 支持设备端识别的语言就把请求设成强制 on-device（音频不出本机、离线可用）；不支持
+/// 的语言不设，回退系统默认（可能走网络）以保底能用。
+fn configure_on_device(recognizer: *mut AnyObject, request: *mut AnyObject) {
+    // SFSpeechRecognizer.supportsOnDeviceRecognition（macOS 10.15+，BOOL 属性）。
+    // SAFETY: `recognizer` 有效；无参返回 BOOL。
+    let supports: Bool = unsafe { msg_send![recognizer, supportsOnDeviceRecognition] };
+    if supports.as_bool() {
+        // SFSpeechRecognitionRequest.requiresOnDeviceRecognition = YES。
+        // SAFETY: `request` 是 SFSpeechURLRecognitionRequest（父类
+        // SFSpeechRecognitionRequest 提供该 setter）；参数 BOOL。
+        let _: () = unsafe { msg_send![request, setRequiresOnDeviceRecognition: Bool::new(true)] };
+        log::info!("[apple-speech] on-device recognition enabled");
+    } else {
+        log::info!(
+            "[apple-speech] on-device unsupported for current locale; using default (may use network)"
+        );
     }
 }
 
@@ -271,19 +429,72 @@ fn speech_recognizer_class() -> Result<&'static AnyClass> {
     })
 }
 
-/// `[[SFSpeechRecognizer alloc] init]` —— 用系统当前 locale。
-fn create_recognizer() -> Result<*mut AnyObject> {
+/// 创建 recognizer。有指定 locale 就 `initWithLocale:`（关键 —— 否则落到系统首选语言，
+/// 中文语音会被英文引擎误识别）；无 locale 或 NSLocale 构造失败时回退 `init`（系统默认）。
+fn create_recognizer(locale: Option<&str>) -> Result<*mut AnyObject> {
     let cls = speech_recognizer_class()?;
-    // SAFETY: `cls` 是 `SFSpeechRecognizer` 类；`alloc` 返回未初始化实例，
-    // `init` 对其初始化，返回的实例由本函数所有权移交调用方（随后被 ARC 管理）。
-    let recognizer: *mut AnyObject = unsafe {
-        let alloc: *mut AnyObject = msg_send![cls, alloc];
-        msg_send![alloc, init]
+    let recognizer: *mut AnyObject = match locale.and_then(ns_locale) {
+        Some(ns_loc) => {
+            log::info!("[apple-speech] recognizer locale = {}", locale.unwrap_or(""));
+            // SAFETY: `cls` 是 SFSpeechRecognizer 类；`alloc` 得未初始化实例，
+            // `initWithLocale:` 用有效 NSLocale 初始化，返回实例移交调用方（ARC 管理）。
+            unsafe {
+                let alloc: *mut AnyObject = msg_send![cls, alloc];
+                msg_send![alloc, initWithLocale: ns_loc]
+            }
+        }
+        None => {
+            // SAFETY: 同上；`init` 用系统默认 locale。
+            unsafe {
+                let alloc: *mut AnyObject = msg_send![cls, alloc];
+                msg_send![alloc, init]
+            }
+        }
     };
     if recognizer.is_null() {
-        bail!("无法创建 SFSpeechRecognizer（当前系统语言可能不支持语音识别）");
+        bail!("无法创建 SFSpeechRecognizer（当前语言可能不支持语音识别）");
     }
     Ok(recognizer)
+}
+
+/// `[NSLocale localeWithLocaleIdentifier:<id>]`。构造失败返回 None（调用方回退系统默认）。
+fn ns_locale(identifier: &str) -> Option<*mut AnyObject> {
+    let ns_id = ns_string_from_str(identifier).ok()?;
+    let cls = AnyClass::get("NSLocale")?;
+    // SAFETY: `cls` 是 NSLocale；`localeWithLocaleIdentifier:` 接收 NSString（`ns_id` 有效），
+    // 返回 autoreleased NSLocale（在 spawn_blocking 线程的 autorelease 池存活）。
+    let loc: *mut AnyObject = unsafe { msg_send![cls, localeWithLocaleIdentifier: ns_id] };
+    if loc.is_null() {
+        None
+    } else {
+        Some(loc)
+    }
+}
+
+/// 用户工作语言（原生名，见前端 `SUPPORTED_LANGUAGES`）→ SFSpeechRecognizer 的 locale
+/// 标识符。取 `working_languages` 主语言映射；未收录的语言返回 None（回退系统默认 locale）。
+/// SFSpeechRecognizer 一个实例只认一种语言，中英混说时以主语言为准 —— 这是 Apple 的固有
+/// 限制，云端 ASR 才能自由多语言混识。
+pub fn native_name_to_apple_locale(native_name: &str) -> Option<String> {
+    let locale = match native_name.trim() {
+        "简体中文" => "zh-CN",
+        "繁体中文" | "繁體中文" => "zh-TW",
+        "English" => "en-US",
+        "日本語" => "ja-JP",
+        "한국어" => "ko-KR",
+        "Français" => "fr-FR",
+        "Deutsch" => "de-DE",
+        "Español" => "es-ES",
+        "Italiano" => "it-IT",
+        "Português" => "pt-BR",
+        "Русский" => "ru-RU",
+        "العربية" => "ar-SA",
+        "Tiếng Việt" => "vi-VN",
+        "ไทย" => "th-TH",
+        "हिन्दी" => "hi-IN",
+        _ => return None,
+    };
+    Some(locale.to_string())
 }
 
 /// `[NSURL fileURLWithPath:<path>]`。
@@ -387,7 +598,7 @@ mod tests {
 
     #[test]
     fn buffer_duration_tracks_consumed_pcm() {
-        let asr = AppleSpeechAsr::new();
+        let asr = AppleSpeechAsr::new(None);
         assert_eq!(asr.buffer_duration_ms(), 0);
         // 16k * 2 bytes/sample * 1s = 32000 bytes。
         asr.consume_pcm_chunk(&vec![0u8; 32_000]);
@@ -398,7 +609,7 @@ mod tests {
 
     #[test]
     fn cancel_clears_buffer() {
-        let asr = AppleSpeechAsr::new();
+        let asr = AppleSpeechAsr::new(None);
         asr.consume_pcm_chunk(&vec![0u8; 32_000]);
         asr.cancel();
         assert_eq!(asr.buffer_duration_ms(), 0);
@@ -406,7 +617,7 @@ mod tests {
 
     #[tokio::test]
     async fn transcribe_empty_buffer_returns_empty() {
-        let asr = AppleSpeechAsr::new();
+        let asr = AppleSpeechAsr::new(None);
         let transcript = asr.transcribe().await.unwrap();
         assert_eq!(transcript.text, "");
         assert_eq!(transcript.duration_ms, 0);
@@ -431,5 +642,73 @@ mod tests {
         let a = unique_suffix();
         let b = unique_suffix();
         assert!(b > a);
+    }
+
+    #[test]
+    fn cancel_flag_defaults_false_and_set_by_cancel() {
+        let asr = AppleSpeechAsr::new(None);
+        assert!(
+            !asr.cancel_flag.load(Ordering::SeqCst),
+            "取消标志初值应为 false"
+        );
+        asr.cancel();
+        assert!(
+            asr.cancel_flag.load(Ordering::SeqCst),
+            "cancel() 应把取消标志置位，让等待轮询下一轮退出"
+        );
+    }
+
+    #[test]
+    fn active_task_defaults_none() {
+        let asr = AppleSpeechAsr::new(None);
+        assert!(
+            asr.active_task.lock().is_none(),
+            "尚未发起识别时 active_task 应为 None"
+        );
+    }
+
+    #[test]
+    fn active_task_guard_clears_handle_on_drop() {
+        // active_task 存了句柄后，ActiveTaskGuard 掉出作用域应把它清回 None。
+        // 用 dangling 指针仅做占位：guard 的 Drop 只 take + 置 None，不触碰指针内容。
+        let slot: Mutex<Option<SendableTask>> = Mutex::new(None);
+        *slot.lock() = Some(SendableTask(std::ptr::null_mut()));
+        assert!(slot.lock().is_some());
+        {
+            let _guard = ActiveTaskGuard(&slot);
+        }
+        assert!(
+            slot.lock().is_none(),
+            "ActiveTaskGuard drop 后 active_task 必须清空，避免悬挂句柄"
+        );
+    }
+
+    #[test]
+    fn cancel_on_empty_active_task_is_noop_and_sets_flag() {
+        // active_task 为 None 时 cancel() 不应发起任何 objc 调用，只置标志 + 清缓冲。
+        let asr = AppleSpeechAsr::new(None);
+        assert!(asr.active_task.lock().is_none());
+        asr.cancel(); // 不得 panic
+        assert!(asr.cancel_flag.load(Ordering::SeqCst));
+        assert!(asr.active_task.lock().is_none());
+    }
+
+    #[tokio::test]
+    async fn transcribe_empty_buffer_short_circuits_before_flag_reset() {
+        // 空缓冲在复位取消标志之前就提前 return，因此不进入识别逻辑，flag 维持原值。
+        // 这条固定住短路顺序：只有真正要识别（缓冲非空）时才会复位并进入轮询。
+        let asr = AppleSpeechAsr::new(None);
+        asr.cancel_flag.store(true, Ordering::SeqCst);
+        let out = asr.transcribe().await.unwrap();
+        assert_eq!(out.text, "");
+        assert!(asr.cancel_flag.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn sendable_task_is_send() {
+        // 编译期断言：SendableTask 必须是 Send，才能被 spawn_blocking 捕获跨线程存取。
+        fn assert_send<T: Send>() {}
+        assert_send::<SendableTask>();
+        assert_send::<Arc<Mutex<Option<SendableTask>>>>();
     }
 }

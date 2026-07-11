@@ -17,7 +17,7 @@
 //!
 //! "ark.api_key"/"volcengine.app_key" 等账户名按 Swift 语义路由到 active provider。
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -40,6 +40,13 @@ const KEYRING_CREDENTIALS_ACCOUNT: &str = "credentials.v1";
 const KEYRING_CREDENTIALS_CHUNK_PREFIX: &str = "credentials.v1.chunk.";
 #[cfg(target_os = "android")]
 const ANDROID_CREDENTIALS_FILE: &str = "credentials.enc.json";
+const RESERVED_EXTRA_HEADER_NAMES: &[&str] = &[
+    "authorization",
+    "content-type",
+    "accept",
+    "host",
+    "content-length",
+];
 // Windows Credential Manager caps one credential blob at 2560 bytes. keyring stores
 // passwords as UTF-16 on Windows, so keep each JSON chunk comfortably below that.
 const KEYRING_CHUNK_MAX_UTF16_UNITS: usize = 1000;
@@ -202,6 +209,88 @@ impl CredsLlmEntry {
     }
 }
 
+fn active_llm_extra_headers(root: &CredsRoot) -> HashMap<String, String> {
+    root.providers
+        .llm
+        .get(&root.active.llm)
+        .and_then(|entry| entry.extraHeaders.clone())
+        .unwrap_or_default()
+}
+
+fn active_llm_extra_headers_json(root: &CredsRoot) -> Result<Option<String>> {
+    let headers = active_llm_extra_headers(root);
+    if headers.is_empty() {
+        return Ok(None);
+    }
+    let ordered = headers.into_iter().collect::<BTreeMap<_, _>>();
+    serde_json::to_string(&ordered)
+        .map(Some)
+        .context("encode LLM extra headers")
+}
+
+fn parse_extra_headers_json(value: &str) -> Result<HashMap<String, String>> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let raw: HashMap<String, serde_json::Value> =
+        serde_json::from_str(trimmed).context("extra headers must be a JSON object")?;
+    let mut headers = HashMap::new();
+    for (key, value) in raw {
+        let key = key.trim();
+        if key.is_empty() {
+            anyhow::bail!("extra header name cannot be empty");
+        }
+        if !is_valid_header_name(key) {
+            anyhow::bail!("invalid extra header name: {key}");
+        }
+        if is_reserved_extra_header_name(key) {
+            anyhow::bail!("reserved extra header name cannot be overridden: {key}");
+        }
+        let Some(value) = value.as_str() else {
+            anyhow::bail!("extra header value for {key} must be a string");
+        };
+        if value.contains('\r') || value.contains('\n') {
+            anyhow::bail!("extra header value for {key} cannot contain line breaks");
+        }
+        headers.insert(key.to_string(), value.to_string());
+    }
+    Ok(headers)
+}
+
+fn is_valid_header_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.bytes().all(|b| {
+            matches!(
+                b,
+                b'!' | b'#'
+                    | b'$'
+                    | b'%'
+                    | b'&'
+                    | b'\''
+                    | b'*'
+                    | b'+'
+                    | b'-'
+                    | b'.'
+                    | b'^'
+                    | b'_'
+                    | b'`'
+                    | b'|'
+                    | b'~'
+                    | b'0'..=b'9'
+                    | b'a'..=b'z'
+                    | b'A'..=b'Z'
+            )
+        })
+}
+
+fn is_reserved_extra_header_name(name: &str) -> bool {
+    RESERVED_EXTRA_HEADER_NAMES
+        .iter()
+        .any(|reserved| name.eq_ignore_ascii_case(reserved))
+}
+
 fn credentials_path() -> Result<PathBuf> {
     // macOS / Linux: ~/.openless/credentials.json (与 Swift 同源)
     // Windows: %APPDATA%\OpenLess\credentials.json (Windows 没有标准 HOME 环境变量)
@@ -362,13 +451,62 @@ fn read_chunk_manifest(json: &str) -> Option<CredsChunkManifest> {
     }
 }
 
+/// Windows Credential Manager (`CredReadW`) can transiently fail right after
+/// login / under contention when we read the manifest entry plus every chunk
+/// entry in quick succession. A single failed read makes the whole credential
+/// set look empty → `load_keyring_credentials` returns `Err` → `load_credentials`
+/// falls back to an empty default → Overview shows「火山引擎未配置」even though the
+/// secrets are present (the next dictation re-reads and succeeds, which is why the
+/// bug is *probabilistic* and the app "实际可以正常使用"). The more chunks a
+/// credential set spans, the more reads per load, the higher the odds at least
+/// one trips. Retry transient errors a few times with short backoff.
+///
+/// macOS / Linux keep the original single-shot behavior on purpose: their read
+/// errors are ACL denials that won't heal on retry, and the un-cached error path
+/// already retries on the next call — adding sleeps there would only slow the
+/// macOS first-launch Keychain authorization flow.
+#[cfg(target_os = "windows")]
+const KEYRING_READ_RETRY_ATTEMPTS: usize = 4;
+#[cfg(target_os = "windows")]
+const KEYRING_READ_RETRY_BACKOFF_MS: u64 = 60;
+
 #[cfg(not(target_os = "android"))]
 fn get_keyring_password(account: &str) -> Result<Option<String>> {
-    match keyring_entry_for(account)?.get_password() {
-        Ok(value) => Ok(Some(value)),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(e) => {
-            Err(anyhow!(e)).with_context(|| format!("read system credential vault {account}"))
+    #[cfg(target_os = "windows")]
+    {
+        let mut attempt = 0usize;
+        loop {
+            match keyring_entry_for(account)?.get_password() {
+                Ok(value) => return Ok(Some(value)),
+                // NoEntry is a definitive "not stored" answer, never a transient
+                // failure — return immediately so genuinely-unconfigured providers
+                // don't pay the retry latency.
+                Err(keyring::Error::NoEntry) => return Ok(None),
+                Err(e) => {
+                    attempt += 1;
+                    if attempt >= KEYRING_READ_RETRY_ATTEMPTS {
+                        return Err(anyhow!(e))
+                            .with_context(|| format!("read system credential vault {account}"));
+                    }
+                    log::warn!(
+                        "[vault] transient credential read for {account} failed \
+                         (attempt {attempt}/{KEYRING_READ_RETRY_ATTEMPTS}): {e}; retrying"
+                    );
+                    std::thread::sleep(std::time::Duration::from_millis(
+                        KEYRING_READ_RETRY_BACKOFF_MS * attempt as u64,
+                    ));
+                }
+            }
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        match keyring_entry_for(account)?.get_password() {
+            Ok(value) => Ok(Some(value)),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(e) => {
+                Err(anyhow!(e)).with_context(|| format!("read system credential vault {account}"))
+            }
         }
     }
 }
@@ -841,6 +979,29 @@ impl CredentialsVault {
         load_credentials().active.llm
     }
 
+    pub fn get_active_llm_extra_headers() -> HashMap<String, String> {
+        let _guard = credentials_lock().lock();
+        active_llm_extra_headers(&load_credentials())
+    }
+
+    pub fn get_active_llm_extra_headers_json() -> Result<Option<String>> {
+        let _guard = credentials_lock().lock();
+        active_llm_extra_headers_json(&load_credentials())
+    }
+
+    pub fn set_active_llm_extra_headers_json(value: &str) -> Result<()> {
+        let _guard = credentials_lock().lock();
+        let headers = parse_extra_headers_json(value)?;
+        let mut root = load_credentials_for_update()?;
+        let entry = root.providers.llm.entry(root.active.llm.clone()).or_default();
+        entry.extraHeaders = if headers.is_empty() {
+            None
+        } else {
+            Some(headers)
+        };
+        save_credentials(&root)
+    }
+
     pub fn snapshot() -> CredentialsSnapshot {
         let _guard = credentials_lock().lock();
         let root = load_credentials();
@@ -860,7 +1021,7 @@ impl CredentialsVault {
 
 #[cfg(test)]
 mod tests {
-    use super::{chunk_json_payload, KEYRING_CHUNK_MAX_UTF16_UNITS};
+    use super::{chunk_json_payload, parse_extra_headers_json, KEYRING_CHUNK_MAX_UTF16_UNITS};
 
     #[test]
     fn credential_payload_chunks_stay_under_windows_blob_limit() {
@@ -876,5 +1037,23 @@ mod tests {
         assert!(chunks
             .iter()
             .all(|chunk| chunk.encode_utf16().count() <= KEYRING_CHUNK_MAX_UTF16_UNITS));
+    }
+
+    #[test]
+    fn parse_extra_headers_json_rejects_reserved_header_names() {
+        for name in [
+            "Authorization",
+            "content-type",
+            "ACCEPT",
+            "Host",
+            "Content-Length",
+        ] {
+            let value = format!(r#"{{"{name}":"secret"}}"#);
+            let err = parse_extra_headers_json(&value).unwrap_err().to_string();
+            assert!(
+                err.contains("reserved extra header name"),
+                "unexpected error for {name}: {err}"
+            );
+        }
     }
 }

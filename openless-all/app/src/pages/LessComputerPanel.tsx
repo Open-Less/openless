@@ -1,42 +1,90 @@
 // LessComputerPanel.tsx — Less Computer 语音 Agent 浮窗（窗口 label = "less-computer"）。
 //
-// 把「按住专用键说话 → Agent 操控电脑」的交互渲染成聊天结构：
-//   - 用户气泡：语音指令转写（`user` 事件，开启新会话并清空旧内容）。
-//   - 助手气泡：流式回复（`delta` 累积）+ 工具调用 chip（`tool`）。
-//   - 内联审批卡（`approval`）：高风险动作被护栏拦下时弹 Approve / Deny。
-//   - 完成（`completed`）落最终结果 + 成本；出错（`error`）红色样式。
+// 结构 = 官方 shadcn base 组件文档 message-scroller-demo **同款骨架**：
+//   MessageScrollerProvider → Card（CardHeader 标题/副行/CardAction ✕ →
+//   CardContent(p-0) 内 MessageScroller / Empty 空状态 → CardFooter 内
+//   InputGroup 输入组）。组件源码 1:1 来自官方 registry（components/chat/ui/，
+//   仅按 CLI 规则改 import 路径），行为来自 @shadcn/react 官方 primitive。
 //
-// 窗口随内容自适应高度（measure content → setSize），不可拖动、置顶、磨砂。
-// 仅 macOS 实际触发（后端只在 macOS 注册 Less Computer 热键并 emit 事件）。
+// 「电脑操控」形态：不带头像 —— 用户指令 = Bubble align="end"（官方 bubble-demo
+// 同款）；工具调用 = Marker + Spinner/✓ + shimmer（官方 marker-demo 同款）；
+// 上下文压缩 = Marker separator；思考 = 与转译胶囊一模一样的 SiriGL 流体圆点。
+//
+// 事件流：`user`（fresh=true 清空重开）→ delta/tool/compaction/approval 交错 →
+// completed（落成本）/ error / cancelled。浮窗首次创建时后端事件可能先于
+// listener 注册到达（webview 冷加载），丢掉 user 事件后其余事件必须自愈补轮，
+// 不能对空轮次静默丢弃（真机「后端在跑、前端一片空白」的根因）。
+//
+// 窗口固定尺寸（Rust 侧创建即定死 420×540），内容只在滚动框内滚动。
 // 关闭：Esc / ✕ → less_computer_window_dismiss → 后端隐藏窗口。
 
-import {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type CSSProperties,
-} from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
-import DOMPurify from 'dompurify';
-import { useRafThrottle } from '../lib/useRafThrottle';
+import { ArrowUpIcon, CheckIcon, MessageCircleDashedIcon, XIcon } from 'lucide-react';
 import {
+  MessageScroller,
+  MessageScrollerButton,
+  MessageScrollerContent,
+  MessageScrollerItem,
+  MessageScrollerProvider,
+  MessageScrollerViewport,
+} from '../components/chat/ui/message-scroller';
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from '../components/chat/ui/card';
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from '../components/chat/ui/empty';
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+} from '../components/chat/ui/input-group';
+import { Marker, MarkerContent, MarkerIcon } from '../components/chat/ui/marker';
+import { Bubble, BubbleContent } from '../components/chat/ui/bubble';
+import { Button } from '../components/chat/ui/button';
+import { Spinner } from '../components/chat/ui/spinner';
+import { ThinkingOrb } from '../components/chat/avatars';
+import { AssistantMarkdown } from '../components/chat/markdown';
+import { useChatPanelLifecycle } from '../components/chat/lifecycle';
+import { cn } from '../components/chat/lib/utils';
+import {
+  chatPanelFocusKeyboard,
   isTauri,
   lessComputerApprove,
+  lessComputerSubmitText,
+  lessComputerSync,
   lessComputerWindowDismiss,
-  lessComputerWindowResize,
 } from '../lib/ipc';
-import type { LessComputerEvent } from '../lib/types';
-import { renderQaMarkdown, renderQaPlainText } from '../lib/qaMarkdown';
+import type { CapsulePayload, LessComputerEvent } from '../lib/types';
+import '../components/chat/chat.css';
 
 type RunStatus = 'idle' | 'working' | 'done' | 'error' | 'cancelled';
 
-interface ToolChip {
-  kind: 'tool';
-  name: string;
+interface TextSegment {
+  kind: 'text';
+  content: string;
 }
 
-interface ApprovalCard {
+interface ToolSegment {
+  kind: 'tool';
+  name: string;
+  /** 后端没有工具结束事件：下一个事件（delta/tool/approval/收尾）到达即视为结束。 */
+  running: boolean;
+}
+
+interface ApprovalSegment {
   kind: 'approval';
   token: string;
   command: string;
@@ -45,48 +93,151 @@ interface ApprovalCard {
   decision?: 'approved' | 'denied';
 }
 
-/** 助手回复流里穿插的工具 chip / 审批卡，按到达顺序排列。 */
-type Activity = ToolChip | ApprovalCard;
+interface CompactionSegment {
+  kind: 'compaction';
+}
 
-/** 一轮对话：用户一句 + 助手流式回复 + 其间的工具/审批 + 本轮收尾态。连续对话累积成数组。 */
+/** 助手输出流：文本 / 工具行 / 上下文压缩 / 审批卡按到达顺序排列（Codex 式交错）。 */
+type Segment = TextSegment | ToolSegment | CompactionSegment | ApprovalSegment;
+
+/** 一轮对话：用户一句 + 助手输出流 + 本轮收尾态。连续对话累积成数组。 */
 interface Turn {
   user: string;
-  answer: string;
-  activities: Activity[];
+  segments: Segment[];
   status: RunStatus;
   errorMsg: string;
   costUsd: number | null;
 }
 
-/** 对 turns 数组「最后一轮」做不可变更新。 */
-function updateLastTurn(turns: Turn[], fn: (t: Turn) => Turn): Turn[] {
-  if (turns.length === 0) return turns;
-  return [...turns.slice(0, -1), fn(turns[turns.length - 1])];
+function emptyTurn(user: string): Turn {
+  return { user, segments: [], status: 'working', errorMsg: '', costUsd: null };
 }
 
-const WINDOW_MIN_HEIGHT = 120;
-const WINDOW_MAX_HEIGHT = 520;
-const TOOLBAR_HEIGHT = 28;
+/**
+ * 自愈：浮窗首次创建时 webview 冷加载，后端的 `user` 事件常常先于 listener
+ * 注册被丢掉；随后的 delta/tool/收尾若发现没有任何轮次，就地补一轮（用户文案
+ * 缺失，只是不显示指令气泡），保证输出照常渲染而不是永久空白。
+ */
+function ensureTurn(turns: Turn[]): Turn[] {
+  return turns.length > 0 ? turns : [emptyTurn('')];
+}
+
+/** 对 turns 数组「最后一轮」做不可变更新（空数组先自愈补轮）。 */
+function updateLastTurn(turns: Turn[], fn: (t: Turn) => Turn): Turn[] {
+  const list = ensureTurn(turns);
+  return [...list.slice(0, -1), fn(list[list.length - 1])];
+}
+
+/** 把流里还在扫光的工具行停下来（下一个事件到达 = 上一个工具已结束）。 */
+function settleRunningTools(segments: Segment[]): Segment[] {
+  if (!segments.some(s => s.kind === 'tool' && s.running)) return segments;
+  return segments.map(s => (s.kind === 'tool' && s.running ? { ...s, running: false } : s));
+}
+
+// 浏览器预览（vite dev，非 Tauri）：?window=less-computer&demo=1 注入两轮演示对话
+// （第一轮完成态含成本行；第二轮进行中，覆盖「文本 → 工具行 → 压缩行 → 进行中
+// 工具行 → 审批卡」交错流与新轮次锚定），方便调样式。
+function getPreviewTurns(): Turn[] {
+  if (isTauri || typeof window === 'undefined') return [];
+  if (new URLSearchParams(window.location.search).get('demo') !== '1') return [];
+  return [
+    {
+      user: '看一下下载文件夹里最大的三个文件是什么',
+      segments: [
+        { kind: 'tool', name: 'Bash', running: false },
+        {
+          kind: 'text',
+          content:
+            '最大的三个文件：\n1. `Xcode_26.5.xip` — 12.4 GB\n2. `ubuntu-24.04.iso` — 5.8 GB\n3. `设计素材包.zip` — 2.1 GB',
+        },
+      ],
+      status: 'done',
+      errorMsg: '',
+      costUsd: 0.012,
+    },
+    {
+      user: '帮我把桌面上的截图整理到「本周素材」文件夹',
+      segments: [
+        { kind: 'text', content: '好的，我先看一下桌面上有哪些截图。' },
+        { kind: 'tool', name: 'Bash', running: false },
+        { kind: 'compaction' },
+        { kind: 'text', content: '找到 6 张截图，正在移动并按日期重命名…' },
+        { kind: 'tool', name: 'Bash', running: true },
+        {
+          kind: 'approval',
+          token: 'demo',
+          command: 'mv ~/Desktop/Screenshot*.png ~/Documents/本周素材/',
+          reason: 'Moving files outside the working directory.',
+        },
+      ],
+      status: 'working',
+      errorMsg: '',
+      costUsd: null,
+    },
+  ];
+}
+
+/** macOS movableByWindowBackground 拖动把手（header 区域整条可拖，普通箭头指针）。 */
+const drag = { 'data-tauri-drag-region': true } as const;
+
+/** 已应用事件的最大 seq。放模块级而不是 effect 闭包：StrictMode/HMR 重挂载时
+ *  组件 state 保留，若水位归零会把同一批积压重放两遍、轮次翻倍。后端 seq 全局
+ *  单调不回卷（新会话只清缓冲），webview 整页重载时本变量归零、恰好与「需要
+ *  完整重放」对齐。 */
+let lcAppliedSeq = 0;
 
 export function LessComputerPanel() {
   const { t } = useTranslation();
   // 连续对话：每按一次说话键追加一轮（除非后端标记 fresh=新会话则清空重开）。
-  const [turns, setTurns] = useState<Turn[]>([]);
+  const [turns, setTurns] = useState<Turn[]>(getPreviewTurns);
+  // 新会话计数：fresh 时 +1，作为壳 key 重放入场动画 —— 浮窗是常驻 webview
+  // （hide/show 复用），没有这个的话再次唤起时内容直接闪现，很突兀。
+  const [sessionSeq, setSessionSeq] = useState(0);
+  // 出现/消失动画：后端 show/hide 发 chat-panel:shown / chat-panel:closing。
+  const { enterEpoch, closing } = useChatPanelLifecycle();
 
   // ── 后端事件订阅（mount 一次）────────────────────────────────────────
+  //
+  // 冷加载竞态补偿：webview 首次创建需要数百毫秒，后端在此期间 emit 的事件
+  // （尤其首条 user —— 用户说的那句话）到不了 listener。协议：
+  //   1) 先注册 listener，实时事件暂存 pending（不直接应用）；
+  //   2) 调 less_computer_sync 拉后端缓冲，按 seq 升序全量重放；
+  //   3) 放行 pending 与后续实时流，seq ≤ 已应用最大值的重复事件丢弃。
+  // 无 seq 的事件（后端缓冲锁异常的降级路径）无条件应用。
   useEffect(() => {
     if (!isTauri) return;
     let unlisten: (() => void) | undefined;
     let cancelled = false;
+    let synced = false;
+    const pending: LessComputerEvent[] = [];
+    const applyDeduped = (ev: LessComputerEvent) => {
+      if (typeof ev.seq === 'number') {
+        if (ev.seq <= lcAppliedSeq) return;
+        lcAppliedSeq = ev.seq;
+      }
+      applyEvent(ev);
+    };
     (async () => {
       try {
         const { listen } = await import('@tauri-apps/api/event');
-        const handle = await listen<LessComputerEvent>(
-          'less-computer:event',
-          event => applyEvent(event.payload),
-        );
-        if (cancelled) handle();
-        else unlisten = handle;
+        const handle = await listen<LessComputerEvent>('less-computer:event', event => {
+          if (synced) applyDeduped(event.payload);
+          else pending.push(event.payload);
+        });
+        if (cancelled) {
+          handle();
+          return;
+        }
+        unlisten = handle;
+        const backlog = await lessComputerSync().catch(error => {
+          console.error('[LessComputer] sync failed', error);
+          return [] as LessComputerEvent[];
+        });
+        if (cancelled) return;
+        for (const ev of backlog) applyDeduped(ev);
+        synced = true;
+        for (const ev of pending) applyDeduped(ev);
+        pending.length = 0;
       } catch (error) {
         console.error('[LessComputer] listener setup failed', error);
       }
@@ -101,28 +252,53 @@ export function LessComputerPanel() {
     switch (ev.kind) {
       case 'user': {
         // 一轮新对话。fresh=true（后端无可续会话→新会话）则清空历史重开；否则追加为后续轮次。
-        const fresh: Turn = {
-          user: ev.text,
-          answer: '',
-          activities: [],
-          status: 'working',
-          errorMsg: '',
-          costUsd: null,
-        };
-        setTurns(prev => (ev.fresh ? [fresh] : [...prev, fresh]));
+        setTurns(prev => (ev.fresh ? [emptyTurn(ev.text)] : [...prev, emptyTurn(ev.text)]));
+        if (ev.fresh) setSessionSeq(seq => seq + 1);
         break;
       }
       case 'started':
         setTurns(prev => updateLastTurn(prev, tn => ({ ...tn, status: 'working' })));
         break;
       case 'delta':
-        setTurns(prev => updateLastTurn(prev, tn => ({ ...tn, answer: tn.answer + ev.text })));
+        setTurns(prev =>
+          updateLastTurn(prev, tn => {
+            const segments = settleRunningTools(tn.segments);
+            const last = segments[segments.length - 1];
+            if (last?.kind === 'text') {
+              return {
+                ...tn,
+                status: 'working',
+                segments: [
+                  ...segments.slice(0, -1),
+                  { ...last, content: last.content + ev.text },
+                ],
+              };
+            }
+            return {
+              ...tn,
+              status: 'working',
+              segments: [...segments, { kind: 'text', content: ev.text }],
+            };
+          }),
+        );
         break;
       case 'tool':
         setTurns(prev =>
           updateLastTurn(prev, tn => ({
             ...tn,
-            activities: [...tn.activities, { kind: 'tool', name: ev.name }],
+            status: 'working',
+            segments: [
+              ...settleRunningTools(tn.segments),
+              { kind: 'tool', name: ev.name, running: true },
+            ],
+          })),
+        );
+        break;
+      case 'compaction':
+        setTurns(prev =>
+          updateLastTurn(prev, tn => ({
+            ...tn,
+            segments: [...settleRunningTools(tn.segments), { kind: 'compaction' }],
           })),
         );
         break;
@@ -130,8 +306,9 @@ export function LessComputerPanel() {
         setTurns(prev =>
           updateLastTurn(prev, tn => ({
             ...tn,
-            activities: [
-              ...tn.activities,
+            status: 'working',
+            segments: [
+              ...settleRunningTools(tn.segments),
               { kind: 'approval', token: ev.token, command: ev.command, reason: ev.reason },
             ],
           })),
@@ -139,19 +316,35 @@ export function LessComputerPanel() {
         break;
       case 'completed':
         setTurns(prev =>
-          updateLastTurn(prev, tn => ({
-            ...tn,
-            answer: ev.text || tn.answer,
-            costUsd: ev.costUsd ?? null,
-            status: 'done',
-          })),
+          updateLastTurn(prev, tn => {
+            let segments = settleRunningTools(tn.segments);
+            // 正常情况最终文本已通过 delta 流出；只有整轮没有任何文本时才用
+            // completed 的成品兜底（否则会把穿插的工具行冲掉）。
+            if (ev.text && !segments.some(s => s.kind === 'text')) {
+              segments = [...segments, { kind: 'text', content: ev.text }];
+            }
+            return { ...tn, segments, costUsd: ev.costUsd ?? null, status: 'done' };
+          }),
         );
         break;
       case 'error':
-        setTurns(prev => updateLastTurn(prev, tn => ({ ...tn, errorMsg: ev.message, status: 'error' })));
+        setTurns(prev =>
+          updateLastTurn(prev, tn => ({
+            ...tn,
+            segments: settleRunningTools(tn.segments),
+            errorMsg: ev.message,
+            status: 'error',
+          })),
+        );
         break;
       case 'cancelled':
-        setTurns(prev => updateLastTurn(prev, tn => ({ ...tn, status: 'cancelled' })));
+        setTurns(prev =>
+          updateLastTurn(prev, tn => ({
+            ...tn,
+            segments: settleRunningTools(tn.segments),
+            status: 'cancelled',
+          })),
+        );
         break;
     }
   };
@@ -160,10 +353,10 @@ export function LessComputerPanel() {
     setTurns(prev =>
       prev.map(tn => ({
         ...tn,
-        activities: tn.activities.map(a =>
-          a.kind === 'approval' && a.token === token
-            ? { ...a, decision: approved ? 'approved' : 'denied' }
-            : a,
+        segments: tn.segments.map(s =>
+          s.kind === 'approval' && s.token === token
+            ? { ...s, decision: approved ? 'approved' : ('denied' as const) }
+            : s,
         ),
       })),
     );
@@ -184,481 +377,378 @@ export function LessComputerPanel() {
     return () => window.removeEventListener('keydown', onKey, true);
   }, []);
 
-  // ── 内容自适应：measure 内容高 + toolbar → 回传后端 clamp + bottom-anchored 摆放，
-  // 让内容增长向上撑开。超出 max 则窗口内部滚动。
-  const contentRef = useRef<HTMLDivElement>(null);
-  const resizeFrame = useRef<number | null>(null);
-  useEffect(() => {
-    if (!isTauri) return;
-    // 把「测量内容高（强制布局）+ 跨进程 IPC resize」坍缩到每帧最多一次：流式回复
-    // 每个 token 都会触发这个 effect，原本每 token 一次 layout + 一次 IPC。rAF 合并成
-    // ~60fps，且回调里读到的是最新 DOM。
-    if (resizeFrame.current != null) return;
-    resizeFrame.current = requestAnimationFrame(() => {
-      resizeFrame.current = null;
-      const el = contentRef.current;
-      if (!el) return;
-      const measured = Math.ceil(el.scrollHeight) + TOOLBAR_HEIGHT;
-      const target = Math.min(WINDOW_MAX_HEIGHT, Math.max(WINDOW_MIN_HEIGHT, measured));
-      void lessComputerWindowResize(target);
-    });
-  }, [turns]);
-  useEffect(
-    () => () => {
-      if (resizeFrame.current != null) cancelAnimationFrame(resizeFrame.current);
-    },
-    [],
-  );
+  const working = turns.some(tn => tn.status === 'working');
 
-  // 自动滚动到底
-  const scrollRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [turns]);
-
+  // ── 官方 message-scroller-demo 同款骨架 ─────────────────────────────
   return (
-    <div className="ol-frost lc-shell" style={shellStyle}>
-      <div className="lc-bg" aria-hidden />
-      <Toolbar label={t('lessComputer.closeTooltip')} onClose={onClose} />
-      <div ref={scrollRef} style={scrollStyle}>
-        <div ref={contentRef} style={contentStyle}>
-          {turns.map((turn, ti) => (
-            <TurnView key={ti} turn={turn} onApproval={onApproval} t={t} />
-          ))}
-        </div>
-      </div>
-    </div>
+    <MessageScrollerProvider
+      autoScroll
+      defaultScrollPosition="last-anchor"
+      scrollPreviousItemPeek={18}
+    >
+      <Card
+        key={`${sessionSeq}-${enterEpoch}`}
+        className={cn(
+          'olchat-shell olchat-shell-in h-screen w-full gap-0',
+          closing && 'olchat-shell-out',
+        )}
+      >
+        <CardHeader {...drag} className="gap-1 border-b">
+          <CardTitle {...drag}>{t('lessComputer.title')}</CardTitle>
+          <CardDescription {...drag}>
+            {working ? (
+              <span className="shimmer" role="status">
+                {t('lessComputer.working')}
+              </span>
+            ) : (
+              t('lessComputer.subtitle')
+            )}
+          </CardDescription>
+          <CardAction>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={onClose}
+              onMouseDown={event => {
+                event.preventDefault();
+                event.stopPropagation();
+              }}
+              title={t('lessComputer.closeTooltip')}
+              aria-label={t('lessComputer.closeTooltip')}
+            >
+              <XIcon />
+            </Button>
+          </CardAction>
+        </CardHeader>
+        <CardContent className="flex-1 overflow-hidden p-0">
+          {turns.length === 0 ? (
+            <Empty className="h-full">
+              <EmptyHeader>
+                <EmptyMedia variant="icon">
+                  <MessageCircleDashedIcon />
+                </EmptyMedia>
+                <EmptyTitle>{t('lessComputer.title')}</EmptyTitle>
+                <EmptyDescription>{t('lessComputer.subtitle')}</EmptyDescription>
+              </EmptyHeader>
+            </Empty>
+          ) : (
+            <MessageScroller>
+              <MessageScrollerViewport>
+                <MessageScrollerContent
+                  aria-busy={working || undefined}
+                  className="p-(--card-spacing)"
+                >
+                  {turns.map((turn, ti) => (
+                    <TurnView key={ti} index={ti} turn={turn} onApproval={onApproval} t={t} />
+                  ))}
+                </MessageScrollerContent>
+              </MessageScrollerViewport>
+              <MessageScrollerButton aria-label={t('lessComputer.jumpToLatest')} />
+            </MessageScroller>
+          )}
+        </CardContent>
+        <CardFooter className="flex-col gap-2">
+          <Composer working={working} t={t} />
+        </CardFooter>
+      </Card>
+    </MessageScrollerProvider>
   );
 }
 
-// ── 子组件 ────────────────────────────────────────────────────────────
+// ── 底部输入区：官方 demo 同款 InputGroup，打字 + 语音两种形式完整 ────
+//
+// · 打字：单行输入 + 右下发送（官方 demo 的 block-end addon 布局）；Enter 走
+//   表单提交；IME 组合中的 Enter（选字确认）不触发（isComposing/keyCode 229
+//   守卫）。点进输入框时 chat_panel_focus_keyboard 让非激活面板成为 key window
+//   （不激活 app，主窗口不动）。
+// · 语音：录音红光、转译思考黑光绕输入组一圈圈跑（olchat-ring），输入框本体
+//   保持可见；指令落定（user 事件到、agent 开跑）即停 —— 监听 capsule:state
+//   的 operating 会话获得状态，与屏幕下方胶囊同一数据源。
+function Composer({
+  working,
+  t,
+}: {
+  working: boolean;
+  t: ReturnType<typeof useTranslation>['t'];
+}) {
+  const [text, setText] = useState('');
+  const [voice, setVoice] = useState<
+    { state: 'recording'; level: number } | { state: 'thinking' } | null
+  >(null);
+  // 输入组环形光：录音红光 → 转译黑光 → 指令落定（agent 已在跑）即停。
+  const ring =
+    voice?.state === 'recording'
+      ? 'recording'
+      : voice?.state === 'thinking' && !working
+        ? 'thinking'
+        : undefined;
+  // IME 组合期间的 Enter 是「选字确认」不是「发送」。keydown 里 isComposing
+  // 已覆盖大部分场景，keyCode 229 兜底 WebKit 老行为。
+  const composingRef = useRef(false);
 
-/** 渲染单轮对话：用户气泡 → 工具/审批 → 助手流式回复 → 收尾(错误/花费)。 */
+  useEffect(() => {
+    if (!isTauri) return;
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        const { listen } = await import('@tauri-apps/api/event');
+        const handle = await listen<CapsulePayload>('capsule:state', event => {
+          const p = event.payload;
+          if (p.operating !== true) return;
+          if (p.state === 'recording') {
+            setVoice({ state: 'recording', level: p.level ?? 0 });
+          } else if (p.state === 'transcribing' || p.state === 'polishing') {
+            setVoice(prev => (prev?.state === 'thinking' ? prev : { state: 'thinking' }));
+          } else {
+            setVoice(null);
+          }
+        });
+        if (cancelled) handle();
+        else unlisten = handle;
+      } catch (error) {
+        console.error('[LessComputer] capsule listener setup failed', error);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
+  const send = () => {
+    const trimmed = text.trim();
+    if (!trimmed || working) return;
+    setText('');
+    void lessComputerSubmitText(trimmed);
+  };
+
+  const onKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (event.key !== 'Enter') return;
+    if (composingRef.current || event.nativeEvent.isComposing || event.keyCode === 229) {
+      event.preventDefault();
+    }
+  };
+
+  return (
+    <form
+      onSubmit={event => {
+        event.preventDefault();
+        send();
+      }}
+      className="w-full"
+    >
+      <InputGroup className="olchat-ring" data-ring={ring}>
+        <InputGroupInput
+          value={text}
+          placeholder={t('lessComputer.inputPlaceholder')}
+          onChange={event => setText(event.currentTarget.value)}
+          onKeyDown={onKeyDown}
+          onCompositionStart={() => {
+            composingRef.current = true;
+          }}
+          onCompositionEnd={() => {
+            composingRef.current = false;
+          }}
+          onFocus={() => void chatPanelFocusKeyboard()}
+          onPointerDown={() => void chatPanelFocusKeyboard()}
+        />
+        <InputGroupAddon align="block-end" className="pt-1">
+          <InputGroupButton
+            type="submit"
+            variant="default"
+            size="icon-sm"
+            className="ml-auto"
+            disabled={working || !text.trim()}
+          >
+            <ArrowUpIcon />
+            <span className="sr-only">{t('lessComputer.send')}</span>
+          </InputGroupButton>
+        </InputGroupAddon>
+      </InputGroup>
+    </form>
+  );
+}
+
+// ── 消息行 ────────────────────────────────────────────────────────────
+
+/** 渲染单轮对话：用户气泡行（锚点，无头像）→ 输出流（文本 / Marker 工具行 /
+ *  separator 压缩行 / 审批卡交错）→ 收尾（思考圆点 / 错误 / 花费）。
+ *  自愈补出的轮次没有用户文案，跳过指令气泡、锚点落在输出行上。 */
 function TurnView({
+  index,
   turn,
   onApproval,
   t,
 }: {
+  index: number;
   turn: Turn;
   onApproval: (token: string, approved: boolean) => void;
   t: ReturnType<typeof useTranslation>['t'];
 }) {
+  const hasUser = turn.user.trim().length > 0;
+  const lastSegment = turn.segments[turn.segments.length - 1];
+  // 思考指示只在流里没有「自带活动感」的内容时出现：整轮还没输出，或审批已决、
+  // 后端正在带着授权重跑。进行中工具行的 Spinner + 扫光本身就是活动指示。
+  const waiting =
+    turn.status === 'working' &&
+    (turn.segments.length === 0 ||
+      (lastSegment?.kind === 'approval' && lastSegment.decision != null));
+  const hasAssistantRow =
+    turn.segments.length > 0 ||
+    waiting ||
+    turn.status === 'error' ||
+    turn.status === 'cancelled' ||
+    (turn.status === 'done' && turn.costUsd != null);
   return (
     <>
-      <UserBubble text={turn.user} label={t('lessComputer.you')} />
-      {turn.activities.map((a, i) =>
-        a.kind === 'tool' ? (
-          <ToolChipRow key={`t${i}`} name={a.name} t={t} />
-        ) : (
-          <ApprovalRow key={a.token} card={a} onDecide={onApproval} t={t} />
-        ),
+      {/* 用户指令 = 新轮次锚点行。电脑操控形态不带头像，右侧主色气泡。 */}
+      {hasUser && (
+        <MessageScrollerItem messageId={`t${index}-user`} scrollAnchor className="olchat-enter">
+          <Bubble align="end">
+            <BubbleContent>{turn.user}</BubbleContent>
+          </Bubble>
+        </MessageScrollerItem>
       )}
-      {turn.answer && <AssistantBubble markdown={turn.answer} working={turn.status === 'working'} />}
-      {turn.status === 'working' && !turn.answer && <WorkingRow label={t('lessComputer.working')} />}
-      {turn.status === 'error' && <ErrorRow message={turn.errorMsg || t('lessComputer.error')} />}
-      {turn.status === 'cancelled' && <CostRow label={t('common.cancelled')} />}
-      {turn.status === 'done' && turn.costUsd != null && (
-        <CostRow label={t('lessComputer.cost', { cost: turn.costUsd.toFixed(3) })} />
+      {hasAssistantRow && (
+        <MessageScrollerItem messageId={`t${index}-assistant`} scrollAnchor={!hasUser}>
+          <div className="flex min-w-0 flex-col gap-3">
+            {turn.segments.map((segment, i) => {
+              if (segment.kind === 'text') {
+                const streaming =
+                  turn.status === 'working' && i === turn.segments.length - 1;
+                return (
+                  <div key={`s${i}`} className="olchat-enter">
+                    <AssistantMarkdown markdown={segment.content} streaming={streaming} />
+                  </div>
+                );
+              }
+              if (segment.kind === 'tool') {
+                return (
+                  <ToolMarker
+                    key={`s${i}`}
+                    label={t('lessComputer.tool', { name: segment.name })}
+                    running={segment.running}
+                  />
+                );
+              }
+              if (segment.kind === 'compaction') {
+                return <CompactionMarker key={`s${i}`} label={t('lessComputer.compaction')} />;
+              }
+              return (
+                <ApprovalCard key={segment.token} card={segment} onDecide={onApproval} t={t} />
+              );
+            })}
+            {waiting && <WorkingRow label={t('lessComputer.working')} />}
+            {turn.status === 'error' && (
+              <Bubble variant="destructive" className="olchat-enter">
+                <BubbleContent>{turn.errorMsg || t('lessComputer.error')}</BubbleContent>
+              </Bubble>
+            )}
+            {turn.status === 'cancelled' && (
+              <Marker>
+                <MarkerContent className="font-mono text-[11px]">
+                  {t('common.cancelled')}
+                </MarkerContent>
+              </Marker>
+            )}
+            {turn.status === 'done' && turn.costUsd != null && (
+              <Marker>
+                <MarkerContent className="font-mono text-[11px]">
+                  {t('lessComputer.cost', { cost: turn.costUsd.toFixed(3) })}
+                </MarkerContent>
+              </Marker>
+            )}
+          </div>
+        </MessageScrollerItem>
       )}
     </>
   );
 }
 
-function Toolbar({ label, onClose }: { label: string; onClose: () => void }) {
+/**
+ * 工具调用标签：官方 marker-demo 同款 —— 进行中 = Marker role="status" +
+ * MarkerIcon Spinner + MarkerContent shimmer；结束 = ✓ + 淡字。
+ */
+function ToolMarker({ label, running }: { label: string; running: boolean }) {
   return (
-    // 顶栏作为拖动把手：按住空白处可把整个聊天框拖到屏幕任意位置（resize 会保住拖后的位置）。
-    <div data-tauri-drag-region style={{ ...toolbarStyle, cursor: 'grab' }}>
-      <div data-tauri-drag-region style={{ flex: 1, alignSelf: 'stretch' }} />
-      <button
-        onClick={onClose}
-        onMouseDown={(event) => {
-          event.preventDefault();
-          event.stopPropagation();
-        }}
-        title={label}
-        aria-label={label}
-        style={closeBtnStyle}
-      >
-        <svg width="11" height="11" viewBox="0 0 11 11">
-          <path
-            d="M1.5 1.5l8 8M9.5 1.5l-8 8"
-            stroke="currentColor"
-            strokeWidth="1.6"
-            strokeLinecap="round"
-          />
-        </svg>
-      </button>
-    </div>
+    <Marker className="olchat-enter" role={running ? 'status' : undefined}>
+      <MarkerIcon>{running ? <Spinner /> : <CheckIcon />}</MarkerIcon>
+      <MarkerContent className={running ? 'shimmer' : undefined}>{label}</MarkerContent>
+    </Marker>
   );
 }
 
-function UserBubble({ text, label }: { text: string; label: string }) {
+/** 上下文压缩标签：官方 marker-demo 同款 separator 形态（居中标签 + 分隔线）。 */
+function CompactionMarker({ label }: { label: string }) {
   return (
-    <div className="lc-enter" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3 }}>
-      <span style={roleLabelStyle}>{label}</span>
-      <div style={userBubbleStyle}>{text}</div>
-    </div>
+    <Marker className="olchat-enter" variant="separator">
+      <MarkerContent className="text-xs">{label}</MarkerContent>
+    </Marker>
   );
 }
 
-function AssistantBubble({ markdown, working }: { markdown: string; working: boolean }) {
-  // 按帧率节流：流式回复逐 token 全量 parse + DOMPurify 是 O(n²)，长回复越来越卡。
-  const throttled = useRafThrottle(markdown);
-  const html = useMemo(() => {
-    let rendered: string;
-    try {
-      rendered = renderQaMarkdown(throttled);
-    } catch (error) {
-      console.error('[LessComputer] markdown render failed', error);
-      rendered = renderQaPlainText(String(throttled ?? ''));
-    }
-    // 兜底再消毒：qaMarkdown 已转义 raw HTML token，这里 DOMPurify 多一道防线，
-    // 即便上游渲染逻辑回归也不会把恶意标记注入 DOM。
-    return DOMPurify.sanitize(rendered, { ADD_ATTR: ['target', 'rel'] });
-  }, [throttled]);
-  return (
-    <div className="lc-enter" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 3 }}>
-      <div
-        className="lc-answer"
-        style={assistantBubbleStyle}
-        // eslint-disable-next-line react/no-danger
-        dangerouslySetInnerHTML={{ __html: html }}
-      />
-      {working && <span style={caretStyle} />}
-    </div>
-  );
-}
-
-function ToolChipRow({
-  name,
-  t,
-}: {
-  name: string;
-  t: ReturnType<typeof useTranslation>['t'];
-}) {
-  return (
-    <div className="lc-enter" style={{ display: 'flex' }}>
-      <span style={toolChipStyle}>
-        <span aria-hidden style={{ marginRight: 4 }}>
-          {'\u{1F6E0}'}
-        </span>
-        {t('lessComputer.tool', { name })}
-      </span>
-    </div>
-  );
-}
-
+/** 思考行：与转译胶囊一模一样的流体圆点（ThinkingOrb）+ 扫光文案。 */
 function WorkingRow({ label }: { label: string }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-      <span style={dotStyle} />
-      <span style={{ fontSize: 12, color: 'var(--ol-ink-3)', fontWeight: 500 }}>{label}</span>
+    <div className="olchat-enter flex items-center gap-2.5" role="status">
+      <ThinkingOrb size={48} />
+      <span className="shimmer text-xs font-medium">{label}</span>
     </div>
   );
 }
 
-function ApprovalRow({
+function ApprovalCard({
   card,
   onDecide,
   t,
 }: {
-  card: ApprovalCard;
+  card: ApprovalSegment;
   onDecide: (token: string, approved: boolean) => void;
   t: ReturnType<typeof useTranslation>['t'];
 }) {
   const decided = card.decision != null;
   return (
-    <div className="lc-enter" style={approvalCardStyle}>
-      <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--ol-ink)' }}>
+    <div className="olchat-enter flex flex-col gap-2 rounded-2xl border border-destructive/30 bg-destructive/5 p-3">
+      <div className="text-[12.5px] font-semibold text-foreground">
         {t('lessComputer.approvalTitle')}
       </div>
-      <code style={approvalCmdStyle}>{card.command}</code>
-      <div style={{ fontSize: 11.5, color: 'var(--ol-ink-3)' }}>{card.reason}</div>
+      <code className="rounded-md bg-muted px-2 py-1.5 font-mono text-[11.5px] break-all text-foreground">
+        {card.command}
+      </code>
+      <div className="text-[11.5px] text-muted-foreground">{card.reason}</div>
       {!decided && (
-        <div style={approvalRerunWarningStyle}>
+        <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1.5 text-[11px] leading-snug text-amber-700">
           {t('lessComputer.approvalRerunWarning')}
         </div>
       )}
       {decided ? (
-        <div style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--ol-ink-3)' }}>
+        <div className="text-[11.5px] font-semibold text-muted-foreground">
           {card.decision === 'approved'
             ? t('lessComputer.approved')
             : t('lessComputer.denied')}
         </div>
       ) : (
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button
-            style={denyBtnStyle}
-            onMouseDown={(event) => event.stopPropagation()}
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            className="flex-1"
+            onMouseDown={event => event.stopPropagation()}
             onClick={() => onDecide(card.token, false)}
           >
             {t('lessComputer.deny')}
-          </button>
-          <button
-            style={approveBtnStyle}
-            onMouseDown={(event) => event.stopPropagation()}
+          </Button>
+          <Button
+            size="sm"
+            className="flex-1"
+            onMouseDown={event => event.stopPropagation()}
             onClick={() => onDecide(card.token, true)}
           >
             {t('lessComputer.approve')}
-          </button>
+          </Button>
         </div>
       )}
     </div>
   );
-}
-
-function ErrorRow({ message }: { message: string }) {
-  return (
-    <div style={errorRowStyle}>
-      <span style={{ fontSize: 12.5, color: 'var(--ol-err)', lineHeight: 1.5 }}>{message}</span>
-    </div>
-  );
-}
-
-function CostRow({ label }: { label: string }) {
-  return (
-    <div style={{ display: 'flex' }}>
-      <span style={costChipStyle}>{label}</span>
-    </div>
-  );
-}
-
-// ── 样式 ──────────────────────────────────────────────────────────────
-
-const shellStyle: CSSProperties = {
-  width: '100%',
-  height: '100vh',
-  display: 'flex',
-  flexDirection: 'column',
-  borderRadius: 14,
-  overflow: 'hidden',
-  border: '0.5px solid rgba(0, 0, 0, 0.12)',
-  background: 'rgba(246, 247, 250, 0.88)',
-  boxShadow: '0 18px 44px -18px rgba(15,17,22,.28), 0 0 0 0.5px rgba(255,255,255,.7) inset',
-  fontFamily: 'var(--ol-font-sans)',
-  color: 'var(--ol-ink)',
-  isolation: 'isolate',
-};
-
-const toolbarStyle: CSSProperties = {
-  height: 28,
-  display: 'flex',
-  alignItems: 'center',
-  padding: '0 8px',
-  borderBottom: '0.5px solid rgba(0, 0, 0, 0.08)',
-  background:
-    'linear-gradient(180deg, rgba(255,255,255,0.74), rgba(238,240,245,0.58))',
-  boxShadow: '0 1px 0 rgba(255,255,255,.55) inset',
-  backdropFilter: 'blur(18px) saturate(150%)',
-  WebkitBackdropFilter: 'blur(18px) saturate(150%)',
-  flexShrink: 0,
-  position: 'relative',
-  zIndex: 1,
-};
-
-const closeBtnStyle: CSSProperties = {
-  width: 22,
-  height: 22,
-  border: 0,
-  borderRadius: 6,
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  cursor: 'default',
-  padding: 0,
-  background: 'transparent',
-  color: 'var(--ol-ink-3)',
-  transition: 'background 0.16s var(--ol-motion-quick)',
-};
-
-const scrollStyle: CSSProperties = {
-  flex: 1,
-  minHeight: 0,
-  overflow: 'auto',
-  position: 'relative',
-  zIndex: 1,
-};
-
-const contentStyle: CSSProperties = {
-  padding: 14,
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 10,
-};
-
-const roleLabelStyle: CSSProperties = {
-  fontSize: 10.5,
-  color: 'var(--ol-ink-4)',
-  fontWeight: 600,
-};
-
-const userBubbleStyle: CSSProperties = {
-  maxWidth: '85%',
-  padding: '8px 12px',
-  borderRadius: 14,
-  borderBottomRightRadius: 4,
-  background: 'var(--ol-blue)',
-  color: '#fff',
-  fontSize: 13,
-  lineHeight: 1.55,
-  wordBreak: 'break-word',
-};
-
-const assistantBubbleStyle: CSSProperties = {
-  maxWidth: '92%',
-  padding: '8px 12px',
-  borderRadius: 14,
-  borderBottomLeftRadius: 4,
-  background: 'rgba(0,0,0,0.04)',
-  fontSize: 13,
-  lineHeight: 1.6,
-  color: 'var(--ol-ink)',
-  wordBreak: 'break-word',
-  alignSelf: 'flex-start',
-};
-
-const caretStyle: CSSProperties = {
-  display: 'inline-block',
-  width: 6,
-  height: 12,
-  background: 'var(--ol-blue)',
-  marginLeft: 12,
-  animation: 'lc-pulse 0.9s var(--ol-motion-soft) infinite',
-  borderRadius: 1,
-};
-
-const toolChipStyle: CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  fontSize: 11.5,
-  fontWeight: 500,
-  color: 'var(--ol-ink-2)',
-  background: 'rgba(0,0,0,0.045)',
-  border: '0.5px solid rgba(0,0,0,0.06)',
-  borderRadius: 8,
-  padding: '4px 8px',
-};
-
-const costChipStyle: CSSProperties = {
-  fontSize: 11,
-  fontWeight: 500,
-  color: 'var(--ol-ink-4)',
-  fontFamily: 'var(--ol-font-mono)',
-};
-
-const dotStyle: CSSProperties = {
-  width: 8,
-  height: 8,
-  borderRadius: '50%',
-  background: 'var(--ol-blue)',
-  animation: 'lc-pulse 1.2s var(--ol-motion-soft) infinite',
-};
-
-const approvalCardStyle: CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 6,
-  padding: '10px 12px',
-  borderRadius: 12,
-  background: 'rgba(220,38,38,0.05)',
-  border: '0.5px solid rgba(220,38,38,0.20)',
-};
-
-const approvalCmdStyle: CSSProperties = {
-  fontFamily: 'var(--ol-font-mono)',
-  fontSize: 11.5,
-  color: 'var(--ol-ink)',
-  background: 'rgba(0,0,0,0.05)',
-  borderRadius: 6,
-  padding: '5px 8px',
-  wordBreak: 'break-all',
-};
-
-const approvalRerunWarningStyle: CSSProperties = {
-  fontSize: 11,
-  lineHeight: 1.45,
-  color: 'rgb(180,83,9)',
-  background: 'rgba(245,158,11,0.10)',
-  border: '0.5px solid rgba(245,158,11,0.25)',
-  borderRadius: 6,
-  padding: '5px 8px',
-};
-
-const approveBtnStyle: CSSProperties = {
-  flex: 1,
-  border: 0,
-  borderRadius: 8,
-  padding: '6px 10px',
-  fontSize: 12,
-  fontWeight: 600,
-  cursor: 'default',
-  background: 'var(--ol-blue)',
-  color: '#fff',
-};
-
-const denyBtnStyle: CSSProperties = {
-  flex: 1,
-  borderRadius: 8,
-  padding: '6px 10px',
-  fontSize: 12,
-  fontWeight: 600,
-  cursor: 'default',
-  background: 'transparent',
-  border: '0.5px solid rgba(0,0,0,0.14)',
-  color: 'var(--ol-ink-2)',
-};
-
-const errorRowStyle: CSSProperties = {
-  padding: '8px 12px',
-  borderRadius: 10,
-  background: 'rgba(220,38,38,0.06)',
-  border: '0.5px solid rgba(220,38,38,0.18)',
-};
-
-const globalCss = `
-@keyframes lc-pulse {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50%      { opacity: 0.35; transform: scale(.94); }
-}
-/* 内容进场：工具芯片 / 气泡 / 审批卡出现时柔和淡入上滑，而不是直接闪出。 */
-@keyframes lc-enter {
-  from { opacity: 0; transform: translateY(6px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
-.lc-shell { position: relative; }
-.lc-bg {
-  position: absolute;
-  inset: -1px;
-  border-radius: inherit;
-  background:
-    radial-gradient(120% 80% at 18% 0%, rgba(255,255,255,.72), rgba(255,255,255,0) 58%),
-    linear-gradient(180deg, rgba(248,249,252,.78), rgba(235,238,244,.72));
-  pointer-events: none;
-  z-index: 0;
-}
-.lc-enter { animation: lc-enter 0.30s var(--ol-motion-soft, cubic-bezier(.16,1,.3,1)) both; }
-@media (prefers-reduced-motion: reduce) {
-  .lc-enter { animation: none; }
-}
-.lc-answer p        { margin: 0 0 6px; }
-.lc-answer p:last-child { margin-bottom: 0; }
-.lc-answer ul,
-.lc-answer ol       { margin: 0 0 6px; padding-left: 18px; }
-.lc-answer li       { margin: 2px 0; }
-.lc-answer code     { font-family: var(--ol-font-mono); font-size: 12px;
-                      padding: 1px 5px; border-radius: 4px;
-                      background: rgba(0,0,0,0.05); }
-.lc-answer pre      { margin: 0 0 6px; padding: 8px 10px;
-                      border-radius: 8px; background: rgba(0,0,0,0.05);
-                      overflow-x: auto; }
-.lc-answer pre code { padding: 0; background: transparent; }
-.lc-answer a        { color: var(--ol-blue); text-decoration: none; }
-`;
-
-if (typeof document !== 'undefined' && !document.getElementById('less-computer-panel-style')) {
-  const tag = document.createElement('style');
-  tag.id = 'less-computer-panel-style';
-  tag.textContent = globalCss;
-  document.head.appendChild(tag);
 }

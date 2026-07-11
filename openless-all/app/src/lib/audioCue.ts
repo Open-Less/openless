@@ -101,6 +101,32 @@ export function audioContextActionForState(state: string): AudioContextAction {
   return 'resume';
 }
 
+/** resume() 完成后对提示音的处置。 */
+export type CueAction = 'schedule' | 'recreate-retry' | 'drop';
+
+/**
+ * resume() 结束后如何处置这次提示音。纯函数，便于单测，是「用久了没声音」修复的判定核心。
+ *
+ * 关键修复点：长时间使用中，本地 ASR / 录音反复抢占系统音频会话后，WKWebView 的共享
+ * AudioContext 常被推进 'suspended' 或 WebKit 非标准的 'interrupted'，此时 resume() 会被拒、
+ * 或名义 resolve 了但 ctx 仍非 'running'（currentTime 冻结）。旧逻辑要么把 resume 失败静默
+ * 吞掉、要么在冻结的时钟上排期 —— 两条路都让提示音永久静默直到进程重启。这里把这两种
+ * 「唤不醒」的退化态统一判为「丢弃坏死 ctx、用全新 ctx 重试一次」，让共享 ctx 自愈。
+ * （'closed' 早在 getContext 就重建掉了，不会走到这里。）
+ *  - resume 成功且 ctx 真在跑：还该播 → 'schedule'，否则 'drop'（被新一轮接管 / 真迟到）。
+ *  - 否则（被拒 / resolve 了仍非 running）：允许重建 → 'recreate-retry'；不允许（已重试过一次）
+ *    → 'drop'，避免在坏死 ctx 上无限递归。
+ */
+export function cueActionAfterResume(params: {
+  runningAfterResume: boolean;
+  shouldPlay: boolean;
+  allowRecreate: boolean;
+}): CueAction {
+  if (!params.shouldPlay) return 'drop';
+  if (params.runningAfterResume) return 'schedule';
+  return params.allowRecreate ? 'recreate-retry' : 'drop';
+}
+
 function resolveAudioContextCtor(): AudioContextCtor | null {
   if (typeof window === 'undefined') return null;
   // window.AudioContext 来自全局声明；webkit 前缀单独用结构化类型拿，避免 any。
@@ -126,6 +152,20 @@ function getContext(): AudioContext | null {
     }
   }
   return sharedCtx;
+}
+
+// 丢弃一个唤不醒 / 坏死的 AudioContext：清空模块单例（下次 getContext 会重建全新一份）与挂在
+// 其上的 activeVoices，并尽力 close 释放底层音频资源。已 closed / close 失败都忽略。
+function discardContext(ctx: AudioContext): void {
+  if (sharedCtx === ctx) {
+    sharedCtx = null;
+  }
+  activeVoices = [];
+  try {
+    void ctx.close().catch(() => undefined);
+  } catch {
+    // 已 closed，或实现未返回 Promise，忽略。
+  }
 }
 
 // 停掉当前正在发声的节点（不动 playSeq / stopSeq —— 仅做去叠音 / 收尾）。
@@ -210,35 +250,52 @@ export function primeAudioCue(): void {
 
 /** 播放「开始录音」提示音。无 Web Audio 或被挂起且无法恢复时静默降级。 */
 export function playRecordStartCue(): void {
+  playRecordStartCueOnce(true);
+}
+
+// allowRecreate 把「丢弃坏死 ctx 并重试」限制为最多一次，避免在唤不醒的 ctx 上无限递归。
+function playRecordStartCueOnce(allowRecreate: boolean): void {
   const ctx = getContext();
   if (!ctx) return;
 
-  // WKWebView / WebView2 的 AudioContext 常处于 suspended（或被音频会话抢占后的非标准
-  // interrupted）：必须先 resume 再排期，不能在 resume 未完成时就用冻结的 currentTime 排
-  // 节点。resume() 失败也不抛（无声降级）。closed 的情况已在 getContext 重建掉了。
-  if (audioContextActionForState(ctx.state) === 'resume') {
-    const myPlay = ++playSeq;
-    const stopAtRequest = stopSeq;
-    const requestedAt = nowMs();
-    ctx
-      .resume()
-      .then(() => {
-        // 被更新一轮播放接管就让位；期间录音已停且 resume 真迟到才丢弃；
-        // 否则照常补响——快速点一下录音（resume 没跑完就已结束）也该有提示音。
-        if (
-          shouldPlayDeferredCue({
-            superseded: myPlay !== playSeq,
-            stoppedWhileWaiting: stopSeq !== stopAtRequest,
-            elapsedMs: nowMs() - requestedAt,
-            lateThresholdMs: DEFERRED_CUE_LATE_THRESHOLD_MS,
-          })
-        ) {
-          scheduleCueVoices(ctx);
-        }
-      })
-      .catch(() => undefined);
+  // ctx 已 running 直接排期；closed 已在 getContext 重建。其余（suspended / WebKit 非标准
+  // interrupted / 未知态）必须先 resume 再排期，不能在 resume 未完成时就用冻结的 currentTime。
+  if (audioContextActionForState(ctx.state) !== 'resume') {
+    scheduleCueVoices(ctx);
     return;
   }
 
-  scheduleCueVoices(ctx);
+  const myPlay = ++playSeq;
+  const stopAtRequest = stopSeq;
+  const requestedAt = nowMs();
+
+  // resume 完成（成功或被拒）后统一决策：排期 / 丢弃重建重试 / 放弃。
+  const settle = (runningAfterResume: boolean): void => {
+    const action = cueActionAfterResume({
+      runningAfterResume,
+      // 被更新一轮播放接管就让位；期间录音已停且 resume 真迟到才丢弃；否则照常补响——
+      // 快速点一下录音（resume 没跑完就已结束）也该有提示音。
+      shouldPlay: shouldPlayDeferredCue({
+        superseded: myPlay !== playSeq,
+        stoppedWhileWaiting: stopSeq !== stopAtRequest,
+        elapsedMs: nowMs() - requestedAt,
+        lateThresholdMs: DEFERRED_CUE_LATE_THRESHOLD_MS,
+      }),
+      allowRecreate,
+    });
+    if (action === 'schedule') {
+      scheduleCueVoices(ctx);
+    } else if (action === 'recreate-retry') {
+      // resume 被拒、或 resolve 了但 ctx 仍非 running（被音频会话抢占后卡死）——「用久了没
+      // 声音」的根因。丢弃这个唤不醒的 ctx，用全新 ctx 重试一次，让共享 ctx 自愈。
+      discardContext(ctx);
+      playRecordStartCueOnce(false);
+    }
+    // 'drop'：被接管 / 真迟到 / 重试后仍唤不醒——静默放弃。
+  };
+
+  ctx
+    .resume()
+    .then(() => settle(ctx.state === 'running'))
+    .catch(() => settle(false));
 }

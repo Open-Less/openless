@@ -18,6 +18,7 @@ function assert(condition: boolean, message: string) {
 const previousPrefs: UserPreferences = {
   hotkey: { trigger: 'rightOption', mode: 'toggle' },
   dictationHotkey: { primary: 'RightOption', modifiers: [] },
+  showOverviewActivityHeatmap: true,
   defaultMode: 'light',
   enabledModes: ['raw', 'light', 'structured'],
   activeStylePackId: '',
@@ -39,6 +40,10 @@ const previousPrefs: UserPreferences = {
   restoreClipboardAfterPaste: true,
   pasteShortcut: 'ctrlV',
   allowNonTsfInsertionFallback: true,
+  windowsInsertionMode: 'tsf',
+  windowsSendInputNewlineMode: 'enter',
+  windowsSendInputInsertionOnly: false,
+  windowsShowOpenlessInKeyboardList: true,
   workingLanguages: ['简体中文'],
   translationTargetLanguage: '',
   chineseScriptPreference: 'auto',

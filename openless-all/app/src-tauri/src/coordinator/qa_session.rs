@@ -690,6 +690,10 @@ pub(super) async fn begin_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
         return Ok(());
     }
 
+    // QA 无「预备态」语义（不走等麦克风预热的乐观显示），显式清掉 capsule_warming ——
+    // 否则若上一次听写在拿到首帧 PCM 前异常早退、warming 停在 true，这里的 QA 录音胶囊会
+    // 读到陈旧 true 卡在「待命」收拢态（QA 的 level_handler 不翻这个标志）。审核 follow-up。
+    inner.capsule_warming.store(false, Ordering::SeqCst);
     // 显式弹胶囊到 Recording。level_handler 后续会持续推电平，胶囊里"录音中…"
     // 的视觉反馈跟主听写完全一致。
     emit_capsule(inner, CapsuleState::Recording, 0.0, 0, None, None);

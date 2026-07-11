@@ -46,12 +46,6 @@ pub fn qa_window_dismiss(coord: CoordinatorState<'_>) {
     coord.qa_window_dismiss();
 }
 
-/// 用户点 📌 / 取消 📌。pinned=true 时浮窗不会自动隐藏。
-#[tauri::command]
-pub fn qa_window_pin(coord: CoordinatorState<'_>, pinned: bool) {
-    coord.qa_window_pin(pinned);
-}
-
 /// 移动端 QA 面板录音按钮：Idle -> begin_qa_session，Recording -> end_qa_session。
 #[tauri::command]
 pub async fn qa_toggle_recording(coord: CoordinatorState<'_>) -> Result<(), String> {
@@ -71,10 +65,80 @@ pub fn less_computer_window_dismiss(coord: CoordinatorState<'_>) {
     coord.less_computer_window_dismiss();
 }
 
-/// 前端按内容测高后回传高度，后端 clamp + bottom-anchored 重新摆放浮窗。
+/// 聊天面板（qa / less-computer）请求键盘焦点。
+///
+/// 两个浮窗都以「不抢前台」方式显示（macOS orderFrontRegardless，从不 makeKey），
+/// 窗口不是 key window 时按键根本进不了 webview —— 「点了输入框却打不出字」的根因。
+///
+/// macOS：窗口已转「非激活 NSPanel」（make_chat_window_panel_macos），makeKeyAndOrderFront
+/// 只给面板键盘焦点、**不激活 app**（Spotlight 同款）—— 之前用 window.set_focus() 会激活
+/// 整个 app，把主窗口（设置页）一起带到前台，且 frontmost 变成 OpenLess、AX 读不到原 app
+/// 选区。其它平台仍走 set_focus。仅允许两个聊天面板窗口调用（与 less_computer_approve
+/// 同款收紧）。
 #[tauri::command]
-pub fn less_computer_window_resize(coord: CoordinatorState<'_>, height: f64) {
-    coord.less_computer_window_resize(height);
+pub fn chat_panel_focus_keyboard(window: Window) -> Result<(), String> {
+    let label = window.label();
+    if label != "qa" && label != "less-computer" {
+        return Err("chat_panel_focus_keyboard is only available to chat panels".to_string());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use tauri::Manager;
+        let label = label.to_string();
+        let app = window.app_handle().clone();
+        // NSWindow 操作必须在主线程（macOS 26 硬断言）；异常兜底防 AppKit raise 穿透。
+        let _ = window.app_handle().run_on_main_thread(move || {
+            use objc2::msg_send;
+            use objc2::runtime::AnyObject;
+            let Some(w) = app.get_webview_window(&label) else {
+                return;
+            };
+            let Ok(handle) = w.ns_window() else {
+                log::warn!("[chat-panel] ns_window unavailable; focus skipped");
+                return;
+            };
+            let ns = handle as *mut AnyObject;
+            if ns.is_null() {
+                return;
+            }
+            // SAFETY: 闭包内只有一次无返回值的 ObjC 消息发送，无需运行 Rust 析构，
+            // 异常展开跳过闭包帧不破坏内存安全。
+            let result = unsafe {
+                objc2::exception::catch(std::panic::AssertUnwindSafe(|| {
+                    let nil: *mut AnyObject = std::ptr::null_mut();
+                    let _: () = msg_send![ns, makeKeyAndOrderFront: nil];
+                }))
+            };
+            if let Err(e) = result {
+                log::warn!("[chat-panel] makeKeyAndOrderFront raised (caught): {e:?}");
+            }
+        });
+        Ok(())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        window.set_focus().map_err(|e| e.to_string())
+    }
+}
+
+/// 浮窗打字输入：文字指令直接进入 Less Computer 执行链（跳过录音与 ASR）。
+#[tauri::command]
+pub fn less_computer_submit_text(coord: CoordinatorState<'_>, text: String) {
+    coord.less_computer_submit_text(text);
+}
+
+/// 浮窗 mount 时拉取当前会话的事件缓冲（seq 升序）。
+///
+/// 浮窗首次创建时 webview 冷加载，后端事件（尤其第一条 `user` —— 用户说的话）
+/// 先于前端 listener 注册被丢，表现为「AI 在干活但面板上没有我说的话」。前端
+/// mount 后先注册 listener 再调本命令重放积压，按 seq 去重衔接实时流。
+/// 会话内容敏感，仅允许 less-computer 窗口调用（与 less_computer_approve 同款收紧）。
+#[tauri::command]
+pub fn less_computer_sync(window: Window) -> Result<Vec<serde_json::Value>, String> {
+    if window.label() != "less-computer" {
+        return Err("sync can only be requested from the Less Computer window".to_string());
+    }
+    Ok(crate::coordinator::less_computer_event_backlog())
 }
 
 /// 内联审批卡的 Approve / Deny 回执。token 关联到等待中的拦截动作。

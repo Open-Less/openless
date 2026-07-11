@@ -313,11 +313,12 @@ mod macos_impl {
 #[cfg(target_os = "windows")]
 mod windows_impl {
     use super::{TisError, TypeError};
+    use crate::types::WindowsSendInputNewlineMode;
     use std::time::Duration;
     use tauri::{AppHandle, Runtime};
     use windows::Win32::UI::Input::KeyboardAndMouse::{
         SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP,
-        KEYEVENTF_UNICODE, VIRTUAL_KEY,
+        KEYEVENTF_UNICODE, VIRTUAL_KEY, VK_RETURN, VK_SHIFT, VK_TAB,
     };
 
     const SENDINPUT_CHUNK_CHARS: usize = 16;
@@ -326,7 +327,27 @@ mod windows_impl {
     /// Windows / Linux 上没有 input source 概念，token 留空。Send/Sync 自动派生。
     pub struct PreviousInputSource;
 
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct WindowsSendInputOptions {
+        pub newline_mode: WindowsSendInputNewlineMode,
+    }
+
+    impl Default for WindowsSendInputOptions {
+        fn default() -> Self {
+            Self {
+                newline_mode: WindowsSendInputNewlineMode::Enter,
+            }
+        }
+    }
+
     pub fn type_unicode_chunk(text: &str) -> Result<usize, TypeError> {
+        type_unicode_chunk_with_options(text, WindowsSendInputOptions::default())
+    }
+
+    pub fn type_unicode_chunk_with_options(
+        text: &str,
+        options: WindowsSendInputOptions,
+    ) -> Result<usize, TypeError> {
         if text.is_empty() {
             return Ok(0);
         }
@@ -334,17 +355,36 @@ mod windows_impl {
         let mut sent_in_chunk = 0usize;
         let mut chars = text.chars().peekable();
         while let Some(ch) = chars.next() {
-            let mut buf = [0u16; 2];
-            for unit in ch.encode_utf16(&mut buf) {
-                if let Err(e) = send_utf16_unit(*unit, false) {
-                    return Err(partial_or_original(typed_chars, e));
+            // 分类与计数复用 `classify_sendinput_char` / `sendinput_char_is_typed`——与
+            // `expected_sendinput_typed_chars` 同一真相，避免规则漂移导致成功的 SendInput
+            // 被误判为回落。
+            match super::classify_sendinput_char(ch) {
+                super::SendInputCharKind::Skip => continue,
+                super::SendInputCharKind::Newline => {
+                    if let Err(e) = send_newline(options.newline_mode) {
+                        return Err(partial_or_original(typed_chars, e));
+                    }
                 }
-                if let Err(e) = send_utf16_unit(*unit, true) {
-                    return Err(partial_or_original(typed_chars, e));
+                super::SendInputCharKind::Tab => {
+                    if let Err(e) = press_vk(VK_TAB) {
+                        return Err(partial_or_original(typed_chars, e));
+                    }
+                }
+                super::SendInputCharKind::Unicode => {
+                    let mut buf = [0u16; 2];
+                    for unit in ch.encode_utf16(&mut buf) {
+                        if let Err(e) = send_utf16_unit(*unit, false) {
+                            return Err(partial_or_original(typed_chars, e));
+                        }
+                        if let Err(e) = send_utf16_unit(*unit, true) {
+                            return Err(partial_or_original(typed_chars, e));
+                        }
+                    }
                 }
             }
             typed_chars += 1;
             sent_in_chunk += 1;
+
             if sent_in_chunk >= SENDINPUT_CHUNK_CHARS && chars.peek().is_some() {
                 std::thread::sleep(SENDINPUT_CHUNK_DELAY);
                 sent_in_chunk = 0;
@@ -361,6 +401,57 @@ mod windows_impl {
                 typed_chars,
                 source: Box::new(source),
             }
+        }
+    }
+
+    fn send_newline(mode: WindowsSendInputNewlineMode) -> Result<(), TypeError> {
+        match mode {
+            WindowsSendInputNewlineMode::Enter => press_vk(VK_RETURN),
+            WindowsSendInputNewlineMode::ShiftEnter => press_shift_enter(),
+            WindowsSendInputNewlineMode::CrLf => {
+                send_utf16_unit(0x000D, false)?;
+                send_utf16_unit(0x000D, true)?;
+                send_utf16_unit(0x000A, false)?;
+                send_utf16_unit(0x000A, true)
+            }
+        }
+    }
+
+    fn press_shift_enter() -> Result<(), TypeError> {
+        send_vk(VK_SHIFT, false)?;
+        press_vk(VK_RETURN)?;
+        send_vk(VK_SHIFT, true)
+    }
+
+    fn press_vk(vk: VIRTUAL_KEY) -> Result<(), TypeError> {
+        send_vk(vk, false)?;
+        send_vk(vk, true)
+    }
+
+    fn send_vk(vk: VIRTUAL_KEY, key_up: bool) -> Result<(), TypeError> {
+        let mut flags = KEYBD_EVENT_FLAGS(0);
+        if key_up {
+            flags |= KEYEVENTF_KEYUP;
+        }
+        let input = INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: vk,
+                    wScan: 0,
+                    dwFlags: flags,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        };
+        let sent = unsafe { SendInput(&[input], std::mem::size_of::<INPUT>() as i32) };
+        if sent == 1 {
+            Ok(())
+        } else {
+            Err(TypeError::SendInputFailed(
+                std::io::Error::last_os_error().to_string(),
+            ))
         }
     }
 
@@ -406,6 +497,39 @@ mod windows_impl {
     ) -> Result<(), TisError> {
         Ok(())
     }
+}
+
+/// SendInput 单字符分类的唯一真相。`type_unicode_chunk_with_options` 的实际打字路径与
+/// `expected_sendinput_typed_chars`（用于校验实际发出的 typed char 数）都复用它，避免三处
+/// 独立的字符规则手工同步——一旦漏改，一次成功的 SendInput 会被 `map_sendinput_type_result`
+/// 误判成 `CopiedFallback`，在已打字的基础上又把整段复制到剪贴板，用户 Ctrl+V 看到重复。
+#[cfg(target_os = "windows")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SendInputCharKind {
+    /// `\r`：跳过（CRLF 只产生一次换行），不计入 typed char。
+    Skip,
+    /// `\n`：按换行发出（模式由 `WindowsSendInputOptions::newline_mode` 决定）。
+    Newline,
+    /// `\t`：按 Tab 键发出。
+    Tab,
+    /// 其余字符：按 UTF-16 Unicode 事件逐 code unit 发出。
+    Unicode,
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn classify_sendinput_char(ch: char) -> SendInputCharKind {
+    match ch {
+        '\r' => SendInputCharKind::Skip,
+        '\n' => SendInputCharKind::Newline,
+        '\t' => SendInputCharKind::Tab,
+        _ => SendInputCharKind::Unicode,
+    }
+}
+
+/// 该字符是否计入「已发出的 typed char」。`Skip`（`\r`）不计入，其余都计入。
+#[cfg(target_os = "windows")]
+pub(crate) fn sendinput_char_is_typed(kind: SendInputCharKind) -> bool {
+    !matches!(kind, SendInputCharKind::Skip)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -481,6 +605,84 @@ mod tests {
     fn platform_error() -> TypeError {
         TypeError::EnigoText("fail".into())
     }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn expected_sendinput_typed_chars_skips_carriage_return() {
+        assert_eq!(super::expected_sendinput_typed_chars("a\r\nb"), 3);
+        assert_eq!(super::expected_sendinput_typed_chars("hello"), 5);
+        assert_eq!(super::expected_sendinput_typed_chars("\r\r\n"), 1);
+    }
+
+    #[cfg(target_os = "windows")]
+    mod windows_sendinput_char_tests {
+        use super::super::{
+            classify_sendinput_char, expected_sendinput_typed_chars, sendinput_char_is_typed,
+            SendInputCharKind,
+        };
+
+        #[test]
+        fn classify_skips_carriage_return() {
+            assert!(matches!(
+                classify_sendinput_char('\r'),
+                SendInputCharKind::Skip
+            ));
+        }
+
+        #[test]
+        fn classify_newline_and_tab() {
+            assert!(matches!(
+                classify_sendinput_char('\n'),
+                SendInputCharKind::Newline
+            ));
+            assert!(matches!(classify_sendinput_char('\t'), SendInputCharKind::Tab));
+        }
+
+        #[test]
+        fn classify_regular_text_as_unicode() {
+            assert!(matches!(
+                classify_sendinput_char('你'),
+                SendInputCharKind::Unicode
+            ));
+        }
+
+        /// 只有 `Skip`（`\r`）不计入 typed char，其余三类都计入。这是
+        /// `expected_sendinput_typed_chars` 与实际打字循环 `typed_chars += 1` 之间保持一致
+        /// 的核心不变量。
+        #[test]
+        fn only_carriage_return_is_not_counted() {
+            assert!(!sendinput_char_is_typed(SendInputCharKind::Skip));
+            assert!(sendinput_char_is_typed(SendInputCharKind::Newline));
+            assert!(sendinput_char_is_typed(SendInputCharKind::Tab));
+            assert!(sendinput_char_is_typed(SendInputCharKind::Unicode));
+        }
+
+        /// 期望计数必须与「逐字符分类后计入的数量」逐字节一致——即 expected 复用了同一分类
+        /// 真相。若二者用不同规则表达，成功的 SendInput 会被 `map_sendinput_type_result`
+        /// 误判为 `CopiedFallback`（重复粘贴）。
+        #[test]
+        fn expected_count_matches_per_char_classification() {
+            for sample in ["a\r\nb", "hello", "\r\r\n", "行1\n\t行2", ""] {
+                let manual = sample
+                    .chars()
+                    .filter(|ch| sendinput_char_is_typed(classify_sendinput_char(*ch)))
+                    .count();
+                assert_eq!(expected_sendinput_typed_chars(sample), manual, "{sample:?}");
+            }
+        }
+    }
+}
+
+/// Windows SendInput 路径上 `type_unicode_chunk` 计入的 typed char 数。
+/// `\r` 会被跳过（CRLF 只产生一次换行），因此不能与 `text.chars().count()` 直接比较。
+///
+/// 复用 `classify_sendinput_char` / `sendinput_char_is_typed`——与实际打字路径同一真相，
+/// 保证 `map_sendinput_type_result` 的期望值与真正发出的 typed char 数永远一致。
+#[cfg(target_os = "windows")]
+pub fn expected_sendinput_typed_chars(text: &str) -> usize {
+    text.chars()
+        .filter(|ch| sendinput_char_is_typed(classify_sendinput_char(*ch)))
+        .count()
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -495,7 +697,8 @@ pub use macos_impl::{
 #[cfg(target_os = "windows")]
 #[allow(unused_imports)]
 pub use windows_impl::{
-    restore_input_source, switch_to_ascii, type_unicode_chunk, PreviousInputSource,
+    restore_input_source, switch_to_ascii, type_unicode_chunk, type_unicode_chunk_with_options,
+    PreviousInputSource, WindowsSendInputOptions,
 };
 
 #[cfg(target_os = "linux")]

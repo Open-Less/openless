@@ -29,8 +29,6 @@ pub(super) struct QaSessionState {
     pub(super) qa_focus_target: Option<usize>,
     /// 用于忽略迟到的 RMS / runtime error。
     pub(super) session_id: SessionId,
-    /// QA 浮窗是否被用户钉住（pinned）。pinned=true 时不自动隐藏。
-    pub(super) pinned: bool,
     /// 浮窗是否对用户可见。Cmd+Shift+; 边沿 toggle 此 flag；
     /// 主听写 hotkey（rightOption）边沿来时，看这个 flag 决定是走 QA 还是走 dictation。
     /// 详见 issue #118 v2。
@@ -48,7 +46,6 @@ impl Default for QaSessionState {
             front_app: None,
             qa_focus_target: None,
             session_id: initial_session_id(),
-            pinned: false,
             panel_visible: false,
             messages: Vec::new(),
         }
@@ -124,7 +121,6 @@ pub(super) fn close_qa_panel(inner: &Arc<Inner>) {
     {
         let mut state = inner.qa_state.lock();
         state.panel_visible = false;
-        state.pinned = false;
         state.messages.clear();
         state.selection = None;
         state.front_app = None;
@@ -155,7 +151,6 @@ mod tests {
         assert!(st.selection.is_none());
         assert!(st.front_app.is_none());
         assert!(st.qa_focus_target.is_none());
-        assert!(!st.pinned, "新建会话不应处于 pinned");
         assert!(!st.panel_visible, "浮窗默认不可见，等用户 toggle");
         assert!(st.messages.is_empty(), "新建会话历史必须为空");
     }

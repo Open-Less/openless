@@ -19,7 +19,6 @@ import type { PolishMode, StylePack, StylePackExample, StylePackRuntimeDiagnosti
 import { Btn, Card, PageHeader, Pill } from './_atoms';
 import { Icon } from '../components/Icon';
 import { SavedToast, type SaveToastState } from '../components/SavedToast';
-import { MarketplaceModal } from '../components/MarketplaceModal';
 
 type BusyAction =
   | 'loading'
@@ -141,7 +140,6 @@ export function Style() {
   const editorCloseTimer = useRef<number | null>(null);
   const [runtimePreview, setRuntimePreview] = useState<StylePackRuntimeDiagnostics | null>(null);
   const [runtimePreviewError, setRuntimePreviewError] = useState<string | null>(null);
-  const [marketplaceOpen, setMarketplaceOpen] = useState(false);
 
   useEffect(() => () => {
     if (statusTimer.current !== null) window.clearTimeout(statusTimer.current);
@@ -523,10 +521,7 @@ export function Style() {
         desc={t('style.pack.desc')}
         right={(
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end', marginTop: 40 }}>
-            {/* 风格市场入口：放在 刷新 左边（按用户需求）。点击 → 全屏弹框承载 <Marketplace />。*/}
-            <Btn variant="ghost" icon="cloud" onClick={() => setMarketplaceOpen(true)}>
-              {t('style.pack.marketplaceBtn')}
-            </Btn>
+            {/* 风格市场入口已移到侧栏「风格」展开组（用户拍板）；此处不再放按钮。 */}
             <Btn variant="ghost" icon="refresh" onClick={() => void loadPacks(selectedId)} disabled={busy === 'loading'}>
               {t('common.refresh')}
             </Btn>
@@ -540,16 +535,6 @@ export function Style() {
       {/* 控制台卡右上角锚定 —— 与「风格市场 / 刷新 / 导入 ZIP」按钮同区；
           淡蓝 pill 只闪现 0.8s，不长期遮挡按钮。 */}
       <SavedToast saveState={saveState} message={saveMessage} />
-
-      {marketplaceOpen && (
-        <MarketplaceModal
-          onClose={() => {
-            setMarketplaceOpen(false);
-            // 用户可能在 modal 内安装过远端 pack；关闭后刷新本地列表，避免新装的看不到。
-            void loadPacks();
-          }}
-        />
-      )}
 
       <Card padding={0} style={{ overflow: 'hidden', flex: '1 1 0', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
           <div style={{ padding: 18, borderBottom: '0.5px solid var(--ol-line)', flexShrink: 0 }}>
@@ -666,7 +651,7 @@ export function Style() {
                         style={{
                           width: 36, height: 36, borderRadius: 12,
                           display: 'grid', placeItems: 'center',
-                          background: pack.active ? 'rgba(37,99,235,0.12)' : 'rgba(15,23,42,0.05)',
+                          background: pack.active ? 'rgba(37,99,235,0.12)' : 'var(--ol-surface-2)',
                           color: pack.active ? 'var(--ol-blue)' : 'var(--ol-ink-3)',
                           flexShrink: 0,
                         }}
@@ -771,7 +756,7 @@ export function Style() {
                 style={{
                   width: 44, height: 44, borderRadius: 999,
                   display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                  background: 'rgba(15,23,42,0.04)',
+                  background: 'var(--ol-surface-2)',
                   color: 'var(--ol-ink-2)',
                 }}
               >
@@ -798,7 +783,7 @@ export function Style() {
             style={{
               position: 'fixed',
               inset: 0,
-              background: 'rgba(15,17,22,0.32)',
+              background: 'var(--ol-overlay-bg)',
               backdropFilter: 'blur(8px) saturate(140%)',
               WebkitBackdropFilter: 'blur(8px) saturate(140%)',
               zIndex: 40,
@@ -828,7 +813,7 @@ export function Style() {
                 display: 'grid',
                 gridTemplateRows: 'auto minmax(0, 1fr)',
                 overflow: 'hidden',
-                boxShadow: '0 24px 80px rgba(15,23,42,0.22)',
+                boxShadow: 'var(--ol-shadow-xl)',
               }}
             >
               <div style={{ padding: 18, borderBottom: '0.5px solid var(--ol-line)' }}>
@@ -992,7 +977,7 @@ export function Style() {
                     padding={16}
                     style={{
                       background: 'var(--ol-style-subtle-bg)',
-                      border: '0.5px solid rgba(148,163,184,0.24)',
+                      border: '0.5px solid var(--ol-line)',
                     }}
                   >
                     <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginBottom: 12 }}>
@@ -1130,7 +1115,7 @@ export function Style() {
                           <div
                             style={{
                               borderRadius: 14,
-                              border: '0.5px solid rgba(148,163,184,0.22)',
+                              border: '0.5px solid var(--ol-line)',
                               background: 'var(--ol-style-subtle-bg)',
                               padding: 14,
                             }}
@@ -1182,7 +1167,7 @@ function MetaItem({ label, value }: { label: string; value: string }) {
     <div
       style={{
         borderRadius: 12,
-        border: '0.5px solid rgba(148,163,184,0.2)',
+        border: '0.5px solid var(--ol-line)',
         background: 'var(--ol-style-input-bg)',
         padding: '10px 12px',
       }}
@@ -1219,7 +1204,7 @@ function DirectiveRow({
         gap: 12,
         padding: '10px 12px',
         borderRadius: 12,
-        border: '0.5px solid rgba(148,163,184,0.2)',
+        border: '0.5px solid var(--ol-line)',
         background: 'var(--ol-style-input-bg)',
       }}
     >

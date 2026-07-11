@@ -579,7 +579,6 @@ pub(super) fn combo_hotkey_supervisor_loop(inner: Arc<Inner>) {
                     .ok();
                 #[cfg(target_os = "linux")]
                 sync_custom_dictation_to_plugin(&inner);
-                attempts = 0;
                 return;
             }
             Err(e) => {

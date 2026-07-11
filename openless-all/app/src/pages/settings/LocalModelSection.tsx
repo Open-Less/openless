@@ -80,7 +80,7 @@ export function LocalModelSection() {
           style={{
             position: 'fixed',
             inset: 0,
-            background: 'rgba(0, 0, 0, 0.32)',
+            background: 'var(--ol-overlay-bg)',
             backdropFilter: 'blur(8px)',
             WebkitBackdropFilter: 'blur(8px)',
             display: 'flex',

@@ -2,6 +2,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
 
 const appRoot = fileURLToPath(new URL(".", import.meta.url));
 
@@ -11,7 +12,9 @@ const isMobileDev =
   process.env.TAURI_ENV_PLATFORM === "ios";
 
 export default defineConfig(async () => ({
-  plugins: [react()],
+  // tailwindcss：只服务统一聊天面板的官方 shadcn 组件（components/chat/chat.css
+  // 入口，source 显式圈定 chat/ 与两个面板文件）；其余全局样式不走 tailwind。
+  plugins: [react(), tailwindcss()],
   resolve: {
     alias: {
       "@android": path.resolve(appRoot, "android/frontend"),

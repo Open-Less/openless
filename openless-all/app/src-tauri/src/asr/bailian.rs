@@ -62,6 +62,16 @@ impl BailianCredentials {
     }
 }
 
+/// Bailian 实时 ASR 走 DashScope WebSocket 网关，接口地址只接受 ws:// 或
+/// wss://。用户容易把百炼控制台的 `https://` 兼容模式 / 专属域名地址粘进来
+/// ——那是另一套 HTTP 协议，WebSocket 握手必然失败且底层报错
+/// （"URL scheme not supported"）对用户不可读。在验证入口先拦下，
+/// 前端据 `bailianEndpointSchemeInvalid` 错误码给出可操作的提示。
+pub fn endpoint_scheme_is_websocket(endpoint: &str) -> bool {
+    let lower = endpoint.trim().to_ascii_lowercase();
+    lower.starts_with("wss://") || lower.starts_with("ws://")
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum BailianASRError {
     #[error("credentials missing")]
@@ -879,6 +889,23 @@ mod tests {
     }
 
     // ---- existing tests kept ----
+
+    #[test]
+    fn endpoint_scheme_accepts_websocket_only() {
+        assert!(endpoint_scheme_is_websocket(DEFAULT_ENDPOINT));
+        assert!(endpoint_scheme_is_websocket("ws://localhost:9000/api-ws"));
+        assert!(endpoint_scheme_is_websocket(
+            "  WSS://dashscope.aliyuncs.com/api-ws/v1/inference/  "
+        ));
+        // 百炼控制台的 https 兼容模式 / 专属域名地址不是 WebSocket 网关
+        assert!(!endpoint_scheme_is_websocket(
+            "https://llm-xxx.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
+        ));
+        assert!(!endpoint_scheme_is_websocket(
+            "http://dashscope.aliyuncs.com/api-ws/v1/inference/"
+        ));
+        assert!(!endpoint_scheme_is_websocket(""));
+    }
 
     #[test]
     fn credentials_apply_default_endpoint_and_model() {

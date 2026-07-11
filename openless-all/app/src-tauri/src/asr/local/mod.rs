@@ -38,7 +38,7 @@ mod qwen_ffi;
 
 #[cfg(target_os = "macos")]
 #[allow(unused_imports)]
-pub use apple_speech_provider::AppleSpeechAsr;
+pub use apple_speech_provider::{native_name_to_apple_locale, AppleSpeechAsr};
 #[cfg(target_os = "macos")]
 pub use local_provider::LocalQwenAsr;
 #[cfg(target_os = "macos")]

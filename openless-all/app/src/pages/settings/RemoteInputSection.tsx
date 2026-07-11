@@ -249,7 +249,7 @@ export function RemoteInputSection() {
       )}
 
       {enabled && startError != null && (
-        <div style={{ fontSize: 12, color: '#d9534f', marginTop: 8 }}>
+        <div style={{ fontSize: 12, color: 'var(--ol-red, #ef4444)', marginTop: 8 }}>
           {startError.reason === 'port-in-use'
             ? t('settings.remoteInput.portInUse', { port: startError.port })
             : t('settings.remoteInput.startError', { reason: startError.reason })}

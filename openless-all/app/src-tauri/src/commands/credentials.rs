@@ -1,5 +1,7 @@
 use super::*;
 
+const LLM_EXTRA_HEADERS_ACCOUNT: &str = "ark.extra_headers";
+
 #[tauri::command]
 pub fn get_credentials() -> CredentialsStatus {
     let snap = CredentialsVault::snapshot();
@@ -153,6 +155,11 @@ pub(crate) async fn release_sherpa_runtime_if_inactive(
 #[tauri::command]
 pub fn set_credential(window: Window, account: String, value: String) -> Result<(), String> {
     ensure_main_window(&window)?;
+    if account == LLM_EXTRA_HEADERS_ACCOUNT {
+        CredentialsVault::set_active_llm_extra_headers_json(&value).map_err(|e| e.to_string())?;
+        let _ = window.emit("credentials:changed", ());
+        return Ok(());
+    }
     let acc = parse_account(&account)?;
     if value.is_empty() {
         CredentialsVault::remove(acc).map_err(|e| e.to_string())?;
@@ -236,6 +243,9 @@ pub fn set_active_llm_provider(provider: String) -> Result<(), String> {
 #[tauri::command]
 pub fn read_credential(window: Window, account: String) -> Result<Option<String>, String> {
     ensure_main_window(&window)?;
+    if account == LLM_EXTRA_HEADERS_ACCOUNT {
+        return CredentialsVault::get_active_llm_extra_headers_json().map_err(|e| e.to_string());
+    }
     let acc = parse_account(&account)?;
     CredentialsVault::get(acc).map_err(|e| e.to_string())
 }

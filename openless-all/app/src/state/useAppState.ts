@@ -7,6 +7,7 @@ export type AppTab =
   | 'history'
   | 'vocab'
   | 'style'
+  | 'marketplace'
   | 'translation'
   | 'selectionAsk'
   | 'localAsr';

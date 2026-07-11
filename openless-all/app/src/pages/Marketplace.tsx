@@ -16,6 +16,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../components/Icon';
 import { SavedToast } from '../components/SavedToast';
+import { ThinkingDots } from '../components/ThinkingDots';
 import { GithubLoginModal } from '../components/GithubLoginModal';
 import { Modal } from '../components/ui/Modal';
 import {
@@ -436,7 +437,7 @@ export function Marketplace() {
               <span style={{
                 width: 18, height: 18, borderRadius: 999,
                 display: 'inline-grid', placeItems: 'center',
-                background: 'rgba(15,23,42,0.06)',
+                background: 'var(--ol-surface-2)',
                 fontSize: 10, fontWeight: 750,
               }}>
                 {(currentLogin || '?').slice(0, 1).toUpperCase()}
@@ -529,10 +530,21 @@ export function Marketplace() {
       )}
 
       {/* 卡片列表 / 我的发布 */}
-      <div style={{ flex: 1, overflow: 'auto' }} className="ol-thinscroll">
+      <div style={{ flex: 1, overflow: 'auto' }} className="ol-thinscroll ol-scroll-fade">
         {loading && items.length === 0 ? (
           // 只在没有缓存数据时才显示 loading；有缓存就直接渲染缓存数据，后台 refresh 校准
-          <div style={{ padding: 32, textAlign: 'center', color: 'var(--ol-ink-4)', fontSize: 13 }}>
+          <div
+            style={{
+              padding: 32,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 10,
+              color: 'var(--ol-ink-4)',
+              fontSize: 13,
+            }}
+          >
+            <ThinkingDots size={18} />
             {t('common.loading')}
           </div>
         ) : visibleItems.length === 0 ? (
@@ -608,7 +620,18 @@ export function Marketplace() {
       {selectedId && (
         <Modal onClose={() => setSelectedId(null)}>
           {detailLoading || !detail ? (
-            <div style={{ padding: 32, textAlign: 'center', color: 'var(--ol-ink-4)', fontSize: 13 }}>
+            <div
+              style={{
+                padding: 32,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 10,
+                color: 'var(--ol-ink-4)',
+                fontSize: 13,
+              }}
+            >
+              <ThinkingDots size={18} />
               {t('common.loading')}
             </div>
           ) : (
@@ -853,7 +876,7 @@ export function Marketplace() {
               <span style={{
                 width: 18, height: 18, borderRadius: 999,
                 display: 'inline-grid', placeItems: 'center',
-                background: currentLogin ? 'rgba(37,99,235,0.14)' : 'rgba(15,23,42,0.06)',
+                background: currentLogin ? 'rgba(37,99,235,0.14)' : 'var(--ol-surface-2)',
                 fontSize: 10, fontWeight: 750,
               }}>
                 {(currentLogin || '?').slice(0, 1).toUpperCase()}

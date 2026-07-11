@@ -6,6 +6,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ShortcutRecorder } from '../../components/ShortcutRecorder';
 import { playRecordStartCue } from '../../lib/audioCue';
+import { emitSaved } from '../../lib/savedEvent';
 import { isHotkeyModeMigrationNoticeActive } from '../../lib/hotkeyMigration';
 import {
   isTauri,
@@ -13,7 +14,15 @@ import {
   setDictationHotkey,
 } from '../../lib/ipc';
 import { getPlatformCapabilities } from '../../lib/platform';
-import type { HotkeyMode, MicrophoneDevice, PasteShortcut, PlatformCapabilities } from '../../lib/types';
+import type {
+  HotkeyMode,
+  MicrophoneDevice,
+  PasteShortcut,
+  PlatformCapabilities,
+  UserPreferences,
+  WindowsInsertionMode,
+  WindowsSendInputNewlineMode,
+} from '../../lib/types';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
 import { SelectLite } from '../../components/ui/SelectLite';
 import { Card, Collapsible } from '../_atoms';
@@ -39,7 +48,7 @@ async function autostartDisable(): Promise<void> {
 export function RecordingInputSection() {
   const { t } = useTranslation();
   const os = detectOS();
-  const { prefs, capability, updatePrefs: savePrefs } = useHotkeySettings();
+  const { prefs, capability, updatePrefs: savePrefs, refresh } = useHotkeySettings();
   const [platformCaps, setPlatformCaps] = useState<PlatformCapabilities | null>(null);
   const [microphoneDevices, setMicrophoneDevices] = useState<MicrophoneDevice[]>([]);
   const [microphoneDevicesLoaded, setMicrophoneDevicesLoaded] = useState(false);
@@ -102,6 +111,16 @@ export function RecordingInputSection() {
     };
   }, [loadMicrophoneDevices]);
 
+  const saveKeyboardListAffectingPrefs = useCallback(async (nextPrefs: UserPreferences) => {
+    try {
+      await savePrefs(nextPrefs);
+    } catch (error) {
+      console.error('[settings] keyboard list visibility pref save failed', error);
+      emitSaved('failed', t('settings.recording.windowsShowOpenlessInKeyboardListError'));
+      await refresh();
+    }
+  }, [savePrefs, refresh, t]);
+
   if (!prefs || !capability) {
     return (
       <Card>
@@ -131,6 +150,17 @@ export function RecordingInputSection() {
     savePrefs({ ...prefs, pasteShortcut });
   const onAllowNonTsfFallbackChange = (allowNonTsfInsertionFallback: boolean) =>
     savePrefs({ ...prefs, allowNonTsfInsertionFallback });
+  const onWindowsInsertionModeChange = (windowsInsertionMode: WindowsInsertionMode) =>
+    void saveKeyboardListAffectingPrefs({
+      ...prefs,
+      windowsInsertionMode,
+      windowsSendInputInsertionOnly: windowsInsertionMode === 'sendInput',
+    });
+  const onWindowsSendInputNewlineModeChange = (windowsSendInputNewlineMode: WindowsSendInputNewlineMode) =>
+    savePrefs({ ...prefs, windowsSendInputNewlineMode });
+  const onWindowsShowOpenlessInKeyboardListChange = (
+    windowsShowOpenlessInKeyboardList: boolean,
+  ) => void saveKeyboardListAffectingPrefs({ ...prefs, windowsShowOpenlessInKeyboardList });
   const onStartMinimizedChange = (startMinimized: boolean) =>
     savePrefs({ ...prefs, startMinimized });
   const onAutoUpdateCheckChange = (autoUpdateCheck: boolean) =>
@@ -289,6 +319,55 @@ export function RecordingInputSection() {
               ]}
               ariaLabel={t('settings.recording.pasteShortcutLabel')}
               style={{ ...inputStyle, maxWidth: 220 }}
+            />
+          </SettingRow>
+        )}
+        {capability.adapter === 'windowsLowLevel' && (
+          <SettingRow
+            label={t('settings.recording.windowsInsertionModeLabel')}
+            desc={t('settings.recording.windowsInsertionModeDesc')}
+          >
+            <SelectLite
+              value={prefs.windowsInsertionMode ?? (prefs.windowsSendInputInsertionOnly ? 'sendInput' : 'tsf')}
+              onChange={next => onWindowsInsertionModeChange(next as WindowsInsertionMode)}
+              options={[
+                { value: 'tsf', label: t('settings.recording.windowsInsertionModeTsf') },
+                { value: 'sendInput', label: t('settings.recording.windowsInsertionModeSendInput') },
+                { value: 'paste', label: t('settings.recording.windowsInsertionModePaste') },
+              ]}
+              ariaLabel={t('settings.recording.windowsInsertionModeLabel')}
+              style={{ ...inputStyle, maxWidth: 260 }}
+            />
+          </SettingRow>
+        )}
+        {capability.adapter === 'windowsLowLevel'
+          && (prefs.windowsInsertionMode === 'sendInput' || prefs.windowsSendInputInsertionOnly) && (
+          <SettingRow
+            label={t('settings.recording.windowsSendInputNewlineModeLabel')}
+            desc={t('settings.recording.windowsSendInputNewlineModeDesc')}
+          >
+            <SelectLite
+              value={prefs.windowsSendInputNewlineMode ?? 'enter'}
+              onChange={next => onWindowsSendInputNewlineModeChange(next as WindowsSendInputNewlineMode)}
+              options={[
+                { value: 'enter', label: t('settings.recording.windowsSendInputNewlineModeEnter') },
+                { value: 'shiftEnter', label: t('settings.recording.windowsSendInputNewlineModeShiftEnter') },
+                { value: 'crlf', label: t('settings.recording.windowsSendInputNewlineModeCrLf') },
+              ]}
+              ariaLabel={t('settings.recording.windowsSendInputNewlineModeLabel')}
+              style={{ ...inputStyle, maxWidth: 260 }}
+            />
+          </SettingRow>
+        )}
+        {capability.adapter === 'windowsLowLevel'
+          && (prefs.windowsInsertionMode === 'sendInput' || prefs.windowsSendInputInsertionOnly) && (
+          <SettingRow
+            label={t('settings.recording.windowsShowOpenlessInKeyboardListLabel')}
+            desc={t('settings.recording.windowsShowOpenlessInKeyboardListDesc')}
+          >
+            <Toggle
+              on={prefs.windowsShowOpenlessInKeyboardList}
+              onToggle={(next) => void onWindowsShowOpenlessInKeyboardListChange(next)}
             />
           </SettingRow>
         )}

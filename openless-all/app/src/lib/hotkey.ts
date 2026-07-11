@@ -217,7 +217,10 @@ export function shortcutFromLegacyTrigger(trigger: HotkeyTrigger): ShortcutBindi
 }
 
 /** 把 ComboBinding 或 QaHotkeyBinding 格式化为可读标签，如 "⌘⇧D" / "Ctrl+Shift+D"。 */
-export function formatComboLabel(binding: ComboBinding | QaHotkeyBinding | ShortcutBinding): string {
+/** 组合键的逐键显示段（修饰键按固定顺序 + 主键），供键帽（Kbd）逐键渲染。 */
+export function formatComboParts(
+  binding: ComboBinding | QaHotkeyBinding | ShortcutBinding,
+): string[] {
   const parts: string[] = [];
   const platform = currentPlatform();
 
@@ -234,7 +237,11 @@ export function formatComboLabel(binding: ComboBinding | QaHotkeyBinding | Short
   }
 
   parts.push(formatPrimary(binding.primary));
-  return parts.join(platform.isMac ? '' : '+');
+  return parts;
+}
+
+export function formatComboLabel(binding: ComboBinding | QaHotkeyBinding | ShortcutBinding): string {
+  return formatComboParts(binding).join(currentPlatform().isMac ? '' : '+');
 }
 
 export function currentPlatform(): { isMac: boolean; isWindows: boolean } {

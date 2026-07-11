@@ -299,8 +299,16 @@ pub(super) async fn build_local_qwen3(
 }
 
 #[cfg(target_os = "macos")]
-pub(super) fn build_apple_speech() -> Arc<crate::asr::local::AppleSpeechAsr> {
-    Arc::new(crate::asr::local::AppleSpeechAsr::new())
+pub(super) fn build_apple_speech(
+    prefs: &crate::types::UserPreferences,
+) -> Arc<crate::asr::local::AppleSpeechAsr> {
+    // Apple 识别 locale 跟随用户工作语言主语言 —— 不显式指定 SFSpeechRecognizer 就落到
+    // 系统首选语言（常是英文），中文语音会被识别成英文且理解错误。未收录语言回退默认。
+    let locale = prefs
+        .working_languages
+        .first()
+        .and_then(|name| crate::asr::local::native_name_to_apple_locale(name));
+    Arc::new(crate::asr::local::AppleSpeechAsr::new(locale))
 }
 
 /// `whisper` 是 OpenAI 原生；`siliconflow` / `zhipu` / `groq` 都暴露
@@ -496,7 +504,7 @@ pub(super) async fn build_qa_asr_start(inner: &Arc<Inner>, active_asr: &str) -> 
 
     #[cfg(target_os = "macos")]
     if crate::asr::local::is_apple_speech(active_asr) {
-        let local = build_apple_speech();
+        let local = build_apple_speech(&inner.prefs.get());
         let active = ActiveAsr::AppleSpeech(Arc::clone(&local));
         let consumer: Arc<dyn crate::recorder::AudioConsumer> = local;
         return Ok(QaAsrStart::Ready { active, consumer });

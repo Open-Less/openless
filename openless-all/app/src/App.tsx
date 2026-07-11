@@ -33,12 +33,18 @@ const Onboarding = lazy(() =>
   import('./components/Onboarding').then(m => ({ default: m.Onboarding })),
 );
 const QaPanel = lazy(() => import('./pages/QaPanel').then(m => ({ default: m.QaPanel })));
-const LessComputerPanel = lazy(() =>
-  import('./pages/LessComputerPanel').then(m => ({ default: m.LessComputerPanel })),
-);
-const LessComputerGlow = lazy(() =>
-  import('./pages/LessComputerGlow').then(m => ({ default: m.LessComputerGlow })),
-);
+// Less Computer 仅 macOS 开放（后端只在 macOS 注册热键/创建窗口）。Tauri 构建时
+// TAURI_ENV_PLATFORM 是编译期字面量：非 macOS 平台下面两个三元的 import() 分支
+// 被常量折叠 + DCE 整个裁掉，面板 chunk 不进打包产物（门控 = 不打包）。
+// 纯浏览器 vite 环境（预览/调样式）没有该变量 → 保持可加载。
+const TAURI_BUILD_PLATFORM: string | undefined = import.meta.env.TAURI_ENV_PLATFORM;
+const LESS_COMPUTER_BUNDLED = !TAURI_BUILD_PLATFORM || TAURI_BUILD_PLATFORM === 'darwin';
+const LessComputerPanel = LESS_COMPUTER_BUNDLED
+  ? lazy(() => import('./pages/LessComputerPanel').then(m => ({ default: m.LessComputerPanel })))
+  : null;
+const LessComputerGlow = LESS_COMPUTER_BUNDLED
+  ? lazy(() => import('./pages/LessComputerGlow').then(m => ({ default: m.LessComputerGlow })))
+  : null;
 
 interface AppProps {
   isCapsule: boolean;
@@ -53,7 +59,7 @@ const ANDROID_SETUP_WIZARD_COMPLETE_KEY = 'openless.androidSetupWizardComplete';
 
 export function App({ isCapsule, isQa, isLessComputer, isLessComputerGlow, forcedOs }: AppProps) {
   if (isCapsule) {
-    return <Capsule />;
+    return <Capsule os={forcedOs} />;
   }
   if (isQa) {
     return (
@@ -63,18 +69,18 @@ export function App({ isCapsule, isQa, isLessComputer, isLessComputerGlow, force
     );
   }
   if (isLessComputer) {
-    return (
+    return LessComputerPanel ? (
       <Suspense fallback={null}>
         <LessComputerPanel />
       </Suspense>
-    );
+    ) : null;
   }
   if (isLessComputerGlow) {
-    return (
+    return LessComputerGlow ? (
       <Suspense fallback={null}>
         <LessComputerGlow />
       </Suspense>
-    );
+    ) : null;
   }
 
   const os = forcedOs ?? detectOS();

@@ -2,7 +2,9 @@
 //
 // 重构（2026-05）：原本是「外层弹窗侧栏 + 设置页内层侧栏」双层嵌套，用户点
 // 「设置」还要再面对第二个侧栏。现在拍平成单层 —— 通用 / 服务 / 隐私 / 高级 /
-// 个性化 / 关于 六个 tab + 帮助外链组。每个 tab 的内容见 pages/settings/。
+// 关于 五个 tab + 帮助外链组。每个 tab 的内容见 pages/settings/tabs.tsx，
+// 分组原则：按「用户带着什么问题来」归类 —— 怎么录（通用）/ 识别润色由谁提供
+// （服务，含本地模型）/ 数据去哪了（隐私）/ 实验功能（高级）/ 版本与更新（关于）。
 //
 // 设计原则：每个可见控件都必须可用。
 
@@ -14,8 +16,7 @@ import { useSavedToastListener } from '../lib/savedEvent';
 import { openExternal } from '../lib/ipc';
 import { useMobileLayout } from '../lib/useMobileLayout';
 import type { OS } from './WindowChrome';
-import { GeneralTab, ServicesTab, PrivacyTab, AdvancedTab } from '../pages/settings/tabs';
-import { AboutSection } from '../pages/settings/AboutSection';
+import { AboutTab, GeneralTab, ServicesTab, PrivacyTab, AdvancedTab } from '../pages/settings/tabs';
 import { chipSelectedStyle } from '../pages/settings/shared';
 
 // 稳定 tab ID（与 i18n key `modal.sections.*` 一致）。
@@ -81,9 +82,8 @@ export function SettingsModal({ os: _os, onClose, initialSettingsSection }: Sett
       style={{
         position: mobile ? 'fixed' : 'absolute',
         inset: 0,
+        // 白/实底哲学：遮罩只做半透明压暗（overlay token），不再叠 backdrop-filter 玻璃模糊。
         background: mobile ? 'var(--ol-surface)' : 'var(--ol-overlay-bg)',
-        backdropFilter: mobile ? 'none' : 'blur(8px) saturate(140%)',
-        WebkitBackdropFilter: mobile ? 'none' : 'blur(8px) saturate(140%)',
         display: 'flex',
         alignItems: mobile ? 'stretch' : 'center',
         justifyContent: mobile ? 'stretch' : 'center',
@@ -231,7 +231,8 @@ export function SettingsModal({ os: _os, onClose, initialSettingsSection }: Sett
               cursor: 'default',
               transition: 'background 0.16s var(--ol-motion-quick)',
             }}
-            onMouseEnter={e => (e.currentTarget.style.background = 'var(--ol-settings-close-hover-bg)')}
+            // hover 底色适配白/实底内容区：旧 token 是白玻璃 rgba（白底上不可见），改用 surface-2。
+            onMouseEnter={e => (e.currentTarget.style.background = 'var(--ol-surface-2)')}
             onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
             title={t('common.close')}>
             <Icon name="close" size={14} />
@@ -245,7 +246,7 @@ export function SettingsModal({ os: _os, onClose, initialSettingsSection }: Sett
           )}
 
           <div
-            className="ol-thinscroll"
+            className="ol-thinscroll ol-scroll-fade"
             style={{
               flex: 1,
               minHeight: 0,
@@ -260,7 +261,7 @@ export function SettingsModal({ os: _os, onClose, initialSettingsSection }: Sett
               {section === 'services' && <ServicesTab />}
               {section === 'privacy' && <PrivacyTab />}
               {section === 'advanced' && <AdvancedTab />}
-              {section === 'about' && <AboutSection />}
+              {section === 'about' && <AboutTab />}
             </div>
             {mobile && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 20, paddingTop: 16, borderTop: '0.5px solid var(--ol-line-soft)' }}>

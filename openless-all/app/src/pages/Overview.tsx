@@ -4,9 +4,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../components/Icon';
 import { formatComboLabel } from '../lib/hotkey';
-import { getCredentials, listHistory } from '../lib/ipc';
+import { getActivityStats, getCredentials, listHistory } from '../lib/ipc';
+import { Heatmap } from '../components/Heatmap';
 import { useMobileLayout } from '../lib/useMobileLayout';
-import type { CredentialsStatus, DictationSession, PolishMode } from '../lib/types';
+import type { ActivityDay, CredentialsStatus, DictationSession, PolishMode } from '../lib/types';
 import { useHotkeySettings } from '../state/HotkeySettingsContext';
 import { Btn, Card, PageHeader, Pill } from './_atoms';
 
@@ -77,6 +78,17 @@ export function Overview({ onOpenHistory }: OverviewProps) {
       .catch(error => {
         console.error('[overview] failed to load history', error);
         setHistoryError(true);
+      });
+  }, []);
+
+  // 年度活动热力图数据（独立于历史内容存储，清空历史不影响）。加载失败仅隐藏卡片。
+  const [activity, setActivity] = useState<ActivityDay[] | null>(null);
+  useEffect(() => {
+    getActivityStats()
+      .then(setActivity)
+      .catch(error => {
+        console.error('[overview] failed to load activity stats', error);
+        setActivity(null);
       });
   }, []);
 
@@ -196,6 +208,13 @@ export function Overview({ onOpenHistory }: OverviewProps) {
         <Metric icon="bolt" label={t('overview.metricTotal')} value={historyError ? '—' : String(history.length)} trend={historyError ? t('overview.historyLoadError') : t('overview.metricTotalTrend')} accent />
       </div>
 
+      {/* 年度活动热力图（8starlabs Heatmap 规格）：过去一年每日听写次数。
+          数据来自独立的 activity 计数存储，与历史保留策略解耦；
+          可在设置 → 通用 → 外观 里单独关闭。 */}
+      {prefs?.showOverviewActivityHeatmap !== false && activity && activity.length > 0 && (
+        <ActivityHeatmapCard activity={activity} />
+      )}
+
       {/* 底部一行 = flex:1 撑满剩余高度（父 wrapper 是 display:flex/column）。
           只有「最近识别」内部允许滚动；其他卡片按内容自然高度，不破裂底部圆角。
           issue #243 follow-up：去掉外层 overflow 后底部圆角被裁的视觉问题。 */}
@@ -291,6 +310,51 @@ function ProviderCard({ kind, name, subname, status }: ProviderCardProps) {
           {status === 'error' ? t('overview.credentialsLoadError') : subname}
         </div>
       </div>
+    </Card>
+  );
+}
+
+/** 年度活动热力图卡：过去 365 天每日听写次数。月份/星期/日期标签用 Intl 按当前语言生成。 */
+function ActivityHeatmapCard({ activity }: { activity: ActivityDay[] }) {
+  const { t, i18n } = useTranslation();
+  const { endDate, startDate, data, labels } = useMemo(() => {
+    const end = new Date();
+    const start = new Date(end);
+    start.setDate(end.getDate() - 364);
+    const lang = i18n.language || 'en';
+    const monthFormat = new Intl.DateTimeFormat(lang, { month: 'short' });
+    const dayFormat = new Intl.DateTimeFormat(lang, { weekday: 'short' });
+    const dateFormat = new Intl.DateTimeFormat(lang, { dateStyle: 'medium' });
+    const anchor = new Date(2026, 0, 4); // 周日
+    return {
+      endDate: end,
+      startDate: start,
+      data: activity.map(day => ({ date: day.date, value: day.count })),
+      labels: {
+        months: Array.from({ length: 12 }, (_, m) => monthFormat.format(new Date(2026, m, 1))),
+        days: Array.from({ length: 7 }, (_, d) => {
+          const date = new Date(anchor);
+          date.setDate(anchor.getDate() + d);
+          return dayFormat.format(date);
+        }),
+        date: (date: Date) => dateFormat.format(date),
+      },
+    };
+  }, [activity, i18n.language]);
+  return (
+    <Card padding={18} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--ol-ink-2)' }}>
+        {t('overview.activityTitle')}
+      </span>
+      <Heatmap
+        data={data}
+        startDate={startDate}
+        endDate={endDate}
+        monthLabels={labels.months}
+        dayLabels={labels.days}
+        dateDisplay={labels.date}
+        valueDisplay={count => t('overview.activityCount', { count })}
+      />
     </Card>
   );
 }

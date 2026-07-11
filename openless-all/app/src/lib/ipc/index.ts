@@ -37,6 +37,7 @@ export {
     listHistory,
     deleteHistoryEntry,
     clearHistory,
+    getActivityStats,
     readAudioRecording,
     retranscribeRecording,
 } from "./history"
@@ -122,7 +123,6 @@ export {
     getQaHotkeyLabel,
     setQaHotkey,
     qaWindowDismiss,
-    qaWindowPin,
     qaToggleRecording,
     qaSubmitText,
 } from "./qa"
@@ -131,8 +131,12 @@ export {
 export {
     lessComputerWindowDismiss,
     lessComputerApprove,
-    lessComputerWindowResize,
+    lessComputerSubmitText,
+    lessComputerSync,
 } from "./less-computer"
+
+// chat-panel（QA / Less Computer 共用）
+export { chatPanelFocusKeyboard } from "./chat-panel"
 
 // updater
 export type { LatestBetaRelease, AppUpdateMetadata } from "./updater"
@@ -158,11 +162,9 @@ export type {
     CodingAgentPermissionMode,
     McpHealth,
     CodingAgentEvent,
-} from "./coding-agent"
-export type {
+    OpenCodeDetection,
     McpServerStatus,
     ClaudeDetection,
-    OpenCodeDetection,
     CodingAgentRunTestArgs,
 } from "./coding-agent"
 export {

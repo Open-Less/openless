@@ -48,6 +48,7 @@ export function History() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [justCopied, setJustCopied] = useState(false);
+  const [justCopiedRaw, setJustCopiedRaw] = useState(false);
   // 「重新转录」进行中：禁用按钮 + 显示「转录中…」，避免重复点击发起多次 ASR。
   const [retranscribing, setRetranscribing] = useState(false);
   // 录音文件 lazily-detected missing 状态：retention / 条数 cap 清理后磁盘上 wav
@@ -160,12 +161,31 @@ export function History() {
       if (!navigator.clipboard?.writeText) {
         throw new Error('clipboard unavailable');
       }
-      await navigator.clipboard.writeText(item.finalText);
+      // 润色失败/未产出时 finalText 为空，回退到原文，避免「复制」按钮复制空字符串
+      // 导致原文无法从 UI 取回（polish 失败时仍能拿到识别原文）。
+      await navigator.clipboard.writeText(item.finalText.trim() ? item.finalText : item.rawTranscript);
       setActionError(null);
       setJustCopied(true);
       window.setTimeout(() => setJustCopied(false), 1500);
     } catch (error) {
       console.error('[history] failed to copy entry', error);
+      setActionError(t('history.copyFailed', { err: errorMessage(error) }));
+    }
+  };
+
+  // 原文（识别结果）单独复制：润色失败或用户只想要未润色文本时使用。
+  const onCopyRaw = async () => {
+    if (!item) return;
+    try {
+      if (!navigator.clipboard?.writeText) {
+        throw new Error('clipboard unavailable');
+      }
+      await navigator.clipboard.writeText(item.rawTranscript);
+      setActionError(null);
+      setJustCopiedRaw(true);
+      window.setTimeout(() => setJustCopiedRaw(false), 1500);
+    } catch (error) {
+      console.error('[history] failed to copy raw transcript', error);
       setActionError(t('history.copyFailed', { err: errorMessage(error) }));
     }
   };
@@ -377,7 +397,14 @@ export function History() {
               )}
               <div style={{ display: 'grid', gridTemplateColumns: mobile ? '1fr' : '1fr 1fr', gap: 12 }}>
                 <div style={{ padding: 14, border: '0.5px solid var(--ol-line)', borderRadius: 10, background: 'var(--ol-surface-2)' }}>
-                  <Pill size="sm" tone="outline" style={{ marginBottom: 10 }}>{t('history.rawLabel')}</Pill>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 10 }}>
+                    <Pill size="sm" tone="outline">{t('history.rawLabel')}</Pill>
+                    {item.rawTranscript && (
+                      <Btn icon={justCopiedRaw ? 'check' : 'copy'} variant="ghost" size="sm" onClick={() => void onCopyRaw()}>
+                        {justCopiedRaw ? t('common.copied') : t('common.copy')}
+                      </Btn>
+                    )}
+                  </div>
                   <p style={{ margin: 0, fontSize: 13, lineHeight: 1.7, color: 'var(--ol-ink-2)', whiteSpace: 'pre-wrap' }}>
                     {item.rawTranscript || t('history.rawEmpty')}
                   </p>

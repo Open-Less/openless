@@ -23,36 +23,32 @@ export interface CapsuleMessageLayout {
   lineClamp: number;
 }
 
-export function getCapsulePillMetrics(os: OS): CapsulePillMetrics {
-  if (os === 'win') {
-    // Windows metrics 必须与 src-tauri/src/lib.rs 的原生命中框合同保持一致。
-    return { width: 196, height: 52, textWidth: 104, boxSizing: 'border-box' };
-  }
+// 纯光效舞台按 siri-glsl demo 的原始比例呈现：光条横贯 ~420px（demo 画布宽），
+// 舞台 460×180 给发光扩散留余量。与 src-tauri/src/lib.rs 的 capsule_window_bounds /
+// capsule_visual_height 保持一致。
+const VOICE_ORB_STAGE_WIDTH = 460;
+const VOICE_ORB_STAGE_HEIGHT = 180;
+const VOICE_ORB_TEXT_WIDTH = 400;
 
-  return { width: 176, height: 42, textWidth: 84, boxSizing: 'border-box' };
+export function getCapsulePillMetrics(os: OS): CapsulePillMetrics {
+  void os;
+  return {
+    width: VOICE_ORB_STAGE_WIDTH,
+    height: VOICE_ORB_STAGE_HEIGHT,
+    textWidth: VOICE_ORB_TEXT_WIDTH,
+    boxSizing: 'border-box',
+  };
 }
 
-// macOS 走 1.2.11 calc 布局，不依赖 host metrics；Windows 端要更大的 host
-// 装下阴影 inset，仍用这一份。
 export function getCapsuleHostMetrics(
   os: OS,
   translationActive: boolean,
 ): CapsuleHostMetrics {
-  if (os === 'win') {
-    const horizontalInset = 12;
-    const pill = getCapsulePillMetrics(os);
-    return {
-      width: pill.width + horizontalInset * 2,
-      height: translationActive ? 118 : 84,
-      horizontalInset,
-      bottomInset: 12,
-      badgeGap: 8,
-      boxSizing: 'border-box',
-    };
-  }
+  const stage = getCapsulePillMetrics(os);
+  void translationActive;
   return {
-    width: 176,
-    height: 42,
+    width: stage.width,
+    height: stage.height,
     horizontalInset: 0,
     bottomInset: 0,
     badgeGap: 8,

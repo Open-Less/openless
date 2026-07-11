@@ -1,4 +1,5 @@
 import { invokeOrMock } from "./shared"
+import type { LessComputerEvent } from "../types"
 
 /** 用户点 ✕ / 按 Esc 关闭 Less Computer 浮窗（隐藏窗口）。 */
 export function lessComputerWindowDismiss(): Promise<void> {
@@ -17,11 +18,17 @@ export function lessComputerApprove(
     )
 }
 
-/** 前端按内容测高后回传，后端 clamp + bottom-anchored 重新摆放浮窗。 */
-export function lessComputerWindowResize(height: number): Promise<void> {
+/** 浮窗打字输入：文字指令直接进入 Less Computer 执行链（与语音同护栏/审批/连续会话）。 */
+export function lessComputerSubmitText(text: string): Promise<void> {
     return invokeOrMock(
-        "less_computer_window_resize",
-        { height },
+        "less_computer_submit_text",
+        { text },
         () => undefined,
     )
+}
+
+/** 浮窗 mount 时拉取当前会话的事件缓冲（seq 升序），重放 webview 冷加载期间
+ *  丢掉的事件（尤其首条 user —— 用户说的话）。 */
+export function lessComputerSync(): Promise<LessComputerEvent[]> {
+    return invokeOrMock("less_computer_sync", undefined, () => [])
 }

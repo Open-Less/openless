@@ -144,6 +144,12 @@ a { color: inherit; text-decoration: none; }
   }
 }
 
+/* 风格市场全高抽屉从右缘滑入（MarketplaceModal 引用此名）。 */
+@keyframes ol-drawer-in-right {
+  from { opacity: 0; transform: translateX(48px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
 /* ── 假毛玻璃面（qa 追问框 / capsule 语音胶囊等透明浮窗）─────────────────────
    webview 拿不到透明窗口背后的桌面像素 —— CSS backdrop-filter 模糊不了桌面，
    是 Tauri 已知的上游限制（issue #2827 / #10064 / #6876）。所以这里**不做
@@ -221,4 +227,77 @@ html[data-ol-platform="android"] .ol-frost::before {
 html[data-ol-platform="linux"] .ol-capsule-pill,
 html[data-ol-platform="android"] .ol-capsule-pill {
   background: var(--ol-capsule-pill-bg) !important;
+}
+
+/* ── 滚动边缘渐隐（.ol-scroll-fade）──────────────────────────────────────────
+   参照 shadcn scroll-fade 工具的行为，纯 CSS scroll-driven animations 实现：
+   静止在顶部时顶缘清晰、底缘 28px 渐隐提示「下面还有内容」；滚动中双边渐隐；
+   滚到底部时底缘恢复清晰。两个注册的 <length> 自定义属性充当 mask 渐变里的
+   动画插值目标（初始值 = 静止在顶部的状态）。 */
+@property --ol-sf-t {
+  syntax: '<length>';
+  inherits: false;
+  initial-value: 0px;
+}
+
+@property --ol-sf-b {
+  syntax: '<length>';
+  inherits: false;
+  initial-value: 28px;
+}
+
+/* 三层 mask 取交集：顶缘渐隐层 ∩ 底缘渐隐层 ∩ 全黑兜底层。
+   -webkit-mask-composite: source-in 等价于标准 mask-composite: intersect；
+   两者都写、标准属性在后 —— 新引擎用标准值，老 WebKit 走前缀值。 */
+.ol-scroll-fade {
+  -webkit-mask-image:
+    linear-gradient(to bottom, transparent, black var(--ol-sf-t)),
+    linear-gradient(to top, transparent, black var(--ol-sf-b)),
+    linear-gradient(black, black);
+  mask-image:
+    linear-gradient(to bottom, transparent, black var(--ol-sf-t)),
+    linear-gradient(to top, transparent, black var(--ol-sf-b)),
+    linear-gradient(black, black);
+  -webkit-mask-composite: source-in;
+  mask-composite: intersect;
+}
+
+@supports (animation-timeline: scroll(self y)) {
+  /* 滚动驱动：开头 96px 行程里顶缘渐隐 0 → 28px，末尾 96px 行程里底缘
+     渐隐 28px → 0，fill both 在行程外保持端点值。
+     注意：animation-timeline / animation-range 必须写在 animation 简写之后，
+     简写会把它们重置回初始值。
+     已知限制：内容不溢出时 scroll(self y) 时间线不激活，自定义属性回落到
+     初始值 —— 底缘仍有 28px 渐隐轻微作用在不可滚动容器的末端（通常落在
+     内边距上几乎不可见），与下方静态降级的限制一致，接受。 */
+  .ol-scroll-fade {
+    animation:
+      ol-sf-top linear both,
+      ol-sf-bottom linear both;
+    animation-timeline: scroll(self y);
+    animation-range: 0 96px, calc(100% - 96px) 100%;
+  }
+
+  @keyframes ol-sf-top {
+    from { --ol-sf-t: 0px; }
+    to   { --ol-sf-t: 28px; }
+  }
+
+  @keyframes ol-sf-bottom {
+    from { --ol-sf-b: 28px; }
+    to   { --ol-sf-b: 0px; }
+  }
+}
+
+/* 降级（macOS 现行 WKWebView 尚无 scroll-driven animations）：静态双边渐隐，
+   不随滚动位置变化；单层 mask 无需分层合成，把 composite 重置回默认，
+   规避老 WebKit 单层 + source-in 的兼容怪癖。限制同上：不可滚动的容器
+   两缘也会有 28px 轻微渐隐。 */
+@supports not (animation-timeline: scroll(self y)) {
+  .ol-scroll-fade {
+    -webkit-mask-image: linear-gradient(to bottom, transparent, black 28px, black calc(100% - 28px), transparent);
+    mask-image: linear-gradient(to bottom, transparent, black 28px, black calc(100% - 28px), transparent);
+    -webkit-mask-composite: source-over;
+    mask-composite: add;
+  }
 }

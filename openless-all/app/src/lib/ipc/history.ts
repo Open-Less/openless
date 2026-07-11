@@ -1,9 +1,14 @@
-import type { DictationSession } from "../types"
+import type { ActivityDay, DictationSession } from "../types"
 import { invokeOrMock } from "./shared"
-import { mockHistory } from "./mock-data"
+import { mockActivityDays, mockHistory } from "./mock-data"
 
 export function listHistory(): Promise<DictationSession[]> {
     return invokeOrMock("list_history", undefined, () => mockHistory)
+}
+
+/** 每日听写活动计数（日期升序），概览页年度热力图数据源。与历史保留策略解耦。 */
+export function getActivityStats(): Promise<ActivityDay[]> {
+    return invokeOrMock("get_activity_stats", undefined, () => mockActivityDays)
 }
 
 export function deleteHistoryEntry(id: string): Promise<void> {

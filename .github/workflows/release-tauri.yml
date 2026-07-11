@@ -50,12 +50,13 @@ jobs:
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
       # 渠道由 tag 后缀决定：
-      #   v<v>-beta-tauri  → beta 渠道（GitHub Release 标 prerelease，manifest 文件名带 -beta 后缀，
+      #   v<v>-beta-tauri / v<v>-Beta.N-tauri
+      #                    → beta 渠道（GitHub Release 标 prerelease，manifest 文件名带 -beta 后缀，
       #                      正式版用户的 endpoint 拿不到）
       #   v<v>-tauri       → stable 渠道（正式版，文件名沿用旧约定，向后兼容）
       # workflow_dispatch / 非 tag 触发时 github.ref_name 不是 tag 字符串，
       # endsWith 返回 false，回退为 stable，不改变现有 dispatch 行为。
-      OPENLESS_RELEASE_CHANNEL: ${{ endsWith(github.ref_name, '-beta-tauri') && 'beta' || 'stable' }}
+      OPENLESS_RELEASE_CHANNEL: ${{ (endsWith(github.ref_name, '-beta-tauri') || contains(github.ref_name, '-Beta.')) && 'beta' || 'stable' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -253,16 +254,32 @@ jobs:
           # 所以单一 `tauri build` 永远拿不到 NSIS 的 .exe.sig。
           # Pass 1：NSIS 独立跑——必须成功，产出 *_x64-setup.exe(.sig) 给 updater。
           # Pass 2：MSI 独立跑——允许失败，Repair 步骤兜底 light.exe 重链。
+          # Beta 版跳过 MSI：Windows Installer / WiX 无法表示 `1.2.3-Beta.1`
+          # 这类非纯数字 prerelease 标识，稳定版仍然照常产出 MSI。
           if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
             npm run tauri -- build --bundles nsis --config '{"bundle":{"createUpdaterArtifacts":true}}'
             nsis_exit=$?
-            npm run tauri -- build --bundles msi --config '{"bundle":{"createUpdaterArtifacts":true}}'
-            msi_exit=$?
+            if [ "${OPENLESS_RELEASE_CHANNEL:-stable}" = "beta" ]; then
+              echo "OPENLESS_SKIP_WINDOWS_MSI=1" >> "$GITHUB_ENV"
+              echo "[info] Skipping MSI bundle for beta release channel."
+              msi_exit=0
+            else
+              echo "OPENLESS_SKIP_WINDOWS_MSI=0" >> "$GITHUB_ENV"
+              npm run tauri -- build --bundles msi --config '{"bundle":{"createUpdaterArtifacts":true}}'
+              msi_exit=$?
+            fi
           else
             npm run tauri -- build --bundles nsis
             nsis_exit=$?
-            npm run tauri -- build --bundles msi
-            msi_exit=$?
+            if [ "${OPENLESS_RELEASE_CHANNEL:-stable}" = "beta" ]; then
+              echo "OPENLESS_SKIP_WINDOWS_MSI=1" >> "$GITHUB_ENV"
+              echo "[info] Skipping MSI bundle for beta release channel."
+              msi_exit=0
+            else
+              echo "OPENLESS_SKIP_WINDOWS_MSI=0" >> "$GITHUB_ENV"
+              npm run tauri -- build --bundles msi
+              msi_exit=$?
+            fi
           fi
           echo "TAURI_BUILD_EXIT=$msi_exit" >> "$GITHUB_ENV"
           # NSIS 是 updater 的硬依赖，挂了就直接 fail step。
@@ -282,6 +299,10 @@ jobs:
         working-directory: 'openless-all/app'
         run: |
           $exitCode = $env:TAURI_BUILD_EXIT
+          if ($env:OPENLESS_SKIP_WINDOWS_MSI -eq '1') {
+            Write-Host "[ok] Skipping MSI repair for beta release channel."
+            return
+          }
           $appRoot = (Resolve-Path .).Path
           $msi = Get-ChildItem "src-tauri\target\release\bundle\msi\*.msi" -ErrorAction SilentlyContinue | Select-Object -First 1
           if ($msi) {
@@ -328,13 +349,17 @@ jobs:
         working-directory: 'openless-all/app'
         run: |
           $nsis = Get-ChildItem "src-tauri\target\release\bundle\nsis\*.exe" -ErrorAction Stop | Select-Object -First 1
-          $msi = Get-ChildItem "src-tauri\target\release\bundle\msi\*.msi" -ErrorAction Stop | Select-Object -First 1
           if (-not $nsis) { throw "NSIS installer not found." }
-          if (-not $msi) { throw "MSI installer not found." }
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows-ime-install-smoke.ps1 -InstallerPath $nsis.FullName -InstallerKind nsis
           if ($LASTEXITCODE -ne 0) {
             throw "NSIS installer smoke failed with exit $LASTEXITCODE"
           }
+          if ($env:OPENLESS_SKIP_WINDOWS_MSI -eq '1') {
+            Write-Host "[ok] Skipping MSI smoke for beta release channel."
+            return
+          }
+          $msi = Get-ChildItem "src-tauri\target\release\bundle\msi\*.msi" -ErrorAction Stop | Select-Object -First 1
+          if (-not $msi) { throw "MSI installer not found." }
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows-ime-install-smoke.ps1 -InstallerPath $msi.FullName -InstallerKind msi
           if ($LASTEXITCODE -ne 0) {
             throw "MSI installer smoke failed with exit $LASTEXITCODE"
@@ -605,7 +630,7 @@ jobs:
           ### 渠道说明
 
           - 以 `-tauri` 结尾的 tag 是**正式版**（自动推送给所有 in-app 检查更新的用户）。
-          - 以 `-beta-tauri` 结尾的 tag 是 **Beta 版**（GitHub 标 pre-release，**不**通过 in-app updater 推送给正式版用户；只对在「设置 → 关于 → 加入 Beta 渠道」开关切到 Beta 的用户可见，且需要手动从此页面下载安装）。
+          - 以 `-beta-tauri` 结尾或包含 `-Beta.N-tauri` 的 tag 是 **Beta 版**（GitHub 标 pre-release，**不**通过 in-app updater 推送给正式版用户；只对在「设置 → 关于 → 加入 Beta 渠道」开关切到 Beta 的用户可见，且需要手动从此页面下载安装）。
 
           ### 行为变更提示
 
@@ -669,6 +694,7 @@ jobs:
       startsWith(github.ref, 'refs/tags/v')
       && endsWith(github.ref, '-tauri')
       && !endsWith(github.ref, '-beta-tauri')
+      && !contains(github.ref_name, '-Beta.')
     steps:
       - name: Checkout default branch (cask 住在这里)
         uses: actions/checkout@v4
