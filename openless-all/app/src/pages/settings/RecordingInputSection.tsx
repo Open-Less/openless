@@ -26,7 +26,7 @@ import type {
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
 import { SelectLite } from '../../components/ui/SelectLite';
 import { Card, Collapsible } from '../_atoms';
-import { SettingRow, Toggle, inputStyle, segmentedTrackStyle } from './shared';
+import { SectionTitle, SettingRow, Toggle, inputStyle, segmentedTrackStyle } from './shared';
 import { MicrophoneSelect } from './MicrophoneSelect';
 import { detectOS } from '../../components/WindowChrome';
 
@@ -182,11 +182,9 @@ export function RecordingInputSection() {
   return (
     <>
       <Card>
-        <div style={{ marginBottom: 6 }}>
-          <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--ol-ink)', letterSpacing: '-0.01em' }}>
-            {t('settings.recording.title')}
-          </div>
-        </div>
+        <SectionTitle hint={t('settings.recording.desc')}>
+          {t('settings.recording.title')}
+        </SectionTitle>
         {isHotkeyModeMigrationNoticeActive() && showDesktopHotkey && (
           <div
             style={{
@@ -220,7 +218,7 @@ export function RecordingInputSection() {
         </SettingRow>
         )}
         {showDesktopHotkey && (
-        <SettingRow label={t('settings.recording.modeLabel')}>
+        <SettingRow label={t('settings.recording.modeLabel')} desc={t('settings.recording.modeDesc')}>
           <div style={segmentedTrackStyle}>
             {choices.map(([v, l]) => (
               <button
@@ -242,7 +240,7 @@ export function RecordingInputSection() {
           </div>
         </SettingRow>
         )}
-        <SettingRow label={t('settings.recording.microphoneLabel')}>
+        <SettingRow label={t('settings.recording.microphoneLabel')} desc={t('settings.recording.microphoneDesc')}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             <MicrophoneSelect
               devices={microphoneDevices}
@@ -258,11 +256,11 @@ export function RecordingInputSection() {
           </div>
         </SettingRow>
         {os !== 'linux' && !isAndroid && (
-        <SettingRow label={t('settings.recording.capsuleLabel')}>
+        <SettingRow label={t('settings.recording.capsuleLabel')} desc={t('settings.recording.capsuleDesc')}>
           <Toggle on={prefs.showCapsule} onToggle={onShowCapsuleChange} />
         </SettingRow>
         )}
-        <SettingRow label={t('settings.recording.muteDuringRecordingLabel')}>
+        <SettingRow label={t('settings.recording.muteDuringRecordingLabel')} desc={t('settings.recording.muteDuringRecordingDesc')}>
           <Toggle on={prefs.muteDuringRecording} onToggle={onMuteDuringRecordingChange} />
         </SettingRow>
         <SettingRow
@@ -304,11 +302,11 @@ export function RecordingInputSection() {
       {/* ─── 插入与剪贴板（折叠，仅 macOS / Windows） ──────────────── */}
       {showDesktopInsert && (
       <Collapsible title={t('settings.recording.insertGroupTitle')}>
-        <SettingRow label={t('settings.recording.restoreClipboardLabel')}>
+        <SettingRow label={t('settings.recording.restoreClipboardLabel')} desc={t('settings.recording.restoreClipboardDesc')}>
           <Toggle on={prefs.restoreClipboardAfterPaste} onToggle={onRestoreClipboardChange} />
         </SettingRow>
         {capability.adapter !== 'macEventTap' && (
-          <SettingRow label={t('settings.recording.pasteShortcutLabel')}>
+          <SettingRow label={t('settings.recording.pasteShortcutLabel')} desc={t('settings.recording.pasteShortcutDesc')}>
             <SelectLite
               value={prefs.pasteShortcut}
               onChange={next => onPasteShortcutChange(next as PasteShortcut)}

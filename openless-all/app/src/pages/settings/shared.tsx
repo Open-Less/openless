@@ -2,27 +2,44 @@
 // AsrPresetId 也放在这里，让 settings/ 下各 section 都从同一处来源拿。
 
 import type { CSSProperties, ReactNode } from "react"
+import { Tooltip } from "../../components/Tooltip"
 import { useMobileLayout } from "../../lib/useMobileLayout"
+
+// 带说明的文字统一加虚线下划线 + help 光标，暗示「悬停可看解释」。
+const hintableTextStyle: CSSProperties = {
+    cursor: "help",
+    textDecoration: "underline dotted",
+    textDecorationColor: "var(--ol-ink-4)",
+    textUnderlineOffset: 3,
+}
 
 export function SectionTitle({
     children,
+    hint,
     style,
 }: {
     children: ReactNode
+    /** 悬停在标题文字上时的功能说明，给 Less Computer 这类光看名字猜不出用途的板块。 */
+    hint?: string
     style?: CSSProperties
 }) {
+    const titleStyle: CSSProperties = {
+        fontSize: 14,
+        fontWeight: 600,
+        color: "var(--ol-ink)",
+        marginBottom: 6,
+        letterSpacing: "-0.01em",
+        ...style,
+    }
+    if (!hint) {
+        return <div style={titleStyle}>{children}</div>
+    }
     return (
-        <div
-            style={{
-                fontSize: 14,
-                fontWeight: 600,
-                color: "var(--ol-ink)",
-                marginBottom: 6,
-                letterSpacing: "-0.01em",
-                ...style,
-            }}
-        >
-            {children}
+        // display:flex 让 Tooltip 的锚点收缩到标题文字本身，提示贴着文字弹出。
+        <div style={{ ...titleStyle, display: "flex" }}>
+            <Tooltip content={hint} wrap placement="bottom">
+                <span style={hintableTextStyle}>{children}</span>
+            </Tooltip>
         </div>
     )
 }
@@ -42,13 +59,21 @@ interface SettingRowProps {
     controlWidth?: number | string
 }
 
-// 页面瘦身：不再渲染每行的描述小字（desc 仍保留在 props 里，调用点无需改、便于恢复）。
+// 页面瘦身后描述小字不再常驻展示；desc 改为悬停在标签文字上时以 Tooltip 弹出，
+// 布局保持紧凑的同时不牺牲可理解性。
 export function SettingRow({
     label,
+    desc,
     children,
     controlWidth,
 }: SettingRowProps) {
     const mobile = useMobileLayout()
+    const labelStyle: CSSProperties = {
+        fontSize: 13,
+        fontWeight: 500,
+        color: "var(--ol-ink)",
+        minWidth: 0,
+    }
     return (
         <div
             style={{
@@ -60,16 +85,15 @@ export function SettingRow({
                 alignItems: "center",
             }}
         >
-            <div style={{ minWidth: 0, alignSelf: "center" }}>
-                <div
-                    style={{
-                        fontSize: 13,
-                        fontWeight: 500,
-                        color: "var(--ol-ink)",
-                    }}
-                >
-                    {label}
-                </div>
+            {/* display:flex 让 Tooltip 锚点收缩到文字宽度，提示贴着文字弹出。 */}
+            <div style={{ minWidth: 0, alignSelf: "center", display: "flex" }}>
+                {desc ? (
+                    <Tooltip content={desc} wrap placement="bottom">
+                        <div style={{ ...labelStyle, ...hintableTextStyle }}>{label}</div>
+                    </Tooltip>
+                ) : (
+                    <div style={labelStyle}>{label}</div>
+                )}
             </div>
             <div
                 style={{

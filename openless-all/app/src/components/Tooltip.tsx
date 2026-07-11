@@ -21,10 +21,12 @@ interface TooltipProps {
   content: ReactNode;
   /** 提示出现在锚点的哪一侧，默认 right（适合左侧栏菜单）。 */
   placement?: 'right' | 'top' | 'bottom';
+  /** 整句说明类提示允许换行；默认 nowrap 适合菜单名等短文案。 */
+  wrap?: boolean;
   children: ReactNode;
 }
 
-export function Tooltip({ content, placement = 'right', children }: TooltipProps) {
+export function Tooltip({ content, placement = 'right', wrap = false, children }: TooltipProps) {
   const anchorRef = useRef<HTMLSpanElement>(null);
   const timerRef = useRef<number | null>(null);
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
@@ -81,7 +83,14 @@ export function Tooltip({ content, placement = 'right', children }: TooltipProps
       {children}
       {pos != null &&
         createPortal(
-          <span role="tooltip" style={{ ...bubbleStyle, ...placementStyle(placement, pos) }}>
+          <span
+            role="tooltip"
+            style={{
+              ...bubbleStyle,
+              ...(wrap ? wrapBubbleStyle : null),
+              ...placementStyle(placement, pos),
+            }}
+          >
             {content}
           </span>,
           document.body,
@@ -118,6 +127,12 @@ const bubbleStyle: CSSProperties = {
   whiteSpace: 'nowrap',
   pointerEvents: 'none',
   animation: 'ol-tooltip-in 0.12s ease-out both',
+};
+
+const wrapBubbleStyle: CSSProperties = {
+  whiteSpace: 'normal',
+  width: 'max-content',
+  maxWidth: 280,
 };
 
 const TOOLTIP_KEYFRAMES = `

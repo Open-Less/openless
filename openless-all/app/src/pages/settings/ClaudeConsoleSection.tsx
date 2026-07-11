@@ -154,7 +154,7 @@ export function ClaudeConsoleSection() {
         onClick={() => setExpanded(v => !v)}
         style={{ all: 'unset', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, width: '100%' }}
       >
-        <SectionTitle>{t('settings.codingConsole.title')}</SectionTitle>
+        <SectionTitle hint={t('settings.codingConsole.desc')}>{t('settings.codingConsole.title')}</SectionTitle>
         <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--ol-ink-4)' }}>
           {expanded ? `${t('common.hide')} ▴` : `${t('common.show')} ▾`}
         </span>
