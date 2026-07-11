@@ -1578,7 +1578,7 @@ impl Coordinator {
             ActiveAsr::FoundryLocalWhisper(local) => {
                 let audio_secs = (local.buffer_duration_ms() as f64) / 1000.0;
                 local
-                    .transcribe(foundry_audio_transcribe_timeout(audio_secs))
+                    .transcribe(windows_local_asr_transcribe_timeout(audio_secs))
                     .await
                     .map_err(|e| e.to_string())?
             }
@@ -1586,7 +1586,7 @@ impl Coordinator {
             ActiveAsr::SherpaOnnxLocal(local) => {
                 let audio_secs = (local.buffer_duration_ms() as f64) / 1000.0;
                 local
-                    .transcribe(sherpa_audio_transcribe_timeout(audio_secs))
+                    .transcribe(windows_local_asr_transcribe_timeout(audio_secs))
                     .await
                     .map_err(|e| e.to_string())?
             }
@@ -2386,26 +2386,18 @@ mod tests {
     }
 
     #[test]
-    fn foundry_timeout_floors_at_global_timeout_for_short_audio() {
+    fn windows_local_asr_timeout_floors_at_global_timeout_for_short_audio() {
         assert_eq!(
-            foundry_audio_transcribe_timeout(5.0),
+            windows_local_asr_transcribe_timeout(5.0),
             std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS)
         );
     }
 
     #[test]
-    fn foundry_timeout_scales_with_audio_duration() {
+    fn windows_local_asr_timeout_scales_with_audio_duration() {
         // 65s 录音：65 × 1.0 = 65，+20 = 85s。长音频不再撞 30s 墙。
         assert_eq!(
-            foundry_audio_transcribe_timeout(65.0),
-            std::time::Duration::from_secs(85)
-        );
-    }
-
-    #[test]
-    fn sherpa_timeout_scales_with_audio_duration() {
-        assert_eq!(
-            sherpa_audio_transcribe_timeout(65.0),
+            windows_local_asr_transcribe_timeout(65.0),
             std::time::Duration::from_secs(85)
         );
     }
@@ -3041,8 +3033,10 @@ const POST_SESSION_COOLDOWN_MS: u64 = 600;
 /// 网络超时预算；只在 ASR 自身超时机制失效时作为最后的防线触发。
 const COORDINATOR_GLOBAL_TIMEOUT_SECS: u64 = 30;
 
-fn foundry_audio_transcribe_timeout(audio_secs: f64) -> std::time::Duration {
-    let secs = ((audio_secs * 1.0).ceil() as u64)
+/// Windows 本地 batch ASR 的动态转写超时。Foundry 与 sherpa-onnx 当前使用
+/// 同一预算：短音频至少 30s，长音频按整段时长向上取整后增加 20s 余量。
+fn windows_local_asr_transcribe_timeout(audio_secs: f64) -> std::time::Duration {
+    let secs = (audio_secs.ceil() as u64)
         .saturating_add(20)
         .max(COORDINATOR_GLOBAL_TIMEOUT_SECS);
     std::time::Duration::from_secs(secs)
@@ -3065,15 +3059,6 @@ fn local_qwen_transcribe_timeout(audio_secs: f64) -> std::time::Duration {
 /// 长录音按音频长度的 0.5 倍 + 20s 余量，覆盖多分片串行请求 + 网络波动。
 fn whisper_transcribe_timeout(audio_secs: f64) -> std::time::Duration {
     let secs = ((audio_secs * 0.5).ceil() as u64)
-        .saturating_add(20)
-        .max(COORDINATOR_GLOBAL_TIMEOUT_SECS);
-    std::time::Duration::from_secs(secs)
-}
-
-/// sherpa-onnx offline batch 暂与 Foundry 同档；后续按 Windows 真机 CPU/模型
-/// 实测结果再调整。
-fn sherpa_audio_transcribe_timeout(audio_secs: f64) -> std::time::Duration {
-    let secs = ((audio_secs * 1.0).ceil() as u64)
         .saturating_add(20)
         .max(COORDINATOR_GLOBAL_TIMEOUT_SECS);
     std::time::Duration::from_secs(secs)

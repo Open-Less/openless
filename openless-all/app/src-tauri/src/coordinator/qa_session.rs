@@ -264,7 +264,7 @@ pub(super) async fn transcribe_overlay_dictation_asr(
         ActiveAsr::FoundryLocalWhisper(local) => {
             debug_assert!(!uses_global_timeout);
             let audio_secs = (local.buffer_duration_ms() as f64) / 1000.0;
-            let timeout_duration = foundry_audio_transcribe_timeout(audio_secs);
+            let timeout_duration = windows_local_asr_transcribe_timeout(audio_secs);
             match local.transcribe(timeout_duration).await {
                 Ok(raw) => {
                     schedule_foundry_local_asr_release(
@@ -286,7 +286,7 @@ pub(super) async fn transcribe_overlay_dictation_asr(
         ActiveAsr::SherpaOnnxLocal(local) => {
             debug_assert!(!uses_global_timeout);
             let audio_secs = (local.buffer_duration_ms() as f64) / 1000.0;
-            let timeout_duration = sherpa_audio_transcribe_timeout(audio_secs);
+            let timeout_duration = windows_local_asr_transcribe_timeout(audio_secs);
             match local.transcribe(timeout_duration).await {
                 Ok(raw) => {
                     schedule_sherpa_onnx_release(
@@ -825,7 +825,7 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
         ActiveAsr::FoundryLocalWhisper(local) => {
             debug_assert!(!uses_global_timeout);
             let audio_secs = (local.buffer_duration_ms() as f64) / 1000.0;
-            let timeout_duration = foundry_audio_transcribe_timeout(audio_secs);
+            let timeout_duration = windows_local_asr_transcribe_timeout(audio_secs);
             log::info!(
                 "[coord] QA Foundry Local Whisper transcribe: audio={:.2}s timeout={}s",
                 audio_secs,
@@ -855,7 +855,7 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
         ActiveAsr::SherpaOnnxLocal(local) => {
             debug_assert!(!uses_global_timeout);
             let audio_secs = (local.buffer_duration_ms() as f64) / 1000.0;
-            let timeout_duration = sherpa_audio_transcribe_timeout(audio_secs);
+            let timeout_duration = windows_local_asr_transcribe_timeout(audio_secs);
             log::info!(
                 "[coord] QA sherpa-onnx transcribe: audio={:.2}s timeout={}s",
                 audio_secs,
