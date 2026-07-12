@@ -37,7 +37,7 @@ export function SectionTitle({
     return (
         // display:flex 让 Tooltip 的锚点收缩到标题文字本身，提示贴着文字弹出。
         <div style={{ ...titleStyle, display: "flex" }}>
-            <Tooltip content={hint} wrap placement="bottom">
+            <Tooltip content={hint} wrap placement="bottom" focusable>
                 <span style={hintableTextStyle}>{children}</span>
             </Tooltip>
         </div>
@@ -88,8 +88,8 @@ export function SettingRow({
             {/* display:flex 让 Tooltip 锚点收缩到文字宽度，提示贴着文字弹出。 */}
             <div style={{ minWidth: 0, alignSelf: "center", display: "flex" }}>
                 {desc ? (
-                    <Tooltip content={desc} wrap placement="bottom">
-                        <div style={{ ...labelStyle, ...hintableTextStyle }}>{label}</div>
+                    <Tooltip content={desc} wrap placement="bottom" focusable>
+                        <span style={{ ...labelStyle, ...hintableTextStyle }}>{label}</span>
                     </Tooltip>
                 ) : (
                     <div style={labelStyle}>{label}</div>
