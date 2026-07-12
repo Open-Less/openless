@@ -33,7 +33,7 @@ export function getHotkeyTriggerLabel(trigger: HotkeyTrigger | null | undefined)
 }
 
 /** 根据录音方式返回追加在触发键标签后的语义后缀（如「（按住说话）」）。 */
-function hotkeyModeSuffix(mode: HotkeyMode | null | undefined): string {
+export function hotkeyModeSuffix(mode: HotkeyMode | null | undefined): string {
   switch (mode) {
     case 'hold': return i18n.t('hotkey.modeHoldSuffix');
     case 'auto': return i18n.t('hotkey.modeAutoSuffix');

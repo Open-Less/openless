@@ -279,8 +279,9 @@ struct Inner {
     /// 与 `hotkey_trigger_held` 互补 —— held 防 press-without-release，本字段防
     /// press-release-press 三连过快。
     last_hotkey_dispatch_at: Mutex<Option<std::time::Instant>>,
-    /// Auto 模式下这次会话「按下」的时刻。松手时用 elapsed() 判定短按（Toggle 锁存）
-    /// 还是长按（Hold 松手即停）。见 dictation.rs 的 AUTO_HOLD_THRESHOLD。
+    /// Auto 模式下这次会话「按下」的事件时刻。松手时用按下/松开的事件时间戳差值
+    /// 判定短按（Toggle 锁存）还是长按（Hold 松手即停）。见 dictation.rs 的
+    /// AUTO_HOLD_THRESHOLD。
     hotkey_press_at: Mutex<Option<std::time::Instant>>,
     /// end_session 成功收尾后将 phase 设为 Idle 时记录的时间戳 + POST_SESSION_COOLDOWN_MS。
     /// handle_pressed 在 (Toggle, Idle) 分支检查此字段：未过期则忽略该次按键，

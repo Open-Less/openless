@@ -4,7 +4,13 @@ import { useEffect, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ShortcutRecorder } from '../../components/ShortcutRecorder';
-import { defaultLessComputerShortcut, defaultOpenAppShortcut, defaultQaShortcut, defaultSwitchStyleShortcut } from '../../lib/hotkey';
+import {
+  defaultLessComputerShortcut,
+  defaultOpenAppShortcut,
+  defaultQaShortcut,
+  defaultSwitchStyleShortcut,
+  hotkeyModeSuffix,
+} from '../../lib/hotkey';
 import {
   setDictationHotkey,
   setOpenAppHotkey,
@@ -74,7 +80,7 @@ export function ShortcutsSection() {
             }}
           />
           <div style={{ fontSize: 11, color: 'var(--ol-ink-4)' }}>
-            {hotkey.mode === 'hold' ? t('hotkey.modeHoldSuffix') : t('hotkey.modeToggleSuffix')}
+            {hotkeyModeSuffix(hotkey.mode)}
           </div>
         </div>
       </SettingRow>
