@@ -1117,6 +1117,17 @@ mod platform {
             rx.try_iter().collect()
         }
 
+        fn edge_names(events: Vec<HotkeyEvent>) -> Vec<&'static str> {
+            events
+                .into_iter()
+                .filter_map(|event| match event {
+                    HotkeyEvent::Pressed { .. } => Some("pressed"),
+                    HotkeyEvent::Released { .. } => Some("released"),
+                    _ => None,
+                })
+                .collect()
+        }
+
         #[test]
         fn windows_modifier_edges_are_deduped_from_mock_hook_events() {
             let shared = shared(HotkeyTrigger::RightControl);
