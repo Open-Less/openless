@@ -520,6 +520,18 @@ fn run_desktop() {
                 }
                 // 纯光效舞台没有任何可点元素（✕/✓ 按钮已移除），而窗口放大到 460×180
                 // 盖住屏幕底部中央 —— 必须鼠标穿透，否则会挡住底下应用的点击。
+                //
+                // Linux (X11) 兼容：tao 在调用 set_ignore_cursor_events 时要求 GDK
+                // 窗口已实例化（window.window() 返回 Some），但 Capsule 在
+                // tauri.conf.json 中定义 visible=false → GDK 窗口从未 real ize →
+                // tao event_loop.rs:457 unwrap() 崩溃。
+                // 解决办法：先移到屏幕外，show() 强制 GDK 实例化，然后再设穿透。
+                // 参考 voicebox PR#837: https://github.com/jamiepine/voicebox/pull/837
+                #[cfg(target_os = "linux")]
+                {
+                    let _ = capsule.set_position(tauri::LogicalPosition::new(-10000.0, -10000.0));
+                    let _ = capsule.show();
+                }
                 if let Err(e) = capsule.set_ignore_cursor_events(true) {
                     log::warn!("[capsule] set_ignore_cursor_events failed: {e}");
                 }
