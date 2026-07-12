@@ -2237,6 +2237,9 @@ pub enum HotkeyMode {
     Toggle,
     Hold,
     DoubleClick,
+    /// 自动识别：按下即开录；松手时按「按住时长」决定语义 —— 短按（< AUTO_HOLD_THRESHOLD）
+    /// 当作 Toggle（锁存，保持录音，下次按下再停），长按当作 Hold（松手即停）。
+    Auto,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

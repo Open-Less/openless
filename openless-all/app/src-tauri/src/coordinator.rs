@@ -279,6 +279,9 @@ struct Inner {
     /// 与 `hotkey_trigger_held` 互补 —— held 防 press-without-release，本字段防
     /// press-release-press 三连过快。
     last_hotkey_dispatch_at: Mutex<Option<std::time::Instant>>,
+    /// Auto 模式下这次会话「按下」的时刻。松手时用 elapsed() 判定短按（Toggle 锁存）
+    /// 还是长按（Hold 松手即停）。见 dictation.rs 的 AUTO_HOLD_THRESHOLD。
+    hotkey_press_at: Mutex<Option<std::time::Instant>>,
     /// end_session 成功收尾后将 phase 设为 Idle 时记录的时间戳 + POST_SESSION_COOLDOWN_MS。
     /// handle_pressed 在 (Toggle, Idle) 分支检查此字段：未过期则忽略该次按键，
     /// 防止胶囊离场动画期间误激活新听写（issue #545）。
@@ -417,6 +420,7 @@ impl Coordinator {
                     hotkey_status: Mutex::new(HotkeyStatus::default()),
                     hotkey_trigger_held: AtomicBool::new(false),
                     last_hotkey_dispatch_at: Mutex::new(None),
+                    hotkey_press_at: Mutex::new(None),
                     session_cooldown_until: Mutex::new(None),
                     shortcut_recording_active: AtomicBool::new(false),
                     combo_hotkey: Mutex::new(None),
@@ -517,6 +521,7 @@ impl Coordinator {
                 hotkey_status: Mutex::new(HotkeyStatus::default()),
                 hotkey_trigger_held: AtomicBool::new(false),
                 last_hotkey_dispatch_at: Mutex::new(None),
+                hotkey_press_at: Mutex::new(None),
                 session_cooldown_until: Mutex::new(None),
                 shortcut_recording_active: AtomicBool::new(false),
                 combo_hotkey: Mutex::new(None),
@@ -2692,6 +2697,63 @@ mod tests {
             SessionPhase::Listening
         );
         assert!(coordinator.inner.hotkey_trigger_held.load(Ordering::SeqCst));
+    }
+
+    fn set_auto_mode(coordinator: &Coordinator) {
+        coordinator
+            .inner
+            .prefs
+            .set(crate::types::UserPreferences {
+                hotkey: crate::types::HotkeyBinding {
+                    trigger: HotkeyTrigger::RightControl,
+                    mode: HotkeyMode::Auto,
+                    keys: None,
+                },
+                ..Default::default()
+            })
+            .unwrap();
+    }
+
+    // Auto 模式短按：松手时按住时长 < 阈值 → 锁存为切换态，保持 Listening（不结束会话）。
+    #[tokio::test]
+    async fn auto_short_tap_release_latches_recording() {
+        let coordinator = Coordinator::new();
+        set_auto_mode(&coordinator);
+        coordinator.inner.state.lock().phase = SessionPhase::Listening;
+        // 刚按下（elapsed ≈ 0 < 350ms）→ 短按。
+        *coordinator.inner.hotkey_press_at.lock() = Some(std::time::Instant::now());
+        coordinator
+            .inner
+            .hotkey_trigger_held
+            .store(true, Ordering::SeqCst);
+
+        handle_released_edge(&coordinator.inner).await;
+
+        // 短按松手不结束录音，等下一次按下再停。
+        assert_eq!(
+            coordinator.inner.state.lock().phase,
+            SessionPhase::Listening
+        );
+    }
+
+    // Auto 模式长按：松手时按住时长 >= 阈值 → 按住说话语义，结束会话（Listening → Idle）。
+    #[tokio::test]
+    async fn auto_long_hold_release_ends_session() {
+        let coordinator = Coordinator::new();
+        set_auto_mode(&coordinator);
+        coordinator.inner.state.lock().phase = SessionPhase::Listening;
+        // 按住已超过阈值 → 长按。
+        *coordinator.inner.hotkey_press_at.lock() = std::time::Instant::now()
+            .checked_sub(std::time::Duration::from_millis(500));
+        coordinator
+            .inner
+            .hotkey_trigger_held
+            .store(true, Ordering::SeqCst);
+
+        handle_released_edge(&coordinator.inner).await;
+
+        // 无 recorder / ASR 的测试会话下，end_session 直接收尾到 Idle。
+        assert_eq!(coordinator.inner.state.lock().phase, SessionPhase::Idle);
     }
 
     #[test]

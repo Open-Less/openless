@@ -12,6 +12,13 @@ use super::*;
 /// 同一个 hotkey 边沿之间的最小间隔。低于此阈值的连按整体作为误触丢弃 ——
 /// 避免微动开关回弹 / 用户手抖双击造成的空转写报错和 ASR session 抢资源。
 const HOTKEY_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(250);
+/// Auto 模式下区分「短按 = 切换式」与「长按 = 按住说话」的按住时长阈值。
+/// 松手时若按住 < 此值判为短按（锁存，保持录音），>= 此值判为长按（松手即停）。
+/// 注意：本时长在 handle_released 处理时用 press_at.elapsed() 测量，会被 begin_session
+/// 阻塞 hotkey bridge 的时长 B 抬高（见 hotkey_loops.rs 的串行化注释）。因此当冷启动
+/// 使 B >= 本阈值时，一次真实短按可能被误判为长按（录音提前停止，用户再按一次即可）。
+/// 常见快速启动（B≈100–200ms）下测量正确。350ms 是「点一下 vs 明显按住」的自然分界。
+const AUTO_HOLD_THRESHOLD: std::time::Duration = std::time::Duration::from_millis(350);
 const STREAMING_INSERT_FLUSH_INTERVAL: std::time::Duration = std::time::Duration::from_millis(12);
 
 #[cfg(target_os = "macos")]
@@ -765,6 +772,37 @@ pub(super) async fn handle_pressed(inner: &Arc<Inner>) {
         (HotkeyMode::Toggle, SessionPhase::Starting) => {
             request_stop_during_starting(inner, "toggle stop edge");
         }
+        // Auto 模式：按下即开录（与 Hold 一样不丢首字）。是短按还是长按要到松手时才知道，
+        // 所以这里只负责「开始」并记下按下时刻，语义交给 handle_released 判定。
+        (HotkeyMode::Auto, SessionPhase::Idle) => {
+            // 复用 Toggle 的冷却 / 排队接力检查：#545 离场动画期间误触保护。
+            let now = std::time::Instant::now();
+            let cooldown_until = *inner.session_cooldown_until.lock();
+            if let Some(deadline) = cooldown_until {
+                if now < deadline {
+                    if is_queued_chain_press(now, deadline) {
+                        log::info!(
+                            "[coord] queued-chain activation (auto): 识别中按下，会话收尾后接力开录下一条"
+                        );
+                    } else {
+                        log::info!(
+                            "[coord] auto activation blocked by cooldown (session still winding down)"
+                        );
+                        return;
+                    }
+                }
+            }
+            *inner.hotkey_press_at.lock() = Some(now);
+            let _ = begin_session(inner).await;
+        }
+        // Auto 模式已因上一次「短按」锁存为切换态，再次按下 → 用户想停。
+        (HotkeyMode::Auto, SessionPhase::Listening) => {
+            let _ = end_session(inner).await;
+        }
+        // Auto 模式锁存后仍在 Starting 时第二次按 → 想停，同 Toggle 存边沿。
+        (HotkeyMode::Auto, SessionPhase::Starting) => {
+            request_stop_during_starting(inner, "auto stop edge");
+        }
         _ => {}
     }
 }
@@ -801,6 +839,28 @@ pub(super) async fn handle_released(inner: &Arc<Inner>) {
             // Hold 模式 Starting 阶段松开 → 用户想停。同上：握手完成后再 end。
             SessionPhase::Starting => {
                 request_stop_during_starting(inner, "hold release edge");
+            }
+            _ => {}
+        }
+    }
+    if mode == HotkeyMode::Auto {
+        // 按住时长判定短按 / 长按。press_at 为空（理论上不会）时保守当作短按 → 锁存。
+        let held_long = (*inner.hotkey_press_at.lock())
+            .map(|t| t.elapsed() >= AUTO_HOLD_THRESHOLD)
+            .unwrap_or(false);
+        match phase {
+            // 长按松手 = 按住说话，松手即停；短按 = 切换式，锁存保持录音，下次按下再停。
+            SessionPhase::Listening if held_long => {
+                let _ = end_session(inner).await;
+            }
+            // 仍在握手就松手，且判为长按 → 用户按住说话想停，存边沿握手完成后再 end。
+            SessionPhase::Starting if held_long => {
+                request_stop_during_starting(inner, "auto hold release edge");
+            }
+            SessionPhase::Listening | SessionPhase::Starting => {
+                log::info!(
+                    "[coord] auto short-tap latched (toggle semantics); next press stops"
+                );
             }
             _ => {}
         }

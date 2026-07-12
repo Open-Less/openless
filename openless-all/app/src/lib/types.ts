@@ -95,7 +95,7 @@ export type HotkeyTrigger =
   | 'mediaPlayPause'
   | 'custom';
 
-export type HotkeyMode = 'toggle' | 'hold' | 'doubleClick';
+export type HotkeyMode = 'toggle' | 'hold' | 'doubleClick' | 'auto';
 
 export interface HotkeyKey {
   code: string;

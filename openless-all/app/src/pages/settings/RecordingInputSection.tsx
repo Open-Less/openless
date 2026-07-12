@@ -169,6 +169,7 @@ export function RecordingInputSection() {
   const choices: Array<[HotkeyMode, string]> = [
     ['toggle', t('settings.recording.modeToggle')],
     ['hold', t('settings.recording.modeHold')],
+    ['auto', t('settings.recording.modeAuto')],
   ];
   const preferredMicrophoneAvailable = Boolean(
     prefs.microphoneDeviceName

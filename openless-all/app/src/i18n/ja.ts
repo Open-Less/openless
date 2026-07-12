@@ -679,6 +679,7 @@ export const ja: typeof zhCN = {
       modeDesc: 'トグル式 = 1 回押して開始、もう 1 回押して終了；押し続けて話す = 押している間だけ録音。',
       modeToggle: 'トグル式',
       modeHold: '押し続けて話す',
+      modeAuto: '自動',
       migrationNoticeTitle: 'デフォルトがトグル式に変更されました',
       migrationNoticeDesc: '以前にトリガー方式を変更していた場合は、ここで再度確認してください。今回のアップデートではショートカット方式のデフォルト値と読み込みロジックが変更されています。「押し続けて話す」が好みであれば再度切り替えてください。',
       microphoneLabel: '優先マイク',
@@ -1139,8 +1140,10 @@ export const ja: typeof zhCN = {
     fallback: 'グローバルショートカット',
     modeHoldSuffix: '（押し続けて話す）',
     modeToggleSuffix: '（開始 / 停止）',
+    modeAutoSuffix: '（自動判別）',
     usageHold: '{{trigger}} を押し続けて話し、離して終了。',
     usageToggle: '{{trigger}} で録音開始、もう 1 回押して終了。',
+    usageAuto: '{{trigger}} を短く押すと開始 / 停止、押し続けると話し終えて離すと停止。',
     adapter: {
       macEventTap: 'macOS Event Tap',
       windowsLowLevel: 'Windows 低レベルキーボードフック',

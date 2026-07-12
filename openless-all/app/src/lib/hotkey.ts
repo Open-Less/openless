@@ -1,5 +1,5 @@
 import i18n from '../i18n';
-import type { ComboBinding, HotkeyBinding, HotkeyTrigger, QaHotkeyBinding, ShortcutBinding } from './types';
+import type { ComboBinding, HotkeyBinding, HotkeyMode, HotkeyTrigger, QaHotkeyBinding, ShortcutBinding } from './types';
 
 export function defaultQaShortcut(): ShortcutBinding {
   return {
@@ -32,31 +32,39 @@ export function getHotkeyTriggerLabel(trigger: HotkeyTrigger | null | undefined)
   return i18n.t(`hotkey.triggers.${trigger}`);
 }
 
+/** 根据录音方式返回追加在触发键标签后的语义后缀（如「（按住说话）」）。 */
+function hotkeyModeSuffix(mode: HotkeyMode | null | undefined): string {
+  switch (mode) {
+    case 'hold': return i18n.t('hotkey.modeHoldSuffix');
+    case 'auto': return i18n.t('hotkey.modeAutoSuffix');
+    case 'doubleClick': return i18n.t('hotkey.modeDoubleClickSuffix');
+    default: return i18n.t('hotkey.modeToggleSuffix');
+  }
+}
+
+/** 根据录音方式返回使用说明（含触发键占位符 trigger）。 */
+function hotkeyModeUsage(mode: HotkeyMode | null | undefined, trigger: string): string {
+  switch (mode) {
+    case 'hold': return i18n.t('hotkey.usageHold', { trigger });
+    case 'auto': return i18n.t('hotkey.usageAuto', { trigger });
+    case 'doubleClick': return i18n.t('hotkey.usageDoubleClick', { trigger });
+    default: return i18n.t('hotkey.usageToggle', { trigger });
+  }
+}
+
 export function getHotkeyStartStopLabel(
   binding: HotkeyBinding | null | undefined,
   comboBinding?: ComboBinding | null,
   shortcutBinding?: ShortcutBinding | null,
 ): string {
   if (shortcutBinding) {
-    const suffix = binding?.mode === 'hold'
-      ? i18n.t('hotkey.modeHoldSuffix')
-      : i18n.t('hotkey.modeToggleSuffix');
-    return `${formatComboLabel(shortcutBinding)}${suffix}`;
+    return `${formatComboLabel(shortcutBinding)}${hotkeyModeSuffix(binding?.mode)}`;
   }
   if (binding?.trigger === 'custom' && comboBinding) {
-    const combo = formatComboLabel(comboBinding);
-    const suffix = binding.mode === 'hold'
-      ? i18n.t('hotkey.modeHoldSuffix')
-      : i18n.t('hotkey.modeToggleSuffix');
-    return `${combo}${suffix}`;
+    return `${formatComboLabel(comboBinding)}${hotkeyModeSuffix(binding.mode)}`;
   }
   const trigger = getHotkeyTriggerLabel(binding?.trigger);
-  const suffix = binding?.mode === 'hold'
-    ? i18n.t('hotkey.modeHoldSuffix')
-    : binding?.mode === 'doubleClick'
-      ? i18n.t('hotkey.modeDoubleClickSuffix')
-      : i18n.t('hotkey.modeToggleSuffix');
-  return `${trigger}${suffix}`;
+  return `${trigger}${hotkeyModeSuffix(binding?.mode)}`;
 }
 
 export function getHotkeyUsageHint(
@@ -65,23 +73,13 @@ export function getHotkeyUsageHint(
   shortcutBinding?: ShortcutBinding | null,
 ): string {
   if (shortcutBinding) {
-    const combo = formatComboLabel(shortcutBinding);
-    return binding?.mode === 'hold'
-      ? i18n.t('hotkey.usageHold', { trigger: combo })
-      : i18n.t('hotkey.usageToggle', { trigger: combo });
+    return hotkeyModeUsage(binding?.mode, formatComboLabel(shortcutBinding));
   }
   if (binding?.trigger === 'custom' && comboBinding) {
-    const combo = formatComboLabel(comboBinding);
-    return binding.mode === 'hold'
-      ? i18n.t('hotkey.usageHold', { trigger: combo })
-      : i18n.t('hotkey.usageToggle', { trigger: combo });
+    return hotkeyModeUsage(binding.mode, formatComboLabel(comboBinding));
   }
   const trigger = getHotkeyTriggerLabel(binding?.trigger);
-  return binding?.mode === 'hold'
-    ? i18n.t('hotkey.usageHold', { trigger })
-    : binding?.mode === 'doubleClick'
-      ? i18n.t('hotkey.usageDoubleClick', { trigger })
-    : i18n.t('hotkey.usageToggle', { trigger });
+  return hotkeyModeUsage(binding?.mode, trigger);
 }
 
 export function getHotkeyBindingCodes(binding: HotkeyBinding | null | undefined): string[] {

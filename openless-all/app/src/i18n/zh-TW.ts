@@ -677,6 +677,7 @@ export const zhTW: typeof zhCN = {
       modeDesc: '切換式 = 按一次開始、再按一次結束；按住說話 = 按住開始、鬆開結束。',
       modeToggle: '切換式',
       modeHold: '按住說話',
+      modeAuto: '自動',
       migrationNoticeTitle: '默認已改爲切換式說話',
       migrationNoticeDesc: '如果你之前改過快捷鍵觸發方式，請在這裏手動確認一次。本次更新調整了快捷鍵方式的默認值與讀取邏輯；如果你更習慣按住說話，可以重新切回“按住說話”。',
       comboRecordLabel: '錄製快捷鍵',
@@ -1137,8 +1138,10 @@ export const zhTW: typeof zhCN = {
     fallback: '全局快捷鍵',
     modeHoldSuffix: '（按住說話）',
     modeToggleSuffix: '（開始 / 停止）',
+    modeAutoSuffix: '（自動識別）',
     usageHold: '按住 {{trigger}} 說話，鬆開結束。',
     usageToggle: '按 {{trigger}} 開始錄音，再按一次結束。',
+    usageAuto: '短按 {{trigger}} 切換開始 / 停止，按住則說完鬆開即停。',
     adapter: {
       macEventTap: 'macOS Event Tap',
       windowsLowLevel: 'Windows 低層鍵盤 hook',

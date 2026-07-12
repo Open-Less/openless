@@ -679,6 +679,7 @@ export const ko: typeof zhCN = {
       modeDesc: '토글 방식 = 한 번 누르면 시작, 다시 누르면 종료; 눌러서 말하기 = 누르고 있는 동안만 녹음.',
       modeToggle: '토글 방식',
       modeHold: '눌러서 말하기',
+      modeAuto: '자동',
       migrationNoticeTitle: '기본값이 토글 방식으로 변경됨',
       migrationNoticeDesc: '이전에 트리거 방식을 변경했다면 여기서 다시 한 번 확인해 주세요. 이번 업데이트는 단축키 방식의 기본값과 읽기 로직을 조정했습니다. "눌러서 말하기"가 더 익숙하다면 다시 전환할 수 있습니다.',
       microphoneLabel: '기본 선택 마이크',
@@ -1139,8 +1140,10 @@ export const ko: typeof zhCN = {
     fallback: '전역 단축키',
     modeHoldSuffix: '(눌러서 말하기)',
     modeToggleSuffix: '(시작 / 정지)',
+    modeAutoSuffix: '(자동 인식)',
     usageHold: '{{trigger}} 를 누르고 말한 후 떼면 종료.',
     usageToggle: '{{trigger}} 로 녹음 시작, 다시 누르면 종료.',
+    usageAuto: '{{trigger}} 를 짧게 누르면 시작 / 정지, 길게 누르면 말한 뒤 떼면 종료.',
     adapter: {
       macEventTap: 'macOS Event Tap',
       windowsLowLevel: 'Windows 저수준 키보드 후크',

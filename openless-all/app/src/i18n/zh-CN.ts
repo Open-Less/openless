@@ -675,6 +675,7 @@ export const zhCN = {
       modeDesc: '切换式按一次开始、再按一次结束；按住说话按下保持、松开结束。',
       modeToggle: '切换式',
       modeHold: '按住说话',
+      modeAuto: '自动',
       migrationNoticeTitle: '默认已改为切换式说话',
       migrationNoticeDesc: '本次更新调整了默认值，如果习惯按住说话，请在此处切回。',
       microphoneLabel: '首选麦克风',
@@ -1169,8 +1170,10 @@ export const zhCN = {
     fallback: '全局快捷键',
     modeHoldSuffix: '（按住说话）',
     modeToggleSuffix: '（开始 / 停止）',
+    modeAutoSuffix: '（自动识别）',
     usageHold: '按住 {{trigger}} 说话，松开结束。',
     usageToggle: '按 {{trigger}} 开始录音，再按一次结束。',
+    usageAuto: '短按 {{trigger}} 切换开始 / 停止，按住则说完松开即停。',
     adapter: {
       macEventTap: 'macOS Event Tap',
       windowsLowLevel: 'Windows 低层键盘 hook',

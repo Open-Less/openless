@@ -677,6 +677,7 @@ export const en: typeof zhCN = {
       modeDesc: 'Toggle = tap once to start, again to stop. Push-to-talk = hold to record.',
       modeToggle: 'Toggle',
       modeHold: 'Push-to-talk',
+      modeAuto: 'Auto',
       migrationNoticeTitle: 'Default recording mode is now Toggle',
       migrationNoticeDesc: 'This update changes the default; if you prefer push-to-talk, switch it back here.',
       microphoneLabel: 'Preferred microphone',
@@ -1171,8 +1172,10 @@ export const en: typeof zhCN = {
     fallback: 'Global hotkey',
     modeHoldSuffix: ' (push-to-talk)',
     modeToggleSuffix: ' (start / stop)',
+    modeAutoSuffix: ' (auto-detect)',
     usageHold: 'Hold {{trigger}} to talk, release to stop.',
     usageToggle: 'Press {{trigger}} to start, press again to stop.',
+    usageAuto: 'Tap {{trigger}} to start / stop; hold it to talk and release to stop.',
     adapter: {
       macEventTap: 'macOS Event Tap',
       windowsLowLevel: 'Windows low-level keyboard hook',
