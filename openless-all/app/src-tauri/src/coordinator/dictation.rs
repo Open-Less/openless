@@ -961,7 +961,7 @@ pub(super) async fn run_voice_agent_transcript(
             log::info!("[coord] Cloud Agent 语音已取消");
             emit_less_computer(inner, serde_json::json!({ "kind": "cancelled" }));
             emit_capsule(inner, CapsuleState::Cancelled, 0.0, elapsed, None, None);
-            schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
+            schedule_capsule_idle(inner, CAPSULE_CANCEL_HIDE_DELAY_MS);
             Err("voice agent cancelled".to_string())
         }
     }
@@ -2968,7 +2968,7 @@ pub(super) fn cancel_session(inner: &Arc<Inner>) {
     }
     emit_capsule(inner, CapsuleState::Cancelled, 0.0, 0, None, None);
     log::info!("[coord] session cancelled (was {:?})", decision.phase);
-    schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
+    schedule_capsule_idle(inner, CAPSULE_CANCEL_HIDE_DELAY_MS);
     // 取消时也熄灭整屏彩虹描边（dictation session 没开描边，hide 是无害 no-op）。
     if let Some(app) = inner.app.lock().clone() {
         crate::hide_less_computer_glow(&app);

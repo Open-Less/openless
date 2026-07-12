@@ -3007,9 +3007,14 @@ fn enabled_phrases(inner: &Arc<Inner>) -> Vec<String> {
         .collect()
 }
 
-/// 终止态（Done / Cancelled / Error）后延迟 N ms 把胶囊改回 Idle，让浮窗自动消失。
-/// 用户点 ✕ / ✓ / 中途出错 / 按 Esc 都走这里，统一 2 秒。
+/// 终止态（Done / Error）后延迟 N ms 把胶囊改回 Idle，让浮窗自动消失。
+/// 点 ✓ / 中途出错走这里，保留 2 秒让用户看清结果 / 错误提示。
 const CAPSULE_AUTO_HIDE_DELAY_MS: u64 = 2000;
+
+/// 用户主动取消（Esc / 点 ✕）时的收起延迟。取消是明确的「我不要了」意图，
+/// 不需要像 Done/Error 那样停留 2 秒给用户读——立刻回 Idle，由前端 capsule-out
+/// 淡出动画（520ms）负责优雅收尾，观感上「按下即消失」（对齐 Typeless）。
+const CAPSULE_CANCEL_HIDE_DELAY_MS: u64 = 0;
 
 /// Toggle 模式下，end_session 将 phase 设为 Idle 后在此时间内禁止新的 begin_session。
 /// 避免用户三连按时第 3 次按下误激活新听写（此时胶囊仍在离场动画周期内）。
