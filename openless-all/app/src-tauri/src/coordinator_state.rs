@@ -181,6 +181,28 @@ pub(crate) fn finish_cancel_session_state(state: &mut SessionState, decision: Ca
     }
 }
 
+/// 完成已进入 Processing 的取消收尾。
+///
+/// cancel_session 不能直接把 Processing 改成 Idle，否则会和 end_session 的润色/插入
+/// 收尾并发竞争；因此由 end_session 在取消早退点调用。session id 校验避免旧会话的迟到
+/// continuation 修改新会话状态。
+pub(crate) fn finish_cancelled_processing_state(
+    state: &mut SessionState,
+    session_id: SessionId,
+) -> bool {
+    if state.session_id != session_id || !state.cancelled {
+        return false;
+    }
+    if state.phase == SessionPhase::Processing {
+        state.phase = SessionPhase::Idle;
+    }
+    if state.phase != SessionPhase::Idle {
+        return false;
+    }
+    state.focus_target = None;
+    true
+}
+
 pub(crate) fn start_processing_if_listening(state: &mut SessionState) -> Option<SessionId> {
     if state.phase != SessionPhase::Listening {
         return None;
@@ -403,6 +425,42 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn finish_cancelled_processing_state_returns_idle_for_matching_session() {
+        let mut state = SessionState {
+            phase: SessionPhase::Processing,
+            cancelled: true,
+            focus_target: Some(1),
+            session_id: session_id(42),
+            ..Default::default()
+        };
+
+        assert!(finish_cancelled_processing_state(
+            &mut state,
+            session_id(42)
+        ));
+        assert_eq!(state.phase, SessionPhase::Idle);
+        assert!(state.focus_target.is_none());
+    }
+
+    #[test]
+    fn finish_cancelled_processing_state_rejects_stale_session() {
+        let mut state = SessionState {
+            phase: SessionPhase::Processing,
+            cancelled: true,
+            focus_target: Some(1),
+            session_id: session_id(42),
+            ..Default::default()
+        };
+
+        assert!(!finish_cancelled_processing_state(
+            &mut state,
+            session_id(41)
+        ));
+        assert_eq!(state.phase, SessionPhase::Processing);
+        assert_eq!(state.focus_target, Some(1));
     }
 
     #[test]

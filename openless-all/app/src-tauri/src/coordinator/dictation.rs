@@ -1,7 +1,9 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use crate::coordinator_state::request_stop_during_starting_state;
+use crate::coordinator_state::{
+    finish_cancelled_processing_state, request_stop_during_starting_state,
+};
 use crate::correction::apply_correction_rules;
 use crate::types::HotkeyMode;
 
@@ -2104,6 +2106,17 @@ async fn try_silent_retranscribe(
     None
 }
 
+fn finish_cancelled_processing(inner: &Arc<Inner>, session_id: SessionId) -> bool {
+    let finished = {
+        let mut state = inner.state.lock();
+        finish_cancelled_processing_state(&mut state, session_id)
+    };
+    if finished {
+        schedule_capsule_idle(inner, CAPSULE_CANCEL_HIDE_DELAY_MS);
+    }
+    finished
+}
+
 pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     let current_session_id = {
         let mut state = inner.state.lock();
@@ -2126,7 +2139,9 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
         Some(a) => a,
         None => {
             restore_prepared_windows_ime_session(inner, current_session_id);
-            inner.state.lock().phase = SessionPhase::Idle;
+            if !finish_cancelled_processing(inner, current_session_id) {
+                set_phase_idle_if_session_matches(inner, current_session_id);
+            }
             return Ok(());
         }
     };
@@ -2268,7 +2283,7 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
                             AsrReleaseSession::Dictation(current_session_id),
                         );
                         restore_prepared_windows_ime_session(inner, current_session_id);
-                        set_phase_idle_if_session_matches(inner, current_session_id);
+                        finish_cancelled_processing(inner, current_session_id);
                         return Ok(());
                     }
                     log::error!("[coord] Foundry Local Whisper transcribe failed: {e:#}");
@@ -2306,7 +2321,7 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
                             AsrReleaseSession::Dictation(current_session_id),
                         );
                         restore_prepared_windows_ime_session(inner, current_session_id);
-                        set_phase_idle_if_session_matches(inner, current_session_id);
+                        finish_cancelled_processing(inner, current_session_id);
                         return Ok(());
                     }
                     log::error!("[coord] sherpa-onnx transcribe failed: {e:#}");
@@ -2375,7 +2390,7 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
                             "[coord] Apple Speech transcribe cancelled - discarding transcript"
                         );
                         restore_prepared_windows_ime_session(inner, current_session_id);
-                        set_phase_idle_if_session_matches(inner, current_session_id);
+                        finish_cancelled_processing(inner, current_session_id);
                         return Ok(());
                     }
                     log::error!("[coord] Apple Speech transcribe failed: {e:#}");
@@ -2405,11 +2420,7 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
         // cancel_session 在 Processing 阶段故意跳过 finish_cancel_session_state（让
         // 这里收尾），但此前的 end_session 没把 focus_target 清掉。logic-review
         // 2026-05-10 P3 (🚩) 把这条补完。
-        {
-            let mut state = inner.state.lock();
-            state.phase = SessionPhase::Idle;
-            state.focus_target = None;
-        }
+        finish_cancelled_processing(inner, current_session_id);
         return Ok(());
     }
 
@@ -2695,7 +2706,6 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     let proceed_to_insert = {
         let mut state = inner.state.lock();
         if state.cancelled && !already_streamed {
-            state.phase = SessionPhase::Idle;
             false
         } else {
             state.phase = SessionPhase::Inserting;
@@ -2708,6 +2718,7 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
             polished.chars().count()
         );
         restore_prepared_windows_ime_session(inner, current_session_id);
+        finish_cancelled_processing(inner, current_session_id);
         return Ok(());
     }
 
