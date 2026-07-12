@@ -99,17 +99,24 @@ export function History() {
     return () => window.clearTimeout(id);
   }, [query]);
 
-  // ⌘K / Ctrl+K 聚焦搜索框（设计稿提示的快捷键）。
+  // ⌘K / Ctrl+K 聚焦搜索框（设计稿提示的快捷键）；⌘R / Ctrl+R 刷新历史列表
+  // （与浏览器「重新加载」直觉一致）。preventDefault 拦掉 webview 默认的整页
+  // reload，改为只重拉 listHistory，避免整个前端重挂载。
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) {
         e.preventDefault();
         searchInputRef.current?.focus();
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && (e.key === 'r' || e.key === 'R')) {
+        e.preventDefault();
+        void refresh();
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, []);
+  }, [refresh]);
 
   const filtered = useMemo(() => {
     const byMode = filter === 'all' ? items : items.filter(s => s.mode === filter);
