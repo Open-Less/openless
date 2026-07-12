@@ -29,6 +29,7 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::header::HeaderValue;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
+use uuid::Uuid;
 
 use super::{AudioConsumer, RawTranscript};
 
@@ -40,6 +41,8 @@ pub const DEFAULT_MODEL: &str = "qwen3-asr-flash-realtime";
 pub const TARGET_AUDIO_CHUNK_BYTES: usize = 3_200;
 const BYTES_PER_MS: u64 = 32;
 const FINAL_RESULT_TIMEOUT: Duration = Duration::from_secs(12);
+const SESSION_READY_TIMEOUT: Duration = Duration::from_secs(5);
+const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 /// server_vad 断句静默阈值。官方默认 400ms；取 500ms 降低说话中途换气被切断的概率。
 const VAD_SILENCE_DURATION_MS: u32 = 500;
 
@@ -116,6 +119,7 @@ struct SyncState {
     bytes_received: u64,
     session_started: bool,
     session_finished: bool,
+    session_start_error: Option<String>,
     runtime: Option<Handle>,
     start: Option<Instant>,
     final_tx: Option<oneshot::Sender<Result<RawTranscript, Qwen3ASRError>>>,
@@ -133,6 +137,7 @@ pub struct Qwen3RealtimeASR {
     writer: SharedWriter,
     final_rx: ParkingMutex<Option<oneshot::Receiver<Result<RawTranscript, Qwen3ASRError>>>>,
     session_started: Arc<Notify>,
+    session_finished: Arc<Notify>,
 }
 
 impl Qwen3RealtimeASR {
@@ -143,6 +148,7 @@ impl Qwen3RealtimeASR {
             writer: Arc::new(AsyncMutex::new(None)),
             final_rx: ParkingMutex::new(None),
             session_started: Arc::new(Notify::new()),
+            session_finished: Arc::new(Notify::new()),
         }
     }
 
@@ -160,10 +166,9 @@ impl Qwen3RealtimeASR {
             HeaderValue::from_str(&format!("Bearer {}", self.credentials.api_key.trim()))
                 .map_err(|e| Qwen3ASRError::ConnectionFailed(e.to_string()))?,
         );
-        request.headers_mut().insert(
-            "OpenAI-Beta",
-            HeaderValue::from_static("realtime=v1"),
-        );
+        request
+            .headers_mut()
+            .insert("OpenAI-Beta", HeaderValue::from_static("realtime=v1"));
 
         let (ws, _resp) = connect_async(request)
             .await
@@ -184,6 +189,7 @@ impl Qwen3RealtimeASR {
         *self.final_rx.lock() = Some(final_rx);
 
         let writer_for_worker = Arc::clone(&self.writer);
+        let weak_self_for_worker = Arc::downgrade(self);
         tokio::spawn(async move {
             while let Some(item) = send_rx.recv().await {
                 match item {
@@ -192,6 +198,10 @@ impl Qwen3RealtimeASR {
                             send_text(&writer_for_worker, append_audio_message(&chunk)).await
                         {
                             log::error!("[qwen3-asr] audio frame send failed: {e}");
+                            if let Some(this) = weak_self_for_worker.upgrade() {
+                                this.finish_error(e);
+                            }
+                            break;
                         }
                     }
                     SendItem::Finish(done) => {
@@ -203,8 +213,6 @@ impl Qwen3RealtimeASR {
                 }
             }
         });
-
-        send_text(&self.writer, session_update_message()).await?;
 
         let weak_self = Arc::downgrade(self);
         tokio::spawn(async move {
@@ -220,12 +228,16 @@ impl Qwen3RealtimeASR {
                         }
                     }
                     Ok(Message::Close(_)) => {
+                        this.fail_session_start(
+                            "websocket closed before session configuration completed",
+                        );
                         this.finish_with_partial_or_error(Qwen3ASRError::NoFinalResult);
                         break;
                     }
                     Ok(_) => {}
                     Err(e) => {
                         log::error!("[qwen3-asr] receive loop error: {e}");
+                        this.fail_session_start(&e.to_string());
                         this.finish_with_partial_or_error(Qwen3ASRError::ConnectionFailed(
                             e.to_string(),
                         ));
@@ -235,49 +247,78 @@ impl Qwen3RealtimeASR {
             }
         });
 
+        let started = self.session_started.notified();
+        tokio::pin!(started);
+        started.as_mut().enable();
+        if let Err(error) = send_text(&self.writer, session_update_message()).await {
+            self.cancel();
+            return Err(error);
+        }
+        let ready_result = if !self.state.lock().session_started {
+            tokio::time::timeout(SESSION_READY_TIMEOUT, started)
+                .await
+                .map_err(|_| Qwen3ASRError::FinalResultTimeout)
+        } else {
+            Ok(())
+        };
+        if let Err(error) = ready_result {
+            self.cancel();
+            return Err(error);
+        }
+        if let Some(error) = self.state.lock().session_start_error.clone() {
+            self.cancel();
+            return Err(Qwen3ASRError::TaskFailed(error));
+        }
+
         Ok(())
     }
 
     pub async fn send_last_frame(&self) -> Result<(), Qwen3ASRError> {
-        let started = self.session_started.notified();
-        tokio::pin!(started);
-        started.as_mut().enable();
-        let ready = {
-            let st = self.state.lock();
-            st.session_started || st.session_finished
-        };
-        if !ready {
-            tokio::time::timeout(Duration::from_secs(5), started)
-                .await
-                .map_err(|_| Qwen3ASRError::FinalResultTimeout)?;
-        }
-        let (send_tx, tail_chunks) = {
-            let mut st = self.state.lock();
-            let send_tx = st.send_tx.clone();
-            if !st.pending_audio.is_empty() {
-                let pending = std::mem::take(&mut st.pending_audio);
-                st.audio_scratch.extend_from_slice(&pending);
-            }
-            let tail = if st.audio_scratch.is_empty() {
-                Vec::new()
-            } else {
-                vec![std::mem::take(&mut st.audio_scratch)]
+        let result = tokio::time::timeout(FINAL_RESULT_TIMEOUT, async {
+            let finished = self.session_finished.notified();
+            tokio::pin!(finished);
+            finished.as_mut().enable();
+            let (send_tx, tail_chunks) = {
+                let mut st = self.state.lock();
+                let send_tx = st.send_tx.clone();
+                if !st.pending_audio.is_empty() {
+                    let pending = std::mem::take(&mut st.pending_audio);
+                    st.audio_scratch.extend_from_slice(&pending);
+                }
+                let tail = if st.audio_scratch.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![std::mem::take(&mut st.audio_scratch)]
+                };
+                (send_tx, tail)
             };
-            (send_tx, tail)
-        };
-        let Some(send_tx) = send_tx else {
-            return Ok(());
-        };
-        for chunk in tail_chunks {
-            let _ = send_tx.send(SendItem::Audio(chunk));
+            let Some(send_tx) = send_tx else {
+                return Ok(());
+            };
+            for chunk in tail_chunks {
+                send_tx
+                    .send(SendItem::Audio(chunk))
+                    .map_err(|_| Qwen3ASRError::SendFailed("send worker closed".to_string()))?;
+            }
+            let (done_tx, done_rx) = oneshot::channel();
+            send_tx
+                .send(SendItem::Finish(done_tx))
+                .map_err(|_| Qwen3ASRError::SendFailed("send worker closed".to_string()))?;
+            done_rx
+                .await
+                .map_err(|_| Qwen3ASRError::SendFailed("finish ack dropped".to_string()))??;
+            if !self.state.lock().session_finished {
+                finished.await;
+            }
+            Ok(())
+        })
+        .await
+        .map_err(|_| Qwen3ASRError::FinalResultTimeout)
+        .and_then(|result| result);
+        if result.is_err() {
+            self.cancel();
         }
-        let (done_tx, done_rx) = oneshot::channel();
-        send_tx
-            .send(SendItem::Finish(done_tx))
-            .map_err(|_| Qwen3ASRError::SendFailed("send worker closed".to_string()))?;
-        done_rx
-            .await
-            .map_err(|_| Qwen3ASRError::SendFailed("finish ack dropped".to_string()))?
+        result
     }
 
     pub async fn await_final_result(&self) -> Result<RawTranscript, Qwen3ASRError> {
@@ -323,9 +364,12 @@ impl Qwen3RealtimeASR {
                 return true;
             }
         };
-        let event = value.get("type").and_then(Value::as_str).unwrap_or_default();
+        let event = value
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         match event {
-            "session.created" => {
+            "session.updated" => {
                 self.mark_session_started();
                 true
             }
@@ -336,6 +380,20 @@ impl Qwen3RealtimeASR {
             "conversation.item.input_audio_transcription.completed" => {
                 self.record_completed(&value);
                 true
+            }
+            "conversation.item.input_audio_transcription.failed" => {
+                let item_id = value
+                    .get("item_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown item");
+                let message = value
+                    .get("error")
+                    .and_then(|error| error.get("message"))
+                    .and_then(Value::as_str)
+                    .or_else(|| value.get("message").and_then(Value::as_str))
+                    .unwrap_or("audio transcription failed");
+                self.finish_error(Qwen3ASRError::TaskFailed(format!("{item_id}: {message}")));
+                false
             }
             "session.finished" => {
                 self.finish_success();
@@ -373,6 +431,14 @@ impl Qwen3RealtimeASR {
             }
         }
         self.session_started.notify_waiters();
+    }
+
+    fn fail_session_start(&self, error: &str) {
+        let mut st = self.state.lock();
+        if !st.session_started && st.session_start_error.is_none() {
+            st.session_start_error = Some(error.to_string());
+            self.session_started.notify_waiters();
+        }
     }
 
     fn record_partial(&self, value: &Value) {
@@ -432,6 +498,7 @@ impl Qwen3RealtimeASR {
         if let Some(tx) = tx {
             let _ = tx.send(Ok(RawTranscript { text, duration_ms }));
         }
+        self.session_finished.notify_waiters();
         self.close_on_runtime();
     }
 
@@ -449,6 +516,7 @@ impl Qwen3RealtimeASR {
     }
 
     fn finish_error(&self, error: Qwen3ASRError) {
+        self.fail_session_start(&error.to_string());
         let tx = {
             let mut st = self.state.lock();
             if st.session_finished {
@@ -461,6 +529,7 @@ impl Qwen3RealtimeASR {
         if let Some(tx) = tx {
             let _ = tx.send(Err(error));
         }
+        self.session_finished.notify_waiters();
         self.close_on_runtime();
     }
 
@@ -514,7 +583,10 @@ fn join_segments(segments: &[String]) -> String {
             continue;
         }
         if let (Some(prev), Some(next)) = (joined.chars().last(), seg.chars().next()) {
-            if prev.is_ascii_alphanumeric() && next.is_ascii_alphanumeric() {
+            if next.is_ascii_alphanumeric()
+                && (prev.is_ascii_alphanumeric()
+                    || matches!(prev, '.' | ',' | '?' | '!' | ':' | ';'))
+            {
                 joined.push(' ');
             }
         }
@@ -527,6 +599,7 @@ fn session_update_message() -> String {
     // language 省略 => 服务端自动检测语种（2026-07 实测可用）。
     json!({
         "type": "session.update",
+        "event_id": event_id(),
         "session": {
             "modalities": ["text"],
             "input_audio_format": "pcm",
@@ -543,25 +616,40 @@ fn session_update_message() -> String {
 fn append_audio_message(pcm: &[u8]) -> String {
     json!({
         "type": "input_audio_buffer.append",
+        "event_id": event_id(),
         "audio": base64::engine::general_purpose::STANDARD.encode(pcm),
     })
     .to_string()
 }
 
 fn finish_session_message() -> String {
-    json!({ "type": "session.finish" }).to_string()
+    json!({ "type": "session.finish", "event_id": event_id() }).to_string()
+}
+
+fn event_id() -> String {
+    format!("event_{}", Uuid::new_v4())
+}
+
+pub fn endpoint_scheme_is_secure_websocket(endpoint: &str) -> bool {
+    url::Url::parse(endpoint.trim())
+        .map(|url| url.scheme() == "wss")
+        .unwrap_or(false)
 }
 
 async fn send_text(writer: &SharedWriter, text: String) -> Result<(), Qwen3ASRError> {
-    let mut guard = writer.lock().await;
-    let Some(ws) = guard.as_mut() else {
-        return Err(Qwen3ASRError::ConnectionFailed(
-            "websocket writer not available".to_string(),
-        ));
-    };
-    ws.send(Message::Text(text))
-        .await
-        .map_err(|e| Qwen3ASRError::SendFailed(e.to_string()))
+    tokio::time::timeout(WRITE_TIMEOUT, async {
+        let mut guard = writer.lock().await;
+        let Some(ws) = guard.as_mut() else {
+            return Err(Qwen3ASRError::ConnectionFailed(
+                "websocket writer not available".to_string(),
+            ));
+        };
+        ws.send(Message::Text(text))
+            .await
+            .map_err(|e| Qwen3ASRError::SendFailed(e.to_string()))
+    })
+    .await
+    .map_err(|_| Qwen3ASRError::SendFailed("websocket write timed out".to_string()))?
 }
 
 async fn close_writer(writer: &SharedWriter) -> Result<(), Qwen3ASRError> {
@@ -638,6 +726,9 @@ mod tests {
         assert_eq!(value["session"]["turn_detection"]["type"], "server_vad");
         // language 省略走服务端自动检测
         assert!(value["session"]["input_audio_transcription"].is_null());
+        assert!(value["event_id"]
+            .as_str()
+            .is_some_and(|id| id.starts_with("event_")));
     }
 
     #[test]
@@ -645,12 +736,27 @@ mod tests {
         let value: Value = serde_json::from_str(&append_audio_message(b"\x01\x02\x03")).unwrap();
         assert_eq!(value["type"], "input_audio_buffer.append");
         assert_eq!(value["audio"], "AQID");
+        assert!(value["event_id"]
+            .as_str()
+            .is_some_and(|id| id.starts_with("event_")));
     }
 
     #[test]
     fn finish_message_shape() {
         let value: Value = serde_json::from_str(&finish_session_message()).unwrap();
         assert_eq!(value["type"], "session.finish");
+        assert!(value["event_id"]
+            .as_str()
+            .is_some_and(|id| id.starts_with("event_")));
+    }
+
+    #[test]
+    fn client_event_ids_are_unique() {
+        let update: Value = serde_json::from_str(&session_update_message()).unwrap();
+        let append: Value = serde_json::from_str(&append_audio_message(b"audio")).unwrap();
+        let finish: Value = serde_json::from_str(&finish_session_message()).unwrap();
+        assert_ne!(update["event_id"], append["event_id"]);
+        assert_ne!(append["event_id"], finish["event_id"]);
     }
 
     // ---- event handling ----
@@ -722,8 +828,7 @@ mod tests {
         asr.record_completed(&completed_event("你好。"));
         let (tx, mut rx) = oneshot::channel();
         asr.state.lock().final_tx = Some(tx);
-        let keep_going =
-            asr.handle_text_message(&json!({"type": "session.finished"}).to_string());
+        let keep_going = asr.handle_text_message(&json!({"type": "session.finished"}).to_string());
         assert!(!keep_going);
         assert_eq!(rx.try_recv().unwrap().unwrap().text, "你好。");
     }
@@ -746,9 +851,50 @@ mod tests {
         let asr = create_test_asr();
         let (tx, mut rx) = oneshot::channel();
         asr.state.lock().final_tx = Some(tx);
-        asr.handle_text_message(&json!({"type": "error", "error": {"message": "boom"}}).to_string());
+        asr.handle_text_message(
+            &json!({"type": "error", "error": {"message": "boom"}}).to_string(),
+        );
         let err = rx.try_recv().unwrap().unwrap_err();
         assert!(matches!(err, Qwen3ASRError::TaskFailed(m) if m == "boom"));
+    }
+
+    #[test]
+    fn transcription_failure_returns_error_instead_of_silent_success() {
+        let asr = create_test_asr();
+        let (tx, mut rx) = oneshot::channel();
+        asr.state.lock().final_tx = Some(tx);
+        let keep_going = asr.handle_text_message(
+            &json!({
+                "type": "conversation.item.input_audio_transcription.failed",
+                "item_id": "item_123",
+                "error": { "message": "transcription rejected" },
+            })
+            .to_string(),
+        );
+        assert!(!keep_going);
+        let err = rx.try_recv().unwrap().unwrap_err();
+        assert!(
+            matches!(err, Qwen3ASRError::TaskFailed(message) if message == "item_123: transcription rejected")
+        );
+    }
+
+    #[test]
+    fn append_write_failure_returns_error_instead_of_partial_success() {
+        let asr = create_test_asr();
+        let (tx, mut rx) = oneshot::channel();
+        asr.state.lock().final_tx = Some(tx);
+        asr.finish_error(Qwen3ASRError::SendFailed("websocket write timed out".to_string()));
+        let err = rx.try_recv().unwrap().unwrap_err();
+        assert!(matches!(err, Qwen3ASRError::SendFailed(message) if message == "websocket write timed out"));
+    }
+
+    #[test]
+    fn only_session_updated_marks_session_ready() {
+        let asr = create_test_asr();
+        asr.handle_text_message(&json!({"type": "session.created"}).to_string());
+        assert!(!asr.state.lock().session_started);
+        asr.handle_text_message(&json!({"type": "session.updated"}).to_string());
+        assert!(asr.state.lock().session_started);
     }
 
     #[test]
@@ -773,6 +919,28 @@ mod tests {
     fn join_segments_latin_inserts_space() {
         let segments = vec!["hello".to_string(), "world".to_string()];
         assert_eq!(join_segments(&segments), "hello world");
+    }
+
+    #[test]
+    fn join_segments_latin_punctuation_inserts_space() {
+        for punctuation in ['.', ',', '?', '!'] {
+            let segments = vec![format!("Hello{punctuation}"), "World".to_string()];
+            assert_eq!(
+                join_segments(&segments),
+                format!("Hello{punctuation} World")
+            );
+        }
+    }
+
+    #[test]
+    fn qwen3_endpoint_requires_wss() {
+        assert!(endpoint_scheme_is_secure_websocket(DEFAULT_ENDPOINT));
+        assert!(!endpoint_scheme_is_secure_websocket(
+            "ws://localhost:9000/realtime"
+        ));
+        assert!(!endpoint_scheme_is_secure_websocket(
+            "https://api.example.com/realtime"
+        ));
     }
 
     #[test]

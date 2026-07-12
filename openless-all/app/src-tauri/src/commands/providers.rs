@@ -37,8 +37,7 @@ pub async fn list_provider_models(kind: String) -> Result<ProviderModelsResult, 
             models: vec![crate::asr::bailian::DEFAULT_MODEL.to_string()],
         });
     }
-    if kind == "asr"
-        && CredentialsVault::get_active_asr() == crate::asr::qwen_realtime::PROVIDER_ID
+    if kind == "asr" && CredentialsVault::get_active_asr() == crate::asr::qwen_realtime::PROVIDER_ID
     {
         // 与 bailian 同理：Realtime 网关无模型列表接口，先做真实连通性检查，
         // 列表为官方文档在案的稳定别名 + 快照版本。
@@ -298,7 +297,7 @@ async fn validate_qwen3_realtime_asr_provider() -> Result<(), String> {
         .map_err(|e| e.to_string())?
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| crate::asr::qwen_realtime::DEFAULT_ENDPOINT.to_string());
-    if !crate::asr::bailian::endpoint_scheme_is_websocket(&endpoint) {
+    if !crate::asr::qwen_realtime::endpoint_scheme_is_secure_websocket(&endpoint) {
         return Err("qwen3EndpointSchemeInvalid".to_string());
     }
     let model = CredentialsVault::get(CredentialAccount::AsrModel)
