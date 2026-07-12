@@ -409,6 +409,21 @@ function WeekChart({ data }: { data: number[] }) {
 
 function RecentRow({ session, modeLabel }: { session: DictationSession; modeLabel: Record<PolishMode, string> }) {
   const { t } = useTranslation();
+  const [copied, setCopied] = useState(false);
+
+  const onCopy = async () => {
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error('clipboard unavailable');
+      // 与 History 一致：润色失败/未产出时 finalText 为空，回退到识别原文，
+      // 避免复制到空字符串。
+      await navigator.clipboard.writeText(session.finalText.trim() ? session.finalText : session.rawTranscript);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch (error) {
+      console.error('[overview] failed to copy recent entry', error);
+    }
+  };
+
   return (
     <div style={{ padding: '12px 18px', borderBottom: '0.5px solid var(--ol-line-soft)', display: 'flex', gap: 12, alignItems: 'flex-start' }}>
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 4, minWidth: 60 }}>
@@ -420,9 +435,20 @@ function RecentRow({ session, modeLabel }: { session: DictationSession; modeLabe
       <div style={{ flex: 1, fontSize: 12.5, color: 'var(--ol-ink-2)', whiteSpace: 'pre-line', lineHeight: 1.55, overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
         {session.finalText.split('\n')[0]}
       </div>
-      <span style={{ fontSize: 10.5, color: 'var(--ol-ink-4)', fontFamily: 'var(--ol-font-mono)' }}>
-        {formatDuration(session.durationMs ?? 0, t)}
-      </span>
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
+        <span style={{ fontSize: 10.5, color: 'var(--ol-ink-4)', fontFamily: 'var(--ol-font-mono)' }}>
+          {formatDuration(session.durationMs ?? 0, t)}
+        </span>
+        <Btn
+          size="sm"
+          variant="ghost"
+          icon={copied ? 'check' : 'copy'}
+          onClick={() => void onCopy()}
+          style={{ padding: '3px 8px' }}
+        >
+          {copied ? t('common.copied') : t('common.copy')}
+        </Btn>
+      </div>
     </div>
   );
 }

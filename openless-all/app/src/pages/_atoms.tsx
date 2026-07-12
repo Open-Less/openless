@@ -114,7 +114,7 @@ export type BtnVariant = 'primary' | 'blue' | 'ghost' | 'soft';
 export type BtnSize = 'sm' | 'md';
 
 interface BtnProps {
-  children: ReactNode;
+  children?: ReactNode;
   variant?: BtnVariant;
   size?: BtnSize;
   icon?: string;
