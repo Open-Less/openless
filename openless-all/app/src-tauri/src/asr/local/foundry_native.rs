@@ -17,6 +17,7 @@ mod imp {
     const TARGET_RID_NATIVE_PREFIX: &str = "runtimes/win-x64/native/";
     const CORE_DLL: &str = "Microsoft.AI.Foundry.Local.Core.dll";
     const REQUIRED_DLLS: &[&str] = &[CORE_DLL, "onnxruntime.dll", "onnxruntime-genai.dll"];
+    const RUNTIME_VERSIONS_FILE: &str = "runtime-versions.txt";
     const WINDOWS_APP_RUNTIME_INSTALLER_URL: &str =
         "https://aka.ms/windowsappsdk/1.8/1.8.260416003/windowsappruntimeinstall-x64.exe";
     const WINDOWS_APP_RUNTIME_INSTALLER_FILE: &str = "WindowsAppRuntimeInstall-x64.exe";
@@ -64,20 +65,22 @@ mod imp {
         expected_file: &'static str,
     }
 
+    // Keep these versions aligned with foundry-local-sdk's deps_versions_winml.json.
+    // The native core and ORT use a versioned C API and will crash on a mixed runtime.
     const PACKAGES: &[NativePackage] = &[
         NativePackage {
             name: "Microsoft.AI.Foundry.Local.Core.WinML",
-            version: "1.0.0",
+            version: "1.2.1",
             expected_file: CORE_DLL,
         },
         NativePackage {
             name: "Microsoft.ML.OnnxRuntime.Foundry",
-            version: "1.23.2.3",
+            version: "1.26.0",
             expected_file: "onnxruntime.dll",
         },
         NativePackage {
             name: "Microsoft.ML.OnnxRuntimeGenAI.Foundry",
-            version: "0.13.2",
+            version: "0.14.1",
             expected_file: "onnxruntime-genai.dll",
         },
     ];
@@ -172,19 +175,76 @@ mod imp {
             progress(&label, end_percent);
         }
 
+        fs::write(
+            staging_dir.join(RUNTIME_VERSIONS_FILE),
+            expected_runtime_versions(),
+        )
+        .context("write Foundry native runtime version manifest")?;
+
         if !required_libraries_present(&staging_dir) {
             anyhow::bail!("Foundry 运行组件下载不完整");
         }
 
-        if target_dir.exists() {
-            fs::remove_dir_all(&target_dir)
-                .with_context(|| format!("remove {}", target_dir.display()))?;
-        }
-        fs::rename(&staging_dir, &target_dir).with_context(|| {
-            format!("move {} to {}", staging_dir.display(), target_dir.display())
-        })?;
+        replace_runtime_dir(&staging_dir, &target_dir)?;
         progress("Foundry Local 运行组件已下载", 100.0);
         Ok(target_dir)
+    }
+
+    fn replace_runtime_dir(staging_dir: &Path, target_dir: &Path) -> Result<()> {
+        let parent = target_dir
+            .parent()
+            .context("resolve Foundry native runtime parent")?;
+        let backup_dir = parent.join(".runtime-backup");
+        if backup_dir.exists() {
+            if required_libraries_present(target_dir) {
+                fs::remove_dir_all(&backup_dir)
+                    .with_context(|| format!("remove stale {}", backup_dir.display()))?;
+            } else {
+                if target_dir.exists() {
+                    fs::remove_dir_all(target_dir)
+                        .with_context(|| format!("remove incomplete {}", target_dir.display()))?;
+                }
+                fs::rename(&backup_dir, target_dir)
+                    .context("recover interrupted Foundry runtime replacement")?;
+            }
+        }
+        if target_dir.exists() {
+            fs::rename(target_dir, &backup_dir).with_context(|| {
+                format!(
+                    "back up Foundry runtime {} to {}",
+                    target_dir.display(),
+                    backup_dir.display()
+                )
+            })?;
+        }
+
+        if let Err(replace_error) = fs::rename(staging_dir, target_dir) {
+            if backup_dir.exists() {
+                fs::rename(&backup_dir, target_dir).with_context(|| {
+                    format!(
+                        "restore Foundry runtime {} after replacement failed: {replace_error}",
+                        target_dir.display()
+                    )
+                })?;
+            }
+            return Err(replace_error).with_context(|| {
+                format!(
+                    "move {} to {}",
+                    staging_dir.display(),
+                    target_dir.display()
+                )
+            });
+        }
+
+        if backup_dir.exists() {
+            if let Err(error) = fs::remove_dir_all(&backup_dir) {
+                log::warn!(
+                    "[foundry-asr] remove replaced runtime backup {} failed: {error}",
+                    backup_dir.display()
+                );
+            }
+        }
+        Ok(())
     }
 
     fn windows_app_runtime_progress_range() -> (f64, f64) {
@@ -528,6 +588,16 @@ if ($readyForFoundryX64) { exit 0 } else { exit 1 }
 
     fn required_libraries_present(dir: &Path) -> bool {
         REQUIRED_DLLS.iter().all(|dll| dir.join(dll).exists())
+            && fs::read_to_string(dir.join(RUNTIME_VERSIONS_FILE))
+                .map(|versions| versions == expected_runtime_versions())
+                .unwrap_or(false)
+    }
+
+    fn expected_runtime_versions() -> String {
+        PACKAGES
+            .iter()
+            .map(|package| format!("{}={}\n", package.name, package.version))
+            .collect()
     }
 
     pub fn extract_native_libraries_from_nupkg(nupkg: &Path, out_dir: &Path) -> Result<usize> {
@@ -594,6 +664,68 @@ if ($readyForFoundryX64) { exit 0 } else { exit 1 }
                 url,
                 "https://example.test/packages/microsoft.ai.foundry.local.core.winml/1.0.0/microsoft.ai.foundry.local.core.winml.1.0.0.nupkg"
             );
+        }
+
+        #[test]
+        fn native_packages_match_foundry_sdk_1_2_1_winml_runtime() {
+            let packages: Vec<_> = super::PACKAGES
+                .iter()
+                .map(|package| (package.name, package.version))
+                .collect();
+
+            assert_eq!(
+                packages,
+                vec![
+                    ("Microsoft.AI.Foundry.Local.Core.WinML", "1.2.1"),
+                    ("Microsoft.ML.OnnxRuntime.Foundry", "1.26.0"),
+                    ("Microsoft.ML.OnnxRuntimeGenAI.Foundry", "0.14.1"),
+                ]
+            );
+        }
+
+        #[test]
+        fn native_runtime_cache_requires_matching_package_versions() {
+            let root = std::env::temp_dir().join(format!(
+                "openless-foundry-runtime-version-test-{}",
+                uuid::Uuid::new_v4()
+            ));
+            fs::create_dir_all(&root).unwrap();
+            for dll in super::REQUIRED_DLLS {
+                fs::write(root.join(dll), b"test").unwrap();
+            }
+
+            assert!(!super::required_libraries_present(&root));
+
+            fs::write(
+                root.join("runtime-versions.txt"),
+                concat!(
+                    "Microsoft.AI.Foundry.Local.Core.WinML=1.2.1\n",
+                    "Microsoft.ML.OnnxRuntime.Foundry=1.26.0\n",
+                    "Microsoft.ML.OnnxRuntimeGenAI.Foundry=0.14.1\n",
+                ),
+            )
+            .unwrap();
+
+            assert!(super::required_libraries_present(&root));
+            fs::remove_dir_all(root).unwrap();
+        }
+
+        #[test]
+        fn failed_runtime_replacement_restores_previous_runtime() {
+            let root = std::env::temp_dir().join(format!(
+                "openless-foundry-runtime-replace-test-{}",
+                uuid::Uuid::new_v4()
+            ));
+            let target = root.join("runtime");
+            let missing_staging = root.join("missing-staging");
+            fs::create_dir_all(&target).unwrap();
+            fs::write(target.join("old-runtime.dll"), b"old").unwrap();
+
+            assert!(super::replace_runtime_dir(&missing_staging, &target).is_err());
+            assert_eq!(fs::read(target.join("old-runtime.dll")).unwrap(), b"old");
+            assert!(!root.join(".runtime-backup").exists());
+
+            fs::remove_dir_all(root).unwrap();
         }
 
         #[test]
