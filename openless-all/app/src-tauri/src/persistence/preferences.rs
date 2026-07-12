@@ -19,8 +19,36 @@ fn read_preferences(path: &Path) -> Result<UserPreferences> {
     if bytes.is_empty() {
         return Ok(UserPreferences::default());
     }
-    let prefs = serde_json::from_slice::<UserPreferences>(&bytes)
-        .with_context(|| format!("decode failed: {}", path.display()))?;
+    let prefs = match serde_json::from_slice::<UserPreferences>(&bytes) {
+        Ok(prefs) => prefs,
+        Err(err) => {
+            // 严格解析失败绝不能静默回落到 default——那样应用一启动就“忘光”所有设置，
+            // 用户随手改一项就把整份 preferences.json 覆盖成默认，历史设置永久丢失
+            // （用户反馈：每次重装 app 后热键等设置读不到的根因路径）。
+            // 改为：① 原样备份坏文件，永不销毁；② 逐字段抢救所有仍合法的设置；
+            // ③ 把抢救结果写回，得到一份干净可解析的文件，后续走正常路径。
+            log::error!(
+                "[prefs] strict decode of {} failed: {err:#}; backing up original and salvaging valid fields",
+                path.display()
+            );
+            backup_unparseable_preferences(path, &bytes);
+            let salvaged = UserPreferences::salvage_from_json_bytes(&bytes);
+            match serde_json::to_vec_pretty(&salvaged)
+                .context("encode salvaged prefs failed")
+                .and_then(|json| atomic_write(path, &json))
+            {
+                Ok(()) => log::info!(
+                    "[prefs] salvaged preferences written back to {}",
+                    path.display()
+                ),
+                Err(err) => log::warn!(
+                    "[prefs] failed to persist salvaged preferences to {}: {err}",
+                    path.display()
+                ),
+            }
+            return Ok(salvaged);
+        }
+    };
 
     // issue #440：老版本可能已把旧默认 `streamingInsert:false` 写进 preferences.json。
     // 反序列化会在内存里迁到 true，但还必须把迁移标记落盘，否则每次启动都停留在
@@ -48,6 +76,26 @@ fn read_preferences(path: &Path) -> Result<UserPreferences> {
     }
 
     Ok(prefs)
+}
+
+/// 把无法解析的 preferences.json 原样备份为 `preferences.corrupt-<unix>.json`，
+/// 保证抢救/写回之前用户的原始设置永远有一份可人工核对的副本，绝不静默销毁。
+fn backup_unparseable_preferences(path: &Path, bytes: &[u8]) {
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let backup = path.with_file_name(format!("preferences.corrupt-{ts}.json"));
+    match fs::write(&backup, bytes) {
+        Ok(()) => log::error!(
+            "[prefs] original unparseable preferences backed up to {}",
+            backup.display()
+        ),
+        Err(err) => log::warn!(
+            "[prefs] failed to back up unparseable preferences to {}: {err}",
+            backup.display()
+        ),
+    }
 }
 
 pub struct PreferencesStore {

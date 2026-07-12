@@ -1297,6 +1297,42 @@ impl<'de> Deserialize<'de> for UserPreferences {
     }
 }
 
+impl UserPreferences {
+    /// 逐字段抢救一份无法严格反序列化的 preferences.json。
+    ///
+    /// 背景：`UserPreferencesWire` 容器级 `#[serde(default)]` 已能容忍「缺字段」
+    /// （老文件读新版本）。真正会让整份解析失败、进而静默回落默认值（= 用户所有
+    /// 设置一次性丢光）的，是「字段存在但值非法」——例如某次重构改了枚举变体名 /
+    /// 字段类型，旧文件里的旧值在新版本里不再合法。这正是用户反馈「每次重装 app
+    /// 之后热键等设置就读不到」的根因路径。
+    ///
+    /// 抢救策略：把 JSON 当作对象逐 key 试解析。因为 Wire 对所有字段都有 default，
+    /// 单键对象 `{k: v}` 只有当 `v` 对字段 `k` 的类型非法时才会失败——据此精确剔除
+    /// 坏字段，保留其余全部有效设置（热键、模型选择、风格等都能活下来），最后再走
+    /// 一次正常反序列化。无法当作对象解析时才彻底回落默认。
+    pub fn salvage_from_json_bytes(bytes: &[u8]) -> Self {
+        let Ok(serde_json::Value::Object(map)) =
+            serde_json::from_slice::<serde_json::Value>(bytes)
+        else {
+            return Self::default();
+        };
+
+        let mut cleaned = serde_json::Map::new();
+        for (key, value) in map {
+            let probe = serde_json::Value::Object(
+                std::iter::once((key.clone(), value.clone())).collect(),
+            );
+            if serde_json::from_value::<UserPreferencesWire>(probe).is_ok() {
+                cleaned.insert(key, value);
+            } else {
+                log::warn!("[prefs] salvage dropping unparseable field: {key}");
+            }
+        }
+
+        serde_json::from_value::<Self>(serde_json::Value::Object(cleaned)).unwrap_or_default()
+    }
+}
+
 fn default_qa_hotkey() -> Option<ShortcutBinding> {
     Some(ShortcutBinding::default_qa())
 }
@@ -2730,6 +2766,27 @@ pub struct QaChatMessage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn salvage_preserves_valid_fields_when_one_value_is_invalid() {
+        // 模拟「某次重构改了枚举变体名」后的旧文件：defaultMode 是新版本已不存在的值，
+        // 但 dictationHotkey / activeAsrProvider 仍然合法。抢救必须保住合法字段，
+        // 只把非法字段回落默认——而不是整份丢光。
+        let json = br#"{
+            "defaultMode": "totally-removed-mode",
+            "dictationHotkey": { "primary": "LeftOption", "modifiers": [] },
+            "activeAsrProvider": "bailian-qwen3-realtime"
+        }"#;
+
+        // 严格解析必失败（否则这个测试没意义）。
+        assert!(serde_json::from_slice::<UserPreferences>(json).is_err());
+
+        let salvaged = UserPreferences::salvage_from_json_bytes(json);
+        assert_eq!(salvaged.dictation_hotkey.primary, "LeftOption");
+        assert_eq!(salvaged.active_asr_provider, "bailian-qwen3-realtime");
+        // 非法字段回落到默认，而不是让整份解析失败。
+        assert_eq!(salvaged.default_mode, UserPreferences::default().default_mode);
+    }
 
     #[test]
     fn non_tsf_insertion_fallback_defaults_to_enabled() {
