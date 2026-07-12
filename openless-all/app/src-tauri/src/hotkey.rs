@@ -598,10 +598,10 @@ mod platform {
 
         if is_active && !was_held {
             ctx.shared.trigger_held.store(true, Ordering::SeqCst);
-            send_or_log(&ctx.tx, HotkeyEvent::Pressed { at: Instant::now() });
+            send_or_log(&ctx.tx, HotkeyEvent::Pressed { at: std::time::Instant::now() });
         } else if !is_active && was_held {
             ctx.shared.trigger_held.store(false, Ordering::SeqCst);
-            send_or_log(&ctx.tx, HotkeyEvent::Released { at: Instant::now() });
+            send_or_log(&ctx.tx, HotkeyEvent::Released { at: std::time::Instant::now() });
         }
     }
 
@@ -1012,14 +1012,14 @@ mod platform {
                 let was_held = ctx.shared.trigger_held.swap(true, Ordering::SeqCst);
                 if !was_held {
                     log::info!("[hotkey] Windows trigger pressed vk={vk_code}");
-                    send_or_log(&ctx.tx, HotkeyEvent::Pressed { at: Instant::now() });
+                    send_or_log(&ctx.tx, HotkeyEvent::Pressed { at: std::time::Instant::now() });
                 }
             }
             WM_KEYUP | WM_SYSKEYUP => {
                 let was_held = ctx.shared.trigger_held.swap(false, Ordering::SeqCst);
                 if was_held {
                     log::info!("[hotkey] Windows trigger released vk={vk_code}");
-                    send_or_log(&ctx.tx, HotkeyEvent::Released { at: Instant::now() });
+                    send_or_log(&ctx.tx, HotkeyEvent::Released { at: std::time::Instant::now() });
                 }
             }
             _ => {}
