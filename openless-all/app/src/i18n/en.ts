@@ -634,7 +634,7 @@ export const en: typeof zhCN = {
       comingSoonNote: 'Config is saved now; hotkey triggering and the execution flow land in a later version.',
       hotkeyHint: 'When enabled, hold the shortcut below to talk; release it and Claude shows the result in the capsule.',
       voiceHotkey: 'Hold-to-talk key',
-      voiceHotkeyDesc: 'Hold to talk, release to run. Supports Ctrl/Option/Fn single keys.',
+      voiceHotkeyDesc: 'Hold to talk, release to run. Supports Ctrl/Option/Fn single keys. See the Advanced settings page for what it does.',
       provider: 'Agent backend',
       opencodeReady: 'OpenCode v{{version}} detected.',
       opencodeMissing: 'opencode command not found. Install it (npm i -g opencode-ai) and sign in with opencode auth login before use.',

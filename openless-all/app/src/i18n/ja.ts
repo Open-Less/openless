@@ -636,7 +636,7 @@ export const ja: typeof zhCN = {
       comingSoonNote: '設定はすぐ保存されます。ホットキー起動と実行フローは今後のバージョンで対応。',
       hotkeyHint: '有効にすると、下のショートカットを押しながら話し、離すと Claude の結果がカプセルに表示されます。',
       voiceHotkey: '押しながら話すキー',
-      voiceHotkeyDesc: '押して話す、離して実行。Ctrl/Option/Fn などの単キー対応。',
+      voiceHotkeyDesc: '押して話す、離して実行。Ctrl/Option/Fn などの単キー対応。機能の説明は「詳細」設定ページを参照。',
       provider: 'Agent バックエンド',
       opencodeReady: 'OpenCode v{{version}} を検出しました。',
       opencodeMissing: 'opencode コマンドが見つかりません。先にインストール（npm i -g opencode-ai）して opencode auth login でログインしてください。',

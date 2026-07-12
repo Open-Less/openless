@@ -634,7 +634,7 @@ export const zhTW: typeof zhCN = {
       comingSoonNote: '設定即時儲存；熱鍵觸發與執行鏈路隨後續版本生效。',
       hotkeyHint: '開啟後，按住下方快捷鍵說話，放開後 Claude 處理並把結果顯示在膠囊裡。',
       voiceHotkey: '按住說話鍵',
-      voiceHotkeyDesc: '按住說話、放開執行。支援 Ctrl/Option/Fn 等單鍵。',
+      voiceHotkeyDesc: '按住說話、放開執行。支援 Ctrl/Option/Fn 等單鍵。功能說明參見「進階」設定頁。',
       provider: 'Agent 後端',
       opencodeReady: '已偵測到 OpenCode v{{version}}。',
       opencodeMissing: '未偵測到 opencode 指令。請先安裝（npm i -g opencode-ai）並用 opencode auth login 登入後再使用。',

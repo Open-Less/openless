@@ -632,7 +632,7 @@ export const zhCN = {
       comingSoonNote: '配置即时保存；热键触发与执行链路随后续版本生效。',
       hotkeyHint: '开启后，按住下方快捷键说话，松开后 Claude 处理并把结果显示在胶囊里。',
       voiceHotkey: '按住说话键',
-      voiceHotkeyDesc: '按住说话、松开执行。支持 Ctrl/Option/Fn 等单键。',
+      voiceHotkeyDesc: '按住说话、松开执行。支持 Ctrl/Option/Fn 等单键。功能说明参见「高级」设置页。',
       provider: 'Agent 后端',
       opencodeReady: '已检测到 OpenCode v{{version}}。',
       opencodeMissing: '未检测到 opencode 命令。请先安装（npm i -g opencode-ai）并用 opencode auth login 登录后再使用。',

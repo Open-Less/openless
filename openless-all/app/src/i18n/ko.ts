@@ -636,7 +636,7 @@ export const ko: typeof zhCN = {
       comingSoonNote: '설정은 즉시 저장됩니다. 단축키 트리거와 실행 흐름은 이후 버전에서 제공됩니다.',
       hotkeyHint: '켜면 아래 단축키를 누른 채 말하고, 놓으면 Claude 결과가 캡슐에 표시됩니다.',
       voiceHotkey: '누르고 말하기 키',
-      voiceHotkeyDesc: '누르고 말하고 놓으면 실행. Ctrl/Option/Fn 단일 키 지원.',
+      voiceHotkeyDesc: '누르고 말하고 놓으면 실행. Ctrl/Option/Fn 단일 키 지원. 기능 설명은 「고급」 설정 페이지 참조.',
       provider: 'Agent 백엔드',
       opencodeReady: 'OpenCode v{{version}} 감지됨.',
       opencodeMissing: 'opencode 명령을 찾을 수 없습니다. 먼저 설치(npm i -g opencode-ai)하고 opencode auth login으로 로그인하세요.',
