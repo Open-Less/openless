@@ -1489,8 +1489,8 @@ impl Coordinator {
     #[cfg(any(debug_assertions, test))]
     pub async fn inject_hotkey_click_for_dev(&self) -> Result<(), String> {
         log::info!("[coord] dev hotkey injection started");
-        handle_pressed(&self.inner).await;
-        handle_released(&self.inner).await;
+            handle_pressed(&self.inner, std::time::Instant::now()).await;
+            handle_released(&self.inner, std::time::Instant::now()).await;
         cancel_session(&self.inner);
         Ok(())
     }
@@ -2662,7 +2662,7 @@ mod tests {
             state.session_id = session_id(41);
         }
 
-        handle_pressed_edge(&coordinator.inner).await;
+        handle_pressed_edge(&coordinator.inner, std::time::Instant::now()).await;
 
         let state = coordinator.inner.state.lock();
         assert_eq!(state.phase, SessionPhase::Inserting);
@@ -2690,7 +2690,7 @@ mod tests {
             .hotkey_trigger_held
             .store(true, Ordering::SeqCst);
 
-        handle_pressed_edge(&coordinator.inner).await;
+        handle_pressed_edge(&coordinator.inner, std::time::Instant::now()).await;
 
         assert_eq!(
             coordinator.inner.state.lock().phase,
@@ -2721,19 +2721,44 @@ mod tests {
         set_auto_mode(&coordinator);
         coordinator.inner.state.lock().phase = SessionPhase::Listening;
         // 刚按下（elapsed ≈ 0 < 350ms）→ 短按。
-        *coordinator.inner.hotkey_press_at.lock() = Some(std::time::Instant::now());
+        let pressed_at = std::time::Instant::now();
+        *coordinator.inner.hotkey_press_at.lock() = Some(pressed_at);
         coordinator
             .inner
             .hotkey_trigger_held
             .store(true, Ordering::SeqCst);
 
-        handle_released_edge(&coordinator.inner).await;
+        handle_released_edge(&coordinator.inner, pressed_at + std::time::Duration::from_millis(100)).await;
 
         // 短按松手不结束录音，等下一次按下再停。
         assert_eq!(
             coordinator.inner.state.lock().phase,
             SessionPhase::Listening
         );
+    }
+
+    #[tokio::test]
+    async fn auto_short_tap_stays_latched_when_bridge_handles_release_late() {
+        let coordinator = Coordinator::new();
+        set_auto_mode(&coordinator);
+        coordinator.inner.state.lock().phase = SessionPhase::Listening;
+        let pressed_at = std::time::Instant::now();
+        *coordinator.inner.hotkey_press_at.lock() = Some(pressed_at);
+        coordinator
+            .inner
+            .hotkey_trigger_held
+            .store(true, Ordering::SeqCst);
+
+        // 模拟上一条会话阻塞 bridge：处理发生在物理松手很久之后。
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        handle_released_edge(
+            &coordinator.inner,
+            pressed_at + std::time::Duration::from_millis(100),
+        )
+        .await;
+
+        assert_eq!(coordinator.inner.state.lock().phase, SessionPhase::Listening);
+        assert!(coordinator.inner.hotkey_press_at.lock().is_none());
     }
 
     // Auto 模式长按：松手时按住时长 >= 阈值 → 按住说话语义，结束会话（Listening → Idle）。
@@ -2743,17 +2768,18 @@ mod tests {
         set_auto_mode(&coordinator);
         coordinator.inner.state.lock().phase = SessionPhase::Listening;
         // 按住已超过阈值 → 长按。
-        *coordinator.inner.hotkey_press_at.lock() = std::time::Instant::now()
-            .checked_sub(std::time::Duration::from_millis(500));
+        let pressed_at = std::time::Instant::now();
+        *coordinator.inner.hotkey_press_at.lock() = Some(pressed_at);
         coordinator
             .inner
             .hotkey_trigger_held
             .store(true, Ordering::SeqCst);
 
-        handle_released_edge(&coordinator.inner).await;
+        handle_released_edge(&coordinator.inner, pressed_at + std::time::Duration::from_millis(500)).await;
 
         // 无 recorder / ASR 的测试会话下，end_session 直接收尾到 Idle。
         assert_eq!(coordinator.inner.state.lock().phase, SessionPhase::Idle);
+        assert!(coordinator.inner.hotkey_press_at.lock().is_none());
     }
 
     #[test]

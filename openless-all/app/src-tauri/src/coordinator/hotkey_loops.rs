@@ -352,12 +352,12 @@ pub(super) fn less_computer_modifier_bridge_loop(inner: Arc<Inner>, rx: mpsc::Re
         }
         let inner_cloned = Arc::clone(&inner);
         match evt {
-            HotkeyEvent::Pressed => {
+            HotkeyEvent::Pressed { .. } => {
                 async_runtime::block_on(async {
                     handle_less_computer_pressed(&inner_cloned).await
                 });
             }
-            HotkeyEvent::Released => {
+            HotkeyEvent::Released { .. } => {
                 async_runtime::block_on(async {
                     handle_less_computer_released(&inner_cloned).await
                 });
@@ -375,12 +375,12 @@ pub(super) fn less_computer_combo_bridge_loop(inner: Arc<Inner>, rx: mpsc::Recei
         }
         let inner_cloned = Arc::clone(&inner);
         match evt {
-            ComboHotkeyEvent::Pressed => {
+            ComboHotkeyEvent::Pressed { .. } => {
                 async_runtime::block_on(async {
                     handle_less_computer_pressed(&inner_cloned).await
                 });
             }
-            ComboHotkeyEvent::Released => {
+            ComboHotkeyEvent::Released { .. } => {
                 async_runtime::block_on(async {
                     handle_less_computer_released(&inner_cloned).await
                 });
@@ -601,14 +601,14 @@ pub(super) fn combo_hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<Com
         match evt {
             // P0 #468/#475: 同 hotkey_bridge_loop —— Pressed/Released 必须串行 await，
             // 否则 latch 竞态导致 combo 快捷键二次按键失效。
-            ComboHotkeyEvent::Pressed => {
+            ComboHotkeyEvent::Pressed { at } => {
                 async_runtime::block_on(async {
-                    handle_pressed_edge(&inner_cloned).await;
+                    handle_pressed_edge(&inner_cloned, at).await;
                 });
             }
-            ComboHotkeyEvent::Released => {
+            ComboHotkeyEvent::Released { at } => {
                 async_runtime::block_on(async {
-                    handle_released_edge(&inner_cloned).await;
+                    handle_released_edge(&inner_cloned, at).await;
                 });
             }
         }
@@ -711,7 +711,7 @@ pub(super) fn translation_hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiv
         if inner.shortcut_recording_active.load(Ordering::SeqCst) {
             continue;
         }
-        if matches!(evt, ComboHotkeyEvent::Pressed) {
+        if matches!(evt, ComboHotkeyEvent::Pressed { .. }) {
             mark_translation_modifier_seen(&inner);
         }
     }
@@ -807,7 +807,7 @@ pub(super) fn action_hotkey_bridge_loop(
         if inner.shortcut_recording_active.load(Ordering::SeqCst) {
             continue;
         }
-        if matches!(evt, ComboHotkeyEvent::Pressed) {
+        if matches!(evt, ComboHotkeyEvent::Pressed { .. }) {
             handle_action_hotkey_pressed(&inner, kind);
         }
     }
@@ -1026,14 +1026,14 @@ pub(super) fn hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<HotkeyEve
             // 里直到 begin_session 完成，但 SessionPhase::Starting 已经有
             // request_stop_during_starting 兜底，begin_session 完成进 Listening 后
             // bridge 立刻 recv Released → end_session，行为正确，仅有短暂 stop 延迟。
-            HotkeyEvent::Pressed => {
+            HotkeyEvent::Pressed { at } => {
                 async_runtime::block_on(async {
-                    handle_pressed_edge(&inner_cloned).await;
+                    handle_pressed_edge(&inner_cloned, at).await;
                 });
             }
-            HotkeyEvent::Released => {
+            HotkeyEvent::Released { at } => {
                 async_runtime::block_on(async {
-                    handle_released_edge(&inner_cloned).await;
+                    handle_released_edge(&inner_cloned, at).await;
                 });
             }
             HotkeyEvent::Cancelled => {
@@ -1161,11 +1161,11 @@ pub(super) async fn handle_window_hotkey_event(
                 log::info!(
                     "[window-hotkey] pressed trigger={trigger:?} code={code} repeat={repeat}"
                 );
-                handle_pressed_edge(inner).await;
+                handle_pressed_edge(inner, std::time::Instant::now()).await;
             }
             "keyup" => {
                 log::info!("[window-hotkey] released trigger={trigger:?} code={code}");
-                handle_released_edge(inner).await;
+                handle_released_edge(inner, std::time::Instant::now()).await;
             }
             _ => {}
         }

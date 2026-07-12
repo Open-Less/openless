@@ -317,11 +317,8 @@ pub fn start_dictation_signal_listener(
                 );
                 if let Some(member) = member {
                     if member == "DictationKeyEvent" {
-                        let event = if is_press {
-                            crate::hotkey::HotkeyEvent::Pressed
-                        } else {
-                            crate::hotkey::HotkeyEvent::Released
-                        };
+                        let at = std::time::Instant::now();
+                        let event = if is_press { crate::hotkey::HotkeyEvent::Pressed { at } } else { crate::hotkey::HotkeyEvent::Released { at } };
                         let _ = tx.send(event);
                     } else if member == "QaShortcutEvent" {
                         if is_press {

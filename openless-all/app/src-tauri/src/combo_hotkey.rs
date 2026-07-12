@@ -11,6 +11,7 @@
 
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Arc;
+use std::time::Instant;
 
 use global_hotkey::{GlobalHotKeyEvent, HotKeyState};
 use parking_lot::Mutex;
@@ -22,9 +23,9 @@ use crate::types::ShortcutBinding;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ComboHotkeyEvent {
     /// 用户按下了配置的组合键。
-    Pressed,
+    Pressed { at: Instant },
     /// 用户松开了配置的组合键（用于 Hold 模式结束录音）。
-    Released,
+    Released { at: Instant },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -129,9 +130,10 @@ fn forward_loop(hotkey_id: u32, rx: Receiver<GlobalHotKeyEvent>, tx: Sender<Comb
         if event.id() != hotkey_id {
             continue;
         }
+        let at = Instant::now();
         let combo_event = match event.state() {
-            HotKeyState::Pressed => ComboHotkeyEvent::Pressed,
-            HotKeyState::Released => ComboHotkeyEvent::Released,
+            HotKeyState::Pressed => ComboHotkeyEvent::Pressed { at },
+            HotKeyState::Released => ComboHotkeyEvent::Released { at },
         };
         if let Err(e) = tx.send(combo_event) {
             log::warn!("[combo-hotkey] 事件投递失败: {e}");
@@ -263,8 +265,8 @@ mod tests {
 
         forward_loop(8, event_rx, out_tx);
 
-        assert!(matches!(out_rx.recv().unwrap(), ComboHotkeyEvent::Released));
-        assert!(matches!(out_rx.recv().unwrap(), ComboHotkeyEvent::Pressed));
+        assert!(matches!(out_rx.recv().unwrap(), ComboHotkeyEvent::Released { .. }));
+        assert!(matches!(out_rx.recv().unwrap(), ComboHotkeyEvent::Pressed { .. }));
         assert!(out_rx.try_recv().is_err());
     }
 }

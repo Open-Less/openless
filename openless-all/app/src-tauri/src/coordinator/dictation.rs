@@ -14,10 +14,8 @@ use super::*;
 const HOTKEY_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(250);
 /// Auto 模式下区分「短按 = 切换式」与「长按 = 按住说话」的按住时长阈值。
 /// 松手时若按住 < 此值判为短按（锁存，保持录音），>= 此值判为长按（松手即停）。
-/// 注意：本时长在 handle_released 处理时用 press_at.elapsed() 测量，会被 begin_session
-/// 阻塞 hotkey bridge 的时长 B 抬高（见 hotkey_loops.rs 的串行化注释）。因此当冷启动
-/// 使 B >= 本阈值时，一次真实短按可能被误判为长按（录音提前停止，用户再按一次即可）。
-/// 常见快速启动（B≈100–200ms）下测量正确。350ms 是「点一下 vs 明显按住」的自然分界。
+/// 时长以热键事件产生时携带的时间戳计算，避免串行 bridge 的排队延迟改变用户的物理按住时长。
+/// 350ms 是「点一下 vs 明显按住」的自然分界。
 const AUTO_HOLD_THRESHOLD: std::time::Duration = std::time::Duration::from_millis(350);
 const STREAMING_INSERT_FLUSH_INTERVAL: std::time::Duration = std::time::Duration::from_millis(12);
 
@@ -674,7 +672,7 @@ fn default_done_message(status: InsertStatus, polish_failed: bool) -> Option<Str
     }
 }
 
-pub(super) async fn handle_pressed_edge(inner: &Arc<Inner>) {
+pub(super) async fn handle_pressed_edge(inner: &Arc<Inner>, pressed_at: std::time::Instant) {
     let was_held = inner.hotkey_trigger_held.swap(true, Ordering::SeqCst);
     if !was_held {
         // 防抖：相邻 < HOTKEY_DEBOUNCE 的边沿直接丢弃，记到 log 方便排查。
@@ -708,7 +706,7 @@ pub(super) async fn handle_pressed_edge(inner: &Arc<Inner>) {
         if panel_visible && !dictation_active {
             handle_qa_option_edge(inner).await;
         } else {
-            handle_pressed(inner).await;
+            handle_pressed(inner, pressed_at).await;
         }
     }
 }
@@ -733,7 +731,7 @@ fn is_queued_chain_press(now: std::time::Instant, cooldown_until: std::time::Ins
         .unwrap_or(false)
 }
 
-pub(super) async fn handle_pressed(inner: &Arc<Inner>) {
+pub(super) async fn handle_pressed(inner: &Arc<Inner>, pressed_at: std::time::Instant) {
     let mode = inner.prefs.get().hotkey.mode;
     let phase = inner.state.lock().phase;
     log::info!("[coord] hotkey pressed (mode={mode:?}, phase={phase:?})");
@@ -792,7 +790,7 @@ pub(super) async fn handle_pressed(inner: &Arc<Inner>) {
                     }
                 }
             }
-            *inner.hotkey_press_at.lock() = Some(now);
+            *inner.hotkey_press_at.lock() = Some(pressed_at);
             let _ = begin_session(inner).await;
         }
         // Auto 模式已因上一次「短按」锁存为切换态，再次按下 → 用户想停。
@@ -807,7 +805,7 @@ pub(super) async fn handle_pressed(inner: &Arc<Inner>) {
     }
 }
 
-pub(super) async fn handle_released_edge(inner: &Arc<Inner>) {
+pub(super) async fn handle_released_edge(inner: &Arc<Inner>, released_at: std::time::Instant) {
     let was_held = inner.hotkey_trigger_held.swap(false, Ordering::SeqCst);
     if was_held {
         // QA 浮窗可见时，Option 行为是 press-toggle（不分 hold/release），release 边沿忽略。
@@ -819,11 +817,11 @@ pub(super) async fn handle_released_edge(inner: &Arc<Inner>) {
         if panel_visible && !dictation_active {
             return;
         }
-        handle_released(inner).await;
+        handle_released(inner, released_at).await;
     }
 }
 
-pub(super) async fn handle_released(inner: &Arc<Inner>) {
+pub(super) async fn handle_released(inner: &Arc<Inner>, released_at: std::time::Instant) {
     let mode = inner.prefs.get().hotkey.mode;
     let phase = inner.state.lock().phase;
     log::info!("[coord] hotkey released (mode={mode:?}, phase={phase:?})");
@@ -844,9 +842,9 @@ pub(super) async fn handle_released(inner: &Arc<Inner>) {
         }
     }
     if mode == HotkeyMode::Auto {
-        // 按住时长判定短按 / 长按。press_at 为空（理论上不会）时保守当作短按 → 锁存。
-        let held_long = (*inner.hotkey_press_at.lock())
-            .map(|t| t.elapsed() >= AUTO_HOLD_THRESHOLD)
+        // 使用物理按下/松开的事件时刻，避免 bridge 排队时把处理延迟误算为按住时长。
+        let held_long = inner.hotkey_press_at.lock().take()
+            .map(|pressed_at| released_at.saturating_duration_since(pressed_at) >= AUTO_HOLD_THRESHOLD)
             .unwrap_or(false);
         match phase {
             // 长按松手 = 按住说话，松手即停；短按 = 切换式，锁存保持录音，下次按下再停。

@@ -12,7 +12,7 @@
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{self, Sender};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use parking_lot::RwLock;
 
@@ -21,8 +21,8 @@ use crate::types::{HotkeyAdapterKind, HotkeyBinding, HotkeyCapability, HotkeyIns
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HotkeyEvent {
-    Pressed,
-    Released,
+    Pressed { at: Instant },
+    Released { at: Instant },
     Cancelled,
     /// Shift（或未来配置项指定的修饰键）按下边沿。可在录音过程中任何时刻产生；
     /// 上层据此切换到翻译输出管线。详见 issue #4。
@@ -598,10 +598,10 @@ mod platform {
 
         if is_active && !was_held {
             ctx.shared.trigger_held.store(true, Ordering::SeqCst);
-            send_or_log(&ctx.tx, HotkeyEvent::Pressed);
+            send_or_log(&ctx.tx, HotkeyEvent::Pressed { at: Instant::now() });
         } else if !is_active && was_held {
             ctx.shared.trigger_held.store(false, Ordering::SeqCst);
-            send_or_log(&ctx.tx, HotkeyEvent::Released);
+            send_or_log(&ctx.tx, HotkeyEvent::Released { at: Instant::now() });
         }
     }
 
@@ -706,6 +706,14 @@ mod platform {
 
         fn drain(rx: &mpsc::Receiver<HotkeyEvent>) -> Vec<HotkeyEvent> {
             rx.try_iter().collect()
+        }
+
+        fn edge_names(events: Vec<HotkeyEvent>) -> Vec<&'static str> {
+            events.into_iter().filter_map(|event| match event {
+                HotkeyEvent::Pressed { .. } => Some("pressed"),
+                HotkeyEvent::Released { .. } => Some("released"),
+                _ => None,
+            }).collect()
         }
 
         #[test]
@@ -1004,14 +1012,14 @@ mod platform {
                 let was_held = ctx.shared.trigger_held.swap(true, Ordering::SeqCst);
                 if !was_held {
                     log::info!("[hotkey] Windows trigger pressed vk={vk_code}");
-                    send_or_log(&ctx.tx, HotkeyEvent::Pressed);
+                    send_or_log(&ctx.tx, HotkeyEvent::Pressed { at: Instant::now() });
                 }
             }
             WM_KEYUP | WM_SYSKEYUP => {
                 let was_held = ctx.shared.trigger_held.swap(false, Ordering::SeqCst);
                 if was_held {
                     log::info!("[hotkey] Windows trigger released vk={vk_code}");
-                    send_or_log(&ctx.tx, HotkeyEvent::Released);
+                    send_or_log(&ctx.tx, HotkeyEvent::Released { at: Instant::now() });
                 }
             }
             _ => {}
@@ -1120,8 +1128,8 @@ mod platform {
             assert!(dispatch_keyboard_event(&ctx, VK_RCONTROL, WM_KEYUP));
 
             assert_eq!(
-                drain(&rx),
-                vec![HotkeyEvent::Pressed, HotkeyEvent::Released]
+                edge_names(drain(&rx)),
+                vec!["pressed", "released"]
             );
         }
 
@@ -1137,12 +1145,8 @@ mod platform {
             assert!(dispatch_keyboard_event(&ctx, VK_RCONTROL, WM_KEYDOWN));
 
             assert_eq!(
-                drain(&rx),
-                vec![
-                    HotkeyEvent::Pressed,
-                    HotkeyEvent::Released,
-                    HotkeyEvent::Pressed
-                ]
+                edge_names(drain(&rx)),
+                vec!["pressed", "released", "pressed"]
             );
         }
 
@@ -1181,8 +1185,8 @@ mod platform {
             assert!(dispatch_keyboard_event(&left_ctx, VK_LMENU, WM_KEYDOWN));
             assert!(dispatch_keyboard_event(&left_ctx, VK_LMENU, WM_KEYUP));
             assert_eq!(
-                drain(&left_rx),
-                vec![HotkeyEvent::Pressed, HotkeyEvent::Released]
+                edge_names(drain(&left_rx)),
+                vec!["pressed", "released"]
             );
 
             let right_option_shared = shared(HotkeyTrigger::RightOption);
@@ -1197,7 +1201,7 @@ mod platform {
                 VK_RMENU,
                 WM_KEYDOWN
             ));
-            assert_eq!(drain(&right_option_rx), vec![HotkeyEvent::Pressed]);
+            assert_eq!(edge_names(drain(&right_option_rx)), vec!["pressed"]);
 
             let right_alt_shared = shared(HotkeyTrigger::RightAlt);
             let (right_alt_ctx, right_alt_rx) = callback_context(right_alt_shared);
@@ -1211,7 +1215,7 @@ mod platform {
                 VK_RMENU,
                 WM_KEYDOWN
             ));
-            assert_eq!(drain(&right_alt_rx), vec![HotkeyEvent::Pressed]);
+            assert_eq!(edge_names(drain(&right_alt_rx)), vec!["pressed"]);
         }
 
         #[test]
@@ -1233,7 +1237,7 @@ mod platform {
             dispatch_keyboard_event(&ctx, VK_LSHIFT, WM_KEYDOWN);
             dispatch_keyboard_event(&ctx, 0x44, WM_KEYDOWN);
 
-            assert_eq!(combo_rx.recv().unwrap(), ComboHotkeyEvent::Pressed);
+            assert!(matches!(combo_rx.recv().unwrap(), ComboHotkeyEvent::Pressed { .. }));
             assert!(
                 hotkey_rx
                     .try_iter()
