@@ -542,7 +542,7 @@ pub(super) async fn build_qa_asr_start(inner: &Arc<Inner>, active_asr: &str) -> 
         .ok()
         .flatten()
         .unwrap_or_default();
-    let effective_asr = resolve_effective_asr_provider(active_asr, &asr_model);
+    let effective_asr = resolve_effective_asr_provider(active_asr, &asr_model)?;
     match active_asr_provider_kind(&effective_asr) {
         ActiveAsrProviderKind::Bailian => Ok(QaAsrStart::Bailian {
             asr: Arc::new(BailianRealtimeASR::new(read_bailian_credentials())),
@@ -561,7 +561,10 @@ pub(super) async fn build_qa_asr_start(inner: &Arc<Inner>, active_asr: &str) -> 
         }
         ActiveAsrProviderKind::DashScopeMultimodal => {
             let (api_key, base_url, model) = read_dashscope_multimodal_credentials();
-            let asr = Arc::new(DashScopeMultimodalASR::new(api_key, base_url, model));
+            let asr = Arc::new(
+                DashScopeMultimodalASR::new(api_key, base_url, model)
+                    .with_vocabulary_id(read_asr_vocabulary_id()),
+            );
             let active = ActiveAsr::DashScopeMultimodal(Arc::clone(&asr));
             let consumer: Arc<dyn crate::recorder::AudioConsumer> = asr;
             Ok(QaAsrStart::Ready { active, consumer })

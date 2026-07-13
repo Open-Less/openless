@@ -277,7 +277,8 @@ pub(super) async fn transcribe_overlay_dictation_asr(
         }
         ActiveAsr::DashScopeMultimodal(asr) => {
             debug_assert!(uses_global_timeout);
-            let timeout_duration = std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS);
+            let audio_secs = asr.buffer_duration_ms() as f64 / 1000.0;
+            let timeout_duration = whisper_transcribe_timeout(audio_secs);
             match tokio::time::timeout(timeout_duration, asr.transcribe()).await {
                 Ok(Ok(raw)) => Ok(raw),
                 Ok(Err(error)) => Err(error.to_string()),
@@ -871,7 +872,8 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
         }
         ActiveAsr::DashScopeMultimodal(m) => {
             debug_assert!(uses_global_timeout);
-            let timeout_duration = std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS);
+            let audio_secs = m.buffer_duration_ms() as f64 / 1000.0;
+            let timeout_duration = whisper_transcribe_timeout(audio_secs);
             match tokio::time::timeout(timeout_duration, m.transcribe()).await {
                 Ok(Ok(r)) => r,
                 Ok(Err(e)) => {
@@ -881,8 +883,9 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
                 }
                 Err(_) => {
                     log::error!(
-                        "[coord] QA: DashScope Fun-ASR-Flash 全局超时 {} 秒",
-                        COORDINATOR_GLOBAL_TIMEOUT_SECS
+                        "[coord] QA: DashScope Fun-ASR-Flash dynamic timeout {}s (audio {:.2}s)",
+                        timeout_duration.as_secs(),
+                        audio_secs
                     );
                     finish_qa_with_error(inner, "识别超时".to_string());
                     return Err("dashscope multimodal global timeout".to_string());

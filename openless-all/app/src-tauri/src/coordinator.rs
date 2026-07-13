@@ -302,19 +302,51 @@ pub(crate) fn active_asr_provider_kind(id: &str) -> ActiveAsrProviderKind {
 ///
 /// 老用户若停在别名 id（`bailian-qwen3-realtime` / `bailian-fun-asr-flash`）上，
 /// 非 `bailian` 直接原样返回，各走各的旧路径——即「隐藏别名」向后兼容。
-pub(crate) fn resolve_effective_asr_provider(active_asr: &str, model: &str) -> String {
+pub(crate) fn resolve_effective_asr_provider(
+    active_asr: &str,
+    model: &str,
+) -> Result<String, String> {
     if !is_bailian_provider(active_asr) {
-        return active_asr.to_string();
+        if is_dashscope_multimodal_provider(active_asr) {
+            validate_dashscope_multimodal_model(model)?;
+        }
+        return Ok(active_asr.to_string());
     }
+
+    // Android/iOS 继续使用原来的 Bailian WebSocket 配置。统一入口的模型路由
+    // 只在桌面端启用，避免共享设置页意外改变移动端行为。
+    if cfg!(mobile) {
+        return Ok(crate::asr::bailian::PROVIDER_ID.to_string());
+    }
+
     let model = model.trim();
-    if model.starts_with("qwen3-asr-flash-realtime") {
-        crate::asr::qwen_realtime::PROVIDER_ID.to_string()
+    if model.is_empty() || is_classic_bailian_realtime_model(model) {
+        Ok(crate::asr::bailian::PROVIDER_ID.to_string())
+    } else if model.starts_with("qwen3-asr-flash-realtime") {
+        Ok(crate::asr::qwen_realtime::PROVIDER_ID.to_string())
     } else if model.starts_with("fun-asr-flash") {
-        crate::asr::dashscope_multimodal::PROVIDER_ID.to_string()
+        Ok(crate::asr::dashscope_multimodal::PROVIDER_ID.to_string())
     } else {
-        // fun-asr-realtime 及空/未知模型 → 经典实时（百炼默认）
-        crate::asr::bailian::PROVIDER_ID.to_string()
+        Err(format!(
+            "不支持的百炼 ASR 模型：{model}。支持 fun-asr-realtime、paraformer-realtime、sensevoice-realtime、qwen3-asr-flash-realtime 和 fun-asr-flash 系列"
+        ))
     }
+}
+
+fn is_classic_bailian_realtime_model(model: &str) -> bool {
+    model.starts_with("fun-asr-realtime")
+        || model.starts_with("paraformer-realtime")
+        || model.starts_with("sensevoice-realtime")
+}
+
+pub(crate) fn validate_dashscope_multimodal_model(model: &str) -> Result<(), String> {
+    let model = model.trim();
+    if model.is_empty() || model.starts_with("fun-asr-flash") {
+        return Ok(());
+    }
+    Err(format!(
+        "不支持的 DashScope 录音文件 ASR 模型：{model}。该协议仅支持 fun-asr-flash 系列"
+    ))
 }
 
 fn batch_asr_chunk_limit_ms(provider_id: &str) -> Option<u64> {
@@ -1649,6 +1681,9 @@ impl Coordinator {
         let consumer = start.recorder_consumer();
         consumer.consume_pcm_chunk(&pcm);
         let timeout = std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS);
+        let dashscope_timeout = whisper_transcribe_timeout(
+            crate::asr::pcm::pcm_duration_ms(&pcm) as f64 / 1000.0,
+        );
         let raw = match start.active_asr() {
             ActiveAsr::Volcengine(asr) => {
                 asr.send_last_frame().await.map_err(|e| e.to_string())?;
@@ -1679,10 +1714,12 @@ impl Coordinator {
                 .await
                 .map_err(|_| "重新转录超时".to_string())?
                 .map_err(|e| e.to_string())?,
-            ActiveAsr::DashScopeMultimodal(m) => tokio::time::timeout(timeout, m.transcribe())
+            ActiveAsr::DashScopeMultimodal(m) => {
+                tokio::time::timeout(dashscope_timeout, m.transcribe())
                 .await
                 .map_err(|_| "重新转录超时".to_string())?
-                .map_err(|e| e.to_string())?,
+                .map_err(|e| e.to_string())?
+            }
             #[cfg(target_os = "windows")]
             ActiveAsr::FoundryLocalWhisper(local) => {
                 let audio_secs = (local.buffer_duration_ms() as f64) / 1000.0;
@@ -2099,6 +2136,13 @@ fn read_dashscope_multimodal_credentials() -> (String, String, String) {
     (api_key, base_url, model)
 }
 
+fn read_asr_vocabulary_id() -> Option<String> {
+    CredentialsVault::get(CredentialAccount::AsrVocabularyId)
+        .ok()
+        .flatten()
+        .filter(|s| !s.trim().is_empty())
+}
+
 fn read_bailian_credentials() -> BailianCredentials {
     let api_key = CredentialsVault::get(CredentialAccount::AsrApiKey)
         .ok()
@@ -2114,10 +2158,7 @@ fn read_bailian_credentials() -> BailianCredentials {
         .flatten()
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| crate::asr::bailian::DEFAULT_MODEL.to_string());
-    let vocabulary_id = CredentialsVault::get(CredentialAccount::AsrVocabularyId)
-        .ok()
-        .flatten()
-        .filter(|s| !s.trim().is_empty());
+    let vocabulary_id = read_asr_vocabulary_id();
     BailianCredentials {
         api_key,
         endpoint,
@@ -2559,35 +2600,48 @@ mod tests {
         let bailian = crate::asr::bailian::PROVIDER_ID;
         // 统一百炼:按模型名路由到底层协议 id。
         assert_eq!(
-            resolve_effective_asr_provider(bailian, "fun-asr-realtime"),
+            resolve_effective_asr_provider(bailian, "fun-asr-realtime").unwrap(),
             crate::asr::bailian::PROVIDER_ID
         );
         assert_eq!(
-            resolve_effective_asr_provider(bailian, "qwen3-asr-flash-realtime"),
+            resolve_effective_asr_provider(bailian, "qwen3-asr-flash-realtime").unwrap(),
             crate::asr::qwen_realtime::PROVIDER_ID
         );
         assert_eq!(
-            resolve_effective_asr_provider(bailian, "qwen3-asr-flash-realtime-2026-02-10"),
+            resolve_effective_asr_provider(bailian, "qwen3-asr-flash-realtime-2026-02-10")
+                .unwrap(),
             crate::asr::qwen_realtime::PROVIDER_ID
         );
         assert_eq!(
-            resolve_effective_asr_provider(bailian, "fun-asr-flash-2026-06-15"),
+            resolve_effective_asr_provider(bailian, "fun-asr-flash-2026-06-15").unwrap(),
             crate::asr::dashscope_multimodal::PROVIDER_ID
         );
-        // 空 / 未知模型 → 经典实时（百炼默认）。
         assert_eq!(
-            resolve_effective_asr_provider(bailian, ""),
+            resolve_effective_asr_provider(bailian, "paraformer-realtime-v2").unwrap(),
+            crate::asr::bailian::PROVIDER_ID
+        );
+        // 空模型 → 经典实时（百炼默认）；未知模型应被拒绝。
+        assert_eq!(
+            resolve_effective_asr_provider(bailian, "").unwrap(),
             crate::asr::bailian::PROVIDER_ID
         );
         // 非百炼 provider 原样返回（隐藏别名与其它厂商各走各的旧路径）。
         assert_eq!(
-            resolve_effective_asr_provider(crate::asr::qwen_realtime::PROVIDER_ID, "anything"),
+            resolve_effective_asr_provider(crate::asr::qwen_realtime::PROVIDER_ID, "anything")
+                .unwrap(),
             crate::asr::qwen_realtime::PROVIDER_ID
         );
         assert_eq!(
-            resolve_effective_asr_provider("whisper", "whisper-1"),
+            resolve_effective_asr_provider("whisper", "whisper-1").unwrap(),
             "whisper"
         );
+    }
+
+    #[test]
+    fn resolve_effective_asr_provider_rejects_unsupported_bailian_model() {
+        let error = resolve_effective_asr_provider(crate::asr::bailian::PROVIDER_ID, "paraformer-v2")
+            .unwrap_err();
+        assert!(error.contains("不支持的百炼 ASR 模型"));
     }
 
     #[test]

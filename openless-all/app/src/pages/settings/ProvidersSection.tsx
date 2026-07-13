@@ -173,6 +173,12 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
   const [llmModelRevision, setLlmModelRevision] = useState(0);
   const [asrModelRevision, setAsrModelRevision] = useState(0);
   const os = detectOS();
+  const unifiedBailian = committedAsrProvider === 'bailian' && os !== 'android';
+  const [bailianModel, setBailianModel] = useState('');
+
+  useEffect(() => {
+    if (committedAsrProvider !== 'bailian') setBailianModel('');
+  }, [committedAsrProvider]);
   // 本地重引擎（qwen3 / sherpa / foundry）仍只在「高级 → 本地模型」里启用，
   // 防止新手在主下拉误开 CPU 推理。Apple 语音是系统自带、零凭据、轻量，
   // 在 macOS 上直接作为常规选项放进主下拉，方便随时选用 / 切走。
@@ -468,21 +474,22 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
         ) : (
           <>
             <CredentialField key={`${committedAsrProvider}:api_key`} label={t('settings.providers.apiKeyLabel')} account="asr.api_key" mono mask />
-            {/* 统一「阿里云百炼」:一把 key + 一个模型框(可「拉取模型」或直接手填任意
+            {/* 统一「阿里云百炼」:一把 key + 一个模型框(可「拉取模型」或直接手填已支持的
                 DashScope ASR 模型),协议按模型名在后端自动路由,接口地址随协议自动推导,
                 故不暴露 endpoint 字段。模型框下一行提示当前模型是「实时」还是「录音文件」,
                 解决三种模型看不出区别的问题。 */}
-            {committedAsrProvider !== 'bailian' && (
+            {!unifiedBailian && (
               <CredentialField key={`${committedAsrProvider}:endpoint`} label={t('settings.providers.baseUrlLabel')} account="asr.endpoint"
                 placeholder={asrPreset?.baseUrl || 'https://api.openai.com/v1'}
                 defaultValue={asrPreset?.baseUrl || undefined} />
             )}
             <CredentialField key={`${committedAsrProvider}:model:${asrModelRevision}`} label={t('settings.providers.modelLabel')} account="asr.model"
-              placeholder={committedAsrProvider === 'bailian' ? 'fun-asr-realtime' : (asrPreset?.model || 'whisper-1')} />
-            {committedAsrProvider === 'bailian' && (
-              <BailianProtocolHint key={`${committedAsrProvider}:proto:${asrModelRevision}`} />
+              placeholder={unifiedBailian ? 'fun-asr-realtime' : (asrPreset?.model || 'whisper-1')}
+              onValueChange={unifiedBailian ? setBailianModel : undefined} />
+            {unifiedBailian && (
+              <BailianProtocolHint key={`${committedAsrProvider}:proto:${asrModelRevision}`} currentModel={bailianModel} />
             )}
-            {committedAsrProvider === 'bailian' && (
+            {unifiedBailian && bailianModelSupportsVocabulary(bailianModel) && (
               <>
                 <CredentialField
                   key={`${committedAsrProvider}:vocabulary_id`}
@@ -517,9 +524,18 @@ function bailianModelIsRecordedFile(model: string): boolean {
   return m.startsWith('fun-asr-flash');
 }
 
+function bailianModelSupportsVocabulary(model: string): boolean {
+  const m = model.trim();
+  return !m
+    || m.startsWith('fun-asr-realtime')
+    || m.startsWith('paraformer-realtime')
+    || m.startsWith('sensevoice-realtime')
+    || m.startsWith('fun-asr-flash');
+}
+
 // 模型框下的一行协议提示,解决「三种模型看不出区别」——告诉用户当前模型是实时还是
 // 录音文件、行为差异如何。随 asrModelRevision(拉取/选择模型时)与挂载时重读 asr.model。
-function BailianProtocolHint() {
+function BailianProtocolHint({ currentModel }: { currentModel: string }) {
   const { t } = useTranslation();
   const [model, setModel] = useState('');
 
@@ -530,6 +546,10 @@ function BailianProtocolHint() {
       .catch(() => { /* 读失败按默认实时提示 */ });
     return () => { cancelled = true; };
   }, []);
+
+  useEffect(() => {
+    setModel(currentModel || 'fun-asr-realtime');
+  }, [currentModel]);
 
   const hint = bailianModelIsRecordedFile(model)
     ? t('settings.providers.bailianModelRecordedFileHint')
@@ -671,9 +691,10 @@ interface CredentialFieldProps {
   mask?: boolean;
   defaultValue?: string;
   trailing?: ReactNode;
+  onValueChange?: (value: string) => void;
 }
 
-function CredentialField({ label, account, placeholder, mono, mask, defaultValue, trailing }: CredentialFieldProps) {
+function CredentialField({ label, account, placeholder, mono, mask, defaultValue, trailing, onValueChange }: CredentialFieldProps) {
   const { t } = useTranslation();
   const mobile = useMobileLayout();
   const [value, setValue] = useState('');
@@ -691,6 +712,7 @@ function CredentialField({ label, account, placeholder, mono, mask, defaultValue
     setDirty(false);
     setStatus('idle');
     setValue('');
+    onValueChange?.('');
     if (debounceRef.current) {
       clearTimeout(debounceRef.current);
       debounceRef.current = null;
@@ -699,18 +721,20 @@ function CredentialField({ label, account, placeholder, mono, mask, defaultValue
       .then(v => {
         if (cancelled) return;
         setValue(v ?? '');
+        onValueChange?.(v ?? '');
         setLoaded(true);
       })
       .catch(error => {
         if (cancelled) return;
         console.error('[settings] failed to read credential', account, error);
+        onValueChange?.('');
         setLoaded(true);
         setStatus('readError');
       });
     return () => {
       cancelled = true;
     };
-  }, [account]);
+  }, [account, onValueChange]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -761,6 +785,7 @@ function CredentialField({ label, account, placeholder, mono, mask, defaultValue
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const v = e.target.value;
     setValue(v);
+    onValueChange?.(v);
     if (!loaded) return;
     setDirty(true);
     if (debounceRef.current) clearTimeout(debounceRef.current);
@@ -779,6 +804,7 @@ function CredentialField({ label, account, placeholder, mono, mask, defaultValue
   const fillDefault = async () => {
     if (!loaded || !defaultValue) return;
     setValue(defaultValue);
+    onValueChange?.(defaultValue);
     setDirty(true);
     await save(defaultValue, true);
   };

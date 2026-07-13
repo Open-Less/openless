@@ -27,15 +27,18 @@ pub async fn validate_provider_credentials(kind: String) -> Result<ProviderCheck
 
 #[tauri::command]
 pub async fn list_provider_models(kind: String) -> Result<ProviderModelsResult, String> {
-    if kind == "asr" && CredentialsVault::get_active_asr() == crate::asr::bailian::PROVIDER_ID {
+    if kind == "asr"
+        && CredentialsVault::get_active_asr() == crate::asr::bailian::PROVIDER_ID
+        && !cfg!(mobile)
+    {
         // 统一「阿里云百炼」入口:三条协议(实时 fun-asr-realtime / 实时 qwen3 /
         // 录音文件 fun-asr-flash)收成一个 provider。百炼各网关都没有模型列表 HTTP
         // 接口,列表是静态的;但先跑一次与「验证」相同的、按当前所选模型对应协议的
         // 连通性检查(validate_asr_provider 已按模型路由),避免 Key/endpoint 全错时
         // 也显示成功。随后返回三个可选模型供下拉。
         validate_asr_provider().await?;
-        // 静态清单只是常用快捷项;协议按模型名自动路由,用户也可在模型框直接手填
-        // 任意 DashScope ASR 模型(如 paraformer-realtime-v2 等),不受此列表限制。
+        // 静态清单只是常用快捷项；协议按模型名自动路由，用户也可在模型框直接手填
+        // 已支持的 DashScope ASR 模型；不支持的模型会在验证/开始录音前明确拒绝。
         return Ok(ProviderModelsResult {
             models: vec![
                 crate::asr::bailian::DEFAULT_MODEL.to_string(),
@@ -44,6 +47,15 @@ pub async fn list_provider_models(kind: String) -> Result<ProviderModelsResult, 
                 "qwen3-asr-flash-realtime-2025-10-27".to_string(),
                 crate::asr::dashscope_multimodal::DEFAULT_MODEL.to_string(),
             ],
+        });
+    }
+    if kind == "asr"
+        && CredentialsVault::get_active_asr() == crate::asr::bailian::PROVIDER_ID
+        && cfg!(mobile)
+    {
+        validate_bailian_asr_provider().await?;
+        return Ok(ProviderModelsResult {
+            models: vec![crate::asr::bailian::DEFAULT_MODEL.to_string()],
         });
     }
     if kind == "asr" && CredentialsVault::get_active_asr() == crate::asr::qwen_realtime::PROVIDER_ID
@@ -226,7 +238,7 @@ async fn validate_asr_provider() -> Result<(), String> {
             .ok()
             .flatten()
             .unwrap_or_default();
-        let effective = crate::coordinator::resolve_effective_asr_provider(&active_asr, &model);
+        let effective = crate::coordinator::resolve_effective_asr_provider(&active_asr, &model)?;
         if effective == crate::asr::qwen_realtime::PROVIDER_ID {
             return validate_qwen3_realtime_asr_provider().await;
         }
@@ -242,6 +254,10 @@ async fn validate_asr_provider() -> Result<(), String> {
         return validate_mimo_asr_provider().await;
     }
     if active_asr == crate::asr::dashscope_multimodal::PROVIDER_ID {
+        let model = CredentialsVault::get(CredentialAccount::AsrModel)
+            .map_err(|e| e.to_string())?
+            .unwrap_or_default();
+        crate::coordinator::validate_dashscope_multimodal_model(&model)?;
         return validate_dashscope_multimodal_asr_provider().await;
     }
 
@@ -298,15 +314,23 @@ async fn validate_dashscope_multimodal_asr_provider() -> Result<(), String> {
         .map_err(|e| e.to_string())?
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| crate::asr::dashscope_multimodal::DEFAULT_MODEL.to_string());
+    crate::coordinator::validate_dashscope_multimodal_model(&model)?;
+    let vocabulary_id = CredentialsVault::get(CredentialAccount::AsrVocabularyId)
+        .map_err(|e| e.to_string())?
+        .filter(|s| !s.trim().is_empty());
     let url = crate::asr::dashscope_multimodal::generation_url(&base_url)
         .map_err(|_| "endpointInvalid".to_string())?;
+    let mut parameters = serde_json::json!({ "format": "wav", "sample_rate": "16000" });
+    if let Some(vocabulary_id) = vocabulary_id {
+        parameters["vocabulary_id"] = serde_json::json!(vocabulary_id.trim());
+    }
     let body = serde_json::json!({
         "model": model,
         "input": { "messages": [{ "role": "user", "content": [{
             "type": "input_audio",
             "input_audio": { "data": DASHSCOPE_ASR_VALIDATE_SAMPLE_URL },
         }]}]},
-        "parameters": { "format": "wav", "sample_rate": "16000" },
+        "parameters": parameters,
     });
     let client = http_client_builder(&url, 20)
         .build()
