@@ -59,7 +59,7 @@ pub async fn list_provider_models(kind: String) -> Result<ProviderModelsResult, 
         return Ok(ProviderModelsResult {
             models: vec![
                 crate::asr::elevenlabs::DEFAULT_MODEL.to_string(),
-                "scribe_v2".to_string(),
+                "scribe_v1".to_string(),
             ],
         });
     }

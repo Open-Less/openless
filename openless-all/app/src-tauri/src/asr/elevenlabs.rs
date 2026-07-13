@@ -18,7 +18,10 @@ use crate::asr::RawTranscript;
 
 pub const PROVIDER_ID: &str = "elevenlabs";
 pub const DEFAULT_ENDPOINT: &str = "https://api.elevenlabs.io/v1";
-pub const DEFAULT_MODEL: &str = "scribe_v1";
+// `scribe_v2` is the current recommended Scribe model (higher accuracy, 99
+// languages, ~40% cheaper). `scribe_v1` is deprecated and is removed from the
+// API on 2026-07-09, so it would be a poor default to ship.
+pub const DEFAULT_MODEL: &str = "scribe_v2";
 
 pub struct ElevenLabsBatchASR {
     api_key: String,
@@ -231,7 +234,7 @@ mod tests {
             assert!(lower.contains("xi-api-key: key"));
             assert!(lower.contains("content-type: multipart/form-data"));
             assert!(request_text.contains("name=\"model_id\""));
-            assert!(request_text.contains("scribe_v1"));
+            assert!(request_text.contains("scribe_v2"));
             assert!(request_text.contains("name=\"file\""));
             assert!(request_text.contains("name=\"tag_audio_events\""));
             write_json_response(
