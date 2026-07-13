@@ -58,6 +58,18 @@ export function RecordingInputSection() {
     void getPlatformCapabilities().then(setPlatformCaps);
   }, []);
 
+  // 兼容旧 Windows 配置：Shift+Insert 仍保留在跨平台类型/后端中供 Linux 使用，
+  // 但 Windows 已不再提供该选项；进入设置时迁移为 Ctrl+V，避免下拉框无匹配值。
+  useEffect(() => {
+    if (os !== 'win' || prefs?.pasteShortcut !== 'shiftInsert') return;
+    void savePrefs(current => {
+      if (current.pasteShortcut !== 'shiftInsert') return current;
+      return { ...current, pasteShortcut: 'ctrlV' };
+    }).catch(error => {
+      console.warn('[settings] migrate Windows paste shortcut failed', error);
+    });
+  }, [os, prefs?.pasteShortcut, savePrefs]);
+
   const loadMicrophoneDevices = useCallback(async (
     signal?: { cancelled: boolean },
     options: { showLoading?: boolean } = {},
@@ -133,6 +145,9 @@ export function RecordingInputSection() {
   const showDesktopHotkey = platformCaps?.supportsDesktopHotkey === true;
   const showDesktopInsert = showDesktopHotkey && os !== 'linux';
   const showDesktopStartup = showDesktopHotkey;
+  const effectivePasteShortcut = os === 'win' && prefs.pasteShortcut === 'shiftInsert'
+    ? 'ctrlV'
+    : prefs.pasteShortcut;
 
   const onModeChange = (mode: HotkeyMode) =>
     savePrefs({ ...prefs, hotkey: { ...prefs.hotkey, mode } });
@@ -309,7 +324,7 @@ export function RecordingInputSection() {
         {capability.adapter !== 'macEventTap' && (
           <SettingRow label={t('settings.recording.pasteShortcutLabel')} desc={t('settings.recording.pasteShortcutDesc')}>
             <SelectLite
-              value={prefs.pasteShortcut}
+              value={effectivePasteShortcut}
               onChange={next => onPasteShortcutChange(next as PasteShortcut)}
               options={[
                 { value: 'ctrlV', label: t('settings.recording.pasteShortcutCtrlV') },

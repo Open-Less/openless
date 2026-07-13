@@ -59,6 +59,7 @@ export function HotkeySettingsProvider({ children }: { children: ReactNode }) {
             ])
             let nextError: string | null = null
             if (prefsResult.status === "fulfilled") {
+                latestPrefsRef.current = prefsResult.value
                 setPrefs(prefsResult.value)
                 applyThemeFromPreference(prefsResult.value.themeMode ?? "system")
             } else {
