@@ -370,6 +370,42 @@ struct PreparedWindowsImeSessionSlot {
     prepared: PreparedWindowsImeSession,
 }
 
+/// 历史音频静默重试的 ASR 资源护栏。
+///
+/// 重试 future 被 select 丢弃时，局部 QaAsrStart 不会再经过正常的
+/// end_session 收尾；这里用 Drop 补 cancel 和本地模型释放，尤其覆盖
+/// spawn_blocking 已经开始运行的本地 ASR。
+struct CancellableRetranscribeGuard {
+    inner: Arc<Inner>,
+    asr: Option<ActiveAsr>,
+    session_id: SessionId,
+}
+
+impl CancellableRetranscribeGuard {
+    fn new(inner: Arc<Inner>, asr: ActiveAsr, session_id: SessionId) -> Self {
+        Self {
+            inner,
+            asr: Some(asr),
+            session_id,
+        }
+    }
+
+    fn disarm(mut self) {
+        self.asr.take();
+    }
+}
+
+impl Drop for CancellableRetranscribeGuard {
+    fn drop(&mut self) {
+        let Some(asr) = self.asr.take() else {
+            return;
+        };
+        let asr_for_release = asr.clone();
+        cancel_active_asr(asr);
+        dictation::schedule_cancelled_asr_release(&self.inner, &asr_for_release, self.session_id);
+    }
+}
+
 impl Coordinator {
     pub fn new() -> Self {
         #[cfg(target_os = "windows")]
@@ -1556,9 +1592,33 @@ impl Coordinator {
     }
 
     pub async fn retranscribe_pcm(&self, pcm: Vec<u8>) -> Result<String, String> {
+        self.retranscribe_pcm_inner(pcm, false).await
+    }
+
+    pub(super) async fn retranscribe_pcm_until_cancelled(
+        &self,
+        pcm: Vec<u8>,
+    ) -> Result<String, String> {
+        self.retranscribe_pcm_inner(pcm, true).await
+    }
+
+    async fn retranscribe_pcm_inner(
+        &self,
+        pcm: Vec<u8>,
+        cancel_on_drop: bool,
+    ) -> Result<String, String> {
         let inner = &self.inner;
         let active_asr = CredentialsVault::get_active_asr();
         let start = build_qa_asr_start(inner, &active_asr).await?;
+        let retry_guard = if cancel_on_drop {
+            Some(CancellableRetranscribeGuard::new(
+                Arc::clone(inner),
+                start.active_asr(),
+                inner.state.lock().session_id,
+            ))
+        } else {
+            None
+        };
         start.open_streaming_session().await?;
         let consumer = start.recorder_consumer();
         consumer.consume_pcm_chunk(&pcm);
@@ -1627,6 +1687,9 @@ impl Coordinator {
                 .map_err(|_| "重新转录超时".to_string())?
                 .map_err(|e| e.to_string())?,
         };
+        if let Some(guard) = retry_guard {
+            guard.disarm();
+        }
         Ok(raw.text)
     }
 

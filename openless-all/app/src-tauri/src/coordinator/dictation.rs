@@ -2174,6 +2174,12 @@ const SILENT_RETRY_MAX: u32 = 2;
 /// 网络/服务端一点缓冲再打。
 const SILENT_RETRY_BACKOFF_MS: u64 = 500;
 
+enum SilentRetryOutcome {
+    Transcript(RawTranscript),
+    Exhausted,
+    Cancelled,
+}
+
 /// 归档 wav 是 16k/mono/16-bit、固定 44 字节标准头（asr::wav::encode_wav_16k_mono）；取出
 /// PCM 负载。长度 <= 44（空/损坏）返回 None。
 fn pcm_from_wav_bytes(wav: &[u8]) -> Option<Vec<u8>> {
@@ -2196,49 +2202,70 @@ async fn retranscribe_pcm_via_inner(inner: &Arc<Inner>, pcm: Vec<u8>) -> Result<
     Coordinator {
         inner: Arc::clone(inner),
     }
-    .retranscribe_pcm(pcm)
+    .retranscribe_pcm_until_cancelled(pcm)
     .await
 }
 
 /// 自动静默重试：从刚归档的 wav 读 PCM，用当前 provider 重转最多 SILENT_RETRY_MAX 次（线性
-/// 退避）。任一次拿到非空文本立即 Some（当作正常转写继续走润色/插入）；没有归档音频、读不到、
-/// 或全部失败则 None（交回 fail_dictation 做「失败保留 + 报错」）。全程不改胶囊文案——对用户
-/// 静默，只是「转写中」多停留一会儿。
-async fn try_silent_retranscribe(
-    inner: &Arc<Inner>,
-    session_id: SessionId,
-) -> Option<RawTranscript> {
-    if !inner.audio_archive_active.load(Ordering::Relaxed) {
-        return None; // 没归档音频，无从重试
+/// 退避）。任一次拿到非空文本立即返回 Transcript（当作正常转写继续走润色/插入）；没有归档
+/// 音频、读不到或全部失败返回 Exhausted（交回 fail_dictation 做「失败保留 + 报错」）。如果
+/// 用户在退避或重试请求期间按 Esc，则返回 Cancelled，直接完成取消收尾。全程不改胶囊文案——
+/// 对用户静默，只是「转写中」多停留一会儿。
+async fn try_silent_retranscribe(inner: &Arc<Inner>, session_id: SessionId) -> SilentRetryOutcome {
+    if inner.state.lock().cancelled {
+        return SilentRetryOutcome::Cancelled;
     }
-    let path = crate::persistence::recording_path_for_session(&session_id.to_string()).ok()?;
-    let wav = tokio::fs::read(&path).await.ok()?;
-    let pcm = pcm_from_wav_bytes(&wav)?;
+    if !inner.audio_archive_active.load(Ordering::Relaxed) {
+        return SilentRetryOutcome::Exhausted; // 没归档音频，无从重试
+    }
+    let Some(path) = crate::persistence::recording_path_for_session(&session_id.to_string()).ok()
+    else {
+        return SilentRetryOutcome::Exhausted;
+    };
+    let wav = tokio::select! {
+        biased;
+        _ = wait_for_processing_cancel(inner) => return SilentRetryOutcome::Cancelled,
+        result = tokio::fs::read(&path) => match result {
+            Ok(wav) => wav,
+            Err(_) => return SilentRetryOutcome::Exhausted,
+        },
+    };
+    let Some(pcm) = pcm_from_wav_bytes(&wav) else {
+        return SilentRetryOutcome::Exhausted;
+    };
     let duration_ms = pcm_duration_ms(pcm.len());
     for attempt in 1..=SILENT_RETRY_MAX {
-        tokio::time::sleep(std::time::Duration::from_millis(
-            SILENT_RETRY_BACKOFF_MS * attempt as u64,
-        ))
-        .await;
-        match retranscribe_pcm_via_inner(inner, pcm.clone()).await {
+        tokio::select! {
+            biased;
+            _ = wait_for_processing_cancel(inner) => return SilentRetryOutcome::Cancelled,
+            _ = tokio::time::sleep(std::time::Duration::from_millis(
+                SILENT_RETRY_BACKOFF_MS * attempt as u64,
+            )) => {}
+        }
+        let result = tokio::select! {
+            biased;
+            _ = wait_for_processing_cancel(inner) => return SilentRetryOutcome::Cancelled,
+            result = retranscribe_pcm_via_inner(inner, pcm.clone()) => result,
+        };
+        match result {
             Ok(text) if !text.trim().is_empty() => {
                 log::info!(
                     "[coord] 自动静默重试第 {attempt}/{SILENT_RETRY_MAX} 次成功（{} 字）",
                     text.chars().count()
                 );
-                return Some(RawTranscript { text, duration_ms });
+                return SilentRetryOutcome::Transcript(RawTranscript { text, duration_ms });
             }
             Ok(_) => {
                 // 重试得到空转写——多半真没说话，再重试无意义，省流量直接放弃。
                 log::info!("[coord] 自动静默重试得到空转写，停止重试");
-                return None;
+                return SilentRetryOutcome::Exhausted;
             }
             Err(e) => {
                 log::warn!("[coord] 自动静默重试第 {attempt}/{SILENT_RETRY_MAX} 次失败: {e}");
             }
         }
     }
-    None
+    SilentRetryOutcome::Exhausted
 }
 
 fn finish_cancelled_processing(inner: &Arc<Inner>, session_id: SessionId) -> bool {
@@ -2250,6 +2277,29 @@ fn finish_cancelled_processing(inner: &Arc<Inner>, session_id: SessionId) -> boo
         schedule_capsule_idle(inner, CAPSULE_CANCEL_HIDE_DELAY_MS);
     }
     finished
+}
+
+pub(super) fn schedule_cancelled_asr_release(
+    inner: &Arc<Inner>,
+    asr: &ActiveAsr,
+    session_id: SessionId,
+) {
+    match asr {
+        #[cfg(target_os = "windows")]
+        ActiveAsr::FoundryLocalWhisper(_) => {
+            schedule_foundry_local_asr_release(inner, AsrReleaseSession::Dictation(session_id));
+        }
+        #[cfg(target_os = "windows")]
+        ActiveAsr::SherpaOnnxLocal(_) => {
+            schedule_sherpa_onnx_release(inner, AsrReleaseSession::Dictation(session_id));
+        }
+        #[cfg(target_os = "macos")]
+        ActiveAsr::Local(_) => {
+            inner.local_asr_cache.touch();
+            schedule_local_asr_release(inner);
+        }
+        _ => {}
+    }
 }
 
 /// end_session 转写阶段与「用户取消」赛跑的结果。
@@ -2618,7 +2668,11 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
             // 上面 select! 已把 transcribe_fut drop 掉（中断 reqwest / 停止等待流式结果 /
             // 停止本地转写）；这里再显式 cancel 一次，促使流式 WebSocket 立即关闭、不残留
             // 后台 worker。asr_for_cancel 与被 drop 的 future 共享同一 Arc 底层。
+            let asr_for_release = asr_for_cancel.clone();
             cancel_active_asr(asr_for_cancel);
+            // end_session 已经把 ASR 从 inner.asr 取走，cancel_session 无法再触发
+            // provider 的释放调度；取消路径必须自己补上，否则本地模型会一直占用缓存。
+            schedule_cancelled_asr_release(inner, &asr_for_release, current_session_id);
             restore_prepared_windows_ime_session(inner, current_session_id);
             // 与下方「ASR 完成后 cancel 检查」同款收尾（finish_cancelled_processing 负责
             // 把 phase 收回 Idle、清 focus_target）。
@@ -2648,15 +2702,25 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     let raw = match transcribe_outcome {
         Ok(raw) => raw,
         Err(fail) => match try_silent_retranscribe(inner, current_session_id).await {
-            Some(raw) => raw,
-            None => {
-                return fail_dictation(
-                    inner,
-                    current_session_id,
-                    elapsed,
-                    fail.user_msg,
-                    fail.err,
-                )
+            SilentRetryOutcome::Transcript(raw) => raw,
+            SilentRetryOutcome::Cancelled => {
+                log::info!("[coord] cancel during silent ASR retry — discarding transcript");
+                restore_prepared_windows_ime_session(inner, current_session_id);
+                finish_cancelled_processing(inner, current_session_id);
+                return Ok(());
+            }
+            SilentRetryOutcome::Exhausted => {
+                // 处理最后一次重试结果时也复查一次取消标志，覆盖「重试刚返回
+                // Exhausted 与用户同时按 Esc」的窄竞态，避免误走失败提示。
+                if inner.state.lock().cancelled {
+                    log::info!(
+                        "[coord] cancel after silent ASR retry — discarding transcript"
+                    );
+                    restore_prepared_windows_ime_session(inner, current_session_id);
+                    finish_cancelled_processing(inner, current_session_id);
+                    return Ok(());
+                }
+                return fail_dictation(inner, current_session_id, elapsed, fail.user_msg, fail.err)
             }
         },
     };

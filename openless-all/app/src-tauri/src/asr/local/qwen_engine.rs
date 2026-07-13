@@ -7,7 +7,7 @@ use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_void};
 use std::path::Path;
 use std::ptr;
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 
 use anyhow::{Context, Result};
 
@@ -22,14 +22,18 @@ type TokenHandlerBox = Box<Box<TokenHandler>>;
 
 pub struct QwenAsrEngine {
     ctx: *mut QwenCtx,
+    /// 同一个 C context 不能并发转写，也不能在转写期间替换 token 回调。
+    /// 取消时上层只会丢弃 `spawn_blocking` 的 JoinHandle，已经开始运行的
+    /// native worker 仍会继续到返回；这把锁保证它返回前不会被下一次会话复用。
+    run_lock: Mutex<()>,
     /// 持有 token 回调的所有权；C 端拿到的是 `&**handler` 派生出来的 raw ptr，
     /// 只要这个 Box 还活着，那个 raw ptr 就有效。Mutex 防止并发 set。
     token_handler: Mutex<Option<TokenHandlerBox>>,
 }
 
 /// SAFETY: `qwen_ctx_t` 内部的 pthread/buffer 仅在单次 transcribe 期间被 C 端
-/// 自己用；外层不会从两个 Rust 线程并发调进同一个 ctx（由 coordinator 串行
-/// 化保证）。Send/Sync 在这一约束下成立。
+/// 自己用；`run_lock` 保证同一 context 不会被两个 Rust 线程并发调用。Send/Sync
+/// 在这一约束下成立。
 unsafe impl Send for QwenAsrEngine {}
 unsafe impl Sync for QwenAsrEngine {}
 
@@ -50,12 +54,27 @@ impl QwenAsrEngine {
 
         Ok(Self {
             ctx,
+            run_lock: Mutex::new(()),
             token_handler: Mutex::new(None),
         })
     }
 
     /// 注册流式 token 回调；传 `None` 清空。重新注册会先解绑再装新回调。
     pub fn set_token_handler<F>(&self, handler: Option<F>)
+    where
+        F: FnMut(&str) + Send + 'static,
+    {
+        let _run_guard = self.lock_run();
+        self.set_token_handler_locked(handler);
+    }
+
+    fn lock_run(&self) -> MutexGuard<'_, ()> {
+        self.run_lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn set_token_handler_locked<F>(&self, handler: Option<F>)
     where
         F: FnMut(&str) + Send + 'static,
     {
@@ -84,6 +103,11 @@ impl QwenAsrEngine {
 
     /// 批式转写：一次性给完整音频（mono f32 16kHz）。
     pub fn transcribe_audio(&self, samples: &[f32]) -> Result<String> {
+        let _run_guard = self.lock_run();
+        self.transcribe_audio_locked(samples)
+    }
+
+    fn transcribe_audio_locked(&self, samples: &[f32]) -> Result<String> {
         if self.ctx.is_null() {
             anyhow::bail!("engine already freed — cannot transcribe");
         }
@@ -103,6 +127,11 @@ impl QwenAsrEngine {
     /// 流式转写：内部按 2s chunk 切片，token 通过 `set_token_handler` 注册的
     /// 回调实时吐出；返回值是最终完整文本。
     pub fn transcribe_stream(&self, samples: &[f32]) -> Result<String> {
+        let _run_guard = self.lock_run();
+        self.transcribe_stream_locked(samples)
+    }
+
+    fn transcribe_stream_locked(&self, samples: &[f32]) -> Result<String> {
         if self.ctx.is_null() {
             anyhow::bail!("engine already freed — cannot transcribe");
         }
@@ -116,6 +145,22 @@ impl QwenAsrEngine {
             .into_owned();
         unsafe { libc::free(raw as *mut c_void) };
         Ok(text)
+    }
+
+    /// 在同一把 context 锁内安装回调、运行 native 转写并解绑回调。
+    ///
+    /// `spawn_blocking` 的 JoinHandle 被取消时，已经启动的 blocking closure
+    /// 仍可能运行；把回调解绑放进 closure 自身的同步收尾路径，避免旧会话
+    /// 在下一次会话期间继续持有或调用失效的 userdata。
+    pub fn transcribe_stream_with_handler<F>(&self, samples: &[f32], handler: F) -> Result<String>
+    where
+        F: FnMut(&str) + Send + 'static,
+    {
+        let _run_guard = self.lock_run();
+        self.set_token_handler_locked(Some(handler));
+        let result = self.transcribe_stream_locked(samples);
+        self.set_token_handler_locked::<fn(&str)>(None);
+        result
     }
 }
 
