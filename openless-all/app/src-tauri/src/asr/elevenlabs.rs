@@ -84,7 +84,13 @@ impl ElevenLabsBatchASR {
             .text("model_id", self.model.clone())
             .text("tag_audio_events", "false");
 
-        let client = reqwest::Client::new();
+        // Never forward the custom credential header or audio to a redirect
+        // target. Unlike standard Authorization headers, `xi-api-key` is not
+        // guaranteed to be stripped by HTTP clients on cross-origin redirects.
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .context("build ElevenLabs ASR HTTP client")?;
         let resp = client
             .post(&url)
             .header("xi-api-key", self.api_key.trim())
@@ -96,7 +102,10 @@ impl ElevenLabsBatchASR {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            anyhow::bail!("ElevenLabs ASR API error {}: {}", status, body);
+            if let Some(code) = safe_error_code(&body) {
+                anyhow::bail!("ElevenLabs ASR API error {} (code: {})", status, code);
+            }
+            anyhow::bail!("ElevenLabs ASR API error {}", status);
         }
 
         let json: Value = resp.json().await.context("parse ElevenLabs ASR response")?;
@@ -124,6 +133,17 @@ impl crate::recorder::AudioConsumer for ElevenLabsBatchASR {
 /// is idempotent.
 pub fn speech_to_text_url(base_url: &str) -> Result<String> {
     let parsed = reqwest::Url::parse(base_url.trim()).context("parse ElevenLabs base URL")?;
+    let loopback_http = parsed.scheme() == "http"
+        && parsed.host_str().is_some_and(|host| {
+            let host = host.trim_start_matches('[').trim_end_matches(']');
+            host.eq_ignore_ascii_case("localhost")
+                || host
+                    .parse::<std::net::IpAddr>()
+                    .is_ok_and(|ip| ip.is_loopback())
+        });
+    if parsed.scheme() != "https" && !loopback_http {
+        anyhow::bail!("ElevenLabs endpoint must use HTTPS (HTTP is allowed only for loopback)");
+    }
     let mut url = parsed.clone();
     let path = parsed.path().trim_end_matches('/');
     let next_path = if path.ends_with("/speech-to-text") {
@@ -168,12 +188,27 @@ fn pcm_duration_ms(pcm: &[u8]) -> u64 {
     super::pcm::pcm_duration_ms(pcm)
 }
 
+/// Return only locally-known, non-sensitive error codes.
+///
+/// The response body is untrusted, especially for custom endpoints. Never
+/// propagate arbitrary fields into errors because callers log and display the
+/// resulting message. Unknown codes deliberately collapse to the HTTP status.
+fn safe_error_code(body: &str) -> Option<&'static str> {
+    let json: Value = serde_json::from_str(body).ok()?;
+    match json.pointer("/detail/code").and_then(Value::as_str) {
+        Some("audio_too_short") => Some("audio_too_short"),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::recorder::AudioConsumer;
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
     use std::thread;
     use std::time::{Duration, Instant};
 
@@ -191,6 +226,18 @@ mod tests {
             speech_to_text_url("https://api.elevenlabs.io/v1/speech-to-text").unwrap(),
             "https://api.elevenlabs.io/v1/speech-to-text"
         );
+    }
+
+    #[test]
+    fn url_rejects_insecure_non_loopback_endpoint() {
+        let error = speech_to_text_url("http://api.example.com/v1")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("HTTPS"));
+
+        assert!(speech_to_text_url("http://127.0.0.1:8080/v1").is_ok());
+        assert!(speech_to_text_url("http://localhost:8080/v1").is_ok());
+        assert!(speech_to_text_url("http://[::1]:8080/v1").is_ok());
     }
 
     #[test]
@@ -264,6 +311,115 @@ mod tests {
         assert_eq!(transcript.text, "elevenlabs ok");
         assert_eq!(transcript.duration_ms, 1_000);
         server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn transcribe_redacts_untrusted_error_response_body() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                        assert!(
+                            Instant::now() < deadline,
+                            "timed out waiting for ElevenLabs ASR test request"
+                        );
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(err) => panic!("accept ElevenLabs ASR test request failed: {err}"),
+                }
+            };
+            stream.set_nonblocking(false).unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let _request = read_http_request(&mut stream);
+            let body = r#"{"detail":{"code":"audio_too_short","message":"SENSITIVE_API_KEY_VALUE","request_id":"SENSITIVE_REQUEST_ID","transcript":"SENSITIVE_TRANSCRIPT"}}"#;
+            let response = format!(
+                "HTTP/1.1 400 Bad Request\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+            stream.flush().unwrap();
+        });
+
+        let asr = ElevenLabsBatchASR::new(
+            "synthetic-test-key".to_string(),
+            format!("http://{}/v1", addr),
+            DEFAULT_MODEL.to_string(),
+        );
+        asr.consume_pcm_chunk(&vec![0u8; 32_000]);
+        let error = asr.transcribe().await.unwrap_err().to_string();
+
+        assert!(error.contains("400 Bad Request"));
+        assert!(error.contains("audio_too_short"));
+        assert!(!error.contains("SENSITIVE_API_KEY_VALUE"));
+        assert!(!error.contains("SENSITIVE_REQUEST_ID"));
+        assert!(!error.contains("SENSITIVE_TRANSCRIPT"));
+        assert!(!error.contains("message"));
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn transcribe_does_not_follow_redirects_with_credentials() {
+        let redirect_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let redirect_addr = redirect_listener.local_addr().unwrap();
+        let target_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        target_listener.set_nonblocking(true).unwrap();
+        let target_addr = target_listener.local_addr().unwrap();
+        let followed = Arc::new(AtomicBool::new(false));
+        let target_followed = Arc::clone(&followed);
+
+        let redirect_server = thread::spawn(move || {
+            let (mut stream, _) = redirect_listener.accept().unwrap();
+            let _request = read_http_request(&mut stream);
+            let response = format!(
+                "HTTP/1.1 302 Found\r\nlocation: http://{}/v1/speech-to-text\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+                target_addr
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+            stream.flush().unwrap();
+        });
+        let target_server = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            loop {
+                match target_listener.accept() {
+                    Ok((mut stream, _)) => {
+                        target_followed.store(true, Ordering::SeqCst);
+                        write_json_response(
+                            &mut stream,
+                            r#"{"language_code":"en","text":"redirect followed"}"#,
+                        );
+                        break;
+                    }
+                    Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                        if Instant::now() >= deadline {
+                            break;
+                        }
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(err) => panic!("accept redirect target request failed: {err}"),
+                }
+            }
+        });
+
+        let asr = ElevenLabsBatchASR::new(
+            "synthetic-test-key".to_string(),
+            format!("http://{}/v1", redirect_addr),
+            DEFAULT_MODEL.to_string(),
+        );
+        asr.consume_pcm_chunk(&vec![0u8; 32_000]);
+        let error = asr.transcribe().await.unwrap_err().to_string();
+
+        assert!(error.contains("302 Found"));
+        redirect_server.join().unwrap();
+        target_server.join().unwrap();
+        assert!(!followed.load(Ordering::SeqCst));
     }
 
     #[tokio::test]
