@@ -2425,6 +2425,10 @@ mod tests {
             ActiveAsrProviderKind::Mimo
         );
         assert_eq!(
+            active_asr_provider_kind(crate::asr::elevenlabs::PROVIDER_ID),
+            ActiveAsrProviderKind::ElevenLabs
+        );
+        assert_eq!(
             active_asr_provider_kind("volcengine"),
             ActiveAsrProviderKind::Volcengine
         );
