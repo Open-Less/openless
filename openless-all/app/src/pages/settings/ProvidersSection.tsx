@@ -169,6 +169,9 @@ const ASR_PRESETS: ReadonlyArray<{ id: AsrPresetId; nameKey: string; baseUrl: st
   // 小米 MiMo ASR 按官方文档走 /chat/completions + input_audio，不是
   // Whisper /audio/transcriptions；后端由 asr/mimo.rs 专用 client 处理。
   { id: 'xiaomi-mimo-asr', nameKey: 'asrXiaomiMimo', baseUrl: 'https://api.xiaomimimo.com/v1',                  model: 'mimo-v2.5-asr'               },
+  // ElevenLabs Scribe：xi-api-key 头 + /speech-to-text multipart（model_id/file），
+  // 非 Whisper /audio/transcriptions；后端由 asr/elevenlabs.rs 专用 client 处理。
+  { id: 'elevenlabs',   nameKey: 'asrElevenLabs',  baseUrl: 'https://api.elevenlabs.io/v1',                   model: 'scribe_v1'                   },
   { id: 'foundry-local-whisper', nameKey: 'asrFoundryLocalWhisper', baseUrl: '',                              model: ''                              },
   // 本地引擎（Foundry / sherpa-onnx / Qwen3）：无 baseUrl/model 配置，
   // 模型在「高级 → 本地模型」里下载与切换。

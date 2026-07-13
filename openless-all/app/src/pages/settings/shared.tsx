@@ -211,6 +211,7 @@ export type AsrPresetId =
     | "whisper"
     | "openrouter"
     | "xiaomi-mimo-asr"
+    | "elevenlabs"
     | "foundry-local-whisper"
     | "sherpa-onnx-local"
     | "local-qwen3"

@@ -56,6 +56,11 @@ pub(crate) fn asr_configured_for_provider(provider: &str, snap: &CredentialsSnap
             && configured(&snap.asr_endpoint)
             && configured(&snap.asr_model);
     }
+    if provider == crate::asr::elevenlabs::PROVIDER_ID {
+        return configured(&snap.asr_api_key)
+            && configured(&snap.asr_endpoint)
+            && configured(&snap.asr_model);
+    }
     configured(&snap.asr_endpoint) && configured(&snap.asr_model)
 }
 

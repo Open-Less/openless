@@ -1757,6 +1757,17 @@ pub(super) async fn begin_session_as(
         let consumer: Arc<dyn crate::recorder::AudioConsumer> = mimo;
         start_recorder_and_enter_listening(inner, current_session_id, &active_asr, consumer)
             .await?;
+    } else if is_elevenlabs_provider(&active_asr) {
+        let (api_key, base_url, model) = read_elevenlabs_credentials();
+        let elevenlabs = Arc::new(ElevenLabsBatchASR::new(api_key, base_url, model));
+        store_asr_for_session(
+            inner,
+            current_session_id,
+            ActiveAsr::ElevenLabs(Arc::clone(&elevenlabs)),
+        );
+        let consumer: Arc<dyn crate::recorder::AudioConsumer> = elevenlabs;
+        start_recorder_and_enter_listening(inner, current_session_id, &active_asr, consumer)
+            .await?;
     } else if is_whisper_compatible_provider(&active_asr) {
         let (api_key, base_url, model) = read_whisper_credentials();
         // 用户辞書の有効フレーズを Whisper の `prompt` に流し込む。固有名詞や
@@ -2363,6 +2374,27 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
                     Err(TranscribeFail::new(
                         "识别超时".to_string(),
                         "mimo global timeout".to_string(),
+                    ))
+                }
+            }
+        }
+        ActiveAsr::ElevenLabs(e) => {
+            debug_assert!(uses_global_timeout);
+            let timeout_duration = std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS);
+            match tokio::time::timeout(timeout_duration, e.transcribe()).await {
+                Ok(Ok(r)) => Ok(r),
+                Ok(Err(e)) => {
+                    log::error!("[coord] ElevenLabs ASR transcribe failed: {e}");
+                    Err(TranscribeFail::new(format!("识别失败: {e}"), e.to_string()))
+                }
+                Err(_) => {
+                    log::error!(
+                        "[coord] ElevenLabs ASR 全局超时 {} 秒",
+                        COORDINATOR_GLOBAL_TIMEOUT_SECS
+                    );
+                    Err(TranscribeFail::new(
+                        "识别超时".to_string(),
+                        "elevenlabs global timeout".to_string(),
                     ))
                 }
             }

@@ -55,6 +55,14 @@ pub async fn list_provider_models(kind: String) -> Result<ProviderModelsResult, 
             models: vec![crate::asr::mimo::DEFAULT_MODEL.to_string()],
         });
     }
+    if kind == "asr" && CredentialsVault::get_active_asr() == crate::asr::elevenlabs::PROVIDER_ID {
+        return Ok(ProviderModelsResult {
+            models: vec![
+                crate::asr::elevenlabs::DEFAULT_MODEL.to_string(),
+                "scribe_v2".to_string(),
+            ],
+        });
+    }
     if kind == "llm" && CredentialsVault::get_active_llm() == CODEX_OAUTH_PROVIDER_ID {
         return Ok(ProviderModelsResult {
             models: vec![
@@ -211,6 +219,9 @@ async fn validate_asr_provider() -> Result<(), String> {
     if active_asr == crate::asr::mimo::PROVIDER_ID {
         return validate_mimo_asr_provider().await;
     }
+    if active_asr == crate::asr::elevenlabs::PROVIDER_ID {
+        return validate_elevenlabs_asr_provider().await;
+    }
 
     let config = read_openai_provider_config("asr")?;
     let model = CredentialsVault::get(CredentialAccount::AsrModel)
@@ -227,6 +238,23 @@ async fn validate_mimo_asr_provider() -> Result<(), String> {
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| crate::asr::mimo::DEFAULT_MODEL.to_string());
     let asr = crate::asr::MimoBatchASR::new(config.api_key, config.base_url, model);
+    crate::recorder::AudioConsumer::consume_pcm_chunk(
+        &asr,
+        &encode_wav_16k_mono_silence(250)[44..],
+    );
+    asr.transcribe()
+        .await
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+async fn validate_elevenlabs_asr_provider() -> Result<(), String> {
+    let config = read_openai_provider_config("asr")?;
+    let model = CredentialsVault::get(CredentialAccount::AsrModel)
+        .map_err(|e| e.to_string())?
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| crate::asr::elevenlabs::DEFAULT_MODEL.to_string());
+    let asr = crate::asr::ElevenLabsBatchASR::new(config.api_key, config.base_url, model);
     crate::recorder::AudioConsumer::consume_pcm_chunk(
         &asr,
         &encode_wav_16k_mono_silence(250)[44..],
