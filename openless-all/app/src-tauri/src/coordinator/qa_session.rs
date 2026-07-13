@@ -869,10 +869,10 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
                 }
             }
         }
-        ActiveAsr::ElevenLabs(m) => {
+        ActiveAsr::ElevenLabs(elevenlabs) => {
             debug_assert!(uses_global_timeout);
             let timeout_duration = std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS);
-            match tokio::time::timeout(timeout_duration, m.transcribe()).await {
+            match tokio::time::timeout(timeout_duration, elevenlabs.transcribe()).await {
                 Ok(Ok(r)) => r,
                 Ok(Err(e)) => {
                     log::error!("[coord] QA: ElevenLabs ASR transcribe failed: {e}");

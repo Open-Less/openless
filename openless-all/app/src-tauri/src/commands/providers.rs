@@ -57,10 +57,7 @@ pub async fn list_provider_models(kind: String) -> Result<ProviderModelsResult, 
     }
     if kind == "asr" && CredentialsVault::get_active_asr() == crate::asr::elevenlabs::PROVIDER_ID {
         return Ok(ProviderModelsResult {
-            models: vec![
-                crate::asr::elevenlabs::DEFAULT_MODEL.to_string(),
-                "scribe_v1".to_string(),
-            ],
+            models: vec![crate::asr::elevenlabs::DEFAULT_MODEL.to_string()],
         });
     }
     if kind == "llm" && CredentialsVault::get_active_llm() == CODEX_OAUTH_PROVIDER_ID {

@@ -101,7 +101,7 @@ impl ElevenLabsBatchASR {
 
         let json: Value = resp.json().await.context("parse ElevenLabs ASR response")?;
         Ok(RawTranscript {
-            text: extract_text(&json).trim().to_string(),
+            text: extract_text(&json)?.trim().to_string(),
             duration_ms,
         })
     }
@@ -140,18 +140,28 @@ pub fn speech_to_text_url(base_url: &str) -> Result<String> {
 /// Single-channel responses carry a top-level `text`; multichannel responses
 /// carry `transcripts: [{ text, ... }]` instead. Concatenate the latter so a
 /// stray multichannel result still yields usable text.
-pub fn extract_text(json: &Value) -> String {
-    if let Some(text) = json.get("text").and_then(|t| t.as_str()) {
-        return text.to_string();
+pub fn extract_text(json: &Value) -> Result<String> {
+    if let Some(text) = json.get("text") {
+        return text
+            .as_str()
+            .map(str::to_string)
+            .context("ElevenLabs ASR response `text` must be a string");
     }
-    if let Some(transcripts) = json.get("transcripts").and_then(|t| t.as_array()) {
+    if let Some(transcripts) = json.get("transcripts") {
+        let transcripts = transcripts
+            .as_array()
+            .context("ElevenLabs ASR response `transcripts` must be an array")?;
         return transcripts
             .iter()
-            .filter_map(|item| item.get("text").and_then(|t| t.as_str()))
-            .collect::<Vec<_>>()
-            .join(" ");
+            .map(|item| {
+                item.get("text")
+                    .and_then(|text| text.as_str())
+                    .context("ElevenLabs ASR transcript missing string `text`")
+            })
+            .collect::<Result<Vec<_>>>()
+            .map(|texts| texts.join(" "));
     }
-    String::new()
+    anyhow::bail!("ElevenLabs ASR response missing `text` or `transcripts`")
 }
 
 fn pcm_duration_ms(pcm: &[u8]) -> u64 {
@@ -186,7 +196,7 @@ mod tests {
     #[test]
     fn extract_text_reads_single_channel() {
         let json = serde_json::json!({ "language_code": "en", "text": "hello world" });
-        assert_eq!(extract_text(&json), "hello world");
+        assert_eq!(extract_text(&json).unwrap(), "hello world");
     }
 
     #[test]
@@ -194,13 +204,13 @@ mod tests {
         let json = serde_json::json!({
             "transcripts": [ { "text": "left" }, { "text": "right" } ]
         });
-        assert_eq!(extract_text(&json), "left right");
+        assert_eq!(extract_text(&json).unwrap(), "left right");
     }
 
     #[test]
-    fn extract_text_missing_field_is_empty() {
+    fn extract_text_rejects_missing_transcript_field() {
         let json = serde_json::json!({ "language_code": "en" });
-        assert_eq!(extract_text(&json), "");
+        assert!(extract_text(&json).is_err());
     }
 
     #[tokio::test]
@@ -236,7 +246,7 @@ mod tests {
             assert!(request_text.contains("name=\"model_id\""));
             assert!(request_text.contains("scribe_v2"));
             assert!(request_text.contains("name=\"file\""));
-            assert!(request_text.contains("name=\"tag_audio_events\""));
+            assert!(request_text.contains("name=\"tag_audio_events\"\r\n\r\nfalse\r\n"));
             write_json_response(
                 &mut stream,
                 r#"{"language_code":"en","text":"elevenlabs ok"}"#,
