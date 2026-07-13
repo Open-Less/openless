@@ -766,6 +766,16 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
             await setLocalAsrActiveModel(modelId)
             // 顺手把 active provider 也切到本地（避免用户改了模型却忘了切 provider）
             await setActiveAsrProvider("local-qwen3")
+            await updatePrefs((current) =>
+                current.activeAsrProvider === "local-qwen3" &&
+                current.localAsrActiveModel === modelId
+                    ? current
+                    : {
+                          ...current,
+                          activeAsrProvider: "local-qwen3",
+                          localAsrActiveModel: modelId,
+                      },
+            )
             await refresh()
         } catch (e) {
             setError(e instanceof Error ? e.message : String(e))
