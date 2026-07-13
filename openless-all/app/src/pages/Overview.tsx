@@ -219,7 +219,9 @@ export function Overview({ onOpenHistory }: OverviewProps) {
           只有「最近识别」内部允许滚动；其他卡片按内容自然高度，不破裂底部圆角。
           issue #243 follow-up：去掉外层 overflow 后底部圆角被裁的视觉问题。 */}
       <div style={{ display: 'grid', gridTemplateColumns: mobile ? '1fr' : '1fr 1.4fr', gap: 12, flex: mobile ? undefined : 1, minHeight: mobile ? undefined : 0 }}>
-        <Card padding={18} style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+        {/* overflow:hidden：窗口过小时这一行 flex:1 会被压到比内容还矮，柱状图（固定高）
+            原本会溢出卡片圆角外（issue #782）。裁进卡片内，与右侧「最近识别」卡片一致。 */}
+        <Card padding={18} style={{ display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
             <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--ol-ink-2)' }}>{t('overview.weekTitle')}</span>
             <span style={{ fontSize: 11, color: 'var(--ol-ink-4)' }}>{t('overview.weekUnit')}</span>
@@ -342,7 +344,9 @@ function ActivityHeatmapCard({ activity }: { activity: ActivityDay[] }) {
     };
   }, [activity, i18n.language]);
   return (
-    <Card padding={18} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+    // marginBottom 与上方 provider / metrics 两行的 18px 节奏保持一致：否则「年度活动」
+    // 会直接贴住下面「近 7 天 / 最近识别」那一行，中间没有间隔（issue #781）。
+    <Card padding={18} style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 18 }}>
       <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--ol-ink-2)' }}>
         {t('overview.activityTitle')}
       </span>

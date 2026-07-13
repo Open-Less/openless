@@ -314,7 +314,9 @@ export function RecordingInputSection() {
               options={[
                 { value: 'ctrlV', label: t('settings.recording.pasteShortcutCtrlV') },
                 { value: 'ctrlShiftV', label: t('settings.recording.pasteShortcutCtrlShiftV') },
-                { value: 'shiftInsert', label: t('settings.recording.pasteShortcutShiftInsert') },
+                // 这个「粘贴与剪贴板」组只在 Windows 出现（showDesktopInsert 已排除 Linux，mac 走
+                // macEventTap 不显示本行）。Shift+Insert 是 xterm/urxvt 等 X11 终端的粘贴组合，
+                // 放在 Windows 上纯属误导，故不再作为选项（issue #786）。
               ]}
               ariaLabel={t('settings.recording.pasteShortcutLabel')}
               style={{ ...inputStyle, maxWidth: 220 }}
@@ -404,11 +406,6 @@ export function RecordingInputSection() {
         <SettingRow label={t('settings.recording.autoUpdateCheckLabel')}>
           <Toggle on={prefs.autoUpdateCheck} onToggle={onAutoUpdateCheckChange} />
         </SettingRow>
-        {capability.statusHint && (
-          <div style={{ marginTop: 6, fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.5 }}>
-            {capability.statusHint}
-          </div>
-        )}
       </Collapsible>
       )}
     </>
