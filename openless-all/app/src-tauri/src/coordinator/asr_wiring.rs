@@ -104,26 +104,28 @@ pub(super) fn ensure_asr_credentials() -> Result<(), String> {
         }
     }
 
-    if is_whisper_compatible_provider(&active_asr)
-        || is_bailian_provider(&active_asr)
-        || is_qwen3_realtime_provider(&active_asr)
-        || is_mimo_provider(&active_asr)
-    {
-        let api_key = CredentialsVault::get(CredentialAccount::AsrApiKey)
-            .ok()
-            .flatten()
-            .unwrap_or_default();
-        if api_key.trim().is_empty() {
-            return Err("请先在设置中填写 ASR 服务商 API Key".to_string());
+    // 云端 provider 的预检凭据由 ActiveAsrProviderKind 统一判定（穷尽 match，
+    // 编译器保证新增 kind 不会被漏掉 —— 取代旧的「provider 白名单 + 火山兜底」，
+    // 那个静默 else 曾让新通道误落到火山分支）。
+    match active_asr_provider_kind(&active_asr).preflight_credential() {
+        AsrPreflightCredential::AsrApiKey => {
+            let api_key = CredentialsVault::get(CredentialAccount::AsrApiKey)
+                .ok()
+                .flatten()
+                .unwrap_or_default();
+            if api_key.trim().is_empty() {
+                return Err("请先在设置中填写 ASR 服务商 API Key".to_string());
+            }
+            Ok(())
         }
-        return Ok(());
-    }
-
-    let creds = read_volc_credentials();
-    if creds.app_id.trim().is_empty() || creds.access_token.trim().is_empty() {
-        Err("请先在设置中填写火山引擎 ASR App Key 和 Access Key".to_string())
-    } else {
-        Ok(())
+        AsrPreflightCredential::VolcAppKey => {
+            let creds = read_volc_credentials();
+            if creds.app_id.trim().is_empty() || creds.access_token.trim().is_empty() {
+                Err("请先在设置中填写火山引擎 ASR App Key 和 Access Key".to_string())
+            } else {
+                Ok(())
+            }
+        }
     }
 }
 
@@ -360,6 +362,10 @@ pub(super) fn is_mimo_provider(id: &str) -> bool {
     id == crate::asr::mimo::PROVIDER_ID
 }
 
+pub(super) fn is_dashscope_multimodal_provider(id: &str) -> bool {
+    id == crate::asr::dashscope_multimodal::PROVIDER_ID
+}
+
 pub(super) fn apply_chinese_script_preference(text: &str, pref: ChineseScriptPreference) -> String {
     if text.is_empty() {
         return String::new();
@@ -530,7 +536,14 @@ pub(super) async fn build_qa_asr_start(inner: &Arc<Inner>, active_asr: &str) -> 
         return Ok(QaAsrStart::Ready { active, consumer });
     }
 
-    match active_asr_provider_kind(active_asr) {
+    // 统一百炼:按所选模型把 build 分发重定向到具体协议（凭据仍读真实 active
+    // `bailian` 的那把 key；endpoint 由前端按模型同步好）。别名 id 原样返回。
+    let asr_model = CredentialsVault::get(CredentialAccount::AsrModel)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let effective_asr = resolve_effective_asr_provider(active_asr, &asr_model);
+    match active_asr_provider_kind(&effective_asr) {
         ActiveAsrProviderKind::Bailian => Ok(QaAsrStart::Bailian {
             asr: Arc::new(BailianRealtimeASR::new(read_bailian_credentials())),
             bridge: Arc::new(DeferredAsrBridge::new()),
@@ -544,6 +557,13 @@ pub(super) async fn build_qa_asr_start(inner: &Arc<Inner>, active_asr: &str) -> 
             let mimo = Arc::new(MimoBatchASR::new(api_key, base_url, model));
             let active = ActiveAsr::Mimo(Arc::clone(&mimo));
             let consumer: Arc<dyn crate::recorder::AudioConsumer> = mimo;
+            Ok(QaAsrStart::Ready { active, consumer })
+        }
+        ActiveAsrProviderKind::DashScopeMultimodal => {
+            let (api_key, base_url, model) = read_dashscope_multimodal_credentials();
+            let asr = Arc::new(DashScopeMultimodalASR::new(api_key, base_url, model));
+            let active = ActiveAsr::DashScopeMultimodal(Arc::clone(&asr));
+            let consumer: Arc<dyn crate::recorder::AudioConsumer> = asr;
             Ok(QaAsrStart::Ready { active, consumer })
         }
         ActiveAsrProviderKind::WhisperCompatible => {

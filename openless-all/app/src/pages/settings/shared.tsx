@@ -199,19 +199,45 @@ export const inputStyle: CSSProperties = {
         "background 0.16s var(--ol-motion-quick), border-color 0.16s var(--ol-motion-quick)",
 }
 
-// ASR provider id 集合，跟 ProvidersSection.tsx::ASR_PRESETS 一一对应。
-// 拆成独立类型让 LocalModelSection / ProvidersSection 都能用同一份不互相依赖。
-export type AsrPresetId =
-    | "volcengine"
-    | "bailian"
-    | "bailian-qwen3-realtime"
-    | "siliconflow"
-    | "zhipu"
-    | "groq"
-    | "whisper"
-    | "openrouter"
-    | "xiaomi-mimo-asr"
-    | "foundry-local-whisper"
-    | "sherpa-onnx-local"
-    | "local-qwen3"
-    | "apple-speech"
+// ASR provider preset 清单 —— 单一来源，放这里让 ProvidersSection /
+// LocalModelSection / Overview 都从同一处取，不再各维护一份 id 列表导致漂移。
+// `AsrPresetId` 由此派生（与 ProvidersSection 的 LLM_PRESETS→LlmPresetId 同构）。
+//
+// 新增兼容厂商：
+//   1. 这里加一项 `{ id, nameKey, baseUrl, model }`；
+//   2. 后端 `coordinator.rs::active_asr_provider_kind` 加 id→kind 映射 —— 之后
+//      `preflight_credential` / `configured_fields` 等穷尽 match 会被编译器逐个
+//      报错逼你补齐；走 Whisper 协议再加进 `is_whisper_compatible_provider`，
+//      专有协议另配独立 ASR client 与 provider kind；
+//   3. i18n 的 `settings.providers.presets.<nameKey>` 补各语言文案。
+export const ASR_PRESETS = [
+  { id: 'volcengine',   nameKey: 'asrVolcengine',   baseUrl: '',                                              model: ''                              },
+  { id: 'bailian',      nameKey: 'asrBailian',     baseUrl: 'wss://dashscope.aliyuncs.com/api-ws/v1/inference/', model: 'fun-asr-realtime'             },
+  // Qwen3-ASR-Flash 实时：OpenAI Realtime 风格 WS（/api-ws/v1/realtime），
+  // 与上面经典 inference 协议不同，由 asr/qwen_realtime.rs 专用 client 处理。
+  // 业务空间专属域名（wss://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/api-ws/v1/realtime）同样可用。
+  { id: 'bailian-qwen3-realtime', nameKey: 'asrBailianQwen3', baseUrl: 'wss://dashscope.aliyuncs.com/api-ws/v1/realtime', model: 'qwen3-asr-flash-realtime' },
+  // Fun-ASR-Flash 录音文件识别：非实时，走 DashScope 私有的
+  // multimodal-generation HTTP 接口（既非实时 WS，也非 OpenAI /audio/transcriptions），
+  // 由 asr/dashscope_multimodal.rs 专用批量 client 处理。API key 与百炼同一把。
+  { id: 'bailian-fun-asr-flash', nameKey: 'asrBailianFunAsrFlash', baseUrl: 'https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation', model: 'fun-asr-flash-2026-06-15' },
+  { id: 'siliconflow',  nameKey: 'asrSiliconflow',  baseUrl: 'https://api.siliconflow.cn/v1',                  model: 'FunAudioLLM/SenseVoiceSmall' },
+  { id: 'zhipu',        nameKey: 'asrZhipu',        baseUrl: 'https://open.bigmodel.cn/api/paas/v4',           model: 'glm-asr-2512'                },
+  { id: 'groq',         nameKey: 'asrGroq',         baseUrl: 'https://api.groq.com/openai/v1',                 model: 'whisper-large-v3-turbo'      },
+  { id: 'whisper',      nameKey: 'asrWhisper',      baseUrl: 'https://api.openai.com/v1',                      model: 'whisper-1'                   },
+  // OpenRouter 的 /audio/transcriptions 走 application/json + base64（issue #582），
+  // 后端 coordinator.rs::whisper_request_format 对该 id 切换到 OpenRouterJson 编码。
+  { id: 'openrouter',   nameKey: 'asrOpenrouter',   baseUrl: 'https://openrouter.ai/api/v1',                   model: 'openai/whisper-large-v3-turbo' },
+  // 小米 MiMo ASR 按官方文档走 /chat/completions + input_audio，不是
+  // Whisper /audio/transcriptions；后端由 asr/mimo.rs 专用 client 处理。
+  { id: 'xiaomi-mimo-asr', nameKey: 'asrXiaomiMimo', baseUrl: 'https://api.xiaomimimo.com/v1',                  model: 'mimo-v2.5-asr'               },
+  { id: 'foundry-local-whisper', nameKey: 'asrFoundryLocalWhisper', baseUrl: '',                              model: ''                              },
+  // 本地引擎（Foundry / sherpa-onnx / Qwen3）：无 baseUrl/model 配置，
+  // 模型在「高级 → 本地模型」里下载与切换。
+  { id: 'sherpa-onnx-local',     nameKey: 'asrSherpaOnnxLocal',     baseUrl: '',                              model: ''                              },
+  { id: 'local-qwen3',  nameKey: 'asrLocalQwen3',   baseUrl: '',                                              model: ''                              },
+  // Apple 系统语音识别（macOS）：无 baseUrl/model、无下载、无凭据。
+  { id: 'apple-speech', nameKey: 'asrAppleSpeech',  baseUrl: '',                                              model: ''                              },
+] as const;
+
+export type AsrPresetId = typeof ASR_PRESETS[number]['id'];

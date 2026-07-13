@@ -10,6 +10,7 @@ import { useMobileLayout } from '../lib/useMobileLayout';
 import type { ActivityDay, CredentialsStatus, DictationSession, PolishMode } from '../lib/types';
 import { useHotkeySettings } from '../state/HotkeySettingsContext';
 import { Btn, Card, PageHeader, Pill } from './_atoms';
+import { ASR_PRESETS } from './settings/shared';
 
 function useModeLabels(): Record<PolishMode, string> {
   const { t } = useTranslation();
@@ -25,19 +26,11 @@ interface OverviewProps {
   onOpenHistory?: () => void;
 }
 
-const ASR_NAME_KEY_BY_ID: Record<string, string> = {
-  volcengine: 'asrVolcengine',
-  bailian: 'asrBailian',
-  siliconflow: 'asrSiliconflow',
-  zhipu: 'asrZhipu',
-  groq: 'asrGroq',
-  whisper: 'asrWhisper',
-  openrouter: 'asrOpenrouter',
-  'xiaomi-mimo-asr': 'asrXiaomiMimo',
-  'foundry-local-whisper': 'asrFoundryLocalWhisper',
-  'sherpa-onnx-local': 'asrSherpaOnnxLocal',
-  'local-qwen3': 'asrLocalQwen3',
-};
+// id → i18n nameKey，从 ASR_PRESETS 单一来源派生，避免这里再手维护一份 id 列表
+// （之前漏了 bailian-qwen3-realtime / apple-speech，会退化成显示裸 id）。
+const ASR_NAME_KEY_BY_ID: Record<string, string> = Object.fromEntries(
+  ASR_PRESETS.map(p => [p.id, p.nameKey]),
+);
 
 const LLM_NAME_KEY_BY_ID: Record<string, string> = {
   ark: 'ark',

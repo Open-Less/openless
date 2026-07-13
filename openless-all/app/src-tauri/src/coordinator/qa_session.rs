@@ -275,6 +275,15 @@ pub(super) async fn transcribe_overlay_dictation_asr(
                 Err(_) => Err("mimo global timeout".to_string()),
             }
         }
+        ActiveAsr::DashScopeMultimodal(asr) => {
+            debug_assert!(uses_global_timeout);
+            let timeout_duration = std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS);
+            match tokio::time::timeout(timeout_duration, asr.transcribe()).await {
+                Ok(Ok(raw)) => Ok(raw),
+                Ok(Err(error)) => Err(error.to_string()),
+                Err(_) => Err("dashscope multimodal global timeout".to_string()),
+            }
+        }
         #[cfg(target_os = "windows")]
         ActiveAsr::FoundryLocalWhisper(local) => {
             debug_assert!(!uses_global_timeout);
@@ -857,6 +866,26 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
                     );
                     finish_qa_with_error(inner, "识别超时".to_string());
                     return Err("mimo global timeout".to_string());
+                }
+            }
+        }
+        ActiveAsr::DashScopeMultimodal(m) => {
+            debug_assert!(uses_global_timeout);
+            let timeout_duration = std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS);
+            match tokio::time::timeout(timeout_duration, m.transcribe()).await {
+                Ok(Ok(r)) => r,
+                Ok(Err(e)) => {
+                    log::error!("[coord] QA: DashScope Fun-ASR-Flash transcribe failed: {e}");
+                    finish_qa_with_error(inner, format!("识别失败: {e}"));
+                    return Err(e.to_string());
+                }
+                Err(_) => {
+                    log::error!(
+                        "[coord] QA: DashScope Fun-ASR-Flash 全局超时 {} 秒",
+                        COORDINATOR_GLOBAL_TIMEOUT_SECS
+                    );
+                    finish_qa_with_error(inner, "识别超时".to_string());
+                    return Err("dashscope multimodal global timeout".to_string());
                 }
             }
         }

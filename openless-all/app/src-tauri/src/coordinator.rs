@@ -25,9 +25,9 @@ use crate::asr::local::{
     foundry, sherpa, FoundryLocalRuntime, FoundryLocalWhisperAsr, SherpaOnnxAsr, SherpaOnnxRuntime,
 };
 use crate::asr::{
-    BailianCredentials, BailianRealtimeASR, DictionaryHotword, MimoBatchASR, Qwen3RealtimeASR,
-    Qwen3RealtimeCredentials, RawTranscript, VolcengineCredentials, VolcengineStreamingASR,
-    WhisperBatchASR,
+    BailianCredentials, BailianRealtimeASR, DashScopeMultimodalASR, DictionaryHotword,
+    MimoBatchASR, Qwen3RealtimeASR, Qwen3RealtimeCredentials, RawTranscript, VolcengineCredentials,
+    VolcengineStreamingASR, WhisperBatchASR,
 };
 use crate::combo_hotkey::{ComboHotkeyError, ComboHotkeyEvent, ComboHotkeyMonitor};
 use crate::coordinator_state::{
@@ -180,6 +180,8 @@ enum ActiveAsr {
     Volcengine(Arc<VolcengineStreamingASR>),
     Whisper(Arc<WhisperBatchASR>),
     Mimo(Arc<MimoBatchASR>),
+    /// 百炼 Fun-ASR-Flash 录音文件识别（DashScope multimodal-generation 批量 HTTP）。
+    DashScopeMultimodal(Arc<DashScopeMultimodalASR>),
     Bailian(Arc<BailianRealtimeASR>),
     /// 百炼 Qwen3-ASR-Flash 实时（OpenAI Realtime 风格 WS 协议）。
     Qwen3Realtime(Arc<Qwen3RealtimeASR>),
@@ -208,26 +210,110 @@ fn asr_transcribe_uses_global_timeout(asr: &ActiveAsr) -> bool {
     }
 }
 
+/// 单一分类来源：云端 ASR provider id → 协议种类。本地/无凭据引擎（local qwen3 /
+/// apple speech / foundry / sherpa）由各调用点在此之前用平台 cfg 门单独处理，不进
+/// 这个枚举。
+///
+/// **加新云端通道的唯一改动点**：在 [`active_asr_provider_kind`] 加一条 id 映射，
+/// 然后 [`ActiveAsrProviderKind::preflight_credential`] /
+/// [`ActiveAsrProviderKind::configured_fields`] 与各 build/dispatch 的穷尽 `match`
+/// 会被编译器逐个报错逼你补齐——不会再出现「装完才发现某处漏了」。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ActiveAsrProviderKind {
+pub(crate) enum ActiveAsrProviderKind {
     Bailian,
     Qwen3Realtime,
     Mimo,
+    DashScopeMultimodal,
     WhisperCompatible,
     Volcengine,
 }
 
-fn active_asr_provider_kind(id: &str) -> ActiveAsrProviderKind {
+/// 「能否开始一次会话」所需的凭据形态（对应 `ensure_asr_credentials` 预检门）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AsrPreflightCredential {
+    /// 需要 ASR API Key（endpoint/model 有默认值兜底）。
+    AsrApiKey,
+    /// 需要火山引擎 App Key + Access Key。
+    VolcAppKey,
+}
+
+/// 概览页「已配置 / 未配置」状态所需的字段（对应 `asr_configured_for_provider`）。
+/// 语义与预检门**有意不同**：预检问「能否开始」，这里问「preset 要求的字段填齐没」。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AsrConfiguredFields {
+    /// 只看 API Key（endpoint/model 走默认）：bailian / qwen3 实时。
+    ApiKeyOnly,
+    /// API Key + endpoint + model 都要填：mimo / dashscope multimodal。
+    ApiKeyEndpointModel,
+    /// 只看 endpoint + model（不含 API Key）：Whisper 兼容厂商。
+    EndpointModelOnly,
+    /// 火山引擎三件套。
+    VolcAppKey,
+}
+
+impl ActiveAsrProviderKind {
+    pub(crate) fn preflight_credential(self) -> AsrPreflightCredential {
+        match self {
+            ActiveAsrProviderKind::Bailian
+            | ActiveAsrProviderKind::Qwen3Realtime
+            | ActiveAsrProviderKind::Mimo
+            | ActiveAsrProviderKind::DashScopeMultimodal
+            | ActiveAsrProviderKind::WhisperCompatible => AsrPreflightCredential::AsrApiKey,
+            ActiveAsrProviderKind::Volcengine => AsrPreflightCredential::VolcAppKey,
+        }
+    }
+
+    pub(crate) fn configured_fields(self) -> AsrConfiguredFields {
+        match self {
+            ActiveAsrProviderKind::Bailian | ActiveAsrProviderKind::Qwen3Realtime => {
+                AsrConfiguredFields::ApiKeyOnly
+            }
+            ActiveAsrProviderKind::Mimo | ActiveAsrProviderKind::DashScopeMultimodal => {
+                AsrConfiguredFields::ApiKeyEndpointModel
+            }
+            ActiveAsrProviderKind::WhisperCompatible => AsrConfiguredFields::EndpointModelOnly,
+            ActiveAsrProviderKind::Volcengine => AsrConfiguredFields::VolcAppKey,
+        }
+    }
+}
+
+pub(crate) fn active_asr_provider_kind(id: &str) -> ActiveAsrProviderKind {
     if is_bailian_provider(id) {
         ActiveAsrProviderKind::Bailian
     } else if is_qwen3_realtime_provider(id) {
         ActiveAsrProviderKind::Qwen3Realtime
     } else if is_mimo_provider(id) {
         ActiveAsrProviderKind::Mimo
+    } else if is_dashscope_multimodal_provider(id) {
+        ActiveAsrProviderKind::DashScopeMultimodal
     } else if is_whisper_compatible_provider(id) {
         ActiveAsrProviderKind::WhisperCompatible
     } else {
         ActiveAsrProviderKind::Volcengine
+    }
+}
+
+/// 统一「阿里云百炼」入口的模型 → 底层协议 id 路由。
+///
+/// 三条百炼协议（fun-asr-realtime 经典实时 / qwen3-asr-flash-realtime Realtime /
+/// fun-asr-flash 录音文件）在 UI 上收成一个 provider `bailian`（一把 key），**构建时**
+/// 按所选模型二次路由到具体协议客户端。凭据 / 「已配置」判定仍看真实 active
+/// `bailian`（→ ApiKeyOnly，一把 key），只有这里的 build 分发用得上 effective id。
+///
+/// 老用户若停在别名 id（`bailian-qwen3-realtime` / `bailian-fun-asr-flash`）上，
+/// 非 `bailian` 直接原样返回，各走各的旧路径——即「隐藏别名」向后兼容。
+pub(crate) fn resolve_effective_asr_provider(active_asr: &str, model: &str) -> String {
+    if !is_bailian_provider(active_asr) {
+        return active_asr.to_string();
+    }
+    let model = model.trim();
+    if model.starts_with("qwen3-asr-flash-realtime") {
+        crate::asr::qwen_realtime::PROVIDER_ID.to_string()
+    } else if model.starts_with("fun-asr-flash") {
+        crate::asr::dashscope_multimodal::PROVIDER_ID.to_string()
+    } else {
+        // fun-asr-realtime 及空/未知模型 → 经典实时（百炼默认）
+        crate::asr::bailian::PROVIDER_ID.to_string()
     }
 }
 
@@ -1593,6 +1679,10 @@ impl Coordinator {
                 .await
                 .map_err(|_| "重新转录超时".to_string())?
                 .map_err(|e| e.to_string())?,
+            ActiveAsr::DashScopeMultimodal(m) => tokio::time::timeout(timeout, m.transcribe())
+                .await
+                .map_err(|_| "重新转录超时".to_string())?
+                .map_err(|e| e.to_string())?,
             #[cfg(target_os = "windows")]
             ActiveAsr::FoundryLocalWhisper(local) => {
                 let audio_secs = (local.buffer_duration_ms() as f64) / 1000.0;
@@ -1987,6 +2077,28 @@ fn read_mimo_credentials() -> (String, String, String) {
     (api_key, base_url, model)
 }
 
+fn read_dashscope_multimodal_credentials() -> (String, String, String) {
+    let api_key = CredentialsVault::get(CredentialAccount::AsrApiKey)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let base_url = if unified_bailian_is_active() {
+        crate::asr::dashscope_multimodal::DEFAULT_ENDPOINT.to_string()
+    } else {
+        CredentialsVault::get(CredentialAccount::AsrEndpoint)
+            .ok()
+            .flatten()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| crate::asr::dashscope_multimodal::DEFAULT_ENDPOINT.to_string())
+    };
+    let model = CredentialsVault::get(CredentialAccount::AsrModel)
+        .ok()
+        .flatten()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| crate::asr::dashscope_multimodal::DEFAULT_MODEL.to_string());
+    (api_key, base_url, model)
+}
+
 fn read_bailian_credentials() -> BailianCredentials {
     let api_key = CredentialsVault::get(CredentialAccount::AsrApiKey)
         .ok()
@@ -2014,16 +2126,30 @@ fn read_bailian_credentials() -> BailianCredentials {
     }
 }
 
+/// 统一「阿里云百炼」入口的三条协议共用同一个 `bailian` 凭据条目，只有一个
+/// endpoint 字段（存的是经典实时地址）。qwen3 / dashscope 若照读这个共用地址会指错
+/// 网关。当 active 恰是统一 `bailian` 时，这两个协议一律改用各自协议默认地址（忽略
+/// 存储值）——这样任意模型（含用户自定义、拉取来的）都能按模型名路由到正确 endpoint。
+/// 老用户停在别名 id（`bailian-qwen3-realtime` / `bailian-fun-asr-flash`）上时不触发，
+/// 仍读自己条目里存的 endpoint。
+pub(crate) fn unified_bailian_is_active() -> bool {
+    CredentialsVault::get_active_asr() == crate::asr::bailian::PROVIDER_ID
+}
+
 fn read_qwen3_realtime_credentials() -> Qwen3RealtimeCredentials {
     let api_key = CredentialsVault::get(CredentialAccount::AsrApiKey)
         .ok()
         .flatten()
         .unwrap_or_default();
-    let endpoint = CredentialsVault::get(CredentialAccount::AsrEndpoint)
-        .ok()
-        .flatten()
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| crate::asr::qwen_realtime::DEFAULT_ENDPOINT.to_string());
+    let endpoint = if unified_bailian_is_active() {
+        crate::asr::qwen_realtime::DEFAULT_ENDPOINT.to_string()
+    } else {
+        CredentialsVault::get(CredentialAccount::AsrEndpoint)
+            .ok()
+            .flatten()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| crate::asr::qwen_realtime::DEFAULT_ENDPOINT.to_string())
+    };
     let model = CredentialsVault::get(CredentialAccount::AsrModel)
         .ok()
         .flatten()
@@ -2399,9 +2525,81 @@ mod tests {
             ActiveAsrProviderKind::Mimo
         );
         assert_eq!(
+            active_asr_provider_kind(crate::asr::dashscope_multimodal::PROVIDER_ID),
+            ActiveAsrProviderKind::DashScopeMultimodal
+        );
+        assert_eq!(
             active_asr_provider_kind("volcengine"),
             ActiveAsrProviderKind::Volcengine
         );
+        // 未知 id 落到 Volcengine（与构建/凭据分发的兜底一致）。
+        assert_eq!(
+            active_asr_provider_kind("some-unknown-provider"),
+            ActiveAsrProviderKind::Volcengine
+        );
+    }
+
+    // 锁定分类枚举派生的凭据语义：重构把 ensure_asr_credentials /
+    // asr_configured_for_provider 从「字符串白名单 + 静默 else」改成对这两个方法的
+    // 穷尽 match，这里逐 kind 钉死映射，防止未来悄悄改动某个 provider 的凭据形态。
+    #[test]
+    fn preflight_credential_maps_every_kind() {
+        use AsrPreflightCredential::*;
+        use ActiveAsrProviderKind::*;
+        assert_eq!(Bailian.preflight_credential(), AsrApiKey);
+        assert_eq!(Qwen3Realtime.preflight_credential(), AsrApiKey);
+        assert_eq!(Mimo.preflight_credential(), AsrApiKey);
+        assert_eq!(DashScopeMultimodal.preflight_credential(), AsrApiKey);
+        assert_eq!(WhisperCompatible.preflight_credential(), AsrApiKey);
+        assert_eq!(Volcengine.preflight_credential(), VolcAppKey);
+    }
+
+    #[test]
+    fn resolve_effective_asr_provider_routes_bailian_by_model() {
+        let bailian = crate::asr::bailian::PROVIDER_ID;
+        // 统一百炼:按模型名路由到底层协议 id。
+        assert_eq!(
+            resolve_effective_asr_provider(bailian, "fun-asr-realtime"),
+            crate::asr::bailian::PROVIDER_ID
+        );
+        assert_eq!(
+            resolve_effective_asr_provider(bailian, "qwen3-asr-flash-realtime"),
+            crate::asr::qwen_realtime::PROVIDER_ID
+        );
+        assert_eq!(
+            resolve_effective_asr_provider(bailian, "qwen3-asr-flash-realtime-2026-02-10"),
+            crate::asr::qwen_realtime::PROVIDER_ID
+        );
+        assert_eq!(
+            resolve_effective_asr_provider(bailian, "fun-asr-flash-2026-06-15"),
+            crate::asr::dashscope_multimodal::PROVIDER_ID
+        );
+        // 空 / 未知模型 → 经典实时（百炼默认）。
+        assert_eq!(
+            resolve_effective_asr_provider(bailian, ""),
+            crate::asr::bailian::PROVIDER_ID
+        );
+        // 非百炼 provider 原样返回（隐藏别名与其它厂商各走各的旧路径）。
+        assert_eq!(
+            resolve_effective_asr_provider(crate::asr::qwen_realtime::PROVIDER_ID, "anything"),
+            crate::asr::qwen_realtime::PROVIDER_ID
+        );
+        assert_eq!(
+            resolve_effective_asr_provider("whisper", "whisper-1"),
+            "whisper"
+        );
+    }
+
+    #[test]
+    fn configured_fields_maps_every_kind() {
+        use AsrConfiguredFields::*;
+        use ActiveAsrProviderKind::*;
+        assert_eq!(Bailian.configured_fields(), ApiKeyOnly);
+        assert_eq!(Qwen3Realtime.configured_fields(), ApiKeyOnly);
+        assert_eq!(Mimo.configured_fields(), ApiKeyEndpointModel);
+        assert_eq!(DashScopeMultimodal.configured_fields(), ApiKeyEndpointModel);
+        assert_eq!(WhisperCompatible.configured_fields(), EndpointModelOnly);
+        assert_eq!(Volcengine.configured_fields(), VolcAppKey);
     }
 
     #[cfg(target_os = "windows")]

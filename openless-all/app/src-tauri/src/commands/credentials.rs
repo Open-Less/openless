@@ -27,9 +27,8 @@ fn volcengine_configured(snap: &CredentialsSnapshot) -> bool {
 }
 
 pub(crate) fn asr_configured_for_provider(provider: &str, snap: &CredentialsSnapshot) -> bool {
-    if provider == "volcengine" {
-        return volcengine_configured(snap);
-    }
+    // 本地 / 无凭据引擎不属于云端分类枚举（ActiveAsrProviderKind），由平台 cfg 门
+    // 在此单独判定；移动端上这些引擎不可用直接判未配置。
     if cfg!(mobile)
         && (provider == crate::asr::local::PROVIDER_ID
             || provider == crate::asr::local::sherpa::PROVIDER_ID
@@ -46,17 +45,21 @@ pub(crate) fn asr_configured_for_provider(provider: &str, snap: &CredentialsSnap
         // 本地 ASR 不依赖云端凭据。
         return true;
     }
-    if provider == crate::asr::bailian::PROVIDER_ID
-        || provider == crate::asr::qwen_realtime::PROVIDER_ID
-    {
-        return configured(&snap.asr_api_key);
+    // 云端 provider：所需字段由 ActiveAsrProviderKind 统一判定（穷尽 match，新增
+    // kind 编译器强制补齐）。volcengine 亦经此路（VolcAppKey）。
+    use crate::coordinator::{active_asr_provider_kind, AsrConfiguredFields};
+    match active_asr_provider_kind(provider).configured_fields() {
+        AsrConfiguredFields::ApiKeyOnly => configured(&snap.asr_api_key),
+        AsrConfiguredFields::ApiKeyEndpointModel => {
+            configured(&snap.asr_api_key)
+                && configured(&snap.asr_endpoint)
+                && configured(&snap.asr_model)
+        }
+        AsrConfiguredFields::EndpointModelOnly => {
+            configured(&snap.asr_endpoint) && configured(&snap.asr_model)
+        }
+        AsrConfiguredFields::VolcAppKey => volcengine_configured(snap),
     }
-    if provider == crate::asr::mimo::PROVIDER_ID {
-        return configured(&snap.asr_api_key)
-            && configured(&snap.asr_endpoint)
-            && configured(&snap.asr_model);
-    }
-    configured(&snap.asr_endpoint) && configured(&snap.asr_model)
 }
 
 pub(crate) fn llm_configured_for_provider(provider: &str, snap: &CredentialsSnapshot) -> bool {
