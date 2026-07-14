@@ -12,7 +12,8 @@
 //!     "providers": {
 //!       "asr": { "<id>": { "appKey", "accessKey", "resourceId", "apiKey", "baseURL", "model", "vocabularyId" } },
 //!       "llm": { "<id>": { "displayName", "apiKey", "baseURL", "model", "temperature", "extraHeaders" } }
-//!     }
+//!     },
+//!     "marketplace": { "githubAccessToken": "<secret>" }
 //!   }
 //!
 //! "ark.api_key"/"volcengine.app_key" 等账户名按 Swift 语义路由到 active provider。
@@ -101,6 +102,8 @@ struct CredsRoot {
     active: CredsActive,
     #[serde(default)]
     providers: CredsProviders,
+    #[serde(default)]
+    marketplace: CredsMarketplace,
 }
 
 fn credsroot_default_version() -> u32 {
@@ -144,6 +147,23 @@ struct CredsProviders {
     asr: HashMap<String, CredsAsrEntry>,
     #[serde(default)]
     llm: HashMap<String, CredsLlmEntry>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+#[allow(non_snake_case)]
+struct CredsMarketplace {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    githubAccessToken: Option<MarketplaceGithubToken>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(transparent)]
+struct MarketplaceGithubToken(String);
+
+impl std::fmt::Debug for MarketplaceGithubToken {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("[REDACTED]")
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
@@ -363,6 +383,25 @@ fn clean_credentials(root: &CredsRoot) -> CredsRoot {
     cleaned.providers.asr.retain(|_, v| !v.is_empty());
     cleaned.providers.llm.retain(|_, v| !v.is_empty());
     cleaned
+}
+
+fn lookup_marketplace_github_token(root: &CredsRoot) -> Option<String> {
+    root.marketplace
+        .githubAccessToken
+        .as_ref()
+        .map(|token| token.0.as_str())
+        .filter(|token| !token.trim().is_empty())
+        .map(str::to_string)
+}
+
+fn write_marketplace_github_token(root: &mut CredsRoot, value: Option<String>) {
+    root.marketplace.githubAccessToken = value.and_then(|token| {
+        if token.trim().is_empty() {
+            None
+        } else {
+            Some(MarketplaceGithubToken(token))
+        }
+    });
 }
 
 fn read_legacy_credentials_file(path: &Path) -> Option<CredsRoot> {
@@ -973,6 +1012,29 @@ impl CredentialsVault {
         save_credentials(&root)
     }
 
+    /// GitHub OAuth token for authenticated marketplace operations.
+    ///
+    /// This credential deliberately has no generic `CredentialAccount` and is
+    /// excluded from `CredentialsSnapshot`, so frontend IPC can never read it.
+    pub fn get_marketplace_github_token() -> Result<Option<String>> {
+        let _guard = credentials_lock().lock();
+        Ok(lookup_marketplace_github_token(&load_credentials()))
+    }
+
+    pub fn set_marketplace_github_token(value: &str) -> Result<()> {
+        let _guard = credentials_lock().lock();
+        let mut root = load_credentials_for_update()?;
+        write_marketplace_github_token(&mut root, Some(value.to_string()));
+        save_credentials(&root)
+    }
+
+    pub fn remove_marketplace_github_token() -> Result<()> {
+        let _guard = credentials_lock().lock();
+        let mut root = load_credentials_for_update()?;
+        write_marketplace_github_token(&mut root, None);
+        save_credentials(&root)
+    }
+
     pub fn get_active_asr() -> String {
         let _guard = credentials_lock().lock();
         load_credentials().active.asr
@@ -1039,7 +1101,10 @@ impl CredentialsVault {
 
 #[cfg(test)]
 mod tests {
-    use super::{chunk_json_payload, parse_extra_headers_json, KEYRING_CHUNK_MAX_UTF16_UNITS};
+    use super::{
+        chunk_json_payload, lookup_marketplace_github_token, parse_extra_headers_json,
+        write_marketplace_github_token, CredsRoot, KEYRING_CHUNK_MAX_UTF16_UNITS,
+    };
 
     #[test]
     fn credential_payload_chunks_stay_under_windows_blob_limit() {
@@ -1073,5 +1138,56 @@ mod tests {
                 "unexpected error for {name}: {err}"
             );
         }
+    }
+
+    #[test]
+    fn marketplace_github_token_uses_the_credentials_payload_not_provider_accounts() {
+        let mut root = CredsRoot::default();
+        assert_eq!(lookup_marketplace_github_token(&root), None);
+
+        write_marketplace_github_token(&mut root, Some("gho_vault_only".to_string()));
+
+        assert_eq!(
+            lookup_marketplace_github_token(&root).as_deref(),
+            Some("gho_vault_only")
+        );
+        assert!(root.providers.asr.is_empty());
+        assert!(root.providers.llm.is_empty());
+    }
+
+    #[test]
+    fn legacy_credentials_payload_without_marketplace_token_remains_readable() {
+        let root: CredsRoot = serde_json::from_str(r#"{"version":1}"#)
+            .expect("pre-marketplace credentials should remain compatible");
+
+        assert_eq!(lookup_marketplace_github_token(&root), None);
+    }
+
+    #[test]
+    fn marketplace_logout_removes_only_the_marketplace_token() {
+        let mut root = CredsRoot::default();
+        root.active.llm = "configured-provider".to_string();
+        write_marketplace_github_token(&mut root, Some("gho_remove_me".to_string()));
+
+        write_marketplace_github_token(&mut root, None);
+
+        assert_eq!(lookup_marketplace_github_token(&root), None);
+        assert_eq!(root.active.llm, "configured-provider");
+    }
+
+    #[test]
+    fn marketplace_token_is_absent_from_serialized_preferences() {
+        let token = "gho_must_not_enter_preferences";
+        let mut root = CredsRoot::default();
+        write_marketplace_github_token(&mut root, Some(token.to_string()));
+
+        let credentials_json = serde_json::to_string(&root).expect("credentials should serialize");
+        let preferences_json = serde_json::to_string(&crate::types::UserPreferences::default())
+            .expect("preferences should serialize");
+
+        assert!(credentials_json.contains(token));
+        assert!(!preferences_json.contains(token));
+        assert!(!preferences_json.contains("githubAccessToken"));
+        assert!(!format!("{root:?}").contains(token));
     }
 }

@@ -8,6 +8,7 @@ import {
   importStylePackFromZip,
   isTauri,
   listStylePacks,
+  marketplaceAuthStatus,
   previewStylePackRuntime,
   resetBuiltinStylePack,
   saveStylePack,
@@ -121,7 +122,9 @@ function sanitizeZipFileName(name: string) {
 export function Style() {
   const { t } = useTranslation();
   const { prefs: marketplacePrefs } = useHotkeySettings();
-  const canPublish = (marketplacePrefs?.marketplaceDevLogin ?? '').trim().length > 0;
+  const marketplaceDisplayLogin = (marketplacePrefs?.marketplaceDevLogin ?? '').trim();
+  const [marketplaceSignedIn, setMarketplaceSignedIn] = useState(false);
+  const canPublish = marketplaceSignedIn;
 
   const [packs, setPacks] = useState<StylePack[]>([]);
 
@@ -140,6 +143,18 @@ export function Style() {
   const editorCloseTimer = useRef<number | null>(null);
   const [runtimePreview, setRuntimePreview] = useState<StylePackRuntimeDiagnostics | null>(null);
   const [runtimePreviewError, setRuntimePreviewError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void marketplaceAuthStatus()
+      .then(status => {
+        if (!cancelled) setMarketplaceSignedIn(status.signedIn);
+      })
+      .catch(() => {
+        if (!cancelled) setMarketplaceSignedIn(false);
+      });
+    return () => { cancelled = true; };
+  }, [marketplaceDisplayLogin]);
 
   useEffect(() => () => {
     if (statusTimer.current !== null) window.clearTimeout(statusTimer.current);
@@ -475,6 +490,9 @@ export function Style() {
       await uploadMarketplacePack(pack.id);
       showSaveStatus('saved', t('style.pack.publishSuccess'), true);
     } catch (publishError) {
+      void marketplaceAuthStatus()
+        .then(status => setMarketplaceSignedIn(status.signedIn))
+        .catch(() => setMarketplaceSignedIn(false));
       showSaveStatus('failed', t('style.pack.publishFailed', { err: String(publishError) }));
     } finally {
       setBusy(null);

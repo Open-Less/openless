@@ -1,10 +1,9 @@
 use super::*;
 
-// ─────────────────────── GitHub OAuth Device Flow (Phase 1) ───────────────────────
+// ───────────────────────── GitHub OAuth Device Flow ─────────────────────────
 //
-// 客户端直连 GitHub 拿 access_token + login，前端自动把 login 写进
-// prefs.marketplaceDevLogin。marketplace backend 完全不动（依然 X-Dev-User）。
-// Phase 2 才会让 backend 验证 GitHub identity（JWT 签发 + 防伪造）。
+// 客户端直连 GitHub 拿 access_token + login。Rust 在 `/user` 验证成功后把 token
+// 写入 CredentialsVault；前端只收到 login 用作展示缓存，永远拿不到 token。
 //
 // 配置 client_id 的两种方式（OAuth App client_id 非敏感，可硬编码）：
 //   1. 在下方 GITHUB_OAUTH_CLIENT_ID 常量填值（生产推荐 — 直接 bake 进二进制）
@@ -93,6 +92,20 @@ pub enum GithubDevicePollResult {
     Error { message: String },
 }
 
+fn github_login_from_verified_response(
+    status: reqwest::StatusCode,
+    body: &serde_json::Value,
+) -> Result<String, String> {
+    if !status.is_success() {
+        return Err(format!("GitHub /user HTTP {status}"));
+    }
+    let login = body["login"].as_str().unwrap_or("").trim();
+    if login.is_empty() {
+        return Err("GitHub /user 返回空 login".to_string());
+    }
+    Ok(login.to_string())
+}
+
 #[tauri::command]
 pub async fn github_device_flow_poll(
     device_code: String,
@@ -117,7 +130,10 @@ pub async fn github_device_flow_poll(
         .await
         .map_err(|e| format!("解析 access_token 响应失败：{e}"))?;
 
-    if let Some(token) = body["access_token"].as_str() {
+    if let Some(token) = body["access_token"]
+        .as_str()
+        .filter(|token| !token.trim().is_empty())
+    {
         let user_resp = net::send_with_retry(|| {
             net::http()
                 .get("https://api.github.com/user")
@@ -128,16 +144,17 @@ pub async fn github_device_flow_poll(
         })
         .await
         .map_err(|e| format!("调用 GitHub /user 失败：{e}"))?;
+        let user_status = user_resp.status();
         let user_body: serde_json::Value = user_resp
             .json()
             .await
             .map_err(|e| format!("解析 /user 响应失败：{e}"))?;
-        let login = user_body["login"].as_str().unwrap_or("").to_string();
-        if login.is_empty() {
-            return Ok(GithubDevicePollResult::Error {
-                message: "GitHub /user 返回空 login".to_string(),
-            });
-        }
+        let login = match github_login_from_verified_response(user_status, &user_body) {
+            Ok(login) => login,
+            Err(message) => return Ok(GithubDevicePollResult::Error { message }),
+        };
+        CredentialsVault::set_marketplace_github_token(token)
+            .map_err(|e| format!("保存 Marketplace 登录凭据失败：{e}"))?;
         return Ok(GithubDevicePollResult::Authorized { login });
     }
 
@@ -151,4 +168,63 @@ pub async fn github_device_flow_poll(
         _ => "未知 OAuth 错误（access_token 缺失）".to_string(),
     };
     Ok(GithubDevicePollResult::Error { message: msg })
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarketplaceAuthStatus {
+    pub signed_in: bool,
+}
+
+/// Exposes only credential presence. The token remains inside Rust.
+#[tauri::command]
+pub fn marketplace_auth_status() -> Result<MarketplaceAuthStatus, String> {
+    let signed_in = CredentialsVault::get_marketplace_github_token()
+        .map_err(|e| format!("读取 Marketplace 登录状态失败：{e}"))?
+        .is_some();
+    Ok(MarketplaceAuthStatus { signed_in })
+}
+
+#[tauri::command]
+pub fn marketplace_logout() -> Result<(), String> {
+    CredentialsVault::remove_marketplace_github_token()
+        .map_err(|e| format!("清除 Marketplace 登录凭据失败：{e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{github_login_from_verified_response, GithubDevicePollResult};
+    use reqwest::StatusCode;
+
+    #[test]
+    fn github_user_must_be_successful_and_have_a_login_before_token_persistence() {
+        assert_eq!(
+            github_login_from_verified_response(
+                StatusCode::OK,
+                &serde_json::json!({ "login": "octocat" }),
+            )
+            .as_deref(),
+            Ok("octocat")
+        );
+        assert!(github_login_from_verified_response(
+            StatusCode::UNAUTHORIZED,
+            &serde_json::json!({ "login": "forged" }),
+        )
+        .is_err());
+        assert!(
+            github_login_from_verified_response(StatusCode::OK, &serde_json::json!({})).is_err()
+        );
+    }
+
+    #[test]
+    fn authorized_poll_result_exposes_login_but_never_the_token() {
+        let serialized = serde_json::to_string(&GithubDevicePollResult::Authorized {
+            login: "octocat".to_string(),
+        })
+        .expect("poll result should serialize");
+
+        assert!(serialized.contains("octocat"));
+        assert!(!serialized.contains("access_token"));
+        assert!(!serialized.contains("gho_"));
+    }
 }

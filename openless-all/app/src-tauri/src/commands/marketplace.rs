@@ -5,8 +5,8 @@ use std::io::Write;
 //
 // 客户端跟 marketplace backend 的 HTTP 客户端封装。Backend URL 走 prefs
 // `marketplace_base_url`（默认 http://127.0.0.1:8090 开发；生产用户填 https://api.<domain>）。
-// dev-mode auth：用户在 Settings 填 `marketplace_dev_login`（GitHub 风格 username），
-// 后续 OAuth 接入时换成 token 字段。
+// 写操作认证：Rust 从 CredentialsVault 读取 GitHub OAuth token 并附加
+// `Authorization: Bearer`。`marketplace_dev_login` 只是前端展示缓存，不是权限来源。
 //
 // 5 个 IPC：
 // - marketplace_list      列表 + 搜索 + 排序
@@ -66,6 +66,45 @@ fn marketplace_url_from_prefs(_prefs: &UserPreferences) -> String {
 
 fn marketplace_dev_user(prefs: &UserPreferences) -> String {
     prefs.marketplace_dev_login.trim().to_string()
+}
+
+pub(crate) const MARKETPLACE_REAUTH_REQUIRED: &str =
+    "marketplace_auth_required: GitHub sign-in expired or is missing; sign in again";
+
+fn marketplace_access_token() -> Result<String, String> {
+    CredentialsVault::get_marketplace_github_token()
+        .map_err(|e| format!("read marketplace credential failed: {e}"))?
+        .ok_or_else(|| MARKETPLACE_REAUTH_REQUIRED.to_string())
+}
+
+fn with_marketplace_bearer(
+    request: reqwest::RequestBuilder,
+    token: &str,
+) -> reqwest::RequestBuilder {
+    request.bearer_auth(token)
+}
+
+fn marketplace_auth_error_for_status(status: reqwest::StatusCode) -> Option<&'static str> {
+    (status == reqwest::StatusCode::UNAUTHORIZED).then_some(MARKETPLACE_REAUTH_REQUIRED)
+}
+
+fn require_valid_marketplace_auth_with(
+    status: reqwest::StatusCode,
+    clear_credential: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    let Some(message) = marketplace_auth_error_for_status(status) else {
+        return Ok(());
+    };
+    if let Err(error) = clear_credential() {
+        log::warn!("[marketplace] failed to clear rejected credential: {error}");
+    }
+    Err(message.to_string())
+}
+
+fn require_valid_marketplace_auth(status: reqwest::StatusCode) -> Result<(), String> {
+    require_valid_marketplace_auth_with(status, || {
+        CredentialsVault::remove_marketplace_github_token().map_err(|error| error.to_string())
+    })
 }
 
 #[tauri::command]
@@ -291,10 +330,7 @@ pub async fn marketplace_upload(
     }
     let prefs = coord.prefs().get();
     let base = marketplace_url_from_prefs(&prefs);
-    let dev_user = marketplace_dev_user(&prefs);
-    if dev_user.is_empty() {
-        return Err("未登录：先在 Settings 填发布者名字".into());
-    }
+    let access_token = marketplace_access_token()?;
 
     // 拉本地 pack 拿 origin_pack_id —— 装过的 pack 这里有值，
     // backend 据此判同作者就 supersede 原行（新版本），他人就 derivative（独立新 row）。
@@ -325,15 +361,14 @@ pub async fn marketplace_upload(
     if let Some(ref oid) = origin_pack_id {
         form = form.text("origin_pack_id", oid.clone());
     }
-    let resp = net::http()
-        .post(format!("{base}/packs"))
-        .header("X-Dev-User", dev_user)
+    let resp = with_marketplace_bearer(net::http().post(format!("{base}/packs")), &access_token)
         .timeout(std::time::Duration::from_secs(30))
         .multipart(form)
         .send()
         .await
         .map_err(|e| format!("upload request failed: {e}"))?;
     let status = resp.status();
+    require_valid_marketplace_auth(status)?;
     let body = resp
         .text()
         .await
@@ -372,19 +407,15 @@ pub async fn marketplace_like(
     }
     let prefs = coord.prefs().get();
     let base = marketplace_url_from_prefs(&prefs);
-    let dev_user = marketplace_dev_user(&prefs);
-    if dev_user.is_empty() {
-        return Err("未登录：先在 Settings 填发布者名字".into());
-    }
+    let access_token = marketplace_access_token()?;
     let like_url = format!("{base}/packs/{pack_id}/like");
     let resp = net::send_with_retry(|| {
-        net::http()
-            .post(&like_url)
-            .header("X-Dev-User", dev_user.as_str())
+        with_marketplace_bearer(net::http().post(&like_url), &access_token)
             .timeout(std::time::Duration::from_secs(10))
     })
     .await
     .map_err(|e| format!("like request failed: {e}"))?;
+    require_valid_marketplace_auth(resp.status())?;
     if !resp.status().is_success() {
         return Err(format!("like HTTP {}", resp.status()));
     }
@@ -439,20 +470,16 @@ pub async fn marketplace_delete(
     }
     let prefs = coord.prefs().get();
     let base = marketplace_url_from_prefs(&prefs);
-    let dev_user = marketplace_dev_user(&prefs);
-    if dev_user.is_empty() {
-        return Err("未登录：先在 Settings 填发布者名字".into());
-    }
+    let access_token = marketplace_access_token()?;
     let delete_url = format!("{base}/packs/{pack_id}");
     let resp = net::send_with_retry(|| {
-        net::http()
-            .delete(&delete_url)
-            .header("X-Dev-User", dev_user.as_str())
+        with_marketplace_bearer(net::http().delete(&delete_url), &access_token)
             .timeout(std::time::Duration::from_secs(15))
     })
     .await
     .map_err(|e| format!("delete request failed: {e}"))?;
     let status = resp.status();
+    require_valid_marketplace_auth(status)?;
     if !status.is_success() {
         let body = resp.text().await.unwrap_or_default();
         return Err(format!("delete HTTP {status}: {body}"));
@@ -465,19 +492,15 @@ pub async fn marketplace_delete(
 pub async fn marketplace_my_likes(coord: CoordinatorState<'_>) -> Result<Vec<String>, String> {
     let prefs = coord.prefs().get();
     let base = marketplace_url_from_prefs(&prefs);
-    let dev_user = marketplace_dev_user(&prefs);
-    if dev_user.is_empty() {
-        return Ok(Vec::new()); // 未登录就空集合，UI 渲染无红心
-    }
+    let access_token = marketplace_access_token()?;
     let likes_url = format!("{base}/me/likes");
     let resp = net::send_with_retry(|| {
-        net::http()
-            .get(&likes_url)
-            .header("X-Dev-User", dev_user.as_str())
+        with_marketplace_bearer(net::http().get(&likes_url), &access_token)
             .timeout(std::time::Duration::from_secs(10))
     })
     .await
     .map_err(|e| format!("my-likes request failed: {e}"))?;
+    require_valid_marketplace_auth(resp.status())?;
     if !resp.status().is_success() {
         return Err(format!("my-likes HTTP {}", resp.status()));
     }
@@ -493,23 +516,73 @@ pub async fn marketplace_my_packs(
 ) -> Result<Vec<MarketplaceMyPackItem>, String> {
     let prefs = coord.prefs().get();
     let base = marketplace_url_from_prefs(&prefs);
-    let dev_user = marketplace_dev_user(&prefs);
-    if dev_user.is_empty() {
-        return Ok(Vec::new());
-    }
+    let access_token = marketplace_access_token()?;
     let packs_url = format!("{base}/me/packs");
     let resp = net::send_with_retry(|| {
-        net::http()
-            .get(&packs_url)
-            .header("X-Dev-User", dev_user.as_str())
+        with_marketplace_bearer(net::http().get(&packs_url), &access_token)
             .timeout(std::time::Duration::from_secs(10))
     })
     .await
     .map_err(|e| format!("my-packs request failed: {e}"))?;
+    require_valid_marketplace_auth(resp.status())?;
     if !resp.status().is_success() {
         return Err(format!("my-packs HTTP {}", resp.status()));
     }
     resp.json::<Vec<MarketplaceMyPackItem>>()
         .await
         .map_err(|e| format!("parse my-packs failed: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        marketplace_auth_error_for_status, require_valid_marketplace_auth_with,
+        with_marketplace_bearer, MARKETPLACE_REAUTH_REQUIRED,
+    };
+    use reqwest::StatusCode;
+
+    #[test]
+    fn authenticated_request_uses_bearer_and_never_dev_identity_headers() {
+        let request = with_marketplace_bearer(
+            reqwest::Client::new().post("https://example.invalid/packs"),
+            "gho_header_test",
+        )
+        .build()
+        .expect("request should build");
+
+        assert_eq!(
+            request
+                .headers()
+                .get(reqwest::header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer gho_header_test")
+        );
+        assert!(request.headers().get("X-Dev-User").is_none());
+        assert!(request.headers().get("X-Admin").is_none());
+    }
+
+    #[test]
+    fn unauthorized_response_maps_to_clear_reauthentication_without_echoing_token() {
+        let message = marketplace_auth_error_for_status(StatusCode::UNAUTHORIZED)
+            .expect("401 should require reauthentication");
+
+        assert_eq!(message, MARKETPLACE_REAUTH_REQUIRED);
+        assert!(!message.contains("gho_header_test"));
+        assert_eq!(
+            marketplace_auth_error_for_status(StatusCode::FORBIDDEN),
+            None
+        );
+    }
+
+    #[test]
+    fn rejected_token_is_cleared_and_requires_reauthentication() {
+        let mut cleared = false;
+        let result = require_valid_marketplace_auth_with(StatusCode::UNAUTHORIZED, || {
+            cleared = true;
+            Ok(())
+        });
+
+        assert_eq!(result, Err(MARKETPLACE_REAUTH_REQUIRED.to_string()));
+        assert!(cleared);
+    }
 }
