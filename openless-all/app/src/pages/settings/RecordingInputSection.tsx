@@ -58,6 +58,18 @@ export function RecordingInputSection() {
     void getPlatformCapabilities().then(setPlatformCaps);
   }, []);
 
+  // 兼容旧 Windows 配置：Shift+Insert 仍保留在跨平台类型/后端中供 Linux 使用，
+  // 但 Windows 已不再提供该选项；进入设置时迁移为 Ctrl+V，避免下拉框无匹配值。
+  useEffect(() => {
+    if (os !== 'win' || prefs?.pasteShortcut !== 'shiftInsert') return;
+    void savePrefs(current => {
+      if (current.pasteShortcut !== 'shiftInsert') return current;
+      return { ...current, pasteShortcut: 'ctrlV' };
+    }).catch(error => {
+      console.warn('[settings] migrate Windows paste shortcut failed', error);
+    });
+  }, [os, prefs?.pasteShortcut, savePrefs]);
+
   const loadMicrophoneDevices = useCallback(async (
     signal?: { cancelled: boolean },
     options: { showLoading?: boolean } = {},
@@ -133,6 +145,9 @@ export function RecordingInputSection() {
   const showDesktopHotkey = platformCaps?.supportsDesktopHotkey === true;
   const showDesktopInsert = showDesktopHotkey && os !== 'linux';
   const showDesktopStartup = showDesktopHotkey;
+  const effectivePasteShortcut = os === 'win' && prefs.pasteShortcut === 'shiftInsert'
+    ? 'ctrlV'
+    : prefs.pasteShortcut;
 
   const onModeChange = (mode: HotkeyMode) =>
     savePrefs({ ...prefs, hotkey: { ...prefs.hotkey, mode } });
@@ -309,12 +324,14 @@ export function RecordingInputSection() {
         {capability.adapter !== 'macEventTap' && (
           <SettingRow label={t('settings.recording.pasteShortcutLabel')} desc={t('settings.recording.pasteShortcutDesc')}>
             <SelectLite
-              value={prefs.pasteShortcut}
+              value={effectivePasteShortcut}
               onChange={next => onPasteShortcutChange(next as PasteShortcut)}
               options={[
                 { value: 'ctrlV', label: t('settings.recording.pasteShortcutCtrlV') },
                 { value: 'ctrlShiftV', label: t('settings.recording.pasteShortcutCtrlShiftV') },
-                { value: 'shiftInsert', label: t('settings.recording.pasteShortcutShiftInsert') },
+                // 这个「粘贴与剪贴板」组只在 Windows 出现（showDesktopInsert 已排除 Linux，mac 走
+                // macEventTap 不显示本行）。Shift+Insert 是 xterm/urxvt 等 X11 终端的粘贴组合，
+                // 放在 Windows 上纯属误导，故不再作为选项（issue #786）。
               ]}
               ariaLabel={t('settings.recording.pasteShortcutLabel')}
               style={{ ...inputStyle, maxWidth: 220 }}
@@ -404,11 +421,6 @@ export function RecordingInputSection() {
         <SettingRow label={t('settings.recording.autoUpdateCheckLabel')}>
           <Toggle on={prefs.autoUpdateCheck} onToggle={onAutoUpdateCheckChange} />
         </SettingRow>
-        {capability.statusHint && (
-          <div style={{ marginTop: 6, fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.5 }}>
-            {capability.statusHint}
-          </div>
-        )}
       </Collapsible>
       )}
     </>
