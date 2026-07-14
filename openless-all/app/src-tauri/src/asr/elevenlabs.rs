@@ -92,7 +92,8 @@ impl ElevenLabsBatchASR {
         let form = reqwest::multipart::Form::new()
             .part("file", wav_part)
             .text("model_id", self.model.clone())
-            .text("tag_audio_events", "false");
+            .text("tag_audio_events", "false")
+            .text("timestamps_granularity", "none");
 
         // Never forward the custom credential header or audio to a redirect
         // target. Unlike standard Authorization headers, `xi-api-key` is not
@@ -345,6 +346,7 @@ mod tests {
             assert!(request_text.contains("scribe_v2"));
             assert!(request_text.contains("name=\"file\""));
             assert!(request_text.contains("name=\"tag_audio_events\"\r\n\r\nfalse\r\n"));
+            assert!(request_text.contains("name=\"timestamps_granularity\"\r\n\r\nnone\r\n"));
             write_json_response(
                 &mut stream,
                 r#"{"language_code":"en","text":"elevenlabs ok"}"#,
@@ -362,6 +364,25 @@ mod tests {
         assert_eq!(transcript.text, "elevenlabs ok");
         assert_eq!(transcript.duration_ms, 1_000);
         server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn response_limit_accepts_one_megabyte_and_rejects_the_next_byte() {
+        let (at_limit_url, at_limit_server) = spawn_body_response(vec![b'a'; MAX_RESPONSE_BYTES]);
+        let at_limit_response = reqwest::get(at_limit_url).await.unwrap();
+        let at_limit_body = read_response_limited(at_limit_response).await.unwrap();
+        assert_eq!(at_limit_body.len(), MAX_RESPONSE_BYTES);
+        at_limit_server.join().unwrap();
+
+        let (over_limit_url, over_limit_server) =
+            spawn_body_response(vec![b'a'; MAX_RESPONSE_BYTES + 1]);
+        let over_limit_response = reqwest::get(over_limit_url).await.unwrap();
+        let error = read_response_limited(over_limit_response)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("response too large"));
+        over_limit_server.join().unwrap();
     }
 
     #[tokio::test]
@@ -483,6 +504,27 @@ mod tests {
         let transcript = asr.transcribe().await.unwrap();
         assert_eq!(transcript.text, "");
         assert_eq!(transcript.duration_ms, 0);
+    }
+
+    fn spawn_body_response(body: Vec<u8>) -> (String, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut request = [0u8; 1024];
+            assert!(stream.read(&mut request).unwrap() > 0);
+            let headers = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/octet-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                body.len()
+            );
+            stream.write_all(headers.as_bytes()).unwrap();
+            let _ = stream.write_all(&body);
+            let _ = stream.flush();
+        });
+        (format!("http://{addr}/response"), server)
     }
 
     fn read_http_request(stream: &mut TcpStream) -> Vec<u8> {
