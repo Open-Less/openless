@@ -23,7 +23,10 @@
 //! "ark.api_key"/"volcengine.app_key" 等账户名按 Swift 语义路由到 active provider。
 
 use std::collections::{BTreeMap, HashMap};
+#[cfg(any(target_os = "android", test))]
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 
 use anyhow::{Context, Result};
@@ -56,8 +59,17 @@ const KEYRING_CHUNK_MAX_UTF16_UNITS: usize = 1000;
 
 static CREDENTIALS_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
+// A rejected Marketplace token must become unusable before best-effort durable
+// deletion starts. Keychain/credential-manager deletion can fail or prompt, so
+// this process-local tombstone is authoritative for every read until a newly
+// verified token has been saved successfully.
+static MARKETPLACE_TOKEN_REJECTED: AtomicBool = AtomicBool::new(false);
+
 #[cfg(target_os = "android")]
 static ANDROID_MARKETPLACE_TOKEN: OnceLock<Mutex<Option<MarketplaceGithubToken>>> = OnceLock::new();
+
+#[cfg(target_os = "android")]
+static ANDROID_MARKETPLACE_LEGACY_SCRUBBED: OnceLock<Mutex<bool>> = OnceLock::new();
 
 fn credentials_lock() -> &'static Mutex<()> {
     CREDENTIALS_LOCK.get_or_init(|| Mutex::new(()))
@@ -66,6 +78,11 @@ fn credentials_lock() -> &'static Mutex<()> {
 #[cfg(target_os = "android")]
 fn android_marketplace_token() -> &'static Mutex<Option<MarketplaceGithubToken>> {
     ANDROID_MARKETPLACE_TOKEN.get_or_init(|| Mutex::new(None))
+}
+
+#[cfg(target_os = "android")]
+fn android_marketplace_legacy_scrubbed() -> &'static Mutex<bool> {
+    ANDROID_MARKETPLACE_LEGACY_SCRUBBED.get_or_init(|| Mutex::new(false))
 }
 
 /// Process-wide credentials cache.
@@ -365,10 +382,76 @@ fn android_credentials_path() -> Result<PathBuf> {
 #[cfg(target_os = "android")]
 fn load_android_credentials() -> Result<Option<CredsRoot>> {
     let path = android_credentials_path()?;
-    load_android_credentials_from_path(&path)
+    let loaded = load_android_credentials_from_path(&path);
+    if loaded.is_ok() {
+        *android_marketplace_legacy_scrubbed().lock() = true;
+    }
+    loaded
 }
 
+#[cfg(any(target_os = "android", test))]
 fn load_android_credentials_from_path(path: &Path) -> Result<Option<CredsRoot>> {
+    load_android_credentials_from_path_with_fault(path, &mut |_| Ok(()))
+}
+
+#[cfg(any(target_os = "android", test))]
+fn ensure_android_marketplace_legacy_scrubbed_at(
+    path: &Path,
+    completed: &Mutex<bool>,
+) -> Result<()> {
+    let mut completed = completed.lock();
+    if *completed {
+        return Ok(());
+    }
+    // Mark completion only after the durable sanitized rewrite (or confirmed
+    // absence of a legacy file) succeeds. Any error remains retryable.
+    let _ = load_android_credentials_from_path(path)?;
+    *completed = true;
+    Ok(())
+}
+
+#[cfg(any(target_os = "android", test))]
+fn get_android_marketplace_token_at(
+    path: &Path,
+    completed: &Mutex<bool>,
+    memory_token: &Mutex<Option<MarketplaceGithubToken>>,
+) -> Result<Option<String>> {
+    ensure_android_marketplace_legacy_scrubbed_at(path, completed)?;
+    Ok(memory_token.lock().as_ref().map(|token| token.0.clone()))
+}
+
+#[cfg(target_os = "android")]
+fn ensure_android_marketplace_legacy_scrubbed() -> Result<()> {
+    let path = android_credentials_path()?;
+    ensure_android_marketplace_legacy_scrubbed_at(&path, android_marketplace_legacy_scrubbed())
+}
+
+#[cfg(any(target_os = "android", test))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AndroidEnvelopeStage {
+    LegacyOpen,
+    LegacySync,
+    LegacyRemove,
+    ParentSyncAfterErase,
+    AfterErase,
+    TempOpen,
+    AfterTempOpen,
+    TempWrite,
+    AfterTempWrite,
+    TempFlush,
+    AfterTempFlush,
+    TempSync,
+    AfterTempSync,
+    Rename,
+    AfterRename,
+    ParentSyncAfterRename,
+}
+
+#[cfg(any(target_os = "android", test))]
+fn load_android_credentials_from_path_with_fault(
+    path: &Path,
+    fault: &mut impl FnMut(AndroidEnvelopeStage) -> io::Result<()>,
+) -> Result<Option<CredsRoot>> {
     if !path.exists() {
         return Ok(None);
     }
@@ -384,11 +467,12 @@ fn load_android_credentials_from_path(path: &Path) -> Result<Option<CredsRoot>> 
     let mut root =
         serde_json::from_slice::<CredsRoot>(&decoded).context("parse android credentials json")?;
     if lookup_marketplace_github_token(&root).is_some() {
-        // Defense in depth for files written by unreleased/dev builds of the
-        // OAuth companion. Scrub on disk before returning anything; failure is
-        // fail-closed so a reversible bearer token is never silently retained.
+        // Files written by unreleased/dev builds may contain a recoverable
+        // bearer token. Erase that legacy secret durably *before* creating the
+        // sanitized replacement. A crash can therefore lose generic Android
+        // credentials, but can never leave the old bearer recoverable.
         write_marketplace_github_token(&mut root, None);
-        write_android_credentials_envelope(path, &root)
+        scrub_android_legacy_envelope_with_fault(path, &root, fault)
             .context("scrub Marketplace token from Android credential envelope")?;
     }
     Ok(Some(root))
@@ -400,24 +484,120 @@ fn save_android_credentials(root: &CredsRoot) -> Result<()> {
     write_android_credentials_envelope(&path, root)
 }
 
+#[cfg(target_os = "android")]
 fn write_android_credentials_envelope(path: &Path, root: &CredsRoot) -> Result<()> {
+    write_android_credentials_envelope_with_fault(path, root, false, &mut |_| Ok(()))
+}
+
+#[cfg(any(target_os = "android", test))]
+fn scrub_android_legacy_envelope_with_fault(
+    path: &Path,
+    root: &CredsRoot,
+    fault: &mut impl FnMut(AndroidEnvelopeStage) -> io::Result<()>,
+) -> Result<()> {
+    write_android_credentials_envelope_with_fault(path, root, true, fault)
+}
+
+#[cfg(any(target_os = "android", test))]
+fn sync_android_credentials_parent(path: &Path) -> io::Result<()> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    std::fs::File::open(parent)?.sync_all()
+}
+
+#[cfg(any(target_os = "android", test))]
+fn fail_closed_remove_android_envelope(path: &Path, tmp: &Path) {
+    // Truncate+sync first so even a crash that resurrects the directory entry
+    // after unlink cannot resurrect the bearer bytes.
+    if let Ok(file) = std::fs::OpenOptions::new().write(true).open(path) {
+        let _ = file.set_len(0);
+        let _ = file.sync_all();
+    }
+    let _ = std::fs::remove_file(path);
+    let _ = std::fs::remove_file(tmp);
+    let _ = sync_android_credentials_parent(path);
+}
+
+#[cfg(any(target_os = "android", test))]
+fn write_android_credentials_envelope_with_fault(
+    path: &Path,
+    root: &CredsRoot,
+    erase_legacy_secret_first: bool,
+    fault: &mut impl FnMut(AndroidEnvelopeStage) -> io::Result<()>,
+) -> Result<()> {
     let cleaned = android_persistable_credentials(root);
     let json = serde_json::to_string(&cleaned).context("encode credentials failed")?;
     use base64::Engine;
     let encoded = base64::engine::general_purpose::STANDARD.encode(json.as_bytes());
     super::ensure_dir(path.parent().unwrap_or_else(|| Path::new(".")))?;
     let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, encoded).with_context(|| format!("write failed: {}", tmp.display()))?;
-    if let Err(error) = std::fs::rename(&tmp, path) {
-        // If atomic replacement is unavailable, remove the old reversible
-        // envelope rather than leave a bearer token recoverable on disk.
-        let _ = std::fs::remove_file(path);
-        let _ = std::fs::remove_file(&tmp);
-        return Err(error).with_context(|| format!("replace failed: {}", path.display()));
+    let _ = std::fs::remove_file(&tmp);
+
+    let persisted = (|| -> Result<()> {
+        if erase_legacy_secret_first {
+            fault(AndroidEnvelopeStage::LegacyOpen)?;
+            let legacy = std::fs::OpenOptions::new()
+                .write(true)
+                .truncate(true)
+                .open(path)
+                .with_context(|| format!("open legacy envelope failed: {}", path.display()))?;
+            fault(AndroidEnvelopeStage::LegacySync)?;
+            legacy
+                .sync_all()
+                .with_context(|| format!("sync erased envelope failed: {}", path.display()))?;
+            drop(legacy);
+            fault(AndroidEnvelopeStage::LegacyRemove)?;
+            std::fs::remove_file(path)
+                .with_context(|| format!("remove legacy envelope failed: {}", path.display()))?;
+            fault(AndroidEnvelopeStage::ParentSyncAfterErase)?;
+            sync_android_credentials_parent(path)
+                .with_context(|| format!("sync erased envelope directory: {}", path.display()))?;
+            fault(AndroidEnvelopeStage::AfterErase)?;
+        }
+
+        fault(AndroidEnvelopeStage::TempOpen)?;
+        let mut output = std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&tmp)
+            .with_context(|| format!("open failed: {}", tmp.display()))?;
+        fault(AndroidEnvelopeStage::AfterTempOpen)?;
+        fault(AndroidEnvelopeStage::TempWrite)?;
+        output
+            .write_all(encoded.as_bytes())
+            .with_context(|| format!("write failed: {}", tmp.display()))?;
+        fault(AndroidEnvelopeStage::AfterTempWrite)?;
+        fault(AndroidEnvelopeStage::TempFlush)?;
+        output
+            .flush()
+            .with_context(|| format!("flush failed: {}", tmp.display()))?;
+        fault(AndroidEnvelopeStage::AfterTempFlush)?;
+        fault(AndroidEnvelopeStage::TempSync)?;
+        output
+            .sync_all()
+            .with_context(|| format!("sync failed: {}", tmp.display()))?;
+        fault(AndroidEnvelopeStage::AfterTempSync)?;
+        drop(output);
+        fault(AndroidEnvelopeStage::Rename)?;
+        std::fs::rename(&tmp, path)
+            .with_context(|| format!("replace failed: {}", path.display()))?;
+        fault(AndroidEnvelopeStage::AfterRename)?;
+        fault(AndroidEnvelopeStage::ParentSyncAfterRename)?;
+        sync_android_credentials_parent(path)
+            .with_context(|| format!("sync replacement directory: {}", path.display()))?;
+        Ok(())
+    })();
+
+    if persisted.is_err() {
+        if erase_legacy_secret_first {
+            fail_closed_remove_android_envelope(path, &tmp);
+        } else {
+            let _ = std::fs::remove_file(&tmp);
+        }
     }
-    Ok(())
+    persisted
 }
 
+#[cfg(any(target_os = "android", test))]
 fn android_persistable_credentials(root: &CredsRoot) -> CredsRoot {
     let mut cleaned = clean_credentials(root);
     write_marketplace_github_token(&mut cleaned, None);
@@ -448,6 +628,34 @@ fn write_marketplace_github_token(root: &mut CredsRoot, value: Option<String>) {
             Some(MarketplaceGithubToken(token))
         }
     });
+}
+
+fn marketplace_token_is_rejected() -> bool {
+    MARKETPLACE_TOKEN_REJECTED.load(Ordering::SeqCst)
+}
+
+fn invalidate_marketplace_token_process_local() {
+    // Publish the tombstone first. All token reads happen under
+    // `credentials_lock`, so the subsequent cache/memory clear is atomic from
+    // the command layer's point of view; the atomic also prevents accidental
+    // direct readers from observing the rejected token.
+    MARKETPLACE_TOKEN_REJECTED.store(true, Ordering::SeqCst);
+    if let Some(root) = credentials_cache().lock().as_mut() {
+        write_marketplace_github_token(root, None);
+    }
+    #[cfg(target_os = "android")]
+    {
+        *android_marketplace_token().lock() = None;
+    }
+}
+
+fn invalidate_marketplace_token_with(durable_delete: impl FnOnce() -> Result<()>) -> Result<()> {
+    invalidate_marketplace_token_process_local();
+    durable_delete()
+}
+
+fn mark_marketplace_token_verified() {
+    MARKETPLACE_TOKEN_REJECTED.store(false, Ordering::SeqCst);
 }
 
 fn read_legacy_credentials_file(path: &Path) -> Option<CredsRoot> {
@@ -717,6 +925,26 @@ fn migrate_legacy_sources_for_update() -> Result<CredsRoot> {
     Ok(CredsRoot::default())
 }
 
+#[cfg(any(target_os = "android", test))]
+fn load_android_credentials_into_cache_with(
+    loader: impl FnOnce() -> Result<Option<CredsRoot>>,
+) -> CredsRoot {
+    match loader() {
+        Ok(root) => {
+            let root = root.unwrap_or_default();
+            store_credentials_cache(&root);
+            root
+        }
+        Err(e) => {
+            // Do not cache the fallback. In particular, a failed legacy-token
+            // scrub must be retried by the next startup/getter call rather than
+            // hidden for the rest of the process.
+            log::warn!("[vault] android credential read failed: {e}");
+            CredsRoot::default()
+        }
+    }
+}
+
 fn load_credentials() -> CredsRoot {
     if let Some(cached) = credentials_cache().lock().as_ref().cloned() {
         return cached;
@@ -724,16 +952,7 @@ fn load_credentials() -> CredsRoot {
 
     #[cfg(target_os = "android")]
     {
-        let root = match load_android_credentials() {
-            Ok(Some(root)) => root,
-            Ok(None) => CredsRoot::default(),
-            Err(e) => {
-                log::warn!("[vault] android credential read failed: {e}");
-                CredsRoot::default()
-            }
-        };
-        store_credentials_cache(&root);
-        return root;
+        return load_android_credentials_into_cache_with(load_android_credentials);
     }
 
     #[cfg(not(target_os = "android"))]
@@ -1064,12 +1283,17 @@ impl CredentialsVault {
     /// excluded from `CredentialsSnapshot`, so frontend IPC can never read it.
     pub fn get_marketplace_github_token() -> Result<Option<String>> {
         let _guard = credentials_lock().lock();
+        if marketplace_token_is_rejected() {
+            return Ok(None);
+        }
         #[cfg(target_os = "android")]
         {
-            return Ok(android_marketplace_token()
-                .lock()
-                .as_ref()
-                .map(|token| token.0.clone()));
+            let path = android_credentials_path()?;
+            return get_android_marketplace_token_at(
+                &path,
+                android_marketplace_legacy_scrubbed(),
+                android_marketplace_token(),
+            );
         }
         #[cfg(not(target_os = "android"))]
         Ok(lookup_marketplace_github_token(&load_credentials()))
@@ -1079,31 +1303,66 @@ impl CredentialsVault {
         let _guard = credentials_lock().lock();
         #[cfg(target_os = "android")]
         {
+            ensure_android_marketplace_legacy_scrubbed()?;
             *android_marketplace_token().lock() =
                 (!value.trim().is_empty()).then(|| MarketplaceGithubToken(value.to_string()));
+            if value.trim().is_empty() {
+                invalidate_marketplace_token_process_local();
+            } else {
+                mark_marketplace_token_verified();
+            }
             return Ok(());
         }
         #[cfg(not(target_os = "android"))]
         {
             let mut root = load_credentials_for_update()?;
             write_marketplace_github_token(&mut root, Some(value.to_string()));
-            save_credentials(&root)
+            save_credentials(&root)?;
+            mark_marketplace_token_verified();
+            Ok(())
         }
     }
 
     pub fn remove_marketplace_github_token() -> Result<()> {
         let _guard = credentials_lock().lock();
-        #[cfg(target_os = "android")]
-        {
-            *android_marketplace_token().lock() = None;
-            return Ok(());
-        }
-        #[cfg(not(target_os = "android"))]
-        {
-            let mut root = load_credentials_for_update()?;
-            write_marketplace_github_token(&mut root, None);
-            save_credentials(&root)
-        }
+        invalidate_marketplace_token_with(|| {
+            #[cfg(target_os = "android")]
+            {
+                // Retry the durable legacy scrub on every logout until it has
+                // actually completed. Process memory is already invalidated.
+                return ensure_android_marketplace_legacy_scrubbed();
+            }
+            #[cfg(not(target_os = "android"))]
+            {
+                let mut root = load_credentials_for_update()?;
+                write_marketplace_github_token(&mut root, None);
+                save_credentials(&root)
+            }
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn seed_marketplace_github_token_for_tests(value: &str) {
+        let _guard = credentials_lock().lock();
+        let mut root = CredsRoot::default();
+        write_marketplace_github_token(&mut root, Some(value.to_string()));
+        store_credentials_cache(&root);
+        mark_marketplace_token_verified();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn reject_marketplace_github_token_for_tests(
+        durable_delete: impl FnOnce() -> Result<()>,
+    ) -> Result<()> {
+        let _guard = credentials_lock().lock();
+        invalidate_marketplace_token_with(durable_delete)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn reset_marketplace_github_token_for_tests() {
+        let _guard = credentials_lock().lock();
+        store_credentials_cache(&CredsRoot::default());
+        MARKETPLACE_TOKEN_REJECTED.store(false, Ordering::SeqCst);
     }
 
     pub fn get_active_asr() -> String {
@@ -1173,10 +1432,16 @@ impl CredentialsVault {
 #[cfg(test)]
 mod tests {
     use super::{
-        android_persistable_credentials, chunk_json_payload, load_android_credentials_from_path,
-        lookup_marketplace_github_token, parse_extra_headers_json, write_marketplace_github_token,
-        CredsRoot, KEYRING_CHUNK_MAX_UTF16_UNITS,
+        android_persistable_credentials, chunk_json_payload, credentials_cache,
+        get_android_marketplace_token_at, load_android_credentials_from_path,
+        load_android_credentials_from_path_with_fault, load_android_credentials_into_cache_with,
+        lookup_marketplace_github_token, parse_extra_headers_json,
+        reset_credentials_cache_for_tests, write_marketplace_github_token, AndroidEnvelopeStage,
+        CredsRoot, MarketplaceGithubToken, KEYRING_CHUNK_MAX_UTF16_UNITS,
     };
+    use anyhow::anyhow;
+    use parking_lot::Mutex;
+    use std::io;
 
     #[test]
     fn credential_payload_chunks_stay_under_windows_blob_limit() {
@@ -1309,5 +1574,154 @@ mod tests {
         assert!(!decoded.contains("marketplace"));
         assert!(!path.with_extension("json.tmp").exists());
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    fn write_legacy_android_envelope(path: &std::path::Path, token: &str) {
+        use base64::Engine;
+
+        let mut root = CredsRoot::default();
+        write_marketplace_github_token(&mut root, Some(token.to_string()));
+        let raw = serde_json::to_vec(&root).unwrap();
+        let encoded = base64::engine::general_purpose::STANDARD.encode(raw);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, encoded).unwrap();
+    }
+
+    fn assert_android_secret_unrecoverable(path: &std::path::Path, token: &str) {
+        use base64::Engine;
+
+        for candidate in [path.to_path_buf(), path.with_extension("json.tmp")] {
+            let Ok(bytes) = std::fs::read(&candidate) else {
+                continue;
+            };
+            assert!(
+                !String::from_utf8_lossy(&bytes).contains(token),
+                "raw secret remained in {}",
+                candidate.display()
+            );
+            if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(&bytes) {
+                assert!(
+                    !String::from_utf8_lossy(&decoded).contains(token),
+                    "base64 secret remained in {}",
+                    candidate.display()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn android_legacy_scrub_is_fail_closed_for_every_io_failure() {
+        let stages = [
+            AndroidEnvelopeStage::LegacyOpen,
+            AndroidEnvelopeStage::LegacySync,
+            AndroidEnvelopeStage::LegacyRemove,
+            AndroidEnvelopeStage::ParentSyncAfterErase,
+            AndroidEnvelopeStage::TempOpen,
+            AndroidEnvelopeStage::TempWrite,
+            AndroidEnvelopeStage::TempFlush,
+            AndroidEnvelopeStage::TempSync,
+            AndroidEnvelopeStage::Rename,
+            AndroidEnvelopeStage::ParentSyncAfterRename,
+        ];
+
+        for failed_stage in stages {
+            let token = format!("gho_android_fault_{failed_stage:?}");
+            let dir = std::env::temp_dir()
+                .join(format!("openless-android-fault-{}", uuid::Uuid::new_v4()));
+            let path = dir.join("credentials.enc.json");
+            write_legacy_android_envelope(&path, &token);
+
+            let result = load_android_credentials_from_path_with_fault(&path, &mut |stage| {
+                if stage == failed_stage {
+                    Err(io::Error::other(format!("injected {stage:?}")))
+                } else {
+                    Ok(())
+                }
+            });
+
+            assert!(result.is_err(), "{failed_stage:?} should fail");
+            assert_android_secret_unrecoverable(&path, &token);
+            assert!(!path.with_extension("json.tmp").exists());
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
+    #[test]
+    fn android_legacy_secret_is_unrecoverable_at_every_crash_boundary() {
+        let boundaries = [
+            AndroidEnvelopeStage::AfterErase,
+            AndroidEnvelopeStage::AfterTempOpen,
+            AndroidEnvelopeStage::AfterTempWrite,
+            AndroidEnvelopeStage::AfterTempFlush,
+            AndroidEnvelopeStage::AfterTempSync,
+            AndroidEnvelopeStage::AfterRename,
+        ];
+
+        for crash_stage in boundaries {
+            let token = format!("gho_android_crash_{crash_stage:?}");
+            let dir = std::env::temp_dir()
+                .join(format!("openless-android-crash-{}", uuid::Uuid::new_v4()));
+            let path = dir.join("credentials.enc.json");
+            write_legacy_android_envelope(&path, &token);
+
+            let crashed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _ = load_android_credentials_from_path_with_fault(&path, &mut |stage| {
+                    assert_ne!(stage, crash_stage, "injected crash at {stage:?}");
+                    Ok(())
+                });
+            }));
+
+            assert!(crashed.is_err(), "{crash_stage:?} should simulate a crash");
+            assert_android_secret_unrecoverable(&path, &token);
+            let _ = std::fs::remove_file(path.with_extension("json.tmp"));
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
+    #[test]
+    fn android_real_getter_scrubs_legacy_disk_token_and_retries_failure() {
+        let dir =
+            std::env::temp_dir().join(format!("openless-android-getter-{}", uuid::Uuid::new_v4()));
+        let path = dir.join("credentials.enc.json");
+        std::fs::create_dir_all(&path).unwrap();
+        let completed = Mutex::new(false);
+        let memory = Mutex::new(Some(MarketplaceGithubToken(
+            "gho_process_memory".to_string(),
+        )));
+
+        assert!(get_android_marketplace_token_at(&path, &completed, &memory).is_err());
+        assert!(!*completed.lock(), "failed scrub must remain retryable");
+
+        std::fs::remove_dir(&path).unwrap();
+        write_legacy_android_envelope(&path, "gho_legacy_getter_secret");
+        let token = get_android_marketplace_token_at(&path, &completed, &memory).unwrap();
+
+        assert_eq!(token.as_deref(), Some("gho_process_memory"));
+        assert!(*completed.lock());
+        assert_android_secret_unrecoverable(&path, "gho_legacy_getter_secret");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn android_startup_failure_does_not_cache_default_or_suppress_retry() {
+        reset_credentials_cache_for_tests();
+        let first = load_android_credentials_into_cache_with(|| {
+            Err(anyhow!("injected startup scrub failure"))
+        });
+        assert!(lookup_marketplace_github_token(&first).is_none());
+        assert!(credentials_cache().lock().is_none());
+
+        let dir =
+            std::env::temp_dir().join(format!("openless-android-startup-{}", uuid::Uuid::new_v4()));
+        let path = dir.join("credentials.enc.json");
+        write_legacy_android_envelope(&path, "gho_legacy_startup_secret");
+        let second =
+            load_android_credentials_into_cache_with(|| load_android_credentials_from_path(&path));
+
+        assert!(lookup_marketplace_github_token(&second).is_none());
+        assert!(credentials_cache().lock().is_some());
+        assert_android_secret_unrecoverable(&path, "gho_legacy_startup_secret");
+        *credentials_cache().lock() = Some(CredsRoot::default());
+        let _ = std::fs::remove_dir_all(dir);
     }
 }
