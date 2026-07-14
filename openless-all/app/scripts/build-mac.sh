@@ -33,6 +33,7 @@ npm run tauri -- "${TAURI_BUILD_ARGS[@]}"
 
 echo "▶ 校验 Info.plist / 签名"
 /usr/libexec/PlistBuddy -c "Print :NSMicrophoneUsageDescription" "$INFO" >/dev/null
+/usr/libexec/PlistBuddy -c "Print :NSSpeechRecognitionUsageDescription" "$INFO" >/dev/null
 codesign -d --entitlements :- "$APP" 2>/dev/null | grep -q "com.apple.security.device.audio-input"
 codesign --verify --deep --strict --verbose=2 "$APP" 2>&1 | tail -2
 
