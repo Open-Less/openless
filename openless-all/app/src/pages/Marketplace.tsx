@@ -80,15 +80,25 @@ export function Marketplace() {
   const [likedIds, setLikedIds] = useState<Set<string>>(new Set());
   const currentLogin = (prefs?.marketplaceDevLogin ?? '').trim();
   const [marketplaceSignedIn, setMarketplaceSignedIn] = useState(false);
+  const authorizedLogin = marketplaceSignedIn ? currentLogin : '';
   const canUpload = marketplaceSignedIn;
   const refreshAuthStatus = useCallback(async () => {
     try {
       const status = await marketplaceAuthStatus();
       setMarketplaceSignedIn(status.signedIn);
+      if (!status.signedIn) {
+        setLikedIds(new Set());
+        setMyPacks([]);
+        if (currentLogin) {
+          await updatePrefs(current => ({ ...current, marketplaceDevLogin: '' }));
+        }
+      }
+      return status.signedIn;
     } catch {
       setMarketplaceSignedIn(false);
+      return false;
     }
-  }, []);
+  }, [currentLogin, updatePrefs]);
   // 「衍生自」只在 origin 作者 != 当前登录身份时显示 —— 自己的 pack 不要给自己挂衍生标签。
   const isDerivative = (originLogin: string | null | undefined): boolean =>
     !!originLogin && originLogin !== currentLogin;
@@ -261,6 +271,11 @@ export function Marketplace() {
 
   const onLike = async () => {
     if (!detail) return;
+    if (!marketplaceSignedIn) {
+      setActionMsg({ kind: 'err', text: t('marketplace.myPacks.notLoggedIn') });
+      setShowLogin(true);
+      return;
+    }
     const packId = detail.id;
     const prevLikedIds = likedIds;
     const prevLikeCount = detail.likeCount;
@@ -447,7 +462,7 @@ export function Marketplace() {
             <button
               type="button"
               onClick={() => setShowMyPacks(true)}
-              title={currentLogin ? t('marketplace.myPacks.buttonTitle', { login: currentLogin }) : t('marketplace.myPacks.buttonTitleEmpty')}
+              title={authorizedLogin ? t('marketplace.myPacks.buttonTitle', { login: authorizedLogin }) : t('marketplace.myPacks.buttonTitleEmpty')}
               style={{
                 display: 'inline-flex', alignItems: 'center', gap: 8,
                 height: 30, padding: '0 12px', borderRadius: 9,
@@ -465,7 +480,7 @@ export function Marketplace() {
                 background: 'var(--ol-surface-2)',
                 fontSize: 10, fontWeight: 750,
               }}>
-                {(currentLogin || '?').slice(0, 1).toUpperCase()}
+                {(authorizedLogin || '?').slice(0, 1).toUpperCase()}
               </span>
               <span>{t('marketplace.myPacks.buttonLabel')}</span>
             </button>
@@ -717,6 +732,7 @@ export function Marketplace() {
                     whileTap={{ scale: 0.75 }}
                     transition={{ type: 'spring', stiffness: 400, damping: 17 }}
                     onClick={() => void onLike()}
+                    aria-label={marketplaceSignedIn ? undefined : t('marketplace.oauth.loginBtn')}
                     style={{
                       display: 'inline-flex',
                       alignItems: 'center',
@@ -885,14 +901,14 @@ export function Marketplace() {
                 已登录时再点会重新走一次（切账号）。 */}
             <button
               type="button"
-              title={currentLogin ? t('marketplace.oauth.reloginTooltip', { login: currentLogin }) : t('marketplace.oauth.loginTooltip')}
+              title={authorizedLogin ? t('marketplace.oauth.reloginTooltip', { login: authorizedLogin }) : t('marketplace.oauth.loginTooltip')}
               onClick={() => setShowLogin(true)}
               style={{
                 display: 'inline-flex', alignItems: 'center', gap: 6,
                 padding: '5px 10px', borderRadius: 9,
                 border: '0.5px solid var(--ol-line-strong)',
-                background: currentLogin ? 'var(--ol-blue-soft)' : 'var(--ol-surface)',
-                color: currentLogin ? 'var(--ol-blue)' : 'var(--ol-ink-3)',
+                background: authorizedLogin ? 'var(--ol-blue-soft)' : 'var(--ol-surface)',
+                color: authorizedLogin ? 'var(--ol-blue)' : 'var(--ol-ink-3)',
                 fontSize: 12, fontWeight: 650,
                 cursor: 'pointer',
                 whiteSpace: 'nowrap',
@@ -901,12 +917,12 @@ export function Marketplace() {
               <span style={{
                 width: 18, height: 18, borderRadius: 999,
                 display: 'inline-grid', placeItems: 'center',
-                background: currentLogin ? 'rgba(37,99,235,0.14)' : 'var(--ol-surface-2)',
+                background: authorizedLogin ? 'rgba(37,99,235,0.14)' : 'var(--ol-surface-2)',
                 fontSize: 10, fontWeight: 750,
               }}>
-                {(currentLogin || '?').slice(0, 1).toUpperCase()}
+                {(authorizedLogin || '?').slice(0, 1).toUpperCase()}
               </span>
-              <span>{currentLogin ? `@${currentLogin}` : t('marketplace.oauth.loginBtn')}</span>
+              <span>{authorizedLogin ? `@${authorizedLogin}` : t('marketplace.oauth.loginBtn')}</span>
             </button>
             {/* 关闭 × */}
             <button

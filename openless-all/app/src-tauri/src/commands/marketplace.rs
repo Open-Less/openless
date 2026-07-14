@@ -70,6 +70,8 @@ fn marketplace_dev_user(prefs: &UserPreferences) -> String {
 
 pub(crate) const MARKETPLACE_REAUTH_REQUIRED: &str =
     "marketplace_auth_required: GitHub sign-in expired or is missing; sign in again";
+pub(crate) const MARKETPLACE_REDIRECT_REJECTED: &str =
+    "marketplace_authenticated_redirect_rejected";
 
 fn marketplace_access_token() -> Result<String, String> {
     CredentialsVault::get_marketplace_github_token()
@@ -84,6 +86,14 @@ fn with_marketplace_bearer(
     request.bearer_auth(token)
 }
 
+fn marketplace_bearer_request(
+    method: reqwest::Method,
+    url: &str,
+    token: &str,
+) -> reqwest::RequestBuilder {
+    with_marketplace_bearer(net::credential_http().request(method, url), token)
+}
+
 fn marketplace_auth_error_for_status(status: reqwest::StatusCode) -> Option<&'static str> {
     (status == reqwest::StatusCode::UNAUTHORIZED).then_some(MARKETPLACE_REAUTH_REQUIRED)
 }
@@ -92,6 +102,9 @@ fn require_valid_marketplace_auth_with(
     status: reqwest::StatusCode,
     clear_credential: impl FnOnce() -> Result<(), String>,
 ) -> Result<(), String> {
+    if status.is_redirection() {
+        return Err(MARKETPLACE_REDIRECT_REJECTED.to_string());
+    }
     let Some(message) = marketplace_auth_error_for_status(status) else {
         return Ok(());
     };
@@ -101,10 +114,23 @@ fn require_valid_marketplace_auth_with(
     Err(message.to_string())
 }
 
-fn require_valid_marketplace_auth(status: reqwest::StatusCode) -> Result<(), String> {
-    require_valid_marketplace_auth_with(status, || {
-        CredentialsVault::remove_marketplace_github_token().map_err(|error| error.to_string())
-    })
+pub(crate) fn clear_marketplace_authentication(coord: &Coordinator) -> Result<(), String> {
+    let credential_result = CredentialsVault::remove_marketplace_github_token()
+        .map_err(|error| format!("clear Marketplace credential failed: {error}"));
+    let mut prefs = coord.prefs().get();
+    prefs.marketplace_dev_login.clear();
+    let prefs_result = coord
+        .prefs()
+        .set(prefs)
+        .map_err(|error| format!("clear Marketplace display login failed: {error}"));
+    credential_result.and(prefs_result)
+}
+
+fn require_valid_marketplace_auth_for(
+    status: reqwest::StatusCode,
+    coord: &Coordinator,
+) -> Result<(), String> {
+    require_valid_marketplace_auth_with(status, || clear_marketplace_authentication(coord))
 }
 
 #[tauri::command]
@@ -361,22 +387,22 @@ pub async fn marketplace_upload(
     if let Some(ref oid) = origin_pack_id {
         form = form.text("origin_pack_id", oid.clone());
     }
-    let resp = with_marketplace_bearer(net::http().post(format!("{base}/packs")), &access_token)
+    let upload_url = format!("{base}/packs");
+    let resp = marketplace_bearer_request(reqwest::Method::POST, &upload_url, &access_token)
         .timeout(std::time::Duration::from_secs(30))
         .multipart(form)
         .send()
         .await
         .map_err(|e| format!("upload request failed: {e}"))?;
     let status = resp.status();
-    require_valid_marketplace_auth(status)?;
+    require_valid_marketplace_auth_for(status, &coord)?;
+    if !status.is_success() {
+        return Err(format!("upload HTTP {status}"));
+    }
     let body = resp
         .text()
         .await
-        .unwrap_or_else(|e| format!("read body failed: {e}"))
-        .clone();
-    if !status.is_success() {
-        return Err(format!("upload HTTP {status}: {body}"));
-    }
+        .map_err(|_| "read upload response failed".to_string())?;
     let parsed = serde_json::from_str::<serde_json::Value>(&body)
         .map_err(|e| format!("parse upload response failed: {e}"))?;
 
@@ -410,12 +436,12 @@ pub async fn marketplace_like(
     let access_token = marketplace_access_token()?;
     let like_url = format!("{base}/packs/{pack_id}/like");
     let resp = net::send_with_retry(|| {
-        with_marketplace_bearer(net::http().post(&like_url), &access_token)
+        marketplace_bearer_request(reqwest::Method::POST, &like_url, &access_token)
             .timeout(std::time::Duration::from_secs(10))
     })
     .await
     .map_err(|e| format!("like request failed: {e}"))?;
-    require_valid_marketplace_auth(resp.status())?;
+    require_valid_marketplace_auth_for(resp.status(), &coord)?;
     if !resp.status().is_success() {
         return Err(format!("like HTTP {}", resp.status()));
     }
@@ -473,16 +499,15 @@ pub async fn marketplace_delete(
     let access_token = marketplace_access_token()?;
     let delete_url = format!("{base}/packs/{pack_id}");
     let resp = net::send_with_retry(|| {
-        with_marketplace_bearer(net::http().delete(&delete_url), &access_token)
+        marketplace_bearer_request(reqwest::Method::DELETE, &delete_url, &access_token)
             .timeout(std::time::Duration::from_secs(15))
     })
     .await
     .map_err(|e| format!("delete request failed: {e}"))?;
     let status = resp.status();
-    require_valid_marketplace_auth(status)?;
+    require_valid_marketplace_auth_for(status, &coord)?;
     if !status.is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        return Err(format!("delete HTTP {status}: {body}"));
+        return Err(format!("delete HTTP {status}"));
     }
     Ok(())
 }
@@ -495,12 +520,12 @@ pub async fn marketplace_my_likes(coord: CoordinatorState<'_>) -> Result<Vec<Str
     let access_token = marketplace_access_token()?;
     let likes_url = format!("{base}/me/likes");
     let resp = net::send_with_retry(|| {
-        with_marketplace_bearer(net::http().get(&likes_url), &access_token)
+        marketplace_bearer_request(reqwest::Method::GET, &likes_url, &access_token)
             .timeout(std::time::Duration::from_secs(10))
     })
     .await
     .map_err(|e| format!("my-likes request failed: {e}"))?;
-    require_valid_marketplace_auth(resp.status())?;
+    require_valid_marketplace_auth_for(resp.status(), &coord)?;
     if !resp.status().is_success() {
         return Err(format!("my-likes HTTP {}", resp.status()));
     }
@@ -519,12 +544,12 @@ pub async fn marketplace_my_packs(
     let access_token = marketplace_access_token()?;
     let packs_url = format!("{base}/me/packs");
     let resp = net::send_with_retry(|| {
-        with_marketplace_bearer(net::http().get(&packs_url), &access_token)
+        marketplace_bearer_request(reqwest::Method::GET, &packs_url, &access_token)
             .timeout(std::time::Duration::from_secs(10))
     })
     .await
     .map_err(|e| format!("my-packs request failed: {e}"))?;
-    require_valid_marketplace_auth(resp.status())?;
+    require_valid_marketplace_auth_for(resp.status(), &coord)?;
     if !resp.status().is_success() {
         return Err(format!("my-packs HTTP {}", resp.status()));
     }
@@ -536,15 +561,17 @@ pub async fn marketplace_my_packs(
 #[cfg(test)]
 mod tests {
     use super::{
-        marketplace_auth_error_for_status, require_valid_marketplace_auth_with,
-        with_marketplace_bearer, MARKETPLACE_REAUTH_REQUIRED,
+        marketplace_auth_error_for_status, marketplace_bearer_request,
+        require_valid_marketplace_auth_with, MARKETPLACE_REAUTH_REQUIRED,
+        MARKETPLACE_REDIRECT_REJECTED,
     };
     use reqwest::StatusCode;
 
     #[test]
     fn authenticated_request_uses_bearer_and_never_dev_identity_headers() {
-        let request = with_marketplace_bearer(
-            reqwest::Client::new().post("https://example.invalid/packs"),
+        let request = marketplace_bearer_request(
+            reqwest::Method::POST,
+            "https://example.invalid/packs",
             "gho_header_test",
         )
         .build()
@@ -584,5 +611,48 @@ mod tests {
 
         assert_eq!(result, Err(MARKETPLACE_REAUTH_REQUIRED.to_string()));
         assert!(cleared);
+    }
+
+    #[test]
+    fn every_authenticated_marketplace_entry_uses_bearer_without_dev_headers() {
+        let entries = [
+            (reqwest::Method::POST, "/packs"),
+            (reqwest::Method::POST, "/packs/id/like"),
+            (reqwest::Method::DELETE, "/packs/id"),
+            (reqwest::Method::GET, "/me/likes"),
+            (reqwest::Method::GET, "/me/packs"),
+        ];
+        for (method, path) in entries {
+            let request = marketplace_bearer_request(
+                method.clone(),
+                &format!("https://example.invalid{path}"),
+                "gho_entry_test",
+            )
+            .build()
+            .unwrap();
+            assert_eq!(request.method(), method);
+            assert_eq!(request.url().path(), path);
+            assert_eq!(
+                request
+                    .headers()
+                    .get(reqwest::header::AUTHORIZATION)
+                    .and_then(|value| value.to_str().ok()),
+                Some("Bearer gho_entry_test")
+            );
+            assert!(request.headers().get("X-Dev-User").is_none());
+            assert!(request.headers().get("X-Admin").is_none());
+        }
+    }
+
+    #[test]
+    fn redirects_fail_closed_without_clearing_valid_token() {
+        let mut cleared = false;
+        let result = require_valid_marketplace_auth_with(StatusCode::FOUND, || {
+            cleared = true;
+            Ok(())
+        });
+
+        assert_eq!(result, Err(MARKETPLACE_REDIRECT_REJECTED.to_string()));
+        assert!(!cleared);
     }
 }

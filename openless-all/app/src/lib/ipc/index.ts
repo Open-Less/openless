@@ -196,6 +196,10 @@ export type {
 export {
     githubDeviceFlowStart,
     githubDeviceFlowPoll,
+    githubDeviceFlowCancel,
+    githubPollIntervalMs,
+    githubSlowDownIntervalMs,
+    githubFlowExpiresAt,
     marketplaceAuthStatus,
     marketplaceLogout,
 } from "./github-oauth"

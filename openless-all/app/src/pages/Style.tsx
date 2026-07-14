@@ -121,7 +121,7 @@ function sanitizeZipFileName(name: string) {
 
 export function Style() {
   const { t } = useTranslation();
-  const { prefs: marketplacePrefs } = useHotkeySettings();
+  const { prefs: marketplacePrefs, updatePrefs: updateMarketplacePrefs } = useHotkeySettings();
   const marketplaceDisplayLogin = (marketplacePrefs?.marketplaceDevLogin ?? '').trim();
   const [marketplaceSignedIn, setMarketplaceSignedIn] = useState(false);
   const canPublish = marketplaceSignedIn;
@@ -147,14 +147,18 @@ export function Style() {
   useEffect(() => {
     let cancelled = false;
     void marketplaceAuthStatus()
-      .then(status => {
-        if (!cancelled) setMarketplaceSignedIn(status.signedIn);
+      .then(async status => {
+        if (cancelled) return;
+        setMarketplaceSignedIn(status.signedIn);
+        if (!status.signedIn && marketplaceDisplayLogin) {
+          await updateMarketplacePrefs(current => ({ ...current, marketplaceDevLogin: '' }));
+        }
       })
       .catch(() => {
         if (!cancelled) setMarketplaceSignedIn(false);
       });
     return () => { cancelled = true; };
-  }, [marketplaceDisplayLogin]);
+  }, [marketplaceDisplayLogin, updateMarketplacePrefs]);
 
   useEffect(() => () => {
     if (statusTimer.current !== null) window.clearTimeout(statusTimer.current);
@@ -491,7 +495,12 @@ export function Style() {
       showSaveStatus('saved', t('style.pack.publishSuccess'), true);
     } catch (publishError) {
       void marketplaceAuthStatus()
-        .then(status => setMarketplaceSignedIn(status.signedIn))
+        .then(async status => {
+          setMarketplaceSignedIn(status.signedIn);
+          if (!status.signedIn && marketplaceDisplayLogin) {
+            await updateMarketplacePrefs(current => ({ ...current, marketplaceDevLogin: '' }));
+          }
+        })
         .catch(() => setMarketplaceSignedIn(false));
       showSaveStatus('failed', t('style.pack.publishFailed', { err: String(publishError) }));
     } finally {

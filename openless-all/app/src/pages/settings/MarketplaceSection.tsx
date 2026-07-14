@@ -23,14 +23,18 @@ export function MarketplaceSection() {
   useEffect(() => {
     let cancelled = false;
     void marketplaceAuthStatus()
-      .then(status => {
-        if (!cancelled) setSignedIn(status.signedIn);
+      .then(async status => {
+        if (cancelled) return;
+        setSignedIn(status.signedIn);
+        if (!status.signedIn && prefs?.marketplaceDevLogin.trim()) {
+          await savePrefs(current => ({ ...current, marketplaceDevLogin: '' }));
+        }
       })
       .catch(() => {
         if (!cancelled) setSignedIn(false);
       });
     return () => { cancelled = true; };
-  }, [prefs?.marketplaceDevLogin]);
+  }, [prefs?.marketplaceDevLogin, savePrefs]);
 
   if (!prefs) {
     return (

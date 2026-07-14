@@ -13,8 +13,12 @@
 //!       "asr": { "<id>": { "appKey", "accessKey", "resourceId", "apiKey", "baseURL", "model", "vocabularyId" } },
 //!       "llm": { "<id>": { "displayName", "apiKey", "baseURL", "model", "temperature", "extraHeaders" } }
 //!     },
-//!     "marketplace": { "githubAccessToken": "<secret>" }
+//!     "marketplace": { "githubAccessToken": "<desktop-only secret>" }
 //!   }
+//!
+//! Android's generic credential envelope is only reversible Base64 today. Until
+//! the Keystore-backed vault lands, Marketplace OAuth is process-memory-only on
+//! Android and is deliberately stripped from `credentials.enc.json`.
 //!
 //! "ark.api_key"/"volcengine.app_key" 等账户名按 Swift 语义路由到 active provider。
 
@@ -30,8 +34,6 @@ use serde::{Deserialize, Serialize};
 // import keeps the Android build free of an unused-import warning.
 #[cfg(not(target_os = "android"))]
 use anyhow::anyhow;
-#[cfg(target_os = "android")]
-use std::fs;
 
 /// 旧版 plaintext JSON 凭据路径。仅作为迁移来源；成功写入系统凭据库后会删除。
 const LEGACY_CREDS_DIR: &str = ".openless";
@@ -54,8 +56,16 @@ const KEYRING_CHUNK_MAX_UTF16_UNITS: usize = 1000;
 
 static CREDENTIALS_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
+#[cfg(target_os = "android")]
+static ANDROID_MARKETPLACE_TOKEN: OnceLock<Mutex<Option<MarketplaceGithubToken>>> = OnceLock::new();
+
 fn credentials_lock() -> &'static Mutex<()> {
     CREDENTIALS_LOCK.get_or_init(|| Mutex::new(()))
+}
+
+#[cfg(target_os = "android")]
+fn android_marketplace_token() -> &'static Mutex<Option<MarketplaceGithubToken>> {
+    ANDROID_MARKETPLACE_TOKEN.get_or_init(|| Mutex::new(None))
 }
 
 /// Process-wide credentials cache.
@@ -102,7 +112,7 @@ struct CredsRoot {
     active: CredsActive,
     #[serde(default)]
     providers: CredsProviders,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "CredsMarketplace::is_empty")]
     marketplace: CredsMarketplace,
 }
 
@@ -154,6 +164,12 @@ struct CredsProviders {
 struct CredsMarketplace {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     githubAccessToken: Option<MarketplaceGithubToken>,
+}
+
+impl CredsMarketplace {
+    fn is_empty(&self) -> bool {
+        self.githubAccessToken.is_none()
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -349,10 +365,14 @@ fn android_credentials_path() -> Result<PathBuf> {
 #[cfg(target_os = "android")]
 fn load_android_credentials() -> Result<Option<CredsRoot>> {
     let path = android_credentials_path()?;
+    load_android_credentials_from_path(&path)
+}
+
+fn load_android_credentials_from_path(path: &Path) -> Result<Option<CredsRoot>> {
     if !path.exists() {
         return Ok(None);
     }
-    let bytes = fs::read(&path).with_context(|| format!("read failed: {}", path.display()))?;
+    let bytes = std::fs::read(path).with_context(|| format!("read failed: {}", path.display()))?;
     if bytes.is_empty() {
         return Ok(None);
     }
@@ -361,21 +381,47 @@ fn load_android_credentials() -> Result<Option<CredsRoot>> {
     let decoded = base64::engine::general_purpose::STANDARD
         .decode(bytes)
         .context("decode android credentials envelope")?;
-    let root =
+    let mut root =
         serde_json::from_slice::<CredsRoot>(&decoded).context("parse android credentials json")?;
+    if lookup_marketplace_github_token(&root).is_some() {
+        // Defense in depth for files written by unreleased/dev builds of the
+        // OAuth companion. Scrub on disk before returning anything; failure is
+        // fail-closed so a reversible bearer token is never silently retained.
+        write_marketplace_github_token(&mut root, None);
+        write_android_credentials_envelope(path, &root)
+            .context("scrub Marketplace token from Android credential envelope")?;
+    }
     Ok(Some(root))
 }
 
 #[cfg(target_os = "android")]
 fn save_android_credentials(root: &CredsRoot) -> Result<()> {
-    let cleaned = clean_credentials(root);
+    let path = android_credentials_path()?;
+    write_android_credentials_envelope(&path, root)
+}
+
+fn write_android_credentials_envelope(path: &Path, root: &CredsRoot) -> Result<()> {
+    let cleaned = android_persistable_credentials(root);
     let json = serde_json::to_string(&cleaned).context("encode credentials failed")?;
     use base64::Engine;
     let encoded = base64::engine::general_purpose::STANDARD.encode(json.as_bytes());
-    let path = android_credentials_path()?;
     super::ensure_dir(path.parent().unwrap_or_else(|| Path::new(".")))?;
-    fs::write(&path, encoded).with_context(|| format!("write failed: {}", path.display()))?;
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, encoded).with_context(|| format!("write failed: {}", tmp.display()))?;
+    if let Err(error) = std::fs::rename(&tmp, path) {
+        // If atomic replacement is unavailable, remove the old reversible
+        // envelope rather than leave a bearer token recoverable on disk.
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(&tmp);
+        return Err(error).with_context(|| format!("replace failed: {}", path.display()));
+    }
     Ok(())
+}
+
+fn android_persistable_credentials(root: &CredsRoot) -> CredsRoot {
+    let mut cleaned = clean_credentials(root);
+    write_marketplace_github_token(&mut cleaned, None);
+    cleaned
 }
 
 fn clean_credentials(root: &CredsRoot) -> CredsRoot {
@@ -1018,21 +1064,46 @@ impl CredentialsVault {
     /// excluded from `CredentialsSnapshot`, so frontend IPC can never read it.
     pub fn get_marketplace_github_token() -> Result<Option<String>> {
         let _guard = credentials_lock().lock();
+        #[cfg(target_os = "android")]
+        {
+            return Ok(android_marketplace_token()
+                .lock()
+                .as_ref()
+                .map(|token| token.0.clone()));
+        }
+        #[cfg(not(target_os = "android"))]
         Ok(lookup_marketplace_github_token(&load_credentials()))
     }
 
     pub fn set_marketplace_github_token(value: &str) -> Result<()> {
         let _guard = credentials_lock().lock();
-        let mut root = load_credentials_for_update()?;
-        write_marketplace_github_token(&mut root, Some(value.to_string()));
-        save_credentials(&root)
+        #[cfg(target_os = "android")]
+        {
+            *android_marketplace_token().lock() =
+                (!value.trim().is_empty()).then(|| MarketplaceGithubToken(value.to_string()));
+            return Ok(());
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            let mut root = load_credentials_for_update()?;
+            write_marketplace_github_token(&mut root, Some(value.to_string()));
+            save_credentials(&root)
+        }
     }
 
     pub fn remove_marketplace_github_token() -> Result<()> {
         let _guard = credentials_lock().lock();
-        let mut root = load_credentials_for_update()?;
-        write_marketplace_github_token(&mut root, None);
-        save_credentials(&root)
+        #[cfg(target_os = "android")]
+        {
+            *android_marketplace_token().lock() = None;
+            return Ok(());
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            let mut root = load_credentials_for_update()?;
+            write_marketplace_github_token(&mut root, None);
+            save_credentials(&root)
+        }
     }
 
     pub fn get_active_asr() -> String {
@@ -1102,8 +1173,9 @@ impl CredentialsVault {
 #[cfg(test)]
 mod tests {
     use super::{
-        chunk_json_payload, lookup_marketplace_github_token, parse_extra_headers_json,
-        write_marketplace_github_token, CredsRoot, KEYRING_CHUNK_MAX_UTF16_UNITS,
+        android_persistable_credentials, chunk_json_payload, load_android_credentials_from_path,
+        lookup_marketplace_github_token, parse_extra_headers_json, write_marketplace_github_token,
+        CredsRoot, KEYRING_CHUNK_MAX_UTF16_UNITS,
     };
 
     #[test]
@@ -1189,5 +1261,53 @@ mod tests {
         assert!(!preferences_json.contains(token));
         assert!(!preferences_json.contains("githubAccessToken"));
         assert!(!format!("{root:?}").contains(token));
+    }
+
+    #[test]
+    fn android_persistable_credentials_never_contains_marketplace_token_or_account() {
+        let token = "gho_android_memory_only";
+        let mut root = CredsRoot::default();
+        write_marketplace_github_token(&mut root, Some(token.to_string()));
+
+        let persisted = serde_json::to_string(&android_persistable_credentials(&root))
+            .expect("android credential payload should serialize");
+
+        assert!(!persisted.contains(token));
+        assert!(!persisted.contains("githubAccessToken"));
+        assert!(!persisted.contains("marketplace"));
+    }
+
+    #[test]
+    fn android_legacy_envelope_is_atomically_scrubbed_before_load_returns() {
+        use base64::Engine;
+
+        let token = "gho_legacy_android_secret";
+        let mut root = CredsRoot::default();
+        write_marketplace_github_token(&mut root, Some(token.to_string()));
+        let raw = serde_json::to_vec(&root).unwrap();
+        let encoded = base64::engine::general_purpose::STANDARD.encode(raw);
+        let dir = std::env::temp_dir().join(format!(
+            "openless-android-credential-scrub-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("credentials.enc.json");
+        std::fs::write(&path, encoded).unwrap();
+
+        let loaded = load_android_credentials_from_path(&path)
+            .unwrap()
+            .expect("credential envelope should load");
+        let disk = std::fs::read_to_string(&path).unwrap();
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(disk)
+            .unwrap();
+        let decoded = String::from_utf8(decoded).unwrap();
+
+        assert_eq!(lookup_marketplace_github_token(&loaded), None);
+        assert!(!decoded.contains(token));
+        assert!(!decoded.contains("githubAccessToken"));
+        assert!(!decoded.contains("marketplace"));
+        assert!(!path.with_extension("json.tmp").exists());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }
