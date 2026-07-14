@@ -33,7 +33,6 @@ pub struct DashScopeMultimodalASR {
     api_key: String,
     base_url: String,
     model: String,
-    vocabulary_id: Option<String>,
     buffer: Mutex<Vec<u8>>,
 }
 
@@ -43,17 +42,8 @@ impl DashScopeMultimodalASR {
             api_key,
             base_url,
             model,
-            vocabulary_id: None,
             buffer: Mutex::new(Vec::new()),
         }
-    }
-
-    pub fn with_vocabulary_id(mut self, vocabulary_id: Option<String>) -> Self {
-        self.vocabulary_id = vocabulary_id.and_then(|value| {
-            let value = value.trim();
-            (!value.is_empty()).then(|| value.to_string())
-        });
-        self
     }
 
     pub fn buffer_duration_ms(&self) -> u64 {
@@ -100,11 +90,7 @@ impl DashScopeMultimodalASR {
             .map(|chunk| i16::from_le_bytes([chunk[0], chunk[1]]))
             .collect();
         let wav = encode_wav_16k_mono(&samples);
-        let body = dashscope_multimodal_body_with_vocabulary(
-            &self.model,
-            &wav,
-            self.vocabulary_id.as_deref(),
-        );
+        let body = dashscope_multimodal_body(&self.model, &wav);
         let url = generation_url(&self.base_url)?;
         let client = reqwest::Client::new();
         let resp = client
@@ -164,25 +150,10 @@ pub fn generation_url(base_url: &str) -> Result<String> {
 }
 
 pub fn dashscope_multimodal_body(model: &str, wav: &[u8]) -> Value {
-    dashscope_multimodal_body_with_vocabulary(model, wav, None)
-}
-
-pub fn dashscope_multimodal_body_with_vocabulary(
-    model: &str,
-    wav: &[u8],
-    vocabulary_id: Option<&str>,
-) -> Value {
     let audio_data = format!(
         "data:audio/wav;base64,{}",
         base64::engine::general_purpose::STANDARD.encode(wav)
     );
-    let mut parameters = serde_json::json!({
-        "format": "wav",
-        "sample_rate": "16000",
-    });
-    if let Some(vocabulary_id) = vocabulary_id.filter(|value| !value.trim().is_empty()) {
-        parameters["vocabulary_id"] = serde_json::json!(vocabulary_id.trim());
-    }
     serde_json::json!({
         "model": model,
         "input": {
@@ -194,7 +165,10 @@ pub fn dashscope_multimodal_body_with_vocabulary(
                 }],
             }],
         },
-        "parameters": parameters,
+        "parameters": {
+            "format": "wav",
+            "sample_rate": "16000",
+        },
     })
 }
 
@@ -298,14 +272,7 @@ mod tests {
             .starts_with("data:audio/wav;base64,"));
         assert_eq!(body["parameters"]["format"], "wav");
         assert_eq!(body["parameters"]["sample_rate"], "16000");
-        assert!(body["parameters"]["vocabulary_id"].is_null());
-    }
-
-    #[test]
-    fn body_includes_trimmed_vocabulary_id() {
-        let body =
-            dashscope_multimodal_body_with_vocabulary(DEFAULT_MODEL, b"wav", Some(" vocab-123 "));
-        assert_eq!(body["parameters"]["vocabulary_id"], "vocab-123");
+        assert!(body["parameters"].get("vocabulary_id").is_none());
     }
 
     #[test]
@@ -375,7 +342,7 @@ mod tests {
             assert!(request_text.contains(r#""model":"fun-asr-flash-2026-06-15""#));
             assert!(request_text.contains(r#""type":"input_audio""#));
             assert!(request_text.contains("data:audio/wav;base64,"));
-            assert!(request_text.contains(r#""vocabulary_id":"vocab-123""#));
+            assert!(!request_text.contains("vocabulary_id"));
             write_json_response(
                 &mut stream,
                 r#"{"output":{"text":"你好百炼"},"request_id":"r1"}"#,
@@ -389,8 +356,7 @@ mod tests {
                 addr
             ),
             DEFAULT_MODEL.to_string(),
-        )
-        .with_vocabulary_id(Some(" vocab-123 ".to_string()));
+        );
         asr.consume_pcm_chunk(&vec![0u8; 32_000]);
         assert_eq!(asr.buffer_duration_ms(), 1_000);
         let transcript = asr.transcribe().await.unwrap();

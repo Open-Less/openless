@@ -561,10 +561,7 @@ pub(super) async fn build_qa_asr_start(inner: &Arc<Inner>, active_asr: &str) -> 
         }
         ActiveAsrProviderKind::DashScopeMultimodal => {
             let (api_key, base_url, model) = read_dashscope_multimodal_credentials();
-            let asr = Arc::new(
-                DashScopeMultimodalASR::new(api_key, base_url, model)
-                    .with_vocabulary_id(read_asr_vocabulary_id()),
-            );
+            let asr = Arc::new(DashScopeMultimodalASR::new(api_key, base_url, model));
             let active = ActiveAsr::DashScopeMultimodal(Arc::clone(&asr));
             let consumer: Arc<dyn crate::recorder::AudioConsumer> = asr;
             Ok(QaAsrStart::Ready { active, consumer })

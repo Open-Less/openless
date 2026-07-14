@@ -294,18 +294,21 @@ const DASHSCOPE_ASR_VALIDATE_SAMPLE_URL: &str =
     "https://dashscope.oss-cn-beijing.aliyuncs.com/samples/audio/paraformer/hello_world_female2.wav";
 
 async fn validate_dashscope_multimodal_asr_provider() -> Result<(), String> {
-    // 统一「阿里云百炼」下三协议共用一个 endpoint 字段(存的是经典实时的 wss 地址),
-    // 对 multimodal(https)不适用；直接用协议默认地址 + 共用 key,绕过按存储 endpoint
-    // 走(且会拒 wss)的 read_openai_provider_config。别名 id 仍走标准读取。
+    // 统一百炼复用配置中的区域/工作空间主机，并推导 multimodal 的 https 路径。
+    // 隐藏别名仍按原有完整 endpoint 读取。
     let (api_key, base_url) = if crate::coordinator::unified_bailian_is_active() {
         let api_key = CredentialsVault::get(CredentialAccount::AsrApiKey)
             .map_err(|e| e.to_string())?
             .filter(|s| !s.trim().is_empty())
             .ok_or_else(|| "API Key 为空".to_string())?;
-        (
-            api_key,
-            crate::asr::dashscope_multimodal::DEFAULT_ENDPOINT.to_string(),
-        )
+        let endpoint = CredentialsVault::get(CredentialAccount::AsrEndpoint)
+            .map_err(|e| e.to_string())?
+            .unwrap_or_default();
+        let endpoint = crate::coordinator::derive_bailian_endpoint(
+            &endpoint,
+            crate::coordinator::BailianEndpointProtocol::Multimodal,
+        )?;
+        (api_key, endpoint)
     } else {
         let config = read_openai_provider_config("asr")?;
         (config.api_key, config.base_url)
@@ -315,22 +318,15 @@ async fn validate_dashscope_multimodal_asr_provider() -> Result<(), String> {
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| crate::asr::dashscope_multimodal::DEFAULT_MODEL.to_string());
     crate::coordinator::validate_dashscope_multimodal_model(&model)?;
-    let vocabulary_id = CredentialsVault::get(CredentialAccount::AsrVocabularyId)
-        .map_err(|e| e.to_string())?
-        .filter(|s| !s.trim().is_empty());
     let url = crate::asr::dashscope_multimodal::generation_url(&base_url)
         .map_err(|_| "endpointInvalid".to_string())?;
-    let mut parameters = serde_json::json!({ "format": "wav", "sample_rate": "16000" });
-    if let Some(vocabulary_id) = vocabulary_id {
-        parameters["vocabulary_id"] = serde_json::json!(vocabulary_id.trim());
-    }
     let body = serde_json::json!({
         "model": model,
         "input": { "messages": [{ "role": "user", "content": [{
             "type": "input_audio",
             "input_audio": { "data": DASHSCOPE_ASR_VALIDATE_SAMPLE_URL },
         }]}]},
-        "parameters": parameters,
+        "parameters": { "format": "wav", "sample_rate": "16000" },
     });
     let client = http_client_builder(&url, 20)
         .build()
@@ -366,10 +362,18 @@ async fn validate_bailian_asr_provider() -> Result<(), String> {
     }
     // 已知残留（issue #609 F-01 孪生 gap）：Bailian endpoint 走 `wss://`，与 http/https-only 的
     // validate_llm_endpoint 不兼容，无法直接复用，需单独的 ws/wss 感知 SSRF 校验器（超本次范围）。
-    let endpoint = CredentialsVault::get(CredentialAccount::AsrEndpoint)
+    let stored_endpoint = CredentialsVault::get(CredentialAccount::AsrEndpoint)
         .map_err(|e| e.to_string())?
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| crate::asr::bailian::DEFAULT_ENDPOINT.to_string());
+    let endpoint = if crate::coordinator::unified_bailian_is_active() {
+        crate::coordinator::derive_bailian_endpoint(
+            &stored_endpoint,
+            crate::coordinator::BailianEndpointProtocol::ClassicRealtime,
+        )?
+    } else {
+        stored_endpoint
+    };
     // 协议头先行校验：填成 https://（百炼兼容模式 / 专属域名地址）时，WebSocket
     // 握手报的 "URL scheme not supported" 会被前端兜底成笼统的「操作失败」，
     // 用户无从定位。这里拦下并返回专用错误码，前端映射成可操作的提示。
@@ -413,10 +417,15 @@ async fn validate_qwen3_realtime_asr_provider() -> Result<(), String> {
     if api_key.trim().is_empty() {
         return Err("API Key 为空".to_string());
     }
-    // 统一百炼下共用 endpoint 存的是经典实时地址，对 qwen3 realtime 网关不对；用协议
-    // 默认地址。别名 id 仍读自己存的 endpoint。
+    // 统一百炼保留配置中的区域/工作空间主机，并切换到 Qwen Realtime 路径。
     let endpoint = if crate::coordinator::unified_bailian_is_active() {
-        crate::asr::qwen_realtime::DEFAULT_ENDPOINT.to_string()
+        let endpoint = CredentialsVault::get(CredentialAccount::AsrEndpoint)
+            .map_err(|e| e.to_string())?
+            .unwrap_or_default();
+        crate::coordinator::derive_bailian_endpoint(
+            &endpoint,
+            crate::coordinator::BailianEndpointProtocol::QwenRealtime,
+        )?
     } else {
         CredentialsVault::get(CredentialAccount::AsrEndpoint)
             .map_err(|e| e.to_string())?

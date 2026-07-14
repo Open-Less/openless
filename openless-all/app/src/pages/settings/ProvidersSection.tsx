@@ -474,15 +474,10 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
         ) : (
           <>
             <CredentialField key={`${committedAsrProvider}:api_key`} label={t('settings.providers.apiKeyLabel')} account="asr.api_key" mono mask />
-            {/* 统一「阿里云百炼」:一把 key + 一个模型框(可「拉取模型」或直接手填已支持的
-                DashScope ASR 模型),协议按模型名在后端自动路由,接口地址随协议自动推导,
-                故不暴露 endpoint 字段。模型框下一行提示当前模型是「实时」还是「录音文件」,
-                解决三种模型看不出区别的问题。 */}
-            {!unifiedBailian && (
-              <CredentialField key={`${committedAsrProvider}:endpoint`} label={t('settings.providers.baseUrlLabel')} account="asr.endpoint"
-                placeholder={asrPreset?.baseUrl || 'https://api.openai.com/v1'}
-                defaultValue={asrPreset?.baseUrl || undefined} />
-            )}
+            {/* 统一百炼保留 endpoint 供用户选择区域或工作空间域名；后端按模型转换协议与路径。 */}
+            <CredentialField key={`${committedAsrProvider}:endpoint`} label={t('settings.providers.baseUrlLabel')} account="asr.endpoint"
+              placeholder={asrPreset?.baseUrl || 'https://api.openai.com/v1'}
+              defaultValue={asrPreset?.baseUrl || undefined} />
             <CredentialField key={`${committedAsrProvider}:model:${asrModelRevision}`} label={t('settings.providers.modelLabel')} account="asr.model"
               placeholder={unifiedBailian ? 'fun-asr-realtime' : (asrPreset?.model || 'whisper-1')}
               onValueChange={unifiedBailian ? setBailianModel : undefined} />
@@ -503,8 +498,7 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
                 </div>
               </>
             )}
-            {/* 统一百炼「拉取模型」返回常用清单;endpoint 由后端按模型自动推导,
-                「拉取模型」只写 model 也不会写错 endpoint,故对 bailian 也开放。 */}
+            {/* 统一百炼「拉取模型」只写 model，不覆盖用户选择的区域或工作空间 endpoint。 */}
             <ProviderTools kind="asr" modelAccount="asr.model" onModelSelected={() => setAsrModelRevision(v => v + 1)} />
           </>
         )}
@@ -516,12 +510,11 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
 
 // 统一「阿里云百炼」下,按模型名判断走哪种协议(与后端
 // coordinator::resolve_effective_asr_provider 保持一致):qwen3-asr-flash-realtime* 与
-// fun-asr-realtime* 都是「实时·边说边出」,fun-asr-flash* 是「录音文件·说完转写」。
+// fun-asr-realtime* 与 fun-asr-flash-8k-realtime* 都是实时模型；当前支持的
+// fun-asr-flash-2026-06-15 是「录音文件·说完转写」。
 function bailianModelIsRecordedFile(model: string): boolean {
   const m = model.trim();
-  // qwen3-asr-flash-realtime 含「flash」但是实时,先判 realtime。
-  if (m.startsWith('qwen3-asr-flash-realtime')) return false;
-  return m.startsWith('fun-asr-flash');
+  return m === 'fun-asr-flash-2026-06-15';
 }
 
 function bailianModelSupportsVocabulary(model: string): boolean {
@@ -529,8 +522,7 @@ function bailianModelSupportsVocabulary(model: string): boolean {
   return !m
     || m.startsWith('fun-asr-realtime')
     || m.startsWith('paraformer-realtime')
-    || m.startsWith('sensevoice-realtime')
-    || m.startsWith('fun-asr-flash');
+    || m.startsWith('sensevoice-realtime');
 }
 
 // 模型框下的一行协议提示,解决「三种模型看不出区别」——告诉用户当前模型是实时还是

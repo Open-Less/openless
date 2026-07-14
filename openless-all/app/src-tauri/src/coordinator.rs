@@ -324,11 +324,11 @@ pub(crate) fn resolve_effective_asr_provider(
         Ok(crate::asr::bailian::PROVIDER_ID.to_string())
     } else if model.starts_with("qwen3-asr-flash-realtime") {
         Ok(crate::asr::qwen_realtime::PROVIDER_ID.to_string())
-    } else if model.starts_with("fun-asr-flash") {
+    } else if model == crate::asr::dashscope_multimodal::DEFAULT_MODEL {
         Ok(crate::asr::dashscope_multimodal::PROVIDER_ID.to_string())
     } else {
         Err(format!(
-            "不支持的百炼 ASR 模型：{model}。支持 fun-asr-realtime、paraformer-realtime、sensevoice-realtime、qwen3-asr-flash-realtime 和 fun-asr-flash 系列"
+            "不支持的百炼 ASR 模型：{model}。支持 fun-asr-realtime、paraformer-realtime、sensevoice-realtime、qwen3-asr-flash-realtime 和 fun-asr-flash-2026-06-15"
         ))
     }
 }
@@ -341,12 +341,55 @@ fn is_classic_bailian_realtime_model(model: &str) -> bool {
 
 pub(crate) fn validate_dashscope_multimodal_model(model: &str) -> Result<(), String> {
     let model = model.trim();
-    if model.is_empty() || model.starts_with("fun-asr-flash") {
+    if model.is_empty() || model == crate::asr::dashscope_multimodal::DEFAULT_MODEL {
         return Ok(());
     }
     Err(format!(
-        "不支持的 DashScope 录音文件 ASR 模型：{model}。该协议仅支持 fun-asr-flash 系列"
+        "不支持的 DashScope 录音文件 ASR 模型：{model}。该协议仅支持 fun-asr-flash-2026-06-15；fun-asr-flash-8k-realtime 系列属于 8 kHz 实时 WebSocket 模型，当前尚未支持"
     ))
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum BailianEndpointProtocol {
+    ClassicRealtime,
+    QwenRealtime,
+    Multimodal,
+}
+
+/// 统一百炼配置只需要表达区域/工作空间主机；具体协议的 scheme 与 path 由模型路由决定。
+/// 这样既能复用同一个 endpoint 字段，也不会把中国区默认网关强加给新加坡或专属工作空间。
+pub(crate) fn derive_bailian_endpoint(
+    endpoint: &str,
+    protocol: BailianEndpointProtocol,
+) -> Result<String, String> {
+    let default_endpoint = match protocol {
+        BailianEndpointProtocol::ClassicRealtime => crate::asr::bailian::DEFAULT_ENDPOINT,
+        BailianEndpointProtocol::QwenRealtime => crate::asr::qwen_realtime::DEFAULT_ENDPOINT,
+        BailianEndpointProtocol::Multimodal => crate::asr::dashscope_multimodal::DEFAULT_ENDPOINT,
+    };
+    let source = if endpoint.trim().is_empty() {
+        default_endpoint
+    } else {
+        endpoint.trim()
+    };
+    let mut url = url::Url::parse(source).map_err(|_| "endpointInvalid".to_string())?;
+    if url.host_str().is_none() {
+        return Err("endpointInvalid".to_string());
+    }
+    let (scheme, path) = match protocol {
+        BailianEndpointProtocol::ClassicRealtime => ("wss", "/api-ws/v1/inference/"),
+        BailianEndpointProtocol::QwenRealtime => ("wss", "/api-ws/v1/realtime"),
+        BailianEndpointProtocol::Multimodal => (
+            "https",
+            "/api/v1/services/aigc/multimodal-generation/generation",
+        ),
+    };
+    url.set_scheme(scheme)
+        .map_err(|_| "endpointInvalid".to_string())?;
+    url.set_path(path);
+    url.set_query(None);
+    url.set_fragment(None);
+    Ok(url.to_string())
 }
 
 fn batch_asr_chunk_limit_ms(provider_id: &str) -> Option<u64> {
@@ -2120,7 +2163,8 @@ fn read_dashscope_multimodal_credentials() -> (String, String, String) {
         .flatten()
         .unwrap_or_default();
     let base_url = if unified_bailian_is_active() {
-        crate::asr::dashscope_multimodal::DEFAULT_ENDPOINT.to_string()
+        let endpoint = read_asr_endpoint(crate::asr::bailian::DEFAULT_ENDPOINT);
+        derive_bailian_endpoint(&endpoint, BailianEndpointProtocol::Multimodal).unwrap_or(endpoint)
     } else {
         CredentialsVault::get(CredentialAccount::AsrEndpoint)
             .ok()
@@ -2148,11 +2192,13 @@ fn read_bailian_credentials() -> BailianCredentials {
         .ok()
         .flatten()
         .unwrap_or_default();
-    let endpoint = CredentialsVault::get(CredentialAccount::AsrEndpoint)
-        .ok()
-        .flatten()
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| crate::asr::bailian::DEFAULT_ENDPOINT.to_string());
+    let stored_endpoint = read_asr_endpoint(crate::asr::bailian::DEFAULT_ENDPOINT);
+    let endpoint = if unified_bailian_is_active() {
+        derive_bailian_endpoint(&stored_endpoint, BailianEndpointProtocol::ClassicRealtime)
+            .unwrap_or(stored_endpoint)
+    } else {
+        stored_endpoint
+    };
     let model = CredentialsVault::get(CredentialAccount::AsrModel)
         .ok()
         .flatten()
@@ -2167,10 +2213,16 @@ fn read_bailian_credentials() -> BailianCredentials {
     }
 }
 
-/// 统一「阿里云百炼」入口的三条协议共用同一个 `bailian` 凭据条目，只有一个
-/// endpoint 字段（存的是经典实时地址）。qwen3 / dashscope 若照读这个共用地址会指错
-/// 网关。当 active 恰是统一 `bailian` 时，这两个协议一律改用各自协议默认地址（忽略
-/// 存储值）——这样任意模型（含用户自定义、拉取来的）都能按模型名路由到正确 endpoint。
+fn read_asr_endpoint(default_endpoint: &str) -> String {
+    CredentialsVault::get(CredentialAccount::AsrEndpoint)
+        .ok()
+        .flatten()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| default_endpoint.to_string())
+}
+
+/// 统一「阿里云百炼」入口的三条协议共用同一个 `bailian` 凭据条目。存储 endpoint
+/// 提供区域/工作空间主机，运行时再按所选模型推导各协议的 scheme 与 path。
 /// 老用户停在别名 id（`bailian-qwen3-realtime` / `bailian-fun-asr-flash`）上时不触发，
 /// 仍读自己条目里存的 endpoint。
 pub(crate) fn unified_bailian_is_active() -> bool {
@@ -2183,7 +2235,9 @@ fn read_qwen3_realtime_credentials() -> Qwen3RealtimeCredentials {
         .flatten()
         .unwrap_or_default();
     let endpoint = if unified_bailian_is_active() {
-        crate::asr::qwen_realtime::DEFAULT_ENDPOINT.to_string()
+        let endpoint = read_asr_endpoint(crate::asr::bailian::DEFAULT_ENDPOINT);
+        derive_bailian_endpoint(&endpoint, BailianEndpointProtocol::QwenRealtime)
+            .unwrap_or(endpoint)
     } else {
         CredentialsVault::get(CredentialAccount::AsrEndpoint)
             .ok()
@@ -2642,6 +2696,38 @@ mod tests {
         let error = resolve_effective_asr_provider(crate::asr::bailian::PROVIDER_ID, "paraformer-v2")
             .unwrap_err();
         assert!(error.contains("不支持的百炼 ASR 模型"));
+
+        let error = resolve_effective_asr_provider(
+            crate::asr::bailian::PROVIDER_ID,
+            "fun-asr-flash-8k-realtime",
+        )
+        .unwrap_err();
+        assert!(error.contains("不支持的百炼 ASR 模型"));
+    }
+
+    #[test]
+    fn derive_bailian_endpoint_preserves_region_host_and_selects_protocol_path() {
+        let endpoint = "https://workspace.ap-southeast-1.maas.aliyuncs.com/custom?x=1";
+        assert_eq!(
+            derive_bailian_endpoint(endpoint, BailianEndpointProtocol::ClassicRealtime).unwrap(),
+            "wss://workspace.ap-southeast-1.maas.aliyuncs.com/api-ws/v1/inference/"
+        );
+        assert_eq!(
+            derive_bailian_endpoint(endpoint, BailianEndpointProtocol::QwenRealtime).unwrap(),
+            "wss://workspace.ap-southeast-1.maas.aliyuncs.com/api-ws/v1/realtime"
+        );
+        assert_eq!(
+            derive_bailian_endpoint(endpoint, BailianEndpointProtocol::Multimodal).unwrap(),
+            "https://workspace.ap-southeast-1.maas.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
+        );
+    }
+
+    #[test]
+    fn derive_bailian_endpoint_uses_protocol_default_for_empty_value() {
+        assert_eq!(
+            derive_bailian_endpoint("", BailianEndpointProtocol::QwenRealtime).unwrap(),
+            crate::asr::qwen_realtime::DEFAULT_ENDPOINT
+        );
     }
 
     #[test]

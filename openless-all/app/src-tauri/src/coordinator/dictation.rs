@@ -1797,10 +1797,7 @@ pub(super) async fn begin_session_as(
             .await?;
     } else if is_dashscope_multimodal_provider(&effective_asr) {
         let (api_key, base_url, model) = read_dashscope_multimodal_credentials();
-        let asr = Arc::new(
-            DashScopeMultimodalASR::new(api_key, base_url, model)
-                .with_vocabulary_id(read_asr_vocabulary_id()),
-        );
+        let asr = Arc::new(DashScopeMultimodalASR::new(api_key, base_url, model));
         store_asr_for_session(
             inner,
             current_session_id,
