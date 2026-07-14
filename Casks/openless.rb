@@ -7,7 +7,7 @@ cask "openless" do
 
   url "https://github.com/appergb/openless/releases/download/v#{version}-tauri/OpenLess_#{version}_#{arch}.dmg"
   name "OpenLess"
-  desc "Menu-bar voice input layer for macOS"
+  desc "Menu-bar voice input layer"
   homepage "https://github.com/appergb/openless"
 
   livecheck do
@@ -16,6 +16,7 @@ cask "openless" do
   end
 
   auto_updates true
+  depends_on macos: :monterey
 
   app "OpenLess.app"
 
