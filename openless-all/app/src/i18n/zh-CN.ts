@@ -782,7 +782,7 @@ export const zhCN = {
       baseUrlLabel: '接口地址',
       modelLabel: '模型',
       temperatureLabel: 'Temperature',
-      temperaturePlaceholder: '留空则不发送；例如 0.3',
+      temperaturePlaceholder: '留空则不发送；范围 0～2（含边界），例如 0.3',
       extraHeadersLabel: '额外 Headers',
       extraHeadersPlaceholder: '{"custom-head":"..."}',
       thinkingModeLabel: '思考',

@@ -786,7 +786,7 @@ export const ja: typeof zhCN = {
       baseUrlLabel: 'エンドポイント',
       modelLabel: 'モデル',
       temperatureLabel: 'Temperature',
-      temperaturePlaceholder: '空欄なら送信しません。例: 0.3',
+      temperaturePlaceholder: '空欄なら送信しません。範囲は 0〜2（両端を含む）。例: 0.3',
       extraHeadersLabel: '追加 Headers',
       extraHeadersPlaceholder: '{"custom-head":"..."}',
       thinkingModeLabel: '思考',

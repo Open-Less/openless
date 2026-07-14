@@ -784,7 +784,7 @@ export const en: typeof zhCN = {
       baseUrlLabel: 'Base URL',
       modelLabel: 'Model',
       temperatureLabel: 'Temperature',
-      temperaturePlaceholder: 'Leave empty to omit; e.g. 0.3',
+      temperaturePlaceholder: 'Leave empty to omit; range 0–2 inclusive, e.g. 0.3',
       extraHeadersLabel: 'Extra headers',
       extraHeadersPlaceholder: '{"custom-head":"..."}',
       thinkingModeLabel: 'Thinking',
