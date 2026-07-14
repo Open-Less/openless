@@ -268,6 +268,22 @@ fn active_llm_extra_headers(root: &CredsRoot) -> HashMap<String, String> {
         .unwrap_or_default()
 }
 
+fn active_llm_temperature(root: &CredsRoot) -> Option<f32> {
+    root.providers
+        .llm
+        .get(&root.active.llm)
+        .and_then(|entry| entry.temperature)
+        .map(|value| value as f32)
+}
+
+fn active_llm_temperature_string(root: &CredsRoot) -> Option<String> {
+    root.providers
+        .llm
+        .get(&root.active.llm)
+        .and_then(|entry| entry.temperature)
+        .map(|value| value.to_string())
+}
+
 fn active_llm_extra_headers_json(root: &CredsRoot) -> Result<Option<String>> {
     let headers = active_llm_extra_headers(root);
     if headers.is_empty() {
@@ -308,6 +324,21 @@ fn parse_extra_headers_json(value: &str) -> Result<HashMap<String, String>> {
         headers.insert(key.to_string(), value.to_string());
     }
     Ok(headers)
+}
+
+fn parse_llm_temperature(value: &str) -> Result<Option<f64>> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    let temperature: f64 = trimmed.parse().context("temperature must be a number")?;
+    if !temperature.is_finite() {
+        anyhow::bail!("temperature must be finite");
+    }
+    if !(0.0..=2.0).contains(&temperature) {
+        anyhow::bail!("temperature must be between 0 and 2");
+    }
+    Ok(Some(temperature))
 }
 
 fn is_valid_header_name(name: &str) -> bool {
@@ -1370,6 +1401,25 @@ impl CredentialsVault {
         active_llm_extra_headers_json(&load_credentials())
     }
 
+    pub fn get_active_llm_temperature() -> Option<f32> {
+        let _guard = credentials_lock().lock();
+        active_llm_temperature(&load_credentials())
+    }
+
+    pub fn get_active_llm_temperature_string() -> Option<String> {
+        let _guard = credentials_lock().lock();
+        active_llm_temperature_string(&load_credentials())
+    }
+
+    pub fn set_active_llm_temperature(value: &str) -> Result<()> {
+        let _guard = credentials_lock().lock();
+        let temperature = parse_llm_temperature(value)?;
+        let mut root = load_credentials_for_update()?;
+        let entry = root.providers.llm.entry(root.active.llm.clone()).or_default();
+        entry.temperature = temperature;
+        save_credentials(&root)
+    }
+
     pub fn set_active_llm_extra_headers_json(value: &str) -> Result<()> {
         let _guard = credentials_lock().lock();
         let headers = parse_extra_headers_json(value)?;
@@ -1406,7 +1456,7 @@ mod tests {
         android_persistable_credentials, chunk_json_payload, credentials_cache,
         get_android_marketplace_token_at, load_android_credentials_from_path,
         load_android_credentials_from_path_with_crypto, load_android_credentials_into_cache_with,
-        lookup_marketplace_github_token, parse_extra_headers_json,
+        lookup_marketplace_github_token, parse_extra_headers_json, parse_llm_temperature,
         reset_credentials_cache_for_tests, write_marketplace_github_token, CredsRoot,
         MarketplaceGithubToken, KEYRING_CHUNK_MAX_UTF16_UNITS,
     };
@@ -1715,5 +1765,22 @@ mod tests {
         assert_android_secret_unrecoverable(&path, "gho_legacy_startup_secret");
         *credentials_cache().lock() = Some(CredsRoot::default());
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn parse_llm_temperature_accepts_empty_and_valid_range() {
+        assert_eq!(parse_llm_temperature("").unwrap(), None);
+        assert_eq!(parse_llm_temperature(" 0.3 ").unwrap(), Some(0.3));
+        assert_eq!(parse_llm_temperature("2").unwrap(), Some(2.0));
+    }
+
+    #[test]
+    fn parse_llm_temperature_rejects_invalid_values() {
+        for value in ["abc", "-0.1", "2.1", "NaN", "inf"] {
+            assert!(
+                parse_llm_temperature(value).is_err(),
+                "{value} should be rejected"
+            );
+        }
     }
 }

@@ -46,8 +46,9 @@ use crate::persistence::{
 
 use crate::llm_gemini::{GeminiConfig, GeminiProvider};
 use crate::polish::{
-    ActiveLLMProvider, CodexOAuthConfig, CodexOAuthLLMProvider, OpenAICompatibleConfig,
-    OpenAICompatibleLLMProvider, CODEX_DEFAULT_MODEL, CODEX_OAUTH_PROVIDER_ID,
+    openai_compatible_temperature_for_provider, ActiveLLMProvider, CodexOAuthConfig,
+    CodexOAuthLLMProvider, OpenAICompatibleConfig, OpenAICompatibleLLMProvider,
+    CODEX_DEFAULT_MODEL, CODEX_OAUTH_PROVIDER_ID,
 };
 use crate::qa_hotkey::{QaHotkeyError, QaHotkeyEvent, QaHotkeyMonitor};
 use crate::recorder::{Recorder, RecorderError};
@@ -2589,8 +2590,13 @@ fn build_active_llm_provider(llm_thinking_enabled: bool) -> anyhow::Result<Activ
         .trim_end_matches("/chat/completions")
         .trim_end_matches('/')
         .to_string();
+    let temperature = openai_compatible_temperature_for_provider(
+        &active,
+        CredentialsVault::get_active_llm_temperature(),
+    );
     let config = OpenAICompatibleConfig::new(active, "OpenLess LLM", base_url, api_key, model)
         .with_thinking_enabled(llm_thinking_enabled)
+        .with_temperature(temperature)
         .with_extra_headers(CredentialsVault::get_active_llm_extra_headers());
     Ok(ActiveLLMProvider::OpenAI(OpenAICompatibleLLMProvider::new(
         config,

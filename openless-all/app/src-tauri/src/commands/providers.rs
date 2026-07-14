@@ -110,6 +110,7 @@ pub(crate) struct ProviderConfig {
     pub(crate) base_url: String,
     pub(crate) api_key: String,
     pub(crate) extra_headers: HashMap<String, String>,
+    pub(crate) temperature: Option<f32>,
 }
 
 fn read_openai_provider_config(kind: &str) -> Result<ProviderConfig, String> {
@@ -132,10 +133,17 @@ fn read_openai_provider_config(kind: &str) -> Result<ProviderConfig, String> {
     let base_url = CredentialsVault::get(endpoint_account)
         .map_err(|e| e.to_string())?
         .unwrap_or_default();
-    let extra_headers = if kind == "llm" {
-        CredentialsVault::get_active_llm_extra_headers()
+    let (extra_headers, temperature) = if kind == "llm" {
+        let active_llm = CredentialsVault::get_active_llm();
+        (
+            CredentialsVault::get_active_llm_extra_headers(),
+            openai_compatible_temperature_for_provider(
+                &active_llm,
+                CredentialsVault::get_active_llm_temperature(),
+            ),
+        )
     } else {
-        HashMap::new()
+        (HashMap::new(), None)
     };
     if api_key_required && api_key.trim().is_empty() {
         return Err("API Key 为空".to_string());
@@ -154,6 +162,7 @@ fn read_openai_provider_config(kind: &str) -> Result<ProviderConfig, String> {
         base_url,
         api_key,
         extra_headers,
+        temperature,
     })
 }
 
@@ -202,6 +211,7 @@ async fn validate_llm_provider() -> Result<(), String> {
             model,
         )
         .with_thinking_enabled(llm_thinking_enabled)
+        .with_temperature(config.temperature)
         .with_extra_headers(config.extra_headers),
     );
     provider
@@ -1021,6 +1031,7 @@ mod tests {
             ),
             api_key: String::new(),
             extra_headers: HashMap::new(),
+            temperature: None,
         })
         .await
         .expect_err("closed listener should reject the provider request");
@@ -1084,6 +1095,7 @@ mod tests {
             base_url: format!("http://{addr}/v1?token=query-secret#client-fragment"),
             api_key: String::new(),
             extra_headers: HashMap::new(),
+            temperature: None,
         })
         .await
         .unwrap();

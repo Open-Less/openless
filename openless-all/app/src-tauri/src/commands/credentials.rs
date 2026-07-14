@@ -1,6 +1,7 @@
 use super::*;
 
 const LLM_EXTRA_HEADERS_ACCOUNT: &str = "ark.extra_headers";
+const LLM_TEMPERATURE_ACCOUNT: &str = "ark.temperature";
 
 #[tauri::command]
 pub fn get_credentials() -> CredentialsStatus {
@@ -171,6 +172,11 @@ pub fn set_credential(
         let _ = window.emit("credentials:changed", ());
         return Ok(());
     }
+    if account == LLM_TEMPERATURE_ACCOUNT {
+        CredentialsVault::set_active_llm_temperature(&value).map_err(|e| e.to_string())?;
+        let _ = window.emit("credentials:changed", ());
+        return Ok(());
+    }
     let acc = parse_account(&account)?;
     if let Some(provider) = provider {
         if !matches!(
@@ -275,6 +281,9 @@ pub fn read_credential(
     ensure_main_window(&window)?;
     if account == LLM_EXTRA_HEADERS_ACCOUNT {
         return CredentialsVault::get_active_llm_extra_headers_json().map_err(|e| e.to_string());
+    }
+    if account == LLM_TEMPERATURE_ACCOUNT {
+        return Ok(CredentialsVault::get_active_llm_temperature_string());
     }
     let acc = parse_account(&account)?;
     if let Some(provider) = provider {
