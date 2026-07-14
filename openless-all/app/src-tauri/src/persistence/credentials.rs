@@ -217,6 +217,22 @@ fn active_llm_extra_headers(root: &CredsRoot) -> HashMap<String, String> {
         .unwrap_or_default()
 }
 
+fn active_llm_temperature(root: &CredsRoot) -> Option<f32> {
+    root.providers
+        .llm
+        .get(&root.active.llm)
+        .and_then(|entry| entry.temperature)
+        .map(|value| value as f32)
+}
+
+fn active_llm_temperature_string(root: &CredsRoot) -> Option<String> {
+    root.providers
+        .llm
+        .get(&root.active.llm)
+        .and_then(|entry| entry.temperature)
+        .map(|value| value.to_string())
+}
+
 fn active_llm_extra_headers_json(root: &CredsRoot) -> Result<Option<String>> {
     let headers = active_llm_extra_headers(root);
     if headers.is_empty() {
@@ -257,6 +273,21 @@ fn parse_extra_headers_json(value: &str) -> Result<HashMap<String, String>> {
         headers.insert(key.to_string(), value.to_string());
     }
     Ok(headers)
+}
+
+fn parse_llm_temperature(value: &str) -> Result<Option<f64>> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    let temperature: f64 = trimmed.parse().context("temperature must be a number")?;
+    if !temperature.is_finite() {
+        anyhow::bail!("temperature must be finite");
+    }
+    if !(0.0..=2.0).contains(&temperature) {
+        anyhow::bail!("temperature must be between 0 and 2");
+    }
+    Ok(Some(temperature))
 }
 
 fn is_valid_header_name(name: &str) -> bool {
@@ -940,11 +971,38 @@ impl CredentialsVault {
         active_llm_extra_headers_json(&load_credentials())
     }
 
+    pub fn get_active_llm_temperature() -> Option<f32> {
+        let _guard = credentials_lock().lock();
+        active_llm_temperature(&load_credentials())
+    }
+
+    pub fn get_active_llm_temperature_string() -> Option<String> {
+        let _guard = credentials_lock().lock();
+        active_llm_temperature_string(&load_credentials())
+    }
+
+    pub fn set_active_llm_temperature(value: &str) -> Result<()> {
+        let _guard = credentials_lock().lock();
+        let temperature = parse_llm_temperature(value)?;
+        let mut root = load_credentials_for_update()?;
+        let entry = root
+            .providers
+            .llm
+            .entry(root.active.llm.clone())
+            .or_default();
+        entry.temperature = temperature;
+        save_credentials(&root)
+    }
+
     pub fn set_active_llm_extra_headers_json(value: &str) -> Result<()> {
         let _guard = credentials_lock().lock();
         let headers = parse_extra_headers_json(value)?;
         let mut root = load_credentials_for_update()?;
-        let entry = root.providers.llm.entry(root.active.llm.clone()).or_default();
+        let entry = root
+            .providers
+            .llm
+            .entry(root.active.llm.clone())
+            .or_default();
         entry.extraHeaders = if headers.is_empty() {
             None
         } else {
@@ -972,7 +1030,10 @@ impl CredentialsVault {
 
 #[cfg(test)]
 mod tests {
-    use super::{chunk_json_payload, parse_extra_headers_json, KEYRING_CHUNK_MAX_UTF16_UNITS};
+    use super::{
+        chunk_json_payload, parse_extra_headers_json, parse_llm_temperature,
+        KEYRING_CHUNK_MAX_UTF16_UNITS,
+    };
 
     #[test]
     fn credential_payload_chunks_stay_under_windows_blob_limit() {
@@ -1004,6 +1065,23 @@ mod tests {
             assert!(
                 err.contains("reserved extra header name"),
                 "unexpected error for {name}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_llm_temperature_accepts_empty_and_valid_range() {
+        assert_eq!(parse_llm_temperature("").unwrap(), None);
+        assert_eq!(parse_llm_temperature(" 0.3 ").unwrap(), Some(0.3));
+        assert_eq!(parse_llm_temperature("2").unwrap(), Some(2.0));
+    }
+
+    #[test]
+    fn parse_llm_temperature_rejects_invalid_values() {
+        for value in ["abc", "-0.1", "2.1", "NaN", "inf"] {
+            assert!(
+                parse_llm_temperature(value).is_err(),
+                "{value} should be rejected"
             );
         }
     }

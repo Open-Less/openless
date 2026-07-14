@@ -36,7 +36,7 @@ pub struct OpenAICompatibleConfig {
     pub api_key: String,
     pub model: String,
     pub extra_headers: HashMap<String, String>,
-    pub temperature: f32,
+    pub temperature: Option<f32>,
     pub request_timeout_secs: u64,
     /// true = 让支持的 OpenAI-compatible provider 启用推理 / 思考；
     /// false = 按渠道级官方参数关闭或压低思考。不做模型白名单判断，
@@ -59,7 +59,7 @@ impl OpenAICompatibleConfig {
             api_key: api_key.into(),
             model: model.into(),
             extra_headers: HashMap::new(),
-            temperature: DEFAULT_TEMPERATURE,
+            temperature: Some(DEFAULT_TEMPERATURE),
             request_timeout_secs: DEFAULT_REQUEST_TIMEOUT_SECS,
             thinking_enabled: false,
         }
@@ -73,6 +73,22 @@ impl OpenAICompatibleConfig {
     pub fn with_extra_headers(mut self, extra_headers: HashMap<String, String>) -> Self {
         self.extra_headers = extra_headers;
         self
+    }
+
+    pub fn with_temperature(mut self, temperature: Option<f32>) -> Self {
+        self.temperature = temperature;
+        self
+    }
+}
+
+pub fn openai_compatible_temperature_for_provider(
+    provider_id: &str,
+    custom_temperature: Option<f32>,
+) -> Option<f32> {
+    if provider_id == "custom" {
+        custom_temperature
+    } else {
+        Some(DEFAULT_TEMPERATURE)
     }
 }
 
@@ -500,9 +516,11 @@ impl OpenAICompatibleLLMProvider {
         let mut body = json!({
             "model": self.config.model,
             "stream": stream,
-            "temperature": self.config.temperature,
             "messages": messages,
         });
+        if let Some(temperature) = self.config.temperature {
+            body["temperature"] = json!(temperature);
+        }
         apply_openai_compatible_thinking_control(&mut body, &self.config);
         body
     }
@@ -1668,7 +1686,6 @@ fn openai_chat_reasoning_effort(model: &str, thinking_enabled: bool) -> Option<&
     }
 }
 
-
 fn extract_assistant_content(body: &str) -> Result<String, LLMError> {
     let json: Value = serde_json::from_str(body)
         .map_err(|e| LLMError::ParseError(format!("not valid JSON: {}", e)))?;
@@ -1686,7 +1703,6 @@ fn extract_assistant_content(body: &str) -> Result<String, LLMError> {
         .ok_or_else(|| LLMError::ParseError("message.content is not a string".into()))?;
     Ok(clean_polish_output(content))
 }
-
 
 pub mod prompts {
     use crate::types::PolishMode;
@@ -2433,6 +2449,75 @@ mod tests {
         let body = provider.chat_body(false, vec![json!({ "role": "user", "content": "hi" })]);
 
         assert_eq!(body["reasoning_effort"], "medium");
+    }
+
+    #[test]
+    fn chat_body_omits_temperature_when_config_is_none() {
+        let provider = OpenAICompatibleLLMProvider::new(
+            OpenAICompatibleConfig::new(
+                "custom",
+                "Custom",
+                "https://example.test/v1",
+                "k",
+                "gpt-5.6-terra",
+            )
+            .with_temperature(None),
+        );
+
+        let body = provider.chat_body(false, vec![json!({ "role": "user", "content": "hi" })]);
+
+        assert!(body.get("temperature").is_none());
+    }
+
+    #[test]
+    fn chat_body_sends_configured_temperature() {
+        for temperature in [0.0, 0.3, 1.0] {
+            let provider = OpenAICompatibleLLMProvider::new(
+                OpenAICompatibleConfig::new(
+                    "custom",
+                    "Custom",
+                    "https://example.test/v1",
+                    "k",
+                    "gpt-5.6-terra",
+                )
+                .with_temperature(Some(temperature)),
+            );
+
+            let body = provider.chat_body(true, vec![json!({ "role": "user", "content": "hi" })]);
+
+            assert_eq!(body["temperature"], json!(temperature));
+        }
+    }
+
+    #[test]
+    fn chat_body_uses_default_temperature_when_unspecified() {
+        let provider = OpenAICompatibleLLMProvider::new(OpenAICompatibleConfig::new(
+            "custom",
+            "Custom",
+            "https://example.test/v1",
+            "k",
+            "qwen3-max",
+        ));
+
+        let body = provider.chat_body(true, vec![json!({ "role": "user", "content": "hi" })]);
+
+        assert_eq!(body["temperature"], json!(DEFAULT_TEMPERATURE));
+    }
+
+    #[test]
+    fn provider_temperature_policy_makes_custom_opt_in() {
+        assert_eq!(
+            openai_compatible_temperature_for_provider("custom", None),
+            None
+        );
+        assert_eq!(
+            openai_compatible_temperature_for_provider("custom", Some(0.7)),
+            Some(0.7)
+        );
+        assert_eq!(
+            openai_compatible_temperature_for_provider("openai", None),
+            Some(DEFAULT_TEMPERATURE)
+        );
     }
 
     #[test]

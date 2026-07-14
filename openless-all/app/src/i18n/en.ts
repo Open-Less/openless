@@ -783,6 +783,8 @@ export const en: typeof zhCN = {
       apiKeyLabel: 'API Key',
       baseUrlLabel: 'Base URL',
       modelLabel: 'Model',
+      temperatureLabel: 'Temperature',
+      temperaturePlaceholder: 'Leave empty to omit; e.g. 0.3',
       extraHeadersLabel: 'Extra headers',
       extraHeadersPlaceholder: '{"custom-head":"..."}',
       thinkingModeLabel: 'Thinking',

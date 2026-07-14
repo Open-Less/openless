@@ -785,6 +785,8 @@ export const ko: typeof zhCN = {
       apiKeyLabel: 'API 키',
       baseUrlLabel: '엔드포인트',
       modelLabel: '모델',
+      temperatureLabel: 'Temperature',
+      temperaturePlaceholder: '비워 두면 보내지 않음. 예: 0.3',
       extraHeadersLabel: '추가 Headers',
       extraHeadersPlaceholder: '{"custom-head":"..."}',
       thinkingModeLabel: '사고',
