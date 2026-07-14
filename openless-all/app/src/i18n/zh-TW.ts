@@ -826,7 +826,7 @@ export const zhTW: typeof zhCN = {
       baseUrlLabel: '接口地址',
       modelLabel: '模型',
       temperatureLabel: 'Temperature',
-      temperaturePlaceholder: '留空則不發送；例如 0.3',
+      temperaturePlaceholder: '留空則不發送；範圍 0～2（含邊界），例如 0.3',
       extraHeadersLabel: '額外 Headers',
       extraHeadersPlaceholder: '{"custom-head":"..."}',
       thinkingModeLabel: '思考',

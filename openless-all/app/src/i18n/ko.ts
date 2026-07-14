@@ -828,7 +828,7 @@ export const ko: typeof zhCN = {
       baseUrlLabel: '엔드포인트',
       modelLabel: '모델',
       temperatureLabel: 'Temperature',
-      temperaturePlaceholder: '비워 두면 보내지 않음. 예: 0.3',
+      temperaturePlaceholder: '비워 두면 보내지 않음. 범위 0~2(양 끝 포함), 예: 0.3',
       extraHeadersLabel: '추가 Headers',
       extraHeadersPlaceholder: '{"custom-head":"..."}',
       thinkingModeLabel: '사고',
