@@ -161,3 +161,9 @@ opt-level = 3
 lto = "thin"
 codegen-units = 1
 strip = "symbols"
+
+# issue #801: wayland-scanner 0.31.10 still pins vulnerable quick-xml 0.39.
+# This local copy backports upstream security commit d07c4f91f28b without
+# pulling the breaking, unreleased wayland-rs master branch.
+[patch.crates-io]
+wayland-scanner = { path = "vendor/wayland-scanner" }
