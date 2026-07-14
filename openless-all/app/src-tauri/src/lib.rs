@@ -32,6 +32,7 @@ mod correction;
 // Linux 退化为纯轮询兜底。仅桌面端。详见 issue #470。
 #[cfg(not(mobile))]
 mod device_watch;
+mod endpoint_security;
 mod external_url;
 #[cfg(not(mobile))]
 mod global_hotkey_runtime;

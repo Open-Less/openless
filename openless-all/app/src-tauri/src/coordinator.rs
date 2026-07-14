@@ -26,8 +26,8 @@ use crate::asr::local::{
 };
 use crate::asr::{
     BailianCredentials, BailianRealtimeASR, DashScopeMultimodalASR, DictionaryHotword,
-    MimoBatchASR, Qwen3RealtimeASR, Qwen3RealtimeCredentials, RawTranscript, VolcengineCredentials,
-    VolcengineStreamingASR, WhisperBatchASR,
+    ElevenLabsBatchASR, MimoBatchASR, Qwen3RealtimeASR, Qwen3RealtimeCredentials, RawTranscript,
+    VolcengineCredentials, VolcengineStreamingASR, WhisperBatchASR,
 };
 use crate::combo_hotkey::{ComboHotkeyError, ComboHotkeyEvent, ComboHotkeyMonitor};
 use crate::coordinator_state::{
@@ -182,6 +182,7 @@ enum ActiveAsr {
     Mimo(Arc<MimoBatchASR>),
     /// 百炼 Fun-ASR-Flash 录音文件识别（DashScope multimodal-generation 批量 HTTP）。
     DashScopeMultimodal(Arc<DashScopeMultimodalASR>),
+    ElevenLabs(Arc<ElevenLabsBatchASR>),
     Bailian(Arc<BailianRealtimeASR>),
     /// 百炼 Qwen3-ASR-Flash 实时（OpenAI Realtime 风格 WS 协议）。
     Qwen3Realtime(Arc<Qwen3RealtimeASR>),
@@ -224,6 +225,7 @@ pub(crate) enum ActiveAsrProviderKind {
     Qwen3Realtime,
     Mimo,
     DashScopeMultimodal,
+    ElevenLabs,
     WhisperCompatible,
     Volcengine,
 }
@@ -258,6 +260,7 @@ impl ActiveAsrProviderKind {
             | ActiveAsrProviderKind::Qwen3Realtime
             | ActiveAsrProviderKind::Mimo
             | ActiveAsrProviderKind::DashScopeMultimodal
+            | ActiveAsrProviderKind::ElevenLabs
             | ActiveAsrProviderKind::WhisperCompatible => AsrPreflightCredential::AsrApiKey,
             ActiveAsrProviderKind::Volcengine => AsrPreflightCredential::VolcAppKey,
         }
@@ -265,7 +268,9 @@ impl ActiveAsrProviderKind {
 
     pub(crate) fn configured_fields(self) -> AsrConfiguredFields {
         match self {
-            ActiveAsrProviderKind::Bailian | ActiveAsrProviderKind::Qwen3Realtime => {
+            ActiveAsrProviderKind::Bailian
+            | ActiveAsrProviderKind::Qwen3Realtime
+            | ActiveAsrProviderKind::ElevenLabs => {
                 AsrConfiguredFields::ApiKeyOnly
             }
             ActiveAsrProviderKind::Mimo | ActiveAsrProviderKind::DashScopeMultimodal => {
@@ -286,6 +291,8 @@ pub(crate) fn active_asr_provider_kind(id: &str) -> ActiveAsrProviderKind {
         ActiveAsrProviderKind::Mimo
     } else if is_dashscope_multimodal_provider(id) {
         ActiveAsrProviderKind::DashScopeMultimodal
+    } else if is_elevenlabs_provider(id) {
+        ActiveAsrProviderKind::ElevenLabs
     } else if is_whisper_compatible_provider(id) {
         ActiveAsrProviderKind::WhisperCompatible
     } else {
@@ -1787,6 +1794,9 @@ impl Coordinator {
         let dashscope_timeout = whisper_transcribe_timeout(
             crate::asr::pcm::pcm_duration_ms(&pcm) as f64 / 1000.0,
         );
+        let elevenlabs_timeout = crate::asr::elevenlabs::transcribe_timeout(
+            crate::asr::pcm::pcm_duration_ms(&pcm) as f64 / 1000.0,
+        );
         let raw = match start.active_asr() {
             ActiveAsr::Volcengine(asr) => {
                 asr.send_last_frame().await.map_err(|e| e.to_string())?;
@@ -1822,6 +1832,12 @@ impl Coordinator {
                 .await
                 .map_err(|_| "重新转录超时".to_string())?
                 .map_err(|e| e.to_string())?
+            }
+            ActiveAsr::ElevenLabs(e) => {
+                tokio::time::timeout(elevenlabs_timeout, e.transcribe())
+                    .await
+                    .map_err(|_| "重新转录超时".to_string())?
+                    .map_err(|e| e.to_string())?
             }
             #[cfg(target_os = "windows")]
             ActiveAsr::FoundryLocalWhisper(local) => {
@@ -2217,6 +2233,24 @@ fn read_mimo_credentials() -> (String, String, String) {
         .flatten()
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| crate::asr::mimo::DEFAULT_MODEL.to_string());
+    (api_key, base_url, model)
+}
+
+fn read_elevenlabs_credentials() -> (String, String, String) {
+    let api_key = CredentialsVault::get(CredentialAccount::AsrApiKey)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let base_url = CredentialsVault::get(CredentialAccount::AsrEndpoint)
+        .ok()
+        .flatten()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| crate::asr::elevenlabs::DEFAULT_ENDPOINT.to_string());
+    let model = CredentialsVault::get(CredentialAccount::AsrModel)
+        .ok()
+        .flatten()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| crate::asr::elevenlabs::DEFAULT_MODEL.to_string());
     (api_key, base_url, model)
 }
 
@@ -2687,6 +2721,10 @@ mod tests {
             ActiveAsrProviderKind::DashScopeMultimodal
         );
         assert_eq!(
+            active_asr_provider_kind(crate::asr::elevenlabs::PROVIDER_ID),
+            ActiveAsrProviderKind::ElevenLabs
+        );
+        assert_eq!(
             active_asr_provider_kind("volcengine"),
             ActiveAsrProviderKind::Volcengine
         );
@@ -2708,6 +2746,7 @@ mod tests {
         assert_eq!(Qwen3Realtime.preflight_credential(), AsrApiKey);
         assert_eq!(Mimo.preflight_credential(), AsrApiKey);
         assert_eq!(DashScopeMultimodal.preflight_credential(), AsrApiKey);
+        assert_eq!(ElevenLabs.preflight_credential(), AsrApiKey);
         assert_eq!(WhisperCompatible.preflight_credential(), AsrApiKey);
         assert_eq!(Volcengine.preflight_credential(), VolcAppKey);
     }
@@ -2801,6 +2840,7 @@ mod tests {
         assert_eq!(Qwen3Realtime.configured_fields(), ApiKeyOnly);
         assert_eq!(Mimo.configured_fields(), ApiKeyEndpointModel);
         assert_eq!(DashScopeMultimodal.configured_fields(), ApiKeyEndpointModel);
+        assert_eq!(ElevenLabs.configured_fields(), ApiKeyOnly);
         assert_eq!(WhisperCompatible.configured_fields(), EndpointModelOnly);
         assert_eq!(Volcengine.configured_fields(), VolcAppKey);
     }
@@ -3596,87 +3636,6 @@ fn whisper_transcribe_timeout(audio_secs: f64) -> std::time::Duration {
         .saturating_add(20)
         .max(COORDINATOR_GLOBAL_TIMEOUT_SECS);
     std::time::Duration::from_secs(secs)
-}
-
-pub(crate) fn validate_llm_endpoint(raw: &str) -> anyhow::Result<()> {
-    use std::net::IpAddr;
-
-    let url =
-        url::Url::parse(raw).map_err(|e| anyhow::anyhow!("LLM endpoint 不是合法 URL：{e}"))?;
-    let host = url
-        .host_str()
-        .ok_or_else(|| anyhow::anyhow!("LLM endpoint 缺少主机名"))?
-        .to_ascii_lowercase();
-
-    const METADATA_HOSTS: [&str; 2] = ["metadata.google.internal", "169.254.169.254"];
-    if METADATA_HOSTS.iter().any(|m| host.contains(m)) {
-        anyhow::bail!("LLM endpoint 指向云元数据服务，已拒绝：{host}");
-    }
-
-    let scheme = url.scheme();
-    let bare_host = host
-        .strip_prefix('[')
-        .and_then(|h| h.strip_suffix(']'))
-        .unwrap_or(host.as_str());
-
-    let Ok(ip) = bare_host.parse::<IpAddr>() else {
-        if bare_host == "localhost" {
-            return Ok(());
-        }
-        if scheme != "https" {
-            anyhow::bail!("LLM endpoint 必须使用 https（仅 localhost / 局域网允许 http）：{raw}");
-        }
-        return Ok(());
-    };
-
-    let canonical = match ip {
-        IpAddr::V6(v6) => v6.to_ipv4_mapped().map(IpAddr::V4).unwrap_or(ip),
-        v4 => v4,
-    };
-
-    let is_lan = match canonical {
-        IpAddr::V4(v4) => ip_v4_is_lan(v4),
-        IpAddr::V6(v6) => ip_v6_is_lan(v6),
-    };
-    if is_lan {
-        return Ok(());
-    }
-
-    let is_blocked = match canonical {
-        IpAddr::V4(v4) => ip_v4_is_blocked(v4),
-        IpAddr::V6(v6) => ip_v6_is_blocked(v6),
-    };
-    if is_blocked {
-        anyhow::bail!("LLM endpoint 指向保留/危险地址，已拒绝（防 SSRF）：{ip}");
-    }
-
-    if scheme != "https" {
-        anyhow::bail!("LLM endpoint 必须使用 https（仅 localhost / 局域网允许 http）：{raw}");
-    }
-
-    Ok(())
-}
-
-fn ip_v4_is_lan(ip: std::net::Ipv4Addr) -> bool {
-    ip.is_loopback() || ip.is_private()
-}
-
-fn ip_v4_is_blocked(ip: std::net::Ipv4Addr) -> bool {
-    let octets = ip.octets();
-    let is_cgnat = octets[0] == 100 && (64..=127).contains(&octets[1]);
-    ip.is_link_local() || ip.is_unspecified() || ip.is_broadcast() || is_cgnat
-}
-
-fn ip_v6_is_lan(ip: std::net::Ipv6Addr) -> bool {
-    let segs = ip.segments();
-    let is_ula = (segs[0] & 0xfe00) == 0xfc00;
-    ip.is_loopback() || is_ula
-}
-
-fn ip_v6_is_blocked(ip: std::net::Ipv6Addr) -> bool {
-    let segs = ip.segments();
-    let is_link_local = (segs[0] & 0xffc0) == 0xfe80;
-    ip.is_unspecified() || is_link_local
 }
 
 /// 检查 begin_session 的 await 间隙是否被 cancel_session 打断。

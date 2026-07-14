@@ -285,6 +285,22 @@ pub(super) async fn transcribe_overlay_dictation_asr(
                 Err(_) => Err("dashscope multimodal global timeout".to_string()),
             }
         }
+        ActiveAsr::ElevenLabs(asr) => {
+            debug_assert!(uses_global_timeout);
+            let audio_secs = asr.buffer_duration_ms() as f64 / 1000.0;
+            let timeout_duration = crate::asr::elevenlabs::transcribe_timeout(audio_secs);
+            tokio::select! {
+                result = tokio::time::timeout(timeout_duration, asr.transcribe()) => match result {
+                    Ok(Ok(raw)) => Ok(raw),
+                    Ok(Err(error)) => Err(error.to_string()),
+                    Err(_) => Err("elevenlabs dynamic timeout".to_string()),
+                },
+                _ = wait_for_overlay_dictation_cancel(_inner, _current_session_id) => {
+                    asr.cancel();
+                    Err("dictation cancelled".to_string())
+                }
+            }
+        }
         #[cfg(target_os = "windows")]
         ActiveAsr::FoundryLocalWhisper(local) => {
             debug_assert!(!uses_global_timeout);
@@ -892,6 +908,30 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
                 }
             }
         }
+        ActiveAsr::ElevenLabs(e) => {
+            debug_assert!(uses_global_timeout);
+            let audio_secs = e.buffer_duration_ms() as f64 / 1000.0;
+            let timeout_duration = crate::asr::elevenlabs::transcribe_timeout(audio_secs);
+            tokio::select! {
+                result = tokio::time::timeout(timeout_duration, e.transcribe()) => match result {
+                    Ok(Ok(raw)) => raw,
+                    Ok(Err(error)) => {
+                        log::error!("[coord] QA: ElevenLabs ASR transcribe failed: {error}");
+                        finish_qa_with_error(inner, format!("识别失败: {error}"));
+                        return Err(error.to_string());
+                    }
+                    Err(_) => {
+                        finish_qa_with_error(inner, "识别超时".to_string());
+                        return Err("elevenlabs dynamic timeout".to_string());
+                    }
+                },
+                _ = wait_for_qa_processing_cancel(inner) => {
+                    e.cancel();
+                    finish_qa_idle_silently(inner);
+                    return Ok(());
+                }
+            }
+        }
         #[cfg(target_os = "windows")]
         ActiveAsr::FoundryLocalWhisper(local) => {
             debug_assert!(!uses_global_timeout);
@@ -1236,6 +1276,27 @@ pub(super) fn finish_qa_idle_silently(inner: &Arc<Inner>) {
     state.phase = QaPhase::Idle;
     state.cancelled = false;
     state.selection = None;
+}
+
+async fn wait_for_qa_processing_cancel(inner: &Arc<Inner>) {
+    loop {
+        if inner.qa_state.lock().cancelled {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}
+
+async fn wait_for_overlay_dictation_cancel(inner: &Arc<Inner>, session_id: SessionId) {
+    loop {
+        {
+            let state = inner.state.lock();
+            if state.cancelled || state.session_id != session_id {
+                return;
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
 }
 
 pub(super) fn cancel_qa_session(inner: &Arc<Inner>) {

@@ -948,6 +948,28 @@ impl CredentialsVault {
         save_credentials(&root)
     }
 
+    pub fn get_for_asr_provider(id: &str, account: CredentialAccount) -> Result<Option<String>> {
+        let _guard = credentials_lock().lock();
+        let mut root = load_credentials();
+        root.active.asr = id.to_string();
+        Ok(lookup_account(&root, account))
+    }
+
+    pub fn set_for_asr_provider(
+        id: &str,
+        account: CredentialAccount,
+        value: &str,
+    ) -> Result<()> {
+        let _guard = credentials_lock().lock();
+        let mut root = load_credentials_for_update()?;
+        let active = root.active.asr.clone();
+        root.active.asr = id.to_string();
+        let value = (!value.is_empty()).then(|| value.to_string());
+        write_account(&mut root, account, value);
+        root.active.asr = active;
+        save_credentials(&root)
+    }
+
     pub fn remove(account: CredentialAccount) -> Result<()> {
         let _guard = credentials_lock().lock();
         let mut root = load_credentials_for_update()?;

@@ -69,6 +69,7 @@ pub(super) fn cancel_active_asr(asr: ActiveAsr) {
         ActiveAsr::Whisper(w) => w.cancel(),
         ActiveAsr::Mimo(m) => m.cancel(),
         ActiveAsr::DashScopeMultimodal(m) => m.cancel(),
+        ActiveAsr::ElevenLabs(e) => e.cancel(),
         ActiveAsr::Bailian(b) => b.cancel(),
         ActiveAsr::Qwen3Realtime(q) => q.cancel(),
         #[cfg(target_os = "windows")]

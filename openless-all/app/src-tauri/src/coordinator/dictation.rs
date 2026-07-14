@@ -1631,6 +1631,7 @@ pub(super) async fn begin_session_as(
         | ActiveAsrProviderKind::Qwen3Realtime
         | ActiveAsrProviderKind::Mimo
         | ActiveAsrProviderKind::DashScopeMultimodal
+        | ActiveAsrProviderKind::ElevenLabs
         | ActiveAsrProviderKind::WhisperCompatible
         | ActiveAsrProviderKind::Volcengine => {}
     }
@@ -1802,6 +1803,17 @@ pub(super) async fn begin_session_as(
             inner,
             current_session_id,
             ActiveAsr::DashScopeMultimodal(Arc::clone(&asr)),
+        );
+        let consumer: Arc<dyn crate::recorder::AudioConsumer> = asr;
+        start_recorder_and_enter_listening(inner, current_session_id, &active_asr, consumer)
+            .await?;
+    } else if is_elevenlabs_provider(&effective_asr) {
+        let (api_key, base_url, model) = read_elevenlabs_credentials();
+        let asr = Arc::new(ElevenLabsBatchASR::new(api_key, base_url, model));
+        store_asr_for_session(
+            inner,
+            current_session_id,
+            ActiveAsr::ElevenLabs(Arc::clone(&asr)),
         );
         let consumer: Arc<dyn crate::recorder::AudioConsumer> = asr;
         start_recorder_and_enter_listening(inner, current_session_id, &active_asr, consumer)
@@ -2528,6 +2540,30 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
                                 "dashscope multimodal global timeout".to_string(),
                             ))
                         }
+                    }
+                }
+                ActiveAsr::ElevenLabs(e) => {
+                    debug_assert!(uses_global_timeout);
+                    let audio_secs = e.buffer_duration_ms() as f64 / 1000.0;
+                    let timeout_duration = crate::asr::elevenlabs::transcribe_timeout(audio_secs);
+                    log::info!(
+                        "[coord] ElevenLabs dynamic timeout: {}s (audio {:.2}s)",
+                        timeout_duration.as_secs(),
+                        audio_secs
+                    );
+                    match tokio::time::timeout(timeout_duration, e.transcribe()).await {
+                        Ok(Ok(r)) => Ok(r),
+                        Ok(Err(error)) => {
+                            log::error!("[coord] ElevenLabs ASR transcribe failed: {error}");
+                            Err(TranscribeFail::new(
+                                format!("识别失败: {error}"),
+                                error.to_string(),
+                            ))
+                        }
+                        Err(_) => Err(TranscribeFail::new(
+                            "识别超时".to_string(),
+                            "elevenlabs dynamic timeout".to_string(),
+                        )),
                     }
                 }
                 ActiveAsr::Bailian(asr) => {

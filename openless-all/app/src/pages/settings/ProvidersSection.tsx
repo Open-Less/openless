@@ -288,18 +288,20 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
         await updatePrefs(next);
         if (seq !== asrSwitchSeqRef.current) return;
       }
-      // asr.endpoint / asr.model 是所有 ASR 厂商共用的一对凭据槽（persistence.rs
-      // 未做 per-provider 隔离）。若只在槽空时填默认值，老用户从 A 厂商切到 B 厂商
-      // 时槽里仍是 A 的 endpoint/model —— dropdown 切了、实际还打 A 的地址。改成切到
-      // 有默认值的预设就强制覆盖，让切换真切到位。volcengine 走另一套凭据、本地引擎
-      // 无 baseUrl，都被 if 守卫天然跳过。与 onLlmProviderChange 同款修法。
+      // 凭据按 provider 隔离。切换回来时优先保留该 provider 已保存的自定义值，
+      // 仅在当前 entry 为空时写入 preset 默认值。
       const preset = ASR_PRESETS.find(p => p.id === id);
-      if (preset && preset.baseUrl) {
-        await setCredential('asr.endpoint', preset.baseUrl);
+      const [storedEndpoint, storedModel] = await Promise.all([
+        readCredential('asr.endpoint', id),
+        readCredential('asr.model', id),
+      ]);
+      if (seq !== asrSwitchSeqRef.current) return;
+      if (preset?.baseUrl && !storedEndpoint?.trim()) {
+        await setCredential('asr.endpoint', preset.baseUrl, id);
         if (seq !== asrSwitchSeqRef.current) return;
       }
-      if (preset && preset.model) {
-        await setCredential('asr.model', preset.model);
+      if (preset?.model && !storedModel?.trim()) {
+        await setCredential('asr.model', preset.model, id);
         if (seq !== asrSwitchSeqRef.current) return;
       }
       setCommittedAsrProvider(id);
@@ -446,6 +448,7 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
               key={`${committedAsrProvider}:app_key`}
               label={t('settings.providers.volcengineAppKeyLabel')}
               account="volcengine.app_key"
+              provider={committedAsrProvider}
               mono
               mask
             />
@@ -453,6 +456,7 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
               key={`${committedAsrProvider}:access_key`}
               label={t('settings.providers.volcengineAccessKeyLabel')}
               account="volcengine.access_key"
+              provider={committedAsrProvider}
               mono
               mask
             />
@@ -460,6 +464,7 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
               key={`${committedAsrProvider}:resource_id`}
               label={t('settings.providers.volcengineResourceIdLabel')}
               account="volcengine.resource_id"
+              provider={committedAsrProvider}
               mono
               placeholder={ASR_DEFAULT_RESOURCE_ID} defaultValue={ASR_DEFAULT_RESOURCE_ID} />
             <div style={{ marginTop: 2, fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.6 }}>
@@ -473,12 +478,14 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
           null
         ) : (
           <>
-            <CredentialField key={`${committedAsrProvider}:api_key`} label={t('settings.providers.apiKeyLabel')} account="asr.api_key" mono mask />
+            <CredentialField key={`${committedAsrProvider}:api_key`} label={t('settings.providers.apiKeyLabel')} account="asr.api_key" provider={committedAsrProvider} mono mask />
             {/* 统一百炼保留 endpoint 供用户选择区域或工作空间域名；后端按模型转换协议与路径。 */}
             <CredentialField key={`${committedAsrProvider}:endpoint`} label={t('settings.providers.baseUrlLabel')} account="asr.endpoint"
+              provider={committedAsrProvider}
               placeholder={asrPreset?.baseUrl || 'https://api.openai.com/v1'}
               defaultValue={asrPreset?.baseUrl || undefined} />
             <CredentialField key={`${committedAsrProvider}:model:${asrModelRevision}`} label={t('settings.providers.modelLabel')} account="asr.model"
+              provider={committedAsrProvider}
               placeholder={unifiedBailian ? 'fun-asr-realtime' : (asrPreset?.model || 'whisper-1')}
               onValueChange={unifiedBailian ? setBailianModel : undefined} />
             {unifiedBailian && (
@@ -490,6 +497,7 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
                   key={`${committedAsrProvider}:vocabulary_id`}
                   label={t('settings.providers.bailianVocabularyIdLabel')}
                   account="asr.vocabulary_id"
+                  provider={committedAsrProvider}
                   mono
                   placeholder="vocab-..."
                 />
@@ -498,8 +506,13 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
                 </div>
               </>
             )}
+            {committedAsrProvider === 'elevenlabs' && (
+              <div role="note" style={{ marginTop: 2, fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.6 }}>
+                {t('settings.providers.elevenLabsUploadNotice')}
+              </div>
+            )}
             {/* 统一百炼「拉取模型」只写 model，不覆盖用户选择的区域或工作空间 endpoint。 */}
-            <ProviderTools kind="asr" modelAccount="asr.model" onModelSelected={() => setAsrModelRevision(v => v + 1)} />
+            <ProviderTools kind="asr" modelAccount="asr.model" provider={committedAsrProvider} onModelSelected={() => setAsrModelRevision(v => v + 1)} />
           </>
         )}
       </Card>
@@ -556,7 +569,7 @@ function BailianProtocolHint({ currentModel }: { currentModel: string }) {
 
 type ProviderToolStatus = 'idle' | 'loading' | 'success' | 'empty' | 'error';
 
-function ProviderTools({ kind, modelAccount, onModelSelected, showFetchModels = true }: { kind: 'llm' | 'asr'; modelAccount: string; onModelSelected: () => void; showFetchModels?: boolean }) {
+function ProviderTools({ kind, modelAccount, provider, onModelSelected, showFetchModels = true }: { kind: 'llm' | 'asr'; modelAccount: string; provider?: string; onModelSelected: () => void; showFetchModels?: boolean }) {
   const { t } = useTranslation();
   const mobile = useMobileLayout();
   const [models, setModels] = useState<string[]>([]);
@@ -613,7 +626,7 @@ function ProviderTools({ kind, modelAccount, onModelSelected, showFetchModels = 
   const applyModel = async (model: string) => {
     setResult('loading', t('common.saving'));
     try {
-      await setCredential(modelAccount, model);
+      await setCredential(modelAccount, model, provider);
       setSelectedModel(model);
       onModelSelected();
       setResult('success', t('settings.providers.modelSaved', { model }));
@@ -678,6 +691,7 @@ type CredentialFieldStatus = 'idle' | 'saving' | 'saved' | 'readError' | 'saveEr
 interface CredentialFieldProps {
   label: string;
   account: string;
+  provider?: string;
   placeholder?: string;
   mono?: boolean;
   mask?: boolean;
@@ -686,7 +700,7 @@ interface CredentialFieldProps {
   onValueChange?: (value: string) => void;
 }
 
-function CredentialField({ label, account, placeholder, mono, mask, defaultValue, trailing, onValueChange }: CredentialFieldProps) {
+function CredentialField({ label, account, provider, placeholder, mono, mask, defaultValue, trailing, onValueChange }: CredentialFieldProps) {
   const { t } = useTranslation();
   const mobile = useMobileLayout();
   const [value, setValue] = useState('');
@@ -709,7 +723,7 @@ function CredentialField({ label, account, placeholder, mono, mask, defaultValue
       clearTimeout(debounceRef.current);
       debounceRef.current = null;
     }
-    readCredential(account)
+    readCredential(account, provider)
       .then(v => {
         if (cancelled) return;
         setValue(v ?? '');
@@ -726,7 +740,7 @@ function CredentialField({ label, account, placeholder, mono, mask, defaultValue
     return () => {
       cancelled = true;
     };
-  }, [account, onValueChange]);
+  }, [account, provider, onValueChange]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -763,7 +777,7 @@ function CredentialField({ label, account, placeholder, mono, mask, defaultValue
     setStatus('saving');
     emitSaved('saving', t('common.saving'));
     try {
-      await setCredential(account, v);
+      await setCredential(account, v, provider);
       if (!mountedRef.current) return;
       setDirty(false);
       showTemporaryStatus('saved');

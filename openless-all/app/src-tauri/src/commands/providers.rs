@@ -84,6 +84,12 @@ pub async fn list_provider_models(kind: String) -> Result<ProviderModelsResult, 
             models: vec![crate::asr::dashscope_multimodal::DEFAULT_MODEL.to_string()],
         });
     }
+    if kind == "asr" && CredentialsVault::get_active_asr() == crate::asr::elevenlabs::PROVIDER_ID {
+        validate_elevenlabs_asr_provider().await?;
+        return Ok(ProviderModelsResult {
+            models: vec![crate::asr::elevenlabs::DEFAULT_MODEL.to_string()],
+        });
+    }
     if kind == "llm" && CredentialsVault::get_active_llm() == CODEX_OAUTH_PROVIDER_ID {
         return Ok(ProviderModelsResult {
             models: vec![
@@ -142,7 +148,7 @@ fn read_openai_provider_config(kind: &str) -> Result<ProviderConfig, String> {
     // 校验，拒绝指向内网/回环/link-local/CGNAT/IPv6 ULA/元数据服务的地址；localhost/
     // 127.0.0.1/::1 仍放行 http（本地 Whisper 服务）。覆盖 validate_provider_credentials
     // (asr/llm) 连通性测试与 list_provider_models 模型列表两条 HTTP 路径。
-    crate::coordinator::validate_llm_endpoint(&base_url)
+    crate::endpoint_security::validate_http_endpoint(&base_url)
         .map_err(|_| "endpointInvalid".to_string())?;
     Ok(ProviderConfig {
         base_url,
@@ -260,6 +266,9 @@ async fn validate_asr_provider() -> Result<(), String> {
         crate::coordinator::validate_dashscope_multimodal_model(&model)?;
         return validate_dashscope_multimodal_asr_provider().await;
     }
+    if active_asr == crate::asr::elevenlabs::PROVIDER_ID {
+        return validate_elevenlabs_asr_provider().await;
+    }
 
     let config = read_openai_provider_config("asr")?;
     let model = CredentialsVault::get(CredentialAccount::AsrModel)
@@ -284,6 +293,39 @@ async fn validate_mimo_asr_provider() -> Result<(), String> {
         .await
         .map(|_| ())
         .map_err(|e| e.to_string())
+}
+
+async fn validate_elevenlabs_asr_provider() -> Result<(), String> {
+    let api_key = CredentialsVault::get(CredentialAccount::AsrApiKey)
+        .map_err(|e| e.to_string())?
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "API Key 为空".to_string())?;
+    let base_url = CredentialsVault::get(CredentialAccount::AsrEndpoint)
+        .map_err(|e| e.to_string())?
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| crate::asr::elevenlabs::DEFAULT_ENDPOINT.to_string());
+    crate::endpoint_security::validate_http_endpoint(&base_url)
+        .map_err(|_| "endpointInvalid".to_string())?;
+    let model = CredentialsVault::get(CredentialAccount::AsrModel)
+        .map_err(|e| e.to_string())?
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| crate::asr::elevenlabs::DEFAULT_MODEL.to_string());
+    let asr = crate::asr::ElevenLabsBatchASR::new(api_key, base_url, model);
+    crate::recorder::AudioConsumer::consume_pcm_chunk(
+        &asr,
+        &encode_wav_16k_mono_silence(250)[44..],
+    );
+    asr.transcribe().await.map(|_| ()).map_err(|error| {
+        if error.chain().any(|cause| {
+            cause
+                .downcast_ref::<reqwest::Error>()
+                .is_some_and(reqwest::Error::is_timeout)
+        }) {
+            "providerRequestTimeout".to_string()
+        } else {
+            error.to_string()
+        }
+    })
 }
 
 /// fun-asr-flash 官方公开示例音频，用于连通性校验。该模型对纯静音会返回
@@ -361,7 +403,7 @@ async fn validate_bailian_asr_provider() -> Result<(), String> {
         return Err("API Key 为空".to_string());
     }
     // 已知残留（issue #609 F-01 孪生 gap）：Bailian endpoint 走 `wss://`，与 http/https-only 的
-    // validate_llm_endpoint 不兼容，无法直接复用，需单独的 ws/wss 感知 SSRF 校验器（超本次范围）。
+    // validate_http_endpoint 不兼容，无法直接复用，需单独的 ws/wss 感知 SSRF 校验器（超本次范围）。
     let stored_endpoint = CredentialsVault::get(CredentialAccount::AsrEndpoint)
         .map_err(|e| e.to_string())?
         .filter(|s| !s.trim().is_empty())
@@ -745,29 +787,29 @@ mod tests {
     // API Key 发请求，read_openai_provider_config（连通性测试 + 模型列表 chokepoint）现在复用
     // LLM 路径的 SSRF 校验。read_openai_provider_config 依赖凭据库无法纯单测，这里直接对它调用
     // 的校验器锁定 ASR 形态 endpoint 的拒绝/放行契约。
-    use crate::coordinator::validate_llm_endpoint;
+    use crate::endpoint_security::validate_http_endpoint;
 
     #[test]
     fn asr_endpoint_rejects_metadata_cgnat_and_non_https_public() {
         // 元数据 / CGNAT / 非 https 外网：拒绝，避免带 API Key 的 ASR 请求被指向高价值目标 / 明文外泄。
-        assert!(validate_llm_endpoint("http://169.254.169.254/v1/audio/transcriptions").is_err());
-        assert!(validate_llm_endpoint("http://100.64.0.1/v1/audio/transcriptions").is_err());
-        assert!(validate_llm_endpoint("http://api.example.com/v1/audio/transcriptions").is_err());
+        assert!(validate_http_endpoint("http://169.254.169.254/v1/audio/transcriptions").is_err());
+        assert!(validate_http_endpoint("http://100.64.0.1/v1/audio/transcriptions").is_err());
+        assert!(validate_http_endpoint("http://api.example.com/v1/audio/transcriptions").is_err());
     }
 
     #[test]
     fn asr_endpoint_accepts_public_https_localhost_and_lan() {
         // 公网 https（如自建 Whisper 网关）放行。
-        validate_llm_endpoint("https://api.example.com/v1/audio/transcriptions")
+        validate_http_endpoint("https://api.example.com/v1/audio/transcriptions")
             .expect("公网 https ASR endpoint 必须通过");
         // 本地 Whisper 服务：localhost / 127.0.0.1 http 放行。
-        validate_llm_endpoint("http://localhost:9000/v1").expect("本地 Whisper http 必须通过");
-        validate_llm_endpoint("http://127.0.0.1:9000/v1").expect("本地 Whisper http 必须通过");
+        validate_http_endpoint("http://localhost:9000/v1").expect("本地 Whisper http 必须通过");
+        validate_http_endpoint("http://127.0.0.1:9000/v1").expect("本地 Whisper http 必须通过");
         // F-01 放宽：局域网（RFC1918）http ASR 网关放行（用户局域网自托管 Whisper）。
-        validate_llm_endpoint("http://192.168.1.50:9000/v1/audio/transcriptions")
+        validate_http_endpoint("http://192.168.1.50:9000/v1/audio/transcriptions")
             .expect("局域网 http ASR endpoint 必须通过");
         // Mimo 官方默认 endpoint（https）放行。
-        validate_llm_endpoint(crate::asr::mimo::DEFAULT_ENDPOINT)
+        validate_http_endpoint(crate::asr::mimo::DEFAULT_ENDPOINT)
             .expect("Mimo 官方默认 endpoint 必须通过");
     }
 }

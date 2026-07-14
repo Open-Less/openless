@@ -366,6 +366,10 @@ pub(super) fn is_dashscope_multimodal_provider(id: &str) -> bool {
     id == crate::asr::dashscope_multimodal::PROVIDER_ID
 }
 
+pub(super) fn is_elevenlabs_provider(id: &str) -> bool {
+    id == crate::asr::elevenlabs::PROVIDER_ID
+}
+
 pub(super) fn apply_chinese_script_preference(text: &str, pref: ChineseScriptPreference) -> String {
     if text.is_empty() {
         return String::new();
@@ -563,6 +567,13 @@ pub(super) async fn build_qa_asr_start(inner: &Arc<Inner>, active_asr: &str) -> 
             let (api_key, base_url, model) = read_dashscope_multimodal_credentials();
             let asr = Arc::new(DashScopeMultimodalASR::new(api_key, base_url, model));
             let active = ActiveAsr::DashScopeMultimodal(Arc::clone(&asr));
+            let consumer: Arc<dyn crate::recorder::AudioConsumer> = asr;
+            Ok(QaAsrStart::Ready { active, consumer })
+        }
+        ActiveAsrProviderKind::ElevenLabs => {
+            let (api_key, base_url, model) = read_elevenlabs_credentials();
+            let asr = Arc::new(ElevenLabsBatchASR::new(api_key, base_url, model));
+            let active = ActiveAsr::ElevenLabs(Arc::clone(&asr));
             let consumer: Arc<dyn crate::recorder::AudioConsumer> = asr;
             Ok(QaAsrStart::Ready { active, consumer })
         }
