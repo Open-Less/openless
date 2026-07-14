@@ -20,12 +20,12 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
 use block2::RcBlock;
-use objc2::msg_send;
 use objc2::runtime::{AnyClass, AnyObject, Bool};
+use objc2::{msg_send, sel};
 use parking_lot::Mutex;
 
 use crate::asr::wav::encode_wav_16k_mono;
@@ -37,13 +37,24 @@ const SF_AUTH_DENIED: i64 = 1;
 const SF_AUTH_RESTRICTED: i64 = 2;
 const SF_AUTH_AUTHORIZED: i64 = 3;
 
-/// 等待识别 / 授权回调的兜底超时。识别本身另有 coordinator 侧动态超时；
-/// 这里只防 block 永不回调导致线程永久阻塞。
+/// 等待识别回调的兜底超时**下限**。识别本身另有 coordinator 侧动态超时；这里只防
+/// block 永不回调导致线程永久阻塞。长录音按音频时长放大，见 `recognition_wait_budget`。
 const RECOGNITION_WAIT: Duration = Duration::from_secs(60);
-/// 识别等待的轮询步长。把 `recv_timeout(RECOGNITION_WAIT)` 的一次性阻塞拆成每
-/// `RECOGNITION_POLL` 一轮：每轮之间检查 `cancel_flag`，取消 / 上层超时后阻塞线程
-/// 最多再等这一步长（~100ms）就退出，而不是傻等满 `RECOGNITION_WAIT`（60s）。
+/// 识别等待的轮询步长。每轮之间检查 `cancel_flag` 与任务状态：取消 / 上层超时后阻塞
+/// 线程最多再等这一步长（~100ms）就退出，而不是傻等满整个等待预算。
 const RECOGNITION_POLL: Duration = Duration::from_millis(100);
+/// `SFSpeechRecognitionTaskState`（NS_ENUM(NSInteger)）的 completed。任务终结
+/// （成功、失败或取消）后进入该状态，是「不会再有回调」的权威信号。
+const SF_TASK_STATE_COMPLETED: i64 = 4;
+/// 观察到任务 completed 后再等这一小段，让已经在飞的最后一次 resultHandler 回调
+/// 落进累积器，避免「state 先翻转、回调后到」的竞态把最后一个话段截掉。
+const COMPLETION_GRACE: Duration = Duration::from_millis(250);
+/// 后备终止条件：已见 isFinal 且此后静默这么久，视为识别结束。只防 `state` 轮询
+/// 因系统差异拿不到 completed 时无限等待；正常路径由 completed + COMPLETION_GRACE
+/// 快速收账，不受此值影响。取 5s 是因为多话段场景 isFinal 可能逐话段出现，话段间
+/// 的回调空窗（对应音频里的长停顿）必须远小于该阈值，否则会提前收账截掉后文——
+/// 批处理识别消化静音远快于实时，5s 空窗足够安全。
+const FINAL_QUIESCENCE: Duration = Duration::from_secs(5);
 const AUTHORIZATION_WAIT: Duration = Duration::from_secs(30);
 /// 识别引擎就绪（isAvailable）的轮询等待：刚 init 的 recognizer 常瞬时不可用（异步
 /// 加载语言资源），稍等即就绪。等满仍不可用才报错——修「有时用不了」的竞态。
@@ -199,7 +210,7 @@ fn transcribe_pcm_blocking(
     let path_str = path
         .to_str()
         .ok_or_else(|| anyhow!("临时 wav 路径含非 UTF-8 字符: {}", path.display()))?;
-    let text = recognize_file(path_str, locale, cancel_flag, active_task)?;
+    let text = recognize_file(path_str, locale, duration_ms, cancel_flag, active_task)?;
 
     Ok(RawTranscript { text, duration_ms })
 }
@@ -254,13 +265,19 @@ fn ensure_authorized() -> Result<()> {
 /// 用 `SFSpeechURLRecognitionRequest` 对给定 wav 文件做一次批处理识别，
 /// 把 `recognitionTaskWithRequest:resultHandler:` 的异步回调同步化。
 ///
-/// 等待不再是一次性 `recv_timeout(RECOGNITION_WAIT)`，而是每 `RECOGNITION_POLL`
-/// 一轮的轮询：每轮检查 `cancel_flag`，置位则 `cancel` 底层任务并返回「已取消」错误，
-/// 让上层动态超时抛弃 / `cancel()` 触发时阻塞线程在 ~100ms 内退出。返回前无论成败
-/// 都清空 `active_task`（RAII guard 兜底 `?` 早退）。
+/// **多话段累积（修「停顿后前文丢失」）**：设备端识别会在语音停顿处把音频切成多个
+/// 话段（utterance），逐话段回调、逐话段重置文本（见 `SegmentAccumulator` 文档）。
+/// 因此不能「见到第一个 isFinal 就收工」——resultHandler 只负责把每次回调喂进
+/// `SegmentAccumulator`；等待循环以 `task.state == completed`（辅以 isFinal 后静默
+/// 的后备条件）判定识别真正结束，再把所有话段拼接返回。
+///
+/// 等待是每 `RECOGNITION_POLL` 一轮的轮询：每轮检查 `cancel_flag`，置位则 `cancel`
+/// 底层任务并返回「已取消」错误，让上层动态超时抛弃 / `cancel()` 触发时阻塞线程在
+/// ~100ms 内退出。返回前无论成败都清空 `active_task`（RAII guard 兜底 `?` 早退）。
 fn recognize_file(
     wav_path: &str,
     locale: Option<&str>,
+    duration_ms: u64,
     cancel_flag: &AtomicBool,
     active_task: &Mutex<Option<SendableTask>>,
 ) -> Result<String> {
@@ -279,13 +296,41 @@ fn recognize_file(
     // 语言回退系统默认（可能走网络）以保底能用。
     configure_on_device(recognizer, request);
 
-    let (tx, rx) = mpsc::channel::<RecognitionOutcome>();
-    // resultHandler: void(^)(SFSpeechRecognitionResult *result, NSError *error)
+    // 显式开启 partial 回调：话段边界信号（speechRecognitionMetadata 非空的结果）
+    // 出现在非 final 回调里，关掉 partial 就拿不到边界、无从累积。
+    // SAFETY: `request` 是 SFSpeechURLRecognitionRequest（父类提供该 BOOL setter）。
+    let _: () = unsafe { msg_send![request, setShouldReportPartialResults: Bool::new(true)] };
+
+    let shared = Arc::new(Mutex::new(RecognitionShared::default()));
+    let shared_cb = Arc::clone(&shared);
+    // resultHandler: void(^)(SFSpeechRecognitionResult *result, NSError *error)。
+    // 回调只做「解包 + 喂累积器」，结束判定完全交给下面的等待循环。
     let block = RcBlock::new(move |result: *mut AnyObject, error: *mut AnyObject| {
-        let outcome = build_outcome(result, error);
-        // 只取第一个 final（或第一个 error）。后续重复回调忽略。
-        if outcome.is_terminal() {
-            let _ = tx.send(outcome);
+        let event = extract_event(result, error);
+        let mut s = shared_cb.lock();
+        s.last_event = Some(Instant::now());
+        match event {
+            CallbackEvent::Error(message) => {
+                if s.error.is_none() {
+                    s.error = Some(message);
+                }
+            }
+            CallbackEvent::Recognized {
+                text,
+                utterance_ended,
+                is_final,
+            } => {
+                if utterance_ended {
+                    log::info!(
+                        "[apple-speech] utterance boundary: segment captured ({} chars)",
+                        text.chars().count()
+                    );
+                }
+                s.acc.fold(&text, utterance_ended, is_final);
+                if is_final {
+                    s.saw_final = true;
+                }
+            }
         }
     });
 
@@ -306,9 +351,10 @@ fn recognize_file(
     *active_task.lock() = Some(SendableTask(task));
     let _task_guard = ActiveTaskGuard(active_task);
 
-    // 轮询等待：每轮 recv 最多 RECOGNITION_POLL，累计超过 RECOGNITION_WAIT 则超时。
-    // 每轮先查 cancel_flag —— 置位即真正 cancel 任务并返回「已取消」错误、放弃等待。
-    let deadline = std::time::Instant::now() + RECOGNITION_WAIT;
+    // 轮询等待：每轮先查 cancel_flag，再看错误 / 终止条件；超过按音频时长放大的
+    // 等待预算则超时（外层 coordinator 的动态超时通常先于它触发，这里只防回调失联）。
+    let deadline = Instant::now() + recognition_wait_budget(duration_ms);
+    let mut completed_since: Option<Instant> = None;
     loop {
         if cancel_flag.load(Ordering::SeqCst) {
             // 若 cancel() 尚未取走句柄（例如超时路径只置了 flag 没调 cancel），这里补发
@@ -319,21 +365,64 @@ fn recognize_file(
             }
             bail!("语音识别已取消");
         }
-        match rx.recv_timeout(RECOGNITION_POLL) {
-            Ok(RecognitionOutcome::Final(text)) => return Ok(text),
-            Ok(RecognitionOutcome::Failed(message)) => bail!("语音识别失败: {message}"),
-            Ok(RecognitionOutcome::Pending) => unreachable!("Pending 不会被发送"),
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                if std::time::Instant::now() >= deadline {
-                    bail!("等待语音识别结果超时");
-                }
-                // 未到总时限：继续下一轮（回到循环顶部再查 cancel_flag）。
+        std::thread::sleep(RECOGNITION_POLL);
+
+        // SAFETY: `task` 在本栈帧内被 recognizer 强引用存活（见上）；`state` 是无参
+        // 只读属性，返回 NSInteger（i64）。跨线程读一个整型属性，最坏读到瞬时旧值，
+        // 下一轮（~100ms 后）即追上，不影响正确性。
+        let state: i64 = unsafe { msg_send![task, state] };
+        if state == SF_TASK_STATE_COMPLETED && completed_since.is_none() {
+            completed_since = Some(Instant::now());
+        }
+
+        let mut s = shared.lock();
+        if let Some(err) = s.error.take() {
+            // 有已累积内容时不整段作废：把已识别话段兜底返回（比如尾部静音触发的
+            // 识别错误不应吞掉前面所有话段——内容丢失正是本模块要修的问题）。
+            let salvaged = s.acc.salvage();
+            if salvaged.is_empty() {
+                bail!("语音识别失败: {err}");
             }
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                bail!("等待语音识别结果失败：回调通道已断开");
-            }
+            log::warn!(
+                "[apple-speech] recognition error after {} segment(s); returning salvaged text: {err}",
+                s.acc.segment_count()
+            );
+            return Ok(salvaged);
+        }
+
+        let events_quiet = s
+            .last_event
+            .map(|t| t.elapsed() >= COMPLETION_GRACE)
+            .unwrap_or(true);
+        let completed_settled = completed_since
+            .map(|t| t.elapsed() >= COMPLETION_GRACE && events_quiet)
+            .unwrap_or(false);
+        let final_quiesced = s.saw_final
+            && s.last_event
+                .map(|t| t.elapsed() >= FINAL_QUIESCENCE)
+                .unwrap_or(false);
+        if completed_settled || final_quiesced {
+            let text = s.acc.salvage();
+            log::info!(
+                "[apple-speech] recognition finished: {} segment(s), {} chars",
+                s.acc.segment_count(),
+                text.chars().count()
+            );
+            return Ok(text);
+        }
+        drop(s);
+
+        if Instant::now() >= deadline {
+            bail!("等待语音识别结果超时");
         }
     }
+}
+
+/// 识别等待预算：音频时长 + 30s，且不低于 `RECOGNITION_WAIT`。批处理识别通常远快于
+/// 实时，但长录音（多话段逐段吐结果）不该被固定 60s 硬顶截断——旧实现对超过 60s
+/// 才识别完的长录音会直接报「等待超时」。外层 coordinator 的动态超时仍然先兜底。
+fn recognition_wait_budget(duration_ms: u64) -> Duration {
+    RECOGNITION_WAIT.max(Duration::from_millis(duration_ms).saturating_add(Duration::from_secs(30)))
 }
 
 /// 保证 `recognize_file` 任意退出路径（含 `?` 早退、正常返回、取消/超时）都把
@@ -384,43 +473,181 @@ fn configure_on_device(recognizer: *mut AnyObject, request: *mut AnyObject) {
     }
 }
 
-/// 识别回调的归一化结果。
-enum RecognitionOutcome {
-    /// 还没拿到 final（partial），不发送。
-    Pending,
-    Final(String),
-    Failed(String),
+/// resultHandler 单次回调的归一化事件。
+enum CallbackEvent {
+    Error(String),
+    Recognized {
+        text: String,
+        /// 本次结果带 `speechRecognitionMetadata`（非空）——一个话段（utterance）
+        /// 到此结束，`text` 是该话段的完整文本。
+        utterance_ended: bool,
+        is_final: bool,
+    },
 }
 
-impl RecognitionOutcome {
-    fn is_terminal(&self) -> bool {
-        !matches!(self, RecognitionOutcome::Pending)
-    }
+/// resultHandler 回调与等待循环之间的共享状态（block 侧写，轮询侧读）。
+#[derive(Default)]
+struct RecognitionShared {
+    acc: SegmentAccumulator,
+    /// 第一个识别错误（保留首个，后续忽略）。
+    error: Option<String>,
+    /// 是否见过 isFinal 结果。注意多话段场景 isFinal 可能逐话段出现，只作
+    /// 后备终止条件的输入，不能单独当结束信号。
+    saw_final: bool,
+    /// 最近一次回调时刻，供 `COMPLETION_GRACE` / `FINAL_QUIESCENCE` 判静默。
+    last_event: Option<Instant>,
 }
 
-/// 从 `(result, error)` 回调参数提取最终文本或错误。
-fn build_outcome(result: *mut AnyObject, error: *mut AnyObject) -> RecognitionOutcome {
+/// 从 `(result, error)` 回调参数解包出归一化事件。
+fn extract_event(result: *mut AnyObject, error: *mut AnyObject) -> CallbackEvent {
     if !error.is_null() {
-        return RecognitionOutcome::Failed(ns_error_description(error));
+        return CallbackEvent::Error(ns_error_description(error));
     }
     if result.is_null() {
-        return RecognitionOutcome::Failed("识别返回空结果".to_string());
+        return CallbackEvent::Error("识别返回空结果".to_string());
     }
-    // result.isFinal —— 只有 final 才取文本；partial 让上层继续等。
     // SAFETY: `result` 非空，是 `SFSpeechRecognitionResult`；`isFinal` 无参返回 BOOL。
     let is_final: Bool = unsafe { msg_send![result, isFinal] };
-    if !is_final.as_bool() {
-        return RecognitionOutcome::Pending;
-    }
+    // speechRecognitionMetadata 非空 = 一个话段结束（macOS 11.3+）。老系统没有该
+    // selector，先 respondsToSelector 探测，避免直接调用未知 selector 崩溃。
+    // SAFETY: `respondsToSelector:` 是 NSObject 协议方法，参数为 Sel，返回 BOOL。
+    let has_metadata_sel: Bool =
+        unsafe { msg_send![result, respondsToSelector: sel!(speechRecognitionMetadata)] };
+    let utterance_ended = if has_metadata_sel.as_bool() {
+        // SAFETY: 上面已确认 selector 存在；无参返回对象指针（可能为 nil）。
+        let metadata: *mut AnyObject = unsafe { msg_send![result, speechRecognitionMetadata] };
+        !metadata.is_null()
+    } else {
+        false
+    };
     // result.bestTranscription.formattedString → NSString → Rust String。
-    // SAFETY: `result` 是 final 的 `SFSpeechRecognitionResult`，`bestTranscription`
-    // 非空（final 结果保证有 transcription）；`formattedString` 返回 NSString。
+    // SAFETY: `result` 非空；`bestTranscription` 返回 SFTranscription（可能为 nil），
+    // `formattedString` 返回 NSString。
     let transcription: *mut AnyObject = unsafe { msg_send![result, bestTranscription] };
-    if transcription.is_null() {
-        return RecognitionOutcome::Final(String::new());
+    let text = if transcription.is_null() {
+        String::new()
+    } else {
+        let formatted: *mut AnyObject = unsafe { msg_send![transcription, formattedString] };
+        ns_string_to_rust(formatted)
+    };
+    CallbackEvent::Recognized {
+        text,
+        utterance_ended,
+        is_final: is_final.as_bool(),
     }
-    let formatted: *mut AnyObject = unsafe { msg_send![transcription, formattedString] };
-    RecognitionOutcome::Final(ns_string_to_rust(formatted))
+}
+
+/// 跨话段累积识别文本（修「停顿后前文丢失」，issue：Apple Speech 停顿截断）。
+///
+/// Apple 设备端识别（`requiresOnDeviceRecognition`）会在语音停顿处把音频切成多个
+/// 「话段」(utterance)：每个话段结束时回调一次带 `speechRecognitionMetadata` 的结果
+/// （其文本**只覆盖该话段**），随后 partial 文本从空重新累计；`isFinal` 通常只在最后
+/// 一个话段出现（个别系统版本按话段多次 isFinal）。旧实现只取第一个 isFinal 的文本，
+/// 停顿之前的所有话段被整段丢弃——这正是「说话中间停顿思考，前面内容全没了」的根因。
+/// 这里把每个话段落袋，识别结束时按 CJK 规则拼接返回。
+///
+/// 云端（服务器）识别没有话段重置：partial 全程累计、final 为全文。此时 `segments`
+/// 只会收到一条 final 全文（或经前缀替换归并），行为与旧实现一致。
+#[derive(Default)]
+struct SegmentAccumulator {
+    /// 已结束话段的文本，按时间顺序。
+    segments: Vec<String>,
+    /// 当前话段最新 partial 文本。
+    current: String,
+}
+
+impl SegmentAccumulator {
+    /// 喂入一次识别回调。`utterance_ended` / `is_final` 的文本视为所在话段的完整
+    /// 文本并落袋；普通 partial 只更新 `current`，除非检测到「静默重置」。
+    fn fold(&mut self, text: &str, utterance_ended: bool, is_final: bool) {
+        if utterance_ended || is_final {
+            if text.trim().is_empty() {
+                // 边界结果偶见空文本：退而落袋当前话段已见的最长 partial，不丢内容。
+                let current = std::mem::take(&mut self.current);
+                self.push_segment(&current);
+            } else {
+                self.push_segment(text);
+                self.current.clear();
+            }
+        } else if self.reset_detected(text) {
+            // 防守路径：没有 metadata 边界回调、partial 却骤缩——设备端识别已悄悄
+            // 重开话段。把上一话段已见的最长 partial 先落袋，再从新文本重新累计。
+            let previous = std::mem::take(&mut self.current);
+            self.push_segment(&previous);
+            self.current = text.to_string();
+        } else {
+            self.current = text.to_string();
+        }
+    }
+
+    /// partial 骤缩视为话段重置。阈值保守（原文本 ≥12 字符且新文本缩到 1/3 以下）：
+    /// 识别器正常的假设修正只会小幅增删，不会缩水到这个程度。
+    fn reset_detected(&self, text: &str) -> bool {
+        let current_chars = self.current.chars().count();
+        let new_chars = text.chars().count();
+        current_chars >= 12 && new_chars.saturating_mul(3) < current_chars
+    }
+
+    /// 话段落袋，带去重防线：新旧互为前缀视为「累计式文本」（服务器识别的 final 覆盖
+    /// 此前全部内容），取长者替换而非追加；新文本若等于已收全文（忽略空白差异），
+    /// 视为引擎在结尾重放累计全文，直接忽略。两条防线都为避免同一内容出现两次。
+    fn push_segment(&mut self, text: &str) {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return;
+        }
+        if let Some(last) = self.segments.last_mut() {
+            if trimmed.starts_with(last.as_str()) {
+                *last = trimmed.to_string();
+                return;
+            }
+            if last.starts_with(trimmed) {
+                return;
+            }
+        }
+        if !self.segments.is_empty() && normalized(&self.joined()) == normalized(trimmed) {
+            return;
+        }
+        self.segments.push(trimmed.to_string());
+    }
+
+    /// 结束收账：把残余 partial 落袋后返回全部话段的拼接文本。
+    fn salvage(&mut self) -> String {
+        let current = std::mem::take(&mut self.current);
+        self.push_segment(&current);
+        self.joined()
+    }
+
+    fn segment_count(&self) -> usize {
+        self.segments.len()
+    }
+
+    /// 话段拼接：相邻两段的边界字符都不是 ASCII（多为 CJK）时直接相连，否则补一个
+    /// 空格分词（英文等空格语言）。润色模式下 LLM 还会再整理，此处只求原文可读。
+    fn joined(&self) -> String {
+        let mut out = String::new();
+        for segment in &self.segments {
+            if out.is_empty() {
+                out.push_str(segment);
+                continue;
+            }
+            let cjk_boundary = matches!(
+                (out.chars().last(), segment.chars().next()),
+                (Some(prev), Some(next)) if !prev.is_ascii() && !next.is_ascii()
+            );
+            if !cjk_boundary {
+                out.push(' ');
+            }
+            out.push_str(segment);
+        }
+        out
+    }
+}
+
+/// 空白不敏感比较用：剔除所有空白字符。话段拼接与引擎全文重放的分隔符可能不同
+/// （我们按 CJK 规则拼、引擎按自己的习惯拼），只比内容不比空白。
+fn normalized(s: &str) -> String {
+    s.chars().filter(|c| !c.is_whitespace()).collect()
 }
 
 fn speech_recognizer_class() -> Result<&'static AnyClass> {
@@ -710,5 +937,116 @@ mod tests {
         fn assert_send<T: Send>() {}
         assert_send::<SendableTask>();
         assert_send::<Arc<Mutex<Option<SendableTask>>>>();
+    }
+
+    // ---- SegmentAccumulator：停顿多话段累积（修「停顿后前文丢失」） ----
+
+    #[test]
+    fn server_style_growing_partials_keep_full_final() {
+        // 云端识别：partial 全程累计、final 为全文 —— 行为必须与旧实现一致。
+        let mut acc = SegmentAccumulator::default();
+        acc.fold("hello", false, false);
+        acc.fold("hello there", false, false);
+        acc.fold("hello there how are you", false, true);
+        assert_eq!(acc.salvage(), "hello there how are you");
+    }
+
+    #[test]
+    fn on_device_pause_segments_are_all_kept() {
+        // 用户 bug 复现：停顿产生话段边界（metadata），旧实现只留最后一段。
+        let mut acc = SegmentAccumulator::default();
+        acc.fold("今天天气", false, false);
+        acc.fold("今天天气很好", true, false); // 停顿 → 话段 1 结束
+        acc.fold("我们", false, false); // partial 从空重来
+        acc.fold("我们去公园", false, true); // 最后话段以 isFinal 收尾
+        assert_eq!(acc.salvage(), "今天天气很好我们去公园");
+    }
+
+    #[test]
+    fn per_segment_finals_are_all_kept() {
+        // 个别系统按话段多次 isFinal：每个 final 都要落袋，不能见到第一个就收工。
+        let mut acc = SegmentAccumulator::default();
+        acc.fold("第一段内容", false, true);
+        acc.fold("第二段内容", false, true);
+        assert_eq!(acc.salvage(), "第一段内容第二段内容");
+    }
+
+    #[test]
+    fn silent_reset_without_metadata_is_salvaged() {
+        // 防守路径：没有 metadata 边界、partial 骤缩 → 上一话段先落袋。
+        let mut acc = SegmentAccumulator::default();
+        acc.fold("这是停顿之前说的很长一段话啊", false, false); // 14 字符
+        acc.fold("后", false, false); // 骤缩 → 判定重置
+        acc.fold("后半段", false, true);
+        assert_eq!(acc.salvage(), "这是停顿之前说的很长一段话啊后半段");
+    }
+
+    #[test]
+    fn small_revision_is_not_treated_as_reset() {
+        // 识别器正常的假设修正（小幅缩短）不能触发重置，否则会人为造出重复段。
+        let mut acc = SegmentAccumulator::default();
+        acc.fold("hello there my friend", false, false);
+        acc.fold("hello there my frien", false, false); // 仅缩 1 字符
+        acc.fold("hello there my friends", false, true);
+        assert_eq!(acc.salvage(), "hello there my friends");
+    }
+
+    #[test]
+    fn cumulative_boundary_text_replaces_instead_of_duplicating() {
+        // 若边界结果携带的是「累计全文」而非「本段文本」，前缀替换去重，不得重复。
+        let mut acc = SegmentAccumulator::default();
+        acc.fold("AAA", true, false);
+        acc.fold("AAA BBB", true, false);
+        acc.fold("AAA BBB CCC", false, true);
+        assert_eq!(acc.salvage(), "AAA BBB CCC");
+    }
+
+    #[test]
+    fn full_text_replay_at_final_is_not_duplicated() {
+        // 防守：逐话段落袋之后，final 若重放「累计全文」（分隔符可能与我们不同），
+        // 空白不敏感去重必须把它忽略，不得把全文再拼一遍。
+        let mut acc = SegmentAccumulator::default();
+        acc.fold("今天天气很好", true, false);
+        acc.fold("我们去公园", true, false);
+        acc.fold("今天天气很好 我们去公园", false, true);
+        assert_eq!(acc.salvage(), "今天天气很好我们去公园");
+    }
+
+    #[test]
+    fn empty_boundary_text_falls_back_to_partial() {
+        // 边界结果偶见空文本：兜底用当前话段已见的最长 partial，不丢内容。
+        let mut acc = SegmentAccumulator::default();
+        acc.fold("前半句", false, false);
+        acc.fold("", true, false);
+        acc.fold("后半句", false, true);
+        assert_eq!(acc.salvage(), "前半句后半句");
+    }
+
+    #[test]
+    fn salvage_includes_residual_partial() {
+        // 错误兜底路径：final 没等到，也要把已见 partial 抢救回来。
+        let mut acc = SegmentAccumulator::default();
+        acc.fold("说到一半", false, false);
+        assert_eq!(acc.salvage(), "说到一半");
+    }
+
+    #[test]
+    fn ascii_segments_join_with_space_cjk_join_bare() {
+        let mut acc = SegmentAccumulator::default();
+        acc.fold("first part", true, false);
+        acc.fold("second part", true, false);
+        assert_eq!(acc.salvage(), "first part second part");
+
+        let mut mixed = SegmentAccumulator::default();
+        mixed.fold("中文段落", true, false);
+        mixed.fold("english tail", true, false);
+        assert_eq!(mixed.salvage(), "中文段落 english tail");
+    }
+
+    #[test]
+    fn recognition_wait_budget_scales_with_audio_length() {
+        // 短音频维持 60s 下限；长音频按时长 + 30s 放大，不再被固定硬顶截断。
+        assert_eq!(recognition_wait_budget(5_000), RECOGNITION_WAIT);
+        assert_eq!(recognition_wait_budget(300_000), Duration::from_secs(330));
     }
 }
