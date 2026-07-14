@@ -25,9 +25,9 @@ use crate::asr::local::{
     foundry, sherpa, FoundryLocalRuntime, FoundryLocalWhisperAsr, SherpaOnnxAsr, SherpaOnnxRuntime,
 };
 use crate::asr::{
-    BailianCredentials, BailianRealtimeASR, DictionaryHotword, ElevenLabsBatchASR, MimoBatchASR,
-    Qwen3RealtimeASR, Qwen3RealtimeCredentials, RawTranscript, VolcengineCredentials,
-    VolcengineStreamingASR, WhisperBatchASR,
+    BailianCredentials, BailianRealtimeASR, DashScopeMultimodalASR, DictionaryHotword,
+    ElevenLabsBatchASR, MimoBatchASR, Qwen3RealtimeASR, Qwen3RealtimeCredentials, RawTranscript,
+    VolcengineCredentials, VolcengineStreamingASR, WhisperBatchASR,
 };
 use crate::combo_hotkey::{ComboHotkeyError, ComboHotkeyEvent, ComboHotkeyMonitor};
 use crate::coordinator_state::{
@@ -180,6 +180,8 @@ enum ActiveAsr {
     Volcengine(Arc<VolcengineStreamingASR>),
     Whisper(Arc<WhisperBatchASR>),
     Mimo(Arc<MimoBatchASR>),
+    /// 百炼 Fun-ASR-Flash 录音文件识别（DashScope multimodal-generation 批量 HTTP）。
+    DashScopeMultimodal(Arc<DashScopeMultimodalASR>),
     ElevenLabs(Arc<ElevenLabsBatchASR>),
     Bailian(Arc<BailianRealtimeASR>),
     /// 百炼 Qwen3-ASR-Flash 实时（OpenAI Realtime 风格 WS 协议）。
@@ -209,23 +211,86 @@ fn asr_transcribe_uses_global_timeout(asr: &ActiveAsr) -> bool {
     }
 }
 
+/// 单一分类来源：云端 ASR provider id → 协议种类。本地/无凭据引擎（local qwen3 /
+/// apple speech / foundry / sherpa）由各调用点在此之前用平台 cfg 门单独处理，不进
+/// 这个枚举。
+///
+/// **加新云端通道的唯一改动点**：在 [`active_asr_provider_kind`] 加一条 id 映射，
+/// 然后 [`ActiveAsrProviderKind::preflight_credential`] /
+/// [`ActiveAsrProviderKind::configured_fields`] 与各 build/dispatch 的穷尽 `match`
+/// 会被编译器逐个报错逼你补齐——不会再出现「装完才发现某处漏了」。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ActiveAsrProviderKind {
+pub(crate) enum ActiveAsrProviderKind {
     Bailian,
     Qwen3Realtime,
     Mimo,
+    DashScopeMultimodal,
     ElevenLabs,
     WhisperCompatible,
     Volcengine,
 }
 
-fn active_asr_provider_kind(id: &str) -> ActiveAsrProviderKind {
+/// 「能否开始一次会话」所需的凭据形态（对应 `ensure_asr_credentials` 预检门）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AsrPreflightCredential {
+    /// 需要 ASR API Key（endpoint/model 有默认值兜底）。
+    AsrApiKey,
+    /// 需要火山引擎 App Key + Access Key。
+    VolcAppKey,
+}
+
+/// 概览页「已配置 / 未配置」状态所需的字段（对应 `asr_configured_for_provider`）。
+/// 语义与预检门**有意不同**：预检问「能否开始」，这里问「preset 要求的字段填齐没」。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AsrConfiguredFields {
+    /// 只看 API Key（endpoint/model 走默认）：bailian / qwen3 实时。
+    ApiKeyOnly,
+    /// API Key + endpoint + model 都要填：mimo / dashscope multimodal。
+    ApiKeyEndpointModel,
+    /// 只看 endpoint + model（不含 API Key）：Whisper 兼容厂商。
+    EndpointModelOnly,
+    /// 火山引擎三件套。
+    VolcAppKey,
+}
+
+impl ActiveAsrProviderKind {
+    pub(crate) fn preflight_credential(self) -> AsrPreflightCredential {
+        match self {
+            ActiveAsrProviderKind::Bailian
+            | ActiveAsrProviderKind::Qwen3Realtime
+            | ActiveAsrProviderKind::Mimo
+            | ActiveAsrProviderKind::DashScopeMultimodal
+            | ActiveAsrProviderKind::ElevenLabs
+            | ActiveAsrProviderKind::WhisperCompatible => AsrPreflightCredential::AsrApiKey,
+            ActiveAsrProviderKind::Volcengine => AsrPreflightCredential::VolcAppKey,
+        }
+    }
+
+    pub(crate) fn configured_fields(self) -> AsrConfiguredFields {
+        match self {
+            ActiveAsrProviderKind::Bailian
+            | ActiveAsrProviderKind::Qwen3Realtime
+            | ActiveAsrProviderKind::ElevenLabs => {
+                AsrConfiguredFields::ApiKeyOnly
+            }
+            ActiveAsrProviderKind::Mimo | ActiveAsrProviderKind::DashScopeMultimodal => {
+                AsrConfiguredFields::ApiKeyEndpointModel
+            }
+            ActiveAsrProviderKind::WhisperCompatible => AsrConfiguredFields::EndpointModelOnly,
+            ActiveAsrProviderKind::Volcengine => AsrConfiguredFields::VolcAppKey,
+        }
+    }
+}
+
+pub(crate) fn active_asr_provider_kind(id: &str) -> ActiveAsrProviderKind {
     if is_bailian_provider(id) {
         ActiveAsrProviderKind::Bailian
     } else if is_qwen3_realtime_provider(id) {
         ActiveAsrProviderKind::Qwen3Realtime
     } else if is_mimo_provider(id) {
         ActiveAsrProviderKind::Mimo
+    } else if is_dashscope_multimodal_provider(id) {
+        ActiveAsrProviderKind::DashScopeMultimodal
     } else if is_elevenlabs_provider(id) {
         ActiveAsrProviderKind::ElevenLabs
     } else if is_whisper_compatible_provider(id) {
@@ -233,6 +298,105 @@ fn active_asr_provider_kind(id: &str) -> ActiveAsrProviderKind {
     } else {
         ActiveAsrProviderKind::Volcengine
     }
+}
+
+/// 统一「阿里云百炼」入口的模型 → 底层协议 id 路由。
+///
+/// 三条百炼协议（fun-asr-realtime 经典实时 / qwen3-asr-flash-realtime Realtime /
+/// fun-asr-flash 录音文件）在 UI 上收成一个 provider `bailian`（一把 key），**构建时**
+/// 按所选模型二次路由到具体协议客户端。凭据 / 「已配置」判定仍看真实 active
+/// `bailian`（→ ApiKeyOnly，一把 key），只有这里的 build 分发用得上 effective id。
+///
+/// 老用户若停在别名 id（`bailian-qwen3-realtime` / `bailian-fun-asr-flash`）上，
+/// 非 `bailian` 直接原样返回，各走各的旧路径——即「隐藏别名」向后兼容。
+pub(crate) fn resolve_effective_asr_provider(
+    active_asr: &str,
+    model: &str,
+) -> Result<String, String> {
+    if !is_bailian_provider(active_asr) {
+        if is_dashscope_multimodal_provider(active_asr) {
+            validate_dashscope_multimodal_model(model)?;
+        }
+        return Ok(active_asr.to_string());
+    }
+
+    // Android/iOS 继续使用原来的 Bailian WebSocket 配置。统一入口的模型路由
+    // 只在桌面端启用，避免共享设置页意外改变移动端行为。
+    if cfg!(mobile) {
+        return Ok(crate::asr::bailian::PROVIDER_ID.to_string());
+    }
+
+    let model = model.trim();
+    if model.is_empty() || is_classic_bailian_realtime_model(model) {
+        Ok(crate::asr::bailian::PROVIDER_ID.to_string())
+    } else if model.starts_with("qwen3-asr-flash-realtime") {
+        Ok(crate::asr::qwen_realtime::PROVIDER_ID.to_string())
+    } else if model == crate::asr::dashscope_multimodal::DEFAULT_MODEL {
+        Ok(crate::asr::dashscope_multimodal::PROVIDER_ID.to_string())
+    } else {
+        Err(format!(
+            "不支持的百炼 ASR 模型：{model}。支持 fun-asr-realtime、paraformer-realtime、sensevoice-realtime、qwen3-asr-flash-realtime 和 fun-asr-flash-2026-06-15"
+        ))
+    }
+}
+
+fn is_classic_bailian_realtime_model(model: &str) -> bool {
+    model.starts_with("fun-asr-realtime")
+        || model.starts_with("paraformer-realtime")
+        || model.starts_with("sensevoice-realtime")
+}
+
+pub(crate) fn validate_dashscope_multimodal_model(model: &str) -> Result<(), String> {
+    let model = model.trim();
+    if model.is_empty() || model == crate::asr::dashscope_multimodal::DEFAULT_MODEL {
+        return Ok(());
+    }
+    Err(format!(
+        "不支持的 DashScope 录音文件 ASR 模型：{model}。该协议仅支持 fun-asr-flash-2026-06-15；fun-asr-flash-8k-realtime 系列属于 8 kHz 实时 WebSocket 模型，当前尚未支持"
+    ))
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum BailianEndpointProtocol {
+    ClassicRealtime,
+    QwenRealtime,
+    Multimodal,
+}
+
+/// 统一百炼配置只需要表达区域/工作空间主机；具体协议的 scheme 与 path 由模型路由决定。
+/// 这样既能复用同一个 endpoint 字段，也不会把中国区默认网关强加给新加坡或专属工作空间。
+pub(crate) fn derive_bailian_endpoint(
+    endpoint: &str,
+    protocol: BailianEndpointProtocol,
+) -> Result<String, String> {
+    let default_endpoint = match protocol {
+        BailianEndpointProtocol::ClassicRealtime => crate::asr::bailian::DEFAULT_ENDPOINT,
+        BailianEndpointProtocol::QwenRealtime => crate::asr::qwen_realtime::DEFAULT_ENDPOINT,
+        BailianEndpointProtocol::Multimodal => crate::asr::dashscope_multimodal::DEFAULT_ENDPOINT,
+    };
+    let source = if endpoint.trim().is_empty() {
+        default_endpoint
+    } else {
+        endpoint.trim()
+    };
+    let mut url = url::Url::parse(source).map_err(|_| "endpointInvalid".to_string())?;
+    if url.host_str().is_none() {
+        return Err("endpointInvalid".to_string());
+    }
+    let (scheme, path) = match protocol {
+        BailianEndpointProtocol::ClassicRealtime => ("wss", "/api-ws/v1/inference/"),
+        BailianEndpointProtocol::QwenRealtime => ("wss", "/api-ws/v1/realtime"),
+        BailianEndpointProtocol::Multimodal => (
+            "https",
+            "/api/v1/services/aigc/multimodal-generation/generation",
+        ),
+    };
+    url.set_scheme(scheme)
+        .map_err(|_| "endpointInvalid".to_string())?;
+    url.set_path(path);
+    url.set_query(None);
+    url.set_fragment(None);
+    Ok(url.to_string())
 }
 
 fn batch_asr_chunk_limit_ms(provider_id: &str) -> Option<u64> {
@@ -372,6 +536,42 @@ enum ActionHotkeyKind {
 struct PreparedWindowsImeSessionSlot {
     session_id: SessionId,
     prepared: PreparedWindowsImeSession,
+}
+
+/// 历史音频静默重试的 ASR 资源护栏。
+///
+/// 重试 future 被 select 丢弃时，局部 QaAsrStart 不会再经过正常的
+/// end_session 收尾；这里用 Drop 补 cancel 和本地模型释放，尤其覆盖
+/// spawn_blocking 已经开始运行的本地 ASR。
+struct CancellableRetranscribeGuard {
+    inner: Arc<Inner>,
+    asr: Option<ActiveAsr>,
+    session_id: SessionId,
+}
+
+impl CancellableRetranscribeGuard {
+    fn new(inner: Arc<Inner>, asr: ActiveAsr, session_id: SessionId) -> Self {
+        Self {
+            inner,
+            asr: Some(asr),
+            session_id,
+        }
+    }
+
+    fn disarm(mut self) {
+        self.asr.take();
+    }
+}
+
+impl Drop for CancellableRetranscribeGuard {
+    fn drop(&mut self) {
+        let Some(asr) = self.asr.take() else {
+            return;
+        };
+        let asr_for_release = asr.clone();
+        cancel_active_asr(asr);
+        dictation::schedule_cancelled_asr_release(&self.inner, &asr_for_release, self.session_id);
+    }
 }
 
 impl Coordinator {
@@ -1560,13 +1760,43 @@ impl Coordinator {
     }
 
     pub async fn retranscribe_pcm(&self, pcm: Vec<u8>) -> Result<String, String> {
+        self.retranscribe_pcm_inner(pcm, false).await
+    }
+
+    pub(super) async fn retranscribe_pcm_until_cancelled(
+        &self,
+        pcm: Vec<u8>,
+    ) -> Result<String, String> {
+        self.retranscribe_pcm_inner(pcm, true).await
+    }
+
+    async fn retranscribe_pcm_inner(
+        &self,
+        pcm: Vec<u8>,
+        cancel_on_drop: bool,
+    ) -> Result<String, String> {
         let inner = &self.inner;
         let active_asr = CredentialsVault::get_active_asr();
         let start = build_qa_asr_start(inner, &active_asr).await?;
+        let retry_guard = if cancel_on_drop {
+            Some(CancellableRetranscribeGuard::new(
+                Arc::clone(inner),
+                start.active_asr(),
+                inner.state.lock().session_id,
+            ))
+        } else {
+            None
+        };
         start.open_streaming_session().await?;
         let consumer = start.recorder_consumer();
         consumer.consume_pcm_chunk(&pcm);
         let timeout = std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS);
+        let dashscope_timeout = whisper_transcribe_timeout(
+            crate::asr::pcm::pcm_duration_ms(&pcm) as f64 / 1000.0,
+        );
+        let elevenlabs_timeout = crate::asr::elevenlabs::transcribe_timeout(
+            crate::asr::pcm::pcm_duration_ms(&pcm) as f64 / 1000.0,
+        );
         let raw = match start.active_asr() {
             ActiveAsr::Volcengine(asr) => {
                 asr.send_last_frame().await.map_err(|e| e.to_string())?;
@@ -1597,10 +1827,18 @@ impl Coordinator {
                 .await
                 .map_err(|_| "重新转录超时".to_string())?
                 .map_err(|e| e.to_string())?,
-            ActiveAsr::ElevenLabs(e) => tokio::time::timeout(timeout, e.transcribe())
+            ActiveAsr::DashScopeMultimodal(m) => {
+                tokio::time::timeout(dashscope_timeout, m.transcribe())
                 .await
                 .map_err(|_| "重新转录超时".to_string())?
-                .map_err(|e| e.to_string())?,
+                .map_err(|e| e.to_string())?
+            }
+            ActiveAsr::ElevenLabs(e) => {
+                tokio::time::timeout(elevenlabs_timeout, e.transcribe())
+                    .await
+                    .map_err(|_| "重新转录超时".to_string())?
+                    .map_err(|e| e.to_string())?
+            }
             #[cfg(target_os = "windows")]
             ActiveAsr::FoundryLocalWhisper(local) => {
                 let audio_secs = (local.buffer_duration_ms() as f64) / 1000.0;
@@ -1635,6 +1873,9 @@ impl Coordinator {
                 .map_err(|_| "重新转录超时".to_string())?
                 .map_err(|e| e.to_string())?,
         };
+        if let Some(guard) = retry_guard {
+            guard.disarm();
+        }
         Ok(raw.text)
     }
 
@@ -2013,25 +2254,54 @@ fn read_elevenlabs_credentials() -> (String, String, String) {
     (api_key, base_url, model)
 }
 
+fn read_dashscope_multimodal_credentials() -> (String, String, String) {
+    let api_key = CredentialsVault::get(CredentialAccount::AsrApiKey)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let base_url = if unified_bailian_is_active() {
+        let endpoint = read_asr_endpoint(crate::asr::bailian::DEFAULT_ENDPOINT);
+        derive_bailian_endpoint(&endpoint, BailianEndpointProtocol::Multimodal).unwrap_or(endpoint)
+    } else {
+        CredentialsVault::get(CredentialAccount::AsrEndpoint)
+            .ok()
+            .flatten()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| crate::asr::dashscope_multimodal::DEFAULT_ENDPOINT.to_string())
+    };
+    let model = CredentialsVault::get(CredentialAccount::AsrModel)
+        .ok()
+        .flatten()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| crate::asr::dashscope_multimodal::DEFAULT_MODEL.to_string());
+    (api_key, base_url, model)
+}
+
+fn read_asr_vocabulary_id() -> Option<String> {
+    CredentialsVault::get(CredentialAccount::AsrVocabularyId)
+        .ok()
+        .flatten()
+        .filter(|s| !s.trim().is_empty())
+}
+
 fn read_bailian_credentials() -> BailianCredentials {
     let api_key = CredentialsVault::get(CredentialAccount::AsrApiKey)
         .ok()
         .flatten()
         .unwrap_or_default();
-    let endpoint = CredentialsVault::get(CredentialAccount::AsrEndpoint)
-        .ok()
-        .flatten()
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| crate::asr::bailian::DEFAULT_ENDPOINT.to_string());
+    let stored_endpoint = read_asr_endpoint(crate::asr::bailian::DEFAULT_ENDPOINT);
+    let endpoint = if unified_bailian_is_active() {
+        derive_bailian_endpoint(&stored_endpoint, BailianEndpointProtocol::ClassicRealtime)
+            .unwrap_or(stored_endpoint)
+    } else {
+        stored_endpoint
+    };
     let model = CredentialsVault::get(CredentialAccount::AsrModel)
         .ok()
         .flatten()
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| crate::asr::bailian::DEFAULT_MODEL.to_string());
-    let vocabulary_id = CredentialsVault::get(CredentialAccount::AsrVocabularyId)
-        .ok()
-        .flatten()
-        .filter(|s| !s.trim().is_empty());
+    let vocabulary_id = read_asr_vocabulary_id();
     BailianCredentials {
         api_key,
         endpoint,
@@ -2040,16 +2310,38 @@ fn read_bailian_credentials() -> BailianCredentials {
     }
 }
 
+fn read_asr_endpoint(default_endpoint: &str) -> String {
+    CredentialsVault::get(CredentialAccount::AsrEndpoint)
+        .ok()
+        .flatten()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| default_endpoint.to_string())
+}
+
+/// 统一「阿里云百炼」入口的三条协议共用同一个 `bailian` 凭据条目。存储 endpoint
+/// 提供区域/工作空间主机，运行时再按所选模型推导各协议的 scheme 与 path。
+/// 老用户停在别名 id（`bailian-qwen3-realtime` / `bailian-fun-asr-flash`）上时不触发，
+/// 仍读自己条目里存的 endpoint。
+pub(crate) fn unified_bailian_is_active() -> bool {
+    CredentialsVault::get_active_asr() == crate::asr::bailian::PROVIDER_ID
+}
+
 fn read_qwen3_realtime_credentials() -> Qwen3RealtimeCredentials {
     let api_key = CredentialsVault::get(CredentialAccount::AsrApiKey)
         .ok()
         .flatten()
         .unwrap_or_default();
-    let endpoint = CredentialsVault::get(CredentialAccount::AsrEndpoint)
-        .ok()
-        .flatten()
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| crate::asr::qwen_realtime::DEFAULT_ENDPOINT.to_string());
+    let endpoint = if unified_bailian_is_active() {
+        let endpoint = read_asr_endpoint(crate::asr::bailian::DEFAULT_ENDPOINT);
+        derive_bailian_endpoint(&endpoint, BailianEndpointProtocol::QwenRealtime)
+            .unwrap_or(endpoint)
+    } else {
+        CredentialsVault::get(CredentialAccount::AsrEndpoint)
+            .ok()
+            .flatten()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| crate::asr::qwen_realtime::DEFAULT_ENDPOINT.to_string())
+    };
     let model = CredentialsVault::get(CredentialAccount::AsrModel)
         .ok()
         .flatten()
@@ -2425,6 +2717,10 @@ mod tests {
             ActiveAsrProviderKind::Mimo
         );
         assert_eq!(
+            active_asr_provider_kind(crate::asr::dashscope_multimodal::PROVIDER_ID),
+            ActiveAsrProviderKind::DashScopeMultimodal
+        );
+        assert_eq!(
             active_asr_provider_kind(crate::asr::elevenlabs::PROVIDER_ID),
             ActiveAsrProviderKind::ElevenLabs
         );
@@ -2432,6 +2728,121 @@ mod tests {
             active_asr_provider_kind("volcengine"),
             ActiveAsrProviderKind::Volcengine
         );
+        // 未知 id 落到 Volcengine（与构建/凭据分发的兜底一致）。
+        assert_eq!(
+            active_asr_provider_kind("some-unknown-provider"),
+            ActiveAsrProviderKind::Volcengine
+        );
+    }
+
+    // 锁定分类枚举派生的凭据语义：重构把 ensure_asr_credentials /
+    // asr_configured_for_provider 从「字符串白名单 + 静默 else」改成对这两个方法的
+    // 穷尽 match，这里逐 kind 钉死映射，防止未来悄悄改动某个 provider 的凭据形态。
+    #[test]
+    fn preflight_credential_maps_every_kind() {
+        use AsrPreflightCredential::*;
+        use ActiveAsrProviderKind::*;
+        assert_eq!(Bailian.preflight_credential(), AsrApiKey);
+        assert_eq!(Qwen3Realtime.preflight_credential(), AsrApiKey);
+        assert_eq!(Mimo.preflight_credential(), AsrApiKey);
+        assert_eq!(DashScopeMultimodal.preflight_credential(), AsrApiKey);
+        assert_eq!(ElevenLabs.preflight_credential(), AsrApiKey);
+        assert_eq!(WhisperCompatible.preflight_credential(), AsrApiKey);
+        assert_eq!(Volcengine.preflight_credential(), VolcAppKey);
+    }
+
+    #[test]
+    fn resolve_effective_asr_provider_routes_bailian_by_model() {
+        let bailian = crate::asr::bailian::PROVIDER_ID;
+        // 统一百炼:按模型名路由到底层协议 id。
+        assert_eq!(
+            resolve_effective_asr_provider(bailian, "fun-asr-realtime").unwrap(),
+            crate::asr::bailian::PROVIDER_ID
+        );
+        assert_eq!(
+            resolve_effective_asr_provider(bailian, "qwen3-asr-flash-realtime").unwrap(),
+            crate::asr::qwen_realtime::PROVIDER_ID
+        );
+        assert_eq!(
+            resolve_effective_asr_provider(bailian, "qwen3-asr-flash-realtime-2026-02-10")
+                .unwrap(),
+            crate::asr::qwen_realtime::PROVIDER_ID
+        );
+        assert_eq!(
+            resolve_effective_asr_provider(bailian, "fun-asr-flash-2026-06-15").unwrap(),
+            crate::asr::dashscope_multimodal::PROVIDER_ID
+        );
+        assert_eq!(
+            resolve_effective_asr_provider(bailian, "paraformer-realtime-v2").unwrap(),
+            crate::asr::bailian::PROVIDER_ID
+        );
+        // 空模型 → 经典实时（百炼默认）；未知模型应被拒绝。
+        assert_eq!(
+            resolve_effective_asr_provider(bailian, "").unwrap(),
+            crate::asr::bailian::PROVIDER_ID
+        );
+        // 非百炼 provider 原样返回（隐藏别名与其它厂商各走各的旧路径）。
+        assert_eq!(
+            resolve_effective_asr_provider(crate::asr::qwen_realtime::PROVIDER_ID, "anything")
+                .unwrap(),
+            crate::asr::qwen_realtime::PROVIDER_ID
+        );
+        assert_eq!(
+            resolve_effective_asr_provider("whisper", "whisper-1").unwrap(),
+            "whisper"
+        );
+    }
+
+    #[test]
+    fn resolve_effective_asr_provider_rejects_unsupported_bailian_model() {
+        let error = resolve_effective_asr_provider(crate::asr::bailian::PROVIDER_ID, "paraformer-v2")
+            .unwrap_err();
+        assert!(error.contains("不支持的百炼 ASR 模型"));
+
+        let error = resolve_effective_asr_provider(
+            crate::asr::bailian::PROVIDER_ID,
+            "fun-asr-flash-8k-realtime",
+        )
+        .unwrap_err();
+        assert!(error.contains("不支持的百炼 ASR 模型"));
+    }
+
+    #[test]
+    fn derive_bailian_endpoint_preserves_region_host_and_selects_protocol_path() {
+        let endpoint = "https://workspace.ap-southeast-1.maas.aliyuncs.com/custom?x=1";
+        assert_eq!(
+            derive_bailian_endpoint(endpoint, BailianEndpointProtocol::ClassicRealtime).unwrap(),
+            "wss://workspace.ap-southeast-1.maas.aliyuncs.com/api-ws/v1/inference/"
+        );
+        assert_eq!(
+            derive_bailian_endpoint(endpoint, BailianEndpointProtocol::QwenRealtime).unwrap(),
+            "wss://workspace.ap-southeast-1.maas.aliyuncs.com/api-ws/v1/realtime"
+        );
+        assert_eq!(
+            derive_bailian_endpoint(endpoint, BailianEndpointProtocol::Multimodal).unwrap(),
+            "https://workspace.ap-southeast-1.maas.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
+        );
+    }
+
+    #[test]
+    fn derive_bailian_endpoint_uses_protocol_default_for_empty_value() {
+        assert_eq!(
+            derive_bailian_endpoint("", BailianEndpointProtocol::QwenRealtime).unwrap(),
+            crate::asr::qwen_realtime::DEFAULT_ENDPOINT
+        );
+    }
+
+    #[test]
+    fn configured_fields_maps_every_kind() {
+        use AsrConfiguredFields::*;
+        use ActiveAsrProviderKind::*;
+        assert_eq!(Bailian.configured_fields(), ApiKeyOnly);
+        assert_eq!(Qwen3Realtime.configured_fields(), ApiKeyOnly);
+        assert_eq!(Mimo.configured_fields(), ApiKeyEndpointModel);
+        assert_eq!(DashScopeMultimodal.configured_fields(), ApiKeyEndpointModel);
+        assert_eq!(ElevenLabs.configured_fields(), ApiKeyOnly);
+        assert_eq!(WhisperCompatible.configured_fields(), EndpointModelOnly);
+        assert_eq!(Volcengine.configured_fields(), VolcAppKey);
     }
 
     #[cfg(target_os = "windows")]
@@ -3225,87 +3636,6 @@ fn whisper_transcribe_timeout(audio_secs: f64) -> std::time::Duration {
         .saturating_add(20)
         .max(COORDINATOR_GLOBAL_TIMEOUT_SECS);
     std::time::Duration::from_secs(secs)
-}
-
-pub(crate) fn validate_llm_endpoint(raw: &str) -> anyhow::Result<()> {
-    use std::net::IpAddr;
-
-    let url =
-        url::Url::parse(raw).map_err(|e| anyhow::anyhow!("LLM endpoint 不是合法 URL：{e}"))?;
-    let host = url
-        .host_str()
-        .ok_or_else(|| anyhow::anyhow!("LLM endpoint 缺少主机名"))?
-        .to_ascii_lowercase();
-
-    const METADATA_HOSTS: [&str; 2] = ["metadata.google.internal", "169.254.169.254"];
-    if METADATA_HOSTS.iter().any(|m| host.contains(m)) {
-        anyhow::bail!("LLM endpoint 指向云元数据服务，已拒绝：{host}");
-    }
-
-    let scheme = url.scheme();
-    let bare_host = host
-        .strip_prefix('[')
-        .and_then(|h| h.strip_suffix(']'))
-        .unwrap_or(host.as_str());
-
-    let Ok(ip) = bare_host.parse::<IpAddr>() else {
-        if bare_host == "localhost" {
-            return Ok(());
-        }
-        if scheme != "https" {
-            anyhow::bail!("LLM endpoint 必须使用 https（仅 localhost / 局域网允许 http）：{raw}");
-        }
-        return Ok(());
-    };
-
-    let canonical = match ip {
-        IpAddr::V6(v6) => v6.to_ipv4_mapped().map(IpAddr::V4).unwrap_or(ip),
-        v4 => v4,
-    };
-
-    let is_lan = match canonical {
-        IpAddr::V4(v4) => ip_v4_is_lan(v4),
-        IpAddr::V6(v6) => ip_v6_is_lan(v6),
-    };
-    if is_lan {
-        return Ok(());
-    }
-
-    let is_blocked = match canonical {
-        IpAddr::V4(v4) => ip_v4_is_blocked(v4),
-        IpAddr::V6(v6) => ip_v6_is_blocked(v6),
-    };
-    if is_blocked {
-        anyhow::bail!("LLM endpoint 指向保留/危险地址，已拒绝（防 SSRF）：{ip}");
-    }
-
-    if scheme != "https" {
-        anyhow::bail!("LLM endpoint 必须使用 https（仅 localhost / 局域网允许 http）：{raw}");
-    }
-
-    Ok(())
-}
-
-fn ip_v4_is_lan(ip: std::net::Ipv4Addr) -> bool {
-    ip.is_loopback() || ip.is_private()
-}
-
-fn ip_v4_is_blocked(ip: std::net::Ipv4Addr) -> bool {
-    let octets = ip.octets();
-    let is_cgnat = octets[0] == 100 && (64..=127).contains(&octets[1]);
-    ip.is_link_local() || ip.is_unspecified() || ip.is_broadcast() || is_cgnat
-}
-
-fn ip_v6_is_lan(ip: std::net::Ipv6Addr) -> bool {
-    let segs = ip.segments();
-    let is_ula = (segs[0] & 0xfe00) == 0xfc00;
-    ip.is_loopback() || is_ula
-}
-
-fn ip_v6_is_blocked(ip: std::net::Ipv6Addr) -> bool {
-    let segs = ip.segments();
-    let is_link_local = (segs[0] & 0xffc0) == 0xfe80;
-    ip.is_unspecified() || is_link_local
 }
 
 /// 检查 begin_session 的 await 间隙是否被 cancel_session 打断。

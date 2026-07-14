@@ -27,9 +27,8 @@ fn volcengine_configured(snap: &CredentialsSnapshot) -> bool {
 }
 
 pub(crate) fn asr_configured_for_provider(provider: &str, snap: &CredentialsSnapshot) -> bool {
-    if provider == "volcengine" {
-        return volcengine_configured(snap);
-    }
+    // 本地 / 无凭据引擎不属于云端分类枚举（ActiveAsrProviderKind），由平台 cfg 门
+    // 在此单独判定；移动端上这些引擎不可用直接判未配置。
     if cfg!(mobile)
         && (provider == crate::asr::local::PROVIDER_ID
             || provider == crate::asr::local::sherpa::PROVIDER_ID
@@ -46,22 +45,21 @@ pub(crate) fn asr_configured_for_provider(provider: &str, snap: &CredentialsSnap
         // 本地 ASR 不依赖云端凭据。
         return true;
     }
-    if provider == crate::asr::bailian::PROVIDER_ID
-        || provider == crate::asr::qwen_realtime::PROVIDER_ID
-    {
-        return configured(&snap.asr_api_key);
+    // 云端 provider：所需字段由 ActiveAsrProviderKind 统一判定（穷尽 match，新增
+    // kind 编译器强制补齐）。volcengine 亦经此路（VolcAppKey）。
+    use crate::coordinator::{active_asr_provider_kind, AsrConfiguredFields};
+    match active_asr_provider_kind(provider).configured_fields() {
+        AsrConfiguredFields::ApiKeyOnly => configured(&snap.asr_api_key),
+        AsrConfiguredFields::ApiKeyEndpointModel => {
+            configured(&snap.asr_api_key)
+                && configured(&snap.asr_endpoint)
+                && configured(&snap.asr_model)
+        }
+        AsrConfiguredFields::EndpointModelOnly => {
+            configured(&snap.asr_endpoint) && configured(&snap.asr_model)
+        }
+        AsrConfiguredFields::VolcAppKey => volcengine_configured(snap),
     }
-    if provider == crate::asr::mimo::PROVIDER_ID {
-        return configured(&snap.asr_api_key)
-            && configured(&snap.asr_endpoint)
-            && configured(&snap.asr_model);
-    }
-    if provider == crate::asr::elevenlabs::PROVIDER_ID {
-        return configured(&snap.asr_api_key)
-            && configured(&snap.asr_endpoint)
-            && configured(&snap.asr_model);
-    }
-    configured(&snap.asr_endpoint) && configured(&snap.asr_model)
 }
 
 pub(crate) fn llm_configured_for_provider(provider: &str, snap: &CredentialsSnapshot) -> bool {
@@ -160,7 +158,12 @@ pub(crate) async fn release_sherpa_runtime_if_inactive(
 }
 
 #[tauri::command]
-pub fn set_credential(window: Window, account: String, value: String) -> Result<(), String> {
+pub fn set_credential(
+    window: Window,
+    account: String,
+    value: String,
+    provider: Option<String>,
+) -> Result<(), String> {
     ensure_main_window(&window)?;
     if account == LLM_EXTRA_HEADERS_ACCOUNT {
         CredentialsVault::set_active_llm_extra_headers_json(&value).map_err(|e| e.to_string())?;
@@ -168,7 +171,22 @@ pub fn set_credential(window: Window, account: String, value: String) -> Result<
         return Ok(());
     }
     let acc = parse_account(&account)?;
-    if value.is_empty() {
+    if let Some(provider) = provider {
+        if !matches!(
+            acc,
+            CredentialAccount::VolcengineAppKey
+                | CredentialAccount::VolcengineAccessKey
+                | CredentialAccount::VolcengineResourceId
+                | CredentialAccount::AsrApiKey
+                | CredentialAccount::AsrEndpoint
+                | CredentialAccount::AsrModel
+                | CredentialAccount::AsrVocabularyId
+        ) {
+            return Err("provider-scoped credential must be an ASR account".to_string());
+        }
+        CredentialsVault::set_for_asr_provider(&provider, acc, &value)
+            .map_err(|e| e.to_string())?;
+    } else if value.is_empty() {
         CredentialsVault::remove(acc).map_err(|e| e.to_string())?;
     } else {
         CredentialsVault::set(acc, &value).map_err(|e| e.to_string())?;
@@ -248,13 +266,21 @@ pub fn set_active_llm_provider(provider: String) -> Result<(), String> {
 /// 读出某个账号的实际值（用于设置页预填表单）。
 /// 凭据来自系统凭据库；只允许主设置窗口读取 raw secret，避免胶囊 / QA 等辅助窗口默认暴露。
 #[tauri::command]
-pub fn read_credential(window: Window, account: String) -> Result<Option<String>, String> {
+pub fn read_credential(
+    window: Window,
+    account: String,
+    provider: Option<String>,
+) -> Result<Option<String>, String> {
     ensure_main_window(&window)?;
     if account == LLM_EXTRA_HEADERS_ACCOUNT {
         return CredentialsVault::get_active_llm_extra_headers_json().map_err(|e| e.to_string());
     }
     let acc = parse_account(&account)?;
-    CredentialsVault::get(acc).map_err(|e| e.to_string())
+    if let Some(provider) = provider {
+        CredentialsVault::get_for_asr_provider(&provider, acc).map_err(|e| e.to_string())
+    } else {
+        CredentialsVault::get(acc).map_err(|e| e.to_string())
+    }
 }
 
 fn ensure_main_window(window: &Window) -> Result<(), String> {

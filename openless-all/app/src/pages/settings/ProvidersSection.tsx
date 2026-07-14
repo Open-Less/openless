@@ -18,7 +18,7 @@ import { useMobileLayout } from '../../lib/useMobileLayout';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
 import { SelectLite } from '../../components/ui/SelectLite';
 import { Card } from '../_atoms';
-import { SettingRow, SectionTitle, Toggle, inputStyle, type AsrPresetId } from './shared';
+import { SettingRow, SectionTitle, Toggle, inputStyle, ASR_PRESETS, type AsrPresetId } from './shared';
 
 function LlmThinkingToggle({ enabled, onToggle }: { enabled: boolean; onToggle: (next: boolean) => void }) {
   const { t } = useTranslation();
@@ -144,42 +144,8 @@ type LlmPresetId = typeof LLM_PRESETS[number]['id'];
 
 const ASR_DEFAULT_RESOURCE_ID = 'volc.seedasr.sauc.duration';
 
-// `volcengine` / `bailian` 走自建流式客户端；其余走 OpenAI 兼容
-// `/audio/transcriptions`（`coordinator.rs::is_whisper_compatible_provider`）。
-// 新增兼容厂商：
-//   1. 在这里加一项 `{ id, nameKey, baseUrl, model }`；
-//   2. 若走 Whisper 协议，`coordinator.rs::is_whisper_compatible_provider` 加同名 id；
-//      若是专有协议，新增独立 ASR client 与 provider kind；
-//   3. 在 i18n 的 `settings.providers.presets.<nameKey>` 加文案。
-// `AsrPresetId` 定义在 settings/shared.tsx，LocalModelSection / ProvidersSection 共用同一份。
-const ASR_PRESETS: ReadonlyArray<{ id: AsrPresetId; nameKey: string; baseUrl: string; model: string }> = [
-  { id: 'volcengine',   nameKey: 'asrVolcengine',   baseUrl: '',                                              model: ''                              },
-  { id: 'bailian',      nameKey: 'asrBailian',     baseUrl: 'wss://dashscope.aliyuncs.com/api-ws/v1/inference/', model: 'fun-asr-realtime'             },
-  // Qwen3-ASR-Flash 实时：OpenAI Realtime 风格 WS（/api-ws/v1/realtime），
-  // 与上面经典 inference 协议不同，由 asr/qwen_realtime.rs 专用 client 处理。
-  // 业务空间专属域名（wss://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/api-ws/v1/realtime）同样可用。
-  { id: 'bailian-qwen3-realtime', nameKey: 'asrBailianQwen3', baseUrl: 'wss://dashscope.aliyuncs.com/api-ws/v1/realtime', model: 'qwen3-asr-flash-realtime' },
-  { id: 'siliconflow',  nameKey: 'asrSiliconflow',  baseUrl: 'https://api.siliconflow.cn/v1',                  model: 'FunAudioLLM/SenseVoiceSmall' },
-  { id: 'zhipu',        nameKey: 'asrZhipu',        baseUrl: 'https://open.bigmodel.cn/api/paas/v4',           model: 'glm-asr-2512'                },
-  { id: 'groq',         nameKey: 'asrGroq',         baseUrl: 'https://api.groq.com/openai/v1',                 model: 'whisper-large-v3-turbo'      },
-  { id: 'whisper',      nameKey: 'asrWhisper',      baseUrl: 'https://api.openai.com/v1',                      model: 'whisper-1'                   },
-  // OpenRouter 的 /audio/transcriptions 走 application/json + base64（issue #582），
-  // 后端 coordinator.rs::whisper_request_format 对该 id 切换到 OpenRouterJson 编码。
-  { id: 'openrouter',   nameKey: 'asrOpenrouter',   baseUrl: 'https://openrouter.ai/api/v1',                   model: 'openai/whisper-large-v3-turbo' },
-  // 小米 MiMo ASR 按官方文档走 /chat/completions + input_audio，不是
-  // Whisper /audio/transcriptions；后端由 asr/mimo.rs 专用 client 处理。
-  { id: 'xiaomi-mimo-asr', nameKey: 'asrXiaomiMimo', baseUrl: 'https://api.xiaomimimo.com/v1',                  model: 'mimo-v2.5-asr'               },
-  // ElevenLabs Scribe：xi-api-key 头 + /speech-to-text multipart（model_id/file），
-  // 非 Whisper /audio/transcriptions；后端由 asr/elevenlabs.rs 专用 client 处理。
-  { id: 'elevenlabs',   nameKey: 'asrElevenLabs',  baseUrl: 'https://api.elevenlabs.io/v1',                   model: 'scribe_v2'                   },
-  { id: 'foundry-local-whisper', nameKey: 'asrFoundryLocalWhisper', baseUrl: '',                              model: ''                              },
-  // 本地引擎（Foundry / sherpa-onnx / Qwen3）：无 baseUrl/model 配置，
-  // 模型在「高级 → 本地模型」里下载与切换。
-  { id: 'sherpa-onnx-local',     nameKey: 'asrSherpaOnnxLocal',     baseUrl: '',                              model: ''                              },
-  { id: 'local-qwen3',  nameKey: 'asrLocalQwen3',   baseUrl: '',                                              model: ''                              },
-  // Apple 系统语音识别（macOS）：无 baseUrl/model、无下载、无凭据。
-  { id: 'apple-speech', nameKey: 'asrAppleSpeech',  baseUrl: '',                                              model: ''                              },
-];
+// ASR_PRESETS 已上移到 settings/shared.tsx 作为单一来源（AsrPresetId 由其派生，
+// Overview 的显示名映射也从那里取）。新增厂商的步骤见 shared.tsx 的注释。
 
 type ProvidersSectionKind = 'all' | 'llm' | 'asr';
 
@@ -207,6 +173,12 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
   const [llmModelRevision, setLlmModelRevision] = useState(0);
   const [asrModelRevision, setAsrModelRevision] = useState(0);
   const os = detectOS();
+  const unifiedBailian = committedAsrProvider === 'bailian' && os !== 'android';
+  const [bailianModel, setBailianModel] = useState('');
+
+  useEffect(() => {
+    if (committedAsrProvider !== 'bailian') setBailianModel('');
+  }, [committedAsrProvider]);
   // 本地重引擎（qwen3 / sherpa / foundry）仍只在「高级 → 本地模型」里启用，
   // 防止新手在主下拉误开 CPU 推理。Apple 语音是系统自带、零凭据、轻量，
   // 在 macOS 上直接作为常规选项放进主下拉，方便随时选用 / 切走。
@@ -214,7 +186,12 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
     p => p.id !== 'foundry-local-whisper'
       && p.id !== 'local-qwen3'
       && p.id !== 'sherpa-onnx-local'
-      && (p.id !== 'apple-speech' || os === 'mac'),
+      && (p.id !== 'apple-speech' || os === 'mac')
+      // 百炼三协议收成一个「阿里云百炼」入口(id=bailian)+ 模型下拉。qwen3 / fun-asr-flash
+      // 两个旧 id 作隐藏别名:新用户下拉里看不到,只有已经停在该 id 上的老用户仍显示,
+      // 保证其配置不被打断(见 coordinator::resolve_effective_asr_provider 的向后兼容)。
+      && (p.id !== 'bailian-qwen3-realtime' || asrProvider === 'bailian-qwen3-realtime')
+      && (p.id !== 'bailian-fun-asr-flash' || asrProvider === 'bailian-fun-asr-flash'),
   );
 
   useEffect(() => {
@@ -311,18 +288,20 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
         await updatePrefs(next);
         if (seq !== asrSwitchSeqRef.current) return;
       }
-      // asr.endpoint / asr.model 是所有 ASR 厂商共用的一对凭据槽（persistence.rs
-      // 未做 per-provider 隔离）。若只在槽空时填默认值，老用户从 A 厂商切到 B 厂商
-      // 时槽里仍是 A 的 endpoint/model —— dropdown 切了、实际还打 A 的地址。改成切到
-      // 有默认值的预设就强制覆盖，让切换真切到位。volcengine 走另一套凭据、本地引擎
-      // 无 baseUrl，都被 if 守卫天然跳过。与 onLlmProviderChange 同款修法。
+      // 凭据按 provider 隔离。切换回来时优先保留该 provider 已保存的自定义值，
+      // 仅在当前 entry 为空时写入 preset 默认值。
       const preset = ASR_PRESETS.find(p => p.id === id);
-      if (preset && preset.baseUrl) {
-        await setCredential('asr.endpoint', preset.baseUrl);
+      const [storedEndpoint, storedModel] = await Promise.all([
+        readCredential('asr.endpoint', id),
+        readCredential('asr.model', id),
+      ]);
+      if (seq !== asrSwitchSeqRef.current) return;
+      if (preset?.baseUrl && !storedEndpoint?.trim()) {
+        await setCredential('asr.endpoint', preset.baseUrl, id);
         if (seq !== asrSwitchSeqRef.current) return;
       }
-      if (preset && preset.model) {
-        await setCredential('asr.model', preset.model);
+      if (preset?.model && !storedModel?.trim()) {
+        await setCredential('asr.model', preset.model, id);
         if (seq !== asrSwitchSeqRef.current) return;
       }
       setCommittedAsrProvider(id);
@@ -469,6 +448,7 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
               key={`${committedAsrProvider}:app_key`}
               label={t('settings.providers.volcengineAppKeyLabel')}
               account="volcengine.app_key"
+              provider={committedAsrProvider}
               mono
               mask
             />
@@ -476,6 +456,7 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
               key={`${committedAsrProvider}:access_key`}
               label={t('settings.providers.volcengineAccessKeyLabel')}
               account="volcengine.access_key"
+              provider={committedAsrProvider}
               mono
               mask
             />
@@ -483,6 +464,7 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
               key={`${committedAsrProvider}:resource_id`}
               label={t('settings.providers.volcengineResourceIdLabel')}
               account="volcengine.resource_id"
+              provider={committedAsrProvider}
               mono
               placeholder={ASR_DEFAULT_RESOURCE_ID} defaultValue={ASR_DEFAULT_RESOURCE_ID} />
             <div style={{ marginTop: 2, fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.6 }}>
@@ -496,18 +478,26 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
           null
         ) : (
           <>
-            <CredentialField key={`${committedAsrProvider}:api_key`} label={t('settings.providers.apiKeyLabel')} account="asr.api_key" mono mask />
+            <CredentialField key={`${committedAsrProvider}:api_key`} label={t('settings.providers.apiKeyLabel')} account="asr.api_key" provider={committedAsrProvider} mono mask />
+            {/* 统一百炼保留 endpoint 供用户选择区域或工作空间域名；后端按模型转换协议与路径。 */}
             <CredentialField key={`${committedAsrProvider}:endpoint`} label={t('settings.providers.baseUrlLabel')} account="asr.endpoint"
+              provider={committedAsrProvider}
               placeholder={asrPreset?.baseUrl || 'https://api.openai.com/v1'}
               defaultValue={asrPreset?.baseUrl || undefined} />
             <CredentialField key={`${committedAsrProvider}:model:${asrModelRevision}`} label={t('settings.providers.modelLabel')} account="asr.model"
-              placeholder={asrPreset?.model || 'whisper-1'} />
-            {committedAsrProvider === 'bailian' && (
+              provider={committedAsrProvider}
+              placeholder={unifiedBailian ? 'fun-asr-realtime' : (asrPreset?.model || 'whisper-1')}
+              onValueChange={unifiedBailian ? setBailianModel : undefined} />
+            {unifiedBailian && (
+              <BailianProtocolHint key={`${committedAsrProvider}:proto:${asrModelRevision}`} currentModel={bailianModel} />
+            )}
+            {unifiedBailian && bailianModelSupportsVocabulary(bailianModel) && (
               <>
                 <CredentialField
                   key={`${committedAsrProvider}:vocabulary_id`}
                   label={t('settings.providers.bailianVocabularyIdLabel')}
                   account="asr.vocabulary_id"
+                  provider={committedAsrProvider}
                   mono
                   placeholder="vocab-..."
                 />
@@ -516,7 +506,13 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
                 </div>
               </>
             )}
-            <ProviderTools kind="asr" modelAccount="asr.model" onModelSelected={() => setAsrModelRevision(v => v + 1)} />
+            {committedAsrProvider === 'elevenlabs' && (
+              <div role="note" style={{ marginTop: 2, fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.6 }}>
+                {t('settings.providers.elevenLabsUploadNotice')}
+              </div>
+            )}
+            {/* 统一百炼「拉取模型」只写 model，不覆盖用户选择的区域或工作空间 endpoint。 */}
+            <ProviderTools kind="asr" modelAccount="asr.model" provider={committedAsrProvider} onModelSelected={() => setAsrModelRevision(v => v + 1)} />
           </>
         )}
       </Card>
@@ -525,9 +521,55 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
   );
 }
 
+// 统一「阿里云百炼」下,按模型名判断走哪种协议(与后端
+// coordinator::resolve_effective_asr_provider 保持一致):qwen3-asr-flash-realtime* 与
+// fun-asr-realtime* 与 fun-asr-flash-8k-realtime* 都是实时模型；当前支持的
+// fun-asr-flash-2026-06-15 是「录音文件·说完转写」。
+function bailianModelIsRecordedFile(model: string): boolean {
+  const m = model.trim();
+  return m === 'fun-asr-flash-2026-06-15';
+}
+
+function bailianModelSupportsVocabulary(model: string): boolean {
+  const m = model.trim();
+  return !m
+    || m.startsWith('fun-asr-realtime')
+    || m.startsWith('paraformer-realtime')
+    || m.startsWith('sensevoice-realtime');
+}
+
+// 模型框下的一行协议提示,解决「三种模型看不出区别」——告诉用户当前模型是实时还是
+// 录音文件、行为差异如何。随 asrModelRevision(拉取/选择模型时)与挂载时重读 asr.model。
+function BailianProtocolHint({ currentModel }: { currentModel: string }) {
+  const { t } = useTranslation();
+  const [model, setModel] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    readCredential('asr.model')
+      .then(v => { if (!cancelled) setModel(v || 'fun-asr-realtime'); })
+      .catch(() => { /* 读失败按默认实时提示 */ });
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    setModel(currentModel || 'fun-asr-realtime');
+  }, [currentModel]);
+
+  const hint = bailianModelIsRecordedFile(model)
+    ? t('settings.providers.bailianModelRecordedFileHint')
+    : t('settings.providers.bailianModelRealtimeHint');
+
+  return (
+    <div style={{ marginTop: 2, fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.6 }}>
+      {hint}
+    </div>
+  );
+}
+
 type ProviderToolStatus = 'idle' | 'loading' | 'success' | 'empty' | 'error';
 
-function ProviderTools({ kind, modelAccount, onModelSelected }: { kind: 'llm' | 'asr'; modelAccount: string; onModelSelected: () => void }) {
+function ProviderTools({ kind, modelAccount, provider, onModelSelected, showFetchModels = true }: { kind: 'llm' | 'asr'; modelAccount: string; provider?: string; onModelSelected: () => void; showFetchModels?: boolean }) {
   const { t } = useTranslation();
   const mobile = useMobileLayout();
   const [models, setModels] = useState<string[]>([]);
@@ -584,7 +626,7 @@ function ProviderTools({ kind, modelAccount, onModelSelected }: { kind: 'llm' | 
   const applyModel = async (model: string) => {
     setResult('loading', t('common.saving'));
     try {
-      await setCredential(modelAccount, model);
+      await setCredential(modelAccount, model, provider);
       setSelectedModel(model);
       onModelSelected();
       setResult('success', t('settings.providers.modelSaved', { model }));
@@ -598,8 +640,10 @@ function ProviderTools({ kind, modelAccount, onModelSelected }: { kind: 'llm' | 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8, width: '100%', maxWidth: mobile ? '100%' : 420 }}>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', width: '100%' }}>
           <button onClick={validate} style={miniBtnStyle} disabled={status === 'loading'}>{t('settings.providers.validate')}</button>
-          <button onClick={loadModels} style={miniBtnStyle} disabled={status === 'loading'}>{t('settings.providers.fetchModels')}</button>
-          {models.length > 0 && (
+          {showFetchModels && (
+            <button onClick={loadModels} style={miniBtnStyle} disabled={status === 'loading'}>{t('settings.providers.fetchModels')}</button>
+          )}
+          {showFetchModels && models.length > 0 && (
             <SelectLite
               value={selectedModel}
               onChange={applyModel}
@@ -647,14 +691,16 @@ type CredentialFieldStatus = 'idle' | 'saving' | 'saved' | 'readError' | 'saveEr
 interface CredentialFieldProps {
   label: string;
   account: string;
+  provider?: string;
   placeholder?: string;
   mono?: boolean;
   mask?: boolean;
   defaultValue?: string;
   trailing?: ReactNode;
+  onValueChange?: (value: string) => void;
 }
 
-function CredentialField({ label, account, placeholder, mono, mask, defaultValue, trailing }: CredentialFieldProps) {
+function CredentialField({ label, account, provider, placeholder, mono, mask, defaultValue, trailing, onValueChange }: CredentialFieldProps) {
   const { t } = useTranslation();
   const mobile = useMobileLayout();
   const [value, setValue] = useState('');
@@ -672,26 +718,29 @@ function CredentialField({ label, account, placeholder, mono, mask, defaultValue
     setDirty(false);
     setStatus('idle');
     setValue('');
+    onValueChange?.('');
     if (debounceRef.current) {
       clearTimeout(debounceRef.current);
       debounceRef.current = null;
     }
-    readCredential(account)
+    readCredential(account, provider)
       .then(v => {
         if (cancelled) return;
         setValue(v ?? '');
+        onValueChange?.(v ?? '');
         setLoaded(true);
       })
       .catch(error => {
         if (cancelled) return;
         console.error('[settings] failed to read credential', account, error);
+        onValueChange?.('');
         setLoaded(true);
         setStatus('readError');
       });
     return () => {
       cancelled = true;
     };
-  }, [account]);
+  }, [account, provider, onValueChange]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -728,7 +777,7 @@ function CredentialField({ label, account, placeholder, mono, mask, defaultValue
     setStatus('saving');
     emitSaved('saving', t('common.saving'));
     try {
-      await setCredential(account, v);
+      await setCredential(account, v, provider);
       if (!mountedRef.current) return;
       setDirty(false);
       showTemporaryStatus('saved');
@@ -742,6 +791,7 @@ function CredentialField({ label, account, placeholder, mono, mask, defaultValue
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const v = e.target.value;
     setValue(v);
+    onValueChange?.(v);
     if (!loaded) return;
     setDirty(true);
     if (debounceRef.current) clearTimeout(debounceRef.current);
@@ -760,6 +810,7 @@ function CredentialField({ label, account, placeholder, mono, mask, defaultValue
   const fillDefault = async () => {
     if (!loaded || !defaultValue) return;
     setValue(defaultValue);
+    onValueChange?.(defaultValue);
     setDirty(true);
     await save(defaultValue, true);
   };

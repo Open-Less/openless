@@ -8,6 +8,8 @@
 //! 取已缓存的引擎再传进来，避免每次会话都重加载 1.2GB+ 模型。
 
 #[cfg(target_os = "macos")]
+use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(target_os = "macos")]
 use std::sync::Arc;
 
 #[cfg(target_os = "macos")]
@@ -25,6 +27,9 @@ use crate::asr::RawTranscript;
 #[cfg(target_os = "macos")]
 pub struct LocalQwenAsr {
     engine: Arc<QwenAsrEngine>,
+    /// `spawn_blocking` 已经启动后不能被 JoinHandle 强制终止；取消先关闭
+    /// 当前会话的 token 门控，确保 native worker 返回前不会向新 UI 会话泄漏旧 token。
+    cancelled: Arc<AtomicBool>,
     /// 16-bit LE PCM 字节缓冲（recorder 推什么我们存什么），在 transcribe 时再
     /// 转 f32 喂给 C 端。一次会话最多几 MB，clone 一次成本可接受。
     buffer: Mutex<Vec<u8>>,
@@ -36,6 +41,7 @@ impl LocalQwenAsr {
     pub fn new(app: AppHandle, engine: Arc<QwenAsrEngine>) -> Self {
         Self {
             engine,
+            cancelled: Arc::new(AtomicBool::new(false)),
             buffer: Mutex::new(Vec::new()),
             app,
         }
@@ -51,6 +57,7 @@ impl LocalQwenAsr {
     /// stop 时调用：把 buffer 的 i16 PCM 转 f32，跑流式转写，token 实时
     /// 通过事件吐到前端胶囊；最终文本一起返回供 polish/insert。
     pub async fn transcribe(self: Arc<Self>) -> Result<RawTranscript> {
+        self.cancelled.store(false, Ordering::Release);
         let pcm_bytes = std::mem::take(&mut *self.buffer.lock());
         if pcm_bytes.is_empty() {
             return Ok(RawTranscript {
@@ -68,32 +75,35 @@ impl LocalQwenAsr {
         samples_f32.extend(std::iter::repeat(0.0f32).take(8_000));
 
         // 注册 token 回调：每个稳定 token 抛 `local-asr-token` 事件。
-        // capsule 前端按 sessionId 累积显示。
+        // capsule 前端按 sessionId 累积显示。回调安装、native 调用和解绑
+        // 在 QwenAsrEngine 的同一把 context 锁内完成。
         let app = self.app.clone();
-        self.engine.set_token_handler(Some(move |piece: &str| {
-            if let Err(e) = app.emit("local-asr-token", piece.to_string()) {
-                log::warn!("[local-asr] emit token failed: {e}");
-            }
-        }));
+        let cancelled = Arc::clone(&self.cancelled);
 
         // qwen_transcribe_stream 是阻塞调用；用 spawn_blocking 防止占住 tokio runtime。
         // 用 tauri::async_runtime::spawn_blocking 而非 tokio 的 —— 同 download.rs 注释，
         // 走 Tauri 持有的 runtime handle，不依赖调用方上下文（虽然这里目前都在 async 路径上调，
         // 但保持一致更稳）。
         let engine = Arc::clone(&self.engine);
-        let text =
-            tauri::async_runtime::spawn_blocking(move || engine.transcribe_stream(&samples_f32))
-                .await
-                .context("transcribe spawn_blocking join 失败")?
-                .context("qwen_transcribe_stream 失败")?;
-
-        // 解绑回调，避免 idle 期 C 端任何后续触发。
-        self.engine.set_token_handler::<fn(&str)>(None);
+        let text = tauri::async_runtime::spawn_blocking(move || {
+            engine.transcribe_stream_with_handler(&samples_f32, move |piece: &str| {
+                if cancelled.load(Ordering::Acquire) {
+                    return;
+                }
+                if let Err(e) = app.emit("local-asr-token", piece.to_string()) {
+                    log::warn!("[local-asr] emit token failed: {e}");
+                }
+            })
+        })
+        .await
+        .context("transcribe spawn_blocking join 失败")?
+        .context("qwen_transcribe_stream 失败")?;
 
         Ok(RawTranscript { text, duration_ms })
     }
 
     pub fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Release);
         self.buffer.lock().clear();
     }
 }

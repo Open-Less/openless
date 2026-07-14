@@ -90,6 +90,7 @@ features = ["windows-native"]
 
 [target.'cfg(target_os = "linux")'.dependencies]
 dbus = "0.9"
+gtk = "0.18"
 [target.'cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))'.dependencies.keyring]
 version = "3.6.3"
 default-features = false

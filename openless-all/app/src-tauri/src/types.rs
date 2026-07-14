@@ -2576,12 +2576,13 @@ impl HotkeyCapability {
         {
             return Self {
                 adapter: HotkeyAdapterKind::WindowsLowLevel,
+                // Windows 没有 Command 键：leftCommand/rightCommand 会被映射到 Win 键，
+                // 而单按 Win 会弹出开始菜单，实际无法作为录音热键使用。故不在 Windows
+                // 的常用单键预设里提供 Command 选项（issue #784）。
                 available_triggers: vec![
                     HotkeyTrigger::RightControl,
                     HotkeyTrigger::RightAlt,
                     HotkeyTrigger::LeftControl,
-                    HotkeyTrigger::RightCommand,
-                    HotkeyTrigger::LeftCommand,
                     HotkeyTrigger::LeftShift,
                     HotkeyTrigger::RightShift,
                     HotkeyTrigger::MediaPlayPause,

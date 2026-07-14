@@ -10,8 +10,10 @@
 //! session always fits in one request.
 
 use anyhow::{Context, Result};
+use futures_util::StreamExt;
 use parking_lot::Mutex;
 use serde_json::Value;
+use std::time::Duration;
 
 use crate::asr::wav::encode_wav_16k_mono;
 use crate::asr::RawTranscript;
@@ -22,6 +24,7 @@ pub const DEFAULT_ENDPOINT: &str = "https://api.elevenlabs.io/v1";
 // languages, ~40% cheaper). `scribe_v1` is deprecated and is removed from the
 // API on 2026-07-09, so it would be a poor default to ship.
 pub const DEFAULT_MODEL: &str = "scribe_v2";
+const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 
 pub struct ElevenLabsBatchASR {
     api_key: String,
@@ -59,6 +62,10 @@ impl ElevenLabsBatchASR {
         result
     }
 
+    pub fn buffer_duration_ms(&self) -> u64 {
+        pcm_duration_ms(&self.buffer.lock())
+    }
+
     async fn transcribe_inner(&self, pcm: &[u8]) -> Result<RawTranscript> {
         if self.api_key.trim().is_empty() {
             anyhow::bail!("ElevenLabs API key missing");
@@ -71,6 +78,9 @@ impl ElevenLabsBatchASR {
             .collect();
         let wav = encode_wav_16k_mono(&samples);
         let url = speech_to_text_url(&self.base_url)?;
+        let resolved = crate::endpoint_security::resolve_http_endpoint(&url)
+            .await
+            .context("resolve ElevenLabs endpoint")?;
 
         let wav_part = reqwest::multipart::Part::bytes(wav)
             .file_name("audio.wav")
@@ -87,8 +97,14 @@ impl ElevenLabsBatchASR {
         // Never forward the custom credential header or audio to a redirect
         // target. Unlike standard Authorization headers, `xi-api-key` is not
         // guaranteed to be stripped by HTTP clients on cross-origin redirects.
-        let client = reqwest::Client::builder()
+        let mut client_builder = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(transcribe_timeout(duration_ms as f64 / 1000.0));
+        if let Some(resolved) = &resolved {
+            client_builder = client_builder.resolve_to_addrs(&resolved.host, &resolved.addrs);
+        }
+        let client = client_builder
             .build()
             .context("build ElevenLabs ASR HTTP client")?;
         let resp = client
@@ -99,16 +115,17 @@ impl ElevenLabsBatchASR {
             .await
             .context("ElevenLabs ASR HTTP request failed")?;
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
+        let status = resp.status();
+        let body = read_response_limited(resp).await?;
+        if !status.is_success() {
+            let body = String::from_utf8_lossy(&body);
             if let Some(code) = safe_error_code(&body) {
                 anyhow::bail!("ElevenLabs ASR API error {} (code: {})", status, code);
             }
             anyhow::bail!("ElevenLabs ASR API error {}", status);
         }
 
-        let json: Value = resp.json().await.context("parse ElevenLabs ASR response")?;
+        let json: Value = serde_json::from_slice(&body).context("parse ElevenLabs ASR response")?;
         Ok(RawTranscript {
             text: extract_text(&json)?.trim().to_string(),
             duration_ms,
@@ -132,6 +149,9 @@ impl crate::recorder::AudioConsumer for ElevenLabsBatchASR {
 /// endpoint already ending in `/speech-to-text`, so re-saving the resolved URL
 /// is idempotent.
 pub fn speech_to_text_url(base_url: &str) -> Result<String> {
+    crate::endpoint_security::validate_http_endpoint(base_url)
+        .map_err(anyhow::Error::msg)
+        .context("validate ElevenLabs endpoint")?;
     let parsed = reqwest::Url::parse(base_url.trim()).context("parse ElevenLabs base URL")?;
     let loopback_http = parsed.scheme() == "http"
         && parsed.host_str().is_some_and(|host| {
@@ -153,6 +173,25 @@ pub fn speech_to_text_url(base_url: &str) -> Result<String> {
     };
     url.set_path(&next_path);
     Ok(url.to_string())
+}
+
+async fn read_response_limited(response: reqwest::Response) -> Result<Vec<u8>> {
+    let mut stream = response.bytes_stream();
+    let mut body = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.context("read ElevenLabs ASR response")?;
+        if body.len().saturating_add(chunk.len()) > MAX_RESPONSE_BYTES {
+            anyhow::bail!("ElevenLabs ASR response too large");
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
+
+/// Batch transcription gets a fixed network allowance plus time proportional
+/// to the recording, while retaining a practical minimum for short clips.
+pub fn transcribe_timeout(audio_secs: f64) -> Duration {
+    Duration::from_secs(30.max((audio_secs * 0.5).ceil() as u64 + 20))
 }
 
 /// Pull the transcript out of the Scribe response.
@@ -230,14 +269,26 @@ mod tests {
 
     #[test]
     fn url_rejects_insecure_non_loopback_endpoint() {
-        let error = speech_to_text_url("http://api.example.com/v1")
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("HTTPS"));
+        let error = speech_to_text_url("http://api.example.com/v1").unwrap_err();
+        assert!(format!("{error:#}").to_ascii_lowercase().contains("https"));
 
         assert!(speech_to_text_url("http://127.0.0.1:8080/v1").is_ok());
         assert!(speech_to_text_url("http://localhost:8080/v1").is_ok());
         assert!(speech_to_text_url("http://[::1]:8080/v1").is_ok());
+    }
+
+    #[test]
+    fn url_rejects_sensitive_network_targets() {
+        assert!(speech_to_text_url("https://169.254.169.254/v1").is_err());
+        assert!(speech_to_text_url("https://100.64.0.1/v1").is_err());
+        assert!(speech_to_text_url("https://metadata.google.internal/v1").is_err());
+    }
+
+    #[test]
+    fn timeout_scales_with_recording_duration() {
+        assert_eq!(transcribe_timeout(0.0), Duration::from_secs(30));
+        assert_eq!(transcribe_timeout(20.0), Duration::from_secs(30));
+        assert_eq!(transcribe_timeout(120.0), Duration::from_secs(80));
     }
 
     #[test]

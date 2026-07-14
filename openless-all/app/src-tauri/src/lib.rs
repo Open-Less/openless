@@ -32,6 +32,7 @@ mod correction;
 // Linux 退化为纯轮询兜底。仅桌面端。详见 issue #470。
 #[cfg(not(mobile))]
 mod device_watch;
+mod endpoint_security;
 mod external_url;
 #[cfg(not(mobile))]
 mod global_hotkey_runtime;
@@ -94,6 +95,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::Duration;
+
+#[cfg(target_os = "linux")]
+use gtk::prelude::WidgetExt;
 
 const LOG_ROTATE_LIMIT_BYTES: u64 = 10 * 1024 * 1024;
 #[cfg(target_os = "macos")]
@@ -520,8 +524,27 @@ fn run_desktop() {
                 }
                 // 纯光效舞台没有任何可点元素（✕/✓ 按钮已移除），而窗口放大到 460×180
                 // 盖住屏幕底部中央 —— 必须鼠标穿透，否则会挡住底下应用的点击。
-                if let Err(e) = capsule.set_ignore_cursor_events(true) {
-                    log::warn!("[capsule] set_ignore_cursor_events failed: {e}");
+                // Linux 下 tao 的鼠标穿透实现会直接解包底层 GDK 窗口；visible=false 时
+                // 窗口尚未 realize。这里只创建窗口系统资源而不 map，避免 X11 崩溃，
+                // 也不会像 show() 那样在不支持窗口定位的 Wayland 上造成启动闪窗。
+                #[cfg(target_os = "linux")]
+                let cursor_passthrough_ready = match capsule.gtk_window() {
+                    Ok(gtk_window) => {
+                        gtk_window.realize();
+                        true
+                    }
+                    Err(e) => {
+                        log::warn!("[capsule] gtk_window failed; skipping cursor passthrough: {e}");
+                        false
+                    }
+                };
+                #[cfg(not(target_os = "linux"))]
+                let cursor_passthrough_ready = true;
+
+                if cursor_passthrough_ready {
+                    if let Err(e) = capsule.set_ignore_cursor_events(true) {
+                        log::warn!("[capsule] set_ignore_cursor_events failed: {e}");
+                    }
                 }
                 if let Err(e) = position_capsule_bottom_center(&capsule, false) {
                     log::warn!("[capsule] position failed: {e}");

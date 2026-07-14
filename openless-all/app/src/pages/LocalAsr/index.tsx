@@ -766,6 +766,16 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
             await setLocalAsrActiveModel(modelId)
             // 顺手把 active provider 也切到本地（避免用户改了模型却忘了切 provider）
             await setActiveAsrProvider("local-qwen3")
+            await updatePrefs((current) =>
+                current.activeAsrProvider === "local-qwen3" &&
+                current.localAsrActiveModel === modelId
+                    ? current
+                    : {
+                          ...current,
+                          activeAsrProvider: "local-qwen3",
+                          localAsrActiveModel: modelId,
+                      },
+            )
             await refresh()
         } catch (e) {
             setError(e instanceof Error ? e.message : String(e))
@@ -2831,7 +2841,15 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
                             modelDir={modelDirs[model.id] ?? ""}
                             remoteSize={remoteSizes[model.id]}
                             progress={progress[model.id]}
-                            isActive={settings?.activeModel === model.id}
+                            // 「当前使用」只在本地 Qwen3 确实是激活的 ASR provider 时才亮。
+                            // settings.activeModel 只是本地引擎内部「选中的模型」(默认
+                            // qwen3-asr-0.6b),不代表整体在用本地 ASR——否则用户在跑云端
+                            // (火山/百炼)时这里仍误标 0.6B「当前使用」。与 foundry/sherpa/
+                            // apple 三处的 activeAsrProvider 门保持一致。
+                            isActive={
+                                settings?.activeModel === model.id &&
+                                prefs?.activeAsrProvider === "local-qwen3"
+                            }
                             engineAvailable={engineAvailable}
                             disabled={
                                 busyModelId !== null && busyModelId !== model.id
