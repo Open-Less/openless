@@ -181,12 +181,17 @@ async fn read_response_limited(response: reqwest::Response) -> Result<Vec<u8>> {
     let mut body = Vec::new();
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.context("read ElevenLabs ASR response")?;
-        if body.len().saturating_add(chunk.len()) > MAX_RESPONSE_BYTES {
-            anyhow::bail!("ElevenLabs ASR response too large");
-        }
-        body.extend_from_slice(&chunk);
+        append_response_chunk(&mut body, &chunk)?;
     }
     Ok(body)
+}
+
+fn append_response_chunk(body: &mut Vec<u8>, chunk: &[u8]) -> Result<()> {
+    if body.len().saturating_add(chunk.len()) > MAX_RESPONSE_BYTES {
+        anyhow::bail!("ElevenLabs ASR response too large");
+    }
+    body.extend_from_slice(chunk);
+    Ok(())
 }
 
 /// Batch transcription gets a fixed network allowance plus time proportional
@@ -366,23 +371,16 @@ mod tests {
         server.join().unwrap();
     }
 
-    #[tokio::test]
-    async fn response_limit_accepts_one_megabyte_and_rejects_the_next_byte() {
-        let (at_limit_url, at_limit_server) = spawn_body_response(vec![b'a'; MAX_RESPONSE_BYTES]);
-        let at_limit_response = reqwest::get(at_limit_url).await.unwrap();
-        let at_limit_body = read_response_limited(at_limit_response).await.unwrap();
-        assert_eq!(at_limit_body.len(), MAX_RESPONSE_BYTES);
-        at_limit_server.join().unwrap();
+    #[test]
+    fn response_limit_accepts_one_megabyte_and_rejects_the_next_byte() {
+        let mut body = Vec::new();
+        append_response_chunk(&mut body, &vec![b'a'; MAX_RESPONSE_BYTES]).unwrap();
+        assert_eq!(body.len(), MAX_RESPONSE_BYTES);
 
-        let (over_limit_url, over_limit_server) =
-            spawn_body_response(vec![b'a'; MAX_RESPONSE_BYTES + 1]);
-        let over_limit_response = reqwest::get(over_limit_url).await.unwrap();
-        let error = read_response_limited(over_limit_response)
-            .await
+        let error = append_response_chunk(&mut body, b"a")
             .unwrap_err()
             .to_string();
         assert!(error.contains("response too large"));
-        over_limit_server.join().unwrap();
     }
 
     #[tokio::test]
@@ -504,27 +502,6 @@ mod tests {
         let transcript = asr.transcribe().await.unwrap();
         assert_eq!(transcript.text, "");
         assert_eq!(transcript.duration_ms, 0);
-    }
-
-    fn spawn_body_response(body: Vec<u8>) -> (String, thread::JoinHandle<()>) {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        let server = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            stream
-                .set_read_timeout(Some(Duration::from_secs(5)))
-                .unwrap();
-            let mut request = [0u8; 1024];
-            assert!(stream.read(&mut request).unwrap() > 0);
-            let headers = format!(
-                "HTTP/1.1 200 OK\r\ncontent-type: application/octet-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
-                body.len()
-            );
-            stream.write_all(headers.as_bytes()).unwrap();
-            let _ = stream.write_all(&body);
-            let _ = stream.flush();
-        });
-        (format!("http://{addr}/response"), server)
     }
 
     fn read_http_request(stream: &mut TcpStream) -> Vec<u8> {

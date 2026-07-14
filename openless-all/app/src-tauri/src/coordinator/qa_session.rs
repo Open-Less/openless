@@ -136,12 +136,24 @@ pub(super) async fn take_current_dictation_transcript_for_qa(
     };
 
     let mut raw = match transcribe_overlay_dictation_asr(inner, current_session_id, asr).await {
-        Ok(raw) => raw,
-        Err(error) => {
+        OverlayDictationTranscribeOutcome::Done(Ok(raw)) => raw,
+        OverlayDictationTranscribeOutcome::Done(Err(error)) => {
             restore_prepared_windows_ime_session(inner, current_session_id);
             set_phase_idle_if_session_matches(inner, current_session_id);
             finish_qa_with_error(inner, format!("识别失败: {error}"));
             return Err(error);
+        }
+        OverlayDictationTranscribeOutcome::Cancelled => {
+            restore_prepared_windows_ime_session(inner, current_session_id);
+            {
+                let mut state = inner.state.lock();
+                if state.session_id == current_session_id {
+                    state.phase = SessionPhase::Idle;
+                    state.focus_target = None;
+                }
+            }
+            finish_qa_idle_silently(inner);
+            return Ok(None);
         }
     };
 
@@ -205,13 +217,18 @@ pub(super) async fn wait_for_dictation_listening(inner: &Arc<Inner>) -> Result<(
     }
 }
 
+pub(super) enum OverlayDictationTranscribeOutcome {
+    Done(Result<RawTranscript, String>),
+    Cancelled,
+}
+
 pub(super) async fn transcribe_overlay_dictation_asr(
     _inner: &Arc<Inner>,
     _current_session_id: SessionId,
     asr: ActiveAsr,
-) -> Result<RawTranscript, String> {
+) -> OverlayDictationTranscribeOutcome {
     let uses_global_timeout = asr_transcribe_uses_global_timeout(&asr);
-    match asr {
+    let result = match asr {
         ActiveAsr::Volcengine(asr) => {
             debug_assert!(uses_global_timeout);
             if let Err(error) = asr.send_last_frame().await {
@@ -297,7 +314,7 @@ pub(super) async fn transcribe_overlay_dictation_asr(
                 },
                 _ = wait_for_overlay_dictation_cancel(_inner, _current_session_id) => {
                     asr.cancel();
-                    Err("dictation cancelled".to_string())
+                    return OverlayDictationTranscribeOutcome::Cancelled;
                 }
             }
         }
@@ -373,7 +390,8 @@ pub(super) async fn transcribe_overlay_dictation_asr(
                 Err(_) => Err("apple speech transcribe timeout".to_string()),
             }
         }
-    }
+    };
+    OverlayDictationTranscribeOutcome::Done(result)
 }
 
 pub(super) async fn answer_qa_question_text(
@@ -1368,4 +1386,111 @@ where
             should_cancel,
         )
         .await?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Read;
+    use std::net::TcpListener;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::thread;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn overlay_elevenlabs_cancel_finishes_idle_without_error_capsule() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let request_started = Arc::new(AtomicBool::new(false));
+        let release_server = Arc::new(AtomicBool::new(false));
+        let server_started = Arc::clone(&request_started);
+        let server_release = Arc::clone(&release_server);
+        let server = thread::spawn(move || {
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        if server_release.load(Ordering::SeqCst) {
+                            return;
+                        }
+                        assert!(
+                            std::time::Instant::now() < deadline,
+                            "timed out waiting for ElevenLabs overlay request"
+                        );
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => panic!("accept ElevenLabs overlay request failed: {error}"),
+                }
+            };
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut request = [0u8; 4096];
+            assert!(stream.read(&mut request).unwrap() > 0);
+            server_started.store(true, Ordering::SeqCst);
+            while !server_release.load(Ordering::SeqCst) {
+                thread::sleep(Duration::from_millis(10));
+            }
+        });
+
+        let coordinator = Coordinator::new();
+        let session_id = new_session_id();
+        {
+            let mut state = coordinator.inner.state.lock();
+            state.phase = SessionPhase::Listening;
+            state.cancelled = false;
+            state.session_id = session_id;
+        }
+        {
+            let mut state = coordinator.inner.qa_state.lock();
+            state.phase = QaPhase::Processing;
+            state.cancelled = false;
+        }
+
+        let asr = Arc::new(ElevenLabsBatchASR::new(
+            "synthetic-test-key".to_string(),
+            format!("http://{addr}/v1"),
+            crate::asr::elevenlabs::DEFAULT_MODEL.to_string(),
+        ));
+        crate::recorder::AudioConsumer::consume_pcm_chunk(asr.as_ref(), &vec![0u8; 32_000]);
+        super::super::resources::store_asr_for_session(
+            &coordinator.inner,
+            session_id,
+            ActiveAsr::ElevenLabs(asr),
+        );
+
+        let transcribe = tokio::spawn({
+            let inner = Arc::clone(&coordinator.inner);
+            async move { take_current_dictation_transcript_for_qa(&inner).await }
+        });
+
+        let request_wait = tokio::time::timeout(Duration::from_secs(5), async {
+            while !request_started.load(Ordering::SeqCst) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+        if request_wait.is_ok() {
+            cancel_session(&coordinator.inner);
+        }
+
+        let transcribe_result = tokio::time::timeout(Duration::from_secs(2), transcribe).await;
+        release_server.store(true, Ordering::SeqCst);
+        server.join().unwrap();
+
+        request_wait.expect("ElevenLabs overlay request did not start");
+        let result = transcribe_result
+            .expect("ElevenLabs overlay cancellation did not finish")
+            .expect("overlay transcription task panicked");
+        assert!(matches!(result, Ok(None)));
+        assert_eq!(coordinator.inner.state.lock().phase, SessionPhase::Idle);
+        assert_eq!(coordinator.inner.qa_state.lock().phase, QaPhase::Idle);
+        assert!(!coordinator.inner.qa_state.lock().cancelled);
+        assert_eq!(
+            *coordinator.inner.last_capsule_state.lock(),
+            Some(CapsuleState::Idle)
+        );
+    }
 }
