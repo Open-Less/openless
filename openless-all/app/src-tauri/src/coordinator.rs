@@ -827,6 +827,11 @@ impl Coordinator {
         self.inner.local_asr_cache.loaded_model_id()
     }
 
+    /// 当前活跃 ASR 的 (provider_id, model)，retranscribe_recording 命令回写历史条目用。
+    pub fn active_asr_history_label(&self) -> (String, Option<String>) {
+        asr_history_label(&self.inner.prefs.get())
+    }
+
     /// 主动把当前本地 ASR 引擎状态推给前端（keepLoadedSecs 变更等命令侧调用）。
     pub fn emit_local_asr_engine_status(&self) {
         emit_local_asr_engine_status(&self.inner);
@@ -2411,6 +2416,53 @@ fn read_gemini_credentials() -> anyhow::Result<(String, String, String)> {
     }
     let base_url = base_url.trim_end_matches('/').to_string();
     Ok((api_key, model, base_url))
+}
+
+/// 历史详情展示用：当前活跃 ASR 的 (provider_id, model)。model 的取值与各凭据读取器 /
+/// begin_session 的构建逻辑一致（含同样的默认值回退）；provider 无模型概念时 None。
+fn asr_history_label(prefs: &crate::types::UserPreferences) -> (String, Option<String>) {
+    let id = CredentialsVault::get_active_asr();
+    let model = if crate::asr::local::is_local_qwen3(&id) {
+        Some(prefs.local_asr_active_model.clone())
+    } else if crate::asr::local::is_apple_speech(&id) {
+        None
+    } else if crate::asr::local::foundry::is_foundry_local_whisper(&id) {
+        Some(prefs.foundry_local_asr_model.clone())
+    } else if crate::asr::local::sherpa::is_sherpa_onnx_local(&id) {
+        Some(prefs.sherpa_onnx_model.clone())
+    } else {
+        match active_asr_provider_kind(&id) {
+            ActiveAsrProviderKind::Bailian => Some(read_bailian_credentials().model),
+            ActiveAsrProviderKind::Qwen3Realtime => Some(read_qwen3_realtime_credentials().model),
+            ActiveAsrProviderKind::Mimo => Some(read_mimo_credentials().2),
+            ActiveAsrProviderKind::DashScopeMultimodal => {
+                Some(read_dashscope_multimodal_credentials().2)
+            }
+            ActiveAsrProviderKind::ElevenLabs => Some(read_elevenlabs_credentials().2),
+            ActiveAsrProviderKind::WhisperCompatible => Some(read_whisper_credentials().2),
+            // Volcengine 用 app key / resource id 鉴权，没有用户可见的模型 id。
+            ActiveAsrProviderKind::Volcengine => None,
+        }
+    };
+    (id, model.filter(|s| !s.trim().is_empty()))
+}
+
+/// 历史详情展示用：当前活跃 LLM 的 (provider_id, model)。model 的默认值回退与
+/// build_active_llm_provider / read_gemini_credentials 一致。
+fn llm_history_label() -> (String, Option<String>) {
+    let active = CredentialsVault::get_active_llm();
+    let model = CredentialsVault::get(CredentialAccount::ArkModelId)
+        .ok()
+        .flatten()
+        .filter(|s| !s.trim().is_empty());
+    let model = if active == CODEX_OAUTH_PROVIDER_ID {
+        model.unwrap_or_else(|| CODEX_DEFAULT_MODEL.to_string())
+    } else if active == "gemini" {
+        model.unwrap_or_else(|| "gemini-2.5-flash".to_string())
+    } else {
+        model.unwrap_or_else(|| "deepseek-v3-2".to_string())
+    };
+    (active, Some(model))
 }
 
 fn build_active_llm_provider(llm_thinking_enabled: bool) -> anyhow::Result<ActiveLLMProvider> {

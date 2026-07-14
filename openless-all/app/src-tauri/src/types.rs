@@ -167,6 +167,26 @@ pub struct DictationSession {
     /// `None` / `Some(false)` 都按"无录音"处理；旧 JSON 不带这字段也兼容。
     #[serde(default)]
     pub has_audio_recording: Option<bool>,
+    /// 本次转写用的 ASR provider id（如 "volcengine" / "local-qwen3"）。历史详情页
+    /// 展示用，方便做模型能力对比。旧历史无此字段时 None，前端隐藏对应行。
+    #[serde(default)]
+    pub asr_provider: Option<String>,
+    /// 本次转写用的 ASR 模型 id。provider 无模型概念（volcengine / apple-speech）时 None。
+    #[serde(default)]
+    pub asr_model: Option<String>,
+    /// 本次润色用的 LLM provider id。Raw 直通（未调用 LLM）时 None。
+    #[serde(default)]
+    pub llm_provider: Option<String>,
+    /// 本次润色用的 LLM 模型 id。Raw 直通时 None。
+    #[serde(default)]
+    pub llm_model: Option<String>,
+    /// 松键后「等待转写结果」的实测耗时（毫秒）。流式 ASR 大部分识别在录音期间已完成，
+    /// 这里量的是用户感知的收尾延迟；批式 ASR 则是完整转写耗时。
+    #[serde(default)]
+    pub asr_ms: Option<u64>,
+    /// LLM 润色/翻译调用的实测耗时（毫秒）。未调用 LLM 时 None。
+    #[serde(default)]
+    pub polish_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

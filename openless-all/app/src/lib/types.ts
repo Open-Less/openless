@@ -50,6 +50,18 @@ export interface DictationSession {
   /** 该会话是否在录音时归档了原始 wav（取决于当时 prefs.recordAudioForDebug）。
    *  true 时前端在 History 渲染播放按钮，凭 id 通过 read_audio_recording IPC 拿字节流。 */
   hasAudioRecording: boolean | null;
+  /** 本次转写用的 ASR provider id（如 "volcengine" / "local-qwen3"）。旧历史为 null。 */
+  asrProvider: string | null;
+  /** 本次转写用的 ASR 模型 id。provider 无模型概念时为 null。 */
+  asrModel: string | null;
+  /** 本次润色用的 LLM provider id。Raw 直通（未调用 LLM）时为 null。 */
+  llmProvider: string | null;
+  /** 本次润色用的 LLM 模型 id。Raw 直通时为 null。 */
+  llmModel: string | null;
+  /** 松键后等待转写结果的实测耗时（毫秒）。流式 ASR 是收尾延迟，批式是完整转写耗时。 */
+  asrMs: number | null;
+  /** LLM 润色/翻译调用的实测耗时（毫秒）。未调用 LLM 时为 null。 */
+  polishMs: number | null;
 }
 
 export interface DictionaryEntry {

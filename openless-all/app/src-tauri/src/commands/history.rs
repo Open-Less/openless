@@ -92,10 +92,12 @@ pub async fn retranscribe_recording(
     }
     let pcm = wav[44..].to_vec();
 
+    let retranscribe_started = std::time::Instant::now();
     let text = coord.retranscribe_pcm(pcm).await?;
     if text.trim().is_empty() {
         return Err("重新转录仍未识别到语音".into());
     }
+    let retranscribe_ms = retranscribe_started.elapsed().as_millis() as u64;
 
     // 找到原条目，保留其它字段，只更新转写结果 + 清错误码。
     let mut entry = coord
@@ -110,6 +112,15 @@ pub async fn retranscribe_recording(
     entry.raw_transcript = text.clone();
     entry.final_text = text;
     entry.error_code = None;
+    // 重转用的是「当前」ASR provider，覆盖原会话记录的模型/耗时；没有润色环节，
+    // 清掉 llm_* / polish_ms，避免详情页把旧润色信息错挂在新转写结果上。
+    let (asr_provider, asr_model) = coord.active_asr_history_label();
+    entry.asr_provider = Some(asr_provider);
+    entry.asr_model = asr_model;
+    entry.asr_ms = Some(retranscribe_ms);
+    entry.llm_provider = None;
+    entry.llm_model = None;
+    entry.polish_ms = None;
 
     let updated = coord
         .history()

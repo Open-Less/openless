@@ -456,6 +456,12 @@ export const mockHistory: DictationSession[] = OL_DATA.history.map((h, i) => ({
     durationMs: 600,
     dictionaryEntryCount: 28,
     hasAudioRecording: null,
+    asrProvider: "bailian",
+    asrModel: "qwen3-asr-flash",
+    llmProvider: "ark",
+    llmModel: "deepseek-v3-2",
+    asrMs: 860 + i * 120,
+    polishMs: 1240 + i * 90,
 }))
 
 export const mockVocab: DictionaryEntry[] = OL_DATA.vocab.map((v, i) => ({

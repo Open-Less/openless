@@ -378,10 +378,11 @@ export function History() {
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                   <span style={{ fontSize: 13, fontFamily: 'var(--ol-font-mono)', color: 'var(--ol-ink-3)' }}>{formatTime(item.createdAt)}</span>
                   <Pill size="sm" tone="default">{MODE_LABEL[item.mode]}</Pill>
-                  <span style={{ fontSize: 11, color: 'var(--ol-ink-4)' }}>{formatDuration(item.durationMs, t)}</span>
+                  {/* 「录音」前缀：与下方识别/润色耗时区分——录音时长发生在松键前，
+                      不该与流水线各步耗时加总（用户反馈"时间对不上"）。 */}
+                  <span style={{ fontSize: 11, color: 'var(--ol-ink-4)' }}>{t('history.recorded', { duration: formatDuration(item.durationMs, t) })}</span>
                 </div>
                 <div style={{ display: 'flex', gap: 6 }}>
-                  <Btn icon={justCopied ? 'check' : 'copy'} variant="ghost" size="sm" onClick={() => void onCopy()}>{justCopied ? t('common.copied') : t('common.copy')}</Btn>
                   {item.hasAudioRecording && !audioMissingIds.has(item.id) && (
                     <Btn icon="download" variant="ghost" size="sm" onClick={() => void onExportAudio()}>{t('history.exportRecording')}</Btn>
                   )}
@@ -417,19 +418,52 @@ export function History() {
                   </p>
                 </div>
                 <div style={{ padding: 14, border: '0.5px solid var(--ol-blue)', borderRadius: 10, background: 'var(--ol-blue-soft)' }}>
-                  <Pill size="sm" tone="blue" style={{ marginBottom: 10 }}>{MODE_LABEL[item.mode]}</Pill>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 10 }}>
+                    <Pill size="sm" tone="blue">{MODE_LABEL[item.mode]}</Pill>
+                    <Btn icon={justCopied ? 'check' : 'copy'} variant="ghost" size="sm" onClick={() => void onCopy()}>
+                      {justCopied ? t('common.copied') : t('common.copy')}
+                    </Btn>
+                  </div>
                   <p style={{ margin: 0, fontSize: 13, lineHeight: 1.7, color: 'var(--ol-ink)', whiteSpace: 'pre-line' }}>
                     {item.finalText}
                   </p>
                 </div>
               </div>
-              <div style={{ marginTop: 18, paddingTop: 14, borderTop: '0.5px solid var(--ol-line-soft)', display: 'flex', gap: 18, fontSize: 11, color: 'var(--ol-ink-4)', flexWrap: 'wrap' }}>
-                {item.appName && <span>{t('history.insertedTo')} <b style={{ color: 'var(--ol-ink-2)' }}>{item.appName}</b></span>}
-                <span>{t('history.chars', { count: item.finalText.length })}</span>
-                {item.dictionaryEntryCount != null && item.dictionaryEntryCount > 0 && (
-                  <span>{t('history.vocabHits', { count: item.dictionaryEntryCount })}</span>
+              {/* 流水线明细：识别 / 润色 / 插入 三步各占一行 —— 左列步骤名、中列
+                  provider·model（或插入目标），右列该步耗时/状态。旧历史没有模型与
+                  耗时字段时对应行自动隐藏，只剩插入行 = 改版前的信息量。 */}
+              <div style={{ marginTop: 18, paddingTop: 14, borderTop: '0.5px solid var(--ol-line-soft)', display: 'grid', gridTemplateColumns: 'auto 1fr auto', columnGap: 14, rowGap: 7, fontSize: 11, color: 'var(--ol-ink-4)', alignItems: 'baseline' }}>
+                {(item.asrProvider || item.asrMs != null) && (
+                  <>
+                    <span title={t('history.stepAsrHint')} style={{ cursor: 'help' }}>{t('history.stepAsr')}</span>
+                    <span style={{ color: 'var(--ol-ink-2)', fontFamily: 'var(--ol-font-mono)', overflowWrap: 'anywhere' }}>
+                      {[item.asrProvider, item.asrModel].filter(Boolean).join(' · ')}
+                    </span>
+                    <span style={{ fontFamily: 'var(--ol-font-mono)', textAlign: 'right' }}>
+                      {item.asrMs != null ? formatDuration(item.asrMs, t) : ''}
+                    </span>
+                  </>
                 )}
-                <span>{
+                {(item.llmProvider || item.llmModel || item.polishMs != null) && (
+                  <>
+                    <span>{t('history.stepPolish')}</span>
+                    <span style={{ color: 'var(--ol-ink-2)', fontFamily: 'var(--ol-font-mono)', overflowWrap: 'anywhere' }}>
+                      {[item.llmProvider, item.llmModel].filter(Boolean).join(' · ')}
+                    </span>
+                    <span style={{ fontFamily: 'var(--ol-font-mono)', textAlign: 'right' }}>
+                      {item.polishMs != null ? formatDuration(item.polishMs, t) : ''}
+                    </span>
+                  </>
+                )}
+                <span>{t('history.stepInsert')}</span>
+                <span style={{ color: 'var(--ol-ink-2)' }}>
+                  {item.appName && <><b>{item.appName}</b>{' · '}</>}
+                  {t('history.chars', { count: item.finalText.length })}
+                  {item.dictionaryEntryCount != null && item.dictionaryEntryCount > 0 && (
+                    <>{' · '}{t('history.vocabHits', { count: item.dictionaryEntryCount })}</>
+                  )}
+                </span>
+                <span style={{ textAlign: 'right' }}>{
                   item.insertStatus === 'inserted'
                     ? t('history.inserted')
                     : item.insertStatus === 'pasteSent'

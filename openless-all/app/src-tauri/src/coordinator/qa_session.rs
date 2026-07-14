@@ -544,6 +544,12 @@ pub(super) async fn answer_qa_question_text(
             duration_ms: Some(duration_ms),
             dictionary_entry_count: None,
             has_audio_recording: None,
+            asr_provider: None,
+            asr_model: None,
+            llm_provider: None,
+            llm_model: None,
+            asr_ms: None,
+            polish_ms: None,
         };
         let prefs_snapshot = inner.prefs.get();
         if let Err(error) = inner.history.append_with_retention(
@@ -1236,6 +1242,12 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
             duration_ms: Some(raw.duration_ms),
             dictionary_entry_count: None,
             has_audio_recording: None,
+            asr_provider: None,
+            asr_model: None,
+            llm_provider: None,
+            llm_model: None,
+            asr_ms: None,
+            polish_ms: None,
         };
         let prefs_snapshot = inner.prefs.get();
         if let Err(e) = inner.history.append_with_retention(

@@ -2204,17 +2204,27 @@ fn build_transcribe_failed_session(
         duration_ms: Some(duration_ms),
         dictionary_entry_count: None,
         has_audio_recording: Some(has_audio_recording),
+        asr_provider: None,
+        asr_model: None,
+        llm_provider: None,
+        llm_model: None,
+        asr_ms: None,
+        polish_ms: None,
     }
 }
 
 fn write_transcribe_failed_history(inner: &Arc<Inner>, session_id: SessionId, duration_ms: u64) {
     let prefs = inner.prefs.get();
-    let session = build_transcribe_failed_session(
+    let mut session = build_transcribe_failed_session(
         session_id,
         duration_ms,
         prefs.default_mode,
         inner.audio_archive_active.load(Ordering::Relaxed),
     );
+    // 失败条目也记下是哪个 ASR 出的错——「哪个模型转不出来」正是模型对比要看的信息。
+    let (asr_provider, asr_model) = asr_history_label(&prefs);
+    session.asr_provider = Some(asr_provider);
+    session.asr_model = asr_model;
     if let Err(e) = inner.history.append_with_retention(
         session,
         prefs.history_retention_days,
@@ -2450,6 +2460,9 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     // `asr` move 进去，命中取消时那个 future 会被 drop（连同它持有的 Arc），我们再用这份
     // clone 显式 cancel，促使流式 WebSocket 立刻关闭、不残留后台 worker。
     let asr_for_cancel = asr.clone();
+    // 「等待转写结果」实测起点：流式 ASR 量的是收尾延迟，批式量完整转写。写进
+    // history.asr_ms 供历史详情页展示（含下方的自动静默重试时间——那也是用户等的时间）。
+    let transcribe_started = std::time::Instant::now();
     // 每个引擎分支产出 Ok(RawTranscript) 或 Err(TranscribeFail)；失败/超时不再就地 return，
     // 而是把失败值交给 match 之后统一处理：先自动静默重试（从归档音频重转，应对网络/服务端
     // 瞬时抖动），重试拿回文本就当正常转写继续；彻底失败才 fail_dictation 保留录音 + 报错。
@@ -2865,6 +2878,8 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
             }
         },
     };
+    let asr_ms = transcribe_started.elapsed().as_millis() as u64;
+    let (asr_provider, asr_model) = asr_history_label(&inner.prefs.get());
 
     // ASR 返回空转写护栏（来自 PR #66）：写一条 emptyTranscript 失败历史 + 错误胶囊，
     // 与 main 上其它 error 路径保持一致（带 schedule_capsule_idle 让胶囊自动消失）。
@@ -2904,6 +2919,13 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
             // 通过原始录音定位"是不是麦克风太小声 / ASR 模型问题"的场景。修 pr_agent
             // "Missing Audio" 反馈。
             has_audio_recording: Some(inner.audio_archive_active.load(Ordering::Relaxed)),
+            // 空转写也记下是哪个 ASR 模型给出的空结果 + 等了多久，供模型对比排查。
+            asr_provider: Some(asr_provider.clone()),
+            asr_model: asr_model.clone(),
+            llm_provider: None,
+            llm_model: None,
+            asr_ms: Some(asr_ms),
+            polish_ms: None,
         };
         let prefs_snapshot = inner.prefs.get();
         if let Err(e) = inner.history.append_with_retention(
@@ -3054,6 +3076,10 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     // 翻译会话润色后的源语言文本（译文前的中间产物），仅翻译路径解析成功时有值，
     // 写进 history 供后续普通润色轮复用（剔除译文、避免外语污染）。
     let mut polish_source: Option<String> = None;
+    // LLM 是否真的会被调用：翻译 / 非 Raw 模式 / Raw 但风格包带 LLM 提示词。
+    // Raw 直通时不记 llm_* / polish_ms（没有模型参与，历史详情页隐藏润色行）。
+    let llm_used = translation_active || mode != PolishMode::Raw || raw_uses_llm;
+    let polish_started = std::time::Instant::now();
     let (polished, polish_error, already_streamed) = if translation_active {
         log::info!(
             "[coord] translation mode → target=\u{300C}{}\u{300D} working={:?} front_app={:?}",
@@ -3106,6 +3132,13 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
         )
         .await;
         (p, e, false)
+    };
+    let polish_ms = llm_used.then(|| polish_started.elapsed().as_millis() as u64);
+    let (llm_provider, llm_model) = if llm_used {
+        let (provider, model) = llm_history_label();
+        (Some(provider), model)
+    } else {
+        (None, None)
     };
 
     let polished = finalize_polished_text(
@@ -3293,6 +3326,12 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
         // 用 begin_session 时 Recorder::start 返回的实际写盘状态，而不是 prefs 开关——
         // 开关打开但路径创建失败时这里是 false，避免前端渲染播放按钮后端 404。
         has_audio_recording: Some(inner.audio_archive_active.load(Ordering::Relaxed)),
+        asr_provider: Some(asr_provider),
+        asr_model,
+        llm_provider,
+        llm_model,
+        asr_ms: Some(asr_ms),
+        polish_ms,
     };
     if let Err(e) = inner.history.append_with_retention(
         session,
@@ -3509,6 +3548,12 @@ mod tests {
             style_pack_id: style_pack_id.map(str::to_string),
             translation_active,
             polish_source: polish_source.map(str::to_string),
+            asr_provider: None,
+            asr_model: None,
+            llm_provider: None,
+            llm_model: None,
+            asr_ms: None,
+            polish_ms: None,
         }
     }
 
