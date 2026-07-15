@@ -90,6 +90,35 @@ where
     CACHE.lock().entry(key).or_insert_with(build).clone()
 }
 
+/// Render a user-configured URL for logs without credentials or secret-bearing components.
+pub(crate) fn sanitized_url_for_logs(raw_url: &str) -> String {
+    let Ok(mut url) = reqwest::Url::parse(raw_url.trim()) else {
+        return "<invalid-url>".to_string();
+    };
+    if !matches!(url.scheme(), "http" | "https")
+        || url.set_username("").is_err()
+        || url.set_password(None).is_err()
+    {
+        return "<invalid-url>".to_string();
+    }
+    url.set_query(None);
+    url.set_fragment(None);
+    url.to_string()
+}
+
+/// Stable diagnostic category for a reqwest failure. Unlike `Display`, this never embeds its URL.
+pub(crate) fn request_error_kind(error: &reqwest::Error) -> &'static str {
+    if error.is_timeout() {
+        "timeout"
+    } else if error.is_connect() {
+        "connection"
+    } else if error.is_body() || error.is_decode() {
+        "response-body"
+    } else {
+        "request"
+    }
+}
+
 /// 单次请求最多尝试的次数。失败本身很快（握手重置 ~0.5s），10 次总耗时仍可控。
 const MAX_ATTEMPTS: u32 = 10;
 
@@ -116,8 +145,9 @@ where
                 }
                 // 150 / 300 / 600 / 900 / 900 … ms 退避。
                 let backoff = (150u64 * 2u64.pow((attempt - 1).min(3))).min(900);
+                let failure = request_error_kind(&err);
                 log::warn!(
-                    "[net] transient failure (attempt {attempt}/{MAX_ATTEMPTS}), retry in {backoff}ms: {err}"
+                    "[net] transient {failure} failure (attempt {attempt}/{MAX_ATTEMPTS}), retry in {backoff}ms"
                 );
                 tokio::time::sleep(Duration::from_millis(backoff)).await;
             }
@@ -127,7 +157,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::credential_http;
+    use super::{credential_http, sanitized_url_for_logs};
     use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
@@ -165,5 +195,24 @@ mod tests {
                 .is_err()
         );
         source_task.await.unwrap();
+    }
+
+    #[test]
+    fn log_url_removes_userinfo_query_and_fragment() {
+        let rendered = sanitized_url_for_logs(
+            "https://alice:password@example.com:8443/v1/models?token=secret#private",
+        );
+        assert_eq!(rendered, "https://example.com:8443/v1/models");
+        for secret in ["alice", "password", "token", "secret", "private"] {
+            assert!(!rendered.contains(secret), "log URL leaked {secret}");
+        }
+    }
+
+    #[test]
+    fn log_url_never_echoes_malformed_input() {
+        assert_eq!(
+            sanitized_url_for_logs("not a URL?token=secret#private"),
+            "<invalid-url>"
+        );
     }
 }
