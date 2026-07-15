@@ -23,7 +23,7 @@ pub fn list_local_ips() -> Vec<String> {
 }
 
 #[tauri::command]
-pub fn regenerate_remote_pin(coord: CoordinatorState<'_>) -> String {
+pub fn regenerate_remote_pin(coord: CoordinatorState<'_>) -> Result<String, String> {
     coord.regenerate_remote_pin()
 }
 

@@ -574,6 +574,19 @@ impl Drop for CancellableRetranscribeGuard {
     }
 }
 
+#[cfg(not(mobile))]
+fn persist_and_commit_remote_pin(
+    slot: &Mutex<Option<String>>,
+    pin: String,
+    persist: impl FnOnce(&str) -> Result<(), String>,
+    refresh: impl FnOnce(),
+) -> Result<String, String> {
+    persist(&pin)?;
+    *slot.lock() = Some(pin.clone());
+    refresh();
+    Ok(pin)
+}
+
 impl Coordinator {
     pub fn new() -> Self {
         #[cfg(target_os = "windows")]
@@ -1554,14 +1567,23 @@ impl Coordinator {
     }
 
     #[cfg(not(mobile))]
-    pub fn regenerate_remote_pin(self: &Arc<Self>) -> String {
+    pub fn regenerate_remote_pin(self: &Arc<Self>) -> Result<String, String> {
         let pin = crate::remote_server::generate_pin();
-        *self.inner.remote_pin.lock() = Some(pin.clone());
-        if let Some(app) = self.inner.app.lock().clone() {
-            crate::remote_server::save_pin(&app, &pin);
-        }
-        self.refresh_remote_server();
-        pin
+        let app = self
+            .inner
+            .app
+            .lock()
+            .clone()
+            .ok_or_else(|| "OpenLess app handle is unavailable".to_string())?;
+        persist_and_commit_remote_pin(
+            &self.inner.remote_pin,
+            pin,
+            |pin| {
+                crate::remote_server::save_pin(&app, pin)
+                    .map_err(|error| format!("persist pairing PIN failed: {error}"))
+            },
+            || self.refresh_remote_server(),
+        )
     }
 
     #[cfg(not(mobile))]
@@ -1604,12 +1626,24 @@ impl Coordinator {
             let Some(app) = app else {
                 return;
             };
-            let pin = {
-                let mut guard = coord.inner.remote_pin.lock();
-                if guard.is_none() {
-                    *guard = Some(crate::remote_server::load_or_create_pin(&app));
+            let pin = if let Some(pin) = coord.inner.remote_pin.lock().clone() {
+                pin
+            } else {
+                match crate::remote_server::load_or_create_pin(&app) {
+                    Ok(pin) => {
+                        *coord.inner.remote_pin.lock() = Some(pin.clone());
+                        pin
+                    }
+                    Err(error) => {
+                        let reason = format!("persist pairing PIN failed: {error}");
+                        let _ = app.emit(
+                            "remote-input:error",
+                            serde_json::json!({"reason": reason, "port": prefs.remote_input_port}),
+                        );
+                        log::error!("[remote-input] {reason}");
+                        return;
+                    }
                 }
-                guard.clone().unwrap_or_default()
             };
             let port = prefs.remote_input_port;
             match crate::remote_server::start(crate::remote_server::RemoteServerConfig {
@@ -2467,6 +2501,40 @@ mod tests {
 
     fn session_id(n: u128) -> SessionId {
         Uuid::from_u128(n)
+    }
+
+    #[test]
+    fn failed_remote_pin_persistence_keeps_memory_and_server_state() {
+        let slot = Mutex::new(Some("123456".to_string()));
+        let refreshed = std::sync::atomic::AtomicBool::new(false);
+
+        let result = persist_and_commit_remote_pin(
+            &slot,
+            "654321".to_string(),
+            |_| Err("injected persistence failure".to_string()),
+            || refreshed.store(true, Ordering::SeqCst),
+        );
+
+        assert_eq!(result.unwrap_err(), "injected persistence failure");
+        assert_eq!(slot.lock().as_deref(), Some("123456"));
+        assert!(!refreshed.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn successful_remote_pin_persistence_commits_memory_before_refresh() {
+        let slot = Mutex::new(Some("123456".to_string()));
+        let observed = Mutex::new(None::<String>);
+
+        let result = persist_and_commit_remote_pin(
+            &slot,
+            "654321".to_string(),
+            |_| Ok(()),
+            || *observed.lock() = slot.lock().clone(),
+        );
+
+        assert_eq!(result.as_deref(), Ok("654321"));
+        assert_eq!(slot.lock().as_deref(), Some("654321"));
+        assert_eq!(observed.lock().as_deref(), Some("654321"));
     }
 
     #[test]

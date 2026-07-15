@@ -158,6 +158,9 @@ jobs:
       - name: Check Windows UI configuration contract
         run: npm run check:windows-ui-config
 
+      - name: Check PIN persistence security contract
+        run: npm run check:pin-persistence-security
+
       - name: Build frontend (tsc + vite)
         run: npm run build
 

@@ -10,9 +10,7 @@
 //! rcgen 自签名（SAN 含本机局域网 IP），手机首次访问需手动信任。TLS 走 ring
 //! 后端（与项目 reqwest/tungstenite 一致，避免 aws-lc-sys 的 C 编译依赖）。
 
-use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -133,282 +131,28 @@ fn pin_path(app: &AppHandle) -> Option<std::path::PathBuf> {
         .map(|d| d.join("remote-input-pin.txt"))
 }
 
-/// 读持久化的配对码；没有 / 无效则新生成并写盘。让配对码跨重启稳定 —— 否则每次启动
-/// 都重新随机一个，用户得反复回来找新码（"配对码错误"的根因）。
-pub fn load_or_create_pin(app: &AppHandle) -> String {
-    if let Some(p) = pin_path(app) {
-        return load_or_create_pin_at_path(&p);
-    }
-    generate_pin()
+mod pin_persistence;
+
+/// 读持久化的配对码；没有 / 无效则新生成并写盘。让配对码跨重启稳定。
+pub fn load_or_create_pin(app: &AppHandle) -> std::io::Result<String> {
+    let path = pin_path(app).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "OpenLess config directory is unavailable",
+        )
+    })?;
+    pin_persistence::load_or_create_pin_at_path(&path, generate_pin)
 }
 
-/// 写配对码到磁盘（用户点"重置配对码"时覆盖）。
-pub fn save_pin(app: &AppHandle, pin: &str) {
-    if let Some(p) = pin_path(app) {
-        if let Err(error) = persist_pin_atomically(&p, pin) {
-            log::warn!(
-                "[remote-input] persist pairing PIN failed at {}: {error}",
-                p.display()
-            );
-        }
-    }
-}
-
-fn load_or_create_pin_at_path(path: &Path) -> String {
-    if let Some(pin) = read_valid_persisted_pin(path) {
-        return pin;
-    }
-
-    let pin = generate_pin();
-    if let Err(error) = persist_pin_atomically(path, &pin) {
-        log::warn!(
-            "[remote-input] persist generated pairing PIN failed at {}: {error}",
-            path.display()
-        );
-    }
-    pin
-}
-
-fn read_valid_persisted_pin(path: &Path) -> Option<String> {
-    let contents = std::fs::read_to_string(path).ok()?;
-    let pin = contents.trim();
-    if pin.len() != 6 || !pin.bytes().all(|byte| byte.is_ascii_digit()) {
-        return None;
-    }
-
-    // A PIN written by an older build may have inherited a permissive umask.
-    // Refuse to reuse it unless owner-only permissions are confirmed/repaired.
-    if repair_pin_permissions(path).is_err() {
-        return None;
-    }
-    Some(pin.to_string())
-}
-
-fn persist_pin_atomically(path: &Path, pin: &str) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let file_name = path
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "remote-input-pin.txt".to_string());
-    let temp_path = path.with_file_name(format!(
-        ".{file_name}.tmp-{}",
-        uuid::Uuid::new_v4().simple()
-    ));
-
-    let result = (|| {
-        let mut options = std::fs::OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
-        let mut temp = options.open(&temp_path)?;
-        temp.write_all(pin.as_bytes())?;
-        temp.sync_all()?;
-        drop(temp);
-
-        replace_pin_file(&temp_path, path)?;
-        repair_pin_permissions(path)?;
-        sync_pin_parent(path)?;
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(&temp_path);
-    }
-    result
-}
-
-#[cfg(unix)]
-fn replace_pin_file(temp_path: &Path, path: &Path) -> std::io::Result<()> {
-    // POSIX rename replaces the destination atomically. The temporary file was
-    // created as 0600, so there is no world-readable creation window.
-    std::fs::rename(temp_path, path)
-}
-
-#[cfg(not(unix))]
-fn replace_pin_file(temp_path: &Path, path: &Path) -> std::io::Result<()> {
-    // Windows does not expose Unix mode bits. Preserve the existing app-data
-    // ACL behavior and replacement semantics while still avoiding partial data.
-    match std::fs::rename(temp_path, path) {
-        Ok(()) => Ok(()),
-        Err(error) if path.exists() => {
-            std::fs::remove_file(path)?;
-            std::fs::rename(temp_path, path).map_err(|_| error)
-        }
-        Err(error) => Err(error),
-    }
-}
-
-#[cfg(unix)]
-fn repair_pin_permissions(path: &Path) -> std::io::Result<()> {
-    use std::os::unix::fs::{MetadataExt, PermissionsExt};
-
-    let metadata = std::fs::symlink_metadata(path)?;
-    if !metadata.file_type().is_file() || metadata.nlink() != 1 {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "pairing PIN path must be a single-link regular file",
-        ));
-    }
-    let current_mode = metadata.permissions().mode() & 0o777;
-    if current_mode != 0o600 {
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
-    }
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn repair_pin_permissions(_path: &Path) -> std::io::Result<()> {
-    Ok(())
-}
-
-#[cfg(unix)]
-fn sync_pin_parent(path: &Path) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::File::open(parent)?.sync_all()?;
-    }
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn sync_pin_parent(_path: &Path) -> std::io::Result<()> {
-    Ok(())
-}
-
-#[cfg(test)]
-mod pin_persistence_tests {
-    use super::*;
-
-    struct TestDir(std::path::PathBuf);
-
-    impl TestDir {
-        fn new(label: &str) -> Self {
-            let path = std::env::temp_dir().join(format!(
-                "openless-pin-{label}-{}",
-                uuid::Uuid::new_v4().simple()
-            ));
-            std::fs::create_dir_all(&path).expect("create test directory");
-            Self(path)
-        }
-
-        fn pin_path(&self) -> std::path::PathBuf {
-            self.0.join("remote-input-pin.txt")
-        }
-    }
-
-    impl Drop for TestDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-
-    #[test]
-    fn atomic_replacement_never_leaves_partial_or_temporary_pin_files() {
-        let root = TestDir::new("replace");
-        let path = root.pin_path();
-
-        persist_pin_atomically(&path, "123456").expect("persist initial PIN");
-        persist_pin_atomically(&path, "654321").expect("replace PIN");
-
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "654321");
-        let names = std::fs::read_dir(&root.0)
-            .unwrap()
-            .map(|entry| entry.unwrap().file_name())
-            .collect::<Vec<_>>();
-        assert_eq!(
-            names,
-            vec![std::ffi::OsString::from("remote-input-pin.txt")]
-        );
-    }
-
-    #[test]
-    fn invalid_or_partial_pin_is_replaced_with_a_complete_six_digit_pin() {
-        for invalid in ["", "12", "12345x", "1234567"] {
-            let root = TestDir::new("invalid");
-            let path = root.pin_path();
-            std::fs::write(&path, invalid).unwrap();
-
-            let pin = load_or_create_pin_at_path(&path);
-
-            assert_eq!(pin.len(), 6);
-            assert!(pin.bytes().all(|byte| byte.is_ascii_digit()));
-            assert_eq!(std::fs::read_to_string(&path).unwrap(), pin);
-        }
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn new_pin_file_is_owner_only_from_creation() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let root = TestDir::new("new-mode");
-        let path = root.pin_path();
-        persist_pin_atomically(&path, "123456").unwrap();
-
-        assert_eq!(
-            std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
-            0o600
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn loading_valid_legacy_pin_repairs_permissive_mode() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let root = TestDir::new("repair-mode");
-        let path = root.pin_path();
-        std::fs::write(&path, "123456").unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
-
-        assert_eq!(read_valid_persisted_pin(&path).as_deref(), Some("123456"));
-        assert_eq!(
-            std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
-            0o600
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn symlink_pin_path_is_replaced_without_touching_its_target() {
-        use std::os::unix::fs::symlink;
-
-        let root = TestDir::new("symlink");
-        let path = root.pin_path();
-        let target = root.0.join("outside-target.txt");
-        std::fs::write(&target, "123456").unwrap();
-        symlink(&target, &path).unwrap();
-
-        let pin = load_or_create_pin_at_path(&path);
-
-        assert_eq!(std::fs::read_to_string(&target).unwrap(), "123456");
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), pin);
-        assert!(std::fs::symlink_metadata(&path)
-            .unwrap()
-            .file_type()
-            .is_file());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn hard_link_pin_path_is_replaced_without_touching_the_other_link() {
-        use std::os::unix::fs::MetadataExt;
-
-        let root = TestDir::new("hard-link");
-        let path = root.pin_path();
-        let other_link = root.0.join("other-link.txt");
-        std::fs::write(&other_link, "123456").unwrap();
-        std::fs::hard_link(&other_link, &path).unwrap();
-
-        let pin = load_or_create_pin_at_path(&path);
-
-        assert_eq!(std::fs::read_to_string(&other_link).unwrap(), "123456");
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), pin);
-        assert_eq!(std::fs::metadata(&path).unwrap().nlink(), 1);
-    }
+/// 原子写配对码到磁盘；只有成功后调用方才能提交内存状态。
+pub fn save_pin(app: &AppHandle, pin: &str) -> std::io::Result<()> {
+    let path = pin_path(app).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "OpenLess config directory is unavailable",
+        )
+    })?;
+    pin_persistence::persist_pin_atomically(&path, pin)
 }
 
 fn is_private_lan(ip: &Ipv4Addr) -> bool {

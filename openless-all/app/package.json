@@ -22,6 +22,7 @@
     "check:hotkey-side-modifiers": "tsx src/lib/hotkeySideModifiers.test.ts",
     "check:windows-startup-lifecycle": "node scripts/windows-startup-lifecycle-contract.test.mjs",
     "check:windows-ui-config": "node scripts/windows-ui-config.test.mjs",
+    "check:pin-persistence-security": "node scripts/pin-persistence-security-contract.test.mjs",
     "check:android-updater-pubkey": "node scripts/check-android-updater-pubkey.mjs"
   },
   "dependencies": {

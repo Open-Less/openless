@@ -1095,6 +1095,7 @@ dependencies = [
  "cpal",
  "enigo",
  "global-hotkey",
+ "libc",
  "log",
  "once_cell",
  "parking_lot",
