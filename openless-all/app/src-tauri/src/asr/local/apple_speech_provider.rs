@@ -306,32 +306,9 @@ fn recognize_file(
     // resultHandler: void(^)(SFSpeechRecognitionResult *result, NSError *error)。
     // 回调只做「解包 + 喂累积器」，结束判定完全交给下面的等待循环。
     let block = RcBlock::new(move |result: *mut AnyObject, error: *mut AnyObject| {
-        let event = extract_event(result, error);
+        let (recognized, callback_error) = extract_callback(result, error);
         let mut s = shared_cb.lock();
-        s.last_event = Some(Instant::now());
-        match event {
-            CallbackEvent::Error(message) => {
-                if s.error.is_none() {
-                    s.error = Some(message);
-                }
-            }
-            CallbackEvent::Recognized {
-                text,
-                utterance_ended,
-                is_final,
-            } => {
-                if utterance_ended {
-                    log::info!(
-                        "[apple-speech] utterance boundary: segment captured ({} chars)",
-                        text.chars().count()
-                    );
-                }
-                s.acc.fold(&text, utterance_ended, is_final);
-                if is_final {
-                    s.saw_final = true;
-                }
-            }
-        }
+        s.record_callback(recognized, callback_error, Instant::now());
     });
 
     log::info!("[apple-speech] starting recognitionTaskWithRequest");
@@ -354,66 +331,62 @@ fn recognize_file(
     // 轮询等待：每轮先查 cancel_flag，再看错误 / 终止条件；超过按音频时长放大的
     // 等待预算则超时（外层 coordinator 的动态超时通常先于它触发，这里只防回调失联）。
     let deadline = Instant::now() + recognition_wait_budget(duration_ms);
-    let mut completed_since: Option<Instant> = None;
     loop {
-        if cancel_flag.load(Ordering::SeqCst) {
-            // 若 cancel() 尚未取走句柄（例如超时路径只置了 flag 没调 cancel），这里补发
-            // 一次 cancel，确保底层识别任务被真正终止，而不是留它在后台跑满。
-            if let Some(t) = active_task.lock().take() {
-                // SAFETY: 见 SendableTask 文档 —— `cancel` 无参、可跨线程调用，仅调用不解引用。
-                let _: () = unsafe { msg_send![t.0, cancel] };
+        let now = Instant::now();
+        let mut s = shared.lock();
+        let decision = s.lifecycle.decide(
+            now,
+            cancel_flag.load(Ordering::SeqCst),
+            s.error.is_some(),
+            now >= deadline,
+        );
+        match decision {
+            RecognitionDecision::Cancel => {
+                drop(s);
+                // 若 cancel() 尚未取走句柄（例如超时路径只置了 flag 没调 cancel），这里
+                // 补发一次 cancel，确保底层识别任务被真正终止，而不是留它在后台跑满。
+                if let Some(t) = active_task.lock().take() {
+                    // SAFETY: 见 SendableTask 文档 —— `cancel` 无参、可跨线程调用，仅调用不解引用。
+                    let _: () = unsafe { msg_send![t.0, cancel] };
+                }
+                bail!("语音识别已取消");
             }
-            bail!("语音识别已取消");
+            RecognitionDecision::Error => {
+                let Some(err) = s.error.take() else {
+                    bail!("语音识别失败：终止状态缺少错误详情");
+                };
+                // result 与 error 同次到达时，record_callback 已先折叠 result；这里抢救只
+                // 收账一次，不会因错误回放已提交的 final。
+                let salvaged = s.acc.salvage();
+                if salvaged.is_empty() {
+                    bail!("语音识别失败: {err}");
+                }
+                log::warn!(
+                    "[apple-speech] recognition error after {} segment(s); returning salvaged text: {err}",
+                    s.acc.segment_count()
+                );
+                return Ok(salvaged);
+            }
+            RecognitionDecision::Finish => {
+                let text = s.acc.salvage();
+                log::info!(
+                    "[apple-speech] recognition finished: {} segment(s), {} chars",
+                    s.acc.segment_count(),
+                    text.chars().count()
+                );
+                return Ok(text);
+            }
+            RecognitionDecision::Timeout => bail!("等待语音识别结果超时"),
+            RecognitionDecision::Wait => drop(s),
         }
-        std::thread::sleep(RECOGNITION_POLL);
 
+        std::thread::sleep(RECOGNITION_POLL);
         // SAFETY: `task` 在本栈帧内被 recognizer 强引用存活（见上）；`state` 是无参
         // 只读属性，返回 NSInteger（i64）。跨线程读一个整型属性，最坏读到瞬时旧值，
         // 下一轮（~100ms 后）即追上，不影响正确性。
         let state: i64 = unsafe { msg_send![task, state] };
-        if state == SF_TASK_STATE_COMPLETED && completed_since.is_none() {
-            completed_since = Some(Instant::now());
-        }
-
-        let mut s = shared.lock();
-        if let Some(err) = s.error.take() {
-            // 有已累积内容时不整段作废：把已识别话段兜底返回（比如尾部静音触发的
-            // 识别错误不应吞掉前面所有话段——内容丢失正是本模块要修的问题）。
-            let salvaged = s.acc.salvage();
-            if salvaged.is_empty() {
-                bail!("语音识别失败: {err}");
-            }
-            log::warn!(
-                "[apple-speech] recognition error after {} segment(s); returning salvaged text: {err}",
-                s.acc.segment_count()
-            );
-            return Ok(salvaged);
-        }
-
-        let events_quiet = s
-            .last_event
-            .map(|t| t.elapsed() >= COMPLETION_GRACE)
-            .unwrap_or(true);
-        let completed_settled = completed_since
-            .map(|t| t.elapsed() >= COMPLETION_GRACE && events_quiet)
-            .unwrap_or(false);
-        let final_quiesced = s.saw_final
-            && s.last_event
-                .map(|t| t.elapsed() >= FINAL_QUIESCENCE)
-                .unwrap_or(false);
-        if completed_settled || final_quiesced {
-            let text = s.acc.salvage();
-            log::info!(
-                "[apple-speech] recognition finished: {} segment(s), {} chars",
-                s.acc.segment_count(),
-                text.chars().count()
-            );
-            return Ok(text);
-        }
-        drop(s);
-
-        if Instant::now() >= deadline {
-            bail!("等待语音识别结果超时");
+        if state == SF_TASK_STATE_COMPLETED {
+            shared.lock().lifecycle.record_completed(Instant::now());
         }
     }
 }
@@ -473,38 +446,125 @@ fn configure_on_device(recognizer: *mut AnyObject, request: *mut AnyObject) {
     }
 }
 
-/// resultHandler 单次回调的归一化事件。
-enum CallbackEvent {
-    Error(String),
-    Recognized {
-        text: String,
-        /// 本次结果带 `speechRecognitionMetadata`（非空）——一个话段（utterance）
-        /// 到此结束，`text` 是该话段的完整文本。
-        utterance_ended: bool,
-        is_final: bool,
-    },
-}
-
 /// resultHandler 回调与等待循环之间的共享状态（block 侧写，轮询侧读）。
 #[derive(Default)]
 struct RecognitionShared {
     acc: SegmentAccumulator,
+    lifecycle: RecognitionLifecycle,
     /// 第一个识别错误（保留首个，后续忽略）。
     error: Option<String>,
-    /// 是否见过 isFinal 结果。注意多话段场景 isFinal 可能逐话段出现，只作
-    /// 后备终止条件的输入，不能单独当结束信号。
-    saw_final: bool,
-    /// 最近一次回调时刻，供 `COMPLETION_GRACE` / `FINAL_QUIESCENCE` 判静默。
-    last_event: Option<Instant>,
 }
 
-/// 从 `(result, error)` 回调参数解包出归一化事件。
-fn extract_event(result: *mut AnyObject, error: *mut AnyObject) -> CallbackEvent {
-    if !error.is_null() {
-        return CallbackEvent::Error(ns_error_description(error));
+struct RecognizedCallback {
+    text: String,
+    /// 本次结果带 `speechRecognitionMetadata`（非空）——一个话段（utterance）
+    /// 到此结束，`text` 是该话段的完整文本。
+    utterance_ended: bool,
+    is_final: bool,
+}
+
+impl RecognitionShared {
+    fn record_callback(
+        &mut self,
+        recognized: Option<RecognizedCallback>,
+        error: Option<String>,
+        at: Instant,
+    ) {
+        if let Some(result) = recognized {
+            if result.utterance_ended {
+                log::info!(
+                    "[apple-speech] utterance boundary: segment captured ({} chars)",
+                    result.text.chars().count()
+                );
+            }
+            self.acc
+                .fold(&result.text, result.utterance_ended, result.is_final);
+            self.lifecycle.record_callback(at, result.is_final);
+        }
+        if self.error.is_none() {
+            self.error = error;
+        }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RecognitionDecision {
+    Wait,
+    Finish,
+    Cancel,
+    Error,
+    Timeout,
+}
+
+#[derive(Default)]
+struct RecognitionLifecycle {
+    completed_at: Option<Instant>,
+    last_callback_at: Option<Instant>,
+    saw_final: bool,
+}
+
+impl RecognitionLifecycle {
+    fn record_callback(&mut self, at: Instant, is_final: bool) {
+        self.last_callback_at = Some(at);
+        self.saw_final |= is_final;
+    }
+
+    fn record_completed(&mut self, at: Instant) {
+        self.completed_at.get_or_insert(at);
+    }
+
+    fn decide(
+        &self,
+        now: Instant,
+        cancelled: bool,
+        has_error: bool,
+        deadline_reached: bool,
+    ) -> RecognitionDecision {
+        if cancelled {
+            return RecognitionDecision::Cancel;
+        }
+        if has_error {
+            return RecognitionDecision::Error;
+        }
+
+        let completion_settled = self
+            .completed_at
+            .map(|at| now.saturating_duration_since(at) >= COMPLETION_GRACE)
+            .unwrap_or(false)
+            && self
+                .last_callback_at
+                .map(|at| now.saturating_duration_since(at) >= COMPLETION_GRACE)
+                .unwrap_or(true);
+        let final_quiesced = self.saw_final
+            && self
+                .last_callback_at
+                .map(|at| now.saturating_duration_since(at) >= FINAL_QUIESCENCE)
+                .unwrap_or(false);
+        if completion_settled || final_quiesced {
+            return RecognitionDecision::Finish;
+        }
+        if deadline_reached {
+            return RecognitionDecision::Timeout;
+        }
+        RecognitionDecision::Wait
+    }
+}
+
+/// 从 `(result, error)` 同时解包识别结果与错误。Apple 允许二者同次出现；调用方必须先
+/// 折叠结果、再记录错误，确保错误抢救包含这次最后文本且只收账一次。
+fn extract_callback(
+    result: *mut AnyObject,
+    error: *mut AnyObject,
+) -> (Option<RecognizedCallback>, Option<String>) {
+    let callback_error = if !error.is_null() {
+        Some(ns_error_description(error))
+    } else if result.is_null() {
+        Some("识别返回空结果".to_string())
+    } else {
+        None
+    };
     if result.is_null() {
-        return CallbackEvent::Error("识别返回空结果".to_string());
+        return (None, callback_error);
     }
     // SAFETY: `result` 非空，是 `SFSpeechRecognitionResult`；`isFinal` 无参返回 BOOL。
     let is_final: Bool = unsafe { msg_send![result, isFinal] };
@@ -530,11 +590,12 @@ fn extract_event(result: *mut AnyObject, error: *mut AnyObject) -> CallbackEvent
         let formatted: *mut AnyObject = unsafe { msg_send![transcription, formattedString] };
         ns_string_to_rust(formatted)
     };
-    CallbackEvent::Recognized {
+    let recognized = RecognizedCallback {
         text,
         utterance_ended,
         is_final: is_final.as_bool(),
-    }
+    };
+    (Some(recognized), callback_error)
 }
 
 /// 跨话段累积识别文本（修「停顿后前文丢失」，issue：Apple Speech 停顿截断）。
@@ -554,29 +615,53 @@ struct SegmentAccumulator {
     segments: Vec<String>,
     /// 当前话段最新 partial 文本。
     current: String,
+    /// 自上次明确边界提交后，是否见过新一代 partial。它把「下一话段」与同一任务在
+    /// 结尾重放 final 全文区分开，避免用跨话段文本前缀猜测身份。
+    current_generation_active: bool,
 }
 
 impl SegmentAccumulator {
     /// 喂入一次识别回调。`utterance_ended` / `is_final` 的文本视为所在话段的完整
     /// 文本并落袋；普通 partial 只更新 `current`，除非检测到「静默重置」。
     fn fold(&mut self, text: &str, utterance_ended: bool, is_final: bool) {
-        if utterance_ended || is_final {
-            if text.trim().is_empty() {
-                // 边界结果偶见空文本：退而落袋当前话段已见的最长 partial，不丢内容。
-                let current = std::mem::take(&mut self.current);
-                self.push_segment(&current);
+        if utterance_ended {
+            // metadata 是 Apple 给出的独立 utterance 证据；即使相邻文本相同或互为
+            // 前缀也必须分别提交，不能把正常复述/自我修正当累计回放吞掉。
+            let segment = if text.trim().is_empty() {
+                std::mem::take(&mut self.current)
             } else {
-                self.push_segment(text);
-                self.current.clear();
+                text.to_string()
+            };
+            self.push_segment(&segment);
+            self.current.clear();
+            self.current_generation_active = false;
+        } else if is_final {
+            let segment = if text.trim().is_empty() {
+                std::mem::take(&mut self.current)
+            } else {
+                text.to_string()
+            };
+            // 有新 partial（或尚无已提交话段）说明 final 属于当前 generation；否则它
+            // 可能只是同一 recognition task 在完成时重放累计全文，只在全文确实不同
+            // 时兜底保留。去重证据来自 generation/commit 状态，不跨 segment 猜前缀。
+            if self.current_generation_active
+                || self.segments.is_empty()
+                || normalized(&self.joined()) != normalized(&segment)
+            {
+                self.push_segment(&segment);
             }
+            self.current.clear();
+            self.current_generation_active = false;
         } else if self.reset_detected(text) {
             // 防守路径：没有 metadata 边界回调、partial 却骤缩——设备端识别已悄悄
             // 重开话段。把上一话段已见的最长 partial 先落袋，再从新文本重新累计。
             let previous = std::mem::take(&mut self.current);
             self.push_segment(&previous);
             self.current = text.to_string();
+            self.current_generation_active = true;
         } else {
             self.current = text.to_string();
+            self.current_generation_active = true;
         }
     }
 
@@ -588,24 +673,11 @@ impl SegmentAccumulator {
         current_chars >= 12 && new_chars.saturating_mul(3) < current_chars
     }
 
-    /// 话段落袋，带去重防线：新旧互为前缀视为「累计式文本」（服务器识别的 final 覆盖
-    /// 此前全部内容），取长者替换而非追加；新文本若等于已收全文（忽略空白差异），
-    /// 视为引擎在结尾重放累计全文，直接忽略。两条防线都为避免同一内容出现两次。
+    /// 明确话段落袋。调用方先依据 metadata / generation / final 状态判定提交身份；此处
+    /// 不做跨话段文本启发式去重，避免吞掉正常复述与前缀式自我修正。
     fn push_segment(&mut self, text: &str) {
         let trimmed = text.trim();
         if trimmed.is_empty() {
-            return;
-        }
-        if let Some(last) = self.segments.last_mut() {
-            if trimmed.starts_with(last.as_str()) {
-                *last = trimmed.to_string();
-                return;
-            }
-            if last.starts_with(trimmed) {
-                return;
-            }
-        }
-        if !self.segments.is_empty() && normalized(&self.joined()) == normalized(trimmed) {
             return;
         }
         self.segments.push(trimmed.to_string());
@@ -613,8 +685,11 @@ impl SegmentAccumulator {
 
     /// 结束收账：把残余 partial 落袋后返回全部话段的拼接文本。
     fn salvage(&mut self) -> String {
-        let current = std::mem::take(&mut self.current);
-        self.push_segment(&current);
+        if self.current_generation_active {
+            let current = std::mem::take(&mut self.current);
+            self.push_segment(&current);
+            self.current_generation_active = false;
+        }
         self.joined()
     }
 
@@ -622,8 +697,8 @@ impl SegmentAccumulator {
         self.segments.len()
     }
 
-    /// 话段拼接：相邻两段的边界字符都不是 ASCII（多为 CJK）时直接相连，否则补一个
-    /// 空格分词（英文等空格语言）。润色模式下 LLM 还会再整理，此处只求原文可读。
+    /// 话段拼接：汉字、平假名、片假名及中日标点按无空格书写习惯连接；其它脚本
+    /// （包括韩文、俄文、阿文）默认补词间空格。润色模式下 LLM 仍会再整理。
     fn joined(&self) -> String {
         let mut out = String::new();
         for segment in &self.segments {
@@ -631,17 +706,100 @@ impl SegmentAccumulator {
                 out.push_str(segment);
                 continue;
             }
-            let cjk_boundary = matches!(
+            let join_bare = matches!(
                 (out.chars().last(), segment.chars().next()),
-                (Some(prev), Some(next)) if !prev.is_ascii() && !next.is_ascii()
+                (Some(prev), Some(next)) if should_join_without_space(prev, next)
             );
-            if !cjk_boundary {
+            if !join_bare {
                 out.push(' ');
             }
             out.push_str(segment);
         }
         out
     }
+}
+
+fn should_join_without_space(prev: char, next: char) -> bool {
+    (is_han_or_japanese(prev) && is_han_or_japanese(next))
+        || (is_cjk_punctuation(prev) && is_han_or_japanese(next))
+        || (is_han_or_japanese(prev) && is_cjk_punctuation(next))
+        || is_opening_punctuation(prev)
+        || is_closing_punctuation(next)
+}
+
+fn is_han_or_japanese(c: char) -> bool {
+    matches!(
+        c as u32,
+        0x3400..=0x4DBF
+            | 0x4E00..=0x9FFF
+            | 0xF900..=0xFAFF
+            | 0x20000..=0x2FA1F
+            | 0x3040..=0x30FF
+            | 0x31F0..=0x31FF
+            | 0xFF66..=0xFF9D
+    )
+}
+
+fn is_cjk_punctuation(c: char) -> bool {
+    matches!(
+        c,
+        '、' | '。'
+            | '，'
+            | '！'
+            | '？'
+            | '：'
+            | '；'
+            | '「'
+            | '」'
+            | '『'
+            | '』'
+            | '【'
+            | '】'
+            | '《'
+            | '》'
+            | '〈'
+            | '〉'
+            | '・'
+            | '〜'
+            | '…'
+            | '—'
+    )
+}
+
+fn is_opening_punctuation(c: char) -> bool {
+    matches!(
+        c,
+        '(' | '[' | '{' | '（' | '［' | '｛' | '「' | '『' | '【' | '《' | '〈'
+    )
+}
+
+fn is_closing_punctuation(c: char) -> bool {
+    matches!(
+        c,
+        ',' | '.'
+            | '!'
+            | '?'
+            | ':'
+            | ';'
+            | ')'
+            | ']'
+            | '}'
+            | '，'
+            | '。'
+            | '！'
+            | '？'
+            | '：'
+            | '；'
+            | '）'
+            | '］'
+            | '｝'
+            | '、'
+            | '」'
+            | '』'
+            | '】'
+            | '》'
+            | '〉'
+    )
 }
 
 /// 空白不敏感比较用：剔除所有空白字符。话段拼接与引擎全文重放的分隔符可能不同
@@ -662,7 +820,10 @@ fn create_recognizer(locale: Option<&str>) -> Result<*mut AnyObject> {
     let cls = speech_recognizer_class()?;
     let recognizer: *mut AnyObject = match locale.and_then(ns_locale) {
         Some(ns_loc) => {
-            log::info!("[apple-speech] recognizer locale = {}", locale.unwrap_or(""));
+            log::info!(
+                "[apple-speech] recognizer locale = {}",
+                locale.unwrap_or("")
+            );
             // SAFETY: `cls` 是 SFSpeechRecognizer 类；`alloc` 得未初始化实例，
             // `initWithLocale:` 用有效 NSLocale 初始化，返回实例移交调用方（ARC 管理）。
             unsafe {
@@ -992,13 +1153,27 @@ mod tests {
     }
 
     #[test]
-    fn cumulative_boundary_text_replaces_instead_of_duplicating() {
-        // 若边界结果携带的是「累计全文」而非「本段文本」，前缀替换去重，不得重复。
+    fn equal_boundary_segments_are_distinct_utterances() {
         let mut acc = SegmentAccumulator::default();
-        acc.fold("AAA", true, false);
-        acc.fold("AAA BBB", true, false);
-        acc.fold("AAA BBB CCC", false, true);
-        assert_eq!(acc.salvage(), "AAA BBB CCC");
+        acc.fold("hello", true, false);
+        acc.fold("hello", true, false);
+        assert_eq!(acc.salvage(), "hello hello");
+    }
+
+    #[test]
+    fn longer_prefix_boundary_segment_is_not_a_cumulative_replay() {
+        let mut acc = SegmentAccumulator::default();
+        acc.fold("好的", true, false);
+        acc.fold("好的我们继续", true, false);
+        assert_eq!(acc.salvage(), "好的好的我们继续");
+    }
+
+    #[test]
+    fn shorter_prefix_boundary_segment_is_not_a_cumulative_replay() {
+        let mut acc = SegmentAccumulator::default();
+        acc.fold("好的我们继续", true, false);
+        acc.fold("好的", true, false);
+        assert_eq!(acc.salvage(), "好的我们继续好的");
     }
 
     #[test]
@@ -1044,9 +1219,165 @@ mod tests {
     }
 
     #[test]
+    fn non_cjk_non_ascii_segments_keep_word_spaces() {
+        for (first, second, expected) in [
+            ("привет", "мир", "привет мир"),
+            ("مرحبا", "بالعالم", "مرحبا بالعالم"),
+            ("안녕", "하세요", "안녕 하세요"),
+        ] {
+            let mut acc = SegmentAccumulator::default();
+            acc.fold(first, true, false);
+            acc.fold(second, true, false);
+            assert_eq!(acc.salvage(), expected);
+        }
+    }
+
+    #[test]
+    fn chinese_and_japanese_scripts_join_without_spaces_around_native_punctuation() {
+        let mut chinese = SegmentAccumulator::default();
+        chinese.fold("你好，", true, false);
+        chinese.fold("我们继续", true, false);
+        assert_eq!(chinese.salvage(), "你好，我们继续");
+
+        let mut japanese = SegmentAccumulator::default();
+        japanese.fold("今日は", true, false);
+        japanese.fold("晴れです。", true, false);
+        assert_eq!(japanese.salvage(), "今日は晴れです。");
+    }
+
+    #[test]
     fn recognition_wait_budget_scales_with_audio_length() {
         // 短音频维持 60s 下限；长音频按时长 + 30s 放大，不再被固定硬顶截断。
         assert_eq!(recognition_wait_budget(5_000), RECOGNITION_WAIT);
         assert_eq!(recognition_wait_budget(300_000), Duration::from_secs(330));
+    }
+
+    // ---- RecognitionLifecycle：完成 / 迟到回调 / 静默与终止优先级 ----
+
+    #[test]
+    fn completed_task_waits_for_the_full_grace_period() {
+        let start = Instant::now();
+        let mut lifecycle = RecognitionLifecycle::default();
+        lifecycle.record_completed(start);
+
+        assert_eq!(
+            lifecycle.decide(
+                start + COMPLETION_GRACE - Duration::from_millis(1),
+                false,
+                false,
+                false
+            ),
+            RecognitionDecision::Wait
+        );
+        assert_eq!(
+            lifecycle.decide(start + COMPLETION_GRACE, false, false, false),
+            RecognitionDecision::Finish
+        );
+    }
+
+    #[test]
+    fn callback_after_completed_restarts_the_grace_window() {
+        let start = Instant::now();
+        let late = start + Duration::from_millis(200);
+        let mut lifecycle = RecognitionLifecycle::default();
+        lifecycle.record_completed(start);
+        lifecycle.record_callback(late, false);
+
+        assert_eq!(
+            lifecycle.decide(
+                late + COMPLETION_GRACE - Duration::from_millis(1),
+                false,
+                false,
+                false
+            ),
+            RecognitionDecision::Wait
+        );
+        assert_eq!(
+            lifecycle.decide(late + COMPLETION_GRACE, false, false, false),
+            RecognitionDecision::Finish
+        );
+    }
+
+    #[test]
+    fn final_callback_without_completed_uses_silent_fallback() {
+        let start = Instant::now();
+        let mut lifecycle = RecognitionLifecycle::default();
+        lifecycle.record_callback(start, true);
+
+        assert_eq!(
+            lifecycle.decide(
+                start + FINAL_QUIESCENCE - Duration::from_millis(1),
+                false,
+                false,
+                false
+            ),
+            RecognitionDecision::Wait
+        );
+        assert_eq!(
+            lifecycle.decide(start + FINAL_QUIESCENCE, false, false, false),
+            RecognitionDecision::Finish
+        );
+    }
+
+    #[test]
+    fn cancellation_wins_over_error_timeout_and_completion() {
+        let start = Instant::now();
+        let mut lifecycle = RecognitionLifecycle::default();
+        lifecycle.record_completed(start);
+        assert_eq!(
+            lifecycle.decide(start + COMPLETION_GRACE, true, true, true),
+            RecognitionDecision::Cancel
+        );
+    }
+
+    #[test]
+    fn error_wins_over_timeout_and_completion_when_not_cancelled() {
+        let start = Instant::now();
+        let mut lifecycle = RecognitionLifecycle::default();
+        lifecycle.record_completed(start);
+        assert_eq!(
+            lifecycle.decide(start + COMPLETION_GRACE, false, true, true),
+            RecognitionDecision::Error
+        );
+    }
+
+    #[test]
+    fn result_and_error_in_one_callback_salvages_the_result_once() {
+        let start = Instant::now();
+        let mut shared = RecognitionShared::default();
+        shared.record_callback(
+            Some(RecognizedCallback {
+                text: "已经识别的内容".to_string(),
+                utterance_ended: false,
+                is_final: true,
+            }),
+            Some("尾部错误".to_string()),
+            start,
+        );
+
+        assert_eq!(
+            shared
+                .lifecycle
+                .decide(start, false, shared.error.is_some(), false),
+            RecognitionDecision::Error
+        );
+        assert_eq!(shared.acc.salvage(), "已经识别的内容");
+        assert_eq!(shared.acc.salvage(), "已经识别的内容");
+    }
+
+    #[test]
+    fn settled_completion_wins_over_timeout_but_timeout_ends_plain_waiting() {
+        let start = Instant::now();
+        let mut completed = RecognitionLifecycle::default();
+        completed.record_completed(start);
+        assert_eq!(
+            completed.decide(start + COMPLETION_GRACE, false, false, true),
+            RecognitionDecision::Finish
+        );
+
+        assert_eq!(
+            RecognitionLifecycle::default().decide(start, false, false, true),
+            RecognitionDecision::Timeout
+        );
     }
 }
