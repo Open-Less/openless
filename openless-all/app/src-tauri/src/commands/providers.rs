@@ -184,12 +184,7 @@ async fn validate_llm_provider() -> Result<(), String> {
             )
             .await
             .map(|_| ())
-            .map_err(|e| match e {
-                LLMError::InvalidResponse { status, .. } => {
-                    format!("providerHttpStatus:{status}")
-                }
-                other => other.to_string(),
-            });
+            .map_err(provider_llm_error_message);
     }
 
     let config = read_openai_provider_config("llm")?;
@@ -223,12 +218,18 @@ async fn validate_llm_provider() -> Result<(), String> {
         )
         .await
         .map(|_| ())
-        .map_err(|e| match e {
-            LLMError::InvalidResponse { status, .. } => {
-                format!("providerHttpStatus:{status}")
-            }
-            other => other.to_string(),
-        })
+        .map_err(provider_llm_error_message)
+}
+
+fn provider_llm_error_message(error: LLMError) -> String {
+    match error {
+        LLMError::InvalidResponse { status, .. } => format!("providerHttpStatus:{status}"),
+        LLMError::Timeout => "请求超时".to_string(),
+        LLMError::Network(_) => "网络请求失败".to_string(),
+        LLMError::MissingCredentials => "providerCredentialsMissing".to_string(),
+        LLMError::ParseError(_) => "providerInvalidResponse".to_string(),
+        LLMError::CodexAuth(_) => "codexOAuthUnavailable".to_string(),
+    }
 }
 
 async fn validate_asr_provider() -> Result<(), String> {
@@ -660,13 +661,50 @@ fn encode_wav_16k_mono_silence(duration_ms: u32) -> Vec<u8> {
     wav
 }
 
+fn sanitized_provider_destination(raw_url: &str) -> String {
+    let Ok(mut url) = reqwest::Url::parse(raw_url.trim()) else {
+        return "<invalid-provider-url>".to_string();
+    };
+    if !matches!(url.scheme(), "http" | "https")
+        || url.set_username("").is_err()
+        || url.set_password(None).is_err()
+    {
+        return "<invalid-provider-url>".to_string();
+    }
+    url.set_query(None);
+    url.set_fragment(None);
+    url.to_string()
+}
+
+fn provider_log_context(raw_url: &str, is_gemini: bool) -> String {
+    format!(
+        "GET {} (gemini={is_gemini})",
+        sanitized_provider_destination(raw_url)
+    )
+}
+
+fn provider_request_error_message(error: &reqwest::Error) -> &'static str {
+    if error.is_timeout() {
+        "请求超时"
+    } else if error.is_connect() {
+        "网络连接失败"
+    } else {
+        "网络请求失败"
+    }
+}
+
 pub(crate) async fn fetch_provider_models(config: &ProviderConfig) -> Result<Vec<String>, String> {
     let url = models_url(&config.base_url);
     let is_gemini = is_gemini_base_url(&config.base_url);
-    log::info!("[provider-check] GET {url} (gemini={is_gemini})");
+    let log_context = provider_log_context(&url, is_gemini);
+    log::info!("[provider-check] {log_context}");
     let client = http_client_builder(&config.base_url, 15)
         .build()
-        .map_err(|e| format!("HTTP client 初始化失败: {e}"))?;
+        .map_err(|_| {
+            log::warn!("[provider-check] {log_context} failed: client-init");
+            "HTTP client 初始化失败".to_string()
+        })?;
+    // Observability uses only the sanitized copy above; requests retain the original URL.
     let mut request = client.get(&url);
     if !config.api_key.trim().is_empty() {
         // 谷歌原生 generativelanguage.googleapis.com 不识别 Bearer Authorization,
@@ -680,18 +718,21 @@ pub(crate) async fn fetch_provider_models(config: &ProviderConfig) -> Result<Vec
     for (k, v) in &config.extra_headers {
         request = request.header(k.as_str(), v.as_str());
     }
-    let response = request.send().await.map_err(|e| {
-        if e.is_timeout() {
-            "请求超时".to_string()
-        } else {
-            format!("网络错误: {e}")
-        }
+    let response = request.send().await.map_err(|error| {
+        let message = provider_request_error_message(&error);
+        log::warn!("[provider-check] {log_context} failed: {message}");
+        message.to_string()
     })?;
     let status = response.status();
-    let body = response
-        .text()
-        .await
-        .map_err(|e| format!("读取响应失败: {e}"))?;
+    let body = response.text().await.map_err(|error| {
+        let reason = if error.is_timeout() {
+            "response-timeout"
+        } else {
+            "response-read"
+        };
+        log::warn!("[provider-check] {log_context} failed: {reason}");
+        "读取响应失败".to_string()
+    })?;
     if !status.is_success() {
         return Err(format!("providerHttpStatus:{}", status.as_u16()));
     }
@@ -707,14 +748,21 @@ pub(crate) fn is_gemini_base_url(base_url: &str) -> bool {
 }
 
 pub(crate) fn models_url(base_url: &str) -> String {
-    let trimmed = base_url.trim().trim_end_matches('/');
-    if trimmed.ends_with("/models") {
-        return trimmed.to_string();
-    }
-    if let Some(prefix) = trimmed.strip_suffix("/chat/completions") {
-        return format!("{prefix}/models");
-    }
-    format!("{trimmed}/models")
+    let trimmed = base_url.trim();
+    let Ok(mut url) = reqwest::Url::parse(trimmed) else {
+        let fallback = trimmed.trim_end_matches('/');
+        return format!("{fallback}/models");
+    };
+    let path = url.path().trim_end_matches('/');
+    let next_path = if path.ends_with("/models") {
+        path.to_string()
+    } else if let Some(prefix) = path.strip_suffix("/chat/completions") {
+        format!("{prefix}/models")
+    } else {
+        format!("{path}/models")
+    };
+    url.set_path(&next_path);
+    url.to_string()
 }
 
 pub(crate) fn parse_model_ids(body: &str) -> Result<Vec<String>, String> {
@@ -787,7 +835,184 @@ mod tests {
     // API Key 发请求，read_openai_provider_config（连通性测试 + 模型列表 chokepoint）现在复用
     // LLM 路径的 SSRF 校验。read_openai_provider_config 依赖凭据库无法纯单测，这里直接对它调用
     // 的校验器锁定 ASR 形态 endpoint 的拒绝/放行契约。
+    use super::{
+        fetch_provider_models, models_url, provider_llm_error_message, provider_log_context,
+        provider_request_error_message, sanitized_provider_destination, ProviderConfig,
+    };
     use crate::endpoint_security::validate_http_endpoint;
+
+    #[test]
+    fn provider_destination_redacts_userinfo_query_and_fragment() {
+        let raw = "https://alice:password@example.com:8443/v1/models?api_key=query-secret#private-fragment";
+        let destination = sanitized_provider_destination(raw);
+
+        assert_eq!(destination, "https://example.com:8443/v1/models");
+        for secret in [
+            "alice",
+            "password",
+            "api_key",
+            "query-secret",
+            "private-fragment",
+        ] {
+            assert!(!destination.contains(secret), "destination leaked {secret}");
+        }
+    }
+
+    #[test]
+    fn provider_destination_preserves_normal_origin_path_and_port() {
+        assert_eq!(
+            sanitized_provider_destination("https://api.example.com:9443/v1/models"),
+            "https://api.example.com:9443/v1/models"
+        );
+    }
+
+    #[test]
+    fn provider_destination_never_echoes_malformed_input() {
+        let raw = "not a url?token=malformed-secret#private";
+        let destination = sanitized_provider_destination(raw);
+
+        assert_eq!(destination, "<invalid-provider-url>");
+        assert!(!destination.contains("malformed-secret"));
+        assert!(!provider_log_context(raw, false).contains("malformed-secret"));
+    }
+
+    #[test]
+    fn provider_log_context_contains_only_the_sanitized_destination() {
+        let context = provider_log_context(
+            "https://user:pass@example.com/v1/models?token=query-secret#fragment-secret",
+            true,
+        );
+
+        assert_eq!(context, "GET https://example.com/v1/models (gemini=true)");
+        for secret in ["user", "pass", "query-secret", "fragment-secret"] {
+            assert!(!context.contains(secret), "log context leaked {secret}");
+        }
+    }
+
+    #[test]
+    fn provider_validation_ipc_error_never_includes_network_details() {
+        let secret = "https://user:pass@example.com/v1?token=query-secret#fragment";
+        let message = provider_llm_error_message(crate::polish::LLMError::Network(format!(
+            "request failed for {secret}"
+        )));
+        assert_eq!(message, "网络请求失败");
+        assert!(!message.contains(secret));
+    }
+
+    #[tokio::test]
+    async fn provider_request_error_does_not_echo_reqwest_url_secrets() {
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+        let raw =
+            format!("http://user:password@{addr}/v1/models?token=query-secret#fragment-secret");
+        let error = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .unwrap()
+            .get(&raw)
+            .send()
+            .await
+            .expect_err("closed listener should reject the request");
+        let message = provider_request_error_message(&error);
+
+        assert_eq!(message, "网络连接失败");
+        for secret in ["user", "password", "query-secret", "fragment-secret"] {
+            assert!(!message.contains(secret), "IPC error leaked {secret}");
+        }
+    }
+
+    #[tokio::test]
+    async fn fetch_provider_models_keeps_url_secrets_out_of_ipc_errors() {
+        use std::collections::HashMap;
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+        let secrets = ["user", "password", "query-secret", "fragment-secret"];
+        let error = fetch_provider_models(&ProviderConfig {
+            base_url: format!(
+                "http://{}:{}@{addr}/v1?token={}#{}",
+                secrets[0], secrets[1], secrets[2], secrets[3]
+            ),
+            api_key: String::new(),
+            extra_headers: HashMap::new(),
+        })
+        .await
+        .expect_err("closed listener should reject the provider request");
+
+        assert_eq!(error, "网络连接失败");
+        for secret in secrets {
+            assert!(!error.contains(secret), "IPC error leaked {secret}");
+        }
+    }
+
+    #[test]
+    fn models_url_appends_to_the_path_without_corrupting_query_or_fragment() {
+        assert_eq!(
+            models_url("https://example.com/v1?token=query-secret#client-fragment"),
+            "https://example.com/v1/models?token=query-secret#client-fragment"
+        );
+        assert_eq!(
+            models_url("https://example.com/v1/chat/completions?token=query-secret"),
+            "https://example.com/v1/models?token=query-secret"
+        );
+    }
+
+    #[tokio::test]
+    async fn fetch_provider_models_preserves_the_original_request_query() {
+        use std::collections::HashMap;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 1024];
+            while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                let count = stream.read(&mut buffer).await.unwrap();
+                assert!(count > 0, "client closed before sending request headers");
+                request.extend_from_slice(&buffer[..count]);
+            }
+            let request_line = String::from_utf8(request)
+                .unwrap()
+                .lines()
+                .next()
+                .unwrap()
+                .to_string();
+            let body = r#"{"data":[{"id":"model-a"}]}"#;
+            stream
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+            request_line
+        });
+
+        let models = fetch_provider_models(&ProviderConfig {
+            base_url: format!("http://{addr}/v1?token=query-secret#client-fragment"),
+            api_key: String::new(),
+            extra_headers: HashMap::new(),
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(models, vec!["model-a"]);
+        assert_eq!(
+            server.await.unwrap(),
+            "GET /v1/models?token=query-secret HTTP/1.1"
+        );
+    }
 
     #[test]
     fn asr_endpoint_rejects_metadata_cgnat_and_non_https_public() {
