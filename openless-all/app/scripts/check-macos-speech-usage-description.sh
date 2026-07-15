@@ -14,7 +14,7 @@ DESCRIPTION=$(/usr/bin/plutil \
   -o - \
   -- "$PLIST_PATH")
 
-if [[ ! "$DESCRIPTION" =~ [^[:space:]] ]]; then
+if ! node -e 'process.exit(process.argv[1].trim().length === 0 ? 1 : 0)' -- "$DESCRIPTION"; then
   echo "NSSpeechRecognitionUsageDescription must be a non-empty string in $PLIST_PATH" >&2
   exit 1
 fi

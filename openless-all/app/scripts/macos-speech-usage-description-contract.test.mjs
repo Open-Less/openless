@@ -21,8 +21,11 @@ function writeFixture(name, value) {
   return path;
 }
 
-function runChecker(path) {
-  return spawnSync('bash', [checker, path], { encoding: 'utf8' });
+function runChecker(path, env = {}) {
+  return spawnSync('bash', [checker, path], {
+    encoding: 'utf8',
+    env: { ...process.env, ...env },
+  });
 }
 
 function expectSuccessSilent(name, path) {
@@ -35,8 +38,8 @@ function expectSuccessSilent(name, path) {
   }
 }
 
-function expectFailure(name, path) {
-  const result = runChecker(path);
+function expectFailure(name, path, env = {}) {
+  const result = runChecker(path, env);
   if (result.status === 0) {
     throw new Error(`${name}: expected non-zero exit`);
   }
@@ -62,6 +65,20 @@ try {
       '<key>NSSpeechRecognitionUsageDescription</key><string>  \n\t  </string>',
     ),
   );
+  for (const [name, slug, whitespace] of [
+    ['NBSP', 'nbsp', '\u00a0'],
+    ['EM SPACE', 'em-space', '\u2003'],
+    ['IDEOGRAPHIC SPACE', 'ideographic-space', '\u3000'],
+  ]) {
+    expectFailure(
+      `${name}-only string under C locale`,
+      writeFixture(
+        `${slug}-only.plist`,
+        `<key>NSSpeechRecognitionUsageDescription</key><string>${whitespace}</string>`,
+      ),
+      { LC_ALL: 'C', LANG: 'C' },
+    );
+  }
   expectFailure(
     'wrong type',
     writeFixture('wrong-type.plist', '<key>NSSpeechRecognitionUsageDescription</key><true/>'),
