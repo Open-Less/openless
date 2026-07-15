@@ -155,6 +155,9 @@ jobs:
       - name: Check macOS capsule Spaces contract
         run: npm run check:macos-capsule-spaces
 
+      - name: Check Windows UI configuration contract
+        run: npm run check:windows-ui-config
+
       - name: Build frontend (tsc + vite)
         run: npm run build
 
