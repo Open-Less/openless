@@ -47,6 +47,19 @@ static CREDENTIAL_HTTP: Lazy<reqwest::Client> = Lazy::new(|| {
         .expect("build no-redirect credential HTTP client")
 });
 
+/// Anonymous HTTP client for public endpoints that must fail closed on redirects.
+static ANONYMOUS_NO_REDIRECT_HTTP: Lazy<reqwest::Client> = Lazy::new(|| {
+    reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(8))
+        .pool_idle_timeout(Duration::from_secs(90))
+        .pool_max_idle_per_host(8)
+        .tcp_keepalive(Duration::from_secs(30))
+        .redirect(reqwest::redirect::Policy::none())
+        .user_agent(concat!("OpenLess/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .expect("build anonymous no-redirect HTTP client")
+});
+
 /// 进程级共享 HTTP 客户端。带连接池 —— 一次握手成功后的连接被后续请求复用。
 pub fn http() -> &'static reqwest::Client {
     &HTTP
@@ -54,6 +67,10 @@ pub fn http() -> &'static reqwest::Client {
 
 pub fn credential_http() -> &'static reqwest::Client {
     &CREDENTIAL_HTTP
+}
+
+pub fn anonymous_no_redirect_http() -> &'static reqwest::Client {
+    &ANONYMOUS_NO_REDIRECT_HTTP
 }
 
 /// 按 `(timeout_secs, no_proxy)` 缓存并复用 `reqwest::Client`。

@@ -72,6 +72,8 @@ pub(crate) const MARKETPLACE_REAUTH_REQUIRED: &str =
     "marketplace_auth_required: GitHub sign-in expired or is missing; sign in again";
 pub(crate) const MARKETPLACE_REDIRECT_REJECTED: &str =
     "marketplace_authenticated_redirect_rejected";
+pub(crate) const MARKETPLACE_PUBLIC_REDIRECT_REJECTED: &str =
+    "marketplace_public_redirect_rejected";
 
 fn marketplace_access_token() -> Result<String, String> {
     CredentialsVault::get_marketplace_github_token()
@@ -325,10 +327,15 @@ async fn execute_public_marketplace_with(
     let response = net::send_with_retry(|| {
         // Public browse/detail/download intentionally use the anonymous client
         // and never inherit Marketplace bearer state.
-        net::http().get(url.clone()).timeout(timeout)
+        net::anonymous_no_redirect_http()
+            .get(url.clone())
+            .timeout(timeout)
     })
     .await
     .map_err(|_| format!("{operation} request failed"))?;
+    if response.status().is_redirection() {
+        return Err(MARKETPLACE_PUBLIC_REDIRECT_REJECTED.to_string());
+    }
     if !response.status().is_success() {
         return Err(format!("{operation} HTTP {}", response.status()));
     }
@@ -760,6 +767,61 @@ mod tests {
         (base, task)
     }
 
+    async fn spawn_mock_redirect_response(
+        body: String,
+    ) -> (
+        String,
+        tokio::task::JoinHandle<(String, usize, bool, String)>,
+    ) {
+        let redirect_target = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let target_url = format!(
+            "http://{}/location-gho_public_redirect_secret",
+            redirect_target.local_addr().unwrap()
+        );
+        let source = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", source.local_addr().unwrap());
+        let task = tokio::spawn(async move {
+            let (mut stream, _) = source.accept().await.unwrap();
+            let request = read_http_request(&mut stream).await;
+            let response = format!(
+                "HTTP/1.1 302 Found\r\nLocation: {target_url}\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+
+            let target_accessed = match tokio::time::timeout(
+                std::time::Duration::from_millis(300),
+                redirect_target.accept(),
+            )
+            .await
+            {
+                Ok(Ok((mut target_stream, _))) => {
+                    let mut request = [0u8; 2048];
+                    let _ = target_stream.read(&mut request).await;
+                    target_stream
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+                        )
+                        .await
+                        .unwrap();
+                    true
+                }
+                _ => false,
+            };
+            let source_connections =
+                if tokio::time::timeout(std::time::Duration::from_millis(150), source.accept())
+                    .await
+                    .is_ok()
+                {
+                    2
+                } else {
+                    1
+                };
+            (request, source_connections, target_accessed, target_url)
+        });
+        (base, task)
+    }
+
     fn authenticated_cases() -> Vec<(MarketplaceAuthenticatedEndpoint, reqwest::Method, String)> {
         vec![
             (
@@ -951,7 +1013,7 @@ mod tests {
             execute_public_marketplace_with(&base, endpoint)
                 .await
                 .unwrap();
-            let (request, _) = server.await.unwrap();
+            let (request, followed_redirect) = server.await.unwrap();
             let headers = request
                 .split("\r\n\r\n")
                 .next()
@@ -961,6 +1023,51 @@ mod tests {
             assert!(!headers.contains("authorization:"));
             assert!(!headers.contains("x-dev-user:"));
             assert!(!headers.contains("x-admin:"));
+            assert!(!followed_redirect, "anonymous client sent a second request");
+        }
+    }
+
+    #[tokio::test]
+    async fn every_public_endpoint_rejects_redirect_without_contacting_target_or_leaking() {
+        let cases = [
+            MarketplacePublicEndpoint::List {
+                query: None,
+                sort: None,
+                limit: None,
+            },
+            MarketplacePublicEndpoint::Detail {
+                pack_id: "remote-id".to_string(),
+            },
+            MarketplacePublicEndpoint::Download {
+                pack_id: "remote-id".to_string(),
+            },
+        ];
+
+        for endpoint in cases {
+            let response_secret = format!(
+                "public-redirect-body-gho_secret-{}",
+                endpoint.operation().replace(' ', "-")
+            );
+            let (base, server) = spawn_mock_redirect_response(response_secret.clone()).await;
+            let result = execute_public_marketplace_with(&base, endpoint).await;
+            let (request, source_connections, target_accessed, location) = server.await.unwrap();
+            let headers = request
+                .split("\r\n\r\n")
+                .next()
+                .unwrap()
+                .to_ascii_lowercase();
+
+            assert!(headers.starts_with("get "));
+            assert!(!headers.contains("authorization:"));
+            assert!(!headers.contains("x-dev-user:"));
+            assert!(!headers.contains("x-admin:"));
+            assert_eq!(source_connections, 1, "redirect source was requested again");
+            assert!(!target_accessed, "redirect target was contacted");
+
+            let error = result.expect_err("public Marketplace redirect must fail closed");
+            assert_eq!(error, "marketplace_public_redirect_rejected");
+            assert!(!error.contains(&response_secret));
+            assert!(!error.contains(&location));
         }
     }
 
