@@ -97,7 +97,7 @@ function getPreviewMessages(): QaChatMessage[] {
     {
       role: 'user',
       content:
-        '# 选区原文\nThe mitochondria is the powerhouse of the cell.\n\n# 我的问题\n这句话为什么会成为梗？',
+        '<selected_text>\nThe mitochondria is the powerhouse of the cell.\n</selected_text>\n\n# 我的问题\n这句话为什么会成为梗？',
     },
     {
       role: 'assistant',
@@ -125,6 +125,7 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
   const [status, setStatus] = useState<Status>('idle');
   const [errorMsg, setErrorMsg] = useState<string>('');
   const [selectionPreview, setSelectionPreview] = useState<string>('');
+  const [selectionWarning, setSelectionWarning] = useState<string>('');
   const [composerText, setComposerText] = useState<string>('');
   /** 流式 LLM 答案：answer_delta 累积、answer 事件来时清空（最终内容已落到 messages）。 */
   const [streamingAnswer, setStreamingAnswer] = useState<string>('');
@@ -160,12 +161,16 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
               setSelectionPreview('');
               setErrorMsg('');
               setStreamingAnswer('');
+              if (payload.selection_warning !== undefined) {
+                setSelectionWarning(payload.selection_warning ?? '');
+              }
               break;
             case 'recording':
               setStatus('recording');
               setSelectionPreview(payload.selection_preview ?? '');
               setErrorMsg('');
               setStreamingAnswer('');
+              setSelectionWarning(payload.selection_warning ?? '');
               break;
             case 'loading':
               // ASR 在 finalize、user message 还没 push 的过渡帧。提前切到 thinking
@@ -174,6 +179,9 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
               if (payload.selection_preview != null) {
                 setSelectionPreview(payload.selection_preview);
               }
+              if (payload.selection_warning !== undefined) {
+                setSelectionWarning(payload.selection_warning ?? '');
+              }
               setErrorMsg('');
               setStreamingAnswer('');
               break;
@@ -181,6 +189,9 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
               setStatus('thinking');
               if (payload.selection_preview != null) {
                 setSelectionPreview(payload.selection_preview);
+              }
+              if (payload.selection_warning !== undefined) {
+                setSelectionWarning(payload.selection_warning ?? '');
               }
               setErrorMsg('');
               setStreamingAnswer('');
@@ -206,6 +217,7 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
         });
         const dismissHandle = await listen<unknown>('qa:dismiss', () => {
           setSelectionPreview('');
+          setSelectionWarning('');
           setComposerText('');
           if (embeddedRef.current) {
             onRequestCloseRef.current?.();
@@ -382,6 +394,11 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
           {status === 'recording' && selectionPreview && (
             <SelectionChip text={selectionPreview} t={t} />
           )}
+          {selectionWarning === 'linux_selection_tools_missing' && (
+            <div className="w-full rounded-md border border-amber-500/35 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
+              {t('qa.linuxSelectionToolsMissing')}
+            </div>
+          )}
           <Composer
             value={composerText}
             status={status}
@@ -510,8 +527,8 @@ function MessageRow({
   githubLogin: string;
 }) {
   if (message.role === 'user') {
-    // 第一轮可能含 "# 选区原文 ... # 我的问题 ..." → 抽出问题单独显示，选区作引用块淡显在上。
-    const { selection, question } = splitFirstTurnUser(message.content);
+    // 任意轮次都可能带选区信封：抽出问题单独显示，选区作引用块淡显在上。
+    const { selection, question } = splitSelectionUser(message.content);
     return (
       // 用户消息 = 新轮次锚点行（MessageScrollerItem scrollAnchor），右挂 GitHub 头像。
       <MessageScrollerItem messageId={`m${index}`} scrollAnchor className="olchat-enter">
@@ -547,11 +564,20 @@ function MessageRow({
   );
 }
 
-function splitFirstTurnUser(content: string): { selection: string; question: string } {
-  // 后端拼法：`# 选区原文\n{sel}\n\n# 我的问题\n{q}`。简单 split，对齐 coordinator.rs 的写法。
-  const m = content.match(/^# 选区原文\n([\s\S]*?)\n\n# 我的问题\n([\s\S]+)$/);
-  if (!m) return { selection: '', question: content };
-  return { selection: m[1].trim(), question: m[2].trim() };
+function splitSelectionUser(content: string): { selection: string; question: string } {
+  const envelope = content.match(
+    /^<selected_text>\n([\s\S]*?)\n<\/selected_text>\n\n# 我的问题\n([\s\S]+)$/,
+  );
+  if (envelope) {
+    return { selection: envelope[1].trim(), question: envelope[2].trim() };
+  }
+
+  // 兼容修复前已保存在当前会话中的旧格式。
+  const legacy = content.match(/^# 选区原文\n([\s\S]*?)\n\n# 我的问题\n([\s\S]+)$/);
+  if (legacy) {
+    return { selection: legacy[1].trim(), question: legacy[2].trim() };
+  }
+  return { selection: '', question: content };
 }
 
 /** 录音时的选区上下文条：贴在输入区上方，让用户看到「在追问哪段文字」。 */

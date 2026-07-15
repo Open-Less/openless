@@ -32,11 +32,17 @@ pub struct SelectionContext {
     pub source_app: Option<String>,
 }
 
-/// 尝试捕获当前选区文本。所有 IO 都在调用线程完成（短小、阻塞但 < 200ms）。
-///
-/// 返回 `None` 表示真的没拿到东西（用户没选 / 平台不支持 / 权限缺失）。
-/// 返回 `Some(ctx)` 时 `ctx.text` **保证非空**。
-pub fn capture_selection() -> Option<SelectionContext> {
+#[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+const LINUX_SELECTION_TOOLS_MISSING_WARNING: &str = "linux_selection_tools_missing";
+
+pub struct SelectionCaptureOutcome {
+    pub selection: Option<SelectionContext>,
+    pub warning_code: Option<&'static str>,
+}
+
+/// 捕获选区并返回可向用户展示的非阻断平台提醒。
+/// 目前仅 Linux 在 `wl-paste`、`xclip`、`xsel` 均未安装时返回提醒码。
+pub fn capture_selection_with_status() -> SelectionCaptureOutcome {
     let source_app = current_front_app();
 
     // 1. macOS AX 直读
@@ -52,10 +58,13 @@ pub fn capture_selection() -> Option<SelectionContext> {
                     .map(|a| format!(" front_app={a}"))
                     .unwrap_or_default()
             );
-            return Some(SelectionContext {
-                text: truncate_selection(trimmed),
-                source_app,
-            });
+            return SelectionCaptureOutcome {
+                selection: Some(SelectionContext {
+                    text: truncate_selection(trimmed),
+                    source_app,
+                }),
+                warning_code: None,
+            };
         }
     }
 
@@ -72,18 +81,21 @@ pub fn capture_selection() -> Option<SelectionContext> {
                     .map(|a| format!(" front_app={a}"))
                     .unwrap_or_default()
             );
-            return Some(SelectionContext {
-                text: truncate_selection(trimmed),
-                source_app,
-            });
+            return SelectionCaptureOutcome {
+                selection: Some(SelectionContext {
+                    text: truncate_selection(trimmed),
+                    source_app,
+                }),
+                warning_code: None,
+            };
         }
     }
 
     // 3. Linux：best-effort 读 PRIMARY selection（wl-paste / xclip / xsel）。
     #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
-    if let Some(text) = linux_selection::read_selected_text() {
-        let trimmed = text.trim();
-        if !trimmed.is_empty() {
+    match linux_selection::read_selected_text() {
+        linux_selection::LinuxSelectionRead::Text(text) => {
+            let trimmed = text.trim();
             log::info!(
                 "[selection] linux primary selection OK ({} chars){}",
                 trimmed.chars().count(),
@@ -92,14 +104,30 @@ pub fn capture_selection() -> Option<SelectionContext> {
                     .map(|a| format!(" front_app={a}"))
                     .unwrap_or_default()
             );
-            return Some(SelectionContext {
-                text: truncate_selection(trimmed),
-                source_app,
-            });
+            return SelectionCaptureOutcome {
+                selection: Some(SelectionContext {
+                    text: truncate_selection(trimmed),
+                    source_app,
+                }),
+                warning_code: None,
+            };
         }
+        linux_selection::LinuxSelectionRead::ToolsUnavailable => {
+            log::warn!(
+                "[selection] linux primary selection unavailable: install wl-paste, xclip, or xsel"
+            );
+            return SelectionCaptureOutcome {
+                selection: None,
+                warning_code: Some(LINUX_SELECTION_TOOLS_MISSING_WARNING),
+            };
+        }
+        linux_selection::LinuxSelectionRead::NoSelection => {}
     }
 
-    None
+    SelectionCaptureOutcome {
+        selection: None,
+        warning_code: None,
+    }
 }
 
 /// 长度截断到首 + 尾 + 标记。
@@ -194,8 +222,9 @@ fn post_copy_shortcut() -> bool {
     windows_paste::send_ctrl_c().is_ok()
 }
 
-#[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+#[cfg(any(all(not(target_os = "macos"), not(target_os = "windows")), test))]
 mod linux_selection {
+    use std::io::ErrorKind;
     use std::process::Command;
 
     const PRIMARY_SELECTION_COMMANDS: &[(&str, &[&str])] = &[
@@ -204,29 +233,97 @@ mod linux_selection {
         ("xsel", &["--primary", "--output"]),
     ];
 
-    pub fn read_selected_text() -> Option<String> {
-        for (bin, args) in PRIMARY_SELECTION_COMMANDS {
-            if let Some(text) = run_capture(bin, args) {
-                return Some(text);
-            }
-        }
-        log::info!(
-            "[selection] linux primary selection unavailable (wl-paste/xclip/xsel all failed)"
-        );
-        None
+    #[derive(Debug, PartialEq, Eq)]
+    pub enum LinuxSelectionRead {
+        Text(String),
+        NoSelection,
+        ToolsUnavailable,
     }
 
-    fn run_capture(bin: &str, args: &[&str]) -> Option<String> {
-        let output = Command::new(bin).args(args).output().ok()?;
-        if !output.status.success() {
-            return None;
+    #[derive(Debug, PartialEq, Eq)]
+    enum ReaderAttempt {
+        Text(String),
+        AvailableWithoutText,
+        Unavailable,
+    }
+
+    pub fn read_selected_text() -> LinuxSelectionRead {
+        read_selected_text_with(run_capture)
+    }
+
+    fn read_selected_text_with<F>(mut run: F) -> LinuxSelectionRead
+    where
+        F: FnMut(&str, &[&str]) -> ReaderAttempt,
+    {
+        let mut has_available_reader = false;
+        for (bin, args) in PRIMARY_SELECTION_COMMANDS {
+            match run(bin, args) {
+                ReaderAttempt::Text(text) => return LinuxSelectionRead::Text(text),
+                ReaderAttempt::AvailableWithoutText => has_available_reader = true,
+                ReaderAttempt::Unavailable => {}
+            }
         }
-        let text = String::from_utf8(output.stdout).ok()?;
+        if has_available_reader {
+            LinuxSelectionRead::NoSelection
+        } else {
+            LinuxSelectionRead::ToolsUnavailable
+        }
+    }
+
+    fn run_capture(bin: &str, args: &[&str]) -> ReaderAttempt {
+        let output = match Command::new(bin).args(args).output() {
+            Ok(output) => output,
+            Err(error) if error.kind() == ErrorKind::NotFound => return ReaderAttempt::Unavailable,
+            Err(_) => return ReaderAttempt::AvailableWithoutText,
+        };
+        if !output.status.success() {
+            return ReaderAttempt::AvailableWithoutText;
+        }
+        let Ok(text) = String::from_utf8(output.stdout) else {
+            return ReaderAttempt::AvailableWithoutText;
+        };
         let trimmed = text.trim();
         if trimmed.is_empty() {
-            return None;
+            return ReaderAttempt::AvailableWithoutText;
         }
-        Some(trimmed.to_string())
+        ReaderAttempt::Text(trimmed.to_string())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn reports_tools_unavailable_only_when_all_three_are_missing() {
+            let result = read_selected_text_with(|_, _| ReaderAttempt::Unavailable);
+            assert_eq!(result, LinuxSelectionRead::ToolsUnavailable);
+
+            let mut attempts = 0;
+            let result = read_selected_text_with(|_, _| {
+                attempts += 1;
+                if attempts == 2 {
+                    ReaderAttempt::AvailableWithoutText
+                } else {
+                    ReaderAttempt::Unavailable
+                }
+            });
+            assert_eq!(result, LinuxSelectionRead::NoSelection);
+        }
+
+        #[test]
+        fn returns_text_from_first_reader_that_has_a_selection() {
+            let result = read_selected_text_with(|bin, _| {
+                if bin == "xclip" {
+                    ReaderAttempt::Text("selected text".to_string())
+                } else {
+                    ReaderAttempt::Unavailable
+                }
+            });
+            assert_eq!(
+                result,
+                LinuxSelectionRead::Text("selected text".to_string())
+            );
+        }
     }
 }
 
