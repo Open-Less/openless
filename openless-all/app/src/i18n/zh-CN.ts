@@ -25,6 +25,7 @@ export const zhCN = {
     operationFailed: '操作失败',
     add: '添加',
     durationSeconds: '{{value}} 秒',
+    durationMillis: '{{value}} 毫秒',
     durationMinutes: '{{value}} 分钟',
   },
   capsule: {

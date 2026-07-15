@@ -29,6 +29,7 @@ export const ja: typeof zhCN = {
     operationFailed: '操作に失敗しました',
     add: '追加',
     durationSeconds: '{{value}} 秒',
+    durationMillis: '{{value}}ミリ秒',
     durationMinutes: '{{value}} 分',
   },
   capsule: {

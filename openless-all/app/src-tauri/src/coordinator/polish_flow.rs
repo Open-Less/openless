@@ -42,6 +42,7 @@ pub async fn polish_or_passthrough_streaming<F, C>(
     llm_thinking_enabled: bool,
     front_app: Option<&str>,
     prior_turns: &[(String, String)],
+    llm_call: &mut Option<crate::polish::LlmCallLabel>,
     on_delta: F,
     should_cancel: C,
 ) -> StreamingPolishOutcome
@@ -73,6 +74,8 @@ where
         );
         return StreamingPolishOutcome::UnsupportedFallback;
     }
+    // 过了所有 early-out、即将发起真实调用——此刻才记录调用快照。
+    *llm_call = Some(provider.call_label());
     log::info!(
         "[coord] streaming polish START: provider=openai-compatible mode={:?} raw_chars={} prior_turns={}",
         mode,
@@ -121,6 +124,7 @@ pub(super) async fn polish_or_passthrough(
     llm_thinking_enabled: bool,
     front_app: Option<&str>,
     prior_turns: &[(String, String)],
+    llm_call: &mut Option<crate::polish::LlmCallLabel>,
 ) -> (String, Option<String>) {
     if mode == PolishMode::Raw && !raw_mode_uses_llm(style_system_prompt) {
         return (raw.text.clone(), None);
@@ -136,6 +140,7 @@ pub(super) async fn polish_or_passthrough(
         llm_thinking_enabled,
         front_app,
         prior_turns,
+        llm_call,
     )
     .await
     {
@@ -159,6 +164,7 @@ pub(super) async fn polish_text(
     llm_thinking_enabled: bool,
     front_app: Option<&str>,
     prior_turns: &[(String, String)],
+    llm_call: &mut Option<crate::polish::LlmCallLabel>,
 ) -> anyhow::Result<String> {
     // 谷歌 Gemini 分支：所有 LLM provider 共用 ark.* 凭据槽，唯独 Gemini 走原生
     // generateContent / 自带 thinkingConfig 控制；其余 provider 走 OpenAI
@@ -166,6 +172,11 @@ pub(super) async fn polish_text(
     let active_llm = CredentialsVault::get_active_llm();
     if active_llm == "gemini" {
         let (api_key, model, base_url) = read_gemini_credentials()?;
+        // 凭据读取成功、即将发起调用——记录构建时快照（preflight 失败走上面的 ? 提前返回，不会记）。
+        *llm_call = Some(crate::polish::LlmCallLabel {
+            provider: active_llm.clone(),
+            model: model.clone(),
+        });
         let provider = GeminiProvider::new(
             GeminiConfig::new(api_key, model, base_url).with_thinking_enabled(llm_thinking_enabled),
         );
@@ -185,6 +196,7 @@ pub(super) async fn polish_text(
     }
 
     let provider = build_active_llm_provider(llm_thinking_enabled)?;
+    *llm_call = Some(provider.call_label());
     Ok(provider
         .polish(
             raw,
@@ -210,11 +222,16 @@ pub(super) async fn translate_text(
     output_language_preference: OutputLanguagePreference,
     llm_thinking_enabled: bool,
     front_app: Option<&str>,
+    llm_call: &mut Option<crate::polish::LlmCallLabel>,
 ) -> anyhow::Result<String> {
     // 见 polish_text 顶部注释——同样的 Gemini / OpenAI-compatible 路由逻辑。
     let active_llm = CredentialsVault::get_active_llm();
     if active_llm == "gemini" {
         let (api_key, model, base_url) = read_gemini_credentials()?;
+        *llm_call = Some(crate::polish::LlmCallLabel {
+            provider: active_llm.clone(),
+            model: model.clone(),
+        });
         let provider = GeminiProvider::new(
             GeminiConfig::new(api_key, model, base_url).with_thinking_enabled(llm_thinking_enabled),
         );
@@ -231,6 +248,7 @@ pub(super) async fn translate_text(
     }
 
     let provider = build_active_llm_provider(llm_thinking_enabled)?;
+    *llm_call = Some(provider.call_label());
     Ok(provider
         .translate_to(
             raw,
@@ -309,6 +327,7 @@ pub(super) async fn polish_and_translate_or_passthrough(
     llm_thinking_enabled: bool,
     front_app: Option<&str>,
     prior_turns: &[(String, String)],
+    llm_call: &mut Option<crate::polish::LlmCallLabel>,
 ) -> (String, Option<String>, Option<String>) {
     let system_prompt = build_polish_translate_system_prompt(target_language);
     match polish_text(
@@ -322,6 +341,7 @@ pub(super) async fn polish_and_translate_or_passthrough(
         llm_thinking_enabled,
         front_app,
         prior_turns,
+        llm_call,
     )
     .await
     {
@@ -341,6 +361,7 @@ pub(super) async fn polish_and_translate_or_passthrough(
                     output_language_preference,
                     llm_thinking_enabled,
                     front_app,
+                    llm_call,
                 )
                 .await
                 {
@@ -358,5 +379,41 @@ pub(super) async fn polish_and_translate_or_passthrough(
             log::error!("[coord] polish+translate failed, falling back to raw: {reason}");
             (raw.text.clone(), None, Some(reason))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// PR #826 review：llm_call 快照只在真的构建 provider / 发起调用时填充。
+    /// Raw 直通在读取任何凭据之前就 early-return，llm_call 必须保持 None——
+    /// 调用方据此不落 llm_* / polish_ms。
+    #[tokio::test]
+    async fn raw_passthrough_leaves_llm_call_snapshot_empty() {
+        let raw = RawTranscript {
+            text: "原样输出".to_string(),
+            duration_ms: 800,
+        };
+        let mut llm_call: Option<crate::polish::LlmCallLabel> = None;
+        // 直通判定：style prompt 等于内置 raw 提示词 → raw_mode_uses_llm 为 false。
+        let builtin_raw_prompt = crate::types::StyleSystemPrompts::default().raw;
+        let (out, err) = polish_or_passthrough(
+            &raw,
+            PolishMode::Raw,
+            &[],
+            &builtin_raw_prompt,
+            &[],
+            ChineseScriptPreference::Auto,
+            OutputLanguagePreference::Auto,
+            false,
+            None,
+            &[],
+            &mut llm_call,
+        )
+        .await;
+        assert_eq!(out, "原样输出");
+        assert_eq!(err, None);
+        assert_eq!(llm_call, None, "Raw 直通不得产生 LLM 调用快照");
     }
 }

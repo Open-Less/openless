@@ -428,6 +428,10 @@ struct Inner {
     prepared_windows_ime_session: Arc<Mutex<Vec<PreparedWindowsImeSessionSlot>>>,
     state: Mutex<SessionState>,
     asr: Mutex<Option<SessionResource<ActiveAsr>>>,
+    /// 与 `asr` 同生命周期的构建时快照：本次会话实际构建的 (provider, model)。
+    /// store_asr_for_session 一并写入，end_session 取走落 history——比事后重读
+    /// 全局设置可靠：会话中途切 provider/model 不会污染归因（PR #826 review）。
+    asr_label: Mutex<Option<SessionResource<AsrCallLabel>>>,
     /// 本地 Qwen3-ASR 引擎缓存。跨会话复用，避免每次重加载 1.2GB+ 模型。
     /// 释放时机由 prefs.local_asr_keep_loaded_secs 决定。
     local_asr_cache: Arc<crate::asr::local::LocalAsrCache>,
@@ -624,6 +628,7 @@ impl Coordinator {
                     inserter: TextInserter::new(),
                     state: Mutex::new(SessionState::default()),
                     asr: Mutex::new(None),
+                    asr_label: Mutex::new(None),
                     recorder: Mutex::new(None),
                     audio_archive_active: AtomicBool::new(false),
                     recording_mute: Mutex::new(SharedRecordingMuteState::new()),
@@ -725,6 +730,7 @@ impl Coordinator {
                 prepared_windows_ime_session: Arc::new(Mutex::new(Vec::new())),
                 state: Mutex::new(SessionState::default()),
                 asr: Mutex::new(None),
+                asr_label: Mutex::new(None),
                 recorder: Mutex::new(None),
                 audio_archive_active: AtomicBool::new(false),
                 recording_mute: Mutex::new(SharedRecordingMuteState::new()),
@@ -827,10 +833,6 @@ impl Coordinator {
         self.inner.local_asr_cache.loaded_model_id()
     }
 
-    /// 当前活跃 ASR 的 (provider_id, model)，retranscribe_recording 命令回写历史条目用。
-    pub fn active_asr_history_label(&self) -> (String, Option<String>) {
-        asr_history_label(&self.inner.prefs.get())
-    }
 
     /// 主动把当前本地 ASR 引擎状态推给前端（keepLoadedSecs 变更等命令侧调用）。
     pub fn emit_local_asr_engine_status(&self) {
@@ -1759,12 +1761,19 @@ impl Coordinator {
             llm_thinking_enabled,
             front_app.as_deref(),
             &[],
+            // repolish 不回写历史的模型/耗时字段，调用快照就地丢弃。
+            &mut None,
         )
         .await
         .map_err(|e| e.to_string())
     }
 
-    pub async fn retranscribe_pcm(&self, pcm: Vec<u8>) -> Result<String, String> {
+    /// 返回 (转写文本, 本次实际构建的 ASR (provider, model) 快照)。快照供命令层把
+    /// 「重转用了哪个模型」写回历史（构建时归因，PR #826 review）。
+    pub async fn retranscribe_pcm(
+        &self,
+        pcm: Vec<u8>,
+    ) -> Result<(String, AsrCallLabel), String> {
         self.retranscribe_pcm_inner(pcm, false).await
     }
 
@@ -1772,17 +1781,18 @@ impl Coordinator {
         &self,
         pcm: Vec<u8>,
     ) -> Result<String, String> {
-        self.retranscribe_pcm_inner(pcm, true).await
+        // 自动静默重试沿用 begin_session 已存的会话快照，这里的构建标签不再需要。
+        self.retranscribe_pcm_inner(pcm, true).await.map(|(text, _)| text)
     }
 
     async fn retranscribe_pcm_inner(
         &self,
         pcm: Vec<u8>,
         cancel_on_drop: bool,
-    ) -> Result<String, String> {
+    ) -> Result<(String, AsrCallLabel), String> {
         let inner = &self.inner;
         let active_asr = CredentialsVault::get_active_asr();
-        let start = build_qa_asr_start(inner, &active_asr).await?;
+        let (start, asr_call_label) = build_qa_asr_start(inner, &active_asr).await?;
         let retry_guard = if cancel_on_drop {
             Some(CancellableRetranscribeGuard::new(
                 Arc::clone(inner),
@@ -1881,7 +1891,7 @@ impl Coordinator {
         if let Some(guard) = retry_guard {
             guard.disarm();
         }
-        Ok(raw.text)
+        Ok((raw.text, asr_call_label))
     }
 
     pub fn preview_style_pack_runtime(
@@ -2418,51 +2428,37 @@ fn read_gemini_credentials() -> anyhow::Result<(String, String, String)> {
     Ok((api_key, model, base_url))
 }
 
-/// 历史详情展示用：当前活跃 ASR 的 (provider_id, model)。model 的取值与各凭据读取器 /
-/// begin_session 的构建逻辑一致（含同样的默认值回退）；provider 无模型概念时 None。
-fn asr_history_label(prefs: &crate::types::UserPreferences) -> (String, Option<String>) {
-    let id = CredentialsVault::get_active_asr();
-    let model = if crate::asr::local::is_local_qwen3(&id) {
-        Some(prefs.local_asr_active_model.clone())
-    } else if crate::asr::local::is_apple_speech(&id) {
-        None
-    } else if crate::asr::local::foundry::is_foundry_local_whisper(&id) {
-        Some(prefs.foundry_local_asr_model.clone())
-    } else if crate::asr::local::sherpa::is_sherpa_onnx_local(&id) {
-        Some(prefs.sherpa_onnx_model.clone())
-    } else {
-        match active_asr_provider_kind(&id) {
-            ActiveAsrProviderKind::Bailian => Some(read_bailian_credentials().model),
-            ActiveAsrProviderKind::Qwen3Realtime => Some(read_qwen3_realtime_credentials().model),
-            ActiveAsrProviderKind::Mimo => Some(read_mimo_credentials().2),
-            ActiveAsrProviderKind::DashScopeMultimodal => {
-                Some(read_dashscope_multimodal_credentials().2)
-            }
-            ActiveAsrProviderKind::ElevenLabs => Some(read_elevenlabs_credentials().2),
-            ActiveAsrProviderKind::WhisperCompatible => Some(read_whisper_credentials().2),
-            // Volcengine 用 app key / resource id 鉴权，没有用户可见的模型 id。
-            ActiveAsrProviderKind::Volcengine => None,
-        }
-    };
-    (id, model.filter(|s| !s.trim().is_empty()))
+/// 构建 ASR 客户端那一刻捕获的 (provider, model) 快照。随会话资源一起存放
+/// （store_asr_for_session），end_session 取走写 history。provider 是实际构建用的
+/// 具体协议 id（统一百炼入口会先经 resolve_effective_asr_provider 重定向）；model
+/// 是构建时实际传给客户端的值（含 alias 归一化与默认回退）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AsrCallLabel {
+    pub provider: String,
+    pub model: Option<String>,
 }
 
-/// 历史详情展示用：当前活跃 LLM 的 (provider_id, model)。model 的默认值回退与
-/// build_active_llm_provider / read_gemini_credentials 一致。
-fn llm_history_label() -> (String, Option<String>) {
-    let active = CredentialsVault::get_active_llm();
-    let model = CredentialsVault::get(CredentialAccount::ArkModelId)
-        .ok()
-        .flatten()
-        .filter(|s| !s.trim().is_empty());
-    let model = if active == CODEX_OAUTH_PROVIDER_ID {
-        model.unwrap_or_else(|| CODEX_DEFAULT_MODEL.to_string())
-    } else if active == "gemini" {
-        model.unwrap_or_else(|| "gemini-2.5-flash".to_string())
-    } else {
-        model.unwrap_or_else(|| "deepseek-v3-2".to_string())
-    };
-    (active, Some(model))
+impl AsrCallLabel {
+    pub(crate) fn new(provider: impl Into<String>, model: Option<String>) -> Self {
+        Self {
+            provider: provider.into(),
+            model: model.filter(|m| !m.trim().is_empty()),
+        }
+    }
+}
+
+/// Volcengine resource id 进历史前的 allowlist：只放行 `volc.` 命名空间的产品标识
+/// （如 volc.seedasr.sauc.duration / volc.bigasr.sauc.duration），字符集限 ASCII
+/// 字母数字与 `._-`。自定义/异常值可能携带租户信息，一律不落盘（PR #826 review /
+/// issue #373 的可观测性诉求）。
+pub(crate) fn volc_resource_history_label(resource_id: &str) -> Option<String> {
+    let id = resource_id.trim();
+    let allowed = id.starts_with("volc.")
+        && id.len() <= 64
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'));
+    allowed.then(|| id.to_string())
 }
 
 fn build_active_llm_provider(llm_thinking_enabled: bool) -> anyhow::Result<ActiveLLMProvider> {
@@ -2509,6 +2505,31 @@ fn resolve_ark_endpoint_with_policy(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn volc_resource_history_label_allows_volc_namespace_ids() {
+        // issue #373 场景的两个真实 resource id 必须放行。
+        assert_eq!(
+            super::volc_resource_history_label("volc.seedasr.sauc.duration").as_deref(),
+            Some("volc.seedasr.sauc.duration")
+        );
+        assert_eq!(
+            super::volc_resource_history_label(" volc.bigasr.sauc.duration ").as_deref(),
+            Some("volc.bigasr.sauc.duration"),
+            "首尾空白应被 trim"
+        );
+    }
+
+    #[test]
+    fn volc_resource_history_label_rejects_non_allowlisted_values() {
+        // 非 volc. 命名空间 / 含异常字符 / 超长的值可能携带租户信息，一律不落历史。
+        assert_eq!(super::volc_resource_history_label(""), None);
+        assert_eq!(super::volc_resource_history_label("my-secret-tenant"), None);
+        assert_eq!(super::volc_resource_history_label("volc.a b"), None, "空格不在字符集");
+        assert_eq!(super::volc_resource_history_label("volc.引擎"), None, "非 ASCII 拒绝");
+        let too_long = format!("volc.{}", "x".repeat(64));
+        assert_eq!(super::volc_resource_history_label(&too_long), None);
+    }
+
     use super::dictation::abort_recording_with_error;
     use super::dictation::{handle_pressed_edge, handle_released_edge};
     use super::*;

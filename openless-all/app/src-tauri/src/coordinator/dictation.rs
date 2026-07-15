@@ -248,6 +248,7 @@ async fn run_streaming_polish(
     llm_thinking_enabled: bool,
     front_app: Option<&str>,
     prior_turns: &[(String, String)],
+    llm_call: &mut Option<crate::polish::LlmCallLabel>,
 ) -> (String, Option<String>, bool) {
     log::info!(
         "[coord] streaming_insert path ENTER (raw_chars={})",
@@ -268,6 +269,7 @@ async fn run_streaming_polish(
             llm_thinking_enabled,
             front_app,
             prior_turns,
+            llm_call,
         )
         .await;
         return (p, e, false);
@@ -298,6 +300,7 @@ async fn run_streaming_polish(
                 llm_thinking_enabled,
                 front_app,
                 prior_turns,
+                llm_call,
             )
             .await;
             return (p, err, false);
@@ -353,6 +356,7 @@ async fn run_streaming_polish(
         llm_thinking_enabled,
         front_app,
         prior_turns,
+        llm_call,
         move |delta: &str| {
             let converted = match delta_converter.as_ref() {
                 Some(converter) => converter.convert(delta),
@@ -452,6 +456,7 @@ async fn run_streaming_polish(
                 llm_thinking_enabled,
                 front_app,
                 prior_turns,
+                llm_call,
             )
             .await;
             (p, e, false)
@@ -1515,7 +1520,7 @@ pub(super) async fn begin_session_as(
         };
         let local = Arc::new(FoundryLocalWhisperAsr::new(
             Arc::clone(&inner.foundry_local_runtime),
-            model_alias,
+            model_alias.clone(),
             prefs.foundry_local_runtime_source.clone(),
             language_hint,
         ));
@@ -1523,6 +1528,7 @@ pub(super) async fn begin_session_as(
             inner,
             current_session_id,
             ActiveAsr::FoundryLocalWhisper(Arc::clone(&local)),
+            AsrCallLabel::new(foundry::PROVIDER_ID, Some(model_alias)),
         );
         let consumer: Arc<dyn crate::recorder::AudioConsumer> = local;
         start_recorder_and_enter_listening(inner, current_session_id, &active_asr, consumer)
@@ -1557,7 +1563,7 @@ pub(super) async fn begin_session_as(
         });
         let local = match SherpaOnnxAsr::new_for_model(
             Arc::clone(&inner.sherpa_onnx_runtime),
-            model_alias,
+            model_alias.clone(),
             language_hint,
             token_handler,
         )
@@ -1584,6 +1590,7 @@ pub(super) async fn begin_session_as(
             inner,
             current_session_id,
             ActiveAsr::SherpaOnnxLocal(Arc::clone(&local)),
+            AsrCallLabel::new(sherpa::PROVIDER_ID, Some(model_alias)),
         );
         let consumer: Arc<dyn crate::recorder::AudioConsumer> = local;
         start_recorder_and_enter_listening(inner, current_session_id, &active_asr, consumer)
@@ -1595,7 +1602,7 @@ pub(super) async fn begin_session_as(
     if let Some(provider) = macos_keyless_dictation_provider(&active_asr) {
         match provider {
             MacosKeylessDictationProvider::LocalQwen3 => {
-                let local = match build_local_qwen3(inner).await {
+                let (local, local_model) = match build_local_qwen3(inner).await {
                     Ok(l) => l,
                     Err(e) => {
                         log::error!("[coord] 本地 Qwen3-ASR 初始化失败: {e:#}");
@@ -1617,6 +1624,7 @@ pub(super) async fn begin_session_as(
                     inner,
                     current_session_id,
                     ActiveAsr::Local(Arc::clone(&local)),
+                    AsrCallLabel::new(crate::asr::local::PROVIDER_ID, Some(local_model)),
                 );
                 let consumer: Arc<dyn crate::recorder::AudioConsumer> = local;
                 start_recorder_and_enter_listening(
@@ -1633,6 +1641,8 @@ pub(super) async fn begin_session_as(
                     inner,
                     current_session_id,
                     ActiveAsr::AppleSpeech(Arc::clone(&local)),
+                    // 系统语音识别没有用户可见的模型 id。
+                    AsrCallLabel::new(crate::asr::local::APPLE_SPEECH_PROVIDER_ID, None),
                 );
                 let consumer: Arc<dyn crate::recorder::AudioConsumer> = local;
                 start_recorder_and_enter_listening(
@@ -1665,13 +1675,16 @@ pub(super) async fn begin_session_as(
     }
 
     if is_bailian_provider(&effective_asr) {
-        let asr = Arc::new(BailianRealtimeASR::new(read_bailian_credentials()));
+        let creds = read_bailian_credentials();
+        let asr_call_label = AsrCallLabel::new(effective_asr.clone(), Some(creds.model.clone()));
+        let asr = Arc::new(BailianRealtimeASR::new(creds));
         let bridge = Arc::new(DeferredAsrBridge::new());
         let consumer: Arc<dyn crate::recorder::AudioConsumer> = bridge.clone();
         store_asr_for_session(
             inner,
             current_session_id,
             ActiveAsr::Bailian(Arc::clone(&asr)),
+            asr_call_label,
         );
         start_recorder_for_starting(inner, current_session_id, &active_asr, consumer).await?;
 
@@ -1738,13 +1751,16 @@ pub(super) async fn begin_session_as(
         finish_starting_session(inner, current_session_id).await;
     } else if is_qwen3_realtime_provider(&effective_asr) {
         // 与 Bailian 分支同构：流式 WS 会话 + DeferredAsrBridge 缓冲开链前音频。
-        let asr = Arc::new(Qwen3RealtimeASR::new(read_qwen3_realtime_credentials()));
+        let creds = read_qwen3_realtime_credentials();
+        let asr_call_label = AsrCallLabel::new(effective_asr.clone(), Some(creds.model.clone()));
+        let asr = Arc::new(Qwen3RealtimeASR::new(creds));
         let bridge = Arc::new(DeferredAsrBridge::new());
         let consumer: Arc<dyn crate::recorder::AudioConsumer> = bridge.clone();
         store_asr_for_session(
             inner,
             current_session_id,
             ActiveAsr::Qwen3Realtime(Arc::clone(&asr)),
+            asr_call_label,
         );
         start_recorder_for_starting(inner, current_session_id, &active_asr, consumer).await?;
 
@@ -1815,33 +1831,39 @@ pub(super) async fn begin_session_as(
         finish_starting_session(inner, current_session_id).await;
     } else if is_mimo_provider(&effective_asr) {
         let (api_key, base_url, model) = read_mimo_credentials();
+        let asr_call_label = AsrCallLabel::new(effective_asr.clone(), Some(model.clone()));
         let mimo = Arc::new(MimoBatchASR::new(api_key, base_url, model));
         store_asr_for_session(
             inner,
             current_session_id,
             ActiveAsr::Mimo(Arc::clone(&mimo)),
+            asr_call_label,
         );
         let consumer: Arc<dyn crate::recorder::AudioConsumer> = mimo;
         start_recorder_and_enter_listening(inner, current_session_id, &active_asr, consumer)
             .await?;
     } else if is_dashscope_multimodal_provider(&effective_asr) {
         let (api_key, base_url, model) = read_dashscope_multimodal_credentials();
+        let asr_call_label = AsrCallLabel::new(effective_asr.clone(), Some(model.clone()));
         let asr = Arc::new(DashScopeMultimodalASR::new(api_key, base_url, model));
         store_asr_for_session(
             inner,
             current_session_id,
             ActiveAsr::DashScopeMultimodal(Arc::clone(&asr)),
+            asr_call_label,
         );
         let consumer: Arc<dyn crate::recorder::AudioConsumer> = asr;
         start_recorder_and_enter_listening(inner, current_session_id, &active_asr, consumer)
             .await?;
     } else if is_elevenlabs_provider(&effective_asr) {
         let (api_key, base_url, model) = read_elevenlabs_credentials();
+        let asr_call_label = AsrCallLabel::new(effective_asr.clone(), Some(model.clone()));
         let asr = Arc::new(ElevenLabsBatchASR::new(api_key, base_url, model));
         store_asr_for_session(
             inner,
             current_session_id,
             ActiveAsr::ElevenLabs(Arc::clone(&asr)),
+            asr_call_label,
         );
         let consumer: Arc<dyn crate::recorder::AudioConsumer> = asr;
         start_recorder_and_enter_listening(inner, current_session_id, &active_asr, consumer)
@@ -1857,6 +1879,7 @@ pub(super) async fn begin_session_as(
         // 互換プロバイダにも揃えるのが筋。
         let whisper_prompt =
             crate::asr::whisper::build_prompt_from_phrases(&enabled_phrases(inner));
+        let asr_call_label = AsrCallLabel::new(effective_asr.clone(), Some(model.clone()));
         let whisper = Arc::new(
             WhisperBatchASR::new(
                 api_key,
@@ -1872,6 +1895,7 @@ pub(super) async fn begin_session_as(
             inner,
             current_session_id,
             ActiveAsr::Whisper(Arc::clone(&whisper)),
+            asr_call_label,
         );
         let consumer: Arc<dyn crate::recorder::AudioConsumer> = whisper;
         start_recorder_and_enter_listening(inner, current_session_id, &active_asr, consumer)
@@ -1879,6 +1903,12 @@ pub(super) async fn begin_session_as(
     } else {
         let hotwords = enabled_hotwords(inner);
         let creds = read_volc_credentials();
+        // Volcengine 没有模型 id，但 resource id（volc.seedasr.* / volc.bigasr.*）承担同样的
+        // 「用的哪个引擎」角色；经 allowlist 脱敏后当 model 落历史（issue #373 排障场景）。
+        let asr_call_label = AsrCallLabel::new(
+            effective_asr.clone(),
+            volc_resource_history_label(&creds.resource_id),
+        );
         let asr = Arc::new(VolcengineStreamingASR::new(creds, hotwords));
         let bridge = Arc::new(DeferredAsrBridge::new());
         let consumer: Arc<dyn crate::recorder::AudioConsumer> = bridge.clone();
@@ -1886,6 +1916,7 @@ pub(super) async fn begin_session_as(
             inner,
             current_session_id,
             ActiveAsr::Volcengine(Arc::clone(&asr)),
+            asr_call_label,
         );
         start_recorder_for_starting(inner, current_session_id, &active_asr, consumer).await?;
 
@@ -2213,7 +2244,12 @@ fn build_transcribe_failed_session(
     }
 }
 
-fn write_transcribe_failed_history(inner: &Arc<Inner>, session_id: SessionId, duration_ms: u64) {
+fn write_transcribe_failed_history(
+    inner: &Arc<Inner>,
+    session_id: SessionId,
+    duration_ms: u64,
+    asr_call_label: Option<&AsrCallLabel>,
+) {
     let prefs = inner.prefs.get();
     let mut session = build_transcribe_failed_session(
         session_id,
@@ -2222,9 +2258,11 @@ fn write_transcribe_failed_history(inner: &Arc<Inner>, session_id: SessionId, du
         inner.audio_archive_active.load(Ordering::Relaxed),
     );
     // 失败条目也记下是哪个 ASR 出的错——「哪个模型转不出来」正是模型对比要看的信息。
-    let (asr_provider, asr_model) = asr_history_label(&prefs);
-    session.asr_provider = Some(asr_provider);
-    session.asr_model = asr_model;
+    // 用 begin_session 的构建时快照，而不是此刻重读设置（PR #826 review）。
+    if let Some(label) = asr_call_label {
+        session.asr_provider = Some(label.provider.clone());
+        session.asr_model = label.model.clone();
+    }
     if let Err(e) = inner.history.append_with_retention(
         session,
         prefs.history_retention_days,
@@ -2244,8 +2282,9 @@ fn fail_dictation(
     elapsed: u64,
     user_msg: String,
     err: String,
+    asr_call_label: Option<&AsrCallLabel>,
 ) -> Result<(), String> {
-    write_transcribe_failed_history(inner, session_id, elapsed);
+    write_transcribe_failed_history(inner, session_id, elapsed, asr_call_label);
     emit_capsule(inner, CapsuleState::Error, 0.0, elapsed, Some(user_msg), None);
     restore_prepared_windows_ime_session(inner, session_id);
     inner.state.lock().phase = SessionPhase::Idle;
@@ -2444,6 +2483,8 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     }
 
     let asr_opt = take_asr_for_session(inner, current_session_id);
+    // 构建时快照（begin_session 存入）。会话中途改设置不影响这份归因。
+    let asr_call_label = take_asr_label_for_session(inner, current_session_id);
     let asr = match asr_opt {
         Some(a) => a,
         None => {
@@ -2874,12 +2915,22 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
                     finish_cancelled_processing(inner, current_session_id);
                     return Ok(());
                 }
-                return fail_dictation(inner, current_session_id, elapsed, fail.user_msg, fail.err)
+                return fail_dictation(
+                    inner,
+                    current_session_id,
+                    elapsed,
+                    fail.user_msg,
+                    fail.err,
+                    asr_call_label.as_ref(),
+                )
             }
         },
     };
     let asr_ms = transcribe_started.elapsed().as_millis() as u64;
-    let (asr_provider, asr_model) = asr_history_label(&inner.prefs.get());
+    let (asr_provider, asr_model) = match &asr_call_label {
+        Some(label) => (Some(label.provider.clone()), label.model.clone()),
+        None => (None, None),
+    };
 
     // ASR 返回空转写护栏（来自 PR #66）：写一条 emptyTranscript 失败历史 + 错误胶囊，
     // 与 main 上其它 error 路径保持一致（带 schedule_capsule_idle 让胶囊自动消失）。
@@ -2920,7 +2971,7 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
             // "Missing Audio" 反馈。
             has_audio_recording: Some(inner.audio_archive_active.load(Ordering::Relaxed)),
             // 空转写也记下是哪个 ASR 模型给出的空结果 + 等了多久，供模型对比排查。
-            asr_provider: Some(asr_provider.clone()),
+            asr_provider: asr_provider.clone(),
             asr_model: asr_model.clone(),
             llm_provider: None,
             llm_model: None,
@@ -3076,9 +3127,10 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     // 翻译会话润色后的源语言文本（译文前的中间产物），仅翻译路径解析成功时有值，
     // 写进 history 供后续普通润色轮复用（剔除译文、避免外语污染）。
     let mut polish_source: Option<String> = None;
-    // LLM 是否真的会被调用：翻译 / 非 Raw 模式 / Raw 但风格包带 LLM 提示词。
-    // Raw 直通时不记 llm_* / polish_ms（没有模型参与，历史详情页隐藏润色行）。
-    let llm_used = translation_active || mode != PolishMode::Raw || raw_uses_llm;
+    // 一次 LLM 调用的构建时快照：polish 链路在成功构建 provider、即将发起真实调用时
+    // 填充（见 polish_flow.rs）。Raw 直通、凭据缺失等 preflight 失败都保持 None——
+    // 此时不落 llm_* / polish_ms，避免"没调用却记了模型/耗时"的伪数据（PR #826 review）。
+    let mut llm_call: Option<crate::polish::LlmCallLabel> = None;
     let polish_started = std::time::Instant::now();
     let (polished, polish_error, already_streamed) = if translation_active {
         log::info!(
@@ -3098,6 +3150,7 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
             llm_thinking_enabled,
             front_app.as_deref(),
             &prior_turns,
+            &mut llm_call,
         )
         .await;
         polish_source = src;
@@ -3115,6 +3168,7 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
             llm_thinking_enabled,
             front_app.as_deref(),
             &prior_turns,
+            &mut llm_call,
         )
         .await
     } else {
@@ -3129,16 +3183,18 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
             llm_thinking_enabled,
             front_app.as_deref(),
             &prior_turns,
+            &mut llm_call,
         )
         .await;
         (p, e, false)
     };
-    let polish_ms = llm_used.then(|| polish_started.elapsed().as_millis() as u64);
-    let (llm_provider, llm_model) = if llm_used {
-        let (provider, model) = llm_history_label();
-        (Some(provider), model)
-    } else {
-        (None, None)
+    // 耗时与标签都以「真的发起了调用」为准：llm_call 为 None 时两者都不落。
+    let polish_ms = llm_call
+        .is_some()
+        .then(|| polish_started.elapsed().as_millis() as u64);
+    let (llm_provider, llm_model) = match &llm_call {
+        Some(label) => (Some(label.provider.clone()), Some(label.model.clone())),
+        None => (None, None),
     };
 
     let polished = finalize_polished_text(
@@ -3326,7 +3382,7 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
         // 用 begin_session 时 Recorder::start 返回的实际写盘状态，而不是 prefs 开关——
         // 开关打开但路径创建失败时这里是 false，避免前端渲染播放按钮后端 404。
         has_audio_recording: Some(inner.audio_archive_active.load(Ordering::Relaxed)),
-        asr_provider: Some(asr_provider),
+        asr_provider,
         asr_model,
         llm_provider,
         llm_model,

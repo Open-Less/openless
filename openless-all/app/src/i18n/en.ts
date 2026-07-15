@@ -27,6 +27,7 @@ export const en: typeof zhCN = {
     operationFailed: 'Operation failed',
     add: 'Add',
     durationSeconds: '{{value}}s',
+    durationMillis: '{{value}}ms',
     durationMinutes: '{{value}}m',
   },
   capsule: {

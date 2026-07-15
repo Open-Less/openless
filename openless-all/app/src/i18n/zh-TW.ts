@@ -27,6 +27,7 @@ export const zhTW: typeof zhCN = {
     operationFailed: '操作失敗',
     add: '添加',
     durationSeconds: '{{value}} 秒',
+    durationMillis: '{{value}} 毫秒',
     durationMinutes: '{{value}} 分鐘',
   },
   capsule: {

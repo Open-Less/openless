@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../components/Icon';
+import { Tooltip } from '../components/Tooltip';
 import { detectOS } from '../components/WindowChrome';
 import { formatComboLabel } from '../lib/hotkey';
 import { clearHistory, deleteHistoryEntry, listHistory, readAudioRecording, retranscribeRecording } from '../lib/ipc';
@@ -435,12 +436,18 @@ export function History() {
               <div style={{ marginTop: 18, paddingTop: 14, borderTop: '0.5px solid var(--ol-line-soft)', display: 'grid', gridTemplateColumns: 'auto 1fr auto', columnGap: 14, rowGap: 7, fontSize: 11, color: 'var(--ol-ink-4)', alignItems: 'baseline' }}>
                 {(item.asrProvider || item.asrMs != null) && (
                   <>
-                    <span title={t('history.stepAsrHint')} style={{ cursor: 'help' }}>{t('history.stepAsr')}</span>
+                    <span style={{ display: 'flex' }}>
+                      <Tooltip content={t('history.stepAsrHint')} wrap placement="bottom" focusable>
+                        <span style={{ cursor: 'help', textDecoration: 'underline dotted', textDecorationColor: 'var(--ol-ink-4)', textUnderlineOffset: 3 }}>
+                          {t('history.stepAsr')}
+                        </span>
+                      </Tooltip>
+                    </span>
                     <span style={{ color: 'var(--ol-ink-2)', fontFamily: 'var(--ol-font-mono)', overflowWrap: 'anywhere' }}>
                       {[item.asrProvider, item.asrModel].filter(Boolean).join(' · ')}
                     </span>
                     <span style={{ fontFamily: 'var(--ol-font-mono)', textAlign: 'right' }}>
-                      {item.asrMs != null ? formatDuration(item.asrMs, t) : ''}
+                      {item.asrMs != null ? formatStepDuration(item.asrMs, t) : ''}
                     </span>
                   </>
                 )}
@@ -451,7 +458,7 @@ export function History() {
                       {[item.llmProvider, item.llmModel].filter(Boolean).join(' · ')}
                     </span>
                     <span style={{ fontFamily: 'var(--ol-font-mono)', textAlign: 'right' }}>
-                      {item.polishMs != null ? formatDuration(item.polishMs, t) : ''}
+                      {item.polishMs != null ? formatStepDuration(item.polishMs, t) : ''}
                     </span>
                   </>
                 )}
@@ -573,6 +580,13 @@ function formatTime(iso: string): string {
   const pad = (n: number) => String(n).padStart(2, '0');
   if (sameDay) return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
   return `${d.getMonth() + 1}/${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/** 流水线单步耗时：<1s 显示整数毫秒（流式收尾常在几十 ms，0.1s 精度会把不同结果
+ *  拍成同一个值，模型对比就失真了——PR #826 review）；≥1s 沿用 0.1s 精度。 */
+function formatStepDuration(ms: number, t: ReturnType<typeof useTranslation>['t']): string {
+  if (ms < 1000) return t('common.durationMillis', { value: Math.round(ms) });
+  return formatDuration(ms, t);
 }
 
 function formatDuration(ms: number | null, t: ReturnType<typeof useTranslation>['t']): string {

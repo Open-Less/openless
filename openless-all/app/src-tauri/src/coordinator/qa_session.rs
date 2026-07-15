@@ -655,8 +655,9 @@ pub(super) async fn begin_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
         return Err(message);
     }
 
+    // QA 历史暂不落模型归因字段，构建时快照就地丢弃（dictation / 重转录路径在用）。
     let qa_asr = match build_qa_asr_start(inner, &active_asr).await {
-        Ok(qa_asr) => qa_asr,
+        Ok((qa_asr, _asr_call_label)) => qa_asr,
         Err(message) => {
             log::error!("[coord] QA active ASR init failed: {message}");
             finish_qa_with_error(inner, format!("ASR 初始化失败: {message}"));
@@ -1471,6 +1472,7 @@ mod tests {
             &coordinator.inner,
             session_id,
             ActiveAsr::ElevenLabs(asr),
+            crate::coordinator::AsrCallLabel::new("elevenlabs", Some("scribe_v2".into())),
         );
 
         let transcribe = tokio::spawn({

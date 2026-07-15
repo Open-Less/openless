@@ -29,6 +29,7 @@ export const ko: typeof zhCN = {
     operationFailed: '작업 실패',
     add: '추가',
     durationSeconds: '{{value}}초',
+    durationMillis: '{{value}}ms',
     durationMinutes: '{{value}}분',
   },
   capsule: {

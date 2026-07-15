@@ -3368,4 +3368,64 @@ mod tests {
 
         assert!(binding.effective_codes().is_empty());
     }
+
+    /// PR #826：新增的模型/耗时字段必须向后兼容——旧 history.json 完全没有这些 key。
+    #[test]
+    fn dictation_session_deserializes_legacy_json_without_model_fields() {
+        let legacy = r#"{
+            "id": "abc",
+            "createdAt": "2026-07-01T00:00:00Z",
+            "rawTranscript": "你好",
+            "finalText": "你好。",
+            "mode": "light",
+            "appBundleId": null,
+            "appName": null,
+            "insertStatus": "inserted",
+            "errorCode": null,
+            "durationMs": 1200,
+            "dictionaryEntryCount": null
+        }"#;
+        let session: DictationSession = serde_json::from_str(legacy).expect("legacy json");
+        assert_eq!(session.asr_provider, None);
+        assert_eq!(session.asr_model, None);
+        assert_eq!(session.llm_provider, None);
+        assert_eq!(session.llm_model, None);
+        assert_eq!(session.asr_ms, None);
+        assert_eq!(session.polish_ms, None);
+    }
+
+    /// 新字段序列化必须是 camelCase（前端 types.ts 镜像按 camelCase 读）。
+    #[test]
+    fn dictation_session_serializes_model_fields_as_camel_case() {
+        let session = DictationSession {
+            id: "abc".into(),
+            created_at: "2026-07-01T00:00:00Z".into(),
+            raw_transcript: "你好".into(),
+            final_text: "你好。".into(),
+            mode: PolishMode::Light,
+            style_pack_id: None,
+            translation_active: false,
+            polish_source: None,
+            app_bundle_id: None,
+            app_name: None,
+            insert_status: InsertStatus::Inserted,
+            error_code: None,
+            duration_ms: Some(1200),
+            dictionary_entry_count: None,
+            has_audio_recording: None,
+            asr_provider: Some("bailian".into()),
+            asr_model: Some("fun-asr-realtime".into()),
+            llm_provider: Some("ark".into()),
+            llm_model: Some("deepseek-v3-2".into()),
+            asr_ms: Some(230),
+            polish_ms: Some(1450),
+        };
+        let json = serde_json::to_value(&session).expect("serialize");
+        assert_eq!(json["asrProvider"], "bailian");
+        assert_eq!(json["asrModel"], "fun-asr-realtime");
+        assert_eq!(json["llmProvider"], "ark");
+        assert_eq!(json["llmModel"], "deepseek-v3-2");
+        assert_eq!(json["asrMs"], 230);
+        assert_eq!(json["polishMs"], 1450);
+    }
 }
