@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "prebuild": "node scripts/android-ipc-import-boundary.test.mjs",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",

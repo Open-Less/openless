@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../../../src/components/Icon';
-import { getSettings, setSettings } from '../../../src/lib/ipc';
+import { getSettings, setSettings } from '../../../src/lib/ipc/settings';
 import type { UserPreferences } from '../../../src/lib/types';
 import { Btn, Pill } from '../../../src/pages/_atoms';
 import { SettingRow } from '../../../src/pages/settings/shared';
