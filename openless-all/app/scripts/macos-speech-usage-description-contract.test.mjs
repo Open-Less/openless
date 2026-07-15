@@ -4,6 +4,11 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
+if (process.platform !== 'darwin') {
+  console.log('macOS speech usage description contract skipped on non-macOS');
+  process.exit(0);
+}
+
 const scriptsDir = fileURLToPath(new URL('.', import.meta.url));
 const checker = join(scriptsDir, 'check-macos-speech-usage-description.sh');
 const fixtureDir = mkdtempSync(join(tmpdir(), 'openless-speech-usage-'));

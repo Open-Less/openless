@@ -1,5 +1,13 @@
 import { spawnSync } from 'node:child_process';
 
+if (process.platform === 'win32') {
+  // The full Tauri lib-test binary is compile-only on clean Windows runners because an
+  // optional native runtime DLL is unavailable there. CI executes this behavioral gate on
+  // macOS/Linux and still compiles the same Rust test on Windows via `cargo test --no-run`.
+  console.log('Hotkey injection runtime gate skipped on Windows (covered by lib-test compilation).');
+  process.exit(0);
+}
+
 const result = spawnSync(
   'cargo',
   ['test', '--manifest-path', 'src-tauri/Cargo.toml', 'hotkey_injection_gate_logs_pressed_and_cancels', '--', '--nocapture'],

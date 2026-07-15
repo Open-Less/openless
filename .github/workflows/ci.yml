@@ -2,7 +2,7 @@ name: CI
 
 # 多平台跨语言质量门禁。release-tauri.yml 是发版流水线（仅打包构建），这里负责
 # 在合并前快速验证两件事：
-#   1. 前端 typecheck + vite bundle 通过（tsc + vite build，捕获跨 locale 类型 drift）
+#   1. 全部前端/契约测试与 vite bundle 通过（捕获行为、合同及跨 locale 类型 drift）
 #   2. Rust 后端在 macOS / Windows / Linux 都能 cargo check 过（捕获 cfg 漏分支 / 平台 API 误用）
 # 跑 build-mac.sh / windows-package-msvc.ps1 / Tauri bundle 太重；只跑轻量 cargo check + vite build。
 
@@ -152,21 +152,8 @@ jobs:
             }
           }
 
-      - name: Check macOS capsule Spaces contract
-        run: npm run check:macos-capsule-spaces
-
-      - name: Check Windows UI configuration contract
-        run: npm run check:windows-ui-config
-
-      - name: Check PIN persistence security contract
-        run: npm run check:pin-persistence-security
-
-      - name: Check macOS speech usage description contract
-        if: runner.os == 'macOS'
-        run: npm run check:macos-speech-usage-description
-
-      - name: Build frontend (tsc + vite)
-        run: npm run build
+      - name: Build frontend and run frontend/contract tests
+        run: npm test
 
       - name: Check Tauri backend (cargo check)
         run: cargo check --manifest-path src-tauri/Cargo.toml
