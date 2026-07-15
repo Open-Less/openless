@@ -100,6 +100,29 @@ mod tests {
     }
 
     #[test]
+    fn beta_manifest_urls_use_newest_modern_beta_tag_from_atom() {
+        let body = r#"<feed>
+  <entry>
+    <updated>2026-07-15T07:00:00Z</updated>
+    <link rel="alternate" type="text/html" href="https://github.com/appergb/openless/releases/tag/v1.3.15-Beta.1-tauri"/>
+  </entry>
+  <entry>
+    <updated>2026-06-17T15:41:46Z</updated>
+    <link rel="alternate" type="text/html" href="https://github.com/appergb/openless/releases/tag/v1.3.10-4-beta-tauri"/>
+  </entry>
+</feed>"#;
+        let latest = crate::commands::parse_latest_beta_from_atom(body)
+            .expect("Android updater must discover the modern Beta tag");
+
+        let urls = beta_manifest_urls("aarch64", &latest.tag_name);
+
+        assert_eq!(latest.tag_name, "v1.3.15-Beta.1-tauri");
+        assert!(urls
+            .iter()
+            .all(|url| url.contains("/releases/download/v1.3.15-Beta.1-tauri/")));
+    }
+
+    #[test]
     fn map_abi_to_arch_maps_arm64() {
         assert_eq!(map_abi_to_arch("arm64-v8a"), "aarch64");
     }
