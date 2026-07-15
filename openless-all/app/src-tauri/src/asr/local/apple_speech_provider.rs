@@ -618,6 +618,9 @@ struct SegmentAccumulator {
     /// 自上次明确边界提交后，是否见过新一代 partial。它把「下一话段」与同一任务在
     /// 结尾重放 final 全文区分开，避免用跨话段文本前缀猜测身份。
     current_generation_active: bool,
+    /// 最近一次 metadata 边界提交后，任务可能在完成时重放的累计全文。只有明确边界
+    /// 才能创建这个候选；纯 isFinal 序列即使文本相同也必须视为独立话段。
+    cumulative_replay_candidate: Option<String>,
 }
 
 impl SegmentAccumulator {
@@ -635,20 +638,21 @@ impl SegmentAccumulator {
             self.push_segment(&segment);
             self.current.clear();
             self.current_generation_active = false;
+            self.cumulative_replay_candidate = Some(normalized(&self.joined()));
         } else if is_final {
             let segment = if text.trim().is_empty() {
                 std::mem::take(&mut self.current)
             } else {
                 text.to_string()
             };
-            // 有新 partial（或尚无已提交话段）说明 final 属于当前 generation；否则它
-            // 可能只是同一 recognition task 在完成时重放累计全文，只在全文确实不同
-            // 时兜底保留。去重证据来自 generation/commit 状态，不跨 segment 猜前缀。
-            if self.current_generation_active
-                || self.segments.is_empty()
-                || normalized(&self.joined()) != normalized(&segment)
-            {
+            // 只有 metadata 边界创建的快照能证明这是同一 task 的累计全文重放；不能仅
+            // 因 final 文本等于 joined 就去重，否则连续两个相同的 final-only 话段会丢失。
+            let normalized_segment = normalized(&segment);
+            let is_cumulative_replay = !self.current_generation_active
+                && self.cumulative_replay_candidate.as_deref() == Some(normalized_segment.as_str());
+            if !is_cumulative_replay {
                 self.push_segment(&segment);
+                self.cumulative_replay_candidate = None;
             }
             self.current.clear();
             self.current_generation_active = false;
@@ -659,9 +663,11 @@ impl SegmentAccumulator {
             self.push_segment(&previous);
             self.current = text.to_string();
             self.current_generation_active = true;
+            self.cumulative_replay_candidate = None;
         } else {
             self.current = text.to_string();
             self.current_generation_active = true;
+            self.cumulative_replay_candidate = None;
         }
     }
 
@@ -1130,6 +1136,15 @@ mod tests {
         acc.fold("第一段内容", false, true);
         acc.fold("第二段内容", false, true);
         assert_eq!(acc.salvage(), "第一段内容第二段内容");
+    }
+
+    #[test]
+    fn repeated_per_segment_finals_are_distinct_utterances() {
+        // 两个相邻话段内容可以完全相同；不能把第二个 final 当任务级全文重放吞掉。
+        let mut acc = SegmentAccumulator::default();
+        acc.fold("hello", false, true);
+        acc.fold("hello", false, true);
+        assert_eq!(acc.salvage(), "hello hello");
     }
 
     #[test]
