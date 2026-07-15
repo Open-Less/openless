@@ -161,6 +161,10 @@ jobs:
       - name: Check PIN persistence security contract
         run: npm run check:pin-persistence-security
 
+      - name: Check macOS speech usage description contract
+        if: runner.os == 'macOS'
+        run: npm run check:macos-speech-usage-description
+
       - name: Build frontend (tsc + vite)
         run: npm run build
 
