@@ -2,20 +2,39 @@
 // 浏览与安装风格在「风格」页内完成，设置页只管登录身份。
 //
 // 登录走共用的 <GithubLoginModal />（GitHub OAuth Device Flow），与风格市场
-// 完全一致 —— 点登录弹出统一登录窗口，授权成功写回 prefs.marketplaceDevLogin。
+// 完全一致 —— 点登录弹出统一登录窗口，授权成功后 token 由
+// Rust CredentialsVault 保管，prefs.marketplaceDevLogin 只作展示。
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
 import { Icon } from '../../components/Icon';
 import { GithubLoginModal } from '../../components/GithubLoginModal';
 import { Btn, Card } from '../_atoms';
 import { SectionTitle } from './shared';
+import { marketplaceAuthStatus, marketplaceLogout } from '../../lib/ipc';
 
 export function MarketplaceSection() {
   const { t } = useTranslation();
   const { prefs, updatePrefs: savePrefs } = useHotkeySettings();
   const [showLogin, setShowLogin] = useState(false);
+  const [signedIn, setSignedIn] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void marketplaceAuthStatus()
+      .then(async status => {
+        if (cancelled) return;
+        setSignedIn(status.signedIn);
+        if (!status.signedIn && prefs?.marketplaceDevLogin.trim()) {
+          await savePrefs(current => ({ ...current, marketplaceDevLogin: '' }));
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setSignedIn(false);
+      });
+    return () => { cancelled = true; };
+  }, [prefs?.marketplaceDevLogin, savePrefs]);
 
   if (!prefs) {
     return (
@@ -26,10 +45,17 @@ export function MarketplaceSection() {
   }
 
   const login = prefs.marketplaceDevLogin.trim();
-  const signedIn = login.length > 0;
 
   const signOut = () => {
-    void savePrefs(current => ({ ...current, marketplaceDevLogin: '' }));
+    void (async () => {
+      try {
+        await marketplaceLogout();
+        setSignedIn(false);
+        await savePrefs(current => ({ ...current, marketplaceDevLogin: '' }));
+      } catch (error) {
+        console.warn('[marketplace] sign out failed', error);
+      }
+    })();
   };
 
   return (
@@ -98,6 +124,7 @@ export function MarketplaceSection() {
         <GithubLoginModal
           onClose={() => setShowLogin(false)}
           onSuccess={nextLogin => {
+            setSignedIn(true);
             void savePrefs(current => ({ ...current, marketplaceDevLogin: nextLogin }))
               .catch(e => console.warn('[marketplace] save login to prefs failed', e));
           }}

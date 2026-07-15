@@ -9,7 +9,7 @@
 //
 // 后端 URL 走 prefs.marketplaceBaseUrl，dev 模式默认 http://127.0.0.1:8090；
 // 用户在 Settings 填生产 URL 后客户端自动切换。
-// dev 上传需要 prefs.marketplaceDevLogin（GitHub login 风格）—— 空时上传按钮 disabled。
+// GitHub login 只用作展示；是否可写由 Rust 端凭据库中的 OAuth token 决定。
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
@@ -26,6 +26,7 @@ import {
   listMarketplace,
   listStylePacks,
   marketplaceDelete,
+  marketplaceAuthStatus,
   marketplaceMyLikes,
   marketplaceMyPacks,
   readMarketplaceDetailCache,
@@ -77,8 +78,27 @@ export function Marketplace() {
   // 当前用户赞过的 pack id 集合 —— 用于红心渲染 + 「我赞过的」过滤。
   // 进入 marketplace 时拉一次；点星后本地 mutate。
   const [likedIds, setLikedIds] = useState<Set<string>>(new Set());
-  const canUpload = (prefs?.marketplaceDevLogin ?? '').trim().length > 0;
   const currentLogin = (prefs?.marketplaceDevLogin ?? '').trim();
+  const [marketplaceSignedIn, setMarketplaceSignedIn] = useState(false);
+  const authorizedLogin = marketplaceSignedIn ? currentLogin : '';
+  const canUpload = marketplaceSignedIn;
+  const refreshAuthStatus = useCallback(async () => {
+    try {
+      const status = await marketplaceAuthStatus();
+      setMarketplaceSignedIn(status.signedIn);
+      if (!status.signedIn) {
+        setLikedIds(new Set());
+        setMyPacks([]);
+        if (currentLogin) {
+          await updatePrefs(current => ({ ...current, marketplaceDevLogin: '' }));
+        }
+      }
+      return status.signedIn;
+    } catch {
+      setMarketplaceSignedIn(false);
+      return false;
+    }
+  }, [currentLogin, updatePrefs]);
   // 「衍生自」只在 origin 作者 != 当前登录身份时显示 —— 自己的 pack 不要给自己挂衍生标签。
   const isDerivative = (originLogin: string | null | undefined): boolean =>
     !!originLogin && originLogin !== currentLogin;
@@ -142,22 +162,31 @@ export function Marketplace() {
     void refresh();
   }, [refresh]);
 
+  useEffect(() => {
+    void refreshAuthStatus();
+  }, [currentLogin, refreshAuthStatus]);
+
   // 拉一次「我赞过的」缓存，渲染红心 + 「我赞过的」过滤。登录身份变更时重拉。
   useEffect(() => {
     let cancelled = false;
+    if (!marketplaceSignedIn) {
+      setLikedIds(new Set());
+      return () => { cancelled = true; };
+    }
     void (async () => {
       try {
         const ids = await marketplaceMyLikes();
         if (!cancelled) setLikedIds(new Set(ids));
       } catch (error) {
+        void refreshAuthStatus();
         console.warn('[marketplace] fetch my-likes failed', error);
       }
     })();
     return () => { cancelled = true; };
-  }, [currentLogin]);
+  }, [marketplaceSignedIn, refreshAuthStatus]);
 
   const refreshMyPacks = useCallback(async () => {
-    if (!currentLogin) {
+    if (!marketplaceSignedIn) {
       setMyPacks([]);
       setMyPacksLoading(false);
       setMyPacksError(null);
@@ -169,6 +198,7 @@ export function Marketplace() {
       const packs = await marketplaceMyPacks();
       setMyPacks(packs);
     } catch (error) {
+      void refreshAuthStatus();
       console.warn('[marketplace] fetch my-packs failed', error);
       const msg = errorMessage(error);
       setMyPacksError(msg);
@@ -177,7 +207,7 @@ export function Marketplace() {
     } finally {
       setMyPacksLoading(false);
     }
-  }, [currentLogin, t]);
+  }, [marketplaceSignedIn, refreshAuthStatus, t]);
 
   useEffect(() => {
     void refreshMyPacks();
@@ -185,10 +215,10 @@ export function Marketplace() {
 
   // 弹框打开时刷新一次「我的发布」，避免显示陈旧数据。
   useEffect(() => {
-    if (showMyPacks && currentLogin) {
+    if (showMyPacks && marketplaceSignedIn) {
       void refreshMyPacks();
     }
-  }, [showMyPacks, currentLogin, refreshMyPacks]);
+  }, [showMyPacks, marketplaceSignedIn, refreshMyPacks]);
 
   const openDetail = async (id: string) => {
     const seq = ++detailSeqRef.current;
@@ -241,6 +271,11 @@ export function Marketplace() {
 
   const onLike = async () => {
     if (!detail) return;
+    if (!marketplaceSignedIn) {
+      setActionMsg({ kind: 'err', text: t('marketplace.myPacks.notLoggedIn') });
+      setShowLogin(true);
+      return;
+    }
     const packId = detail.id;
     const prevLikedIds = likedIds;
     const prevLikeCount = detail.likeCount;
@@ -267,6 +302,7 @@ export function Marketplace() {
         return next;
       });
     } catch (error) {
+      void refreshAuthStatus();
       // rollback 到点击前的状态
       setLikedIds(prevLikedIds);
       setDetail(prev => (prev && prev.id === packId ? { ...prev, likeCount: prevLikeCount } : prev));
@@ -315,6 +351,7 @@ export function Marketplace() {
       setItems(prev => prev.filter(p => p.id !== detail.id));
       void refresh();
     } catch (error) {
+      void refreshAuthStatus();
       setActionMsg({ kind: 'err', text: t('marketplace.detail.withdrawFailed', { err: errorMessage(error) }) });
     }
   };
@@ -330,6 +367,7 @@ export function Marketplace() {
       setItems(prev => prev.filter(p => p.id !== pack.id));
       void refreshMyPacks();
     } catch (error) {
+      void refreshAuthStatus();
       setActionMsg({ kind: 'err', text: t('marketplace.detail.withdrawFailed', { err: errorMessage(error) }) });
     }
   };
@@ -389,12 +427,14 @@ export function Marketplace() {
       // 这里只需单次兜底刷新；取较长延时（5s）确保后端最终一致后能查到，去掉冗余的 1.5s 那次。
       window.setTimeout(() => { void refresh(); void refreshMyPacks(); }, 5000);
     } catch (error) {
+      void refreshAuthStatus();
       setActionMsg({ kind: 'err', text: t('marketplace.errors.upload', { err: errorMessage(error) }) });
     }
   };
 
-  // GitHub 登录成功 → 写回 prefs.marketplaceDevLogin，让后续 X-Dev-User 走真实身份。
+  // GitHub 登录成功后 Rust 已保存 token；prefs 只缓存 login 供界面展示。
   const onLoginSuccess = useCallback((nextLogin: string) => {
+    setMarketplaceSignedIn(true);
     // prefs 写入失败只 console 记一笔（与重构前的 OAuth 轮询一致）—— 不能裸 void，
     // 否则 reject 会冒成未处理的 promise rejection。
     void updatePrefs(current => ({ ...current, marketplaceDevLogin: nextLogin }))
@@ -422,7 +462,7 @@ export function Marketplace() {
             <button
               type="button"
               onClick={() => setShowMyPacks(true)}
-              title={currentLogin ? t('marketplace.myPacks.buttonTitle', { login: currentLogin }) : t('marketplace.myPacks.buttonTitleEmpty')}
+              title={authorizedLogin ? t('marketplace.myPacks.buttonTitle', { login: authorizedLogin }) : t('marketplace.myPacks.buttonTitleEmpty')}
               style={{
                 display: 'inline-flex', alignItems: 'center', gap: 8,
                 height: 30, padding: '0 12px', borderRadius: 9,
@@ -440,7 +480,7 @@ export function Marketplace() {
                 background: 'var(--ol-surface-2)',
                 fontSize: 10, fontWeight: 750,
               }}>
-                {(currentLogin || '?').slice(0, 1).toUpperCase()}
+                {(authorizedLogin || '?').slice(0, 1).toUpperCase()}
               </span>
               <span>{t('marketplace.myPacks.buttonLabel')}</span>
             </button>
@@ -680,7 +720,7 @@ export function Marketplace() {
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
                 <div>
-                  {detail.authorLogin === currentLogin && currentLogin.length > 0 && (
+                  {marketplaceSignedIn && detail.authorLogin === currentLogin && currentLogin.length > 0 && (
                     <Btn variant="ghost" size="sm" onClick={() => void onDelete()}>
                       <span style={{ color: '#ef4444', marginRight: 4 }}>🗑</span>
                       {t('marketplace.detail.withdrawBtn')}
@@ -692,6 +732,7 @@ export function Marketplace() {
                     whileTap={{ scale: 0.75 }}
                     transition={{ type: 'spring', stiffness: 400, damping: 17 }}
                     onClick={() => void onLike()}
+                    aria-label={marketplaceSignedIn ? undefined : t('marketplace.oauth.loginBtn')}
                     style={{
                       display: 'inline-flex',
                       alignItems: 'center',
@@ -860,14 +901,14 @@ export function Marketplace() {
                 已登录时再点会重新走一次（切账号）。 */}
             <button
               type="button"
-              title={currentLogin ? t('marketplace.oauth.reloginTooltip', { login: currentLogin }) : t('marketplace.oauth.loginTooltip')}
+              title={authorizedLogin ? t('marketplace.oauth.reloginTooltip', { login: authorizedLogin }) : t('marketplace.oauth.loginTooltip')}
               onClick={() => setShowLogin(true)}
               style={{
                 display: 'inline-flex', alignItems: 'center', gap: 6,
                 padding: '5px 10px', borderRadius: 9,
                 border: '0.5px solid var(--ol-line-strong)',
-                background: currentLogin ? 'var(--ol-blue-soft)' : 'var(--ol-surface)',
-                color: currentLogin ? 'var(--ol-blue)' : 'var(--ol-ink-3)',
+                background: authorizedLogin ? 'var(--ol-blue-soft)' : 'var(--ol-surface)',
+                color: authorizedLogin ? 'var(--ol-blue)' : 'var(--ol-ink-3)',
                 fontSize: 12, fontWeight: 650,
                 cursor: 'pointer',
                 whiteSpace: 'nowrap',
@@ -876,12 +917,12 @@ export function Marketplace() {
               <span style={{
                 width: 18, height: 18, borderRadius: 999,
                 display: 'inline-grid', placeItems: 'center',
-                background: currentLogin ? 'rgba(37,99,235,0.14)' : 'var(--ol-surface-2)',
+                background: authorizedLogin ? 'rgba(37,99,235,0.14)' : 'var(--ol-surface-2)',
                 fontSize: 10, fontWeight: 750,
               }}>
-                {(currentLogin || '?').slice(0, 1).toUpperCase()}
+                {(authorizedLogin || '?').slice(0, 1).toUpperCase()}
               </span>
-              <span>{currentLogin ? `@${currentLogin}` : t('marketplace.oauth.loginBtn')}</span>
+              <span>{authorizedLogin ? `@${authorizedLogin}` : t('marketplace.oauth.loginBtn')}</span>
             </button>
             {/* 关闭 × */}
             <button
@@ -909,7 +950,7 @@ export function Marketplace() {
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 12 }}>
             <div style={{ fontSize: 11.5, color: 'var(--ol-ink-3)' }}>
               {(() => {
-                if (!currentLogin) return t('marketplace.myPacks.notLoggedIn');
+                if (!marketplaceSignedIn) return t('marketplace.myPacks.notLoggedIn');
                 const activeCount = visibleMyPacks.length;
                 const pendingCount = visibleMyPacks.filter(p => p.state === 'pending').length;
                 return pendingCount > 0
@@ -918,7 +959,7 @@ export function Marketplace() {
               })()}
             </div>
             <div style={{ display: 'flex', gap: 6 }}>
-              <Btn icon="refresh" variant="ghost" size="sm" onClick={() => void refreshMyPacks()} disabled={!currentLogin || myPacksLoading}>
+              <Btn icon="refresh" variant="ghost" size="sm" onClick={() => void refreshMyPacks()} disabled={!marketplaceSignedIn || myPacksLoading}>
                 {t('common.refresh')}
               </Btn>
               <span title={canUpload ? '' : t('marketplace.uploadDisabledHint')}>
@@ -965,11 +1006,11 @@ export function Marketplace() {
               return (
                 <div style={{ padding: '32px 12px', textAlign: 'center' }}>
                   <div style={{ fontSize: 13, color: 'var(--ol-ink-3)', marginBottom: 6 }}>
-                    {currentLogin
+                    {marketplaceSignedIn
                       ? (myPacks.length === 0 ? t('marketplace.myPacks.emptyTitle') : t('marketplace.myPacks.noMatch'))
                       : t('marketplace.myPacks.notLoggedIn')}
                   </div>
-                  {currentLogin && myPacks.length === 0 && (
+                  {marketplaceSignedIn && myPacks.length === 0 && (
                     <div style={{ fontSize: 11, color: 'var(--ol-ink-4)' }}>
                       {t('marketplace.myPacks.emptyHint')}
                     </div>

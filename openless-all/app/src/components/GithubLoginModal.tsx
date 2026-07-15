@@ -6,8 +6,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
+  githubDeviceFlowCancel,
   githubDeviceFlowPoll,
   githubDeviceFlowStart,
+  githubFlowExpiresAt,
+  githubPollIntervalMs,
+  githubSlowDownIntervalMs,
   openExternal,
 } from '../lib/ipc';
 import { Btn } from '../pages/_atoms';
@@ -15,7 +19,14 @@ import { Modal } from './ui/Modal';
 
 type Phase =
   | { kind: 'starting' }
-  | { kind: 'pending'; userCode: string; verificationUri: string; deviceCode: string }
+  | {
+      kind: 'pending';
+      userCode: string;
+      verificationUri: string;
+      flowId: string;
+      intervalMs: number;
+      expiresAt: number;
+    }
   | { kind: 'success'; login: string }
   | { kind: 'error'; message: string };
 
@@ -30,6 +41,8 @@ export function GithubLoginModal({ onClose, onSuccess }: GithubLoginModalProps) 
   const [phase, setPhase] = useState<Phase>({ kind: 'starting' });
   const [copied, setCopied] = useState(false);
   const cancelledRef = useRef(false);
+  const beginGenerationRef = useRef(0);
+  const activeFlowIdRef = useRef<string | undefined>(undefined);
   // 用 ref 持有回调，poll 副作用只依赖 phase，不因父组件重渲染而重启。
   const onSuccessRef = useRef(onSuccess);
   const onCloseRef = useRef(onClose);
@@ -38,17 +51,32 @@ export function GithubLoginModal({ onClose, onSuccess }: GithubLoginModalProps) 
     onCloseRef.current = onClose;
   });
 
+  const cancelActiveFlow = useCallback(async () => {
+    const flowId = activeFlowIdRef.current;
+    activeFlowIdRef.current = undefined;
+    try { await githubDeviceFlowCancel(flowId); } catch { /* best effort */ }
+  }, []);
+
   const begin = useCallback(async () => {
+    const generation = ++beginGenerationRef.current;
     cancelledRef.current = false;
     setPhase({ kind: 'starting' });
     try {
+      await cancelActiveFlow();
+      if (cancelledRef.current || generation !== beginGenerationRef.current) return;
       const start = await githubDeviceFlowStart();
-      if (cancelledRef.current) return;
+      if (cancelledRef.current || generation !== beginGenerationRef.current) {
+        await githubDeviceFlowCancel(start.flowId).catch(() => undefined);
+        return;
+      }
+      activeFlowIdRef.current = start.flowId;
       setPhase({
         kind: 'pending',
         userCode: start.userCode,
         verificationUri: start.verificationUri,
-        deviceCode: start.deviceCode,
+        flowId: start.flowId,
+        intervalMs: githubPollIntervalMs(start.interval),
+        expiresAt: githubFlowExpiresAt(Date.now(), start.expiresIn),
       });
       // 自动拉起浏览器；失败不致命，用户可手动复制。
       try { await openExternal(start.verificationUri); } catch { /* manual fallback */ }
@@ -56,36 +84,55 @@ export function GithubLoginModal({ onClose, onSuccess }: GithubLoginModalProps) 
       if (cancelledRef.current) return;
       setPhase({ kind: 'error', message: err instanceof Error ? err.message : String(err) });
     }
-  }, []);
+  }, [cancelActiveFlow]);
 
   // 打开即发起登录。
   useEffect(() => {
     void begin();
-    return () => { cancelledRef.current = true; };
-  }, [begin]);
+    return () => {
+      cancelledRef.current = true;
+      beginGenerationRef.current += 1;
+      void cancelActiveFlow();
+    };
+  }, [begin, cancelActiveFlow]);
 
   // pending 阶段轮询 backend。
   useEffect(() => {
     if (phase.kind !== 'pending') return;
     let cancelled = false;
     let timer: number | null = null;
-    let interval = 5_000;
-    const deviceCode = phase.deviceCode;
+    let interval = phase.intervalMs;
+    const { flowId, expiresAt } = phase;
     const tick = async () => {
       if (cancelled) return;
+      if (Date.now() >= expiresAt) {
+        await githubDeviceFlowCancel(flowId).catch(() => undefined);
+        activeFlowIdRef.current = undefined;
+        if (!cancelled) {
+          setPhase({
+            kind: 'error',
+            message: t('marketplace.oauth.expiredError', {
+              defaultValue: 'GitHub authorization expired. Start again.',
+            }),
+          });
+        }
+        return;
+      }
       try {
-        const res = await githubDeviceFlowPoll(deviceCode);
+        const res = await githubDeviceFlowPoll(flowId);
         if (cancelled) return;
         if (res.kind === 'authorized') {
+          activeFlowIdRef.current = undefined;
           setPhase({ kind: 'success', login: res.login });
           onSuccessRef.current(res.login);
           window.setTimeout(() => { if (!cancelled) onCloseRef.current(); }, 1200);
         } else if (res.kind === 'slowDown') {
-          interval = Math.min(interval + 5_000, 30_000);
-          timer = window.setTimeout(tick, interval);
+          interval = githubSlowDownIntervalMs(interval);
+          timer = window.setTimeout(tick, Math.min(interval, Math.max(0, expiresAt - Date.now())));
         } else if (res.kind === 'pending') {
-          timer = window.setTimeout(tick, interval);
+          timer = window.setTimeout(tick, Math.min(interval, Math.max(0, expiresAt - Date.now())));
         } else {
+          activeFlowIdRef.current = undefined;
           setPhase({ kind: 'error', message: res.message });
         }
       } catch (err) {
@@ -98,11 +145,12 @@ export function GithubLoginModal({ onClose, onSuccess }: GithubLoginModalProps) 
       cancelled = true;
       if (timer != null) window.clearTimeout(timer);
     };
-  }, [phase]);
+  }, [phase, t]);
 
   const close = () => {
     cancelledRef.current = true;
-    onClose();
+    beginGenerationRef.current += 1;
+    void cancelActiveFlow().finally(onClose);
   };
 
   const copyCode = async () => {

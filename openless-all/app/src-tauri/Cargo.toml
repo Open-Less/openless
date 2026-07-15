@@ -88,6 +88,11 @@ version = "3.6.3"
 default-features = false
 features = ["windows-native"]
 
+[target.'cfg(unix)'.dependencies]
+# PIN persistence uses O_NOFOLLOW/O_NONBLOCK/O_CLOEXEC; macOS qwen-asr also
+# uses libc::free for strings allocated by the C runtime.
+libc = "0.2"
+
 [target.'cfg(target_os = "linux")'.dependencies]
 dbus = "0.9"
 gtk = "0.18"
@@ -113,8 +118,6 @@ coreaudio-sys = "0.2"
 objc2 = { version = "0.5", features = ["exception"] }
 objc2-foundation = "0.2"
 objc2-app-kit = "0.2"
-# qwen-asr 用 malloc 分配返回字符串，必须用 C `free()` 释放。
-libc = "0.2"
 # 把胶囊窗口转成「非激活 NSPanel」，使其能叠在别的 app 的全屏 Space 之上。
 # 普通 NSWindow 即便设了 collectionBehavior 也做不到（tauri#9556 / #11488）—— 必须是
 # NSPanel。该插件做窗口 NSWindow→NSPanel subclass 转换；仅 macOS。
@@ -131,6 +134,7 @@ windows = { version = "0.58", features = [
   "Win32_Graphics_Gdi",
   "Win32_Media_Audio",
   "Win32_Media_Audio_Endpoints",
+  "Win32_Storage_FileSystem",
   "Win32_System_Com",
   "Win32_System_Ole",
   "Win32_System_Registry",

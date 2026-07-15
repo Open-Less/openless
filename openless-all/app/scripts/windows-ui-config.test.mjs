@@ -36,8 +36,8 @@ if (!capsuleWindow) {
 if (!mainWindow) {
   throw new Error('main window config missing');
 }
-assertEqual(capsuleWindow.width, 220, 'windows capsule config keeps translation-capable width baseline');
-assertEqual(capsuleWindow.height, 110, 'windows capsule config keeps translation-capable height baseline');
+assertEqual(capsuleWindow.width, 460, 'windows capsule config keeps the shared bootstrap width');
+assertEqual(capsuleWindow.height, 180, 'windows capsule config keeps the shared bootstrap height');
 assertEqual(capsuleWindow.transparent, true, 'capsule window should keep transparent visuals');
 assertEqual(capsuleWindow.alwaysOnTop, true, 'capsule window should stay above the focused app while recording');
 assertEqual(mainWindow.decorations, true, 'windows main window should keep native decorations');
@@ -113,9 +113,11 @@ assertMatch(
   'linux should keep the custom ol-linux-titlebar shell',
 );
 
-if (!/borderRadius:\s*'var\(--ol-r-lg\)'/.test(floatingShellTsx)) {
-  throw new Error('floating shell should consume the shared radius token');
-}
+assertMatch(
+  floatingShellTsx,
+  /className="ol-console-main"[\s\S]*?borderRadius:\s*0,[\s\S]*?boxShadow:\s*'none'/,
+  'main content should keep the intentional flush shell treatment',
+);
 
 assertMatch(
   coordinatorRs,
@@ -142,9 +144,19 @@ if (!/export function getCapsuleHostMetrics\(\s*os: OS,\s*translationActive: boo
   throw new Error('capsule layout should define explicit host metrics separate from the visible pill metrics');
 }
 
-if (!/if \(os === 'win'\)\s*\{[\s\S]*?const horizontalInset = 12;[\s\S]*?const pill = getCapsulePillMetrics\(os\);[\s\S]*?width: pill\.width \+ horizontalInset \* 2,[\s\S]*?height: translationActive \? 118 : 84,[\s\S]*?horizontalInset,[\s\S]*?bottomInset: 12,[\s\S]*?badgeGap: 8,[\s\S]*?boxSizing: 'border-box',[\s\S]*?\}/.test(capsuleLayoutTs)) {
-  throw new Error('windows capsule host metrics should leave room for shadow and badge geometry');
-}
+assertMatch(
+  capsuleLayoutTs,
+  // The 1.3.14 voice-orb shell replaced the legacy 196px Windows pill and its
+  // 12px host inset. Keep the frontend and native stage contracts in sync.
+  /const VOICE_ORB_STAGE_WIDTH = 460;[\s\S]*?const VOICE_ORB_STAGE_HEIGHT = 180;/,
+  'capsule layout should keep the shared 460x180 voice-orb stage',
+);
+
+assertMatch(
+  capsuleLayoutTs,
+  /const stage = getCapsulePillMetrics\(os\);[\s\S]*?width: stage\.width,[\s\S]*?height: stage\.height,[\s\S]*?horizontalInset: 0,[\s\S]*?bottomInset: 0,[\s\S]*?badgeGap: 8,[\s\S]*?boxSizing: 'border-box'/,
+  'capsule host metrics should mirror the shared voice-orb stage without legacy Windows insets',
+);
 
 if (!/const hostMetrics = getCapsuleHostMetrics\(os,\s*translation\);/.test(capsuleTsx)) {
   throw new Error('capsule should derive host metrics from the shared layout contract');
@@ -155,24 +167,28 @@ if (!/return\s*\(\s*<div\s*style=\{\{[\s\S]*?width:\s*'100%',[\s\S]*?height:\s*'
 }
 
 if (!/paddingLeft:\s*hostMetrics\.horizontalInset,/.test(capsuleTsx) || !/paddingRight:\s*hostMetrics\.horizontalInset,/.test(capsuleTsx)) {
-  throw new Error('windows capsule host should reserve shared horizontal inset room for shadow geometry');
+  throw new Error('capsule host should consume the shared horizontal inset contract');
 }
 
 if (!/paddingBottom:\s*os === 'win' \? hostMetrics\.bottomInset : 0/.test(capsuleTsx)) {
   throw new Error('windows capsule host should respect the shared bottom inset');
 }
 
-if (!/hostMetrics\.bottomInset \+ metrics\.height \+ hostMetrics\.badgeGap/.test(capsuleTsx)) {
-  throw new Error('windows translation badge should anchor from the shared host inset instead of a fixed center-based offset');
+if (!/const badgeBottom = Math\.round\(metrics\.height \* 0\.73\);/.test(capsuleTsx)) {
+  throw new Error('translation badge should anchor proportionally within the voice-orb stage');
 }
 
-if (!/#\[cfg\(target_os = "windows"\)\][\s\S]*?const WINDOWS_CAPSULE_PILL_WIDTH: f64 = 196\.0;[\s\S]*?const WINDOWS_CAPSULE_SIDE_INSET: f64 = 12\.0;[\s\S]*?width: WINDOWS_CAPSULE_PILL_WIDTH \+ WINDOWS_CAPSULE_SIDE_INSET \* 2\.0,[\s\S]*?height: if translation_active \{ 118\.0 \} else \{ 84\.0 \},[\s\S]*?bottom_inset: 12\.0,/.test(libRs)) {
-  throw new Error('windows runtime capsule bounds should leave room for the native shadow while keeping a fixed visual pill');
-}
+assertMatch(
+  libRs,
+  /fn capsule_window_bounds\(translation_active: bool\)[\s\S]*?width: 460\.0,[\s\S]*?height: 180\.0,[\s\S]*?bottom_inset: 0\.0,/,
+  'runtime capsule bounds should match the shared 460x180 voice-orb stage',
+);
 
-if (!/#\[cfg\(target_os = "windows"\)\]\s*\{\s*52\.0\s*\}/.test(libRs)) {
-  throw new Error('windows capsule visual pill height should stay at 52px');
-}
+assertMatch(
+  libRs,
+  /fn capsule_visual_height\(_translation_active: bool\) -> f64[\s\S]*?140\.0/,
+  'runtime capsule visual anchor should preserve the intentional 140px height',
+);
 
 if (!/window\.set_size\(LogicalSize::new\(bounds\.width, bounds\.height\)\)\?/.test(libRs)) {
   throw new Error('capsule positioning should resync runtime size with the computed layout');

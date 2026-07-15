@@ -33,9 +33,44 @@ static HTTP: Lazy<reqwest::Client> = Lazy::new(|| {
         .unwrap_or_else(|_| reqwest::Client::new())
 });
 
+/// HTTP client for requests carrying OAuth device credentials or bearer tokens.
+/// Redirects are disabled so secrets are never replayed to a different origin.
+static CREDENTIAL_HTTP: Lazy<reqwest::Client> = Lazy::new(|| {
+    reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(8))
+        .pool_idle_timeout(Duration::from_secs(90))
+        .pool_max_idle_per_host(8)
+        .tcp_keepalive(Duration::from_secs(30))
+        .redirect(reqwest::redirect::Policy::none())
+        .user_agent(concat!("OpenLess/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .expect("build no-redirect credential HTTP client")
+});
+
+/// Anonymous HTTP client for public endpoints that must fail closed on redirects.
+static ANONYMOUS_NO_REDIRECT_HTTP: Lazy<reqwest::Client> = Lazy::new(|| {
+    reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(8))
+        .pool_idle_timeout(Duration::from_secs(90))
+        .pool_max_idle_per_host(8)
+        .tcp_keepalive(Duration::from_secs(30))
+        .redirect(reqwest::redirect::Policy::none())
+        .user_agent(concat!("OpenLess/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .expect("build anonymous no-redirect HTTP client")
+});
+
 /// 进程级共享 HTTP 客户端。带连接池 —— 一次握手成功后的连接被后续请求复用。
 pub fn http() -> &'static reqwest::Client {
     &HTTP
+}
+
+pub fn credential_http() -> &'static reqwest::Client {
+    &CREDENTIAL_HTTP
+}
+
+pub fn anonymous_no_redirect_http() -> &'static reqwest::Client {
+    &ANONYMOUS_NO_REDIRECT_HTTP
 }
 
 /// 按 `(timeout_secs, no_proxy)` 缓存并复用 `reqwest::Client`。
@@ -87,5 +122,48 @@ where
                 tokio::time::sleep(Duration::from_millis(backoff)).await;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::credential_http;
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    #[tokio::test]
+    async fn credential_client_never_follows_redirects_or_forwards_bearer() {
+        let redirect_target = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let target_url = format!("http://{}", redirect_target.local_addr().unwrap());
+        let source = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let source_url = format!("http://{}", source.local_addr().unwrap());
+        let source_task = tokio::spawn(async move {
+            let (mut stream, _) = source.accept().await.unwrap();
+            let mut request = [0u8; 2048];
+            let read = stream.read(&mut request).await.unwrap();
+            assert!(String::from_utf8_lossy(&request[..read])
+                .to_ascii_lowercase()
+                .contains("authorization: bearer gho_redirect_test"));
+            let response = format!(
+                "HTTP/1.1 302 Found\r\nLocation: {target_url}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+        });
+
+        let response = credential_http()
+            .get(source_url)
+            .bearer_auth("gho_redirect_test")
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), reqwest::StatusCode::FOUND);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(150), redirect_target.accept())
+                .await
+                .is_err()
+        );
+        source_task.await.unwrap();
     }
 }

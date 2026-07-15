@@ -131,30 +131,28 @@ fn pin_path(app: &AppHandle) -> Option<std::path::PathBuf> {
         .map(|d| d.join("remote-input-pin.txt"))
 }
 
-/// 读持久化的配对码；没有 / 无效则新生成并写盘。让配对码跨重启稳定 —— 否则每次启动
-/// 都重新随机一个，用户得反复回来找新码（"配对码错误"的根因）。
-pub fn load_or_create_pin(app: &AppHandle) -> String {
-    if let Some(p) = pin_path(app) {
-        if let Ok(s) = std::fs::read_to_string(&p) {
-            let s = s.trim();
-            if s.len() == 6 && s.bytes().all(|b| b.is_ascii_digit()) {
-                return s.to_string();
-            }
-        }
-    }
-    let pin = generate_pin();
-    save_pin(app, &pin);
-    pin
+mod pin_persistence;
+
+/// 读持久化的配对码；没有 / 无效则新生成并写盘。让配对码跨重启稳定。
+pub fn load_or_create_pin(app: &AppHandle) -> std::io::Result<String> {
+    let path = pin_path(app).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "OpenLess config directory is unavailable",
+        )
+    })?;
+    pin_persistence::load_or_create_pin_at_path(&path, generate_pin)
 }
 
-/// 写配对码到磁盘（用户点"重置配对码"时覆盖）。
-pub fn save_pin(app: &AppHandle, pin: &str) {
-    if let Some(p) = pin_path(app) {
-        if let Some(dir) = p.parent() {
-            let _ = std::fs::create_dir_all(dir);
-        }
-        let _ = std::fs::write(&p, pin);
-    }
+/// 原子写配对码到磁盘；只有成功后调用方才能提交内存状态。
+pub fn save_pin(app: &AppHandle, pin: &str) -> std::io::Result<()> {
+    let path = pin_path(app).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "OpenLess config directory is unavailable",
+        )
+    })?;
+    pin_persistence::persist_pin_atomically(&path, pin)
 }
 
 fn is_private_lan(ip: &Ipv4Addr) -> bool {
