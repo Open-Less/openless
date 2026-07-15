@@ -855,8 +855,7 @@ pub struct UserPreferences {
     /// 用户在 Settings 里填生产 URL (如 https://api.openless-marketplace.com)。
     #[serde(default)]
     pub marketplace_base_url: String,
-    /// Marketplace dev-mode 模拟登录用户名（GitHub login 风格）。生产换 OAuth token 后此字段废弃。
-    /// 上传 / 点赞需要带这个 header；空时上传被后端 401。
+    /// GitHub login 展示缓存。不用于认证；OAuth token 只存在 CredentialsVault。
     #[serde(default)]
     pub marketplace_dev_login: String,
     /// Android: text insertion strategy for cross-app dictation results.

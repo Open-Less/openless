@@ -56,6 +56,8 @@ mod hotkey;
 #[cfg(not(target_os = "macos"))]
 #[path = "../../src/insertion.rs"]
 mod insertion;
+#[path = "../../src/remote_server/pin_persistence.rs"]
+mod pin_persistence;
 #[path = "../../src/recorder.rs"]
 mod recorder;
 #[path = "../../src/shortcut_binding.rs"]

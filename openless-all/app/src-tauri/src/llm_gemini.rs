@@ -19,7 +19,7 @@ use serde_json::{json, Value};
 
 use crate::polish::{
     clean_polish_output, compose_polish_prompts, compose_qa_system_prompt,
-    compose_translate_prompts, safe_str_slice, LLMError,
+    compose_translate_prompts, llm_error_from_reqwest, safe_str_slice, LLMError,
 };
 use crate::types::{ChineseScriptPreference, OutputLanguagePreference, PolishMode, QaChatMessage};
 
@@ -112,7 +112,7 @@ impl GeminiProvider {
 
         log::info!(
             "[llm] POST {} provider=gemini model={} prior_turns={}",
-            url,
+            crate::net::sanitized_url_for_logs(&url),
             self.config.model,
             prior_turns.len()
         );
@@ -145,7 +145,7 @@ impl GeminiProvider {
 
         log::info!(
             "[llm] POST {} provider=gemini model={} translate=true",
-            url,
+            crate::net::sanitized_url_for_logs(&url),
             self.config.model
         );
 
@@ -184,7 +184,7 @@ impl GeminiProvider {
 
         log::info!(
             "[llm] POST {} provider=gemini model={} chat_turns={} stream=true",
-            url,
+            crate::net::sanitized_url_for_logs(&url),
             self.config.model,
             messages.len()
         );
@@ -218,19 +218,11 @@ impl GeminiProvider {
 
         let response = match request.send().await {
             Ok(r) => r,
-            Err(e) => {
-                if e.is_timeout() {
-                    return Err(LLMError::Timeout);
-                }
-                return Err(LLMError::Network(e.to_string()));
-            }
+            Err(e) => return Err(llm_error_from_reqwest(e)),
         };
 
         let status = response.status();
-        let body_text = response
-            .text()
-            .await
-            .map_err(|e| LLMError::Network(e.to_string()))?;
+        let body_text = response.text().await.map_err(llm_error_from_reqwest)?;
 
         let preview_end = BODY_PREVIEW_LIMIT.min(body_text.len());
         let preview = safe_str_slice(&body_text, preview_end);
@@ -269,20 +261,12 @@ impl GeminiProvider {
 
         let response = match request.send().await {
             Ok(r) => r,
-            Err(e) => {
-                if e.is_timeout() {
-                    return Err(LLMError::Timeout);
-                }
-                return Err(LLMError::Network(e.to_string()));
-            }
+            Err(e) => return Err(llm_error_from_reqwest(e)),
         };
 
         let status = response.status();
         if !status.is_success() {
-            let body_text = response
-                .text()
-                .await
-                .map_err(|e| LLMError::Network(e.to_string()))?;
+            let body_text = response.text().await.map_err(llm_error_from_reqwest)?;
             let preview_end = BODY_PREVIEW_LIMIT.min(body_text.len());
             let preview = safe_str_slice(&body_text, preview_end);
             log::error!("[llm] HTTP {} body={}", status.as_u16(), preview);
@@ -307,10 +291,7 @@ impl GeminiProvider {
                 log::info!("[llm] gemini stream cancelled by caller; breaking SSE loop");
                 break;
             }
-            let chunk_opt = response
-                .chunk()
-                .await
-                .map_err(|e| LLMError::Network(e.to_string()))?;
+            let chunk_opt = response.chunk().await.map_err(llm_error_from_reqwest)?;
             let Some(chunk) = chunk_opt else { break };
             byte_buffer.extend_from_slice(&chunk);
 
@@ -471,13 +452,38 @@ fn disabled_thinking_config() -> Value {
 }
 
 fn generate_content_url(base_url: &str, model: &str) -> String {
-    let trimmed = base_url.trim().trim_end_matches('/');
-    format!("{trimmed}/models/{model}:generateContent")
+    let trimmed = base_url.trim();
+    let Ok(mut url) = reqwest::Url::parse(trimmed) else {
+        let fallback = trimmed.trim_end_matches('/');
+        return format!("{fallback}/models/{model}:generateContent");
+    };
+    let path = url.path().trim_end_matches('/');
+    url.set_path(&format!("{path}/models/{model}:generateContent"));
+    url.to_string()
 }
 
 fn stream_generate_content_url(base_url: &str, model: &str) -> String {
-    let trimmed = base_url.trim().trim_end_matches('/');
-    format!("{trimmed}/models/{model}:streamGenerateContent?alt=sse")
+    let trimmed = base_url.trim();
+    let Ok(mut url) = reqwest::Url::parse(trimmed) else {
+        let fallback = trimmed.trim_end_matches('/');
+        return format!("{fallback}/models/{model}:streamGenerateContent?alt=sse");
+    };
+    let path = url.path().trim_end_matches('/');
+    url.set_path(&format!("{path}/models/{model}:streamGenerateContent"));
+    let existing_query = url
+        .query_pairs()
+        .filter(|(key, _)| key != "alt")
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect::<Vec<_>>();
+    url.set_query(None);
+    {
+        let mut query = url.query_pairs_mut();
+        for (key, value) in existing_query {
+            query.append_pair(&key, &value);
+        }
+        query.append_pair("alt", "sse");
+    }
+    url.to_string()
 }
 
 fn extract_assistant_content(body: &str) -> Result<String, LLMError> {
@@ -535,11 +541,34 @@ mod tests {
     }
 
     #[test]
+    fn generate_content_url_preserves_query_and_fragment() {
+        assert_eq!(
+            generate_content_url(
+                "https://example.com/v1beta?token=query-secret#client-fragment",
+                "gemini-2.5-flash"
+            ),
+            "https://example.com/v1beta/models/gemini-2.5-flash:generateContent?token=query-secret#client-fragment"
+        );
+    }
+
+    #[test]
     fn stream_generate_content_url_appends_alt_sse() {
         let a = stream_generate_content_url("https://x/v1beta", "gemini-2.5-flash");
         assert_eq!(
             a,
             "https://x/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse"
+        );
+    }
+
+    #[test]
+    fn stream_generate_content_url_preserves_existing_query() {
+        let url = stream_generate_content_url(
+            "https://example.com/v1beta?token=query-secret#client-fragment",
+            "gemini-2.5-flash",
+        );
+        assert_eq!(
+            url,
+            "https://example.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?token=query-secret&alt=sse#client-fragment"
         );
     }
 

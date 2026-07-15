@@ -27,8 +27,10 @@ Two channels; the branch name equals the channel name:
 Release tags (created by an admin only):
 
 - **Stable release:** push tag `v<version>-tauri`.
-- **Beta release:** push tag `v<version>-beta-tauri` (published as a GitHub
-  pre-release; never auto-updates Stable users).
+- **Beta release:** push tag `v<X.Y.Z>-Beta.<N>-tauri`, for example
+  `v1.3.15-Beta.1-tauri` (published as a GitHub pre-release; never auto-updates
+  Stable users). The updater still recognizes the historical `*-beta-tauri`
+  suffix for existing releases, but new releases use the `Beta.<N>` form.
 
 ## Version-sync gate
 
@@ -41,7 +43,8 @@ with `1-app/scripts/bump-version.sh <X.Y.Z>`:
 - `openless-all/app/src-tauri/Cargo.toml`
 - `openless-all/app/src-tauri/Cargo.lock` (the `name = "openless"` block)
 
-The script takes a plain `X.Y.Z`; for a `-beta` suffix, edit the files by hand.
+The script takes a plain `X.Y.Z`; for a prerelease version such as
+`X.Y.Z-Beta.N`, edit the files by hand.
 
 ## Pre-release checklist (for the admin cutting the release)
 

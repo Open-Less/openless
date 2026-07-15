@@ -465,13 +465,13 @@ pub struct LatestBetaRelease {
     pub published_at: String,
 }
 
-/// 拉 GitHub Releases atom feed 找最新 Beta release（tag 以 `-beta-tauri` 结尾）。
+/// 拉 GitHub Releases atom feed 找最新 Beta release。
 ///
 /// 历史：之前用 `api.github.com/repos/.../releases` REST 端点，**未认证 60 req/h/IP**，
 /// 多人多次切 Beta toggle 很容易撞 403 rate limit（用户报"获取 Beta 版本信息失败"
 /// 即是这个）。换成 `releases.atom` 后是公开页面 + CDN cache，没有同等 rate 限制。
-/// Atom feed 不显式标 prerelease，但项目约定 tag 后缀 `-beta-tauri` 必为 Beta，
-/// 所以只用 tag 后缀过滤就够了。
+/// Atom feed 不显式标 prerelease，所以按当前 `-Beta.N-tauri` 约定过滤，同时兼容
+/// 历史 `-beta-tauri` 后缀。
 ///
 /// 返回 `Ok(None)` = 当前没发过 Beta 版；`Err(String)` = 网络/解析故障。
 #[tauri::command]
@@ -512,7 +512,7 @@ pub(crate) fn parse_latest_beta_from_atom(body: &str) -> Option<LatestBetaReleas
             .find(|c: char| c == '"' || c == '<' || c == ' ' || c == '/')
             .unwrap_or(tag_after.len());
         let tag_name = tag_after[..tag_end].to_string();
-        if !tag_name.ends_with("-beta-tauri") {
+        if !is_beta_release_tag(&tag_name) {
             continue;
         }
         let html_url = format!("https://github.com/appergb/openless/releases/tag/{tag_name}");
@@ -525,6 +525,31 @@ pub(crate) fn parse_latest_beta_from_atom(body: &str) -> Option<LatestBetaReleas
         });
     }
     None
+}
+
+fn is_beta_release_tag(tag_name: &str) -> bool {
+    if tag_name.ends_with("-beta-tauri") {
+        return true;
+    }
+
+    let Some((version, beta_number)) = tag_name
+        .strip_prefix('v')
+        .and_then(|tag| tag.strip_suffix("-tauri"))
+        .and_then(|tag| tag.split_once("-Beta."))
+    else {
+        return false;
+    };
+
+    if beta_number.is_empty() || !beta_number.chars().all(|c| c.is_ascii_digit()) {
+        return false;
+    }
+
+    let mut version_parts = version.split('.');
+    (0..3).all(|_| {
+        version_parts
+            .next()
+            .is_some_and(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()))
+    }) && version_parts.next().is_none()
 }
 
 fn extract_between(haystack: &str, open: &str, close: &str) -> Option<String> {

@@ -8,6 +8,7 @@ import {
   importStylePackFromZip,
   isTauri,
   listStylePacks,
+  marketplaceAuthStatus,
   previewStylePackRuntime,
   resetBuiltinStylePack,
   saveStylePack,
@@ -120,8 +121,10 @@ function sanitizeZipFileName(name: string) {
 
 export function Style() {
   const { t } = useTranslation();
-  const { prefs: marketplacePrefs } = useHotkeySettings();
-  const canPublish = (marketplacePrefs?.marketplaceDevLogin ?? '').trim().length > 0;
+  const { prefs: marketplacePrefs, updatePrefs: updateMarketplacePrefs } = useHotkeySettings();
+  const marketplaceDisplayLogin = (marketplacePrefs?.marketplaceDevLogin ?? '').trim();
+  const [marketplaceSignedIn, setMarketplaceSignedIn] = useState(false);
+  const canPublish = marketplaceSignedIn;
 
   const [packs, setPacks] = useState<StylePack[]>([]);
 
@@ -140,6 +143,22 @@ export function Style() {
   const editorCloseTimer = useRef<number | null>(null);
   const [runtimePreview, setRuntimePreview] = useState<StylePackRuntimeDiagnostics | null>(null);
   const [runtimePreviewError, setRuntimePreviewError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void marketplaceAuthStatus()
+      .then(async status => {
+        if (cancelled) return;
+        setMarketplaceSignedIn(status.signedIn);
+        if (!status.signedIn && marketplaceDisplayLogin) {
+          await updateMarketplacePrefs(current => ({ ...current, marketplaceDevLogin: '' }));
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setMarketplaceSignedIn(false);
+      });
+    return () => { cancelled = true; };
+  }, [marketplaceDisplayLogin, updateMarketplacePrefs]);
 
   useEffect(() => () => {
     if (statusTimer.current !== null) window.clearTimeout(statusTimer.current);
@@ -475,6 +494,14 @@ export function Style() {
       await uploadMarketplacePack(pack.id);
       showSaveStatus('saved', t('style.pack.publishSuccess'), true);
     } catch (publishError) {
+      void marketplaceAuthStatus()
+        .then(async status => {
+          setMarketplaceSignedIn(status.signedIn);
+          if (!status.signedIn && marketplaceDisplayLogin) {
+            await updateMarketplacePrefs(current => ({ ...current, marketplaceDevLogin: '' }));
+          }
+        })
+        .catch(() => setMarketplaceSignedIn(false));
       showSaveStatus('failed', t('style.pack.publishFailed', { err: String(publishError) }));
     } finally {
       setBusy(null);
