@@ -53,17 +53,22 @@ assert.match(
     "Windows CI must execute the Rust-only PIN tests",
 )
 
-const regenerate = coordinator.match(
-    /pub fn regenerate_remote_pin[\s\S]*?\n    }\n\n    #\[cfg\(not\(mobile\)\)\]/,
-)?.[0]
-assert.ok(regenerate, "Coordinator regenerate implementation must be present")
-assert.match(regenerate, /-> Result<String, String>/, "reset must surface persistence errors")
-assert.match(regenerate, /persist_and_commit_remote_pin[\s\S]*save_pin[\s\S]*refresh_remote_server/, "reset must delegate persistence and state commit as one transaction")
-const transaction = coordinator.match(
-    /fn persist_and_commit_remote_pin[\s\S]*?\n}\n\nimpl Coordinator/,
-)?.[0]
-assert.ok(transaction, "PIN reset transaction helper must be present")
-assert.match(transaction, /persist\(&pin\)\?;[\s\S]*\*slot\.lock\(\) = Some\(pin\.clone\(\)\);[\s\S]*refresh\(\)/, "persist must succeed before memory commit and server refresh")
+const assertCoordinatorContract = (source) => {
+    const regenerate = source.match(
+        /pub fn regenerate_remote_pin[\s\S]*?\r?\n    }\r?\n\r?\n    #\[cfg\(not\(mobile\)\)\]/,
+    )?.[0]
+    assert.ok(regenerate, "Coordinator regenerate implementation must be present")
+    assert.match(regenerate, /-> Result<String, String>/, "reset must surface persistence errors")
+    assert.match(regenerate, /persist_and_commit_remote_pin[\s\S]*save_pin[\s\S]*refresh_remote_server/, "reset must delegate persistence and state commit as one transaction")
+    const transaction = source.match(
+        /fn persist_and_commit_remote_pin[\s\S]*?\r?\n}\r?\n\r?\nimpl Coordinator/,
+    )?.[0]
+    assert.ok(transaction, "PIN reset transaction helper must be present")
+    assert.match(transaction, /persist\(&pin\)\?;[\s\S]*\*slot\.lock\(\) = Some\(pin\.clone\(\)\);[\s\S]*refresh\(\)/, "persist must succeed before memory commit and server refresh")
+}
+
+assertCoordinatorContract(coordinator)
+assertCoordinatorContract(coordinator.replace(/\r?\n/g, "\r\n"))
 assert.match(command, /regenerate_remote_pin[\s\S]*-> Result<String, String>/, "Tauri command must reject on reset failure")
 
 console.log("PIN persistence security contract passed")
