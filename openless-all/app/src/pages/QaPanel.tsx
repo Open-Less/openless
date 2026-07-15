@@ -77,6 +77,7 @@ import {
   qaToggleRecording,
   qaWindowDismiss,
 } from '../lib/ipc';
+import { nextQaSelectionWarning, splitQaUserMessage } from '../lib/qaMessage';
 import type { QaChatMessage, QaStatePayload } from '../lib/types';
 import '../components/chat/chat.css';
 
@@ -155,22 +156,19 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
           if (payload.messages) {
             setMessages(payload.messages);
           }
+          setSelectionWarning(current => nextQaSelectionWarning(current, payload));
           switch (payload.kind) {
             case 'idle':
               setStatus('idle');
               setSelectionPreview('');
               setErrorMsg('');
               setStreamingAnswer('');
-              if (payload.selection_warning !== undefined) {
-                setSelectionWarning(payload.selection_warning ?? '');
-              }
               break;
             case 'recording':
               setStatus('recording');
               setSelectionPreview(payload.selection_preview ?? '');
               setErrorMsg('');
               setStreamingAnswer('');
-              setSelectionWarning(payload.selection_warning ?? '');
               break;
             case 'loading':
               // ASR 在 finalize、user message 还没 push 的过渡帧。提前切到 thinking
@@ -179,9 +177,6 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
               if (payload.selection_preview != null) {
                 setSelectionPreview(payload.selection_preview);
               }
-              if (payload.selection_warning !== undefined) {
-                setSelectionWarning(payload.selection_warning ?? '');
-              }
               setErrorMsg('');
               setStreamingAnswer('');
               break;
@@ -189,9 +184,6 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
               setStatus('thinking');
               if (payload.selection_preview != null) {
                 setSelectionPreview(payload.selection_preview);
-              }
-              if (payload.selection_warning !== undefined) {
-                setSelectionWarning(payload.selection_warning ?? '');
               }
               setErrorMsg('');
               setStreamingAnswer('');
@@ -242,6 +234,13 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
       unlistenDismiss?.();
     };
   }, []);
+
+  useEffect(() => {
+    if (!closing) return;
+    setSelectionPreview('');
+    setSelectionWarning('');
+    setComposerText('');
+  }, [closing]);
 
   // ── Esc 关闭 ────────────────────────────────────────────────────────
   useEffect(() => {
@@ -395,7 +394,12 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
             <SelectionChip text={selectionPreview} t={t} />
           )}
           {selectionWarning === 'linux_selection_tools_missing' && (
-            <div className="w-full rounded-md border border-amber-500/35 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
+            <div
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+              className="w-full rounded-md border border-amber-500/35 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-200"
+            >
               {t('qa.linuxSelectionToolsMissing')}
             </div>
           )}
@@ -528,7 +532,7 @@ function MessageRow({
 }) {
   if (message.role === 'user') {
     // 任意轮次都可能带选区信封：抽出问题单独显示，选区作引用块淡显在上。
-    const { selection, question } = splitSelectionUser(message.content);
+    const { selection, question } = splitQaUserMessage(message);
     return (
       // 用户消息 = 新轮次锚点行（MessageScrollerItem scrollAnchor），右挂 GitHub 头像。
       <MessageScrollerItem messageId={`m${index}`} scrollAnchor className="olchat-enter">
@@ -562,22 +566,6 @@ function MessageRow({
       </Message>
     </MessageScrollerItem>
   );
-}
-
-function splitSelectionUser(content: string): { selection: string; question: string } {
-  const envelope = content.match(
-    /^<selected_text>\n([\s\S]*?)\n<\/selected_text>\n\n# 我的问题\n([\s\S]+)$/,
-  );
-  if (envelope) {
-    return { selection: envelope[1].trim(), question: envelope[2].trim() };
-  }
-
-  // 兼容修复前已保存在当前会话中的旧格式。
-  const legacy = content.match(/^# 选区原文\n([\s\S]*?)\n\n# 我的问题\n([\s\S]+)$/);
-  if (legacy) {
-    return { selection: legacy[1].trim(), question: legacy[2].trim() };
-  }
-  return { selection: '', question: content };
 }
 
 /** 录音时的选区上下文条：贴在输入区上方，让用户看到「在追问哪段文字」。 */

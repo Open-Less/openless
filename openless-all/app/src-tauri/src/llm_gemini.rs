@@ -587,14 +587,17 @@ mod tests {
             QaChatMessage {
                 role: "user".into(),
                 content: "选区是什么意思".into(),
+                selection_text: None,
             },
             QaChatMessage {
                 role: "assistant".into(),
                 content: "这是一段示例文本".into(),
+                selection_text: None,
             },
             QaChatMessage {
                 role: "user".into(),
                 content: "继续问".into(),
+                selection_text: None,
             },
         ];
         let contents = qa_messages_to_contents(&messages);

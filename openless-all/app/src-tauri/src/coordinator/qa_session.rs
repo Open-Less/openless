@@ -23,6 +23,57 @@ fn compose_qa_user_content(selection_text: &str, question: &str) -> String {
     }
 }
 
+fn qa_user_message_from_state(
+    state: &QaSessionState,
+    question: &str,
+) -> crate::types::QaChatMessage {
+    let selection_text = state
+        .selection
+        .as_ref()
+        .map(|selection| selection.text.clone())
+        .filter(|text| !text.trim().is_empty());
+    let content = compose_qa_user_content(selection_text.as_deref().unwrap_or_default(), question);
+
+    crate::types::QaChatMessage {
+        role: "user".to_string(),
+        content,
+        selection_text,
+    }
+}
+
+fn complete_qa_turn_state(state: &mut QaSessionState) {
+    state.phase = QaPhase::Idle;
+    state.cancelled = false;
+    state.selection = None;
+}
+
+/// 每轮 QA 都重新捕获选区。Windows 上 QA WebView 已持有焦点，需先临时还给
+/// 用户原窗口，捕获后再恢复 QA；Linux 的 primary selection 不依赖当前焦点。
+fn capture_qa_turn_selection(inner: &Arc<Inner>) -> crate::selection::SelectionCaptureOutcome {
+    #[cfg(target_os = "windows")]
+    {
+        // 用户可能在多轮问答中切到另一个外部窗口；当前前台属于外部进程时刷新目标，
+        // 当前前台仍是 OpenLess 时沿用打开面板时保存的目标。
+        let saved_target = {
+            let mut state = inner.qa_state.lock();
+            if let Some(current_external) = capture_external_focus_target() {
+                state.qa_focus_target = Some(current_external);
+            }
+            state.qa_focus_target
+        };
+        let _ = restore_focus_target_if_possible(saved_target);
+    }
+
+    let capture = crate::selection::capture_selection_with_status();
+
+    #[cfg(target_os = "windows")]
+    if let Some(app) = inner.app.lock().clone() {
+        crate::refocus_qa_window(&app);
+    }
+
+    capture
+}
+
 // ─────────────────────────── QA session lifecycle ───────────────────────────
 
 pub(super) async fn finalize_dictation_as_qa_question(inner: &Arc<Inner>) -> Result<(), String> {
@@ -87,7 +138,6 @@ pub(super) async fn submit_qa_text_question(
         return Ok(());
     }
 
-    let mut selection_warning = None;
     {
         let mut state = inner.qa_state.lock();
         if !state.panel_visible {
@@ -102,20 +152,17 @@ pub(super) async fn submit_qa_text_question(
         state.phase = QaPhase::Processing;
         state.cancelled = false;
         state.session_id = new_session_id();
-        if state.selection.is_none() {
-            let capture = crate::selection::capture_selection_with_status();
-            state.selection = capture.selection;
-            selection_warning = capture.warning_code;
-        }
+        state.selection = None;
     }
     inner.qa_stream_cancelled.store(false, Ordering::SeqCst);
 
-    let selection_preview_text = inner
-        .qa_state
-        .lock()
+    let capture = capture_qa_turn_selection(inner);
+    let selection_preview_text = capture
         .selection
         .as_ref()
         .map(|selection| selection.text.clone());
+    let selection_warning = capture.warning_code;
+    inner.qa_state.lock().selection = capture.selection;
     if let Some(app) = inner.app.lock().clone() {
         let messages = inner.qa_state.lock().messages.clone();
         let _ = app.emit_to(
@@ -429,24 +476,12 @@ pub(super) async fn answer_qa_question_text(
         return Ok(());
     }
 
-    let user_content = {
+    let user_message = {
         let st = inner.qa_state.lock();
-        let sel_text = st
-            .selection
-            .as_ref()
-            .map(|s| s.text.clone())
-            .unwrap_or_default();
-        compose_qa_user_content(&sel_text, &question)
+        qa_user_message_from_state(&st, &question)
     };
 
-    inner
-        .qa_state
-        .lock()
-        .messages
-        .push(crate::types::QaChatMessage {
-            role: "user".to_string(),
-            content: user_content,
-        });
+    inner.qa_state.lock().messages.push(user_message);
 
     if let Some(app) = inner.app.lock().clone() {
         let messages = inner.qa_state.lock().messages.clone();
@@ -527,6 +562,7 @@ pub(super) async fn answer_qa_question_text(
         .push(crate::types::QaChatMessage {
             role: "assistant".to_string(),
             content: answer.clone(),
+            selection_text: None,
         });
 
     if let Some(app) = inner.app.lock().clone() {
@@ -571,7 +607,7 @@ pub(super) async fn answer_qa_question_text(
         }
     }
 
-    inner.qa_state.lock().phase = QaPhase::Idle;
+    complete_qa_turn_state(&mut inner.qa_state.lock());
     Ok(())
 }
 
@@ -600,42 +636,10 @@ pub(super) async fn begin_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
     // 重置 SSE 取消标志：上一轮可能 set 过的 true 留着会让本轮流式立即 break。
     inner.qa_stream_cancelled.store(false, Ordering::SeqCst);
 
-    // 抓选区。每轮按 Option 都重新抓一次：用户多轮提问中可以重新选别处文字。
-    //
-    // - macOS：浮窗走 orderFrontRegardless，不成为 key window，原 app 仍是 frontmost，
-    //   AX/Cmd+C fallback 都能拿到。
-    // - Windows：#466 修复后 show_qa_window_no_activate 主动抓焦点，QA 此刻已是前台，
-    //   simulate_copy 会跑在 QA 自己 webview 上 → 抓不到。focus-dance 上半场：把焦点临时
-    //   还给"用户原 app 的 HWND"。
-    //
-    //   多轮场景的目标刷新：用户开 QA 后可能 Alt+Tab 切到别的 app 选新文字。如果还死认
-    //   open_qa_panel 时记下的初始 HWND，会把焦点抢回错的 app（pr_agent stale-focus 关注点）。
-    //   策略：每轮先看当前前台是不是本进程的窗口（QA / capsule / main）—— 是 → 用户没切
-    //   走，沿用 saved；不是 → 用户切到了真正的外部 app，刷新 saved 为当前 HWND。
-    //   抓完选区后下半场再把焦点交还 QA，让 ESC/X 继续可用。
-    #[cfg(target_os = "windows")]
-    {
-        // 合并两次 lock：原来分 lock #1 写 + lock #2 读，两者之间 close_qa_panel 在别的
-        // 线程把 qa_focus_target 清成 None 会被覆盖回旧 HWND。Cloud 评审指出的 TOCTOU。
-        // 单次加锁里既写最新外部前台、再读出来交给后面的 restore_focus_target_if_possible
-        // —— capture_external_focus_target() 内部只调 GetForegroundWindow / pid 查询，
-        // 不会反向取 qa_state 锁，持锁期间调用安全。
-        let saved_target = {
-            let mut state = inner.qa_state.lock();
-            if let Some(current_external) = capture_external_focus_target() {
-                state.qa_focus_target = Some(current_external);
-            }
-            state.qa_focus_target
-        };
-        let _ = restore_focus_target_if_possible(saved_target);
-    }
-    let capture = crate::selection::capture_selection_with_status();
+    // 每轮按 Option 都重新抓一次：用户多轮提问中可以重新选别处文字。
+    let capture = capture_qa_turn_selection(inner);
     let selection = capture.selection;
     let selection_warning = capture.warning_code;
-    #[cfg(target_os = "windows")]
-    if let Some(app) = inner.app.lock().clone() {
-        crate::refocus_qa_window(&app);
-    }
     let selection_preview_text = selection.as_ref().map(|s| s.text.clone());
     inner.qa_state.lock().selection = selection.clone();
 
@@ -1096,24 +1100,12 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
 
     // 拼这一轮的 user 消息：当前轮捕获到非空选区时始终嵌入，确保用户在多轮问答中
     // 重新划选的文字也进入模型上下文；没有新选区时只发送问题并沿用历史上下文。
-    let user_content = {
+    let user_message = {
         let st = inner.qa_state.lock();
-        let sel_text = st
-            .selection
-            .as_ref()
-            .map(|s| s.text.clone())
-            .unwrap_or_default();
-        compose_qa_user_content(&sel_text, &question)
+        qa_user_message_from_state(&st, &question)
     };
 
-    inner
-        .qa_state
-        .lock()
-        .messages
-        .push(crate::types::QaChatMessage {
-            role: "user".to_string(),
-            content: user_content,
-        });
+    inner.qa_state.lock().messages.push(user_message);
 
     if let Some(app) = inner.app.lock().clone() {
         let messages = inner.qa_state.lock().messages.clone();
@@ -1207,6 +1199,7 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
         .push(crate::types::QaChatMessage {
             role: "assistant".to_string(),
             content: answer.clone(),
+            selection_text: None,
         });
 
     if let Some(app) = inner.app.lock().clone() {
@@ -1257,7 +1250,7 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
         }
     }
 
-    inner.qa_state.lock().phase = QaPhase::Idle;
+    complete_qa_turn_state(&mut inner.qa_state.lock());
     Ok(())
 }
 
@@ -1301,9 +1294,7 @@ pub(super) fn finish_qa_idle_silently(inner: &Arc<Inner>) {
     }
     emit_capsule(inner, CapsuleState::Idle, 0.0, 0, None, None);
     let mut state = inner.qa_state.lock();
-    state.phase = QaPhase::Idle;
-    state.cancelled = false;
-    state.selection = None;
+    complete_qa_turn_state(&mut state);
 }
 
 async fn wait_for_qa_processing_cancel(inner: &Arc<Inner>) {
@@ -1401,6 +1392,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::selection::SelectionContext;
     use std::io::Read;
     use std::net::TcpListener;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -1435,6 +1427,47 @@ mod tests {
     #[test]
     fn qa_without_selection_sends_only_the_question() {
         assert_eq!(compose_qa_user_content("  ", "继续解释"), "继续解释");
+    }
+
+    fn selection_context(text: &str) -> SelectionContext {
+        SelectionContext {
+            text: text.to_string(),
+            source_app: None,
+        }
+    }
+
+    #[test]
+    fn qa_typed_followup_replaces_the_previous_turn_selection() {
+        let mut state = QaSessionState::default();
+        state.selection = Some(selection_context("选区 A"));
+        let first = qa_user_message_from_state(&state, "问题一");
+        assert!(first.content.contains("选区 A"));
+
+        complete_qa_turn_state(&mut state);
+        assert!(state.selection.is_none());
+
+        state.selection = Some(selection_context("选区 B"));
+        let second = qa_user_message_from_state(&state, "问题二");
+        assert!(second.content.contains("选区 B"));
+        assert!(!second.content.contains("选区 A"));
+        assert_eq!(second.selection_text.as_deref(), Some("选区 B"));
+    }
+
+    #[test]
+    fn qa_voice_then_typed_followup_does_not_reuse_voice_turn_selection() {
+        let mut state = QaSessionState::default();
+        state.selection = Some(selection_context("语音轮选区 A"));
+        let voice_turn = qa_user_message_from_state(&state, "语音问题");
+        assert!(voice_turn.content.contains("语音轮选区 A"));
+
+        complete_qa_turn_state(&mut state);
+        assert!(state.selection.is_none());
+
+        state.selection = Some(selection_context("文字轮选区 B"));
+        let typed_turn = qa_user_message_from_state(&state, "文字问题");
+        assert!(typed_turn.content.contains("文字轮选区 B"));
+        assert!(!typed_turn.content.contains("语音轮选区 A"));
+        assert_eq!(typed_turn.selection_text.as_deref(), Some("文字轮选区 B"));
     }
 
     #[tokio::test]

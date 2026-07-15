@@ -109,6 +109,7 @@ pub(super) fn open_qa_panel(inner: &Arc<Inner>) {
             "qa:state",
             serde_json::json!({
                 "kind": "idle",
+                "selection_warning": null,
                 "messages": Vec::<crate::types::QaChatMessage>::new(),
             }),
         );

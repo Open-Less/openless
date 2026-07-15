@@ -2845,6 +2845,9 @@ pub struct QaChatMessage {
     /// "user" | "assistant" — 直接对应 OpenAI 消息 role 字段。
     pub role: String,
     pub content: String,
+    /// 仅用于前端安全展示选区原文；LLM 通道只读取 `role` / `content`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selection_text: Option<String>,
 }
 
 #[cfg(test)]

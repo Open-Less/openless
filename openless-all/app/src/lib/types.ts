@@ -460,6 +460,8 @@ export type QaStateKind =
 export interface QaChatMessage {
   role: 'user' | 'assistant';
   content: string;
+  /** 未经模型安全信封转义的选区原文，仅用于 UI 文本展示。 */
+  selectionText?: string;
 }
 
 export interface QaStatePayload {
