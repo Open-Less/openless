@@ -123,6 +123,24 @@ mod tests {
     }
 
     #[test]
+    fn beta_manifest_urls_skip_malformed_modern_tags_from_atom() {
+        let body = r#"<feed>
+  <entry><link href="https://github.com/appergb/openless/releases/tag/v-Beta.1-tauri"/></entry>
+  <entry><link href="https://github.com/appergb/openless/releases/tag/garbage-Beta.1-tauri"/></entry>
+  <entry><link href="https://github.com/appergb/openless/releases/tag/v1.3.15-Beta.1-tauri"/></entry>
+</feed>"#;
+        let latest = crate::commands::parse_latest_beta_from_atom(body)
+            .expect("Android updater must skip malformed Beta tags");
+
+        let urls = beta_manifest_urls("aarch64", &latest.tag_name);
+
+        assert_eq!(latest.tag_name, "v1.3.15-Beta.1-tauri");
+        assert!(urls
+            .iter()
+            .all(|url| url.contains("/releases/download/v1.3.15-Beta.1-tauri/")));
+    }
+
+    #[test]
     fn map_abi_to_arch_maps_arm64() {
         assert_eq!(map_abi_to_arch("arm64-v8a"), "aarch64");
     }

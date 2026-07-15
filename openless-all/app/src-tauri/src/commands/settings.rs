@@ -532,10 +532,24 @@ fn is_beta_release_tag(tag_name: &str) -> bool {
         return true;
     }
 
-    tag_name
-        .strip_suffix("-tauri")
-        .and_then(|tag| tag.rsplit_once("-Beta."))
-        .is_some_and(|(_, number)| !number.is_empty() && number.chars().all(|c| c.is_ascii_digit()))
+    let Some((version, beta_number)) = tag_name
+        .strip_prefix('v')
+        .and_then(|tag| tag.strip_suffix("-tauri"))
+        .and_then(|tag| tag.split_once("-Beta."))
+    else {
+        return false;
+    };
+
+    if beta_number.is_empty() || !beta_number.chars().all(|c| c.is_ascii_digit()) {
+        return false;
+    }
+
+    let mut version_parts = version.split('.');
+    (0..3).all(|_| {
+        version_parts
+            .next()
+            .is_some_and(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()))
+    }) && version_parts.next().is_none()
 }
 
 fn extract_between(haystack: &str, open: &str, close: &str) -> Option<String> {
