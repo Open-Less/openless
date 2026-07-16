@@ -106,9 +106,11 @@ use qa::{
 #[cfg(test)]
 use resources::discard_startup_resources_for_session;
 use resources::{
-    acquire_recording_mute, cancel_active_asr, release_recording_mute,
-    selected_microphone_device_name, stop_microphone_preview_monitor, stop_qa_recorder,
-    take_asr_for_session, take_recorder_for_session, SessionResource, SharedRecordingMuteState,
+    acquire_recording_mute, cancel_active_asr, cancel_qa_asr_for_session, release_recording_mute,
+    selected_microphone_device_name, stop_microphone_preview_monitor,
+    stop_qa_recorder_for_session, store_qa_asr_for_session, store_qa_recorder_for_session,
+    take_asr_for_session, take_qa_asr_for_session, take_recorder_for_session, SessionResource,
+    SharedRecordingMuteState,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -427,6 +429,10 @@ struct Inner {
     prepared_windows_ime_session: Arc<Mutex<Vec<PreparedWindowsImeSessionSlot>>>,
     state: Mutex<SessionState>,
     asr: Mutex<Option<SessionResource<ActiveAsr>>>,
+    /// 与 `asr` 同生命周期的构建时快照：本次会话实际构建的 (provider, model)。
+    /// store_asr_for_session 一并写入，end_session 取走落 history——比事后重读
+    /// 全局设置可靠：会话中途切 provider/model 不会污染归因（PR #826 review）。
+    asr_label: Mutex<Option<SessionResource<AsrCallLabel>>>,
     /// 本地 Qwen3-ASR 引擎缓存。跨会话复用，避免每次重加载 1.2GB+ 模型。
     /// 释放时机由 prefs.local_asr_keep_loaded_secs 决定。
     local_asr_cache: Arc<crate::asr::local::LocalAsrCache>,
@@ -493,9 +499,9 @@ struct Inner {
     /// 流入）后置 false，光条"点亮"进入正式录音。begin_session 每次入场重置为 true。
     capsule_warming: AtomicBool,
     /// QA 用的 ASR 句柄。必须跟 active_asr_provider 保持一致，避免浮窗走不同入口。
-    qa_asr: Mutex<Option<ActiveAsr>>,
+    qa_asr: Mutex<Option<SessionResource<ActiveAsr>>>,
     /// QA 用的 Recorder 句柄。
-    qa_recorder: Mutex<Option<Recorder>>,
+    qa_recorder: Mutex<Option<SessionResource<Recorder>>>,
     /// QA SSE 流取消标志。begin_qa_session 重置为 false；cancel_qa_session 设 true；
     /// polish::chat_completion_history_streaming 的 loop 每帧检查，true 时 break loop
     /// 避免取消后 LLM 仍 drain HTTP body 烧 token。详见 issue #161。
@@ -636,6 +642,7 @@ impl Coordinator {
                     inserter: TextInserter::new(),
                     state: Mutex::new(SessionState::default()),
                     asr: Mutex::new(None),
+                    asr_label: Mutex::new(None),
                     recorder: Mutex::new(None),
                     audio_archive_active: AtomicBool::new(false),
                     recording_mute: Mutex::new(SharedRecordingMuteState::new()),
@@ -737,6 +744,7 @@ impl Coordinator {
                 prepared_windows_ime_session: Arc::new(Mutex::new(Vec::new())),
                 state: Mutex::new(SessionState::default()),
                 asr: Mutex::new(None),
+                asr_label: Mutex::new(None),
                 recorder: Mutex::new(None),
                 audio_archive_active: AtomicBool::new(false),
                 recording_mute: Mutex::new(SharedRecordingMuteState::new()),
@@ -838,6 +846,7 @@ impl Coordinator {
     pub fn local_asr_loaded_model(&self) -> Option<String> {
         self.inner.local_asr_cache.loaded_model_id()
     }
+
 
     /// 主动把当前本地 ASR 引擎状态推给前端（keepLoadedSecs 变更等命令侧调用）。
     pub fn emit_local_asr_engine_status(&self) {
@@ -1787,30 +1796,50 @@ impl Coordinator {
             llm_thinking_enabled,
             front_app.as_deref(),
             &[],
+            // repolish 不回写历史的模型/耗时字段，调用快照就地丢弃。
+            &mut None,
+            &mut None,
         )
         .await
         .map_err(|e| e.to_string())
     }
 
-    pub async fn retranscribe_pcm(&self, pcm: Vec<u8>) -> Result<String, String> {
-        self.retranscribe_pcm_inner(pcm, false).await
+    /// 返回 (转写文本, 本次实际构建的 ASR (provider, model) 快照)。快照供命令层把
+    /// 「重转用了哪个模型」写回历史（构建时归因，PR #826 review）。
+    pub async fn retranscribe_pcm(
+        &self,
+        pcm: Vec<u8>,
+    ) -> Result<(String, AsrCallLabel), String> {
+        self.retranscribe_pcm_inner(pcm, false, None).await
     }
 
     pub(super) async fn retranscribe_pcm_until_cancelled(
         &self,
         pcm: Vec<u8>,
-    ) -> Result<String, String> {
-        self.retranscribe_pcm_inner(pcm, true).await
+    ) -> (Result<String, String>, Option<AsrCallLabel>) {
+        // 自动静默重试会重新读取当前设置并构建一条全新的 ASR 会话，因此必须把这次
+        // 实际构建的标签交还给调用方。即使请求最终失败，也保留“本次尝试了谁”，让
+        // 彻底失败的历史不会退回首次会话的旧归因。
+        let mut attempted_label = None;
+        let result = self
+            .retranscribe_pcm_inner(pcm, true, Some(&mut attempted_label))
+            .await
+            .map(|(text, _)| text);
+        (result, attempted_label)
     }
 
     async fn retranscribe_pcm_inner(
         &self,
         pcm: Vec<u8>,
         cancel_on_drop: bool,
-    ) -> Result<String, String> {
+        attempted_label: Option<&mut Option<AsrCallLabel>>,
+    ) -> Result<(String, AsrCallLabel), String> {
         let inner = &self.inner;
         let active_asr = CredentialsVault::get_active_asr();
-        let start = build_qa_asr_start(inner, &active_asr).await?;
+        let (start, asr_call_label) = build_qa_asr_start(inner, &active_asr).await?;
+        if let Some(label_slot) = attempted_label {
+            *label_slot = Some(asr_call_label.clone());
+        }
         let retry_guard = if cancel_on_drop {
             Some(CancellableRetranscribeGuard::new(
                 Arc::clone(inner),
@@ -1909,7 +1938,7 @@ impl Coordinator {
         if let Some(guard) = retry_guard {
             guard.disarm();
         }
-        Ok(raw.text)
+        Ok((raw.text, asr_call_label))
     }
 
     pub fn preview_style_pack_runtime(
@@ -1977,25 +2006,32 @@ fn raw_mode_uses_llm(style_system_prompt: &str) -> bool {
 /// QA 录音 runtime error 监听器。镜像 `spawn_recorder_error_monitor` 的语义但走 QA
 /// 收尾路径（`finish_qa_with_error` 替代 `abort_recording_with_error`）。
 /// 用 qa_state.session_id 守卫 stale 事件。详见 issue #168。
-fn spawn_qa_recorder_error_monitor(inner: &Arc<Inner>, rx: mpsc::Receiver<RecorderError>) {
-    let captured_session_id = inner.qa_state.lock().session_id;
+fn spawn_qa_recorder_error_monitor(
+    inner: &Arc<Inner>,
+    session_id: SessionId,
+    rx: mpsc::Receiver<RecorderError>,
+) {
     let inner = Arc::clone(inner);
     std::thread::Builder::new()
         .name("openless-qa-recorder-error-monitor".into())
         .spawn(move || {
             if let Ok(err) = rx.recv() {
                 let current_session_id = inner.qa_state.lock().session_id;
-                if captured_session_id != current_session_id {
+                if session_id != current_session_id {
                     log::warn!(
                         "[coord] QA recorder error from stale session {} dropped (current={}, err={})",
-                        captured_session_id,
+                        session_id,
                         current_session_id,
                         err
                     );
                     return;
                 }
                 log::error!("[coord] QA recorder runtime error: {err}");
-                finish_qa_with_error(&inner, format!("录音设备异常: {err}"));
+                finish_qa_with_error_if_current(
+                    &inner,
+                    session_id,
+                    format!("录音设备异常: {err}"),
+                );
             }
         })
         .ok();
@@ -2446,6 +2482,39 @@ fn read_gemini_credentials() -> anyhow::Result<(String, String, String)> {
     Ok((api_key, model, base_url))
 }
 
+/// 构建 ASR 客户端那一刻捕获的 (provider, model) 快照。随会话资源一起存放
+/// （store_asr_for_session），end_session 取走写 history。provider 是实际构建用的
+/// 具体协议 id（统一百炼入口会先经 resolve_effective_asr_provider 重定向）；model
+/// 是构建时实际传给客户端的值（含 alias 归一化与默认回退）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AsrCallLabel {
+    pub provider: String,
+    pub model: Option<String>,
+}
+
+impl AsrCallLabel {
+    pub(crate) fn new(provider: impl Into<String>, model: Option<String>) -> Self {
+        Self {
+            provider: provider.into(),
+            model: model.filter(|m| !m.trim().is_empty()),
+        }
+    }
+}
+
+/// Volcengine resource id 进历史前的 allowlist：只放行 `volc.` 命名空间的产品标识
+/// （如 volc.seedasr.sauc.duration / volc.bigasr.sauc.duration），字符集限 ASCII
+/// 字母数字与 `._-`。自定义/异常值可能携带租户信息，一律不落盘（PR #826 review /
+/// issue #373 的可观测性诉求）。
+pub(crate) fn volc_resource_history_label(resource_id: &str) -> Option<String> {
+    let id = resource_id.trim();
+    let allowed = id.starts_with("volc.")
+        && id.len() <= 64
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'));
+    allowed.then(|| id.to_string())
+}
+
 fn build_active_llm_provider(llm_thinking_enabled: bool) -> anyhow::Result<ActiveLLMProvider> {
     let active = CredentialsVault::get_active_llm();
     let model =
@@ -2490,6 +2559,31 @@ fn resolve_ark_endpoint_with_policy(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn volc_resource_history_label_allows_volc_namespace_ids() {
+        // issue #373 场景的两个真实 resource id 必须放行。
+        assert_eq!(
+            super::volc_resource_history_label("volc.seedasr.sauc.duration").as_deref(),
+            Some("volc.seedasr.sauc.duration")
+        );
+        assert_eq!(
+            super::volc_resource_history_label(" volc.bigasr.sauc.duration ").as_deref(),
+            Some("volc.bigasr.sauc.duration"),
+            "首尾空白应被 trim"
+        );
+    }
+
+    #[test]
+    fn volc_resource_history_label_rejects_non_allowlisted_values() {
+        // 非 volc. 命名空间 / 含异常字符 / 超长的值可能携带租户信息，一律不落历史。
+        assert_eq!(super::volc_resource_history_label(""), None);
+        assert_eq!(super::volc_resource_history_label("my-secret-tenant"), None);
+        assert_eq!(super::volc_resource_history_label("volc.a b"), None, "空格不在字符集");
+        assert_eq!(super::volc_resource_history_label("volc.引擎"), None, "非 ASCII 拒绝");
+        let too_long = format!("volc.{}", "x".repeat(64));
+        assert_eq!(super::volc_resource_history_label(&too_long), None);
+    }
+
     use super::dictation::abort_recording_with_error;
     use super::dictation::{handle_pressed_edge, handle_released_edge};
     use super::*;

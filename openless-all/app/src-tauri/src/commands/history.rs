@@ -92,10 +92,12 @@ pub async fn retranscribe_recording(
     }
     let pcm = wav[44..].to_vec();
 
-    let text = coord.retranscribe_pcm(pcm).await?;
+    let retranscribe_started = std::time::Instant::now();
+    let (text, asr_call_label) = coord.retranscribe_pcm(pcm).await?;
     if text.trim().is_empty() {
         return Err("重新转录仍未识别到语音".into());
     }
+    let retranscribe_ms = retranscribe_started.elapsed().as_millis() as u64;
 
     // 找到原条目，保留其它字段，只更新转写结果 + 清错误码。
     let mut entry = coord
@@ -105,11 +107,7 @@ pub async fn retranscribe_recording(
         .into_iter()
         .find(|s| s.id == session_id)
         .ok_or_else(|| "history entry not found".to_string())?;
-    // 只更新转写结果并清除失败标记。insert_status 保持原值（重新转录不向光标落字，
-    // 没有可表达「已转写未落字」的状态，清掉 error_code 即足以标记不再是失败条目）。
-    entry.raw_transcript = text.clone();
-    entry.final_text = text;
-    entry.error_code = None;
+    apply_retranscription(&mut entry, text, &asr_call_label, retranscribe_ms);
 
     let updated = coord
         .history()
@@ -119,4 +117,86 @@ pub async fn retranscribe_recording(
         return Err("history entry not found".into());
     }
     Ok(entry)
+}
+
+
+/// 把一次重转录的结果落到既有历史条目上（纯函数，供单测覆盖契约）：
+/// - 只更新转写结果并清除失败标记。insert_status 保持原值——重新转录不向光标落字，
+///   没有可表达「已转写未落字」的状态，清掉 error_code 即足以标记不再是失败条目。
+/// - ASR 归因换成本次重转实际构建的 (provider, model) 快照 + 实测耗时。
+/// - 重转没有润色环节：清掉 llm_* / polish_ms，避免详情页把旧润色信息错挂在新转写上。
+fn apply_retranscription(
+    entry: &mut DictationSession,
+    text: String,
+    asr_call_label: &crate::coordinator::AsrCallLabel,
+    asr_ms: u64,
+) {
+    entry.raw_transcript = text.clone();
+    entry.final_text = text;
+    entry.error_code = None;
+    entry.asr_provider = Some(asr_call_label.provider.clone());
+    entry.asr_model = asr_call_label.model.clone();
+    entry.asr_ms = Some(asr_ms);
+    entry.llm_provider = None;
+    entry.llm_model = None;
+    entry.polish_ms = None;
+}
+
+#[cfg(test)]
+mod retranscribe_tests {
+    use super::apply_retranscription;
+    use crate::coordinator::AsrCallLabel;
+    use crate::types::{DictationSession, InsertStatus, PolishMode};
+
+    fn failed_entry() -> DictationSession {
+        DictationSession {
+            id: "s1".into(),
+            created_at: "2026-07-15T00:00:00Z".into(),
+            raw_transcript: String::new(),
+            final_text: String::new(),
+            mode: PolishMode::Light,
+            style_pack_id: None,
+            translation_active: false,
+            polish_source: None,
+            app_bundle_id: None,
+            app_name: None,
+            insert_status: InsertStatus::Failed,
+            error_code: Some("transcribeFailed".into()),
+            duration_ms: Some(3200),
+            dictionary_entry_count: None,
+            has_audio_recording: Some(true),
+            asr_provider: Some("volcengine".into()),
+            asr_model: Some("volc.seedasr.sauc.duration".into()),
+            llm_provider: Some("ark".into()),
+            llm_model: Some("deepseek-v3-2".into()),
+            asr_ms: Some(15000),
+            polish_ms: Some(1200),
+        }
+    }
+
+    #[test]
+    fn retranscription_overwrites_asr_attribution_and_clears_polish_fields() {
+        let mut entry = failed_entry();
+        let label = AsrCallLabel {
+            provider: "bailian-qwen3-realtime".into(),
+            model: Some("qwen3-asr-flash-realtime".into()),
+        };
+        apply_retranscription(&mut entry, "重转出来的文本".into(), &label, 480);
+
+        assert_eq!(entry.raw_transcript, "重转出来的文本");
+        assert_eq!(entry.final_text, "重转出来的文本");
+        assert_eq!(entry.error_code, None, "重转成功应清除失败标记");
+        // ASR 归因换成本次重转的构建时快照。
+        assert_eq!(entry.asr_provider.as_deref(), Some("bailian-qwen3-realtime"));
+        assert_eq!(entry.asr_model.as_deref(), Some("qwen3-asr-flash-realtime"));
+        assert_eq!(entry.asr_ms, Some(480));
+        // 重转没有润色环节：旧 LLM 元数据不得残留在新转写结果上。
+        assert_eq!(entry.llm_provider, None);
+        assert_eq!(entry.llm_model, None);
+        assert_eq!(entry.polish_ms, None);
+        // 其余字段保持原值。
+        assert_eq!(entry.insert_status, InsertStatus::Failed);
+        assert_eq!(entry.duration_ms, Some(3200));
+        assert_eq!(entry.has_audio_recording, Some(true));
+    }
 }

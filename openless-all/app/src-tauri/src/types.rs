@@ -167,6 +167,26 @@ pub struct DictationSession {
     /// `None` / `Some(false)` 都按"无录音"处理；旧 JSON 不带这字段也兼容。
     #[serde(default)]
     pub has_audio_recording: Option<bool>,
+    /// 本次转写用的 ASR provider id（如 "volcengine" / "local-qwen3"）。历史详情页
+    /// 展示用，方便做模型能力对比。旧历史无此字段时 None，前端隐藏对应行。
+    #[serde(default)]
+    pub asr_provider: Option<String>,
+    /// 本次转写用的 ASR 模型 id。provider 无模型概念（volcengine / apple-speech）时 None。
+    #[serde(default)]
+    pub asr_model: Option<String>,
+    /// 本次润色用的 LLM provider id。Raw 直通（未调用 LLM）时 None。
+    #[serde(default)]
+    pub llm_provider: Option<String>,
+    /// 本次润色用的 LLM 模型 id。Raw 直通时 None。
+    #[serde(default)]
+    pub llm_model: Option<String>,
+    /// 松键后「等待转写结果」的实测耗时（毫秒）。流式 ASR 大部分识别在录音期间已完成，
+    /// 这里量的是用户感知的收尾延迟；批式 ASR 则是完整转写耗时。
+    #[serde(default)]
+    pub asr_ms: Option<u64>,
+    /// LLM 润色/翻译调用的实测耗时（毫秒）。未调用 LLM 时 None。
+    #[serde(default)]
+    pub polish_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -3349,5 +3369,65 @@ mod tests {
                 .unwrap();
 
         assert!(binding.effective_codes().is_empty());
+    }
+
+    /// PR #826：新增的模型/耗时字段必须向后兼容——旧 history.json 完全没有这些 key。
+    #[test]
+    fn dictation_session_deserializes_legacy_json_without_model_fields() {
+        let legacy = r#"{
+            "id": "abc",
+            "createdAt": "2026-07-01T00:00:00Z",
+            "rawTranscript": "你好",
+            "finalText": "你好。",
+            "mode": "light",
+            "appBundleId": null,
+            "appName": null,
+            "insertStatus": "inserted",
+            "errorCode": null,
+            "durationMs": 1200,
+            "dictionaryEntryCount": null
+        }"#;
+        let session: DictationSession = serde_json::from_str(legacy).expect("legacy json");
+        assert_eq!(session.asr_provider, None);
+        assert_eq!(session.asr_model, None);
+        assert_eq!(session.llm_provider, None);
+        assert_eq!(session.llm_model, None);
+        assert_eq!(session.asr_ms, None);
+        assert_eq!(session.polish_ms, None);
+    }
+
+    /// 新字段序列化必须是 camelCase（前端 types.ts 镜像按 camelCase 读）。
+    #[test]
+    fn dictation_session_serializes_model_fields_as_camel_case() {
+        let session = DictationSession {
+            id: "abc".into(),
+            created_at: "2026-07-01T00:00:00Z".into(),
+            raw_transcript: "你好".into(),
+            final_text: "你好。".into(),
+            mode: PolishMode::Light,
+            style_pack_id: None,
+            translation_active: false,
+            polish_source: None,
+            app_bundle_id: None,
+            app_name: None,
+            insert_status: InsertStatus::Inserted,
+            error_code: None,
+            duration_ms: Some(1200),
+            dictionary_entry_count: None,
+            has_audio_recording: None,
+            asr_provider: Some("bailian".into()),
+            asr_model: Some("fun-asr-realtime".into()),
+            llm_provider: Some("ark".into()),
+            llm_model: Some("deepseek-v3-2".into()),
+            asr_ms: Some(230),
+            polish_ms: Some(1450),
+        };
+        let json = serde_json::to_value(&session).expect("serialize");
+        assert_eq!(json["asrProvider"], "bailian");
+        assert_eq!(json["asrModel"], "fun-asr-realtime");
+        assert_eq!(json["llmProvider"], "ark");
+        assert_eq!(json["llmModel"], "deepseek-v3-2");
+        assert_eq!(json["asrMs"], 230);
+        assert_eq!(json["polishMs"], 1450);
     }
 }

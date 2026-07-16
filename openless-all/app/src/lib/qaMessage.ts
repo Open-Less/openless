@@ -38,3 +38,22 @@ export function nextQaSelectionWarning(
   }
   return current;
 }
+
+export function acceptQaSessionEvent(
+  currentSessionId: string | null,
+  payload: Pick<QaStatePayload, 'kind' | 'session_id'>,
+): { accepted: boolean; sessionId: string | null } {
+  if (!payload.session_id) {
+    return { accepted: true, sessionId: currentSessionId };
+  }
+  const startsTurn = payload.kind === 'recording'
+    || payload.kind === 'loading'
+    || payload.kind === 'thinking';
+  if (currentSessionId && !startsTurn && currentSessionId !== payload.session_id) {
+    return { accepted: false, sessionId: currentSessionId };
+  }
+  return {
+    accepted: true,
+    sessionId: !currentSessionId || startsTurn ? payload.session_id : currentSessionId,
+  };
+}

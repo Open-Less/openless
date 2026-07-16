@@ -1,4 +1,4 @@
-import { nextQaSelectionWarning, splitQaUserMessage } from './qaMessage';
+import { acceptQaSessionEvent, nextQaSelectionWarning, splitQaUserMessage } from './qaMessage';
 import type { QaChatMessage, QaStatePayload } from './types';
 
 function assertEqual<T>(actual: T, expected: T, message: string) {
@@ -58,6 +58,17 @@ assertEqual(
   nextQaSelectionWarning(warning, { kind: 'thinking' }),
   warning,
   'a transitional event without a warning preserves the current warning',
+);
+
+assertEqual(
+  acceptQaSessionEvent('new-session', { kind: 'answer_delta', session_id: 'old-session' }).accepted,
+  false,
+  'a late delta from an invalidated session is rejected',
+);
+assertEqual(
+  acceptQaSessionEvent('old-session', { kind: 'recording', session_id: 'new-session' }).sessionId,
+  'new-session',
+  'a recording event activates the next turn token',
 );
 
 console.log('qaMessage.test.ts passed');

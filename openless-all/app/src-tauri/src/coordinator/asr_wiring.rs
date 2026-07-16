@@ -277,9 +277,11 @@ pub(super) fn schedule_sherpa_onnx_release(inner: &Arc<Inner>, session: AsrRelea
 }
 
 #[cfg(target_os = "macos")]
+/// 返回 (provider, 实际加载的模型 id)。模型 id 是 ModelId 校验归一后的值，调用方
+/// 直接用它做历史归因（构建时快照，PR #826 review）。
 pub(super) async fn build_local_qwen3(
     inner: &Arc<Inner>,
-) -> anyhow::Result<Arc<crate::asr::local::LocalQwenAsr>> {
+) -> anyhow::Result<(Arc<crate::asr::local::LocalQwenAsr>, String)> {
     let prefs = inner.prefs.get();
     let model_id = crate::asr::local::ModelId::from_str(&prefs.local_asr_active_model)
         .ok_or_else(|| anyhow::anyhow!("未知本地模型 id: {}", prefs.local_asr_active_model))?;
@@ -298,7 +300,11 @@ pub(super) async fn build_local_qwen3(
         .map_err(|e| anyhow::anyhow!("spawn_blocking join failed: {e:#}"))??;
     // 加载完成（含缓存命中刷新 last_used）后推一次状态，前端零轮询更新「已加载」。
     emit_local_asr_engine_status(inner);
-    Ok(Arc::new(crate::asr::local::LocalQwenAsr::new(app, engine)))
+    let model_label = model_id.as_str().to_string();
+    Ok((
+        Arc::new(crate::asr::local::LocalQwenAsr::new(app, engine)),
+        model_label,
+    ))
 }
 
 #[cfg(target_os = "macos")]
@@ -461,7 +467,12 @@ impl QaAsrStart {
     }
 }
 
-pub(super) async fn build_qa_asr_start(inner: &Arc<Inner>, active_asr: &str) -> Result<QaAsrStart, String> {
+/// 返回 (启动器, 构建时 (provider, model) 快照)。快照供 QA / 重转录把「实际用了哪个
+/// 模型」写回历史（PR #826 review：归因必须来自构建现场，不能事后重读设置）。
+pub(super) async fn build_qa_asr_start(
+    inner: &Arc<Inner>,
+    active_asr: &str,
+) -> Result<(QaAsrStart, AsrCallLabel), String> {
     #[cfg(target_os = "windows")]
     if foundry::is_foundry_local_whisper(active_asr) {
         let prefs = inner.prefs.get();
@@ -478,13 +489,14 @@ pub(super) async fn build_qa_asr_start(inner: &Arc<Inner>, active_asr: &str) -> 
         };
         let local = Arc::new(FoundryLocalWhisperAsr::new(
             Arc::clone(&inner.foundry_local_runtime),
-            model_alias,
+            model_alias.clone(),
             prefs.foundry_local_runtime_source.clone(),
             language_hint,
         ));
         let active = ActiveAsr::FoundryLocalWhisper(Arc::clone(&local));
         let consumer: Arc<dyn crate::recorder::AudioConsumer> = local;
-        return Ok(QaAsrStart::Ready { active, consumer });
+        let label = AsrCallLabel::new(foundry::PROVIDER_ID, Some(model_alias));
+        return Ok((QaAsrStart::Ready { active, consumer }, label));
     }
 
     #[cfg(target_os = "windows")]
@@ -510,7 +522,7 @@ pub(super) async fn build_qa_asr_start(inner: &Arc<Inner>, active_asr: &str) -> 
         });
         let local = SherpaOnnxAsr::new_for_model(
             Arc::clone(&inner.sherpa_onnx_runtime),
-            model_alias,
+            model_alias.clone(),
             language_hint,
             token_handler,
         )
@@ -519,17 +531,19 @@ pub(super) async fn build_qa_asr_start(inner: &Arc<Inner>, active_asr: &str) -> 
         let local = Arc::new(local);
         let active = ActiveAsr::SherpaOnnxLocal(Arc::clone(&local));
         let consumer: Arc<dyn crate::recorder::AudioConsumer> = local;
-        return Ok(QaAsrStart::Ready { active, consumer });
+        let label = AsrCallLabel::new(sherpa::PROVIDER_ID, Some(model_alias));
+        return Ok((QaAsrStart::Ready { active, consumer }, label));
     }
 
     #[cfg(target_os = "macos")]
     if crate::asr::local::is_local_qwen3(active_asr) {
-        let local = build_local_qwen3(inner)
+        let (local, model) = build_local_qwen3(inner)
             .await
             .map_err(|e| format!("local ASR init failed: {e}"))?;
         let active = ActiveAsr::Local(Arc::clone(&local));
         let consumer: Arc<dyn crate::recorder::AudioConsumer> = local;
-        return Ok(QaAsrStart::Ready { active, consumer });
+        let label = AsrCallLabel::new(crate::asr::local::PROVIDER_ID, Some(model));
+        return Ok((QaAsrStart::Ready { active, consumer }, label));
     }
 
     #[cfg(target_os = "macos")]
@@ -537,7 +551,8 @@ pub(super) async fn build_qa_asr_start(inner: &Arc<Inner>, active_asr: &str) -> 
         let local = build_apple_speech(&inner.prefs.get());
         let active = ActiveAsr::AppleSpeech(Arc::clone(&local));
         let consumer: Arc<dyn crate::recorder::AudioConsumer> = local;
-        return Ok(QaAsrStart::Ready { active, consumer });
+        let label = AsrCallLabel::new(crate::asr::local::APPLE_SPEECH_PROVIDER_ID, None);
+        return Ok((QaAsrStart::Ready { active, consumer }, label));
     }
 
     // 统一百炼:按所选模型把 build 分发重定向到具体协议（凭据仍读真实 active
@@ -548,37 +563,55 @@ pub(super) async fn build_qa_asr_start(inner: &Arc<Inner>, active_asr: &str) -> 
         .unwrap_or_default();
     let effective_asr = resolve_effective_asr_provider(active_asr, &asr_model)?;
     match active_asr_provider_kind(&effective_asr) {
-        ActiveAsrProviderKind::Bailian => Ok(QaAsrStart::Bailian {
-            asr: Arc::new(BailianRealtimeASR::new(read_bailian_credentials())),
-            bridge: Arc::new(DeferredAsrBridge::new()),
-        }),
-        ActiveAsrProviderKind::Qwen3Realtime => Ok(QaAsrStart::Qwen3Realtime {
-            asr: Arc::new(Qwen3RealtimeASR::new(read_qwen3_realtime_credentials())),
-            bridge: Arc::new(DeferredAsrBridge::new()),
-        }),
+        ActiveAsrProviderKind::Bailian => {
+            let creds = read_bailian_credentials();
+            let label = AsrCallLabel::new(effective_asr.clone(), Some(creds.model.clone()));
+            Ok((
+                QaAsrStart::Bailian {
+                    asr: Arc::new(BailianRealtimeASR::new(creds)),
+                    bridge: Arc::new(DeferredAsrBridge::new()),
+                },
+                label,
+            ))
+        }
+        ActiveAsrProviderKind::Qwen3Realtime => {
+            let creds = read_qwen3_realtime_credentials();
+            let label = AsrCallLabel::new(effective_asr.clone(), Some(creds.model.clone()));
+            Ok((
+                QaAsrStart::Qwen3Realtime {
+                    asr: Arc::new(Qwen3RealtimeASR::new(creds)),
+                    bridge: Arc::new(DeferredAsrBridge::new()),
+                },
+                label,
+            ))
+        }
         ActiveAsrProviderKind::Mimo => {
             let (api_key, base_url, model) = read_mimo_credentials();
+            let label = AsrCallLabel::new(effective_asr.clone(), Some(model.clone()));
             let mimo = Arc::new(MimoBatchASR::new(api_key, base_url, model));
             let active = ActiveAsr::Mimo(Arc::clone(&mimo));
             let consumer: Arc<dyn crate::recorder::AudioConsumer> = mimo;
-            Ok(QaAsrStart::Ready { active, consumer })
+            Ok((QaAsrStart::Ready { active, consumer }, label))
         }
         ActiveAsrProviderKind::DashScopeMultimodal => {
             let (api_key, base_url, model) = read_dashscope_multimodal_credentials();
+            let label = AsrCallLabel::new(effective_asr.clone(), Some(model.clone()));
             let asr = Arc::new(DashScopeMultimodalASR::new(api_key, base_url, model));
             let active = ActiveAsr::DashScopeMultimodal(Arc::clone(&asr));
             let consumer: Arc<dyn crate::recorder::AudioConsumer> = asr;
-            Ok(QaAsrStart::Ready { active, consumer })
+            Ok((QaAsrStart::Ready { active, consumer }, label))
         }
         ActiveAsrProviderKind::ElevenLabs => {
             let (api_key, base_url, model) = read_elevenlabs_credentials();
+            let label = AsrCallLabel::new(effective_asr.clone(), Some(model.clone()));
             let asr = Arc::new(ElevenLabsBatchASR::new(api_key, base_url, model));
             let active = ActiveAsr::ElevenLabs(Arc::clone(&asr));
             let consumer: Arc<dyn crate::recorder::AudioConsumer> = asr;
-            Ok(QaAsrStart::Ready { active, consumer })
+            Ok((QaAsrStart::Ready { active, consumer }, label))
         }
         ActiveAsrProviderKind::WhisperCompatible => {
             let (api_key, base_url, model) = read_whisper_credentials();
+            let label = AsrCallLabel::new(effective_asr.clone(), Some(model.clone()));
             let whisper_prompt =
                 crate::asr::whisper::build_prompt_from_phrases(&enabled_phrases(inner));
             let whisper = Arc::new(
@@ -594,14 +627,21 @@ pub(super) async fn build_qa_asr_start(inner: &Arc<Inner>, active_asr: &str) -> 
             );
             let active = ActiveAsr::Whisper(Arc::clone(&whisper));
             let consumer: Arc<dyn crate::recorder::AudioConsumer> = whisper;
-            Ok(QaAsrStart::Ready { active, consumer })
+            Ok((QaAsrStart::Ready { active, consumer }, label))
         }
-        ActiveAsrProviderKind::Volcengine => Ok(QaAsrStart::Volcengine {
-            asr: Arc::new(VolcengineStreamingASR::new(
-                read_volc_credentials(),
-                enabled_hotwords(inner),
-            )),
-            bridge: Arc::new(DeferredAsrBridge::new()),
-        }),
+        ActiveAsrProviderKind::Volcengine => {
+            let creds = read_volc_credentials();
+            let label = AsrCallLabel::new(
+                effective_asr.clone(),
+                volc_resource_history_label(&creds.resource_id),
+            );
+            Ok((
+                QaAsrStart::Volcengine {
+                    asr: Arc::new(VolcengineStreamingASR::new(creds, enabled_hotwords(inner))),
+                    bridge: Arc::new(DeferredAsrBridge::new()),
+                },
+                label,
+            ))
+        }
     }
 }

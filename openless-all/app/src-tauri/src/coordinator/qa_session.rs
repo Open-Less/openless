@@ -71,12 +71,35 @@ fn qa_provider_should_cancel(
     cancel_requested || state.session_id != session_id
 }
 
-fn finish_qa_with_error_if_current(inner: &Arc<Inner>, session_id: SessionId, message: String) {
-    if qa_session_can_continue(&inner.qa_state.lock(), session_id) {
-        finish_qa_with_error(inner, message);
-    } else {
+pub(super) fn finish_qa_with_error_if_current(
+    inner: &Arc<Inner>,
+    session_id: SessionId,
+    message: String,
+) {
+    let mut state = inner.qa_state.lock();
+    if !qa_session_can_continue(&state, session_id) {
         log::info!("[coord] discarded error from invalidated QA session");
+        return;
     }
+    state.phase = QaPhase::Idle;
+    state.cancelled = false;
+    let messages = state.messages.clone();
+    stop_qa_recorder_for_session(inner, session_id);
+    cancel_qa_asr_for_session(inner, session_id);
+    if let Some(app) = inner.app.lock().clone() {
+        let _ = app.emit_to(
+            qa_event_target(),
+            "qa:state",
+            serde_json::json!({
+                "kind": "error",
+                "session_id": session_id,
+                "error": message,
+                "messages": messages,
+            }),
+        );
+    }
+    emit_capsule(inner, CapsuleState::Error, 0.0, 0, Some(message), None);
+    schedule_capsule_idle(inner, 1500);
 }
 
 /// 每轮 QA 都重新捕获选区。Windows 上 QA WebView 已持有焦点，需先临时还给
@@ -135,6 +158,7 @@ pub(super) async fn finalize_dictation_as_qa_question(inner: &Arc<Inner>) -> Res
             "qa:state",
             serde_json::json!({
                 "kind": "loading",
+                "session_id": session_id,
                 "selection_preview": selection_preview_text,
                 "selection_warning": selection_warning,
                 "messages": messages,
@@ -151,7 +175,7 @@ pub(super) async fn finalize_dictation_as_qa_question(inner: &Arc<Inner>) -> Res
         Ok(Some(raw)) => raw,
         Ok(None) => {
             log::info!("[coord] QA finalize from overlay: no transcript produced");
-            finish_qa_idle_silently(inner);
+            finish_qa_idle_silently_if_current(inner, session_id);
             return Ok(());
         }
         Err(error) => {
@@ -224,6 +248,7 @@ pub(super) async fn submit_qa_text_question(
             "qa:state",
             serde_json::json!({
                 "kind": "thinking",
+                "session_id": session_id,
                 "selection_preview": selection_preview_text,
                 "selection_warning": selection_warning,
                 "messages": messages,
@@ -282,7 +307,7 @@ pub(super) async fn take_current_dictation_transcript_for_qa(
                 }
             }
             if qa_turn_can_continue(&inner.qa_state.lock(), qa_session_id) {
-                finish_qa_idle_silently(inner);
+                finish_qa_idle_silently_if_current(inner, qa_session_id);
             }
             return Ok(None);
         }
@@ -310,7 +335,7 @@ pub(super) async fn take_current_dictation_transcript_for_qa(
         restore_prepared_windows_ime_session(inner, current_session_id);
         set_phase_idle_if_session_matches(inner, current_session_id);
         if qa_turn_can_continue(&inner.qa_state.lock(), qa_session_id) {
-            finish_qa_idle_silently(inner);
+            finish_qa_idle_silently_if_current(inner, qa_session_id);
         }
         return Ok(None);
     }
@@ -542,7 +567,7 @@ pub(super) async fn answer_qa_question_text(
     }
     if question.trim().is_empty() {
         if qa_turn_can_continue(&inner.qa_state.lock(), session_id) {
-            finish_qa_idle_silently(inner);
+            finish_qa_idle_silently_if_current(inner, session_id);
         }
         return Ok(());
     }
@@ -557,16 +582,23 @@ pub(super) async fn answer_qa_question_text(
         state.messages.push(user_message);
     }
 
-    if let Some(app) = inner.app.lock().clone() {
-        let messages = inner.qa_state.lock().messages.clone();
-        let _ = app.emit_to(
-            qa_event_target(),
-            "qa:state",
-            serde_json::json!({
-                "kind": "thinking",
-                "messages": messages,
-            }),
-        );
+    {
+        let state = inner.qa_state.lock();
+        if !qa_turn_can_continue(&state, session_id) {
+            return Ok(());
+        }
+        let messages = state.messages.clone();
+        if let Some(app) = inner.app.lock().clone() {
+            let _ = app.emit_to(
+                qa_event_target(),
+                "qa:state",
+                serde_json::json!({
+                    "kind": "thinking",
+                    "session_id": session_id,
+                    "messages": messages,
+                }),
+            );
+        }
     }
 
     emit_capsule(inner, CapsuleState::Polishing, 0.0, 0, None, None);
@@ -588,8 +620,8 @@ pub(super) async fn answer_qa_question_text(
     let captured_session_id = session_id;
     let inner_for_delta = Arc::clone(inner);
     let on_delta = move |chunk: &str| {
-        let cur_id = inner_for_delta.qa_state.lock().session_id;
-        if cur_id != captured_session_id {
+        let state = inner_for_delta.qa_state.lock();
+        if !qa_turn_can_continue(&state, captured_session_id) {
             return;
         }
         if let Some(app) = inner_for_delta.app.lock().clone() {
@@ -598,6 +630,7 @@ pub(super) async fn answer_qa_question_text(
                 "qa:state",
                 serde_json::json!({
                     "kind": "answer_delta",
+                    "session_id": captured_session_id,
                     "chunk": chunk,
                 }),
             );
@@ -641,16 +674,7 @@ pub(super) async fn answer_qa_question_text(
         }
     };
 
-    let turn_still_current = {
-        let state = inner.qa_state.lock();
-        qa_turn_can_continue(&state, session_id)
-    };
-    if !turn_still_current {
-        log::info!("[coord] QA turn invalidated before answer commit");
-        return Ok(());
-    }
-
-    let messages = {
+    {
         let mut state = inner.qa_state.lock();
         if !qa_turn_can_continue(&state, session_id) {
             log::info!("[coord] QA turn invalidated while committing answer");
@@ -661,27 +685,23 @@ pub(super) async fn answer_qa_question_text(
             content: answer.clone(),
             selection_text: None,
         });
-        state.messages.clone()
-    };
-
-    if let Some(app) = inner.app.lock().clone() {
-        let _ = app.emit_to(
-            qa_event_target(),
-            "qa:state",
-            serde_json::json!({
-                "kind": "answer",
-                "messages": messages,
-            }),
-        );
+        complete_qa_turn_state(&mut state);
+        let messages = state.messages.clone();
+        if let Some(app) = inner.app.lock().clone() {
+            let _ = app.emit_to(
+                qa_event_target(),
+                "qa:state",
+                serde_json::json!({
+                    "kind": "answer",
+                    "session_id": session_id,
+                    "messages": messages,
+                }),
+            );
+        }
+        emit_capsule(inner, CapsuleState::Idle, 0.0, 0, None, None);
     }
 
-    emit_capsule(inner, CapsuleState::Idle, 0.0, 0, None, None);
-
-    let turn_still_current = {
-        let state = inner.qa_state.lock();
-        qa_turn_can_continue(&state, session_id)
-    };
-    if prefs.qa_save_history && turn_still_current {
+    if prefs.qa_save_history {
         let session = DictationSession {
             id: Uuid::new_v4().to_string(),
             created_at: Utc::now().to_rfc3339(),
@@ -698,6 +718,12 @@ pub(super) async fn answer_qa_question_text(
             duration_ms: Some(duration_ms),
             dictionary_entry_count: None,
             has_audio_recording: None,
+            asr_provider: None,
+            asr_model: None,
+            llm_provider: None,
+            llm_model: None,
+            asr_ms: None,
+            polish_ms: None,
         };
         let prefs_snapshot = inner.prefs.get();
         if let Err(error) = inner.history.append_with_retention(
@@ -709,10 +735,6 @@ pub(super) async fn answer_qa_question_text(
         }
     }
 
-    let mut state = inner.qa_state.lock();
-    if qa_turn_can_continue(&state, session_id) {
-        complete_qa_turn_state(&mut state);
-    }
     Ok(())
 }
 
@@ -763,6 +785,7 @@ pub(super) async fn begin_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
             "qa:state",
             serde_json::json!({
                 "kind": "recording",
+                "session_id": session_id,
                 "selection_preview": selection_preview_text,
                 "selection_warning": selection_warning,
                 "messages": messages,
@@ -785,8 +808,9 @@ pub(super) async fn begin_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
         return Err(message);
     }
 
+    // QA 历史暂不落模型归因字段，构建时快照就地丢弃（dictation / 重转录路径在用）。
     let qa_asr = match build_qa_asr_start(inner, &active_asr).await {
-        Ok(qa_asr) => qa_asr,
+        Ok((qa_asr, _asr_call_label)) => qa_asr,
         Err(message) => {
             log::error!("[coord] QA active ASR init failed: {message}");
             finish_qa_with_error_if_current(
@@ -797,12 +821,16 @@ pub(super) async fn begin_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
             return Err(message);
         }
     };
-    if !qa_recording_can_continue(&inner.qa_state.lock(), session_id) {
-        log::info!("[coord] QA recording invalidated during ASR initialization");
-        return Ok(());
-    }
-    let consumer = qa_asr.recorder_consumer();
-    *inner.qa_asr.lock() = Some(qa_asr.active_asr());
+    let consumer = {
+        let state = inner.qa_state.lock();
+        if !qa_recording_can_continue(&state, session_id) {
+            log::info!("[coord] QA recording invalidated during ASR initialization");
+            return Ok(());
+        }
+        let consumer = qa_asr.recorder_consumer();
+        store_qa_asr_for_session(inner, session_id, qa_asr.active_asr());
+        consumer
+    };
 
     // QA recorder 不需要 RMS 节流到胶囊；前端 QA 浮窗有自己的电平视图，
     // Android 的 QA 面板嵌在 main WebView；桌面端仍发给独立 qa 窗口。
@@ -848,9 +876,7 @@ pub(super) async fn begin_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
     acquire_recording_mute(inner, "qa").await;
     if !qa_recording_can_continue(&inner.qa_state.lock(), session_id) {
         log::info!("[coord] QA recording invalidated before recorder start");
-        if let Some(asr) = inner.qa_asr.lock().take() {
-            cancel_active_asr(asr);
-        }
+        cancel_qa_asr_for_session(inner, session_id);
         release_recording_mute(inner, "qa");
         return Ok(());
     }
@@ -862,9 +888,7 @@ pub(super) async fn begin_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
             if !qa_recording_can_continue(&state, session_id) {
                 drop(state);
                 drop(rec);
-                if let Some(asr) = inner.qa_asr.lock().take() {
-                    cancel_active_asr(asr);
-                }
+                cancel_qa_asr_for_session(inner, session_id);
                 release_recording_mute(inner, "qa");
                 log::info!("[coord] discarded recorder from invalidated QA session");
                 return Ok(());
@@ -874,17 +898,15 @@ pub(super) async fn begin_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
             inner
                 .audio_archive_active
                 .store(archive_active, std::sync::atomic::Ordering::Relaxed);
-            *inner.qa_recorder.lock() = Some(rec);
+            store_qa_recorder_for_session(inner, session_id, rec);
             drop(state);
             // QA 也跟主听写一样监听 cpal runtime error。设备中途消失 / panic 时
             // 不能让 QA 永远卡在 Recording 没反馈。详见 issue #168。
-            spawn_qa_recorder_error_monitor(inner, runtime_errors);
+            spawn_qa_recorder_error_monitor(inner, session_id, runtime_errors);
         }
         Err(e) => {
             log::error!("[coord] QA recorder start failed: {e}");
-            if let Some(asr) = inner.qa_asr.lock().take() {
-                cancel_active_asr(asr);
-            }
+            cancel_qa_asr_for_session(inner, session_id);
             release_recording_mute(inner, "qa");
             finish_qa_with_error_if_current(inner, session_id, format!("录音启动失败: {e}"));
             return Err(e.to_string());
@@ -894,17 +916,13 @@ pub(super) async fn begin_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
     if let Err(e) = qa_asr.open_streaming_session().await {
         if !qa_recording_can_continue(&inner.qa_state.lock(), session_id) {
             log::info!("[coord] discarded ASR error from invalidated QA session");
-            stop_qa_recorder(inner);
-            if let Some(asr) = inner.qa_asr.lock().take() {
-                cancel_active_asr(asr);
-            }
+            stop_qa_recorder_for_session(inner, session_id);
+            cancel_qa_asr_for_session(inner, session_id);
             return Ok(());
         }
         log::error!("[coord] QA: open ASR session failed: {e}");
-        stop_qa_recorder(inner);
-        if let Some(asr) = inner.qa_asr.lock().take() {
-            cancel_active_asr(asr);
-        }
+        stop_qa_recorder_for_session(inner, session_id);
+        cancel_qa_asr_for_session(inner, session_id);
         finish_qa_with_error_if_current(inner, session_id, format!("ASR 连接失败: {e}"));
         return Err(e);
     }
@@ -912,10 +930,8 @@ pub(super) async fn begin_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
     // cancel race：在 await 期间用户可能 dismiss 了浮窗。
     if !qa_recording_can_continue(&inner.qa_state.lock(), session_id) {
         log::info!("[coord] QA cancel raced during open_session — aborting begin");
-        if let Some(asr) = inner.qa_asr.lock().take() {
-            cancel_active_asr(asr);
-        }
-        stop_qa_recorder(inner);
+        cancel_qa_asr_for_session(inner, session_id);
+        stop_qa_recorder_for_session(inner, session_id);
         return Ok(());
     }
 
@@ -947,13 +963,13 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
         let _ = app.emit_to(
             qa_event_target(),
             "qa:state",
-            serde_json::json!({ "kind": "loading" }),
+            serde_json::json!({ "kind": "loading", "session_id": session_id }),
         );
     }
 
-    stop_qa_recorder(inner);
+    stop_qa_recorder_for_session(inner, session_id);
 
-    let asr = match inner.qa_asr.lock().take() {
+    let asr = match take_qa_asr_for_session(inner, session_id) {
         Some(a) => a,
         None => {
             inner.qa_state.lock().phase = QaPhase::Idle;
@@ -1124,11 +1140,9 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
                         return Err("elevenlabs dynamic timeout".to_string());
                     }
                 },
-                _ = wait_for_qa_processing_cancel(inner) => {
+                _ = wait_for_qa_processing_cancel(inner, session_id) => {
                     e.cancel();
-                    if qa_session_is_active(&inner.qa_state.lock(), session_id) {
-                        finish_qa_idle_silently(inner);
-                    }
+                    finish_qa_idle_silently_if_current(inner, session_id);
                     return Ok(());
                 }
             }
@@ -1155,7 +1169,7 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
                             "[coord] QA Foundry Local Whisper transcribe cancelled — discarding transcript"
                         );
                         if qa_session_is_active(&inner.qa_state.lock(), session_id) {
-                            finish_qa_idle_silently(inner);
+                            finish_qa_idle_silently_if_current(inner, session_id);
                         }
                         return Ok(());
                     }
@@ -1191,7 +1205,7 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
                             "[coord] QA sherpa-onnx transcribe cancelled — discarding transcript"
                         );
                         if qa_session_is_active(&inner.qa_state.lock(), session_id) {
-                            finish_qa_idle_silently(inner);
+                            finish_qa_idle_silently_if_current(inner, session_id);
                         }
                         return Ok(());
                     }
@@ -1273,59 +1287,39 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
     if question.is_empty() {
         // 静默录音：不调 LLM，不弹错误，直接关浮窗。
         log::info!("[coord] QA: empty transcript → silent dismiss");
-        finish_qa_idle_silently(inner);
+        finish_qa_idle_silently_if_current(inner, session_id);
         return Ok(());
     }
 
     answer_qa_question_text(inner, question, raw.duration_ms, session_id).await
 }
 
-/// 把出错状态送到前端浮窗 + 胶囊错误闪一下 + 复位 phase。
-/// 浮窗保持可见（v2：错误后用户可以再按 Option 重试）；messages 一并送过去
-/// 让前端继续渲染历史对话。
-pub(super) fn finish_qa_with_error(inner: &Arc<Inner>, message: String) {
-    stop_qa_recorder(inner);
-    if let Some(app) = inner.app.lock().clone() {
-        let messages = inner.qa_state.lock().messages.clone();
-        let _ = app.emit_to(
-            qa_event_target(),
-            "qa:state",
-            serde_json::json!({
-                "kind": "error",
-                "error": message,
-                "messages": messages,
-            }),
-        );
-    }
-    emit_capsule(inner, CapsuleState::Error, 0.0, 0, Some(message), None);
-    schedule_capsule_idle(inner, 1500);
-    let mut state = inner.qa_state.lock();
-    state.phase = QaPhase::Idle;
-    state.cancelled = false;
-}
-
 /// 静默收尾：发 idle 事件给前端，phase 复位。**不关浮窗**（v2：浮窗只在用户
 /// Esc/X 或再按 QA hotkey 时才关）；多轮对话历史保留。胶囊也即刻收掉。
-pub(super) fn finish_qa_idle_silently(inner: &Arc<Inner>) {
+pub(super) fn finish_qa_idle_silently_if_current(inner: &Arc<Inner>, session_id: SessionId) {
+    let mut state = inner.qa_state.lock();
+    if !qa_session_is_active(&state, session_id) {
+        return;
+    }
+    complete_qa_turn_state(&mut state);
+    let messages = state.messages.clone();
     if let Some(app) = inner.app.lock().clone() {
-        let messages = inner.qa_state.lock().messages.clone();
         let _ = app.emit_to(
             qa_event_target(),
             "qa:state",
             serde_json::json!({
                 "kind": "idle",
+                "session_id": session_id,
                 "messages": messages,
             }),
         );
     }
     emit_capsule(inner, CapsuleState::Idle, 0.0, 0, None, None);
-    let mut state = inner.qa_state.lock();
-    complete_qa_turn_state(&mut state);
 }
 
-async fn wait_for_qa_processing_cancel(inner: &Arc<Inner>) {
+async fn wait_for_qa_processing_cancel(inner: &Arc<Inner>, session_id: SessionId) {
     loop {
-        if inner.qa_state.lock().cancelled {
+        if !qa_turn_can_continue(&inner.qa_state.lock(), session_id) {
             return;
         }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -1345,7 +1339,10 @@ async fn wait_for_overlay_dictation_cancel(inner: &Arc<Inner>, session_id: Sessi
 }
 
 pub(super) fn cancel_qa_session(inner: &Arc<Inner>) {
-    let phase = inner.qa_state.lock().phase;
+    let (phase, session_id) = {
+        let state = inner.qa_state.lock();
+        (state.phase, state.session_id)
+    };
     if phase == QaPhase::Idle {
         return;
     }
@@ -1354,10 +1351,8 @@ pub(super) fn cancel_qa_session(inner: &Arc<Inner>) {
     // 这个 flag，true 时立即 break 不再 drain HTTP body，避免取消后 LLM 仍烧 token。
     // 详见 issue #161。
     inner.qa_stream_cancelled.store(true, Ordering::SeqCst);
-    stop_qa_recorder(inner);
-    if let Some(asr) = inner.qa_asr.lock().take() {
-        cancel_active_asr(asr);
-    }
+    stop_qa_recorder_for_session(inner, session_id);
+    cancel_qa_asr_for_session(inner, session_id);
     // Processing 阶段保持 phase 让 end_qa_session 自然走完 cancel 检查；
     // 否则直接复位。
     if phase != QaPhase::Processing {
@@ -1607,6 +1602,7 @@ mod tests {
             &coordinator.inner,
             session_id,
             ActiveAsr::ElevenLabs(asr),
+            crate::coordinator::AsrCallLabel::new("elevenlabs", Some("scribe_v2".into())),
         );
 
         let transcribe = tokio::spawn({

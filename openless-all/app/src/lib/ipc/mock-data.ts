@@ -456,6 +456,24 @@ export const mockHistory: DictationSession[] = OL_DATA.history.map((h, i) => ({
     durationMs: 600,
     dictionaryEntryCount: 28,
     hasAudioRecording: null,
+    // 轮换三种画像，覆盖 UI 验收要看的形态：亚秒流式收尾（毫秒精度）、volc resource id、
+    // 超长 provider/model 文本换行；i%4==3 模拟 Raw 直通（无 LLM 行）与旧条目缺耗时。
+    asrProvider: ["bailian-qwen3-realtime", "volcengine", "openrouter", "apple-speech"][i % 4],
+    asrModel: [
+        "qwen3-asr-flash-realtime",
+        "volc.seedasr.sauc.duration",
+        "openai/whisper-large-v3-turbo-preview-2026-01-31",
+        null,
+    ][i % 4],
+    llmProvider: ["ark", "codex_oauth", "openrouter", null][i % 4],
+    llmModel: [
+        "deepseek-v3-2",
+        "gpt-5.5-codex-spark",
+        "anthropic/claude-sonnet-5-20260203-preview-long-context",
+        null,
+    ][i % 4],
+    asrMs: [120, 64, 9840, null][i % 4],
+    polishMs: [1240, 890, 12400, null][i % 4],
 }))
 
 export const mockVocab: DictionaryEntry[] = OL_DATA.vocab.map((v, i) => ({

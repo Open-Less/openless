@@ -105,7 +105,32 @@ pub enum ActiveLLMProvider {
     Codex(CodexOAuthLLMProvider),
 }
 
+/// 一次 LLM 调用的构建时快照（provider id + 归一化后的模型 id）。polish 链路在
+/// **成功构建 provider、即将发起真实调用**时填充；凭据缺失等 preflight 失败不填，
+/// 调用方据此决定要不要把 llm_* / polish_ms 落进历史——避免"没调用却记了模型"的
+/// 伪数据（PR #826 review）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LlmCallLabel {
+    pub provider: String,
+    pub model: String,
+}
+
 impl ActiveLLMProvider {
+    /// 构建时快照：从已构建的 config 读 provider/model（Codex 的 model 已经过
+    /// normalize_codex_model 归一化），而不是事后重读全局设置。
+    pub fn call_label(&self) -> LlmCallLabel {
+        match self {
+            Self::OpenAI(p) => LlmCallLabel {
+                provider: p.config.provider_id.clone(),
+                model: p.config.model.clone(),
+            },
+            Self::Codex(p) => LlmCallLabel {
+                provider: CODEX_OAUTH_PROVIDER_ID.to_string(),
+                model: p.config.model.clone(),
+            },
+        }
+    }
+
     /// v1 流式润色只在 OpenAI-compatible 走通；Codex 走 Responses API，shape 与
     /// chat completions SSE 不同，留给 v2。Gemini 在 coordinator.rs 路径上自己分流，
     /// 不进 ActiveLLMProvider 枚举。

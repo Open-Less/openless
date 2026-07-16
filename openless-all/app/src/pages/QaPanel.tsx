@@ -77,7 +77,7 @@ import {
   qaToggleRecording,
   qaWindowDismiss,
 } from '../lib/ipc';
-import { nextQaSelectionWarning, splitQaUserMessage } from '../lib/qaMessage';
+import { acceptQaSessionEvent, nextQaSelectionWarning, splitQaUserMessage } from '../lib/qaMessage';
 import type { QaChatMessage, QaStatePayload } from '../lib/types';
 import '../components/chat/chat.css';
 
@@ -130,6 +130,7 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
   const [composerText, setComposerText] = useState<string>('');
   /** 流式 LLM 答案：answer_delta 累积、answer 事件来时清空（最终内容已落到 messages）。 */
   const [streamingAnswer, setStreamingAnswer] = useState<string>('');
+  const activeSessionIdRef = useRef<string | null>(null);
   const { enterEpoch, closing } = useChatPanelLifecycle();
   const tRef = useRef(t);
   tRef.current = t;
@@ -153,6 +154,11 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
         const { listen } = await import('@tauri-apps/api/event');
         const stateHandle = await listen<QaStatePayload>('qa:state', event => {
           const payload = event.payload;
+          const sessionEvent = acceptQaSessionEvent(activeSessionIdRef.current, payload);
+          if (!sessionEvent.accepted) {
+            return;
+          }
+          activeSessionIdRef.current = sessionEvent.sessionId;
           if (payload.messages) {
             setMessages(payload.messages);
           }
@@ -208,6 +214,7 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
           }
         });
         const dismissHandle = await listen<unknown>('qa:dismiss', () => {
+          activeSessionIdRef.current = null;
           setSelectionPreview('');
           setSelectionWarning('');
           setComposerText('');
