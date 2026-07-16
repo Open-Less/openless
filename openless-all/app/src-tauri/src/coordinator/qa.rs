@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use tauri::Emitter;
 
-use crate::coordinator_state::{initial_session_id, SessionId, SessionPhase};
+use crate::coordinator_state::{initial_session_id, new_session_id, SessionId, SessionPhase};
 use crate::selection::SelectionContext;
 use crate::types::CapsuleState;
 
@@ -128,6 +128,8 @@ pub(super) fn close_qa_panel(inner: &Arc<Inner>) {
         state.qa_focus_target = None;
         state.phase = QaPhase::Idle;
         state.cancelled = false;
+        // 让仍在阻塞选区捕获或 provider await 中的旧任务无法在关闭后写回状态。
+        state.session_id = new_session_id();
     }
     if let Some(app) = inner.app.lock().clone() {
         crate::hide_qa_window(&app);

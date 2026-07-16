@@ -47,6 +47,13 @@ fn complete_qa_turn_state(state: &mut QaSessionState) {
     state.selection = None;
 }
 
+fn qa_turn_can_continue(state: &QaSessionState, session_id: SessionId) -> bool {
+    state.panel_visible
+        && state.phase == QaPhase::Processing
+        && !state.cancelled
+        && state.session_id == session_id
+}
+
 /// 每轮 QA 都重新捕获选区。Windows 上 QA WebView 已持有焦点，需先临时还给
 /// 用户原窗口，捕获后再恢复 QA；Linux 的 primary selection 不依赖当前焦点。
 fn capture_qa_turn_selection(inner: &Arc<Inner>) -> crate::selection::SelectionCaptureOutcome {
@@ -85,14 +92,15 @@ pub(super) async fn finalize_dictation_as_qa_question(inner: &Arc<Inner>) -> Res
 
     log::info!("[coord] QA finalize from overlay: opening panel and waiting for ASR result");
     open_qa_panel(inner);
-    {
+    let session_id = {
         let mut state = inner.qa_state.lock();
         state.phase = QaPhase::Processing;
         state.cancelled = false;
         state.session_id = new_session_id();
         state.front_app = capture_frontmost_app();
         state.selection = selection;
-    }
+        state.session_id
+    };
     inner.qa_stream_cancelled.store(false, Ordering::SeqCst);
 
     if let Some(app) = inner.app.lock().clone() {
@@ -126,7 +134,13 @@ pub(super) async fn finalize_dictation_as_qa_question(inner: &Arc<Inner>) -> Res
         raw.text.chars().count(),
         raw.duration_ms
     );
-    answer_qa_question_text(inner, raw.text.trim().to_string(), raw.duration_ms).await
+    answer_qa_question_text(
+        inner,
+        raw.text.trim().to_string(),
+        raw.duration_ms,
+        session_id,
+    )
+    .await
 }
 
 pub(super) async fn submit_qa_text_question(
@@ -138,7 +152,7 @@ pub(super) async fn submit_qa_text_question(
         return Ok(());
     }
 
-    {
+    let session_id = {
         let mut state = inner.qa_state.lock();
         if !state.panel_visible {
             state.panel_visible = true;
@@ -153,7 +167,8 @@ pub(super) async fn submit_qa_text_question(
         state.cancelled = false;
         state.session_id = new_session_id();
         state.selection = None;
-    }
+        state.session_id
+    };
     inner.qa_stream_cancelled.store(false, Ordering::SeqCst);
 
     let capture = capture_qa_turn_selection(inner);
@@ -162,7 +177,16 @@ pub(super) async fn submit_qa_text_question(
         .as_ref()
         .map(|selection| selection.text.clone());
     let selection_warning = capture.warning_code;
-    inner.qa_state.lock().selection = capture.selection;
+    {
+        let mut state = inner.qa_state.lock();
+        if !qa_turn_can_continue(&state, session_id) {
+            log::info!(
+                "[coord] QA typed turn invalidated while capturing selection; discarding capture"
+            );
+            return Ok(());
+        }
+        state.selection = capture.selection;
+    }
     if let Some(app) = inner.app.lock().clone() {
         let messages = inner.qa_state.lock().messages.clone();
         let _ = app.emit_to(
@@ -177,7 +201,7 @@ pub(super) async fn submit_qa_text_question(
         );
     }
 
-    answer_qa_question_text(inner, question, 0).await
+    answer_qa_question_text(inner, question, 0, session_id).await
 }
 
 pub(super) async fn take_current_dictation_transcript_for_qa(
@@ -470,18 +494,29 @@ pub(super) async fn answer_qa_question_text(
     inner: &Arc<Inner>,
     question: String,
     duration_ms: u64,
+    session_id: SessionId,
 ) -> Result<(), String> {
+    {
+        let state = inner.qa_state.lock();
+        if !qa_turn_can_continue(&state, session_id) {
+            log::info!("[coord] QA turn invalidated before answer handling");
+            return Ok(());
+        }
+    }
     if question.trim().is_empty() {
         finish_qa_idle_silently(inner);
         return Ok(());
     }
 
-    let user_message = {
-        let st = inner.qa_state.lock();
-        qa_user_message_from_state(&st, &question)
-    };
-
-    inner.qa_state.lock().messages.push(user_message);
+    {
+        let mut state = inner.qa_state.lock();
+        if !qa_turn_can_continue(&state, session_id) {
+            log::info!("[coord] QA turn invalidated before answer dispatch");
+            return Ok(());
+        }
+        let user_message = qa_user_message_from_state(&state, &question);
+        state.messages.push(user_message);
+    }
 
     if let Some(app) = inner.app.lock().clone() {
         let messages = inner.qa_state.lock().messages.clone();
@@ -503,11 +538,15 @@ pub(super) async fn answer_qa_question_text(
     let output_language_preference = prefs.output_language_preference;
     let llm_thinking_enabled = prefs.llm_thinking_enabled;
     let (messages_for_llm, front_app) = {
-        let st = inner.qa_state.lock();
-        (st.messages.clone(), st.front_app.clone())
+        let state = inner.qa_state.lock();
+        if !qa_turn_can_continue(&state, session_id) {
+            log::info!("[coord] QA turn invalidated before provider request");
+            return Ok(());
+        }
+        (state.messages.clone(), state.front_app.clone())
     };
 
-    let captured_session_id = inner.qa_state.lock().session_id;
+    let captured_session_id = session_id;
     let inner_for_delta = Arc::clone(inner);
     let on_delta = move |chunk: &str| {
         let cur_id = inner_for_delta.qa_state.lock().session_id;
@@ -543,30 +582,43 @@ pub(super) async fn answer_qa_question_text(
     {
         Ok(answer) => answer,
         Err(error) => {
-            inner.qa_state.lock().messages.pop();
+            {
+                let mut state = inner.qa_state.lock();
+                if !qa_turn_can_continue(&state, session_id) {
+                    log::info!("[coord] discarded provider error from invalidated QA turn");
+                    return Ok(());
+                }
+                state.messages.pop();
+            }
             finish_qa_with_error(inner, format!("回答失败: {error}"));
             return Err(error.to_string());
         }
     };
 
-    if inner.qa_state.lock().cancelled {
-        inner.qa_state.lock().messages.pop();
-        finish_qa_idle_silently(inner);
+    let turn_still_current = {
+        let state = inner.qa_state.lock();
+        qa_turn_can_continue(&state, session_id)
+    };
+    if !turn_still_current {
+        log::info!("[coord] QA turn invalidated before answer commit");
         return Ok(());
     }
 
-    inner
-        .qa_state
-        .lock()
-        .messages
-        .push(crate::types::QaChatMessage {
+    let messages = {
+        let mut state = inner.qa_state.lock();
+        if !qa_turn_can_continue(&state, session_id) {
+            log::info!("[coord] QA turn invalidated while committing answer");
+            return Ok(());
+        }
+        state.messages.push(crate::types::QaChatMessage {
             role: "assistant".to_string(),
             content: answer.clone(),
             selection_text: None,
         });
+        state.messages.clone()
+    };
 
     if let Some(app) = inner.app.lock().clone() {
-        let messages = inner.qa_state.lock().messages.clone();
         let _ = app.emit_to(
             qa_event_target(),
             "qa:state",
@@ -579,7 +631,11 @@ pub(super) async fn answer_qa_question_text(
 
     emit_capsule(inner, CapsuleState::Idle, 0.0, 0, None, None);
 
-    if prefs.qa_save_history {
+    let turn_still_current = {
+        let state = inner.qa_state.lock();
+        qa_turn_can_continue(&state, session_id)
+    };
+    if prefs.qa_save_history && turn_still_current {
         let session = DictationSession {
             id: Uuid::new_v4().to_string(),
             created_at: Utc::now().to_rfc3339(),
@@ -607,7 +663,10 @@ pub(super) async fn answer_qa_question_text(
         }
     }
 
-    complete_qa_turn_state(&mut inner.qa_state.lock());
+    let mut state = inner.qa_state.lock();
+    if qa_turn_can_continue(&state, session_id) {
+        complete_qa_turn_state(&mut state);
+    }
     Ok(())
 }
 
@@ -1468,6 +1527,27 @@ mod tests {
         assert!(typed_turn.content.contains("文字轮选区 B"));
         assert!(!typed_turn.content.contains("语音轮选区 A"));
         assert_eq!(typed_turn.selection_text.as_deref(), Some("文字轮选区 B"));
+    }
+
+    #[test]
+    fn qa_closed_turn_cannot_resume_after_selection_capture() {
+        let mut state = QaSessionState::default();
+        state.panel_visible = true;
+        state.phase = QaPhase::Processing;
+        state.session_id = new_session_id();
+        let captured_session_id = state.session_id;
+        assert!(qa_turn_can_continue(&state, captured_session_id));
+
+        state.panel_visible = false;
+        state.phase = QaPhase::Idle;
+        state.cancelled = false;
+        state.session_id = new_session_id();
+        assert!(!qa_turn_can_continue(&state, captured_session_id));
+
+        // 即使用户快速重新打开面板，旧捕获仍属于已经失效的 session。
+        state.panel_visible = true;
+        state.phase = QaPhase::Processing;
+        assert!(!qa_turn_can_continue(&state, captured_session_id));
     }
 
     #[tokio::test]
