@@ -16,15 +16,13 @@
 //!     "marketplace": { "githubAccessToken": "<desktop-only secret>" }
 //!   }
 //!
-//! Android's generic credential envelope is only reversible Base64 today. Until
-//! the Keystore-backed vault lands, Marketplace OAuth is process-memory-only on
-//! Android and is deliberately stripped from `credentials.enc.json`.
+//! Android stores the same payload in a versioned AES-GCM envelope whose key is
+//! non-exportable from Android Keystore. Marketplace OAuth remains
+//! process-memory-only and is deliberately stripped from `credentials.enc.json`.
 //!
 //! "ark.api_key"/"volcengine.app_key" 等账户名按 Swift 语义路由到 active provider。
 
 use std::collections::{BTreeMap, HashMap};
-#[cfg(any(target_os = "android", test))]
-use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
@@ -389,9 +387,42 @@ fn load_android_credentials() -> Result<Option<CredsRoot>> {
     loaded
 }
 
-#[cfg(any(target_os = "android", test))]
+#[cfg(target_os = "android")]
 fn load_android_credentials_from_path(path: &Path) -> Result<Option<CredsRoot>> {
-    load_android_credentials_from_path_with_fault(path, &mut |_| Ok(()))
+    let mut crypto = super::android_credentials::AndroidKeystoreCrypto;
+    load_android_credentials_from_path_with_crypto(path, &mut crypto)
+}
+
+#[cfg(all(test, not(target_os = "android")))]
+fn load_android_credentials_from_path(path: &Path) -> Result<Option<CredsRoot>> {
+    let mut crypto = super::android_credentials::TestCrypto::default();
+    load_android_credentials_from_path_with_crypto(path, &mut crypto)
+}
+
+#[cfg(any(target_os = "android", test))]
+fn load_android_credentials_from_path_with_crypto(
+    path: &Path,
+    crypto: &mut impl super::android_credentials::AndroidCredentialsCrypto,
+) -> Result<Option<CredsRoot>> {
+    use super::android_credentials::ReadOutcome;
+
+    let loaded = super::android_credentials::read(path, crypto)
+        .map_err(anyhow::Error::new)
+        .context("read Android credential envelope")?;
+    let (bytes, needs_rewrite) = match loaded {
+        ReadOutcome::Missing => return Ok(None),
+        ReadOutcome::Legacy(bytes) => (bytes, true),
+        ReadOutcome::Plaintext(bytes) => (bytes, false),
+    };
+    let root = serde_json::from_slice::<CredsRoot>(&bytes)
+        .context("parse Android credential payload")?;
+    let cleaned = android_persistable_credentials(&root);
+    let contained_marketplace_token = lookup_marketplace_github_token(&root).is_some();
+    if needs_rewrite || contained_marketplace_token {
+        write_android_credentials_envelope_with_crypto(path, &cleaned, crypto)
+            .context("migrate Android credential envelope")?;
+    }
+    Ok(Some(cleaned))
 }
 
 #[cfg(any(target_os = "android", test))]
@@ -426,58 +457,6 @@ fn ensure_android_marketplace_legacy_scrubbed() -> Result<()> {
     ensure_android_marketplace_legacy_scrubbed_at(&path, android_marketplace_legacy_scrubbed())
 }
 
-#[cfg(any(target_os = "android", test))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AndroidEnvelopeStage {
-    LegacyOpen,
-    LegacySync,
-    LegacyRemove,
-    ParentSyncAfterErase,
-    AfterErase,
-    TempOpen,
-    AfterTempOpen,
-    TempWrite,
-    AfterTempWrite,
-    TempFlush,
-    AfterTempFlush,
-    TempSync,
-    AfterTempSync,
-    Rename,
-    AfterRename,
-    ParentSyncAfterRename,
-}
-
-#[cfg(any(target_os = "android", test))]
-fn load_android_credentials_from_path_with_fault(
-    path: &Path,
-    fault: &mut impl FnMut(AndroidEnvelopeStage) -> io::Result<()>,
-) -> Result<Option<CredsRoot>> {
-    if !path.exists() {
-        return Ok(None);
-    }
-    let bytes = std::fs::read(path).with_context(|| format!("read failed: {}", path.display()))?;
-    if bytes.is_empty() {
-        return Ok(None);
-    }
-    // Stub: base64 envelope — replace with Keystore-backed AES when JNI lands.
-    use base64::Engine;
-    let decoded = base64::engine::general_purpose::STANDARD
-        .decode(bytes)
-        .context("decode android credentials envelope")?;
-    let mut root =
-        serde_json::from_slice::<CredsRoot>(&decoded).context("parse android credentials json")?;
-    if lookup_marketplace_github_token(&root).is_some() {
-        // Files written by unreleased/dev builds may contain a recoverable
-        // bearer token. Erase that legacy secret durably *before* creating the
-        // sanitized replacement. A crash can therefore lose generic Android
-        // credentials, but can never leave the old bearer recoverable.
-        write_marketplace_github_token(&mut root, None);
-        scrub_android_legacy_envelope_with_fault(path, &root, fault)
-            .context("scrub Marketplace token from Android credential envelope")?;
-    }
-    Ok(Some(root))
-}
-
 #[cfg(target_os = "android")]
 fn save_android_credentials(root: &CredsRoot) -> Result<()> {
     let path = android_credentials_path()?;
@@ -486,115 +465,21 @@ fn save_android_credentials(root: &CredsRoot) -> Result<()> {
 
 #[cfg(target_os = "android")]
 fn write_android_credentials_envelope(path: &Path, root: &CredsRoot) -> Result<()> {
-    write_android_credentials_envelope_with_fault(path, root, false, &mut |_| Ok(()))
+    let mut crypto = super::android_credentials::AndroidKeystoreCrypto;
+    write_android_credentials_envelope_with_crypto(path, root, &mut crypto)
 }
 
 #[cfg(any(target_os = "android", test))]
-fn scrub_android_legacy_envelope_with_fault(
+fn write_android_credentials_envelope_with_crypto(
     path: &Path,
     root: &CredsRoot,
-    fault: &mut impl FnMut(AndroidEnvelopeStage) -> io::Result<()>,
-) -> Result<()> {
-    write_android_credentials_envelope_with_fault(path, root, true, fault)
-}
-
-#[cfg(any(target_os = "android", test))]
-fn sync_android_credentials_parent(path: &Path) -> io::Result<()> {
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    std::fs::File::open(parent)?.sync_all()
-}
-
-#[cfg(any(target_os = "android", test))]
-fn fail_closed_remove_android_envelope(path: &Path, tmp: &Path) {
-    // Truncate+sync first so even a crash that resurrects the directory entry
-    // after unlink cannot resurrect the bearer bytes.
-    if let Ok(file) = std::fs::OpenOptions::new().write(true).open(path) {
-        let _ = file.set_len(0);
-        let _ = file.sync_all();
-    }
-    let _ = std::fs::remove_file(path);
-    let _ = std::fs::remove_file(tmp);
-    let _ = sync_android_credentials_parent(path);
-}
-
-#[cfg(any(target_os = "android", test))]
-fn write_android_credentials_envelope_with_fault(
-    path: &Path,
-    root: &CredsRoot,
-    erase_legacy_secret_first: bool,
-    fault: &mut impl FnMut(AndroidEnvelopeStage) -> io::Result<()>,
+    crypto: &mut impl super::android_credentials::AndroidCredentialsCrypto,
 ) -> Result<()> {
     let cleaned = android_persistable_credentials(root);
-    let json = serde_json::to_string(&cleaned).context("encode credentials failed")?;
-    use base64::Engine;
-    let encoded = base64::engine::general_purpose::STANDARD.encode(json.as_bytes());
-    super::ensure_dir(path.parent().unwrap_or_else(|| Path::new(".")))?;
-    let tmp = path.with_extension("json.tmp");
-    let _ = std::fs::remove_file(&tmp);
-
-    let persisted = (|| -> Result<()> {
-        if erase_legacy_secret_first {
-            fault(AndroidEnvelopeStage::LegacyOpen)?;
-            let legacy = std::fs::OpenOptions::new()
-                .write(true)
-                .truncate(true)
-                .open(path)
-                .with_context(|| format!("open legacy envelope failed: {}", path.display()))?;
-            fault(AndroidEnvelopeStage::LegacySync)?;
-            legacy
-                .sync_all()
-                .with_context(|| format!("sync erased envelope failed: {}", path.display()))?;
-            drop(legacy);
-            fault(AndroidEnvelopeStage::LegacyRemove)?;
-            std::fs::remove_file(path)
-                .with_context(|| format!("remove legacy envelope failed: {}", path.display()))?;
-            fault(AndroidEnvelopeStage::ParentSyncAfterErase)?;
-            sync_android_credentials_parent(path)
-                .with_context(|| format!("sync erased envelope directory: {}", path.display()))?;
-            fault(AndroidEnvelopeStage::AfterErase)?;
-        }
-
-        fault(AndroidEnvelopeStage::TempOpen)?;
-        let mut output = std::fs::OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&tmp)
-            .with_context(|| format!("open failed: {}", tmp.display()))?;
-        fault(AndroidEnvelopeStage::AfterTempOpen)?;
-        fault(AndroidEnvelopeStage::TempWrite)?;
-        output
-            .write_all(encoded.as_bytes())
-            .with_context(|| format!("write failed: {}", tmp.display()))?;
-        fault(AndroidEnvelopeStage::AfterTempWrite)?;
-        fault(AndroidEnvelopeStage::TempFlush)?;
-        output
-            .flush()
-            .with_context(|| format!("flush failed: {}", tmp.display()))?;
-        fault(AndroidEnvelopeStage::AfterTempFlush)?;
-        fault(AndroidEnvelopeStage::TempSync)?;
-        output
-            .sync_all()
-            .with_context(|| format!("sync failed: {}", tmp.display()))?;
-        fault(AndroidEnvelopeStage::AfterTempSync)?;
-        drop(output);
-        fault(AndroidEnvelopeStage::Rename)?;
-        std::fs::rename(&tmp, path)
-            .with_context(|| format!("replace failed: {}", path.display()))?;
-        fault(AndroidEnvelopeStage::AfterRename)?;
-        fault(AndroidEnvelopeStage::ParentSyncAfterRename)?;
-        sync_android_credentials_parent(path)
-            .with_context(|| format!("sync replacement directory: {}", path.display()))?;
-        Ok(())
-    })();
-
-    if persisted.is_err() {
-        if erase_legacy_secret_first {
-            fail_closed_remove_android_envelope(path, &tmp);
-        } else {
-            let _ = std::fs::remove_file(&tmp);
-        }
-    }
-    persisted
+    let json = serde_json::to_vec(&cleaned).context("encode Android credential payload")?;
+    super::android_credentials::write_verified(path, &json, crypto)
+        .map_err(anyhow::Error::new)
+        .context("write Android credential envelope")
 }
 
 #[cfg(any(target_os = "android", test))]
@@ -1434,14 +1319,13 @@ mod tests {
     use super::{
         android_persistable_credentials, chunk_json_payload, credentials_cache,
         get_android_marketplace_token_at, load_android_credentials_from_path,
-        load_android_credentials_from_path_with_fault, load_android_credentials_into_cache_with,
-        lookup_marketplace_github_token, parse_extra_headers_json,
-        reset_credentials_cache_for_tests, write_marketplace_github_token, AndroidEnvelopeStage,
-        CredsRoot, MarketplaceGithubToken, KEYRING_CHUNK_MAX_UTF16_UNITS,
+        load_android_credentials_into_cache_with, lookup_marketplace_github_token,
+        parse_extra_headers_json, reset_credentials_cache_for_tests,
+        write_marketplace_github_token, CredsRoot, MarketplaceGithubToken,
+        KEYRING_CHUNK_MAX_UTF16_UNITS,
     };
     use anyhow::anyhow;
     use parking_lot::Mutex;
-    use std::io;
 
     #[test]
     fn credential_payload_chunks_stay_under_windows_blob_limit() {
@@ -1563,15 +1447,17 @@ mod tests {
             .unwrap()
             .expect("credential envelope should load");
         let disk = std::fs::read_to_string(&path).unwrap();
-        let decoded = base64::engine::general_purpose::STANDARD
-            .decode(disk)
-            .unwrap();
-        let decoded = String::from_utf8(decoded).unwrap();
+        let loaded_again = load_android_credentials_from_path(&path)
+            .unwrap()
+            .expect("migrated credential envelope should load");
 
         assert_eq!(lookup_marketplace_github_token(&loaded), None);
-        assert!(!decoded.contains(token));
-        assert!(!decoded.contains("githubAccessToken"));
-        assert!(!decoded.contains("marketplace"));
+        assert_eq!(lookup_marketplace_github_token(&loaded_again), None);
+        assert!(disk.starts_with('{'));
+        assert!(disk.contains("openless-android-credentials"));
+        assert!(!disk.contains(token));
+        assert!(!disk.contains("githubAccessToken"));
+        assert!(!disk.contains("marketplace"));
         assert!(!path.with_extension("json.tmp").exists());
         std::fs::remove_dir_all(dir).unwrap();
     }
@@ -1606,75 +1492,6 @@ mod tests {
                     candidate.display()
                 );
             }
-        }
-    }
-
-    #[test]
-    fn android_legacy_scrub_is_fail_closed_for_every_io_failure() {
-        let stages = [
-            AndroidEnvelopeStage::LegacyOpen,
-            AndroidEnvelopeStage::LegacySync,
-            AndroidEnvelopeStage::LegacyRemove,
-            AndroidEnvelopeStage::ParentSyncAfterErase,
-            AndroidEnvelopeStage::TempOpen,
-            AndroidEnvelopeStage::TempWrite,
-            AndroidEnvelopeStage::TempFlush,
-            AndroidEnvelopeStage::TempSync,
-            AndroidEnvelopeStage::Rename,
-            AndroidEnvelopeStage::ParentSyncAfterRename,
-        ];
-
-        for failed_stage in stages {
-            let token = format!("gho_android_fault_{failed_stage:?}");
-            let dir = std::env::temp_dir()
-                .join(format!("openless-android-fault-{}", uuid::Uuid::new_v4()));
-            let path = dir.join("credentials.enc.json");
-            write_legacy_android_envelope(&path, &token);
-
-            let result = load_android_credentials_from_path_with_fault(&path, &mut |stage| {
-                if stage == failed_stage {
-                    Err(io::Error::other(format!("injected {stage:?}")))
-                } else {
-                    Ok(())
-                }
-            });
-
-            assert!(result.is_err(), "{failed_stage:?} should fail");
-            assert_android_secret_unrecoverable(&path, &token);
-            assert!(!path.with_extension("json.tmp").exists());
-            let _ = std::fs::remove_dir_all(dir);
-        }
-    }
-
-    #[test]
-    fn android_legacy_secret_is_unrecoverable_at_every_crash_boundary() {
-        let boundaries = [
-            AndroidEnvelopeStage::AfterErase,
-            AndroidEnvelopeStage::AfterTempOpen,
-            AndroidEnvelopeStage::AfterTempWrite,
-            AndroidEnvelopeStage::AfterTempFlush,
-            AndroidEnvelopeStage::AfterTempSync,
-            AndroidEnvelopeStage::AfterRename,
-        ];
-
-        for crash_stage in boundaries {
-            let token = format!("gho_android_crash_{crash_stage:?}");
-            let dir = std::env::temp_dir()
-                .join(format!("openless-android-crash-{}", uuid::Uuid::new_v4()));
-            let path = dir.join("credentials.enc.json");
-            write_legacy_android_envelope(&path, &token);
-
-            let crashed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let _ = load_android_credentials_from_path_with_fault(&path, &mut |stage| {
-                    assert_ne!(stage, crash_stage, "injected crash at {stage:?}");
-                    Ok(())
-                });
-            }));
-
-            assert!(crashed.is_err(), "{crash_stage:?} should simulate a crash");
-            assert_android_secret_unrecoverable(&path, &token);
-            let _ = std::fs::remove_file(path.with_extension("json.tmp"));
-            let _ = std::fs::remove_dir_all(dir);
         }
     }
 

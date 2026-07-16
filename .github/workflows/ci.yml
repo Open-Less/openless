@@ -58,9 +58,16 @@ jobs:
           cache: npm
           cache-dependency-path: openless-all/app/package-lock.json
 
+      - uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: "17"
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android
+
+      - uses: gradle/actions/setup-gradle@v4
 
       - name: Install Linux check dependencies
         run: |
@@ -79,6 +86,20 @@ jobs:
 
       - name: Check Tauri backend (Android target)
         run: cargo check --manifest-path src-tauri/Cargo.toml --target aarch64-linux-android
+
+      - name: Initialize generated Android project
+        run: npm run tauri -- android init --ci
+
+      - name: Copy Android production and test scaffolding
+        run: node scripts/copy-android-scaffolding.mjs
+
+      - name: Run JVM credential tests and compile instrumentation tests
+        run: >-
+          src-tauri/gen/android/gradlew
+          --project-dir src-tauri/gen/android
+          :app:testDebugUnitTest
+          :app:assembleDebugAndroidTest
+          --no-daemon
 
   cross-platform:
     name: ${{ matrix.label }} checks

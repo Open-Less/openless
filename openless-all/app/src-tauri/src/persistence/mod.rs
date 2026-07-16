@@ -25,6 +25,8 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 mod activity;
+#[cfg(any(target_os = "android", test))]
+mod android_credentials;
 mod correction;
 mod credentials;
 mod dictionary;

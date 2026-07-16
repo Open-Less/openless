@@ -6,10 +6,16 @@ import { fileURLToPath } from 'node:url';
 
 const appRoot = fileURLToPath(new URL('..', import.meta.url));
 const kotlinRoot = join(appRoot, 'android/kotlin');
+const kotlinTestRoot = join(kotlinRoot, 'test');
+const kotlinAndroidTestRoot = join(kotlinRoot, 'androidTest');
 const manifestsRoot = join(appRoot, 'android/manifests');
 const androidIconRoot = join(appRoot, 'src-tauri/icons/android');
+const androidAppRoot = join(appRoot, 'src-tauri/gen/android/app');
 const genRoot = join(appRoot, 'src-tauri/gen/android/app/src/main');
 const kotlinDest = join(genRoot, 'java/com/openless/app');
+const kotlinTestDest = join(androidAppRoot, 'src/test/java/com/openless/app');
+const kotlinAndroidTestDest = join(androidAppRoot, 'src/androidTest/java/com/openless/app');
+const androidAppGradle = join(androidAppRoot, 'build.gradle.kts');
 const resDest = join(genRoot, 'res');
 const resXmlDest = join(genRoot, 'res/xml');
 
@@ -19,6 +25,8 @@ const KOTLIN_FILES = [
   'OpenLessPermissionBridge.kt',
   'MicrophonePermissionActivity.kt',
   'OpenLessAndroidPreferences.kt',
+  'OpenLessCredentialCipher.kt',
+  'OpenLessCredentialVault.kt',
   'OpenLessApplication.kt',
   'OpenLessOverlayService.kt',
   'OpenLessOverlayBridge.kt',
@@ -27,6 +35,9 @@ const KOTLIN_FILES = [
   'OverlayPermissionActivity.kt',
   'OpenLessUpdateInstaller.kt',
 ];
+
+const KOTLIN_TEST_FILES = ['OpenLessCredentialCipherTest.kt'];
+const KOTLIN_ANDROID_TEST_FILES = ['OpenLessCredentialVaultInstrumentedTest.kt'];
 
 const XML_FILES = [
   ['res/xml/openless_accessibility_config.xml', 'openless_accessibility_config.xml'],
@@ -136,22 +147,11 @@ function copyDirectoryContents(srcRoot, destRoot, dryRun) {
   }
 }
 
-function main() {
-  const { dryRun } = parseArgs(process.argv.slice(2));
-
-  if (!existsSync(join(appRoot, 'src-tauri/gen/android'))) {
-    throw new Error(
-      `Generated Android project not found under src-tauri/gen/android.\nRun "npm run tauri -- android init --ci" first.`,
-    );
-  }
-
-  ensureDir(kotlinDest, dryRun);
-  ensureDir(resXmlDest, dryRun);
-  copyDirectoryContents(androidIconRoot, resDest, dryRun);
-
-  for (const file of KOTLIN_FILES) {
-    const src = join(kotlinRoot, file);
-    const dest = join(kotlinDest, file);
+function copyNamedFiles(files, srcRoot, destRoot, dryRun) {
+  ensureDir(destRoot, dryRun);
+  for (const file of files) {
+    const src = join(srcRoot, file);
+    const dest = join(destRoot, file);
     if (!existsSync(src)) {
       throw new Error(`Missing scaffolding file: ${src}`);
     }
@@ -162,6 +162,57 @@ function main() {
     copyFileSync(src, dest);
     console.log(`Copied ${file}`);
   }
+}
+
+function ensureInstrumentationRunner(dryRun) {
+  if (!existsSync(androidAppGradle)) {
+    throw new Error(`Missing generated Android Gradle file: ${androidAppGradle}`);
+  }
+  const existing = readFileSync(androidAppGradle, 'utf8');
+  if (existing.includes('testInstrumentationRunner')) {
+    console.log(`Android instrumentation runner already present in ${androidAppGradle}; skipping.`);
+    return;
+  }
+  const defaultConfig = /^(\s*)defaultConfig\s*\{\s*$/m;
+  const match = existing.match(defaultConfig);
+  if (!match) {
+    throw new Error(`defaultConfig block not found in ${androidAppGradle}`);
+  }
+  const runner =
+    `${match[0]}\n${match[1]}    ` +
+    'testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"';
+  const updated = existing.replace(defaultConfig, runner);
+  if (dryRun) {
+    console.log(`[dry-run] Would add testInstrumentationRunner to ${androidAppGradle}`);
+    return;
+  }
+  writeFileSync(androidAppGradle, updated, 'utf8');
+  console.log(`Added Android instrumentation runner to ${androidAppGradle}`);
+}
+
+function main() {
+  const { dryRun } = parseArgs(process.argv.slice(2));
+
+  if (!existsSync(join(appRoot, 'src-tauri/gen/android'))) {
+    throw new Error(
+      `Generated Android project not found under src-tauri/gen/android.\nRun "npm run tauri -- android init --ci" first.`,
+    );
+  }
+
+  ensureDir(kotlinDest, dryRun);
+  ensureDir(kotlinTestDest, dryRun);
+  ensureDir(kotlinAndroidTestDest, dryRun);
+  ensureDir(resXmlDest, dryRun);
+  copyDirectoryContents(androidIconRoot, resDest, dryRun);
+  copyNamedFiles(KOTLIN_FILES, kotlinRoot, kotlinDest, dryRun);
+  copyNamedFiles(KOTLIN_TEST_FILES, kotlinTestRoot, kotlinTestDest, dryRun);
+  copyNamedFiles(
+    KOTLIN_ANDROID_TEST_FILES,
+    kotlinAndroidTestRoot,
+    kotlinAndroidTestDest,
+    dryRun,
+  );
+  ensureInstrumentationRunner(dryRun);
 
   for (const [relSrc, destName] of XML_FILES) {
     const src = join(manifestsRoot, relSrc);

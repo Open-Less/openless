@@ -2,7 +2,7 @@
 
 #[cfg(target_os = "android")]
 pub mod android {
-    use jni::objects::{JClass, JObject, JString, JValue};
+    use jni::objects::{JByteArray, JClass, JObject, JString, JValue};
     use jni::JNIEnv;
     use jni::JavaVM;
 
@@ -105,6 +105,150 @@ pub mod android {
         value: &str,
     ) -> Result<JObject<'local>, String> {
         Ok(jstring(env, value)?.into())
+    }
+
+    const CREDENTIAL_VAULT_CLASS: &str = "com.openless.app.OpenLessCredentialVault";
+    const KEYSTORE_KEY_MISSING: &str = "openless-keystore-key-missing";
+    const KEYSTORE_AUTHENTICATION_FAILED: &str = "openless-keystore-authentication-failed";
+    const KEYSTORE_TEMPORARILY_UNAVAILABLE: &str = "openless-keystore-temporarily-unavailable";
+    const KEYSTORE_MALFORMED: &str = "openless-keystore-malformed";
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) enum AndroidKeystoreFailure {
+        KeyMissingOrInvalidated,
+        AuthenticationFailed,
+        TemporarilyUnavailable,
+        Malformed,
+    }
+
+    fn clear_pending_exception(env: &mut JNIEnv) {
+        if env.exception_check().unwrap_or(false) {
+            let _ = env.exception_clear();
+        }
+    }
+
+    fn keystore_temporarily_unavailable<T>(env: &mut JNIEnv) -> Result<T, String> {
+        clear_pending_exception(env);
+        Err(KEYSTORE_TEMPORARILY_UNAVAILABLE.to_string())
+    }
+
+    fn credential_response(response: Vec<u8>) -> Result<Vec<u8>, String> {
+        let Some((&status, payload)) = response.split_first() else {
+            return Err(KEYSTORE_TEMPORARILY_UNAVAILABLE.to_string());
+        };
+        match status {
+            0 => Ok(payload.to_vec()),
+            1 => Err(KEYSTORE_KEY_MISSING.to_string()),
+            2 => Err(KEYSTORE_AUTHENTICATION_FAILED.to_string()),
+            3 => Err(KEYSTORE_TEMPORARILY_UNAVAILABLE.to_string()),
+            4 => Err(KEYSTORE_MALFORMED.to_string()),
+            _ => Err(KEYSTORE_TEMPORARILY_UNAVAILABLE.to_string()),
+        }
+    }
+
+    fn call_credential_vault_two_arrays(
+        method: &str,
+        first: &[u8],
+        second: &[u8],
+    ) -> Result<Vec<u8>, String> {
+        with_android_env(|env, context| {
+            let class = match load_context_class(env, context, CREDENTIAL_VAULT_CLASS) {
+                Ok(class) => class,
+                Err(_) => return keystore_temporarily_unavailable(env),
+            };
+            let first_array = match env.byte_array_from_slice(first) {
+                Ok(array) => array,
+                Err(_) => return keystore_temporarily_unavailable(env),
+            };
+            let second_array = match env.byte_array_from_slice(second) {
+                Ok(array) => array,
+                Err(_) => return keystore_temporarily_unavailable(env),
+            };
+            let first_object = JObject::from(first_array);
+            let second_object = JObject::from(second_array);
+            let value = match env.call_static_method(
+                class,
+                method,
+                "([B[B)[B",
+                &[
+                    JValue::Object(&first_object),
+                    JValue::Object(&second_object),
+                ],
+            ) {
+                Ok(value) => value,
+                Err(_) => return keystore_temporarily_unavailable(env),
+            };
+            let object = match value.l() {
+                Ok(object) => object,
+                Err(_) => return keystore_temporarily_unavailable(env),
+            };
+            if object.is_null() {
+                return Err(KEYSTORE_TEMPORARILY_UNAVAILABLE.to_string());
+            }
+            let array = JByteArray::from(object);
+            let response = match env.convert_byte_array(&array) {
+                Ok(response) => response,
+                Err(_) => return keystore_temporarily_unavailable(env),
+            };
+            credential_response(response)
+        })
+    }
+
+    fn call_credential_vault_no_args(method: &str) -> Result<Vec<u8>, String> {
+        with_android_env(|env, context| {
+            let class = match load_context_class(env, context, CREDENTIAL_VAULT_CLASS) {
+                Ok(class) => class,
+                Err(_) => return keystore_temporarily_unavailable(env),
+            };
+            let value = match env.call_static_method(class, method, "()[B", &[]) {
+                Ok(value) => value,
+                Err(_) => return keystore_temporarily_unavailable(env),
+            };
+            let object = match value.l() {
+                Ok(object) => object,
+                Err(_) => return keystore_temporarily_unavailable(env),
+            };
+            if object.is_null() {
+                return Err(KEYSTORE_TEMPORARILY_UNAVAILABLE.to_string());
+            }
+            let array = JByteArray::from(object);
+            let response = match env.convert_byte_array(&array) {
+                Ok(response) => response,
+                Err(_) => return keystore_temporarily_unavailable(env),
+            };
+            credential_response(response)
+        })
+    }
+
+    fn classify_keystore_failure(error: String) -> AndroidKeystoreFailure {
+        match error.as_str() {
+            KEYSTORE_KEY_MISSING => AndroidKeystoreFailure::KeyMissingOrInvalidated,
+            KEYSTORE_AUTHENTICATION_FAILED => AndroidKeystoreFailure::AuthenticationFailed,
+            KEYSTORE_MALFORMED => AndroidKeystoreFailure::Malformed,
+            _ => AndroidKeystoreFailure::TemporarilyUnavailable,
+        }
+    }
+
+    pub(crate) fn keystore_seal(
+        plaintext: &[u8],
+        aad: &[u8],
+    ) -> Result<Vec<u8>, AndroidKeystoreFailure> {
+        call_credential_vault_two_arrays("seal", plaintext, aad)
+            .map_err(classify_keystore_failure)
+    }
+
+    pub(crate) fn keystore_open(
+        sealed: &[u8],
+        aad: &[u8],
+    ) -> Result<Vec<u8>, AndroidKeystoreFailure> {
+        call_credential_vault_two_arrays("open", sealed, aad)
+            .map_err(classify_keystore_failure)
+    }
+
+    pub(crate) fn keystore_delete_key() -> Result<(), AndroidKeystoreFailure> {
+        call_credential_vault_no_args("deleteKey")
+            .map(|_| ())
+            .map_err(classify_keystore_failure)
     }
 
     pub fn start_activity_class(
