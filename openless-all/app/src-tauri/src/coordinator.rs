@@ -2860,6 +2860,36 @@ mod tests {
     }
 
     #[test]
+    fn stepfun_is_whisper_compatible_with_hotwords_vocab() {
+        use crate::asr::whisper::AsrRequestFormat;
+        // StepFun /audio/transcriptions 是标准 multipart（实测 2026-07），
+        // response_format 只认 json/text → verbose_json 关闭；100MB 上限
+        // （约 54 分钟 16k WAV）→ 无需切分。
+        assert!(is_whisper_compatible_provider("stepfun"));
+        assert_eq!(
+            active_asr_provider_kind("stepfun"),
+            ActiveAsrProviderKind::WhisperCompatible
+        );
+        assert_eq!(
+            whisper_request_format("stepfun"),
+            AsrRequestFormat::Multipart
+        );
+        assert!(!whisper_supports_verbose_json("stepfun"));
+        assert_eq!(batch_asr_chunk_limit_ms("stepfun"), None);
+
+        // 词典路由：StepFun 忽略 prompt，走一等 hotwords；其余厂商维持 prompt。
+        assert!(whisper_uses_hotwords("stepfun"));
+        assert!(!whisper_uses_hotwords("whisper"));
+        let phrases = vec!["阶跃星辰".to_string()];
+        let (prompt, hotwords) = whisper_vocab_for_provider("stepfun", phrases.clone());
+        assert_eq!(prompt, None);
+        assert_eq!(hotwords, phrases);
+        let (prompt, hotwords) = whisper_vocab_for_provider("groq", phrases);
+        assert_eq!(prompt.as_deref(), Some("阶跃星辰."));
+        assert!(hotwords.is_empty());
+    }
+
+    #[test]
     fn qa_asr_provider_kind_tracks_active_provider() {
         assert_eq!(
             active_asr_provider_kind(crate::asr::bailian::PROVIDER_ID),

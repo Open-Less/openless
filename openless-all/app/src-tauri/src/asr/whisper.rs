@@ -52,6 +52,9 @@ pub struct WhisperBatchASR {
     verbose_json: bool,
     /// 请求体编码方式。默认 `Multipart`，OpenRouter 走 `OpenRouterJson`。
     request_format: AsrRequestFormat,
+    /// 一等 `hotwords` 参数（JSON 数组字符串）。StepFun 等厂商不认 `prompt`
+    /// （静默忽略），但提供专门的热词字段——用它词典才真正生效。空 = 不发。
+    hotwords: Vec<String>,
     buffer: Mutex<Vec<u8>>,
 }
 
@@ -72,6 +75,7 @@ impl WhisperBatchASR {
             max_chunk_duration_ms,
             verbose_json,
             request_format: AsrRequestFormat::Multipart,
+            hotwords: Vec::new(),
             buffer: Mutex::new(Vec::new()),
         }
     }
@@ -80,6 +84,13 @@ impl WhisperBatchASR {
     /// 用 builder 而非给 `new()` 加参数，避免改动既有 4 处构造点的签名。
     pub fn with_request_format(mut self, request_format: AsrRequestFormat) -> Self {
         self.request_format = request_format;
+        self
+    }
+
+    /// 设置一等热词列表（默认空 = 不发）。仅 Multipart 编码下生效；与 `prompt`
+    /// 二选一由 wiring 决定（见 coordinator 的 `whisper_uses_hotwords`）。
+    pub fn with_hotwords(mut self, hotwords: Vec<String>) -> Self {
+        self.hotwords = hotwords;
         self
     }
 
@@ -169,6 +180,20 @@ impl WhisperBatchASR {
                     let trimmed = prompt.trim();
                     if !trimmed.is_empty() {
                         form = form.text("prompt", trimmed.to_string());
+                    }
+                }
+
+                // 一等热词（StepFun 形状：可解析的 JSON 数组字符串，如
+                // `["热词1","热词2"]`）。空白词条过滤后再编码，全空则不发该字段。
+                let hotwords: Vec<&str> = self
+                    .hotwords
+                    .iter()
+                    .map(|w| w.trim())
+                    .filter(|w| !w.is_empty())
+                    .collect();
+                if !hotwords.is_empty() {
+                    if let Ok(encoded) = serde_json::to_string(&hotwords) {
+                        form = form.text("hotwords", encoded);
                     }
                 }
 
@@ -830,6 +855,63 @@ mod tests {
 
         let transcript = asr.transcribe().await.unwrap();
         assert_eq!(transcript.text, "openrouter ok");
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn hotwords_sent_as_json_array_field_without_prompt() {
+        // StepFun 形状：词典走一等 `hotwords`（JSON 数组字符串）而非 `prompt`；
+        // 空白词条过滤后编码。
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                        assert!(
+                            Instant::now() < deadline,
+                            "timed out waiting for ASR test request"
+                        );
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(err) => panic!("accept ASR test request failed: {err}"),
+                }
+            };
+            stream.set_nonblocking(false).unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let request = read_http_request(&mut stream);
+            let request_text = String::from_utf8_lossy(&request);
+            assert!(request_text.starts_with("POST /audio/transcriptions HTTP/1.1"));
+            assert!(request_text.contains(r#"name="hotwords""#));
+            assert!(request_text.contains(r#"["阶跃星辰","OpenLess"]"#));
+            assert!(!request_text.contains(r#"name="prompt""#));
+            write_json_response(&mut stream, r#"{"text":"hotwords ok"}"#);
+        });
+        let base_url = format!("http://{}", addr);
+
+        let asr = WhisperBatchASR::new(
+            "key".to_string(),
+            base_url,
+            "stepaudio-2.5-asr".to_string(),
+            None,
+            None,
+            false,
+        )
+        .with_hotwords(vec![
+            "阶跃星辰".to_string(),
+            "   ".to_string(),
+            "OpenLess".to_string(),
+        ]);
+        let pcm = vec![0u8; 32_000 * 2];
+        asr.consume_pcm_chunk(&pcm);
+
+        let transcript = asr.transcribe().await.unwrap();
+        assert_eq!(transcript.text, "hotwords ok");
         server.join().unwrap();
     }
 

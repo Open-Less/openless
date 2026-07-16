@@ -788,6 +788,7 @@ export const en: typeof zhCN = {
         asrBailianQwen3: 'Bailian Qwen3 Realtime ASR',
         asrBailianFunAsrFlash: 'Bailian Fun-ASR-Flash (recorded file)',
         asrSiliconflow: 'SiliconFlow SenseVoice',
+        asrStepfun: 'StepFun StepAudio ASR',
         asrZhipu: 'Zhipu GLM-ASR',
         asrGroq: 'Groq Whisper-large-v3',
         asrWhisper: 'OpenAI Whisper (compatible)',

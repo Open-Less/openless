@@ -790,6 +790,7 @@ export const ja: typeof zhCN = {
         asrBailianQwen3: 'Bailian Qwen3 リアルタイム ASR',
         asrBailianFunAsrFlash: 'Bailian Fun-ASR-Flash（録音ファイル）',
         asrSiliconflow: 'SiliconFlow SenseVoice',
+        asrStepfun: 'StepFun StepAudio ASR',
         asrZhipu: 'Zhipu GLM-ASR',
         asrGroq: 'Groq Whisper-large-v3',
         asrWhisper: 'OpenAI Whisper（互換）',

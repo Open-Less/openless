@@ -1882,8 +1882,8 @@ pub(super) async fn begin_session_as(
         // hotword を受け取っており、UI 説明文も「ASR ホットワードと後処理
         // モデルのコンテキスト両方に渡される」と明示しているので、Whisper
         // 互換プロバイダにも揃えるのが筋。
-        let whisper_prompt =
-            crate::asr::whisper::build_prompt_from_phrases(&enabled_phrases(inner));
+        let (whisper_prompt, hotwords) =
+            whisper_vocab_for_provider(&active_asr, enabled_phrases(inner));
         let asr_call_label = AsrCallLabel::new(effective_asr.clone(), Some(model.clone()));
         let whisper = Arc::new(
             WhisperBatchASR::new(
@@ -1894,7 +1894,8 @@ pub(super) async fn begin_session_as(
                 batch_asr_chunk_limit_ms(&active_asr),
                 whisper_supports_verbose_json(&active_asr),
             )
-            .with_request_format(whisper_request_format(&active_asr)),
+            .with_request_format(whisper_request_format(&active_asr))
+            .with_hotwords(hotwords),
         );
         store_asr_for_session(
             inner,

@@ -788,6 +788,7 @@ export const zhTW: typeof zhCN = {
         asrBailianQwen3: '阿里雲百煉 Qwen3 即時 ASR',
         asrBailianFunAsrFlash: '阿里雲百煉 Fun-ASR-Flash（錄音檔）',
         asrSiliconflow: '硅基流動 SenseVoice',
+        asrStepfun: '階躍星辰 StepAudio',
         asrZhipu: '智譜 GLM-ASR',
         asrGroq: 'Groq Whisper-large-v3',
         asrWhisper: 'OpenAI Whisper（兼容）',

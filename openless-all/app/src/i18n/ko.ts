@@ -790,6 +790,7 @@ export const ko: typeof zhCN = {
         asrBailianQwen3: 'Bailian Qwen3 실시간 ASR',
         asrBailianFunAsrFlash: 'Bailian Fun-ASR-Flash (녹음 파일)',
         asrSiliconflow: 'SiliconFlow SenseVoice',
+        asrStepfun: 'StepFun StepAudio ASR',
         asrZhipu: 'Zhipu GLM-ASR',
         asrGroq: 'Groq Whisper-large-v3',
         asrWhisper: 'OpenAI Whisper(호환)',

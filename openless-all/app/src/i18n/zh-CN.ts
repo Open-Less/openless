@@ -786,6 +786,7 @@ export const zhCN = {
         asrBailianQwen3: '阿里云百炼 Qwen3 实时 ASR',
         asrBailianFunAsrFlash: '阿里云百炼 Fun-ASR-Flash（录音文件）',
         asrSiliconflow: '硅基流动 SenseVoice',
+        asrStepfun: '阶跃星辰 StepAudio',
         asrZhipu: '智谱 GLM-ASR',
         asrGroq: 'Groq Whisper-large-v3',
         asrWhisper: 'OpenAI Whisper（兼容）',

@@ -320,8 +320,8 @@ pub(super) fn build_apple_speech(
     Arc::new(crate::asr::local::AppleSpeechAsr::new(locale))
 }
 
-/// `whisper` 是 OpenAI 原生；`siliconflow` / `zhipu` / `groq` 都暴露
-/// OpenAI 兼容的 `/audio/transcriptions`，统一走 `WhisperBatchASR`。
+/// `whisper` 是 OpenAI 原生；`siliconflow` / `zhipu` / `groq` / `stepfun`
+/// 都暴露 OpenAI 兼容的 `/audio/transcriptions`，统一走 `WhisperBatchASR`。
 /// 新增 OpenAI 兼容 ASR 时只需在这里加一项。
 ///
 /// 注：DashScope 的 Qwen3-ASR-Flash 不在此列——它用 MultiModalConversation
@@ -330,8 +330,33 @@ pub(super) fn build_apple_speech(
 pub(super) fn is_whisper_compatible_provider(id: &str) -> bool {
     matches!(
         id,
-        "whisper" | "siliconflow" | "zhipu" | "groq" | "openrouter"
+        "whisper" | "siliconflow" | "zhipu" | "groq" | "openrouter" | "stepfun"
     )
+}
+
+/// 用户词典该走 `prompt` 还是一等 `hotwords` 参数。
+///
+/// StepFun 的 `/audio/transcriptions` **静默忽略** `prompt`（实测 2026-07：带
+/// prompt 返回 200 但不参与偏置），词汇偏置走专门的 `hotwords` 字段（可解析的
+/// JSON 数组字符串）。其余兼容厂商维持 Whisper 惯例的 `prompt`。
+pub(super) fn whisper_uses_hotwords(provider_id: &str) -> bool {
+    provider_id == "stepfun"
+}
+
+/// 词典启用词条 → (prompt, hotwords) 二选一路由，QA 与听写两处构造点共用。
+/// hotwords 厂商不再拼 prompt（免得白占请求体），prompt 厂商 hotwords 恒空。
+pub(super) fn whisper_vocab_for_provider(
+    provider_id: &str,
+    phrases: Vec<String>,
+) -> (Option<String>, Vec<String>) {
+    if whisper_uses_hotwords(provider_id) {
+        (None, phrases)
+    } else {
+        (
+            crate::asr::whisper::build_prompt_from_phrases(&phrases),
+            Vec::new(),
+        )
+    }
 }
 
 /// 该 provider 的请求体编码方式。OpenRouter 的 `/audio/transcriptions` 是
@@ -612,8 +637,8 @@ pub(super) async fn build_qa_asr_start(
         ActiveAsrProviderKind::WhisperCompatible => {
             let (api_key, base_url, model) = read_whisper_credentials();
             let label = AsrCallLabel::new(effective_asr.clone(), Some(model.clone()));
-            let whisper_prompt =
-                crate::asr::whisper::build_prompt_from_phrases(&enabled_phrases(inner));
+            let (whisper_prompt, hotwords) =
+                whisper_vocab_for_provider(active_asr, enabled_phrases(inner));
             let whisper = Arc::new(
                 WhisperBatchASR::new(
                     api_key,
@@ -623,7 +648,8 @@ pub(super) async fn build_qa_asr_start(
                     batch_asr_chunk_limit_ms(active_asr),
                     whisper_supports_verbose_json(active_asr),
                 )
-                .with_request_format(whisper_request_format(active_asr)),
+                .with_request_format(whisper_request_format(active_asr))
+                .with_hotwords(hotwords),
             );
             let active = ActiveAsr::Whisper(Arc::clone(&whisper));
             let consumer: Arc<dyn crate::recorder::AudioConsumer> = whisper;

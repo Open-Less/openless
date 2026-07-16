@@ -223,6 +223,9 @@ export const ASR_PRESETS = [
   // 由 asr/dashscope_multimodal.rs 专用批量 client 处理。API key 与百炼同一把。
   { id: 'bailian-fun-asr-flash', nameKey: 'asrBailianFunAsrFlash', baseUrl: 'https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation', model: 'fun-asr-flash-2026-06-15' },
   { id: 'siliconflow',  nameKey: 'asrSiliconflow',  baseUrl: 'https://api.siliconflow.cn/v1',                  model: 'FunAudioLLM/SenseVoiceSmall' },
+  // 阶跃星辰 StepAudio：标准 OpenAI multipart /audio/transcriptions，走 Whisper
+  // 兼容路由；词典经一等 hotwords 参数生效（后端 whisper_uses_hotwords）。
+  { id: 'stepfun',      nameKey: 'asrStepfun',      baseUrl: 'https://api.stepfun.com/v1',                     model: 'stepaudio-2.5-asr'           },
   { id: 'zhipu',        nameKey: 'asrZhipu',        baseUrl: 'https://open.bigmodel.cn/api/paas/v4',           model: 'glm-asr-2512'                },
   { id: 'groq',         nameKey: 'asrGroq',         baseUrl: 'https://api.groq.com/openai/v1',                 model: 'whisper-large-v3-turbo'      },
   { id: 'whisper',      nameKey: 'asrWhisper',      baseUrl: 'https://api.openai.com/v1',                      model: 'whisper-1'                   },

@@ -588,6 +588,16 @@ async fn validate_asr_transcription(config: &ProviderConfig, model: &str) -> Res
     };
     let status = response.status();
     if !status.is_success() {
+        // 探针音频是纯静音，有的厂商（StepFun）对无语音内容直接 400
+        // "no speech found"。走到这一步说明鉴权（错 key 是 401）和模型名
+        // （错模型是 404 model_invalid）都已通过、转写管线是通的——这类
+        // 内容拒收判为验证成功，避免对静音敏感的厂商恒报假阴性。
+        if status.as_u16() == 400 {
+            let body = response.text().await.unwrap_or_default();
+            if asr_error_is_no_speech_rejection(&body) {
+                return Ok(());
+            }
+        }
         return Err(format!("providerHttpStatus:{}", status.as_u16()));
     }
     if let Some(len) = response.content_length() {
@@ -610,6 +620,13 @@ async fn validate_asr_transcription(config: &ProviderConfig, model: &str) -> Res
         return Err("asrMissingTextField".to_string());
     }
     Ok(())
+}
+
+/// 400 应答体是否是「音频里没有语音」类内容拒收（而非参数错误）。
+/// 只匹配语义明确的措辞，宁可漏判（用户看到 400 后实测仍可用）也不误判
+/// 真正的参数错误为成功。
+fn asr_error_is_no_speech_rejection(body: &str) -> bool {
+    body.to_ascii_lowercase().contains("no speech")
 }
 
 pub(crate) fn asr_transcriptions_url(base_url: &str) -> Result<String, String> {
@@ -836,10 +853,25 @@ mod tests {
     // LLM 路径的 SSRF 校验。read_openai_provider_config 依赖凭据库无法纯单测，这里直接对它调用
     // 的校验器锁定 ASR 形态 endpoint 的拒绝/放行契约。
     use super::{
-        fetch_provider_models, models_url, provider_llm_error_message, provider_log_context,
-        provider_request_error_message, sanitized_provider_destination, ProviderConfig,
+        asr_error_is_no_speech_rejection, fetch_provider_models, models_url,
+        provider_llm_error_message, provider_log_context, provider_request_error_message,
+        sanitized_provider_destination, ProviderConfig,
     };
     use crate::endpoint_security::validate_http_endpoint;
+
+    #[test]
+    fn silence_probe_content_rejection_is_not_a_credential_error() {
+        // StepFun 对静音探针的实测应答（2026-07）：鉴权/模型都通过，只是探针
+        // 音频没有语音内容——不能报成凭据错误。
+        assert!(asr_error_is_no_speech_rejection(
+            r#"{"error":{"message":"no speech found","type":"request_params_invalid"}}"#
+        ));
+        // 真正的参数错误不能被误判成功。
+        assert!(!asr_error_is_no_speech_rejection(
+            r#"{"error":{"message":"Request param: response_format is invalid","type":"input_invalid"}}"#
+        ));
+        assert!(!asr_error_is_no_speech_rejection(""));
+    }
 
     #[test]
     fn provider_destination_redacts_userinfo_query_and_fragment() {
