@@ -51,6 +51,10 @@ jobs:
           echo "CXX_aarch64_linux_android=$prebuilt/bin/aarch64-linux-android24-clang++" >> "$GITHUB_ENV"
           echo "AR_aarch64_linux_android=$prebuilt/bin/llvm-ar" >> "$GITHUB_ENV"
           echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$prebuilt/bin/aarch64-linux-android24-clang" >> "$GITHUB_ENV"
+          echo "CC_x86_64_linux_android=$prebuilt/bin/x86_64-linux-android24-clang" >> "$GITHUB_ENV"
+          echo "CXX_x86_64_linux_android=$prebuilt/bin/x86_64-linux-android24-clang++" >> "$GITHUB_ENV"
+          echo "AR_x86_64_linux_android=$prebuilt/bin/llvm-ar" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER=$prebuilt/bin/x86_64-linux-android24-clang" >> "$GITHUB_ENV"
 
       - uses: actions/setup-node@v4
         with:
@@ -65,7 +69,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android
+          targets: aarch64-linux-android,x86_64-linux-android
 
       - uses: gradle/actions/setup-gradle@v4
 
@@ -97,8 +101,8 @@ jobs:
         run: >-
           src-tauri/gen/android/gradlew
           --project-dir src-tauri/gen/android
-          :app:testDebugUnitTest
-          :app:assembleDebugAndroidTest
+          :app:testX86_64DebugUnitTest
+          :app:assembleX86_64DebugAndroidTest
           --no-daemon
 
       - name: Enable KVM for Android instrumentation tests
@@ -118,7 +122,7 @@ jobs:
             cd openless-all/app &&
             src-tauri/gen/android/gradlew
             --project-dir src-tauri/gen/android
-            :app:connectedDebugAndroidTest
+            :app:connectedX86_64DebugAndroidTest
             --no-daemon
 
   cross-platform:

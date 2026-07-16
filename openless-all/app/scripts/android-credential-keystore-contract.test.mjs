@@ -159,13 +159,33 @@ requirePattern(
   'generated Android project must declare the AndroidX instrumentation runner',
 );
 
-requirePattern(ci, /testDebugUnitTest/, 'PR CI must execute JVM credential tests');
-requirePattern(ci, /assembleDebugAndroidTest/, 'PR CI must compile instrumentation tests');
 requirePattern(
   ci,
-  /connectedDebugAndroidTest/,
-  'PR CI must execute Android Keystore instrumentation tests on a device',
+  /targets:\s*aarch64-linux-android,x86_64-linux-android/,
+  'PR CI must install the Rust target used by the x86_64 emulator',
 );
+requirePattern(
+  ci,
+  /testX86_64DebugUnitTest/,
+  'PR CI must execute JVM credential tests for the x86_64 flavor',
+);
+requirePattern(
+  ci,
+  /assembleX86_64DebugAndroidTest/,
+  'PR CI must compile x86_64 instrumentation tests',
+);
+requirePattern(
+  ci,
+  /connectedX86_64DebugAndroidTest/,
+  'PR CI must execute x86_64 Android Keystore instrumentation tests on a device',
+);
+if (
+  /:app:(?:testDebugUnitTest|assembleDebugAndroidTest|connectedDebugAndroidTest)\b/.test(
+    ci,
+  )
+) {
+  throw new Error('PR CI must not use Android tasks without the required ABI flavor');
+}
 requirePattern(
   rustStore,
   /successful_v2_rejects_legacy_base64_downgrade/,
