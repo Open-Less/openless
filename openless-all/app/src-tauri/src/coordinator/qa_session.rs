@@ -47,11 +47,36 @@ fn complete_qa_turn_state(state: &mut QaSessionState) {
     state.selection = None;
 }
 
+fn qa_session_is_active(state: &QaSessionState, session_id: SessionId) -> bool {
+    state.panel_visible && state.session_id == session_id
+}
+
+fn qa_session_can_continue(state: &QaSessionState, session_id: SessionId) -> bool {
+    qa_session_is_active(state, session_id) && !state.cancelled
+}
+
 fn qa_turn_can_continue(state: &QaSessionState, session_id: SessionId) -> bool {
-    state.panel_visible
-        && state.phase == QaPhase::Processing
-        && !state.cancelled
-        && state.session_id == session_id
+    qa_session_can_continue(state, session_id) && state.phase == QaPhase::Processing
+}
+
+fn qa_recording_can_continue(state: &QaSessionState, session_id: SessionId) -> bool {
+    qa_session_can_continue(state, session_id) && state.phase == QaPhase::Recording
+}
+
+fn qa_provider_should_cancel(
+    state: &QaSessionState,
+    session_id: SessionId,
+    cancel_requested: bool,
+) -> bool {
+    cancel_requested || state.session_id != session_id
+}
+
+fn finish_qa_with_error_if_current(inner: &Arc<Inner>, session_id: SessionId, message: String) {
+    if qa_session_can_continue(&inner.qa_state.lock(), session_id) {
+        finish_qa_with_error(inner, message);
+    } else {
+        log::info!("[coord] discarded error from invalidated QA session");
+    }
 }
 
 /// 每轮 QA 都重新捕获选区。Windows 上 QA WebView 已持有焦点，需先临时还给
@@ -117,7 +142,12 @@ pub(super) async fn finalize_dictation_as_qa_question(inner: &Arc<Inner>) -> Res
         );
     }
 
-    let raw = match take_current_dictation_transcript_for_qa(inner).await {
+    let raw_result = take_current_dictation_transcript_for_qa(inner, session_id).await;
+    if !qa_turn_can_continue(&inner.qa_state.lock(), session_id) {
+        log::info!("[coord] overlay QA turn invalidated while awaiting transcript");
+        return Ok(());
+    }
+    let raw = match raw_result {
         Ok(Some(raw)) => raw,
         Ok(None) => {
             log::info!("[coord] QA finalize from overlay: no transcript produced");
@@ -125,7 +155,7 @@ pub(super) async fn finalize_dictation_as_qa_question(inner: &Arc<Inner>) -> Res
             return Ok(());
         }
         Err(error) => {
-            finish_qa_with_error(inner, error.clone());
+            finish_qa_with_error_if_current(inner, session_id, error.clone());
             return Err(error);
         }
     };
@@ -206,6 +236,7 @@ pub(super) async fn submit_qa_text_question(
 
 pub(super) async fn take_current_dictation_transcript_for_qa(
     inner: &Arc<Inner>,
+    qa_session_id: SessionId,
 ) -> Result<Option<RawTranscript>, String> {
     wait_for_dictation_listening(inner).await?;
 
@@ -236,7 +267,9 @@ pub(super) async fn take_current_dictation_transcript_for_qa(
         OverlayDictationTranscribeOutcome::Done(Err(error)) => {
             restore_prepared_windows_ime_session(inner, current_session_id);
             set_phase_idle_if_session_matches(inner, current_session_id);
-            finish_qa_with_error(inner, format!("识别失败: {error}"));
+            if qa_turn_can_continue(&inner.qa_state.lock(), qa_session_id) {
+                finish_qa_with_error_if_current(inner, qa_session_id, format!("识别失败: {error}"));
+            }
             return Err(error);
         }
         OverlayDictationTranscribeOutcome::Cancelled => {
@@ -248,7 +281,9 @@ pub(super) async fn take_current_dictation_transcript_for_qa(
                     state.focus_target = None;
                 }
             }
-            finish_qa_idle_silently(inner);
+            if qa_turn_can_continue(&inner.qa_state.lock(), qa_session_id) {
+                finish_qa_idle_silently(inner);
+            }
             return Ok(None);
         }
     };
@@ -274,7 +309,9 @@ pub(super) async fn take_current_dictation_transcript_for_qa(
     if raw.text.trim().is_empty() {
         restore_prepared_windows_ime_session(inner, current_session_id);
         set_phase_idle_if_session_matches(inner, current_session_id);
-        finish_qa_idle_silently(inner);
+        if qa_turn_can_continue(&inner.qa_state.lock(), qa_session_id) {
+            finish_qa_idle_silently(inner);
+        }
         return Ok(None);
     }
 
@@ -504,7 +541,9 @@ pub(super) async fn answer_qa_question_text(
         }
     }
     if question.trim().is_empty() {
-        finish_qa_idle_silently(inner);
+        if qa_turn_can_continue(&inner.qa_state.lock(), session_id) {
+            finish_qa_idle_silently(inner);
+        }
         return Ok(());
     }
 
@@ -566,7 +605,14 @@ pub(super) async fn answer_qa_question_text(
     };
 
     let cancel_flag = Arc::clone(&inner.qa_stream_cancelled);
-    let should_cancel = move || cancel_flag.load(Ordering::Relaxed);
+    let inner_for_cancel = Arc::clone(inner);
+    let should_cancel = move || {
+        qa_provider_should_cancel(
+            &inner_for_cancel.qa_state.lock(),
+            session_id,
+            cancel_flag.load(Ordering::Relaxed),
+        )
+    };
 
     let answer = match answer_chat_dispatch(
         &messages_for_llm,
@@ -590,7 +636,7 @@ pub(super) async fn answer_qa_question_text(
                 }
                 state.messages.pop();
             }
-            finish_qa_with_error(inner, format!("回答失败: {error}"));
+            finish_qa_with_error_if_current(inner, session_id, format!("回答失败: {error}"));
             return Err(error.to_string());
         }
     };
@@ -677,7 +723,7 @@ pub(super) async fn answer_qa_question_text(
 /// - 不写 history.json（除非 prefs.qa_save_history=true 才旁路写一条 placeholder）
 /// - 用独立的 qa_recorder + qa_asr，复用现有 Volcengine ASR 通路
 pub(super) async fn begin_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
-    {
+    let session_id = {
         let mut state = inner.qa_state.lock();
         if !state.panel_visible {
             // 防御：浮窗没开就被叫到这里说明路由错了，直接退出。
@@ -691,7 +737,8 @@ pub(super) async fn begin_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
         state.session_id = new_session_id();
         state.front_app = capture_frontmost_app();
         state.selection = None;
-    }
+        state.session_id
+    };
     // 重置 SSE 取消标志：上一轮可能 set 过的 true 留着会让本轮流式立即 break。
     inner.qa_stream_cancelled.store(false, Ordering::SeqCst);
 
@@ -700,7 +747,14 @@ pub(super) async fn begin_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
     let selection = capture.selection;
     let selection_warning = capture.warning_code;
     let selection_preview_text = selection.as_ref().map(|s| s.text.clone());
-    inner.qa_state.lock().selection = selection.clone();
+    {
+        let mut state = inner.qa_state.lock();
+        if !qa_recording_can_continue(&state, session_id) {
+            log::info!("[coord] QA recording invalidated while capturing selection");
+            return Ok(());
+        }
+        state.selection = selection.clone();
+    }
 
     if let Some(app) = inner.app.lock().clone() {
         let messages = inner.qa_state.lock().messages.clone();
@@ -721,13 +775,13 @@ pub(super) async fn begin_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
     let active_asr = CredentialsVault::get_active_asr();
     if let Err(message) = ensure_asr_credentials() {
         log::warn!("[coord] QA: active ASR credentials missing: {message}");
-        finish_qa_with_error(inner, format!("缺少 ASR 凭据：{message}"));
+        finish_qa_with_error_if_current(inner, session_id, format!("缺少 ASR 凭据：{message}"));
         return Err(message);
     }
 
     if let Err(message) = ensure_microphone_permission(inner) {
         log::warn!("[coord] QA: microphone permission gate failed: {message}");
-        finish_qa_with_error(inner, message.clone());
+        finish_qa_with_error_if_current(inner, session_id, message.clone());
         return Err(message);
     }
 
@@ -735,10 +789,18 @@ pub(super) async fn begin_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
         Ok(qa_asr) => qa_asr,
         Err(message) => {
             log::error!("[coord] QA active ASR init failed: {message}");
-            finish_qa_with_error(inner, format!("ASR 初始化失败: {message}"));
+            finish_qa_with_error_if_current(
+                inner,
+                session_id,
+                format!("ASR 初始化失败: {message}"),
+            );
             return Err(message);
         }
     };
+    if !qa_recording_can_continue(&inner.qa_state.lock(), session_id) {
+        log::info!("[coord] QA recording invalidated during ASR initialization");
+        return Ok(());
+    }
     let consumer = qa_asr.recorder_consumer();
     *inner.qa_asr.lock() = Some(qa_asr.active_asr());
 
@@ -748,10 +810,11 @@ pub(super) async fn begin_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
     let last_emit_at = Arc::new(Mutex::new(None::<Instant>));
     const LEVEL_EMIT_MIN_INTERVAL_MS: u64 = 33;
     let level_handler: Arc<dyn Fn(f32) + Send + Sync> = Arc::new(move |level| {
-        let phase = inner_for_level.qa_state.lock().phase;
-        if phase != QaPhase::Recording {
+        let state = inner_for_level.qa_state.lock();
+        if !qa_recording_can_continue(&state, session_id) {
             return;
         }
+        drop(state);
         let now = Instant::now();
         {
             let mut last = last_emit_at.lock();
@@ -783,16 +846,36 @@ pub(super) async fn begin_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
     let microphone_device_name = selected_microphone_device_name(inner);
     stop_microphone_preview_monitor(inner, "QA recorder");
     acquire_recording_mute(inner, "qa").await;
+    if !qa_recording_can_continue(&inner.qa_state.lock(), session_id) {
+        log::info!("[coord] QA recording invalidated before recorder start");
+        if let Some(asr) = inner.qa_asr.lock().take() {
+            cancel_active_asr(asr);
+        }
+        release_recording_mute(inner, "qa");
+        return Ok(());
+    }
     // QA 默认不留痕（qa_save_history 默认 false），录音文件归档也跟着不开。
     // 调试 QA 麦克风请用主听写路径。
     match Recorder::start(microphone_device_name, consumer, level_handler, None) {
         Ok((rec, runtime_errors, archive_active)) => {
+            let state = inner.qa_state.lock();
+            if !qa_recording_can_continue(&state, session_id) {
+                drop(state);
+                drop(rec);
+                if let Some(asr) = inner.qa_asr.lock().take() {
+                    cancel_active_asr(asr);
+                }
+                release_recording_mute(inner, "qa");
+                log::info!("[coord] discarded recorder from invalidated QA session");
+                return Ok(());
+            }
             // QA 路径不写 dictation 的 history，但仍把 archive 状态归零，避免 dictation
             // 接力时读到上一个 QA session 的过期值。
             inner
                 .audio_archive_active
                 .store(archive_active, std::sync::atomic::Ordering::Relaxed);
             *inner.qa_recorder.lock() = Some(rec);
+            drop(state);
             // QA 也跟主听写一样监听 cpal runtime error。设备中途消失 / panic 时
             // 不能让 QA 永远卡在 Recording 没反馈。详见 issue #168。
             spawn_qa_recorder_error_monitor(inner, runtime_errors);
@@ -803,29 +886,36 @@ pub(super) async fn begin_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
                 cancel_active_asr(asr);
             }
             release_recording_mute(inner, "qa");
-            finish_qa_with_error(inner, format!("录音启动失败: {e}"));
+            finish_qa_with_error_if_current(inner, session_id, format!("录音启动失败: {e}"));
             return Err(e.to_string());
         }
     }
 
     if let Err(e) = qa_asr.open_streaming_session().await {
+        if !qa_recording_can_continue(&inner.qa_state.lock(), session_id) {
+            log::info!("[coord] discarded ASR error from invalidated QA session");
+            stop_qa_recorder(inner);
+            if let Some(asr) = inner.qa_asr.lock().take() {
+                cancel_active_asr(asr);
+            }
+            return Ok(());
+        }
         log::error!("[coord] QA: open ASR session failed: {e}");
         stop_qa_recorder(inner);
         if let Some(asr) = inner.qa_asr.lock().take() {
             cancel_active_asr(asr);
         }
-        finish_qa_with_error(inner, format!("ASR 连接失败: {e}"));
+        finish_qa_with_error_if_current(inner, session_id, format!("ASR 连接失败: {e}"));
         return Err(e);
     }
 
     // cancel race：在 await 期间用户可能 dismiss 了浮窗。
-    if inner.qa_state.lock().cancelled {
+    if !qa_recording_can_continue(&inner.qa_state.lock(), session_id) {
         log::info!("[coord] QA cancel raced during open_session — aborting begin");
         if let Some(asr) = inner.qa_asr.lock().take() {
             cancel_active_asr(asr);
         }
         stop_qa_recorder(inner);
-        inner.qa_state.lock().phase = QaPhase::Idle;
         return Ok(());
     }
 
@@ -841,13 +931,14 @@ pub(super) async fn begin_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
 }
 
 pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
-    {
+    let session_id = {
         let mut state = inner.qa_state.lock();
         if state.phase != QaPhase::Recording {
             return Ok(());
         }
         state.phase = QaPhase::Processing;
-    }
+        state.session_id
+    };
 
     // 胶囊进入 Transcribing：用户视觉上看到"识别中"。
     emit_capsule(inner, CapsuleState::Transcribing, 0.0, 0, None, None);
@@ -871,7 +962,7 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
     };
 
     #[cfg_attr(not(target_os = "windows"), allow(unused_variables))]
-    let qa_session_id = inner.qa_state.lock().session_id;
+    let qa_session_id = session_id;
     let uses_global_timeout = asr_transcribe_uses_global_timeout(&asr);
     let raw = match asr {
         ActiveAsr::Volcengine(asr) => {
@@ -884,7 +975,7 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
                 Ok(Ok(r)) => r,
                 Ok(Err(e)) => {
                     log::error!("[coord] QA: await final failed: {e}");
-                    finish_qa_with_error(inner, format!("识别失败: {e}"));
+                    finish_qa_with_error_if_current(inner, session_id, format!("识别失败: {e}"));
                     return Err(e.to_string());
                 }
                 Err(_) => {
@@ -893,7 +984,7 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
                         COORDINATOR_GLOBAL_TIMEOUT_SECS
                     );
                     asr.cancel();
-                    finish_qa_with_error(inner, "识别超时".to_string());
+                    finish_qa_with_error_if_current(inner, session_id, "识别超时".to_string());
                     return Err("global timeout".to_string());
                 }
             }
@@ -908,7 +999,7 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
                 Ok(Ok(r)) => r,
                 Ok(Err(e)) => {
                     log::error!("[coord] QA: Bailian await final failed: {e}");
-                    finish_qa_with_error(inner, format!("识别失败: {e}"));
+                    finish_qa_with_error_if_current(inner, session_id, format!("识别失败: {e}"));
                     return Err(e.to_string());
                 }
                 Err(_) => {
@@ -917,7 +1008,7 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
                         COORDINATOR_GLOBAL_TIMEOUT_SECS
                     );
                     asr.cancel();
-                    finish_qa_with_error(inner, "识别超时".to_string());
+                    finish_qa_with_error_if_current(inner, session_id, "识别超时".to_string());
                     return Err("bailian global timeout".to_string());
                 }
             }
@@ -932,7 +1023,7 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
                 Ok(Ok(r)) => r,
                 Ok(Err(e)) => {
                     log::error!("[coord] QA: Qwen3 realtime await final failed: {e}");
-                    finish_qa_with_error(inner, format!("识别失败: {e}"));
+                    finish_qa_with_error_if_current(inner, session_id, format!("识别失败: {e}"));
                     return Err(e.to_string());
                 }
                 Err(_) => {
@@ -941,7 +1032,7 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
                         COORDINATOR_GLOBAL_TIMEOUT_SECS
                     );
                     asr.cancel();
-                    finish_qa_with_error(inner, "识别超时".to_string());
+                    finish_qa_with_error_if_current(inner, session_id, "识别超时".to_string());
                     return Err("qwen3 realtime global timeout".to_string());
                 }
             }
@@ -953,7 +1044,7 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
                 Ok(Ok(r)) => r,
                 Ok(Err(e)) => {
                     log::error!("[coord] QA: whisper transcribe failed: {e}");
-                    finish_qa_with_error(inner, format!("识别失败: {e}"));
+                    finish_qa_with_error_if_current(inner, session_id, format!("识别失败: {e}"));
                     return Err(e.to_string());
                 }
                 Err(_) => {
@@ -961,7 +1052,7 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
                         "[coord] QA: whisper 全局超时 {} 秒",
                         COORDINATOR_GLOBAL_TIMEOUT_SECS
                     );
-                    finish_qa_with_error(inner, "识别超时".to_string());
+                    finish_qa_with_error_if_current(inner, session_id, "识别超时".to_string());
                     return Err("whisper global timeout".to_string());
                 }
             }
@@ -973,7 +1064,7 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
                 Ok(Ok(r)) => r,
                 Ok(Err(e)) => {
                     log::error!("[coord] QA: MiMo ASR transcribe failed: {e}");
-                    finish_qa_with_error(inner, format!("识别失败: {e}"));
+                    finish_qa_with_error_if_current(inner, session_id, format!("识别失败: {e}"));
                     return Err(e.to_string());
                 }
                 Err(_) => {
@@ -981,7 +1072,7 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
                         "[coord] QA: MiMo ASR 全局超时 {} 秒",
                         COORDINATOR_GLOBAL_TIMEOUT_SECS
                     );
-                    finish_qa_with_error(inner, "识别超时".to_string());
+                    finish_qa_with_error_if_current(inner, session_id, "识别超时".to_string());
                     return Err("mimo global timeout".to_string());
                 }
             }
@@ -994,7 +1085,7 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
                 Ok(Ok(r)) => r,
                 Ok(Err(e)) => {
                     log::error!("[coord] QA: DashScope Fun-ASR-Flash transcribe failed: {e}");
-                    finish_qa_with_error(inner, format!("识别失败: {e}"));
+                    finish_qa_with_error_if_current(inner, session_id, format!("识别失败: {e}"));
                     return Err(e.to_string());
                 }
                 Err(_) => {
@@ -1003,7 +1094,7 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
                         timeout_duration.as_secs(),
                         audio_secs
                     );
-                    finish_qa_with_error(inner, "识别超时".to_string());
+                    finish_qa_with_error_if_current(inner, session_id, "识别超时".to_string());
                     return Err("dashscope multimodal global timeout".to_string());
                 }
             }
@@ -1017,17 +1108,27 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
                     Ok(Ok(raw)) => raw,
                     Ok(Err(error)) => {
                         log::error!("[coord] QA: ElevenLabs ASR transcribe failed: {error}");
-                        finish_qa_with_error(inner, format!("识别失败: {error}"));
+                        finish_qa_with_error_if_current(
+                            inner,
+                            session_id,
+                            format!("识别失败: {error}"),
+                        );
                         return Err(error.to_string());
                     }
                     Err(_) => {
-                        finish_qa_with_error(inner, "识别超时".to_string());
+                        finish_qa_with_error_if_current(
+                            inner,
+                            session_id,
+                            "识别超时".to_string(),
+                        );
                         return Err("elevenlabs dynamic timeout".to_string());
                     }
                 },
                 _ = wait_for_qa_processing_cancel(inner) => {
                     e.cancel();
-                    finish_qa_idle_silently(inner);
+                    if qa_session_is_active(&inner.qa_state.lock(), session_id) {
+                        finish_qa_idle_silently(inner);
+                    }
                     return Ok(());
                 }
             }
@@ -1053,11 +1154,17 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
                         log::info!(
                             "[coord] QA Foundry Local Whisper transcribe cancelled — discarding transcript"
                         );
-                        finish_qa_idle_silently(inner);
+                        if qa_session_is_active(&inner.qa_state.lock(), session_id) {
+                            finish_qa_idle_silently(inner);
+                        }
                         return Ok(());
                     }
                     log::error!("[coord] QA Foundry Local Whisper transcribe failed: {e:#}");
-                    finish_qa_with_error(inner, format!("本地识别失败: {e}"));
+                    finish_qa_with_error_if_current(
+                        inner,
+                        session_id,
+                        format!("本地识别失败: {e}"),
+                    );
                     return Err(e.to_string());
                 }
             }
@@ -1083,11 +1190,17 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
                         log::info!(
                             "[coord] QA sherpa-onnx transcribe cancelled — discarding transcript"
                         );
-                        finish_qa_idle_silently(inner);
+                        if qa_session_is_active(&inner.qa_state.lock(), session_id) {
+                            finish_qa_idle_silently(inner);
+                        }
                         return Ok(());
                     }
                     log::error!("[coord] QA sherpa-onnx transcribe failed: {e:#}");
-                    finish_qa_with_error(inner, format!("本地识别失败: {e}"));
+                    finish_qa_with_error_if_current(
+                        inner,
+                        session_id,
+                        format!("本地识别失败: {e}"),
+                    );
                     return Err(e.to_string());
                 }
             }
@@ -1109,7 +1222,11 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
                 Ok(Ok(r)) => r,
                 Ok(Err(e)) => {
                     log::error!("[coord] QA local Qwen3-ASR transcribe failed: {e:#}");
-                    finish_qa_with_error(inner, format!("本地识别失败: {e}"));
+                    finish_qa_with_error_if_current(
+                        inner,
+                        session_id,
+                        format!("本地识别失败: {e}"),
+                    );
                     return Err(e.to_string());
                 }
                 Err(_) => {
@@ -1117,7 +1234,7 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
                         "[coord] QA local Qwen3-ASR transcribe timeout after {}s",
                         timeout_duration.as_secs()
                     );
-                    finish_qa_with_error(inner, "本地识别超时".to_string());
+                    finish_qa_with_error_if_current(inner, session_id, "本地识别超时".to_string());
                     return Err("local qwen transcribe timeout".to_string());
                 }
             }
@@ -1130,12 +1247,16 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
                 Ok(Ok(r)) => r,
                 Ok(Err(e)) => {
                     log::error!("[coord] QA Apple Speech transcribe failed: {e:#}");
-                    finish_qa_with_error(inner, format!("本地识别失败: {e}"));
+                    finish_qa_with_error_if_current(
+                        inner,
+                        session_id,
+                        format!("本地识别失败: {e}"),
+                    );
                     return Err(e.to_string());
                 }
                 Err(_) => {
                     log::error!("[coord] QA Apple Speech transcribe timeout");
-                    finish_qa_with_error(inner, "本地识别超时".to_string());
+                    finish_qa_with_error_if_current(inner, session_id, "本地识别超时".to_string());
                     return Err("apple speech transcribe timeout".to_string());
                 }
             }
@@ -1143,9 +1264,8 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
     };
 
     // cancel race：用户在 transcribe 中按 Esc / dismiss → 静默退出。
-    if inner.qa_state.lock().cancelled {
+    if !qa_turn_can_continue(&inner.qa_state.lock(), session_id) {
         log::info!("[coord] QA cancel detected after ASR — discarding transcript");
-        finish_qa_idle_silently(inner);
         return Ok(());
     }
 
@@ -1157,160 +1277,7 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
         return Ok(());
     }
 
-    // 拼这一轮的 user 消息：当前轮捕获到非空选区时始终嵌入，确保用户在多轮问答中
-    // 重新划选的文字也进入模型上下文；没有新选区时只发送问题并沿用历史上下文。
-    let user_message = {
-        let st = inner.qa_state.lock();
-        qa_user_message_from_state(&st, &question)
-    };
-
-    inner.qa_state.lock().messages.push(user_message);
-
-    if let Some(app) = inner.app.lock().clone() {
-        let messages = inner.qa_state.lock().messages.clone();
-        let _ = app.emit_to(
-            qa_event_target(),
-            "qa:state",
-            serde_json::json!({
-                "kind": "thinking",
-                "messages": messages,
-            }),
-        );
-    }
-
-    // 胶囊：思考阶段（复用 dictation 的 Polishing 状态——视觉上是"润色中"，QA 借用一下）。
-    emit_capsule(inner, CapsuleState::Polishing, 0.0, 0, None, None);
-
-    let prefs = inner.prefs.get();
-    let working_languages = prefs.working_languages.clone();
-    let chinese_script_preference = prefs.chinese_script_preference;
-    let output_language_preference = prefs.output_language_preference;
-    let llm_thinking_enabled = prefs.llm_thinking_enabled;
-    let (messages_for_llm, front_app) = {
-        let st = inner.qa_state.lock();
-        (st.messages.clone(), st.front_app.clone())
-    };
-
-    // 流式回调：每个 SSE delta 立刻推一帧 qa:state{kind:"answer_delta"} 给前端，
-    // 浮窗里气泡边收边长。最终的 messages 由 answer 事件统一下发（保证一致性）。
-    //
-    // session_id 守卫（issue #161）：闭包捕获本会话 id；用户取消 → 关浮窗 → 开新浮窗
-    // 开新一轮时，旧的 in-flight LLM 流仍可能 emit chunk，必须在 emit 前比对当前
-    // qa_state.session_id == 捕获 id，否则跳过——避免旧会话的字漏进新气泡。
-    let captured_session_id = inner.qa_state.lock().session_id;
-    let inner_for_delta = Arc::clone(inner);
-    let on_delta = move |chunk: &str| {
-        let cur_id = inner_for_delta.qa_state.lock().session_id;
-        if cur_id != captured_session_id {
-            return; // 旧 session 漏来的 chunk，丢弃
-        }
-        if let Some(app) = inner_for_delta.app.lock().clone() {
-            let _ = app.emit_to(
-                qa_event_target(),
-                "qa:state",
-                serde_json::json!({
-                    "kind": "answer_delta",
-                    "chunk": chunk,
-                }),
-            );
-        }
-    };
-
-    // SSE 流取消旗标：cancel_qa_session / close_qa_panel 会 set true，
-    // polish 的 SSE loop 每帧检查 → break，释放 HTTP body。详见 issue #161。
-    let cancel_flag = Arc::clone(&inner.qa_stream_cancelled);
-    let should_cancel = move || cancel_flag.load(Ordering::Relaxed);
-
-    let answer = match answer_chat_dispatch(
-        &messages_for_llm,
-        &working_languages,
-        chinese_script_preference,
-        output_language_preference,
-        llm_thinking_enabled,
-        front_app.as_deref(),
-        on_delta,
-        should_cancel,
-    )
-    .await
-    {
-        Ok(s) => s,
-        Err(e) => {
-            log::error!("[coord] QA: LLM answer failed: {e}");
-            // 把刚 push 的 user 消息回滚，避免 retry 重复
-            inner.qa_state.lock().messages.pop();
-            finish_qa_with_error(inner, format!("回答失败: {e}"));
-            return Err(e.to_string());
-        }
-    };
-
-    if inner.qa_state.lock().cancelled {
-        log::info!("[coord] QA cancel detected before answer — discarding");
-        // 同样回滚未配对的 user 消息
-        inner.qa_state.lock().messages.pop();
-        finish_qa_idle_silently(inner);
-        return Ok(());
-    }
-
-    inner
-        .qa_state
-        .lock()
-        .messages
-        .push(crate::types::QaChatMessage {
-            role: "assistant".to_string(),
-            content: answer.clone(),
-            selection_text: None,
-        });
-
-    if let Some(app) = inner.app.lock().clone() {
-        let messages = inner.qa_state.lock().messages.clone();
-        let _ = app.emit_to(
-            qa_event_target(),
-            "qa:state",
-            serde_json::json!({
-                "kind": "answer",
-                "messages": messages,
-            }),
-        );
-    }
-
-    // 胶囊直接收掉。QA 不走 insertion，没"已粘贴 N 字"语义；浮窗里答案就是用户的反馈。
-    // （之前用 Done 状态会被 capsule UI 错误地渲染上一次 dictation 残留的 message/insertedChars。）
-    emit_capsule(inner, CapsuleState::Idle, 0.0, 0, None, None);
-
-    // 可选：写一条 history（QA 类型）。当前 DictationSession schema 不能直接表达
-    // "QuestionAnswer" 类型，因此简单做法：勾选 qa_save_history 时写一条
-    // mode=Raw、error_code=Some("qaSession") 的 placeholder，避免污染 schema 同时
-    // 让用户能在历史里翻到这次问答的字面值。详见 issue #118。
-    if prefs.qa_save_history {
-        let session = DictationSession {
-            id: Uuid::new_v4().to_string(),
-            created_at: Utc::now().to_rfc3339(),
-            raw_transcript: question.clone(),
-            final_text: answer.clone(),
-            mode: PolishMode::Raw,
-            style_pack_id: None,
-            translation_active: false,
-            polish_source: None,
-            app_bundle_id: None,
-            app_name: front_app.clone(),
-            insert_status: InsertStatus::CopiedFallback,
-            error_code: Some("qaSession".to_string()),
-            duration_ms: Some(raw.duration_ms),
-            dictionary_entry_count: None,
-            has_audio_recording: None,
-        };
-        let prefs_snapshot = inner.prefs.get();
-        if let Err(e) = inner.history.append_with_retention(
-            session,
-            prefs_snapshot.history_retention_days,
-            prefs_snapshot.history_max_entries,
-        ) {
-            log::error!("[coord] QA history append failed: {e}");
-        }
-    }
-
-    complete_qa_turn_state(&mut inner.qa_state.lock());
-    Ok(())
+    answer_qa_question_text(inner, question, raw.duration_ms, session_id).await
 }
 
 /// 把出错状态送到前端浮窗 + 胶囊错误闪一下 + 复位 phase。
@@ -1550,6 +1517,32 @@ mod tests {
         assert!(!qa_turn_can_continue(&state, captured_session_id));
     }
 
+    #[test]
+    fn qa_closed_recording_cannot_resume_or_restart_provider() {
+        let mut state = QaSessionState::default();
+        state.panel_visible = true;
+        state.phase = QaPhase::Recording;
+        state.session_id = new_session_id();
+        let captured_session_id = state.session_id;
+        assert!(qa_recording_can_continue(&state, captured_session_id));
+        assert!(!qa_provider_should_cancel(
+            &state,
+            captured_session_id,
+            false
+        ));
+
+        state.panel_visible = false;
+        state.phase = QaPhase::Idle;
+        state.cancelled = false;
+        state.session_id = new_session_id();
+        assert!(!qa_recording_can_continue(&state, captured_session_id));
+        assert!(qa_provider_should_cancel(
+            &state,
+            captured_session_id,
+            false
+        ));
+    }
+
     #[tokio::test]
     async fn overlay_elevenlabs_cancel_finishes_idle_without_error_capsule() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1598,8 +1591,10 @@ mod tests {
         }
         {
             let mut state = coordinator.inner.qa_state.lock();
+            state.panel_visible = true;
             state.phase = QaPhase::Processing;
             state.cancelled = false;
+            state.session_id = session_id;
         }
 
         let asr = Arc::new(ElevenLabsBatchASR::new(
@@ -1616,7 +1611,7 @@ mod tests {
 
         let transcribe = tokio::spawn({
             let inner = Arc::clone(&coordinator.inner);
-            async move { take_current_dictation_transcript_for_qa(&inner).await }
+            async move { take_current_dictation_transcript_for_qa(&inner, session_id).await }
         });
 
         let request_wait = tokio::time::timeout(Duration::from_secs(5), async {
