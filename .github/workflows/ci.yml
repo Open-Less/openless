@@ -34,7 +34,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          sdkmanager "ndk;26.1.10909125"
+          sdkmanager "ndk;26.1.10909125" "platforms;android-36" "build-tools;36.0.0"
           ndk_dir="$ANDROID_HOME/ndk/26.1.10909125"
           echo "ANDROID_NDK_HOME=$ndk_dir" >> "$GITHUB_ENV"
           echo "NDK_HOME=$ndk_dir" >> "$GITHUB_ENV"
@@ -100,6 +100,26 @@ jobs:
           :app:testDebugUnitTest
           :app:assembleDebugAndroidTest
           --no-daemon
+
+      - name: Enable KVM for Android instrumentation tests
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Run Android Keystore instrumentation tests
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          script: >-
+            cd openless-all/app &&
+            src-tauri/gen/android/gradlew
+            --project-dir src-tauri/gen/android
+            :app:connectedDebugAndroidTest
+            --no-daemon
 
   cross-platform:
     name: ${{ matrix.label }} checks

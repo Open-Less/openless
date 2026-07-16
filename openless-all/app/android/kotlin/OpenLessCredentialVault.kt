@@ -24,6 +24,13 @@ private fun credentialResponse(status: Byte, payload: ByteArray = byteArrayOf())
     return byteArrayOf(status) + payload
 }
 
+internal fun credentialStatusForKeyLoadFailure(error: GeneralSecurityException): Byte {
+    return when (error) {
+        is KeyPermanentlyInvalidatedException -> CREDENTIAL_STATUS_KEY_MISSING
+        else -> CREDENTIAL_STATUS_TEMPORARILY_UNAVAILABLE
+    }
+}
+
 /** AndroidKeyStore owner with fixed, secret-free status responses for JNI. */
 internal class AndroidKeystoreCredentialVault(private val alias: String) {
     @Synchronized
@@ -33,10 +40,13 @@ internal class AndroidKeystoreCredentialVault(private val alias: String) {
                 CREDENTIAL_STATUS_OK,
                 OpenLessCredentialCipher.seal(getOrCreateKey(), plaintext, aad),
             )
-        } catch (_: KeyPermanentlyInvalidatedException) {
-            credentialResponse(CREDENTIAL_STATUS_KEY_MISSING)
-        } catch (_: UnrecoverableKeyException) {
-            credentialResponse(CREDENTIAL_STATUS_KEY_MISSING)
+        } catch (error: KeyPermanentlyInvalidatedException) {
+            credentialResponse(credentialStatusForKeyLoadFailure(error))
+        } catch (error: UnrecoverableKeyException) {
+            // Keystore2 wraps backend-busy and other provider failures in this
+            // broad JCA exception too. Only an absent alias or the explicit
+            // permanent-invalidated exception is safe to treat as data loss.
+            credentialResponse(credentialStatusForKeyLoadFailure(error))
         } catch (_: IllegalArgumentException) {
             credentialResponse(CREDENTIAL_STATUS_MALFORMED)
         } catch (_: GeneralSecurityException) {
@@ -51,10 +61,10 @@ internal class AndroidKeystoreCredentialVault(private val alias: String) {
         return try {
             val key = existingKey() ?: return credentialResponse(CREDENTIAL_STATUS_KEY_MISSING)
             credentialResponse(CREDENTIAL_STATUS_OK, OpenLessCredentialCipher.open(key, packet, aad))
-        } catch (_: KeyPermanentlyInvalidatedException) {
-            credentialResponse(CREDENTIAL_STATUS_KEY_MISSING)
-        } catch (_: UnrecoverableKeyException) {
-            credentialResponse(CREDENTIAL_STATUS_KEY_MISSING)
+        } catch (error: KeyPermanentlyInvalidatedException) {
+            credentialResponse(credentialStatusForKeyLoadFailure(error))
+        } catch (error: UnrecoverableKeyException) {
+            credentialResponse(credentialStatusForKeyLoadFailure(error))
         } catch (_: AEADBadTagException) {
             credentialResponse(CREDENTIAL_STATUS_AUTHENTICATION_FAILED)
         } catch (_: BadPaddingException) {
@@ -76,6 +86,36 @@ internal class AndroidKeystoreCredentialVault(private val alias: String) {
                 keyStore.deleteEntry(alias)
             }
             credentialResponse(CREDENTIAL_STATUS_OK)
+        } catch (_: GeneralSecurityException) {
+            credentialResponse(CREDENTIAL_STATUS_TEMPORARILY_UNAVAILABLE)
+        } catch (_: IOException) {
+            credentialResponse(CREDENTIAL_STATUS_TEMPORARILY_UNAVAILABLE)
+        }
+    }
+
+    @Synchronized
+    fun keyExists(): ByteArray {
+        return try {
+            credentialResponse(
+                CREDENTIAL_STATUS_OK,
+                byteArrayOf(if (loadKeyStore().containsAlias(alias)) 1 else 0),
+            )
+        } catch (_: GeneralSecurityException) {
+            credentialResponse(CREDENTIAL_STATUS_TEMPORARILY_UNAVAILABLE)
+        } catch (_: IOException) {
+            credentialResponse(CREDENTIAL_STATUS_TEMPORARILY_UNAVAILABLE)
+        }
+    }
+
+    @Synchronized
+    fun ensureKey(): ByteArray {
+        return try {
+            getOrCreateKey()
+            credentialResponse(CREDENTIAL_STATUS_OK)
+        } catch (error: KeyPermanentlyInvalidatedException) {
+            credentialResponse(credentialStatusForKeyLoadFailure(error))
+        } catch (error: UnrecoverableKeyException) {
+            credentialResponse(credentialStatusForKeyLoadFailure(error))
         } catch (_: GeneralSecurityException) {
             credentialResponse(CREDENTIAL_STATUS_TEMPORARILY_UNAVAILABLE)
         } catch (_: IOException) {
@@ -123,7 +163,9 @@ internal class AndroidKeystoreCredentialVault(private val alias: String) {
 @Keep
 object OpenLessCredentialVault {
     private const val KEY_ALIAS = "com.openless.app.credentials.v2"
+    private const val MIGRATION_MARKER_ALIAS = "com.openless.app.credentials.v2.migrated"
     private val backend = AndroidKeystoreCredentialVault(KEY_ALIAS)
+    private val migrationMarker = AndroidKeystoreCredentialVault(MIGRATION_MARKER_ALIAS)
 
     @JvmStatic
     fun seal(plaintext: ByteArray, aad: ByteArray): ByteArray = backend.seal(plaintext, aad)
@@ -133,4 +175,10 @@ object OpenLessCredentialVault {
 
     @JvmStatic
     fun deleteKey(): ByteArray = backend.deleteKey()
+
+    @JvmStatic
+    fun migrationComplete(): ByteArray = migrationMarker.keyExists()
+
+    @JvmStatic
+    fun markMigrationComplete(): ByteArray = migrationMarker.ensureKey()
 }

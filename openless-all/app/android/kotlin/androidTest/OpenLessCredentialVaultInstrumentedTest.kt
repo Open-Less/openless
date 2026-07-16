@@ -44,6 +44,29 @@ class OpenLessCredentialVaultInstrumentedTest {
     }
 
     @Test
+    fun keyMarkerStateTracksKeyCreationAndDeletion() {
+        assertArrayEquals(byteArrayOf(0), payload(vault.keyExists()))
+        assertEquals(CREDENTIAL_STATUS_OK, vault.ensureKey().first())
+        assertArrayEquals(byteArrayOf(1), payload(vault.keyExists()))
+        assertEquals(CREDENTIAL_STATUS_OK, vault.deleteKey().first())
+        assertArrayEquals(byteArrayOf(0), payload(vault.keyExists()))
+    }
+
+    @Test
+    fun publicFacadeRoundTripExercisesJvmStaticEntryPoints() {
+        OpenLessCredentialVault.deleteKey()
+        try {
+            val plaintext = "facade credential".toByteArray()
+            val aad = "facade aad".toByteArray()
+            val packet = payload(OpenLessCredentialVault.seal(plaintext, aad))
+
+            assertArrayEquals(plaintext, payload(OpenLessCredentialVault.open(packet, aad)))
+        } finally {
+            OpenLessCredentialVault.deleteKey()
+        }
+    }
+
+    @Test
     fun deletedKeyIsReportedAsMissing() {
         val aad = "format-version-account".toByteArray()
         val packet = payload(vault.seal("secret".toByteArray(), aad))

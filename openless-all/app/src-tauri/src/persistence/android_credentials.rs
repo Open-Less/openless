@@ -56,6 +56,10 @@ pub(super) trait AndroidCredentialsCrypto {
     ) -> std::result::Result<Vec<u8>, CryptoErrorKind>;
 
     fn delete_key(&mut self) -> std::result::Result<(), CryptoErrorKind>;
+
+    fn migration_complete(&mut self) -> std::result::Result<bool, CryptoErrorKind>;
+
+    fn mark_migration_complete(&mut self) -> std::result::Result<(), CryptoErrorKind>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -141,6 +145,15 @@ pub(super) fn read(
     };
 
     if first != b'{' {
+        // The non-exportable marker is created only after a v2 envelope has
+        // reached durable storage. Once present, a Base64 file is a rollback
+        // or injection attempt rather than a legitimate upgrade source.
+        if crypto
+            .migration_complete()
+            .map_err(StoreError::Crypto)?
+        {
+            return Err(StoreError::InvalidEnvelope);
+        }
         let plaintext = base64::engine::general_purpose::STANDARD
             .decode(&bytes)
             .map_err(|_| StoreError::InvalidEnvelope)?;
@@ -151,7 +164,12 @@ pub(super) fn read(
     }
 
     match open_envelope(&bytes, crypto) {
-        Ok(plaintext) => Ok(ReadOutcome::Plaintext(plaintext)),
+        Ok(plaintext) => {
+            crypto
+                .mark_migration_complete()
+                .map_err(StoreError::Crypto)?;
+            Ok(ReadOutcome::Plaintext(plaintext))
+        }
         Err(StoreError::Crypto(CryptoErrorKind::KeyMissingOrInvalidated)) => {
             // The ciphertext can no longer be recovered. Reset the alias first;
             // if that is temporarily unavailable, preserve the file for retry.
@@ -236,7 +254,89 @@ pub(super) fn write_verified(
     plaintext: &[u8],
     crypto: &mut impl AndroidCredentialsCrypto,
 ) -> Result<(), StoreError> {
-    write_verified_with_fault(path, plaintext, crypto, &mut |_| Ok(()))
+    write_verified_with_fault(path, plaintext, crypto, &mut |_| Ok(()))?;
+    crypto
+        .mark_migration_complete()
+        .map_err(StoreError::Crypto)
+}
+
+pub(super) fn rewrite_legacy_without_bearer(
+    path: &Path,
+    sanitized_plaintext: &[u8],
+) -> Result<(), StoreError> {
+    rewrite_legacy_without_bearer_with_fault(path, sanitized_plaintext, &mut |_| Ok(()))
+}
+
+fn rewrite_legacy_without_bearer_with_fault(
+    path: &Path,
+    sanitized_plaintext: &[u8],
+    fault: &mut impl FnMut(WriteStage) -> io::Result<()>,
+) -> Result<(), StoreError> {
+    let encoded = base64::engine::general_purpose::STANDARD.encode(sanitized_plaintext);
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    ensure_private_dir(parent)?;
+    let temporary = path.with_extension("legacy.tmp");
+    remove_if_present(&temporary)?;
+    let mut replaced = false;
+
+    let result = (|| {
+        fault(WriteStage::TempOpen).map_err(|error| io_error("open sanitized legacy", error))?;
+        let mut output = open_private_temp(&temporary)?;
+        fault(WriteStage::AfterTempOpen)
+            .map_err(|error| io_error("after opening sanitized legacy", error))?;
+        output
+            .write_all(encoded.as_bytes())
+            .map_err(|error| io_error("write sanitized legacy", error))?;
+        fault(WriteStage::AfterTempWrite)
+            .map_err(|error| io_error("after writing sanitized legacy", error))?;
+        output
+            .flush()
+            .map_err(|error| io_error("flush sanitized legacy", error))?;
+        output
+            .sync_all()
+            .map_err(|error| io_error("sync sanitized legacy", error))?;
+        fault(WriteStage::AfterTempSync)
+            .map_err(|error| io_error("after syncing sanitized legacy", error))?;
+        drop(output);
+        set_private_file_mode(&temporary)?;
+
+        let persisted = fs::read(&temporary)
+            .map_err(|error| io_error("reread sanitized legacy", error))?;
+        let verified = base64::engine::general_purpose::STANDARD
+            .decode(&persisted)
+            .map_err(|_| StoreError::VerificationFailed)?;
+        if verified != sanitized_plaintext {
+            return Err(StoreError::VerificationFailed);
+        }
+        fault(WriteStage::AfterVerification)
+            .map_err(|error| io_error("after verifying sanitized legacy", error))?;
+
+        // The replacement is ready and durable. Erase the bearer-bearing
+        // source before installing it, preserving the previous fail-closed
+        // contract while keeping all non-Marketplace credentials recoverable.
+        secure_remove(path)?;
+        fault(WriteStage::Rename).map_err(|error| io_error("replace sanitized legacy", error))?;
+        fs::rename(&temporary, path)
+            .map_err(|error| io_error("replace sanitized legacy", error))?;
+        replaced = true;
+        fault(WriteStage::AfterRename)
+            .map_err(|error| io_error("after replacing sanitized legacy", error))?;
+        set_private_file_mode(path)?;
+        fault(WriteStage::ParentSync)
+            .map_err(|error| io_error("sync sanitized legacy directory", error))?;
+        sync_parent(path)
+    })();
+
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+        if !replaced {
+            // A returned migration error must never leave the old bearer
+            // recoverable. This deliberately favors token invalidation over
+            // availability, matching the pre-v2 Android policy.
+            let _ = secure_remove(path);
+        }
+    }
+    result
 }
 
 fn write_verified_with_fault(
@@ -352,6 +452,16 @@ impl AndroidCredentialsCrypto for AndroidKeystoreCrypto {
     fn delete_key(&mut self) -> std::result::Result<(), CryptoErrorKind> {
         crate::android::jni::android::keystore_delete_key().map_err(map_keystore_failure)
     }
+
+    fn migration_complete(&mut self) -> std::result::Result<bool, CryptoErrorKind> {
+        crate::android::jni::android::keystore_migration_complete()
+            .map_err(map_keystore_failure)
+    }
+
+    fn mark_migration_complete(&mut self) -> std::result::Result<(), CryptoErrorKind> {
+        crate::android::jni::android::keystore_mark_migration_complete()
+            .map_err(map_keystore_failure)
+    }
 }
 
 #[cfg(target_os = "android")]
@@ -400,6 +510,9 @@ fn join_packet(sealed: &SealedPayload) -> Vec<u8> {
 pub(super) struct TestCrypto {
     key: [u8; 32],
     counter: u64,
+    key_present: bool,
+    migration_complete: bool,
+    pub(super) fail_next_seal: Option<CryptoErrorKind>,
     pub(super) fail_next_open: Option<CryptoErrorKind>,
     pub(super) delete_key_calls: usize,
 }
@@ -410,6 +523,9 @@ impl Default for TestCrypto {
         Self {
             key: [0xA7; 32],
             counter: 0,
+            key_present: false,
+            migration_complete: false,
+            fail_next_seal: None,
             fail_next_open: None,
             delete_key_calls: 0,
         }
@@ -440,6 +556,10 @@ impl AndroidCredentialsCrypto for TestCrypto {
         plaintext: &[u8],
         aad: &[u8],
     ) -> std::result::Result<SealedPayload, CryptoErrorKind> {
+        if let Some(error) = self.fail_next_seal.take() {
+            return Err(error);
+        }
+        self.key_present = true;
         self.counter += 1;
         let mut nonce = vec![0x51, 0x7A, 0xC3, 0x19];
         nonce.extend_from_slice(&self.counter.to_be_bytes());
@@ -464,6 +584,9 @@ impl AndroidCredentialsCrypto for TestCrypto {
         if let Some(error) = self.fail_next_open.take() {
             return Err(error);
         }
+        if !self.key_present {
+            return Err(CryptoErrorKind::KeyMissingOrInvalidated);
+        }
         if sealed.nonce.len() != NONCE_BYTES || sealed.ciphertext.len() < GCM_TAG_BYTES {
             return Err(CryptoErrorKind::AuthenticationFailed);
         }
@@ -482,6 +605,16 @@ impl AndroidCredentialsCrypto for TestCrypto {
 
     fn delete_key(&mut self) -> std::result::Result<(), CryptoErrorKind> {
         self.delete_key_calls += 1;
+        self.key_present = false;
+        Ok(())
+    }
+
+    fn migration_complete(&mut self) -> std::result::Result<bool, CryptoErrorKind> {
+        Ok(self.migration_complete)
+    }
+
+    fn mark_migration_complete(&mut self) -> std::result::Result<(), CryptoErrorKind> {
+        self.migration_complete = true;
         Ok(())
     }
 }
@@ -671,6 +804,108 @@ mod tests {
             ReadOutcome::Plaintext(plaintext.to_vec())
         );
         remove_test_parent(&path);
+    }
+
+    #[test]
+    fn successful_v2_rejects_legacy_base64_downgrade() {
+        let path = test_path("android-v2-downgrade");
+        let mut crypto = TestCrypto::default();
+        write_verified(&path, b"authenticated value", &mut crypto).unwrap();
+        let injected = base64::engine::general_purpose::STANDARD
+            .encode(br#"{"version":1,"active":{"llm":"attacker"}}"#);
+        std::fs::write(&path, &injected).unwrap();
+
+        assert!(matches!(
+            read(&path, &mut crypto),
+            Err(StoreError::InvalidEnvelope)
+        ));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), injected);
+        remove_test_parent(&path);
+    }
+
+    fn assert_token_absent_from_legacy_candidates(path: &Path, token: &str) {
+        for candidate in [path.to_path_buf(), path.with_extension("legacy.tmp")] {
+            let Ok(bytes) = std::fs::read(&candidate) else {
+                continue;
+            };
+            assert!(!String::from_utf8_lossy(&bytes).contains(token));
+            if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(&bytes) {
+                assert!(!String::from_utf8_lossy(&decoded).contains(token));
+            }
+        }
+    }
+
+    #[test]
+    fn legacy_bearer_sanitized_rewrite_is_fail_closed_for_every_io_failure() {
+        let stages = [
+            WriteStage::TempOpen,
+            WriteStage::AfterTempOpen,
+            WriteStage::AfterTempWrite,
+            WriteStage::AfterTempSync,
+            WriteStage::AfterVerification,
+            WriteStage::Rename,
+            WriteStage::AfterRename,
+            WriteStage::ParentSync,
+        ];
+
+        for failed_stage in stages {
+            let path = test_path(&format!("android-legacy-bearer-{failed_stage:?}"));
+            let token = format!("gho_legacy_{failed_stage:?}");
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let legacy_json =
+                format!(r#"{{"marketplace":{{"githubAccessToken":"{token}"}}}}"#);
+            let legacy = base64::engine::general_purpose::STANDARD.encode(legacy_json.as_bytes());
+            std::fs::write(&path, legacy).unwrap();
+            let sanitized = br#"{"version":1,"active":{"llm":"ark"}}"#;
+
+            let result = rewrite_legacy_without_bearer_with_fault(
+                &path,
+                sanitized,
+                &mut |stage| {
+                    if stage == failed_stage {
+                        Err(io::Error::other(format!("injected {stage:?}")))
+                    } else {
+                        Ok(())
+                    }
+                },
+            );
+
+            assert!(result.is_err(), "{failed_stage:?} should fail");
+            assert_token_absent_from_legacy_candidates(&path, &token);
+            remove_test_parent(&path);
+        }
+    }
+
+    #[test]
+    fn legacy_bearer_is_unrecoverable_at_post_erase_crash_boundaries() {
+        for crash_stage in [
+            WriteStage::Rename,
+            WriteStage::AfterRename,
+            WriteStage::ParentSync,
+        ] {
+            let path = test_path(&format!("android-legacy-crash-{crash_stage:?}"));
+            let token = format!("gho_crash_{crash_stage:?}");
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let legacy_json =
+                format!(r#"{{"marketplace":{{"githubAccessToken":"{token}"}}}}"#);
+            let legacy = base64::engine::general_purpose::STANDARD.encode(legacy_json.as_bytes());
+            std::fs::write(&path, legacy).unwrap();
+
+            let crashed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _ = rewrite_legacy_without_bearer_with_fault(
+                    &path,
+                    br#"{"version":1}"#,
+                    &mut |stage| {
+                        assert_ne!(stage, crash_stage, "injected crash at {stage:?}");
+                        Ok(())
+                    },
+                );
+            }));
+
+            assert!(crashed.is_err(), "{crash_stage:?} should simulate a crash");
+            assert_token_absent_from_legacy_candidates(&path, &token);
+            remove_test_parent(&path);
+        }
     }
 
     #[test]

@@ -418,6 +418,13 @@ fn load_android_credentials_from_path_with_crypto(
         .context("parse Android credential payload")?;
     let cleaned = android_persistable_credentials(&root);
     let contained_marketplace_token = lookup_marketplace_github_token(&root).is_some();
+    if needs_rewrite && contained_marketplace_token {
+        let sanitized = serde_json::to_vec(&cleaned)
+            .context("encode bearer-free Android legacy payload")?;
+        super::android_credentials::rewrite_legacy_without_bearer(path, &sanitized)
+            .map_err(anyhow::Error::new)
+            .context("scrub Marketplace bearer before Android Keystore migration")?;
+    }
     if needs_rewrite || contained_marketplace_token {
         write_android_credentials_envelope_with_crypto(path, &cleaned, crypto)
             .context("migrate Android credential envelope")?;
@@ -1319,10 +1326,10 @@ mod tests {
     use super::{
         android_persistable_credentials, chunk_json_payload, credentials_cache,
         get_android_marketplace_token_at, load_android_credentials_from_path,
-        load_android_credentials_into_cache_with, lookup_marketplace_github_token,
-        parse_extra_headers_json, reset_credentials_cache_for_tests,
-        write_marketplace_github_token, CredsRoot, MarketplaceGithubToken,
-        KEYRING_CHUNK_MAX_UTF16_UNITS,
+        load_android_credentials_from_path_with_crypto, load_android_credentials_into_cache_with,
+        lookup_marketplace_github_token, parse_extra_headers_json,
+        reset_credentials_cache_for_tests, write_marketplace_github_token, CredsRoot,
+        MarketplaceGithubToken, KEYRING_CHUNK_MAX_UTF16_UNITS,
     };
     use anyhow::anyhow;
     use parking_lot::Mutex;
@@ -1476,7 +1483,11 @@ mod tests {
     fn assert_android_secret_unrecoverable(path: &std::path::Path, token: &str) {
         use base64::Engine;
 
-        for candidate in [path.to_path_buf(), path.with_extension("json.tmp")] {
+        for candidate in [
+            path.to_path_buf(),
+            path.with_extension("json.tmp"),
+            path.with_extension("legacy.tmp"),
+        ] {
             let Ok(bytes) = std::fs::read(&candidate) else {
                 continue;
             };
@@ -1493,6 +1504,51 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn android_bearer_is_scrubbed_before_failed_keystore_migration_returns() {
+        use base64::Engine;
+
+        let token = "gho_must_be_unrecoverable";
+        let provider_secret = "sk_generic_credential_survives";
+        let raw = format!(
+            r#"{{"version":1,"providers":{{"llm":{{"ark":{{"apiKey":"{provider_secret}"}}}}}},"marketplace":{{"githubAccessToken":"{token}"}}}}"#,
+        );
+        let dir = std::env::temp_dir().join(format!(
+            "openless-android-bearer-migration-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let path = dir.join("credentials.enc.json");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            &path,
+            base64::engine::general_purpose::STANDARD.encode(raw.as_bytes()),
+        )
+        .unwrap();
+        let mut crypto = super::super::android_credentials::TestCrypto::default();
+        crypto.fail_next_seal = Some(
+            super::super::android_credentials::CryptoErrorKind::TemporarilyUnavailable,
+        );
+
+        assert!(load_android_credentials_from_path_with_crypto(&path, &mut crypto).is_err());
+        let sanitized = std::fs::read(&path).unwrap();
+        let sanitized = base64::engine::general_purpose::STANDARD
+            .decode(sanitized)
+            .unwrap();
+        let sanitized = String::from_utf8(sanitized).unwrap();
+        assert!(!sanitized.contains(token));
+        assert!(!sanitized.contains("githubAccessToken"));
+        assert!(sanitized.contains(provider_secret));
+
+        let loaded = load_android_credentials_from_path_with_crypto(&path, &mut crypto)
+            .unwrap()
+            .expect("sanitized legacy credentials should remain retryable");
+        assert_eq!(lookup_marketplace_github_token(&loaded), None);
+        assert!(std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("openless-android-credentials"));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

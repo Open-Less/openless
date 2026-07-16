@@ -251,6 +251,22 @@ pub mod android {
             .map_err(classify_keystore_failure)
     }
 
+    pub(crate) fn keystore_migration_complete() -> Result<bool, AndroidKeystoreFailure> {
+        let payload = call_credential_vault_no_args("migrationComplete")
+            .map_err(classify_keystore_failure)?;
+        match payload.as_slice() {
+            [0] => Ok(false),
+            [1] => Ok(true),
+            _ => Err(AndroidKeystoreFailure::Malformed),
+        }
+    }
+
+    pub(crate) fn keystore_mark_migration_complete() -> Result<(), AndroidKeystoreFailure> {
+        call_credential_vault_no_args("markMigrationComplete")
+            .map(|_| ())
+            .map_err(classify_keystore_failure)
+    }
+
     pub fn start_activity_class(
         env: &mut JNIEnv,
         context: &JObject,

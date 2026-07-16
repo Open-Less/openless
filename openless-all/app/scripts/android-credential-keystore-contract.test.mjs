@@ -70,8 +70,23 @@ for (const pattern of [
   /fun\s+seal\s*\(/,
   /fun\s+open\s*\(/,
   /fun\s+deleteKey\s*\(/,
+  /fun\s+migrationComplete\s*\(/,
+  /fun\s+markMigrationComplete\s*\(/,
 ]) {
   requirePattern(vault, pattern, `Keystore bridge is missing ${pattern}`);
+}
+if (
+  /catch\s*\([^:]+:\s*UnrecoverableKeyException\)\s*\{\s*credentialResponse\(CREDENTIAL_STATUS_KEY_MISSING\)/.test(
+    vault,
+  )
+) {
+  throw new Error('UnrecoverableKeyException must never trigger destructive key-missing cleanup');
+}
+for (const pattern of [
+  /is\s+KeyPermanentlyInvalidatedException\s*->\s*CREDENTIAL_STATUS_KEY_MISSING/,
+  /else\s*->\s*CREDENTIAL_STATUS_TEMPORARILY_UNAVAILABLE/,
+]) {
+  requirePattern(vault, pattern, `Keystore failure classifier is missing ${pattern}`);
 }
 if (/\b(?:Log\.|println\s*\()/.test(vault)) {
   throw new Error('Keystore bridge must not log secret-bearing inputs or crypto exceptions');
@@ -83,6 +98,7 @@ for (const pattern of [
   /tamperedNonce/,
   /tamperedCiphertext/,
   /tamperedAad/,
+  /unrecoverableKeyExceptionRemainsRetryable/,
 ]) {
   requirePattern(unitTest, pattern, `JVM crypto tests are missing ${pattern}`);
 }
@@ -104,6 +120,8 @@ for (const pattern of [
   /KeyMissingOrInvalidated/,
   /AuthenticationFailed/,
   /TemporarilyUnavailable/,
+  /migration_complete/,
+  /mark_migration_complete/,
   /mode\(0o600\)/,
   /sync_all\(\)/,
 ]) {
@@ -113,7 +131,14 @@ if (/Stub:\s*base64 envelope/.test(credentials)) {
   throw new Error('legacy Base64 stub is still the Android credential writer');
 }
 
-for (const pattern of [/keystore_seal/, /keystore_open/, /keystore_delete_key/, /JByteArray/]) {
+for (const pattern of [
+  /keystore_seal/,
+  /keystore_open/,
+  /keystore_delete_key/,
+  /keystore_migration_complete/,
+  /keystore_mark_migration_complete/,
+  /JByteArray/,
+]) {
   requirePattern(jni, pattern, `JNI bridge is missing ${pattern}`);
 }
 
@@ -135,5 +160,20 @@ requirePattern(
 
 requirePattern(ci, /testDebugUnitTest/, 'PR CI must execute JVM credential tests');
 requirePattern(ci, /assembleDebugAndroidTest/, 'PR CI must compile instrumentation tests');
+requirePattern(
+  ci,
+  /connectedDebugAndroidTest/,
+  'PR CI must execute Android Keystore instrumentation tests on a device',
+);
+requirePattern(
+  rustStore,
+  /successful_v2_rejects_legacy_base64_downgrade/,
+  'Rust store must test that legacy migration closes after v2 succeeds',
+);
+requirePattern(
+  credentials,
+  /android_bearer_is_scrubbed_before_failed_keystore_migration_returns/,
+  'credentials integration must preserve the fail-closed Marketplace bearer scrub',
+);
 
 console.log('android-credential-keystore-contract.test.mjs passed');
