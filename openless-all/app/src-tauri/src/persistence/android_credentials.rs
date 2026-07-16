@@ -134,6 +134,7 @@ pub(super) fn read(
     path: &Path,
     crypto: &mut impl AndroidCredentialsCrypto,
 ) -> Result<ReadOutcome, StoreError> {
+    recover_verified_sanitized_legacy(path)?;
     let bytes = match fs::read(path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(ReadOutcome::Missing),
@@ -179,6 +180,41 @@ pub(super) fn read(
         }
         Err(error) => Err(error),
     }
+}
+
+fn recover_verified_sanitized_legacy(path: &Path) -> Result<(), StoreError> {
+    let temporary = path.with_extension("legacy.tmp");
+    let destination_needs_recovery = match fs::metadata(path) {
+        Ok(metadata) => metadata.len() == 0,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => true,
+        Err(error) => return Err(io_error("inspect legacy recovery destination", error)),
+    };
+    if !destination_needs_recovery {
+        return Ok(());
+    }
+
+    let persisted = match fs::read(&temporary) {
+        Ok(persisted) => persisted,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(io_error("read sanitized legacy recovery", error)),
+    };
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(&persisted)
+        .map_err(|_| StoreError::VerificationFailed)?;
+    if decoded.is_empty() {
+        return Err(StoreError::VerificationFailed);
+    }
+
+    set_private_file_mode(&temporary)?;
+    match fs::remove_file(path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(io_error("remove empty legacy recovery target", error)),
+    }
+    fs::rename(&temporary, path)
+        .map_err(|error| io_error("recover sanitized legacy", error))?;
+    set_private_file_mode(path)?;
+    sync_parent(path)
 }
 
 fn envelope_for(sealed: &SealedPayload) -> Result<Vec<u8>, StoreError> {
@@ -278,6 +314,7 @@ fn rewrite_legacy_without_bearer_with_fault(
     let temporary = path.with_extension("legacy.tmp");
     remove_if_present(&temporary)?;
     let mut replaced = false;
+    let mut replacement_verified = false;
 
     let result = (|| {
         fault(WriteStage::TempOpen).map_err(|error| io_error("open sanitized legacy", error))?;
@@ -308,6 +345,7 @@ fn rewrite_legacy_without_bearer_with_fault(
         if verified != sanitized_plaintext {
             return Err(StoreError::VerificationFailed);
         }
+        replacement_verified = true;
         fault(WriteStage::AfterVerification)
             .map_err(|error| io_error("after verifying sanitized legacy", error))?;
 
@@ -328,8 +366,15 @@ fn rewrite_legacy_without_bearer_with_fault(
     })();
 
     if result.is_err() {
-        let _ = fs::remove_file(&temporary);
-        if !replaced {
+        if !replaced && replacement_verified {
+            // Keep the durable bearer-free copy recoverable if the cutover
+            // fails after verification. read() will install it when the
+            // destination is missing or was already truncated.
+            let _ = secure_remove(path);
+        } else {
+            let _ = fs::remove_file(&temporary);
+        }
+        if !replaced && !replacement_verified {
             // A returned migration error must never leave the old bearer
             // recoverable. This deliberately favors token invalidation over
             // availability, matching the pre-v2 Android policy.
@@ -872,6 +917,20 @@ mod tests {
 
             assert!(result.is_err(), "{failed_stage:?} should fail");
             assert_token_absent_from_legacy_candidates(&path, &token);
+            if matches!(
+                failed_stage,
+                WriteStage::AfterVerification
+                    | WriteStage::Rename
+                    | WriteStage::AfterRename
+                    | WriteStage::ParentSync
+            ) {
+                let mut crypto = TestCrypto::default();
+                assert_eq!(
+                    read(&path, &mut crypto).unwrap(),
+                    ReadOutcome::Legacy(sanitized.to_vec()),
+                    "{failed_stage:?} should preserve sanitized credentials"
+                );
+            }
             remove_test_parent(&path);
         }
     }
@@ -904,8 +963,35 @@ mod tests {
 
             assert!(crashed.is_err(), "{crash_stage:?} should simulate a crash");
             assert_token_absent_from_legacy_candidates(&path, &token);
+            let mut crypto = TestCrypto::default();
+            assert_eq!(
+                read(&path, &mut crypto).unwrap(),
+                ReadOutcome::Legacy(br#"{"version":1}"#.to_vec()),
+                "{crash_stage:?} should recover sanitized credentials"
+            );
             remove_test_parent(&path);
         }
+    }
+
+    #[test]
+    fn truncated_legacy_target_recovers_verified_sanitized_copy() {
+        let path = test_path("android-legacy-truncated-recovery");
+        let sanitized = br#"{"version":1,"active":{"llm":"ark"}}"#;
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"").unwrap();
+        std::fs::write(
+            path.with_extension("legacy.tmp"),
+            base64::engine::general_purpose::STANDARD.encode(sanitized),
+        )
+        .unwrap();
+        let mut crypto = TestCrypto::default();
+
+        assert_eq!(
+            read(&path, &mut crypto).unwrap(),
+            ReadOutcome::Legacy(sanitized.to_vec())
+        );
+        assert!(!path.with_extension("legacy.tmp").exists());
+        remove_test_parent(&path);
     }
 
     #[test]

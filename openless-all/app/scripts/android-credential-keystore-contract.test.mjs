@@ -122,6 +122,7 @@ for (const pattern of [
   /TemporarilyUnavailable/,
   /migration_complete/,
   /mark_migration_complete/,
+  /recover_verified_sanitized_legacy/,
   /mode\(0o600\)/,
   /sync_all\(\)/,
 ]) {
