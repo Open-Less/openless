@@ -88,7 +88,9 @@ const LLM_PRESETS = [
     id: 'codex_oauth',
     nameKey: 'codexOAuth',
     baseUrl: '',
-    modelPlaceholder: 'gpt-5.3-codex-spark',
+    // gpt-5.3-codex-spark 对 ChatGPT 账号的 Codex 通道会被 400 拒绝，
+    // 默认与占位一律用实测可用的 gpt-5.5（见 polish.rs::CODEX_DEFAULT_MODEL）。
+    modelPlaceholder: 'gpt-5.5',
   },
   {
     id: 'mimo',
@@ -131,6 +133,19 @@ const LLM_PRESETS = [
     nameKey: 'minimax',
     baseUrl: 'https://api.minimaxi.com/v1',
     modelPlaceholder: 'MiniMax-M3',
+  },
+  {
+    // StepFun（阶跃星辰）OpenAI 兼容 /v1/chat/completions。
+    // 默认模型选 step-1o-turbo-vision：step-3.x-flash 系列是推理模型且思考无法关闭
+    // （reasoning_effort 只能调档，正式内容要等隐藏思考结束，润色场景 TTFT 2s+），
+    // 而 step-1o-turbo-vision 无思考、TTFT ~0.3s，润色忠实度实测更适合听写链路。
+    // provider_id 在后端 polish.rs::openai_compatible_thinking_control 命中
+    // "stepfun" → ReasoningEffort 分支；走"自定义"preset 接入时由 base_url
+    // 含 "stepfun" 兜底识别，见 polish.rs。
+    id: 'stepfun',
+    nameKey: 'stepfun',
+    baseUrl: 'https://api.stepfun.com/v1',
+    modelPlaceholder: 'step-1o-turbo-vision',
   },
   {
     id: 'custom',

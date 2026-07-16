@@ -782,6 +782,7 @@ export const zhTW: typeof zhCN = {
         alibabaCoding: '阿里雲 Coding Plan',
         codingPlanX: 'CodingPlanX',
         minimax: 'MiniMax（M3）',
+        stepfun: 'StepFun（階躍星辰）',
         custom: '自定義',
         asrVolcengine: '火山引擎 bigasr',
         asrBailian: '阿里雲百煉即時 ASR',

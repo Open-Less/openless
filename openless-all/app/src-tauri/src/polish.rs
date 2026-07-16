@@ -25,7 +25,10 @@ const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
 const BODY_PREVIEW_LIMIT: usize = 200;
 pub const CODEX_OAUTH_PROVIDER_ID: &str = "codex_oauth";
 pub const CODEX_DEFAULT_BASE_URL: &str = "https://chatgpt.com/backend-api";
-pub const CODEX_DEFAULT_MODEL: &str = "gpt-5.3-codex-spark";
+// 注意：gpt-5.3-codex-spark 不能做默认——ChatGPT 账号走 Codex OAuth 时后端会
+// 400 拒绝（"model is not supported when using Codex with a ChatGPT account"），
+// 每次润色都失败并回退原文。gpt-5.5 是该通道实测可用的模型。
+pub const CODEX_DEFAULT_MODEL: &str = "gpt-5.5";
 const CODEX_MIN_TOKEN_TTL_SECS: u64 = 60;
 
 #[derive(Clone, Debug)]
@@ -1607,7 +1610,9 @@ fn openai_compatible_thinking_control(provider_id: &str) -> Option<ThinkingContr
         "minimax" => Some(ThinkingControl::MiniMaxThinking),
         "openrouterFree" => Some(ThinkingControl::OpenRouterReasoning),
         "alibabaCoding" => Some(ThinkingControl::EnableThinking),
-        "openai" | "codingPlanX" => Some(ThinkingControl::ReasoningEffort),
+        // StepFun step-3.x-flash 系列按官方文档接受 reasoning_effort（low/medium/high，
+        // 无法完全关闭思考）；非推理模型（如 step-1o-turbo-vision）会忽略该字段。
+        "openai" | "codingPlanX" | "stepfun" => Some(ThinkingControl::ReasoningEffort),
         // custom / 其他未声明 provider 走 base_url 兜底识别——用户用自定义
         // endpoint 接入 MiniMax 时,根据 base_url 命中即下发官方 thinking 参数。
         _ => None,
@@ -1642,6 +1647,9 @@ fn openai_compatible_thinking_control_for_base_url(base_url: &str) -> Option<Thi
     }
     if host.contains("dashscope") || host.contains("aliyuncs") {
         return Some(ThinkingControl::EnableThinking);
+    }
+    if host.contains("stepfun") {
+        return Some(ThinkingControl::ReasoningEffort);
     }
     None
 }
@@ -2648,6 +2656,47 @@ mod tests {
                 "base_url={base_url} should trigger MiniMax thinking control"
             );
         }
+    }
+
+    #[test]
+    fn openai_chat_body_adds_reasoning_effort_for_stepfun_channel() {
+        // StepFun 按渠道声明下发 reasoning_effort:开启思考发 medium,关闭发 low。
+        for (thinking_enabled, expected) in [(true, "medium"), (false, "low")] {
+            let provider = OpenAICompatibleLLMProvider::new(
+                OpenAICompatibleConfig::new(
+                    "stepfun",
+                    "StepFun",
+                    "https://api.stepfun.com/v1",
+                    "k",
+                    "step-3.7-flash",
+                )
+                .with_thinking_enabled(thinking_enabled),
+            );
+
+            let body = provider.chat_body(false, vec![json!({ "role": "user", "content": "hi" })]);
+
+            assert_eq!(body["reasoning_effort"], expected);
+        }
+    }
+
+    #[test]
+    fn openai_chat_body_falls_back_to_base_url_for_custom_stepfun_endpoint() {
+        // 用 "custom" preset + StepFun base_url 接入时,base_url 兜底识别需要
+        // 命中 "stepfun" 关键字,下发 reasoning_effort。
+        let provider = OpenAICompatibleLLMProvider::new(
+            OpenAICompatibleConfig::new(
+                "custom",
+                "Custom",
+                "https://api.stepfun.com/v1",
+                "k",
+                "step-3.7-flash",
+            )
+            .with_thinking_enabled(false),
+        );
+
+        let body = provider.chat_body(false, vec![json!({ "role": "user", "content": "hi" })]);
+
+        assert_eq!(body["reasoning_effort"], "low");
     }
 
     #[test]

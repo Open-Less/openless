@@ -780,6 +780,7 @@ export const zhCN = {
         alibabaCoding: '阿里云 Coding Plan',
         codingPlanX: 'CodingPlanX',
         minimax: 'MiniMax（M3）',
+        stepfun: 'StepFun（阶跃星辰）',
         custom: '自定义',
         asrVolcengine: '火山引擎 bigasr',
         asrBailian: '阿里云百炼实时 ASR',

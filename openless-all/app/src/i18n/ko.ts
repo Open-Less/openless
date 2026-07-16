@@ -784,6 +784,7 @@ export const ko: typeof zhCN = {
         alibabaCoding: 'Alibaba Cloud Coding Plan',
         codingPlanX: 'CodingPlanX',
         minimax: 'MiniMax (M3)',
+        stepfun: 'StepFun',
         custom: '사용자 정의',
         asrVolcengine: 'Volcengine bigasr',
         asrBailian: 'Alibaba Bailian 실시간 ASR',

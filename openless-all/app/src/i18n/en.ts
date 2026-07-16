@@ -782,6 +782,7 @@ export const en: typeof zhCN = {
         alibabaCoding: 'Alibaba Cloud Coding Plan',
         codingPlanX: 'CodingPlanX',
         minimax: 'MiniMax (M3)',
+        stepfun: 'StepFun',
         custom: 'Custom',
         asrVolcengine: 'Volcengine bigasr',
         asrBailian: 'Alibaba Bailian realtime ASR',
