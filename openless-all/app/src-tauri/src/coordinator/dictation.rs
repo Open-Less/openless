@@ -249,6 +249,7 @@ async fn run_streaming_polish(
     front_app: Option<&str>,
     prior_turns: &[(String, String)],
     llm_call: &mut Option<crate::polish::LlmCallLabel>,
+    llm_elapsed_ms: &mut Option<u64>,
 ) -> (String, Option<String>, bool) {
     log::info!(
         "[coord] streaming_insert path ENTER (raw_chars={})",
@@ -270,6 +271,7 @@ async fn run_streaming_polish(
             front_app,
             prior_turns,
             llm_call,
+            llm_elapsed_ms,
         )
         .await;
         return (p, e, false);
@@ -301,6 +303,7 @@ async fn run_streaming_polish(
                 front_app,
                 prior_turns,
                 llm_call,
+                llm_elapsed_ms,
             )
             .await;
             return (p, err, false);
@@ -357,6 +360,7 @@ async fn run_streaming_polish(
         front_app,
         prior_turns,
         llm_call,
+        llm_elapsed_ms,
         move |delta: &str| {
             let converted = match delta_converter.as_ref() {
                 Some(converter) => converter.convert(delta),
@@ -457,6 +461,7 @@ async fn run_streaming_polish(
                 front_app,
                 prior_turns,
                 llm_call,
+                llm_elapsed_ms,
             )
             .await;
             (p, e, false)
@@ -2216,6 +2221,7 @@ pub(super) async fn finish_starting_session(inner: &Arc<Inner>, session_id: Sess
 fn build_transcribe_failed_session(
     session_id: SessionId,
     duration_ms: u64,
+    asr_ms: u64,
     mode: PolishMode,
     has_audio_recording: bool,
 ) -> DictationSession {
@@ -2239,7 +2245,7 @@ fn build_transcribe_failed_session(
         asr_model: None,
         llm_provider: None,
         llm_model: None,
-        asr_ms: None,
+        asr_ms: Some(asr_ms),
         polish_ms: None,
     }
 }
@@ -2248,12 +2254,14 @@ fn write_transcribe_failed_history(
     inner: &Arc<Inner>,
     session_id: SessionId,
     duration_ms: u64,
+    asr_ms: u64,
     asr_call_label: Option<&AsrCallLabel>,
 ) {
     let prefs = inner.prefs.get();
     let mut session = build_transcribe_failed_session(
         session_id,
         duration_ms,
+        asr_ms,
         prefs.default_mode,
         inner.audio_archive_active.load(Ordering::Relaxed),
     );
@@ -2280,12 +2288,20 @@ fn fail_dictation(
     inner: &Arc<Inner>,
     session_id: SessionId,
     elapsed: u64,
+    asr_ms: u64,
     user_msg: String,
     err: String,
     asr_call_label: Option<&AsrCallLabel>,
 ) -> Result<(), String> {
-    write_transcribe_failed_history(inner, session_id, elapsed, asr_call_label);
-    emit_capsule(inner, CapsuleState::Error, 0.0, elapsed, Some(user_msg), None);
+    write_transcribe_failed_history(inner, session_id, elapsed, asr_ms, asr_call_label);
+    emit_capsule(
+        inner,
+        CapsuleState::Error,
+        0.0,
+        elapsed,
+        Some(user_msg),
+        None,
+    );
     restore_prepared_windows_ime_session(inner, session_id);
     inner.state.lock().phase = SessionPhase::Idle;
     schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
@@ -2313,9 +2329,21 @@ const SILENT_RETRY_MAX: u32 = 2;
 const SILENT_RETRY_BACKOFF_MS: u64 = 500;
 
 enum SilentRetryOutcome {
-    Transcript(RawTranscript),
-    Exhausted,
+    Transcript {
+        raw: RawTranscript,
+        asr_call_label: AsrCallLabel,
+    },
+    Exhausted(Option<AsrCallLabel>),
     Cancelled,
+}
+
+fn accept_silent_retry_transcript(
+    raw: RawTranscript,
+    retry_label: AsrCallLabel,
+    asr_call_label: &mut Option<AsrCallLabel>,
+) -> RawTranscript {
+    *asr_call_label = Some(retry_label);
+    raw
 }
 
 /// 归档 wav 是 16k/mono/16-bit、固定 44 字节标准头（asr::wav::encode_wav_16k_mono）；取出
@@ -2336,7 +2364,10 @@ fn pcm_duration_ms(pcm_len: usize) -> u64 {
 /// 用「当前」provider 把一段 PCM 重新转录（建一条全新 ASR 会话——原会话失败/断开后不可
 /// 复用）。复用 Coordinator::retranscribe_pcm（历史「重新转录」同款逻辑）；Coordinator 只持有
 /// `inner`，这里用 inner 重建一个轻量句柄，零副作用。
-async fn retranscribe_pcm_via_inner(inner: &Arc<Inner>, pcm: Vec<u8>) -> Result<String, String> {
+async fn retranscribe_pcm_via_inner(
+    inner: &Arc<Inner>,
+    pcm: Vec<u8>,
+) -> (Result<String, String>, Option<AsrCallLabel>) {
     Coordinator {
         inner: Arc::clone(inner),
     }
@@ -2354,24 +2385,25 @@ async fn try_silent_retranscribe(inner: &Arc<Inner>, session_id: SessionId) -> S
         return SilentRetryOutcome::Cancelled;
     }
     if !inner.audio_archive_active.load(Ordering::Relaxed) {
-        return SilentRetryOutcome::Exhausted; // 没归档音频，无从重试
+        return SilentRetryOutcome::Exhausted(None); // 没归档音频，无从重试
     }
     let Some(path) = crate::persistence::recording_path_for_session(&session_id.to_string()).ok()
     else {
-        return SilentRetryOutcome::Exhausted;
+        return SilentRetryOutcome::Exhausted(None);
     };
     let wav = tokio::select! {
         biased;
         _ = wait_for_processing_cancel(inner) => return SilentRetryOutcome::Cancelled,
         result = tokio::fs::read(&path) => match result {
             Ok(wav) => wav,
-            Err(_) => return SilentRetryOutcome::Exhausted,
+            Err(_) => return SilentRetryOutcome::Exhausted(None),
         },
     };
     let Some(pcm) = pcm_from_wav_bytes(&wav) else {
-        return SilentRetryOutcome::Exhausted;
+        return SilentRetryOutcome::Exhausted(None);
     };
     let duration_ms = pcm_duration_ms(pcm.len());
+    let mut last_attempted_label = None;
     for attempt in 1..=SILENT_RETRY_MAX {
         tokio::select! {
             biased;
@@ -2380,30 +2412,37 @@ async fn try_silent_retranscribe(inner: &Arc<Inner>, session_id: SessionId) -> S
                 SILENT_RETRY_BACKOFF_MS * attempt as u64,
             )) => {}
         }
-        let result = tokio::select! {
+        let (result, attempted_label) = tokio::select! {
             biased;
             _ = wait_for_processing_cancel(inner) => return SilentRetryOutcome::Cancelled,
             result = retranscribe_pcm_via_inner(inner, pcm.clone()) => result,
         };
+        if attempted_label.is_some() {
+            last_attempted_label = attempted_label.clone();
+        }
         match result {
             Ok(text) if !text.trim().is_empty() => {
                 log::info!(
                     "[coord] 自动静默重试第 {attempt}/{SILENT_RETRY_MAX} 次成功（{} 字）",
                     text.chars().count()
                 );
-                return SilentRetryOutcome::Transcript(RawTranscript { text, duration_ms });
+                return SilentRetryOutcome::Transcript {
+                    raw: RawTranscript { text, duration_ms },
+                    asr_call_label: attempted_label
+                        .expect("successful retranscription must have a build-time ASR label"),
+                };
             }
             Ok(_) => {
                 // 重试得到空转写——多半真没说话，再重试无意义，省流量直接放弃。
                 log::info!("[coord] 自动静默重试得到空转写，停止重试");
-                return SilentRetryOutcome::Exhausted;
+                return SilentRetryOutcome::Exhausted(last_attempted_label);
             }
             Err(e) => {
                 log::warn!("[coord] 自动静默重试第 {attempt}/{SILENT_RETRY_MAX} 次失败: {e}");
             }
         }
     }
-    SilentRetryOutcome::Exhausted
+    SilentRetryOutcome::Exhausted(last_attempted_label)
 }
 
 fn finish_cancelled_processing(inner: &Arc<Inner>, session_id: SessionId) -> bool {
@@ -2484,7 +2523,7 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
 
     let asr_opt = take_asr_for_session(inner, current_session_id);
     // 构建时快照（begin_session 存入）。会话中途改设置不影响这份归因。
-    let asr_call_label = take_asr_label_for_session(inner, current_session_id);
+    let mut asr_call_label = take_asr_label_for_session(inner, current_session_id);
     let asr = match asr_opt {
         Some(a) => a,
         None => {
@@ -2897,14 +2936,20 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     let raw = match transcribe_outcome {
         Ok(raw) => raw,
         Err(fail) => match try_silent_retranscribe(inner, current_session_id).await {
-            SilentRetryOutcome::Transcript(raw) => raw,
+            SilentRetryOutcome::Transcript {
+                raw,
+                asr_call_label: retry_label,
+            } => accept_silent_retry_transcript(raw, retry_label, &mut asr_call_label),
             SilentRetryOutcome::Cancelled => {
                 log::info!("[coord] cancel during silent ASR retry — discarding transcript");
                 restore_prepared_windows_ime_session(inner, current_session_id);
                 finish_cancelled_processing(inner, current_session_id);
                 return Ok(());
             }
-            SilentRetryOutcome::Exhausted => {
+            SilentRetryOutcome::Exhausted(retry_label) => {
+                if retry_label.is_some() {
+                    asr_call_label = retry_label;
+                }
                 // 处理最后一次重试结果时也复查一次取消标志，覆盖「重试刚返回
                 // Exhausted 与用户同时按 Esc」的窄竞态，避免误走失败提示。
                 if inner.state.lock().cancelled {
@@ -2919,10 +2964,11 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
                     inner,
                     current_session_id,
                     elapsed,
+                    transcribe_started.elapsed().as_millis() as u64,
                     fail.user_msg,
                     fail.err,
                     asr_call_label.as_ref(),
-                )
+                );
             }
         },
     };
@@ -3131,7 +3177,9 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     // 填充（见 polish_flow.rs）。Raw 直通、凭据缺失等 preflight 失败都保持 None——
     // 此时不落 llm_* / polish_ms，避免"没调用却记了模型/耗时"的伪数据（PR #826 review）。
     let mut llm_call: Option<crate::polish::LlmCallLabel> = None;
-    let polish_started = std::time::Instant::now();
+    // 只累计 provider 请求本身的耗时。流式路径的输入法切换、逐字上屏和队列排空
+    // 属于插入阶段，不能混入用于模型对比的 polish_ms。
+    let mut llm_elapsed_ms: Option<u64> = None;
     let (polished, polish_error, already_streamed) = if translation_active {
         log::info!(
             "[coord] translation mode → target=\u{300C}{}\u{300D} working={:?} front_app={:?}",
@@ -3151,6 +3199,7 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
             front_app.as_deref(),
             &prior_turns,
             &mut llm_call,
+            &mut llm_elapsed_ms,
         )
         .await;
         polish_source = src;
@@ -3169,6 +3218,7 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
             front_app.as_deref(),
             &prior_turns,
             &mut llm_call,
+            &mut llm_elapsed_ms,
         )
         .await
     } else {
@@ -3184,14 +3234,13 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
             front_app.as_deref(),
             &prior_turns,
             &mut llm_call,
+            &mut llm_elapsed_ms,
         )
         .await;
         (p, e, false)
     };
-    // 耗时与标签都以「真的发起了调用」为准：llm_call 为 None 时两者都不落。
-    let polish_ms = llm_call
-        .is_some()
-        .then(|| polish_started.elapsed().as_millis() as u64);
+    // 耗时与标签都以「真的发起了 provider 调用」为准；preflight 失败和 Raw 直通均为 None。
+    let polish_ms = llm_elapsed_ms;
     let (llm_provider, llm_model) = match &llm_call {
         Some(label) => (Some(label.provider.clone()), Some(label.model.clone())),
         None => (None, None),
@@ -3557,10 +3606,10 @@ fn eligible_polish_context_turns(
 #[cfg(test)]
 mod tests {
     use super::{
-        append_typed_prefix, batch_asr_chunk_limit_ms, build_transcribe_failed_session,
-        default_done_message, drain_streaming_insert_deltas_with, eligible_polish_context_turns,
-        finalize_polished_text, flush_streaming_insert_buffer_with, pcm_duration_ms,
-        pcm_from_wav_bytes, streaming_insert_eligible,
+        accept_silent_retry_transcript, append_typed_prefix, batch_asr_chunk_limit_ms,
+        build_transcribe_failed_session, default_done_message, drain_streaming_insert_deltas_with,
+        eligible_polish_context_turns, finalize_polished_text, flush_streaming_insert_buffer_with,
+        pcm_duration_ms, pcm_from_wav_bytes, streaming_insert_eligible,
     };
     #[cfg(target_os = "macos")]
     use super::{macos_keyless_dictation_provider, MacosKeylessDictationProvider};
@@ -3568,6 +3617,27 @@ mod tests {
         ChineseScriptPreference, CorrectionRule, DictationSession, InsertStatus, PolishMode,
     };
     use uuid::Uuid;
+
+    #[test]
+    fn silent_retry_replaces_initial_asr_attribution() {
+        let mut label = Some(super::AsrCallLabel::new(
+            "volcengine",
+            Some("volc.seedasr.sauc.duration".into()),
+        ));
+        let retry_label = super::AsrCallLabel::new(
+            "bailian-qwen3-realtime",
+            Some("qwen3-asr-flash-realtime".into()),
+        );
+        let raw = super::RawTranscript {
+            text: "重试成功".into(),
+            duration_ms: 900,
+        };
+
+        let accepted = accept_silent_retry_transcript(raw, retry_label.clone(), &mut label);
+
+        assert_eq!(accepted.text, "重试成功");
+        assert_eq!(label, Some(retry_label));
+    }
 
     fn correction_rule(pattern: &str, replacement: &str) -> CorrectionRule {
         CorrectionRule {
@@ -3642,17 +3712,20 @@ mod tests {
         // 凭 id 找回。之前 empty 分支用 Uuid::new_v4()，与 wav 文件名对不上 → 前端永远 404、
         // 录音随 prune 丢失（用户报告「识别失败之前的语音也都丢失了」）。
         let sid = Uuid::new_v4();
-        let session = build_transcribe_failed_session(sid, 4200, PolishMode::Structured, true);
+        let session =
+            build_transcribe_failed_session(sid, 4200, 17_250, PolishMode::Structured, true);
         assert_eq!(session.id, sid.to_string());
     }
 
     #[test]
     fn transcribe_failed_history_marks_failed_and_recoverable() {
         let sid = Uuid::new_v4();
-        let session = build_transcribe_failed_session(sid, 1234, PolishMode::Structured, true);
+        let session =
+            build_transcribe_failed_session(sid, 1234, 17_250, PolishMode::Structured, true);
         assert!(matches!(session.insert_status, InsertStatus::Failed));
         assert_eq!(session.error_code.as_deref(), Some("transcribeFailed"));
         assert_eq!(session.duration_ms, Some(1234));
+        assert_eq!(session.asr_ms, Some(17_250));
         // 归档成功 → 标 has_audio_recording=true，前端据此渲染「重新转录」入口。
         assert_eq!(session.has_audio_recording, Some(true));
     }
@@ -3662,7 +3735,7 @@ mod tests {
         // 录音归档失败（has_audio=false）→ 条目仍写（用户看得到这次失败），但不标可重转，
         // 避免前端渲染重转按钮而后端找不到 wav。
         let sid = Uuid::new_v4();
-        let session = build_transcribe_failed_session(sid, 1, PolishMode::Structured, false);
+        let session = build_transcribe_failed_session(sid, 1, 250, PolishMode::Structured, false);
         assert_eq!(session.has_audio_recording, Some(false));
     }
 

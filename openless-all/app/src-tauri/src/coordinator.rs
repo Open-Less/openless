@@ -1763,6 +1763,7 @@ impl Coordinator {
             &[],
             // repolish 不回写历史的模型/耗时字段，调用快照就地丢弃。
             &mut None,
+            &mut None,
         )
         .await
         .map_err(|e| e.to_string())
@@ -1774,25 +1775,36 @@ impl Coordinator {
         &self,
         pcm: Vec<u8>,
     ) -> Result<(String, AsrCallLabel), String> {
-        self.retranscribe_pcm_inner(pcm, false).await
+        self.retranscribe_pcm_inner(pcm, false, None).await
     }
 
     pub(super) async fn retranscribe_pcm_until_cancelled(
         &self,
         pcm: Vec<u8>,
-    ) -> Result<String, String> {
-        // 自动静默重试沿用 begin_session 已存的会话快照，这里的构建标签不再需要。
-        self.retranscribe_pcm_inner(pcm, true).await.map(|(text, _)| text)
+    ) -> (Result<String, String>, Option<AsrCallLabel>) {
+        // 自动静默重试会重新读取当前设置并构建一条全新的 ASR 会话，因此必须把这次
+        // 实际构建的标签交还给调用方。即使请求最终失败，也保留“本次尝试了谁”，让
+        // 彻底失败的历史不会退回首次会话的旧归因。
+        let mut attempted_label = None;
+        let result = self
+            .retranscribe_pcm_inner(pcm, true, Some(&mut attempted_label))
+            .await
+            .map(|(text, _)| text);
+        (result, attempted_label)
     }
 
     async fn retranscribe_pcm_inner(
         &self,
         pcm: Vec<u8>,
         cancel_on_drop: bool,
+        attempted_label: Option<&mut Option<AsrCallLabel>>,
     ) -> Result<(String, AsrCallLabel), String> {
         let inner = &self.inner;
         let active_asr = CredentialsVault::get_active_asr();
         let (start, asr_call_label) = build_qa_asr_start(inner, &active_asr).await?;
+        if let Some(label_slot) = attempted_label {
+            *label_slot = Some(asr_call_label.clone());
+        }
         let retry_guard = if cancel_on_drop {
             Some(CancellableRetranscribeGuard::new(
                 Arc::clone(inner),

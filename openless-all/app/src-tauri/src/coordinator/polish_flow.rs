@@ -25,6 +25,14 @@ pub enum StreamingPolishOutcome {
     Failed(String),
 }
 
+fn accumulate_llm_elapsed(total_ms: &mut Option<u64>, elapsed_ms: u64) {
+    *total_ms = Some(total_ms.unwrap_or(0).saturating_add(elapsed_ms));
+}
+
+fn record_llm_elapsed(total_ms: &mut Option<u64>, started: std::time::Instant) {
+    accumulate_llm_elapsed(total_ms, started.elapsed().as_millis() as u64);
+}
+
 /// 流式润色入口。在不支持流式的所有 case 都返回 `UnsupportedFallback`，让调用方
 /// 透明降级。不修改任何持久化 / 焦点 / 光标状态。
 ///
@@ -43,6 +51,7 @@ pub async fn polish_or_passthrough_streaming<F, C>(
     front_app: Option<&str>,
     prior_turns: &[(String, String)],
     llm_call: &mut Option<crate::polish::LlmCallLabel>,
+    llm_elapsed_ms: &mut Option<u64>,
     on_delta: F,
     should_cancel: C,
 ) -> StreamingPolishOutcome
@@ -82,7 +91,8 @@ where
         raw.text.chars().count(),
         prior_turns.len()
     );
-    match provider
+    let call_started = std::time::Instant::now();
+    let result = provider
         .polish_streaming(
             &raw.text,
             mode,
@@ -96,8 +106,9 @@ where
             on_delta,
             should_cancel,
         )
-        .await
-    {
+        .await;
+    record_llm_elapsed(llm_elapsed_ms, call_started);
+    match result {
         Ok(text) => {
             log::info!(
                 "[coord] streaming polish OK: final_chars={}",
@@ -125,6 +136,7 @@ pub(super) async fn polish_or_passthrough(
     front_app: Option<&str>,
     prior_turns: &[(String, String)],
     llm_call: &mut Option<crate::polish::LlmCallLabel>,
+    llm_elapsed_ms: &mut Option<u64>,
 ) -> (String, Option<String>) {
     if mode == PolishMode::Raw && !raw_mode_uses_llm(style_system_prompt) {
         return (raw.text.clone(), None);
@@ -141,6 +153,7 @@ pub(super) async fn polish_or_passthrough(
         front_app,
         prior_turns,
         llm_call,
+        llm_elapsed_ms,
     )
     .await
     {
@@ -165,6 +178,7 @@ pub(super) async fn polish_text(
     front_app: Option<&str>,
     prior_turns: &[(String, String)],
     llm_call: &mut Option<crate::polish::LlmCallLabel>,
+    llm_elapsed_ms: &mut Option<u64>,
 ) -> anyhow::Result<String> {
     // 谷歌 Gemini 分支：所有 LLM provider 共用 ark.* 凭据槽，唯独 Gemini 走原生
     // generateContent / 自带 thinkingConfig 控制；其余 provider 走 OpenAI
@@ -180,7 +194,8 @@ pub(super) async fn polish_text(
         let provider = GeminiProvider::new(
             GeminiConfig::new(api_key, model, base_url).with_thinking_enabled(llm_thinking_enabled),
         );
-        return Ok(provider
+        let call_started = std::time::Instant::now();
+        let result = provider
             .polish(
                 raw,
                 mode,
@@ -192,12 +207,15 @@ pub(super) async fn polish_text(
                 front_app,
                 prior_turns,
             )
-            .await?);
+            .await;
+        record_llm_elapsed(llm_elapsed_ms, call_started);
+        return Ok(result?);
     }
 
     let provider = build_active_llm_provider(llm_thinking_enabled)?;
     *llm_call = Some(provider.call_label());
-    Ok(provider
+    let call_started = std::time::Instant::now();
+    let result = provider
         .polish(
             raw,
             mode,
@@ -209,7 +227,9 @@ pub(super) async fn polish_text(
             front_app,
             prior_turns,
         )
-        .await?)
+        .await;
+    record_llm_elapsed(llm_elapsed_ms, call_started);
+    Ok(result?)
 }
 
 /// 专用翻译（仅翻译、不润色、单轮）。现作为"润色+翻译"合成调用解析失败时的兜底——
@@ -223,6 +243,7 @@ pub(super) async fn translate_text(
     llm_thinking_enabled: bool,
     front_app: Option<&str>,
     llm_call: &mut Option<crate::polish::LlmCallLabel>,
+    llm_elapsed_ms: &mut Option<u64>,
 ) -> anyhow::Result<String> {
     // 见 polish_text 顶部注释——同样的 Gemini / OpenAI-compatible 路由逻辑。
     let active_llm = CredentialsVault::get_active_llm();
@@ -235,7 +256,8 @@ pub(super) async fn translate_text(
         let provider = GeminiProvider::new(
             GeminiConfig::new(api_key, model, base_url).with_thinking_enabled(llm_thinking_enabled),
         );
-        return Ok(provider
+        let call_started = std::time::Instant::now();
+        let result = provider
             .translate_to(
                 raw,
                 target_language,
@@ -244,12 +266,15 @@ pub(super) async fn translate_text(
                 output_language_preference,
                 front_app,
             )
-            .await?);
+            .await;
+        record_llm_elapsed(llm_elapsed_ms, call_started);
+        return Ok(result?);
     }
 
     let provider = build_active_llm_provider(llm_thinking_enabled)?;
     *llm_call = Some(provider.call_label());
-    Ok(provider
+    let call_started = std::time::Instant::now();
+    let result = provider
         .translate_to(
             raw,
             target_language,
@@ -258,7 +283,9 @@ pub(super) async fn translate_text(
             output_language_preference,
             front_app,
         )
-        .await?)
+        .await;
+    record_llm_elapsed(llm_elapsed_ms, call_started);
+    Ok(result?)
 }
 
 /// "润色+翻译"单次调用的两段哨兵。模型按 `SRC\n源文\nTGT\n译文` 输出，解析器据此切分。
@@ -328,6 +355,7 @@ pub(super) async fn polish_and_translate_or_passthrough(
     front_app: Option<&str>,
     prior_turns: &[(String, String)],
     llm_call: &mut Option<crate::polish::LlmCallLabel>,
+    llm_elapsed_ms: &mut Option<u64>,
 ) -> (String, Option<String>, Option<String>) {
     let system_prompt = build_polish_translate_system_prompt(target_language);
     match polish_text(
@@ -342,6 +370,7 @@ pub(super) async fn polish_and_translate_or_passthrough(
         front_app,
         prior_turns,
         llm_call,
+        llm_elapsed_ms,
     )
     .await
     {
@@ -362,6 +391,7 @@ pub(super) async fn polish_and_translate_or_passthrough(
                     llm_thinking_enabled,
                     front_app,
                     llm_call,
+                    llm_elapsed_ms,
                 )
                 .await
                 {
@@ -396,6 +426,7 @@ mod tests {
             duration_ms: 800,
         };
         let mut llm_call: Option<crate::polish::LlmCallLabel> = None;
+        let mut llm_elapsed_ms = None;
         // 直通判定：style prompt 等于内置 raw 提示词 → raw_mode_uses_llm 为 false。
         let builtin_raw_prompt = crate::types::StyleSystemPrompts::default().raw;
         let (out, err) = polish_or_passthrough(
@@ -410,10 +441,20 @@ mod tests {
             None,
             &[],
             &mut llm_call,
+            &mut llm_elapsed_ms,
         )
         .await;
         assert_eq!(out, "原样输出");
         assert_eq!(err, None);
         assert_eq!(llm_call, None, "Raw 直通不得产生 LLM 调用快照");
+        assert_eq!(llm_elapsed_ms, None, "Raw 直通不得产生 LLM 调用耗时");
+    }
+
+    #[test]
+    fn llm_elapsed_accumulates_only_provider_call_durations() {
+        let mut elapsed_ms = None;
+        accumulate_llm_elapsed(&mut elapsed_ms, 120);
+        accumulate_llm_elapsed(&mut elapsed_ms, 80);
+        assert_eq!(elapsed_ms, Some(200));
     }
 }
