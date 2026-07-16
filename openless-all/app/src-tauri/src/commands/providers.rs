@@ -270,6 +270,18 @@ async fn validate_asr_provider() -> Result<(), String> {
     if active_asr == crate::asr::elevenlabs::PROVIDER_ID {
         return validate_elevenlabs_asr_provider().await;
     }
+    // StepFun 一入口双协议：`*-stream` 模型走实时 WS 验证，其余走批式
+    // /audio/transcriptions（与 build 侧 resolve_effective_asr_provider 同判据）。
+    if active_asr == "stepfun" || active_asr == crate::asr::stepfun_realtime::PROVIDER_ID {
+        let model = CredentialsVault::get(CredentialAccount::AsrModel)
+            .map_err(|e| e.to_string())?
+            .unwrap_or_default();
+        if active_asr == crate::asr::stepfun_realtime::PROVIDER_ID
+            || crate::coordinator::stepfun_model_is_stream(&model)
+        {
+            return validate_stepfun_realtime_asr_provider().await;
+        }
+    }
 
     let config = read_openai_provider_config("asr")?;
     let model = CredentialsVault::get(CredentialAccount::AsrModel)
@@ -277,6 +289,43 @@ async fn validate_asr_provider() -> Result<(), String> {
         .filter(|s| !s.trim().is_empty())
         .ok_or_else(|| "asrModelMissing".to_string())?;
     validate_asr_transcription(&config, model.trim()).await
+}
+
+/// StepFun 实时 WS 验证：真连 + session.update + 500ms 静音 + 收尾。
+/// 协议无 finish 事件，收尾走静音帧 + 宽限期（纯静音会话以空文本成功返回，
+/// 见 stepfun_realtime 模块注释），全程 ~2s。
+async fn validate_stepfun_realtime_asr_provider() -> Result<(), String> {
+    let api_key = CredentialsVault::get(CredentialAccount::AsrApiKey)
+        .map_err(|e| e.to_string())?
+        .unwrap_or_default();
+    if api_key.trim().is_empty() {
+        return Err("API Key 为空".to_string());
+    }
+    let endpoint = CredentialsVault::get(CredentialAccount::AsrEndpoint)
+        .map_err(|e| e.to_string())?
+        .unwrap_or_default();
+    let model = CredentialsVault::get(CredentialAccount::AsrModel)
+        .map_err(|e| e.to_string())?
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| crate::asr::stepfun_realtime::DEFAULT_MODEL.to_string());
+    let asr = std::sync::Arc::new(crate::asr::StepfunRealtimeASR::new(
+        crate::asr::StepfunRealtimeCredentials {
+            api_key,
+            endpoint,
+            model,
+            prompt: None,
+        },
+    ));
+    asr.open_session().await.map_err(|e| e.to_string())?;
+    crate::asr::AudioConsumer::consume_pcm_chunk(
+        &*asr,
+        &vec![0u8; crate::asr::stepfun_realtime::TARGET_AUDIO_CHUNK_BYTES * 5],
+    );
+    asr.send_last_frame().await.map_err(|e| e.to_string())?;
+    asr.await_final_result()
+        .await
+        .map(|_| ())
+        .map_err(|e| e.to_string())
 }
 
 async fn validate_mimo_asr_provider() -> Result<(), String> {

@@ -187,6 +187,8 @@ enum ActiveAsr {
     Bailian(Arc<BailianRealtimeASR>),
     /// 百炼 Qwen3-ASR-Flash 实时（OpenAI Realtime 风格 WS 协议）。
     Qwen3Realtime(Arc<Qwen3RealtimeASR>),
+    /// 阶跃星辰 StepAudio 实时（OpenAI Realtime 风格 WS，收尾靠静音帧驱动 VAD）。
+    StepfunRealtime(Arc<crate::asr::StepfunRealtimeASR>),
     #[cfg(target_os = "windows")]
     FoundryLocalWhisper(Arc<FoundryLocalWhisperAsr>),
     /// Windows sherpa-onnx 本地 ASR（offline batch + 实验 online streaming）。
@@ -224,6 +226,7 @@ fn asr_transcribe_uses_global_timeout(asr: &ActiveAsr) -> bool {
 pub(crate) enum ActiveAsrProviderKind {
     Bailian,
     Qwen3Realtime,
+    StepfunRealtime,
     Mimo,
     DashScopeMultimodal,
     ElevenLabs,
@@ -259,6 +262,7 @@ impl ActiveAsrProviderKind {
         match self {
             ActiveAsrProviderKind::Bailian
             | ActiveAsrProviderKind::Qwen3Realtime
+            | ActiveAsrProviderKind::StepfunRealtime
             | ActiveAsrProviderKind::Mimo
             | ActiveAsrProviderKind::DashScopeMultimodal
             | ActiveAsrProviderKind::ElevenLabs
@@ -277,7 +281,11 @@ impl ActiveAsrProviderKind {
             ActiveAsrProviderKind::Mimo | ActiveAsrProviderKind::DashScopeMultimodal => {
                 AsrConfiguredFields::ApiKeyEndpointModel
             }
-            ActiveAsrProviderKind::WhisperCompatible => AsrConfiguredFields::EndpointModelOnly,
+            // StepfunRealtime 只经 `stepfun` 的模型路由可达（隐藏 effective id），
+            // 「已配置」判定看真实 active `stepfun` → WhisperCompatible；此处形态
+            // 与之对齐，保证直接停在该 id 上也语义一致。
+            ActiveAsrProviderKind::WhisperCompatible
+            | ActiveAsrProviderKind::StepfunRealtime => AsrConfiguredFields::EndpointModelOnly,
             ActiveAsrProviderKind::Volcengine => AsrConfiguredFields::VolcAppKey,
         }
     }
@@ -288,6 +296,8 @@ pub(crate) fn active_asr_provider_kind(id: &str) -> ActiveAsrProviderKind {
         ActiveAsrProviderKind::Bailian
     } else if is_qwen3_realtime_provider(id) {
         ActiveAsrProviderKind::Qwen3Realtime
+    } else if is_stepfun_realtime_provider(id) {
+        ActiveAsrProviderKind::StepfunRealtime
     } else if is_mimo_provider(id) {
         ActiveAsrProviderKind::Mimo
     } else if is_dashscope_multimodal_provider(id) {
@@ -318,6 +328,12 @@ pub(crate) fn resolve_effective_asr_provider(
         if is_dashscope_multimodal_provider(active_asr) {
             validate_dashscope_multimodal_model(model)?;
         }
+        // StepFun 同款「一个入口按模型切协议」：`*-stream` 模型走实时 WS
+        // 客户端，其余走批式 Whisper 兼容路径。凭据 / 「已配置」判定仍看
+        // 真实 active `stepfun`。
+        if active_asr == "stepfun" && stepfun_model_is_stream(model) {
+            return Ok(crate::asr::stepfun_realtime::PROVIDER_ID.to_string());
+        }
         return Ok(active_asr.to_string());
     }
 
@@ -345,6 +361,12 @@ fn is_classic_bailian_realtime_model(model: &str) -> bool {
     model.starts_with("fun-asr-realtime")
         || model.starts_with("paraformer-realtime")
         || model.starts_with("sensevoice-realtime")
+}
+
+/// StepFun 的流式模型命名恒以 `-stream` 结尾（stepaudio-2.5-asr-stream /
+/// step-asr-1.1-stream），其余（含空 = 默认批式模型）走批式。
+pub(crate) fn stepfun_model_is_stream(model: &str) -> bool {
+    model.trim().ends_with("-stream")
 }
 
 pub(crate) fn validate_dashscope_multimodal_model(model: &str) -> Result<(), String> {
@@ -1881,6 +1903,13 @@ impl Coordinator {
                     .map_err(|_| "重新转录超时".to_string())?
                     .map_err(|e| e.to_string())?
             }
+            ActiveAsr::StepfunRealtime(asr) => {
+                asr.send_last_frame().await.map_err(|e| e.to_string())?;
+                tokio::time::timeout(timeout, asr.await_final_result())
+                    .await
+                    .map_err(|_| "重新转录超时".to_string())?
+                    .map_err(|e| e.to_string())?
+            }
             ActiveAsr::Whisper(w) => tokio::time::timeout(timeout, w.transcribe())
                 .await
                 .map_err(|_| "重新转录超时".to_string())?
@@ -2423,6 +2452,33 @@ fn read_qwen3_realtime_credentials() -> Qwen3RealtimeCredentials {
     }
 }
 
+/// StepFun 实时凭据与批式共用同一组槽位（一把 key、同一个 https base、
+/// 模型名区分协议）；wss URL 由 client 的 `connect_url()` 从 base 派生。
+/// `prompt` 由调用方按用户词典填充（实时协议接受 prompt、批式只认 hotwords）。
+fn read_stepfun_realtime_credentials(
+    prompt: Option<String>,
+) -> crate::asr::StepfunRealtimeCredentials {
+    let api_key = CredentialsVault::get(CredentialAccount::AsrApiKey)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let endpoint = CredentialsVault::get(CredentialAccount::AsrEndpoint)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let model = CredentialsVault::get(CredentialAccount::AsrModel)
+        .ok()
+        .flatten()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| crate::asr::stepfun_realtime::DEFAULT_MODEL.to_string());
+    crate::asr::StepfunRealtimeCredentials {
+        api_key,
+        endpoint,
+        model,
+        prompt,
+    }
+}
+
 fn read_volc_credentials() -> VolcengineCredentials {
     let app_id = CredentialsVault::get(CredentialAccount::VolcengineAppKey)
         .ok()
@@ -2877,7 +2933,29 @@ mod tests {
         assert!(!whisper_supports_verbose_json("stepfun"));
         assert_eq!(batch_asr_chunk_limit_ms("stepfun"), None);
 
-        // 词典路由：StepFun 忽略 prompt，走一等 hotwords；其余厂商维持 prompt。
+        // 一入口双协议：`*-stream` 模型路由到实时 WS 客户端，其余留在批式。
+        assert_eq!(
+            resolve_effective_asr_provider("stepfun", "stepaudio-2.5-asr").unwrap(),
+            "stepfun"
+        );
+        assert_eq!(
+            resolve_effective_asr_provider("stepfun", "").unwrap(),
+            "stepfun"
+        );
+        assert_eq!(
+            resolve_effective_asr_provider("stepfun", "stepaudio-2.5-asr-stream").unwrap(),
+            crate::asr::stepfun_realtime::PROVIDER_ID
+        );
+        assert_eq!(
+            resolve_effective_asr_provider("stepfun", "step-asr-1.1-stream").unwrap(),
+            crate::asr::stepfun_realtime::PROVIDER_ID
+        );
+        assert_eq!(
+            active_asr_provider_kind(crate::asr::stepfun_realtime::PROVIDER_ID),
+            ActiveAsrProviderKind::StepfunRealtime
+        );
+
+        // 词典路由：StepFun 批式忽略 prompt，走一等 hotwords；其余厂商维持 prompt。
         assert!(whisper_uses_hotwords("stepfun"));
         assert!(!whisper_uses_hotwords("whisper"));
         let phrases = vec!["阶跃星辰".to_string()];

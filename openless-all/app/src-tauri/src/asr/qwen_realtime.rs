@@ -576,7 +576,8 @@ fn drain_audio_chunks(buffer: &mut Vec<u8>) -> Vec<Vec<u8>> {
 }
 
 /// VAD 句段拼接：CJK 之间直接相连；拉丁词之间补空格，避免英文句段黏连。
-fn join_segments(segments: &[String]) -> String {
+/// `stepfun_realtime` 的多句段收尾复用同一套拼接逻辑，故 `pub(crate)`。
+pub(crate) fn join_segments(segments: &[String]) -> String {
     let mut joined = String::new();
     for seg in segments.iter().map(|s| s.trim()) {
         if seg.is_empty() {

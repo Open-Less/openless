@@ -13,6 +13,7 @@ pub mod local;
 pub mod mimo;
 pub mod pcm;
 pub mod qwen_realtime;
+pub mod stepfun_realtime;
 pub mod volcengine;
 pub mod wav;
 pub mod whisper;
@@ -22,6 +23,7 @@ pub use dashscope_multimodal::DashScopeMultimodalASR;
 pub use elevenlabs::ElevenLabsBatchASR;
 pub use mimo::MimoBatchASR;
 pub use qwen_realtime::{Qwen3RealtimeASR, Qwen3RealtimeCredentials};
+pub use stepfun_realtime::{StepfunRealtimeASR, StepfunRealtimeCredentials};
 pub use volcengine::{VolcengineCredentials, VolcengineStreamingASR};
 pub use whisper::WhisperBatchASR;
 

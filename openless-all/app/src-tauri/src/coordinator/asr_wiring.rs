@@ -389,6 +389,10 @@ pub(super) fn is_qwen3_realtime_provider(id: &str) -> bool {
     id == crate::asr::qwen_realtime::PROVIDER_ID
 }
 
+pub(super) fn is_stepfun_realtime_provider(id: &str) -> bool {
+    id == crate::asr::stepfun_realtime::PROVIDER_ID
+}
+
 pub(super) fn is_mimo_provider(id: &str) -> bool {
     id == crate::asr::mimo::PROVIDER_ID
 }
@@ -435,6 +439,10 @@ pub(super) enum QaAsrStart {
         asr: Arc<Qwen3RealtimeASR>,
         bridge: Arc<DeferredAsrBridge>,
     },
+    StepfunRealtime {
+        asr: Arc<crate::asr::StepfunRealtimeASR>,
+        bridge: Arc<DeferredAsrBridge>,
+    },
     Ready {
         active: ActiveAsr,
         consumer: Arc<dyn crate::recorder::AudioConsumer>,
@@ -447,6 +455,7 @@ impl QaAsrStart {
             QaAsrStart::Volcengine { asr, .. } => ActiveAsr::Volcengine(Arc::clone(asr)),
             QaAsrStart::Bailian { asr, .. } => ActiveAsr::Bailian(Arc::clone(asr)),
             QaAsrStart::Qwen3Realtime { asr, .. } => ActiveAsr::Qwen3Realtime(Arc::clone(asr)),
+            QaAsrStart::StepfunRealtime { asr, .. } => ActiveAsr::StepfunRealtime(Arc::clone(asr)),
             QaAsrStart::Ready { active, .. } => active.clone(),
         }
     }
@@ -456,6 +465,7 @@ impl QaAsrStart {
             QaAsrStart::Volcengine { bridge, .. } => Arc::clone(bridge) as _,
             QaAsrStart::Bailian { bridge, .. } => Arc::clone(bridge) as _,
             QaAsrStart::Qwen3Realtime { bridge, .. } => Arc::clone(bridge) as _,
+            QaAsrStart::StepfunRealtime { bridge, .. } => Arc::clone(bridge) as _,
             QaAsrStart::Ready { consumer, .. } => Arc::clone(consumer),
         }
     }
@@ -484,6 +494,15 @@ impl QaAsrStart {
                 let flushed = bridge.attach(target);
                 log::info!(
                     "[coord] QA Qwen3 realtime ASR connected; flushed {flushed} deferred audio bytes"
+                );
+                Ok(())
+            }
+            QaAsrStart::StepfunRealtime { asr, bridge } => {
+                asr.open_session().await.map_err(|e| e.to_string())?;
+                let target: Arc<dyn crate::asr::AudioConsumer> = Arc::clone(asr) as _;
+                let flushed = bridge.attach(target);
+                log::info!(
+                    "[coord] QA StepFun realtime ASR connected; flushed {flushed} deferred audio bytes"
                 );
                 Ok(())
             }
@@ -605,6 +624,18 @@ pub(super) async fn build_qa_asr_start(
             Ok((
                 QaAsrStart::Qwen3Realtime {
                     asr: Arc::new(Qwen3RealtimeASR::new(creds)),
+                    bridge: Arc::new(DeferredAsrBridge::new()),
+                },
+                label,
+            ))
+        }
+        ActiveAsrProviderKind::StepfunRealtime => {
+            let prompt = crate::asr::whisper::build_prompt_from_phrases(&enabled_phrases(inner));
+            let creds = read_stepfun_realtime_credentials(prompt);
+            let label = AsrCallLabel::new(effective_asr.clone(), Some(creds.model.clone()));
+            Ok((
+                QaAsrStart::StepfunRealtime {
+                    asr: Arc::new(crate::asr::StepfunRealtimeASR::new(creds)),
                     bridge: Arc::new(DeferredAsrBridge::new()),
                 },
                 label,
