@@ -244,6 +244,11 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
 
   useEffect(() => {
     if (!closing) return;
+    activeSessionIdRef.current = null;
+    setMessages([]);
+    setStatus('idle');
+    setErrorMsg('');
+    setStreamingAnswer('');
     setSelectionPreview('');
     setSelectionWarning('');
     setComposerText('');

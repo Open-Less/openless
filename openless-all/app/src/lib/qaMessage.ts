@@ -41,14 +41,15 @@ export function nextQaSelectionWarning(
 
 export function acceptQaSessionEvent(
   currentSessionId: string | null,
-  payload: Pick<QaStatePayload, 'kind' | 'session_id'>,
+  payload: Pick<QaStatePayload, 'kind' | 'session_id' | 'selection_warning'>,
 ): { accepted: boolean; sessionId: string | null } {
   if (!payload.session_id) {
     return { accepted: true, sessionId: currentSessionId };
   }
   const startsTurn = payload.kind === 'recording'
     || payload.kind === 'loading'
-    || payload.kind === 'thinking';
+    || payload.kind === 'thinking'
+    || (payload.kind === 'idle' && payload.selection_warning !== undefined);
   if (currentSessionId && !startsTurn && currentSessionId !== payload.session_id) {
     return { accepted: false, sessionId: currentSessionId };
   }

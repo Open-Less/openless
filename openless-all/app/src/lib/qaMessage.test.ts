@@ -70,5 +70,14 @@ assertEqual(
   'new-session',
   'a recording event activates the next turn token',
 );
+assertEqual(
+  acceptQaSessionEvent('old-session', {
+    kind: 'idle',
+    session_id: 'new-session',
+    selection_warning: null,
+  }).sessionId,
+  'new-session',
+  'an explicit panel-open reset activates the reopened panel token',
+);
 
 console.log('qaMessage.test.ts passed');

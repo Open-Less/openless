@@ -104,18 +104,24 @@ pub(super) fn open_qa_panel(inner: &Arc<Inner>) {
     if dictation_idle {
         emit_capsule(inner, CapsuleState::Idle, 0.0, 0, None, None);
     }
-    if let Some(app) = inner.app.lock().clone() {
-        crate::show_qa_window(&app, "idle");
-        let _ = app.emit_to(
-            qa_event_target(),
-            "qa:state",
-            serde_json::json!({
-                "kind": "idle",
-                "session_id": session_id,
-                "selection_warning": null,
-                "messages": Vec::<crate::types::QaChatMessage>::new(),
-            }),
-        );
+    {
+        let state = inner.qa_state.lock();
+        if !state.panel_visible || state.session_id != session_id {
+            return;
+        }
+        if let Some(app) = inner.app.lock().clone() {
+            crate::show_qa_window(&app, "idle");
+            let _ = app.emit_to(
+                qa_event_target(),
+                "qa:state",
+                serde_json::json!({
+                    "kind": "idle",
+                    "session_id": session_id,
+                    "selection_warning": null,
+                    "messages": Vec::<crate::types::QaChatMessage>::new(),
+                }),
+            );
+        }
     }
     log::info!("[coord] QA panel opened (awaiting Option to record)");
 }

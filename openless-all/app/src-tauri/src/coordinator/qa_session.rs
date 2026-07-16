@@ -151,19 +151,24 @@ pub(super) async fn finalize_dictation_as_qa_question(inner: &Arc<Inner>) -> Res
     };
     inner.qa_stream_cancelled.store(false, Ordering::SeqCst);
 
-    if let Some(app) = inner.app.lock().clone() {
-        let messages = inner.qa_state.lock().messages.clone();
-        let _ = app.emit_to(
-            qa_event_target(),
-            "qa:state",
-            serde_json::json!({
-                "kind": "loading",
-                "session_id": session_id,
-                "selection_preview": selection_preview_text,
-                "selection_warning": selection_warning,
-                "messages": messages,
-            }),
-        );
+    {
+        let state = inner.qa_state.lock();
+        if !qa_turn_can_continue(&state, session_id) {
+            return Ok(());
+        }
+        if let Some(app) = inner.app.lock().clone() {
+            let _ = app.emit_to(
+                qa_event_target(),
+                "qa:state",
+                serde_json::json!({
+                    "kind": "loading",
+                    "session_id": session_id,
+                    "selection_preview": selection_preview_text,
+                    "selection_warning": selection_warning,
+                    "messages": state.messages.clone(),
+                }),
+            );
+        }
     }
 
     let raw_result = take_current_dictation_transcript_for_qa(inner, session_id).await;
@@ -240,20 +245,19 @@ pub(super) async fn submit_qa_text_question(
             return Ok(());
         }
         state.selection = capture.selection;
-    }
-    if let Some(app) = inner.app.lock().clone() {
-        let messages = inner.qa_state.lock().messages.clone();
-        let _ = app.emit_to(
-            qa_event_target(),
-            "qa:state",
-            serde_json::json!({
-                "kind": "thinking",
-                "session_id": session_id,
-                "selection_preview": selection_preview_text,
-                "selection_warning": selection_warning,
-                "messages": messages,
-            }),
-        );
+        if let Some(app) = inner.app.lock().clone() {
+            let _ = app.emit_to(
+                qa_event_target(),
+                "qa:state",
+                serde_json::json!({
+                    "kind": "thinking",
+                    "session_id": session_id,
+                    "selection_preview": selection_preview_text,
+                    "selection_warning": selection_warning,
+                    "messages": state.messages.clone(),
+                }),
+            );
+        }
     }
 
     answer_qa_question_text(inner, question, 0, session_id).await
@@ -776,21 +780,19 @@ pub(super) async fn begin_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
             return Ok(());
         }
         state.selection = selection.clone();
-    }
-
-    if let Some(app) = inner.app.lock().clone() {
-        let messages = inner.qa_state.lock().messages.clone();
-        let _ = app.emit_to(
-            qa_event_target(),
-            "qa:state",
-            serde_json::json!({
-                "kind": "recording",
-                "session_id": session_id,
-                "selection_preview": selection_preview_text,
-                "selection_warning": selection_warning,
-                "messages": messages,
-            }),
-        );
+        if let Some(app) = inner.app.lock().clone() {
+            let _ = app.emit_to(
+                qa_event_target(),
+                "qa:state",
+                serde_json::json!({
+                    "kind": "recording",
+                    "session_id": session_id,
+                    "selection_preview": selection_preview_text,
+                    "selection_warning": selection_warning,
+                    "messages": state.messages.clone(),
+                }),
+            );
+        }
     }
 
     // 2. QA 与 dictation 使用同一个 active ASR 入口。不要回退火山，否则用户配置
@@ -953,19 +955,19 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
             return Ok(());
         }
         state.phase = QaPhase::Processing;
-        state.session_id
+        let session_id = state.session_id;
+        if let Some(app) = inner.app.lock().clone() {
+            let _ = app.emit_to(
+                qa_event_target(),
+                "qa:state",
+                serde_json::json!({ "kind": "loading", "session_id": session_id }),
+            );
+        }
+        session_id
     };
 
     // 胶囊进入 Transcribing：用户视觉上看到"识别中"。
     emit_capsule(inner, CapsuleState::Transcribing, 0.0, 0, None, None);
-
-    if let Some(app) = inner.app.lock().clone() {
-        let _ = app.emit_to(
-            qa_event_target(),
-            "qa:state",
-            serde_json::json!({ "kind": "loading", "session_id": session_id }),
-        );
-    }
 
     stop_qa_recorder_for_session(inner, session_id);
 
