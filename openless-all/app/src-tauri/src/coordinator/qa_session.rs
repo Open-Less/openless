@@ -47,6 +47,14 @@ fn complete_qa_turn_state(state: &mut QaSessionState) {
     state.selection = None;
 }
 
+fn reset_qa_processing_if_current(state: &mut QaSessionState, session_id: SessionId) -> bool {
+    if state.session_id != session_id || state.phase != QaPhase::Processing {
+        return false;
+    }
+    state.phase = QaPhase::Idle;
+    true
+}
+
 fn qa_session_is_active(state: &QaSessionState, session_id: SessionId) -> bool {
     state.panel_visible && state.session_id == session_id
 }
@@ -974,7 +982,7 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
     let asr = match take_qa_asr_for_session(inner, session_id) {
         Some(a) => a,
         None => {
-            inner.qa_state.lock().phase = QaPhase::Idle;
+            reset_qa_processing_if_current(&mut inner.qa_state.lock(), session_id);
             return Ok(());
         }
     };
@@ -1538,6 +1546,18 @@ mod tests {
             captured_session_id,
             false
         ));
+    }
+
+    #[test]
+    fn stale_qa_end_cannot_reset_a_reopened_recording_session() {
+        let old_session_id = new_session_id();
+        let mut state = QaSessionState::default();
+        state.panel_visible = true;
+        state.phase = QaPhase::Recording;
+        state.session_id = new_session_id();
+
+        assert!(!reset_qa_processing_if_current(&mut state, old_session_id));
+        assert_eq!(state.phase, QaPhase::Recording);
     }
 
     #[tokio::test]
