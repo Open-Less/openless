@@ -1449,12 +1449,13 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("credentials.enc.json");
         std::fs::write(&path, encoded).unwrap();
+        let mut crypto = super::super::android_credentials::TestCrypto::default();
 
-        let loaded = load_android_credentials_from_path(&path)
+        let loaded = load_android_credentials_from_path_with_crypto(&path, &mut crypto)
             .unwrap()
             .expect("credential envelope should load");
         let disk = std::fs::read_to_string(&path).unwrap();
-        let loaded_again = load_android_credentials_from_path(&path)
+        let loaded_again = load_android_credentials_from_path_with_crypto(&path, &mut crypto)
             .unwrap()
             .expect("migrated credential envelope should load");
 

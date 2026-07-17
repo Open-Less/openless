@@ -94,6 +94,11 @@ jobs:
       - name: Initialize generated Android project
         run: npm run tauri -- android init --ci
 
+      - name: Generate Tauri Gradle dependency scripts
+        env:
+          TAURI_ANDROID_PROJECT_PATH: ${{ github.workspace }}/openless-all/app/src-tauri/gen/android
+        run: cargo check --manifest-path src-tauri/Cargo.toml --target x86_64-linux-android
+
       - name: Copy Android production and test scaffolding
         run: node scripts/copy-android-scaffolding.mjs
 
