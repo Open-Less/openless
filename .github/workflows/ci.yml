@@ -97,6 +97,9 @@ jobs:
       - name: Generate Tauri Gradle dependency scripts
         env:
           TAURI_ANDROID_PROJECT_PATH: ${{ github.workspace }}/openless-all/app/src-tauri/gen/android
+          TAURI_ANDROID_PACKAGE_UNESCAPED: com.openless.app
+          WRY_ANDROID_LIBRARY: openless_lib
+          WRY_ANDROID_PACKAGE: com.openless.app
         run: cargo check --manifest-path src-tauri/Cargo.toml --target x86_64-linux-android
 
       - name: Copy Android production and test scaffolding
