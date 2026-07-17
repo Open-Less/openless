@@ -106,11 +106,14 @@ jobs:
         run: node scripts/copy-android-scaffolding.mjs
 
       - name: Run JVM credential tests and compile instrumentation tests
+        # These tests are Kotlin-only. The Rust target is checked above; direct Gradle
+        # rustBuild requires the live Tauri CLI RPC server used by `tauri android build`.
         run: >-
           src-tauri/gen/android/gradlew
           --project-dir src-tauri/gen/android
           :app:testX86_64DebugUnitTest
           :app:assembleX86_64DebugAndroidTest
+          -x :app:rustBuildX86_64Debug
           --no-daemon
 
       - name: Enable KVM for Android instrumentation tests
@@ -126,11 +129,13 @@ jobs:
           api-level: 35
           target: google_apis
           arch: x86_64
+          # The instrumentation suite exercises AndroidKeyStore without launching Tauri.
           script: >-
             cd openless-all/app &&
             src-tauri/gen/android/gradlew
             --project-dir src-tauri/gen/android
             :app:connectedX86_64DebugAndroidTest
+            -x :app:rustBuildX86_64Debug
             --no-daemon
 
   cross-platform:
