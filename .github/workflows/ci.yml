@@ -99,8 +99,11 @@ jobs:
           TAURI_ANDROID_PROJECT_PATH: ${{ github.workspace }}/openless-all/app/src-tauri/gen/android
           TAURI_ANDROID_PACKAGE_UNESCAPED: com.openless.app
           WRY_ANDROID_LIBRARY: openless_lib
+          WRY_ANDROID_KOTLIN_FILES_OUT_DIR: ${{ github.workspace }}/openless-all/app/src-tauri/gen/android/app/src/main/java/com/openless/app/generated
           WRY_ANDROID_PACKAGE: com.openless.app
-        run: cargo check --manifest-path src-tauri/Cargo.toml --target x86_64-linux-android
+        run: |
+          mkdir -p "$WRY_ANDROID_KOTLIN_FILES_OUT_DIR"
+          cargo check --manifest-path src-tauri/Cargo.toml --target x86_64-linux-android
 
       - name: Copy Android production and test scaffolding
         run: node scripts/copy-android-scaffolding.mjs
