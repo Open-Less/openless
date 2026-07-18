@@ -154,7 +154,7 @@ requirePattern(
   'startup persistence must use Tao\'s non-panicking Android context registry',
 );
 const androidCredentialPath = credentials.match(
-  /fn\s+android_credentials_path\s*\([^)]*\)\s*->\s*Result<PathBuf>[\s\S]*?\n}\n/,
+  /fn\s+android_credentials_path\s*\([^)]*\)\s*->\s*Result<PathBuf>[\s\S]*?\r?\n}\r?\n/,
 );
 if (!androidCredentialPath) {
   throw new Error('missing Android credential path resolver');
