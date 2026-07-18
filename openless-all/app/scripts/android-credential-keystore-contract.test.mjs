@@ -123,6 +123,7 @@ for (const pattern of [
   /migration_complete/,
   /mark_migration_complete/,
   /recover_verified_sanitized_legacy/,
+  /recover_verified_v2_temporary/,
   /mode\(0o600\)/,
   /sync_all\(\)/,
 ]) {
@@ -181,8 +182,8 @@ requirePattern(
 );
 requirePattern(
   rustStore,
-  /verified_v2_commit_barrier_rejects_legacy_after_pre_rename_failure/,
-  'Rust store must test the pre-rename legacy downgrade barrier',
+  /verified_v2_commit_barrier_recovers_verified_temp_after_pre_rename_failure/,
+  'Rust store must recover the verified pre-rename v2 candidate without accepting legacy',
 );
 
 for (const file of [

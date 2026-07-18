@@ -1,6 +1,6 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use base64::Engine;
 use serde::{Deserialize, Serialize};
@@ -135,6 +135,7 @@ pub(super) fn read(
     crypto: &mut impl AndroidCredentialsCrypto,
 ) -> Result<ReadOutcome, StoreError> {
     recover_verified_sanitized_legacy(path)?;
+    recover_verified_v2_temporary(path, crypto)?;
     let bytes = match fs::read(path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(ReadOutcome::Missing),
@@ -181,6 +182,39 @@ pub(super) fn read(
         }
         Err(error) => Err(error),
     }
+}
+
+fn v2_temporary_path(path: &Path) -> PathBuf {
+    path.with_extension("json.tmp")
+}
+
+fn verified_v2_temporary_path(path: &Path) -> PathBuf {
+    path.with_extension("json.pending")
+}
+
+fn recover_verified_v2_temporary(
+    path: &Path,
+    crypto: &mut impl AndroidCredentialsCrypto,
+) -> Result<(), StoreError> {
+    let temporary = verified_v2_temporary_path(path);
+    let persisted = match fs::read(&temporary) {
+        Ok(persisted) => persisted,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(io_error("read verified v2 recovery", error)),
+    };
+    let _ = open_envelope(&persisted, crypto)?;
+
+    // Re-establish the non-exportable rollback barrier before promoting the
+    // verified recovery candidate. A crash after this point leaves the
+    // candidate available for another recovery attempt instead of admitting
+    // the old Base64 envelope again.
+    crypto
+        .mark_migration_complete()
+        .map_err(StoreError::Crypto)?;
+    set_private_file_mode(&temporary)?;
+    fs::rename(&temporary, path).map_err(|error| io_error("recover verified v2", error))?;
+    set_private_file_mode(path)?;
+    sync_parent(path)
 }
 
 fn recover_verified_sanitized_legacy(path: &Path) -> Result<(), StoreError> {
@@ -247,11 +281,19 @@ fn set_private_file_mode(path: &Path) -> Result<(), StoreError> {
     Ok(())
 }
 
+#[cfg(not(windows))]
 fn sync_parent(path: &Path) -> Result<(), StoreError> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     File::open(parent)
         .and_then(|directory| directory.sync_all())
         .map_err(|error| io_error("sync parent directory", error))
+}
+
+// This module is production-only on Android. Windows only compiles it for
+// host-side unit tests, where opening a directory for `sync_all` is rejected.
+#[cfg(windows)]
+fn sync_parent(_path: &Path) -> Result<(), StoreError> {
+    Ok(())
 }
 
 fn remove_if_present(path: &Path) -> Result<(), StoreError> {
@@ -388,6 +430,7 @@ fn write_verified_with_fault(
     crypto: &mut impl AndroidCredentialsCrypto,
     fault: &mut impl FnMut(WriteStage) -> io::Result<()>,
 ) -> Result<(), StoreError> {
+    recover_verified_v2_temporary(path, crypto)?;
     let sealed = crypto
         .seal(plaintext, ENVELOPE_AAD)
         .map_err(StoreError::Crypto)?;
@@ -401,8 +444,10 @@ fn write_verified_with_fault(
 
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     ensure_private_dir(parent)?;
-    let temporary = path.with_extension("json.tmp");
+    let temporary = v2_temporary_path(path);
+    let recovery = verified_v2_temporary_path(path);
     remove_if_present(&temporary)?;
+    let mut recovery_prepared = false;
 
     let result = (|| {
         fault(WriteStage::TempOpen).map_err(|error| io_error("open temporary file", error))?;
@@ -432,9 +477,18 @@ fn write_verified_with_fault(
             return Err(StoreError::VerificationFailed);
         }
 
+        // Keep a separately named, durable recovery candidate only after the
+        // reread/decrypt check succeeds. `read` never promotes the ordinary
+        // write temp, so a crash before this point cannot replace a complete
+        // envelope with an unverified write.
+        fs::rename(&temporary, &recovery)
+            .map_err(|error| io_error("prepare verified credential recovery", error))?;
+        recovery_prepared = true;
+        sync_parent(&recovery)?;
+
         // Retire Base64 envelopes before replacing one. If the process stops
-        // after this point, the old file is deliberately rejected instead of
-        // becoming a downgrade path on the next launch.
+        // after this point, `recovery` can be promoted on the next launch;
+        // the old file is never admitted as a downgrade path.
         crypto
             .mark_migration_complete()
             .map_err(StoreError::Crypto)?;
@@ -442,7 +496,7 @@ fn write_verified_with_fault(
             .map_err(|error| io_error("after verifying temporary file", error))?;
 
         fault(WriteStage::Rename).map_err(|error| io_error("replace credential file", error))?;
-        fs::rename(&temporary, path).map_err(|error| io_error("replace credential file", error))?;
+        fs::rename(&recovery, path).map_err(|error| io_error("replace credential file", error))?;
         fault(WriteStage::AfterRename)
             .map_err(|error| io_error("after replacing credential file", error))?;
         set_private_file_mode(path)?;
@@ -452,7 +506,9 @@ fn write_verified_with_fault(
     })();
 
     if result.is_err() {
-        let _ = fs::remove_file(&temporary);
+        if !recovery_prepared {
+            let _ = fs::remove_file(&temporary);
+        }
     }
     result
 }
@@ -564,6 +620,7 @@ pub(super) struct TestCrypto {
     migration_complete: bool,
     pub(super) fail_next_seal: Option<CryptoErrorKind>,
     pub(super) fail_next_open: Option<CryptoErrorKind>,
+    pub(super) fail_next_mark_migration: Option<CryptoErrorKind>,
     pub(super) delete_key_calls: usize,
 }
 
@@ -577,6 +634,7 @@ impl Default for TestCrypto {
             migration_complete: false,
             fail_next_seal: None,
             fail_next_open: None,
+            fail_next_mark_migration: None,
             delete_key_calls: 0,
         }
     }
@@ -664,6 +722,9 @@ impl AndroidCredentialsCrypto for TestCrypto {
     }
 
     fn mark_migration_complete(&mut self) -> std::result::Result<(), CryptoErrorKind> {
+        if let Some(error) = self.fail_next_mark_migration.take() {
+            return Err(error);
+        }
         self.migration_complete = true;
         Ok(())
     }
@@ -847,21 +908,16 @@ mod tests {
         );
         assert!(result.is_err());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), legacy);
-        assert!(matches!(
-            read(&path, &mut crypto),
-            Err(StoreError::InvalidEnvelope)
-        ));
-
-        write_verified(&path, plaintext, &mut crypto).unwrap();
         assert_eq!(
             read(&path, &mut crypto).unwrap(),
             ReadOutcome::Plaintext(plaintext.to_vec())
         );
+        assert!(!verified_v2_temporary_path(&path).exists());
         remove_test_parent(&path);
     }
 
     #[test]
-    fn verified_v2_commit_barrier_rejects_legacy_after_pre_rename_failure() {
+    fn verified_v2_commit_barrier_recovers_verified_temp_after_pre_rename_failure() {
         let path = test_path("android-v2-commit-barrier");
         let plaintext = br#"{"version":1,"active":{"llm":"ark"}}"#;
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -884,10 +940,33 @@ mod tests {
 
         assert!(result.is_err());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), legacy);
-        assert!(matches!(
-            read(&path, &mut crypto),
-            Err(StoreError::InvalidEnvelope)
-        ));
+        assert!(verified_v2_temporary_path(&path).exists());
+        assert_eq!(
+            read(&path, &mut crypto).unwrap(),
+            ReadOutcome::Plaintext(plaintext.to_vec())
+        );
+        assert!(!verified_v2_temporary_path(&path).exists());
+        remove_test_parent(&path);
+    }
+
+    #[test]
+    fn verified_v2_recovery_candidate_survives_temporary_marker_failure() {
+        let path = test_path("android-v2-marker-retry");
+        let plaintext = br#"{"version":1,"active":{"llm":"ark"}}"#;
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let legacy = base64::engine::general_purpose::STANDARD.encode(plaintext);
+        std::fs::write(&path, &legacy).unwrap();
+        let mut crypto = TestCrypto::default();
+        crypto.fail_next_mark_migration = Some(CryptoErrorKind::TemporarilyUnavailable);
+
+        assert!(write_verified(&path, plaintext, &mut crypto).is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), legacy);
+        assert!(verified_v2_temporary_path(&path).exists());
+        assert_eq!(
+            read(&path, &mut crypto).unwrap(),
+            ReadOutcome::Plaintext(plaintext.to_vec())
+        );
+        assert!(!verified_v2_temporary_path(&path).exists());
         remove_test_parent(&path);
     }
 
@@ -1066,7 +1145,10 @@ mod tests {
             assert!(result.is_err(), "{failed_stage:?} should fail");
             let expected: &[u8] = if matches!(
                 failed_stage,
-                WriteStage::AfterRename | WriteStage::ParentSync
+                WriteStage::AfterVerification
+                    | WriteStage::Rename
+                    | WriteStage::AfterRename
+                    | WriteStage::ParentSync
             ) {
                 b"new complete value"
             } else {
@@ -1078,6 +1160,7 @@ mod tests {
                 "{failed_stage:?} left an incomplete envelope"
             );
             assert!(!path.with_extension("json.tmp").exists());
+            assert!(!verified_v2_temporary_path(&path).exists());
         }
         remove_test_parent(&path);
     }
