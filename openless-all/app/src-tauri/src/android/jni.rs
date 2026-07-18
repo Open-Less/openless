@@ -107,6 +107,35 @@ pub mod android {
         Ok(jstring(env, value)?.into())
     }
 
+    /// Returns the app-private files directory supplied by Android's Context.
+    pub(crate) fn app_files_dir() -> Result<String, String> {
+        with_android_env(|env, context| {
+            let directory = env
+                .call_method(context, "getFilesDir", "()Ljava/io/File;", &[])
+                .and_then(|value| value.l())
+                .map_err(|error| format!("Context.getFilesDir: {error}"))?;
+            if directory.is_null() {
+                return Err("Context.getFilesDir returned null".to_string());
+            }
+            let path = env
+                .call_method(&directory, "getAbsolutePath", "()Ljava/lang/String;", &[])
+                .and_then(|value| value.l())
+                .map_err(|error| format!("File.getAbsolutePath: {error}"))?;
+            if path.is_null() {
+                return Err("Context files directory has no path".to_string());
+            }
+            let path = env
+                .get_string(&JString::from(path))
+                .map_err(|error| format!("read Context files directory: {error}"))?
+                .to_string_lossy()
+                .into_owned();
+            if path.is_empty() {
+                return Err("Context files directory is empty".to_string());
+            }
+            Ok(path)
+        })
+    }
+
     const CREDENTIAL_VAULT_CLASS: &str = "com.openless.app.OpenLessCredentialVault";
     const KEYSTORE_KEY_MISSING: &str = "openless-keystore-key-missing";
     const KEYSTORE_AUTHENTICATION_FAILED: &str = "openless-keystore-authentication-failed";

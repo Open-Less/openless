@@ -146,9 +146,10 @@ pub(super) fn read(
     };
 
     if first != b'{' {
-        // The non-exportable marker is created only after a v2 envelope has
-        // reached durable storage. Once present, a Base64 file is a rollback
-        // or injection attempt rather than a legitimate upgrade source.
+        // The non-exportable marker is created after a v2 temporary envelope
+        // has been verified and before it can replace a legacy envelope. Once
+        // present, a Base64 file is a rollback or injection attempt rather
+        // than a legitimate upgrade source.
         if crypto
             .migration_complete()
             .map_err(StoreError::Crypto)?
@@ -290,10 +291,7 @@ pub(super) fn write_verified(
     plaintext: &[u8],
     crypto: &mut impl AndroidCredentialsCrypto,
 ) -> Result<(), StoreError> {
-    write_verified_with_fault(path, plaintext, crypto, &mut |_| Ok(()))?;
-    crypto
-        .mark_migration_complete()
-        .map_err(StoreError::Crypto)
+    write_verified_with_fault(path, plaintext, crypto, &mut |_| Ok(()))
 }
 
 pub(super) fn rewrite_legacy_without_bearer(
@@ -433,6 +431,13 @@ fn write_verified_with_fault(
         if verified != plaintext {
             return Err(StoreError::VerificationFailed);
         }
+
+        // Retire Base64 envelopes before replacing one. If the process stops
+        // after this point, the old file is deliberately rejected instead of
+        // becoming a downgrade path on the next launch.
+        crypto
+            .mark_migration_complete()
+            .map_err(StoreError::Crypto)?;
         fault(WriteStage::AfterVerification)
             .map_err(|error| io_error("after verifying temporary file", error))?;
 
@@ -842,12 +847,47 @@ mod tests {
         );
         assert!(result.is_err());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), legacy);
+        assert!(matches!(
+            read(&path, &mut crypto),
+            Err(StoreError::InvalidEnvelope)
+        ));
 
         write_verified(&path, plaintext, &mut crypto).unwrap();
         assert_eq!(
             read(&path, &mut crypto).unwrap(),
             ReadOutcome::Plaintext(plaintext.to_vec())
         );
+        remove_test_parent(&path);
+    }
+
+    #[test]
+    fn verified_v2_commit_barrier_rejects_legacy_after_pre_rename_failure() {
+        let path = test_path("android-v2-commit-barrier");
+        let plaintext = br#"{"version":1,"active":{"llm":"ark"}}"#;
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let legacy = base64::engine::general_purpose::STANDARD.encode(plaintext);
+        std::fs::write(&path, &legacy).unwrap();
+        let mut crypto = TestCrypto::default();
+
+        let result = write_verified_with_fault(
+            &path,
+            plaintext,
+            &mut crypto,
+            &mut |stage| {
+                if stage == WriteStage::AfterVerification {
+                    Err(io::Error::other("injected pre-rename failure"))
+                } else {
+                    Ok(())
+                }
+            },
+        );
+
+        assert!(result.is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), legacy);
+        assert!(matches!(
+            read(&path, &mut crypto),
+            Err(StoreError::InvalidEnvelope)
+        ));
         remove_test_parent(&path);
     }
 

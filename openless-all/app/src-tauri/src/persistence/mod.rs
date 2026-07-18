@@ -81,10 +81,9 @@ fn data_dir() -> Result<PathBuf> {
 
     #[cfg(target_os = "android")]
     {
-        if let Ok(dir) = std::env::var("TAURI_ANDROID_APP_DATA_DIR") {
-            return Ok(PathBuf::from(dir).join("OpenLess"));
-        }
-        Ok(std::env::temp_dir().join("OpenLess"))
+        let files_dir = crate::android::jni::android::app_files_dir()
+            .map_err(|error| anyhow::anyhow!("resolve Android app files directory: {error}"))?;
+        Ok(PathBuf::from(files_dir).join("OpenLess"))
     }
 }
 
