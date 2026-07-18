@@ -185,6 +185,11 @@ requirePattern(
   /verified_v2_commit_barrier_recovers_verified_temp_after_pre_rename_failure/,
   'Rust store must recover the verified pre-rename v2 candidate without accepting legacy',
 );
+requirePattern(
+  rustStore,
+  /invalidated_key_clears_pending_v2_recovery_candidate/,
+  'Rust store must clear an unrecoverable pending v2 candidate so credentials can be reconfigured',
+);
 
 for (const file of [
   'OpenLessCredentialCipher.kt',

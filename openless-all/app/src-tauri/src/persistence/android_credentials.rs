@@ -202,7 +202,19 @@ fn recover_verified_v2_temporary(
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(io_error("read verified v2 recovery", error)),
     };
-    let _ = open_envelope(&persisted, crypto)?;
+    match open_envelope(&persisted, crypto) {
+        Ok(_) => {}
+        Err(StoreError::Crypto(CryptoErrorKind::KeyMissingOrInvalidated)) => {
+            // Match the main-envelope recovery behavior: a permanently
+            // invalidated key cannot decrypt this candidate, so clear both
+            // files and let the caller reconfigure credentials.
+            crypto.delete_key().map_err(StoreError::Crypto)?;
+            secure_remove(&temporary)?;
+            secure_remove(path)?;
+            return Ok(());
+        }
+        Err(error) => return Err(error),
+    }
 
     // Re-establish the non-exportable rollback barrier before promoting the
     // verified recovery candidate. A crash after this point leaves the
@@ -967,6 +979,47 @@ mod tests {
             ReadOutcome::Plaintext(plaintext.to_vec())
         );
         assert!(!verified_v2_temporary_path(&path).exists());
+        remove_test_parent(&path);
+    }
+
+    #[test]
+    fn invalidated_key_clears_pending_v2_recovery_candidate() {
+        let path = test_path("android-v2-pending-missing-key");
+        let plaintext = br#"{"version":1,"active":{"llm":"ark"}}"#;
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            base64::engine::general_purpose::STANDARD.encode(plaintext),
+        )
+        .unwrap();
+        let mut crypto = TestCrypto::default();
+
+        assert!(write_verified_with_fault(
+            &path,
+            plaintext,
+            &mut crypto,
+            &mut |stage| {
+                if stage == WriteStage::AfterVerification {
+                    Err(io::Error::other("inject pending recovery candidate"))
+                } else {
+                    Ok(())
+                }
+            },
+        )
+        .is_err());
+        assert!(verified_v2_temporary_path(&path).exists());
+
+        crypto.fail_next_open = Some(CryptoErrorKind::KeyMissingOrInvalidated);
+        assert_eq!(read(&path, &mut crypto).unwrap(), ReadOutcome::Missing);
+        assert!(!path.exists());
+        assert!(!verified_v2_temporary_path(&path).exists());
+        assert_eq!(crypto.delete_key_calls, 1);
+
+        write_verified(&path, b"reconfigured", &mut crypto).unwrap();
+        assert_eq!(
+            read(&path, &mut crypto).unwrap(),
+            ReadOutcome::Plaintext(b"reconfigured".to_vec())
+        );
         remove_test_parent(&path);
     }
 
