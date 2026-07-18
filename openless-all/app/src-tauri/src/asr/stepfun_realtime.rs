@@ -126,7 +126,12 @@ pub enum StepfunASRError {
 }
 
 enum SendItem {
-    Audio(Vec<u8>),
+    Audio {
+        chunk: Vec<u8>,
+        contains_non_silent_audio: bool,
+        /// `send_last_frame` 用它确认尾帧已由写 worker 实际写入 WebSocket。
+        written_tx: Option<oneshot::Sender<Result<(), String>>>,
+    },
 }
 
 #[derive(Default)]
@@ -134,6 +139,10 @@ struct SyncState {
     pending_audio: Vec<u8>,
     audio_scratch: Vec<u8>,
     bytes_received: u64,
+    /// 最近一次非静音 PCM 由写 worker 成功写入 WebSocket 的时刻。
+    last_non_silent_audio_written_at: Option<Instant>,
+    /// 最近一次服务端 completed 事件到达的时刻。
+    last_completed_at: Option<Instant>,
     session_started: bool,
     session_finished: bool,
     session_start_error: Option<String>,
@@ -210,13 +219,33 @@ impl StepfunRealtimeASR {
         let writer_for_worker = Arc::clone(&self.writer);
         let weak_self_for_worker = Arc::downgrade(self);
         tokio::spawn(async move {
-            while let Some(SendItem::Audio(chunk)) = send_rx.recv().await {
-                if let Err(e) = send_text(&writer_for_worker, append_audio_message(&chunk)).await {
-                    log::error!("[stepfun-asr] audio frame send failed: {e}");
-                    if let Some(this) = weak_self_for_worker.upgrade() {
-                        this.finish_error(e);
+            while let Some(SendItem::Audio {
+                chunk,
+                contains_non_silent_audio,
+                written_tx,
+            }) = send_rx.recv().await
+            {
+                match send_text(&writer_for_worker, append_audio_message(&chunk)).await {
+                    Ok(()) => {
+                        if contains_non_silent_audio {
+                            if let Some(this) = weak_self_for_worker.upgrade() {
+                                this.mark_non_silent_audio_written();
+                            }
+                        }
+                        if let Some(tx) = written_tx {
+                            let _ = tx.send(Ok(()));
+                        }
                     }
-                    break;
+                    Err(error) => {
+                        if let Some(tx) = written_tx {
+                            let _ = tx.send(Err(error.to_string()));
+                        }
+                        log::error!("[stepfun-asr] audio frame send failed: {error}");
+                        if let Some(this) = weak_self_for_worker.upgrade() {
+                            this.finish_error(error);
+                        }
+                        break;
+                    }
                 }
             }
         });
@@ -294,9 +323,8 @@ impl StepfunRealtimeASR {
             let finished = self.session_finished.notified();
             tokio::pin!(finished);
             finished.as_mut().enable();
-            let send_tx = {
+            let (send_tx, tail) = {
                 let mut st = self.state.lock();
-                let send_tx = st.send_tx.clone();
                 if !st.pending_audio.is_empty() {
                     let pending = std::mem::take(&mut st.pending_audio);
                     st.audio_scratch.extend_from_slice(&pending);
@@ -305,24 +333,43 @@ impl StepfunRealtimeASR {
                 // 尾音频和静音帧合并成一次 append，减少一次写。
                 tail.resize(tail.len() + (SILENCE_TAIL_MS * BYTES_PER_MS) as usize, 0);
                 st.finishing = true;
-                if let Some(tx) = send_tx.as_ref() {
-                    let _ = tx.send(SendItem::Audio(tail));
-                }
-                send_tx
+                (st.send_tx.clone(), tail)
             };
-            if send_tx.is_none() {
+            let Some(send_tx) = send_tx else {
                 return Ok(());
-            }
+            };
+            let (written_tx, written_rx) = oneshot::channel();
+            let contains_non_silent_audio = contains_non_silent_pcm(&tail);
+            send_tx
+                .send(SendItem::Audio {
+                    chunk: tail,
+                    contains_non_silent_audio,
+                    written_tx: Some(written_tx),
+                })
+                .map_err(|_| {
+                    StepfunASRError::SendFailed("audio writer is not available".to_string())
+                })?;
+            written_rx
+                .await
+                .map_err(|_| {
+                    StepfunASRError::SendFailed(
+                        "audio writer stopped before the tail frame was sent".to_string(),
+                    )
+                })?
+                .map_err(StepfunASRError::SendFailed)?;
 
-            // 宽限任务：静音送达后若始终没有开放句段（纯静音 / 全部已 completed），
-            // 到点即成功；有开放句段则由 completed 事件驱动收尾。
+            // 宽限任务：仅当最后一个 completed 之后没有新的非静音帧写入时才可收尾。
+            // 这既允许松手前已 completed 的正常会话快速返回，也避免异步写入或服务端
+            // VAD 延迟把新的真实音频误判为空会话。
             let weak = Arc::downgrade(self);
             tokio::spawn(async move {
                 tokio::time::sleep(FINISH_GRACE).await;
                 if let Some(this) = weak.upgrade() {
                     let should_finish = {
                         let st = this.state.lock();
-                        !st.session_finished && st.open_segments == 0
+                        !st.session_finished
+                            && !has_audio_after_last_completed(&st)
+                            && st.open_segments == 0
                     };
                     if should_finish {
                         this.finish_success();
@@ -454,7 +501,11 @@ impl StepfunRealtimeASR {
         };
         if let Some(tx) = send_tx {
             for chunk in chunks {
-                let _ = tx.send(SendItem::Audio(chunk));
+                let _ = tx.send(SendItem::Audio {
+                    contains_non_silent_audio: contains_non_silent_pcm(&chunk),
+                    chunk,
+                    written_tx: None,
+                });
             }
         }
         self.session_started.notify_waiters();
@@ -494,6 +545,7 @@ impl StepfunRealtimeASR {
             }
             st.partial_text.clear();
             st.open_segments = st.open_segments.saturating_sub(1);
+            st.last_completed_at = Some(Instant::now());
             st.finishing && st.open_segments == 0
         };
         if should_finish {
@@ -573,6 +625,10 @@ impl StepfunRealtimeASR {
             });
         }
     }
+
+    fn mark_non_silent_audio_written(&self) {
+        self.state.lock().last_non_silent_audio_written_at = Some(Instant::now());
+    }
 }
 
 impl AudioConsumer for StepfunRealtimeASR {
@@ -593,7 +649,11 @@ impl AudioConsumer for StepfunRealtimeASR {
         };
         if let Some(tx) = send_tx {
             for chunk in chunks {
-                let _ = tx.send(SendItem::Audio(chunk));
+                let _ = tx.send(SendItem::Audio {
+                    contains_non_silent_audio: contains_non_silent_pcm(&chunk),
+                    chunk,
+                    written_tx: None,
+                });
             }
         }
     }
@@ -605,6 +665,21 @@ fn drain_audio_chunks(buffer: &mut Vec<u8>) -> Vec<Vec<u8>> {
         chunks.push(buffer.drain(..TARGET_AUDIO_CHUNK_BYTES).collect());
     }
     chunks
+}
+
+fn contains_non_silent_pcm(pcm: &[u8]) -> bool {
+    pcm.iter().any(|&byte| byte != 0)
+}
+
+fn has_audio_after_last_completed(state: &SyncState) -> bool {
+    match (
+        state.last_non_silent_audio_written_at,
+        state.last_completed_at,
+    ) {
+        (Some(last_audio), Some(last_completed)) => last_audio > last_completed,
+        (Some(_), None) => true,
+        (None, _) => false,
+    }
 }
 
 fn session_update_message(model: &str, prompt: Option<&str>) -> String {
@@ -681,6 +756,7 @@ async fn close_writer(writer: &SharedWriter) -> Result<(), StepfunASRError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures_util::{SinkExt, StreamExt};
 
     fn create_test_asr() -> StepfunRealtimeASR {
         StepfunRealtimeASR::new(StepfunRealtimeCredentials {
@@ -897,5 +973,89 @@ mod tests {
         assert_eq!(st.pending_audio.len(), 100);
         assert_eq!(st.bytes_received, 100);
     }
-}
 
+    #[test]
+    fn only_audio_written_after_completed_remains_pending() {
+        let completed_at = Instant::now();
+        let mut state = SyncState {
+            last_non_silent_audio_written_at: Some(completed_at),
+            last_completed_at: Some(completed_at + Duration::from_millis(1)),
+            ..SyncState::default()
+        };
+        assert!(!has_audio_after_last_completed(&state));
+
+        state.last_non_silent_audio_written_at = Some(completed_at + Duration::from_millis(2));
+        assert!(has_audio_after_last_completed(&state));
+    }
+
+    #[tokio::test]
+    async fn non_silent_audio_waits_for_delayed_vad_before_finishing() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!(
+            "ws://{}/v1/realtime/asr/stream",
+            listener.local_addr().unwrap()
+        );
+        let (release_events_tx, release_events_rx) = oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+            assert!(matches!(
+                ws.next().await.unwrap().unwrap(),
+                Message::Text(_)
+            ));
+            ws.send(Message::Text(
+                json!({ "type": "session.updated" }).to_string(),
+            ))
+            .await
+            .unwrap();
+
+            release_events_rx.await.unwrap();
+            ws.send(Message::Text(speech_started_event()))
+                .await
+                .unwrap();
+            ws.send(Message::Text(completed_event("delayed speech")))
+                .await
+                .unwrap();
+            // 保持连接直到客户端处理 completed 并主动关闭，避免测试服务端析构抢先
+            // 触发客户端的连接错误。
+            let _ = tokio::time::timeout(Duration::from_secs(2), async {
+                while let Some(message) = ws.next().await {
+                    match message {
+                        Ok(Message::Close(_)) | Err(_) => break,
+                        Ok(_) => {}
+                    }
+                }
+            })
+            .await;
+        });
+
+        let asr = Arc::new(StepfunRealtimeASR::new(StepfunRealtimeCredentials {
+            api_key: "sk-test".to_string(),
+            endpoint,
+            model: DEFAULT_MODEL.to_string(),
+            prompt: None,
+        }));
+        asr.open_session().await.unwrap();
+        asr.consume_pcm_chunk(&[1u8; TARGET_AUDIO_CHUNK_BYTES]);
+
+        let asr_for_finish = Arc::clone(&asr);
+        let finish = tokio::spawn(async move { asr_for_finish.send_last_frame().await });
+        tokio::time::sleep(FINISH_GRACE + Duration::from_millis(100)).await;
+        assert!(
+            !finish.is_finished(),
+            "non-silent audio must not finish before the server observes its VAD segment"
+        );
+
+        release_events_tx.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), finish)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            asr.await_final_result().await.unwrap().text,
+            "delayed speech"
+        );
+        server.await.unwrap();
+    }
+}
