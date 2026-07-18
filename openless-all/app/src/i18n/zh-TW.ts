@@ -773,6 +773,7 @@ export const zhTW: typeof zhCN = {
         ark: 'ARK（火山方舟）',
         deepseek: 'DeepSeek',
         siliconflow: '硅基流動',
+        atlascloud: 'Atlas Cloud',
         openai: 'OpenAI',
         gemini: 'Google Gemini',
         codexOAuth: 'Codex OAuth',

@@ -773,6 +773,7 @@ export const en: typeof zhCN = {
         ark: 'ARK (Volcengine Ark)',
         deepseek: 'DeepSeek',
         siliconflow: 'SiliconFlow',
+        atlascloud: 'Atlas Cloud',
         openai: 'OpenAI',
         gemini: 'Google Gemini',
         codexOAuth: 'Codex OAuth',

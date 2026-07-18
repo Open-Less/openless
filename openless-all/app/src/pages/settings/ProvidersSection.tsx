@@ -47,7 +47,7 @@ function LlmThinkingToggle({ enabled, onToggle }: { enabled: boolean; onToggle: 
   );
 }
 
-const LLM_PRESETS = [
+export const LLM_PRESETS = [
   {
     id: 'ark',
     nameKey: 'ark',
@@ -65,6 +65,12 @@ const LLM_PRESETS = [
     nameKey: 'siliconflow',
     baseUrl: 'https://api.siliconflow.cn/v1',
     modelPlaceholder: 'Qwen/Qwen2.5-7B-Instruct',
+  },
+  {
+    id: 'atlascloud',
+    nameKey: 'atlascloud',
+    baseUrl: 'https://api.atlascloud.ai/v1',
+    modelPlaceholder: 'qwen/qwen3.5-flash',
   },
   {
     id: 'openai',
