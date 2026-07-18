@@ -18,7 +18,6 @@ const paths = {
     '../src-tauri/src/persistence/android_credentials.rs',
     import.meta.url,
   ),
-  persistence: new URL('../src-tauri/src/persistence/mod.rs', import.meta.url),
   credentials: new URL('../src-tauri/src/persistence/credentials.rs', import.meta.url),
   jni: new URL('../src-tauri/src/android/jni.rs', import.meta.url),
   copyScript: new URL('./copy-android-scaffolding.mjs', import.meta.url),
@@ -44,14 +43,13 @@ function requirePattern(source, pattern, message) {
   }
 }
 
-const [cipher, vault, unitTest, instrumentedTest, rustStore, persistence, credentials, jni, copyScript, ci] =
+const [cipher, vault, unitTest, instrumentedTest, rustStore, credentials, jni, copyScript, ci] =
   await Promise.all([
     requiredSource('pure AES-GCM codec', paths.cipher),
     requiredSource('Android Keystore bridge', paths.vault),
     requiredSource('JVM cipher tests', paths.unitTest),
     requiredSource('Android Keystore instrumentation tests', paths.instrumentedTest),
     requiredSource('Rust Android credential store', paths.rustStore),
-    requiredSource('persistence root', paths.persistence),
     requiredSource('credentials integration', paths.credentials),
     requiredSource('JNI bridge', paths.jni),
     requiredSource('Android scaffolding copier', paths.copyScript),
@@ -150,12 +148,31 @@ requirePattern(
   'JNI bridge must resolve the app-private Context files directory',
 );
 requirePattern(
-  persistence,
-  /#\[cfg\(target_os = "android"\)\][\s\S]*?app_files_dir\(\)[\s\S]*?join\("OpenLess"\)/,
-  'Android persistence must use the app-private files directory',
+  jni,
+  /fn\s+with_tao_android_env[\s\S]*?main_android_context/,
+  'startup persistence must use Tao\'s non-panicking Android context registry',
 );
-if (/TAURI_ANDROID_APP_DATA_DIR|std::env::temp_dir\(\)\.join\("OpenLess"\)/.test(persistence)) {
-  throw new Error('Android persistence must not fall back to environment or temporary storage');
+const androidCredentialPath = credentials.match(
+  /fn\s+android_credentials_path\s*\([^)]*\)\s*->\s*Result<PathBuf>[\s\S]*?\n}\n/,
+);
+if (!androidCredentialPath) {
+  throw new Error('missing Android credential path resolver');
+}
+requirePattern(
+  androidCredentialPath[0],
+  /app_files_dir\(\)[\s\S]*?join\("OpenLess"\)[\s\S]*?join\(ANDROID_CREDENTIALS_FILE\)/,
+  'Android credentials must use the app-private files directory',
+);
+if (/TAURI_ANDROID_APP_DATA_DIR|temp_dir/.test(androidCredentialPath[0])) {
+  throw new Error('Android credential storage must not fall back to environment or temporary storage');
+}
+for (const pattern of [
+  /android_legacy_credentials_paths/,
+  /load_android_credentials_from_source_with_crypto/,
+  /remove_migrated_android_legacy_credentials/,
+  /android_legacy_root_migrates_to_private_destination_and_is_erased/,
+]) {
+  requirePattern(credentials, pattern, `Android credential root migration is missing ${pattern}`);
 }
 requirePattern(
   rustStore,

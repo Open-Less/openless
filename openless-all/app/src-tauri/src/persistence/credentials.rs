@@ -374,17 +374,77 @@ fn keyring_entry_for(account: &str) -> Result<keyring::Entry> {
 
 #[cfg(target_os = "android")]
 fn android_credentials_path() -> Result<PathBuf> {
-    Ok(super::data_dir()?.join(ANDROID_CREDENTIALS_FILE))
+    let files_dir = crate::android::jni::android::app_files_dir()
+        .map_err(|error| anyhow::anyhow!("resolve Android credential directory: {error}"))?;
+    Ok(PathBuf::from(files_dir)
+        .join("OpenLess")
+        .join(ANDROID_CREDENTIALS_FILE))
+}
+
+#[cfg(target_os = "android")]
+fn android_legacy_credentials_paths(current_path: &Path) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    let mut add_path = |path: PathBuf| {
+        if path != current_path && !paths.contains(&path) {
+            paths.push(path);
+        }
+    };
+    if let Ok(dir) = std::env::var("TAURI_ANDROID_APP_DATA_DIR") {
+        add_path(
+            PathBuf::from(dir)
+                .join("OpenLess")
+                .join(ANDROID_CREDENTIALS_FILE),
+        );
+    }
+    add_path(
+        std::env::temp_dir()
+            .join("OpenLess")
+            .join(ANDROID_CREDENTIALS_FILE),
+    );
+    paths
+}
+
+#[cfg(target_os = "android")]
+fn remove_migrated_android_legacy_credentials(current_path: &Path) -> Result<()> {
+    for legacy_path in android_legacy_credentials_paths(current_path) {
+        super::android_credentials::secure_remove(&legacy_path)
+            .map_err(anyhow::Error::new)
+            .with_context(|| {
+                format!(
+                    "remove migrated Android legacy envelope {}",
+                    legacy_path.display()
+                )
+            })?;
+    }
+    Ok(())
 }
 
 #[cfg(target_os = "android")]
 fn load_android_credentials() -> Result<Option<CredsRoot>> {
     let path = android_credentials_path()?;
-    let loaded = load_android_credentials_from_path(&path);
-    if loaded.is_ok() {
-        *android_marketplace_legacy_scrubbed().lock() = true;
+    let mut crypto = super::android_credentials::AndroidKeystoreCrypto;
+    let loaded = match load_android_credentials_from_path_with_crypto(&path, &mut crypto)? {
+        Some(root) => Some(root),
+        None => {
+            let mut migrated = None;
+            for legacy_path in android_legacy_credentials_paths(&path) {
+                if let Some(root) = load_android_credentials_from_source_with_crypto(
+                    &legacy_path,
+                    &path,
+                    &mut crypto,
+                )? {
+                    migrated = Some(root);
+                    break;
+                }
+            }
+            migrated
+        }
+    };
+    if loaded.is_some() {
+        remove_migrated_android_legacy_credentials(&path)?;
     }
-    loaded
+    *android_marketplace_legacy_scrubbed().lock() = true;
+    Ok(loaded)
 }
 
 #[cfg(target_os = "android")]
@@ -404,9 +464,18 @@ fn load_android_credentials_from_path_with_crypto(
     path: &Path,
     crypto: &mut impl super::android_credentials::AndroidCredentialsCrypto,
 ) -> Result<Option<CredsRoot>> {
+    load_android_credentials_from_source_with_crypto(path, path, crypto)
+}
+
+#[cfg(any(target_os = "android", test))]
+fn load_android_credentials_from_source_with_crypto(
+    source_path: &Path,
+    destination_path: &Path,
+    crypto: &mut impl super::android_credentials::AndroidCredentialsCrypto,
+) -> Result<Option<CredsRoot>> {
     use super::android_credentials::ReadOutcome;
 
-    let loaded = super::android_credentials::read(path, crypto)
+    let loaded = super::android_credentials::read(source_path, crypto)
         .map_err(anyhow::Error::new)
         .context("read Android credential envelope")?;
     let (bytes, needs_rewrite) = match loaded {
@@ -421,13 +490,23 @@ fn load_android_credentials_from_path_with_crypto(
     if needs_rewrite && contained_marketplace_token {
         let sanitized = serde_json::to_vec(&cleaned)
             .context("encode bearer-free Android legacy payload")?;
-        super::android_credentials::rewrite_legacy_without_bearer(path, &sanitized)
+        super::android_credentials::rewrite_legacy_without_bearer(source_path, &sanitized)
             .map_err(anyhow::Error::new)
             .context("scrub Marketplace bearer before Android Keystore migration")?;
     }
-    if needs_rewrite || contained_marketplace_token {
-        write_android_credentials_envelope_with_crypto(path, &cleaned, crypto)
+    if needs_rewrite || contained_marketplace_token || source_path != destination_path {
+        write_android_credentials_envelope_with_crypto(destination_path, &cleaned, crypto)
             .context("migrate Android credential envelope")?;
+    }
+    if source_path != destination_path {
+        super::android_credentials::secure_remove(source_path)
+            .map_err(anyhow::Error::new)
+            .with_context(|| {
+                format!(
+                    "remove migrated Android legacy envelope {}",
+                    source_path.display()
+                )
+            })?;
     }
     Ok(Some(cleaned))
 }
@@ -460,8 +539,8 @@ fn get_android_marketplace_token_at(
 
 #[cfg(target_os = "android")]
 fn ensure_android_marketplace_legacy_scrubbed() -> Result<()> {
-    let path = android_credentials_path()?;
-    ensure_android_marketplace_legacy_scrubbed_at(&path, android_marketplace_legacy_scrubbed())
+    let _ = load_android_credentials()?;
+    Ok(())
 }
 
 #[cfg(target_os = "android")]
@@ -1331,6 +1410,8 @@ mod tests {
         reset_credentials_cache_for_tests, write_marketplace_github_token, CredsRoot,
         MarketplaceGithubToken, KEYRING_CHUNK_MAX_UTF16_UNITS,
     };
+    #[cfg(not(windows))]
+    use super::load_android_credentials_from_source_with_crypto;
     use anyhow::anyhow;
     use parking_lot::Mutex;
 
@@ -1468,6 +1549,43 @@ mod tests {
         assert!(!disk.contains("marketplace"));
         assert!(!path.with_extension("json.tmp").exists());
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn android_legacy_root_migrates_to_private_destination_and_is_erased() {
+        use base64::Engine;
+
+        let root_dir = std::env::temp_dir().join(format!(
+            "openless-android-cross-root-migration-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let legacy_path = root_dir.join("legacy").join("credentials.enc.json");
+        let destination_path = root_dir.join("files").join("credentials.enc.json");
+        let plaintext = br#"{"version":1,"providers":{"llm":{"ark":{"apiKey":"sk-migrate"}}}}"#;
+        std::fs::create_dir_all(legacy_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &legacy_path,
+            base64::engine::general_purpose::STANDARD.encode(plaintext),
+        )
+        .unwrap();
+        let mut crypto = super::super::android_credentials::TestCrypto::default();
+
+        assert!(load_android_credentials_from_source_with_crypto(
+            &legacy_path,
+            &destination_path,
+            &mut crypto,
+        )
+        .unwrap()
+        .is_some());
+        assert!(!legacy_path.exists());
+        assert!(std::fs::read_to_string(&destination_path)
+            .unwrap()
+            .contains("openless-android-credentials"));
+        assert!(load_android_credentials_from_path_with_crypto(&destination_path, &mut crypto)
+            .unwrap()
+            .is_some());
+        std::fs::remove_dir_all(root_dir).unwrap();
     }
 
     fn write_legacy_android_envelope(path: &std::path::Path, token: &str) {

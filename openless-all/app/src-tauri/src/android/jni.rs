@@ -107,9 +107,33 @@ pub mod android {
         Ok(jstring(env, value)?.into())
     }
 
+    fn with_tao_android_env<R>(
+        f: impl for<'local> FnOnce(&mut JNIEnv<'local>, &JObject<'local>) -> Result<R, String>,
+    ) -> Result<R, String> {
+        let android_context = tao::platform::android::prelude::main_android_context()
+            .ok_or_else(|| "Tao Android context not yet initialized".to_string())?;
+        let vm = unsafe {
+            JavaVM::from_raw(android_context.java_vm.cast())
+                .map_err(|error| format!("attach Android JVM: {error}"))?
+        };
+        let mut env = vm
+            .attach_current_thread()
+            .map_err(|error| format!("attach Android thread: {error}"))?;
+        let raw_context = android_context.context_jobject as jni::sys::jobject;
+        if raw_context.is_null() {
+            return Err("Tao Android context is null".to_string());
+        }
+        // SAFETY: Tao keeps this activity reference alive for the Android
+        // runtime; it is only borrowed for the duration of `f`.
+        let context = unsafe { JObject::from_raw(raw_context) };
+        f(&mut env, &context)
+    }
+
     /// Returns the app-private files directory supplied by Android's Context.
     pub(crate) fn app_files_dir() -> Result<String, String> {
-        with_android_env(|env, context| {
+        // Persistence initializes before mobile_runtime::setup initializes
+        // ndk-context, so use Tao's non-panicking activity registry here.
+        with_tao_android_env(|env, context| {
             let directory = env
                 .call_method(context, "getFilesDir", "()Ljava/io/File;", &[])
                 .and_then(|value| value.l())
