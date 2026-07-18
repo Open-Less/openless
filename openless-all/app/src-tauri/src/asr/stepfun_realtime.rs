@@ -160,6 +160,8 @@ struct SyncState {
     open_segments: u32,
     /// send_last_frame 已冲刷尾音频 + 静音帧，进入等待句段归零阶段。
     finishing: bool,
+    /// 尾帧尚未由写 worker 确认写入 WebSocket，不能被旧句段的 completed 抢先收尾。
+    tail_write_pending: bool,
 }
 
 pub struct StepfunRealtimeASR {
@@ -325,6 +327,7 @@ impl StepfunRealtimeASR {
             finished.as_mut().enable();
             let (send_tx, tail) = {
                 let mut st = self.state.lock();
+                let send_tx = st.send_tx.clone();
                 if !st.pending_audio.is_empty() {
                     let pending = std::mem::take(&mut st.pending_audio);
                     st.audio_scratch.extend_from_slice(&pending);
@@ -333,7 +336,8 @@ impl StepfunRealtimeASR {
                 // 尾音频和静音帧合并成一次 append，减少一次写。
                 tail.resize(tail.len() + (SILENCE_TAIL_MS * BYTES_PER_MS) as usize, 0);
                 st.finishing = true;
-                (st.send_tx.clone(), tail)
+                st.tail_write_pending = send_tx.is_some();
+                (send_tx, tail)
             };
             let Some(send_tx) = send_tx else {
                 return Ok(());
@@ -357,6 +361,7 @@ impl StepfunRealtimeASR {
                     )
                 })?
                 .map_err(StepfunASRError::SendFailed)?;
+            self.state.lock().tail_write_pending = false;
 
             // 宽限任务：仅当最后一个 completed 之后没有新的非静音帧写入时才可收尾。
             // 这既允许松手前已 completed 的正常会话快速返回，也避免异步写入或服务端
@@ -546,7 +551,10 @@ impl StepfunRealtimeASR {
             st.partial_text.clear();
             st.open_segments = st.open_segments.saturating_sub(1);
             st.last_completed_at = Some(Instant::now());
-            st.finishing && st.open_segments == 0
+            st.finishing
+                && !st.tail_write_pending
+                && !has_audio_after_last_completed(&st)
+                && st.open_segments == 0
         };
         if should_finish {
             self.finish_success();
@@ -986,6 +994,26 @@ mod tests {
 
         state.last_non_silent_audio_written_at = Some(completed_at + Duration::from_millis(2));
         assert!(has_audio_after_last_completed(&state));
+    }
+
+    #[test]
+    fn completed_does_not_finish_while_tail_write_is_pending() {
+        let asr = create_test_asr();
+        let (tx, mut rx) = oneshot::channel();
+        {
+            let mut state = asr.state.lock();
+            state.final_tx = Some(tx);
+            state.finishing = true;
+            state.tail_write_pending = true;
+            state.open_segments = 1;
+            state.last_non_silent_audio_written_at = Some(Instant::now());
+        }
+
+        let keep_going = asr.handle_text_message(&completed_event("上一段。"));
+
+        assert!(keep_going, "尾帧未写入时，旧 completed 不能提前关闭会话");
+        assert!(!asr.state.lock().session_finished);
+        assert!(rx.try_recv().is_err());
     }
 
     #[tokio::test]
