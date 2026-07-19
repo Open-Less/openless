@@ -70,6 +70,7 @@ pub async fn read_audio_recording(session_id: String) -> Result<String, String> 
 /// 把已归档录音 wav 导出到用户选定的路径。
 ///
 /// 后端直接调系统文件保存对话框，路径不经 IPC 传递，无法被篡改或注入。
+/// 对话框调用在 spawn_blocking 中执行，避免阻塞 Tauri 异步线程池。
 #[tauri::command]
 pub async fn export_audio_recording(
     app: tauri::AppHandle,
@@ -79,19 +80,26 @@ pub async fn export_audio_recording(
         return Err("invalid session id".into());
     }
 
-    let file_path = app
-        .dialog()
-        .file()
-        .add_filter("WAV audio", &["wav"])
-        .set_file_name(format!("openless-recording-{session_id}.wav"))
-        .blocking_save_file();
+    let (file_path, src) = tokio::task::spawn_blocking(move || -> Result<_, String> {
+        let file_path = app
+            .dialog()
+            .file()
+            .add_filter("WAV audio", &["wav"])
+            .set_file_name(format!("openless-recording-{session_id}.wav"))
+            .blocking_save_file();
 
-    let Some(file_path) = file_path else {
-        return Err("user cancelled".into());
-    };
+        let Some(file_path) = file_path else {
+            return Err("user cancelled".into());
+        };
 
-    let src =
-        crate::persistence::recording_path_for_session(&session_id).map_err(|e| e.to_string())?;
+        let src = crate::persistence::recording_path_for_session(&session_id)
+            .map_err(|e| e.to_string())?;
+
+        Ok((file_path, src))
+    })
+    .await
+    .map_err(|e| format!("internal error: {e}"))??;
+
     let dest_str = file_path.to_string();
     std::fs::copy(&src, std::path::Path::new(&dest_str))
         .map(|_| dest_str)
