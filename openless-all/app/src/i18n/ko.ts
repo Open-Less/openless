@@ -349,6 +349,7 @@ export const ko: typeof zhCN = {
     copyFailed: '복사 실패: {{err}}',
     playRecording: '녹음 재생',
     audioLoading: '로딩 중…',
+    audioDecodeFailed: '오디오 디코딩 실패: {{err}}',
     exportRecording: '녹음 내보내기',
     exportFailed: '내보내기 실패: {{err}}',
     retranscribe: '다시 인식',

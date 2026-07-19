@@ -56,6 +56,7 @@
         "font-src": "'self' https://fonts.gstatic.com",
         "img-src": "'self' asset: http://asset.localhost blob: data: https://github.com https://avatars.githubusercontent.com",
         "connect-src": "'self' ipc: http://ipc.localhost http://localhost:1420 ws://localhost:1420",
+        "media-src": "'self' data: asset: http://asset.localhost blob:",
         "object-src": "'none'",
         "base-uri": "'none'",
         "form-action": "'none'",

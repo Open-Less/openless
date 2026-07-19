@@ -345,6 +345,7 @@ export const zhCN = {
     copyFailed: '复制失败：{{err}}',
     playRecording: '播放录音',
     audioLoading: '加载中…',
+    audioDecodeFailed: '音频解码失败：{{err}}',
     exportRecording: '导出录音',
     exportFailed: '导出失败：{{err}}',
     retranscribe: '重新转录',

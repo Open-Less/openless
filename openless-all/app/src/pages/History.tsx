@@ -7,7 +7,7 @@ import { Icon } from '../components/Icon';
 import { Tooltip } from '../components/Tooltip';
 import { detectOS } from '../components/WindowChrome';
 import { formatComboLabel } from '../lib/hotkey';
-import { clearHistory, deleteHistoryEntry, listHistory, readAudioRecording, retranscribeRecording } from '../lib/ipc';
+import { clearHistory, deleteHistoryEntry, listHistory, readAudioRecording, retranscribeRecording, isTauri } from '../lib/ipc';
 import { useMobileLayout } from '../lib/useMobileLayout';
 import type { DictationSession, PolishMode } from '../lib/types';
 import { useHotkeySettings } from '../state/HotkeySettingsContext';
@@ -201,20 +201,27 @@ export function History() {
   const onExportAudio = async () => {
     if (!item || !item.hasAudioRecording) return;
     try {
-      const bytes = await readAudioRecording(item.id);
-      if (bytes.byteLength === 0) throw new Error('empty recording');
-      const buffer = new ArrayBuffer(bytes.byteLength);
-      new Uint8Array(buffer).set(bytes);
-      const blob = new Blob([buffer], { type: 'audio/wav' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `openless-recording-${item.id}.wav`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      // 浏览器异步触发下载，立刻 revoke 偶尔被中断；延后 60s 兜底。
-      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      const dataUrl = await readAudioRecording(item.id);
+      if (!dataUrl || dataUrl === 'data:audio/wav;base64,') throw new Error('empty recording');
+      // Wry/WebKit 中 data URL 的 <a download> 可能不触发保存对话框，改用 Tauri dialog save + 后端写入
+      if (isTauri) {
+        const { save } = await import('@tauri-apps/plugin-dialog');
+        const selected = await save({
+          defaultPath: `openless-recording-${item.id}.wav`,
+          filters: [{ name: 'WAV audio', extensions: ['wav'] }],
+        });
+        if (!selected) return;
+        // 通过 IPC 把录音复制到用户选定的路径
+        const { invoke } = await import('@tauri-apps/api/core');
+        await invoke('export_audio_recording', { sessionId: item.id, targetPath: selected });
+      } else {
+        const a = document.createElement('a');
+        a.href = dataUrl;
+        a.download = `openless-recording-${item.id}.wav`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      }
       setActionError(null);
     } catch (error) {
       console.error('[history] failed to export recording', error);
@@ -511,33 +518,36 @@ function AudioRecordingPlayer({
   onMissing?: () => void;
 }) {
   const { t } = useTranslation();
-  const [url, setUrl] = useState<string | null>(null);
+  const [blobUrl, setBlobUrl] = useState<string | null>(null);
   const [status, setStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
   const [errorText, setErrorText] = useState<string | null>(null);
 
+  // 组件 unmount 时释放 Blob URL，避免内存泄漏。
   useEffect(() => {
     return () => {
-      if (url) URL.revokeObjectURL(url);
+      if (blobUrl) URL.revokeObjectURL(blobUrl);
     };
-  }, [url]);
+  }, [blobUrl]);
 
   const load = async () => {
     setStatus('loading');
     setErrorText(null);
     try {
-      const bytes = await readAudioRecording(sessionId);
-      if (bytes.byteLength === 0) throw new Error('empty recording');
-      // typed array 在严格 TS lib 下不直接是 BlobPart；构造独立 ArrayBuffer 后 cast。
-      const buffer = new ArrayBuffer(bytes.byteLength);
-      new Uint8Array(buffer).set(bytes);
-      const blob = new Blob([buffer], { type: 'audio/wav' });
-      const objectUrl = URL.createObjectURL(blob);
-      setUrl(objectUrl);
+      const dataUrl = await readAudioRecording(sessionId);
+      if (!dataUrl || dataUrl === 'data:audio/wav;base64,') throw new Error('empty recording');
+      // WebKitGTK <audio> 对 data: URL 解码不稳定（时长 0 / 播不动），
+      // 把 base64 解码为二进制再封装成 Blob URL，在 WebKit 里远更可靠。
+      const comma = dataUrl.indexOf(',');
+      const b64 = comma >= 0 ? dataUrl.slice(comma + 1) : '';
+      if (!b64) throw new Error('empty recording');
+      const bin = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+      const blob = new Blob([bin], { type: 'audio/wav' });
+      const url = URL.createObjectURL(blob);
+      setBlobUrl(url);
       setStatus('ready');
     } catch (error) {
       console.error('[history] load recording failed', error);
       const msg = errorMessage(error);
-      // 文件被清理：通知父组件隐藏按钮组，自身不显示 error UI（用户没干错事）。
       if (msg.includes('recording not found') || msg.includes('not found')) {
         onMissing?.();
         return;
@@ -547,10 +557,24 @@ function AudioRecordingPlayer({
     }
   };
 
-  if (status === 'ready' && url) {
+  if (status === 'ready' && blobUrl) {
     return (
       <div style={{ marginBottom: 14 }}>
-        <audio src={url} controls preload="auto" autoPlay style={{ width: '100%' }} />
+        <audio
+          src={blobUrl}
+          controls
+          preload="auto"
+          autoPlay
+          style={{ width: '100%' }}
+          onError={(e) => {
+            const a = e.currentTarget;
+            const code = a.error?.code ?? -1;
+            const detail = a.error?.message ?? `${code}`;
+            console.error('[history] <audio> decode/play failed', { code, detail });
+            setStatus('error');
+            setErrorText(t('history.audioDecodeFailed', { err: detail }));
+          }}
+        />
       </div>
     );
   }

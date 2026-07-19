@@ -37,28 +37,48 @@ pub fn get_activity_stats(coord: CoordinatorState<'_>) -> Vec<ActivityDay> {
 /// session_id 在仓库内由 `Uuid::new_v4()` 生成 (`dictation.rs:1531`)，前端只会回传
 /// 自己列出的合法 id，但 IPC = boundary，按 boundary 规则严格校验。
 ///
-/// async fs：单条 5 分钟 wav 约 9.6MB，同步 `std::fs::read` 会阻塞 Tauri IPC 主循环。
-/// 改 `tokio::fs::read` 后让出线程给其它 IPC。
+/// 读取录音文件的 data URL（base64），前端 `<audio>` 直接 `src={url}` 播放。
+///
+/// 之前的实现返回 `Vec<u8>`，Tauri IPC 将其 JSON 序列化为 number 数组（~460 KB），
+/// 在 WebKit/Wry 中 `<audio>` 解析这个 Blob 有时会失败（表现为时长 0、导出无反应）。
+/// 改用 base64 data URL 后：
+/// - IPC payload 只增大 33%（150 KB），仍在安全范围内
+/// - 前端不需要 `ArrayBuffer → Blob → createObjectURL` 的复杂链路
+/// - 导出按钮直接把 data URL 设为 `<a>.href` 即可触发浏览器下载
 #[tauri::command]
-pub async fn read_audio_recording(session_id: String) -> Result<Vec<u8>, String> {
+pub async fn read_audio_recording(session_id: String) -> Result<String, String> {
     if !is_valid_session_id(&session_id) {
         return Err("invalid session id".into());
     }
     let path =
         crate::persistence::recording_path_for_session(&session_id).map_err(|e| e.to_string())?;
-    if !path.exists() {
-        return Err("recording not found".into());
-    }
-    // TOCTOU 兜底：exists() 通过到 read 之间文件可能被 prune（条数 cap / retention
-    // 清理 / 用户手动删）。把 NotFound 标准化成跟 exists() 失败同样的错误字符串，
-    // 前端单条 'recording not found' catch 就能稳定隐藏按钮，不依赖本地化 OS 错误。
-    tokio::fs::read(&path).await.map_err(|e| {
+    let data = tokio::fs::read(&path).await.map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             "recording not found".into()
         } else {
             format!("read wav failed: {e}")
         }
-    })
+    })?;
+    log::info!("[history] read_audio_recording id={session_id} bytes={} head={:?}", data.len(), &data.get(..16));
+    let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &data);
+    let data_url = format!("data:audio/wav;base64,{b64}");
+    log::info!("[history] read_audio_recording data_url_len={}", data_url.len());
+    Ok(data_url)
+}
+
+/// 把已归档录音 wav 复制到用户指定的路径。前端通过 Tauri dialog 选路径，后端直接
+/// 复制 recordings/<session_id>.wav → targetPath。
+#[tauri::command]
+pub fn export_audio_recording(session_id: String, target_path: String) -> Result<(), String> {
+    if !is_valid_session_id(&session_id) {
+        return Err("invalid session id".into());
+    }
+    let src =
+        crate::persistence::recording_path_for_session(&session_id).map_err(|e| e.to_string())?;
+    let dest = std::path::Path::new(&target_path);
+    std::fs::copy(&src, dest)
+        .map(|_| ())
+        .map_err(|e| format!("保存录音失败: {e}"))
 }
 
 /// 对一条「转录失败」历史条目的归档录音用**当前** ASR provider 重新转录（issue #613）。
