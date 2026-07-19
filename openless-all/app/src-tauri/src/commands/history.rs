@@ -1,4 +1,5 @@
 use super::*;
+use tauri_plugin_dialog::DialogExt;
 
 #[tauri::command]
 pub fn list_history(coord: CoordinatorState<'_>) -> Result<Vec<DictationSession>, String> {
@@ -66,31 +67,34 @@ pub async fn read_audio_recording(session_id: String) -> Result<String, String> 
     Ok(data_url)
 }
 
-/// 把已归档录音 wav 复制到用户指定的路径。
+/// 把已归档录音 wav 导出到用户选定的路径。
 ///
-/// 调用方必须通过 Tauri dialog `save()` 获取 `target_path`，该值由用户
-/// 在系统文件选择器中亲手选定，本身是可信任的用户意图。后端仅做最小防御：
-/// 拒绝 `..` 路径穿越，并要求父目录已存在（这两个条件在正常 dialog save
-/// 路径上天然成立，但能挡掉直接 IPC 调用中构造的恶意路径）。
+/// 后端直接调系统文件保存对话框，路径不经 IPC 传递，无法被篡改或注入。
 #[tauri::command]
-pub fn export_audio_recording(session_id: String, target_path: String) -> Result<(), String> {
+pub async fn export_audio_recording(
+    app: tauri::AppHandle,
+    session_id: String,
+) -> Result<String, String> {
     if !is_valid_session_id(&session_id) {
         return Err("invalid session id".into());
     }
 
-    if target_path.contains("..") {
-        return Err("invalid target path".into());
-    }
+    let file_path = app
+        .dialog()
+        .file()
+        .add_filter("WAV audio", &["wav"])
+        .set_file_name(format!("openless-recording-{session_id}.wav"))
+        .blocking_save_file();
 
-    let dest = std::path::Path::new(&target_path);
-    if dest.parent().map_or(true, |p| !p.is_dir()) || dest.is_dir() {
-        return Err("invalid target path".into());
-    }
+    let Some(file_path) = file_path else {
+        return Err("user cancelled".into());
+    };
 
     let src =
         crate::persistence::recording_path_for_session(&session_id).map_err(|e| e.to_string())?;
-    std::fs::copy(&src, dest)
-        .map(|_| ())
+    let dest_str = file_path.to_string();
+    std::fs::copy(&src, std::path::Path::new(&dest_str))
+        .map(|_| dest_str)
         .map_err(|e| format!("保存录音失败: {e}"))
 }
 

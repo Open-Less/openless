@@ -203,17 +203,10 @@ export function History() {
     try {
       const dataUrl = await readAudioRecording(item.id);
       if (!dataUrl || dataUrl === 'data:audio/wav;base64,') throw new Error('empty recording');
-      // Wry/WebKit 中 data URL 的 <a download> 可能不触发保存对话框，改用 Tauri dialog save + 后端写入
+      // Wry/WebKit 中 data URL 的 <a download> 可能不触发保存对话框，后端直接调系统对话框
       if (isTauri) {
-        const { save } = await import('@tauri-apps/plugin-dialog');
-        const selected = await save({
-          defaultPath: `openless-recording-${item.id}.wav`,
-          filters: [{ name: 'WAV audio', extensions: ['wav'] }],
-        });
-        if (!selected) return;
-        // 通过 IPC 把录音复制到用户选定的路径
         const { invoke } = await import('@tauri-apps/api/core');
-        await invoke('export_audio_recording', { sessionId: item.id, targetPath: selected });
+        await invoke('export_audio_recording', { sessionId: item.id });
       } else {
         const a = document.createElement('a');
         a.href = dataUrl;
