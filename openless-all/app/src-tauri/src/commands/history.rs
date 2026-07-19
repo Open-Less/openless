@@ -66,16 +66,29 @@ pub async fn read_audio_recording(session_id: String) -> Result<String, String> 
     Ok(data_url)
 }
 
-/// 把已归档录音 wav 复制到用户指定的路径。前端通过 Tauri dialog 选路径，后端直接
-/// 复制 recordings/<session_id>.wav → targetPath。
+/// 把已归档录音 wav 复制到用户指定的路径。
+///
+/// 调用方必须通过 Tauri dialog `save()` 获取 `target_path`，该值由用户
+/// 在系统文件选择器中亲手选定，本身是可信任的用户意图。后端仅做最小防御：
+/// 拒绝 `..` 路径穿越，并要求父目录已存在（这两个条件在正常 dialog save
+/// 路径上天然成立，但能挡掉直接 IPC 调用中构造的恶意路径）。
 #[tauri::command]
 pub fn export_audio_recording(session_id: String, target_path: String) -> Result<(), String> {
     if !is_valid_session_id(&session_id) {
         return Err("invalid session id".into());
     }
+
+    if target_path.contains("..") {
+        return Err("invalid target path".into());
+    }
+
+    let dest = std::path::Path::new(&target_path);
+    if dest.parent().map_or(true, |p| !p.is_dir()) || dest.is_dir() {
+        return Err("invalid target path".into());
+    }
+
     let src =
         crate::persistence::recording_path_for_session(&session_id).map_err(|e| e.to_string())?;
-    let dest = std::path::Path::new(&target_path);
     std::fs::copy(&src, dest)
         .map(|_| ())
         .map_err(|e| format!("保存录音失败: {e}"))
