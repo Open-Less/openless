@@ -201,13 +201,13 @@ export function History() {
   const onExportAudio = async () => {
     if (!item || !item.hasAudioRecording) return;
     try {
-      const dataUrl = await readAudioRecording(item.id);
-      if (!dataUrl || dataUrl === 'data:audio/wav;base64,') throw new Error('empty recording');
       // Wry/WebKit 中 data URL 的 <a download> 可能不触发保存对话框，后端直接调系统对话框
       if (isTauri) {
         const { invoke } = await import('@tauri-apps/api/core');
         await invoke('export_audio_recording', { sessionId: item.id });
       } else {
+        const dataUrl = await readAudioRecording(item.id);
+        if (!dataUrl || dataUrl === 'data:audio/wav;base64,') throw new Error('empty recording');
         const a = document.createElement('a');
         a.href = dataUrl;
         a.download = `openless-recording-${item.id}.wav`;
@@ -219,6 +219,10 @@ export function History() {
     } catch (error) {
       console.error('[history] failed to export recording', error);
       const msg = errorMessage(error);
+      if (isUserCancelled(msg)) {
+        setActionError(null);
+        return;
+      }
       // wav 已被 retention / 条数 cap 清理：把按钮隐藏，不显示错误（用户没干错事）。
       if (msg.includes('recording not found') || msg.includes('not found')) {
         markAudioMissing(item.id);
@@ -499,6 +503,14 @@ function errorMessage(error: unknown): string {
   return String(error);
 }
 
+function isUserCancelled(message: string): boolean {
+  const normalized = message.trim().toLowerCase();
+  return normalized === 'cancelled'
+    || normalized === 'canceled'
+    || normalized === 'user cancelled'
+    || normalized === 'user canceled';
+}
+
 /** 当 session.hasAudioRecording 为 true 时渲染：一个加载按钮 + 拿到字节后切换为
  *  原生 audio controls。Blob URL 在组件 unmount 时 revoke，避免泄漏。
  *  `onMissing` 在后端返回 'recording not found'（wav 已被 prune）时触发，让父组件
@@ -514,19 +526,35 @@ function AudioRecordingPlayer({
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
   const [status, setStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
   const [errorText, setErrorText] = useState<string | null>(null);
+  const mountedRef = useRef(true);
+  const blobUrlRef = useRef<string | null>(null);
 
   // 组件 unmount 时释放 Blob URL，避免内存泄漏。
   useEffect(() => {
+    mountedRef.current = true;
     return () => {
-      if (blobUrl) URL.revokeObjectURL(blobUrl);
+      mountedRef.current = false;
+      if (blobUrlRef.current) {
+        URL.revokeObjectURL(blobUrlRef.current);
+        blobUrlRef.current = null;
+      }
     };
-  }, [blobUrl]);
+  }, []);
+
+  const clearBlobUrl = () => {
+    if (blobUrlRef.current) {
+      URL.revokeObjectURL(blobUrlRef.current);
+      blobUrlRef.current = null;
+    }
+    setBlobUrl(null);
+  };
 
   const load = async () => {
     setStatus('loading');
     setErrorText(null);
     try {
       const dataUrl = await readAudioRecording(sessionId);
+      if (!mountedRef.current) return;
       if (!dataUrl || dataUrl === 'data:audio/wav;base64,') throw new Error('empty recording');
       // WebKitGTK <audio> 对 data: URL 解码不稳定（时长 0 / 播不动），
       // 把 base64 解码为二进制再封装成 Blob URL，在 WebKit 里远更可靠。
@@ -536,9 +564,16 @@ function AudioRecordingPlayer({
       const bin = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
       const blob = new Blob([bin], { type: 'audio/wav' });
       const url = URL.createObjectURL(blob);
+      if (!mountedRef.current) {
+        URL.revokeObjectURL(url);
+        return;
+      }
+      if (blobUrlRef.current) URL.revokeObjectURL(blobUrlRef.current);
+      blobUrlRef.current = url;
       setBlobUrl(url);
       setStatus('ready');
     } catch (error) {
+      if (!mountedRef.current) return;
       console.error('[history] load recording failed', error);
       const msg = errorMessage(error);
       if (msg.includes('recording not found') || msg.includes('not found')) {
@@ -560,10 +595,12 @@ function AudioRecordingPlayer({
           autoPlay
           style={{ width: '100%' }}
           onError={(e) => {
+            if (!mountedRef.current) return;
             const a = e.currentTarget;
             const code = a.error?.code ?? -1;
             const detail = a.error?.message ?? `${code}`;
             console.error('[history] <audio> decode/play failed', { code, detail });
+            clearBlobUrl();
             setStatus('error');
             setErrorText(t('history.audioDecodeFailed', { err: detail }));
           }}

@@ -1,5 +1,5 @@
 use super::*;
-use tauri_plugin_dialog::DialogExt;
+use tauri_plugin_dialog::{DialogExt, FilePath};
 
 #[tauri::command]
 pub fn list_history(coord: CoordinatorState<'_>) -> Result<Vec<DictationSession>, String> {
@@ -80,7 +80,7 @@ pub async fn export_audio_recording(
         return Err("invalid session id".into());
     }
 
-    let (file_path, src) = tokio::task::spawn_blocking(move || -> Result<_, String> {
+    tokio::task::spawn_blocking(move || -> Result<String, String> {
         let file_path = app
             .dialog()
             .file()
@@ -95,15 +95,44 @@ pub async fn export_audio_recording(
         let src = crate::persistence::recording_path_for_session(&session_id)
             .map_err(|e| e.to_string())?;
 
-        Ok((file_path, src))
+        export_recording_to_destination(file_path, &src)
     })
     .await
-    .map_err(|e| format!("internal error: {e}"))??;
+    .map_err(|e| format!("internal error: {e}"))?
+}
 
-    let dest_str = file_path.to_string();
-    std::fs::copy(&src, std::path::Path::new(&dest_str))
-        .map(|_| dest_str)
-        .map_err(|e| format!("保存录音失败: {e}"))
+fn export_recording_to_destination(
+    file_path: FilePath,
+    source: &std::path::Path,
+) -> Result<String, String> {
+    #[cfg(target_os = "android")]
+    if let FilePath::Url(url) = &file_path {
+        if url.scheme() == "content" {
+            crate::android::jni::android::copy_file_to_content_uri(url.as_str(), source).map_err(
+                |error| {
+                    if error == "recording not found" {
+                        error
+                    } else {
+                        format!("保存录音失败: {error}")
+                    }
+                },
+            )?;
+            return Ok(url.to_string());
+        }
+    }
+
+    let destination = file_path
+        .into_path()
+        .map_err(|error| format!("保存录音失败: {error}"))?;
+    std::fs::copy(source, &destination)
+        .map(|_| destination.to_string_lossy().into_owned())
+        .map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                "recording not found".to_string()
+            } else {
+                format!("保存录音失败: {error}")
+            }
+        })
 }
 
 /// 对一条「转录失败」历史条目的归档录音用**当前** ASR provider 重新转录（issue #613）。
