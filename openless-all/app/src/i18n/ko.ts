@@ -334,6 +334,7 @@ export const ko: typeof zhCN = {
     },
   },
   history: {
+    exportError: '녹음을 내보내지 못했습니다. 다시 시도해 주세요.',
     kicker: 'HISTORY',
     title: '기록',
     desc: '로컬에 저장된 인식 기록.',

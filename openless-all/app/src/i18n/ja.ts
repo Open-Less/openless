@@ -334,6 +334,7 @@ export const ja: typeof zhCN = {
     },
   },
   history: {
+    exportError: '録音のエクスポートに失敗しました。もう一度お試しください。',
     kicker: 'HISTORY',
     title: '履歴',
     desc: 'ローカルに保存された認識記録。',

@@ -332,6 +332,7 @@ export const en: typeof zhCN = {
     },
   },
   history: {
+    exportError: 'Failed to export the recording. Please try again.',
     kicker: 'HISTORY',
     title: 'History',
     desc: 'Locally stored transcripts.',

@@ -9,9 +9,13 @@ use crate::coordinator::Coordinator;
 pub fn run() {
     let coordinator = Arc::new(Coordinator::new());
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_dialog::init());
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    let builder = builder.plugin(tauri_plugin_fs::init());
+
+    builder
         .manage(coordinator.clone())
         .setup(move |app| {
             crate::init_file_logger();

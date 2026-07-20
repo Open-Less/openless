@@ -223,6 +223,10 @@ export function History() {
         setActionError(null);
         return;
       }
+      if (msg === 'recording export failed') {
+        setActionError(t('history.exportError'));
+        return;
+      }
       // wav 已被 retention / 条数 cap 清理：把按钮隐藏，不显示错误（用户没干错事）。
       if (msg.includes('recording not found') || msg.includes('not found')) {
         markAudioMissing(item.id);

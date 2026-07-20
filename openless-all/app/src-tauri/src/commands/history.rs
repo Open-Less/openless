@@ -95,44 +95,107 @@ pub async fn export_audio_recording(
         let src = crate::persistence::recording_path_for_session(&session_id)
             .map_err(|e| e.to_string())?;
 
-        export_recording_to_destination(file_path, &src)
+        export_recording_to_destination(&app, file_path, &src)
     })
     .await
     .map_err(|e| format!("internal error: {e}"))?
 }
 
 fn export_recording_to_destination(
+    app: &tauri::AppHandle,
     file_path: FilePath,
     source: &std::path::Path,
 ) -> Result<String, String> {
     #[cfg(target_os = "android")]
     if let FilePath::Url(url) = &file_path {
         if url.scheme() == "content" {
-            crate::android::jni::android::copy_file_to_content_uri(url.as_str(), source).map_err(
-                |error| {
-                    if error == "recording not found" {
-                        error
-                    } else {
-                        format!("保存录音失败: {error}")
-                    }
-                },
-            )?;
+            copy_recording_to_mobile_url(app, &file_path, source)?;
+            return Ok(url.to_string());
+        }
+    }
+
+    #[cfg(target_os = "ios")]
+    if let FilePath::Url(url) = &file_path {
+        if url.scheme() == "file" {
+            copy_recording_to_mobile_url(app, &file_path, source)?;
             return Ok(url.to_string());
         }
     }
 
     let destination = file_path
         .into_path()
-        .map_err(|error| format!("保存录音失败: {error}"))?;
-    std::fs::copy(source, &destination)
-        .map(|_| destination.to_string_lossy().into_owned())
-        .map_err(|error| {
-            if error.kind() == std::io::ErrorKind::NotFound {
-                "recording not found".to_string()
-            } else {
-                format!("保存录音失败: {error}")
-            }
-        })
+        .map_err(export_recording_failed)?;
+    copy_recording_to_path(source, &destination)?;
+    Ok(destination.to_string_lossy().into_owned())
+}
+
+const RECORDING_EXPORT_FAILED: &str = "recording export failed";
+
+fn open_recording_source(source: &std::path::Path) -> Result<std::fs::File, String> {
+    std::fs::File::open(source).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            "recording not found".to_string()
+        } else {
+            export_recording_failed(error)
+        }
+    })
+}
+
+fn export_recording_failed(error: impl std::fmt::Display) -> String {
+    log::error!("[history] audio recording export failed: {error}");
+    RECORDING_EXPORT_FAILED.to_string()
+}
+
+fn copy_recording_to_path(
+    source: &std::path::Path,
+    destination: &std::path::Path,
+) -> Result<(), String> {
+    let mut source_file = open_recording_source(source)?;
+    let mut destination_file = std::fs::File::create(destination).map_err(export_recording_failed)?;
+    std::io::copy(&mut source_file, &mut destination_file)
+        .map(|_| ())
+        .map_err(export_recording_failed)
+}
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+fn copy_recording_to_mobile_url(
+    app: &tauri::AppHandle,
+    destination: &FilePath,
+    source: &std::path::Path,
+) -> Result<(), String> {
+    use tauri_plugin_fs::{FsExt, OpenOptions};
+
+    let mut source_file = open_recording_source(source)?;
+    let mut options = OpenOptions::new();
+    options.write(true).truncate(true).create(true);
+    let mut destination_file = match app.fs().open(destination.clone(), options) {
+        Ok(file) => file,
+        Err(error) => {
+            #[cfg(target_os = "ios")]
+            let _ = app.fs().stop_accessing_security_scoped_resource(destination.clone());
+            return Err(export_recording_failed(error));
+        }
+    };
+
+    let copy_result = std::io::copy(&mut source_file, &mut destination_file)
+        .map(|_| ())
+        .map_err(export_recording_failed);
+
+    #[cfg(target_os = "ios")]
+    let stop_result = app
+        .fs()
+        .stop_accessing_security_scoped_resource(destination.clone())
+        .map_err(export_recording_failed);
+
+    if let Err(error) = copy_result {
+        #[cfg(target_os = "ios")]
+        let _ = stop_result;
+        return Err(error);
+    }
+
+    #[cfg(target_os = "ios")]
+    stop_result?;
+    Ok(())
 }
 
 /// 对一条「转录失败」历史条目的归档录音用**当前** ASR provider 重新转录（issue #613）。

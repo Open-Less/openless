@@ -59,6 +59,9 @@ ferrous-opencc = "0.4"
 # Audio capture — shared across desktop and mobile.
 cpal = "0.15"
 
+[target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
+tauri-plugin-fs = "2.5.1"
+
 # Desktop-only plugins, hotkey/insertion helpers, and tray-icon (not built for mobile).
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 reqwest = { version = "0.12", default-features = false, features = ["native-tls"] }

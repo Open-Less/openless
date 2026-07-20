@@ -5,7 +5,6 @@ pub mod android {
     use jni::objects::{JByteArray, JClass, JObject, JString, JValue};
     use jni::JNIEnv;
     use jni::JavaVM;
-    use std::{fs::File, io::Read, path::Path};
 
     pub fn with_android_env<R>(
         f: impl for<'local> FnOnce(&mut JNIEnv<'local>, &JObject<'local>) -> Result<R, String>,
@@ -721,81 +720,6 @@ pub mod android {
         env.call_method(context, "getContentResolver", "()Landroid/content/ContentResolver;", &[])
             .and_then(|value| value.l())
             .map_err(|error| format!("Context.getContentResolver: {error}"))
-    }
-
-    /// 将本地文件复制到 Android `ACTION_CREATE_DOCUMENT` 返回的 URI。
-    ///
-    /// Android 文档选择器返回的是 `content://` URI，而不是文件系统路径；通过
-    /// `ContentResolver` 写入可使用用户选择的存储提供方，避免把 URI 文本当成本地路径。
-    pub(crate) fn copy_file_to_content_uri(uri: &str, source: &Path) -> Result<(), String> {
-        let mut source_file = File::open(source).map_err(|error| {
-            if error.kind() == std::io::ErrorKind::NotFound {
-                "recording not found".to_string()
-            } else {
-                format!("read recording failed: {error}")
-            }
-        })?;
-
-        with_android_env(|env, context| {
-            let resolver = content_resolver(env, context)?;
-            let uri_string = jobject_str(env, uri)?;
-            let parsed_uri = env
-                .call_static_method(
-                    "android/net/Uri",
-                    "parse",
-                    "(Ljava/lang/String;)Landroid/net/Uri;",
-                    &[JValue::Object(&uri_string)],
-                )
-                .and_then(|value| value.l())
-                .map_err(|error| format!("Uri.parse: {error}"))?;
-            if parsed_uri.is_null() {
-                return Err("Android returned an invalid save URI".to_string());
-            }
-
-            let output = env
-                .call_method(
-                    &resolver,
-                    "openOutputStream",
-                    "(Landroid/net/Uri;)Ljava/io/OutputStream;",
-                    &[JValue::Object(&parsed_uri)],
-                )
-                .and_then(|value| value.l())
-                .map_err(|error| format!("open save URI: {error}"))?;
-            if output.is_null() {
-                return Err("Android could not open the selected save location".to_string());
-            }
-
-            let write_result = (|| -> Result<(), String> {
-                let mut buffer = [0_u8; 64 * 1024];
-                loop {
-                    let read = source_file
-                        .read(&mut buffer)
-                        .map_err(|error| format!("read recording failed: {error}"))?;
-                    if read == 0 {
-                        break;
-                    }
-                    let bytes = env
-                        .byte_array_from_slice(&buffer[..read])
-                        .map_err(|error| format!("create Android write buffer: {error}"))?;
-                    let bytes_object = JObject::from(bytes);
-                    env.call_method(
-                        &output,
-                        "write",
-                        "([B)V",
-                        &[JValue::Object(&bytes_object)],
-                    )
-                    .map_err(|error| format!("write save URI: {error}"))?;
-                }
-                Ok(())
-            })();
-
-            let close_result = env
-                .call_method(&output, "close", "()V", &[])
-                .map_err(|error| format!("close save URI: {error}"));
-            write_result?;
-            close_result?;
-            Ok(())
-        })
     }
 
     fn jstring_object_to_option<'local>(
