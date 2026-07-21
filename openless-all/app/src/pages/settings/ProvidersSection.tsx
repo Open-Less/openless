@@ -698,6 +698,9 @@ function providerErrorMessage(error: unknown, t: ReturnType<typeof useTranslatio
   if (message.includes('API Key')) return t('settings.providers.apiKeyMissing');
   if (message.includes('Endpoint')) return t('settings.providers.endpointMissing');
   if (message.includes('timeout') || message.includes('超时')) return t('settings.providers.requestTimeout');
+  if (message.startsWith('task failed:') || message.startsWith('connection failed:') || message.startsWith('send failed:')) {
+    return message;
+  }
   return t('common.operationFailed');
 }
 

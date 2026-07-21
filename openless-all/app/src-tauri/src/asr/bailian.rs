@@ -486,6 +486,7 @@ impl BailianRealtimeASR {
         if let Some(tx) = tx {
             let _ = tx.send(Err(error));
         }
+        self.task_started.notify_waiters();
         self.close_on_runtime();
     }
 
