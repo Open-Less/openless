@@ -83,6 +83,7 @@ fn llm_provider_default_endpoint(provider: &str) -> Option<&'static str> {
         "ark" => Some("https://ark.cn-beijing.volces.com/api/v3"),
         "deepseek" => Some("https://api.deepseek.com/v1"),
         "siliconflow" => Some("https://api.siliconflow.cn/v1"),
+        "atlascloud" => Some("https://api.atlascloud.ai/v1"),
         "openai" => Some("https://api.openai.com/v1"),
         // 谷歌 Gemini 原生 API（v1beta）。后端 llm_gemini.rs 会拼成
         // `{baseUrl}/models/{model}:generateContent`，认证用 x-goog-api-key 头。

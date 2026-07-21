@@ -566,6 +566,22 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn credentials_status_requires_api_key_for_atlascloud() {
+        let keyless = CredentialsSnapshot {
+            ark_endpoint: Some("https://api.atlascloud.ai/v1".into()),
+            ark_model_id: Some("qwen/qwen3.5-flash".into()),
+            ..snapshot()
+        };
+        assert!(!llm_configured_for_provider("atlascloud", &keyless));
+
+        let ready = CredentialsSnapshot {
+            ark_api_key: Some("key".into()),
+            ..keyless
+        };
+        assert!(llm_configured_for_provider("atlascloud", &ready));
+    }
+
     impl SettingsWriter for FakeSettingsWriter {
         fn read_settings(&self) -> UserPreferences {
             self.saved.lock().unwrap().clone().unwrap_or_default()

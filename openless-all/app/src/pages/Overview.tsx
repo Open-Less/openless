@@ -36,6 +36,7 @@ const LLM_NAME_KEY_BY_ID: Record<string, string> = {
   ark: 'ark',
   deepseek: 'deepseek',
   siliconflow: 'siliconflow',
+  atlascloud: 'atlascloud',
   openai: 'openai',
   codex_oauth: 'codexOAuth',
   mimo: 'mimo',
