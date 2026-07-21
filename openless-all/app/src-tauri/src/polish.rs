@@ -88,11 +88,31 @@ pub fn openai_compatible_temperature_for_provider(
     provider_id: &str,
     custom_temperature: Option<f32>,
 ) -> Option<f32> {
-    if provider_id == "custom" {
+    if provider_id == "custom" || !is_builtin_llm_provider(provider_id) {
         custom_temperature
     } else {
         Some(DEFAULT_TEMPERATURE)
     }
+}
+
+fn is_builtin_llm_provider(provider_id: &str) -> bool {
+    matches!(
+        provider_id,
+        "ark"
+            | "deepseek"
+            | "siliconflow"
+            | "atlascloud"
+            | "openai"
+            | "gemini"
+            | "codex_oauth"
+            | "mimo"
+            | "cometapi"
+            | "openrouterFree"
+            | "alibabaCoding"
+            | "codingPlanX"
+            | "minimax"
+            | "stepfun"
+    )
 }
 
 #[derive(Debug, Error)]
@@ -2535,6 +2555,18 @@ mod tests {
         );
         assert_eq!(
             openai_compatible_temperature_for_provider("openai", None),
+            Some(DEFAULT_TEMPERATURE)
+        );
+        assert_eq!(
+            openai_compatible_temperature_for_provider("self-hosted", None),
+            None
+        );
+        assert_eq!(
+            openai_compatible_temperature_for_provider("self-hosted", Some(0.7)),
+            Some(0.7)
+        );
+        assert_eq!(
+            openai_compatible_temperature_for_provider("atlascloud", None),
             Some(DEFAULT_TEMPERATURE)
         );
     }
