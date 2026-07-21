@@ -225,7 +225,7 @@ impl DeepgramRealtimeASR {
                         }
                     }
                     Ok(Message::Close(_)) => {
-                        this.finish_success();
+                        this.finish_with_partial_or_error(DeepgramError::NoFinalResult);
                         break;
                     }
                     Ok(_) => {}
