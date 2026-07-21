@@ -213,6 +213,8 @@ export const inputStyle: CSSProperties = {
 export const ASR_PRESETS = [
   { id: 'volcengine',   nameKey: 'asrVolcengine',   baseUrl: '',                                              model: ''                              },
   { id: 'elevenlabs',   nameKey: 'asrElevenLabs',   baseUrl: 'https://api.elevenlabs.io/v1',                  model: 'scribe_v2'                     },
+  { id: 'assemblyai',   nameKey: 'asrAssemblyAI',   baseUrl: 'wss://streaming.assemblyai.com/v3/ws',           model: 'universal-3-5-pro'           },
+  { id: 'deepgram',     nameKey: 'asrDeepgram',     baseUrl: 'wss://api.deepgram.com/v1/listen',                model: 'nova-3'                      },
   { id: 'bailian',      nameKey: 'asrBailian',     baseUrl: 'wss://dashscope.aliyuncs.com/api-ws/v1/inference/', model: 'fun-asr-realtime'             },
   // Qwen3-ASR-Flash 实时：OpenAI Realtime 风格 WS（/api-ws/v1/realtime），
   // 与上面经典 inference 协议不同，由 asr/qwen_realtime.rs 专用 client 处理。

@@ -25,7 +25,8 @@ use crate::asr::local::{
     foundry, sherpa, FoundryLocalRuntime, FoundryLocalWhisperAsr, SherpaOnnxAsr, SherpaOnnxRuntime,
 };
 use crate::asr::{
-    BailianCredentials, BailianRealtimeASR, DashScopeMultimodalASR, DictionaryHotword,
+    AssemblyAICredentials, AssemblyAIRealtimeASR, BailianCredentials, BailianRealtimeASR,
+    DashScopeMultimodalASR, DeepgramCredentials, DeepgramRealtimeASR, DictionaryHotword,
     ElevenLabsBatchASR, MimoBatchASR, Qwen3RealtimeASR, Qwen3RealtimeCredentials, RawTranscript,
     VolcengineCredentials, VolcengineStreamingASR, WhisperBatchASR,
 };
@@ -184,6 +185,8 @@ enum ActiveAsr {
     /// 百炼 Fun-ASR-Flash 录音文件识别（DashScope multimodal-generation 批量 HTTP）。
     DashScopeMultimodal(Arc<DashScopeMultimodalASR>),
     ElevenLabs(Arc<ElevenLabsBatchASR>),
+    AssemblyAI(Arc<AssemblyAIRealtimeASR>),
+    Deepgram(Arc<DeepgramRealtimeASR>),
     Bailian(Arc<BailianRealtimeASR>),
     /// 百炼 Qwen3-ASR-Flash 实时（OpenAI Realtime 风格 WS 协议）。
     Qwen3Realtime(Arc<Qwen3RealtimeASR>),
@@ -230,6 +233,8 @@ pub(crate) enum ActiveAsrProviderKind {
     Mimo,
     DashScopeMultimodal,
     ElevenLabs,
+    AssemblyAI,
+    Deepgram,
     WhisperCompatible,
     Volcengine,
 }
@@ -266,6 +271,8 @@ impl ActiveAsrProviderKind {
             | ActiveAsrProviderKind::Mimo
             | ActiveAsrProviderKind::DashScopeMultimodal
             | ActiveAsrProviderKind::ElevenLabs
+            | ActiveAsrProviderKind::AssemblyAI
+            | ActiveAsrProviderKind::Deepgram
             | ActiveAsrProviderKind::WhisperCompatible => AsrPreflightCredential::AsrApiKey,
             ActiveAsrProviderKind::Volcengine => AsrPreflightCredential::VolcAppKey,
         }
@@ -275,7 +282,9 @@ impl ActiveAsrProviderKind {
         match self {
             ActiveAsrProviderKind::Bailian
             | ActiveAsrProviderKind::Qwen3Realtime
-            | ActiveAsrProviderKind::ElevenLabs => {
+            | ActiveAsrProviderKind::ElevenLabs
+            | ActiveAsrProviderKind::AssemblyAI
+            | ActiveAsrProviderKind::Deepgram => {
                 AsrConfiguredFields::ApiKeyOnly
             }
             ActiveAsrProviderKind::Mimo | ActiveAsrProviderKind::DashScopeMultimodal => {
@@ -304,6 +313,10 @@ pub(crate) fn active_asr_provider_kind(id: &str) -> ActiveAsrProviderKind {
         ActiveAsrProviderKind::DashScopeMultimodal
     } else if is_elevenlabs_provider(id) {
         ActiveAsrProviderKind::ElevenLabs
+    } else if is_assemblyai_provider(id) {
+        ActiveAsrProviderKind::AssemblyAI
+    } else if is_deepgram_provider(id) {
+        ActiveAsrProviderKind::Deepgram
     } else if is_whisper_compatible_provider(id) {
         ActiveAsrProviderKind::WhisperCompatible
     } else {
@@ -2350,6 +2363,51 @@ fn read_elevenlabs_credentials() -> (String, String, String) {
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| crate::asr::elevenlabs::DEFAULT_MODEL.to_string());
     (api_key, base_url, model)
+}
+
+fn read_assemblyai_credentials() -> crate::asr::AssemblyAICredentials {
+    let api_key = CredentialsVault::get(CredentialAccount::AsrApiKey)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let endpoint = CredentialsVault::get(CredentialAccount::AsrEndpoint)
+        .ok()
+        .flatten()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| crate::asr::assemblyai::DEFAULT_ENDPOINT.to_string());
+    let model = CredentialsVault::get(CredentialAccount::AsrModel)
+        .ok()
+        .flatten()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| crate::asr::assemblyai::DEFAULT_MODEL.to_string());
+    crate::asr::AssemblyAICredentials {
+        api_key,
+        endpoint,
+        model,
+    }
+}
+
+fn read_deepgram_credentials() -> crate::asr::DeepgramCredentials {
+    let api_key = CredentialsVault::get(CredentialAccount::AsrApiKey)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let endpoint = CredentialsVault::get(CredentialAccount::AsrEndpoint)
+        .ok()
+        .flatten()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| crate::asr::deepgram::DEFAULT_ENDPOINT.to_string());
+    let model = CredentialsVault::get(CredentialAccount::AsrModel)
+        .ok()
+        .flatten()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| crate::asr::deepgram::DEFAULT_MODEL.to_string());
+    crate::asr::DeepgramCredentials {
+        api_key,
+        endpoint,
+        model,
+        language: Some("zh".to_string()),
+    }
 }
 
 fn read_dashscope_multimodal_credentials() -> (String, String, String) {

@@ -798,6 +798,8 @@ export const en: typeof zhCN = {
         asrOpenrouter: 'OpenRouter Whisper',
         asrXiaomiMimo: 'Xiaomi MiMo ASR',
         asrElevenLabs: 'ElevenLabs Scribe',
+        asrAssemblyAI: 'AssemblyAI Realtime ASR',
+        asrDeepgram: 'Deepgram Realtime ASR',
         asrSherpaOnnxLocal: 'Local sherpa-onnx (experimental)',
         asrFoundryLocalWhisper: 'Local Whisper (Foundry Local)',
         asrLocalQwen3: 'Local Qwen3-ASR',

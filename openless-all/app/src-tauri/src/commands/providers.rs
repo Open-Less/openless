@@ -90,6 +90,24 @@ pub async fn list_provider_models(kind: String) -> Result<ProviderModelsResult, 
             models: vec![crate::asr::elevenlabs::DEFAULT_MODEL.to_string()],
         });
     }
+    if kind == "asr" && CredentialsVault::get_active_asr() == crate::asr::assemblyai::PROVIDER_ID {
+        validate_assemblyai_asr_provider().await?;
+        return Ok(ProviderModelsResult {
+            models: vec![
+                crate::asr::assemblyai::DEFAULT_MODEL.to_string(),
+                "universal-2".to_string(),
+            ],
+        });
+    }
+    if kind == "asr" && CredentialsVault::get_active_asr() == crate::asr::deepgram::PROVIDER_ID {
+        validate_deepgram_asr_provider().await?;
+        return Ok(ProviderModelsResult {
+            models: vec![
+                crate::asr::deepgram::DEFAULT_MODEL.to_string(),
+                "nova-2".to_string(),
+            ],
+        });
+    }
     if kind == "llm" && CredentialsVault::get_active_llm() == CODEX_OAUTH_PROVIDER_ID {
         return Ok(ProviderModelsResult {
             models: vec![
@@ -270,6 +288,12 @@ async fn validate_asr_provider() -> Result<(), String> {
     if active_asr == crate::asr::elevenlabs::PROVIDER_ID {
         return validate_elevenlabs_asr_provider().await;
     }
+    if active_asr == crate::asr::assemblyai::PROVIDER_ID {
+        return validate_assemblyai_asr_provider().await;
+    }
+    if active_asr == crate::asr::deepgram::PROVIDER_ID {
+        return validate_deepgram_asr_provider().await;
+    }
     // StepFun 一入口双协议：`*-stream` 模型走实时 WS 验证，其余走批式
     // /audio/transcriptions（与 build 侧 resolve_effective_asr_provider 同判据）。
     if active_asr == "stepfun" || active_asr == crate::asr::stepfun_realtime::PROVIDER_ID {
@@ -376,6 +400,77 @@ async fn validate_elevenlabs_asr_provider() -> Result<(), String> {
             error.to_string()
         }
     })
+}
+
+async fn validate_assemblyai_asr_provider() -> Result<(), String> {
+    let api_key = CredentialsVault::get(CredentialAccount::AsrApiKey)
+        .map_err(|e| e.to_string())?
+        .unwrap_or_default();
+    if api_key.trim().is_empty() {
+        return Err("API Key 为空".to_string());
+    }
+    let endpoint = CredentialsVault::get(CredentialAccount::AsrEndpoint)
+        .map_err(|e| e.to_string())?
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| crate::asr::assemblyai::DEFAULT_ENDPOINT.to_string());
+    let model = CredentialsVault::get(CredentialAccount::AsrModel)
+        .map_err(|e| e.to_string())?
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| crate::asr::assemblyai::DEFAULT_MODEL.to_string());
+
+    let asr = std::sync::Arc::new(crate::asr::AssemblyAIRealtimeASR::new(
+        crate::asr::AssemblyAICredentials {
+            api_key,
+            endpoint,
+            model,
+        },
+    ));
+    asr.open_session().await.map_err(|e| e.to_string())?;
+    crate::asr::AudioConsumer::consume_pcm_chunk(
+        &*asr,
+        &vec![0u8; crate::asr::assemblyai::TARGET_AUDIO_CHUNK_BYTES * 5],
+    );
+    asr.send_last_frame().await.map_err(|e| e.to_string())?;
+    asr.await_final_result()
+        .await
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+async fn validate_deepgram_asr_provider() -> Result<(), String> {
+    let api_key = CredentialsVault::get(CredentialAccount::AsrApiKey)
+        .map_err(|e| e.to_string())?
+        .unwrap_or_default();
+    if api_key.trim().is_empty() {
+        return Err("API Key 为空".to_string());
+    }
+    let endpoint = CredentialsVault::get(CredentialAccount::AsrEndpoint)
+        .map_err(|e| e.to_string())?
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| crate::asr::deepgram::DEFAULT_ENDPOINT.to_string());
+    let model = CredentialsVault::get(CredentialAccount::AsrModel)
+        .map_err(|e| e.to_string())?
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| crate::asr::deepgram::DEFAULT_MODEL.to_string());
+
+    let asr = std::sync::Arc::new(crate::asr::DeepgramRealtimeASR::new(
+        crate::asr::DeepgramCredentials {
+            api_key,
+            endpoint,
+            model,
+            language: Some("zh".to_string()),
+        },
+    ));
+    asr.open_session().await.map_err(|e| e.to_string())?;
+    crate::asr::AudioConsumer::consume_pcm_chunk(
+        &*asr,
+        &vec![0u8; crate::asr::deepgram::TARGET_AUDIO_CHUNK_BYTES * 5],
+    );
+    asr.send_last_frame().await.map_err(|e| e.to_string())?;
+    asr.await_final_result()
+        .await
+        .map(|_| ())
+        .map_err(|e| e.to_string())
 }
 
 /// fun-asr-flash 官方公开示例音频，用于连通性校验。该模型对纯静音会返回

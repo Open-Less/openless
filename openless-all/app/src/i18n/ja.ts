@@ -800,6 +800,8 @@ export const ja: typeof zhCN = {
         asrOpenrouter: 'OpenRouter Whisper',
         asrXiaomiMimo: 'Xiaomi MiMo ASR',
         asrElevenLabs: 'ElevenLabs Scribe',
+        asrAssemblyAI: 'AssemblyAI リアルタイム ASR',
+        asrDeepgram: 'Deepgram リアルタイム ASR',
         asrSherpaOnnxLocal: 'ローカル sherpa-onnx（実験的）',
         asrFoundryLocalWhisper: 'ローカル Whisper（Foundry Local）',
         asrLocalQwen3: 'ローカル Qwen3-ASR',

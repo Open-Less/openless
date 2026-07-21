@@ -405,6 +405,14 @@ pub(super) fn is_elevenlabs_provider(id: &str) -> bool {
     id == crate::asr::elevenlabs::PROVIDER_ID
 }
 
+pub(super) fn is_assemblyai_provider(id: &str) -> bool {
+    id == crate::asr::assemblyai::PROVIDER_ID
+}
+
+pub(super) fn is_deepgram_provider(id: &str) -> bool {
+    id == crate::asr::deepgram::PROVIDER_ID
+}
+
 pub(super) fn apply_chinese_script_preference(text: &str, pref: ChineseScriptPreference) -> String {
     if text.is_empty() {
         return String::new();
@@ -443,6 +451,14 @@ pub(super) enum QaAsrStart {
         asr: Arc<crate::asr::StepfunRealtimeASR>,
         bridge: Arc<DeferredAsrBridge>,
     },
+    AssemblyAI {
+        asr: Arc<crate::asr::AssemblyAIRealtimeASR>,
+        bridge: Arc<DeferredAsrBridge>,
+    },
+    Deepgram {
+        asr: Arc<crate::asr::DeepgramRealtimeASR>,
+        bridge: Arc<DeferredAsrBridge>,
+    },
     Ready {
         active: ActiveAsr,
         consumer: Arc<dyn crate::recorder::AudioConsumer>,
@@ -456,6 +472,8 @@ impl QaAsrStart {
             QaAsrStart::Bailian { asr, .. } => ActiveAsr::Bailian(Arc::clone(asr)),
             QaAsrStart::Qwen3Realtime { asr, .. } => ActiveAsr::Qwen3Realtime(Arc::clone(asr)),
             QaAsrStart::StepfunRealtime { asr, .. } => ActiveAsr::StepfunRealtime(Arc::clone(asr)),
+            QaAsrStart::AssemblyAI { asr, .. } => ActiveAsr::AssemblyAI(Arc::clone(asr)),
+            QaAsrStart::Deepgram { asr, .. } => ActiveAsr::Deepgram(Arc::clone(asr)),
             QaAsrStart::Ready { active, .. } => active.clone(),
         }
     }
@@ -466,6 +484,8 @@ impl QaAsrStart {
             QaAsrStart::Bailian { bridge, .. } => Arc::clone(bridge) as _,
             QaAsrStart::Qwen3Realtime { bridge, .. } => Arc::clone(bridge) as _,
             QaAsrStart::StepfunRealtime { bridge, .. } => Arc::clone(bridge) as _,
+            QaAsrStart::AssemblyAI { bridge, .. } => Arc::clone(bridge) as _,
+            QaAsrStart::Deepgram { bridge, .. } => Arc::clone(bridge) as _,
             QaAsrStart::Ready { consumer, .. } => Arc::clone(consumer),
         }
     }
@@ -503,6 +523,24 @@ impl QaAsrStart {
                 let flushed = bridge.attach(target);
                 log::info!(
                     "[coord] QA StepFun realtime ASR connected; flushed {flushed} deferred audio bytes"
+                );
+                Ok(())
+            }
+            QaAsrStart::AssemblyAI { asr, bridge } => {
+                asr.open_session().await.map_err(|e| e.to_string())?;
+                let target: Arc<dyn crate::asr::AudioConsumer> = Arc::clone(asr) as _;
+                let flushed = bridge.attach(target);
+                log::info!(
+                    "[coord] QA AssemblyAI realtime ASR connected; flushed {flushed} deferred audio bytes"
+                );
+                Ok(())
+            }
+            QaAsrStart::Deepgram { asr, bridge } => {
+                asr.open_session().await.map_err(|e| e.to_string())?;
+                let target: Arc<dyn crate::asr::AudioConsumer> = Arc::clone(asr) as _;
+                let flushed = bridge.attach(target);
+                log::info!(
+                    "[coord] QA Deepgram realtime ASR connected; flushed {flushed} deferred audio bytes"
                 );
                 Ok(())
             }
@@ -636,6 +674,28 @@ pub(super) async fn build_qa_asr_start(
             Ok((
                 QaAsrStart::StepfunRealtime {
                     asr: Arc::new(crate::asr::StepfunRealtimeASR::new(creds)),
+                    bridge: Arc::new(DeferredAsrBridge::new()),
+                },
+                label,
+            ))
+        }
+        ActiveAsrProviderKind::AssemblyAI => {
+            let creds = read_assemblyai_credentials();
+            let label = AsrCallLabel::new(effective_asr.clone(), Some(creds.model.clone()));
+            Ok((
+                QaAsrStart::AssemblyAI {
+                    asr: Arc::new(crate::asr::AssemblyAIRealtimeASR::new(creds)),
+                    bridge: Arc::new(DeferredAsrBridge::new()),
+                },
+                label,
+            ))
+        }
+        ActiveAsrProviderKind::Deepgram => {
+            let creds = read_deepgram_credentials();
+            let label = AsrCallLabel::new(effective_asr.clone(), Some(creds.model.clone()));
+            Ok((
+                QaAsrStart::Deepgram {
+                    asr: Arc::new(crate::asr::DeepgramRealtimeASR::new(creds)),
                     bridge: Arc::new(DeferredAsrBridge::new()),
                 },
                 label,

@@ -800,6 +800,8 @@ export const ko: typeof zhCN = {
         asrOpenrouter: 'OpenRouter Whisper',
         asrXiaomiMimo: 'Xiaomi MiMo ASR',
         asrElevenLabs: 'ElevenLabs Scribe',
+        asrAssemblyAI: 'AssemblyAI 실시간 ASR',
+        asrDeepgram: 'Deepgram 실시간 ASR',
         asrSherpaOnnxLocal: '로컬 sherpa-onnx(실험적)',
         asrFoundryLocalWhisper: '로컬 Whisper(Foundry Local)',
         asrLocalQwen3: '로컬 Qwen3-ASR',

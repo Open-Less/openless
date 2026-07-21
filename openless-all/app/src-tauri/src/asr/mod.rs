@@ -5,8 +5,10 @@
 //! `frame.rs` (binary frame codec) and the session lifecycle in
 //! `volcengine.rs`.
 
+pub mod assemblyai;
 pub mod bailian;
 pub mod dashscope_multimodal;
+pub mod deepgram;
 pub mod elevenlabs;
 mod frame;
 pub mod local;
@@ -18,8 +20,10 @@ pub mod volcengine;
 pub mod wav;
 pub mod whisper;
 
+pub use assemblyai::{AssemblyAICredentials, AssemblyAIRealtimeASR};
 pub use bailian::{BailianCredentials, BailianRealtimeASR};
 pub use dashscope_multimodal::DashScopeMultimodalASR;
+pub use deepgram::{DeepgramCredentials, DeepgramRealtimeASR};
 pub use elevenlabs::ElevenLabsBatchASR;
 pub use mimo::MimoBatchASR;
 pub use qwen_realtime::{Qwen3RealtimeASR, Qwen3RealtimeCredentials};
