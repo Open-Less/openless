@@ -268,20 +268,24 @@ fn active_llm_extra_headers(root: &CredsRoot) -> HashMap<String, String> {
         .unwrap_or_default()
 }
 
-fn active_llm_temperature(root: &CredsRoot) -> Option<f32> {
+fn is_valid_llm_temperature(temperature: f64) -> bool {
+    temperature.is_finite() && (0.0..=2.0).contains(&temperature)
+}
+
+fn active_llm_temperature_value(root: &CredsRoot) -> Option<f64> {
     root.providers
         .llm
         .get(&root.active.llm)
         .and_then(|entry| entry.temperature)
-        .map(|value| value as f32)
+        .filter(|temperature| is_valid_llm_temperature(*temperature))
+}
+
+fn active_llm_temperature(root: &CredsRoot) -> Option<f32> {
+    active_llm_temperature_value(root).map(|temperature| temperature as f32)
 }
 
 fn active_llm_temperature_string(root: &CredsRoot) -> Option<String> {
-    root.providers
-        .llm
-        .get(&root.active.llm)
-        .and_then(|entry| entry.temperature)
-        .map(|value| value.to_string())
+    active_llm_temperature_value(root).map(|temperature| temperature.to_string())
 }
 
 fn active_llm_extra_headers_json(root: &CredsRoot) -> Result<Option<String>> {
@@ -332,10 +336,10 @@ fn parse_llm_temperature(value: &str) -> Result<Option<f64>> {
         return Ok(None);
     }
     let temperature: f64 = trimmed.parse().context("temperature must be a number")?;
-    if !temperature.is_finite() {
-        anyhow::bail!("temperature must be finite");
-    }
-    if !(0.0..=2.0).contains(&temperature) {
+    if !is_valid_llm_temperature(temperature) {
+        if !temperature.is_finite() {
+            anyhow::bail!("temperature must be finite");
+        }
         anyhow::bail!("temperature must be between 0 and 2");
     }
     Ok(Some(temperature))
@@ -1782,5 +1786,36 @@ mod tests {
                 "{value} should be rejected"
             );
         }
+    }
+
+    #[test]
+    fn active_llm_temperature_ignores_invalid_persisted_values() {
+        for temperature in [-0.1, 2.5] {
+            let mut root = CredsRoot::default();
+            root.providers.llm.insert(
+                root.active.llm.clone(),
+                super::CredsLlmEntry {
+                    temperature: Some(temperature),
+                    ..Default::default()
+                },
+            );
+
+            assert_eq!(super::active_llm_temperature(&root), None);
+            assert_eq!(super::active_llm_temperature_string(&root), None);
+        }
+
+        let mut root = CredsRoot::default();
+        root.providers.llm.insert(
+            root.active.llm.clone(),
+            super::CredsLlmEntry {
+                temperature: Some(0.7),
+                ..Default::default()
+            },
+        );
+        assert_eq!(super::active_llm_temperature(&root), Some(0.7));
+        assert_eq!(
+            super::active_llm_temperature_string(&root).as_deref(),
+            Some("0.7")
+        );
     }
 }

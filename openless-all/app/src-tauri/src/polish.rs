@@ -55,14 +55,17 @@ impl OpenAICompatibleConfig {
         api_key: impl Into<String>,
         model: impl Into<String>,
     ) -> Self {
+        let provider_id = provider_id.into();
+        let temperature = openai_compatible_temperature_for_provider(&provider_id, None);
+
         Self {
-            provider_id: provider_id.into(),
+            provider_id,
             display_name: display_name.into(),
             base_url: base_url.into(),
             api_key: api_key.into(),
             model: model.into(),
             extra_headers: HashMap::new(),
-            temperature: Some(DEFAULT_TEMPERATURE),
+            temperature,
             request_timeout_secs: DEFAULT_REQUEST_TIMEOUT_SECS,
             thinking_enabled: false,
         }
@@ -2338,6 +2341,55 @@ mod tests {
         haystack.find(needle).expect("needle exists") + 1
     }
 
+    #[tokio::test]
+    async fn polish_request_omits_temperature_for_unconfigured_custom_provider() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let request = read_http_request(&mut stream);
+            let header_end = request
+                .windows(4)
+                .position(|window| window == b"\r\n\r\n")
+                .expect("request must contain headers");
+            let body: serde_json::Value = serde_json::from_slice(&request[header_end + 4..])
+                .expect("request body must be JSON");
+            assert!(body.get("temperature").is_none());
+
+            let body = r#"{"choices":[{"message":{"content":"polished"}}]}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+        });
+
+        let provider = OpenAICompatibleLLMProvider::new(OpenAICompatibleConfig::new(
+            "custom",
+            "Custom",
+            format!("http://{addr}"),
+            "",
+            "test-model",
+        ));
+        let output = provider
+            .polish(
+                "raw text",
+                PolishMode::Raw,
+                &[],
+                "",
+                &[],
+                ChineseScriptPreference::Auto,
+                OutputLanguagePreference::Auto,
+                None,
+                &[],
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(output, "polished");
+        server.join().unwrap();
+    }
+
     // ──────────────── 对话感知 polish 的 chat 消息构造 ────────────────
     // 用户的核心顾虑：让 LLM 拿到上下文但**不要把上下文吐出来**。
     // 这里的不变量保证「不复读」靠两层防御：
@@ -2491,17 +2543,14 @@ mod tests {
     }
 
     #[test]
-    fn chat_body_omits_temperature_when_config_is_none() {
-        let provider = OpenAICompatibleLLMProvider::new(
-            OpenAICompatibleConfig::new(
-                "custom",
-                "Custom",
-                "https://example.test/v1",
-                "k",
-                "gpt-5.6-terra",
-            )
-            .with_temperature(None),
-        );
+    fn chat_body_omits_temperature_for_unconfigured_custom_provider() {
+        let provider = OpenAICompatibleLLMProvider::new(OpenAICompatibleConfig::new(
+            "custom",
+            "Custom",
+            "https://example.test/v1",
+            "k",
+            "gpt-5.6-terra",
+        ));
 
         let body = provider.chat_body(false, vec![json!({ "role": "user", "content": "hi" })]);
 
@@ -2529,11 +2578,11 @@ mod tests {
     }
 
     #[test]
-    fn chat_body_uses_default_temperature_when_unspecified() {
+    fn chat_body_uses_default_temperature_for_builtin_provider() {
         let provider = OpenAICompatibleLLMProvider::new(OpenAICompatibleConfig::new(
-            "custom",
-            "Custom",
-            "https://example.test/v1",
+            "openai",
+            "OpenAI",
+            "https://api.openai.com/v1",
             "k",
             "qwen3-max",
         ));
