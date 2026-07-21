@@ -467,10 +467,9 @@ async fn validate_deepgram_asr_provider() -> Result<(), String> {
         &vec![0u8; crate::asr::deepgram::TARGET_AUDIO_CHUNK_BYTES * 5],
     );
     asr.send_last_frame().await.map_err(|e| e.to_string())?;
-    asr.await_final_result()
-        .await
-        .map(|_| ())
-        .map_err(|e| e.to_string())
+    // Deepgram 对纯静音不会返回最终转写结果，因此只验证连接与关闭流程
+    let _ = asr.await_final_result().await;
+    Ok(())
 }
 
 /// fun-asr-flash 官方公开示例音频，用于连通性校验。该模型对纯静音会返回
