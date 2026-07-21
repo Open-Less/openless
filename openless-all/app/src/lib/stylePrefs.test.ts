@@ -18,6 +18,9 @@ function assert(condition: boolean, message: string) {
 const previousPrefs: UserPreferences = {
   hotkey: { trigger: 'rightOption', mode: 'toggle' },
   dictationHotkey: { primary: 'RightOption', modifiers: [] },
+  selectionPolishHotkey: { primary: 'RightControl', modifiers: [] },
+  selectionPolishStylePackId: 'builtin.light',
+  selectionPolishOutputMode: 'directReplace',
   showOverviewActivityHeatmap: true,
   defaultMode: 'light',
   enabledModes: ['raw', 'light', 'structured'],

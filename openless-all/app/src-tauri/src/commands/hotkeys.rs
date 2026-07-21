@@ -26,6 +26,7 @@ pub fn set_dictation_hotkey(
     if let Some(less_computer) = prefs.coding_agent_voice_hotkey.as_ref() {
         reject_dictation_less_computer_hotkey_overlap(&binding, less_computer)?;
     }
+    reject_existing_selection_polish_hotkey_overlap(&binding, &prefs)?;
     prefs.dictation_hotkey = binding;
     sync_dictation_hotkey_legacy_fields(&mut prefs);
     coord.prefs().set(prefs).map_err(|e| e.to_string())?;
@@ -55,6 +56,7 @@ pub fn set_translation_hotkey(
     if let Some(less_computer) = previous.coding_agent_voice_hotkey.as_ref() {
         reject_translation_less_computer_hotkey_overlap(&binding, less_computer)?;
     }
+    reject_existing_selection_polish_hotkey_overlap(&binding, &previous)?;
     let mut prefs = previous.clone();
     prefs.translation_hotkey = binding;
     coord.prefs().set(prefs).map_err(|e| e.to_string())?;
@@ -93,6 +95,7 @@ pub fn set_switch_style_hotkey(
         if let Some(less_computer) = prefs.coding_agent_voice_hotkey.as_ref() {
             reject_less_computer_switch_style_hotkey_overlap(less_computer, binding)?;
         }
+        reject_existing_selection_polish_hotkey_overlap(binding, &prefs)?;
     }
     prefs.switch_style_hotkey = binding;
     coord.prefs().set(prefs).map_err(|e| e.to_string())?;
@@ -124,10 +127,43 @@ pub fn set_open_app_hotkey(
         if let Some(less_computer) = prefs.coding_agent_voice_hotkey.as_ref() {
             reject_less_computer_open_app_hotkey_overlap(less_computer, binding)?;
         }
+        reject_existing_selection_polish_hotkey_overlap(binding, &prefs)?;
     }
     prefs.open_app_hotkey = binding;
     coord.prefs().set(prefs).map_err(|e| e.to_string())?;
     coord.update_open_app_hotkey_binding();
+    Ok(())
+}
+
+/// Set the Selection Polish global shortcut. The new binding is persisted first
+/// so the coordinator sees it during registration; a registration failure
+/// restores the exact previous preferences and listener state before returning.
+#[tauri::command]
+pub fn set_selection_polish_hotkey(
+    coord: CoordinatorState<'_>,
+    binding: Option<ShortcutBinding>,
+) -> Result<(), String> {
+    if let Some(binding) = binding.as_ref() {
+        crate::shortcut_binding::validate_binding(binding).map_err(|e| e.to_string())?;
+        crate::shortcut_binding::reject_side_specific_non_dictation(binding)?;
+        reject_bare_shift_dictation_shortcut(binding)?;
+    }
+    let previous = coord.prefs().get();
+    if let Some(binding) = binding.as_ref() {
+        reject_selection_polish_hotkey_collisions(binding, &previous)?;
+    }
+    let mut next = previous.clone();
+    next.selection_polish_hotkey = binding;
+    coord.prefs().set(next).map_err(|e| e.to_string())?;
+    if let Err(error) = coord.try_update_selection_polish_hotkey_binding() {
+        if let Err(rollback_error) = coord.prefs().set(previous) {
+            return Err(format!(
+                "{error}; additionally failed to restore previous Selection Polish shortcut: {rollback_error}"
+            ));
+        }
+        coord.update_selection_polish_hotkey_binding();
+        return Err(error);
+    }
     Ok(())
 }
 
@@ -174,6 +210,7 @@ pub fn set_combo_hotkey(coord: CoordinatorState<'_>, binding: ComboBinding) -> R
     if let Some(less_computer) = prefs.coding_agent_voice_hotkey.as_ref() {
         reject_dictation_less_computer_hotkey_overlap(&shortcut, less_computer)?;
     }
+    reject_existing_selection_polish_hotkey_overlap(&shortcut, &prefs)?;
     prefs.custom_combo_hotkey = Some(binding);
     prefs.dictation_hotkey = shortcut;
     sync_dictation_hotkey_legacy_fields(&mut prefs);
@@ -275,6 +312,64 @@ pub(crate) fn reject_hotkey_collisions(prefs: &UserPreferences) -> Result<(), St
     if let (Some(switch_style), Some(open_app)) = (switch_style, open_app) {
         reject_switch_style_open_app_hotkey_overlap(switch_style, open_app)?;
     }
+    if let Some(selection_polish) = prefs.selection_polish_hotkey.as_ref() {
+        reject_selection_polish_hotkey_collisions(selection_polish, prefs)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn reject_selection_polish_hotkey_collisions(
+    selection_polish: &ShortcutBinding,
+    prefs: &UserPreferences,
+) -> Result<(), String> {
+    reject_hotkey_overlap(
+        selection_polish,
+        &prefs.dictation_hotkey,
+        "选区润色快捷键不能和听写快捷键相同",
+    )?;
+    reject_hotkey_overlap(
+        selection_polish,
+        &prefs.translation_hotkey,
+        "选区润色快捷键不能和翻译快捷键相同",
+    )?;
+    if let Some(qa) = prefs.qa_hotkey.as_ref() {
+        reject_hotkey_overlap(selection_polish, qa, "选区润色快捷键不能和 QA 快捷键相同")?;
+    }
+    if let Some(switch_style) = prefs.switch_style_hotkey.as_ref() {
+        reject_hotkey_overlap(
+            selection_polish,
+            switch_style,
+            "选区润色快捷键不能和切换风格快捷键相同",
+        )?;
+    }
+    if let Some(open_app) = prefs.open_app_hotkey.as_ref() {
+        reject_hotkey_overlap(
+            selection_polish,
+            open_app,
+            "选区润色快捷键不能和打开应用快捷键相同",
+        )?;
+    }
+    if let Some(less_computer) = prefs.coding_agent_voice_hotkey.as_ref() {
+        reject_hotkey_overlap(
+            selection_polish,
+            less_computer,
+            "选区润色快捷键不能和 Less Computer 快捷键相同",
+        )?;
+    }
+    Ok(())
+}
+
+pub(crate) fn reject_existing_selection_polish_hotkey_overlap(
+    binding: &ShortcutBinding,
+    prefs: &UserPreferences,
+) -> Result<(), String> {
+    if let Some(selection_polish) = prefs.selection_polish_hotkey.as_ref() {
+        reject_hotkey_overlap(
+            binding,
+            selection_polish,
+            "该快捷键不能和选区润色快捷键相同",
+        )?;
+    }
     Ok(())
 }
 
@@ -290,6 +385,11 @@ pub(crate) fn reject_non_dictation_side_specific_shortcuts(
     }
     if let Some(binding) = prefs.open_app_hotkey.as_ref() {
         crate::shortcut_binding::reject_side_specific_non_dictation(binding)?;
+    }
+    if let Some(binding) = prefs.selection_polish_hotkey.as_ref() {
+        crate::shortcut_binding::validate_binding(binding).map_err(|e| e.to_string())?;
+        crate::shortcut_binding::reject_side_specific_non_dictation(binding)?;
+        reject_bare_shift_dictation_shortcut(binding)?;
     }
     if let Some(binding) = prefs.coding_agent_voice_hotkey.as_ref() {
         crate::shortcut_binding::reject_side_specific_non_dictation(binding)?;
@@ -482,6 +582,29 @@ mod tests {
     }
 
     #[test]
+    fn selection_polish_hotkey_collides_with_existing_shortcuts() {
+        let binding = key("RightControl");
+        let prefs = UserPreferences {
+            dictation_hotkey: binding.clone(),
+            selection_polish_hotkey: Some(binding),
+            ..Default::default()
+        };
+        assert!(reject_hotkey_collisions(&prefs).is_err());
+    }
+
+    #[test]
+    fn existing_selection_polish_hotkey_rejects_another_action_binding() {
+        let selection = key("RightControl");
+        let prefs = UserPreferences {
+            selection_polish_hotkey: Some(selection.clone()),
+            ..Default::default()
+        };
+
+        assert!(reject_existing_selection_polish_hotkey_overlap(&selection, &prefs).is_err());
+        assert!(reject_existing_selection_polish_hotkey_overlap(&key("P"), &prefs).is_ok());
+    }
+
+    #[test]
     fn side_specific_dictation_overlaps_generic_qa_hotkey() {
         let mut prefs = UserPreferences {
             dictation_hotkey: ShortcutBinding {
@@ -520,6 +643,18 @@ mod tests {
             qa_hotkey: Some(ShortcutBinding {
                 primary: "D".into(),
                 modifiers: vec!["cmd-left".into()],
+            }),
+            ..Default::default()
+        };
+        assert!(reject_non_dictation_side_specific_shortcuts(&prefs).is_err());
+    }
+
+    #[test]
+    fn rejects_side_specific_selection_polish_hotkey_on_save() {
+        let prefs = UserPreferences {
+            selection_polish_hotkey: Some(ShortcutBinding {
+                primary: "D".into(),
+                modifiers: vec!["cmd-right".into()],
             }),
             ..Default::default()
         };

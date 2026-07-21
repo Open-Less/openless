@@ -121,8 +121,13 @@ pub(super) fn hotkey_supervisor_loop(inner: Arc<Inner>) {
                 let adapter = monitor.kind();
                 *inner.hotkey.lock() = Some(monitor);
                 if let Some(monitor) = inner.hotkey.lock().as_ref() {
-                    let (qa_trigger, translation_trigger) = modifier_shortcut_triggers(&inner);
-                    monitor.update_modifier_shortcuts(qa_trigger, translation_trigger);
+                    let (qa_trigger, selection_polish_trigger, translation_trigger) =
+                        modifier_shortcut_triggers(&inner);
+                    monitor.update_modifier_shortcuts(
+                        qa_trigger,
+                        selection_polish_trigger,
+                        translation_trigger,
+                    );
                 }
                 *inner.hotkey_status.lock() = HotkeyStatus {
                     adapter,
@@ -142,7 +147,8 @@ pub(super) fn hotkey_supervisor_loop(inner: Arc<Inner>) {
                 // Linux: 启动 fcitx5 插件信号监听作为热键源。
                 #[cfg(target_os = "linux")]
                 {
-                    let (qa_trigger, translation_trigger) = modifier_shortcut_triggers(&inner);
+                    let (qa_trigger, _selection_polish_trigger, translation_trigger) =
+                        modifier_shortcut_triggers(&inner);
                     let custom_key = custom_dictation_key_string(&inner);
                     crate::linux_fcitx::start_dictation_signal_listener(
                         fcitx_tx,
@@ -201,8 +207,13 @@ pub(super) fn qa_hotkey_supervisor_loop(inner: Arc<Inner>) {
         if crate::shortcut_binding::legacy_modifier_trigger(&binding).is_some() {
             inner.qa_hotkey.lock().take();
             if let Some(monitor) = inner.hotkey.lock().as_ref() {
-                let (qa_trigger, translation_trigger) = modifier_shortcut_triggers(&inner);
-                monitor.update_modifier_shortcuts(qa_trigger, translation_trigger);
+                let (qa_trigger, selection_polish_trigger, translation_trigger) =
+                    modifier_shortcut_triggers(&inner);
+                monitor.update_modifier_shortcuts(
+                    qa_trigger,
+                    selection_polish_trigger,
+                    translation_trigger,
+                );
             }
             std::thread::sleep(std::time::Duration::from_secs(5));
             continue;
@@ -288,6 +299,125 @@ pub(super) fn qa_hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<QaHotk
                 async_runtime::spawn(async move { handle_qa_hotkey_pressed(&inner_cloned).await });
             }
         }
+    }
+}
+
+// ─────────────────────── Selection Polish hotkey ───────────────────────
+
+pub(super) fn selection_polish_hotkey_supervisor_loop(inner: Arc<Inner>) {
+    let mut attempts = 0_u32;
+    loop {
+        if inner.shutdown.load(Ordering::SeqCst) {
+            return;
+        }
+        match try_update_selection_polish_hotkey_binding(&inner) {
+            Ok(()) => return,
+            Err(error) => {
+                attempts += 1;
+                if attempts <= 3 || attempts % 10 == 0 {
+                    log::warn!(
+                        "[selection-polish] hotkey registration attempt #{attempts} failed: {error}; retrying in 3s"
+                    );
+                }
+                std::thread::sleep(std::time::Duration::from_secs(3));
+            }
+        }
+    }
+}
+
+pub(super) fn try_update_selection_polish_hotkey_binding(inner: &Arc<Inner>) -> Result<(), String> {
+    let binding = inner.prefs.get().selection_polish_hotkey.clone();
+    let Some(binding) = binding else {
+        take_selection_polish_hotkey_on_main_thread(inner);
+        update_selection_polish_modifier_shortcut(inner);
+        return Ok(());
+    };
+
+    if crate::shortcut_binding::legacy_modifier_trigger(&binding).is_some() {
+        take_selection_polish_hotkey_on_main_thread(inner);
+        update_selection_polish_modifier_shortcut(inner);
+        return Ok(());
+    }
+
+    // A generic combo is registered by global-hotkey on the UI thread. It is
+    // deliberately not routed through the side-aware singleton: side-specific
+    // combos remain dictation-only until that monitor supports multiple owners.
+    update_selection_polish_modifier_shortcut(inner);
+    let app = inner.app.lock().clone().ok_or_else(|| {
+        "AppHandle unavailable while registering Selection Polish hotkey".to_string()
+    })?;
+    let (result_tx, result_rx) = mpsc::sync_channel(1);
+    let inner_for_main = Arc::clone(inner);
+    app.run_on_main_thread(move || {
+        let result = update_selection_polish_hotkey_on_main_thread(inner_for_main, binding)
+            .map_err(|error| error.to_string());
+        let _ = result_tx.send(result);
+    })
+    .map_err(|error| error.to_string())?;
+    result_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .map_err(|_| "Selection Polish hotkey registration timed out".to_string())?
+}
+
+fn update_selection_polish_modifier_shortcut(inner: &Arc<Inner>) {
+    if let Some(monitor) = inner.hotkey.lock().as_ref() {
+        let (qa_trigger, selection_polish_trigger, translation_trigger) =
+            modifier_shortcut_triggers(inner);
+        monitor.update_modifier_shortcuts(
+            qa_trigger,
+            selection_polish_trigger,
+            translation_trigger,
+        );
+    }
+}
+
+fn update_selection_polish_hotkey_on_main_thread(
+    inner: Arc<Inner>,
+    binding: crate::types::ShortcutBinding,
+) -> Result<(), ComboHotkeyError> {
+    if let Some(monitor) = inner.selection_polish_hotkey.lock().as_ref() {
+        return monitor.update_binding(binding);
+    }
+    let (tx, rx) = mpsc::channel::<ComboHotkeyEvent>();
+    let monitor = ComboHotkeyMonitor::start(binding, tx)?;
+    *inner.selection_polish_hotkey.lock() = Some(monitor);
+    let bridge_inner = Arc::clone(&inner);
+    std::thread::Builder::new()
+        .name("openless-selection-polish-hotkey-bridge".into())
+        .spawn(move || selection_polish_hotkey_bridge_loop(bridge_inner, rx))
+        .map_err(|error| {
+            ComboHotkeyError::RegisterFailed(format!("spawn bridge thread: {error}"))
+        })?;
+    Ok(())
+}
+
+fn selection_polish_hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<ComboHotkeyEvent>) {
+    while let Ok(event) = rx.recv() {
+        if inner.shortcut_recording_active.load(Ordering::SeqCst)
+            || !matches!(event, ComboHotkeyEvent::Pressed { .. })
+        {
+            continue;
+        }
+        let coordinator = Coordinator {
+            inner: Arc::clone(&inner),
+        };
+        async_runtime::spawn(async move {
+            if let Err(error) = coordinator.trigger_selection_polish().await {
+                log::warn!("[selection-polish] combo hotkey workflow failed: {error}");
+            }
+        });
+    }
+}
+
+pub(super) fn take_selection_polish_hotkey_on_main_thread(inner: &Arc<Inner>) {
+    let app = inner.app.lock().clone();
+    if let Some(app) = app {
+        let inner = Arc::clone(inner);
+        let _ = app.run_on_main_thread(move || {
+            inner.selection_polish_hotkey.lock().take();
+        });
+    } else {
+        inner.selection_polish_hotkey.lock().take();
     }
 }
 
@@ -425,7 +555,10 @@ pub(super) fn less_computer_modifier_binding(
     })
 }
 
-pub(super) fn less_computer_modifier_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<HotkeyEvent>) {
+pub(super) fn less_computer_modifier_bridge_loop(
+    inner: Arc<Inner>,
+    rx: mpsc::Receiver<HotkeyEvent>,
+) {
     while let Ok(evt) = rx.recv() {
         if inner.shortcut_recording_active.load(Ordering::SeqCst) {
             continue;
@@ -444,7 +577,9 @@ pub(super) fn less_computer_modifier_bridge_loop(inner: Arc<Inner>, rx: mpsc::Re
             }
             // Esc 取消与组合键撤销都不在此枚举里：分别走 esc_cancel_bridge_loop /
             // combo_abort_bridge_loop（见各自函数注释）。
-            HotkeyEvent::TranslationModifierPressed | HotkeyEvent::QaShortcutPressed => {}
+            HotkeyEvent::TranslationModifierPressed
+            | HotkeyEvent::QaShortcutPressed
+            | HotkeyEvent::SelectionPolishShortcutPressed => {}
         }
     }
 }
@@ -657,7 +792,9 @@ pub(super) fn combo_hotkey_supervisor_loop(inner: Arc<Inner>) {
                 Err(e) => {
                     attempts += 1;
                     if attempts <= 3 || attempts % 10 == 0 {
-                        log::warn!("[coord] side-aware combo 第 {attempts} 次注册失败: {e}; 3s 后重试");
+                        log::warn!(
+                            "[coord] side-aware combo 第 {attempts} 次注册失败: {e}; 3s 后重试"
+                        );
                     }
                     std::thread::sleep(std::time::Duration::from_secs(3));
                     continue;
@@ -765,8 +902,13 @@ pub(super) fn translation_hotkey_supervisor_loop(inner: Arc<Inner>) {
         {
             take_translation_hotkey_on_main_thread(&inner);
             if let Some(monitor) = inner.hotkey.lock().as_ref() {
-                let (qa_trigger, translation_trigger) = modifier_shortcut_triggers(&inner);
-                monitor.update_modifier_shortcuts(qa_trigger, translation_trigger);
+                let (qa_trigger, selection_polish_trigger, translation_trigger) =
+                    modifier_shortcut_triggers(&inner);
+                monitor.update_modifier_shortcuts(
+                    qa_trigger,
+                    selection_polish_trigger,
+                    translation_trigger,
+                );
             }
             // 对齐主 supervisor 的 exit-on-success：装/卸交给 try_update_translation_hotkey_binding 主动路径，issue #470
             return;
@@ -844,7 +986,10 @@ pub(super) fn update_translation_hotkey_on_main_thread(
     Ok(())
 }
 
-pub(super) fn translation_hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<ComboHotkeyEvent>) {
+pub(super) fn translation_hotkey_bridge_loop(
+    inner: Arc<Inner>,
+    rx: mpsc::Receiver<ComboHotkeyEvent>,
+) {
     while let Ok(evt) = rx.recv() {
         if inner.shortcut_recording_active.load(Ordering::SeqCst) {
             continue;
@@ -1123,6 +1268,7 @@ pub(super) fn modifier_shortcut_triggers(
 ) -> (
     Option<crate::types::HotkeyTrigger>,
     Option<crate::types::HotkeyTrigger>,
+    Option<crate::types::HotkeyTrigger>,
 ) {
     let prefs = inner.prefs.get();
     let qa_trigger = prefs
@@ -1134,7 +1280,11 @@ pub(super) fn modifier_shortcut_triggers(
     } else {
         crate::shortcut_binding::legacy_modifier_trigger(&prefs.translation_hotkey)
     };
-    (qa_trigger, translation_trigger)
+    let selection_polish_trigger = prefs
+        .selection_polish_hotkey
+        .as_ref()
+        .and_then(crate::shortcut_binding::legacy_modifier_trigger);
+    (qa_trigger, selection_polish_trigger, translation_trigger)
 }
 
 pub(super) fn mark_translation_modifier_seen(inner: &Arc<Inner>) {
@@ -1189,6 +1339,19 @@ pub(super) fn hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<HotkeyEve
             HotkeyEvent::QaShortcutPressed => {
                 async_runtime::block_on(async {
                     handle_qa_hotkey_pressed(&inner_cloned).await;
+                });
+            }
+            HotkeyEvent::SelectionPolishShortcutPressed => {
+                let coordinator = Coordinator {
+                    inner: Arc::clone(&inner_cloned),
+                };
+                // Selection Polish has no paired release edge. Run the cloud
+                // workflow independently so its network wait cannot stall the
+                // shared modifier-key bridge (Esc, dictation, QA, etc.).
+                async_runtime::spawn(async move {
+                    if let Err(error) = coordinator.trigger_selection_polish().await {
+                        log::warn!("[selection-polish] hotkey workflow failed: {error}");
+                    }
                 });
             }
         }
@@ -1316,7 +1479,11 @@ pub(super) fn window_hotkey_fallback_enabled() -> bool {
 }
 
 #[cfg(any(target_os = "windows", test))]
-pub(super) fn window_key_matches_trigger(trigger: crate::types::HotkeyTrigger, key: &str, code: &str) -> bool {
+pub(super) fn window_key_matches_trigger(
+    trigger: crate::types::HotkeyTrigger,
+    key: &str,
+    code: &str,
+) -> bool {
     use crate::types::HotkeyTrigger;
 
     match trigger {

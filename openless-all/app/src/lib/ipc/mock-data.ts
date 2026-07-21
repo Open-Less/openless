@@ -20,6 +20,7 @@ import { OL_DATA } from "../mockData"
 import {
     defaultAppShortcutModifiers,
     defaultQaShortcut,
+    defaultSelectionPolishShortcut,
 } from "../hotkey"
 
 export let mockSettings: UserPreferences = {
@@ -57,6 +58,9 @@ export let mockSettings: UserPreferences = {
     workingLanguages: ["简体中文"],
     translationTargetLanguage: "",
     qaHotkey: defaultQaShortcut(),
+    selectionPolishStylePackId: "builtin.light",
+    selectionPolishOutputMode: "directReplace",
+    selectionPolishHotkey: defaultSelectionPolishShortcut(),
     chineseScriptPreference: "auto",
     outputLanguagePreference: "auto",
     qaSaveHistory: false,
@@ -208,6 +212,13 @@ const mockBuiltinExamples: Record<PolishMode, StylePackExample[]> = {
     ],
 }
 
+const mockSelectionPrompts: Record<PolishMode, string> = {
+    raw: "You are a selected-text editor for the Original style. The input is written text, not ASR output. Preserve it exactly and return only the original text.",
+    light: "You are a selected-text editor for the Light Polish style. The input is written text, not ASR output. Make small improvements to grammar, clarity, punctuation, and flow while preserving meaning and tone. Return only replacement text.",
+    structured: "You are a selected-text editor for the Clear Structure style. The input is written text, not ASR output. Organize multiple points and technical details into a clear structure without inventing facts. Return only replacement text.",
+    formal: "You are a selected-text editor for the Formal Expression style. The input is written text, not ASR output. Rewrite it into concise, professional work language while preserving facts and intent. Return only replacement text.",
+}
+
 export function makeMockStylePack(
     id: string,
     kind: StylePackKind,
@@ -225,6 +236,7 @@ export function makeMockStylePack(
         version: "1.0.0",
         kind,
         baseMode,
+        selectionPrompt: mockSelectionPrompts[baseMode],
         prompt,
         examples: mockBuiltinExamples[baseMode].map((example) => ({
             ...example,

@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { useEffect, useState } from 'react';
 import { RecordingInputSection } from './RecordingInputSection';
 import { ShortcutsSection } from './ShortcutsSection';
+import { SelectionPolishSection } from './SelectionPolishSection';
 import { LanguageSection } from './LanguageSection';
 import { ThemeSection } from './ThemeSection';
 import { ProvidersSection } from './ProvidersSection';
@@ -41,6 +42,7 @@ export function GeneralTab() {
   return (
     <>
       <RecordingInputSection />
+      <SelectionPolishSection />
       {showDesktopShortcuts && <ShortcutsSection />}
       <ThemeSection />
       <LanguageSection />

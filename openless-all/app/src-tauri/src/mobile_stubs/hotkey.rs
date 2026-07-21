@@ -15,6 +15,7 @@ pub enum HotkeyEvent {
 
     TranslationModifierPressed,
     QaShortcutPressed,
+    SelectionPolishShortcutPressed,
 }
 
 /// Mobile 无全局键盘监听，Esc 独占为 no-op。
@@ -40,6 +41,7 @@ impl HotkeyMonitor {
     pub fn update_modifier_shortcuts(
         &self,
         _qa_trigger: Option<HotkeyTrigger>,
+        _selection_polish_trigger: Option<HotkeyTrigger>,
         _translation_trigger: Option<HotkeyTrigger>,
     ) {
     }

@@ -28,6 +28,9 @@ const CAPSULE_KEYFRAMES = `
     from { opacity: 0; }
     to   { opacity: 1; }
   }
+  @keyframes selection-polish-spinner {
+    to { transform: rotate(360deg); }
+  }
 `;
 
 if (typeof document !== 'undefined' && !document.getElementById('capsule-keyframes')) {
@@ -153,6 +156,105 @@ const errorGlowTextStyle: CSSProperties = {
   textOverflow: 'ellipsis',
 };
 
+interface SelectionPolishNoticeProps {
+  state: CapsuleState;
+  message?: string;
+}
+
+/**
+ * 选区润色专用的一行无交互提示。它处在同一扇 Windows no-activate + mouse-passthrough
+ * capsule 窗口中，因此不会把焦点从用户当前输入框抢走，也不会遮挡点击。
+ */
+function SelectionPolishNotice({ state, message }: SelectionPolishNoticeProps) {
+  const processing = state === 'polishing';
+  const failed = state === 'error';
+  const completed = state === 'done';
+  const cancelled = state === 'cancelled';
+  const label = message
+    ?? (processing
+      ? '正在润色...'
+      : completed
+        ? '已替换'
+        : cancelled
+          ? '未选中内容'
+          : '润色失败，请重试');
+  const color = failed
+    ? '#ff8278'
+    : completed
+      ? '#63d596'
+      : cancelled
+        ? 'var(--ol-capsule-center-ink)'
+        : '#8fc0ff';
+  const symbol = completed ? '✓' : failed ? '!' : cancelled ? '·' : null;
+
+  return (
+    <div
+      role={failed ? 'alert' : 'status'}
+      aria-live="polite"
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 8,
+        maxWidth: 360,
+        padding: '8px 14px',
+        borderRadius: 999,
+        border: failed
+          ? '1px solid rgba(255, 112, 102, 0.42)'
+          : '1px solid var(--ol-capsule-pill-border)',
+        background: 'var(--ol-capsule-pill-bg)',
+        boxShadow: 'var(--ol-capsule-pill-shadow)',
+        color,
+        fontFamily: 'var(--ol-font-sans)',
+        fontSize: 13,
+        fontWeight: 600,
+        lineHeight: 1.25,
+        letterSpacing: '0.01em',
+        pointerEvents: 'none',
+      }}
+    >
+      {processing ? (
+        <span
+          aria-hidden="true"
+          style={{
+            width: 12,
+            height: 12,
+            flex: '0 0 auto',
+            border: '2px solid rgba(143, 192, 255, 0.32)',
+            borderTopColor: color,
+            borderRadius: '50%',
+            animation: 'selection-polish-spinner .75s linear infinite',
+          }}
+        />
+      ) : (
+        <span
+          aria-hidden="true"
+          style={{
+            display: 'inline-flex',
+            width: 13,
+            justifyContent: 'center',
+            flex: '0 0 auto',
+            color,
+            fontSize: completed ? 15 : 16,
+            fontWeight: 800,
+            lineHeight: 1,
+          }}
+        >
+          {symbol}
+        </span>
+      )}
+      <span
+        style={{
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {label}
+      </span>
+    </div>
+  );
+}
+
 // 与 @keyframes capsule-out 的 0.52s 时长一致——必须同步，否则定时器先于
 // 动画结束就 unmount → 用户看到半截动画被截断。
 const EXIT_ANIM_MS = 520;
@@ -187,6 +289,7 @@ function getPreviewCapsulePayload() {
       message: undefined,
       translation: false,
       warming: false,
+      selectionPolish: false,
     };
   }
 
@@ -202,6 +305,7 @@ function getPreviewCapsulePayload() {
     message: params.get('message') ?? undefined,
     translation: params.get('translation') === '1',
     warming: params.get('warming') === '1',
+    selectionPolish: params.get('selectionPolish') === '1',
   };
 }
 
@@ -218,6 +322,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   const [level, setLevel] = useState<number>(preview.level);
   const [message, setMessage] = useState<string | undefined>(preview.message);
   const [translation, setTranslation] = useState<boolean>(preview.translation);
+  const [selectionPolish, setSelectionPolish] = useState<boolean>(preview.selectionPolish);
   // 预备态：麦克风尚未吐第一帧 PCM。true 时录音光条走「待命」呼吸形态（见 SiriGL warming）。
   const [warming, setWarming] = useState<boolean>(preview.warming);
   // 预备→就绪耗时的移动平均，驱动光条展开动画的预测节奏（见 SiriGL warmProgress）。
@@ -230,6 +335,10 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   // - 若期间 state 又切回非 idle（例如用户连按热键），立刻中止 leaving 并恢复显示。
   const [leaving, setLeaving] = useState<boolean>(false);
   const [lastVisibleState, setLastVisibleState] = useState<CapsuleState>(preview.state);
+  const [lastVisibleSelectionPolish, setLastVisibleSelectionPolish] = useState<boolean>(
+    preview.selectionPolish,
+  );
+  const [lastVisibleMessage, setLastVisibleMessage] = useState<string | undefined>(preview.message);
   // 前端 host 与原生窗口保持同一份透明语音 orb 舞台尺寸。
   const hostMetrics = getCapsuleHostMetrics(os, translation);
   const badgeBottom = Math.round(metrics.height * 0.73);
@@ -265,6 +374,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
         setMessage(p.message ?? undefined);
         setTranslation(p.translation === true);
         setWarming(p.warming === true);
+        setSelectionPolish(p.selectionPolish === true);
       });
       if (cancelled) handle();
       else unlisten = handle;
@@ -301,6 +411,14 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state]);
 
+  // Idle payload 不携带终态文案。保留最近一帧可见 selection 提示，才能让 auto-hide
+  // 触发后的 520ms 离场动画继续显示“已替换 / 未选中内容”等正确反馈，而不闪回语音舞台。
+  useEffect(() => {
+    if (state === 'idle') return;
+    setLastVisibleSelectionPolish(selectionPolish);
+    setLastVisibleMessage(message);
+  }, [state, selectionPolish, message]);
+
   // 学习「预备态持续多久」= 麦克风就绪耗时，EMA 更新 warmupMs（预测展开的基准时长）。
   useEffect(() => {
     if (warming) {
@@ -326,6 +444,10 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
 
   // 离场时用 lastVisibleState 渲染最后一帧内容，避免把 idle 当作无波形状态。
   const renderedState: CapsuleState = state === 'idle' ? lastVisibleState : state;
+  const renderedSelectionPolish = state === 'idle'
+    ? lastVisibleSelectionPolish
+    : selectionPolish;
+  const renderedMessage = state === 'idle' ? lastVisibleMessage : message;
 
   return (
     <div
@@ -353,6 +475,8 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
         willChange: 'transform, opacity',
       }}
     >
+      {!renderedSelectionPolish && (
+        <>
       {/* "正在翻译" 徽章 — 嵌套两层：
           外层只负责"绝对定位 + 水平居中（translateX(-50%)）"，不参与动画；
           内层只负责"垂直位移 + 渐变透明度"——这样不会跟 translateX(-50%) 冲突，
@@ -404,8 +528,13 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
         level={leaving ? 0 : level}
         warming={!leaving && warming}
         warmupMs={warmupMs}
-        message={message}
+        message={renderedMessage}
       />
+        </>
+      )}
+      {renderedSelectionPolish && (
+        <SelectionPolishNotice state={renderedState} message={renderedMessage} />
+      )}
     </div>
   );
 }

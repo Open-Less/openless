@@ -32,12 +32,165 @@ pub struct SelectionContext {
     pub source_app: Option<String>,
 }
 
+/// The target that was active when Selection Polish began.  This deliberately
+/// lives outside [`SelectionContext`]: QA can keep using a captured selection
+/// after it moves focus to its own window, while Selection Polish must refuse
+/// to paste after an asynchronous cloud request if the original target changed.
+///
+/// On Windows, a top-level HWND alone is not enough: clicking another editor
+/// pane in the same app can retain that HWND.  We therefore retain both the
+/// foreground window and the focused child control, plus their process/thread
+/// identities.  Other platforms retain their existing insertion behavior.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct SelectionInsertionTarget {
+    #[cfg(target_os = "windows")]
+    windows: Option<WindowsSelectionTarget>,
+}
+
+#[cfg(target_os = "windows")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct WindowsSelectionTarget {
+    foreground_window: usize,
+    focused_window: usize,
+    foreground_process_id: u32,
+    foreground_thread_id: u32,
+    focused_process_id: u32,
+    focused_thread_id: u32,
+}
+
+/// Result of the final target/selection revalidation immediately before a
+/// Selection Polish result could be pasted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SelectionInsertionTargetValidation {
+    Valid,
+    TargetUnavailable,
+    TargetChanged,
+    SelectionChanged,
+}
+
+impl SelectionInsertionTargetValidation {
+    pub(crate) const fn error_code(self) -> Option<&'static str> {
+        match self {
+            Self::Valid => None,
+            Self::TargetUnavailable => Some("selectionPolishTargetUnavailable"),
+            Self::TargetChanged => Some("selectionPolishTargetChanged"),
+            Self::SelectionChanged => Some("selectionPolishSelectionChanged"),
+        }
+    }
+}
+
 #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
 const LINUX_SELECTION_TOOLS_MISSING_WARNING: &str = "linux_selection_tools_missing";
 
 pub struct SelectionCaptureOutcome {
     pub selection: Option<SelectionContext>,
     pub warning_code: Option<&'static str>,
+}
+
+/// Snapshot the insertion target before starting an asynchronous Selection
+/// Polish request.  Windows is intentionally fail-closed when this cannot
+/// identify a concrete foreground target; macOS/Linux/mobile keep their
+/// existing behavior until they gain an equivalently reliable native check.
+pub(crate) fn capture_selection_insertion_target() -> SelectionInsertionTarget {
+    #[cfg(target_os = "windows")]
+    {
+        return SelectionInsertionTarget {
+            windows: capture_windows_selection_target(),
+        };
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        SelectionInsertionTarget::default()
+    }
+}
+
+/// Whether the target snapshot is sufficient to start a Selection Polish
+/// request.  On Windows, do not send selected text to the provider if we cannot
+/// later prove where it is safe to replace it.
+pub(crate) fn selection_insertion_target_is_captured(
+    target: &SelectionInsertionTarget,
+) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        target.windows.is_some()
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = target;
+        true
+    }
+}
+
+/// Revalidate the target and the selected text immediately before insertion.
+///
+/// The first and final HWND checks fence the temporary Ctrl+C used to read the
+/// current selection.  This keeps the race window down to the direct handoff
+/// to the inserter, while failing closed if the user moved to another app or
+/// another editor/control during the cloud request.
+pub(crate) fn validate_selection_insertion_target(
+    target: &SelectionInsertionTarget,
+    expected_selection: &str,
+) -> SelectionInsertionTargetValidation {
+    #[cfg(target_os = "windows")]
+    {
+        let Some(captured) = target.windows else {
+            return SelectionInsertionTargetValidation::TargetUnavailable;
+        };
+        let Some(current_before_copy) = capture_windows_selection_target() else {
+            return SelectionInsertionTargetValidation::TargetUnavailable;
+        };
+        if !windows_selection_targets_match(captured, current_before_copy) {
+            return SelectionInsertionTargetValidation::TargetChanged;
+        }
+
+        let current_selection = selected_text_for_validation();
+        if !selection_text_matches(expected_selection, current_selection.as_deref()) {
+            return SelectionInsertionTargetValidation::SelectionChanged;
+        }
+
+        let Some(current_after_copy) = capture_windows_selection_target() else {
+            return SelectionInsertionTargetValidation::TargetUnavailable;
+        };
+        if !windows_selection_targets_match(captured, current_after_copy) {
+            return SelectionInsertionTargetValidation::TargetChanged;
+        }
+        return SelectionInsertionTargetValidation::Valid;
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (target, expected_selection);
+        SelectionInsertionTargetValidation::Valid
+    }
+}
+
+/// 把确认预览后的焦点交还给最初的选区目标。预览窗允许编辑，因此确认时必然不再是
+/// 原应用的前台窗口；这里先恢复原目标，再沿用上面的严格选区校验，避免盲目粘贴。
+pub(crate) fn reactivate_selection_insertion_target(target: &SelectionInsertionTarget) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::UI::WindowsAndMessaging::{BringWindowToTop, SetForegroundWindow};
+
+        let Some(captured) = target.windows else {
+            return false;
+        };
+        unsafe {
+            let foreground = HWND(captured.foreground_window as *mut _);
+            let _ = BringWindowToTop(foreground);
+            let _ = SetForegroundWindow(foreground);
+        }
+        std::thread::sleep(Duration::from_millis(80));
+        return true;
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = target;
+        true
+    }
 }
 
 /// 捕获选区并返回可向用户展示的非阻断平台提醒。
@@ -200,6 +353,76 @@ fn simulate_copy_and_read() -> Option<String> {
         return None;
     }
     Some(captured)
+}
+
+/// Read the current selection in the same normalized/truncated form stored by
+/// [`SelectionContext`].  This is used only by the Windows final safety check;
+/// the clipboard helper snapshots and restores the user's clipboard.
+#[cfg(target_os = "windows")]
+fn selected_text_for_validation() -> Option<String> {
+    let text = simulate_copy_and_read()?;
+    let trimmed = text.trim();
+    (!trimmed.is_empty()).then(|| truncate_selection(trimmed))
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn selection_text_matches(expected: &str, actual: Option<&str>) -> bool {
+    actual.is_some_and(|actual| actual == expected)
+}
+
+#[cfg(target_os = "windows")]
+fn capture_windows_selection_target() -> Option<WindowsSelectionTarget> {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetForegroundWindow, GetGUIThreadInfo, GetWindowThreadProcessId, GUITHREADINFO,
+    };
+
+    unsafe {
+        let foreground = GetForegroundWindow();
+        if foreground.0.is_null() {
+            return None;
+        }
+
+        let mut foreground_process_id = 0;
+        let foreground_thread_id =
+            GetWindowThreadProcessId(foreground, Some(&mut foreground_process_id));
+        if foreground_process_id == 0 || foreground_thread_id == 0 {
+            return None;
+        }
+
+        let mut gui_info = GUITHREADINFO {
+            cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
+            ..Default::default()
+        };
+        let focused = if GetGUIThreadInfo(foreground_thread_id, &mut gui_info).is_ok()
+            && !gui_info.hwndFocus.0.is_null()
+        {
+            gui_info.hwndFocus
+        } else {
+            foreground
+        };
+        let mut focused_process_id = 0;
+        let focused_thread_id = GetWindowThreadProcessId(focused, Some(&mut focused_process_id));
+        if focused_process_id == 0 || focused_thread_id == 0 {
+            return None;
+        }
+
+        Some(WindowsSelectionTarget {
+            foreground_window: foreground.0 as usize,
+            focused_window: focused.0 as usize,
+            foreground_process_id,
+            foreground_thread_id,
+            focused_process_id,
+            focused_thread_id,
+        })
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn windows_selection_targets_match(
+    captured: WindowsSelectionTarget,
+    current: WindowsSelectionTarget,
+) -> bool {
+    captured == current
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -687,5 +910,68 @@ mod tests {
         assert!(out.ends_with(&"c".repeat(50)));
         // 中段 b 应被裁掉
         assert!(!out.contains(&"b".repeat(20)));
+    }
+
+    #[test]
+    fn final_selection_check_requires_the_original_text() {
+        assert!(selection_text_matches("original", Some("original")));
+        assert!(!selection_text_matches("original", Some("different")));
+        assert!(!selection_text_matches("original", None));
+    }
+
+    #[test]
+    fn target_validation_error_codes_are_stable_for_the_capsule_layer() {
+        assert_eq!(SelectionInsertionTargetValidation::Valid.error_code(), None);
+        assert_eq!(
+            SelectionInsertionTargetValidation::TargetUnavailable.error_code(),
+            Some("selectionPolishTargetUnavailable")
+        );
+        assert_eq!(
+            SelectionInsertionTargetValidation::TargetChanged.error_code(),
+            Some("selectionPolishTargetChanged")
+        );
+        assert_eq!(
+            SelectionInsertionTargetValidation::SelectionChanged.error_code(),
+            Some("selectionPolishSelectionChanged")
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    fn windows_target(seed: usize) -> WindowsSelectionTarget {
+        WindowsSelectionTarget {
+            foreground_window: seed,
+            focused_window: seed + 1,
+            foreground_process_id: seed as u32 + 2,
+            foreground_thread_id: seed as u32 + 3,
+            focused_process_id: seed as u32 + 4,
+            focused_thread_id: seed as u32 + 5,
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_target_match_rejects_another_control_in_the_same_app() {
+        let captured = windows_target(10);
+        assert!(windows_selection_targets_match(captured, captured));
+
+        let mut another_control = captured;
+        another_control.focused_window += 100;
+        assert!(!windows_selection_targets_match(
+            captured,
+            another_control
+        ));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_requires_a_captured_target_before_contacting_the_provider() {
+        assert!(!selection_insertion_target_is_captured(
+            &SelectionInsertionTarget { windows: None }
+        ));
+        assert!(selection_insertion_target_is_captured(
+            &SelectionInsertionTarget {
+                windows: Some(windows_target(10)),
+            }
+        ));
     }
 }

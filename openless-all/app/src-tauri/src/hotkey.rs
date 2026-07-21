@@ -37,6 +37,7 @@ pub enum HotkeyEvent {
     /// 上层据此切换到翻译输出管线。详见 issue #4。
     TranslationModifierPressed,
     QaShortcutPressed,
+    SelectionPolishShortcutPressed,
 }
 
 #[cfg(test)]
@@ -52,6 +53,8 @@ mod tests {
             trigger_companion_seen: AtomicU64::new(0),
             qa_trigger: RwLock::new(None),
             qa_trigger_held: AtomicBool::new(true),
+            selection_polish_trigger: RwLock::new(None),
+            selection_polish_trigger_held: AtomicBool::new(true),
             translation_trigger: RwLock::new(None),
             translation_trigger_held: AtomicBool::new(true),
             translation_modifier_held: AtomicBool::new(true),
@@ -65,6 +68,7 @@ mod tests {
 
         assert!(!shared.trigger_held.load(Ordering::SeqCst));
         assert!(!shared.qa_trigger_held.load(Ordering::SeqCst));
+        assert!(!shared.selection_polish_trigger_held.load(Ordering::SeqCst));
         assert!(!shared.translation_trigger_held.load(Ordering::SeqCst));
         assert!(!shared.translation_modifier_held.load(Ordering::SeqCst));
     }
@@ -83,6 +87,7 @@ mod tests {
         assert_eq!(*shared.binding.read(), next);
         assert!(!shared.trigger_held.load(Ordering::SeqCst));
         assert!(shared.qa_trigger_held.load(Ordering::SeqCst));
+        assert!(shared.selection_polish_trigger_held.load(Ordering::SeqCst));
         assert!(shared.translation_trigger_held.load(Ordering::SeqCst));
         assert!(shared.translation_modifier_held.load(Ordering::SeqCst));
     }
@@ -94,16 +99,22 @@ mod tests {
         update_shared_modifier_shortcuts(
             &shared,
             Some(HotkeyTrigger::RightCommand),
+            Some(HotkeyTrigger::RightControl),
             Some(HotkeyTrigger::LeftOption),
         );
 
         assert_eq!(*shared.qa_trigger.read(), Some(HotkeyTrigger::RightCommand));
+        assert_eq!(
+            *shared.selection_polish_trigger.read(),
+            Some(HotkeyTrigger::RightControl)
+        );
         assert_eq!(
             *shared.translation_trigger.read(),
             Some(HotkeyTrigger::LeftOption)
         );
         assert!(shared.trigger_held.load(Ordering::SeqCst));
         assert!(!shared.qa_trigger_held.load(Ordering::SeqCst));
+        assert!(!shared.selection_polish_trigger_held.load(Ordering::SeqCst));
         assert!(!shared.translation_trigger_held.load(Ordering::SeqCst));
         assert!(shared.translation_modifier_held.load(Ordering::SeqCst));
     }
@@ -115,6 +126,7 @@ pub trait HotkeyAdapter: Send + Sync {
     fn update_modifier_shortcuts(
         &self,
         qa_trigger: Option<HotkeyTrigger>,
+        selection_polish_trigger: Option<HotkeyTrigger>,
         translation_trigger: Option<HotkeyTrigger>,
     );
     fn reset_held_state(&self);
@@ -138,6 +150,8 @@ struct Shared {
     trigger_companion_seen: AtomicU64,
     qa_trigger: RwLock<Option<HotkeyTrigger>>,
     qa_trigger_held: AtomicBool,
+    selection_polish_trigger: RwLock<Option<HotkeyTrigger>>,
+    selection_polish_trigger_held: AtomicBool,
     translation_trigger: RwLock<Option<HotkeyTrigger>>,
     translation_trigger_held: AtomicBool,
     /// Shift（翻译修饰键）当前是否按住。用于在 FLAGS_CHANGED 上识别 down 边沿
@@ -177,10 +191,14 @@ impl HotkeyMonitor {
     pub fn update_modifier_shortcuts(
         &self,
         qa_trigger: Option<HotkeyTrigger>,
+        selection_polish_trigger: Option<HotkeyTrigger>,
         translation_trigger: Option<HotkeyTrigger>,
     ) {
-        self.adapter
-            .update_modifier_shortcuts(qa_trigger, translation_trigger);
+        self.adapter.update_modifier_shortcuts(
+            qa_trigger,
+            selection_polish_trigger,
+            translation_trigger,
+        );
     }
 
     pub fn kind(&self) -> HotkeyAdapterKind {
@@ -285,6 +303,8 @@ where
         trigger_companion_seen: AtomicU64::new(0),
         qa_trigger: RwLock::new(None),
         qa_trigger_held: AtomicBool::new(false),
+        selection_polish_trigger: RwLock::new(None),
+        selection_polish_trigger_held: AtomicBool::new(false),
         translation_trigger: RwLock::new(None),
         translation_trigger_held: AtomicBool::new(false),
         translation_modifier_held: AtomicBool::new(false),
@@ -324,12 +344,17 @@ fn update_shared_binding(shared: &Shared, binding: HotkeyBinding) {
 fn update_shared_modifier_shortcuts(
     shared: &Shared,
     qa_trigger: Option<HotkeyTrigger>,
+    selection_polish_trigger: Option<HotkeyTrigger>,
     translation_trigger: Option<HotkeyTrigger>,
 ) {
     *shared.qa_trigger.write() = qa_trigger;
+    *shared.selection_polish_trigger.write() = selection_polish_trigger;
     *shared.translation_trigger.write() = translation_trigger;
     shared
         .qa_trigger_held
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    shared
+        .selection_polish_trigger_held
         .store(false, std::sync::atomic::Ordering::SeqCst);
     shared
         .translation_trigger_held
@@ -345,6 +370,9 @@ fn reset_shared_held_state(shared: &Shared) {
         .store(0, std::sync::atomic::Ordering::SeqCst);
     shared
         .qa_trigger_held
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    shared
+        .selection_polish_trigger_held
         .store(false, std::sync::atomic::Ordering::SeqCst);
     shared
         .translation_trigger_held
@@ -426,9 +454,15 @@ mod platform {
         fn update_modifier_shortcuts(
             &self,
             qa_trigger: Option<HotkeyTrigger>,
+            selection_polish_trigger: Option<HotkeyTrigger>,
             translation_trigger: Option<HotkeyTrigger>,
         ) {
-            update_shared_modifier_shortcuts(&self.shared, qa_trigger, translation_trigger);
+            update_shared_modifier_shortcuts(
+                &self.shared,
+                qa_trigger,
+                selection_polish_trigger,
+                translation_trigger,
+            );
         }
 
         fn reset_held_state(&self) {
@@ -563,9 +597,7 @@ mod platform {
         combo_tx: Sender<u64>,
         status_tx: StartupTx<Arc<MacShutdownHandles>>,
     ) {
-        let mask: CgEventMask = (1u64 << FLAGS_CHANGED)
-            | (1u64 << KEY_DOWN)
-            | (1u64 << KEY_UP);
+        let mask: CgEventMask = (1u64 << FLAGS_CHANGED) | (1u64 << KEY_DOWN) | (1u64 << KEY_UP);
         let handles = Arc::new(MacShutdownHandles {
             tap: std::sync::Mutex::new(None),
             runloop: std::sync::Mutex::new(None),
@@ -684,6 +716,14 @@ mod platform {
             ctx,
             keycode,
             flags,
+            *ctx.shared.selection_polish_trigger.read(),
+            &ctx.shared.selection_polish_trigger_held,
+            HotkeyEvent::SelectionPolishShortcutPressed,
+        );
+        handle_optional_modifier_trigger(
+            ctx,
+            keycode,
+            flags,
             *ctx.shared.translation_trigger.read(),
             &ctx.shared.translation_trigger_held,
             HotkeyEvent::TranslationModifierPressed,
@@ -719,7 +759,12 @@ mod platform {
             );
         } else if !is_active && was_held {
             ctx.shared.trigger_held.store(false, Ordering::SeqCst);
-            send_or_log(&ctx.tx, HotkeyEvent::Released { at: std::time::Instant::now() });
+            send_or_log(
+                &ctx.tx,
+                HotkeyEvent::Released {
+                    at: std::time::Instant::now(),
+                },
+            );
         }
     }
 
@@ -833,6 +878,8 @@ mod platform {
                 trigger_companion_seen: AtomicU64::new(0),
                 qa_trigger: RwLock::new(None),
                 qa_trigger_held: AtomicBool::new(false),
+                selection_polish_trigger: RwLock::new(None),
+                selection_polish_trigger_held: AtomicBool::new(false),
                 translation_trigger: RwLock::new(None),
                 translation_trigger_held: AtomicBool::new(false),
                 translation_modifier_held: AtomicBool::new(false),
@@ -880,11 +927,14 @@ mod platform {
         }
 
         fn edge_names(events: Vec<HotkeyEvent>) -> Vec<&'static str> {
-            events.into_iter().filter_map(|event| match event {
-                HotkeyEvent::Pressed { .. } => Some("pressed"),
-                HotkeyEvent::Released { .. } => Some("released"),
-                _ => None,
-            }).collect()
+            events
+                .into_iter()
+                .filter_map(|event| match event {
+                    HotkeyEvent::Pressed { .. } => Some("pressed"),
+                    HotkeyEvent::Released { .. } => Some("released"),
+                    _ => None,
+                })
+                .collect()
         }
 
         #[test]
@@ -1055,9 +1105,15 @@ mod platform {
         fn update_modifier_shortcuts(
             &self,
             qa_trigger: Option<HotkeyTrigger>,
+            selection_polish_trigger: Option<HotkeyTrigger>,
             translation_trigger: Option<HotkeyTrigger>,
         ) {
-            update_shared_modifier_shortcuts(&self.shared, qa_trigger, translation_trigger);
+            update_shared_modifier_shortcuts(
+                &self.shared,
+                qa_trigger,
+                selection_polish_trigger,
+                translation_trigger,
+            );
         }
 
         fn reset_held_state(&self) {
@@ -1231,6 +1287,14 @@ mod platform {
             ctx,
             vk_code,
             message,
+            *ctx.shared.selection_polish_trigger.read(),
+            &ctx.shared.selection_polish_trigger_held,
+            HotkeyEvent::SelectionPolishShortcutPressed,
+        );
+        handle_optional_modifier_trigger(
+            ctx,
+            vk_code,
+            message,
             *ctx.shared.translation_trigger.read(),
             &ctx.shared.translation_trigger_held,
             HotkeyEvent::TranslationModifierPressed,
@@ -1269,7 +1333,12 @@ mod platform {
                 let was_held = ctx.shared.trigger_held.swap(false, Ordering::SeqCst);
                 if was_held {
                     log::info!("[hotkey] Windows trigger released vk={vk_code}");
-                    send_or_log(&ctx.tx, HotkeyEvent::Released { at: std::time::Instant::now() });
+                    send_or_log(
+                        &ctx.tx,
+                        HotkeyEvent::Released {
+                            at: std::time::Instant::now(),
+                        },
+                    );
                 }
             }
             _ => {}
@@ -1388,6 +1457,8 @@ mod platform {
                 trigger_companion_seen: AtomicU64::new(0),
                 qa_trigger: RwLock::new(None),
                 qa_trigger_held: AtomicBool::new(false),
+                selection_polish_trigger: RwLock::new(None),
+                selection_polish_trigger_held: AtomicBool::new(false),
                 translation_trigger: RwLock::new(None),
                 translation_trigger_held: AtomicBool::new(false),
                 translation_modifier_held: AtomicBool::new(false),
@@ -1452,10 +1523,7 @@ mod platform {
             assert!(dispatch_keyboard_event(&ctx, VK_RCONTROL, WM_KEYUP));
             assert!(dispatch_keyboard_event(&ctx, VK_RCONTROL, WM_KEYUP));
 
-            assert_eq!(
-                edge_names(drain(&rx)),
-                vec!["pressed", "released"]
-            );
+            assert_eq!(edge_names(drain(&rx)), vec!["pressed", "released"]);
         }
 
         #[test]
@@ -1502,6 +1570,27 @@ mod platform {
         }
 
         #[test]
+        fn windows_right_control_routes_only_to_selection_polish_action() {
+            let shared = shared(HotkeyTrigger::Custom);
+            *shared.selection_polish_trigger.write() = Some(HotkeyTrigger::RightControl);
+            let (ctx, rx) = callback_context(shared);
+
+            dispatch_keyboard_event(&ctx, VK_LCONTROL, WM_KEYDOWN);
+            dispatch_keyboard_event(&ctx, VK_RCONTROL, WM_KEYDOWN);
+            dispatch_keyboard_event(&ctx, VK_RCONTROL, WM_KEYDOWN);
+            dispatch_keyboard_event(&ctx, VK_RCONTROL, WM_KEYUP);
+            dispatch_keyboard_event(&ctx, VK_RCONTROL, WM_KEYDOWN);
+
+            assert_eq!(
+                drain(&rx),
+                vec![
+                    HotkeyEvent::SelectionPolishShortcutPressed,
+                    HotkeyEvent::SelectionPolishShortcutPressed,
+                ]
+            );
+        }
+
+        #[test]
         fn windows_option_triggers_keep_left_and_right_alt_separate() {
             let left_shared = shared(HotkeyTrigger::LeftOption);
             let (left_ctx, left_rx) = callback_context(left_shared);
@@ -1509,10 +1598,7 @@ mod platform {
             assert!(!dispatch_keyboard_event(&left_ctx, VK_RMENU, WM_KEYDOWN));
             assert!(dispatch_keyboard_event(&left_ctx, VK_LMENU, WM_KEYDOWN));
             assert!(dispatch_keyboard_event(&left_ctx, VK_LMENU, WM_KEYUP));
-            assert_eq!(
-                edge_names(drain(&left_rx)),
-                vec!["pressed", "released"]
-            );
+            assert_eq!(edge_names(drain(&left_rx)), vec!["pressed", "released"]);
 
             let right_option_shared = shared(HotkeyTrigger::RightOption);
             let (right_option_ctx, right_option_rx) = callback_context(right_option_shared);
@@ -1589,12 +1675,13 @@ mod platform {
             dispatch_keyboard_event(&ctx, VK_LSHIFT, WM_KEYDOWN);
             dispatch_keyboard_event(&ctx, 0x44, WM_KEYDOWN);
 
-            assert!(matches!(combo_rx.recv().unwrap(), ComboHotkeyEvent::Pressed { .. }));
-            assert!(
-                hotkey_rx
-                    .try_iter()
-                    .any(|evt| evt == HotkeyEvent::TranslationModifierPressed)
-            );
+            assert!(matches!(
+                combo_rx.recv().unwrap(),
+                ComboHotkeyEvent::Pressed { .. }
+            ));
+            assert!(hotkey_rx
+                .try_iter()
+                .any(|evt| evt == HotkeyEvent::TranslationModifierPressed));
 
             drop(monitor);
         }
@@ -1649,9 +1736,13 @@ mod platform {
         fn update_modifier_shortcuts(
             &self,
             qa_trigger: Option<HotkeyTrigger>,
+            selection_polish_trigger: Option<HotkeyTrigger>,
             translation_trigger: Option<HotkeyTrigger>,
         ) {
             crate::linux_fcitx::sync_qa_binding(qa_trigger);
+            // Selection Polish ships disabled on Linux for now; the fcitx plugin has
+            // no corresponding signal route yet.
+            let _ = selection_polish_trigger;
             crate::linux_fcitx::sync_translation_binding(translation_trigger);
         }
 

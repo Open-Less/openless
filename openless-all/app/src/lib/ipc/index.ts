@@ -102,6 +102,7 @@ export {
     setComboHotkey,
     validateShortcutBinding,
     setDictationHotkey,
+    setSelectionPolishHotkey,
     setTranslationHotkey,
     setSwitchStyleHotkey,
     setOpenAppHotkey,
@@ -126,6 +127,12 @@ export {
     qaToggleRecording,
     qaSubmitText,
 } from "./qa"
+
+export {
+    getSelectionPolishPreview,
+    confirmSelectionPolishPreview,
+    cancelSelectionPolishPreview,
+} from './selection-polish-preview'
 
 // less-computer
 export {

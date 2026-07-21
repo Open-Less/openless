@@ -84,6 +84,10 @@ mod remote_input;
 mod settings;
 #[cfg(not(mobile))]
 mod sherpa_asr;
+#[cfg(all(not(mobile), debug_assertions))]
+mod selection_polish;
+#[cfg(not(mobile))]
+mod selection_polish_preview;
 mod style_packs;
 
 pub use credentials::*;
@@ -110,6 +114,10 @@ pub use settings::*;
 #[cfg(not(mobile))]
 #[allow(unused_imports)]
 pub use sherpa_asr::*;
+#[cfg(all(not(mobile), debug_assertions))]
+pub use selection_polish::*;
+#[cfg(not(mobile))]
+pub use selection_polish_preview::*;
 pub use style_packs::*;
 
 pub(crate) type CoordinatorState<'a> = State<'a, Arc<Coordinator>>;
@@ -676,6 +684,8 @@ mod tests {
             *self.open_app_refreshes.lock().unwrap() += 1;
         }
 
+        fn refresh_selection_polish_hotkey(&self) {}
+
         fn refresh_coding_agent_hotkey(&self) {
             *self.coding_agent_refreshes.lock().unwrap() += 1;
         }
@@ -820,6 +830,10 @@ mod tests {
                 primary: "RightControl".to_string(),
                 modifiers: vec![],
             }),
+            // This fixture deliberately assigns Right Control to Less Computer.
+            // Keep selection polish disabled so the test exercises the intended
+            // independent refresh paths.
+            selection_polish_hotkey: None,
             hotkey: HotkeyBinding {
                 trigger: HotkeyTrigger::Custom,
                 mode: HotkeyMode::Hold,

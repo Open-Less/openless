@@ -738,6 +738,7 @@ pub(super) async fn answer_qa_question_text(
         let session = DictationSession {
             id: Uuid::new_v4().to_string(),
             created_at: Utc::now().to_rfc3339(),
+            source: crate::types::HistorySource::Voice,
             raw_transcript: question.clone(),
             final_text: answer,
             mode: PolishMode::Raw,

@@ -33,6 +33,7 @@ pub fn set_qa_hotkey(
         if let Some(less_computer) = prefs.coding_agent_voice_hotkey.as_ref() {
             reject_qa_less_computer_hotkey_overlap(binding, less_computer)?;
         }
+        reject_existing_selection_polish_hotkey_overlap(binding, &prefs)?;
     }
     prefs.qa_hotkey = binding;
     coord.prefs().set(prefs).map_err(|e| e.to_string())?;

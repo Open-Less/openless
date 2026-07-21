@@ -1,0 +1,94 @@
+// 通用 → 选区润色：这是与录音输入并列的独立入口，快捷键、交付方式均不再藏在快捷键列表中。
+
+import type { CSSProperties } from 'react';
+import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import { ShortcutRecorder } from '../../components/ShortcutRecorder';
+import { defaultSelectionPolishShortcut } from '../../lib/hotkey';
+import { setSelectionPolishHotkey } from '../../lib/ipc';
+import { getPlatformCapabilities } from '../../lib/platform';
+import type { PlatformCapabilities, SelectionPolishOutputMode } from '../../lib/types';
+import { useHotkeySettings } from '../../state/HotkeySettingsContext';
+import { Card } from '../_atoms';
+import { SectionTitle, SettingRow, chipSelectedStyle, segmentedTrackStyle } from './shared';
+import { detectOS } from '../../components/WindowChrome';
+
+const enableButton: CSSProperties = {
+  padding: '5px 14px', background: 'var(--ol-blue)', color: '#fff', border: 0,
+  borderRadius: 6, fontFamily: 'inherit', fontWeight: 500, cursor: 'default', fontSize: 12,
+};
+
+const outputOptions: Array<{ value: SelectionPolishOutputMode; title: string; hint: string }> = [
+  { value: 'directReplace', title: '直接覆盖', hint: '模型完成后安全替换原选区。' },
+  { value: 'previewConfirm', title: '预览确认', hint: '在可编辑弹窗中核对结果，再确认覆盖原选区。' },
+];
+
+export function SelectionPolishSection() {
+  const { t } = useTranslation();
+  const os = detectOS();
+  const { prefs, capability, refresh, updatePrefs } = useHotkeySettings();
+  const [platformCaps, setPlatformCaps] = useState<PlatformCapabilities | null>(null);
+
+  useEffect(() => { void getPlatformCapabilities().then(setPlatformCaps); }, []);
+
+  if (!prefs || !capability || !platformCaps?.supportsDesktopHotkey || os === 'linux') return null;
+
+  return (
+    <Card>
+      <SectionTitle hint="选择任意文字后触发。它不依赖麦克风或 ASR，使用当前风格包与独立的选区 Prompt。">
+        {t('settings.selectionPolish.title', '选区润色')}
+      </SectionTitle>
+      <SettingRow
+        label={t('settings.selectionPolish.hotkey', '触发快捷键')}
+        desc="录制后立即生效；与录音、追问等全局快捷键冲突时会被拒绝。"
+      >
+        {prefs.selectionPolishHotkey ? (
+          <ShortcutRecorder
+            value={prefs.selectionPolishHotkey}
+            alignRecordButton
+            sideSpecificModifiers
+            modifierPresets={capability.availableTriggers ?? []}
+            onSave={async binding => {
+              await setSelectionPolishHotkey(binding);
+              await refresh();
+            }}
+            onDisable={async () => {
+              await setSelectionPolishHotkey(null);
+              await refresh();
+            }}
+          />
+        ) : (
+          <button
+            onClick={async () => {
+              await setSelectionPolishHotkey(defaultSelectionPolishShortcut());
+              await refresh();
+            }}
+            style={enableButton}
+          >
+            {t('settings.shortcuts.enable', '启用 Right Alt（可修改）')}
+          </button>
+        )}
+      </SettingRow>
+      <SettingRow label={t('settings.selectionPolish.delivery', '结果处理方式')}>
+        <div style={{ ...segmentedTrackStyle, flexWrap: 'wrap', gap: 4 }}>
+          {outputOptions.map(option => {
+            const selected = prefs.selectionPolishOutputMode === option.value;
+            return (
+              <button
+                key={option.value}
+                title={option.hint}
+                onClick={() => void updatePrefs(current => ({ ...current, selectionPolishOutputMode: option.value }))}
+                style={{
+                  ...chipSelectedStyle(selected), border: 0, borderRadius: 6, padding: '6px 10px',
+                  fontFamily: 'inherit', fontSize: 12, cursor: 'default', fontWeight: selected ? 600 : 500,
+                }}
+              >
+                {option.title}
+              </button>
+            );
+          })}
+        </div>
+      </SettingRow>
+    </Card>
+  );
+}

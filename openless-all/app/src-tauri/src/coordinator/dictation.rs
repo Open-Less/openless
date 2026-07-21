@@ -2525,6 +2525,7 @@ fn build_transcribe_failed_session(
     DictationSession {
         id: session_id.to_string(),
         created_at: Utc::now().to_rfc3339(),
+        source: crate::types::HistorySource::Voice,
         raw_transcript: String::new(),
         final_text: String::new(),
         mode,
@@ -3325,6 +3326,7 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
             // 对不上，has_audio_recording 标了 true 但前端永远 404）。
             id: current_session_id.to_string(),
             created_at: Utc::now().to_rfc3339(),
+            source: crate::types::HistorySource::Voice,
             raw_transcript: raw.text.clone(),
             final_text: String::new(),
             mode: inner.prefs.get().default_mode,
@@ -3437,13 +3439,18 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     let chinese_script_preference = prefs.chinese_script_preference;
     let output_language_preference = prefs.output_language_preference;
     let llm_thinking_enabled = prefs.llm_thinking_enabled;
-    let style_system_prompt = pack.prompt.clone();
+    // 风格包原有 Prompt 就是录音 / ASR 后处理的完整规则；不要在全局设置再叠一层，
+    // 否则会让同一个风格包的导出、复用和运行结果不一致。
+    let style_system_prompt = crate::types::style_pack_prompt(
+        &pack,
+        crate::types::StylePromptKind::DictationAsr,
+    );
     let raw_uses_llm = mode == PolishMode::Raw && super::raw_style_pack_uses_llm(&pack);
     let translation_target = prefs.translation_target_language.trim().to_string();
     let translation_active =
         inner.translation_modifier_seen.load(Ordering::SeqCst) && !translation_target.is_empty();
     log::info!(
-        "[style-pack] runtime dispatch session_id={} active_pack={} kind={:?} mode={:?} raw_chars={} prompt_chars={} raw_uses_llm={} translation_active={} hotwords={} working_languages={:?}",
+        "[style-pack] runtime dispatch scope=asr session_id={} active_pack={} kind={:?} mode={:?} raw_chars={} prompt_chars={} raw_uses_llm={} translation_active={} hotwords={} working_languages={:?}",
         current_session_id,
         pack.id,
         pack.kind,
@@ -3739,6 +3746,7 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     let session = DictationSession {
         id: history_session_id.clone(),
         created_at: history_created_at.clone(),
+        source: crate::types::HistorySource::Voice,
         raw_transcript: raw.text.clone(),
         final_text: polished.clone(),
         mode,
@@ -4122,6 +4130,7 @@ mod tests {
         DictationSession {
             id: id.into(),
             created_at: "2026-06-03T00:00:00Z".into(),
+            source: crate::types::HistorySource::Voice,
             raw_transcript: raw.into(),
             final_text: final_text.into(),
             mode: PolishMode::Structured,

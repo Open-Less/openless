@@ -197,6 +197,9 @@ export type UpdateChannel = 'stable' | 'beta';
 
 export type ThemeMode = 'system' | 'light' | 'dark';
 
+/** 选区润色结果直接替换，或先在可编辑预览中确认。 */
+export type SelectionPolishOutputMode = 'directReplace' | 'previewConfirm';
+
 export interface CustomStylePrompts {
   raw: string;
   light: string;
@@ -227,6 +230,8 @@ export interface StylePack {
   version: string;
   kind: StylePackKind;
   baseMode: PolishMode;
+  /** For selected written text. Empty values in legacy packs use a safe backend default. */
+  selectionPrompt: string;
   prompt: string;
   examples: StylePackExample[];
   tags: string[];
@@ -313,6 +318,12 @@ export interface UserPreferences {
   outputLanguagePreference: 'auto' | 'zhCn' | 'zhTw' | 'en' | 'ja' | 'ko';
   /** 划词语音问答快捷键。null = 未启用。详见 issue #118。 */
   qaHotkey: QaHotkeyBinding | null;
+  /** 选区润色快捷键。null = 已停用。 */
+  selectionPolishHotkey: ShortcutBinding | null;
+  /** The style pack used only by selected written-text polishing. */
+  selectionPolishStylePackId: string;
+  /** 选区润色结果的交付方式。 */
+  selectionPolishOutputMode: SelectionPolishOutputMode;
   /** 是否把 Q&A 历史写到本地存档。详见 issue #118。 */
   qaSaveHistory: boolean;
   /** 自定义录音组合键。当 hotkey.trigger == 'custom' 时使用。null = 未设置。 */
@@ -566,6 +577,11 @@ export interface CapsulePayload {
    * 再开口；麦克风就绪后翻 false，光条点亮进入正式录音。只对 recording 有意义。
    */
   warming?: boolean;
+  /**
+   * 选区润色复用 capsule 的无焦点原生窗口，但渲染为轻量状态提示；缺失时保持原有
+   * 语音/QA 胶囊行为，兼容旧后端 payload。
+   */
+  selectionPolish?: boolean;
 }
 
 export interface CredentialsStatus {

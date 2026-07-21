@@ -1,6 +1,12 @@
 import type { ComboBinding, HotkeyCapability, HotkeyStatus, ShortcutBinding, WindowsImeStatus } from "../types"
 import { invokeOrMock, platformCapabilities, androidHotkeyStatus, androidHotkeyCapability, androidWindowsImeStatus } from "./shared"
-import { mockHotkeyStatus, mockHotkeyCapability, mockWindowsImeStatus } from "./mock-data"
+import {
+    mockHotkeyStatus,
+    mockHotkeyCapability,
+    mockSettings,
+    mockSetSettings,
+    mockWindowsImeStatus,
+} from "./mock-data"
 
 export function getHotkeyStatus(): Promise<HotkeyStatus> {
     return platformCapabilities().then((caps) => {
@@ -57,6 +63,14 @@ export function validateShortcutBinding(
 
 export function setDictationHotkey(binding: ShortcutBinding): Promise<void> {
     return invokeOrMock("set_dictation_hotkey", { binding }, () => undefined)
+}
+
+// binding = null 表示停用。Tauri 端持久化后，设置页会立即重新读取 prefs。
+export function setSelectionPolishHotkey(binding: ShortcutBinding | null): Promise<void> {
+    return invokeOrMock("set_selection_polish_hotkey", { binding }, () => {
+        mockSetSettings({ ...mockSettings, selectionPolishHotkey: binding })
+        return undefined
+    })
 }
 
 export function setTranslationHotkey(binding: ShortcutBinding): Promise<void> {

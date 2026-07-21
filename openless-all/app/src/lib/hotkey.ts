@@ -8,6 +8,11 @@ export function defaultQaShortcut(): ShortcutBinding {
   };
 }
 
+/** 选区润色的默认触发键，与后端默认值保持一致。 */
+export function defaultSelectionPolishShortcut(): ShortcutBinding {
+  return { primary: 'RightAlt', modifiers: [] };
+}
+
 export function defaultAppShortcutModifiers(): string[] {
   return currentPlatform().isMac ? ['cmd', 'shift'] : ['ctrl', 'shift'];
 }

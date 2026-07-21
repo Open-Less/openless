@@ -5,6 +5,8 @@ dist/
 .env
 .vite/
 .artifacts/
+# Local shell error capture accidentally written by an invalid Tauri command.
+/+
 
 # Tauri
 src-tauri/target/

@@ -283,12 +283,13 @@ fn apply_retranscription(
 mod retranscribe_tests {
     use super::apply_retranscription;
     use crate::coordinator::AsrCallLabel;
-    use crate::types::{DictationSession, InsertStatus, PolishMode};
+    use crate::types::{DictationSession, HistorySource, InsertStatus, PolishMode};
 
     fn failed_entry() -> DictationSession {
         DictationSession {
             id: "s1".into(),
             created_at: "2026-07-15T00:00:00Z".into(),
+            source: HistorySource::Voice,
             raw_transcript: String::new(),
             final_text: String::new(),
             mode: PolishMode::Light,

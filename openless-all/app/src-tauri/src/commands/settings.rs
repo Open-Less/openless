@@ -28,6 +28,7 @@ pub(crate) trait SettingsWriter {
     fn refresh_translation_hotkey(&self);
     fn refresh_switch_style_hotkey(&self);
     fn refresh_open_app_hotkey(&self);
+    fn refresh_selection_polish_hotkey(&self);
     fn refresh_coding_agent_hotkey(&self);
 }
 
@@ -75,6 +76,10 @@ impl SettingsWriter for Coordinator {
 
     fn refresh_open_app_hotkey(&self) {
         self.update_open_app_hotkey_binding();
+    }
+
+    fn refresh_selection_polish_hotkey(&self) {
+        self.update_selection_polish_hotkey_binding();
     }
 
     fn refresh_coding_agent_hotkey(&self) {
@@ -126,6 +131,10 @@ impl<T: SettingsWriter + ?Sized> SettingsWriter for Arc<T> {
         (**self).refresh_open_app_hotkey();
     }
 
+    fn refresh_selection_polish_hotkey(&self) {
+        (**self).refresh_selection_polish_hotkey();
+    }
+
     fn refresh_coding_agent_hotkey(&self) {
         (**self).refresh_coding_agent_hotkey();
     }
@@ -157,6 +166,8 @@ pub(crate) fn persist_settings_with_keyboard_apply<T: SettingsWriter>(
     let translation_changed = previous.translation_hotkey != prefs.translation_hotkey;
     let switch_style_changed = previous.switch_style_hotkey != prefs.switch_style_hotkey;
     let open_app_changed = previous.open_app_hotkey != prefs.open_app_hotkey;
+    let selection_polish_changed =
+        previous.selection_polish_hotkey != prefs.selection_polish_hotkey;
     let coding_agent_changed = previous.coding_agent_enabled != prefs.coding_agent_enabled
         || previous.coding_agent_voice_hotkey != prefs.coding_agent_voice_hotkey;
     let windows_keyboard_list_changed = previous.windows_sendinput_insertion_only
@@ -244,6 +255,9 @@ pub(crate) fn persist_settings_with_keyboard_apply<T: SettingsWriter>(
     }
     if open_app_changed {
         coord.refresh_open_app_hotkey();
+    }
+    if selection_polish_changed {
+        coord.refresh_selection_polish_hotkey();
     }
     if coding_agent_changed {
         coord.refresh_coding_agent_hotkey();
@@ -360,6 +374,7 @@ mod tests {
         fn refresh_switch_style_hotkey(&self) {}
 
         fn refresh_open_app_hotkey(&self) {}
+        fn refresh_selection_polish_hotkey(&self) {}
 
         fn refresh_coding_agent_hotkey(&self) {}
     }
@@ -738,6 +753,7 @@ mod persist_settings_tests {
         fn refresh_translation_hotkey(&self) {}
         fn refresh_switch_style_hotkey(&self) {}
         fn refresh_open_app_hotkey(&self) {}
+        fn refresh_selection_polish_hotkey(&self) {}
         fn refresh_coding_agent_hotkey(&self) {}
     }
 
@@ -749,14 +765,17 @@ mod persist_settings_tests {
         next.windows_show_openless_in_keyboard_list = false;
         next.active_asr_provider = "other-asr".into();
 
-        let result = persist_settings_with_keyboard_apply(&writer, next, |_| {
-            Err("apply failed".into())
-        });
+        let result =
+            persist_settings_with_keyboard_apply(&writer, next, |_| Err("apply failed".into()));
 
         assert!(result.is_err());
         assert_eq!(*writer.write_calls.borrow(), 0);
         assert!(writer.asr_sync_calls.borrow().is_empty());
-        assert!(writer.read_settings().windows_show_openless_in_keyboard_list);
+        assert!(
+            writer
+                .read_settings()
+                .windows_show_openless_in_keyboard_list
+        );
     }
 
     #[test]
@@ -770,7 +789,11 @@ mod persist_settings_tests {
 
         assert!(result.is_ok());
         assert_eq!(*writer.write_calls.borrow(), 1);
-        assert!(!writer.read_settings().windows_show_openless_in_keyboard_list);
+        assert!(
+            !writer
+                .read_settings()
+                .windows_show_openless_in_keyboard_list
+        );
     }
 
     #[test]
@@ -797,7 +820,11 @@ mod persist_settings_tests {
         assert!(result.is_err());
         assert_eq!(*writer.write_calls.borrow(), 0);
         assert_eq!(*apply_calls.borrow(), 2);
-        assert!(writer.read_settings().windows_show_openless_in_keyboard_list);
+        assert!(
+            writer
+                .read_settings()
+                .windows_show_openless_in_keyboard_list
+        );
     }
 
     #[test]
@@ -880,7 +907,11 @@ mod persist_settings_tests {
         assert!(result.is_ok());
         assert_eq!(*writer.write_calls.borrow(), 2);
         assert_eq!(*apply_calls.borrow(), 1);
-        assert!(!writer.read_settings().windows_show_openless_in_keyboard_list);
+        assert!(
+            !writer
+                .read_settings()
+                .windows_show_openless_in_keyboard_list
+        );
     }
 }
 

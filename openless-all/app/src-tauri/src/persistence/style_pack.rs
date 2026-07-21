@@ -306,6 +306,7 @@ impl StylePackStore {
             version: normalize_version(&manifest.version),
             kind: StylePackKind::Imported,
             base_mode: manifest.base_mode,
+            selection_prompt: manifest.selection_prompt.unwrap_or_default(),
             prompt: parsed.prompt,
             examples: parsed.examples,
             tags: normalize_tags(&manifest.tags),
@@ -372,6 +373,7 @@ impl StylePackStore {
             author: pack.author.clone(),
             version: pack.version.clone(),
             base_mode: pack.base_mode,
+            selection_prompt: (!pack.selection_prompt.trim().is_empty()).then(|| pack.selection_prompt.clone()),
             tags: pack.tags.clone(),
             prompt_file: "prompt.md".into(),
             examples_file: "examples.json".into(),
@@ -462,6 +464,38 @@ fn migrate_style_packs_from_preferences(
                 pack.prompt = builtin.prompt.clone();
                 changed = true;
             }
+            // A short-lived pre-separation build could write the non-ASR
+            // fallback into the pack's main `prompt` slot. If the legacy
+            // per-mode prompt still contains the original ASR rules, recover
+            // it before syncing preferences back from the pack store.
+            let legacy_prompt = legacy_prompts.for_mode(pack.base_mode);
+            let restore_prompt = if is_asr_style_prompt(legacy_prompt) {
+                legacy_prompt
+            } else {
+                // If the earlier bad build already synced the selection prompt
+                // into both stores, fall back to the bundled ASR default rather
+                // than keeping a non-ASR prompt in the dictation slot.
+                builtin.prompt.as_str()
+            };
+            if is_non_asr_selection_prompt(&pack.prompt)
+                && is_asr_style_prompt(restore_prompt)
+                && pack.prompt.trim() != restore_prompt.trim()
+            {
+                log::warn!(
+                    "[style-packs] restoring builtin ASR prompt from legacy preferences id={}",
+                    pack.id
+                );
+                pack.prompt = restore_prompt.to_string();
+                changed = true;
+            }
+            // v1 风格包没有选区书面文本 Prompt。旧的过渡版本又给所有内置包
+            // 写入了同一条通用 Prompt；这里只替换这两种已知默认值，保留用户自定义内容。
+            if pack.selection_prompt.trim().is_empty()
+                || is_generic_selection_prompt(&pack.selection_prompt)
+            {
+                pack.selection_prompt = builtin.selection_prompt.clone();
+                changed = true;
+            }
             if pack.examples.is_empty() {
                 pack.examples = builtin.examples.clone();
                 changed = true;
@@ -508,6 +542,30 @@ fn migrate_style_packs_from_preferences(
     changed
 }
 
+fn is_non_asr_selection_prompt(prompt: &str) -> bool {
+    let normalized = prompt.to_ascii_lowercase();
+    (normalized.contains("selected-text editor") && normalized.contains("not asr"))
+        || normalized.contains("不是语音识别（asr）转写")
+}
+
+fn is_generic_selection_prompt(prompt: &str) -> bool {
+    let normalized = prompt.to_ascii_lowercase();
+    normalized.contains("selected-text editor")
+        && normalized.contains("improve clarity, grammar")
+        && normalized.contains("active style")
+}
+
+fn is_asr_style_prompt(prompt: &str) -> bool {
+    if is_non_asr_selection_prompt(prompt) {
+        return false;
+    }
+    let normalized = prompt.to_ascii_lowercase();
+    normalized.contains("asr")
+        || normalized.contains("语音识别")
+        || normalized.contains("转写")
+        || normalized.contains("口语")
+}
+
 fn style_pack_sort_key(pack: &StylePack) -> (u8, u8) {
     let kind_rank = match pack.kind {
         StylePackKind::Builtin => 0,
@@ -546,6 +604,7 @@ pub fn sync_style_pack_preferences(prefs: &mut UserPreferences, packs: &[StylePa
     let previous_active_style_pack_id = prefs.active_style_pack_id.clone();
     let previous_default_mode = prefs.default_mode;
     let previous_enabled_modes = prefs.enabled_modes.clone();
+    let previous_selection_style_pack_id = prefs.selection_polish_style_pack_id.clone();
     let enabled: Vec<&StylePack> = packs.iter().filter(|pack| pack.enabled).collect();
     let active = packs
         .iter()
@@ -570,6 +629,10 @@ pub fn sync_style_pack_preferences(prefs: &mut UserPreferences, packs: &[StylePa
         prefs.default_mode = active_pack.base_mode;
         changed = true;
     }
+    if !packs.iter().any(|pack| pack.id == prefs.selection_polish_style_pack_id && pack.enabled) {
+        prefs.selection_polish_style_pack_id = active_pack.id.clone();
+        changed = true;
+    }
 
     let next_enabled_modes = enabled_modes_from_style_packs(packs);
     if prefs.enabled_modes != next_enabled_modes {
@@ -583,9 +646,11 @@ pub fn sync_style_pack_preferences(prefs: &mut UserPreferences, packs: &[StylePa
 
     if changed {
         log::info!(
-            "[style-pack] sync_prefs active:{}->{} default_mode:{:?}->{:?} enabled_modes:{:?}->{:?}",
+            "[style-pack] sync_prefs active:{}->{} selection:{}->{} default_mode:{:?}->{:?} enabled_modes:{:?}->{:?}",
             previous_active_style_pack_id,
             prefs.active_style_pack_id,
+            previous_selection_style_pack_id,
+            prefs.selection_polish_style_pack_id,
             previous_default_mode,
             prefs.default_mode,
             previous_enabled_modes,
@@ -675,6 +740,7 @@ fn merge_style_pack_update(existing: StylePack, incoming: StylePack) -> Result<S
     updated.description = incoming.description.trim().to_string();
     updated.author = normalize_optional_text(incoming.author);
     updated.version = normalize_version(&incoming.version);
+    updated.selection_prompt = incoming.selection_prompt;
     updated.prompt = incoming.prompt;
     updated.examples = normalize_examples(incoming.examples);
     updated.tags = normalize_tags(&incoming.tags);
