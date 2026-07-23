@@ -8,6 +8,12 @@
 //! - Linux：fcitx5 插件提供热键事件（DBus 信号 `DictationKeyEvent`）。
 //!
 //! 仅产出"边沿"事件，toggle vs hold 由 Coordinator 解释。
+//!
+//! Esc（取消）**不走** `HotkeyEvent` 通道，而是独立的 `Sender<()>`：Pressed/Released
+//! 的 bridge 线程为了修 #468/#475 的 latch 竞态改成了串行 block_on，Released 会在
+//! bridge 线程上同步跑完整个转写 + 润色流程 —— 若 Esc 与它们同队列，Processing 期间
+//! 的取消事件只能排队等流程跑完，#798 的 select! 取消赛跑永远等不到 cancelled 旗标
+//! （「转写中按 Esc 停不下来」）。独立通道 + 专用消费线程保证取消随到随处理。
 
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{self, Sender};
@@ -23,7 +29,6 @@ use crate::types::{HotkeyAdapterKind, HotkeyBinding, HotkeyCapability, HotkeyIns
 pub enum HotkeyEvent {
     Pressed { at: Instant },
     Released { at: Instant },
-    Cancelled,
     /// Shift（或未来配置项指定的修饰键）按下边沿。可在录音过程中任何时刻产生；
     /// 上层据此切换到翻译输出管线。详见 issue #4。
     TranslationModifierPressed,
@@ -131,12 +136,16 @@ impl HotkeyMonitor {
     /// Spawn the listener thread and **wait synchronously** for it to confirm
     /// the OS-level hook installed so the caller can surface an actual adapter
     /// status instead of silently dropping events.
+    ///
+    /// `cancel_tx`：Esc 按下即发一个 `()`。独立于 `tx`，见模块注释——不能与
+    /// Pressed/Released 挤同一条串行 bridge，否则 Processing 期间取消排不上队。
     pub fn start(
         binding: HotkeyBinding,
         tx: Sender<HotkeyEvent>,
+        cancel_tx: Sender<()>,
     ) -> Result<Self, HotkeyInstallError> {
         Ok(Self {
-            adapter: platform::start_adapter(binding, tx)?,
+            adapter: platform::start_adapter(binding, tx, cancel_tx)?,
         })
     }
 
@@ -185,6 +194,12 @@ fn send_or_log(tx: &Sender<HotkeyEvent>, evt: HotkeyEvent) {
     }
 }
 
+fn send_cancel_or_log(tx: &Sender<()>) {
+    if let Err(e) = tx.send(()) {
+        log::warn!("[hotkey] 取消事件发送失败: {e}");
+    }
+}
+
 type StartupTx<T> = mpsc::Sender<Result<T, HotkeyInstallError>>;
 
 struct ListenerThread<T> {
@@ -195,13 +210,14 @@ struct ListenerThread<T> {
 fn start_listener_thread<T, F>(
     binding: HotkeyBinding,
     tx: Sender<HotkeyEvent>,
+    cancel_tx: Sender<()>,
     thread_name: &str,
     startup_timeout_message: &'static str,
     run_listen_loop: F,
 ) -> Result<ListenerThread<T>, HotkeyInstallError>
 where
     T: Send + 'static,
-    F: FnOnce(Arc<Shared>, Sender<HotkeyEvent>, StartupTx<T>) + Send + 'static,
+    F: FnOnce(Arc<Shared>, Sender<HotkeyEvent>, Sender<()>, StartupTx<T>) + Send + 'static,
 {
     let shared = Arc::new(Shared {
         binding: RwLock::new(binding),
@@ -217,7 +233,7 @@ where
     let (status_tx, status_rx) = mpsc::channel::<Result<T, HotkeyInstallError>>();
     std::thread::Builder::new()
         .name(thread_name.into())
-        .spawn(move || run_listen_loop(thread_shared, tx, status_tx))
+        .spawn(move || run_listen_loop(thread_shared, tx, cancel_tx, status_tx))
         .map_err(|e| install_error("spawn_failed", format!("hotkey 线程启动失败: {e}")))?;
 
     match status_rx.recv_timeout(Duration::from_secs(3)) {
@@ -284,19 +300,21 @@ mod platform {
     use std::sync::Arc;
 
     use super::{
-        install_error, reset_shared_held_state, send_or_log, start_listener_thread,
-        update_shared_binding, update_shared_modifier_shortcuts, HotkeyAdapter, HotkeyEvent,
-        Shared, StartupTx,
+        install_error, reset_shared_held_state, send_cancel_or_log, send_or_log,
+        start_listener_thread, update_shared_binding, update_shared_modifier_shortcuts,
+        HotkeyAdapter, HotkeyEvent, Shared, StartupTx,
     };
     use crate::types::{HotkeyAdapterKind, HotkeyBinding, HotkeyInstallError, HotkeyTrigger};
 
     pub fn start_adapter(
         binding: HotkeyBinding,
         tx: Sender<HotkeyEvent>,
+        cancel_tx: Sender<()>,
     ) -> Result<Box<dyn HotkeyAdapter>, HotkeyInstallError> {
         let listener = start_listener_thread(
             binding,
             tx,
+            cancel_tx,
             "openless-hotkey-mac-event-tap",
             "hotkey hook 启动超时",
             run_listen_loop,
@@ -452,6 +470,8 @@ mod platform {
     struct CallbackContext {
         shared: Arc<Shared>,
         tx: Sender<HotkeyEvent>,
+        /// Esc 专用通道，见模块注释——不与 tx 挤同一条串行 bridge。
+        cancel_tx: Sender<()>,
         /// 与 MacHotkeyAdapter 共享的 (tap, runloop) refs。tap re-enable on
         /// TAP_DISABLED_BY_TIMEOUT 走 handles.tap；adapter shutdown 也走这两个 lock。
         handles: Arc<MacShutdownHandles>,
@@ -463,6 +483,7 @@ mod platform {
     fn run_listen_loop(
         shared: Arc<Shared>,
         tx: Sender<HotkeyEvent>,
+        cancel_tx: Sender<()>,
         status_tx: StartupTx<Arc<MacShutdownHandles>>,
     ) {
         let mask: CgEventMask = (1u64 << FLAGS_CHANGED)
@@ -475,6 +496,7 @@ mod platform {
         let context = Box::into_raw(Box::new(CallbackContext {
             shared,
             tx,
+            cancel_tx,
             handles: Arc::clone(&handles),
         }));
 
@@ -632,7 +654,7 @@ mod platform {
     fn handle_key_down(ctx: &CallbackContext, event: CgEventRef) {
         let keycode = unsafe { CGEventGetIntegerValueField(event, KEYBOARD_EVENT_KEYCODE) };
         if keycode == ESC_KEYCODE {
-            send_or_log(&ctx.tx, HotkeyEvent::Cancelled);
+            send_cancel_or_log(&ctx.cancel_tx);
         }
     }
 
@@ -691,10 +713,12 @@ mod platform {
 
         fn callback_context(shared: Arc<Shared>) -> (CallbackContext, mpsc::Receiver<HotkeyEvent>) {
             let (tx, rx) = mpsc::channel();
+            let (cancel_tx, _cancel_rx) = mpsc::channel();
             (
                 CallbackContext {
                     shared,
                     tx,
+                    cancel_tx,
                     handles: Arc::new(MacShutdownHandles {
                         tap: std::sync::Mutex::new(None),
                         runloop: std::sync::Mutex::new(None),
@@ -783,9 +807,9 @@ mod platform {
     };
 
     use super::{
-        install_error, reset_shared_held_state, send_or_log, start_listener_thread,
-        update_shared_binding, update_shared_modifier_shortcuts, HotkeyAdapter, HotkeyEvent,
-        Shared, StartupTx,
+        install_error, reset_shared_held_state, send_cancel_or_log, send_or_log,
+        start_listener_thread, update_shared_binding, update_shared_modifier_shortcuts,
+        HotkeyAdapter, HotkeyEvent, Shared, StartupTx,
     };
     use crate::types::{HotkeyAdapterKind, HotkeyBinding, HotkeyInstallError, HotkeyTrigger};
 
@@ -813,10 +837,12 @@ mod platform {
     pub fn start_adapter(
         binding: HotkeyBinding,
         tx: Sender<HotkeyEvent>,
+        cancel_tx: Sender<()>,
     ) -> Result<Box<dyn HotkeyAdapter>, HotkeyInstallError> {
         let listener = start_listener_thread(
             binding,
             tx,
+            cancel_tx,
             "openless-hotkey-win-ll-hook",
             "Windows hotkey hook 启动超时",
             run_listen_loop,
@@ -866,17 +892,25 @@ mod platform {
     struct CallbackContext {
         shared: Arc<Shared>,
         tx: Sender<HotkeyEvent>,
+        /// Esc 专用通道，见模块注释——不与 tx 挤同一条串行 bridge。
+        cancel_tx: Sender<()>,
         hook: std::sync::Mutex<Option<HHOOK>>,
     }
 
     unsafe impl Send for CallbackContext {}
     unsafe impl Sync for CallbackContext {}
 
-    fn run_listen_loop(shared: Arc<Shared>, tx: Sender<HotkeyEvent>, status_tx: StartupTx<u32>) {
+    fn run_listen_loop(
+        shared: Arc<Shared>,
+        tx: Sender<HotkeyEvent>,
+        cancel_tx: Sender<()>,
+        status_tx: StartupTx<u32>,
+    ) {
         let thread_id = unsafe { GetCurrentThreadId() };
         let context = Box::into_raw(Box::new(CallbackContext {
             shared,
             tx,
+            cancel_tx,
             hook: std::sync::Mutex::new(None),
         }));
         HOOK_CONTEXT.store(context, AtomicOrdering::SeqCst);
@@ -953,7 +987,7 @@ mod platform {
 
     fn dispatch_keyboard_event(ctx: &CallbackContext, vk_code: u32, message: usize) -> bool {
         if vk_code == VK_ESCAPE && (message == WM_KEYDOWN || message == WM_SYSKEYDOWN) {
-            send_or_log(&ctx.tx, HotkeyEvent::Cancelled);
+            send_cancel_or_log(&ctx.cancel_tx);
             return false;
         }
 
@@ -1103,10 +1137,12 @@ mod platform {
 
         fn callback_context(shared: Arc<Shared>) -> (CallbackContext, mpsc::Receiver<HotkeyEvent>) {
             let (tx, rx) = mpsc::channel();
+            let (cancel_tx, _cancel_rx) = mpsc::channel();
             (
                 CallbackContext {
                     shared,
                     tx,
+                    cancel_tx,
                     hook: std::sync::Mutex::new(None),
                 },
                 rx,
@@ -1276,6 +1312,7 @@ mod platform {
     pub fn start_adapter(
         _binding: HotkeyBinding,
         _tx: Sender<HotkeyEvent>,
+        _cancel_tx: Sender<()>,
     ) -> Result<Box<dyn HotkeyAdapter>, HotkeyInstallError> {
         log::info!("[hotkey] Linux — fcitx5 plugin handles hotkeys");
         Ok(Box::new(PlaceholderAdapter { _tx }))

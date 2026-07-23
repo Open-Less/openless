@@ -9,6 +9,32 @@ use super::*;
 
 // ─────────────────────────── hotkey bridging ───────────────────────────
 
+/// Esc 取消专用消费线程。为什么不并入 `hotkey_bridge_loop`：bridge 为修 #468/#475
+/// 的 latch 竞态把 Pressed/Released 改成了串行 block_on —— Hold 松手后 `end_session`
+/// 会在 bridge 线程上同步跑完整段转写 + 润色，期间 bridge 无法 recv。若 Esc 与其同
+/// 队列，取消事件只能排队等流程跑完（此时 phase 已回 Idle，cancel 变 no-op），#798
+/// 在 `end_session` 里的 select! 取消赛跑永远等不到 `cancelled` 旗标 ——「转写 / 润色
+/// 中按 Esc 停不下来」。独立通道 + 本线程保证 `cancel_session` 随到随执行（它是纯同步
+/// 快路径：置旗标 + 清资源，不 await）。
+pub(super) fn esc_cancel_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<()>) {
+    while rx.recv().is_ok() {
+        if inner.shortcut_recording_active.load(Ordering::SeqCst) {
+            continue;
+        }
+        cancel_session(&inner);
+    }
+}
+
+pub(super) fn spawn_esc_cancel_bridge(inner: &Arc<Inner>) -> mpsc::Sender<()> {
+    let (cancel_tx, cancel_rx) = mpsc::channel::<()>();
+    let bridge_inner = Arc::clone(inner);
+    std::thread::Builder::new()
+        .name("openless-esc-cancel-bridge".into())
+        .spawn(move || esc_cancel_bridge_loop(bridge_inner, cancel_rx))
+        .ok();
+    cancel_tx
+}
+
 pub(super) fn hotkey_supervisor_loop(inner: Arc<Inner>) {
     let mut attempts: u32 = 0;
     let capability = HotkeyMonitor::capability();
@@ -54,7 +80,8 @@ pub(super) fn hotkey_supervisor_loop(inner: Arc<Inner>) {
         let (tx, rx) = mpsc::channel::<HotkeyEvent>();
         #[cfg(target_os = "linux")]
         let (fcitx_tx, fcitx_binding) = (tx.clone(), binding.clone());
-        match HotkeyMonitor::start(binding, tx) {
+        let cancel_tx = spawn_esc_cancel_bridge(&inner);
+        match HotkeyMonitor::start(binding, tx, cancel_tx) {
             Ok(monitor) => {
                 let adapter = monitor.kind();
                 *inner.hotkey.lock() = Some(monitor);
@@ -278,7 +305,10 @@ pub(super) fn update_coding_agent_hotkey_binding_now(inner: &Arc<Inner>) {
                 return;
             }
             let (tx, rx) = mpsc::channel::<HotkeyEvent>();
-            match HotkeyMonitor::start(modifier_binding, tx) {
+            // Less Computer 的独立 tap 也转发 Esc 取消（与主 monitor 双保险；
+            // cancel_session 幂等，重复触发无害）。
+            let cancel_tx = spawn_esc_cancel_bridge(inner);
+            match HotkeyMonitor::start(modifier_binding, tx, cancel_tx) {
                 Ok(monitor) => {
                     *inner.coding_agent_modifier_hotkey.lock() = Some(monitor);
                     log::info!(
@@ -362,7 +392,6 @@ pub(super) fn less_computer_modifier_bridge_loop(inner: Arc<Inner>, rx: mpsc::Re
                     handle_less_computer_released(&inner_cloned).await
                 });
             }
-            HotkeyEvent::Cancelled => cancel_session(&inner_cloned),
             HotkeyEvent::TranslationModifierPressed | HotkeyEvent::QaShortcutPressed => {}
         }
     }
@@ -1036,9 +1065,8 @@ pub(super) fn hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<HotkeyEve
                     handle_released_edge(&inner_cloned, at).await;
                 });
             }
-            HotkeyEvent::Cancelled => {
-                cancel_session(&inner_cloned);
-            }
+            // Esc 取消不在此枚举里：走独立的 esc_cancel_bridge_loop，避免被上面
+            // Released → end_session 的同步转写流程堵在队列里（见该函数注释）。
             HotkeyEvent::TranslationModifierPressed => {
                 let translation_hotkey = inner_cloned.prefs.get().translation_hotkey;
                 if is_builtin_translation_shift(&translation_hotkey)

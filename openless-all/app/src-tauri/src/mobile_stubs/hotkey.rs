@@ -11,7 +11,6 @@ use crate::types::{
 pub enum HotkeyEvent {
     Pressed { at: Instant },
     Released { at: Instant },
-    Cancelled,
     TranslationModifierPressed,
     QaShortcutPressed,
 }
@@ -22,6 +21,7 @@ impl HotkeyMonitor {
     pub fn start(
         _binding: HotkeyBinding,
         _tx: Sender<HotkeyEvent>,
+        _cancel_tx: Sender<()>,
     ) -> Result<Self, HotkeyInstallError> {
         Err(HotkeyInstallError {
             code: "unavailable".into(),

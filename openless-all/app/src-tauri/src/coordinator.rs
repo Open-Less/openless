@@ -1443,7 +1443,8 @@ impl Coordinator {
         let (tx, rx) = mpsc::channel::<HotkeyEvent>();
         #[cfg(target_os = "linux")]
         let (fcitx_tx, fcitx_binding) = (tx.clone(), binding.clone());
-        match HotkeyMonitor::start(binding, tx) {
+        let cancel_tx = spawn_esc_cancel_bridge(&self.inner);
+        match HotkeyMonitor::start(binding, tx, cancel_tx) {
             Ok(monitor) => {
                 let adapter = monitor.kind();
                 *self.inner.hotkey.lock() = Some(monitor);
