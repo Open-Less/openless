@@ -96,7 +96,7 @@ pub(super) fn qa_event_target() -> &'static str {
 use dictation::dictation_error_code;
 use dictation::{
     begin_session, begin_session_as, cancel_session, end_session, handle_pressed_edge,
-    handle_released_edge, request_stop_during_starting,
+    handle_released_edge, handle_trigger_combined, request_stop_during_starting,
 };
 #[cfg(any(debug_assertions, test))]
 use dictation::{handle_pressed, handle_released};
@@ -476,6 +476,10 @@ struct Inner {
     hotkey: Mutex<Option<HotkeyMonitor>>,
     hotkey_status: Mutex<HotkeyStatus>,
     hotkey_trigger_held: AtomicBool,
+    /// 本次热键按下是否真的「开出了」一个会话。TriggerCombined（触发键被当修饰键用）
+    /// 只撤销这一次按下开出来的会话：若这次按下其实是 toggle 停止 / 被冷却拦下 /
+    /// 路由给了 QA，就没有可撤销的东西，绝不能顺手取消正在转写的上一条。
+    hotkey_press_began_session: AtomicBool,
     /// 防抖时间戳：handle_pressed_edge 入口检查与本字段的距离，< 250ms 的边沿直接
     /// 丢弃（误触双击 / 微动开关回弹 / 用户连点过快造成的空转写报错）。
     /// 与 `hotkey_trigger_held` 互补 —— held 防 press-without-release，本字段防
@@ -672,6 +676,7 @@ impl Coordinator {
                     hotkey: Mutex::new(None),
                     hotkey_status: Mutex::new(HotkeyStatus::default()),
                     hotkey_trigger_held: AtomicBool::new(false),
+                    hotkey_press_began_session: AtomicBool::new(false),
                     last_hotkey_dispatch_at: Mutex::new(None),
                     hotkey_press_at: Mutex::new(None),
                     session_cooldown_until: Mutex::new(None),
@@ -774,6 +779,7 @@ impl Coordinator {
                 hotkey: Mutex::new(None),
                 hotkey_status: Mutex::new(HotkeyStatus::default()),
                 hotkey_trigger_held: AtomicBool::new(false),
+                hotkey_press_began_session: AtomicBool::new(false),
                 last_hotkey_dispatch_at: Mutex::new(None),
                 hotkey_press_at: Mutex::new(None),
                 session_cooldown_until: Mutex::new(None),
@@ -3548,6 +3554,66 @@ mod tests {
         // 无 recorder / ASR 的测试会话下，end_session 直接收尾到 Idle。
         assert_eq!(coordinator.inner.state.lock().phase, SessionPhase::Idle);
         assert!(coordinator.inner.hotkey_press_at.lock().is_none());
+    }
+
+    // Option+任意字母/数字键：这次按下开出来的会话必须被撤销，且随后的松手边沿不能再被当成
+    // Auto 短按锁存（否则录音一直开着，正是用户报的「按 Option+其他键唤起听写」）。
+    #[tokio::test]
+    async fn trigger_combined_cancels_session_started_by_this_press() {
+        let coordinator = Coordinator::new();
+        set_auto_mode(&coordinator);
+        coordinator.inner.state.lock().phase = SessionPhase::Listening;
+        let pressed_at = std::time::Instant::now();
+        *coordinator.inner.hotkey_press_at.lock() = Some(pressed_at);
+        coordinator
+            .inner
+            .hotkey_trigger_held
+            .store(true, Ordering::SeqCst);
+        coordinator
+            .inner
+            .hotkey_press_began_session
+            .store(true, Ordering::SeqCst);
+
+        handle_trigger_combined(&coordinator.inner);
+
+        assert_eq!(coordinator.inner.state.lock().phase, SessionPhase::Idle);
+        assert!(!coordinator.inner.hotkey_trigger_held.load(Ordering::SeqCst));
+        assert!(coordinator.inner.hotkey_press_at.lock().is_none());
+        // 组合键误触不算「刚用完一次听写」：不留冷却，否则紧接着真想说话的按下被吞。
+        assert!(coordinator.inner.session_cooldown_until.lock().is_none());
+
+        handle_released_edge(
+            &coordinator.inner,
+            pressed_at + std::time::Duration::from_millis(80),
+        )
+        .await;
+
+        assert_eq!(coordinator.inner.state.lock().phase, SessionPhase::Idle);
+    }
+
+    // 这次按下是 toggle 停止（没开出会话）时，组合键撤销不能顺手取消正在跑的会话 ——
+    // 那条录音是上一次按下锁存的，取消 = 用户白说一段。
+    #[tokio::test]
+    async fn trigger_combined_leaves_session_it_did_not_start() {
+        let coordinator = Coordinator::new();
+        set_auto_mode(&coordinator);
+        coordinator.inner.state.lock().phase = SessionPhase::Listening;
+        coordinator
+            .inner
+            .hotkey_trigger_held
+            .store(true, Ordering::SeqCst);
+        coordinator
+            .inner
+            .hotkey_press_began_session
+            .store(false, Ordering::SeqCst);
+
+        handle_trigger_combined(&coordinator.inner);
+
+        assert_eq!(
+            coordinator.inner.state.lock().phase,
+            SessionPhase::Listening
+        );
+        assert!(!coordinator.inner.hotkey_trigger_held.load(Ordering::SeqCst));
     }
 
     #[test]

@@ -735,6 +735,12 @@ pub(super) async fn handle_pressed_edge(inner: &Arc<Inner>, pressed_at: std::tim
             return;
         }
 
+        // 新的一次按下：先假定它什么会话都没开出来，由下面的分支在真正 begin_session
+        // 时置 true。TriggerCombined 靠这个标志判断有没有东西要撤销。
+        inner
+            .hotkey_press_began_session
+            .store(false, Ordering::SeqCst);
+
         // 路由：QA 浮窗可见时，rightOption 边沿走 QA；否则走主听写。详见 issue #118 v2。
         // 例外：dictation session 已经在跑（Starting / Listening / Processing / Inserting），
         // 即使 QA 浮窗被打开了，这条边沿也必须先走 dictation。否则 begin_qa_session 会
@@ -797,13 +803,13 @@ pub(super) async fn handle_pressed(inner: &Arc<Inner>, pressed_at: std::time::In
                     }
                 }
             }
-            let _ = begin_session(inner).await;
+            begin_session_from_press(inner).await;
         }
         (HotkeyMode::Toggle, SessionPhase::Listening) => {
             let _ = end_session(inner).await;
         }
         (HotkeyMode::Hold, SessionPhase::Idle) => {
-            let _ = begin_session(inner).await;
+            begin_session_from_press(inner).await;
         }
         // Toggle 模式 Starting 阶段第二次按 → 用户想停。
         // 不能直接 end_session（ASR session 还没建好），存边沿，握手完成后立即触发。
@@ -831,7 +837,7 @@ pub(super) async fn handle_pressed(inner: &Arc<Inner>, pressed_at: std::time::In
                 }
             }
             *inner.hotkey_press_at.lock() = Some(pressed_at);
-            let _ = begin_session(inner).await;
+            begin_session_from_press(inner).await;
         }
         // Auto 模式已因上一次「短按」锁存为切换态，再次按下 → 用户想停。
         (HotkeyMode::Auto, SessionPhase::Listening) => {
@@ -843,6 +849,42 @@ pub(super) async fn handle_pressed(inner: &Arc<Inner>, pressed_at: std::time::In
         }
         _ => {}
     }
+}
+
+/// 由「这一次热键按下」开一条会话，并记下这个事实。TriggerCombined 只撤销带着这个
+/// 标记的会话（见 handle_trigger_combined）。
+async fn begin_session_from_press(inner: &Arc<Inner>) {
+    inner
+        .hotkey_press_began_session
+        .store(true, Ordering::SeqCst);
+    let _ = begin_session(inner).await;
+}
+
+/// 触发键（modifier-only 热键）按住期间又按了普通键 —— 用户在打 Option+任意字母/数字键这类组合键，
+/// 不是想说话。撤销这次按下：
+///
+/// 1. 清掉按住态。后面必然到来的 Released 会被 handle_released_edge 的 `was_held`
+///    检查吞掉，不会再走 Hold 松手结束 / Auto 短按锁存那套判定 —— 否则 Auto 模式下
+///    「Option+组合键快速松手」正是被判成短按锁存，录音一直开着停不下来。
+/// 2. 只有这次按下真的开出了会话才取消它。按下时是 toggle 停止 / 被冷却拦下 /
+///    路由给 QA 的，什么都不动（尤其不能取消正在转写的上一条）。
+///
+/// 组合键误触不算「刚用完一次听写」，所以顺带清掉冷却与防抖时间戳：否则紧接着那次
+/// 真想说话的按下会被 #545 冷却 / 250ms 防抖静默吞掉，用户以为热键坏了。
+pub(super) fn handle_trigger_combined(inner: &Arc<Inner>) {
+    let was_held = inner.hotkey_trigger_held.swap(false, Ordering::SeqCst);
+    *inner.hotkey_press_at.lock() = None;
+    let began_session = inner
+        .hotkey_press_began_session
+        .swap(false, Ordering::SeqCst);
+    if !was_held || !began_session {
+        log::info!("[coord] hotkey combined with another key (本次按下没开出会话，无需撤销)");
+        return;
+    }
+    log::info!("[coord] hotkey combined with another key —— 取消本次按下开出的会话");
+    cancel_session(inner);
+    *inner.session_cooldown_until.lock() = None;
+    *inner.last_hotkey_dispatch_at.lock() = None;
 }
 
 pub(super) async fn handle_released_edge(inner: &Arc<Inner>, released_at: std::time::Instant) {

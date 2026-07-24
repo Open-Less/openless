@@ -24,6 +24,10 @@ pub enum HotkeyEvent {
     Pressed { at: Instant },
     Released { at: Instant },
     Cancelled,
+    /// 触发键（modifier-only 热键）按住期间又按下了普通键 —— 用户是在打 Option+任意字母/数字键
+    /// 这类组合键，不是想说话。上层据此撤销这次按下的副作用。同一次按住只发一次，
+    /// 之后仍会照常发 Released（上层的 held latch 会把它吞掉）。
+    TriggerCombined,
     /// Shift（或未来配置项指定的修饰键）按下边沿。可在录音过程中任何时刻产生；
     /// 上层据此切换到翻译输出管线。详见 issue #4。
     TranslationModifierPressed,
@@ -39,6 +43,7 @@ mod tests {
         Shared {
             binding: RwLock::new(HotkeyBinding::default()),
             trigger_held: AtomicBool::new(true),
+            trigger_companion_seen: AtomicBool::new(false),
             qa_trigger: RwLock::new(None),
             qa_trigger_held: AtomicBool::new(true),
             translation_trigger: RwLock::new(None),
@@ -114,6 +119,9 @@ struct Shared {
     binding: RwLock<HotkeyBinding>,
     /// 触发键当前是否处于"按住"状态。OS 自动重复事件用此去重。
     trigger_held: AtomicBool,
+    /// 本次按住期间是否已经发过 TriggerCombined。每次 Pressed 边沿重置为 false，
+    /// 保证「按住触发键连按好几个普通键」只撤销一次。
+    trigger_companion_seen: AtomicBool,
     qa_trigger: RwLock<Option<HotkeyTrigger>>,
     qa_trigger_held: AtomicBool,
     translation_trigger: RwLock<Option<HotkeyTrigger>>,
@@ -206,6 +214,7 @@ where
     let shared = Arc::new(Shared {
         binding: RwLock::new(binding),
         trigger_held: AtomicBool::new(false),
+        trigger_companion_seen: AtomicBool::new(false),
         qa_trigger: RwLock::new(None),
         qa_trigger_held: AtomicBool::new(false),
         translation_trigger: RwLock::new(None),
@@ -598,6 +607,9 @@ mod platform {
 
         if is_active && !was_held {
             ctx.shared.trigger_held.store(true, Ordering::SeqCst);
+            ctx.shared
+                .trigger_companion_seen
+                .store(false, Ordering::SeqCst);
             send_or_log(&ctx.tx, HotkeyEvent::Pressed { at: std::time::Instant::now() });
         } else if !is_active && was_held {
             ctx.shared.trigger_held.store(false, Ordering::SeqCst);
@@ -633,7 +645,30 @@ mod platform {
         let keycode = unsafe { CGEventGetIntegerValueField(event, KEYBOARD_EVENT_KEYCODE) };
         if keycode == ESC_KEYCODE {
             send_or_log(&ctx.tx, HotkeyEvent::Cancelled);
+            return;
         }
+        note_companion_key_down(ctx);
+    }
+
+    /// 触发键按住期间按下任意普通键 = 用户在打组合键（Option+任意字母/数字键、Option+Tab…），
+    /// 不是想说话 —— 发一次 TriggerCombined 让上层撤销这次按下。
+    ///
+    /// macOS 的修饰键走 FLAGS_CHANGED、不会进 KEY_DOWN，所以叠加 Shift（翻译修饰键）
+    /// 或 Cmd 不会被误判成组合键；只有真正的字符 / 功能键才算。OS 自动重复与「按住
+    /// 触发键连按多个键」由 companion latch 收敛成一次。
+    fn note_companion_key_down(ctx: &CallbackContext) {
+        if !ctx.shared.trigger_held.load(Ordering::SeqCst) {
+            return;
+        }
+        if ctx
+            .shared
+            .trigger_companion_seen
+            .swap(true, Ordering::SeqCst)
+        {
+            return;
+        }
+        log::info!("[hotkey] 触发键与其他键组合按下 —— 撤销本次触发");
+        send_or_log(&ctx.tx, HotkeyEvent::TriggerCombined);
     }
 
     fn trigger_to_keycode(trigger: HotkeyTrigger) -> i64 {
@@ -681,6 +716,7 @@ mod platform {
                     keys: None,
                 }),
                 trigger_held: AtomicBool::new(false),
+                trigger_companion_seen: AtomicBool::new(false),
                 qa_trigger: RwLock::new(None),
                 qa_trigger_held: AtomicBool::new(false),
                 translation_trigger: RwLock::new(None),
@@ -762,6 +798,31 @@ mod platform {
                 ]
             );
         }
+
+        // Option+任意字母/数字键这类组合键：按住期间的普通键按下只撤销一次，且必须真的按住了触发键。
+        #[test]
+        fn mac_companion_key_down_aborts_trigger_once_per_hold() {
+            let shared = shared(HotkeyTrigger::LeftOption);
+            let (ctx, rx) = callback_context(Arc::clone(&shared));
+
+            // 没按住触发键时的普通打字：与听写无关，不发事件。
+            note_companion_key_down(&ctx);
+            assert!(drain(&rx).is_empty());
+
+            shared.trigger_held.store(true, Ordering::SeqCst);
+            // OS 自动重复 / 按住触发键连按多个键，都只撤销一次。
+            note_companion_key_down(&ctx);
+            note_companion_key_down(&ctx);
+            assert_eq!(drain(&rx), vec![HotkeyEvent::TriggerCombined]);
+
+            // 下一次 Pressed 边沿会重置 latch（handle_flags_changed 里做），下一轮组合键
+            // 才能再次撤销 —— 否则第二次组合键会被当成正常听写。
+            shared
+                .trigger_companion_seen
+                .store(false, Ordering::SeqCst);
+            note_companion_key_down(&ctx);
+            assert_eq!(drain(&rx), vec![HotkeyEvent::TriggerCombined]);
+        }
     }
 }
 
@@ -796,6 +857,9 @@ mod platform {
 
     const VK_ESCAPE: u32 = 0x1B;
     const VK_SHIFT: u32 = 0x10;
+    const VK_CONTROL: u32 = 0x11;
+    const VK_MENU: u32 = 0x12;
+    const VK_CAPITAL: u32 = 0x14;
     const VK_LSHIFT: u32 = 0xA0;
     const VK_RSHIFT: u32 = 0xA1;
     const VK_LCONTROL: u32 = 0xA2;
@@ -960,6 +1024,10 @@ mod platform {
         let pressed = matches!(message, WM_KEYDOWN | WM_SYSKEYDOWN);
         crate::side_aware_combo::platform::dispatch_vk(vk_code, pressed);
 
+        if pressed && !is_modifier_vk(vk_code) {
+            note_companion_key_down(ctx);
+        }
+
         // Shift（任一侧）= 翻译模式修饰键。在录音过程中任意时刻按下都生效。详见 issue #4。
         if matches!(vk_code, VK_SHIFT | VK_LSHIFT | VK_RSHIFT) {
             match message {
@@ -1011,6 +1079,9 @@ mod platform {
             WM_KEYDOWN | WM_SYSKEYDOWN => {
                 let was_held = ctx.shared.trigger_held.swap(true, Ordering::SeqCst);
                 if !was_held {
+                    ctx.shared
+                        .trigger_companion_seen
+                        .store(false, Ordering::SeqCst);
                     log::info!("[hotkey] Windows trigger pressed vk={vk_code}");
                     send_or_log(&ctx.tx, HotkeyEvent::Pressed { at: std::time::Instant::now() });
                 }
@@ -1025,6 +1096,43 @@ mod platform {
             _ => {}
         }
         true
+    }
+
+    /// 触发键按住期间按下任意非修饰键 = 用户在打组合键（Alt+Tab / Alt+F4…），不是想
+    /// 说话 —— 发一次 TriggerCombined 让上层撤销这次按下。修饰键本身不算「其他键」，
+    /// 与 macOS 侧（修饰键走 FLAGS_CHANGED、不进 KEY_DOWN）保持同一语义：叠加 Shift
+    /// （翻译修饰键）或 Ctrl 不会撤销听写。
+    fn note_companion_key_down(ctx: &CallbackContext) {
+        if !ctx.shared.trigger_held.load(Ordering::SeqCst) {
+            return;
+        }
+        if ctx
+            .shared
+            .trigger_companion_seen
+            .swap(true, Ordering::SeqCst)
+        {
+            return;
+        }
+        log::info!("[hotkey] Windows 触发键与其他键组合按下 —— 撤销本次触发");
+        send_or_log(&ctx.tx, HotkeyEvent::TriggerCombined);
+    }
+
+    fn is_modifier_vk(vk_code: u32) -> bool {
+        matches!(
+            vk_code,
+            VK_SHIFT
+                | VK_LSHIFT
+                | VK_RSHIFT
+                | VK_CONTROL
+                | VK_LCONTROL
+                | VK_RCONTROL
+                | VK_MENU
+                | VK_LMENU
+                | VK_RMENU
+                | VK_LWIN
+                | VK_RWIN
+                | VK_CAPITAL
+        )
     }
 
     fn handle_optional_modifier_trigger(
@@ -1093,6 +1201,7 @@ mod platform {
                     keys: None,
                 }),
                 trigger_held: AtomicBool::new(false),
+                trigger_companion_seen: AtomicBool::new(false),
                 qa_trigger: RwLock::new(None),
                 qa_trigger_held: AtomicBool::new(false),
                 translation_trigger: RwLock::new(None),
@@ -1227,6 +1336,21 @@ mod platform {
                 WM_KEYDOWN
             ));
             assert_eq!(edge_names(drain(&right_alt_rx)), vec!["pressed"]);
+        }
+
+        // Alt+任意字母/数字键这类组合键：普通键按下撤销本次触发；修饰键叠加（Shift = 翻译模式）不算。
+        #[test]
+        fn windows_companion_key_down_aborts_trigger_but_modifiers_do_not() {
+            let shared = shared(HotkeyTrigger::LeftOption);
+            let (ctx, rx) = callback_context(shared);
+
+            dispatch_keyboard_event(&ctx, VK_LMENU, WM_KEYDOWN);
+            dispatch_keyboard_event(&ctx, VK_LSHIFT, WM_KEYDOWN);
+            assert!(!drain(&rx).contains(&HotkeyEvent::TriggerCombined));
+
+            dispatch_keyboard_event(&ctx, 0x41, WM_KEYDOWN); // A
+            dispatch_keyboard_event(&ctx, 0x41, WM_KEYDOWN); // OS 自动重复
+            assert_eq!(drain(&rx), vec![HotkeyEvent::TriggerCombined]);
         }
 
         #[test]

@@ -363,8 +363,27 @@ pub(super) fn less_computer_modifier_bridge_loop(inner: Arc<Inner>, rx: mpsc::Re
                 });
             }
             HotkeyEvent::Cancelled => cancel_session(&inner_cloned),
+            HotkeyEvent::TriggerCombined => cancel_less_computer_press(&inner_cloned),
             HotkeyEvent::TranslationModifierPressed | HotkeyEvent::QaShortcutPressed => {}
         }
+    }
+}
+
+/// Less Computer 触发键被当修饰键用（Option+任意字母/数字键之类）：撤销这次按下开出的语音会话。
+/// handle_less_computer_pressed 只在 Idle 时开会话，所以此刻还在跑的 voice_agent
+/// 会话必然就是这次按下开出来的；其他情况（按下被忽略）什么都不动。
+fn cancel_less_computer_press(inner: &Arc<Inner>) {
+    let (phase, voice_agent) = {
+        let state = inner.state.lock();
+        (state.phase, state.voice_agent)
+    };
+    if !voice_agent || !matches!(phase, SessionPhase::Starting | SessionPhase::Listening) {
+        return;
+    }
+    log::info!("[less-computer] 触发键与其他键组合按下 —— 取消本次按下开出的会话");
+    cancel_session(inner);
+    if let Some(app) = inner.app.lock().clone() {
+        crate::hide_less_computer_glow(&app);
     }
 }
 
@@ -1038,6 +1057,9 @@ pub(super) fn hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<HotkeyEve
             }
             HotkeyEvent::Cancelled => {
                 cancel_session(&inner_cloned);
+            }
+            HotkeyEvent::TriggerCombined => {
+                handle_trigger_combined(&inner_cloned);
             }
             HotkeyEvent::TranslationModifierPressed => {
                 let translation_hotkey = inner_cloned.prefs.get().translation_hotkey;
