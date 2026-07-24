@@ -19,6 +19,16 @@ const HOTKEY_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(25
 /// 时长以热键事件产生时携带的时间戳计算，避免串行 bridge 的排队延迟改变用户的物理按住时长。
 /// 350ms 是「点一下 vs 明显按住」的自然分界。
 const AUTO_HOLD_THRESHOLD: std::time::Duration = std::time::Duration::from_millis(350);
+/// modifier-only 触发键（Option / 右 Ctrl…）按下后的「组合键仲裁窗口」。
+///
+/// 按下这一刻还分不清用户是想说话，还是要打 Option+任意字母/数字键：修饰键的按下边沿两者完全一样。
+/// 所以先等这么久再开会话——期间监听器若报告叠加了普通键，这次按下整条作废，麦克风
+/// 不开、胶囊不闪、也不烧一次 ASR 建连。代价是听写起录晚这么多，取 150ms：足以覆盖
+/// 绝大多数组合键的「修饰键→普通键」间隔，又低于人从按键到开口的反应时间（>250ms），
+/// 不会吃掉首字。窗口没盖住的慢速组合键（按住 Option 半秒再按 Tab）由 TriggerCombined
+/// 事后撤销兜底，见 handle_trigger_combined。
+pub(super) const COMBO_ARBITRATION_GRACE: std::time::Duration =
+    std::time::Duration::from_millis(150);
 const STREAMING_INSERT_FLUSH_INTERVAL: std::time::Duration = std::time::Duration::from_millis(12);
 
 #[cfg(target_os = "macos")]
@@ -853,11 +863,45 @@ pub(super) async fn handle_pressed(inner: &Arc<Inner>, pressed_at: std::time::In
 
 /// 由「这一次热键按下」开一条会话，并记下这个事实。TriggerCombined 只撤销带着这个
 /// 标记的会话（见 handle_trigger_combined）。
+///
+/// 开录之前先过一遍组合键仲裁窗口：命中就当这次按下没发生过——不开麦、不弹胶囊。
 async fn begin_session_from_press(inner: &Arc<Inner>) {
+    if press_resolves_to_combo(inner).await {
+        // 按住态一并清掉：随后必然到来的 Released 会被 handle_released_edge 的
+        // was_held 检查吞掉，不会走 Auto 短按锁存。
+        inner.hotkey_trigger_held.store(false, Ordering::SeqCst);
+        *inner.hotkey_press_at.lock() = None;
+        return;
+    }
     inner
         .hotkey_press_began_session
         .store(true, Ordering::SeqCst);
     let _ = begin_session(inner).await;
+}
+
+/// 组合键仲裁：等 COMBO_ARBITRATION_GRACE，再问监听器这次按住有没有叠加普通键。
+///
+/// 只对 modifier-only 触发键等待 —— 自定义组合键（Cmd+Shift+D 之类）本身就没有歧义，
+/// 让它白等这一下纯粹是掉延迟。等待放在防抖 / 冷却判定之后，那些判定用的仍是未被本
+/// 窗口推迟的时刻（尤其别把「排队接力」窗口挤掉，见 is_queued_chain_press）。
+async fn press_resolves_to_combo(inner: &Arc<Inner>) -> bool {
+    let binding = inner.prefs.get().dictation_hotkey;
+    if crate::shortcut_binding::legacy_modifier_trigger(&binding).is_none() {
+        return false;
+    }
+    tokio::time::sleep(COMBO_ARBITRATION_GRACE).await;
+    let combined = inner
+        .hotkey
+        .lock()
+        .as_ref()
+        .is_some_and(|monitor| monitor.trigger_combined_since_press());
+    if combined {
+        log::info!(
+            "[coord] 触发键在 {}ms 仲裁窗口内叠加了其他键 —— 本次按下作废，不开录音",
+            COMBO_ARBITRATION_GRACE.as_millis()
+        );
+    }
+    combined
 }
 
 /// 触发键（modifier-only 热键）按住期间又按了普通键 —— 用户在打 Option+任意字母/数字键这类组合键，
@@ -3771,6 +3815,49 @@ mod tests {
         ChineseScriptPreference, CorrectionRule, DictationSession, InsertStatus, PolishMode,
     };
     use uuid::Uuid;
+
+    fn coordinator_with_dictation_hotkey(
+        binding: crate::types::ShortcutBinding,
+    ) -> super::super::Coordinator {
+        let coordinator = super::super::Coordinator::new();
+        coordinator
+            .inner
+            .prefs
+            .set(crate::types::UserPreferences {
+                dictation_hotkey: binding,
+                ..Default::default()
+            })
+            .unwrap();
+        coordinator
+    }
+
+    // modifier-only 触发键：按下后必须先过仲裁窗口，才能知道这是说话还是
+    // Option+任意字母/数字键。
+    #[tokio::test]
+    async fn modifier_only_press_waits_out_the_arbitration_window() {
+        let coordinator = coordinator_with_dictation_hotkey(crate::types::ShortcutBinding {
+            primary: "LeftOption".into(),
+            modifiers: vec![],
+        });
+
+        let started = std::time::Instant::now();
+        // 测试里没装监听器（inner.hotkey = None）→ 读不到叠加标志，按「不是组合键」放行。
+        assert!(!super::press_resolves_to_combo(&coordinator.inner).await);
+        assert!(started.elapsed() >= super::COMBO_ARBITRATION_GRACE);
+    }
+
+    // 自定义组合键（Cmd+Shift+D）没有歧义 —— 白等这一下就是纯掉延迟。
+    #[tokio::test]
+    async fn custom_combo_press_skips_the_arbitration_window() {
+        let coordinator = coordinator_with_dictation_hotkey(crate::types::ShortcutBinding {
+            primary: "D".into(),
+            modifiers: vec!["cmd".into(), "shift".into()],
+        });
+
+        let started = std::time::Instant::now();
+        assert!(!super::press_resolves_to_combo(&coordinator.inner).await);
+        assert!(started.elapsed() < super::COMBO_ARBITRATION_GRACE);
+    }
 
     #[test]
     fn silent_retry_replaces_initial_asr_attribution() {

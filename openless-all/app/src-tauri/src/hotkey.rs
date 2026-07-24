@@ -112,6 +112,12 @@ pub trait HotkeyAdapter: Send + Sync {
         translation_trigger: Option<HotkeyTrigger>,
     );
     fn reset_held_state(&self);
+    /// 本次按住期间，监听器是否已经看到触发键被叠加了普通键。上层的「仲裁窗口」
+    /// 按下后先等一小会儿再读它，命中就整条按下作废（麦克风都不用开）。
+    /// 没有键盘监听器的平台（Linux/fcitx5）恒为 false。
+    fn trigger_combined_since_press(&self) -> bool {
+        false
+    }
     fn shutdown(&self) {}
 }
 
@@ -167,6 +173,10 @@ impl HotkeyMonitor {
 
     pub fn reset_held_state(&self) {
         self.adapter.reset_held_state();
+    }
+
+    pub fn trigger_combined_since_press(&self) -> bool {
+        self.adapter.trigger_combined_since_press()
     }
 
     pub fn capability() -> HotkeyCapability {
@@ -357,6 +367,12 @@ mod platform {
 
         fn reset_held_state(&self) {
             reset_shared_held_state(&self.shared);
+        }
+
+        fn trigger_combined_since_press(&self) -> bool {
+            self.shared
+                .trigger_companion_seen
+                .load(Ordering::SeqCst)
         }
 
         fn shutdown(&self) {
@@ -799,7 +815,8 @@ mod platform {
             );
         }
 
-        // Option+任意字母/数字键这类组合键：按住期间的普通键按下只撤销一次，且必须真的按住了触发键。
+        // Option+任意字母/数字键这类组合键：按住期间的普通键按下只撤销一次，
+        // 且必须真的按住了触发键。
         #[test]
         fn mac_companion_key_down_aborts_trigger_once_per_hold() {
             let shared = shared(HotkeyTrigger::LeftOption);
@@ -915,6 +932,12 @@ mod platform {
 
         fn reset_held_state(&self) {
             reset_shared_held_state(&self.shared);
+        }
+
+        fn trigger_combined_since_press(&self) -> bool {
+            self.shared
+                .trigger_companion_seen
+                .load(Ordering::SeqCst)
         }
 
         fn shutdown(&self) {
@@ -1338,7 +1361,8 @@ mod platform {
             assert_eq!(edge_names(drain(&right_alt_rx)), vec!["pressed"]);
         }
 
-        // Alt+任意字母/数字键这类组合键：普通键按下撤销本次触发；修饰键叠加（Shift = 翻译模式）不算。
+        // Alt+任意字母/数字键这类组合键：普通键按下撤销本次触发；
+        // 修饰键叠加（Shift = 翻译模式）不算。
         #[test]
         fn windows_companion_key_down_aborts_trigger_but_modifiers_do_not() {
             let shared = shared(HotkeyTrigger::LeftOption);
