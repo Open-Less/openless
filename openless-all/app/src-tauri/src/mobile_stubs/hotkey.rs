@@ -12,6 +12,7 @@ pub enum HotkeyEvent {
     Pressed { at: Instant },
     Released { at: Instant },
     Cancelled,
+    TriggerCombined,
     TranslationModifierPressed,
     QaShortcutPressed,
 }
@@ -43,6 +44,12 @@ impl HotkeyMonitor {
     }
 
     pub fn reset_held_state(&self) {}
+
+    /// 移动端没有键盘监听器，永远「没看到叠加的普通键」——组合键仲裁窗口在这里
+    /// 恒等于放行（`press_resolves_to_combo` 也拿不到 monitor，双保险）。
+    pub fn trigger_combined_since_press(&self) -> bool {
+        false
+    }
 
     pub fn capability() -> HotkeyCapability {
         HotkeyCapability::current()
