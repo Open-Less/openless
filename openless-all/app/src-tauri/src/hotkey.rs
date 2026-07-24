@@ -200,6 +200,22 @@ fn send_cancel_or_log(tx: &Sender<()>) {
     }
 }
 
+/// 会话激活期间（胶囊显示录音/转写/润色中）Esc 由 OpenLess 独占：tap/hook 吞掉
+/// keydown 不透传宿主应用。否则一次 Esc 双重生效——既取消 OpenLess 会话，又触发
+/// 宿主应用自己的 Esc 语义（如取消 Claude 正在生成的回复）。对照输入法的行为：
+/// 组合窗激活时 Esc 只取消候选词、宿主应用收不到。keyup 不吞：宿主应用几乎都在
+/// keydown 上响应 Esc，孤儿 keyup 无害，且窗口期内会话结束时吞 up 不吞 down 反而
+/// 会造成不成对。由 coordinator 的 emit_capsule 在胶囊状态变化时更新。
+static ESC_EXCLUSIVE: AtomicBool = AtomicBool::new(false);
+
+pub fn set_esc_exclusive(active: bool) {
+    ESC_EXCLUSIVE.store(active, std::sync::atomic::Ordering::SeqCst);
+}
+
+fn esc_exclusive() -> bool {
+    ESC_EXCLUSIVE.load(std::sync::atomic::Ordering::SeqCst)
+}
+
 type StartupTx<T> = mpsc::Sender<Result<T, HotkeyInstallError>>;
 
 struct ListenerThread<T> {
@@ -300,7 +316,7 @@ mod platform {
     use std::sync::Arc;
 
     use super::{
-        install_error, reset_shared_held_state, send_cancel_or_log, send_or_log,
+        esc_exclusive, install_error, reset_shared_held_state, send_cancel_or_log, send_or_log,
         start_listener_thread, update_shared_binding, update_shared_modifier_shortcuts,
         HotkeyAdapter, HotkeyEvent, Shared, StartupTx,
     };
@@ -560,6 +576,11 @@ mod platform {
                 handle_key_down(ctx, event);
                 let keycode = unsafe { CGEventGetIntegerValueField(event, KEYBOARD_EVENT_KEYCODE) };
                 crate::side_aware_combo::platform::dispatch_keycode(keycode, false, 0, true);
+                // 会话激活期间独占消费 Esc：返回 null 删除事件（active tap），宿主应用
+                // 收不到，避免「取消会话」与宿主 Esc 语义双重生效。见 esc_exclusive 注释。
+                if keycode == ESC_KEYCODE && esc_exclusive() {
+                    return std::ptr::null_mut();
+                }
             }
             KEY_UP => {
                 let keycode = unsafe { CGEventGetIntegerValueField(event, KEYBOARD_EVENT_KEYCODE) };
@@ -807,7 +828,7 @@ mod platform {
     };
 
     use super::{
-        install_error, reset_shared_held_state, send_cancel_or_log, send_or_log,
+        esc_exclusive, install_error, reset_shared_held_state, send_cancel_or_log, send_or_log,
         start_listener_thread, update_shared_binding, update_shared_modifier_shortcuts,
         HotkeyAdapter, HotkeyEvent, Shared, StartupTx,
     };
@@ -988,7 +1009,9 @@ mod platform {
     fn dispatch_keyboard_event(ctx: &CallbackContext, vk_code: u32, message: usize) -> bool {
         if vk_code == VK_ESCAPE && (message == WM_KEYDOWN || message == WM_SYSKEYDOWN) {
             send_cancel_or_log(&ctx.cancel_tx);
-            return false;
+            // 会话激活期间独占消费 Esc（返回 true → LRESULT(1) 吞掉），宿主应用收不到，
+            // 避免「取消会话」与宿主 Esc 语义双重生效。见 esc_exclusive 注释。
+            return esc_exclusive();
         }
 
         let pressed = matches!(message, WM_KEYDOWN | WM_SYSKEYDOWN);

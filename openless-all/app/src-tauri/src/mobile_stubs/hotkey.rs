@@ -15,6 +15,9 @@ pub enum HotkeyEvent {
     QaShortcutPressed,
 }
 
+/// Mobile 无全局键盘监听，Esc 独占为 no-op。
+pub fn set_esc_exclusive(_active: bool) {}
+
 pub struct HotkeyMonitor;
 
 impl HotkeyMonitor {
