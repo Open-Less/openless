@@ -76,15 +76,17 @@ export function Overview({ onOpenHistory }: OverviewProps) {
   }, []);
 
   // 年度活动热力图数据（独立于历史内容存储，清空历史不影响）。加载失败仅隐藏卡片。
+  // 移动端跳过 IPC 与渲染（issue #861）：热力图横向宽度固定，窄屏易溢出并拖慢 WebView。
   const [activity, setActivity] = useState<ActivityDay[] | null>(null);
   useEffect(() => {
+    if (mobile) return;
     getActivityStats()
       .then(setActivity)
       .catch(error => {
         console.error('[overview] failed to load activity stats', error);
         setActivity(null);
       });
-  }, []);
+  }, [mobile]);
 
   const refreshCredentials = useCallback(() => {
     const requestSeq = credentialsRequestSeq.current + 1;
@@ -204,10 +206,14 @@ export function Overview({ onOpenHistory }: OverviewProps) {
 
       {/* 年度活动热力图（8starlabs Heatmap 规格）：过去一年每日听写次数。
           数据来自独立的 activity 计数存储，与历史保留策略解耦；
-          可在设置 → 通用 → 外观 里单独关闭。 */}
-      {prefs?.showOverviewActivityHeatmap !== false && activity && activity.length > 0 && (
-        <ActivityHeatmapCard activity={activity} />
-      )}
+          可在设置 → 通用 → 外观 里单独关闭。
+          移动端（useMobileLayout）不渲染，避免窄屏横向溢出（issue #861）。 */}
+      {!mobile &&
+        prefs?.showOverviewActivityHeatmap !== false &&
+        activity &&
+        activity.length > 0 && (
+          <ActivityHeatmapCard activity={activity} />
+        )}
 
       {/* 底部一行 = flex:1 撑满剩余高度（父 wrapper 是 display:flex/column）。
           只有「最近识别」内部允许滚动；其他卡片按内容自然高度，不破裂底部圆角。
