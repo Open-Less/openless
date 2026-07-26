@@ -196,6 +196,18 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
   const os = detectOS();
   const unifiedBailian = committedAsrProvider === 'bailian' && os !== 'android';
   const [bailianModel, setBailianModel] = useState('');
+  const [volcengineAuthMode, setVolcengineAuthMode] = useState<'app_id_token' | 'api_key'>('app_id_token');
+
+  useEffect(() => {
+    if (committedAsrProvider === 'volcengine') {
+      readCredential('volcengine.auth_mode', 'volcengine')
+        .then(v => {
+          if (v === 'api_key') setVolcengineAuthMode('api_key');
+          else setVolcengineAuthMode('app_id_token');
+        })
+        .catch(() => setVolcengineAuthMode('app_id_token'));
+    }
+  }, [committedAsrProvider]);
 
   useEffect(() => {
     if (committedAsrProvider !== 'bailian') setBailianModel('');
@@ -474,17 +486,37 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
         </SettingRow>
         {committedAsrProvider === 'volcengine' ? (
           <>
+            <SettingRow label={t('settings.providers.volcengineAuthModeLabel')}>
+              <SelectLite
+                value={volcengineAuthMode}
+                onChange={(v) => {
+                  const mode = v as 'app_id_token' | 'api_key';
+                  setVolcengineAuthMode(mode);
+                  void setCredential('volcengine.auth_mode', mode, committedAsrProvider);
+                }}
+                options={[
+                  { value: 'app_id_token', label: t('settings.providers.volcengineAuthModeAppIdToken') },
+                  { value: 'api_key', label: t('settings.providers.volcengineAuthModeApiKey') },
+                ]}
+                ariaLabel={t('settings.providers.volcengineAuthModeLabel')}
+                style={{ ...inputStyle, width: '100%', maxWidth: mobile ? '100%' : 260 }}
+              />
+            </SettingRow>
+            {volcengineAuthMode === 'app_id_token' && (
+              <CredentialField
+                key={`${committedAsrProvider}:app_key`}
+                label={t('settings.providers.volcengineAppKeyLabel')}
+                account="volcengine.app_key"
+                provider={committedAsrProvider}
+                mono
+                mask
+              />
+            )}
             <CredentialField
-              key={`${committedAsrProvider}:app_key`}
-              label={t('settings.providers.volcengineAppKeyLabel')}
-              account="volcengine.app_key"
-              provider={committedAsrProvider}
-              mono
-              mask
-            />
-            <CredentialField
-              key={`${committedAsrProvider}:access_key`}
-              label={t('settings.providers.volcengineAccessKeyLabel')}
+              key={`${committedAsrProvider}:access_key:${volcengineAuthMode}`}
+              label={volcengineAuthMode === 'api_key'
+                ? t('settings.providers.volcengineApiKeyLabel')
+                : t('settings.providers.volcengineAccessKeyLabel')}
               account="volcengine.access_key"
               provider={committedAsrProvider}
               mono
@@ -498,7 +530,9 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
               mono
               placeholder={ASR_DEFAULT_RESOURCE_ID} defaultValue={ASR_DEFAULT_RESOURCE_ID} />
             <div style={{ marginTop: 2, fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.6 }}>
-              {t('settings.providers.volcengineMappingNote')}
+              {volcengineAuthMode === 'api_key'
+                ? t('settings.providers.volcengineApiKeyNote')
+                : t('settings.providers.volcengineMappingNote')}
             </div>
           </>
         ) : committedAsrProvider === 'local-qwen3' || committedAsrProvider === 'foundry-local-whisper' || committedAsrProvider === 'sherpa-onnx-local' || committedAsrProvider === 'apple-speech' ? (

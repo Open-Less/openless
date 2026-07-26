@@ -280,6 +280,7 @@ mod tests {
             volcengine_app_key: Some("app".into()),
             volcengine_access_key: Some("access".into()),
             volcengine_resource_id: Some("resource".into()),
+            volcengine_auth_mode: None, // 默认 AppIdToken 模式
             ..snapshot()
         };
         assert!(asr_configured_for_provider("volcengine", &volcengine));

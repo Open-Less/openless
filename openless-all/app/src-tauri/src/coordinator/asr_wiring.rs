@@ -119,11 +119,25 @@ pub(super) fn ensure_asr_credentials() -> Result<(), String> {
             Ok(())
         }
         AsrPreflightCredential::VolcAppKey => {
+            use crate::asr::volcengine::VolcengineAuthMode;
             let creds = read_volc_credentials();
-            if creds.app_id.trim().is_empty() || creds.access_token.trim().is_empty() {
-                Err("请先在设置中填写火山引擎 ASR App Key 和 Access Key".to_string())
-            } else {
+            let auth_ok = match creds.auth_mode {
+                VolcengineAuthMode::AppIdToken => {
+                    !creds.app_id.trim().is_empty() && !creds.access_token.trim().is_empty()
+                }
+                VolcengineAuthMode::ApiKey => !creds.access_token.trim().is_empty(),
+            };
+            if auth_ok {
                 Ok(())
+            } else {
+                match creds.auth_mode {
+                    VolcengineAuthMode::AppIdToken => {
+                        Err("请先在设置中填写火山引擎 ASR App Key 和 Access Key".to_string())
+                    }
+                    VolcengineAuthMode::ApiKey => {
+                        Err("请先在设置中填写火山方舟语音模型 API Key".to_string())
+                    }
+                }
             }
         }
     }

@@ -22,9 +22,19 @@ pub fn get_credentials() -> CredentialsStatus {
 }
 
 fn volcengine_configured(snap: &CredentialsSnapshot) -> bool {
-    configured(&snap.volcengine_app_key)
-        && configured(&snap.volcengine_access_key)
-        && configured(&snap.volcengine_resource_id)
+    use crate::asr::volcengine::VolcengineAuthMode;
+    let mode = snap
+        .volcengine_auth_mode
+        .as_deref()
+        .map(VolcengineAuthMode::from_str)
+        .unwrap_or(VolcengineAuthMode::AppIdToken);
+    let auth_ok = match mode {
+        VolcengineAuthMode::AppIdToken => {
+            configured(&snap.volcengine_app_key) && configured(&snap.volcengine_access_key)
+        }
+        VolcengineAuthMode::ApiKey => configured(&snap.volcengine_access_key),
+    };
+    auth_ok && configured(&snap.volcengine_resource_id)
 }
 
 pub(crate) fn asr_configured_for_provider(provider: &str, snap: &CredentialsSnapshot) -> bool {
@@ -185,6 +195,7 @@ pub fn set_credential(
             CredentialAccount::VolcengineAppKey
                 | CredentialAccount::VolcengineAccessKey
                 | CredentialAccount::VolcengineResourceId
+                | CredentialAccount::VolcengineAuthMode
                 | CredentialAccount::AsrApiKey
                 | CredentialAccount::AsrEndpoint
                 | CredentialAccount::AsrModel
@@ -307,6 +318,7 @@ fn parse_account(s: &str) -> Result<CredentialAccount, String> {
         "volcengine.app_key" => Ok(CredentialAccount::VolcengineAppKey),
         "volcengine.access_key" => Ok(CredentialAccount::VolcengineAccessKey),
         "volcengine.resource_id" => Ok(CredentialAccount::VolcengineResourceId),
+        "volcengine.auth_mode" => Ok(CredentialAccount::VolcengineAuthMode),
         "ark.api_key" => Ok(CredentialAccount::ArkApiKey),
         "ark.model_id" => Ok(CredentialAccount::ArkModelId),
         "ark.endpoint" => Ok(CredentialAccount::ArkEndpoint),

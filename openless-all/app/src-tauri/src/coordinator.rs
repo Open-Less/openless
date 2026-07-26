@@ -2481,6 +2481,7 @@ fn read_stepfun_realtime_credentials(
 }
 
 fn read_volc_credentials() -> VolcengineCredentials {
+    use crate::asr::volcengine::VolcengineAuthMode;
     let app_id = CredentialsVault::get(CredentialAccount::VolcengineAppKey)
         .ok()
         .flatten()
@@ -2494,7 +2495,13 @@ fn read_volc_credentials() -> VolcengineCredentials {
         .flatten()
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| VolcengineCredentials::default_resource_id().to_string());
+    let auth_mode = CredentialsVault::get(CredentialAccount::VolcengineAuthMode)
+        .ok()
+        .flatten()
+        .map(|s| VolcengineAuthMode::from_str(&s))
+        .unwrap_or(VolcengineAuthMode::AppIdToken);
     VolcengineCredentials {
+        auth_mode,
         app_id,
         access_token,
         resource_id,
