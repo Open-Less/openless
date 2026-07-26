@@ -248,12 +248,9 @@ impl BailianRealtimeASR {
         }
         let (send_tx, tail_chunks) = {
             let mut st = self.state.lock();
-            if model_is_8k(&self.credentials.normalized_model())
-                && st.downsample_remainder.len() >= 2
-            {
-                let final_sample = st.downsample_remainder[..2].to_vec();
-                st.audio_scratch.extend_from_slice(&final_sample);
-                st.downsample_remainder.clear();
+            if model_is_8k(&self.credentials.normalized_model()) {
+                let mut remainder = std::mem::take(&mut st.downsample_remainder);
+                flush_downsample_tail(&mut remainder, &mut st.audio_scratch);
             }
             let send_tx = st.send_tx.clone();
             if !st.pending_audio.is_empty() {
@@ -576,6 +573,15 @@ fn downsample_pcm_16k_to_8k(pcm: &[u8]) -> Vec<u8> {
     pcm.chunks_exact(4)
         .flat_map(|pair| [pair[0], pair[1]])
         .collect()
+}
+
+fn flush_downsample_tail(remainder: &mut Vec<u8>, output: &mut Vec<u8>) {
+    // Decimation keeps source indices 0, 2, 4, ... . A final complete i16 in
+    // `remainder` is therefore the next kept sample, not half of an output pair.
+    if remainder.len() >= 2 {
+        output.extend_from_slice(&remainder[..2]);
+    }
+    remainder.clear();
 }
 
 /// 带重叠检测的文本段拼接：如果后一段的开头与前一段的末尾存在重叠，
@@ -1000,6 +1006,27 @@ mod tests {
             .map(|chunk| i16::from_le_bytes([chunk[0], chunk[1]]))
             .collect::<Vec<_>>();
         assert_eq!(samples, vec![1, 3]);
+    }
+
+    #[test]
+    fn downsample_flush_keeps_final_even_index_sample() {
+        let mut remainder = [
+            1_i16.to_le_bytes(),
+            2_i16.to_le_bytes(),
+            3_i16.to_le_bytes(),
+        ]
+        .concat();
+        let complete_len = remainder.len() / 4 * 4;
+        let mut downsampled = downsample_pcm_16k_to_8k(&remainder[..complete_len]);
+        remainder.drain(..complete_len);
+        flush_downsample_tail(&mut remainder, &mut downsampled);
+
+        let samples = downsampled
+            .chunks_exact(2)
+            .map(|chunk| i16::from_le_bytes([chunk[0], chunk[1]]))
+            .collect::<Vec<_>>();
+        assert_eq!(samples, vec![1, 3]);
+        assert!(remainder.is_empty());
     }
 
     #[test]
