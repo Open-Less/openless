@@ -27,10 +27,7 @@ pub async fn validate_provider_credentials(kind: String) -> Result<ProviderCheck
 
 #[tauri::command]
 pub async fn list_provider_models(kind: String) -> Result<ProviderModelsResult, String> {
-    if kind == "asr"
-        && CredentialsVault::get_active_asr() == crate::asr::bailian::PROVIDER_ID
-        && !cfg!(mobile)
-    {
+    if kind == "asr" && CredentialsVault::get_active_asr() == crate::asr::bailian::PROVIDER_ID {
         // 统一「阿里云百炼」入口:三条协议(实时 fun-asr-realtime / 实时 qwen3 /
         // 录音文件 fun-asr-flash)收成一个 provider。百炼各网关都没有模型列表 HTTP
         // 接口,列表是静态的;但先跑一次与「验证」相同的、按当前所选模型对应协议的
@@ -42,20 +39,20 @@ pub async fn list_provider_models(kind: String) -> Result<ProviderModelsResult, 
         return Ok(ProviderModelsResult {
             models: vec![
                 crate::asr::bailian::DEFAULT_MODEL.to_string(),
+                "fun-asr-flash-8k-realtime".to_string(),
                 crate::asr::qwen_realtime::DEFAULT_MODEL.to_string(),
                 "qwen3-asr-flash-realtime-2026-02-10".to_string(),
                 "qwen3-asr-flash-realtime-2025-10-27".to_string(),
                 crate::asr::dashscope_multimodal::DEFAULT_MODEL.to_string(),
+                "qwen3-asr-flash".to_string(),
+                "fun-asr".to_string(),
+                "fun-asr-2025-11-07".to_string(),
+                "fun-asr-2025-08-25".to_string(),
+                "fun-asr-mtl".to_string(),
+                "fun-asr-mtl-2025-08-25".to_string(),
+                "qwen3-asr-flash-filetrans".to_string(),
+                "paraformer-v2".to_string(),
             ],
-        });
-    }
-    if kind == "asr"
-        && CredentialsVault::get_active_asr() == crate::asr::bailian::PROVIDER_ID
-        && cfg!(mobile)
-    {
-        validate_bailian_asr_provider().await?;
-        return Ok(ProviderModelsResult {
-            models: vec![crate::asr::bailian::DEFAULT_MODEL.to_string()],
         });
     }
     if kind == "asr" && CredentialsVault::get_active_asr() == crate::asr::qwen_realtime::PROVIDER_ID
@@ -398,6 +395,13 @@ const DASHSCOPE_ASR_VALIDATE_SAMPLE_URL: &str =
 async fn validate_dashscope_multimodal_asr_provider() -> Result<(), String> {
     // 统一百炼复用配置中的区域/工作空间主机，并推导 multimodal 的 https 路径。
     // 隐藏别名仍按原有完整 endpoint 读取。
+    let model = CredentialsVault::get(CredentialAccount::AsrModel)
+        .map_err(|e| e.to_string())?
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| crate::asr::dashscope_multimodal::DEFAULT_MODEL.to_string());
+    crate::coordinator::validate_dashscope_multimodal_model(&model)?;
+    let protocol = crate::asr::dashscope_multimodal::protocol_for_model(&model)
+        .unwrap_or(crate::asr::dashscope_multimodal::DashScopeBatchProtocol::Multimodal);
     let (api_key, base_url) = if crate::coordinator::unified_bailian_is_active() {
         let api_key = CredentialsVault::get(CredentialAccount::AsrApiKey)
             .map_err(|e| e.to_string())?
@@ -406,39 +410,53 @@ async fn validate_dashscope_multimodal_asr_provider() -> Result<(), String> {
         let endpoint = CredentialsVault::get(CredentialAccount::AsrEndpoint)
             .map_err(|e| e.to_string())?
             .unwrap_or_default();
-        let endpoint = crate::coordinator::derive_bailian_endpoint(
-            &endpoint,
-            crate::coordinator::BailianEndpointProtocol::Multimodal,
-        )?;
+        let endpoint_protocol = match protocol {
+            crate::asr::dashscope_multimodal::DashScopeBatchProtocol::Multimodal => {
+                crate::coordinator::BailianEndpointProtocol::Multimodal
+            }
+            crate::asr::dashscope_multimodal::DashScopeBatchProtocol::AsyncTranscription => {
+                crate::coordinator::BailianEndpointProtocol::AsyncTranscription
+            }
+        };
+        let endpoint = crate::coordinator::derive_bailian_endpoint(&endpoint, endpoint_protocol)?;
         (api_key, endpoint)
     } else {
         let config = read_openai_provider_config("asr")?;
         (config.api_key, config.base_url)
     };
-    let model = CredentialsVault::get(CredentialAccount::AsrModel)
-        .map_err(|e| e.to_string())?
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| crate::asr::dashscope_multimodal::DEFAULT_MODEL.to_string());
-    crate::coordinator::validate_dashscope_multimodal_model(&model)?;
+    if protocol == crate::asr::dashscope_multimodal::DashScopeBatchProtocol::AsyncTranscription {
+        let asr = crate::asr::DashScopeMultimodalASR::new(api_key, base_url, model);
+        return match tokio::time::timeout(
+            std::time::Duration::from_secs(660),
+            asr.transcribe_async_url(DASHSCOPE_ASR_VALIDATE_SAMPLE_URL),
+        )
+        .await
+        {
+            Ok(result) => result.map(|_| ()).map_err(|error| error.to_string()),
+            Err(_) => Err("providerRequestTimeout".to_string()),
+        };
+    }
     let url = crate::asr::dashscope_multimodal::generation_url(&base_url)
         .map_err(|_| "endpointInvalid".to_string())?;
-    let body = serde_json::json!({
-        "model": model,
-        "input": { "messages": [{ "role": "user", "content": [{
-            "type": "input_audio",
-            "input_audio": { "data": DASHSCOPE_ASR_VALIDATE_SAMPLE_URL },
-        }]}]},
-        "parameters": { "format": "wav", "sample_rate": "16000" },
-    });
-    let client = http_client_builder(&url, 20)
-        .build()
-        .map_err(|_| "providerClientInitFailed".to_string())?;
-    let response = client
-        .post(&url)
+    let body = crate::asr::dashscope_multimodal::dashscope_multimodal_body_from_uri(
+        &model,
+        DASHSCOPE_ASR_VALIDATE_SAMPLE_URL,
+    );
+    send_dashscope_multimodal_validation(&api_key, url.as_str(), &body).await
+}
+
+async fn send_dashscope_multimodal_validation(
+    api_key: &str,
+    url: &str,
+    body: &Value,
+) -> Result<(), String> {
+    let response = crate::net::credential_http()
+        .post(url)
         .header("Authorization", format!("Bearer {}", api_key))
         .header("Content-Type", "application/json")
         .header("X-DashScope-SSE", "disable")
         .json(&body)
+        .timeout(std::time::Duration::from_secs(20))
         .send()
         .await
         .map_err(|e| {
@@ -914,7 +932,7 @@ mod tests {
     use super::{
         asr_error_is_no_speech_rejection, fetch_provider_models, models_url,
         provider_llm_error_message, provider_log_context, provider_request_error_message,
-        sanitized_provider_destination, ProviderConfig,
+        sanitized_provider_destination, send_dashscope_multimodal_validation, ProviderConfig,
     };
     use crate::endpoint_security::validate_http_endpoint;
 
@@ -1105,6 +1123,45 @@ mod tests {
             server.await.unwrap(),
             "GET /v1/models?token=query-secret HTTP/1.1"
         );
+    }
+
+    #[tokio::test]
+    async fn dashscope_validation_does_not_follow_redirects_with_credentials() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let redirect_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let redirect_addr = redirect_listener.local_addr().unwrap();
+        let target_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let target_addr = target_listener.local_addr().unwrap();
+        let redirect_server = tokio::spawn(async move {
+            let (mut stream, _) = redirect_listener.accept().await.unwrap();
+            let mut request = [0_u8; 2048];
+            let count = stream.read(&mut request).await.unwrap();
+            let request = String::from_utf8_lossy(&request[..count]).to_ascii_lowercase();
+            assert!(request.contains("authorization: bearer sk-test"));
+            let response = format!(
+                "HTTP/1.1 302 Found\r\nLocation: http://{target_addr}/stolen\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+        });
+        let target_server = tokio::spawn(async move {
+            tokio::time::timeout(std::time::Duration::from_millis(500), target_listener.accept())
+                .await
+                .is_ok()
+        });
+
+        let error = send_dashscope_multimodal_validation(
+            "sk-test",
+            &format!("http://{redirect_addr}/validate"),
+            &serde_json::json!({"model": "fun-asr-flash"}),
+        )
+        .await
+        .unwrap_err();
+
+        redirect_server.await.unwrap();
+        assert_eq!(error, "providerHttpStatus:302");
+        assert!(!target_server.await.unwrap(), "validation followed redirect");
     }
 
     #[test]

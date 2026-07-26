@@ -29,6 +29,7 @@ pub const DEFAULT_MODEL: &str = "fun-asr-realtime";
 
 /// 100 ms of 16 kHz / 16-bit / mono PCM.
 pub const TARGET_AUDIO_CHUNK_BYTES: usize = 3_200;
+const TARGET_AUDIO_CHUNK_BYTES_8K: usize = 1_600;
 const BYTES_PER_MS: u64 = 32;
 const FINAL_RESULT_TIMEOUT: Duration = Duration::from_secs(12);
 
@@ -98,6 +99,7 @@ struct SyncState {
     task_id: String,
     pending_audio: Vec<u8>,
     audio_scratch: Vec<u8>,
+    downsample_remainder: Vec<u8>,
     bytes_received: u64,
     task_started: bool,
     task_finished: bool,
@@ -246,6 +248,13 @@ impl BailianRealtimeASR {
         }
         let (send_tx, tail_chunks) = {
             let mut st = self.state.lock();
+            if model_is_8k(&self.credentials.normalized_model())
+                && st.downsample_remainder.len() >= 2
+            {
+                let final_sample = st.downsample_remainder[..2].to_vec();
+                st.audio_scratch.extend_from_slice(&final_sample);
+                st.downsample_remainder.clear();
+            }
             let send_tx = st.send_tx.clone();
             if !st.pending_audio.is_empty() {
                 let pending = std::mem::take(&mut st.pending_audio);
@@ -288,6 +297,7 @@ impl BailianRealtimeASR {
         let mut st = self.state.lock();
         st.pending_audio.clear();
         st.audio_scratch.clear();
+        st.downsample_remainder.clear();
         st.send_tx.take();
         st.final_tx.take();
         st.task_finished = true;
@@ -357,7 +367,10 @@ impl BailianRealtimeASR {
                 st.audio_scratch.extend_from_slice(&pending);
             }
             let send_tx = st.send_tx.clone();
-            let chunks = drain_audio_chunks(&mut st.audio_scratch);
+            let chunks = drain_audio_chunks_for_model(
+                &mut st.audio_scratch,
+                &self.credentials.normalized_model(),
+            );
             (send_tx, chunks)
         };
         if let Some(tx) = send_tx {
@@ -505,15 +518,25 @@ impl AudioConsumer for BailianRealtimeASR {
         if pcm.is_empty() {
             return;
         }
+        let model = self.credentials.normalized_model();
         let (send_tx, chunks) = {
             let mut st = self.state.lock();
             st.bytes_received = st.bytes_received.saturating_add(pcm.len() as u64);
+            let audio = if model_is_8k(&model) {
+                st.downsample_remainder.extend_from_slice(pcm);
+                let complete_len = st.downsample_remainder.len() / 4 * 4;
+                let audio = downsample_pcm_16k_to_8k(&st.downsample_remainder[..complete_len]);
+                st.downsample_remainder.drain(..complete_len);
+                audio
+            } else {
+                pcm.to_vec()
+            };
             if !st.task_started {
-                st.pending_audio.extend_from_slice(pcm);
+                st.pending_audio.extend_from_slice(&audio);
                 return;
             }
-            st.audio_scratch.extend_from_slice(pcm);
-            let chunks = drain_audio_chunks(&mut st.audio_scratch);
+            st.audio_scratch.extend_from_slice(&audio);
+            let chunks = drain_audio_chunks_for_model(&mut st.audio_scratch, &model);
             (st.send_tx.clone(), chunks)
         };
         if let Some(tx) = send_tx {
@@ -525,11 +548,34 @@ impl AudioConsumer for BailianRealtimeASR {
 }
 
 fn drain_audio_chunks(buffer: &mut Vec<u8>) -> Vec<Vec<u8>> {
+    drain_audio_chunks_with_target(buffer, TARGET_AUDIO_CHUNK_BYTES)
+}
+
+fn drain_audio_chunks_for_model(buffer: &mut Vec<u8>, model: &str) -> Vec<Vec<u8>> {
+    let target = if model_is_8k(model) {
+        TARGET_AUDIO_CHUNK_BYTES_8K
+    } else {
+        TARGET_AUDIO_CHUNK_BYTES
+    };
+    drain_audio_chunks_with_target(buffer, target)
+}
+
+fn drain_audio_chunks_with_target(buffer: &mut Vec<u8>, target: usize) -> Vec<Vec<u8>> {
     let mut chunks = Vec::new();
-    while buffer.len() >= TARGET_AUDIO_CHUNK_BYTES {
-        chunks.push(buffer.drain(..TARGET_AUDIO_CHUNK_BYTES).collect());
+    while buffer.len() >= target {
+        chunks.push(buffer.drain(..target).collect());
     }
     chunks
+}
+
+fn model_is_8k(model: &str) -> bool {
+    model.contains("-8k-") || model.starts_with("paraformer-8k-")
+}
+
+fn downsample_pcm_16k_to_8k(pcm: &[u8]) -> Vec<u8> {
+    pcm.chunks_exact(4)
+        .flat_map(|pair| [pair[0], pair[1]])
+        .collect()
 }
 
 /// 带重叠检测的文本段拼接：如果后一段的开头与前一段的末尾存在重叠，
@@ -562,7 +608,7 @@ fn merge_segments(segments: &[String]) -> String {
 
 fn run_task_message(task_id: &str, model: &str, vocabulary_id: Option<&str>) -> String {
     let mut parameters = json!({
-        "sample_rate": 16000,
+        "sample_rate": if model_is_8k(model) { 8000 } else { 16000 },
         "format": "pcm"
     });
     if let Some(vocabulary_id) = vocabulary_id.map(str::trim).filter(|id| !id.is_empty()) {
@@ -929,6 +975,57 @@ mod tests {
         assert_eq!(value["payload"]["parameters"]["sample_rate"], 16000);
         assert_eq!(value["payload"]["parameters"]["format"], "pcm");
         assert!(value["payload"]["parameters"]["vocabulary_id"].is_null());
+    }
+
+    #[test]
+    fn run_task_message_uses_pcm_8k_for_8k_model() {
+        let value: Value =
+            serde_json::from_str(&run_task_message("abc", "fun-asr-flash-8k-realtime", None))
+                .unwrap();
+        assert_eq!(value["payload"]["parameters"]["sample_rate"], 8000);
+    }
+
+    #[test]
+    fn downsample_16k_pcm_to_8k_keeps_every_other_sample() {
+        let pcm = [
+            1_i16.to_le_bytes(),
+            2_i16.to_le_bytes(),
+            3_i16.to_le_bytes(),
+            4_i16.to_le_bytes(),
+        ]
+        .concat();
+        let downsampled = downsample_pcm_16k_to_8k(&pcm);
+        let samples = downsampled
+            .chunks_exact(2)
+            .map(|chunk| i16::from_le_bytes([chunk[0], chunk[1]]))
+            .collect::<Vec<_>>();
+        assert_eq!(samples, vec![1, 3]);
+    }
+
+    #[test]
+    fn downsample_keeps_phase_across_recorder_chunks() {
+        let asr = BailianRealtimeASR::new(BailianCredentials {
+            api_key: "sk-test".to_string(),
+            endpoint: String::new(),
+            model: "fun-asr-flash-8k-realtime".to_string(),
+            vocabulary_id: None,
+        });
+        let first = [
+            1_i16.to_le_bytes(),
+            2_i16.to_le_bytes(),
+            3_i16.to_le_bytes(),
+        ]
+        .concat();
+        asr.consume_pcm_chunk(&first);
+        asr.consume_pcm_chunk(&4_i16.to_le_bytes());
+
+        let state = asr.state.lock();
+        let samples = state
+            .pending_audio
+            .chunks_exact(2)
+            .map(|chunk| i16::from_le_bytes([chunk[0], chunk[1]]))
+            .collect::<Vec<_>>();
+        assert_eq!(samples, vec![1, 3]);
     }
 
     #[test]

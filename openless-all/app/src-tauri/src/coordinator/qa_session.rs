@@ -480,11 +480,17 @@ pub(super) async fn transcribe_overlay_dictation_asr(
         ActiveAsr::DashScopeMultimodal(asr) => {
             debug_assert!(uses_global_timeout);
             let audio_secs = asr.buffer_duration_ms() as f64 / 1000.0;
-            let timeout_duration = whisper_transcribe_timeout(audio_secs);
-            match tokio::time::timeout(timeout_duration, asr.transcribe()).await {
-                Ok(Ok(raw)) => Ok(raw),
-                Ok(Err(error)) => Err(error.to_string()),
-                Err(_) => Err("dashscope multimodal global timeout".to_string()),
+            let timeout_duration = asr.transcribe_timeout(audio_secs);
+            tokio::select! {
+                result = tokio::time::timeout(timeout_duration, asr.transcribe()) => match result {
+                    Ok(Ok(raw)) => Ok(raw),
+                    Ok(Err(error)) => Err(error.to_string()),
+                    Err(_) => Err("dashscope multimodal global timeout".to_string()),
+                },
+                _ = wait_for_overlay_dictation_cancel(_inner, _current_session_id) => {
+                    asr.cancel();
+                    return OverlayDictationTranscribeOutcome::Cancelled;
+                }
             }
         }
         ActiveAsr::ElevenLabs(asr) => {
@@ -1145,22 +1151,29 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
         ActiveAsr::DashScopeMultimodal(m) => {
             debug_assert!(uses_global_timeout);
             let audio_secs = m.buffer_duration_ms() as f64 / 1000.0;
-            let timeout_duration = whisper_transcribe_timeout(audio_secs);
-            match tokio::time::timeout(timeout_duration, m.transcribe()).await {
-                Ok(Ok(r)) => r,
-                Ok(Err(e)) => {
-                    log::error!("[coord] QA: DashScope Fun-ASR-Flash transcribe failed: {e}");
-                    finish_qa_with_error_if_current(inner, session_id, format!("识别失败: {e}"));
-                    return Err(e.to_string());
-                }
-                Err(_) => {
-                    log::error!(
-                        "[coord] QA: DashScope Fun-ASR-Flash dynamic timeout {}s (audio {:.2}s)",
-                        timeout_duration.as_secs(),
-                        audio_secs
-                    );
-                    finish_qa_with_error_if_current(inner, session_id, "识别超时".to_string());
-                    return Err("dashscope multimodal global timeout".to_string());
+            let timeout_duration = m.transcribe_timeout(audio_secs);
+            tokio::select! {
+                result = tokio::time::timeout(timeout_duration, m.transcribe()) => match result {
+                    Ok(Ok(r)) => r,
+                    Ok(Err(e)) => {
+                        log::error!("[coord] QA: DashScope Fun-ASR-Flash transcribe failed: {e}");
+                        finish_qa_with_error_if_current(inner, session_id, format!("识别失败: {e}"));
+                        return Err(e.to_string());
+                    }
+                    Err(_) => {
+                        log::error!(
+                            "[coord] QA: DashScope Fun-ASR-Flash dynamic timeout {}s (audio {:.2}s)",
+                            timeout_duration.as_secs(),
+                            audio_secs
+                        );
+                        finish_qa_with_error_if_current(inner, session_id, "识别超时".to_string());
+                        return Err("dashscope multimodal global timeout".to_string());
+                    }
+                },
+                _ = wait_for_qa_processing_cancel(inner, session_id) => {
+                    m.cancel();
+                    finish_qa_idle_silently_if_current(inner, session_id);
+                    return Ok(());
                 }
             }
         }

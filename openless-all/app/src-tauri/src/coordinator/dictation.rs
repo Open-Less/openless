@@ -2722,7 +2722,7 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
                 ActiveAsr::DashScopeMultimodal(m) => {
                     debug_assert!(uses_global_timeout);
                     let audio_secs = m.buffer_duration_ms() as f64 / 1000.0;
-                    let timeout_duration = whisper_transcribe_timeout(audio_secs);
+                    let timeout_duration = m.transcribe_timeout(audio_secs);
                     log::info!(
                         "[coord] DashScope Fun-ASR-Flash dynamic timeout: {}s (audio {:.2}s)",
                         timeout_duration.as_secs(),

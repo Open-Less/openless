@@ -14,6 +14,7 @@ use anyhow::{Context, Result};
 use base64::Engine;
 use parking_lot::Mutex;
 use serde_json::Value;
+use std::time::{Duration, Instant};
 
 use crate::asr::mimo::{join_transcript_chunks, split_pcm_by_duration};
 use crate::asr::wav::encode_wav_16k_mono;
@@ -23,11 +24,54 @@ use crate::asr::RawTranscript;
 // 体积。沿用 mimo 验证过的 180s 预算（16k/16-bit/mono WAV base64 后约 7.7MB），
 // 稳稳落在时长和常见网关体积上限之内。超长录音按此切分后逐段识别再拼接。
 const DASHSCOPE_MAX_CHUNK_DURATION_MS: u64 = 180_000;
+const ASYNC_TASK_POLL_TIMEOUT_SECS: u64 = 600;
+const ASYNC_WORKFLOW_OVERHEAD_SECS: u64 = 60;
+const ASYNC_UPLOAD_BYTES_PER_SEC: u64 = 64 * 1024;
 
 pub const PROVIDER_ID: &str = "bailian-fun-asr-flash";
 pub const DEFAULT_ENDPOINT: &str =
     "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation";
+pub const ASYNC_DEFAULT_ENDPOINT: &str =
+    "https://dashscope.aliyuncs.com/api/v1/services/audio/asr/transcription";
 pub const DEFAULT_MODEL: &str = "fun-asr-flash-2026-06-15";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DashScopeBatchProtocol {
+    Multimodal,
+    AsyncTranscription,
+}
+
+fn is_realtime_model(model: &str) -> bool {
+    model.contains("realtime")
+}
+
+fn is_qwen_filetrans_model(model: &str) -> bool {
+    model.starts_with("qwen3-asr-flash-filetrans")
+}
+
+fn is_qwen_sync_model(model: &str) -> bool {
+    model.starts_with("qwen3-asr-flash")
+        && !is_qwen_filetrans_model(model)
+        && !is_realtime_model(model)
+}
+
+pub fn protocol_for_model(model: &str) -> Option<DashScopeBatchProtocol> {
+    let model = model.trim();
+    if model.is_empty() || is_realtime_model(model) {
+        return None;
+    }
+    if model.starts_with("fun-asr-flash") || is_qwen_sync_model(model) {
+        return Some(DashScopeBatchProtocol::Multimodal);
+    }
+    if model == "fun-asr"
+        || model.starts_with("fun-asr-")
+        || model.starts_with("paraformer")
+        || is_qwen_filetrans_model(model)
+    {
+        return Some(DashScopeBatchProtocol::AsyncTranscription);
+    }
+    None
+}
 
 pub struct DashScopeMultimodalASR {
     api_key: String,
@@ -48,6 +92,20 @@ impl DashScopeMultimodalASR {
 
     pub fn buffer_duration_ms(&self) -> u64 {
         crate::asr::pcm::pcm_duration_ms(&self.buffer.lock())
+    }
+
+    pub fn transcribe_timeout(&self, audio_secs: f64) -> Duration {
+        if protocol_for_model(&self.model) == Some(DashScopeBatchProtocol::AsyncTranscription) {
+            let pcm_bytes = (audio_secs.max(0.0) * 32_000.0).ceil() as u64;
+            return async_upload_timeout(pcm_bytes.saturating_add(44))
+                + Duration::from_secs(
+                    ASYNC_TASK_POLL_TIMEOUT_SECS + ASYNC_WORKFLOW_OVERHEAD_SECS,
+                );
+        }
+        let secs = ((audio_secs * 0.5).ceil() as u64)
+            .saturating_add(20)
+            .max(30);
+        Duration::from_secs(secs)
     }
 
     pub async fn transcribe(&self) -> Result<RawTranscript> {
@@ -72,6 +130,15 @@ impl DashScopeMultimodalASR {
         }
 
         let duration_ms = crate::asr::pcm::pcm_duration_ms(pcm);
+        if protocol_for_model(&self.model) == Some(DashScopeBatchProtocol::AsyncTranscription) {
+            let samples: Vec<i16> = pcm
+                .chunks_exact(2)
+                .map(|chunk| i16::from_le_bytes([chunk[0], chunk[1]]))
+                .collect();
+            let wav = encode_wav_16k_mono(&samples);
+            let text = self.transcribe_async(&wav).await?;
+            return Ok(RawTranscript { text, duration_ms });
+        }
         let chunks = split_pcm_by_duration(pcm, DASHSCOPE_MAX_CHUNK_DURATION_MS);
         let mut texts = Vec::with_capacity(chunks.len());
         for chunk in chunks {
@@ -92,14 +159,15 @@ impl DashScopeMultimodalASR {
         let wav = encode_wav_16k_mono(&samples);
         let body = dashscope_multimodal_body(&self.model, &wav);
         let url = generation_url(&self.base_url)?;
-        let client = reqwest::Client::new();
-        let resp = client
+        let request_timeout = self.transcribe_timeout(crate::asr::pcm::pcm_duration_ms(pcm) as f64 / 1000.0);
+        let resp = crate::net::credential_http()
             .post(&url)
             .header("Authorization", format!("Bearer {}", self.api_key.trim()))
             .header("Content-Type", "application/json")
             // multimodal-generation 默认可 SSE 流式；显式关掉走一次性 JSON 响应。
             .header("X-DashScope-SSE", "disable")
             .json(&body)
+            .timeout(request_timeout)
             .send()
             .await
             .context("DashScope ASR HTTP request failed")?;
@@ -114,9 +182,202 @@ impl DashScopeMultimodalASR {
         Ok(extract_dashscope_text(&json).trim().to_string())
     }
 
+    async fn transcribe_async(&self, wav: &[u8]) -> Result<String> {
+        let file_url = self.upload_temporary_wav(wav).await?;
+        self.transcribe_async_url(&file_url).await
+    }
+
+    async fn upload_temporary_wav(&self, wav: &[u8]) -> Result<String> {
+        let mut policy_url = api_url(&self.base_url, "/api/v1/uploads")?;
+        policy_url
+            .query_pairs_mut()
+            .append_pair("action", "getPolicy")
+            .append_pair("model", self.model.trim());
+        let response = crate::net::credential_http()
+            .get(policy_url)
+            .header("Authorization", format!("Bearer {}", self.api_key.trim()))
+            .header("Content-Type", "application/json")
+            .timeout(Duration::from_secs(30))
+            .send()
+            .await
+            .context("request DashScope temporary upload policy")?;
+        let policy_json = response_json(response, "DashScope upload policy").await?;
+        let data = policy_json
+            .get("data")
+            .context("DashScope upload policy missing data")?;
+        let field = |name: &str| -> Result<String> {
+            data.get(name)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+                .with_context(|| format!("DashScope upload policy missing {name}"))
+        };
+        let upload_dir = field("upload_dir")?;
+        let object_key = format!("{}/audio.wav", upload_dir.trim_end_matches('/'));
+        let form = reqwest::multipart::Form::new()
+            .text("OSSAccessKeyId", field("oss_access_key_id")?)
+            .text("policy", field("policy")?)
+            .text("Signature", field("signature")?)
+            .text("key", object_key.clone())
+            .text("x-oss-object-acl", field("x_oss_object_acl")?)
+            .text("x-oss-forbid-overwrite", field("x_oss_forbid_overwrite")?)
+            .text("success_action_status", "200")
+            .part(
+                "file",
+                reqwest::multipart::Part::bytes(wav.to_vec())
+                    .file_name("audio.wav")
+                    .mime_str("audio/wav")?,
+            );
+        let upload_url = dashscope_transfer_url(&field("upload_host")?)?;
+        let upload = crate::net::anonymous_no_redirect_http()
+            .post(upload_url)
+            .multipart(form)
+            .timeout(async_upload_timeout(wav.len() as u64))
+            .send()
+            .await
+            .context("upload audio to DashScope temporary storage")?;
+        ensure_success(upload, "DashScope temporary upload").await?;
+        Ok(format!("oss://{object_key}"))
+    }
+
+    pub async fn transcribe_async_url(&self, file_url: &str) -> Result<String> {
+        let submit_url = async_transcription_url(&self.base_url)?;
+        let response = crate::net::credential_http()
+            .post(submit_url)
+            .header("Authorization", format!("Bearer {}", self.api_key.trim()))
+            .header("Content-Type", "application/json")
+            .header("X-DashScope-Async", "enable")
+            .header("X-DashScope-OssResourceResolve", "enable")
+            .json(&async_transcription_body(&self.model, file_url))
+            .timeout(Duration::from_secs(30))
+            .send()
+            .await
+            .context("submit DashScope async ASR task")?;
+        let submitted = response_json(response, "DashScope async ASR submission").await?;
+        let task_id = submitted
+            .pointer("/output/task_id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .context("DashScope async ASR response missing task_id")?;
+        let task_url = api_url(&self.base_url, &format!("/api/v1/tasks/{task_id}"))?;
+        let deadline = Instant::now() + Duration::from_secs(ASYNC_TASK_POLL_TIMEOUT_SECS);
+        let completed = loop {
+            let response = crate::net::credential_http()
+                .get(task_url.clone())
+                .header("Authorization", format!("Bearer {}", self.api_key.trim()))
+                .timeout(Duration::from_secs(30))
+                .send()
+                .await
+                .context("poll DashScope async ASR task")?;
+            let task = response_json(response, "DashScope async ASR task").await?;
+            match task
+                .pointer("/output/task_status")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+            {
+                "SUCCEEDED" => break task,
+                "FAILED" | "CANCELED" | "UNKNOWN" => {
+                    let message = task
+                        .get("message")
+                        .or_else(|| task.pointer("/output/message"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("task failed");
+                    anyhow::bail!("DashScope async ASR task failed: {message}");
+                }
+                _ if Instant::now() >= deadline => {
+                    anyhow::bail!("DashScope async ASR task timed out");
+                }
+                _ => tokio::time::sleep(Duration::from_secs(1)).await,
+            }
+        };
+        let result = download_async_result(&extract_async_result_url(&self.model, &completed)?).await?;
+        extract_async_transcript_text(&result)
+    }
+
     pub fn cancel(&self) {
         self.buffer.lock().clear();
     }
+}
+
+fn api_url(base_url: &str, path: &str) -> Result<reqwest::Url> {
+    let mut url = reqwest::Url::parse(base_url.trim()).context("parse DashScope base URL")?;
+    url.set_path(path);
+    url.set_query(None);
+    url.set_fragment(None);
+    Ok(url)
+}
+
+fn dashscope_transfer_url(raw: &str) -> Result<reqwest::Url> {
+    let mut url = reqwest::Url::parse(raw.trim()).context("parse DashScope transfer URL")?;
+    if !url.username().is_empty() || url.password().is_some() {
+        anyhow::bail!("DashScope transfer URL must not contain credentials");
+    }
+    let host = url
+        .host_str()
+        .context("DashScope transfer URL missing host")?
+        .to_ascii_lowercase();
+
+    #[cfg(test)]
+    if host == "localhost"
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
+    {
+        return Ok(url);
+    }
+
+    if host != "aliyuncs.com" && !host.ends_with(".aliyuncs.com") {
+        anyhow::bail!("DashScope transfer URL must use an Alibaba Cloud OSS host");
+    }
+    match url.scheme() {
+        "https" => {}
+        "http" => url
+            .set_scheme("https")
+            .map_err(|_| anyhow::anyhow!("upgrade DashScope transfer URL to HTTPS"))?,
+        _ => anyhow::bail!("DashScope transfer URL must use HTTPS"),
+    }
+    Ok(url)
+}
+
+fn async_upload_timeout(bytes: u64) -> Duration {
+    let transfer_secs = bytes
+        .saturating_add(ASYNC_UPLOAD_BYTES_PER_SEC - 1)
+        / ASYNC_UPLOAD_BYTES_PER_SEC;
+    Duration::from_secs(transfer_secs.saturating_add(30).max(60))
+}
+
+async fn download_async_result(raw_url: &str) -> Result<Value> {
+    let result_url = dashscope_transfer_url(raw_url)?;
+    let response = crate::net::anonymous_no_redirect_http()
+        .get(result_url)
+        .timeout(Duration::from_secs(30))
+        .send()
+        .await
+        .context("download DashScope async ASR result")?;
+    response_json(response, "DashScope async ASR result").await
+}
+
+async fn ensure_success(response: reqwest::Response, operation: &str) -> Result<()> {
+    if response.status().is_success() {
+        return Ok(());
+    }
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+    anyhow::bail!("{operation} error {status}: {body}")
+}
+
+async fn response_json(response: reqwest::Response, operation: &str) -> Result<Value> {
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        anyhow::bail!("{operation} error {status}: {body}");
+    }
+    response
+        .json()
+        .await
+        .with_context(|| format!("parse {operation} response"))
 }
 
 impl crate::recorder::AudioConsumer for DashScopeMultimodalASR {
@@ -149,11 +410,30 @@ pub fn generation_url(base_url: &str) -> Result<String> {
     Ok(url.to_string())
 }
 
+pub fn async_transcription_url(base_url: &str) -> Result<String> {
+    Ok(api_url(base_url, "/api/v1/services/audio/asr/transcription")?.to_string())
+}
+
 pub fn dashscope_multimodal_body(model: &str, wav: &[u8]) -> Value {
     let audio_data = format!(
         "data:audio/wav;base64,{}",
         base64::engine::general_purpose::STANDARD.encode(wav)
     );
+    dashscope_multimodal_body_from_uri(model, &audio_data)
+}
+
+pub fn dashscope_multimodal_body_from_uri(model: &str, audio_uri: &str) -> Value {
+    if is_qwen_sync_model(model) {
+        return serde_json::json!({
+            "model": model,
+            "input": {
+                "messages": [{
+                    "role": "user",
+                    "content": [{ "audio": audio_uri }],
+                }],
+            },
+        });
+    }
     serde_json::json!({
         "model": model,
         "input": {
@@ -161,7 +441,7 @@ pub fn dashscope_multimodal_body(model: &str, wav: &[u8]) -> Value {
                 "role": "user",
                 "content": [{
                     "type": "input_audio",
-                    "input_audio": { "data": audio_data },
+                    "input_audio": { "data": audio_uri },
                 }],
             }],
         },
@@ -170,6 +450,73 @@ pub fn dashscope_multimodal_body(model: &str, wav: &[u8]) -> Value {
             "sample_rate": "16000",
         },
     })
+}
+
+pub fn async_transcription_body(model: &str, file_url: &str) -> Value {
+    if is_qwen_filetrans_model(model) {
+        serde_json::json!({
+            "model": model,
+            "input": { "file_url": file_url },
+            "parameters": {},
+        })
+    } else {
+        serde_json::json!({
+            "model": model,
+            "input": { "file_urls": [file_url] },
+            "parameters": {},
+        })
+    }
+}
+
+pub fn extract_async_result_url(model: &str, json: &Value) -> Result<String> {
+    let url = if is_qwen_filetrans_model(model) {
+        json.pointer("/output/result/transcription_url")
+            .and_then(Value::as_str)
+    } else {
+        json.pointer("/output/results/0/transcription_url")
+            .and_then(Value::as_str)
+    };
+    url.map(str::trim)
+        .filter(|url| !url.is_empty())
+        .map(ToOwned::to_owned)
+        .context("DashScope async ASR response missing transcription_url")
+}
+
+pub fn extract_async_transcript_text(json: &Value) -> Result<String> {
+    let transcripts = json
+        .get("transcripts")
+        .context("DashScope async ASR result missing transcripts")?
+        .as_array()
+        .context("DashScope async ASR transcripts must be an array")?;
+    let mut texts = Vec::new();
+    for transcript in transcripts {
+        if let Some(value) = transcript.get("text") {
+            let text = value
+                .as_str()
+                .context("DashScope async ASR transcript text must be a string")?
+                .trim();
+            if !text.is_empty() {
+                texts.push(text.to_string());
+            }
+            continue;
+        }
+        let sentences = transcript
+            .get("sentences")
+            .context("DashScope async ASR transcript missing text or sentences")?
+            .as_array()
+            .context("DashScope async ASR sentences must be an array")?;
+        for sentence in sentences {
+            let text = sentence
+                .get("text")
+                .and_then(Value::as_str)
+                .context("DashScope async ASR sentence missing text")?
+                .trim();
+            if !text.is_empty() {
+                texts.push(text.to_string());
+            }
+        }
+    }
+    Ok(texts.join(""))
 }
 
 /// fun-asr-flash 的响应信封与标准多模态接口不同，且不同模型版本字段路径略有
@@ -240,6 +587,10 @@ mod tests {
     use crate::recorder::AudioConsumer;
     use std::io::{Read, Write};
     use std::net::TcpListener;
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
     use std::thread;
     use std::time::{Duration, Instant};
 
@@ -273,6 +624,126 @@ mod tests {
         assert_eq!(body["parameters"]["format"], "wav");
         assert_eq!(body["parameters"]["sample_rate"], "16000");
         assert!(body["parameters"].get("vocabulary_id").is_none());
+    }
+
+    #[test]
+    fn qwen_flash_body_uses_documented_audio_shape() {
+        let body = dashscope_multimodal_body("qwen3-asr-flash", b"wav");
+        assert_eq!(body["model"], "qwen3-asr-flash");
+        let audio = &body["input"]["messages"][0]["content"][0];
+        assert!(audio["audio"]
+            .as_str()
+            .unwrap()
+            .starts_with("data:audio/wav;base64,"));
+        assert!(audio.get("input_audio").is_none());
+    }
+
+    #[test]
+    fn classifies_supported_batch_model_protocols() {
+        assert_eq!(
+            protocol_for_model("fun-asr-flash-2026-06-15"),
+            Some(DashScopeBatchProtocol::Multimodal)
+        );
+        assert_eq!(
+            protocol_for_model("qwen3-asr-flash-2026-02-10"),
+            Some(DashScopeBatchProtocol::Multimodal)
+        );
+        for model in [
+            "fun-asr",
+            "fun-asr-mtl-2025-08-25",
+            "paraformer-v2",
+            "qwen3-asr-flash-filetrans-2025-11-17",
+        ] {
+            assert_eq!(
+                protocol_for_model(model),
+                Some(DashScopeBatchProtocol::AsyncTranscription),
+                "unexpected protocol for {model}"
+            );
+        }
+        assert_eq!(protocol_for_model("unknown-asr"), None);
+    }
+
+    #[test]
+    fn async_models_get_a_task_polling_timeout() {
+        let asr = DashScopeMultimodalASR::new(
+            "sk-test".to_string(),
+            ASYNC_DEFAULT_ENDPOINT.to_string(),
+            "fun-asr".to_string(),
+        );
+        assert!(asr.transcribe_timeout(1.0) >= Duration::from_secs(660));
+        assert!(asr.transcribe_timeout(1_800.0) >= Duration::from_secs(1_500));
+        assert!(asr.transcribe_timeout(1_800.0) > asr.transcribe_timeout(1.0));
+        assert!(async_upload_timeout(58_000_000) >= Duration::from_secs(900));
+    }
+
+    #[test]
+    fn async_body_uses_model_specific_input_shape() {
+        let funasr = async_transcription_body("fun-asr", "oss://bucket/test.wav");
+        assert_eq!(funasr["input"]["file_urls"][0], "oss://bucket/test.wav");
+        assert!(funasr["input"].get("file_url").is_none());
+        assert_eq!(funasr["parameters"], serde_json::json!({}));
+
+        let qwen = async_transcription_body("qwen3-asr-flash-filetrans", "oss://bucket/test.wav");
+        assert_eq!(qwen["input"]["file_url"], "oss://bucket/test.wav");
+        assert!(qwen["input"].get("file_urls").is_none());
+        assert_eq!(qwen["parameters"], serde_json::json!({}));
+    }
+
+    #[test]
+    fn extracts_model_specific_async_result_url() {
+        let funasr = serde_json::json!({
+            "output": {"results": [{
+                "subtask_status": "SUCCEEDED",
+                "transcription_url": "https://result.example/funasr.json"
+            }]}
+        });
+        assert_eq!(
+            extract_async_result_url("fun-asr", &funasr).unwrap(),
+            "https://result.example/funasr.json"
+        );
+
+        let qwen = serde_json::json!({
+            "output": {"result": {
+                "transcription_url": "https://result.example/qwen.json"
+            }}
+        });
+        assert_eq!(
+            extract_async_result_url("qwen3-asr-flash-filetrans", &qwen).unwrap(),
+            "https://result.example/qwen.json"
+        );
+    }
+
+    #[test]
+    fn extracts_text_from_async_result_documents() {
+        let funasr = serde_json::json!({
+            "transcripts": [{"sentences": [{"text": "第一句"}, {"text": "第二句"}]}]
+        });
+        assert_eq!(extract_async_transcript_text(&funasr).unwrap(), "第一句第二句");
+
+        let qwen = serde_json::json!({
+            "transcripts": [{"text": "Qwen 转写结果"}]
+        });
+        assert_eq!(extract_async_transcript_text(&qwen).unwrap(), "Qwen 转写结果");
+    }
+
+    #[test]
+    fn rejects_malformed_async_result_documents() {
+        assert!(extract_async_transcript_text(&serde_json::json!({})).is_err());
+        assert!(extract_async_transcript_text(&serde_json::json!({
+            "transcripts": [{"unexpected": "shape"}]
+        }))
+        .is_err());
+    }
+
+    #[test]
+    fn validates_dashscope_transfer_urls() {
+        let upgraded = dashscope_transfer_url(
+            "http://dashscope-file.oss-cn-beijing.aliyuncs.com/result.json",
+        )
+        .unwrap();
+        assert_eq!(upgraded.scheme(), "https");
+        assert!(dashscope_transfer_url("http://169.254.169.254/latest/meta-data").is_err());
+        assert!(dashscope_transfer_url("https://aliyuncs.com.evil.example/result.json").is_err());
     }
 
     #[test]
@@ -366,6 +837,198 @@ mod tests {
         server.join().unwrap();
     }
 
+    #[tokio::test]
+    async fn uploads_and_polls_async_transcription() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            for step in 0..5 {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let request = read_http_request(&mut stream);
+                let request_text = String::from_utf8_lossy(&request);
+                let lower = request_text.to_ascii_lowercase();
+                if matches!(step, 0 | 2 | 3) {
+                    assert!(lower.contains("authorization: bearer sk-test"));
+                } else {
+                    assert!(!lower.contains("authorization:"));
+                }
+                match step {
+                    0 => {
+                        assert!(request_text.starts_with(
+                            "GET /api/v1/uploads?action=getPolicy&model=fun-asr HTTP/1.1"
+                        ));
+                        write_json_response(
+                            &mut stream,
+                            &format!(
+                                r#"{{"data":{{"policy":"policy","signature":"signature","upload_dir":"dashscope-instant/test","upload_host":"http://{addr}","oss_access_key_id":"key-id","x_oss_object_acl":"private","x_oss_forbid_overwrite":"true"}}}}"#
+                            ),
+                        );
+                    }
+                    1 => {
+                        assert!(request_text.starts_with("POST / HTTP/1.1"));
+                        assert!(lower.contains("content-type: multipart/form-data"));
+                        assert!(request_text.contains("OSSAccessKeyId"));
+                        assert!(request_text.contains("success_action_status"));
+                        assert!(request_text.contains("audio.wav"));
+                        write_json_response(&mut stream, "{}");
+                    }
+                    2 => {
+                        assert!(request_text
+                            .starts_with("POST /api/v1/services/audio/asr/transcription HTTP/1.1"));
+                        assert!(lower.contains("x-dashscope-async: enable"));
+                        assert!(lower.contains("x-dashscope-ossresourceresolve: enable"));
+                        assert!(request_text
+                            .contains(r#""file_urls":["oss://dashscope-instant/test/audio.wav"]"#));
+                        write_json_response(&mut stream, r#"{"output":{"task_id":"task-1"}}"#);
+                    }
+                    3 => {
+                        assert!(request_text.starts_with("GET /api/v1/tasks/task-1 HTTP/1.1"));
+                        write_json_response(
+                            &mut stream,
+                            &format!(
+                                r#"{{"output":{{"task_status":"SUCCEEDED","results":[{{"subtask_status":"SUCCEEDED","transcription_url":"http://{addr}/result.json"}}]}}}}"#
+                            ),
+                        );
+                    }
+                    4 => {
+                        assert!(request_text.starts_with("GET /result.json HTTP/1.1"));
+                        write_json_response(
+                            &mut stream,
+                            r#"{"transcripts":[{"sentences":[{"text":"异步"},{"text":"转写"}]}]}"#,
+                        );
+                    }
+                    _ => unreachable!(),
+                }
+            }
+        });
+
+        let asr = DashScopeMultimodalASR::new(
+            "sk-test".to_string(),
+            format!("http://{addr}/api/v1/services/audio/asr/transcription"),
+            "fun-asr".to_string(),
+        );
+        asr.consume_pcm_chunk(&vec![0u8; 32_000]);
+        let transcript = asr.transcribe().await.unwrap();
+        assert_eq!(transcript.text, "异步转写");
+        assert_eq!(transcript.duration_ms, 1_000);
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn async_policy_request_does_not_follow_redirects_with_credentials() {
+        let redirect_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let redirect_addr = redirect_listener.local_addr().unwrap();
+        let target_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        target_listener.set_nonblocking(true).unwrap();
+        let target_addr = target_listener.local_addr().unwrap();
+        let followed = Arc::new(AtomicBool::new(false));
+        let target_followed = Arc::clone(&followed);
+
+        let redirect_server = thread::spawn(move || {
+            let (mut stream, _) = redirect_listener.accept().unwrap();
+            let request = read_http_request(&mut stream);
+            assert!(String::from_utf8_lossy(&request)
+                .to_ascii_lowercase()
+                .contains("authorization: bearer sk-test"));
+            let response = format!(
+                "HTTP/1.1 302 Found\r\nlocation: http://{target_addr}/api/v1/uploads\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+            stream.flush().unwrap();
+        });
+        let target_server = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            loop {
+                match target_listener.accept() {
+                    Ok((mut stream, _)) => {
+                        target_followed.store(true, Ordering::SeqCst);
+                        let _request = read_http_request(&mut stream);
+                        let body = r#"{"message":"redirect followed"}"#;
+                        let response = format!(
+                            "HTTP/1.1 400 Bad Request\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                            body.len(),
+                            body
+                        );
+                        stream.write_all(response.as_bytes()).unwrap();
+                        stream.flush().unwrap();
+                        break;
+                    }
+                    Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                        if Instant::now() >= deadline {
+                            break;
+                        }
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(err) => panic!("accept redirect target request failed: {err}"),
+                }
+            }
+        });
+
+        let asr = DashScopeMultimodalASR::new(
+            "sk-test".to_string(),
+            format!("http://{redirect_addr}/api/v1/services/audio/asr/transcription"),
+            "fun-asr".to_string(),
+        );
+        asr.consume_pcm_chunk(&vec![0u8; 32_000]);
+        let error = asr.transcribe().await.unwrap_err().to_string();
+
+        assert!(error.contains("302 Found"), "unexpected error: {error}");
+        redirect_server.join().unwrap();
+        target_server.join().unwrap();
+        assert!(!followed.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn async_result_download_does_not_follow_redirects() {
+        let redirect_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let redirect_addr = redirect_listener.local_addr().unwrap();
+        let target_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        target_listener.set_nonblocking(true).unwrap();
+        let target_addr = target_listener.local_addr().unwrap();
+        let followed = Arc::new(AtomicBool::new(false));
+        let target_followed = Arc::clone(&followed);
+        let redirect_server = thread::spawn(move || {
+            let (mut stream, _) = redirect_listener.accept().unwrap();
+            let request = read_http_request(&mut stream);
+            assert!(!String::from_utf8_lossy(&request)
+                .to_ascii_lowercase()
+                .contains("authorization:"));
+            let response = format!(
+                "HTTP/1.1 302 Found\r\nlocation: http://{target_addr}/result.json\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+            stream.flush().unwrap();
+        });
+        let target_server = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while Instant::now() < deadline {
+                match target_listener.accept() {
+                    Ok((_stream, _)) => {
+                        target_followed.store(true, Ordering::SeqCst);
+                        break;
+                    }
+                    Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(err) => panic!("accept result redirect target failed: {err}"),
+                }
+            }
+        });
+
+        let error = download_async_result(&format!("http://{redirect_addr}/result.json"))
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("302 Found"), "unexpected error: {error}");
+        redirect_server.join().unwrap();
+        target_server.join().unwrap();
+        assert!(!followed.load(Ordering::SeqCst));
+    }
+
     fn read_http_request(stream: &mut std::net::TcpStream) -> Vec<u8> {
         let mut request = Vec::new();
         let mut buf = [0u8; 4096];
@@ -389,14 +1052,17 @@ mod tests {
     fn parse_expected_request_len(request: &[u8]) -> Option<usize> {
         let header_end = request.windows(4).position(|w| w == b"\r\n\r\n")? + 4;
         let headers = String::from_utf8_lossy(&request[..header_end]);
-        let content_len = headers.lines().find_map(|line| {
-            let (name, value) = line.split_once(':')?;
-            if name.eq_ignore_ascii_case("content-length") {
-                value.trim().parse::<usize>().ok()
-            } else {
-                None
-            }
-        })?;
+        let content_len = headers
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                if name.eq_ignore_ascii_case("content-length") {
+                    value.trim().parse::<usize>().ok()
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(0);
         Some(header_end + content_len)
     }
 

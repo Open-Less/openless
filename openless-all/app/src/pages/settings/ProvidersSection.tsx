@@ -194,7 +194,7 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
   const [llmModelRevision, setLlmModelRevision] = useState(0);
   const [asrModelRevision, setAsrModelRevision] = useState(0);
   const os = detectOS();
-  const unifiedBailian = committedAsrProvider === 'bailian' && os !== 'android';
+  const unifiedBailian = committedAsrProvider === 'bailian';
   const [bailianModel, setBailianModel] = useState('');
 
   useEffect(() => {
@@ -555,9 +555,14 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
 // coordinator::resolve_effective_asr_provider 保持一致):qwen3-asr-flash-realtime* 与
 // fun-asr-realtime* 与 fun-asr-flash-8k-realtime* 都是实时模型；当前支持的
 // fun-asr-flash-2026-06-15 是「录音文件·说完转写」。
-function bailianModelIsRecordedFile(model: string): boolean {
+function bailianModelProtocol(model: string): 'realtime' | 'sync' | 'async' {
   const m = model.trim();
-  return m === 'fun-asr-flash-2026-06-15';
+  if (!m || m.includes('realtime')) return 'realtime';
+  if (m.startsWith('qwen3-asr-flash-filetrans')
+    || m === 'fun-asr'
+    || m.startsWith('fun-asr-') && !m.startsWith('fun-asr-flash')
+    || m.startsWith('paraformer')) return 'async';
+  return 'sync';
 }
 
 function bailianModelSupportsVocabulary(model: string): boolean {
@@ -586,9 +591,12 @@ function BailianProtocolHint({ currentModel }: { currentModel: string }) {
     setModel(currentModel || 'fun-asr-realtime');
   }, [currentModel]);
 
-  const hint = bailianModelIsRecordedFile(model)
-    ? t('settings.providers.bailianModelRecordedFileHint')
-    : t('settings.providers.bailianModelRealtimeHint');
+  const protocol = bailianModelProtocol(model);
+  const hint = protocol === 'realtime'
+    ? t('settings.providers.bailianModelRealtimeHint')
+    : protocol === 'async'
+      ? t('settings.providers.bailianModelAsyncFileHint')
+      : t('settings.providers.bailianModelSyncFileHint');
 
   return (
     <div style={{ marginTop: 2, fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.6 }}>
