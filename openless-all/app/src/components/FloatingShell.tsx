@@ -35,10 +35,13 @@ import {
 } from '../lib/providerSetup';
 import { type SettingsSectionId } from './SettingsModal';
 import { MobileMoreSheet } from './MobileMoreSheet';
+import { MobileStyleSheet } from './MobileStyleSheet';
+import { subItemLabelKey } from '../lib/navLabels';
 import { useMobileLayout } from '../lib/useMobileLayout';
 import { useAppState, type AppTab } from '../state/useAppState';
 
 const MORE_TAB_IDS: AppTab[] = ['vocab', 'translation', 'selectionAsk'];
+const STYLE_TAB_IDS: AppTab[] = ['style', 'marketplace'];
 
 /** macOS 上侧栏顶部需让开原生红绿灯的高度（红绿灯竖直落在 ~6–22px）。 */
 const MAC_TRAFFIC_LIGHT_CLEARANCE = 30;
@@ -71,13 +74,6 @@ const NAV_TREE: NavNode[] = [
   { kind: 'group', key: 'tools', icon: 'selectionAsk', children: [{ id: 'selectionAsk' }, { id: 'translation' }] },
 ];
 
-/** 分组标题的 i18n key（nav.group.<key>）。子项标题：style 组用 nav.polishMode/nav.marketplace，
- *  其余子项复用 nav.<id>。 */
-function subItemLabelKey(id: AppTab): string {
-  if (id === 'style') return 'nav.polishMode';
-  return `nav.${id}`;
-}
-
 interface FloatingShellProps {
   os?: OS;
   initialTab?: AppTab;
@@ -101,6 +97,7 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
   const [providerPromptOpen, setProviderPromptOpen] = useState(false);
   const [hotkeyModePromptOpen, setHotkeyModePromptOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
+  const [styleOpen, setStyleOpen] = useState(false);
 
   // tab 切换的 cross-fade：旧页 blur+fade out（180ms），结束后挂载新页（走 ol-page-slide enter）。
   // displayTab 是实际渲染的 tab，currentTab 是用户点中的目标 tab。
@@ -181,6 +178,7 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
     setSettingsInitialSection(section);
     setSettingsOpen(true);
     setMoreOpen(false);
+    setStyleOpen(false);
   };
 
   // ⌘, 打开设置页面
@@ -210,6 +208,7 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
     ? t('shell.footer.settings')
     : t(subItemLabelKey(currentTab));
   const moreTabActive = MORE_TAB_IDS.includes(currentTab);
+  const styleTabActive = STYLE_TAB_IDS.includes(currentTab);
 
   return (
     // 不再为 macOS 红绿灯预留顶部 28px 空条（用户反馈「块上方多一条丑横条」）：
@@ -467,12 +466,31 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
             currentTab={currentTab}
             moreOpen={moreOpen}
             moreTabActive={moreTabActive}
+            styleOpen={styleOpen}
+            styleTabActive={styleTabActive}
             settingsOpen={settingsOpen}
             onSelectTab={id => {
               setMoreOpen(false);
+              setStyleOpen(false);
               setCurrentTab(id);
             }}
-            onOpenMore={() => setMoreOpen(true)}
+            onOpenStyle={() => {
+              setMoreOpen(false);
+              setStyleOpen(true);
+            }}
+            onOpenMore={() => {
+              setStyleOpen(false);
+              setMoreOpen(true);
+            }}
+          />
+          <MobileStyleSheet
+            open={styleOpen}
+            currentTab={currentTab}
+            onClose={() => setStyleOpen(false)}
+            onSelectTab={id => {
+              setStyleOpen(false);
+              setCurrentTab(id);
+            }}
           />
           <MobileMoreSheet
             open={moreOpen}
@@ -571,7 +589,6 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
 const MOBILE_BOTTOM_TABS: Array<{ id: AppTab; icon: string }> = [
   { id: 'overview', icon: 'overview' },
   { id: 'history', icon: 'history' },
-  { id: 'style', icon: 'style' },
 ];
 
 function MobileTopBar({
@@ -646,19 +663,26 @@ function MobileBottomNav({
   currentTab,
   moreOpen,
   moreTabActive,
+  styleOpen,
+  styleTabActive,
   settingsOpen,
   onSelectTab,
+  onOpenStyle,
   onOpenMore,
 }: {
   currentTab: AppTab;
   moreOpen: boolean;
   moreTabActive: boolean;
+  styleOpen: boolean;
+  styleTabActive: boolean;
   settingsOpen: boolean;
   onSelectTab: (tab: AppTab) => void;
+  onOpenStyle: () => void;
   onOpenMore: () => void;
 }) {
   const { t } = useTranslation();
   const moreActive = moreOpen || moreTabActive;
+  const styleActive = !settingsOpen && (styleOpen || styleTabActive);
 
   return (
     <nav
@@ -692,6 +716,15 @@ function MobileBottomNav({
           </button>
         );
       })}
+      <button
+        type="button"
+        onClick={onOpenStyle}
+        className={styleActive ? 'ol-nav-btn ol-nav-btn-active' : 'ol-nav-btn'}
+        style={mobileNavBtnStyle}
+      >
+        <Icon name="style" size={18} />
+        <span style={{ fontSize: 10.5, fontWeight: styleActive ? 600 : 500 }}>{t('nav.group.style')}</span>
+      </button>
       <button
         type="button"
         onClick={onOpenMore}
