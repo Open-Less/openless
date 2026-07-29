@@ -56,6 +56,12 @@ const SILENCE_TAIL_MS: u64 = 700;
 /// 静音送出后等待「无未关句段」的宽限期：纯静音会话（连接检查、误触）没有任何
 /// speech_started，宽限到点即以空文本成功返回。
 const FINISH_GRACE: Duration = Duration::from_millis(1_200);
+/// 宽限期内的复查间隔。收尾判据必须**反复**查——只查一次的话，那一次不通过就
+/// 再没有第二次机会（详见 `send_last_frame` 里的宽限任务）。
+const FINISH_POLL_INTERVAL: Duration = Duration::from_millis(100);
+/// 自尾帧写出起算的收尾硬上限。服务端始终不关最后一个句段时的兜底，把最坏等待
+/// 从 FINAL_RESULT_TIMEOUT（12s）压到这里。
+const FINISH_HARD_DEADLINE: Duration = Duration::from_millis(3_000);
 
 type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 type WsSink = futures_util::stream::SplitSink<WsStream, Message>;
@@ -325,7 +331,7 @@ impl StepfunRealtimeASR {
             let finished = self.session_finished.notified();
             tokio::pin!(finished);
             finished.as_mut().enable();
-            let (send_tx, tail) = {
+            let (send_tx, tail, contains_non_silent_audio) = {
                 let mut st = self.state.lock();
                 let send_tx = st.send_tx.clone();
                 if !st.pending_audio.is_empty() {
@@ -333,17 +339,20 @@ impl StepfunRealtimeASR {
                     st.audio_scratch.extend_from_slice(&pending);
                 }
                 let mut tail = std::mem::take(&mut st.audio_scratch);
+                // 只有**真实录音**部分算「有声」。补的静音是收尾工具，若把它一起
+                // 算进去，`last_non_silent_audio_written_at` 会被推到最后一个
+                // completed 之后，`has_audio_after_last_completed` 从此恒为真。
+                let contains_non_silent_audio = contains_non_silent_pcm(&tail);
                 // 尾音频和静音帧合并成一次 append，减少一次写。
                 tail.resize(tail.len() + (SILENCE_TAIL_MS * BYTES_PER_MS) as usize, 0);
                 st.finishing = true;
                 st.tail_write_pending = send_tx.is_some();
-                (send_tx, tail)
+                (send_tx, tail, contains_non_silent_audio)
             };
             let Some(send_tx) = send_tx else {
                 return Ok(());
             };
             let (written_tx, written_rx) = oneshot::channel();
-            let contains_non_silent_audio = contains_non_silent_pcm(&tail);
             send_tx
                 .send(SendItem::Audio {
                     chunk: tail,
@@ -363,21 +372,49 @@ impl StepfunRealtimeASR {
                 .map_err(StepfunASRError::SendFailed)?;
             self.state.lock().tail_write_pending = false;
 
-            // 宽限任务：仅当最后一个 completed 之后没有新的非静音帧写入时才可收尾。
-            // 这既允许松手前已 completed 的正常会话快速返回，也避免异步写入或服务端
-            // VAD 延迟把新的真实音频误判为空会话。
+            // 宽限任务：尾帧已写出，客户端不再发任何音频，剩下的只是等服务端把尾帧
+            // 里的音频吐成 completed。等够 FINISH_GRACE 且没有未关句段即可收尾。
+            //
+            // 必须**轮询**：此处曾经只在 FINISH_GRACE 到点查一次，那一次不通过就再
+            // 没有第二次机会——而尾帧之后服务端可能一个事件都不再发（松手前已停顿
+            // ≥VAD 阈值时，最后一段的 completed 早在尾帧之前就到了），会话于是一路
+            // 干等到 FINAL_RESULT_TIMEOUT。实测约 13% 的听写因此白等 12 秒。
+            // （那 13% 的直接成因是 `contains_non_silent_pcm` 把底噪当语音，见该函数；
+            // 轮询 + 硬上限是第二道防线，保证任何收尾失败都不会再退化成 12 秒。）
+            //
+            // 收尾前提仍是「无未关句段、且最后一个 completed 之后没有未确认的真实
+            // 音频」——那条保护是对的，不能为了修卡顿丢掉。真正的兜底是
+            // FINISH_HARD_DEADLINE：服务端始终不关最后一段时，把最坏等待压到 3s，
+            // 而不是一路耗到 FINAL_RESULT_TIMEOUT。
             let weak = Arc::downgrade(self);
             tokio::spawn(async move {
-                tokio::time::sleep(FINISH_GRACE).await;
-                if let Some(this) = weak.upgrade() {
+                let since_tail = Instant::now();
+                loop {
+                    tokio::time::sleep(FINISH_POLL_INTERVAL).await;
+                    let Some(this) = weak.upgrade() else {
+                        return;
+                    };
+                    let waited = since_tail.elapsed();
+                    let expired = waited >= FINISH_HARD_DEADLINE;
                     let should_finish = {
                         let st = this.state.lock();
-                        !st.session_finished
-                            && !has_audio_after_last_completed(&st)
-                            && st.open_segments == 0
+                        if st.session_finished {
+                            return;
+                        }
+                        expired
+                            || (waited >= FINISH_GRACE
+                                && st.open_segments == 0
+                                && !has_audio_after_last_completed(&st))
                     };
                     if should_finish {
+                        if expired {
+                            log::warn!(
+                                "[stepfun-asr] server did not settle within {FINISH_HARD_DEADLINE:?} \
+                                 (open segments); finishing with what we have"
+                            );
+                        }
                         this.finish_success();
+                        return;
                     }
                 }
             });
@@ -392,6 +429,12 @@ impl StepfunRealtimeASR {
             Ok(inner) => inner,
             Err(_) => {
                 // 超时兜底：有部分结果就带出去，没有才报错——与断连路径一致。
+                // 走到这里说明上面的宽限任务没能收尾（它自己有 FINISH_HARD_DEADLINE
+                // 兜底，正常不该到这一步），而用户已经白等了整整 12 秒——必须留痕。
+                log::warn!(
+                    "[stepfun-asr] finish stalled for {:?}, falling back to partial transcript",
+                    FINAL_RESULT_TIMEOUT
+                );
                 self.finish_with_partial_or_error(StepfunASRError::FinalResultTimeout);
                 Ok(())
             }
@@ -675,8 +718,25 @@ fn drain_audio_chunks(buffer: &mut Vec<u8>) -> Vec<Vec<u8>> {
     chunks
 }
 
+/// 采样振幅超过满量程 ~1% 才算「有声」。
+const NON_SILENT_PEAK: i16 = 328;
+/// 至少这么多采样超阈值才判定这一帧含真实语音。单点尖峰（键盘、电流噪声）不足以
+/// 把收尾判据拉住。
+const NON_SILENT_MIN_SAMPLES: usize = 8;
+
+/// 这段 s16le PCM 里是否有真实语音。
+///
+/// 曾经写成 `any(|byte| byte != 0)`——但麦克风底噪（实测 RMS≈0.0008）每个采样都
+/// 非零，于是**任何**一帧都被判成「非静音」，`last_non_silent_audio_written_at`
+/// 被无意义地一路刷新，收尾判据永远不成立。这里改成按振幅判。
 fn contains_non_silent_pcm(pcm: &[u8]) -> bool {
-    pcm.iter().any(|&byte| byte != 0)
+    pcm.chunks_exact(2)
+        .filter(|sample| {
+            i16::from_le_bytes([sample[0], sample[1]]).saturating_abs() > NON_SILENT_PEAK
+        })
+        .take(NON_SILENT_MIN_SAMPLES)
+        .count()
+        == NON_SILENT_MIN_SAMPLES
 }
 
 fn has_audio_after_last_completed(state: &SyncState) -> bool {
@@ -773,6 +833,23 @@ mod tests {
             model: String::new(),
             prompt: None,
         })
+    }
+
+    /// 语音级 s16le PCM：振幅远超 NON_SILENT_PEAK。
+    fn speech_pcm(bytes: usize) -> Vec<u8> {
+        std::iter::repeat(6_000i16.to_le_bytes())
+            .flatten()
+            .take(bytes)
+            .collect()
+    }
+
+    /// 底噪级 s16le PCM：每个字节都非零（旧的 `byte != 0` 判据会误判成语音），
+    /// 但振幅低于 NON_SILENT_PEAK，实际是静音。
+    fn room_tone_pcm(bytes: usize) -> Vec<u8> {
+        std::iter::repeat(0x0101i16.to_le_bytes())
+            .flatten()
+            .take(bytes)
+            .collect()
     }
 
     // ---- credentials / URL ----
@@ -983,6 +1060,18 @@ mod tests {
     }
 
     #[test]
+    fn silence_detection_ignores_room_tone_but_catches_speech() {
+        // 底噪：每个字节都非零，旧的 `byte != 0` 判据会误判成语音。
+        assert!(!contains_non_silent_pcm(&room_tone_pcm(3_200)));
+        assert!(contains_non_silent_pcm(&speech_pcm(3_200)));
+        // 纯静音与单点尖峰都不算有声。
+        assert!(!contains_non_silent_pcm(&[0u8; 3_200]));
+        let mut spike = room_tone_pcm(3_200);
+        spike[0..2].copy_from_slice(&20_000i16.to_le_bytes());
+        assert!(!contains_non_silent_pcm(&spike));
+    }
+
+    #[test]
     fn only_audio_written_after_completed_remains_pending() {
         let completed_at = Instant::now();
         let mut state = SyncState {
@@ -1064,7 +1153,7 @@ mod tests {
             prompt: None,
         }));
         asr.open_session().await.unwrap();
-        asr.consume_pcm_chunk(&[1u8; TARGET_AUDIO_CHUNK_BYTES]);
+        asr.consume_pcm_chunk(&speech_pcm(TARGET_AUDIO_CHUNK_BYTES));
 
         let asr_for_finish = Arc::clone(&asr);
         let finish = tokio::spawn(async move { asr_for_finish.send_last_frame().await });
@@ -1085,5 +1174,134 @@ mod tests {
             "delayed speech"
         );
         server.await.unwrap();
+    }
+
+    /// 假网关：握手后回 `session.updated`，收到第一个音频 append 时发出指定事件，
+    /// 之后**保持静默**直到客户端关闭连接——模拟 StepFun「没有 finish 事件」的现实。
+    async fn spawn_fake_gateway(events_on_first_audio: Vec<String>) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!(
+            "ws://{}/v1/realtime/asr/stream",
+            listener.local_addr().unwrap()
+        );
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+            // 首条必然是 session.update。
+            assert!(matches!(
+                ws.next().await.unwrap().unwrap(),
+                Message::Text(_)
+            ));
+            ws.send(Message::Text(
+                json!({ "type": "session.updated" }).to_string(),
+            ))
+            .await
+            .unwrap();
+            let mut fired = false;
+            while let Some(Ok(message)) = ws.next().await {
+                match message {
+                    Message::Text(_) if !fired => {
+                        fired = true;
+                        for event in &events_on_first_audio {
+                            ws.send(Message::Text(event.clone())).await.unwrap();
+                        }
+                    }
+                    Message::Close(_) => break,
+                    _ => {}
+                }
+            }
+        });
+        endpoint
+    }
+
+    /// 回归：松手前已停顿 ≥VAD 阈值 —— 最后一段的 completed 在尾帧**之前**就到了，
+    /// 服务端此后不会再发任何事件。
+    ///
+    /// 修复前：尾帧里残留的底噪被 `byte != 0` 判成语音，把
+    /// `last_non_silent_audio_written_at` 推到 completed 之后，一次性宽限检查因此
+    /// 不通过、又没有第二次机会 → 干等满 12 秒 FINAL_RESULT_TIMEOUT。实测约 13%
+    /// 的听写走到这条路径上。
+    #[tokio::test]
+    async fn finishes_promptly_when_last_completed_arrived_before_the_tail() {
+        let endpoint = spawn_fake_gateway(vec![
+            speech_started_event(),
+            completed_event("说完就松手了。"),
+        ])
+        .await;
+
+        let asr = Arc::new(StepfunRealtimeASR::new(StepfunRealtimeCredentials {
+            api_key: "sk-test".to_string(),
+            endpoint,
+            model: DEFAULT_MODEL.to_string(),
+            prompt: None,
+        }));
+        asr.open_session().await.unwrap();
+        // 一整帧语音，触发服务端回 speech_started + completed。
+        asr.consume_pcm_chunk(&speech_pcm(TARGET_AUDIO_CHUNK_BYTES));
+        // 关键时序：必须等 completed **先于**尾帧到达，否则走的是
+        // `record_completed` 的健康快路径，复现不出这个 bug。
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while asr.state.lock().last_completed_at.is_none() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("fake gateway should have completed the segment");
+        // 不足一帧的底噪残留：留在 audio_scratch 里，收尾时跟静音帧拼成尾帧一起
+        // 写出。旧判据把它当语音，于是尾帧把「最后一次语音」推到 completed 之后。
+        asr.consume_pcm_chunk(&room_tone_pcm(1_600));
+
+        let started = Instant::now();
+        tokio::time::timeout(FINAL_RESULT_TIMEOUT, asr.send_last_frame())
+            .await
+            .expect("send_last_frame must not hang until the final-result timeout")
+            .unwrap();
+        let elapsed = started.elapsed();
+
+        assert!(
+            elapsed < FINISH_HARD_DEADLINE,
+            "should settle on the grace path, took {elapsed:?}"
+        );
+        assert_eq!(
+            asr.await_final_result().await.unwrap().text,
+            "说完就松手了。"
+        );
+    }
+
+    /// 回归：服务端始终不关最后一个句段（只有 speech_started + delta，没有
+    /// completed）。硬上限必须兜住，而不是退化成 12 秒。
+    #[tokio::test]
+    async fn hard_deadline_bounds_the_wait_when_segment_never_closes() {
+        let endpoint = spawn_fake_gateway(vec![
+            speech_started_event(),
+            delta_event("这句话没有收到 completed", ""),
+        ])
+        .await;
+
+        let asr = Arc::new(StepfunRealtimeASR::new(StepfunRealtimeCredentials {
+            api_key: "sk-test".to_string(),
+            endpoint,
+            model: DEFAULT_MODEL.to_string(),
+            prompt: None,
+        }));
+        asr.open_session().await.unwrap();
+        asr.consume_pcm_chunk(&speech_pcm(TARGET_AUDIO_CHUNK_BYTES));
+
+        let started = Instant::now();
+        tokio::time::timeout(FINAL_RESULT_TIMEOUT, asr.send_last_frame())
+            .await
+            .expect("hard deadline must fire well before the final-result timeout")
+            .unwrap();
+        let elapsed = started.elapsed();
+
+        assert!(
+            elapsed >= FINISH_HARD_DEADLINE && elapsed < FINISH_HARD_DEADLINE * 2,
+            "should settle at the hard deadline, took {elapsed:?}"
+        );
+        // 未 completed 的 interim 尾巴仍然带出去，不能因为收尾超时就丢字。
+        assert_eq!(
+            asr.await_final_result().await.unwrap().text,
+            "这句话没有收到 completed"
+        );
     }
 }
