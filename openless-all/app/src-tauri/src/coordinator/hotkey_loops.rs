@@ -9,6 +9,42 @@ use super::*;
 
 // ─────────────────────────── hotkey bridging ───────────────────────────
 
+/// 组合键撤销专用消费线程。为什么不并入 `hotkey_bridge_loop`：bridge 为修 #468/#475
+/// 的 latch 竞态把 Pressed/Released 改成了串行 block_on —— 一次按下的 `begin_session`
+/// （开麦 + ASR 握手，几百 ms）就在 bridge 线程上同步跑，期间 bridge 无法 recv。若撤销
+/// 与其同队列，用户按下 Option+Q 的那一刻 tap 明明已经知道了，撤销却要排队等开麦跑完
+/// 才被取出，胶囊晚几百毫秒才消失 —— 观感上「录音已经起来了」，正是这次要修的。
+/// 独立通道 + 本线程保证撤销随到随执行（`handle_trigger_combined` 是纯同步快路径：
+/// 清标志 + `cancel_session`，不 await）。
+///
+/// `handler` 区分两个 monitor：主听写走 `handle_trigger_combined`，Less Computer 的
+/// 修饰键 monitor 走 `cancel_less_computer_press`。
+pub(super) fn combo_abort_bridge_loop(
+    inner: Arc<Inner>,
+    rx: mpsc::Receiver<()>,
+    handler: fn(&Arc<Inner>),
+) {
+    while rx.recv().is_ok() {
+        if inner.shortcut_recording_active.load(Ordering::SeqCst) {
+            continue;
+        }
+        handler(&inner);
+    }
+}
+
+pub(super) fn spawn_combo_abort_bridge(
+    inner: &Arc<Inner>,
+    handler: fn(&Arc<Inner>),
+) -> mpsc::Sender<()> {
+    let (combo_tx, combo_rx) = mpsc::channel::<()>();
+    let bridge_inner = Arc::clone(inner);
+    std::thread::Builder::new()
+        .name("openless-combo-abort-bridge".into())
+        .spawn(move || combo_abort_bridge_loop(bridge_inner, combo_rx, handler))
+        .ok();
+    combo_tx
+}
+
 pub(super) fn hotkey_supervisor_loop(inner: Arc<Inner>) {
     let mut attempts: u32 = 0;
     let capability = HotkeyMonitor::capability();
@@ -54,7 +90,8 @@ pub(super) fn hotkey_supervisor_loop(inner: Arc<Inner>) {
         let (tx, rx) = mpsc::channel::<HotkeyEvent>();
         #[cfg(target_os = "linux")]
         let (fcitx_tx, fcitx_binding) = (tx.clone(), binding.clone());
-        match HotkeyMonitor::start(binding, tx) {
+        let combo_tx = spawn_combo_abort_bridge(&inner, handle_trigger_combined);
+        match HotkeyMonitor::start(binding, tx, combo_tx) {
             Ok(monitor) => {
                 let adapter = monitor.kind();
                 *inner.hotkey.lock() = Some(monitor);
@@ -278,7 +315,10 @@ pub(super) fn update_coding_agent_hotkey_binding_now(inner: &Arc<Inner>) {
                 return;
             }
             let (tx, rx) = mpsc::channel::<HotkeyEvent>();
-            match HotkeyMonitor::start(modifier_binding, tx) {
+            // Less Computer 的独立 tap 也走组合键撤销通道，只是撤销的是它自己的
+            // voice_agent 会话（cancel_less_computer_press）。
+            let combo_tx = spawn_combo_abort_bridge(inner, cancel_less_computer_press);
+            match HotkeyMonitor::start(modifier_binding, tx, combo_tx) {
                 Ok(monitor) => {
                     *inner.coding_agent_modifier_hotkey.lock() = Some(monitor);
                     log::info!(
@@ -363,7 +403,7 @@ pub(super) fn less_computer_modifier_bridge_loop(inner: Arc<Inner>, rx: mpsc::Re
                 });
             }
             HotkeyEvent::Cancelled => cancel_session(&inner_cloned),
-            HotkeyEvent::TriggerCombined => cancel_less_computer_press(&inner_cloned),
+            // 组合键撤销不在此枚举里：走 combo_abort_bridge_loop（见该函数注释）。
             HotkeyEvent::TranslationModifierPressed | HotkeyEvent::QaShortcutPressed => {}
         }
     }
@@ -1058,9 +1098,8 @@ pub(super) fn hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<HotkeyEve
             HotkeyEvent::Cancelled => {
                 cancel_session(&inner_cloned);
             }
-            HotkeyEvent::TriggerCombined => {
-                handle_trigger_combined(&inner_cloned);
-            }
+            // 组合键撤销不在此枚举里：走 combo_abort_bridge_loop，避免被上面
+            // Pressed → begin_session 的同步开麦流程堵在队列里（见该函数注释）。
             HotkeyEvent::TranslationModifierPressed => {
                 let translation_hotkey = inner_cloned.prefs.get().translation_hotkey;
                 if is_builtin_translation_shift(&translation_hotkey)

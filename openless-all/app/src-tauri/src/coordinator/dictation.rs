@@ -25,7 +25,7 @@ const AUTO_HOLD_THRESHOLD: std::time::Duration = std::time::Duration::from_milli
 /// 所以先等这么久再开会话——期间监听器若报告叠加了普通键，这次按下整条作废，麦克风
 /// 不开、胶囊不闪、也不烧一次 ASR 建连。代价是听写起录晚这么多，取 150ms：足以覆盖
 /// 绝大多数组合键的「修饰键→普通键」间隔，又低于人从按键到开口的反应时间（>250ms），
-/// 不会吃掉首字。窗口没盖住的慢速组合键（按住 Option 半秒再按 Tab）由 TriggerCombined
+/// 不会吃掉首字。窗口没盖住的慢速组合键（按住 Option 半秒再按 Tab）由组合键撤销
 /// 事后撤销兜底，见 handle_trigger_combined。
 pub(super) const COMBO_ARBITRATION_GRACE: std::time::Duration =
     std::time::Duration::from_millis(150);
@@ -746,7 +746,7 @@ pub(super) async fn handle_pressed_edge(inner: &Arc<Inner>, pressed_at: std::tim
         }
 
         // 新的一次按下：先假定它什么会话都没开出来，由下面的分支在真正 begin_session
-        // 时置 true。TriggerCombined 靠这个标志判断有没有东西要撤销。
+        // 时置 true。组合键撤销靠这个标志判断有没有东西要撤销。
         inner
             .hotkey_press_began_session
             .store(false, Ordering::SeqCst);
@@ -861,7 +861,7 @@ pub(super) async fn handle_pressed(inner: &Arc<Inner>, pressed_at: std::time::In
     }
 }
 
-/// 由「这一次热键按下」开一条会话，并记下这个事实。TriggerCombined 只撤销带着这个
+/// 由「这一次热键按下」开一条会话，并记下这个事实。组合键撤销只撤销带着这个
 /// 标记的会话（见 handle_trigger_combined）。
 ///
 /// 开录之前先过一遍组合键仲裁窗口：命中就当这次按下没发生过——不开麦、不弹胶囊。
@@ -915,13 +915,24 @@ async fn press_resolves_to_combo(inner: &Arc<Inner>) -> bool {
 ///
 /// 组合键误触不算「刚用完一次听写」，所以顺带清掉冷却与防抖时间戳：否则紧接着那次
 /// 真想说话的按下会被 #545 冷却 / 250ms 防抖静默吞掉，用户以为热键坏了。
+///
+/// 本函数跑在 `combo_abort_bridge_loop` 的独立线程上，与 Pressed/Released 那条串行
+/// bridge 并发 —— 这正是它能在按下 Q 的那一帧就撤掉胶囊的原因，但也意味着不能再假定
+/// 「Released 一定排在自己后面」。所以撤不撤销只看 `hotkey_press_began_session`
+/// （每个 Pressed 边沿都会重置它，见 handle_pressed_edge），不看 `hotkey_trigger_held`：
+/// 万一 Released 抢先跑完把按住态清了，撤销仍然认得出这条会话是自己那次按下开的。
+/// 清 `hotkey_trigger_held` 只为吞掉后面的 Released，与撤销与否无关。
+///
+/// 另一个并发面是撤销落在 `begin_session` 还在 await 的中途 —— 由 begin_session 里
+/// 既有的 `startup_race_status_for_starting` / `CancelRaced` 检查点接住（audit HIGH #1），
+/// 与 Esc 取消同一条路径。
 pub(super) fn handle_trigger_combined(inner: &Arc<Inner>) {
-    let was_held = inner.hotkey_trigger_held.swap(false, Ordering::SeqCst);
+    inner.hotkey_trigger_held.store(false, Ordering::SeqCst);
     *inner.hotkey_press_at.lock() = None;
     let began_session = inner
         .hotkey_press_began_session
         .swap(false, Ordering::SeqCst);
-    if !was_held || !began_session {
+    if !began_session {
         log::info!("[coord] hotkey combined with another key (本次按下没开出会话，无需撤销)");
         return;
     }

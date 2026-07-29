@@ -476,7 +476,7 @@ struct Inner {
     hotkey: Mutex<Option<HotkeyMonitor>>,
     hotkey_status: Mutex<HotkeyStatus>,
     hotkey_trigger_held: AtomicBool,
-    /// 本次热键按下是否真的「开出了」一个会话。TriggerCombined（触发键被当修饰键用）
+    /// 本次热键按下是否真的「开出了」一个会话。组合键撤销（触发键被当修饰键用）
     /// 只撤销这一次按下开出来的会话：若这次按下其实是 toggle 停止 / 被冷却拦下 /
     /// 路由给了 QA，就没有可撤销的东西，绝不能顺手取消正在转写的上一条。
     hotkey_press_began_session: AtomicBool,
@@ -1449,7 +1449,8 @@ impl Coordinator {
         let (tx, rx) = mpsc::channel::<HotkeyEvent>();
         #[cfg(target_os = "linux")]
         let (fcitx_tx, fcitx_binding) = (tx.clone(), binding.clone());
-        match HotkeyMonitor::start(binding, tx) {
+        let combo_tx = spawn_combo_abort_bridge(&self.inner, handle_trigger_combined);
+        match HotkeyMonitor::start(binding, tx, combo_tx) {
             Ok(monitor) => {
                 let adapter = monitor.kind();
                 *self.inner.hotkey.lock() = Some(monitor);
@@ -3614,6 +3615,43 @@ mod tests {
             SessionPhase::Listening
         );
         assert!(!coordinator.inner.hotkey_trigger_held.load(Ordering::SeqCst));
+    }
+
+    // 撤销走独立线程后，它与 Pressed/Released 那条串行 bridge 之间没有先后保证。
+    // 万一 Released 抢先跑完（把按住态清了、Auto 还锁存成了切换态），撤销仍然必须认出
+    // 这条会话是自己那次按下开的并取消掉 —— 否则组合键会留下一条停不下来的录音，
+    // 正是本 PR 要修的老毛病换个形式复发。
+    #[tokio::test]
+    async fn trigger_combined_still_cancels_when_released_edge_wins_the_race() {
+        let coordinator = Coordinator::new();
+        set_auto_mode(&coordinator);
+        coordinator.inner.state.lock().phase = SessionPhase::Listening;
+        let pressed_at = std::time::Instant::now();
+        *coordinator.inner.hotkey_press_at.lock() = Some(pressed_at);
+        coordinator
+            .inner
+            .hotkey_trigger_held
+            .store(true, Ordering::SeqCst);
+        coordinator
+            .inner
+            .hotkey_press_began_session
+            .store(true, Ordering::SeqCst);
+
+        // 先跑 Released（短按 → Auto 锁存成切换态，录音继续），撤销后到。
+        handle_released_edge(
+            &coordinator.inner,
+            pressed_at + std::time::Duration::from_millis(80),
+        )
+        .await;
+        assert_eq!(
+            coordinator.inner.state.lock().phase,
+            SessionPhase::Listening
+        );
+
+        handle_trigger_combined(&coordinator.inner);
+
+        assert_eq!(coordinator.inner.state.lock().phase, SessionPhase::Idle);
+        assert!(coordinator.inner.session_cooldown_until.lock().is_none());
     }
 
     #[test]
