@@ -3740,9 +3740,20 @@ pub(super) fn cancel_session(inner: &Arc<Inner>) {
         return;
     };
 
-    stop_recorder_for_session(inner, decision.session_id);
-    cancel_asr_for_session(inner, decision.session_id);
-    restore_prepared_windows_ime_session(inner, decision.session_id);
+    // 顺序要紧：先把 UI 收干净，再去拆麦克风 / ASR。
+    //
+    // 反过来（原来的顺序）会让胶囊等在 `stop_recorder_for_session` 后面 ——
+    // `Recorder::stop()` 要 join 音频线程，而音频线程退出前要 join liveness watchdog，
+    // watchdog 又睡在自己的检查间隔里，实测撤销到胶囊消失能差 0.8~1 秒。用户按 Option+Q
+    // 或按 Esc 的观感就是「明明已经取消了，胶囊还赖着」。拆资源不需要 UI 等它，反正
+    // 这段时间录到的音频整条会话都要丢。
+    //
+    // 代价：胶囊消失后麦克风还会多开一小会儿（系统菜单栏的录音小圆点晚灭）。这段窗口
+    // 必须足够短 —— 否则紧接着那次真想说话的按下会在旧 recorder 还占着麦克风时
+    // build_input_stream，而 `Recorder` 没有 Drop 停采，recorder 槽被新会话覆盖后旧音频
+    // 线程会继续跑、抓着麦克风不放。所以 watchdog 的检查间隔必须是碎的（见
+    // recorder.rs 的 WATCHDOG_*），把这段窗口压到几十毫秒；两处改动是一对，不能只留一个。
+    //
     // Processing 阶段保持 phase=Processing 让 end_session 自己走完检查 + 收尾；
     // 其他阶段直接转 Idle。
     if decision.phase != SessionPhase::Processing {
@@ -3753,6 +3764,8 @@ pub(super) fn cancel_session(inner: &Arc<Inner>) {
         *inner.session_cooldown_until.lock() =
             Some(now + std::time::Duration::from_millis(POST_SESSION_COOLDOWN_MS));
     }
+    // emit_capsule 仍然排在 finish_cancel_session_state 之后：它要读 state.voice_agent /
+    // phase 拼 payload，提到前面会发出「还在进行中」的那一帧。
     emit_capsule(inner, CapsuleState::Cancelled, 0.0, 0, None, None);
     log::info!("[coord] session cancelled (was {:?})", decision.phase);
     schedule_capsule_idle(inner, CAPSULE_CANCEL_HIDE_DELAY_MS);
@@ -3760,6 +3773,10 @@ pub(super) fn cancel_session(inner: &Arc<Inner>) {
     if let Some(app) = inner.app.lock().clone() {
         crate::hide_less_computer_glow(&app);
     }
+
+    stop_recorder_for_session(inner, decision.session_id);
+    cancel_asr_for_session(inner, decision.session_id);
+    restore_prepared_windows_ime_session(inner, decision.session_id);
 }
 
 fn append_typed_prefix(target: &mut String, delta: &str, typed_chars: usize) -> usize {
