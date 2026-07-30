@@ -48,6 +48,17 @@ const BYTES_PER_MS: u64 = 32;
 const FINAL_RESULT_TIMEOUT: Duration = Duration::from_secs(12);
 const SESSION_READY_TIMEOUT: Duration = Duration::from_secs(5);
 const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+/// WebSocket 建连（TCP + TLS + HTTP upgrade）本身的上限。
+///
+/// 没有它，`connect_async` 会无限等：握手打到一半断网、公司网关 / 酒店门户静默丢包、
+/// 服务端黑洞掉连接，这个 await 就永远不返回。而 `open_session` 是在 hotkey bridge
+/// 线程上 `block_on` 等的（那条 bridge 为修 #468/#475 的 latch 竞态改成了串行），
+/// 一旦卡住，按下 / 松开全都排在队里没人处理 —— 用户的表现是「热键突然完全失灵，
+/// 录音开不了也停不了，只能退出重开」，而且没有任何提示。
+///
+/// 与 SESSION_READY_TIMEOUT 的区别：那个管的是「连上之后等 session.updated 回应」，
+/// 这个管的是「连上」本身，之前完全没人管。取值与 volcengine 侧一致。
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 /// server_vad 断句静默阈值，与 qwen_realtime 取齐（500ms 降低换气误切概率）。
 const VAD_SILENCE_DURATION_MS: u32 = 500;
 /// 收尾补送的静音时长：必须 > VAD_SILENCE_DURATION_MS 并留网络余量，
@@ -200,8 +211,14 @@ impl StepfunRealtimeASR {
                 .map_err(|e| StepfunASRError::ConnectionFailed(e.to_string()))?,
         );
 
-        let (ws, _resp) = connect_async(request)
+        let (ws, _resp) = tokio::time::timeout(CONNECT_TIMEOUT, connect_async(request))
             .await
+            .map_err(|_| {
+                StepfunASRError::ConnectionFailed(format!(
+                    "连接超时（{} ms）",
+                    CONNECT_TIMEOUT.as_millis()
+                ))
+            })?
             .map_err(|e| StepfunASRError::ConnectionFailed(e.to_string()))?;
         let (write, read) = ws.split();
         *self.writer.lock().await = Some(write);
@@ -1085,5 +1102,43 @@ mod tests {
             "delayed speech"
         );
         server.await.unwrap();
+    }
+
+    // 服务端收下 TCP 却永不完成 WebSocket 握手（断网、公司网关 / 酒店门户静默丢包、
+    // 服务端黑洞）时，open_session 必须超时返回错误，而不是把调用方永远挂住 ——
+    // 它是在串行的 hotkey bridge 线程上 block_on 等的，一旦挂住，按下 / 松开全都排在
+    // 队列里没人处理，用户表现为「热键彻底失灵，录音开不了也停不了，只能退出重开」。
+    #[tokio::test]
+    async fn open_session_times_out_when_handshake_never_completes() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        // 收下连接后什么都不回，连接一直挂着。
+        let _server = tokio::spawn(async move {
+            let _accepted = listener.accept().await;
+            std::future::pending::<()>().await;
+        });
+
+        let asr = Arc::new(StepfunRealtimeASR::new(StepfunRealtimeCredentials {
+            api_key: "sk-test".to_string(),
+            endpoint: format!("ws://{addr}"),
+            model: String::new(),
+            prompt: None,
+        }));
+
+        let started = Instant::now();
+        let err = asr
+            .open_session()
+            .await
+            .expect_err("握手不完成时必须超时失败，不能永远挂着");
+        assert!(
+            matches!(&err, StepfunASRError::ConnectionFailed(msg) if msg.contains("连接超时")),
+            "应报连接超时，实际: {err:?}"
+        );
+        // 上限给足余量，只为证明它真的有界（没有 CONNECT_TIMEOUT 时这里会永远不返回）。
+        assert!(
+            started.elapsed() < CONNECT_TIMEOUT * 3,
+            "超时应在 CONNECT_TIMEOUT 量级返回，实际耗时 {:?}",
+            started.elapsed()
+        );
     }
 }

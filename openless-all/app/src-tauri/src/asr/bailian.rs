@@ -31,6 +31,10 @@ pub const DEFAULT_MODEL: &str = "fun-asr-realtime";
 pub const TARGET_AUDIO_CHUNK_BYTES: usize = 3_200;
 const BYTES_PER_MS: u64 = 32;
 const FINAL_RESULT_TIMEOUT: Duration = Duration::from_secs(12);
+/// WebSocket 建连（TCP + TLS + HTTP upgrade）本身的上限。没有它 `connect_async` 会无限
+/// 等，而 `open_session` 是在串行的 hotkey bridge 线程上 `block_on` 等的 —— 卡住就意味着
+/// 热键彻底失灵（开不了也停不了，只能退出重开）。详见 stepfun_realtime.rs 同名常量。
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 type WsSink = futures_util::stream::SplitSink<WsStream, Message>;
@@ -149,8 +153,14 @@ impl BailianRealtimeASR {
                 .map_err(|e| BailianASRError::ConnectionFailed(e.to_string()))?,
         );
 
-        let (ws, _resp) = connect_async(request)
+        let (ws, _resp) = tokio::time::timeout(CONNECT_TIMEOUT, connect_async(request))
             .await
+            .map_err(|_| {
+                BailianASRError::ConnectionFailed(format!(
+                    "连接超时（{} ms）",
+                    CONNECT_TIMEOUT.as_millis()
+                ))
+            })?
             .map_err(|e| BailianASRError::ConnectionFailed(e.to_string()))?;
         let (write, read) = ws.split();
         *self.writer.lock().await = Some(write);
