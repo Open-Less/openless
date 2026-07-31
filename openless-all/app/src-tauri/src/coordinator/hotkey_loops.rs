@@ -250,6 +250,16 @@ pub(super) fn coding_agent_hotkey_supervisor_loop(inner: Arc<Inner>) {
     }
 }
 
+/// 「Less Computer 语音键已禁用」是否已经打过日志。
+///
+/// supervisor 每 5s 轮询一次，没配语音键的用户每轮都会落到同一条禁用分支。无条件
+/// 打印会稳定产出 720 行/小时的同一句话 —— 实测一份跑了六天的 openless.log 里它占
+/// 了 95% 以上，真正有用的会话日志被冲得很难找，日志轮转也被它提前触发。
+/// 只在状态翻转成禁用时打一次；重新装上语音键时清掉，下次禁用还会再打。
+#[cfg(target_os = "macos")]
+static LESS_COMPUTER_HOTKEY_DISABLED_LOGGED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub(super) fn update_coding_agent_hotkey_binding_now(inner: &Arc<Inner>) {
     #[cfg(not(target_os = "macos"))]
     {
@@ -263,13 +273,16 @@ pub(super) fn update_coding_agent_hotkey_binding_now(inner: &Arc<Inner>) {
         let prefs = inner.prefs.get();
         let Some(binding) = prefs.coding_agent_voice_hotkey.clone() else {
             take_coding_agent_hotkeys_on_main_thread(inner);
-            log::info!("[less-computer] hotkey disabled");
+            if !LESS_COMPUTER_HOTKEY_DISABLED_LOGGED.swap(true, Ordering::SeqCst) {
+                log::info!("[less-computer] hotkey disabled");
+            }
             return;
         };
         if !prefs.coding_agent_enabled || is_unconfigured_shortcut(&binding) {
             take_coding_agent_hotkeys_on_main_thread(inner);
             return;
         }
+        LESS_COMPUTER_HOTKEY_DISABLED_LOGGED.store(false, Ordering::SeqCst);
 
         if let Some(modifier_binding) = less_computer_modifier_binding(&binding) {
             take_coding_agent_combo_hotkey_on_main_thread(inner);
