@@ -3581,9 +3581,24 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
         default_done_message(status, polish_error.is_some())
     };
 
+    // 胶囊只在 error 态渲染 message —— done 态按设计是「冻结光效淡出、不带文字」
+    // （见 Capsule.tsx 的 VoiceOrbStage：`state === 'error' && <span>{message}</span>`）。
+    // 所以失败信息必须走 error 态才看得见，否则文案算出来就被前端丢掉。
+    //
+    // 最典型的受害者是润色失败：它会静默回退成未润色的原文，而胶囊照常显示成功态，
+    // 用户界面上没有任何痕迹。实际后果是 LLM 凭证失效后，用户连着十几个小时每句话
+    // 都在拿原文，只能靠「今天出来的字怎么变笨了」察觉，日志里其实每一句都报了错。
+    let session_failed =
+        tsf_required_insert_failed || polish_error.is_some() || status == InsertStatus::Failed;
+    let capsule_state = if session_failed {
+        CapsuleState::Error
+    } else {
+        CapsuleState::Done
+    };
+
     emit_capsule(
         inner,
-        CapsuleState::Done,
+        capsule_state,
         0.0,
         elapsed,
         done_message,
