@@ -2464,6 +2464,7 @@ pub(crate) fn show_less_computer_glow<R: tauri::Runtime>(app: &AppHandle<R>) {
     // issue #470：通知 glow 前端「可见」，恢复发光动画（隐藏时会 emit(false) 卸载发光层以释放 GPU）。
     let _ = window.emit("less-computer-glow:active", true);
     let window_clone = window.clone();
+    let app_for_reassert = app.clone();
     let _ = app.run_on_main_thread(move || {
         use objc2::msg_send;
         use objc2::runtime::AnyObject;
@@ -2476,11 +2477,32 @@ pub(crate) fn show_less_computer_glow<R: tauri::Runtime>(app: &AppHandle<R>) {
                     unsafe {
                         // 抬到菜单栏(24)/Dock 之上，让描边能真正贴到屏幕最外缘（含顶部菜单栏区域）。
                         let _: () = msg_send![ns, setLevel: 25i64];
-                        // 所有 Space 都显示、不参与窗口循环、全屏 app 上也叠加。
-                        let _: () = msg_send![ns, setCollectionBehavior: 273u64];
+                        // 所有 Space 都显示、不参与窗口循环、全屏 app 上也叠加（273 =
+                        // CanJoinAllSpaces|Stationary|FullScreenAuxiliary）。macOS 26 会在
+                        // 运行中把窗口从「全 Space 贴附」剥离且同值写入救不回（详见
+                        // show_capsule_window_no_activate 的重注册注释）；glow show 频率低，
+                        // 每次都走重注册序列：先以去掉 CanJoinAllSpaces 位的 272 上屏，
+                        // 下一个 tick 再写 273 —— 可见状态下的位翻转才触发重新注册。
+                        let _: () = msg_send![ns, setCollectionBehavior: 272u64];
                         let _: () = msg_send![ns, setIgnoresMouseEvents: true];
                         let _: () = msg_send![ns, orderFrontRegardless];
                     }
+                    let window_for_reassert = window_clone.clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_millis(30));
+                        let _ = app_for_reassert.run_on_main_thread(move || {
+                            let Ok(handle) = window_for_reassert.ns_window() else {
+                                return;
+                            };
+                            let ns = handle as *mut AnyObject;
+                            if ns.is_null() {
+                                return;
+                            }
+                            unsafe {
+                                let _: () = msg_send![ns, setCollectionBehavior: 273u64];
+                            }
+                        });
+                    });
                 }
             }
             Err(_) => {

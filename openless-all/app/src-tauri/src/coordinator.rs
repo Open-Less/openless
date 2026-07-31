@@ -158,10 +158,11 @@ fn capsule_state_log_name(state: CapsuleState) -> &'static str {
 fn show_capsule_window_for_recording<R: tauri::Runtime>(
     app: &AppHandle<R>,
     window: &tauri::WebviewWindow<R>,
+    reassert_spaces: bool,
 ) {
     let mut needs_fallback = true;
     if capsule_show_strategy_for_platform() == CapsuleShowStrategy::NoActivate {
-        needs_fallback = !show_capsule_window_no_activate(app, window);
+        needs_fallback = !show_capsule_window_no_activate(app, window, reassert_spaces);
         if needs_fallback && !CAPSULE_NO_ACTIVATE_FALLBACK_WARNED.swap(true, Ordering::SeqCst) {
             // 产品取舍：no-activate 是 macOS/AeroSpace 的主路径；但如果 ns_window
             // 暂不可用，仍优先保住录音反馈，不让用户以为听写没启动。fallback 可能

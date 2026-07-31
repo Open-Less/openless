@@ -245,6 +245,7 @@ pub(super) fn capture_ime_submit_target() -> Option<ImeSubmitTarget> {
 pub(super) fn show_capsule_window_no_activate<R: tauri::Runtime>(
     _app: &AppHandle<R>,
     window: &tauri::WebviewWindow<R>,
+    _reassert_spaces: bool,
 ) -> bool {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     use windows::Win32::Foundation::HWND;
@@ -284,8 +285,9 @@ pub(super) fn show_capsule_window_no_activate<R: tauri::Runtime>(
 
 #[cfg(target_os = "macos")]
 pub(super) fn show_capsule_window_no_activate<R: tauri::Runtime>(
-    _app: &AppHandle<R>,
+    app: &AppHandle<R>,
     window: &tauri::WebviewWindow<R>,
+    reassert_spaces: bool,
 ) -> bool {
     use objc2::msg_send;
     use objc2::runtime::AnyObject;
@@ -314,14 +316,53 @@ pub(super) fn show_capsule_window_no_activate<R: tauri::Runtime>(
     // 外加 setLevel(25)：光有 FULL_SCREEN_AUXILIARY 只是「被允许」进全屏 Space，但窗口层级
     // 若停在 alwaysOnTop 的浮动层(~3) 仍会被全屏 app 的窗口盖住而看不见；抬到菜单栏(24)之上
     // 的 25（与 show_less_computer_glow 同款）才能真正叠在全屏之上。
+    const CAN_JOIN_ALL_SPACES: usize = 1 << 0;
+    const STATIONARY: usize = 1 << 4;
+    const FULL_SCREEN_AUXILIARY: usize = 1 << 8;
+    const BEHAVIOR: usize = CAN_JOIN_ALL_SPACES | STATIONARY | FULL_SCREEN_AUXILIARY;
     unsafe {
-        const CAN_JOIN_ALL_SPACES: usize = 1 << 0;
-        const STATIONARY: usize = 1 << 4;
-        const FULL_SCREEN_AUXILIARY: usize = 1 << 8;
-        let behavior = CAN_JOIN_ALL_SPACES | STATIONARY | FULL_SCREEN_AUXILIARY;
         let _: () = msg_send![ns_window, setLevel: 25i64];
-        let _: () = msg_send![ns_window, setCollectionBehavior: behavior];
+        if reassert_spaces {
+            // 值若被外部改动过，留一条证据 —— 用于分辨「值被改」与「值没变但
+            // WindowServer 侧注册失效」（2026-07-31 事故属于后者：值一直是 273，
+            // 注册却缺了桌面，窗口被钉死在单个 Space）。
+            let current: usize = msg_send![ns_window, collectionBehavior];
+            if current != BEHAVIOR {
+                log::warn!(
+                    "[capsule] collectionBehavior drifted to {current} (expected {BEHAVIOR}); re-registering"
+                );
+            }
+            // 入场帧先以「无 CanJoinAllSpaces 位」的低值上屏（保留 Stationary/
+            // FullScreenAuxiliary，全屏叠加不受影响）。体外实验（macOS 26）证明：
+            // 只有「窗口可见时 CanJoinAllSpaces 位发生 0→1 转变」才触发 WindowServer
+            // 重新注册贴附；隐藏时改值、或同一个 runloop tick 里连写两个值（被合并）
+            // 都是 no-op。所以 273 必须等 orderFront 之后的下一个 tick 再写（见下方）。
+            let low = STATIONARY | FULL_SCREEN_AUXILIARY;
+            let _: () = msg_send![ns_window, setCollectionBehavior: low];
+        } else {
+            let _: () = msg_send![ns_window, setCollectionBehavior: BEHAVIOR];
+        }
         let _: () = msg_send![ns_window, orderFrontRegardless];
+    }
+    if reassert_spaces {
+        // 换线程再回主线程，保证落在 orderFront 之后的另一个 runloop tick——
+        // run_on_main_thread 在主线程上会内联执行，起不到隔 tick 的作用。
+        // 30ms 间隙里窗口以低值可见于当前桌面（用户正看着的那个），无可感知差异。
+        let app = app.clone();
+        let window = window.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(30));
+            let _ = app.run_on_main_thread(move || {
+                let Ok(handle) = window.ns_window() else { return };
+                let ns_window = handle as *mut AnyObject;
+                if ns_window.is_null() {
+                    return;
+                }
+                unsafe {
+                    let _: () = msg_send![ns_window, setCollectionBehavior: BEHAVIOR];
+                }
+            });
+        });
     }
     true
 }
@@ -330,6 +371,7 @@ pub(super) fn show_capsule_window_no_activate<R: tauri::Runtime>(
 pub(super) fn show_capsule_window_no_activate<R: tauri::Runtime>(
     _app: &AppHandle<R>,
     _window: &tauri::WebviewWindow<R>,
+    _reassert_spaces: bool,
 ) -> bool {
     true
 }
@@ -338,6 +380,7 @@ pub(super) fn show_capsule_window_no_activate<R: tauri::Runtime>(
 pub(super) fn show_capsule_window_no_activate<R: tauri::Runtime>(
     _app: &AppHandle<R>,
     _window: &tauri::WebviewWindow<R>,
+    _reassert_spaces: bool,
 ) -> bool {
     false
 }
@@ -567,7 +610,16 @@ pub(super) fn emit_capsule(
                     capsule_state_log_name(state)
                 );
             }
-            show_capsule_window_for_recording(&app_for_main, &window);
+            // 入场帧（隐藏→可见）强制重注册 Space 贴附：macOS 26 观测到系统会在运行中
+            // 把窗口从「全 Space 贴附」剥离（2026-07-31 实测：胶囊被钉死单个 Space，
+            // 其它桌面上听写全程不可见），而 setCollectionBehavior 写入相同值是 no-op，
+            // 之后每帧重写 273 都救不回来。只在入场帧做一次 0→273 的翻转即可恢复注册，
+            // 30Hz 的 level 帧不做（每帧翻转会让 WindowServer 反复重排窗口）。
+            show_capsule_window_for_recording(
+                &app_for_main,
+                &window,
+                payload_for_deferred_emit.is_some(),
+            );
             // macOS/Windows 优先走 no-activate show，避免录音胶囊抢走当前工作 app 焦点。
             // 若 fallback 到 show()，OpenLess 已是前台 app 时再把 key window 还给 main。
             #[cfg(target_os = "macos")]
