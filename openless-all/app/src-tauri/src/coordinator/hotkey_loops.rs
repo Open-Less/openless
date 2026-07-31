@@ -28,10 +28,14 @@ pub(super) fn esc_cancel_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<()>) 
 pub(super) fn spawn_esc_cancel_bridge(inner: &Arc<Inner>) -> mpsc::Sender<()> {
     let (cancel_tx, cancel_rx) = mpsc::channel::<()>();
     let bridge_inner = Arc::clone(inner);
-    std::thread::Builder::new()
+    if let Err(e) = std::thread::Builder::new()
         .name("openless-esc-cancel-bridge".into())
         .spawn(move || esc_cancel_bridge_loop(bridge_inner, cancel_rx))
-        .ok();
+    {
+        // 线程建不起来 = 取消通道没有消费者，Esc 取消会静默失效——这正是本 PR 想修的
+        // bug 以另一种方式回归，必须留 error 日志以便排查。
+        log::error!("[hotkey] esc-cancel-bridge 线程启动失败，Esc 取消将不可用: {e}");
+    }
     cancel_tx
 }
 
@@ -1225,5 +1229,118 @@ pub(super) fn window_key_matches_trigger(trigger: crate::types::HotkeyTrigger, k
         HotkeyTrigger::MediaPlayPause => false,
         // Custom 走 global-hotkey crate，不走 window hotkey fallback
         HotkeyTrigger::Custom => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 轮询 `inner.state.cancelled` 直到满足条件，超时返回 false。
+    fn wait_until(mut cond: impl FnMut() -> bool, timeout: std::time::Duration) -> bool {
+        let deadline = std::time::Instant::now() + timeout;
+        while std::time::Instant::now() < deadline {
+            if cond() {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        false
+    }
+
+    /// 构造一个处于 Processing 阶段、cancelled=false 的 Coordinator。
+    fn coordinator_in_processing() -> Coordinator {
+        let coordinator = Coordinator::new();
+        let mut state = coordinator.inner.state.lock();
+        state.phase = SessionPhase::Processing;
+        state.cancelled = false;
+        drop(state);
+        coordinator
+    }
+
+    /// 后台运行 esc_cancel_bridge_loop，返回 sender 与 join handle。
+    fn spawn_loop(inner: &Arc<Inner>) -> (mpsc::Sender<()>, std::thread::JoinHandle<()>) {
+        let (tx, rx) = mpsc::channel::<()>();
+        let bridge_inner = Arc::clone(inner);
+        let handle = std::thread::spawn(move || esc_cancel_bridge_loop(bridge_inner, rx));
+        (tx, handle)
+    }
+
+    #[test]
+    fn esc_cancel_bridge_sets_cancelled_during_processing() {
+        let coordinator = coordinator_in_processing();
+        let (tx, handle) = spawn_loop(&coordinator.inner);
+
+        tx.send(()).unwrap();
+        assert!(
+            wait_until(
+                || coordinator.inner.state.lock().cancelled,
+                std::time::Duration::from_secs(2)
+            ),
+            "取消信号应置 cancelled 旗标"
+        );
+        // #798 语义：Processing 阶段保持 phase=Processing，由 end_session 自行收尾。
+        assert_eq!(
+            coordinator.inner.state.lock().phase,
+            SessionPhase::Processing
+        );
+
+        drop(tx);
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn esc_cancel_bridge_skips_while_shortcut_recording_active() {
+        let coordinator = coordinator_in_processing();
+        let (tx, handle) = spawn_loop(&coordinator.inner);
+
+        coordinator.set_shortcut_recording_active(true);
+        tx.send(()).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(120));
+        assert!(
+            !coordinator.inner.state.lock().cancelled,
+            "录制快捷键期间按 Esc 应被忽略"
+        );
+
+        // 录制结束后 Esc 恢复生效。
+        coordinator.set_shortcut_recording_active(false);
+        tx.send(()).unwrap();
+        assert!(
+            wait_until(
+                || coordinator.inner.state.lock().cancelled,
+                std::time::Duration::from_secs(2)
+            ),
+            "录制结束后取消信号应恢复生效"
+        );
+
+        drop(tx);
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn esc_cancel_bridge_is_idempotent_on_repeat_signals() {
+        let coordinator = coordinator_in_processing();
+        let (tx, handle) = spawn_loop(&coordinator.inner);
+
+        for _ in 0..3 {
+            tx.send(()).unwrap();
+        }
+        assert!(
+            wait_until(
+                || coordinator.inner.state.lock().cancelled,
+                std::time::Duration::from_secs(2)
+            ),
+            "首个取消信号应置 cancelled 旗标"
+        );
+        // 连按 Esc / 双通道重复触发时 cancel_session 幂等：不 panic、状态不回写。
+        tx.send(()).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(120));
+        assert_eq!(
+            coordinator.inner.state.lock().phase,
+            SessionPhase::Processing
+        );
+
+        drop(tx);
+        handle.join().unwrap();
     }
 }
