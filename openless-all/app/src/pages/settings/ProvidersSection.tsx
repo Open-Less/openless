@@ -554,12 +554,14 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
 // 统一「阿里云百炼」下,按模型名判断走哪种协议(与后端
 // coordinator::resolve_effective_asr_provider 保持一致):qwen3-asr-flash-realtime* 与
 // fun-asr-realtime* 与 fun-asr-flash-8k-realtime* 都是实时模型；当前支持的
-// fun-asr-flash-2026-06-15 是「录音文件·说完转写」。
+// fun-asr-flash-2026-06-15 / qwen-audio-3.0-asr-flash 是「录音文件·说完转写」。
 function bailianModelIsRecordedFile(model: string): boolean {
   const m = model.trim();
-  return m === 'fun-asr-flash-2026-06-15';
+  return m === 'fun-asr-flash-2026-06-15' || m === 'qwen-audio-3.0-asr-flash';
 }
 
+// qwen-audio-3.0-asr-flash 官方支持热词，但批量协议尚未把该设置写入请求体；
+// 在后端接入前不展示一个实际不生效的热词输入框。
 function bailianModelSupportsVocabulary(model: string): boolean {
   const m = model.trim();
   return !m

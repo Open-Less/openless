@@ -315,7 +315,8 @@ pub(crate) fn active_asr_provider_kind(id: &str) -> ActiveAsrProviderKind {
 /// 统一「阿里云百炼」入口的模型 → 底层协议 id 路由。
 ///
 /// 三条百炼协议（fun-asr-realtime 经典实时 / qwen3-asr-flash-realtime Realtime /
-/// fun-asr-flash 录音文件）在 UI 上收成一个 provider `bailian`（一把 key），**构建时**
+/// fun-asr-flash 与 qwen-audio-3.0-asr-flash 录音文件）在 UI 上收成一个
+/// provider `bailian`（一把 key），**构建时**
 /// 按所选模型二次路由到具体协议客户端。凭据 / 「已配置」判定仍看真实 active
 /// `bailian`（→ ApiKeyOnly，一把 key），只有这里的 build 分发用得上 effective id。
 ///
@@ -349,11 +350,11 @@ pub(crate) fn resolve_effective_asr_provider(
         Ok(crate::asr::bailian::PROVIDER_ID.to_string())
     } else if model.starts_with("qwen3-asr-flash-realtime") {
         Ok(crate::asr::qwen_realtime::PROVIDER_ID.to_string())
-    } else if model == crate::asr::dashscope_multimodal::DEFAULT_MODEL {
+    } else if crate::asr::dashscope_multimodal::is_supported_model(model) {
         Ok(crate::asr::dashscope_multimodal::PROVIDER_ID.to_string())
     } else {
         Err(format!(
-            "不支持的百炼 ASR 模型：{model}。支持 fun-asr-realtime、paraformer-realtime、sensevoice-realtime、qwen3-asr-flash-realtime 和 fun-asr-flash-2026-06-15"
+            "不支持的百炼 ASR 模型：{model}。支持 fun-asr-realtime、paraformer-realtime、sensevoice-realtime、qwen3-asr-flash-realtime、qwen-audio-3.0-asr-flash 和 fun-asr-flash-2026-06-15"
         ))
     }
 }
@@ -372,11 +373,11 @@ pub(crate) fn stepfun_model_is_stream(model: &str) -> bool {
 
 pub(crate) fn validate_dashscope_multimodal_model(model: &str) -> Result<(), String> {
     let model = model.trim();
-    if model.is_empty() || model == crate::asr::dashscope_multimodal::DEFAULT_MODEL {
+    if model.is_empty() || crate::asr::dashscope_multimodal::is_supported_model(model) {
         return Ok(());
     }
     Err(format!(
-        "不支持的 DashScope 录音文件 ASR 模型：{model}。该协议仅支持 fun-asr-flash-2026-06-15；fun-asr-flash-8k-realtime 系列属于 8 kHz 实时 WebSocket 模型，当前尚未支持"
+        "不支持的 DashScope 录音文件 ASR 模型：{model}。该协议支持 qwen-audio-3.0-asr-flash 和 fun-asr-flash-2026-06-15；fun-asr-flash-8k-realtime 系列属于 8 kHz 实时 WebSocket 模型，当前尚未支持"
     ))
 }
 
@@ -3048,6 +3049,10 @@ mod tests {
             crate::asr::dashscope_multimodal::PROVIDER_ID
         );
         assert_eq!(
+            resolve_effective_asr_provider(bailian, "qwen-audio-3.0-asr-flash").unwrap(),
+            crate::asr::dashscope_multimodal::PROVIDER_ID
+        );
+        assert_eq!(
             resolve_effective_asr_provider(bailian, "paraformer-realtime-v2").unwrap(),
             crate::asr::bailian::PROVIDER_ID
         );
@@ -3080,6 +3085,18 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.contains("不支持的百炼 ASR 模型"));
+    }
+
+    #[test]
+    fn validates_only_supported_dashscope_multimodal_models() {
+        assert!(validate_dashscope_multimodal_model("").is_ok());
+        assert!(
+            validate_dashscope_multimodal_model("fun-asr-flash-2026-06-15").is_ok()
+        );
+        assert!(validate_dashscope_multimodal_model("qwen-audio-3.0-asr-flash").is_ok());
+        assert!(
+            validate_dashscope_multimodal_model("qwen-audio-3.0-asr-flash-streaming").is_err()
+        );
     }
 
     #[test]

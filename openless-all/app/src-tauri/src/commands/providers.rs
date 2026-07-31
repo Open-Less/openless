@@ -45,6 +45,7 @@ pub async fn list_provider_models(kind: String) -> Result<ProviderModelsResult, 
                 crate::asr::qwen_realtime::DEFAULT_MODEL.to_string(),
                 "qwen3-asr-flash-realtime-2026-02-10".to_string(),
                 "qwen3-asr-flash-realtime-2025-10-27".to_string(),
+                crate::asr::dashscope_multimodal::QWEN_AUDIO_MODEL.to_string(),
                 crate::asr::dashscope_multimodal::DEFAULT_MODEL.to_string(),
             ],
         });
@@ -81,7 +82,10 @@ pub async fn list_provider_models(kind: String) -> Result<ProviderModelsResult, 
     {
         // multimodal-generation 无模型列表 HTTP 接口；与 mimo 同，返回静态别名。
         return Ok(ProviderModelsResult {
-            models: vec![crate::asr::dashscope_multimodal::DEFAULT_MODEL.to_string()],
+            models: vec![
+                crate::asr::dashscope_multimodal::QWEN_AUDIO_MODEL.to_string(),
+                crate::asr::dashscope_multimodal::DEFAULT_MODEL.to_string(),
+            ],
         });
     }
     if kind == "asr" && CredentialsVault::get_active_asr() == crate::asr::elevenlabs::PROVIDER_ID {
@@ -388,7 +392,8 @@ async fn validate_elevenlabs_asr_provider() -> Result<(), String> {
     })
 }
 
-/// fun-asr-flash 官方公开示例音频，用于连通性校验。该模型对纯静音会返回
+/// DashScope 录音文件 ASR 官方公开示例音频，用于两个已支持模型的连通性校验。
+/// 这类模型对纯静音会返回
 /// 400（"no speech" 类错误），无法像 Whisper/Mimo 那样发静音探活；改用这段
 /// 阿里官方文档在案的示例 wav（由 DashScope 侧拉取），key/endpoint/model 有效
 /// 即返回 200。

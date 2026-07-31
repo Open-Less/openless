@@ -1,6 +1,7 @@
 //! 阿里云百炼（DashScope）多模态生成同步接口的批量 ASR 客户端。
 //!
-//! `fun-asr-flash` 系列是**非实时录音文件识别**模型，走 DashScope 私有的
+//! `fun-asr-flash` 与 `qwen-audio-3.0-asr-flash` 系列是**非实时录音文件识别**
+//! 模型，走 DashScope 私有的
 //! `multimodal-generation/generation` HTTP 接口，既不是实时 WebSocket 双工
 //! （见 `bailian.rs`），也不是 OpenAI 兼容的 `/audio/transcriptions`
 //! （见 `whisper.rs`）。因此单独成一路批量客户端：录音结束后把整段 PCM 编成
@@ -28,6 +29,7 @@ pub const PROVIDER_ID: &str = "bailian-fun-asr-flash";
 pub const DEFAULT_ENDPOINT: &str =
     "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation";
 pub const DEFAULT_MODEL: &str = "fun-asr-flash-2026-06-15";
+pub const QWEN_AUDIO_MODEL: &str = "qwen-audio-3.0-asr-flash";
 
 pub struct DashScopeMultimodalASR {
     api_key: String,
@@ -119,6 +121,11 @@ impl DashScopeMultimodalASR {
     }
 }
 
+pub fn is_supported_model(model: &str) -> bool {
+    let model = model.trim();
+    model == DEFAULT_MODEL || model == QWEN_AUDIO_MODEL
+}
+
 impl crate::recorder::AudioConsumer for DashScopeMultimodalASR {
     fn consume_pcm_chunk(&self, pcm: &[u8]) {
         self.buffer.lock().extend_from_slice(pcm);
@@ -154,6 +161,8 @@ pub fn dashscope_multimodal_body(model: &str, wav: &[u8]) -> Value {
         "data:audio/wav;base64,{}",
         base64::engine::general_purpose::STANDARD.encode(wav)
     );
+    // qwen-audio-3.0-asr-flash 还支持 vocabulary 与 language_hints；当前批量客户端
+    // 尚未将这两项设置映射到请求体，暂时保持自动语言检测且不传热词。
     serde_json::json!({
         "model": model,
         "input": {
@@ -262,17 +271,19 @@ mod tests {
 
     #[test]
     fn body_uses_multimodal_generation_shape() {
-        let body = dashscope_multimodal_body(DEFAULT_MODEL, b"wav");
-        assert_eq!(body["model"], DEFAULT_MODEL);
-        let audio = &body["input"]["messages"][0]["content"][0];
-        assert_eq!(audio["type"], "input_audio");
-        assert!(audio["input_audio"]["data"]
-            .as_str()
-            .unwrap()
-            .starts_with("data:audio/wav;base64,"));
-        assert_eq!(body["parameters"]["format"], "wav");
-        assert_eq!(body["parameters"]["sample_rate"], "16000");
-        assert!(body["parameters"].get("vocabulary_id").is_none());
+        for model in [DEFAULT_MODEL, QWEN_AUDIO_MODEL] {
+            let body = dashscope_multimodal_body(model, b"wav");
+            assert_eq!(body["model"], model);
+            let audio = &body["input"]["messages"][0]["content"][0];
+            assert_eq!(audio["type"], "input_audio");
+            assert!(audio["input_audio"]["data"]
+                .as_str()
+                .unwrap()
+                .starts_with("data:audio/wav;base64,"));
+            assert_eq!(body["parameters"]["format"], "wav");
+            assert_eq!(body["parameters"]["sample_rate"], "16000");
+            assert!(body["parameters"].get("vocabulary_id").is_none());
+        }
     }
 
     #[test]
