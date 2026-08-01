@@ -945,6 +945,9 @@ mod platform {
             note_companion_key_down(&ctx);
             assert_eq!(drain_combo(&combo_rx), 0);
 
+            shared
+                .trigger_press_id
+                .store(1, Ordering::SeqCst);
             shared.trigger_held.store(true, Ordering::SeqCst);
             // OS 自动重复 / 按住触发键连按多个键，都只撤销一次。
             note_companion_key_down(&ctx);
