@@ -1005,6 +1005,13 @@ pub(super) async fn run_voice_agent_transcript(
         }
         None => outcome,
     };
+    // 审批等待期间会话被取消（Esc）：把结果强制为 Cancelled，避免把第一轮拦截文本
+    // 当 Done 收尾（cancelled 旗标已置、插入被跳过；胶囊/浮窗语义应一致显示「已取消」）。
+    let final_outcome = if inner.state.lock().cancelled {
+        LessComputerOutcome::Cancelled
+    } else {
+        final_outcome
+    };
 
     {
         let mut state = inner.state.lock();
@@ -1356,10 +1363,19 @@ async fn maybe_request_approval(
         }),
     );
 
-    // 等用户点 Approve/Deny；90s 无响应按 Deny 处理并清理注册表项。
-    let approved = match tokio::time::timeout(std::time::Duration::from_secs(90), rx).await {
-        Ok(Ok(v)) => v,
-        _ => {
+    // 等用户点 Approve/Deny；90s 无响应按 Deny 处理并清理注册表项。会话被取消
+    // （Esc → esc-cancel-bridge → cancel_session 置 cancelled，PR #855 场景）时
+    // 同样按 Deny 处理并清理——否则审批挂起期间 Esc 被独占吞掉却毫无效果。
+    let approved = tokio::select! {
+        v = rx => v.unwrap_or(false),
+        _ = tokio::time::sleep(std::time::Duration::from_secs(90)) => {
+            less_computer_approvals()
+                .lock()
+                .ok()
+                .map(|mut m| m.remove(&token));
+            false
+        }
+        _ = wait_for_processing_cancel(inner) => {
             less_computer_approvals()
                 .lock()
                 .ok()
@@ -3729,6 +3745,25 @@ mod tests {
         ChineseScriptPreference, CorrectionRule, DictationSession, InsertStatus, PolishMode,
     };
     use uuid::Uuid;
+
+    #[tokio::test]
+    async fn approval_request_is_denied_when_session_cancelled_during_wait() {
+        let coordinator = crate::coordinator::Coordinator::new();
+        {
+            let mut state = coordinator.inner.state.lock();
+            state.cancelled = true; // 模拟审批挂起期间用户按 Esc（cancel_session 置位）
+        }
+        let outcome = super::LessComputerOutcome::Done {
+            text: "permission denied: rm -rf".into(),
+            cost_usd: None,
+        };
+        let result = super::maybe_request_approval(&coordinator.inner, &outcome).await;
+        assert_eq!(result, None, "会话取消后审批应按 Deny 处理");
+        assert!(
+            super::less_computer_approvals().lock().unwrap().is_empty(),
+            "取消后审批注册表应被清理"
+        );
+    }
 
     #[test]
     fn silent_retry_replaces_initial_asr_attribution() {

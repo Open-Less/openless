@@ -3356,6 +3356,34 @@ mod tests {
         assert_eq!(coordinator.inner.state.lock().phase, SessionPhase::Idle);
     }
 
+    #[tokio::test]
+    async fn stale_capsule_idle_schedule_does_not_hide_newer_state() {
+        let coordinator = Coordinator::new();
+        // 旧 schedule 触发时若期间有更新的 emit，应跳过隐藏（voice agent 取消双 emit 竞争）。
+        emit_capsule(&coordinator.inner, CapsuleState::Done, 0.0, 0, None, None);
+        schedule_capsule_idle(&coordinator.inner, 30);
+        emit_capsule(&coordinator.inner, CapsuleState::Cancelled, 0.0, 0, None, None);
+        tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+        assert_eq!(
+            coordinator.inner.last_capsule_state.lock().as_ref().copied(),
+            Some(CapsuleState::Cancelled),
+            "旧 schedule 不应把更新的 Cancelled 状态提前隐藏"
+        );
+    }
+
+    #[tokio::test]
+    async fn capsule_idle_schedule_hides_when_no_newer_state() {
+        let coordinator = Coordinator::new();
+        emit_capsule(&coordinator.inner, CapsuleState::Done, 0.0, 0, None, None);
+        schedule_capsule_idle(&coordinator.inner, 30);
+        tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+        assert_eq!(
+            coordinator.inner.last_capsule_state.lock().as_ref().copied(),
+            Some(CapsuleState::Idle),
+            "无新 emit 时 schedule 应隐藏胶囊"
+        );
+    }
+
     #[test]
     fn cancel_session_state_machine_is_table_driven() {
         let cases = [
@@ -3933,9 +3961,16 @@ fn set_phase_idle_if_session_matches(inner: &Arc<Inner>, session_id: SessionId) 
 }
 
 fn schedule_capsule_idle(inner: &Arc<Inner>, delay_ms: u64) {
+    // 记录触发时胶囊显示的状态；到点时若期间有更新的 emit（last_capsule_state 已变），
+    // 说明本次状态已被后续 emit 取代，隐藏交给那次 emit 自己的 schedule——避免旧
+    // schedule 把新状态提前隐藏（如 voice agent 取消路径 cancel_session 与收尾双 emit）。
+    let expect = inner.last_capsule_state.lock().as_ref().copied();
     let inner_clone = Arc::clone(inner);
     async_runtime::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+        if inner_clone.last_capsule_state.lock().as_ref().copied() != expect {
+            return;
+        }
         // 必须 dictation **和** QA 同时空闲才能隐藏胶囊。否则旧 dictation Done timer
         // 的尾巴会在新 QA 录音/思考中把胶囊意外收掉（issue #118 v2 复现）。
         let dictation_idle = inner_clone.state.lock().phase == SessionPhase::Idle;
