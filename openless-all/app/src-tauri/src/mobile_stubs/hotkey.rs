@@ -11,10 +11,14 @@ use crate::types::{
 pub enum HotkeyEvent {
     Pressed { at: Instant },
     Released { at: Instant },
-    Cancelled,
+    // 组合键撤销与 Esc 取消在移动端无全局键盘监听，不在此枚举里（见 hotkey.rs 模块注释）。
+
     TranslationModifierPressed,
     QaShortcutPressed,
 }
+
+/// Mobile 无全局键盘监听，Esc 独占为 no-op。
+pub fn set_esc_exclusive(_active: bool) {}
 
 pub struct HotkeyMonitor;
 
@@ -22,6 +26,7 @@ impl HotkeyMonitor {
     pub fn start(
         _binding: HotkeyBinding,
         _tx: Sender<HotkeyEvent>,
+        _cancel_tx: Sender<()>,
         _combo_tx: Sender<()>,
     ) -> Result<Self, HotkeyInstallError> {
         Err(HotkeyInstallError {

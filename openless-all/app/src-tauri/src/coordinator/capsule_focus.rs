@@ -378,6 +378,16 @@ pub(super) fn hide_capsule_window_if_present() {
 #[cfg(not(target_os = "windows"))]
 pub(super) fn hide_capsule_window_if_present() {}
 
+/// Esc 独占判定：胶囊显示「进行中」（录音/转写/润色）且确为 dictation 会话（phase 非
+/// Idle）时为 true——tap/hook 吞掉 Esc 不透传宿主应用。phase 条件专门排除 QA：QA 也走
+/// 胶囊，但它的 Esc 由聚焦浮窗处理（#161），全局吞键反而会把它挡掉。纯函数便于表格测试。
+fn esc_exclusive_for_capsule(state: CapsuleState, phase: SessionPhase) -> bool {
+    matches!(
+        state,
+        CapsuleState::Recording | CapsuleState::Transcribing | CapsuleState::Polishing
+    ) && !matches!(phase, SessionPhase::Idle)
+}
+
 pub(super) fn emit_capsule(
     inner: &Arc<Inner>,
     state: CapsuleState,
@@ -389,6 +399,14 @@ pub(super) fn emit_capsule(
     // 在 app 句柄校验之前记录，便于无 GUI 的测试断言「按下热键 → 弹了哪种胶囊」。
     // replace 顺带取回上一帧 state，用于判断本次是不是「入场帧」（见下方 defer_capsule_emit）。
     let prev_state = inner.last_capsule_state.lock().replace(state);
+    // Esc 独占窗口：胶囊显示进行中（录音/转写/润色）且确为 dictation 会话（phase 非
+    // Idle）时，tap/hook 吞掉 Esc 不透传宿主应用——此刻 Esc 的语义是「取消这个会话」，
+    // 双重派发会顺带触发宿主应用的 Esc（如取消 Claude 正在生成的回复）。phase 条件排除
+    // QA：QA 会话也走胶囊，但它的 Esc 由聚焦的浮窗窗口处理，吞键反而会把它挡掉。
+    // 终止帧（Done/Cancelled/Error/Idle）自然清除。emit_capsule 是所有会话状态变化的
+    // 单一出口（含 #77 审计保证的全部终止路径），在此维护不会漏路径。
+    let esc_exclusive = esc_exclusive_for_capsule(state, inner.state.lock().phase);
+    crate::hotkey::set_esc_exclusive(esc_exclusive);
     let app_opt = inner.app.lock().clone();
     let Some(app) = app_opt else { return };
     let translation = inner.translation_modifier_seen.load(Ordering::SeqCst);
@@ -690,5 +708,52 @@ pub(super) fn maybe_position_capsule_bottom_center<R: tauri::Runtime>(
     if crate::position_capsule_bottom_center(window, translation_active).is_ok() {
         let mut last = inner.capsule_layout.lock();
         *last = Some(next);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::CapsuleState;
+
+    #[test]
+    fn esc_exclusive_flag_matches_capsule_and_phase() {
+        // 进行中胶囊 + dictation phase 非 Idle → 独占 Esc（不透传宿主应用）。
+        for (state, phase) in [
+            (CapsuleState::Recording, SessionPhase::Listening),
+            (CapsuleState::Transcribing, SessionPhase::Processing),
+            (CapsuleState::Polishing, SessionPhase::Processing),
+            (CapsuleState::Recording, SessionPhase::Inserting),
+        ] {
+            assert!(
+                esc_exclusive_for_capsule(state, phase),
+                "{state:?} @ {phase:?} 应独占 Esc"
+            );
+        }
+
+        // 终止帧（Done/Cancelled/Error/Idle）→ 清除独占。
+        for (state, phase) in [
+            (CapsuleState::Done, SessionPhase::Idle),
+            (CapsuleState::Cancelled, SessionPhase::Idle),
+            (CapsuleState::Error, SessionPhase::Idle),
+            (CapsuleState::Idle, SessionPhase::Idle),
+        ] {
+            assert!(
+                !esc_exclusive_for_capsule(state, phase),
+                "{state:?} @ {phase:?} 不应独占 Esc"
+            );
+        }
+
+        // QA 场景：胶囊显示进行中但 dictation phase=Idle → 不独占（Esc 归浮窗，#161）。
+        for (state, phase) in [
+            (CapsuleState::Recording, SessionPhase::Idle),
+            (CapsuleState::Transcribing, SessionPhase::Idle),
+            (CapsuleState::Polishing, SessionPhase::Idle),
+        ] {
+            assert!(
+                !esc_exclusive_for_capsule(state, phase),
+                "{state:?} @ {phase:?}（QA）不应独占 Esc"
+            );
+        }
     }
 }
