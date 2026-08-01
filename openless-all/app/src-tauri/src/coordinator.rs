@@ -2486,24 +2486,32 @@ fn read_volc_credentials() -> VolcengineCredentials {
         .ok()
         .flatten()
         .unwrap_or_default();
-    let access_token = CredentialsVault::get(CredentialAccount::VolcengineAccessKey)
-        .ok()
-        .flatten()
-        .unwrap_or_default();
-    let resource_id = CredentialsVault::get(CredentialAccount::VolcengineResourceId)
-        .ok()
-        .flatten()
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| VolcengineCredentials::default_resource_id().to_string());
     let auth_mode = CredentialsVault::get(CredentialAccount::VolcengineAuthMode)
         .ok()
         .flatten()
         .map(|s| VolcengineAuthMode::from_str(&s))
         .unwrap_or(VolcengineAuthMode::AppIdToken);
+    // 密钥槽位随鉴权模式：AppIdToken 读旧版 Access Token，ApiKey 读独立的方舟 API Key，
+    // 两者互不污染，切换模式不会把旧模式的凭据带进新模式的握手。
+    let secret = match auth_mode {
+        VolcengineAuthMode::AppIdToken => CredentialsVault::get(CredentialAccount::VolcengineAccessKey)
+            .ok()
+            .flatten()
+            .unwrap_or_default(),
+        VolcengineAuthMode::ApiKey => CredentialsVault::get(CredentialAccount::VolcengineApiKey)
+            .ok()
+            .flatten()
+            .unwrap_or_default(),
+    };
+    let resource_id = CredentialsVault::get(CredentialAccount::VolcengineResourceId)
+        .ok()
+        .flatten()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| VolcengineCredentials::default_resource_id().to_string());
     VolcengineCredentials {
         auth_mode,
         app_id,
-        access_token,
+        access_token: secret,
         resource_id,
     }
 }

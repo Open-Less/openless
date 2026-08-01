@@ -28,13 +28,15 @@ fn volcengine_configured(snap: &CredentialsSnapshot) -> bool {
         .as_deref()
         .map(VolcengineAuthMode::from_str)
         .unwrap_or(VolcengineAuthMode::AppIdToken);
-    let auth_ok = match mode {
-        VolcengineAuthMode::AppIdToken => {
-            configured(&snap.volcengine_app_key) && configured(&snap.volcengine_access_key)
-        }
-        VolcengineAuthMode::ApiKey => configured(&snap.volcengine_access_key),
+    // 两种模式的密钥来源不同：AppIdToken 读 Access Token 槽，ApiKey 读独立的 API Key 槽。
+    let (app_id, secret) = match mode {
+        VolcengineAuthMode::AppIdToken => (
+            snap.volcengine_app_key.as_deref().unwrap_or(""),
+            snap.volcengine_access_key.as_deref().unwrap_or(""),
+        ),
+        VolcengineAuthMode::ApiKey => ("", snap.volcengine_api_key.as_deref().unwrap_or("")),
     };
-    auth_ok && configured(&snap.volcengine_resource_id)
+    mode.auth_ok(app_id, secret) && configured(&snap.volcengine_resource_id)
 }
 
 pub(crate) fn asr_configured_for_provider(provider: &str, snap: &CredentialsSnapshot) -> bool {
@@ -196,6 +198,7 @@ pub fn set_credential(
                 | CredentialAccount::VolcengineAccessKey
                 | CredentialAccount::VolcengineResourceId
                 | CredentialAccount::VolcengineAuthMode
+                | CredentialAccount::VolcengineApiKey
                 | CredentialAccount::AsrApiKey
                 | CredentialAccount::AsrEndpoint
                 | CredentialAccount::AsrModel
@@ -319,6 +322,7 @@ fn parse_account(s: &str) -> Result<CredentialAccount, String> {
         "volcengine.access_key" => Ok(CredentialAccount::VolcengineAccessKey),
         "volcengine.resource_id" => Ok(CredentialAccount::VolcengineResourceId),
         "volcengine.auth_mode" => Ok(CredentialAccount::VolcengineAuthMode),
+        "volcengine.api_key" => Ok(CredentialAccount::VolcengineApiKey),
         "ark.api_key" => Ok(CredentialAccount::ArkApiKey),
         "ark.model_id" => Ok(CredentialAccount::ArkModelId),
         "ark.endpoint" => Ok(CredentialAccount::ArkEndpoint),

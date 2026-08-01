@@ -489,10 +489,19 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
             <SettingRow label={t('settings.providers.volcengineAuthModeLabel')}>
               <SelectLite
                 value={volcengineAuthMode}
-                onChange={(v) => {
+                onChange={async (v) => {
                   const mode = v as 'app_id_token' | 'api_key';
+                  const prev = volcengineAuthMode;
                   setVolcengineAuthMode(mode);
-                  void setCredential('volcengine.auth_mode', mode, committedAsrProvider);
+                  try {
+                    await setCredential('volcengine.auth_mode', mode, committedAsrProvider);
+                  } catch (error) {
+                    // 写入失败必须回滚 UI 并提示：否则模式看着已切换、重启后却静默回退，
+                    // 配合独立 API Key 槽会造成「Key 存在但模式不对」的混乱。
+                    console.error('[settings] failed to save volcengine auth mode', error);
+                    setVolcengineAuthMode(prev);
+                    emitSaved('failed', t('common.operationFailed'));
+                  }
                 }}
                 options={[
                   { value: 'app_id_token', label: t('settings.providers.volcengineAuthModeAppIdToken') },
@@ -502,26 +511,37 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
                 style={{ ...inputStyle, width: '100%', maxWidth: mobile ? '100%' : 260 }}
               />
             </SettingRow>
-            {volcengineAuthMode === 'app_id_token' && (
+            {/* 两种模式使用各自独立的凭据槽位：旧版 Access Token（volcengine.access_key）
+                与方舟 API Key（volcengine.api_key）互不预填，切换模式不会残留混淆。 */}
+            {volcengineAuthMode === 'app_id_token' ? (
+              <>
+                <CredentialField
+                  key={`${committedAsrProvider}:app_key`}
+                  label={t('settings.providers.volcengineAppKeyLabel')}
+                  account="volcengine.app_key"
+                  provider={committedAsrProvider}
+                  mono
+                  mask
+                />
+                <CredentialField
+                  key={`${committedAsrProvider}:access_key`}
+                  label={t('settings.providers.volcengineAccessKeyLabel')}
+                  account="volcengine.access_key"
+                  provider={committedAsrProvider}
+                  mono
+                  mask
+                />
+              </>
+            ) : (
               <CredentialField
-                key={`${committedAsrProvider}:app_key`}
-                label={t('settings.providers.volcengineAppKeyLabel')}
-                account="volcengine.app_key"
+                key={`${committedAsrProvider}:api_key`}
+                label={t('settings.providers.volcengineApiKeyLabel')}
+                account="volcengine.api_key"
                 provider={committedAsrProvider}
                 mono
                 mask
               />
             )}
-            <CredentialField
-              key={`${committedAsrProvider}:access_key:${volcengineAuthMode}`}
-              label={volcengineAuthMode === 'api_key'
-                ? t('settings.providers.volcengineApiKeyLabel')
-                : t('settings.providers.volcengineAccessKeyLabel')}
-              account="volcengine.access_key"
-              provider={committedAsrProvider}
-              mono
-              mask
-            />
             <CredentialField
               key={`${committedAsrProvider}:resource_id`}
               label={t('settings.providers.volcengineResourceIdLabel')}

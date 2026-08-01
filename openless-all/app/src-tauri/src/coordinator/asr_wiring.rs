@@ -121,13 +121,9 @@ pub(super) fn ensure_asr_credentials() -> Result<(), String> {
         AsrPreflightCredential::VolcAppKey => {
             use crate::asr::volcengine::VolcengineAuthMode;
             let creds = read_volc_credentials();
-            let auth_ok = match creds.auth_mode {
-                VolcengineAuthMode::AppIdToken => {
-                    !creds.app_id.trim().is_empty() && !creds.access_token.trim().is_empty()
-                }
-                VolcengineAuthMode::ApiKey => !creds.access_token.trim().is_empty(),
-            };
-            if auth_ok {
+            // 统一走 VolcengineAuthMode::auth_ok：与 open_session / volcengine_configured
+            // 共用同一份按模式判定 + trim 语义，避免三处规则漂移。
+            if creds.auth_ok() {
                 Ok(())
             } else {
                 match creds.auth_mode {

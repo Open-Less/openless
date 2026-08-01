@@ -68,6 +68,21 @@ impl VolcengineAuthMode {
             Self::ApiKey => "api_key",
         }
     }
+
+    /// 当前模式下所需凭据是否齐备（统一 trim 语义）。
+    ///
+    /// `secret` 的语义随模式：AppIdToken = Access Token（旧版语音控制台），
+    /// ApiKey = 方舟语音模型 API Key。`app_id` 仅在 AppIdToken 模式要求非空。
+    ///
+    /// 所有按模式判定凭据完整性的入口（`open_session`、`volcengine_configured`、
+    /// `ensure_asr_credentials`）都应复用此方法，避免三处规则漂移。
+    pub fn auth_ok(&self, app_id: &str, secret: &str) -> bool {
+        let app_id_ok = match self {
+            Self::AppIdToken => !app_id.trim().is_empty(),
+            Self::ApiKey => true,
+        };
+        app_id_ok && !secret.trim().is_empty()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -83,6 +98,11 @@ pub struct VolcengineCredentials {
 impl VolcengineCredentials {
     pub fn default_resource_id() -> &'static str {
         "volc.seedasr.sauc.duration"
+    }
+
+    /// 凭据是否满足当前鉴权模式的要求（统一 trim 语义，见 [`VolcengineAuthMode::auth_ok`]）。
+    pub fn auth_ok(&self) -> bool {
+        self.auth_mode.auth_ok(&self.app_id, &self.access_token)
     }
 }
 
@@ -171,11 +191,9 @@ impl VolcengineStreamingASR {
 
     pub async fn open_session(self: &Arc<Self>) -> Result<(), VolcengineASRError> {
         let creds = &self.credentials;
-        let auth_ok = match creds.auth_mode {
-            VolcengineAuthMode::AppIdToken => !creds.app_id.is_empty() && !creds.access_token.is_empty(),
-            VolcengineAuthMode::ApiKey => !creds.access_token.is_empty(),
-        };
-        if !auth_ok || creds.resource_id.is_empty() {
+        // 统一走 VolcengineCredentials::auth_ok（trim 语义），与概览页凭据状态检测、
+        // dictation 预检保持同一判定规则。
+        if !creds.auth_ok() || creds.resource_id.trim().is_empty() {
             return Err(VolcengineASRError::CredentialsMissing);
         }
 
@@ -920,6 +938,77 @@ mod tests {
         assert_eq!(VolcengineAuthMode::from_str(""), VolcengineAuthMode::AppIdToken); // 默认回退
         assert_eq!(VolcengineAuthMode::ApiKey.as_str(), "api_key");
         assert_eq!(VolcengineAuthMode::AppIdToken.as_str(), "app_id_token");
+    }
+
+    #[test]
+    fn auth_ok_matches_mode_requirements() {
+        let app_id_token = VolcengineAuthMode::AppIdToken;
+        let api_key = VolcengineAuthMode::ApiKey;
+        // AppIdToken：需要 app_id + secret 都非空。
+        assert!(app_id_token.auth_ok("app", "token"));
+        assert!(!app_id_token.auth_ok("", "token"));
+        assert!(!app_id_token.auth_ok("app", ""));
+        // 全空格视为未配置（统一 trim 语义，与 volcengine_configured / 预检一致）。
+        assert!(!app_id_token.auth_ok("   ", "   "));
+        // ApiKey：只需 API Key，app_id 可为空。
+        assert!(api_key.auth_ok("", "key"));
+        assert!(api_key.auth_ok("app", "key"));
+        assert!(!api_key.auth_ok("app", ""));
+        assert!(!api_key.auth_ok("", "   "));
+    }
+
+    #[test]
+    fn build_connect_request_selects_endpoint_and_headers_per_mode() {
+        let cases = [
+            (
+                VolcengineAuthMode::AppIdToken,
+                ENDPOINT_APP_ID_TOKEN,
+                true,  // 双表头（X-Api-App-Key / X-Api-Access-Key）
+                false, // 不应带 X-Api-Key
+            ),
+            (
+                VolcengineAuthMode::ApiKey,
+                ENDPOINT_API_KEY,
+                false, // 不应带双表头
+                true,  // 单表头 X-Api-Key
+            ),
+        ];
+        for (mode, endpoint, expects_app_headers, expects_api_key) in cases {
+            let asr = VolcengineStreamingASR::new(
+                VolcengineCredentials {
+                    auth_mode: mode.clone(),
+                    app_id: "app".into(),
+                    access_token: "secret".into(),
+                    resource_id: VolcengineCredentials::default_resource_id().into(),
+                },
+                vec![],
+            );
+            let req = asr.build_connect_request("connect-id").unwrap();
+            assert_eq!(
+                req.uri().to_string(),
+                endpoint,
+                "端点应随鉴权模式切换（mode={mode:?}）"
+            );
+            let headers = req.headers();
+            assert_eq!(
+                headers.contains_key("X-Api-App-Key"),
+                expects_app_headers,
+                "mode={mode:?} X-Api-App-Key"
+            );
+            assert_eq!(
+                headers.contains_key("X-Api-Access-Key"),
+                expects_app_headers,
+                "mode={mode:?} X-Api-Access-Key"
+            );
+            assert_eq!(
+                headers.contains_key("X-Api-Key"),
+                expects_api_key,
+                "mode={mode:?} X-Api-Key"
+            );
+            // 两种模式都必须携带资源与连接标识头。
+            assert!(headers.contains_key("X-Api-Resource-Id"));
+            assert!(headers.contains_key("X-Api-Connect-Id"));
+        }
     }
 
     /// 构造一个握手阶段返回给定 HTTP 状态码的 tungstenite 错误，用于分类测试。
