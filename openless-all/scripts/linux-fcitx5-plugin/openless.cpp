@@ -71,6 +71,8 @@ public:
           translationRawSym_(0),
           translationRawStates_(0),
           hasCustomDictationKey_(false),
+          dictationTriggerHeld_(false),
+          dictationTriggerCombined_(false),
           savedIc_(nullptr) {
 
         // 1. 读取配置
@@ -141,11 +143,24 @@ public:
                             : static_cast<uint32_t>(triggerKeyList_[0].sym());
                         auto dstates = triggerRawStates_ != 0 ? triggerRawStates_
                             : static_cast<uint32_t>(triggerKeyList_[0].states());
+                        if (!hasCustomDictationKey_ && isModifierKeySym(dsym)) {
+                            dictationTriggerHeld_ = isPress;
+                            if (isPress) {
+                                dictationTriggerCombined_ = false;
+                            }
+                        }
                         FCITX_LOGC(openless, Debug)
                             << "Dictation hotkey sym=" << dsym;
                         dictationKeyEvent(dsym, dstates, isPress);
                         keyEvent.filterAndAccept();
                         return;
+                    }
+                    if (isPress && dictationTriggerHeld_ && !isModifierKeySym(sym) &&
+                        !dictationTriggerCombined_) {
+                        FCITX_LOGC(openless, Debug)
+                            << "Dictation hotkey combined with sym=" << sym;
+                        dictationTriggerCombined_ = true;
+                        dictationKeyCombined(sym, states, true);
                     }
                     if (qaRawSym_ != 0 && sym == qaRawSym_ &&
                         states == qaRawStates_) {
@@ -296,6 +311,7 @@ public:
     void setHotkey(const std::vector<std::string> &keys) {
         // 切换预设修饰键时清空自定义组合键，避免双发
         hasCustomDictationKey_ = false;
+        resetDictationTriggerState();
         KeyList keyList;
         for (const auto &s : keys) {
             Key key(s);
@@ -326,6 +342,7 @@ public:
     void setHotkeyRaw(uint32_t sym, uint32_t states) {
         // 切换预设修饰键时清空自定义组合键，避免双发
         hasCustomDictationKey_ = false;
+        resetDictationTriggerState();
         triggerRawSym_ = sym;
         triggerRawStates_ = states;
         // 同时尝试维护 KeyList（如果 sym 可转为有效 key）
@@ -353,10 +370,12 @@ public:
             FCITX_LOGC(openless, Warn)
                 << "SetCustomDictationTrigger: invalid key '" << keyString << "'";
             hasCustomDictationKey_ = false;
+            resetDictationTriggerState();
             return;
         }
         customDictationKey_ = key;
         hasCustomDictationKey_ = true;
+        resetDictationTriggerState();
         // 有自定义键时清空已有 raw+keylist 路径，避免双发
         triggerRawSym_ = 0;
         triggerRawStates_ = 0;
@@ -409,12 +428,14 @@ public:
     FCITX_OBJECT_VTABLE_METHOD(setQaHotkeyRaw, "SetQaHotkeyRaw", "uu", "");
     FCITX_OBJECT_VTABLE_METHOD(setTranslationHotkeyRaw, "SetTranslationHotkeyRaw", "uu", "");
     FCITX_OBJECT_VTABLE_SIGNAL(dictationKeyEvent, "DictationKeyEvent", "uub");
+    FCITX_OBJECT_VTABLE_SIGNAL(dictationKeyCombined, "DictationKeyCombined", "uub");
     FCITX_OBJECT_VTABLE_SIGNAL(qaShortcutEvent, "QaShortcutEvent", "uub");
     FCITX_OBJECT_VTABLE_SIGNAL(translationModifierEvent, "TranslationModifierEvent", "uub");
 
     Instance *instance() { return instance_; }
 
     void reloadConfig() override {
+        resetDictationTriggerState();
         readAsIni(config_, configFile());
         // 加载原始 sym/states（由 SetHotkeyRaw / SetQaHotkeyRaw / SetTranslationHotkeyRaw 写入的持久化键值）
         RawConfig raw;
@@ -461,6 +482,18 @@ private:
         return "conf/openless.conf";
     }
 
+    static bool isModifierKeySym(uint32_t sym) {
+        // X11 modifier keysyms.  CapsLock is included to match the desktop hook's
+        // treatment of lock keys: pressing it alongside a trigger must not abort
+        // dictation as if it were a printable companion key.
+        return sym >= 0xffe1 && sym <= 0xffee;
+    }
+
+    void resetDictationTriggerState() {
+        dictationTriggerHeld_ = false;
+        dictationTriggerCombined_ = false;
+    }
+
     void rebuildTriggerKeys() {
         triggerKeyList_ = config_.triggerKey.value();
     }
@@ -476,6 +509,8 @@ private:
     uint32_t translationRawStates_;
     Key customDictationKey_;
     bool hasCustomDictationKey_;
+    bool dictationTriggerHeld_;
+    bool dictationTriggerCombined_;
     /// 快捷键按下时保存的输入上下文指针，用于 commitText 在失焦后仍能提交文字。
     /// 事件处理线程和 DBus 处理线程都是 fcitx5 主事件循环，无竞态。
     /// 通过 InputContextDestroyed 事件监听 IC 销毁时自动清空指针。

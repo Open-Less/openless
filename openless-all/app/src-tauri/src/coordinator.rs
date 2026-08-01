@@ -476,10 +476,14 @@ struct Inner {
     hotkey: Mutex<Option<HotkeyMonitor>>,
     hotkey_status: Mutex<HotkeyStatus>,
     hotkey_trigger_held: AtomicBool,
-    /// 本次热键按下是否真的「开出了」一个会话。组合键撤销（触发键被当修饰键用）
-    /// 只撤销这一次按下开出来的会话：若这次按下其实是 toggle 停止 / 被冷却拦下 /
-    /// 路由给了 QA，就没有可撤销的东西，绝不能顺手取消正在转写的上一条。
-    hotkey_press_began_session: AtomicBool,
+    /// 当前主听写热键按下的代次。组合键撤销通道使用同一代次，避免迟到事件
+    /// 误取消下一次按下开启的会话。
+    hotkey_press_generation: AtomicU64,
+    /// 当前代次是否真的开出了会话；0 表示没有可撤销的会话。
+    hotkey_press_began_session: AtomicU64,
+    /// 组合键事件可能先于 Pressed 事件抵达协调器，暂存其代次供仲裁窗口消费。
+    /// 用队列而不是单个槽，避免主 bridge 忙于上一轮仲裁时覆盖连续按下的事件。
+    hotkey_combo_pending_presses: Mutex<std::collections::VecDeque<u64>>,
     /// 防抖时间戳：handle_pressed_edge 入口检查与本字段的距离，< 250ms 的边沿直接
     /// 丢弃（误触双击 / 微动开关回弹 / 用户连点过快造成的空转写报错）。
     /// 与 `hotkey_trigger_held` 互补 —— held 防 press-without-release，本字段防
@@ -494,6 +498,9 @@ struct Inner {
     /// 防止胶囊离场动画期间误激活新听写（issue #545）。
     session_cooldown_until: Mutex<Option<std::time::Instant>>,
     shortcut_recording_active: AtomicBool,
+    /// Less Computer modifier 热键的按下代次与待处理组合键事件。
+    less_computer_press_generation: AtomicU64,
+    less_computer_combo_pending_press: AtomicU64,
     /// 自定义组合键监听器（global-hotkey crate）。当 `prefs.hotkey.trigger == Custom` 时
     /// 代替 modifier-only 的 hotkey monitor。`None` 表示不使用自定义组合键或还没成功安装。
     combo_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
@@ -676,11 +683,15 @@ impl Coordinator {
                     hotkey: Mutex::new(None),
                     hotkey_status: Mutex::new(HotkeyStatus::default()),
                     hotkey_trigger_held: AtomicBool::new(false),
-                    hotkey_press_began_session: AtomicBool::new(false),
+                    hotkey_press_generation: AtomicU64::new(0),
+                    hotkey_press_began_session: AtomicU64::new(0),
+                    hotkey_combo_pending_presses: Mutex::new(std::collections::VecDeque::new()),
                     last_hotkey_dispatch_at: Mutex::new(None),
                     hotkey_press_at: Mutex::new(None),
                     session_cooldown_until: Mutex::new(None),
                     shortcut_recording_active: AtomicBool::new(false),
+                    less_computer_press_generation: AtomicU64::new(0),
+                    less_computer_combo_pending_press: AtomicU64::new(0),
                     combo_hotkey: Mutex::new(None),
                     side_aware_combo: Mutex::new(None),
                     translation_hotkey: Mutex::new(None),
@@ -779,11 +790,15 @@ impl Coordinator {
                 hotkey: Mutex::new(None),
                 hotkey_status: Mutex::new(HotkeyStatus::default()),
                 hotkey_trigger_held: AtomicBool::new(false),
-                hotkey_press_began_session: AtomicBool::new(false),
+                hotkey_press_generation: AtomicU64::new(0),
+                hotkey_press_began_session: AtomicU64::new(0),
+                hotkey_combo_pending_presses: Mutex::new(std::collections::VecDeque::new()),
                 last_hotkey_dispatch_at: Mutex::new(None),
                 hotkey_press_at: Mutex::new(None),
                 session_cooldown_until: Mutex::new(None),
                 shortcut_recording_active: AtomicBool::new(false),
+                less_computer_press_generation: AtomicU64::new(0),
+                less_computer_combo_pending_press: AtomicU64::new(0),
                 combo_hotkey: Mutex::new(None),
                 side_aware_combo: Mutex::new(None),
                 translation_hotkey: Mutex::new(None),
@@ -1451,6 +1466,8 @@ impl Coordinator {
         let (fcitx_tx, fcitx_binding) = (tx.clone(), binding.clone());
         let cancel_tx = spawn_esc_cancel_bridge(&self.inner);
         let combo_tx = spawn_combo_abort_bridge(&self.inner, handle_trigger_combined);
+        #[cfg(target_os = "linux")]
+        let combo_tx_for_fcitx = combo_tx.clone();
         match HotkeyMonitor::start(binding, tx, cancel_tx, combo_tx) {
             Ok(monitor) => {
                 let adapter = monitor.kind();
@@ -1473,6 +1490,7 @@ impl Coordinator {
                     let custom_key = custom_dictation_key_string(&self.inner);
                     crate::linux_fcitx::start_dictation_signal_listener(
                         fcitx_tx,
+                        combo_tx_for_fcitx,
                         fcitx_binding.clone(),
                         qa_trigger,
                         translation_trigger,
@@ -1773,7 +1791,7 @@ impl Coordinator {
     #[cfg(any(debug_assertions, test))]
     pub async fn inject_hotkey_click_for_dev(&self) -> Result<(), String> {
         log::info!("[coord] dev hotkey injection started");
-            handle_pressed(&self.inner, std::time::Instant::now()).await;
+            handle_pressed(&self.inner, std::time::Instant::now(), 0).await;
             handle_released(&self.inner, std::time::Instant::now()).await;
         cancel_session(&self.inner);
         Ok(())
@@ -3466,7 +3484,7 @@ mod tests {
             state.session_id = session_id(41);
         }
 
-        handle_pressed_edge(&coordinator.inner, std::time::Instant::now()).await;
+        handle_pressed_edge(&coordinator.inner, std::time::Instant::now(), 1).await;
 
         let state = coordinator.inner.state.lock();
         assert_eq!(state.phase, SessionPhase::Inserting);
@@ -3494,7 +3512,7 @@ mod tests {
             .hotkey_trigger_held
             .store(true, Ordering::SeqCst);
 
-        handle_pressed_edge(&coordinator.inner, std::time::Instant::now()).await;
+        handle_pressed_edge(&coordinator.inner, std::time::Instant::now(), 1).await;
 
         assert_eq!(
             coordinator.inner.state.lock().phase,
@@ -3601,10 +3619,14 @@ mod tests {
             .store(true, Ordering::SeqCst);
         coordinator
             .inner
+            .hotkey_press_generation
+            .store(1, Ordering::SeqCst);
+        coordinator
+            .inner
             .hotkey_press_began_session
-            .store(true, Ordering::SeqCst);
+            .store(1, Ordering::SeqCst);
 
-        handle_trigger_combined(&coordinator.inner);
+        handle_trigger_combined(&coordinator.inner, 1);
 
         assert_eq!(coordinator.inner.state.lock().phase, SessionPhase::Idle);
         assert!(!coordinator.inner.hotkey_trigger_held.load(Ordering::SeqCst));
@@ -3634,16 +3656,46 @@ mod tests {
             .store(true, Ordering::SeqCst);
         coordinator
             .inner
+            .hotkey_press_generation
+            .store(1, Ordering::SeqCst);
+        coordinator
+            .inner
             .hotkey_press_began_session
-            .store(false, Ordering::SeqCst);
+            .store(0, Ordering::SeqCst);
 
-        handle_trigger_combined(&coordinator.inner);
+        handle_trigger_combined(&coordinator.inner, 1);
 
         assert_eq!(
             coordinator.inner.state.lock().phase,
             SessionPhase::Listening
         );
         assert!(!coordinator.inner.hotkey_trigger_held.load(Ordering::SeqCst));
+    }
+
+    // 组合键撤销通道独立于 Released；若正常松手已经把会话收尾到 Idle，迟到的撤销
+    // 不能清掉正常会话的冷却/防抖，否则下一次三连按会绕过 #545 的保护。
+    #[tokio::test]
+    async fn late_trigger_combined_does_not_clear_completed_session_guards() {
+        let coordinator = Coordinator::new();
+        set_auto_mode(&coordinator);
+        let now = std::time::Instant::now();
+        *coordinator.inner.session_cooldown_until.lock() =
+            Some(now + std::time::Duration::from_secs(1));
+        *coordinator.inner.last_hotkey_dispatch_at.lock() = Some(now);
+        coordinator
+            .inner
+            .hotkey_press_generation
+            .store(1, Ordering::SeqCst);
+        coordinator
+            .inner
+            .hotkey_press_began_session
+            .store(1, Ordering::SeqCst);
+
+        handle_trigger_combined(&coordinator.inner, 1);
+
+        assert_eq!(coordinator.inner.state.lock().phase, SessionPhase::Idle);
+        assert!(coordinator.inner.session_cooldown_until.lock().is_some());
+        assert!(coordinator.inner.last_hotkey_dispatch_at.lock().is_some());
     }
 
     // 撤销走独立线程后，它与 Pressed/Released 那条串行 bridge 之间没有先后保证。
@@ -3663,8 +3715,12 @@ mod tests {
             .store(true, Ordering::SeqCst);
         coordinator
             .inner
+            .hotkey_press_generation
+            .store(1, Ordering::SeqCst);
+        coordinator
+            .inner
             .hotkey_press_began_session
-            .store(true, Ordering::SeqCst);
+            .store(1, Ordering::SeqCst);
 
         // 先跑 Released（短按 → Auto 锁存成切换态，录音继续），撤销后到。
         handle_released_edge(
@@ -3677,7 +3733,7 @@ mod tests {
             SessionPhase::Listening
         );
 
-        handle_trigger_combined(&coordinator.inner);
+        handle_trigger_combined(&coordinator.inner, 1);
 
         assert_eq!(coordinator.inner.state.lock().phase, SessionPhase::Idle);
         assert!(coordinator.inner.session_cooldown_until.lock().is_none());

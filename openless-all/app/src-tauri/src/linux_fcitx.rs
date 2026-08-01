@@ -276,11 +276,14 @@ pub fn available() -> bool {
 #[cfg(target_os = "linux")]
 pub fn start_dictation_signal_listener(
     tx: std::sync::mpsc::Sender<crate::hotkey::HotkeyEvent>,
+    combo_tx: std::sync::mpsc::Sender<u64>,
     binding: crate::types::HotkeyBinding,
     qa_trigger: Option<crate::types::HotkeyTrigger>,
     translation_trigger: Option<crate::types::HotkeyTrigger>,
     custom_trigger_key: Option<String>,
 ) {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Arc;
     use std::time::Duration;
 
     std::thread::Builder::new()
@@ -307,6 +310,9 @@ pub fn start_dictation_signal_listener(
             };
 
             let tx2 = tx.clone();
+            let combo_tx = combo_tx.clone();
+            let current_press_id = Arc::new(AtomicU64::new(0));
+            let current_press_id_for_match = Arc::clone(&current_press_id);
             let _match = match conn.add_match(rule, move |args: (u32, u32, bool), _conn, msg| {
                 let (sym, states, is_press) = args;
                 let member = msg.member();
@@ -318,8 +324,20 @@ pub fn start_dictation_signal_listener(
                 if let Some(member) = member {
                     if member == "DictationKeyEvent" {
                         let at = std::time::Instant::now();
-                        let event = if is_press { crate::hotkey::HotkeyEvent::Pressed { at } } else { crate::hotkey::HotkeyEvent::Released { at } };
+                        let event = if is_press {
+                            let press_id = crate::hotkey::next_press_id();
+                            current_press_id_for_match.store(press_id, Ordering::SeqCst);
+                            crate::hotkey::HotkeyEvent::Pressed { at, press_id }
+                        } else {
+                            current_press_id_for_match.store(0, Ordering::SeqCst);
+                            crate::hotkey::HotkeyEvent::Released { at }
+                        };
                         let _ = tx.send(event);
+                    } else if member == "DictationKeyCombined" && is_press {
+                        let press_id = current_press_id_for_match.load(Ordering::SeqCst);
+                        if press_id != 0 {
+                            let _ = combo_tx.send(press_id);
+                        }
                     } else if member == "QaShortcutEvent" {
                         if is_press {
                             let _ = tx2.send(crate::hotkey::HotkeyEvent::QaShortcutPressed);
