@@ -401,10 +401,13 @@ impl StepfunRealtimeASR {
                         if st.session_finished {
                             return;
                         }
-                        expired
-                            || (waited >= FINISH_GRACE
+                        if expired {
+                            should_force_finish_at_hard_deadline(&st)
+                        } else {
+                            waited >= FINISH_GRACE
                                 && st.open_segments == 0
-                                && !has_audio_after_last_completed(&st))
+                                && !has_audio_after_last_completed(&st)
+                        }
                     };
                     if should_finish {
                         if expired {
@@ -638,11 +641,11 @@ impl StepfunRealtimeASR {
     }
 
     fn finish_with_partial_or_error(&self, error: StepfunASRError) {
-        let has_partial = {
+        let has_result = {
             let st = self.state.lock();
-            !st.completed_segments.is_empty() || !st.partial_text.trim().is_empty()
+            has_transcript(&st)
         };
-        if has_partial {
+        if has_result {
             // 与 Bailian / Qwen / Volcengine 一致：异常但已有结果时兜底返回。
             self.finish_success();
         } else {
@@ -737,6 +740,22 @@ fn contains_non_silent_pcm(pcm: &[u8]) -> bool {
         .take(NON_SILENT_MIN_SAMPLES)
         .count()
         == NON_SILENT_MIN_SAMPLES
+}
+
+fn has_transcript(state: &SyncState) -> bool {
+    !state.completed_segments.is_empty() || !state.partial_text.trim().is_empty()
+}
+
+/// 硬截止只允许在已有当前句段可返回文本，或确认没有未结算音频时收尾。
+///
+/// 如果服务端已经确认开始了一段语音、却还没有发出任何 transcript，继续等到
+/// FINAL_RESULT_TIMEOUT，让迟到的 completed 有机会到达；超时后由
+/// `finish_with_partial_or_error` 返回显式错误，而不是静默成功返回空文本。
+fn should_force_finish_at_hard_deadline(state: &SyncState) -> bool {
+    if state.open_segments > 0 {
+        return !state.partial_text.trim().is_empty();
+    }
+    !has_audio_after_last_completed(state)
 }
 
 fn has_audio_after_last_completed(state: &SyncState) -> bool {
@@ -1007,6 +1026,27 @@ mod tests {
         asr.handle_text_message(&json!({"type": "error", "error": {"message": "boom"}}).to_string());
         let err = rx.try_recv().unwrap().unwrap_err();
         assert!(matches!(err, StepfunASRError::TaskFailed(m) if m == "boom"));
+    }
+
+    #[test]
+    fn hard_deadline_waits_for_unsettled_segment_without_transcript() {
+        let mut state = SyncState {
+            open_segments: 1,
+            completed_segments: vec!["previous".to_string()],
+            ..SyncState::default()
+        };
+        assert!(!should_force_finish_at_hard_deadline(&state));
+
+        state.partial_text = "interim".to_string();
+        assert!(should_force_finish_at_hard_deadline(&state));
+
+        state.partial_text.clear();
+        state.open_segments = 0;
+        state.last_non_silent_audio_written_at = Some(Instant::now());
+        assert!(!should_force_finish_at_hard_deadline(&state));
+
+        state.last_completed_at = Some(Instant::now());
+        assert!(should_force_finish_at_hard_deadline(&state));
     }
 
     #[test]
