@@ -114,6 +114,8 @@ pub(super) fn hotkey_supervisor_loop(inner: Arc<Inner>) {
         let (fcitx_tx, fcitx_binding) = (tx.clone(), binding.clone());
         let cancel_tx = spawn_esc_cancel_bridge(&inner);
         let combo_tx = spawn_combo_abort_bridge(&inner, handle_trigger_combined);
+        #[cfg(target_os = "linux")]
+        let combo_tx_for_fcitx = combo_tx.clone();
         match HotkeyMonitor::start(binding, tx, cancel_tx, combo_tx) {
             Ok(monitor) => {
                 let adapter = monitor.kind();
