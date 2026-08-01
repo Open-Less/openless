@@ -14,11 +14,22 @@ use super::*;
 /// 同一个 hotkey 边沿之间的最小间隔。低于此阈值的连按整体作为误触丢弃 ——
 /// 避免微动开关回弹 / 用户手抖双击造成的空转写报错和 ASR session 抢资源。
 const HOTKEY_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(250);
+const MAX_PENDING_COMBO_PRESSES: usize = 64;
 /// Auto 模式下区分「短按 = 切换式」与「长按 = 按住说话」的按住时长阈值。
 /// 松手时若按住 < 此值判为短按（锁存，保持录音），>= 此值判为长按（松手即停）。
 /// 时长以热键事件产生时携带的时间戳计算，避免串行 bridge 的排队延迟改变用户的物理按住时长。
 /// 350ms 是「点一下 vs 明显按住」的自然分界。
 const AUTO_HOLD_THRESHOLD: std::time::Duration = std::time::Duration::from_millis(350);
+/// modifier-only 触发键（Option / 右 Ctrl…）按下后的「组合键仲裁窗口」。
+///
+/// 按下这一刻还分不清用户是想说话，还是要打 Option+任意字母/数字键：修饰键的按下边沿两者完全一样。
+/// 所以先等这么久再开会话——期间监听器若报告叠加了普通键，这次按下整条作废，麦克风
+/// 不开、胶囊不闪、也不烧一次 ASR 建连。代价是听写起录晚这么多，取 150ms：足以覆盖
+/// 绝大多数组合键的「修饰键→普通键」间隔，又低于人从按键到开口的反应时间（>250ms），
+/// 不会吃掉首字。窗口没盖住的慢速组合键（按住 Option 半秒再按 Tab）由组合键撤销
+/// 事后撤销兜底，见 handle_trigger_combined。
+pub(super) const COMBO_ARBITRATION_GRACE: std::time::Duration =
+    std::time::Duration::from_millis(150);
 const STREAMING_INSERT_FLUSH_INTERVAL: std::time::Duration = std::time::Duration::from_millis(12);
 
 #[cfg(target_os = "macos")]
@@ -712,9 +723,22 @@ fn default_done_message(status: InsertStatus, polish_failed: bool) -> Option<Str
     }
 }
 
-pub(super) async fn handle_pressed_edge(inner: &Arc<Inner>, pressed_at: std::time::Instant) {
+pub(super) async fn handle_pressed_edge(
+    inner: &Arc<Inner>,
+    pressed_at: std::time::Instant,
+    press_id: u64,
+) {
     let was_held = inner.hotkey_trigger_held.swap(true, Ordering::SeqCst);
     if !was_held {
+        // 先切换代次并清掉上一轮的会话标记，再做防抖。被防抖丢弃的按下也必须
+        // 让后续组合键撤销事件归属于自己，不能继承上一轮的 true。
+        inner
+            .hotkey_press_generation
+            .store(press_id, Ordering::SeqCst);
+        inner
+            .hotkey_press_began_session
+            .store(0, Ordering::SeqCst);
+
         // 防抖：相邻 < HOTKEY_DEBOUNCE 的边沿直接丢弃，记到 log 方便排查。
         // 与 `hotkey_trigger_held` 互补：held 防 press-without-release，本检查防
         // press-release-press 三连过快。每个有效边沿都会更新时间戳。
@@ -746,7 +770,7 @@ pub(super) async fn handle_pressed_edge(inner: &Arc<Inner>, pressed_at: std::tim
         if panel_visible && !dictation_active {
             handle_qa_option_edge(inner).await;
         } else {
-            handle_pressed(inner, pressed_at).await;
+            handle_pressed(inner, pressed_at, press_id).await;
         }
     }
 }
@@ -771,7 +795,11 @@ fn is_queued_chain_press(now: std::time::Instant, cooldown_until: std::time::Ins
         .unwrap_or(false)
 }
 
-pub(super) async fn handle_pressed(inner: &Arc<Inner>, pressed_at: std::time::Instant) {
+pub(super) async fn handle_pressed(
+    inner: &Arc<Inner>,
+    pressed_at: std::time::Instant,
+    press_id: u64,
+) {
     let mode = inner.prefs.get().hotkey.mode;
     let phase = inner.state.lock().phase;
     log::info!("[coord] hotkey pressed (mode={mode:?}, phase={phase:?})");
@@ -797,13 +825,13 @@ pub(super) async fn handle_pressed(inner: &Arc<Inner>, pressed_at: std::time::In
                     }
                 }
             }
-            let _ = begin_session(inner).await;
+            begin_session_from_press(inner, press_id).await;
         }
         (HotkeyMode::Toggle, SessionPhase::Listening) => {
             let _ = end_session(inner).await;
         }
         (HotkeyMode::Hold, SessionPhase::Idle) => {
-            let _ = begin_session(inner).await;
+            begin_session_from_press(inner, press_id).await;
         }
         // Toggle 模式 Starting 阶段第二次按 → 用户想停。
         // 不能直接 end_session（ASR session 还没建好），存边沿，握手完成后立即触发。
@@ -831,7 +859,7 @@ pub(super) async fn handle_pressed(inner: &Arc<Inner>, pressed_at: std::time::In
                 }
             }
             *inner.hotkey_press_at.lock() = Some(pressed_at);
-            let _ = begin_session(inner).await;
+            begin_session_from_press(inner, press_id).await;
         }
         // Auto 模式已因上一次「短按」锁存为切换态，再次按下 → 用户想停。
         (HotkeyMode::Auto, SessionPhase::Listening) => {
@@ -843,6 +871,175 @@ pub(super) async fn handle_pressed(inner: &Arc<Inner>, pressed_at: std::time::In
         }
         _ => {}
     }
+}
+
+/// 由「这一次热键按下」开一条会话，并记下这个事实。组合键撤销只撤销带着这个
+/// 标记的会话（见 handle_trigger_combined）。
+///
+/// 开录之前先过一遍组合键仲裁窗口：命中就当这次按下没发生过——不开麦、不弹胶囊。
+async fn begin_session_from_press(inner: &Arc<Inner>, press_id: u64) {
+    if press_resolves_to_combo(inner, press_id).await {
+        // 按住态一并清掉：随后必然到来的 Released 会被 handle_released_edge 的
+        // was_held 检查吞掉，不会走 Auto 短按锁存。
+        inner.hotkey_trigger_held.store(false, Ordering::SeqCst);
+        *inner.hotkey_press_at.lock() = None;
+        *inner.last_hotkey_dispatch_at.lock() = None;
+        return;
+    }
+    inner
+        .hotkey_press_began_session
+        .store(press_id, Ordering::SeqCst);
+    // 组合键事件可能刚好在仲裁窗口结束、但在上面的标记写入前抵达；再检查一次，
+    // 避免这种窄竞态把已判定为组合键的按下开成会话。
+    if combo_seen_for_press(inner, press_id) {
+        inner
+            .hotkey_press_began_session
+            .compare_exchange(press_id, 0, Ordering::SeqCst, Ordering::SeqCst)
+            .ok();
+        inner.hotkey_trigger_held.store(false, Ordering::SeqCst);
+        *inner.hotkey_press_at.lock() = None;
+        *inner.last_hotkey_dispatch_at.lock() = None;
+        return;
+    }
+    let _ = begin_session(inner).await;
+    // 组合键撤销走独立通道，可能恰好在上面的仲裁检查之后、会话启动之前抵达。
+    // 这种情况下撤销线程会留下 pending 标记，但在 phase=Idle 时无法取消；启动完成后
+    // 必须再消费一次，否则这次组合键会把会话误启动出来。
+    if inner.hotkey_press_generation.load(Ordering::SeqCst) == press_id
+        && combo_seen_for_press(inner, press_id)
+    {
+        inner.hotkey_trigger_held.store(false, Ordering::SeqCst);
+        *inner.hotkey_press_at.lock() = None;
+        *inner.last_hotkey_dispatch_at.lock() = None;
+        inner
+            .hotkey_press_began_session
+            .compare_exchange(press_id, 0, Ordering::SeqCst, Ordering::SeqCst)
+            .ok();
+        cancel_combined_session_if_active(inner);
+        return;
+    }
+    if inner.hotkey_press_generation.load(Ordering::SeqCst) == press_id
+        && inner.state.lock().phase == SessionPhase::Idle
+    {
+        inner
+            .hotkey_press_began_session
+            .compare_exchange(press_id, 0, Ordering::SeqCst, Ordering::SeqCst)
+            .ok();
+    }
+}
+
+/// 组合键仲裁：等 COMBO_ARBITRATION_GRACE，再问监听器这次按住有没有叠加普通键。
+///
+/// 只对 modifier-only 触发键等待 —— 自定义组合键（Cmd+Shift+D 之类）本身就没有歧义，
+/// 让它白等这一下纯粹是掉延迟。等待放在防抖 / 冷却判定之后，那些判定用的仍是未被本
+/// 窗口推迟的时刻（尤其别把「排队接力」窗口挤掉，见 is_queued_chain_press）。
+async fn press_resolves_to_combo(inner: &Arc<Inner>, press_id: u64) -> bool {
+    let binding = inner.prefs.get().dictation_hotkey;
+    if crate::shortcut_binding::legacy_modifier_trigger(&binding).is_none() {
+        return false;
+    }
+    tokio::time::sleep(COMBO_ARBITRATION_GRACE).await;
+    let combined = combo_seen_for_press(inner, press_id);
+    if combined {
+        log::info!(
+            "[coord] 触发键在 {}ms 仲裁窗口内叠加了其他键 —— 本次按下作废，不开录音",
+            COMBO_ARBITRATION_GRACE.as_millis()
+        );
+    }
+    combined
+}
+
+/// 触发键（modifier-only 热键）按住期间又按了普通键 —— 用户在打 Option+任意字母/数字键这类组合键，
+/// 不是想说话。撤销这次按下：
+///
+/// 1. 清掉按住态。后面必然到来的 Released 会被 handle_released_edge 的 `was_held`
+///    检查吞掉，不会再走 Hold 松手结束 / Auto 短按锁存那套判定 —— 否则 Auto 模式下
+///    「Option+组合键快速松手」正是被判成短按锁存，录音一直开着停不下来。
+/// 2. 只有这次按下真的开出了会话才取消它。按下时是 toggle 停止 / 被冷却拦下 /
+///    路由给 QA 的，什么都不动（尤其不能取消正在转写的上一条）。
+///
+/// 组合键误触不算「刚用完一次听写」，所以顺带清掉冷却与防抖时间戳：否则紧接着那次
+/// 真想说话的按下会被 #545 冷却 / 250ms 防抖静默吞掉，用户以为热键坏了。
+///
+/// 本函数跑在 `combo_abort_bridge_loop` 的独立线程上，与 Pressed/Released 那条串行
+/// bridge 并发 —— 这正是它能在按下 Q 的那一帧就撤掉胶囊的原因，但也意味着不能再假定
+/// 「Released 一定排在自己后面」。所以撤不撤销只看 `hotkey_press_began_session`
+/// （每个 Pressed 边沿都会重置它，见 handle_pressed_edge），不看 `hotkey_trigger_held`：
+/// 万一 Released 抢先跑完把按住态清了，撤销仍然认得出这条会话是自己那次按下开的。
+/// 清 `hotkey_trigger_held` 只为吞掉后面的 Released，与撤销与否无关。
+///
+/// 另一个并发面是撤销落在 `begin_session` 还在 await 的中途 —— 由 begin_session 里
+/// 既有的 `startup_race_status_for_starting` / `CancelRaced` 检查点接住（audit HIGH #1），
+/// 与 Esc 取消同一条路径。
+fn combo_seen_for_press(inner: &Arc<Inner>, press_id: u64) -> bool {
+    // 自定义组合键和窗口回退路径没有 modifier-only 监听器，使用 0 表示没有代次。
+    // pending 的初始值也是 0，不能让 compare_exchange(0, 0) 把每次自定义组合键误判为
+    // 已发生组合撤销。
+    if press_id == 0 {
+        return false;
+    }
+    let pending = {
+        let mut pending_presses = inner.hotkey_combo_pending_presses.lock();
+        pending_presses
+            .iter()
+            .position(|pending_press| *pending_press == press_id)
+            .and_then(|index| pending_presses.remove(index))
+            .is_some()
+    };
+    let monitor_seen = inner
+        .hotkey
+        .lock()
+        .as_ref()
+        .is_some_and(|monitor| monitor.trigger_combined_since_press(press_id));
+    pending || monitor_seen
+}
+
+pub(super) fn handle_trigger_combined(inner: &Arc<Inner>, press_id: u64) {
+    if press_id == 0 {
+        return;
+    }
+    // 先记下代次：combo 事件可能早于 Pressed 事件被协调器线程取出，仲裁窗口会
+    // 在稍后消费这个待处理标记。若当前已进入下一代，则只记录旧事件，不能清掉
+    // 新按下的 held 状态。
+    {
+        let mut pending_presses = inner.hotkey_combo_pending_presses.lock();
+        if !pending_presses.contains(&press_id) {
+            pending_presses.push_back(press_id);
+            if pending_presses.len() > MAX_PENDING_COMBO_PRESSES {
+                pending_presses.pop_front();
+            }
+        }
+    }
+    if inner.hotkey_press_generation.load(Ordering::SeqCst) != press_id {
+        log::debug!("[coord] ignore stale combined hotkey press_id={press_id}");
+        return;
+    }
+    inner.hotkey_trigger_held.store(false, Ordering::SeqCst);
+    *inner.hotkey_press_at.lock() = None;
+    let began_session = inner
+        .hotkey_press_began_session
+        .compare_exchange(press_id, 0, Ordering::SeqCst, Ordering::SeqCst)
+        .is_ok();
+    if !began_session {
+        log::info!("[coord] hotkey combined with another key (本次按下没开出会话，无需撤销)");
+        return;
+    }
+    log::info!("[coord] hotkey combined with another key —— 取消本次按下开出的会话");
+    cancel_combined_session_if_active(inner);
+}
+
+/// 只取消仍处于可取消阶段的本次会话。
+///
+/// 组合键通道独立于 Pressed/Released，事件可能在正常松手收尾、phase 已回到 Idle 后才被
+/// 消费。此时不能清掉正常会话留下的冷却和防抖时间戳，否则会重新打开 #545 的三连按窗口。
+/// 若会话尚未进入可取消阶段，pending 标记由 `begin_session_from_press` 的收尾检查消费，
+/// 防止「撤销先到、开录后到」的竞态。
+fn cancel_combined_session_if_active(inner: &Arc<Inner>) {
+    if !cancel_session(inner) {
+        return;
+    }
+    *inner.session_cooldown_until.lock() = None;
+    *inner.last_hotkey_dispatch_at.lock() = None;
 }
 
 pub(super) async fn handle_released_edge(inner: &Arc<Inner>, released_at: std::time::Instant) {
@@ -1004,6 +1201,13 @@ pub(super) async fn run_voice_agent_transcript(
             .await
         }
         None => outcome,
+    };
+    // 审批等待期间会话被取消（Esc）：把结果强制为 Cancelled，避免把第一轮拦截文本
+    // 当 Done 收尾（cancelled 旗标已置、插入被跳过；胶囊/浮窗语义应一致显示「已取消」）。
+    let final_outcome = if inner.state.lock().cancelled {
+        LessComputerOutcome::Cancelled
+    } else {
+        final_outcome
     };
 
     {
@@ -1356,10 +1560,19 @@ async fn maybe_request_approval(
         }),
     );
 
-    // 等用户点 Approve/Deny；90s 无响应按 Deny 处理并清理注册表项。
-    let approved = match tokio::time::timeout(std::time::Duration::from_secs(90), rx).await {
-        Ok(Ok(v)) => v,
-        _ => {
+    // 等用户点 Approve/Deny；90s 无响应按 Deny 处理并清理注册表项。会话被取消
+    // （Esc → esc-cancel-bridge → cancel_session 置 cancelled，PR #855 场景）时
+    // 同样按 Deny 处理并清理——否则审批挂起期间 Esc 被独占吞掉却毫无效果。
+    let approved = tokio::select! {
+        v = rx => v.unwrap_or(false),
+        _ = tokio::time::sleep(std::time::Duration::from_secs(90)) => {
+            less_computer_approvals()
+                .lock()
+                .ok()
+                .map(|mut m| m.remove(&token));
+            false
+        }
+        _ = wait_for_processing_cancel(inner) => {
             less_computer_approvals()
                 .lock()
                 .ok()
@@ -3630,7 +3843,7 @@ pub(super) fn dictation_error_code(
     }
 }
 
-pub(super) fn cancel_session(inner: &Arc<Inner>) {
+pub(super) fn cancel_session(inner: &Arc<Inner>) -> bool {
     let Some(decision) = ({
         let mut state = inner.state.lock();
         let phase = state.phase;
@@ -3640,12 +3853,23 @@ pub(super) fn cancel_session(inner: &Arc<Inner>) {
         }
         decision
     }) else {
-        return;
+        return false;
     };
 
-    stop_recorder_for_session(inner, decision.session_id);
-    cancel_asr_for_session(inner, decision.session_id);
-    restore_prepared_windows_ime_session(inner, decision.session_id);
+    // 顺序要紧：先把 UI 收干净，再去拆麦克风 / ASR。
+    //
+    // 反过来（原来的顺序）会让胶囊等在 `stop_recorder_for_session` 后面 ——
+    // `Recorder::stop()` 要 join 音频线程，而音频线程退出前要 join liveness watchdog，
+    // watchdog 又睡在自己的检查间隔里，实测撤销到胶囊消失能差 0.8~1 秒。用户按 Option+Q
+    // 或按 Esc 的观感就是「明明已经取消了，胶囊还赖着」。拆资源不需要 UI 等它，反正
+    // 这段时间录到的音频整条会话都要丢。
+    //
+    // 代价：胶囊消失后麦克风还会多开一小会儿（系统菜单栏的录音小圆点晚灭）。这段窗口
+    // 必须足够短 —— 否则紧接着那次真想说话的按下会在旧 recorder 还占着麦克风时
+    // build_input_stream，而 `Recorder` 没有 Drop 停采，recorder 槽被新会话覆盖后旧音频
+    // 线程会继续跑、抓着麦克风不放。所以 watchdog 的检查间隔必须是碎的（见
+    // recorder.rs 的 WATCHDOG_*），把这段窗口压到几十毫秒；两处改动是一对，不能只留一个。
+    //
     // Processing 阶段保持 phase=Processing 让 end_session 自己走完检查 + 收尾；
     // 其他阶段直接转 Idle。
     if decision.phase != SessionPhase::Processing {
@@ -3656,6 +3880,8 @@ pub(super) fn cancel_session(inner: &Arc<Inner>) {
         *inner.session_cooldown_until.lock() =
             Some(now + std::time::Duration::from_millis(POST_SESSION_COOLDOWN_MS));
     }
+    // emit_capsule 仍然排在 finish_cancel_session_state 之后：它要读 state.voice_agent /
+    // phase 拼 payload，提到前面会发出「还在进行中」的那一帧。
     emit_capsule(inner, CapsuleState::Cancelled, 0.0, 0, None, None);
     log::info!("[coord] session cancelled (was {:?})", decision.phase);
     schedule_capsule_idle(inner, CAPSULE_CANCEL_HIDE_DELAY_MS);
@@ -3663,6 +3889,11 @@ pub(super) fn cancel_session(inner: &Arc<Inner>) {
     if let Some(app) = inner.app.lock().clone() {
         crate::hide_less_computer_glow(&app);
     }
+
+    stop_recorder_for_session(inner, decision.session_id);
+    cancel_asr_for_session(inner, decision.session_id);
+    restore_prepared_windows_ime_session(inner, decision.session_id);
+    true
 }
 
 fn append_typed_prefix(target: &mut String, delta: &str, typed_chars: usize) -> usize {
@@ -3729,6 +3960,109 @@ mod tests {
         ChineseScriptPreference, CorrectionRule, DictationSession, InsertStatus, PolishMode,
     };
     use uuid::Uuid;
+
+    #[tokio::test]
+    async fn approval_request_is_denied_when_session_cancelled_during_wait() {
+        let coordinator = crate::coordinator::Coordinator::new();
+        {
+            let mut state = coordinator.inner.state.lock();
+            state.cancelled = true; // 模拟审批挂起期间用户按 Esc（cancel_session 置位）
+        }
+        let outcome = super::LessComputerOutcome::Done {
+            text: "permission denied: rm -rf".into(),
+            cost_usd: None,
+        };
+        let result = super::maybe_request_approval(&coordinator.inner, &outcome).await;
+        assert_eq!(result, None, "会话取消后审批应按 Deny 处理");
+        assert!(
+            super::less_computer_approvals().lock().unwrap().is_empty(),
+            "取消后审批注册表应被清理"
+        );
+    }
+
+    fn coordinator_with_dictation_hotkey(
+        binding: crate::types::ShortcutBinding,
+    ) -> super::super::Coordinator {
+        let coordinator = super::super::Coordinator::new();
+        coordinator
+            .inner
+            .prefs
+            .set(crate::types::UserPreferences {
+                dictation_hotkey: binding,
+                ..Default::default()
+            })
+            .unwrap();
+        coordinator
+    }
+
+    // modifier-only 触发键：按下后必须先过仲裁窗口，才能知道这是说话还是
+    // Option+任意字母/数字键。
+    #[tokio::test]
+    async fn modifier_only_press_waits_out_the_arbitration_window() {
+        let coordinator = coordinator_with_dictation_hotkey(crate::types::ShortcutBinding {
+            primary: "LeftOption".into(),
+            modifiers: vec![],
+        });
+
+        let started = std::time::Instant::now();
+        // 测试里没装监听器（inner.hotkey = None）→ 读不到叠加标志，按「不是组合键」放行。
+        assert!(!super::press_resolves_to_combo(&coordinator.inner, 1).await);
+        assert!(started.elapsed() >= super::COMBO_ARBITRATION_GRACE);
+    }
+
+    #[tokio::test]
+    async fn arbitration_combo_does_not_consume_debounce_window() {
+        let coordinator = coordinator_with_dictation_hotkey(crate::types::ShortcutBinding {
+            primary: "LeftOption".into(),
+            modifiers: vec![],
+        });
+        coordinator
+            .inner
+            .hotkey_press_generation
+            .store(1, std::sync::atomic::Ordering::SeqCst);
+        coordinator
+            .inner
+            .hotkey_combo_pending_presses
+            .lock()
+            .push_back(1);
+        *coordinator.inner.last_hotkey_dispatch_at.lock() = Some(std::time::Instant::now());
+
+        super::begin_session_from_press(&coordinator.inner, 1).await;
+
+        assert!(coordinator.inner.last_hotkey_dispatch_at.lock().is_none());
+        assert_eq!(
+            coordinator.inner.state.lock().phase,
+            crate::coordinator_state::SessionPhase::Idle
+        );
+    }
+
+    // 自定义组合键（Cmd+Shift+D）没有歧义 —— 白等这一下就是纯掉延迟。
+    #[tokio::test]
+    async fn custom_combo_press_skips_the_arbitration_window() {
+        let coordinator = coordinator_with_dictation_hotkey(crate::types::ShortcutBinding {
+            primary: "D".into(),
+            modifiers: vec!["cmd".into(), "shift".into()],
+        });
+
+        let started = std::time::Instant::now();
+        assert!(!super::press_resolves_to_combo(&coordinator.inner, 1).await);
+        assert!(!super::combo_seen_for_press(&coordinator.inner, 0));
+        assert!(started.elapsed() < super::COMBO_ARBITRATION_GRACE);
+    }
+
+    #[test]
+    fn pending_combo_queue_preserves_multiple_press_ids() {
+        let coordinator = super::super::Coordinator::new();
+        coordinator
+            .inner
+            .hotkey_combo_pending_presses
+            .lock()
+            .extend([11, 12]);
+
+        assert!(super::combo_seen_for_press(&coordinator.inner, 11));
+        assert!(super::combo_seen_for_press(&coordinator.inner, 12));
+        assert!(!super::combo_seen_for_press(&coordinator.inner, 11));
+    }
 
     #[test]
     fn silent_retry_replaces_initial_asr_attribution() {

@@ -96,7 +96,7 @@ pub(super) fn qa_event_target() -> &'static str {
 use dictation::dictation_error_code;
 use dictation::{
     begin_session, begin_session_as, cancel_session, end_session, handle_pressed_edge,
-    handle_released_edge, request_stop_during_starting,
+    handle_released_edge, handle_trigger_combined, request_stop_during_starting,
 };
 #[cfg(any(debug_assertions, test))]
 use dictation::{handle_pressed, handle_released};
@@ -476,6 +476,14 @@ struct Inner {
     hotkey: Mutex<Option<HotkeyMonitor>>,
     hotkey_status: Mutex<HotkeyStatus>,
     hotkey_trigger_held: AtomicBool,
+    /// 当前主听写热键按下的代次。组合键撤销通道使用同一代次，避免迟到事件
+    /// 误取消下一次按下开启的会话。
+    hotkey_press_generation: AtomicU64,
+    /// 当前代次是否真的开出了会话；0 表示没有可撤销的会话。
+    hotkey_press_began_session: AtomicU64,
+    /// 组合键事件可能先于 Pressed 事件抵达协调器，暂存其代次供仲裁窗口消费。
+    /// 用队列而不是单个槽，避免主 bridge 忙于上一轮仲裁时覆盖连续按下的事件。
+    hotkey_combo_pending_presses: Mutex<std::collections::VecDeque<u64>>,
     /// 防抖时间戳：handle_pressed_edge 入口检查与本字段的距离，< 250ms 的边沿直接
     /// 丢弃（误触双击 / 微动开关回弹 / 用户连点过快造成的空转写报错）。
     /// 与 `hotkey_trigger_held` 互补 —— held 防 press-without-release，本字段防
@@ -490,6 +498,9 @@ struct Inner {
     /// 防止胶囊离场动画期间误激活新听写（issue #545）。
     session_cooldown_until: Mutex<Option<std::time::Instant>>,
     shortcut_recording_active: AtomicBool,
+    /// Less Computer modifier 热键的按下代次与待处理组合键事件。
+    less_computer_press_generation: AtomicU64,
+    less_computer_combo_pending_press: AtomicU64,
     /// 自定义组合键监听器（global-hotkey crate）。当 `prefs.hotkey.trigger == Custom` 时
     /// 代替 modifier-only 的 hotkey monitor。`None` 表示不使用自定义组合键或还没成功安装。
     combo_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
@@ -672,10 +683,15 @@ impl Coordinator {
                     hotkey: Mutex::new(None),
                     hotkey_status: Mutex::new(HotkeyStatus::default()),
                     hotkey_trigger_held: AtomicBool::new(false),
+                    hotkey_press_generation: AtomicU64::new(0),
+                    hotkey_press_began_session: AtomicU64::new(0),
+                    hotkey_combo_pending_presses: Mutex::new(std::collections::VecDeque::new()),
                     last_hotkey_dispatch_at: Mutex::new(None),
                     hotkey_press_at: Mutex::new(None),
                     session_cooldown_until: Mutex::new(None),
                     shortcut_recording_active: AtomicBool::new(false),
+                    less_computer_press_generation: AtomicU64::new(0),
+                    less_computer_combo_pending_press: AtomicU64::new(0),
                     combo_hotkey: Mutex::new(None),
                     side_aware_combo: Mutex::new(None),
                     translation_hotkey: Mutex::new(None),
@@ -774,10 +790,15 @@ impl Coordinator {
                 hotkey: Mutex::new(None),
                 hotkey_status: Mutex::new(HotkeyStatus::default()),
                 hotkey_trigger_held: AtomicBool::new(false),
+                hotkey_press_generation: AtomicU64::new(0),
+                hotkey_press_began_session: AtomicU64::new(0),
+                hotkey_combo_pending_presses: Mutex::new(std::collections::VecDeque::new()),
                 last_hotkey_dispatch_at: Mutex::new(None),
                 hotkey_press_at: Mutex::new(None),
                 session_cooldown_until: Mutex::new(None),
                 shortcut_recording_active: AtomicBool::new(false),
+                less_computer_press_generation: AtomicU64::new(0),
+                less_computer_combo_pending_press: AtomicU64::new(0),
                 combo_hotkey: Mutex::new(None),
                 side_aware_combo: Mutex::new(None),
                 translation_hotkey: Mutex::new(None),
@@ -1443,7 +1464,11 @@ impl Coordinator {
         let (tx, rx) = mpsc::channel::<HotkeyEvent>();
         #[cfg(target_os = "linux")]
         let (fcitx_tx, fcitx_binding) = (tx.clone(), binding.clone());
-        match HotkeyMonitor::start(binding, tx) {
+        let cancel_tx = spawn_esc_cancel_bridge(&self.inner);
+        let combo_tx = spawn_combo_abort_bridge(&self.inner, handle_trigger_combined);
+        #[cfg(target_os = "linux")]
+        let combo_tx_for_fcitx = combo_tx.clone();
+        match HotkeyMonitor::start(binding, tx, cancel_tx, combo_tx) {
             Ok(monitor) => {
                 let adapter = monitor.kind();
                 *self.inner.hotkey.lock() = Some(monitor);
@@ -1465,6 +1490,7 @@ impl Coordinator {
                     let custom_key = custom_dictation_key_string(&self.inner);
                     crate::linux_fcitx::start_dictation_signal_listener(
                         fcitx_tx,
+                        combo_tx_for_fcitx,
                         fcitx_binding.clone(),
                         qa_trigger,
                         translation_trigger,
@@ -1765,7 +1791,7 @@ impl Coordinator {
     #[cfg(any(debug_assertions, test))]
     pub async fn inject_hotkey_click_for_dev(&self) -> Result<(), String> {
         log::info!("[coord] dev hotkey injection started");
-            handle_pressed(&self.inner, std::time::Instant::now()).await;
+            handle_pressed(&self.inner, std::time::Instant::now(), 0).await;
             handle_released(&self.inner, std::time::Instant::now()).await;
         cancel_session(&self.inner);
         Ok(())
@@ -3355,6 +3381,34 @@ mod tests {
         assert_eq!(coordinator.inner.state.lock().phase, SessionPhase::Idle);
     }
 
+    #[tokio::test]
+    async fn stale_capsule_idle_schedule_does_not_hide_newer_state() {
+        let coordinator = Coordinator::new();
+        // 旧 schedule 触发时若期间有更新的 emit，应跳过隐藏（voice agent 取消双 emit 竞争）。
+        emit_capsule(&coordinator.inner, CapsuleState::Done, 0.0, 0, None, None);
+        schedule_capsule_idle(&coordinator.inner, 30);
+        emit_capsule(&coordinator.inner, CapsuleState::Cancelled, 0.0, 0, None, None);
+        tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+        assert_eq!(
+            coordinator.inner.last_capsule_state.lock().as_ref().copied(),
+            Some(CapsuleState::Cancelled),
+            "旧 schedule 不应把更新的 Cancelled 状态提前隐藏"
+        );
+    }
+
+    #[tokio::test]
+    async fn capsule_idle_schedule_hides_when_no_newer_state() {
+        let coordinator = Coordinator::new();
+        emit_capsule(&coordinator.inner, CapsuleState::Done, 0.0, 0, None, None);
+        schedule_capsule_idle(&coordinator.inner, 30);
+        tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+        assert_eq!(
+            coordinator.inner.last_capsule_state.lock().as_ref().copied(),
+            Some(CapsuleState::Idle),
+            "无新 emit 时 schedule 应隐藏胶囊"
+        );
+    }
+
     #[test]
     fn cancel_session_state_machine_is_table_driven() {
         let cases = [
@@ -3430,7 +3484,7 @@ mod tests {
             state.session_id = session_id(41);
         }
 
-        handle_pressed_edge(&coordinator.inner, std::time::Instant::now()).await;
+        handle_pressed_edge(&coordinator.inner, std::time::Instant::now(), 1).await;
 
         let state = coordinator.inner.state.lock();
         assert_eq!(state.phase, SessionPhase::Inserting);
@@ -3458,7 +3512,7 @@ mod tests {
             .hotkey_trigger_held
             .store(true, Ordering::SeqCst);
 
-        handle_pressed_edge(&coordinator.inner, std::time::Instant::now()).await;
+        handle_pressed_edge(&coordinator.inner, std::time::Instant::now(), 1).await;
 
         assert_eq!(
             coordinator.inner.state.lock().phase,
@@ -3548,6 +3602,141 @@ mod tests {
         // 无 recorder / ASR 的测试会话下，end_session 直接收尾到 Idle。
         assert_eq!(coordinator.inner.state.lock().phase, SessionPhase::Idle);
         assert!(coordinator.inner.hotkey_press_at.lock().is_none());
+    }
+
+    // Option+任意字母/数字键：这次按下开出来的会话必须被撤销，且随后的松手边沿不能再被当成
+    // Auto 短按锁存（否则录音一直开着，正是用户报的「按 Option+其他键唤起听写」）。
+    #[tokio::test]
+    async fn trigger_combined_cancels_session_started_by_this_press() {
+        let coordinator = Coordinator::new();
+        set_auto_mode(&coordinator);
+        coordinator.inner.state.lock().phase = SessionPhase::Listening;
+        let pressed_at = std::time::Instant::now();
+        *coordinator.inner.hotkey_press_at.lock() = Some(pressed_at);
+        coordinator
+            .inner
+            .hotkey_trigger_held
+            .store(true, Ordering::SeqCst);
+        coordinator
+            .inner
+            .hotkey_press_generation
+            .store(1, Ordering::SeqCst);
+        coordinator
+            .inner
+            .hotkey_press_began_session
+            .store(1, Ordering::SeqCst);
+
+        handle_trigger_combined(&coordinator.inner, 1);
+
+        assert_eq!(coordinator.inner.state.lock().phase, SessionPhase::Idle);
+        assert!(!coordinator.inner.hotkey_trigger_held.load(Ordering::SeqCst));
+        assert!(coordinator.inner.hotkey_press_at.lock().is_none());
+        // 组合键误触不算「刚用完一次听写」：不留冷却，否则紧接着真想说话的按下被吞。
+        assert!(coordinator.inner.session_cooldown_until.lock().is_none());
+
+        handle_released_edge(
+            &coordinator.inner,
+            pressed_at + std::time::Duration::from_millis(80),
+        )
+        .await;
+
+        assert_eq!(coordinator.inner.state.lock().phase, SessionPhase::Idle);
+    }
+
+    // 这次按下是 toggle 停止（没开出会话）时，组合键撤销不能顺手取消正在跑的会话 ——
+    // 那条录音是上一次按下锁存的，取消 = 用户白说一段。
+    #[tokio::test]
+    async fn trigger_combined_leaves_session_it_did_not_start() {
+        let coordinator = Coordinator::new();
+        set_auto_mode(&coordinator);
+        coordinator.inner.state.lock().phase = SessionPhase::Listening;
+        coordinator
+            .inner
+            .hotkey_trigger_held
+            .store(true, Ordering::SeqCst);
+        coordinator
+            .inner
+            .hotkey_press_generation
+            .store(1, Ordering::SeqCst);
+        coordinator
+            .inner
+            .hotkey_press_began_session
+            .store(0, Ordering::SeqCst);
+
+        handle_trigger_combined(&coordinator.inner, 1);
+
+        assert_eq!(
+            coordinator.inner.state.lock().phase,
+            SessionPhase::Listening
+        );
+        assert!(!coordinator.inner.hotkey_trigger_held.load(Ordering::SeqCst));
+    }
+
+    // 组合键撤销通道独立于 Released；若正常松手已经把会话收尾到 Idle，迟到的撤销
+    // 不能清掉正常会话的冷却/防抖，否则下一次三连按会绕过 #545 的保护。
+    #[tokio::test]
+    async fn late_trigger_combined_does_not_clear_completed_session_guards() {
+        let coordinator = Coordinator::new();
+        set_auto_mode(&coordinator);
+        let now = std::time::Instant::now();
+        *coordinator.inner.session_cooldown_until.lock() =
+            Some(now + std::time::Duration::from_secs(1));
+        *coordinator.inner.last_hotkey_dispatch_at.lock() = Some(now);
+        coordinator
+            .inner
+            .hotkey_press_generation
+            .store(1, Ordering::SeqCst);
+        coordinator
+            .inner
+            .hotkey_press_began_session
+            .store(1, Ordering::SeqCst);
+
+        handle_trigger_combined(&coordinator.inner, 1);
+
+        assert_eq!(coordinator.inner.state.lock().phase, SessionPhase::Idle);
+        assert!(coordinator.inner.session_cooldown_until.lock().is_some());
+        assert!(coordinator.inner.last_hotkey_dispatch_at.lock().is_some());
+    }
+
+    // 撤销走独立线程后，它与 Pressed/Released 那条串行 bridge 之间没有先后保证。
+    // 万一 Released 抢先跑完（把按住态清了、Auto 还锁存成了切换态），撤销仍然必须认出
+    // 这条会话是自己那次按下开的并取消掉 —— 否则组合键会留下一条停不下来的录音，
+    // 正是本 PR 要修的老毛病换个形式复发。
+    #[tokio::test]
+    async fn trigger_combined_still_cancels_when_released_edge_wins_the_race() {
+        let coordinator = Coordinator::new();
+        set_auto_mode(&coordinator);
+        coordinator.inner.state.lock().phase = SessionPhase::Listening;
+        let pressed_at = std::time::Instant::now();
+        *coordinator.inner.hotkey_press_at.lock() = Some(pressed_at);
+        coordinator
+            .inner
+            .hotkey_trigger_held
+            .store(true, Ordering::SeqCst);
+        coordinator
+            .inner
+            .hotkey_press_generation
+            .store(1, Ordering::SeqCst);
+        coordinator
+            .inner
+            .hotkey_press_began_session
+            .store(1, Ordering::SeqCst);
+
+        // 先跑 Released（短按 → Auto 锁存成切换态，录音继续），撤销后到。
+        handle_released_edge(
+            &coordinator.inner,
+            pressed_at + std::time::Duration::from_millis(80),
+        )
+        .await;
+        assert_eq!(
+            coordinator.inner.state.lock().phase,
+            SessionPhase::Listening
+        );
+
+        handle_trigger_combined(&coordinator.inner, 1);
+
+        assert_eq!(coordinator.inner.state.lock().phase, SessionPhase::Idle);
+        assert!(coordinator.inner.session_cooldown_until.lock().is_none());
     }
 
     #[test]
@@ -3932,9 +4121,16 @@ fn set_phase_idle_if_session_matches(inner: &Arc<Inner>, session_id: SessionId) 
 }
 
 fn schedule_capsule_idle(inner: &Arc<Inner>, delay_ms: u64) {
+    // 记录触发时胶囊显示的状态；到点时若期间有更新的 emit（last_capsule_state 已变），
+    // 说明本次状态已被后续 emit 取代，隐藏交给那次 emit 自己的 schedule——避免旧
+    // schedule 把新状态提前隐藏（如 voice agent 取消路径 cancel_session 与收尾双 emit）。
+    let expect = inner.last_capsule_state.lock().as_ref().copied();
     let inner_clone = Arc::clone(inner);
     async_runtime::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+        if inner_clone.last_capsule_state.lock().as_ref().copied() != expect {
+            return;
+        }
         // 必须 dictation **和** QA 同时空闲才能隐藏胶囊。否则旧 dictation Done timer
         // 的尾巴会在新 QA 录音/思考中把胶囊意外收掉（issue #118 v2 复现）。
         let dictation_idle = inner_clone.state.lock().phase == SessionPhase::Idle;

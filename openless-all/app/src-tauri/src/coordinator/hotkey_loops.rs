@@ -9,6 +9,64 @@ use super::*;
 
 // ─────────────────────────── hotkey bridging ───────────────────────────
 
+/// Esc 取消专用消费线程。为什么不并入 `hotkey_bridge_loop`：bridge 为修 #468/#475
+/// 的 latch 竞态把 Pressed/Released 改成了串行 block_on —— Hold 松手后 `end_session`
+/// 会在 bridge 线程上同步跑完整段转写 + 润色，期间 bridge 无法 recv。若 Esc 与其同
+/// 队列，取消事件只能排队等流程跑完（此时 phase 已回 Idle，cancel 变 no-op），#798
+/// 在 `end_session` 里的 select! 取消赛跑永远等不到 `cancelled` 旗标 ——「转写 / 润色
+/// 中按 Esc 停不下来」。独立通道 + 本线程保证 `cancel_session` 随到随执行（它是纯同步
+/// 快路径：置旗标 + 清资源，不 await）。
+pub(super) fn esc_cancel_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<()>) {
+    while rx.recv().is_ok() {
+        if inner.shortcut_recording_active.load(Ordering::SeqCst) {
+            continue;
+        }
+        cancel_session(&inner);
+    }
+}
+
+/// 组合键撤销专用消费线程。撤销事件携带触发键按下代次，避免独立通道的迟到事件
+/// 误取消下一次按下开启的会话。
+pub(super) fn combo_abort_bridge_loop(
+    inner: Arc<Inner>,
+    rx: mpsc::Receiver<u64>,
+    handler: fn(&Arc<Inner>, u64),
+) {
+    while let Ok(press_id) = rx.recv() {
+        if inner.shortcut_recording_active.load(Ordering::SeqCst) {
+            continue;
+        }
+        handler(&inner, press_id);
+    }
+}
+
+pub(super) fn spawn_esc_cancel_bridge(inner: &Arc<Inner>) -> mpsc::Sender<()> {
+    let (cancel_tx, cancel_rx) = mpsc::channel::<()>();
+    let bridge_inner = Arc::clone(inner);
+    if let Err(e) = std::thread::Builder::new()
+        .name("openless-esc-cancel-bridge".into())
+        .spawn(move || esc_cancel_bridge_loop(bridge_inner, cancel_rx))
+    {
+        // 线程建不起来 = 取消通道没有消费者，Esc 取消会静默失效——这正是本 PR 想修的
+        // bug 以另一种方式回归，必须留 error 日志以便排查。
+        log::error!("[hotkey] esc-cancel-bridge 线程启动失败，Esc 取消将不可用: {e}");
+    }
+    cancel_tx
+}
+
+pub(super) fn spawn_combo_abort_bridge(
+    inner: &Arc<Inner>,
+    handler: fn(&Arc<Inner>, u64),
+) -> mpsc::Sender<u64> {
+    let (combo_tx, combo_rx) = mpsc::channel::<u64>();
+    let bridge_inner = Arc::clone(inner);
+    std::thread::Builder::new()
+        .name("openless-combo-abort-bridge".into())
+        .spawn(move || combo_abort_bridge_loop(bridge_inner, combo_rx, handler))
+        .ok();
+    combo_tx
+}
+
 pub(super) fn hotkey_supervisor_loop(inner: Arc<Inner>) {
     let mut attempts: u32 = 0;
     let capability = HotkeyMonitor::capability();
@@ -54,7 +112,11 @@ pub(super) fn hotkey_supervisor_loop(inner: Arc<Inner>) {
         let (tx, rx) = mpsc::channel::<HotkeyEvent>();
         #[cfg(target_os = "linux")]
         let (fcitx_tx, fcitx_binding) = (tx.clone(), binding.clone());
-        match HotkeyMonitor::start(binding, tx) {
+        let cancel_tx = spawn_esc_cancel_bridge(&inner);
+        let combo_tx = spawn_combo_abort_bridge(&inner, handle_trigger_combined);
+        #[cfg(target_os = "linux")]
+        let combo_tx_for_fcitx = combo_tx.clone();
+        match HotkeyMonitor::start(binding, tx, cancel_tx, combo_tx) {
             Ok(monitor) => {
                 let adapter = monitor.kind();
                 *inner.hotkey.lock() = Some(monitor);
@@ -84,6 +146,7 @@ pub(super) fn hotkey_supervisor_loop(inner: Arc<Inner>) {
                     let custom_key = custom_dictation_key_string(&inner);
                     crate::linux_fcitx::start_dictation_signal_listener(
                         fcitx_tx,
+                        combo_tx_for_fcitx,
                         fcitx_binding.clone(),
                         qa_trigger,
                         translation_trigger,
@@ -278,7 +341,11 @@ pub(super) fn update_coding_agent_hotkey_binding_now(inner: &Arc<Inner>) {
                 return;
             }
             let (tx, rx) = mpsc::channel::<HotkeyEvent>();
-            match HotkeyMonitor::start(modifier_binding, tx) {
+            // Less Computer 的独立 tap 也转发 Esc 取消与组合键撤销（与主 monitor 双保险；
+            // cancel_session 幂等，重复触发无害）。组合键撤销撤销的是 voice_agent 会话。
+            let cancel_tx = spawn_esc_cancel_bridge(inner);
+            let combo_tx = spawn_combo_abort_bridge(inner, cancel_less_computer_press);
+            match HotkeyMonitor::start(modifier_binding, tx, cancel_tx, combo_tx) {
                 Ok(monitor) => {
                     *inner.coding_agent_modifier_hotkey.lock() = Some(monitor);
                     log::info!(
@@ -352,9 +419,9 @@ pub(super) fn less_computer_modifier_bridge_loop(inner: Arc<Inner>, rx: mpsc::Re
         }
         let inner_cloned = Arc::clone(&inner);
         match evt {
-            HotkeyEvent::Pressed { .. } => {
+            HotkeyEvent::Pressed { press_id, .. } => {
                 async_runtime::block_on(async {
-                    handle_less_computer_pressed(&inner_cloned).await
+                    handle_less_computer_modifier_pressed(&inner_cloned, press_id).await
                 });
             }
             HotkeyEvent::Released { .. } => {
@@ -362,9 +429,67 @@ pub(super) fn less_computer_modifier_bridge_loop(inner: Arc<Inner>, rx: mpsc::Re
                     handle_less_computer_released(&inner_cloned).await
                 });
             }
-            HotkeyEvent::Cancelled => cancel_session(&inner_cloned),
+            // Esc 取消与组合键撤销都不在此枚举里：分别走 esc_cancel_bridge_loop /
+            // combo_abort_bridge_loop（见各自函数注释）。
             HotkeyEvent::TranslationModifierPressed | HotkeyEvent::QaShortcutPressed => {}
         }
+    }
+}
+
+/// Less Computer 触发键被当修饰键用（Option+任意字母/数字键之类）：撤销这次按下开出的语音会话。
+/// handle_less_computer_pressed 只在 Idle 时开会话，所以此刻还在跑的 voice_agent
+/// 会话必然就是这次按下开出来的；其他情况（按下被忽略）什么都不动。
+async fn handle_less_computer_modifier_pressed(inner: &Arc<Inner>, press_id: u64) {
+    if press_id == 0 {
+        handle_less_computer_pressed(inner).await;
+        return;
+    }
+    inner
+        .less_computer_press_generation
+        .store(press_id, Ordering::SeqCst);
+    if inner
+        .less_computer_combo_pending_press
+        .compare_exchange(press_id, 0, Ordering::SeqCst, Ordering::SeqCst)
+        .is_ok()
+    {
+        return;
+    }
+    handle_less_computer_pressed(inner).await;
+    if inner
+        .less_computer_combo_pending_press
+        .compare_exchange(press_id, 0, Ordering::SeqCst, Ordering::SeqCst)
+        .is_ok()
+    {
+        cancel_less_computer_voice_session(inner);
+    }
+}
+
+fn cancel_less_computer_press(inner: &Arc<Inner>, press_id: u64) {
+    if press_id == 0 {
+        return;
+    }
+    inner
+        .less_computer_combo_pending_press
+        .store(press_id, Ordering::SeqCst);
+    if inner.less_computer_press_generation.load(Ordering::SeqCst) != press_id {
+        return;
+    }
+    cancel_less_computer_voice_session(inner);
+}
+
+fn cancel_less_computer_voice_session(inner: &Arc<Inner>) {
+    let (phase, voice_agent) = {
+        let state = inner.state.lock();
+        (state.phase, state.voice_agent)
+    };
+    if !voice_agent || !matches!(phase, SessionPhase::Starting | SessionPhase::Listening) {
+        return;
+    }
+    let _ = inner.less_computer_combo_pending_press.swap(0, Ordering::SeqCst);
+    log::info!("[less-computer] 触发键与其他键组合按下 —— 取消本次按下开出的会话");
+    cancel_session(inner);
+    if let Some(app) = inner.app.lock().clone() {
+        crate::hide_less_computer_glow(&app);
     }
 }
 
@@ -603,7 +728,7 @@ pub(super) fn combo_hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<Com
             // 否则 latch 竞态导致 combo 快捷键二次按键失效。
             ComboHotkeyEvent::Pressed { at } => {
                 async_runtime::block_on(async {
-                    handle_pressed_edge(&inner_cloned, at).await;
+                    handle_pressed_edge(&inner_cloned, at, 0).await;
                 });
             }
             ComboHotkeyEvent::Released { at } => {
@@ -1026,9 +1151,9 @@ pub(super) fn hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<HotkeyEve
             // 里直到 begin_session 完成，但 SessionPhase::Starting 已经有
             // request_stop_during_starting 兜底，begin_session 完成进 Listening 后
             // bridge 立刻 recv Released → end_session，行为正确，仅有短暂 stop 延迟。
-            HotkeyEvent::Pressed { at } => {
+            HotkeyEvent::Pressed { at, press_id } => {
                 async_runtime::block_on(async {
-                    handle_pressed_edge(&inner_cloned, at).await;
+                    handle_pressed_edge(&inner_cloned, at, press_id).await;
                 });
             }
             HotkeyEvent::Released { at } => {
@@ -1036,9 +1161,9 @@ pub(super) fn hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<HotkeyEve
                     handle_released_edge(&inner_cloned, at).await;
                 });
             }
-            HotkeyEvent::Cancelled => {
-                cancel_session(&inner_cloned);
-            }
+            // Esc 取消与组合键撤销都不在此枚举里：分别走 esc_cancel_bridge_loop /
+            // combo_abort_bridge_loop，避免被上面 Released → end_session /
+            // Pressed → begin_session 的同步流程堵在队列里（见各自函数注释）。
             HotkeyEvent::TranslationModifierPressed => {
                 let translation_hotkey = inner_cloned.prefs.get().translation_hotkey;
                 if is_builtin_translation_shift(&translation_hotkey)
@@ -1161,7 +1286,7 @@ pub(super) async fn handle_window_hotkey_event(
                 log::info!(
                     "[window-hotkey] pressed trigger={trigger:?} code={code} repeat={repeat}"
                 );
-                handle_pressed_edge(inner, std::time::Instant::now()).await;
+                handle_pressed_edge(inner, std::time::Instant::now(), 0).await;
             }
             "keyup" => {
                 log::info!("[window-hotkey] released trigger={trigger:?} code={code}");
@@ -1197,5 +1322,118 @@ pub(super) fn window_key_matches_trigger(trigger: crate::types::HotkeyTrigger, k
         HotkeyTrigger::MediaPlayPause => false,
         // Custom 走 global-hotkey crate，不走 window hotkey fallback
         HotkeyTrigger::Custom => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 轮询 `inner.state.cancelled` 直到满足条件，超时返回 false。
+    fn wait_until(mut cond: impl FnMut() -> bool, timeout: std::time::Duration) -> bool {
+        let deadline = std::time::Instant::now() + timeout;
+        while std::time::Instant::now() < deadline {
+            if cond() {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        false
+    }
+
+    /// 构造一个处于 Processing 阶段、cancelled=false 的 Coordinator。
+    fn coordinator_in_processing() -> Coordinator {
+        let coordinator = Coordinator::new();
+        let mut state = coordinator.inner.state.lock();
+        state.phase = SessionPhase::Processing;
+        state.cancelled = false;
+        drop(state);
+        coordinator
+    }
+
+    /// 后台运行 esc_cancel_bridge_loop，返回 sender 与 join handle。
+    fn spawn_loop(inner: &Arc<Inner>) -> (mpsc::Sender<()>, std::thread::JoinHandle<()>) {
+        let (tx, rx) = mpsc::channel::<()>();
+        let bridge_inner = Arc::clone(inner);
+        let handle = std::thread::spawn(move || esc_cancel_bridge_loop(bridge_inner, rx));
+        (tx, handle)
+    }
+
+    #[test]
+    fn esc_cancel_bridge_sets_cancelled_during_processing() {
+        let coordinator = coordinator_in_processing();
+        let (tx, handle) = spawn_loop(&coordinator.inner);
+
+        tx.send(()).unwrap();
+        assert!(
+            wait_until(
+                || coordinator.inner.state.lock().cancelled,
+                std::time::Duration::from_secs(2)
+            ),
+            "取消信号应置 cancelled 旗标"
+        );
+        // #798 语义：Processing 阶段保持 phase=Processing，由 end_session 自行收尾。
+        assert_eq!(
+            coordinator.inner.state.lock().phase,
+            SessionPhase::Processing
+        );
+
+        drop(tx);
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn esc_cancel_bridge_skips_while_shortcut_recording_active() {
+        let coordinator = coordinator_in_processing();
+        let (tx, handle) = spawn_loop(&coordinator.inner);
+
+        coordinator.set_shortcut_recording_active(true);
+        tx.send(()).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(120));
+        assert!(
+            !coordinator.inner.state.lock().cancelled,
+            "录制快捷键期间按 Esc 应被忽略"
+        );
+
+        // 录制结束后 Esc 恢复生效。
+        coordinator.set_shortcut_recording_active(false);
+        tx.send(()).unwrap();
+        assert!(
+            wait_until(
+                || coordinator.inner.state.lock().cancelled,
+                std::time::Duration::from_secs(2)
+            ),
+            "录制结束后取消信号应恢复生效"
+        );
+
+        drop(tx);
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn esc_cancel_bridge_is_idempotent_on_repeat_signals() {
+        let coordinator = coordinator_in_processing();
+        let (tx, handle) = spawn_loop(&coordinator.inner);
+
+        for _ in 0..3 {
+            tx.send(()).unwrap();
+        }
+        assert!(
+            wait_until(
+                || coordinator.inner.state.lock().cancelled,
+                std::time::Duration::from_secs(2)
+            ),
+            "首个取消信号应置 cancelled 旗标"
+        );
+        // 连按 Esc / 双通道重复触发时 cancel_session 幂等：不 panic、状态不回写。
+        tx.send(()).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(120));
+        assert_eq!(
+            coordinator.inner.state.lock().phase,
+            SessionPhase::Processing
+        );
+
+        drop(tx);
+        handle.join().unwrap();
     }
 }
