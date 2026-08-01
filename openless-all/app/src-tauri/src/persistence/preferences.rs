@@ -128,10 +128,11 @@ impl PreferencesStore {
         })
     }
 
-    /// 降级实例：data_dir 不可用时使用默认配置，写操作会安静地失败。
+    /// 降级实例：data_dir 不可用时使用默认配置。
+    /// Android 使用空 path（内存态，写盘明确失败），禁止落 `/data/local/tmp`。
     pub(crate) fn new_fallback() -> Self {
         Self {
-            path: std::env::temp_dir().join("openless_prefs_fallback.json"),
+            path: super::fallback_store_path("openless_prefs_fallback.json"),
             state: Mutex::new(UserPreferences::default()),
         }
     }

@@ -26,12 +26,11 @@ impl HistoryStore {
         })
     }
 
-    /// 在 data_dir 不可用时构造一个降级实例（指向临时目录）。
-    /// 该实例在运行期间读写会安静地失败或返回空，不会 panic，
-    /// 也不会影响正常启动路径。
+    /// 在 data_dir 不可用时构造一个降级实例。
+    /// Android 使用空 path（内存态），禁止落 `/data/local/tmp`。
     pub(crate) fn new_fallback() -> Self {
         Self {
-            path: std::env::temp_dir().join("openless_history_fallback.json"),
+            path: super::fallback_store_path("openless_history_fallback.json"),
             lock: Mutex::new(()),
         }
     }

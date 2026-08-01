@@ -628,23 +628,33 @@ impl Coordinator {
         #[cfg(not(target_os = "windows"))]
         {
             let history = HistoryStore::new().unwrap_or_else(|e| {
-                log::error!("[coord] HistoryStore init failed: {e}; 降级为空历史记录");
+                log::error!(
+                    "[coord] HistoryStore init failed: {e}; 降级为空历史记录 (Android 禁止 /data/local/tmp)"
+                );
                 HistoryStore::new_fallback()
             });
             let prefs = PreferencesStore::new().unwrap_or_else(|e| {
-                log::error!("[coord] PreferencesStore init failed: {e}; 降级为默认偏好设置");
+                log::error!(
+                    "[coord] PreferencesStore init failed: {e}; 降级为默认偏好设置 (Android 禁止 /data/local/tmp)"
+                );
                 PreferencesStore::new_fallback()
             });
             let style_packs = StylePackStore::new(&prefs).unwrap_or_else(|e| {
-                log::error!("[coord] StylePackStore init failed: {e}; 降级为空样式包列表");
+                log::error!(
+                    "[coord] StylePackStore init failed: {e}; 降级为空样式包列表 (Android 禁止 /data/local/tmp)"
+                );
                 StylePackStore::new_fallback()
             });
             let vocab = DictionaryStore::new().unwrap_or_else(|e| {
-                log::error!("[coord] DictionaryStore init failed: {e}; 降级为空词库");
+                log::error!(
+                    "[coord] DictionaryStore init failed: {e}; 降级为空词库 (Android 禁止 /data/local/tmp)"
+                );
                 DictionaryStore::new_fallback()
             });
             let correction_rules = CorrectionRuleStore::new().unwrap_or_else(|e| {
-                log::error!("[coord] CorrectionRuleStore init failed: {e}; 降级为空纠错规则");
+                log::error!(
+                    "[coord] CorrectionRuleStore init failed: {e}; 降级为空纠错规则 (Android 禁止 /data/local/tmp)"
+                );
                 CorrectionRuleStore::new_fallback()
             });
 

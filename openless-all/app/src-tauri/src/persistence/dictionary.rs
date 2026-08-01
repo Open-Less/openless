@@ -32,10 +32,10 @@ impl DictionaryStore {
         })
     }
 
-    /// 降级实例：data_dir 不可用时使用临时路径，读写会安静地失败或返回空。
+    /// 降级实例：data_dir 不可用时使用临时路径（桌面）或空 path（Android 内存态）。
     pub(crate) fn new_fallback() -> Self {
         Self {
-            path: std::env::temp_dir().join("openless_vocab_fallback.json"),
+            path: super::fallback_store_path("openless_vocab_fallback.json"),
             lock: Mutex::new(()),
         }
     }

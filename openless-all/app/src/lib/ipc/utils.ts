@@ -27,6 +27,9 @@ export async function openExternal(url: string): Promise<void> {
 /**
  * 让用户选 save 路径并把当前会话日志（openless.log）复制过去。
  * 浏览器开发模式下走 mock 不实际写盘。返回最终 save 的绝对路径，取消选择则返回 null。
+ *
+ * Android：省略 filters——部分 ROM 上 CREATE_DOCUMENT + EXTRA_MIME_TYPES 不稳定；
+ * 文件名已带 .log，足够标识类型。
  */
 export async function exportErrorLog(
     suggestedFileName: string,
@@ -35,10 +38,16 @@ export async function exportErrorLog(
         return `~/Downloads/${suggestedFileName}`
     }
     const { save } = await import("@tauri-apps/plugin-dialog")
-    const target = await save({
-        defaultPath: suggestedFileName,
-        filters: [{ name: "Log", extensions: ["log", "txt"] }],
-    })
+    const isAndroid =
+        typeof navigator !== "undefined" && /Android/i.test(navigator.userAgent || "")
+    const target = await save(
+        isAndroid
+            ? { defaultPath: suggestedFileName }
+            : {
+                  defaultPath: suggestedFileName,
+                  filters: [{ name: "Log", extensions: ["log", "txt"] }],
+              },
+    )
     if (!target) return null
     await invokeOrMock<void>(
         "export_error_log",

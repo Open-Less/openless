@@ -7,17 +7,24 @@ use tauri::{AppHandle, Manager, RunEvent};
 use crate::coordinator::Coordinator;
 
 pub fn run() {
-    let coordinator = Arc::new(Coordinator::new());
-
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init());
     #[cfg(any(target_os = "android", target_os = "ios"))]
     let builder = builder.plugin(tauri_plugin_fs::init());
 
+    // Coordinator is created inside setup (after Android storage roots are ready).
+    // Managing state in setup is supported by Tauri 2 and avoids constructing
+    // PreferencesStore against /data/local/tmp before JNI Context exists.
     builder
-        .manage(coordinator.clone())
-        .setup(move |app| {
+        .setup(|app| {
+            #[cfg(target_os = "android")]
+            {
+                if let Err(error) = crate::persistence::init_android_storage_roots() {
+                    eprintln!("[android-storage] ERROR init failed: {error:#}");
+                }
+            }
+
             crate::init_file_logger();
             log::info!("=== OpenLess mobile 启动 ===");
             initialize_android_ndk_context_for_audio();
@@ -29,6 +36,8 @@ pub fn run() {
                 let _ = qa.hide();
             }
 
+            let coordinator = Arc::new(Coordinator::new());
+            app.manage(coordinator.clone());
             coordinator.bind_app(app.handle().clone());
             #[cfg(target_os = "android")]
             {
@@ -42,8 +51,9 @@ pub fn run() {
         .expect("error while building tauri mobile application")
         .run(|app, event| match event {
             RunEvent::Exit => {
-                let coordinator = app.state::<Arc<Coordinator>>();
-                coordinator.stop_hotkey_listener();
+                if let Some(coordinator) = app.try_state::<Arc<Coordinator>>() {
+                    coordinator.stop_hotkey_listener();
+                }
             }
             _ => {}
         });

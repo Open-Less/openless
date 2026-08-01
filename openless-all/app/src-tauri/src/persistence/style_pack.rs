@@ -82,12 +82,12 @@ impl StylePackStore {
         })
     }
 
-    /// 降级实例：data_dir 不可用时使用临时路径和空列表，写操作会安静地失败。
+    /// 降级实例：data_dir 不可用时使用空列表。
+    /// Android 使用空 path（内存态），禁止落 `/data/local/tmp`。
     pub(crate) fn new_fallback() -> Self {
-        let tmp = std::env::temp_dir();
         Self {
-            path: tmp.join("openless_style_packs_fallback.json"),
-            asset_root: tmp.join("openless_style_pack_assets_fallback"),
+            path: super::fallback_store_path("openless_style_packs_fallback.json"),
+            asset_root: super::fallback_store_path("openless_style_pack_assets_fallback"),
             state: Mutex::new(Vec::new()),
         }
     }

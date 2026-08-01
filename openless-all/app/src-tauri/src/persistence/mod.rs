@@ -6,6 +6,7 @@
 //! - macOS:   `~/Library/Application Support/OpenLess`
 //! - Windows: `%APPDATA%\OpenLess`
 //! - Linux:   `$XDG_DATA_HOME/OpenLess` or `~/.local/share/OpenLess`
+//! - Android: `{Context.getFilesDir()}/OpenLess` (never `/data/local/tmp`)
 //!
 //! Credential storage policy: provider credentials are stored in the OS
 //! credential vault (macOS Keychain, Windows Credential Manager, Linux keyring).
@@ -20,13 +21,15 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use uuid::Uuid;
 
 mod activity;
 #[cfg(any(target_os = "android", test))]
 mod android_credentials;
+#[cfg(any(target_os = "android", test))]
+mod android_storage;
 mod correction;
 mod credentials;
 mod dictionary;
@@ -45,6 +48,13 @@ pub use paths::*;
 pub use preferences::*;
 pub use style_pack::*;
 pub(crate) use style_pack_archive::STYLE_PACK_ARCHIVE_MAX_COMPRESSED_BYTES;
+
+#[cfg(target_os = "android")]
+pub use android_storage::init_android_storage_roots;
+#[cfg(target_os = "android")]
+pub(crate) use android_storage::{android_log_dir, android_openless_log_candidates};
+#[cfg(any(target_os = "android", test))]
+use android_storage::is_memory_only_path;
 
 const HISTORY_CAP: usize = 200;
 const PREFERENCES_FILE: &str = "preferences.json";
@@ -81,10 +91,22 @@ fn data_dir() -> Result<PathBuf> {
 
     #[cfg(target_os = "android")]
     {
-        if let Ok(dir) = std::env::var("TAURI_ANDROID_APP_DATA_DIR") {
-            return Ok(PathBuf::from(dir).join("OpenLess"));
-        }
-        Ok(std::env::temp_dir().join("OpenLess"))
+        // Never use std::env::temp_dir() (/data/local/tmp) — apps cannot write there.
+        android_storage::android_data_dir()
+    }
+}
+
+/// Fallback store path when `data_dir()` is unavailable.
+/// Android: empty path → memory-only (writes refused); never `/data/local/tmp`.
+fn fallback_store_path(file_name: &str) -> PathBuf {
+    #[cfg(target_os = "android")]
+    {
+        let _ = file_name;
+        PathBuf::new()
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        std::env::temp_dir().join(file_name)
     }
 }
 
@@ -97,6 +119,14 @@ fn ensure_dir(dir: &Path) -> Result<()> {
 /// target path. The unique suffix lets concurrent writers each own their own
 /// tmp file, so a parallel rename never finds its source already taken.
 fn atomic_write(path: &Path, contents: &[u8]) -> Result<()> {
+    #[cfg(any(target_os = "android", test))]
+    if is_memory_only_path(path) {
+        bail!("atomic write refused: empty path (memory-only store; Android data_dir unavailable)");
+    }
+    #[cfg(not(any(target_os = "android", test)))]
+    if path.as_os_str().is_empty() {
+        bail!("atomic write refused: empty path (memory-only store)");
+    }
     if let Some(parent) = path.parent() {
         ensure_dir(parent)?;
     }

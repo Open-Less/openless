@@ -101,12 +101,14 @@ object OpenLessAndroidPreferences {
 
     private fun preferenceFiles(context: Context): List<File> {
         val files = mutableListOf<File>()
+        // Prefer app-private filesDir (Rust data_dir); never rely on /data/local/tmp.
+        files += File(File(context.filesDir, APP_DIR), PREFERENCES_FILE)
         val envDir = System.getenv("TAURI_ANDROID_APP_DATA_DIR")
         if (!envDir.isNullOrBlank()) {
             files += File(File(envDir), APP_DIR).resolve(PREFERENCES_FILE)
         }
+        // Legacy probe only — some older builds may have written under cacheDir.
         files += File(File(context.cacheDir, APP_DIR), PREFERENCES_FILE)
-        files += File(File(context.filesDir, APP_DIR), PREFERENCES_FILE)
         return files
     }
 }

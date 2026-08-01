@@ -925,4 +925,36 @@ pub mod android {
             &[JValue::Object(context), JValue::Object(path_obj)],
         )
     }
+
+    /// Write `bytes` to a SAF `content://` URI via Kotlin ContentResolver.
+    pub fn write_content_uri(uri: &str, bytes: &[u8]) -> Result<(), String> {
+        with_android_env(|env, context| {
+            let class = load_context_class(env, context, "com.openless.app.OpenLessContentWriter")?;
+            let uri_obj = jobject_str(env, uri)?;
+            let bytes_array = env
+                .byte_array_from_slice(bytes)
+                .map_err(|error| format!("create byte array for content URI write: {error}"))?;
+            let bytes_obj = JObject::from(bytes_array);
+            let ok = env
+                .call_static_method(
+                    class,
+                    "writeBytes",
+                    "(Landroid/content/Context;Ljava/lang/String;[B)Z",
+                    &[
+                        JValue::Object(context),
+                        JValue::Object(&uri_obj),
+                        JValue::Object(&bytes_obj),
+                    ],
+                )
+                .and_then(|value| value.z())
+                .map_err(|error| {
+                    format!("call OpenLessContentWriter.writeBytes: {error}")
+                })?;
+            if ok {
+                Ok(())
+            } else {
+                Err(format!("写入 content URI 失败：{uri}"))
+            }
+        })
+    }
 }

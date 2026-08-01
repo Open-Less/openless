@@ -1279,13 +1279,18 @@ fn reset_tcc_service_for_restart(service: &str, reason: &str) {
 }
 
 /// 把日志同时写到 stderr + ~/Library/Logs/OpenLess/openless.log（match Swift `Log.swift`）。
-fn init_file_logger() {
+pub(crate) fn init_file_logger() {
     use simplelog::{
         ColorChoice, CombinedLogger, ConfigBuilder, LevelFilter, TermLogger, TerminalMode,
         WriteLogger,
     };
     let log_dir = log_dir_path();
-    let _ = std::fs::create_dir_all(&log_dir);
+    if let Err(e) = std::fs::create_dir_all(&log_dir) {
+        eprintln!(
+            "[logger] WARN create log dir failed path={}: {e}",
+            log_dir.display()
+        );
+    }
     let log_file = log_dir.join("openless.log");
     if let Err(e) = rotate_log_if_too_large(&log_file) {
         eprintln!("[logger] WARN 日志轮转失败: {e}");
@@ -1297,12 +1302,21 @@ fn init_file_logger() {
         TerminalMode::Mixed,
         ColorChoice::Auto,
     )];
-    if let Ok(file) = std::fs::OpenOptions::new()
+    match std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(&log_file)
     {
-        loggers.push(WriteLogger::new(LevelFilter::Info, config, file));
+        Ok(file) => {
+            loggers.push(WriteLogger::new(LevelFilter::Info, config, file));
+            eprintln!("[logger] file logger ready path={}", log_file.display());
+        }
+        Err(e) => {
+            eprintln!(
+                "[logger] ERROR open log file failed path={}: {e}",
+                log_file.display()
+            );
+        }
     }
     let _ = CombinedLogger::init(loggers);
 }
@@ -1354,11 +1368,17 @@ pub fn log_dir_path() -> std::path::PathBuf {
     }
     #[cfg(target_os = "android")]
     {
-        if let Ok(dir) = std::env::var("TAURI_ANDROID_APP_DATA_DIR") {
-            return std::path::PathBuf::from(dir).join("logs");
+        // Prefer cached JNI filesDir/logs; never use /data/local/tmp.
+        if let Ok(dir) = crate::persistence::android_log_dir() {
+            return dir;
         }
+        eprintln!("[logger] ERROR android_log_dir unavailable; file logging disabled");
+        return std::path::PathBuf::from("/__openless_android_log_uninitialized__");
     }
-    std::env::temp_dir().join("OpenLess")
+    #[cfg(not(target_os = "android"))]
+    {
+        std::env::temp_dir().join("OpenLess")
+    }
 }
 
 pub(crate) fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
