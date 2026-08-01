@@ -781,6 +781,9 @@ fn sanitize_style_pack_id(requested_id: &str) -> String {
 }
 
 fn remove_style_pack_assets(asset_root: &Path, pack: &StylePack) {
+    if asset_root.as_os_str().is_empty() {
+        return;
+    }
     if let Some(icon_path) = pack.icon_path.as_deref() {
         let path = Path::new(icon_path);
         let _ = fs::remove_file(path);

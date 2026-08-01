@@ -778,6 +778,9 @@ pub(super) fn persist_style_pack_icon(
     pack_id: &str,
     icon: StylePackIcon,
 ) -> Result<String> {
+    if asset_root.as_os_str().is_empty() {
+        bail!("style pack asset root unavailable (memory-only store)");
+    }
     let target_dir = asset_root.join(pack_id);
     ensure_dir(&target_dir)?;
     let target_path = target_dir.join(format!("icon.{}", icon.extension));
@@ -790,6 +793,9 @@ pub(super) fn persist_style_pack_icon(
 }
 
 pub(super) fn cleanup_style_pack_asset_dir(asset_root: &Path, pack_id: &str) {
+    if asset_root.as_os_str().is_empty() {
+        return;
+    }
     let _ = fs::remove_dir_all(asset_root.join(pack_id));
 }
 
@@ -858,5 +864,34 @@ mod tests {
         png.extend_from_slice(chunk_type);
         png.extend_from_slice(data);
         png.extend_from_slice(&[0; 4]);
+    }
+
+    #[test]
+    fn persist_style_pack_icon_rejects_empty_asset_root() {
+        use std::fs;
+        use std::path::PathBuf;
+
+        use super::persist_style_pack_icon;
+        use super::StylePackIcon;
+
+        let pack_id = "fallback-pack-id";
+        let cwd = std::env::current_dir().expect("cwd");
+        let relative_dir = cwd.join(pack_id);
+        let _ = fs::remove_dir_all(&relative_dir);
+
+        let icon = StylePackIcon {
+            extension: "png".to_string(),
+            bytes: vec![0x89, 0x50, 0x4e, 0x47],
+        };
+        let err = persist_style_pack_icon(&PathBuf::new(), pack_id, icon).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("memory-only store"),
+            "{err:#}"
+        );
+        assert!(
+            !relative_dir.exists(),
+            "empty asset_root must not create {} under cwd",
+            relative_dir.display()
+        );
     }
 }
