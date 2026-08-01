@@ -139,10 +139,20 @@ public:
                             }
                             return false;
                         }())) {
-                        auto dsym = triggerRawSym_ != 0 ? triggerRawSym_
-                            : static_cast<uint32_t>(triggerKeyList_[0].sym());
-                        auto dstates = triggerRawStates_ != 0 ? triggerRawStates_
-                            : static_cast<uint32_t>(triggerKeyList_[0].states());
+                        // 修复崩溃: raw 路径(SetHotkeyRaw)匹配时若 triggerRawStates_==0,
+                        // 原代码会无条件取 triggerKeyList_[0];而 raw 模式常伴随空 KeyList
+                        // (见 openless.conf: TriggerKey= 为空), 对空 vector 取下标 [0]
+                        // 是未定义行为, 直接导致 fcitx5 段错误 (Key::states 读野指针)。
+                        // 修正: 只有 KeyList 路径匹配时才访问列表, raw 路径直接用 raw 值。
+                        uint32_t dsym = triggerRawSym_;
+                        uint32_t dstates = triggerRawStates_;
+                        if (triggerRawSym_ == 0 && !triggerKeyList_.empty()) {
+                            dsym = static_cast<uint32_t>(triggerKeyList_[0].sym());
+                            dstates = static_cast<uint32_t>(triggerKeyList_[0].states());
+                        }
+                        if (dsym == 0) {
+                            return;
+                        }
                         if (!hasCustomDictationKey_ && isModifierKeySym(dsym)) {
                             dictationTriggerHeld_ = isPress;
                             if (isPress) {
