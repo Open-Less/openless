@@ -464,35 +464,9 @@ fn migrate_style_packs_from_preferences(
                 pack.prompt = builtin.prompt.clone();
                 changed = true;
             }
-            // A short-lived pre-separation build could write the non-ASR
-            // fallback into the pack's main `prompt` slot. If the legacy
-            // per-mode prompt still contains the original ASR rules, recover
-            // it before syncing preferences back from the pack store.
-            let legacy_prompt = legacy_prompts.for_mode(pack.base_mode);
-            let restore_prompt = if is_asr_style_prompt(legacy_prompt) {
-                legacy_prompt
-            } else {
-                // If the earlier bad build already synced the selection prompt
-                // into both stores, fall back to the bundled ASR default rather
-                // than keeping a non-ASR prompt in the dictation slot.
-                builtin.prompt.as_str()
-            };
-            if is_non_asr_selection_prompt(&pack.prompt)
-                && is_asr_style_prompt(restore_prompt)
-                && pack.prompt.trim() != restore_prompt.trim()
-            {
-                log::warn!(
-                    "[style-packs] restoring builtin ASR prompt from legacy preferences id={}",
-                    pack.id
-                );
-                pack.prompt = restore_prompt.to_string();
-                changed = true;
-            }
-            // v1 风格包没有选区书面文本 Prompt。旧的过渡版本又给所有内置包
-            // 写入了同一条通用 Prompt；这里只替换这两种已知默认值，保留用户自定义内容。
-            if pack.selection_prompt.trim().is_empty()
-                || is_generic_selection_prompt(&pack.selection_prompt)
-            {
+            // v1 风格包没有选区书面文本 Prompt 字段；为空时填充内置默认值，
+            // 非空内容（含用户自定义）一律保留。
+            if pack.selection_prompt.trim().is_empty() {
                 pack.selection_prompt = builtin.selection_prompt.clone();
                 changed = true;
             }
@@ -540,30 +514,6 @@ fn migrate_style_packs_from_preferences(
             .then_with(|| left.name.cmp(&right.name))
     });
     changed
-}
-
-fn is_non_asr_selection_prompt(prompt: &str) -> bool {
-    let normalized = prompt.to_ascii_lowercase();
-    (normalized.contains("selected-text editor") && normalized.contains("not asr"))
-        || normalized.contains("不是语音识别（asr）转写")
-}
-
-fn is_generic_selection_prompt(prompt: &str) -> bool {
-    let normalized = prompt.to_ascii_lowercase();
-    normalized.contains("selected-text editor")
-        && normalized.contains("improve clarity, grammar")
-        && normalized.contains("active style")
-}
-
-fn is_asr_style_prompt(prompt: &str) -> bool {
-    if is_non_asr_selection_prompt(prompt) {
-        return false;
-    }
-    let normalized = prompt.to_ascii_lowercase();
-    normalized.contains("asr")
-        || normalized.contains("语音识别")
-        || normalized.contains("转写")
-        || normalized.contains("口语")
 }
 
 fn style_pack_sort_key(pack: &StylePack) -> (u8, u8) {
