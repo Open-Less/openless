@@ -168,7 +168,11 @@ mod macos_impl {
         Ok(())
     }
 
-    fn is_secure_input_enabled() -> bool {
+    /// Secure Event Input 是否开启（密码框、sudo 提示、1Password 等会打开它）。
+    ///
+    /// 写入路径用它判断「合成键盘事件会不会被静默丢弃」；`host_document` 用它做读取
+    /// 前的第一道硬拦 —— 这个信号一亮就说明屏幕上正在输入凭据，一个字都不该读。
+    pub fn is_secure_input_enabled() -> bool {
         unsafe { IsSecureEventInputEnabled() != 0 }
     }
 
@@ -691,7 +695,8 @@ pub fn expected_sendinput_typed_chars(text: &str) -> usize {
 #[cfg(target_os = "macos")]
 #[allow(unused_imports)]
 pub use macos_impl::{
-    restore_input_source, switch_to_ascii, type_unicode_chunk, PreviousInputSource,
+    is_secure_input_enabled, restore_input_source, switch_to_ascii, type_unicode_chunk,
+    PreviousInputSource,
 };
 
 #[cfg(target_os = "windows")]

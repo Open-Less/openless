@@ -209,6 +209,52 @@ fn resolve_openless_log_path() -> Result<std::path::PathBuf, String> {
     Err(format!("日志文件不存在（已尝试：{tried}）"))
 }
 
+// ─────────────────────────── cursor context (debug only) ───────────────────────────
+
+/// 探一次「宿主 app 光标周围的正文」，把结果原样交给调用方。
+///
+/// **调试用，不接任何产品链路**（里程碑 1 的产物就是「模块可用但没人调它」）。
+/// 存在的意义是装机之后能在各个真实 app 里挨个点一遍，肉眼确认：读到的内容对不对、
+/// 终端和密码框有没有被拦住、卡死的 app 会不会把界面冻住。
+///
+/// `delayMs` 是这个命令能用起来的关键：从 devtools 里 invoke 时前台 app 是 OpenLess
+/// 自己，读到的永远是我们自己的窗口。传个 3000 就有三秒时间切到备忘录 / VS Code /
+/// 微信里点进输入框，探针在那时才真正开始读。
+///
+/// ```js
+/// await __TAURI__.core.invoke('debug_read_cursor_context', { delayMs: 3000 })
+/// ```
+#[tauri::command]
+pub async fn debug_read_cursor_context(
+    budget_chars: Option<usize>,
+    delay_ms: Option<u64>,
+) -> crate::host_document::HostDocumentReadResult {
+    if let Some(delay) = delay_ms.filter(|ms| *ms > 0) {
+        // 上限 30s：这是手动调试入口，不该能被参数拖成一个永不返回的命令。
+        tokio::time::sleep(std::time::Duration::from_millis(delay.min(30_000))).await;
+    }
+    let budget = budget_chars
+        .filter(|chars| *chars > 0)
+        .unwrap_or(crate::host_document::DEFAULT_BUDGET_CHARS);
+
+    let result = crate::host_document::probe_around_cursor(budget).await;
+    // 同步打进日志：装机验证时多半是切到别的 app 手动点，回头翻日志比翻 devtools 顺手。
+    log::info!(
+        "[cursor-context] status={:?} reason={:?} app={:?} bundle={:?} chars={} elapsed={}ms",
+        result.status,
+        result.reason,
+        result.app_name,
+        result.bundle_id,
+        result
+            .window
+            .as_ref()
+            .map(|w| w.text.chars().count())
+            .unwrap_or(0),
+        result.elapsed_ms,
+    );
+    result
+}
+
 // ─────────────────────────── unused but exported (silences dead_code) ───────────────────────────
 
 #[allow(dead_code)]

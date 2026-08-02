@@ -56,85 +56,17 @@ pub(super) fn capture_focus_target() -> Option<usize> {
 ///
 /// macOS 走 NSWorkspace.frontmostApplication（公开 API，无需额外权限）；
 /// Windows 复用前台 HWND 拿窗口标题；Linux/其他平台返回 None。
-#[cfg(target_os = "macos")]
 pub(super) fn capture_frontmost_app() -> Option<String> {
-    use objc2::msg_send;
-    use objc2::runtime::{AnyClass, AnyObject};
-
-    unsafe {
-        let cls = AnyClass::get("NSWorkspace")?;
-        let workspace: *mut AnyObject = msg_send![cls, sharedWorkspace];
-        if workspace.is_null() {
-            return None;
-        }
-        let app: *mut AnyObject = msg_send![workspace, frontmostApplication];
-        if app.is_null() {
-            return None;
-        }
-        let name_obj: *mut AnyObject = msg_send![app, localizedName];
-        let bundle_obj: *mut AnyObject = msg_send![app, bundleIdentifier];
-        let name = nsstring_to_string(name_obj);
-        let bundle = nsstring_to_string(bundle_obj);
-        match (name, bundle) {
-            (Some(n), Some(b)) => Some(format!("{n} ({b})")),
-            (Some(n), None) => Some(n),
-            (None, Some(b)) => Some(b),
-            (None, None) => None,
-        }
+    // 曾经这里有一份和 `selection.rs` 逐字重复的 NSWorkspace/Win32 实现（三个 cfg
+    // 分支、连 nsstring 转换 helper 都是复制的）。收口到 selection：那边现在把取值
+    // 拆成了结构化的 `current_front_app_parts`，`host_document` 的 bundle 黑名单要用。
+    // 一处实现，三个消费方。
+    match crate::selection::current_front_app_parts() {
+        (Some(name), Some(bundle)) => Some(format!("{name} ({bundle})")),
+        (Some(name), None) => Some(name),
+        (None, Some(bundle)) => Some(bundle),
+        (None, None) => None,
     }
-}
-
-#[cfg(target_os = "macos")]
-unsafe fn nsstring_to_string(ns_string: *mut objc2::runtime::AnyObject) -> Option<String> {
-    use objc2::msg_send;
-    if ns_string.is_null() {
-        return None;
-    }
-    let utf8: *const std::os::raw::c_char = unsafe { msg_send![ns_string, UTF8String] };
-    if utf8.is_null() {
-        return None;
-    }
-    let cstr = unsafe { std::ffi::CStr::from_ptr(utf8) };
-    let s = cstr.to_string_lossy().into_owned();
-    if s.is_empty() {
-        None
-    } else {
-        Some(s)
-    }
-}
-
-#[cfg(target_os = "windows")]
-pub(super) fn capture_frontmost_app() -> Option<String> {
-    use windows::Win32::UI::WindowsAndMessaging::{
-        GetForegroundWindow, GetWindowTextLengthW, GetWindowTextW,
-    };
-
-    unsafe {
-        let hwnd = GetForegroundWindow();
-        if hwnd.0.is_null() {
-            return None;
-        }
-        let len = GetWindowTextLengthW(hwnd);
-        if len <= 0 {
-            return None;
-        }
-        let mut buf = vec![0u16; (len + 1) as usize];
-        let copied = GetWindowTextW(hwnd, &mut buf);
-        if copied <= 0 {
-            return None;
-        }
-        let title = String::from_utf16_lossy(&buf[..copied as usize]);
-        if title.is_empty() {
-            None
-        } else {
-            Some(title)
-        }
-    }
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
-pub(super) fn capture_frontmost_app() -> Option<String> {
-    None
 }
 
 #[cfg(target_os = "windows")]

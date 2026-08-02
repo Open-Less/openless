@@ -36,6 +36,9 @@ mod endpoint_security;
 mod external_url;
 #[cfg(not(mobile))]
 mod global_hotkey_runtime;
+// 读宿主 app 光标周围的正文，给 LLM 润色当上下文。唯一接触「别的应用的文档」的地方，
+// 平台差异和安全硬拦全关在里面；目前仅 macOS 有实现，其余平台优雅降级。
+mod host_document;
 #[cfg(not(mobile))]
 #[path = "hotkey.rs"]
 mod hotkey;
@@ -323,6 +326,7 @@ macro_rules! app_invoke_handler_desktop {
             #[cfg(target_os = "windows")]
             commands::sherpa_onnx_asr_reveal_model_dir,
             commands::export_error_log,
+            commands::debug_read_cursor_context,
             restart_app,
             reset_accessibility_permission_and_restart_app,
             log_client_error,
