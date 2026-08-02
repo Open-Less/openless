@@ -356,7 +356,9 @@ fn is_classic_bailian_realtime_model(model: &str) -> bool {
     model.starts_with("fun-asr-realtime")
         || model.starts_with("fun-asr-flash-8k-realtime")
         || model.starts_with("paraformer-realtime")
+        || model.starts_with("paraformer-8k-realtime")
         || model.starts_with("sensevoice-realtime")
+        || model.starts_with("sensevoice-8k-realtime")
 }
 
 /// StepFun 的流式模型命名恒以 `-stream` 结尾（stepaudio-2.5-asr-stream /
@@ -3072,6 +3074,16 @@ mod tests {
         );
         assert_eq!(
             resolve_effective_asr_provider(bailian, "paraformer-realtime-v2").unwrap(),
+            crate::asr::bailian::PROVIDER_ID
+        );
+        // 8k 实时变体同样走经典 WebSocket（降采样 + sample_rate=8000），
+        // 与 bailian.rs::model_is_8k 的命名空间保持一致。
+        assert_eq!(
+            resolve_effective_asr_provider(bailian, "paraformer-8k-realtime-v2").unwrap(),
+            crate::asr::bailian::PROVIDER_ID
+        );
+        assert_eq!(
+            resolve_effective_asr_provider(bailian, "sensevoice-8k-realtime-v1").unwrap(),
             crate::asr::bailian::PROVIDER_ID
         );
         // 空模型 → 经典实时（百炼默认）；未知模型应被拒绝。

@@ -242,6 +242,21 @@ impl DashScopeMultimodalASR {
     }
 
     pub async fn transcribe_async_url(&self, file_url: &str) -> Result<String> {
+        self.transcribe_async_url_with_timeout(
+            file_url,
+            Duration::from_secs(ASYNC_TASK_POLL_TIMEOUT_SECS),
+        )
+        .await
+    }
+
+    /// 提交异步任务并轮询至完成。`poll_timeout` 是任务轮询阶段的硬截止时间：
+    /// 真实转写用长轮询（默认 600s），连通性验证用短轮询以便快速返回，避免
+    /// 「验证」按钮在最坏情况下阻塞近 11 分钟。
+    pub async fn transcribe_async_url_with_timeout(
+        &self,
+        file_url: &str,
+        poll_timeout: Duration,
+    ) -> Result<String> {
         let submit_url = async_transcription_url(&self.base_url)?;
         let response = crate::net::credential_http()
             .post(submit_url)
@@ -262,7 +277,7 @@ impl DashScopeMultimodalASR {
             .filter(|id| !id.is_empty())
             .context("DashScope async ASR response missing task_id")?;
         let task_url = api_url(&self.base_url, &format!("/api/v1/tasks/{task_id}"))?;
-        let deadline = Instant::now() + Duration::from_secs(ASYNC_TASK_POLL_TIMEOUT_SECS);
+        let deadline = Instant::now() + poll_timeout;
         let completed = loop {
             let response = crate::net::credential_http()
                 .get(task_url.clone())
@@ -516,7 +531,9 @@ pub fn extract_async_transcript_text(json: &Value) -> Result<String> {
             }
         }
     }
-    Ok(texts.join(""))
+    // 段间用空格分隔：中文识别结果几乎不含空格，连成整句无感知；而拉丁语言
+    // （英文等）的词汇若直接拼接会粘在一起，空格分隔对两种场景都更安全。
+    Ok(texts.join(" "))
 }
 
 /// fun-asr-flash 的响应信封与标准多模态接口不同，且不同模型版本字段路径略有
@@ -718,7 +735,7 @@ mod tests {
         let funasr = serde_json::json!({
             "transcripts": [{"sentences": [{"text": "第一句"}, {"text": "第二句"}]}]
         });
-        assert_eq!(extract_async_transcript_text(&funasr).unwrap(), "第一句第二句");
+        assert_eq!(extract_async_transcript_text(&funasr).unwrap(), "第一句 第二句");
 
         let qwen = serde_json::json!({
             "transcripts": [{"text": "Qwen 转写结果"}]
@@ -912,7 +929,7 @@ mod tests {
         );
         asr.consume_pcm_chunk(&vec![0u8; 32_000]);
         let transcript = asr.transcribe().await.unwrap();
-        assert_eq!(transcript.text, "异步转写");
+        assert_eq!(transcript.text, "异步 转写");
         assert_eq!(transcript.duration_ms, 1_000);
         server.join().unwrap();
     }

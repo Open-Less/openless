@@ -249,8 +249,7 @@ impl BailianRealtimeASR {
         let (send_tx, tail_chunks) = {
             let mut st = self.state.lock();
             if model_is_8k(&self.credentials.normalized_model()) {
-                let mut remainder = std::mem::take(&mut st.downsample_remainder);
-                flush_downsample_tail(&mut remainder, &mut st.audio_scratch);
+                clear_downsample_tail(&mut st.downsample_remainder);
             }
             let send_tx = st.send_tx.clone();
             if !st.pending_audio.is_empty() {
@@ -570,17 +569,22 @@ fn model_is_8k(model: &str) -> bool {
 }
 
 fn downsample_pcm_16k_to_8k(pcm: &[u8]) -> Vec<u8> {
-    pcm.chunks_exact(4)
-        .flat_map(|pair| [pair[0], pair[1]])
-        .collect()
+    // 16 kHz → 8 kHz：相邻两个样本取平均（一阶低通）。相比纯抽取（每隔一个
+    // 直接丢弃），平均能压低 4–8 kHz 频段折叠进 0–4 kHz 的混叠，识别更稳。
+    // 用 i32 求和避免 i16 溢出；输出样本数减半。
+    let mut out = Vec::with_capacity(pcm.len() / 2);
+    for pair in pcm.chunks_exact(4) {
+        let left = i16::from_le_bytes([pair[0], pair[1]]) as i32;
+        let right = i16::from_le_bytes([pair[2], pair[3]]) as i32;
+        let sample = ((left + right) / 2) as i16;
+        out.extend_from_slice(&sample.to_le_bytes());
+    }
+    out
 }
 
-fn flush_downsample_tail(remainder: &mut Vec<u8>, output: &mut Vec<u8>) {
-    // Decimation keeps source indices 0, 2, 4, ... . A final complete i16 in
-    // `remainder` is therefore the next kept sample, not half of an output pair.
-    if remainder.len() >= 2 {
-        output.extend_from_slice(&remainder[..2]);
-    }
+fn clear_downsample_tail(remainder: &mut Vec<u8>) {
+    // 平均降采样需要成对样本：收尾时不足一对的残余（≤1 个 16k 样本 ≈ 0.0625ms）
+    // 无法配对取平均，直接丢弃，不破坏后续分块对齐。
     remainder.clear();
 }
 
@@ -992,12 +996,12 @@ mod tests {
     }
 
     #[test]
-    fn downsample_16k_pcm_to_8k_keeps_every_other_sample() {
+    fn downsample_16k_pcm_to_8k_averages_each_sample_pair() {
         let pcm = [
-            1_i16.to_le_bytes(),
             2_i16.to_le_bytes(),
-            3_i16.to_le_bytes(),
             4_i16.to_le_bytes(),
+            6_i16.to_le_bytes(),
+            8_i16.to_le_bytes(),
         ]
         .concat();
         let downsampled = downsample_pcm_16k_to_8k(&pcm);
@@ -1005,11 +1009,13 @@ mod tests {
             .chunks_exact(2)
             .map(|chunk| i16::from_le_bytes([chunk[0], chunk[1]]))
             .collect::<Vec<_>>();
-        assert_eq!(samples, vec![1, 3]);
+        assert_eq!(samples, vec![3, 7]);
     }
 
     #[test]
-    fn downsample_flush_keeps_final_even_index_sample() {
+    fn downsample_flush_drops_lone_tail_sample() {
+        // 3 个 16k 样本：完整一对 (1,2) 取平均；残余的第 3 个样本无法配对，
+        // 收尾时直接丢弃（最多损失 0.0625ms，无感知）。
         let mut remainder = [
             1_i16.to_le_bytes(),
             2_i16.to_le_bytes(),
@@ -1019,13 +1025,13 @@ mod tests {
         let complete_len = remainder.len() / 4 * 4;
         let mut downsampled = downsample_pcm_16k_to_8k(&remainder[..complete_len]);
         remainder.drain(..complete_len);
-        flush_downsample_tail(&mut remainder, &mut downsampled);
+        clear_downsample_tail(&mut remainder);
 
         let samples = downsampled
             .chunks_exact(2)
             .map(|chunk| i16::from_le_bytes([chunk[0], chunk[1]]))
             .collect::<Vec<_>>();
-        assert_eq!(samples, vec![1, 3]);
+        assert_eq!(samples, vec![(1 + 2) / 2]);
         assert!(remainder.is_empty());
     }
 

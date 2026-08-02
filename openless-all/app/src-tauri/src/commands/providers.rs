@@ -391,6 +391,11 @@ async fn validate_elevenlabs_asr_provider() -> Result<(), String> {
 /// 即返回 200。
 const DASHSCOPE_ASR_VALIDATE_SAMPLE_URL: &str =
     "https://dashscope.oss-cn-beijing.aliyuncs.com/samples/audio/paraformer/hello_world_female2.wav";
+// 异步验证只需确认「提交 → 轮询 → 下载」链路可用：示例音频很短，任务通常在
+// 数十秒内完成。外层 120s（30s 提交 + 60s 轮询 + 30s 下载）封顶，避免验证按钮
+// 在最坏情况下阻塞近 11 分钟（真实转写仍用长轮询，不受影响）。
+const DASHSCOPE_ASR_VALIDATE_TIMEOUT_SECS: u64 = 120;
+const DASHSCOPE_ASR_VALIDATE_POLL_SECS: u64 = 60;
 
 async fn validate_dashscope_multimodal_asr_provider() -> Result<(), String> {
     // 统一百炼复用配置中的区域/工作空间主机，并推导 multimodal 的 https 路径。
@@ -427,8 +432,11 @@ async fn validate_dashscope_multimodal_asr_provider() -> Result<(), String> {
     if protocol == crate::asr::dashscope_multimodal::DashScopeBatchProtocol::AsyncTranscription {
         let asr = crate::asr::DashScopeMultimodalASR::new(api_key, base_url, model);
         return match tokio::time::timeout(
-            std::time::Duration::from_secs(660),
-            asr.transcribe_async_url(DASHSCOPE_ASR_VALIDATE_SAMPLE_URL),
+            std::time::Duration::from_secs(DASHSCOPE_ASR_VALIDATE_TIMEOUT_SECS),
+            asr.transcribe_async_url_with_timeout(
+                DASHSCOPE_ASR_VALIDATE_SAMPLE_URL,
+                std::time::Duration::from_secs(DASHSCOPE_ASR_VALIDATE_POLL_SECS),
+            ),
         )
         .await
         {
