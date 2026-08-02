@@ -413,6 +413,13 @@ export const ja: typeof zhCN = {
       tipDisabled: 'クリックしてこのルールを無効化',
       tipEnabled: 'クリックしてこのルールを有効化',
       removeAria: '補正ルールを削除',
+      learnedBadge: '自動',
+      learnedTip: 'あなたの手直しから自動で収集したものです。いつでも削除できます。',
+      onlyLearned: '自動収集のみ表示（{{count}}）',
+      removeAllLearned: '自動収集をすべて削除',
+      suggestTitle: 'この直しを覚えますか？',
+      suggestAccept: '覚える',
+      suggestDismiss: '不要',
     },
     presets: {
       title: 'シーンプリセット',

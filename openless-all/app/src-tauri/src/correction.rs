@@ -148,6 +148,7 @@ mod tests {
             replacement: replacement.into(),
             enabled: true,
             created_at: String::new(),
+            source: crate::types::RuleSource::Manual,
         }
     }
 

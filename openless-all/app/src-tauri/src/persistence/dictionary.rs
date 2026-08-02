@@ -61,6 +61,34 @@ impl DictionaryStore {
         Ok(entry)
     }
 
+    /// 学习路径专用：已存在同 phrase 就不重复加，返回 `Ok(None)`。
+    ///
+    /// 手动添加不查重（用户重复录入是他的选择），自动路径必须查 —— 同一个词每被改一次
+    /// 就多一条，几天下来词汇表全是重复。
+    pub fn add_if_absent(&self, phrase: String, note: Option<String>) -> Result<Option<DictionaryEntry>> {
+        let phrase = phrase.trim().to_string();
+        if phrase.is_empty() {
+            return Ok(None);
+        }
+        // 查重和写入同一个 guard 内完成，不留 TOCTOU 窗口。
+        let _guard = self.lock.lock();
+        let mut entries = self.read_locked()?;
+        if entries.iter().any(|e| e.phrase == phrase) {
+            return Ok(None);
+        }
+        let entry = DictionaryEntry {
+            id: Uuid::new_v4().to_string(),
+            phrase,
+            note,
+            enabled: true,
+            hits: 0,
+            created_at: Utc::now().to_rfc3339(),
+        };
+        entries.insert(0, entry.clone());
+        self.write_locked(&entries)?;
+        Ok(Some(entry))
+    }
+
     pub fn remove(&self, id: &str) -> Result<()> {
         let _guard = self.lock.lock();
         let mut entries = self.read_locked()?;

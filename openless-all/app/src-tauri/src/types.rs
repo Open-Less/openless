@@ -239,6 +239,20 @@ pub struct DictionaryEntry {
     pub created_at: String,
 }
 
+/// 一条纠正规则是怎么来的。
+///
+/// 用户必须随时能一眼看出「哪些是我自己加的、哪些是它替我学的」，并且能把后者一键
+/// 删掉。这是自动收集能被信任的前提 —— 一个看不清来源的词库，用户只会整个不敢用。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum RuleSource {
+    /// 用户在设置页手动录入。旧文件没有这个字段时也按这个算 —— 那些确实都是手动加的。
+    #[default]
+    Manual,
+    /// 从用户的手改中学来的。
+    Learned,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CorrectionRule {
@@ -249,7 +263,26 @@ pub struct CorrectionRule {
     pub enabled: bool,
     #[serde(default)]
     pub created_at: String,
+    /// 规则来源。`#[serde(default)]` 让 `correction-rules.json` 向后兼容：老文件缺
+    /// 这个字段就落到 `Manual`。
+    #[serde(default)]
+    pub source: RuleSource,
 }
+
+/// 一条等待用户确认的纠正建议（Tier2）。
+///
+/// 只存在内存里，不落盘：建议本身是易逝的 —— 用户下次犯同样的错会再产生一条，而一个
+/// 重启之后还在追着你要确认的队列只会变成噪声。上限 [`MAX_PENDING_CORRECTIONS`]。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingCorrection {
+    pub id: String,
+    pub pattern: String,
+    pub replacement: String,
+}
+
+/// 待确认建议的上限。用户一次听写最多产生几条，攒到二十条还没人理就说明他不想理。
+pub const MAX_PENDING_CORRECTIONS: usize = 20;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

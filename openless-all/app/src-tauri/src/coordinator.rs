@@ -562,6 +562,8 @@ struct Inner {
     /// 覆盖这个 Option 会 drop 掉旧的 watcher，drop 即解除。另外三条（60 秒超时、
     /// 前台 app 切换、焦点元素消失）由观察线程自己负责。
     edit_watcher: Mutex<Option<crate::host_document::EditWatcher>>,
+    /// 等待用户确认的纠正建议（Tier2）。只在内存里 —— 见 `PendingCorrection` 的说明。
+    pending_corrections: Mutex<Vec<crate::types::PendingCorrection>>,
     recording_mute: Mutex<SharedRecordingMuteState>,
     hotkey: Mutex<Option<HotkeyMonitor>>,
     hotkey_status: Mutex<HotkeyStatus>,
@@ -811,6 +813,7 @@ impl Coordinator {
                     recorder: Mutex::new(None),
                     audio_archive_active: AtomicBool::new(false),
                     edit_watcher: Mutex::new(None),
+                    pending_corrections: Mutex::new(Vec::new()),
                     recording_mute: Mutex::new(SharedRecordingMuteState::new()),
                     hotkey: Mutex::new(None),
                     hotkey_status: Mutex::new(HotkeyStatus::default()),
@@ -930,6 +933,7 @@ impl Coordinator {
                 recorder: Mutex::new(None),
                 audio_archive_active: AtomicBool::new(false),
                 edit_watcher: Mutex::new(None),
+                pending_corrections: Mutex::new(Vec::new()),
                 recording_mute: Mutex::new(SharedRecordingMuteState::new()),
                 hotkey: Mutex::new(None),
                 hotkey_status: Mutex::new(HotkeyStatus::default()),
@@ -1633,6 +1637,38 @@ impl Coordinator {
     }
     pub fn correction_rules(&self) -> &CorrectionRuleStore {
         &self.inner.correction_rules
+    }
+
+    pub fn list_pending_corrections(&self) -> Vec<crate::types::PendingCorrection> {
+        self.inner.pending_corrections.lock().clone()
+    }
+
+    /// 用户点了「记住」。走的是和自动收集完全相同的落库路径（纠正规则 + 词汇表 +
+    /// 查重），只是触发方是用户而不是分级判定。
+    pub fn accept_pending_correction(&self, id: &str) {
+        let Some(pending) = self.take_pending_correction(id) else {
+            return;
+        };
+        dictation::commit_learned_rule(
+            &self.inner,
+            &crate::host_document::LearnedRule {
+                pattern: pending.pattern,
+                replacement: pending.replacement,
+                tier: crate::host_document::RuleTier::Confirm,
+            },
+        );
+    }
+
+    /// 用户点了「不用」。只是从队列里拿掉 —— 不记「这条被拒过」：用户改主意的成本
+    /// 应该是零，而一份看不见的拒绝名单只会让人猜为什么它不学了。
+    pub fn dismiss_pending_correction(&self, id: &str) {
+        self.take_pending_correction(id);
+    }
+
+    fn take_pending_correction(&self, id: &str) -> Option<crate::types::PendingCorrection> {
+        let mut pending = self.inner.pending_corrections.lock();
+        let idx = pending.iter().position(|p| p.id == id)?;
+        Some(pending.remove(idx))
     }
 
     pub fn update_hotkey_binding(&self) {

@@ -77,12 +77,25 @@ export interface DictionaryEntry {
   createdAt: string;
 }
 
+/** 一条纠正规则是怎么来的。老的 correction-rules.json 没有这个字段，后端反序列化时
+ *  落到 'manual'——那些确实都是手动加的。 */
+export type RuleSource = 'manual' | 'learned';
+
 export interface CorrectionRule {
   id: string;
   pattern: string;
   replacement: string;
   enabled: boolean;
   createdAt: string;
+  source: RuleSource;
+}
+
+/** 一条等待用户确认的纠正建议（Tier2）。后端只存在内存里，重启即空——建议本身是
+ *  易逝的，用户下次犯同样的错会再产生一条。 */
+export interface PendingCorrection {
+  id: string;
+  pattern: string;
+  replacement: string;
 }
 
 export interface VocabPreset {

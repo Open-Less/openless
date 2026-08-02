@@ -411,6 +411,13 @@ export const zhTW: typeof zhCN = {
       tipDisabled: '點擊停用此規則',
       tipEnabled: '點擊啟用此規則',
       removeAria: '刪除糾正規則',
+      learnedBadge: '自動',
+      learnedTip: '從你的手動修改中自動收集。可以隨時刪掉。',
+      onlyLearned: '只看自動收集的（{{count}}）',
+      removeAllLearned: '刪除全部自動收集的',
+      suggestTitle: '要記住這個改法嗎？',
+      suggestAccept: '記住',
+      suggestDismiss: '不用',
     },
     presets: {
       title: '場景預設',

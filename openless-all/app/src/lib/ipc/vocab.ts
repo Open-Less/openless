@@ -1,4 +1,9 @@
-import type { CorrectionRule, DictionaryEntry, VocabPresetStore } from "../types"
+import type {
+    CorrectionRule,
+    DictionaryEntry,
+    PendingCorrection,
+    VocabPresetStore,
+} from "../types"
 import { invokeOrMock } from "./shared"
 import { mockVocab, mockCorrectionRules } from "./mock-data"
 
@@ -49,8 +54,23 @@ export function addCorrectionRule(
             replacement,
             enabled: true,
             createdAt: new Date().toISOString(),
+            source: "manual" as const,
         }),
     )
+}
+
+/** 待用户确认的纠正建议（Tier2 那一档）。后端只存在内存里，重启即空。 */
+export function listPendingCorrections(): Promise<PendingCorrection[]> {
+    return invokeOrMock("list_pending_corrections", undefined, () => [])
+}
+
+/** 接受一条建议：写纠正规则 + 加词汇表热词，并打 learned 标记。 */
+export function acceptPendingCorrection(id: string): Promise<void> {
+    return invokeOrMock("accept_pending_correction", { id }, () => undefined)
+}
+
+export function dismissPendingCorrection(id: string): Promise<void> {
+    return invokeOrMock("dismiss_pending_correction", { id }, () => undefined)
 }
 
 export function removeCorrectionRule(id: string): Promise<void> {

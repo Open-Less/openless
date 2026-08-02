@@ -409,6 +409,13 @@ export const zhCN = {
       tipDisabled: '点击禁用此规则',
       tipEnabled: '点击启用此规则',
       removeAria: '删除纠正规则',
+      learnedBadge: '自动',
+      learnedTip: '从你的手改中自动收集。可以随时删掉。',
+      onlyLearned: '只看自动收集的（{{count}}）',
+      removeAllLearned: '删除全部自动收集的',
+      suggestTitle: '要记住这个改法吗？',
+      suggestAccept: '记住',
+      suggestDismiss: '不用',
     },
     presets: {
       title: '场景预设',

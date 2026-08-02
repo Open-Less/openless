@@ -33,7 +33,10 @@ mod macos;
 
 // `minimal_edit` 目前只有 macOS 的观察回调在用，非 macOS 构建下没有消费方。
 #[allow(unused_imports)]
-pub use diff::{edit_is_within_typed_text, minimal_edit, EditPair};
+pub use diff::{
+    classify_edit, edit_is_within_typed_text, learned_rule, minimal_edit, EditPair, LearnedRule,
+    RuleTier,
+};
 
 // `WindowSpan` 目前只有 `plan_window` 的返回类型用到，本 crate 内没有别的引用点；
 // 跟着一起导出是为了让调用方能给它命名（对齐 `unicode_keystroke` 的既有写法）。

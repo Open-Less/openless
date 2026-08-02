@@ -613,6 +613,15 @@ export const mockCorrectionRules: CorrectionRule[] = [
         replacement: "{num}例",
         enabled: true,
         createdAt: new Date().toISOString(),
+        source: "manual",
+    },
+    {
+        id: "rule-learned-codex",
+        pattern: "扣德克斯",
+        replacement: "Codex",
+        enabled: true,
+        createdAt: new Date().toISOString(),
+        source: "learned",
     },
 ]
 

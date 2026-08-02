@@ -411,6 +411,13 @@ export const en: typeof zhCN = {
       tipDisabled: 'Click to disable this rule',
       tipEnabled: 'Click to enable this rule',
       removeAria: 'Remove correction rule',
+      learnedBadge: 'auto',
+      learnedTip: 'Collected automatically from your own edits. Delete it any time.',
+      onlyLearned: 'Only auto-collected ({{count}})',
+      removeAllLearned: 'Delete all auto-collected',
+      suggestTitle: 'Remember this correction?',
+      suggestAccept: 'Remember',
+      suggestDismiss: 'No thanks',
     },
     presets: {
       title: 'Scenario presets',

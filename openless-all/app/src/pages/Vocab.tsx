@@ -4,17 +4,25 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
+  acceptPendingCorrection,
   addCorrectionRule,
   addVocab,
+  dismissPendingCorrection,
   isTauri,
   listCorrectionRules,
+  listPendingCorrections,
   listVocab,
   removeCorrectionRule,
   removeVocab,
   setCorrectionRuleEnabled,
   setVocabEnabled,
 } from '../lib/ipc';
-import type { CorrectionRule, DictionaryEntry, VocabPreset } from '../lib/types';
+import type {
+  CorrectionRule,
+  DictionaryEntry,
+  PendingCorrection,
+  VocabPreset,
+} from '../lib/types';
 import { DEFAULT_VOCAB_PRESETS, loadVocabPresets, persistVocabPresets } from '../lib/vocabPresets';
 import { useMobileLayout } from '../lib/useMobileLayout';
 import { Btn, Card, Collapsible, PageHeader } from './_atoms';
@@ -48,6 +56,10 @@ export function Vocab() {
   const [presetNameDraft, setPresetNameDraft] = useState('');
   const [presetPhrasesDraft, setPresetPhrasesDraft] = useState('');
   const [correctionRules, setCorrectionRules] = useState<CorrectionRule[]>([]);
+  // 「只看自动收集的」筛选。自动收集能被信任的前提就是用户随时能把它们单独挑出来
+  // 一眼看完并批量删掉 —— 混在手动规则里等于看不见。
+  const [onlyLearnedRules, setOnlyLearnedRules] = useState(false);
+  const [pendingCorrections, setPendingCorrections] = useState<PendingCorrection[]>([]);
   const [rulePatternDraft, setRulePatternDraft] = useState('');
   const [ruleReplacementDraft, setRuleReplacementDraft] = useState('');
 
@@ -73,9 +85,18 @@ export function Vocab() {
     }
   };
 
+  const refreshPendingCorrections = async () => {
+    try {
+      setPendingCorrections(await listPendingCorrections());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
   const refreshAll = () => {
     void refresh();
     void refreshCorrectionRules();
+    void refreshPendingCorrections();
   };
 
   useEffect(() => {
@@ -93,8 +114,19 @@ export function Vocab() {
       const handle = await listen('vocab:updated', () => {
         void refresh();
       });
-      if (cancelled) handle();
-      else unlisten = handle;
+      // 手改建议是后台产生的（用户当时在别的 app 里），页面开着时即时刷出来。
+      const handleSuggested = await listen('correction:suggested', () => {
+        void refreshPendingCorrections();
+      });
+      if (cancelled) {
+        handle();
+        handleSuggested();
+      } else {
+        unlisten = () => {
+          handle();
+          handleSuggested();
+        };
+      }
     })();
     return () => {
       cancelled = true;
@@ -143,6 +175,48 @@ export function Vocab() {
       setError(err instanceof Error ? err.message : String(err));
     }
   };
+
+  const onRemoveAllLearnedRules = async () => {
+    const learned = correctionRules.filter(r => r.source === 'learned');
+    if (learned.length === 0) return;
+    // 逐条删而不是加一个新的批量后端命令：规则数量是几十条量级，为此多开一条 IPC
+    // 不值得，而且逐条删失败一条也不影响其余。
+    const removed: string[] = [];
+    for (const rule of learned) {
+      try {
+        await removeCorrectionRule(rule.id);
+        removed.push(rule.id);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      }
+    }
+    setCorrectionRules(prev => prev.filter(r => !removed.includes(r.id)));
+  };
+
+  const onAcceptPending = async (id: string) => {
+    setPendingCorrections(prev => prev.filter(p => p.id !== id));
+    try {
+      await acceptPendingCorrection(id);
+      await refreshCorrectionRules();
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const onDismissPending = async (id: string) => {
+    setPendingCorrections(prev => prev.filter(p => p.id !== id));
+    try {
+      await dismissPendingCorrection(id);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const learnedRuleCount = correctionRules.filter(r => r.source === 'learned').length;
+  const visibleCorrectionRules = onlyLearnedRules
+    ? correctionRules.filter(r => r.source === 'learned')
+    : correctionRules;
 
   const onToggleCorrectionRule = async (rule: CorrectionRule) => {
     const next = !rule.enabled;
@@ -335,11 +409,54 @@ export function Vocab() {
               />
               <Btn size="sm" variant="primary" onClick={() => void onAddCorrectionRule()} style={mobile ? { justifySelf: 'start' } : undefined}>{t('common.add')}</Btn>
             </div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, minHeight: correctionRules.length ? undefined : 20 }}>
-              {correctionRules.length === 0 && (
+            {pendingCorrections.length > 0 && (
+              <div style={{ display: 'grid', gap: 6 }}>
+                <div style={{ fontSize: 12, color: 'var(--ol-ink-3)' }}>
+                  {t('vocab.corrections.suggestTitle')}
+                </div>
+                {pendingCorrections.map(p => (
+                  <div
+                    key={p.id}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+                      padding: '6px 10px', borderRadius: 8,
+                      border: '0.5px solid var(--ol-line-strong)',
+                      background: 'var(--ol-blue-soft)',
+                    }}
+                  >
+                    <span style={{ fontSize: 12, fontFamily: 'var(--ol-font-mono)', flex: 1, minWidth: 0 }}>
+                      {p.pattern} → {p.replacement}
+                    </span>
+                    <Btn size="sm" variant="primary" onClick={() => void onAcceptPending(p.id)}>
+                      {t('vocab.corrections.suggestAccept')}
+                    </Btn>
+                    <Btn size="sm" onClick={() => void onDismissPending(p.id)}>
+                      {t('vocab.corrections.suggestDismiss')}
+                    </Btn>
+                  </div>
+                ))}
+              </div>
+            )}
+            {learnedRuleCount > 0 && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--ol-ink-3)' }}>
+                  <input
+                    type="checkbox"
+                    checked={onlyLearnedRules}
+                    onChange={e => setOnlyLearnedRules(e.target.checked)}
+                  />
+                  {t('vocab.corrections.onlyLearned', { count: learnedRuleCount })}
+                </label>
+                <Btn size="sm" onClick={() => void onRemoveAllLearnedRules()}>
+                  {t('vocab.corrections.removeAllLearned')}
+                </Btn>
+              </div>
+            )}
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, minHeight: visibleCorrectionRules.length ? undefined : 20 }}>
+              {visibleCorrectionRules.length === 0 && (
                 <span style={{ fontSize: 12, color: 'var(--ol-ink-4)' }}>{t('vocab.corrections.empty')}</span>
               )}
-              {correctionRules.map(rule => (
+              {visibleCorrectionRules.map(rule => (
                 <CorrectionRuleChip
                   key={rule.id}
                   rule={rule}
@@ -429,6 +546,18 @@ function CorrectionRuleChip({ rule, onToggle, onRemove }: CorrectionRuleChipProp
       >
         {rule.pattern} → {rule.replacement}
       </button>
+      {rule.source === 'learned' && (
+        <span
+          title={t('vocab.corrections.learnedTip')}
+          style={{
+            padding: '1px 5px', borderRadius: 4, fontSize: 10,
+            background: 'var(--ol-blue-soft)', color: 'var(--ol-ink-3)',
+            fontFamily: 'inherit', letterSpacing: 0.2,
+          }}
+        >
+          {t('vocab.corrections.learnedBadge')}
+        </span>
+      )}
       <button
         onClick={onRemove}
         aria-label={t('vocab.corrections.removeAria')}

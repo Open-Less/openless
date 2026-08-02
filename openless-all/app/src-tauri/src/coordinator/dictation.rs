@@ -715,17 +715,108 @@ fn arm_edit_watch(inner: &Arc<Inner>, status: InsertStatus, typed_text: &str) {
     if !should_arm_edit_watch(inner.prefs.get().cursor_context_enabled, status, typed_text) {
         return;
     }
-    *slot = crate::host_document::watch_for_edits(typed_text.to_string(), |edit| {
-        // 本阶段只记日志。规则入库是下一步的事 —— 先用真实数据确认「感知」是对的，
-        // 再谈让它去改用户的词库。
+    let inner_for_edit = Arc::clone(inner);
+    *slot = crate::host_document::watch_for_edits(typed_text.to_string(), move |edit| {
         log::info!(
-            "[cursor-context] user edit detected: source={:?} target={:?} before={:?} after={:?}",
+            "[cursor-context] user edit detected: source={:?} target={:?}",
             edit.source,
-            edit.target,
-            edit.before,
-            edit.after
+            edit.target
         );
+        handle_user_edit(&inner_for_edit, edit);
     });
+}
+
+/// 把一次手改变成词库里的东西。
+///
+/// 分两档（见 `host_document::RuleTier`）：
+/// - **跨文种**（扣德克斯 → Codex）静默入库，但打 `learned` 标记 —— 用户在词汇表里
+///   一眼能看到并撤销。用户不会把中文词改成英文词只为换个说法，这类判错的概率极低。
+/// - **其余**（含中文同音词）弹提示等确认。「大禹 → 大鱼」和「明天 → 后天」在文本上
+///   长得一模一样，光看字分不出纠错和改主意，只能问。
+///
+/// 入库同时做两件事，两者不能互相替代：写**纠正规则**保证这次一定对（本地确定性替换），
+/// 把 target 加进**词汇表**当热词提高下次直接听对的概率。
+fn handle_user_edit(inner: &Arc<Inner>, edit: crate::host_document::EditPair) {
+    let Some(rule) = crate::host_document::learned_rule(&edit) else {
+        log::info!("[cursor-context] edit is not rule-worthy; logged only");
+        return;
+    };
+    match rule.tier {
+        crate::host_document::RuleTier::Auto => commit_learned_rule(inner, &rule),
+        crate::host_document::RuleTier::Confirm => queue_correction_suggestion(inner, &rule),
+    }
+}
+
+/// 排进待确认队列，并通知前端刷新。
+///
+/// 不直接弹窗：此刻用户正在别的 app 里打字，抢焦点是最惹人烦的一件事。建议攒在队列
+/// 里，用户下次打开 OpenLess 时在词汇表页看到 —— 这也是为什么要有队列而不是只发一个
+/// 转瞬即逝的事件：主窗口没开的时候，事件没人接。
+fn queue_correction_suggestion(inner: &Arc<Inner>, rule: &crate::host_document::LearnedRule) {
+    {
+        let mut pending = inner.pending_corrections.lock();
+        // 同一条建议重复出现（用户在不同会话里犯了同样的错）不重复排队。
+        if pending
+            .iter()
+            .any(|p| p.pattern == rule.pattern && p.replacement == rule.replacement)
+        {
+            return;
+        }
+        if pending.len() >= crate::types::MAX_PENDING_CORRECTIONS {
+            // 攒到上限还没人理，说明用户不想理。丢最老的，别无限涨。
+            pending.remove(0);
+        }
+        pending.push(crate::types::PendingCorrection {
+            id: uuid::Uuid::new_v4().to_string(),
+            pattern: rule.pattern.clone(),
+            replacement: rule.replacement.clone(),
+        });
+    }
+    log::info!(
+        "[cursor-context] correction suggested (awaiting confirmation): {:?} → {:?}",
+        rule.pattern,
+        rule.replacement
+    );
+    if let Some(app) = inner.app.lock().clone() {
+        let _ = app.emit("correction:suggested", ());
+    }
+}
+
+/// 真正落库：纠正规则 + 词汇表热词。任一步失败只 warn —— 学不到东西可以接受。
+pub(super) fn commit_learned_rule(
+    inner: &Arc<Inner>,
+    rule: &crate::host_document::LearnedRule,
+) {
+    match inner
+        .correction_rules
+        .add_learned(rule.pattern.clone(), rule.replacement.clone())
+    {
+        Ok(Some(_)) => log::info!(
+            "[cursor-context] learned correction rule: {:?} → {:?}",
+            rule.pattern,
+            rule.replacement
+        ),
+        Ok(None) => {
+            log::info!("[cursor-context] rule already exists, skipped: {:?}", rule.pattern);
+            return;
+        }
+        Err(error) => {
+            log::warn!("[cursor-context] add learned rule failed: {error}");
+            return;
+        }
+    }
+    // 热词走的是 ASR 那一侧：规则保证这次一定对，热词提高下次直接听对的概率。
+    match inner.vocab.add_if_absent(
+        rule.replacement.clone(),
+        Some("从手改中自动收集".to_string()),
+    ) {
+        Ok(Some(_)) => log::info!("[cursor-context] added {:?} to vocabulary", rule.replacement),
+        Ok(None) => {}
+        Err(error) => log::warn!("[cursor-context] add learned vocab entry failed: {error}"),
+    }
+    if let Some(app) = inner.app.lock().clone() {
+        let _ = app.emit("vocab:updated", 0u64);
+    }
 }
 
 fn streaming_insert_eligible(
@@ -4410,6 +4501,7 @@ mod tests {
             replacement: replacement.into(),
             enabled: true,
             created_at: String::new(),
+            source: crate::types::RuleSource::Manual,
         }
     }
 

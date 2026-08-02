@@ -413,6 +413,13 @@ export const ko: typeof zhCN = {
       tipDisabled: '이 규칙 비활성화',
       tipEnabled: '이 규칙 활성화',
       removeAria: '교정 규칙 삭제',
+      learnedBadge: '자동',
+      learnedTip: '직접 고친 내용에서 자동으로 수집했습니다. 언제든 삭제할 수 있습니다.',
+      onlyLearned: '자동 수집만 보기 ({{count}})',
+      removeAllLearned: '자동 수집 전체 삭제',
+      suggestTitle: '이 수정을 기억할까요?',
+      suggestAccept: '기억하기',
+      suggestDismiss: '괜찮아요',
     },
     presets: {
       title: '시나리오 프리셋',
