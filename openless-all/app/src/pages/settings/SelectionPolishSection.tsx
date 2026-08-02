@@ -18,9 +18,9 @@ const enableButton: CSSProperties = {
   borderRadius: 6, fontFamily: 'inherit', fontWeight: 500, cursor: 'default', fontSize: 12,
 };
 
-const outputOptions: Array<{ value: SelectionPolishOutputMode; title: string; hint: string }> = [
-  { value: 'directReplace', title: '直接覆盖', hint: '模型完成后安全替换原选区。' },
-  { value: 'previewConfirm', title: '预览确认', hint: '在可编辑弹窗中核对结果，再确认覆盖原选区。' },
+const outputOptions: Array<{ value: SelectionPolishOutputMode }> = [
+  { value: 'directReplace' },
+  { value: 'previewConfirm' },
 ];
 
 export function SelectionPolishSection() {
@@ -36,12 +36,12 @@ export function SelectionPolishSection() {
 
   return (
     <Card>
-      <SectionTitle hint="选择任意文字后触发。它不依赖麦克风或 ASR，使用当前风格包与独立的选区 Prompt。">
+      <SectionTitle hint={t('settings.selectionPolish.hint')}>
         {t('settings.selectionPolish.title', '选区润色')}
       </SectionTitle>
       <SettingRow
         label={t('settings.selectionPolish.hotkey', '触发快捷键')}
-        desc="录制后立即生效；与录音、追问等全局快捷键冲突时会被拒绝。"
+        desc={t('settings.selectionPolish.hotkeyDesc')}
       >
         {prefs.selectionPolishHotkey ? (
           <ShortcutRecorder
@@ -77,14 +77,14 @@ export function SelectionPolishSection() {
             return (
               <button
                 key={option.value}
-                title={option.hint}
+                title={t(`settings.selectionPolish.${option.value}Hint`)}
                 onClick={() => void updatePrefs(current => ({ ...current, selectionPolishOutputMode: option.value }))}
                 style={{
                   ...chipSelectedStyle(selected), border: 0, borderRadius: 6, padding: '6px 10px',
                   fontFamily: 'inherit', fontSize: 12, cursor: 'default', fontWeight: selected ? 600 : 500,
                 }}
               >
-                {option.title}
+                {t(`settings.selectionPolish.${option.value}`)}
               </button>
             );
           })}

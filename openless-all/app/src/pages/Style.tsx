@@ -404,9 +404,9 @@ export function Style() {
   const handleActivateSelectionStyle = async (pack: StylePack) => {
     try {
       await updateMarketplacePrefs(current => ({ ...current, selectionPolishStylePackId: pack.id }));
-      showSaveStatus('saved', `已将「${pack.name}」用于选区润色`, true);
+      showSaveStatus('saved', t('style.pack.selectionActivated', { name: pack.name }), true);
     } catch (activateError) {
-      showSaveStatus('failed', `选区润色风格切换失败：${String(activateError)}`);
+      showSaveStatus('failed', t('style.pack.selectionActivateFailed', { err: String(activateError) }));
     }
   };
 
@@ -572,8 +572,8 @@ export function Style() {
   const selectionPromptEditor = (
     <label style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--ol-ink)' }}>选区润色 Prompt（无 ASR）</span>
-        <Pill tone="default" size="sm">{draft?.selectionPrompt.length ?? 0} 字符</Pill>
+        <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--ol-ink)' }}>{t('style.pack.selectionPromptTitle')}</span>
+        <Pill tone="default" size="sm">{t('style.pack.selectionChars', { count: draft?.selectionPrompt.length ?? 0 })}</Pill>
       </div>
       <span style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.55 }}>
         用于用户主动选中的书面文字；不经过 ASR，不把内容当成转写，也不回答其中的问题。
@@ -589,7 +589,7 @@ export function Style() {
   const dictationPromptEditor = (
     <label style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--ol-ink)' }}>录音 / ASR Prompt</span>
+        <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--ol-ink)' }}>{t('style.pack.dictationPromptTitle')}</span>
         <Pill tone="default" size="sm">{t('style.pack.promptChars', { count: draft?.prompt.length ?? 0 })}</Pill>
       </div>
       <span style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.55 }}>
@@ -632,12 +632,12 @@ export function Style() {
               <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', minWidth: 0 }}>
                 <div>
                   <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--ol-ink)' }}>
-                    {workflowView === 'dictation' ? t('style.pack.listTitle') : '选区书面润色风格'}
+                    {workflowView === 'dictation' ? t('style.pack.listTitle') : t('style.pack.selectionListTitle')}
                   </div>
                   <div style={{ fontSize: 12, color: 'var(--ol-ink-3)', marginTop: 4, maxWidth: 760 }}>
                     {workflowView === 'dictation'
                       ? t('style.pack.listDesc')
-                      : '用于无需 ASR 的已选文字：单纯语法、清晰度和格式润色。可为它单独选择风格与 Prompt。'}
+                      : t('style.pack.selectionListDesc')}
                   </div>
                 </div>
                 {rawPack && workflowView === 'dictation' && (
@@ -671,8 +671,8 @@ export function Style() {
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                 <div style={{ display: 'inline-flex', padding: 3, borderRadius: 8, background: 'var(--ol-surface-2)', border: '0.5px solid var(--ol-line)' }}>
                   {([
-                    ['dictation', '录音 / ASR 风格'],
-                    ['selection', '选区润色'],
+                    ['dictation', t('style.pack.dictationTab')],
+                    ['selection', t('style.pack.selectionTab')],
                   ] as const).map(([value, label]) => {
                     const active = workflowView === value;
                     return <button key={value} onClick={() => setWorkflowView(value)} style={{ padding: '6px 10px', borderRadius: 6, background: active ? 'var(--ol-blue)' : 'transparent', color: active ? '#fff' : 'var(--ol-ink-3)', fontSize: 12, fontWeight: active ? 600 : 500 }}>{label}</button>;
@@ -753,7 +753,7 @@ export function Style() {
                         }}
                       >
                         {workflowView === 'selection'
-                          ? (pack.selectionPrompt.trim() || '尚未配置书面润色 Prompt；将使用安全默认规则。')
+                          ? (pack.selectionPrompt.trim() || t('style.pack.selectionPromptFallback'))
                           : (pack.prompt.trim() || pack.description)}
                       </div>
                     </div>
@@ -796,7 +796,7 @@ export function Style() {
 
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', minHeight: 24, marginBottom: 12 }}>
                     <Pill tone={workflowView === 'selection' ? 'blue' : modeTone(pack.baseMode)} size="sm">
-                      {workflowView === 'selection' ? '书面润色' : t(`style.modes.${pack.baseMode}.name`)}
+                      {workflowView === 'selection' ? t('style.pack.writtenPolish') : t(`style.modes.${pack.baseMode}.name`)}
                     </Pill>
                     {pack.tags.slice(0, 1).map(tag => (
                       <Pill key={`${pack.id}-${tag}`} tone="default" size="sm">{tag}</Pill>
@@ -810,7 +810,7 @@ export function Style() {
                       disabled={isCurrentForView || busy === 'activating'}
                       onClick={() => void (workflowView === 'selection' ? handleActivateSelectionStyle(pack) : handleActivate(pack))}
                     >
-                      {isCurrentForView ? '当前' : workflowView === 'selection' ? '用于选区' : t('style.pack.activate')}
+                      {isCurrentForView ? t('style.pack.current') : workflowView === 'selection' ? t('style.pack.useForSelection') : t('style.pack.activate')}
                     </Btn>
                     <Btn
                       size="sm"
@@ -939,8 +939,8 @@ export function Style() {
                     <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--ol-ink)' }}>{t('style.pack.editorTitle')}</div>
                     <div style={{ fontSize: 12, color: 'var(--ol-ink-3)', marginTop: 4, lineHeight: 1.6 }}>
                       {workflowView === 'dictation'
-                        ? '当前编辑录音 / ASR 风格 Prompt；输入对象是语音识别后的转写文本。'
-                        : '当前编辑选区润色 Prompt；输入对象是用户主动选中的书面文字，不经过 ASR。'}
+                        ? t('style.pack.dictationPromptHint')
+                        : t('style.pack.selectionPromptHint')}
                     </div>
                   </div>
                   <button

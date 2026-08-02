@@ -166,18 +166,19 @@ interface SelectionPolishNoticeProps {
  * capsule 窗口中，因此不会把焦点从用户当前输入框抢走，也不会遮挡点击。
  */
 function SelectionPolishNotice({ state, message }: SelectionPolishNoticeProps) {
+  const { t } = useTranslation();
   const processing = state === 'polishing';
   const failed = state === 'error';
   const completed = state === 'done';
   const cancelled = state === 'cancelled';
   const label = message
     ?? (processing
-      ? '正在润色...'
+      ? t('capsule.selectionPolish.polishing')
       : completed
-        ? '已替换'
+        ? t('capsule.selectionPolish.replaced')
         : cancelled
-          ? '未选中内容'
-          : '润色失败，请重试');
+          ? t('capsule.selectionPolish.noSelection')
+          : t('capsule.selectionPolish.failed'));
   const color = failed
     ? '#ff8278'
     : completed
