@@ -825,10 +825,7 @@ export function Style() {
                       size="sm"
                       variant="ghost"
                       icon="expand"
-                      // Built-in packs are editable local defaults. The editor's
-                      // reset action restores the bundled prompt/examples when
-                      // the user wants to discard custom changes.
-                      disabled={busy === 'loading' || busy === 'saving' || busy === 'resetting'}
+                      disabled={isBuiltin}
                       onClick={() => openEditorForPack(pack)}
                     >
                       {t('style.pack.edit')}
