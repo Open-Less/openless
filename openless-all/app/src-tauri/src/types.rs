@@ -162,6 +162,16 @@ pub struct DictationSession {
     #[serde(default)]
     pub source: HistorySource,
     pub raw_transcript: String,
+    /// **未经任何处理**的 ASR 原文。
+    ///
+    /// 和 `raw_transcript` 的区别容易被忽略但很关键：`raw_transcript` 存的是**已经跑过
+    /// 本地纠正规则**的文本（`dictation.rs` 在应用规则后原地改了 `raw.text`）。要判断
+    /// 一次手改到底是「ASR 听错了」还是「LLM 改坏了」，必须拿到规则之前的那一版。
+    ///
+    /// 没有沿用 `raw_transcript` 来存这一版，是为了不改变历史页现有的显示语义。
+    /// 旧历史没有此字段时为 None。
+    #[serde(default)]
+    pub asr_transcript: Option<String>,
     pub final_text: String,
     pub mode: PolishMode,
     /// 本次 dictation 使用的风格包。旧历史没有此字段时为 None；对话感知 polish
@@ -3651,6 +3661,7 @@ mod tests {
             created_at: "2026-07-01T00:00:00Z".into(),
             source: HistorySource::SelectionPolish,
             raw_transcript: "你好".into(),
+            asr_transcript: None,
             final_text: "你好。".into(),
             mode: PolishMode::Light,
             style_pack_id: None,

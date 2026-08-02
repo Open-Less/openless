@@ -25,10 +25,15 @@
 //! 模块可用但**不接产品链路** —— 只有一个 debug 命令 `debug_read_cursor_context`
 //! 在调它。接进润色 prompt 是下一步的事，那里才引入用户可见的开关（默认关）。
 
+mod diff;
 mod window;
 
 #[cfg(target_os = "macos")]
 mod macos;
+
+// `minimal_edit` 目前只有 macOS 的观察回调在用，非 macOS 构建下没有消费方。
+#[allow(unused_imports)]
+pub use diff::{edit_is_within_typed_text, minimal_edit, EditPair};
 
 // `WindowSpan` 目前只有 `plan_window` 的返回类型用到，本 crate 内没有别的引用点；
 // 跟着一起导出是为了让调用方能给它命名（对齐 `unicode_keystroke` 的既有写法）。
@@ -52,18 +57,17 @@ const AX_MESSAGING_TIMEOUT_SECS: f32 = 0.2;
 #[cfg(target_os = "macos")]
 const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(1200);
 
-/// 宿主 app 里的一篇文档，及其光标位置（char 下标）。
+/// 手改监听最长存活多久。
 ///
-/// 里程碑 3 的手改检测要拿它当基线，所以这里是完整文档语义；[`DocumentWindow`] 才是
-/// 截过窗、可以送人的那份。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HostDocument {
-    pub text: String,
-    /// 光标在 `text` 中的 char 下标，恒满足 `cursor <= text.chars().count()`。
-    pub cursor: usize,
-}
+/// 过了一分钟用户还在动这段文字，多半是在继续写新东西而不是纠我们插错的词，再学下去
+/// 只会收进噪声。同时这也是「观察器绝不泄漏」的最后一道保险。
+#[cfg(target_os = "macos")]
+const EDIT_WATCH_MAX_LIFETIME: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// 已按预算截过窗的上下文。`cursor` 是窗口内的 char 下标。
+///
+/// 没有与之对应的「完整文档」类型：手改监听的基线是**落字那一段文本**而不是整篇文档
+/// （见 [`watch_for_edits`]），整篇文档在本模块里除了被截窗之外没有第二个用途。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DocumentWindow {
@@ -104,7 +108,8 @@ pub enum HostDocumentStatus {
     Ok,
     /// 安全闸门拦下，一次 AX 都没发。
     Blocked,
-    /// 本平台没有实现。
+    /// 本平台没有实现。（macOS 编译时构造不到它，故显式 allow。）
+    #[allow(dead_code)]
     Unsupported,
     /// AX 可达但拿不到文档（没焦点 / 该控件不支持文本属性 / 权限缺失）。
     Unavailable,
@@ -327,6 +332,62 @@ async fn macos_probe(budget_chars: usize) -> HostDocumentReadResult {
 #[cfg(target_os = "macos")]
 fn blocked_result(reason: BlockReason) -> HostDocumentReadResult {
     HostDocumentReadResult::new(HostDocumentStatus::Blocked, Some(reason.as_str().to_string()))
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 手改监听
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// 已武装的手改监听。**drop 即解除** —— 让「忘了解除」在类型层面不成立。
+///
+/// 观察器泄漏不只是资源问题：它意味着我们持续持有别的 app 的 AX 引用、持续被那个 app
+/// 的每次击键唤醒。所以除了这里的 RAII，观察线程自己还有 60 秒硬超时和「前台 app 一换
+/// 就自杀」两道保险。
+pub struct EditWatcher {
+    #[cfg(target_os = "macos")]
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl EditWatcher {
+    /// 主动解除。幂等，drop 时会自动调用。
+    pub fn disarm(&self) {
+        #[cfg(target_os = "macos")]
+        self.stop
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+impl Drop for EditWatcher {
+    fn drop(&mut self) {
+        self.disarm();
+    }
+}
+
+/// 武装「用户改了我们刚插入的文本」的监听。
+///
+/// `typed_text` 必须是**用户实际看到落到屏幕上的那段文字**：流式路径下它是真正打出去的
+/// 内容，可能短于完整的 LLM 输出（中途失败、被取消）。拿完整输出当基线会让所有没打完的
+/// 会话都被判成「用户删掉了一大段」。
+///
+/// `on_edit` 在观察线程上被调用，可能多次。任何失败都返回 `None` —— 学不到东西是可以
+/// 接受的，影响落字不行。
+pub fn watch_for_edits<F>(typed_text: String, on_edit: F) -> Option<EditWatcher>
+where
+    F: Fn(EditPair) + Send + Sync + 'static,
+{
+    #[cfg(target_os = "macos")]
+    {
+        if typed_text.trim().is_empty() {
+            return None;
+        }
+        let stop = macos::spawn_edit_watcher(typed_text, Box::new(on_edit))?;
+        Some(EditWatcher { stop })
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (typed_text, on_edit);
+        None
+    }
 }
 
 #[cfg(test)]

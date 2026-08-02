@@ -18,10 +18,19 @@
 
 use std::ffi::{c_void, CStr};
 use std::os::raw::c_char;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
+use core_foundation::base::TCFType;
+use core_foundation::runloop::{
+    kCFRunLoopDefaultMode, CFRunLoop, CFRunLoopRunResult, CFRunLoopSource, CFRunLoopSourceRef,
+};
+
+use super::diff::{edit_is_within_typed_text, minimal_edit};
 use super::{
-    evaluate_gate, plan_window, utf16_offset_to_char_offset, window_around_cursor, GateInputs,
-    ReadOutcome, AX_MESSAGING_TIMEOUT_SECS,
+    evaluate_gate, plan_window, utf16_offset_to_char_offset, window_around_cursor, EditPair,
+    GateInputs, ReadOutcome, AX_MESSAGING_TIMEOUT_SECS, EDIT_WATCH_MAX_LIFETIME,
 };
 
 /// 超过这个 UTF-16 长度就不整篇 `AXValue` 读回来，改走 `AXStringForRange` 只取光标附近。
@@ -54,9 +63,39 @@ const K_AX_VALUE_CF_RANGE_TYPE: i32 = 4;
 /// `kCFNumberCFIndexType` —— 按 `CFIndex`（isize）取值，与 AX 的下标宽度一致。
 const K_CF_NUMBER_CF_INDEX_TYPE: i32 = 14;
 
+/// AXObserver 的不透明句柄。
+#[repr(C)]
+struct OpaqueAxObserver(c_void);
+type AxObserverRef = *mut OpaqueAxObserver;
+
+type AxObserverCallback = unsafe extern "C" fn(
+    observer: AxObserverRef,
+    element: AxUiElementRef,
+    notification: CFStringRef,
+    refcon: *mut c_void,
+);
+
 #[link(name = "ApplicationServices", kind = "framework")]
 extern "C" {
     fn AXUIElementCreateSystemWide() -> AxUiElementRef;
+    fn AXUIElementGetPid(element: AxUiElementRef, pid: *mut i32) -> AxError;
+    fn AXObserverCreate(
+        application: i32,
+        callback: AxObserverCallback,
+        observer: *mut AxObserverRef,
+    ) -> AxError;
+    fn AXObserverAddNotification(
+        observer: AxObserverRef,
+        element: AxUiElementRef,
+        notification: CFStringRef,
+        refcon: *mut c_void,
+    ) -> AxError;
+    fn AXObserverRemoveNotification(
+        observer: AxObserverRef,
+        element: AxUiElementRef,
+        notification: CFStringRef,
+    ) -> AxError;
+    fn AXObserverGetRunLoopSource(observer: AxObserverRef) -> CFRunLoopSourceRef;
     fn AXUIElementSetMessagingTimeout(element: AxUiElementRef, timeout: f32) -> AxError;
     fn AXUIElementCopyAttributeValue(
         element: AxUiElementRef,
@@ -76,6 +115,7 @@ extern "C" {
 #[link(name = "CoreFoundation", kind = "framework")]
 extern "C" {
     fn CFRelease(cf: CFTypeRef);
+    fn CFRetain(cf: CFTypeRef) -> CFTypeRef;
     fn CFGetTypeID(cf: CFTypeRef) -> CFTypeId;
     fn CFStringGetTypeID() -> CFTypeId;
     fn CFNumberGetTypeID() -> CFTypeId;
@@ -311,4 +351,247 @@ unsafe fn cfstring_to_rust(s: CFStringRef) -> Option<String> {
         .to_str()
         .ok()
         .map(str::to_string)
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 手改监听（AXObserver）
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// 形状照抄 `device_watch.rs`（CoreAudio 设备监听）：专用线程 → 注册回调（user_data
+// 双重间接封装闭包胖指针）→ `CFRunLoop::run_in_mode(1s)` 轮转 + 退出 flag → 退出前
+// 反注册 → 失败只 warn。那边注释解释了为什么不用 `CFRunLoopRun()` + 跨线程
+// `CFRunLoopStop`：跨线程停 runloop 有竞态且会漏线程。这里一模一样。
+//
+// **必须保证解除**。观察器泄漏意味着我们一直持有别的 app 的 AX 引用、一直被它的每次
+// 击键唤醒 —— 既是资源泄漏也是隐私问题。所以有三重保险：调用方 disarm、60 秒硬超时、
+// 前台 app 一换就自杀。
+
+/// 跨线程传递 AX 引用的载体。
+///
+/// `AXUIElementRef` 是 CFType，跨线程使用本身没问题（CF 引用计数是原子的），但裸指针
+/// 不是 `Send`。照 `unicode_keystroke::PreviousInputSource` 的既有做法：存成 `usize`
+/// + 手动 `Send`，交接前 `CFRetain`、用完 `CFRelease`。
+///
+/// 在调用线程上抓元素、而不是让工作线程自己去读 `AXFocusedUIElement`，是因为武装发生
+/// 在落字刚结束那一刻，此时焦点一定还在目标控件上；让新线程晚几毫秒再读，用户可能
+/// 已经点到别处了。
+struct SendableElement(usize);
+unsafe impl Send for SendableElement {}
+
+impl SendableElement {
+    /// # Safety
+    /// `element` 必须是有效的 `AXUIElementRef`。本函数自己 retain，调用方的那一份
+    /// 所有权不受影响（仍需自行 release）。
+    unsafe fn retained(element: AxUiElementRef) -> Self {
+        CFRetain(element as CFTypeRef);
+        Self(element as usize)
+    }
+
+    fn as_ref(&self) -> AxUiElementRef {
+        self.0 as AxUiElementRef
+    }
+}
+
+impl Drop for SendableElement {
+    fn drop(&mut self) {
+        // SAFETY: retained 里 CFRetain 过一次，这里配对释放。
+        unsafe { CFRelease(self.0 as CFTypeRef) };
+    }
+}
+
+/// 观察线程持有的全部状态。回调通过 `refcon` 拿到它。
+struct WatchContext {
+    element: SendableElement,
+    /// 落字刚结束时该控件的全文，作为比对基线。
+    baseline: String,
+    /// 我们这次实际打出去的文本。只有落在这段文字里的改动才算「用户改了我们插的东西」。
+    typed_text: String,
+    on_edit: Box<dyn Fn(EditPair) + Send + Sync>,
+    /// 已上报过的 `(source, target)`。用户改一个词要敲好几下，每一下都发一次通知，
+    /// 不去重会把同一处改动刷成一串日志。
+    reported: std::cell::RefCell<std::collections::HashSet<(String, String)>>,
+}
+
+/// `AXValueChanged` 回调 shim：把 `refcon` 还原成 `WatchContext` 并比对文本。
+///
+/// # Safety
+/// `refcon` 必须是 `run_edit_watch_loop` 注册时传入、且在观察器存活期间一直有效的
+/// `*const WatchContext`（由观察线程的栈持有，反注册在其之前完成）。
+unsafe extern "C" fn value_changed_shim(
+    _observer: AxObserverRef,
+    _element: AxUiElementRef,
+    _notification: CFStringRef,
+    refcon: *mut c_void,
+) {
+    if refcon.is_null() {
+        return;
+    }
+    let ctx = &*(refcon as *const WatchContext);
+    let Some(current) = copy_string_attr(ctx.element.as_ref(), b"AXValue\0") else {
+        return;
+    };
+    let Some(edit) = minimal_edit(&ctx.baseline, &current) else {
+        return;
+    };
+    if !edit_is_within_typed_text(&edit, &ctx.typed_text) {
+        return;
+    }
+    let key = (edit.source.clone(), edit.target.clone());
+    if !ctx.reported.borrow_mut().insert(key) {
+        return;
+    }
+    (ctx.on_edit)(edit);
+}
+
+/// 武装手改监听。成功返回停止开关，失败返回 `None`（只 warn，绝不影响主链路）。
+///
+/// `typed_text` 是用户实际看到落到屏幕上的那段文字 —— 流式路径下它是真正打出去的内容
+/// 而非完整 LLM 输出，两者可能不同。
+pub(super) fn spawn_edit_watcher(
+    typed_text: String,
+    on_edit: Box<dyn Fn(EditPair) + Send + Sync>,
+) -> Option<Arc<AtomicBool>> {
+    // 在调用线程上抓焦点元素 + 读基线，趁焦点还没跑。
+    let (element, baseline, pid) = unsafe {
+        let system = AXUIElementCreateSystemWide();
+        if system.is_null() {
+            return None;
+        }
+        AXUIElementSetMessagingTimeout(system, AX_MESSAGING_TIMEOUT_SECS);
+        let focused = copy_element_attr(system, b"AXFocusedUIElement\0");
+        CFRelease(system as CFTypeRef);
+        let focused = focused?;
+        AXUIElementSetMessagingTimeout(focused, AX_MESSAGING_TIMEOUT_SECS);
+
+        let baseline = copy_string_attr(focused, b"AXValue\0");
+        let mut pid: i32 = 0;
+        let pid_err = AXUIElementGetPid(focused, &mut pid);
+        let element = SendableElement::retained(focused);
+        CFRelease(focused as CFTypeRef);
+
+        let Some(baseline) = baseline else {
+            log::info!("[cursor-context] edit watch skipped: focused element has no AXValue");
+            return None;
+        };
+        if pid_err != AX_ERROR_SUCCESS || pid <= 0 {
+            log::info!("[cursor-context] edit watch skipped: AXUIElementGetPid failed");
+            return None;
+        }
+        (element, baseline, pid)
+    };
+    let (_, bundle_id) = crate::selection::current_front_app_parts();
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let thread_stop = Arc::clone(&stop);
+    let spawn_result = std::thread::Builder::new()
+        .name("openless-cursor-edit-watch".into())
+        .spawn(move || {
+            run_edit_watch_loop(
+                WatchContext {
+                    element,
+                    baseline,
+                    typed_text,
+                    on_edit,
+                    reported: std::cell::RefCell::new(std::collections::HashSet::new()),
+                },
+                pid,
+                bundle_id,
+                thread_stop,
+            );
+        });
+
+    if let Err(err) = spawn_result {
+        log::warn!("[cursor-context] spawn edit watch thread failed: {err}");
+        return None;
+    }
+    Some(stop)
+}
+
+fn run_edit_watch_loop(
+    ctx: WatchContext,
+    pid: i32,
+    bundle_id: Option<String>,
+    stop: Arc<AtomicBool>,
+) {
+    unsafe {
+        let mut observer: AxObserverRef = std::ptr::null_mut();
+        let err = AXObserverCreate(pid, value_changed_shim, &mut observer);
+        if err != AX_ERROR_SUCCESS || observer.is_null() {
+            log::warn!("[cursor-context] AXObserverCreate failed: AXError={err}");
+            return;
+        }
+        let Some(notification) = cfstring_from_static(b"AXValueChanged\0") else {
+            CFRelease(observer as CFTypeRef);
+            return;
+        };
+
+        // SAFETY: &ctx 在本函数返回前一直有效，而反注册发生在返回之前，C 侧拿不到
+        // 悬垂指针。
+        let add_err = AXObserverAddNotification(
+            observer,
+            ctx.element.as_ref(),
+            notification,
+            &ctx as *const _ as *mut c_void,
+        );
+        if add_err != AX_ERROR_SUCCESS {
+            log::info!(
+                "[cursor-context] AXObserverAddNotification failed: AXError={add_err} \
+                 (this app likely does not emit AXValueChanged)"
+            );
+            CFRelease(notification);
+            CFRelease(observer as CFTypeRef);
+            return;
+        }
+
+        // runloop 这一段走 core_foundation 的封装而不是自己再声明一遍 extern：
+        // `hotkey.rs` 已经声明过 CFRunLoopGetCurrent / CFRunLoopAddSource，重复声明
+        // 会触发 clashing_extern_declarations（ABI 上兼容，但那是靠运气）。
+        let source = CFRunLoopSource::wrap_under_get_rule(AXObserverGetRunLoopSource(observer));
+        let runloop = CFRunLoop::get_current();
+        // SAFETY: kCFRunLoopDefaultMode 是 CoreFoundation 的 'static 常量字符串。
+        let mode = kCFRunLoopDefaultMode;
+        runloop.add_source(&source, mode);
+        log::info!("[cursor-context] edit watch armed (pid={pid} bundle={bundle_id:?})");
+
+        let started = Instant::now();
+        let mut end_reason = "disarmed";
+        loop {
+            if stop.load(Ordering::Relaxed) {
+                break;
+            }
+            // 60 秒硬上限：过了这么久还在改，多半是在写新东西而不是纠我们插的词。
+            if started.elapsed() >= EDIT_WATCH_MAX_LIFETIME {
+                end_reason = "timeout";
+                break;
+            }
+            // 前台 app 一换就收工 —— 继续盯着别人的窗口既没意义也不该做。
+            let (_, current_bundle) = crate::selection::current_front_app_parts();
+            if current_bundle != bundle_id {
+                end_reason = "front app changed";
+                break;
+            }
+            let result = CFRunLoop::run_in_mode(mode, Duration::from_secs(1), false);
+            // Finished 表示 runloop 里没有任何 input source —— 观察器的 source 已经装上，
+            // 正常走不到这里；真到了就说明焦点元素没了，收工。
+            if matches!(result, CFRunLoopRunResult::Finished) {
+                end_reason = "focused element gone";
+                break;
+            }
+        }
+
+        // 无论怎么退出的，反注册这一段都必须跑到。
+        runloop.remove_source(&source, mode);
+        let remove_err = AXObserverRemoveNotification(observer, ctx.element.as_ref(), notification);
+        if remove_err != AX_ERROR_SUCCESS {
+            log::warn!("[cursor-context] AXObserverRemoveNotification failed: AXError={remove_err}");
+        }
+        CFRelease(notification);
+        CFRelease(observer as CFTypeRef);
+        log::info!(
+            "[cursor-context] edit watch disarmed after {}ms ({end_reason})",
+            started.elapsed().as_millis()
+        );
+        // ctx 在此 drop —— 此时观察器已移除，C 侧不再回调，安全。
+        drop(ctx);
+    }
 }

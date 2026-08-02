@@ -36,6 +36,10 @@ export interface DictationSession {
   id: string;
   createdAt: string; // ISO-8601
   rawTranscript: string;
+  /** 纠正规则**之前**的 ASR 原文。`rawTranscript` 存的是规则跑完之后的版本，
+   *  两者相同时后端不写这个字段（null）。用于归因：一次误识别到底是 ASR 听错还是
+   *  LLM 改坏。旧历史没有此字段。 */
+  asrTranscript: string | null;
   finalText: string;
   mode: PolishMode;
   stylePackId: string | null;

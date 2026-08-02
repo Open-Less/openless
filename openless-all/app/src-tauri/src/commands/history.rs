@@ -291,6 +291,7 @@ mod retranscribe_tests {
             created_at: "2026-07-15T00:00:00Z".into(),
             source: HistorySource::Voice,
             raw_transcript: String::new(),
+            asr_transcript: None,
             final_text: String::new(),
             mode: PolishMode::Light,
             style_pack_id: None,

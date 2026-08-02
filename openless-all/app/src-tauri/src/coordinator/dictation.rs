@@ -689,6 +689,45 @@ fn finalize_polished_text(
     }
 }
 
+/// 该不该武装手改监听。
+///
+/// 三个条件缺一不可：
+/// - **开关开着**。手改学习和光标上下文共用 `cursorContextEnabled`：两者用的是同一套
+///   AX 读取、面对的是同一个隐私问题，拆成两个开关只会让用户以为关掉一个就安全了。
+/// - **真的落字了**。`PasteSent` / `CopiedFallback` / `Failed` 意味着文字压根没进目标
+///   控件，或者进没进我们并不知道 —— 拿它当基线只会学到幻觉。
+/// - **落的字非空**。空文本没有「用户改了哪个词」可言。
+fn should_arm_edit_watch(enabled: bool, status: InsertStatus, typed_text: &str) -> bool {
+    enabled && status == InsertStatus::Inserted && !typed_text.trim().is_empty()
+}
+
+/// 落字成功后武装手改监听；同时解除上一次的（覆盖 Option 即 drop 即解除）。
+///
+/// 复用 `cursorContextEnabled` 这一个开关：手改学习和光标上下文用的是同一套 AX 读取、
+/// 面对的是同一个隐私问题，分成两个开关只会让用户以为关掉一个就安全了。
+///
+/// 任何一步失败都只是「学不到东西」，绝不影响已经落到屏幕上的文字。
+fn arm_edit_watch(inner: &Arc<Inner>, status: InsertStatus, typed_text: &str) {
+    // 无论如何都先把上一次的解除掉：哪怕这次不武装，旧观察器也不该继续活着。
+    let mut slot = inner.edit_watcher.lock();
+    *slot = None;
+
+    if !should_arm_edit_watch(inner.prefs.get().cursor_context_enabled, status, typed_text) {
+        return;
+    }
+    *slot = crate::host_document::watch_for_edits(typed_text.to_string(), |edit| {
+        // 本阶段只记日志。规则入库是下一步的事 —— 先用真实数据确认「感知」是对的，
+        // 再谈让它去改用户的词库。
+        log::info!(
+            "[cursor-context] user edit detected: source={:?} target={:?} before={:?} after={:?}",
+            edit.source,
+            edit.target,
+            edit.before,
+            edit.after
+        );
+    });
+}
+
 fn streaming_insert_eligible(
     streaming_insert_enabled: bool,
     translation_active: bool,
@@ -1610,6 +1649,9 @@ pub(super) async fn begin_session_as(
         }
         session_id
     };
+    // 新一次听写开始 → 上一次的手改监听作废。用户已经不在改上一段了，继续盯着只会
+    // 把新的输入误判成对旧文本的修改。这是「必须保证解除」的四条规则之一。
+    *inner.edit_watcher.lock() = None;
     #[cfg(target_os = "windows")]
     {
         if inner.prefs.get().windows_insertion_mode == crate::types::WindowsInsertionMode::Tsf {
@@ -2644,6 +2686,7 @@ fn build_transcribe_failed_session(
         created_at: Utc::now().to_rfc3339(),
         source: crate::types::HistorySource::Voice,
         raw_transcript: String::new(),
+        asr_transcript: None,
         final_text: String::new(),
         mode,
         style_pack_id: None,
@@ -3481,6 +3524,8 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
             created_at: Utc::now().to_rfc3339(),
             source: crate::types::HistorySource::Voice,
             raw_transcript: raw.text.clone(),
+            // 空转写：没有内容，也就无所谓「规则前的原文」。
+            asr_transcript: None,
             final_text: String::new(),
             mode: inner.prefs.get().default_mode,
             style_pack_id: None,
@@ -3559,6 +3604,12 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
         }
     };
     let front_app = inner.state.lock().front_app.clone();
+    // 纠正规则之前的 ASR 原文。下面 `raw.text` 会被原地改掉，而 `raw_transcript` 存的
+    // 是改之后的版本（历史页一直这么显示，不动它的语义）。要判断一次手改到底是
+    // ASR 听错还是 LLM 改坏，需要的是规则之前的这一版。
+    //
+    // 只在规则真的改动了文本时才留 —— 否则两个字段一字不差，白占历史文件的体积。
+    let mut asr_transcript: Option<String> = None;
     if !correction_rules.is_empty() {
         let corrected = apply_correction_rules(&raw.text, &correction_rules);
         if corrected != raw.text {
@@ -3567,7 +3618,7 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
                 raw.text.chars().count(),
                 corrected.chars().count()
             );
-            raw.text = corrected;
+            asr_transcript = Some(std::mem::replace(&mut raw.text, corrected));
         }
     }
 
@@ -3903,6 +3954,15 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     restore_prepared_windows_ime_session(inner, current_session_id);
     let inserted_chars = polished.chars().count() as u32;
 
+    // 落字成功 → 武装手改监听。用户接下来改的那个词，就是我们本该听对而没听对的。
+    //
+    // 基线用 `polished`（`finalize_polished_text` 的返回值）而不是完整的 LLM 输出：
+    // 流式路径下它返回的是 `typed_text`，即真正打到屏幕上的那段。中途失败或被取消时
+    // 两者不同，用错了会把「没打完」误判成「用户删掉了一大段」。
+    //
+    // 只观察不学习：本阶段先把「感知」做对，规则入库是下一步的事。
+    arm_edit_watch(inner, status, &polished);
+
     // 累计每条 enabled 词条在最终文本中的命中次数。
     // 用 polished（最终插入的文本）扫描，与用户实际看到的输出一致。
     let total_hits: u64 = match inner.vocab.record_hits(&polished) {
@@ -3942,6 +4002,7 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
         created_at: history_created_at.clone(),
         source: crate::types::HistorySource::Voice,
         raw_transcript: raw.text.clone(),
+        asr_transcript: asr_transcript.clone(),
         final_text: polished.clone(),
         mode,
         style_pack_id: Some(pack.id.clone()),
@@ -4169,7 +4230,7 @@ mod tests {
         accept_silent_retry_transcript, append_typed_prefix, batch_asr_chunk_limit_ms,
         build_transcribe_failed_session, default_done_message, drain_streaming_insert_deltas_with,
         eligible_polish_context_turns, finalize_polished_text, flush_streaming_insert_buffer_with,
-        pcm_duration_ms, pcm_from_wav_bytes, streaming_insert_eligible,
+        pcm_duration_ms, pcm_from_wav_bytes, should_arm_edit_watch, streaming_insert_eligible,
     };
     #[cfg(target_os = "macos")]
     use super::{macos_keyless_dictation_provider, MacosKeylessDictationProvider};
@@ -4195,6 +4256,46 @@ mod tests {
             super::less_computer_approvals().lock().unwrap().is_empty(),
             "取消后审批注册表应被清理"
         );
+    }
+
+    #[test]
+    fn edit_watch_is_not_armed_while_the_feature_is_off() {
+        // 手改监听和光标上下文共用一个开关。关着就是一次 AX 都不发。
+        assert!(!should_arm_edit_watch(
+            false,
+            InsertStatus::Inserted,
+            "落到屏幕上的文字"
+        ));
+    }
+
+    #[test]
+    fn edit_watch_is_armed_after_a_successful_insert() {
+        assert!(should_arm_edit_watch(
+            true,
+            InsertStatus::Inserted,
+            "落到屏幕上的文字"
+        ));
+    }
+
+    #[test]
+    fn edit_watch_is_not_armed_when_the_text_never_made_it_into_the_control() {
+        // PasteSent / CopiedFallback / Failed 下我们并不知道目标控件里现在是什么，
+        // 拿它当基线只会学到幻觉。
+        for status in [
+            InsertStatus::PasteSent,
+            InsertStatus::CopiedFallback,
+            InsertStatus::Failed,
+        ] {
+            assert!(
+                !should_arm_edit_watch(true, status, "落到屏幕上的文字"),
+                "{status:?} 不该武装"
+            );
+        }
+    }
+
+    #[test]
+    fn edit_watch_is_not_armed_for_empty_output() {
+        assert!(!should_arm_edit_watch(true, InsertStatus::Inserted, "   "));
     }
 
     fn coordinator_with_dictation_hotkey(
@@ -4326,6 +4427,7 @@ mod tests {
             created_at: "2026-06-03T00:00:00Z".into(),
             source: crate::types::HistorySource::Voice,
             raw_transcript: raw.into(),
+            asr_transcript: None,
             final_text: final_text.into(),
             mode: PolishMode::Structured,
             app_bundle_id: None,

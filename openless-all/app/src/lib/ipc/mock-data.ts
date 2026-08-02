@@ -564,6 +564,7 @@ export const mockHistory: DictationSession[] = OL_DATA.history.map((h, i) => ({
     id: `mock-${i}`,
     createdAt: new Date().toISOString(),
     rawTranscript: h.preview,
+    asrTranscript: null,
     finalText: h.preview,
     mode: "structured",
     stylePackId: "builtin.structured",

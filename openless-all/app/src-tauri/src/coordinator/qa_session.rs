@@ -755,6 +755,8 @@ pub(super) async fn answer_qa_question_text(
             created_at: Utc::now().to_rfc3339(),
             source: crate::types::HistorySource::Voice,
             raw_transcript: question.clone(),
+            // QA 不是听写落字，没有「纠正规则前的 ASR 原文」这个概念。
+            asr_transcript: None,
             final_text: answer,
             mode: PolishMode::Raw,
             style_pack_id: None,
