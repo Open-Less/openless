@@ -1874,8 +1874,8 @@ impl Coordinator {
     #[cfg(any(debug_assertions, test))]
     pub async fn inject_hotkey_click_for_dev(&self) -> Result<(), String> {
         log::info!("[coord] dev hotkey injection started");
-            handle_pressed(&self.inner, std::time::Instant::now(), 0).await;
-            handle_released(&self.inner, std::time::Instant::now()).await;
+        handle_pressed(&self.inner, std::time::Instant::now(), 0).await;
+        handle_released(&self.inner, std::time::Instant::now()).await;
         cancel_session(&self.inner);
         Ok(())
     }

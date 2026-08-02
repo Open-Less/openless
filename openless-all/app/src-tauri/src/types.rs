@@ -749,7 +749,7 @@ pub struct UserPreferences {
     /// 默认 Cmd+Shift+; (macOS) / Ctrl+Shift+; (Windows)。详见 issue #118。
     #[serde(default = "default_qa_hotkey")]
     pub qa_hotkey: Option<ShortcutBinding>,
-    /// 选区润色全局快捷键。Windows 默认右 Control；其它平台默认关闭。
+    /// 选区润色全局快捷键。Windows 默认右 Alt；其它平台默认关闭。
     #[serde(default = "default_selection_polish_hotkey")]
     pub selection_polish_hotkey: Option<ShortcutBinding>,
     /// 选区书面润色独立使用的风格包；未设置时迁移为默认内置轻度润色包。
