@@ -6,7 +6,7 @@ OpenLess uses one Alibaba Bailian provider and selects the DashScope protocol fr
 | --- | --- | --- |
 | Realtime WebSocket | `fun-asr-realtime`, `fun-asr-flash-8k-realtime`, `paraformer-realtime-v2`, `sensevoice-realtime-v1` | Streams text while recording. OpenLess downsamples 16 kHz recorder audio for 8 kHz models. |
 | Qwen realtime | `qwen3-asr-flash-realtime`, versioned snapshots | Streams text through the Qwen Realtime WebSocket API. |
-| Synchronous recording | `fun-asr-flash-*`, `qwen3-asr-flash` | Sends the recording after capture and waits for one synchronous response. These models are intended for short recordings. |
+| Synchronous recording | `fun-asr-flash-*`, `qwen3-asr-flash`, `qwen-audio-3.0-asr-flash` | Sends the recording after capture and waits for one synchronous response. These models are intended for short recordings (`qwen-audio-*-streaming` variants are not supported). |
 | Asynchronous file transcription | `fun-asr`, `fun-asr-mtl`, versioned snapshots, `paraformer-v2` | Uploads the recording, starts an asynchronous task, polls it, then downloads the transcript. |
 
 Future dated snapshots that retain one of these model prefixes are routed to the same protocol, so they can be entered manually before they are added to the model picker.
