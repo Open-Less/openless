@@ -454,6 +454,8 @@ export const ko: typeof zhCN = {
       writtenPolish: '서면 다듬기',
       selectionPromptTitle: '선택 영역 다듬기 프롬프트(ASR 없음)',
       selectionPromptHint: '사용자가 선택한 서면 텍스트용. ASR을 거치지 않으며, 받아쓰기로 취급하지 않고 그 안의 질문에도 답하지 않습니다.',
+      selectionPromptEditorDesc: '선택 영역 다듬기 프롬프트를 편집 중입니다. 입력은 사용자가 선택한 서면 텍스트이며 ASR을 거치지 않습니다.',
+      dictationPromptEditorDesc: '녹음 / ASR 스타일 프롬프트를 편집 중입니다. 입력은 음성 인식 후 받아쓰기 텍스트입니다.',
       dictationPromptTitle: '녹음 / ASR 프롬프트',
       dictationPromptHint: '녹음 후 받아쓰기한 ASR 텍스트용. 구어 정리, ASR 오타 수정, 고유명사 복원 규칙을 여기에 작성하세요.',
       selectionPromptFallback: '서면 다듬기 프롬프트가 아직 설정되지 않았습니다. 안전한 기본값을 사용합니다.',

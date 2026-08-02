@@ -452,6 +452,8 @@ export const zhTW: typeof zhCN = {
       writtenPolish: '書面潤色',
       selectionPromptTitle: '選區潤色 Prompt（無 ASR）',
       selectionPromptHint: '用於使用者主動選中的書面文字；不經過 ASR，不把內容當成轉寫，也不回答其中的問題。',
+      selectionPromptEditorDesc: '目前編輯選區潤色 Prompt；輸入對象是使用者主動選中的書面文字，不經過 ASR。',
+      dictationPromptEditorDesc: '目前編輯錄音 / ASR 風格 Prompt；輸入對象是語音辨識後的轉寫文本。',
       dictationPromptTitle: '錄音 / ASR Prompt',
       dictationPromptHint: '用於錄音轉寫後的 ASR 文本；這裡可以寫口語整理、ASR 錯字糾正和專有名詞還原規則。',
       selectionPromptFallback: '尚未配置書面潤色 Prompt；將使用安全預設規則。',

@@ -450,6 +450,8 @@ export const zhCN = {
       writtenPolish: '书面润色',
       selectionPromptTitle: '选区润色 Prompt（无 ASR）',
       selectionPromptHint: '用于用户主动选中的书面文字；不经过 ASR，不把内容当成转写，也不回答其中的问题。',
+      selectionPromptEditorDesc: '当前编辑选区润色 Prompt；输入对象是用户主动选中的书面文字，不经过 ASR。',
+      dictationPromptEditorDesc: '当前编辑录音 / ASR 风格 Prompt；输入对象是语音识别后的转写文本。',
       dictationPromptTitle: '录音 / ASR Prompt',
       dictationPromptHint: '用于录音转写后的 ASR 文本；这里可以写口语整理、ASR 错字纠正和专有名词还原规则。',
       selectionPromptFallback: '尚未配置书面润色 Prompt；将使用安全默认规则。',

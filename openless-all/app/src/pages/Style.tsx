@@ -576,7 +576,7 @@ export function Style() {
         <Pill tone="default" size="sm">{t('style.pack.selectionChars', { count: draft?.selectionPrompt.length ?? 0 })}</Pill>
       </div>
       <span style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.55 }}>
-        用于用户主动选中的书面文字；不经过 ASR，不把内容当成转写，也不回答其中的问题。
+        {t('style.pack.selectionPromptHint')}
       </span>
       <textarea
         value={draft?.selectionPrompt ?? ''}
@@ -593,7 +593,7 @@ export function Style() {
         <Pill tone="default" size="sm">{t('style.pack.promptChars', { count: draft?.prompt.length ?? 0 })}</Pill>
       </div>
       <span style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.55 }}>
-        用于录音转写后的 ASR 文本；这里可以写口语整理、ASR 错字纠正和专有名词还原规则。
+        {t('style.pack.dictationPromptHint')}
       </span>
       <textarea
         value={draft?.prompt ?? ''}
@@ -737,7 +737,7 @@ export function Style() {
                             <Pill tone="ok" size="sm">{t('style.pack.derivativeBadge', { login: pack.originAuthorLogin })}</Pill>
                           </span>
                         )}
-                        {isCurrentForView && <Pill tone="dark" size="sm">当前</Pill>}
+                        {isCurrentForView && <Pill tone="dark" size="sm">{t('style.pack.current')}</Pill>}
                       </div>
                       <div
                         style={{
@@ -936,8 +936,8 @@ export function Style() {
                     <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--ol-ink)' }}>{t('style.pack.editorTitle')}</div>
                     <div style={{ fontSize: 12, color: 'var(--ol-ink-3)', marginTop: 4, lineHeight: 1.6 }}>
                       {workflowView === 'dictation'
-                        ? t('style.pack.dictationPromptHint')
-                        : t('style.pack.selectionPromptHint')}
+                        ? t('style.pack.dictationPromptEditorDesc')
+                        : t('style.pack.selectionPromptEditorDesc')}
                     </div>
                   </div>
                   <button

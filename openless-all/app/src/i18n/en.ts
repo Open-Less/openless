@@ -452,6 +452,8 @@ export const en: typeof zhCN = {
       writtenPolish: 'Written polish',
       selectionPromptTitle: 'Selection polish prompt (no ASR)',
       selectionPromptHint: 'For user-selected written text; not ASR output. Do not treat it as a transcript or answer its questions.',
+      selectionPromptEditorDesc: 'Editing the selection polish prompt; input is written text the user actively selected, without ASR.',
+      dictationPromptEditorDesc: 'Editing the recording / ASR style prompt; input is ASR transcript text after dictation.',
       dictationPromptTitle: 'Recording / ASR prompt',
       dictationPromptHint: 'For ASR text after dictation; write spoken-language cleanup, ASR typo fixes and term restoration rules here.',
       selectionPromptFallback: 'No written polish prompt configured yet; a safe default will be used.',
