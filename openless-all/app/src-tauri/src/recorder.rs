@@ -201,6 +201,17 @@ fn run_audio_thread(
 
     // 启动 liveness watchdog 线程：检测录音回调是否静默停止
     const WATCHDOG_CHECK_INTERVAL_MS: u64 = 1000; // 每秒检查一次
+    /// 一次「检查间隔」被切成这么碎的若干觉来睡，每觉醒来都重看 stop_flag。
+    ///
+    /// 为什么不直接 sleep 满 1000ms：`Recorder::stop()` 要 join 音频线程，音频线程退出前
+    /// 要 join 本 watchdog —— watchdog 睡多沉，停采就要等多久。实测停一次录音因此要
+    /// 0.8~1 秒，而 `cancel_session` 又在拆完 recorder 才收胶囊，用户按 Option+Q / Esc
+    /// 看到的就是「取消了但胶囊还赖着一秒」。切碎后 stop 的等待从最坏 1000ms 降到 50ms。
+    ///
+    /// 检查的判据（下面两个 SECS）用的是真实时间差，不是「醒了几次」，所以睡眠粒度变化
+    /// 不改变 watchdog 的灵敏度：仍然是回调静默超过 CALLBACK_TIMEOUT_SECS 才报错。
+    /// 代价只是录音期间线程多醒几次（醒来只读一个时间戳）。
+    const WATCHDOG_SLEEP_SLICE_MS: u64 = 50;
     const CALLBACK_TIMEOUT_SECS: u64 = 3; // 3 秒没有回调视为异常
     const FIRST_CALLBACK_DEADLINE_SECS: u64 = 5; // 5 秒内必须收到首次回调
 
@@ -215,7 +226,17 @@ fn run_audio_thread(
             let watchdog_start_time = std::time::Instant::now();
 
             while !stop_flag_for_watchdog.load(Ordering::SeqCst) {
-                thread::sleep(std::time::Duration::from_millis(WATCHDOG_CHECK_INTERVAL_MS));
+                // 一个检查间隔切成 WATCHDOG_SLEEP_SLICE_MS 的碎觉睡完，中途 stop 就立刻退出
+                // （见 WATCHDOG_SLEEP_SLICE_MS：停采要 join 本线程，睡沉了停采就慢）。
+                let mut slept_ms = 0;
+                while slept_ms < WATCHDOG_CHECK_INTERVAL_MS {
+                    if stop_flag_for_watchdog.load(Ordering::SeqCst) {
+                        return;
+                    }
+                    let slice = WATCHDOG_SLEEP_SLICE_MS.min(WATCHDOG_CHECK_INTERVAL_MS - slept_ms);
+                    thread::sleep(std::time::Duration::from_millis(slice));
+                    slept_ms += slice;
+                }
 
                 // 关键：sleep 醒来后必须重新检查 stop_flag，再去看 elapsed。
                 //

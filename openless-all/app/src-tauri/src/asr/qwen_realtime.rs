@@ -43,6 +43,10 @@ const BYTES_PER_MS: u64 = 32;
 const FINAL_RESULT_TIMEOUT: Duration = Duration::from_secs(12);
 const SESSION_READY_TIMEOUT: Duration = Duration::from_secs(5);
 const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+/// WebSocket 建连（TCP + TLS + HTTP upgrade）本身的上限。没有它 `connect_async` 会无限
+/// 等，而 `open_session` 是在串行的 hotkey bridge 线程上 `block_on` 等的 —— 卡住就意味着
+/// 热键彻底失灵（开不了也停不了，只能退出重开）。详见 stepfun_realtime.rs 同名常量。
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 /// server_vad 断句静默阈值。官方默认 400ms；取 500ms 降低说话中途换气被切断的概率。
 const VAD_SILENCE_DURATION_MS: u32 = 500;
 
@@ -170,8 +174,14 @@ impl Qwen3RealtimeASR {
             .headers_mut()
             .insert("OpenAI-Beta", HeaderValue::from_static("realtime=v1"));
 
-        let (ws, _resp) = connect_async(request)
+        let (ws, _resp) = tokio::time::timeout(CONNECT_TIMEOUT, connect_async(request))
             .await
+            .map_err(|_| {
+                Qwen3ASRError::ConnectionFailed(format!(
+                    "连接超时（{} ms）",
+                    CONNECT_TIMEOUT.as_millis()
+                ))
+            })?
             .map_err(|e| Qwen3ASRError::ConnectionFailed(e.to_string()))?;
         let (write, read) = ws.split();
         *self.writer.lock().await = Some(write);

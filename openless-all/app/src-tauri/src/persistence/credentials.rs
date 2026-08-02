@@ -213,6 +213,12 @@ struct CredsAsrEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     resourceId: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    authMode: Option<String>,
+    /// 方舟（Ark）API Key —— 仅 `api_key` 鉴权模式使用，与旧版 Access Token 槽位
+    /// (`accessKey`) 隔离，避免两模式切换时残留凭据互相污染。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    volcengineApiKey: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     vocabularyId: Option<String>,
 }
 
@@ -224,6 +230,8 @@ impl CredsAsrEntry {
             && self.appKey.as_deref().unwrap_or("").is_empty()
             && self.accessKey.as_deref().unwrap_or("").is_empty()
             && self.resourceId.as_deref().unwrap_or("").is_empty()
+            && self.authMode.as_deref().unwrap_or("").is_empty()
+            && self.volcengineApiKey.as_deref().unwrap_or("").is_empty()
             && self.vocabularyId.as_deref().unwrap_or("").is_empty()
     }
 }
@@ -1109,6 +1117,8 @@ fn lookup_account(root: &CredsRoot, account: CredentialAccount) -> Option<String
         }
         CredentialAccount::VolcengineAccessKey => asr.and_then(|e| pick(&e.accessKey)),
         CredentialAccount::VolcengineResourceId => asr.and_then(|e| pick(&e.resourceId)),
+        CredentialAccount::VolcengineAuthMode => asr.and_then(|e| pick(&e.authMode)),
+        CredentialAccount::VolcengineApiKey => asr.and_then(|e| pick(&e.volcengineApiKey)),
         CredentialAccount::ArkApiKey => llm.and_then(|e| pick(&e.apiKey)),
         CredentialAccount::ArkModelId => llm.and_then(|e| pick(&e.model)),
         CredentialAccount::ArkEndpoint => llm.and_then(|e| pick(&e.baseURL)),
@@ -1135,6 +1145,14 @@ fn write_account(root: &mut CredsRoot, account: CredentialAccount, value: Option
         CredentialAccount::VolcengineResourceId => {
             let entry = root.providers.asr.entry(asr_id).or_default();
             entry.resourceId = normalized;
+        }
+        CredentialAccount::VolcengineAuthMode => {
+            let entry = root.providers.asr.entry(asr_id).or_default();
+            entry.authMode = normalized;
+        }
+        CredentialAccount::VolcengineApiKey => {
+            let entry = root.providers.asr.entry(asr_id).or_default();
+            entry.volcengineApiKey = normalized;
         }
         CredentialAccount::ArkApiKey => {
             let entry = root.providers.llm.entry(llm_id).or_default();
@@ -1172,6 +1190,9 @@ pub enum CredentialAccount {
     VolcengineAppKey,
     VolcengineAccessKey,
     VolcengineResourceId,
+    VolcengineAuthMode,
+    /// 方舟（Ark）语音模型 API Key（`api_key` 鉴权模式使用，独立于旧版 Access Token 槽位）。
+    VolcengineApiKey,
     ArkApiKey,
     ArkModelId,
     ArkEndpoint,
@@ -1194,6 +1215,8 @@ impl CredentialAccount {
             CredentialAccount::VolcengineAppKey => "volcengine.app_key",
             CredentialAccount::VolcengineAccessKey => "volcengine.access_key",
             CredentialAccount::VolcengineResourceId => "volcengine.resource_id",
+            CredentialAccount::VolcengineAuthMode => "volcengine.auth_mode",
+            CredentialAccount::VolcengineApiKey => "volcengine.api_key",
             CredentialAccount::ArkApiKey => "ark.api_key",
             CredentialAccount::ArkModelId => "ark.model_id",
             CredentialAccount::ArkEndpoint => "ark.endpoint",
@@ -1209,6 +1232,8 @@ impl CredentialAccount {
             CredentialAccount::VolcengineAppKey,
             CredentialAccount::VolcengineAccessKey,
             CredentialAccount::VolcengineResourceId,
+            CredentialAccount::VolcengineAuthMode,
+            CredentialAccount::VolcengineApiKey,
             CredentialAccount::ArkApiKey,
             CredentialAccount::ArkModelId,
             CredentialAccount::ArkEndpoint,
@@ -1226,6 +1251,8 @@ pub struct CredentialsSnapshot {
     pub volcengine_app_key: Option<String>,
     pub volcengine_access_key: Option<String>,
     pub volcengine_resource_id: Option<String>,
+    pub volcengine_auth_mode: Option<String>,
+    pub volcengine_api_key: Option<String>,
     pub asr_api_key: Option<String>,
     pub asr_endpoint: Option<String>,
     pub asr_model: Option<String>,
@@ -1444,6 +1471,8 @@ impl CredentialsVault {
             volcengine_app_key: lookup_account(&root, CredentialAccount::VolcengineAppKey),
             volcengine_access_key: lookup_account(&root, CredentialAccount::VolcengineAccessKey),
             volcengine_resource_id: lookup_account(&root, CredentialAccount::VolcengineResourceId),
+            volcengine_auth_mode: lookup_account(&root, CredentialAccount::VolcengineAuthMode),
+            volcengine_api_key: lookup_account(&root, CredentialAccount::VolcengineApiKey),
             asr_api_key: lookup_account(&root, CredentialAccount::AsrApiKey),
             asr_endpoint: lookup_account(&root, CredentialAccount::AsrEndpoint),
             asr_model: lookup_account(&root, CredentialAccount::AsrModel),

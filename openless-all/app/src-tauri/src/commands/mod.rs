@@ -280,9 +280,35 @@ mod tests {
             volcengine_app_key: Some("app".into()),
             volcengine_access_key: Some("access".into()),
             volcengine_resource_id: Some("resource".into()),
+            volcengine_auth_mode: None, // 默认 AppIdToken 模式
             ..snapshot()
         };
         assert!(asr_configured_for_provider("volcengine", &volcengine));
+
+        // AppIdToken 模式缺 access_key → 未配置（即使 app_key / resource_id 已填）。
+        let volcengine_no_access = CredentialsSnapshot {
+            volcengine_app_key: Some("app".into()),
+            volcengine_resource_id: Some("resource".into()),
+            ..snapshot()
+        };
+        assert!(!asr_configured_for_provider("volcengine", &volcengine_no_access));
+
+        // ApiKey 模式：只需独立 api_key 槽 + resource_id，无需 app_key。
+        let volcengine_api_key = CredentialsSnapshot {
+            volcengine_api_key: Some("key".into()),
+            volcengine_resource_id: Some("resource".into()),
+            volcengine_auth_mode: Some("api_key".into()),
+            ..snapshot()
+        };
+        assert!(asr_configured_for_provider("volcengine", &volcengine_api_key));
+        // ApiKey 模式缺 api_key（旧 access_key 槽有值也不满足）→ 未配置。
+        let volcengine_api_key_missing = CredentialsSnapshot {
+            volcengine_access_key: Some("old-access-token".into()),
+            volcengine_resource_id: Some("resource".into()),
+            volcengine_auth_mode: Some("api_key".into()),
+            ..snapshot()
+        };
+        assert!(!asr_configured_for_provider("volcengine", &volcengine_api_key_missing));
 
         let whisper_key_only = CredentialsSnapshot {
             asr_api_key: Some("key".into()),

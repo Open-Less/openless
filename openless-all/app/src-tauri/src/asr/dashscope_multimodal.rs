@@ -1,6 +1,7 @@
 //! 阿里云百炼（DashScope）多模态生成同步接口的批量 ASR 客户端。
 //!
-//! `fun-asr-flash` 系列是**非实时录音文件识别**模型，走 DashScope 私有的
+//! `fun-asr-flash` 与 `qwen-audio-3.0-asr-flash` 系列是**非实时录音文件识别**
+//! 模型，走 DashScope 私有的
 //! `multimodal-generation/generation` HTTP 接口，既不是实时 WebSocket 双工
 //! （见 `bailian.rs`），也不是 OpenAI 兼容的 `/audio/transcriptions`
 //! （见 `whisper.rs`）。因此单独成一路批量客户端：录音结束后把整段 PCM 编成
@@ -34,6 +35,7 @@ pub const DEFAULT_ENDPOINT: &str =
 pub const ASYNC_DEFAULT_ENDPOINT: &str =
     "https://dashscope.aliyuncs.com/api/v1/services/audio/asr/transcription";
 pub const DEFAULT_MODEL: &str = "fun-asr-flash-2026-06-15";
+pub const QWEN_AUDIO_MODEL: &str = "qwen-audio-3.0-asr-flash";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DashScopeBatchProtocol {
@@ -55,6 +57,11 @@ fn is_qwen_sync_model(model: &str) -> bool {
         && !is_realtime_model(model)
 }
 
+fn is_qwen_audio_model(model: &str) -> bool {
+    // 同步录音文件模型；`-streaming` 流式变体不在批量协议支持范围内。
+    model.starts_with("qwen-audio") && !model.contains("streaming")
+}
+
 pub fn protocol_for_model(model: &str) -> Option<DashScopeBatchProtocol> {
     let model = model.trim();
     if model.is_empty() || is_realtime_model(model) {
@@ -66,7 +73,10 @@ pub fn protocol_for_model(model: &str) -> Option<DashScopeBatchProtocol> {
     if is_qwen_filetrans_model(model) {
         return None;
     }
-    if model.starts_with("fun-asr-flash") || is_qwen_sync_model(model) {
+    if model.starts_with("fun-asr-flash")
+        || is_qwen_sync_model(model)
+        || is_qwen_audio_model(model)
+    {
         return Some(DashScopeBatchProtocol::Multimodal);
     }
     if model == "fun-asr" || model.starts_with("fun-asr-") || model.starts_with("paraformer") {
@@ -512,6 +522,8 @@ pub fn dashscope_multimodal_body_from_uri(model: &str, audio_uri: &str) -> Value
             },
         });
     }
+    // qwen-audio-3.0-asr-flash 还支持 vocabulary 与 language_hints；当前批量客户端
+    // 尚未将这两项设置映射到请求体，暂时保持自动语言检测且不传热词。
     serde_json::json!({
         "model": model,
         "input": {
@@ -681,17 +693,19 @@ mod tests {
 
     #[test]
     fn body_uses_multimodal_generation_shape() {
-        let body = dashscope_multimodal_body(DEFAULT_MODEL, b"wav");
-        assert_eq!(body["model"], DEFAULT_MODEL);
-        let audio = &body["input"]["messages"][0]["content"][0];
-        assert_eq!(audio["type"], "input_audio");
-        assert!(audio["input_audio"]["data"]
-            .as_str()
-            .unwrap()
-            .starts_with("data:audio/wav;base64,"));
-        assert_eq!(body["parameters"]["format"], "wav");
-        assert_eq!(body["parameters"]["sample_rate"], "16000");
-        assert!(body["parameters"].get("vocabulary_id").is_none());
+        for model in [DEFAULT_MODEL, QWEN_AUDIO_MODEL] {
+            let body = dashscope_multimodal_body(model, b"wav");
+            assert_eq!(body["model"], model);
+            let audio = &body["input"]["messages"][0]["content"][0];
+            assert_eq!(audio["type"], "input_audio");
+            assert!(audio["input_audio"]["data"]
+                .as_str()
+                .unwrap()
+                .starts_with("data:audio/wav;base64,"));
+            assert_eq!(body["parameters"]["format"], "wav");
+            assert_eq!(body["parameters"]["sample_rate"], "16000");
+            assert!(body["parameters"].get("vocabulary_id").is_none());
+        }
     }
 
     #[test]
@@ -714,6 +728,11 @@ mod tests {
         );
         assert_eq!(
             protocol_for_model("qwen3-asr-flash-2026-02-10"),
+            Some(DashScopeBatchProtocol::Multimodal)
+        );
+        // beta 合并：#876 引入的 qwen-audio-3.0-asr-flash 走同步 multimodal。
+        assert_eq!(
+            protocol_for_model("qwen-audio-3.0-asr-flash"),
             Some(DashScopeBatchProtocol::Multimodal)
         );
         for model in ["fun-asr", "fun-asr-mtl-2025-08-25", "paraformer-v2"] {

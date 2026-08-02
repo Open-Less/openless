@@ -245,6 +245,7 @@ pub(super) fn capture_ime_submit_target() -> Option<ImeSubmitTarget> {
 pub(super) fn show_capsule_window_no_activate<R: tauri::Runtime>(
     _app: &AppHandle<R>,
     window: &tauri::WebviewWindow<R>,
+    _reassert_spaces: bool,
 ) -> bool {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     use windows::Win32::Foundation::HWND;
@@ -284,8 +285,9 @@ pub(super) fn show_capsule_window_no_activate<R: tauri::Runtime>(
 
 #[cfg(target_os = "macos")]
 pub(super) fn show_capsule_window_no_activate<R: tauri::Runtime>(
-    _app: &AppHandle<R>,
+    app: &AppHandle<R>,
     window: &tauri::WebviewWindow<R>,
+    reassert_spaces: bool,
 ) -> bool {
     use objc2::msg_send;
     use objc2::runtime::AnyObject;
@@ -314,14 +316,53 @@ pub(super) fn show_capsule_window_no_activate<R: tauri::Runtime>(
     // 外加 setLevel(25)：光有 FULL_SCREEN_AUXILIARY 只是「被允许」进全屏 Space，但窗口层级
     // 若停在 alwaysOnTop 的浮动层(~3) 仍会被全屏 app 的窗口盖住而看不见；抬到菜单栏(24)之上
     // 的 25（与 show_less_computer_glow 同款）才能真正叠在全屏之上。
+    const CAN_JOIN_ALL_SPACES: usize = 1 << 0;
+    const STATIONARY: usize = 1 << 4;
+    const FULL_SCREEN_AUXILIARY: usize = 1 << 8;
+    const BEHAVIOR: usize = CAN_JOIN_ALL_SPACES | STATIONARY | FULL_SCREEN_AUXILIARY;
     unsafe {
-        const CAN_JOIN_ALL_SPACES: usize = 1 << 0;
-        const STATIONARY: usize = 1 << 4;
-        const FULL_SCREEN_AUXILIARY: usize = 1 << 8;
-        let behavior = CAN_JOIN_ALL_SPACES | STATIONARY | FULL_SCREEN_AUXILIARY;
         let _: () = msg_send![ns_window, setLevel: 25i64];
-        let _: () = msg_send![ns_window, setCollectionBehavior: behavior];
+        if reassert_spaces {
+            // 值若被外部改动过，留一条证据 —— 用于分辨「值被改」与「值没变但
+            // WindowServer 侧注册失效」（2026-07-31 事故属于后者：值一直是 273，
+            // 注册却缺了桌面，窗口被钉死在单个 Space）。
+            let current: usize = msg_send![ns_window, collectionBehavior];
+            if current != BEHAVIOR {
+                log::warn!(
+                    "[capsule] collectionBehavior drifted to {current} (expected {BEHAVIOR}); re-registering"
+                );
+            }
+            // 入场帧先以「无 CanJoinAllSpaces 位」的低值上屏（保留 Stationary/
+            // FullScreenAuxiliary，全屏叠加不受影响）。体外实验（macOS 26）证明：
+            // 只有「窗口可见时 CanJoinAllSpaces 位发生 0→1 转变」才触发 WindowServer
+            // 重新注册贴附；隐藏时改值、或同一个 runloop tick 里连写两个值（被合并）
+            // 都是 no-op。所以 273 必须等 orderFront 之后的下一个 tick 再写（见下方）。
+            let low = STATIONARY | FULL_SCREEN_AUXILIARY;
+            let _: () = msg_send![ns_window, setCollectionBehavior: low];
+        } else {
+            let _: () = msg_send![ns_window, setCollectionBehavior: BEHAVIOR];
+        }
         let _: () = msg_send![ns_window, orderFrontRegardless];
+    }
+    if reassert_spaces {
+        // 换线程再回主线程，保证落在 orderFront 之后的另一个 runloop tick——
+        // run_on_main_thread 在主线程上会内联执行，起不到隔 tick 的作用。
+        // 30ms 间隙里窗口以低值可见于当前桌面（用户正看着的那个），无可感知差异。
+        let app = app.clone();
+        let window = window.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(30));
+            let _ = app.run_on_main_thread(move || {
+                let Ok(handle) = window.ns_window() else { return };
+                let ns_window = handle as *mut AnyObject;
+                if ns_window.is_null() {
+                    return;
+                }
+                unsafe {
+                    let _: () = msg_send![ns_window, setCollectionBehavior: BEHAVIOR];
+                }
+            });
+        });
     }
     true
 }
@@ -330,6 +371,7 @@ pub(super) fn show_capsule_window_no_activate<R: tauri::Runtime>(
 pub(super) fn show_capsule_window_no_activate<R: tauri::Runtime>(
     _app: &AppHandle<R>,
     _window: &tauri::WebviewWindow<R>,
+    _reassert_spaces: bool,
 ) -> bool {
     true
 }
@@ -338,6 +380,7 @@ pub(super) fn show_capsule_window_no_activate<R: tauri::Runtime>(
 pub(super) fn show_capsule_window_no_activate<R: tauri::Runtime>(
     _app: &AppHandle<R>,
     _window: &tauri::WebviewWindow<R>,
+    _reassert_spaces: bool,
 ) -> bool {
     false
 }
@@ -378,6 +421,16 @@ pub(super) fn hide_capsule_window_if_present() {
 #[cfg(not(target_os = "windows"))]
 pub(super) fn hide_capsule_window_if_present() {}
 
+/// Esc 独占判定：胶囊显示「进行中」（录音/转写/润色）且确为 dictation 会话（phase 非
+/// Idle）时为 true——tap/hook 吞掉 Esc 不透传宿主应用。phase 条件专门排除 QA：QA 也走
+/// 胶囊，但它的 Esc 由聚焦浮窗处理（#161），全局吞键反而会把它挡掉。纯函数便于表格测试。
+fn esc_exclusive_for_capsule(state: CapsuleState, phase: SessionPhase) -> bool {
+    matches!(
+        state,
+        CapsuleState::Recording | CapsuleState::Transcribing | CapsuleState::Polishing
+    ) && !matches!(phase, SessionPhase::Idle)
+}
+
 pub(super) fn emit_capsule(
     inner: &Arc<Inner>,
     state: CapsuleState,
@@ -389,6 +442,14 @@ pub(super) fn emit_capsule(
     // 在 app 句柄校验之前记录，便于无 GUI 的测试断言「按下热键 → 弹了哪种胶囊」。
     // replace 顺带取回上一帧 state，用于判断本次是不是「入场帧」（见下方 defer_capsule_emit）。
     let prev_state = inner.last_capsule_state.lock().replace(state);
+    // Esc 独占窗口：胶囊显示进行中（录音/转写/润色）且确为 dictation 会话（phase 非
+    // Idle）时，tap/hook 吞掉 Esc 不透传宿主应用——此刻 Esc 的语义是「取消这个会话」，
+    // 双重派发会顺带触发宿主应用的 Esc（如取消 Claude 正在生成的回复）。phase 条件排除
+    // QA：QA 会话也走胶囊，但它的 Esc 由聚焦的浮窗窗口处理，吞键反而会把它挡掉。
+    // 终止帧（Done/Cancelled/Error/Idle）自然清除。emit_capsule 是所有会话状态变化的
+    // 单一出口（含 #77 审计保证的全部终止路径），在此维护不会漏路径。
+    let esc_exclusive = esc_exclusive_for_capsule(state, inner.state.lock().phase);
+    crate::hotkey::set_esc_exclusive(esc_exclusive);
     let app_opt = inner.app.lock().clone();
     let Some(app) = app_opt else { return };
     let translation = inner.translation_modifier_seen.load(Ordering::SeqCst);
@@ -567,7 +628,16 @@ pub(super) fn emit_capsule(
                     capsule_state_log_name(state)
                 );
             }
-            show_capsule_window_for_recording(&app_for_main, &window);
+            // 入场帧（隐藏→可见）强制重注册 Space 贴附：macOS 26 观测到系统会在运行中
+            // 把窗口从「全 Space 贴附」剥离（2026-07-31 实测：胶囊被钉死单个 Space，
+            // 其它桌面上听写全程不可见），而 setCollectionBehavior 写入相同值是 no-op，
+            // 之后每帧重写 273 都救不回来。只在入场帧做一次 0→273 的翻转即可恢复注册，
+            // 30Hz 的 level 帧不做（每帧翻转会让 WindowServer 反复重排窗口）。
+            show_capsule_window_for_recording(
+                &app_for_main,
+                &window,
+                payload_for_deferred_emit.is_some(),
+            );
             // macOS/Windows 优先走 no-activate show，避免录音胶囊抢走当前工作 app 焦点。
             // 若 fallback 到 show()，OpenLess 已是前台 app 时再把 key window 还给 main。
             #[cfg(target_os = "macos")]
@@ -690,5 +760,52 @@ pub(super) fn maybe_position_capsule_bottom_center<R: tauri::Runtime>(
     if crate::position_capsule_bottom_center(window, translation_active).is_ok() {
         let mut last = inner.capsule_layout.lock();
         *last = Some(next);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::CapsuleState;
+
+    #[test]
+    fn esc_exclusive_flag_matches_capsule_and_phase() {
+        // 进行中胶囊 + dictation phase 非 Idle → 独占 Esc（不透传宿主应用）。
+        for (state, phase) in [
+            (CapsuleState::Recording, SessionPhase::Listening),
+            (CapsuleState::Transcribing, SessionPhase::Processing),
+            (CapsuleState::Polishing, SessionPhase::Processing),
+            (CapsuleState::Recording, SessionPhase::Inserting),
+        ] {
+            assert!(
+                esc_exclusive_for_capsule(state, phase),
+                "{state:?} @ {phase:?} 应独占 Esc"
+            );
+        }
+
+        // 终止帧（Done/Cancelled/Error/Idle）→ 清除独占。
+        for (state, phase) in [
+            (CapsuleState::Done, SessionPhase::Idle),
+            (CapsuleState::Cancelled, SessionPhase::Idle),
+            (CapsuleState::Error, SessionPhase::Idle),
+            (CapsuleState::Idle, SessionPhase::Idle),
+        ] {
+            assert!(
+                !esc_exclusive_for_capsule(state, phase),
+                "{state:?} @ {phase:?} 不应独占 Esc"
+            );
+        }
+
+        // QA 场景：胶囊显示进行中但 dictation phase=Idle → 不独占（Esc 归浮窗，#161）。
+        for (state, phase) in [
+            (CapsuleState::Recording, SessionPhase::Idle),
+            (CapsuleState::Transcribing, SessionPhase::Idle),
+            (CapsuleState::Polishing, SessionPhase::Idle),
+        ] {
+            assert!(
+                !esc_exclusive_for_capsule(state, phase),
+                "{state:?} @ {phase:?}（QA）不应独占 Esc"
+            );
+        }
     }
 }
