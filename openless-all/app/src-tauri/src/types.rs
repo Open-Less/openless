@@ -719,7 +719,10 @@ pub struct UserPreferences {
     pub windows_sendinput_insertion_only: bool,
     /// Windows：SendInput 模式下是否在系统键盘列表（Win+Space）中显示 OpenLess TSF 输入法。
     /// 默认 true 保持现有行为；关闭后用户级禁用语言配置文件，无需管理员权限。
-    #[serde(default = "default_true", rename = "windowsShowOpenlessInKeyboardList")]
+    #[serde(
+        default = "default_true",
+        rename = "windowsShowOpenlessInKeyboardList"
+    )]
     pub windows_show_openless_in_keyboard_list: bool,
     /// 用户的工作语言（多选，原生名）。会作为前提注入 LLM polish/translate 的 system prompt 头部，
     /// 让模型知道该用户在哪些语言间工作。详见 issue #4。
@@ -3114,10 +3117,7 @@ mod tests {
         let prefs: UserPreferences =
             serde_json::from_str(r#"{"windowsSendInputInsertionOnly": true}"#).unwrap();
         assert!(prefs.windows_sendinput_insertion_only);
-        assert_eq!(
-            prefs.windows_insertion_mode,
-            WindowsInsertionMode::SendInput
-        );
+        assert_eq!(prefs.windows_insertion_mode, WindowsInsertionMode::SendInput);
     }
 
     #[test]
@@ -3125,10 +3125,7 @@ mod tests {
         let prefs: UserPreferences =
             serde_json::from_str(r#"{"windowsSendinputInsertionOnly": true}"#).unwrap();
         assert!(prefs.windows_sendinput_insertion_only);
-        assert_eq!(
-            prefs.windows_insertion_mode,
-            WindowsInsertionMode::SendInput
-        );
+        assert_eq!(prefs.windows_insertion_mode, WindowsInsertionMode::SendInput);
     }
 
     #[test]
@@ -3194,10 +3191,7 @@ mod tests {
         assert!(json.contains(r#""windowsInsertionMode":"sendInput""#));
         let restored: UserPreferences = serde_json::from_str(&json).unwrap();
         assert!(restored.windows_sendinput_insertion_only);
-        assert_eq!(
-            restored.windows_insertion_mode,
-            WindowsInsertionMode::SendInput
-        );
+        assert_eq!(restored.windows_insertion_mode, WindowsInsertionMode::SendInput);
     }
 
     #[test]

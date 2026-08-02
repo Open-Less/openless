@@ -29,14 +29,6 @@ docs/old-promo/
 # 宣传录屏 / 素材根目录（GB 级二进制，绝不入版本库）
 video-materials/
 
-# Local OpenLess development diagnostics and generated release candidates.
-# Keep these available on the workstation, but never include them in a PR.
-/.codegraph/
-/artifacts/
-/baseline-*.log
-/cargo-*.log
-/docs/notes/
-
 # 派生产物（兜底）：项目曾出现 promo-openless-v2/node_modules 等遗漏，
 # 这里全局通配，避免某子目录漏配 .gitignore 时把 build artifact 推进 PR。
 node_modules/

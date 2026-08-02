@@ -562,10 +562,7 @@ pub(super) fn less_computer_modifier_binding(
     })
 }
 
-pub(super) fn less_computer_modifier_bridge_loop(
-    inner: Arc<Inner>,
-    rx: mpsc::Receiver<HotkeyEvent>,
-) {
+pub(super) fn less_computer_modifier_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<HotkeyEvent>) {
     while let Ok(evt) = rx.recv() {
         if inner.shortcut_recording_active.load(Ordering::SeqCst) {
             continue;
@@ -799,9 +796,7 @@ pub(super) fn combo_hotkey_supervisor_loop(inner: Arc<Inner>) {
                 Err(e) => {
                     attempts += 1;
                     if attempts <= 3 || attempts % 10 == 0 {
-                        log::warn!(
-                            "[coord] side-aware combo 第 {attempts} 次注册失败: {e}; 3s 后重试"
-                        );
+                        log::warn!("[coord] side-aware combo 第 {attempts} 次注册失败: {e}; 3s 后重试");
                     }
                     std::thread::sleep(std::time::Duration::from_secs(3));
                     continue;
@@ -993,10 +988,7 @@ pub(super) fn update_translation_hotkey_on_main_thread(
     Ok(())
 }
 
-pub(super) fn translation_hotkey_bridge_loop(
-    inner: Arc<Inner>,
-    rx: mpsc::Receiver<ComboHotkeyEvent>,
-) {
+pub(super) fn translation_hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<ComboHotkeyEvent>) {
     while let Ok(evt) = rx.recv() {
         if inner.shortcut_recording_active.load(Ordering::SeqCst) {
             continue;
@@ -1487,11 +1479,7 @@ pub(super) fn window_hotkey_fallback_enabled() -> bool {
 }
 
 #[cfg(any(target_os = "windows", test))]
-pub(super) fn window_key_matches_trigger(
-    trigger: crate::types::HotkeyTrigger,
-    key: &str,
-    code: &str,
-) -> bool {
+pub(super) fn window_key_matches_trigger(trigger: crate::types::HotkeyTrigger, key: &str, code: &str) -> bool {
     use crate::types::HotkeyTrigger;
 
     match trigger {

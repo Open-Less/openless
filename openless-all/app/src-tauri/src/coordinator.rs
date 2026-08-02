@@ -110,9 +110,10 @@ use qa::{
 use resources::discard_startup_resources_for_session;
 use resources::{
     acquire_recording_mute, cancel_active_asr, cancel_qa_asr_for_session, release_recording_mute,
-    selected_microphone_device_name, stop_microphone_preview_monitor, stop_qa_recorder_for_session,
-    store_qa_asr_for_session, store_qa_recorder_for_session, take_asr_for_session,
-    take_qa_asr_for_session, take_recorder_for_session, SessionResource, SharedRecordingMuteState,
+    selected_microphone_device_name, stop_microphone_preview_monitor,
+    stop_qa_recorder_for_session, store_qa_asr_for_session, store_qa_recorder_for_session,
+    take_asr_for_session, take_qa_asr_for_session, take_recorder_for_session, SessionResource,
+    SharedRecordingMuteState,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -278,7 +279,9 @@ impl ActiveAsrProviderKind {
         match self {
             ActiveAsrProviderKind::Bailian
             | ActiveAsrProviderKind::Qwen3Realtime
-            | ActiveAsrProviderKind::ElevenLabs => AsrConfiguredFields::ApiKeyOnly,
+            | ActiveAsrProviderKind::ElevenLabs => {
+                AsrConfiguredFields::ApiKeyOnly
+            }
             ActiveAsrProviderKind::Mimo | ActiveAsrProviderKind::DashScopeMultimodal => {
                 AsrConfiguredFields::ApiKeyEndpointModel
             }
@@ -939,6 +942,7 @@ impl Coordinator {
         self.inner.local_asr_cache.loaded_model_id()
     }
 
+
     /// 主动把当前本地 ASR 引擎状态推给前端（keepLoadedSecs 变更等命令侧调用）。
     pub fn emit_local_asr_engine_status(&self) {
         emit_local_asr_engine_status(&self.inner);
@@ -1436,6 +1440,7 @@ impl Coordinator {
         close_qa_panel(&self.inner);
     }
 
+
     /// 用户点 ✕ / 按 Esc 关 Less Computer 浮窗：隐藏窗口 + 结束连续对话
     /// （下次说话开新会话，不再 --continue 续旧上下文）。
     pub fn less_computer_window_dismiss(&self) {
@@ -1463,7 +1468,8 @@ impl Coordinator {
         let inner = Arc::clone(&self.inner);
         tokio::spawn(async move {
             let session_id = crate::coordinator_state::new_session_id();
-            if let Err(e) = dictation::run_voice_agent_transcript(&inner, session_id, text, 0).await
+            if let Err(e) =
+                dictation::run_voice_agent_transcript(&inner, session_id, text, 0).await
             {
                 log::warn!("[less-computer] text submit run failed: {e}");
             }
@@ -1868,8 +1874,8 @@ impl Coordinator {
     #[cfg(any(debug_assertions, test))]
     pub async fn inject_hotkey_click_for_dev(&self) -> Result<(), String> {
         log::info!("[coord] dev hotkey injection started");
-        handle_pressed(&self.inner, std::time::Instant::now(), 0).await;
-        handle_released(&self.inner, std::time::Instant::now()).await;
+            handle_pressed(&self.inner, std::time::Instant::now(), 0).await;
+            handle_released(&self.inner, std::time::Instant::now()).await;
         cancel_session(&self.inner);
         Ok(())
     }
@@ -1935,7 +1941,10 @@ impl Coordinator {
 
     /// 返回 (转写文本, 本次实际构建的 ASR (provider, model) 快照)。快照供命令层把
     /// 「重转用了哪个模型」写回历史（构建时归因，PR #826 review）。
-    pub async fn retranscribe_pcm(&self, pcm: Vec<u8>) -> Result<(String, AsrCallLabel), String> {
+    pub async fn retranscribe_pcm(
+        &self,
+        pcm: Vec<u8>,
+    ) -> Result<(String, AsrCallLabel), String> {
         self.retranscribe_pcm_inner(pcm, false, None).await
     }
 
@@ -2032,10 +2041,12 @@ impl Coordinator {
                     .map_err(|_| "重新转录超时".to_string())?
                     .map_err(|e| e.to_string())?
             }
-            ActiveAsr::ElevenLabs(e) => tokio::time::timeout(elevenlabs_timeout, e.transcribe())
-                .await
-                .map_err(|_| "重新转录超时".to_string())?
-                .map_err(|e| e.to_string())?,
+            ActiveAsr::ElevenLabs(e) => {
+                tokio::time::timeout(elevenlabs_timeout, e.transcribe())
+                    .await
+                    .map_err(|_| "重新转录超时".to_string())?
+                    .map_err(|e| e.to_string())?
+            }
             #[cfg(target_os = "windows")]
             ActiveAsr::FoundryLocalWhisper(local) => {
                 let audio_secs = (local.buffer_duration_ms() as f64) / 1000.0;
@@ -2299,11 +2310,9 @@ pub(super) fn insert_via_non_tsf_fallback(
     let prefs = inner.prefs.get();
     let sendinput_options = dictation::windows_sendinput_options_from_prefs(&prefs);
     let status = finish_non_tsf_insertion_fallback(
-        || {
-            inner
-                .inserter
-                .insert_via_unicode_keystrokes(polished, sendinput_options)
-        },
+        || inner
+            .inserter
+            .insert_via_unicode_keystrokes(polished, sendinput_options),
         || inner.inserter.copy_fallback(polished),
     );
 
@@ -2404,6 +2413,7 @@ mod non_tsf_fallback_tests {
 }
 
 // ─────────────────────────── helpers ───────────────────────────
+
 
 fn read_whisper_credentials() -> (String, String, String) {
     let api_key = CredentialsVault::get(CredentialAccount::AsrApiKey)
@@ -2640,6 +2650,7 @@ fn enabled_hotwords(inner: &Arc<Inner>) -> Vec<DictionaryHotword> {
         .collect()
 }
 
+
 /// 读 Gemini 凭据。所有 LLM provider 共用 ark.* 槽位（persistence 没做 per-provider
 /// 隔离），所以这里也是从 `ArkApiKey` / `ArkModelId` / `ArkEndpoint` 三个槽读，
 /// 但回退默认值改成谷歌的：base_url 默认 `https://generativelanguage.googleapis.com/v1beta`，
@@ -2765,16 +2776,8 @@ mod tests {
         // 非 volc. 命名空间 / 含异常字符 / 超长的值可能携带租户信息，一律不落历史。
         assert_eq!(super::volc_resource_history_label(""), None);
         assert_eq!(super::volc_resource_history_label("my-secret-tenant"), None);
-        assert_eq!(
-            super::volc_resource_history_label("volc.a b"),
-            None,
-            "空格不在字符集"
-        );
-        assert_eq!(
-            super::volc_resource_history_label("volc.引擎"),
-            None,
-            "非 ASCII 拒绝"
-        );
+        assert_eq!(super::volc_resource_history_label("volc.a b"), None, "空格不在字符集");
+        assert_eq!(super::volc_resource_history_label("volc.引擎"), None, "非 ASCII 拒绝");
         let too_long = format!("volc.{}", "x".repeat(64));
         assert_eq!(super::volc_resource_history_label(&too_long), None);
     }
@@ -3148,8 +3151,8 @@ mod tests {
     // 穷尽 match，这里逐 kind 钉死映射，防止未来悄悄改动某个 provider 的凭据形态。
     #[test]
     fn preflight_credential_maps_every_kind() {
-        use ActiveAsrProviderKind::*;
         use AsrPreflightCredential::*;
+        use ActiveAsrProviderKind::*;
         assert_eq!(Bailian.preflight_credential(), AsrApiKey);
         assert_eq!(Qwen3Realtime.preflight_credential(), AsrApiKey);
         assert_eq!(Mimo.preflight_credential(), AsrApiKey);
@@ -3172,7 +3175,8 @@ mod tests {
             crate::asr::qwen_realtime::PROVIDER_ID
         );
         assert_eq!(
-            resolve_effective_asr_provider(bailian, "qwen3-asr-flash-realtime-2026-02-10").unwrap(),
+            resolve_effective_asr_provider(bailian, "qwen3-asr-flash-realtime-2026-02-10")
+                .unwrap(),
             crate::asr::qwen_realtime::PROVIDER_ID
         );
         assert_eq!(
@@ -3288,8 +3292,8 @@ mod tests {
 
     #[test]
     fn configured_fields_maps_every_kind() {
-        use ActiveAsrProviderKind::*;
         use AsrConfiguredFields::*;
+        use ActiveAsrProviderKind::*;
         assert_eq!(Bailian.configured_fields(), ApiKeyOnly);
         assert_eq!(Qwen3Realtime.configured_fields(), ApiKeyOnly);
         assert_eq!(Mimo.configured_fields(), ApiKeyEndpointModel);
@@ -3703,11 +3707,7 @@ mod tests {
             .hotkey_trigger_held
             .store(true, Ordering::SeqCst);
 
-        handle_released_edge(
-            &coordinator.inner,
-            pressed_at + std::time::Duration::from_millis(100),
-        )
-        .await;
+        handle_released_edge(&coordinator.inner, pressed_at + std::time::Duration::from_millis(100)).await;
 
         // 短按松手不结束录音，等下一次按下再停。
         assert_eq!(
@@ -3736,10 +3736,7 @@ mod tests {
         )
         .await;
 
-        assert_eq!(
-            coordinator.inner.state.lock().phase,
-            SessionPhase::Listening
-        );
+        assert_eq!(coordinator.inner.state.lock().phase, SessionPhase::Listening);
         assert!(coordinator.inner.hotkey_press_at.lock().is_none());
     }
 
@@ -3757,11 +3754,7 @@ mod tests {
             .hotkey_trigger_held
             .store(true, Ordering::SeqCst);
 
-        handle_released_edge(
-            &coordinator.inner,
-            pressed_at + std::time::Duration::from_millis(500),
-        )
-        .await;
+        handle_released_edge(&coordinator.inner, pressed_at + std::time::Duration::from_millis(500)).await;
 
         // 无 recorder / ASR 的测试会话下，end_session 直接收尾到 Idle。
         assert_eq!(coordinator.inner.state.lock().phase, SessionPhase::Idle);

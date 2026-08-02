@@ -597,7 +597,9 @@ mod platform {
         combo_tx: Sender<u64>,
         status_tx: StartupTx<Arc<MacShutdownHandles>>,
     ) {
-        let mask: CgEventMask = (1u64 << FLAGS_CHANGED) | (1u64 << KEY_DOWN) | (1u64 << KEY_UP);
+        let mask: CgEventMask = (1u64 << FLAGS_CHANGED)
+            | (1u64 << KEY_DOWN)
+            | (1u64 << KEY_UP);
         let handles = Arc::new(MacShutdownHandles {
             tap: std::sync::Mutex::new(None),
             runloop: std::sync::Mutex::new(None),
@@ -759,12 +761,7 @@ mod platform {
             );
         } else if !is_active && was_held {
             ctx.shared.trigger_held.store(false, Ordering::SeqCst);
-            send_or_log(
-                &ctx.tx,
-                HotkeyEvent::Released {
-                    at: std::time::Instant::now(),
-                },
-            );
+            send_or_log(&ctx.tx, HotkeyEvent::Released { at: std::time::Instant::now() });
         }
     }
 
@@ -1333,12 +1330,7 @@ mod platform {
                 let was_held = ctx.shared.trigger_held.swap(false, Ordering::SeqCst);
                 if was_held {
                     log::info!("[hotkey] Windows trigger released vk={vk_code}");
-                    send_or_log(
-                        &ctx.tx,
-                        HotkeyEvent::Released {
-                            at: std::time::Instant::now(),
-                        },
-                    );
+                    send_or_log(&ctx.tx, HotkeyEvent::Released { at: std::time::Instant::now() });
                 }
             }
             _ => {}
@@ -1523,7 +1515,10 @@ mod platform {
             assert!(dispatch_keyboard_event(&ctx, VK_RCONTROL, WM_KEYUP));
             assert!(dispatch_keyboard_event(&ctx, VK_RCONTROL, WM_KEYUP));
 
-            assert_eq!(edge_names(drain(&rx)), vec!["pressed", "released"]);
+            assert_eq!(
+                edge_names(drain(&rx)),
+                vec!["pressed", "released"]
+            );
         }
 
         #[test]
@@ -1598,7 +1593,10 @@ mod platform {
             assert!(!dispatch_keyboard_event(&left_ctx, VK_RMENU, WM_KEYDOWN));
             assert!(dispatch_keyboard_event(&left_ctx, VK_LMENU, WM_KEYDOWN));
             assert!(dispatch_keyboard_event(&left_ctx, VK_LMENU, WM_KEYUP));
-            assert_eq!(edge_names(drain(&left_rx)), vec!["pressed", "released"]);
+            assert_eq!(
+                edge_names(drain(&left_rx)),
+                vec!["pressed", "released"]
+            );
 
             let right_option_shared = shared(HotkeyTrigger::RightOption);
             let (right_option_ctx, right_option_rx) = callback_context(right_option_shared);
@@ -1675,13 +1673,12 @@ mod platform {
             dispatch_keyboard_event(&ctx, VK_LSHIFT, WM_KEYDOWN);
             dispatch_keyboard_event(&ctx, 0x44, WM_KEYDOWN);
 
-            assert!(matches!(
-                combo_rx.recv().unwrap(),
-                ComboHotkeyEvent::Pressed { .. }
-            ));
-            assert!(hotkey_rx
-                .try_iter()
-                .any(|evt| evt == HotkeyEvent::TranslationModifierPressed));
+            assert!(matches!(combo_rx.recv().unwrap(), ComboHotkeyEvent::Pressed { .. }));
+            assert!(
+                hotkey_rx
+                    .try_iter()
+                    .any(|evt| evt == HotkeyEvent::TranslationModifierPressed)
+            );
 
             drop(monitor);
         }

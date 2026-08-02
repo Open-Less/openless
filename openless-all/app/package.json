@@ -11,7 +11,6 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "tauri:dev:visible": "node scripts/tauri-dev-visible.mjs",
     "tauri:android:init": "tauri android init",
     "tauri:android:dev": "tauri android dev",
     "tauri:android:build": "tauri android build --apk --debug --target aarch64 armv7 i686 x86_64 --split-per-abi",
