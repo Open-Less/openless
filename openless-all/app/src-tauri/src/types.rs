@@ -928,6 +928,16 @@ pub struct UserPreferences {
     /// 默认 true（更接近用户习惯）。
     #[serde(default = "default_true")]
     pub streaming_insert_save_clipboard: bool,
+    /// 是否把「用户正在写的那篇文档」中光标附近的原文送进 LLM 润色当上下文。
+    ///
+    /// **默认 false，且必须保持 false。** 开启后每次听写都会读取前台 app 的正文并把
+    /// 其中一段发给 LLM 服务商——这是用户没有主动交给我们的数据，只能由用户显式选择。
+    /// 关闭时 `host_document` 一次 AX 都不发，prompt 与本功能存在之前逐字节相同。
+    ///
+    /// 目前仅 macOS 有实现；Windows / Linux 开了也读不到，优雅降级为无上下文。
+    /// 密码框 / Secure Input / 密码管理器 / 终端一律硬拦，与本开关无关。
+    #[serde(default)]
+    pub cursor_context_enabled: bool,
     /// 概览页是否显示「年度活动」热力图卡。默认 true；关闭只隐藏卡片，
     /// 活动计数照常记录（persistence/activity.rs），再打开时全年数据仍在。
     #[serde(default = "default_true")]
@@ -1176,6 +1186,8 @@ struct UserPreferencesWire {
     streaming_insert_default_migrated: bool,
     #[serde(default = "default_true")]
     streaming_insert_save_clipboard: bool,
+    #[serde(default)]
+    cursor_context_enabled: bool,
     #[serde(default = "default_true")]
     show_overview_activity_heatmap: bool,
     #[serde(default = "default_true")]
@@ -1292,6 +1304,7 @@ impl Default for UserPreferencesWire {
             streaming_insert: prefs.streaming_insert,
             streaming_insert_default_migrated: prefs.streaming_insert_default_migrated,
             streaming_insert_save_clipboard: prefs.streaming_insert_save_clipboard,
+            cursor_context_enabled: prefs.cursor_context_enabled,
             show_overview_activity_heatmap: prefs.show_overview_activity_heatmap,
             auto_update_check: prefs.auto_update_check,
             history_max_entries: prefs.history_max_entries,
@@ -1440,6 +1453,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             streaming_insert,
             streaming_insert_default_migrated: true,
             streaming_insert_save_clipboard: wire.streaming_insert_save_clipboard,
+            cursor_context_enabled: wire.cursor_context_enabled,
             show_overview_activity_heatmap: wire.show_overview_activity_heatmap,
             auto_update_check: wire.auto_update_check,
             history_max_entries: wire.history_max_entries,
@@ -2247,6 +2261,7 @@ impl Default for UserPreferences {
             streaming_insert: true,
             streaming_insert_default_migrated: true,
             streaming_insert_save_clipboard: true,
+            cursor_context_enabled: false,
             show_overview_activity_heatmap: true,
             auto_update_check: true,
             history_max_entries: None,

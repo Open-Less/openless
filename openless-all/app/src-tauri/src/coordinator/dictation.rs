@@ -258,6 +258,7 @@ async fn run_streaming_polish(
     output_language_preference: crate::types::OutputLanguagePreference,
     llm_thinking_enabled: bool,
     front_app: Option<&str>,
+    cursor_context: Option<&str>,
     prior_turns: &[(String, String)],
     llm_call: &mut Option<crate::polish::LlmCallLabel>,
     llm_elapsed_ms: &mut Option<u64>,
@@ -280,6 +281,7 @@ async fn run_streaming_polish(
             output_language_preference,
             llm_thinking_enabled,
             front_app,
+            cursor_context,
             prior_turns,
             llm_call,
             llm_elapsed_ms,
@@ -312,6 +314,7 @@ async fn run_streaming_polish(
                 output_language_preference,
                 llm_thinking_enabled,
                 front_app,
+                cursor_context,
                 prior_turns,
                 llm_call,
                 llm_elapsed_ms,
@@ -369,6 +372,7 @@ async fn run_streaming_polish(
         output_language_preference,
         llm_thinking_enabled,
         front_app,
+        cursor_context,
         prior_turns,
         llm_call,
         llm_elapsed_ms,
@@ -470,6 +474,7 @@ async fn run_streaming_polish(
                 output_language_preference,
                 llm_thinking_enabled,
                 front_app,
+                cursor_context,
                 prior_turns,
                 llm_call,
                 llm_elapsed_ms,
@@ -3656,6 +3661,38 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     // Linux: emit_capsule(Polishing) 已通过 fcitx5 auxDown 显示 "✨ 润色中..."，
     // 无需在此重复调用。
 
+    // 光标上下文：读用户正在写的那篇文档，给 LLM 当消歧材料。
+    //
+    // 开关关闭时**完全不调用** host_document——一次 AX 都不发。这不只是省开销：读别的
+    // app 的正文是件需要用户明确同意的事，关着就该等于这个功能不存在。
+    //
+    // 位置在这里是因为此刻焦点还在目标 app 上（胶囊是不激活的 panel），而润色马上就要
+    // 发出去。任何失败都退化成 None，绝不影响落字——不丢字优先于有上下文。
+    let cursor_context: Option<String> = if prefs.cursor_context_enabled {
+        match crate::host_document::read_around_cursor(crate::host_document::DEFAULT_BUDGET_CHARS)
+            .await
+        {
+            Some(window) => {
+                log::info!(
+                    "[coord] cursor context read OK: {} chars (before={} after={})",
+                    window.text.chars().count(),
+                    window.cursor,
+                    window.text.chars().count() - window.cursor
+                );
+                Some(crate::polish::prompts::cursor_context_input(
+                    window.before(),
+                    window.after(),
+                ))
+            }
+            None => {
+                log::info!("[coord] cursor context unavailable; polishing without it");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     // 翻译会话润色后的源语言文本（译文前的中间产物），仅翻译路径解析成功时有值，
     // 写进 history 供后续普通润色轮复用（剔除译文、避免外语污染）。
     let mut polish_source: Option<String> = None;
@@ -3683,6 +3720,7 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
             output_language_preference,
             llm_thinking_enabled,
             front_app.as_deref(),
+            cursor_context.as_deref(),
             &prior_turns,
             &mut llm_call,
             &mut llm_elapsed_ms,
@@ -3702,6 +3740,7 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
             output_language_preference,
             llm_thinking_enabled,
             front_app.as_deref(),
+            cursor_context.as_deref(),
             &prior_turns,
             &mut llm_call,
             &mut llm_elapsed_ms,
@@ -3718,6 +3757,7 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
             output_language_preference,
             llm_thinking_enabled,
             front_app.as_deref(),
+            cursor_context.as_deref(),
             &prior_turns,
             &mut llm_call,
             &mut llm_elapsed_ms,

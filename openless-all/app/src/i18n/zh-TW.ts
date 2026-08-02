@@ -649,6 +649,9 @@ export const zhTW: typeof zhCN = {
     dataStorage: {
       title: '資料儲存',
       desc: '本機保留的歷史會話與對話上下文。',
+      cursorContextLabel: '游標上下文（實驗）',
+      cursorContextDesc:
+        '潤稿時讀取你正在寫的那篇文件中游標附近的原文，幫模型判斷同音詞、專有名詞與代詞該怎麼寫。開啟後這段文字會隨請求送給你設定的 LLM 服務商；關閉時一個字都不讀。密碼輸入框、Secure Input、密碼管理器與終端機始終不讀。僅 macOS。',
     },
     codingConsole: {
       title: 'Claude 主控台',

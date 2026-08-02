@@ -2,9 +2,10 @@
 // 自 Settings.tsx 的 RecordingSection「历史与上下文」折叠组拆出，逻辑零改动。
 
 import { useTranslation } from 'react-i18next';
+import { detectOS } from '../../components/WindowChrome';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
 import { Card } from '../_atoms';
-import { SettingRow, SectionTitle, inputStyle } from './shared';
+import { SettingRow, SectionTitle, Toggle, inputStyle } from './shared';
 
 // 范围限制：retention 0-365 天，context window 0-60 分钟（再大对实际对话场景没意义且白烧 token）。
 const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
@@ -79,6 +80,20 @@ export function DataStorageSection() {
           style={{ ...inputStyle, width: 80, textAlign: 'right' }}
         />
       </SettingRow>
+      {/* 光标上下文。放在「隐私」而不是「润色」下是有意的：这个开关真正的代价不是
+          token，而是「把别的 app 里的文字发给 LLM 服务商」。只在 macOS 显示——
+          其余平台没有实现，摆一个拨不动结果的开关只会误导。 */}
+      {detectOS() === 'mac' && (
+        <SettingRow
+          label={t('settings.dataStorage.cursorContextLabel')}
+          desc={t('settings.dataStorage.cursorContextDesc')}
+        >
+          <Toggle
+            on={prefs.cursorContextEnabled}
+            onToggle={next => void savePrefs({ ...prefs, cursorContextEnabled: next })}
+          />
+        </SettingRow>
+      )}
     </Card>
   );
 }

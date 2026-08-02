@@ -651,6 +651,9 @@ export const ja: typeof zhCN = {
     dataStorage: {
       title: 'データ保存',
       desc: 'この端末に保存される会話履歴とコンテキスト。',
+      cursorContextLabel: 'カーソル文脈（実験的）',
+      cursorContextDesc:
+        '推敲時に、いま書いている文書のカーソル周辺の原文を読み取り、同音語・固有名詞・代名詞の書き分けをモデルが判断できるようにします。オンにすると、そのテキストがリクエストとともに設定中の LLM プロバイダへ送信されます。オフのときは一文字も読み取りません。パスワード入力欄、Secure Input、パスワード管理アプリ、ターミナルは常に読み取りません。macOS のみ。',
     },
     codingConsole: {
       title: 'Claude コンソール',

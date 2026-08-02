@@ -2050,6 +2050,9 @@ impl Coordinator {
             output_language_preference,
             llm_thinking_enabled,
             front_app.as_deref(),
+            // repolish 发生在历史页里，此刻焦点在 OpenLess 自己的窗口上，读到的
+            // 只会是我们自己的 UI —— 没有可用的光标上下文。
+            None,
             &[],
             // repolish 不回写历史的模型/耗时字段，调用快照就地丢弃。
             &mut None,
@@ -2227,6 +2230,9 @@ impl Coordinator {
             prefs.chinese_script_preference,
             prefs.output_language_preference,
             None,
+            // front_app 一样传 None：这是脱离运行时的静态预览，前台 app 和光标上下文
+            // 都要等真正听写时才有值。
+            None,
             false,
         );
         let multi_turn = crate::polish::assemble_polish_system_prompt(
@@ -2235,6 +2241,7 @@ impl Coordinator {
             &prefs.working_languages,
             prefs.chinese_script_preference,
             prefs.output_language_preference,
+            None,
             None,
             true,
         );

@@ -105,6 +105,7 @@ pub(super) fn context_premise(
 /// (`llm_gemini.rs`) 共享同一套 prompt 装配规则——不再担心两路 LLM
 /// 在 `system_prompt` 拼接顺序、context_premise 注入时机、
 /// polish_context_instruction 追加条件上慢慢漂移。
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn compose_polish_prompts(
     raw_text: &str,
     _mode: PolishMode,
@@ -114,6 +115,7 @@ pub(crate) fn compose_polish_prompts(
     chinese_script_preference: ChineseScriptPreference,
     output_language_preference: OutputLanguagePreference,
     front_app: Option<&str>,
+    cursor_context: Option<&str>,
     has_prior_turns: bool,
 ) -> (String, String) {
     let mut system_prompt = compose_system_prompt(style_system_prompt, hotwords);
@@ -125,6 +127,12 @@ pub(crate) fn compose_polish_prompts(
     ) {
         system_prompt = format!("{}\n\n{}", premise, system_prompt);
     }
+    // 光标上下文（用户正在写的那篇文档）。开关关闭时调用方传 None，这里逐字节回到
+    // 改动前的 prompt —— 关掉就等于这个功能不存在，是本功能的第一条验收。
+    let cursor_context_block = cursor_context.and_then(prompts::cursor_context_block);
+    if let Some(block) = &cursor_context_block {
+        system_prompt = format!("{}\n\n{}", system_prompt, block);
+    }
     // issue #609 F-02：在 system prompt 末尾追加对抗式防御措辞，明确信封内文本是
     // 数据而非指令。纵深防御，非硬保证。
     system_prompt = format!(
@@ -132,6 +140,14 @@ pub(crate) fn compose_polish_prompts(
         system_prompt,
         prompts::polish_injection_defense()
     );
+    // 带了光标上下文才追加它那一条，理由同上：没开这个功能的用户不该被改 prompt。
+    if cursor_context_block.is_some() {
+        system_prompt = format!(
+            "{}\n{}",
+            system_prompt,
+            prompts::cursor_context_injection_defense()
+        );
+    }
     // 多轮上下文模式：把"上一轮的指令是什么、不要复读上一轮答案"明确写进
     // system prompt，配合 chat structure 让 LLM 自然不重复历史输出。
     if has_prior_turns {
@@ -148,6 +164,7 @@ pub(crate) fn compose_polish_prompts(
 /// 翻译路径的 `(system_prompt, user_prompt)` 装配——和 polish 一样供两路 LLM 客户端共用。
 /// 翻译模式以 `target_language` 为唯一输出语言约束，OutputLanguagePreference 在这里被
 /// 强制设为 Auto 以避免 UI 偏好（如 ja）与 target_language（如 en）冲突。
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn assemble_polish_system_prompt(
     style_system_prompt: &str,
     hotwords: &[String],
@@ -155,6 +172,7 @@ pub(crate) fn assemble_polish_system_prompt(
     chinese_script_preference: ChineseScriptPreference,
     output_language_preference: OutputLanguagePreference,
     front_app: Option<&str>,
+    cursor_context: Option<&str>,
     has_prior_turns: bool,
 ) -> PolishSystemPromptAssembly {
     let (effective_system_prompt, _) = compose_polish_prompts(
@@ -166,6 +184,7 @@ pub(crate) fn assemble_polish_system_prompt(
         chinese_script_preference,
         output_language_preference,
         front_app,
+        cursor_context,
         has_prior_turns,
     );
     let context_premise = context_premise(

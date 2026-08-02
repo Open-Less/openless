@@ -647,6 +647,9 @@ export const zhCN = {
     dataStorage: {
       title: '数据存储',
       desc: '本机保留的历史会话与对话上下文。',
+      cursorContextLabel: '光标上下文（实验）',
+      cursorContextDesc:
+        '润色时读取你正在写的那篇文档中光标附近的原文，帮模型判断同音词、专名和代词该怎么写。开启后这段文字会随请求发送给你配置的 LLM 服务商；关闭时一个字都不读。密码输入框、Secure Input、密码管理器与终端始终不读。仅 macOS。',
     },
     codingConsole: {
       title: 'Claude 控制台',

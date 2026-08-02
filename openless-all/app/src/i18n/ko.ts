@@ -651,6 +651,9 @@ export const ko: typeof zhCN = {
     dataStorage: {
       title: '데이터 저장',
       desc: '이 기기에 보관되는 대화 기록과 컨텍스트.',
+      cursorContextLabel: '커서 문맥 (실험적)',
+      cursorContextDesc:
+        '다듬을 때 작성 중인 문서에서 커서 주변 원문을 읽어, 동음이의어·고유명사·대명사를 모델이 구분할 수 있게 합니다. 켜면 해당 텍스트가 요청과 함께 설정된 LLM 제공자로 전송됩니다. 끄면 한 글자도 읽지 않습니다. 비밀번호 입력란, Secure Input, 비밀번호 관리자, 터미널은 항상 읽지 않습니다. macOS 전용.',
     },
     codingConsole: {
       title: 'Claude 콘솔',

@@ -649,6 +649,9 @@ export const en: typeof zhCN = {
     dataStorage: {
       title: 'Data storage',
       desc: 'Conversation history and context kept on this device.',
+      cursorContextLabel: 'Cursor context (experimental)',
+      cursorContextDesc:
+        'While polishing, read the text around your cursor in the document you are writing, so the model can tell homophones, proper nouns and pronouns apart. When on, that text is sent to your configured LLM provider with the request; when off, nothing is read at all. Password fields, Secure Input, password managers and terminals are never read. macOS only.',
     },
     codingConsole: {
       title: 'Claude Console',

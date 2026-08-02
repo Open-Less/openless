@@ -21,6 +21,7 @@ const previousPrefs: UserPreferences = {
   selectionPolishHotkey: { primary: 'RightControl', modifiers: [] },
   selectionPolishStylePackId: 'builtin.light',
   selectionPolishOutputMode: 'directReplace',
+  cursorContextEnabled: false,
   showOverviewActivityHeatmap: true,
   defaultMode: 'light',
   enabledModes: ['raw', 'light', 'structured'],

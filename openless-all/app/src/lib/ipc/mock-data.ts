@@ -102,6 +102,7 @@ export let mockSettings: UserPreferences = {
     streamingInsert: true,
     streamingInsertDefaultMigrated: true,
     streamingInsertSaveClipboard: true,
+    cursorContextEnabled: false,
     showOverviewActivityHeatmap: true,
     autoUpdateCheck: true,
     historyMaxEntries: null,

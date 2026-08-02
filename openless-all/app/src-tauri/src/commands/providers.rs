@@ -192,6 +192,7 @@ async fn validate_llm_provider() -> Result<(), String> {
                 ChineseScriptPreference::Auto,
                 OutputLanguagePreference::Auto,
                 None,
+                None,
                 &[],
             )
             .await
@@ -226,6 +227,7 @@ async fn validate_llm_provider() -> Result<(), String> {
             &[],
             ChineseScriptPreference::Auto,
             OutputLanguagePreference::Auto,
+            None,
             None,
             &[],
         )

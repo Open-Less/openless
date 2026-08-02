@@ -96,6 +96,7 @@ impl GeminiProvider {
         chinese_script_preference: ChineseScriptPreference,
         output_language_preference: OutputLanguagePreference,
         front_app: Option<&str>,
+        cursor_context: Option<&str>,
         prior_turns: &[(String, String)],
     ) -> Result<String, LLMError> {
         let (system_prompt, user_prompt) = compose_polish_prompts(
@@ -107,6 +108,7 @@ impl GeminiProvider {
             chinese_script_preference,
             output_language_preference,
             front_app,
+            cursor_context,
             !prior_turns.is_empty(),
         );
 
