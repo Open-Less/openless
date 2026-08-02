@@ -90,6 +90,18 @@ export interface CorrectionRule {
   source: RuleSource;
 }
 
+/** `debug_read_cursor_context` 的返回：一次光标上下文探测的完整结果。
+ *  status 之外的每一种都要能说清「为什么没读到」——装机验证时全靠它判断某个 app
+ *  是被安全闸门拦住了，还是 AX 根本不支持。 */
+export interface HostDocumentReadResult {
+  status: 'ok' | 'blocked' | 'unsupported' | 'unavailable' | 'timeout';
+  reason: string | null;
+  window: { text: string; cursor: number } | null;
+  appName: string | null;
+  bundleId: string | null;
+  elapsedMs: number;
+}
+
 /** 一条等待用户确认的纠正建议（Tier2）。后端只存在内存里，重启即空——建议本身是
  *  易逝的，用户下次犯同样的错会再产生一条。 */
 export interface PendingCorrection {

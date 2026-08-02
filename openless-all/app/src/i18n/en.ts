@@ -730,6 +730,10 @@ export const en: typeof zhCN = {
     debug: {
       title: 'Debug tools',
       desc: 'For troubleshooting recognition issues; off by default.',
+      cursorProbeLabel: 'Cursor context probe',
+      cursorProbeDesc: 'Click, then switch to the target app and click into a text field before the countdown ends. The probe reads the text around your cursor there, so you can see which apps are readable and which the safety gate blocks. One read, sent to no provider.',
+      cursorProbeBtn: 'Probe (in 5s)',
+      cursorProbeCountdown: 'Reading in {{n}}s…',
     },
     marketplace: {
       title: 'Marketplace',

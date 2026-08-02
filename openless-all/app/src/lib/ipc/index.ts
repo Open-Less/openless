@@ -225,4 +225,4 @@ export {
 } from "./marketplace-cache"
 
 // utils
-export { openExternal, exportErrorLog, logClientError } from "./utils"
+export { openExternal, exportErrorLog, logClientError, debugReadCursorContext } from "./utils"

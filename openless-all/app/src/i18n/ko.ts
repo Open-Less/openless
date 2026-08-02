@@ -732,6 +732,10 @@ export const ko: typeof zhCN = {
     debug: {
       title: '디버그 도구',
       desc: '인식 문제를 진단할 때 사용합니다. 평소에는 꺼두어도 됩니다.',
+      cursorProbeLabel: '커서 문맥 프로브',
+      cursorProbeDesc: '누른 뒤 카운트다운 안에 대상 앱으로 전환해 입력란을 클릭하세요. 그곳의 커서 주변 원문을 읽어, 어떤 앱이 읽히고 어떤 앱이 안전 게이트에 막히는지 확인할 수 있습니다. 한 번만 읽으며 어떤 제공자에게도 보내지 않습니다.',
+      cursorProbeBtn: '프로브 (5초 후)',
+      cursorProbeCountdown: '{{n}}초 후 읽기…',
     },
     marketplace: {
       title: '확장 마켓',

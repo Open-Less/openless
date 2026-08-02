@@ -69,3 +69,15 @@ export async function logClientError(message: string): Promise<void> {
         console.warn("[log-client-error] failed to forward error to app log", error)
     }
 }
+
+/** 探一次「宿主 app 光标周围的正文」。**调试用，不接产品链路。**
+ *
+ *  `delayMs` 是这个入口能用起来的关键：从设置页点按钮时前台 app 是 OpenLess 自己，
+ *  读到的永远是我们自己的窗口。给几秒延迟，用户才有时间切到备忘录 / VS Code / 微信
+ *  里点进输入框，探针在那时才真正开始读。 */
+export async function debugReadCursorContext(
+    delayMs: number,
+): Promise<import("../types").HostDocumentReadResult> {
+    const { invoke } = await import("@tauri-apps/api/core")
+    return invoke("debug_read_cursor_context", { delayMs })
+}

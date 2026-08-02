@@ -732,6 +732,10 @@ export const ja: typeof zhCN = {
     debug: {
       title: 'デバッグツール',
       desc: '認識の問題を調査するときに使用。通常はオフのままで構いません。',
+      cursorProbeLabel: 'カーソル文脈プローブ',
+      cursorProbeDesc: 'クリックしたあと、カウントダウン中に対象アプリへ切り替えて入力欄をクリックしてください。そこのカーソル周辺の原文を読み取り、どのアプリが読めてどれが安全ゲートに阻まれるかを確認できます。読み取りは一度きりで、どのプロバイダにも送信しません。',
+      cursorProbeBtn: 'プローブ（5 秒後）',
+      cursorProbeCountdown: '{{n}} 秒後に読み取り…',
     },
     marketplace: {
       title: '拡張マーケット',

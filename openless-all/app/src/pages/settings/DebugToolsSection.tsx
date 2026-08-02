@@ -4,8 +4,9 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { exportErrorLog } from '../../lib/ipc';
+import { debugReadCursorContext, exportErrorLog } from '../../lib/ipc';
 import { useMobileLayout } from '../../lib/useMobileLayout';
+import type { HostDocumentReadResult } from '../../lib/types';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
 import { Btn, Card } from '../_atoms';
 import { SettingRow, Toggle, SectionTitle, inputStyle } from './shared';
@@ -19,10 +20,42 @@ export function DebugToolsSection() {
   const [exportStatus, setExportStatus] = useState<'idle' | 'busy' | 'ok' | 'err'>('idle');
   const [exportMessage, setExportMessage] = useState<string>('');
   const exportTimerRef = useRef<number | null>(null);
+  // 光标上下文探针。倒计时让用户有时间切到目标 app —— 见 onProbeCursorContext。
+  const [probeCountdown, setProbeCountdown] = useState(0);
+  const [probeResult, setProbeResult] = useState<HostDocumentReadResult | null>(null);
+  const [probeError, setProbeError] = useState<string | null>(null);
+  const probeTimerRef = useRef<number | null>(null);
 
   useEffect(() => () => {
     if (exportTimerRef.current) clearTimeout(exportTimerRef.current);
+    if (probeTimerRef.current) clearInterval(probeTimerRef.current);
   }, []);
+
+  /// 点一下 → 倒数几秒 → 读一次前台 app 的光标上下文。
+  ///
+  /// 必须有倒计时：点按钮的那一刻前台 app 是 OpenLess 自己，直接读只会读到我们自己的
+  /// 设置窗口。倒计时期间切到备忘录 / VS Code / 微信里点进输入框，探针才读得到真东西。
+  const PROBE_DELAY_SECONDS = 5;
+  const onProbeCursorContext = async () => {
+    setProbeResult(null);
+    setProbeError(null);
+    setProbeCountdown(PROBE_DELAY_SECONDS);
+    if (probeTimerRef.current) clearInterval(probeTimerRef.current);
+    probeTimerRef.current = window.setInterval(() => {
+      setProbeCountdown(prev => {
+        if (prev <= 1 && probeTimerRef.current) clearInterval(probeTimerRef.current);
+        return Math.max(0, prev - 1);
+      });
+    }, 1000);
+    try {
+      setProbeResult(await debugReadCursorContext(PROBE_DELAY_SECONDS * 1000));
+    } catch (err) {
+      setProbeError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setProbeCountdown(0);
+      if (probeTimerRef.current) clearInterval(probeTimerRef.current);
+    }
+  };
 
   const onExportLog = async () => {
     setExportStatus('busy');
@@ -88,6 +121,49 @@ export function DebugToolsSection() {
             <span style={{ fontSize: 11, color: 'var(--ol-ink-4)', lineHeight: 1.45 }}>
               {t('settings.recording.audioRecordingMaxEntriesDesc')}
             </span>
+          )}
+        </div>
+      </SettingRow>
+      {/* 光标上下文探针。里程碑 1 的产物「能肉眼看它在各 app 里读到了什么」——
+          没有这个入口，那条命令就等于不存在。 */}
+      <SettingRow label={t('settings.debug.cursorProbeLabel')} desc={t('settings.debug.cursorProbeDesc')}>
+        <div style={{ display: 'grid', gap: 6, minWidth: 0 }}>
+          <div>
+            <Btn variant="ghost" size="sm" disabled={probeCountdown > 0} onClick={() => void onProbeCursorContext()}>
+              {probeCountdown > 0
+                ? t('settings.debug.cursorProbeCountdown', { n: probeCountdown })
+                : t('settings.debug.cursorProbeBtn')}
+            </Btn>
+          </div>
+          {probeError && (
+            <div style={{ fontSize: 11, color: 'var(--ol-err)' }}>{probeError}</div>
+          )}
+          {probeResult && (
+            <div
+              style={{
+                fontSize: 11, fontFamily: 'var(--ol-font-mono)', lineHeight: 1.7,
+                padding: '8px 10px', borderRadius: 8,
+                background: 'var(--ol-surface-2)',
+                border: '0.5px solid var(--ol-line-strong)',
+                maxWidth: 420, wordBreak: 'break-word',
+              }}
+            >
+              <div>
+                <b>{probeResult.status}</b>
+                {probeResult.reason ? ` — ${probeResult.reason}` : ''}
+                {` · ${probeResult.elapsedMs}ms`}
+              </div>
+              <div style={{ color: 'var(--ol-ink-4)' }}>
+                {probeResult.appName ?? '?'} ({probeResult.bundleId ?? '?'})
+              </div>
+              {probeResult.window && (
+                <div style={{ marginTop: 4, whiteSpace: 'pre-wrap' }}>
+                  {probeResult.window.text.slice(0, probeResult.window.cursor)}
+                  <span style={{ color: 'var(--ol-blue)', fontWeight: 700 }}>⟦光标⟧</span>
+                  {probeResult.window.text.slice(probeResult.window.cursor)}
+                </div>
+              )}
+            </div>
           )}
         </div>
       </SettingRow>

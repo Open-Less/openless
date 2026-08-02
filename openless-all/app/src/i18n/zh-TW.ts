@@ -730,6 +730,10 @@ export const zhTW: typeof zhCN = {
     debug: {
       title: '除錯工具',
       desc: '排查辨識問題時使用，平時無需開啟。',
+      cursorProbeLabel: '游標上下文探針',
+      cursorProbeDesc: '點一下，然後在倒數內切到目標 app 並點進輸入框——探針會讀那裡的游標附近原文，用來確認哪些 app 讀得到、哪些被安全閘門擋住。只讀一次，不送給任何服務商。',
+      cursorProbeBtn: '探測（5 秒後）',
+      cursorProbeCountdown: '{{n}} 秒後讀取…',
     },
     marketplace: {
       title: '擴充市集',
