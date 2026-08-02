@@ -108,6 +108,10 @@ pub(crate) fn capture_selection_insertion_target() -> SelectionInsertionTarget {
 /// Whether the target snapshot is sufficient to start a Selection Polish
 /// request.  On Windows, do not send selected text to the provider if we cannot
 /// later prove where it is safe to replace it.
+///
+/// 非 Windows（macOS / Linux）尚未实现等效的前台窗口/焦点控件校验，无法保证
+/// 云端等待期间结果不会落到用户切换后的应用或控件上，因此一律 fail-closed：
+/// 不把选区文本发给 provider，选区润色在非 Windows 平台不可用。
 pub(crate) fn selection_insertion_target_is_captured(
     target: &SelectionInsertionTarget,
 ) -> bool {
@@ -119,7 +123,7 @@ pub(crate) fn selection_insertion_target_is_captured(
     #[cfg(not(target_os = "windows"))]
     {
         let _ = target;
-        true
+        false
     }
 }
 

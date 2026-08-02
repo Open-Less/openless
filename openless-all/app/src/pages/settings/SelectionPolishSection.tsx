@@ -31,7 +31,8 @@ export function SelectionPolishSection() {
 
   useEffect(() => { void getPlatformCapabilities().then(setPlatformCaps); }, []);
 
-  if (!prefs || !capability || !platformCaps?.supportsDesktopHotkey || os === 'linux') return null;
+  // 选区润色的安全替换依赖 Windows 前台窗口/焦点控件校验，macOS/Linux 尚未实现，仅 Windows 提供设置入口。
+  if (!prefs || !capability || !platformCaps?.supportsDesktopHotkey || os !== 'win') return null;
 
   return (
     <Card>
