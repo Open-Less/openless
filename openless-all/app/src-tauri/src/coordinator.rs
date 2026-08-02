@@ -71,6 +71,7 @@ mod polish_flow;
 mod qa;
 mod qa_session;
 mod resources;
+#[cfg(not(mobile))]
 pub(crate) mod selection_polish;
 
 use asr_wiring::*;
@@ -511,9 +512,11 @@ struct Inner {
     switch_style_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
     open_app_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
     /// 选区润色快捷键：modifier-only 复用 `HotkeyMonitor`，其它组合键复用
-    /// `ComboHotkeyMonitor`。
+    /// `ComboHotkeyMonitor`。桌面（非 mobile）专属。
+    #[cfg(not(mobile))]
     selection_polish_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
     /// 预览确认模式暂存的结果和原选区目标；仅在用户确认时才允许插入。
+    #[cfg(not(mobile))]
     selection_polish_preview: Mutex<Option<selection_polish::PendingSelectionPolishPreview>>,
     /// 翻译模式触发标志。每次 begin_session 重置为 false；hotkey 监听器在
     /// Listening / Starting 阶段看到 Shift down 边沿时 set true。
@@ -728,7 +731,9 @@ impl Coordinator {
                     translation_hotkey: Mutex::new(None),
                     switch_style_hotkey: Mutex::new(None),
                     open_app_hotkey: Mutex::new(None),
+                    #[cfg(not(mobile))]
                     selection_polish_hotkey: Mutex::new(None),
+                    #[cfg(not(mobile))]
                     selection_polish_preview: Mutex::new(None),
                     translation_modifier_seen: AtomicBool::new(false),
                     qa_hotkey: Mutex::new(None),
@@ -840,8 +845,10 @@ impl Coordinator {
                 translation_hotkey: Mutex::new(None),
                 switch_style_hotkey: Mutex::new(None),
                 open_app_hotkey: Mutex::new(None),
-            selection_polish_hotkey: Mutex::new(None),
-            selection_polish_preview: Mutex::new(None),
+                #[cfg(not(mobile))]
+                selection_polish_hotkey: Mutex::new(None),
+                #[cfg(not(mobile))]
+                selection_polish_preview: Mutex::new(None),
                 translation_modifier_seen: AtomicBool::new(false),
                 qa_hotkey: Mutex::new(None),
                 coding_agent_modifier_hotkey: Mutex::new(None),
@@ -1104,6 +1111,7 @@ impl Coordinator {
         }
     }
 
+    #[cfg(not(mobile))]
     pub fn start_selection_polish_hotkey_listener(&self) {
         let inner = Arc::clone(&self.inner);
         std::thread::Builder::new()
@@ -1112,14 +1120,17 @@ impl Coordinator {
             .ok();
     }
 
+    #[cfg(not(mobile))]
     pub fn stop_selection_polish_hotkey_listener(&self) {
         take_selection_polish_hotkey_on_main_thread(&self.inner);
     }
 
+    #[cfg(not(mobile))]
     pub fn try_update_selection_polish_hotkey_binding(&self) -> Result<(), String> {
         try_update_selection_polish_hotkey_binding(&self.inner)
     }
 
+    #[cfg(not(mobile))]
     pub fn update_selection_polish_hotkey_binding(&self) {
         if let Err(error) = self.try_update_selection_polish_hotkey_binding() {
             log::warn!("[coord] update selection polish hotkey binding failed: {error}");
@@ -4332,6 +4343,7 @@ fn schedule_capsule_idle(inner: &Arc<Inner>, delay_ms: u64) {
 
 /// 选区润色终态的短暂展示。旧的 timer 只能收起自己那一代的 payload；若用户已经
 /// 触发了下一轮 selection，或在此期间开始语音/QA，会直接放弃，不碰当前 capsule。
+#[cfg(not(mobile))]
 fn schedule_selection_polish_capsule_idle(inner: &Arc<Inner>, event_epoch: u64, delay_ms: u64) {
     let inner_clone = Arc::clone(inner);
     async_runtime::spawn(async move {

@@ -78,9 +78,13 @@ impl SettingsWriter for Coordinator {
         self.update_open_app_hotkey_binding();
     }
 
+    #[cfg(not(mobile))]
     fn refresh_selection_polish_hotkey(&self) {
         self.update_selection_polish_hotkey_binding();
     }
+
+    #[cfg(mobile)]
+    fn refresh_selection_polish_hotkey(&self) {}
 
     fn refresh_coding_agent_hotkey(&self) {
         self.update_coding_agent_hotkey_binding();

@@ -303,7 +303,9 @@ pub(super) fn qa_hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<QaHotk
 }
 
 // ─────────────────────── Selection Polish hotkey ───────────────────────
+// 选区润色为桌面（Windows-first）工作流，mobile 不注册全局热键。
 
+#[cfg(not(mobile))]
 pub(super) fn selection_polish_hotkey_supervisor_loop(inner: Arc<Inner>) {
     let mut attempts = 0_u32;
     loop {
@@ -325,6 +327,7 @@ pub(super) fn selection_polish_hotkey_supervisor_loop(inner: Arc<Inner>) {
     }
 }
 
+#[cfg(not(mobile))]
 pub(super) fn try_update_selection_polish_hotkey_binding(inner: &Arc<Inner>) -> Result<(), String> {
     let binding = inner.prefs.get().selection_polish_hotkey.clone();
     let Some(binding) = binding else {
@@ -359,6 +362,7 @@ pub(super) fn try_update_selection_polish_hotkey_binding(inner: &Arc<Inner>) -> 
         .map_err(|_| "Selection Polish hotkey registration timed out".to_string())?
 }
 
+#[cfg(not(mobile))]
 fn update_selection_polish_modifier_shortcut(inner: &Arc<Inner>) {
     if let Some(monitor) = inner.hotkey.lock().as_ref() {
         let (qa_trigger, selection_polish_trigger, translation_trigger) =
@@ -371,6 +375,7 @@ fn update_selection_polish_modifier_shortcut(inner: &Arc<Inner>) {
     }
 }
 
+#[cfg(not(mobile))]
 fn update_selection_polish_hotkey_on_main_thread(
     inner: Arc<Inner>,
     binding: crate::types::ShortcutBinding,
@@ -391,6 +396,7 @@ fn update_selection_polish_hotkey_on_main_thread(
     Ok(())
 }
 
+#[cfg(not(mobile))]
 fn selection_polish_hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<ComboHotkeyEvent>) {
     while let Ok(event) = rx.recv() {
         if inner.shortcut_recording_active.load(Ordering::SeqCst)
@@ -409,6 +415,7 @@ fn selection_polish_hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<Com
     }
 }
 
+#[cfg(not(mobile))]
 pub(super) fn take_selection_polish_hotkey_on_main_thread(inner: &Arc<Inner>) {
     let app = inner.app.lock().clone();
     if let Some(app) = app {
@@ -577,9 +584,9 @@ pub(super) fn less_computer_modifier_bridge_loop(
             }
             // Esc 取消与组合键撤销都不在此枚举里：分别走 esc_cancel_bridge_loop /
             // combo_abort_bridge_loop（见各自函数注释）。
-            HotkeyEvent::TranslationModifierPressed
-            | HotkeyEvent::QaShortcutPressed
-            | HotkeyEvent::SelectionPolishShortcutPressed => {}
+            HotkeyEvent::TranslationModifierPressed | HotkeyEvent::QaShortcutPressed => {}
+            #[cfg(not(mobile))]
+            HotkeyEvent::SelectionPolishShortcutPressed => {}
         }
     }
 }
@@ -1341,6 +1348,7 @@ pub(super) fn hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<HotkeyEve
                     handle_qa_hotkey_pressed(&inner_cloned).await;
                 });
             }
+            #[cfg(not(mobile))]
             HotkeyEvent::SelectionPolishShortcutPressed => {
                 let coordinator = Coordinator {
                     inner: Arc::clone(&inner_cloned),

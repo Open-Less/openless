@@ -138,6 +138,8 @@ pub fn set_open_app_hotkey(
 /// Set the Selection Polish global shortcut. The new binding is persisted first
 /// so the coordinator sees it during registration; a registration failure
 /// restores the exact previous preferences and listener state before returning.
+/// 选区润色为桌面（Windows-first）工作流，mobile 不注册。
+#[cfg(not(mobile))]
 #[tauri::command]
 pub fn set_selection_polish_hotkey(
     coord: CoordinatorState<'_>,

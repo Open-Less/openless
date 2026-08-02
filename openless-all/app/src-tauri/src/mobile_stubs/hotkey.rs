@@ -15,7 +15,7 @@ pub enum HotkeyEvent {
 
     TranslationModifierPressed,
     QaShortcutPressed,
-    SelectionPolishShortcutPressed,
+    // SelectionPolishShortcutPressed 为桌面（Windows-first）选区润色专属，mobile stub 不声明。
 }
 
 /// Mobile 无全局键盘监听，Esc 独占为 no-op。
