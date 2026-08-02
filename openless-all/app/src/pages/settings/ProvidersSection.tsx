@@ -558,8 +558,9 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
 function bailianModelProtocol(model: string): 'realtime' | 'sync' | 'async' {
   const m = model.trim();
   if (!m || m.includes('realtime')) return 'realtime';
-  if (m.startsWith('qwen3-asr-flash-filetrans')
-    || m === 'fun-asr'
+  // qwen3-asr-flash-filetrans 仅接受公网 URL，暂不支持（后端 protocol_for_model
+  // 显式拒绝），前端不再归为 async 提示。
+  if (m === 'fun-asr'
     || m.startsWith('fun-asr-') && !m.startsWith('fun-asr-flash')
     || m.startsWith('paraformer')) return 'async';
   return 'sync';

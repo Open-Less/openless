@@ -60,14 +60,16 @@ pub fn protocol_for_model(model: &str) -> Option<DashScopeBatchProtocol> {
     if model.is_empty() || is_realtime_model(model) {
         return None;
     }
+    // qwen3-asr-flash-filetrans 官方仅接受公网音频 URL，与本地录音的临时 OSS
+    // 上传 + oss:// 链路不兼容，暂不纳入支持：显式拒绝，避免被误路由到异步协议
+    // 造成「验证通过但真实录音必然失败」。
+    if is_qwen_filetrans_model(model) {
+        return None;
+    }
     if model.starts_with("fun-asr-flash") || is_qwen_sync_model(model) {
         return Some(DashScopeBatchProtocol::Multimodal);
     }
-    if model == "fun-asr"
-        || model.starts_with("fun-asr-")
-        || model.starts_with("paraformer")
-        || is_qwen_filetrans_model(model)
-    {
+    if model == "fun-asr" || model.starts_with("fun-asr-") || model.starts_with("paraformer") {
         return Some(DashScopeBatchProtocol::AsyncTranscription);
     }
     None
@@ -279,14 +281,16 @@ impl DashScopeMultimodalASR {
         let task_url = api_url(&self.base_url, &format!("/api/v1/tasks/{task_id}"))?;
         let deadline = Instant::now() + poll_timeout;
         let completed = loop {
-            let response = crate::net::credential_http()
-                .get(task_url.clone())
-                .header("Authorization", format!("Bearer {}", self.api_key.trim()))
-                .timeout(Duration::from_secs(30))
-                .send()
-                .await
-                .context("poll DashScope async ASR task")?;
-            let task = response_json(response, "DashScope async ASR task").await?;
+            // 轮询窗口最长可达 600s、每秒一次：对瞬态网络失败做有界重试，
+            // 避免 10 分钟内单次连接抖动/5xx 直接废弃整段转写。
+            let task = get_json_with_retry(
+                crate::net::credential_http(),
+                task_url.clone(),
+                Some(self.api_key.trim()),
+                deadline,
+                "poll DashScope async ASR task",
+            )
+            .await?;
             match task
                 .pointer("/output/task_status")
                 .and_then(Value::as_str)
@@ -307,7 +311,7 @@ impl DashScopeMultimodalASR {
                 _ => tokio::time::sleep(Duration::from_secs(1)).await,
             }
         };
-        let result = download_async_result(&extract_async_result_url(&self.model, &completed)?).await?;
+        let result = download_async_result(&extract_async_result_url(&completed)?).await?;
         extract_async_transcript_text(&result)
     }
 
@@ -365,13 +369,72 @@ fn async_upload_timeout(bytes: u64) -> Duration {
 
 async fn download_async_result(raw_url: &str) -> Result<Value> {
     let result_url = dashscope_transfer_url(raw_url)?;
-    let response = crate::net::anonymous_no_redirect_http()
-        .get(result_url)
-        .timeout(Duration::from_secs(30))
-        .send()
-        .await
-        .context("download DashScope async ASR result")?;
-    response_json(response, "DashScope async ASR result").await
+    let deadline = Instant::now() + Duration::from_secs(60);
+    get_json_with_retry(
+        crate::net::anonymous_no_redirect_http(),
+        result_url,
+        None,
+        deadline,
+        "download DashScope async ASR result",
+    )
+    .await
+}
+
+/// GET JSON 请求的瞬态失败重试上限（指数退避 500ms / 1s / 2s / 4s）。
+const ASYNC_HTTP_RETRY_ATTEMPTS: u32 = 3;
+
+fn retry_backoff(attempts: u32) -> Duration {
+    Duration::from_millis((500u64 * 2u64.pow(attempts.min(3))).min(4000))
+}
+
+/// 带瞬态重试的 GET JSON。
+///
+/// 连接失败 / 超时 / 请求阶段错误 / 5xx / 429 视为瞬态：指数退避重试，最多
+/// `ASYNC_HTTP_RETRY_ATTEMPTS` 次且不晚于 `deadline`（GET 幂等，重试安全）。
+/// 4xx 与确定性错误立即返回；`api_key` 为 Some 时附带 Bearer 头。
+async fn get_json_with_retry(
+    client: &'static reqwest::Client,
+    url: reqwest::Url,
+    api_key: Option<&str>,
+    deadline: Instant,
+    operation: &'static str,
+) -> Result<Value> {
+    let mut attempts: u32 = 0;
+    loop {
+        let mut request = client.get(url.clone()).timeout(Duration::from_secs(30));
+        if let Some(key) = api_key {
+            request = request.header("Authorization", format!("Bearer {key}"));
+        }
+        match request.send().await {
+            Ok(response) if response.status().is_success() => {
+                return response
+                    .json()
+                    .await
+                    .with_context(|| format!("parse {operation} response"));
+            }
+            Ok(response) => {
+                let status = response.status();
+                let body = response.text().await.unwrap_or_default();
+                let transient = status.is_server_error()
+                    || status == reqwest::StatusCode::TOO_MANY_REQUESTS;
+                if !transient || attempts >= ASYNC_HTTP_RETRY_ATTEMPTS || Instant::now() >= deadline
+                {
+                    anyhow::bail!("{operation} error {status}: {body}");
+                }
+                attempts += 1;
+                tokio::time::sleep(retry_backoff(attempts)).await;
+            }
+            Err(err) => {
+                let transient = err.is_timeout() || err.is_connect() || err.is_request();
+                if !transient || attempts >= ASYNC_HTTP_RETRY_ATTEMPTS || Instant::now() >= deadline
+                {
+                    return Err(err).with_context(|| format!("{operation} request failed"));
+                }
+                attempts += 1;
+                tokio::time::sleep(retry_backoff(attempts)).await;
+            }
+        }
+    }
 }
 
 async fn ensure_success(response: reqwest::Response, operation: &str) -> Result<()> {
@@ -468,29 +531,17 @@ pub fn dashscope_multimodal_body_from_uri(model: &str, audio_uri: &str) -> Value
 }
 
 pub fn async_transcription_body(model: &str, file_url: &str) -> Value {
-    if is_qwen_filetrans_model(model) {
-        serde_json::json!({
-            "model": model,
-            "input": { "file_url": file_url },
-            "parameters": {},
-        })
-    } else {
-        serde_json::json!({
-            "model": model,
-            "input": { "file_urls": [file_url] },
-            "parameters": {},
-        })
-    }
+    serde_json::json!({
+        "model": model,
+        "input": { "file_urls": [file_url] },
+        "parameters": {},
+    })
 }
 
-pub fn extract_async_result_url(model: &str, json: &Value) -> Result<String> {
-    let url = if is_qwen_filetrans_model(model) {
-        json.pointer("/output/result/transcription_url")
-            .and_then(Value::as_str)
-    } else {
-        json.pointer("/output/results/0/transcription_url")
-            .and_then(Value::as_str)
-    };
+pub fn extract_async_result_url(json: &Value) -> Result<String> {
+    let url = json
+        .pointer("/output/results/0/transcription_url")
+        .and_then(Value::as_str);
     url.map(str::trim)
         .filter(|url| !url.is_empty())
         .map(ToOwned::to_owned)
@@ -665,18 +716,19 @@ mod tests {
             protocol_for_model("qwen3-asr-flash-2026-02-10"),
             Some(DashScopeBatchProtocol::Multimodal)
         );
-        for model in [
-            "fun-asr",
-            "fun-asr-mtl-2025-08-25",
-            "paraformer-v2",
-            "qwen3-asr-flash-filetrans-2025-11-17",
-        ] {
+        for model in ["fun-asr", "fun-asr-mtl-2025-08-25", "paraformer-v2"] {
             assert_eq!(
                 protocol_for_model(model),
                 Some(DashScopeBatchProtocol::AsyncTranscription),
                 "unexpected protocol for {model}"
             );
         }
+        // qwen3-asr-flash-filetrans 仅接受公网 URL，与本地录音的临时 OSS 链路
+        // 不兼容：显式拒绝，不得路由到异步协议。
+        assert_eq!(
+            protocol_for_model("qwen3-asr-flash-filetrans-2025-11-17"),
+            None
+        );
         assert_eq!(protocol_for_model("unknown-asr"), None);
     }
 
@@ -694,39 +746,24 @@ mod tests {
     }
 
     #[test]
-    fn async_body_uses_model_specific_input_shape() {
+    fn async_body_uses_file_urls_input_shape() {
         let funasr = async_transcription_body("fun-asr", "oss://bucket/test.wav");
         assert_eq!(funasr["input"]["file_urls"][0], "oss://bucket/test.wav");
         assert!(funasr["input"].get("file_url").is_none());
         assert_eq!(funasr["parameters"], serde_json::json!({}));
-
-        let qwen = async_transcription_body("qwen3-asr-flash-filetrans", "oss://bucket/test.wav");
-        assert_eq!(qwen["input"]["file_url"], "oss://bucket/test.wav");
-        assert!(qwen["input"].get("file_urls").is_none());
-        assert_eq!(qwen["parameters"], serde_json::json!({}));
     }
 
     #[test]
-    fn extracts_model_specific_async_result_url() {
-        let funasr = serde_json::json!({
+    fn extracts_async_result_url_from_results_array() {
+        let json = serde_json::json!({
             "output": {"results": [{
                 "subtask_status": "SUCCEEDED",
                 "transcription_url": "https://result.example/funasr.json"
             }]}
         });
         assert_eq!(
-            extract_async_result_url("fun-asr", &funasr).unwrap(),
+            extract_async_result_url(&json).unwrap(),
             "https://result.example/funasr.json"
-        );
-
-        let qwen = serde_json::json!({
-            "output": {"result": {
-                "transcription_url": "https://result.example/qwen.json"
-            }}
-        });
-        assert_eq!(
-            extract_async_result_url("qwen3-asr-flash-filetrans", &qwen).unwrap(),
-            "https://result.example/qwen.json"
         );
     }
 
@@ -761,6 +798,48 @@ mod tests {
         assert_eq!(upgraded.scheme(), "https");
         assert!(dashscope_transfer_url("http://169.254.169.254/latest/meta-data").is_err());
         assert!(dashscope_transfer_url("https://aliyuncs.com.evil.example/result.json").is_err());
+    }
+
+    #[tokio::test]
+    async fn get_json_retries_transient_5xx_then_succeeds() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let hits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let server_hits = Arc::clone(&hits);
+        let server = tokio::spawn(async move {
+            for expected_status in [503_u16, 200] {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = [0_u8; 2048];
+                let _ = stream.read(&mut request).await.unwrap();
+                server_hits.fetch_add(1, Ordering::SeqCst);
+                let (status_text, body) = if expected_status == 503 {
+                    ("Service Unavailable", "retry me")
+                } else {
+                    ("OK", "{\"ok\":true}")
+                };
+                let response = format!(
+                    "HTTP/1.1 {expected_status} {status_text}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                stream.write_all(response.as_bytes()).await.unwrap();
+            }
+        });
+
+        let value = get_json_with_retry(
+            crate::net::credential_http(),
+            format!("http://{addr}/poll").parse().unwrap(),
+            None,
+            Instant::now() + Duration::from_secs(10),
+            "test poll",
+        )
+        .await
+        .unwrap();
+        assert_eq!(value["ok"], true);
+        assert_eq!(hits.load(Ordering::SeqCst), 2);
+        server.await.unwrap();
     }
 
     #[test]

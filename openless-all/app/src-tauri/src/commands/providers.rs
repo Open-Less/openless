@@ -50,7 +50,6 @@ pub async fn list_provider_models(kind: String) -> Result<ProviderModelsResult, 
                 "fun-asr-2025-08-25".to_string(),
                 "fun-asr-mtl".to_string(),
                 "fun-asr-mtl-2025-08-25".to_string(),
-                "qwen3-asr-flash-filetrans".to_string(),
                 "paraformer-v2".to_string(),
             ],
         });

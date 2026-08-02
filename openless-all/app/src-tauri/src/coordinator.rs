@@ -3059,7 +3059,6 @@ mod tests {
             "qwen3-asr-flash-2026-02-10",
             "fun-asr",
             "fun-asr-mtl-2025-08-25",
-            "qwen3-asr-flash-filetrans",
             "paraformer-v2",
         ] {
             assert_eq!(
@@ -3107,6 +3106,11 @@ mod tests {
     fn resolve_effective_asr_provider_rejects_unsupported_bailian_model() {
         let error = resolve_effective_asr_provider(crate::asr::bailian::PROVIDER_ID, "unknown-asr")
             .unwrap_err();
+        assert!(error.contains("不支持的百炼 ASR 模型"));
+        // qwen3-asr-flash-filetrans 仅接受公网 URL，与本地录音链路不兼容，同样拒绝。
+        let error =
+            resolve_effective_asr_provider(crate::asr::bailian::PROVIDER_ID, "qwen3-asr-flash-filetrans")
+                .unwrap_err();
         assert!(error.contains("不支持的百炼 ASR 模型"));
     }
 
