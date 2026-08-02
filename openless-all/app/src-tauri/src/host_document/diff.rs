@@ -149,11 +149,22 @@ pub struct LearnedRule {
 
 /// 判定一处改动该以什么档入库。
 ///
-/// 返回 `None` 表示**不该变成规则**：`target` 为空的纯删除。做成全局替换就是「以后
-/// 所有听写里这个词一律删掉」—— 「的」被删一次，往后每个「的」都没了。风险与收益
-/// 完全不对等。（检测仍然有效，日志照记。）
+/// 返回 `None` 表示**不该变成规则**（检测仍然有效，日志照记）：
+///
+/// - **纯删除**（`target` 为空）。做成全局替换就是「以后所有听写里这个词一律删掉」
+///   —— 「的」被删一次，往后每个「的」都没了。风险与收益完全不对等。
+/// - **跨行或跨句**（含换行、中文句读标点、`?!;`）。纠正规则是词级字面替换，跨句的
+///   要么永远匹配不上，要么一命中就改掉一整段。
 pub fn classify_edit(edit: &EditPair) -> Option<RuleTier> {
     if edit.target.trim().is_empty() {
+        return None;
+    }
+    // 跨行或跨句的不是在纠一个词。
+    //
+    // 纠正规则是词级字面替换。真机上抓到的两次假阳性都是这一类：用户在聊天框里按回车
+    // 发送，输入框被清空换成占位符 —— 形式上是「把一整句替换成另一句」，长度也没超过
+    // 上限（才 25 个字），只有「它包含句末标点」这个特征把它和真正的改词分开。
+    if crosses_a_sentence_boundary(&edit.source) || crosses_a_sentence_boundary(&edit.target) {
         return None;
     }
     if is_cross_script(&edit.source, &edit.target) {
@@ -217,6 +228,15 @@ fn pad_to_min_length(edit: &EditPair) -> Option<(String, String)> {
         format!("{prefix}{}{suffix}", edit.source),
         format!("{prefix}{}{suffix}", edit.target),
     ))
+}
+
+/// 这段文字里有没有句子边界（换行或句读标点）。
+///
+/// 只看中文标点和 ASCII 的 `?!;` —— **不看 ASCII 句点**，`Node.js`、`co.uk`、`v1.2`
+/// 都带点，把它们当句子边界会误杀一整类技术名词，而那正是这个功能最该学会的东西。
+fn crosses_a_sentence_boundary(s: &str) -> bool {
+    s.chars()
+        .any(|c| matches!(c, '\n' | '\r' | '。' | '？' | '！' | '；' | '，' | '、' | '：' | '?' | '!' | ';'))
 }
 
 /// 一侧纯 CJK、另一侧纯 ASCII 字母（顺序不限）。
@@ -353,6 +373,70 @@ mod tests {
         // 排版调整没有词汇价值。
         assert_eq!(edit("大 鱼", "大鱼"), None);
         assert_eq!(edit("一句话  另一句", "一句话 另一句"), None);
+    }
+
+    /// 真机抓到的假阳性：在聊天框里按回车发送，输入框清空并显示占位符。
+    ///
+    /// 形式上这是一次「把整句话替换成另一句」的编辑，`MAX_EDIT_CHARS`（64）拦不住
+    /// ——那句话才 25 个字。要是没这条，它会被建议成一条纠正规则，以后每次说那句话
+    /// 都被替换成占位符。
+    #[test]
+    fn submitting_a_chat_box_never_becomes_a_rule() {
+        let e = minimal_edit(
+            "还有哪些是我们明明有，但 status 看板没有的模型呢？",
+            "Type / for commands",
+        )
+        .expect("形式上确实是一处改动 —— 检测到它没问题");
+        assert_eq!(
+            classify_edit(&e),
+            None,
+            "整句被替换不该变成规则：以后每次说那句话都会被换成占位符"
+        );
+    }
+
+    #[test]
+    fn a_technical_name_with_a_dot_is_still_learned() {
+        // 句子边界守卫不看 ASCII 句点：Node.js / co.uk / v1.2 全带点，把它们当句子
+        // 边界会误杀一整类技术名词 —— 而那正是这个功能最该学会的东西。
+        let e = EditPair {
+            source: "诺德点 JS".to_string(),
+            target: "Node.js".to_string(),
+            before: "用".to_string(),
+            after: "写".to_string(),
+        };
+        assert_eq!(classify_edit(&e), Some(RuleTier::Confirm));
+    }
+
+    #[test]
+    fn a_sentence_ending_in_a_period_never_becomes_a_rule() {
+        // 第二条真机假阳性：用户清空了输入框里已经写完的一句话。
+        let e = EditPair {
+            source: "界面和界面之间的问题倒不大。".to_string(),
+            target: "改成别的".to_string(),
+            before: String::new(),
+            after: String::new(),
+        };
+        assert_eq!(classify_edit(&e), None);
+    }
+
+    #[test]
+    fn a_multiline_change_never_becomes_a_rule() {
+        // 词级字面替换装不下换行：要么永远匹配不上，要么一命中就改掉一整段。
+        let edit = EditPair {
+            source: "第一行\n第二行".to_string(),
+            target: "改过的内容".to_string(),
+            before: "上文".to_string(),
+            after: "下文".to_string(),
+        };
+        assert_eq!(classify_edit(&edit), None);
+
+        let edit = EditPair {
+            source: "一个词".to_string(),
+            target: "换成\n两行".to_string(),
+            before: "上文".to_string(),
+            after: "下文".to_string(),
+        };
+        assert_eq!(classify_edit(&edit), None);
     }
 
     #[test]

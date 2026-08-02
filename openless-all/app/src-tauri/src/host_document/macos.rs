@@ -39,6 +39,12 @@ use super::{
 /// 超时；而我们最终只要几百字。阈值取得比任何合理预算都大得多，正常文档仍走简单路径。
 const FULL_TEXT_MAX_UTF16: usize = 20_000;
 
+/// 等「我们自己的落字生效」最多等多久，超过就以当前文档状态为基线。
+///
+/// 目标 app 对插入的文本做过加工时（智能引号、自动补全、字形转换），我们永远等不到
+/// 那段文字原样出现。等不到就一直不锚定，等于功能静默失效 —— 宁可基线略有偏差。
+const BASELINE_ANCHOR_TIMEOUT: Duration = Duration::from_millis(1500);
+
 #[repr(C)]
 struct OpaqueAxRef(c_void);
 type AxUiElementRef = *mut OpaqueAxRef;
@@ -402,14 +408,28 @@ impl Drop for SendableElement {
 /// 观察线程持有的全部状态。回调通过 `refcon` 拿到它。
 struct WatchContext {
     element: SendableElement,
-    /// 落字刚结束时该控件的全文，作为比对基线。
-    baseline: String,
+    /// 比对基线：**我们插完字之后**该控件的全文。
+    ///
+    /// 不能在武装的那一刻就定死。`inserter.insert()` 返回只代表事件发出去了，目标 app
+    /// 把字放进文档要晚几十到几百毫秒；那一刻读到的是**插入之前**的文档。拿它当基线，
+    /// 第一次比对出来的差异就是我们自己插的那一整段，会被当成「纯插入」直接丢掉，
+    /// 用户真正改的那个词永远轮不到被看见。所以基线是「落字生效后才锚定」的。
+    baseline: std::cell::RefCell<String>,
+    /// 基线是否已经锚定到「落字生效后」的状态。
+    anchored: std::cell::Cell<bool>,
+    /// 武装时刻，用于给锚定兜底一个时限。
+    armed_at: Instant,
     /// 我们这次实际打出去的文本。只有落在这段文字里的改动才算「用户改了我们插的东西」。
     typed_text: String,
     on_edit: Box<dyn Fn(EditPair) + Send + Sync>,
     /// 已上报过的 `(source, target)`。用户改一个词要敲好几下，每一下都发一次通知，
     /// 不去重会把同一处改动刷成一串日志。
     reported: std::cell::RefCell<std::collections::HashSet<(String, String)>>,
+    /// 本次武装期间收到了几次 `AXValueChanged`。
+    ///
+    /// 解除时打出来。这一个数字就能把「观察器压根没工作」（0）和「通知收到了但被后面
+    /// 某一步过滤掉了」（>0）分开 —— 没有它，两种情况在日志里完全一样。
+    notifications: std::cell::Cell<u64>,
 }
 
 /// `AXValueChanged` 回调 shim：把 `refcon` 还原成 `WatchContext` 并比对文本。
@@ -427,13 +447,46 @@ unsafe extern "C" fn value_changed_shim(
         return;
     }
     let ctx = &*(refcon as *const WatchContext);
+    ctx.notifications.set(ctx.notifications.get() + 1);
+    // 每一条 early return 都要留痕。否则「回调没被调用」和「回调被调用但被过滤掉了」
+    // 在日志里长得一模一样 —— 第一次真机排查就卡在这个盲点上。
     let Some(current) = copy_string_attr(ctx.element.as_ref(), b"AXValue\0") else {
+        log::info!("[cursor-context] notified but AXValue is unreadable");
         return;
     };
-    let Some(edit) = minimal_edit(&ctx.baseline, &current) else {
+    // 第一阶段：等我们自己的落字生效，把基线锚在那之后。
+    if !ctx.anchored.get() {
+        // 正常情况：文档里出现了我们刚打出去的那段文字 —— 插入生效了。
+        // 兜底：目标 app 可能对文本做了加工（智能引号、自动补全），contains 永远匹配
+        // 不上。等到这个时限就直接以当前状态为准 —— 落字早已生效，再等只会一直瞎等。
+        let inserted = current.contains(&ctx.typed_text);
+        if inserted || ctx.armed_at.elapsed() >= BASELINE_ANCHOR_TIMEOUT {
+            log::info!(
+                "[cursor-context] baseline anchored at {} chars ({})",
+                current.chars().count(),
+                if inserted { "insertion landed" } else { "timeout" }
+            );
+            *ctx.baseline.borrow_mut() = current;
+            ctx.anchored.set(true);
+        }
+        return;
+    }
+
+    let baseline = ctx.baseline.borrow().clone();
+    let Some(edit) = minimal_edit(&baseline, &current) else {
+        log::info!(
+            "[cursor-context] notified but no minimal edit (baseline={} chars, current={} chars)",
+            baseline.chars().count(),
+            current.chars().count()
+        );
         return;
     };
     if !edit_is_within_typed_text(&edit, &ctx.typed_text) {
+        log::info!(
+            "[cursor-context] edit {:?}→{:?} is outside the text we inserted; ignored",
+            edit.source,
+            edit.target
+        );
         return;
     }
     let key = (edit.source.clone(), edit.target.clone());
@@ -489,10 +542,14 @@ pub(super) fn spawn_edit_watcher(
             run_edit_watch_loop(
                 WatchContext {
                     element,
-                    baseline,
+                    // 武装时若文档里已经有我们插的字，说明落字已经生效，基线直接可用。
+                    anchored: std::cell::Cell::new(baseline.contains(&typed_text)),
+                    baseline: std::cell::RefCell::new(baseline),
+                    armed_at: Instant::now(),
                     typed_text,
                     on_edit,
                     reported: std::cell::RefCell::new(std::collections::HashSet::new()),
+                    notifications: std::cell::Cell::new(0),
                 },
                 pid,
                 bundle_id,
@@ -520,25 +577,37 @@ fn run_edit_watch_loop(
             log::warn!("[cursor-context] AXObserverCreate failed: AXError={err}");
             return;
         }
-        let Some(notification) = cfstring_from_static(b"AXValueChanged\0") else {
-            CFRelease(observer as CFTypeRef);
-            return;
-        };
-
-        // SAFETY: &ctx 在本函数返回前一直有效，而反注册发生在返回之前，C 侧拿不到
-        // 悬垂指针。
-        let add_err = AXObserverAddNotification(
-            observer,
-            ctx.element.as_ref(),
-            notification,
-            &ctx as *const _ as *mut c_void,
-        );
-        if add_err != AX_ERROR_SUCCESS {
-            log::info!(
-                "[cursor-context] AXObserverAddNotification failed: AXError={add_err} \
-                 (this app likely does not emit AXValueChanged)"
+        // 注册两种通知，不是一种。
+        //
+        // `AXValueChanged` 是「文本内容变了」的标准信号，但不是每个文本控件都发它。
+        // `AXSelectedTextChanged` 是「选区/光标动了」—— 用户改一个词必然会移动光标，
+        // 所以它是同一件事的另一条证据路径。收到任意一个都去比对一次文本，代价只是
+        // 一次 AX 读；漏掉一种通知的代价是整个功能在那个 app 里静默失效。
+        let mut registered: Vec<(CFStringRef, &str)> = Vec::new();
+        for name in [&b"AXValueChanged\0"[..], &b"AXSelectedTextChanged\0"[..]] {
+            let Some(notification) = cfstring_from_static(name) else {
+                continue;
+            };
+            // SAFETY: &ctx 在本函数返回前一直有效，而反注册发生在返回之前，C 侧拿不到
+            // 悬垂指针。
+            let add_err = AXObserverAddNotification(
+                observer,
+                ctx.element.as_ref(),
+                notification,
+                &ctx as *const _ as *mut c_void,
             );
-            CFRelease(notification);
+            let label = std::str::from_utf8(&name[..name.len() - 1]).unwrap_or("?");
+            if add_err == AX_ERROR_SUCCESS {
+                registered.push((notification, label));
+            } else {
+                log::info!(
+                    "[cursor-context] {label} not registered: AXError={add_err} (app does not emit it)"
+                );
+                CFRelease(notification);
+            }
+        }
+        if registered.is_empty() {
+            log::info!("[cursor-context] no usable AX notification on this element; edit watch off");
             CFRelease(observer as CFTypeRef);
             return;
         }
@@ -551,7 +620,14 @@ fn run_edit_watch_loop(
         // SAFETY: kCFRunLoopDefaultMode 是 CoreFoundation 的 'static 常量字符串。
         let mode = kCFRunLoopDefaultMode;
         runloop.add_source(&source, mode);
-        log::info!("[cursor-context] edit watch armed (pid={pid} bundle={bundle_id:?})");
+        log::info!(
+            "[cursor-context] edit watch armed (pid={pid} bundle={bundle_id:?} notifications=[{}])",
+            registered
+                .iter()
+                .map(|(_, l)| *l)
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
 
         let started = Instant::now();
         let mut end_reason = "disarmed";
@@ -581,15 +657,23 @@ fn run_edit_watch_loop(
 
         // 无论怎么退出的，反注册这一段都必须跑到。
         runloop.remove_source(&source, mode);
-        let remove_err = AXObserverRemoveNotification(observer, ctx.element.as_ref(), notification);
-        if remove_err != AX_ERROR_SUCCESS {
-            log::warn!("[cursor-context] AXObserverRemoveNotification failed: AXError={remove_err}");
+        for (notification, label) in registered {
+            let remove_err =
+                AXObserverRemoveNotification(observer, ctx.element.as_ref(), notification);
+            if remove_err != AX_ERROR_SUCCESS {
+                // -25202 = notification not registered，通常意味着元素已经被目标 app
+                // 销毁重建（Electron 每次输入都这样）——那也解释了为什么通知收不到。
+                log::warn!(
+                    "[cursor-context] remove {label} failed: AXError={remove_err} (element gone?)"
+                );
+            }
+            CFRelease(notification);
         }
-        CFRelease(notification);
         CFRelease(observer as CFTypeRef);
         log::info!(
-            "[cursor-context] edit watch disarmed after {}ms ({end_reason})",
-            started.elapsed().as_millis()
+            "[cursor-context] edit watch disarmed after {}ms ({end_reason}, {} notifications)",
+            started.elapsed().as_millis(),
+            ctx.notifications.get()
         );
         // ctx 在此 drop —— 此时观察器已移除，C 侧不再回调，安全。
         drop(ctx);
