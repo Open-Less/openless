@@ -473,6 +473,7 @@ fn style_pack_archive_round_trip_preserves_valid_pack_and_png_icon() {
     pack.icon_path = Some(icon_path.to_string_lossy().into_owned());
     let source = test_store(&root.path().join("source"), vec![pack.clone()]);
     let zip_path = root.path().join("roundtrip.zip");
+    fs::write(&zip_path, b"stale pre-created archive contents").expect("pre-create zip target");
     source
         .export_to_zip(&pack.id, &zip_path)
         .expect("export valid pack");

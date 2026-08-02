@@ -116,6 +116,7 @@ export const zhCN = {
     loadFailed: '加载失败：{{err}}',
     noDescription: '（暂无描述）',
     installBtn: '安装到本地',
+    installingBtn: '安装中…',
     likeBtn: '点赞',
     installed: '已安装「{{name}}」到本地风格包',
     uploaded: '上传成功，等待审核',

@@ -238,6 +238,51 @@ fn marketplace_auth_error_for_status(status: reqwest::StatusCode) -> Option<&'st
     (status == reqwest::StatusCode::UNAUTHORIZED).then_some(MARKETPLACE_REAUTH_REQUIRED)
 }
 
+fn marketplace_log_value(value: &str) -> String {
+    const MAX_LOG_VALUE_LEN: usize = 1024;
+    let mut sanitized = value
+        .chars()
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect::<String>();
+    if sanitized.len() > MAX_LOG_VALUE_LEN {
+        let mut end = MAX_LOG_VALUE_LEN;
+        while !sanitized.is_char_boundary(end) {
+            end -= 1;
+        }
+        sanitized.truncate(end);
+        sanitized.push_str("…(truncated)");
+    }
+    sanitized
+}
+
+fn log_marketplace_install_failure(phase: &str, pack_id: &str, error: &str) {
+    log::error!(
+        "[marketplace-install] stage=failed phase={} pack_id={} error={}",
+        marketplace_log_value(phase),
+        marketplace_log_value(pack_id),
+        marketplace_log_value(error),
+    );
+}
+
+const MARKETPLACE_INSTALL_IN_PROGRESS: &str =
+    "marketplace_install_in_progress: another style pack installation is already running";
+
+static MARKETPLACE_INSTALL_LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> =
+    std::sync::OnceLock::new();
+
+fn try_acquire_marketplace_install_lock() -> Result<tokio::sync::MutexGuard<'static, ()>, String> {
+    MARKETPLACE_INSTALL_LOCK
+        .get_or_init(|| tokio::sync::Mutex::new(()))
+        .try_lock()
+        .map_err(|_| MARKETPLACE_INSTALL_IN_PROGRESS.to_string())
+}
+
 fn require_valid_marketplace_auth_with(
     status: reqwest::StatusCode,
     clear_credential: impl FnOnce() -> Result<(), String>,
@@ -386,53 +431,137 @@ pub async fn marketplace_install(
     coord: CoordinatorState<'_>,
     pack_id: String,
 ) -> Result<StylePack, String> {
+    log::info!(
+        "[marketplace-install] stage=start pack_id={}",
+        marketplace_log_value(&pack_id)
+    );
     // 安全校验：pack_id 来自远端 backend，可能含路径遍历 segment。
     // 用跟 read_audio_recording 同样的 UUID-v4 白名单挡住 ../ / 绝对路径等。
     // backend 当前用 Uuid::new_v4 生成所有 id，合法 id 必然匹配。
     if !is_valid_session_id(&pack_id) {
+        log_marketplace_install_failure("validate", &pack_id, "invalid pack id");
         return Err("invalid pack id".into());
     }
+    let _install_guard = match try_acquire_marketplace_install_lock() {
+        Ok(guard) => guard,
+        Err(error) => {
+            log_marketplace_install_failure("lock", &pack_id, &error);
+            return Err(error);
+        }
+    };
     let prefs = coord.prefs().get();
     let base = marketplace_url_from_prefs(&prefs);
 
     // 先拉 detail 拿 authorLogin —— 装好后本地写 originAuthorLogin，
     // 后续编辑+发布时 backend 据此判 supersede（原作者）vs derivative（他人 fork）。
-    let detail: serde_json::Value = execute_public_marketplace_with(
+    let detail_response = match execute_public_marketplace_with(
         &base,
         MarketplacePublicEndpoint::Detail {
             pack_id: pack_id.clone(),
         },
     )
-    .await?
-    .json()
     .await
-    .map_err(|e| format!("parse detail failed: {e}"))?;
+    {
+        Ok(response) => response,
+        Err(error) => {
+            log_marketplace_install_failure("detail", &pack_id, &error);
+            return Err(error);
+        }
+    };
+    let detail: serde_json::Value = match detail_response.json().await {
+        Ok(detail) => detail,
+        Err(error) => {
+            let error = format!("parse detail failed: {error}");
+            log_marketplace_install_failure("detail", &pack_id, &error);
+            return Err(error);
+        }
+    };
+    log::info!("[marketplace-install] stage=detail-ok pack_id={pack_id}");
     let origin_author_login = detail
         .get("authorLogin")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
-    let response = execute_public_marketplace_with(
+    let response = match execute_public_marketplace_with(
         &base,
         MarketplacePublicEndpoint::Download {
             pack_id: pack_id.clone(),
         },
     )
-    .await?;
-    let bytes = read_marketplace_archive_response(response).await?;
+    .await
+    {
+        Ok(response) => response,
+        Err(error) => {
+            log_marketplace_install_failure("download", &pack_id, &error);
+            return Err(error);
+        }
+    };
+    let bytes = match read_marketplace_archive_response(response).await {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            log_marketplace_install_failure("download", &pack_id, &error);
+            return Err(error);
+        }
+    };
+    log::info!(
+        "[marketplace-install] stage=download-ok pack_id={pack_id} bytes={}",
+        bytes.len()
+    );
 
     // 每次安装使用 create_new 的唯一临时路径；Drop 覆盖导入成功和所有错误分支。
-    let tmp = MarketplaceTempArchive::create(&pack_id, &bytes)?;
-    let imported = coord
-        .style_packs()
-        .import_from_zip(tmp.path())
-        .map_err(|e| e.to_string())?;
+    let temp_root = match marketplace_temp_root() {
+        Ok(root) => root,
+        Err(error) => {
+            log_marketplace_install_failure("temp-root", &pack_id, &error);
+            return Err(error);
+        }
+    };
+    log::info!(
+        "[marketplace-install] stage=temp-root-ok pack_id={pack_id} path={}",
+        marketplace_log_value(&temp_root.display().to_string())
+    );
+    let tmp = match MarketplaceTempArchive::create_empty_in(&temp_root, &pack_id) {
+        Ok(tmp) => tmp,
+        Err(error) => {
+            log_marketplace_install_failure("temp-create", &pack_id, &error);
+            return Err(error);
+        }
+    };
+    log::info!("[marketplace-install] stage=temp-create-ok pack_id={pack_id}");
+    if let Err(error) = tmp.write_bytes(&bytes) {
+        log_marketplace_install_failure("temp-write", &pack_id, &error);
+        return Err(error);
+    }
+    log::info!("[marketplace-install] stage=temp-write-ok pack_id={pack_id}");
+    let imported = match coord.style_packs().import_from_zip(tmp.path()) {
+        Ok(imported) => imported,
+        Err(error) => {
+            let error = error.to_string();
+            log_marketplace_install_failure("import", &pack_id, &error);
+            return Err(error);
+        }
+    };
+    log::info!(
+        "[marketplace-install] stage=import-ok pack_id={pack_id} local_pack_id={}",
+        marketplace_log_value(&imported.id)
+    );
 
     // 绑定 origin —— 后续编辑+发布走 derivative / supersede 分支。
-    coord
+    match coord
         .style_packs()
-        .set_origin(&imported.id, Some(pack_id), origin_author_login)
-        .map_err(|e| format!("set origin failed: {e}"))
+        .set_origin(&imported.id, Some(pack_id.clone()), origin_author_login)
+    {
+        Ok(pack) => {
+            log::info!("[marketplace-install] stage=origin-ok pack_id={pack_id}");
+            log::info!("[marketplace-install] stage=done pack_id={pack_id}");
+            Ok(pack)
+        }
+        Err(error) => {
+            let error = format!("set origin failed: {error}");
+            log_marketplace_install_failure("origin", &pack_id, &error);
+            Err(error)
+        }
+    }
 }
 
 fn validate_marketplace_archive_content_length(content_length: Option<u64>) -> Result<(), String> {
@@ -483,31 +612,67 @@ struct MarketplaceTempArchive {
 }
 
 impl MarketplaceTempArchive {
-    fn create(pack_id: &str, bytes: &[u8]) -> Result<Self, String> {
-        let path = std::env::temp_dir().join(format!(
+    fn create_empty_in(root: &std::path::Path, pack_id: &str) -> Result<Self, String> {
+        std::fs::create_dir_all(root).map_err(|error| {
+            format!("create marketplace temporary archive directory failed: {error}")
+        })?;
+        let path = root.join(format!(
             "openless-marketplace-{pack_id}-{}.zip",
             uuid::Uuid::new_v4().simple()
         ));
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .map_err(|error| format!("create marketplace temporary archive failed: {error}"))?;
+        Ok(Self { path })
+    }
+
+    fn create_empty(pack_id: &str) -> Result<Self, String> {
+        let root = marketplace_temp_root()?;
+        Self::create_empty_in(&root, pack_id)
+    }
+
+    fn write_bytes(&self, bytes: &[u8]) -> Result<(), String> {
+        self.write_bytes_with(bytes, |file, bytes| file.write_all(bytes))
+    }
+
+    fn write_bytes_with(
+        &self,
+        bytes: &[u8],
+        write: impl FnOnce(&mut std::fs::File, &[u8]) -> std::io::Result<()>,
+    ) -> Result<(), String> {
         let write_result = (|| -> std::io::Result<()> {
             let mut file = std::fs::OpenOptions::new()
                 .write(true)
-                .create_new(true)
-                .open(&path)?;
-            file.write_all(bytes)?;
+                .truncate(true)
+                .open(&self.path)?;
+            write(&mut file, bytes)?;
             file.sync_all()
         })();
-        if let Err(error) = write_result {
-            let _ = std::fs::remove_file(&path);
-            return Err(format!(
-                "write marketplace temporary archive failed: {error}"
-            ));
-        }
-        Ok(Self { path })
+        write_result.map_err(|error| format!("write marketplace temporary archive failed: {error}"))
     }
 
     fn path(&self) -> &std::path::Path {
         &self.path
     }
+}
+
+fn marketplace_temp_root() -> Result<std::path::PathBuf, String> {
+    #[cfg(target_os = "android")]
+    let root = {
+        let cache_dir = crate::android::jni::android::app_cache_dir()?;
+        marketplace_temp_root_from_cache_dir(std::path::Path::new(&cache_dir))
+    };
+    #[cfg(not(target_os = "android"))]
+    let root = std::env::temp_dir();
+    std::fs::create_dir_all(&root)
+        .map_err(|error| format!("marketplace temp root create failed: {error}"))?;
+    Ok(root)
+}
+
+fn marketplace_temp_root_from_cache_dir(cache_dir: &std::path::Path) -> std::path::PathBuf {
+    cache_dir.join("openless-marketplace")
 }
 
 impl Drop for MarketplaceTempArchive {
@@ -540,13 +705,12 @@ pub async fn marketplace_upload(
         .or_else(|| local_pack.origin_pack_id.clone());
 
     // 先 export 本地 pack → 临时 ZIP
-    let tmp = std::env::temp_dir().join(format!("openless-marketplace-upload-{pack_id}.zip"));
+    let tmp = MarketplaceTempArchive::create_empty(&pack_id)?;
     coord
         .style_packs()
-        .export_to_zip(&pack_id, &tmp)
+        .export_to_zip(&pack_id, tmp.path())
         .map_err(|e| format!("export local pack failed: {e}"))?;
-    let bytes = std::fs::read(&tmp).map_err(|e| format!("read exported zip: {e}"))?;
-    let _ = std::fs::remove_file(&tmp);
+    let bytes = std::fs::read(tmp.path()).map_err(|e| format!("read exported zip: {e}"))?;
 
     let resp = execute_authenticated_marketplace(
         &base,
@@ -605,8 +769,22 @@ pub async fn marketplace_like(
 
 #[cfg(test)]
 mod archive_download_tests {
-    use super::{append_marketplace_archive_chunk, validate_marketplace_archive_content_length};
+    use super::{
+        append_marketplace_archive_chunk, marketplace_log_value,
+        marketplace_temp_root_from_cache_dir, try_acquire_marketplace_install_lock,
+        validate_marketplace_archive_content_length, MarketplaceTempArchive,
+        MARKETPLACE_INSTALL_IN_PROGRESS,
+    };
     use crate::persistence::STYLE_PACK_ARCHIVE_MAX_COMPRESSED_BYTES;
+    use std::io::Write;
+    use std::path::PathBuf;
+
+    fn test_root(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "openless-marketplace-test-{name}-{}",
+            uuid::Uuid::new_v4().simple()
+        ))
+    }
 
     #[test]
     fn marketplace_archive_rejects_oversized_declared_content_length() {
@@ -634,6 +812,91 @@ mod archive_download_tests {
         append_marketplace_archive_chunk(&mut body, b"x").expect("exact limit is valid");
 
         assert_eq!(body.len(), STYLE_PACK_ARCHIVE_MAX_COMPRESSED_BYTES);
+    }
+
+    #[test]
+    fn temporary_archives_are_unique_and_drop_cleans_them() {
+        let root = test_root("unique");
+        let first = MarketplaceTempArchive::create_empty_in(&root, "pack").unwrap();
+        first.write_bytes(b"first").unwrap();
+        let second = MarketplaceTempArchive::create_empty_in(&root, "pack").unwrap();
+        second.write_bytes(b"second").unwrap();
+        assert_ne!(first.path(), second.path());
+        assert_eq!(std::fs::read(first.path()).unwrap(), b"first");
+        assert_eq!(std::fs::read(second.path()).unwrap(), b"second");
+
+        let first_path = first.path().to_path_buf();
+        let second_path = second.path().to_path_buf();
+        drop(first);
+        drop(second);
+        assert!(!first_path.exists());
+        assert!(!second_path.exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn empty_archive_can_be_overwritten_for_upload() {
+        let root = test_root("upload");
+        let archive = MarketplaceTempArchive::create_empty_in(&root, "pack").unwrap();
+        archive.write_bytes(b"exported zip bytes").unwrap();
+        assert_eq!(
+            std::fs::read(archive.path()).unwrap(),
+            b"exported zip bytes"
+        );
+        drop(archive);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn failed_write_leaves_no_archive_file() {
+        let root = test_root("write-failure");
+        let archive = MarketplaceTempArchive::create_empty_in(&root, "pack").unwrap();
+        let path = archive.path().to_path_buf();
+        let error = archive
+            .write_bytes_with(b"must not persist", |file, bytes| {
+                file.write_all(&bytes[..4])?;
+                Err(std::io::Error::other("injected write failure"))
+            })
+            .expect_err("injected write failure must fail");
+        assert!(error.contains("injected write failure"));
+        drop(archive);
+        assert!(!path.exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn android_cache_root_uses_private_cache_subdirectory() {
+        let root = marketplace_temp_root_from_cache_dir(std::path::Path::new(
+            "/data/user/0/com.openless.app/cache",
+        ));
+        assert_eq!(
+            root,
+            PathBuf::from("/data/user/0/com.openless.app/cache/openless-marketplace")
+        );
+        assert!(!root.starts_with("/data/local/tmp"));
+    }
+
+    #[test]
+    fn marketplace_log_value_removes_controls_and_preserves_utf8_boundaries() {
+        let sanitized = marketplace_log_value("first\nsecond\r\tthird");
+        assert_eq!(sanitized, "first second  third");
+
+        let truncated = marketplace_log_value(&"界".repeat(600));
+        assert!(truncated.ends_with("…(truncated)"));
+        assert!(truncated.is_char_boundary(truncated.len()));
+        assert!(!truncated.chars().any(char::is_control));
+    }
+
+    #[test]
+    fn marketplace_install_lock_rejects_concurrent_install() {
+        let first = try_acquire_marketplace_install_lock().expect("first install lock");
+        let error = match try_acquire_marketplace_install_lock() {
+            Ok(_) => panic!("second install must be rejected while first is active"),
+            Err(error) => error,
+        };
+        assert_eq!(error, MARKETPLACE_INSTALL_IN_PROGRESS);
+        drop(first);
+        assert!(try_acquire_marketplace_install_lock().is_ok());
     }
 }
 

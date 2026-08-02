@@ -118,6 +118,7 @@ export const zhTW: typeof zhCN = {
     loadFailed: '載入失敗：{{err}}',
     noDescription: '（暫無描述）',
     installBtn: '安裝到本機',
+    installingBtn: '安裝中…',
     likeBtn: '點讚',
     installed: '已安裝「{{name}}」到本機風格包',
     uploaded: '上傳成功，等待審核',

@@ -136,22 +136,8 @@ mod android_impl {
     }
 
     fn updates_cache_dir() -> Result<PathBuf, String> {
-        crate::android::jni::android::with_android_env(|env, context| {
-            let cache = env
-                .call_method(context, "getCacheDir", "()Ljava/io/File;", &[])
-                .and_then(|value| value.l())
-                .map_err(|e| format!("getCacheDir: {e}"))?;
-            let path = env
-                .call_method(&cache, "getAbsolutePath", "()Ljava/lang/String;", &[])
-                .and_then(|value| value.l())
-                .map_err(|e| format!("cache path: {e}"))?;
-            let text = env
-                .get_string(&jni::objects::JString::from(path))
-                .map_err(|e| format!("read cache path: {e}"))?
-                .to_string_lossy()
-                .into_owned();
-            Ok(PathBuf::from(text).join("updates"))
-        })
+        crate::android::jni::android::app_cache_dir()
+            .map(|path| PathBuf::from(path).join("updates"))
     }
 
     pub async fn download_and_install(

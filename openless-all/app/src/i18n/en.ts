@@ -118,6 +118,7 @@ export const en: typeof zhCN = {
     loadFailed: 'Load failed: {{err}}',
     noDescription: '(no description)',
     installBtn: 'Install',
+    installingBtn: 'Installing…',
     likeBtn: 'Like',
     installed: 'Installed "{{name}}" locally',
     uploaded: 'Uploaded — waiting for review',

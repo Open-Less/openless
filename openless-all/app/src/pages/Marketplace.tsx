@@ -25,6 +25,7 @@ import {
   likeMarketplacePack,
   listMarketplace,
   listStylePacks,
+  logClientError,
   marketplaceDelete,
   marketplaceAuthStatus,
   marketplaceMyLikes,
@@ -37,6 +38,13 @@ import {
 } from '../lib/ipc';
 import { useHotkeySettings } from '../state/HotkeySettingsContext';
 import type { MarketplaceDetail, MarketplaceListItem, MarketplaceMyPackItem, StylePack } from '../lib/types';
+import {
+  canStartMarketplaceInstall,
+  isMarketplaceInstallActive,
+  isMarketplaceInstallErrorForPack,
+  shouldCloseMarketplaceDetail,
+  type MarketplaceInstallError,
+} from '../lib/marketplaceInstall';
 import { Btn, Card, PageHeader, Pill } from './_atoms';
 
 type SortMode = 'popular' | 'new' | 'liked';
@@ -56,6 +64,8 @@ export function Marketplace() {
   const [detail, setDetail] = useState<MarketplaceDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [actionMsg, setActionMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+  const [installingPackId, setInstallingPackId] = useState<string | null>(null);
+  const [installError, setInstallError] = useState<MarketplaceInstallError | null>(null);
 
   const [showUpload, setShowUpload] = useState(false);
   const [uploadOriginPackId, setUploadOriginPackId] = useState<string | null>(null);
@@ -225,6 +235,7 @@ export function Marketplace() {
     setSelectedId(id);
     setDetail(null);
     setDetailLoading(true);
+    setInstallError(previous => previous?.packId === id ? previous : null);
     // 差量缓存命中：list 已经带 version+updatedAt，按三元组匹配本机 detail。
     // 命中 = 直接渲染、跳过网络；未命中 = 走 fetchMarketplaceDetail。
     const listItem = items.find(it => it.id === id);
@@ -259,13 +270,25 @@ export function Marketplace() {
   };
 
   const onInstall = async () => {
-    if (!detail) return;
+    if (!detail || !canStartMarketplaceInstall(installingPackId)) return;
+    const packId = detail.id;
+    const packName = detail.name;
+    setInstallingPackId(packId);
+    setInstallError(null);
+    let clientFailureLog: string | null = null;
     try {
-      await installMarketplacePack(detail.id);
-      setActionMsg({ kind: 'ok', text: t('marketplace.installed', { name: detail.name }) });
-      setSelectedId(null);
+      await installMarketplacePack(packId);
+      setActionMsg({ kind: 'ok', text: t('marketplace.installed', { name: packName }) });
+      setSelectedId(current => shouldCloseMarketplaceDetail(current, packId) ? null : current);
     } catch (error) {
-      setActionMsg({ kind: 'err', text: t('marketplace.errors.install', { err: errorMessage(error) }) });
+      const errorText = errorMessage(error);
+      const message = t('marketplace.errors.install', { err: errorText });
+      setInstallError({ packId, message });
+      setActionMsg({ kind: 'err', text: message });
+      clientFailureLog = `[marketplace-install] stage=ipc-failed pack_id=${packId} error=${errorText}`;
+    } finally {
+      setInstallingPackId(current => current === packId ? null : current);
+      if (clientFailureLog) void logClientError(clientFailureLog);
     }
   };
 
@@ -658,7 +681,7 @@ export function Marketplace() {
 
       {/* 详情弹窗 */}
       {selectedId && (
-        <Modal onClose={() => setSelectedId(null)}>
+        <Modal onClose={() => { setSelectedId(null); setInstallError(null); }}>
           {detailLoading || !detail ? (
             <div
               style={{
@@ -718,6 +741,11 @@ export function Marketplace() {
               >
                 {detail.prompt}
               </div>
+              {isMarketplaceInstallErrorForPack(installError, detail.id) && (
+                <div role="alert" style={{ color: '#ef4444', fontSize: 12, whiteSpace: 'normal', overflowWrap: 'anywhere', marginBottom: 10 }}>
+                  {installError.message}
+                </div>
+              )}
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
                 <div>
                   {marketplaceSignedIn && detail.authorLogin === currentLogin && currentLogin.length > 0 && (
@@ -758,11 +786,18 @@ export function Marketplace() {
                     </span>
                     {detail.likeCount}
                   </motion.button>
-                  <Btn variant="ghost" size="sm" onClick={() => setSelectedId(null)}>
-                    {t('common.cancel')}
+                  <Btn variant="ghost" size="sm" onClick={() => { setSelectedId(null); setInstallError(null); }}>
+                    {installingPackId !== null ? t('common.close') : t('common.cancel')}
                   </Btn>
-                  <Btn variant="blue" size="sm" onClick={() => void onInstall()}>
-                    {t('marketplace.installBtn')}
+                  <Btn
+                    variant="blue"
+                    size="sm"
+                    disabled={!canStartMarketplaceInstall(installingPackId)}
+                    onClick={() => void onInstall()}
+                  >
+                    {isMarketplaceInstallActive(installingPackId, detail.id)
+                      ? t('marketplace.installingBtn')
+                      : t('marketplace.installBtn')}
                   </Btn>
                 </div>
               </div>

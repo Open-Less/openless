@@ -120,6 +120,7 @@ export const ko: typeof zhCN = {
     loadFailed: '불러오기 실패: {{err}}',
     noDescription: '(설명 없음)',
     installBtn: '설치',
+    installingBtn: '설치 중…',
     likeBtn: '좋아요',
     installed: '"{{name}}"을(를) 로컬에 설치했습니다',
     uploaded: '업로드 완료, 심사 대기 중',

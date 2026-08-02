@@ -160,6 +160,35 @@ pub mod android {
         })
     }
 
+    /// Returns the app-private cache directory supplied by Android's Context.
+    pub(crate) fn app_cache_dir() -> Result<String, String> {
+        with_android_env(|env, context| {
+            let directory = env
+                .call_method(context, "getCacheDir", "()Ljava/io/File;", &[])
+                .and_then(|value| value.l())
+                .map_err(|error| format!("Context.getCacheDir: {error}"))?;
+            if directory.is_null() {
+                return Err("Context.getCacheDir returned null".to_string());
+            }
+            let path = env
+                .call_method(&directory, "getAbsolutePath", "()Ljava/lang/String;", &[])
+                .and_then(|value| value.l())
+                .map_err(|error| format!("File.getAbsolutePath: {error}"))?;
+            if path.is_null() {
+                return Err("Context cache directory has no path".to_string());
+            }
+            let path = env
+                .get_string(&JString::from(path))
+                .map_err(|error| format!("read Context cache directory: {error}"))?
+                .to_string_lossy()
+                .into_owned();
+            if path.is_empty() {
+                return Err("Context cache directory is empty".to_string());
+            }
+            Ok(path)
+        })
+    }
+
     const CREDENTIAL_VAULT_CLASS: &str = "com.openless.app.OpenLessCredentialVault";
     const KEYSTORE_KEY_MISSING: &str = "openless-keystore-key-missing";
     const KEYSTORE_AUTHENTICATION_FAILED: &str = "openless-keystore-authentication-failed";

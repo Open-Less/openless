@@ -120,6 +120,7 @@ export const ja: typeof zhCN = {
     loadFailed: '読み込み失敗：{{err}}',
     noDescription: '（説明なし）',
     installBtn: 'インストール',
+    installingBtn: 'インストール中…',
     likeBtn: 'いいね',
     installed: '「{{name}}」をローカルにインストールしました',
     uploaded: 'アップロード完了、審査中',
