@@ -658,6 +658,9 @@ fn emit_capsule_with_context_locked(
     let app_for_main = app.clone();
     // 入场帧要在 window.show 之后、闭包内部把 state 回发给前端，需要 payload 的独立副本
     // move 进闭包；非入场帧走闭包外的即时同步 emit（下方），这里就是 None。
+    // 注意：入场帧的 payload 在闭包同步 capsule_style 原子之前克隆，最多带一帧旧样式
+    //（设置里刚切换后的首次录音，第 2 帧 ~33ms 即纠正）。这是刻意取舍——不要在音频
+    // 线程改回直接读 prefs。前端第 1 帧处于 capsule-in 动画期间（380ms），无感知。
     let payload_for_deferred_emit = if defer_capsule_emit {
         Some(payload.clone())
     } else {
