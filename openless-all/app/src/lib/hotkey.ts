@@ -26,6 +26,12 @@ export function defaultLessComputerShortcut(): ShortcutBinding {
   return { primary: 'LeftControl', modifiers: [] };
 }
 
+// 默认录音快捷键：右侧 Control。与 mock-data 默认值 / Rust legacy trigger
+// （shortcut_binding.rs 的 rightControl 映射）保持一致。
+export function defaultDictationHotkey(): ShortcutBinding {
+  return { primary: 'RightControl', modifiers: [] };
+}
+
 export function getHotkeyTriggerLabel(trigger: HotkeyTrigger | null | undefined): string {
   if (!trigger) return i18n.t('hotkey.fallback');
   if (trigger === 'custom') return i18n.t('hotkey.triggers.custom');

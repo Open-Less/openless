@@ -1,41 +1,76 @@
 import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react';
+import { AnimatePresence, motion } from 'framer-motion';
+import { ChevronDown } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { formatComboParts, getHotkeyTriggerLabel, modifiersFromPressedCodes, shortcutFromLegacyTrigger } from '../lib/hotkey';
+import { formatComboParts, modifiersFromPressedCodes } from '../lib/hotkey';
 import { KbdGroup } from './Kbd';
 import { setShortcutRecordingActive, validateShortcutBinding } from '../lib/ipc';
-import type { HotkeyTrigger, ShortcutBinding } from '../lib/types';
+import type { ShortcutBinding } from '../lib/types';
+
+/** 主行与「正在录入」面板切换时的水平滑动距离（px）。 */
+const SLIDE_DISTANCE = 48;
+/** 下拉菜单展开后的固定高度（px）：菜单按钮行高恒定，用固定值动画避免每次测量。 */
+const MENU_HEIGHT = 34;
+/** 滑动切换用 spring（与 Style.tsx 编辑抽屉同款）。只动 transform/opacity，不驱动布局，避免抽搐。 */
+const slideSpring = { type: 'spring' as const, damping: 26, stiffness: 280 };
+/** 下拉菜单展开/收起缓动，与 --ol-motion-soft 一致。 */
+const menuEase = [0.22, 0.8, 0.22, 1] as const;
 
 export function ShortcutRecorder({
   value,
   onSave,
-  alignRecordButton = false,
   disabled = false,
   onDisable,
   disableLabel,
+  disableDisabled = false,
+  disableHint,
+  onReset,
+  resetLabel,
   comboOnly = false,
-  modifierPresets = [],
   sideSpecificModifiers = false,
 }: {
-  value: ShortcutBinding;
+  value: ShortcutBinding | null;
   onSave: (binding: ShortcutBinding) => Promise<void>;
-  alignRecordButton?: boolean;
   disabled?: boolean;
-  /** 提供则在「录制」按钮左侧并排渲染一个「停用」旋钮。 */
+  /** 提供则下拉菜单里的「停用」可点（问答/切风格等可停用快捷键）。 */
   onDisable?: () => void | Promise<void>;
   disableLabel?: string;
+  /** 置灰「停用」（核心快捷键不可停用），配合 disableHint 展示原因。 */
+  disableDisabled?: boolean;
+  disableHint?: string;
+  /** 提供则下拉菜单里渲染「重置」——恢复该快捷键的默认绑定。 */
+  onReset?: () => void | Promise<void>;
+  resetLabel?: string;
   /** 仅允许组合键（修饰键+主键 / 功能键）；拒绝单修饰键，因为全局热键无法注册它。 */
   comboOnly?: boolean;
-  /** 平台可用的单修饰键快捷选项（如 Fn，WebView 无法录制）。 */
-  modifierPresets?: HotkeyTrigger[];
   /** 听写 start/stop 专用：录制 cmd-left / ctrl-right 等侧向修饰键。 */
   sideSpecificModifiers?: boolean;
 }) {
   const { t } = useTranslation();
   const [recording, setRecording] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const pendingModifier = useRef<ShortcutBinding | null>(null);
   const pendingTimer = useRef<number | null>(null);
   const pressedCodes = useRef<Set<string>>(new Set());
+  const rootRef = useRef<HTMLDivElement | null>(null);
+
+  // 菜单打开时：Esc 或点击菜单外部即收起，避免菜单"赖着不关"。
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onKeyDown = (e: globalThis.KeyboardEvent) => {
+      if (e.key === 'Escape') setMenuOpen(false);
+    };
+    const onPointerDown = (e: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setMenuOpen(false);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('mousedown', onPointerDown);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('mousedown', onPointerDown);
+    };
+  }, [menuOpen]);
 
   const clearPressedCodes = () => {
     pressedCodes.current.clear();
@@ -82,6 +117,15 @@ export function ShortcutRecorder({
     } catch {
       setError(t('settings.recording.comboConflict'));
     }
+  };
+
+  /** 开始录入：同时收起菜单——「录制快捷键」按下后，重置/停用两个按钮随之消失。 */
+  const startRecording = () => {
+    if (disabled || recording) return;
+    setMenuOpen(false);
+    setError(null);
+    resetRecordingState();
+    setRecording(true);
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
@@ -132,123 +176,204 @@ export function ShortcutRecorder({
     }
   };
 
+  const doReset = () => {
+    setMenuOpen(false);
+    setError(null);
+    if (onReset) void onReset();
+  };
+
+  const doDisable = () => {
+    setMenuOpen(false);
+    setError(null);
+    if (onDisable) void onDisable();
+  };
+
+  // 「停用」可点：有 onDisable 且未被置灰（录音快捷键置灰，核心热键不可停用）。
+  const canDisable = Boolean(onDisable) && !disableDisabled;
+
   const rootStyle: CSSProperties = {
     display: 'flex',
     flexDirection: 'column',
     gap: 6,
-    width: alignRecordButton ? '100%' : undefined,
+    width: '100%',
   };
   const recorderRowStyle: CSSProperties = {
     display: 'flex',
     alignItems: 'center',
     gap: 8,
     flexWrap: 'wrap',
-    width: alignRecordButton ? '100%' : undefined,
+    width: '100%',
   };
-  const recordButtonStyle: CSSProperties = {
-    fontSize: 12,
-    padding: '5px 14px',
-    background: recording ? 'rgba(37,99,235,0.12)' : 'var(--ol-blue)',
-    color: recording ? 'var(--ol-blue)' : '#fff',
+  const chevronButtonStyle: CSSProperties = {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 26,
+    height: 26,
+    padding: 0,
     border: 0,
     borderRadius: 6,
-    fontFamily: 'inherit',
-    fontWeight: 500,
-    cursor: recording || disabled ? 'default' : 'pointer',
-    opacity: disabled ? 0.68 : 1,
-  };
-  const disableKnobStyle: CSSProperties = {
-    fontSize: 12,
-    padding: '5px 12px',
     background: 'transparent',
     color: 'var(--ol-ink-4)',
-    border: '0.5px solid var(--ol-line-strong)',
-    borderRadius: 6,
     fontFamily: 'inherit',
-    fontWeight: 500,
-    cursor: recording ? 'default' : 'pointer',
+    cursor: 'pointer',
+    transition: 'background 0.16s var(--ol-motion-quick), color 0.16s var(--ol-motion-quick)',
   };
   const controlsGroupStyle: CSSProperties = {
     display: 'inline-flex',
     alignItems: 'center',
-    gap: 8,
-    marginLeft: alignRecordButton ? 'auto' : undefined,
+    gap: 4,
+    marginLeft: 'auto',
   };
-  const presetChipStyle: CSSProperties = {
-    fontSize: 11,
-    padding: '4px 10px',
-    borderRadius: 999,
+  const menuButtonStyle: CSSProperties = {
+    fontSize: 12,
+    padding: '5px 12px',
     border: '0.5px solid var(--ol-line-strong)',
+    borderRadius: 6,
     background: 'transparent',
-    color: 'var(--ol-ink-3)',
+    color: 'var(--ol-ink-2)',
     fontFamily: 'inherit',
-    cursor: disabled || recording ? 'default' : 'pointer',
+    fontWeight: 500,
+    cursor: 'pointer',
+    transition: 'background 0.16s var(--ol-motion-quick), color 0.16s var(--ol-motion-quick)',
   };
-
-  const presetTriggers = modifierPresets.filter(t => t !== 'custom' && t !== 'mediaPlayPause');
+  const menuPrimaryStyle: CSSProperties = {
+    ...menuButtonStyle,
+    background: 'rgba(37,99,235,0.08)',
+    borderColor: 'rgba(37,99,235,0.25)',
+    color: 'var(--ol-blue)',
+  };
+  const disabledMenuButtonStyle: CSSProperties = {
+    ...menuButtonStyle,
+    opacity: 0.45,
+    cursor: 'default',
+  };
+  const menuRowStyle: CSSProperties = {
+    display: 'flex',
+    gap: 8,
+    paddingTop: 2,
+  };
 
   return (
-    <div style={rootStyle}>
-      <div style={recorderRowStyle}>
-        {/* 键帽逐键展示（Kbd 组件，用户拍板的快捷键展示标准），替代整块灰底文本。 */}
-        <KbdGroup keys={formatComboParts(value)} />
-        <div style={controlsGroupStyle}>
-          {onDisable && (
-            <button
-              onClick={() => {
-                if (recording) return;
-                void onDisable();
-              }}
-              disabled={recording}
-              style={disableKnobStyle}
-            >
-              {disableLabel ?? t('settings.shortcuts.disable', 'Disable')}
-            </button>
-          )}
-          <button
-            onClick={() => {
-              if (disabled) return;
-              setRecording(true);
-              setError(null);
-              resetRecordingState();
+    <div style={rootStyle} ref={rootRef}>
+      {/* mode="wait"：主行与「正在录入」面板不重叠渲染；切换只做 transform/opacity 动画，
+          不驱动布局，面板运动过程不抽搐。所有滑入/滑出统一向右。 */}
+      <AnimatePresence mode="wait" initial={false}>
+        {recording ? (
+          <motion.div
+            key="recording"
+            initial={{ x: SLIDE_DISTANCE, opacity: 0 }}
+            animate={{ x: 0, opacity: 1 }}
+            exit={{ x: SLIDE_DISTANCE, opacity: 0 }}
+            transition={slideSpring}
+            tabIndex={-1}
+            onKeyDown={onKeyDown}
+            onKeyUp={onKeyUp}
+            ref={el => el?.focus()}
+            style={{
+              minHeight: 36,
+              display: 'flex',
+              flexDirection: 'column',
+              justifyContent: 'center',
+              padding: '8px 12px',
+              borderRadius: 8,
+              background: 'rgba(37,99,235,0.06)',
+              border: '1px solid rgba(37,99,235,0.2)',
+              fontSize: 12,
+              color: 'var(--ol-blue)',
+              outline: 'none',
             }}
-            disabled={recording || disabled}
-            style={recordButtonStyle}
           >
-            {recording ? t('settings.recording.comboRecordHint') : t('settings.recording.comboRecordBtn')}
-          </button>
-        </div>
-      </div>
-      {!comboOnly && presetTriggers.length > 0 && (
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-          <span style={{ fontSize: 11, color: 'var(--ol-ink-4)', alignSelf: 'center' }}>
-            {t('settings.recording.modifierPresetsLabel', '常用单键：')}
-          </span>
-          {presetTriggers.map(trigger => (
-            <button
-              key={trigger}
-              type="button"
-              disabled={disabled || recording}
-              style={presetChipStyle}
-              onClick={() => void finish(shortcutFromLegacyTrigger(trigger))}
-            >
-              {getHotkeyTriggerLabel(trigger)}
-            </button>
-          ))}
-        </div>
-      )}
-      {recording && (
-        <div
-          tabIndex={-1}
-          onKeyDown={onKeyDown}
-          onKeyUp={onKeyUp}
-          style={{ padding: '8px 12px', borderRadius: 8, background: 'rgba(37,99,235,0.06)', border: '1px solid rgba(37,99,235,0.2)', fontSize: 12, color: 'var(--ol-blue)', outline: 'none' }}
-          ref={el => el?.focus()}
-        >
-          {t('settings.recording.comboRecordHint')}
-          <div style={{ fontSize: 11, color: 'var(--ol-ink-4)', marginTop: 4 }}>Esc 取消</div>
-        </div>
-      )}
+            {t('settings.recording.comboRecordHint')}
+            <div style={{ fontSize: 11, color: 'var(--ol-ink-4)', marginTop: 4 }}>Esc 取消</div>
+          </motion.div>
+        ) : (
+          <motion.div
+            key="idle"
+            initial={{ x: SLIDE_DISTANCE, opacity: 0 }}
+            animate={{ x: 0, opacity: 1 }}
+            exit={{ x: SLIDE_DISTANCE, opacity: 0 }}
+            transition={slideSpring}
+          >
+            <div style={recorderRowStyle}>
+              {/* 键帽逐键展示（Kbd 组件，用户拍板的快捷键展示标准），替代整块灰底文本。
+                  录入入口在展开菜单里（录制快捷键）；主行只留箭头，统一靠最右。 */}
+              {value && <KbdGroup keys={formatComboParts(value)} />}
+              <div style={controlsGroupStyle}>
+                <motion.button
+                  whileTap={{ scale: 0.9 }}
+                  onClick={() => setMenuOpen(open => !open)}
+                  aria-label={t('settings.recording.comboMenuToggle', 'More options')}
+                  aria-expanded={menuOpen}
+                  title={t('settings.recording.comboMenuToggle', 'More options')}
+                  style={chevronButtonStyle}
+                >
+                  <motion.span
+                    animate={{ rotate: menuOpen ? 180 : 0 }}
+                    transition={{ duration: 0.16, ease: menuEase }}
+                    style={{ display: 'inline-flex' }}
+                  >
+                    <ChevronDown size={14} strokeWidth={2.2} />
+                  </motion.span>
+                </motion.button>
+              </div>
+            </div>
+            {/* 下拉菜单：整个板块向下展开，出现 录制快捷键 / 重置 / 停用 三个按钮。
+                高度用固定值动画（菜单内容高度恒定），避免 'auto' 每次测量带来的卡顿。 */}
+            <AnimatePresence initial={false}>
+              {menuOpen && (
+                <motion.div
+                  key="menu"
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: MENU_HEIGHT, opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  transition={{ duration: 0.16, ease: menuEase }}
+                  style={{ overflow: 'hidden' }}
+                >
+                  <div style={menuRowStyle}>
+                    <motion.button
+                      initial={{ y: 4, opacity: 0 }}
+                      animate={{ y: 0, opacity: 1 }}
+                      transition={{ duration: 0.16, ease: menuEase }}
+                      whileHover={{ y: -1 }}
+                      whileTap={{ scale: 0.96 }}
+                      onClick={startRecording}
+                      style={menuPrimaryStyle}
+                    >
+                      {t('settings.recording.comboRecordBtn')}
+                    </motion.button>
+                    {onReset && (
+                      <motion.button
+                        initial={{ y: 4, opacity: 0 }}
+                        animate={{ y: 0, opacity: 1 }}
+                        transition={{ duration: 0.16, ease: menuEase, delay: 0.03 }}
+                        whileHover={{ y: -1 }}
+                        whileTap={{ scale: 0.96 }}
+                        onClick={doReset}
+                        style={menuButtonStyle}
+                      >
+                        {resetLabel ?? t('settings.recording.comboResetBtn', 'Reset')}
+                      </motion.button>
+                    )}
+                    <motion.button
+                      initial={{ y: 4, opacity: 0 }}
+                      animate={{ y: 0, opacity: 1 }}
+                      transition={{ duration: 0.16, ease: menuEase, delay: 0.06 }}
+                      whileHover={canDisable ? { y: -1 } : undefined}
+                      whileTap={canDisable ? { scale: 0.96 } : undefined}
+                      onClick={canDisable ? doDisable : undefined}
+                      title={canDisable ? undefined : disableHint}
+                      style={canDisable ? menuButtonStyle : disabledMenuButtonStyle}
+                    >
+                      {disableLabel ?? t('settings.shortcuts.disable', 'Disable')}
+                    </motion.button>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </motion.div>
+        )}
+      </AnimatePresence>
       {error && <div style={{ fontSize: 11, color: 'var(--ol-red, #ef4444)' }}>{error}</div>}
     </div>
   );

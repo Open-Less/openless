@@ -1,7 +1,6 @@
 // 快捷键设置：开始/停止、翻译、问答、切风格、唤起 App、以及只读取消/确认提示。
 
 import { useEffect, useState } from 'react';
-import type { CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ShortcutRecorder } from '../../components/ShortcutRecorder';
 import {
@@ -25,30 +24,17 @@ import { Card } from '../_atoms';
 import { SettingRow } from './shared';
 import { detectOS } from '../../components/WindowChrome';
 
-const enableBtnStyle: CSSProperties = {
-  alignSelf: 'flex-start',
-  fontSize: 12,
-  padding: '5px 14px',
-  background: 'var(--ol-blue)',
-  color: '#fff',
-  border: 0,
-  borderRadius: 6,
-  fontFamily: 'inherit',
-  fontWeight: 500,
-  cursor: 'pointer',
-};
-
 export function ShortcutsSection() {
   const { t } = useTranslation();
   const os = detectOS();
-  const { prefs, hotkey, capability, updatePrefs: savePrefs } = useHotkeySettings();
+  const { prefs, hotkey, updatePrefs: savePrefs } = useHotkeySettings();
   const [platformCaps, setPlatformCaps] = useState<PlatformCapabilities | null>(null);
 
   useEffect(() => {
     void getPlatformCapabilities().then(setPlatformCaps);
   }, []);
 
-  if (!prefs || !hotkey || !capability) {
+  if (!prefs || !hotkey) {
     return (
       <Card>
         <div style={{ fontSize: 12, color: 'var(--ol-ink-4)' }}>{t('common.loading')}</div>
@@ -73,9 +59,10 @@ export function ShortcutsSection() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, width: '100%' }}>
           <ShortcutRecorder
             value={prefs.dictationHotkey}
-            alignRecordButton
             sideSpecificModifiers
-            modifierPresets={capability?.availableTriggers ?? []}
+            // 与「录音与输入」页一致：核心热键不可停用，置灰并提示。
+            disableDisabled
+            disableHint={t('settings.recording.comboDisableHint')}
             onSave={async binding => {
               await setDictationHotkey(binding);
               await savePrefs({ ...prefs, dictationHotkey: binding });
@@ -89,7 +76,6 @@ export function ShortcutsSection() {
       <SettingRow label={t('translation.hotkey.title', 'Translation shortcut')}>
         <ShortcutRecorder
           value={prefs.translationHotkey}
-          alignRecordButton
           onSave={async binding => {
             await setTranslationHotkey(binding);
             await savePrefs({ ...prefs, translationHotkey: binding });
@@ -97,113 +83,73 @@ export function ShortcutsSection() {
         />
       </SettingRow>
       <SettingRow label={t('selectionAsk.hotkey.title')}>
-        {prefs.qaHotkey ? (
-          <ShortcutRecorder
-            value={prefs.qaHotkey}
-            alignRecordButton
-            onSave={async binding => {
-              await setQaHotkey(binding);
-              await savePrefs({ ...prefs, qaHotkey: binding });
-            }}
-            onDisable={async () => {
-              await setQaHotkey(null);
-              await savePrefs({ ...prefs, qaHotkey: null });
-            }}
-          />
-        ) : (
-          <button
-            onClick={async () => {
-              const binding = defaultQaShortcut();
-              await setQaHotkey(binding);
-              await savePrefs({ ...prefs, qaHotkey: binding });
-            }}
-            style={{ fontSize: 12, padding: '5px 14px', background: 'var(--ol-blue)', color: '#fff', border: 0, borderRadius: 6, fontFamily: 'inherit', fontWeight: 500, cursor: 'default' }}
-          >
-            {t('selectionAsk.hotkey.enable', 'Enable')}
-          </button>
-        )}
+        <ShortcutRecorder
+          value={prefs.qaHotkey}
+          onSave={async binding => {
+            await setQaHotkey(binding);
+            await savePrefs({ ...prefs, qaHotkey: binding });
+          }}
+          onDisable={async () => {
+            await setQaHotkey(null);
+            await savePrefs({ ...prefs, qaHotkey: null });
+          }}
+          onReset={async () => {
+            const binding = defaultQaShortcut();
+            await setQaHotkey(binding);
+            await savePrefs({ ...prefs, qaHotkey: binding });
+          }}
+        />
       </SettingRow>
       <SettingRow label={t('settings.shortcuts.switchStyle')}>
-        {prefs.switchStyleHotkey ? (
-          <ShortcutRecorder
-            value={prefs.switchStyleHotkey}
-            alignRecordButton
-            onSave={async binding => {
-              await setSwitchStyleHotkey(binding);
-              await savePrefs({ ...prefs, switchStyleHotkey: binding });
-            }}
-            onDisable={async () => {
-              await setSwitchStyleHotkey(null);
-              await savePrefs({ ...prefs, switchStyleHotkey: null });
-            }}
-          />
-        ) : (
-          <button
-            onClick={async () => {
-              const binding = defaultSwitchStyleShortcut();
-              await setSwitchStyleHotkey(binding);
-              await savePrefs({ ...prefs, switchStyleHotkey: binding });
-            }}
-            style={enableBtnStyle}
-          >
-            {t('settings.shortcuts.enable', 'Enable')}
-          </button>
-        )}
+        <ShortcutRecorder
+          value={prefs.switchStyleHotkey}
+          onSave={async binding => {
+            await setSwitchStyleHotkey(binding);
+            await savePrefs({ ...prefs, switchStyleHotkey: binding });
+          }}
+          onDisable={async () => {
+            await setSwitchStyleHotkey(null);
+            await savePrefs({ ...prefs, switchStyleHotkey: null });
+          }}
+          onReset={async () => {
+            const binding = defaultSwitchStyleShortcut();
+            await setSwitchStyleHotkey(binding);
+            await savePrefs({ ...prefs, switchStyleHotkey: binding });
+          }}
+        />
       </SettingRow>
       <SettingRow label={t('settings.shortcuts.openApp')}>
-        {prefs.openAppHotkey ? (
-          <ShortcutRecorder
-            value={prefs.openAppHotkey}
-            alignRecordButton
-            onSave={async binding => {
-              await setOpenAppHotkey(binding);
-              await savePrefs({ ...prefs, openAppHotkey: binding });
-            }}
-            onDisable={async () => {
-              await setOpenAppHotkey(null);
-              await savePrefs({ ...prefs, openAppHotkey: null });
-            }}
-          />
-        ) : (
-          <button
-            onClick={async () => {
-              const binding = defaultOpenAppShortcut();
-              await setOpenAppHotkey(binding);
-              await savePrefs({ ...prefs, openAppHotkey: binding });
-            }}
-            style={enableBtnStyle}
-          >
-            {t('settings.shortcuts.enable', 'Enable')}
-          </button>
-        )}
+        <ShortcutRecorder
+          value={prefs.openAppHotkey}
+          onSave={async binding => {
+            await setOpenAppHotkey(binding);
+            await savePrefs({ ...prefs, openAppHotkey: binding });
+          }}
+          onDisable={async () => {
+            await setOpenAppHotkey(null);
+            await savePrefs({ ...prefs, openAppHotkey: null });
+          }}
+          onReset={async () => {
+            const binding = defaultOpenAppShortcut();
+            await setOpenAppHotkey(binding);
+            await savePrefs({ ...prefs, openAppHotkey: binding });
+          }}
+        />
       </SettingRow>
       {os === 'mac' && (
         <SettingRow label={t('settings.codingAgent.title')} desc={t('settings.codingAgent.voiceHotkeyDesc')}>
-          {prefs.codingAgentEnabled && prefs.codingAgentVoiceHotkey ? (
-            <ShortcutRecorder
-              value={prefs.codingAgentVoiceHotkey}
-              alignRecordButton
-              onSave={async binding => {
-                await savePrefs({ ...prefs, codingAgentVoiceHotkey: binding });
-              }}
-              onDisable={async () => {
-                await savePrefs({ ...prefs, codingAgentVoiceHotkey: null });
-              }}
-            />
-          ) : (
-            <button
-              onClick={() =>
-                void savePrefs({
-                  ...prefs,
-                  codingAgentEnabled: true,
-                  codingAgentVoiceHotkey: prefs.codingAgentVoiceHotkey ?? defaultLessComputerShortcut(),
-                })
-              }
-              style={enableBtnStyle}
-            >
-              {t('settings.shortcuts.enable', 'Enable')}
-            </button>
-          )}
+          <ShortcutRecorder
+            value={prefs.codingAgentVoiceHotkey}
+            onSave={async binding => {
+              await savePrefs({ ...prefs, codingAgentEnabled: true, codingAgentVoiceHotkey: binding });
+            }}
+            onDisable={async () => {
+              await savePrefs({ ...prefs, codingAgentVoiceHotkey: null });
+            }}
+            onReset={async () => {
+              await savePrefs({ ...prefs, codingAgentEnabled: true, codingAgentVoiceHotkey: defaultLessComputerShortcut() });
+            }}
+          />
         </SettingRow>
       )}
       {readonlyRows.map(([k, v]) => (

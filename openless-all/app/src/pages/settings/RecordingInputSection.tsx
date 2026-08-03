@@ -6,6 +6,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ShortcutRecorder } from '../../components/ShortcutRecorder';
 import { playRecordStartCue } from '../../lib/audioCue';
+import { defaultDictationHotkey } from '../../lib/hotkey';
 import { emitSaved } from '../../lib/savedEvent';
 import { isHotkeyModeMigrationNoticeActive } from '../../lib/hotkeyMigration';
 import {
@@ -224,9 +225,16 @@ export function RecordingInputSection() {
         <SettingRow label={t('settings.recording.hotkeyLabel')}>
           <ShortcutRecorder
             value={prefs.dictationHotkey}
-            modifierPresets={capability?.availableTriggers ?? []}
             sideSpecificModifiers
+            // 录音快捷键是核心热键，Rust 端不接受 null，不可停用——置灰并提示。
+            disableDisabled
+            disableHint={t('settings.recording.comboDisableHint')}
             onSave={async binding => {
+              await setDictationHotkey(binding);
+              await savePrefs({ ...prefs, dictationHotkey: binding });
+            }}
+            onReset={async () => {
+              const binding = defaultDictationHotkey();
               await setDictationHotkey(binding);
               await savePrefs({ ...prefs, dictationHotkey: binding });
             }}
