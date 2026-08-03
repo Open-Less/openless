@@ -39,15 +39,19 @@ use super::{
 /// 超时；而我们最终只要几百字。阈值取得比任何合理预算都大得多，正常文档仍走简单路径。
 const FULL_TEXT_MAX_UTF16: usize = 20_000;
 
-/// 用户停手多久算「这一处改完了」。
+/// 「这一处改完了」的**兜底**判据：多久没动静就判一次。
 ///
-/// 不能一收到通知就判定。把「扣德克斯」改成 `Codex` 的击键序列是：删掉四个字 → 打 C
-/// → 打 o → 打 d … 每一步都是一次通知，而中间态「扣德克斯 → C」「→ Co」「→ Cod」
-/// 全都是形式合法的**跨文种**改动 —— 而跨文种是自动入库、不问用户的那一档。不等停手，
-/// 一次改词就能往词库里塞进四条垃圾。
+/// 主判据是语义的 —— 光标离开这一处（见 `value_changed_shim`）。时间只用来兜住那些
+/// 不发光标事件的 app。
 ///
-/// 1.2 秒：远长于打字时的字间停顿（几百毫秒），又短于改完之后去做下一件事的时间。
-const EDIT_SETTLE_DELAY: Duration = Duration::from_millis(1200);
+/// 为什么必须有「改完了」这个概念：把「扣德克斯」改成 `Codex` 的击键序列是删掉四个字
+/// → C → o → d → e → x。每一步都是一次通知，而中间态「扣德克斯 → C」「→ Co」
+/// 「→ Cod」全都是形式合法的**跨文种**改动 —— 那是自动入库、不问用户的那一档。判早了，
+/// 一次改词就能往词库里塞四条垃圾。
+///
+/// 5 秒而不是 1 秒出头：它已经不是主判据了，放宽只会更不容易抓到中间态。用户改到一半
+/// 停下来想事情，也不该被切断。
+const EDIT_SETTLE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// 等「我们自己的落字生效」最多等多久，超过就以当前文档状态为基线。
 ///
@@ -435,10 +439,22 @@ struct WatchContext {
     /// 已上报过的 `(source, target)`。用户改一个词要敲好几下，每一下都发一次通知，
     /// 不去重会把同一处改动刷成一串日志。
     reported: std::cell::RefCell<std::collections::HashSet<(String, String)>>,
-    /// 最近一次收到变更通知的时刻；`None` 表示没有待处理的变更。
+    /// 上一次通知时看到的文本。
     ///
-    /// 回调只更新它，真正的比对交给监听线程在「停手够久」之后做一次。回调和那个循环
-    /// 在同一个线程上（通知由 runloop 派发），所以 `Cell` 就够了，不需要锁。
+    /// 用来把两种通知分开 —— 这是「一次编辑结束了没有」的**主判据**：
+    ///
+    /// | 用户在干什么 | 文本变了 | 光标动了 |
+    /// |---|---|---|
+    /// | 打字 / 删字 | ✅ | ✅（跟着走） |
+    /// | 点到别处、按方向键、选中别的 | ❌ | ✅ |
+    ///
+    /// 「光标动了但文本没变」就是他离开了这一处 —— 那一刻这次改动才算定稿。这不是
+    /// 时间上的猜测，是语义信号，而且用的是本来就在收的 `AXSelectedTextChanged`。
+    last_text: std::cell::RefCell<String>,
+    /// 有未判定的改动时，记它开始的时刻；`None` 表示没有待判定的改动。
+    ///
+    /// 回调只登记，判定交给监听线程 —— 中间态怎么都可能变，全程只记录不分析。
+    /// 回调和那个循环在同一线程上（通知由 runloop 派发），`Cell` 就够，不需要锁。
     pending_since: std::cell::Cell<Option<Instant>>,
     /// 本次武装期间收到了几次 `AXValueChanged`。
     ///
@@ -481,26 +497,40 @@ unsafe extern "C" fn value_changed_shim(
                 current.chars().count(),
                 if inserted { "insertion landed" } else { "timeout" }
             );
+            // 两者必须一起推进：`baseline` 是比对起点，`last_text` 是「上次看到的样子」。
+            // 只更新前者的话，锚定后第一条通知会把「插入生效」当成一次用户编辑。
+            *ctx.last_text.borrow_mut() = current.clone();
             *ctx.baseline.borrow_mut() = current;
             ctx.anchored.set(true);
         }
         return;
     }
 
-    // 第二阶段：只登记「有变动」，不在这里判定。判定要等用户停手 —— 见
-    // `EDIT_SETTLE_DELAY` 和 `settle_pending_edit`。
-    ctx.pending_since.set(Some(Instant::now()));
+    // 第二阶段：把「打字」和「光标移开」分开 —— 全程只记录，边界到了才分析。
+    let text_changed = *ctx.last_text.borrow() != current;
+    if text_changed {
+        // 还在改。登记一笔，不判定：中间态怎么都可能变。
+        *ctx.last_text.borrow_mut() = current;
+        ctx.pending_since.set(Some(Instant::now()));
+        return;
+    }
+
+    // 文本没变却收到了通知 —— 光标动了。用户离开了这一处，改动到此定稿。
+    if ctx.pending_since.get().is_some() {
+        log::info!("[cursor-context] caret moved away; settling the pending edit");
+        settle_pending_edit(ctx, true);
+    }
 }
 
-/// 用户停手够久了，比对一次并上报。
+/// 一处改动定稿了，比对一次并上报。
 ///
-/// 由监听线程调用（每秒一次的轮转里、以及解除之前），**不在通知回调里调**。回调只负责
-/// 刷新「最后变动时刻」，因为一次改词会连着发好几十条通知，中间态全是错的。
+/// `force` 为真表示到了明确的语义边界（光标移开、切走 app、观察结束）；为假时只有
+/// 距最后一次变动超过 [`EDIT_SETTLE_TIMEOUT`] 才处理，那是给不发光标事件的 app 兜底。
 unsafe fn settle_pending_edit(ctx: &WatchContext, force: bool) {
     let Some(since) = ctx.pending_since.get() else {
         return;
     };
-    if !force && since.elapsed() < EDIT_SETTLE_DELAY {
+    if !force && since.elapsed() < EDIT_SETTLE_TIMEOUT {
         return;
     }
     ctx.pending_since.set(None);
@@ -530,6 +560,12 @@ unsafe fn settle_pending_edit(ctx: &WatchContext, force: bool) {
         return;
     }
     (ctx.on_edit)(edit);
+    // 只有真的上报了才推进基线 —— 这一处已经有结论，不该再算进下一处的差异。
+    //
+    // 被过滤掉的**不推进**：那还没有结论。用户可能删掉一个词、跑去别处复制点东西、
+    // 再回来把新词打完；中途那次「纯删除」被拒绝，保留原基线才能在他打完之后算出
+    // 完整的那一处改动。
+    *ctx.baseline.borrow_mut() = current;
 }
 
 /// 武装手改监听。成功返回停止开关，失败返回 `None`（只 warn，绝不影响主链路）。
@@ -570,6 +606,7 @@ pub(super) fn spawn_edit_watcher(
     };
     let (_, bundle_id) = crate::selection::current_front_app_parts();
 
+    let baseline_for_last_text = baseline.clone();
     let stop = Arc::new(AtomicBool::new(false));
     let thread_stop = Arc::clone(&stop);
     let spawn_result = std::thread::Builder::new()
@@ -582,6 +619,7 @@ pub(super) fn spawn_edit_watcher(
                     anchored: std::cell::Cell::new(baseline.contains(&typed_text)),
                     baseline: std::cell::RefCell::new(baseline),
                     armed_at: Instant::now(),
+                    last_text: std::cell::RefCell::new(baseline_for_last_text),
                     pending_since: std::cell::Cell::new(None),
                     typed_text,
                     on_edit,
