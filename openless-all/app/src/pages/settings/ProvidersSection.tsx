@@ -16,7 +16,7 @@ import {
 import { emitSaved } from '../../lib/savedEvent';
 import { useMobileLayout } from '../../lib/useMobileLayout';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
-import { SelectLite } from '../../components/ui/SelectLite';
+import { SelectLite, type SelectOption } from '../../components/ui/SelectLite';
 import { Card } from '../_atoms';
 import { SettingRow, SectionTitle, Toggle, inputStyle, ASR_PRESETS, type AsrPresetId } from './shared';
 
@@ -167,6 +167,39 @@ const ASR_DEFAULT_RESOURCE_ID = 'volc.seedasr.sauc.duration';
 
 // ASR_PRESETS 已上移到 settings/shared.tsx 作为单一来源（AsrPresetId 由其派生，
 // Overview 的显示名映射也从那里取）。新增厂商的步骤见 shared.tsx 的注释。
+
+// 云端 ASR 模型预设（下拉可选）——千问新发布的 ASR 优先：qwen3-asr-flash 是
+// Qwen-ASR 的 OpenAI 兼容 HTTP 形态，另有实时变体（flash-realtime）；fun-asr
+// 系列是百炼原生推荐，paraformer 为老一代兜底。
+// 注意：qwen3-asr-flash-filetrans 官方只接受公网音频 URL，与本地录音链路不兼容，
+// 后端会显式拒绝（coordinator.rs::resolve_effective_asr_provider），不放预设。
+const BAILIAN_ASR_MODELS: string[] = [
+  'qwen3-asr-flash-realtime',
+  'qwen3-asr-flash',
+  'fun-asr-realtime',
+  'fun-asr',
+  'fun-asr-flash-2026-06-15',
+  'fun-asr-mtl',
+  'paraformer-realtime-v2',
+  'paraformer-v2',
+];
+
+// OpenAI 兼容（/audio/transcriptions）厂商共用的模型预设。
+const OPENAI_COMPAT_ASR_MODELS: string[] = [
+  'whisper-large-v3-turbo',
+  'whisper-large-v3',
+  'whisper-1',
+  'FunAudioLLM/SenseVoiceSmall',
+  'qwen3-asr-flash',
+];
+
+// 走 Whisper 兼容 /audio/transcriptions 协议的厂商（与后端
+// coordinator.rs::is_whisper_compatible_provider 保持一致）。其余非百炼厂商
+// （zhipu / stepfun / mimo / elevenlabs 等）协议不同，不给预设下拉，保持输入框。
+const WHISPER_COMPAT_ASR_PROVIDERS: AsrPresetId[] = ['whisper', 'groq', 'siliconflow', 'openrouter'];
+
+/** 模型预设下拉里的「自定义模型…」哨兵值：选中即切回输入框手输。 */
+const CUSTOM_MODEL_OPTION_VALUE = '__custom_model__';
 
 type ProvidersSectionKind = 'all' | 'llm' | 'asr';
 
@@ -571,7 +604,12 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
             <CredentialField key={`${committedAsrProvider}:model:${asrModelRevision}`} label={t('settings.providers.modelLabel')} account="asr.model"
               provider={committedAsrProvider}
               placeholder={unifiedBailian ? 'fun-asr-realtime' : (asrPreset?.model || 'whisper-1')}
-              onValueChange={unifiedBailian ? setBailianModel : undefined} />
+              onValueChange={unifiedBailian ? setBailianModel : undefined}
+              options={unifiedBailian
+                ? BAILIAN_ASR_MODELS.map(m => ({ value: m, label: m }))
+                : WHISPER_COMPAT_ASR_PROVIDERS.includes(committedAsrProvider)
+                  ? OPENAI_COMPAT_ASR_MODELS.map(m => ({ value: m, label: m }))
+                  : undefined} />
             {unifiedBailian && (
               <BailianProtocolHint key={`${committedAsrProvider}:proto:${asrModelRevision}`} currentModel={bailianModel} />
             )}
@@ -797,9 +835,11 @@ interface CredentialFieldProps {
   defaultValue?: string;
   trailing?: ReactNode;
   onValueChange?: (value: string) => void;
+  /** 提供则渲染为下拉（预设选择）代替输入框；当前值不在预设里时附加为自定义项。 */
+  options?: SelectOption[];
 }
 
-function CredentialField({ label, account, provider, placeholder, mono, mask, defaultValue, trailing, onValueChange }: CredentialFieldProps) {
+function CredentialField({ label, account, provider, placeholder, mono, mask, defaultValue, trailing, onValueChange, options }: CredentialFieldProps) {
   const { t } = useTranslation();
   const mobile = useMobileLayout();
   const [value, setValue] = useState('');
@@ -807,6 +847,8 @@ function CredentialField({ label, account, provider, placeholder, mono, mask, de
   const [loaded, setLoaded] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [status, setStatus] = useState<CredentialFieldStatus>('idle');
+  // 预设下拉的「自定义模型…」逃生口：选中后切回输入框，保证后端支持的任意模型名都能手输。
+  const [customModelMode, setCustomModelMode] = useState(false);
   const debounceRef = useRef<number | null>(null);
   const statusRef = useRef<number | null>(null);
   const mountedRef = useRef(true);
@@ -937,15 +979,52 @@ function CredentialField({ label, account, provider, placeholder, mono, mask, de
     <SettingRow label={label}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 5, width: '100%', maxWidth: mobile ? '100%' : 420 }}>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center', width: '100%', flexWrap: mobile ? 'wrap' : 'nowrap' }}>
-          <input
-            type={inputType}
-            value={value}
-            placeholder={loaded ? placeholder : t('common.loading')}
-            onChange={handleChange}
-            onBlur={onBlur}
-            disabled={disabled}
-            style={{ ...inputStyle, flex: mobile ? '1 1 180px' : 1, minWidth: 0, maxWidth: '100%', fontFamily: mono ? 'var(--ol-font-mono)' : 'inherit' }}
-          />
+          {options && !customModelMode ? (
+            <SelectLite
+              value={value}
+              onChange={(v) => {
+                // 「自定义模型…」逃生口：切回输入框手输任意模型名。
+                if (v === CUSTOM_MODEL_OPTION_VALUE) {
+                  setCustomModelMode(true);
+                  return;
+                }
+                setValue(v);
+                onValueChange?.(v);
+                if (!loaded) return;
+                setDirty(true);
+                void save(v, true);
+              }}
+              options={[
+                ...(value && !options.some(o => o.value === value) ? [{ value, label: value }] : []),
+                ...options,
+                { value: CUSTOM_MODEL_OPTION_VALUE, label: t('settings.providers.customModelLabel', 'Custom model…') },
+              ]}
+              placeholder={loaded ? placeholder : t('common.loading')}
+              disabled={disabled}
+              ariaLabel={label}
+              style={{ ...inputStyle, flex: mobile ? '1 1 180px' : 1, minWidth: 0, maxWidth: '100%', fontFamily: mono ? 'var(--ol-font-mono)' : 'inherit' }}
+            />
+          ) : (
+            <input
+              type={inputType}
+              value={value}
+              placeholder={loaded ? placeholder : t('common.loading')}
+              onChange={handleChange}
+              onBlur={onBlur}
+              disabled={disabled}
+              style={{ ...inputStyle, flex: mobile ? '1 1 180px' : 1, minWidth: 0, maxWidth: '100%', fontFamily: mono ? 'var(--ol-font-mono)' : 'inherit' }}
+            />
+          )}
+          {options && customModelMode && (
+            <button
+              onClick={() => setCustomModelMode(false)}
+              title={t('settings.providers.presetListLabel', 'Back to presets')}
+              style={iconBtnStyle}
+              disabled={disabled}
+            >
+              <Icon name="chevDown" size={13} />
+            </button>
+          )}
           {defaultValue && !value && loaded && (
             <button onClick={fillDefault} title={t('settings.providers.fillDefault')} style={iconBtnStyle} disabled={!loaded}>
               <Icon name="check" size={13} />
