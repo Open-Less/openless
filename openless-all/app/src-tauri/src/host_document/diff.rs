@@ -119,17 +119,22 @@ fn strip_whitespace(s: &str) -> String {
     s.chars().filter(|c| !c.is_whitespace()).collect()
 }
 
-/// 一处改动该以什么方式进词库。
+/// 一处改动该以什么方式进词汇表。
+///
+/// **只写词汇表，不再写纠正规则。** 学来的东西配不上「见字面就替换」这份权力：
+///
+/// - 纠正规则是字面替换，错了是静默的、全局的、用户看不见。真机上学到过
+///   `小鱼 → x` 这种半截规则，它会毁掉以后每一个「小鱼」。
+/// - 词汇表是提示：送给 ASR 提高听对的概率，也进润色 prompt 让 LLM **带着上下文**
+///   判断该不该改。错了最多是没帮上忙。
+///
+/// 而且两者并存会直接打架：词汇表里有 `Codex` 热词（「我要这个词」），纠正规则却写着
+/// `Codex → 扣的爱思`（「把这个词换掉」）—— 真机上就撞出过这个环。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuleTier {
-    /// 自动收集：静默入库，但打 `learned` 标记，用户能在词汇表里看到并撤销。
-    ///
-    /// 只有**跨文种**改动落这一档：一侧纯 CJK、另一侧纯 ASCII 字母
-    /// （扣德克斯 → Codex）。这类几乎不可能是「用户有意换个说法」——用户不会把一个
-    /// 中文词改成一个英文词只为了换语气，那就是我们把外来词听成了汉字。
+    /// 自动收进词汇表（打 `learned` 标记，用户能看到并删掉）。
     Auto,
-    /// 提示确认：用户点一下才入库。中文同音词（大禹 → 大鱼）落这一档 —— 光看文本
-    /// 分不出「纠错」和「改主意」（明天 → 后天 长得跟纠错一模一样），只能问用户。
+    /// 弹卡片问一下，用户点了才收。
     Confirm,
 }
 
@@ -139,37 +144,49 @@ pub enum RuleTier {
 /// 下次说「禹州」就成了「鱼州」。
 const MIN_PATTERN_CHARS: usize = 2;
 
-/// 可以入库的一条规则。
+/// 从一次手改里提炼出来的词条建议。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LearnedRule {
+    /// 用户改之前那个（错的）写法。不入库，只用来在卡片上给用户看清改的是什么。
     pub pattern: String,
+    /// 用户最后要的那个词 —— 要进词汇表的就是它。
     pub replacement: String,
     pub tier: RuleTier,
 }
 
-/// 判定一处改动该以什么档入库。
+/// 词汇表条目的长度上限（char）。超过就不是一个「词」了。
+const MAX_PHRASE_CHARS: usize = 12;
+
+/// 判定用户改出来的这个词该不该进词汇表、要不要先问一声。
 ///
-/// 返回 `None` 表示**不该变成规则**（检测仍然有效，日志照记）：
+/// **只看 `target`（用户最后要的那个词），不看 `source → target` 这个映射。** 语义变了：
+/// 问的不再是「这个替换安不安全」，而是「这个**词**值不值得记住」。方向问题也随之消失
+/// —— 你把中文改成英文还是反过来，都不影响「你最后要的是哪个词」。
 ///
-/// - **纯删除**（`target` 为空）。做成全局替换就是「以后所有听写里这个词一律删掉」
-///   —— 「的」被删一次，往后每个「的」都没了。风险与收益完全不对等。
-/// - **跨行或跨句**（含换行、中文句读标点、`?!;`）。纠正规则是词级字面替换，跨句的
-///   要么永远匹配不上，要么一命中就改掉一整段。
+/// 返回 `None` = 那不是一个词：
+///
+/// - **`target` 为空**（纯删除）—— 没有词可记。
+/// - **跨行或跨句**（换行、中文句读标点、`?!;`）—— 真机上抓到的假阳性正是这类：在聊天
+///   框里按回车发送，输入框清空换成占位符，形式上是「把一整句换成另一句」。
+/// - **超过 [`MAX_PHRASE_CHARS`]** —— 一整句话不是词条。
 pub fn classify_edit(edit: &EditPair) -> Option<RuleTier> {
-    if edit.target.trim().is_empty() {
+    let target = edit.target.trim();
+    if target.is_empty() || edit.source.trim().is_empty() {
         return None;
     }
-    // 跨行或跨句的不是在纠一个词。
-    //
-    // 纠正规则是词级字面替换。真机上抓到的两次假阳性都是这一类：用户在聊天框里按回车
-    // 发送，输入框被清空换成占位符 —— 形式上是「把一整句替换成另一句」，长度也没超过
-    // 上限（才 25 个字），只有「它包含句末标点」这个特征把它和真正的改词分开。
-    if crosses_a_sentence_boundary(&edit.source) || crosses_a_sentence_boundary(&edit.target) {
+    if crosses_a_sentence_boundary(&edit.source) || crosses_a_sentence_boundary(target) {
         return None;
     }
-    if is_cross_script(&edit.source, &edit.target) {
+    if target.chars().count() > MAX_PHRASE_CHARS {
+        return None;
+    }
+    // 拉丁字母/数字构成的词（Codex、Node.js、GPT-5）自动收：你把一个词改成英文写法，
+    // 这件事本身就说明它是个专名 —— 没人为了换语气把中文改成英文。
+    if is_pure_ascii_word(target) {
         return Some(RuleTier::Auto);
     }
+    // 其余（主要是汉字词）问一声。「大鱼」可能是公司名也可能就是字面意思，「接口」是
+    // 术语也是极常见的普通词 —— 光看字分不出来，而普通词进了热词表会让识别对它过度敏感。
     Some(RuleTier::Confirm)
 }
 
@@ -239,29 +256,10 @@ fn crosses_a_sentence_boundary(s: &str) -> bool {
         .any(|c| matches!(c, '\n' | '\r' | '。' | '？' | '！' | '；' | '，' | '、' | '：' | '?' | '!' | ';'))
 }
 
-/// 一侧纯 CJK、另一侧纯 ASCII 字母（顺序不限）。
+/// 这是不是一个由拉丁字母/数字构成的词（`Codex`、`Node.js`、`GPT-5`、`v1.2`）。
 ///
-/// 两侧都要求「纯」而不是「含」：「用 Codex 写」→「用 Cursor 写」两侧都带 ASCII，
-/// 那是用户在换工具名，不是我们听错了。
-fn is_cross_script(a: &str, b: &str) -> bool {
-    (is_pure_cjk(a) && is_pure_ascii_word(b)) || (is_pure_ascii_word(a) && is_pure_cjk(b))
-}
-
-fn is_pure_cjk(s: &str) -> bool {
-    let mut saw_cjk = false;
-    for ch in s.chars() {
-        if ch.is_whitespace() {
-            continue;
-        }
-        if is_cjk(ch) {
-            saw_cjk = true;
-        } else {
-            return false;
-        }
-    }
-    saw_cjk
-}
-
+/// 要求至少有一个字母 —— 纯数字（"2026"）不是值得记的词。连字符、下划线、点号放行，
+/// 技术名词到处是它们。
 fn is_pure_ascii_word(s: &str) -> bool {
     let mut saw_alpha = false;
     for ch in s.chars() {
@@ -277,15 +275,6 @@ fn is_pure_ascii_word(s: &str) -> bool {
     saw_alpha
 }
 
-/// CJK 统一表意文字（含扩展 A）+ 中日韩标点之外的汉字区。够覆盖中文听写场景，
-/// 不需要为此引入一个 Unicode 属性库。
-fn is_cjk(ch: char) -> bool {
-    matches!(ch as u32,
-        0x3400..=0x4DBF   // 扩展 A
-        | 0x4E00..=0x9FFF // 基本区
-        | 0xF900..=0xFAFF // 兼容表意文字
-    )
-}
 
 /// 这处改动是不是落在「我们刚插进去的那段文字」里。
 ///
@@ -404,7 +393,19 @@ mod tests {
             before: "用".to_string(),
             after: "写".to_string(),
         };
-        assert_eq!(classify_edit(&e), Some(RuleTier::Confirm));
+        assert_eq!(classify_edit(&e), Some(RuleTier::Auto));
+    }
+
+    #[test]
+    fn a_whole_sentence_is_not_a_word() {
+        // 词汇表条目是「词」。一整句话进热词表毫无意义，还会把识别带偏。
+        let e = EditPair {
+            source: "短的".to_string(),
+            target: "这是一句很长的话完全不像一个词".to_string(),
+            before: String::new(),
+            after: String::new(),
+        };
+        assert_eq!(classify_edit(&e), None);
     }
 
     #[test]
@@ -498,14 +499,22 @@ mod tests {
     }
 
     #[test]
-    fn a_cross_script_correction_is_collected_automatically() {
-        // 用户不会把一个中文词改成英文词只为了换语气 —— 那就是我们把外来词听成了汉字。
+    fn a_latin_word_is_collected_automatically() {
+        // 你把一个词改成英文写法，这件事本身就说明它是专名 —— 没人为了换语气这么做。
         assert_eq!(
             tier("我们用扣德克斯写代码", "我们用Codex写代码"),
             Some(RuleTier::Auto)
         );
-        // 反向也算：英文被改回中文。
-        assert_eq!(tier("打开setting页", "打开设置页"), Some(RuleTier::Auto));
+    }
+
+    #[test]
+    fn direction_no_longer_matters() {
+        // 旧设计按「中文→英文」还是反过来分档，真机上撞出过一个环：词汇表里的 `Codex`
+        // 热词让识别把中文听成英文，用户改回中文，系统又学一条规则把 `Codex` 换掉。
+        //
+        // 现在只看「你最后要的是哪个词」，方向不再参与判定。英文被改回中文时，要记的
+        // 是那个中文词 —— 汉字词一律先问一声。
+        assert_eq!(tier("打开setting页", "打开设置页"), Some(RuleTier::Confirm));
     }
 
     #[test]
@@ -566,8 +575,8 @@ mod tests {
 
     #[test]
     fn tier_is_decided_before_widening() {
-        // 扩长会把中文上下文粘到英文 pattern 上；先扩再判就永远判不出跨文种了。
-        let learned = rule("装了docker之后", "装了容器之后").unwrap();
+        // 扩长会把中文上下文粘到英文词上；先扩再判就永远判不出这是个拉丁词了。
+        let learned = rule("装了容器之后", "装了docker之后").unwrap();
         assert_eq!(learned.tier, RuleTier::Auto);
     }
 
@@ -587,11 +596,12 @@ mod tests {
     }
 
     #[test]
-    fn a_change_between_two_ascii_words_is_not_cross_script() {
-        // 两侧都是英文 —— 用户在换工具名，不是我们听错了。
+    fn swapping_one_latin_name_for_another_is_still_a_word_worth_keeping() {
+        // 「Codex → Cursor」大概率是换工具而不是纠错，但要记的是 `Cursor` 这个词
+        // 本身 —— 它值得进词汇表，跟这次改动的动机无关。词条只是提示，不做替换。
         assert_eq!(
             tier("我们用 Codex 写", "我们用 Cursor 写"),
-            Some(RuleTier::Confirm)
+            Some(RuleTier::Auto)
         );
     }
 

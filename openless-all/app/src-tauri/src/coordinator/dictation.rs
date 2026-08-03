@@ -782,42 +782,46 @@ fn queue_correction_suggestion(inner: &Arc<Inner>, rule: &crate::host_document::
     }
 }
 
-/// 真正落库：纠正规则 + 词汇表热词。任一步失败只 warn —— 学不到东西可以接受。
+/// 收进词汇表。**只写词汇表，不写纠正规则。**
+///
+/// 学来的东西配不上「见字面就替换」那份权力：纠正规则错了是静默的、全局的，真机上学到
+/// 过 `小鱼 → x` 这种半截规则，会毁掉以后每一个「小鱼」。词条只是提示 —— 送给 ASR 提高
+/// 听对的概率，也进润色 prompt 让 LLM 带着上下文判断，错了最多是没帮上忙。
+///
+/// 两者并存还会直接打架：词汇表里的 `Codex`（「我要这个词」）和纠正规则
+/// `Codex → 扣的爱思`（「把这个词换掉」）在真机上撞出过一个来回震荡的环。
+///
+/// 失败只 warn —— 学不到东西可以接受。
 pub(super) fn commit_learned_rule(
     inner: &Arc<Inner>,
     rule: &crate::host_document::LearnedRule,
 ) {
-    match inner
-        .correction_rules
-        .add_learned(rule.pattern.clone(), rule.replacement.clone())
-    {
+    match inner.vocab.add_if_absent(
+        rule.replacement.clone(),
+        Some(LEARNED_VOCAB_NOTE.to_string()),
+    ) {
         Ok(Some(_)) => log::info!(
-            "[cursor-context] learned correction rule: {:?} → {:?}",
-            rule.pattern,
-            rule.replacement
+            "[cursor-context] learned vocabulary entry: {:?} (was {:?})",
+            rule.replacement,
+            rule.pattern
         ),
         Ok(None) => {
-            log::info!("[cursor-context] rule already exists, skipped: {:?}", rule.pattern);
+            log::info!("[cursor-context] already in vocabulary: {:?}", rule.replacement);
             return;
         }
         Err(error) => {
-            log::warn!("[cursor-context] add learned rule failed: {error}");
+            log::warn!("[cursor-context] add learned vocab entry failed: {error}");
             return;
         }
-    }
-    // 热词走的是 ASR 那一侧：规则保证这次一定对，热词提高下次直接听对的概率。
-    match inner.vocab.add_if_absent(
-        rule.replacement.clone(),
-        Some("从手改中自动收集".to_string()),
-    ) {
-        Ok(Some(_)) => log::info!("[cursor-context] added {:?} to vocabulary", rule.replacement),
-        Ok(None) => {}
-        Err(error) => log::warn!("[cursor-context] add learned vocab entry failed: {error}"),
     }
     if let Some(app) = inner.app.lock().clone() {
         let _ = app.emit("vocab:updated", 0u64);
     }
 }
+
+/// 自动收集的词条在 `note` 里带的标记。词汇表页靠它把「你自己加的」和「它替你收的」
+/// 分成两区 —— 用户随时能看清、能整块删掉，这是自动收集能被信任的前提。
+pub(crate) const LEARNED_VOCAB_NOTE: &str = "从手改中自动收集";
 
 fn streaming_insert_eligible(
     streaming_insert_enabled: bool,
