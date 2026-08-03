@@ -55,11 +55,14 @@ sed -E -i.bak \
   "$TAURI_CONF"
 rm "$TAURI_CONF.bak"
 
-# Cargo.toml：用 awk 替换文件里第一个 version = "X.Y.Z" 行（顶层 [package].version）。
+# Cargo.toml：用 awk 替换 [package] 段里的 version = "X.Y.Z" 行。
+# 必须锚定 [package] 段：文件里先出现的纯 X.Y.Z 版本行可能是依赖版本
+# （如 keyring 的 `version = "3.6.3"`），不带锚定会把依赖版本误改成新版本号。
 # 不用 GNU sed 的 `0,/.../` 行号范围地址（macOS BSD sed 不支持）。
 echo "▶ 升 Cargo.toml → $NEW"
 awk -v new="$NEW" '
-  !done && /^version = "[0-9]+\.[0-9]+\.[0-9]+"$/ {
+  /^\[package\]$/ { in_package = 1 }
+  in_package && !done && /^version = "[0-9]+\.[0-9]+\.[0-9]+"$/ {
     sub(/"[0-9]+\.[0-9]+\.[0-9]+"/, "\"" new "\"")
     done = 1
   }
