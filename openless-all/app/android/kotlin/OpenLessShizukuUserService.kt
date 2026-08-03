@@ -15,18 +15,12 @@ import java.util.concurrent.TimeoutException
  * Best-effort accessibility recovery — Secure Settings writes are not compare-and-set.
  */
 @Keep
-class OpenLessShizukuUserService : IOpenLessShizukuUserService.Stub() {
-    private val appPackage: String
+class OpenLessShizukuUserService @JvmOverloads constructor(
+    private val appPackage: String = "",
+) : IOpenLessShizukuUserService.Stub() {
 
     @Keep
-    constructor() {
-        appPackage = ""
-    }
-
-    @Keep
-    constructor(context: Context) {
-        appPackage = context.packageName
-    }
+    constructor(context: Context) : this(context.packageName)
 
     override fun destroy() {
         Log.i(TAG, "destroy")
