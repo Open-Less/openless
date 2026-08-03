@@ -1,8 +1,10 @@
 package com.openless.app
 
 import android.app.Activity
+import android.app.ActivityManager
 import android.app.Application
 import android.content.Intent
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.util.Log
@@ -14,6 +16,9 @@ class OpenLessApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         OpenLessAppContext.initialize(this)
+        if (isMainProcess()) {
+            OpenLessShizukuBridge.initialize()
+        }
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
             override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = Unit
             override fun onActivityStarted(activity: Activity) {
@@ -76,6 +81,22 @@ class OpenLessApplication : Application() {
         } catch (error: Throwable) {
             Log.w(TAG, "overlay action failed: $action", error)
         }
+    }
+
+    private fun isMainProcess(): Boolean {
+        val processName = currentProcessName() ?: return true
+        return processName == packageName
+    }
+
+    private fun currentProcessName(): String? {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            return Application.getProcessName()
+        }
+        val pid = android.os.Process.myPid()
+        val activityManager = getSystemService(ACTIVITY_SERVICE) as? ActivityManager ?: return null
+        return activityManager.runningAppProcesses
+            ?.firstOrNull { it.pid == pid }
+            ?.processName
     }
 
     companion object {

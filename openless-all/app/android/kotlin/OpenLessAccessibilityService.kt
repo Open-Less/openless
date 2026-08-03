@@ -284,6 +284,11 @@ class OpenLessAccessibilityService : AccessibilityService() {
     }
 
     companion object {
+        /** Matches [isEnabled] / Settings.Secure component id format (full class name). */
+        @JvmStatic
+        fun serviceComponentId(): String =
+            "${BuildConfig.APPLICATION_ID}/${OpenLessAccessibilityService::class.java.name}"
+
         @Volatile
         var instance: OpenLessAccessibilityService? = null
             private set

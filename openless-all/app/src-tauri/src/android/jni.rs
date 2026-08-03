@@ -887,6 +887,84 @@ pub mod android {
         start_settings_intent(env, context, &action_obj, None)
     }
 
+    pub fn shizuku_get_status_json<'local>(
+        env: &mut JNIEnv<'local>,
+        context: &JObject<'local>,
+    ) -> Result<String, String> {
+        call_static_string_with_context_class(
+            env,
+            context,
+            "com.openless.app.OpenLessShizukuBridge",
+            "getStatusJson",
+            "(Landroid/content/Context;)Ljava/lang/String;",
+            &[JValue::Object(context)],
+        )
+    }
+
+    pub fn shizuku_request_permission<'local>(
+        env: &mut JNIEnv<'local>,
+        context: &JObject<'local>,
+    ) -> Result<bool, String> {
+        call_static_bool_with_context_class(
+            env,
+            context,
+            "com.openless.app.OpenLessShizukuBridge",
+            "requestPermission",
+            "(Landroid/content/Context;)Z",
+            &[JValue::Object(context)],
+        )
+    }
+
+    pub fn shizuku_open_app<'local>(
+        env: &mut JNIEnv<'local>,
+        context: &JObject<'local>,
+    ) -> Result<bool, String> {
+        call_static_bool_with_context_class(
+            env,
+            context,
+            "com.openless.app.OpenLessShizukuBridge",
+            "openShizukuApp",
+            "(Landroid/content/Context;)Z",
+            &[JValue::Object(context)],
+        )
+    }
+
+    pub fn shizuku_recover_accessibility_json<'local>(
+        env: &mut JNIEnv<'local>,
+        context: &JObject<'local>,
+        confirmed: bool,
+    ) -> Result<String, String> {
+        call_static_string_with_context_class(
+            env,
+            context,
+            "com.openless.app.OpenLessShizukuBridge",
+            "recoverAccessibilityJson",
+            "(Landroid/content/Context;Z)Ljava/lang/String;",
+            &[JValue::Object(context), JValue::Bool(confirmed as u8)],
+        )
+    }
+
+    fn call_static_string_with_context_class<'local>(
+        env: &mut JNIEnv<'local>,
+        context: &JObject<'local>,
+        class_name: &str,
+        method: &str,
+        sig: &str,
+        args: &[JValue],
+    ) -> Result<String, String> {
+        let class = load_context_class(env, context, class_name)?;
+        let value = env
+            .call_static_method(class, method, sig, args)
+            .and_then(|value| value.l())
+            .map_err(|error| format!("call {class_name}.{method}: {error}"))?;
+        if value.is_null() {
+            return Err(format!("{class_name}.{method} returned null"));
+        }
+        env.get_string(&JString::from(value))
+            .map_err(|error| format!("read {class_name}.{method} result: {error}"))
+            .map(|text| text.to_string_lossy().into_owned())
+    }
+
     fn start_settings_intent(
         env: &mut JNIEnv,
         context: &JObject,

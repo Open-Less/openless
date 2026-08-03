@@ -1,7 +1,10 @@
 import { invokeOrMock } from '../../../src/lib/ipc';
 import type {
+  AndroidAccessibilityRecoveryResult,
   AndroidAccessibilityStatus,
   AndroidOverlayStatus,
+  AndroidShizukuActionResult,
+  AndroidShizukuStatus,
 } from './androidTypes';
 
 export function getAndroidOverlayStatus(): Promise<AndroidOverlayStatus> {
@@ -39,5 +42,38 @@ export function requestAndroidAccessibilityPermission(): Promise<{ launched: boo
   return invokeOrMock('request_android_accessibility_permission', undefined, () => ({
     launched: false,
     message: 'Mock: accessibility settings unavailable in browser preview',
+  }));
+}
+
+export function getAndroidShizukuStatus(): Promise<AndroidShizukuStatus> {
+  return invokeOrMock('get_android_shizuku_status', undefined, () => ({
+    state: 'notAndroid',
+    messageKey: 'not_android',
+    accessibility: {
+      registered: false,
+      operational: false,
+      messageKey: 'not_android',
+    },
+  }));
+}
+
+export function requestAndroidShizukuPermission(): Promise<AndroidShizukuActionResult> {
+  return invokeOrMock('request_android_shizuku_permission', undefined, () => ({
+    launched: false,
+    messageKey: 'not_android',
+  }));
+}
+
+export function openShizukuApp(): Promise<AndroidShizukuActionResult> {
+  return invokeOrMock('open_shizuku_app', undefined, () => ({
+    launched: false,
+    messageKey: 'not_android',
+  }));
+}
+
+export function recoverAndroidAccessibility(confirmed: boolean): Promise<AndroidAccessibilityRecoveryResult> {
+  return invokeOrMock('recover_android_accessibility', { confirmed }, () => ({
+    outcome: confirmed ? 'shizukuUnavailable' : 'userNotConfirmed',
+    messageKey: confirmed ? 'not_android' : 'user_not_confirmed',
   }));
 }

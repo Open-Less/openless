@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { Icon } from '../../../src/components/Icon';
 import { getSettings, setSettings } from '../../../src/lib/ipc/settings';
 import type { UserPreferences } from '../../../src/lib/types';
@@ -8,8 +9,12 @@ import { SettingRow } from '../../../src/pages/settings/shared';
 import {
   getAndroidAccessibilityStatus,
   getAndroidOverlayStatus,
+  getAndroidShizukuStatus,
+  openShizukuApp,
+  recoverAndroidAccessibility,
   requestAndroidAccessibilityPermission,
   requestAndroidOverlayPermission,
+  requestAndroidShizukuPermission,
 } from '../lib/androidIpc';
 import type {
   AndroidAccessibilityStatus,
@@ -20,6 +25,7 @@ import type {
   AndroidOverlayStatus,
   AndroidOverlayTrigger,
   AndroidPreferenceKey,
+  AndroidShizukuStatus,
 } from '../lib/androidTypes';
 import {
   clampAndroidOverlaySize,
@@ -69,15 +75,20 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
   const { t } = useTranslation();
   const [androidOverlay, setAndroidOverlay] = useState<AndroidOverlayStatus | null>(null);
   const [androidAccessibility, setAndroidAccessibility] = useState<AndroidAccessibilityStatus | null>(null);
+  const [androidShizuku, setAndroidShizuku] = useState<AndroidShizukuStatus | null>(null);
+  const [shizukuRecoveryMessageKey, setShizukuRecoveryMessageKey] = useState<string | null>(null);
+  const [shizukuActionMessageKey, setShizukuActionMessageKey] = useState<string | null>(null);
+  const [shizukuRecoveryPending, setShizukuRecoveryPending] = useState(false);
   const [androidPrefs, setAndroidPrefs] = useState<Pick<UserPreferences, AndroidPreferenceKey> | null>(null);
   const [sizeDraft, setSizeDraft] = useState<number | null>(null);
   const sizeDebounceRef = useRef<number | null>(null);
   const sizePendingRef = useRef(false);
 
   const refreshAndroid = async () => {
-    const [overlay, accessibility, settings] = await Promise.all([
+    const [overlay, accessibility, shizuku, settings] = await Promise.all([
       getAndroidOverlayStatus(),
       getAndroidAccessibilityStatus(),
+      getAndroidShizukuStatus(),
       getSettings(),
     ]);
     let migratedSettings = settings;
@@ -89,8 +100,39 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
     }
     setAndroidOverlay(overlay);
     setAndroidAccessibility(accessibility);
+    setAndroidShizuku((prev) => {
+      const operational = shizuku.accessibility.operational;
+      if (operational && !prev?.accessibility.operational) {
+        setShizukuRecoveryMessageKey(null);
+      }
+      if (shizuku.lastPermissionMessageKey) {
+        setShizukuActionMessageKey(null);
+      }
+      return shizuku;
+    });
     setAndroidPrefs(pickAndroidPrefs(migratedSettings));
   };
+
+  const handleRecoverAccessibility = async () => {
+    if (shizukuRecoveryPending) return;
+    const confirmed = window.confirm(t('settings.permissions.androidShizukuRecoverConfirm'));
+    if (!confirmed) return;
+    setShizukuActionMessageKey(null);
+    setShizukuRecoveryPending(true);
+    try {
+      const result = await recoverAndroidAccessibility(true);
+      setShizukuRecoveryMessageKey(result.messageKey);
+      await refreshAndroid();
+    } finally {
+      setShizukuRecoveryPending(false);
+    }
+  };
+
+  const shizukuDisplayMessageKey = androidShizuku?.lastPermissionMessageKey
+    ?? shizukuRecoveryMessageKey
+    ?? shizukuActionMessageKey
+    ?? androidShizuku?.messageKey
+    ?? null;
 
   useEffect(() => {
     void refreshAndroid();
@@ -248,6 +290,89 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
         </div>
       </SettingRow>
       )}
+      {showAccessibility && (
+      <SettingRow label={t('settings.permissions.androidShizukuLabel')}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-end', width: '100%', minWidth: 0 }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'flex-end', width: '100%', flexWrap: 'wrap', minWidth: 0 }}>
+            {resolveShizukuMessage(t, shizukuDisplayMessageKey) && (
+              <span style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', maxWidth: 220, textAlign: 'right' }}>
+                {resolveShizukuMessage(t, shizukuDisplayMessageKey)}
+              </span>
+            )}
+            <AndroidShizukuStatusPill status={androidShizuku} />
+            {(androidShizuku?.state === 'notInstalled' || androidShizuku?.state === 'notRunning' || androidShizuku?.state === 'binderDead') && (
+              <Btn variant="ghost" size="sm" onClick={() => {
+                setShizukuRecoveryMessageKey(null);
+                setShizukuActionMessageKey(null);
+                void openShizukuApp().then((result) => {
+                  if (!result.launched) {
+                    setShizukuActionMessageKey(result.messageKey);
+                  }
+                  return refreshAndroid();
+                });
+              }}>
+                {t('settings.permissions.androidShizukuOpenApp')}
+              </Btn>
+            )}
+            {androidShizuku?.state === 'notAuthorized' && (
+              <Btn variant="ghost" size="sm" onClick={() => {
+                setShizukuRecoveryMessageKey(null);
+                setShizukuActionMessageKey(null);
+                void requestAndroidShizukuPermission().then((result) => {
+                  if (!result.launched) {
+                    setShizukuActionMessageKey(result.messageKey);
+                  }
+                  return refreshAndroid();
+                });
+              }}>
+                {t('settings.permissions.androidShizukuRequestPermission')}
+              </Btn>
+            )}
+            {androidShizuku?.state === 'authorized'
+              && !androidShizuku.accessibility.operational && (
+              <Btn
+                variant="ghost"
+                size="sm"
+                disabled={shizukuRecoveryPending}
+                onClick={() => { void handleRecoverAccessibility(); }}
+              >
+                {shizukuRecoveryPending
+                  ? t('settings.permissions.checking')
+                  : t('settings.permissions.androidShizukuRecover')}
+              </Btn>
+            )}
+            {shizukuRecoveryMessageKey
+              && androidShizuku?.state === 'authorized'
+              && !androidShizuku.accessibility.operational
+              && (shizukuRecoveryMessageKey === 'partial_rollback'
+                || shizukuRecoveryMessageKey === 'manual_required'
+                || shizukuRecoveryMessageKey === 'oem_rollback'
+                || shizukuRecoveryMessageKey === 'concurrent_change') && (
+              <Btn variant="ghost" size="sm" onClick={() => { void requestAndroidAccessibilityPermission().then(refreshAndroid); }}>
+                {t('settings.permissions.openSystem')}
+              </Btn>
+            )}
+          </div>
+          {androidShizuku?.state === 'authorized' && (
+            <span style={{ fontSize: 11, color: 'var(--ol-ink-4)', maxWidth: 300, textAlign: 'right' }}>
+              {androidShizuku.accessibility.operational
+                ? t('settings.permissions.androidShizukuAccessibilityOperational')
+                : t('settings.permissions.androidShizukuAccessibilityRegistered', {
+                    registered: androidShizuku.accessibility.registered
+                      ? t('settings.permissions.androidShizukuYes')
+                      : t('settings.permissions.androidShizukuNo'),
+                    operational: androidShizuku.accessibility.operational
+                      ? t('settings.permissions.androidShizukuYes')
+                      : t('settings.permissions.androidShizukuNo'),
+                  })}
+            </span>
+          )}
+          <span style={{ fontSize: 11, color: 'var(--ol-ink-4)', maxWidth: 300, textAlign: 'right' }}>
+            {t('settings.permissions.androidShizukuHint')}
+          </span>
+        </div>
+      </SettingRow>
+      )}
       {showOverlayConfig && (
       <>
       <SettingRow label={t('settings.permissions.androidInsertStrategyLabel')}>
@@ -383,4 +508,22 @@ function AndroidAccessibilityStatusPill({ status }: { status: AndroidAccessibili
     return <Pill tone="ok"><Icon name="check" size={11} />{t('settings.permissions.granted')}</Pill>;
   }
   return <Pill tone="outline">{t('settings.permissions.denied')}</Pill>;
+}
+
+function resolveShizukuMessage(t: TFunction, key: string | null | undefined): string {
+  if (!key) return '';
+  return t(`settings.permissions.androidShizukuMessages.${key}`, { defaultValue: key });
+}
+
+function AndroidShizukuStatusPill({ status }: { status: AndroidShizukuStatus | null }) {
+  const { t } = useTranslation();
+  if (!status) return <Pill tone="default">{t('settings.permissions.checking')}</Pill>;
+  const labelKey = `settings.permissions.androidShizukuState.${status.state}` as const;
+  if (status.state === 'authorized') {
+    return <Pill tone="ok"><Icon name="check" size={11} />{t(labelKey)}</Pill>;
+  }
+  if (status.state === 'notAndroid') {
+    return <Pill tone="default">{t(labelKey)}</Pill>;
+  }
+  return <Pill tone="outline">{t(labelKey)}</Pill>;
 }

@@ -21,6 +21,7 @@ src-tauri/src/android/   # Rust 运行时模块（crate::android）
 | `native_bridge.rs` | Kotlin ↔ Coordinator JNI 入口 |
 | `overlay.rs` | 悬浮窗权限与 show/hide |
 | `accessibility.rs` | 无障碍服务状态与 paste |
+| `shizuku.rs` | Shizuku 状态诊断与受控无障碍恢复 |
 | `insert.rs` | 跨 App 文本插入策略 |
 | `updater.rs` | 应用内更新（manifest 拉取、minisign 校验、系统安装器） |
 | `updater_logic.rs` | 更新 URL / 版本比较纯函数（全平台可测） |
@@ -36,13 +37,15 @@ Manifest 合并脚本：
 
 - [`scripts/merge-android-v1-manifest.mjs`](../scripts/merge-android-v1-manifest.mjs) — 麦克风权限（`android/manifests/AndroidManifest.v1.snippet.xml`）
 - [`scripts/merge-android-overlay-manifest.mjs`](../scripts/merge-android-overlay-manifest.mjs) — 悬浮窗 / 无障碍
+- [`scripts/merge-android-shizuku-manifest.mjs`](../scripts/merge-android-shizuku-manifest.mjs) — Shizuku Provider / 授权 Activity
+- [`scripts/patch-android-shizuku-deps.mjs`](../scripts/patch-android-shizuku-deps.mjs) — Shizuku Gradle 依赖
 
 ## 前端（`android/frontend/`，别名 `@android`）
 
 | 路径 | 职责 |
 |------|------|
 | `lib/androidTypes.ts` | Android 偏好与状态 TS 类型 |
-| `lib/androidIpc.ts` | overlay / accessibility Tauri invoke |
+| `lib/androidIpc.ts` | overlay / accessibility / Shizuku Tauri invoke |
 | `lib/androidMicrophonePermission.ts` | WebView 麦克风权限辅助 |
 | `components/AndroidPermissionsPanel.tsx` | 设置页 Android 权限与 overlay 配置 |
 
@@ -59,6 +62,8 @@ CI=true npm run tauri -- android init --ci
 node scripts/copy-android-scaffolding.mjs
 node scripts/merge-android-v1-manifest.mjs
 node scripts/merge-android-overlay-manifest.mjs
+node scripts/merge-android-shizuku-manifest.mjs
+node scripts/patch-android-shizuku-deps.mjs
 CI=true npm run tauri:android:build
 ```
 
@@ -72,6 +77,8 @@ npm run tauri:android:init
 npm run copy:android-scaffolding
 node scripts/merge-android-v1-manifest.mjs
 node scripts/merge-android-overlay-manifest.mjs
+node scripts/merge-android-shizuku-manifest.mjs
+node scripts/patch-android-shizuku-deps.mjs
 npm run tauri:android:build
 ```
 

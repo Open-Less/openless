@@ -18,6 +18,8 @@
     "tauri:android:build:release": "tauri android build --apk --target aarch64 armv7 i686 x86_64 --split-per-abi",
     "merge:android-v1-manifest": "node scripts/merge-android-v1-manifest.mjs",
     "merge:android-overlay-manifest": "node scripts/merge-android-overlay-manifest.mjs",
+    "merge:android-shizuku-manifest": "node scripts/merge-android-shizuku-manifest.mjs",
+    "patch:android-shizuku-deps": "node scripts/patch-android-shizuku-deps.mjs",
     "copy:android-scaffolding": "node scripts/copy-android-scaffolding.mjs",
     "check:macos-capsule-spaces": "node scripts/macos-capsule-spaces-contract.test.mjs",
     "check:macos-speech-usage-description": "node scripts/macos-speech-usage-description-contract.test.mjs",
@@ -26,7 +28,8 @@
     "check:windows-startup-lifecycle": "node scripts/windows-startup-lifecycle-contract.test.mjs",
     "check:windows-ui-config": "node scripts/windows-ui-config.test.mjs",
     "check:pin-persistence-security": "node scripts/pin-persistence-security-contract.test.mjs",
-    "check:android-updater-pubkey": "node scripts/check-android-updater-pubkey.mjs"
+    "check:android-updater-pubkey": "node scripts/check-android-updater-pubkey.mjs",
+    "check:android-shizuku-scaffolding": "node scripts/merge-android-shizuku-manifest.test.mjs && node scripts/patch-android-shizuku-deps.test.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",

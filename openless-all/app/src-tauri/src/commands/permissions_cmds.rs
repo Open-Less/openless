@@ -37,6 +37,32 @@ pub fn request_android_accessibility_permission(
 }
 
 #[tauri::command]
+pub fn get_android_shizuku_status() -> AndroidShizukuStatus {
+    crate::android::get_android_shizuku_status()
+}
+
+#[tauri::command]
+pub fn request_android_shizuku_permission() -> crate::android::AndroidShizukuPermissionResult {
+    crate::android::request_android_shizuku_permission()
+}
+
+#[tauri::command]
+pub fn open_shizuku_app() -> crate::android::AndroidShizukuOpenResult {
+    crate::android::open_shizuku_app()
+}
+
+#[tauri::command]
+pub async fn recover_android_accessibility(confirmed: bool) -> AndroidAccessibilityRecoveryResult {
+    tokio::task::spawn_blocking(move || crate::android::recover_android_accessibility(confirmed))
+        .await
+        .unwrap_or(AndroidAccessibilityRecoveryResult {
+            outcome: AndroidAccessibilityRecoveryOutcome::ShellFailed,
+            message: String::new(),
+            message_key: "internal_error".to_string(),
+        })
+}
+
+#[tauri::command]
 pub fn open_external_url(url: String) -> Result<(), String> {
     crate::external_url::open_external_url(&url)
 }

@@ -65,6 +65,59 @@ pub struct AndroidAccessibilityStatus {
     pub message: String,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum AndroidShizukuState {
+    NotInstalled,
+    NotRunning,
+    NotAuthorized,
+    Authorized,
+    BinderDead,
+    NotAndroid,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AndroidAccessibilityDiagnosis {
+    pub registered: bool,
+    pub operational: bool,
+    #[serde(default)]
+    pub message: String,
+    pub message_key: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AndroidShizukuStatus {
+    pub state: AndroidShizukuState,
+    #[serde(default)]
+    pub message: String,
+    pub message_key: String,
+    pub accessibility: AndroidAccessibilityDiagnosis,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_permission_message_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum AndroidAccessibilityRecoveryOutcome {
+    Success,
+    WriteRejected,
+    ServiceNotBound,
+    ShizukuUnavailable,
+    UserNotConfirmed,
+    ShellFailed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AndroidAccessibilityRecoveryResult {
+    pub outcome: AndroidAccessibilityRecoveryOutcome,
+    #[serde(default)]
+    pub message: String,
+    pub message_key: String,
+}
+
 pub fn default_android_insert_strategy() -> AndroidInsertStrategy {
     AndroidInsertStrategy::Accessibility
 }

@@ -179,6 +179,14 @@ jobs:
         working-directory: openless-all/app
         run: node scripts/merge-android-overlay-manifest.mjs
 
+      - name: Merge Shizuku manifest
+        working-directory: openless-all/app
+        run: node scripts/merge-android-shizuku-manifest.mjs
+
+      - name: Patch Shizuku Gradle dependencies
+        working-directory: openless-all/app
+        run: node scripts/patch-android-shizuku-deps.mjs
+
       - name: Merge updater / install manifest
         working-directory: openless-all/app
         run: node scripts/merge-android-updater-manifest.mjs

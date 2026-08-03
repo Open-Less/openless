@@ -13,10 +13,11 @@ use android_types::{
     normalize_android_insert_strategy, normalize_android_overlay_size_dp,
 };
 pub use android_types::{
-    AndroidAccessibilityState, AndroidAccessibilityStatus, AndroidInsertStrategy,
-    AndroidOverlayActivationMode, AndroidOverlayCancelSwipeDirection,
+    AndroidAccessibilityDiagnosis, AndroidAccessibilityRecoveryOutcome,
+    AndroidAccessibilityRecoveryResult, AndroidAccessibilityState, AndroidAccessibilityStatus,
+    AndroidInsertStrategy, AndroidOverlayActivationMode, AndroidOverlayCancelSwipeDirection,
     AndroidOverlayLeftSwipeAction, AndroidOverlayPermissionState, AndroidOverlayStatus,
-    AndroidOverlayTrigger,
+    AndroidOverlayTrigger, AndroidShizukuState, AndroidShizukuStatus,
 };
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

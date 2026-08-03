@@ -58,7 +58,9 @@ pub(crate) use crate::types::WindowsImeStatus;
 pub(crate) use crate::types::{
     builtin_style_pack_id, default_active_style_pack_id, ActivityDay,
     AndroidAccessibilityStatus,
-    AndroidOverlayStatus, ChineseScriptPreference, ComboBinding, CorrectionRule, CredentialsStatus,
+    AndroidAccessibilityRecoveryOutcome,
+    AndroidAccessibilityRecoveryResult,
+    AndroidOverlayStatus, AndroidShizukuStatus, ChineseScriptPreference, ComboBinding, CorrectionRule, CredentialsStatus,
     DictationSession, DictionaryEntry, HotkeyCapability, HotkeyStatus, OutputLanguagePreference,
     PolishMode, ShortcutBinding, StylePack, StylePackKind, StylePackRuntimeDiagnostics,
     StyleSystemPrompts, UpdateChannel, UserPreferences, VocabPresetStore,

@@ -108,6 +108,12 @@ jobs:
       - name: Copy Android production and test scaffolding
         run: node scripts/copy-android-scaffolding.mjs
 
+      - name: Merge Shizuku manifest
+        run: node scripts/merge-android-shizuku-manifest.mjs
+
+      - name: Patch Shizuku Gradle dependencies
+        run: node scripts/patch-android-shizuku-deps.mjs
+
       - name: Run JVM credential tests and compile instrumentation tests
         # These tests are Kotlin-only. The Rust target is checked above; direct Gradle
         # rustBuild requires the live Tauri CLI RPC server used by `tauri android build`.
