@@ -117,9 +117,10 @@ a { color: inherit; text-decoration: none; }
   to   { opacity: 1; transform: translateY(0); }
 }
 
-/* 通用旋转 —— 「检查更新」按钮检查中的转圈动画等。 */
+/* 通用旋转 —— 「检查更新」按钮检查中的转圈动画等。
+   refresh 图标是逆时针（ccw）箭头，旋转方向与其一致，避免视觉上"反着转"。 */
 @keyframes ol-spin {
-  to { transform: rotate(360deg); }
+  to { transform: rotate(-360deg); }
 }
 
 @keyframes ol-modal-drawer-in {

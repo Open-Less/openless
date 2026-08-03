@@ -43,13 +43,17 @@ export function CheckUpdateButton({ channel }: { channel: UpdateChannel }) {
               ? t('settings.about.upToDate')
               : undefined
         }
-        style={{ ...btnGhostStyle, color, opacity: checking || busy ? 0.7 : 1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, minWidth: 84 }}
+        // 固定宽度 + 内容居中：图标（check ↔ refresh）与 label（"检查更新" ↔ "检查中…"）
+        // 切换时按钮尺寸不再跳动；图标固定容器保证旋转时绕中心转、不位移。
+        style={{ ...btnGhostStyle, color, opacity: checking || busy ? 0.7 : 1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, minWidth: 160 }}
       >
-        <Icon
-          name={iconName}
-          size={12}
-          style={checking ? { animation: 'ol-spin 0.8s linear infinite' } : undefined}
-        />
+        <span style={{ display: 'inline-flex', width: 14, height: 14, alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+          <Icon
+            name={iconName}
+            size={12}
+            style={checking ? { animation: 'ol-spin 0.8s linear infinite' } : undefined}
+          />
+        </span>
         <span style={{ whiteSpace: 'nowrap' }}>{label}</span>
       </button>
       {isDialogStatus(status) && (
