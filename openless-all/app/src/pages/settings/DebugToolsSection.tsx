@@ -84,9 +84,11 @@ export function DebugToolsSection() {
             style={{ ...inputStyle, width: mobile ? '100%' : 80, textAlign: 'right' }}
             disabled={!prefs.recordAudioForDebug}
           />
-          <span style={{ fontSize: 11, color: 'var(--ol-ink-4)', lineHeight: 1.45 }}>
-            {t('settings.recording.audioRecordingMaxEntriesDesc')}
-          </span>
+          {mobile && (
+            <span style={{ fontSize: 11, color: 'var(--ol-ink-4)', lineHeight: 1.45 }}>
+              {t('settings.recording.audioRecordingMaxEntriesDesc')}
+            </span>
+          )}
         </div>
       </SettingRow>
       <SettingRow label={t('modal.about.exportErrorLog')}>
@@ -96,10 +98,19 @@ export function DebugToolsSection() {
           </Btn>
           {exportStatus === 'ok' && (
             <span
-              style={{ fontSize: 11, color: 'var(--ol-ok)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: mobile ? '100%' : 220 }}
+              style={{
+                fontSize: 11,
+                color: 'var(--ol-ok)',
+                whiteSpace: mobile ? 'normal' : 'nowrap',
+                overflow: mobile ? 'visible' : 'hidden',
+                textOverflow: mobile ? 'clip' : 'ellipsis',
+                wordBreak: 'break-word',
+                maxWidth: mobile ? '100%' : 220,
+              }}
               title={exportMessage}
             >
               {t('modal.about.exportSuccess')}
+              {mobile && exportMessage ? `：${exportMessage}` : ''}
             </span>
           )}
           {exportStatus === 'err' && (
