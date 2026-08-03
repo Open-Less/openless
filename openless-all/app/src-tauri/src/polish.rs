@@ -578,7 +578,14 @@ impl OpenAICompatibleLLMProvider {
             "messages": messages,
         });
         if let Some(temperature) = self.config.temperature {
-            body["temperature"] = json!(temperature);
+            // OpenAI 官方 gpt-5 系列在 Chat Completions 只接受默认 temperature=1，
+            // 传 0.3 会被 400 拒绝（issue #857）。官方渠道的 gpt-5* 不下发该字段，
+            // 让服务端用默认值；其余模型保持原行为。
+            if !(self.config.provider_id.trim() == "openai"
+                && openai_model_is_gpt5_family(&self.config.model))
+            {
+                body["temperature"] = json!(temperature);
+            }
         }
         apply_openai_compatible_thinking_control(&mut body, &self.config);
         body
@@ -1695,6 +1702,18 @@ fn openai_compatible_thinking_control_for_base_url(base_url: &str) -> Option<Thi
     None
 }
 
+/// OpenAI 官方 gpt-5 系列（gpt-5 / gpt-5-mini / gpt-5-nano / gpt-5.5 等）在
+/// Chat Completions 中只接受默认 temperature=1，传其它值会返回 400（issue #857）。
+/// 模型名归一化规则与 `openai_chat_reasoning_effort` 保持一致。
+fn openai_model_is_gpt5_family(model: &str) -> bool {
+    model
+        .trim()
+        .strip_prefix("openai/")
+        .unwrap_or_else(|| model.trim())
+        .to_ascii_lowercase()
+        .starts_with("gpt-5")
+}
+
 fn openai_chat_reasoning_effort(model: &str, thinking_enabled: bool) -> Option<&'static str> {
     let normalized = model
         .trim()
@@ -2592,6 +2611,63 @@ mod tests {
         let body = provider.chat_body(true, vec![json!({ "role": "user", "content": "hi" })]);
 
         assert_eq!(body["temperature"], json!(DEFAULT_TEMPERATURE));
+    }
+
+    #[test]
+    fn chat_body_omits_temperature_for_openai_gpt5_family() {
+        for model in ["gpt-5", "gpt-5-mini", "gpt-5-nano", "gpt-5.5", "openai/gpt-5"] {
+            let provider = OpenAICompatibleLLMProvider::new(OpenAICompatibleConfig::new(
+                "openai",
+                "OpenAI",
+                "https://api.openai.com/v1",
+                "k",
+                model,
+            ));
+
+            let body = provider.chat_body(false, vec![json!({ "role": "user", "content": "hi" })]);
+
+            assert!(
+                body.get("temperature").is_none(),
+                "{model} must not receive temperature (issue #857)"
+            );
+        }
+    }
+
+    #[test]
+    fn chat_body_keeps_default_temperature_for_openai_non_gpt5_models() {
+        for model in ["gpt-4o", "gpt-4o-mini", "gpt-4.1"] {
+            let provider = OpenAICompatibleLLMProvider::new(OpenAICompatibleConfig::new(
+                "openai",
+                "OpenAI",
+                "https://api.openai.com/v1",
+                "k",
+                model,
+            ));
+
+            let body = provider.chat_body(false, vec![json!({ "role": "user", "content": "hi" })]);
+
+            assert_eq!(body["temperature"], json!(DEFAULT_TEMPERATURE));
+        }
+    }
+
+    #[test]
+    fn chat_body_keeps_custom_temperature_for_gpt5_on_custom_provider() {
+        // custom 预设由用户显式配温度（issue #857 的绕过路径：custom + temperature=1），
+        // 不该被内置渠道的 gpt-5 特判误伤。
+        let provider = OpenAICompatibleLLMProvider::new(
+            OpenAICompatibleConfig::new(
+                "custom",
+                "Custom",
+                "https://api.openai.com/v1",
+                "k",
+                "gpt-5",
+            )
+            .with_temperature(Some(1.0)),
+        );
+
+        let body = provider.chat_body(false, vec![json!({ "role": "user", "content": "hi" })]);
+
+        assert_eq!(body["temperature"], json!(1.0));
     }
 
     #[test]
