@@ -39,6 +39,16 @@ use super::{
 /// 超时；而我们最终只要几百字。阈值取得比任何合理预算都大得多，正常文档仍走简单路径。
 const FULL_TEXT_MAX_UTF16: usize = 20_000;
 
+/// 一条光标通知要跟最后一次文本变化隔多久，才算「用户真的把光标移开了」。
+///
+/// 两种通知是**成对**发出来的：打一个字，`AXValueChanged` 和 `AXSelectedTextChanged`
+/// 相隔几毫秒先后到达。不设这道门槛，第二条就会被当成「光标移开」——于是每敲一个键都
+/// 判定一次，而中间态全被拒，等用户真正打完时已经没有待判定的改动了。真机上就是这样
+/// 一次都没学到的。
+///
+/// 300ms：远大于配对通知的间隔（毫秒级），远小于「停手再去点别处」的间隔。
+const CARET_MOVE_QUIET: Duration = Duration::from_millis(300);
+
 /// 「这一处改完了」的**兜底**判据：多久没动静就判一次。
 ///
 /// 主判据是语义的 —— 光标离开这一处（见 `value_changed_shim`）。时间只用来兜住那些
@@ -451,6 +461,9 @@ struct WatchContext {
     /// 「光标动了但文本没变」就是他离开了这一处 —— 那一刻这次改动才算定稿。这不是
     /// 时间上的猜测，是语义信号，而且用的是本来就在收的 `AXSelectedTextChanged`。
     last_text: std::cell::RefCell<String>,
+    /// 最后一次**文本**变化的时刻。用来把「打字带出来的光标事件」和「用户真的移开光标」
+    /// 分开 —— 见 [`CARET_MOVE_QUIET`]。
+    last_value_change: std::cell::Cell<Option<Instant>>,
     /// 有未判定的改动时，记它开始的时刻；`None` 表示没有待判定的改动。
     ///
     /// 回调只登记，判定交给监听线程 —— 中间态怎么都可能变，全程只记录不分析。
@@ -471,7 +484,7 @@ struct WatchContext {
 unsafe extern "C" fn value_changed_shim(
     _observer: AxObserverRef,
     _element: AxUiElementRef,
-    _notification: CFStringRef,
+    notification: CFStringRef,
     refcon: *mut c_void,
 ) {
     if refcon.is_null() {
@@ -507,19 +520,33 @@ unsafe extern "C" fn value_changed_shim(
     }
 
     // 第二阶段：把「打字」和「光标移开」分开 —— 全程只记录，边界到了才分析。
-    let text_changed = *ctx.last_text.borrow() != current;
-    if text_changed {
+    if *ctx.last_text.borrow() != current {
         // 还在改。登记一笔，不判定：中间态怎么都可能变。
         *ctx.last_text.borrow_mut() = current;
+        ctx.last_value_change.set(Some(Instant::now()));
         ctx.pending_since.set(Some(Instant::now()));
         return;
     }
 
-    // 文本没变却收到了通知 —— 光标动了。用户离开了这一处，改动到此定稿。
-    if ctx.pending_since.get().is_some() {
-        log::info!("[cursor-context] caret moved away; settling the pending edit");
-        settle_pending_edit(ctx, true);
+    // 文本没变。可能是用户把光标移开了（边界），也可能只是刚才那次打字带出来的配对
+    // 通知 —— 后者必须挡掉，否则每敲一个键都判定一次。
+    if !is_caret_notification(notification) || ctx.pending_since.get().is_none() {
+        return;
     }
+    let quiet = ctx
+        .last_value_change
+        .get()
+        .is_none_or(|t| t.elapsed() >= CARET_MOVE_QUIET);
+    if !quiet {
+        return;
+    }
+    log::info!("[cursor-context] caret moved away; settling the pending edit");
+    settle_pending_edit(ctx, true);
+}
+
+/// 这条通知是不是 `AXSelectedTextChanged`（光标/选区变化）。
+unsafe fn is_caret_notification(notification: CFStringRef) -> bool {
+    cfstring_to_rust(notification).as_deref() == Some("AXSelectedTextChanged")
 }
 
 /// 一处改动定稿了，比对一次并上报。
@@ -620,6 +647,7 @@ pub(super) fn spawn_edit_watcher(
                     baseline: std::cell::RefCell::new(baseline),
                     armed_at: Instant::now(),
                     last_text: std::cell::RefCell::new(baseline_for_last_text),
+                    last_value_change: std::cell::Cell::new(None),
                     pending_since: std::cell::Cell::new(None),
                     typed_text,
                     on_edit,
