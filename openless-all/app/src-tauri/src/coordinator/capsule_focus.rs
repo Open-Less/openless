@@ -722,6 +722,9 @@ fn emit_capsule_with_context_locked(
             .swap(want_passthrough, Ordering::SeqCst)
             != want_passthrough
         {
+            // Android 用原生 overlay（见上方 notify_capsule_state 分支），
+            // 无鼠标穿透 API，跳过（触摸交互由系统处理）。
+            #[cfg(not(target_os = "android"))]
             if let Err(e) = window.set_ignore_cursor_events(want_passthrough) {
                 log::warn!("[capsule] set_ignore_cursor_events failed: {e}");
             }
