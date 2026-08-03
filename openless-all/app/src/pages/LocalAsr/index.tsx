@@ -1636,6 +1636,21 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
               </div>
           )
 
+    // 本地模型页分组标题：模型选择 / 下载与管理 / 其他。
+    const GroupTitle = ({ children }: { children: ReactNode }) => (
+        <div
+            style={{
+                fontSize: 12.5,
+                fontWeight: 600,
+                color: "var(--ol-ink-3)",
+                letterSpacing: "0.02em",
+                margin: "18px 0 8px",
+            }}
+        >
+            {children}
+        </div>
+    )
+
     return (
         <Wrapper>
             {!embedded && (
@@ -1666,109 +1681,56 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
                 </Card>
             )}
 
-            <Card style={{ marginBottom: 16 }}>
-                <div
-                    style={{
-                        display: "flex",
-                        flexDirection: "column",
-                        gap: 12,
-                    }}
-                >
+            {/* ─── 模型选择板块：下拉直接选用已下载的本地模型（macOS Qwen3 引擎）。 ─── */}
+            {IS_MAC && (
+                <Card style={{ marginBottom: 16 }}>
                     <div
                         style={{
-                            display: "flex",
-                            justifyContent: "space-between",
-                            gap: 16,
-                            flexWrap: "wrap",
+                            fontSize: 14,
+                            fontWeight: 700,
+                            color: "var(--ol-ink)",
+                            marginBottom: 6,
                         }}
                     >
-                        <div style={{ minWidth: 0, flex: "1 1 360px" }}>
-                            <div
-                                style={{
-                                    fontSize: 14,
-                                    fontWeight: 700,
-                                    color: "var(--ol-ink)",
-                                    marginBottom: 6,
-                                }}
-                            >
-                                {t("localAsr.storageTitle")}
-                            </div>
-                            <div
-                                style={{
-                                    fontSize: 12.5,
-                                    color: "var(--ol-ink-3)",
-                                    lineHeight: 1.6,
-                                }}
-                            >
-                                <div>
-                                    <span
-                                        style={{ color: "var(--ol-ink-4)" }}
-                                    >
-                                        {t("localAsr.storageBaseDir")}:{" "}
-                                    </span>
-                                    <code>
-                                        {settings?.modelsBaseDir ??
-                                            t("localAsr.storageDefault")}
-                                    </code>
-                                </div>
-                                <div>
-                                    <span
-                                        style={{ color: "var(--ol-ink-4)" }}
-                                    >
-                                        {t("localAsr.storageModelsRoot")}:{" "}
-                                    </span>
-                                    <code>{settings?.modelsRootDir ?? "—"}</code>
-                                </div>
-                            </div>
-                        </div>
+                        {t("localAsr.modelSelectTitle")}
+                    </div>
+                    <div
+                        style={{
+                            fontSize: 12.5,
+                            color: "var(--ol-ink-3)",
+                            lineHeight: 1.55,
+                            marginBottom: 10,
+                        }}
+                    >
+                        {t("localAsr.modelSelectDesc")}
+                    </div>
+                    {models.some(m => m.isDownloaded) ? (
+                        <SelectLite
+                            value={settings?.activeModel ?? ""}
+                            onChange={(id) => void handleSetActiveModel(id)}
+                            options={models
+                                .filter(m => m.isDownloaded)
+                                .map(m => ({ value: m.id, label: m.id }))}
+                            placeholder={t("localAsr.modelSelectPlaceholder")}
+                            ariaLabel={t("localAsr.modelSelectTitle")}
+                            style={{ maxWidth: 300 }}
+                        />
+                    ) : (
                         <div
                             style={{
-                                display: "flex",
-                                gap: 8,
-                                flexWrap: "wrap",
-                                justifyContent: "flex-end",
-                                alignContent: "flex-start",
+                                fontSize: 12,
+                                color: "var(--ol-ink-4)",
                             }}
                         >
-                            <Btn
-                                variant="primary"
-                                size="sm"
-                                disabled={storageBusy}
-                                onClick={() => void handleChooseModelsBaseDir()}
-                            >
-                                {storageBusy
-                                    ? t("common.loading")
-                                    : t("localAsr.storageChoose")}
-                            </Btn>
-                            <Btn
-                                variant="ghost"
-                                size="sm"
-                                disabled={storageBusy || !settings?.modelsBaseDir}
-                                onClick={() => void handleResetModelsBaseDir()}
-                            >
-                                {t("localAsr.storageReset")}
-                            </Btn>
-                            <Btn
-                                variant="ghost"
-                                size="sm"
-                                disabled={storageBusy}
-                                onClick={() => void handleRevealModelsRoot()}
-                            >
-                                {t("localAsr.storageReveal")}
-                            </Btn>
+                            {t("localAsr.modelSelectEmpty")}
                         </div>
-                    </div>
-                    <div
-                        style={{
-                            fontSize: 12,
-                            color: "var(--ol-ink-4)",
-                            lineHeight: 1.55,
-                        }}
-                    >
-                        {t("localAsr.storageDesc")}
-                    </div>
-                </div>
-            </Card>
+                    )}
+                </Card>
+            )}
+
+            {/* ─── 分组：下载与管理（各引擎的模型获取/准备/下载） ─── */}
+            <GroupTitle>{t("localAsr.groupDownload")}</GroupTitle>
+
 
             {IS_WINDOWS && (
                 <Card style={{ marginBottom: 16 }}>
@@ -2871,6 +2833,113 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
 
             {/* Apple Speech（macOS 系统语音识别）：无下载、无凭据，零网络兜底。
                 issue #574。和 Qwen3 模型行平级摆一张卡片即可。 */}
+
+            {/* ─── 分组：其他（存储位置 / 系统语音等） ─── */}
+            <GroupTitle>{t("localAsr.groupOther")}</GroupTitle>
+
+            <Card style={{ marginBottom: 16 }}>
+                <div
+                    style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 12,
+                    }}
+                >
+                    <div
+                        style={{
+                            display: "flex",
+                            justifyContent: "space-between",
+                            gap: 16,
+                            flexWrap: "wrap",
+                        }}
+                    >
+                        <div style={{ minWidth: 0, flex: "1 1 360px" }}>
+                            <div
+                                style={{
+                                    fontSize: 14,
+                                    fontWeight: 700,
+                                    color: "var(--ol-ink)",
+                                    marginBottom: 6,
+                                }}
+                            >
+                                {t("localAsr.storageTitle")}
+                            </div>
+                            <div
+                                style={{
+                                    fontSize: 12.5,
+                                    color: "var(--ol-ink-3)",
+                                    lineHeight: 1.6,
+                                }}
+                            >
+                                <div>
+                                    <span
+                                        style={{ color: "var(--ol-ink-4)" }}
+                                    >
+                                        {t("localAsr.storageBaseDir")}:{" "}
+                                    </span>
+                                    <code>
+                                        {settings?.modelsBaseDir ??
+                                            t("localAsr.storageDefault")}
+                                    </code>
+                                </div>
+                                <div>
+                                    <span
+                                        style={{ color: "var(--ol-ink-4)" }}
+                                    >
+                                        {t("localAsr.storageModelsRoot")}:{" "}
+                                    </span>
+                                    <code>{settings?.modelsRootDir ?? "—"}</code>
+                                </div>
+                            </div>
+                        </div>
+                        <div
+                            style={{
+                                display: "flex",
+                                gap: 8,
+                                flexWrap: "wrap",
+                                justifyContent: "flex-end",
+                                alignContent: "flex-start",
+                            }}
+                        >
+                            <Btn
+                                variant="primary"
+                                size="sm"
+                                disabled={storageBusy}
+                                onClick={() => void handleChooseModelsBaseDir()}
+                            >
+                                {storageBusy
+                                    ? t("common.loading")
+                                    : t("localAsr.storageChoose")}
+                            </Btn>
+                            <Btn
+                                variant="ghost"
+                                size="sm"
+                                disabled={storageBusy || !settings?.modelsBaseDir}
+                                onClick={() => void handleResetModelsBaseDir()}
+                            >
+                                {t("localAsr.storageReset")}
+                            </Btn>
+                            <Btn
+                                variant="ghost"
+                                size="sm"
+                                disabled={storageBusy}
+                                onClick={() => void handleRevealModelsRoot()}
+                            >
+                                {t("localAsr.storageReveal")}
+                            </Btn>
+                        </div>
+                    </div>
+                    <div
+                        style={{
+                            fontSize: 12,
+                            color: "var(--ol-ink-4)",
+                            lineHeight: 1.55,
+                        }}
+                    >
+                        {t("localAsr.storageDesc")}
+                    </div>
+                </div>
+            </Card>
             {IS_MAC && (
                 <Card style={{ marginTop: 16 }}>
                     <div

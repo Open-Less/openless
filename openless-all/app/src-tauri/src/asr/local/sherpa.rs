@@ -75,6 +75,17 @@ pub const MODELS: &[SherpaModel] = &[
         languages: &["multi"],
         quality_tier: "english-fallback",
     },
+    // 开源多语通用里效果最好的 Whisper 档：large-v3 int8（HF csukuangfj/
+    // sherpa-onnx-whisper-large-v3，large-v3-* 前缀文件，加载时重命名为
+    // encoder/decoder/tokens —— 与 whisper-small-multi 同一 Whisper 模式）。
+    SherpaModel {
+        alias: "whisper-large-v3-multi",
+        display_name: "Whisper Large V3 (multilingual)",
+        family: SherpaFamily::Whisper,
+        mode: SherpaMode::Offline,
+        languages: &["multi"],
+        quality_tier: "multilingual-strong",
+    },
     SherpaModel {
         alias: "qwen3-asr-0.6b-int8",
         display_name: "Qwen3-ASR 0.6B INT8",
@@ -129,6 +140,7 @@ pub fn hf_repo_for_alias(alias: &str) -> Result<&'static str> {
         }
         "paraformer-zh" => Ok("csukuangfj/sherpa-onnx-paraformer-zh-2024-03-09"),
         "whisper-small-multi" => Ok("csukuangfj/sherpa-onnx-whisper-small"),
+        "whisper-large-v3-multi" => Ok("csukuangfj/sherpa-onnx-whisper-large-v3"),
         DEFAULT_ONLINE_MODEL_ALIAS => {
             Ok("csukuangfj/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20")
         }
@@ -141,6 +153,7 @@ pub fn required_files_for_alias(alias: &str) -> Result<&'static [&'static str]> 
         "sense-voice-small-zh" => Ok(&["model.int8.onnx", "tokens.txt"]),
         "paraformer-zh" => Ok(&["model.int8.onnx", "tokens.txt"]),
         "whisper-small-multi" => Ok(&["encoder.int8.onnx", "decoder.int8.onnx", "tokens.txt"]),
+        "whisper-large-v3-multi" => Ok(&["encoder.int8.onnx", "decoder.int8.onnx", "tokens.txt"]),
         "qwen3-asr-0.6b-int8" => Ok(&[
             "conv_frontend.onnx",
             "encoder.int8.onnx",
@@ -193,6 +206,11 @@ pub fn download_files_for_alias(alias: &str) -> Result<&'static [(&'static str, 
             ("small-encoder.int8.onnx", "encoder.int8.onnx"),
             ("small-decoder.int8.onnx", "decoder.int8.onnx"),
             ("small-tokens.txt", "tokens.txt"),
+        ]),
+        "whisper-large-v3-multi" => Ok(&[
+            ("large-v3-encoder.int8.onnx", "encoder.int8.onnx"),
+            ("large-v3-decoder.int8.onnx", "decoder.int8.onnx"),
+            ("large-v3-tokens.txt", "tokens.txt"),
         ]),
         DEFAULT_ONLINE_MODEL_ALIAS => Ok(&[
             (
@@ -396,6 +414,7 @@ mod tests {
                 "sense-voice-small-zh",
                 "paraformer-zh",
                 "whisper-small-multi",
+                "whisper-large-v3-multi",
                 "qwen3-asr-0.6b-int8",
                 "zipformer-bilingual-zh-en-streaming",
             ]
