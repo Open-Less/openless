@@ -55,6 +55,12 @@ impl StylePackStore {
 
         let mut prefs_snapshot = prefs.get();
         let mut changed = migrate_style_packs_from_preferences(&mut packs, &prefs_snapshot);
+        // 内置包版本对账：代码内置包 version 高于本地副本时用官方覆盖——内置提示词
+        // 升级（如「清晰结构」v3.0 Beta）随 app 更新推向所有已安装用户。保留用户对
+        // enabled 的设置；本地缺失的内置包直接补入。
+        if reconcile_builtin_packs(&mut packs) {
+            changed = true;
+        }
         if ensure_at_least_one_style_pack_enabled(&mut packs) {
             changed = true;
         }
@@ -538,6 +544,46 @@ fn ensure_at_least_one_style_pack_enabled(packs: &mut [StylePack]) -> bool {
         first.enabled = true;
         first.updated_at = Some(Utc::now().to_rfc3339());
         return true;
+    }
+    false
+}
+
+/// 内置包版本对账：官方版本更高 → 用官方副本覆盖本地（保留 enabled）。
+/// 返回是否有任何包被覆盖 / 补入。
+fn reconcile_builtin_packs(packs: &mut Vec<StylePack>) -> bool {
+    let mut changed = false;
+    for builtin in crate::types::builtin_style_packs() {
+        if let Some(local) = packs.iter_mut().find(|pack| pack.id == builtin.id) {
+            if pack_version_newer(&builtin.version, &local.version) {
+                let enabled = local.enabled;
+                *local = builtin;
+                local.enabled = enabled;
+                changed = true;
+            }
+        } else {
+            packs.push(builtin);
+            changed = true;
+        }
+    }
+    changed
+}
+
+/// "X.Y.Z" 数值分段比较（忽略非数字后缀，如 -beta）。
+fn pack_version_newer(a: &str, b: &str) -> bool {
+    fn numeric_parts(v: &str) -> Vec<u64> {
+        v.split('.')
+            .map(|s| s.trim_end_matches(|c: char| !c.is_ascii_digit()))
+            .filter_map(|s| s.parse::<u64>().ok())
+            .collect()
+    }
+    let (pa, pb) = (numeric_parts(a), numeric_parts(b));
+    for i in 0..pa.len().max(pb.len()) {
+        let x = pa.get(i).copied().unwrap_or(0);
+        let y = pb.get(i).copied().unwrap_or(0);
+        if x == y {
+            continue;
+        }
+        return x > y;
     }
     false
 }
