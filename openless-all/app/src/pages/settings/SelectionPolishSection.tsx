@@ -1,22 +1,16 @@
 // 通用 → 选区润色：这是与录音输入并列的独立入口，快捷键、交付方式均不再藏在快捷键列表中。
 
-import type { CSSProperties } from 'react';
+import type { PlatformCapabilities, SelectionPolishOutputMode } from '../../lib/types';
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ShortcutRecorder } from '../../components/ShortcutRecorder';
 import { defaultSelectionPolishShortcut } from '../../lib/hotkey';
 import { setSelectionPolishHotkey } from '../../lib/ipc';
 import { getPlatformCapabilities } from '../../lib/platform';
-import type { PlatformCapabilities, SelectionPolishOutputMode } from '../../lib/types';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
 import { Card } from '../_atoms';
 import { SectionTitle, SettingRow, chipSelectedStyle, segmentedTrackStyle } from './shared';
 import { detectOS } from '../../components/WindowChrome';
-
-const enableButton: CSSProperties = {
-  padding: '5px 14px', background: 'var(--ol-blue)', color: '#fff', border: 0,
-  borderRadius: 6, fontFamily: 'inherit', fontWeight: 500, cursor: 'default', fontSize: 12,
-};
 
 const outputOptions: Array<{ value: SelectionPolishOutputMode }> = [
   { value: 'directReplace' },
@@ -43,32 +37,23 @@ export function SelectionPolishSection() {
         label={t('settings.selectionPolish.hotkey', '触发快捷键')}
         desc={t('settings.selectionPolish.hotkeyDesc')}
       >
-        {prefs.selectionPolishHotkey ? (
-          <ShortcutRecorder
-            value={prefs.selectionPolishHotkey}
-            alignRecordButton
-            sideSpecificModifiers
-            modifierPresets={capability.availableTriggers ?? []}
-            onSave={async binding => {
-              await setSelectionPolishHotkey(binding);
-              await refresh();
-            }}
-            onDisable={async () => {
-              await setSelectionPolishHotkey(null);
-              await refresh();
-            }}
-          />
-        ) : (
-          <button
-            onClick={async () => {
-              await setSelectionPolishHotkey(defaultSelectionPolishShortcut());
-              await refresh();
-            }}
-            style={enableButton}
-          >
-            {t('settings.shortcuts.enable', '启用 Right Alt（可修改）')}
-          </button>
-        )}
+        <ShortcutRecorder
+          value={prefs.selectionPolishHotkey}
+          sideSpecificModifiers
+          onSave={async binding => {
+            await setSelectionPolishHotkey(binding);
+            await refresh();
+          }}
+          onDisable={async () => {
+            await setSelectionPolishHotkey(null);
+            await refresh();
+          }}
+          // 「重置」= 恢复默认快捷键，等价于旧版独立「启用」按钮。
+          onReset={async () => {
+            await setSelectionPolishHotkey(defaultSelectionPolishShortcut());
+            await refresh();
+          }}
+        />
       </SettingRow>
       <SettingRow label={t('settings.selectionPolish.delivery', '结果处理方式')}>
         <div style={{ ...segmentedTrackStyle, flexWrap: 'wrap', gap: 4 }}>
