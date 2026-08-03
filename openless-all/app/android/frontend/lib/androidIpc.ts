@@ -34,7 +34,8 @@ export function getAndroidAccessibilityStatus(): Promise<AndroidAccessibilitySta
   return invokeOrMock('get_android_accessibility_status', undefined, () => ({
     state: 'notAndroid',
     enabled: false,
-    message: 'Android accessibility is only available on Android',
+    operational: false,
+    messageKey: 'not_android',
   }));
 }
 

@@ -15,7 +15,9 @@ export interface AndroidOverlayStatus {
 export interface AndroidAccessibilityStatus {
   state: 'enabled' | 'notEnabled' | 'notAndroid';
   enabled: boolean;
-  message: string;
+  operational?: boolean;
+  message?: string;
+  messageKey: string;
 }
 
 export type AndroidShizukuState =

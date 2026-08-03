@@ -272,13 +272,13 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
       <SettingRow label={t('settings.permissions.androidAccessibilityLabel')}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-end', width: '100%', minWidth: 0 }}>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'flex-end', width: '100%', flexWrap: 'wrap', minWidth: 0 }}>
-            {androidAccessibility?.message && (
+            {resolveAccessibilityMessage(t, androidAccessibility?.messageKey) && (
               <span style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', maxWidth: 220, textAlign: 'right' }}>
-                {androidAccessibility.message}
+                {resolveAccessibilityMessage(t, androidAccessibility?.messageKey)}
               </span>
             )}
             <AndroidAccessibilityStatusPill status={androidAccessibility} />
-            {!androidAccessibility?.enabled && (
+            {(!androidAccessibility?.enabled || androidAccessibility?.operational === false) && (
               <Btn variant="ghost" size="sm" onClick={() => { void requestAndroidAccessibilityPermission().then(refreshAndroid); }}>
                 {t('settings.permissions.openSystem')}
               </Btn>
@@ -504,6 +504,9 @@ function AndroidOverlayStatusPill({ status }: { status: AndroidOverlayStatus | n
 function AndroidAccessibilityStatusPill({ status }: { status: AndroidAccessibilityStatus | null }) {
   const { t } = useTranslation();
   if (!status) return <Pill tone="default">{t('settings.permissions.checking')}</Pill>;
+  if (status.enabled && status.operational === false) {
+    return <Pill tone="outline">{t('settings.permissions.androidAccessibilityGrantedStale')}</Pill>;
+  }
   if (status.enabled) {
     return <Pill tone="ok"><Icon name="check" size={11} />{t('settings.permissions.granted')}</Pill>;
   }
@@ -513,6 +516,11 @@ function AndroidAccessibilityStatusPill({ status }: { status: AndroidAccessibili
 function resolveShizukuMessage(t: TFunction, key: string | null | undefined): string {
   if (!key) return '';
   return t(`settings.permissions.androidShizukuMessages.${key}`, { defaultValue: key });
+}
+
+function resolveAccessibilityMessage(t: TFunction, key: string | null | undefined): string {
+  if (!key) return '';
+  return t(`settings.permissions.androidAccessibilityMessages.${key}`, { defaultValue: '' });
 }
 
 function AndroidShizukuStatusPill({ status }: { status: AndroidShizukuStatus | null }) {

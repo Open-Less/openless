@@ -222,7 +222,7 @@ object OpenLessShizukuBridge {
 
     internal fun diagnoseAccessibility(context: Context): AccessibilityDiagnosis {
         val registered = OpenLessAccessibilityService.isEnabled(context)
-        val operational = registered && OpenLessAccessibilityService.isOperational(context)
+        val operational = registered && OpenLessAccessibilityService.pingAccessibilityProcess(context)
         val messageKey = when {
             operational -> "operational"
             registered -> "registered_stale"
@@ -551,7 +551,7 @@ object OpenLessShizukuBridge {
     private fun waitForAccessibilityOperational(context: Context): Boolean {
         val deadline = System.currentTimeMillis() + RECOVERY_BIND_TIMEOUT_MS
         while (System.currentTimeMillis() < deadline) {
-            if (OpenLessAccessibilityService.isOperational(context)) {
+            if (OpenLessAccessibilityService.pingAccessibilityProcess(context)) {
                 return true
             }
             try {
@@ -561,7 +561,7 @@ object OpenLessShizukuBridge {
                 return false
             }
         }
-        return OpenLessAccessibilityService.isOperational(context)
+        return OpenLessAccessibilityService.pingAccessibilityProcess(context)
     }
 
     private fun recoveryJson(outcome: RecoveryOutcome, messageKey: String): String {

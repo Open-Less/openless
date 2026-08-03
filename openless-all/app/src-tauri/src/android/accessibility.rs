@@ -4,6 +4,10 @@ use serde::Serialize;
 
 use crate::android::types::{AndroidAccessibilityState, AndroidAccessibilityStatus};
 
+pub const PASTE_RESULT_SUCCESS: &str = "SUCCESS";
+pub const PASTE_RESULT_SERVICE_NOT_CONNECTED: &str = "SERVICE_NOT_CONNECTED";
+pub const PASTE_RESULT_IPC_PROTOCOL_ERROR: &str = "IPC_PROTOCOL_ERROR";
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AndroidAccessibilityPermissionResult {
@@ -22,7 +26,9 @@ pub fn get_android_accessibility_status() -> AndroidAccessibilityStatus {
         AndroidAccessibilityStatus {
             state: AndroidAccessibilityState::NotAndroid,
             enabled: false,
-            message: "Android accessibility backend is only available on Android".to_string(),
+            operational: false,
+            message: String::new(),
+            message_key: "not_android".to_string(),
         }
     }
 }
@@ -43,21 +49,53 @@ pub fn request_android_accessibility_permission() -> AndroidAccessibilityPermiss
 }
 
 pub fn paste_via_accessibility() -> bool {
+    paste_via_accessibility_with_result() == PASTE_RESULT_SUCCESS
+}
+
+pub fn paste_via_accessibility_with_result() -> String {
     #[cfg(target_os = "android")]
     {
-        return android_impl::paste_via_accessibility();
+        return android_impl::paste_via_accessibility_with_result();
+    }
+
+    #[cfg(not(target_os = "android"))]
+    PASTE_RESULT_SERVICE_NOT_CONNECTED.to_string()
+}
+
+pub fn is_accessibility_enabled() -> bool {
+    #[cfg(target_os = "android")]
+    {
+        return android_impl::is_accessibility_enabled();
     }
 
     #[cfg(not(target_os = "android"))]
     false
 }
 
+/// Only retry paste when Kotlin explicitly reports the accessibility process is unreachable.
+/// TIMEOUT and JNI/protocol errors must not retry: the first paste may already have succeeded.
+pub(crate) fn should_retry_paste_after_failure(reason: &str) -> bool {
+    reason == PASTE_RESULT_SERVICE_NOT_CONNECTED
+}
+
 #[cfg(target_os = "android")]
 mod android_impl {
-    use super::{AndroidAccessibilityPermissionResult, AndroidAccessibilityStatus};
+    use super::{
+        AndroidAccessibilityPermissionResult, PASTE_RESULT_IPC_PROTOCOL_ERROR,
+        PASTE_RESULT_SERVICE_NOT_CONNECTED, PASTE_RESULT_SUCCESS,
+    };
     use crate::android::types::{AndroidAccessibilityState, AndroidAccessibilityStatus as Status};
+    use std::thread;
+    use std::time::Duration;
 
-    pub fn get_android_accessibility_status() -> AndroidAccessibilityStatus {
+    pub fn is_accessibility_enabled() -> bool {
+        crate::android::jni::android::with_android_env(|env, context| {
+            crate::android::jni::android::accessibility_enabled(env, context)
+        })
+        .unwrap_or(false)
+    }
+
+    pub fn get_android_accessibility_status() -> Status {
         let enabled = match crate::android::jni::android::with_android_env(|env, context| {
             crate::android::jni::android::accessibility_enabled(env, context)
         }) {
@@ -66,7 +104,9 @@ mod android_impl {
                 return Status {
                     state: AndroidAccessibilityState::NotEnabled,
                     enabled: false,
+                    operational: false,
                     message: error,
+                    message_key: "status_read_failed".to_string(),
                 };
             }
         };
@@ -74,27 +114,26 @@ mod android_impl {
             return Status {
                 state: AndroidAccessibilityState::NotEnabled,
                 enabled: false,
-                message: "请在系统设置中启用 OpenLess 无障碍服务".to_string(),
+                operational: false,
+                message: String::new(),
+                message_key: "not_enabled".to_string(),
             };
         }
 
-        match crate::android::jni::android::with_android_env(|env, context| {
+        let operational = crate::android::jni::android::with_android_env(|env, context| {
             crate::android::jni::android::accessibility_operational(env, context)
-        }) {
-            Ok(true) => Status {
-                state: AndroidAccessibilityState::Enabled,
-                enabled: true,
-                message: "无障碍服务已启用".to_string(),
-            },
-            Ok(false) => Status {
-                state: AndroidAccessibilityState::NotEnabled,
-                enabled: false,
-                message: "无障碍服务已开启，但当前未运行或已被系统标记为故障，请重新开启 OpenLess 无障碍服务".to_string(),
-            },
-            Err(error) => Status {
-                state: AndroidAccessibilityState::NotEnabled,
-                enabled: false,
-                message: error,
+        })
+        .unwrap_or(false);
+
+        Status {
+            state: AndroidAccessibilityState::Enabled,
+            enabled: true,
+            operational,
+            message: String::new(),
+            message_key: if operational {
+                "operational".to_string()
+            } else {
+                "authorized_not_connected".to_string()
             },
         }
     }
@@ -114,10 +153,66 @@ mod android_impl {
         }
     }
 
-    pub fn paste_via_accessibility() -> bool {
-        crate::android::jni::android::with_android_env(|env, context| {
-            crate::android::jni::android::accessibility_paste(env, context)
-        })
-        .unwrap_or(false)
+    fn invoke_paste_once() -> String {
+        match crate::android::jni::android::with_android_env(|env, context| {
+            crate::android::jni::android::accessibility_paste_result(env, context)
+        }) {
+            Ok(result) => result,
+            Err(error) => {
+                log::warn!("[android-a11y] paste IPC protocol error: {error}");
+                PASTE_RESULT_IPC_PROTOCOL_ERROR.to_string()
+            }
+        }
+    }
+
+    pub fn paste_via_accessibility_with_result() -> String {
+        let first = invoke_paste_once();
+        if first == PASTE_RESULT_SUCCESS {
+            return first;
+        }
+        if super::should_retry_paste_after_failure(&first) {
+            log::info!("[android-a11y] paste retry after {first}");
+            thread::sleep(Duration::from_millis(200));
+            let second = invoke_paste_once();
+            log::info!("[android-a11y] paste retry result={second}");
+            return second;
+        }
+        if first == "TIMEOUT" {
+            log::warn!("[android-a11y] paste timed out without retry; text remains on clipboard");
+        } else {
+            log::warn!("[android-a11y] paste failed reason={first}");
+        }
+        first
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        paste_via_accessibility_with_result, should_retry_paste_after_failure,
+        PASTE_RESULT_IPC_PROTOCOL_ERROR, PASTE_RESULT_SERVICE_NOT_CONNECTED,
+    };
+
+    #[cfg(not(target_os = "android"))]
+    #[test]
+    fn paste_result_constant_off_android() {
+        assert_eq!(
+            paste_via_accessibility_with_result(),
+            PASTE_RESULT_SERVICE_NOT_CONNECTED
+        );
+    }
+
+    #[test]
+    fn should_retry_only_service_not_connected() {
+        assert!(should_retry_paste_after_failure(
+            PASTE_RESULT_SERVICE_NOT_CONNECTED
+        ));
+        assert!(!should_retry_paste_after_failure("TIMEOUT"));
+        assert!(!should_retry_paste_after_failure(
+            PASTE_RESULT_IPC_PROTOCOL_ERROR
+        ));
+        assert!(!should_retry_paste_after_failure("NO_FOCUSED_EDITOR"));
+        assert!(!should_retry_paste_after_failure("PASTE_REJECTED"));
+        assert!(!should_retry_paste_after_failure("SUCCESS"));
     }
 }

@@ -25,8 +25,8 @@ pub fn android_insert_with_strategy(
 }
 
 fn try_accessibility(inserter: &TextInserter, text: &str) -> Option<InsertStatus> {
-    if !crate::android::accessibility::get_android_accessibility_status().enabled {
-        log::info!("[android-insert] accessibility service not enabled");
+    if !crate::android::accessibility::is_accessibility_enabled() {
+        log::info!("[android-insert] accessibility service not enabled in system settings");
         return None;
     }
     // 保存粘贴前的剪贴板内容，粘贴完成后还原，避免静默覆盖用户剪贴板。
@@ -40,10 +40,13 @@ fn try_accessibility(inserter: &TextInserter, text: &str) -> Option<InsertStatus
     if !matches!(inserter.copy_fallback(text), InsertStatus::CopiedFallback) {
         return None;
     }
-    let result = if crate::android::accessibility::paste_via_accessibility() {
+    let paste_result = crate::android::accessibility::paste_via_accessibility_with_result();
+    let result = if paste_result == "SUCCESS" {
         Some(InsertStatus::Inserted)
     } else {
-        log::warn!("[android-insert] accessibility paste failed; text remains on clipboard");
+        log::warn!(
+            "[android-insert] accessibility paste failed reason={paste_result}; text remains on clipboard"
+        );
         Some(InsertStatus::CopiedFallback)
     };
 

@@ -62,7 +62,11 @@ pub enum AndroidAccessibilityState {
 pub struct AndroidAccessibilityStatus {
     pub state: AndroidAccessibilityState,
     pub enabled: bool,
+    #[serde(default)]
+    pub operational: bool,
+    #[serde(default)]
     pub message: String,
+    pub message_key: String,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

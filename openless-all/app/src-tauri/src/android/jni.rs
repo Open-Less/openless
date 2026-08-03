@@ -697,12 +697,19 @@ pub mod android {
         env: &mut JNIEnv<'local>,
         context: &JObject<'local>,
     ) -> Result<bool, String> {
-        call_static_bool_with_context_class(
+        Ok(accessibility_paste_result(env, context)? == "SUCCESS")
+    }
+
+    pub fn accessibility_paste_result<'local>(
+        env: &mut JNIEnv<'local>,
+        context: &JObject<'local>,
+    ) -> Result<String, String> {
+        call_static_string_with_context_class(
             env,
             context,
             "com.openless.app.OpenLessAccessibilityService",
-            "pasteToFocusedField",
-            "()Z",
+            "pasteToFocusedFieldResult",
+            "()Ljava/lang/String;",
             &[],
         )
     }
@@ -738,9 +745,6 @@ pub mod android {
     }
 
     const ACCESSIBILITY_SERVICE_CLASS: &str = "com.openless.app.OpenLessAccessibilityService";
-    const ACCESSIBILITY_PREFS_NAME: &str = "openless_accessibility";
-    const ACCESSIBILITY_HEARTBEAT_KEY: &str = "last_heartbeat";
-    const ACCESSIBILITY_HEARTBEAT_STALE_MS: i64 = 15_000;
 
     fn content_resolver<'local>(
         env: &mut JNIEnv<'local>,
@@ -844,39 +848,14 @@ pub mod android {
         if !accessibility_enabled(env, context)? {
             return Ok(false);
         }
-        let prefs_name = jobject_str(env, ACCESSIBILITY_PREFS_NAME)?;
-        let prefs = env
-            .call_method(
-                context,
-                "getSharedPreferences",
-                "(Ljava/lang/String;I)Landroid/content/SharedPreferences;",
-                &[JValue::Object(&prefs_name), JValue::Int(0)],
-            )
-            .and_then(|value| value.l())
-            .map_err(|error| format!("Context.getSharedPreferences: {error}"))?;
-        let heartbeat_key = jobject_str(env, ACCESSIBILITY_HEARTBEAT_KEY)?;
-        let last_heartbeat = env
-            .call_method(
-                &prefs,
-                "getLong",
-                "(Ljava/lang/String;J)J",
-                &[JValue::Object(&heartbeat_key), JValue::Long(0)],
-            )
-            .and_then(|value| value.j())
-            .map_err(|error| format!("SharedPreferences.getLong: {error}"))?;
-        if last_heartbeat <= 0 {
-            return Ok(false);
-        }
-        let now = env
-            .call_static_method(
-                "java/lang/System",
-                "currentTimeMillis",
-                "()J",
-                &[],
-            )
-            .and_then(|value| value.j())
-            .map_err(|error| format!("System.currentTimeMillis: {error}"))?;
-        Ok(now.saturating_sub(last_heartbeat) <= ACCESSIBILITY_HEARTBEAT_STALE_MS)
+        call_static_bool_with_context_class(
+            env,
+            context,
+            "com.openless.app.OpenLessAccessibilityService",
+            "pingAccessibilityProcess",
+            "(Landroid/content/Context;)Z",
+            &[JValue::Object(context)],
+        )
     }
 
     pub fn launch_accessibility_settings(
