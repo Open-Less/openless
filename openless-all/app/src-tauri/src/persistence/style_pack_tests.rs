@@ -528,3 +528,55 @@ fn sync_style_pack_preferences_uses_builtin_store_prompts_as_source_of_truth() {
     assert_eq!(prefs.style_system_prompts.formal, packs[3].prompt);
     assert_eq!(prefs.custom_style_prompts, CustomStylePrompts::default());
 }
+
+#[test]
+fn pack_version_newer_compares_numeric_segments() {
+    assert!(super::pack_version_newer("3.0.0", "2.0.0"));
+    assert!(!super::pack_version_newer("2.0.0", "3.0.0"));
+    assert!(!super::pack_version_newer("3.0.0", "3.0.0"));
+    assert!(super::pack_version_newer("3.1.0", "3.0.9"));
+    assert!(super::pack_version_newer("10.0.0", "9.9.9"));
+    // pre-release 视为与正式版同级，不判为更新
+    assert!(!super::pack_version_newer("3.0.0-beta.1", "3.0.0"));
+    assert!(!super::pack_version_newer("3.0.0", "3.0.0-beta.1"));
+    assert!(super::pack_version_newer("3.0.1-beta", "3.0.0"));
+    // 全非数字 → 不判定更新
+    assert!(!super::pack_version_newer("abc", "def"));
+}
+
+#[test]
+fn reconcile_builtin_packs_upgrades_prompt_only_and_preserves_user_fields() {
+    let mut packs = builtin_style_packs();
+    let local = packs
+        .iter_mut()
+        .find(|p| p.id == "builtin.structured")
+        .expect("builtin structured pack");
+    local.version = "2.0.0".into();
+    local.prompt = "用户自定义的旧 prompt".into();
+    local.name = "我的清晰结构".into();
+    local.enabled = false; // 用户手动禁用
+
+    assert!(super::reconcile_builtin_packs(&mut packs));
+
+    let upgraded = packs
+        .iter()
+        .find(|p| p.id == "builtin.structured")
+        .expect("builtin structured pack");
+    assert_eq!(upgraded.version, "3.0.0", "版本应推进到官方 3.0.0");
+    assert!(upgraded.prompt.contains("# 场景优先级"), "prompt 应推进为 v3.0 Beta");
+    assert_eq!(upgraded.name, "我的清晰结构", "用户改名必须保留");
+    assert!(!upgraded.enabled, "用户 enabled 状态必须保留");
+}
+
+#[test]
+fn reconcile_builtin_packs_skips_equal_version_and_adds_missing() {
+    // 等版本（builtin 3.0.0 vs local 3.0.0）→ 不推进、不落盘
+    let mut packs = builtin_style_packs();
+    assert!(!super::reconcile_builtin_packs(&mut packs));
+
+    // 本地缺失内置包 → 补入全部 4 个
+    let mut empty: Vec<StylePack> = Vec::new();
+    assert!(super::reconcile_builtin_packs(&mut empty));
+    assert_eq!(empty.len(), 4);
+    assert!(empty.iter().all(|p| p.kind == crate::types::StylePackKind::Builtin));
+}

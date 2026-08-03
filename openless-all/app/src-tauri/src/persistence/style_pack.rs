@@ -128,9 +128,11 @@ impl StylePackStore {
         {
             return Ok(pack);
         }
+        // 产品默认包是「清晰结构」（default_active_style_pack_id）；用户激活的包
+        // 被禁用时优先落回它，与默认保持一致，最后才用任意 enabled 包兜底。
         if let Some(pack) = packs
             .iter()
-            .find(|pack| pack.id == BUILTIN_STYLE_PACK_LIGHT_ID && pack.enabled)
+            .find(|pack| pack.id == default_active_style_pack_id() && pack.enabled)
             .cloned()
         {
             return Ok(pack);
@@ -548,16 +550,23 @@ fn ensure_at_least_one_style_pack_enabled(packs: &mut [StylePack]) -> bool {
     false
 }
 
-/// 内置包版本对账：官方版本更高 → 用官方副本覆盖本地（保留 enabled）。
-/// 返回是否有任何包被覆盖 / 补入。
+/// 内置包版本对账：官方版本更高 → 仅推进 prompt 与 version（描述/示例/tags 等
+/// 用户自定义和 enabled 状态全部保留）。缺失的内置包直接补入。
+/// 返回是否有任何包被推进 / 补入。
 fn reconcile_builtin_packs(packs: &mut Vec<StylePack>) -> bool {
     let mut changed = false;
     for builtin in crate::types::builtin_style_packs() {
         if let Some(local) = packs.iter_mut().find(|pack| pack.id == builtin.id) {
             if pack_version_newer(&builtin.version, &local.version) {
-                let enabled = local.enabled;
-                *local = builtin;
-                local.enabled = enabled;
+                log::info!(
+                    "[style-pack] builtin {} prompt upgraded {} -> {} (prompt-only)",
+                    local.id,
+                    local.version,
+                    builtin.version
+                );
+                local.version = builtin.version.clone();
+                local.prompt = builtin.prompt.clone();
+                local.updated_at = Some(Utc::now().to_rfc3339());
                 changed = true;
             }
         } else {
@@ -568,11 +577,14 @@ fn reconcile_builtin_packs(packs: &mut Vec<StylePack>) -> bool {
     changed
 }
 
-/// "X.Y.Z" 数值分段比较（忽略非数字后缀，如 -beta）。
+/// "X.Y.Z" 数值分段比较。pre-release 后缀（-beta 等）先切掉：pre-release 视为
+/// 与正式版同级，不判为更新（与 semver 直觉一致）。
 fn pack_version_newer(a: &str, b: &str) -> bool {
     fn numeric_parts(v: &str) -> Vec<u64> {
-        v.split('.')
-            .map(|s| s.trim_end_matches(|c: char| !c.is_ascii_digit()))
+        v.split('-')
+            .next()
+            .unwrap_or(v)
+            .split('.')
             .filter_map(|s| s.parse::<u64>().ok())
             .collect()
     }
