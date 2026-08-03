@@ -6,6 +6,11 @@ export function lessComputerWindowDismiss(): Promise<void> {
     return invokeOrMock("less_computer_window_dismiss", undefined, () => undefined)
 }
 
+/** 从主设置页打开文字交互浮窗，无需先触发麦克风或全局快捷键。 */
+export function lessComputerWindowOpen(): Promise<void> {
+    return invokeOrMock("less_computer_window_open", undefined, () => undefined)
+}
+
 /** 内联审批卡的 Approve / Deny 回执。token 关联到等待中的拦截动作。 */
 export function lessComputerApprove(
     token: string,

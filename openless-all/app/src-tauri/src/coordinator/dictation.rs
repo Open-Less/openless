@@ -1166,11 +1166,10 @@ pub(super) async fn run_voice_agent_transcript(
         }
         other => other,
     };
-    let model = prefs
-        .coding_agent_model
-        .clone()
-        .filter(|m| !m.trim().is_empty())
-        .or_else(|| Some("sonnet".to_string()));
+    let provider =
+        crate::coding_agent::CodingAgentProvider::from_pref(&prefs.coding_agent_provider);
+    let model =
+        crate::coding_agent::resolve_coding_agent_model(provider, prefs.coding_agent_model.clone());
     let prompt = crate::coding_agent::autonomous_prompt(&transcript);
 
     // 第一轮：默认护栏（高风险全 deny）。运行后若检测到护栏拦截，弹审批卡；

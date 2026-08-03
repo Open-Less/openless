@@ -25,7 +25,8 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 
 pub use args::{
-    build_claude_args, CodingAgentPermissionMode, CodingAgentProvider, CodingAgentRequest,
+    build_claude_args, resolve_coding_agent_model, CodingAgentPermissionMode, CodingAgentProvider,
+    CodingAgentRequest,
 };
 pub use detect::McpServerStatus;
 pub use opencode::run_opencode_agent;

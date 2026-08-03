@@ -12,7 +12,7 @@ use tauri::{AppHandle, Emitter, Window};
 
 use super::detect::{has_computer_use_mcp, McpServerStatus};
 use super::guard::build_guard_settings_json;
-use super::opencode::detect_opencode;
+use super::opencode::{detect_opencode, list_opencode_models};
 use super::{
     claude_mcp_list, create_git_snapshot, detect_claude, run_claude_agent,
     CodingAgentPermissionMode, CodingAgentRequest,
@@ -38,7 +38,9 @@ fn validate_exe(exe: &str) -> Result<(), String> {
         if exe == "claude" {
             return Ok(());
         }
-        return Err(format!("不允许的可执行文件名: {exe}（只接受 'claude' 或已知安装目录下的绝对路径）"));
+        return Err(format!(
+            "不允许的可执行文件名: {exe}（只接受 'claude' 或已知安装目录下的绝对路径）"
+        ));
     }
     // 绝对路径：必须规范化到已知 claude 安装目录之一
     let path = std::path::Path::new(exe);
@@ -46,11 +48,7 @@ fn validate_exe(exe: &str) -> Result<(), String> {
         return Err(format!("不允许的相对路径: {exe}"));
     }
     // 已知 claude 安装目录前缀
-    let known_prefixes: &[&str] = &[
-        "/usr/local/bin/",
-        "/usr/bin/",
-        "/opt/homebrew/bin/",
-    ];
+    let known_prefixes: &[&str] = &["/usr/local/bin/", "/usr/bin/", "/opt/homebrew/bin/"];
     // 也允许 ~/.local/bin/claude（用户目录绝对路径，动态计算）
     let home_prefix = std::env::var("HOME")
         .ok()
@@ -58,11 +56,15 @@ fn validate_exe(exe: &str) -> Result<(), String> {
 
     let exe_norm = exe.replace('\\', "/");
     let allowed = known_prefixes.iter().any(|p| exe_norm.starts_with(p))
-        || home_prefix.as_deref().map_or(false, |p| exe_norm.starts_with(p));
+        || home_prefix
+            .as_deref()
+            .map_or(false, |p| exe_norm.starts_with(p));
     if allowed {
         Ok(())
     } else {
-        Err(format!("不允许的 claude 路径: {exe}（必须位于已知安装目录）"))
+        Err(format!(
+            "不允许的 claude 路径: {exe}（必须位于已知安装目录）"
+        ))
     }
 }
 
@@ -135,6 +137,20 @@ pub struct OpenCodeDetectionWire {
     pub exe: String,
 }
 
+fn normalize_opencode_exe(exe: Option<String>) -> Result<String, String> {
+    let exe = exe
+        .map(|e| e.trim().to_string())
+        .filter(|e| !e.is_empty())
+        .unwrap_or_else(|| "opencode".to_string());
+    if exe.contains("..") {
+        return Err("不允许的可执行文件路径: 包含 '..'".into());
+    }
+    if (exe.contains('/') || exe.contains('\\')) && !std::path::Path::new(&exe).is_absolute() {
+        return Err("不允许的相对路径，仅接受裸可执行文件名或绝对路径".into());
+    }
+    Ok(exe)
+}
+
 /// 检测 `opencode` 是否安装、版本。语音 Agent 选了 OpenCode 后端时，设置页据此提示
 /// 用户是否需要先 `npm i -g opencode-ai` / 登录。
 #[tauri::command]
@@ -143,23 +159,25 @@ pub async fn coding_agent_detect_opencode(
     exe: Option<String>,
 ) -> Result<OpenCodeDetectionWire, String> {
     ensure_main_window(&window)?;
-    let exe = exe
-        .map(|e| e.trim().to_string())
-        .filter(|e| !e.is_empty())
-        .unwrap_or_else(|| "opencode".to_string());
-    // 拒绝路径遍历和相对路径（--version 探测仅允许裸名或绝对路径）。
-    if exe.contains("..") {
-        return Err("不允许的可执行文件路径: 包含 '..'".into());
-    }
-    if (exe.contains('/') || exe.contains('\\')) && !std::path::Path::new(&exe).is_absolute() {
-        return Err("不允许的相对路径，仅接受裸可执行文件名或绝对路径".into());
-    }
+    let exe = normalize_opencode_exe(exe)?;
     let version = detect_opencode(&exe).await;
     Ok(OpenCodeDetectionWire {
         installed: version.is_some(),
         version,
         exe,
     })
+}
+
+/// 拉取 OpenCode 当前账号可用模型，供 Less Computer 设置页自动填充模型选择器。
+#[tauri::command]
+pub async fn coding_agent_list_opencode_models(
+    window: Window,
+    exe: Option<String>,
+    refresh: Option<bool>,
+) -> Result<Vec<String>, String> {
+    ensure_main_window(&window)?;
+    let exe = normalize_opencode_exe(exe)?;
+    list_opencode_models(&exe, refresh.unwrap_or(true)).await
 }
 
 /// 护栏化地无头跑一次 claude，事件流式 emit 到前端 `coding-agent:test`。

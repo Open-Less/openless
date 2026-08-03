@@ -709,24 +709,25 @@ fn emit_capsule_with_context_locked(
         // 关掉鼠标穿透（按钮可点，代价是窗口底部 460×180 区域在这几秒内拦截点击——
         // 与 1.3.x 经典胶囊同款取舍）；终态 toast、隐藏、Siri 光效、选区润色提示一律
         // 保持穿透，不遮挡底层 app。set_ignore_cursor_events 只在值变化时调用一次。
-        let interactive = classic_style
-            && visible
-            && !selection_polish
-            && matches!(
-                state,
-                CapsuleState::Recording | CapsuleState::Transcribing | CapsuleState::Polishing
-            );
-        let want_passthrough = !interactive;
-        if inner_for_main
-            .capsule_cursor_passthrough
-            .swap(want_passthrough, Ordering::SeqCst)
-            != want_passthrough
+        // Android 没有胶囊窗口，tauri 的 set_ignore_cursor_events 在其上不可用。
+        #[cfg(not(mobile))]
         {
-            // Android 用原生 overlay（见上方 notify_capsule_state 分支），
-            // 无鼠标穿透 API，跳过（触摸交互由系统处理）。
-            #[cfg(not(target_os = "android"))]
-            if let Err(e) = window.set_ignore_cursor_events(want_passthrough) {
-                log::warn!("[capsule] set_ignore_cursor_events failed: {e}");
+            let interactive = classic_style
+                && visible
+                && !selection_polish
+                && matches!(
+                    state,
+                    CapsuleState::Recording | CapsuleState::Transcribing | CapsuleState::Polishing
+                );
+            let want_passthrough = !interactive;
+            if inner_for_main
+                .capsule_cursor_passthrough
+                .swap(want_passthrough, Ordering::SeqCst)
+                != want_passthrough
+            {
+                if let Err(e) = window.set_ignore_cursor_events(want_passthrough) {
+                    log::warn!("[capsule] set_ignore_cursor_events failed: {e}");
+                }
             }
         }
         if show_capsule && visible {

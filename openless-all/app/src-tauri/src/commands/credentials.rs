@@ -4,21 +4,25 @@ const LLM_EXTRA_HEADERS_ACCOUNT: &str = "ark.extra_headers";
 const LLM_TEMPERATURE_ACCOUNT: &str = "ark.temperature";
 
 #[tauri::command]
-pub fn get_credentials() -> CredentialsStatus {
-    let snap = CredentialsVault::snapshot();
-    let active_asr_provider = CredentialsVault::get_active_asr();
-    let active_llm_provider = CredentialsVault::get_active_llm();
-    let volcengine_configured = volcengine_configured(&snap);
-    let asr_configured = asr_configured_for_provider(&active_asr_provider, &snap);
-    let llm_configured = llm_configured_for_provider(&active_llm_provider, &snap);
-    CredentialsStatus {
-        active_asr_provider,
-        active_llm_provider,
-        asr_configured,
-        llm_configured,
-        volcengine_configured,
-        ark_configured: llm_configured,
-    }
+pub async fn get_credentials() -> Result<CredentialsStatus, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let snap = CredentialsVault::snapshot();
+        let active_asr_provider = CredentialsVault::get_active_asr();
+        let active_llm_provider = CredentialsVault::get_active_llm();
+        let volcengine_configured = volcengine_configured(&snap);
+        let asr_configured = asr_configured_for_provider(&active_asr_provider, &snap);
+        let llm_configured = llm_configured_for_provider(&active_llm_provider, &snap);
+        CredentialsStatus {
+            active_asr_provider,
+            active_llm_provider,
+            asr_configured,
+            llm_configured,
+            volcengine_configured,
+            ark_configured: llm_configured,
+        }
+    })
+    .await
+    .map_err(|e| format!("credential status worker failed: {e}"))
 }
 
 fn volcengine_configured(snap: &CredentialsSnapshot) -> bool {
@@ -173,46 +177,55 @@ pub(crate) async fn release_sherpa_runtime_if_inactive(
 }
 
 #[tauri::command]
-pub fn set_credential(
+pub async fn set_credential(
     window: Window,
     account: String,
     value: String,
     provider: Option<String>,
 ) -> Result<(), String> {
     ensure_main_window(&window)?;
-    if account == LLM_EXTRA_HEADERS_ACCOUNT {
-        CredentialsVault::set_active_llm_extra_headers_json(&value).map_err(|e| e.to_string())?;
-        let _ = window.emit("credentials:changed", ());
-        return Ok(());
-    }
-    if account == LLM_TEMPERATURE_ACCOUNT {
-        CredentialsVault::set_active_llm_temperature(&value).map_err(|e| e.to_string())?;
-        let _ = window.emit("credentials:changed", ());
-        return Ok(());
-    }
-    let acc = parse_account(&account)?;
-    if let Some(provider) = provider {
-        if !matches!(
-            acc,
-            CredentialAccount::VolcengineAppKey
-                | CredentialAccount::VolcengineAccessKey
-                | CredentialAccount::VolcengineResourceId
-                | CredentialAccount::VolcengineAuthMode
-                | CredentialAccount::VolcengineApiKey
-                | CredentialAccount::AsrApiKey
-                | CredentialAccount::AsrEndpoint
-                | CredentialAccount::AsrModel
-                | CredentialAccount::AsrVocabularyId
-        ) {
-            return Err("provider-scoped credential must be an ASR account".to_string());
-        }
-        CredentialsVault::set_for_asr_provider(&provider, acc, &value)
-            .map_err(|e| e.to_string())?;
-    } else if value.is_empty() {
-        CredentialsVault::remove(acc).map_err(|e| e.to_string())?;
+    let extra_headers = account == LLM_EXTRA_HEADERS_ACCOUNT;
+    let temperature = account == LLM_TEMPERATURE_ACCOUNT;
+    let parsed = if extra_headers || temperature {
+        None
     } else {
-        CredentialsVault::set(acc, &value).map_err(|e| e.to_string())?;
-    }
+        Some(parse_account(&account)?)
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        if extra_headers {
+            return CredentialsVault::set_active_llm_extra_headers_json(&value)
+                .map_err(|e| e.to_string());
+        }
+        if temperature {
+            return CredentialsVault::set_active_llm_temperature(&value)
+                .map_err(|e| e.to_string());
+        }
+        let acc = parsed.expect("non-extra credential account must be parsed");
+        if let Some(provider) = provider {
+            if !matches!(
+                acc,
+                CredentialAccount::VolcengineAppKey
+                    | CredentialAccount::VolcengineAccessKey
+                    | CredentialAccount::VolcengineResourceId
+                    | CredentialAccount::VolcengineAuthMode
+                    | CredentialAccount::VolcengineApiKey
+                    | CredentialAccount::AsrApiKey
+                    | CredentialAccount::AsrEndpoint
+                    | CredentialAccount::AsrModel
+                    | CredentialAccount::AsrVocabularyId
+            ) {
+                return Err("provider-scoped credential must be an ASR account".to_string());
+            }
+            CredentialsVault::set_for_asr_provider(&provider, acc, &value)
+                .map_err(|e| e.to_string())
+        } else if value.is_empty() {
+            CredentialsVault::remove(acc).map_err(|e| e.to_string())
+        } else {
+            CredentialsVault::set(acc, &value).map_err(|e| e.to_string())
+        }
+    })
+    .await
+    .map_err(|e| format!("credential write worker failed: {e}"))??;
     // 通知前端凭据已变更（如 Overview 页需要刷新 asrConfigured 状态）。
     // issue #532 / #573：在 Settings 填写凭据但不切换提供商时，Overview 不会重拉状态，
     // 仍显示「未配置」。该修复曾随 #538 合入 main，但被 beta→main 合并覆盖，beta 上缺失。
@@ -288,24 +301,36 @@ pub fn set_active_llm_provider(provider: String) -> Result<(), String> {
 /// 读出某个账号的实际值（用于设置页预填表单）。
 /// 凭据来自系统凭据库；只允许主设置窗口读取 raw secret，避免胶囊 / QA 等辅助窗口默认暴露。
 #[tauri::command]
-pub fn read_credential(
+pub async fn read_credential(
     window: Window,
     account: String,
     provider: Option<String>,
 ) -> Result<Option<String>, String> {
     ensure_main_window(&window)?;
-    if account == LLM_EXTRA_HEADERS_ACCOUNT {
-        return CredentialsVault::get_active_llm_extra_headers_json().map_err(|e| e.to_string());
-    }
-    if account == LLM_TEMPERATURE_ACCOUNT {
-        return Ok(CredentialsVault::get_active_llm_temperature_string());
-    }
-    let acc = parse_account(&account)?;
-    if let Some(provider) = provider {
-        CredentialsVault::get_for_asr_provider(&provider, acc).map_err(|e| e.to_string())
+    let extra_headers = account == LLM_EXTRA_HEADERS_ACCOUNT;
+    let temperature = account == LLM_TEMPERATURE_ACCOUNT;
+    let parsed = if extra_headers || temperature {
+        None
     } else {
-        CredentialsVault::get(acc).map_err(|e| e.to_string())
-    }
+        Some(parse_account(&account)?)
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        if extra_headers {
+            return CredentialsVault::get_active_llm_extra_headers_json()
+                .map_err(|e| e.to_string());
+        }
+        if temperature {
+            return Ok(CredentialsVault::get_active_llm_temperature_string());
+        }
+        let acc = parsed.expect("non-extra credential account must be parsed");
+        if let Some(provider) = provider {
+            CredentialsVault::get_for_asr_provider(&provider, acc).map_err(|e| e.to_string())
+        } else {
+            CredentialsVault::get(acc).map_err(|e| e.to_string())
+        }
+    })
+    .await
+    .map_err(|e| format!("credential read worker failed: {e}"))?
 }
 
 fn ensure_main_window(window: &Window) -> Result<(), String> {

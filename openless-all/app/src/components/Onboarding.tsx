@@ -440,6 +440,25 @@ function DesktopOnboarding({
         <div style={footerHintStyle}>
           {t('onboarding.footerHint')}
         </div>
+        <button
+          type="button"
+          onClick={onComplete}
+          style={{
+            width: '100%',
+            marginTop: 12,
+            padding: '9px 14px',
+            fontSize: 12.5,
+            fontWeight: 500,
+            fontFamily: 'inherit',
+            border: '0.5px solid var(--ol-line-strong)',
+            borderRadius: 8,
+            background: 'var(--ol-surface)',
+            color: 'var(--ol-ink-2)',
+            cursor: 'pointer',
+          }}
+        >
+          {t('onboarding.continueToSettings')}
+        </button>
       </div>
     </OnboardingSurface>
   );

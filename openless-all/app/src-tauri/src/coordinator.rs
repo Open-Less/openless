@@ -1466,6 +1466,14 @@ impl Coordinator {
         }
     }
 
+    /// 从主设置页打开 Less Computer 浮窗，允许用户在没有麦克风/全局快捷键权限时
+    /// 先用文字测试已配置的 Coding Agent 后端。
+    pub fn less_computer_window_open(&self) {
+        if let Some(app) = self.inner.app.lock().clone() {
+            crate::show_less_computer_window(&app);
+        }
+    }
+
     /// 内联审批卡的 Approve / Deny 回执：解析等待中的 token。
     pub fn less_computer_approve(&self, token: &str, approved: bool) {
         dictation::resolve_less_computer_approval(token, approved);
@@ -1479,7 +1487,11 @@ impl Coordinator {
             return;
         }
         let inner = Arc::clone(&self.inner);
-        tokio::spawn(async move {
+        // This method is entered by a synchronous Tauri command on WebKit's custom
+        // protocol callback. Direct Tokio spawning panics there because that AppKit thread
+        // has no entered Tokio runtime, and the panic cannot unwind across the ObjC
+        // callback (SIGABRT). Tauri's runtime handle is safe from either thread.
+        tauri::async_runtime::spawn(async move {
             let session_id = crate::coordinator_state::new_session_id();
             if let Err(e) =
                 dictation::run_voice_agent_transcript(&inner, session_id, text, 0).await

@@ -33,6 +33,21 @@ impl CodingAgentProvider {
     }
 }
 
+/// 按后端解析用户选择的模型。Claude 保持既有的 sonnet 默认；OpenCode 只接受
+/// `provider/model`，未选择或遗留的 Claude 别名均交给 OpenCode 自己的默认配置。
+pub fn resolve_coding_agent_model(
+    provider: CodingAgentProvider,
+    configured: Option<String>,
+) -> Option<String> {
+    let configured = configured
+        .map(|model| model.trim().to_string())
+        .filter(|model| !model.is_empty());
+    match provider {
+        CodingAgentProvider::ClaudeCodeCli => configured.or_else(|| Some("sonnet".to_string())),
+        CodingAgentProvider::OpenCodeCli => configured.filter(|model| model.contains('/')),
+    }
+}
+
 /// Claude Code 权限模式，对应 CLI `--permission-mode` 的取值（已对本机 v2.1.161 核实）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -284,5 +299,31 @@ mod tests {
     fn provider_default_exe() {
         assert_eq!(CodingAgentProvider::ClaudeCodeCli.default_exe(), "claude");
         assert_eq!(CodingAgentProvider::OpenCodeCli.default_exe(), "opencode");
+    }
+
+    #[test]
+    fn provider_specific_model_defaults_do_not_leak_sonnet_into_opencode() {
+        assert_eq!(
+            resolve_coding_agent_model(CodingAgentProvider::ClaudeCodeCli, None),
+            Some("sonnet".to_string())
+        );
+        assert_eq!(
+            resolve_coding_agent_model(CodingAgentProvider::OpenCodeCli, None),
+            None
+        );
+        assert_eq!(
+            resolve_coding_agent_model(
+                CodingAgentProvider::OpenCodeCli,
+                Some("sonnet".to_string())
+            ),
+            None
+        );
+        assert_eq!(
+            resolve_coding_agent_model(
+                CodingAgentProvider::OpenCodeCli,
+                Some("opencode/deepseek-v4-flash-free".to_string())
+            ),
+            Some("opencode/deepseek-v4-flash-free".to_string())
+        );
     }
 }

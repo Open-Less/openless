@@ -5,8 +5,9 @@
 //! OpenCode CLI（[opencode.ai](https://opencode.ai)）：
 //!
 //! - 检测：`opencode --version` → 复用 [`super::detect::parse_claude_version`] 取 `x.y.z`。
+//! - 模型：`opencode models --refresh` → 拉取当前账号可用的 `provider/model` 列表。
 //! - 运行：`opencode run --format json --model <provider/model> --dir <cwd>
-//!   [--dangerously-skip-permissions]`，**prompt 作为命令行参数**（OpenCode 从 argv 读，
+//!   [--auto]`，**prompt 作为命令行参数**（OpenCode 从 argv 读，
 //!   不像 claude 从 stdin），逐行解析 JSON 事件。
 //! - 护栏：OpenCode 无 `--settings`，但支持 `permission` 配置；用
 //!   `OPENCODE_CONFIG_CONTENT` 环境变量注入 inline 护栏 JSON（precedence 高于项目
@@ -15,6 +16,7 @@
 //!   且**没有**带 cost 的终局 `result` 事件——本模块在 EOF 处合成一条
 //!   [`CodingAgentEvent::Completed`]，`cost_usd = None`（OpenCode CLI 不在 JSON 里给单次成本）。
 
+use std::collections::HashSet;
 use std::process::Stdio;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -28,15 +30,84 @@ use super::{CodingAgentError, CodingAgentPermissionMode};
 
 /// 探测 `opencode` 版本（`None` 表示未安装或无法运行）。复用 claude 的 `x.y.z` 解析。
 pub async fn detect_opencode(exe: &str) -> Option<String> {
-    let out = augmented_command(exe).arg("--version").output().await.ok()?;
+    let out = augmented_command(exe)
+        .arg("--version")
+        .output()
+        .await
+        .ok()?;
     if !out.status.success() {
         return None;
     }
     super::detect::parse_claude_version(&String::from_utf8_lossy(&out.stdout))
 }
 
-/// OpenCode 权限模式到 CLI 的映射。OpenCode 只有一个二元的
-/// `--dangerously-skip-permissions`（绕过所有非 deny 规则），没有 claude 的四档模式。
+/// 去掉 OpenCode CLI 状态行里的 ANSI CSI 转义序列，保留普通文本。
+fn strip_ansi_csi(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch != '\u{1b}' || chars.peek() != Some(&'[') {
+            out.push(ch);
+            continue;
+        }
+        let _ = chars.next();
+        for code in chars.by_ref() {
+            if ('@'..='~').contains(&code) {
+                break;
+            }
+        }
+    }
+    out
+}
+
+/// 解析 `opencode models` 输出，只保留合法的 `provider/model`，保持 CLI 顺序并去重。
+pub fn parse_opencode_models_output(stdout: &str) -> Vec<String> {
+    let mut seen = HashSet::new();
+    strip_ansi_csi(stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|line| {
+            !line.is_empty()
+                && line.contains('/')
+                && !line.chars().any(char::is_whitespace)
+                && line.len() <= 256
+        })
+        .filter(|line| seen.insert((*line).to_string()))
+        .map(str::to_string)
+        .collect()
+}
+
+/// 从 OpenCode 拉取当前账号可用模型。`refresh=true` 时同步刷新 models.dev 缓存。
+pub async fn list_opencode_models(exe: &str, refresh: bool) -> Result<Vec<String>, String> {
+    let mut cmd = augmented_command(exe);
+    cmd.arg("models").kill_on_drop(true);
+    if refresh {
+        cmd.arg("--refresh");
+    }
+    let output = tokio::time::timeout(Duration::from_secs(45), cmd.output())
+        .await
+        .map_err(|_| "OpenCode 模型拉取超时（45 秒）".to_string())?
+        .map_err(|e| format!("无法运行 OpenCode 模型命令: {e}"))?;
+    if !output.status.success() {
+        let stderr = strip_ansi_csi(&String::from_utf8_lossy(&output.stderr));
+        let summary = stderr
+            .lines()
+            .rev()
+            .find(|line| !line.trim().is_empty())
+            .unwrap_or("OpenCode 模型命令执行失败")
+            .trim();
+        return Err(summary.chars().take(512).collect());
+    }
+    let models = parse_opencode_models_output(&String::from_utf8_lossy(&output.stdout));
+    if models.is_empty() {
+        Err("OpenCode 没有返回可用模型，请先完成登录或配置模型提供商".to_string())
+    } else {
+        Ok(models)
+    }
+}
+
+/// OpenCode 权限模式到 CLI 的映射。OpenCode 1.17 使用 `--auto` 自动批准未被配置显式
+/// deny 的权限，没有 claude 的四档模式。
 /// 我们靠注入的 `permission` 护栏配置（deny 高风险）做真正的拦截，因此除 `Plan` 外都需要
 /// 加 skip 标志，否则无头下「ask」会卡死或被默认拒。`Plan` 不传 skip（OpenCode 自身只读）。
 fn skip_permissions_flag(mode: CodingAgentPermissionMode) -> bool {
@@ -62,7 +133,10 @@ pub fn build_opencode_args(req: &CodingAgentRequest) -> Vec<String> {
         args.push(cwd.to_string_lossy().into_owned());
     }
     if skip_permissions_flag(req.permission_mode) {
-        args.push("--dangerously-skip-permissions".into());
+        args.push("--auto".into());
+    }
+    if req.continue_session {
+        args.push("--continue".into());
     }
     // end-of-options：其后由运行器追加的 prompt 一律按位置参数处理，不再解析成 flag。
     args.push("--".into());
@@ -103,11 +177,16 @@ pub fn parse_opencode_json_line(session_id: &str, line: &str) -> Option<CodingAg
             })
         }
         "error" => {
-            let message = match v.get("error") {
-                Some(serde_json::Value::String(s)) => s.clone(),
-                Some(other) => other.to_string(),
-                None => "agent 返回错误".to_string(),
-            };
+            let message = v
+                .pointer("/error/data/message")
+                .and_then(serde_json::Value::as_str)
+                .or_else(|| {
+                    v.pointer("/error/message")
+                        .and_then(serde_json::Value::as_str)
+                })
+                .or_else(|| v.get("error").and_then(serde_json::Value::as_str))
+                .map(str::to_string)
+                .unwrap_or_else(|| "OpenCode 返回了未知错误".to_string());
             Some(CodingAgentEvent::Error {
                 session_id: session_id.to_string(),
                 message,
@@ -282,7 +361,7 @@ mod tests {
 
     #[test]
     fn end_of_options_marker_is_last_even_with_flags() {
-        // 即便带 --model / --dir / --dangerously-skip-permissions，`--` 仍在最末，
+        // 即便带 --model / --dir / --auto，`--` 仍在最末，
         // 保证以 `-` 开头的 prompt 不会被解析成 flag。
         let mut req = CodingAgentRequest::new("s", "p");
         req.model = Some("anthropic/claude-sonnet-4".into());
@@ -290,20 +369,56 @@ mod tests {
         req.permission_mode = CodingAgentPermissionMode::AcceptEdits;
         let args = build_opencode_args(&req);
         assert_eq!(args.last().map(|s| s.as_str()), Some("--"));
-        // `--` 之前才是各 flag，`--dangerously-skip-permissions` 不在 `--` 之后。
+        // `--` 之前才是各 flag，`--auto` 不在 `--` 之后。
         let dd = args.iter().rposition(|a| a == "--").unwrap();
-        assert!(args[..dd].iter().any(|a| a == "--dangerously-skip-permissions"));
+        assert!(args[..dd].iter().any(|a| a == "--auto"));
     }
 
     #[test]
     fn plan_mode_omits_skip_permissions_other_modes_add_it() {
         let mut req = CodingAgentRequest::new("s", "p");
         req.permission_mode = CodingAgentPermissionMode::Plan;
-        assert!(!build_opencode_args(&req).contains(&"--dangerously-skip-permissions".to_string()));
+        assert!(!build_opencode_args(&req).contains(&"--auto".to_string()));
         req.permission_mode = CodingAgentPermissionMode::AcceptEdits;
-        assert!(build_opencode_args(&req).contains(&"--dangerously-skip-permissions".to_string()));
+        assert!(build_opencode_args(&req).contains(&"--auto".to_string()));
         req.permission_mode = CodingAgentPermissionMode::BypassPermissions;
-        assert!(build_opencode_args(&req).contains(&"--dangerously-skip-permissions".to_string()));
+        assert!(build_opencode_args(&req).contains(&"--auto".to_string()));
+    }
+
+    #[test]
+    fn continue_session_uses_opencode_continue_flag() {
+        let mut req = CodingAgentRequest::new("s", "p");
+        req.continue_session = true;
+        let args = build_opencode_args(&req);
+        assert!(args.contains(&"--continue".to_string()));
+        assert_eq!(args.last().map(|s| s.as_str()), Some("--"));
+    }
+
+    #[test]
+    fn parses_refreshed_models_and_removes_ansi_status() {
+        let stdout = "\u{1b}[92m\u{1b}[1mModels cache refreshed\u{1b}[0m\n\
+opencode/deepseek-v4-flash-free\n\
+minimax/MiniMax-M2.7\n\
+opencode/deepseek-v4-flash-free\n";
+        assert_eq!(
+            parse_opencode_models_output(stdout),
+            vec![
+                "opencode/deepseek-v4-flash-free".to_string(),
+                "minimax/MiniMax-M2.7".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn parses_nested_opencode_error_message() {
+        let line = r#"{"type":"error","error":{"name":"UnknownError","data":{"message":"Rate limit exceeded"}}}"#;
+        assert_eq!(
+            parse_opencode_json_line("s1", line),
+            Some(CodingAgentEvent::Error {
+                session_id: "s1".into(),
+                message: "Rate limit exceeded".into(),
+            })
+        );
     }
 
     #[test]
@@ -312,7 +427,10 @@ mod tests {
         req.model = Some("anthropic/claude-sonnet-4".into());
         req.cwd = Some(PathBuf::from("/tmp/work"));
         let args = build_opencode_args(&req);
-        assert_eq!(arg_value(&args, "--model"), Some("anthropic/claude-sonnet-4"));
+        assert_eq!(
+            arg_value(&args, "--model"),
+            Some("anthropic/claude-sonnet-4")
+        );
         assert_eq!(arg_value(&args, "--dir"), Some("/tmp/work"));
     }
 

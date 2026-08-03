@@ -114,6 +114,8 @@ static LESS_COMPUTER_PANEL_EPOCH: std::sync::atomic::AtomicU64 =
 #[cfg(not(mobile))]
 static TRAY_MICROPHONE_WATCHER_STOPPING: AtomicBool = AtomicBool::new(false);
 #[cfg(not(mobile))]
+struct TrayMicrophoneDeviceCache(parking_lot::Mutex<Vec<recorder::MicrophoneDevice>>);
+#[cfg(not(mobile))]
 use tauri::menu::{
     CheckMenuItemBuilder, Menu, MenuBuilder, MenuItemBuilder, Submenu, SubmenuBuilder,
 };
@@ -207,6 +209,7 @@ macro_rules! app_invoke_handler_desktop {
             commands::cancel_dictation,
             coding_agent::commands::coding_agent_detect,
             coding_agent::commands::coding_agent_detect_opencode,
+            coding_agent::commands::coding_agent_list_opencode_models,
             coding_agent::commands::coding_agent_run_test,
             coding_agent::commands::coding_agent_cancel_test,
             coding_agent::commands::coding_agent_command_risk,
@@ -255,6 +258,7 @@ macro_rules! app_invoke_handler_desktop {
             commands::qa_toggle_recording,
             commands::qa_submit_text,
             commands::less_computer_window_dismiss,
+            commands::less_computer_window_open,
             commands::chat_panel_focus_keyboard,
             commands::less_computer_submit_text,
             commands::less_computer_sync,
@@ -499,6 +503,7 @@ fn run_desktop() {
         .manage(sherpa_onnx_runtime.clone())
         .manage(commands::MicrophoneMonitorState::new(None))
         .manage(commands::TrayMicrophoneMenuState::new(Vec::new()))
+        .manage(TrayMicrophoneDeviceCache(parking_lot::Mutex::new(Vec::new())))
         .setup(move |app| {
             init_file_logger();
             log::info!("=== OpenLess 启动 ===");
@@ -908,13 +913,14 @@ fn build_microphone_tray_menu<M: Manager<tauri::Wry>>(
     let selected = coordinator.prefs().get().microphone_device_name;
     let mut items = Vec::new();
     let mut submenu = SubmenuBuilder::with_id(app, "microphone", "选择麦克风");
-    let devices = match recorder::list_input_devices() {
-        Ok(devices) => devices,
-        Err(err) => {
-            log::warn!("[tray] list microphone devices failed: {err}");
-            Vec::new()
-        }
-    };
+    // CoreAudio device enumeration can block inside AudioUnitSetProperty while AppKit is
+    // finishing launch. Tray menus must be built on the main thread, so only consume the
+    // cache here; the watcher below owns every potentially blocking enumeration.
+    let devices = app
+        .state::<TrayMicrophoneDeviceCache>()
+        .0
+        .lock()
+        .clone();
     let selected_available =
         selected.trim().is_empty() || devices.iter().any(|device| device.name == selected);
 
@@ -972,18 +978,44 @@ pub(crate) fn refresh_tray_microphone_menu(app: &AppHandle) -> tauri::Result<()>
 }
 
 #[cfg(not(mobile))]
-fn microphone_device_signature() -> Option<Vec<(String, bool)>> {
+fn microphone_devices_with_signature(
+) -> Option<(Vec<recorder::MicrophoneDevice>, Vec<(String, bool)>)> {
     match recorder::list_input_devices() {
-        Ok(devices) => Some(
-            devices
-                .into_iter()
-                .map(|device| (device.name, device.is_default))
-                .collect(),
-        ),
+        Ok(devices) => {
+            let signature = devices
+                .iter()
+                .map(|device| (device.name.clone(), device.is_default))
+                .collect();
+            Some((devices, signature))
+        }
         Err(err) => {
             log::warn!("[tray] watch microphone devices failed: {err}");
             None
         }
+    }
+}
+
+/// Enumerate devices off the main thread, update the shared cache, then rebuild the tray on
+/// AppKit's main thread only when the device signature changed.
+#[cfg(not(mobile))]
+fn refresh_microphone_cache_if_changed(
+    app: &AppHandle,
+    last_signature: &parking_lot::Mutex<Option<Vec<(String, bool)>>>,
+) {
+    let Some((devices, signature)) = microphone_devices_with_signature() else {
+        return;
+    };
+    {
+        let mut guard = last_signature.lock();
+        if guard.as_ref() == Some(&signature) {
+            return;
+        }
+        *guard = Some(signature);
+    }
+    *app.state::<TrayMicrophoneDeviceCache>().0.lock() = devices;
+    let refresh_app = app.clone();
+    if let Err(err) = app.run_on_main_thread(move || refresh_microphone_on_main(&refresh_app)) {
+        log::warn!("[tray] dispatch microphone cache refresh failed: {err}");
     }
 }
 
@@ -998,24 +1030,29 @@ fn refresh_microphone_on_main(app: &AppHandle) {
 }
 
 /// 设备变更去抖闭包：被 OS 原生通知回调（macOS CoreAudio / Windows MMDevice）调用。
-/// 复用 `microphone_device_signature()` 去抖——签名没变就零副作用直接返回；变了才
-/// `run_on_main_thread` 派发刷新+emit。OS 通知可能合并/重复触发，去抖确保只在真正
-/// 变化时刷新。`last_signature` 用 `Mutex` 保护，因为回调可能从不同的 CoreAudio/COM
-/// 线程并发进入。
+/// OS 回调仅调度一个后台枚举任务，绝不在 AppKit 主线程或 CoreAudio/COM 通知线程中
+/// 直接枚举设备。并发通知通过 `refresh_in_flight` 合并，签名去抖避免重复刷新菜单。
 #[cfg(not(mobile))]
 fn make_microphone_change_handler(app: AppHandle) -> impl Fn() + Send + Sync + 'static {
-    let last_signature = parking_lot::Mutex::new(microphone_device_signature());
+    let last_signature = Arc::new(parking_lot::Mutex::new(None));
+    let refresh_in_flight = Arc::new(AtomicBool::new(false));
     move || {
-        let signature = microphone_device_signature();
-        {
-            let mut guard = last_signature.lock();
-            if signature == *guard {
-                return;
-            }
-            *guard = signature;
+        if refresh_in_flight.swap(true, Ordering::AcqRel) {
+            return;
         }
         let refresh_app = app.clone();
-        let _ = app.run_on_main_thread(move || refresh_microphone_on_main(&refresh_app));
+        let refresh_signature = Arc::clone(&last_signature);
+        let refresh_flag = Arc::clone(&refresh_in_flight);
+        if let Err(err) = std::thread::Builder::new()
+            .name("openless-tray-mic-event".into())
+            .spawn(move || {
+                refresh_microphone_cache_if_changed(&refresh_app, &refresh_signature);
+                refresh_flag.store(false, Ordering::Release);
+            })
+        {
+            refresh_in_flight.store(false, Ordering::Release);
+            log::warn!("[tray] start microphone event refresh failed: {err}");
+        }
     }
 }
 
@@ -1044,7 +1081,9 @@ fn start_tray_microphone_watcher(app: AppHandle) {
     if let Err(err) = std::thread::Builder::new()
         .name("openless-tray-mic-poll".into())
         .spawn(move || {
-            let mut last_signature = microphone_device_signature();
+            let last_signature = parking_lot::Mutex::new(None);
+            // Populate the initially empty tray cache without blocking AppKit startup.
+            refresh_microphone_cache_if_changed(&app, &last_signature);
             while !TRAY_MICROPHONE_WATCHER_STOPPING.load(Ordering::Relaxed) {
                 // 60s（而非 10s）：原生通知承担实时检测，这条线程只是兜底，把它拉到 60s
                 // 进一步压低空闲唤醒。1s 一片的睡眠让退出 flag 最多 1s 内生效，避免退出时
@@ -1058,13 +1097,7 @@ fn start_tray_microphone_watcher(app: AppHandle) {
                 if TRAY_MICROPHONE_WATCHER_STOPPING.load(Ordering::Relaxed) {
                     break;
                 }
-                let signature = microphone_device_signature();
-                if signature == last_signature {
-                    continue;
-                }
-                last_signature = signature;
-                let refresh_app = app.clone();
-                let _ = app.run_on_main_thread(move || refresh_microphone_on_main(&refresh_app));
+                refresh_microphone_cache_if_changed(&app, &last_signature);
             }
         })
     {
@@ -2473,13 +2506,23 @@ pub(crate) fn show_less_computer_window<R: tauri::Runtime>(app: &AppHandle<R>) {
         log::info!("[less-computer] show 跳过：窗口不存在");
         return;
     };
-    if let Err(e) = position_less_computer_window(&window) {
-        log::warn!("[less-computer] position before show failed: {e}");
-    }
     let window_clone = window.clone();
     let _ = app.run_on_main_thread(move || {
         use objc2::msg_send;
         use objc2::runtime::AnyObject;
+        // This helper is also called from the Tokio worker that executes a text or
+        // voice Agent turn. Keep every AppKit-backed window mutation on the main
+        // thread; macOS aborts the process if a converted NSPanel is resized or moved
+        // from that worker while WebKit is servicing its custom URL scheme.
+        if let Err(e) = position_less_computer_window(&window_clone) {
+            log::warn!("[less-computer] position before show failed: {e}");
+        }
+        // A lazily-created window starts with Tauri's visible=false state. Cocoa's
+        // orderFrontRegardless alone does not always clear that state, leaving the first
+        // text-only launch invisible even though the NSPanel was created successfully.
+        if let Err(e) = window_clone.show() {
+            log::warn!("[less-computer] window.show before orderFront failed: {e}");
+        }
         match window_clone.ns_window() {
             Ok(handle) => {
                 let ns = handle as *mut AnyObject;

@@ -8,6 +8,7 @@ const discovered = discoverTestFiles();
 for (const expected of [
   'scripts/check-android-updater-pubkey.mjs',
   'scripts/check-hotkey-injection.mjs',
+  'scripts/less-computer-opencode-contract.test.mjs',
   'scripts/macos-capsule-spaces-contract.test.mjs',
   'scripts/macos-speech-usage-description-contract.test.mjs',
   'scripts/repository-owner-contract.test.mjs',

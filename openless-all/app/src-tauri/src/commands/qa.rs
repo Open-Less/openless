@@ -128,6 +128,19 @@ pub fn less_computer_submit_text(coord: CoordinatorState<'_>, text: String) {
     coord.less_computer_submit_text(text);
 }
 
+/// 主设置页的文字测试入口。浮窗自身无需也不允许反向调用这个命令。
+#[tauri::command]
+pub fn less_computer_window_open(
+    window: Window,
+    coord: CoordinatorState<'_>,
+) -> Result<(), String> {
+    if window.label() != "main" {
+        return Err("Less Computer can only be opened from the main window".to_string());
+    }
+    coord.less_computer_window_open();
+    Ok(())
+}
+
 /// 浮窗 mount 时拉取当前会话的事件缓冲（seq 升序）。
 ///
 /// 浮窗首次创建时 webview 冷加载，后端事件（尤其第一条 `user` —— 用户说的话）

@@ -137,6 +137,7 @@ export {
 // less-computer
 export {
     lessComputerWindowDismiss,
+    lessComputerWindowOpen,
     lessComputerApprove,
     lessComputerSubmitText,
     lessComputerSync,
@@ -177,6 +178,7 @@ export type {
 export {
     codingAgentDetect,
     codingAgentDetectOpencode,
+    codingAgentListOpencodeModels,
     codingAgentRunTest,
     codingAgentCancelTest,
     codingAgentCommandRisk,
