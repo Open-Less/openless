@@ -2891,14 +2891,14 @@ mod tests {
     fn structured_prompt_anchors_on_high_density_examples_and_term_protection() {
         let prompt = prompts::system_prompt(PolishMode::Structured);
 
-        // v2.0：八节中文序号骨架。结构化判断 + 双层格式 + 事项数规则必须靠前讲清楚。
-        assert!(prompt.contains("# 二、结构化判断（核心）"));
-        assert!(prompt.contains("# 三、双层格式"));
-        assert!(prompt.contains("第一层（主题）"));
-        assert!(prompt.contains("第二层（子项）"));
-        assert!(prompt.contains("事项仅 1 条"));
-        assert!(prompt.contains("事项 = 2 条"));
-        assert!(prompt.contains("事项 ≥ 3 条"));
+        // v3.0 Beta：人格化「语修」角色 + 场景优先级分型。结构化判断与双层格式
+        // 换到 # 场景优先级 / # 输出格式 节，事项数规则必须靠前讲清楚。
+        assert!(prompt.contains("# 场景优先级"));
+        assert!(prompt.contains("# 输出格式"));
+        assert!(prompt.contains("# AI 编程术语纠错"));
+        assert!(prompt.contains("子项另起一行，用 3 个空格 + `(a)` `(b)` `(c)`"));
+        assert!(prompt.contains("事项 ≤ 2 条"));
+        assert!(prompt.contains("连续编号"));
 
         // 防回归：模型名、字段名、布尔值和版本号必须被显式保护。
         assert!(prompt.contains("Claude"));
@@ -2908,41 +2908,46 @@ mod tests {
         assert!(prompt.contains("LongCat"));
         assert!(prompt.contains("Secret Key"));
         assert!(prompt.contains("true / false / null"));
-        assert!(prompt.contains("GPT-5.6"));
-        assert!(prompt.contains("**不**简写成 GPT-5、Claude 4"));
+        assert!(prompt.contains("不要把 GPT 5.5 写成 GPT 5"));
+        assert!(prompt.contains("不要把 Claude 4.7 写成 Claude 4"));
 
-        // 4 个核心示例的锚点：超长 GitHub 请求、已编号工作日报、散乱长口述、AI 日报。
-        assert!(prompt.contains("帮忙给 GitHub 提个请求，主要包含以下内容："));
-        assert!(prompt.contains("代码与功能优化"));
-        assert!(prompt.contains("今天的工作小结如下："));
-        assert!(prompt.contains("Gemini 3.2 版本更名为 Gemini 3.5"));
-        assert!(prompt.contains("remote control 的参数值更改为 true"));
+        // 核心示例锚点：AI 编程任务（Codex 请求）与 AI 模型资讯（Gemini 更名 + Codex 远程控制）。
+        assert!(prompt.contains("帮忙给 Codex 提个任务，主要包含以下内容："));
+        assert!(prompt.contains("登录页修复"));
+        assert!(prompt.contains("文档与配置"));
+        assert!(prompt.contains("Gemini 3.2 更名为 Gemini 3.5"));
+        assert!(prompt.contains("remote control 改为 true"));
     }
 
     #[test]
     fn structured_prompt_keeps_regrouping_and_no_loss_guards() {
         let prompt = prompts::system_prompt(PolishMode::Structured);
 
-        // v1.3.0 回归的关键规则：已编号 ≠ 不用改、≥3 必须重组、仅 1 条事项输出连贯段落。
+        // 回归的关键规则：事项数决定输出形态、防止事项丢失、禁止替用户编造。
         assert!(
-            prompt.contains("照抄原结构 = 失败"),
-            "Structured prompt 必须把照抄原结构判为失败"
+            prompt.contains("事项 ≤ 2 条 → 直接输出连贯段落"),
+            "Structured prompt 必须避免短输入过度结构化（事项少 → 连贯段落）"
         );
         assert!(
-            prompt.contains("输出连贯段落"),
-            "Structured prompt 必须避免短输入过度结构化（仅 1 条事项 → 连贯段落）"
+            prompt.contains("全部列为条目保留"),
+            "Structured prompt 必须把未决事项原样保留"
         );
         assert!(
-            prompt.contains("不丢失任何一件事"),
-            "Structured prompt 必须明确防止事项丢失"
+            prompt.contains("是否丢事项"),
+            "Structured prompt 必须明确防止事项丢失（结构自检）"
         );
         assert!(
-            prompt.contains("不补充用户没说过的实现方案"),
+            prompt.contains("不补充用户没说过的事实、字段、实现方案或功能清单"),
             "Structured prompt 必须禁止替用户编造实现方案"
         );
         assert!(
-            prompt.contains("即使原文已经写成"),
-            "Structured prompt 必须显式说明已编号的输入也要重新归类"
+            prompt.contains("没有编造原文不存在的实现方案"),
+            "Structured prompt 必须把不编造写进结构自检"
+        );
+        // 长输入必须按主题重组：示例 1 把超长口述整理成主题分组双层结构。
+        assert!(
+            prompt.contains("帮忙给 Codex 提个任务，主要包含以下内容："),
+            "Structured prompt 必须带重组示例锚点"
         );
     }
 
@@ -3123,11 +3128,7 @@ mod tests {
         );
 
         // v2 PRO 自带 prompt 必须共享：四/五、ASR 纠错段 + 高/低置信度分级 + 根目录词条。
-        for mode in [
-            PolishMode::Light,
-            PolishMode::Structured,
-            PolishMode::Formal,
-        ] {
+        for mode in [PolishMode::Light, PolishMode::Formal] {
             let prompt = prompts::system_prompt(mode);
             let has_asr_heading =
                 prompt.contains("# 四、ASR 纠错") || prompt.contains("# 五、ASR 纠错");
@@ -3141,6 +3142,19 @@ mod tests {
                 "{mode:?} prompt 缺少分级置信度策略"
             );
         }
+
+        // Structured v3.0 Beta：ASR 纠错段换到 # 通用规则 5（自动纠错按置信度分级），
+        // 置信度表述为「高/中/低置信度」而非 v2 的 ** 加粗。
+        let structured = prompts::system_prompt(PolishMode::Structured);
+        assert!(
+            structured.contains("自动纠错（ASR 主动纠错，按置信度分级处理）"),
+            "Structured prompt 缺少自动纠错分级规则"
+        );
+        assert!(
+            structured.contains("高置信度") && structured.contains("低置信度"),
+            "Structured prompt 缺少置信度分级"
+        );
+        assert!(structured.contains("根目录"), "Structured prompt 缺少根目录纠错示例");
     }
 
     #[test]
