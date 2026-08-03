@@ -5,6 +5,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { exportErrorLog } from '../../lib/ipc';
+import { useMobileLayout } from '../../lib/useMobileLayout';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
 import { Btn, Card } from '../_atoms';
 import { SettingRow, Toggle, SectionTitle, inputStyle } from './shared';
@@ -13,6 +14,7 @@ const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(ma
 
 export function DebugToolsSection() {
   const { t } = useTranslation();
+  const mobile = useMobileLayout();
   const { prefs, updatePrefs: savePrefs } = useHotkeySettings();
   const [exportStatus, setExportStatus] = useState<'idle' | 'busy' | 'ok' | 'err'>('idle');
   const [exportMessage, setExportMessage] = useState<string>('');
@@ -71,25 +73,30 @@ export function DebugToolsSection() {
         <Toggle on={prefs.recordAudioForDebug} onToggle={onRecordAudioForDebugChange} />
       </SettingRow>
       <SettingRow label={t('settings.recording.audioRecordingMaxEntriesLabel')}>
-        <input
-          type="number"
-          min={1}
-          max={200}
-          placeholder="200"
-          value={prefs.audioRecordingMaxEntries ?? ''}
-          onChange={e => onAudioRecordingMaxEntriesChange(e.target.value)}
-          style={{ ...inputStyle, width: 80, textAlign: 'right' }}
-          disabled={!prefs.recordAudioForDebug}
-        />
+        <div style={{ display: 'flex', flexDirection: mobile ? 'column' : 'row', gap: 8, alignItems: mobile ? 'stretch' : 'center', width: '100%' }}>
+          <input
+            type="number"
+            min={1}
+            max={200}
+            placeholder="200"
+            value={prefs.audioRecordingMaxEntries ?? ''}
+            onChange={e => onAudioRecordingMaxEntriesChange(e.target.value)}
+            style={{ ...inputStyle, width: mobile ? '100%' : 80, textAlign: 'right' }}
+            disabled={!prefs.recordAudioForDebug}
+          />
+          <span style={{ fontSize: 11, color: 'var(--ol-ink-4)', lineHeight: 1.45 }}>
+            {t('settings.recording.audioRecordingMaxEntriesDesc')}
+          </span>
+        </div>
       </SettingRow>
       <SettingRow label={t('modal.about.exportErrorLog')}>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <Btn variant="ghost" size="sm" disabled={exportStatus === 'busy'} onClick={onExportLog}>
             {exportStatus === 'busy' ? t('modal.about.exporting') : t('modal.about.exportErrorLogBtn')}
           </Btn>
           {exportStatus === 'ok' && (
             <span
-              style={{ fontSize: 11, color: 'var(--ol-ok)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 220 }}
+              style={{ fontSize: 11, color: 'var(--ol-ok)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: mobile ? '100%' : 220 }}
               title={exportMessage}
             >
               {t('modal.about.exportSuccess')}
@@ -97,7 +104,7 @@ export function DebugToolsSection() {
           )}
           {exportStatus === 'err' && (
             <span
-              style={{ fontSize: 11, color: 'var(--ol-err)', lineHeight: 1.45, wordBreak: 'break-word', maxWidth: 280 }}
+              style={{ fontSize: 11, color: 'var(--ol-err)', lineHeight: 1.45, wordBreak: 'break-word', maxWidth: mobile ? '100%' : 280 }}
               title={exportMessage}
             >
               {t('modal.about.exportFailed')}
