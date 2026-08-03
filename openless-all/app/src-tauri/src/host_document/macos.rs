@@ -39,6 +39,16 @@ use super::{
 /// 超时；而我们最终只要几百字。阈值取得比任何合理预算都大得多，正常文档仍走简单路径。
 const FULL_TEXT_MAX_UTF16: usize = 20_000;
 
+/// 用户停手多久算「这一处改完了」。
+///
+/// 不能一收到通知就判定。把「扣德克斯」改成 `Codex` 的击键序列是：删掉四个字 → 打 C
+/// → 打 o → 打 d … 每一步都是一次通知，而中间态「扣德克斯 → C」「→ Co」「→ Cod」
+/// 全都是形式合法的**跨文种**改动 —— 而跨文种是自动入库、不问用户的那一档。不等停手，
+/// 一次改词就能往词库里塞进四条垃圾。
+///
+/// 1.2 秒：远长于打字时的字间停顿（几百毫秒），又短于改完之后去做下一件事的时间。
+const EDIT_SETTLE_DELAY: Duration = Duration::from_millis(1200);
+
 /// 等「我们自己的落字生效」最多等多久，超过就以当前文档状态为基线。
 ///
 /// 目标 app 对插入的文本做过加工时（智能引号、自动补全、字形转换），我们永远等不到
@@ -425,6 +435,11 @@ struct WatchContext {
     /// 已上报过的 `(source, target)`。用户改一个词要敲好几下，每一下都发一次通知，
     /// 不去重会把同一处改动刷成一串日志。
     reported: std::cell::RefCell<std::collections::HashSet<(String, String)>>,
+    /// 最近一次收到变更通知的时刻；`None` 表示没有待处理的变更。
+    ///
+    /// 回调只更新它，真正的比对交给监听线程在「停手够久」之后做一次。回调和那个循环
+    /// 在同一个线程上（通知由 runloop 派发），所以 `Cell` 就够了，不需要锁。
+    pending_since: std::cell::Cell<Option<Instant>>,
     /// 本次武装期间收到了几次 `AXValueChanged`。
     ///
     /// 解除时打出来。这一个数字就能把「观察器压根没工作」（0）和「通知收到了但被后面
@@ -472,10 +487,31 @@ unsafe extern "C" fn value_changed_shim(
         return;
     }
 
+    // 第二阶段：只登记「有变动」，不在这里判定。判定要等用户停手 —— 见
+    // `EDIT_SETTLE_DELAY` 和 `settle_pending_edit`。
+    ctx.pending_since.set(Some(Instant::now()));
+}
+
+/// 用户停手够久了，比对一次并上报。
+///
+/// 由监听线程调用（每秒一次的轮转里、以及解除之前），**不在通知回调里调**。回调只负责
+/// 刷新「最后变动时刻」，因为一次改词会连着发好几十条通知，中间态全是错的。
+unsafe fn settle_pending_edit(ctx: &WatchContext, force: bool) {
+    let Some(since) = ctx.pending_since.get() else {
+        return;
+    };
+    if !force && since.elapsed() < EDIT_SETTLE_DELAY {
+        return;
+    }
+    ctx.pending_since.set(None);
+
+    let Some(current) = copy_string_attr(ctx.element.as_ref(), b"AXValue\0") else {
+        return;
+    };
     let baseline = ctx.baseline.borrow().clone();
     let Some(edit) = minimal_edit(&baseline, &current) else {
         log::info!(
-            "[cursor-context] notified but no minimal edit (baseline={} chars, current={} chars)",
+            "[cursor-context] settled but no minimal edit (baseline={} chars, current={} chars)",
             baseline.chars().count(),
             current.chars().count()
         );
@@ -546,6 +582,7 @@ pub(super) fn spawn_edit_watcher(
                     anchored: std::cell::Cell::new(baseline.contains(&typed_text)),
                     baseline: std::cell::RefCell::new(baseline),
                     armed_at: Instant::now(),
+                    pending_since: std::cell::Cell::new(None),
                     typed_text,
                     on_edit,
                     reported: std::cell::RefCell::new(std::collections::HashSet::new()),
@@ -647,6 +684,8 @@ fn run_edit_watch_loop(
                 break;
             }
             let result = CFRunLoop::run_in_mode(mode, Duration::from_secs(1), false);
+            // 每转一圈问一次「停手够久了吗」。判定发生在这里而不是回调里。
+            settle_pending_edit(&ctx, false);
             // Finished 表示 runloop 里没有任何 input source —— 观察器的 source 已经装上，
             // 正常走不到这里；真到了就说明焦点元素没了，收工。
             if matches!(result, CFRunLoopRunResult::Finished) {
@@ -654,6 +693,10 @@ fn run_edit_watch_loop(
                 break;
             }
         }
+
+        // 收工前兜一次：用户改完就直接切走 app 的话，停手计时还没到就已经退出循环了，
+        // 那次改动不该白丢。
+        settle_pending_edit(&ctx, true);
 
         // 无论怎么退出的，反注册这一段都必须跑到。
         runloop.remove_source(&source, mode);
