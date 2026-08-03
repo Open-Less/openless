@@ -65,9 +65,9 @@ class OpenLessAccessibilityCommandReceiver : BroadcastReceiver() {
         /** @deprecated Use [AccessibilityPasteResult] codes */
         const val EXTRA_PASTE_RESULT = "paste_result"
         /** @deprecated Use [AccessibilityPasteResult.SUCCESS.code] */
-        const val RESULT_PASTE_SUCCESS = AccessibilityPasteResult.SUCCESS.code
+        const val RESULT_PASTE_SUCCESS = 1
         /** @deprecated Use failure codes from [AccessibilityPasteResult] */
-        const val RESULT_PASTE_FAILED = AccessibilityPasteResult.PASTE_REJECTED.code
+        const val RESULT_PASTE_FAILED = 4
         private const val TAG = "OpenLessA11yCommand"
     }
 }
