@@ -820,7 +820,8 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
     };
   }, []);
 
-  // 退出动画调度：在 state 真正进入 idle 时，先用 capsule-out 播放 EXIT_ANIM_MS，再卸载。
+  // 退出动画调度：在 state 真正进入 idle 时，先用 capsule-out 播放
+  // EXIT_ANIM_MS_SIRI / EXIT_ANIM_MS_CLASSIC（按当前样式，经 exitMsRef 读取），再卸载。
   // 设计要点：
   // 1. 进入非 idle：清掉 leaving，记录最新可见 state；
   // 2. 进入 idle 且之前可见：开启 leaving 并启动定时器；

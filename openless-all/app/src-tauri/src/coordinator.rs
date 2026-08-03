@@ -9,7 +9,7 @@
 //! insertion, persists history, emits `capsule:state` events to the capsule
 //! window.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::Instant;
@@ -55,8 +55,9 @@ use crate::recorder::{Recorder, RecorderError};
 #[cfg(target_os = "windows")]
 use crate::types::PasteShortcut;
 use crate::types::{
-    CapsulePayload, CapsuleState, ChineseScriptPreference, DictationSession, HotkeyCapability,
-    HotkeyStatus, HotkeyStatusState, InsertStatus, OutputLanguagePreference, PolishMode,
+    CapsulePayload, CapsuleState, CapsuleStyle, ChineseScriptPreference, DictationSession,
+    HotkeyCapability, HotkeyStatus, HotkeyStatusState, InsertStatus, OutputLanguagePreference,
+    PolishMode,
 };
 #[cfg(target_os = "windows")]
 use crate::windows_ime_ipc::ImeSubmitTarget;
@@ -554,6 +555,14 @@ struct Inner {
     /// `warming` 打成 true（前端渲染"待命"光效）；`level_handler` 首次触发（PCM 真的
     /// 流入）后置 false，光条"点亮"进入正式录音。begin_session 每次入场重置为 true。
     capsule_warming: AtomicBool,
+    /// 用户选择的胶囊样式缓存（0=Siri，1=Classic）。emit_capsule 在音频回调线程
+    /// ~30Hz 读它下发 payload.capsuleStyle；主线程闭包每帧从 prefs 同步该值——
+    /// 读偏好锁的代价只落在主线程（与 show_capsule 同源），音频线程零开销。
+    capsule_style: AtomicU8,
+    /// 胶囊窗口当前是否鼠标穿透（true=穿透）。经典药丸需要接收 ✕/✓ 点击时，主线程
+    /// 闭包把它翻 false；离开可交互状态立即恢复 true。初始 true 与 lib.rs 启动时
+    /// set_ignore_cursor_events(true) 保持一致。
+    capsule_cursor_passthrough: AtomicBool,
     /// QA 用的 ASR 句柄。必须跟 active_asr_provider 保持一致，避免浮窗走不同入口。
     qa_asr: Mutex<Option<SessionResource<ActiveAsr>>>,
     /// QA 用的 Recorder 句柄。
@@ -749,6 +758,8 @@ impl Coordinator {
                     qa_state: Mutex::new(QaSessionState::default()),
                     capsule_layout: Mutex::new(None),
                     capsule_warming: AtomicBool::new(false),
+                    capsule_style: AtomicU8::new(0),
+                    capsule_cursor_passthrough: AtomicBool::new(true),
                     qa_asr: Mutex::new(None),
                     qa_recorder: Mutex::new(None),
                     qa_stream_cancelled: Arc::new(AtomicBool::new(false)),
@@ -863,6 +874,8 @@ impl Coordinator {
                 qa_state: Mutex::new(QaSessionState::default()),
                 capsule_layout: Mutex::new(None),
                 capsule_warming: AtomicBool::new(false),
+                capsule_style: AtomicU8::new(0),
+                capsule_cursor_passthrough: AtomicBool::new(true),
                 qa_asr: Mutex::new(None),
                 qa_recorder: Mutex::new(None),
                 qa_stream_cancelled: Arc::new(AtomicBool::new(false)),

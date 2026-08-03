@@ -534,8 +534,12 @@ fn emit_capsule_with_context_locked(
         operating,
         warming,
         selection_polish,
-        // 用户选择的胶囊样式随每次状态事件下发 —— 设置里切换后下一次录音即生效。
-        capsule_style: inner.prefs.get().capsule_style,
+        // 用户选择的胶囊样式：读 Inner 上的原子缓存（主线程闭包每帧从 prefs 同步），
+        // 不在音频回调线程碰偏好锁。设置里切换后下一次录音即生效。
+        capsule_style: match inner.capsule_style.load(Ordering::Relaxed) {
+            1 => CapsuleStyle::Classic,
+            _ => CapsuleStyle::Siri,
+        },
     };
 
     #[cfg(target_os = "android")]
@@ -673,7 +677,16 @@ fn emit_capsule_with_context_locked(
         };
         // `show_capsule` 是原有“录音胶囊”偏好；Selection Polish 没有独立开关，且它的
         // 无选区/失败提示是这条无界面工作流的唯一反馈，所以始终展示轻量提示。
-        let show_capsule = selection_polish || inner_for_main.prefs.get().show_capsule;
+        let prefs_snapshot = inner_for_main.prefs.get();
+        let show_capsule = selection_polish || prefs_snapshot.show_capsule;
+        // 把胶囊样式同步进 Inner 原子缓存：emit_capsule（音频回调线程）从这里读
+        // payload.capsuleStyle，避免在音频线程碰偏好锁。主线程每帧克隆 prefs 本就有
+        //（show_capsule 同源），多读一个字段零额外代价。
+        let classic_style = matches!(prefs_snapshot.capsule_style, CapsuleStyle::Classic);
+        inner_for_main.capsule_style.store(
+            if classic_style { 1 } else { 0 },
+            Ordering::Relaxed,
+        );
         // Linux: 不操作胶囊窗口（不 show/hide，不 reposition）。
         // 文字通过 fcitx5 插件直接 commit，用户始终在目标 app 中。
         #[cfg(target_os = "linux")]
@@ -689,6 +702,27 @@ fn emit_capsule_with_context_locked(
         // `hide_capsule_window_if_present()` Win32 hard-hide 在 visible=false 分支
         // 处理，不依赖把 Done/Cancelled/Error 打成 invisible。详见 PR #140 评论。
         maybe_position_capsule_bottom_center(&inner_for_main, &window, translation);
+        // 经典药丸（Openless 默认风格）的 ✕/✓ 按钮需要接收点击：录音/转写/润色期间
+        // 关掉鼠标穿透（按钮可点，代价是窗口底部 460×180 区域在这几秒内拦截点击——
+        // 与 1.3.x 经典胶囊同款取舍）；终态 toast、隐藏、Siri 光效、选区润色提示一律
+        // 保持穿透，不遮挡底层 app。set_ignore_cursor_events 只在值变化时调用一次。
+        let interactive = classic_style
+            && visible
+            && !selection_polish
+            && matches!(
+                state,
+                CapsuleState::Recording | CapsuleState::Transcribing | CapsuleState::Polishing
+            );
+        let want_passthrough = !interactive;
+        if inner_for_main
+            .capsule_cursor_passthrough
+            .swap(want_passthrough, Ordering::SeqCst)
+            != want_passthrough
+        {
+            if let Err(e) = window.set_ignore_cursor_events(want_passthrough) {
+                log::warn!("[capsule] set_ignore_cursor_events failed: {e}");
+            }
+        }
         if show_capsule && visible {
             // 用户报"看不到胶囊"时第一时间能在 log 里确认：胶囊路径有跑、show_capsule
             // 开关是 true、当前进入 visible 帧 —— 排除 prefs 没存住 / emit_capsule 没触

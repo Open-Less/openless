@@ -281,7 +281,7 @@ export function RecordingInputSection() {
           </div>
         </SettingRow>
         {os !== 'linux' && !isAndroid && (
-        <SettingRow label={t('settings.recording.capsuleLabel')}>
+        <SettingRow label={t('settings.recording.capsuleLabel')} desc={t('settings.recording.capsuleDesc')}>
           <Toggle on={prefs.showCapsule} onToggle={onShowCapsuleChange} />
         </SettingRow>
         )}
