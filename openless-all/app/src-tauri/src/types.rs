@@ -673,6 +673,10 @@ pub struct UserPreferences {
     pub custom_style_prompts: CustomStylePrompts,
     pub launch_at_login: bool,
     pub show_capsule: bool,
+    /// 录音胶囊样式：'siri' = 流光 Siri 光效版（默认）；'classic' = Openless 经典药丸版。
+    /// 由 capsule:state 事件的 capsuleStyle 字段下发到胶囊 webview，下次录音即生效。
+    #[serde(default)]
+    pub capsule_style: CapsuleStyle,
     /// 录音期间临时静音系统输出，停止/取消/出错后恢复原静音状态。
     #[serde(default)]
     pub mute_during_recording: bool,
@@ -1035,6 +1039,8 @@ struct UserPreferencesWire {
     launch_at_login: bool,
     show_capsule: bool,
     #[serde(default)]
+    capsule_style: CapsuleStyle,
+    #[serde(default)]
     mute_during_recording: bool,
     #[serde(default = "default_true")]
     audio_cue_on_record: bool,
@@ -1200,6 +1206,7 @@ impl Default for UserPreferencesWire {
             custom_style_prompts: prefs.custom_style_prompts,
             launch_at_login: prefs.launch_at_login,
             show_capsule: prefs.show_capsule,
+            capsule_style: prefs.capsule_style,
             mute_during_recording: prefs.mute_during_recording,
             audio_cue_on_record: prefs.audio_cue_on_record,
             microphone_device_name: prefs.microphone_device_name,
@@ -1323,6 +1330,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             custom_style_prompts: wire.custom_style_prompts,
             launch_at_login: wire.launch_at_login,
             show_capsule: wire.show_capsule,
+            capsule_style: wire.capsule_style,
             mute_during_recording: wire.mute_during_recording,
             audio_cue_on_record: wire.audio_cue_on_record,
             microphone_device_name: wire.microphone_device_name,
@@ -2140,6 +2148,7 @@ impl Default for UserPreferences {
             custom_style_prompts: CustomStylePrompts::default(),
             launch_at_login: false,
             show_capsule: true,
+            capsule_style: CapsuleStyle::Siri,
             mute_during_recording: false,
             audio_cue_on_record: true,
             microphone_device_name: String::new(),
@@ -2855,6 +2864,18 @@ pub enum CapsuleState {
     Error,
 }
 
+/// 录音胶囊样式。由 UserPreferences.capsule_style 透传到 capsule:state payload，
+/// 胶囊 webview 据此选择渲染流光 Siri 光效舞台还是经典药丸。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum CapsuleStyle {
+    /// 流光 Siri 风格：SiriGL 光效舞台（默认）。
+    #[default]
+    Siri,
+    /// Openless 默认风格：经典毛玻璃药丸（音量条 + 取消/确认按钮）。
+    Classic,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CapsulePayload {
@@ -2876,6 +2897,10 @@ pub struct CapsulePayload {
     /// false，光条"点亮"进入正式录音态。只对 Recording 状态有意义。详见胶囊出现时序改造。
     #[serde(default)]
     pub warming: bool,
+    /// 用户选择的胶囊样式（siri / classic）。随每次状态事件下发，设置里切换后下一次
+    /// 录音即生效，胶囊 webview 无需额外请求。
+    #[serde(default)]
+    pub capsule_style: CapsuleStyle,
     /// 选区润色专用的轻量反馈。它与原有语音/QA 会话共用同一扇不抢焦点的 capsule
     /// 窗口，但前端据此切换为一行状态提示，避免改变既有语音光效与文案。
     #[serde(default)]

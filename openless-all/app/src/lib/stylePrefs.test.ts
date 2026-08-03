@@ -34,6 +34,7 @@ const previousPrefs: UserPreferences = {
   customStylePrompts: { raw: '', light: '', structured: '', formal: '' },
   launchAtLogin: false,
   showCapsule: true,
+  capsuleStyle: 'siri',
   muteDuringRecording: false,
   audioCueOnRecord: true,
   microphoneDeviceName: '',

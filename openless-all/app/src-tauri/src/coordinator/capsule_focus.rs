@@ -534,6 +534,8 @@ fn emit_capsule_with_context_locked(
         operating,
         warming,
         selection_polish,
+        // 用户选择的胶囊样式随每次状态事件下发 —— 设置里切换后下一次录音即生效。
+        capsule_style: inner.prefs.get().capsule_style,
     };
 
     #[cfg(target_os = "android")]

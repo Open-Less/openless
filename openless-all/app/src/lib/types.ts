@@ -281,6 +281,8 @@ export interface UserPreferences {
   customStylePrompts: CustomStylePrompts;
   launchAtLogin: boolean;
   showCapsule: boolean;
+  /** 录音胶囊样式（'siri' | 'classic'）。见 CapsulePayload.capsuleStyle 的运行时下发。 */
+  capsuleStyle: CapsuleStyle;
   /** 录音期间临时静音系统输出，停止/取消/出错后恢复原静音状态。 */
   muteDuringRecording: boolean;
   /** 按下录音热键进入 recording 状态时，播放一段合成提示音提醒「已开始录音」。
@@ -561,6 +563,9 @@ export type CapsuleState =
   | 'cancelled'
   | 'error';
 
+/** 录音胶囊样式：'siri' = 流光 Siri 光效版（默认）；'classic' = Openless 经典药丸版。 */
+export type CapsuleStyle = 'siri' | 'classic';
+
 export interface CapsulePayload {
   state: CapsuleState;
   level: number; // 0..1 RMS
@@ -577,6 +582,11 @@ export interface CapsulePayload {
    * 再开口；麦克风就绪后翻 false，光条点亮进入正式录音。只对 recording 有意义。
    */
   warming?: boolean;
+  /**
+   * 用户选择的胶囊样式（siri / classic）。随每次状态事件下发；缺失时回落默认
+   * 'siri'，兼容旧后端 payload。
+   */
+  capsuleStyle?: CapsuleStyle;
   /**
    * 选区润色复用 capsule 的无焦点原生窗口，但渲染为轻量状态提示；缺失时保持原有
    * 语音/QA 胶囊行为，兼容旧后端 payload。
