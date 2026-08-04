@@ -137,9 +137,19 @@ class OpenLessAccessibilityService : AccessibilityService() {
     private fun rememberFocusedEditable(event: AccessibilityEvent) {
         val source = event.source ?: return
         try {
-            if (!source.isEditable) return
-            lastEditableFocus?.recycle()
-            lastEditableFocus = AccessibilityNodeInfo.obtain(source)
+            if (source.isEditable) {
+                cacheEditableTarget(source)
+                return
+            }
+            editableFocusedNode(source, AccessibilityNodeInfo.FOCUS_INPUT)?.let { focused ->
+                cacheEditableTarget(focused)
+                focused.recycle()
+                return
+            }
+            editableFocusedNode(source, AccessibilityNodeInfo.FOCUS_ACCESSIBILITY)?.let { focused ->
+                cacheEditableTarget(focused)
+                focused.recycle()
+            }
         } finally {
             source.recycle()
         }
@@ -151,35 +161,60 @@ class OpenLessAccessibilityService : AccessibilityService() {
     }
 
     private fun findEditableTarget(): AccessibilityNodeInfo? {
-        val root = rootInActiveWindow ?: run {
-            invalidateEditableCache()
-            return null
+        lastEditableFocus?.let { cached ->
+            if (cached.refresh() && cached.isEditable) {
+                return AccessibilityNodeInfo.obtain(cached)
+            }
         }
-        try {
-            editableFocusedNode(root, AccessibilityNodeInfo.FOCUS_INPUT)?.let { fresh ->
-                cacheEditableTarget(fresh)
-                return fresh
-            }
-            editableFocusedNode(root, AccessibilityNodeInfo.FOCUS_ACCESSIBILITY)?.let { fresh ->
-                cacheEditableTarget(fresh)
-                return fresh
-            }
 
-            lastEditableFocus?.let { cached ->
-                if (OpenLessAccessibilityTarget.isValidCachedEditable(cached, root)) {
-                    return AccessibilityNodeInfo.obtain(cached)
-                }
-                if (cached.refresh() && cached.isEditable) {
-                    return AccessibilityNodeInfo.obtain(cached)
-                }
-                invalidateEditableCache()
+        val activeRoot = rootInActiveWindow
+        val activePackage = activeRoot?.packageName?.toString()
+        if (activeRoot != null) {
+            try {
+                findEditableInRoot(activeRoot)?.let { return it }
+            } finally {
+                activeRoot.recycle()
             }
+        }
 
-            return findEditableInTree(root, 0)?.also { found ->
-                cacheEditableTarget(found)
+        for (window in windows) {
+            if (window.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD) {
+                continue
             }
-        } finally {
-            root.recycle()
+            val root = window.root ?: continue
+            try {
+                findEditableInRoot(root)?.let { return it }
+            } finally {
+                root.recycle()
+            }
+        }
+
+        Log.w(
+            TAG,
+            "findEditableTarget failed activeRoot=$activePackage windowCount=${windows.size} hadCache=${lastEditableFocus != null}",
+        )
+        invalidateEditableCache()
+        return null
+    }
+
+    private fun findEditableInRoot(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        editableFocusedNode(root, AccessibilityNodeInfo.FOCUS_INPUT)?.let { fresh ->
+            cacheEditableTarget(fresh)
+            return fresh
+        }
+        editableFocusedNode(root, AccessibilityNodeInfo.FOCUS_ACCESSIBILITY)?.let { fresh ->
+            cacheEditableTarget(fresh)
+            return fresh
+        }
+
+        lastEditableFocus?.let { cached ->
+            if (OpenLessAccessibilityTarget.isValidCachedEditable(cached, root)) {
+                return AccessibilityNodeInfo.obtain(cached)
+            }
+        }
+
+        return findEditableInTree(root, 0)?.also { found ->
+            cacheEditableTarget(found)
         }
     }
 
@@ -485,7 +520,7 @@ class OpenLessAccessibilityService : AccessibilityService() {
         private const val PASTE_COMMAND_TIMEOUT_MS = 800L
         private const val PING_COMMAND_TIMEOUT_MS = 500L
         private const val SELECTION_COMMAND_TIMEOUT_MS = 500L
-        private const val MAX_EDITABLE_SEARCH_DEPTH = 4
+        private const val MAX_EDITABLE_SEARCH_DEPTH = 8
         private const val TAG = "OpenLessAccessibility"
     }
 }
