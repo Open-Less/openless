@@ -570,6 +570,7 @@ export const zhCN = {
       title: '翻译目标语言',
       desc: '录音时按 Shift 触发翻译。选「不启用」则 Shift 无效。',
       disabled: '不启用（Shift 按下不触发翻译）',
+      sameAsWorking: '目标语言与你唯一的工作语言相同，翻译不会生效：按 Shift 仍按普通润色处理。换一个目标语言，或在上方多勾选一个工作语言。',
     },
     save: {
       workingFailed: '工作语言保存失败，请重试。',

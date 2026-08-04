@@ -574,6 +574,7 @@ export const ko: typeof zhCN = {
       title: '번역 대상 언어',
       desc: '녹음 중 Shift 로 번역 실행. "비활성화" 시 Shift 무효.',
       disabled: '비활성화 (Shift 로 번역 발동 안 함)',
+      sameAsWorking: '대상 언어가 유일한 작업 언어와 같아 번역이 실행되지 않습니다. Shift 를 눌러도 일반 정리로 처리됩니다. 다른 대상 언어를 고르거나 위에서 작업 언어를 추가하세요.',
     },
     save: {
       workingFailed: '작업 언어 저장에 실패했습니다. 다시 시도하세요.',

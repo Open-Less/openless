@@ -572,6 +572,7 @@ export const zhTW: typeof zhCN = {
       title: '翻譯目標語言',
       desc: '錄音時按 Shift 觸發翻譯。選「不啟用」則 Shift 無效。',
       disabled: '不啓用（Shift 按下不觸發翻譯）',
+      sameAsWorking: '目標語言與你唯一的工作語言相同，翻譯不會生效：按 Shift 仍按普通潤色處理。換一個目標語言，或在上方多勾選一個工作語言。',
     },
     save: {
       workingFailed: '工作語言保存失敗，請重試。',

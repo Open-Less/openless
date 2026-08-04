@@ -572,6 +572,7 @@ export const en: typeof zhCN = {
       title: 'Translation target language',
       desc: 'Press Shift during recording to trigger translation. "Disabled" makes Shift a no-op.',
       disabled: 'Disabled (Shift does nothing)',
+      sameAsWorking: 'The target matches your only working language, so translation cannot take effect — Shift will just run a normal polish. Pick a different target, or add another working language above.',
     },
     save: {
       workingFailed: 'Failed to save working languages. Please try again.',

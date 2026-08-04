@@ -574,6 +574,7 @@ export const ja: typeof zhCN = {
       title: '翻訳ターゲット言語',
       desc: '録音中に Shift で翻訳を起動。「無効」で Shift 無効化。',
       disabled: '無効（Shift で翻訳を発動しない）',
+      sameAsWorking: 'ターゲット言語が唯一の作業言語と同じため、翻訳は発動しません（Shift を押しても通常の整文になります）。別のターゲットを選ぶか、上で作業言語を追加してください。',
     },
     save: {
       workingFailed: '作業言語の保存に失敗しました。もう一度お試しください。',
