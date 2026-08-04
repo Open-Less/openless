@@ -313,22 +313,30 @@ class OpenLessAccessibilityService : AccessibilityService() {
                 Settings.Secure.ACCESSIBILITY_ENABLED,
                 0,
             ) == 1
-            if (!enabled) return false
+            if (!enabled) {
+                return false
+            }
             val services = Settings.Secure.getString(
                 context.contentResolver,
                 Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
             ) ?: return false
-            return services.contains("${context.packageName}/${OpenLessAccessibilityService::class.java.name}")
+            return OpenLessAccessibilityComponentIds.enabledListContains(
+                services,
+                serviceComponentId(),
+            )
         }
 
         @JvmStatic
         fun pingAccessibilityProcess(context: Context): Boolean {
             if (!isEnabled(context)) return false
-            if (instance != null) return true
-            return sendAccessibilityCommand(
+            if (instance != null) {
+                return true
+            }
+            val pingResult = sendAccessibilityCommand(
                 OpenLessAccessibilityCommandReceiver.ACTION_PING,
                 PING_COMMAND_TIMEOUT_MS,
-            ) == AccessibilityPasteResult.SUCCESS
+            )
+            return pingResult == AccessibilityPasteResult.SUCCESS
         }
 
         /** @deprecated Use [pingAccessibilityProcess] for UI; paste no longer gates on this. */

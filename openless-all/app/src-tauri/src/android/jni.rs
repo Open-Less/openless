@@ -838,7 +838,10 @@ pub mod android {
         let services = settings_secure_get_string(env, context, "enabled_accessibility_services")?
             .unwrap_or_default();
         let component_id = accessibility_service_component_id(env, context)?;
-        Ok(services.contains(&component_id))
+        Ok(crate::android::accessibility::enabled_services_contain(
+            &services,
+            &component_id,
+        ))
     }
 
     pub fn accessibility_operational<'local>(
