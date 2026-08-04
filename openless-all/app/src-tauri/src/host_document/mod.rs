@@ -396,6 +396,33 @@ where
 mod tests {
     use super::*;
 
+    /// 丢掉 `EditWatcher` 必须真的把观察线程停掉。
+    ///
+    /// 停止链路横跨两个文件，读单个文件看不全，实际被误读过：`spawn_edit_watcher`
+    /// 只是把 flag 交出来，谁都没置位它 —— 置位的是这里的 `Drop`。解除的调用点也不是
+    /// 显式的 `disarm()`，而是 `*slot = None`（`arm_edit_watch` / `begin_session_as`）。
+    ///
+    /// 这条链一旦断了，症状是**静默的**：观察器活到 60 秒硬超时才停，期间继续读用户
+    /// 正在写的文档、继续上报，还会和新武装的那个并行跑。所以钉一个测试在这里。
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn dropping_the_watcher_stops_the_observer_thread() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let watcher = EditWatcher {
+            stop: Arc::clone(&stop),
+        };
+        assert!(!stop.load(Ordering::Relaxed), "刚建好不该是停止态");
+
+        drop(watcher);
+        assert!(
+            stop.load(Ordering::Relaxed),
+            "Drop 必须置位停止 flag —— 观察线程只认这一个信号（macos.rs 的 run_edit_watch_loop）"
+        );
+    }
+
     fn gate(bundle: Option<&str>, role: Option<&str>, subrole: Option<&str>) -> GateInputs {
         GateInputs {
             secure_input: false,

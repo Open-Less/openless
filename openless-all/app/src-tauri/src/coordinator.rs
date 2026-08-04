@@ -1815,6 +1815,17 @@ impl Coordinator {
         hide_vocab_suggestion_card(&self.inner);
     }
 
+    /// 用户关掉了「光标上下文」开关 —— 立刻停掉一切还在跑的观察，别等它自己超时。
+    ///
+    /// 置空即解除：`EditWatcher` 的 `Drop` 会把停止 flag 置位，观察线程在下一次
+    /// runloop 轮转（≤1s）时退出并反注册 AXObserver。同时把还挂着的建议卡片收掉 ——
+    /// 那些建议是这条链路的产物，开关关了就不该再让用户看见。
+    pub fn disarm_edit_watch(&self) {
+        *self.inner.edit_watcher.lock() = None;
+        hide_vocab_suggestion_card(&self.inner);
+        log::info!("[cursor-context] edit watch disarmed: feature switched off");
+    }
+
     pub fn update_hotkey_binding(&self) {
         let prefs = self.inner.prefs.get();
         let dictation_trigger =

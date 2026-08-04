@@ -413,6 +413,15 @@ pub fn set_settings(
     if remote_prev.use_system_proxy != prefs.use_system_proxy {
         crate::net::set_use_system_proxy(prefs.use_system_proxy);
     }
+    // 关掉「光标上下文」时立刻解除已经武装的手改观察器。
+    //
+    // 不这么做的话，上一次听写留下的观察器会一直活到它自己的 60 秒硬超时（或前台 app
+    // 切换）为止 —— 也就是用户明确关掉开关之后，我们还在读他正在写的那个文档，最长
+    // 一分钟。功能本身是否还有用不重要：**开关关掉的那一刻就该停**，这是这个功能敢
+    // 默认存在的全部前提。
+    if remote_prev.cursor_context_enabled && !prefs.cursor_context_enabled {
+        coord.disarm_edit_watch();
+    }
     #[cfg(target_os = "android")]
     coord.apply_android_overlay_settings_change(&remote_prev, &prefs);
     // refresh_tray_microphone_menu 内部会调用 NSStatusItem.set_menu，必须在主线程上跑。
