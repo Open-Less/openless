@@ -220,6 +220,9 @@ pub(crate) fn show_vocab_suggestion_card(inner: &Arc<Inner>) {
             return;
         };
         // 卡片是要点的，穿透必须关掉。
+        // Android 没有胶囊窗口，tauri 的 set_ignore_cursor_events 在其上不存在
+        //（与 capsule_focus.rs 里同一处理）。
+        #[cfg(not(mobile))]
         if let Err(e) = window.set_ignore_cursor_events(false) {
             log::warn!("[vocab-card] set_ignore_cursor_events(false) failed: {e}");
         }
@@ -259,6 +262,7 @@ pub(crate) fn hide_vocab_suggestion_card(inner: &Arc<Inner>) {
         };
         let _ = app.emit_to("capsule", "vocab:suggested", Vec::<crate::types::PendingCorrection>::new());
         // 穿透必须还回去，否则胶囊会一直挡着屏幕底部那一块。
+        #[cfg(not(mobile))]
         if let Err(e) = window.set_ignore_cursor_events(true) {
             log::warn!("[vocab-card] restoring cursor passthrough failed: {e}");
         }

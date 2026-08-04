@@ -602,50 +602,49 @@ unsafe fn settle_pending_edit(ctx: &WatchContext, force: bool) {
     *ctx.baseline.borrow_mut() = current;
 }
 
+/// 观察器愿意盯的文档上限（char）。
+///
+/// 每收到一条通知就要整份读一次 `AXValue` 再做 O(n) 比对，而观察窗口最长 60 秒、
+/// 用户每敲一个键都可能来一条。文档大到一定程度，这个代价就变成「用户改一个词，
+/// 每次击键都跨进程拷贝一份文档」—— 卡顿、甚至把 AX 消息拖超时。
+///
+/// 与 [`FULL_TEXT_MAX_UTF16`] 同一量级：一次性读不下的文档，也不值得逐键盯着。
+/// 超过就干脆不武装 —— 学不到词可以接受，让用户打字变卡不行。
+const EDIT_WATCH_MAX_CHARS: usize = 20_000;
+
 /// 武装手改监听。成功返回停止开关，失败返回 `None`（只 warn，绝不影响主链路）。
 ///
 /// `typed_text` 是用户实际看到落到屏幕上的那段文字 —— 流式路径下它是真正打出去的内容
 /// 而非完整 LLM 输出，两者可能不同。
+///
+/// **抓焦点元素和读基线都在新线程里做，不在调用线程上。** 调用方 `arm_edit_watch` 位于
+/// `end_session` 这条 async 路径上，也就是 tokio worker —— 而这几次 AX 调用每次都可能
+/// 耗到 [`AX_MESSAGING_TIMEOUT_SECS`]，对着一个 AX 无响应的 app（正是设这个超时要防的
+/// 那种）能把一个 worker 卡住几百毫秒。本模块开头第 2 条硬约束写的就是这件事。
+///
+/// 代价是「趁焦点还没跑」这个窗口从零变成一次线程启动（几十微秒）。这比放进
+/// `spawn_blocking` 好 —— 那个要排 tokio 阻塞池的队，负载高时反而更晚。
 pub(super) fn spawn_edit_watcher(
     typed_text: String,
     on_edit: Box<dyn Fn(EditPair) + Send + Sync>,
 ) -> Option<Arc<AtomicBool>> {
-    // 在调用线程上抓焦点元素 + 读基线，趁焦点还没跑。
-    let (element, baseline, pid) = unsafe {
-        let system = AXUIElementCreateSystemWide();
-        if system.is_null() {
-            return None;
-        }
-        AXUIElementSetMessagingTimeout(system, AX_MESSAGING_TIMEOUT_SECS);
-        let focused = copy_element_attr(system, b"AXFocusedUIElement\0");
-        CFRelease(system as CFTypeRef);
-        let focused = focused?;
-        AXUIElementSetMessagingTimeout(focused, AX_MESSAGING_TIMEOUT_SECS);
-
-        let baseline = copy_string_attr(focused, b"AXValue\0");
-        let mut pid: i32 = 0;
-        let pid_err = AXUIElementGetPid(focused, &mut pid);
-        let element = SendableElement::retained(focused);
-        CFRelease(focused as CFTypeRef);
-
-        let Some(baseline) = baseline else {
-            log::info!("[cursor-context] edit watch skipped: focused element has no AXValue");
-            return None;
-        };
-        if pid_err != AX_ERROR_SUCCESS || pid <= 0 {
-            log::info!("[cursor-context] edit watch skipped: AXUIElementGetPid failed");
-            return None;
-        }
-        (element, baseline, pid)
-    };
-    let (_, bundle_id) = crate::selection::current_front_app_parts();
-
-    let baseline_for_last_text = baseline.clone();
     let stop = Arc::new(AtomicBool::new(false));
     let thread_stop = Arc::clone(&stop);
     let spawn_result = std::thread::Builder::new()
         .name("openless-cursor-edit-watch".into())
         .spawn(move || {
+            let Some((element, baseline, pid)) = grab_focused_element() else {
+                return;
+            };
+            if baseline.chars().count() > EDIT_WATCH_MAX_CHARS {
+                log::info!(
+                    "[cursor-context] edit watch skipped: document is {} chars (limit {EDIT_WATCH_MAX_CHARS})",
+                    baseline.chars().count()
+                );
+                return;
+            }
+            let (_, bundle_id) = crate::selection::current_front_app_parts();
+            let baseline_for_last_text = baseline.clone();
             run_edit_watch_loop(
                 WatchContext {
                     element,
@@ -673,6 +672,37 @@ pub(super) fn spawn_edit_watcher(
         return None;
     }
     Some(stop)
+}
+
+/// 抓当前焦点元素 + 读一次基线全文 + 取 pid。**只在观察线程上调用。**
+fn grab_focused_element() -> Option<(SendableElement, String, i32)> {
+    unsafe {
+        let system = AXUIElementCreateSystemWide();
+        if system.is_null() {
+            return None;
+        }
+        AXUIElementSetMessagingTimeout(system, AX_MESSAGING_TIMEOUT_SECS);
+        let focused = copy_element_attr(system, b"AXFocusedUIElement\0");
+        CFRelease(system as CFTypeRef);
+        let focused = focused?;
+        AXUIElementSetMessagingTimeout(focused, AX_MESSAGING_TIMEOUT_SECS);
+
+        let baseline = copy_string_attr(focused, b"AXValue\0");
+        let mut pid: i32 = 0;
+        let pid_err = AXUIElementGetPid(focused, &mut pid);
+        let element = SendableElement::retained(focused);
+        CFRelease(focused as CFTypeRef);
+
+        let Some(baseline) = baseline else {
+            log::info!("[cursor-context] edit watch skipped: focused element has no AXValue");
+            return None;
+        };
+        if pid_err != AX_ERROR_SUCCESS || pid <= 0 {
+            log::info!("[cursor-context] edit watch skipped: AXUIElementGetPid failed");
+            return None;
+        }
+        Some((element, baseline, pid))
+    }
 }
 
 fn run_edit_watch_loop(
