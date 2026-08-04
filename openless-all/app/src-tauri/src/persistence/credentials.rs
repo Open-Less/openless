@@ -372,6 +372,8 @@ impl CredsLlmEntry {
 trait HasChannelMeta {
     fn meta(&self) -> &ChannelMeta;
     fn meta_mut(&mut self) -> &mut ChannelMeta;
+    /// 用户是否往这张卡里填过东西 —— 迁移排序时用来避免把空卡片排到第一。
+    fn is_blank(&self) -> bool;
 }
 
 impl HasChannelMeta for CredsAsrEntry {
@@ -381,6 +383,9 @@ impl HasChannelMeta for CredsAsrEntry {
     fn meta_mut(&mut self) -> &mut ChannelMeta {
         &mut self.channel
     }
+    fn is_blank(&self) -> bool {
+        self.has_no_content()
+    }
 }
 
 impl HasChannelMeta for CredsLlmEntry {
@@ -389,6 +394,9 @@ impl HasChannelMeta for CredsLlmEntry {
     }
     fn meta_mut(&mut self) -> &mut ChannelMeta {
         &mut self.channel
+    }
+    fn is_blank(&self) -> bool {
+        self.has_no_content()
     }
 }
 
@@ -434,9 +442,26 @@ fn migrate_channel_map<V: HasChannelMeta>(map: &mut HashMap<String, V>, active: 
     }
 
     let mut keys: Vec<String> = map.keys().cloned().collect();
-    // false < true，所以 active 那把排最前；其余按字母序。
+    // 排序优先级（false < true，所以"是"排前面）：
+    //   1. 原来的 active —— 升级前用哪个，升级后还用哪个；
+    //   2. **填过凭据的** —— `active` 指向一个已不存在的 entry 是真实会发生的
+    //      （前端 prefs 与凭据库里的 active 是两份数据，历史上可能不同步）。这时若纯按
+    //      字母序挑，很容易把一张空卡排到第一，用户升级后就看到"未配置"，而他配好的
+    //      那张其实还在列表下面躺着；
+    //   3. 字母序 —— 兜底，保证结果确定、迁移幂等。
+    let is_blank: std::collections::HashMap<&String, bool> = map
+        .iter()
+        .map(|(key, entry)| (key, entry.is_blank()))
+        .collect();
     keys.sort_by(|left, right| {
-        (left != active, left.as_str()).cmp(&(right != active, right.as_str()))
+        let key_of = |key: &String| {
+            (
+                key != active,
+                is_blank.get(key).copied().unwrap_or(true),
+                key.clone(),
+            )
+        };
+        key_of(left).cmp(&key_of(right))
     });
 
     let mut changed = false;
@@ -2835,6 +2860,85 @@ mod tests {
         super::sync_active_channels(&mut root);
         // 不去随机挑一个被关掉的渠道顶上。
         assert_eq!(root.active.asr, "volcengine");
+    }
+
+    /// `active` 指向一个**不存在的 entry** 是真实会发生的：前端 prefs 里的
+    /// `activeAsrProvider` 与凭据库里的 `active.asr` 是两份数据，历史上可能不同步。
+    /// 此时迁移只能退而求其次选一张，但**绝不允许动任何凭据** —— 用户的 key 必须原样
+    /// 留在各自的 entry 里，用户把想用的那张拖回第一位就能恢复。
+    #[test]
+    fn migration_never_touches_credentials_even_when_active_points_at_a_missing_entry() {
+        let mut root = CredsRoot::default();
+        root.active.asr = "stepfun".into(); // 凭据库里并没有这个 entry
+        root.providers.asr.insert(
+            "volcengine".into(),
+            CredsAsrEntry {
+                appKey: Some("vk".into()),
+                accessKey: Some("ak".into()),
+                ..Default::default()
+            },
+        );
+        root.providers.asr.insert(
+            "groq".into(),
+            CredsAsrEntry {
+                apiKey: Some("gk".into()),
+                ..Default::default()
+            },
+        );
+
+        super::migrate_channels(&mut root);
+        super::sync_active_channels(&mut root);
+
+        // 迁移只写 providerType / order，凭据一个字节都不动。
+        assert_eq!(
+            root.providers.asr.get("volcengine").unwrap().appKey.as_deref(),
+            Some("vk")
+        );
+        assert_eq!(
+            root.providers.asr.get("volcengine").unwrap().accessKey.as_deref(),
+            Some("ak")
+        );
+        assert_eq!(
+            root.providers.asr.get("groq").unwrap().apiKey.as_deref(),
+            Some("gk")
+        );
+        // 两张卡片都还在，用户可以自己拖回想要的那张。
+        assert_eq!(root.providers.asr.len(), 2);
+        // active 退到一个真实存在的渠道上，而不是继续指向空气。
+        assert!(root.providers.asr.contains_key(&root.active.asr));
+    }
+
+    #[test]
+    fn migration_prefers_a_configured_channel_over_alphabetical_order() {
+        // active 指向一个不存在的 entry；`aaa-empty` 字母序更靠前但一个字都没填，
+        // `volcengine` 才是用户真正配好的那张。纯字母序会让用户升级后看到"未配置"。
+        let mut root = CredsRoot::default();
+        root.active.asr = "stepfun".into();
+        root.providers.asr.insert(
+            "aaa-empty".into(),
+            CredsAsrEntry {
+                ..Default::default()
+            },
+        );
+        root.providers.asr.insert(
+            "volcengine".into(),
+            CredsAsrEntry {
+                appKey: Some("vk".into()),
+                accessKey: Some("ak".into()),
+                resourceId: Some("rid".into()),
+                ..Default::default()
+            },
+        );
+
+        super::migrate_channels(&mut root);
+        super::sync_active_channels(&mut root);
+
+        assert_eq!(root.active.asr, "volcengine");
+        // 凭据确实能通过正常读取路径拿到 —— 也就是 UI 上会显示"已配置"。
+        assert_eq!(
+            lookup_account(&root, CredentialAccount::VolcengineAppKey).as_deref(),
+            Some("vk")
+        );
     }
 
     #[test]
