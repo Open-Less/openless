@@ -449,6 +449,8 @@ struct WatchContext {
     /// 已上报过的 `(source, target)`。用户改一个词要敲好几下，每一下都发一次通知，
     /// 不去重会把同一处改动刷成一串日志。
     reported: std::cell::RefCell<std::collections::HashSet<(String, String)>>,
+    /// 本次武装期间上报了几处改动。
+    reports: std::cell::Cell<u64>,
     /// 上一次通知时看到的文本。
     ///
     /// 用来把两种通知分开 —— 这是「一次编辑结束了没有」的**主判据**：
@@ -469,7 +471,11 @@ struct WatchContext {
     /// 回调只登记，判定交给监听线程 —— 中间态怎么都可能变，全程只记录不分析。
     /// 回调和那个循环在同一线程上（通知由 runloop 派发），`Cell` 就够，不需要锁。
     pending_since: std::cell::Cell<Option<Instant>>,
-    /// 本次武装期间收到了几次 `AXValueChanged`。
+    /// 本次武装期间收到了几次通知。
+    ///
+    /// 解除时和「学到了几条」一起打出来 —— 逐事件的诊断日志都降到了 debug（这个 app
+    /// 只记 info 以上），日常使用里一次听写只留 armed/disarmed 两行，而这两个数字足够
+    /// 判断「这个 app 到底发不发通知」，那正是要逐 app 收集的覆盖率数据。
     ///
     /// 解除时打出来。这一个数字就能把「观察器压根没工作」（0）和「通知收到了但被后面
     /// 某一步过滤掉了」（>0）分开 —— 没有它，两种情况在日志里完全一样。
@@ -495,7 +501,7 @@ unsafe extern "C" fn value_changed_shim(
     // 每一条 early return 都要留痕。否则「回调没被调用」和「回调被调用但被过滤掉了」
     // 在日志里长得一模一样 —— 第一次真机排查就卡在这个盲点上。
     let Some(current) = copy_string_attr(ctx.element.as_ref(), b"AXValue\0") else {
-        log::info!("[cursor-context] notified but AXValue is unreadable");
+        log::debug!("[cursor-context] notified but AXValue is unreadable");
         return;
     };
     // 第一阶段：等我们自己的落字生效，把基线锚在那之后。
@@ -505,7 +511,7 @@ unsafe extern "C" fn value_changed_shim(
         // 不上。等到这个时限就直接以当前状态为准 —— 落字早已生效，再等只会一直瞎等。
         let inserted = current.contains(&ctx.typed_text);
         if inserted || ctx.armed_at.elapsed() >= BASELINE_ANCHOR_TIMEOUT {
-            log::info!(
+            log::debug!(
                 "[cursor-context] baseline anchored at {} chars ({})",
                 current.chars().count(),
                 if inserted { "insertion landed" } else { "timeout" }
@@ -540,7 +546,7 @@ unsafe extern "C" fn value_changed_shim(
     if !quiet {
         return;
     }
-    log::info!("[cursor-context] caret moved away; settling the pending edit");
+    log::debug!("[cursor-context] caret moved away; settling the pending edit");
     settle_pending_edit(ctx, true);
 }
 
@@ -567,7 +573,7 @@ unsafe fn settle_pending_edit(ctx: &WatchContext, force: bool) {
     };
     let baseline = ctx.baseline.borrow().clone();
     let Some(edit) = minimal_edit(&baseline, &current) else {
-        log::info!(
+        log::debug!(
             "[cursor-context] settled but no minimal edit (baseline={} chars, current={} chars)",
             baseline.chars().count(),
             current.chars().count()
@@ -575,7 +581,7 @@ unsafe fn settle_pending_edit(ctx: &WatchContext, force: bool) {
         return;
     };
     if !edit_is_within_typed_text(&edit, &ctx.typed_text) {
-        log::info!(
+        log::debug!(
             "[cursor-context] edit {:?}→{:?} is outside the text we inserted; ignored",
             edit.source,
             edit.target
@@ -586,6 +592,7 @@ unsafe fn settle_pending_edit(ctx: &WatchContext, force: bool) {
     if !ctx.reported.borrow_mut().insert(key) {
         return;
     }
+    ctx.reports.set(ctx.reports.get() + 1);
     (ctx.on_edit)(edit);
     // 只有真的上报了才推进基线 —— 这一处已经有结论，不该再算进下一处的差异。
     //
@@ -652,6 +659,7 @@ pub(super) fn spawn_edit_watcher(
                     typed_text,
                     on_edit,
                     reported: std::cell::RefCell::new(std::collections::HashSet::new()),
+                    reports: std::cell::Cell::new(0),
                     notifications: std::cell::Cell::new(0),
                 },
                 pid,
@@ -780,9 +788,10 @@ fn run_edit_watch_loop(
         }
         CFRelease(observer as CFTypeRef);
         log::info!(
-            "[cursor-context] edit watch disarmed after {}ms ({end_reason}, {} notifications)",
+            "[cursor-context] edit watch disarmed after {}ms ({end_reason}, {} notifications, {} edits)",
             started.elapsed().as_millis(),
-            ctx.notifications.get()
+            ctx.notifications.get(),
+            ctx.reports.get()
         );
         // ctx 在此 drop —— 此时观察器已移除，C 侧不再回调，安全。
         drop(ctx);
