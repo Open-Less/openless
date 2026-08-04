@@ -145,12 +145,20 @@ pub enum SelectionPolishOutputMode {
     PreviewConfirm,
 }
 
-/// 概览页年度活动热力图的单日计数（date = 本地日期 YYYY-MM-DD）。
+/// 概览页活动统计的单日汇总（date = 本地日期 YYYY-MM-DD）。
+///
+/// 年度热力图只用 `count`；`chars` / `duration_ms` 供「近 7 天 / 近 30 天」的
+/// 字数与时长指标使用——这两个指标此前从 `list_history()` 现算，会被历史 200 条
+/// 上限截断（说得多的用户几天就把上周挤没了）。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ActivityDay {
     pub date: String,
     pub count: u32,
+    /// 当日最终插入文本的总字符数（按 Unicode 字符计，与历史详情页的「N 字」同口径）。
+    pub chars: u64,
+    /// 当日录音总时长（毫秒）。口径 = 每次会话的录音时长，不含识别/润色耗时。
+    pub duration_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

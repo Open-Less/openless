@@ -30,6 +30,10 @@ export type InsertStatus = 'inserted' | 'pasteSent' | 'copiedFallback' | 'failed
 export interface ActivityDay {
   date: string;
   count: number;
+  /** 当日最终插入文本的总字符数。升级前写入的日期没有这个字段（读作 0）。 */
+  chars?: number;
+  /** 当日录音总时长（毫秒）。升级前写入的日期没有这个字段（读作 0）。 */
+  durationMs?: number;
 }
 
 export interface DictationSession {
