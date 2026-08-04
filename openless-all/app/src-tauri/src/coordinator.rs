@@ -77,6 +77,9 @@ mod silence_auto_stop;
 pub(crate) mod selection_polish;
 
 use asr_wiring::*;
+// providers.rs 的 ASR 验证路径按 provider 的真实请求格式发送探针（issue #837），
+// 需要跨模块访问 whisper 兼容系的格式映射，显式再导出。
+pub(crate) use asr_wiring::whisper_request_format;
 use capsule_focus::*;
 use hotkey_loops::*;
 use polish_flow::*;
@@ -603,9 +606,9 @@ pub(crate) fn derive_bailian_endpoint(
 
 fn batch_asr_chunk_limit_ms(provider_id: &str) -> Option<u64> {
     match provider_id {
-        // OpenRouter 把音频 base64 进 JSON body，体积比二进制大 ~33%，长录音易撞
-        // body/时长上限，保守按 30s 切分（与 zhipu 同）。
-        "zhipu" | "openrouter" => Some(30_000),
+        // OpenRouter / ZenMux 把音频 base64 进 JSON body，体积比二进制大 ~33%，
+        // 长录音易撞 body/时长上限，保守按 30s 切分（与 zhipu 同）。
+        "zhipu" | "openrouter" | "zenmux" => Some(30_000),
         // 其余预设默认不分片；openai-compatible 可由用户高级配置覆盖。
         _ => read_advanced_asr_config(provider_id).chunk_duration_ms,
     }
@@ -616,13 +619,30 @@ fn batch_asr_chunk_limit_ms(provider_id: &str) -> Option<u64> {
 /// 与分片时长由用户按 provider 配置（存凭据 vault）。
 pub(crate) const OPENAI_COMPATIBLE_ASR_PROVIDER_ID: &str = "openai-compatible";
 
-/// `openai-compatible` 预设的高级配置（per-provider 存于凭据 vault）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// ZenMux ASR 预设 id（issue #837）。与前端 `ASR_PRESETS` 的 `zenmux` 条目一致，
+/// 复用 Whisper 批式管线，但请求体走 JSON + base64（`ZenMuxJson`）。
+pub(crate) const ZENMUX_ASR_PROVIDER_ID: &str = "zenmux";
+
+/// `openai-compatible` 与 `zenmux` 预设的高级配置（per-provider 存于凭据 vault）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct AdvancedAsrConfig {
     /// 是否请求 `response_format=verbose_json`（配合幻听过滤；服务端不支持时保持 false）。
     pub(crate) verbose_json: bool,
     /// 单次请求的音频分片时长；None = 不分片整段发送。
     pub(crate) chunk_duration_ms: Option<u64>,
+    /// ZenMux `enable_itn`（数字/单位归一化）。默认 true，与 ZenMux 文档示例及
+    /// 中文 ASR 预期一致；仅 zenmux 消费。
+    pub(crate) enable_itn: bool,
+}
+
+impl Default for AdvancedAsrConfig {
+    fn default() -> Self {
+        Self {
+            verbose_json: false,
+            chunk_duration_ms: None,
+            enable_itn: true,
+        }
+    }
 }
 
 /// 解析 per-provider 高级配置 JSON；缺失/非法一律回落保守默认。
@@ -651,20 +671,25 @@ fn parse_advanced_asr_config(raw: Option<&str>) -> AdvancedAsrConfig {
                     .map(|ms| ms.floor() as u64)
             })
         }),
+        // 缺失/非布尔回落默认 true（开启），与前端 advancedAsrConfig.ts 一致。
+        enable_itn: value
+            .get("enableItn")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true),
     }
 }
 
-/// 按 provider id 决定高级配置：仅 `openai-compatible` 采用用户配置，
-/// 命名厂商一律返回默认（保持硬编码行为）。
+/// 按 provider id 决定高级配置：`openai-compatible` 与 `zenmux` 采用用户配置，
+/// 其余命名厂商一律返回默认（保持硬编码行为）。
 fn advanced_asr_config_for(provider_id: &str, raw: Option<&str>) -> AdvancedAsrConfig {
-    if provider_id != OPENAI_COMPATIBLE_ASR_PROVIDER_ID {
+    if provider_id != OPENAI_COMPATIBLE_ASR_PROVIDER_ID && provider_id != ZENMUX_ASR_PROVIDER_ID {
         return AdvancedAsrConfig::default();
     }
     parse_advanced_asr_config(raw)
 }
 
-/// 读取某 ASR provider 的高级配置。仅 `openai-compatible` 读 vault；命名厂商
-/// 走硬编码行为（这里返回默认值），避免破坏已测通的路径。
+/// 读取某 ASR provider 的高级配置。仅 `openai-compatible` / `zenmux` 读 vault；
+/// 其余命名厂商走硬编码行为（这里返回默认值），避免破坏已测通的路径。
 fn read_advanced_asr_config(provider_id: &str) -> AdvancedAsrConfig {
     let raw = CredentialsVault::get_for_asr_provider(
         provider_id,
@@ -2808,16 +2833,33 @@ fn read_whisper_credentials() -> (String, String, String) {
         .ok()
         .flatten()
         .unwrap_or_default();
+    let active_asr = CredentialsVault::get_active_asr();
+    let (default_endpoint, default_model) = whisper_credential_defaults(&active_asr);
     let base_url = CredentialsVault::get(CredentialAccount::AsrEndpoint)
         .ok()
         .flatten()
-        .unwrap_or_default();
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or(default_endpoint);
     let model = CredentialsVault::get(CredentialAccount::AsrModel)
         .ok()
         .flatten()
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "whisper-1".to_string());
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or(default_model);
     (api_key, base_url, model)
+}
+
+/// whisper 兼容系 provider 的「空槽默认值」。zenmux 有厂商默认端点/模型
+/// （与前端 preset 一致）；其余预设沿用空 endpoint + `whisper-1`（默认值由
+/// 前端切换 provider 时写入 vault）。纯函数，便于单测。
+fn whisper_credential_defaults(provider_id: &str) -> (String, String) {
+    if provider_id == ZENMUX_ASR_PROVIDER_ID {
+        (
+            crate::asr::whisper::ZENMUX_DEFAULT_ENDPOINT.to_string(),
+            crate::asr::whisper::ZENMUX_DEFAULT_MODEL.to_string(),
+        )
+    } else {
+        (String::new(), "whisper-1".to_string())
+    }
 }
 
 fn read_mimo_credentials() -> (String, String, String) {
@@ -3560,6 +3602,7 @@ mod tests {
             AdvancedAsrConfig {
                 verbose_json: true,
                 chunk_duration_ms: Some(30_000),
+                enable_itn: true,
             }
         );
         // 命名厂商忽略该配置，保持硬编码行为。
@@ -3594,6 +3637,7 @@ mod tests {
             AdvancedAsrConfig {
                 verbose_json: true,
                 chunk_duration_ms: None,
+                enable_itn: true,
             }
         );
         // 分片时长 0 或缺失 = 不分片。
@@ -3608,6 +3652,7 @@ mod tests {
             AdvancedAsrConfig {
                 verbose_json: false,
                 chunk_duration_ms: Some(30_000),
+                enable_itn: true,
             }
         );
         // 浮点分片时长与前端一致向下取整：30000.9 → 30000。
@@ -3616,6 +3661,7 @@ mod tests {
             AdvancedAsrConfig {
                 verbose_json: false,
                 chunk_duration_ms: Some(30_000),
+                enable_itn: true,
             }
         );
         // 负数 / 字符串分片时长 → 不分片。
@@ -3648,6 +3694,38 @@ mod tests {
         assert!(!whisper_supports_verbose_json("openrouter"));
         // base64 膨胀，长录音保守按 30s 切分。
         assert_eq!(batch_asr_chunk_limit_ms("openrouter"), Some(30_000));
+    }
+
+    #[test]
+    fn zenmux_credential_defaults_and_advanced_config() {
+        use crate::asr::whisper::{ZENMUX_DEFAULT_ENDPOINT, ZENMUX_DEFAULT_MODEL};
+        // base64 进 JSON body 体积膨胀，与 OpenRouter 同按 30s 切分。
+        assert_eq!(batch_asr_chunk_limit_ms("zenmux"), Some(30_000));
+        // 空槽默认值：zenmux 回落厂商默认端点/模型（与前端 preset 一致）；
+        // 其余 whisper 兼容预设沿用空 endpoint + whisper-1。
+        assert_eq!(
+            whisper_credential_defaults("zenmux"),
+            (
+                ZENMUX_DEFAULT_ENDPOINT.to_string(),
+                ZENMUX_DEFAULT_MODEL.to_string()
+            )
+        );
+        assert_eq!(
+            whisper_credential_defaults("whisper"),
+            (String::new(), "whisper-1".to_string())
+        );
+        assert_eq!(
+            whisper_credential_defaults("openrouter"),
+            (String::new(), "whisper-1".to_string())
+        );
+
+        // enable_itn 默认 true；用户配置显式 false 可覆盖；仅 openai-compatible /
+        // zenmux 读用户配置，其余命名厂商忽略（保持硬编码行为）。
+        assert!(advanced_asr_config_for("zenmux", None).enable_itn);
+        assert!(advanced_asr_config_for("zenmux", Some(r#"{"verboseJson":true}"#)).enable_itn);
+        assert!(!advanced_asr_config_for("zenmux", Some(r#"{"enableItn":false}"#)).enable_itn);
+        assert!(advanced_asr_config_for("whisper", Some(r#"{"enableItn":false}"#)).enable_itn);
+        assert!(!advanced_asr_config_for("zenmux", Some(r#"{"enableItn":false}"#)).verbose_json);
     }
 
     #[test]

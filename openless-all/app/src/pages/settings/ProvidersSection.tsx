@@ -659,9 +659,14 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
                 {t('settings.providers.elevenLabsUploadNotice')}
               </div>
             )}
+            {committedAsrProvider === 'zenmux' && (
+              <div role="note" style={{ marginTop: 2, fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.6 }}>
+                {t('settings.providers.zenmuxVocabularyNote')}
+              </div>
+            )}
             {/* 统一百炼「拉取模型」只写 model，不覆盖用户选择的区域或工作空间 endpoint。 */}
             <ProviderTools kind="asr" modelAccount="asr.model" provider={committedAsrProvider} onModelSelected={() => setAsrModelRevision(v => v + 1)} />
-            {committedAsrProvider === 'openai-compatible' && (
+            {(committedAsrProvider === 'openai-compatible' || committedAsrProvider === 'zenmux') && (
               <AsrAdvancedOptions provider={committedAsrProvider} />
             )}
           </>
@@ -672,12 +677,14 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
   );
 }
 
-// 通用 OpenAI 兼容 ASR 的高级选项：仅对 openai-compatible 预设显示。
-// 命名厂商预设的怪癖开关（verbose_json / 分片等）是测过的硬编码行为，不开放。
+// ASR 高级选项：openai-compatible 与 zenmux 两个预设显示。
+// openai-compatible 暴露 verbose_json / 分片时长（其余命名厂商保持硬编码行为）；
+// zenmux 暴露 enable_itn（数字归一化）开关，verbose_json / 分片对其无意义。
 function AsrAdvancedOptions({ provider }: { provider: string }) {
   const { t } = useTranslation();
   const [verboseJson, setVerboseJson] = useState(false);
   const [chunkDraft, setChunkDraft] = useState('');
+  const [enableItn, setEnableItn] = useState(true);
   const [status, setStatus] = useState<'idle' | 'saving' | 'error'>('idle');
   const [error, setError] = useState('');
 
@@ -692,6 +699,7 @@ function AsrAdvancedOptions({ provider }: { provider: string }) {
         const config = parseAdvancedAsrConfig(raw);
         setVerboseJson(config.verboseJson);
         setChunkDraft(config.chunkDurationMs ? String(config.chunkDurationMs) : '');
+        setEnableItn(config.enableItn);
       } catch (err) {
         if (!cancelled) {
           setStatus('error');
@@ -710,7 +718,11 @@ function AsrAdvancedOptions({ provider }: { provider: string }) {
     return Math.floor(value);
   };
 
-  const save = async (partial: { verboseJson?: boolean; chunkDurationMs?: number | null }) => {
+  const save = async (partial: {
+    verboseJson?: boolean
+    chunkDurationMs?: number | null
+    enableItn?: boolean
+  }) => {
     setStatus('saving');
     setError('');
     const next: AdvancedAsrConfig = {
@@ -719,11 +731,13 @@ function AsrAdvancedOptions({ provider }: { provider: string }) {
         partial.chunkDurationMs !== undefined
           ? partial.chunkDurationMs
           : parseChunkDraft(chunkDraft),
+      enableItn: partial.enableItn ?? enableItn,
     };
     try {
       await setCredential('asr.advanced_config', serializeAdvancedAsrConfig(next), provider);
       setVerboseJson(next.verboseJson);
       setChunkDraft(next.chunkDurationMs ? String(next.chunkDurationMs) : '');
+      setEnableItn(next.enableItn);
       setStatus('idle');
     } catch (err) {
       setStatus('error');
@@ -744,31 +758,42 @@ function AsrAdvancedOptions({ provider }: { provider: string }) {
       >
         {t('settings.providers.asrAdvancedNote')}
       </div>
-      <SettingRow
-        label={t('settings.providers.asrAdvancedVerboseJsonLabel')}
-        desc={t('settings.providers.asrAdvancedVerboseJsonHint')}
-      >
-        <Toggle on={verboseJson} onToggle={(next) => void save({ verboseJson: next })} />
-      </SettingRow>
-      <SettingRow
-        label={t('settings.providers.asrAdvancedChunkLabel')}
-        desc={t('settings.providers.asrAdvancedChunkHint')}
-      >
-        <input
-          type="number"
-          min={0}
-          step={1000}
-          value={chunkDraft}
-          placeholder="0"
-          disabled={status === 'saving'}
-          onChange={(e) => setChunkDraft(e.target.value)}
-          onBlur={() => void save({ chunkDurationMs: parseChunkDraft(chunkDraft) })}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
-          }}
-          style={inputStyle}
-        />
-      </SettingRow>
+      {provider === 'zenmux' ? (
+        <SettingRow
+          label={t('settings.providers.asrAdvancedEnableItnLabel')}
+          desc={t('settings.providers.asrAdvancedEnableItnHint')}
+        >
+          <Toggle on={enableItn} onToggle={(next) => void save({ enableItn: next })} />
+        </SettingRow>
+      ) : (
+        <>
+          <SettingRow
+            label={t('settings.providers.asrAdvancedVerboseJsonLabel')}
+            desc={t('settings.providers.asrAdvancedVerboseJsonHint')}
+          >
+            <Toggle on={verboseJson} onToggle={(next) => void save({ verboseJson: next })} />
+          </SettingRow>
+          <SettingRow
+            label={t('settings.providers.asrAdvancedChunkLabel')}
+            desc={t('settings.providers.asrAdvancedChunkHint')}
+          >
+            <input
+              type="number"
+              min={0}
+              step={1000}
+              value={chunkDraft}
+              placeholder="0"
+              disabled={status === 'saving'}
+              onChange={(e) => setChunkDraft(e.target.value)}
+              onBlur={() => void save({ chunkDurationMs: parseChunkDraft(chunkDraft) })}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+              }}
+              style={inputStyle}
+            />
+          </SettingRow>
+        </>
+      )}
       {status === 'error' && (
         <div style={{ fontSize: 11, color: 'var(--ol-warn)', lineHeight: 1.4 }}>
           {t('common.operationFailed')}: {error}
