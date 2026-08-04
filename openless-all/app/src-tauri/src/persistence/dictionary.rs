@@ -32,6 +32,16 @@ impl DictionaryStore {
         })
     }
 
+    /// 测试专用：指定落盘路径，让每个用例有自己独立的文件（也就不会碰到用户真实的
+    /// dictionary.json）。与 `CorrectionRuleStore::new_at` 同形。
+    #[cfg(test)]
+    fn new_at(path: PathBuf) -> Self {
+        Self {
+            path,
+            lock: Mutex::new(()),
+        }
+    }
+
     /// 降级实例：data_dir 不可用时使用临时路径（桌面）或空 path（Android 内存态）。
     pub(crate) fn new_fallback() -> Self {
         Self {
@@ -65,6 +75,16 @@ impl DictionaryStore {
     ///
     /// 手动添加不查重（用户重复录入是他的选择），自动路径必须查 —— 同一个词每被改一次
     /// 就多一条，几天下来词汇表全是重复。
+    ///
+    /// **追加到末尾，不像 [`Self::add`] 那样插到最前。** ASR 词表预算按词典顺序取
+    /// 「最近添加的前 [`FRESH_VOCAB_SEATS`](crate::coordinator) 条」做保底席位，那个保底
+    /// 的理由是「用户刚手动加它，多半是刚被它坑过」—— 对着卡片点一下勾不满足这个理由，
+    /// 而卡片本来就可能建议半截词。插到最前会让连点几个勾就把保底席位全占掉，把用户
+    /// 攒了几十次命中的常用词挤出 ASR 预算。
+    ///
+    /// 排在队尾不等于永远进不了 ASR 预算：词条进 LLM 热词块没有名额限制，那一侧立刻
+    /// 生效；命中计数扫的是最终文本、与有没有进过 ASR 词表无关，所以这个词一旦真的开始
+    /// 被用上就会自己按命中爬进预算。
     pub fn add_if_absent(&self, phrase: String, note: Option<String>) -> Result<Option<DictionaryEntry>> {
         let phrase = phrase.trim().to_string();
         if phrase.is_empty() {
@@ -84,7 +104,7 @@ impl DictionaryStore {
             hits: 0,
             created_at: Utc::now().to_rfc3339(),
         };
-        entries.insert(0, entry.clone());
+        entries.push(entry.clone());
         self.write_locked(&entries)?;
         Ok(Some(entry))
     }
@@ -197,10 +217,55 @@ pub fn save_vocab_presets(store: &VocabPresetStore) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{list_vocab_presets, save_vocab_presets};
+    use super::{list_vocab_presets, save_vocab_presets, DictionaryStore};
     use crate::types::{VocabPreset, VocabPresetStore};
     use std::fs;
     use std::path::PathBuf;
+
+    fn temp_store() -> DictionaryStore {
+        let path = std::env::temp_dir().join(format!("openless-vocab-{}.json", uuid::Uuid::new_v4()));
+        DictionaryStore::new_at(path)
+    }
+
+    /// 手动添加插在最前，学来的追加到最后。
+    ///
+    /// 这不是排版偏好，是**跟 ASR 词表预算的接口约定**：预算把「词典最前面的若干条」
+    /// 当保底席位，理由是「用户刚手动加它，多半刚被它坑过」。对着建议卡片点一下勾不
+    /// 满足这个理由，而卡片本来就可能建议出半截词（真机上见过 `ap → ype`）。学来的词
+    /// 要是也插到最前，连点几个勾就能把保底席位全占掉，把用户攒了几十次命中的常用词
+    /// 挤出预算 —— 那正是这个功能要解决的问题本身。
+    #[test]
+    fn a_learned_entry_lands_behind_the_manual_ones() {
+        let store = temp_store();
+        store.add("手动一".into(), None).expect("add");
+        store
+            .add_if_absent("学来的".into(), Some("从手改中自动收集".into()))
+            .expect("add_if_absent");
+        store.add("手动二".into(), None).expect("add");
+
+        let phrases: Vec<String> = store
+            .list()
+            .expect("list")
+            .into_iter()
+            .map(|e| e.phrase)
+            .collect();
+        assert_eq!(phrases, vec!["手动二", "手动一", "学来的"]);
+    }
+
+    #[test]
+    fn the_same_learned_phrase_is_not_collected_twice() {
+        let store = temp_store();
+        let note = Some("从手改中自动收集".to_string());
+        assert!(store
+            .add_if_absent("Codex".into(), note.clone())
+            .expect("first")
+            .is_some());
+        assert!(store
+            .add_if_absent("Codex".into(), note)
+            .expect("second")
+            .is_none());
+        assert_eq!(store.list().expect("list").len(), 1);
+    }
 
     #[test]
     fn vocab_presets_roundtrip_json_file() {
