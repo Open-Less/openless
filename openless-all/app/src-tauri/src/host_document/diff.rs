@@ -157,16 +157,22 @@ const MAX_PHRASE_CHARS: usize = 12;
 /// - **`target` 为空**（纯删除）—— 没有词可记。
 /// - **跨行或跨句**（换行、中文句读标点、`?!;`）—— 真机上抓到的假阳性正是这类：在聊天
 ///   框里按回车发送，输入框清空换成占位符，形式上是「把一整句换成另一句」。
-/// - **超过 [`MAX_PHRASE_CHARS`]** —— 一整句话不是词条。
+/// - **任一侧超过 [`MAX_PHRASE_CHARS`]** —— 一整句话不是词条。
+///
+/// **两侧都要量。** 只量 `target` 的话，「把一长串不带标点的话改成 `ok`」能过关：
+/// `minimal_edit` 那道 64 char 的闸门放它过去，句读检查也拦不住不带标点的长句。
+/// 那是一次改写，不是一次纠错 —— 拿去问用户「要记住 ok 这个词吗」纯属噪声，
+/// 卡片上那条 `pattern` 还会长到显示不下。一个词被听错，错的写法不会比它长太多。
 pub fn is_vocab_worthy(edit: &EditPair) -> bool {
     let target = edit.target.trim();
-    if target.is_empty() || edit.source.trim().is_empty() {
+    let source = edit.source.trim();
+    if target.is_empty() || source.is_empty() {
         return false;
     }
-    if crosses_a_sentence_boundary(&edit.source) || crosses_a_sentence_boundary(target) {
+    if crosses_a_sentence_boundary(source) || crosses_a_sentence_boundary(target) {
         return false;
     }
-    target.chars().count() <= MAX_PHRASE_CHARS
+    target.chars().count() <= MAX_PHRASE_CHARS && source.chars().count() <= MAX_PHRASE_CHARS
 }
 
 /// 把一处改动变成一条可以入库的规则。
@@ -355,6 +361,23 @@ mod tests {
             after: "写".to_string(),
         };
         assert!(is_vocab_worthy(&e));
+    }
+
+    /// 长度上限两侧都要量，不能只量 target。
+    ///
+    /// 「一长串不带标点的话 → ok」：`minimal_edit` 的 64 char 闸门放它过去（没超），
+    /// 句读检查也拦不住（没标点）。只量 target 的话它就成了一条建议 ——「要记住 ok
+    /// 这个词吗」，而卡片上那条 pattern 长到显示不下。那是改写，不是纠错。
+    #[test]
+    fn a_long_source_is_a_rewrite_not_a_correction() {
+        let e = EditPair {
+            source: "这一长串话完全没有任何标点符号所以句读检查拦不住它".to_string(),
+            target: "ok".to_string(),
+            before: String::new(),
+            after: String::new(),
+        };
+        assert!(e.source.chars().count() <= 64, "前提：没被 minimal_edit 拦掉");
+        assert!(!is_vocab_worthy(&e));
     }
 
     #[test]

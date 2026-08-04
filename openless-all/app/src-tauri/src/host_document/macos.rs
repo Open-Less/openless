@@ -241,7 +241,20 @@ unsafe fn read_document(focused: AxUiElementRef, budget_chars: usize) -> ReadOut
 /// 读 `AXSelectedTextRange` 的起点 —— 没有选区时它就是光标位置（length == 0）。
 unsafe fn copy_caret_offset(focused: AxUiElementRef) -> Option<usize> {
     let range = copy_selected_range(focused)?;
-    Some(range.location.max(0) as usize)
+    caret_offset_from_location(range.location)
+}
+
+/// 把 `AXSelectedTextRange` 的 location 翻成光标偏移。**负数是「没有光标」，不是 0。**
+///
+/// 部分 app（尤其 Electron 那一类）在没有插入点或元素不是文本控件时返回
+/// `kCFNotFound`（-1）。原本这里 `.max(0)`，等于把「不知道光标在哪」当成「光标在开头」
+/// —— 于是我们读回文档**开头**那几百个字，再当作「光标附近」发给 LLM。错得静默：
+/// 日志里看到的是 `before=0 after=N`，像是「上文为空」，实际是读错了地方。
+///
+/// 返回 `None` 让 `read_document` 走 `Unavailable` 分支：这次不发上下文，探针里也能
+/// 看到原因。宁可没有上下文，不要错的上下文。
+fn caret_offset_from_location(location: isize) -> Option<usize> {
+    (location >= 0).then_some(location as usize)
 }
 
 unsafe fn copy_selected_range(focused: AxUiElementRef) -> Option<CFRange> {
@@ -825,5 +838,24 @@ fn run_edit_watch_loop(
         );
         // ctx 在此 drop —— 此时观察器已移除，C 侧不再回调，安全。
         drop(ctx);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::caret_offset_from_location;
+
+    /// 负数 location 是「没有光标」的哨兵，必须和「光标在开头」区分开。
+    ///
+    /// 真机上 Electron 类 app 反复出现 `before=0 after=N`，一直被当成「这个 app 读不到
+    /// 上文」；实际上是 `AXSelectedTextRange` 返回了 kCFNotFound(-1)，被钳成 0 之后
+    /// 我们读了文档开头，还当成光标附近发给了 LLM。错的上下文比没有上下文更糟 ——
+    /// 它看起来是对的。
+    #[test]
+    fn a_negative_caret_location_is_not_the_start_of_the_document() {
+        assert_eq!(caret_offset_from_location(0), Some(0), "光标真在开头");
+        assert_eq!(caret_offset_from_location(42), Some(42));
+        assert_eq!(caret_offset_from_location(-1), None, "kCFNotFound：没有光标");
+        assert_eq!(caret_offset_from_location(isize::MIN), None);
     }
 }
