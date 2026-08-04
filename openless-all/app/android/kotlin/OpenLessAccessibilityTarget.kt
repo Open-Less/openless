@@ -23,6 +23,41 @@ internal object OpenLessAccessibilityTarget {
         return cachedWindowId == activeWindowId
     }
 
+    fun hasPasteOrSetTextAction(actions: List<AccessibilityNodeInfo.AccessibilityAction>): Boolean {
+        return actions.any { action ->
+            action.id == AccessibilityNodeInfo.ACTION_PASTE ||
+                action.id == AccessibilityNodeInfo.ACTION_SET_TEXT
+        }
+    }
+
+    fun isPasteTargetClass(className: String?): Boolean {
+        if (className.isNullOrEmpty()) return false
+        return className.endsWith("EditText") ||
+            className.endsWith("AutoCompleteTextView") ||
+            className.contains("WebView")
+    }
+
+    fun isPasteTarget(
+        isEditable: Boolean,
+        isPassword: Boolean,
+        className: String?,
+        actions: List<AccessibilityNodeInfo.AccessibilityAction>,
+    ): Boolean {
+        if (isPassword) return false
+        if (isEditable) return true
+        if (isPasteTargetClass(className)) return true
+        return hasPasteOrSetTextAction(actions)
+    }
+
+    fun isPasteTarget(node: AccessibilityNodeInfo): Boolean {
+        return isPasteTarget(
+            isEditable = node.isEditable,
+            isPassword = node.isPassword,
+            className = node.className?.toString(),
+            actions = node.actionList,
+        )
+    }
+
     /**
      * Limited cache validation without tree walks or pseudo node identity.
      * Caller must prefer [AccessibilityNodeInfo.findFocus] first.
@@ -32,16 +67,11 @@ internal object OpenLessAccessibilityTarget {
         activeRoot: AccessibilityNodeInfo,
     ): Boolean {
         if (!cached.refresh()) return false
+        if (!isPasteTarget(cached)) return false
         val activePackage = activeRoot.packageName?.toString()
-        if (!passesEditableFocusChecks(
-                cached.isEditable,
-                cached.isFocused,
-                cached.packageName?.toString(),
-                activePackage,
-            )
-        ) {
-            return false
-        }
+        val nodePackage = cached.packageName?.toString()
+        if (nodePackage.isNullOrEmpty() || activePackage.isNullOrEmpty()) return false
+        if (nodePackage != activePackage) return false
         return passesWindowChecks(cached.windowId, activeRoot.windowId)
     }
 }

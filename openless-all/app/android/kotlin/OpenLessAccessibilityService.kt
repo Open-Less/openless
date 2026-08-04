@@ -44,7 +44,8 @@ class OpenLessAccessibilityService : AccessibilityService() {
                 updateKeyboardOverlayState()
                 scheduleKeyboardOverlayRefresh()
             }
-            AccessibilityEvent.TYPE_VIEW_FOCUSED -> {
+            AccessibilityEvent.TYPE_VIEW_FOCUSED,
+            AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED -> {
                 rememberFocusedEditable(event)
                 updateKeyboardOverlayState()
                 scheduleKeyboardOverlayRefresh()
@@ -137,7 +138,7 @@ class OpenLessAccessibilityService : AccessibilityService() {
     private fun rememberFocusedEditable(event: AccessibilityEvent) {
         val source = event.source ?: return
         try {
-            if (source.isEditable) {
+            if (OpenLessAccessibilityTarget.isPasteTarget(source)) {
                 cacheEditableTarget(source)
                 return
             }
@@ -162,15 +163,17 @@ class OpenLessAccessibilityService : AccessibilityService() {
 
     private fun findEditableTarget(): AccessibilityNodeInfo? {
         lastEditableFocus?.let { cached ->
-            if (cached.refresh() && cached.isEditable) {
+            if (cached.refresh() && OpenLessAccessibilityTarget.isPasteTarget(cached)) {
                 return AccessibilityNodeInfo.obtain(cached)
             }
         }
 
         val activeRoot = rootInActiveWindow
         val activePackage = activeRoot?.packageName?.toString()
+        var pasteTargetsInActive = 0
         if (activeRoot != null) {
             try {
+                pasteTargetsInActive = countPasteTargetsInTree(activeRoot, 0)
                 findEditableInRoot(activeRoot)?.let { return it }
             } finally {
                 activeRoot.recycle()
@@ -191,7 +194,7 @@ class OpenLessAccessibilityService : AccessibilityService() {
 
         Log.w(
             TAG,
-            "findEditableTarget failed activeRoot=$activePackage windowCount=${windows.size} hadCache=${lastEditableFocus != null}",
+            "findEditableTarget failed activeRoot=$activePackage windowCount=${windows.size} hadCache=${lastEditableFocus != null} pasteTargetsInActive=$pasteTargetsInActive",
         )
         invalidateEditableCache()
         return null
@@ -221,7 +224,7 @@ class OpenLessAccessibilityService : AccessibilityService() {
     private fun editableFocusedNode(root: AccessibilityNodeInfo, focusType: Int): AccessibilityNodeInfo? {
         val focused = root.findFocus(focusType) ?: return null
         return try {
-            if (focused.isEditable) {
+            if (OpenLessAccessibilityTarget.isPasteTarget(focused)) {
                 AccessibilityNodeInfo.obtain(focused)
             } else {
                 null
@@ -233,25 +236,39 @@ class OpenLessAccessibilityService : AccessibilityService() {
 
     private fun findEditableInTree(node: AccessibilityNodeInfo, depth: Int): AccessibilityNodeInfo? {
         if (depth > MAX_EDITABLE_SEARCH_DEPTH) return null
-        var firstEditable: AccessibilityNodeInfo? = null
-        if (node.isEditable) {
+        var firstCandidate: AccessibilityNodeInfo? = null
+        if (OpenLessAccessibilityTarget.isPasteTarget(node)) {
             if (node.isFocused) {
                 return AccessibilityNodeInfo.obtain(node)
             }
-            firstEditable = AccessibilityNodeInfo.obtain(node)
+            firstCandidate = AccessibilityNodeInfo.obtain(node)
         }
         for (index in 0 until node.childCount) {
             val child = node.getChild(index) ?: continue
             try {
                 findEditableInTree(child, depth + 1)?.let { found ->
-                    firstEditable?.recycle()
+                    firstCandidate?.recycle()
                     return found
                 }
             } finally {
                 child.recycle()
             }
         }
-        return firstEditable
+        return firstCandidate
+    }
+
+    private fun countPasteTargetsInTree(node: AccessibilityNodeInfo, depth: Int): Int {
+        if (depth > MAX_EDITABLE_SEARCH_DEPTH) return 0
+        var count = if (OpenLessAccessibilityTarget.isPasteTarget(node)) 1 else 0
+        for (index in 0 until node.childCount) {
+            val child = node.getChild(index) ?: continue
+            try {
+                count += countPasteTargetsInTree(child, depth + 1)
+            } finally {
+                child.recycle()
+            }
+        }
+        return count
     }
 
     private fun cacheEditableTarget(target: AccessibilityNodeInfo) {

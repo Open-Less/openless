@@ -39,8 +39,8 @@ const targetBody = kotlinFunctionBody('private fun findEditableTarget()');
 const rootBody = kotlinFunctionBody('private fun findEditableInRoot(root: AccessibilityNodeInfo)');
 assert.match(
   targetBody,
-  /lastEditableFocus\?\.let\s*\{\s*cached\s*->[\s\S]*?cached\.refresh\(\)\s*&&\s*cached\.isEditable/s,
-  'findEditableTarget must try lenient cached focus before window scans',
+  /lastEditableFocus\?\.let\s*\{\s*cached\s*->[\s\S]*?OpenLessAccessibilityTarget\.isPasteTarget\(cached\)/s,
+  'findEditableTarget must try lenient cached paste target before window scans',
 );
 assert.match(
   targetBody,

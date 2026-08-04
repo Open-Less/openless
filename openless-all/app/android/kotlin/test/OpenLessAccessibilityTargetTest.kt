@@ -66,4 +66,37 @@ class OpenLessAccessibilityTargetTest {
         assertEquals("IPC_PROTOCOL_ERROR", AccessibilityPasteResult.IPC_PROTOCOL_ERROR.reason)
         assertEquals("SERVICE_NOT_CONNECTED", AccessibilityPasteResult.SERVICE_NOT_CONNECTED.reason)
     }
+
+    @Test
+    fun isPasteTargetAcceptsEditTextClassAndPasteAction() {
+        assertTrue(
+            OpenLessAccessibilityTarget.isPasteTarget(
+                isEditable = false,
+                isPassword = false,
+                className = "android.widget.EditText",
+                actions = emptyList(),
+            ),
+        )
+        assertTrue(
+            OpenLessAccessibilityTarget.isPasteTarget(
+                isEditable = false,
+                isPassword = false,
+                className = "android.view.View",
+                actions = listOf(
+                    android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction(
+                        android.view.accessibility.AccessibilityNodeInfo.ACTION_PASTE,
+                        "paste",
+                    ),
+                ),
+            ),
+        )
+        assertFalse(
+            OpenLessAccessibilityTarget.isPasteTarget(
+                isEditable = false,
+                isPassword = true,
+                className = "android.widget.EditText",
+                actions = emptyList(),
+            ),
+        )
+    }
 }
