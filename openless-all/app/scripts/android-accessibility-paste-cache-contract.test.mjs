@@ -46,5 +46,15 @@ assert.match(
   /lastEditableFocus\?\.let\s*\{\s*cached\s*->[\s\S]*?OpenLessAccessibilityTarget\.isValidCachedEditable\(cached, root\)[\s\S]*?return AccessibilityNodeInfo\.obtain\(cached\)/s,
   'cached focus reuse must retain package, window, focus, and refresh validation',
 );
+assert.match(
+  targetBody,
+  /editableFocusedNode\(root, AccessibilityNodeInfo\.FOCUS_ACCESSIBILITY\)/,
+  'findEditableTarget must try accessibility focus after input focus',
+);
+assert.match(
+  targetBody,
+  /findEditableInTree\(root, 0\)/,
+  'findEditableTarget must fall back to editable tree search',
+);
 
 console.log('Android accessibility paste cache contract checks passed');

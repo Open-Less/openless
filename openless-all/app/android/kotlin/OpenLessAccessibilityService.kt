@@ -160,15 +160,24 @@ class OpenLessAccessibilityService : AccessibilityService() {
                 cacheEditableTarget(fresh)
                 return fresh
             }
+            editableFocusedNode(root, AccessibilityNodeInfo.FOCUS_ACCESSIBILITY)?.let { fresh ->
+                cacheEditableTarget(fresh)
+                return fresh
+            }
 
             lastEditableFocus?.let { cached ->
                 if (OpenLessAccessibilityTarget.isValidCachedEditable(cached, root)) {
                     return AccessibilityNodeInfo.obtain(cached)
                 }
+                if (cached.refresh() && cached.isEditable) {
+                    return AccessibilityNodeInfo.obtain(cached)
+                }
                 invalidateEditableCache()
             }
 
-            return null
+            return findEditableInTree(root, 0)?.also { found ->
+                cacheEditableTarget(found)
+            }
         } finally {
             root.recycle()
         }
@@ -177,7 +186,7 @@ class OpenLessAccessibilityService : AccessibilityService() {
     private fun editableFocusedNode(root: AccessibilityNodeInfo, focusType: Int): AccessibilityNodeInfo? {
         val focused = root.findFocus(focusType) ?: return null
         return try {
-            if (focused.isEditable && focused.isFocused) {
+            if (focused.isEditable) {
                 AccessibilityNodeInfo.obtain(focused)
             } else {
                 null
@@ -185,6 +194,29 @@ class OpenLessAccessibilityService : AccessibilityService() {
         } finally {
             focused.recycle()
         }
+    }
+
+    private fun findEditableInTree(node: AccessibilityNodeInfo, depth: Int): AccessibilityNodeInfo? {
+        if (depth > MAX_EDITABLE_SEARCH_DEPTH) return null
+        var firstEditable: AccessibilityNodeInfo? = null
+        if (node.isEditable) {
+            if (node.isFocused) {
+                return AccessibilityNodeInfo.obtain(node)
+            }
+            firstEditable = AccessibilityNodeInfo.obtain(node)
+        }
+        for (index in 0 until node.childCount) {
+            val child = node.getChild(index) ?: continue
+            try {
+                findEditableInTree(child, depth + 1)?.let { found ->
+                    firstEditable?.recycle()
+                    return found
+                }
+            } finally {
+                child.recycle()
+            }
+        }
+        return firstEditable
     }
 
     private fun cacheEditableTarget(target: AccessibilityNodeInfo) {
@@ -453,6 +485,7 @@ class OpenLessAccessibilityService : AccessibilityService() {
         private const val PASTE_COMMAND_TIMEOUT_MS = 800L
         private const val PING_COMMAND_TIMEOUT_MS = 500L
         private const val SELECTION_COMMAND_TIMEOUT_MS = 500L
+        private const val MAX_EDITABLE_SEARCH_DEPTH = 4
         private const val TAG = "OpenLessAccessibility"
     }
 }
