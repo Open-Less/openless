@@ -46,18 +46,21 @@ export function readCredential(account: string, provider?: string): Promise<stri
     )
 }
 
+/** `channelId` 省略时测当前生效的渠道；卡片上的「测试连通」会带上那张卡片的 id。 */
 export function validateProviderCredentials(
     kind: "llm" | "asr",
+    channelId?: string,
 ): Promise<ProviderCheckResult> {
-    return invokeOrMock("validate_provider_credentials", { kind }, () => ({
+    return invokeOrMock("validate_provider_credentials", { kind, channelId }, () => ({
         ok: true,
     }))
 }
 
 export function listProviderModels(
     kind: "llm" | "asr",
+    channelId?: string,
 ): Promise<ProviderModelsResult> {
-    return invokeOrMock("list_provider_models", { kind }, () => ({
+    return invokeOrMock("list_provider_models", { kind, channelId }, () => ({
         models:
             kind === "llm"
                 ? ["gpt-4o", "deepseek-v4-flash", "deepseek-v4-pro"]

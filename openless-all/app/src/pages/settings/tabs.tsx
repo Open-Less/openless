@@ -8,7 +8,7 @@ import { ShortcutsSection } from './ShortcutsSection';
 import { SelectionPolishSection } from './SelectionPolishSection';
 import { LanguageSection } from './LanguageSection';
 import { ThemeSection } from './ThemeSection';
-import { ProvidersSection } from './ProvidersSection';
+import { ProvidersSection } from './ChannelList';
 import { NetworkSection } from './NetworkSection';
 import { MarketplaceSection } from './MarketplaceSection';
 import { PermissionsSection } from './PermissionsSection';

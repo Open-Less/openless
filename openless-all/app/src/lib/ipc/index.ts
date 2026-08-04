@@ -32,6 +32,18 @@ export {
     listProviderModels,
 } from "./asr-credentials"
 
+// channels（渠道卡片）
+export type { Channel, ChannelKind, ChannelTestResult } from "./channels"
+export {
+    listChannels,
+    createChannel,
+    renameChannel,
+    deleteChannel,
+    setChannelEnabled,
+    reorderChannels,
+    recordChannelTest,
+} from "./channels"
+
 // history
 export {
     listHistory,

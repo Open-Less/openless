@@ -16,7 +16,7 @@ import {
 import { getHotkeyTriggerLabel } from '../lib/hotkey';
 import type { PermissionStatus, PlatformCapabilities } from '../lib/types';
 import { useHotkeySettings } from '../state/HotkeySettingsContext';
-import { ProvidersSection } from '../pages/settings/ProvidersSection';
+import { ProvidersSection } from '../pages/settings/ChannelList';
 
 interface OnboardingProps {
   onComplete: () => void;
@@ -205,9 +205,9 @@ function AndroidStepContent({ step }: { step: AndroidStepId }) {
     return <AndroidStepCard><AndroidPermissionsPanel mode="overlayConfig" /></AndroidStepCard>;
   }
   if (step === 'asr') {
-    return <ProvidersSection kind="asr" />;
+    return <ProvidersSection kind="asr" autoCreateWhenEmpty />;
   }
-  return <ProvidersSection kind="llm" />;
+  return <ProvidersSection kind="llm" autoCreateWhenEmpty />;
 }
 
 function AndroidMicrophoneStep() {
