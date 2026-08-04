@@ -128,6 +128,26 @@ export function Overview({ onOpenHistory }: OverviewProps) {
     refreshCredentials();
   }, [refreshCredentials, prefs?.activeLlmProvider, prefs?.activeAsrProvider]);
 
+  // ⌘R / Ctrl+R 重新拉取本页的三份数据（历史、活动、凭据），与历史页同键同语义。
+  // preventDefault 拦掉 webview 默认的整页 reload，避免整个前端重挂载。
+  // 此前概览页没有刷新入口，用户只能切到别的页再切回来才能看到新数据。
+  const refreshAll = useCallback(() => {
+    refreshHistory();
+    refreshActivity();
+    refreshCredentials();
+  }, [refreshHistory, refreshActivity, refreshCredentials]);
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && (e.key === 'r' || e.key === 'R')) {
+        e.preventDefault();
+        refreshAll();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [refreshAll]);
+
   // 凭据被保存后重新拉取状态（issue #532 / #573：在 Settings 中填写/更新凭据
   // 但不切换提供商时，上面的 useEffect 不会重跑，导致概览页的状态仍停留在「未配置」）。
   // 复用 refreshCredentials() 以带上 credentialsRequestSeq 防竞态。
