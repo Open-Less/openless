@@ -208,6 +208,7 @@ pub(crate) fn show_vocab_suggestion_card(inner: &Arc<Inner>) {
     let Some(app) = inner.app.lock().clone() else {
         return;
     };
+    inner.vocab_card_visible.store(true, Ordering::SeqCst);
     let height = VOCAB_CARD_CHROME_HEIGHT + VOCAB_CARD_ROW_HEIGHT * pending.len() as f64;
     let app_for_main = app.clone();
     let _ = app.run_on_main_thread(move || {
@@ -232,11 +233,18 @@ pub(crate) fn show_vocab_suggestion_card(inner: &Arc<Inner>) {
     });
 }
 
-/// 收起卡片：恢复鼠标穿透和窗口尺寸，藏起窗口。
+/// 收起卡片：把窗口完整还给胶囊。
 ///
-/// 三条路径都会走到这里 —— 用户点了「好」/「都不用」、10 秒到时、新一轮听写开始。
+/// 四条路径都会走到这里 —— 用户点了「好」/「都不用」、10 秒到时、新一轮听写开始。
+///
+/// **没有卡片时必须原样返回。** `begin_session_as` 每次听写都会调它，如果无条件去
+/// `hide()` 那个窗口，就会和 `emit_capsule` 的 show 抢同一个窗口 —— 胶囊时隐时不显，
+/// 用户会以为热键坏了。
 pub(crate) fn hide_vocab_suggestion_card(inner: &Arc<Inner>) {
     inner.pending_corrections.lock().clear();
+    if !inner.vocab_card_visible.swap(false, Ordering::SeqCst) {
+        return;
+    }
     let Some(app) = inner.app.lock().clone() else {
         return;
     };
@@ -250,6 +258,12 @@ pub(crate) fn hide_vocab_suggestion_card(inner: &Arc<Inner>) {
         // 穿透必须还回去，否则胶囊会一直挡着屏幕底部那一块。
         if let Err(e) = window.set_ignore_cursor_events(true) {
             log::warn!("[vocab-card] restoring cursor passthrough failed: {e}");
+        }
+        // 尺寸也必须还回去 —— 卡片把窗口缩到过自己的大小，不复原的话下一次胶囊
+        // 就挤在一个 300×108 的窗口里，等于看不见。
+        let bounds = crate::capsule_window_bounds(false);
+        if let Err(e) = window.set_size(tauri::LogicalSize::new(bounds.width, bounds.height)) {
+            log::warn!("[vocab-card] restoring capsule size failed: {e}");
         }
         let _ = window.hide();
     });
@@ -655,8 +669,13 @@ struct Inner {
     /// 覆盖这个 Option 会 drop 掉旧的 watcher，drop 即解除。另外三条（60 秒超时、
     /// 前台 app 切换、焦点元素消失）由观察线程自己负责。
     edit_watcher: Mutex<Option<crate::host_document::EditWatcher>>,
-    /// 等待用户确认的纠正建议（Tier2）。只在内存里 —— 见 `PendingCorrection` 的说明。
+    /// 等待用户确认的词条建议。只在内存里 —— 见 `PendingCorrection` 的说明。
     pending_corrections: Mutex<Vec<crate::types::PendingCorrection>>,
+    /// 建议卡片是不是正占着胶囊窗口。
+    ///
+    /// 门控 `hide_vocab_suggestion_card`：没有卡片时它必须什么都不做，否则每次听写
+    /// 开始都会去 hide 胶囊窗口，和 `emit_capsule` 的 show 抢同一个窗口。
+    vocab_card_visible: AtomicBool,
     recording_mute: Mutex<SharedRecordingMuteState>,
     hotkey: Mutex<Option<HotkeyMonitor>>,
     hotkey_status: Mutex<HotkeyStatus>,
@@ -907,6 +926,7 @@ impl Coordinator {
                     audio_archive_active: AtomicBool::new(false),
                     edit_watcher: Mutex::new(None),
                     pending_corrections: Mutex::new(Vec::new()),
+                    vocab_card_visible: AtomicBool::new(false),
                     recording_mute: Mutex::new(SharedRecordingMuteState::new()),
                     hotkey: Mutex::new(None),
                     hotkey_status: Mutex::new(HotkeyStatus::default()),
@@ -1027,6 +1047,7 @@ impl Coordinator {
                 audio_archive_active: AtomicBool::new(false),
                 edit_watcher: Mutex::new(None),
                 pending_corrections: Mutex::new(Vec::new()),
+                vocab_card_visible: AtomicBool::new(false),
                 recording_mute: Mutex::new(SharedRecordingMuteState::new()),
                 hotkey: Mutex::new(None),
                 hotkey_status: Mutex::new(HotkeyStatus::default()),
