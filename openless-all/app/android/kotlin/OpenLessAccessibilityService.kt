@@ -307,6 +307,7 @@ class OpenLessAccessibilityService : AccessibilityService() {
         }
 
         @JvmStatic
+        @Keep
         fun isEnabled(context: Context): Boolean {
             val enabled = Settings.Secure.getInt(
                 context.contentResolver,
@@ -327,6 +328,7 @@ class OpenLessAccessibilityService : AccessibilityService() {
         }
 
         @JvmStatic
+        @Keep
         fun pingAccessibilityProcess(context: Context): Boolean {
             if (!isEnabled(context)) return false
             if (instance != null) {

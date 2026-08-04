@@ -42,6 +42,16 @@ if (!/OpenLessAccessibilityComponentIds\.enabledListContains/.test(serviceSource
   );
 }
 
+if (!/@Keep[\s\S]*fun isEnabled\(context: Context\)/.test(serviceSource)) {
+  throw new Error('OpenLessAccessibilityService.isEnabled must be annotated with @Keep for JNI/R8');
+}
+
+if (!/@Keep[\s\S]*fun pingAccessibilityProcess\(context: Context\)/.test(serviceSource)) {
+  throw new Error(
+    'OpenLessAccessibilityService.pingAccessibilityProcess must be annotated with @Keep for JNI/R8',
+  );
+}
+
 if (/services\.contains\(&component_id\)/.test(jniSource)) {
   throw new Error('jni.accessibility_enabled must not use naive services.contains(&component_id)');
 }
