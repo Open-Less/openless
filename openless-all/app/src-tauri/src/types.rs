@@ -461,6 +461,32 @@ impl Default for StylePack {
     }
 }
 
+/// 本次会话是否真的会走翻译管线。**唯一判定入口**——胶囊提示与 polish 分派都必须调它，
+/// 否则两边会漂移（此前胶囊只看 `modifier_seen`，用户没设目标语言按下 Shift 也会看到
+/// 「正在翻译」，而后端根本没翻）。
+///
+/// 三个条件：
+/// 1. 会话期间按下过翻译修饰键；
+/// 2. 设了翻译目标语言（空串 = 功能未启用）；
+/// 3. 目标语言不等于用户「唯一的」工作语言——此时源语言必定就是目标语言，翻译是可证
+///    的空操作，白花一次 LLM 往返。工作语言有多个时不拦：中/英双语用户把目标设成英文
+///    是正常用法（说中文出英文）。简体/繁体是列表里的两个独立条目，按字面比较即可，
+///    简→繁仍会照常翻译。
+pub fn translation_effective(
+    modifier_seen: bool,
+    translation_target_language: &str,
+    working_languages: &[String],
+) -> bool {
+    if !modifier_seen {
+        return false;
+    }
+    let target = translation_target_language.trim();
+    if target.is_empty() {
+        return false;
+    }
+    !matches!(working_languages, [only] if only.trim() == target)
+}
+
 pub const BUILTIN_STYLE_PACK_RAW_ID: &str = "builtin.raw";
 pub const BUILTIN_STYLE_PACK_LIGHT_ID: &str = "builtin.light";
 pub const BUILTIN_STYLE_PACK_STRUCTURED_ID: &str = "builtin.structured";
@@ -2974,6 +3000,74 @@ pub struct QaChatMessage {
     /// 仅用于前端安全展示选区原文；LLM 通道只读取 `role` / `content`。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selection_text: Option<String>,
+}
+
+#[cfg(test)]
+mod translation_effective_tests {
+    use super::translation_effective;
+
+    fn langs(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn requires_the_modifier() {
+        assert!(!translation_effective(
+            false,
+            "English",
+            &langs(&["简体中文"])
+        ));
+    }
+
+    #[test]
+    fn unset_target_language_is_not_translation() {
+        // 用户没在翻译页选目标语言就按 Shift：此前胶囊照样显示「正在翻译」，
+        // 而后端走的是普通润色。
+        assert!(!translation_effective(true, "", &langs(&["简体中文"])));
+        assert!(!translation_effective(true, "   ", &langs(&["简体中文"])));
+    }
+
+    #[test]
+    fn target_equal_to_the_only_working_language_is_a_no_op() {
+        // 工作语言只有中文、目标也是中文 —— 源语言必定就是目标语言，翻译是空操作。
+        assert!(!translation_effective(
+            true,
+            "简体中文",
+            &langs(&["简体中文"])
+        ));
+        // 前后空白不该让它逃过判定。
+        assert!(!translation_effective(
+            true,
+            " 简体中文 ",
+            &langs(&["简体中文"])
+        ));
+    }
+
+    #[test]
+    fn simplified_to_traditional_still_translates() {
+        // 简体/繁体是语言列表里两个独立条目，简→繁是真实转换，不能按「同一种中文」拦掉。
+        assert!(translation_effective(
+            true,
+            "繁体中文",
+            &langs(&["简体中文"])
+        ));
+    }
+
+    #[test]
+    fn multiple_working_languages_are_never_blocked() {
+        // 中/英双语用户把目标设成英文是正常用法（说中文出英文），源语言无法预先判定，
+        // 不能因为目标语言出现在工作语言里就拦。
+        assert!(translation_effective(
+            true,
+            "English",
+            &langs(&["简体中文", "English"])
+        ));
+    }
+
+    #[test]
+    fn empty_working_languages_still_translates() {
+        assert!(translation_effective(true, "English", &[]));
+    }
 }
 
 #[cfg(test)]

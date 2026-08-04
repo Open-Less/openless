@@ -3601,8 +3601,11 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     );
     let raw_uses_llm = mode == PolishMode::Raw && super::raw_style_pack_uses_llm(&pack);
     let translation_target = prefs.translation_target_language.trim().to_string();
-    let translation_active =
-        inner.translation_modifier_seen.load(Ordering::SeqCst) && !translation_target.is_empty();
+    let translation_active = crate::types::translation_effective(
+        inner.translation_modifier_seen.load(Ordering::SeqCst),
+        &translation_target,
+        &working_languages,
+    );
     log::info!(
         "[style-pack] runtime dispatch scope=asr session_id={} active_pack={} kind={:?} mode={:?} raw_chars={} prompt_chars={} raw_uses_llm={} translation_active={} hotwords={} working_languages={:?}",
         current_session_id,
