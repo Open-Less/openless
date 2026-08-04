@@ -926,6 +926,20 @@ pub mod android {
         )
     }
 
+    pub fn shizuku_inject_paste_key<'local>(
+        env: &mut JNIEnv<'local>,
+        context: &JObject<'local>,
+    ) -> Result<bool, String> {
+        call_static_bool_with_context_class(
+            env,
+            context,
+            "com.openless.app.OpenLessShizukuBridge",
+            "injectPasteKey",
+            "(Landroid/content/Context;)Z",
+            &[JValue::Object(context)],
+        )
+    }
+
     fn call_static_string_with_context_class<'local>(
         env: &mut JNIEnv<'local>,
         context: &JObject<'local>,

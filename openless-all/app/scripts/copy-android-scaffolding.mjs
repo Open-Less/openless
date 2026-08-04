@@ -34,7 +34,6 @@ const KOTLIN_FILES = [
   'OpenLessOverlayBridge.kt',
   'OpenLessAccessibilityService.kt',
   'OpenLessAccessibilityResult.kt',
-  'OpenLessAccessibilityTarget.kt',
   'OpenLessAccessibilityComponentIds.kt',
   'OpenLessShizukuBridge.kt',
   'OpenLessShizukuUserService.kt',
@@ -49,7 +48,7 @@ const KOTLIN_FILES = [
 const KOTLIN_TEST_FILES = [
   'OpenLessCredentialCipherTest.kt',
   'OpenLessShizukuBridgeTest.kt',
-  'OpenLessAccessibilityTargetTest.kt',
+  'OpenLessAccessibilityResultTest.kt',
   'OpenLessAccessibilityComponentIdsTest.kt',
 ];
 const KOTLIN_ANDROID_TEST_FILES = ['OpenLessCredentialVaultInstrumentedTest.kt'];
@@ -60,7 +59,7 @@ const XML_FILES = [
 
 const GENERATED_ACCESSIBILITY_CONFIG = `<?xml version="1.0" encoding="utf-8"?>
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
-    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowsChanged|typeViewFocused|typeViewClicked"
+    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowsChanged"
     android:accessibilityFeedbackType="feedbackGeneric"
     android:accessibilityFlags="flagRetrieveInteractiveWindows"
     android:canRetrieveWindowContent="true"

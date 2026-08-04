@@ -27,6 +27,10 @@ class OpenLessShizukuUserService @JvmOverloads constructor(
         System.exit(0)
     }
 
+    override fun injectPasteKey(): Boolean {
+        return runPasteKeyInjection() is ShellResult.Success
+    }
+
     override fun recoverAccessibilityService(serviceComponent: String): String {
         if (!OpenLessShizukuBridge.isValidServiceComponent(serviceComponent)) {
             return recoveryJson(
@@ -331,6 +335,10 @@ class OpenLessShizukuUserService @JvmOverloads constructor(
         ) is ShellResult.Success
     }
 
+    private fun runPasteKeyInjection(): ShellResult {
+        return runProcess(listOf("input", "keyevent", KEYCODE_PASTE))
+    }
+
     private fun runSettingsGet(key: String): ShellResult {
         if (!isAllowedSecureKey(key)) {
             return ShellResult.Failure
@@ -431,5 +439,6 @@ class OpenLessShizukuUserService @JvmOverloads constructor(
         private const val KEY_ENABLED_SERVICES = "enabled_accessibility_services"
         private const val KEY_ACCESSIBILITY_ENABLED = "accessibility_enabled"
         private const val MAX_RECOVERY_ATTEMPTS = 3
+        private const val KEYCODE_PASTE = "279"
     }
 }

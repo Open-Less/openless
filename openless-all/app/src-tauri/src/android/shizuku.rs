@@ -1,4 +1,4 @@
-//! Android Shizuku integration for optional accessibility recovery.
+//! Android Shizuku integration for optional accessibility recovery and paste injection.
 
 use serde::Serialize;
 
@@ -6,6 +6,10 @@ use crate::android::types::{
     AndroidAccessibilityDiagnosis, AndroidAccessibilityRecoveryOutcome,
     AndroidAccessibilityRecoveryResult, AndroidShizukuState, AndroidShizukuStatus,
 };
+
+pub const PASTE_RESULT_SUCCESS: &str = "SUCCESS";
+pub const PASTE_RESULT_SHIZUKU_UNAVAILABLE: &str = "SHIZUKU_UNAVAILABLE";
+pub const PASTE_RESULT_INJECT_FAILED: &str = "INJECT_FAILED";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -95,6 +99,16 @@ pub fn recover_android_accessibility(confirmed: bool) -> AndroidAccessibilityRec
             message_key: "not_android".to_string(),
         }
     }
+}
+
+pub fn paste_via_shizuku_with_result() -> String {
+    #[cfg(target_os = "android")]
+    {
+        return android_impl::paste_via_shizuku_with_result();
+    }
+
+    #[cfg(not(target_os = "android"))]
+    PASTE_RESULT_SHIZUKU_UNAVAILABLE.to_string()
 }
 
 mod json {
@@ -332,6 +346,19 @@ mod android_impl {
                 message: String::new(),
                 message_key: "jni_error".to_string(),
             },
+        }
+    }
+
+    pub fn paste_via_shizuku_with_result() -> String {
+        match crate::android::jni::android::with_android_env(|env, context| {
+            crate::android::jni::android::shizuku_inject_paste_key(env, context)
+        }) {
+            Ok(true) => super::PASTE_RESULT_SUCCESS.to_string(),
+            Ok(false) => super::PASTE_RESULT_INJECT_FAILED.to_string(),
+            Err(error) => {
+                log::info!("[android-shizuku] paste inject unavailable: {error}");
+                super::PASTE_RESULT_SHIZUKU_UNAVAILABLE.to_string()
+            }
         }
     }
 }

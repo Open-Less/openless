@@ -12,8 +12,8 @@ import rikka.shizuku.Shizuku
 import rikka.sui.Sui
 
 /**
- * Optional Shizuku integration for accessibility diagnostics and controlled recovery.
- * Complements [OpenLessAccessibilityService]; does not replace paste / IME logic.
+ * Optional Shizuku integration for accessibility diagnostics, recovery, and paste injection.
+ * Complements [OpenLessAccessibilityService]; paste tier 2 uses [injectPasteKey].
  */
 @Keep
 object OpenLessShizukuBridge {
@@ -129,6 +129,20 @@ object OpenLessShizukuBridge {
             Log.w(TAG, "open Shizuku store listing failed", error)
             false
         }
+    }
+
+    @JvmStatic
+    @Keep
+    fun injectPasteKey(context: Context): Boolean {
+        if (isLegacyShizukuBackend()) {
+            return false
+        }
+        if (detectState(context) != ShizukuState.Authorized) {
+            return false
+        }
+        return OpenLessShizukuUserServiceClient.withService(context) { service ->
+            service.injectPasteKey()
+        } == true
     }
 
     @JvmStatic

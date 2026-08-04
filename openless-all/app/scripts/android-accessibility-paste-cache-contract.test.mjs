@@ -26,46 +26,13 @@ function kotlinFunctionBody(functionSignature) {
 const pasteBody = kotlinFunctionBody('private fun performPasteToFocusedFieldInternal()');
 assert.match(
   pasteBody,
-  /finally\s*\{\s*target\.recycle\(\)\s*\}/s,
-  'paste completion must recycle only the per-call target',
+  /rootInActiveWindow[\s\S]*findFocus\(AccessibilityNodeInfo\.FOCUS_INPUT\)[\s\S]*findFocus\(AccessibilityNodeInfo\.FOCUS_ACCESSIBILITY\)/s,
+  'paste must resolve focus from the active window only',
 );
-assert.doesNotMatch(
-  pasteBody,
-  /finally\s*\{[\s\S]*?invalidateEditableCache\s*\(/,
-  'paste completion must retain the validated focus cache for a consecutive paste',
-);
+assert.match(pasteBody, /pasteWithRetryOrSetText\(focused\)/, 'paste must retry ACTION_PASTE then SET_TEXT');
+assert.doesNotMatch(source, /lastEditableFocus/, 'paste path must not keep an editable focus cache');
+assert.doesNotMatch(source, /findEditableInTree/, 'paste path must not walk the accessibility tree');
+assert.doesNotMatch(source, /rememberFocusedEditable/, 'paste path must not warm a focus cache from events');
+assert.doesNotMatch(pasteBody, /for\s*\(\s*window\s+in\s+windows\s*\)/, 'paste must not scan all windows');
 
-const targetBody = kotlinFunctionBody('private fun findEditableTarget()');
-const rootBody = kotlinFunctionBody('private fun findEditableInRoot(root: AccessibilityNodeInfo)');
-assert.match(
-  targetBody,
-  /lastEditableFocus\?\.let\s*\{\s*cached\s*->[\s\S]*?OpenLessAccessibilityTarget\.isPasteTarget\(cached\)/s,
-  'findEditableTarget must try lenient cached paste target before window scans',
-);
-assert.match(
-  targetBody,
-  /for\s*\(\s*window\s+in\s+windows\s*\)/,
-  'findEditableTarget must scan all accessibility windows',
-);
-assert.match(
-  rootBody,
-  /editableFocusedNode\(root, AccessibilityNodeInfo\.FOCUS_INPUT\)\?\.let\s*\{\s*fresh\s*->\s*cacheEditableTarget\(fresh\)\s*return fresh/s,
-  'a fresh focus target must refresh the service cache',
-);
-assert.match(
-  rootBody,
-  /lastEditableFocus\?\.let\s*\{\s*cached\s*->[\s\S]*?OpenLessAccessibilityTarget\.isValidCachedEditable\(cached, root\)[\s\S]*?return AccessibilityNodeInfo\.obtain\(cached\)/s,
-  'cached focus reuse must retain package, window, focus, and refresh validation',
-);
-assert.match(
-  rootBody,
-  /editableFocusedNode\(root, AccessibilityNodeInfo\.FOCUS_ACCESSIBILITY\)/,
-  'findEditableInRoot must try accessibility focus after input focus',
-);
-assert.match(
-  rootBody,
-  /findEditableInTree\(root, 0\)/,
-  'findEditableInRoot must fall back to editable tree search',
-);
-
-console.log('Android accessibility paste cache contract checks passed');
+console.log('Android accessibility paste contract checks passed');

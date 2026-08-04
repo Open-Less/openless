@@ -18,7 +18,7 @@ import java.util.concurrent.locks.ReentrantLock
 internal object OpenLessShizukuUserServiceClient {
     private const val TAG = "OpenLessShizukuClient"
     private const val BIND_TIMEOUT_MS = 8_000L
-    private const val SERVICE_VERSION = 2
+    private const val SERVICE_VERSION = 3
 
     private val recoveryLock = ReentrantLock()
 
