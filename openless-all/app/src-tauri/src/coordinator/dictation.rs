@@ -747,11 +747,13 @@ fn handle_user_edit(inner: &Arc<Inner>, edit: crate::host_document::EditPair) {
     }
 }
 
-/// 排进待确认队列，并通知前端刷新。
+/// 排进待确认队列，并把卡片弹到胶囊那个位置。
 ///
-/// 不直接弹窗：此刻用户正在别的 app 里打字，抢焦点是最惹人烦的一件事。建议攒在队列
-/// 里，用户下次打开 OpenLess 时在词汇表页看到 —— 这也是为什么要有队列而不是只发一个
-/// 转瞬即逝的事件：主窗口没开的时候，事件没人接。
+/// 攒队列 + 立刻弹卡片，两件事都要：卡片是即时的（用户刚改完，正记得自己在干嘛），
+/// 队列是卡片的数据源（同一次听写里改了好几个词就合并到一张卡）。
+///
+/// 卡片本身不抢焦点 —— 胶囊窗口是 nonactivating panel，你在别的 app 里打字时它弹
+/// 出来不会把光标夺走。
 fn queue_correction_suggestion(inner: &Arc<Inner>, rule: &crate::host_document::LearnedRule) {
     {
         let mut pending = inner.pending_corrections.lock();
@@ -763,7 +765,6 @@ fn queue_correction_suggestion(inner: &Arc<Inner>, rule: &crate::host_document::
             return;
         }
         if pending.len() >= crate::types::MAX_PENDING_CORRECTIONS {
-            // 攒到上限还没人理，说明用户不想理。丢最老的，别无限涨。
             pending.remove(0);
         }
         pending.push(crate::types::PendingCorrection {
@@ -773,13 +774,11 @@ fn queue_correction_suggestion(inner: &Arc<Inner>, rule: &crate::host_document::
         });
     }
     log::info!(
-        "[cursor-context] correction suggested (awaiting confirmation): {:?} → {:?}",
-        rule.pattern,
-        rule.replacement
+        "[cursor-context] vocabulary suggested (awaiting confirmation): {:?} (was {:?})",
+        rule.replacement,
+        rule.pattern
     );
-    if let Some(app) = inner.app.lock().clone() {
-        let _ = app.emit("correction:suggested", ());
-    }
+    super::show_vocab_suggestion_card(inner);
 }
 
 /// 收进词汇表。**只写词汇表，不写纠正规则。**
@@ -1747,6 +1746,9 @@ pub(super) async fn begin_session_as(
     // 新一次听写开始 → 上一次的手改监听作废。用户已经不在改上一段了，继续盯着只会
     // 把新的输入误判成对旧文本的修改。这是「必须保证解除」的四条规则之一。
     *inner.edit_watcher.lock() = None;
+    // 词条建议卡片同样让位：它和录音胶囊共用一个窗口，不收起来就会挡住听写反馈。
+    // 用户开口说下一句时，上一句的建议已经不是他关心的事了。
+    super::hide_vocab_suggestion_card(inner);
     #[cfg(target_os = "windows")]
     {
         if inner.prefs.get().windows_insertion_mode == crate::types::WindowsInsertionMode::Tsf {

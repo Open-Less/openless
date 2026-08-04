@@ -18,7 +18,8 @@ import {
   getCapsulePillMetrics,
 } from '../lib/capsuleLayout';
 import { isTauri } from '../lib/ipc';
-import type { CapsulePayload, CapsuleState, CapsuleStyle } from '../lib/types';
+import type { CapsulePayload, CapsuleState, CapsuleStyle, PendingCorrection } from '../lib/types';
+import { VocabSuggestionCard } from './VocabSuggestionCard';
 
 // 胶囊 keyframes 注入一次到 document.head，而不是放在组件 JSX 里。否则录音时音量
 // 每帧（~60Hz）setLevel 都会让 React 重新创建/reconcile 这个 <style> 元素 —— 纯属
@@ -769,6 +770,9 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   const exitMsRef = useRef(isClassic ? EXIT_ANIM_MS_CLASSIC : EXIT_ANIM_MS_SIRI);
   exitMsRef.current = isClassic ? EXIT_ANIM_MS_CLASSIC : EXIT_ANIM_MS_SIRI;
   const exitMs = exitMsRef.current;
+  // 词条建议卡片。走独立事件通道，不进会话状态机 —— 那套状态机身上挂着 Esc 独占、
+  // Space 贴附、多屏定位一整串逻辑，加一个非会话状态进去只会污染它。
+  const [suggestions, setSuggestions] = useState<PendingCorrection[]>([]);
   // 前端 host 与原生窗口保持同一份透明语音 orb 舞台尺寸。
   const hostMetrics = getCapsuleHostMetrics(os, translation);
   // Windows 端 host 用「host 高 − pill 高」把 pill 垂直居中；Siri 舞台 460×180 与 host
@@ -812,8 +816,18 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
         if (p.insertedChars != null) insertedCharsRef.current = p.insertedChars;
         operatingRef.current = p.operating === true;
       });
-      if (cancelled) handle();
-      else unlisten = handle;
+      const suggestHandle = await listen<PendingCorrection[]>('vocab:suggested', event => {
+        setSuggestions(event.payload ?? []);
+      });
+      if (cancelled) {
+        handle();
+        suggestHandle();
+      } else {
+        unlisten = () => {
+          handle();
+          suggestHandle();
+        };
+      }
     })();
     return () => {
       cancelled = true;
@@ -906,6 +920,12 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
       return next;
     });
   }, [warming]);
+
+  // 卡片优先：它和胶囊共用一个窗口，但时序上不冲突 —— 卡片在改完字之后才弹，那时
+  // 会话早已收尾；新一轮听写开始时后端会先把卡片收起来（见 begin_session_as）。
+  if (suggestions.length > 0) {
+    return <VocabSuggestionCard suggestions={suggestions} />;
+  }
 
   // 真正卸载：state 已是 idle，且不在离场动画中。
   if (state === 'idle' && !leaving) {

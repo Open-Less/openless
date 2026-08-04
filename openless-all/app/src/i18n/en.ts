@@ -389,6 +389,11 @@ export const en: typeof zhCN = {
     confirmClear: 'Delete all {{count}} history entries? This cannot be undone.',
     backToList: 'Back to list',
   },
+  vocabCard: {
+    title: 'Remember this word?',
+    accept: 'Yes',
+    dismissAll: 'No thanks',
+  },
   vocab: {
     kicker: 'VOCABULARY',
     title: 'Vocabulary',
@@ -401,6 +406,8 @@ export const en: typeof zhCN = {
     tipDisabled: 'Click to disable this entry',
     tipEnabled: 'Click to enable this entry',
     removeAria: 'Remove',
+    learnedSection: 'Auto-collected ({{count}})',
+    removeAllLearned: 'Remove all',
     corrections: {
       title: 'Correction rules',
       tip: 'Fix common ASR mistakes. Supports {num} number wildcard.',

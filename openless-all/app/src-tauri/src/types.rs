@@ -269,20 +269,30 @@ pub struct CorrectionRule {
     pub source: RuleSource,
 }
 
-/// 一条等待用户确认的纠正建议（Tier2）。
+/// 一条等待用户确认的词条建议。
 ///
-/// 只存在内存里，不落盘：建议本身是易逝的 —— 用户下次犯同样的错会再产生一条，而一个
-/// 重启之后还在追着你要确认的队列只会变成噪声。上限 [`MAX_PENDING_CORRECTIONS`]。
+/// 只存在内存里，不落盘：建议是易逝的 —— 卡片消失就当没发生，用户下次改同一个词会再
+/// 产生一条。这也是不做「拒绝名单」的原因：一份用户看不见的名单，只会让他将来纳闷
+/// 「为什么这个词它不学了」。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct PendingCorrection {
     pub id: String,
+    /// 改之前那个（错的）写法。只用来在卡片上让用户看清改的是什么，不入库。
     pub pattern: String,
+    /// 用户最后要的那个词 —— 点「好」之后进词汇表的就是它。
     pub replacement: String,
 }
 
-/// 待确认建议的上限。用户一次听写最多产生几条，攒到二十条还没人理就说明他不想理。
-pub const MAX_PENDING_CORRECTIONS: usize = 20;
+/// 一张卡片上最多列几条。同一次听写里改好几个词会合并到一张卡；再多就该丢最老的了，
+/// 卡片撑得比屏幕还高没有意义。
+pub const MAX_PENDING_CORRECTIONS: usize = 5;
+
+/// 卡片自动消失的时间。
+///
+/// 到点就当没发生 —— 不记任何东西。用户下次改同一个词还会再问，这正是不要拒绝名单
+/// 换来的好处。
+pub const VOCAB_SUGGESTION_TTL_MS: u64 = 10_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

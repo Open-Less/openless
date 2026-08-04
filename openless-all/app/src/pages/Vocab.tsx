@@ -4,25 +4,17 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
-  acceptPendingCorrection,
   addCorrectionRule,
   addVocab,
-  dismissPendingCorrection,
   isTauri,
   listCorrectionRules,
-  listPendingCorrections,
   listVocab,
   removeCorrectionRule,
   removeVocab,
   setCorrectionRuleEnabled,
   setVocabEnabled,
 } from '../lib/ipc';
-import type {
-  CorrectionRule,
-  DictionaryEntry,
-  PendingCorrection,
-  VocabPreset,
-} from '../lib/types';
+import type { CorrectionRule, DictionaryEntry, VocabPreset } from '../lib/types';
 import { DEFAULT_VOCAB_PRESETS, loadVocabPresets, persistVocabPresets } from '../lib/vocabPresets';
 import { useMobileLayout } from '../lib/useMobileLayout';
 import { Btn, Card, Collapsible, PageHeader } from './_atoms';
@@ -59,7 +51,6 @@ export function Vocab() {
   // 「只看自动收集的」筛选。自动收集能被信任的前提就是用户随时能把它们单独挑出来
   // 一眼看完并批量删掉 —— 混在手动规则里等于看不见。
   const [onlyLearnedRules, setOnlyLearnedRules] = useState(false);
-  const [pendingCorrections, setPendingCorrections] = useState<PendingCorrection[]>([]);
   const [rulePatternDraft, setRulePatternDraft] = useState('');
   const [ruleReplacementDraft, setRuleReplacementDraft] = useState('');
 
@@ -85,18 +76,9 @@ export function Vocab() {
     }
   };
 
-  const refreshPendingCorrections = async () => {
-    try {
-      setPendingCorrections(await listPendingCorrections());
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  };
-
   const refreshAll = () => {
     void refresh();
     void refreshCorrectionRules();
-    void refreshPendingCorrections();
   };
 
   useEffect(() => {
@@ -114,19 +96,8 @@ export function Vocab() {
       const handle = await listen('vocab:updated', () => {
         void refresh();
       });
-      // 手改建议是后台产生的（用户当时在别的 app 里），页面开着时即时刷出来。
-      const handleSuggested = await listen('correction:suggested', () => {
-        void refreshPendingCorrections();
-      });
-      if (cancelled) {
-        handle();
-        handleSuggested();
-      } else {
-        unlisten = () => {
-          handle();
-          handleSuggested();
-        };
-      }
+      if (cancelled) handle();
+      else unlisten = handle;
     })();
     return () => {
       cancelled = true;
@@ -193,24 +164,24 @@ export function Vocab() {
     setCorrectionRules(prev => prev.filter(r => !removed.includes(r.id)));
   };
 
-  const onAcceptPending = async (id: string) => {
-    setPendingCorrections(prev => prev.filter(p => p.id !== id));
-    try {
-      await acceptPendingCorrection(id);
-      await refreshCorrectionRules();
-      await refresh();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  };
+  // 自动收集的词条靠 note 认。分成两区显示 —— 见下面渲染处的说明。
+  const LEARNED_NOTE = '从手改中自动收集';
+  const manualEntries = entries.filter(e => e.note !== LEARNED_NOTE);
+  const learnedEntries = entries.filter(e => e.note === LEARNED_NOTE);
 
-  const onDismissPending = async (id: string) => {
-    setPendingCorrections(prev => prev.filter(p => p.id !== id));
-    try {
-      await dismissPendingCorrection(id);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+  const onRemoveAllLearnedEntries = async () => {
+    // 逐条删而不是加一条批量后端命令：词条是几十条量级，为此多开一条 IPC 不值得，
+    // 而且逐条删失败一条也不影响其余。
+    const removed: string[] = [];
+    for (const entry of learnedEntries) {
+      try {
+        await removeVocab(entry.id);
+        removed.push(entry.id);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      }
     }
+    setEntries(prev => prev.filter(e => !removed.includes(e.id)));
   };
 
   const learnedRuleCount = correctionRules.filter(r => r.source === 'learned').length;
@@ -409,34 +380,6 @@ export function Vocab() {
               />
               <Btn size="sm" variant="primary" onClick={() => void onAddCorrectionRule()} style={mobile ? { justifySelf: 'start' } : undefined}>{t('common.add')}</Btn>
             </div>
-            {pendingCorrections.length > 0 && (
-              <div style={{ display: 'grid', gap: 6 }}>
-                <div style={{ fontSize: 12, color: 'var(--ol-ink-3)' }}>
-                  {t('vocab.corrections.suggestTitle')}
-                </div>
-                {pendingCorrections.map(p => (
-                  <div
-                    key={p.id}
-                    style={{
-                      display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
-                      padding: '6px 10px', borderRadius: 8,
-                      border: '0.5px solid var(--ol-line-strong)',
-                      background: 'var(--ol-blue-soft)',
-                    }}
-                  >
-                    <span style={{ fontSize: 12, fontFamily: 'var(--ol-font-mono)', flex: 1, minWidth: 0 }}>
-                      {p.pattern} → {p.replacement}
-                    </span>
-                    <Btn size="sm" variant="primary" onClick={() => void onAcceptPending(p.id)}>
-                      {t('vocab.corrections.suggestAccept')}
-                    </Btn>
-                    <Btn size="sm" onClick={() => void onDismissPending(p.id)}>
-                      {t('vocab.corrections.suggestDismiss')}
-                    </Btn>
-                  </div>
-                ))}
-              </div>
-            )}
             {learnedRuleCount > 0 && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                 <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--ol-ink-3)' }}>
@@ -501,10 +444,39 @@ export function Vocab() {
                 {t('vocab.empty')}
               </div>
             )}
-            {!error && entries.map(e => (
+            {!error && manualEntries.map(e => (
               <VocabChip key={e.id} entry={e} onRemove={() => onRemove(e.id)} onToggle={() => onToggle(e)} />
             ))}
           </div>
+          {/* 自动收集的单独一区。不给每个词条挂 badge —— 混在一堆里要逐个看；
+              分区一眼就看得完，「全部删除」也自然地管着下面这一块。
+              用户随时能看清、能整块撤销，是自动收集能被信任的前提。 */}
+          {!error && learnedEntries.length > 0 && (
+            <>
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 10,
+                  marginTop: 16,
+                  paddingTop: 12,
+                  borderTop: '0.5px solid var(--ol-line-soft)',
+                }}
+              >
+                <span style={{ fontSize: 12, color: 'var(--ol-ink-3)' }}>
+                  {t('vocab.learnedSection', { count: learnedEntries.length })}
+                </span>
+                <Btn size="sm" onClick={() => void onRemoveAllLearnedEntries()}>
+                  {t('vocab.removeAllLearned')}
+                </Btn>
+              </div>
+              <div style={{ marginTop: 10, display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                {learnedEntries.map(e => (
+                  <VocabChip key={e.id} entry={e} onRemove={() => onRemove(e.id)} onToggle={() => onToggle(e)} />
+                ))}
+              </div>
+            </>
+          )}
         </Collapsible>
       </Card>
       <style>{`

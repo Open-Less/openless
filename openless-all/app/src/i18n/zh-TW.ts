@@ -389,6 +389,11 @@ export const zhTW: typeof zhCN = {
     confirmClear: '確定清空全部 {{count}} 條記錄？此操作不可恢復。',
     backToList: '返回列表',
   },
+  vocabCard: {
+    title: '要記住這個詞嗎？',
+    accept: '好',
+    dismissAll: '都不用',
+  },
   vocab: {
     kicker: 'VOCABULARY',
     title: '詞彙表',
@@ -401,6 +406,8 @@ export const zhTW: typeof zhCN = {
     tipDisabled: '點擊禁用此詞條',
     tipEnabled: '點擊啓用此詞條',
     removeAria: '刪除',
+    learnedSection: '自動收集（{{count}}）',
+    removeAllLearned: '全部刪除',
     corrections: {
       title: '糾正規則',
       tip: '修正常見 ASR 誤識別，支援 {num} 數字通配。',

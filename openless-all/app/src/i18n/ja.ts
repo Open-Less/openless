@@ -391,6 +391,11 @@ export const ja: typeof zhCN = {
     confirmClear: '全 {{count}} 件の記録を削除しますか？この操作は取り消せません。',
     backToList: '一覧に戻る',
   },
+  vocabCard: {
+    title: 'この語を覚えますか？',
+    accept: 'はい',
+    dismissAll: 'すべて不要',
+  },
   vocab: {
     kicker: 'VOCABULARY',
     title: '語彙',
@@ -403,6 +408,8 @@ export const ja: typeof zhCN = {
     tipDisabled: 'クリックで無効化',
     tipEnabled: 'クリックで有効化',
     removeAria: '削除',
+    learnedSection: '自動収集（{{count}}）',
+    removeAllLearned: 'すべて削除',
     corrections: {
       title: '補正ルール',
       tip: 'ASR の誤認識を修正。{num} 数字ワイルドカード対応。',

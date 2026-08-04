@@ -387,6 +387,11 @@ export const zhCN = {
     confirmClear: '确定清空全部 {{count}} 条记录？此操作不可恢复。',
     backToList: '返回列表',
   },
+  vocabCard: {
+    title: '要记住这个词吗？',
+    accept: '好',
+    dismissAll: '都不用',
+  },
   vocab: {
     kicker: 'VOCABULARY',
     title: '词汇表',
@@ -399,6 +404,8 @@ export const zhCN = {
     tipDisabled: '点击禁用此词条',
     tipEnabled: '点击启用此词条',
     removeAria: '删除',
+    learnedSection: '自动收集（{{count}}）',
+    removeAllLearned: '全部删除',
     corrections: {
       title: '纠正规则',
       tip: '修正常见 ASR 误识别，支持 {num} 数字通配。',

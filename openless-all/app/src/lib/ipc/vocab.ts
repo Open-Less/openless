@@ -59,18 +59,14 @@ export function addCorrectionRule(
     )
 }
 
-/** 待用户确认的纠正建议（Tier2 那一档）。后端只存在内存里，重启即空。 */
-export function listPendingCorrections(): Promise<PendingCorrection[]> {
-    return invokeOrMock("list_pending_corrections", undefined, () => [])
-}
-
-/** 接受一条建议：写纠正规则 + 加词汇表热词，并打 learned 标记。 */
+/** 卡片上点了「好」：把这个词收进词汇表，并打「自动收集」标记。 */
 export function acceptPendingCorrection(id: string): Promise<void> {
     return invokeOrMock("accept_pending_correction", { id }, () => undefined)
 }
 
-export function dismissPendingCorrection(id: string): Promise<void> {
-    return invokeOrMock("dismiss_pending_correction", { id }, () => undefined)
+/** 点了「都不用」，或者卡片 10 秒到期。什么都不记 —— 没有拒绝名单。 */
+export function dismissVocabSuggestions(): Promise<void> {
+    return invokeOrMock("dismiss_vocab_suggestions", undefined, () => undefined)
 }
 
 export function removeCorrectionRule(id: string): Promise<void> {

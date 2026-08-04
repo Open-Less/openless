@@ -391,6 +391,11 @@ export const ko: typeof zhCN = {
     confirmClear: '전체 {{count}}건의 기록을 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.',
     backToList: '목록으로',
   },
+  vocabCard: {
+    title: '이 단어를 기억할까요?',
+    accept: '예',
+    dismissAll: '모두 아니요',
+  },
   vocab: {
     kicker: 'VOCABULARY',
     title: '어휘',
@@ -403,6 +408,8 @@ export const ko: typeof zhCN = {
     tipDisabled: '클릭하여 비활성화',
     tipEnabled: '클릭하여 활성화',
     removeAria: '삭제',
+    learnedSection: '자동 수집 ({{count}})',
+    removeAllLearned: '모두 삭제',
     corrections: {
       title: '교정 규칙',
       tip: 'ASR 오인식 수정. {num} 숫자 와일드카드 지원.',

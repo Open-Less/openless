@@ -182,6 +182,99 @@ fn show_capsule_window_for_recording<R: tauri::Runtime>(
     }
 }
 
+/// 词条建议卡片的窗口尺寸（逻辑点）。
+///
+/// 显示卡片时必须把胶囊窗口缩到这个大小 —— 见 [`show_vocab_suggestion_card`] 里关于
+/// 鼠标穿透的说明。
+const VOCAB_CARD_WIDTH: f64 = 300.0;
+/// 一条建议占的高度 + 卡片自身的边距。
+const VOCAB_CARD_ROW_HEIGHT: f64 = 52.0;
+const VOCAB_CARD_CHROME_HEIGHT: f64 = 56.0;
+
+/// 把「要不要记住这个词」的卡片弹到胶囊那个位置。
+///
+/// 复用胶囊窗口而不是新开一个：多显示器定位、Space 贴附（macOS 26 上那个把窗口钉死在
+/// 单个桌面的坑）、nonactivating panel 都是踩过坑才对的，重开一个窗口等于重踩一遍。
+///
+/// 但有一处必须动：**胶囊平时是鼠标完全穿透的**（`set_ignore_cursor_events(true)`），
+/// 因为它浮在别的 app 上面，不能挡住用户点下面的东西。卡片要能点，就得临时关掉穿透；
+/// 而透明窗口一旦不穿透，**连透明的部分也会拦鼠标**。所以显示卡片时把窗口缩到卡片实际
+/// 大小，挡住的范围就只有卡片本身；收起时再恢复。
+pub(crate) fn show_vocab_suggestion_card(inner: &Arc<Inner>) {
+    let pending = inner.pending_corrections.lock().clone();
+    if pending.is_empty() {
+        return;
+    }
+    let Some(app) = inner.app.lock().clone() else {
+        return;
+    };
+    let height = VOCAB_CARD_CHROME_HEIGHT + VOCAB_CARD_ROW_HEIGHT * pending.len() as f64;
+    let app_for_main = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let app = app_for_main;
+        let Some(window) = app.get_webview_window("capsule") else {
+            return;
+        };
+        // 卡片是要点的，穿透必须关掉。
+        if let Err(e) = window.set_ignore_cursor_events(false) {
+            log::warn!("[vocab-card] set_ignore_cursor_events(false) failed: {e}");
+        }
+        if let Err(e) = window.set_size(tauri::LogicalSize::new(VOCAB_CARD_WIDTH, height)) {
+            log::warn!("[vocab-card] resize failed: {e}");
+        }
+        if let Err(e) = position_vocab_card(&window, VOCAB_CARD_WIDTH, height) {
+            log::warn!("[vocab-card] position failed: {e}");
+        }
+        let _ = app.emit_to("capsule", "vocab:suggested", &pending);
+        show_capsule_window_for_recording(&app, &window, true);
+        #[cfg(target_os = "macos")]
+        crate::restore_main_window_key_if_active(&app);
+    });
+}
+
+/// 收起卡片：恢复鼠标穿透和窗口尺寸，藏起窗口。
+///
+/// 三条路径都会走到这里 —— 用户点了「好」/「都不用」、10 秒到时、新一轮听写开始。
+pub(crate) fn hide_vocab_suggestion_card(inner: &Arc<Inner>) {
+    inner.pending_corrections.lock().clear();
+    let Some(app) = inner.app.lock().clone() else {
+        return;
+    };
+    let app_for_main = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let app = app_for_main;
+        let Some(window) = app.get_webview_window("capsule") else {
+            return;
+        };
+        let _ = app.emit_to("capsule", "vocab:suggested", Vec::<crate::types::PendingCorrection>::new());
+        // 穿透必须还回去，否则胶囊会一直挡着屏幕底部那一块。
+        if let Err(e) = window.set_ignore_cursor_events(true) {
+            log::warn!("[vocab-card] restoring cursor passthrough failed: {e}");
+        }
+        let _ = window.hide();
+    });
+}
+
+/// 把卡片放到胶囊平时待的位置（底部居中、避开 Dock）。
+fn position_vocab_card<R: tauri::Runtime>(
+    window: &tauri::WebviewWindow<R>,
+    width: f64,
+    height: f64,
+) -> tauri::Result<()> {
+    let Some(monitor) = window.current_monitor()? else {
+        return Ok(());
+    };
+    let scale = monitor.scale_factor();
+    let size = monitor.size();
+    let pos = monitor.position();
+    let (mon_w, mon_h) = (size.width as f64 / scale, size.height as f64 / scale);
+    let (mon_x, mon_y) = (pos.x as f64 / scale, pos.y as f64 / scale);
+    let x = mon_x + (mon_w - width) / 2.0;
+    // 80pt 给 Dock，与胶囊同源。
+    let y = mon_y + mon_h - height - 80.0;
+    window.set_position(tauri::LogicalPosition::new(x, y))
+}
+
 #[derive(Clone)]
 enum ActiveAsr {
     Volcengine(Arc<VolcengineStreamingASR>),
@@ -1639,16 +1732,19 @@ impl Coordinator {
         &self.inner.correction_rules
     }
 
-    pub fn list_pending_corrections(&self) -> Vec<crate::types::PendingCorrection> {
-        self.inner.pending_corrections.lock().clone()
-    }
-
-    /// 用户点了「记住」。走的是和自动收集完全相同的落库路径（纠正规则 + 词汇表 +
-    /// 查重），只是触发方是用户而不是分级判定。
+    /// 用户在卡片上点了「好」。走的是和自动收集完全相同的落库路径（词汇表 + 查重），
+    /// 只是触发方是用户而不是分级判定。
+    ///
+    /// 队列空了就把卡片收起来 —— 卡片上列了几条，用户逐条点完最后一条时它该自己消失。
     pub fn accept_pending_correction(&self, id: &str) {
-        let Some(pending) = self.take_pending_correction(id) else {
-            return;
+        let taken = {
+            let mut pending = self.inner.pending_corrections.lock();
+            pending
+                .iter()
+                .position(|p| p.id == id)
+                .map(|idx| pending.remove(idx))
         };
+        let Some(pending) = taken else { return };
         dictation::commit_learned_rule(
             &self.inner,
             &crate::host_document::LearnedRule {
@@ -1657,18 +1753,17 @@ impl Coordinator {
                 tier: crate::host_document::RuleTier::Confirm,
             },
         );
+        if self.inner.pending_corrections.lock().is_empty() {
+            hide_vocab_suggestion_card(&self.inner);
+        }
     }
 
-    /// 用户点了「不用」。只是从队列里拿掉 —— 不记「这条被拒过」：用户改主意的成本
-    /// 应该是零，而一份看不见的拒绝名单只会让人猜为什么它不学了。
-    pub fn dismiss_pending_correction(&self, id: &str) {
-        self.take_pending_correction(id);
-    }
-
-    fn take_pending_correction(&self, id: &str) -> Option<crate::types::PendingCorrection> {
-        let mut pending = self.inner.pending_corrections.lock();
-        let idx = pending.iter().position(|p| p.id == id)?;
-        Some(pending.remove(idx))
+    /// 用户点了「都不用」，或者卡片 10 秒到期自己消失。
+    ///
+    /// 什么都不记 —— 不做「拒绝名单」。用户下次改同一个词还会再问，而一份他看不见的
+    /// 名单只会让他将来纳闷「为什么这个词它不学了」。
+    pub fn dismiss_vocab_suggestions(&self) {
+        hide_vocab_suggestion_card(&self.inner);
     }
 
     pub fn update_hotkey_binding(&self) {
