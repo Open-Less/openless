@@ -711,17 +711,14 @@ fn arm_edit_watch(inner: &Arc<Inner>, status: InsertStatus, typed_text: &str) {
     use std::sync::atomic::Ordering;
 
     // 无论如何都先把上一次的解除掉：哪怕这次不武装，旧观察器也不该继续活着。
-    //
-    // 代次同时 +1。解除是异步的（drop 只置 flag，观察线程要到下一次 runloop 轮转才
-    // 看得见，而 AX 回调正跑在那次轮转里面），所以「已解除」和「还能再上报一次」有
-    // 重叠。推进代次让那些迟到的上报当场失效 —— 见 `Inner::edit_watch_generation`。
-    let mut slot = inner.edit_watcher.lock();
-    *slot = None;
-    let generation = inner.edit_watch_generation.fetch_add(1, Ordering::SeqCst) + 1;
+    // 走统一入口 —— 它同时推进代次，让上一代还在路上的上报失效。
+    super::disarm_edit_watch(inner);
+    let generation = inner.edit_watch_generation.load(Ordering::SeqCst);
 
     if !should_arm_edit_watch(inner.prefs.get().cursor_context_enabled, status, typed_text) {
         return;
     }
+    let mut slot = inner.edit_watcher.lock();
     let inner_for_edit = Arc::clone(inner);
     *slot = crate::host_document::watch_for_edits(typed_text.to_string(), move |edit| {
         // 代次对不上 = 这条来自已经被换掉的观察器，丢掉。不打 info：正常解除也会走到
@@ -1756,7 +1753,10 @@ pub(super) async fn begin_session_as(
     };
     // 新一次听写开始 → 上一次的手改监听作废。用户已经不在改上一段了，继续盯着只会
     // 把新的输入误判成对旧文本的修改。这是「必须保证解除」的四条规则之一。
-    *inner.edit_watcher.lock() = None;
+    //
+    // 必须走 `disarm_edit_watch` 而不是裸的 `*slot = None`：解除是异步的，还要推进代次
+    // 才能让路上那条上报失效。见该函数的说明。
+    super::disarm_edit_watch(inner);
     // 词条建议卡片同样让位：它和录音胶囊共用一个窗口，不收起来就会挡住听写反馈。
     // 用户开口说下一句时，上一句的建议已经不是他关心的事了。
     super::hide_vocab_suggestion_card(inner);

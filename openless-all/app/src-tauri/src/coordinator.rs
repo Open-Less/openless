@@ -276,6 +276,28 @@ pub(crate) fn hide_vocab_suggestion_card(inner: &Arc<Inner>) {
     });
 }
 
+/// 解除手改观察器 —— **唯一的解除入口，三条路径都必须走它。**
+///
+/// 两步缺一不可，而这正是它必须收口成一个函数的原因：
+///
+/// 1. `*slot = None` 丢掉 `EditWatcher`，其 `Drop` 置位停止 flag；
+/// 2. 推进代次，让还在路上的上报当场失效。
+///
+/// 只做第 1 步是不够的：解除是**异步**的，观察线程要到下一次 runloop 轮转（≤1s）才看得见
+/// flag，而 AX 通知回调正跑在那次轮转里面。漏掉第 2 步，一条属于上一轮的建议就会在新会话
+/// 进行中弹出卡片 —— 而卡片会把胶囊窗口缩到卡片大小，等于把正在进行的那次听写的胶囊
+/// 弄没了（真机踩过，表现是「热键像是坏了」）。
+///
+/// 这个函数是补出来的：代次守卫刚加进来时，`arm_edit_watch` 和 `disarm_edit_watch` 各自
+/// 推了代次，唯独 `begin_session_as` 还是裸的 `*slot = None` —— 而它恰好是「新会话开始」
+/// 这条主路径，也就是上面那个 bug 的实际触发路径。三处各写各的，漏一处就等于没修。
+pub(crate) fn disarm_edit_watch(inner: &Arc<Inner>) {
+    *inner.edit_watcher.lock() = None;
+    inner
+        .edit_watch_generation
+        .fetch_add(1, Ordering::SeqCst);
+}
+
 /// 把卡片放到屏幕**右下角**。
 ///
 /// 不跟胶囊一样居中：卡片是要停留几秒等你读的，而屏幕正下方居中正是你在写字的地方 ——
@@ -1835,12 +1857,7 @@ impl Coordinator {
     /// runloop 轮转（≤1s）时退出并反注册 AXObserver。同时把还挂着的建议卡片收掉 ——
     /// 那些建议是这条链路的产物，开关关了就不该再让用户看见。
     pub fn disarm_edit_watch(&self) {
-        *self.inner.edit_watcher.lock() = None;
-        // 推进代次：解除是异步的，观察线程可能还会再上报一次。开关都关了，那条更不该
-        // 落地。见 `Inner::edit_watch_generation`。
-        self.inner
-            .edit_watch_generation
-            .fetch_add(1, Ordering::SeqCst);
+        disarm_edit_watch(&self.inner);
         hide_vocab_suggestion_card(&self.inner);
         log::info!("[cursor-context] edit watch disarmed: feature switched off");
     }

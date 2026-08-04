@@ -207,7 +207,12 @@ pub fn learned_rule(edit: &EditPair) -> Option<LearnedRule> {
 fn pad_to_min_length(edit: &EditPair) -> Option<(String, String)> {
     let before: Vec<char> = edit.before.chars().collect();
     let after: Vec<char> = edit.after.chars().collect();
-    let base = edit.source.chars().count();
+    // 按 **trim 之后**的长度算，因为最终入库的也是 trim 之后的。
+    //
+    // 用原始长度会漏掉一整类：「大 禹」→「大鱼」的最小差异是 `" 禹"` → `"鱼"`，
+    // 带空格数出来是 2 char，正好够 MIN_PATTERN_CHARS，于是不扩长；trim 之后却只剩
+    // 单字的「禹 → 鱼」—— 恰好是这个常量存在的意义所要挡的那种。
+    let base = edit.source.trim().chars().count();
     let (mut left, mut right) = (0usize, 0usize);
 
     // 借一个字的条件：那一侧还有字，且那个字不是空白。
@@ -553,6 +558,25 @@ mod tests {
         let learned = rule("上一行\n甲乙", "上一行\n丙乙").unwrap();
         assert_eq!(learned.pattern, "甲乙");
         assert_eq!(learned.replacement, "丙乙");
+    }
+
+    /// 差异里夹着空格时，扩长必须按 trim 后的长度判，否则单字规则会溜过去。
+    ///
+    /// 「大 禹」→「大鱼」的最小差异是 `" 禹"` → `"鱼"`。带着空格数是 2 char，正好够
+    /// MIN_PATTERN_CHARS 于是不扩长；可最终入库的是 trim 之后的，只剩单字「禹 → 鱼」
+    /// —— 正是 MIN_PATTERN_CHARS 存在的意义所要挡的那种（下次说「禹州」就成了「鱼州」）。
+    #[test]
+    fn a_diff_padded_with_whitespace_still_gets_widened() {
+        let learned = rule("今天讲大 禹养殖", "今天讲大鱼养殖").unwrap();
+        assert_eq!(
+            learned.replacement, "大鱼",
+            "trim 之后必须仍然是个词，不能退化成单字"
+        );
+        assert!(
+            learned.pattern.trim().chars().count() >= 2,
+            "pattern 也不该是单字，实际是 {:?}",
+            learned.pattern
+        );
     }
 
     #[test]
