@@ -708,15 +708,31 @@ fn should_arm_edit_watch(enabled: bool, status: InsertStatus, typed_text: &str) 
 ///
 /// 任何一步失败都只是「学不到东西」，绝不影响已经落到屏幕上的文字。
 fn arm_edit_watch(inner: &Arc<Inner>, status: InsertStatus, typed_text: &str) {
+    use std::sync::atomic::Ordering;
+
     // 无论如何都先把上一次的解除掉：哪怕这次不武装，旧观察器也不该继续活着。
+    //
+    // 代次同时 +1。解除是异步的（drop 只置 flag，观察线程要到下一次 runloop 轮转才
+    // 看得见，而 AX 回调正跑在那次轮转里面），所以「已解除」和「还能再上报一次」有
+    // 重叠。推进代次让那些迟到的上报当场失效 —— 见 `Inner::edit_watch_generation`。
     let mut slot = inner.edit_watcher.lock();
     *slot = None;
+    let generation = inner.edit_watch_generation.fetch_add(1, Ordering::SeqCst) + 1;
 
     if !should_arm_edit_watch(inner.prefs.get().cursor_context_enabled, status, typed_text) {
         return;
     }
     let inner_for_edit = Arc::clone(inner);
     *slot = crate::host_document::watch_for_edits(typed_text.to_string(), move |edit| {
+        // 代次对不上 = 这条来自已经被换掉的观察器，丢掉。不打 info：正常解除也会走到
+        // 这里，日常并不稀奇。
+        let current = inner_for_edit.edit_watch_generation.load(Ordering::SeqCst);
+        if current != generation {
+            log::debug!(
+                "[cursor-context] dropping a late report from watch generation {generation} (now {current})"
+            );
+            return;
+        }
         log::info!(
             "[cursor-context] user edit detected: source={:?} target={:?}",
             edit.source,

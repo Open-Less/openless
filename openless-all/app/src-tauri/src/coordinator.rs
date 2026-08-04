@@ -680,6 +680,18 @@ struct Inner {
     /// 覆盖这个 Option 会 drop 掉旧的 watcher，drop 即解除。另外三条（60 秒超时、
     /// 前台 app 切换、焦点元素消失）由观察线程自己负责。
     edit_watcher: Mutex<Option<crate::host_document::EditWatcher>>,
+    /// 观察器代次。每武装一次 +1；上报时对不上号的一律丢弃。
+    ///
+    /// 解除是**异步**的：drop `EditWatcher` 只是置一个 flag，观察线程要到下一次 runloop
+    /// 轮转（≤1s）才看得见，而 AX 通知回调正跑在那次轮转**里面**。也就是说「已解除」和
+    /// 「还能再上报一次」有一段重叠 —— 光靠 flag 只能缩小这个窗口，关不死它。
+    ///
+    /// 迟到的上报不是小事：卡片会把胶囊窗口缩到卡片大小，一条属于上一轮的建议在**新
+    /// 会话进行中**弹出来，等于把正在进行的那次听写的胶囊弄没了。真机上踩过一次，
+    /// 表现是「热键像是坏了」。
+    ///
+    /// 所以判据不放在线程那边，放在这里：只有代次对得上的上报才算数。
+    edit_watch_generation: std::sync::atomic::AtomicU64,
     /// 等待用户确认的词条建议。只在内存里 —— 见 `PendingCorrection` 的说明。
     pending_corrections: Mutex<Vec<crate::types::PendingCorrection>>,
     /// 建议卡片是不是正占着胶囊窗口。
@@ -936,6 +948,7 @@ impl Coordinator {
                     recorder: Mutex::new(None),
                     audio_archive_active: AtomicBool::new(false),
                     edit_watcher: Mutex::new(None),
+                    edit_watch_generation: std::sync::atomic::AtomicU64::new(0),
                     pending_corrections: Mutex::new(Vec::new()),
                     vocab_card_visible: AtomicBool::new(false),
                     recording_mute: Mutex::new(SharedRecordingMuteState::new()),
@@ -1057,6 +1070,7 @@ impl Coordinator {
                 recorder: Mutex::new(None),
                 audio_archive_active: AtomicBool::new(false),
                 edit_watcher: Mutex::new(None),
+                    edit_watch_generation: std::sync::atomic::AtomicU64::new(0),
                 pending_corrections: Mutex::new(Vec::new()),
                 vocab_card_visible: AtomicBool::new(false),
                 recording_mute: Mutex::new(SharedRecordingMuteState::new()),
@@ -1822,6 +1836,11 @@ impl Coordinator {
     /// 那些建议是这条链路的产物，开关关了就不该再让用户看见。
     pub fn disarm_edit_watch(&self) {
         *self.inner.edit_watcher.lock() = None;
+        // 推进代次：解除是异步的，观察线程可能还会再上报一次。开关都关了，那条更不该
+        // 落地。见 `Inner::edit_watch_generation`。
+        self.inner
+            .edit_watch_generation
+            .fetch_add(1, Ordering::SeqCst);
         hide_vocab_suggestion_card(&self.inner);
         log::info!("[cursor-context] edit watch disarmed: feature switched off");
     }

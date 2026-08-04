@@ -801,6 +801,11 @@ fn run_edit_watch_loop(
                 break;
             }
             let result = CFRunLoop::run_in_mode(mode, Duration::from_secs(1), false);
+            // 解除信号可能正好在这 1 秒里到达。先看一眼再判定 —— 否则会上报一条属于
+            // 上一轮的改动（见下面收尾处的长注释）。
+            if stop.load(Ordering::Relaxed) {
+                break;
+            }
             // 每转一圈问一次「停手够久了吗」。判定发生在这里而不是回调里。
             settle_pending_edit(&ctx, false);
             // Finished 表示 runloop 里没有任何 input source —— 观察器的 source 已经装上，
@@ -813,7 +818,18 @@ fn run_edit_watch_loop(
 
         // 收工前兜一次：用户改完就直接切走 app 的话，停手计时还没到就已经退出循环了，
         // 那次改动不该白丢。
-        settle_pending_edit(&ctx, true);
+        //
+        // **但被主动解除时不补。** `stop` 被置位只有两个来源：新一轮听写开始
+        //（`begin_session_as`）或用户关掉了开关（`disarm_edit_watch`）。两种情况下协调方
+        // 都已经把建议卡片收掉了 —— 这时再上报一条属于上一轮的改动，卡片会在**新会话
+        // 进行中**弹出来。而卡片会把胶囊窗口缩到自己那么大，等于把正在进行的那次听写的
+        // 胶囊弄没了（这个坑真机上踩过一次，表现是「热键像是坏了」）。
+        //
+        // 自然结束（超时 / 切走 app / 焦点元素没了）才补 —— 那几种情况下没有新会话在跑，
+        // 用户那次改动是真的还没被判定过。
+        if !stop.load(Ordering::Relaxed) {
+            settle_pending_edit(&ctx, true);
+        }
 
         // 无论怎么退出的，反注册这一段都必须跑到。
         runloop.remove_source(&source, mode);
