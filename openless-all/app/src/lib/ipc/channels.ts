@@ -55,7 +55,7 @@ const mockChannels: Record<ChannelKind, Channel[]> = {
             providerType: "openai",
             enabled: false,
             order: 2,
-            lastTest: { ok: false, latencyMs: null, at: Math.floor(Date.now() / 1000) - 3600, error: "401" },
+            lastTest: { ok: false, latencyMs: null, at: Math.floor(Date.now() / 1000) - 3600, error: "providerHttpStatus:401" },
         },
     ],
     asr: [
@@ -95,6 +95,27 @@ export function createChannel(
     )
 }
 
+/** 在已建好的草稿卡片上换供应商（单弹窗添加流程的常规操作）。 */
+export function setChannelProviderType(
+    kind: ChannelKind,
+    id: string,
+    providerType: string,
+): Promise<void> {
+    return invokeOrMock(
+        "set_channel_provider_type",
+        { kind, id, providerType },
+        () => undefined,
+    )
+}
+
+/** 关闭添加弹窗时回收没填任何东西的草稿；返回是否真的删了。 */
+export function deleteChannelIfBlank(
+    kind: ChannelKind,
+    id: string,
+): Promise<boolean> {
+    return invokeOrMock("delete_channel_if_blank", { kind, id }, () => true)
+}
+
 export function renameChannel(
     kind: ChannelKind,
     id: string,
@@ -124,7 +145,20 @@ export function reorderChannels(
     kind: ChannelKind,
     ids: string[],
 ): Promise<void> {
-    return invokeOrMock("reorder_channels", { kind, ids }, () => undefined)
+    return invokeOrMock("reorder_channels", { kind, ids }, () => {
+        // mock 也要真的重排：否则浏览器预览里松手后顺序被 listChannels 拉回原样，
+        // 看着就像"拖拽坏了"，而真机是好的。
+        const list = mockChannels[kind]
+        const ordered = ids
+            .map(id => list.find(c => c.id === id))
+            .filter((c): c is Channel => Boolean(c))
+        const rest = list.filter(c => !ids.includes(c.id))
+        mockChannels[kind] = [...ordered, ...rest].map((c, index) => ({
+            ...c,
+            order: index,
+        }))
+        return undefined
+    })
 }
 
 export function recordChannelTest(

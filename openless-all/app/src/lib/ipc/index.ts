@@ -37,6 +37,8 @@ export type { Channel, ChannelKind, ChannelTestResult } from "./channels"
 export {
     listChannels,
     createChannel,
+    setChannelProviderType,
+    deleteChannelIfBlank,
     renameChannel,
     deleteChannel,
     setChannelEnabled,

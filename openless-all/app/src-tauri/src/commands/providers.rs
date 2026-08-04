@@ -34,8 +34,9 @@ impl ProviderScope {
     /// 该渠道的厂商 id —— 决定走哪套协议。
     fn provider_type(&self) -> String {
         match (&self.channel, self.kind) {
-            (Some(id), kind) => CredentialsVault::get_channel_provider_type(kind, id)
-                .unwrap_or_else(|| id.clone()),
+            (Some(id), kind) => {
+                CredentialsVault::get_channel_provider_type(kind, id).unwrap_or_else(|| id.clone())
+            }
             (None, ChannelKind::Asr) => CredentialsVault::get_active_asr(),
             (None, ChannelKind::Llm) => CredentialsVault::get_active_llm(),
         }
@@ -122,8 +123,7 @@ pub async fn list_provider_models(
             ],
         });
     }
-    if kind == "asr" && scope.provider_type() == crate::asr::qwen_realtime::PROVIDER_ID
-    {
+    if kind == "asr" && scope.provider_type() == crate::asr::qwen_realtime::PROVIDER_ID {
         // 与 bailian 同理：Realtime 网关无模型列表接口，先做真实连通性检查，
         // 列表为官方文档在案的稳定别名 + 快照版本。
         validate_qwen3_realtime_asr_provider(scope).await?;
@@ -140,9 +140,7 @@ pub async fn list_provider_models(
             models: vec![crate::asr::mimo::DEFAULT_MODEL.to_string()],
         });
     }
-    if kind == "asr"
-        && scope.provider_type() == crate::asr::dashscope_multimodal::PROVIDER_ID
-    {
+    if kind == "asr" && scope.provider_type() == crate::asr::dashscope_multimodal::PROVIDER_ID {
         // multimodal-generation 无模型列表 HTTP 接口；与 mimo 同，返回静态别名。
         return Ok(ProviderModelsResult {
             models: vec![
@@ -180,7 +178,10 @@ pub(crate) struct ProviderConfig {
     pub(crate) temperature: Option<f32>,
 }
 
-fn read_openai_provider_config(kind: &str, scope: &ProviderScope) -> Result<ProviderConfig, String> {
+fn read_openai_provider_config(
+    kind: &str,
+    scope: &ProviderScope,
+) -> Result<ProviderConfig, String> {
     // `openai-compatible` 允许 API Key 留空（LAN 无鉴权端点）；其余 ASR 提供商
     // 仍必填，与运行时门禁 ensure_asr_credentials 保持一致。
     let (api_key_account, endpoint_account, api_key_required) = match kind {
@@ -192,25 +193,23 @@ fn read_openai_provider_config(kind: &str, scope: &ProviderScope) -> Result<Prov
         "asr" => (
             CredentialAccount::AsrApiKey,
             CredentialAccount::AsrEndpoint,
-            scope.provider_type()
-                != crate::coordinator::OPENAI_COMPATIBLE_ASR_PROVIDER_ID,
+            scope.provider_type() != crate::coordinator::OPENAI_COMPATIBLE_ASR_PROVIDER_ID,
         ),
         _ => return Err(format!("unknown provider kind: {kind}")),
     };
-    let api_key = scope.get(api_key_account)
+    let api_key = scope
+        .get(api_key_account)
         .map_err(|e| e.to_string())?
         .unwrap_or_default();
-    let base_url = scope.get(endpoint_account)
+    let base_url = scope
+        .get(endpoint_account)
         .map_err(|e| e.to_string())?
         .unwrap_or_default();
     let (extra_headers, temperature) = if kind == "llm" {
         let active_llm = scope.provider_type();
         (
             scope.llm_extra_headers(),
-            openai_compatible_temperature_for_provider(
-                &active_llm,
-                scope.llm_temperature(),
-            ),
+            openai_compatible_temperature_for_provider(&active_llm, scope.llm_temperature()),
         )
     } else {
         (HashMap::new(), None)
@@ -242,7 +241,8 @@ async fn validate_llm_provider(scope: &ProviderScope) -> Result<(), String> {
         .get()
         .llm_thinking_enabled;
     if scope.provider_type() == CODEX_OAUTH_PROVIDER_ID {
-        let model = scope.get(CredentialAccount::ArkModelId)
+        let model = scope
+            .get(CredentialAccount::ArkModelId)
             .map_err(|e| e.to_string())?
             .filter(|s| !s.trim().is_empty())
             .unwrap_or_else(|| CODEX_DEFAULT_MODEL.to_string());
@@ -268,7 +268,8 @@ async fn validate_llm_provider(scope: &ProviderScope) -> Result<(), String> {
 
     let config = read_openai_provider_config("llm", scope)?;
     let active_llm = scope.provider_type();
-    let model = scope.get(CredentialAccount::ArkModelId)
+    let model = scope
+        .get(CredentialAccount::ArkModelId)
         .map_err(|e| e.to_string())?
         .filter(|s| !s.is_empty())
         .ok_or_else(|| "llmModelMissing".to_string())?;
@@ -321,7 +322,8 @@ async fn validate_asr_provider(scope: &ProviderScope) -> Result<(), String> {
     if active_asr == crate::asr::bailian::PROVIDER_ID {
         // 统一百炼:按所选模型验证对应协议（endpoint 由前端按模型同步，各 validator
         // 读到的都是该协议的正确地址）。
-        let model = scope.get(CredentialAccount::AsrModel)
+        let model = scope
+            .get(CredentialAccount::AsrModel)
             .ok()
             .flatten()
             .unwrap_or_default();
@@ -341,7 +343,8 @@ async fn validate_asr_provider(scope: &ProviderScope) -> Result<(), String> {
         return validate_mimo_asr_provider(scope).await;
     }
     if active_asr == crate::asr::dashscope_multimodal::PROVIDER_ID {
-        let model = scope.get(CredentialAccount::AsrModel)
+        let model = scope
+            .get(CredentialAccount::AsrModel)
             .map_err(|e| e.to_string())?
             .unwrap_or_default();
         crate::coordinator::validate_dashscope_multimodal_model(&model)?;
@@ -356,7 +359,8 @@ async fn validate_asr_provider(scope: &ProviderScope) -> Result<(), String> {
     // StepFun 一入口双协议：`*-stream` 模型走实时 WS 验证，其余走批式
     // /audio/transcriptions（与 build 侧 resolve_effective_asr_provider 同判据）。
     if active_asr == "stepfun" || active_asr == crate::asr::stepfun_realtime::PROVIDER_ID {
-        let model = scope.get(CredentialAccount::AsrModel)
+        let model = scope
+            .get(CredentialAccount::AsrModel)
             .map_err(|e| e.to_string())?
             .unwrap_or_default();
         if active_asr == crate::asr::stepfun_realtime::PROVIDER_ID
@@ -367,7 +371,8 @@ async fn validate_asr_provider(scope: &ProviderScope) -> Result<(), String> {
     }
 
     let config = read_openai_provider_config("asr", scope)?;
-    let model = scope.get(CredentialAccount::AsrModel)
+    let model = scope
+        .get(CredentialAccount::AsrModel)
         .map_err(|e| e.to_string())?
         .filter(|s| !s.trim().is_empty())
         .ok_or_else(|| "asrModelMissing".to_string())?;
@@ -381,13 +386,15 @@ async fn validate_asr_provider(scope: &ProviderScope) -> Result<(), String> {
 /// 即返回；纯静音会话服务端可能直接关闭且不返回任何 result（等价于「没说话」），
 /// 这类 `NoFinalResult` 不算验证失败 —— 握手成功已经证明 AppID/APIKey 有效。
 async fn validate_xfyun_asr_provider(scope: &ProviderScope) -> Result<(), String> {
-    let app_id = scope.get(CredentialAccount::XfyunAppId)
+    let app_id = scope
+        .get(CredentialAccount::XfyunAppId)
         .map_err(|e| e.to_string())?
         .unwrap_or_default();
     if app_id.trim().is_empty() {
         return Err("讯飞 AppID 为空".to_string());
     }
-    let api_key = scope.get(CredentialAccount::XfyunApiKey)
+    let api_key = scope
+        .get(CredentialAccount::XfyunApiKey)
         .map_err(|e| e.to_string())?
         .unwrap_or_default();
     if api_key.trim().is_empty() {
@@ -413,16 +420,19 @@ async fn validate_xfyun_asr_provider(scope: &ProviderScope) -> Result<(), String
 /// 协议无 finish 事件，收尾走静音帧 + 宽限期（纯静音会话以空文本成功返回，
 /// 见 stepfun_realtime 模块注释），全程 ~2s。
 async fn validate_stepfun_realtime_asr_provider(scope: &ProviderScope) -> Result<(), String> {
-    let api_key = scope.get(CredentialAccount::AsrApiKey)
+    let api_key = scope
+        .get(CredentialAccount::AsrApiKey)
         .map_err(|e| e.to_string())?
         .unwrap_or_default();
     if api_key.trim().is_empty() {
         return Err("API Key 为空".to_string());
     }
-    let endpoint = scope.get(CredentialAccount::AsrEndpoint)
+    let endpoint = scope
+        .get(CredentialAccount::AsrEndpoint)
         .map_err(|e| e.to_string())?
         .unwrap_or_default();
-    let model = scope.get(CredentialAccount::AsrModel)
+    let model = scope
+        .get(CredentialAccount::AsrModel)
         .map_err(|e| e.to_string())?
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| crate::asr::stepfun_realtime::DEFAULT_MODEL.to_string());
@@ -448,7 +458,8 @@ async fn validate_stepfun_realtime_asr_provider(scope: &ProviderScope) -> Result
 
 async fn validate_mimo_asr_provider(scope: &ProviderScope) -> Result<(), String> {
     let config = read_openai_provider_config("asr", scope)?;
-    let model = scope.get(CredentialAccount::AsrModel)
+    let model = scope
+        .get(CredentialAccount::AsrModel)
         .map_err(|e| e.to_string())?
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| crate::asr::mimo::DEFAULT_MODEL.to_string());
@@ -464,17 +475,20 @@ async fn validate_mimo_asr_provider(scope: &ProviderScope) -> Result<(), String>
 }
 
 async fn validate_elevenlabs_asr_provider(scope: &ProviderScope) -> Result<(), String> {
-    let api_key = scope.get(CredentialAccount::AsrApiKey)
+    let api_key = scope
+        .get(CredentialAccount::AsrApiKey)
         .map_err(|e| e.to_string())?
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| "API Key 为空".to_string())?;
-    let base_url = scope.get(CredentialAccount::AsrEndpoint)
+    let base_url = scope
+        .get(CredentialAccount::AsrEndpoint)
         .map_err(|e| e.to_string())?
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| crate::asr::elevenlabs::DEFAULT_ENDPOINT.to_string());
     crate::endpoint_security::validate_http_endpoint(&base_url)
         .map_err(|_| "endpointInvalid".to_string())?;
-    let model = scope.get(CredentialAccount::AsrModel)
+    let model = scope
+        .get(CredentialAccount::AsrModel)
         .map_err(|e| e.to_string())?
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| crate::asr::elevenlabs::DEFAULT_MODEL.to_string());
@@ -512,7 +526,8 @@ const DASHSCOPE_ASR_VALIDATE_POLL_SECS: u64 = 60;
 async fn validate_dashscope_multimodal_asr_provider(scope: &ProviderScope) -> Result<(), String> {
     // 统一百炼复用配置中的区域/工作空间主机，并推导 multimodal 的 https 路径。
     // 隐藏别名仍按原有完整 endpoint 读取。
-    let model = scope.get(CredentialAccount::AsrModel)
+    let model = scope
+        .get(CredentialAccount::AsrModel)
         .map_err(|e| e.to_string())?
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| crate::asr::dashscope_multimodal::DEFAULT_MODEL.to_string());
@@ -520,11 +535,13 @@ async fn validate_dashscope_multimodal_asr_provider(scope: &ProviderScope) -> Re
     let protocol = crate::asr::dashscope_multimodal::protocol_for_model(&model)
         .unwrap_or(crate::asr::dashscope_multimodal::DashScopeBatchProtocol::Multimodal);
     let (api_key, base_url) = if crate::coordinator::unified_bailian_is_active() {
-        let api_key = scope.get(CredentialAccount::AsrApiKey)
+        let api_key = scope
+            .get(CredentialAccount::AsrApiKey)
             .map_err(|e| e.to_string())?
             .filter(|s| !s.trim().is_empty())
             .ok_or_else(|| "API Key 为空".to_string())?;
-        let endpoint = scope.get(CredentialAccount::AsrEndpoint)
+        let endpoint = scope
+            .get(CredentialAccount::AsrEndpoint)
             .map_err(|e| e.to_string())?
             .unwrap_or_default();
         let endpoint_protocol = match protocol {
@@ -594,7 +611,8 @@ async fn send_dashscope_multimodal_validation(
 }
 
 async fn validate_bailian_asr_provider(scope: &ProviderScope) -> Result<(), String> {
-    let api_key = scope.get(CredentialAccount::AsrApiKey)
+    let api_key = scope
+        .get(CredentialAccount::AsrApiKey)
         .map_err(|e| e.to_string())?
         .unwrap_or_default();
     if api_key.trim().is_empty() {
@@ -602,7 +620,8 @@ async fn validate_bailian_asr_provider(scope: &ProviderScope) -> Result<(), Stri
     }
     // 已知残留（issue #609 F-01 孪生 gap）：Bailian endpoint 走 `wss://`，与 http/https-only 的
     // validate_http_endpoint 不兼容，无法直接复用，需单独的 ws/wss 感知 SSRF 校验器（超本次范围）。
-    let stored_endpoint = scope.get(CredentialAccount::AsrEndpoint)
+    let stored_endpoint = scope
+        .get(CredentialAccount::AsrEndpoint)
         .map_err(|e| e.to_string())?
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| crate::asr::bailian::DEFAULT_ENDPOINT.to_string());
@@ -620,11 +639,13 @@ async fn validate_bailian_asr_provider(scope: &ProviderScope) -> Result<(), Stri
     if !crate::asr::bailian::endpoint_scheme_is_websocket(&endpoint) {
         return Err("bailianEndpointSchemeInvalid".to_string());
     }
-    let model = scope.get(CredentialAccount::AsrModel)
+    let model = scope
+        .get(CredentialAccount::AsrModel)
         .map_err(|e| e.to_string())?
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| crate::asr::bailian::DEFAULT_MODEL.to_string());
-    let vocabulary_id = scope.get(CredentialAccount::AsrVocabularyId)
+    let vocabulary_id = scope
+        .get(CredentialAccount::AsrVocabularyId)
         .map_err(|e| e.to_string())?
         .filter(|s| !s.trim().is_empty());
     let asr = std::sync::Arc::new(crate::asr::BailianRealtimeASR::new(
@@ -651,7 +672,8 @@ async fn validate_bailian_asr_provider(scope: &ProviderScope) -> Result<(), Stri
 }
 
 async fn validate_qwen3_realtime_asr_provider(scope: &ProviderScope) -> Result<(), String> {
-    let api_key = scope.get(CredentialAccount::AsrApiKey)
+    let api_key = scope
+        .get(CredentialAccount::AsrApiKey)
         .map_err(|e| e.to_string())?
         .unwrap_or_default();
     if api_key.trim().is_empty() {
@@ -659,7 +681,8 @@ async fn validate_qwen3_realtime_asr_provider(scope: &ProviderScope) -> Result<(
     }
     // 统一百炼保留配置中的区域/工作空间主机，并切换到 Qwen Realtime 路径。
     let endpoint = if crate::coordinator::unified_bailian_is_active() {
-        let endpoint = scope.get(CredentialAccount::AsrEndpoint)
+        let endpoint = scope
+            .get(CredentialAccount::AsrEndpoint)
             .map_err(|e| e.to_string())?
             .unwrap_or_default();
         crate::coordinator::derive_bailian_endpoint(
@@ -667,7 +690,8 @@ async fn validate_qwen3_realtime_asr_provider(scope: &ProviderScope) -> Result<(
             crate::coordinator::BailianEndpointProtocol::QwenRealtime,
         )?
     } else {
-        scope.get(CredentialAccount::AsrEndpoint)
+        scope
+            .get(CredentialAccount::AsrEndpoint)
             .map_err(|e| e.to_string())?
             .filter(|s| !s.trim().is_empty())
             .unwrap_or_else(|| crate::asr::qwen_realtime::DEFAULT_ENDPOINT.to_string())
@@ -675,7 +699,8 @@ async fn validate_qwen3_realtime_asr_provider(scope: &ProviderScope) -> Result<(
     if !crate::asr::qwen_realtime::endpoint_scheme_is_secure_websocket(&endpoint) {
         return Err("qwen3EndpointSchemeInvalid".to_string());
     }
-    let model = scope.get(CredentialAccount::AsrModel)
+    let model = scope
+        .get(CredentialAccount::AsrModel)
         .map_err(|e| e.to_string())?
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| crate::asr::qwen_realtime::DEFAULT_MODEL.to_string());
@@ -1307,9 +1332,12 @@ mod tests {
             stream.write_all(response.as_bytes()).await.unwrap();
         });
         let target_server = tokio::spawn(async move {
-            tokio::time::timeout(std::time::Duration::from_millis(500), target_listener.accept())
-                .await
-                .is_ok()
+            tokio::time::timeout(
+                std::time::Duration::from_millis(500),
+                target_listener.accept(),
+            )
+            .await
+            .is_ok()
         });
 
         let error = send_dashscope_multimodal_validation(
@@ -1322,7 +1350,10 @@ mod tests {
 
         redirect_server.await.unwrap();
         assert_eq!(error, "providerHttpStatus:302");
-        assert!(!target_server.await.unwrap(), "validation followed redirect");
+        assert!(
+            !target_server.await.unwrap(),
+            "validation followed redirect"
+        );
     }
 
     #[test]

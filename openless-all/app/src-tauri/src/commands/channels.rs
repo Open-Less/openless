@@ -40,6 +40,39 @@ pub async fn create_channel(
 }
 
 #[tauri::command]
+pub async fn set_channel_provider_type(
+    window: Window,
+    kind: String,
+    id: String,
+    provider_type: String,
+) -> Result<(), String> {
+    ensure_main_window(&window)?;
+    let kind = parse_kind(&kind)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        CredentialsVault::set_channel_provider_type(kind, &id, &provider_type)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("channel provider type worker failed: {e}"))?
+}
+
+/// 关闭「添加渠道」弹窗时回收没填任何内容的草稿卡片；返回是否真的删了。
+#[tauri::command]
+pub async fn delete_channel_if_blank(
+    window: Window,
+    kind: String,
+    id: String,
+) -> Result<bool, String> {
+    ensure_main_window(&window)?;
+    let kind = parse_kind(&kind)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        CredentialsVault::delete_channel_if_blank(kind, &id).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("channel cleanup worker failed: {e}"))?
+}
+
+#[tauri::command]
 pub async fn rename_channel(
     window: Window,
     kind: String,

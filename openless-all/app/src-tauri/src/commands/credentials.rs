@@ -200,8 +200,7 @@ pub async fn set_credential(
                 .map_err(|e| e.to_string());
         }
         if temperature {
-            return CredentialsVault::set_active_llm_temperature(&value)
-                .map_err(|e| e.to_string());
+            return CredentialsVault::set_active_llm_temperature(&value).map_err(|e| e.to_string());
         }
         let acc = parsed.expect("non-extra credential account must be parsed");
         if let Some(provider) = provider {
@@ -320,12 +319,10 @@ pub async fn read_credential(
         let acc = parsed.expect("non-extra credential account must be parsed");
         if let Some(provider) = provider {
             match account_channel_kind(acc) {
-                ChannelKind::Asr => {
-                    CredentialsVault::get_for_asr_provider(&provider, acc).map_err(|e| e.to_string())
-                }
-                ChannelKind::Llm => {
-                    CredentialsVault::get_for_llm_provider(&provider, acc).map_err(|e| e.to_string())
-                }
+                ChannelKind::Asr => CredentialsVault::get_for_asr_provider(&provider, acc)
+                    .map_err(|e| e.to_string()),
+                ChannelKind::Llm => CredentialsVault::get_for_llm_provider(&provider, acc)
+                    .map_err(|e| e.to_string()),
             }
         } else {
             CredentialsVault::get(acc).map_err(|e| e.to_string())

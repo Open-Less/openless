@@ -299,11 +299,18 @@ impl CredsAsrEntry {
     fn is_empty(&self) -> bool {
         // 渠道卡片（providerType 已写入）永远不算空：用户可能刚点「添加渠道」、
         // 名字都取好了还没填 key，此时被 clean_credentials 的 retain 静默删掉
-        // 就是"卡片自己消失了"。渠道只能由用户显式删除。
+        // 就是"卡片自己消失了"。渠道只能由用户显式删除（或由
+        // `delete_channel_if_blank` 回收一张什么都没填的草稿）。
         if self.channel.providerType.is_some() {
             return false;
         }
-        self.apiKey.as_deref().unwrap_or("").is_empty()
+        self.has_no_content()
+    }
+
+    /// 除渠道元信息外，用户是否一个字都没填。草稿回收用。
+    fn has_no_content(&self) -> bool {
+        self.displayName.as_deref().unwrap_or("").is_empty()
+            && self.apiKey.as_deref().unwrap_or("").is_empty()
             && self.baseURL.as_deref().unwrap_or("").is_empty()
             && self.model.as_deref().unwrap_or("").is_empty()
             && self.appKey.as_deref().unwrap_or("").is_empty()
@@ -343,6 +350,11 @@ impl CredsLlmEntry {
         if self.channel.providerType.is_some() {
             return false;
         }
+        self.has_no_content()
+    }
+
+    /// 除渠道元信息外，用户是否一个字都没填。草稿回收用。
+    fn has_no_content(&self) -> bool {
         self.displayName.as_deref().unwrap_or("").is_empty()
             && self.apiKey.as_deref().unwrap_or("").is_empty()
             && self.baseURL.as_deref().unwrap_or("").is_empty()
@@ -413,7 +425,11 @@ fn current_channel_id<V: HasChannelMeta>(map: &HashMap<String, V>) -> Option<Str
 /// order 按「原 active 排第一，其余按 id 字母序」分配。用字母序而不是 preset 表顺序，
 /// 是因为后端不知道前端 LLM_PRESETS / ASR_PRESETS 的排列，而字母序是确定的。
 fn migrate_channel_map<V: HasChannelMeta>(map: &mut HashMap<String, V>, active: &str) -> bool {
-    if map.is_empty() || map.values().all(|entry| entry.meta().providerType.is_some()) {
+    if map.is_empty()
+        || map
+            .values()
+            .all(|entry| entry.meta().providerType.is_some())
+    {
         return false;
     }
 
@@ -773,13 +789,13 @@ fn load_android_credentials_from_source_with_crypto(
         ReadOutcome::Legacy(bytes) => (bytes, true),
         ReadOutcome::Plaintext(bytes) => (bytes, false),
     };
-    let root = serde_json::from_slice::<CredsRoot>(&bytes)
-        .context("parse Android credential payload")?;
+    let root =
+        serde_json::from_slice::<CredsRoot>(&bytes).context("parse Android credential payload")?;
     let cleaned = android_persistable_credentials(&root);
     let contained_marketplace_token = lookup_marketplace_github_token(&root).is_some();
     if needs_rewrite && contained_marketplace_token {
-        let sanitized = serde_json::to_vec(&cleaned)
-            .context("encode bearer-free Android legacy payload")?;
+        let sanitized =
+            serde_json::to_vec(&cleaned).context("encode bearer-free Android legacy payload")?;
         super::android_credentials::rewrite_legacy_without_bearer(source_path, &sanitized)
             .map_err(anyhow::Error::new)
             .context("scrub Marketplace bearer before Android Keystore migration")?;
@@ -1991,6 +2007,81 @@ impl CredentialsVault {
         Ok(id)
     }
 
+    /// 改一张卡片的厂商。
+    ///
+    /// 「添加渠道」被合并成单个弹窗后，用户是在**已经建好的草稿卡片上**换供应商的，
+    /// 所以这不是内部细节而是常规操作。旧厂商的凭据字段留着不动：不同厂商用不同的
+    /// 凭据槽（volcengine.* / xfyun.* / asr.*），互不覆盖，换回去时原样还在。
+    pub fn set_channel_provider_type(
+        kind: ChannelKind,
+        id: &str,
+        provider_type: &str,
+    ) -> Result<()> {
+        let provider_type = provider_type.trim();
+        if provider_type.is_empty() {
+            anyhow::bail!("provider type cannot be empty");
+        }
+        let _guard = credentials_lock().lock();
+        let mut root = load_credentials_for_update()?;
+        let meta = match kind {
+            ChannelKind::Asr => root
+                .providers
+                .asr
+                .get_mut(id)
+                .map(|entry| entry.meta_mut())
+                .with_context(|| format!("unknown ASR channel: {id}"))?,
+            ChannelKind::Llm => root
+                .providers
+                .llm
+                .get_mut(id)
+                .map(|entry| entry.meta_mut())
+                .with_context(|| format!("unknown LLM channel: {id}"))?,
+        };
+        meta.providerType = Some(provider_type.to_string());
+        // 换了厂商，之前那次测试结果就不再代表这张卡片了。
+        meta.lastTest = None;
+        save_credentials(&root)
+    }
+
+    /// 回收一张「什么都没填」的草稿渠道，返回是否真的删了。
+    ///
+    /// 单弹窗流程下，点开「添加渠道」就会先建一张草稿卡片（凭据必须按渠道 id 写入，
+    /// 没有 id 就没处可写）。用户什么都没填就关掉弹窗时用这个把草稿收走，
+    /// 免得列表里留下一张空卡片。填过任何一个字段就保留。
+    pub fn delete_channel_if_blank(kind: ChannelKind, id: &str) -> Result<bool> {
+        let _guard = credentials_lock().lock();
+        let mut root = load_credentials_for_update()?;
+        let blank = match kind {
+            ChannelKind::Asr => root
+                .providers
+                .asr
+                .get(id)
+                .map(|entry| entry.has_no_content())
+                .unwrap_or(false),
+            ChannelKind::Llm => root
+                .providers
+                .llm
+                .get(id)
+                .map(|entry| entry.has_no_content())
+                .unwrap_or(false),
+        };
+        if !blank {
+            return Ok(false);
+        }
+        match kind {
+            ChannelKind::Asr => {
+                root.providers.asr.remove(id);
+                compact_orders(&mut root.providers.asr);
+            }
+            ChannelKind::Llm => {
+                root.providers.llm.remove(id);
+                compact_orders(&mut root.providers.llm);
+            }
+        }
+        save_credentials(&root)?;
+        Ok(true)
+    }
+
     pub fn rename_channel(kind: ChannelKind, id: &str, name: &str) -> Result<()> {
         let _guard = credentials_lock().lock();
         let mut root = load_credentials_for_update()?;
@@ -2195,7 +2286,11 @@ impl CredentialsVault {
         let _guard = credentials_lock().lock();
         let temperature = parse_llm_temperature(value)?;
         let mut root = load_credentials_for_update()?;
-        let entry = root.providers.llm.entry(root.active.llm.clone()).or_default();
+        let entry = root
+            .providers
+            .llm
+            .entry(root.active.llm.clone())
+            .or_default();
         entry.temperature = temperature;
         save_credentials(&root)
     }
@@ -2204,7 +2299,11 @@ impl CredentialsVault {
         let _guard = credentials_lock().lock();
         let headers = parse_extra_headers_json(value)?;
         let mut root = load_credentials_for_update()?;
-        let entry = root.providers.llm.entry(root.active.llm.clone()).or_default();
+        let entry = root
+            .providers
+            .llm
+            .entry(root.active.llm.clone())
+            .or_default();
         entry.extraHeaders = if headers.is_empty() {
             None
         } else {
@@ -2236,6 +2335,8 @@ impl CredentialsVault {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(not(windows))]
+    use super::load_android_credentials_from_source_with_crypto;
     use super::{
         android_persistable_credentials, chunk_json_payload, credentials_cache,
         get_android_marketplace_token_at, load_android_credentials_from_path,
@@ -2245,8 +2346,6 @@ mod tests {
         write_marketplace_github_token, CredentialAccount, CredsAsrEntry, CredsRoot,
         MarketplaceGithubToken, KEYRING_CHUNK_MAX_UTF16_UNITS,
     };
-    #[cfg(not(windows))]
-    use super::load_android_credentials_from_source_with_crypto;
     use anyhow::anyhow;
     use parking_lot::Mutex;
     use std::collections::HashMap;
@@ -2316,8 +2415,13 @@ mod tests {
 
         // 清空即移除该字段，且只影响对应 provider 的 entry。
         write_account(&mut root, CredentialAccount::AsrAdvancedConfig, None);
-        assert_eq!(lookup_account(&root, CredentialAccount::AsrAdvancedConfig), None);
-        assert!(root.providers.asr["openai-compatible"].advancedConfig.is_none());
+        assert_eq!(
+            lookup_account(&root, CredentialAccount::AsrAdvancedConfig),
+            None
+        );
+        assert!(root.providers.asr["openai-compatible"]
+            .advancedConfig
+            .is_none());
 
         // 旧条目（无 advancedConfig 字段）反序列化为 None，不破坏既有数据。
         let legacy: CredsAsrEntry = serde_json::from_str(r#"{"apiKey":"k"}"#).unwrap();
@@ -2443,9 +2547,11 @@ mod tests {
         assert!(std::fs::read_to_string(&destination_path)
             .unwrap()
             .contains("openless-android-credentials"));
-        assert!(load_android_credentials_from_path_with_crypto(&destination_path, &mut crypto)
-            .unwrap()
-            .is_some());
+        assert!(
+            load_android_credentials_from_path_with_crypto(&destination_path, &mut crypto)
+                .unwrap()
+                .is_some()
+        );
         std::fs::remove_dir_all(root_dir).unwrap();
     }
 
@@ -2507,9 +2613,8 @@ mod tests {
         )
         .unwrap();
         let mut crypto = super::super::android_credentials::TestCrypto::default();
-        crypto.fail_next_seal = Some(
-            super::super::android_credentials::CryptoErrorKind::TemporarilyUnavailable,
-        );
+        crypto.fail_next_seal =
+            Some(super::super::android_credentials::CryptoErrorKind::TemporarilyUnavailable);
 
         assert!(load_android_credentials_from_path_with_crypto(&path, &mut crypto).is_err());
         let sanitized = std::fs::read(&path).unwrap();
@@ -2654,10 +2759,17 @@ mod tests {
         assert!(super::migrate_channels(&mut root));
 
         // id 沿用原 preset id —— 老用户的 map key 一个字节都不变。
-        let volcengine = root.providers.asr.get("volcengine").expect("volcengine kept");
+        let volcengine = root
+            .providers
+            .asr
+            .get("volcengine")
+            .expect("volcengine kept");
         let groq = root.providers.asr.get("groq").expect("groq kept");
 
-        assert_eq!(volcengine.channel.providerType.as_deref(), Some("volcengine"));
+        assert_eq!(
+            volcengine.channel.providerType.as_deref(),
+            Some("volcengine")
+        );
         assert_eq!(groq.channel.providerType.as_deref(), Some("groq"));
         // 原 active 排第一。
         assert_eq!(volcengine.channel.order, Some(0));
@@ -2763,7 +2875,12 @@ mod tests {
         }"#;
         let root: CredsRoot = serde_json::from_str(v1).expect("v1 payload must still parse");
         assert_eq!(
-            root.providers.asr.get("volcengine").unwrap().appKey.as_deref(),
+            root.providers
+                .asr
+                .get("volcengine")
+                .unwrap()
+                .appKey
+                .as_deref(),
             Some("vk")
         );
         // 缺省即启用，且尚未渠道化。
@@ -2771,7 +2888,10 @@ mod tests {
         assert!(entry.channel.enabled);
         assert_eq!(entry.channel.providerType, None);
         // 未迁移时 providerType 回落到 map key。
-        assert_eq!(super::channel_provider_type("volcengine", entry), "volcengine");
+        assert_eq!(
+            super::channel_provider_type("volcengine", entry),
+            "volcengine"
+        );
     }
 
     // ---- 排序 / 开关 ----
@@ -2822,11 +2942,7 @@ mod tests {
 
         assert_eq!(
             ordered(&map),
-            vec![
-                ("b".into(), true),
-                ("c".into(), true),
-                ("a".into(), false),
-            ]
+            vec![("b".into(), true), ("c".into(), true), ("a".into(), false),]
         );
     }
 
@@ -2850,11 +2966,7 @@ mod tests {
 
         assert_eq!(
             ordered(&map),
-            vec![
-                ("c".into(), true),
-                ("b".into(), true),
-                ("a".into(), false),
-            ]
+            vec![("c".into(), true), ("b".into(), true), ("a".into(), false),]
         );
         // order 压实成 0..n，避免反复拖拽后数值发散。
         let mut orders: Vec<u32> = map
@@ -2932,7 +3044,10 @@ mod tests {
 
         let entry = root.providers.llm.get(&root.active.llm).unwrap();
         // 协议路由拿到的必须是厂商 id，不是 uuid。
-        assert_eq!(super::channel_provider_type(&root.active.llm, entry), "deepseek");
+        assert_eq!(
+            super::channel_provider_type(&root.active.llm, entry),
+            "deepseek"
+        );
         assert_eq!(
             lookup_account(&root, CredentialAccount::ArkApiKey).as_deref(),
             Some("sk-uuid-a")
