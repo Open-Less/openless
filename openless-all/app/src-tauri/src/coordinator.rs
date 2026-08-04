@@ -211,11 +211,30 @@ pub(crate) fn show_vocab_suggestion_card(inner: &Arc<Inner>) {
     let Some(app) = inner.app.lock().clone() else {
         return;
     };
-    inner.vocab_card_visible.store(true, Ordering::SeqCst);
     let height = VOCAB_CARD_CHROME_HEIGHT + VOCAB_CARD_ROW_HEIGHT * pending.len() as f64;
     let app_for_main = app.clone();
+    let inner_for_main = Arc::clone(inner);
     let _ = app.run_on_main_thread(move || {
         let app = app_for_main;
+        let inner = inner_for_main;
+        // **最后一道闸：听写不在 Idle 就绝不弹卡片。**
+        //
+        // 上游那些判据（观察器代次、`pending_corrections` 是否为空）全都是「读一次再去
+        // 干活」，读完到这里还隔着一次跨线程调度 —— 排队的这段时间里 `begin_session_as`
+        // 完全可能已经跑完：解除观察器、收起卡片、开启新一轮听写。那种 check-then-act
+        // 无论怎么加都堵不住这一段。
+        //
+        // 判据放在这里才有意义：这是碰窗口之前的最后一个时点，而且问的是**真正的不变量**
+        // —— 卡片和录音胶囊共用一个窗口，显示卡片要把窗口缩到卡片大小，在听写进行中弹
+        // 出来就是把那次听写的胶囊弄没了（真机踩过，表现是「热键像是坏了」）。
+        //
+        // `begin_session_as` 是先置 phase 再收卡片的，所以只要它开了头，这里必然看得见。
+        if inner.state.lock().phase != crate::coordinator_state::SessionPhase::Idle {
+            log::debug!("[vocab-card] suppressed: a dictation session is in flight");
+            inner.pending_corrections.lock().clear();
+            return;
+        }
+        inner.vocab_card_visible.store(true, Ordering::SeqCst);
         let Some(window) = app.get_webview_window("capsule") else {
             return;
         };
