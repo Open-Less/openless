@@ -222,6 +222,9 @@ pub(super) async fn run_selection_polish(inner: &Arc<Inner>) -> Result<(), Strin
             prefs.output_language_preference,
             prefs.llm_thinking_enabled,
             source_app.as_deref(),
+            // 选区润色的输入是用户选中的整段文字，本身就是完整上下文；
+            // 光标前后文是给「对着光标口述」用的，这里没有意义。
+            None,
             &[],
             &mut llm_call,
             &mut polish_ms,
@@ -322,6 +325,8 @@ pub(super) async fn run_selection_polish(inner: &Arc<Inner>) -> Result<(), Strin
         created_at: Utc::now().to_rfc3339(),
         source: crate::types::HistorySource::SelectionPolish,
         raw_transcript: raw_text,
+        // 选区润色没有 ASR 环节：这个字段专门存「纠正规则生效前的识别文本」，这里无从谈起。
+        asr_transcript: None,
         final_text: text_to_insert.clone(),
         mode: effective_mode,
         style_pack_id: Some(pack.id.clone()),
@@ -443,6 +448,8 @@ impl Coordinator {
             created_at: Utc::now().to_rfc3339(),
             source: crate::types::HistorySource::SelectionPolish,
             raw_transcript: preview.source_text,
+            // 同上：选区润色的输入是用户选中的文字，不经过 ASR。
+            asr_transcript: None,
             final_text: text.clone(),
             mode: preview.mode,
             style_pack_id: Some(preview.style_pack_id),

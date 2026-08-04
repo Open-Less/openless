@@ -3226,6 +3226,8 @@ mod tests {
             ChineseScriptPreference::Auto,
             OutputLanguagePreference::Auto,
             None,
+            // 本用例只关心「问句形态的原文不能被当成提问回答」，与光标上下文无关。
+            None,
             false,
         );
 
