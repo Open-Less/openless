@@ -19,6 +19,7 @@ internal object OpenLessShizukuUserServiceClient {
     private const val TAG = "OpenLessShizukuClient"
     private const val BIND_TIMEOUT_MS = 8_000L
     private const val SERVICE_VERSION = 3
+    private const val USER_SERVICE_PROCESS_SUFFIX = "shizuku"
 
     private val recoveryLock = ReentrantLock()
 
@@ -32,8 +33,9 @@ internal object OpenLessShizukuUserServiceClient {
         val component = ComponentName(context.packageName, OpenLessShizukuUserService::class.java.name)
         val args = Shizuku.UserServiceArgs(component)
             .daemon(false)
+            .processNameSuffix(USER_SERVICE_PROCESS_SUFFIX)
             .version(SERVICE_VERSION)
-            .tag("openless_shizuku_recovery")
+            .tag("openless_shizuku")
 
         val latch = CountDownLatch(1)
         val binderRef = AtomicReference<IOpenLessShizukuUserService?>(null)

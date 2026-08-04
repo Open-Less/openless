@@ -15,6 +15,9 @@ const shizukuPath = fileURLToPath(
 const bridgePath = fileURLToPath(
   new URL('../android/kotlin/OpenLessShizukuBridge.kt', import.meta.url),
 );
+const clientPath = fileURLToPath(
+  new URL('../android/kotlin/OpenLessShizukuUserServiceClient.kt', import.meta.url),
+);
 function rustFunctionBody(source, functionSignature) {
   const signatureIndex = source.indexOf(functionSignature);
   assert.notEqual(signatureIndex, -1, `missing Rust function: ${functionSignature}`);
@@ -34,6 +37,7 @@ const insertSource = readFileSync(insertPath, 'utf8');
 const tiersSource = readFileSync(tiersPath, 'utf8');
 const shizukuSource = readFileSync(shizukuPath, 'utf8');
 const bridgeSource = readFileSync(bridgePath, 'utf8');
+const clientSource = readFileSync(clientPath, 'utf8');
 const tieredFallbackBody = rustFunctionBody(insertSource, 'fn insert_with_tiered_fallback');
 
 assert.match(
@@ -66,6 +70,17 @@ assert.match(
   /paste_via_shizuku_with_result/,
   'shizuku module must expose paste injection result',
 );
+assert.match(
+  tieredFallbackBody,
+  /tier2 skipped: tier1 succeeded/,
+  'tier2 must be skipped when tier1 already succeeded',
+);
+assert.match(
+  clientSource,
+  /processNameSuffix\(/,
+  'shizuku user service bind must set processNameSuffix',
+);
+
 assert.match(
   bridgeSource,
   /fun injectPasteKey\(context: Context\): Boolean/,

@@ -29,6 +29,8 @@ assert.match(
   /rootInActiveWindow[\s\S]*findFocus\(AccessibilityNodeInfo\.FOCUS_INPUT\)[\s\S]*findFocus\(AccessibilityNodeInfo\.FOCUS_ACCESSIBILITY\)/s,
   'paste must resolve focus from the active window only',
 );
+assert.match(source, /pasteAppearsApplied/, 'paste must verify editor text changed');
+assert.match(source, /paste=unverified/, 'paste must log unverified ACTION_PASTE results');
 assert.match(pasteBody, /pasteWithRetryOrSetText\(focused\)/, 'paste must retry ACTION_PASTE then SET_TEXT');
 assert.doesNotMatch(source, /lastEditableFocus/, 'paste path must not keep an editable focus cache');
 assert.doesNotMatch(source, /findEditableInTree/, 'paste path must not walk the accessibility tree');

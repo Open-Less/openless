@@ -52,17 +52,24 @@ fn insert_with_tiered_fallback(inserter: &TextInserter, text: &str) -> InsertSta
         }
     }
 
-    let shizuku_result = paste_via_shizuku_with_result();
-    if shizuku_result != PASTE_RESULT_SUCCESS && shizuku_result != PASTE_RESULT_SHIZUKU_UNAVAILABLE
-    {
-        log::warn!("[android-insert] tier2 shizuku paste failed reason={shizuku_result}");
-    } else if shizuku_result == PASTE_RESULT_SHIZUKU_UNAVAILABLE {
-        log::info!("[android-insert] tier2 skipped: shizuku unavailable");
+    let shizuku_result = match accessibility_result.as_deref() {
+        Some(PASTE_RESULT_SUCCESS) => {
+            log::info!("[android-insert] tier2 skipped: tier1 succeeded");
+            None
+        }
+        _ => Some(paste_via_shizuku_with_result()),
+    };
+    if let Some(ref result) = shizuku_result {
+        if result != PASTE_RESULT_SUCCESS && result != PASTE_RESULT_SHIZUKU_UNAVAILABLE {
+            log::warn!("[android-insert] tier2 shizuku paste failed reason={result}");
+        } else if result == PASTE_RESULT_SHIZUKU_UNAVAILABLE {
+            log::info!("[android-insert] tier2 skipped: shizuku unavailable");
+        }
     }
 
     match resolve_tiered_insert_status(
         accessibility_result.as_deref(),
-        Some(shizuku_result.as_str()),
+        shizuku_result.as_deref(),
     ) {
         TieredInsertOutcome::Inserted => {
             restore_clipboard_after_success(previous_clip);

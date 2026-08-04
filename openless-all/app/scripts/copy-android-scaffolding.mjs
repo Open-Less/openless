@@ -34,6 +34,7 @@ const KOTLIN_FILES = [
   'OpenLessOverlayBridge.kt',
   'OpenLessAccessibilityService.kt',
   'OpenLessAccessibilityResult.kt',
+  'OpenLessPasteVerification.kt',
   'OpenLessAccessibilityComponentIds.kt',
   'OpenLessShizukuBridge.kt',
   'OpenLessShizukuUserService.kt',
@@ -49,6 +50,7 @@ const KOTLIN_TEST_FILES = [
   'OpenLessCredentialCipherTest.kt',
   'OpenLessShizukuBridgeTest.kt',
   'OpenLessAccessibilityResultTest.kt',
+  'OpenLessPasteVerificationTest.kt',
   'OpenLessAccessibilityComponentIdsTest.kt',
 ];
 const KOTLIN_ANDROID_TEST_FILES = ['OpenLessCredentialVaultInstrumentedTest.kt'];

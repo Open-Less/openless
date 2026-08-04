@@ -133,17 +133,49 @@ class OpenLessAccessibilityService : AccessibilityService() {
     }
 
     private fun pasteWithRetryOrSetText(target: AccessibilityNodeInfo): Boolean {
+        val clipboardText = clipboardText().takeIf { it.isNotEmpty() } ?: return false
+        val beforeText = nodeText(target)
         sleepQuietly(PASTE_INITIAL_DELAY_MS)
         repeat(PASTE_RETRY_COUNT) { attempt ->
             if (target.performAction(AccessibilityNodeInfo.ACTION_PASTE)) {
-                Log.i(TAG, "paste=true attempt=${attempt + 1} package=${target.packageName}")
-                return true
+                sleepQuietly(PASTE_VERIFY_DELAY_MS)
+                if (target.refresh() && pasteAppearsApplied(beforeText, nodeText(target), clipboardText)) {
+                    Log.i(
+                        TAG,
+                        "paste=true verified attempt=${attempt + 1} package=${target.packageName}",
+                    )
+                    return true
+                }
+                Log.w(
+                    TAG,
+                    "paste=unverified attempt=${attempt + 1} package=${target.packageName}",
+                )
             }
             sleepQuietly(PASTE_RETRY_DELAY_MS)
         }
         val setText = appendClipboardTextWithSetText(target)
-        Log.i(TAG, "paste=false setText=$setText package=${target.packageName}")
-        return setText
+        sleepQuietly(PASTE_VERIFY_DELAY_MS)
+        val verified =
+            setText &&
+                target.refresh() &&
+                pasteAppearsApplied(beforeText, nodeText(target), clipboardText)
+        Log.i(
+            TAG,
+            "paste=false setText=$setText verified=$verified package=${target.packageName}",
+        )
+        return verified
+    }
+
+    private fun nodeText(target: AccessibilityNodeInfo): String {
+        return target.text?.toString().orEmpty()
+    }
+
+    private fun pasteAppearsApplied(
+        beforeText: String,
+        afterText: String,
+        clipboardText: String,
+    ): Boolean {
+        return OpenLessPasteVerification.pasteAppearsApplied(beforeText, afterText, clipboardText)
     }
 
     private fun appendClipboardTextWithSetText(target: AccessibilityNodeInfo): Boolean {
@@ -388,6 +420,7 @@ class OpenLessAccessibilityService : AccessibilityService() {
 
         private val KEYBOARD_REFRESH_DELAYS_MS = longArrayOf(120L, 360L, 900L, 1600L)
         private const val PASTE_INITIAL_DELAY_MS = 50L
+        private const val PASTE_VERIFY_DELAY_MS = 80L
         private const val PASTE_RETRY_COUNT = 3
         private const val PASTE_RETRY_DELAY_MS = 80L
         private const val PASTE_COMMAND_TIMEOUT_MS = 800L
