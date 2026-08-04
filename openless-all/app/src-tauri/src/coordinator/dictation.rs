@@ -726,25 +726,20 @@ fn arm_edit_watch(inner: &Arc<Inner>, status: InsertStatus, typed_text: &str) {
     });
 }
 
-/// 把一次手改变成词库里的东西。
+/// 把一次手改变成一条**待你点头**的词条建议。
 ///
-/// 分两档（见 `host_document::RuleTier`）：
-/// - **跨文种**（扣德克斯 → Codex）静默入库，但打 `learned` 标记 —— 用户在词汇表里
-///   一眼能看到并撤销。用户不会把中文词改成英文词只为换个说法，这类判错的概率极低。
-/// - **其余**（含中文同音词）弹提示等确认。「大禹 → 大鱼」和「明天 → 后天」在文本上
-///   长得一模一样，光看字分不出纠错和改主意，只能问。
+/// **没有静默入库这条路。** 早期版本让跨文种的改动（扣德克斯 → Codex）自己进词汇表，
+/// 理由是「没人为了换语气把中文改成英文」。真机上这条假设塌了：自动收进去 5 条只有 1
+/// 条对，其余是逐字打字的中间态（`ap → ype`）和用户本来就要打的词（`TypeScript →
+/// typeless`）。观察器看到的是编辑过程中的每一帧，而中间态和一次纠错在文本上没有区别。
 ///
-/// 入库同时做两件事，两者不能互相替代：写**纠正规则**保证这次一定对（本地确定性替换），
-/// 把 target 加进**词汇表**当热词提高下次直接听对的概率。
+/// 分不出来就别猜 —— 一律弹卡片，让用户点勾或点叉。
 fn handle_user_edit(inner: &Arc<Inner>, edit: crate::host_document::EditPair) {
     let Some(rule) = crate::host_document::learned_rule(&edit) else {
-        log::info!("[cursor-context] edit is not rule-worthy; logged only");
+        log::debug!("[cursor-context] edit is not word-like; logged only");
         return;
     };
-    match rule.tier {
-        crate::host_document::RuleTier::Auto => commit_learned_rule(inner, &rule),
-        crate::host_document::RuleTier::Confirm => queue_correction_suggestion(inner, &rule),
-    }
+    queue_correction_suggestion(inner, &rule);
 }
 
 /// 排进待确认队列，并把卡片弹到胶囊那个位置。

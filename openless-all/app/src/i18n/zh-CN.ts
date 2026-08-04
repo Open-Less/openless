@@ -389,8 +389,8 @@ export const zhCN = {
   },
   vocabCard: {
     title: '要记住这个词吗？',
-    accept: '好',
-    dismissAll: '都不用',
+    accept: '记住',
+    reject: '不用',
   },
   vocab: {
     kicker: 'VOCABULARY',

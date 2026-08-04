@@ -328,6 +328,7 @@ macro_rules! app_invoke_handler_desktop {
             commands::export_error_log,
             commands::debug_read_cursor_context,
             commands::accept_pending_correction,
+            commands::reject_pending_correction,
             commands::dismiss_vocab_suggestions,
             restart_app,
             reset_accessibility_permission_and_restart_app,

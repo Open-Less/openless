@@ -393,8 +393,8 @@ export const ja: typeof zhCN = {
   },
   vocabCard: {
     title: 'この語を覚えますか？',
-    accept: 'はい',
-    dismissAll: 'すべて不要',
+    accept: '覚える',
+    reject: '不要',
   },
   vocab: {
     kicker: 'VOCABULARY',

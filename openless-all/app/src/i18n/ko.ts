@@ -393,8 +393,8 @@ export const ko: typeof zhCN = {
   },
   vocabCard: {
     title: '이 단어를 기억할까요?',
-    accept: '예',
-    dismissAll: '모두 아니요',
+    accept: '기억하기',
+    reject: '건너뛰기',
   },
   vocab: {
     kicker: 'VOCABULARY',

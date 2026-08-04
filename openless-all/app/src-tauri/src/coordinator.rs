@@ -186,10 +186,13 @@ fn show_capsule_window_for_recording<R: tauri::Runtime>(
 ///
 /// 显示卡片时必须把胶囊窗口缩到这个大小 —— 见 [`show_vocab_suggestion_card`] 里关于
 /// 鼠标穿透的说明。
-const VOCAB_CARD_WIDTH: f64 = 300.0;
-/// 一条建议占的高度 + 卡片自身的边距。
-const VOCAB_CARD_ROW_HEIGHT: f64 = 52.0;
-const VOCAB_CARD_CHROME_HEIGHT: f64 = 56.0;
+const VOCAB_CARD_WIDTH: f64 = 320.0;
+/// 一行建议的高度：勾叉按钮 28pt + 行间距 8pt，与 `VocabSuggestionCard.tsx` 对齐。
+const VOCAB_CARD_ROW_HEIGHT: f64 = 36.0;
+/// 标题行 + 卡片内边距 + 留给投影的外边距。
+const VOCAB_CARD_CHROME_HEIGHT: f64 = 72.0;
+/// 卡片离屏幕右边缘留多少。
+const VOCAB_CARD_EDGE_MARGIN: f64 = 24.0;
 
 /// 把「要不要记住这个词」的卡片弹到胶囊那个位置。
 ///
@@ -269,7 +272,11 @@ pub(crate) fn hide_vocab_suggestion_card(inner: &Arc<Inner>) {
     });
 }
 
-/// 把卡片放到胶囊平时待的位置（底部居中、避开 Dock）。
+/// 把卡片放到屏幕**右下角**。
+///
+/// 不跟胶囊一样居中：卡片是要停留几秒等你读的，而屏幕正下方居中正是你在写字的地方 ——
+/// 真机上它就直接盖住了正在编辑的那一行。右下角是通知类界面的常规位置，也是唯一一块
+/// 「停留几秒不打扰任何人」的地方。
 fn position_vocab_card<R: tauri::Runtime>(
     window: &tauri::WebviewWindow<R>,
     width: f64,
@@ -283,7 +290,7 @@ fn position_vocab_card<R: tauri::Runtime>(
     let pos = monitor.position();
     let (mon_w, mon_h) = (size.width as f64 / scale, size.height as f64 / scale);
     let (mon_x, mon_y) = (pos.x as f64 / scale, pos.y as f64 / scale);
-    let x = mon_x + (mon_w - width) / 2.0;
+    let x = mon_x + mon_w - width - VOCAB_CARD_EDGE_MARGIN;
     // 80pt 给 Dock，与胶囊同源。
     let y = mon_y + mon_h - height - 80.0;
     window.set_position(tauri::LogicalPosition::new(x, y))
@@ -1753,36 +1760,53 @@ impl Coordinator {
         &self.inner.correction_rules
     }
 
-    /// 用户在卡片上点了「好」。走的是和自动收集完全相同的落库路径（词汇表 + 查重），
-    /// 只是触发方是用户而不是分级判定。
-    ///
-    /// 队列空了就把卡片收起来 —— 卡片上列了几条，用户逐条点完最后一条时它该自己消失。
+    /// 用户在卡片上点了勾 —— 这一条进词汇表。
     pub fn accept_pending_correction(&self, id: &str) {
-        let taken = {
-            let mut pending = self.inner.pending_corrections.lock();
-            pending
-                .iter()
-                .position(|p| p.id == id)
-                .map(|idx| pending.remove(idx))
+        let Some(taken) = self.take_pending_correction(id) else {
+            return;
         };
-        let Some(pending) = taken else { return };
         dictation::commit_learned_rule(
             &self.inner,
             &crate::host_document::LearnedRule {
-                pattern: pending.pattern,
-                replacement: pending.replacement,
-                tier: crate::host_document::RuleTier::Confirm,
+                pattern: taken.pattern,
+                replacement: taken.replacement,
             },
         );
+        self.refresh_vocab_card();
+    }
+
+    /// 用户在卡片上点了叉 —— 这一条丢掉，什么都不记。
+    ///
+    /// **不做「拒绝名单」。** 下次你再改同一个词它还会问；一份你看不见的名单只会让你
+    /// 将来纳闷「为什么这个词它不学了」。
+    pub fn reject_pending_correction(&self, id: &str) {
+        if self.take_pending_correction(id).is_none() {
+            return;
+        }
+        self.refresh_vocab_card();
+    }
+
+    fn take_pending_correction(&self, id: &str) -> Option<crate::types::PendingCorrection> {
+        let mut pending = self.inner.pending_corrections.lock();
+        pending
+            .iter()
+            .position(|p| p.id == id)
+            .map(|idx| pending.remove(idx))
+    }
+
+    /// 逐条点完之后重排卡片：还有剩的就按新行数重算高度，空了就收起来。
+    ///
+    /// 不重算高度的话，窗口会停在「原来那么多行」的尺寸上，而窗口在显示卡片期间是**不
+    /// 穿透鼠标**的 —— 那块已经空掉的透明区域会继续拦住底下的点击。
+    fn refresh_vocab_card(&self) {
         if self.inner.pending_corrections.lock().is_empty() {
             hide_vocab_suggestion_card(&self.inner);
+        } else {
+            show_vocab_suggestion_card(&self.inner);
         }
     }
 
-    /// 用户点了「都不用」，或者卡片 10 秒到期自己消失。
-    ///
-    /// 什么都不记 —— 不做「拒绝名单」。用户下次改同一个词还会再问，而一份他看不见的
-    /// 名单只会让他将来纳闷「为什么这个词它不学了」。
+    /// 卡片 10 秒到期，或新一轮听写开始。
     pub fn dismiss_vocab_suggestions(&self) {
         hide_vocab_suggestion_card(&self.inner);
     }

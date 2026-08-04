@@ -48,15 +48,19 @@ pub fn add_correction_rule(
         .map_err(|e| e.to_string())
 }
 
-/// 卡片上点了「好」：把这个词收进词汇表。
-///
-/// 与自动收集走同一条路 —— 同样打「自动收集」标记，用户随时能在词汇表页看到并删掉。
+/// 卡片上点了勾：把这个词收进词汇表，打「自动收集」标记，随时能在词汇表页删掉。
 #[tauri::command]
 pub fn accept_pending_correction(coord: CoordinatorState<'_>, id: String) {
     coord.accept_pending_correction(&id);
 }
 
-/// 点了「都不用」，或者卡片 10 秒到期。什么都不记。
+/// 卡片上点了叉：丢掉这一条，什么都不记（没有拒绝名单）。
+#[tauri::command]
+pub fn reject_pending_correction(coord: CoordinatorState<'_>, id: String) {
+    coord.reject_pending_correction(&id);
+}
+
+/// 卡片 10 秒到期，或新一轮听写开始。
 #[tauri::command]
 pub fn dismiss_vocab_suggestions(coord: CoordinatorState<'_>) {
     coord.dismiss_vocab_suggestions();

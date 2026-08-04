@@ -391,8 +391,8 @@ export const zhTW: typeof zhCN = {
   },
   vocabCard: {
     title: '要記住這個詞嗎？',
-    accept: '好',
-    dismissAll: '都不用',
+    accept: '記住',
+    reject: '不用',
   },
   vocab: {
     kicker: 'VOCABULARY',

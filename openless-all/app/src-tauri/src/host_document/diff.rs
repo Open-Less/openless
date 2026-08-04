@@ -119,25 +119,6 @@ fn strip_whitespace(s: &str) -> String {
     s.chars().filter(|c| !c.is_whitespace()).collect()
 }
 
-/// 一处改动该以什么方式进词汇表。
-///
-/// **只写词汇表，不再写纠正规则。** 学来的东西配不上「见字面就替换」这份权力：
-///
-/// - 纠正规则是字面替换，错了是静默的、全局的、用户看不见。真机上学到过
-///   `小鱼 → x` 这种半截规则，它会毁掉以后每一个「小鱼」。
-/// - 词汇表是提示：送给 ASR 提高听对的概率，也进润色 prompt 让 LLM **带着上下文**
-///   判断该不该改。错了最多是没帮上忙。
-///
-/// 而且两者并存会直接打架：词汇表里有 `Codex` 热词（「我要这个词」），纠正规则却写着
-/// `Codex → 扣的爱思`（「把这个词换掉」）—— 真机上就撞出过这个环。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RuleTier {
-    /// 自动收进词汇表（打 `learned` 标记，用户能看到并删掉）。
-    Auto,
-    /// 弹卡片问一下，用户点了才收。
-    Confirm,
-}
-
 /// 规则 pattern 的最小长度（char）。
 ///
 /// 一个字的 pattern 会在往后每一句话里到处命中：从「大禹 → 大鱼」学出「禹 → 鱼」，
@@ -145,49 +126,47 @@ pub enum RuleTier {
 const MIN_PATTERN_CHARS: usize = 2;
 
 /// 从一次手改里提炼出来的词条建议。
+///
+/// **一律是建议，没有「自动收」这一档。** 早期版本认为「你把一个词改成英文写法」本身
+/// 就足以证明它是专名，于是跨文种的改动静默入库。真机跑了两天，自动收进去 5 条里只有
+/// 1 条是对的（`Tailscale` ✓，而 `ype`、`ess` 是逐字打字的半截，`typeless` 是用户本
+/// 来就要打的词，` claude` 带着前导空格）—— 因为观察器看到的是**编辑过程中的每一个
+/// 中间态**，而中间态在文本上跟「一次纠错」长得完全一样。
+///
+/// 分不出来就别猜。卡片上一个勾一个叉，是这里唯一可靠的判据。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LearnedRule {
     /// 用户改之前那个（错的）写法。不入库，只用来在卡片上给用户看清改的是什么。
     pub pattern: String,
     /// 用户最后要的那个词 —— 要进词汇表的就是它。
     pub replacement: String,
-    pub tier: RuleTier,
 }
 
 /// 词汇表条目的长度上限（char）。超过就不是一个「词」了。
 const MAX_PHRASE_CHARS: usize = 12;
 
-/// 判定用户改出来的这个词该不该进词汇表、要不要先问一声。
+/// 这处改动值不值得拿去问用户「要记住这个词吗」。
 ///
-/// **只看 `target`（用户最后要的那个词），不看 `source → target` 这个映射。** 语义变了：
-/// 问的不再是「这个替换安不安全」，而是「这个**词**值不值得记住」。方向问题也随之消失
-/// —— 你把中文改成英文还是反过来，都不影响「你最后要的是哪个词」。
+/// **只看 `target`（用户最后要的那个词），不看 `source → target` 这个映射。** 问的不是
+/// 「这个替换安不安全」，而是「这个**词**值不值得记住」。方向也就不重要了 —— 你把中文
+/// 改成英文还是反过来，都不影响「你最后要的是哪个词」。
 ///
-/// 返回 `None` = 那不是一个词：
+/// 这里只做**廉价的粗筛**，把连问都不值得问的滤掉；真正的判断交给卡片上的勾叉。
+/// 返回 `false` = 那根本不是一个词：
 ///
 /// - **`target` 为空**（纯删除）—— 没有词可记。
 /// - **跨行或跨句**（换行、中文句读标点、`?!;`）—— 真机上抓到的假阳性正是这类：在聊天
 ///   框里按回车发送，输入框清空换成占位符，形式上是「把一整句换成另一句」。
 /// - **超过 [`MAX_PHRASE_CHARS`]** —— 一整句话不是词条。
-pub fn classify_edit(edit: &EditPair) -> Option<RuleTier> {
+pub fn is_vocab_worthy(edit: &EditPair) -> bool {
     let target = edit.target.trim();
     if target.is_empty() || edit.source.trim().is_empty() {
-        return None;
+        return false;
     }
     if crosses_a_sentence_boundary(&edit.source) || crosses_a_sentence_boundary(target) {
-        return None;
+        return false;
     }
-    if target.chars().count() > MAX_PHRASE_CHARS {
-        return None;
-    }
-    // 拉丁字母/数字构成的词（Codex、Node.js、GPT-5）自动收：你把一个词改成英文写法，
-    // 这件事本身就说明它是个专名 —— 没人为了换语气把中文改成英文。
-    if is_pure_ascii_word(target) {
-        return Some(RuleTier::Auto);
-    }
-    // 其余（主要是汉字词）问一声。「大鱼」可能是公司名也可能就是字面意思，「接口」是
-    // 术语也是极常见的普通词 —— 光看字分不出来，而普通词进了热词表会让识别对它过度敏感。
-    Some(RuleTier::Confirm)
+    target.chars().count() <= MAX_PHRASE_CHARS
 }
 
 /// 把一处改动变成一条可以入库的规则。
@@ -201,15 +180,21 @@ pub fn classify_edit(edit: &EditPair) -> Option<RuleTier> {
 /// 字：把换行或空格卷进 literal 规则，它就再也匹配不上任何东西了。上下文两侧都凑不
 /// 够时返回 `None` —— 宁可不学。
 ///
-/// 分级在扩长**之前**判定：扩长会把中文上下文粘到英文 pattern 上，之后再判跨文种就
-/// 永远判不出来了。
+/// 最后那一步 `trim` 不能省：最小差异是按 char 剥前后缀剥出来的，边界上很容易挂着一
+/// 个空格。真机上就学到过 ` claude`（带前导空格），那种词条永远匹配不上任何东西。
 pub fn learned_rule(edit: &EditPair) -> Option<LearnedRule> {
-    let tier = classify_edit(edit)?;
+    if !is_vocab_worthy(edit) {
+        return None;
+    }
     let (pattern, replacement) = pad_to_min_length(edit)?;
+    let pattern = pattern.trim().to_string();
+    let replacement = replacement.trim().to_string();
+    if pattern.is_empty() || replacement.is_empty() {
+        return None;
+    }
     Some(LearnedRule {
         pattern,
         replacement,
-        tier,
     })
 }
 
@@ -255,26 +240,6 @@ fn crosses_a_sentence_boundary(s: &str) -> bool {
     s.chars()
         .any(|c| matches!(c, '\n' | '\r' | '。' | '？' | '！' | '；' | '，' | '、' | '：' | '?' | '!' | ';'))
 }
-
-/// 这是不是一个由拉丁字母/数字构成的词（`Codex`、`Node.js`、`GPT-5`、`v1.2`）。
-///
-/// 要求至少有一个字母 —— 纯数字（"2026"）不是值得记的词。连字符、下划线、点号放行，
-/// 技术名词到处是它们。
-fn is_pure_ascii_word(s: &str) -> bool {
-    let mut saw_alpha = false;
-    for ch in s.chars() {
-        if ch.is_whitespace() || ch == '-' || ch == '_' || ch == '.' {
-            continue;
-        }
-        if ch.is_ascii_alphanumeric() {
-            saw_alpha |= ch.is_ascii_alphabetic();
-        } else {
-            return false;
-        }
-    }
-    saw_alpha
-}
-
 
 /// 这处改动是不是落在「我们刚插进去的那段文字」里。
 ///
@@ -376,11 +341,7 @@ mod tests {
             "Type / for commands",
         )
         .expect("形式上确实是一处改动 —— 检测到它没问题");
-        assert_eq!(
-            classify_edit(&e),
-            None,
-            "整句被替换不该变成规则：以后每次说那句话都会被换成占位符"
-        );
+        assert!(!is_vocab_worthy(&e), "整句被替换不该变成规则：以后每次说那句话都会被换成占位符");
     }
 
     #[test]
@@ -393,7 +354,7 @@ mod tests {
             before: "用".to_string(),
             after: "写".to_string(),
         };
-        assert_eq!(classify_edit(&e), Some(RuleTier::Auto));
+        assert!(is_vocab_worthy(&e));
     }
 
     #[test]
@@ -405,7 +366,7 @@ mod tests {
             before: String::new(),
             after: String::new(),
         };
-        assert_eq!(classify_edit(&e), None);
+        assert!(!is_vocab_worthy(&e));
     }
 
     #[test]
@@ -417,7 +378,7 @@ mod tests {
             before: String::new(),
             after: String::new(),
         };
-        assert_eq!(classify_edit(&e), None);
+        assert!(!is_vocab_worthy(&e));
     }
 
     #[test]
@@ -429,7 +390,7 @@ mod tests {
             before: "上文".to_string(),
             after: "下文".to_string(),
         };
-        assert_eq!(classify_edit(&edit), None);
+        assert!(!is_vocab_worthy(&edit));
 
         let edit = EditPair {
             source: "一个词".to_string(),
@@ -437,7 +398,7 @@ mod tests {
             before: "上文".to_string(),
             after: "下文".to_string(),
         };
-        assert_eq!(classify_edit(&edit), None);
+        assert!(!is_vocab_worthy(&edit));
     }
 
     #[test]
@@ -492,37 +453,44 @@ mod tests {
         assert_eq!(pair.after, "后面的内容");
     }
 
-    // ─────────────────────── 分级 ───────────────────────
+    // ─────────────────────── 粗筛 ───────────────────────
 
-    fn tier(before: &str, after: &str) -> Option<RuleTier> {
-        classify_edit(&minimal_edit(before, after).expect("应当是一处有效改动"))
+    fn worthy(before: &str, after: &str) -> bool {
+        is_vocab_worthy(&minimal_edit(before, after).expect("应当是一处有效改动"))
     }
 
     #[test]
-    fn a_latin_word_is_collected_automatically() {
-        // 你把一个词改成英文写法，这件事本身就说明它是专名 —— 没人为了换语气这么做。
-        assert_eq!(
-            tier("我们用扣德克斯写代码", "我们用Codex写代码"),
-            Some(RuleTier::Auto)
-        );
+    fn a_latin_word_is_worth_asking_about() {
+        assert!(worthy("我们用扣德克斯写代码", "我们用Codex写代码"));
     }
 
     #[test]
-    fn direction_no_longer_matters() {
+    fn direction_does_not_matter() {
         // 旧设计按「中文→英文」还是反过来分档，真机上撞出过一个环：词汇表里的 `Codex`
         // 热词让识别把中文听成英文，用户改回中文，系统又学一条规则把 `Codex` 换掉。
         //
-        // 现在只看「你最后要的是哪个词」，方向不再参与判定。英文被改回中文时，要记的
-        // 是那个中文词 —— 汉字词一律先问一声。
-        assert_eq!(tier("打开setting页", "打开设置页"), Some(RuleTier::Confirm));
+        // 现在只看「你最后要的是哪个词」，方向不参与判定。
+        assert!(worthy("打开setting页", "打开设置页"));
     }
 
     #[test]
-    fn a_chinese_homophone_needs_confirmation() {
+    fn a_chinese_homophone_is_worth_asking_about() {
         // 「大禹 → 大鱼」和「明天 → 后天」在文本上长得一模一样，光看字分不出「纠错」
-        // 和「改主意」。这正是不引入拼音之后必须问用户的那一类。
-        assert_eq!(tier("今天讲大禹养殖", "今天讲大鱼养殖"), Some(RuleTier::Confirm));
-        assert_eq!(tier("我们明天见面", "我们后天见面"), Some(RuleTier::Confirm));
+        // 和「改主意」。分不出就问 —— 这正是不引入拼音之后卡片存在的理由。
+        assert!(worthy("今天讲大禹养殖", "今天讲大鱼养殖"));
+        assert!(worthy("我们明天见面", "我们后天见面"));
+    }
+
+    /// 真机日志里自动收进词汇表的 5 条，有 4 条是这种「打字打到一半」的中间态：
+    /// 用户在逐字敲 `Type`，观察器在 `ap` 变成 `ype` 的那一帧收到通知。
+    ///
+    /// 这一类**在文本上跟一次真正的纠错完全没有区别**，粗筛拦不住也不该硬拦。这个用例
+    /// 钉的是：它们照旧会被提成建议，但建议只能通过卡片入库 —— 见 `LearnedRule` 的
+    /// 文档，以及 `dictation::handle_user_edit` 里没有第二条分支这件事。
+    #[test]
+    fn a_half_typed_word_is_still_only_a_suggestion() {
+        let learned = rule("按 ap 键", "按 ype 键").unwrap();
+        assert_eq!(learned.replacement, "ype");
     }
 
     // ─────────────────────── 扩到安全长度 ───────────────────────
@@ -538,7 +506,6 @@ mod tests {
         let learned = rule("今天讲大禹养殖", "今天讲大鱼养殖").unwrap();
         assert_eq!(learned.pattern, "大禹");
         assert_eq!(learned.replacement, "大鱼");
-        assert_eq!(learned.tier, RuleTier::Confirm);
     }
 
     #[test]
@@ -554,7 +521,6 @@ mod tests {
         let learned = rule("我们用扣德克斯写代码", "我们用Codex写代码").unwrap();
         assert_eq!(learned.pattern, "扣德克斯");
         assert_eq!(learned.replacement, "Codex");
-        assert_eq!(learned.tier, RuleTier::Auto);
     }
 
     #[test]
@@ -573,49 +539,38 @@ mod tests {
         assert!(rule(" 甲 ", " 乙 ").is_none());
     }
 
+    /// 真机上学到过 ` claude`（带前导空格）。词条前面挂个空格，它永远匹配不上任何东西
+    /// —— 白白占一条，还让用户在词汇表里看见一个「怎么看都没错但就是不生效」的词。
     #[test]
-    fn tier_is_decided_before_widening() {
-        // 扩长会把中文上下文粘到英文词上；先扩再判就永远判不出这是个拉丁词了。
-        let learned = rule("装了容器之后", "装了docker之后").unwrap();
-        assert_eq!(learned.tier, RuleTier::Auto);
+    fn a_stray_space_on_the_boundary_is_trimmed_off() {
+        let edit = EditPair {
+            source: "cloud".to_string(),
+            target: " claude".to_string(),
+            before: "用".to_string(),
+            after: "写".to_string(),
+        };
+        let learned = learned_rule(&edit).unwrap();
+        assert_eq!(learned.replacement, "claude");
+        assert_eq!(learned.pattern, "cloud");
     }
 
     #[test]
-    fn a_semantic_rewrite_needs_confirmation() {
-        assert_eq!(
-            tier("这个方案挺好的", "这个方案还行吧"),
-            Some(RuleTier::Confirm)
-        );
+    fn a_semantic_rewrite_is_still_worth_asking_about() {
+        assert!(worthy("这个方案挺好的", "这个方案还行吧"));
     }
 
     #[test]
     fn a_pure_deletion_never_becomes_a_rule() {
-        // 做成全局替换就是「以后所有听写里这个词一律删掉」。风险与收益完全不对等。
-        assert_eq!(tier("这个的的接口", "这个的接口"), None);
-        assert_eq!(tier("多余的词组在这", "在这"), None);
+        // 没有词可记 —— 「以后所有听写里这个词一律删掉」不该是一次手改能表达的意思。
+        assert!(!worthy("这个的的接口", "这个的接口"));
+        assert!(!worthy("多余的词组在这", "在这"));
     }
 
     #[test]
     fn swapping_one_latin_name_for_another_is_still_a_word_worth_keeping() {
         // 「Codex → Cursor」大概率是换工具而不是纠错，但要记的是 `Cursor` 这个词
-        // 本身 —— 它值得进词汇表，跟这次改动的动机无关。词条只是提示，不做替换。
-        assert_eq!(
-            tier("我们用 Codex 写", "我们用 Cursor 写"),
-            Some(RuleTier::Auto)
-        );
-    }
-
-    #[test]
-    fn a_side_that_mixes_scripts_is_not_treated_as_a_loanword_mishearing() {
-        // 「一侧纯 CJK、另一侧纯 ASCII」要求的是「纯」。混着的那种更可能是用户在换
-        // 说法，不是我们把外来词听成了汉字。
-        let edit = EditPair {
-            source: "Docker容器".to_string(),
-            target: "容器引擎".to_string(),
-            before: "用".to_string(),
-            after: "跑".to_string(),
-        };
-        assert_eq!(classify_edit(&edit), Some(RuleTier::Confirm));
+        // 本身 —— 它值得问一声，跟这次改动的动机无关。词条只是提示，不做替换。
+        assert!(worthy("我们用 Codex 写", "我们用 Cursor 写"));
     }
 
     #[test]

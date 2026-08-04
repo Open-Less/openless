@@ -51,6 +51,7 @@ export {
     listCorrectionRules,
     addCorrectionRule,
     acceptPendingCorrection,
+    rejectPendingCorrection,
     dismissVocabSuggestions,
     removeCorrectionRule,
     setCorrectionRuleEnabled,

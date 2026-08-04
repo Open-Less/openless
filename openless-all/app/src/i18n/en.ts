@@ -391,8 +391,8 @@ export const en: typeof zhCN = {
   },
   vocabCard: {
     title: 'Remember this word?',
-    accept: 'Yes',
-    dismissAll: 'No thanks',
+    accept: 'Remember',
+    reject: 'Skip',
   },
   vocab: {
     kicker: 'VOCABULARY',
