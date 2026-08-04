@@ -3087,6 +3087,73 @@ fn resolve_ark_endpoint_with_policy(
 
 #[cfg(test)]
 mod tests {
+    /// 造一条词典条目。传给 `prioritize_vocab_for_asr` 时必须是词典的原始顺序
+    /// （最近添加在前）。
+    fn vocab_entry(phrase: &str, hits: u64) -> crate::types::DictionaryEntry {
+        crate::types::DictionaryEntry {
+            id: phrase.to_string(),
+            phrase: phrase.to_string(),
+            note: None,
+            enabled: true,
+            hits,
+            created_at: String::new(),
+        }
+    }
+
+    /// 真机复现：刚添加的碎片排在词典最前，把命中 18 次的 `hermes`、7 次的
+    /// `win-shukong` 挤出了 240 字符的 ASR 预算。保底席位之后必须按命中排。
+    #[test]
+    fn asr_vocab_orders_by_hits_once_past_the_fresh_seats() {
+        let mut entries: Vec<_> = (0..super::FRESH_VOCAB_SEATS)
+            .map(|i| vocab_entry(&format!("fresh{i}"), 0))
+            .collect();
+        entries.push(vocab_entry("scrap", 1));
+        entries.push(vocab_entry("hermes", 18));
+        entries.push(vocab_entry("win-shukong", 7));
+
+        let ordered = super::prioritize_vocab_for_asr(entries);
+
+        let pos = |p: &str| ordered.iter().position(|x| x == p).expect("phrase kept");
+        assert!(pos("hermes") < pos("scrap"), "命中多的必须排在刚收进来的碎片前面");
+        assert!(pos("win-shukong") < pos("scrap"));
+        assert!(pos("hermes") < pos("win-shukong"), "命中多的在前");
+    }
+
+    /// 纯按命中排会让刚添加的词永远进不去预算——而用户刚加它，多半就是因为刚
+    /// 被它坑过。最近添加的若干条要有保底席位。
+    #[test]
+    fn asr_vocab_reserves_seats_for_freshly_added_phrases() {
+        let mut entries = vec![vocab_entry("Pathwyze", 0)];
+        entries.extend((0..30).map(|i| vocab_entry(&format!("old{i}"), 100 + i)));
+
+        let ordered = super::prioritize_vocab_for_asr(entries);
+
+        assert_eq!(
+            ordered.first().map(String::as_str),
+            Some("Pathwyze"),
+            "命中为 0 的新词也要占住最前的保底席位"
+        );
+    }
+
+    /// 同词异形一起进词表既浪费预算，又让模型无所适从。留命中多的那个写法——
+    /// 位置取最靠前那次，但内容不能被刚收进来、命中为 0 的变体顶掉。
+    #[test]
+    fn asr_vocab_dedupes_case_insensitively_keeping_the_most_hit_spelling() {
+        let entries = vec![
+            vocab_entry("claude", 0),
+            vocab_entry("mac-mini", 27),
+            vocab_entry("Claude", 33),
+        ];
+
+        let ordered = super::prioritize_vocab_for_asr(entries);
+
+        assert_eq!(
+            ordered,
+            vec!["Claude".to_string(), "mac-mini".to_string()],
+            "保留 Claude 的写法，但沿用 claude 那次更靠前的位置"
+        );
+    }
+
     #[test]
     fn volc_resource_history_label_allows_volc_namespace_ids() {
         // issue #373 场景的两个真实 resource id 必须放行。
@@ -4722,6 +4789,80 @@ fn enabled_phrases(inner: &Arc<Inner>) -> Vec<String> {
         .filter(|e| e.enabled)
         .map(|e| e.phrase)
         .collect()
+}
+
+/// 词典启用词条，**按送进 ASR 词汇偏置的优先级排好序**。
+///
+/// LLM 侧的热词块没有名额限制（[`enabled_phrases`] 直接用词典顺序就行），ASR 侧
+/// 有：`whisper::PROMPT_CHAR_BUDGET` 只给 240 个字符，装不下的词条被直接丢弃。
+/// 于是「送进去的顺序」就等于「谁能被听见」。
+///
+/// 而词典本身的顺序是**最近添加的在最前**（[`DictionaryStore::add`] 用
+/// `insert(0)`，为的是词汇表页面把刚加的词排在上面）。两个各自都合理的决定撞在
+/// 一起，结果是预算永远优先喂给最新的词，最老的先掉出去——而最老的那批恰恰是
+/// 攒了最多命中的常用词。真机上的表现：一份 40 条的词典里，命中 18 次、7 次、
+/// 10 次的三个专有名词全部排在预算外，从来没送到过 ASR；用户在词汇表里看得见
+/// 它们、以为在生效，实际上一次都没生效过。
+///
+/// 排序规则：
+/// 1. 最近添加的前 [`FRESH_VOCAB_SEATS`] 条保底——刚加的词还没机会攒命中，纯按
+///    命中排会让它永远进不去，而用户刚加它多半就是因为刚被它坑过。
+/// 2. 其余按命中次数降序。
+/// 3. 同词异形（`claude` / `Claude`）只留命中多的那个写法。
+fn asr_vocab_phrases(inner: &Arc<Inner>) -> Vec<String> {
+    let entries: Vec<crate::types::DictionaryEntry> = inner
+        .vocab
+        .list()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|e| e.enabled)
+        .collect();
+    prioritize_vocab_for_asr(entries)
+}
+
+/// 最近添加的词条无条件占住的名额，见 [`asr_vocab_phrases`]。
+const FRESH_VOCAB_SEATS: usize = 5;
+
+/// [`asr_vocab_phrases`] 的纯函数部分，方便直接测排序规则。
+///
+/// `entries` 必须是词典的原始顺序（最近添加在前）——保底席位靠它取「最近」，
+/// 不去解析 `created_at` 字符串（历史文件由 Swift 版写入，格式不保证一致）。
+fn prioritize_vocab_for_asr(entries: Vec<crate::types::DictionaryEntry>) -> Vec<String> {
+    let split = FRESH_VOCAB_SEATS.min(entries.len());
+    let mut ordered = entries;
+    // 保底席位之后的部分按命中降序；`sort_by_key` 是稳定排序，同命中次数的保持
+    // 词典原顺序（最近添加在前）。
+    ordered[split..].sort_by_key(|e| std::cmp::Reverse(e.hits));
+
+    // 同一个词的不同写法（`claude` / `Claude`）只留一个：既省预算，也免得两种
+    // 写法一起进词表让模型无所适从。留**命中多**的那个写法，但位置取最靠前那次
+    // ——否则一个刚被收进来、命中为 0 的小写变体会把攒了几十次命中的正确写法顶掉。
+    let mut best: std::collections::HashMap<String, (usize, crate::types::DictionaryEntry)> =
+        std::collections::HashMap::new();
+    for (index, entry) in ordered.into_iter().enumerate() {
+        let key = entry.phrase.trim().to_lowercase();
+        if key.is_empty() {
+            continue;
+        }
+        match best.entry(key) {
+            std::collections::hash_map::Entry::Vacant(slot) => {
+                slot.insert((index, entry));
+            }
+            std::collections::hash_map::Entry::Occupied(mut slot) => {
+                if entry.hits > slot.get().1.hits {
+                    let position = slot.get().0;
+                    slot.insert((position, entry));
+                }
+            }
+        }
+    }
+
+    let mut picked: Vec<(usize, String)> = best
+        .into_values()
+        .map(|(index, entry)| (index, entry.phrase))
+        .collect();
+    picked.sort_by_key(|(index, _)| *index);
+    picked.into_iter().map(|(_, phrase)| phrase).collect()
 }
 
 /// 终止态（Done / Error）后延迟 N ms 把胶囊改回 Idle，让浮窗自动消失。

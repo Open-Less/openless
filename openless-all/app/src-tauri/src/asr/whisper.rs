@@ -485,8 +485,38 @@ fn is_cjk(ch: char) -> bool {
 /// - 入力が空、または有効フレーズが 0 件の場合は `None` を返す。Optional に
 ///   することで「プロンプト無し」と「空文字プロンプト」を呼び出し側で区別
 ///   する必要をなくす。
+/// 预算装不下的词条是**静默**丢弃的：用户在词汇表里看得见它、以为它在生效，实际
+/// 上从来没送到 ASR。真机上排查这个花了很久，因为没留下任何痕迹——所以留一行。
+///
+/// 但这个函数每次听写都会被调用，无条件打 info 会把日志刷满。丢弃集合只随词典
+/// 变化而变化，所以只在它**变了**的时候打；`app` 固定 Info 级别（`lib.rs`），
+/// 用 debug 等于没打。
+fn log_dropped_phrases_when_changed(included: &[&str], dropped: &[&str]) {
+    static LAST_DROPPED: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+    let fingerprint = (!dropped.is_empty()).then(|| dropped.join(", "));
+    let Ok(mut last) = LAST_DROPPED.lock() else {
+        return;
+    };
+    if *last == fingerprint {
+        return;
+    }
+    *last = fingerprint;
+    if dropped.is_empty() {
+        return;
+    }
+    log::info!(
+        "[asr-vocab] prompt budget {} chars: kept {} phrase(s), dropped {}: {:?}",
+        PROMPT_CHAR_BUDGET,
+        included.len(),
+        dropped.len(),
+        dropped
+    );
+}
+
 pub fn build_prompt_from_phrases(phrases: &[String]) -> Option<String> {
     let mut included: Vec<&str> = Vec::new();
+    let mut dropped: Vec<&str> = Vec::new();
     let mut total_chars: usize = 0;
 
     for phrase in phrases {
@@ -502,11 +532,14 @@ pub fn build_prompt_from_phrases(phrases: &[String]) -> Option<String> {
         };
         // 末尾の "." 1 文字も予約。
         if total_chars + added + 1 > PROMPT_CHAR_BUDGET {
+            dropped.push(trimmed);
             continue;
         }
         included.push(trimmed);
         total_chars += added;
     }
+
+    log_dropped_phrases_when_changed(&included, &dropped);
 
     if included.is_empty() {
         return None;

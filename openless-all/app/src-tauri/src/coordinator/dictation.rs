@@ -2162,7 +2162,7 @@ pub(super) async fn begin_session_as(
     } else if is_stepfun_realtime_provider(&effective_asr) {
         // 与 Qwen3 realtime 分支同构：流式 WS 会话 + DeferredAsrBridge 缓冲开链前音频。
         // 实时协议的词汇偏置走 transcription.prompt（批式 stepfun 则相反走 hotwords）。
-        let prompt = crate::asr::whisper::build_prompt_from_phrases(&enabled_phrases(inner));
+        let prompt = crate::asr::whisper::build_prompt_from_phrases(&asr_vocab_phrases(inner));
         let creds = read_stepfun_realtime_credentials(prompt);
         let asr_call_label = AsrCallLabel::new(effective_asr.clone(), Some(creds.model.clone()));
         let asr = Arc::new(crate::asr::StepfunRealtimeASR::new(creds));
@@ -2290,7 +2290,7 @@ pub(super) async fn begin_session_as(
         // モデルのコンテキスト両方に渡される」と明示しているので、Whisper
         // 互換プロバイダにも揃えるのが筋。
         let (whisper_prompt, hotwords) =
-            whisper_vocab_for_provider(&active_asr, enabled_phrases(inner));
+            whisper_vocab_for_provider(&active_asr, asr_vocab_phrases(inner));
         let asr_call_label = AsrCallLabel::new(effective_asr.clone(), Some(model.clone()));
         let whisper = Arc::new(
             WhisperBatchASR::new(
