@@ -1613,7 +1613,7 @@ pub(super) async fn begin_session_as(
             store_prepared_windows_ime_session(&mut slots, current_session_id, prepared);
         }
     }
-    // 翻译生效标志重置；修饰键按下或安卓浮层请求时经 mark_translation_active 置位。
+    // 翻译生效标志重置；修饰键按下或安卓浮层请求时经 arm_translation_if_effective 置位。
     inner.translation_active.store(false, Ordering::SeqCst);
 
     #[cfg(any(debug_assertions, test))]

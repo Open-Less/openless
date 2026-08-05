@@ -994,7 +994,7 @@ pub(super) fn translation_hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiv
             continue;
         }
         if matches!(evt, ComboHotkeyEvent::Pressed { .. }) {
-            mark_translation_active(&inner);
+            arm_translation_if_effective(&inner);
         }
     }
 }
@@ -1294,7 +1294,7 @@ pub(super) fn modifier_shortcut_triggers(
 /// 收紧后这个 flag 的语义从「按过 Shift」变成「本次会话真的要翻译」，胶囊提示与 polish
 /// 分派读同一个值，不会再出现「胶囊说正在翻译、后端其实没翻」的漂移（用户未设目标语言
 /// 时按 Shift 就会撞上）。返回 true 表示本次会话翻译已置位。
-pub(super) fn mark_translation_active(inner: &Arc<Inner>) -> bool {
+pub(super) fn arm_translation_if_effective(inner: &Arc<Inner>) -> bool {
     let phase = inner.state.lock().phase;
     if !matches!(phase, SessionPhase::Starting | SessionPhase::Listening) {
         return false;
@@ -1356,7 +1356,7 @@ pub(super) fn hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<HotkeyEve
                     || crate::shortcut_binding::legacy_modifier_trigger(&translation_hotkey)
                         .is_some()
                 {
-                    mark_translation_active(&inner_cloned);
+                    arm_translation_if_effective(&inner_cloned);
                 }
             }
             HotkeyEvent::QaShortcutPressed => {

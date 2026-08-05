@@ -601,7 +601,7 @@ struct Inner {
     selection_polish_preview: Mutex<Option<selection_polish::PendingSelectionPolishPreview>>,
     /// 「本次会话真的要翻译」。每次 begin_session 重置为 false；hotkey 监听器在
     /// Listening / Starting 阶段看到 Shift down 边沿（或安卓浮层请求）时，经
-    /// `mark_translation_active` 判定翻译确实会生效（设了目标语言、且不等于唯一工作语言）
+    /// `arm_translation_if_effective` 判定翻译确实会生效（设了目标语言、且不等于唯一工作语言）
     /// 后才 set true。
     ///
     /// 判定收在写入侧：读取侧之一是音频回调线程上的 emit_capsule，不能碰偏好锁。
@@ -1729,7 +1729,7 @@ impl Coordinator {
         begin_session(&self.inner).await?;
         // 与桌面 Shift 走同一个 gate：目标语言没设 / 与唯一工作语言相同时不置位，
         // 避免安卓浮层也出现「提示在翻译、实际没翻」。
-        let translation_armed = mark_translation_active(&self.inner);
+        let translation_armed = arm_translation_if_effective(&self.inner);
         log::info!("[coord] android overlay dictation started (translation={translation_armed})");
         Ok(())
     }
@@ -1744,7 +1744,7 @@ impl Coordinator {
 
     pub async fn stop_dictation_with_translation(&self, translation: bool) -> Result<(), String> {
         if translation {
-            mark_translation_active(&self.inner);
+            arm_translation_if_effective(&self.inner);
         }
         self.stop_dictation().await
     }

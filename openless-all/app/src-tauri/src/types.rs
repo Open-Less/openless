@@ -461,7 +461,7 @@ impl Default for StylePack {
     }
 }
 
-/// 本次会话是否真的会走翻译管线。**唯一判定入口**——写入侧（mark_translation_active）
+/// 本次会话是否真的会走翻译管线。**唯一判定入口**——写入侧（arm_translation_if_effective）
 /// 与 end_session 的 polish 分派都经它判定，否则两边会漂移（此前胶囊只看
 /// `modifier_seen`，用户没设目标语言按下 Shift 也会看到「正在翻译」，而后端根本没翻）。
 /// 胶囊本身只读经它置位的原子标志，不在音频回调线程触碰偏好锁。
@@ -485,7 +485,7 @@ pub fn translation_effective(
     if target.is_empty() {
         return false;
     }
-    !matches!(working_languages, [only] if only.trim() == target)
+    !(working_languages.len() == 1 && working_languages[0].trim() == target)
 }
 
 pub const BUILTIN_STYLE_PACK_RAW_ID: &str = "builtin.raw";
