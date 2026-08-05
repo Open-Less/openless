@@ -49,13 +49,13 @@ pub fn request_android_accessibility_permission() -> AndroidAccessibilityPermiss
 }
 
 pub fn paste_via_accessibility() -> bool {
-    paste_via_accessibility_with_result() == PASTE_RESULT_SUCCESS
+    paste_via_accessibility_with_result("") == PASTE_RESULT_SUCCESS
 }
 
-pub fn paste_via_accessibility_with_result() -> String {
+pub fn paste_via_accessibility_with_result(text: &str) -> String {
     #[cfg(target_os = "android")]
     {
-        return android_impl::paste_via_accessibility_with_result();
+        return android_impl::paste_via_accessibility_with_result(text);
     }
 
     #[cfg(not(target_os = "android"))]
@@ -237,9 +237,9 @@ mod android_impl {
         }
     }
 
-    fn invoke_paste_once() -> String {
+    fn invoke_paste_once(text: &str) -> String {
         match crate::android::jni::android::with_android_env(|env, context| {
-            crate::android::jni::android::accessibility_paste_result(env, context)
+            crate::android::jni::android::accessibility_paste_result(env, context, text)
         }) {
             Ok(result) => result,
             Err(error) => {
@@ -249,15 +249,15 @@ mod android_impl {
         }
     }
 
-    pub fn paste_via_accessibility_with_result() -> String {
-        let first = invoke_paste_once();
+    pub fn paste_via_accessibility_with_result(text: &str) -> String {
+        let first = invoke_paste_once(text);
         if first == PASTE_RESULT_SUCCESS {
             return first;
         }
         if super::should_retry_paste_after_failure(&first) {
             log::info!("[android-a11y] paste retry after {first}");
             thread::sleep(Duration::from_millis(200));
-            let second = invoke_paste_once();
+            let second = invoke_paste_once(text);
             log::info!("[android-a11y] paste retry result={second}");
             return second;
         }
@@ -289,7 +289,7 @@ mod tests {
     #[test]
     fn paste_result_constant_off_android() {
         assert_eq!(
-            paste_via_accessibility_with_result(),
+            paste_via_accessibility_with_result(""),
             PASTE_RESULT_SERVICE_NOT_CONNECTED
         );
     }

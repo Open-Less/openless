@@ -47,7 +47,7 @@ assert.match(
 );
 assert.match(
   tieredFallbackBody,
-  /paste_via_accessibility_with_result\(\)[\s\S]*paste_via_shizuku_with_result\(\)/s,
+  /paste_via_accessibility_with_result\(text\)[\s\S]*paste_via_shizuku_with_result\(\)/s,
   'tier1 accessibility must be attempted before tier2 shizuku',
 );
 assert.match(
@@ -57,7 +57,7 @@ assert.match(
 );
 assert.match(
   tieredFallbackBody,
-  /paste_via_accessibility_with_result\(\)[\s\S]*paste_via_shizuku_with_result\(\)[\s\S]*clipboard_fallback\(/s,
+  /paste_via_accessibility_with_result\(text\)[\s\S]*paste_via_shizuku_with_result\(\)[\s\S]*clipboard_fallback\(/s,
   'clipboard fallback must run only after accessibility and shizuku attempts',
 );
 assert.match(

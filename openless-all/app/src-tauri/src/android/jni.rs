@@ -697,20 +697,24 @@ pub mod android {
         env: &mut JNIEnv<'local>,
         context: &JObject<'local>,
     ) -> Result<bool, String> {
-        Ok(accessibility_paste_result(env, context)? == "SUCCESS")
+        Ok(accessibility_paste_result(env, context, "")? == "SUCCESS")
     }
 
     pub fn accessibility_paste_result<'local>(
         env: &mut JNIEnv<'local>,
         context: &JObject<'local>,
+        text: &str,
     ) -> Result<String, String> {
+        let text_obj = env
+            .new_string(text)
+            .map_err(|error| format!("create paste text jstring: {error}"))?;
         call_static_string_with_context_class(
             env,
             context,
             "com.openless.app.OpenLessAccessibilityService",
             "pasteToFocusedFieldResult",
-            "()Ljava/lang/String;",
-            &[],
+            "(Ljava/lang/String;)Ljava/lang/String;",
+            &[JValue::Object(&text_obj)],
         )
     }
 

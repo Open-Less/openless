@@ -121,11 +121,11 @@ class OpenLessAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun performPasteToFocusedFieldInternal(): AccessibilityPasteResult {
+    private fun performPasteToFocusedFieldInternal(pasteText: String? = null): AccessibilityPasteResult {
         val target = findEditableTarget()
         if (target == null) {
             // #region agent log
-            Log.i(TAG, "[DBG-53a00d][H1] performPaste NO_FOCUSED_EDITOR")
+            Log.i(TAG, "[DBG-21a66f][H2] performPaste NO_FOCUSED_EDITOR")
             // #endregion
             return AccessibilityPasteResult.NO_FOCUSED_EDITOR
         }
@@ -133,11 +133,11 @@ class OpenLessAccessibilityService : AccessibilityService() {
             val pkg = target.packageName?.toString()
             val className = target.className?.toString()
             target.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
-            val ok = pasteWithRetryOrSetText(target)
+            val ok = pasteWithRetryOrSetText(target, pasteText)
             // #region agent log
             Log.i(
                 TAG,
-                "[DBG-53a00d][H2] performPaste result=${if (ok) "SUCCESS" else "PASTE_REJECTED"} pkg=$pkg class=$className editable=${target.isEditable}",
+                "[DBG-21a66f][H3] performPaste result=${if (ok) "SUCCESS" else "PASTE_REJECTED"} pkg=$pkg class=$className editable=${target.isEditable} textSource=${if (pasteText.isNullOrEmpty()) "clipboard" else "ipc"}",
             )
             // #endregion
             if (ok) {
@@ -319,14 +319,20 @@ class OpenLessAccessibilityService : AccessibilityService() {
         lastEditableFocus = AccessibilityNodeInfo.obtain(target)
     }
 
-    private fun pasteWithRetryOrSetText(target: AccessibilityNodeInfo): Boolean {
-        val clipboardText = clipboardText().takeIf { it.isNotEmpty() } ?: return false
+    private fun pasteWithRetryOrSetText(target: AccessibilityNodeInfo, pasteText: String? = null): Boolean {
+        val effectiveText = pasteText?.takeIf { it.isNotEmpty() } ?: clipboardText()
+        if (effectiveText.isEmpty()) {
+            // #region agent log
+            Log.w(TAG, "[DBG-21a66f][H1] paste aborted: no text from IPC or clipboard")
+            // #endregion
+            return false
+        }
         val beforeText = nodeText(target)
         sleepQuietly(PASTE_INITIAL_DELAY_MS)
         repeat(PASTE_RETRY_COUNT) { attempt ->
             if (target.performAction(AccessibilityNodeInfo.ACTION_PASTE)) {
                 sleepQuietly(PASTE_VERIFY_DELAY_MS)
-                if (target.refresh() && pasteAppearsApplied(beforeText, nodeText(target), clipboardText)) {
+                if (target.refresh() && pasteAppearsApplied(beforeText, nodeText(target), effectiveText)) {
                     Log.i(
                         TAG,
                         "paste=true verified attempt=${attempt + 1} package=${target.packageName}",
@@ -340,12 +346,12 @@ class OpenLessAccessibilityService : AccessibilityService() {
             }
             sleepQuietly(PASTE_RETRY_DELAY_MS)
         }
-        val setText = appendClipboardTextWithSetText(target)
+        val setText = appendClipboardTextWithSetText(target, effectiveText)
         sleepQuietly(PASTE_VERIFY_DELAY_MS)
         val verified =
             setText &&
                 target.refresh() &&
-                pasteAppearsApplied(beforeText, nodeText(target), clipboardText)
+                pasteAppearsApplied(beforeText, nodeText(target), effectiveText)
         Log.i(
             TAG,
             "paste=false setText=$setText verified=$verified package=${target.packageName}",
@@ -365,14 +371,13 @@ class OpenLessAccessibilityService : AccessibilityService() {
         return OpenLessPasteVerification.pasteAppearsApplied(beforeText, afterText, clipboardText)
     }
 
-    private fun appendClipboardTextWithSetText(target: AccessibilityNodeInfo): Boolean {
+    private fun appendClipboardTextWithSetText(target: AccessibilityNodeInfo, pasteText: String): Boolean {
         if (target.isPassword) return false
-        val clipboardText = clipboardText().takeIf { it.isNotEmpty() } ?: return false
         val existingText = target.text?.toString().orEmpty()
         val args = Bundle().apply {
             putCharSequence(
                 AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
-                existingText + clipboardText,
+                existingText + pasteText,
             )
         }
         return target.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
@@ -449,13 +454,13 @@ class OpenLessAccessibilityService : AccessibilityService() {
         @JvmStatic
         @Keep
         fun pasteToFocusedField(): Boolean {
-            return pasteToFocusedFieldWithResult() == AccessibilityPasteResult.SUCCESS
+            return pasteToFocusedFieldWithResult("") == AccessibilityPasteResult.SUCCESS
         }
 
         @JvmStatic
         @Keep
-        fun pasteToFocusedFieldResult(): String {
-            return pasteToFocusedFieldWithResult().reason
+        fun pasteToFocusedFieldResult(text: String): String {
+            return pasteToFocusedFieldWithResult(text).reason
         }
 
         @JvmStatic
@@ -506,8 +511,8 @@ class OpenLessAccessibilityService : AccessibilityService() {
             return pingAccessibilityProcess(context)
         }
 
-        internal fun performPasteFromCommand(): AccessibilityPasteResult {
-            return instance?.performPasteToFocusedFieldInternal()
+        internal fun performPasteFromCommand(pasteText: String? = null): AccessibilityPasteResult {
+            return instance?.performPasteToFocusedFieldInternal(pasteText)
                 ?: AccessibilityPasteResult.SERVICE_NOT_CONNECTED
         }
 
@@ -515,14 +520,19 @@ class OpenLessAccessibilityService : AccessibilityService() {
             return instance?.captureSelectedTextFromFocusedNode()
         }
 
-        private fun pasteToFocusedFieldWithResult(): AccessibilityPasteResult {
-            instance?.let { return it.performPasteToFocusedFieldInternal() }
-            return sendAccessibilityCommand(OpenLessAccessibilityCommandReceiver.ACTION_PASTE)
+        private fun pasteToFocusedFieldWithResult(pasteText: String): AccessibilityPasteResult {
+            instance?.let { return it.performPasteToFocusedFieldInternal(pasteText) }
+            return sendAccessibilityCommand(
+                OpenLessAccessibilityCommandReceiver.ACTION_PASTE,
+                PASTE_COMMAND_TIMEOUT_MS,
+                pasteText,
+            )
         }
 
         private fun sendAccessibilityCommand(
             action: String,
             timeoutMs: Long = PASTE_COMMAND_TIMEOUT_MS,
+            pasteText: String? = null,
         ): AccessibilityPasteResult {
             val context = OpenLessAppContext.context ?: return AccessibilityPasteResult.SERVICE_NOT_CONNECTED
             val latch = CountDownLatch(1)
@@ -538,6 +548,9 @@ class OpenLessAccessibilityService : AccessibilityService() {
                 val intent = Intent(context, OpenLessAccessibilityCommandReceiver::class.java).apply {
                     this.action = action
                     putExtra(OpenLessAccessibilityCommandReceiver.EXTRA_RESULT_RECEIVER, receiver)
+                    if (!pasteText.isNullOrEmpty()) {
+                        putExtra(OpenLessAccessibilityCommandReceiver.EXTRA_PASTE_TEXT, pasteText)
+                    }
                 }
                 context.sendBroadcast(intent)
                 broadcastSent = true

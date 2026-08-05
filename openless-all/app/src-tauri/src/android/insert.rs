@@ -41,7 +41,7 @@ fn insert_with_tiered_fallback(inserter: &TextInserter, text: &str) -> InsertSta
     }
 
     let accessibility_result = if is_accessibility_enabled() {
-        Some(paste_via_accessibility_with_result())
+        Some(paste_via_accessibility_with_result(text))
     } else {
         log::info!("[android-insert] tier1 skipped: accessibility service not enabled");
         None

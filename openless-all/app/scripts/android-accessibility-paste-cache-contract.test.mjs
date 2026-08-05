@@ -23,7 +23,7 @@ function kotlinFunctionBody(functionSignature) {
   assert.fail(`missing closing brace: ${functionSignature}`);
 }
 
-const pasteBody = kotlinFunctionBody('private fun performPasteToFocusedFieldInternal()');
+const pasteBody = kotlinFunctionBody('private fun performPasteToFocusedFieldInternal(pasteText: String? = null)');
 assert.match(
   pasteBody,
   /finally\s*\{\s*target\.recycle\(\)\s*\}/s,
@@ -70,5 +70,14 @@ assert.match(
 
 assert.match(source, /pasteAppearsApplied/, 'paste must verify editor text changed');
 assert.match(source, /paste=unverified/, 'paste must log unverified ACTION_PASTE results');
+assert.match(
+  readFileSync(
+    fileURLToPath(new URL('../android/kotlin/OpenLessAccessibilityCommandReceiver.kt', import.meta.url)),
+    'utf8',
+  ),
+  /EXTRA_PASTE_TEXT/,
+  'paste IPC must carry text to the accessibility process',
+);
+assert.match(source, /EXTRA_PASTE_TEXT/, 'paste sender must include IPC text extra');
 
 console.log('Android accessibility paste cache contract checks passed');

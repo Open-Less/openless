@@ -13,7 +13,8 @@ class OpenLessAccessibilityCommandReceiver : BroadcastReceiver() {
         val receiver = resultReceiver(intent) ?: return
         when (action) {
             ACTION_PASTE -> {
-                val result = OpenLessAccessibilityService.performPasteFromCommand()
+                val pasteText = intent.getStringExtra(EXTRA_PASTE_TEXT)
+                val result = OpenLessAccessibilityService.performPasteFromCommand(pasteText)
                 sendResult(receiver, result)
                 if (result != AccessibilityPasteResult.SUCCESS) {
                     Log.w(TAG, "paste command failed reason=${result.reason}")
@@ -61,6 +62,7 @@ class OpenLessAccessibilityCommandReceiver : BroadcastReceiver() {
         const val ACTION_CAPTURE_SELECTED_TEXT = "com.openless.app.accessibility.CAPTURE_SELECTED_TEXT"
         const val EXTRA_RESULT_RECEIVER = "result_receiver"
         const val EXTRA_RESULT_REASON = "result_reason"
+        const val EXTRA_PASTE_TEXT = "paste_text"
         const val EXTRA_SELECTED_TEXT = "selected_text"
         /** @deprecated Use [AccessibilityPasteResult] codes */
         const val EXTRA_PASTE_RESULT = "paste_result"
