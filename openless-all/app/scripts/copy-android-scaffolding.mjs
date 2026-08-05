@@ -34,6 +34,7 @@ const KOTLIN_FILES = [
   'OpenLessOverlayBridge.kt',
   'OpenLessAccessibilityService.kt',
   'OpenLessAccessibilityResult.kt',
+  'OpenLessAccessibilityTarget.kt',
   'OpenLessPasteVerification.kt',
   'OpenLessAccessibilityComponentIds.kt',
   'OpenLessShizukuBridge.kt',
@@ -50,6 +51,7 @@ const KOTLIN_TEST_FILES = [
   'OpenLessCredentialCipherTest.kt',
   'OpenLessShizukuBridgeTest.kt',
   'OpenLessAccessibilityResultTest.kt',
+  'OpenLessAccessibilityTargetTest.kt',
   'OpenLessPasteVerificationTest.kt',
   'OpenLessAccessibilityComponentIdsTest.kt',
 ];

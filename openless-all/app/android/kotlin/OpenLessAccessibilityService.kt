@@ -25,6 +25,7 @@ import java.util.concurrent.atomic.AtomicReference
 class OpenLessAccessibilityService : AccessibilityService() {
     private val mainHandler = Handler(Looper.getMainLooper())
     private val keyboardRefreshRunnable = Runnable { updateKeyboardOverlayState() }
+    private var lastEditableFocus: AccessibilityNodeInfo? = null
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -36,8 +37,16 @@ class OpenLessAccessibilityService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
         when (event.eventType) {
+            AccessibilityEvent.TYPE_VIEW_CLICKED -> rememberFocusedEditable(event)
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
             AccessibilityEvent.TYPE_WINDOWS_CHANGED -> {
+                rememberFocusedEditable(event)
+                updateKeyboardOverlayState()
+                scheduleKeyboardOverlayRefresh()
+            }
+            AccessibilityEvent.TYPE_VIEW_FOCUSED,
+            AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED -> {
+                rememberFocusedEditable(event)
                 updateKeyboardOverlayState()
                 scheduleKeyboardOverlayRefresh()
             }
@@ -48,6 +57,7 @@ class OpenLessAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         mainHandler.removeCallbacks(keyboardRefreshRunnable)
+        invalidateEditableCache()
         if (instance === this) {
             instance = null
         }
@@ -112,24 +122,201 @@ class OpenLessAccessibilityService : AccessibilityService() {
     }
 
     private fun performPasteToFocusedFieldInternal(): AccessibilityPasteResult {
-        val root = rootInActiveWindow ?: return AccessibilityPasteResult.NO_FOCUSED_EDITOR
+        val target = findEditableTarget()
+        if (target == null) {
+            // #region agent log
+            Log.i(TAG, "[DBG-53a00d][H1] performPaste NO_FOCUSED_EDITOR")
+            // #endregion
+            return AccessibilityPasteResult.NO_FOCUSED_EDITOR
+        }
         return try {
-            val focused = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
-                ?: root.findFocus(AccessibilityNodeInfo.FOCUS_ACCESSIBILITY)
-                ?: return AccessibilityPasteResult.NO_FOCUSED_EDITOR
-            try {
-                focused.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
-                if (pasteWithRetryOrSetText(focused)) {
-                    AccessibilityPasteResult.SUCCESS
-                } else {
-                    AccessibilityPasteResult.PASTE_REJECTED
-                }
-            } finally {
+            val pkg = target.packageName?.toString()
+            val className = target.className?.toString()
+            target.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+            val ok = pasteWithRetryOrSetText(target)
+            // #region agent log
+            Log.i(
+                TAG,
+                "[DBG-53a00d][H2] performPaste result=${if (ok) "SUCCESS" else "PASTE_REJECTED"} pkg=$pkg class=$className editable=${target.isEditable}",
+            )
+            // #endregion
+            if (ok) {
+                AccessibilityPasteResult.SUCCESS
+            } else {
+                AccessibilityPasteResult.PASTE_REJECTED
+            }
+        } finally {
+            target.recycle()
+        }
+    }
+
+    private fun rememberFocusedEditable(event: AccessibilityEvent) {
+        val source = event.source ?: return
+        try {
+            if (OpenLessAccessibilityTarget.isPasteTarget(source)) {
+                cacheEditableTarget(source)
+                return
+            }
+            editableFocusedNode(source, AccessibilityNodeInfo.FOCUS_INPUT)?.let { focused ->
+                cacheEditableTarget(focused)
+                focused.recycle()
+                return
+            }
+            editableFocusedNode(source, AccessibilityNodeInfo.FOCUS_ACCESSIBILITY)?.let { focused ->
+                cacheEditableTarget(focused)
                 focused.recycle()
             }
         } finally {
-            root.recycle()
+            source.recycle()
         }
+    }
+
+    private fun invalidateEditableCache() {
+        lastEditableFocus?.recycle()
+        lastEditableFocus = null
+    }
+
+    private fun findEditableTarget(): AccessibilityNodeInfo? {
+        lastEditableFocus?.let { cached ->
+            if (cached.refresh() && OpenLessAccessibilityTarget.isPasteTarget(cached)) {
+                // #region agent log
+                Log.i(
+                    TAG,
+                    "[DBG-53a00d][H4] findEditableTarget via cache pkg=${cached.packageName} class=${cached.className}",
+                )
+                // #endregion
+                return AccessibilityNodeInfo.obtain(cached)
+            }
+        }
+
+        val activeRoot = rootInActiveWindow
+        val activePackage = activeRoot?.packageName?.toString()
+        var pasteTargetsInActive = 0
+        if (activeRoot != null) {
+            try {
+                pasteTargetsInActive = countPasteTargetsInTree(activeRoot, 0)
+                findEditableInRoot(activeRoot)?.let { found ->
+                    // #region agent log
+                    Log.i(
+                        TAG,
+                        "[DBG-53a00d][H3] findEditableTarget via activeRoot pkg=${found.packageName} class=${found.className}",
+                    )
+                    // #endregion
+                    return found
+                }
+            } finally {
+                activeRoot.recycle()
+            }
+        }
+
+        for (window in windows) {
+            if (window.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD) {
+                continue
+            }
+            val root = window.root ?: continue
+            try {
+                findEditableInRoot(root)?.let { found ->
+                    // #region agent log
+                    Log.i(
+                        TAG,
+                        "[DBG-53a00d][H3] findEditableTarget via windowScan pkg=${found.packageName} class=${found.className}",
+                    )
+                    // #endregion
+                    return found
+                }
+            } finally {
+                root.recycle()
+            }
+        }
+
+        Log.w(
+            TAG,
+            "findEditableTarget failed activeRoot=$activePackage windowCount=${windows.size} hadCache=${lastEditableFocus != null} pasteTargetsInActive=$pasteTargetsInActive",
+        )
+        // #region agent log
+        Log.i(
+            TAG,
+            "[DBG-53a00d][H1] findEditableTarget failed activeRoot=$activePackage pasteTargetsInActive=$pasteTargetsInActive",
+        )
+        // #endregion
+        invalidateEditableCache()
+        return null
+    }
+
+    private fun findEditableInRoot(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        editableFocusedNode(root, AccessibilityNodeInfo.FOCUS_INPUT)?.let { fresh ->
+            cacheEditableTarget(fresh)
+            return fresh
+        }
+        editableFocusedNode(root, AccessibilityNodeInfo.FOCUS_ACCESSIBILITY)?.let { fresh ->
+            cacheEditableTarget(fresh)
+            return fresh
+        }
+
+        lastEditableFocus?.let { cached ->
+            if (OpenLessAccessibilityTarget.isValidCachedEditable(cached, root)) {
+                return AccessibilityNodeInfo.obtain(cached)
+            }
+        }
+
+        return findEditableInTree(root, 0)?.also { found ->
+            cacheEditableTarget(found)
+        }
+    }
+
+    private fun editableFocusedNode(root: AccessibilityNodeInfo, focusType: Int): AccessibilityNodeInfo? {
+        val focused = root.findFocus(focusType) ?: return null
+        return try {
+            if (OpenLessAccessibilityTarget.isPasteTarget(focused)) {
+                AccessibilityNodeInfo.obtain(focused)
+            } else {
+                null
+            }
+        } finally {
+            focused.recycle()
+        }
+    }
+
+    private fun findEditableInTree(node: AccessibilityNodeInfo, depth: Int): AccessibilityNodeInfo? {
+        if (depth > MAX_EDITABLE_SEARCH_DEPTH) return null
+        var firstCandidate: AccessibilityNodeInfo? = null
+        if (OpenLessAccessibilityTarget.isPasteTarget(node)) {
+            if (node.isFocused) {
+                return AccessibilityNodeInfo.obtain(node)
+            }
+            firstCandidate = AccessibilityNodeInfo.obtain(node)
+        }
+        for (index in 0 until node.childCount) {
+            val child = node.getChild(index) ?: continue
+            try {
+                findEditableInTree(child, depth + 1)?.let { found ->
+                    firstCandidate?.recycle()
+                    return found
+                }
+            } finally {
+                child.recycle()
+            }
+        }
+        return firstCandidate
+    }
+
+    private fun countPasteTargetsInTree(node: AccessibilityNodeInfo, depth: Int): Int {
+        if (depth > MAX_EDITABLE_SEARCH_DEPTH) return 0
+        var count = if (OpenLessAccessibilityTarget.isPasteTarget(node)) 1 else 0
+        for (index in 0 until node.childCount) {
+            val child = node.getChild(index) ?: continue
+            try {
+                count += countPasteTargetsInTree(child, depth + 1)
+            } finally {
+                child.recycle()
+            }
+        }
+        return count
+    }
+
+    private fun cacheEditableTarget(target: AccessibilityNodeInfo) {
+        lastEditableFocus?.recycle()
+        lastEditableFocus = AccessibilityNodeInfo.obtain(target)
     }
 
     private fun pasteWithRetryOrSetText(target: AccessibilityNodeInfo): Boolean {
@@ -426,6 +613,7 @@ class OpenLessAccessibilityService : AccessibilityService() {
         private const val PASTE_COMMAND_TIMEOUT_MS = 800L
         private const val PING_COMMAND_TIMEOUT_MS = 500L
         private const val SELECTION_COMMAND_TIMEOUT_MS = 500L
+        private const val MAX_EDITABLE_SEARCH_DEPTH = 8
         private const val TAG = "OpenLessAccessibility"
     }
 }

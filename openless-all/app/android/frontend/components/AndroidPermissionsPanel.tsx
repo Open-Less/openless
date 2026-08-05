@@ -85,32 +85,63 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
   const sizePendingRef = useRef(false);
 
   const refreshAndroid = async () => {
-    const [overlay, accessibility, shizuku, settings] = await Promise.all([
-      getAndroidOverlayStatus(),
-      getAndroidAccessibilityStatus(),
-      getAndroidShizukuStatus(),
-      getSettings(),
-    ]);
-    let migratedSettings = settings;
-    if (settings.androidOverlayTrigger === 'keyboard') {
-      const migratedPrefs = await persistAndroidOverlayPrefs({
-        androidOverlayTrigger: normalizeAndroidOverlayTrigger(settings.androidOverlayTrigger),
-      });
-      migratedSettings = { ...settings, ...migratedPrefs };
+    // #region agent log
+    const refreshStartedAt = Date.now();
+    // #endregion
+    const [overlayResult, accessibilityResult, shizukuResult, settingsResult] =
+      await Promise.allSettled([
+        getAndroidOverlayStatus(),
+        getAndroidAccessibilityStatus(),
+        getAndroidShizukuStatus(),
+        getSettings(),
+      ]);
+    // #region agent log
+    const refreshSummary = {
+      overlay: overlayResult.status,
+      accessibility: accessibilityResult.status,
+      shizuku: shizukuResult.status,
+      settings: settingsResult.status,
+      durationMs: Date.now() - refreshStartedAt,
+      accessibilityReason:
+        accessibilityResult.status === 'rejected'
+          ? String(accessibilityResult.reason)
+          : undefined,
+      shizukuReason:
+        shizukuResult.status === 'rejected' ? String(shizukuResult.reason) : undefined,
+    };
+    console.error('[DBG-53a00d][H1-H4] refreshAndroid summary', refreshSummary);
+    // #endregion
+    if (overlayResult.status === 'fulfilled') {
+      setAndroidOverlay(overlayResult.value);
     }
-    setAndroidOverlay(overlay);
-    setAndroidAccessibility(accessibility);
-    setAndroidShizuku((prev) => {
-      const operational = shizuku.accessibility.operational;
-      if (operational && !prev?.accessibility.operational) {
-        setShizukuRecoveryMessageKey(null);
+    if (accessibilityResult.status === 'fulfilled') {
+      setAndroidAccessibility(accessibilityResult.value);
+    }
+    if (shizukuResult.status === 'fulfilled') {
+      const shizuku = shizukuResult.value;
+      setAndroidShizuku((prev) => {
+        const operational = shizuku.accessibility.operational;
+        if (operational && !prev?.accessibility.operational) {
+          setShizukuRecoveryMessageKey(null);
+        }
+        if (shizuku.lastPermissionMessageKey) {
+          setShizukuActionMessageKey(null);
+        }
+        return shizuku;
+      });
+    }
+    if (settingsResult.status === 'fulfilled') {
+      let migratedSettings = settingsResult.value;
+      if (migratedSettings.androidOverlayTrigger === 'keyboard') {
+        const migratedPrefs = await persistAndroidOverlayPrefs({
+          androidOverlayTrigger: normalizeAndroidOverlayTrigger(
+            migratedSettings.androidOverlayTrigger,
+          ),
+        });
+        migratedSettings = { ...migratedSettings, ...migratedPrefs };
       }
-      if (shizuku.lastPermissionMessageKey) {
-        setShizukuActionMessageKey(null);
-      }
-      return shizuku;
-    });
-    setAndroidPrefs(pickAndroidPrefs(migratedSettings));
+      setAndroidPrefs(pickAndroidPrefs(migratedSettings));
+    }
   };
 
   const handleRecoverAccessibility = async () => {
