@@ -7,6 +7,7 @@ import { formatComboLabel } from '../lib/hotkey';
 import { getActivityStats, getCredentials, listHistory } from '../lib/ipc';
 import { Heatmap } from '../components/Heatmap';
 import { useMobileLayout } from '../lib/useMobileLayout';
+import { countCodePoints } from '../lib/unicode';
 import {
   ACTIVITY_METRICS,
   ACTIVITY_PERIODS,
@@ -180,7 +181,7 @@ export function Overview({ onOpenHistory }: OverviewProps) {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const todays = history.filter(s => new Date(s.createdAt) >= today);
-    const charsToday = todays.reduce((acc, s) => acc + s.finalText.length, 0);
+    const charsToday = todays.reduce((acc, s) => acc + countCodePoints(s.finalText), 0);
     const segmentsToday = todays.length;
     const totalDurationMs = todays.reduce((acc, s) => acc + (s.durationMs ?? 0), 0);
     const avgLatencyMs = segmentsToday > 0 ? totalDurationMs / segmentsToday : 0;
@@ -687,4 +688,3 @@ function formatDuration(ms: number, t: ReturnType<typeof useTranslation>['t']): 
   if (sec < 60) return t('common.durationSeconds', { value: sec.toFixed(1) });
   return `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
 }
-

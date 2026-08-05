@@ -10,6 +10,7 @@ import { formatComboLabel } from '../lib/hotkey';
 import { clearHistory, deleteHistoryEntry, listHistory, readAudioRecording, retranscribeRecording, isTauri } from '../lib/ipc';
 import { useMobileLayout } from '../lib/useMobileLayout';
 import type { DictationSession, PolishMode } from '../lib/types';
+import { countCodePoints } from '../lib/unicode';
 import { useHotkeySettings } from '../state/HotkeySettingsContext';
 import { Btn, Card, PageHeader, Pill } from './_atoms';
 import { chipSelectedStyle } from './settings/shared';
@@ -475,7 +476,7 @@ export function History() {
                   {item.appName && <><b>{item.appName}</b>{' · '}</>}
                   {/* 按 Unicode 码点计（emoji / CJK 扩展 B 等增补平面字符不按 UTF-16 码元双算），
                       与后端 `polished.chars().count()` 及概览页「字数」口径一致。 */}
-                  {t('history.chars', { count: Array.from(item.finalText).length })}
+                  {t('history.chars', { count: countCodePoints(item.finalText) })}
                   {item.dictionaryEntryCount != null && item.dictionaryEntryCount > 0 && (
                     <>{' · '}{t('history.vocabHits', { count: item.dictionaryEntryCount })}</>
                   )}
