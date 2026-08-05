@@ -242,12 +242,23 @@ pub(crate) fn show_vocab_suggestion_card(inner: &Arc<Inner>) {
         if let Err(e) = window.set_ignore_cursor_events(false) {
             log::warn!("[vocab-card] set_ignore_cursor_events(false) failed: {e}");
         }
+        // 穿透状态也是有缓存的（`capsule_cursor_passthrough`，emit_capsule 靠它跳过
+        // 重复调用）。这里直接碰了窗口就必须同步那个缓存，否则它记着的值和窗口
+        // 真实状态分家，下次 emit_capsule 会以为「没变化」而跳过该调的那一次。
+        #[cfg(not(mobile))]
+        inner
+            .capsule_cursor_passthrough
+            .store(false, Ordering::SeqCst);
         if let Err(e) = window.set_size(tauri::LogicalSize::new(VOCAB_CARD_WIDTH, height)) {
             log::warn!("[vocab-card] resize failed: {e}");
         }
         if let Err(e) = position_vocab_card(&window, VOCAB_CARD_WIDTH, height) {
             log::warn!("[vocab-card] position failed: {e}");
         }
+        // 位置同理：`maybe_position_capsule_bottom_center` 的去重缓存只记「显示器 +
+        // 翻译态」，卡片这一挪它一无所知。不清掉的话，下一次录音时它会拿相同的
+        // 显示器快照判定「没变化」→ 跳过重新定位 → 胶囊留在卡片挪过去的右下角。
+        *inner.capsule_layout.lock() = None;
         let _ = app.emit_to("capsule", "vocab:suggested", &pending);
         show_capsule_window_for_recording(&app, &window, true);
         #[cfg(target_os = "macos")]
@@ -271,24 +282,42 @@ pub(crate) fn hide_vocab_suggestion_card(inner: &Arc<Inner>) {
         return;
     };
     let app_for_main = app.clone();
+    let inner_for_main = Arc::clone(inner);
     let _ = app.run_on_main_thread(move || {
         let app = app_for_main;
+        let inner = inner_for_main;
         let Some(window) = app.get_webview_window("capsule") else {
             return;
         };
         let _ = app.emit_to("capsule", "vocab:suggested", Vec::<crate::types::PendingCorrection>::new());
+        // 先隐藏再改几何：复原要同时动尺寸和位置，窗口还亮着时改就有概率被合成出
+        // 一帧「卡片被拉宽、还横着飞过半个屏幕」。
+        let _ = window.hide();
         // 穿透必须还回去，否则胶囊会一直挡着屏幕底部那一块。
         #[cfg(not(mobile))]
         if let Err(e) = window.set_ignore_cursor_events(true) {
             log::warn!("[vocab-card] restoring cursor passthrough failed: {e}");
         }
+        #[cfg(not(mobile))]
+        inner
+            .capsule_cursor_passthrough
+            .store(true, Ordering::SeqCst);
         // 尺寸也必须还回去 —— 卡片把窗口缩到过自己的大小，不复原的话下一次胶囊
-        // 就挤在一个 300×108 的窗口里，等于看不见。
+        // 就挤在一个 320×108 的窗口里，等于看不见。
         let bounds = crate::capsule_window_bounds(false);
         if let Err(e) = window.set_size(tauri::LogicalSize::new(bounds.width, bounds.height)) {
             log::warn!("[vocab-card] restoring capsule size failed: {e}");
         }
-        let _ = window.hide();
+        // 位置一样要还 —— 卡片把窗口挪到了右下角，胶囊的位置是底部居中。
+        // 只还尺寸不还位置，下一次录音胶囊就出现在右下角（真机上就是这个 bug）。
+        //
+        // 清缓存和这次重定位是两件事，都要做：清缓存保证「就算这次重定位失败，
+        // 下一次 emit_capsule 也一定会重算」，重定位保证「就算有哪条路径绕过了
+        // emit_capsule 直接 show，窗口也已经在对的地方」。
+        *inner.capsule_layout.lock() = None;
+        if let Err(e) = crate::position_capsule_bottom_center(&window, false) {
+            log::warn!("[vocab-card] restoring capsule position failed: {e}");
+        }
     });
 }
 
