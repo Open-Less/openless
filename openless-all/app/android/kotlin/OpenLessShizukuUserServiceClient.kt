@@ -27,15 +27,47 @@ internal object OpenLessShizukuUserServiceClient {
     private var recoveryInProgress = false
 
     fun <T> withService(context: Context, block: (IOpenLessShizukuUserService) -> T): T? {
+        return bindUserService(
+            context = context,
+            daemon = false,
+            processNameSuffix = USER_SERVICE_PROCESS_SUFFIX,
+            tag = "openless_shizuku",
+            block = block,
+        )
+    }
+
+    /**
+     * Paste injection uses a daemon UserService so MTK/Xiaomi ROMs do not spawn
+     * `com.openless.app:shizuku`, where LoadedApk.makeApplicationInner NPEs.
+     */
+    fun <T> withPasteService(context: Context, block: (IOpenLessShizukuUserService) -> T): T? {
+        return bindUserService(
+            context = context,
+            daemon = true,
+            processNameSuffix = null,
+            tag = "openless_paste",
+            block = block,
+        )
+    }
+
+    private fun <T> bindUserService(
+        context: Context,
+        daemon: Boolean,
+        processNameSuffix: String?,
+        tag: String,
+        block: (IOpenLessShizukuUserService) -> T,
+    ): T? {
         if (!Shizuku.pingBinder()) {
             return null
         }
         val component = ComponentName(context.packageName, OpenLessShizukuUserService::class.java.name)
-        val args = Shizuku.UserServiceArgs(component)
-            .daemon(false)
-            .processNameSuffix(USER_SERVICE_PROCESS_SUFFIX)
+        var args = Shizuku.UserServiceArgs(component)
+            .daemon(daemon)
             .version(SERVICE_VERSION)
-            .tag("openless_shizuku")
+            .tag(tag)
+        if (!daemon && processNameSuffix != null) {
+            args = args.processNameSuffix(processNameSuffix)
+        }
 
         val latch = CountDownLatch(1)
         val binderRef = AtomicReference<IOpenLessShizukuUserService?>(null)
@@ -53,19 +85,19 @@ internal object OpenLessShizukuUserServiceClient {
         return try {
             Shizuku.bindUserService(args, connection)
             if (!latch.await(BIND_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
-                Log.w(TAG, "UserService bind timed out")
+                Log.w(TAG, "UserService bind timed out tag=$tag daemon=$daemon")
                 return null
             }
             val service = binderRef.get() ?: return null
             block(service)
         } catch (error: Throwable) {
-            Log.w(TAG, "UserService bind failed", error)
+            Log.w(TAG, "UserService bind failed tag=$tag daemon=$daemon", error)
             null
         } finally {
             try {
                 Shizuku.unbindUserService(args, connection, true)
             } catch (error: Throwable) {
-                Log.w(TAG, "UserService unbind failed", error)
+                Log.w(TAG, "UserService unbind failed tag=$tag", error)
             }
         }
     }

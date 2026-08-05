@@ -78,7 +78,17 @@ assert.match(
 assert.match(
   clientSource,
   /processNameSuffix\(/,
-  'shizuku user service bind must set processNameSuffix',
+  'recovery service bind must set processNameSuffix',
+);
+assert.match(
+  clientSource,
+  /withPasteService/,
+  'shizuku client must expose daemon paste service bind',
+);
+assert.match(
+  clientSource,
+  /\.daemon\(true\)/,
+  'paste service bind must use daemon mode',
 );
 
 assert.match(
@@ -88,8 +98,8 @@ assert.match(
 );
 assert.match(
   bridgeSource,
-  /Shizuku\.newProcess\([\s\S]*keyevent[\s\S]*KEYCODE_PASTE/s,
-  'paste injection must prefer Shizuku.newProcess before UserService bind',
+  /withPasteService/,
+  'injectPasteKey must use daemon paste service bind',
 );
 
 console.log('Android insert tier fallback contract checks passed');

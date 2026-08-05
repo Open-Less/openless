@@ -18,7 +18,6 @@ import rikka.sui.Sui
 @Keep
 object OpenLessShizukuBridge {
     private const val TAG = "OpenLessShizuku"
-    private const val KEYCODE_PASTE = "279"
     private const val SHIZUKU_PACKAGE = "moe.shizuku.privileged.api"
     private const val RECOVERY_BIND_TIMEOUT_MS = 5_000L
     private const val RECOVERY_BIND_POLL_MS = 250L
@@ -141,34 +140,9 @@ object OpenLessShizukuBridge {
         if (detectState(context) != ShizukuState.Authorized) {
             return false
         }
-        if (injectPasteKeyViaBinder()) {
-            return true
-        }
-        return OpenLessShizukuUserServiceClient.withService(context) { service ->
+        return OpenLessShizukuUserServiceClient.withPasteService(context) { service ->
             service.injectPasteKey()
         } == true
-    }
-
-    /**
-     * Prefer [Shizuku.newProcess] so paste injection works on MTK/Xiaomi ROMs where
-     * UserService process startup NPEs in LoadedApk.makeApplicationInner.
-     */
-    internal fun injectPasteKeyViaBinder(): Boolean {
-        return try {
-            val process = Shizuku.newProcess(
-                arrayOf("input", "keyevent", KEYCODE_PASTE),
-                null,
-                null,
-            )
-            val exitCode = process.waitFor()
-            // #region agent log
-            Log.i(TAG, "[DBG-21a66f][H4] injectPasteKeyViaBinder exitCode=$exitCode")
-            // #endregion
-            exitCode == 0
-        } catch (error: Throwable) {
-            Log.w(TAG, "inject paste via Shizuku.newProcess failed", error)
-            false
-        }
     }
 
     @JvmStatic
