@@ -27,7 +27,7 @@ use core_foundation::runloop::{
     kCFRunLoopDefaultMode, CFRunLoop, CFRunLoopRunResult, CFRunLoopSource, CFRunLoopSourceRef,
 };
 
-use super::diff::{edit_is_within_typed_text, minimal_edit};
+use super::diff::{edit_is_within_typed_text, is_vocab_worthy, minimal_edit};
 use super::{
     evaluate_gate, plan_window, utf16_offset_to_char_offset, window_around_cursor, EditPair,
     GateInputs, ReadOutcome, AX_MESSAGING_TIMEOUT_SECS, EDIT_WATCH_MAX_LIFETIME,
@@ -634,17 +634,35 @@ unsafe fn settle_pending_edit(ctx: &WatchContext, force: bool) {
         );
         return;
     }
+    // 用**下游同一个判据**决定这一处算不算「有结论」。
+    //
+    // 这里曾经是无条件上报 + 推进基线，而真正的过滤在下游 `handle_user_edit` 里
+    // （`is_vocab_worthy` 判 target 为空就丢掉）—— 观察器看不到那个决定，于是把一次
+    // 注定被丢弃的改动当成了「已结论」，顺手吃掉了基线。
+    //
+    // 代价正是最自然的那个纠错动作学不到：**删掉错词 → 停顿 → 敲正确的词**。删词那
+    // 一下先 settle（光标移开安静 300ms，或 5 秒兜底），纯删除被上报、基线推进到「已
+    // 删词」；等用户把新词敲完，相对新基线只剩一条「空 → 新词」的纯插入，而
+    // `minimal_edit` 对纯插入一律返回 None。于是只要中间停顿一下，这次纠正就永远
+    // 学不进去。
+    //
+    // 判据统一之后：注定学不到的改动既不上报（少一条噪声日志）也不动基线，用户把新
+    // 词敲完时，相对原基线算出来的正是完整的「错词 → 正确词」。
+    if !is_vocab_worthy(&edit) {
+        log::debug!(
+            "[cursor-context] settled edit {:?}→{:?} can't become a vocab entry; baseline kept",
+            edit.source,
+            edit.target
+        );
+        return;
+    }
     let key = (edit.source.clone(), edit.target.clone());
     if !ctx.reported.borrow_mut().insert(key) {
         return;
     }
     ctx.reports.set(ctx.reports.get() + 1);
     (ctx.on_edit)(edit);
-    // 只有真的上报了才推进基线 —— 这一处已经有结论，不该再算进下一处的差异。
-    //
-    // 被过滤掉的**不推进**：那还没有结论。用户可能删掉一个词、跑去别处复制点东西、
-    // 再回来把新词打完；中途那次「纯删除」被拒绝，保留原基线才能在他打完之后算出
-    // 完整的那一处改动。
+    // 上报过的才推进基线 —— 这一处已经有结论，不该再算进下一处的差异。
     *ctx.baseline.borrow_mut() = current;
 }
 
