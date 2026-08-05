@@ -473,7 +473,9 @@ export function History() {
                 <span>{t('history.stepInsert')}</span>
                 <span style={{ color: 'var(--ol-ink-2)' }}>
                   {item.appName && <><b>{item.appName}</b>{' · '}</>}
-                  {t('history.chars', { count: item.finalText.length })}
+                  {/* 按 Unicode 码点计（emoji / CJK 扩展 B 等增补平面字符不按 UTF-16 码元双算），
+                      与后端 `polished.chars().count()` 及概览页「字数」口径一致。 */}
+                  {t('history.chars', { count: Array.from(item.finalText).length })}
                   {item.dictionaryEntryCount != null && item.dictionaryEntryCount > 0 && (
                     <>{' · '}{t('history.vocabHits', { count: item.dictionaryEntryCount })}</>
                   )}
