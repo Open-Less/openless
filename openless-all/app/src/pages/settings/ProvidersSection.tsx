@@ -24,6 +24,24 @@ import {
   serializeAdvancedAsrConfig,
   type AdvancedAsrConfig,
 } from '../../lib/advancedAsrConfig';
+import {
+  getFoundryLocalAsrCatalog,
+  getSherpaOnnxAsrCatalog,
+  listLocalAsrModels,
+  setFoundryLocalAsrModel,
+  setLocalAsrActiveModel,
+  setSherpaOnnxAsrModel,
+} from '../../lib/localAsr';
+
+// 本地模型供应商：在主下拉里标注「本地」后缀，与云端供应商区分开。
+const LOCAL_ASR_PRESET_IDS: ReadonlySet<string> = new Set([
+  'local-qwen3',
+  'foundry-local-whisper',
+  'sherpa-onnx-local',
+]);
+function isLocalAsrPreset(id: string): boolean {
+  return LOCAL_ASR_PRESET_IDS.has(id);
+}
 
 function LlmThinkingToggle({ enabled, onToggle }: { enabled: boolean; onToggle: (next: boolean) => void }) {
   const { t } = useTranslation();
@@ -250,13 +268,88 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
   useEffect(() => {
     if (committedAsrProvider !== 'bailian') setBailianModel('');
   }, [committedAsrProvider]);
-  // 本地重引擎（qwen3 / sherpa / foundry）仍只在「高级 → 本地模型」里启用，
-  // 防止新手在主下拉误开 CPU 推理。Apple 语音是系统自带、零凭据、轻量，
-  // 在 macOS 上直接作为常规选项放进主下拉，方便随时选用 / 切走。
+  // 本地引擎（qwen3 / sherpa / foundry）的已下载模型直接作为 ASR 供应商下拉的
+  // 可选项：模型 ID 就是选项，选中即使用该模型（不用先选引擎再选模型）。
+  // 一次拉全三个引擎；并监听下载进度事件，在本地模型下载完成后自动刷新列表。
+  const [localModelOptions, setLocalModelOptions] = useState<
+    { engine: 'qwen3' | 'sherpa' | 'foundry'; id: string; name: string; isDownloaded: boolean }[]
+  >([]);
+  // 同 provider 内切换本地模型的乐观值：下拉立即显示用户点的模型，不等后端
+  // set_settings + prefs:changed 事件回来（回来前的几帧会闪回旧模型 = 闪烁）。
+  const [localAsrModelDraft, setLocalAsrModelDraft] = useState<string | null>(null);
+  useEffect(() => {
+    // 供应商切换后旧引擎的 draft 不再适用，清掉让 asrValue 回退 prefs。
+    setLocalAsrModelDraft(null);
+  }, [committedAsrProvider]);
+  useEffect(() => {
+    let cancelled = false;
+    // 平台分支拉取：sherpa/foundry 的 catalog 命令只在 Windows 注册，macOS 上
+    // invoke 未注册命令会 reject——Promise.all 拉三个会把 qwen3 的结果也一起
+    // 吞掉（下拉永远只剩引擎级入口）。按平台只拉本平台存在的引擎。
+    const fetchAll = async () => {
+      try {
+        const qwen3 = await listLocalAsrModels();
+        const extra =
+          os === 'win'
+            ? await Promise.all([
+                getSherpaOnnxAsrCatalog(),
+                getFoundryLocalAsrCatalog(),
+              ])
+            : null;
+        if (cancelled) return;
+        const next = [
+          ...qwen3.map(m => ({ engine: 'qwen3' as const, id: m.id, name: m.id, isDownloaded: m.isDownloaded })),
+          ...(extra?.[0] ?? []).map(c => ({ engine: 'sherpa' as const, id: c.alias, name: c.displayName || c.alias, isDownloaded: c.cached })),
+          ...(extra?.[1] ?? []).map(c => ({ engine: 'foundry' as const, id: c.alias, name: c.displayName || c.alias, isDownloaded: c.cached })),
+        ];
+        // 浅比较：数据没变就不 setState，避免 3s 轮询让下拉每轮重渲染（闪烁）。
+        setLocalModelOptions(prev =>
+          prev.length === next.length &&
+          prev.every((m, i) =>
+            m.engine === next[i].engine &&
+            m.id === next[i].id &&
+            m.name === next[i].name &&
+            m.isDownloaded === next[i].isDownloaded,
+          )
+            ? prev
+            : next,
+        );
+      } catch {
+        if (!cancelled) setLocalModelOptions([]);
+      }
+    };
+    void fetchAll();
+    // 3s 轮询磁盘状态：模型被外部删除（或下载完成后）下拉选项自动跟随，
+    // 用户不需要重开设置页。本地 fs 检查很轻，无感。
+    const pollTimer = window.setInterval(() => {
+      void fetchAll();
+    }, 3000);
+    // 下载完成事件驱动刷新：本页下方「本地模型」看板下载完模型后，下拉立刻出现新选项。
+    let unlistenQ: (() => void) | undefined;
+    let unlistenS: (() => void) | undefined;
+    void import('@tauri-apps/api/event').then(({ listen }) => {
+      void listen<{ phase: string }>('local-asr-download-progress', (e) => {
+        if (e.payload.phase === 'finished') void fetchAll();
+      }).then(fn => { if (cancelled) fn(); else unlistenQ = fn; }).catch(() => {});
+      void listen<{ phase: string }>('sherpa-onnx-asr-download-progress', (e) => {
+        if (e.payload.phase === 'finished') void fetchAll();
+      }).then(fn => { if (cancelled) fn(); else unlistenS = fn; }).catch(() => {});
+    }).catch(() => {});
+    return () => {
+      cancelled = true;
+      window.clearInterval(pollTimer);
+      unlistenQ?.();
+      unlistenS?.();
+    };
+  }, []);
+
+  // 本地引擎（qwen3 / foundry / sherpa）直接作为常规选项放进主下拉（按平台 gating），
+  // 选项名标注「本地」——选了本地模型供应商，ASR 就用本地模型（与 Apple 语音同理），
+  // 不再需要单独的启用开关。模型下载与管理在「服务 → 本地模型」的看板里。
   const visibleAsrPresets = ASR_PRESETS.filter(
-    p => p.id !== 'foundry-local-whisper'
-      && p.id !== 'local-qwen3'
-      && p.id !== 'sherpa-onnx-local'
+    p => (p.id !== 'foundry-local-whisper' || os === 'win')
+      && (p.id !== 'sherpa-onnx-local' || os === 'win')
+      && (p.id !== 'local-qwen3' || os === 'mac')
       && (p.id !== 'apple-speech' || os === 'mac')
       // 百炼三协议收成一个「阿里云百炼」入口(id=bailian)+ 模型下拉。qwen3 / fun-asr-flash
       // 两个旧 id 作隐藏别名:新用户下拉里看不到,只有已经停在该 id 上的老用户仍显示,
@@ -345,8 +438,37 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
     });
   };
 
-  const onAsrProviderChange = async (id: AsrPresetId) => {
+  const onAsrProviderChange = async (id: AsrPresetId, modelId?: string) => {
     setAsrProvider(id);
+    // 轻量路径：供应商没变、只是换本地模型 → 不重跑 set_active_provider /
+    // 凭据回填整套流程（那些会触发 prefs:changed 全量重渲染 + 下拉闪回旧值），
+    // 只写模型命令 + prefs 字段。draft 让下拉立即显示用户点的模型。
+    if (id === committedAsrProvider && modelId && isLocalAsrPreset(id)) {
+      setLocalAsrModelDraft(modelId);
+      try {
+        if (id === 'local-qwen3') {
+          await setLocalAsrActiveModel(modelId);
+        } else if (id === 'sherpa-onnx-local') {
+          await setSherpaOnnxAsrModel(modelId);
+        } else if (id === 'foundry-local-whisper') {
+          await setFoundryLocalAsrModel(modelId);
+        }
+        if (prefs) {
+          const next = { ...prefs, activeAsrProvider: id };
+          if (id === 'local-qwen3') next.localAsrActiveModel = modelId;
+          else if (id === 'sherpa-onnx-local') next.sherpaOnnxModel = modelId;
+          else if (id === 'foundry-local-whisper') next.foundryLocalAsrModel = modelId;
+          await updatePrefs(next);
+        }
+        emitSaved('saved', t('common.saved'));
+      } catch (err) {
+        // 写入失败回滚 draft，让下拉回到 prefs 里的真实值。
+        setLocalAsrModelDraft(null);
+        emitSaved('failed', t('common.operationFailed'));
+        console.error('[settings] switch local ASR model failed', err);
+      }
+      return;
+    }
     const seq = ++asrSwitchSeqRef.current;
     emitSaved('saving', t('common.saving'));
     let backendSwitched = false;
@@ -354,8 +476,24 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
       await setActiveAsrProvider(id);
       backendSwitched = true;
       if (seq !== asrSwitchSeqRef.current) return;
+      // 模型 ID 直选：供应商切到本地引擎后，把 active model 一并写进后端。
+      if (modelId) {
+        if (id === 'local-qwen3') {
+          await setLocalAsrActiveModel(modelId);
+        } else if (id === 'sherpa-onnx-local') {
+          await setSherpaOnnxAsrModel(modelId);
+        } else if (id === 'foundry-local-whisper') {
+          await setFoundryLocalAsrModel(modelId);
+        }
+        if (seq !== asrSwitchSeqRef.current) return;
+      }
       if (prefs) {
         const next = { ...prefs, activeAsrProvider: id };
+        if (modelId) {
+          if (id === 'local-qwen3') next.localAsrActiveModel = modelId;
+          else if (id === 'sherpa-onnx-local') next.sherpaOnnxModel = modelId;
+          else if (id === 'foundry-local-whisper') next.foundryLocalAsrModel = modelId;
+        }
         await updatePrefs(next);
         if (seq !== asrSwitchSeqRef.current) return;
       }
@@ -421,7 +559,7 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
               label: t(`settings.providers.presets.${p.nameKey}`),
             }))}
             ariaLabel={t('settings.providers.providerLabel')}
-            style={{ ...inputStyle, width: '100%', maxWidth: mobile ? '100%' : 200 }}
+            style={{ width: mobile ? '100%' : 200, maxWidth: '100%', minWidth: 0 }}
           />
         </SettingRow>
         {codexOAuthSelected ? (
@@ -476,14 +614,63 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
             未激活时不显示提示。 */}
         <SettingRow label={t('settings.providers.providerLabel')}>
           {(() => {
-            // 本地引擎激活时不再「接管 / 锁死」下拉——下拉始终可用，用户在本页就能直接
-            // 切到其它供应商；切走后端 active 即自动停用本地引擎，不必再进「高级」手动关。
-            // 重引擎（qwen3 / sherpa / foundry）当前激活但不在主下拉里时，补一个可选 option
-            // 让 select 显示当前值并允许切走。Apple 语音在 macOS 已是常规可选项。
+            // 本地引擎的已下载模型直接作为下拉选项（value = "引擎:模型ID"）：
+            // 选了哪个模型 ID，就用哪个模型——不用先选引擎再选模型。
+            // 引擎 → 模型数据源映射。
+            const LOCAL_ENGINE_OF: Record<string, 'qwen3' | 'sherpa' | 'foundry'> = {
+              'local-qwen3': 'qwen3',
+              'sherpa-onnx-local': 'sherpa',
+              'foundry-local-whisper': 'foundry',
+            };
+            const localPresets = visibleAsrPresets.filter(p => isLocalAsrPreset(p.id));
+            const localOptions = localPresets.flatMap(p => {
+              const downloaded = localModelOptions.filter(
+                m => m.engine === LOCAL_ENGINE_OF[p.id] && m.isDownloaded,
+              );
+              if (downloaded.length === 0) {
+                // 还没下载模型：保留引擎入口，选它之后去「本地模型」看板下载。
+                return [{
+                  value: p.id,
+                  label: `${t(`settings.providers.presets.${p.nameKey}`)}（${t('settings.providers.localTag')}）`,
+                }];
+              }
+              return downloaded.map(m => ({
+                value: `${p.id}:${m.id}`,
+                label: `${m.name}（${t('settings.providers.localTag')}）`,
+              }));
+            });
+            // 受控 value：本地引擎激活且 active 模型已下载时显示 "引擎:模型ID"。
+            // draft（用户刚点的模型）优先于 prefs——同 provider 换模型时后端
+            // 还没回写完成，直接读 prefs 会闪回旧模型。
+            const activeModelId = committedAsrProvider === 'local-qwen3'
+              ? prefs?.localAsrActiveModel
+              : committedAsrProvider === 'sherpa-onnx-local'
+                ? prefs?.sherpaOnnxModel
+                : committedAsrProvider === 'foundry-local-whisper'
+                  ? prefs?.foundryLocalAsrModel
+                  : undefined;
+            const resolvedModelId =
+              localAsrModelDraft &&
+              localModelOptions.some(m => m.id === localAsrModelDraft && m.isDownloaded)
+                ? localAsrModelDraft
+                : activeModelId;
+            const asrValue =
+              isLocalAsrPreset(committedAsrProvider) &&
+              resolvedModelId &&
+              localModelOptions.some(m => m.id === resolvedModelId && m.isDownloaded)
+                ? `${committedAsrProvider}:${resolvedModelId}`
+                : asrProvider;
+            // 平台不匹配的旧配置（如 Windows 上仍激活 local-qwen3）：补一个选项兜底。
             const hiddenLocalActive: AsrPresetId | null =
               !visibleAsrPresets.some(p => p.id === committedAsrProvider)
                 ? committedAsrProvider
                 : null;
+            // 本地引擎激活但 active 模型不在已下载列表（模型被删）时，value 无匹配
+            // 选项——补引擎兜底项让下拉有显示、可切走。hiddenLocalActive 已兜底时不重复加。
+            const unmatchedLocalPreset =
+              isLocalAsrPreset(asrValue) && !hiddenLocalActive
+                ? ASR_PRESETS.find(p => p.id === asrValue)
+                : undefined;
             const hiddenLocalNameKey = hiddenLocalActive === 'local-qwen3'
               ? 'asrLocalQwen3'
               : hiddenLocalActive === 'foundry-local-whisper'
@@ -496,13 +683,27 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
             return (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: mobile ? 'stretch' : 'flex-start', minWidth: 0, width: '100%', maxWidth: '100%' }}>
                 <SelectLite
-                  value={asrProvider}
-                  onChange={next => onAsrProviderChange(next as AsrPresetId)}
+                  value={asrValue}
+                  onChange={(next) => {
+                    const sep = next.indexOf(':');
+                    if (sep > 0 && isLocalAsrPreset(next.slice(0, sep))) {
+                      void onAsrProviderChange(next.slice(0, sep) as AsrPresetId, next.slice(sep + 1));
+                    } else {
+                      void onAsrProviderChange(next as AsrPresetId);
+                    }
+                  }}
                   options={[
-                    ...visibleAsrPresets.map(p => ({
+                    ...visibleAsrPresets.filter(p => !isLocalAsrPreset(p.id)).map(p => ({
                       value: p.id,
                       label: t(`settings.providers.presets.${p.nameKey}`),
                     })),
+                    ...localOptions,
+                    ...(unmatchedLocalPreset && !localOptions.some(o => o.value === asrValue)
+                      ? [{
+                          value: asrValue,
+                          label: `${t(`settings.providers.presets.${unmatchedLocalPreset.nameKey}`)}（${t('settings.providers.localTag')}）`,
+                        }]
+                      : []),
                     ...(hiddenLocalActive && hiddenLocalNameKey
                       ? [{
                           value: hiddenLocalActive,
@@ -511,7 +712,7 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
                       : []),
                   ]}
                   ariaLabel={t('settings.providers.providerLabel')}
-                  style={{ ...inputStyle, width: '100%', maxWidth: mobile ? '100%' : 200 }}
+                  style={{ width: mobile ? '100%' : 200, maxWidth: '100%', minWidth: 0 }}
                 />
                 {hiddenLocalActive && (
                   <div style={{ fontSize: 11, color: 'var(--ol-ink-4)', lineHeight: 1.5 }}>
@@ -522,6 +723,8 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
             );
           })()}
         </SettingRow>
+        {/* 供应商切换时 ASR 板块高度 / 内容会变：keyed 淡入动画平滑过渡（ol-tab-fade）。 */}
+        <div key={committedAsrProvider} style={{ animation: 'ol-tab-fade 0.22s var(--ol-motion-soft)' }}>
         {committedAsrProvider === 'volcengine' ? (
           <>
             <SettingRow label={t('settings.providers.volcengineAuthModeLabel')}>
@@ -546,7 +749,7 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
                   { value: 'api_key', label: t('settings.providers.volcengineAuthModeApiKey') },
                 ]}
                 ariaLabel={t('settings.providers.volcengineAuthModeLabel')}
-                style={{ ...inputStyle, width: '100%', maxWidth: mobile ? '100%' : 260 }}
+                style={{ width: mobile ? '100%' : 260, maxWidth: '100%', minWidth: 0 }}
               />
             </SettingRow>
             {/* 两种模式使用各自独立的凭据槽位：旧版 Access Token（volcengine.access_key）
@@ -615,10 +818,17 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
             </div>
           </>
         ) : committedAsrProvider === 'local-qwen3' || committedAsrProvider === 'foundry-local-whisper' || committedAsrProvider === 'sherpa-onnx-local' || committedAsrProvider === 'apple-speech' ? (
-          // 用户已经在用本地 ASR——dropdown 行的 asrProviderTakenOver 已经把
-          // "在高级中切换或禁用"讲清楚了，body 不再重复。
-          // 模型管理 UI 唯一入口在「高级 → 本地模型」里的 <LocalAsr embedded />。
-          null
+          // 本地引擎激活：模型选择已并进上方供应商下拉（模型 ID 直选），这里只留提示。
+          // Apple 语音零模型选择。
+          committedAsrProvider === 'apple-speech' ? (
+            <div style={{ marginTop: 2, fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.6 }}>
+              {t('settings.providers.appleSpeechLocalNote')}
+            </div>
+          ) : (
+            <div style={{ marginTop: 2, fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.6 }}>
+              {t('settings.providers.localEngineNote')}
+            </div>
+          )
         ) : (
           <>
             <CredentialField key={`${committedAsrProvider}:api_key`} label={t('settings.providers.apiKeyLabel')} account="asr.api_key" provider={committedAsrProvider} mono mask />
@@ -671,6 +881,7 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
             )}
           </>
         )}
+        </div>
       </Card>
       )}
     </>
@@ -945,7 +1156,7 @@ function ProviderTools({ kind, modelAccount, provider, onModelSelected, showFetc
               options={models.map(model => ({ value: model, label: model }))}
               placeholder={t('settings.providers.selectModel')}
               ariaLabel={t('settings.providers.selectModel')}
-              style={{ ...inputStyle, flex: mobile ? '1 1 100%' : '1 1 180px', maxWidth: mobile ? '100%' : 220 }}
+              style={{ flex: mobile ? '1 1 100%' : '1 1 180px', maxWidth: mobile ? '100%' : 220, minWidth: 0 }}
             />
           )}
         </div>
@@ -1162,7 +1373,7 @@ function CredentialField({ label, account, provider, placeholder, mono, mask, de
               placeholder={loaded ? placeholder : t('common.loading')}
               disabled={disabled}
               ariaLabel={label}
-              style={{ ...inputStyle, flex: mobile ? '1 1 180px' : 1, minWidth: 0, maxWidth: '100%', fontFamily: mono ? 'var(--ol-font-mono)' : 'inherit' }}
+              style={{ flex: mobile ? '1 1 180px' : 1, minWidth: 0, maxWidth: '100%', fontFamily: mono ? 'var(--ol-font-mono)' : 'inherit' }}
             />
           ) : (
             <input

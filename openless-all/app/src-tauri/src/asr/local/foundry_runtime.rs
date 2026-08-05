@@ -4,7 +4,7 @@
 mod imp {
     use std::path::{Path, PathBuf};
     use std::sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
     };
 
@@ -97,6 +97,24 @@ mod imp {
             let _lifecycle = self.lifecycle.lock().await;
             self.cancel_prepare.store(false, Ordering::SeqCst);
             let progress: FoundryPrepareProgressCallback = Arc::new(progress);
+            // 节流：SDK 的 percent 回调频率不可控（可能远高于前端可感知的
+            // 刷新率），percent 类事件 ≥150ms 才转发，避免进度浮层抽搐；
+            // phase 事件（percent=None，如 runtime/model/load 的阶段切换与
+            // finished/failed）不受限，保证阶段提示不丢。
+            let raw = Arc::clone(&progress);
+            let last_emit = Arc::new(AtomicU64::new(0));
+            let progress: FoundryPrepareProgressCallback = Arc::new(move |payload| {
+                if payload.percent.is_some() {
+                    let now = crate::asr::local::download::now_millis();
+                    if now - last_emit.load(Ordering::Relaxed)
+                        < crate::asr::local::download::PROGRESS_EMIT_MIN_INTERVAL_MS
+                    {
+                        return;
+                    }
+                    last_emit.store(now, Ordering::Relaxed);
+                }
+                raw(payload);
+            });
             let runtime_source = foundry_native::normalize_runtime_source(runtime_source);
             Ok(self
                 .ensure_loaded_locked(alias, runtime_source, progress)

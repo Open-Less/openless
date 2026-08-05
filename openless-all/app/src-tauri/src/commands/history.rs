@@ -16,15 +16,21 @@ pub fn clear_history(coord: CoordinatorState<'_>) -> Result<(), String> {
     coord.history().clear().map_err(|e| e.to_string())
 }
 
-/// 每日活动计数（日期升序），概览页年度热力图的数据源。与历史内容 / 保留策略解耦：
-/// 清空历史不影响它，全年格子照亮。
+/// 每日活动汇总（日期升序），概览页年度热力图与「近 7 天 / 近 30 天」指标的数据源。
+/// 与历史内容 / 保留策略解耦：清空历史不影响它，全年格子照亮，周期统计也不会被
+/// 历史 200 条上限截断。
 #[tauri::command]
 pub fn get_activity_stats(coord: CoordinatorState<'_>) -> Vec<ActivityDay> {
     coord
         .activity()
         .snapshot()
         .into_iter()
-        .map(|(date, count)| ActivityDay { date, count })
+        .map(|(date, stats)| ActivityDay {
+            date,
+            count: stats.count,
+            chars: stats.chars,
+            duration_ms: stats.duration_ms,
+        })
         .collect()
 }
 

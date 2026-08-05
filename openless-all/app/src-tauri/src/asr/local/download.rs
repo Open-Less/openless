@@ -23,6 +23,20 @@ use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 
 use super::models::{model_dir, ModelId, READY_SENTINEL};
 
+/// 进度事件最小发射间隔（毫秒）。HTTP 每 chunk 回调一次 on_progress，若全量
+/// 转发，前端每秒收到上百个 IPC 事件、进度条高频刷新会「抽搐」（issue 见
+/// LocalAsr 下载浮层）。按 ≥150ms 节流后肉眼平滑（约 6-7 次/秒），首条进度
+/// 与 phase 事件（started/finished/cancelled/failed）不受此限。
+pub(crate) const PROGRESS_EMIT_MIN_INTERVAL_MS: u64 = 150;
+
+/// 当前 Unix 毫秒时间戳（进度节流用）。
+pub(crate) fn now_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 /// 下载源镜像。
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -245,8 +259,20 @@ pub(crate) fn build_client() -> Result<reqwest::Client> {
     builder.build().context("build reqwest client failed")
 }
 
-/// 判定一个「已存在」的目标文件是否完整可信，纯函数便于单测（#686）。
-/// - 大小一致 → 完整；
+/// 用户主动取消下载后，清理断点续传产物（`<file>.partial` sparse 文件 +
+/// `<file>.partial.idx` 块索引）。`.partial` 按 `set_len` 预分配了目标全长
+/// —— 1.7B 模型即使只下了 1% 也占 1.7GB 逻辑大小，不删会让用户以为
+/// 「取消失效」且磁盘占用虚高。仅用户取消（非 worker 自 abort）时调用；
+/// worker 失败触发的中止保留续传点，重试可直接续传。
+pub(crate) fn remove_partial_artifacts(dir: &Path, dest_paths: &[String]) {
+    for path in dest_paths {
+        let dest = dir.join(path);
+        let _ = std::fs::remove_file(dest.with_extension("partial"));
+        let _ = std::fs::remove_file(dest.with_extension("partial.idx"));
+    }
+}
+
+/// 判定一个「已存在」的目标文件是否完整可信，纯函数便于单测（#686）。/// - 大小一致 → 完整；
 /// - 大小不符（截断 / 损坏 / 超大）→ 不完整，应删除重下；
 /// - `expected_size == 0`（HF 未给出大小）→ 退回旧行为「存在即信任」，避免对未知大小
 ///   的文件反复重下。
@@ -393,8 +419,18 @@ async fn run_download(
             let model_id_emit = model_id_str.clone();
             let file_path_emit = file_path.clone();
             let in_flight_for_cb = Arc::clone(&in_flight_bytes);
+            let last_emit = Arc::new(AtomicU64::new(0));
             let on_progress: Arc<dyn Fn(u64) + Send + Sync> = Arc::new(move |bytes_in_file| {
                 in_flight_for_cb[idx].store(bytes_in_file, Ordering::Relaxed);
+                // 节流：距上次 emit < 150ms 的中间进度直接丢弃（高频事件会让
+                // 前端进度条抽搐），in_flight 仍照常累计，下次 emit 带的是最新值。
+                let now = now_millis();
+                if now - last_emit.load(Ordering::Relaxed)
+                    < PROGRESS_EMIT_MIN_INTERVAL_MS
+                {
+                    return;
+                }
+                last_emit.store(now, Ordering::Relaxed);
                 let total_in_flight: u64 = in_flight_for_cb
                     .iter()
                     .map(|a| a.load(Ordering::Relaxed))
@@ -461,6 +497,10 @@ async fn run_download(
 
     // 用户主动 cancel（不是我们因为错误自己 set 的）→ Cancelled
     if cancel.load(Ordering::SeqCst) && !self_aborted {
+        // 取消 = 放弃该模型：清掉 .partial/.partial.idx，避免残留稀疏大文件
+        // 占满磁盘（用户取消意图明确，不留续传点）。
+        let dest_paths: Vec<String> = info.files.iter().map(|f| f.path.clone()).collect();
+        remove_partial_artifacts(&dir, &dest_paths);
         emit_cancelled(app, model_id, "", 0, file_count, total_bytes);
         return Ok(());
     }
@@ -1037,7 +1077,7 @@ fn emit_cancelled(
 
 #[cfg(test)]
 mod tests {
-    use super::existing_file_is_complete;
+    use super::{existing_file_is_complete, remove_partial_artifacts};
 
     #[test]
     fn complete_when_size_matches() {
@@ -1059,5 +1099,31 @@ mod tests {
         // HF 未给大小（size == 0）时退回「存在即信任」，避免反复重下。
         assert!(existing_file_is_complete(0, 0));
         assert!(existing_file_is_complete(999, 0));
+    }
+
+    #[test]
+    fn remove_partial_artifacts_deletes_partials_keeps_complete() {
+        // 用户取消后：`<file>.partial` 与 `<file>.partial.idx` 应被清掉，
+        // 已完成/完整的目标文件不受影响。
+        let uniq = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir().join(format!("ol-asr-dl-test-{uniq}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dest = dir.join("model.safetensors");
+        let partial = dest.with_extension("partial");
+        let idx = partial.with_extension("partial.idx");
+        let keep = dir.join("config.json");
+        for p in [&dest, &partial, &idx, &keep] {
+            std::fs::write(p, b"x").unwrap();
+        }
+        let dest_paths: Vec<String> = vec!["model.safetensors".into()];
+        remove_partial_artifacts(&dir, &dest_paths);
+        assert!(!partial.exists(), ".partial 应被删除");
+        assert!(!idx.exists(), ".partial.idx 应被删除");
+        assert!(dest.exists(), "完整目标文件不应被删除");
+        assert!(keep.exists(), "未在清单里的文件不应被删除");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

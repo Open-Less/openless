@@ -6,6 +6,7 @@
 // Android：download/install 走 appDownloadAndInstallAndroidUpdate（minisign + 系统安装器）。
 
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import type { DownloadEvent } from '@tauri-apps/plugin-updater';
 import { Update } from '@tauri-apps/plugin-updater';
 import { listen } from '@tauri-apps/api/event';
@@ -301,11 +302,12 @@ export function UpdateDialog({
   const installing = status === 'installing';
   const installError = status === 'installError';
   const androidInstalled = isAndroid() && status === 'downloaded';
-  return (
-    // 遮罩刻意极淡（0.05）：用户反馈 0.18 会把设置页白底卡片盖成灰色
-    //（「通用下面的内容变灰、存在断层感」）——侧边栏/顶部渐变是深色看不出，
-    // 白色选项行最明显。保留极淡遮罩维持模态语义 + 点击外部关闭。
-    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.05)', display: 'grid', placeItems: 'center', zIndex: 40 }}>
+  // Portal 到 document.body：WindowChrome / 设置弹窗带常驻 transform + will-change，
+  // 会创建 containing block——`position: fixed` 的遮罩会相对设置面板定位，只压暗
+  // 白色内容区（侧边栏深色看不出，形成「内容变灰、断层感」，见 Modal.tsx 同款注释）。
+  // portal 出去后遮罩铺满整窗，灰度均匀。0.05 极淡遮罩因此可以恢复正常遮罩透明度。
+  return createPortal(
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.22)', display: 'grid', placeItems: 'center', zIndex: 40, animation: 'ol-modal-backdrop-in 0.18s var(--ol-motion-soft)' }}>
       <div style={{ width: 360, borderRadius: 16, background: 'var(--ol-surface)', border: '0.5px solid var(--ol-line-strong)', boxShadow: 'var(--ol-shadow-lg)', padding: 18 }}>
         <div style={{ fontSize: 15, fontWeight: 650, marginBottom: 8 }}>{t(`settings.about.updateDialog.${status}.title`)}</div>
         <div style={{ fontSize: 12, color: 'var(--ol-ink-3)', lineHeight: 1.6, marginBottom: 14, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
@@ -339,7 +341,8 @@ export function UpdateDialog({
           {installError && <Btn variant="blue" size="sm" onClick={() => void openExternal(RELEASE_DOWNLOAD_URL)}>{t('settings.about.updateDialog.manualDownload')}</Btn>}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

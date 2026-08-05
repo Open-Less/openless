@@ -808,11 +808,14 @@ struct Inner {
     /// 预览确认模式暂存的结果和原选区目标；仅在用户确认时才允许插入。
     #[cfg(not(mobile))]
     selection_polish_preview: Mutex<Option<selection_polish::PendingSelectionPolishPreview>>,
-    /// 翻译模式触发标志。每次 begin_session 重置为 false；hotkey 监听器在
-    /// Listening / Starting 阶段看到 Shift down 边沿时 set true。
-    /// end_session 在调 polish/translate 前读这个 flag + translation_target_language
-    /// 决定走哪条管线。详见 issue #4。
-    translation_modifier_seen: AtomicBool,
+    /// 「本次会话真的要翻译」。每次 begin_session 重置为 false；hotkey 监听器在
+    /// Listening / Starting 阶段看到 Shift down 边沿（或安卓浮层请求）时，经
+    /// `arm_translation_if_effective` 判定翻译确实会生效（设了目标语言、且不等于唯一工作语言）
+    /// 后才 set true。
+    ///
+    /// 判定收在写入侧：读取侧之一是音频回调线程上的 emit_capsule，不能碰偏好锁。
+    /// 胶囊提示与 end_session 的 polish 分派因此读到同一个真值。详见 issue #4。
+    translation_active: AtomicBool,
     /// 划词语音问答（issue #118）：与 dictation hotkey 平行的全局快捷键
     /// 监听器（global-hotkey crate）。`None` 表示功能关闭或还没成功安装。
     qa_hotkey: Mutex<Option<QaHotkeyMonitor>>,
@@ -1039,7 +1042,7 @@ impl Coordinator {
                     selection_polish_hotkey: Mutex::new(None),
                     #[cfg(not(mobile))]
                     selection_polish_preview: Mutex::new(None),
-                    translation_modifier_seen: AtomicBool::new(false),
+                    translation_active: AtomicBool::new(false),
                     qa_hotkey: Mutex::new(None),
                     coding_agent_modifier_hotkey: Mutex::new(None),
                     coding_agent_combo_hotkey: Mutex::new(None),
@@ -1161,7 +1164,7 @@ impl Coordinator {
                 selection_polish_hotkey: Mutex::new(None),
                 #[cfg(not(mobile))]
                 selection_polish_preview: Mutex::new(None),
-                translation_modifier_seen: AtomicBool::new(false),
+                translation_active: AtomicBool::new(false),
                 qa_hotkey: Mutex::new(None),
                 coding_agent_modifier_hotkey: Mutex::new(None),
                 coding_agent_combo_hotkey: Mutex::new(None),
@@ -2017,10 +2020,10 @@ impl Coordinator {
 
     pub async fn start_dictation_with_translation(&self) -> Result<(), String> {
         begin_session(&self.inner).await?;
-        self.inner
-            .translation_modifier_seen
-            .store(true, Ordering::SeqCst);
-        log::info!("[coord] android overlay translation dictation started");
+        // 与桌面 Shift 走同一个 gate：目标语言没设 / 与唯一工作语言相同时不置位，
+        // 避免安卓浮层也出现「提示在翻译、实际没翻」。
+        let translation_armed = arm_translation_if_effective(&self.inner);
+        log::info!("[coord] android overlay dictation started (translation={translation_armed})");
         Ok(())
     }
 
@@ -2034,7 +2037,7 @@ impl Coordinator {
 
     pub async fn stop_dictation_with_translation(&self, translation: bool) -> Result<(), String> {
         if translation {
-            mark_translation_modifier_seen(&self.inner);
+            arm_translation_if_effective(&self.inner);
         }
         self.stop_dictation().await
     }
@@ -2279,14 +2282,33 @@ impl Coordinator {
         Ok(())
     }
 
-    pub async fn repolish(&self, raw_text: String, mode: PolishMode) -> Result<String, String> {
+    /// 用某个风格包重新润色一段已有原文。
+    ///
+    /// `style_pack_id`：
+    /// - `None` → 用当前激活的风格包。历史页的「重试」走这条：同样的输入再给模型看一遍，
+    ///   用来判断上一次的结果是模型抖动还是稳定行为。
+    /// - `Some(id)` → 用指定的风格包。历史页的「换风格重润色」走这条。
+    ///
+    /// 指定的包**不需要**处于激活状态，也不会改变激活状态：这只是一次一次性试算，
+    /// 不该有把用户当前风格换掉的副作用。
+    pub async fn repolish(
+        &self,
+        raw_text: String,
+        mode: PolishMode,
+        style_pack_id: Option<String>,
+    ) -> Result<String, String> {
         let hotwords = enabled_phrases(&self.inner);
         let prefs = self.inner.prefs.get();
-        let pack = self
-            .inner
-            .style_packs
-            .get_or_default_active(&prefs.active_style_pack_id)
-            .map_err(|e| e.to_string())?;
+        let pack = match style_pack_id.as_deref() {
+            // 显式指定时按 id 精确取，不走 get_or_default_active 的兜底链——用户点的是
+            // 「用这个风格看看」，静默回落到别的包会让结果无从解释。
+            Some(id) => self.inner.style_packs.get(id).map_err(|e| e.to_string())?,
+            None => self
+                .inner
+                .style_packs
+                .get_or_default_active(&prefs.active_style_pack_id)
+                .map_err(|e| e.to_string())?,
+        };
         let style_system_prompt = crate::types::style_pack_prompt(
             &pack,
             crate::types::StylePromptKind::DictationAsr,
@@ -2443,12 +2465,6 @@ impl Coordinator {
                 .await
                 .map_err(|_| "重新转录超时".to_string())?
                 .map_err(|e| e.to_string())?
-            }
-            ActiveAsr::ElevenLabs(e) => {
-                tokio::time::timeout(elevenlabs_timeout, e.transcribe())
-                    .await
-                    .map_err(|_| "重新转录超时".to_string())?
-                    .map_err(|e| e.to_string())?
             }
             ActiveAsr::ElevenLabs(e) => {
                 tokio::time::timeout(elevenlabs_timeout, e.transcribe())
