@@ -464,7 +464,7 @@ function SegmentedToggle<T extends string | number>({
               borderRadius: 6,
               background: selected ? 'var(--ol-blue)' : 'transparent',
               color: selected ? '#fff' : 'var(--ol-ink-3)',
-              cursor: 'default',
+              cursor: 'pointer',
               fontFamily: 'inherit',
               whiteSpace: 'nowrap',
               transition: 'background 0.16s var(--ol-motion-quick), color 0.16s var(--ol-motion-quick)',
