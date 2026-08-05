@@ -721,13 +721,25 @@ unsafe fn settle_pending_edit(ctx: &WatchContext, force: bool) {
         return;
     }
     let key = (edit.source.clone(), edit.target.clone());
-    if !ctx.reported.borrow_mut().insert(key) {
+    let first_time = ctx.reported.borrow_mut().insert(key);
+
+    // 基线在**去重之前**推进：去重管的是「别重复上报」，不是「这处改动没发生」。
+    //
+    // 同一处 `(source, target)` 在一次观察窗口里出现两次是常事 —— 听错的专名在好几句
+    // 里都出现，用户逐个改过去。第二次被去重挡掉时如果不推进基线，基线就停在「只改了
+    // 第一处」的状态，而文档已经改了两处。之后用户再改任何东西，`minimal_edit` 都是拿
+    // 这个陈旧基线去比，算出来的 span 把「已经有结论的那处重复改动」和「新改动」搅在
+    // 一起 —— 多半过不了 `edit_is_within_typed_text`，于是新的那次纠正被静默丢掉。
+    //
+    // 换句话说：**有结论就推进，无论这个结论是不是新的。** 上面两道 return（不是我们
+    // 插的文字、注定成不了词条）才是「还没有结论」，那两处保留基线是对的。
+    *ctx.baseline.borrow_mut() = current;
+
+    if !first_time {
         return;
     }
     ctx.reports.set(ctx.reports.get() + 1);
     (ctx.on_edit)(edit);
-    // 上报过的才推进基线 —— 这一处已经有结论，不该再算进下一处的差异。
-    *ctx.baseline.borrow_mut() = current;
 }
 
 /// 观察器愿意盯的文档上限（char）。
