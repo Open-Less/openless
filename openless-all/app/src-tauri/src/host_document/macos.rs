@@ -166,36 +166,69 @@ extern "C" {
     fn CFNumberGetValue(number: CFTypeRef, number_type: i32, value_ptr: *mut c_void) -> bool;
 }
 
+/// 拿到焦点元素的结果。`Ready` 里的 ref **调用方负责 `CFRelease`**。
+enum GatedElement {
+    Ready(AxUiElementRef),
+    Blocked(super::BlockReason),
+    Unavailable(&'static str),
+}
+
+/// **拿到焦点元素的唯一入口 —— 想读宿主 app 的任何东西都必须从这里拿。**
+///
+/// 把「取元素」和「过闸门」焊死在一起，是因为它们分开过一次就出过事：闸门原本只装在
+/// 读取路径上，手改观察器自己另开了一条取元素的路，于是在终端里听写时上下文读取被正确
+/// 拦住、观察器却照样把终端全文读走。**闸门漏一条路径 = 没有闸门。**
+///
+/// 顺序有讲究，两段判定不能合并：
+///
+/// 1. 先判不需要 AX 的部分（Secure Input、bundle 黑名单）—— 命中就一条 AX 消息都不发；
+/// 2. 拿到焦点元素后补 `role` / `subrole` 再判一次 —— 密码框正是靠这个认出来的，
+///    而这两个属性不拿到元素就读不到。
+///
+/// `AXUIElementSetMessagingTimeout` 也在这里统一设。不设就继承 AX 默认的 ~6 秒，对着
+/// 一个卡死的 app 就是 6 秒冻结 —— 这是本模块最重要的一行。
+unsafe fn focused_element_passing_the_gate(mut gate: GateInputs) -> GatedElement {
+    if let Some(reason) = evaluate_gate(&gate) {
+        return GatedElement::Blocked(reason);
+    }
+
+    let system = AXUIElementCreateSystemWide();
+    if system.is_null() {
+        return GatedElement::Unavailable("system-wide AX element unavailable");
+    }
+    // 系统级 element 上的设置会成为本进程的默认值。
+    AXUIElementSetMessagingTimeout(system, AX_MESSAGING_TIMEOUT_SECS);
+
+    let focused = copy_element_attr(system, b"AXFocusedUIElement\0");
+    CFRelease(system as CFTypeRef);
+
+    let Some(focused) = focused else {
+        return GatedElement::Unavailable("no focused UI element (AX permission or no focus)");
+    };
+    // 显式再设一次：进程默认值只对「之后创建」的 ref 生效，对已有 ref 补一刀更稳。
+    AXUIElementSetMessagingTimeout(focused, AX_MESSAGING_TIMEOUT_SECS);
+
+    gate.role = copy_string_attr(focused, b"AXRole\0");
+    gate.subrole = copy_string_attr(focused, b"AXSubrole\0");
+    if let Some(reason) = evaluate_gate(&gate) {
+        CFRelease(focused as CFTypeRef);
+        return GatedElement::Blocked(reason);
+    }
+
+    GatedElement::Ready(focused)
+}
+
 /// 同步读取光标周围的文档。**只允许在 `spawn_blocking` 上下文里调用。**
 ///
-/// `gate` 带着调用方已经填好的 `secure_input` / `bundle_id`；本函数补上需要一次 AX 读
-/// 的 `role` / `subrole`，再做最终判定 —— 拿到焦点元素之后、读正文之前。
-pub(super) fn read_around_cursor_blocking(budget_chars: usize, mut gate: GateInputs) -> ReadOutcome {
+/// `gate` 带着调用方已经填好的 `secure_input` / `bundle_id`；
+/// [`focused_element_passing_the_gate`] 会补上 `role` / `subrole` 并做最终判定。
+pub(super) fn read_around_cursor_blocking(budget_chars: usize, gate: GateInputs) -> ReadOutcome {
     unsafe {
-        let system = AXUIElementCreateSystemWide();
-        if system.is_null() {
-            return ReadOutcome::Unavailable("system-wide AX element unavailable");
-        }
-        // 这一行是整个模块最重要的一行：不设就继承 AX 默认的 ~6 秒，对着一个卡死的
-        // app 就是 6 秒冻结。系统级 element 上的设置会成为本进程的默认值。
-        AXUIElementSetMessagingTimeout(system, AX_MESSAGING_TIMEOUT_SECS);
-
-        let focused = copy_element_attr(system, b"AXFocusedUIElement\0");
-        CFRelease(system as CFTypeRef);
-
-        let Some(focused) = focused else {
-            return ReadOutcome::Unavailable("no focused UI element (AX permission or no focus)");
+        let focused = match focused_element_passing_the_gate(gate) {
+            GatedElement::Ready(el) => el,
+            GatedElement::Blocked(reason) => return ReadOutcome::Blocked(reason),
+            GatedElement::Unavailable(why) => return ReadOutcome::Unavailable(why),
         };
-        // 显式再设一次：进程默认值只对「之后创建」的 ref 生效，对已有 ref 补一刀更稳。
-        AXUIElementSetMessagingTimeout(focused, AX_MESSAGING_TIMEOUT_SECS);
-
-        gate.role = copy_string_attr(focused, b"AXRole\0");
-        gate.subrole = copy_string_attr(focused, b"AXSubrole\0");
-        if let Some(reason) = evaluate_gate(&gate) {
-            CFRelease(focused as CFTypeRef);
-            return ReadOutcome::Blocked(reason);
-        }
-
         let outcome = read_document(focused, budget_chars);
         CFRelease(focused as CFTypeRef);
         outcome
@@ -649,6 +682,9 @@ pub(super) fn spawn_edit_watcher(
             let Some((element, baseline, pid)) = grab_focused_element() else {
                 return;
             };
+            // 兜底。主判定在 `grab_focused_element` 里靠 `AXNumberOfCharacters` 完成，
+            // 那一道能在整篇拷回来**之前**就拦住；这一道是给不报 `AXNumberOfCharacters`
+            // 的 app 用的 —— 那种情况只能拷完再量。
             if baseline.chars().count() > EDIT_WATCH_MAX_CHARS {
                 log::info!(
                     "[cursor-context] edit watch skipped: document is {} chars (limit {EDIT_WATCH_MAX_CHARS})",
@@ -688,17 +724,55 @@ pub(super) fn spawn_edit_watcher(
 }
 
 /// 抓当前焦点元素 + 读一次基线全文 + 取 pid。**只在观察线程上调用。**
+///
+/// ## 安全闸门必须在这里再过一遍
+///
+/// 观察器读的是和 [`read_around_cursor_blocking`] 完全相同的东西 —— 焦点元素的
+/// `AXValue` 全文 —— 只是读得更频繁（整个观察窗口内每条通知一次），而且读到的差异会
+/// 进日志、还可能变成一张词条建议卡片。
+///
+/// 两条路径是**分别**到达 AX 的：读取那条走 `probe_around_cursor`，观察这条走
+/// `arm_edit_watch`。闸门只装在前者身上时，后者就是一个绕过口 —— 在终端里听写，上下文
+/// 读取被正确拦住，落字之后观察器却照样武装、照样把终端全文读走。这个功能敢默认存在
+/// 的全部前提就是「密码框 / Secure Input / 密码管理器 / 终端一律不读」，两条路径必须
+/// 给出同一个答案。
+///
+/// 走的是和读取路径同一个 [`focused_element_passing_the_gate`]，不另开一条路。
 fn grab_focused_element() -> Option<(SendableElement, String, i32)> {
+    let (_, bundle_id) = crate::selection::current_front_app_parts();
+    let gate = GateInputs {
+        secure_input: crate::unicode_keystroke::is_secure_input_enabled(),
+        bundle_id,
+        role: None,
+        subrole: None,
+    };
+
     unsafe {
-        let system = AXUIElementCreateSystemWide();
-        if system.is_null() {
-            return None;
+        let focused = match focused_element_passing_the_gate(gate) {
+            GatedElement::Ready(el) => el,
+            GatedElement::Blocked(reason) => {
+                log::info!("[cursor-context] edit watch blocked: {reason:?}");
+                return None;
+            }
+            GatedElement::Unavailable(why) => {
+                log::info!("[cursor-context] edit watch skipped: {why}");
+                return None;
+            }
+        };
+
+        // 先问长度再决定要不要整篇拷回来 —— 与 `read_document` 同一套做法。
+        // `AXValue` 会把整篇文档跨进程拷过来，在一个十万字的文件上光 marshalling 就够
+        // 撞上超时；而超限的文档我们本来就不观察（见 `EDIT_WATCH_MAX_CHARS`），白拷一次
+        // 纯属浪费。
+        if let Some(total) = copy_index_attr(focused, b"AXNumberOfCharacters\0") {
+            if total > EDIT_WATCH_MAX_CHARS {
+                log::info!(
+                    "[cursor-context] edit watch skipped: document is {total} UTF-16 units (limit {EDIT_WATCH_MAX_CHARS})"
+                );
+                CFRelease(focused as CFTypeRef);
+                return None;
+            }
         }
-        AXUIElementSetMessagingTimeout(system, AX_MESSAGING_TIMEOUT_SECS);
-        let focused = copy_element_attr(system, b"AXFocusedUIElement\0");
-        CFRelease(system as CFTypeRef);
-        let focused = focused?;
-        AXUIElementSetMessagingTimeout(focused, AX_MESSAGING_TIMEOUT_SECS);
 
         let baseline = copy_string_attr(focused, b"AXValue\0");
         let mut pid: i32 = 0;
