@@ -195,12 +195,20 @@ pub fn split_front_app_opt(label: Option<&str>) -> FrontApp {
         .unwrap_or(FrontApp { name: None, bundle_id: None })
 }
 
-/// 概览页年度活动热力图的单日计数（date = 本地日期 YYYY-MM-DD）。
+/// 概览页活动统计的单日汇总（date = 本地日期 YYYY-MM-DD）。
+///
+/// 年度热力图只用 `count`；`chars` / `duration_ms` 供「近 7 天 / 近 30 天」的
+/// 字数与时长指标使用——这两个指标此前从 `list_history()` 现算，会被历史 200 条
+/// 上限截断（说得多的用户几天就把上周挤没了）。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ActivityDay {
     pub date: String,
     pub count: u32,
+    /// 当日最终插入文本的总字符数（按 Unicode 字符计，与历史详情页的「N 字」同口径）。
+    pub chars: u64,
+    /// 当日录音总时长（毫秒）。口径 = 每次会话的录音时长，不含识别/润色耗时。
+    pub duration_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -509,6 +517,33 @@ impl Default for StylePack {
             origin_author_login: None,
         }
     }
+}
+
+/// 本次会话是否真的会走翻译管线。**唯一判定入口**——写入侧（arm_translation_if_effective）
+/// 与 end_session 的 polish 分派都经它判定，否则两边会漂移（此前胶囊只看
+/// `modifier_seen`，用户没设目标语言按下 Shift 也会看到「正在翻译」，而后端根本没翻）。
+/// 胶囊本身只读经它置位的原子标志，不在音频回调线程触碰偏好锁。
+///
+/// 三个条件：
+/// 1. 会话期间按下过翻译修饰键；
+/// 2. 设了翻译目标语言（空串 = 功能未启用）；
+/// 3. 目标语言不等于用户「唯一的」工作语言——此时源语言必定就是目标语言，翻译是可证
+///    的空操作，白花一次 LLM 往返。工作语言有多个时不拦：中/英双语用户把目标设成英文
+///    是正常用法（说中文出英文）。简体/繁体是列表里的两个独立条目，按字面比较即可，
+///    简→繁仍会照常翻译。
+pub fn translation_effective(
+    modifier_seen: bool,
+    translation_target_language: &str,
+    working_languages: &[String],
+) -> bool {
+    if !modifier_seen {
+        return false;
+    }
+    let target = translation_target_language.trim();
+    if target.is_empty() {
+        return false;
+    }
+    !(working_languages.len() == 1 && working_languages[0].trim() == target)
 }
 
 pub const BUILTIN_STYLE_PACK_RAW_ID: &str = "builtin.raw";
@@ -1374,15 +1409,23 @@ impl<'de> Deserialize<'de> for UserPreferences {
         let mut selection_polish_hotkey = wire
             .selection_polish_hotkey
             .unwrap_or_else(default_selection_polish_hotkey);
-        if cfg!(target_os = "windows")
-            && selection_polish_hotkey_was_missing
-            && is_right_control_modifier_shortcut(&dictation_hotkey)
-        {
-            // Old settings cannot distinguish the historic default from a
-            // deliberate Right Ctrl choice. Preserve the existing dictation
-            // workflow and leave the new action disabled rather than silently
-            // changing a user's shortcut.
-            selection_polish_hotkey = None;
+        if selection_polish_hotkey_was_missing {
+            // 1.3.15 新增的选区润色默认键（Windows = 右 Alt）不能抢占/顶掉用户已有按键：
+            // - 老用户从未自定义录音键（仍为历史默认 Right Control）：默认关闭新功能，
+            //   避免升级后右 Alt 被全局热键占用影响既有使用习惯；
+            // - 默认键与录音键重叠（字符串可能不等但物理同键，如 legacy rightAlt
+            //   派生出 RightOption 而默认是 RightAlt）：同样关闭，否则升级后任何
+            //   设置保存都会被热键冲突校验整体拒绝，改动全部丢失（#904）。
+            let legacy_default_user = cfg!(target_os = "windows")
+                && is_right_control_modifier_shortcut(&dictation_hotkey);
+            let default_taken_by_dictation = selection_polish_hotkey
+                .as_ref()
+                .is_some_and(|binding| {
+                    crate::shortcut_binding::bindings_overlap(binding, &dictation_hotkey)
+                });
+            if legacy_default_user || default_taken_by_dictation {
+                selection_polish_hotkey = None;
+            }
         }
         let streaming_insert_default_migrated = wire.streaming_insert_default_migrated;
         let streaming_insert = if streaming_insert_default_migrated {
@@ -3096,6 +3139,74 @@ mod split_front_app_label_tests {
 }
 
 #[cfg(test)]
+mod translation_effective_tests {
+    use super::translation_effective;
+
+    fn langs(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn requires_the_modifier() {
+        assert!(!translation_effective(
+            false,
+            "English",
+            &langs(&["简体中文"])
+        ));
+    }
+
+    #[test]
+    fn unset_target_language_is_not_translation() {
+        // 用户没在翻译页选目标语言就按 Shift：此前胶囊照样显示「正在翻译」，
+        // 而后端走的是普通润色。
+        assert!(!translation_effective(true, "", &langs(&["简体中文"])));
+        assert!(!translation_effective(true, "   ", &langs(&["简体中文"])));
+    }
+
+    #[test]
+    fn target_equal_to_the_only_working_language_is_a_no_op() {
+        // 工作语言只有中文、目标也是中文 —— 源语言必定就是目标语言，翻译是空操作。
+        assert!(!translation_effective(
+            true,
+            "简体中文",
+            &langs(&["简体中文"])
+        ));
+        // 前后空白不该让它逃过判定。
+        assert!(!translation_effective(
+            true,
+            " 简体中文 ",
+            &langs(&["简体中文"])
+        ));
+    }
+
+    #[test]
+    fn simplified_to_traditional_still_translates() {
+        // 简体/繁体是语言列表里两个独立条目，简→繁是真实转换，不能按「同一种中文」拦掉。
+        assert!(translation_effective(
+            true,
+            "繁体中文",
+            &langs(&["简体中文"])
+        ));
+    }
+
+    #[test]
+    fn multiple_working_languages_are_never_blocked() {
+        // 中/英双语用户把目标设成英文是正常用法（说中文出英文），源语言无法预先判定，
+        // 不能因为目标语言出现在工作语言里就拦。
+        assert!(translation_effective(
+            true,
+            "English",
+            &langs(&["简体中文", "English"])
+        ));
+    }
+
+    #[test]
+    fn empty_working_languages_still_translates() {
+        assert!(translation_effective(true, "English", &[]));
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -3178,6 +3289,38 @@ mod tests {
         .unwrap();
         assert!(prefs.selection_polish_hotkey.is_none());
         assert_eq!(prefs.dictation_hotkey.primary, "RightControl");
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn legacy_right_alt_dictation_upgrade_disables_selection_polish_instead_of_colliding() {
+        // #904：录音键自定义为右 Alt 的旧配置升级时，默认注入的选区润色键（右 Alt）
+        // 与录音键相同会形成持久冲突，把后续所有设置保存挡死。迁移必须改为停用新功能。
+        let prefs: UserPreferences = serde_json::from_str(
+            r#"{
+                "hotkey": { "trigger": "rightAlt", "mode": "hold", "keys": null },
+                "dictationHotkey": { "primary": "RightAlt", "modifiers": [] }
+            }"#,
+        )
+        .unwrap();
+        assert!(prefs.selection_polish_hotkey.is_none());
+        assert_eq!(prefs.dictation_hotkey.primary, "RightAlt");
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn legacy_right_alt_trigger_upgrade_disables_selection_polish_by_overlap() {
+        // #904 变体：旧文件没有 dictationHotkey，只带 legacy hotkey.trigger=rightAlt，
+        // 派生出的录音键 primary 是 "RightOption"，与默认注入的 "RightAlt" 字符串不相等
+        // 但物理同键（bindings_overlap=true）。迁移必须按重叠判定，不能按 == 字符串比较。
+        let prefs: UserPreferences = serde_json::from_str(
+            r#"{
+                "hotkey": { "trigger": "rightAlt", "mode": "hold", "keys": null }
+            }"#,
+        )
+        .unwrap();
+        assert!(prefs.selection_polish_hotkey.is_none());
+        assert_eq!(prefs.dictation_hotkey.primary, "RightOption");
     }
 
     #[cfg(target_os = "windows")]
@@ -3319,6 +3462,24 @@ mod tests {
         let prefs: UserPreferences = serde_json::from_str("{}").unwrap();
 
         assert!(prefs.audio_cue_on_record);
+    }
+
+    #[test]
+    fn capsule_style_pref_defaults_to_siri_and_round_trips_wire_key() {
+        // 老用户的 preferences.json 没有 capsuleStyle 字段 → 回落默认 Siri。
+        let prefs: UserPreferences = serde_json::from_str("{}").unwrap();
+        assert_eq!(prefs.capsule_style, CapsuleStyle::Siri);
+
+        // 设置里切到 Classic 后：set_settings 存盘（camelCase wire 键）→ 重启
+        // get_settings 读回，必须保持 Classic（配置文件持久化 roundtrip）。
+        let classic = UserPreferences {
+            capsule_style: CapsuleStyle::Classic,
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&classic).unwrap();
+        assert!(json.contains(r#""capsuleStyle":"classic""#));
+        let restored: UserPreferences = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.capsule_style, CapsuleStyle::Classic);
     }
 
     #[test]

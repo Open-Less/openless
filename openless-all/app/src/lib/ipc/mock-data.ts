@@ -787,7 +787,20 @@ export const mockActivityDays: ActivityDay[] = (() => {
         if (seed < 0.55) continue
         const count = Math.max(1, Math.round(seed * 22) - 8)
         const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`
-        days.push({ date: iso, count })
+        // 字数 / 时长按每条 ~120 字、~9 秒的量级派生，让周期指标卡在浏览器 dev 下
+        // 也有可看的数据。最早的 30 天故意只给 count（不给 chars/durationMs），
+        // 模拟升级前写入的老数据，验证「老日期在字数/时长指标里显示 0」不会崩。
+        const legacy = i > 334
+        days.push(
+            legacy
+                ? { date: iso, count }
+                : {
+                      date: iso,
+                      count,
+                      chars: count * (90 + Math.round(seed * 70)),
+                      durationMs: count * (6000 + Math.round(seed * 7000)),
+                  },
+        )
     }
     return days
 })()

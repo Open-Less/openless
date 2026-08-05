@@ -50,25 +50,6 @@
 </p>
 
 <p align="center">
-  <a href="https://jiangmuran.com/" target="_blank" rel="noopener">
-    <img src="assets/people/jiangmuran.png" width="120" height="120" alt="jiangmuran" />
-  </a>
-</p>
-
-<p align="center">
-  <a href="https://jiangmuran.com/" target="_blank" rel="noopener"><strong>jiangmuran</strong></a><br/>
-  <sub>⭐ Featured Sponsor · jiangmuran.com</sub>
-</p>
-
-<p align="center">
-  Special thanks to <strong>jiangmuran</strong> for the sustained support that keeps OpenLess moving forward.
-</p>
-
-<p align="center">
-  <sub>— with thanks to —</sub>
-</p>
-
-<p align="center">
   <a href="https://www.knin.net" target="_blank" rel="noopener">
     <img alt="悠雾云数据 (Youwu Cloud Data)" src="https://www.knin.net/upload/logo.png" height="52" />
   </a>
@@ -93,13 +74,6 @@
         <strong>Chris233</strong>
       </a><br/>
       <sub>chris233.qzz.io</sub>
-    </td>
-    <td align="center" width="170">
-      <a href="https://github.com/Cooper-X-Oak" target="_blank" rel="noopener">
-        <img src="assets/people/cooper.png" width="80" height="80" alt="Cooper" /><br/>
-        <strong>Cooper</strong>
-      </a><br/>
-      <sub>github.com/Cooper-X-Oak</sub>
     </td>
   </tr>
 </table>
@@ -206,7 +180,7 @@ Every item below is one more layer sedimented into a default — a capability yo
 - 🎨 **Style Pack Marketplace** — browse, install, and like community **style packs** from the in-app Marketplace, and publish your own (custom system prompt per pack, switchable by hotkey). Backed by a moderated marketplace backend; uploads are reviewed before they go public.
 - ⚡ **Streaming insertion** — polished text is written to the cursor character by character to reduce perceived latency, with an automatic one-shot-paste fallback. Toggle in Settings → Recording.
 - **Toggle and push-to-talk** recording modes, plus a **MediaPlayPause trigger** so wired-earbud inline controls can start and stop recording. `Esc` cancels at any phase, including polish and insertion.
-- **Cloud ASR**: Volcengine streaming ASR (bigasr), iFlytek realtime ASR (RTASR), Alibaba Cloud Bailian (classic realtime / Qwen3 realtime / Fun-ASR-Flash file transcription), StepFun StepAudio (batch + realtime), Zhipu GLM-ASR, Xiaomi MiMo ASR, ElevenLabs Scribe, OpenAI-compatible batch transcription (OpenAI Whisper / Groq / SiliconFlow SenseVoice / OpenRouter), and Apple Speech (macOS).
+- **Cloud ASR**: Volcengine streaming ASR (bigasr), iFlytek realtime ASR (RTASR), Alibaba Cloud Bailian (classic realtime / Qwen3 realtime / Fun-ASR-Flash file transcription), StepFun StepAudio (batch + realtime), Zhipu GLM-ASR, Xiaomi MiMo ASR, ElevenLabs Scribe, OpenAI-compatible batch transcription (OpenAI Whisper / Groq / SiliconFlow SenseVoice / OpenRouter / ZenMux), and Apple Speech (macOS).
 - **Local ASR**: bundled Qwen3-ASR (0.6B / 1.7B) via vendored `Open-Less/qwen-asr` (macOS); Windows Foundry Local Whisper and sherpa-onnx (experimental) variants.
 - **Polish providers**: Ark (Volcengine), DeepSeek, OpenAI, Google Gemini, Codex OAuth, SiliconFlow, Atlas Cloud, Xiaomi MiMo, CometAPI, OpenRouter, Alibaba Cloud Coding Plan, CodingPlanX, MiniMax, and StepFun — plus any OpenAI-compatible endpoint you bring.
 - **Four output modes**: raw, light polish, structured (**AI-prompt mode**), and formal. Plus a **translation hotkey** that converts speech directly into the configured target language ([#43](../../issues/43)).
@@ -364,7 +338,7 @@ Long-term reference rewrites are stored as `raw → polished → rule` triples a
 The dictionary handles your proper nouns, product names, names of people, and new words. Today it supports:
 
 - Manually adding the correct spelling, a category, and notes. You do not need to maintain misspellings or context hints.
-- Enabled entries are sent to the ASR provider that supports hotwords (Volcengine `context.hotwords`, StepFun `hotwords`, Whisper-compatible `prompt`, Bailian vocabulary ID) so they are recognized correctly during transcription. iFlytek realtime ASR has no request-level hotword parameter — configure personalized hotwords in the iFlytek console instead.
+- Enabled entries are sent to the ASR provider that supports hotwords (Volcengine `context.hotwords`, StepFun `hotwords`, Whisper-compatible `prompt` — except ZenMux, whose JSON protocol does not carry `prompt`/`hotwords`, Bailian vocabulary ID) so they are recognized correctly during transcription. iFlytek realtime ASR has no request-level hotword parameter — configure personalized hotwords in the iFlytek console instead.
 - Entries are also injected into the polish prompt: the model decides per sentence whether to substitute. If "Cloud" clearly refers to the AI product `Claude` in context, it is corrected; if it genuinely means cloud computing, it is left as is.
 - The app auto-learns candidate corrections such as `Claude`, `ChatGPT`, and `OpenLess` from your history and offers them later.
 

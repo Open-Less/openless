@@ -65,6 +65,13 @@ button {
   to   { opacity: 0; transform: translateY(-4px) scale(.98); }
 }
 
+/* SelectLite 触发器选中值切换动画：值变化时 span 以 key 重挂载，重放这段
+   淡入微滑移 —— 录音方式/胶囊样式/粘贴快捷键等横向选框的「切换」反馈。 */
+@keyframes ol-select-value-in {
+  from { opacity: 0.3; transform: translateY(3px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
 /* 键盘焦点指示：鼠标点击 (:focus) 不显示，键盘 Tab (:focus-visible) 才显示。
    用 box-shadow 而非 outline 是因为组件内联 style 可能用 outline:none
    把默认 ring 干掉，box-shadow 不受影响仍能上色。配合 pr-agent #407 的 a11y 要求。 */

@@ -87,6 +87,7 @@ mod windows_ime_ipc;
 mod windows_ime_profile;
 #[cfg(target_os = "windows")]
 mod windows_ime_protocol;
+mod windows_ime_restore;
 #[cfg(target_os = "windows")]
 mod windows_ime_session;
 

@@ -741,7 +741,8 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   const [message, setMessage] = useState<string | undefined>(preview.message);
   const [translation, setTranslation] = useState<boolean>(preview.translation);
   const [selectionPolish, setSelectionPolish] = useState<boolean>(preview.selectionPolish);
-  // 胶囊样式（siri / classic）：随 capsule:state payload 下发，设置里切换后下一次录音生效。
+  // 胶囊样式（siri / classic）：随 capsule:state payload 下发；设置里切换后还会经
+  // prefs:changed 广播即时到达（见下方监听），无需等下一次录音。
   const [capsuleStyle, setCapsuleStyle] = useState<CapsuleStyle>(preview.style);
   const isClassic = capsuleStyle === 'classic';
   // 预备态：麦克风尚未吐第一帧 PCM。true 时录音光条走「待命」呼吸形态（见 SiriGL warming）。
@@ -819,6 +820,39 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
       if (unlisten) unlisten();
     };
   }, []);
+
+  // 设置里切换胶囊样式「立即生效」：prefs:changed 由 Rust 广播到所有 webview（含胶囊
+  // 窗口，见 set_settings 的 app.emit），不用等下一次录音的 capsule:state payload。
+  // idle 时组件常驻（只渲染 0 尺寸 div），监听不丢；录音中切换则当帧换肤。
+  // capsule:state 仍作为兜底（payload.capsuleStyle），两路幂等。
+  useEffect(() => {
+    if (!isTauri) return;
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    (async () => {
+      const { listen } = await import('@tauri-apps/api/event');
+      const handle = await listen<{ capsuleStyle?: CapsuleStyle }>('prefs:changed', event => {
+        const next = event.payload?.capsuleStyle;
+        if (next === 'siri' || next === 'classic') setCapsuleStyle(next);
+      });
+      if (cancelled) handle();
+      else unlisten = handle;
+    })();
+    return () => {
+      cancelled = true;
+      if (unlisten) unlisten();
+    };
+  }, []);
+
+  // 切换样式时重置胶囊瞬态（「切换完成后重置并重新初始化相关配置」）：
+  // 中止进行中的退出动画（避免用旧时长收尾）、清掉上一会话残留的插入字数/操作态
+  // 与预备态计时，让换肤后的首帧从干净状态重新初始化。
+  useEffect(() => {
+    setLeaving(false);
+    insertedCharsRef.current = 0;
+    operatingRef.current = false;
+    warmStartRef.current = null;
+  }, [capsuleStyle]);
 
   // 退出动画调度：在 state 真正进入 idle 时，先用 capsule-out 播放
   // EXIT_ANIM_MS_SIRI / EXIT_ANIM_MS_CLASSIC（按当前样式，经 exitMsRef 读取），再卸载。

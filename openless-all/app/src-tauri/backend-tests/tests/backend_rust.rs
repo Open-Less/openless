@@ -67,3 +67,7 @@ mod types;
 #[cfg(target_os = "windows")]
 #[path = "../../src/unicode_keystroke.rs"]
 mod unicode_keystroke;
+#[path = "../../src/windows_ime_profile.rs"]
+mod windows_ime_profile;
+#[path = "../../src/windows_ime_restore.rs"]
+mod windows_ime_restore;

@@ -11,6 +11,7 @@ import { clearHistory, deleteHistoryEntry, listHistory, listStylePacks, readAudi
 import { defaultPackId, packDisplayName, resolveRepolishRetryPackIdWithFallback } from '../lib/history-repolish';
 import { useMobileLayout } from '../lib/useMobileLayout';
 import type { DictationSession, PolishMode, StylePack } from '../lib/types';
+import { countCodePoints } from '../lib/unicode';
 import { useHotkeySettings } from '../state/HotkeySettingsContext';
 import { Btn, Card, PageHeader, Pill } from './_atoms';
 import { chipSelectedStyle } from './settings/shared';
@@ -506,7 +507,9 @@ export function History() {
                 <span>{t('history.stepInsert')}</span>
                 <span style={{ color: 'var(--ol-ink-2)' }}>
                   {item.appName && <><b>{item.appName}</b>{' · '}</>}
-                  {t('history.chars', { count: item.finalText.length })}
+                  {/* 按 Unicode 码点计（emoji / CJK 扩展 B 等增补平面字符不按 UTF-16 码元双算），
+                      与后端 `polished.chars().count()` 及概览页「字数」口径一致。 */}
+                  {t('history.chars', { count: countCodePoints(item.finalText) })}
                   {item.dictionaryEntryCount != null && item.dictionaryEntryCount > 0 && (
                     <>{' · '}{t('history.vocabHits', { count: item.dictionaryEntryCount })}</>
                   )}

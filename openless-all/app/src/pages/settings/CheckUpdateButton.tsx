@@ -51,10 +51,25 @@ export function CheckUpdateButton({ channel }: { channel: UpdateChannel }) {
           <Icon
             name={iconName}
             size={12}
-            style={checking ? { animation: 'ol-spin 0.8s linear infinite' } : undefined}
+            style={{
+              // 状态图标（check ↔ refresh ↔ 错误）切换时颜色过渡；
+              // 检查中旋转（ol-spin），旋转轴在图标容器中心（宽度锁死 14）。
+              transition: 'color 0.18s var(--ol-motion-quick)',
+              animation: checking ? 'ol-spin 0.8s linear infinite' : undefined,
+            }}
           />
         </span>
-        <span style={{ whiteSpace: 'nowrap' }}>{label}</span>
+        <span
+          key={label}
+          style={{
+            whiteSpace: 'nowrap',
+            // 状态文案（"检查更新" ↔ "检查中…" ↔ 结果提示）切换时淡入微滑移，
+            // 与 SelectLite 选中值切换动画同款（ol-select-value-in，global.css）。
+            animation: 'ol-select-value-in .16s var(--ol-motion-quick)',
+          }}
+        >
+          {label}
+        </span>
       </button>
       {isDialogStatus(status) && (
         <UpdateDialog

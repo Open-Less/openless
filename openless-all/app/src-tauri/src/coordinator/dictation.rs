@@ -1613,10 +1613,8 @@ pub(super) async fn begin_session_as(
             store_prepared_windows_ime_session(&mut slots, current_session_id, prepared);
         }
     }
-    // 翻译模式标志重置；hotkey 监听器在 Shift down 时再 set true。
-    inner
-        .translation_modifier_seen
-        .store(false, Ordering::SeqCst);
+    // 翻译生效标志重置；修饰键按下或安卓浮层请求时经 arm_translation_if_effective 置位。
+    inner.translation_active.store(false, Ordering::SeqCst);
 
     #[cfg(any(debug_assertions, test))]
     if hotkey_injection_dry_run_enabled() {
@@ -2153,7 +2151,7 @@ pub(super) async fn begin_session_as(
         let (whisper_prompt, hotwords) =
             whisper_vocab_for_provider(&active_asr, enabled_phrases(inner));
         let asr_call_label = AsrCallLabel::new(effective_asr.clone(), Some(model.clone()));
-        let whisper = Arc::new(
+        let whisper = Arc::new(apply_zenmux_asr_options(
             WhisperBatchASR::new(
                 api_key,
                 base_url,
@@ -2164,7 +2162,9 @@ pub(super) async fn begin_session_as(
             )
             .with_request_format(whisper_request_format(&active_asr))
             .with_hotwords(hotwords),
-        );
+            &active_asr,
+            inner,
+        ));
         store_asr_for_session(
             inner,
             current_session_id,
@@ -3610,8 +3610,11 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     );
     let raw_uses_llm = mode == PolishMode::Raw && super::raw_style_pack_uses_llm(&pack);
     let translation_target = prefs.translation_target_language.trim().to_string();
-    let translation_active =
-        inner.translation_modifier_seen.load(Ordering::SeqCst) && !translation_target.is_empty();
+    let translation_active = crate::types::translation_effective(
+        inner.translation_active.load(Ordering::SeqCst),
+        &translation_target,
+        &working_languages,
+    );
     log::info!(
         "[style-pack] runtime dispatch scope=asr session_id={} active_pack={} kind={:?} mode={:?} raw_chars={} prompt_chars={} raw_uses_llm={} translation_active={} hotwords={} working_languages={:?}",
         current_session_id,
@@ -3945,12 +3948,16 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     ) {
         log::error!("[coord] history append failed: {e}");
     }
-    // 活动计数（概览页热力图数据源）：只有成功完成的听写才点亮格子——转录失败 /
-    // 错误收尾的两处 append 不计。写失败不阻断主流程。
-    if let Err(e) = inner
-        .activity
-        .bump(&chrono::Local::now().format("%Y-%m-%d").to_string())
-    {
+    // 活动汇总（概览页热力图 + 近 7 天 / 近 30 天指标的数据源）：只有成功完成的听写
+    // 才点亮格子——转录失败 / 错误收尾的两处 append 不计。写失败不阻断主流程。
+    //
+    // 字数口径与历史详情页的「N 字」一致（最终插入文本的 Unicode 字符数）；时长口径
+    // 是录音时长，不含识别/润色耗时——与详情页「录音 x.x 秒」同源，避免两处对不上。
+    if let Err(e) = inner.activity.bump(
+        &chrono::Local::now().format("%Y-%m-%d").to_string(),
+        polished.chars().count() as u64,
+        raw.duration_ms,
+    ) {
         log::warn!("[coord] activity bump failed: {e}");
     }
 

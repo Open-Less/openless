@@ -24,6 +24,24 @@ import {
   serializeAdvancedAsrConfig,
   type AdvancedAsrConfig,
 } from '../../lib/advancedAsrConfig';
+import {
+  getFoundryLocalAsrCatalog,
+  getSherpaOnnxAsrCatalog,
+  listLocalAsrModels,
+  setFoundryLocalAsrModel,
+  setLocalAsrActiveModel,
+  setSherpaOnnxAsrModel,
+} from '../../lib/localAsr';
+
+// 本地模型供应商：在主下拉里标注「本地」后缀，与云端供应商区分开。
+const LOCAL_ASR_PRESET_IDS: ReadonlySet<string> = new Set([
+  'local-qwen3',
+  'foundry-local-whisper',
+  'sherpa-onnx-local',
+]);
+function isLocalAsrPreset(id: string): boolean {
+  return LOCAL_ASR_PRESET_IDS.has(id);
+}
 
 function LlmThinkingToggle({ enabled, onToggle }: { enabled: boolean; onToggle: (next: boolean) => void }) {
   const { t } = useTranslation();
@@ -250,13 +268,57 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
   useEffect(() => {
     if (committedAsrProvider !== 'bailian') setBailianModel('');
   }, [committedAsrProvider]);
-  // 本地重引擎（qwen3 / sherpa / foundry）仍只在「高级 → 本地模型」里启用，
-  // 防止新手在主下拉误开 CPU 推理。Apple 语音是系统自带、零凭据、轻量，
-  // 在 macOS 上直接作为常规选项放进主下拉，方便随时选用 / 切走。
+  // 本地引擎（qwen3 / sherpa / foundry）的已下载模型直接作为 ASR 供应商下拉的
+  // 可选项：模型 ID 就是选项，选中即使用该模型（不用先选引擎再选模型）。
+  // 一次拉全三个引擎；并监听下载进度事件，在本地模型下载完成后自动刷新列表。
+  const [localModelOptions, setLocalModelOptions] = useState<
+    { engine: 'qwen3' | 'sherpa' | 'foundry'; id: string; name: string; isDownloaded: boolean }[]
+  >([]);
+  useEffect(() => {
+    let cancelled = false;
+    const fetchAll = async () => {
+      try {
+        const [qwen3, sherpa, foundry] = await Promise.all([
+          listLocalAsrModels(),
+          getSherpaOnnxAsrCatalog(),
+          getFoundryLocalAsrCatalog(),
+        ]);
+        if (cancelled) return;
+        setLocalModelOptions([
+          ...qwen3.map(m => ({ engine: 'qwen3' as const, id: m.id, name: m.id, isDownloaded: m.isDownloaded })),
+          ...sherpa.map(c => ({ engine: 'sherpa' as const, id: c.alias, name: c.displayName || c.alias, isDownloaded: c.cached })),
+          ...foundry.map(c => ({ engine: 'foundry' as const, id: c.alias, name: c.displayName || c.alias, isDownloaded: c.cached })),
+        ]);
+      } catch {
+        if (!cancelled) setLocalModelOptions([]);
+      }
+    };
+    void fetchAll();
+    // 下载完成事件驱动刷新：本页下方「本地模型」看板下载完模型后，下拉立刻出现新选项。
+    let unlistenQ: (() => void) | undefined;
+    let unlistenS: (() => void) | undefined;
+    void import('@tauri-apps/api/event').then(({ listen }) => {
+      void listen<{ phase: string }>('local-asr-download-progress', (e) => {
+        if (e.payload.phase === 'finished') void fetchAll();
+      }).then(fn => { if (cancelled) fn(); else unlistenQ = fn; }).catch(() => {});
+      void listen<{ phase: string }>('sherpa-onnx-asr-download-progress', (e) => {
+        if (e.payload.phase === 'finished') void fetchAll();
+      }).then(fn => { if (cancelled) fn(); else unlistenS = fn; }).catch(() => {});
+    }).catch(() => {});
+    return () => {
+      cancelled = true;
+      unlistenQ?.();
+      unlistenS?.();
+    };
+  }, []);
+
+  // 本地引擎（qwen3 / foundry / sherpa）直接作为常规选项放进主下拉（按平台 gating），
+  // 选项名标注「本地」——选了本地模型供应商，ASR 就用本地模型（与 Apple 语音同理），
+  // 不再需要单独的启用开关。模型下载与管理在「服务 → 本地模型」的看板里。
   const visibleAsrPresets = ASR_PRESETS.filter(
-    p => p.id !== 'foundry-local-whisper'
-      && p.id !== 'local-qwen3'
-      && p.id !== 'sherpa-onnx-local'
+    p => (p.id !== 'foundry-local-whisper' || os === 'win')
+      && (p.id !== 'sherpa-onnx-local' || os === 'win')
+      && (p.id !== 'local-qwen3' || os === 'mac')
       && (p.id !== 'apple-speech' || os === 'mac')
       // 百炼三协议收成一个「阿里云百炼」入口(id=bailian)+ 模型下拉。qwen3 / fun-asr-flash
       // 两个旧 id 作隐藏别名:新用户下拉里看不到,只有已经停在该 id 上的老用户仍显示,
@@ -345,7 +407,7 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
     });
   };
 
-  const onAsrProviderChange = async (id: AsrPresetId) => {
+  const onAsrProviderChange = async (id: AsrPresetId, modelId?: string) => {
     setAsrProvider(id);
     const seq = ++asrSwitchSeqRef.current;
     emitSaved('saving', t('common.saving'));
@@ -354,8 +416,24 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
       await setActiveAsrProvider(id);
       backendSwitched = true;
       if (seq !== asrSwitchSeqRef.current) return;
+      // 模型 ID 直选：供应商切到本地引擎后，把 active model 一并写进后端。
+      if (modelId) {
+        if (id === 'local-qwen3') {
+          await setLocalAsrActiveModel(modelId);
+        } else if (id === 'sherpa-onnx-local') {
+          await setSherpaOnnxAsrModel(modelId);
+        } else if (id === 'foundry-local-whisper') {
+          await setFoundryLocalAsrModel(modelId);
+        }
+        if (seq !== asrSwitchSeqRef.current) return;
+      }
       if (prefs) {
         const next = { ...prefs, activeAsrProvider: id };
+        if (modelId) {
+          if (id === 'local-qwen3') next.localAsrActiveModel = modelId;
+          else if (id === 'sherpa-onnx-local') next.sherpaOnnxModel = modelId;
+          else if (id === 'foundry-local-whisper') next.foundryLocalAsrModel = modelId;
+        }
         await updatePrefs(next);
         if (seq !== asrSwitchSeqRef.current) return;
       }
@@ -421,7 +499,7 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
               label: t(`settings.providers.presets.${p.nameKey}`),
             }))}
             ariaLabel={t('settings.providers.providerLabel')}
-            style={{ ...inputStyle, width: '100%', maxWidth: mobile ? '100%' : 200 }}
+            style={{ width: mobile ? '100%' : 200, maxWidth: '100%', minWidth: 0 }}
           />
         </SettingRow>
         {codexOAuthSelected ? (
@@ -476,14 +554,56 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
             未激活时不显示提示。 */}
         <SettingRow label={t('settings.providers.providerLabel')}>
           {(() => {
-            // 本地引擎激活时不再「接管 / 锁死」下拉——下拉始终可用，用户在本页就能直接
-            // 切到其它供应商；切走后端 active 即自动停用本地引擎，不必再进「高级」手动关。
-            // 重引擎（qwen3 / sherpa / foundry）当前激活但不在主下拉里时，补一个可选 option
-            // 让 select 显示当前值并允许切走。Apple 语音在 macOS 已是常规可选项。
+            // 本地引擎的已下载模型直接作为下拉选项（value = "引擎:模型ID"）：
+            // 选了哪个模型 ID，就用哪个模型——不用先选引擎再选模型。
+            // 引擎 → 模型数据源映射。
+            const LOCAL_ENGINE_OF: Record<string, 'qwen3' | 'sherpa' | 'foundry'> = {
+              'local-qwen3': 'qwen3',
+              'sherpa-onnx-local': 'sherpa',
+              'foundry-local-whisper': 'foundry',
+            };
+            const localPresets = visibleAsrPresets.filter(p => isLocalAsrPreset(p.id));
+            const localOptions = localPresets.flatMap(p => {
+              const downloaded = localModelOptions.filter(
+                m => m.engine === LOCAL_ENGINE_OF[p.id] && m.isDownloaded,
+              );
+              if (downloaded.length === 0) {
+                // 还没下载模型：保留引擎入口，选它之后去「本地模型」看板下载。
+                return [{
+                  value: p.id,
+                  label: `${t(`settings.providers.presets.${p.nameKey}`)}（${t('settings.providers.localTag')}）`,
+                }];
+              }
+              return downloaded.map(m => ({
+                value: `${p.id}:${m.id}`,
+                label: `${m.name}（${t('settings.providers.localTag')}）`,
+              }));
+            });
+            // 受控 value：本地引擎激活且 active 模型已下载时显示 "引擎:模型ID"。
+            const activeModelId = committedAsrProvider === 'local-qwen3'
+              ? prefs?.localAsrActiveModel
+              : committedAsrProvider === 'sherpa-onnx-local'
+                ? prefs?.sherpaOnnxModel
+                : committedAsrProvider === 'foundry-local-whisper'
+                  ? prefs?.foundryLocalAsrModel
+                  : undefined;
+            const asrValue =
+              isLocalAsrPreset(committedAsrProvider) &&
+              activeModelId &&
+              localModelOptions.some(m => m.id === activeModelId && m.isDownloaded)
+                ? `${committedAsrProvider}:${activeModelId}`
+                : asrProvider;
+            // 平台不匹配的旧配置（如 Windows 上仍激活 local-qwen3）：补一个选项兜底。
             const hiddenLocalActive: AsrPresetId | null =
               !visibleAsrPresets.some(p => p.id === committedAsrProvider)
                 ? committedAsrProvider
                 : null;
+            // 本地引擎激活但 active 模型不在已下载列表（模型被删）时，value 无匹配
+            // 选项——补引擎兜底项让下拉有显示、可切走。hiddenLocalActive 已兜底时不重复加。
+            const unmatchedLocalPreset =
+              isLocalAsrPreset(asrValue) && !hiddenLocalActive
+                ? ASR_PRESETS.find(p => p.id === asrValue)
+                : undefined;
             const hiddenLocalNameKey = hiddenLocalActive === 'local-qwen3'
               ? 'asrLocalQwen3'
               : hiddenLocalActive === 'foundry-local-whisper'
@@ -496,13 +616,27 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
             return (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: mobile ? 'stretch' : 'flex-start', minWidth: 0, width: '100%', maxWidth: '100%' }}>
                 <SelectLite
-                  value={asrProvider}
-                  onChange={next => onAsrProviderChange(next as AsrPresetId)}
+                  value={asrValue}
+                  onChange={(next) => {
+                    const sep = next.indexOf(':');
+                    if (sep > 0 && isLocalAsrPreset(next.slice(0, sep))) {
+                      void onAsrProviderChange(next.slice(0, sep) as AsrPresetId, next.slice(sep + 1));
+                    } else {
+                      void onAsrProviderChange(next as AsrPresetId);
+                    }
+                  }}
                   options={[
-                    ...visibleAsrPresets.map(p => ({
+                    ...visibleAsrPresets.filter(p => !isLocalAsrPreset(p.id)).map(p => ({
                       value: p.id,
                       label: t(`settings.providers.presets.${p.nameKey}`),
                     })),
+                    ...localOptions,
+                    ...(unmatchedLocalPreset && !localOptions.some(o => o.value === asrValue)
+                      ? [{
+                          value: asrValue,
+                          label: `${t(`settings.providers.presets.${unmatchedLocalPreset.nameKey}`)}（${t('settings.providers.localTag')}）`,
+                        }]
+                      : []),
                     ...(hiddenLocalActive && hiddenLocalNameKey
                       ? [{
                           value: hiddenLocalActive,
@@ -511,7 +645,7 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
                       : []),
                   ]}
                   ariaLabel={t('settings.providers.providerLabel')}
-                  style={{ ...inputStyle, width: '100%', maxWidth: mobile ? '100%' : 200 }}
+                  style={{ width: mobile ? '100%' : 200, maxWidth: '100%', minWidth: 0 }}
                 />
                 {hiddenLocalActive && (
                   <div style={{ fontSize: 11, color: 'var(--ol-ink-4)', lineHeight: 1.5 }}>
@@ -522,6 +656,8 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
             );
           })()}
         </SettingRow>
+        {/* 供应商切换时 ASR 板块高度 / 内容会变：keyed 淡入动画平滑过渡（ol-tab-fade）。 */}
+        <div key={committedAsrProvider} style={{ animation: 'ol-tab-fade 0.22s var(--ol-motion-soft)' }}>
         {committedAsrProvider === 'volcengine' ? (
           <>
             <SettingRow label={t('settings.providers.volcengineAuthModeLabel')}>
@@ -546,7 +682,7 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
                   { value: 'api_key', label: t('settings.providers.volcengineAuthModeApiKey') },
                 ]}
                 ariaLabel={t('settings.providers.volcengineAuthModeLabel')}
-                style={{ ...inputStyle, width: '100%', maxWidth: mobile ? '100%' : 260 }}
+                style={{ width: mobile ? '100%' : 260, maxWidth: '100%', minWidth: 0 }}
               />
             </SettingRow>
             {/* 两种模式使用各自独立的凭据槽位：旧版 Access Token（volcengine.access_key）
@@ -615,10 +751,17 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
             </div>
           </>
         ) : committedAsrProvider === 'local-qwen3' || committedAsrProvider === 'foundry-local-whisper' || committedAsrProvider === 'sherpa-onnx-local' || committedAsrProvider === 'apple-speech' ? (
-          // 用户已经在用本地 ASR——dropdown 行的 asrProviderTakenOver 已经把
-          // "在高级中切换或禁用"讲清楚了，body 不再重复。
-          // 模型管理 UI 唯一入口在「高级 → 本地模型」里的 <LocalAsr embedded />。
-          null
+          // 本地引擎激活：模型选择已并进上方供应商下拉（模型 ID 直选），这里只留提示。
+          // Apple 语音零模型选择。
+          committedAsrProvider === 'apple-speech' ? (
+            <div style={{ marginTop: 2, fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.6 }}>
+              {t('settings.providers.appleSpeechLocalNote')}
+            </div>
+          ) : (
+            <div style={{ marginTop: 2, fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.6 }}>
+              {t('settings.providers.localEngineNote')}
+            </div>
+          )
         ) : (
           <>
             <CredentialField key={`${committedAsrProvider}:api_key`} label={t('settings.providers.apiKeyLabel')} account="asr.api_key" provider={committedAsrProvider} mono mask />
@@ -659,25 +802,33 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
                 {t('settings.providers.elevenLabsUploadNotice')}
               </div>
             )}
+            {committedAsrProvider === 'zenmux' && (
+              <div role="note" style={{ marginTop: 2, fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.6 }}>
+                {t('settings.providers.zenmuxVocabularyNote')}
+              </div>
+            )}
             {/* 统一百炼「拉取模型」只写 model，不覆盖用户选择的区域或工作空间 endpoint。 */}
             <ProviderTools kind="asr" modelAccount="asr.model" provider={committedAsrProvider} onModelSelected={() => setAsrModelRevision(v => v + 1)} />
-            {committedAsrProvider === 'openai-compatible' && (
+            {(committedAsrProvider === 'openai-compatible' || committedAsrProvider === 'zenmux') && (
               <AsrAdvancedOptions provider={committedAsrProvider} />
             )}
           </>
         )}
+        </div>
       </Card>
       )}
     </>
   );
 }
 
-// 通用 OpenAI 兼容 ASR 的高级选项：仅对 openai-compatible 预设显示。
-// 命名厂商预设的怪癖开关（verbose_json / 分片等）是测过的硬编码行为，不开放。
+// ASR 高级选项：openai-compatible 与 zenmux 两个预设显示。
+// openai-compatible 暴露 verbose_json / 分片时长（其余命名厂商保持硬编码行为）；
+// zenmux 暴露 enable_itn（数字归一化）开关，verbose_json / 分片对其无意义。
 function AsrAdvancedOptions({ provider }: { provider: string }) {
   const { t } = useTranslation();
   const [verboseJson, setVerboseJson] = useState(false);
   const [chunkDraft, setChunkDraft] = useState('');
+  const [enableItn, setEnableItn] = useState(true);
   const [status, setStatus] = useState<'idle' | 'saving' | 'error'>('idle');
   const [error, setError] = useState('');
 
@@ -692,6 +843,7 @@ function AsrAdvancedOptions({ provider }: { provider: string }) {
         const config = parseAdvancedAsrConfig(raw);
         setVerboseJson(config.verboseJson);
         setChunkDraft(config.chunkDurationMs ? String(config.chunkDurationMs) : '');
+        setEnableItn(config.enableItn);
       } catch (err) {
         if (!cancelled) {
           setStatus('error');
@@ -710,7 +862,11 @@ function AsrAdvancedOptions({ provider }: { provider: string }) {
     return Math.floor(value);
   };
 
-  const save = async (partial: { verboseJson?: boolean; chunkDurationMs?: number | null }) => {
+  const save = async (partial: {
+    verboseJson?: boolean
+    chunkDurationMs?: number | null
+    enableItn?: boolean
+  }) => {
     setStatus('saving');
     setError('');
     const next: AdvancedAsrConfig = {
@@ -719,11 +875,13 @@ function AsrAdvancedOptions({ provider }: { provider: string }) {
         partial.chunkDurationMs !== undefined
           ? partial.chunkDurationMs
           : parseChunkDraft(chunkDraft),
+      enableItn: partial.enableItn ?? enableItn,
     };
     try {
       await setCredential('asr.advanced_config', serializeAdvancedAsrConfig(next), provider);
       setVerboseJson(next.verboseJson);
       setChunkDraft(next.chunkDurationMs ? String(next.chunkDurationMs) : '');
+      setEnableItn(next.enableItn);
       setStatus('idle');
     } catch (err) {
       setStatus('error');
@@ -744,31 +902,42 @@ function AsrAdvancedOptions({ provider }: { provider: string }) {
       >
         {t('settings.providers.asrAdvancedNote')}
       </div>
-      <SettingRow
-        label={t('settings.providers.asrAdvancedVerboseJsonLabel')}
-        desc={t('settings.providers.asrAdvancedVerboseJsonHint')}
-      >
-        <Toggle on={verboseJson} onToggle={(next) => void save({ verboseJson: next })} />
-      </SettingRow>
-      <SettingRow
-        label={t('settings.providers.asrAdvancedChunkLabel')}
-        desc={t('settings.providers.asrAdvancedChunkHint')}
-      >
-        <input
-          type="number"
-          min={0}
-          step={1000}
-          value={chunkDraft}
-          placeholder="0"
-          disabled={status === 'saving'}
-          onChange={(e) => setChunkDraft(e.target.value)}
-          onBlur={() => void save({ chunkDurationMs: parseChunkDraft(chunkDraft) })}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
-          }}
-          style={inputStyle}
-        />
-      </SettingRow>
+      {provider === 'zenmux' ? (
+        <SettingRow
+          label={t('settings.providers.asrAdvancedEnableItnLabel')}
+          desc={t('settings.providers.asrAdvancedEnableItnHint')}
+        >
+          <Toggle on={enableItn} onToggle={(next) => void save({ enableItn: next })} />
+        </SettingRow>
+      ) : (
+        <>
+          <SettingRow
+            label={t('settings.providers.asrAdvancedVerboseJsonLabel')}
+            desc={t('settings.providers.asrAdvancedVerboseJsonHint')}
+          >
+            <Toggle on={verboseJson} onToggle={(next) => void save({ verboseJson: next })} />
+          </SettingRow>
+          <SettingRow
+            label={t('settings.providers.asrAdvancedChunkLabel')}
+            desc={t('settings.providers.asrAdvancedChunkHint')}
+          >
+            <input
+              type="number"
+              min={0}
+              step={1000}
+              value={chunkDraft}
+              placeholder="0"
+              disabled={status === 'saving'}
+              onChange={(e) => setChunkDraft(e.target.value)}
+              onBlur={() => void save({ chunkDurationMs: parseChunkDraft(chunkDraft) })}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+              }}
+              style={inputStyle}
+            />
+          </SettingRow>
+        </>
+      )}
       {status === 'error' && (
         <div style={{ fontSize: 11, color: 'var(--ol-warn)', lineHeight: 1.4 }}>
           {t('common.operationFailed')}: {error}
@@ -920,7 +1089,7 @@ function ProviderTools({ kind, modelAccount, provider, onModelSelected, showFetc
               options={models.map(model => ({ value: model, label: model }))}
               placeholder={t('settings.providers.selectModel')}
               ariaLabel={t('settings.providers.selectModel')}
-              style={{ ...inputStyle, flex: mobile ? '1 1 100%' : '1 1 180px', maxWidth: mobile ? '100%' : 220 }}
+              style={{ flex: mobile ? '1 1 100%' : '1 1 180px', maxWidth: mobile ? '100%' : 220, minWidth: 0 }}
             />
           )}
         </div>
@@ -1137,7 +1306,7 @@ function CredentialField({ label, account, provider, placeholder, mono, mask, de
               placeholder={loaded ? placeholder : t('common.loading')}
               disabled={disabled}
               ariaLabel={label}
-              style={{ ...inputStyle, flex: mobile ? '1 1 180px' : 1, minWidth: 0, maxWidth: '100%', fontFamily: mono ? 'var(--ol-font-mono)' : 'inherit' }}
+              style={{ flex: mobile ? '1 1 180px' : 1, minWidth: 0, maxWidth: '100%', fontFamily: mono ? 'var(--ol-font-mono)' : 'inherit' }}
             />
           ) : (
             <input

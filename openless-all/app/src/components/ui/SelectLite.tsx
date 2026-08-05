@@ -285,6 +285,7 @@ export function SelectLite({
         style={triggerStyle}
       >
         <span
+          key={displayLabel}
           style={{
             flex: 1,
             minWidth: 0,
@@ -292,6 +293,9 @@ export function SelectLite({
             textOverflow: 'ellipsis',
             whiteSpace: 'nowrap',
             color: selected ? 'var(--ol-ink)' : 'var(--ol-ink-4)',
+            // 值切换动画：key 变化让 span 重挂载，重放 ol-select-value-in
+            //（global.css）。仅选中值变化时触发一次，不是常驻动画。
+            animation: 'ol-select-value-in .16s var(--ol-motion-quick)',
           }}
         >
           {displayLabel}

@@ -22,17 +22,28 @@ pub const PROMPT_CHAR_BUDGET: usize = 240;
 /// 区切り文字（ASCII）。Whisper のトークナイザはどの言語でも安定して扱える。
 const PROMPT_SEPARATOR: &str = ", ";
 
+/// ZenMux 聚合平台的默认端点与模型（issue #837）。与前端 `ASR_PRESETS` 的
+/// `zenmux` 条目保持一致；`read_whisper_credentials` 在 active 为 zenmux 且
+/// 用户未填时回退到这里。
+pub const ZENMUX_DEFAULT_ENDPOINT: &str = "https://zenmux.ai/api/v1";
+pub const ZENMUX_DEFAULT_MODEL: &str = "qwen/qwen3-asr-flash";
+
 /// `/audio/transcriptions` 请求体编码方式。
 ///
 /// OpenAI 官方及多数兼容厂商用 `multipart/form-data`（file + model）。
 /// OpenRouter 虽路径相同、也走 Bearer，但请求体是 `application/json`：
 /// `{model, input_audio:{data:<base64 wav>, format:"wav"}}`（issue #582）。
+/// ZenMux 与 OpenRouter 同形（issue #837），另支持可选的 `language` 与
+/// `enable_itn`（数字归一化）字段，故单独一个变体，避免给 OpenRouter
+/// 的请求体塞未知字段（部分实现会对未知字段 4xx）。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum AsrRequestFormat {
     /// `multipart/form-data`（既有行为，默认）。
     Multipart,
     /// OpenRouter `application/json` + base64 音频。
     OpenRouterJson,
+    /// ZenMux `application/json` + base64 音频（`language` 可选、`enable_itn` 恒发）。
+    ZenMuxJson,
 }
 
 pub struct WhisperBatchASR {
@@ -52,6 +63,12 @@ pub struct WhisperBatchASR {
     verbose_json: bool,
     /// 请求体编码方式。默认 `Multipart`，OpenRouter 走 `OpenRouterJson`。
     request_format: AsrRequestFormat,
+    /// ZenMux 的 `language` 字段（ISO 639-1，如 `zh`）。None = 不发送，服务端
+    /// 自动检测。仅 `ZenMuxJson` 编码下生效。
+    language: Option<String>,
+    /// ZenMux 的 `enable_itn` 字段（数字/单位归一化）。默认 true，与 ZenMux
+    /// 文档示例及中文 ASR 预期一致；仅 `ZenMuxJson` 编码下生效。
+    enable_itn: bool,
     /// 一等 `hotwords` 参数（JSON 数组字符串）。StepFun 等厂商不认 `prompt`
     /// （静默忽略），但提供专门的热词字段——用它词典才真正生效。空 = 不发。
     hotwords: Vec<String>,
@@ -75,6 +92,8 @@ impl WhisperBatchASR {
             max_chunk_duration_ms,
             verbose_json,
             request_format: AsrRequestFormat::Multipart,
+            language: None,
+            enable_itn: true,
             hotwords: Vec::new(),
             buffer: Mutex::new(Vec::new()),
         }
@@ -91,6 +110,20 @@ impl WhisperBatchASR {
     /// 二选一由 wiring 决定（见 coordinator 的 `whisper_uses_hotwords`）。
     pub fn with_hotwords(mut self, hotwords: Vec<String>) -> Self {
         self.hotwords = hotwords;
+        self
+    }
+
+    /// 设置 ZenMux 的 `language` 字段（ISO 639-1 码）。None = 不发送（自动检测）。
+    /// 仅 `ZenMuxJson` 编码下生效。
+    pub fn with_language(mut self, language: Option<String>) -> Self {
+        self.language = language;
+        self
+    }
+
+    /// 设置 ZenMux 的 `enable_itn`（数字归一化）开关，默认 true。仅 `ZenMuxJson`
+    /// 编码下生效。
+    pub fn with_enable_itn(mut self, enable_itn: bool) -> Self {
+        self.enable_itn = enable_itn;
         self
     }
 
@@ -218,6 +251,29 @@ impl WhisperBatchASR {
                 }
                 request.json(&body)
             }
+            AsrRequestFormat::ZenMuxJson => {
+                // ZenMux /audio/transcriptions（issue #837）：application/json，
+                // 音频走标准 base64。语言跟随 OpenLess 工作语言映射；enable_itn
+                // 由设置页开关决定，恒显式发送。不带 multipart 专属字段。
+                let mut body = serde_json::json!({
+                    "model": self.model,
+                    "input_audio": {
+                        "data": base64::engine::general_purpose::STANDARD.encode(&wav),
+                        "format": "wav",
+                    },
+                    "enable_itn": self.enable_itn,
+                });
+                if let Some(language) = self.language.as_ref() {
+                    if !language.trim().is_empty() {
+                        body["language"] = serde_json::Value::String(language.trim().to_string());
+                    }
+                }
+                let mut request = client.post(&url);
+                if !self.api_key.trim().is_empty() {
+                    request = request.header("Authorization", format!("Bearer {}", self.api_key));
+                }
+                request.json(&body)
+            }
         };
 
         let resp = request
@@ -237,7 +293,15 @@ impl WhisperBatchASR {
             // segments が無い応答では内部で従来どおり text にフォールバック。
             Ok(extract_confident_text(&json))
         } else {
-            Ok(json["text"].as_str().unwrap_or("").trim().to_string())
+            // GLM-ASR 等厂商在静音/弱音片段偶发返回仅含 `#`（或 `##`…）的占位
+            // 文本（issue #787）。归一化为空转写，走既有空转写护栏，避免把占位符
+            // 当有效内容插入用户输入。
+            let text = json["text"].as_str().unwrap_or("").trim();
+            if is_placeholder_heading(text) {
+                Ok(String::new())
+            } else {
+                Ok(text.to_string())
+            }
         }
     }
 
@@ -269,7 +333,11 @@ impl crate::recorder::AudioConsumer for WhisperBatchASR {
 /// 「不丢弃」处理（unwrap_or 默认值），所以对不返回这些指标的 provider 是无害空转。
 fn extract_confident_text(json: &serde_json::Value) -> String {
     let Some(segments) = json.get("segments").and_then(|s| s.as_array()) else {
-        return json["text"].as_str().unwrap_or("").trim().to_string();
+        let text = json["text"].as_str().unwrap_or("").trim();
+        if is_placeholder_heading(text) {
+            return String::new();
+        }
+        return text.to_string();
     };
 
     let mut kept = String::new();
@@ -313,6 +381,17 @@ fn extract_confident_text(json: &serde_json::Value) -> String {
         return String::new();
     }
     kept
+}
+
+/// 判定转写结果是否为「纯井号占位文本」。
+///
+/// GLM-ASR（zhipu）在静音 / 弱音片段偶发把整段识别为单个 `#`（或 `##`、`###`…），
+/// 属于模型退化的占位输出，不是任何真实语音转写（issue #787）。判定只命中「整段
+/// 仅由 1 个或多个 `#` 组成」的情况：`C#`、`# 你好` 等含其它字符的真实内容不受
+/// 影响。输入先 `trim()`，空白与两侧空格不影响判定。
+fn is_placeholder_heading(text: &str) -> bool {
+    let trimmed = text.trim();
+    !trimmed.is_empty() && trimmed.chars().all(|c| c == '#')
 }
 
 fn pcm_duration_ms(pcm: &[u8]) -> u64 {
@@ -759,6 +838,84 @@ mod tests {
         assert_eq!(extract_confident_text(&json), "保留される");
     }
 
+    #[test]
+    fn placeholder_heading_detects_pure_hash_runs_only() {
+        // issue #787：GLM-ASR 偶发返回仅含 `#` 的占位文本。
+        assert!(is_placeholder_heading("#"));
+        assert!(is_placeholder_heading("##"));
+        assert!(is_placeholder_heading("###"));
+        assert!(is_placeholder_heading("  ##  "));
+        // 含其它字符的真实内容不受影响。
+        assert!(!is_placeholder_heading("C#"));
+        assert!(!is_placeholder_heading("# 你好"));
+        assert!(!is_placeholder_heading("#hash"));
+        // 空 / 空白输入不命中。
+        assert!(!is_placeholder_heading(""));
+        assert!(!is_placeholder_heading("   "));
+    }
+
+    #[tokio::test]
+    async fn single_placeholder_chunk_transcribes_to_empty() {
+        // 单分片响应为 `#` → 归一化为空转写。
+        for text in ["#", "##", "###"] {
+            let (base_url, server) = start_whisper_test_server(vec![text]);
+            let asr = WhisperBatchASR::new(
+                "key".to_string(),
+                base_url,
+                "model".to_string(),
+                None,
+                None,
+                false,
+            );
+            let pcm = vec![0u8; 32_000 * 2];
+            asr.consume_pcm_chunk(&pcm);
+
+            let transcript = asr.transcribe().await.unwrap();
+            assert_eq!(transcript.text, "");
+            server.join().unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn placeholder_chunk_is_dropped_when_joining() {
+        // 分片 ["你好", "#", "世界"] → 占位分片被丢弃，正常分片保留。
+        let (base_url, server) = start_whisper_test_server(vec!["你好", "#", "世界"]);
+        let asr = WhisperBatchASR::new(
+            "key".to_string(),
+            base_url,
+            "model".to_string(),
+            None,
+            Some(30_000),
+            false,
+        );
+        let pcm = vec![0u8; 32_000 * 65];
+        asr.consume_pcm_chunk(&pcm);
+
+        let transcript = asr.transcribe().await.unwrap();
+        assert_eq!(transcript.text, "你好世界");
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn all_placeholder_chunks_transcribe_to_empty() {
+        // 全部分片均为 `#` → 整体转写为空（走 coordinator 空转写护栏）。
+        let (base_url, server) = start_whisper_test_server(vec!["#", "##", "###"]);
+        let asr = WhisperBatchASR::new(
+            "key".to_string(),
+            base_url,
+            "model".to_string(),
+            None,
+            Some(30_000),
+            false,
+        );
+        let pcm = vec![0u8; 32_000 * 65];
+        asr.consume_pcm_chunk(&pcm);
+
+        let transcript = asr.transcribe().await.unwrap();
+        assert_eq!(transcript.text, "");
+        server.join().unwrap();
+    }
+
     #[tokio::test]
     async fn transcribe_posts_single_request_without_chunk_limit() {
         let (base_url, server) = start_whisper_test_server(vec!["one"]);
@@ -855,6 +1012,118 @@ mod tests {
 
         let transcript = asr.transcribe().await.unwrap();
         assert_eq!(transcript.text, "openrouter ok");
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn zenmux_format_posts_json_with_language_and_itn() {
+        // issue #837：ZenMuxJson 走 application/json + input_audio.data(base64)，
+        // 语言有映射时发送、enable_itn 恒显式发送；响应仍按 {text} 解析。
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                        assert!(
+                            Instant::now() < deadline,
+                            "timed out waiting for ASR test request"
+                        );
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(err) => panic!("accept ASR test request failed: {err}"),
+                }
+            };
+            stream.set_nonblocking(false).unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let request = read_http_request(&mut stream);
+            let request_text = String::from_utf8_lossy(&request);
+            let lower = request_text.to_ascii_lowercase();
+            assert!(request_text.starts_with("POST /audio/transcriptions HTTP/1.1"));
+            assert!(lower.contains("content-type: application/json"));
+            assert!(lower.contains("authorization: bearer key"));
+            assert!(request_text.contains("input_audio"));
+            assert!(request_text.contains(r#""format":"wav""#));
+            assert!(request_text.contains(r#""language":"zh""#));
+            assert!(request_text.contains(r#""enable_itn":true"#));
+            assert!(!lower.contains("multipart/form-data"));
+            write_json_response(&mut stream, r#"{"text":"zenmux ok"}"#);
+        });
+        let base_url = format!("http://{}", addr);
+
+        let asr = WhisperBatchASR::new(
+            "key".to_string(),
+            base_url,
+            "qwen/qwen3-asr-flash".to_string(),
+            None,
+            Some(30_000),
+            false,
+        )
+        .with_request_format(AsrRequestFormat::ZenMuxJson)
+        .with_language(Some("zh".to_string()))
+        .with_enable_itn(true);
+        let pcm = vec![0u8; 32_000 * 2];
+        asr.consume_pcm_chunk(&pcm);
+
+        let transcript = asr.transcribe().await.unwrap();
+        assert_eq!(transcript.text, "zenmux ok");
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn zenmux_format_omits_language_when_unset_and_sends_false_itn() {
+        // language 无映射（None）时不发送该字段；enable_itn=false 显式发送 false。
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                        assert!(
+                            Instant::now() < deadline,
+                            "timed out waiting for ASR test request"
+                        );
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(err) => panic!("accept ASR test request failed: {err}"),
+                }
+            };
+            stream.set_nonblocking(false).unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let request = read_http_request(&mut stream);
+            let request_text = String::from_utf8_lossy(&request);
+            assert!(request_text.contains(r#""enable_itn":false"#));
+            assert!(!request_text.contains(r#""language""#));
+            write_json_response(&mut stream, r#"{"text":"zenmux no-lang ok"}"#);
+        });
+        let base_url = format!("http://{}", addr);
+
+        let asr = WhisperBatchASR::new(
+            "key".to_string(),
+            base_url,
+            "qwen/qwen3-asr-flash".to_string(),
+            None,
+            None,
+            false,
+        )
+        .with_request_format(AsrRequestFormat::ZenMuxJson)
+        .with_language(None)
+        .with_enable_itn(false);
+        let pcm = vec![0u8; 32_000 * 2];
+        asr.consume_pcm_chunk(&pcm);
+
+        let transcript = asr.transcribe().await.unwrap();
+        assert_eq!(transcript.text, "zenmux no-lang ok");
         server.join().unwrap();
     }
 

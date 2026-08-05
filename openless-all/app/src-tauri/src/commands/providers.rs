@@ -1,4 +1,5 @@
 use super::*;
+use base64::Engine;
 use std::collections::HashMap;
 
 #[derive(Serialize)]
@@ -304,7 +305,10 @@ async fn validate_asr_provider() -> Result<(), String> {
         .map_err(|e| e.to_string())?
         .filter(|s| !s.trim().is_empty())
         .ok_or_else(|| "asrModelMissing".to_string())?;
-    validate_asr_transcription(&config, model.trim()).await
+    // 验证请求体与真实转写保持一致：OpenRouter / ZenMux 走 JSON+base64，
+    // 其余 whisper 兼容厂商走 multipart——避免「测试连接」假阴性（issue #837）。
+    let request_format = crate::coordinator::whisper_request_format(&active_asr);
+    validate_asr_transcription(&config, model.trim(), request_format).await
 }
 
 /// 讯飞 RTASR 验证：真连 + 500ms 静音 + 收尾。鉴权错误（10105 / 10110）在握手阶段
@@ -676,7 +680,11 @@ pub(crate) fn active_sherpa_asr_is_supported(provider: &str) -> bool {
     }
 }
 
-async fn validate_asr_transcription(config: &ProviderConfig, model: &str) -> Result<(), String> {
+async fn validate_asr_transcription(
+    config: &ProviderConfig,
+    model: &str,
+    request_format: crate::asr::whisper::AsrRequestFormat,
+) -> Result<(), String> {
     const MAX_ASR_VALIDATE_BODY_BYTES: usize = 1024 * 1024;
     const MAX_ATTEMPTS: u32 = 6;
     let url = asr_transcriptions_url(&config.base_url)?;
@@ -689,20 +697,57 @@ async fn validate_asr_transcription(config: &ProviderConfig, model: &str) -> Res
     let mut attempt: u32 = 0;
     let response = loop {
         attempt += 1;
-        let wav_part = reqwest::multipart::Part::bytes(wav.clone())
-            .file_name("openless-asr-check.wav")
-            .mime_str("audio/wav")
-            .map_err(|e| format!("请求体构建失败: {e}"))?;
-        let form = reqwest::multipart::Form::new()
-            .part("file", wav_part)
-            .text("model", model.to_string());
-        // `openai-compatible` 允许 API Key 留空：此时不带 Authorization 头，
-        // 避免空 Bearer 被服务端 401 拒绝（与 fetch_provider_models 一致）。
-        let mut request = client.post(&url);
-        if !config.api_key.trim().is_empty() {
-            request = request.header("Authorization", format!("Bearer {}", config.api_key));
-        }
-        match request.multipart(form).send().await {
+        let request = match request_format {
+            crate::asr::whisper::AsrRequestFormat::Multipart => {
+                let wav_part = reqwest::multipart::Part::bytes(wav.clone())
+                    .file_name("openless-asr-check.wav")
+                    .mime_str("audio/wav")
+                    .map_err(|e| format!("请求体构建失败: {e}"))?;
+                let form = reqwest::multipart::Form::new()
+                    .part("file", wav_part)
+                    .text("model", model.to_string());
+                let mut request = client.post(&url);
+                if !config.api_key.trim().is_empty() {
+                    request = request.header("Authorization", format!("Bearer {}", config.api_key));
+                }
+                request.multipart(form)
+            }
+            crate::asr::whisper::AsrRequestFormat::OpenRouterJson => {
+                // OpenRouter：application/json + base64（issue #582），与真实
+                // 转写请求同形；不带 multipart 专属字段。
+                let body = serde_json::json!({
+                    "model": model,
+                    "input_audio": {
+                        "data": base64::engine::general_purpose::STANDARD.encode(&wav),
+                        "format": "wav",
+                    },
+                });
+                let mut request = client.post(&url);
+                if !config.api_key.trim().is_empty() {
+                    request = request.header("Authorization", format!("Bearer {}", config.api_key));
+                }
+                request.json(&body)
+            }
+            crate::asr::whisper::AsrRequestFormat::ZenMuxJson => {
+                // ZenMux：application/json + base64，enable_itn 与真实请求默认
+                // 一致（true），language 留空走服务端自动检测（issue #837）。
+                let body = serde_json::json!({
+                    "model": model,
+                    "input_audio": {
+                        "data": base64::engine::general_purpose::STANDARD.encode(&wav),
+                        "format": "wav",
+                    },
+                    "enable_itn": true,
+                });
+                let mut request = client.post(&url);
+                if !config.api_key.trim().is_empty() {
+                    request = request.header("Authorization", format!("Bearer {}", config.api_key));
+                }
+                request.json(&body)
+            }
+        };
+        match request.send().await
+        {
             Ok(resp) => break resp,
             Err(e) if e.is_timeout() => return Err("providerRequestTimeout".to_string()),
             Err(e) if (e.is_connect() || e.is_request()) && attempt < MAX_ATTEMPTS => {

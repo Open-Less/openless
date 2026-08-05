@@ -144,6 +144,114 @@ impl<T: SettingsWriter + ?Sized> SettingsWriter for Arc<T> {
     }
 }
 
+/// 非核心热键，用于保存兜底的冲突化解。dictation 是核心热键，永不参与调整。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NonCoreHotkey {
+    Translation,
+    Qa,
+    SwitchStyle,
+    OpenApp,
+    SelectionPolish,
+    LessComputer,
+}
+
+impl NonCoreHotkey {
+    fn get(&self, prefs: &UserPreferences) -> Option<ShortcutBinding> {
+        match self {
+            Self::Translation => Some(prefs.translation_hotkey.clone()),
+            Self::Qa => prefs.qa_hotkey.clone(),
+            Self::SwitchStyle => prefs.switch_style_hotkey.clone(),
+            Self::OpenApp => prefs.open_app_hotkey.clone(),
+            Self::SelectionPolish => prefs.selection_polish_hotkey.clone(),
+            Self::LessComputer => prefs.coding_agent_voice_hotkey.clone(),
+        }
+    }
+
+    fn set(&self, prefs: &mut UserPreferences, value: Option<ShortcutBinding>) {
+        match self {
+            // translation 是必填键，None 表示恢复失败时保持旧值不动。
+            Self::Translation => {
+                if let Some(value) = value {
+                    prefs.translation_hotkey = value;
+                }
+            }
+            Self::Qa => prefs.qa_hotkey = value,
+            Self::SwitchStyle => prefs.switch_style_hotkey = value,
+            Self::OpenApp => prefs.open_app_hotkey = value,
+            Self::SelectionPolish => prefs.selection_polish_hotkey = value,
+            Self::LessComputer => prefs.coding_agent_voice_hotkey = value,
+        }
+    }
+}
+
+/// 单个非核心热键是否非法。与 `reject_non_dictation_side_specific_shortcuts`
+/// 的逐键校验保持精确一致，避免把非冲突键一并停用。
+fn non_core_hotkey_invalid(key: NonCoreHotkey, binding: &ShortcutBinding) -> bool {
+    if crate::shortcut_binding::reject_side_specific_non_dictation(binding).is_err() {
+        return true;
+    }
+    match key {
+        NonCoreHotkey::SelectionPolish => {
+            crate::shortcut_binding::validate_binding(binding).is_err()
+                || reject_bare_shift_dictation_shortcut(binding).is_err()
+        }
+        _ => false,
+    }
+}
+
+/// 保存兜底（#904）：热键冲突不能把整份设置挡在保存之外。
+///
+/// 按核心度从高到低处理每个非核心热键：凡与更高优先级键重叠、或本身非法
+/// （侧特定修饰键等）的，恢复为旧值；旧值仍冲突/非法（历史遗留，例如 1.3.15
+/// 升级注入的选区润色默认键与录音键重复）时停用（translation 回退默认 Shift）。
+/// 返回被调整的键数量。dictation 永远保留，不参与调整。
+pub(crate) fn reconcile_hotkey_collisions(
+    prefs: &mut UserPreferences,
+    previous: &UserPreferences,
+) -> usize {
+    // 处理顺序 = 核心度从高到低：处理某项时，更高优先级的键已定稿。
+    const ORDER: [NonCoreHotkey; 6] = [
+        NonCoreHotkey::Translation,
+        NonCoreHotkey::Qa,
+        NonCoreHotkey::SwitchStyle,
+        NonCoreHotkey::OpenApp,
+        NonCoreHotkey::SelectionPolish,
+        NonCoreHotkey::LessComputer,
+    ];
+    let mut higher: Vec<ShortcutBinding> = vec![prefs.dictation_hotkey.clone()];
+    let mut adjusted = 0;
+    for key in ORDER {
+        let Some(current) = key.get(prefs) else {
+            continue;
+        };
+        let collides = higher
+            .iter()
+            .any(|held| crate::shortcut_binding::bindings_overlap(held, &current));
+        if !collides && !non_core_hotkey_invalid(key, &current) {
+            higher.push(current);
+            continue;
+        }
+        let fallback = key.get(previous).filter(|candidate| {
+            !higher
+                .iter()
+                .any(|held| crate::shortcut_binding::bindings_overlap(held, candidate))
+                && !non_core_hotkey_invalid(key, candidate)
+        });
+        // translation 不能停用：旧值仍冲突/非法时回退到默认 Shift（不会与任何键重叠）。
+        let resolved = if key == NonCoreHotkey::Translation && fallback.is_none() {
+            Some(UserPreferences::default().translation_hotkey.clone())
+        } else {
+            fallback
+        };
+        key.set(prefs, resolved.clone());
+        adjusted += 1;
+        if let Some(value) = resolved {
+            higher.push(value);
+        }
+    }
+    adjusted
+}
+
 pub(crate) fn persist_settings<T: SettingsWriter>(
     coord: &T,
     prefs: UserPreferences,
@@ -163,7 +271,17 @@ pub(crate) fn persist_settings_with_keyboard_apply<T: SettingsWriter>(
     let mut previous = coord.read_settings();
     sync_dictation_hotkey_legacy_fields(&mut previous);
     sync_dictation_hotkey_legacy_fields(&mut prefs);
-    reject_hotkey_collisions(&prefs)?;
+    if let Err(collision_error) = reject_hotkey_collisions(&prefs) {
+        // 兜底（#904）：热键冲突（含历史遗留的重复键）不能拒绝整份设置保存。
+        // 自动把冲突/非法的非核心热键恢复旧值或停用，其余设置照常落盘。
+        let adjusted = reconcile_hotkey_collisions(&mut prefs, &previous);
+        reject_hotkey_collisions(&prefs).map_err(|leftover| {
+            format!("{collision_error}; 自动化解 {adjusted} 项后仍无法通过校验: {leftover}")
+        })?;
+        log::warn!(
+            "[settings] 热键冲突已自动化解（调整 {adjusted} 项）后保存: {collision_error}"
+        );
+    }
     let dictation_shortcut_changed = previous.dictation_hotkey != prefs.dictation_hotkey;
     let dictation_mode_changed = previous.hotkey.mode != prefs.hotkey.mode;
     let qa_changed = previous.qa_hotkey != prefs.qa_hotkey;
@@ -287,6 +405,10 @@ pub fn set_settings(
     // 用户改键会让浮窗里的 "{recordHotkey}" 文案一直停留在旧值。
     persist_settings(&*coord, prefs)?;
     let prefs = coord.prefs().get();
+    // 保存即同步胶囊样式原子：下一次录音的入场帧就携带新样式，不依赖 emit_capsule
+    // 主线程闭包的 ~30Hz 同步（Windows 主线程拥塞时闭包延迟 → 整场显示旧样式）。
+    // 前端也会通过 prefs:changed 广播收到新样式，录音中切换即时换肤。
+    coord.sync_capsule_style_from_preferences();
     // 系统代理开关变化时立即重建客户端连接池（issue #869）。
     if remote_prev.use_system_proxy != prefs.use_system_proxy {
         crate::net::set_use_system_proxy(prefs.use_system_proxy);
@@ -335,6 +457,8 @@ pub fn set_settings(
     prefs.android_overlay_trigger = prefs.android_overlay_trigger.normalized();
     persist_settings(&*coord, prefs)?;
     let prefs = coord.prefs().get();
+    // 保存即同步胶囊样式原子（Android 通知胶囊 payload 同源，见 emit_capsule）。
+    coord.sync_capsule_style_from_preferences();
     // 系统代理开关变化时立即重建客户端连接池（issue #869）。
     if previous.use_system_proxy != prefs.use_system_proxy {
         crate::net::set_use_system_proxy(prefs.use_system_proxy);
@@ -447,6 +571,97 @@ mod tests {
         );
         assert_eq!(saved.default_mode, PolishMode::Light);
         assert_eq!(saved.microphone_device_name, "External Mic");
+    }
+
+    #[test]
+    fn reconcile_clears_legacy_dictation_selection_polish_duplication() {
+        // #904 历史遗留：1.3.15 升级注入的选区润色默认键（右 Alt）与录音键相同。
+        let prefs = UserPreferences {
+            hotkey: crate::types::HotkeyBinding {
+                trigger: crate::types::HotkeyTrigger::RightAlt,
+                mode: crate::types::HotkeyMode::Hold,
+                keys: None,
+            },
+            dictation_hotkey: ShortcutBinding {
+                primary: "RightAlt".into(),
+                modifiers: vec![],
+            },
+            selection_polish_hotkey: Some(ShortcutBinding {
+                primary: "RightAlt".into(),
+                modifiers: vec![],
+            }),
+            ..Default::default()
+        };
+        let mut next = prefs.clone();
+
+        let adjusted = reconcile_hotkey_collisions(&mut next, &prefs);
+
+        assert!(adjusted >= 1);
+        assert!(next.selection_polish_hotkey.is_none());
+        assert!(reject_hotkey_collisions(&next).is_ok());
+    }
+
+    #[test]
+    fn persist_settings_reconciles_legacy_collision_and_still_saves_mode() {
+        // #904 复现：历史冲突存在时，用户切「自动」必须能保存成功，
+        // 冲突的选区润色键被停用，而不是整份设置被拒。
+        let collision = UserPreferences {
+            hotkey: crate::types::HotkeyBinding {
+                trigger: crate::types::HotkeyTrigger::RightAlt,
+                mode: crate::types::HotkeyMode::Hold,
+                keys: None,
+            },
+            dictation_hotkey: ShortcutBinding {
+                primary: "RightAlt".into(),
+                modifiers: vec![],
+            },
+            selection_polish_hotkey: Some(ShortcutBinding {
+                primary: "RightAlt".into(),
+                modifiers: vec![],
+            }),
+            ..Default::default()
+        };
+        let mut next = collision.clone();
+        next.hotkey.mode = crate::types::HotkeyMode::Auto;
+        let writer = RaceSettingsWriter {
+            reads: Mutex::new(vec![collision]),
+            saved: Mutex::new(None),
+        };
+
+        persist_settings_with_keyboard_apply(&writer, next, |_| Ok(())).unwrap();
+
+        let saved = writer.saved.lock().unwrap().clone().expect("prefs saved");
+        assert_eq!(saved.hotkey.mode, crate::types::HotkeyMode::Auto);
+        assert!(saved.selection_polish_hotkey.is_none());
+    }
+
+    #[test]
+    fn reconcile_resolves_non_core_overlap_and_invalid_side_specific_hotkey() {
+        // QA 与翻译键相同：较低优先级的 QA 恢复旧值，旧值仍冲突则停用。
+        let previous = UserPreferences {
+            qa_hotkey: Some(ShortcutBinding {
+                primary: "E".into(),
+                modifiers: vec!["ctrl".into(), "shift".into()],
+            }),
+            ..Default::default()
+        };
+        let mut next = previous.clone();
+        next.qa_hotkey = Some(ShortcutBinding {
+            primary: "Shift".into(),
+            modifiers: vec![],
+        });
+        // 侧特定修饰键对非 dictation 非法（SIDE_SPECIFIC_NON_DICTATION_MSG）。
+        next.translation_hotkey = ShortcutBinding {
+            primary: "D".into(),
+            modifiers: vec!["cmd-left".into()],
+        };
+
+        let adjusted = reconcile_hotkey_collisions(&mut next, &previous);
+
+        assert!(adjusted >= 2);
+        assert_eq!(next.qa_hotkey, previous.qa_hotkey);
+        assert_eq!(next.translation_hotkey, previous.translation_hotkey);
+        assert!(reject_hotkey_collisions(&next).is_ok());
     }
 }
 

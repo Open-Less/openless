@@ -192,7 +192,9 @@ export const inputStyle: CSSProperties = {
     fontSize: 12.5,
     fontFamily: "inherit",
     outline: "none",
-    background: "var(--ol-surface-2)",
+    // 与 SelectLite 触发器同底色：此前用 --ol-surface-2（浅灰）会让所有输入框/
+    // 下拉与其它设置控件（麦克风/胶囊样式等 select-trigger-bg）颜色不一致。
+    background: "var(--ol-select-trigger-bg)",
     width: "100%",
     maxWidth: 360,
     transition:
@@ -235,6 +237,10 @@ export const ASR_PRESETS = [
   // OpenRouter 的 /audio/transcriptions 走 application/json + base64（issue #582），
   // 后端 coordinator.rs::whisper_request_format 对该 id 切换到 OpenRouterJson 编码。
   { id: 'openrouter',   nameKey: 'asrOpenrouter',   baseUrl: 'https://openrouter.ai/api/v1',                   model: 'openai/whisper-large-v3-turbo' },
+  // ZenMux 聚合平台的 /audio/transcriptions 同为 application/json + base64
+  // （issue #837），后端 whisper_request_format 对该 id 切 ZenMuxJson；
+  // 语言跟随工作语言，enable_itn 开关见 AsrAdvancedOptions（仅该预设显示）。
+  { id: 'zenmux',       nameKey: 'asrZenmux',       baseUrl: 'https://zenmux.ai/api/v1',                      model: 'qwen/qwen3-asr-flash'          },
   // 通用 OpenAI 兼容端点（自建 / 局域网 llama.cpp 等）：无默认 endpoint/model，
   // 用户必填；verbose_json 与分片时长由高级选项按 provider 配置（见
   // ProvidersSection 的 AsrAdvancedOptions），默认行为最保守。

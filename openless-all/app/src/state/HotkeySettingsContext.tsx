@@ -21,6 +21,7 @@ import type {
 } from "../lib/types"
 import i18n, { outputPrefsForLocale, type SupportedLocale } from "../i18n"
 import { applyThemeFromPreference } from "../lib/themeMode"
+import { emitSaved } from "../lib/savedEvent"
 
 interface HotkeySettingsContextValue {
     prefs: UserPreferences | null
@@ -48,6 +49,7 @@ export function HotkeySettingsProvider({ children }: { children: ReactNode }) {
     const [error, setError] = useState<string | null>(null)
     const persistQueueRef = useRef<Promise<void>>(Promise.resolve())
     const latestPrefsRef = useRef<UserPreferences | null>(null)
+    const persistedPrefsRef = useRef<UserPreferences | null>(null)
 
     const refresh = useCallback(async () => {
         setLoading(true)
@@ -60,6 +62,7 @@ export function HotkeySettingsProvider({ children }: { children: ReactNode }) {
             let nextError: string | null = null
             if (prefsResult.status === "fulfilled") {
                 latestPrefsRef.current = prefsResult.value
+                persistedPrefsRef.current = prefsResult.value
                 setPrefs(prefsResult.value)
                 applyThemeFromPreference(prefsResult.value.themeMode ?? "system")
             } else {
@@ -120,6 +123,7 @@ export function HotkeySettingsProvider({ children }: { children: ReactNode }) {
                         const nextPrefs = event.payload
                         if (!nextPrefs) return
                         latestPrefsRef.current = nextPrefs
+                        persistedPrefsRef.current = nextPrefs
                         setPrefs(nextPrefs)
                         applyThemeFromPreference(nextPrefs.themeMode ?? "system")
                     },
@@ -196,7 +200,19 @@ export function HotkeySettingsProvider({ children }: { children: ReactNode }) {
             if (resolved === current) return
             setPrefs(resolved)
             latestPrefsRef.current = resolved
-            await queueSetSettings(resolved)
+            try {
+                await queueSetSettings(resolved)
+                persistedPrefsRef.current = resolved
+            } catch (error) {
+                // 兜底（#904）：保存失败必须回滚乐观状态并可见，
+                // 不能出现界面显示已切换、重启后回退的“假保存”。
+                const fallback = persistedPrefsRef.current ?? current
+                latestPrefsRef.current = fallback
+                setPrefs(fallback)
+                console.error("[hotkey-settings] save failed, rolled back", error)
+                emitSaved("failed", errorMessage(error))
+                throw error
+            }
         },
         [queueSetSettings],
     )

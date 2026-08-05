@@ -867,7 +867,7 @@ mod tests {
     }
 
     #[test]
-    fn persist_settings_rejects_less_computer_dictation_overlap() {
+    fn persist_settings_reconciles_less_computer_dictation_overlap_and_saves() {
         let writer = FakeSettingsWriter::default();
         let binding = ShortcutBinding {
             primary: "LeftControl".into(),
@@ -879,11 +879,11 @@ mod tests {
             ..Default::default()
         };
 
-        assert_eq!(
-            persist_settings(&writer, prefs),
-            Err("Less Computer 快捷键不能和听写快捷键相同".into())
-        );
-        assert!(writer.saved.lock().unwrap().is_none());
+        // 兜底（#904）：冲突不再拒绝整份保存，较低优先级的 Less Computer 键被停用。
+        persist_settings(&writer, prefs).unwrap();
+        let saved = writer.saved.lock().unwrap().clone().expect("prefs saved");
+        assert_eq!(saved.dictation_hotkey.primary, "LeftControl");
+        assert!(saved.coding_agent_voice_hotkey.is_none());
     }
 
     #[test]
@@ -1249,7 +1249,7 @@ mod tests {
     }
 
     #[test]
-    fn persist_settings_rejects_dictation_translation_overlap() {
+    fn persist_settings_reconciles_dictation_translation_overlap_and_saves() {
         let writer = FakeSettingsWriter::default();
         let binding = ShortcutBinding {
             primary: "RightControl".into(),
@@ -1261,15 +1261,15 @@ mod tests {
             ..Default::default()
         };
 
-        assert_eq!(
-            persist_settings(&writer, prefs),
-            Err("翻译快捷键不能和听写快捷键相同".into())
-        );
-        assert!(writer.saved.lock().unwrap().is_none());
+        // 兜底（#904）：冲突不再拒绝整份保存，翻译键恢复为旧默认 Shift。
+        persist_settings(&writer, prefs).unwrap();
+        let saved = writer.saved.lock().unwrap().clone().expect("prefs saved");
+        assert_eq!(saved.dictation_hotkey.primary, "RightControl");
+        assert_eq!(saved.translation_hotkey.primary, "Shift");
     }
 
     #[test]
-    fn persist_settings_rejects_translation_switch_style_overlap() {
+    fn persist_settings_reconciles_translation_switch_style_overlap_and_saves() {
         let writer = FakeSettingsWriter::default();
         let binding = ShortcutBinding {
             primary: "T".into(),
@@ -1281,15 +1281,16 @@ mod tests {
             ..Default::default()
         };
 
-        assert_eq!(
-            persist_settings(&writer, prefs),
-            Err("切换风格快捷键不能和翻译快捷键相同".into())
-        );
-        assert!(writer.saved.lock().unwrap().is_none());
+        // 兜底（#904）：冲突不再拒绝整份保存，切换风格键恢复为旧默认。
+        persist_settings(&writer, prefs).unwrap();
+        let saved = writer.saved.lock().unwrap().clone().expect("prefs saved");
+        let defaults = UserPreferences::default();
+        assert_eq!(saved.translation_hotkey.primary, "T");
+        assert_eq!(saved.switch_style_hotkey, defaults.switch_style_hotkey);
     }
 
     #[test]
-    fn persist_settings_rejects_switch_style_open_app_overlap() {
+    fn persist_settings_reconciles_switch_style_open_app_overlap_and_saves() {
         let writer = FakeSettingsWriter::default();
         let binding = ShortcutBinding {
             primary: "K".into(),
@@ -1297,15 +1298,16 @@ mod tests {
         };
         let prefs = UserPreferences {
             switch_style_hotkey: Some(binding.clone()),
-            open_app_hotkey: Some(binding),
+            open_app_hotkey: Some(binding.clone()),
             ..Default::default()
         };
 
-        assert_eq!(
-            persist_settings(&writer, prefs),
-            Err("打开应用快捷键不能和切换风格快捷键相同".into())
-        );
-        assert!(writer.saved.lock().unwrap().is_none());
+        // 兜底（#904）：冲突不再拒绝整份保存，打开应用键恢复为旧默认。
+        persist_settings(&writer, prefs).unwrap();
+        let saved = writer.saved.lock().unwrap().clone().expect("prefs saved");
+        let defaults = UserPreferences::default();
+        assert_eq!(saved.switch_style_hotkey, Some(binding));
+        assert_eq!(saved.open_app_hotkey, defaults.open_app_hotkey);
     }
 
     #[test]
