@@ -124,22 +124,11 @@ class OpenLessAccessibilityService : AccessibilityService() {
     private fun performPasteToFocusedFieldInternal(pasteText: String? = null): AccessibilityPasteResult {
         val target = findEditableTarget()
         if (target == null) {
-            // #region agent log
-            Log.i(TAG, "[DBG-21a66f][H2] performPaste NO_FOCUSED_EDITOR")
-            // #endregion
             return AccessibilityPasteResult.NO_FOCUSED_EDITOR
         }
         return try {
-            val pkg = target.packageName?.toString()
-            val className = target.className?.toString()
             target.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
             val ok = pasteWithRetryOrSetText(target, pasteText)
-            // #region agent log
-            Log.i(
-                TAG,
-                "[DBG-21a66f][H3] performPaste result=${if (ok) "SUCCESS" else "PASTE_REJECTED"} pkg=$pkg class=$className editable=${target.isEditable} textSource=${if (pasteText.isNullOrEmpty()) "clipboard" else "ipc"}",
-            )
-            // #endregion
             if (ok) {
                 AccessibilityPasteResult.SUCCESS
             } else {
@@ -179,12 +168,6 @@ class OpenLessAccessibilityService : AccessibilityService() {
     private fun findEditableTarget(): AccessibilityNodeInfo? {
         lastEditableFocus?.let { cached ->
             if (cached.refresh() && OpenLessAccessibilityTarget.isPasteTarget(cached)) {
-                // #region agent log
-                Log.i(
-                    TAG,
-                    "[DBG-53a00d][H4] findEditableTarget via cache pkg=${cached.packageName} class=${cached.className}",
-                )
-                // #endregion
                 return AccessibilityNodeInfo.obtain(cached)
             }
         }
@@ -196,12 +179,6 @@ class OpenLessAccessibilityService : AccessibilityService() {
             try {
                 pasteTargetsInActive = countPasteTargetsInTree(activeRoot, 0)
                 findEditableInRoot(activeRoot)?.let { found ->
-                    // #region agent log
-                    Log.i(
-                        TAG,
-                        "[DBG-53a00d][H3] findEditableTarget via activeRoot pkg=${found.packageName} class=${found.className}",
-                    )
-                    // #endregion
                     return found
                 }
             } finally {
@@ -216,12 +193,6 @@ class OpenLessAccessibilityService : AccessibilityService() {
             val root = window.root ?: continue
             try {
                 findEditableInRoot(root)?.let { found ->
-                    // #region agent log
-                    Log.i(
-                        TAG,
-                        "[DBG-53a00d][H3] findEditableTarget via windowScan pkg=${found.packageName} class=${found.className}",
-                    )
-                    // #endregion
                     return found
                 }
             } finally {
@@ -233,12 +204,6 @@ class OpenLessAccessibilityService : AccessibilityService() {
             TAG,
             "findEditableTarget failed activeRoot=$activePackage windowCount=${windows.size} hadCache=${lastEditableFocus != null} pasteTargetsInActive=$pasteTargetsInActive",
         )
-        // #region agent log
-        Log.i(
-            TAG,
-            "[DBG-53a00d][H1] findEditableTarget failed activeRoot=$activePackage pasteTargetsInActive=$pasteTargetsInActive",
-        )
-        // #endregion
         invalidateEditableCache()
         return null
     }
@@ -322,9 +287,6 @@ class OpenLessAccessibilityService : AccessibilityService() {
     private fun pasteWithRetryOrSetText(target: AccessibilityNodeInfo, pasteText: String? = null): Boolean {
         val effectiveText = pasteText?.takeIf { it.isNotEmpty() } ?: clipboardText()
         if (effectiveText.isEmpty()) {
-            // #region agent log
-            Log.w(TAG, "[DBG-21a66f][H1] paste aborted: no text from IPC or clipboard")
-            // #endregion
             return false
         }
         val beforeText = nodeText(target)

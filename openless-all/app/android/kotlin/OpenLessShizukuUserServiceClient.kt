@@ -88,9 +88,6 @@ internal object OpenLessShizukuUserServiceClient {
                 return null
             }
             val service = binderRef.get() ?: return null
-            // #region agent log
-            Log.i(TAG, "[DBG-21a66f][H4] UserService bound tag=$tag daemon=$daemon suffix=$processNameSuffix")
-            // #endregion
             block(service)
         } catch (error: Throwable) {
             Log.w(TAG, "UserService bind failed tag=$tag daemon=$daemon", error)

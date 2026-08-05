@@ -173,9 +173,6 @@ object OpenLessShizukuBridge {
                 null,
             ) as Process
             val exitCode = process.waitFor()
-            // #region agent log
-            Log.i(TAG, "[DBG-21a66f][H4] injectPasteKeyViaShizukuShell exitCode=$exitCode")
-            // #endregion
             exitCode == 0
         } catch (error: Throwable) {
             Log.w(TAG, "inject paste via Shizuku.newProcess reflection failed", error)

@@ -85,9 +85,6 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
   const sizePendingRef = useRef(false);
 
   const refreshAndroid = async () => {
-    // #region agent log
-    const refreshStartedAt = Date.now();
-    // #endregion
     const [overlayResult, accessibilityResult, shizukuResult, settingsResult] =
       await Promise.allSettled([
         getAndroidOverlayStatus(),
@@ -95,22 +92,6 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
         getAndroidShizukuStatus(),
         getSettings(),
       ]);
-    // #region agent log
-    const refreshSummary = {
-      overlay: overlayResult.status,
-      accessibility: accessibilityResult.status,
-      shizuku: shizukuResult.status,
-      settings: settingsResult.status,
-      durationMs: Date.now() - refreshStartedAt,
-      accessibilityReason:
-        accessibilityResult.status === 'rejected'
-          ? String(accessibilityResult.reason)
-          : undefined,
-      shizukuReason:
-        shizukuResult.status === 'rejected' ? String(shizukuResult.reason) : undefined,
-    };
-    console.error('[DBG-53a00d][H1-H4] refreshAndroid summary', refreshSummary);
-    // #endregion
     if (overlayResult.status === 'fulfilled') {
       setAndroidOverlay(overlayResult.value);
     }
