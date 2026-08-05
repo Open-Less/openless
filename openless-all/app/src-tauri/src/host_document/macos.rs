@@ -186,9 +186,16 @@ enum GatedElement {
 ///
 /// 顺序有讲究，两段判定不能合并：
 ///
-/// 1. 先判不需要 AX 的部分（Secure Input、bundle 黑名单）—— 命中就一条 AX 消息都不发；
-/// 2. 拿到焦点元素后补 `role` / `subrole` 再判一次 —— 密码框正是靠这个认出来的，
-///    而这两个属性不拿到元素就读不到。
+/// 1. 先用**前台 app**粗判一道（Secure Input、bundle 黑名单）—— 命中就一条 AX 消息都
+///    不发，这是为了省事，不是最终判据；
+/// 2. 拿到焦点元素后，用**元素自己的 pid** 换真正的 bundle，连同 `role` / `subrole`
+///    再判一次 —— 这一道才算数。
+///
+/// 第二道为什么必须重新取 bundle：前台 app 是在取元素**之前**采样的，而每个 AX 调用
+/// 都可能阻塞到 [`AX_MESSAGING_TIMEOUT_SECS`]。用户在这中间切了 app，第一道就会拿旧
+/// app 的身份，放行一个属于新 app 的元素 —— 终端、密码管理器正是靠 bundle 黑名单拦的。
+/// 拿元素自己的 pid 去问「你是谁」，这个时间窗就不存在了；顺带也修好了「焦点元素归属
+/// 与前台 app 本来就可能不一致」这件事。
 ///
 /// `AXUIElementSetMessagingTimeout` 也在这里统一设。不设就继承 AX 默认的 ~6 秒，对着
 /// 一个卡死的 app 就是 6 秒冻结 —— 这是本模块最重要的一行。
@@ -213,6 +220,15 @@ unsafe fn focused_element_passing_the_gate(mut gate: GateInputs) -> GatedElement
     // 显式再设一次：进程默认值只对「之后创建」的 ref 生效，对已有 ref 补一刀更稳。
     AXUIElementSetMessagingTimeout(focused, AX_MESSAGING_TIMEOUT_SECS);
 
+    // 拿元素自己的身份重判，别再信第一道用的那个前台 app。
+    let mut pid: i32 = 0;
+    if AXUIElementGetPid(focused, &mut pid) == AX_ERROR_SUCCESS && pid > 0 {
+        if let Some(owner) = crate::selection::bundle_id_for_pid(pid) {
+            gate.bundle_id = Some(owner);
+        }
+    }
+    // Secure Input 是全局状态，顺手也刷新一次 —— 同样可能在这几次 AX 调用期间才打开。
+    gate.secure_input = crate::unicode_keystroke::is_secure_input_enabled();
     gate.role = copy_string_attr(focused, b"AXRole\0");
     gate.subrole = copy_string_attr(focused, b"AXSubrole\0");
     if let Some(reason) = evaluate_gate(&gate) {

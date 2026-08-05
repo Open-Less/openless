@@ -843,6 +843,33 @@ pub(crate) fn current_front_app_parts() -> (Option<String>, Option<String>) {
     }
 }
 
+/// **某个进程**的 bundle id —— 不是「谁在最前面」，是「这个 pid 是谁」。
+///
+/// `host_document` 的安全闸门要判的是**手里这个 AX 元素属于哪个 app**。用前台 app 顶替
+/// 有两个问题，后者是安全问题：
+///
+/// 1. 焦点元素的归属和「谁在最前面」本来就可能不一致；
+/// 2. 更要命的是时间差 —— bundle 在取元素**之前**采样，而每个 AX 调用都可能阻塞到
+///    `AX_MESSAGING_TIMEOUT_SECS`。用户在这中间切了 app，闸门就会拿旧 app 的身份，去
+///    放行一个属于新 app 的元素。终端、密码管理器正是靠 bundle 黑名单拦的。
+///
+/// 拿元素自己的 pid 来问，这个窗口就不存在了。
+#[cfg(target_os = "macos")]
+pub(crate) fn bundle_id_for_pid(pid: i32) -> Option<String> {
+    use objc2::msg_send;
+    use objc2::runtime::{AnyClass, AnyObject};
+
+    unsafe {
+        let cls = AnyClass::get("NSRunningApplication")?;
+        let app: *mut AnyObject = msg_send![cls, runningApplicationWithProcessIdentifier: pid];
+        if app.is_null() {
+            return None;
+        }
+        let bundle_obj: *mut AnyObject = msg_send![app, bundleIdentifier];
+        ns_string_to_rust(bundle_obj)
+    }
+}
+
 #[cfg(target_os = "windows")]
 pub(crate) fn current_front_app_parts() -> (Option<String>, Option<String>) {
     use windows::Win32::UI::WindowsAndMessaging::{
