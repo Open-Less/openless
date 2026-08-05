@@ -247,12 +247,25 @@ unsafe fn focused_element_passing_the_gate(mut gate: GateInputs) -> GatedElement
     AXUIElementSetMessagingTimeout(focused, AX_MESSAGING_TIMEOUT_SECS);
 
     // 拿元素自己的身份重判，别再信第一道用的那个前台 app。
+    //
+    // **确认不了归属就不读 —— 这里必须失败关闭。** 取不到 pid 或查不到 bundle 时，
+    // 如果沿用第一道那个采样值，闸门就退回按「谁在最前面」判定，等于这个修复没做；
+    // 而把 `bundle_id` 清成 `None` 同样不行 —— `evaluate_gate` 对缺失的元数据是放行的
+    //（见 `missing_metadata_does_not_block_by_itself`），那是另一种 fail-open。
+    //
+    // 代价是没有 bundle id 的进程读不到上下文。那类进程本来就很少，而「宁可不读」正是
+    // 这个功能对隐私的基本承诺。
     let mut pid: i32 = 0;
-    if AXUIElementGetPid(focused, &mut pid) == AX_ERROR_SUCCESS && pid > 0 {
-        if let Some(owner) = crate::selection::bundle_id_for_pid(pid) {
-            gate.bundle_id = Some(owner);
-        }
-    }
+    let owner = (AXUIElementGetPid(focused, &mut pid) == AX_ERROR_SUCCESS && pid > 0)
+        .then(|| crate::selection::bundle_id_for_pid(pid))
+        .flatten();
+    let Some(owner) = owner else {
+        CFRelease(focused as CFTypeRef);
+        return GatedElement::Unavailable(
+            "could not confirm which app owns the focused element",
+        );
+    };
+    gate.bundle_id = Some(owner);
     // Secure Input 是全局状态，顺手也刷新一次 —— 同样可能在这几次 AX 调用期间才打开。
     gate.secure_input = crate::unicode_keystroke::is_secure_input_enabled();
     gate.role = copy_string_attr(focused, b"AXRole\0");
