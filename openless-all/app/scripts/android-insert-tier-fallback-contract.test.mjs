@@ -98,8 +98,13 @@ assert.match(
 );
 assert.match(
   bridgeSource,
-  /withPasteService/,
-  'injectPasteKey must use daemon paste service bind',
+  /injectPasteKeyViaShizukuShell/,
+  'paste injection must try Shizuku shell before UserService bind',
+);
+assert.match(
+  bridgeSource,
+  /getDeclaredMethod\(\s*"newProcess"/,
+  'shell paste must invoke private Shizuku.newProcess via reflection',
 );
 
 console.log('Android insert tier fallback contract checks passed');

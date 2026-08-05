@@ -18,6 +18,7 @@ import rikka.sui.Sui
 @Keep
 object OpenLessShizukuBridge {
     private const val TAG = "OpenLessShizuku"
+    private const val KEYCODE_PASTE = "279"
     private const val SHIZUKU_PACKAGE = "moe.shizuku.privileged.api"
     private const val RECOVERY_BIND_TIMEOUT_MS = 5_000L
     private const val RECOVERY_BIND_POLL_MS = 250L
@@ -140,9 +141,46 @@ object OpenLessShizukuBridge {
         if (detectState(context) != ShizukuState.Authorized) {
             return false
         }
+        if (injectPasteKeyViaShizukuShell()) {
+            return true
+        }
         return OpenLessShizukuUserServiceClient.withPasteService(context) { service ->
             service.injectPasteKey()
         } == true
+    }
+
+    /**
+     * MTK/Xiaomi ROMs NPE in UserService app_process startup; Shizuku.newProcess is private
+     * but callable via reflection and does not spawn com.openless.app:* processes.
+     */
+    internal fun injectPasteKeyViaShizukuShell(): Boolean {
+        if (!Shizuku.pingBinder()) {
+            return false
+        }
+        return try {
+            val method = Shizuku::class.java.getDeclaredMethod(
+                "newProcess",
+                Array<String>::class.java,
+                Array<String>::class.java,
+                String::class.java,
+            )
+            method.isAccessible = true
+            @Suppress("UNCHECKED_CAST")
+            val process = method.invoke(
+                null,
+                arrayOf("input", "keyevent", KEYCODE_PASTE),
+                null,
+                null,
+            ) as Process
+            val exitCode = process.waitFor()
+            // #region agent log
+            Log.i(TAG, "[DBG-21a66f][H4] injectPasteKeyViaShizukuShell exitCode=$exitCode")
+            // #endregion
+            exitCode == 0
+        } catch (error: Throwable) {
+            Log.w(TAG, "inject paste via Shizuku.newProcess reflection failed", error)
+            false
+        }
     }
 
     @JvmStatic
