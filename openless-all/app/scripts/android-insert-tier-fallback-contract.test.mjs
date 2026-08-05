@@ -87,8 +87,8 @@ assert.match(
 );
 assert.match(
   clientSource,
-  /withPasteService[\s\S]*daemon\s*=\s*true/s,
-  'paste service bind must use daemon mode',
+  /withPasteService[\s\S]*daemon\s*=\s*true[\s\S]*PASTE_SERVICE_PROCESS_SUFFIX/s,
+  'paste service bind must use daemon mode with required process suffix',
 );
 
 assert.match(

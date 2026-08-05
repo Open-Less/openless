@@ -20,6 +20,7 @@ internal object OpenLessShizukuUserServiceClient {
     private const val BIND_TIMEOUT_MS = 8_000L
     private const val SERVICE_VERSION = 3
     private const val USER_SERVICE_PROCESS_SUFFIX = "shizuku"
+    private const val PASTE_SERVICE_PROCESS_SUFFIX = "paste"
 
     private val recoveryLock = ReentrantLock()
 
@@ -44,7 +45,7 @@ internal object OpenLessShizukuUserServiceClient {
         return bindUserService(
             context = context,
             daemon = true,
-            processNameSuffix = null,
+            processNameSuffix = PASTE_SERVICE_PROCESS_SUFFIX,
             tag = "openless_paste",
             block = block,
         )
@@ -53,7 +54,7 @@ internal object OpenLessShizukuUserServiceClient {
     private fun <T> bindUserService(
         context: Context,
         daemon: Boolean,
-        processNameSuffix: String?,
+        processNameSuffix: String,
         tag: String,
         block: (IOpenLessShizukuUserService) -> T,
     ): T? {
@@ -61,13 +62,11 @@ internal object OpenLessShizukuUserServiceClient {
             return null
         }
         val component = ComponentName(context.packageName, OpenLessShizukuUserService::class.java.name)
-        var args = Shizuku.UserServiceArgs(component)
+        val args = Shizuku.UserServiceArgs(component)
             .daemon(daemon)
+            .processNameSuffix(processNameSuffix)
             .version(SERVICE_VERSION)
             .tag(tag)
-        if (!daemon && processNameSuffix != null) {
-            args = args.processNameSuffix(processNameSuffix)
-        }
 
         val latch = CountDownLatch(1)
         val binderRef = AtomicReference<IOpenLessShizukuUserService?>(null)
@@ -89,6 +88,9 @@ internal object OpenLessShizukuUserServiceClient {
                 return null
             }
             val service = binderRef.get() ?: return null
+            // #region agent log
+            Log.i(TAG, "[DBG-21a66f][H4] UserService bound tag=$tag daemon=$daemon suffix=$processNameSuffix")
+            // #endregion
             block(service)
         } catch (error: Throwable) {
             Log.w(TAG, "UserService bind failed tag=$tag daemon=$daemon", error)
