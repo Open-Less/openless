@@ -155,15 +155,20 @@ extern "C" {
         encoding: u32,
     ) -> CFStringRef;
     fn CFStringGetCStringPtr(s: CFStringRef, encoding: u32) -> *const c_char;
+    // 返回 `u8` 而不是 `bool`：CoreFoundation 的 `Boolean` 是 `unsigned char`，不是
+    // C 的 `_Bool`。Rust 的 `bool` 要求位模式**恰好**是 0 或 1，其余一律 UB —— 拿它
+    // 接一个 `unsigned char` 是在赌 CF 永远只返回 0/1。同文件的 `AXValueGetValue`
+    // 早就是 `u8` 了，这两个当初照抄 `selection.rs` 抄进来的（那边至今还是 `bool`，
+    // 属于本模块开头声明过「不得复制」的那类既有缺陷）。
     fn CFStringGetCString(
         s: CFStringRef,
         buffer: *mut c_char,
         buffer_size: isize,
         encoding: u32,
-    ) -> bool;
+    ) -> u8;
     fn CFStringGetLength(s: CFStringRef) -> isize;
     fn CFStringGetMaximumSizeForEncoding(length: isize, encoding: u32) -> isize;
-    fn CFNumberGetValue(number: CFTypeRef, number_type: i32, value_ptr: *mut c_void) -> bool;
+    fn CFNumberGetValue(number: CFTypeRef, number_type: i32, value_ptr: *mut c_void) -> u8;
 }
 
 /// 拿到焦点元素的结果。`Ready` 里的 ref **调用方负责 `CFRelease`**。
@@ -368,7 +373,7 @@ unsafe fn copy_index_attr(element: AxUiElementRef, attribute: &[u8]) -> Option<u
         &mut out as *mut _ as *mut c_void,
     );
     CFRelease(value);
-    if ok && out >= 0 {
+    if ok != 0 && out >= 0 {
         Some(out as usize)
     } else {
         None
@@ -420,7 +425,7 @@ unsafe fn cfstring_to_rust(s: CFStringRef) -> Option<String> {
         max_bytes,
         K_CF_STRING_ENCODING_UTF8,
     );
-    if !ok {
+    if ok == 0 {
         return None;
     }
     CStr::from_ptr(buf.as_ptr() as *const c_char)
