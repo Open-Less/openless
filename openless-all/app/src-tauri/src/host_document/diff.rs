@@ -56,6 +56,25 @@ pub struct EditPair {
 /// 注意**纯删除是允许学的**（`target` 为空）：「把多余的『的』删掉」是有意义的纠正，
 /// 而且它不会像纯插入那样在任何位置无条件触发。
 pub fn minimal_edit(before_text: &str, after_text: &str) -> Option<EditPair> {
+    // 比对前先去掉两侧的尾部空白。**这一步不是洁癖，是算法正确性的前提。**
+    //
+    // 公共后缀是从末尾往前逐字符比的，末尾只要差一个字符，后缀长度立刻判为 0，
+    // 于是「改动点到结尾」的整段都成了差异。真机上就这么翻过车：用户只把「压根」
+    // 改成「根本」，改完顺手按了回车 —— 基线末尾是「醒」、当前末尾是「\n」，第一个
+    // 字符就不匹配，两个字的改动被撑成九个字的整句，卡片上弹出「压根就没有给我提醒
+    // → 根本就没有给我提醒」。用户的原话是「我只改了一个词，这么长怎么要」。
+    //
+    // 尾部空白的差异本身没有词汇价值（多半就是一次回车），去掉它既修好了后缀剥离，
+    // 也顺带让「只按了个回车」这种情况在下一行的相等判定里直接出局。
+    //
+    // **残留的一面**：这个算法只能表达**一处连续**的差异（前缀 + 后缀两刀剥出中间）。
+    // 用户同时做两处改动时，两处之间的所有字都会被并进同一个 span。trim_end 只治好了
+    // 「第二处是尾部空白」这一种 —— 也是最常见的一种。换成尾部标点（改完词又补了个
+    // 句号）仍然会撑开。真要根治得换成 LCS 之类能识别多处改动的算法，那是另一件事；
+    // 在那之前，卡片上偶尔出现的超长 pattern 就是这个来源。
+    let before_text = before_text.trim_end();
+    let after_text = after_text.trim_end();
+
     if before_text == after_text {
         return None;
     }
@@ -390,6 +409,26 @@ mod tests {
     /// 「一长串不带标点的话 → ok」：`minimal_edit` 的 64 char 闸门放它过去（没超），
     /// 句读检查也拦不住（没标点）。只量 target 的话它就成了一条建议 ——「要记住 ok
     /// 这个词吗」，而卡片上那条 pattern 长到显示不下。那是改写，不是纠错。
+    /// 真机翻车：用户只改了两个字，改完按了回车，建议却变成整句。
+    ///
+    /// 公共后缀从末尾往前比，末尾差一个字符（`醒` vs `\n`）后缀就判为 0，于是「改动点
+    /// 到结尾」整段都成了差异。用户看到卡片上弹出九个字的短语，原话是「我只改了一个词，
+    /// 这么长怎么要」。
+    #[test]
+    fn a_trailing_newline_must_not_swallow_the_whole_tail() {
+        let e = minimal_edit("我压根就没有给我提醒", "我根本就没有给我提醒\n")
+            .expect("是一处有效改动");
+        assert_eq!(e.source, "压根", "只该抠出真正改掉的那两个字");
+        assert_eq!(e.target, "根本");
+    }
+
+    /// 只按了个回车不算改动。
+    #[test]
+    fn pressing_enter_alone_is_not_an_edit() {
+        assert!(minimal_edit("写完了", "写完了\n").is_none());
+        assert!(minimal_edit("写完了", "写完了  \n\n").is_none());
+    }
+
     #[test]
     fn a_long_source_is_a_rewrite_not_a_correction() {
         let e = EditPair {
