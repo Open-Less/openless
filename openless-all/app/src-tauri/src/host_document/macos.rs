@@ -478,6 +478,15 @@ impl Drop for SendableElement {
 /// 观察线程持有的全部状态。回调通过 `refcon` 拿到它。
 struct WatchContext {
     element: SendableElement,
+    /// 停止 flag，与 [`run_edit_watch_loop`] 那个是同一个。
+    ///
+    /// 回调也得看它，不能只有循环看。解除信号到达时，观察线程可能正卡在
+    /// `CFRunLoop::run_in_mode` 里（最长 1 秒），而这一秒内排队的 AX 通知**照样会派发
+    /// 到回调**——循环末尾那道 `if !stop.load(..)` 覆盖不到这条路径。
+    ///
+    /// 这不是唯一防线（协调方那边还有观察器代次和「听写进行中不弹卡片」两道），但它是
+    /// 最早、最便宜的一道：对不上就直接不做那次跨进程 AX 全文读取和比对。
+    stop: Arc<AtomicBool>,
     /// 比对基线：**我们插完字之后**该控件的全文。
     ///
     /// 不能在武装的那一刻就定死。`inserter.insert()` 返回只代表事件发出去了，目标 app
@@ -544,6 +553,14 @@ unsafe extern "C" fn value_changed_shim(
     }
     let ctx = &*(refcon as *const WatchContext);
     ctx.notifications.set(ctx.notifications.get() + 1);
+    // 已经解除就什么都别做。**这一刀必须在读 AXValue 之前。**
+    //
+    // 解除信号到达时观察线程可能正卡在 `run_in_mode` 里（最长 1 秒），这一秒内排队的
+    // AX 通知照样派发到这里 —— 循环末尾那道 `if !stop.load(..)` 覆盖不到回调这条路。
+    // 不挡的话，一次已经作废的观察还会再去跨进程读一遍宿主 app 的全文。
+    if ctx.stop.load(Ordering::Relaxed) {
+        return;
+    }
     // 每一条 early return 都要留痕。否则「回调没被调用」和「回调被调用但被过滤掉了」
     // 在日志里长得一模一样 —— 第一次真机排查就卡在这个盲点上。
     let Some(current) = copy_string_attr(ctx.element.as_ref(), b"AXValue\0") else {
@@ -715,6 +732,7 @@ pub(super) fn spawn_edit_watcher(
             run_edit_watch_loop(
                 WatchContext {
                     element,
+                    stop: Arc::clone(&thread_stop),
                     // 武装时若文档里已经有我们插的字，说明落字已经生效，基线直接可用。
                     anchored: std::cell::Cell::new(baseline.contains(&typed_text)),
                     baseline: std::cell::RefCell::new(baseline),
