@@ -86,5 +86,10 @@ assert.match(
   /fun injectPasteKey\(context: Context\): Boolean/,
   'shizuku bridge must expose injectPasteKey',
 );
+assert.match(
+  bridgeSource,
+  /Shizuku\.newProcess\([\s\S]*keyevent[\s\S]*KEYCODE_PASTE/s,
+  'paste injection must prefer Shizuku.newProcess before UserService bind',
+);
 
 console.log('Android insert tier fallback contract checks passed');
