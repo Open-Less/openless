@@ -1613,10 +1613,8 @@ pub(super) async fn begin_session_as(
             store_prepared_windows_ime_session(&mut slots, current_session_id, prepared);
         }
     }
-    // 翻译模式标志重置；hotkey 监听器在 Shift down 时再 set true。
-    inner
-        .translation_modifier_seen
-        .store(false, Ordering::SeqCst);
+    // 翻译生效标志重置；修饰键按下或安卓浮层请求时经 mark_translation_active 置位。
+    inner.translation_active.store(false, Ordering::SeqCst);
 
     #[cfg(any(debug_assertions, test))]
     if hotkey_injection_dry_run_enabled() {
@@ -3602,7 +3600,7 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     let raw_uses_llm = mode == PolishMode::Raw && super::raw_style_pack_uses_llm(&pack);
     let translation_target = prefs.translation_target_language.trim().to_string();
     let translation_active = crate::types::translation_effective(
-        inner.translation_modifier_seen.load(Ordering::SeqCst),
+        inner.translation_active.load(Ordering::SeqCst),
         &translation_target,
         &working_languages,
     );
