@@ -1062,39 +1062,6 @@ fn current_front_app_pid() -> Option<i32> {
     }
 }
 
-#[cfg(target_os = "windows")]
-fn current_front_app() -> Option<String> {
-    use windows::Win32::UI::WindowsAndMessaging::{
-        GetForegroundWindow, GetWindowTextLengthW, GetWindowTextW,
-    };
-    unsafe {
-        let hwnd = GetForegroundWindow();
-        if hwnd.0.is_null() {
-            return None;
-        }
-        let len = GetWindowTextLengthW(hwnd);
-        if len <= 0 {
-            return None;
-        }
-        let mut buf = vec![0u16; (len + 1) as usize];
-        let copied = GetWindowTextW(hwnd, &mut buf);
-        if copied <= 0 {
-            return None;
-        }
-        let title = String::from_utf16_lossy(&buf[..copied as usize]);
-        if title.is_empty() {
-            None
-        } else {
-            Some(title)
-        }
-    }
-}
-
-#[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
-fn current_front_app() -> Option<String> {
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
