@@ -72,12 +72,20 @@ export function Overview({ onOpenHistory }: OverviewProps) {
   });
   const { prefs } = useHotkeySettings();
   const credentialsRequestSeq = useRef(0);
+  const historyRequestSeq = useRef(0);
+  const activityRequestSeq = useRef(0);
 
   const refreshHistory = useCallback(() => {
+    const requestSeq = historyRequestSeq.current + 1;
+    historyRequestSeq.current = requestSeq;
     setHistoryError(false);
     listHistory()
-      .then(setHistory)
+      .then(entries => {
+        if (requestSeq !== historyRequestSeq.current) return;
+        setHistory(entries);
+      })
       .catch(error => {
+        if (requestSeq !== historyRequestSeq.current) return;
         console.error('[overview] failed to load history', error);
         setHistoryError(true);
       });
@@ -91,10 +99,16 @@ export function Overview({ onOpenHistory }: OverviewProps) {
   const [activity, setActivity] = useState<ActivityDay[] | null>(null);
   const [activityError, setActivityError] = useState(false);
   const refreshActivity = useCallback(() => {
+    const requestSeq = activityRequestSeq.current + 1;
+    activityRequestSeq.current = requestSeq;
     setActivityError(false);
     getActivityStats()
-      .then(setActivity)
+      .then(stats => {
+        if (requestSeq !== activityRequestSeq.current) return;
+        setActivity(stats);
+      })
       .catch(error => {
+        if (requestSeq !== activityRequestSeq.current) return;
         console.error('[overview] failed to load activity stats', error);
         setActivity(null);
         setActivityError(true);
