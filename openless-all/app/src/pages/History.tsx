@@ -7,9 +7,11 @@ import { Icon } from '../components/Icon';
 import { Tooltip } from '../components/Tooltip';
 import { detectOS } from '../components/WindowChrome';
 import { formatComboLabel } from '../lib/hotkey';
-import { clearHistory, deleteHistoryEntry, listHistory, readAudioRecording, retranscribeRecording, isTauri } from '../lib/ipc';
+import { clearHistory, deleteHistoryEntry, listHistory, listStylePacks, readAudioRecording, repolish, retranscribeRecording, isTauri } from '../lib/ipc';
+import { defaultPackId, packDisplayName, resolveRepolishRetryPackIdWithFallback } from '../lib/history-repolish';
 import { useMobileLayout } from '../lib/useMobileLayout';
-import type { DictationSession, PolishMode } from '../lib/types';
+import type { DictationSession, PolishMode, StylePack } from '../lib/types';
+import { countCodePoints } from '../lib/unicode';
 import { useHotkeySettings } from '../state/HotkeySettingsContext';
 import { Btn, Card, PageHeader, Pill } from './_atoms';
 import { chipSelectedStyle } from './settings/shared';
@@ -33,6 +35,33 @@ function useModeLabel(): Record<PolishMode, string> {
     structured: t('style.modes.structured.name'),
     formal: t('style.modes.formal.name'),
   };
+}
+
+// Pill 默认 nowrap + flexShrink: 0，遇上长包名会把同一排的按钮挤变形（「复制」文字竖排）。
+// 显示包名的地方一律改成可收缩 + 省略号，全名挂在外层容器的 title 上悬停查看。
+const TRUNCATED_PILL_STYLE = {
+  minWidth: 0,
+  maxWidth: '100%',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  display: 'block',
+  flexShrink: 1,
+} as const;
+
+// 历史条目上显示「哪个风格包产出的这段文本」。session.mode 只是风格包的 baseMode
+// （四个内置分类之一），自建包全都会落进这四个桶，光看 mode 分不出是哪个包——
+// 所以优先用 stylePackId 查真实包名，跟本页「重新润色」面板里的风格命名对齐。
+// 内置包例外与命名规则统一走 packDisplayName；旧历史没有 stylePackId、或包已被删除
+// 时同样回落到 mode 名。
+function styleLabelFor(
+  session: DictationSession,
+  allPacks: StylePack[] | null,
+  modeLabel: Record<PolishMode, string>,
+): string {
+  const pack = session.stylePackId
+    ? allPacks?.find(candidate => candidate.id === session.stylePackId)
+    : undefined;
+  return pack ? packDisplayName(pack, modeLabel) : modeLabel[session.mode];
 }
 
 export function History() {
@@ -69,6 +98,12 @@ export function History() {
   const { prefs } = useHotkeySettings();
   const mobile = useMobileLayout();
   const [mobileDetailOpen, setMobileDetailOpen] = useState(false);
+  // 风格包在本页有两个用途：给历史条目显示包名、给「重新润色」面板选风格。加载提到这里
+  // 一次拿全，两处共用，省掉切换条目时 RepolishPanel 重挂载带来的重复 IPC。
+  // 注意这里存的是**全部**包（含已禁用）：历史条目可能出自后来被禁用的包，显示名字要能查到；
+  // RepolishPanel 自己再 filter(enabled)，禁用的包不该出现在可选风格里。
+  const [allPacks, setAllPacks] = useState<StylePack[] | null>(null);
+  const [packsError, setPacksError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -89,6 +124,24 @@ export function History() {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    let cancelled = false;
+    listStylePacks()
+      .then(packs => {
+        if (!cancelled) setAllPacks(packs);
+      })
+      .catch(err => {
+        if (cancelled) return;
+        console.error('[history] failed to load style packs', err);
+        setPacksError(errorMessage(err));
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  // 不缓存：MODE_LABEL 每次渲染都是新对象，用 useCallback 反而会把旧语言的标签闭包
+  // 留在缓存里，切换界面语言后 Pill 不跟着变。只在渲染里调用，重建成本可忽略。
+  const styleLabel = (session: DictationSession) => styleLabelFor(session, allPacks, MODE_LABEL);
 
   const searchInputRef = useRef<HTMLInputElement>(null);
   const searchShortcut = os === 'mac' ? '⌘K' : 'Ctrl+K';
@@ -365,7 +418,12 @@ export function History() {
                 <div style={{ fontSize: 12, color: 'var(--ol-ink-2)', lineHeight: 1.45, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
                   {s.finalText.split('\n')[0]}
                 </div>
-                <div><Pill size="sm" tone={s.mode === 'raw' ? 'outline' : 'default'}>{MODE_LABEL[s.mode]}</Pill></div>
+                {/* tone 仍按 baseMode 走：颜色保留原来的粗分类信息，文字换成实际风格包名。 */}
+                <div style={{ display: 'flex', minWidth: 0 }} title={styleLabel(s)}>
+                  <Pill size="sm" tone={s.mode === 'raw' ? 'outline' : 'default'} style={TRUNCATED_PILL_STYLE}>
+                    {styleLabel(s)}
+                  </Pill>
+                </div>
               </button>
             ))}
           </div>
@@ -384,9 +442,14 @@ export function History() {
                 </div>
               )}
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14, flexWrap: 'wrap', gap: 8 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <span style={{ fontSize: 13, fontFamily: 'var(--ol-font-mono)', color: 'var(--ol-ink-3)' }}>{formatTime(item.createdAt)}</span>
-                  <Pill size="sm" tone="default">{MODE_LABEL[item.mode]}</Pill>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                  <span style={{ fontSize: 13, fontFamily: 'var(--ol-font-mono)', color: 'var(--ol-ink-3)', flexShrink: 0 }}>{formatTime(item.createdAt)}</span>
+                  <span style={{ display: 'flex', minWidth: 0 }} title={styleLabel(item)}>
+                    <Pill size="sm" tone="default" style={TRUNCATED_PILL_STYLE}>{styleLabel(item)}</Pill>
+                  </span>
+                  {item.pipelineMode === 'multimodal' && (
+                    <Pill size="sm" tone="blue">{t('history.multimodalPipeline')}</Pill>
+                  )}
                   {/* 「录音」前缀：与下方识别/润色耗时区分——录音时长发生在松键前，
                       不该与流水线各步耗时加总（用户反馈"时间对不上"）。 */}
                   <span style={{ fontSize: 11, color: 'var(--ol-ink-4)' }}>{t('history.recorded', { duration: formatDuration(item.durationMs, t) })}</span>
@@ -397,6 +460,7 @@ export function History() {
                   )}
                   {item.hasAudioRecording
                     && !audioMissingIds.has(item.id)
+                    && item.pipelineMode !== 'multimodal'
                     && (item.errorCode === 'transcribeFailed' || item.errorCode === 'emptyTranscript') && (
                     <Btn icon="refresh" variant="ghost" size="sm" disabled={retranscribing} onClick={() => void onRetranscribe()}>
                       {retranscribing ? t('history.retranscribing') : t('history.retranscribe')}
@@ -412,36 +476,10 @@ export function History() {
                   key={item.id}
                 />
               )}
-              <div style={{ display: 'grid', gridTemplateColumns: mobile ? '1fr' : '1fr 1fr', gap: 12 }}>
-                <div style={{ padding: 14, border: '0.5px solid var(--ol-line)', borderRadius: 10, background: 'var(--ol-surface-2)' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 10 }}>
-                    <Pill size="sm" tone="outline">{t('history.rawLabel')}</Pill>
-                    {item.rawTranscript && (
-                      <Btn icon={justCopiedRaw ? 'check' : 'copy'} variant="ghost" size="sm" onClick={() => void onCopyRaw()}>
-                        {justCopiedRaw ? t('common.copied') : t('common.copy')}
-                      </Btn>
-                    )}
-                  </div>
-                  <p style={{ margin: 0, fontSize: 13, lineHeight: 1.7, color: 'var(--ol-ink-2)', whiteSpace: 'pre-wrap' }}>
-                    {item.rawTranscript || t('history.rawEmpty')}
-                  </p>
-                </div>
-                <div style={{ padding: 14, border: '0.5px solid var(--ol-blue)', borderRadius: 10, background: 'var(--ol-blue-soft)' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 10 }}>
-                    <Pill size="sm" tone="blue">{MODE_LABEL[item.mode]}</Pill>
-                    <Btn icon={justCopied ? 'check' : 'copy'} variant="ghost" size="sm" onClick={() => void onCopy()}>
-                      {justCopied ? t('common.copied') : t('common.copy')}
-                    </Btn>
-                  </div>
-                  <p style={{ margin: 0, fontSize: 13, lineHeight: 1.7, color: 'var(--ol-ink)', whiteSpace: 'pre-line' }}>
-                    {item.finalText}
-                  </p>
-                </div>
-              </div>
               {/* 流水线明细：识别 / 润色 / 插入 三步各占一行 —— 左列步骤名、中列
                   provider·model（或插入目标），右列该步耗时/状态。旧历史没有模型与
                   耗时字段时对应行自动隐藏，只剩插入行 = 改版前的信息量。 */}
-              <div style={{ marginTop: 18, paddingTop: 14, borderTop: '0.5px solid var(--ol-line-soft)', display: 'grid', gridTemplateColumns: 'auto 1fr auto', columnGap: 14, rowGap: 7, fontSize: 11, color: 'var(--ol-ink-4)', alignItems: 'baseline' }}>
+              <div style={{ marginBottom: 16, paddingBottom: 14, borderBottom: '0.5px solid var(--ol-line-soft)', display: 'grid', gridTemplateColumns: 'auto 1fr auto', columnGap: 14, rowGap: 7, fontSize: 11, color: 'var(--ol-ink-4)', alignItems: 'baseline' }}>
                 {(item.asrProvider || item.asrMs != null) && (
                   <>
                     <span style={{ display: 'flex' }}>
@@ -454,7 +492,7 @@ export function History() {
                     <span style={{ color: 'var(--ol-ink-2)', fontFamily: 'var(--ol-font-mono)', overflowWrap: 'anywhere' }}>
                       {[item.asrProvider, item.asrModel].filter(Boolean).join(' · ')}
                     </span>
-                    <span style={{ fontFamily: 'var(--ol-font-mono)', textAlign: 'right' }}>
+                    <span style={{ fontFamily: 'var(--ol-font-mono)', textAlign: 'right', whiteSpace: 'nowrap' }}>
                       {item.asrMs != null ? formatStepDuration(item.asrMs, t) : ''}
                     </span>
                   </>
@@ -465,7 +503,7 @@ export function History() {
                     <span style={{ color: 'var(--ol-ink-2)', fontFamily: 'var(--ol-font-mono)', overflowWrap: 'anywhere' }}>
                       {[item.llmProvider, item.llmModel].filter(Boolean).join(' · ')}
                     </span>
-                    <span style={{ fontFamily: 'var(--ol-font-mono)', textAlign: 'right' }}>
+                    <span style={{ fontFamily: 'var(--ol-font-mono)', textAlign: 'right', whiteSpace: 'nowrap' }}>
                       {item.polishMs != null ? formatStepDuration(item.polishMs, t) : ''}
                     </span>
                   </>
@@ -473,12 +511,14 @@ export function History() {
                 <span>{t('history.stepInsert')}</span>
                 <span style={{ color: 'var(--ol-ink-2)' }}>
                   {item.appName && <><b>{item.appName}</b>{' · '}</>}
-                  {t('history.chars', { count: item.finalText.length })}
+                  {/* 按 Unicode 码点计（emoji / CJK 扩展 B 等增补平面字符不按 UTF-16 码元双算），
+                      与后端 `polished.chars().count()` 及概览页「字数」口径一致。 */}
+                  {t('history.chars', { count: countCodePoints(item.finalText) })}
                   {item.dictionaryEntryCount != null && item.dictionaryEntryCount > 0 && (
                     <>{' · '}{t('history.vocabHits', { count: item.dictionaryEntryCount })}</>
                   )}
                 </span>
-                <span style={{ textAlign: 'right' }}>{
+                <span style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>{
                   item.insertStatus === 'inserted'
                     ? t('history.inserted')
                     : item.insertStatus === 'pasteSent'
@@ -488,6 +528,52 @@ export function History() {
                       : t('history.insertFailed')
                 }</span>
               </div>
+              {/* minWidth: 0 —— grid 子项默认 min-width: auto，任何不换行的内容（这里是风格包名
+                  Pill）都会把整列撑出卡片、逼出横向滚动条。两栏都要加，否则一栏撑宽另一栏跟着宽。 */}
+              <div style={{ display: 'grid', gridTemplateColumns: mobile ? '1fr' : '1fr 1fr', gap: 12 }}>
+                <div style={{ minWidth: 0, padding: 14, border: '0.5px solid var(--ol-line)', borderRadius: 10, background: 'var(--ol-surface-2)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 10 }}>
+                    <Pill size="sm" tone="outline">{t('history.rawLabel')}</Pill>
+                    {item.rawTranscript && (
+                      <Btn icon={justCopiedRaw ? 'check' : 'copy'} variant="ghost" size="sm" onClick={() => void onCopyRaw()}>
+                        {justCopiedRaw ? t('common.copied') : t('common.copy')}
+                      </Btn>
+                    )}
+                  </div>
+                  <p style={{ margin: 0, fontSize: 13, lineHeight: 1.7, color: 'var(--ol-ink-2)', whiteSpace: 'pre-wrap' }}>
+                    {item.rawTranscript || t('history.rawEmpty')}
+                  </p>
+                </div>
+                <div style={{ minWidth: 0, padding: 14, border: '0.5px solid var(--ol-blue)', borderRadius: 10, background: 'var(--ol-blue-soft)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 10 }}>
+                    <span style={{ display: 'flex', minWidth: 0 }} title={styleLabel(item)}>
+                      <Pill size="sm" tone="blue" style={TRUNCATED_PILL_STYLE}>{styleLabel(item)}</Pill>
+                    </span>
+                    {/* 「复制」不能被长包名压缩：压窄后按钮文字会竖排。 */}
+                    <span style={{ flexShrink: 0 }}>
+                      <Btn icon={justCopied ? 'check' : 'copy'} variant="ghost" size="sm" onClick={() => void onCopy()}>
+                        {justCopied ? t('common.copied') : t('common.copy')}
+                      </Btn>
+                    </span>
+                  </div>
+                  <p style={{ margin: 0, fontSize: 13, lineHeight: 1.7, color: 'var(--ol-ink)', whiteSpace: 'pre-line' }}>
+                    {item.finalText}
+                  </p>
+                </div>
+              </div>
+              {/* 重新润色：拿这条的原文再跑一次 LLM。没有原文就没得润色（转录失败条目），
+                  此时整块不渲染；QA 记录的原文是问题而不是待润色文本，同样不渲染。
+                  key={item.id} 让切换记录时结果与状态一起重置，
+                  避免把上一条的结果留在新条目下面。 */}
+              {item.rawTranscript.trim() && item.errorCode !== 'qaSession' && (
+                <RepolishPanel
+                  session={item}
+                  mobile={mobile}
+                  allPacks={allPacks}
+                  packsError={packsError}
+                  key={item.id}
+                />
+              )}
             </>
           ) : (
             <div style={{ padding: 40, textAlign: 'center', fontSize: 13, color: 'var(--ol-ink-4)' }}>
@@ -501,10 +587,223 @@ export function History() {
   );
 }
 
+/** 后端超时错误在 IPC 边界退化成裸字符串（LLMError::Timeout → "timeout"）。
+ *  只匹配整串的常见超时形态，避免其它含 "timeout" 字样的错误被误判成超时。 */
+function isTimeout(message: string): boolean {
+  const trimmed = message.trim();
+  return /^(timeout|timed out|request timed out)$/i.test(trimmed) || trimmed.includes('超时');
+}
+
 function errorMessage(error: unknown): string {
   if (typeof error === 'string') return error;
   if (error instanceof Error) return error.message;
   return String(error);
+}
+
+interface RepolishResult {
+  /** 结果卡片的 key。同一个风格重复应用会覆盖上一次，不无限堆卡片。 */
+  key: string;
+  title: string;
+  text: string;
+}
+
+/**
+ * 「重新润色」面板：拿这条历史的**原文**再跑一次 LLM。
+ *
+ * 两个入口共用一条后端通道（`repolish`，stylePackId 可选）：
+ * - 「用原风格重试」→ 优先传产生这条记录的风格包 id（包已删除/旧历史/未加载时回落当前
+ *   激活风格）。用同一套风格再跑一遍，才能判断上次的结果是模型抖动还是稳定行为 ——
+ *   这是用户说「AI 识别得不对」时真正想做的对照实验。
+ * - 「应用」→ 传选中的 pack id，看同一段话换个风格是什么样。
+ *
+ * 结果只在本次查看时显示，不写回历史条目：历史的 finalText 是「当时真的插进去的那段
+ * 文字」，是一条事实记录，不该被事后试算覆盖。面板顶部的说明也把这点直说了。
+ *
+ * 注意这里只重跑润色，不重跑识别 —— 成功听写的录音在插入后就删了（隐私设计），
+ * 原文是唯一还在的输入。真正的「重新转录」入口仍只对留有录音的失败条目开放。
+ */
+function RepolishPanel({ session, mobile, allPacks, packsError }: {
+  session: DictationSession;
+  mobile: boolean;
+  /** History 顶层加载的**全部**风格包（含已禁用）；null 表示还在加载。 */
+  allPacks: StylePack[] | null;
+  packsError: string | null;
+}) {
+  const { t } = useTranslation();
+  const MODE_LABEL = useModeLabel();
+  const [selectedPackId, setSelectedPackId] = useState<string>('');
+  const [running, setRunning] = useState<'retry' | 'apply' | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [results, setResults] = useState<RepolishResult[]>([]);
+
+  // 只列启用的包：禁用的包在别处也不参与润色，这里列出来会让「应用」得到
+  // 一个用户以为已经关掉的风格。
+  const packs = useMemo(
+    () => (allPacks ? allPacks.filter(p => p.enabled) : null),
+    [allPacks],
+  );
+
+  useEffect(() => {
+    if (!packs) return;
+    setSelectedPackId(current => current || defaultPackId(packs));
+  }, [packs]);
+
+  const run = async (kind: 'retry' | 'apply') => {
+    // 重试优先用产生这条记录的原包；原包已删除/旧历史/未加载时显式落到当前激活包
+    // （其次第一个可用包）——前端标注与实际执行一致，而不是让后端走 None 兜底链。
+    const packId = kind === 'apply'
+      ? selectedPackId
+      : resolveRepolishRetryPackIdWithFallback(session, allPacks, packs ?? []);
+    if (kind === 'apply' && !packId) return;
+    setRunning(kind);
+    setError(null);
+    try {
+      const text = await repolish(session.rawTranscript, session.mode, packId);
+      // 用 allPacks 而非 packs 找包名：按已禁用原包重试时标题仍显示真实包名。
+      const pack = packId ? allPacks?.find(p => p.id === packId) : undefined;
+      const result: RepolishResult = {
+        key: packId ?? '__retry__',
+        title: pack
+          ? t('history.repolish.resultTitle', { name: packDisplayName(pack, MODE_LABEL) })
+          : t('history.repolish.retryResultTitle'),
+        text,
+      };
+      // 同一个 key 覆盖旧结果，新 key 追加到最前面 —— 最新的试算结果离操作区最近。
+      setResults(prev => [result, ...prev.filter(r => r.key !== result.key)]);
+    } catch (err) {
+      console.error('[history] repolish failed', err);
+      const msg = errorMessage(err);
+      // 后端把 LLMError::Timeout 原样透成字符串 "timeout"，直接显示等于没说 ——
+      // 用户看到「重新润色失败：timeout」只会以为是这个功能坏了，而实际是当前 LLM
+      // provider 没在 30 秒内回包（免费模型池尤其常见）。换一句能照着做的提示。
+      setError(
+        isTimeout(msg)
+          ? t('history.repolish.timeout')
+          : t('history.repolish.failed', { err: msg }),
+      );
+    } finally {
+      setRunning(null);
+    }
+  };
+
+  return (
+    <div style={{ marginTop: 18, paddingTop: 14, borderTop: '0.5px solid var(--ol-line-soft)' }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', marginBottom: 4 }}>
+        <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--ol-ink-2)' }}>
+          {t('history.repolish.title')}
+        </span>
+        {results.length > 0 && (
+          <Btn size="sm" variant="ghost" onClick={() => setResults([])}>
+            {t('history.repolish.clear')}
+          </Btn>
+        )}
+      </div>
+      <div style={{ fontSize: 11, color: 'var(--ol-ink-4)', lineHeight: 1.55, marginBottom: 12 }}>
+        {t('history.repolish.hint')}
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: results.length > 0 ? 14 : 0 }}>
+        <Btn
+          icon="refresh"
+          variant="ghost"
+          size="sm"
+          disabled={running !== null}
+          onClick={() => void run('retry')}
+        >
+          {running === 'retry' ? t('history.repolish.retrying') : t('history.repolish.retry')}
+        </Btn>
+        <span style={{ width: 1, height: 18, background: 'var(--ol-line)' }} />
+        {packsError ? (
+          <span style={{ fontSize: 11, color: 'var(--ol-red, #ef4444)' }}>
+            {t('history.repolish.packsLoadFailed', { err: packsError })}
+          </span>
+        ) : packs && packs.length === 0 ? (
+          <span style={{ fontSize: 11, color: 'var(--ol-ink-4)' }}>{t('history.repolish.noPacks')}</span>
+        ) : (
+          <>
+            <select
+              value={selectedPackId}
+              onChange={e => setSelectedPackId(e.target.value)}
+              aria-label={t('history.repolish.pickStyle')}
+              disabled={!packs || running !== null}
+              style={{
+                padding: '4px 8px',
+                fontSize: 11.5,
+                fontFamily: 'inherit',
+                color: 'var(--ol-ink-2)',
+                background: 'var(--ol-surface-2)',
+                border: '0.5px solid var(--ol-line-strong)',
+                borderRadius: 8,
+                maxWidth: mobile ? 160 : 220,
+              }}
+            >
+              {(packs ?? []).map(pack => (
+                <option key={pack.id} value={pack.id}>{packDisplayName(pack, MODE_LABEL)}</option>
+              ))}
+            </select>
+            <Btn
+              variant="ghost"
+              size="sm"
+              disabled={!selectedPackId || running !== null}
+              onClick={() => void run('apply')}
+            >
+              {running === 'apply' ? t('history.repolish.applying') : t('history.repolish.apply')}
+            </Btn>
+          </>
+        )}
+      </div>
+
+      {error && (
+        <div style={{ marginTop: 10, padding: '8px 10px', borderRadius: 8, background: 'rgba(239,68,68,0.08)', color: 'var(--ol-red, #ef4444)', fontSize: 11.5, lineHeight: 1.45 }}>
+          {error}
+        </div>
+      )}
+
+      {results.length > 0 && (
+        <div style={{ display: 'grid', gridTemplateColumns: mobile ? '1fr' : '1fr 1fr', gap: 12 }}>
+          {results.map(result => (
+            <RepolishResultCard key={result.key} title={result.title} text={result.text} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RepolishResultCard({ title, text }: { title: string; text: string }) {
+  const { t } = useTranslation();
+  const [copied, setCopied] = useState(false);
+
+  const onCopy = async () => {
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error('clipboard unavailable');
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch (error) {
+      console.error('[history] failed to copy repolish result', error);
+    }
+  };
+
+  return (
+    // minWidth: 0 —— grid 子项默认 min-width: auto，标题 Pill 不换行时会把卡片
+    // 撑出结果网格（与详情页两栏文本卡片同一类问题）。
+    <div style={{ minWidth: 0, padding: 14, border: '0.5px dashed var(--ol-line-strong)', borderRadius: 10, background: 'var(--ol-surface-2)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 10 }}>
+        <span style={{ display: 'flex', minWidth: 0 }} title={title}>
+          <Pill size="sm" tone="default" style={TRUNCATED_PILL_STYLE}>{title}</Pill>
+        </span>
+        {text.trim() && (
+          <Btn icon={copied ? 'check' : 'copy'} variant="ghost" size="sm" onClick={() => void onCopy()}>
+            {copied ? t('common.copied') : t('common.copy')}
+          </Btn>
+        )}
+      </div>
+      <p style={{ margin: 0, fontSize: 13, lineHeight: 1.7, color: 'var(--ol-ink-2)', whiteSpace: 'pre-wrap' }}>
+        {text.trim() || t('history.repolish.empty')}
+      </p>
+    </div>
+  );
 }
 
 function isUserCancelled(message: string): boolean {

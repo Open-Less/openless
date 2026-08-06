@@ -1,7 +1,7 @@
 use super::*;
 
 use crate::asr::local::{
-    download::{fetch_remote_info, RemoteInfo},
+    download::{fetch_hf_card, fetch_remote_info, HfModelCard, RemoteInfo},
     DownloadManager, ModelId, ModelStatus, PROVIDER_ID as LOCAL_PROVIDER_ID,
 };
 
@@ -199,6 +199,16 @@ pub async fn local_asr_fetch_remote_info(
     let id = ModelId::from_str(&model_id).ok_or_else(|| format!("unknown model id: {model_id}"))?;
     let m = mirror.as_deref().map(Mirror::from_str).unwrap_or_default();
     fetch_remote_info(id, m).await.map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
+pub async fn local_asr_fetch_hf_card(
+    model_id: String,
+    mirror: Option<String>,
+) -> Result<HfModelCard, String> {
+    let id = ModelId::from_str(&model_id).ok_or_else(|| format!("unknown model id: {model_id}"))?;
+    let m = mirror.as_deref().map(Mirror::from_str).unwrap_or_default();
+    fetch_hf_card(id, m).await.map_err(|e| format!("{e:#}"))
 }
 
 #[tauri::command]

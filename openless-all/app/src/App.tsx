@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
 import { Capsule } from './components/Capsule';
+import { GlobalDownloadProgress } from './components/GlobalDownloadProgress';
 import { detectOS, type OS } from './components/WindowChrome';
 import {
   checkAccessibilityPermission,
@@ -298,6 +299,8 @@ export function App({ isCapsule, isQa, isSelectionPolishPreview, isLessComputer,
   return (
     <Suspense fallback={null}>
       <HotkeySettingsProvider>
+        {/* 全局下载进度浮层：主窗口所有页面常驻（自身监听事件，与页面解耦）。 */}
+        <GlobalDownloadProgress />
         {platformCaps?.platform === 'android' && (
           <div style={{ display: mobileQaOpen ? 'block' : 'none', height: '100%' }}>
             <QaPanel

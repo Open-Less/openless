@@ -264,6 +264,32 @@ export function fetchLocalAsrRemoteInfo(
     )
 }
 
+/** HF 模型卡片：下载量 / 收藏 / 简介（下载弹窗右侧展示）。 */
+export interface HfModelCard {
+    modelId: string
+    mirror: string
+    downloads: number
+    likes: number
+    description: string
+}
+
+export function fetchLocalAsrHfCard(
+    modelId: string,
+    mirror?: string,
+): Promise<HfModelCard> {
+    return invokeOrMock(
+        "local_asr_fetch_hf_card",
+        { modelId, mirror },
+        () => ({
+            modelId,
+            mirror: mirror ?? "huggingface",
+            downloads: 0,
+            likes: 0,
+            description: "",
+        }),
+    )
+}
+
 export function downloadLocalAsrModel(
     modelId: string,
     mirror?: string,

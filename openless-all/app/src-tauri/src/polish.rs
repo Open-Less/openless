@@ -587,7 +587,13 @@ impl OpenAICompatibleLLMProvider {
                 body["temperature"] = json!(temperature);
             }
         }
-        apply_openai_compatible_thinking_control(&mut body, &self.config);
+        apply_openai_compatible_thinking_control(
+            &mut body,
+            &self.config.provider_id,
+            &self.config.base_url,
+            &self.config.model,
+            self.config.thinking_enabled,
+        );
         body
     }
 
@@ -1211,7 +1217,7 @@ impl CodexOAuthLLMProvider {
     }
 }
 
-fn append_utf8_sse_chunk(
+pub(crate) fn append_utf8_sse_chunk(
     buffer: &mut String,
     pending: &mut Vec<u8>,
     chunk: &[u8],
@@ -1220,7 +1226,10 @@ fn append_utf8_sse_chunk(
     drain_complete_utf8(buffer, pending)
 }
 
-fn finish_utf8_sse_chunks(buffer: &mut String, pending: &mut Vec<u8>) -> Result<(), LLMError> {
+pub(crate) fn finish_utf8_sse_chunks(
+    buffer: &mut String,
+    pending: &mut Vec<u8>,
+) -> Result<(), LLMError> {
     drain_complete_utf8(buffer, pending)?;
     if pending.is_empty() {
         Ok(())
@@ -1297,7 +1306,7 @@ fn build_polish_history_messages(
     messages
 }
 
-fn chat_completions_url(base_url: &str) -> String {
+pub(crate) fn chat_completions_url(base_url: &str) -> String {
     let trimmed = base_url.trim();
     let Ok(mut url) = reqwest::Url::parse(trimmed) else {
         let fallback = trimmed.trim_end_matches('/');
@@ -1341,7 +1350,7 @@ fn should_retry_transient(is_connect: bool, is_request: bool, is_timeout: bool) 
 /// 对流式 SSE 路径 retry 是安全的：connect / request 类失败发生在 TCP 握手 / HTTP
 /// 请求写出阶段，response 还没回 → on_delta 必然未被调用 → 不会有「已流式输出的字
 /// 被重复」的问题。
-async fn send_with_transient_retry(
+pub(crate) async fn send_with_transient_retry(
     request: reqwest::RequestBuilder,
 ) -> Result<reqwest::Response, LLMError> {
     const RETRY_DELAY_MS: u64 = 500;
@@ -1578,41 +1587,43 @@ fn unix_now_secs() -> u64 {
         .unwrap_or(0)
 }
 
-fn apply_openai_compatible_thinking_control(body: &mut Value, config: &OpenAICompatibleConfig) {
+pub(crate) fn apply_openai_compatible_thinking_control(
+    body: &mut Value,
+    provider_id: &str,
+    base_url: &str,
+    model: &str,
+    thinking_enabled: bool,
+) {
     // 优先按 provider_id 预设分派；custom / 未声明 provider 时回退到 base_url 兜底,
     // 让用户用"自定义"preset 接入 MiniMax 也能正确下发 thinking 控制参数。
-    let control = openai_compatible_thinking_control(&config.provider_id)
-        .or_else(|| openai_compatible_thinking_control_for_base_url(&config.base_url));
+    let control = openai_compatible_thinking_control(provider_id)
+        .or_else(|| openai_compatible_thinking_control_for_base_url(base_url));
     match control {
         Some(ThinkingControl::ReasoningEffort) => {
             // OpenAI 官方 Chat Completions 只在推理模型族接受 reasoning_effort；
             // 普通 chat 模型会直接 400。其它兼容渠道按渠道声明继续下发。
-            let effort = if config.provider_id.trim() == "openai" {
-                openai_chat_reasoning_effort(&config.model, config.thinking_enabled)
+            let effort = if provider_id.trim() == "openai" {
+                openai_chat_reasoning_effort(model, thinking_enabled)
             } else {
-                Some(if config.thinking_enabled {
-                    "medium"
-                } else {
-                    "low"
-                })
+                Some(if thinking_enabled { "medium" } else { "low" })
             };
             if let Some(effort) = effort {
                 body["reasoning_effort"] = json!(effort);
             }
         }
         Some(ThinkingControl::EnableThinking) => {
-            body["enable_thinking"] = json!(config.thinking_enabled);
+            body["enable_thinking"] = json!(thinking_enabled);
         }
         Some(ThinkingControl::OpenRouterReasoning) => {
             body["reasoning"] = json!({
-                "effort": if config.thinking_enabled { "medium" } else { "none" },
+                "effort": if thinking_enabled { "medium" } else { "none" },
                 // OpenLess 的 QA/润色输出只展示最终答案；推理内容即使生成，也不应进 UI。
                 "exclude": true,
             });
         }
         Some(ThinkingControl::DeepSeekThinking) => {
             body["thinking"] = json!({
-                "type": if config.thinking_enabled { "enabled" } else { "disabled" },
+                "type": if thinking_enabled { "enabled" } else { "disabled" },
             });
         }
         // MiniMax OpenAI 兼容 Chat Completions 接受官方 `thinking` 字段，关闭用
@@ -1623,7 +1634,7 @@ fn apply_openai_compatible_thinking_control(body: &mut Value, config: &OpenAICom
         // 这与 OpenLess 渠道级"按官方参数声明下发"的策略一致,不维护单模型白名单。
         Some(ThinkingControl::MiniMaxThinking) => {
             body["thinking"] = json!({
-                "type": if config.thinking_enabled { "adaptive" } else { "disabled" },
+                "type": if thinking_enabled { "adaptive" } else { "disabled" },
             });
         }
         None => {}
@@ -1631,7 +1642,7 @@ fn apply_openai_compatible_thinking_control(body: &mut Value, config: &OpenAICom
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ThinkingControl {
+pub(crate) enum ThinkingControl {
     ReasoningEffort,
     EnableThinking,
     OpenRouterReasoning,
@@ -1639,7 +1650,7 @@ enum ThinkingControl {
     MiniMaxThinking,
 }
 
-fn openai_compatible_thinking_control(provider_id: &str) -> Option<ThinkingControl> {
+pub(crate) fn openai_compatible_thinking_control(provider_id: &str) -> Option<ThinkingControl> {
     match provider_id.trim() {
         "deepseek" => Some(ThinkingControl::DeepSeekThinking),
         // provider_id 预设(见 ProvidersSection.tsx::LLM_PRESETS)。
@@ -1660,7 +1671,9 @@ fn openai_compatible_thinking_control(provider_id: &str) -> Option<ThinkingContr
 /// 识别,沿用原"不主动干预"行为。
 ///
 /// 命中策略:base_url 主机名包含厂商关键字。
-fn openai_compatible_thinking_control_for_base_url(base_url: &str) -> Option<ThinkingControl> {
+pub(crate) fn openai_compatible_thinking_control_for_base_url(
+    base_url: &str,
+) -> Option<ThinkingControl> {
     // 抽 host(不区分大小写),允许带端口。`base_url` 末尾可能带 `/v1`、`/v1/`、
     // 甚至 `/v1/chat/completions`——统一取第一个 `/` 段当 host。
     let host = base_url
@@ -1693,7 +1706,7 @@ fn openai_compatible_thinking_control_for_base_url(base_url: &str) -> Option<Thi
 /// OpenAI 官方 gpt-5 系列（gpt-5 / gpt-5-mini / gpt-5-nano / gpt-5.5 等）在
 /// Chat Completions 中只接受默认 temperature=1，传其它值会返回 400（issue #857）。
 /// 模型名归一化规则与 `openai_chat_reasoning_effort` 保持一致。
-fn openai_model_is_gpt5_family(model: &str) -> bool {
+pub(crate) fn openai_model_is_gpt5_family(model: &str) -> bool {
     model
         .trim()
         .strip_prefix("openai/")
@@ -1724,7 +1737,7 @@ fn openai_chat_reasoning_effort(model: &str, thinking_enabled: bool) -> Option<&
     }
 }
 
-fn extract_assistant_content(body: &str) -> Result<String, LLMError> {
+pub(crate) fn extract_assistant_content(body: &str) -> Result<String, LLMError> {
     let json: Value = serde_json::from_str(body)
         .map_err(|e| LLMError::ParseError(format!("not valid JSON: {}", e)))?;
     let choices = json
@@ -2603,7 +2616,13 @@ mod tests {
 
     #[test]
     fn chat_body_omits_temperature_for_openai_gpt5_family() {
-        for model in ["gpt-5", "gpt-5-mini", "gpt-5-nano", "gpt-5.5", "openai/gpt-5"] {
+        for model in [
+            "gpt-5",
+            "gpt-5-mini",
+            "gpt-5-nano",
+            "gpt-5.5",
+            "openai/gpt-5",
+        ] {
             let provider = OpenAICompatibleLLMProvider::new(OpenAICompatibleConfig::new(
                 "openai",
                 "OpenAI",
@@ -3242,7 +3261,10 @@ mod tests {
             structured.contains("高置信度") && structured.contains("低置信度"),
             "Structured prompt 缺少置信度分级"
         );
-        assert!(structured.contains("根目录"), "Structured prompt 缺少根目录纠错示例");
+        assert!(
+            structured.contains("根目录"),
+            "Structured prompt 缺少根目录纠错示例"
+        );
     }
 
     #[test]

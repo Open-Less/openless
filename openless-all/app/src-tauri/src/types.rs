@@ -30,6 +30,29 @@ pub enum PolishMode {
     Formal,
 }
 
+/// 识别管线模式（issue #902）：`traditional` = 两段式 ASR + LLM 润色；
+/// `multimodal` = 单个多模态模型一步完成「音频 + 提示词 → 最终文本」。
+/// 两套配置在凭据库中完全隔离，运行时只读当前模式，切换不删除另一套配置。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum PipelineMode {
+    #[default]
+    Traditional,
+    Multimodal,
+}
+
+fn default_pipeline_mode() -> PipelineMode {
+    PipelineMode::Traditional
+}
+
+fn default_multimodal_pipeline_enabled() -> bool {
+    false
+}
+
+fn default_active_omni_provider() -> String {
+    "custom".into()
+}
+
 /// 历史记录的产生来源。旧版 `history.json` 未写入该字段时，按既有听写记录处理。
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
@@ -145,12 +168,70 @@ pub enum SelectionPolishOutputMode {
     PreviewConfirm,
 }
 
-/// 概览页年度活动热力图的单日计数（date = 本地日期 YYYY-MM-DD）。
+/// 前台应用标签拆分结果：人读的应用名 +（macOS 的）bundle id。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FrontApp {
+    pub name: Option<String>,
+    pub bundle_id: Option<String>,
+}
+
+/// 把 `capture_frontmost_app()` 的显示串拆成 `FrontApp { name, bundle_id }`。
+///
+/// macOS 那边拼的是 `"Claude (com.anthropic.claudefordesktop)"`；Windows 拿的是窗口
+/// 标题，没有 bundle id。历史条目有 `app_name` / `app_bundle_id` 两个字段，拆开存
+/// 才能让详情页只显示人读得懂的应用名，而不是把一长串 bundle id 也糊在正文里。
+///
+/// 只有 macOS 的标签才是 `"名称 (bundle.id)"` 格式；Windows 拿的是窗口标题，括号属于
+/// 标题正文。调用方必须按平台传入 `is_macos`（生产路径统一走 `split_front_app_opt`），
+/// 非 macOS 一律整串当应用名。认不出括号结构也整串当应用名 —— 宁可显示得啰嗦，
+/// 也不要把窗口标题里的普通括号误当成 bundle id。
+pub fn split_front_app_label(label: &str, is_macos: bool) -> FrontApp {
+    let trimmed = label.trim();
+    if trimmed.is_empty() {
+        return FrontApp { name: None, bundle_id: None };
+    }
+    if is_macos {
+        if let Some(open) = trimmed.rfind(" (") {
+            if trimmed.ends_with(')') {
+                let name = trimmed[..open].trim();
+                let bundle = trimmed[open + 2..trimmed.len() - 1].trim();
+                // bundle id 必然是点分的反向域名。没有点的括号内容（"记事本 (未保存)"
+                // 这类窗口标题）不是 bundle id，不能拆。
+                if !name.is_empty() && bundle.contains('.') && !bundle.contains(' ') {
+                    return FrontApp {
+                        name: Some(name.to_string()),
+                        bundle_id: Some(bundle.to_string()),
+                    };
+                }
+            }
+        }
+    }
+    FrontApp { name: Some(trimmed.to_string()), bundle_id: None }
+}
+
+/// `split_front_app_label` 的 `Option` 便捷版，平台开关收敛在这一处：
+/// 只有 macOS 的显示串才是 `"名称 (bundle.id)"`，其它平台（Windows 窗口标题、Linux）
+/// 整串当应用名，bundle id 留空。
+pub fn split_front_app_opt(label: Option<&str>) -> FrontApp {
+    label
+        .map(|l| split_front_app_label(l, cfg!(target_os = "macos")))
+        .unwrap_or(FrontApp { name: None, bundle_id: None })
+}
+
+/// 概览页活动统计的单日汇总（date = 本地日期 YYYY-MM-DD）。
+///
+/// 年度热力图只用 `count`；`chars` / `duration_ms` 供「近 7 天 / 近 30 天」的
+/// 字数与时长指标使用——这两个指标此前从 `list_history()` 现算，会被历史 200 条
+/// 上限截断（说得多的用户几天就把上周挤没了）。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ActivityDay {
     pub date: String,
     pub count: u32,
+    /// 当日最终插入文本的总字符数（按 Unicode 字符计，与历史详情页的「N 字」同口径）。
+    pub chars: u64,
+    /// 当日录音总时长（毫秒）。口径 = 每次会话的录音时长，不含识别/润色耗时。
+    pub duration_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -201,6 +282,11 @@ pub struct DictationSession {
     /// 本次润色用的 LLM 模型 id。Raw 直通时 None。
     #[serde(default)]
     pub llm_model: Option<String>,
+    /// 本次会话走的识别管线模式（"multimodal" / 缺失 = 传统两段式）。
+    /// 多模态会话 `asr_provider/asr_model` 为空，`llm_provider/llm_model`
+    /// 记实际调用的多模态模型，`polish_ms` 记该调用的耗时。
+    #[serde(default)]
+    pub pipeline_mode: Option<String>,
     /// 松键后「等待转写结果」的实测耗时（毫秒）。流式 ASR 大部分识别在录音期间已完成，
     /// 这里量的是用户感知的收尾延迟；批式 ASR 则是完整转写耗时。
     #[serde(default)]
@@ -461,6 +547,33 @@ impl Default for StylePack {
     }
 }
 
+/// 本次会话是否真的会走翻译管线。**唯一判定入口**——写入侧（arm_translation_if_effective）
+/// 与 end_session 的 polish 分派都经它判定，否则两边会漂移（此前胶囊只看
+/// `modifier_seen`，用户没设目标语言按下 Shift 也会看到「正在翻译」，而后端根本没翻）。
+/// 胶囊本身只读经它置位的原子标志，不在音频回调线程触碰偏好锁。
+///
+/// 三个条件：
+/// 1. 会话期间按下过翻译修饰键；
+/// 2. 设了翻译目标语言（空串 = 功能未启用）；
+/// 3. 目标语言不等于用户「唯一的」工作语言——此时源语言必定就是目标语言，翻译是可证
+///    的空操作，白花一次 LLM 往返。工作语言有多个时不拦：中/英双语用户把目标设成英文
+///    是正常用法（说中文出英文）。简体/繁体是列表里的两个独立条目，按字面比较即可，
+///    简→繁仍会照常翻译。
+pub fn translation_effective(
+    modifier_seen: bool,
+    translation_target_language: &str,
+    working_languages: &[String],
+) -> bool {
+    if !modifier_seen {
+        return false;
+    }
+    let target = translation_target_language.trim();
+    if target.is_empty() {
+        return false;
+    }
+    !(working_languages.len() == 1 && working_languages[0].trim() == target)
+}
+
 pub const BUILTIN_STYLE_PACK_RAW_ID: &str = "builtin.raw";
 pub const BUILTIN_STYLE_PACK_LIGHT_ID: &str = "builtin.light";
 pub const BUILTIN_STYLE_PACK_STRUCTURED_ID: &str = "builtin.structured";
@@ -702,6 +815,17 @@ pub struct UserPreferences {
     pub microphone_device_name: String,
     pub active_asr_provider: String, // "volcengine" | "apple-speech" | ...
     pub active_llm_provider: String, // "ark" | "openai" | ...
+    /// 识别管线模式（实验性，issue #902）。`multimodal` 时各语音管线改用
+    /// 单独隔离的多模态模型配置（`omni.*` 凭据命名空间），不再读 ASR/LLM 两套。
+    #[serde(default = "default_pipeline_mode")]
+    pub pipeline_mode: PipelineMode,
+    /// 「多模态识别管线」实验性功能总开关（高级设置）。关闭时一切行为与旧版一致。
+    #[serde(default = "default_multimodal_pipeline_enabled")]
+    pub multimodal_pipeline_enabled: bool,
+    /// 多模态（Omni）模型当前激活的 provider id（镜像凭据库 `omni.active`，
+    /// 供设置页初始化下拉；运行时权威仍在 CredentialsVault）。
+    #[serde(default = "default_active_omni_provider")]
+    pub active_omni_provider: String,
     /// LLM 思考模式开关。默认 false 以保持既有「尽量关闭思考」行为；
     /// Gemini 走原生 thinkingConfig，OpenAI-compatible 路径仅按 provider/channel
     /// 下发官方渠道级字段；OpenAI 官方渠道会跳过普通 chat 模型不支持的字段。详见 issue #402。
@@ -741,10 +865,7 @@ pub struct UserPreferences {
     pub windows_sendinput_insertion_only: bool,
     /// Windows：SendInput 模式下是否在系统键盘列表（Win+Space）中显示 OpenLess TSF 输入法。
     /// 默认 true 保持现有行为；关闭后用户级禁用语言配置文件，无需管理员权限。
-    #[serde(
-        default = "default_true",
-        rename = "windowsShowOpenlessInKeyboardList"
-    )]
+    #[serde(default = "default_true", rename = "windowsShowOpenlessInKeyboardList")]
     pub windows_show_openless_in_keyboard_list: bool,
     /// 用户的工作语言（多选，原生名）。会作为前提注入 LLM polish/translate 的 system prompt 头部，
     /// 让模型知道该用户在哪些语言间工作。详见 issue #4。
@@ -1069,6 +1190,12 @@ struct UserPreferencesWire {
     microphone_device_name: String,
     active_asr_provider: String,
     active_llm_provider: String,
+    #[serde(default = "default_pipeline_mode")]
+    pipeline_mode: PipelineMode,
+    #[serde(default = "default_multimodal_pipeline_enabled")]
+    multimodal_pipeline_enabled: bool,
+    #[serde(default = "default_active_omni_provider")]
+    active_omni_provider: String,
     #[serde(default)]
     llm_thinking_enabled: bool,
     #[serde(default = "default_true")]
@@ -1237,6 +1364,9 @@ impl Default for UserPreferencesWire {
             microphone_device_name: prefs.microphone_device_name,
             active_asr_provider: prefs.active_asr_provider,
             active_llm_provider: prefs.active_llm_provider,
+            pipeline_mode: prefs.pipeline_mode,
+            multimodal_pipeline_enabled: prefs.multimodal_pipeline_enabled,
+            active_omni_provider: prefs.active_omni_provider,
             llm_thinking_enabled: prefs.llm_thinking_enabled,
             use_system_proxy: prefs.use_system_proxy,
             restore_clipboard_after_paste: prefs.restore_clipboard_after_paste,
@@ -1333,9 +1463,8 @@ impl<'de> Deserialize<'de> for UserPreferences {
             //   设置保存都会被热键冲突校验整体拒绝，改动全部丢失（#904）。
             let legacy_default_user = cfg!(target_os = "windows")
                 && is_right_control_modifier_shortcut(&dictation_hotkey);
-            let default_taken_by_dictation = selection_polish_hotkey
-                .as_ref()
-                .is_some_and(|binding| {
+            let default_taken_by_dictation =
+                selection_polish_hotkey.as_ref().is_some_and(|binding| {
                     crate::shortcut_binding::bindings_overlap(binding, &dictation_hotkey)
                 });
             if legacy_default_user || default_taken_by_dictation {
@@ -1372,6 +1501,9 @@ impl<'de> Deserialize<'de> for UserPreferences {
             microphone_device_name: wire.microphone_device_name,
             active_asr_provider: wire.active_asr_provider,
             active_llm_provider: wire.active_llm_provider,
+            pipeline_mode: wire.pipeline_mode,
+            multimodal_pipeline_enabled: wire.multimodal_pipeline_enabled,
+            active_omni_provider: wire.active_omni_provider,
             llm_thinking_enabled: wire.llm_thinking_enabled,
             use_system_proxy: wire.use_system_proxy,
             restore_clipboard_after_paste: wire.restore_clipboard_after_paste,
@@ -1582,14 +1714,16 @@ fn default_qa_hotkey() -> Option<ShortcutBinding> {
 }
 
 fn default_selection_polish_hotkey() -> Option<ShortcutBinding> {
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     {
+        // Windows 用右 Alt；macOS 上 RightAlt = 右 Option（CGEventTap keycode 61，
+        // 可区分左右键，且不占用 Cmd/Ctrl 常用组合）。
         Some(ShortcutBinding {
             primary: "RightAlt".into(),
             modifiers: Vec::new(),
         })
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         None
     }
@@ -2193,6 +2327,9 @@ impl Default for UserPreferences {
             microphone_device_name: String::new(),
             active_asr_provider: default_active_asr_provider(),
             active_llm_provider: "ark".into(),
+            pipeline_mode: PipelineMode::Traditional,
+            multimodal_pipeline_enabled: false,
+            active_omni_provider: "custom".into(),
             llm_thinking_enabled: false,
             use_system_proxy: true,
             restore_clipboard_after_paste: true,
@@ -2954,8 +3091,13 @@ pub struct CapsulePayload {
 pub struct CredentialsStatus {
     pub active_asr_provider: String,
     pub active_llm_provider: String,
+    /// 当前识别管线模式（"traditional" | "multimodal"），前端据此决定
+    /// 配置页渲染哪套卡片、概览页按哪套判定「已配置」。
+    pub pipeline_mode: PipelineMode,
     pub asr_configured: bool,
     pub llm_configured: bool,
+    /// 多模态（omni）模型是否已配置。仅 `pipeline_mode == multimodal` 时有意义。
+    pub omni_configured: bool,
     // 兼容旧前端字段（逐步迁移中）
     pub volcengine_configured: bool,
     pub ark_configured: bool,
@@ -2982,6 +3124,143 @@ pub struct QaChatMessage {
     /// 仅用于前端安全展示选区原文；LLM 通道只读取 `role` / `content`。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selection_text: Option<String>,
+}
+
+#[cfg(test)]
+mod split_front_app_label_tests {
+    use super::{split_front_app_label, split_front_app_opt, FrontApp};
+
+    #[test]
+    fn macos_label_splits_into_name_and_bundle() {
+        let split = split_front_app_label("Claude (com.anthropic.claudefordesktop)", true);
+        assert_eq!(split.name.as_deref(), Some("Claude"));
+        assert_eq!(split.bundle_id.as_deref(), Some("com.anthropic.claudefordesktop"));
+    }
+
+    #[test]
+    fn app_names_containing_spaces_and_parens_still_split_on_the_last_group() {
+        let split = split_front_app_label("Visual Studio Code (com.microsoft.VSCode)", true);
+        assert_eq!(split.name.as_deref(), Some("Visual Studio Code"));
+        assert_eq!(split.bundle_id.as_deref(), Some("com.microsoft.VSCode"));
+    }
+
+    /// Windows 拿的是窗口标题，里面的括号是正文的一部分，不是 bundle id。
+    /// 平台开关关闭时整串保留——即使括号内容恰好形如反向域名、文件路径或版本号，
+    /// 也绝不拆。误拆会把标题截断，显示成半句话，还写入错误的 bundle id。
+    #[test]
+    fn window_titles_are_never_split_outside_macos() {
+        for title in [
+            "未命名文档 (未保存)",
+            "report.txt (~/Documents)",
+            "Inbox (12)",
+            "script.py (C:\\dir\\script.py)",
+            "会议 (meet.example.com)",
+            "卸载 (2.4.1)",
+        ] {
+            let split = split_front_app_label(title, false);
+            assert_eq!(split.name.as_deref(), Some(title), "{title} should stay intact");
+            assert_eq!(split.bundle_id, None, "{title} has no bundle id");
+        }
+    }
+
+    #[test]
+    fn bare_names_pass_through() {
+        let split = split_front_app_label("Terminal", true);
+        assert_eq!(split.name.as_deref(), Some("Terminal"));
+        assert_eq!(split.bundle_id, None);
+    }
+
+    #[test]
+    fn blank_input_yields_nothing() {
+        assert_eq!(
+            split_front_app_label("", true),
+            FrontApp { name: None, bundle_id: None }
+        );
+        assert_eq!(
+            split_front_app_label("   ", true),
+            FrontApp { name: None, bundle_id: None }
+        );
+        assert_eq!(
+            split_front_app_label("", false),
+            FrontApp { name: None, bundle_id: None }
+        );
+        assert_eq!(
+            split_front_app_label("   ", false),
+            FrontApp { name: None, bundle_id: None }
+        );
+        assert_eq!(
+            split_front_app_opt(None),
+            FrontApp { name: None, bundle_id: None }
+        );
+    }
+}
+
+#[cfg(test)]
+mod translation_effective_tests {
+    use super::translation_effective;
+
+    fn langs(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn requires_the_modifier() {
+        assert!(!translation_effective(
+            false,
+            "English",
+            &langs(&["简体中文"])
+        ));
+    }
+
+    #[test]
+    fn unset_target_language_is_not_translation() {
+        // 用户没在翻译页选目标语言就按 Shift：此前胶囊照样显示「正在翻译」，
+        // 而后端走的是普通润色。
+        assert!(!translation_effective(true, "", &langs(&["简体中文"])));
+        assert!(!translation_effective(true, "   ", &langs(&["简体中文"])));
+    }
+
+    #[test]
+    fn target_equal_to_the_only_working_language_is_a_no_op() {
+        // 工作语言只有中文、目标也是中文 —— 源语言必定就是目标语言，翻译是空操作。
+        assert!(!translation_effective(
+            true,
+            "简体中文",
+            &langs(&["简体中文"])
+        ));
+        // 前后空白不该让它逃过判定。
+        assert!(!translation_effective(
+            true,
+            " 简体中文 ",
+            &langs(&["简体中文"])
+        ));
+    }
+
+    #[test]
+    fn simplified_to_traditional_still_translates() {
+        // 简体/繁体是语言列表里两个独立条目，简→繁是真实转换，不能按「同一种中文」拦掉。
+        assert!(translation_effective(
+            true,
+            "繁体中文",
+            &langs(&["简体中文"])
+        ));
+    }
+
+    #[test]
+    fn multiple_working_languages_are_never_blocked() {
+        // 中/英双语用户把目标设成英文是正常用法（说中文出英文），源语言无法预先判定，
+        // 不能因为目标语言出现在工作语言里就拦。
+        assert!(translation_effective(
+            true,
+            "English",
+            &langs(&["简体中文", "English"])
+        ));
+    }
+
+    #[test]
+    fn empty_working_languages_still_translates() {
+        assert!(translation_effective(true, "English", &[]));
+    }
 }
 
 #[cfg(test)]
@@ -3103,7 +3382,8 @@ mod tests {
 
     #[cfg(target_os = "windows")]
     #[test]
-    fn new_preferences_keep_the_existing_dictation_default_and_use_right_alt_for_selection_polish() {
+    fn new_preferences_keep_the_existing_dictation_default_and_use_right_alt_for_selection_polish()
+    {
         let prefs = UserPreferences::default();
         assert_eq!(prefs.dictation_hotkey.primary, "RightControl");
         assert_eq!(
@@ -3131,7 +3411,10 @@ mod tests {
         let prefs: UserPreferences =
             serde_json::from_str(r#"{"windowsSendInputInsertionOnly": true}"#).unwrap();
         assert!(prefs.windows_sendinput_insertion_only);
-        assert_eq!(prefs.windows_insertion_mode, WindowsInsertionMode::SendInput);
+        assert_eq!(
+            prefs.windows_insertion_mode,
+            WindowsInsertionMode::SendInput
+        );
     }
 
     #[test]
@@ -3139,7 +3422,10 @@ mod tests {
         let prefs: UserPreferences =
             serde_json::from_str(r#"{"windowsSendinputInsertionOnly": true}"#).unwrap();
         assert!(prefs.windows_sendinput_insertion_only);
-        assert_eq!(prefs.windows_insertion_mode, WindowsInsertionMode::SendInput);
+        assert_eq!(
+            prefs.windows_insertion_mode,
+            WindowsInsertionMode::SendInput
+        );
     }
 
     #[test]
@@ -3205,7 +3491,10 @@ mod tests {
         assert!(json.contains(r#""windowsInsertionMode":"sendInput""#));
         let restored: UserPreferences = serde_json::from_str(&json).unwrap();
         assert!(restored.windows_sendinput_insertion_only);
-        assert_eq!(restored.windows_insertion_mode, WindowsInsertionMode::SendInput);
+        assert_eq!(
+            restored.windows_insertion_mode,
+            WindowsInsertionMode::SendInput
+        );
     }
 
     #[test]
@@ -3652,6 +3941,7 @@ mod tests {
             asr_model: Some("fun-asr-realtime".into()),
             llm_provider: Some("ark".into()),
             llm_model: Some("deepseek-v3-2".into()),
+            pipeline_mode: None,
             asr_ms: Some(230),
             polish_ms: Some(1450),
         };

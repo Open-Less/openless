@@ -10,6 +10,7 @@ import { Card, PageHeader } from './_atoms';
 import { SavedToast } from '../components/SavedToast';
 import { SelectLite } from '../components/ui/SelectLite';
 import { SUPPORTED_LANGUAGES } from '../lib/types';
+import { isTranslationEnabled, isTranslationTargetRedundant } from '../lib/translationTarget';
 import { useHotkeySettings } from '../state/HotkeySettingsContext';
 import { formatComboLabel } from '../lib/hotkey';
 import type { UserPreferences } from '../lib/types';
@@ -119,7 +120,13 @@ export function Translation() {
 
   const triggerLabel = formatComboLabel(prefs.dictationHotkey);
   const translationHotkeyLabel = formatComboLabel(prefs.translationHotkey);
-  const enabled = prefs.translationTargetLanguage.trim() !== '';
+  // 「已启用」= 选了目标语言 **且** 该目标真的会触发翻译。目标等于唯一工作语言时后端
+  // 走普通润色，状态灯不能还亮着说已启用（否则用户按 Shift 什么都没发生，无从排查）。
+  const redundantTarget = isTranslationTargetRedundant(
+    prefs.translationTargetLanguage,
+    prefs.workingLanguages,
+  );
+  const enabled = isTranslationEnabled(prefs.translationTargetLanguage) && !redundantTarget;
 
   const targetOptions = useMemo(() => ([
     { value: '', label: t('translation.target.disabled') },
@@ -230,6 +237,23 @@ export function Translation() {
             ariaLabel={t('translation.target.title')}
             style={{ width: '100%', maxWidth: 360, fontSize: 13 }}
           />
+          {redundantTarget && (
+            <div
+              role="status"
+              style={{
+                marginTop: 10,
+                padding: '8px 12px',
+                borderRadius: 10,
+                border: '0.5px solid rgba(217,119,6,0.24)',
+                background: 'rgba(217,119,6,0.08)',
+                color: 'var(--ol-warn, #b45309)',
+                fontSize: 11.5,
+                lineHeight: 1.55,
+              }}
+            >
+              {t('translation.target.sameAsWorking')}
+            </div>
+          )}
         </Card>
 
         {/* 3. 使用方法 */}

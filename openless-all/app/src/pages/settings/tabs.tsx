@@ -15,6 +15,7 @@ import { PermissionsSection } from './PermissionsSection';
 import { DataStorageSection } from './DataStorageSection';
 import { LocalModelSection } from './LocalModelSection';
 import { DebugToolsSection } from './DebugToolsSection';
+import { MultimodalPipelineSection } from './MultimodalPipelineSection';
 import { CodingAgentSection } from './CodingAgentSection';
 import { ClaudeConsoleSection } from './ClaudeConsoleSection';
 import { BetaChannelSection } from './BetaChannelSection';
@@ -116,6 +117,7 @@ export function AdvancedTab() {
     <>
       {showDesktopAdvanced && os !== 'win' && <CodingAgentSection />}
       {showDesktopAdvanced && os !== 'win' && <ClaudeConsoleSection />}
+      <MultimodalPipelineSection />
       {showDebugTools && <DebugToolsSection />}
     </>
   );

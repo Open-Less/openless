@@ -9,6 +9,7 @@ import {
   listProviderModels,
   readCredential,
   recordChannelTest,
+  setActiveOmniProvider,
   setCredential,
   validateProviderCredentials,
 } from '../../lib/ipc';
@@ -17,12 +18,38 @@ import { useMobileLayout } from '../../lib/useMobileLayout';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
 import { SelectLite, type SelectOption } from '../../components/ui/SelectLite';
 import { Card } from '../_atoms';
-import { SettingRow, SectionTitle, Toggle, inputStyle, ASR_PRESETS, type AsrPresetId } from './shared';
+import {
+  SettingRow,
+  SectionTitle,
+  Toggle,
+  inputStyle,
+  segmentedTrackStyle,
+  ASR_PRESETS,
+  type AsrPresetId,
+} from './shared';
 import {
   parseAdvancedAsrConfig,
   serializeAdvancedAsrConfig,
   type AdvancedAsrConfig,
 } from '../../lib/advancedAsrConfig';
+import {
+  getFoundryLocalAsrCatalog,
+  getSherpaOnnxAsrCatalog,
+  listLocalAsrModels,
+  setFoundryLocalAsrModel,
+  setLocalAsrActiveModel,
+  setSherpaOnnxAsrModel,
+} from '../../lib/localAsr';
+
+// 本地模型供应商：在主下拉里标注「本地」后缀，与云端供应商区分开。
+const LOCAL_ASR_PRESET_IDS: ReadonlySet<string> = new Set([
+  'local-qwen3',
+  'foundry-local-whisper',
+  'sherpa-onnx-local',
+]);
+function isLocalAsrPreset(id: string): boolean {
+  return LOCAL_ASR_PRESET_IDS.has(id);
+}
 
 function LlmThinkingToggle({ enabled, onToggle }: { enabled: boolean; onToggle: (next: boolean) => void }) {
   const { t } = useTranslation();
@@ -166,6 +193,41 @@ export const LLM_PRESETS = [
 ] as const;
 
 type LlmPresetId = typeof LLM_PRESETS[number]['id'];
+
+// 多模态（Omni）模型预设（issue #902）：一个模型同时接收「提示词 + 音频」一步输出
+// 最终文本。凭据走独立 `omni.*` 命名空间，与上方 LLM/ASR 两套配置完全隔离。
+// - openai       : OpenAI 官方（gpt-4o-audio-preview 等，input_audio part）
+// - gemini       : Gemini 原生 generateContent（inlineData audio/wav）
+// - dashscope-omni: 阿里云百炼 OpenAI 兼容通道（qwen3-omni-flash 等）
+// - custom       : 任意 OpenAI 兼容多模态网关
+export const OMNI_PRESETS = [
+  {
+    id: 'openai',
+    nameKey: 'omniOpenai',
+    baseUrl: 'https://api.openai.com/v1',
+    modelPlaceholder: 'gpt-4o-audio-preview',
+  },
+  {
+    id: 'gemini',
+    nameKey: 'omniGemini',
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+    modelPlaceholder: 'gemini-2.5-flash',
+  },
+  {
+    id: 'dashscope-omni',
+    nameKey: 'omniDashscope',
+    baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    modelPlaceholder: 'qwen3-omni-flash',
+  },
+  {
+    id: 'custom',
+    nameKey: 'custom',
+    baseUrl: '',
+    modelPlaceholder: '',
+  },
+] as const;
+
+type OmniPresetId = typeof OMNI_PRESETS[number]['id'];
 
 const ASR_DEFAULT_RESOURCE_ID = 'volc.seedasr.sauc.duration';
 
@@ -649,7 +711,7 @@ function BailianProtocolHint({ currentModel }: { currentModel: string }) {
 
 type ProviderToolStatus = 'idle' | 'loading' | 'success' | 'empty' | 'error';
 
-function ProviderTools({ kind, modelAccount, provider, onModelSelected, onTested, showFetchModels = true }: { kind: 'llm' | 'asr'; modelAccount: string; provider?: string; onModelSelected: () => void; onTested?: () => void; showFetchModels?: boolean }) {
+function ProviderTools({ kind, modelAccount, provider, onModelSelected, onTested, showFetchModels = true }: { kind: 'llm' | 'asr' | 'omni'; modelAccount: string; provider?: string; onModelSelected: () => void; onTested?: () => void; showFetchModels?: boolean }) {
   const { t } = useTranslation();
   const mobile = useMobileLayout();
   const [models, setModels] = useState<string[]>([]);
@@ -665,7 +727,8 @@ function ProviderTools({ kind, modelAccount, provider, onModelSelected, onTested
   // 把测试结果落到渠道上（卡片据此显示延迟或标红）。失败不打断主流程：
   // 测试本身已经在按钮旁给出结论，记录不上只是卡片少一行历史。
   const persistTest = async (ok: boolean, latencyMs: number | null, message: string | null) => {
-    if (!provider) return;
+    // Omni 不走渠道化（独立命名空间），没有可落测试结果的渠道卡片。
+    if (!provider || kind === 'omni') return;
     try {
       await recordChannelTest(kind, provider, ok, latencyMs, message);
       onTested?.();
@@ -749,7 +812,7 @@ function ProviderTools({ kind, modelAccount, provider, onModelSelected, onTested
               options={models.map(model => ({ value: model, label: model }))}
               placeholder={t('settings.providers.selectModel')}
               ariaLabel={t('settings.providers.selectModel')}
-              style={{ ...inputStyle, flex: mobile ? '1 1 100%' : '1 1 180px', maxWidth: mobile ? '100%' : 220 }}
+              style={{ flex: mobile ? '1 1 100%' : '1 1 180px', maxWidth: mobile ? '100%' : 220, minWidth: 0 }}
             />
           )}
         </div>
@@ -966,7 +1029,7 @@ function CredentialField({ label, account, provider, placeholder, mono, mask, de
               placeholder={loaded ? placeholder : t('common.loading')}
               disabled={disabled}
               ariaLabel={label}
-              style={{ ...inputStyle, flex: mobile ? '1 1 180px' : 1, minWidth: 0, maxWidth: '100%', fontFamily: mono ? 'var(--ol-font-mono)' : 'inherit' }}
+              style={{ flex: mobile ? '1 1 180px' : 1, minWidth: 0, maxWidth: '100%', fontFamily: mono ? 'var(--ol-font-mono)' : 'inherit' }}
             />
           ) : (
             <input
@@ -1057,3 +1120,184 @@ const iconBtnStyle: CSSProperties = {
   color: 'var(--ol-ink-3)', cursor: 'default', flexShrink: 0,
   transition: 'background 0.16s var(--ol-motion-quick), border-color 0.16s var(--ol-motion-quick), color 0.16s var(--ol-motion-quick), transform 0.12s var(--ol-motion-quick)',
 };
+
+/**
+ * 多模态（Omni）配置卡片：仅在「高级 → 实验性」里打开多模态管线后出现。
+ *
+ * 它不参与渠道排序——Omni 是独立命名空间，渠道化范围只覆盖 ASR/LLM
+ * （见 docs/provider-channels-plan.md 的分期）；管道模式切换沿用既有语义：
+ * 多模态模式下隐藏传统 llm/asr 渠道列表，凭据两套并存但停用，切回即恢复。
+ */
+export function OmniChannelSection() {
+  const { t } = useTranslation();
+  const mobile = useMobileLayout();
+  const { prefs, updatePrefs } = useHotkeySettings();
+  const [omniProvider, setOmniProvider] = useState<OmniPresetId>('custom');
+  const [committedOmniProvider, setCommittedOmniProvider] = useState<OmniPresetId>('custom');
+  const omniSwitchSeqRef = useRef(0);
+  const [omniModelRevision, setOmniModelRevision] = useState(0);
+
+  useEffect(() => {
+    if (!prefs) return;
+    const knownOmni = OMNI_PRESETS.find(x => x.id === prefs.activeOmniProvider);
+    const omniId = knownOmni ? knownOmni.id : 'custom';
+    setOmniProvider(omniId);
+    setCommittedOmniProvider(omniId);
+  }, [prefs]);
+
+  // 与 LLM 卡同语义：受控下拉立即反馈 + committed 控制 CredentialField remount
+  // + seq 守卫防 stale 覆盖，只是凭据落到 omni.* 槽。
+  const onOmniProviderChange = async (id: OmniPresetId) => {
+    setOmniProvider(id);
+    const seq = ++omniSwitchSeqRef.current;
+    emitSaved('saving', t('common.saving'));
+    let backendSwitched = false;
+    try {
+      await setActiveOmniProvider(id);
+      backendSwitched = true;
+      if (seq !== omniSwitchSeqRef.current) return;
+      if (prefs) {
+        const next = { ...prefs, activeOmniProvider: id };
+        await updatePrefs(next);
+        if (seq !== omniSwitchSeqRef.current) return;
+      }
+      const preset = OMNI_PRESETS.find(p => p.id === id);
+      // 切到非 custom 预设强制覆盖 endpoint/model 默认值（与 LLM 卡同语义），
+      // 保证「切换」真切到位，不残留旧厂商的槽值。
+      if (preset && preset.id !== 'custom') {
+        if (preset.baseUrl) {
+          await setCredential('omni.endpoint', preset.baseUrl);
+          if (seq !== omniSwitchSeqRef.current) return;
+        }
+        if (preset.modelPlaceholder) {
+          await setCredential('omni.model', preset.modelPlaceholder);
+          if (seq !== omniSwitchSeqRef.current) return;
+        }
+      }
+      setCommittedOmniProvider(id);
+      emitSaved('saved', t('common.saved'));
+    } catch (err) {
+      if (seq === omniSwitchSeqRef.current) {
+        emitSaved('failed', t('common.operationFailed'));
+        if (!backendSwitched) {
+          setOmniProvider(committedOmniProvider);
+        }
+      }
+      console.error('[settings] switch omni provider failed', err);
+    }
+  };
+
+  // 识别管线模式：切换只改偏好，不删除另一套凭据，切回即恢复；运行时只读当前模式。
+  const onPipelineModeChange = (mode: 'traditional' | 'multimodal') => {
+    if (!prefs) return;
+    void updatePrefs(current => ({ ...current, pipelineMode: mode })).catch(error => {
+      console.error('[settings] failed to update pipeline mode', error);
+      emitSaved('failed', t('common.operationFailed'));
+    });
+  };
+
+  if (prefs?.multimodalPipelineEnabled !== true) return null;
+  const multimodalMode = prefs?.pipelineMode === 'multimodal';
+  const omniPreset = OMNI_PRESETS.find(p => p.id === committedOmniProvider);
+
+  return (
+    <>
+      <div style={{ marginBottom: 12 }}>
+        <SettingRow
+          label={t('settings.providers.pipelineModeLabel')}
+          desc={t('settings.providers.pipelineModeHint')}
+        >
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: mobile ? 'wrap' : 'nowrap' }}>
+            <div style={segmentedTrackStyle}>
+              {(['traditional', 'multimodal'] as const).map(mode => (
+                <button
+                  key={mode}
+                  onClick={() => onPipelineModeChange(mode)}
+                  style={{
+                    padding: '5px 12px', fontSize: 12, fontWeight: 500, border: 0, borderRadius: 6,
+                    fontFamily: 'inherit',
+                    background: prefs?.pipelineMode === mode ? 'var(--ol-segmented-active-bg)' : 'transparent',
+                    color: prefs?.pipelineMode === mode ? 'var(--ol-ink)' : 'var(--ol-ink-3)',
+                    boxShadow: prefs?.pipelineMode === mode ? 'var(--ol-segmented-active-shadow)' : 'none',
+                    cursor: 'default',
+                  }}
+                >
+                  {mode === 'traditional'
+                    ? t('settings.providers.pipelineModeTraditional')
+                    : t('settings.providers.pipelineModeMultimodal')}
+                </button>
+              ))}
+            </div>
+          </div>
+        </SettingRow>
+        <div style={{ fontSize: 11, color: 'var(--ol-ink-4)', lineHeight: 1.5, paddingLeft: 2 }}>
+          {t('settings.providers.pipelineIsolationNotice')}
+        </div>
+      </div>
+      {multimodalMode && (
+        <Card>
+          <div style={{ marginBottom: 10 }}>
+            <SectionTitle>{t('settings.providers.omniTitle')}</SectionTitle>
+          </div>
+          <SettingRow label={t('settings.providers.providerLabel')}>
+            <SelectLite
+              value={omniProvider}
+              onChange={next => onOmniProviderChange(next as OmniPresetId)}
+              options={OMNI_PRESETS.map(p => ({
+                value: p.id,
+                label: t(`settings.providers.presets.${p.nameKey}`),
+              }))}
+              ariaLabel={t('settings.providers.providerLabel')}
+              style={{ ...inputStyle, width: '100%', maxWidth: mobile ? '100%' : 200 }}
+            />
+          </SettingRow>
+          <CredentialField
+            key={`${committedOmniProvider}:api_key`}
+            label={t('settings.providers.apiKeyLabel')}
+            account="omni.api_key"
+            mono
+            mask
+          />
+          <CredentialField
+            key={`${committedOmniProvider}:endpoint`}
+            label={t('settings.providers.baseUrlLabel')}
+            account="omni.endpoint"
+            placeholder={omniPreset?.baseUrl || 'https://your-endpoint/v1'}
+          />
+          {committedOmniProvider === 'custom' && (
+            <>
+              <CredentialField
+                key="omni:temperature"
+                label={t('settings.providers.temperatureLabel')}
+                account="omni.temperature"
+                placeholder={t('settings.providers.temperaturePlaceholder')}
+                mono
+              />
+              <CredentialField
+                key="omni:extra_headers"
+                label={t('settings.providers.extraHeadersLabel')}
+                account="omni.extra_headers"
+                placeholder={t('settings.providers.extraHeadersPlaceholder')}
+                mono
+                mask
+              />
+            </>
+          )}
+          <CredentialField
+            key={`${committedOmniProvider}:model:${omniModelRevision}`}
+            label={t('settings.providers.modelLabel')}
+            account="omni.model"
+            placeholder={omniPreset?.modelPlaceholder || 'model-name'}
+            mono
+          />
+          <ProviderTools
+            key={`omni:${committedOmniProvider}`}
+            kind="omni"
+            modelAccount="omni.model"
+            onModelSelected={() => setOmniModelRevision(v => v + 1)}
+          />
+        </Card>
+      )}
+    </>
+  );
+}

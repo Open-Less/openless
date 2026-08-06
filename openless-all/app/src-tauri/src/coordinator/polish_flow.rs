@@ -137,6 +137,7 @@ pub(super) async fn polish_or_passthrough(
     prior_turns: &[(String, String)],
     llm_call: &mut Option<crate::polish::LlmCallLabel>,
     llm_elapsed_ms: &mut Option<u64>,
+    multimodal: bool,
 ) -> (String, Option<String>) {
     if mode == PolishMode::Raw && !raw_mode_uses_llm(style_system_prompt) {
         return (raw.text.clone(), None);
@@ -154,6 +155,7 @@ pub(super) async fn polish_or_passthrough(
         prior_turns,
         llm_call,
         llm_elapsed_ms,
+        multimodal,
     )
     .await
     {
@@ -179,7 +181,36 @@ pub(super) async fn polish_text(
     prior_turns: &[(String, String)],
     llm_call: &mut Option<crate::polish::LlmCallLabel>,
     llm_elapsed_ms: &mut Option<u64>,
+    multimodal: bool,
 ) -> anyhow::Result<String> {
+    // 多模态（Omni）模式：纯文本管线（选区润色 / 历史重润色）改用 omni 模型当
+    // 文本 LLM，读取 omni 命名空间凭据，与传统 LLM 配置隔离。
+    if multimodal {
+        let provider = super::build_active_omni_provider(llm_thinking_enabled)?;
+        let label = provider.call_label();
+        *llm_call = Some(crate::polish::LlmCallLabel {
+            provider: label.provider,
+            model: label.model,
+        });
+        let mut system_prompt = style_system_prompt.to_string();
+        if !hotwords.is_empty() {
+            system_prompt.push_str(&format!(
+                "\n\n# 词典/热词\n以下专有名词必须严格按给定写法准确识别：{}。",
+                hotwords.join("、")
+            ));
+        }
+        if !working_languages.is_empty() {
+            system_prompt.push_str(&format!(
+                "\n\n# 工作语言\n用户主要在以下语言间工作：{}。",
+                working_languages.join("、")
+            ));
+        }
+        let call_started = std::time::Instant::now();
+        let result = provider.complete(&system_prompt, raw, None).await;
+        record_llm_elapsed(llm_elapsed_ms, call_started);
+        return Ok(result?);
+    }
+
     // 谷歌 Gemini 分支：所有 LLM provider 共用 ark.* 凭据槽，唯独 Gemini 走原生
     // generateContent / 自带 thinkingConfig 控制；其余 provider 走 OpenAI
     // 兼容协议，并在该路径里按 provider/channel 下发对应的思考开关。
@@ -356,6 +387,7 @@ pub(super) async fn polish_and_translate_or_passthrough(
     prior_turns: &[(String, String)],
     llm_call: &mut Option<crate::polish::LlmCallLabel>,
     llm_elapsed_ms: &mut Option<u64>,
+    multimodal: bool,
 ) -> (String, Option<String>, Option<String>) {
     let system_prompt = build_polish_translate_system_prompt(target_language);
     match polish_text(
@@ -371,6 +403,7 @@ pub(super) async fn polish_and_translate_or_passthrough(
         prior_turns,
         llm_call,
         llm_elapsed_ms,
+        multimodal,
     )
     .await
     {
@@ -442,6 +475,7 @@ mod tests {
             &[],
             &mut llm_call,
             &mut llm_elapsed_ms,
+            false,
         )
         .await;
         assert_eq!(out, "原样输出");

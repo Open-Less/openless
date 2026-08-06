@@ -147,7 +147,7 @@ pub(super) fn hotkey_supervisor_loop(inner: Arc<Inner>) {
                 // Linux: 启动 fcitx5 插件信号监听作为热键源。
                 #[cfg(target_os = "linux")]
                 {
-                    let (qa_trigger, _selection_polish_trigger, translation_trigger) =
+                    let (qa_trigger, selection_polish_trigger, translation_trigger) =
                         modifier_shortcut_triggers(&inner);
                     let custom_key = custom_dictation_key_string(&inner);
                     crate::linux_fcitx::start_dictation_signal_listener(
@@ -155,6 +155,7 @@ pub(super) fn hotkey_supervisor_loop(inner: Arc<Inner>) {
                         combo_tx_for_fcitx,
                         fcitx_binding.clone(),
                         qa_trigger,
+                        selection_polish_trigger,
                         translation_trigger,
                         custom_key,
                     );
@@ -994,7 +995,7 @@ pub(super) fn translation_hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiv
             continue;
         }
         if matches!(evt, ComboHotkeyEvent::Pressed { .. }) {
-            mark_translation_modifier_seen(&inner);
+            arm_translation_if_effective(&inner);
         }
     }
 }
@@ -1286,14 +1287,38 @@ pub(super) fn modifier_shortcut_triggers(
     (qa_trigger, selection_polish_trigger, translation_trigger)
 }
 
-pub(super) fn mark_translation_modifier_seen(inner: &Arc<Inner>) {
+/// 在这里、而不是在读取侧判定「翻译是否真的会发生」：本函数在桥接线程（翻译热键事件 /
+/// 主热键循环）和安卓 overlay 命令路径上调用，均非音频回调线程，读一次 prefs 无妨；
+/// 而 `translation_active` 的读取侧之一是 emit_capsule —— 它在音频回调线程按帧执行，
+/// 不能碰偏好锁（见 capsule_focus.rs 注释）。
+///
+/// 收紧后这个 flag 的语义从「按过 Shift」变成「本次会话真的要翻译」，胶囊提示与 polish
+/// 分派读同一个值，不会再出现「胶囊说正在翻译、后端其实没翻」的漂移（用户未设目标语言
+/// 时按 Shift 就会撞上）。返回 true 表示本次会话翻译已置位。
+pub(super) fn arm_translation_if_effective(inner: &Arc<Inner>) -> bool {
     let phase = inner.state.lock().phase;
-    if matches!(phase, SessionPhase::Starting | SessionPhase::Listening) {
-        inner
-            .translation_modifier_seen
-            .store(true, Ordering::SeqCst);
-        log::info!("[coord] translation modifier seen during {phase:?}");
+    if !matches!(phase, SessionPhase::Starting | SessionPhase::Listening) {
+        return false;
     }
+    let prefs = inner.prefs.get();
+    if !crate::types::translation_effective(
+        true,
+        &prefs.translation_target_language,
+        &prefs.working_languages,
+    ) {
+        // 明确记录「按了但不翻」的原因，否则用户只能看到胶囊不提示、无从判断是没生效
+        // 还是没按到。
+        log::info!(
+            "[coord] translation requested during {phase:?} but translation is a no-op \
+             (target={:?} working={:?}); staying in plain polish",
+            prefs.translation_target_language,
+            prefs.working_languages
+        );
+        return false;
+    }
+    inner.translation_active.store(true, Ordering::SeqCst);
+    log::info!("[coord] translation active during {phase:?}");
+    true
 }
 
 pub(super) fn hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<HotkeyEvent>) {
@@ -1332,7 +1357,7 @@ pub(super) fn hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<HotkeyEve
                     || crate::shortcut_binding::legacy_modifier_trigger(&translation_hotkey)
                         .is_some()
                 {
-                    mark_translation_modifier_seen(&inner_cloned);
+                    arm_translation_if_effective(&inner_cloned);
                 }
             }
             HotkeyEvent::QaShortcutPressed => {

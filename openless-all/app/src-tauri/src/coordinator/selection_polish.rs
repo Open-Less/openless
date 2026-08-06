@@ -10,8 +10,9 @@ use std::sync::{
 };
 
 use super::{
-    emit_selection_polish_capsule, enabled_phrases, polish_text, raw_style_pack_uses_llm,
-    schedule_selection_polish_capsule_idle, Coordinator, Inner, CAPSULE_AUTO_HIDE_DELAY_MS,
+    emit_selection_polish_capsule, enabled_phrases, pipeline_multimodal_enabled, polish_text,
+    raw_style_pack_uses_llm, schedule_selection_polish_capsule_idle, Coordinator, Inner,
+    CAPSULE_AUTO_HIDE_DELAY_MS,
 };
 use chrono::Utc;
 use serde::Serialize;
@@ -198,10 +199,8 @@ pub(super) async fn run_selection_polish(inner: &Arc<Inner>) -> Result<(), Strin
     // 与 `repolish` 同样读取当前 style pack、词表和语言偏好；但前台上下文必须
     // 来自选区捕获时的源应用，避免在 provider 等待期间重新读取/校验目标窗口。
     // 选区润色只读取风格包的书面文本 Prompt；旧包缺少该字段时回退为安全默认。
-    let selection_style_prompt = crate::types::style_pack_prompt(
-        &pack,
-        crate::types::StylePromptKind::Selection,
-    );
+    let selection_style_prompt =
+        crate::types::style_pack_prompt(&pack, crate::types::StylePromptKind::Selection);
     log::info!(
         "[style-pack] runtime dispatch scope=selection pack={} kind={:?} mode={:?} prompt_chars={}",
         pack.id,
@@ -225,6 +224,7 @@ pub(super) async fn run_selection_polish(inner: &Arc<Inner>) -> Result<(), Strin
             &[],
             &mut llm_call,
             &mut polish_ms,
+            pipeline_multimodal_enabled(&inner.prefs.get()),
         )
         .await
         .map_err(|error| error.to_string())
@@ -296,7 +296,10 @@ pub(super) async fn run_selection_polish(inner: &Arc<Inner>) -> Result<(), Strin
             finish_selection_polish_capsule(
                 inner,
                 CapsuleState::Done,
-                selection_polish_success_message(InsertStatus::Inserted, prefs.selection_polish_output_mode),
+                selection_polish_success_message(
+                    InsertStatus::Inserted,
+                    prefs.selection_polish_output_mode,
+                ),
             );
             return Ok(());
         }
@@ -317,6 +320,8 @@ pub(super) async fn run_selection_polish(inner: &Arc<Inner>) -> Result<(), Strin
         None => (None, None),
     };
     let raw_chars = raw_text.chars().count();
+    // 与听写路径同口径：应用名与 bundle id 分开存。
+    let source_front = crate::types::split_front_app_opt(source_app.as_deref());
     let session = DictationSession {
         id: Uuid::new_v4().to_string(),
         created_at: Utc::now().to_rfc3339(),
@@ -327,8 +332,8 @@ pub(super) async fn run_selection_polish(inner: &Arc<Inner>) -> Result<(), Strin
         style_pack_id: Some(pack.id.clone()),
         translation_active: false,
         polish_source: None,
-        app_bundle_id: None,
-        app_name: source_app,
+        app_bundle_id: source_front.bundle_id,
+        app_name: source_front.name,
         insert_status: status,
         error_code: (status == InsertStatus::Failed)
             .then_some("selectionPolishInsertFailed".into()),
@@ -339,6 +344,7 @@ pub(super) async fn run_selection_polish(inner: &Arc<Inner>) -> Result<(), Strin
         asr_model: None,
         llm_provider,
         llm_model,
+        pipeline_mode: None,
         asr_ms: None,
         polish_ms,
     };
@@ -438,6 +444,9 @@ impl Coordinator {
                 log::error!("[selection-polish] record vocabulary hits failed: {error}");
                 Some(0)
             });
+        // 与听写路径同口径：应用名与 bundle id 分开存，详情页才不会把一长串 bundle id
+        // 糊进正文。
+        let preview_front = crate::types::split_front_app_opt(preview.source_app.as_deref());
         let session = DictationSession {
             id: Uuid::new_v4().to_string(),
             created_at: Utc::now().to_rfc3339(),
@@ -448,8 +457,8 @@ impl Coordinator {
             style_pack_id: Some(preview.style_pack_id),
             translation_active: false,
             polish_source: None,
-            app_bundle_id: None,
-            app_name: preview.source_app,
+            app_bundle_id: preview_front.bundle_id,
+            app_name: preview_front.name,
             insert_status: status,
             error_code: None,
             duration_ms: Some(preview.started_at.elapsed().as_millis() as u64),
@@ -459,6 +468,7 @@ impl Coordinator {
             asr_model: None,
             llm_provider: preview.llm_provider,
             llm_model: preview.llm_model,
+            pipeline_mode: None,
             asr_ms: None,
             polish_ms: preview.polish_ms,
         };

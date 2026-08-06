@@ -75,6 +75,13 @@ pub async fn validate_provider_credentials(
     kind: String,
     channel_id: Option<String>,
 ) -> Result<ProviderCheckResult, String> {
+    if kind == "omni" {
+        // Omni 走独立命名空间，不做渠道化（见 docs/provider-channels-plan.md 分期）；
+        // 校验是真实纯文本请求，与运行期完全同路径。
+        return validate_omni_provider()
+            .await
+            .map(|()| ProviderCheckResult { ok: true });
+    }
     let scope = ProviderScope::new(&kind, channel_id)?;
     let scope = &scope;
     match kind.as_str() {
@@ -82,6 +89,9 @@ pub async fn validate_provider_credentials(
             .await
             .map(|()| ProviderCheckResult { ok: true }),
         "asr" => validate_asr_provider(scope)
+            .await
+            .map(|()| ProviderCheckResult { ok: true }),
+        "omni" => validate_omni_provider()
             .await
             .map(|()| ProviderCheckResult { ok: true }),
         _ => Err(format!("unknown provider kind: {kind}")),
@@ -195,6 +205,12 @@ fn read_openai_provider_config(
             CredentialAccount::AsrEndpoint,
             scope.provider_type() != crate::coordinator::OPENAI_COMPATIBLE_ASR_PROVIDER_ID,
         ),
+        // 多模态（Omni）模型：独立命名空间，OpenAI 兼容通道要求 API Key + Base URL。
+        "omni" => (
+            CredentialAccount::OmniApiKey,
+            CredentialAccount::OmniEndpoint,
+            true,
+        ),
         _ => return Err(format!("unknown provider kind: {kind}")),
     };
     let api_key = scope
@@ -210,6 +226,15 @@ fn read_openai_provider_config(
         (
             scope.llm_extra_headers(),
             openai_compatible_temperature_for_provider(&active_llm, scope.llm_temperature()),
+        )
+    } else if kind == "omni" {
+        let active_omni = CredentialsVault::get_active_omni();
+        (
+            CredentialsVault::get_active_omni_extra_headers(),
+            openai_compatible_temperature_for_provider(
+                &active_omni,
+                CredentialsVault::get_active_omni_temperature(),
+            ),
         )
     } else {
         (HashMap::new(), None)
@@ -311,6 +336,18 @@ fn provider_llm_error_message(error: LLMError) -> String {
         LLMError::ParseError(_) => "providerInvalidResponse".to_string(),
         LLMError::CodexAuth(_) => "codexOAuthUnavailable".to_string(),
     }
+}
+
+/// 多模态（Omni）模型连通性验证：真发一次纯文本请求（无音频），走与运行期
+/// 完全相同的 provider 构建与请求路径，避免「验证通过但真实调用失败」。
+async fn validate_omni_provider() -> Result<(), String> {
+    let provider =
+        crate::coordinator::build_active_omni_provider(false).map_err(|e| e.to_string())?;
+    provider
+        .complete("验证连接", "ping", None)
+        .await
+        .map(|_| ())
+        .map_err(provider_llm_error_message)
 }
 
 async fn validate_asr_provider(scope: &ProviderScope) -> Result<(), String> {
@@ -837,8 +874,7 @@ async fn validate_asr_transcription(
                 request.json(&body)
             }
         };
-        match request.send().await
-        {
+        match request.send().await {
             Ok(resp) => break resp,
             Err(e) if e.is_timeout() => return Err("providerRequestTimeout".to_string()),
             Err(e) if (e.is_connect() || e.is_request()) && attempt < MAX_ATTEMPTS => {

@@ -192,7 +192,9 @@ export const inputStyle: CSSProperties = {
     fontSize: 12.5,
     fontFamily: "inherit",
     outline: "none",
-    background: "var(--ol-surface-2)",
+    // 与 SelectLite 触发器同底色：此前用 --ol-surface-2（浅灰）会让所有输入框/
+    // 下拉与其它设置控件（麦克风/胶囊样式等 select-trigger-bg）颜色不一致。
+    background: "var(--ol-select-trigger-bg)",
     width: "100%",
     maxWidth: 360,
     transition:

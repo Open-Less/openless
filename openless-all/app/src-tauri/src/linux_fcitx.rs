@@ -69,6 +69,18 @@ pub fn set_qa_hotkey_raw(sym: u32, states: u32) -> Result<(), String> {
     Ok(())
 }
 
+/// 通过 fcitx5 插件设置选区润色触发键 sym + states。
+pub fn set_selection_polish_hotkey_raw(sym: u32, states: u32) -> Result<(), String> {
+    let conn =
+        dbus::blocking::Connection::new_session().map_err(|e| format!("dbus session: {e}"))?;
+    let msg = dbus::Message::new_method_call(DEST, PATH, IFACE, "SetSelectionPolishHotkeyRaw")
+        .map_err(|e| format!("build msg: {e}"))?
+        .append2(sym, states);
+    conn.send_with_reply_and_block(msg, TIMEOUT)
+        .map_err(|e| format!("SetSelectionPolishHotkeyRaw: {e}"))?;
+    Ok(())
+}
+
 /// 通过 fcitx5 插件设置翻译模式修饰键 sym + states。
 pub fn set_translation_hotkey_raw(sym: u32, states: u32) -> Result<(), String> {
     let conn =
@@ -226,6 +238,26 @@ pub fn sync_translation_binding(trigger: Option<crate::types::HotkeyTrigger>) {
     }
 }
 
+/// 将选区润色触发键同步到 fcitx5 插件。
+pub fn sync_selection_polish_binding(trigger: Option<crate::types::HotkeyTrigger>) {
+    let Some(trigger) = trigger else {
+        // 无选区润色快捷键时清空插件端配置
+        let _ = set_selection_polish_hotkey_raw(0, 0);
+        return;
+    };
+    if trigger == crate::types::HotkeyTrigger::MediaPlayPause {
+        return;
+    }
+    let sym = trigger_to_keysym(trigger);
+    let name = trigger_name(trigger);
+    match set_selection_polish_hotkey_raw(sym, 0) {
+        Ok(()) => {
+            log::info!("[fcitx] Synced selection polish hotkey {name} (sym={sym}) to plugin via SetSelectionPolishHotkeyRaw")
+        }
+        Err(e) => log::warn!("[fcitx] Failed to sync selection polish hotkey to plugin: {e}"),
+    }
+}
+
 /// 通过 fcitx5 插件在候选词列表下方显示状态文本（不干扰输入法预编辑）。
 pub fn set_aux_down(text: &str) -> Result<(), String> {
     let conn =
@@ -279,6 +311,7 @@ pub fn start_dictation_signal_listener(
     combo_tx: std::sync::mpsc::Sender<u64>,
     binding: crate::types::HotkeyBinding,
     qa_trigger: Option<crate::types::HotkeyTrigger>,
+    selection_polish_trigger: Option<crate::types::HotkeyTrigger>,
     translation_trigger: Option<crate::types::HotkeyTrigger>,
     custom_trigger_key: Option<String>,
 ) {
@@ -346,6 +379,10 @@ pub fn start_dictation_signal_listener(
                         if is_press {
                             let _ = tx2.send(crate::hotkey::HotkeyEvent::TranslationModifierPressed);
                         }
+                    } else if member == "SelectionPolishEvent" {
+                        if is_press {
+                            let _ = tx2.send(crate::hotkey::HotkeyEvent::SelectionPolishShortcutPressed);
+                        }
                     }
                 }
                 true
@@ -379,6 +416,7 @@ pub fn start_dictation_signal_listener(
             let binding_for_name = binding.clone();
             let custom_for_name = custom_trigger_key.clone();
             let qa_for_name = qa_trigger;
+            let polish_for_name = selection_polish_trigger;
             let trans_for_name = translation_trigger;
             let _name_match = match conn.add_match(fcitx_rule, move |args: (String, String, String), _conn, _msg| {
                 let (name, _old_owner, new_owner) = args;
@@ -391,11 +429,13 @@ pub fn start_dictation_signal_listener(
                     let b = binding_for_name.clone();
                     let c = custom_for_name.clone();
                     let q = qa_for_name;
+                    let s = polish_for_name;
                     let t = trans_for_name;
                     std::thread::spawn(move || {
                         std::thread::sleep(Duration::from_secs(1)); // 等插件完全加载
                         resync_main_binding(&b, c.as_deref());
                         sync_qa_binding(q);
+                        sync_selection_polish_binding(s);
                         sync_translation_binding(t);
                     });
                 }
@@ -414,6 +454,7 @@ pub fn start_dictation_signal_listener(
                     log::info!("[fcitx-hotkey] fcitx5 available, syncing initial bindings (attempt {attempt})");
                     resync_main_binding(&binding, custom_trigger_key.as_deref());
                     sync_qa_binding(qa_trigger);
+                    sync_selection_polish_binding(selection_polish_trigger);
                     sync_translation_binding(translation_trigger);
                     break;
                 }

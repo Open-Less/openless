@@ -12,7 +12,8 @@ use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter};
 
 use super::download::{
-    build_client, download_one, partial_actual_size, DownloadPhase, DownloadProgress, Mirror,
+    build_client, download_one, now_millis, partial_actual_size, DownloadPhase,
+    DownloadProgress, Mirror, PROGRESS_EMIT_MIN_INTERVAL_MS,
 };
 use super::sherpa;
 
@@ -417,8 +418,18 @@ async fn run_download(
             }
             let app_emit = app.clone();
             let in_flight_for_cb = Arc::clone(&in_flight_bytes);
+            let last_emit = Arc::new(AtomicU64::new(0));
             let on_progress: Arc<dyn Fn(u64) + Send + Sync> = Arc::new(move |bytes_in_file| {
                 in_flight_for_cb[idx].store(bytes_in_file, Ordering::Relaxed);
+                // 节流（同 download.rs）：每 HTTP chunk 回调一次，全量转发会
+                // 高频刷前端进度条；in_flight 照常累计，只按 ≥150ms 转发最新值。
+                let now = now_millis();
+                if now - last_emit.load(Ordering::Relaxed)
+                    < PROGRESS_EMIT_MIN_INTERVAL_MS
+                {
+                    return;
+                }
+                last_emit.store(now, Ordering::Relaxed);
                 let total_in_flight: u64 = in_flight_for_cb
                     .iter()
                     .map(|bytes| bytes.load(Ordering::Relaxed))
@@ -479,6 +490,10 @@ async fn run_download(
     }
 
     if cancel.load(Ordering::SeqCst) && !self_aborted {
+        // 用户主动取消 = 放弃该模型：清掉 .partial/.partial.idx（同 qwen3 路径，
+        // 避免稀疏大文件占满磁盘），不留续传点。
+        let dest_paths: Vec<String> = info.files.iter().map(|f| f.local_path.clone()).collect();
+        super::download::remove_partial_artifacts(&dir, &dest_paths);
         emit_cancelled(app, model_alias, file_count, total_bytes);
         return Ok(());
     }
@@ -553,7 +568,14 @@ async fn run_release_archive_download(
     let app_emit = app.clone();
     let model_alias_emit = model_alias.to_string();
     let file_name_emit = archive.file_name.to_string();
+    let last_emit = Arc::new(AtomicU64::new(0));
     let on_progress: Arc<dyn Fn(u64) + Send + Sync> = Arc::new(move |bytes_downloaded| {
+        // 节流（同 download.rs）：release 包下载同样按 ≥150ms 转发进度。
+        let now = now_millis();
+        if now - last_emit.load(Ordering::Relaxed) < PROGRESS_EMIT_MIN_INTERVAL_MS {
+            return;
+        }
+        last_emit.store(now, Ordering::Relaxed);
         let _ = app_emit.emit(
             "sherpa-onnx-asr-download-progress",
             DownloadProgress {
@@ -589,6 +611,9 @@ async fn run_release_archive_download(
         .await
     };
     if cancel.load(Ordering::SeqCst) {
+        // 用户取消：release 包同样清理 .partial/.partial.idx（与多文件路径一致）。
+        let _ = std::fs::remove_file(archive_path.with_extension("partial"));
+        let _ = std::fs::remove_file(archive_path.with_extension("partial.idx"));
         emit_cancelled(app, model_alias, file_count, total_bytes);
         return Ok(());
     }

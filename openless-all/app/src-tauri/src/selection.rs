@@ -40,11 +40,20 @@ pub struct SelectionContext {
 /// On Windows, a top-level HWND alone is not enough: clicking another editor
 /// pane in the same app can retain that HWND.  We therefore retain both the
 /// foreground window and the focused child control, plus their process/thread
-/// identities.  Other platforms retain their existing insertion behavior.
+/// identities.
+///
+/// On macOS we have no HWND equivalent; the closest robust fingerprint is the
+/// frontmost application (name + pid) plus the selected-text snapshot itself.
+/// Revalidation re-reads the current selection via AX (with the simulated
+/// Cmd+C fallback) and compares it to the captured text — if the user moved to
+/// another app or changed the selection during the cloud request, we refuse to
+/// paste.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct SelectionInsertionTarget {
     #[cfg(target_os = "windows")]
     windows: Option<WindowsSelectionTarget>,
+    #[cfg(target_os = "macos")]
+    macos: Option<MacosSelectionTarget>,
 }
 
 #[cfg(target_os = "windows")]
@@ -56,6 +65,15 @@ struct WindowsSelectionTarget {
     foreground_thread_id: u32,
     focused_process_id: u32,
     focused_thread_id: u32,
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Debug, Clone)]
+struct MacosSelectionTarget {
+    /// 捕获时的前台应用（NSWorkspace frontmostApplication，`name (bundle)` 形式）。
+    front_app: Option<String>,
+    /// 捕获时的前台应用 pid —— 预览确认后用它把焦点交还原应用。
+    front_app_pid: Option<i32>,
 }
 
 /// Result of the final target/selection revalidation immediately before a
@@ -89,8 +107,9 @@ pub struct SelectionCaptureOutcome {
 
 /// Snapshot the insertion target before starting an asynchronous Selection
 /// Polish request.  Windows is intentionally fail-closed when this cannot
-/// identify a concrete foreground target; macOS/Linux/mobile keep their
-/// existing behavior until they gain an equivalently reliable native check.
+/// identify a concrete foreground target; macOS records the frontmost app so
+/// it can prove (by app + selection-text fingerprint) that the target did not
+/// change before inserting.
 pub(crate) fn capture_selection_insertion_target() -> SelectionInsertionTarget {
     #[cfg(target_os = "windows")]
     {
@@ -99,7 +118,17 @@ pub(crate) fn capture_selection_insertion_target() -> SelectionInsertionTarget {
         };
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
+    {
+        return SelectionInsertionTarget {
+            macos: Some(MacosSelectionTarget {
+                front_app: current_front_app(),
+                front_app_pid: current_front_app_pid(),
+            }),
+        };
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         SelectionInsertionTarget::default()
     }
@@ -107,11 +136,12 @@ pub(crate) fn capture_selection_insertion_target() -> SelectionInsertionTarget {
 
 /// Whether the target snapshot is sufficient to start a Selection Polish
 /// request.  On Windows, do not send selected text to the provider if we cannot
-/// later prove where it is safe to replace it.
+/// later prove where it is safe to replace it.  On macOS the frontmost-app
+/// snapshot is always available (there is always a frontmost app), so this
+/// passes once we have it.
 ///
-/// 非 Windows（macOS / Linux）尚未实现等效的前台窗口/焦点控件校验，无法保证
-/// 云端等待期间结果不会落到用户切换后的应用或控件上，因此一律 fail-closed：
-/// 不把选区文本发给 provider，选区润色在非 Windows 平台不可用。
+/// 非 Windows/macOS（Linux / mobile）尚未实现等效的前台校验：Linux 依赖
+/// PRIMARY selection 重读做轻量校验，移动端不提供选区润色。
 pub(crate) fn selection_insertion_target_is_captured(
     target: &SelectionInsertionTarget,
 ) -> bool {
@@ -120,10 +150,18 @@ pub(crate) fn selection_insertion_target_is_captured(
         target.windows.is_some()
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
     {
+        target.macos.is_some()
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        // Linux：无前台窗口校验，靠「选区文本一致性」兜底——capture 时能读到
+        // PRIMARY selection（run_selection_polish 已挡掉无选区），validate 时
+        // 重读 PRIMARY 比较，变了就拒绝粘贴。
         let _ = target;
-        false
+        true
     }
 }
 
@@ -163,11 +201,62 @@ pub(crate) fn validate_selection_insertion_target(
         return SelectionInsertionTargetValidation::Valid;
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
     {
-        let _ = (target, expected_selection);
+        let Some(captured) = target.macos.as_ref() else {
+            return SelectionInsertionTargetValidation::TargetUnavailable;
+        };
+        // 前台应用一致性：云端等待期间用户切到别的应用 = 目标变更，拒绝粘贴
+        //（预览确认模式在 validate 前已 reactivate 回原应用，此处应一致）。
+        let front_now = current_front_app();
+        if captured
+            .front_app
+            .as_deref()
+            .is_some_and(|name| front_now.as_deref() != Some(name))
+        {
+            return SelectionInsertionTargetValidation::TargetChanged;
+        }
+        // 选区文本一致性：AX 直读（与捕获同路径），失败再走模拟 Cmd+C 兜底。
+        let current_selection = read_selection_for_validation();
+        if !selection_text_matches(expected_selection, current_selection.as_deref()) {
+            return SelectionInsertionTargetValidation::SelectionChanged;
+        }
+        return SelectionInsertionTargetValidation::Valid;
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        // Linux：重读 PRIMARY selection 与捕获文本比较——用户改了选区 / 清空
+        // PRIMARY 就拒绝粘贴（fcitx CommitText 直接写焦点输入上下文，无需
+        // 恢复窗口焦点，所以这里不需要窗口级校验）。
+        let current_selection = match linux_selection::read_selected_text() {
+            linux_selection::LinuxSelectionRead::Text(text) => {
+                let trimmed = text.trim();
+                (!trimmed.is_empty()).then(|| truncate_selection(trimmed))
+            }
+            _ => None,
+        };
+        if !selection_text_matches(expected_selection, current_selection.as_deref()) {
+            return SelectionInsertionTargetValidation::SelectionChanged;
+        }
         SelectionInsertionTargetValidation::Valid
     }
+}
+
+/// macOS 专用：以与捕获时相同的形式（trim + truncate）重读当前选区，供
+/// validate 与 expected_selection 比较。AX 未授权或直读失败时退化为模拟
+/// Cmd+C + 剪贴板快照（与 `capture_selection_with_status` 的兜底一致）。
+#[cfg(target_os = "macos")]
+fn read_selection_for_validation() -> Option<String> {
+    if let Some(text) = macos_ax::read_selected_text() {
+        let trimmed = text.trim();
+        if !trimmed.is_empty() {
+            return Some(truncate_selection(trimmed));
+        }
+    }
+    let text = simulate_copy_and_read()?;
+    let trimmed = text.trim();
+    (!trimmed.is_empty()).then(|| truncate_selection(trimmed))
 }
 
 /// 把确认预览后的焦点交还给最初的选区目标。预览窗允许编辑，因此确认时必然不再是
@@ -190,10 +279,44 @@ pub(crate) fn reactivate_selection_insertion_target(target: &SelectionInsertionT
         return true;
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
+    {
+        let Some(captured) = target.macos.as_ref() else {
+            return false;
+        };
+        let Some(pid) = captured.front_app_pid else {
+            return false;
+        };
+        // 预览窗是 OpenLess 自己的窗口，确认后需要把焦点交还原应用再粘贴。
+        activate_app_by_pid(pid);
+        std::thread::sleep(Duration::from_millis(120));
+        return true;
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         let _ = target;
         true
+    }
+}
+
+/// macOS 专用：把指定 pid 的应用带回前台（NSRunningApplication activate，
+/// NSApplicationActivateIgnoringOtherApps = 1）。失败静默——validate 仍会
+/// 以选区文本一致性兜底。
+#[cfg(target_os = "macos")]
+fn activate_app_by_pid(pid: i32) {
+    use objc2::msg_send;
+    use objc2::runtime::AnyClass;
+    unsafe {
+        let Some(cls) = AnyClass::get("NSRunningApplication") else {
+            return;
+        };
+        let app: *mut objc2::runtime::AnyObject =
+            msg_send![cls, runningApplicationWithProcessIdentifier: pid];
+        if app.is_null() {
+            return;
+        }
+        let _: () = msg_send![app, activateWithOptions: 1u64]; // IgnoringOtherApps
     }
 }
 
@@ -369,7 +492,12 @@ fn selected_text_for_validation() -> Option<String> {
     (!trimmed.is_empty()).then(|| truncate_selection(trimmed))
 }
 
-#[cfg(any(target_os = "windows", test))]
+#[cfg(any(
+    target_os = "windows",
+    target_os = "macos",
+    target_os = "linux",
+    test
+))]
 fn selection_text_matches(expected: &str, actual: Option<&str>) -> bool {
     actual.is_some_and(|actual| actual == expected)
 }
@@ -856,6 +984,26 @@ unsafe fn ns_string_to_rust(ns_string: *mut objc2::runtime::AnyObject) -> Option
         None
     } else {
         Some(s)
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn current_front_app_pid() -> Option<i32> {
+    use objc2::msg_send;
+    use objc2::runtime::AnyClass;
+
+    unsafe {
+        let cls = AnyClass::get("NSWorkspace")?;
+        let workspace: *mut objc2::runtime::AnyObject = msg_send![cls, sharedWorkspace];
+        if workspace.is_null() {
+            return None;
+        }
+        let app: *mut objc2::runtime::AnyObject = msg_send![workspace, frontmostApplication];
+        if app.is_null() {
+            return None;
+        }
+        let pid: i32 = msg_send![app, processIdentifier];
+        (pid > 0).then_some(pid)
     }
 }
 

@@ -67,6 +67,74 @@ pub(super) fn store_asr_for_session(
     *inner.asr_label.lock() = Some(SessionResource::new(session_id, label));
 }
 
+/// 多模态模式下替代 ASR 消费录音 PCM 的简单缓冲器：录音期间把 16k/mono/i16 PCM
+/// 原样攒进 Vec，松键后由 omni 通道编码成 WAV 一次调用。与 ActiveAsr 完全解耦，
+/// 不会误触发任何 ASR 协议/凭据逻辑。
+#[derive(Default)]
+pub(super) struct PcmBufferConsumer {
+    buffer: parking_lot::Mutex<Vec<u8>>,
+}
+
+impl PcmBufferConsumer {
+    pub(super) fn new() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+
+    pub(super) fn pcm(&self) -> Vec<u8> {
+        self.buffer.lock().clone()
+    }
+
+    pub(super) fn duration_ms(&self) -> u64 {
+        crate::asr::pcm::pcm_duration_ms(&self.buffer.lock())
+    }
+}
+
+impl crate::recorder::AudioConsumer for PcmBufferConsumer {
+    fn consume_pcm_chunk(&self, pcm: &[u8]) {
+        self.buffer.lock().extend_from_slice(pcm);
+    }
+}
+
+/// 把 16k/mono/i16 原始 PCM 字节编码成 WAV 文件字节（omni 通道统一入口）。
+/// 与各 ASR provider 内联的 `chunks_exact(2)` 转换等价，收口成共享实现。
+pub(super) fn pcm_bytes_to_wav(pcm: &[u8]) -> Vec<u8> {
+    let samples: Vec<i16> = pcm
+        .chunks_exact(2)
+        .map(|chunk| i16::from_le_bytes([chunk[0], chunk[1]]))
+        .collect();
+    crate::asr::wav::encode_wav_16k_mono(&samples)
+}
+
+pub(super) fn store_omni_pcm_for_session(
+    inner: &Arc<Inner>,
+    session_id: SessionId,
+    consumer: Arc<PcmBufferConsumer>,
+) {
+    *inner.omni_pcm.lock() = Some(SessionResource::new(session_id, consumer));
+}
+
+pub(super) fn take_omni_pcm_for_session(
+    inner: &Arc<Inner>,
+    session_id: SessionId,
+) -> Option<Arc<PcmBufferConsumer>> {
+    take_session_resource(&mut inner.omni_pcm.lock(), session_id)
+}
+
+pub(super) fn store_qa_omni_pcm_for_session(
+    inner: &Arc<Inner>,
+    session_id: SessionId,
+    consumer: Arc<PcmBufferConsumer>,
+) {
+    *inner.qa_omni_pcm.lock() = Some(SessionResource::new(session_id, consumer));
+}
+
+pub(super) fn take_qa_omni_pcm_for_session(
+    inner: &Arc<Inner>,
+    session_id: SessionId,
+) -> Option<Arc<PcmBufferConsumer>> {
+    take_session_resource(&mut inner.qa_omni_pcm.lock(), session_id)
+}
+
 pub(super) fn take_asr_for_session(inner: &Arc<Inner>, session_id: SessionId) -> Option<ActiveAsr> {
     let mut slot = inner.asr.lock();
     take_session_resource(&mut slot, session_id)

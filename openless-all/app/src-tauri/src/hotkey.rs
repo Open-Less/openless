@@ -1737,9 +1737,9 @@ mod platform {
             translation_trigger: Option<HotkeyTrigger>,
         ) {
             crate::linux_fcitx::sync_qa_binding(qa_trigger);
-            // Selection Polish ships disabled on Linux for now; the fcitx plugin has
-            // no corresponding signal route yet.
-            let _ = selection_polish_trigger;
+            // 选区润色触发键：fcitx5 插件通过 SelectionPolishEvent 信号回传
+            //（插件端需 `scripts/inject-fcitx5-plugin.sh` 重装新版 .so）。
+            crate::linux_fcitx::sync_selection_polish_binding(selection_polish_trigger);
             crate::linux_fcitx::sync_translation_binding(translation_trigger);
         }
 

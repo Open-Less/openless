@@ -127,6 +127,10 @@ struct CredsRoot {
     active: CredsActive,
     #[serde(default)]
     providers: CredsProviders,
+    /// 多模态识别管线（issue #902）专用凭据命名空间，与 asr/llm 完全隔离：
+    /// 运行时只在 `pipeline_mode == multimodal` 时读取，切换模式不删除。
+    #[serde(default)]
+    omni: CredsOmni,
     #[serde(default, skip_serializing_if = "CredsMarketplace::is_empty")]
     marketplace: CredsMarketplace,
 }
@@ -172,6 +176,50 @@ struct CredsProviders {
     asr: HashMap<String, CredsAsrEntry>,
     #[serde(default)]
     llm: HashMap<String, CredsLlmEntry>,
+}
+
+/// 多模态（Omni）模型配置：一个 active provider + 按 provider 隔离的 entry。
+/// entry 字段形状与 LLM 对齐（API Key / Base URL / Model / 温度 / 额外请求头），
+/// 但存放在独立命名空间，绝不与 `providers.llm` 共享槽位。
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+struct CredsOmni {
+    #[serde(default = "creds_default_omni")]
+    active: String,
+    #[serde(default)]
+    providers: HashMap<String, CredsOmniEntry>,
+}
+
+fn creds_default_omni() -> String {
+    "custom".into()
+}
+
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+#[allow(non_snake_case)]
+struct CredsOmniEntry {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    apiKey: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    baseURL: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    extraHeaders: Option<HashMap<String, String>>,
+}
+
+impl CredsOmniEntry {
+    fn is_empty(&self) -> bool {
+        self.apiKey.as_deref().unwrap_or("").is_empty()
+            && self.baseURL.as_deref().unwrap_or("").is_empty()
+            && self.model.as_deref().unwrap_or("").is_empty()
+            && self.temperature.is_none()
+            && self
+                .extraHeaders
+                .as_ref()
+                .map(|h| h.is_empty())
+                .unwrap_or(true)
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
@@ -564,6 +612,14 @@ fn active_llm_extra_headers(root: &CredsRoot) -> HashMap<String, String> {
         .unwrap_or_default()
 }
 
+fn active_omni_extra_headers(root: &CredsRoot) -> HashMap<String, String> {
+    root.omni
+        .providers
+        .get(&root.omni.active)
+        .and_then(|entry| entry.extraHeaders.clone())
+        .unwrap_or_default()
+}
+
 fn is_valid_llm_temperature(temperature: f64) -> bool {
     temperature.is_finite() && (0.0..=2.0).contains(&temperature)
 }
@@ -593,6 +649,33 @@ fn active_llm_extra_headers_json(root: &CredsRoot) -> Result<Option<String>> {
     serde_json::to_string(&ordered)
         .map(Some)
         .context("encode LLM extra headers")
+}
+
+fn active_omni_extra_headers_json(root: &CredsRoot) -> Result<Option<String>> {
+    let headers = active_omni_extra_headers(root);
+    if headers.is_empty() {
+        return Ok(None);
+    }
+    let ordered = headers.into_iter().collect::<BTreeMap<_, _>>();
+    serde_json::to_string(&ordered)
+        .map(Some)
+        .context("encode omni extra headers")
+}
+
+fn active_omni_temperature_value(root: &CredsRoot) -> Option<f64> {
+    root.omni
+        .providers
+        .get(&root.omni.active)
+        .and_then(|entry| entry.temperature)
+        .filter(|temperature| is_valid_llm_temperature(*temperature))
+}
+
+fn active_omni_temperature(root: &CredsRoot) -> Option<f32> {
+    active_omni_temperature_value(root).map(|temperature| temperature as f32)
+}
+
+fn active_omni_temperature_string(root: &CredsRoot) -> Option<String> {
+    active_omni_temperature_value(root).map(|temperature| temperature.to_string())
 }
 
 fn parse_extra_headers_json(value: &str) -> Result<HashMap<String, String>> {
@@ -910,6 +993,7 @@ fn clean_credentials(root: &CredsRoot) -> CredsRoot {
     let mut cleaned = root.clone();
     cleaned.providers.asr.retain(|_, v| !v.is_empty());
     cleaned.providers.llm.retain(|_, v| !v.is_empty());
+    cleaned.omni.providers.retain(|_, v| !v.is_empty());
     cleaned
 }
 
@@ -1421,6 +1505,7 @@ fn save_credentials(root: &CredsRoot) -> Result<()> {
 fn lookup_account(root: &CredsRoot, account: CredentialAccount) -> Option<String> {
     let asr = root.providers.asr.get(&root.active.asr);
     let llm = root.providers.llm.get(&root.active.llm);
+    let omni = root.omni.providers.get(&root.omni.active);
     let pick = |s: &Option<String>| s.as_ref().filter(|v| !v.is_empty()).cloned();
     match account {
         CredentialAccount::VolcengineAppKey => {
@@ -1440,12 +1525,16 @@ fn lookup_account(root: &CredsRoot, account: CredentialAccount) -> Option<String
         CredentialAccount::AsrAdvancedConfig => asr.and_then(|e| pick(&e.advancedConfig)),
         CredentialAccount::XfyunAppId => asr.and_then(|e| pick(&e.xfyunAppId)),
         CredentialAccount::XfyunApiKey => asr.and_then(|e| pick(&e.xfyunApiKey)),
+        CredentialAccount::OmniApiKey => omni.and_then(|e| pick(&e.apiKey)),
+        CredentialAccount::OmniEndpoint => omni.and_then(|e| pick(&e.baseURL)),
+        CredentialAccount::OmniModel => omni.and_then(|e| pick(&e.model)),
     }
 }
 
 fn write_account(root: &mut CredsRoot, account: CredentialAccount, value: Option<String>) {
     let asr_id = root.active.asr.clone();
     let llm_id = root.active.llm.clone();
+    let omni_id = root.omni.active.clone();
     let normalized = value.and_then(|v| if v.is_empty() { None } else { Some(v) });
     match account {
         CredentialAccount::VolcengineAppKey => {
@@ -1508,6 +1597,18 @@ fn write_account(root: &mut CredsRoot, account: CredentialAccount, value: Option
             let entry = root.providers.asr.entry(asr_id).or_default();
             entry.xfyunApiKey = normalized;
         }
+        CredentialAccount::OmniApiKey => {
+            let entry = root.omni.providers.entry(omni_id).or_default();
+            entry.apiKey = normalized;
+        }
+        CredentialAccount::OmniEndpoint => {
+            let entry = root.omni.providers.entry(omni_id).or_default();
+            entry.baseURL = normalized;
+        }
+        CredentialAccount::OmniModel => {
+            let entry = root.omni.providers.entry(omni_id).or_default();
+            entry.model = normalized;
+        }
     }
 }
 
@@ -1536,6 +1637,12 @@ pub enum CredentialAccount {
     XfyunAppId,
     /// 讯飞实时语音转写 APIKey。
     XfyunApiKey,
+    /// 多模态（Omni）模型的 API Key。仅多模态管线读取。
+    OmniApiKey,
+    /// 多模态（Omni）模型的 Base URL。
+    OmniEndpoint,
+    /// 多模态（Omni）模型的 model id。
+    OmniModel,
 }
 
 impl CredentialAccount {
@@ -1559,6 +1666,9 @@ impl CredentialAccount {
             CredentialAccount::AsrAdvancedConfig => "asr.advanced_config",
             CredentialAccount::XfyunAppId => "xfyun.app_id",
             CredentialAccount::XfyunApiKey => "xfyun.api_key",
+            CredentialAccount::OmniApiKey => "omni.api_key",
+            CredentialAccount::OmniEndpoint => "omni.endpoint",
+            CredentialAccount::OmniModel => "omni.model",
         }
     }
 
@@ -1579,6 +1689,9 @@ impl CredentialAccount {
             CredentialAccount::AsrAdvancedConfig,
             CredentialAccount::XfyunAppId,
             CredentialAccount::XfyunApiKey,
+            CredentialAccount::OmniApiKey,
+            CredentialAccount::OmniEndpoint,
+            CredentialAccount::OmniModel,
         ]
     }
 }
@@ -1599,6 +1712,10 @@ pub struct CredentialsSnapshot {
     pub ark_api_key: Option<String>,
     pub ark_model_id: Option<String>,
     pub ark_endpoint: Option<String>,
+    pub active_omni_provider: String,
+    pub omni_api_key: Option<String>,
+    pub omni_endpoint: Option<String>,
+    pub omni_model: Option<String>,
 }
 
 /// 渠道所属的功能面。
@@ -2287,6 +2404,68 @@ impl CredentialsVault {
         save_credentials(&root)
     }
 
+    pub fn get_active_omni() -> String {
+        let _guard = credentials_lock().lock();
+        load_credentials().omni.active
+    }
+
+    pub fn set_active_omni_provider(id: &str) -> Result<()> {
+        let _guard = credentials_lock().lock();
+        let mut root = load_credentials_for_update()?;
+        root.omni.active = id.to_string();
+        save_credentials(&root)
+    }
+
+    pub fn get_active_omni_extra_headers() -> HashMap<String, String> {
+        let _guard = credentials_lock().lock();
+        active_omni_extra_headers(&load_credentials())
+    }
+
+    pub fn get_active_omni_extra_headers_json() -> Result<Option<String>> {
+        let _guard = credentials_lock().lock();
+        active_omni_extra_headers_json(&load_credentials())
+    }
+
+    pub fn get_active_omni_temperature() -> Option<f32> {
+        let _guard = credentials_lock().lock();
+        active_omni_temperature(&load_credentials())
+    }
+
+    pub fn get_active_omni_temperature_string() -> Option<String> {
+        let _guard = credentials_lock().lock();
+        active_omni_temperature_string(&load_credentials())
+    }
+
+    pub fn set_active_omni_temperature(value: &str) -> Result<()> {
+        let _guard = credentials_lock().lock();
+        let temperature = parse_llm_temperature(value)?;
+        let mut root = load_credentials_for_update()?;
+        let entry = root
+            .omni
+            .providers
+            .entry(root.omni.active.clone())
+            .or_default();
+        entry.temperature = temperature;
+        save_credentials(&root)
+    }
+
+    pub fn set_active_omni_extra_headers_json(value: &str) -> Result<()> {
+        let _guard = credentials_lock().lock();
+        let headers = parse_extra_headers_json(value)?;
+        let mut root = load_credentials_for_update()?;
+        let entry = root
+            .omni
+            .providers
+            .entry(root.omni.active.clone())
+            .or_default();
+        entry.extraHeaders = if headers.is_empty() {
+            None
+        } else {
+            Some(headers)
+        };
+        save_credentials(&root)
+    }
+
     pub fn get_active_llm_extra_headers() -> HashMap<String, String> {
         let _guard = credentials_lock().lock();
         active_llm_extra_headers(&load_credentials())
@@ -2354,6 +2533,10 @@ impl CredentialsVault {
             ark_api_key: lookup_account(&root, CredentialAccount::ArkApiKey),
             ark_model_id: lookup_account(&root, CredentialAccount::ArkModelId),
             ark_endpoint: lookup_account(&root, CredentialAccount::ArkEndpoint),
+            active_omni_provider: root.omni.active.clone(),
+            omni_api_key: lookup_account(&root, CredentialAccount::OmniApiKey),
+            omni_endpoint: lookup_account(&root, CredentialAccount::OmniEndpoint),
+            omni_model: lookup_account(&root, CredentialAccount::OmniModel),
         }
     }
 }
@@ -2389,6 +2572,50 @@ mod tests {
         assert!(chunks
             .iter()
             .all(|chunk| chunk.encode_utf16().count() <= KEYRING_CHUNK_MAX_UTF16_UNITS));
+    }
+
+    #[test]
+    fn omni_accounts_route_to_omni_namespace_only() {
+        // 多模态（Omni）凭据必须与 LLM/ASR 命名空间完全隔离（issue #902）：
+        // 写 omni 槽位不影响 ark 槽位；切换 omni active provider 后读到的是
+        // 该 provider 自己的 entry，而不是别的 provider 的残留值。
+        let mut root = CredsRoot::default();
+        root.active.llm = "ark".into();
+        root.active.asr = "volcengine".into();
+        root.omni.active = "openai".into();
+
+        write_account(
+            &mut root,
+            CredentialAccount::OmniApiKey,
+            Some("omni-key".into()),
+        );
+        write_account(
+            &mut root,
+            CredentialAccount::OmniEndpoint,
+            Some("https://api.openai.com/v1".into()),
+        );
+        write_account(
+            &mut root,
+            CredentialAccount::OmniModel,
+            Some("gpt-4o-audio-preview".into()),
+        );
+
+        assert_eq!(
+            lookup_account(&root, CredentialAccount::OmniApiKey).as_deref(),
+            Some("omni-key")
+        );
+        // 传统 LLM / ASR 槽位必须保持为空。
+        assert_eq!(lookup_account(&root, CredentialAccount::ArkApiKey), None);
+        assert_eq!(lookup_account(&root, CredentialAccount::AsrApiKey), None);
+
+        // 切到另一个 omni provider：读不到 openai 的 entry（per-provider 隔离）。
+        root.omni.active = "custom".into();
+        assert_eq!(lookup_account(&root, CredentialAccount::OmniApiKey), None);
+        root.omni.active = "openai".into();
+        assert_eq!(
+            lookup_account(&root, CredentialAccount::OmniModel).as_deref(),
+            Some("gpt-4o-audio-preview")
+        );
     }
 
     #[test]

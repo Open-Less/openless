@@ -16,15 +16,21 @@ pub fn clear_history(coord: CoordinatorState<'_>) -> Result<(), String> {
     coord.history().clear().map_err(|e| e.to_string())
 }
 
-/// 每日活动计数（日期升序），概览页年度热力图的数据源。与历史内容 / 保留策略解耦：
-/// 清空历史不影响它，全年格子照亮。
+/// 每日活动汇总（日期升序），概览页年度热力图与「近 7 天 / 近 30 天」指标的数据源。
+/// 与历史内容 / 保留策略解耦：清空历史不影响它，全年格子照亮，周期统计也不会被
+/// 历史 200 条上限截断。
 #[tauri::command]
 pub fn get_activity_stats(coord: CoordinatorState<'_>) -> Vec<ActivityDay> {
     coord
         .activity()
         .snapshot()
         .into_iter()
-        .map(|(date, count)| ActivityDay { date, count })
+        .map(|(date, stats)| ActivityDay {
+            date,
+            count: stats.count,
+            chars: stats.chars,
+            duration_ms: stats.duration_ms,
+        })
         .collect()
 }
 
@@ -60,10 +66,17 @@ pub async fn read_audio_recording(session_id: String) -> Result<String, String> 
             format!("read wav failed: {e}")
         }
     })?;
-    log::info!("[history] read_audio_recording id={session_id} bytes={} head={:?}", data.len(), &data.get(..16));
+    log::info!(
+        "[history] read_audio_recording id={session_id} bytes={} head={:?}",
+        data.len(),
+        &data.get(..16)
+    );
     let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &data);
     let data_url = format!("data:audio/wav;base64,{b64}");
-    log::info!("[history] read_audio_recording data_url_len={}", data_url.len());
+    log::info!(
+        "[history] read_audio_recording data_url_len={}",
+        data_url.len()
+    );
     Ok(data_url)
 }
 
@@ -122,9 +135,7 @@ fn export_recording_to_destination(
         }
     }
 
-    let destination = file_path
-        .into_path()
-        .map_err(export_recording_failed)?;
+    let destination = file_path.into_path().map_err(export_recording_failed)?;
     copy_recording_to_path(source, &destination)?;
     Ok(destination.to_string_lossy().into_owned())
 }
@@ -151,7 +162,8 @@ fn copy_recording_to_path(
     destination: &std::path::Path,
 ) -> Result<(), String> {
     let mut source_file = open_recording_source(source)?;
-    let mut destination_file = std::fs::File::create(destination).map_err(export_recording_failed)?;
+    let mut destination_file =
+        std::fs::File::create(destination).map_err(export_recording_failed)?;
     std::io::copy(&mut source_file, &mut destination_file)
         .map(|_| ())
         .map_err(export_recording_failed)
@@ -172,7 +184,9 @@ fn copy_recording_to_mobile_url(
         Ok(file) => file,
         Err(error) => {
             #[cfg(target_os = "ios")]
-            let _ = app.fs().stop_accessing_security_scoped_resource(destination.clone());
+            let _ = app
+                .fs()
+                .stop_accessing_security_scoped_resource(destination.clone());
             return Err(export_recording_failed(error));
         }
     };
@@ -256,7 +270,6 @@ pub async fn retranscribe_recording(
     Ok(entry)
 }
 
-
 /// 把一次重转录的结果落到既有历史条目上（纯函数，供单测覆盖契约）：
 /// - 只更新转写结果并清除失败标记。insert_status 保持原值——重新转录不向光标落字，
 ///   没有可表达「已转写未落字」的状态，清掉 error_code 即足以标记不再是失败条目。
@@ -307,6 +320,7 @@ mod retranscribe_tests {
             asr_model: Some("volc.seedasr.sauc.duration".into()),
             llm_provider: Some("ark".into()),
             llm_model: Some("deepseek-v3-2".into()),
+            pipeline_mode: None,
             asr_ms: Some(15000),
             polish_ms: Some(1200),
         }
@@ -325,7 +339,10 @@ mod retranscribe_tests {
         assert_eq!(entry.final_text, "重转出来的文本");
         assert_eq!(entry.error_code, None, "重转成功应清除失败标记");
         // ASR 归因换成本次重转的构建时快照。
-        assert_eq!(entry.asr_provider.as_deref(), Some("bailian-qwen3-realtime"));
+        assert_eq!(
+            entry.asr_provider.as_deref(),
+            Some("bailian-qwen3-realtime")
+        );
         assert_eq!(entry.asr_model.as_deref(), Some("qwen3-asr-flash-realtime"));
         assert_eq!(entry.asr_ms, Some(480));
         // 重转没有润色环节：旧 LLM 元数据不得残留在新转写结果上。

@@ -105,6 +105,17 @@ export function exportStylePackToZip(
     )
 }
 
-export function repolish(rawText: string, mode: PolishMode): Promise<string> {
-    return invokeOrMock("repolish", { rawText, mode }, () => rawText)
+/** 用某个风格包重新润色一段已有原文。
+ *  `stylePackId` 省略 = 用当前激活风格包（历史页「重试」：同样输入再跑一遍）；
+ *  给了 id = 用指定风格包试算一次（历史页「换风格重润色」），不改变激活状态。 */
+export function repolish(
+    rawText: string,
+    mode: PolishMode,
+    stylePackId?: string,
+): Promise<string> {
+    return invokeOrMock(
+        "repolish",
+        { rawText, mode, stylePackId },
+        () => `${rawText}（mock：${stylePackId ?? "当前风格"} 重新润色）`,
+    )
 }

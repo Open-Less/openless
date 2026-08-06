@@ -293,7 +293,15 @@ impl WhisperBatchASR {
             // segments が無い応答では内部で従来どおり text にフォールバック。
             Ok(extract_confident_text(&json))
         } else {
-            Ok(json["text"].as_str().unwrap_or("").trim().to_string())
+            // GLM-ASR 等厂商在静音/弱音片段偶发返回仅含 `#`（或 `##`…）的占位
+            // 文本（issue #787）。归一化为空转写，走既有空转写护栏，避免把占位符
+            // 当有效内容插入用户输入。
+            let text = json["text"].as_str().unwrap_or("").trim();
+            if is_placeholder_heading(text) {
+                Ok(String::new())
+            } else {
+                Ok(text.to_string())
+            }
         }
     }
 
@@ -325,7 +333,11 @@ impl crate::recorder::AudioConsumer for WhisperBatchASR {
 /// 「不丢弃」处理（unwrap_or 默认值），所以对不返回这些指标的 provider 是无害空转。
 fn extract_confident_text(json: &serde_json::Value) -> String {
     let Some(segments) = json.get("segments").and_then(|s| s.as_array()) else {
-        return json["text"].as_str().unwrap_or("").trim().to_string();
+        let text = json["text"].as_str().unwrap_or("").trim();
+        if is_placeholder_heading(text) {
+            return String::new();
+        }
+        return text.to_string();
     };
 
     let mut kept = String::new();
@@ -369,6 +381,17 @@ fn extract_confident_text(json: &serde_json::Value) -> String {
         return String::new();
     }
     kept
+}
+
+/// 判定转写结果是否为「纯井号占位文本」。
+///
+/// GLM-ASR（zhipu）在静音 / 弱音片段偶发把整段识别为单个 `#`（或 `##`、`###`…），
+/// 属于模型退化的占位输出，不是任何真实语音转写（issue #787）。判定只命中「整段
+/// 仅由 1 个或多个 `#` 组成」的情况：`C#`、`# 你好` 等含其它字符的真实内容不受
+/// 影响。输入先 `trim()`，空白与两侧空格不影响判定。
+fn is_placeholder_heading(text: &str) -> bool {
+    let trimmed = text.trim();
+    !trimmed.is_empty() && trimmed.chars().all(|c| c == '#')
 }
 
 fn pcm_duration_ms(pcm: &[u8]) -> u64 {
@@ -813,6 +836,84 @@ mod tests {
             "segments": [ {"text": "保留される"} ]
         });
         assert_eq!(extract_confident_text(&json), "保留される");
+    }
+
+    #[test]
+    fn placeholder_heading_detects_pure_hash_runs_only() {
+        // issue #787：GLM-ASR 偶发返回仅含 `#` 的占位文本。
+        assert!(is_placeholder_heading("#"));
+        assert!(is_placeholder_heading("##"));
+        assert!(is_placeholder_heading("###"));
+        assert!(is_placeholder_heading("  ##  "));
+        // 含其它字符的真实内容不受影响。
+        assert!(!is_placeholder_heading("C#"));
+        assert!(!is_placeholder_heading("# 你好"));
+        assert!(!is_placeholder_heading("#hash"));
+        // 空 / 空白输入不命中。
+        assert!(!is_placeholder_heading(""));
+        assert!(!is_placeholder_heading("   "));
+    }
+
+    #[tokio::test]
+    async fn single_placeholder_chunk_transcribes_to_empty() {
+        // 单分片响应为 `#` → 归一化为空转写。
+        for text in ["#", "##", "###"] {
+            let (base_url, server) = start_whisper_test_server(vec![text]);
+            let asr = WhisperBatchASR::new(
+                "key".to_string(),
+                base_url,
+                "model".to_string(),
+                None,
+                None,
+                false,
+            );
+            let pcm = vec![0u8; 32_000 * 2];
+            asr.consume_pcm_chunk(&pcm);
+
+            let transcript = asr.transcribe().await.unwrap();
+            assert_eq!(transcript.text, "");
+            server.join().unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn placeholder_chunk_is_dropped_when_joining() {
+        // 分片 ["你好", "#", "世界"] → 占位分片被丢弃，正常分片保留。
+        let (base_url, server) = start_whisper_test_server(vec!["你好", "#", "世界"]);
+        let asr = WhisperBatchASR::new(
+            "key".to_string(),
+            base_url,
+            "model".to_string(),
+            None,
+            Some(30_000),
+            false,
+        );
+        let pcm = vec![0u8; 32_000 * 65];
+        asr.consume_pcm_chunk(&pcm);
+
+        let transcript = asr.transcribe().await.unwrap();
+        assert_eq!(transcript.text, "你好世界");
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn all_placeholder_chunks_transcribe_to_empty() {
+        // 全部分片均为 `#` → 整体转写为空（走 coordinator 空转写护栏）。
+        let (base_url, server) = start_whisper_test_server(vec!["#", "##", "###"]);
+        let asr = WhisperBatchASR::new(
+            "key".to_string(),
+            base_url,
+            "model".to_string(),
+            None,
+            Some(30_000),
+            false,
+        );
+        let pcm = vec![0u8; 32_000 * 65];
+        asr.consume_pcm_chunk(&pcm);
+
+        let transcript = asr.transcribe().await.unwrap();
+        assert_eq!(transcript.text, "");
+        server.join().unwrap();
     }
 
     #[tokio::test]

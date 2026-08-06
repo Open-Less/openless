@@ -29,8 +29,14 @@ import {
 } from '../../lib/ipc';
 import { emitSaved } from '../../lib/savedEvent';
 import { useMobileLayout } from '../../lib/useMobileLayout';
+import { useHotkeySettings } from '../../state/HotkeySettingsContext';
 import { Card } from '../_atoms';
-import { ChannelCredentialFields, LLM_PRESETS, LOCAL_ASR_PROVIDER_IDS } from './ProvidersSection';
+import {
+  ChannelCredentialFields,
+  LLM_PRESETS,
+  LOCAL_ASR_PROVIDER_IDS,
+  OmniChannelSection,
+} from './ProvidersSection';
 import { ASR_PRESETS, inputStyle, SectionTitle, Toggle } from './shared';
 
 type ChannelKind = 'llm' | 'asr';
@@ -580,17 +586,23 @@ export function ProvidersSection({
   autoCreateWhenEmpty?: boolean;
 } = {}) {
   const { t } = useTranslation();
+  const { prefs } = useHotkeySettings();
+  // 多模态管线接管（issue #902）：多模态模式下隐藏传统 llm/asr 渠道列表，
+  // 凭据两套并存但停用，切回即恢复（与合并前 beta 语义一致）。
+  const multimodalMode =
+    prefs?.multimodalPipelineEnabled === true && prefs?.pipelineMode === 'multimodal';
   return (
     <>
-      {kind === 'all' && (
+      {kind === 'all' && <OmniChannelSection />}
+      {kind === 'all' && !multimodalMode && (
         <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.6, marginBottom: 10 }}>
           {t('settings.providers.credentialStorageNotice')}
         </div>
       )}
-      {(kind === 'all' || kind === 'llm') && (
+      {!multimodalMode && (kind === 'all' || kind === 'llm') && (
         <ChannelList kind="llm" autoCreateWhenEmpty={autoCreateWhenEmpty} />
       )}
-      {(kind === 'all' || kind === 'asr') && (
+      {!multimodalMode && (kind === 'all' || kind === 'asr') && (
         <ChannelList kind="asr" autoCreateWhenEmpty={autoCreateWhenEmpty} />
       )}
     </>
