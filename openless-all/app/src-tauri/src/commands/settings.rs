@@ -30,6 +30,8 @@ pub(crate) trait SettingsWriter {
     fn refresh_open_app_hotkey(&self);
     fn refresh_selection_polish_hotkey(&self);
     fn refresh_coding_agent_hotkey(&self);
+    // 默认 no-op：测试 mock 不关心风格快捷键；真实实现（Coordinator / Arc<T>）覆写。
+    fn refresh_style_pack_hotkeys(&self) {}
 }
 
 impl SettingsWriter for Coordinator {
@@ -89,6 +91,10 @@ impl SettingsWriter for Coordinator {
     fn refresh_coding_agent_hotkey(&self) {
         self.update_coding_agent_hotkey_binding();
     }
+
+    fn refresh_style_pack_hotkeys(&self) {
+        self.update_style_pack_hotkey_bindings();
+    }
 }
 
 impl<T: SettingsWriter + ?Sized> SettingsWriter for Arc<T> {
@@ -141,6 +147,10 @@ impl<T: SettingsWriter + ?Sized> SettingsWriter for Arc<T> {
 
     fn refresh_coding_agent_hotkey(&self) {
         (**self).refresh_coding_agent_hotkey();
+    }
+
+    fn refresh_style_pack_hotkeys(&self) {
+        (**self).refresh_style_pack_hotkeys();
     }
 }
 
@@ -249,6 +259,44 @@ pub(crate) fn reconcile_hotkey_collisions(
             higher.push(value);
         }
     }
+    // 风格包直达快捷键是最低优先级：与更高优先级键重叠、非法或集合内重复的条目，
+    // 先尝试恢复该风格包的旧绑定，仍不行则整条移除（不影响其余设置落盘）。
+    let mut kept: Vec<StylePackHotkey> = Vec::new();
+    for entry in &prefs.style_pack_hotkeys {
+        let candidate_ok = |candidate: &StylePackHotkey| {
+            !candidate.pack_id.trim().is_empty()
+                && crate::shortcut_binding::validate_binding(&candidate.binding).is_ok()
+                && crate::shortcut_binding::reject_side_specific_non_dictation(&candidate.binding)
+                    .is_ok()
+                && reject_modifier_only_action_shortcut(&candidate.binding).is_ok()
+                && !kept.iter().any(|held: &StylePackHotkey| {
+                    held.pack_id == candidate.pack_id
+                        || crate::shortcut_binding::bindings_overlap(
+                            &held.binding,
+                            &candidate.binding,
+                        )
+                })
+                && !higher.iter().any(|held| {
+                    crate::shortcut_binding::bindings_overlap(held, &candidate.binding)
+                })
+        };
+        if candidate_ok(entry) {
+            kept.push(entry.clone());
+            continue;
+        }
+        adjusted += 1;
+        if let Some(fallback) = previous
+            .style_pack_hotkeys
+            .iter()
+            .find(|old| old.pack_id == entry.pack_id)
+            .filter(|old| candidate_ok(old))
+        {
+            kept.push(fallback.clone());
+        }
+    }
+    if kept != prefs.style_pack_hotkeys {
+        prefs.style_pack_hotkeys = kept;
+    }
     adjusted
 }
 
@@ -288,6 +336,7 @@ pub(crate) fn persist_settings_with_keyboard_apply<T: SettingsWriter>(
     let translation_changed = previous.translation_hotkey != prefs.translation_hotkey;
     let switch_style_changed = previous.switch_style_hotkey != prefs.switch_style_hotkey;
     let open_app_changed = previous.open_app_hotkey != prefs.open_app_hotkey;
+    let style_pack_hotkeys_changed = previous.style_pack_hotkeys != prefs.style_pack_hotkeys;
     let selection_polish_changed =
         previous.selection_polish_hotkey != prefs.selection_polish_hotkey;
     let coding_agent_changed = previous.coding_agent_enabled != prefs.coding_agent_enabled
@@ -377,6 +426,9 @@ pub(crate) fn persist_settings_with_keyboard_apply<T: SettingsWriter>(
     }
     if open_app_changed {
         coord.refresh_open_app_hotkey();
+    }
+    if style_pack_hotkeys_changed {
+        coord.refresh_style_pack_hotkeys();
     }
     if selection_polish_changed {
         coord.refresh_selection_polish_hotkey();

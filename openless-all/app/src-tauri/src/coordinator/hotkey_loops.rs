@@ -1109,6 +1109,17 @@ pub(super) fn handle_action_hotkey_pressed(inner: &Arc<Inner>, kind: ActionHotke
     }
 }
 
+/// 全局快捷键切风格后的轻量提示：用户多半在别的前台 app 里按键，不弹提示
+/// 无法知道切没切成功、切到了哪个风格。复用选区润色的无焦点一行提示胶囊
+/// （✓ + 文案，2s 自动隐藏，不抢焦点不挡点击）；录音中按键最多闪一帧，
+/// 下一个 ~30Hz 电平帧会立即夺回胶囊显示，auto-hide timer 也会因代数失效。
+#[cfg(not(mobile))]
+pub(super) fn show_style_switch_capsule(inner: &Arc<Inner>, name: &str) {
+    let event_epoch =
+        emit_selection_polish_capsule(inner, CapsuleState::Done, format!("已切换：{name}"));
+    schedule_selection_polish_capsule_idle(inner, event_epoch, CAPSULE_AUTO_HIDE_DELAY_MS);
+}
+
 pub(super) fn switch_to_previous_style(inner: &Arc<Inner>) {
     let mut prefs = inner.prefs.get();
     let packs = match inner.style_packs.list() {
@@ -1142,6 +1153,8 @@ pub(super) fn switch_to_previous_style(inner: &Arc<Inner>) {
             "[coord] switch style hotkey changed active style pack to {}",
             prefs.active_style_pack_id
         );
+        #[cfg(not(mobile))]
+        show_style_switch_capsule(inner, &enabled[next_index].name);
         if let Some(app) = inner.app.lock().clone() {
             let _ = app.emit("prefs:changed", &prefs);
             let _ = app.emit_to("main", "prefs:changed", &prefs);
@@ -1226,6 +1239,169 @@ pub(super) fn action_hotkey_bridge_thread_name(kind: ActionHotkeyKind) -> &'stat
     match kind {
         ActionHotkeyKind::SwitchStyle => "openless-switch-style-hotkey-bridge",
         ActionHotkeyKind::OpenApp => "openless-open-app-hotkey-bridge",
+    }
+}
+
+// ─────────────────── style pack hotkeys (issue #759) ───────────────────
+
+/// 启动期 supervisor：等 AppHandle 就绪后按 prefs 全量注册风格包直达快捷键；
+/// 有注册失败时按 action hotkey 的节奏（3s）重试，直到全部装上或 shutdown。
+pub(super) fn style_pack_hotkey_supervisor_loop(inner: Arc<Inner>) {
+    let mut attempts: u32 = 0;
+    loop {
+        if inner.shutdown.load(Ordering::SeqCst) {
+            return;
+        }
+        if inner.prefs.get().style_pack_hotkeys.is_empty() {
+            // 没有配置任何风格快捷键；用户后续新增走 update 主动路径。
+            return;
+        }
+        let app = match inner.app.lock().clone() {
+            Some(a) => a,
+            None => {
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                continue;
+            }
+        };
+
+        let (done_tx, done_rx) = mpsc::sync_channel::<usize>(1);
+        let sync_inner = Arc::clone(&inner);
+        let _ = app.run_on_main_thread(move || {
+            let _ = done_tx.send(sync_style_pack_hotkeys(&sync_inner));
+        });
+        let failures = match done_rx.recv_timeout(std::time::Duration::from_secs(5)) {
+            Ok(n) => n,
+            Err(_) => {
+                attempts += 1;
+                if attempts <= 3 || attempts % 10 == 0 {
+                    log::warn!("[coord] style pack hotkeys 第 {attempts} 次注册超时；3s 后重试");
+                }
+                std::thread::sleep(std::time::Duration::from_secs(3));
+                continue;
+            }
+        };
+        if failures == 0 {
+            log::info!(
+                "[coord] style pack hotkey listeners installed after {} attempt(s)",
+                attempts + 1
+            );
+            return;
+        }
+        attempts += 1;
+        if attempts <= 3 || attempts % 10 == 0 {
+            log::warn!("[coord] style pack hotkeys 有 {failures} 条注册失败；3s 后重试");
+        }
+        std::thread::sleep(std::time::Duration::from_secs(3));
+    }
+}
+
+/// 按 prefs 全量对齐风格包快捷键注册状态。**必须在主线程执行**（macOS Carbon
+/// 要求 manager 在主线程构造）。策略为整表重建：先 drop 全部旧注册再逐条注册，
+/// 避免「两个包互换按键」这类增量 update 场景下新键仍被旧注册占用而失败。
+/// 返回「配置有效但注册失败」的条数。
+pub(super) fn sync_style_pack_hotkeys(inner: &Arc<Inner>) -> usize {
+    let entries: Vec<crate::types::StylePackHotkey> = inner
+        .prefs
+        .get()
+        .style_pack_hotkeys
+        .into_iter()
+        .filter(|entry| {
+            !is_unconfigured_shortcut(&entry.binding) && !is_modifier_only_shortcut(&entry.binding)
+        })
+        .collect();
+    let mut monitors = inner.style_pack_hotkeys.lock();
+    monitors.clear();
+    let mut failures = 0;
+    for entry in entries {
+        let (tx, rx) = mpsc::channel::<ComboHotkeyEvent>();
+        match ComboHotkeyMonitor::start(entry.binding.clone(), tx) {
+            Ok(monitor) => {
+                monitors.insert(entry.pack_id.clone(), monitor);
+                let bridge_inner = Arc::clone(inner);
+                let pack_id = entry.pack_id.clone();
+                std::thread::Builder::new()
+                    .name("openless-style-pack-hotkey-bridge".into())
+                    .spawn(move || style_pack_hotkey_bridge_loop(bridge_inner, rx, pack_id))
+                    .ok();
+            }
+            Err(e) => {
+                log::warn!(
+                    "[coord] style pack hotkey {} 注册失败: {e}",
+                    entry.pack_id
+                );
+                failures += 1;
+            }
+        }
+    }
+    failures
+}
+
+/// 设置变更后的主动同步路径（fire-and-forget dispatch 到主线程）。
+pub(super) fn sync_style_pack_hotkeys_on_main_thread(inner: &Arc<Inner>) {
+    let app = inner.app.lock().clone();
+    let Some(app) = app else {
+        log::warn!("[coord] sync style pack hotkeys: AppHandle 未 bind，跳过");
+        return;
+    };
+    let sync_inner = Arc::clone(inner);
+    let _ = app.run_on_main_thread(move || {
+        let failures = sync_style_pack_hotkeys(&sync_inner);
+        if failures > 0 {
+            log::warn!("[coord] style pack hotkeys 同步后仍有 {failures} 条注册失败");
+        }
+    });
+}
+
+pub(super) fn clear_style_pack_hotkeys_on_main_thread(inner: &Arc<Inner>) {
+    let app = inner.app.lock().clone();
+    if let Some(app) = app {
+        let inner = Arc::clone(inner);
+        let _ = app.run_on_main_thread(move || {
+            inner.style_pack_hotkeys.lock().clear();
+        });
+    } else {
+        inner.style_pack_hotkeys.lock().clear();
+    }
+}
+
+pub(super) fn style_pack_hotkey_bridge_loop(
+    inner: Arc<Inner>,
+    rx: mpsc::Receiver<ComboHotkeyEvent>,
+    pack_id: String,
+) {
+    while let Ok(evt) = rx.recv() {
+        if inner.shortcut_recording_active.load(Ordering::SeqCst) {
+            continue;
+        }
+        if matches!(evt, ComboHotkeyEvent::Pressed { .. }) {
+            handle_style_pack_hotkey_pressed(&inner, &pack_id);
+        }
+    }
+}
+
+/// 复用 `activate_style_pack_by_id`（禁用包自动启用、写 prefs、sync、广播、刷托盘），
+/// 与前端「点选风格包」走完全相同的激活路径；包已被删除时仅 warn 不做事。
+pub(super) fn handle_style_pack_hotkey_pressed(inner: &Arc<Inner>, pack_id: &str) {
+    let Some(app) = inner.app.lock().clone() else {
+        log::warn!("[coord] style pack hotkey {pack_id} pressed but AppHandle not bound");
+        return;
+    };
+    let coord = Coordinator {
+        inner: Arc::clone(inner),
+    };
+    match crate::commands::activate_style_pack_by_id(&coord, &app, pack_id) {
+        Ok(pack) => {
+            log::info!(
+                "[coord] style pack hotkey activated {} ({})",
+                pack.id,
+                pack.name
+            );
+            #[cfg(not(mobile))]
+            show_style_switch_capsule(inner, &pack.name);
+        }
+        Err(error) => {
+            log::warn!("[coord] style pack hotkey {pack_id} activation failed: {error}")
+        }
     }
 }
 

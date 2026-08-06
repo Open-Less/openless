@@ -27,6 +27,7 @@ pub fn set_dictation_hotkey(
         reject_dictation_less_computer_hotkey_overlap(&binding, less_computer)?;
     }
     reject_existing_selection_polish_hotkey_overlap(&binding, &prefs)?;
+    reject_existing_style_pack_hotkey_overlap(&binding, &prefs)?;
     prefs.dictation_hotkey = binding;
     sync_dictation_hotkey_legacy_fields(&mut prefs);
     coord.prefs().set(prefs).map_err(|e| e.to_string())?;
@@ -57,6 +58,7 @@ pub fn set_translation_hotkey(
         reject_translation_less_computer_hotkey_overlap(&binding, less_computer)?;
     }
     reject_existing_selection_polish_hotkey_overlap(&binding, &previous)?;
+    reject_existing_style_pack_hotkey_overlap(&binding, &previous)?;
     let mut prefs = previous.clone();
     prefs.translation_hotkey = binding;
     coord.prefs().set(prefs).map_err(|e| e.to_string())?;
@@ -96,6 +98,7 @@ pub fn set_switch_style_hotkey(
             reject_less_computer_switch_style_hotkey_overlap(less_computer, binding)?;
         }
         reject_existing_selection_polish_hotkey_overlap(binding, &prefs)?;
+        reject_existing_style_pack_hotkey_overlap(binding, &prefs)?;
     }
     prefs.switch_style_hotkey = binding;
     coord.prefs().set(prefs).map_err(|e| e.to_string())?;
@@ -128,6 +131,7 @@ pub fn set_open_app_hotkey(
             reject_less_computer_open_app_hotkey_overlap(less_computer, binding)?;
         }
         reject_existing_selection_polish_hotkey_overlap(binding, &prefs)?;
+        reject_existing_style_pack_hotkey_overlap(binding, &prefs)?;
     }
     prefs.open_app_hotkey = binding;
     coord.prefs().set(prefs).map_err(|e| e.to_string())?;
@@ -169,7 +173,105 @@ pub fn set_selection_polish_hotkey(
     Ok(())
 }
 
-fn reject_modifier_only_action_shortcut(binding: &ShortcutBinding) -> Result<(), String> {
+/// 整表替换风格包直达快捷键（issue #759）。前端任何增删改都发全量列表，
+/// 校验通过才落库并热更新全局键注册；失败时旧绑定原样保留。
+#[tauri::command]
+pub fn set_style_pack_hotkeys(
+    coord: CoordinatorState<'_>,
+    hotkeys: Vec<StylePackHotkey>,
+) -> Result<(), String> {
+    let mut prefs = coord.prefs().get();
+    reject_style_pack_hotkey_conflicts(&hotkeys, &prefs)?;
+    prefs.style_pack_hotkeys = hotkeys;
+    coord.prefs().set(prefs).map_err(|e| e.to_string())?;
+    coord.update_style_pack_hotkey_bindings();
+    Ok(())
+}
+
+/// 风格包快捷键集合的全量校验：逐条格式校验 + 集合内去重（同包一条、同键一条）
+/// + 与其它所有快捷键互斥。
+pub(crate) fn reject_style_pack_hotkey_conflicts(
+    hotkeys: &[StylePackHotkey],
+    prefs: &UserPreferences,
+) -> Result<(), String> {
+    for (index, entry) in hotkeys.iter().enumerate() {
+        if entry.pack_id.trim().is_empty() {
+            return Err("风格快捷键必须选择一个风格包".into());
+        }
+        crate::shortcut_binding::validate_binding(&entry.binding).map_err(|e| e.to_string())?;
+        crate::shortcut_binding::reject_side_specific_non_dictation(&entry.binding)?;
+        reject_modifier_only_action_shortcut(&entry.binding)?;
+        for other in &hotkeys[..index] {
+            if other.pack_id == entry.pack_id {
+                return Err("同一个风格包只能绑定一个快捷键".into());
+            }
+            reject_hotkey_overlap(
+                &other.binding,
+                &entry.binding,
+                "两个风格快捷键不能使用相同按键",
+            )?;
+        }
+        reject_style_pack_hotkey_overlap_with_others(&entry.binding, prefs)?;
+    }
+    Ok(())
+}
+
+fn reject_style_pack_hotkey_overlap_with_others(
+    binding: &ShortcutBinding,
+    prefs: &UserPreferences,
+) -> Result<(), String> {
+    reject_hotkey_overlap(
+        binding,
+        &prefs.dictation_hotkey,
+        "风格快捷键不能和听写快捷键相同",
+    )?;
+    reject_hotkey_overlap(
+        binding,
+        &prefs.translation_hotkey,
+        "风格快捷键不能和翻译快捷键相同",
+    )?;
+    if let Some(qa) = prefs.qa_hotkey.as_ref() {
+        reject_hotkey_overlap(binding, qa, "风格快捷键不能和 QA 快捷键相同")?;
+    }
+    if let Some(switch_style) = prefs.switch_style_hotkey.as_ref() {
+        reject_hotkey_overlap(
+            binding,
+            switch_style,
+            "风格快捷键不能和切换风格快捷键相同",
+        )?;
+    }
+    if let Some(open_app) = prefs.open_app_hotkey.as_ref() {
+        reject_hotkey_overlap(binding, open_app, "风格快捷键不能和打开应用快捷键相同")?;
+    }
+    if let Some(less_computer) = prefs.coding_agent_voice_hotkey.as_ref() {
+        reject_hotkey_overlap(
+            binding,
+            less_computer,
+            "风格快捷键不能和 Less Computer 快捷键相同",
+        )?;
+    }
+    if let Some(selection_polish) = prefs.selection_polish_hotkey.as_ref() {
+        reject_hotkey_overlap(
+            binding,
+            selection_polish,
+            "风格快捷键不能和选区润色快捷键相同",
+        )?;
+    }
+    Ok(())
+}
+
+/// 其它快捷键 setter 的反向检查：新绑定不得与任何已配置的风格快捷键重叠。
+pub(crate) fn reject_existing_style_pack_hotkey_overlap(
+    binding: &ShortcutBinding,
+    prefs: &UserPreferences,
+) -> Result<(), String> {
+    for entry in &prefs.style_pack_hotkeys {
+        reject_hotkey_overlap(binding, &entry.binding, "该快捷键已被风格快捷键使用")?;
+    }
+    Ok(())
+}
+
+pub(crate) fn reject_modifier_only_action_shortcut(binding: &ShortcutBinding) -> Result<(), String> {
     if binding.modifiers.is_empty()
         && (binding.primary.eq_ignore_ascii_case("shift")
             || crate::shortcut_binding::legacy_modifier_trigger(binding).is_some())
@@ -213,6 +315,7 @@ pub fn set_combo_hotkey(coord: CoordinatorState<'_>, binding: ComboBinding) -> R
         reject_dictation_less_computer_hotkey_overlap(&shortcut, less_computer)?;
     }
     reject_existing_selection_polish_hotkey_overlap(&shortcut, &prefs)?;
+    reject_existing_style_pack_hotkey_overlap(&shortcut, &prefs)?;
     prefs.custom_combo_hotkey = Some(binding);
     prefs.dictation_hotkey = shortcut;
     sync_dictation_hotkey_legacy_fields(&mut prefs);
@@ -317,6 +420,7 @@ pub(crate) fn reject_hotkey_collisions(prefs: &UserPreferences) -> Result<(), St
     if let Some(selection_polish) = prefs.selection_polish_hotkey.as_ref() {
         reject_selection_polish_hotkey_collisions(selection_polish, prefs)?;
     }
+    reject_style_pack_hotkey_conflicts(&prefs.style_pack_hotkeys, prefs)?;
     Ok(())
 }
 
@@ -358,6 +462,7 @@ pub(crate) fn reject_selection_polish_hotkey_collisions(
             "选区润色快捷键不能和 Less Computer 快捷键相同",
         )?;
     }
+    reject_existing_style_pack_hotkey_overlap(selection_polish, prefs)?;
     Ok(())
 }
 
@@ -581,6 +686,84 @@ mod tests {
 
         // 复位后再次全不同 → 通过。
         assert!(reject_hotkey_collisions(&prefs).is_ok());
+    }
+
+    fn style_hotkey(pack_id: &str, primary: &str) -> StylePackHotkey {
+        StylePackHotkey {
+            pack_id: pack_id.into(),
+            binding: ShortcutBinding {
+                primary: primary.into(),
+                modifiers: vec!["alt".into()],
+            },
+        }
+    }
+
+    #[test]
+    fn style_pack_hotkeys_reject_duplicates_and_overlaps() {
+        let prefs = UserPreferences {
+            dictation_hotkey: key("A"),
+            ..Default::default()
+        };
+        // 基线：两条不同包、不同键 → 通过。
+        assert!(reject_style_pack_hotkey_conflicts(
+            &[style_hotkey("builtin.raw", "1"), style_hotkey("imported.x", "2")],
+            &prefs,
+        )
+        .is_ok());
+        // 同一个包绑两条 → 拒绝。
+        assert!(reject_style_pack_hotkey_conflicts(
+            &[style_hotkey("builtin.raw", "1"), style_hotkey("builtin.raw", "2")],
+            &prefs,
+        )
+        .is_err());
+        // 两条绑同一个键 → 拒绝。
+        assert!(reject_style_pack_hotkey_conflicts(
+            &[style_hotkey("builtin.raw", "1"), style_hotkey("imported.x", "1")],
+            &prefs,
+        )
+        .is_err());
+        // 空 pack_id → 拒绝。
+        assert!(
+            reject_style_pack_hotkey_conflicts(&[style_hotkey("", "1")], &prefs).is_err()
+        );
+        // 与听写键重叠 → 拒绝。
+        let clash = StylePackHotkey {
+            pack_id: "builtin.raw".into(),
+            binding: key("A"),
+        };
+        assert!(reject_style_pack_hotkey_conflicts(&[clash], &prefs).is_err());
+    }
+
+    #[test]
+    fn existing_style_pack_hotkey_rejects_other_setters() {
+        let prefs = UserPreferences {
+            style_pack_hotkeys: vec![style_hotkey("builtin.raw", "1")],
+            ..Default::default()
+        };
+        assert!(reject_existing_style_pack_hotkey_overlap(
+            &ShortcutBinding {
+                primary: "1".into(),
+                modifiers: vec!["alt".into()],
+            },
+            &prefs,
+        )
+        .is_err());
+        assert!(reject_existing_style_pack_hotkey_overlap(&key("P"), &prefs).is_ok());
+    }
+
+    #[test]
+    fn reject_hotkey_collisions_covers_style_pack_hotkeys() {
+        let mut prefs = UserPreferences {
+            dictation_hotkey: key("A"),
+            style_pack_hotkeys: vec![style_hotkey("builtin.raw", "1")],
+            ..Default::default()
+        };
+        assert!(reject_hotkey_collisions(&prefs).is_ok());
+        prefs.style_pack_hotkeys.push(StylePackHotkey {
+            pack_id: "imported.x".into(),
+            binding: key("A"),
+        });
+        assert!(reject_hotkey_collisions(&prefs).is_err());
     }
 
     #[test]

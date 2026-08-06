@@ -152,6 +152,12 @@ export interface ShortcutBinding {
   modifiers: string[];
 }
 
+/** 风格包直达快捷键：binding 按下即激活 packId 对应的风格包（issue #759）。 */
+export interface StylePackHotkey {
+  packId: string;
+  binding: ShortcutBinding;
+}
+
 /** 划词语音问答快捷键绑定。null 表示未启用。详见 issue #118。 */
 export type QaHotkeyBinding = ShortcutBinding;
 
@@ -343,6 +349,8 @@ export interface UserPreferences {
   switchStyleHotkey: ShortcutBinding | null;
   /** 打开 OpenLess 主窗口的全局快捷键。null = 用户已停用（issue #576）。 */
   openAppHotkey: ShortcutBinding | null;
+  /** 风格包直达快捷键：按下即激活对应风格包。默认空列表（issue #759）。 */
+  stylePackHotkeys: StylePackHotkey[];
   /** Less Computer：是否启用。默认关闭。 */
   codingAgentEnabled: boolean;
   /** Agent 后端：claude-code-cli（默认）/ opencode-cli。 */

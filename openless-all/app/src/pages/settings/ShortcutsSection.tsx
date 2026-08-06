@@ -1,8 +1,9 @@
-// 快捷键设置：开始/停止、翻译、问答、切风格、唤起 App、以及只读取消/确认提示。
+// 快捷键设置：开始/停止、翻译、问答、切风格、风格直达、唤起 App、以及只读取消/确认提示。
 
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ShortcutRecorder } from '../../components/ShortcutRecorder';
+import { SelectLite } from '../../components/ui/SelectLite';
 import {
   defaultLessComputerShortcut,
   defaultOpenAppShortcut,
@@ -11,14 +12,16 @@ import {
   hotkeyModeSuffix,
 } from '../../lib/hotkey';
 import {
+  listStylePacks,
   setDictationHotkey,
   setOpenAppHotkey,
   setQaHotkey,
+  setStylePackHotkeys,
   setSwitchStyleHotkey,
   setTranslationHotkey,
 } from '../../lib/ipc';
 import { getPlatformCapabilities } from '../../lib/platform';
-import type { PlatformCapabilities } from '../../lib/types';
+import type { PlatformCapabilities, StylePack, StylePackHotkey } from '../../lib/types';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
 import { Card } from '../_atoms';
 import { SettingRow } from './shared';
@@ -29,9 +32,15 @@ export function ShortcutsSection() {
   const os = detectOS();
   const { prefs, hotkey, updatePrefs: savePrefs } = useHotkeySettings();
   const [platformCaps, setPlatformCaps] = useState<PlatformCapabilities | null>(null);
+  const [stylePacks, setStylePacks] = useState<StylePack[]>([]);
+  // 新增行的草稿状态：先选风格包、再录快捷键，两者齐了才真正落库。
+  const [draftOpen, setDraftOpen] = useState(false);
+  const [draftPackId, setDraftPackId] = useState('');
+  const [stylePackError, setStylePackError] = useState<string | null>(null);
 
   useEffect(() => {
     void getPlatformCapabilities().then(setPlatformCaps);
+    void listStylePacks().then(setStylePacks).catch(() => setStylePacks([]));
   }, []);
 
   if (!prefs || !hotkey) {
@@ -45,6 +54,33 @@ export function ShortcutsSection() {
   if (platformCaps && !platformCaps.supportsDesktopHotkey) {
     return null;
   }
+
+  const stylePackHotkeys: StylePackHotkey[] = prefs.stylePackHotkeys ?? [];
+  // 下拉列出全部风格包（含停用的，激活时后端自动启用）；已被其它行绑定的包置灰防重复。
+  const stylePackOptions = (currentPackId: string) =>
+    stylePacks.map(pack => ({
+      value: pack.id,
+      label: pack.enabled
+        ? pack.name
+        : `${pack.name}${t('settings.shortcuts.stylePackDisabledSuffix')}`,
+      disabled:
+        pack.id !== currentPackId && stylePackHotkeys.some(entry => entry.packId === pack.id),
+    }));
+  // 整表替换：后端校验通过才落库；失败时抛错交给调用方展示，本地列表保持旧值。
+  const saveStylePackHotkeys = async (next: StylePackHotkey[]) => {
+    setStylePackError(null);
+    await setStylePackHotkeys(next);
+    await savePrefs({ ...prefs, stylePackHotkeys: next });
+  };
+  const removeButtonStyle = {
+    border: 'none',
+    background: 'transparent',
+    color: 'var(--ol-ink-4)',
+    cursor: 'pointer',
+    fontSize: 13,
+    padding: '2px 4px',
+    lineHeight: 1,
+  } as const;
 
   const readonlyRows: Array<[string, string]> = [
     [t('settings.shortcuts.cancel'), 'Esc'],
@@ -118,6 +154,126 @@ export function ShortcutsSection() {
           }}
         />
       </SettingRow>
+      <div style={{ marginTop: 12, marginBottom: 6 }}>
+        <div style={{ fontSize: 13, fontWeight: 600 }}>
+          {t('settings.shortcuts.stylePackTitle')}
+        </div>
+        <div style={{ fontSize: 11, color: 'var(--ol-ink-4)', marginTop: 2 }}>
+          {t('settings.shortcuts.stylePackDesc')}
+        </div>
+      </div>
+      {stylePackHotkeys.map((entry, index) => (
+        <div
+          key={entry.packId}
+          style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}
+        >
+          <SelectLite
+            value={entry.packId}
+            options={stylePackOptions(entry.packId)}
+            ariaLabel={t('settings.shortcuts.stylePackSelect')}
+            style={{ width: 170, flexShrink: 0 }}
+            onChange={packId => {
+              const next = stylePackHotkeys.map((item, i) =>
+                i === index ? { ...item, packId } : item,
+              );
+              void saveStylePackHotkeys(next).catch(error =>
+                setStylePackError(String(error)),
+              );
+            }}
+          />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <ShortcutRecorder
+              value={entry.binding}
+              onSave={async binding => {
+                const next = stylePackHotkeys.map((item, i) =>
+                  i === index ? { ...item, binding } : item,
+                );
+                await saveStylePackHotkeys(next);
+              }}
+            />
+          </div>
+          <button
+            type="button"
+            aria-label={t('settings.shortcuts.stylePackRemove')}
+            title={t('settings.shortcuts.stylePackRemove')}
+            style={removeButtonStyle}
+            onClick={() => {
+              const next = stylePackHotkeys.filter((_, i) => i !== index);
+              void saveStylePackHotkeys(next).catch(error =>
+                setStylePackError(String(error)),
+              );
+            }}
+          >
+            ✕
+          </button>
+        </div>
+      ))}
+      {draftOpen && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+          <SelectLite
+            value={draftPackId}
+            options={stylePackOptions(draftPackId)}
+            placeholder={t('settings.shortcuts.stylePackSelect')}
+            ariaLabel={t('settings.shortcuts.stylePackSelect')}
+            style={{ width: 170, flexShrink: 0 }}
+            onChange={setDraftPackId}
+          />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <ShortcutRecorder
+              value={null}
+              disabled={!draftPackId}
+              onSave={async binding => {
+                await saveStylePackHotkeys([
+                  ...stylePackHotkeys,
+                  { packId: draftPackId, binding },
+                ]);
+                setDraftOpen(false);
+                setDraftPackId('');
+              }}
+            />
+          </div>
+          <button
+            type="button"
+            aria-label={t('settings.shortcuts.stylePackRemove')}
+            title={t('settings.shortcuts.stylePackRemove')}
+            style={removeButtonStyle}
+            onClick={() => {
+              setDraftOpen(false);
+              setDraftPackId('');
+              setStylePackError(null);
+            }}
+          >
+            ✕
+          </button>
+        </div>
+      )}
+      {stylePackError && (
+        <div style={{ fontSize: 11, color: 'var(--ol-err)', marginBottom: 6 }}>
+          {stylePackError}
+        </div>
+      )}
+      {!draftOpen && (
+        <button
+          type="button"
+          style={{
+            border: '0.5px dashed var(--ol-line-strong)',
+            background: 'transparent',
+            color: 'var(--ol-ink-3)',
+            borderRadius: 6,
+            padding: '4px 10px',
+            fontSize: 12,
+            cursor: 'pointer',
+            marginBottom: 6,
+          }}
+          onClick={() => {
+            setDraftOpen(true);
+            setDraftPackId('');
+            setStylePackError(null);
+          }}
+        >
+          + {t('settings.shortcuts.stylePackAdd')}
+        </button>
+      )}
       <SettingRow label={t('settings.shortcuts.openApp')}>
         <ShortcutRecorder
           value={prefs.openAppHotkey}

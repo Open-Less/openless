@@ -61,6 +61,7 @@ const previousPrefs: UserPreferences = {
   translationHotkey: { primary: 'Shift', modifiers: [] },
   switchStyleHotkey: { primary: 'S', modifiers: ['alt'] },
   openAppHotkey: { primary: 'O', modifiers: ['alt'] },
+  stylePackHotkeys: [],
   codingAgentEnabled: false,
   codingAgentProvider: 'claude-code-cli',
   codingAgentModel: null,

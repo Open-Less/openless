@@ -798,6 +798,12 @@ pub struct UserPreferences {
     /// 「唤起 App」全局快捷键。`None` = 停用；`Some(...)` = 注册。默认 `Some(默认键)`。
     #[serde(default = "default_open_app_hotkey")]
     pub open_app_hotkey: Option<ShortcutBinding>,
+    /// 风格包直达快捷键：每条把一个全局组合键绑定到具体风格包 id（issue #759）。
+    /// 按 id 而非「已启用列表第 N 个」绑定——启停其它风格包不会让已配的键位移。
+    /// 默认空列表（不预设 Alt+1~9：macOS 上 Option+数字用于输入特殊字符，全局
+    /// 注册会吞掉正常输入）。绑定指向已停用的包时，触发即自动启用并激活。
+    #[serde(default)]
+    pub style_pack_hotkeys: Vec<StylePackHotkey>,
     /// Less Computer：是否启用。默认关闭，需用户在高级设置开启。
     #[serde(default)]
     pub coding_agent_enabled: bool,
@@ -1113,6 +1119,8 @@ struct UserPreferencesWire {
     switch_style_hotkey: Option<ShortcutBinding>,
     open_app_hotkey: Option<ShortcutBinding>,
     #[serde(default)]
+    style_pack_hotkeys: Vec<StylePackHotkey>,
+    #[serde(default)]
     coding_agent_enabled: bool,
     #[serde(default = "default_coding_agent_provider")]
     coding_agent_provider: String,
@@ -1260,6 +1268,7 @@ impl Default for UserPreferencesWire {
             // 默认携带默认键（Some），保证缺字段时仍是启用状态；None 专表「用户主动停用」。
             switch_style_hotkey: prefs.switch_style_hotkey,
             open_app_hotkey: prefs.open_app_hotkey,
+            style_pack_hotkeys: prefs.style_pack_hotkeys,
             coding_agent_enabled: prefs.coding_agent_enabled,
             coding_agent_provider: prefs.coding_agent_provider,
             coding_agent_model: prefs.coding_agent_model,
@@ -1418,6 +1427,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             // 会落到 Some(默认键)，保证老用户/新用户仍是启用。
             switch_style_hotkey: wire.switch_style_hotkey,
             open_app_hotkey: wire.open_app_hotkey,
+            style_pack_hotkeys: wire.style_pack_hotkeys,
             local_asr_active_model: wire.local_asr_active_model,
             local_asr_mirror: wire.local_asr_mirror,
             local_asr_keep_loaded_secs: wire.local_asr_keep_loaded_secs,
@@ -2215,6 +2225,7 @@ impl Default for UserPreferences {
             translation_hotkey: default_translation_hotkey(),
             switch_style_hotkey: default_switch_style_hotkey(),
             open_app_hotkey: default_open_app_hotkey(),
+            style_pack_hotkeys: Vec::new(),
             coding_agent_enabled: false,
             coding_agent_provider: default_coding_agent_provider(),
             coding_agent_model: None,
@@ -2270,6 +2281,14 @@ impl Default for UserPreferences {
 pub struct ShortcutBinding {
     pub primary: String,
     pub modifiers: Vec<String>,
+}
+
+/// 风格包直达快捷键：`binding` 按下即激活 `pack_id` 对应的风格包（issue #759）。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct StylePackHotkey {
+    pub pack_id: String,
+    pub binding: ShortcutBinding,
 }
 
 impl ShortcutBinding {
@@ -3311,6 +3330,32 @@ mod tests {
         let restored: UserPreferences = serde_json::from_str(&json).unwrap();
         assert!(restored.switch_style_hotkey.is_none());
         assert!(restored.open_app_hotkey.is_none());
+    }
+
+    #[test]
+    fn style_pack_hotkeys_default_empty_and_round_trip() {
+        // issue #759：老 preferences.json 没有该字段 → 空列表，不报错。
+        let prefs: UserPreferences = serde_json::from_str("{}").unwrap();
+        assert!(prefs.style_pack_hotkeys.is_empty());
+
+        // 带绑定的存盘→读回保持原样（camelCase 字段名）。
+        let configured = UserPreferences {
+            style_pack_hotkeys: vec![StylePackHotkey {
+                pack_id: "imported.demo".into(),
+                binding: ShortcutBinding {
+                    primary: "1".into(),
+                    modifiers: vec!["alt".into()],
+                },
+            }],
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&configured).unwrap();
+        assert!(
+            json.contains("\"stylePackHotkeys\":[{\"packId\":\"imported.demo\""),
+            "应序列化为 camelCase，实际: {json}"
+        );
+        let restored: UserPreferences = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.style_pack_hotkeys, configured.style_pack_hotkeys);
     }
 
     #[test]

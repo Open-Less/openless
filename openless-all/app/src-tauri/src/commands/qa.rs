@@ -34,6 +34,7 @@ pub fn set_qa_hotkey(
             reject_qa_less_computer_hotkey_overlap(binding, less_computer)?;
         }
         reject_existing_selection_polish_hotkey_overlap(binding, &prefs)?;
+        reject_existing_style_pack_hotkey_overlap(binding, &prefs)?;
     }
     prefs.qa_hotkey = binding;
     coord.prefs().set(prefs).map_err(|e| e.to_string())?;

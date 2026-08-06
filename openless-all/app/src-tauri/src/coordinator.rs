@@ -617,6 +617,10 @@ struct Inner {
     translation_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
     switch_style_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
     open_app_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
+    /// 风格包直达快捷键监听器（issue #759）：pack_id → monitor。数量随用户配置
+    /// 动态增减，与固定槽位的 action hotkey 分开管理；更新策略为对照 prefs 全量
+    /// 对齐（新增注册 / 改键 update / 删除 drop 反注册）。
+    style_pack_hotkeys: Mutex<std::collections::HashMap<String, ComboHotkeyMonitor>>,
     /// 选区润色快捷键：modifier-only 复用 `HotkeyMonitor`，其它组合键复用
     /// `ComboHotkeyMonitor`。桌面（非 mobile）专属。
     #[cfg(not(mobile))]
@@ -847,6 +851,7 @@ impl Coordinator {
                     translation_hotkey: Mutex::new(None),
                     switch_style_hotkey: Mutex::new(None),
                     open_app_hotkey: Mutex::new(None),
+                    style_pack_hotkeys: Mutex::new(std::collections::HashMap::new()),
                     #[cfg(not(mobile))]
                     selection_polish_hotkey: Mutex::new(None),
                     #[cfg(not(mobile))]
@@ -965,6 +970,7 @@ impl Coordinator {
                 translation_hotkey: Mutex::new(None),
                 switch_style_hotkey: Mutex::new(None),
                 open_app_hotkey: Mutex::new(None),
+                style_pack_hotkeys: Mutex::new(std::collections::HashMap::new()),
                 #[cfg(not(mobile))]
                 selection_polish_hotkey: Mutex::new(None),
                 #[cfg(not(mobile))]
@@ -1308,6 +1314,25 @@ impl Coordinator {
 
     pub fn stop_open_app_hotkey_listener(&self) {
         take_action_hotkey_on_main_thread(&self.inner, ActionHotkeyKind::OpenApp);
+    }
+
+    /// 启动风格包直达快捷键监听（issue #759）。supervisor 线程等 AppHandle 就绪后
+    /// 按 prefs 全量注册，个别注册失败按 action hotkey 的节奏重试。
+    pub fn start_style_pack_hotkey_listeners(&self) {
+        let inner = Arc::clone(&self.inner);
+        std::thread::Builder::new()
+            .name("openless-style-pack-hotkey-supervisor".into())
+            .spawn(move || style_pack_hotkey_supervisor_loop(inner))
+            .ok();
+    }
+
+    pub fn stop_style_pack_hotkey_listeners(&self) {
+        clear_style_pack_hotkeys_on_main_thread(&self.inner);
+    }
+
+    /// 用户在设置里改了风格快捷键列表时调用：按最新 prefs 全量对齐注册状态。
+    pub fn update_style_pack_hotkey_bindings(&self) {
+        sync_style_pack_hotkeys_on_main_thread(&self.inner);
     }
 
     /// 用户在设置里改了自定义组合键时调用。

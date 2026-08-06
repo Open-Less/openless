@@ -210,11 +210,20 @@ pub fn delete_style_pack(
         .style_packs()
         .remove_imported(&id)
         .map_err(|e| e.to_string())?;
+    // 孤儿清理：删除包时一并移除指向它的风格快捷键，避免残留一条按了没反应的绑定。
+    let hotkeys_before = prefs.style_pack_hotkeys.len();
+    prefs.style_pack_hotkeys.retain(|entry| entry.pack_id != id);
+    let removed_hotkey = prefs.style_pack_hotkeys.len() != hotkeys_before;
     if prefs.active_style_pack_id == id {
         prefs.active_style_pack_id = default_active_style_pack_id();
         let _ = sync_style_pack_prefs_and_persist(&*coord, &app, prefs)?;
+    } else if removed_hotkey {
+        let _ = sync_style_pack_prefs_and_persist(&*coord, &app, prefs)?;
     } else {
         refresh_tray_menu_async(&app);
+    }
+    if removed_hotkey {
+        coord.update_style_pack_hotkey_bindings();
     }
     Ok(())
 }

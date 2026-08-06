@@ -60,7 +60,8 @@ pub(crate) use crate::types::{
     AndroidAccessibilityStatus,
     AndroidOverlayStatus, ChineseScriptPreference, ComboBinding, CorrectionRule, CredentialsStatus,
     DictationSession, DictionaryEntry, HotkeyCapability, HotkeyStatus, OutputLanguagePreference,
-    PolishMode, ShortcutBinding, StylePack, StylePackKind, StylePackRuntimeDiagnostics,
+    PolishMode, ShortcutBinding, StylePack, StylePackHotkey, StylePackKind,
+    StylePackRuntimeDiagnostics,
     StyleSystemPrompts, UpdateChannel, UserPreferences, VocabPresetStore,
 };
 

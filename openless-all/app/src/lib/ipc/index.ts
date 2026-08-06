@@ -106,6 +106,7 @@ export {
     setTranslationHotkey,
     setSwitchStyleHotkey,
     setOpenAppHotkey,
+    setStylePackHotkeys,
     setShortcutRecordingActive,
 } from "./hotkeys"
 
