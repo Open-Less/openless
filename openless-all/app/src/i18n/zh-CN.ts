@@ -958,7 +958,7 @@ export const zhCN = {
       requestTimeout: '请求超时，请稍后重试。',
     },
     shortcuts: {
-      title: '快捷键速查',
+      title: '快捷键设置',
       descAcc: '所有快捷键全局生效，需要在权限设置中开启辅助功能。',
       descNoAcc: '所有快捷键全局生效。若无响应，请在权限页查看全局快捷键监听状态。',
       startStop: '开始 / 停止录音',

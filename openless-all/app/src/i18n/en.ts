@@ -960,7 +960,7 @@ export const en: typeof zhCN = {
       requestTimeout: 'Request timed out. Try again later.',
     },
     shortcuts: {
-      title: 'Shortcut reference',
+      title: 'Shortcut settings',
       descAcc: 'All shortcuts apply globally. Accessibility permission must be granted in Permissions.',
       descNoAcc: 'All shortcuts apply globally. If unresponsive, check the global hotkey status in Permissions.',
       startStop: 'Start / Stop recording',

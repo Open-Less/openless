@@ -962,7 +962,7 @@ export const ko: typeof zhCN = {
       requestTimeout: '요청 시간이 초과되었습니다. 잠시 후 다시 시도하세요.',
     },
     shortcuts: {
-      title: '단축키 한눈에 보기',
+      title: '단축키 설정',
       descAcc: '모든 단축키는 전역에서 작동. 권한 설정에서 접근성을 활성화해야 합니다.',
       descNoAcc: '모든 단축키는 전역에서 작동. 응답이 없으면 권한 페이지에서 전역 단축키 감지 상태를 확인해 주세요.',
       startStop: '녹음 시작 / 정지',

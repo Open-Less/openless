@@ -960,7 +960,7 @@ export const zhTW: typeof zhCN = {
       requestTimeout: '請求超時，請稍後重試。',
     },
     shortcuts: {
-      title: '快捷鍵速查',
+      title: '快捷鍵設定',
       descAcc: '所有快捷鍵全局生效，需要在權限設置中開啓輔助功能。',
       descNoAcc: '所有快捷鍵全局生效。若無響應，請在權限頁查看全局快捷鍵監聽狀態。',
       startStop: '開始 / 停止錄音',
