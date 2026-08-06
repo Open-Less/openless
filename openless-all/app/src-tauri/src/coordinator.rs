@@ -72,9 +72,9 @@ mod polish_flow;
 mod qa;
 mod qa_session;
 mod resources;
-mod silence_auto_stop;
 #[cfg(not(mobile))]
 pub(crate) mod selection_polish;
+mod silence_auto_stop;
 
 use asr_wiring::*;
 // providers.rs 的 ASR 验证路径按 provider 的真实请求格式发送探针（issue #837），
@@ -113,13 +113,7 @@ use qa::{
 };
 #[cfg(test)]
 use resources::discard_startup_resources_for_session;
-use resources::{
-    acquire_recording_mute, cancel_active_asr, cancel_qa_asr_for_session, release_recording_mute,
-    selected_microphone_device_name, stop_microphone_preview_monitor,
-    stop_qa_recorder_for_session, store_qa_asr_for_session, store_qa_recorder_for_session,
-    take_asr_for_session, take_qa_asr_for_session, take_recorder_for_session, SessionResource,
-    SharedRecordingMuteState,
-};
+use resources::{cancel_active_asr, SessionResource, SharedRecordingMuteState};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CapsuleShowStrategy {
@@ -451,17 +445,16 @@ impl ActiveAsrProviderKind {
         match self {
             ActiveAsrProviderKind::Bailian
             | ActiveAsrProviderKind::Qwen3Realtime
-            | ActiveAsrProviderKind::ElevenLabs => {
-                AsrConfiguredFields::ApiKeyOnly
-            }
+            | ActiveAsrProviderKind::ElevenLabs => AsrConfiguredFields::ApiKeyOnly,
             ActiveAsrProviderKind::Mimo | ActiveAsrProviderKind::DashScopeMultimodal => {
                 AsrConfiguredFields::ApiKeyEndpointModel
             }
             // StepfunRealtime 只经 `stepfun` 的模型路由可达（隐藏 effective id），
             // 「已配置」判定看真实 active `stepfun` → WhisperCompatible；此处形态
             // 与之对齐，保证直接停在该 id 上也语义一致。
-            ActiveAsrProviderKind::WhisperCompatible
-            | ActiveAsrProviderKind::StepfunRealtime => AsrConfiguredFields::EndpointModelOnly,
+            ActiveAsrProviderKind::WhisperCompatible | ActiveAsrProviderKind::StepfunRealtime => {
+                AsrConfiguredFields::EndpointModelOnly
+            }
             ActiveAsrProviderKind::Volcengine => AsrConfiguredFields::VolcAppKey,
             ActiveAsrProviderKind::Xfyun => AsrConfiguredFields::XfyunAppKey,
         }
@@ -691,12 +684,10 @@ fn advanced_asr_config_for(provider_id: &str, raw: Option<&str>) -> AdvancedAsrC
 /// 读取某 ASR provider 的高级配置。仅 `openai-compatible` / `zenmux` 读 vault；
 /// 其余命名厂商走硬编码行为（这里返回默认值），避免破坏已测通的路径。
 fn read_advanced_asr_config(provider_id: &str) -> AdvancedAsrConfig {
-    let raw = CredentialsVault::get_for_asr_provider(
-        provider_id,
-        CredentialAccount::AsrAdvancedConfig,
-    )
-    .ok()
-    .flatten();
+    let raw =
+        CredentialsVault::get_for_asr_provider(provider_id, CredentialAccount::AsrAdvancedConfig)
+            .ok()
+            .flatten();
     advanced_asr_config_for(provider_id, raw.as_deref())
 }
 
@@ -724,6 +715,10 @@ struct Inner {
     /// store_asr_for_session 一并写入，end_session 取走落 history——比事后重读
     /// 全局设置可靠：会话中途切 provider/model 不会污染归因（PR #826 review）。
     asr_label: Mutex<Option<SessionResource<AsrCallLabel>>>,
+    /// 多模态（Omni）模式下的 dictation 录音 PCM 缓冲。只在
+    /// `multimodal_pipeline_enabled && pipeline_mode == multimodal` 时使用，
+    /// 与 asr 槽互斥——同一会话二者有且仅有一个。
+    omni_pcm: Mutex<Option<SessionResource<Arc<resources::PcmBufferConsumer>>>>,
     /// 本地 Qwen3-ASR 引擎缓存。跨会话复用，避免每次重加载 1.2GB+ 模型。
     /// 释放时机由 prefs.local_asr_keep_loaded_secs 决定。
     local_asr_cache: Arc<crate::asr::local::LocalAsrCache>,
@@ -854,6 +849,8 @@ struct Inner {
     capsule_cursor_passthrough: AtomicBool,
     /// QA 用的 ASR 句柄。必须跟 active_asr_provider 保持一致，避免浮窗走不同入口。
     qa_asr: Mutex<Option<SessionResource<ActiveAsr>>>,
+    /// QA 用的多模态（Omni）录音 PCM 缓冲。与 qa_asr 互斥。
+    qa_omni_pcm: Mutex<Option<SessionResource<Arc<resources::PcmBufferConsumer>>>>,
     /// QA 用的 Recorder 句柄。
     qa_recorder: Mutex<Option<SessionResource<Recorder>>>,
     /// QA SSE 流取消标志。begin_qa_session 重置为 false；cancel_qa_session 设 true；
@@ -1014,6 +1011,7 @@ impl Coordinator {
                     state: Mutex::new(SessionState::default()),
                     asr: Mutex::new(None),
                     asr_label: Mutex::new(None),
+                    omni_pcm: Mutex::new(None),
                     recorder: Mutex::new(None),
                     audio_archive_active: AtomicBool::new(false),
                     edit_watcher: Mutex::new(None),
@@ -1056,6 +1054,7 @@ impl Coordinator {
                     capsule_style: AtomicU8::new(0),
                     capsule_cursor_passthrough: AtomicBool::new(true),
                     qa_asr: Mutex::new(None),
+                    qa_omni_pcm: Mutex::new(None),
                     qa_recorder: Mutex::new(None),
                     qa_stream_cancelled: Arc::new(AtomicBool::new(false)),
                     local_asr_cache: Arc::new(crate::asr::local::LocalAsrCache::new()),
@@ -1136,6 +1135,7 @@ impl Coordinator {
                 state: Mutex::new(SessionState::default()),
                 asr: Mutex::new(None),
                 asr_label: Mutex::new(None),
+                omni_pcm: Mutex::new(None),
                 recorder: Mutex::new(None),
                 audio_archive_active: AtomicBool::new(false),
                 edit_watcher: Mutex::new(None),
@@ -1178,6 +1178,7 @@ impl Coordinator {
                 capsule_style: AtomicU8::new(0),
                 capsule_cursor_passthrough: AtomicBool::new(true),
                 qa_asr: Mutex::new(None),
+                qa_omni_pcm: Mutex::new(None),
                 qa_recorder: Mutex::new(None),
                 qa_stream_cancelled: Arc::new(AtomicBool::new(false)),
                 local_asr_cache: Arc::new(crate::asr::local::LocalAsrCache::new()),
@@ -1255,7 +1256,6 @@ impl Coordinator {
     pub fn local_asr_loaded_model(&self) -> Option<String> {
         self.inner.local_asr_cache.loaded_model_id()
     }
-
 
     /// 主动把当前本地 ASR 引擎状态推给前端（keepLoadedSecs 变更等命令侧调用）。
     pub fn emit_local_asr_engine_status(&self) {
@@ -1754,7 +1754,6 @@ impl Coordinator {
         close_qa_panel(&self.inner);
     }
 
-
     /// 用户点 ✕ / 按 Esc 关 Less Computer 浮窗：隐藏窗口 + 结束连续对话
     /// （下次说话开新会话，不再 --continue 续旧上下文）。
     pub fn less_computer_window_dismiss(&self) {
@@ -1794,8 +1793,7 @@ impl Coordinator {
         // callback (SIGABRT). Tauri's runtime handle is safe from either thread.
         tauri::async_runtime::spawn(async move {
             let session_id = crate::coordinator_state::new_session_id();
-            if let Err(e) =
-                dictation::run_voice_agent_transcript(&inner, session_id, text, 0).await
+            if let Err(e) = dictation::run_voice_agent_transcript(&inner, session_id, text, 0).await
             {
                 log::warn!("[less-computer] text submit run failed: {e}");
             }
@@ -1819,10 +1817,7 @@ impl Coordinator {
     /// 执行——用户反馈「切换成默认风格后仍显示流光 Siri」。在保存路径直接同步后，
     /// 任何平台的下一次录音从入场帧起就携带最新样式，不再依赖 emit 闭包的时序。
     pub fn sync_capsule_style_from_preferences(&self) {
-        let classic = matches!(
-            self.inner.prefs.get().capsule_style,
-            CapsuleStyle::Classic
-        );
+        let classic = matches!(self.inner.prefs.get().capsule_style, CapsuleStyle::Classic);
         self.inner
             .capsule_style
             .store(if classic { 1 } else { 0 }, Ordering::Relaxed);
@@ -1965,7 +1960,7 @@ impl Coordinator {
                 // Linux: 启动 fcitx5 插件信号监听作为热键源。
                 #[cfg(target_os = "linux")]
                 {
-                    let (qa_trigger, _selection_polish_trigger, translation_trigger) =
+                    let (qa_trigger, selection_polish_trigger, translation_trigger) =
                         modifier_shortcut_triggers(&self.inner);
                     let custom_key = custom_dictation_key_string(&self.inner);
                     crate::linux_fcitx::start_dictation_signal_listener(
@@ -1973,6 +1968,7 @@ impl Coordinator {
                         combo_tx_for_fcitx,
                         fcitx_binding.clone(),
                         qa_trigger,
+                        selection_polish_trigger,
                         translation_trigger,
                         custom_key,
                     );
@@ -2358,6 +2354,7 @@ impl Coordinator {
             // repolish 不回写历史的模型/耗时字段，调用快照就地丢弃。
             &mut None,
             &mut None,
+            pipeline_multimodal_enabled(&self.inner.prefs.get()),
         )
         .await
         .map_err(|e| e.to_string())
@@ -2365,10 +2362,7 @@ impl Coordinator {
 
     /// 返回 (转写文本, 本次实际构建的 ASR (provider, model) 快照)。快照供命令层把
     /// 「重转用了哪个模型」写回历史（构建时归因，PR #826 review）。
-    pub async fn retranscribe_pcm(
-        &self,
-        pcm: Vec<u8>,
-    ) -> Result<(String, AsrCallLabel), String> {
+    pub async fn retranscribe_pcm(&self, pcm: Vec<u8>) -> Result<(String, AsrCallLabel), String> {
         self.retranscribe_pcm_inner(pcm, false, None).await
     }
 
@@ -2462,9 +2456,9 @@ impl Coordinator {
                 .map_err(|e| e.to_string())?,
             ActiveAsr::DashScopeMultimodal(m) => {
                 tokio::time::timeout(m.transcribe_timeout(audio_secs), m.transcribe())
-                .await
-                .map_err(|_| "重新转录超时".to_string())?
-                .map_err(|e| e.to_string())?
+                    .await
+                    .map_err(|_| "重新转录超时".to_string())?
+                    .map_err(|e| e.to_string())?
             }
             ActiveAsr::ElevenLabs(e) => {
                 tokio::time::timeout(elevenlabs_timeout, e.transcribe())
@@ -2739,9 +2733,11 @@ pub(super) fn insert_via_non_tsf_fallback(
     let prefs = inner.prefs.get();
     let sendinput_options = dictation::windows_sendinput_options_from_prefs(&prefs);
     let status = finish_non_tsf_insertion_fallback(
-        || inner
-            .inserter
-            .insert_via_unicode_keystrokes(polished, sendinput_options),
+        || {
+            inner
+                .inserter
+                .insert_via_unicode_keystrokes(polished, sendinput_options)
+        },
         || inner.inserter.copy_fallback(polished),
     );
 
@@ -2842,7 +2838,6 @@ mod non_tsf_fallback_tests {
 }
 
 // ─────────────────────────── helpers ───────────────────────────
-
 
 fn read_whisper_credentials() -> (String, String, String) {
     let api_key = CredentialsVault::get(CredentialAccount::AsrApiKey)
@@ -3061,10 +3056,12 @@ fn read_volc_credentials() -> VolcengineCredentials {
     // 密钥槽位随鉴权模式：AppIdToken 读旧版 Access Token，ApiKey 读独立的方舟 API Key，
     // 两者互不污染，切换模式不会把旧模式的凭据带进新模式的握手。
     let secret = match auth_mode {
-        VolcengineAuthMode::AppIdToken => CredentialsVault::get(CredentialAccount::VolcengineAccessKey)
-            .ok()
-            .flatten()
-            .unwrap_or_default(),
+        VolcengineAuthMode::AppIdToken => {
+            CredentialsVault::get(CredentialAccount::VolcengineAccessKey)
+                .ok()
+                .flatten()
+                .unwrap_or_default()
+        }
         VolcengineAuthMode::ApiKey => CredentialsVault::get(CredentialAccount::VolcengineApiKey)
             .ok()
             .flatten()
@@ -3107,7 +3104,6 @@ fn enabled_hotwords(inner: &Arc<Inner>) -> Vec<DictionaryHotword> {
         })
         .collect()
 }
-
 
 /// 读 Gemini 凭据。所有 LLM provider 共用 ark.* 槽位（persistence 没做 per-provider
 /// 隔离），所以这里也是从 `ArkApiKey` / `ArkModelId` / `ArkEndpoint` 三个槽读，
@@ -3195,6 +3191,86 @@ fn build_active_llm_provider(llm_thinking_enabled: bool) -> anyhow::Result<Activ
     Ok(ActiveLLMProvider::OpenAI(OpenAICompatibleLLMProvider::new(
         config,
     )))
+}
+
+/// 是否启用多模态识别管线：实验开关 + 模式切换都满足才生效。
+pub(crate) fn pipeline_multimodal_enabled(prefs: &crate::types::UserPreferences) -> bool {
+    prefs.multimodal_pipeline_enabled
+        && prefs.pipeline_mode == crate::types::PipelineMode::Multimodal
+}
+
+/// 多模态（Omni）模型通道的凭据预检（友好错误信息，供录音前拦截）。
+pub(crate) fn ensure_omni_credentials() -> Result<(), String> {
+    let api_key = CredentialsVault::get(CredentialAccount::OmniApiKey)
+        .map_err(|e| e.to_string())?
+        .unwrap_or_default();
+    let model = CredentialsVault::get(CredentialAccount::OmniModel)
+        .map_err(|e| e.to_string())?
+        .unwrap_or_default();
+    let base_url = CredentialsVault::get(CredentialAccount::OmniEndpoint)
+        .map_err(|e| e.to_string())?
+        .unwrap_or_default();
+    if api_key.trim().is_empty() {
+        return Err("多模态模型 API Key 为空：请在 服务 → AI 提供商 → 多模态模型 中配置".into());
+    }
+    if model.trim().is_empty() {
+        return Err("多模态模型 id 为空：请在 服务 → AI 提供商 → 多模态模型 中配置".into());
+    }
+    let active = CredentialsVault::get_active_omni();
+    if active != crate::omni::OMNI_GEMINI_PROVIDER_ID && base_url.trim().is_empty() {
+        return Err("多模态模型 Base URL 为空：请在 服务 → AI 提供商 → 多模态模型 中配置".into());
+    }
+    Ok(())
+}
+
+fn omni_default_base_url(provider: &str) -> &'static str {
+    match provider {
+        "openai" => "https://api.openai.com/v1",
+        crate::omni::OMNI_GEMINI_PROVIDER_ID => "https://generativelanguage.googleapis.com/v1beta",
+        "dashscope-omni" => "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        _ => "",
+    }
+}
+
+/// 读取 omni 命名空间凭据并构建多模态模型通道（与 build_active_llm_provider
+/// 平行的唯一构建点）。Gemini 按 provider id / base_url 路由到原生通道。
+pub(crate) fn build_active_omni_provider(
+    thinking_enabled: bool,
+) -> anyhow::Result<crate::omni::OmniProvider> {
+    let active = CredentialsVault::get_active_omni();
+    let api_key = CredentialsVault::get(CredentialAccount::OmniApiKey)?.unwrap_or_default();
+    let model = CredentialsVault::get(CredentialAccount::OmniModel)?.unwrap_or_default();
+    let base_url = CredentialsVault::get(CredentialAccount::OmniEndpoint)?.unwrap_or_default();
+    if api_key.trim().is_empty() {
+        anyhow::bail!("多模态模型 API Key 为空");
+    }
+    if model.trim().is_empty() {
+        anyhow::bail!("多模态模型 id 为空");
+    }
+    let base_url = if base_url.trim().is_empty() {
+        omni_default_base_url(&active).to_string()
+    } else {
+        base_url.trim().to_string()
+    };
+    if base_url.is_empty() {
+        anyhow::bail!("多模态模型 Base URL 为空");
+    }
+    // 与 LLM / ASR 通道一致：拒绝指向内网/回环/元数据服务的地址（SSRF 防线）。
+    crate::endpoint_security::validate_http_endpoint(&base_url)
+        .map_err(|_| anyhow::anyhow!("endpointInvalid"))?;
+    let config = crate::omni::OmniConfig {
+        provider_id: active.clone(),
+        base_url,
+        api_key,
+        model,
+        extra_headers: CredentialsVault::get_active_omni_extra_headers(),
+        temperature: crate::polish::openai_compatible_temperature_for_provider(
+            &active,
+            CredentialsVault::get_active_omni_temperature(),
+        ),
+        thinking_enabled,
+    };
+    Ok(crate::omni::OmniProvider::new(config))
 }
 
 fn resolve_ark_endpoint(api_key: &str) -> anyhow::Result<String> {
@@ -3301,8 +3377,16 @@ mod tests {
         // 非 volc. 命名空间 / 含异常字符 / 超长的值可能携带租户信息，一律不落历史。
         assert_eq!(super::volc_resource_history_label(""), None);
         assert_eq!(super::volc_resource_history_label("my-secret-tenant"), None);
-        assert_eq!(super::volc_resource_history_label("volc.a b"), None, "空格不在字符集");
-        assert_eq!(super::volc_resource_history_label("volc.引擎"), None, "非 ASCII 拒绝");
+        assert_eq!(
+            super::volc_resource_history_label("volc.a b"),
+            None,
+            "空格不在字符集"
+        );
+        assert_eq!(
+            super::volc_resource_history_label("volc.引擎"),
+            None,
+            "非 ASCII 拒绝"
+        );
         let too_long = format!("volc.{}", "x".repeat(64));
         assert_eq!(super::volc_resource_history_label(&too_long), None);
     }
@@ -3317,6 +3401,24 @@ mod tests {
 
     fn session_id(n: u128) -> SessionId {
         Uuid::from_u128(n)
+    }
+
+    #[test]
+    fn pipeline_multimodal_enabled_requires_both_flag_and_mode() {
+        let mut prefs = crate::types::UserPreferences::default();
+        assert!(!super::pipeline_multimodal_enabled(&prefs));
+        prefs.multimodal_pipeline_enabled = true;
+        assert!(
+            !super::pipeline_multimodal_enabled(&prefs),
+            "只开实验开关但模式还是 traditional 时不得启用"
+        );
+        prefs.pipeline_mode = crate::types::PipelineMode::Multimodal;
+        assert!(super::pipeline_multimodal_enabled(&prefs));
+        prefs.multimodal_pipeline_enabled = false;
+        assert!(
+            !super::pipeline_multimodal_enabled(&prefs),
+            "实验开关关闭时即使模式为 multimodal 也不得启用"
+        );
     }
 
     #[test]
@@ -3591,7 +3693,9 @@ mod tests {
     fn openai_compatible_preset_is_whisper_compatible_and_conservative_by_default() {
         use crate::asr::whisper::AsrRequestFormat;
 
-        assert!(is_whisper_compatible_provider(OPENAI_COMPATIBLE_ASR_PROVIDER_ID));
+        assert!(is_whisper_compatible_provider(
+            OPENAI_COMPATIBLE_ASR_PROVIDER_ID
+        ));
         assert_eq!(
             active_asr_provider_kind(OPENAI_COMPATIBLE_ASR_PROVIDER_ID),
             ActiveAsrProviderKind::WhisperCompatible
@@ -3662,9 +3766,7 @@ mod tests {
             AdvancedAsrConfig::default()
         );
         assert_eq!(
-            parse_advanced_asr_config(Some(
-                r#"{"verboseJson":false,"chunkDurationMs":30000}"#
-            )),
+            parse_advanced_asr_config(Some(r#"{"verboseJson":false,"chunkDurationMs":30000}"#)),
             AdvancedAsrConfig {
                 verbose_json: false,
                 chunk_duration_ms: Some(30_000),
@@ -3838,8 +3940,8 @@ mod tests {
     // 穷尽 match，这里逐 kind 钉死映射，防止未来悄悄改动某个 provider 的凭据形态。
     #[test]
     fn preflight_credential_maps_every_kind() {
-        use AsrPreflightCredential::*;
         use ActiveAsrProviderKind::*;
+        use AsrPreflightCredential::*;
         assert_eq!(Bailian.preflight_credential(), AsrApiKey);
         assert_eq!(Qwen3Realtime.preflight_credential(), AsrApiKey);
         assert_eq!(Mimo.preflight_credential(), AsrApiKey);
@@ -3863,8 +3965,7 @@ mod tests {
             crate::asr::qwen_realtime::PROVIDER_ID
         );
         assert_eq!(
-            resolve_effective_asr_provider(bailian, "qwen3-asr-flash-realtime-2026-02-10")
-                .unwrap(),
+            resolve_effective_asr_provider(bailian, "qwen3-asr-flash-realtime-2026-02-10").unwrap(),
             crate::asr::qwen_realtime::PROVIDER_ID
         );
         assert_eq!(
@@ -3930,22 +4031,20 @@ mod tests {
             .unwrap_err();
         assert!(error.contains("不支持的百炼 ASR 模型"));
         // qwen3-asr-flash-filetrans 仅接受公网 URL，与本地录音链路不兼容，同样拒绝。
-        let error =
-            resolve_effective_asr_provider(crate::asr::bailian::PROVIDER_ID, "qwen3-asr-flash-filetrans")
-                .unwrap_err();
+        let error = resolve_effective_asr_provider(
+            crate::asr::bailian::PROVIDER_ID,
+            "qwen3-asr-flash-filetrans",
+        )
+        .unwrap_err();
         assert!(error.contains("不支持的百炼 ASR 模型"));
     }
 
     #[test]
     fn validates_only_supported_dashscope_multimodal_models() {
         assert!(validate_dashscope_multimodal_model("").is_ok());
-        assert!(
-            validate_dashscope_multimodal_model("fun-asr-flash-2026-06-15").is_ok()
-        );
+        assert!(validate_dashscope_multimodal_model("fun-asr-flash-2026-06-15").is_ok());
         assert!(validate_dashscope_multimodal_model("qwen-audio-3.0-asr-flash").is_ok());
-        assert!(
-            validate_dashscope_multimodal_model("qwen-audio-3.0-asr-flash-streaming").is_err()
-        );
+        assert!(validate_dashscope_multimodal_model("qwen-audio-3.0-asr-flash-streaming").is_err());
     }
 
     #[test]
@@ -3980,8 +4079,8 @@ mod tests {
 
     #[test]
     fn configured_fields_maps_every_kind() {
-        use AsrConfiguredFields::*;
         use ActiveAsrProviderKind::*;
+        use AsrConfiguredFields::*;
         assert_eq!(Bailian.configured_fields(), ApiKeyOnly);
         assert_eq!(Qwen3Realtime.configured_fields(), ApiKeyOnly);
         assert_eq!(Mimo.configured_fields(), ApiKeyEndpointModel);
@@ -4233,10 +4332,22 @@ mod tests {
         // 旧 schedule 触发时若期间有更新的 emit，应跳过隐藏（voice agent 取消双 emit 竞争）。
         emit_capsule(&coordinator.inner, CapsuleState::Done, 0.0, 0, None, None);
         schedule_capsule_idle(&coordinator.inner, 30);
-        emit_capsule(&coordinator.inner, CapsuleState::Cancelled, 0.0, 0, None, None);
+        emit_capsule(
+            &coordinator.inner,
+            CapsuleState::Cancelled,
+            0.0,
+            0,
+            None,
+            None,
+        );
         tokio::time::sleep(std::time::Duration::from_millis(120)).await;
         assert_eq!(
-            coordinator.inner.last_capsule_state.lock().as_ref().copied(),
+            coordinator
+                .inner
+                .last_capsule_state
+                .lock()
+                .as_ref()
+                .copied(),
             Some(CapsuleState::Cancelled),
             "旧 schedule 不应把更新的 Cancelled 状态提前隐藏"
         );
@@ -4249,7 +4360,12 @@ mod tests {
         schedule_capsule_idle(&coordinator.inner, 30);
         tokio::time::sleep(std::time::Duration::from_millis(120)).await;
         assert_eq!(
-            coordinator.inner.last_capsule_state.lock().as_ref().copied(),
+            coordinator
+                .inner
+                .last_capsule_state
+                .lock()
+                .as_ref()
+                .copied(),
             Some(CapsuleState::Idle),
             "无新 emit 时 schedule 应隐藏胶囊"
         );
@@ -4345,8 +4461,7 @@ mod tests {
         let coordinator = Coordinator::new();
         // Idle + 冷却未过期：模拟「识别中按下 → 会话收尾 → bridge 取出该 Pressed」的时刻。
         *coordinator.inner.session_cooldown_until.lock() = Some(
-            std::time::Instant::now()
-                + std::time::Duration::from_millis(POST_SESSION_COOLDOWN_MS),
+            std::time::Instant::now() + std::time::Duration::from_millis(POST_SESSION_COOLDOWN_MS),
         );
 
         handle_pressed_edge(&coordinator.inner, std::time::Instant::now(), 1).await;
@@ -4414,7 +4529,11 @@ mod tests {
             .hotkey_trigger_held
             .store(true, Ordering::SeqCst);
 
-        handle_released_edge(&coordinator.inner, pressed_at + std::time::Duration::from_millis(100)).await;
+        handle_released_edge(
+            &coordinator.inner,
+            pressed_at + std::time::Duration::from_millis(100),
+        )
+        .await;
 
         // 短按松手不结束录音，等下一次按下再停。
         assert_eq!(
@@ -4443,7 +4562,10 @@ mod tests {
         )
         .await;
 
-        assert_eq!(coordinator.inner.state.lock().phase, SessionPhase::Listening);
+        assert_eq!(
+            coordinator.inner.state.lock().phase,
+            SessionPhase::Listening
+        );
         assert!(coordinator.inner.hotkey_press_at.lock().is_none());
     }
 
@@ -4461,7 +4583,11 @@ mod tests {
             .hotkey_trigger_held
             .store(true, Ordering::SeqCst);
 
-        handle_released_edge(&coordinator.inner, pressed_at + std::time::Duration::from_millis(500)).await;
+        handle_released_edge(
+            &coordinator.inner,
+            pressed_at + std::time::Duration::from_millis(500),
+        )
+        .await;
 
         // 无 recorder / ASR 的测试会话下，end_session 直接收尾到 Idle。
         assert_eq!(coordinator.inner.state.lock().phase, SessionPhase::Idle);

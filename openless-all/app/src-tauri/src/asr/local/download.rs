@@ -164,6 +164,205 @@ fn keep_file(path: &str) -> bool {
     )
 }
 
+/// HF 模型卡片（下载量 / 收藏 / 简介）——下载弹窗右侧展示用。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HfModelCard {
+    pub model_id: String,
+    pub mirror: String,
+    pub downloads: u64,
+    pub likes: u64,
+    pub description: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct HfApiModelCard {
+    #[serde(default)]
+    downloads: u64,
+    #[serde(default)]
+    likes: u64,
+    #[serde(default, rename = "cardData")]
+    card_data: Option<HfApiCardData>,
+}
+
+#[derive(Debug, Deserialize)]
+struct HfApiCardData {
+    #[serde(default)]
+    summary: Option<String>,
+}
+
+/// 拉取 HF 模型卡片：GET `{mirror}/api/models/{repo}` 拿 downloads / likes /
+/// cardData.summary。summary 缺失时回退读 README 首个非空段落当简介；
+/// 描述统一截断到 [`HF_CARD_DESC_MAX_CHARS`]，防超长文本把弹窗撑爆。
+pub async fn fetch_hf_card(model_id: ModelId, mirror: Mirror) -> Result<HfModelCard> {
+    let client = build_client()?;
+    let repo = model_id.hf_repo();
+    let url = format!("{}/api/models/{}", mirror.base_url(), repo);
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .with_context(|| format!("HF model card API GET 失败: {url}"))?;
+    if !resp.status().is_success() {
+        anyhow::bail!("HF model card API HTTP {}: {url}", resp.status());
+    }
+    let api: HfApiModelCard = resp
+        .json()
+        .await
+        .with_context(|| format!("HF model card JSON 解码失败: {url}"))?;
+
+    let mut description = api
+        .card_data
+        .as_ref()
+        .and_then(|c| c.summary.clone())
+        .unwrap_or_default();
+    if description.trim().is_empty() {
+        description = fetch_readme_first_paragraph(&client, repo, mirror).await?;
+    }
+
+    Ok(HfModelCard {
+        model_id: model_id.as_str().into(),
+        mirror: mirror.as_str().into(),
+        downloads: api.downloads,
+        likes: api.likes,
+        description: truncate_description(&description),
+    })
+}
+
+/// 拉取仓库 README 首个非空段落；README 缺失 / 非 200 / 无内容时返回空串。
+async fn fetch_readme_first_paragraph(
+    client: &reqwest::Client,
+    repo: &str,
+    mirror: Mirror,
+) -> Result<String> {
+    let url = format!("{}/{}/raw/main/README.md", mirror.base_url(), repo);
+    let resp = client.get(&url).send().await;
+    let text = match resp {
+        Ok(r) if r.status().is_success() => r.text().await.unwrap_or_default(),
+        _ => return Ok(String::new()),
+    };
+    Ok(first_readme_paragraph(&text))
+}
+
+/// 简介最大字符数（按 char 计，避免切在 UTF-8 中间）。
+pub(crate) const HF_CARD_DESC_MAX_CHARS: usize = 280;
+
+/// 纯函数：README markdown → 首个有实质内容的段落。跳过 yaml front-matter、
+/// 标题行（`#` 开头）、图片（`!` 开头）、表格（`|` 开头）、分隔线（`---`）、
+/// HTML 标签行（`<div`/`<p`/`<img`…，badges 区常见）与整行为 markdown 链接
+/// 的行（`[![badge](…)](…)` / `[中文](…)` 语言切换行）；段落内多行合并成
+/// 一句，并剥掉行内链接 / 强调符。便于单测。
+pub(crate) fn first_readme_paragraph(markdown: &str) -> String {
+    for block in markdown.split("\n\n") {
+        let block = block.trim();
+        if block.is_empty() || block.starts_with("---") {
+            continue;
+        }
+        let mut parts: Vec<String> = Vec::new();
+        for raw_line in block.lines() {
+            let line = raw_line.trim();
+            if line.is_empty()
+                || line.starts_with('#')
+                || line.starts_with('!')
+                || line.starts_with('|')
+                || line.starts_with("---")
+                || line.starts_with('<')
+                || is_link_only_line(line)
+            {
+                continue;
+            }
+            let stripped = strip_markdown_inline(line);
+            if !stripped.is_empty() {
+                parts.push(stripped);
+            }
+        }
+        if parts.is_empty() {
+            continue;
+        }
+        return truncate_description(&parts.join(" "));
+    }
+    String::new()
+}
+
+/// 整行是否只有 markdown 链接（badges 链 `[![a](u)](v)`、语言切换行
+/// `[中文](url) | [English](url)`）。逐个剥离 `[text](url)`，检查链接之间
+/// 与行首尾只允许纯分隔符（`|`、逗号、顿号、空白）；badge 链（img.shields.io）
+/// 剥不干净（嵌套 `]` 残留括号碎片），直接按特征跳过。
+fn is_link_only_line(line: &str) -> bool {
+    if line.contains("img.shields.io") || line.trim_start().starts_with("[![") {
+        return true;
+    }
+    let mut rest = line;
+    loop {
+        let Some(open) = rest.find('[') else { break };
+        if !is_separator_only(&rest[..open]) {
+            return false;
+        }
+        let tail = &rest[open + 1..];
+        let Some(close) = tail.find("](") else {
+            return false;
+        };
+        let after = &tail[close + 2..];
+        let Some(end) = after.find(')') else {
+            return false;
+        };
+        rest = &after[end + 1..];
+    }
+    is_separator_only(rest)
+}
+
+/// 片段是否只含分隔符 / 空白（链接行允许的行首、行尾与链接间间隔）。
+fn is_separator_only(s: &str) -> bool {
+    s.chars()
+        .all(|c| c.is_whitespace() || matches!(c, '|' | ',' | '·' | '、'))
+}
+
+/// 剥掉行内 markdown 语法，保留链接显示文本：`[text](url)` → `text`、
+/// `![alt](url)` → 空（`!` 在 `[` 前面，图片 alt 不保留）、
+/// `` `code` `` / `**bold**` / `*italic*` / `_x_` → 裸文本。
+fn strip_markdown_inline(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut rest = line;
+    while let Some(open) = rest.find('[') {
+        out.push_str(&rest[..open]);
+        let tail = &rest[open + 1..];
+        if let Some(close) = tail.find("](") {
+            let text = &tail[..close];
+            let after = &tail[close + 2..];
+            if let Some(end) = after.find(')') {
+                let is_image = out.ends_with('!');
+                if is_image {
+                    out.pop(); // 图片标记 `!` 在链接外，随 alt 一起丢弃
+                }
+                let text = text.trim();
+                if !is_image && !text.is_empty() {
+                    out.push_str(text);
+                }
+                rest = &after[end + 1..];
+                continue;
+            }
+        }
+        // 不是链接结构的 `[`：原样保留继续扫。
+        out.push('[');
+        rest = tail;
+    }
+    out.push_str(rest);
+    out.replace("**", "")
+        .replace('`', "")
+        .replace('*', "")
+        .replace('_', "")
+}
+
+/// 纯函数：描述截断到 [`HF_CARD_DESC_MAX_CHARS`]，超长加省略号。
+pub(crate) fn truncate_description(text: &str) -> String {
+    let text = text.trim();
+    if text.chars().count() <= HF_CARD_DESC_MAX_CHARS {
+        return text.to_string();
+    }
+    let truncated: String = text.chars().take(HF_CARD_DESC_MAX_CHARS).collect();
+    format!("{truncated}…")
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DownloadProgress {
@@ -425,9 +624,7 @@ async fn run_download(
                 // 节流：距上次 emit < 150ms 的中间进度直接丢弃（高频事件会让
                 // 前端进度条抽搐），in_flight 仍照常累计，下次 emit 带的是最新值。
                 let now = now_millis();
-                if now - last_emit.load(Ordering::Relaxed)
-                    < PROGRESS_EMIT_MIN_INTERVAL_MS
-                {
+                if now - last_emit.load(Ordering::Relaxed) < PROGRESS_EMIT_MIN_INTERVAL_MS {
                     return;
                 }
                 last_emit.store(now, Ordering::Relaxed);
@@ -1077,7 +1274,11 @@ fn emit_cancelled(
 
 #[cfg(test)]
 mod tests {
-    use super::{existing_file_is_complete, remove_partial_artifacts};
+    use super::{
+        existing_file_is_complete, first_readme_paragraph, is_link_only_line,
+        remove_partial_artifacts, strip_markdown_inline, truncate_description,
+        HF_CARD_DESC_MAX_CHARS,
+    };
 
     #[test]
     fn complete_when_size_matches() {
@@ -1125,5 +1326,90 @@ mod tests {
         assert!(dest.exists(), "完整目标文件不应被删除");
         assert!(keep.exists(), "未在清单里的文件不应被删除");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn first_readme_paragraph_skips_front_matter_and_headers() {
+        let md = "---\nlicense: apache-2.0\n---\n\n# Qwen3-ASR\n\nThis is the first real paragraph.\n\n## Features\n- fast\n- accurate";
+        assert_eq!(
+            first_readme_paragraph(md),
+            "This is the first real paragraph."
+        );
+    }
+
+    #[test]
+    fn first_readme_paragraph_joins_multiline_paragraph() {
+        let md = "# Title\n\nFirst line continues\nonto the second line.\n\n## Next";
+        assert_eq!(
+            first_readme_paragraph(md),
+            "First line continues onto the second line."
+        );
+    }
+
+    #[test]
+    fn first_readme_paragraph_returns_empty_when_only_markup() {
+        let md = "# Only headers\n\n---\n\n![image](x.png)";
+        assert_eq!(first_readme_paragraph(md), "");
+    }
+
+    #[test]
+    fn first_readme_paragraph_skips_html_badge_lines() {
+        // Qwen3 README 实际结构：HTML 包裹的 badge 区 + 徽章链接行 + 正文。
+        let md = "# Qwen3\n\n<p align=\"center\">\n  <img src=\"qwen.png\" width=\"400\">\n</p>\n\n<div align=\"center\">\n  <h4> <a href=\"#\">中文</a> | <a href=\"#\">English</a> </h4>\n</div>\n\n[![Model License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)\n\nQwen3 is a next-generation open model.";
+        assert_eq!(
+            first_readme_paragraph(md),
+            "Qwen3 is a next-generation open model."
+        );
+    }
+
+    #[test]
+    fn first_readme_paragraph_skips_link_only_lines() {
+        // 语言切换行与 badge 链整行都是纯链接，不应当正文。
+        assert!(is_link_only_line(
+            "[中文](https://a.cn) | [English](https://a.io)"
+        ));
+        assert!(is_link_only_line(
+            "[![badge](https://img.shields.io/badge/a-1.svg)](https://x)"
+        ));
+        assert!(!is_link_only_line(
+            "See the [docs](https://d.io) for details"
+        ));
+    }
+
+    #[test]
+    fn strip_markdown_inline_keeps_link_text_drops_markup() {
+        assert_eq!(
+            strip_markdown_inline("See [Qwen3](https://hf.co/Qwen/Qwen3) docs"),
+            "See Qwen3 docs"
+        );
+        assert_eq!(strip_markdown_inline("![logo](logo.png)"), "");
+        assert_eq!(
+            strip_markdown_inline("**bold** and `code` and _em_"),
+            "bold and code and em"
+        );
+    }
+
+    #[test]
+    fn first_readme_paragraph_strips_inline_links_and_emphasis() {
+        let md =
+            "# Title\n\nCheck the **official** [Qwen3](https://hf.co/Qwen/Qwen3) page for details.";
+        assert_eq!(
+            first_readme_paragraph(md),
+            "Check the official Qwen3 page for details."
+        );
+    }
+
+    #[test]
+    fn truncate_description_keeps_short_text() {
+        assert_eq!(truncate_description("hello world"), "hello world");
+        assert_eq!(truncate_description("  padded  "), "padded");
+    }
+
+    #[test]
+    fn truncate_description_cuts_long_text() {
+        let long = "界".repeat(HF_CARD_DESC_MAX_CHARS + 50);
+        let out = truncate_description(&long);
+        assert_eq!(out.chars().count(), HF_CARD_DESC_MAX_CHARS + 1); // +1 省略号
+        assert!(out.ends_with('…'));
     }
 }

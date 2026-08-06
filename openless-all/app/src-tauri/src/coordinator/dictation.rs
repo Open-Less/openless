@@ -285,6 +285,7 @@ async fn run_streaming_polish(
             prior_turns,
             llm_call,
             llm_elapsed_ms,
+            pipeline_multimodal_enabled(&inner.prefs.get()),
         )
         .await;
         return (p, e, false);
@@ -318,6 +319,7 @@ async fn run_streaming_polish(
                 prior_turns,
                 llm_call,
                 llm_elapsed_ms,
+                pipeline_multimodal_enabled(&inner.prefs.get()),
             )
             .await;
             return (p, err, false);
@@ -330,8 +332,7 @@ async fn run_streaming_polish(
     // from what the user actually sees\"。
     let (tx, rx) = std::sync::mpsc::channel::<String>();
     #[cfg(target_os = "windows")]
-    let sendinput_options =
-        windows_sendinput_options_from_prefs(&inner.prefs.get());
+    let sendinput_options = windows_sendinput_options_from_prefs(&inner.prefs.get());
     let typer_handle = tokio::task::spawn_blocking(move || {
         #[cfg(target_os = "windows")]
         {
@@ -478,6 +479,7 @@ async fn run_streaming_polish(
                 prior_turns,
                 llm_call,
                 llm_elapsed_ms,
+                pipeline_multimodal_enabled(&inner.prefs.get()),
             )
             .await;
             (p, e, false)
@@ -881,9 +883,7 @@ pub(super) async fn handle_pressed_edge(
         inner
             .hotkey_press_generation
             .store(press_id, Ordering::SeqCst);
-        inner
-            .hotkey_press_began_session
-            .store(0, Ordering::SeqCst);
+        inner.hotkey_press_began_session.store(0, Ordering::SeqCst);
 
         // 防抖：相邻 < HOTKEY_DEBOUNCE 的边沿直接丢弃，记到 log 方便排查。
         // 与 `hotkey_trigger_held` 互补：held 防 press-without-release，本检查防
@@ -1198,8 +1198,13 @@ pub(super) async fn handle_released(inner: &Arc<Inner>, released_at: std::time::
     }
     if mode == HotkeyMode::Auto {
         // 使用物理按下/松开的事件时刻，避免 bridge 排队时把处理延迟误算为按住时长。
-        let held_long = inner.hotkey_press_at.lock().take()
-            .map(|pressed_at| released_at.saturating_duration_since(pressed_at) >= AUTO_HOLD_THRESHOLD)
+        let held_long = inner
+            .hotkey_press_at
+            .lock()
+            .take()
+            .map(|pressed_at| {
+                released_at.saturating_duration_since(pressed_at) >= AUTO_HOLD_THRESHOLD
+            })
             .unwrap_or(false);
         match phase {
             // 长按松手 = 按住说话，松手即停；短按 = 切换式，锁存保持录音，下次按下再停。
@@ -1211,9 +1216,7 @@ pub(super) async fn handle_released(inner: &Arc<Inner>, released_at: std::time::
                 request_stop_during_starting(inner, "auto hold release edge");
             }
             SessionPhase::Listening | SessionPhase::Starting => {
-                log::info!(
-                    "[coord] auto short-tap latched (toggle semantics); next press stops"
-                );
+                log::info!("[coord] auto short-tap latched (toggle semantics); next press stops");
             }
             _ => {}
         }
@@ -1517,8 +1520,7 @@ async fn run_less_computer_once(
             // OpenCode 无 `--settings`，护栏走 `permission` 配置经 OPENCODE_CONFIG_CONTENT 注入。
             // build_opencode_guard_config 默认 bash deny 高风险前缀、webfetch deny，审批放行的
             // 前缀显式 allow。fail-closed：序列化失败立即中止，绝不无护栏裸跑。
-            let guard =
-                crate::coding_agent::guard::build_opencode_guard_config(&approved_patterns);
+            let guard = crate::coding_agent::guard::build_opencode_guard_config(&approved_patterns);
             let guard_str = match serde_json::to_string(&guard) {
                 Ok(s) => s,
                 Err(e) => {
@@ -1732,10 +1734,7 @@ pub(super) async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
 
 /// begin_session 的带参版本，voice_agent=true 时在 Starting 阶段就标记好，
 /// 防止 finish_starting_session 处理 pending_stop 时丢失标志。
-pub(super) async fn begin_session_as(
-    inner: &Arc<Inner>,
-    voice_agent: bool,
-) -> Result<(), String> {
+pub(super) async fn begin_session_as(inner: &Arc<Inner>, voice_agent: bool) -> Result<(), String> {
     let current_session_id = {
         let mut state = inner.state.lock();
         let Some(session_id) =
@@ -1786,6 +1785,42 @@ pub(super) async fn begin_session_as(
     // 过渡守住「不漏首字」。若随后凭证/权限校验失败，下面分支会用 Error 覆盖这一帧。
     inner.capsule_warming.store(true, Ordering::SeqCst);
     emit_capsule(inner, CapsuleState::Recording, 0.0, 0, None, None);
+
+    // 多模态（Omni）模式：不构建 ASR，录音 PCM 直接进缓冲器，松键后一步出文。
+    if pipeline_multimodal_enabled(&inner.prefs.get()) {
+        if let Err(message) = ensure_omni_credentials() {
+            log::warn!("[coord] omni credential gate failed: {message}");
+            emit_capsule(
+                inner,
+                CapsuleState::Error,
+                0.0,
+                0,
+                Some(message.clone()),
+                None,
+            );
+            restore_prepared_windows_ime_session(inner, current_session_id);
+            inner.state.lock().phase = SessionPhase::Idle;
+            return Err(message);
+        }
+        if let Err(message) = ensure_microphone_permission(inner) {
+            log::warn!("[coord] omni microphone permission gate failed: {message}");
+            emit_capsule(
+                inner,
+                CapsuleState::Error,
+                0.0,
+                0,
+                Some(message.clone()),
+                None,
+            );
+            restore_prepared_windows_ime_session(inner, current_session_id);
+            inner.state.lock().phase = SessionPhase::Idle;
+            return Err(message);
+        }
+        let consumer = PcmBufferConsumer::new();
+        store_omni_pcm_for_session(inner, current_session_id, Arc::clone(&consumer));
+        start_recorder_and_enter_listening(inner, current_session_id, "omni", consumer).await?;
+        return Ok(());
+    }
 
     if let Err(message) = ensure_asr_credentials() {
         log::warn!("[coord] ASR credential gate failed: {message}");
@@ -2591,7 +2626,9 @@ pub(super) async fn start_recorder_for_starting(
         // 第一帧 PCM 真的流到 consumer 了（recorder.rs::process_callback 的顺序保证
         // consume_pcm_chunk 先于 level_handler）——关掉预备态，让这一帧起 payload.warming
         // 翻 false，前端把「待命」光条点亮成正式录音态。之后每帧都是 false（幂等）。
-        inner_for_level.capsule_warming.store(false, Ordering::SeqCst);
+        inner_for_level
+            .capsule_warming
+            .store(false, Ordering::SeqCst);
         emit_capsule(
             &inner_for_level,
             CapsuleState::Recording,
@@ -2814,6 +2851,7 @@ fn build_transcribe_failed_session(
         asr_model: None,
         llm_provider: None,
         llm_model: None,
+        pipeline_mode: None,
         asr_ms: Some(asr_ms),
         polish_ms: None,
     }
@@ -3083,6 +3121,90 @@ async fn wait_for_processing_cancel(inner: &Arc<Inner>) {
     }
 }
 
+/// 一次性（非流式）插入最终文本：平台分支与 `end_session` 原内联逻辑一致，
+/// 供传统与多模态（Omni）两条收尾路径复用，避免插入策略漂移。
+async fn insert_final_text(
+    inner: &Arc<Inner>,
+    current_session_id: SessionId,
+    text: &str,
+    prefs: &crate::types::UserPreferences,
+    focus_ready_for_paste: bool,
+) -> InsertStatus {
+    let restore_clipboard = prefs.restore_clipboard_after_paste;
+    let allow_non_tsf_insertion_fallback = prefs.allow_non_tsf_insertion_fallback;
+    let windows_insertion_mode = prefs.windows_insertion_mode;
+    let paste_shortcut = prefs.paste_shortcut;
+    #[cfg(target_os = "android")]
+    {
+        crate::android::android_insert_with_strategy(
+            &inner.inserter,
+            text,
+            inner.prefs.get().android_insert_strategy,
+        )
+    }
+    #[cfg(not(target_os = "android"))]
+    if focus_ready_for_paste {
+        #[cfg(target_os = "windows")]
+        {
+            match windows_insertion_mode {
+                crate::types::WindowsInsertionMode::SendInput => {
+                    let sendinput_options = windows_sendinput_options_from_prefs(prefs);
+                    if allow_non_tsf_insertion_fallback {
+                        insert_via_non_tsf_fallback(inner, text, restore_clipboard, paste_shortcut)
+                    } else {
+                        inner
+                            .inserter
+                            .insert_via_unicode_keystrokes(text, sendinput_options)
+                    }
+                }
+                crate::types::WindowsInsertionMode::Paste => {
+                    inner
+                        .inserter
+                        .insert(text, restore_clipboard, paste_shortcut)
+                }
+                crate::types::WindowsInsertionMode::Tsf => {
+                    let ime_target = capture_ime_submit_target();
+                    insert_with_windows_ime_first(
+                        inner,
+                        current_session_id,
+                        text,
+                        restore_clipboard,
+                        allow_non_tsf_insertion_fallback,
+                        paste_shortcut,
+                        ime_target,
+                    )
+                    .await
+                }
+            }
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            inner
+                .inserter
+                .insert(text, restore_clipboard, paste_shortcut)
+        }
+    } else {
+        #[cfg(target_os = "linux")]
+        {
+            // Linux: fcitx5 commitString 无需窗口焦点，始终尝试插入。
+            inner
+                .inserter
+                .insert(text, restore_clipboard, paste_shortcut)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            log::warn!(
+                "[coord] original insertion target is not foreground; copied output without paste"
+            );
+            if allow_non_tsf_insertion_fallback {
+                inner.inserter.copy_fallback(text)
+            } else {
+                InsertStatus::Failed
+            }
+        }
+    }
+}
+
 pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     let current_session_id = {
         let mut state = inner.state.lock();
@@ -3098,6 +3220,12 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     if let Some(rec) = take_recorder_for_session(inner, current_session_id) {
         rec.stop();
         release_recording_mute(inner, "dictation");
+    }
+
+    // 多模态（Omni）模式：不走 ASR 转写 + LLM 润色，录音 PCM 直接编码 WAV，
+    // 一次调用出最终文本（issue #902）。两套配置隔离，缺 omni 配置时明确报错。
+    if pipeline_multimodal_enabled(&inner.prefs.get()) {
+        return finish_dictation_multimodal(inner, current_session_id, elapsed).await;
     }
 
     let asr_opt = take_asr_for_session(inner, current_session_id);
@@ -3588,9 +3716,7 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
                 // 处理最后一次重试结果时也复查一次取消标志，覆盖「重试刚返回
                 // Exhausted 与用户同时按 Esc」的窄竞态，避免误走失败提示。
                 if inner.state.lock().cancelled {
-                    log::info!(
-                        "[coord] cancel after silent ASR retry — discarding transcript"
-                    );
+                    log::info!("[coord] cancel after silent ASR retry — discarding transcript");
                     restore_prepared_windows_ime_session(inner, current_session_id);
                     finish_cancelled_processing(inner, current_session_id);
                     return Ok(());
@@ -3663,6 +3789,7 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
             asr_model: asr_model.clone(),
             llm_provider: None,
             llm_model: None,
+            pipeline_mode: None,
             asr_ms: Some(asr_ms),
             polish_ms: None,
         };
@@ -3768,10 +3895,8 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     let llm_thinking_enabled = prefs.llm_thinking_enabled;
     // 风格包原有 Prompt 就是录音 / ASR 后处理的完整规则；不要在全局设置再叠一层，
     // 否则会让同一个风格包的导出、复用和运行结果不一致。
-    let style_system_prompt = crate::types::style_pack_prompt(
-        &pack,
-        crate::types::StylePromptKind::DictationAsr,
-    );
+    let style_system_prompt =
+        crate::types::style_pack_prompt(&pack, crate::types::StylePromptKind::DictationAsr);
     let raw_uses_llm = mode == PolishMode::Raw && super::raw_style_pack_uses_llm(&pack);
     let translation_target = prefs.translation_target_language.trim().to_string();
     let translation_active = crate::types::translation_effective(
@@ -3895,6 +4020,7 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
             &prior_turns,
             &mut llm_call,
             &mut llm_elapsed_ms,
+            pipeline_multimodal_enabled(&inner.prefs.get()),
         )
         .await;
         polish_source = src;
@@ -3932,6 +4058,7 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
             &prior_turns,
             &mut llm_call,
             &mut llm_elapsed_ms,
+            pipeline_multimodal_enabled(&inner.prefs.get()),
         )
         .await;
         (p, e, false)
@@ -3983,10 +4110,8 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     let focus_target = inner.state.lock().focus_target;
     let focus_ready_for_paste = restore_focus_target_if_possible(focus_target);
     let prefs = inner.prefs.get();
-    let restore_clipboard = prefs.restore_clipboard_after_paste;
     let allow_non_tsf_insertion_fallback = prefs.allow_non_tsf_insertion_fallback;
     let windows_insertion_mode = prefs.windows_insertion_mode;
-    let paste_shortcut = prefs.paste_shortcut;
     // 流式路径下，字符已经通过 Unicode keystroke 落到光标处，跳过 inserter.insert。
     let status = if already_streamed {
         log::info!(
@@ -3996,80 +4121,14 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
         );
         InsertStatus::Inserted
     } else {
-        #[cfg(target_os = "android")]
-        {
-            crate::android::android_insert_with_strategy(
-                &inner.inserter,
-                &polished,
-                inner.prefs.get().android_insert_strategy,
-            )
-        }
-        #[cfg(not(target_os = "android"))]
-        if focus_ready_for_paste {
-            #[cfg(target_os = "windows")]
-            {
-                match windows_insertion_mode {
-                    crate::types::WindowsInsertionMode::SendInput => {
-                        let sendinput_options = windows_sendinput_options_from_prefs(&prefs);
-                        if allow_non_tsf_insertion_fallback {
-                            insert_via_non_tsf_fallback(
-                                inner,
-                                &polished,
-                                restore_clipboard,
-                                paste_shortcut,
-                            )
-                        } else {
-                            inner
-                                .inserter
-                                .insert_via_unicode_keystrokes(&polished, sendinput_options)
-                        }
-                    }
-                    crate::types::WindowsInsertionMode::Paste => inner.inserter.insert(
-                        &polished,
-                        restore_clipboard,
-                        paste_shortcut,
-                    ),
-                    crate::types::WindowsInsertionMode::Tsf => {
-                        let ime_target = capture_ime_submit_target();
-                        insert_with_windows_ime_first(
-                            inner,
-                            current_session_id,
-                            &polished,
-                            restore_clipboard,
-                            allow_non_tsf_insertion_fallback,
-                            paste_shortcut,
-                            ime_target,
-                        )
-                        .await
-                    }
-                }
-            }
-            #[cfg(not(target_os = "windows"))]
-            {
-                inner
-                    .inserter
-                    .insert(&polished, restore_clipboard, paste_shortcut)
-            }
-        } else {
-            #[cfg(target_os = "linux")]
-            {
-                // Linux: fcitx5 commitString 无需窗口焦点，始终尝试插入。
-                inner
-                    .inserter
-                    .insert(&polished, restore_clipboard, paste_shortcut)
-            }
-            #[cfg(not(target_os = "linux"))]
-            {
-                log::warn!(
-                    "[coord] original insertion target is not foreground; copied output without paste"
-                );
-                if allow_non_tsf_insertion_fallback {
-                    inner.inserter.copy_fallback(&polished)
-                } else {
-                    InsertStatus::Failed
-                }
-            }
-        }
+        insert_final_text(
+            inner,
+            current_session_id,
+            &polished,
+            &prefs,
+            focus_ready_for_paste,
+        )
+        .await
     };
     restore_prepared_windows_ime_session(inner, current_session_id);
     let inserted_chars = polished.chars().count() as u32;
@@ -4147,6 +4206,7 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
         asr_model,
         llm_provider,
         llm_model,
+        pipeline_mode: None,
         asr_ms: Some(asr_ms),
         polish_ms,
     };
@@ -4224,6 +4284,382 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
 
     Ok(())
+}
+
+/// 多模态（Omni）听写收尾（issue #902）：录音 PCM → WAV → omni 一次调用 →
+/// 修正规则 → 一次性插入 → 历史。与两段式管线完全隔离：
+/// 不复用 ASR 构建/静默重试/流式插入，缺 omni 配置时明确报错、不回退传统配置。
+async fn finish_dictation_multimodal(
+    inner: &Arc<Inner>,
+    current_session_id: SessionId,
+    elapsed: u64,
+) -> Result<(), String> {
+    let Some(pcm_consumer) = take_omni_pcm_for_session(inner, current_session_id) else {
+        restore_prepared_windows_ime_session(inner, current_session_id);
+        if !finish_cancelled_processing(inner, current_session_id) {
+            set_phase_idle_if_session_matches(inner, current_session_id);
+        }
+        return Ok(());
+    };
+    let duration_ms = pcm_consumer.duration_ms();
+    let wav = pcm_bytes_to_wav(&pcm_consumer.pcm());
+
+    // 录音后被取消 → 静默丢弃（与 ASR 完成后的 cancel 检查一致）。
+    if inner.state.lock().cancelled {
+        log::info!("[coord] cancel detected after recording (multimodal) — discarding");
+        restore_prepared_windows_ime_session(inner, current_session_id);
+        finish_cancelled_processing(inner, current_session_id);
+        return Ok(());
+    }
+
+    // 提示词装配：风格包提示词 + 词典热词 + 工作语言 + 翻译目标（同一次调用生效，
+    // 这正是多模态管线解决专有名词误识别的关键）；Less Computer 用逐字转写指令。
+    let prefs = inner.prefs.get();
+    let pack = match inner
+        .style_packs
+        .get_or_default_active(&prefs.active_style_pack_id)
+    {
+        Ok(pack) => pack,
+        Err(error) => {
+            log::warn!(
+                "[coord] active style pack unavailable, falling back to builtin light: {error}"
+            );
+            crate::types::builtin_style_pack_for_mode(PolishMode::Light)
+        }
+    };
+    let mode = pack.base_mode;
+    let translation_target = prefs.translation_target_language.trim().to_string();
+    let translation_active = crate::types::translation_effective(
+        inner.translation_active.load(Ordering::SeqCst),
+        &translation_target,
+        &prefs.working_languages,
+    );
+    let voice_agent = inner.state.lock().voice_agent;
+
+    let system_prompt = if voice_agent {
+        "把用户的语音指令逐字转写为文本。不要改写、不要润色、不要补全，只输出转写文本本身。"
+            .to_string()
+    } else {
+        let base =
+            crate::types::style_pack_prompt(&pack, crate::types::StylePromptKind::DictationAsr);
+        let hotwords = enabled_phrases(inner);
+        let mut prompt = base;
+        if !prefs.working_languages.is_empty() {
+            prompt.push_str(&format!(
+                "\n\n# 工作语言\n用户主要在以下语言间工作：{}。",
+                prefs.working_languages.join("、")
+            ));
+        }
+        if !hotwords.is_empty() {
+            prompt.push_str(&format!(
+                "\n\n# 词典/热词\n以下专有名词必须严格按给定写法准确识别，不得换成同音错词：{}。",
+                hotwords.join("、")
+            ));
+        }
+        if translation_active {
+            prompt.push_str(&format!(
+                "\n\n用户按住了翻译键，需要把识别结果翻译成「{}」。直接输出译文，不要额外解释。",
+                translation_target
+            ));
+        }
+        prompt
+    };
+    log::info!(
+        "[coord] multimodal dictation dispatch session_id={} mode={:?} translation={} voice_agent={} prompt_chars={} audio_ms={}",
+        current_session_id,
+        mode,
+        translation_active,
+        voice_agent,
+        system_prompt.chars().count(),
+        duration_ms
+    );
+
+    let provider = match build_active_omni_provider(prefs.llm_thinking_enabled) {
+        Ok(provider) => provider,
+        Err(error) => {
+            let reason = error.to_string();
+            let user_msg = format!("多模态模型配置不完整：{reason}");
+            return fail_dictation_multimodal(inner, current_session_id, elapsed, user_msg, reason);
+        }
+    };
+    let omni_label = provider.call_label();
+    let call_started = std::time::Instant::now();
+    let output = match provider.complete(&system_prompt, "", Some(&wav)).await {
+        Ok(text) => text,
+        Err(error) => {
+            let reason = error.to_string();
+            let user_msg = format!("多模态识别失败：{reason}");
+            return fail_dictation_multimodal(inner, current_session_id, elapsed, user_msg, reason);
+        }
+    };
+    let omni_ms = call_started.elapsed().as_millis() as u64;
+    let output = output.trim().to_string();
+
+    // 模型返回空 → emptyTranscript 失败历史 + 错误胶囊（保留录音供排查）。
+    if output.is_empty() {
+        let session = DictationSession {
+            id: current_session_id.to_string(),
+            created_at: Utc::now().to_rfc3339(),
+            source: crate::types::HistorySource::Voice,
+            raw_transcript: String::new(),
+            // 多模态管线是音频直接进 omni 模型出文本，没有独立的 ASR 阶段，
+            // 因此不存在「纠正规则生效前的 ASR 原文」这个东西。
+            asr_transcript: None,
+            final_text: String::new(),
+            mode: prefs.default_mode,
+            style_pack_id: None,
+            translation_active: false,
+            polish_source: None,
+            app_bundle_id: None,
+            app_name: None,
+            insert_status: InsertStatus::Failed,
+            error_code: Some("emptyTranscript".to_string()),
+            duration_ms: Some(duration_ms),
+            dictionary_entry_count: Some(enabled_phrases(inner).len() as u32),
+            has_audio_recording: Some(inner.audio_archive_active.load(Ordering::Relaxed)),
+            asr_provider: None,
+            asr_model: None,
+            llm_provider: Some(omni_label.provider.clone()),
+            llm_model: Some(omni_label.model.clone()),
+            pipeline_mode: Some("multimodal".to_string()),
+            asr_ms: None,
+            polish_ms: Some(omni_ms),
+        };
+        let prefs_snapshot = inner.prefs.get();
+        if let Err(e) = inner.history.append_with_retention(
+            session,
+            prefs_snapshot.history_retention_days,
+            prefs_snapshot.history_max_entries,
+        ) {
+            log::error!("[coord] history append failed: {e}");
+        }
+        emit_capsule(
+            inner,
+            CapsuleState::Error,
+            0.0,
+            elapsed,
+            Some("多模态模型返回空结果".to_string()),
+            None,
+        );
+        restore_prepared_windows_ime_session(inner, current_session_id);
+        inner.state.lock().phase = SessionPhase::Idle;
+        {
+            let now = std::time::Instant::now();
+            *inner.session_cooldown_until.lock() =
+                Some(now + std::time::Duration::from_millis(POST_SESSION_COOLDOWN_MS));
+        }
+        schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
+        return Err("多模态模型返回空结果".to_string());
+    }
+
+    // Less Computer：转写文本交给 CLI agent，不走插入/历史（agent 流程自己收尾）。
+    if voice_agent {
+        return run_voice_agent_transcript(inner, current_session_id, output, elapsed).await;
+    }
+
+    let correction_rules = match inner.correction_rules.list() {
+        Ok(rules) => rules,
+        Err(e) => {
+            log::warn!("[coord] load correction rules failed: {e}; continue without correction");
+            Vec::new()
+        }
+    };
+    let polished = finalize_polished_text(
+        output,
+        translation_active,
+        false,
+        mode,
+        &None,
+        prefs.chinese_script_preference,
+        &correction_rules,
+        false,
+    );
+
+    // 原子化最后一次 cancel 检查 + 转 Inserting（与两段式路径同款 audit HIGH #2 修复）。
+    let proceed_to_insert = {
+        let mut state = inner.state.lock();
+        if state.cancelled {
+            false
+        } else {
+            state.phase = SessionPhase::Inserting;
+            true
+        }
+    };
+    if !proceed_to_insert {
+        log::info!(
+            "[coord] cancel detected before insert (multimodal) — discarding output (chars={})",
+            polished.chars().count()
+        );
+        restore_prepared_windows_ime_session(inner, current_session_id);
+        finish_cancelled_processing(inner, current_session_id);
+        return Ok(());
+    }
+
+    let focus_target = inner.state.lock().focus_target;
+    let focus_ready_for_paste = restore_focus_target_if_possible(focus_target);
+    let prefs = inner.prefs.get();
+    let allow_non_tsf_insertion_fallback = prefs.allow_non_tsf_insertion_fallback;
+    let windows_insertion_mode = prefs.windows_insertion_mode;
+    let status = insert_final_text(
+        inner,
+        current_session_id,
+        &polished,
+        &prefs,
+        focus_ready_for_paste,
+    )
+    .await;
+    restore_prepared_windows_ime_session(inner, current_session_id);
+    let inserted_chars = polished.chars().count() as u32;
+
+    let total_hits: u64 = match inner.vocab.record_hits(&polished) {
+        Ok(n) => n,
+        Err(e) => {
+            log::error!("[coord] record_hits failed: {e}");
+            0
+        }
+    };
+    if total_hits > 0 {
+        if let Some(app) = inner.app.lock().clone() {
+            let _ = app.emit("vocab:updated", total_hits);
+        }
+    }
+
+    let error_code = dictation_error_code(
+        status,
+        false,
+        focus_ready_for_paste,
+        allow_non_tsf_insertion_fallback,
+        windows_insertion_mode,
+    )
+    .map(str::to_string);
+    let tsf_required_insert_failed = error_code.as_deref() == Some("windowsImeTsfRequired");
+
+    let prefs_snapshot = inner.prefs.get();
+    let session = DictationSession {
+        id: current_session_id.to_string(),
+        created_at: Utc::now().to_rfc3339(),
+        source: crate::types::HistorySource::Voice,
+        raw_transcript: polished.clone(),
+        // 同上：多模态路径没有单独的 ASR 转写可存。
+        asr_transcript: None,
+        final_text: polished.clone(),
+        mode,
+        style_pack_id: Some(pack.id.clone()),
+        translation_active,
+        polish_source: None,
+        app_bundle_id: None,
+        app_name: None,
+        insert_status: status,
+        error_code,
+        duration_ms: Some(duration_ms),
+        dictionary_entry_count: Some(total_hits.min(u32::MAX as u64) as u32),
+        has_audio_recording: Some(inner.audio_archive_active.load(Ordering::Relaxed)),
+        asr_provider: None,
+        asr_model: None,
+        llm_provider: Some(omni_label.provider.clone()),
+        llm_model: Some(omni_label.model.clone()),
+        pipeline_mode: Some("multimodal".to_string()),
+        asr_ms: None,
+        polish_ms: Some(omni_ms),
+    };
+    if let Err(e) = inner.history.append_with_retention(
+        session,
+        prefs_snapshot.history_retention_days,
+        prefs_snapshot.history_max_entries,
+    ) {
+        log::error!("[coord] history append failed: {e}");
+    }
+    if let Err(e) = inner.activity.bump(
+        &chrono::Local::now().format("%Y-%m-%d").to_string(),
+        polished.chars().count() as u64,
+        duration_ms,
+    ) {
+        log::warn!("[coord] activity bump failed: {e}");
+    }
+    if !polished.trim().is_empty() {
+        if let Some(app) = inner.app.lock().clone() {
+            let _ = app.emit("remote:result", polished.clone());
+        }
+    }
+
+    let done_message = if tsf_required_insert_failed {
+        Some("TSF 未上屏，已禁止非 TSF 兜底".to_string())
+    } else {
+        default_done_message(status, false)
+    };
+    let session_failed = tsf_required_insert_failed || status == InsertStatus::Failed;
+    let capsule_state = if session_failed {
+        CapsuleState::Error
+    } else {
+        CapsuleState::Done
+    };
+    emit_capsule(
+        inner,
+        capsule_state,
+        0.0,
+        elapsed,
+        done_message,
+        Some(inserted_chars),
+    );
+
+    {
+        let mut state = inner.state.lock();
+        state.phase = SessionPhase::Idle;
+        state.focus_target = None;
+    }
+    {
+        let now = std::time::Instant::now();
+        *inner.session_cooldown_until.lock() =
+            Some(now + std::time::Duration::from_millis(POST_SESSION_COOLDOWN_MS));
+    }
+    schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
+    Ok(())
+}
+
+/// 多模态听写失败收尾：落失败历史（pipeline_mode=multimodal，前端据此隐藏
+/// 「重新转录」）→ 错误胶囊 → 恢复窗口/IME → 回 Idle + 冷却。永远返回 Err。
+fn fail_dictation_multimodal(
+    inner: &Arc<Inner>,
+    session_id: SessionId,
+    elapsed: u64,
+    user_msg: String,
+    err: String,
+) -> Result<(), String> {
+    let prefs = inner.prefs.get();
+    let front_app = inner.state.lock().front_app.clone();
+    let mut session = build_transcribe_failed_session(
+        session_id,
+        elapsed,
+        0,
+        prefs.default_mode,
+        inner.audio_archive_active.load(Ordering::Relaxed),
+        front_app.as_deref(),
+    );
+    session.pipeline_mode = Some("multimodal".to_string());
+    if let Err(e) = inner.history.append_with_retention(
+        session,
+        prefs.history_retention_days,
+        prefs.history_max_entries,
+    ) {
+        log::error!("[coord] transcribeFailed history append failed: {e}");
+    }
+    emit_capsule(
+        inner,
+        CapsuleState::Error,
+        0.0,
+        elapsed,
+        Some(user_msg),
+        None,
+    );
+    restore_prepared_windows_ime_session(inner, session_id);
+    inner.state.lock().phase = SessionPhase::Idle;
+    {
+        let now = std::time::Instant::now();
+        *inner.session_cooldown_until.lock() =
+            Some(now + std::time::Duration::from_millis(POST_SESSION_COOLDOWN_MS));
+    }
+    schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
+    Err(err)
 }
 
 pub(super) fn dictation_error_code(
@@ -4573,6 +5009,7 @@ mod tests {
             asr_model: None,
             llm_provider: None,
             llm_model: None,
+            pipeline_mode: None,
             asr_ms: None,
             polish_ms: None,
         }

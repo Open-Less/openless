@@ -29,6 +29,7 @@ import {
     deleteLocalAsrModel,
     downloadLocalAsrModel,
     downloadSherpaOnnxAsrModel,
+    fetchLocalAsrHfCard,
     fetchLocalAsrRemoteInfo,
     fetchSherpaOnnxAsrRemoteInfo,
     getFoundryLocalAsrModelDir,
@@ -67,6 +68,7 @@ import {
     type FoundryLocalAsrStatus,
     type FoundryRuntimeSource,
     type FoundryPrepareProgress,
+    type HfModelCard,
     type LocalAsrDownloadProgress,
     type LocalAsrEngineStatus,
     type LocalAsrModelStatus,
@@ -138,6 +140,11 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
     const [remoteSizes, setRemoteSizes] = useState<Record<string, RemoteSize>>(
         {},
     )
+    // HF 模型卡片（下载量/收藏/简介）——弹窗右侧展示；成功结果缓存，
+    // 失败记 { loading:false, error } 允许重试。
+    const [hfCards, setHfCards] = useState<
+        Record<string, HfModelCard | { loading: boolean; error: string | null }>
+    >({})
     const [error, setError] = useState<string | null>(null)
     const [busyModelId, setBusyModelId] = useState<string | null>(null)
     const [storageBusy, setStorageBusy] = useState(false)
@@ -480,6 +487,32 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
         }
     }
 
+    // HF 模型卡片按需抓取（弹窗选中模型时），成功结果缓存不重复请求。
+    const ensureHfCard = async (modelId: string, mirror: string) => {
+        const current = hfCards[modelId]
+        if (current) {
+            if (!("loading" in current)) return // 已有成功缓存
+            if (current.loading) return // 请求进行中
+            // 失败结果允许重试
+        }
+        setHfCards((prev) => ({
+            ...prev,
+            [modelId]: { loading: true, error: null },
+        }))
+        try {
+            const card = await fetchLocalAsrHfCard(modelId, mirror)
+            setHfCards((prev) => ({ ...prev, [modelId]: card }))
+        } catch (e) {
+            setHfCards((prev) => ({
+                ...prev,
+                [modelId]: {
+                    loading: false,
+                    error: e instanceof Error ? e.message : String(e),
+                },
+            }))
+        }
+    }
+
     const ensureSherpaRemoteSize = async (
         modelAlias: string,
         mirror: string,
@@ -535,6 +568,18 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [])
 
+    // 下载弹窗打开期间暂停 3s 轮询：弹窗是静态目录选择，轮询 setState 会
+    // 重排遮罩后的看板内容，透过半透明遮罩看得到内容在跳。弹窗关闭后轮询
+    // 自动重启（依赖 downloadDialogOpen 的 effect 重建 interval）。
+    useEffect(() => {
+        if (downloadDialogOpen) return
+        const pollTimer = window.setInterval(() => {
+            void refresh()
+        }, 3000)
+        return () => window.clearInterval(pollTimer)
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [downloadDialogOpen])
+
     // 引擎状态改由后端主动 emit（加载/释放/keepLoadedSecs 变更），前端零轮询。
     // 挂载时仍拉一次初值，之后 listen `local-asr:engine-changed` 增量更新。
     // 仅 Tauri 环境（浏览器 dev mock 无事件）。
@@ -584,6 +629,17 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [settings?.mirror])
+
+    // 选中模型变化时按需拉 HF 模型卡片（只请求当前选中项，不做全目录预加载
+    // ——打开瞬间并行发多个网络请求 + setState 是 WKWebView 重栅格化闪烁的
+    // 峰值源）。成功结果缓存，切换回已加载的模型零请求；失败条目在此重试。
+    useEffect(() => {
+        if (!downloadDialogOpen || !selectedModelId || !settings) return
+        const entry = allSidebarEntries.find((e) => e.id === selectedModelId)
+        if (!entry?.repo) return
+        void ensureHfCard(selectedModelId, settings.mirror)
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [downloadDialogOpen, selectedModelId, settings?.mirror])
 
     // 订阅下载进度事件 — 仅 Tauri 环境（浏览器 dev mock 无事件）。
     useEffect(() => {
@@ -1462,6 +1518,17 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
     }
 
     const engineAvailable = settings?.engineAvailable ?? false
+    // 真实「下载中」判定：busyModelId 在下载启动后立即清空（Rust 命令同步返回，
+    // 下载跑在后端线程），下载中的可靠标志是 progress 条目的 phase。用于：
+    // 1) 下载弹窗 busy —— 遮罩点击不误关（用户点遮罩下的设置项时弹窗不能
+    //    「像按了叉一样消失」）；2) 「＋ 下载新模型」按钮下载中禁用。
+    const anyDownloadInFlight =
+        Object.values(progress).some(
+            (p) => p.phase === "started" || p.phase === "progress",
+        ) ||
+        Object.values(sherpaDownloadProgress).some(
+            (p) => p.phase === "started" || p.phase === "progress",
+        )
     const foundryPlatformAvailable = isWindowsLikePlatform()
     const foundryAvailable =
         foundryStatus?.available === true ||
@@ -1669,8 +1736,10 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
     )
 
     // ─── 两栏看板的统一模型条目（Qwen3 / sherpa-onnx / foundry 归一化） ───
-    // allSidebarEntries = 全目录（下载弹窗用）；sidebarEntries = 只列已下载 /
-    // 下载中的模型（看板用，未下载的走「＋ 下载新模型」弹窗获取）。
+    // allSidebarEntries = 全目录（下载弹窗用，未下载/下载中/已下载全列出，
+    // 让「下载新模型」弹窗能选到所有可获取的模型）；
+    // sidebarEntries = 只列已下载 / 下载中的模型（看板用，未下载的走
+    // 「＋ 下载新模型」弹窗获取）。
     const allSidebarEntries = useMemo<SidebarModelEntry[]>(() => {
         const entries: SidebarModelEntry[] = []
         // macOS：Qwen3 引擎
@@ -1679,7 +1748,6 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
                 Boolean(progress[m.id]) &&
                 (progress[m.id]?.phase === "started" ||
                     progress[m.id]?.phase === "progress")
-            if (!m.isDownloaded && !isDownloading) continue
             entries.push({
                 id: m.id,
                 name: m.id,
@@ -1707,7 +1775,6 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
                 Boolean(sherpaDownloadProgress[c.alias]) &&
                 (sherpaDownloadProgress[c.alias]?.phase === "started" ||
                     sherpaDownloadProgress[c.alias]?.phase === "progress")
-            if (!c.cached && !isDownloading) continue
             entries.push({
                 id: c.alias,
                 name: c.displayName || c.alias,
@@ -1738,7 +1805,6 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
                 (foundryProgress.phase === "runtime" ||
                     foundryProgress.phase === "model" ||
                     foundryProgress.phase === "load")
-            if (!c.cached && !isDownloading) continue
             entries.push({
                 id: c.alias,
                 name: c.displayName || c.alias,
@@ -1777,6 +1843,21 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
         () => allSidebarEntries.filter((e) => e.isDownloaded || e.isDownloading),
         [allSidebarEntries],
     )
+
+    // 弹窗打开时若看板选中项不在全目录里（零下载用户未选中任何模型），把
+    // 弹窗默认高亮写回 selectedModelId——弹窗高亮与看板 state 一致，后续
+    // 切换 / 开始下载都基于同一值，没有「弹窗内显示 A、逻辑上是 B」的分叉。
+    useEffect(() => {
+        if (!downloadDialogOpen) return
+        const valid = allSidebarEntries.some((e) => e.id === selectedModelId)
+        if (valid) return
+        const fallback =
+            allSidebarEntries.find((e) => !e.isDownloaded) ??
+            allSidebarEntries[0] ??
+            null
+        setSelectedModelId(fallback?.id ?? null)
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [downloadDialogOpen, allSidebarEntries, selectedModelId])
 
     const selectedEntry =
         sidebarEntries.find((e) => e.id === selectedModelId) ?? null
@@ -1827,10 +1908,13 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
     }
 
     // 下载弹框「开始下载」：把弹框当前选中项分派到对应引擎的下载入口。
-    // 弹框列表是全目录（allSidebarEntries），选中项可能不在看板过滤列表里。
+    // 弹框列表是全目录（allSidebarEntries），选中项可能不在看板过滤列表里；
+    // 弹框默认选中第一项时 selectedModelId 可能还是 null，回退到第一个未下载条目。
     const startDownloadFromDialog = () => {
         const dialogEntry =
-            allSidebarEntries.find((e) => e.id === selectedModelId) ?? null
+            allSidebarEntries.find((e) => e.id === selectedModelId) ??
+            allSidebarEntries.find((e) => !e.isDownloaded) ??
+            null
         if (!dialogEntry || dialogEntry.isDownloaded) return
         dispatchEntryAction(dialogEntry, "download")
         setDownloadDialogOpen(false)
@@ -1921,7 +2005,11 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
                             void refresh()
                         }}
                         onOpenDownload={() => setDownloadDialogOpen(true)}
-                        downloadDisabled={busyModelId !== null || sherpaBusy !== null}
+                        downloadDisabled={
+                            busyModelId !== null ||
+                            sherpaBusy !== null ||
+                            anyDownloadInFlight
+                        }
                     />                    <div
                         style={{
                             paddingLeft: 16,
@@ -2307,7 +2395,20 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
                                   : null
                         return remote?.fileCount ?? null
                     }}
-                    busy={busyModelId !== null}
+                    busy={busyModelId !== null || anyDownloadInFlight}
+                    hfCardOf={(id) => {
+                        const state = hfCards[id]
+                        if (!state) return null
+                        if ("loading" in state) {
+                            return state.loading
+                                ? { status: "loading" as const }
+                                : {
+                                      status: "error" as const,
+                                      message: state.error ?? "",
+                                  }
+                        }
+                        return { status: "ok" as const, card: state }
+                    }}
                     onStart={startDownloadFromDialog}
                     onClose={() => setDownloadDialogOpen(false)}
                 />

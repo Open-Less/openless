@@ -87,16 +87,17 @@ input, textarea {
 
 a { color: inherit; text-decoration: none; }
 
+/* 窗口入场 —— 纯 opacity / transform（无 blur）：WKWebView 对带 filter 的
+   常驻合成层（fill-mode: both 保留终帧）会反复重栅格化，整窗出现
+   「模糊→清晰」闪烁；去掉 blur 后即使动画被合成器重放也完全无感。 */
 @keyframes ol-window-enter {
   from {
     opacity: 0;
     transform: translate3d(0, 8px, 0) scale(0.992);
-    filter: blur(8px);
   }
   to {
     opacity: 1;
     transform: translate3d(0, 0, 0) scale(1);
-    filter: blur(0);
   }
 }
 

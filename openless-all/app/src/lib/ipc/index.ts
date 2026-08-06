@@ -27,6 +27,7 @@ export {
     setCredential,
     setActiveAsrProvider,
     setActiveLlmProvider,
+    setActiveOmniProvider,
     readCredential,
     validateProviderCredentials,
     listProviderModels,

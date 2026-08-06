@@ -24,6 +24,11 @@ export type {
 
 export type PolishMode = 'raw' | 'light' | 'structured' | 'formal';
 
+/** 识别管线模式（issue #902）：traditional = ASR + LLM 两段式；
+ *  multimodal = 单个多模态模型一步完成「音频 + 提示词 → 最终文本」。
+ *  两套配置在凭据库中完全隔离，运行时只读当前模式。 */
+export type PipelineMode = 'traditional' | 'multimodal';
+
 export type InsertStatus = 'inserted' | 'pasteSent' | 'copiedFallback' | 'failed';
 
 /** 概览页年度活动热力图的单日计数（date = 本地日期 YYYY-MM-DD）。 */
@@ -66,6 +71,8 @@ export interface DictationSession {
   llmProvider: string | null;
   /** 本次润色用的 LLM 模型 id。Raw 直通时为 null。 */
   llmModel: string | null;
+  /** 本次会话走的识别管线模式（"multimodal" / 缺失 = 传统两段式）。 */
+  pipelineMode?: string | null;
   /** 松键后等待转写结果的实测耗时（毫秒）。流式 ASR 是收尾延迟，批式是完整转写耗时。 */
   asrMs: number | null;
   /** LLM 润色/翻译调用的实测耗时（毫秒）。未调用 LLM 时为 null。 */
@@ -330,6 +337,12 @@ export interface UserPreferences {
   microphoneDeviceName: string;
   activeAsrProvider: string;
   activeLlmProvider: string;
+  /** 识别管线模式（实验性，issue #902）。multimodal 时各语音管线改用 omni 配置。 */
+  pipelineMode: PipelineMode;
+  /** 「多模态识别管线」实验性功能总开关（高级设置）。默认 false。 */
+  multimodalPipelineEnabled: boolean;
+  /** 多模态（Omni）模型当前激活的 provider id，镜像凭据库 omni.active。 */
+  activeOmniProvider: string;
   /** LLM 思考模式开关。默认关闭；OpenAI 普通 chat 模型会跳过不支持的字段。详见 issue #402。 */
   llmThinkingEnabled: boolean;
   /** 是否使用系统代理（issue #869）。默认开启；关闭后所有请求直连，境外服务（GitHub 登录/更新等）可能连不上。 */
@@ -641,8 +654,12 @@ export interface CapsulePayload {
 export interface CredentialsStatus {
   activeAsrProvider: string;
   activeLlmProvider: string;
+  /** 当前识别管线模式，前端据此渲染配置页与概览「已配置」判定。 */
+  pipelineMode: PipelineMode;
   asrConfigured: boolean;
   llmConfigured: boolean;
+  /** 多模态（omni）模型是否已配置。仅 multimodal 模式有意义。 */
+  omniConfigured: boolean;
   /** 兼容旧字段（过渡期保留）。 */
   volcengineConfigured: boolean;
   arkConfigured: boolean;

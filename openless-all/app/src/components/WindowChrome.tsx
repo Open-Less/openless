@@ -40,6 +40,12 @@ export function WindowChrome({
 
   const useSolidSurface = os === 'linux' || os === 'android';
 
+  // 主窗口底色是不透明渐变（--ol-window-bg），backdrop-filter 模糊不到任何
+  // 内容（非透明窗口拿不到窗口背后的像素，见 global.css .ol-frost 注释）——
+  // 之前 blur(36px) 是纯合成开销死代码，macOS WKWebView 在切换模型/高频
+  // 重渲染时合成层故障，整窗「消失一下又恢复」。全平台统一 none。
+  const useBackdropFilter = false;
+
   return (
     <div
       className="ol-winchrome"
@@ -57,11 +63,11 @@ export function WindowChrome({
         flexDirection: 'column',
         border: os === 'win' ? 'none' : os === 'mac' ? 'none' : '0.5px solid var(--ol-window-border)',
         background: useSolidSurface ? 'var(--ol-surface)' : 'var(--ol-window-bg)',
-        backdropFilter: useSolidSurface ? 'none' : 'blur(var(--ol-glass-blur-strong)) saturate(190%)',
-        WebkitBackdropFilter: useSolidSurface ? 'none' : 'blur(var(--ol-glass-blur-strong)) saturate(190%)',
+        backdropFilter: useBackdropFilter ? 'blur(var(--ol-glass-blur-strong)) saturate(190%)' : 'none',
+        WebkitBackdropFilter: useBackdropFilter ? 'blur(var(--ol-glass-blur-strong)) saturate(190%)' : 'none',
         animation: os === 'win' ? undefined : 'ol-window-enter 0.42s var(--ol-motion-spring) both',
-        transition: 'box-shadow 0.28s var(--ol-motion-soft), border-color 0.28s var(--ol-motion-soft), backdrop-filter 0.28s var(--ol-motion-soft)',
-        willChange: 'opacity, transform, filter',
+        transition: 'box-shadow 0.28s var(--ol-motion-soft), border-color 0.28s var(--ol-motion-soft)',
+        willChange: 'opacity, transform',
       } as CSSProperties}
     >
       {os === 'mac' && (

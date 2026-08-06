@@ -50,6 +50,9 @@ export let mockSettings: UserPreferences = {
     microphoneDeviceName: "",
     activeAsrProvider: "foundry-local-whisper",
     activeLlmProvider: "ark",
+    pipelineMode: "traditional",
+    multimodalPipelineEnabled: false,
+    activeOmniProvider: "custom",
     llmThinkingEnabled: false,
     useSystemProxy: true,
     restoreClipboardAfterPaste: true,
@@ -535,8 +538,10 @@ export const mockHotkeyCapability: HotkeyCapability = {
 export const mockCredentialsStatus: CredentialsStatus = {
     activeAsrProvider: "foundry-local-whisper",
     activeLlmProvider: "ark",
+    pipelineMode: "traditional",
     asrConfigured: true,
     llmConfigured: true,
+    omniConfigured: false,
     volcengineConfigured: true,
     arkConfigured: true,
 }

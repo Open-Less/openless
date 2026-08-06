@@ -65,8 +65,10 @@ export function Overview({ onOpenHistory }: OverviewProps) {
   const [creds, setCreds] = useState<CredentialsStatus>({
     activeAsrProvider: 'volcengine',
     activeLlmProvider: 'ark',
+    pipelineMode: 'traditional',
     asrConfigured: false,
     llmConfigured: false,
+    omniConfigured: false,
     volcengineConfigured: false,
     arkConfigured: false,
   });

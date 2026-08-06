@@ -38,6 +38,14 @@ export function setActiveLlmProvider(provider: string): Promise<void> {
     )
 }
 
+export function setActiveOmniProvider(provider: string): Promise<void> {
+    return invokeOrMock(
+        "set_active_omni_provider",
+        { provider },
+        () => undefined,
+    )
+}
+
 export function readCredential(account: string, provider?: string): Promise<string | null> {
     return invokeOrMock<string | null>(
         "read_credential",
@@ -47,7 +55,7 @@ export function readCredential(account: string, provider?: string): Promise<stri
 }
 
 export function validateProviderCredentials(
-    kind: "llm" | "asr",
+    kind: "llm" | "asr" | "omni",
 ): Promise<ProviderCheckResult> {
     return invokeOrMock("validate_provider_credentials", { kind }, () => ({
         ok: true,
@@ -55,7 +63,7 @@ export function validateProviderCredentials(
 }
 
 export function listProviderModels(
-    kind: "llm" | "asr",
+    kind: "llm" | "asr" | "omni",
 ): Promise<ProviderModelsResult> {
     return invokeOrMock("list_provider_models", { kind }, () => ({
         models:

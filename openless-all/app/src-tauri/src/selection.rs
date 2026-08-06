@@ -157,8 +157,11 @@ pub(crate) fn selection_insertion_target_is_captured(
 
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
+        // Linux：无前台窗口校验，靠「选区文本一致性」兜底——capture 时能读到
+        // PRIMARY selection（run_selection_polish 已挡掉无选区），validate 时
+        // 重读 PRIMARY 比较，变了就拒绝粘贴。
         let _ = target;
-        false
+        true
     }
 }
 
@@ -223,7 +226,19 @@ pub(crate) fn validate_selection_insertion_target(
 
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
-        let _ = (target, expected_selection);
+        // Linux：重读 PRIMARY selection 与捕获文本比较——用户改了选区 / 清空
+        // PRIMARY 就拒绝粘贴（fcitx CommitText 直接写焦点输入上下文，无需
+        // 恢复窗口焦点，所以这里不需要窗口级校验）。
+        let current_selection = match linux_selection::read_selected_text() {
+            linux_selection::LinuxSelectionRead::Text(text) => {
+                let trimmed = text.trim();
+                (!trimmed.is_empty()).then(|| truncate_selection(trimmed))
+            }
+            _ => None,
+        };
+        if !selection_text_matches(expected_selection, current_selection.as_deref()) {
+            return SelectionInsertionTargetValidation::SelectionChanged;
+        }
         SelectionInsertionTargetValidation::Valid
     }
 }
@@ -477,7 +492,12 @@ fn selected_text_for_validation() -> Option<String> {
     (!trimmed.is_empty()).then(|| truncate_selection(trimmed))
 }
 
-#[cfg(any(target_os = "windows", target_os = "macos", test))]
+#[cfg(any(
+    target_os = "windows",
+    target_os = "macos",
+    target_os = "linux",
+    test
+))]
 fn selection_text_matches(expected: &str, actual: Option<&str>) -> bool {
     actual.is_some_and(|actual| actual == expected)
 }

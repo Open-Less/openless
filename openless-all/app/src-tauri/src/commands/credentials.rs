@@ -2,6 +2,8 @@ use super::*;
 
 const LLM_EXTRA_HEADERS_ACCOUNT: &str = "ark.extra_headers";
 const LLM_TEMPERATURE_ACCOUNT: &str = "ark.temperature";
+const OMNI_EXTRA_HEADERS_ACCOUNT: &str = "omni.extra_headers";
+const OMNI_TEMPERATURE_ACCOUNT: &str = "omni.temperature";
 
 #[tauri::command]
 pub async fn get_credentials() -> Result<CredentialsStatus, String> {
@@ -9,14 +11,20 @@ pub async fn get_credentials() -> Result<CredentialsStatus, String> {
         let snap = CredentialsVault::snapshot();
         let active_asr_provider = CredentialsVault::get_active_asr();
         let active_llm_provider = CredentialsVault::get_active_llm();
+        let pipeline_mode = PreferencesStore::new()
+            .map(|store| store.get().pipeline_mode)
+            .unwrap_or(crate::types::PipelineMode::Traditional);
         let volcengine_configured = volcengine_configured(&snap);
         let asr_configured = asr_configured_for_provider(&active_asr_provider, &snap);
         let llm_configured = llm_configured_for_provider(&active_llm_provider, &snap);
+        let omni_configured = omni_configured_for_active_provider(&snap);
         CredentialsStatus {
             active_asr_provider,
             active_llm_provider,
+            pipeline_mode,
             asr_configured,
             llm_configured,
+            omni_configured,
             volcengine_configured,
             ark_configured: llm_configured,
         }
@@ -136,6 +144,18 @@ fn configured(field: &Option<String>) -> bool {
         .unwrap_or(false)
 }
 
+/// 多模态（Omni）模型是否已配置：OpenAI 兼容通道要求 API Key + Base URL + Model；
+/// Gemini 通道要求 API Key + Model（Base URL 为空时后端走官方默认）。
+pub(crate) fn omni_configured_for_active_provider(snap: &CredentialsSnapshot) -> bool {
+    let provider = &snap.active_omni_provider;
+    let has_api_key = configured(&snap.omni_api_key);
+    let has_model = configured(&snap.omni_model);
+    if provider == "gemini" {
+        return has_api_key && has_model;
+    }
+    has_api_key && configured(&snap.omni_endpoint) && has_model
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg(not(mobile))]
 pub(crate) struct LocalAsrReleasePlan {
@@ -189,7 +209,9 @@ pub async fn set_credential(
     ensure_main_window(&window)?;
     let extra_headers = account == LLM_EXTRA_HEADERS_ACCOUNT;
     let temperature = account == LLM_TEMPERATURE_ACCOUNT;
-    let parsed = if extra_headers || temperature {
+    let omni_extra_headers = account == OMNI_EXTRA_HEADERS_ACCOUNT;
+    let omni_temperature = account == OMNI_TEMPERATURE_ACCOUNT;
+    let parsed = if extra_headers || temperature || omni_extra_headers || omni_temperature {
         None
     } else {
         Some(parse_account(&account)?)
@@ -200,7 +222,14 @@ pub async fn set_credential(
                 .map_err(|e| e.to_string());
         }
         if temperature {
-            return CredentialsVault::set_active_llm_temperature(&value)
+            return CredentialsVault::set_active_llm_temperature(&value).map_err(|e| e.to_string());
+        }
+        if omni_extra_headers {
+            return CredentialsVault::set_active_omni_extra_headers_json(&value)
+                .map_err(|e| e.to_string());
+        }
+        if omni_temperature {
+            return CredentialsVault::set_active_omni_temperature(&value)
                 .map_err(|e| e.to_string());
         }
         let acc = parsed.expect("non-extra credential account must be parsed");
@@ -304,6 +333,11 @@ pub fn set_active_llm_provider(provider: String) -> Result<(), String> {
     CredentialsVault::set_active_llm_provider(&provider).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+pub fn set_active_omni_provider(provider: String) -> Result<(), String> {
+    CredentialsVault::set_active_omni_provider(&provider).map_err(|e| e.to_string())
+}
+
 /// 读出某个账号的实际值（用于设置页预填表单）。
 /// 凭据来自系统凭据库；只允许主设置窗口读取 raw secret，避免胶囊 / QA 等辅助窗口默认暴露。
 #[tauri::command]
@@ -315,7 +349,9 @@ pub async fn read_credential(
     ensure_main_window(&window)?;
     let extra_headers = account == LLM_EXTRA_HEADERS_ACCOUNT;
     let temperature = account == LLM_TEMPERATURE_ACCOUNT;
-    let parsed = if extra_headers || temperature {
+    let omni_extra_headers = account == OMNI_EXTRA_HEADERS_ACCOUNT;
+    let omni_temperature = account == OMNI_TEMPERATURE_ACCOUNT;
+    let parsed = if extra_headers || temperature || omni_extra_headers || omni_temperature {
         None
     } else {
         Some(parse_account(&account)?)
@@ -327,6 +363,13 @@ pub async fn read_credential(
         }
         if temperature {
             return Ok(CredentialsVault::get_active_llm_temperature_string());
+        }
+        if omni_extra_headers {
+            return CredentialsVault::get_active_omni_extra_headers_json()
+                .map_err(|e| e.to_string());
+        }
+        if omni_temperature {
+            return Ok(CredentialsVault::get_active_omni_temperature_string());
         }
         let acc = parsed.expect("non-extra credential account must be parsed");
         if let Some(provider) = provider {
@@ -364,6 +407,9 @@ fn parse_account(s: &str) -> Result<CredentialAccount, String> {
         "asr.advanced_config" => Ok(CredentialAccount::AsrAdvancedConfig),
         "xfyun.app_id" => Ok(CredentialAccount::XfyunAppId),
         "xfyun.api_key" => Ok(CredentialAccount::XfyunApiKey),
+        "omni.api_key" => Ok(CredentialAccount::OmniApiKey),
+        "omni.endpoint" => Ok(CredentialAccount::OmniEndpoint),
+        "omni.model" => Ok(CredentialAccount::OmniModel),
         _ => Err(format!("unknown account: {s}")),
     }
 }

@@ -30,6 +30,29 @@ pub enum PolishMode {
     Formal,
 }
 
+/// 识别管线模式（issue #902）：`traditional` = 两段式 ASR + LLM 润色；
+/// `multimodal` = 单个多模态模型一步完成「音频 + 提示词 → 最终文本」。
+/// 两套配置在凭据库中完全隔离，运行时只读当前模式，切换不删除另一套配置。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum PipelineMode {
+    #[default]
+    Traditional,
+    Multimodal,
+}
+
+fn default_pipeline_mode() -> PipelineMode {
+    PipelineMode::Traditional
+}
+
+fn default_multimodal_pipeline_enabled() -> bool {
+    false
+}
+
+fn default_active_omni_provider() -> String {
+    "custom".into()
+}
+
 /// 历史记录的产生来源。旧版 `history.json` 未写入该字段时，按既有听写记录处理。
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
@@ -269,6 +292,11 @@ pub struct DictationSession {
     /// 本次润色用的 LLM 模型 id。Raw 直通时 None。
     #[serde(default)]
     pub llm_model: Option<String>,
+    /// 本次会话走的识别管线模式（"multimodal" / 缺失 = 传统两段式）。
+    /// 多模态会话 `asr_provider/asr_model` 为空，`llm_provider/llm_model`
+    /// 记实际调用的多模态模型，`polish_ms` 记该调用的耗时。
+    #[serde(default)]
+    pub pipeline_mode: Option<String>,
     /// 松键后「等待转写结果」的实测耗时（毫秒）。流式 ASR 大部分识别在录音期间已完成，
     /// 这里量的是用户感知的收尾延迟；批式 ASR 则是完整转写耗时。
     #[serde(default)]
@@ -840,6 +868,17 @@ pub struct UserPreferences {
     pub microphone_device_name: String,
     pub active_asr_provider: String, // "volcengine" | "apple-speech" | ...
     pub active_llm_provider: String, // "ark" | "openai" | ...
+    /// 识别管线模式（实验性，issue #902）。`multimodal` 时各语音管线改用
+    /// 单独隔离的多模态模型配置（`omni.*` 凭据命名空间），不再读 ASR/LLM 两套。
+    #[serde(default = "default_pipeline_mode")]
+    pub pipeline_mode: PipelineMode,
+    /// 「多模态识别管线」实验性功能总开关（高级设置）。关闭时一切行为与旧版一致。
+    #[serde(default = "default_multimodal_pipeline_enabled")]
+    pub multimodal_pipeline_enabled: bool,
+    /// 多模态（Omni）模型当前激活的 provider id（镜像凭据库 `omni.active`，
+    /// 供设置页初始化下拉；运行时权威仍在 CredentialsVault）。
+    #[serde(default = "default_active_omni_provider")]
+    pub active_omni_provider: String,
     /// LLM 思考模式开关。默认 false 以保持既有「尽量关闭思考」行为；
     /// Gemini 走原生 thinkingConfig，OpenAI-compatible 路径仅按 provider/channel
     /// 下发官方渠道级字段；OpenAI 官方渠道会跳过普通 chat 模型不支持的字段。详见 issue #402。
@@ -879,10 +918,7 @@ pub struct UserPreferences {
     pub windows_sendinput_insertion_only: bool,
     /// Windows：SendInput 模式下是否在系统键盘列表（Win+Space）中显示 OpenLess TSF 输入法。
     /// 默认 true 保持现有行为；关闭后用户级禁用语言配置文件，无需管理员权限。
-    #[serde(
-        default = "default_true",
-        rename = "windowsShowOpenlessInKeyboardList"
-    )]
+    #[serde(default = "default_true", rename = "windowsShowOpenlessInKeyboardList")]
     pub windows_show_openless_in_keyboard_list: bool,
     /// 用户的工作语言（多选，原生名）。会作为前提注入 LLM polish/translate 的 system prompt 头部，
     /// 让模型知道该用户在哪些语言间工作。详见 issue #4。
@@ -1217,6 +1253,12 @@ struct UserPreferencesWire {
     microphone_device_name: String,
     active_asr_provider: String,
     active_llm_provider: String,
+    #[serde(default = "default_pipeline_mode")]
+    pipeline_mode: PipelineMode,
+    #[serde(default = "default_multimodal_pipeline_enabled")]
+    multimodal_pipeline_enabled: bool,
+    #[serde(default = "default_active_omni_provider")]
+    active_omni_provider: String,
     #[serde(default)]
     llm_thinking_enabled: bool,
     #[serde(default = "default_true")]
@@ -1387,6 +1429,9 @@ impl Default for UserPreferencesWire {
             microphone_device_name: prefs.microphone_device_name,
             active_asr_provider: prefs.active_asr_provider,
             active_llm_provider: prefs.active_llm_provider,
+            pipeline_mode: prefs.pipeline_mode,
+            multimodal_pipeline_enabled: prefs.multimodal_pipeline_enabled,
+            active_omni_provider: prefs.active_omni_provider,
             llm_thinking_enabled: prefs.llm_thinking_enabled,
             use_system_proxy: prefs.use_system_proxy,
             restore_clipboard_after_paste: prefs.restore_clipboard_after_paste,
@@ -1484,9 +1529,8 @@ impl<'de> Deserialize<'de> for UserPreferences {
             //   设置保存都会被热键冲突校验整体拒绝，改动全部丢失（#904）。
             let legacy_default_user = cfg!(target_os = "windows")
                 && is_right_control_modifier_shortcut(&dictation_hotkey);
-            let default_taken_by_dictation = selection_polish_hotkey
-                .as_ref()
-                .is_some_and(|binding| {
+            let default_taken_by_dictation =
+                selection_polish_hotkey.as_ref().is_some_and(|binding| {
                     crate::shortcut_binding::bindings_overlap(binding, &dictation_hotkey)
                 });
             if legacy_default_user || default_taken_by_dictation {
@@ -1523,6 +1567,9 @@ impl<'de> Deserialize<'de> for UserPreferences {
             microphone_device_name: wire.microphone_device_name,
             active_asr_provider: wire.active_asr_provider,
             active_llm_provider: wire.active_llm_provider,
+            pipeline_mode: wire.pipeline_mode,
+            multimodal_pipeline_enabled: wire.multimodal_pipeline_enabled,
+            active_omni_provider: wire.active_omni_provider,
             llm_thinking_enabled: wire.llm_thinking_enabled,
             use_system_proxy: wire.use_system_proxy,
             restore_clipboard_after_paste: wire.restore_clipboard_after_paste,
@@ -2347,6 +2394,9 @@ impl Default for UserPreferences {
             microphone_device_name: String::new(),
             active_asr_provider: default_active_asr_provider(),
             active_llm_provider: "ark".into(),
+            pipeline_mode: PipelineMode::Traditional,
+            multimodal_pipeline_enabled: false,
+            active_omni_provider: "custom".into(),
             llm_thinking_enabled: false,
             use_system_proxy: true,
             restore_clipboard_after_paste: true,
@@ -3109,8 +3159,13 @@ pub struct CapsulePayload {
 pub struct CredentialsStatus {
     pub active_asr_provider: String,
     pub active_llm_provider: String,
+    /// 当前识别管线模式（"traditional" | "multimodal"），前端据此决定
+    /// 配置页渲染哪套卡片、概览页按哪套判定「已配置」。
+    pub pipeline_mode: PipelineMode,
     pub asr_configured: bool,
     pub llm_configured: bool,
+    /// 多模态（omni）模型是否已配置。仅 `pipeline_mode == multimodal` 时有意义。
+    pub omni_configured: bool,
     // 兼容旧前端字段（逐步迁移中）
     pub volcengine_configured: bool,
     pub ark_configured: bool,
@@ -3395,7 +3450,8 @@ mod tests {
 
     #[cfg(target_os = "windows")]
     #[test]
-    fn new_preferences_keep_the_existing_dictation_default_and_use_right_alt_for_selection_polish() {
+    fn new_preferences_keep_the_existing_dictation_default_and_use_right_alt_for_selection_polish()
+    {
         let prefs = UserPreferences::default();
         assert_eq!(prefs.dictation_hotkey.primary, "RightControl");
         assert_eq!(
@@ -3423,7 +3479,10 @@ mod tests {
         let prefs: UserPreferences =
             serde_json::from_str(r#"{"windowsSendInputInsertionOnly": true}"#).unwrap();
         assert!(prefs.windows_sendinput_insertion_only);
-        assert_eq!(prefs.windows_insertion_mode, WindowsInsertionMode::SendInput);
+        assert_eq!(
+            prefs.windows_insertion_mode,
+            WindowsInsertionMode::SendInput
+        );
     }
 
     #[test]
@@ -3431,7 +3490,10 @@ mod tests {
         let prefs: UserPreferences =
             serde_json::from_str(r#"{"windowsSendinputInsertionOnly": true}"#).unwrap();
         assert!(prefs.windows_sendinput_insertion_only);
-        assert_eq!(prefs.windows_insertion_mode, WindowsInsertionMode::SendInput);
+        assert_eq!(
+            prefs.windows_insertion_mode,
+            WindowsInsertionMode::SendInput
+        );
     }
 
     #[test]
@@ -3497,7 +3559,10 @@ mod tests {
         assert!(json.contains(r#""windowsInsertionMode":"sendInput""#));
         let restored: UserPreferences = serde_json::from_str(&json).unwrap();
         assert!(restored.windows_sendinput_insertion_only);
-        assert_eq!(restored.windows_insertion_mode, WindowsInsertionMode::SendInput);
+        assert_eq!(
+            restored.windows_insertion_mode,
+            WindowsInsertionMode::SendInput
+        );
     }
 
     #[test]
@@ -3945,6 +4010,7 @@ mod tests {
             asr_model: Some("fun-asr-realtime".into()),
             llm_provider: Some("ark".into()),
             llm_model: Some("deepseek-v3-2".into()),
+            pipeline_mode: None,
             asr_ms: Some(230),
             polish_ms: Some(1450),
         };

@@ -6,6 +6,7 @@
 //! References parent items via `use super::*;`; `pub(super)` so the parent and
 //! sibling submodules (e.g. `qa`) reach them through `use qa_session::*;`.
 
+use super::resources::*;
 use super::*;
 
 fn compose_qa_user_content(selection_text: &str, question: &str) -> String {
@@ -206,6 +207,7 @@ pub(super) async fn finalize_dictation_as_qa_question(inner: &Arc<Inner>) -> Res
         raw.text.trim().to_string(),
         raw.duration_ms,
         session_id,
+        None,
     )
     .await
 }
@@ -268,7 +270,7 @@ pub(super) async fn submit_qa_text_question(
         }
     }
 
-    answer_qa_question_text(inner, question, 0, session_id).await
+    answer_qa_question_text(inner, question, 0, session_id, None).await
 }
 
 pub(super) async fn take_current_dictation_transcript_for_qa(
@@ -291,6 +293,26 @@ pub(super) async fn take_current_dictation_transcript_for_qa(
     if let Some(rec) = take_recorder_for_session(inner, current_session_id) {
         rec.stop();
         release_recording_mute(inner, "dictation");
+    }
+
+    // 多模态（Omni）模式：dictation 会话没有 ASR，录音 PCM 直接交给 QA 一步回答。
+    if pipeline_multimodal_enabled(&inner.prefs.get()) {
+        let Some(pcm_consumer) = take_omni_pcm_for_session(inner, current_session_id) else {
+            restore_prepared_windows_ime_session(inner, current_session_id);
+            set_phase_idle_if_session_matches(inner, current_session_id);
+            return Ok(None);
+        };
+        let duration_ms = pcm_consumer.duration_ms();
+        let wav = pcm_bytes_to_wav(&pcm_consumer.pcm());
+        restore_prepared_windows_ime_session(inner, current_session_id);
+        {
+            let mut state = inner.state.lock();
+            state.phase = SessionPhase::Idle;
+            state.focus_target = None;
+        }
+        answer_qa_question_text(inner, String::new(), duration_ms, qa_session_id, Some(wav))
+            .await?;
+        return Ok(None);
     }
 
     let Some(asr) = take_asr_for_session(inner, current_session_id) else {
@@ -605,6 +627,7 @@ pub(super) async fn answer_qa_question_text(
     question: String,
     duration_ms: u64,
     session_id: SessionId,
+    audio_wav: Option<Vec<u8>>,
 ) -> Result<(), String> {
     {
         let state = inner.qa_state.lock();
@@ -613,20 +636,27 @@ pub(super) async fn answer_qa_question_text(
             return Ok(());
         }
     }
-    if question.trim().is_empty() {
+    if question.trim().is_empty() && audio_wav.is_none() {
         if qa_turn_can_continue(&inner.qa_state.lock(), session_id) {
             finish_qa_idle_silently_if_current(inner, session_id);
         }
         return Ok(());
     }
 
+    // 多模态（Omni）模式：问题本体在音频里，文本槽位用占位符，便于模型理解
+    // 「这是语音提问」并让 history 的 raw_transcript 不为空。
+    let question_for_message = if audio_wav.is_some() {
+        "（语音问题）".to_string()
+    } else {
+        question.clone()
+    };
     {
         let mut state = inner.qa_state.lock();
         if !qa_turn_can_continue(&state, session_id) {
             log::info!("[coord] QA turn invalidated before answer dispatch");
             return Ok(());
         }
-        let user_message = qa_user_message_from_state(&state, &question);
+        let user_message = qa_user_message_from_state(&state, &question_for_message);
         state.messages.push(user_message);
     }
 
@@ -702,6 +732,8 @@ pub(super) async fn answer_qa_question_text(
         output_language_preference,
         llm_thinking_enabled,
         front_app.as_deref(),
+        audio_wav,
+        pipeline_multimodal_enabled(&inner.prefs.get()),
         on_delta,
         should_cancel,
     )
@@ -775,6 +807,7 @@ pub(super) async fn answer_qa_question_text(
             asr_model: None,
             llm_provider: None,
             llm_model: None,
+            pipeline_mode: None,
             asr_ms: None,
             polish_ms: None,
         };
@@ -846,12 +879,40 @@ pub(super) async fn begin_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
 
     // 2. QA 与 dictation 使用同一个 active ASR 入口。不要回退火山，否则用户配置
     // 百炼 / Whisper / 本地 ASR 后，浮窗仍会偷偷走另一套凭据。
-    let active_asr = CredentialsVault::get_active_asr();
-    if let Err(message) = ensure_asr_credentials() {
-        log::warn!("[coord] QA: active ASR credentials missing: {message}");
-        finish_qa_with_error_if_current(inner, session_id, format!("缺少 ASR 凭据：{message}"));
-        return Err(message);
-    }
+    // 多模态（Omni）模式：不构建 ASR，录音 PCM 进缓冲器，松键后一步出答案。
+    let multimodal = pipeline_multimodal_enabled(&inner.prefs.get());
+    let qa_asr: Option<QaAsrStart> = if multimodal {
+        if let Err(message) = ensure_omni_credentials() {
+            log::warn!("[coord] QA: omni credential gate failed: {message}");
+            finish_qa_with_error_if_current(
+                inner,
+                session_id,
+                format!("缺少多模态模型凭据：{message}"),
+            );
+            return Err(message);
+        }
+        None
+    } else {
+        let active_asr = CredentialsVault::get_active_asr();
+        if let Err(message) = ensure_asr_credentials() {
+            log::warn!("[coord] QA: active ASR credentials missing: {message}");
+            finish_qa_with_error_if_current(inner, session_id, format!("缺少 ASR 凭据：{message}"));
+            return Err(message);
+        }
+        // QA 历史暂不落模型归因字段，构建时快照就地丢弃（dictation / 重转录路径在用）。
+        match build_qa_asr_start(inner, &active_asr).await {
+            Ok((qa_asr, _asr_call_label)) => Some(qa_asr),
+            Err(message) => {
+                log::error!("[coord] QA active ASR init failed: {message}");
+                finish_qa_with_error_if_current(
+                    inner,
+                    session_id,
+                    format!("ASR 初始化失败: {message}"),
+                );
+                return Err(message);
+            }
+        }
+    };
 
     if let Err(message) = ensure_microphone_permission(inner) {
         log::warn!("[coord] QA: microphone permission gate failed: {message}");
@@ -859,28 +920,24 @@ pub(super) async fn begin_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
         return Err(message);
     }
 
-    // QA 历史暂不落模型归因字段，构建时快照就地丢弃（dictation / 重转录路径在用）。
-    let qa_asr = match build_qa_asr_start(inner, &active_asr).await {
-        Ok((qa_asr, _asr_call_label)) => qa_asr,
-        Err(message) => {
-            log::error!("[coord] QA active ASR init failed: {message}");
-            finish_qa_with_error_if_current(
-                inner,
-                session_id,
-                format!("ASR 初始化失败: {message}"),
-            );
-            return Err(message);
-        }
-    };
-    let consumer = {
+    let consumer: Arc<dyn crate::recorder::AudioConsumer> = {
         let state = inner.qa_state.lock();
         if !qa_recording_can_continue(&state, session_id) {
             log::info!("[coord] QA recording invalidated during ASR initialization");
             return Ok(());
         }
-        let consumer = qa_asr.recorder_consumer();
-        store_qa_asr_for_session(inner, session_id, qa_asr.active_asr());
-        consumer
+        match &qa_asr {
+            Some(start) => {
+                let consumer = start.recorder_consumer();
+                store_qa_asr_for_session(inner, session_id, start.active_asr());
+                consumer
+            }
+            None => {
+                let consumer = PcmBufferConsumer::new();
+                store_qa_omni_pcm_for_session(inner, session_id, Arc::clone(&consumer));
+                consumer
+            }
+        }
     };
 
     // QA recorder 不需要 RMS 节流到胶囊；前端 QA 浮窗有自己的电平视图，
@@ -965,18 +1022,20 @@ pub(super) async fn begin_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
         }
     }
 
-    if let Err(e) = qa_asr.open_streaming_session().await {
-        if !qa_recording_can_continue(&inner.qa_state.lock(), session_id) {
-            log::info!("[coord] discarded ASR error from invalidated QA session");
+    if let Some(start) = &qa_asr {
+        if let Err(e) = start.open_streaming_session().await {
+            if !qa_recording_can_continue(&inner.qa_state.lock(), session_id) {
+                log::info!("[coord] discarded ASR error from invalidated QA session");
+                stop_qa_recorder_for_session(inner, session_id);
+                cancel_qa_asr_for_session(inner, session_id);
+                return Ok(());
+            }
+            log::error!("[coord] QA: open ASR session failed: {e}");
             stop_qa_recorder_for_session(inner, session_id);
             cancel_qa_asr_for_session(inner, session_id);
-            return Ok(());
+            finish_qa_with_error_if_current(inner, session_id, format!("ASR 连接失败: {e}"));
+            return Err(e);
         }
-        log::error!("[coord] QA: open ASR session failed: {e}");
-        stop_qa_recorder_for_session(inner, session_id);
-        cancel_qa_asr_for_session(inner, session_id);
-        finish_qa_with_error_if_current(inner, session_id, format!("ASR 连接失败: {e}"));
-        return Err(e);
     }
 
     // cancel race：在 await 期间用户可能 dismiss 了浮窗。
@@ -1020,6 +1079,18 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
     emit_capsule(inner, CapsuleState::Transcribing, 0.0, 0, None, None);
 
     stop_qa_recorder_for_session(inner, session_id);
+
+    // 多模态（Omni）模式：不走 ASR 转写，录音 PCM 直接编码 WAV，一步出答案。
+    if pipeline_multimodal_enabled(&inner.prefs.get()) {
+        let Some(pcm_consumer) = take_qa_omni_pcm_for_session(inner, session_id) else {
+            reset_qa_processing_if_current(&mut inner.qa_state.lock(), session_id);
+            return Ok(());
+        };
+        let duration_ms = pcm_consumer.duration_ms();
+        let wav = pcm_bytes_to_wav(&pcm_consumer.pcm());
+        return answer_qa_question_text(inner, String::new(), duration_ms, session_id, Some(wav))
+            .await;
+    }
 
     let asr = match take_qa_asr_for_session(inner, session_id) {
         Some(a) => a,
@@ -1398,7 +1469,7 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
         return Ok(());
     }
 
-    answer_qa_question_text(inner, question, raw.duration_ms, session_id).await
+    answer_qa_question_text(inner, question, raw.duration_ms, session_id, None).await
 }
 
 /// 静默收尾：发 idle 事件给前端，phase 复位。**不关浮窗**（v2：浮窗只在用户
@@ -1475,6 +1546,8 @@ pub(super) async fn answer_chat_dispatch<F, C>(
     output_language_preference: OutputLanguagePreference,
     llm_thinking_enabled: bool,
     front_app: Option<&str>,
+    audio_wav: Option<Vec<u8>>,
+    multimodal: bool,
     on_delta: F,
     should_cancel: C,
 ) -> anyhow::Result<String>
@@ -1482,6 +1555,50 @@ where
     F: Fn(&str) + Send + Sync,
     C: Fn() -> bool + Send + Sync,
 {
+    // 多模态（Omni）模式：音频 + 选区/历史上下文一次调用出答案。
+    // OpenAI 兼容通道逐字流式（answer_delta）；Gemini 通道一次性返回。
+    if let Some(wav) = audio_wav {
+        let provider = build_active_omni_provider(llm_thinking_enabled)?;
+        let system_prompt = crate::polish::compose_qa_system_prompt(
+            working_languages,
+            chinese_script_preference,
+            output_language_preference,
+            front_app,
+        );
+        let user_text = messages
+            .iter()
+            .map(|message| format!("{}: {}", message.role, message.content))
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        return Ok(provider
+            .complete_streaming(
+                &system_prompt,
+                &user_text,
+                Some(&wav),
+                on_delta,
+                should_cancel,
+            )
+            .await?);
+    }
+    // 多模态模式下键盘输入的纯文本问题：omni 模型当文本 LLM 用（无音频 part）。
+    if multimodal {
+        let provider = build_active_omni_provider(llm_thinking_enabled)?;
+        let system_prompt = crate::polish::compose_qa_system_prompt(
+            working_languages,
+            chinese_script_preference,
+            output_language_preference,
+            front_app,
+        );
+        let user_text = messages
+            .iter()
+            .map(|message| format!("{}: {}", message.role, message.content))
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        return Ok(provider
+            .complete_streaming(&system_prompt, &user_text, None, on_delta, should_cancel)
+            .await?);
+    }
+
     // 见 polish_text 顶部注释——同样的 Gemini / OpenAI-compatible 路由逻辑，
     // QA 流式回答走 Gemini 原生 :streamGenerateContent?alt=sse。
     let active_llm = CredentialsVault::get_active_llm();

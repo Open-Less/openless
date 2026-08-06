@@ -13,8 +13,10 @@ assertEqual(
   areProvidersConfigured({
     activeAsrProvider: 'volcengine',
     activeLlmProvider: 'ark',
+    pipelineMode: 'traditional',
     asrConfigured: true,
     llmConfigured: true,
+    omniConfigured: false,
     volcengineConfigured: true,
     arkConfigured: true,
   }),
@@ -26,8 +28,10 @@ assertEqual(
   areProvidersConfigured({
     activeAsrProvider: 'volcengine',
     activeLlmProvider: 'ark',
+    pipelineMode: 'traditional',
     asrConfigured: false,
     llmConfigured: true,
+    omniConfigured: false,
     volcengineConfigured: false,
     arkConfigured: true,
   }),
@@ -39,8 +43,10 @@ assertEqual(
   areProvidersConfigured({
     activeAsrProvider: 'volcengine',
     activeLlmProvider: 'ark',
+    pipelineMode: 'traditional',
     asrConfigured: true,
     llmConfigured: false,
+    omniConfigured: false,
     volcengineConfigured: true,
     arkConfigured: false,
   }),
@@ -52,8 +58,10 @@ assertEqual(
   areProvidersConfigured({
     activeAsrProvider: 'whisper',
     activeLlmProvider: 'ark',
+    pipelineMode: 'traditional',
     asrConfigured: true,
     llmConfigured: true,
+    omniConfigured: false,
     volcengineConfigured: false,
     arkConfigured: true,
   }),
@@ -66,8 +74,10 @@ assertEqual(
     {
       activeAsrProvider: 'whisper',
       activeLlmProvider: 'ark',
+      pipelineMode: 'traditional',
       asrConfigured: false,
       llmConfigured: false,
+      omniConfigured: false,
       volcengineConfigured: false,
       arkConfigured: false,
     },
@@ -82,8 +92,10 @@ assertEqual(
     {
       activeAsrProvider: 'whisper',
       activeLlmProvider: 'ark',
+      pipelineMode: 'traditional',
       asrConfigured: false,
       llmConfigured: false,
+      omniConfigured: false,
       volcengineConfigured: false,
       arkConfigured: false,
     },
@@ -98,8 +110,10 @@ assertEqual(
     {
       activeAsrProvider: 'whisper',
       activeLlmProvider: 'ark',
+      pipelineMode: 'traditional',
       asrConfigured: true,
       llmConfigured: true,
+      omniConfigured: false,
       volcengineConfigured: false,
       arkConfigured: true,
     },
@@ -107,4 +121,34 @@ assertEqual(
   ),
   false,
   'do not show prompt when providers are already configured',
+);
+
+assertEqual(
+  areProvidersConfigured({
+    activeAsrProvider: 'volcengine',
+    activeLlmProvider: 'ark',
+    pipelineMode: 'multimodal',
+    asrConfigured: false,
+    llmConfigured: false,
+    omniConfigured: true,
+    volcengineConfigured: false,
+    arkConfigured: false,
+  }),
+  true,
+  'multimodal mode only requires the omni model',
+);
+
+assertEqual(
+  areProvidersConfigured({
+    activeAsrProvider: 'volcengine',
+    activeLlmProvider: 'ark',
+    pipelineMode: 'multimodal',
+    asrConfigured: true,
+    llmConfigured: true,
+    omniConfigured: false,
+    volcengineConfigured: true,
+    arkConfigured: true,
+  }),
+  false,
+  'multimodal mode ignores traditional ASR/LLM readiness',
 );

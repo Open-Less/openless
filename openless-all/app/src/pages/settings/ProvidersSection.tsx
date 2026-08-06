@@ -10,6 +10,7 @@ import {
   readCredential,
   setActiveAsrProvider,
   setActiveLlmProvider,
+  setActiveOmniProvider,
   setCredential,
   validateProviderCredentials,
 } from '../../lib/ipc';
@@ -18,7 +19,15 @@ import { useMobileLayout } from '../../lib/useMobileLayout';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
 import { SelectLite, type SelectOption } from '../../components/ui/SelectLite';
 import { Card } from '../_atoms';
-import { SettingRow, SectionTitle, Toggle, inputStyle, ASR_PRESETS, type AsrPresetId } from './shared';
+import {
+  SettingRow,
+  SectionTitle,
+  Toggle,
+  inputStyle,
+  segmentedTrackStyle,
+  ASR_PRESETS,
+  type AsrPresetId,
+} from './shared';
 import {
   parseAdvancedAsrConfig,
   serializeAdvancedAsrConfig,
@@ -186,6 +195,41 @@ export const LLM_PRESETS = [
 
 type LlmPresetId = typeof LLM_PRESETS[number]['id'];
 
+// 多模态（Omni）模型预设（issue #902）：一个模型同时接收「提示词 + 音频」一步输出
+// 最终文本。凭据走独立 `omni.*` 命名空间，与上方 LLM/ASR 两套配置完全隔离。
+// - openai       : OpenAI 官方（gpt-4o-audio-preview 等，input_audio part）
+// - gemini       : Gemini 原生 generateContent（inlineData audio/wav）
+// - dashscope-omni: 阿里云百炼 OpenAI 兼容通道（qwen3-omni-flash 等）
+// - custom       : 任意 OpenAI 兼容多模态网关
+export const OMNI_PRESETS = [
+  {
+    id: 'openai',
+    nameKey: 'omniOpenai',
+    baseUrl: 'https://api.openai.com/v1',
+    modelPlaceholder: 'gpt-4o-audio-preview',
+  },
+  {
+    id: 'gemini',
+    nameKey: 'omniGemini',
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+    modelPlaceholder: 'gemini-2.5-flash',
+  },
+  {
+    id: 'dashscope-omni',
+    nameKey: 'omniDashscope',
+    baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    modelPlaceholder: 'qwen3-omni-flash',
+  },
+  {
+    id: 'custom',
+    nameKey: 'custom',
+    baseUrl: '',
+    modelPlaceholder: '',
+  },
+] as const;
+
+type OmniPresetId = typeof OMNI_PRESETS[number]['id'];
+
 const ASR_DEFAULT_RESOURCE_ID = 'volc.seedasr.sauc.duration';
 
 // ASR_PRESETS 已上移到 settings/shared.tsx 作为单一来源（AsrPresetId 由其派生，
@@ -243,12 +287,16 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
   // 会覆盖后发的 commit。
   const [llmProvider, setLlmProvider] = useState<LlmPresetId>('ark');
   const [asrProvider, setAsrProvider] = useState<AsrPresetId>('volcengine');
+  const [omniProvider, setOmniProvider] = useState<OmniPresetId>('custom');
   const [committedLlmProvider, setCommittedLlmProvider] = useState<LlmPresetId>('ark');
   const [committedAsrProvider, setCommittedAsrProvider] = useState<AsrPresetId>('volcengine');
+  const [committedOmniProvider, setCommittedOmniProvider] = useState<OmniPresetId>('custom');
   const llmSwitchSeqRef = useRef(0);
   const asrSwitchSeqRef = useRef(0);
+  const omniSwitchSeqRef = useRef(0);
   const [llmModelRevision, setLlmModelRevision] = useState(0);
   const [asrModelRevision, setAsrModelRevision] = useState(0);
+  const [omniModelRevision, setOmniModelRevision] = useState(0);
   const os = detectOS();
   const unifiedBailian = committedAsrProvider === 'bailian';
   const [bailianModel, setBailianModel] = useState('');
@@ -371,6 +419,10 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
     const asrId = knownAsr ? knownAsr.id : 'volcengine';
     setAsrProvider(asrId);
     setCommittedAsrProvider(asrId);
+    const knownOmni = OMNI_PRESETS.find(x => x.id === prefs.activeOmniProvider);
+    const omniId = knownOmni ? knownOmni.id : 'custom';
+    setOmniProvider(omniId);
+    setCommittedOmniProvider(omniId);
   }, [prefs, os]);
 
   // issue #219 / #220 P2：
@@ -528,14 +580,69 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
     }
   };
 
+  // 多模态（Omni）模型切换：语义与 LLM 卡完全一致（受控下拉立即反馈 + committed
+  // 控制 CredentialField remount + seq 守卫防 stale 覆盖），只是凭据落到 omni.* 槽。
+  const onOmniProviderChange = async (id: OmniPresetId) => {
+    setOmniProvider(id);
+    const seq = ++omniSwitchSeqRef.current;
+    emitSaved('saving', t('common.saving'));
+    let backendSwitched = false;
+    try {
+      await setActiveOmniProvider(id);
+      backendSwitched = true;
+      if (seq !== omniSwitchSeqRef.current) return;
+      if (prefs) {
+        const next = { ...prefs, activeOmniProvider: id };
+        await updatePrefs(next);
+        if (seq !== omniSwitchSeqRef.current) return;
+      }
+      const preset = OMNI_PRESETS.find(p => p.id === id);
+      // 切到非 custom 预设强制覆盖 endpoint/model 默认值（与 LLM 卡同语义），
+      // 保证「切换」真切到位，不残留旧厂商的槽值。
+      if (preset && preset.id !== 'custom') {
+        if (preset.baseUrl) {
+          await setCredential('omni.endpoint', preset.baseUrl);
+          if (seq !== omniSwitchSeqRef.current) return;
+        }
+        if (preset.modelPlaceholder) {
+          await setCredential('omni.model', preset.modelPlaceholder);
+          if (seq !== omniSwitchSeqRef.current) return;
+        }
+      }
+      setCommittedOmniProvider(id);
+      emitSaved('saved', t('common.saved'));
+    } catch (err) {
+      if (seq === omniSwitchSeqRef.current) {
+        emitSaved('failed', t('common.operationFailed'));
+        if (!backendSwitched) {
+          setOmniProvider(committedOmniProvider);
+        }
+      }
+      console.error('[settings] switch omni provider failed', err);
+    }
+  };
+
+  // 识别管线模式（issue #902）：两套配置并存但停用——切换只改偏好，
+  // 不删除另一套凭据，切回即恢复；运行时只读当前模式。
+  const onPipelineModeChange = (mode: 'traditional' | 'multimodal') => {
+    if (!prefs) return;
+    void updatePrefs(current => ({ ...current, pipelineMode: mode })).catch(error => {
+      console.error('[settings] failed to update pipeline mode', error);
+      emitSaved('failed', t('common.operationFailed'));
+    });
+  };
+
   // preset 决定 placeholder 与 default —— 必须跟着 committed*Provider 走，
   // 否则受控 <select> 立刻切到新厂商，但凭据字段还在显示旧 entry，placeholder
   // 会先于实际数据切换、视觉上对不上。
   const preset = LLM_PRESETS.find(p => p.id === committedLlmProvider) ?? LLM_PRESETS[LLM_PRESETS.length - 1];
   const codexOAuthSelected = committedLlmProvider === 'codex_oauth';
   const asrPreset = visibleAsrPresets.find(p => p.id === committedAsrProvider);
+  const omniPreset = OMNI_PRESETS.find(p => p.id === committedOmniProvider);
   const showLlm = kind === 'all' || kind === 'llm';
   const showAsr = kind === 'all' || kind === 'asr';
+  const multimodalEnabled = prefs?.multimodalPipelineEnabled === true;
+  const multimodalMode = multimodalEnabled && prefs?.pipelineMode === 'multimodal';
   return (
     <>
       {kind === 'all' && (
@@ -543,7 +650,41 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
         {t('settings.providers.credentialStorageNotice')}
       </div>
       )}
-      {showLlm && (
+      {kind === 'all' && multimodalEnabled && (
+        <div style={{ marginBottom: 12 }}>
+          <SettingRow
+            label={t('settings.providers.pipelineModeLabel')}
+            desc={t('settings.providers.pipelineModeHint')}
+          >
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: mobile ? 'wrap' : 'nowrap' }}>
+              <div style={segmentedTrackStyle}>
+                {(['traditional', 'multimodal'] as const).map(mode => (
+                  <button
+                    key={mode}
+                    onClick={() => onPipelineModeChange(mode)}
+                    style={{
+                      padding: '5px 12px', fontSize: 12, fontWeight: 500, border: 0, borderRadius: 6,
+                      fontFamily: 'inherit',
+                      background: prefs?.pipelineMode === mode ? 'var(--ol-segmented-active-bg)' : 'transparent',
+                      color: prefs?.pipelineMode === mode ? 'var(--ol-ink)' : 'var(--ol-ink-3)',
+                      boxShadow: prefs?.pipelineMode === mode ? 'var(--ol-segmented-active-shadow)' : 'none',
+                      cursor: 'default',
+                    }}
+                  >
+                    {mode === 'traditional'
+                      ? t('settings.providers.pipelineModeTraditional')
+                      : t('settings.providers.pipelineModeMultimodal')}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </SettingRow>
+          <div style={{ fontSize: 11, color: 'var(--ol-ink-4)', lineHeight: 1.5, paddingLeft: 2 }}>
+            {t('settings.providers.pipelineIsolationNotice')}
+          </div>
+        </div>
+      )}
+      {showLlm && !multimodalMode && (
       <Card>
         <div style={{ marginBottom: 10 }}>
           <SectionTitle>{t('settings.providers.llmTitle')}</SectionTitle>
@@ -605,7 +746,7 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
       </Card>
       )}
 
-      {showAsr && (
+      {showAsr && !multimodalMode && (
       <Card>
         <div style={{ marginBottom: 10 }}>
           <SectionTitle>{t('settings.providers.asrTitle')}</SectionTitle>
@@ -884,6 +1025,70 @@ export function ProvidersSection({ kind = 'all' }: ProvidersSectionProps = {}) {
         </div>
       </Card>
       )}
+      {showLlm && multimodalMode && (
+      <Card>
+        <div style={{ marginBottom: 10 }}>
+          <SectionTitle>{t('settings.providers.omniTitle')}</SectionTitle>
+        </div>
+        <SettingRow label={t('settings.providers.providerLabel')}>
+          <SelectLite
+            value={omniProvider}
+            onChange={next => onOmniProviderChange(next as OmniPresetId)}
+            options={OMNI_PRESETS.map(p => ({
+              value: p.id,
+              label: t(`settings.providers.presets.${p.nameKey}`),
+            }))}
+            ariaLabel={t('settings.providers.providerLabel')}
+            style={{ ...inputStyle, width: '100%', maxWidth: mobile ? '100%' : 200 }}
+          />
+        </SettingRow>
+        <CredentialField
+          key={`${committedOmniProvider}:api_key`}
+          label={t('settings.providers.apiKeyLabel')}
+          account="omni.api_key"
+          mono
+          mask
+        />
+        <CredentialField
+          key={`${committedOmniProvider}:endpoint`}
+          label={t('settings.providers.baseUrlLabel')}
+          account="omni.endpoint"
+          placeholder={omniPreset?.baseUrl || 'https://your-endpoint/v1'}
+        />
+        {committedOmniProvider === 'custom' && (
+          <>
+            <CredentialField
+              key="omni:temperature"
+              label={t('settings.providers.temperatureLabel')}
+              account="omni.temperature"
+              placeholder={t('settings.providers.temperaturePlaceholder')}
+              mono
+            />
+            <CredentialField
+              key="omni:extra_headers"
+              label={t('settings.providers.extraHeadersLabel')}
+              account="omni.extra_headers"
+              placeholder={t('settings.providers.extraHeadersPlaceholder')}
+              mono
+              mask
+            />
+          </>
+        )}
+        <CredentialField
+          key={`${committedOmniProvider}:model:${omniModelRevision}`}
+          label={t('settings.providers.modelLabel')}
+          account="omni.model"
+          placeholder={omniPreset?.modelPlaceholder || 'model-name'}
+          mono
+        />
+        <ProviderTools
+          key={`omni:${committedOmniProvider}`}
+          kind="omni"
+          modelAccount="omni.model"
+          onModelSelected={() => setOmniModelRevision(v => v + 1)}
+        />
+      </Card>
+      )}
     </>
   );
 }
@@ -1074,7 +1279,7 @@ function BailianProtocolHint({ currentModel }: { currentModel: string }) {
 
 type ProviderToolStatus = 'idle' | 'loading' | 'success' | 'empty' | 'error';
 
-function ProviderTools({ kind, modelAccount, provider, onModelSelected, showFetchModels = true }: { kind: 'llm' | 'asr'; modelAccount: string; provider?: string; onModelSelected: () => void; showFetchModels?: boolean }) {
+function ProviderTools({ kind, modelAccount, provider, onModelSelected, showFetchModels = true }: { kind: 'llm' | 'asr' | 'omni'; modelAccount: string; provider?: string; onModelSelected: () => void; showFetchModels?: boolean }) {
   const { t } = useTranslation();
   const mobile = useMobileLayout();
   const [models, setModels] = useState<string[]>([]);
