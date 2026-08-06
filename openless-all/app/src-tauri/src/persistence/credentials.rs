@@ -593,14 +593,19 @@ fn seed_default_channels(root: &mut CredsRoot) -> bool {
 /// `lookup_account` / `write_account` 仍然读它，因此每次改动排序、开关或删除渠道后
 /// 都必须调用本函数，否则会出现"列表第一张是 A、实际请求打的是 B"。
 ///
-/// 一个渠道都没启用时保持原值不动 —— 让 `lookup_account` 落到 `None`（未配置），
-/// 而不是随机落到某个被关掉的渠道上。
+/// 一个渠道都没启用时清空 active —— 让 `lookup_account` 落到 `None`（未配置），
+/// 而不是保留指向已禁用渠道的旧 id（entry 仍在，运行时照常读得到凭据）。
 fn sync_active_channels(root: &mut CredsRoot) {
-    if let Some(id) = current_channel_id(&root.providers.asr) {
-        root.active.asr = id;
+    match current_channel_id(&root.providers.asr) {
+        Some(id) => root.active.asr = id,
+        // 全部禁用时**清空**而不是保留旧 id：旧 id 对应的 entry 还在（只是 enabled
+        // 为 false），`lookup_account` 会命中它，运行时就会继续用已禁用渠道的凭据，
+        // 与「第一个启用的 = 当前生效」的心智相悖。清空后 lookup 落到 None（未配置）。
+        None => root.active.asr.clear(),
     }
-    if let Some(id) = current_channel_id(&root.providers.llm) {
-        root.active.llm = id;
+    match current_channel_id(&root.providers.llm) {
+        Some(id) => root.active.llm = id,
+        None => root.active.llm.clear(),
     }
 }
 
@@ -2109,13 +2114,12 @@ impl CredentialsVault {
         let id = match kind {
             ChannelKind::Asr => {
                 let id = allocate_channel_id(&root.providers.asr, provider_type);
-                let order = next_order(&root.providers.asr);
                 root.providers.asr.insert(
                     id.clone(),
                     CredsAsrEntry {
                         channel: ChannelMeta {
                             providerType: Some(provider_type.to_string()),
-                            order: Some(order),
+                            order: Some(next_order(&root.providers.asr)),
                             enabled: true,
                             lastTest: None,
                         },
@@ -2123,17 +2127,19 @@ impl CredentialsVault {
                         ..Default::default()
                     },
                 );
+                // 存在禁用项时 `next_order`（启用项 max + 1）可能与其 order 同号，
+                // 列表排序会按 id 字母序把它们混排、破坏「禁用沉底」。压实成 0..n。
+                compact_orders(&mut root.providers.asr);
                 id
             }
             ChannelKind::Llm => {
                 let id = allocate_channel_id(&root.providers.llm, provider_type);
-                let order = next_order(&root.providers.llm);
                 root.providers.llm.insert(
                     id.clone(),
                     CredsLlmEntry {
                         channel: ChannelMeta {
                             providerType: Some(provider_type.to_string()),
-                            order: Some(order),
+                            order: Some(next_order(&root.providers.llm)),
                             enabled: true,
                             lastTest: None,
                         },
@@ -2141,6 +2147,7 @@ impl CredentialsVault {
                         ..Default::default()
                     },
                 );
+                compact_orders(&mut root.providers.llm);
                 id
             }
         };
@@ -2552,7 +2559,7 @@ mod tests {
         lookup_account, lookup_marketplace_github_token, parse_extra_headers_json,
         parse_llm_temperature, reset_credentials_cache_for_tests, write_account,
         write_marketplace_github_token, CredentialAccount, CredsAsrEntry, CredsRoot,
-        MarketplaceGithubToken, KEYRING_CHUNK_MAX_UTF16_UNITS,
+        CredsLlmEntry, MarketplaceGithubToken, KEYRING_CHUNK_MAX_UTF16_UNITS,
     };
     use anyhow::anyhow;
     use parking_lot::Mutex;
@@ -3078,15 +3085,39 @@ mod tests {
     }
 
     #[test]
-    fn every_channel_disabled_leaves_active_untouched_so_lookup_reports_unconfigured() {
+    fn every_channel_disabled_clears_active_so_lookup_reports_unconfigured() {
         let mut root = v1_root_with_two_asr_providers();
         super::migrate_channels(&mut root);
         for entry in root.providers.asr.values_mut() {
             entry.channel.enabled = false;
         }
         super::sync_active_channels(&mut root);
-        // 不去随机挑一个被关掉的渠道顶上。
-        assert_eq!(root.active.asr, "volcengine");
+        // 清空而不是保留旧 id：entry 还在，保留会让 lookup 继续命中已禁用渠道。
+        assert_eq!(root.active.asr, "");
+        assert_eq!(
+            lookup_account(&root, CredentialAccount::VolcengineAppKey),
+            None
+        );
+    }
+
+    #[test]
+    fn every_llm_channel_disabled_clears_active_so_lookup_reports_unconfigured() {
+        let mut root = CredsRoot::default();
+        root.active.llm = "ark".into();
+        root.providers.llm.insert(
+            "ark".into(),
+            CredsLlmEntry {
+                apiKey: Some("sk-ark".into()),
+                ..Default::default()
+            },
+        );
+        super::migrate_channels(&mut root);
+        for entry in root.providers.llm.values_mut() {
+            entry.channel.enabled = false;
+        }
+        super::sync_active_channels(&mut root);
+        assert_eq!(root.active.llm, "");
+        assert_eq!(lookup_account(&root, CredentialAccount::ArkApiKey), None);
     }
 
     /// `active` 指向一个**不存在的 entry** 是真实会发生的：前端 prefs 里的
@@ -3349,6 +3380,48 @@ mod tests {
         // 禁用项的 order 更大，但新卡片要排在启用组末尾，而不是整个列表末尾。
         let map = channels(&[("a", 0, true), ("b", 1, true), ("c", 2, false)]);
         assert_eq!(super::next_order(&map), 2);
+    }
+
+    #[test]
+    fn create_channel_with_disabled_present_keeps_disabled_at_the_bottom() {
+        // 与 `create_channel` 相同的路径：allocate → insert（order = next_order）
+        // → compact_orders。修复前新卡与禁用项 `c` 同 order，列表会按 id 字母序
+        // 混排；压实后新启用卡在启用组末尾、禁用项仍沉底。
+        let mut root = CredsRoot::default();
+        root.providers.asr = channels(&[("a", 0, true), ("b", 1, true), ("c", 2, false)]);
+        let id = super::allocate_channel_id(&root.providers.asr, "deepseek");
+        root.providers.asr.insert(
+            id.clone(),
+            CredsAsrEntry {
+                channel: super::ChannelMeta {
+                    providerType: Some("deepseek".into()),
+                    order: Some(super::next_order(&root.providers.asr)),
+                    enabled: true,
+                    lastTest: None,
+                },
+                ..Default::default()
+            },
+        );
+        super::compact_orders(&mut root.providers.asr);
+
+        assert_eq!(
+            ordered(&root.providers.asr),
+            vec![
+                ("a".into(), true),
+                ("b".into(), true),
+                ("deepseek".into(), true),
+                ("c".into(), false),
+            ]
+        );
+        // order 连续无重复，杜绝与禁用项同号。
+        let mut orders: Vec<u32> = root
+            .providers
+            .asr
+            .values()
+            .map(|entry| entry.channel.order.unwrap())
+            .collect();
+        orders.sort_unstable();
+        assert_eq!(orders, vec![0, 1, 2, 3]);
     }
 
     #[test]

@@ -1,6 +1,6 @@
 # 供应商渠道卡片化 实施计划
 
-> 状态：设计讨论中（尚未动手）
+> 状态：P0 已完成（2026-08-07，PR #918）
 > 日期：2026-08-04
 > 范围：设置 → AI 提供商，LLM 润色 + ASR 语音转写
 > 参考：[Calcium-Ion/new-api](https://github.com/Calcium-Ion/new-api) 的 Channel 模型与重试策略
@@ -170,7 +170,7 @@ struct ChannelRuntime {
 | 期 | 内容 | 可否独立发布 |
 | --- | --- | --- |
 | **P0** | 渠道数据模型 + 迁移 + 卡片 UI + 拖拽排序 + 测试连通。**不做重试** | ✅ 独立故事：「我有两把 key，想随手切」 |
-| | ↑ 已完成。**此时多渠道的价值是"存档 + 手动切换"，不是自动容错**：排在第二的卡片永远不会被自动用上，要用得手动拖到第一位。 | |
+| | ↑ 已完成（PR #918）。**此时多渠道的价值是"存档 + 手动切换"，不是自动容错**：排在第二的卡片永远不会被自动用上，要用得手动拖到第一位。 | |
 | **P1** | 凭据显式化重构：`CredentialsVault::get(...)` → 上层解析 `ResolvedChannel` 显式下传 | ❌ 纯重构，无用户可见变化，P2 前提 |
 | **P2** | 重试 + 故障转移 + 429 冷却 + 超时下调 + 全挂兜底 | ✅ |
 
@@ -178,7 +178,12 @@ P1 是本需求最大的单块工作量，比卡片 UI 大得多。P1 + P2 合�
 
 ## 9. 待确认
 
-- [ ] 拖拽排序用什么实现（现有依赖里有没有可用的，还是手写 HTML5 drag）
-- [ ] 卡片列表的移动端（Android）形态
-- [ ] Android 的 `android_credentials.rs` 加密信封是否需要同步改版本号
-- [ ] P0 的验收判据（建议：能建 3 张同供应商不同 key 的卡片、重启后顺序与内容不丢、拖拽后生效的是第一张）
+- [x] 拖拽排序：手写 pointer 事件（已定）。Tauri webview 默认 `dragDropEnabled` 会吞掉
+      HTML5 的 `dragstart`/`drop`，`draggable` 在打包后的 app 里不触发；pointer 方案
+      Windows / Android 行为一致，并配合「拖拽结束吞掉补发 click」避免关掉设置弹窗。
+- [x] 卡片列表的移动端（Android）形态：与桌面共用同一渠道 UI；Android 走
+      `load_credentials` 的同一条迁移路径，无需单独实现。
+- [x] Android 加密信封：未改版本号。v2 载荷新增的 `providerType`/`order`/`enabled`/
+      `lastTest` 均为 `Option` 或带默认值字段，老版本 serde 忽略未知字段，可降级读取。
+- [x] P0 验收判据：已满足（同供应商多卡、重启后顺序与内容不丢、拖拽后第一张生效），
+      由 `persistence::credentials` 迁移/排序测试与作者 macOS 实机验证覆盖。

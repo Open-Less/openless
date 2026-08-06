@@ -24,6 +24,7 @@ import {
   reorderChannels,
   setChannelEnabled,
   setChannelProviderType,
+  setCredential,
   validateProviderCredentials,
   type Channel,
 } from '../../lib/ipc';
@@ -649,11 +650,44 @@ function ChannelModal({
     }
   };
 
+  // 换供应商后把 preset 默认 endpoint / model 写进**空槽**（不覆盖用户已填的自定义值）。
+  // 渠道化后每张卡凭据独立，这里按卡片 id 读写；Codex OAuth / 本地引擎 / 自定义
+  // OpenAI 兼容（baseUrl/model 为空）自然跳过。失败只记日志，不影响换厂商本身。
+  const fillProviderDefaults = async (next: string) => {
+    try {
+      if (kind === 'llm') {
+        const preset = LLM_PRESETS.find(p => p.id === next);
+        if (!preset || preset.id === 'custom' || preset.id === 'codex_oauth') return;
+        if (preset.baseUrl && !(await readCredential('ark.endpoint', channel.id))?.trim()) {
+          await setCredential('ark.endpoint', preset.baseUrl, channel.id);
+        }
+        if (
+          preset.modelPlaceholder &&
+          !(await readCredential('ark.model_id', channel.id))?.trim()
+        ) {
+          await setCredential('ark.model_id', preset.modelPlaceholder, channel.id);
+        }
+        return;
+      }
+      const preset = ASR_PRESETS.find(p => p.id === next);
+      if (!preset) return;
+      if (preset.baseUrl && !(await readCredential('asr.endpoint', channel.id))?.trim()) {
+        await setCredential('asr.endpoint', preset.baseUrl, channel.id);
+      }
+      if (preset.model && !(await readCredential('asr.model', channel.id))?.trim()) {
+        await setCredential('asr.model', preset.model, channel.id);
+      }
+    } catch (error) {
+      console.error('[channels] failed to fill provider defaults', error);
+    }
+  };
+
   const changeProvider = async (next: string) => {
     const previous = providerType;
     setProviderType(next);
     try {
       await setChannelProviderType(kind, channel.id, next);
+      await fillProviderDefaults(next);
       await onChanged();
     } catch (error) {
       console.error('[channels] change provider failed', error);
