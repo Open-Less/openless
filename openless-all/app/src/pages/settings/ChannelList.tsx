@@ -12,7 +12,7 @@ import { useTranslation } from 'react-i18next';
 import { Icon } from '../../components/Icon';
 import { Modal } from '../../components/ui/Modal';
 import { SelectLite } from '../../components/ui/SelectLite';
-import { detectOS } from '../../components/WindowChrome';
+import { detectOS, type OS } from '../../components/WindowChrome';
 import {
   createChannel,
   deleteChannel,
@@ -49,17 +49,25 @@ interface PresetOption {
 
 /** 「添加渠道」下拉里的供应商清单。本地引擎与 Codex OAuth 也在其中 —— 它们不是预置的
  *  固定卡片，而是和云端厂商一样由用户添加，只是编辑时没有 key / 地址字段。 */
-function presetsFor(kind: ChannelKind, os: string): PresetOption[] {
+export function presetsFor(kind: ChannelKind, os: OS): PresetOption[] {
   if (kind === 'llm') {
     return LLM_PRESETS.map(p => ({ id: p.id, nameKey: p.nameKey }));
   }
   return ASR_PRESETS.filter(p => {
-    // Apple 语音是 macOS 专有。
-    if (p.id === 'apple-speech') return os === 'mac';
+    // 本地引擎严格按其实际支持的平台暴露；Linux / Android 不展示桌面专有实现。
+    if (p.id === 'local-qwen3' || p.id === 'apple-speech') return os === 'mac';
+    if (p.id === 'foundry-local-whisper' || p.id === 'sherpa-onnx-local') {
+      return os === 'win';
+    }
     // 百炼的两个旧 id 是历史别名，统一入口是 `bailian`，不再让新卡片选到。
     if (p.id === 'bailian-qwen3-realtime' || p.id === 'bailian-fun-asr-flash') return false;
     return true;
   }).map(p => ({ id: p.id, nameKey: p.nameKey }));
+}
+
+/** 只有从未发生用户交互的新建草稿才允许走空白回收。 */
+export function shouldRecycleDraft(draftId: string | null, touched: boolean): boolean {
+  return draftId != null && !touched;
 }
 
 function presetLabel(
@@ -138,6 +146,8 @@ export function ChannelList({
   const [editingId, setEditingId] = useState<string | null>(null);
   /** 新建时先落一张草稿卡片（凭据必须按渠道 id 写入），弹窗直接编辑它。 */
   const [draftId, setDraftId] = useState<string | null>(null);
+  /** 同步 ref 避免 blur 保存与关闭弹窗之间的 state 调度竞态。 */
+  const draftTouchedRef = useRef(false);
   const [creatingBusy, setCreatingBusy] = useState(false);
   // 只自动弹一次：用户取消掉之后不该再被弹窗追着跑。
   const autoOpenedRef = useRef(false);
@@ -172,11 +182,12 @@ export function ChannelList({
 
   // ── 添加：一步到位 ──
   // 点「添加渠道」直接开编辑弹窗（供应商、名字、密钥、测试都在里面）。草稿卡片在
-  // 后台先建出来只是因为凭据要按渠道 id 落盘；用户什么都没填就关掉的话它会被回收，
-  // 不会在列表里留下空卡片。
+  // 后台先建出来只是因为凭据要按渠道 id 落盘；用户完全没有交互就关掉时才会被回收。
+  // 一旦改过任何字段就保留，避免 blur/debounce 保存与关闭流程竞争删除卡片。
   const startCreate = useCallback(async () => {
     if (creatingBusy) return;
     setCreatingBusy(true);
+    draftTouchedRef.current = false;
     try {
       const id = await createChannel(kind, presets[0]?.id ?? '', '');
       setDraftId(id);
@@ -363,14 +374,21 @@ export function ChannelList({
     channels.find(c => c.id === (draftId ?? editingId)) ?? null;
   const isDraft = draftId != null;
 
+  const markDraftTouched = () => {
+    if (draftId != null) draftTouchedRef.current = true;
+  };
+
   const closeModal = async () => {
     const id = draftId;
+    const touched = draftTouchedRef.current;
     setDraftId(null);
     setEditingId(null);
-    if (id) {
-      // 草稿：什么都没填就收走，别在列表里留空卡片。
+    draftTouchedRef.current = false;
+    if (shouldRecycleDraft(id, touched)) {
+      // 只回收从未发生用户交互的草稿；一旦用户改过任何内容，异步保存无论成功与否
+      // 都不得与关闭流程竞争删除这张卡片。
       try {
-        await deleteChannelIfBlank(kind, id);
+        await deleteChannelIfBlank(kind, id!);
       } catch (error) {
         console.error('[channels] blank cleanup failed', error);
       }
@@ -496,6 +514,7 @@ export function ChannelList({
           mobile={mobile}
           onClose={() => void closeModal()}
           onChanged={refresh}
+          onUserMutation={markDraftTouched}
         />
       )}
     </Card>
@@ -624,15 +643,18 @@ function ChannelModal({
   mobile,
   onClose,
   onChanged,
+  onUserMutation,
 }: {
   kind: ChannelKind;
   channel: Channel;
   presets: PresetOption[];
-  /** 新建流程中的草稿卡片：标题用「添加渠道」，且允许被空回收。 */
+  /** 新建流程中的草稿卡片：标题用「添加渠道」，未触碰时允许回收。 */
   isDraft: boolean;
   mobile: boolean;
   onClose: () => void;
   onChanged: () => void | Promise<void>;
+  /** 用户对草稿做了有意义的操作；必须在异步写入前同步触发。 */
+  onUserMutation: () => void;
 }) {
   const { t } = useTranslation();
   const [name, setName] = useState(channel.name);
@@ -684,6 +706,7 @@ function ChannelModal({
 
   const changeProvider = async (next: string) => {
     const previous = providerType;
+    onUserMutation();
     setProviderType(next);
     try {
       await setChannelProviderType(kind, channel.id, next);
@@ -730,7 +753,10 @@ function ChannelModal({
       <label style={fieldLabel}>{t('settings.channels.nameLabel')}</label>
       <input
         value={name}
-        onChange={e => setName(e.target.value)}
+        onChange={e => {
+          onUserMutation();
+          setName(e.target.value);
+        }}
         onBlur={() => void saveName()}
         placeholder={t('settings.channels.namePlaceholder')}
         style={{ ...inputStyle, width: '100%', marginBottom: 14 }}
@@ -743,6 +769,7 @@ function ChannelModal({
         providerType={providerType}
         channelId={channel.id}
         onTested={() => void onChanged()}
+        onUserMutation={onUserMutation}
       />
 
       {isLocalEngine && (

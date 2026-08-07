@@ -10,22 +10,46 @@ use std::collections::HashMap;
 ///
 /// 注意这只覆盖测试与模型列表两条路径 —— 真正的听写 / 润色链路仍走隐式 active，
 /// 那部分的显式化是 P1 的工作（见 docs/provider-channels-plan.md）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProviderKind {
+    Asr,
+    Llm,
+    Omni,
+}
+
+impl ProviderKind {
+    fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "asr" => Ok(Self::Asr),
+            "llm" => Ok(Self::Llm),
+            "omni" => Ok(Self::Omni),
+            other => Err(format!("unknown provider kind: {other}")),
+        }
+    }
+}
+
 pub(crate) struct ProviderScope {
-    kind: ChannelKind,
+    kind: ProviderKind,
     channel: Option<String>,
 }
 
 impl ProviderScope {
     fn new(kind: &str, channel: Option<String>) -> Result<Self, String> {
-        let kind = ChannelKind::parse(kind).map_err(|e| e.to_string())?;
+        let kind = ProviderKind::parse(kind)?;
+        if kind == ProviderKind::Omni && channel.is_some() {
+            return Err("omni provider does not support channel id".to_string());
+        }
         Ok(Self { kind, channel })
     }
 
     /// 读该渠道的凭据；未指定渠道时回落到当前生效的那张。
     fn get(&self, account: CredentialAccount) -> Result<Option<String>, String> {
         match (&self.channel, self.kind) {
-            (Some(id), ChannelKind::Asr) => CredentialsVault::get_for_asr_provider(id, account),
-            (Some(id), ChannelKind::Llm) => CredentialsVault::get_for_llm_provider(id, account),
+            (Some(id), ProviderKind::Asr) => CredentialsVault::get_for_asr_provider(id, account),
+            (Some(id), ProviderKind::Llm) => CredentialsVault::get_for_llm_provider(id, account),
+            (Some(_), ProviderKind::Omni) => {
+                return Err("omni provider does not support channel id".to_string())
+            }
             (None, _) => CredentialsVault::get(account),
         }
         .map_err(|e| e.to_string())
@@ -34,11 +58,18 @@ impl ProviderScope {
     /// 该渠道的厂商 id —— 决定走哪套协议。
     fn provider_type(&self) -> String {
         match (&self.channel, self.kind) {
-            (Some(id), kind) => {
-                CredentialsVault::get_channel_provider_type(kind, id).unwrap_or_else(|| id.clone())
+            (Some(id), ProviderKind::Asr) => {
+                CredentialsVault::get_channel_provider_type(ChannelKind::Asr, id)
+                    .unwrap_or_else(|| id.clone())
             }
-            (None, ChannelKind::Asr) => CredentialsVault::get_active_asr(),
-            (None, ChannelKind::Llm) => CredentialsVault::get_active_llm(),
+            (Some(id), ProviderKind::Llm) => {
+                CredentialsVault::get_channel_provider_type(ChannelKind::Llm, id)
+                    .unwrap_or_else(|| id.clone())
+            }
+            (Some(_), ProviderKind::Omni) => CredentialsVault::get_active_omni(),
+            (None, ProviderKind::Asr) => CredentialsVault::get_active_asr(),
+            (None, ProviderKind::Llm) => CredentialsVault::get_active_llm(),
+            (None, ProviderKind::Omni) => CredentialsVault::get_active_omni(),
         }
     }
 
@@ -75,26 +106,18 @@ pub async fn validate_provider_credentials(
     kind: String,
     channel_id: Option<String>,
 ) -> Result<ProviderCheckResult, String> {
-    if kind == "omni" {
-        // Omni 走独立命名空间，不做渠道化（见 docs/provider-channels-plan.md 分期）；
-        // 校验是真实纯文本请求，与运行期完全同路径。
-        return validate_omni_provider()
-            .await
-            .map(|()| ProviderCheckResult { ok: true });
-    }
     let scope = ProviderScope::new(&kind, channel_id)?;
     let scope = &scope;
-    match kind.as_str() {
-        "llm" => validate_llm_provider(scope)
+    match scope.kind {
+        ProviderKind::Llm => validate_llm_provider(scope)
             .await
             .map(|()| ProviderCheckResult { ok: true }),
-        "asr" => validate_asr_provider(scope)
+        ProviderKind::Asr => validate_asr_provider(scope)
             .await
             .map(|()| ProviderCheckResult { ok: true }),
-        "omni" => validate_omni_provider()
+        ProviderKind::Omni => validate_omni_provider()
             .await
             .map(|()| ProviderCheckResult { ok: true }),
-        _ => Err(format!("unknown provider kind: {kind}")),
     }
 }
 
@@ -105,7 +128,8 @@ pub async fn list_provider_models(
 ) -> Result<ProviderModelsResult, String> {
     let scope = ProviderScope::new(&kind, channel_id)?;
     let scope = &scope;
-    if kind == "asr" && scope.provider_type() == crate::asr::bailian::PROVIDER_ID {
+    if scope.kind == ProviderKind::Asr && scope.provider_type() == crate::asr::bailian::PROVIDER_ID
+    {
         // 统一「阿里云百炼」入口:三条协议(实时 fun-asr-realtime / 实时 qwen3 /
         // 录音文件 fun-asr-flash)收成一个 provider。百炼各网关都没有模型列表 HTTP
         // 接口,列表是静态的;但先跑一次与「验证」相同的、按当前所选模型对应协议的
@@ -133,7 +157,9 @@ pub async fn list_provider_models(
             ],
         });
     }
-    if kind == "asr" && scope.provider_type() == crate::asr::qwen_realtime::PROVIDER_ID {
+    if scope.kind == ProviderKind::Asr
+        && scope.provider_type() == crate::asr::qwen_realtime::PROVIDER_ID
+    {
         // 与 bailian 同理：Realtime 网关无模型列表接口，先做真实连通性检查，
         // 列表为官方文档在案的稳定别名 + 快照版本。
         validate_qwen3_realtime_asr_provider(scope).await?;
@@ -145,12 +171,14 @@ pub async fn list_provider_models(
             ],
         });
     }
-    if kind == "asr" && scope.provider_type() == crate::asr::mimo::PROVIDER_ID {
+    if scope.kind == ProviderKind::Asr && scope.provider_type() == crate::asr::mimo::PROVIDER_ID {
         return Ok(ProviderModelsResult {
             models: vec![crate::asr::mimo::DEFAULT_MODEL.to_string()],
         });
     }
-    if kind == "asr" && scope.provider_type() == crate::asr::dashscope_multimodal::PROVIDER_ID {
+    if scope.kind == ProviderKind::Asr
+        && scope.provider_type() == crate::asr::dashscope_multimodal::PROVIDER_ID
+    {
         // multimodal-generation 无模型列表 HTTP 接口；与 mimo 同，返回静态别名。
         return Ok(ProviderModelsResult {
             models: vec![
@@ -159,13 +187,15 @@ pub async fn list_provider_models(
             ],
         });
     }
-    if kind == "asr" && scope.provider_type() == crate::asr::elevenlabs::PROVIDER_ID {
+    if scope.kind == ProviderKind::Asr
+        && scope.provider_type() == crate::asr::elevenlabs::PROVIDER_ID
+    {
         validate_elevenlabs_asr_provider(scope).await?;
         return Ok(ProviderModelsResult {
             models: vec![crate::asr::elevenlabs::DEFAULT_MODEL.to_string()],
         });
     }
-    if kind == "llm" && scope.provider_type() == CODEX_OAUTH_PROVIDER_ID {
+    if scope.kind == ProviderKind::Llm && scope.provider_type() == CODEX_OAUTH_PROVIDER_ID {
         return Ok(ProviderModelsResult {
             models: vec![
                 CODEX_DEFAULT_MODEL.to_string(),
@@ -175,7 +205,7 @@ pub async fn list_provider_models(
             ],
         });
     }
-    let config = read_openai_provider_config(&kind, scope)?;
+    let config = read_openai_provider_config(scope)?;
     fetch_provider_models(&config)
         .await
         .map(|models| ProviderModelsResult { models })
@@ -188,30 +218,26 @@ pub(crate) struct ProviderConfig {
     pub(crate) temperature: Option<f32>,
 }
 
-fn read_openai_provider_config(
-    kind: &str,
-    scope: &ProviderScope,
-) -> Result<ProviderConfig, String> {
+fn read_openai_provider_config(scope: &ProviderScope) -> Result<ProviderConfig, String> {
     // `openai-compatible` 允许 API Key 留空（LAN 无鉴权端点）；其余 ASR 提供商
     // 仍必填，与运行时门禁 ensure_asr_credentials 保持一致。
-    let (api_key_account, endpoint_account, api_key_required) = match kind {
-        "llm" => (
+    let (api_key_account, endpoint_account, api_key_required) = match scope.kind {
+        ProviderKind::Llm => (
             CredentialAccount::ArkApiKey,
             CredentialAccount::ArkEndpoint,
             false,
         ),
-        "asr" => (
+        ProviderKind::Asr => (
             CredentialAccount::AsrApiKey,
             CredentialAccount::AsrEndpoint,
             scope.provider_type() != crate::coordinator::OPENAI_COMPATIBLE_ASR_PROVIDER_ID,
         ),
         // 多模态（Omni）模型：独立命名空间，OpenAI 兼容通道要求 API Key + Base URL。
-        "omni" => (
+        ProviderKind::Omni => (
             CredentialAccount::OmniApiKey,
             CredentialAccount::OmniEndpoint,
             true,
         ),
-        _ => return Err(format!("unknown provider kind: {kind}")),
     };
     let api_key = scope
         .get(api_key_account)
@@ -221,13 +247,13 @@ fn read_openai_provider_config(
         .get(endpoint_account)
         .map_err(|e| e.to_string())?
         .unwrap_or_default();
-    let (extra_headers, temperature) = if kind == "llm" {
+    let (extra_headers, temperature) = if scope.kind == ProviderKind::Llm {
         let active_llm = scope.provider_type();
         (
             scope.llm_extra_headers(),
             openai_compatible_temperature_for_provider(&active_llm, scope.llm_temperature()),
         )
-    } else if kind == "omni" {
+    } else if scope.kind == ProviderKind::Omni {
         let active_omni = CredentialsVault::get_active_omni();
         (
             CredentialsVault::get_active_omni_extra_headers(),
@@ -291,7 +317,7 @@ async fn validate_llm_provider(scope: &ProviderScope) -> Result<(), String> {
             .map_err(provider_llm_error_message);
     }
 
-    let config = read_openai_provider_config("llm", scope)?;
+    let config = read_openai_provider_config(scope)?;
     let active_llm = scope.provider_type();
     let model = scope
         .get(CredentialAccount::ArkModelId)
@@ -407,7 +433,7 @@ async fn validate_asr_provider(scope: &ProviderScope) -> Result<(), String> {
         }
     }
 
-    let config = read_openai_provider_config("asr", scope)?;
+    let config = read_openai_provider_config(scope)?;
     let model = scope
         .get(CredentialAccount::AsrModel)
         .map_err(|e| e.to_string())?
@@ -494,7 +520,7 @@ async fn validate_stepfun_realtime_asr_provider(scope: &ProviderScope) -> Result
 }
 
 async fn validate_mimo_asr_provider(scope: &ProviderScope) -> Result<(), String> {
-    let config = read_openai_provider_config("asr", scope)?;
+    let config = read_openai_provider_config(scope)?;
     let model = scope
         .get(CredentialAccount::AsrModel)
         .map_err(|e| e.to_string())?
@@ -592,7 +618,7 @@ async fn validate_dashscope_multimodal_asr_provider(scope: &ProviderScope) -> Re
         let endpoint = crate::coordinator::derive_bailian_endpoint(&endpoint, endpoint_protocol)?;
         (api_key, endpoint)
     } else {
-        let config = read_openai_provider_config("asr", scope)?;
+        let config = read_openai_provider_config(scope)?;
         (config.api_key, config.base_url)
     };
     if protocol == crate::asr::dashscope_multimodal::DashScopeBatchProtocol::AsyncTranscription {
@@ -1155,8 +1181,39 @@ mod tests {
         asr_error_is_no_speech_rejection, fetch_provider_models, models_url,
         provider_llm_error_message, provider_log_context, provider_request_error_message,
         sanitized_provider_destination, send_dashscope_multimodal_validation, ProviderConfig,
+        ProviderScope,
     };
     use crate::endpoint_security::validate_http_endpoint;
+
+    #[test]
+    fn provider_scope_accepts_omni_without_channel() {
+        assert!(ProviderScope::new("omni", None).is_ok());
+    }
+
+    #[test]
+    fn provider_scope_rejects_channel_id_for_omni() {
+        let error = ProviderScope::new("omni", Some("channel-1".to_string()))
+            .err()
+            .expect("omni must remain outside channel storage");
+        assert_eq!(error, "omni provider does not support channel id");
+    }
+
+    #[test]
+    fn provider_scope_rejects_unknown_kind() {
+        let error = ProviderScope::new("unknown", None)
+            .err()
+            .expect("unknown provider kind must fail");
+        assert_eq!(error, "unknown provider kind: unknown");
+    }
+
+    #[test]
+    fn provider_scope_keeps_channel_ids_for_asr_and_llm() {
+        for kind in ["asr", "llm"] {
+            let scope = ProviderScope::new(kind, Some("channel-1".to_string()))
+                .expect("channel provider kind must remain supported");
+            assert_eq!(scope.channel.as_deref(), Some("channel-1"));
+        }
+    }
 
     #[test]
     fn silence_probe_content_rejection_is_not_a_credential_error() {

@@ -287,12 +287,15 @@ export function ChannelCredentialFields({
   providerType,
   channelId,
   onTested,
+  onUserMutation,
 }: {
   kind: 'llm' | 'asr';
   providerType: string;
   channelId: string;
   /** 测试连通出结果后通知外层刷新卡片上的延迟/标红。 */
   onTested?: () => void;
+  /** 新建草稿发生用户交互时同步通知外层，避免关闭流程误删。 */
+  onUserMutation?: () => void;
 }) {
   const { t } = useTranslation();
   const { prefs, updatePrefs } = useHotkeySettings();
@@ -338,11 +341,11 @@ export function ChannelCredentialFields({
         ) : (
           <>
             <CredentialField key={`${channelId}:api_key`} label={t('settings.providers.apiKeyLabel')}
-              account="ark.api_key" provider={channelId} mono mask />
+              account="ark.api_key" provider={channelId} mono mask onUserMutation={onUserMutation} />
             <CredentialField key={`${channelId}:endpoint`} label={t('settings.providers.baseUrlLabel')}
               account="ark.endpoint" provider={channelId}
               placeholder={preset.baseUrl || 'https://your-endpoint/v1'}
-              defaultValue={preset.baseUrl || undefined} />
+              defaultValue={preset.baseUrl || undefined} onUserMutation={onUserMutation} />
             {providerType === 'custom' && (
               <>
                 <CredentialField
@@ -351,6 +354,7 @@ export function ChannelCredentialFields({
                   account="ark.temperature"
                   placeholder={t('settings.providers.temperaturePlaceholder')}
                   mono
+                  onUserMutation={onUserMutation}
                 />
                 <CredentialField
                   key={`${channelId}:extra_headers`}
@@ -359,6 +363,7 @@ export function ChannelCredentialFields({
                   placeholder={t('settings.providers.extraHeadersPlaceholder')}
                   mono
                   mask
+                  onUserMutation={onUserMutation}
                 />
               </>
             )}
@@ -368,6 +373,7 @@ export function ChannelCredentialFields({
           account="ark.model_id" provider={channelId}
           placeholder={preset.modelPlaceholder || 'model-name'} mono
           defaultValue={preset.modelPlaceholder || undefined}
+          onUserMutation={onUserMutation}
           trailing={(
             <LlmThinkingToggle
               enabled={prefs?.llmThinkingEnabled ?? false}
@@ -376,7 +382,8 @@ export function ChannelCredentialFields({
           )}
         />
         <ProviderTools kind="llm" modelAccount="ark.model_id" provider={channelId}
-          onModelSelected={() => setLlmModelRevision(v => v + 1)} onTested={onTested} />
+          onModelSelected={() => setLlmModelRevision(v => v + 1)} onTested={onTested}
+          onUserMutation={onUserMutation} />
       </>
     );
   }
@@ -390,6 +397,7 @@ export function ChannelCredentialFields({
           <SelectLite
             value={volcengineAuthMode}
             onChange={async (v) => {
+              onUserMutation?.();
               const mode = v as 'app_id_token' | 'api_key';
               const prev = volcengineAuthMode;
               setVolcengineAuthMode(mode);
@@ -416,13 +424,13 @@ export function ChannelCredentialFields({
         {volcengineAuthMode === 'app_id_token' ? (
           <>
             <CredentialField key={`${channelId}:app_key`} label={t('settings.providers.volcengineAppKeyLabel')}
-              account="volcengine.app_key" provider={channelId} mono mask />
+              account="volcengine.app_key" provider={channelId} mono mask onUserMutation={onUserMutation} />
             <CredentialField key={`${channelId}:access_key`} label={t('settings.providers.volcengineAccessKeyLabel')}
-              account="volcengine.access_key" provider={channelId} mono mask />
+              account="volcengine.access_key" provider={channelId} mono mask onUserMutation={onUserMutation} />
           </>
         ) : (
           <CredentialField key={`${channelId}:api_key`} label={t('settings.providers.volcengineApiKeyLabel')}
-            account="volcengine.api_key" provider={channelId} mono mask />
+            account="volcengine.api_key" provider={channelId} mono mask onUserMutation={onUserMutation} />
         )}
         <CredentialField
           key={`${channelId}:resource_id`}
@@ -430,6 +438,7 @@ export function ChannelCredentialFields({
           account="volcengine.resource_id"
           provider={channelId}
           mono
+          onUserMutation={onUserMutation}
           placeholder={ASR_DEFAULT_RESOURCE_ID} defaultValue={ASR_DEFAULT_RESOURCE_ID} />
         <div style={{ marginTop: 2, fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.6 }}>
           {volcengineAuthMode === 'api_key'
@@ -437,7 +446,8 @@ export function ChannelCredentialFields({
             : t('settings.providers.volcengineMappingNote')}
         </div>
         <ProviderTools kind="asr" modelAccount="asr.model" provider={channelId}
-          showFetchModels={false} onModelSelected={() => setAsrModelRevision(v => v + 1)} onTested={onTested} />
+          showFetchModels={false} onModelSelected={() => setAsrModelRevision(v => v + 1)} onTested={onTested}
+          onUserMutation={onUserMutation} />
       </>
     );
   }
@@ -446,14 +456,15 @@ export function ChannelCredentialFields({
     return (
       <>
         <CredentialField key={`${channelId}:app_id`} label={t('settings.providers.xfyunAppIdLabel')}
-          account="xfyun.app_id" provider={channelId} mono />
+          account="xfyun.app_id" provider={channelId} mono onUserMutation={onUserMutation} />
         <CredentialField key={`${channelId}:api_key`} label={t('settings.providers.xfyunApiKeyLabel')}
-          account="xfyun.api_key" provider={channelId} mono mask />
+          account="xfyun.api_key" provider={channelId} mono mask onUserMutation={onUserMutation} />
         <div style={{ marginTop: 2, fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.6 }}>
           {t('settings.providers.xfyunNote')}
         </div>
         <ProviderTools kind="asr" modelAccount="asr.model" provider={channelId}
-          showFetchModels={false} onModelSelected={() => setAsrModelRevision(v => v + 1)} onTested={onTested} />
+          showFetchModels={false} onModelSelected={() => setAsrModelRevision(v => v + 1)} onTested={onTested}
+          onUserMutation={onUserMutation} />
       </>
     );
   }
@@ -471,16 +482,17 @@ export function ChannelCredentialFields({
   return (
     <>
       <CredentialField key={`${channelId}:api_key`} label={t('settings.providers.apiKeyLabel')}
-        account="asr.api_key" provider={channelId} mono mask />
+        account="asr.api_key" provider={channelId} mono mask onUserMutation={onUserMutation} />
       {/* 统一百炼保留 endpoint 供用户选择区域或工作空间域名；后端按模型转换协议与路径。 */}
       <CredentialField key={`${channelId}:endpoint`} label={t('settings.providers.baseUrlLabel')}
         account="asr.endpoint" provider={channelId}
         placeholder={asrPreset?.baseUrl || 'https://api.openai.com/v1'}
-        defaultValue={asrPreset?.baseUrl || undefined} />
+        defaultValue={asrPreset?.baseUrl || undefined} onUserMutation={onUserMutation} />
       <CredentialField key={`${channelId}:model:${asrModelRevision}`} label={t('settings.providers.modelLabel')}
         account="asr.model" provider={channelId}
         placeholder={unifiedBailian ? 'fun-asr-realtime' : (asrPreset?.model || 'whisper-1')}
         defaultValue={asrPreset?.model || undefined}
+        onUserMutation={onUserMutation}
         onValueChange={unifiedBailian ? setBailianModel : undefined}
         options={unifiedBailian
           ? BAILIAN_ASR_MODELS.map(m => ({ value: m, label: m }))
@@ -498,6 +510,7 @@ export function ChannelCredentialFields({
             account="asr.vocabulary_id"
             provider={channelId}
             mono
+            onUserMutation={onUserMutation}
             placeholder="vocab-..."
           />
           <div style={{ marginTop: 2, fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.6 }}>
@@ -517,9 +530,10 @@ export function ChannelCredentialFields({
       )}
       {/* 统一百炼「拉取模型」只写 model，不覆盖用户选择的区域或工作空间 endpoint。 */}
       <ProviderTools kind="asr" modelAccount="asr.model" provider={channelId}
-        onModelSelected={() => setAsrModelRevision(v => v + 1)} onTested={onTested} />
+        onModelSelected={() => setAsrModelRevision(v => v + 1)} onTested={onTested}
+        onUserMutation={onUserMutation} />
       {(providerType === 'openai-compatible' || providerType === 'zenmux') && (
-        <AsrAdvancedOptions provider={channelId} />
+        <AsrAdvancedOptions provider={channelId} onUserMutation={onUserMutation} />
       )}
     </>
   );
@@ -528,7 +542,13 @@ export function ChannelCredentialFields({
 // ASR 高级选项：openai-compatible 与 zenmux 两个预设显示。
 // openai-compatible 暴露 verbose_json / 分片时长（其余命名厂商保持硬编码行为）；
 // zenmux 暴露 enable_itn（数字归一化）开关，verbose_json / 分片对其无意义。
-function AsrAdvancedOptions({ provider }: { provider: string }) {
+function AsrAdvancedOptions({
+  provider,
+  onUserMutation,
+}: {
+  provider: string;
+  onUserMutation?: () => void;
+}) {
   const { t } = useTranslation();
   const [verboseJson, setVerboseJson] = useState(false);
   const [chunkDraft, setChunkDraft] = useState('');
@@ -571,6 +591,7 @@ function AsrAdvancedOptions({ provider }: { provider: string }) {
     chunkDurationMs?: number | null
     enableItn?: boolean
   }) => {
+    onUserMutation?.();
     setStatus('saving');
     setError('');
     const next: AdvancedAsrConfig = {
@@ -711,7 +732,7 @@ function BailianProtocolHint({ currentModel }: { currentModel: string }) {
 
 type ProviderToolStatus = 'idle' | 'loading' | 'success' | 'empty' | 'error';
 
-function ProviderTools({ kind, modelAccount, provider, onModelSelected, onTested, showFetchModels = true }: { kind: 'llm' | 'asr' | 'omni'; modelAccount: string; provider?: string; onModelSelected: () => void; onTested?: () => void; showFetchModels?: boolean }) {
+function ProviderTools({ kind, modelAccount, provider, onModelSelected, onTested, onUserMutation, showFetchModels = true }: { kind: 'llm' | 'asr' | 'omni'; modelAccount: string; provider?: string; onModelSelected: () => void; onTested?: () => void; onUserMutation?: () => void; showFetchModels?: boolean }) {
   const { t } = useTranslation();
   const mobile = useMobileLayout();
   const [models, setModels] = useState<string[]>([]);
@@ -738,6 +759,7 @@ function ProviderTools({ kind, modelAccount, provider, onModelSelected, onTested
   };
 
   const validate = async () => {
+    onUserMutation?.();
     setModels([]);
     setSelectedModel('');
     setResult('loading', t('settings.providers.validating'));
@@ -768,6 +790,7 @@ function ProviderTools({ kind, modelAccount, provider, onModelSelected, onTested
   };
 
   const loadModels = async () => {
+    onUserMutation?.();
     setResult('loading', t('settings.providers.loadingModels'));
     try {
       const result = await listProviderModels(kind, provider);
@@ -785,6 +808,7 @@ function ProviderTools({ kind, modelAccount, provider, onModelSelected, onTested
   };
 
   const applyModel = async (model: string) => {
+    onUserMutation?.();
     setResult('loading', t('common.saving'));
     try {
       await setCredential(modelAccount, model, provider);
@@ -862,11 +886,13 @@ interface CredentialFieldProps {
   defaultValue?: string;
   trailing?: ReactNode;
   onValueChange?: (value: string) => void;
+  /** 只在用户直接改变该字段时触发；初始化读取、复制和显隐不触发。 */
+  onUserMutation?: () => void;
   /** 提供则渲染为下拉（预设选择）代替输入框；当前值不在预设里时附加为自定义项。 */
   options?: SelectOption[];
 }
 
-function CredentialField({ label, account, provider, placeholder, mono, mask, defaultValue, trailing, onValueChange, options }: CredentialFieldProps) {
+function CredentialField({ label, account, provider, placeholder, mono, mask, defaultValue, trailing, onValueChange, onUserMutation, options }: CredentialFieldProps) {
   const { t } = useTranslation();
   const mobile = useMobileLayout();
   const [value, setValue] = useState('');
@@ -957,6 +983,7 @@ function CredentialField({ label, account, provider, placeholder, mono, mask, de
   };
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    onUserMutation?.();
     const v = e.target.value;
     setValue(v);
     onValueChange?.(v);
@@ -977,6 +1004,7 @@ function CredentialField({ label, account, provider, placeholder, mono, mask, de
 
   const fillDefault = async () => {
     if (!loaded || !defaultValue) return;
+    onUserMutation?.();
     setValue(defaultValue);
     onValueChange?.(defaultValue);
     setDirty(true);
@@ -1015,6 +1043,7 @@ function CredentialField({ label, account, provider, placeholder, mono, mask, de
                   setCustomModelMode(true);
                   return;
                 }
+                onUserMutation?.();
                 setValue(v);
                 onValueChange?.(v);
                 if (!loaded) return;

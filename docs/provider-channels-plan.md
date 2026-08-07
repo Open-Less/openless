@@ -69,7 +69,7 @@ ASR 唯一的额外规则：**一旦开始出字就不再切换**，之后连接
 
 ```rust
 struct Channel {
-    id: String,             // uuid，取代 preset id 作为 map key
+    id: String,             // 迁移沿用 preset id；同厂商新卡按 -2 / -3 分配独立 id
     name: String,           // 用户取的名字，如「硅基流动-主号」
     provider_type: String,  // deepseek / volcengine / sherpa-onnx-local / codex_oauth ...
                             // 决定协议路由 + 表单形状，必须独立于 id
@@ -88,12 +88,14 @@ struct ChannelRuntime {
 
 **`provider_type` 必须独立于 `id`**：否则 `coordinator.rs:341` 那条"按 provider id + 模型名路由到具体协议实现"的链会断——这是漏了就整个 ASR 挂掉的点。
 
-`active.llm` / `active.asr` 两个字段退休，"当前使用"= 启用列表的第一个。
+`active.llm` / `active.asr` 不再是用户直接选择的第二份真相，而是由排序与开关同步计算的
+**兼容缓存**；旧主链路仍读取它们，"当前使用"始终等于启用列表的第一个。
 
 ## 5. 迁移
 
-1. 遍历现有 `providers.llm` / `providers.asr` 的每个非空 entry，各生成一张卡片
-   - `id` = 新 uuid，`provider_type` = 原 map key，`name` = `displayName` 或 preset 显示名
+1. 遍历现有 `providers.llm` / `providers.asr` 的每个非空 entry，各补齐渠道元信息
+   - `id` 沿用原 map key，`provider_type` = 原 map key，`name` = `displayName` 或 preset 显示名
+   - 新建同厂商的第二、第三张卡片使用 `<preset>-2`、`<preset>-3`，不改动迁移前的凭据 key
 2. 原 `active.llm` / `active.asr` 指向的那张排到 **order = 0**，其余按 ASR_PRESETS / LLM_PRESETS 原顺序跟随
 3. 全部默认 `enabled = true`
 4. **全新安装**（无任何 entry）：按平台预置
@@ -156,14 +158,23 @@ struct ChannelRuntime {
 └──────────────────────────────────────────┘
 ```
 
-添加/编辑弹窗：名字 → 选供应商（自动填 baseUrl / 模型占位）→ 按 `provider_type` 渲染凭据字段 → 「测试连通」→ 保存。
+添加/编辑弹窗：名字 → 选供应商（自动填 baseUrl / 模型占位）→ 按 `provider_type` 渲染凭据字段
+→ 「测试连通」；字段自动保存，关闭只负责退出弹窗。
 
 可复用的现成件：
 - `validateProviderCredentials` / `listProviderModels`（`ProvidersSection.tsx:854` 起）
 - 按 provider 分支渲染凭据字段的逻辑（火山双鉴权模式、讯飞双字段、百炼词表等）
-- 本地引擎卡片的编辑弹窗内嵌 `<LocalAsr embedded />`（`LocalAsr/index.tsx:122`）
+- 本地引擎卡片不显示凭据字段；模型下载与切换继续集中在「高级 → 本地模型」，避免两处管理同一份模型状态
 
 **新手引导**：列表为空时直接摊开添加表单，跳过空态与加号，省一次点击。
+
+**平台过滤**：macOS 只显示 Qwen3 Local / Apple Speech；Windows 只显示 Foundry /
+Sherpa；Linux 与 Android 不显示这些桌面专有本地引擎。云端供应商全平台可选。
+
+**草稿回收**：保持自动保存。只有打开后从未发生任何用户交互的草稿会在关闭时回收；
+改过名字、供应商、凭据、模型，或执行过验证/模型拉取后都必须保留，即使内容后来清空
+或异步保存失败。这样无凭据的本地引擎 / Apple Speech / Codex OAuth 也能正常创建，且
+关闭弹窗不会与 blur/debounce 保存竞争删除卡片。
 
 ## 8. 分期
 
