@@ -1,6 +1,5 @@
 package com.openless.app
 
-import android.content.ComponentName
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -17,7 +16,7 @@ class OpenLessAccessibilityComponentIdsTest {
     fun componentIdsEqualTreatsShortAndFullFormsAsEqual() {
         assertTrue(OpenLessAccessibilityComponentIds.componentIdsEqual(shortForm, full))
         assertTrue(OpenLessAccessibilityComponentIds.componentIdsEqual(full, shortForm))
-        assertEquals(full, ComponentName.unflattenFromString(shortForm)?.flattenToString())
+        assertEquals(full, OpenLessAccessibilityComponentIds.normalizeComponentKey(shortForm))
     }
 
     @Test

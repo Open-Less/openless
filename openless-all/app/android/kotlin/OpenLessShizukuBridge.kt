@@ -523,6 +523,9 @@ object OpenLessShizukuBridge {
     }
 
     internal fun isValidServiceComponent(component: String): Boolean {
+        if (component != component.trim()) {
+            return false
+        }
         val trimmed = component.trim()
         val slash = trimmed.indexOf('/')
         if (slash <= 0 || slash == trimmed.lastIndex) {

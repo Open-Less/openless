@@ -82,12 +82,7 @@ class OpenLessAccessibilityTargetTest {
                 isEditable = false,
                 isPassword = false,
                 className = "android.view.View",
-                actions = listOf(
-                    android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction(
-                        android.view.accessibility.AccessibilityNodeInfo.ACTION_PASTE,
-                        "paste",
-                    ),
-                ),
+                actionIds = listOf(0x00008000),
             ),
         )
         assertFalse(

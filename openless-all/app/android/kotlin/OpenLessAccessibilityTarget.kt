@@ -6,6 +6,9 @@ import android.view.accessibility.AccessibilityNodeInfo
  * Pure helpers for validating editable focus targets (unit-testable without a live service).
  */
 internal object OpenLessAccessibilityTarget {
+    private const val ACTION_PASTE_ID = 0x00008000
+    private const val ACTION_SET_TEXT_ID = 0x00200000
+
     fun passesEditableFocusChecks(
         isEditable: Boolean,
         isFocused: Boolean,
@@ -24,9 +27,12 @@ internal object OpenLessAccessibilityTarget {
     }
 
     fun hasPasteOrSetTextAction(actions: List<AccessibilityNodeInfo.AccessibilityAction>): Boolean {
-        return actions.any { action ->
-            action.id == AccessibilityNodeInfo.ACTION_PASTE ||
-                action.id == AccessibilityNodeInfo.ACTION_SET_TEXT
+        return hasPasteOrSetTextActionIds(actions.map { it.id })
+    }
+
+    fun hasPasteOrSetTextActionIds(actionIds: Iterable<Int>): Boolean {
+        return actionIds.any { id ->
+            id == ACTION_PASTE_ID || id == ACTION_SET_TEXT_ID
         }
     }
 
@@ -41,12 +47,21 @@ internal object OpenLessAccessibilityTarget {
         isEditable: Boolean,
         isPassword: Boolean,
         className: String?,
-        actions: List<AccessibilityNodeInfo.AccessibilityAction>,
+        actionIds: Iterable<Int>,
     ): Boolean {
         if (isPassword) return false
         if (isEditable) return true
         if (isPasteTargetClass(className)) return true
-        return hasPasteOrSetTextAction(actions)
+        return hasPasteOrSetTextActionIds(actionIds)
+    }
+
+    fun isPasteTarget(
+        isEditable: Boolean,
+        isPassword: Boolean,
+        className: String?,
+        actions: List<AccessibilityNodeInfo.AccessibilityAction>,
+    ): Boolean {
+        return isPasteTarget(isEditable, isPassword, className, actions.map { it.id })
     }
 
     fun isPasteTarget(node: AccessibilityNodeInfo): Boolean {
