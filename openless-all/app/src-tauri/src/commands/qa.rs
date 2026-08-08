@@ -21,22 +21,8 @@ pub fn set_qa_hotkey(
         }
     }
     let mut prefs = coord.prefs().get();
-    if let Some(binding) = binding.as_ref() {
-        reject_dictation_qa_hotkey_overlap(&prefs.dictation_hotkey, binding)?;
-        reject_qa_translation_hotkey_overlap(binding, &prefs.translation_hotkey)?;
-        if let Some(switch_style) = prefs.switch_style_hotkey.as_ref() {
-            reject_qa_switch_style_hotkey_overlap(binding, switch_style)?;
-        }
-        if let Some(open_app) = prefs.open_app_hotkey.as_ref() {
-            reject_qa_open_app_hotkey_overlap(binding, open_app)?;
-        }
-        if let Some(less_computer) = prefs.coding_agent_voice_hotkey.as_ref() {
-            reject_qa_less_computer_hotkey_overlap(binding, less_computer)?;
-        }
-        reject_existing_selection_polish_hotkey_overlap(binding, &prefs)?;
-        reject_existing_style_pack_hotkey_overlap(binding, &prefs)?;
-    }
     prefs.qa_hotkey = binding;
+    reject_hotkey_collisions(&prefs)?;
     coord.prefs().set(prefs).map_err(|e| e.to_string())?;
     coord.update_qa_hotkey_binding();
     Ok(())

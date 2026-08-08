@@ -545,6 +545,11 @@ pub struct Coordinator {
     inner: Arc<Inner>,
 }
 
+struct StylePackHotkeyRegistration {
+    binding: crate::types::ShortcutBinding,
+    _monitor: ComboHotkeyMonitor,
+}
+
 struct Inner {
     app: Mutex<Option<AppHandle>>,
     history: HistoryStore,
@@ -617,10 +622,10 @@ struct Inner {
     translation_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
     switch_style_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
     open_app_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
-    /// 风格包直达快捷键监听器（issue #759）：pack_id → monitor。数量随用户配置
-    /// 动态增减，与固定槽位的 action hotkey 分开管理；更新策略为对照 prefs 全量
-    /// 对齐（新增注册 / 改键 update / 删除 drop 反注册）。
-    style_pack_hotkeys: Mutex<std::collections::HashMap<String, ComboHotkeyMonitor>>,
+    /// 风格包直达快捷键监听器（issue #759）：pack_id → 实际绑定 + monitor。
+    /// 绑定元数据让 supervisor 能区分「同一 pack_id 但按键已变化」，并在任何
+    /// 非事务设置路径注册失败后继续重试到实际状态与 prefs 一致。
+    style_pack_hotkeys: Mutex<std::collections::HashMap<String, StylePackHotkeyRegistration>>,
     /// 选区润色快捷键：modifier-only 复用 `HotkeyMonitor`，其它组合键复用
     /// `ComboHotkeyMonitor`。桌面（非 mobile）专属。
     #[cfg(not(mobile))]
@@ -1173,7 +1178,8 @@ impl Coordinator {
     }
 
     /// 让所有 hotkey supervisor loop（dictation / qa / combo / translation /
-    /// switch_style / open_app）在下一轮 sleep / poll 后退出。生产场景下进程退出
+    /// switch_style / open_app / style_pack / selection_polish）在下一轮 sleep / poll
+    /// 后退出。生产场景下进程退出
     /// 一并 reap 所有线程，但 integration test 和未来 RunEvent::Exit 钩子需要
     /// 显式退出路径。审计 3.1.2。
     #[allow(dead_code)]
@@ -1333,6 +1339,11 @@ impl Coordinator {
     /// 用户在设置里改了风格快捷键列表时调用：按最新 prefs 全量对齐注册状态。
     pub fn update_style_pack_hotkey_bindings(&self) {
         sync_style_pack_hotkeys_on_main_thread(&self.inner);
+    }
+
+    /// 事务式设置路径使用：等待主线程完成整表注册并返回精确失败原因。
+    pub fn try_update_style_pack_hotkey_bindings(&self) -> Result<(), String> {
+        try_sync_style_pack_hotkeys_on_main_thread(&self.inner)
     }
 
     /// 用户在设置里改了自定义组合键时调用。

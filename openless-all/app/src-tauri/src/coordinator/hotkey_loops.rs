@@ -1244,63 +1244,41 @@ pub(super) fn action_hotkey_bridge_thread_name(kind: ActionHotkeyKind) -> &'stat
 
 // ─────────────────── style pack hotkeys (issue #759) ───────────────────
 
-/// 启动期 supervisor：等 AppHandle 就绪后按 prefs 全量注册风格包直达快捷键；
-/// 有注册失败时按 action hotkey 的节奏（3s）重试，直到全部装上或 shutdown。
-pub(super) fn style_pack_hotkey_supervisor_loop(inner: Arc<Inner>) {
-    let mut attempts: u32 = 0;
-    loop {
-        if inner.shutdown.load(Ordering::SeqCst) {
-            return;
-        }
-        if inner.prefs.get().style_pack_hotkeys.is_empty() {
-            // 没有配置任何风格快捷键；用户后续新增走 update 主动路径。
-            return;
-        }
-        let app = match inner.app.lock().clone() {
-            Some(a) => a,
-            None => {
-                std::thread::sleep(std::time::Duration::from_secs(1));
-                continue;
+fn replace_style_pack_hotkey_registrations<R>(
+    entries: &[crate::types::StylePackHotkey],
+    registrations: &mut std::collections::HashMap<String, R>,
+    mut register: impl FnMut(&crate::types::StylePackHotkey) -> Result<R, String>,
+) -> Result<(), String> {
+    registrations.clear();
+    for entry in entries {
+        match register(entry) {
+            Ok(registration) => {
+                registrations.insert(entry.pack_id.clone(), registration);
             }
-        };
-
-        let (done_tx, done_rx) = mpsc::sync_channel::<usize>(1);
-        let sync_inner = Arc::clone(&inner);
-        let _ = app.run_on_main_thread(move || {
-            let _ = done_tx.send(sync_style_pack_hotkeys(&sync_inner));
-        });
-        let failures = match done_rx.recv_timeout(std::time::Duration::from_secs(5)) {
-            Ok(n) => n,
-            Err(_) => {
-                attempts += 1;
-                if attempts <= 3 || attempts % 10 == 0 {
-                    log::warn!("[coord] style pack hotkeys 第 {attempts} 次注册超时；3s 后重试");
-                }
-                std::thread::sleep(std::time::Duration::from_secs(3));
-                continue;
+            Err(error) => {
+                registrations.clear();
+                return Err(error);
             }
-        };
-        if failures == 0 {
-            log::info!(
-                "[coord] style pack hotkey listeners installed after {} attempt(s)",
-                attempts + 1
-            );
-            return;
         }
-        attempts += 1;
-        if attempts <= 3 || attempts % 10 == 0 {
-            log::warn!("[coord] style pack hotkeys 有 {failures} 条注册失败；3s 后重试");
-        }
-        std::thread::sleep(std::time::Duration::from_secs(3));
     }
+    Ok(())
 }
 
-/// 按 prefs 全量对齐风格包快捷键注册状态。**必须在主线程执行**（macOS Carbon
-/// 要求 manager 在主线程构造）。策略为整表重建：先 drop 全部旧注册再逐条注册，
-/// 避免「两个包互换按键」这类增量 update 场景下新键仍被旧注册占用而失败。
-/// 返回「配置有效但注册失败」的条数。
-pub(super) fn sync_style_pack_hotkeys(inner: &Arc<Inner>) -> usize {
-    let entries: Vec<crate::types::StylePackHotkey> = inner
+fn style_pack_hotkey_registrations_match<R>(
+    desired: &[crate::types::StylePackHotkey],
+    registrations: &std::collections::HashMap<String, R>,
+    binding_of: impl for<'a> Fn(&'a R) -> &'a crate::types::ShortcutBinding,
+) -> bool {
+    desired.len() == registrations.len()
+        && desired.iter().all(|entry| {
+            registrations
+                .get(&entry.pack_id)
+                .is_some_and(|registration| binding_of(registration) == &entry.binding)
+        })
+}
+
+fn configured_style_pack_hotkeys(inner: &Arc<Inner>) -> Vec<crate::types::StylePackHotkey> {
+    inner
         .prefs
         .get()
         .style_pack_hotkeys
@@ -1308,48 +1286,119 @@ pub(super) fn sync_style_pack_hotkeys(inner: &Arc<Inner>) -> usize {
         .filter(|entry| {
             !is_unconfigured_shortcut(&entry.binding) && !is_modifier_only_shortcut(&entry.binding)
         })
-        .collect();
-    let mut monitors = inner.style_pack_hotkeys.lock();
-    monitors.clear();
-    let mut failures = 0;
-    for entry in entries {
-        let (tx, rx) = mpsc::channel::<ComboHotkeyEvent>();
-        match ComboHotkeyMonitor::start(entry.binding.clone(), tx) {
-            Ok(monitor) => {
-                monitors.insert(entry.pack_id.clone(), monitor);
-                let bridge_inner = Arc::clone(inner);
-                let pack_id = entry.pack_id.clone();
-                std::thread::Builder::new()
-                    .name("openless-style-pack-hotkey-bridge".into())
-                    .spawn(move || style_pack_hotkey_bridge_loop(bridge_inner, rx, pack_id))
-                    .ok();
-            }
-            Err(e) => {
-                log::warn!(
-                    "[coord] style pack hotkey {} 注册失败: {e}",
-                    entry.pack_id
+        .collect()
+}
+
+/// 常驻 supervisor：持续比较 prefs 与实际注册表。状态一致时低频复查；配置变化、
+/// 主动同步失败或只注册了部分条目时按 3s 节奏重试，直到收敛或 shutdown。
+pub(super) fn style_pack_hotkey_supervisor_loop(inner: Arc<Inner>) {
+    let mut attempts: u32 = 0;
+    loop {
+        if inner.shutdown.load(Ordering::SeqCst) {
+            return;
+        }
+
+        let desired = configured_style_pack_hotkeys(&inner);
+        let registrations_match = {
+            let registrations = inner.style_pack_hotkeys.lock();
+            style_pack_hotkey_registrations_match(&desired, &registrations, |registration| {
+                &registration.binding
+            })
+        };
+        if registrations_match {
+            attempts = 0;
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            continue;
+        }
+
+        match try_sync_style_pack_hotkeys_on_main_thread(&inner) {
+            Ok(()) => {
+                log::info!(
+                    "[coord] style pack hotkey listeners synchronized after {} attempt(s)",
+                    attempts + 1
                 );
-                failures += 1;
+                attempts = 0;
+                std::thread::sleep(std::time::Duration::from_secs(5));
+            }
+            Err(error) => {
+                attempts += 1;
+                if attempts <= 3 || attempts % 10 == 0 {
+                    log::warn!(
+                        "[coord] style pack hotkeys 第 {attempts} 次同步失败: {error}; 3s 后重试"
+                    );
+                }
+                std::thread::sleep(std::time::Duration::from_secs(3));
             }
         }
     }
-    failures
 }
 
-/// 设置变更后的主动同步路径（fire-and-forget dispatch 到主线程）。
+/// 按 prefs 全量对齐风格包快捷键注册状态。**必须在主线程执行**（macOS Carbon
+/// 要求 manager 在主线程构造）。策略为整表重建：先 drop 全部旧注册再逐条注册，
+/// 避免「两个包互换按键」时新键仍被旧注册占用。任意条目失败会清空本轮全部注册。
+pub(super) fn sync_style_pack_hotkeys(inner: &Arc<Inner>) -> Result<(), String> {
+    let entries = configured_style_pack_hotkeys(inner);
+    let mut registrations = inner.style_pack_hotkeys.lock();
+    replace_style_pack_hotkey_registrations(&entries, &mut registrations, |entry| {
+        let (tx, rx) = mpsc::channel::<ComboHotkeyEvent>();
+        let monitor = ComboHotkeyMonitor::start(entry.binding.clone(), tx).map_err(|error| {
+            format!(
+                "style pack hotkey {} registration failed: {error}",
+                entry.pack_id
+            )
+        })?;
+        let bridge_inner = Arc::clone(inner);
+        let pack_id = entry.pack_id.clone();
+        std::thread::Builder::new()
+            .name("openless-style-pack-hotkey-bridge".into())
+            .spawn(move || style_pack_hotkey_bridge_loop(bridge_inner, rx, pack_id))
+            .map_err(|error| {
+                format!(
+                    "style pack hotkey {} bridge thread failed: {error}",
+                    entry.pack_id
+                )
+            })?;
+        Ok(StylePackHotkeyRegistration {
+            binding: entry.binding.clone(),
+            _monitor: monitor,
+        })
+    })
+}
+
+/// 事务式设置路径：派发到主线程并等待最多 5s，确保调用方能回滚偏好并展示错误。
+pub(super) fn try_sync_style_pack_hotkeys_on_main_thread(inner: &Arc<Inner>) -> Result<(), String> {
+    let app = inner
+        .app
+        .lock()
+        .clone()
+        .ok_or_else(|| "AppHandle 未 bind，无法注册风格包快捷键".to_string())?;
+    let (result_tx, result_rx) = mpsc::sync_channel::<Result<(), String>>(1);
+    let sync_inner = Arc::clone(inner);
+    app.run_on_main_thread(move || {
+        let _ = result_tx.send(sync_style_pack_hotkeys(&sync_inner));
+    })
+    .map_err(|error| error.to_string())?;
+    result_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .map_err(|_| "注册风格包快捷键超时".to_string())?
+}
+
+/// 设置导入、删除风格包等不可整体回滚路径使用的主动同步。失败只记录日志，
+/// 常驻 supervisor 会根据 prefs 与实际注册表差异继续重试。
 pub(super) fn sync_style_pack_hotkeys_on_main_thread(inner: &Arc<Inner>) {
     let app = inner.app.lock().clone();
     let Some(app) = app else {
-        log::warn!("[coord] sync style pack hotkeys: AppHandle 未 bind，跳过");
+        log::warn!("[coord] sync style pack hotkeys: AppHandle 未 bind，等待 supervisor 重试");
         return;
     };
     let sync_inner = Arc::clone(inner);
-    let _ = app.run_on_main_thread(move || {
-        let failures = sync_style_pack_hotkeys(&sync_inner);
-        if failures > 0 {
-            log::warn!("[coord] style pack hotkeys 同步后仍有 {failures} 条注册失败");
+    if let Err(error) = app.run_on_main_thread(move || {
+        if let Err(error) = sync_style_pack_hotkeys(&sync_inner) {
+            log::warn!("[coord] style pack hotkeys 主动同步失败: {error}");
         }
-    });
+    }) {
+        log::warn!("[coord] dispatch style pack hotkeys sync failed: {error}");
+    }
 }
 
 pub(super) fn clear_style_pack_hotkeys_on_main_thread(inner: &Arc<Inner>) {
@@ -1680,6 +1729,112 @@ pub(super) fn window_key_matches_trigger(trigger: crate::types::HotkeyTrigger, k
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn style_hotkey(pack_id: &str, primary: &str) -> crate::types::StylePackHotkey {
+        crate::types::StylePackHotkey {
+            pack_id: pack_id.into(),
+            binding: crate::types::ShortcutBinding {
+                primary: primary.into(),
+                modifiers: vec!["alt".into()],
+            },
+        }
+    }
+
+    #[test]
+    fn style_pack_hotkey_registration_failure_leaves_no_partial_table() {
+        let entries = [
+            style_hotkey("builtin.raw", "1"),
+            style_hotkey("imported.x", "2"),
+        ];
+        let mut registrations = std::collections::HashMap::from([("old".into(), 9_u8)]);
+
+        let result =
+            replace_style_pack_hotkey_registrations(&entries, &mut registrations, |entry| {
+                if entry.pack_id == "imported.x" {
+                    Err("register imported.x failed".into())
+                } else {
+                    Ok(1)
+                }
+            });
+
+        assert_eq!(result.unwrap_err(), "register imported.x failed");
+        assert!(registrations.is_empty());
+    }
+
+    #[test]
+    fn style_pack_hotkey_registration_success_replaces_entire_table() {
+        let entries = [
+            style_hotkey("builtin.raw", "1"),
+            style_hotkey("imported.x", "2"),
+        ];
+        let mut registrations = std::collections::HashMap::from([("old".into(), 9_u8)]);
+
+        replace_style_pack_hotkey_registrations(&entries, &mut registrations, |entry| {
+            Ok(if entry.pack_id == "builtin.raw" { 1 } else { 2 })
+        })
+        .unwrap();
+
+        assert_eq!(registrations.len(), 2);
+        assert_eq!(registrations.get("builtin.raw"), Some(&1));
+        assert_eq!(registrations.get("imported.x"), Some(&2));
+        assert!(!registrations.contains_key("old"));
+    }
+
+    #[test]
+    fn style_pack_hotkey_registration_state_matches_exact_bindings() {
+        let desired = [
+            style_hotkey("builtin.raw", "1"),
+            style_hotkey("imported.x", "2"),
+        ];
+        let registrations = desired
+            .iter()
+            .map(|entry| (entry.pack_id.clone(), entry.binding.clone()))
+            .collect();
+
+        assert!(style_pack_hotkey_registrations_match(
+            &desired,
+            &registrations,
+            |binding| binding,
+        ));
+    }
+
+    #[test]
+    fn style_pack_hotkey_registration_state_detects_changed_or_missing_bindings() {
+        let desired = [
+            style_hotkey("builtin.raw", "1"),
+            style_hotkey("imported.x", "2"),
+        ];
+        let changed = std::collections::HashMap::from([
+            (
+                "builtin.raw".into(),
+                style_hotkey("builtin.raw", "9").binding,
+            ),
+            ("imported.x".into(), desired[1].binding.clone()),
+        ]);
+        let partial =
+            std::collections::HashMap::from([("builtin.raw".into(), desired[0].binding.clone())]);
+
+        assert!(!style_pack_hotkey_registrations_match(
+            &desired,
+            &changed,
+            |binding| binding,
+        ));
+        assert!(!style_pack_hotkey_registrations_match(
+            &desired,
+            &partial,
+            |binding| binding,
+        ));
+        assert!(style_pack_hotkey_registrations_match(
+            &[],
+            &std::collections::HashMap::<String, crate::types::ShortcutBinding>::new(),
+            |binding| binding,
+        ));
+        assert!(!style_pack_hotkey_registrations_match(
+            &[style_hotkey("builtin.raw", "1")],
+            &std::collections::HashMap::<String, crate::types::ShortcutBinding>::new(),
+            |binding| binding,
+        ));
+    }
 
     /// 轮询 `inner.state.cancelled` 直到满足条件，超时返回 false。
     fn wait_until(mut cond: impl FnMut() -> bool, timeout: std::time::Duration) -> bool {

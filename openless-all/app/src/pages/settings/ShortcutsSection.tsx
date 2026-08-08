@@ -66,11 +66,16 @@ export function ShortcutsSection() {
       disabled:
         pack.id !== currentPackId && stylePackHotkeys.some(entry => entry.packId === pack.id),
     }));
-  // 整表替换：后端校验通过才落库；失败时抛错交给调用方展示，本地列表保持旧值。
+  // 整表替换：失败时统一在本区域显示，并继续抛给 ShortcutRecorder 结束录制状态。
   const saveStylePackHotkeys = async (next: StylePackHotkey[]) => {
     setStylePackError(null);
-    await setStylePackHotkeys(next);
-    await savePrefs({ ...prefs, stylePackHotkeys: next });
+    try {
+      await setStylePackHotkeys(next);
+      await savePrefs({ ...prefs, stylePackHotkeys: next });
+    } catch (error) {
+      setStylePackError(String(error));
+      throw error;
+    }
   };
   const removeButtonStyle = {
     border: 'none',
@@ -176,9 +181,7 @@ export function ShortcutsSection() {
               const next = stylePackHotkeys.map((item, i) =>
                 i === index ? { ...item, packId } : item,
               );
-              void saveStylePackHotkeys(next).catch(error =>
-                setStylePackError(String(error)),
-              );
+              void saveStylePackHotkeys(next).catch(() => undefined);
             }}
           />
           <div style={{ flex: 1, minWidth: 0 }}>
@@ -199,9 +202,7 @@ export function ShortcutsSection() {
             style={removeButtonStyle}
             onClick={() => {
               const next = stylePackHotkeys.filter((_, i) => i !== index);
-              void saveStylePackHotkeys(next).catch(error =>
-                setStylePackError(String(error)),
-              );
+              void saveStylePackHotkeys(next).catch(() => undefined);
             }}
           >
             ✕
