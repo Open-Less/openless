@@ -3304,6 +3304,12 @@ mod tests {
         }
     }
 
+    fn learned_vocab_entry(phrase: &str, hits: u64) -> crate::types::DictionaryEntry {
+        let mut entry = vocab_entry(phrase, hits);
+        entry.note = Some(super::dictation::LEARNED_VOCAB_NOTE.to_string());
+        entry
+    }
+
     /// 真机复现：刚添加的碎片排在词典最前，把命中 18 次的 `hermes`、7 次的
     /// `win-shukong` 挤出了 240 字符的 ASR 预算。保底席位之后必须按命中排。
     #[test]
@@ -3356,6 +3362,65 @@ mod tests {
             vec!["Claude".to_string(), "mac-mini".to_string()],
             "保留 Claude 的写法，但沿用 claude 那次更靠前的位置"
         );
+    }
+
+    #[test]
+    fn learned_vocab_does_not_consume_fresh_manual_seats() {
+        let mut entries = Vec::new();
+        for i in 0..super::FRESH_VOCAB_SEATS {
+            entries.push(learned_vocab_entry(&format!("learned{i}"), 1_000 - i as u64));
+            entries.push(vocab_entry(&format!("manual{i}"), 0));
+        }
+
+        let ordered = super::prioritize_vocab_for_asr(entries);
+        let expected_manual: Vec<String> = (0..super::FRESH_VOCAB_SEATS)
+            .map(|i| format!("manual{i}"))
+            .collect();
+
+        assert_eq!(
+            &ordered[..super::FRESH_VOCAB_SEATS],
+            expected_manual.as_slice(),
+            "学习词条即使排在词典前面，也不能占用手动新增的保底席位"
+        );
+    }
+
+    #[test]
+    fn learned_vocab_does_not_backfill_unused_manual_seats() {
+        let entries = vec![
+            learned_vocab_entry("learned-low", 1),
+            vocab_entry("only-manual", 0),
+            learned_vocab_entry("learned-high", 20),
+        ];
+
+        let ordered = super::prioritize_vocab_for_asr(entries);
+
+        assert_eq!(ordered, vec!["only-manual", "learned-high", "learned-low"]);
+    }
+
+    #[test]
+    fn all_learned_vocab_is_ranked_by_hits() {
+        let entries = vec![
+            learned_vocab_entry("cold", 0),
+            learned_vocab_entry("hot", 12),
+            learned_vocab_entry("warm", 5),
+        ];
+
+        let ordered = super::prioritize_vocab_for_asr(entries);
+
+        assert_eq!(ordered, vec!["hot", "warm", "cold"]);
+    }
+
+    #[test]
+    fn asr_vocab_dedupes_across_manual_and_learned_sources() {
+        let entries = vec![
+            vocab_entry("claude", 0),
+            learned_vocab_entry("Claude", 33),
+            learned_vocab_entry("other", 10),
+        ];
+
+        let ordered = super::prioritize_vocab_for_asr(entries);
+
+        assert_eq!(ordered, vec!["Claude", "other"]);
     }
 
     #[test]
@@ -5095,8 +5160,9 @@ fn enabled_phrases(inner: &Arc<Inner>) -> Vec<String> {
 /// 它们、以为在生效，实际上一次都没生效过。
 ///
 /// 排序规则：
-/// 1. 最近添加的前 [`FRESH_VOCAB_SEATS`] 条保底——刚加的词还没机会攒命中，纯按
-///    命中排会让它永远进不去，而用户刚加它多半就是因为刚被它坑过。
+/// 1. 最近手动添加的前 [`FRESH_VOCAB_SEATS`] 条保底——刚加的词还没机会攒命中，纯按
+///    命中排会让它永远进不去，而用户刚加它多半就是因为刚被它坑过。手改学习词条不占
+///    这些席位；它们本来就可能是半截词，必须靠真实命中自己爬进预算。
 /// 2. 其余按命中次数降序。
 /// 3. 同词异形（`claude` / `Claude`）只留命中多的那个写法。
 fn asr_vocab_phrases(inner: &Arc<Inner>) -> Vec<String> {
@@ -5118,11 +5184,21 @@ const FRESH_VOCAB_SEATS: usize = 5;
 /// `entries` 必须是词典的原始顺序（最近添加在前）——保底席位靠它取「最近」，
 /// 不去解析 `created_at` 字符串（历史文件由 Swift 版写入，格式不保证一致）。
 fn prioritize_vocab_for_asr(entries: Vec<crate::types::DictionaryEntry>) -> Vec<String> {
-    let split = FRESH_VOCAB_SEATS.min(entries.len());
-    let mut ordered = entries;
-    // 保底席位之后的部分按命中降序；`sort_by_key` 是稳定排序，同命中次数的保持
-    // 词典原顺序（最近添加在前）。
-    ordered[split..].sort_by_key(|e| std::cmp::Reverse(e.hits));
+    let mut fresh_manual = Vec::with_capacity(FRESH_VOCAB_SEATS.min(entries.len()));
+    let mut ranked = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let learned = entry.note.as_deref() == Some(dictation::LEARNED_VOCAB_NOTE);
+        if !learned && fresh_manual.len() < FRESH_VOCAB_SEATS {
+            fresh_manual.push(entry);
+        } else {
+            ranked.push(entry);
+        }
+    }
+    // 保底席位之外的全部词条按命中降序；`sort_by_key` 是稳定排序，同命中次数的保持
+    // 词典原顺序（最近添加在前）。学习词条也在这里，不会被拿来填空缺的手动保底席位。
+    ranked.sort_by_key(|e| std::cmp::Reverse(e.hits));
+    fresh_manual.extend(ranked);
+    let ordered = fresh_manual;
 
     // 同一个词的不同写法（`claude` / `Claude`）只留一个：既省预算，也免得两种
     // 写法一起进词表让模型无所适从。留**命中多**的那个写法，但位置取最靠前那次

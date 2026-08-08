@@ -39,6 +39,21 @@ use super::{
 /// 超时；而我们最终只要几百字。阈值取得比任何合理预算都大得多，正常文档仍走简单路径。
 const FULL_TEXT_MAX_UTF16: usize = 20_000;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DocumentLength {
+    Unknown,
+    WithinLimit(usize),
+    OverLimit(usize),
+}
+
+fn classify_document_length(total: Option<usize>, limit: usize) -> DocumentLength {
+    match total {
+        None => DocumentLength::Unknown,
+        Some(total) if total <= limit => DocumentLength::WithinLimit(total),
+        Some(total) => DocumentLength::OverLimit(total),
+    }
+}
+
 /// 一条光标通知要跟最后一次文本变化隔多久，才算「用户真的把光标移开了」。
 ///
 /// 两种通知是**成对**发出来的：打一个字，`AXValueChanged` 和 `AXSelectedTextChanged`
@@ -299,25 +314,31 @@ unsafe fn read_document(focused: AxUiElementRef, budget_chars: usize) -> ReadOut
     let Some(cursor_utf16) = copy_caret_offset(focused) else {
         return ReadOutcome::Unavailable("AXSelectedTextRange unavailable (not a text element?)");
     };
-    let total_utf16 = copy_index_attr(focused, b"AXNumberOfCharacters\0");
-
-    // 小文档（绝大多数情况）：整篇读回来，按 char 精确截窗。
-    let full_text = match total_utf16 {
-        Some(total) if total > FULL_TEXT_MAX_UTF16 => None,
-        _ => copy_string_attr(focused, b"AXValue\0"),
+    let total_utf16 = match classify_document_length(
+        copy_index_attr(focused, b"AXNumberOfCharacters\0"),
+        FULL_TEXT_MAX_UTF16,
+    ) {
+        DocumentLength::Unknown => {
+            return ReadOutcome::Unavailable(
+                "AXNumberOfCharacters unavailable; refusing an unbounded AXValue read",
+            );
+        }
+        DocumentLength::WithinLimit(total) => {
+            // 小文档（绝大多数情况）：整篇读回来，按 char 精确截窗。AXValue 不可读时
+            // 仍可用已知总长度走下面的有界 AXStringForRange 回落。
+            if let Some(text) = copy_string_attr(focused, b"AXValue\0") {
+                let cursor = utf16_offset_to_char_offset(&text, cursor_utf16);
+                return ReadOutcome::Window(window_around_cursor(&text, cursor, budget_chars));
+            }
+            total
+        }
+        DocumentLength::OverLimit(total) => total,
     };
-    if let Some(text) = full_text {
-        let cursor = utf16_offset_to_char_offset(&text, cursor_utf16);
-        return ReadOutcome::Window(window_around_cursor(&text, cursor, budget_chars));
-    }
 
     // 回落：文档太大，或者该控件压根不给 AXValue（Electron 类常见）。改成只跟它要
     // 光标附近的一段。UTF-16 预算给两倍 —— 宁可多要一点回来自己裁，也不要因为
     // char/UTF-16 换算差把上文截秃。
-    let Some(total) = total_utf16 else {
-        return ReadOutcome::Unavailable("neither AXValue nor AXNumberOfCharacters is readable");
-    };
-    let span = plan_window(total, cursor_utf16, budget_chars.saturating_mul(2));
+    let span = plan_window(total_utf16, cursor_utf16, budget_chars.saturating_mul(2));
     if span.len == 0 {
         return ReadOutcome::Window(super::DocumentWindow {
             text: String::new(),
@@ -755,7 +776,7 @@ unsafe fn settle_pending_edit(ctx: &WatchContext, force: bool) {
     (ctx.on_edit)(edit);
 }
 
-/// 观察器愿意盯的文档上限（char）。
+/// 观察器愿意盯的文档上限（UTF-16 code unit）。
 ///
 /// 每收到一条通知就要整份读一次 `AXValue` 再做 O(n) 比对，而观察窗口最长 60 秒、
 /// 用户每敲一个键都可能来一条。文档大到一定程度，这个代价就变成「用户改一个词，
@@ -763,7 +784,7 @@ unsafe fn settle_pending_edit(ctx: &WatchContext, force: bool) {
 ///
 /// 与 [`FULL_TEXT_MAX_UTF16`] 同一量级：一次性读不下的文档，也不值得逐键盯着。
 /// 超过就干脆不武装 —— 学不到词可以接受，让用户打字变卡不行。
-const EDIT_WATCH_MAX_CHARS: usize = 20_000;
+const EDIT_WATCH_MAX_UTF16: usize = 20_000;
 
 /// 武装手改监听。成功返回停止开关，失败返回 `None`（只 warn，绝不影响主链路）。
 ///
@@ -790,12 +811,12 @@ pub(super) fn spawn_edit_watcher(
                 return;
             };
             // 兜底。主判定在 `grab_focused_element` 里靠 `AXNumberOfCharacters` 完成，
-            // 那一道能在整篇拷回来**之前**就拦住；这一道是给不报 `AXNumberOfCharacters`
-            // 的 app 用的 —— 那种情况只能拷完再量。
-            if baseline.chars().count() > EDIT_WATCH_MAX_CHARS {
+            // 那一道能在整篇拷回来**之前**就拦住；这里防目标 app 报出与 AXValue 不一致
+            // 的长度，避免观察器在错误元数据下继续工作。
+            let baseline_utf16 = baseline.encode_utf16().count();
+            if baseline_utf16 > EDIT_WATCH_MAX_UTF16 {
                 log::info!(
-                    "[cursor-context] edit watch skipped: document is {} chars (limit {EDIT_WATCH_MAX_CHARS})",
-                    baseline.chars().count()
+                    "[cursor-context] edit watch skipped: AXValue is {baseline_utf16} UTF-16 units (limit {EDIT_WATCH_MAX_UTF16})"
                 );
                 return;
             }
@@ -870,16 +891,27 @@ fn grab_focused_element() -> Option<(SendableElement, String, i32)> {
 
         // 先问长度再决定要不要整篇拷回来 —— 与 `read_document` 同一套做法。
         // `AXValue` 会把整篇文档跨进程拷过来，在一个十万字的文件上光 marshalling 就够
-        // 撞上超时；而超限的文档我们本来就不观察（见 `EDIT_WATCH_MAX_CHARS`），白拷一次
+        // 撞上超时；而超限的文档我们本来就不观察（见 `EDIT_WATCH_MAX_UTF16`），白拷一次
         // 纯属浪费。
-        if let Some(total) = copy_index_attr(focused, b"AXNumberOfCharacters\0") {
-            if total > EDIT_WATCH_MAX_CHARS {
+        match classify_document_length(
+            copy_index_attr(focused, b"AXNumberOfCharacters\0"),
+            EDIT_WATCH_MAX_UTF16,
+        ) {
+            DocumentLength::Unknown => {
                 log::info!(
-                    "[cursor-context] edit watch skipped: document is {total} UTF-16 units (limit {EDIT_WATCH_MAX_CHARS})"
+                    "[cursor-context] edit watch skipped: AXNumberOfCharacters unavailable; refusing an unbounded AXValue read"
                 );
                 CFRelease(focused as CFTypeRef);
                 return None;
             }
+            DocumentLength::OverLimit(total) => {
+                log::info!(
+                    "[cursor-context] edit watch skipped: document is {total} UTF-16 units (limit {EDIT_WATCH_MAX_UTF16})"
+                );
+                CFRelease(focused as CFTypeRef);
+                return None;
+            }
+            DocumentLength::WithinLimit(_) => {}
         }
 
         let baseline = copy_string_attr(focused, b"AXValue\0");
@@ -1041,7 +1073,31 @@ fn run_edit_watch_loop(
 
 #[cfg(test)]
 mod tests {
-    use super::caret_offset_from_location;
+    use super::{caret_offset_from_location, classify_document_length, DocumentLength};
+
+    #[test]
+    fn unknown_document_length_is_not_safe_for_a_full_value_read() {
+        assert_eq!(
+            classify_document_length(None, 20_000),
+            DocumentLength::Unknown
+        );
+    }
+
+    #[test]
+    fn small_document_length_allows_a_full_value_read() {
+        assert_eq!(
+            classify_document_length(Some(20_000), 20_000),
+            DocumentLength::WithinLimit(20_000)
+        );
+    }
+
+    #[test]
+    fn large_document_length_requires_a_bounded_range_read() {
+        assert_eq!(
+            classify_document_length(Some(20_001), 20_000),
+            DocumentLength::OverLimit(20_001)
+        );
+    }
 
     /// 负数 location 是「没有光标」的哨兵，必须和「光标在开头」区分开。
     ///
