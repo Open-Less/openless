@@ -150,9 +150,9 @@ fn persist_style_pack_hotkeys<T: StylePackHotkeyWriter>(
     hotkeys: Vec<StylePackHotkey>,
 ) -> Result<(), String> {
     let previous = writer.read_style_pack_hotkey_preferences();
+    reject_style_pack_hotkey_conflicts(&hotkeys, &previous)?;
     let mut next = previous.clone();
     next.style_pack_hotkeys = hotkeys;
-    reject_hotkey_collisions(&next)?;
 
     writer.write_style_pack_hotkey_preferences(next)?;
     if let Err(registration_error) = writer.try_refresh_style_pack_hotkeys() {
@@ -716,6 +716,24 @@ mod tests {
     #[test]
     fn style_pack_hotkey_transaction_persists_and_registers_valid_candidate() {
         let writer = MockStylePackHotkeyWriter::new(UserPreferences::default(), [Ok(())], [Ok(())]);
+        let expected = vec![style_hotkey("builtin.raw", "1")];
+
+        persist_style_pack_hotkeys(&writer, expected.clone()).unwrap();
+
+        assert_eq!(writer.prefs.lock().style_pack_hotkeys, expected);
+        assert_eq!(*writer.write_count.lock(), 1);
+        assert_eq!(*writer.refresh_count.lock(), 1);
+    }
+
+    #[test]
+    fn style_pack_hotkey_transaction_ignores_unrelated_existing_collision() {
+        let existing_binding = key("RightAlt");
+        let previous = UserPreferences {
+            dictation_hotkey: existing_binding.clone(),
+            selection_polish_hotkey: Some(existing_binding),
+            ..Default::default()
+        };
+        let writer = MockStylePackHotkeyWriter::new(previous, [Ok(())], [Ok(())]);
         let expected = vec![style_hotkey("builtin.raw", "1")];
 
         persist_style_pack_hotkeys(&writer, expected.clone()).unwrap();
