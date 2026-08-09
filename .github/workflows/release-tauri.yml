@@ -21,6 +21,11 @@ on:
       - 'v*-tauri'
   workflow_dispatch:
 
+# 同一 tag 重复推送只跑最新一次；workflow_dispatch 用 run_id 隔离避免互相取消。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build:
     permissions:
@@ -60,13 +65,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # vendor/qwen-asr 是 macOS 上 build.rs 必须的 git submodule（cc-rs 编译
-          # Open-Less/qwen-asr fork 的 C 源），不拉就会在 mac 端 cargo build 阶段挂掉。
-          submodules: recursive
+          # vendor/qwen-asr 仅 macOS 上 build.rs 会编译（build.rs:49 build_qwen_asr_macos）；
+          # Windows/Linux 的 cargo build 不需要子模块，去掉非 macOS job 的递归拉取。
+          submodules: ${{ startsWith(matrix.platform, 'macos') && 'recursive' || 'false' }}
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: "22"
           cache: npm
           cache-dependency-path: 'openless-all/app/package-lock.json'
 

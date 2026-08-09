@@ -13,6 +13,11 @@ on:
     branches: [main, beta]
   workflow_dispatch:
 
+# 同一 PR / 分支快速重复推送时，取消旧运行省并发额度。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   android-check:
     name: Android cargo check
@@ -22,9 +27,8 @@ jobs:
         working-directory: openless-all/app
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
+        # vendor/qwen-asr 仅 macOS 上 build.rs 会编译（build.rs:49 build_qwen_asr_macos）；
+        # Android/Linux 的 cargo check 不需要，去掉递归拉取省一次网络 fetch + 失败点。
       - name: Setup Android SDK + NDK
         uses: android-actions/setup-android@v3
         with:
@@ -70,6 +74,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android,x86_64-linux-android
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: 'openless-all/app/src-tauri -> target'
 
       - uses: gradle/actions/setup-gradle@v4
 
@@ -170,9 +178,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # vendor/qwen-asr 是 macOS 上 build.rs 必须的 git submodule。Windows
-          # checkout 也拉一份保持与 release-tauri.yml 一致，开销几秒可以忽略。
-          submodules: recursive
+          # vendor/qwen-asr 仅 macOS 上 build.rs 会编译（build.rs:49 build_qwen_asr_macos）。
+          # Windows/Linux 的 cargo check 不需要子模块；用矩阵条件避免非 macOS job
+          # 多拉一次 git submodule（省网络 fetch + 去掉一个失败点）。
+          submodules: ${{ matrix.os == 'macos-latest' && 'recursive' || 'false' }}
 
       - uses: actions/setup-node@v4
         with:
@@ -181,6 +190,10 @@ jobs:
           cache-dependency-path: openless-all/app/package-lock.json
 
       - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: 'openless-all/app/src-tauri -> target'
 
       - name: Install Linux check dependencies
         if: runner.os == 'Linux'

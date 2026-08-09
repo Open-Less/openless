@@ -13,6 +13,11 @@ on:
       - 'v*-tauri'
   workflow_dispatch:
 
+# 同一 tag 重复推送只跑最新一次；workflow_dispatch 用 run_id 隔离避免互相取消。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build-android-apk:
     permissions:
@@ -25,8 +30,8 @@ jobs:
       OPENLESS_RELEASE_CHANNEL: ${{ (endsWith(github.ref_name, '-beta-tauri') || contains(github.ref_name, '-Beta.')) && 'beta' || 'stable' }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
+        # vendor/qwen-asr 仅 macOS 上 build.rs 会编译；Android APK 构建完全不需要
+        # 子模块，去掉递归拉取省一次网络 fetch + 失败点。
 
       - name: Detect build mode
         id: mode
@@ -136,7 +141,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: "22"
           cache: npm
           cache-dependency-path: openless-all/app/package-lock.json
 
