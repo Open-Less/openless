@@ -13,9 +13,9 @@ on:
     branches: [main, beta]
   workflow_dispatch:
 
-# 同一 PR / 分支快速重复推送时，取消旧运行省并发额度。
+# 同一 PR 快速重复推送时取消旧运行；workflow_dispatch 用 run_id 隔离。
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:

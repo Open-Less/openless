@@ -10,7 +10,7 @@ const workflows = {
   ),
 };
 
-const tagGroup =
+const isolatedManualGroup =
   "group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}";
 const cancelSupersededTagPush = "cancel-in-progress: ${{ github.event_name == 'push' }}";
 
@@ -19,7 +19,7 @@ for (const [name, source] of [
   ['Tauri release', workflows.tauriRelease],
 ]) {
   assert.ok(
-    source.includes(tagGroup),
+    source.includes(isolatedManualGroup),
     `${name} workflow must isolate manual runs while grouping repeated pushes of the same tag`,
   );
   assert.ok(
@@ -29,8 +29,8 @@ for (const [name, source] of [
 }
 
 assert.ok(
-  workflows.ci.includes('group: ${{ github.workflow }}-${{ github.ref }}'),
-  'PR CI must group runs by workflow and ref',
+  workflows.ci.includes(isolatedManualGroup),
+  'PR CI must isolate manual runs while grouping pull-request and branch runs by ref',
 );
 assert.ok(
   workflows.ci.includes(
