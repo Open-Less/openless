@@ -222,7 +222,7 @@ fn resolve_openless_log_path() -> Result<std::path::PathBuf, String> {
 /// 微信里点进输入框，探针在那时才真正开始读。
 ///
 /// ```js
-/// await __TAURI__.core.invoke('debug_read_cursor_context', { delayMs: 3000 })
+/// await window.__TAURI_INTERNALS__.invoke('debug_read_cursor_context', { delayMs: 3000 })
 /// ```
 #[tauri::command]
 pub async fn debug_read_cursor_context(

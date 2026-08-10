@@ -74,7 +74,7 @@ class CdpClient:
         args_json = json.dumps(args or {}, ensure_ascii=False)
         expression = f"""
         (async () => {{
-          const value = await window.__TAURI__.core.invoke({json.dumps(command)}, {args_json});
+          const value = await window.__TAURI_INTERNALS__.invoke({json.dumps(command)}, {args_json});
           return JSON.stringify(value ?? null);
         }})()
         """
