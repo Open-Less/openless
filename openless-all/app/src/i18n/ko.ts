@@ -1061,6 +1061,8 @@ export const ko: typeof zhCN = {
       asrMissingTextField: 'ASR 응답에 text 필드가 없습니다.',
       apiKeyMissing: 'API Key 가 비어 있습니다.',
       endpointMissing: 'Endpoint 가 비어 있습니다.',
+      volcengineAppIdMissing: 'APP ID 가 비어 있습니다.',
+      volcengineAccessTokenMissing: 'Access Token 이 비어 있습니다.',
       requestTimeout: '요청 시간이 초과되었습니다. 잠시 후 다시 시도하세요.',
     },
     shortcuts: {

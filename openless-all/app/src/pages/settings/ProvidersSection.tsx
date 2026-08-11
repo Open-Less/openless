@@ -865,6 +865,11 @@ function providerErrorMessage(error: unknown, t: ReturnType<typeof useTranslatio
   if (message === 'providerNetworkError') return t('common.networkError');
   if (message === 'providerReadResponseFailed' || message === 'providerClientInitFailed') return t('common.operationFailed');
   if (message === 'providerRequestTimeout') return t('settings.providers.requestTimeout');
+  if (message === 'volcengineAppIdMissing') return t('settings.providers.volcengineAppIdMissing');
+  if (message === 'volcengineAccessTokenMissing') return t('settings.providers.volcengineAccessTokenMissing');
+  if (message === 'volcengineApiKeyMissing') return t('settings.providers.apiKeyMissing');
+  // 火山握手被拒/被限流的报错自带状态码与场景说明，原样透传比笼统的「操作失败」有用。
+  if (message.includes('凭据被拒') || message.includes('被限流')) return message;
   if (message.includes('API Key')) return t('settings.providers.apiKeyMissing');
   if (message.includes('Endpoint')) return t('settings.providers.endpointMissing');
   if (message.includes('timeout') || message.includes('超时')) return t('settings.providers.requestTimeout');

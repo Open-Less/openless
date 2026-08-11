@@ -1061,6 +1061,8 @@ export const ja: typeof zhCN = {
       asrMissingTextField: 'ASR の応答に text フィールドがありません。',
       apiKeyMissing: 'API Key が空です。',
       endpointMissing: 'Endpoint が空です。',
+      volcengineAppIdMissing: 'APP ID が空です。',
+      volcengineAccessTokenMissing: 'Access Token が空です。',
       requestTimeout: 'リクエストがタイムアウトしました。後で再試行してください。',
     },
     shortcuts: {

@@ -30,7 +30,7 @@ use super::{AudioConsumer, DictionaryHotword, RawTranscript};
 const ENDPOINT_APP_ID_TOKEN: &str = "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async";
 const ENDPOINT_API_KEY: &str = "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async";
 /// 200 ms of 16 kHz / 16-bit / mono PCM.
-const TARGET_AUDIO_CHUNK_BYTES: usize = 6_400;
+pub(crate) const TARGET_AUDIO_CHUNK_BYTES: usize = 6_400;
 /// 16 kHz · 16-bit · mono = 32 000 bytes/sec → 32 bytes/ms.
 const BYTES_PER_MS: f64 = 32.0;
 const HOTWORD_CAP: usize = 80;

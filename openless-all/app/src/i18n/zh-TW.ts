@@ -1059,6 +1059,8 @@ export const zhTW: typeof zhCN = {
       asrMissingTextField: 'ASR 響應缺少 text 字段。',
       apiKeyMissing: 'API Key 爲空。',
       endpointMissing: 'Endpoint 爲空。',
+      volcengineAppIdMissing: 'APP ID 爲空。',
+      volcengineAccessTokenMissing: 'Access Token 爲空。',
       requestTimeout: '請求超時，請稍後重試。',
     },
     shortcuts: {

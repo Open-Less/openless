@@ -1059,6 +1059,8 @@ export const en: typeof zhCN = {
       asrMissingTextField: 'ASR response is missing the text field.',
       apiKeyMissing: 'API Key is empty.',
       endpointMissing: 'Endpoint is empty.',
+      volcengineAppIdMissing: 'APP ID is empty.',
+      volcengineAccessTokenMissing: 'Access Token is empty.',
       requestTimeout: 'Request timed out. Try again later.',
     },
     shortcuts: {

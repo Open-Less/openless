@@ -1057,6 +1057,8 @@ export const zhCN = {
       asrMissingTextField: 'ASR 响应缺少 text 字段。',
       apiKeyMissing: 'API Key 为空。',
       endpointMissing: 'Endpoint 为空。',
+      volcengineAppIdMissing: 'APP ID 为空。',
+      volcengineAccessTokenMissing: 'Access Token 为空。',
       requestTimeout: '请求超时，请稍后重试。',
     },
     shortcuts: {

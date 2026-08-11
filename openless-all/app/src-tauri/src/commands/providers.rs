@@ -420,6 +420,12 @@ async fn validate_asr_provider(scope: &ProviderScope) -> Result<(), String> {
     if active_asr == crate::asr::xfyun::PROVIDER_ID {
         return validate_xfyun_asr_provider(scope).await;
     }
+    // 火山走专属 WS 协议与 volcengine.* 凭据槽位，不能落进下面的 OpenAI 兼容
+    // HTTP 兜底（那条路只认 asr.api_key —— 火山从不写入的槽位，填对也必报
+    // 「API Key 为空」）。
+    if active_asr == "volcengine" {
+        return validate_volcengine_asr_provider(scope).await;
+    }
     // StepFun 一入口双协议：`*-stream` 模型走实时 WS 验证，其余走批式
     // /audio/transcriptions（与 build 侧 resolve_effective_asr_provider 同判据）。
     if active_asr == "stepfun" || active_asr == crate::asr::stepfun_realtime::PROVIDER_ID {
@@ -476,6 +482,83 @@ async fn validate_xfyun_asr_provider(scope: &ProviderScope) -> Result<(), String
     match asr.await_final_result().await {
         Ok(_) => Ok(()),
         Err(crate::asr::xfyun::XfyunASRError::NoFinalResult) => Ok(()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// 按鉴权模式检查火山凭据完整性，返回给前端映射多语言文案的哨兵串
+/// （providerErrorMessage 识别）。与 [`VolcengineAuthMode::auth_ok`] 同一
+/// trim 语义，但区分缺哪一项，让用户直接知道该补哪个输入框。
+///
+/// [`VolcengineAuthMode::auth_ok`]: crate::asr::volcengine::VolcengineAuthMode::auth_ok
+fn volcengine_missing_credential_error(
+    auth_mode: &crate::asr::volcengine::VolcengineAuthMode,
+    app_id: &str,
+    secret: &str,
+) -> Option<&'static str> {
+    use crate::asr::volcengine::VolcengineAuthMode;
+    match auth_mode {
+        VolcengineAuthMode::AppIdToken => {
+            if app_id.trim().is_empty() {
+                return Some("volcengineAppIdMissing");
+            }
+            if secret.trim().is_empty() {
+                return Some("volcengineAccessTokenMissing");
+            }
+        }
+        VolcengineAuthMode::ApiKey => {
+            if secret.trim().is_empty() {
+                return Some("volcengineApiKeyMissing");
+            }
+        }
+    }
+    None
+}
+
+/// 火山 bigmodel 验证：真连 + 1s 静音 + 收尾。密钥槽位随鉴权模式（与
+/// `read_volc_credentials` 同规则）：旧版读 volcengine.access_key，新版控制台
+/// 读 volcengine.api_key，互不污染。鉴权错误（401/403 → AuthRejected）在
+/// WebSocket 握手阶段即返回；纯静音会话服务端可能不回 final（等价「没说话」），
+/// 这类 `NoFinalResult` 不算验证失败 —— 握手成功已经证明凭据有效。
+async fn validate_volcengine_asr_provider(scope: &ProviderScope) -> Result<(), String> {
+    use crate::asr::volcengine::{VolcengineAuthMode, VolcengineCredentials};
+    let auth_mode = scope
+        .get(CredentialAccount::VolcengineAuthMode)?
+        .map(|s| VolcengineAuthMode::from_str(&s))
+        .unwrap_or(VolcengineAuthMode::AppIdToken);
+    let app_id = scope
+        .get(CredentialAccount::VolcengineAppKey)?
+        .unwrap_or_default();
+    let secret = match auth_mode {
+        VolcengineAuthMode::AppIdToken => scope.get(CredentialAccount::VolcengineAccessKey)?,
+        VolcengineAuthMode::ApiKey => scope.get(CredentialAccount::VolcengineApiKey)?,
+    }
+    .unwrap_or_default();
+    if let Some(message) = volcengine_missing_credential_error(&auth_mode, &app_id, &secret) {
+        return Err(message.to_string());
+    }
+    let resource_id = scope
+        .get(CredentialAccount::VolcengineResourceId)?
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| VolcengineCredentials::default_resource_id().to_string());
+    let asr = std::sync::Arc::new(crate::asr::VolcengineStreamingASR::new(
+        VolcengineCredentials {
+            auth_mode,
+            app_id,
+            access_token: secret,
+            resource_id,
+        },
+        Vec::new(),
+    ));
+    asr.open_session().await.map_err(|e| e.to_string())?;
+    crate::asr::AudioConsumer::consume_pcm_chunk(
+        &*asr,
+        &vec![0u8; crate::asr::volcengine::TARGET_AUDIO_CHUNK_BYTES * 5],
+    );
+    asr.send_last_frame().await.map_err(|e| e.to_string())?;
+    match asr.await_final_result().await {
+        Ok(_) => Ok(()),
+        Err(crate::asr::volcengine::VolcengineASRError::NoFinalResult) => Ok(()),
         Err(e) => Err(e.to_string()),
     }
 }
@@ -1181,8 +1264,8 @@ mod tests {
     use super::{
         asr_error_is_no_speech_rejection, fetch_provider_models, models_url,
         provider_llm_error_message, provider_log_context, provider_request_error_message,
-        sanitized_provider_destination, send_dashscope_multimodal_validation, ProviderConfig,
-        ProviderScope,
+        sanitized_provider_destination, send_dashscope_multimodal_validation,
+        volcengine_missing_credential_error, ProviderConfig, ProviderScope,
     };
     use crate::endpoint_security::validate_http_endpoint;
 
@@ -1214,6 +1297,34 @@ mod tests {
                 .expect("channel provider kind must remain supported");
             assert_eq!(scope.channel.as_deref(), Some("channel-1"));
         }
+    }
+
+    #[test]
+    fn volcengine_missing_credential_error_follows_auth_mode() {
+        use crate::asr::volcengine::VolcengineAuthMode;
+        // 旧版：先查 APP ID 再查 Access Token；全空格视为未填（trim 语义，
+        // 与 VolcengineAuthMode::auth_ok 一致）。
+        assert_eq!(
+            volcengine_missing_credential_error(&VolcengineAuthMode::AppIdToken, "  ", "tok"),
+            Some("volcengineAppIdMissing")
+        );
+        assert_eq!(
+            volcengine_missing_credential_error(&VolcengineAuthMode::AppIdToken, "app", "  "),
+            Some("volcengineAccessTokenMissing")
+        );
+        assert_eq!(
+            volcengine_missing_credential_error(&VolcengineAuthMode::AppIdToken, "app", "tok"),
+            None
+        );
+        // 新版控制台：只查 API Key，不要求 APP ID。
+        assert_eq!(
+            volcengine_missing_credential_error(&VolcengineAuthMode::ApiKey, "", "  "),
+            Some("volcengineApiKeyMissing")
+        );
+        assert_eq!(
+            volcengine_missing_credential_error(&VolcengineAuthMode::ApiKey, "", "key"),
+            None
+        );
     }
 
     #[test]
