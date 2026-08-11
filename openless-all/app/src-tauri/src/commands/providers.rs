@@ -537,10 +537,9 @@ async fn validate_volcengine_asr_provider(scope: &ProviderScope) -> Result<(), S
     if let Some(message) = volcengine_missing_credential_error(&auth_mode, &app_id, &secret) {
         return Err(message.to_string());
     }
-    let resource_id = scope
-        .get(CredentialAccount::VolcengineResourceId)?
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| VolcengineCredentials::default_resource_id().to_string());
+    let resource_id = VolcengineCredentials::resolve_resource_id(
+        scope.get(CredentialAccount::VolcengineResourceId)?,
+    );
     let asr = std::sync::Arc::new(crate::asr::VolcengineStreamingASR::new(
         VolcengineCredentials {
             auth_mode,

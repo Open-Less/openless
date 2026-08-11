@@ -3103,11 +3103,11 @@ fn read_volc_credentials() -> VolcengineCredentials {
             .flatten()
             .unwrap_or_default(),
     };
-    let resource_id = CredentialsVault::get(CredentialAccount::VolcengineResourceId)
-        .ok()
-        .flatten()
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| VolcengineCredentials::default_resource_id().to_string());
+    let resource_id = VolcengineCredentials::resolve_resource_id(
+        CredentialsVault::get(CredentialAccount::VolcengineResourceId)
+            .ok()
+            .flatten(),
+    );
     VolcengineCredentials {
         auth_mode,
         app_id,
