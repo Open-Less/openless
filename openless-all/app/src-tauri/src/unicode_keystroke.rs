@@ -91,11 +91,50 @@ pub enum TisError {
 #[cfg(target_os = "macos")]
 mod macos_impl {
     use super::{TisError, TypeError};
+    use crate::types::MacosNewlineMode;
     use std::ffi::c_void;
     use std::time::Duration;
     use tauri::{AppHandle, Runtime};
 
     const INTER_KEYSTROKE_DELAY: Duration = Duration::from_millis(1);
+
+    /// 逐字上屏时单个 char 的发送方式。
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(super) enum MacKeystroke {
+        /// 换行：发真实的 Shift+Return 按键（聊天框软换行）。
+        ShiftReturn,
+        /// 换行：发真实的 Return 按键（聊天框里等于发送）。
+        Return,
+        /// CR：不发任何键。`\r\n` 里它只是 `\n` 的前缀，发了会变成两个换行；
+        /// 而 LLM 输出中不存在「单独的 `\r` 表示换行」的老 Mac 格式。吞掉最稳，
+        /// 也让跨 delta 边界被拆开的 `\r` / `\n` 各自都不会多打一个换行。
+        Swallow,
+        /// 普通字符：`CGEventKeyboardSetUnicodeString`。
+        Unicode,
+    }
+
+    /// **换行必须走真实按键，不能当普通 Unicode 字符发。**
+    ///
+    /// macOS 的文本输入系统看到 U+000A 就当作 Return —— 在微信 / Slack / Telegram
+    /// 这类聊天框里等价于「发送」。曾经有一条带空行的两段话被逐字上屏，第一个 `\n`
+    /// 直接把上半句发了出去，下半句留在了输入框里。
+    ///
+    /// 默认发 Shift+Return：在聊天框是「软换行」（不发送），在编辑器 / 终端 / 网页
+    /// textarea 里就是普通换行 —— 两边都对。Windows 侧早有同款结论（见
+    /// `WindowsSendInputNewlineMode::ShiftEnter`，设置文案直接写着「聊天框选它」）。
+    ///
+    /// 用户可以在设置里改成 `Return`：风格市场上有靠换行把一段话拆成多条消息的风格包，
+    /// 那种效果要的正是真回车。
+    pub(super) fn classify_mac_keystroke(ch: char, mode: MacosNewlineMode) -> MacKeystroke {
+        match ch {
+            '\n' => match mode {
+                MacosNewlineMode::ShiftReturn => MacKeystroke::ShiftReturn,
+                MacosNewlineMode::Return => MacKeystroke::Return,
+            },
+            '\r' => MacKeystroke::Swallow,
+            _ => MacKeystroke::Unicode,
+        }
+    }
 
     /// 之前激活的 input source 引用 token。携带 raw ptr 的 usize 表示，所有解引用都
     /// 通过 `restore_input_source` 调度到主线程执行；手动 `Send + Sync`。
@@ -106,6 +145,13 @@ mod macos_impl {
     unsafe impl Sync for PreviousInputSource {}
 
     pub fn type_unicode_chunk(text: &str) -> Result<usize, TypeError> {
+        type_unicode_chunk_with_options(text, MacosNewlineMode::default())
+    }
+
+    pub fn type_unicode_chunk_with_options(
+        text: &str,
+        newline_mode: MacosNewlineMode,
+    ) -> Result<usize, TypeError> {
         if text.is_empty() {
             return Ok(0);
         }
@@ -114,7 +160,17 @@ mod macos_impl {
         }
         let mut typed_chars = 0;
         for ch in text.chars() {
-            if let Err(e) = send_one_codepoint(ch) {
+            let sent = match classify_mac_keystroke(ch, newline_mode) {
+                MacKeystroke::ShiftReturn => send_shift_return(),
+                MacKeystroke::Return => send_return(),
+                // 吞掉的 char 也要计数：调用方（`flush_streaming_insert_buffer_with`）
+                // 拿 `typed_chars` 和 `delta.chars().count()` 比对，少一个就判定
+                // 「部分失败」并丢弃后续所有 delta。计数的语义是「这个 char 已处理」，
+                // 不是「屏幕上多了一个字符」。
+                MacKeystroke::Swallow => Ok(()),
+                MacKeystroke::Unicode => send_one_codepoint(ch),
+            };
+            if let Err(e) = sent {
                 return Err(partial_or_original(typed_chars, e));
             }
             typed_chars += 1;
@@ -137,14 +193,39 @@ mod macos_impl {
     fn send_one_codepoint(ch: char) -> Result<(), TypeError> {
         let mut buf = [0u16; 2];
         let utf16 = ch.encode_utf16(&mut buf);
-        let len = utf16.len();
+        // 虚拟键码 0 + Unicode string 覆写：字符本身由 unicode string 决定，keycode 不参与。
+        // flags 显式清零 —— 用户按着 Shift 时不清会被映射成大写。
+        post_key_event(0, 0, Some(utf16))
+    }
+
+    /// 发一次 Shift+Return。用真实的 Return 虚拟键码（`kVK_Return`）而不是 U+000A，
+    /// 详见 [`classify_mac_keystroke`]。
+    fn send_shift_return() -> Result<(), TypeError> {
+        post_key_event(KEY_RETURN, KCG_EVENT_FLAG_MASK_SHIFT, None)
+    }
+
+    /// 发一次不带修饰键的 Return。聊天框里这等于「发送」——只有用户在设置里明确选了
+    /// [`MacosNewlineMode::Return`] 才会走到这里。
+    fn send_return() -> Result<(), TypeError> {
+        post_key_event(KEY_RETURN, 0, None)
+    }
+
+    /// 构造并 post 一对 down/up 键盘事件，负责全部 CF 资源的释放。
+    ///
+    /// `unicode` 为 `Some` 时用 `CGEventKeyboardSetUnicodeString` 覆写字符内容
+    /// （此时 `virtual_key` 无意义）；为 `None` 时就是按下 `virtual_key` 这个物理键。
+    fn post_key_event(
+        virtual_key: CGKeyCode,
+        flags: CGEventFlags,
+        unicode: Option<&[u16]>,
+    ) -> Result<(), TypeError> {
         unsafe {
             let src = CGEventSourceCreate(KCG_EVENT_SOURCE_STATE_HID_SYSTEM_STATE);
             if src.is_null() {
                 return Err(TypeError::SourceAllocFailed);
             }
-            let down = CGEventCreateKeyboardEvent(src, 0, true);
-            let up = CGEventCreateKeyboardEvent(src, 0, false);
+            let down = CGEventCreateKeyboardEvent(src, virtual_key, true);
+            let up = CGEventCreateKeyboardEvent(src, virtual_key, false);
             if down.is_null() || up.is_null() {
                 if !down.is_null() {
                     CFRelease(down as _);
@@ -155,10 +236,12 @@ mod macos_impl {
                 CFRelease(src as _);
                 return Err(TypeError::EventAllocFailed);
             }
-            CGEventSetFlags(down, 0);
-            CGEventSetFlags(up, 0);
-            CGEventKeyboardSetUnicodeString(down, len, utf16.as_ptr());
-            CGEventKeyboardSetUnicodeString(up, len, utf16.as_ptr());
+            CGEventSetFlags(down, flags);
+            CGEventSetFlags(up, flags);
+            if let Some(utf16) = unicode {
+                CGEventKeyboardSetUnicodeString(down, utf16.len(), utf16.as_ptr());
+                CGEventKeyboardSetUnicodeString(up, utf16.len(), utf16.as_ptr());
+            }
             CGEventPost(KCG_HID_EVENT_TAP, down);
             CGEventPost(KCG_HID_EVENT_TAP, up);
             CFRelease(down as _);
@@ -267,6 +350,9 @@ mod macos_impl {
     const KCG_HID_EVENT_TAP: CGEventTapLocation = 0;
     const KCG_EVENT_SOURCE_STATE_HID_SYSTEM_STATE: CGEventSourceStateID = 1;
     const K_CF_STRING_ENCODING_ASCII: CFStringEncoding = 0x0600;
+    const KCG_EVENT_FLAG_MASK_SHIFT: CGEventFlags = 0x00020000;
+    /// US/ANSI 键盘上 Return 的虚拟键码（`kVK_Return`）。
+    const KEY_RETURN: CGKeyCode = 36;
 
     #[repr(C)]
     struct OpaqueCGEvent(c_void);
@@ -580,6 +666,70 @@ mod linux_impl {
 mod tests {
     use super::TypeError;
 
+    /// 默认模式下换行走 Shift+Return —— macOS 把 U+000A 当 Return，聊天框里等于
+    /// 「发送」，一条带空行的两段话会被从中间劈开发出去。
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn newline_defaults_to_shift_return() {
+        use super::macos_impl::{classify_mac_keystroke, MacKeystroke};
+        use crate::types::MacosNewlineMode;
+
+        let mode = MacosNewlineMode::default();
+        assert_eq!(mode, MacosNewlineMode::ShiftReturn, "默认必须是不发送的那个");
+        assert_eq!(
+            classify_mac_keystroke('\n', mode),
+            MacKeystroke::ShiftReturn
+        );
+        // `\r` 吞掉：CRLF 里它只是 LF 的前缀，发出去会变成两个换行。
+        assert_eq!(classify_mac_keystroke('\r', mode), MacKeystroke::Swallow);
+        for ch in ['a', '中', '，', ' ', '\t', '😀'] {
+            assert_eq!(
+                classify_mac_keystroke(ch, mode),
+                MacKeystroke::Unicode,
+                "{ch:?} 应当走普通 Unicode 路径"
+            );
+        }
+    }
+
+    /// 选了 Return 模式就得发真回车 —— 风格市场里有靠换行把一段话拆成多条消息的
+    /// 风格包，那种效果要的正是「回车 = 发送」。
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn return_mode_sends_a_plain_return_for_style_packs_that_want_it() {
+        use super::macos_impl::{classify_mac_keystroke, MacKeystroke};
+        use crate::types::MacosNewlineMode;
+
+        assert_eq!(
+            classify_mac_keystroke('\n', MacosNewlineMode::Return),
+            MacKeystroke::Return
+        );
+        // 换行模式只影响换行，别的字符一律照旧。
+        assert_eq!(
+            classify_mac_keystroke('中', MacosNewlineMode::Return),
+            MacKeystroke::Unicode
+        );
+    }
+
+    /// 计数契约：`type_unicode_chunk` 返回的 typed_chars 必须等于输入的 char 数，
+    /// 连被吞掉的 `\r` 也要算 —— 调用方拿它跟 `delta.chars().count()` 比对，
+    /// 少一个就判定「部分失败」并丢弃后面所有 delta。
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn every_char_counts_toward_typed_chars_including_swallowed_ones() {
+        use super::macos_impl::classify_mac_keystroke;
+        use crate::types::MacosNewlineMode;
+
+        for mode in [MacosNewlineMode::ShiftReturn, MacosNewlineMode::Return] {
+            let text = "上半句\r\n\r\n下半句";
+            // 每个 char 都会被分类成某一种处理方式，没有漏网的。
+            let counted = text
+                .chars()
+                .map(|ch| classify_mac_keystroke(ch, mode))
+                .count();
+            assert_eq!(counted, text.chars().count(), "{mode:?} 下计数必须守恒");
+        }
+    }
+
     #[test]
     fn type_error_partial_reports_typed_chars() {
         let err = TypeError::Partial {
@@ -696,7 +846,7 @@ pub fn expected_sendinput_typed_chars(text: &str) -> usize {
 #[allow(unused_imports)]
 pub use macos_impl::{
     is_secure_input_enabled, restore_input_source, switch_to_ascii, type_unicode_chunk,
-    PreviousInputSource,
+    type_unicode_chunk_with_options, PreviousInputSource,
 };
 
 #[cfg(target_os = "windows")]

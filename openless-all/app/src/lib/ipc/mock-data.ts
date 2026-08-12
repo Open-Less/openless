@@ -60,6 +60,7 @@ export let mockSettings: UserPreferences = {
     allowNonTsfInsertionFallback: true,
     windowsInsertionMode: "tsf",
     windowsSendInputNewlineMode: "enter",
+    macosNewlineMode: "shiftReturn",
     windowsSendInputInsertionOnly: false,
     windowsShowOpenlessInKeyboardList: true,
     workingLanguages: ["简体中文"],

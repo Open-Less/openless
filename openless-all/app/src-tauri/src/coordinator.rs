@@ -338,6 +338,185 @@ fn position_vocab_card<R: tauri::Runtime>(
     window.set_position(tauri::LogicalPosition::new(x, y))
 }
 
+/// 兜底卡片的窗口宽度（逻辑点）。比词条卡片宽一点 —— 这张要放一整段话。
+const FALLBACK_CARD_WIDTH: f64 = 360.0;
+/// 按钮行 + 内边距 + 留给投影的外边距。卡片没有标题行（见 `InsertFallbackCard.tsx`）。
+const FALLBACK_CARD_CHROME_HEIGHT: f64 = 89.0;
+/// 正文一行的高度，与 `InsertFallbackCard.tsx` 的 `line-height` 对齐。
+const FALLBACK_CARD_LINE_HEIGHT: f64 = 18.0;
+/// 正文最多显示几行，再多就在卡片内部滚动。
+///
+/// **必须与 `InsertFallbackCard.tsx` 里正文的 `max-height` 对齐**：窗口按这个上限算高度，
+/// CSS 若允许长得更高，超出的部分就落在窗口外面被裁掉；反过来窗口会空出一块，而卡片
+/// 显示期间窗口是不穿透鼠标的，那块空白会拦住底下的点击。
+const FALLBACK_CARD_MAX_LINES: f64 = 8.0;
+/// 正文按每行多少个字符折行估算（CJK 在 360pt 宽、13px 字号下的粗略值）。
+/// 只用来估窗口高度，真正的折行由浏览器做。
+const FALLBACK_CARD_CHARS_PER_LINE: f64 = 22.0;
+
+/// 把兜底卡片摆到屏幕**水平居中、偏下**的位置。
+///
+/// 与词条卡片的右下角不同：那张是「瞄一眼就完事」的建议，躲在角落里不打扰人正好；
+/// 这张是用户切走窗口后要**读完再决定复不复制**的内容，藏在角落容易整个错过。
+/// 底部居中是录音胶囊本来就在的那条视线，用户的眼睛已经习惯往那儿看。
+///
+/// 垂直方向沿用胶囊那套「距底 80pt 给 Dock 留位」，卡片比胶囊高，往上长。
+fn position_fallback_card<R: tauri::Runtime>(
+    window: &tauri::WebviewWindow<R>,
+    width: f64,
+    height: f64,
+) -> tauri::Result<()> {
+    let Some(monitor) = window.current_monitor()? else {
+        return Ok(());
+    };
+    let scale = monitor.scale_factor();
+    let size = monitor.size();
+    let pos = monitor.position();
+    let (mon_w, mon_h) = (size.width as f64 / scale, size.height as f64 / scale);
+    let (mon_x, mon_y) = (pos.x as f64 / scale, pos.y as f64 / scale);
+    let x = mon_x + (mon_w - width) / 2.0;
+    let y = mon_y + mon_h - height - 80.0;
+    window.set_position(tauri::LogicalPosition::new(x, y))
+}
+
+/// 兜底卡片的窗口高度：内容有多少估多少，封顶在 [`FALLBACK_CARD_MAX_LINES`]。
+fn fallback_card_height(text: &str) -> f64 {
+    let chars = text.chars().count() as f64;
+    let estimated_lines = (chars / FALLBACK_CARD_CHARS_PER_LINE).ceil().max(1.0);
+    // 显式换行也要占行 —— 一段两行的话估出来不能只有一行的高度。
+    let newlines = text.matches('\n').count() as f64;
+    let lines = (estimated_lines + newlines).min(FALLBACK_CARD_MAX_LINES);
+    FALLBACK_CARD_CHROME_HEIGHT + FALLBACK_CARD_LINE_HEIGHT * lines
+}
+
+/// 文本没能落到目标 app 时，把它连同一个复制按钮弹出来。
+///
+/// 为什么需要这张卡片：这些场景下唯一的兜底是「把文本写进剪贴板」，而它既依赖一个
+/// 默认可关的开关，用户也**根本不知道文本在剪贴板里** —— 没有任何提示。屏幕上要么
+/// 什么都没有，要么只有半截。
+///
+/// 窗口机制整套照搬 [`show_vocab_suggestion_card`]（复用胶囊窗口、关穿透、缩尺寸、
+/// 右下角定位），理由见那里。多的一件事是 `insert_fallback_card_visible`：这张卡片
+/// 在会话收尾那一刻弹出，而收尾自己安排了一次 `schedule_capsule_idle` → `hide()`，
+/// 必须让那次 hide 认得出卡片并让路。
+pub(crate) fn show_insert_fallback_card(inner: &Arc<Inner>, text: String, reason: &'static str) {
+    if text.trim().is_empty() {
+        return;
+    }
+    let Some(app) = inner.app.lock().clone() else {
+        return;
+    };
+    let height = fallback_card_height(&text);
+    let payload = crate::types::InsertFallbackCardPayload {
+        text,
+        reason: reason.to_string(),
+    };
+    let app_for_main = app.clone();
+    let inner_for_main = Arc::clone(inner);
+    let _ = app.run_on_main_thread(move || {
+        let app = app_for_main;
+        let inner = inner_for_main;
+        // 与词条卡片同一道闸、同一理由：听写不在 Idle 就绝不碰这个窗口，否则等于把
+        // 正在进行的那次听写的胶囊弄没了。收尾路径是先把 phase 置回 Idle 再走到这里的。
+        if inner.state.lock().phase != crate::coordinator_state::SessionPhase::Idle {
+            log::debug!("[fallback-card] suppressed: a dictation session is in flight");
+            inner.insert_fallback_text.lock().take();
+            return;
+        }
+        inner
+            .insert_fallback_card_visible
+            .store(true, Ordering::SeqCst);
+        let Some(window) = app.get_webview_window("capsule") else {
+            return;
+        };
+        #[cfg(not(mobile))]
+        if let Err(e) = window.set_ignore_cursor_events(false) {
+            log::warn!("[fallback-card] set_ignore_cursor_events(false) failed: {e}");
+        }
+        // 穿透状态有缓存（`capsule_cursor_passthrough`，emit_capsule 靠它跳过重复调用）。
+        // 直接碰了窗口就必须同步它，否则缓存与窗口真实状态分家，下次 emit_capsule
+        // 会以为「没变化」而跳过该调的那一次 —— 表现是胶囊之后一直挡着屏幕不放。
+        #[cfg(not(mobile))]
+        inner
+            .capsule_cursor_passthrough
+            .store(false, Ordering::SeqCst);
+        if let Err(e) = window.set_size(tauri::LogicalSize::new(FALLBACK_CARD_WIDTH, height)) {
+            log::warn!("[fallback-card] resize failed: {e}");
+        }
+        if let Err(e) = position_fallback_card(&window, FALLBACK_CARD_WIDTH, height) {
+            log::warn!("[fallback-card] position failed: {e}");
+        }
+        // 位置同理：`maybe_position_capsule_bottom_center` 的去重缓存只记「显示器 +
+        // 翻译态」，卡片这一挪它一无所知。不清掉的话下一次录音会判定「没变化」→
+        // 跳过重新定位 → 胶囊留在卡片挪过去的右下角。
+        *inner.capsule_layout.lock() = None;
+        let _ = app.emit_to("capsule", "insert:fallback", &payload);
+        show_capsule_window_for_recording(&app, &window, true);
+        #[cfg(target_os = "macos")]
+        crate::restore_main_window_key_if_active(&app);
+        log::info!(
+            "[fallback-card] shown: reason={reason} chars={}",
+            payload.text.chars().count()
+        );
+    });
+}
+
+/// 收起兜底卡片：把窗口完整还给胶囊。
+///
+/// 与 [`hide_vocab_suggestion_card`] 同款：**没有卡片时必须原样返回**，否则每次听写
+/// 开始都会去 hide 那个窗口，和 `emit_capsule` 的 show 抢。
+pub(crate) fn hide_insert_fallback_card(inner: &Arc<Inner>) {
+    inner.insert_fallback_text.lock().take();
+    if !inner
+        .insert_fallback_card_visible
+        .swap(false, Ordering::SeqCst)
+    {
+        return;
+    }
+    let Some(app) = inner.app.lock().clone() else {
+        return;
+    };
+    let app_for_main = app.clone();
+    let inner_for_main = Arc::clone(inner);
+    let _ = app.run_on_main_thread(move || {
+        let app = app_for_main;
+        let inner = inner_for_main;
+        let Some(window) = app.get_webview_window("capsule") else {
+            return;
+        };
+        let _ = app.emit_to(
+            "capsule",
+            "insert:fallback",
+            None::<crate::types::InsertFallbackCardPayload>,
+        );
+        // 先隐藏再改几何：复原要同时动尺寸和位置，窗口还亮着时改就有概率被合成出
+        // 一帧「卡片被拉宽、还横着飞过半个屏幕」。
+        let _ = window.hide();
+        // 穿透必须还回去，否则胶囊会一直挡着屏幕那一块。
+        #[cfg(not(mobile))]
+        if let Err(e) = window.set_ignore_cursor_events(true) {
+            log::warn!("[fallback-card] restoring cursor passthrough failed: {e}");
+        }
+        #[cfg(not(mobile))]
+        inner
+            .capsule_cursor_passthrough
+            .store(true, Ordering::SeqCst);
+        // 尺寸也必须还回去 —— 卡片把窗口缩到过自己的大小，不复原的话下一次胶囊
+        // 就挤在一个卡片大小的窗口里，等于看不见。
+        let bounds = crate::capsule_window_bounds(false);
+        if let Err(e) = window.set_size(tauri::LogicalSize::new(bounds.width, bounds.height)) {
+            log::warn!("[fallback-card] restoring capsule size failed: {e}");
+        }
+        // 位置一样要还 —— 卡片把窗口挪到了右下角，胶囊的位置是底部居中。只还尺寸
+        // 不还位置，下一次录音胶囊就出现在右下角（词条卡片在真机上踩过这个 bug）。
+        // 清缓存和这次重定位两件都要做，理由见 `hide_vocab_suggestion_card`。
+        *inner.capsule_layout.lock() = None;
+        if let Err(e) = crate::position_capsule_bottom_center(&window, false) {
+            log::warn!("[fallback-card] restoring capsule position failed: {e}");
+        }
+    });
+}
+
 #[derive(Clone)]
 enum ActiveAsr {
     Volcengine(Arc<VolcengineStreamingASR>),
@@ -765,6 +944,22 @@ struct Inner {
     /// 门控 `hide_vocab_suggestion_card`：没有卡片时它必须什么都不做，否则每次听写
     /// 开始都会去 hide 胶囊窗口，和 `emit_capsule` 的 show 抢同一个窗口。
     vocab_card_visible: AtomicBool,
+    /// 「流式上屏被焦点守卫拦下」的信号，值是那次的**完整**文本。
+    ///
+    /// 只有那条路径会往里放东西——它是唯一一处「屏幕上的内容 ≠ 完整结果」的场景：
+    /// `polished` 按约定只保留真打出去的半截，而切走窗口的用户要的是整段。收尾处
+    /// (`maybe_show_insert_fallback_card`) 取走它，据此把 `InsertStatus` 从 `Inserted`
+    /// 纠正成 `CopiedFallback`，并决定卡片弹什么内容、标题怎么写。
+    ///
+    /// **取走即消费**，不是「卡片当前内容」的镜像——卡片内容随事件发给前端，后端不留。
+    /// 会话被取消时这里可能有残留，下一轮 `begin_session_as` 的 hide 会清掉。
+    insert_fallback_text: Mutex<Option<String>>,
+    /// 兜底卡片是不是正占着胶囊窗口。与 `vocab_card_visible` 同一职责、同一理由。
+    ///
+    /// 还多担一件事：这张卡片是在**会话收尾那一刻**弹的，而收尾会安排一次
+    /// `schedule_capsule_idle` → `window.hide()`。可见时那次 hide 必须让路，
+    /// 否则卡片刚出现就被自己这轮会话的收尾干掉。
+    insert_fallback_card_visible: AtomicBool,
     recording_mute: Mutex<SharedRecordingMuteState>,
     hotkey: Mutex<Option<HotkeyMonitor>>,
     hotkey_status: Mutex<HotkeyStatus>,
@@ -1027,6 +1222,8 @@ impl Coordinator {
                     edit_watch_generation: std::sync::atomic::AtomicU64::new(0),
                     pending_corrections: Mutex::new(Vec::new()),
                     vocab_card_visible: AtomicBool::new(false),
+                    insert_fallback_text: Mutex::new(None),
+                    insert_fallback_card_visible: AtomicBool::new(false),
                     recording_mute: Mutex::new(SharedRecordingMuteState::new()),
                     hotkey: Mutex::new(None),
                     hotkey_status: Mutex::new(HotkeyStatus::default()),
@@ -1152,6 +1349,8 @@ impl Coordinator {
                     edit_watch_generation: std::sync::atomic::AtomicU64::new(0),
                 pending_corrections: Mutex::new(Vec::new()),
                 vocab_card_visible: AtomicBool::new(false),
+                insert_fallback_text: Mutex::new(None),
+                insert_fallback_card_visible: AtomicBool::new(false),
                 recording_mute: Mutex::new(SharedRecordingMuteState::new()),
                 hotkey: Mutex::new(None),
                 hotkey_status: Mutex::new(HotkeyStatus::default()),
@@ -1927,6 +2126,11 @@ impl Coordinator {
     /// 卡片 10 秒到期，或新一轮听写开始。
     pub fn dismiss_vocab_suggestions(&self) {
         hide_vocab_suggestion_card(&self.inner);
+    }
+
+    /// 落字失败兜底卡片自己关掉了（用户点关闭 / TTL 到时）。
+    pub fn dismiss_insert_fallback_card(&self) {
+        hide_insert_fallback_card(&self.inner);
     }
 
     /// 用户关掉了「光标上下文」开关 —— 立刻停掉一切还在跑的观察，别等它自己超时。
@@ -3331,6 +3535,33 @@ fn resolve_ark_endpoint_with_policy(
 
 #[cfg(test)]
 mod tests {
+    /// 兜底卡片的窗口高度必须随内容增长，并封顶在 `FALLBACK_CARD_MAX_LINES`。
+    ///
+    /// 两头都会出事：算矮了正文被裁在窗口外看不见；算高了窗口空出一块，而卡片显示期间
+    /// 窗口**不穿透鼠标**，那块空白会拦住用户点底下的东西。
+    #[test]
+    fn fallback_card_height_grows_with_text_and_stops_at_the_cap() {
+        let short = super::fallback_card_height("好的");
+        let medium = super::fallback_card_height(&"字".repeat(100));
+        let huge = super::fallback_card_height(&"字".repeat(10_000));
+
+        assert!(short < medium, "内容变多，卡片要变高");
+        assert!(medium <= huge);
+        let cap = super::FALLBACK_CARD_CHROME_HEIGHT
+            + super::FALLBACK_CARD_LINE_HEIGHT * super::FALLBACK_CARD_MAX_LINES;
+        assert_eq!(huge, cap, "再长也不能超过封顶高度");
+        assert!(short >= super::FALLBACK_CARD_CHROME_HEIGHT + super::FALLBACK_CARD_LINE_HEIGHT);
+    }
+
+    /// 显式换行要占行——两段话估出来的高度不能跟一行一样。
+    #[test]
+    fn fallback_card_height_counts_explicit_newlines() {
+        let one_line = super::fallback_card_height("上半句");
+        let two_paragraphs = super::fallback_card_height("上半句\n\n下半句");
+
+        assert!(two_paragraphs > one_line);
+    }
+
     /// 造一条词典条目。传给 `prioritize_vocab_for_asr` 时必须是词典的原始顺序
     /// （最近添加在前）。
     fn vocab_entry(phrase: &str, hits: u64) -> crate::types::DictionaryEntry {

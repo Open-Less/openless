@@ -430,6 +430,12 @@ export const en: typeof zhCN = {
     accept: 'Remember',
     reject: 'Skip',
   },
+  insertFallbackCard: {
+    copy: 'Copy',
+    copied: 'Copied',
+    copyFailed: 'Copy failed',
+    dismiss: 'Dismiss',
+  },
   vocab: {
     kicker: 'VOCABULARY',
     title: 'Vocabulary',
@@ -857,6 +863,10 @@ export const en: typeof zhCN = {
       windowsInsertionModeTsf: 'TSF IME (default)',
       windowsInsertionModeSendInput: 'SendInput keystroke simulation',
       windowsInsertionModePaste: 'Clipboard paste (Ctrl+V, etc.)',
+      macosNewlineModeLabel: 'Line breaks',
+      macosNewlineModeDesc: 'Which key a line break sends while typing out text. A plain Return means "send" in chat apps — keep Shift+Return unless your style pack deliberately splits one dictation into several messages.',
+      macosNewlineModeShiftReturn: 'Shift+Return (newline in chat)',
+      macosNewlineModeReturn: 'Return (split into messages)',
       windowsSendInputNewlineModeLabel: 'SendInput newline simulation',
       windowsSendInputNewlineModeDesc: 'How SendInput turns line breaks into keys. Use Shift+Enter for chat boxes; Enter for Notepad / VS Code and most editors.',
       windowsSendInputNewlineModeEnter: 'Enter (most editors)',

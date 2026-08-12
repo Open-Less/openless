@@ -430,6 +430,12 @@ export const zhTW: typeof zhCN = {
     accept: '記住',
     reject: '不用',
   },
+  insertFallbackCard: {
+    copy: '複製',
+    copied: '已複製',
+    copyFailed: '複製失敗',
+    dismiss: '關閉',
+  },
   vocab: {
     kicker: 'VOCABULARY',
     title: '詞彙表',
@@ -857,6 +863,10 @@ export const zhTW: typeof zhCN = {
       windowsInsertionModeTsf: 'TSF 輸入法（預設）',
       windowsInsertionModeSendInput: 'SendInput 逐字模擬',
       windowsInsertionModePaste: '剪貼簿貼上（Ctrl+V 等）',
+      macosNewlineModeLabel: '換行怎麼落',
+      macosNewlineModeDesc: '逐字上屏時換行符發哪個按鍵。聊天框裡真回車等於發送——除非你用的風格包就是靠換行拆成多條訊息，否則保持 Shift+Return。',
+      macosNewlineModeShiftReturn: 'Shift+Return（聊天框換行）',
+      macosNewlineModeReturn: 'Return（拆成多條訊息）',
       windowsSendInputNewlineModeLabel: 'SendInput 換行模擬',
       windowsSendInputNewlineModeDesc: 'SendInput 模式下如何把換行符模擬成按鍵。聊天框通常選 Shift+Enter；記事本 / VS Code 等選 Enter。',
       windowsSendInputNewlineModeEnter: 'Enter（多數編輯器）',

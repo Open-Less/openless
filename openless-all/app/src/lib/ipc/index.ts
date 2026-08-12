@@ -68,6 +68,8 @@ export {
     acceptPendingCorrection,
     rejectPendingCorrection,
     dismissVocabSuggestions,
+    copyTextToClipboard,
+    dismissInsertFallbackCard,
     removeCorrectionRule,
     setCorrectionRuleEnabled,
     listVocabPresets,

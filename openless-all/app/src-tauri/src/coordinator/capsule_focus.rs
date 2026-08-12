@@ -699,8 +699,17 @@ fn emit_capsule_with_context_locked(
                     capsule_state_log_name(state)
                 );
             }
-            hide_capsule_window_if_present();
-            let _ = window.hide();
+            // 兜底卡片占着这个窗口时不能隐藏 —— 它正是在会话收尾（会 emit 一帧
+            // invisible）的那一刻弹出来的，隐藏等于让它一闪而过。
+            if inner_for_main
+                .insert_fallback_card_visible
+                .load(Ordering::SeqCst)
+            {
+                log::debug!("[capsule] hide skipped: insert fallback card owns the window");
+            } else {
+                hide_capsule_window_if_present();
+                let _ = window.hide();
+            }
         }
         // 入场帧：窗口刚 show（或本次用户关了胶囊显示走了 hide 分支），此刻再把 state 发给
         // capsule 前端 —— 前端起播 capsule-in 时窗口已可见，入场动画从头完整播放。
@@ -742,8 +751,12 @@ pub(super) fn hide_capsule_if_all_sessions_idle(inner: &Arc<Inner>) {
     let dictation_idle = inner.state.lock().phase == SessionPhase::Idle;
     let qa_idle = inner.qa_state.lock().phase == QaPhase::Idle;
     let selection_polish_active = inner.selection_polish_capsule_active.load(Ordering::SeqCst);
+    // 兜底卡片是在会话收尾那一刻弹的，而收尾自己就安排了一次 idle 隐藏 —— 不让路的话
+    // 卡片刚出现就被自己这轮会话的尾巴收掉。卡片有自己的关闭路径（用户点关闭、TTL 到时、
+    // 新一轮听写开始），不归这里管。
+    let fallback_card_active = inner.insert_fallback_card_visible.load(Ordering::SeqCst);
     let observed_epoch = inner.capsule_event_epoch.load(Ordering::SeqCst);
-    if !dictation_idle || !qa_idle || selection_polish_active {
+    if !dictation_idle || !qa_idle || selection_polish_active || fallback_card_active {
         return;
     }
 

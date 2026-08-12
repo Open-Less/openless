@@ -130,6 +130,23 @@ pub enum WindowsSendInputNewlineMode {
     CrLf,
 }
 
+/// macOS 逐字上屏时换行符怎么发。仅流式插入路径生效。
+///
+/// 默认 `ShiftReturn`：macOS 把 U+000A 当 Return 键，而聊天框里 Return 就是「发送」——
+/// 一条带空行的两段话会被从中间劈开发出去。Shift+Return 在聊天框是软换行，在编辑器 /
+/// 终端 / 网页输入框里就是普通换行。
+///
+/// 保留 `Return` 是因为风格市场里有靠换行发多条消息的风格包，那种效果需要真回车。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum MacosNewlineMode {
+    /// Shift+Return：聊天框软换行，不发送。
+    #[default]
+    ShiftReturn,
+    /// Return：聊天框里等于发送 —— 想要「一段话拆成多条消息」的风格包用这个。
+    Return,
+}
+
 /// Auto-update 渠道。决定后台 AutoUpdateGate 拉哪条 manifest。
 /// `Stable` = `latest-android-{arch}.json`（或桌面 plugin-updater 正式版 endpoints）。
 /// `Beta` = `latest-android-{arch}-beta.json`（或桌面 beta endpoints）。
@@ -374,6 +391,26 @@ pub struct PendingCorrection {
 /// 一张卡片上最多列几条。同一次听写里改好几个词会合并到一张卡；再多就该丢最老的了，
 /// 卡片撑得比屏幕还高没有意义。
 pub const MAX_PENDING_CORRECTIONS: usize = 5;
+
+/// 落字失败兜底卡片的内容。
+///
+/// 文本没能落到目标 app 时（焦点在上屏途中离开、Secure Input、插入失败），把**完整**
+/// 的那段话连同复制入口摆到用户面前。此前这些场景唯一的兜底是悄悄写剪贴板 —— 既依赖
+/// 一个默认可关的开关，用户也不知道文本在那儿。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct InsertFallbackCardPayload {
+    /// 完整文本。焦点中途离开时屏幕上只有半截，这里给的是整段。
+    pub text: String,
+    /// 为什么没落进去。**只进日志，不上屏** —— 卡片没有标题行。见
+    /// `INSERT_FALLBACK_REASON_*`。
+    pub reason: String,
+}
+
+/// 逐字上屏打到一半断了（Secure Input 中途打开、合成按键被拒）。
+pub const INSERT_FALLBACK_REASON_PARTIAL_STREAM: &str = "partialStream";
+/// 插入没能完成（Secure Input、辅助功能掉权限、粘贴被拒等）。
+pub const INSERT_FALLBACK_REASON_INSERT_FAILED: &str = "insertFailed";
 
 /// 卡片自动消失的时间。
 ///
@@ -910,6 +947,9 @@ pub struct UserPreferences {
     /// Windows SendInput 路径的换行模拟方式。
     #[serde(default, rename = "windowsSendInputNewlineMode")]
     pub windows_sendinput_newline_mode: WindowsSendInputNewlineMode,
+    /// macOS 逐字上屏的换行模拟方式。
+    #[serde(default)]
+    pub macos_newline_mode: MacosNewlineMode,
     /// 旧版 wire 兼容：`true` 等价于 `windows_insertion_mode = SendInput`。
     #[serde(
         default,
@@ -1282,6 +1322,8 @@ struct UserPreferencesWire {
         alias = "windowsSendinputNewlineMode"
     )]
     windows_sendinput_newline_mode: WindowsSendInputNewlineMode,
+    #[serde(default)]
+    macos_newline_mode: MacosNewlineMode,
     #[serde(
         default,
         rename = "windowsSendInputInsertionOnly",
@@ -1448,6 +1490,7 @@ impl Default for UserPreferencesWire {
             allow_non_tsf_insertion_fallback: prefs.allow_non_tsf_insertion_fallback,
             windows_insertion_mode: prefs.windows_insertion_mode,
             windows_sendinput_newline_mode: prefs.windows_sendinput_newline_mode,
+            macos_newline_mode: prefs.macos_newline_mode,
             windows_sendinput_insertion_only: prefs.windows_sendinput_insertion_only,
             windows_show_openless_in_keyboard_list: prefs.windows_show_openless_in_keyboard_list,
             working_languages: prefs.working_languages,
@@ -1590,6 +1633,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
                 wire.windows_sendinput_insertion_only,
             ),
             windows_sendinput_newline_mode: wire.windows_sendinput_newline_mode,
+            macos_newline_mode: wire.macos_newline_mode,
             windows_sendinput_insertion_only: resolve_windows_sendinput_insertion_only_legacy(
                 wire.windows_insertion_mode,
                 wire.windows_sendinput_insertion_only,
@@ -2415,6 +2459,7 @@ impl Default for UserPreferences {
             allow_non_tsf_insertion_fallback: true,
             windows_insertion_mode: WindowsInsertionMode::default(),
             windows_sendinput_newline_mode: WindowsSendInputNewlineMode::default(),
+            macos_newline_mode: MacosNewlineMode::default(),
             windows_sendinput_insertion_only: false,
             windows_show_openless_in_keyboard_list: true,
             working_languages: default_working_languages(),

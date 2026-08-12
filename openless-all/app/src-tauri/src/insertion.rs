@@ -20,6 +20,18 @@ use crate::types::{InsertStatus, PasteShortcut};
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 const CLIPBOARD_RESTORE_DELAY: Duration = Duration::from_millis(750);
 
+/// 把一段文字放进剪贴板。供落字失败兜底卡片的「复制」按钮使用。
+///
+/// 单独开这个入口而不是让前端调 `navigator.clipboard`：卡片浮在别的 app 上、按钮
+/// 不抢焦点，未聚焦文档里那个 API 会抛 `Document is not focused`。
+pub fn copy_text_to_clipboard(text: &str) -> Result<(), String> {
+    if copy_to_clipboard(text) {
+        Ok(())
+    } else {
+        Err("clipboard write failed".to_string())
+    }
+}
+
 pub struct TextInserter;
 
 impl TextInserter {

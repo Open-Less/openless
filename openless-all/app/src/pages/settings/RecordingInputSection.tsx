@@ -24,6 +24,7 @@ import type {
   UserPreferences,
   WindowsInsertionMode,
   WindowsSendInputNewlineMode,
+  MacosNewlineMode,
 } from '../../lib/types';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
 import { SelectLite } from '../../components/ui/SelectLite';
@@ -178,6 +179,8 @@ export function RecordingInputSection() {
     });
   const onWindowsSendInputNewlineModeChange = (windowsSendInputNewlineMode: WindowsSendInputNewlineMode) =>
     savePrefs({ ...prefs, windowsSendInputNewlineMode });
+  const onMacosNewlineModeChange = (macosNewlineMode: MacosNewlineMode) =>
+    savePrefs({ ...prefs, macosNewlineMode });
   const onWindowsShowOpenlessInKeyboardListChange = (
     windowsShowOpenlessInKeyboardList: boolean,
   ) => void saveKeyboardListAffectingPrefs({ ...prefs, windowsShowOpenlessInKeyboardList });
@@ -513,6 +516,23 @@ export function RecordingInputSection() {
                 { value: 'crlf', label: t('settings.recording.windowsSendInputNewlineModeCrLf') },
               ]}
               ariaLabel={t('settings.recording.windowsSendInputNewlineModeLabel')}
+              style={{ ...inputStyle, maxWidth: 260 }}
+            />
+          </SettingRow>
+        )}
+        {capability.adapter === 'macEventTap' && prefs.streamingInsert && (
+          <SettingRow
+            label={t('settings.recording.macosNewlineModeLabel')}
+            desc={t('settings.recording.macosNewlineModeDesc')}
+          >
+            <SelectLite
+              value={prefs.macosNewlineMode ?? 'shiftReturn'}
+              onChange={next => onMacosNewlineModeChange(next as MacosNewlineMode)}
+              options={[
+                { value: 'shiftReturn', label: t('settings.recording.macosNewlineModeShiftReturn') },
+                { value: 'return', label: t('settings.recording.macosNewlineModeReturn') },
+              ]}
+              ariaLabel={t('settings.recording.macosNewlineModeLabel')}
               style={{ ...inputStyle, maxWidth: 260 }}
             />
           </SettingRow>

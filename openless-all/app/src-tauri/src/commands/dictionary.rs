@@ -66,6 +66,25 @@ pub fn dismiss_vocab_suggestions(coord: CoordinatorState<'_>) {
     coord.dismiss_vocab_suggestions();
 }
 
+/// 落字失败兜底卡片上点了「复制」。
+///
+/// **走后端而不是前端的 `navigator.clipboard`**：卡片浮在别的 app 上面，按钮刻意
+/// `preventDefault` 不抢焦点（抢了就把用户正在写的地方的光标弄没了），而未聚焦的
+/// 文档调 `navigator.clipboard.writeText` 会直接抛 `Document is not focused`。
+#[tauri::command]
+pub fn copy_text_to_clipboard(text: String) -> Result<(), String> {
+    if text.is_empty() {
+        return Ok(());
+    }
+    crate::insertion::copy_text_to_clipboard(&text)
+}
+
+/// 兜底卡片自己关掉了（用户点关闭 / TTL 到时）。
+#[tauri::command]
+pub fn dismiss_insert_fallback_card(coord: CoordinatorState<'_>) {
+    coord.dismiss_insert_fallback_card();
+}
+
 #[tauri::command]
 pub fn remove_correction_rule(coord: CoordinatorState<'_>, id: String) -> Result<(), String> {
     coord

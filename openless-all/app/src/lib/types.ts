@@ -121,6 +121,15 @@ export interface PendingCorrection {
   replacement: string;
 }
 
+/** 为什么这段话没落进目标 app。只用于后端日志，卡片本身不渲染它。 */
+export type InsertFallbackReason = 'partialStream' | 'insertFailed';
+
+/** 落字失败兜底卡片的内容。`text` 始终是完整的那段话，即便屏幕上只落了半截。 */
+export interface InsertFallbackCardPayload {
+  text: string;
+  reason: InsertFallbackReason;
+}
+
 export interface VocabPreset {
   id: string;
   name: string;
@@ -223,6 +232,10 @@ export type WindowsInsertionMode = 'tsf' | 'sendInput' | 'paste';
 
 /** Windows SendInput 路径的换行模拟方式。 */
 export type WindowsSendInputNewlineMode = 'enter' | 'shiftEnter' | 'crlf';
+
+/** macOS 逐字上屏时换行符怎么发。`return` 在聊天框里等于发送 —— 靠换行拆多条消息的
+ *  风格包要的就是这个。 */
+export type MacosNewlineMode = 'shiftReturn' | 'return';
 
 export type WindowsImeInstallState =
   | 'installed'
@@ -365,6 +378,7 @@ export interface UserPreferences {
   windowsInsertionMode: WindowsInsertionMode;
   /** Windows SendInput 路径的换行模拟方式。 */
   windowsSendInputNewlineMode: WindowsSendInputNewlineMode;
+  macosNewlineMode: MacosNewlineMode;
   /** 旧版兼容：`true` 等价于 `windowsInsertionMode === 'sendInput'`。 */
   windowsSendInputInsertionOnly: boolean;
   /** Windows：SendInput 模式下是否在系统键盘列表（Win+Space）中显示 OpenLess。 */

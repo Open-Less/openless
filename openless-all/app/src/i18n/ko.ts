@@ -432,6 +432,12 @@ export const ko: typeof zhCN = {
     accept: '기억하기',
     reject: '건너뛰기',
   },
+  insertFallbackCard: {
+    copy: '복사',
+    copied: '복사됨',
+    copyFailed: '복사 실패',
+    dismiss: '닫기',
+  },
   vocab: {
     kicker: 'VOCABULARY',
     title: '어휘',
@@ -859,6 +865,10 @@ export const ko: typeof zhCN = {
       windowsInsertionModeTsf: 'TSF 입력기(기본)',
       windowsInsertionModeSendInput: 'SendInput 키 입력 시뮬레이션',
       windowsInsertionModePaste: '클립보드 붙여넣기(Ctrl+V 등)',
+      macosNewlineModeLabel: '줄바꿈 처리',
+      macosNewlineModeDesc: '한 글자씩 입력할 때 줄바꿈을 어느 키로 보낼지. 채팅에서 일반 Return은 전송을 의미합니다. 줄바꿈으로 여러 메시지를 나누는 스타일 팩을 쓰는 게 아니라면 Shift+Return을 유지하세요.',
+      macosNewlineModeShiftReturn: 'Shift+Return(채팅에서 줄바꿈)',
+      macosNewlineModeReturn: 'Return(여러 메시지로 분할)',
       windowsSendInputNewlineModeLabel: 'SendInput 줄바꿈 시뮬레이션',
       windowsSendInputNewlineModeDesc: 'SendInput 모드에서 줄바꿈을 어떤 키로 보낼지. 채팅 입력창은 Shift+Enter, 메모장 / VS Code 등은 Enter.',
       windowsSendInputNewlineModeEnter: 'Enter(대부분 편집기)',

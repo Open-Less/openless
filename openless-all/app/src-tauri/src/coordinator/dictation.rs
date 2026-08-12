@@ -333,6 +333,8 @@ async fn run_streaming_polish(
     let (tx, rx) = std::sync::mpsc::channel::<String>();
     #[cfg(target_os = "windows")]
     let sendinput_options = windows_sendinput_options_from_prefs(&inner.prefs.get());
+    #[cfg(target_os = "macos")]
+    let macos_newline_mode = inner.prefs.get().macos_newline_mode;
     let typer_handle = tokio::task::spawn_blocking(move || {
         #[cfg(target_os = "windows")]
         {
@@ -344,7 +346,12 @@ async fn run_streaming_polish(
         }
         #[cfg(not(target_os = "windows"))]
         {
-            drain_streaming_insert_deltas(rx, STREAMING_INSERT_FLUSH_INTERVAL)
+            drain_streaming_insert_deltas(
+                rx,
+                STREAMING_INSERT_FLUSH_INTERVAL,
+                #[cfg(target_os = "macos")]
+                macos_newline_mode,
+            )
         }
     });
 
@@ -427,6 +434,13 @@ async fn run_streaming_polish(
                     );
                     return (text, Some(reason), false);
                 }
+            }
+            // 上屏打到一半就断了（Secure Input 中途打开、SendInput / enigo 拒绝）：
+            // 把**完整**文本留给兜底卡片。下面的 final_text 遵守「与屏幕一致」的约定
+            // （屏幕上只有半截就只记半截），而用户要拿回的是整段话。
+            // 这个字段同时是收尾处「这次上屏没落全」的信号，用来决定弹不弹卡片。
+            if typer_failure.is_some() {
+                *inner.insert_fallback_text.lock() = Some(text.clone());
             }
             // 先确定 final_text —— typer 中途失败时屏幕只有 typed_text 这一段，
             // history 记完整 polish 反而会让用户复盘困惑。让 history / clipboard /
@@ -529,8 +543,30 @@ fn windows_insertion_allows_streaming(_mode: crate::types::WindowsInsertionMode)
 fn drain_streaming_insert_deltas(
     rx: std::sync::mpsc::Receiver<String>,
     flush_interval: std::time::Duration,
+    #[cfg(target_os = "macos")] newline_mode: crate::types::MacosNewlineMode,
 ) -> (String, Option<String>) {
-    drain_streaming_insert_deltas_with(rx, flush_interval, flush_streaming_insert_buffer)
+    #[cfg(target_os = "macos")]
+    {
+        drain_streaming_insert_deltas_with(rx, flush_interval, move |pending, typed| {
+            flush_streaming_insert_buffer_with_newline_mode(pending, typed, newline_mode)
+        })
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        drain_streaming_insert_deltas_with(rx, flush_interval, flush_streaming_insert_buffer)
+    }
+}
+
+/// macOS：把用户选的换行模式带进逐字上屏。
+#[cfg(target_os = "macos")]
+fn flush_streaming_insert_buffer_with_newline_mode(
+    pending: &mut String,
+    typed_text: &mut String,
+    newline_mode: crate::types::MacosNewlineMode,
+) -> Option<String> {
+    flush_streaming_insert_buffer_with(pending, typed_text, move |text| {
+        crate::unicode_keystroke::type_unicode_chunk_with_options(text, newline_mode)
+    })
 }
 
 #[cfg(target_os = "windows")]
@@ -1829,6 +1865,8 @@ pub(super) async fn begin_session_as(inner: &Arc<Inner>, voice_agent: bool) -> R
     // 词条建议卡片同样让位：它和录音胶囊共用一个窗口，不收起来就会挡住听写反馈。
     // 用户开口说下一句时，上一句的建议已经不是他关心的事了。
     super::hide_vocab_suggestion_card(inner);
+    // 落字失败兜底卡片同理 —— 同一个窗口，而且用户既然又开口了，上一句他已经处置完了。
+    super::hide_insert_fallback_card(inner);
     #[cfg(target_os = "windows")]
     {
         if inner.prefs.get().windows_insertion_mode == crate::types::WindowsInsertionMode::Tsf {
@@ -4157,6 +4195,10 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     let prefs = inner.prefs.get();
     let allow_non_tsf_insertion_fallback = prefs.allow_non_tsf_insertion_fallback;
     let windows_insertion_mode = prefs.windows_insertion_mode;
+    // 逐字上屏中途断了（Secure Input 打开、SendInput / enigo 拒绝）时，
+    // `run_streaming_polish` 会把完整文本放进这个字段 —— 它是「这次没落全」的信号，
+    // 下面据此纠正 status 并弹兜底卡片。
+    let streaming_insert_incomplete = inner.insert_fallback_text.lock().is_some();
     // 流式路径下，字符已经通过 Unicode keystroke 落到光标处，跳过 inserter.insert。
     let status = if already_streamed {
         log::info!(
@@ -4164,7 +4206,15 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
             polished.chars().count(),
             polish_error
         );
-        InsertStatus::Inserted
+        // 打到一半断掉的那次不算插入成功 —— 屏幕上只有半截。此前这里一律报
+        // Inserted，连 history 的 insertStatus 都是失真的。
+        // 用 CopiedFallback 而非 Failed：语义上最接近「没落进目标，但文本还在」，
+        // 而兜底卡片正是那个「还在哪儿」的答案。
+        if streaming_insert_incomplete {
+            InsertStatus::CopiedFallback
+        } else {
+            InsertStatus::Inserted
+        }
     } else {
         insert_final_text(
             inner,
@@ -4305,7 +4355,44 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     }
     schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
 
+    // 必须放在 phase 回到 Idle 之后：卡片要占胶囊窗口，而
+    // `show_insert_fallback_card` 有一道「听写进行中绝不碰那个窗口」的闸。
+    maybe_show_insert_fallback_card(inner, status, &polished);
+
     Ok(())
+}
+
+/// 文本是否没能落到目标 app —— 兜底卡片的唯一判据。
+///
+/// `Inserted` / `PasteSent` 是成功语义。`CopiedFallback` 说明只写了剪贴板、没插进去，
+/// `Failed` 连剪贴板都没写成 —— 这两种情况用户屏幕上都看不到自己刚说的话。
+pub(super) fn insert_delivery_failed(status: InsertStatus) -> bool {
+    matches!(
+        status,
+        InsertStatus::CopiedFallback | InsertStatus::Failed
+    )
+}
+
+/// 落字失败时把完整的那段话弹出来。
+///
+/// 在此之前，这些场景的唯一兜底是悄悄写剪贴板：既依赖一个默认可关的开关，用户也
+/// **根本不知道文本在剪贴板里**。屏幕上要么什么都没有，要么只有半截。
+fn maybe_show_insert_fallback_card(inner: &Arc<Inner>, status: InsertStatus, polished: &str) {
+    // 正常落字路径不该留下残留，取走即可（跨会话残留会让下一次弹出上一句话）。
+    let streamed_full_text = inner.insert_fallback_text.lock().take();
+    if !insert_delivery_failed(status) {
+        return;
+    }
+    // 逐字上屏打到一半断掉时 `polished` 只是屏幕上那半截，完整文本在上面那个字段里。
+    // 一次性插入失败的场景（Secure Input、粘贴被拒等）`polished` 本身就是完整的。
+    let (text, reason) = match streamed_full_text {
+        Some(full) => (full, crate::types::INSERT_FALLBACK_REASON_PARTIAL_STREAM),
+        None => (
+            polished.to_string(),
+            crate::types::INSERT_FALLBACK_REASON_INSERT_FAILED,
+        ),
+    };
+    show_insert_fallback_card(inner, text, reason);
 }
 
 /// 多模态（Omni）听写收尾（issue #902）：录音 PCM → WAV → omni 一次调用 →
@@ -4629,6 +4716,11 @@ async fn finish_dictation_multimodal(
             Some(now + std::time::Duration::from_millis(POST_SESSION_COOLDOWN_MS));
     }
     schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
+
+    // 多模态管线与两段式完全隔离，但「文本没落进目标 app」这件事对用户是一样的，
+    // 兜底卡片也必须在这条路径上生效。同样要在 phase 回 Idle 之后调。
+    maybe_show_insert_fallback_card(inner, status, &polished);
+
     Ok(())
 }
 
@@ -4807,11 +4899,12 @@ fn eligible_polish_context_turns(
 #[cfg(test)]
 mod tests {
     use super::{
-        accept_silent_retry_transcript, append_typed_prefix, batch_asr_chunk_limit_ms,
-        build_transcribe_failed_session, default_done_message, drain_streaming_insert_deltas_with,
-        eligible_polish_context_turns, finalize_polished_text, flush_streaming_insert_buffer_with,
-        append_cursor_context_to_multimodal_prompt, pcm_duration_ms, pcm_from_wav_bytes,
-        should_arm_edit_watch, should_read_cursor_context, streaming_insert_eligible,
+        accept_silent_retry_transcript, append_cursor_context_to_multimodal_prompt,
+        append_typed_prefix, batch_asr_chunk_limit_ms, build_transcribe_failed_session,
+        default_done_message, drain_streaming_insert_deltas_with, eligible_polish_context_turns,
+        finalize_polished_text, flush_streaming_insert_buffer_with, pcm_duration_ms,
+        pcm_from_wav_bytes, should_arm_edit_watch, should_read_cursor_context,
+        insert_delivery_failed, streaming_insert_eligible,
     };
     #[cfg(target_os = "macos")]
     use super::{macos_keyless_dictation_provider, MacosKeylessDictationProvider};
@@ -5492,6 +5585,18 @@ mod tests {
         assert_eq!(flushed, vec!["你好🙂".to_string()]);
         assert_eq!(typed, "你好🙂");
         assert_eq!(failure, None);
+    }
+
+    /// 兜底卡片只在文本真没落进目标 app 时弹。
+    ///
+    /// `PasteSent` 尤其不能算失败 —— 那是 Windows / Linux 上的**成功**语义（粘贴按键
+    /// 已发出），错判会让每次正常听写都弹一张卡片。
+    #[test]
+    fn fallback_card_fires_only_when_text_did_not_reach_the_app() {
+        assert!(insert_delivery_failed(InsertStatus::CopiedFallback));
+        assert!(insert_delivery_failed(InsertStatus::Failed));
+        assert!(!insert_delivery_failed(InsertStatus::Inserted));
+        assert!(!insert_delivery_failed(InsertStatus::PasteSent));
     }
 
     #[test]

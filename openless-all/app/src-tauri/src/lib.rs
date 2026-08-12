@@ -350,6 +350,8 @@ macro_rules! app_invoke_handler_desktop {
             commands::accept_pending_correction,
             commands::reject_pending_correction,
             commands::dismiss_vocab_suggestions,
+            commands::copy_text_to_clipboard,
+            commands::dismiss_insert_fallback_card,
             restart_app,
             reset_accessibility_permission_and_restart_app,
             log_client_error,
