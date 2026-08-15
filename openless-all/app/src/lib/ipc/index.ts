@@ -70,6 +70,7 @@ export {
     dismissVocabSuggestions,
     copyTextToClipboard,
     dismissInsertFallbackCard,
+    reportInsertFallbackCardHeight,
     removeCorrectionRule,
     setCorrectionRuleEnabled,
     listVocabPresets,

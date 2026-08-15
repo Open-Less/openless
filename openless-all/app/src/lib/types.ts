@@ -128,6 +128,8 @@ export type InsertFallbackReason = 'partialStream' | 'insertFailed';
 export interface InsertFallbackCardPayload {
   text: string;
   reason: InsertFallbackReason;
+  /** 本次展示代次；尺寸回报必须原样携带，后端据此忽略旧卡片的迟到 IPC。 */
+  presentationId: number;
 }
 
 export interface VocabPreset {

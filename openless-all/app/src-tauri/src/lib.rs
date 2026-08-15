@@ -352,6 +352,7 @@ macro_rules! app_invoke_handler_desktop {
             commands::dismiss_vocab_suggestions,
             commands::copy_text_to_clipboard,
             commands::dismiss_insert_fallback_card,
+            commands::report_insert_fallback_card_height,
             restart_app,
             reset_accessibility_permission_and_restart_app,
             log_client_error,

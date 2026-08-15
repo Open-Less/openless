@@ -413,6 +413,141 @@ fn emit_capsule_with_context(
     )
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CapsuleWindowAction {
+    PreserveFallbackCard,
+    ShowCapsule,
+    HideCapsule,
+}
+
+fn capsule_window_action(
+    fallback_card_active: bool,
+    show_capsule: bool,
+    state: CapsuleState,
+) -> CapsuleWindowAction {
+    if fallback_card_active {
+        CapsuleWindowAction::PreserveFallbackCard
+    } else if show_capsule && !matches!(state, CapsuleState::Idle) {
+        CapsuleWindowAction::ShowCapsule
+    } else {
+        CapsuleWindowAction::HideCapsule
+    }
+}
+
+fn defer_capsule_payload_if_fallback_active(
+    inner: &Arc<Inner>,
+    payload: &CapsulePayload,
+) -> bool {
+    let active = inner
+        .insert_fallback_card_visible
+        .load(Ordering::SeqCst);
+    if active {
+        *inner.insert_fallback_deferred_capsule.lock() = Some(payload.clone());
+    }
+    active
+}
+
+/// 把一帧胶囊状态应用到共享原生窗口。
+///
+/// 兜底卡片是可交互的恢复界面，显示期间必须拥有全部原生窗口属性。胶囊事件仍会抵达
+/// webview 并推进代次，但定位、尺寸、鼠标穿透和显隐要等卡片释放窗口后再恢复。
+pub(super) fn apply_capsule_window_payload<R: tauri::Runtime>(
+    inner: &Arc<Inner>,
+    app: &AppHandle<R>,
+    window: &tauri::WebviewWindow<R>,
+    payload: &CapsulePayload,
+    fallback_card_active: bool,
+    reassert_spaces: bool,
+) {
+    // Selection Polish 没有独立显示开关，因为这是它唯一的反馈。
+    let prefs_snapshot = inner.prefs.get();
+    let show_capsule = payload.selection_polish || prefs_snapshot.show_capsule;
+    let classic_style = matches!(prefs_snapshot.capsule_style, CapsuleStyle::Classic);
+    inner.capsule_style.store(
+        if classic_style { 1 } else { 0 },
+        Ordering::Relaxed,
+    );
+
+    // Linux 通过 fcitx 辅助区显示状态，不操作胶囊窗口。
+    #[cfg(target_os = "linux")]
+    {
+        let _ = (
+            app,
+            window,
+            payload,
+            fallback_card_active,
+            reassert_spaces,
+            show_capsule,
+            classic_style,
+        );
+        return;
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        let action = capsule_window_action(fallback_card_active, show_capsule, payload.state);
+        if action == CapsuleWindowAction::PreserveFallbackCard {
+            log::debug!(
+                "[capsule] native window update deferred: insert fallback card owns the window"
+            );
+            return;
+        }
+
+        maybe_position_capsule_bottom_center(inner, window, payload.translation);
+
+        #[cfg(not(mobile))]
+        {
+            let interactive = classic_style
+                && action == CapsuleWindowAction::ShowCapsule
+                && !payload.selection_polish
+                && matches!(
+                    payload.state,
+                    CapsuleState::Recording
+                        | CapsuleState::Transcribing
+                        | CapsuleState::Polishing
+                );
+            let want_passthrough = !interactive;
+            if inner
+                .capsule_cursor_passthrough
+                .swap(want_passthrough, Ordering::SeqCst)
+                != want_passthrough
+            {
+                if let Err(e) = window.set_ignore_cursor_events(want_passthrough) {
+                    log::warn!("[capsule] set_ignore_cursor_events failed: {e}");
+                }
+            }
+        }
+
+        match action {
+            CapsuleWindowAction::PreserveFallbackCard => unreachable!(),
+            CapsuleWindowAction::ShowCapsule => {
+                if !CAPSULE_FIRST_SHOW_LOGGED.swap(true, Ordering::SeqCst) {
+                    log::info!(
+                        "[capsule] first show this session: show_capsule=true visible=true state={}",
+                        capsule_state_log_name(payload.state)
+                    );
+                }
+                show_capsule_window_for_recording(app, window, reassert_spaces);
+                #[cfg(target_os = "macos")]
+                crate::restore_main_window_key_if_active(app);
+            }
+            CapsuleWindowAction::HideCapsule => {
+                if !show_capsule
+                    && !matches!(payload.state, CapsuleState::Idle)
+                    && !CAPSULE_SUPPRESSED_BY_TOGGLE_LOGGED.swap(true, Ordering::SeqCst)
+                {
+                    log::info!(
+                        "[capsule] suppressed by user toggle: show_capsule=false visible=true state={}",
+                        capsule_state_log_name(payload.state)
+                    );
+                }
+                hide_capsule_window_if_present();
+                let _ = window.hide();
+            }
+        }
+    }
+}
+
 /// `capsule_event_lock` 已由调用方持有的内部实现。自动隐藏路径必须能在验证 epoch
 /// 后、发出 Idle 前一直持锁，才能保证旧 timer 不会盖掉刚到的新 payload。
 fn emit_capsule_with_context_locked(
@@ -473,6 +608,7 @@ fn emit_capsule_with_context_locked(
             _ => CapsuleStyle::Siri,
         },
     };
+    defer_capsule_payload_if_fallback_active(inner, &payload);
 
     #[cfg(target_os = "android")]
     crate::android::notify_capsule_state(&payload);
@@ -598,6 +734,7 @@ fn emit_capsule_with_context_locked(
     } else {
         None
     };
+    let payload_for_window = payload.clone();
     let _ = app.run_on_main_thread(move || {
         let Some(window) = app_for_main.get_webview_window("capsule") else {
             // #470 诊断 v2：比 A/B/C 更靠前的暗点 A0 —— capsule webview 句柄取不到
@@ -610,112 +747,20 @@ fn emit_capsule_with_context_locked(
             }
             return;
         };
-        // `show_capsule` 是原有“录音胶囊”偏好；Selection Polish 没有独立开关，且它的
-        // 无选区/失败提示是这条无界面工作流的唯一反馈，所以始终展示轻量提示。
-        let prefs_snapshot = inner_for_main.prefs.get();
-        let show_capsule = selection_polish || prefs_snapshot.show_capsule;
-        // 把胶囊样式同步进 Inner 原子缓存：emit_capsule（音频回调线程）从这里读
-        // payload.capsuleStyle，避免在音频线程碰偏好锁。主线程每帧克隆 prefs 本就有
-        //（show_capsule 同源），多读一个字段零额外代价。
-        let classic_style = matches!(prefs_snapshot.capsule_style, CapsuleStyle::Classic);
-        inner_for_main.capsule_style.store(
-            if classic_style { 1 } else { 0 },
-            Ordering::Relaxed,
+        let fallback_card_active =
+            defer_capsule_payload_if_fallback_active(&inner_for_main, &payload_for_window);
+        apply_capsule_window_payload(
+            &inner_for_main,
+            &app_for_main,
+            &window,
+            &payload_for_window,
+            fallback_card_active,
+            payload_for_deferred_emit.is_some(),
         );
-        // Linux: 不操作胶囊窗口（不 show/hide，不 reposition）。
-        // 文字通过 fcitx5 插件直接 commit，用户始终在目标 app 中。
-        #[cfg(target_os = "linux")]
-        {
-            return;
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-
-        // 三平台统一：Done / Cancelled / Error 状态保留 ~1.5s toast
-        // （schedule_capsule_idle 之后会回 Idle 隐藏）。
-        // Windows 上 linger 的真实问题（截图选中 / 死区 / 拖拽卡顿）由 #140 加的
-        // `hide_capsule_window_if_present()` Win32 hard-hide 在 visible=false 分支
-        // 处理，不依赖把 Done/Cancelled/Error 打成 invisible。详见 PR #140 评论。
-        maybe_position_capsule_bottom_center(&inner_for_main, &window, translation);
-        // 经典药丸（Openless 默认风格）的 ✕/✓ 按钮需要接收点击：录音/转写/润色期间
-        // 关掉鼠标穿透（按钮可点，代价是窗口底部 460×180 区域在这几秒内拦截点击——
-        // 与 1.3.x 经典胶囊同款取舍）；终态 toast、隐藏、Siri 光效、选区润色提示一律
-        // 保持穿透，不遮挡底层 app。set_ignore_cursor_events 只在值变化时调用一次。
-        // Android 没有胶囊窗口，tauri 的 set_ignore_cursor_events 在其上不可用。
-        #[cfg(not(mobile))]
-        {
-            let interactive = classic_style
-                && visible
-                && !selection_polish
-                && matches!(
-                    state,
-                    CapsuleState::Recording | CapsuleState::Transcribing | CapsuleState::Polishing
-                );
-            let want_passthrough = !interactive;
-            if inner_for_main
-                .capsule_cursor_passthrough
-                .swap(want_passthrough, Ordering::SeqCst)
-                != want_passthrough
-            {
-                if let Err(e) = window.set_ignore_cursor_events(want_passthrough) {
-                    log::warn!("[capsule] set_ignore_cursor_events failed: {e}");
-                }
-            }
-        }
-        if show_capsule && visible {
-            // 用户报"看不到胶囊"时第一时间能在 log 里确认：胶囊路径有跑、show_capsule
-            // 开关是 true、当前进入 visible 帧 —— 排除 prefs 没存住 / emit_capsule 没触
-            // 发 / state 一直 Idle 这几类常见 root cause。issue #470。
-            if !CAPSULE_FIRST_SHOW_LOGGED.swap(true, Ordering::SeqCst) {
-                log::info!(
-                    "[capsule] first show this session: show_capsule=true visible=true state={}",
-                    capsule_state_log_name(state)
-                );
-            }
-            // 入场帧（隐藏→可见）强制重注册 Space 贴附：macOS 26 观测到系统会在运行中
-            // 把窗口从「全 Space 贴附」剥离（2026-07-31 实测：胶囊被钉死单个 Space，
-            // 其它桌面上听写全程不可见），而 setCollectionBehavior 写入相同值是 no-op，
-            // 之后每帧重写 273 都救不回来。只在入场帧做一次 0→273 的翻转即可恢复注册，
-            // 30Hz 的 level 帧不做（每帧翻转会让 WindowServer 反复重排窗口）。
-            show_capsule_window_for_recording(
-                &app_for_main,
-                &window,
-                payload_for_deferred_emit.is_some(),
-            );
-            // macOS/Windows 优先走 no-activate show，避免录音胶囊抢走当前工作 app 焦点。
-            // 若 fallback 到 show()，OpenLess 已是前台 app 时再把 key window 还给 main。
-            #[cfg(target_os = "macos")]
-            crate::restore_main_window_key_if_active(&app_for_main);
-        } else {
-            // show_capsule 开关被用户关掉但本次确实想显示（visible=true）的情况：
-            // 一次性 info log，让用户报"胶囊没显示"时能在日志里一眼看到根因 —— 维护者
-            // 不必再让用户"去打开设置确认"。issue #470。
-            if !show_capsule
-                && visible
-                && !CAPSULE_SUPPRESSED_BY_TOGGLE_LOGGED.swap(true, Ordering::SeqCst)
-            {
-                log::info!(
-                    "[capsule] suppressed by user toggle: show_capsule=false visible=true state={}",
-                    capsule_state_log_name(state)
-                );
-            }
-            // 兜底卡片占着这个窗口时不能隐藏 —— 它正是在会话收尾（会 emit 一帧
-            // invisible）的那一刻弹出来的，隐藏等于让它一闪而过。
-            if inner_for_main
-                .insert_fallback_card_visible
-                .load(Ordering::SeqCst)
-            {
-                log::debug!("[capsule] hide skipped: insert fallback card owns the window");
-            } else {
-                hide_capsule_window_if_present();
-                let _ = window.hide();
-            }
-        }
         // 入场帧：窗口刚 show（或本次用户关了胶囊显示走了 hide 分支），此刻再把 state 发给
         // capsule 前端 —— 前端起播 capsule-in 时窗口已可见，入场动画从头完整播放。
         if let Some(payload) = payload_for_deferred_emit.as_ref() {
             let _ = app_for_main.emit_to("capsule", "capsule:state", payload);
-        }
         }
     });
 
@@ -751,12 +796,8 @@ pub(super) fn hide_capsule_if_all_sessions_idle(inner: &Arc<Inner>) {
     let dictation_idle = inner.state.lock().phase == SessionPhase::Idle;
     let qa_idle = inner.qa_state.lock().phase == QaPhase::Idle;
     let selection_polish_active = inner.selection_polish_capsule_active.load(Ordering::SeqCst);
-    // 兜底卡片是在会话收尾那一刻弹的，而收尾自己就安排了一次 idle 隐藏 —— 不让路的话
-    // 卡片刚出现就被自己这轮会话的尾巴收掉。卡片有自己的关闭路径（用户点关闭、TTL 到时、
-    // 新一轮听写开始），不归这里管。
-    let fallback_card_active = inner.insert_fallback_card_visible.load(Ordering::SeqCst);
     let observed_epoch = inner.capsule_event_epoch.load(Ordering::SeqCst);
-    if !dictation_idle || !qa_idle || selection_polish_active || fallback_card_active {
+    if !dictation_idle || !qa_idle || selection_polish_active {
         return;
     }
 
@@ -866,7 +907,80 @@ pub(super) fn maybe_position_capsule_bottom_center<R: tauri::Runtime>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::CapsuleState;
+    use crate::types::{CapsulePayload, CapsuleState, CapsuleStyle};
+
+    fn payload(state: CapsuleState) -> CapsulePayload {
+        CapsulePayload {
+            state,
+            level: 0.0,
+            elapsed_ms: 0,
+            message: None,
+            inserted_chars: None,
+            translation: false,
+            operating: false,
+            warming: false,
+            selection_polish: false,
+            capsule_style: CapsuleStyle::Siri,
+        }
+    }
+
+    #[test]
+    fn fallback_card_owns_native_window_until_dismissed() {
+        for state in [
+            CapsuleState::Idle,
+            CapsuleState::Recording,
+            CapsuleState::Polishing,
+            CapsuleState::Done,
+        ] {
+            assert_eq!(
+                capsule_window_action(true, true, state),
+                CapsuleWindowAction::PreserveFallbackCard
+            );
+        }
+    }
+
+    #[test]
+    fn capsule_window_action_follows_visibility_without_fallback_card() {
+        assert_eq!(
+            capsule_window_action(false, true, CapsuleState::Recording),
+            CapsuleWindowAction::ShowCapsule
+        );
+        assert_eq!(
+            capsule_window_action(false, true, CapsuleState::Idle),
+            CapsuleWindowAction::HideCapsule
+        );
+        assert_eq!(
+            capsule_window_action(false, false, CapsuleState::Recording),
+            CapsuleWindowAction::HideCapsule
+        );
+    }
+
+    #[test]
+    fn fallback_card_keeps_only_the_latest_deferred_capsule_payload() {
+        let coordinator = Coordinator::new();
+        coordinator
+            .inner
+            .insert_fallback_card_visible
+            .store(true, Ordering::SeqCst);
+
+        assert!(defer_capsule_payload_if_fallback_active(
+            &coordinator.inner,
+            &payload(CapsuleState::Recording),
+        ));
+        assert!(defer_capsule_payload_if_fallback_active(
+            &coordinator.inner,
+            &payload(CapsuleState::Idle),
+        ));
+        assert_eq!(
+            coordinator
+                .inner
+                .insert_fallback_deferred_capsule
+                .lock()
+                .as_ref()
+                .map(|payload| payload.state),
+            Some(CapsuleState::Idle),
+        );
+    }
 
     #[test]
     fn esc_exclusive_flag_matches_capsule_and_phase() {

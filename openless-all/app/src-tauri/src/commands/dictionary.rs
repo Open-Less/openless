@@ -85,6 +85,16 @@ pub fn dismiss_insert_fallback_card(coord: CoordinatorState<'_>) {
     coord.dismiss_insert_fallback_card();
 }
 
+/// 前端按真实折行结果回报卡片高度；presentation_id 用来忽略旧组件迟到的 ResizeObserver。
+#[tauri::command]
+pub fn report_insert_fallback_card_height(
+    coord: CoordinatorState<'_>,
+    presentation_id: u64,
+    height: f64,
+) -> Result<(), String> {
+    coord.report_insert_fallback_card_height(presentation_id, height)
+}
+
 #[tauri::command]
 pub fn remove_correction_rule(coord: CoordinatorState<'_>, id: String) -> Result<(), String> {
     coord

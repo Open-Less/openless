@@ -340,19 +340,11 @@ fn position_vocab_card<R: tauri::Runtime>(
 
 /// 兜底卡片的窗口宽度（逻辑点）。比词条卡片宽一点 —— 这张要放一整段话。
 const FALLBACK_CARD_WIDTH: f64 = 360.0;
-/// 按钮行 + 内边距 + 留给投影的外边距。卡片没有标题行（见 `InsertFallbackCard.tsx`）。
-const FALLBACK_CARD_CHROME_HEIGHT: f64 = 89.0;
-/// 正文一行的高度，与 `InsertFallbackCard.tsx` 的 `line-height` 对齐。
-const FALLBACK_CARD_LINE_HEIGHT: f64 = 18.0;
-/// 正文最多显示几行，再多就在卡片内部滚动。
-///
-/// **必须与 `InsertFallbackCard.tsx` 里正文的 `max-height` 对齐**：窗口按这个上限算高度，
-/// CSS 若允许长得更高，超出的部分就落在窗口外面被裁掉；反过来窗口会空出一块，而卡片
-/// 显示期间窗口是不穿透鼠标的，那块空白会拦住底下的点击。
-const FALLBACK_CARD_MAX_LINES: f64 = 8.0;
-/// 正文按每行多少个字符折行估算（CJK 在 360pt 宽、13px 字号下的粗略值）。
-/// 只用来估窗口高度，真正的折行由浏览器做。
-const FALLBACK_CARD_CHARS_PER_LINE: f64 = 22.0;
+/// Webview 首次渲染前的安全高度。真实高度由卡片 DOM 测量后通过 IPC 回报。
+const FALLBACK_CARD_INITIAL_HEIGHT: f64 = 260.0;
+/// 尺寸 IPC 的原生安全边界，不表达任何 CSS 布局规则。
+const FALLBACK_CARD_MIN_HEIGHT: f64 = 96.0;
+const FALLBACK_CARD_MAX_HEIGHT: f64 = 320.0;
 
 /// 把兜底卡片摆到屏幕**水平居中、偏下**的位置。
 ///
@@ -379,14 +371,22 @@ fn position_fallback_card<R: tauri::Runtime>(
     window.set_position(tauri::LogicalPosition::new(x, y))
 }
 
-/// 兜底卡片的窗口高度：内容有多少估多少，封顶在 [`FALLBACK_CARD_MAX_LINES`]。
-fn fallback_card_height(text: &str) -> f64 {
-    let chars = text.chars().count() as f64;
-    let estimated_lines = (chars / FALLBACK_CARD_CHARS_PER_LINE).ceil().max(1.0);
-    // 显式换行也要占行 —— 一段两行的话估出来不能只有一行的高度。
-    let newlines = text.matches('\n').count() as f64;
-    let lines = (estimated_lines + newlines).min(FALLBACK_CARD_MAX_LINES);
-    FALLBACK_CARD_CHROME_HEIGHT + FALLBACK_CARD_LINE_HEIGHT * lines
+fn validated_fallback_card_height(
+    active_presentation_id: Option<u64>,
+    presentation_id: u64,
+    height: f64,
+) -> Result<Option<f64>, String> {
+    if !height.is_finite() {
+        return Err("fallback card height must be finite".into());
+    }
+    if active_presentation_id != Some(presentation_id) {
+        return Ok(None);
+    }
+    Ok(Some(
+        height
+            .ceil()
+            .clamp(FALLBACK_CARD_MIN_HEIGHT, FALLBACK_CARD_MAX_HEIGHT),
+    ))
 }
 
 /// 文本没能落到目标 app 时，把它连同一个复制按钮弹出来。
@@ -406,11 +406,6 @@ pub(crate) fn show_insert_fallback_card(inner: &Arc<Inner>, text: String, reason
     let Some(app) = inner.app.lock().clone() else {
         return;
     };
-    let height = fallback_card_height(&text);
-    let payload = crate::types::InsertFallbackCardPayload {
-        text,
-        reason: reason.to_string(),
-    };
     let app_for_main = app.clone();
     let inner_for_main = Arc::clone(inner);
     let _ = app.run_on_main_thread(move || {
@@ -423,12 +418,22 @@ pub(crate) fn show_insert_fallback_card(inner: &Arc<Inner>, text: String, reason
             inner.insert_fallback_text.lock().take();
             return;
         }
-        inner
-            .insert_fallback_card_visible
-            .store(true, Ordering::SeqCst);
         let Some(window) = app.get_webview_window("capsule") else {
             return;
         };
+        let presentation_id = inner
+            .insert_fallback_presentation_id
+            .fetch_add(1, Ordering::SeqCst)
+            .wrapping_add(1);
+        let payload = crate::types::InsertFallbackCardPayload {
+            text,
+            reason: reason.to_string(),
+            presentation_id,
+        };
+        inner.insert_fallback_deferred_capsule.lock().take();
+        inner
+            .insert_fallback_card_visible
+            .store(true, Ordering::SeqCst);
         #[cfg(not(mobile))]
         if let Err(e) = window.set_ignore_cursor_events(false) {
             log::warn!("[fallback-card] set_ignore_cursor_events(false) failed: {e}");
@@ -440,10 +445,17 @@ pub(crate) fn show_insert_fallback_card(inner: &Arc<Inner>, text: String, reason
         inner
             .capsule_cursor_passthrough
             .store(false, Ordering::SeqCst);
-        if let Err(e) = window.set_size(tauri::LogicalSize::new(FALLBACK_CARD_WIDTH, height)) {
+        if let Err(e) = window.set_size(tauri::LogicalSize::new(
+            FALLBACK_CARD_WIDTH,
+            FALLBACK_CARD_INITIAL_HEIGHT,
+        )) {
             log::warn!("[fallback-card] resize failed: {e}");
         }
-        if let Err(e) = position_fallback_card(&window, FALLBACK_CARD_WIDTH, height) {
+        if let Err(e) = position_fallback_card(
+            &window,
+            FALLBACK_CARD_WIDTH,
+            FALLBACK_CARD_INITIAL_HEIGHT,
+        ) {
             log::warn!("[fallback-card] position failed: {e}");
         }
         // 位置同理：`maybe_position_capsule_bottom_center` 的去重缓存只记「显示器 +
@@ -461,18 +473,67 @@ pub(crate) fn show_insert_fallback_card(inner: &Arc<Inner>, text: String, reason
     });
 }
 
+fn report_insert_fallback_card_height(
+    inner: &Arc<Inner>,
+    presentation_id: u64,
+    height: f64,
+) -> Result<(), String> {
+    let active_presentation_id = inner
+        .insert_fallback_card_visible
+        .load(Ordering::SeqCst)
+        .then(|| {
+            inner
+                .insert_fallback_presentation_id
+                .load(Ordering::SeqCst)
+        });
+    let Some(height) =
+        validated_fallback_card_height(active_presentation_id, presentation_id, height)?
+    else {
+        return Ok(());
+    };
+    let Some(app) = inner.app.lock().clone() else {
+        return Ok(());
+    };
+    let app_for_main = app.clone();
+    let inner_for_main = Arc::clone(inner);
+    app.run_on_main_thread(move || {
+        if !inner_for_main
+            .insert_fallback_card_visible
+            .load(Ordering::SeqCst)
+            || inner_for_main
+                .insert_fallback_presentation_id
+                .load(Ordering::SeqCst)
+                != presentation_id
+        {
+            return;
+        }
+        let Some(window) = app_for_main.get_webview_window("capsule") else {
+            return;
+        };
+        if let Err(e) = window.set_size(tauri::LogicalSize::new(FALLBACK_CARD_WIDTH, height)) {
+            log::warn!("[fallback-card] measured resize failed: {e}");
+        }
+        if let Err(e) = position_fallback_card(&window, FALLBACK_CARD_WIDTH, height) {
+            log::warn!("[fallback-card] measured position failed: {e}");
+        }
+    })
+    .map_err(|e| e.to_string())
+}
+
 /// 收起兜底卡片：把窗口完整还给胶囊。
 ///
 /// 与 [`hide_vocab_suggestion_card`] 同款：**没有卡片时必须原样返回**，否则每次听写
 /// 开始都会去 hide 那个窗口，和 `emit_capsule` 的 show 抢。
 pub(crate) fn hide_insert_fallback_card(inner: &Arc<Inner>) {
     inner.insert_fallback_text.lock().take();
+    let _event_guard = inner.capsule_event_lock.lock();
     if !inner
         .insert_fallback_card_visible
         .swap(false, Ordering::SeqCst)
     {
         return;
     }
+    let deferred_capsule = inner.insert_fallback_deferred_capsule.lock().take();
     let Some(app) = inner.app.lock().clone() else {
         return;
     };
@@ -492,6 +553,13 @@ pub(crate) fn hide_insert_fallback_card(inner: &Arc<Inner>) {
         // 先隐藏再改几何：复原要同时动尺寸和位置，窗口还亮着时改就有概率被合成出
         // 一帧「卡片被拉宽、还横着飞过半个屏幕」。
         let _ = window.hide();
+        if let Some(payload) = deferred_capsule {
+            // 卡片期间 QA / Selection Polish 仍会推进胶囊状态，只是不能碰共享窗口。
+            // 卡片释放后把最新状态一次性应用回来；若最新是 Idle，该 helper 会正常隐藏。
+            apply_capsule_window_payload(&inner, &app, &window, &payload, false, true);
+            return;
+        }
+        // 卡片期间没有任何胶囊事件：恢复默认隐藏态。
         // 穿透必须还回去，否则胶囊会一直挡着屏幕那一块。
         #[cfg(not(mobile))]
         if let Err(e) = window.set_ignore_cursor_events(true) {
@@ -960,6 +1028,11 @@ struct Inner {
     /// `schedule_capsule_idle` → `window.hide()`。可见时那次 hide 必须让路，
     /// 否则卡片刚出现就被自己这轮会话的收尾干掉。
     insert_fallback_card_visible: AtomicBool,
+    /// 每次展示递增；前端尺寸回报必须携带当前代次，旧卡片的迟到 IPC 才不能缩放新卡片。
+    insert_fallback_presentation_id: AtomicU64,
+    /// 卡片占用共享窗口期间收到的最新胶囊状态。事件仍下发给 webview，但原生窗口变化
+    /// 延后；卡片关闭时用这份 payload 恢复仍在进行的 QA / Selection Polish。
+    insert_fallback_deferred_capsule: Mutex<Option<CapsulePayload>>,
     recording_mute: Mutex<SharedRecordingMuteState>,
     hotkey: Mutex<Option<HotkeyMonitor>>,
     hotkey_status: Mutex<HotkeyStatus>,
@@ -1224,6 +1297,8 @@ impl Coordinator {
                     vocab_card_visible: AtomicBool::new(false),
                     insert_fallback_text: Mutex::new(None),
                     insert_fallback_card_visible: AtomicBool::new(false),
+                    insert_fallback_presentation_id: AtomicU64::new(0),
+                    insert_fallback_deferred_capsule: Mutex::new(None),
                     recording_mute: Mutex::new(SharedRecordingMuteState::new()),
                     hotkey: Mutex::new(None),
                     hotkey_status: Mutex::new(HotkeyStatus::default()),
@@ -1351,6 +1426,8 @@ impl Coordinator {
                 vocab_card_visible: AtomicBool::new(false),
                 insert_fallback_text: Mutex::new(None),
                 insert_fallback_card_visible: AtomicBool::new(false),
+                insert_fallback_presentation_id: AtomicU64::new(0),
+                insert_fallback_deferred_capsule: Mutex::new(None),
                 recording_mute: Mutex::new(SharedRecordingMuteState::new()),
                 hotkey: Mutex::new(None),
                 hotkey_status: Mutex::new(HotkeyStatus::default()),
@@ -2131,6 +2208,14 @@ impl Coordinator {
     /// 落字失败兜底卡片自己关掉了（用户点关闭 / TTL 到时）。
     pub fn dismiss_insert_fallback_card(&self) {
         hide_insert_fallback_card(&self.inner);
+    }
+
+    pub fn report_insert_fallback_card_height(
+        &self,
+        presentation_id: u64,
+        height: f64,
+    ) -> Result<(), String> {
+        report_insert_fallback_card_height(&self.inner, presentation_id, height)
     }
 
     /// 用户关掉了「光标上下文」开关 —— 立刻停掉一切还在跑的观察，别等它自己超时。
@@ -3535,31 +3620,38 @@ fn resolve_ark_endpoint_with_policy(
 
 #[cfg(test)]
 mod tests {
-    /// 兜底卡片的窗口高度必须随内容增长，并封顶在 `FALLBACK_CARD_MAX_LINES`。
-    ///
-    /// 两头都会出事：算矮了正文被裁在窗口外看不见；算高了窗口空出一块，而卡片显示期间
-    /// 窗口**不穿透鼠标**，那块空白会拦住用户点底下的东西。
     #[test]
-    fn fallback_card_height_grows_with_text_and_stops_at_the_cap() {
-        let short = super::fallback_card_height("好的");
-        let medium = super::fallback_card_height(&"字".repeat(100));
-        let huge = super::fallback_card_height(&"字".repeat(10_000));
-
-        assert!(short < medium, "内容变多，卡片要变高");
-        assert!(medium <= huge);
-        let cap = super::FALLBACK_CARD_CHROME_HEIGHT
-            + super::FALLBACK_CARD_LINE_HEIGHT * super::FALLBACK_CARD_MAX_LINES;
-        assert_eq!(huge, cap, "再长也不能超过封顶高度");
-        assert!(short >= super::FALLBACK_CARD_CHROME_HEIGHT + super::FALLBACK_CARD_LINE_HEIGHT);
+    fn fallback_card_height_report_rejects_non_finite_values() {
+        assert!(super::validated_fallback_card_height(Some(7), 7, f64::NAN).is_err());
+        assert!(super::validated_fallback_card_height(Some(7), 7, f64::INFINITY).is_err());
     }
 
-    /// 显式换行要占行——两段话估出来的高度不能跟一行一样。
     #[test]
-    fn fallback_card_height_counts_explicit_newlines() {
-        let one_line = super::fallback_card_height("上半句");
-        let two_paragraphs = super::fallback_card_height("上半句\n\n下半句");
+    fn fallback_card_height_report_ignores_stale_presentations() {
+        assert_eq!(
+            super::validated_fallback_card_height(Some(8), 7, 180.0).unwrap(),
+            None
+        );
+        assert_eq!(
+            super::validated_fallback_card_height(None, 7, 180.0).unwrap(),
+            None
+        );
+    }
 
-        assert!(two_paragraphs > one_line);
+    #[test]
+    fn fallback_card_height_report_clamps_to_native_safety_bounds() {
+        assert_eq!(
+            super::validated_fallback_card_height(Some(7), 7, 40.0).unwrap(),
+            Some(96.0)
+        );
+        assert_eq!(
+            super::validated_fallback_card_height(Some(7), 7, 500.0).unwrap(),
+            Some(320.0)
+        );
+        assert_eq!(
+            super::validated_fallback_card_height(Some(7), 7, 181.2).unwrap(),
+            Some(182.0)
+        );
     }
 
     /// 造一条词典条目。传给 `prioritize_vocab_for_asr` 时必须是词典的原始顺序

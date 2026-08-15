@@ -417,15 +417,36 @@ fn should_restore_clipboard(current_text: Option<&str>, inserted_text: &str) -> 
     matches!(current_text, Some(current) if current == inserted_text)
 }
 
-#[cfg(target_os = "macos")]
-fn simulate_paste() -> Result<(), String> {
-    if !matches!(
-        crate::permissions::check_accessibility(),
-        crate::permissions::PermissionStatus::Granted
-    ) {
+#[cfg(any(target_os = "macos", test))]
+fn simulate_macos_paste_with<P>(
+    accessibility_granted: bool,
+    secure_input_active: bool,
+    post_cmd_v: P,
+) -> Result<(), String>
+where
+    P: FnOnce() -> Result<(), String>,
+{
+    if !accessibility_granted {
         return Err("accessibility permission is not granted".into());
     }
-    macos::post_cmd_v()
+    if secure_input_active {
+        return Err("secure input is active".into());
+    }
+    // CoreGraphics 只能确认合成事件已经构造并投递，无法确认前台应用接受了 Cmd+V
+    // 或真的插入了文本。
+    post_cmd_v()
+}
+
+#[cfg(target_os = "macos")]
+fn simulate_paste() -> Result<(), String> {
+    simulate_macos_paste_with(
+        matches!(
+            crate::permissions::check_accessibility(),
+            crate::permissions::PermissionStatus::Granted
+        ),
+        crate::unicode_keystroke::is_secure_input_enabled(),
+        macos::post_cmd_v,
+    )
 }
 
 /// 把 `PasteShortcut` 拆成 `(modifiers, primary)`，顺序决定按下/释放顺序。
@@ -780,6 +801,45 @@ mod tests {
             Some("user changed clipboard"),
             "dictated text"
         ));
+    }
+
+    #[test]
+    fn macos_paste_preflight_rejects_missing_accessibility_before_posting() {
+        let mut posted = false;
+        let result = simulate_macos_paste_with(false, false, || {
+            posted = true;
+            Ok(())
+        });
+
+        assert_eq!(
+            result.unwrap_err(),
+            "accessibility permission is not granted"
+        );
+        assert!(!posted);
+    }
+
+    #[test]
+    fn macos_paste_preflight_rejects_secure_input_before_posting() {
+        let mut posted = false;
+        let result = simulate_macos_paste_with(true, true, || {
+            posted = true;
+            Ok(())
+        });
+
+        assert_eq!(result.unwrap_err(), "secure input is active");
+        assert!(!posted);
+    }
+
+    #[test]
+    fn macos_paste_preflight_posts_when_guards_are_clear() {
+        let mut posted = false;
+        let result = simulate_macos_paste_with(true, false, || {
+            posted = true;
+            Ok(())
+        });
+
+        assert_eq!(result, Ok(()));
+        assert!(posted);
     }
 
     #[test]

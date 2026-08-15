@@ -89,6 +89,18 @@ export function dismissInsertFallbackCard(): Promise<void> {
     return invokeOrMock("dismiss_insert_fallback_card", undefined, () => undefined)
 }
 
+/** 把浏览器真实折行后的卡片高度同步给原生共享窗口。 */
+export function reportInsertFallbackCardHeight(
+    presentationId: number,
+    height: number,
+): Promise<void> {
+    return invokeOrMock(
+        "report_insert_fallback_card_height",
+        { presentationId, height },
+        () => undefined,
+    )
+}
+
 export function removeCorrectionRule(id: string): Promise<void> {
     return invokeOrMock("remove_correction_rule", { id }, () => undefined)
 }

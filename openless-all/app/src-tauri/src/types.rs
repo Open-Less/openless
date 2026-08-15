@@ -405,6 +405,8 @@ pub struct InsertFallbackCardPayload {
     /// 为什么没落进去。**只进日志，不上屏** —— 卡片没有标题行。见
     /// `INSERT_FALLBACK_REASON_*`。
     pub reason: String,
+    /// 本次卡片展示的代次。尺寸测量 IPC 必须回传它，防止旧卡片迟到的报告缩放新卡片。
+    pub presentation_id: u64,
 }
 
 /// 逐字上屏打到一半断了（Secure Input 中途打开、合成按键被拒）。

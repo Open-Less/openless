@@ -18,9 +18,17 @@
 // 一起，意思已经到了。原先那行「你切走了窗口，这段话没能落进去」是在替用户解释他自己
 // 刚做过的动作，读起来像旁白。`payload.reason` 仍然保留，但只进日志，不上屏。
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { copyTextToClipboard, dismissInsertFallbackCard } from '../lib/ipc';
+import {
+  copyTextToClipboard,
+  dismissInsertFallbackCard,
+  reportInsertFallbackCardHeight,
+} from '../lib/ipc';
+import {
+  nextFallbackCardHeightReport,
+  type FallbackCardHeightReport,
+} from '../lib/insertFallbackLayout';
 import type { InsertFallbackCardPayload } from '../lib/types';
 
 /// 卡片自己消失的时间。比词条卡片的 10 秒长——这张要读内容。
@@ -28,9 +36,7 @@ const TTL_MS = 20_000;
 /// 复制成功后按钮停留在「已复制」的时间。
 const COPIED_FEEDBACK_MS = 1_600;
 /// 正文最多显示几行，再多就在卡片内部滚动。
-///
-/// **必须与后端 `FALLBACK_CARD_MAX_LINES` 对齐**：窗口高度按那个上限算，这里若允许长得
-/// 更高，超出部分会落在窗口外被裁掉。
+/// 原生窗口使用 DOM 实测高度，不再重复维护这组布局参数。
 const MAX_LINES = 8;
 const LINE_HEIGHT = 18;
 
@@ -44,6 +50,44 @@ export function InsertFallbackCard({ payload }: InsertFallbackCardProps) {
   const [copyFailed, setCopyFailed] = useState(false);
   const [paused, setPaused] = useState(false);
   const timerRef = useRef<number | null>(null);
+  const cardRootRef = useRef<HTMLDivElement | null>(null);
+  const lastHeightReportRef = useRef<FallbackCardHeightReport | null>(null);
+
+  useLayoutEffect(() => {
+    const element = cardRootRef.current;
+    if (!element) return undefined;
+    let cancelled = false;
+
+    const reportHeight = () => {
+      const report = nextFallbackCardHeightReport(
+        lastHeightReportRef.current,
+        payload.presentationId,
+        element.getBoundingClientRect().height,
+      );
+      if (!report) return;
+      lastHeightReportRef.current = report;
+      void reportInsertFallbackCardHeight(report.presentationId, report.height).catch(() => {
+        // IPC 短暂失败后允许后续 ResizeObserver 通知重试。
+        if (
+          !cancelled
+          && lastHeightReportRef.current?.presentationId === report.presentationId
+          && lastHeightReportRef.current.height === report.height
+        ) {
+          lastHeightReportRef.current = null;
+        }
+      });
+    };
+
+    lastHeightReportRef.current = null;
+    reportHeight();
+    if (typeof ResizeObserver === 'undefined') return undefined;
+    const observer = new ResizeObserver(reportHeight);
+    observer.observe(element);
+    return () => {
+      cancelled = true;
+      observer.disconnect();
+    };
+  }, [payload.presentationId]);
 
   // TTL 倒计时。悬停时暂停：鼠标停在卡片上说明人正在读它。
   useEffect(() => {
@@ -72,9 +116,10 @@ export function InsertFallbackCard({ payload }: InsertFallbackCardProps) {
 
   return (
     <div
+      ref={cardRootRef}
       style={{
         width: '100%',
-        height: '100%',
+        alignSelf: 'flex-end',
         display: 'flex',
         flexDirection: 'column',
         justifyContent: 'flex-end',
@@ -82,7 +127,6 @@ export function InsertFallbackCard({ payload }: InsertFallbackCardProps) {
         // 卡片是唯一要接鼠标的东西——胶囊本体全程 pointerEvents:none。
         pointerEvents: 'auto',
         boxSizing: 'border-box',
-        animation: 'capsule-in .28s cubic-bezier(.3,1.1,.4,1) both',
       }}
       onMouseEnter={() => setPaused(true)}
       onMouseLeave={() => setPaused(false)}
@@ -100,6 +144,7 @@ export function InsertFallbackCard({ payload }: InsertFallbackCardProps) {
           color: 'var(--ol-capsule-btn-ink)',
           fontFamily: 'var(--ol-font-sans)',
           overflow: 'hidden',
+          animation: 'capsule-in .28s cubic-bezier(.3,1.1,.4,1) both',
         }}
       >
         <div
