@@ -68,7 +68,6 @@ export const ko: typeof zhCN = {
     micLabel: '음성으로 질문',
     micStop: '녹음 종료',
     selectionPreview: '선택된 텍스트 기반:',
-    linuxSelectionToolsMissing: 'Linux 선택 영역을 읽으려면 wl-paste, xclip 또는 xsel 중 하나를 설치하세요.',
     emptyTitle: '무엇을 도와드릴까요?',
     emptyDesc: '텍스트를 선택해 질문하거나 아래에 직접 입력하세요. 답변이 여기에 표시되며 계속 이어서 질문할 수 있습니다.',
     recordingHint: '녹음 중… {{recordHotkey}} 를 다시 눌러 종료하고 질문',

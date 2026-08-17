@@ -77,7 +77,7 @@ import {
   qaToggleRecording,
   qaWindowDismiss,
 } from '../lib/ipc';
-import { acceptQaSessionEvent, nextQaSelectionWarning, splitQaUserMessage } from '../lib/qaMessage';
+import { acceptQaSessionEvent, splitQaUserMessage } from '../lib/qaMessage';
 import type { QaChatMessage, QaStatePayload } from '../lib/types';
 import '../components/chat/chat.css';
 
@@ -126,7 +126,6 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
   const [status, setStatus] = useState<Status>('idle');
   const [errorMsg, setErrorMsg] = useState<string>('');
   const [selectionPreview, setSelectionPreview] = useState<string>('');
-  const [selectionWarning, setSelectionWarning] = useState<string>('');
   const [composerText, setComposerText] = useState<string>('');
   /** 流式 LLM 答案：answer_delta 累积、answer 事件来时清空（最终内容已落到 messages）。 */
   const [streamingAnswer, setStreamingAnswer] = useState<string>('');
@@ -162,7 +161,6 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
           if (payload.messages) {
             setMessages(payload.messages);
           }
-          setSelectionWarning(current => nextQaSelectionWarning(current, payload));
           switch (payload.kind) {
             case 'idle':
               setStatus('idle');
@@ -216,7 +214,6 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
         const dismissHandle = await listen<unknown>('qa:dismiss', () => {
           activeSessionIdRef.current = null;
           setSelectionPreview('');
-          setSelectionWarning('');
           setComposerText('');
           if (embeddedRef.current) {
             onRequestCloseRef.current?.();
@@ -250,7 +247,6 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
     setErrorMsg('');
     setStreamingAnswer('');
     setSelectionPreview('');
-    setSelectionWarning('');
     setComposerText('');
   }, [closing]);
 
@@ -404,16 +400,6 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
         <CardFooter className="flex-col gap-2">
           {status === 'recording' && selectionPreview && (
             <SelectionChip text={selectionPreview} t={t} />
-          )}
-          {selectionWarning === 'linux_selection_tools_missing' && (
-            <div
-              role="status"
-              aria-live="polite"
-              aria-atomic="true"
-              className="w-full rounded-md border border-amber-500/35 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-200"
-            >
-              {t('qa.linuxSelectionToolsMissing')}
-            </div>
           )}
           <Composer
             value={composerText}

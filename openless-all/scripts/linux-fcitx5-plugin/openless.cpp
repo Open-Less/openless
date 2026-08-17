@@ -18,6 +18,8 @@
  *    SetTranslationHotkeyRaw(uu: sym, states) — 直接设翻译模式触发 sym+states
  *    SetAuxDown(s: text)                 — 在候选词列表下方显示状态文本
  *    ClearAuxDown()                      — 清除候选词列表下方文本
+ *    GetSelectionText() -> s             — 读取当前 PRIMARY 选区文本（fcitx clipboard addon
+ *                                          X11 XFIXES / Wayland data-control 统一维护缓存）
  *  信号:
  *    DictationKeyEvent(uub: sym, states, isPress) — 听写热键按下/抬起
  *    QaShortcutEvent(uub: sym, states, isPress)   — QA 快捷键按下/抬起
@@ -46,6 +48,7 @@
 #include <fcitx/inputcontextmanager.h>
 #include <fcitx/inputpanel.h>
 #include <fcitx/instance.h>
+#include <fcitx-module/clipboard/clipboard_public.h>
 #include <fcitx-module/dbus/dbus_public.h>
 
 FCITX_DEFINE_LOG_CATEGORY(openless, "openless");
@@ -454,6 +457,30 @@ public:
             << "SetTranslationHotkeyRaw: sym=" << sym << " states=" << states;
     }
 
+    /// 读取当前 PRIMARY 选区文本（供划词追问）。
+    ///
+    /// 直接读取 fcitx5 clipboard addon 维护的 PRIMARY 选区缓存，与 fcitx 剪贴板
+    /// 模块的选区来源完全一致：X11 走 XFIXES 事件 + convertSelection，Wayland 走
+    /// data-control（zwlr/ext 双协议）。跨平台差异全部由 fcitx 处理，本插件
+    /// 无需自行实现协议。
+    ///
+    /// 返回空字符串表示无选区 / 选区为空 / clipboard addon 不可用；调用方
+    /// （OpenLess Rust 侧）在收到空或错误时应降级到外部工具（wl-paste/xclip/xsel）。
+    std::string getSelectionText() {
+        auto *clipboard = instance_->addonManager().addon("clipboard");
+        if (!clipboard) {
+            FCITX_LOGC(openless, Debug)
+                << "GetSelectionText: clipboard addon not loaded";
+            return std::string();
+        }
+        // primary() 签名接收 const InputContext*，clipboard 模块实现中未使用该参数
+        // （读的是全局 primary_ 缓存），这里传 nullptr 即可。
+        std::string text = clipboard->call<IClipboard::primary>(nullptr);
+        FCITX_LOGC(openless, Debug)
+            << "GetSelectionText: " << text.size() << " chars";
+        return text;
+    }
+
     FCITX_OBJECT_VTABLE_METHOD(commitText, "CommitText", "s", "");
     FCITX_OBJECT_VTABLE_METHOD(setAuxDown, "SetAuxDown", "s", "");
     FCITX_OBJECT_VTABLE_METHOD(clearAuxDown, "ClearAuxDown", "", "");
@@ -463,6 +490,7 @@ public:
     FCITX_OBJECT_VTABLE_METHOD(setQaHotkeyRaw, "SetQaHotkeyRaw", "uu", "");
     FCITX_OBJECT_VTABLE_METHOD(setSelectionPolishHotkeyRaw, "SetSelectionPolishHotkeyRaw", "uu", "");
     FCITX_OBJECT_VTABLE_METHOD(setTranslationHotkeyRaw, "SetTranslationHotkeyRaw", "uu", "");
+    FCITX_OBJECT_VTABLE_METHOD(getSelectionText, "GetSelectionText", "", "s");
     FCITX_OBJECT_VTABLE_SIGNAL(dictationKeyEvent, "DictationKeyEvent", "uub");
     FCITX_OBJECT_VTABLE_SIGNAL(dictationKeyCombined, "DictationKeyCombined", "uub");
     FCITX_OBJECT_VTABLE_SIGNAL(qaShortcutEvent, "QaShortcutEvent", "uub");

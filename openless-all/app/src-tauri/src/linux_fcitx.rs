@@ -295,6 +295,25 @@ pub fn available() -> bool {
     conn.send_with_reply_and_block(msg, TIMEOUT).is_ok()
 }
 
+/// 通过 fcitx5 插件获取当前 PRIMARY 选区文本（供划词追问）。
+///
+/// 插件内部直接读 fcitx clipboard addon 的 PRIMARY 选区缓存——X11 侧由 XFIXES
+/// 事件 + convertSelection 维护，Wayland 侧由 data-control（zwlr/ext 双协议）维护，
+/// 跨发行版 / 桌面环境一致，且不会触碰用户剪贴板。
+///
+/// 返回 `Ok(text)`，`text` 为空字符串表示无选区（或选区为空）；`Err` 表示
+/// 插件不可用 / 方法不存在（旧版插件）/ DBus 失败，调用方应降级到外部工具。
+pub fn get_selection_text() -> Result<String, String> {
+    let conn =
+        dbus::blocking::Connection::new_session().map_err(|e| format!("dbus session: {e}"))?;
+    let msg = dbus::Message::new_method_call(DEST, PATH, IFACE, "GetSelectionText")
+        .map_err(|e| format!("build msg: {e}"))?;
+    let reply = conn
+        .send_with_reply_and_block(msg, TIMEOUT)
+        .map_err(|e| format!("GetSelectionText: {e}"))?;
+    reply.read1::<String>().map_err(|e| format!("GetSelectionText reply: {e}"))
+}
+
 /// 启动 fcitx5 DictationKeyEvent 信号监听线程。
 ///
 /// 当 fcitx5 OpenLess 插件检测到配置的听写热键被按下或松开时，

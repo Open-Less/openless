@@ -117,7 +117,6 @@ pub(super) fn open_qa_panel(inner: &Arc<Inner>) {
                 serde_json::json!({
                     "kind": "idle",
                     "session_id": session_id,
-                    "selection_warning": null,
                     "messages": Vec::<crate::types::QaChatMessage>::new(),
                 }),
             );

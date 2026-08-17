@@ -2174,7 +2174,8 @@ impl Coordinator {
         // callback (SIGABRT). Tauri's runtime handle is safe from either thread.
         tauri::async_runtime::spawn(async move {
             let session_id = crate::coordinator_state::new_session_id();
-            if let Err(e) = dictation::run_voice_agent_transcript(&inner, session_id, text, 0).await
+            if let Err(e) =
+                dictation::run_voice_agent_transcript(&inner, session_id, text, 0, false).await
             {
                 log::warn!("[less-computer] text submit run failed: {e}");
             }

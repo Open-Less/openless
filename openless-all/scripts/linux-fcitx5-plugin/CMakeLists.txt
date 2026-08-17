@@ -6,7 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(Fcitx5Core REQUIRED)
 find_package(Fcitx5Utils REQUIRED)
-find_package(Fcitx5Module REQUIRED COMPONENTS DBus)
+find_package(Fcitx5Module REQUIRED COMPONENTS DBus Clipboard)
 
 # FCITX_INSTALL_*DIR comes from Fcitx5Utils
 message(STATUS "FCITX_INSTALL_LIBDIR: ${FCITX_INSTALL_LIBDIR}")
@@ -16,7 +16,8 @@ message(STATUS "FCITX_INSTALL_ADDONDIR: ${FCITX_INSTALL_ADDONDIR}")
 add_library(openless MODULE openless.cpp)
 target_link_libraries(openless PRIVATE
     Fcitx5::Core
-    Fcitx5::Utils)
+    Fcitx5::Utils
+    Fcitx5::Module::Clipboard)
 
 # Locate fcitx5 module headers (e.g. fcitx-module/dbus/dbus_public.h)
 find_path(FCITX5_MODULE_INCLUDE_DIR

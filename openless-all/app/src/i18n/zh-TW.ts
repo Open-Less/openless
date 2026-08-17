@@ -66,7 +66,6 @@ export const zhTW: typeof zhCN = {
     micLabel: '語音提問',
     micStop: '結束錄音',
     selectionPreview: '基於選中文本：',
-    linuxSelectionToolsMissing: '無法讀取 Linux 選區。請安裝 wl-paste、xclip 或 xsel 後重試。',
     emptyTitle: '有什麼可以幫你？',
     emptyDesc: '選中任意文字後開始追問，或直接在下方輸入問題。回答會顯示在這裏，可以連續多輪。',
     recordingHint: '錄音中…再按一次 {{recordHotkey}} 結束並提問',

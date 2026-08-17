@@ -26,30 +26,19 @@ function splitQaUserContent(content: string): { selection: string; question: str
   return { selection: '', question: content };
 }
 
-export function nextQaSelectionWarning(
-  current: string,
-  payload: Pick<QaStatePayload, 'kind' | 'selection_warning'>,
-): string {
-  if (payload.kind === 'idle' || payload.kind === 'recording') {
-    return payload.selection_warning ?? '';
-  }
-  if (payload.kind === 'loading' || payload.kind === 'thinking') {
-    return payload.selection_warning === undefined ? current : (payload.selection_warning ?? '');
-  }
-  return current;
-}
-
 export function acceptQaSessionEvent(
   currentSessionId: string | null,
-  payload: Pick<QaStatePayload, 'kind' | 'session_id' | 'selection_warning'>,
+  payload: Pick<QaStatePayload, 'kind' | 'session_id'>,
 ): { accepted: boolean; sessionId: string | null } {
   if (!payload.session_id) {
     return { accepted: true, sessionId: currentSessionId };
   }
+  // idle 一律视为新会话 token：open_qa_panel 的 idle 总是携带新生成的 session_id，
+  // 且事件按发送顺序到达，complete/turn 收尾的 idle 一定先于下一次 open。
   const startsTurn = payload.kind === 'recording'
     || payload.kind === 'loading'
     || payload.kind === 'thinking'
-    || (payload.kind === 'idle' && payload.selection_warning !== undefined);
+    || payload.kind === 'idle';
   if (currentSessionId && !startsTurn && currentSessionId !== payload.session_id) {
     return { accepted: false, sessionId: currentSessionId };
   }

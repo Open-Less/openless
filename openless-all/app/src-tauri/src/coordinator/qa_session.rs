@@ -144,7 +144,6 @@ pub(super) async fn finalize_dictation_as_qa_question(inner: &Arc<Inner>) -> Res
     log::info!("[coord] QA finalize from overlay: capturing selection before opening panel");
     let capture = crate::selection::capture_selection_with_status();
     let selection = capture.selection;
-    let selection_warning = capture.warning_code;
     let selection_preview_text = selection.as_ref().map(|s| s.text.clone());
 
     log::info!("[coord] QA finalize from overlay: opening panel and waiting for ASR result");
@@ -173,7 +172,6 @@ pub(super) async fn finalize_dictation_as_qa_question(inner: &Arc<Inner>) -> Res
                     "kind": "loading",
                     "session_id": session_id,
                     "selection_preview": selection_preview_text,
-                    "selection_warning": selection_warning,
                     "messages": state.messages.clone(),
                 }),
             );
@@ -208,6 +206,7 @@ pub(super) async fn finalize_dictation_as_qa_question(inner: &Arc<Inner>) -> Res
         raw.duration_ms,
         session_id,
         None,
+        true,
     )
     .await
 }
@@ -245,7 +244,6 @@ pub(super) async fn submit_qa_text_question(
         .selection
         .as_ref()
         .map(|selection| selection.text.clone());
-    let selection_warning = capture.warning_code;
     {
         let mut state = inner.qa_state.lock();
         if !qa_turn_can_continue(&state, session_id) {
@@ -263,14 +261,13 @@ pub(super) async fn submit_qa_text_question(
                     "kind": "thinking",
                     "session_id": session_id,
                     "selection_preview": selection_preview_text,
-                    "selection_warning": selection_warning,
                     "messages": state.messages.clone(),
                 }),
             );
         }
     }
 
-    answer_qa_question_text(inner, question, 0, session_id, None).await
+    answer_qa_question_text(inner, question, 0, session_id, None, false).await
 }
 
 pub(super) async fn take_current_dictation_transcript_for_qa(
@@ -310,7 +307,7 @@ pub(super) async fn take_current_dictation_transcript_for_qa(
             state.phase = SessionPhase::Idle;
             state.focus_target = None;
         }
-        answer_qa_question_text(inner, String::new(), duration_ms, qa_session_id, Some(wav))
+        answer_qa_question_text(inner, String::new(), duration_ms, qa_session_id, Some(wav), true)
             .await?;
         return Ok(None);
     }
@@ -655,6 +652,10 @@ pub(super) async fn answer_qa_question_text(
     duration_ms: u64,
     session_id: SessionId,
     audio_wav: Option<Vec<u8>>,
+    // QA 面板打字提问（submit_qa_text_question）传 false：回答在面板内流式可见，
+    // 不应在输入法 auxDown 闪「✨ 润色中...」（Linux 下 Polishing 会映射到候选词栏）。
+    // 语音/听写路径保持 true（用户熟悉的小录音条反馈）。
+    show_polish_capsule: bool,
 ) -> Result<(), String> {
     {
         let state = inner.qa_state.lock();
@@ -706,7 +707,9 @@ pub(super) async fn answer_qa_question_text(
         }
     }
 
-    emit_capsule(inner, CapsuleState::Polishing, 0.0, 0, None, None);
+    if show_polish_capsule {
+        emit_capsule(inner, CapsuleState::Polishing, 0.0, 0, None, None);
+    }
 
     let prefs = inner.prefs.get();
     let working_languages = prefs.working_languages.clone();
@@ -880,7 +883,6 @@ pub(super) async fn begin_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
     // 每轮按 Option 都重新抓一次：用户多轮提问中可以重新选别处文字。
     let capture = capture_qa_turn_selection(inner);
     let selection = capture.selection;
-    let selection_warning = capture.warning_code;
     let selection_preview_text = selection.as_ref().map(|s| s.text.clone());
     {
         let mut state = inner.qa_state.lock();
@@ -897,7 +899,6 @@ pub(super) async fn begin_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
                     "kind": "recording",
                     "session_id": session_id,
                     "selection_preview": selection_preview_text,
-                    "selection_warning": selection_warning,
                     "messages": state.messages.clone(),
                 }),
             );
@@ -1115,7 +1116,7 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
         };
         let duration_ms = pcm_consumer.duration_ms();
         let wav = pcm_bytes_to_wav(&pcm_consumer.pcm());
-        return answer_qa_question_text(inner, String::new(), duration_ms, session_id, Some(wav))
+        return answer_qa_question_text(inner, String::new(), duration_ms, session_id, Some(wav), true)
             .await;
     }
 
@@ -1538,7 +1539,7 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
         return Ok(());
     }
 
-    answer_qa_question_text(inner, question, raw.duration_ms, session_id, None).await
+    answer_qa_question_text(inner, question, raw.duration_ms, session_id, None, true).await
 }
 
 /// 静默收尾：发 idle 事件给前端，phase 复位。**不关浮窗**（v2：浮窗只在用户

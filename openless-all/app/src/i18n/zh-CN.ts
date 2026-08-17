@@ -64,7 +64,6 @@ export const zhCN = {
     micLabel: '语音提问',
     micStop: '结束录音',
     selectionPreview: '基于选中文本：',
-    linuxSelectionToolsMissing: '无法读取 Linux 选区。请安装 wl-paste、xclip 或 xsel 后重试。',
     emptyTitle: '有什么可以帮你？',
     emptyDesc: '选中任意文字后开始追问，或直接在下方输入问题。回答会显示在这里，可以连续多轮。',
     recordingHint: '录音中…再按一次 {{recordHotkey}} 结束并提问',

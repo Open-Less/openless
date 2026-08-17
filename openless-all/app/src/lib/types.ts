@@ -578,8 +578,6 @@ export interface QaStatePayload {
   messages?: QaChatMessage[];
   /** recording 状态时附带的选区预览（前 60 字）。 */
   selection_preview?: string | null;
-  /** Linux 选区工具缺失时的非阻断提醒码。 */
-  selection_warning?: 'linux_selection_tools_missing' | null;
   /** error 状态时附带的提示。 */
   error?: string;
   /** answer_delta 事件时附带的本帧增量字符串。 */

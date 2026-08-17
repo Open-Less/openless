@@ -66,7 +66,6 @@ export const en: typeof zhCN = {
     micLabel: 'Ask by voice',
     micStop: 'Stop recording',
     selectionPreview: 'From selected text:',
-    linuxSelectionToolsMissing: 'Linux selection capture needs wl-paste, xclip, or xsel. Install one and try again.',
     emptyTitle: 'How can I help?',
     emptyDesc: 'Select any text to ask about it, or just type your question below. Answers appear here — ask as many follow-ups as you like.',
     recordingHint: 'Recording… press {{recordHotkey}} again to submit',

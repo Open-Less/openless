@@ -68,7 +68,6 @@ export const ja: typeof zhCN = {
     micLabel: '音声で質問',
     micStop: '録音を終了',
     selectionPreview: '選択テキスト：',
-    linuxSelectionToolsMissing: 'Linux の選択範囲を読み取れません。wl-paste、xclip、xsel のいずれかをインストールしてください。',
     emptyTitle: 'ご用件は？',
     emptyDesc: 'テキストを選択して質問するか、下に直接入力してください。回答はここに表示され、続けて質問できます。',
     recordingHint: '録音中… {{recordHotkey}} をもう一度押して終了し、質問します',

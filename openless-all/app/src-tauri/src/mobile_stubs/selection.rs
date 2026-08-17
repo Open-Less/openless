@@ -13,13 +13,11 @@ pub struct SelectionContext {
 
 pub struct SelectionCaptureOutcome {
     pub selection: Option<SelectionContext>,
-    pub warning_code: Option<&'static str>,
 }
 
 pub fn capture_selection_with_status() -> SelectionCaptureOutcome {
     SelectionCaptureOutcome {
         selection: capture_selection(),
-        warning_code: None,
     }
 }
 

@@ -1,5 +1,5 @@
-import { acceptQaSessionEvent, nextQaSelectionWarning, splitQaUserMessage } from './qaMessage';
-import type { QaChatMessage, QaStatePayload } from './types';
+import { acceptQaSessionEvent, splitQaUserMessage } from './qaMessage';
+import type { QaChatMessage } from './types';
 
 function assertEqual<T>(actual: T, expected: T, message: string) {
   if (actual !== expected) {
@@ -38,28 +38,6 @@ const legacy = splitQaUserMessage(
 assertEqual(legacy.selection, '旧选区', 'legacy messages still expose their selection');
 assertEqual(legacy.question, '旧问题', 'legacy messages still expose their question');
 
-const warning: QaStatePayload['selection_warning'] = 'linux_selection_tools_missing';
-assertEqual(
-  nextQaSelectionWarning('', { kind: 'recording', selection_warning: warning }),
-  warning,
-  'recording surfaces a Linux dependency warning',
-);
-assertEqual(
-  nextQaSelectionWarning(warning, { kind: 'idle' }),
-  '',
-  'an idle reset clears a stale warning even when the field is omitted',
-);
-assertEqual(
-  nextQaSelectionWarning(warning, { kind: 'idle', selection_warning: null }),
-  '',
-  'an explicit idle reset clears a stale warning',
-);
-assertEqual(
-  nextQaSelectionWarning(warning, { kind: 'thinking' }),
-  warning,
-  'a transitional event without a warning preserves the current warning',
-);
-
 assertEqual(
   acceptQaSessionEvent('new-session', { kind: 'answer_delta', session_id: 'old-session' }).accepted,
   false,
@@ -71,13 +49,9 @@ assertEqual(
   'a recording event activates the next turn token',
 );
 assertEqual(
-  acceptQaSessionEvent('old-session', {
-    kind: 'idle',
-    session_id: 'new-session',
-    selection_warning: null,
-  }).sessionId,
+  acceptQaSessionEvent('old-session', { kind: 'idle', session_id: 'new-session' }).sessionId,
   'new-session',
-  'an explicit panel-open reset activates the reopened panel token',
+  'a panel-open idle activates the reopened panel token',
 );
 
 console.log('qaMessage.test.ts passed');

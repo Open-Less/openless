@@ -148,16 +148,13 @@ pub(super) async fn run_selection_polish(inner: &Arc<Inner>) -> Result<(), Strin
     let insertion_target = crate::selection::capture_selection_insertion_target();
     let capture = crate::selection::capture_selection_with_status();
     if selection_polish_plan(capture.selection.as_ref()) == SelectionPolishPlan::NoSelection {
-        let code = capture
-            .warning_code
-            .unwrap_or("selectionPolishNoSelection")
-            .to_string();
+        let code = "selectionPolishNoSelection";
         finish_selection_polish_capsule(
             inner,
             CapsuleState::Cancelled,
-            selection_polish_feedback_message(&code),
+            selection_polish_feedback_message(code),
         );
-        return Err(code);
+        return Err(code.to_string());
     }
     let selection = capture.selection.expect("selection plan checked above");
     if !crate::selection::selection_insertion_target_is_captured(&insertion_target) {
