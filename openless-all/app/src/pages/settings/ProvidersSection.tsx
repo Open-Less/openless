@@ -148,6 +148,15 @@ export const LLM_PRESETS = [
     modelPlaceholder: 'qwen/qwen3-coder:free',
   },
   {
+    // OrcaRouter 统一网关，OpenAI 兼容 /v1/chat/completions，直通 Anthropic Claude 系列
+    // （模型名带 anthropic/ 前缀，如 anthropic/claude-haiku-4.5）。纯 OpenAI 兼容通道，
+    // 无特殊 thinking 分支 —— 后端 polish.rs 对未声明 provider 一律不主动干预。
+    id: 'orcarouter',
+    nameKey: 'orcarouter',
+    baseUrl: 'https://api.orcarouter.ai/v1',
+    modelPlaceholder: 'anthropic/claude-haiku-4.5',
+  },
+  {
     id: 'alibabaCoding',
     nameKey: 'alibabaCoding',
     baseUrl: 'https://coding-intl.dashscope.aliyuncs.com/v1',

@@ -959,6 +959,7 @@ export const zhCN = {
         mimo: '小米 MiMo',
         cometapi: 'CometAPI',
         openrouterFree: 'OpenRouter（免费模型）',
+        orcarouter: 'OrcaRouter',
         alibabaCoding: '阿里云 Coding Plan',
         codingPlanX: 'CodingPlanX',
         minimax: 'MiniMax（M3）',

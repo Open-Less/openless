@@ -963,6 +963,7 @@ export const ja: typeof zhCN = {
         mimo: 'Xiaomi MiMo',
         cometapi: 'CometAPI',
         openrouterFree: 'OpenRouter（無料モデル）',
+        orcarouter: 'OrcaRouter',
         alibabaCoding: 'Alibaba Cloud Coding Plan',
         codingPlanX: 'CodingPlanX',
         minimax: 'MiniMax（M3）',

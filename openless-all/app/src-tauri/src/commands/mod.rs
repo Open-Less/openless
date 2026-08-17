@@ -585,6 +585,25 @@ mod tests {
         };
         assert!(llm_configured_for_provider("openrouterFree", &hosted_ready));
 
+        // OrcaRouter 同 OpenRouter：命中默认 endpoint 时需要 key，否则仅 endpoint+model。
+        let orcarouter_hosted_keyless = CredentialsSnapshot {
+            ark_endpoint: Some("https://api.orcarouter.ai/v1".into()),
+            ark_model_id: Some("anthropic/claude-haiku-4.5".into()),
+            ..snapshot()
+        };
+        assert!(!llm_configured_for_provider(
+            "orcarouter",
+            &orcarouter_hosted_keyless
+        ));
+
+        let orcarouter_hosted_ready = CredentialsSnapshot {
+            ark_api_key: Some("key".into()),
+            ark_endpoint: Some("https://api.orcarouter.ai/v1/chat/completions".into()),
+            ark_model_id: Some("anthropic/claude-haiku-4.5".into()),
+            ..snapshot()
+        };
+        assert!(llm_configured_for_provider("orcarouter", &orcarouter_hosted_ready));
+
         let key_without_endpoint = CredentialsSnapshot {
             ark_api_key: Some("key".into()),
             ark_model_id: Some("qwen".into()),

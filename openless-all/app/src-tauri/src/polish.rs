@@ -110,6 +110,7 @@ fn is_builtin_llm_provider(provider_id: &str) -> bool {
             | "mimo"
             | "cometapi"
             | "openrouterFree"
+            | "orcarouter"
             | "alibabaCoding"
             | "codingPlanX"
             | "minimax"
