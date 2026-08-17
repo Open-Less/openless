@@ -469,11 +469,15 @@ export function History() {
                   <Btn icon="trash" variant="ghost" size="sm" onClick={onDelete}>{t('common.delete')}</Btn>
                 </div>
               </div>
+              {/* key 必须带组件前缀：下面的 RepolishPanel 是同一层的兄弟节点，两个都写
+                  裸 `item.id` 会让同层出现重复 key，React 只警告不报错，但 reconcile 匹配
+                  不上旧 fiber —— 每切换一次历史条目就在 DOM 里残留一个「播放录音」按钮，
+                  开着不关的窗口能叠出一整列。 */}
               {item.hasAudioRecording && !audioMissingIds.has(item.id) && (
                 <AudioRecordingPlayer
                   sessionId={item.id}
                   onMissing={() => markAudioMissing(item.id)}
-                  key={item.id}
+                  key={`audio-${item.id}`}
                 />
               )}
               {/* 流水线明细：识别 / 润色 / 插入 三步各占一行 —— 左列步骤名、中列
@@ -563,15 +567,15 @@ export function History() {
               </div>
               {/* 重新润色：拿这条的原文再跑一次 LLM。没有原文就没得润色（转录失败条目），
                   此时整块不渲染；QA 记录的原文是问题而不是待润色文本，同样不渲染。
-                  key={item.id} 让切换记录时结果与状态一起重置，
-                  避免把上一条的结果留在新条目下面。 */}
+                  key 让切换记录时结果与状态一起重置，避免把上一条的结果留在新条目下面；
+                  前缀是为了跟上面播放器的 key 区分开（同层重复 key 会残留旧节点）。 */}
               {item.rawTranscript.trim() && item.errorCode !== 'qaSession' && (
                 <RepolishPanel
                   session={item}
                   mobile={mobile}
                   allPacks={allPacks}
                   packsError={packsError}
-                  key={item.id}
+                  key={`repolish-${item.id}`}
                 />
               )}
             </>
