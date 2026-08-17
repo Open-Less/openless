@@ -38,7 +38,10 @@ export function SelectionPolishSection() {
       >
         <ShortcutRecorder
           value={prefs.selectionPolishHotkey}
-          sideSpecificModifiers
+          // 注意：不能开 sideSpecificModifiers —— 后端 set_selection_polish_hotkey 用
+          // reject_side_specific_non_dictation 拒绝非听写功能的侧键修饰（side-aware hook
+          // 仅听写支持多 owner），开启会把录制出的 ctrl-left/alt-right 等标签全部打回，
+          // 前端 catch 后误报「该快捷键组合不可用」（上游 #851 引入的自相矛盾）。
           onSave={async binding => {
             await setSelectionPolishHotkey(binding);
             await refresh();
