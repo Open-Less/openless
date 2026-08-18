@@ -101,6 +101,7 @@ jobs:
             libxdo-dev \
             patchelf \
             rpm \
+            squashfs-tools \
             wget
 
       - name: Install npm deps
@@ -439,6 +440,8 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/openless-all/app/src-tauri/linux-fcitx5-plugin"
           cp libopenless.so "$GITHUB_WORKSPACE/openless-all/app/src-tauri/linux-fcitx5-plugin/"
           cp openless.conf "$GITHUB_WORKSPACE/openless-all/app/src-tauri/linux-fcitx5-plugin/"
+          test -s "$GITHUB_WORKSPACE/openless-all/app/src-tauri/linux-fcitx5-plugin/libopenless.so"
+          test -s "$GITHUB_WORKSPACE/openless-all/app/src-tauri/linux-fcitx5-plugin/openless.conf"
 
       - name: Build (Linux)
         if: matrix.platform == 'ubuntu-22.04'
@@ -453,10 +456,15 @@ jobs:
           #   ensure_plugin_installed() 自动安装到 ~/.local/ 下。
           # 插件 .so + .conf 由上一步 Build fcitx5 plugin 生成并复制到
           # src-tauri/linux-fcitx5-plugin/ 下。
+          test -s src-tauri/linux-fcitx5-plugin/libopenless.so
+          test -s src-tauri/linux-fcitx5-plugin/openless.conf
           cat > /tmp/tauri-linux-config.json << CONFIG_EOF
           {
             "bundle": {
-              "resources": ["linux-fcitx5-plugin/libopenless.so"],
+              "resources": [
+                "linux-fcitx5-plugin/libopenless.so",
+                "linux-fcitx5-plugin/openless.conf"
+              ],
               "linux": {
                 "deb": {
                   "depends": ["fcitx5", "fcitx5-module-dbus", "libdbus-1-3"],
@@ -483,6 +491,21 @@ jobs:
             CONFIG_FILE=/tmp/tauri-linux-config.json
           fi
           npm run tauri -- build --bundles deb,rpm,appimage --config "$CONFIG_FILE"
+
+          APPIMAGE_PATH=$(find src-tauri/target/release/bundle/appimage -maxdepth 1 -name '*.AppImage' -print -quit)
+          if [ -z "$APPIMAGE_PATH" ]; then
+            echo "::error::AppImage bundle was not produced"
+            exit 1
+          fi
+          APPIMAGE_CONTENTS=$(unsquashfs -l "$APPIMAGE_PATH")
+          if ! grep -Eq '(^|/)usr/lib/OpenLess/linux-fcitx5-plugin/libopenless\.so$' <<< "$APPIMAGE_CONTENTS"; then
+            echo "::error::AppImage is missing usr/lib/OpenLess/linux-fcitx5-plugin/libopenless.so"
+            exit 1
+          fi
+          if ! grep -Eq '(^|/)usr/lib/OpenLess/linux-fcitx5-plugin/openless\.conf$' <<< "$APPIMAGE_CONTENTS"; then
+            echo "::error::AppImage is missing usr/lib/OpenLess/linux-fcitx5-plugin/openless.conf"
+            exit 1
+          fi
 
       - name: Disambiguate macOS updater bundle filename
         if: startsWith(matrix.platform, 'macos') && env.TAURI_SIGNING_PRIVATE_KEY != ''

@@ -3,8 +3,7 @@
 # Usage: ./inject-fcitx5-plugin.sh <package-path>
 #
 # Supports: .deb, .rpm
-# AppImage is NOT supported — fcitx5 runs on the host and cannot load
-# addons from inside the AppImage mount.
+# AppImage resources are bundled separately and installed to ~/.local/ at runtime.
 set -euo pipefail
 
 PKG="$1"

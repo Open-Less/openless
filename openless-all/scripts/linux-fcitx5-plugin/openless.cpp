@@ -18,8 +18,7 @@
  *    SetTranslationHotkeyRaw(uu: sym, states) — 直接设翻译模式触发 sym+states
  *    SetAuxDown(s: text)                 — 在候选词列表下方显示状态文本
  *    ClearAuxDown()                      — 清除候选词列表下方文本
- *    GetSelectionText() -> s             — 读取当前 PRIMARY 选区文本（fcitx clipboard addon
- *                                          X11 XFIXES / Wayland data-control 统一维护缓存）
+ *    GetSelectionText() -> s             — 读取当前 PRIMARY 选区文本（由 clipboard addon 维护）
  *  信号:
  *    DictationKeyEvent(uub: sym, states, isPress) — 听写热键按下/抬起
  *    QaShortcutEvent(uub: sym, states, isPress)   — QA 快捷键按下/抬起
@@ -457,15 +456,7 @@ public:
             << "SetTranslationHotkeyRaw: sym=" << sym << " states=" << states;
     }
 
-    /// 读取当前 PRIMARY 选区文本（供划词追问）。
-    ///
-    /// 直接读取 fcitx5 clipboard addon 维护的 PRIMARY 选区缓存，与 fcitx 剪贴板
-    /// 模块的选区来源完全一致：X11 走 XFIXES 事件 + convertSelection，Wayland 走
-    /// data-control（zwlr/ext 双协议）。跨平台差异全部由 fcitx 处理，本插件
-    /// 无需自行实现协议。
-    ///
-    /// 返回空字符串表示无选区 / 选区为空 / clipboard addon 不可用；调用方
-    /// （OpenLess Rust 侧）在收到空或错误时应降级到外部工具（wl-paste/xclip/xsel）。
+    /// 读取当前 PRIMARY 选区文本。空字符串表示无选区或 clipboard addon 不可用。
     std::string getSelectionText() {
         auto *clipboard = instance_->addonManager().addon("clipboard");
         if (!clipboard) {

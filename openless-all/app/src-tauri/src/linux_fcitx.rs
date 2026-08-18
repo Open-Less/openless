@@ -4,8 +4,8 @@
 //! 封装对 `org.fcitx.Fcitx.OpenLess1` 接口的调用，
 //! 提供文字提交（替代 enigo XTest）和热键设置功能。
 //!
-//! 所有函数会静默返回 `None` 如果 fcitx5 / 插件不可用，
-//! 调用方应当降级到原有方案（clipboard / enigo）。
+//! 插件不可用时，各调用方按自身能力记录 warning 并继续运行；Linux 选区读取
+//! 只通过插件的 `GetSelectionText()` DBus 方法，失败视为无选区，不回退外部命令。
 
 use std::time::Duration;
 
@@ -295,14 +295,10 @@ pub fn available() -> bool {
     conn.send_with_reply_and_block(msg, TIMEOUT).is_ok()
 }
 
-/// 通过 fcitx5 插件获取当前 PRIMARY 选区文本（供划词追问）。
+/// 通过 fcitx5 插件获取当前 PRIMARY 选区文本。
 ///
-/// 插件内部直接读 fcitx clipboard addon 的 PRIMARY 选区缓存——X11 侧由 XFIXES
-/// 事件 + convertSelection 维护，Wayland 侧由 data-control（zwlr/ext 双协议）维护，
-/// 跨发行版 / 桌面环境一致，且不会触碰用户剪贴板。
-///
-/// 返回 `Ok(text)`，`text` 为空字符串表示无选区（或选区为空）；`Err` 表示
-/// 插件不可用 / 方法不存在（旧版插件）/ DBus 失败，调用方应降级到外部工具。
+/// 插件直接读取 fcitx5 clipboard addon 维护的 PRIMARY 缓存，不触碰用户剪贴板。
+/// 返回空字符串表示无选区；插件不可用或 DBus 调用失败则返回错误。
 pub fn get_selection_text() -> Result<String, String> {
     let conn =
         dbus::blocking::Connection::new_session().map_err(|e| format!("dbus session: {e}"))?;
@@ -311,7 +307,9 @@ pub fn get_selection_text() -> Result<String, String> {
     let reply = conn
         .send_with_reply_and_block(msg, TIMEOUT)
         .map_err(|e| format!("GetSelectionText: {e}"))?;
-    reply.read1::<String>().map_err(|e| format!("GetSelectionText reply: {e}"))
+    reply
+        .read1::<String>()
+        .map_err(|e| format!("GetSelectionText reply: {e}"))
 }
 
 /// 启动 fcitx5 DictationKeyEvent 信号监听线程。
@@ -498,13 +496,17 @@ pub fn start_dictation_signal_listener(
         .ok();
 }
 
-/// 检查 fcitx5 插件是否已安装到系统路径。
+/// 确保 Linux fcitx5 插件可用。
 ///
-/// 所有 Linux 格式（deb/rpm/AppImage）的插件安装都在打包时完成
-///（`scripts/inject-fcitx5-plugin.sh`），此处仅确认文件存在。
-/// 未安装时输出警告，不做任何文件 I/O。
+/// AppImage 从 bundled resources 同步到用户级 XDG 路径；deb/rpm 保持系统路径检查，
+/// 不写入用户目录。所有同步失败只记录 warning，不阻塞应用启动。
 #[cfg(target_os = "linux")]
-pub fn ensure_plugin_installed(_app: &tauri::AppHandle) {
+pub fn ensure_plugin_installed(app: &tauri::AppHandle) {
+    if is_appimage_runtime() {
+        ensure_appimage_plugin_installed(app);
+        return;
+    }
+
     // fcitx5 在不同发行版的 lib 路径不同，同时支持用户 XDG 安装
     let lib_dirs = [
         "/usr/lib/x86_64-linux-gnu/fcitx5", // Debian multiarch
@@ -560,6 +562,202 @@ pub fn ensure_plugin_installed(_app: &tauri::AppHandle) {
     }
 }
 
+#[cfg(target_os = "linux")]
+fn is_appimage_runtime() -> bool {
+    ["APPDIR", "APPIMAGE"].iter().any(|name| {
+        std::env::var_os(name)
+            .map(|value| !value.is_empty())
+            .unwrap_or(false)
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn appimage_resource_paths(
+    resource_dir: &std::path::Path,
+) -> (std::path::PathBuf, std::path::PathBuf) {
+    (
+        resource_dir.join("linux-fcitx5-plugin/libopenless.so"),
+        resource_dir.join("linux-fcitx5-plugin/openless.conf"),
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn ensure_appimage_plugin_installed(app: &tauri::AppHandle) {
+    use tauri::Manager;
+
+    let resource_dir = match app.path().resource_dir() {
+        Ok(path) => path,
+        Err(error) => {
+            log::warn!("[fcitx] AppImage resource directory unavailable: {error}");
+            return;
+        }
+    };
+    let (source_so, source_conf) = appimage_resource_paths(&resource_dir);
+    let Some(home) = std::env::var_os("HOME").filter(|value| !value.is_empty()) else {
+        log::warn!("[fcitx] HOME is unavailable; keeping any existing user plugin");
+        return;
+    };
+    let home = std::path::PathBuf::from(home);
+    let target_so = home.join(".local/lib/fcitx5/libopenless.so");
+    let target_conf = home.join(".local/share/fcitx5/addon/openless.conf");
+
+    match sync_plugin_pair(&source_so, &source_conf, &target_so, &target_conf) {
+        Ok(false) => return,
+        Ok(true) => log::info!("[fcitx] Updated AppImage fcitx5 plugin in ~/.local"),
+        Err(error) => {
+            log::warn!("[fcitx] AppImage fcitx5 plugin sync failed: {error}");
+            return;
+        }
+    }
+
+    reload_fcitx5_if_running();
+}
+
+#[cfg(target_os = "linux")]
+fn sync_plugin_pair(
+    source_so: &std::path::Path,
+    source_conf: &std::path::Path,
+    target_so: &std::path::Path,
+    target_conf: &std::path::Path,
+) -> Result<bool, String> {
+    let so = std::fs::read(source_so)
+        .map_err(|error| format!("read {}: {error}", source_so.display()))?;
+    let conf = std::fs::read(source_conf)
+        .map_err(|error| format!("read {}: {error}", source_conf.display()))?;
+    if so.is_empty() {
+        return Err(format!("bundled resource {} is empty", source_so.display()));
+    }
+    if conf.is_empty() {
+        return Err(format!(
+            "bundled resource {} is empty",
+            source_conf.display()
+        ));
+    }
+
+    let so_changed = !target_matches(target_so, &so)?;
+    let conf_changed = !target_matches(target_conf, &conf)?;
+    if !so_changed && !conf_changed {
+        return Ok(false);
+    }
+
+    for target in [target_so, target_conf] {
+        let parent = target
+            .parent()
+            .ok_or_else(|| format!("target has no parent: {}", target.display()))?;
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("create {}: {error}", parent.display()))?;
+    }
+
+    let so_temp = if so_changed {
+        Some(stage_atomic_write(&so, target_so)?)
+    } else {
+        None
+    };
+    let conf_temp = if conf_changed {
+        match stage_atomic_write(&conf, target_conf) {
+            Ok(path) => Some(path),
+            Err(error) => {
+                if let Some(path) = so_temp.as_ref() {
+                    let _ = std::fs::remove_file(path);
+                }
+                return Err(error);
+            }
+        }
+    } else {
+        None
+    };
+
+    let result = (|| {
+        if let Some(temp) = so_temp.as_ref() {
+            commit_atomic_write(temp, target_so)?;
+        }
+        if let Some(temp) = conf_temp.as_ref() {
+            commit_atomic_write(temp, target_conf)?;
+        }
+        Ok(true)
+    })();
+    if result.is_err() {
+        for temp in [so_temp.as_ref(), conf_temp.as_ref()].into_iter().flatten() {
+            let _ = std::fs::remove_file(temp);
+        }
+    }
+    result
+}
+
+#[cfg(target_os = "linux")]
+fn target_matches(target: &std::path::Path, source: &[u8]) -> Result<bool, String> {
+    let target_bytes = match std::fs::read(target) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(format!("read {}: {error}", target.display())),
+    };
+    Ok(sha256(&target_bytes) == sha256(source))
+}
+
+#[cfg(target_os = "linux")]
+fn sha256(bytes: &[u8]) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes).into()
+}
+
+#[cfg(target_os = "linux")]
+fn stage_atomic_write(
+    bytes: &[u8],
+    target: &std::path::Path,
+) -> Result<std::path::PathBuf, String> {
+    use std::io::Write;
+
+    let parent = target
+        .parent()
+        .ok_or_else(|| format!("target has no parent: {}", target.display()))?;
+    let name = target
+        .file_name()
+        .ok_or_else(|| format!("target has no filename: {}", target.display()))?
+        .to_string_lossy();
+    let temp = parent.join(format!(".{name}.tmp-{}", uuid::Uuid::new_v4()));
+    let result = (|| {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)
+            .map_err(|error| format!("create {}: {error}", temp.display()))?;
+        file.write_all(bytes)
+            .map_err(|error| format!("write {}: {error}", temp.display()))?;
+        file.sync_all()
+            .map_err(|error| format!("sync {}: {error}", temp.display()))?;
+        Ok(temp.clone())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temp);
+    }
+    result
+}
+
+#[cfg(target_os = "linux")]
+fn commit_atomic_write(temp: &std::path::Path, target: &std::path::Path) -> Result<(), String> {
+    std::fs::rename(temp, target)
+        .map_err(|error| format!("rename {} to {}: {error}", temp.display(), target.display()))
+}
+
+#[cfg(target_os = "linux")]
+fn reload_fcitx5_if_running() {
+    let conn = match dbus::blocking::SyncConnection::new_session() {
+        Ok(conn) => conn,
+        Err(error) => {
+            log::warn!("[fcitx] Cannot check fcitx5 before reload: {error}");
+            return;
+        }
+    };
+    if !fcitx5_name_has_owner(&conn) {
+        return;
+    }
+    match std::process::Command::new("fcitx5").arg("-r").status() {
+        Ok(status) if status.success() => log::info!("[fcitx] Reloaded fcitx5 after plugin update"),
+        Ok(status) => log::warn!("[fcitx] fcitx5 -r failed with status {status}"),
+        Err(error) => log::warn!("[fcitx] Could not run fcitx5 -r: {error}"),
+    }
+}
+
 /// 同步主听写热键：自定义组合键走 SetCustomDictationTrigger，预设修饰键走 SetHotkeyRaw。
 fn resync_main_binding(binding: &crate::types::HotkeyBinding, custom_trigger_key: Option<&str>) {
     if let Some(key_string) = custom_trigger_key {
@@ -590,5 +788,155 @@ fn fcitx5_name_has_owner(conn: &dbus::blocking::SyncConnection) -> bool {
     match conn.send_with_reply_and_block(msg, Duration::from_secs(1)) {
         Ok(reply) => reply.read1::<bool>().unwrap_or(false),
         Err(_) => false,
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    struct TestDir(PathBuf);
+
+    impl TestDir {
+        fn new() -> Self {
+            let path =
+                std::env::temp_dir().join(format!("openless-fcitx-test-{}", uuid::Uuid::new_v4()));
+            fs::create_dir_all(&path).expect("create test directory");
+            Self(path)
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn appimage_resources_use_the_expected_subdirectory() {
+        let (so, conf) = appimage_resource_paths(Path::new("/opt/openless/resources"));
+        assert_eq!(
+            so,
+            Path::new("/opt/openless/resources/linux-fcitx5-plugin/libopenless.so")
+        );
+        assert_eq!(
+            conf,
+            Path::new("/opt/openless/resources/linux-fcitx5-plugin/openless.conf")
+        );
+    }
+
+    #[test]
+    fn missing_targets_are_created_and_parent_directories_are_made() {
+        let dir = TestDir::new();
+        let source_so = dir.path().join("source/libopenless.so");
+        let source_conf = dir.path().join("source/openless.conf");
+        let target_so = dir.path().join("home/.local/lib/fcitx5/libopenless.so");
+        let target_conf = dir
+            .path()
+            .join("home/.local/share/fcitx5/addon/openless.conf");
+        fs::create_dir_all(source_so.parent().unwrap()).unwrap();
+        fs::write(&source_so, b"so-v1").unwrap();
+        fs::write(&source_conf, b"conf-v1").unwrap();
+
+        assert!(sync_plugin_pair(&source_so, &source_conf, &target_so, &target_conf).unwrap());
+        assert_eq!(fs::read(&target_so).unwrap(), b"so-v1");
+        assert_eq!(fs::read(&target_conf).unwrap(), b"conf-v1");
+    }
+
+    #[test]
+    fn identical_targets_are_not_rewritten() {
+        let dir = TestDir::new();
+        let source_so = dir.path().join("source.so");
+        let source_conf = dir.path().join("source.conf");
+        let target_so = dir.path().join("target.so");
+        let target_conf = dir.path().join("target.conf");
+        fs::write(&source_so, b"same-so").unwrap();
+        fs::write(&source_conf, b"same-conf").unwrap();
+        fs::write(&target_so, b"same-so").unwrap();
+        fs::write(&target_conf, b"same-conf").unwrap();
+
+        assert!(!sync_plugin_pair(&source_so, &source_conf, &target_so, &target_conf).unwrap());
+        assert_eq!(fs::read(&target_so).unwrap(), b"same-so");
+        assert_eq!(fs::read(&target_conf).unwrap(), b"same-conf");
+    }
+
+    #[test]
+    fn changed_targets_are_updated_as_a_pair() {
+        let dir = TestDir::new();
+        let source_so = dir.path().join("source.so");
+        let source_conf = dir.path().join("source.conf");
+        let target_so = dir.path().join("target.so");
+        let target_conf = dir.path().join("target.conf");
+        fs::write(&source_so, b"new-so").unwrap();
+        fs::write(&source_conf, b"new-conf").unwrap();
+        fs::write(&target_so, b"old-so").unwrap();
+        fs::write(&target_conf, b"old-conf").unwrap();
+
+        assert!(sync_plugin_pair(&source_so, &source_conf, &target_so, &target_conf).unwrap());
+        assert_eq!(fs::read(&target_so).unwrap(), b"new-so");
+        assert_eq!(fs::read(&target_conf).unwrap(), b"new-conf");
+    }
+
+    #[test]
+    fn missing_resource_keeps_existing_targets() {
+        let dir = TestDir::new();
+        let source_so = dir.path().join("missing.so");
+        let source_conf = dir.path().join("source.conf");
+        let target_so = dir.path().join("target.so");
+        let target_conf = dir.path().join("target.conf");
+        fs::write(&source_conf, b"new-conf").unwrap();
+        fs::write(&target_so, b"old-so").unwrap();
+        fs::write(&target_conf, b"old-conf").unwrap();
+
+        assert!(sync_plugin_pair(&source_so, &source_conf, &target_so, &target_conf).is_err());
+        assert_eq!(fs::read(&target_so).unwrap(), b"old-so");
+        assert_eq!(fs::read(&target_conf).unwrap(), b"old-conf");
+    }
+
+    #[test]
+    fn unusable_target_directory_keeps_existing_targets() {
+        let dir = TestDir::new();
+        let source_so = dir.path().join("source.so");
+        let source_conf = dir.path().join("source.conf");
+        let target_so = dir.path().join("targets/libopenless.so");
+        let target_conf = dir.path().join("blocked/openless.conf");
+        fs::write(&source_so, b"new-so").unwrap();
+        fs::write(&source_conf, b"new-conf").unwrap();
+        fs::create_dir_all(target_so.parent().unwrap()).unwrap();
+        fs::write(&target_so, b"old-so").unwrap();
+        fs::write(dir.path().join("blocked"), b"not a directory").unwrap();
+
+        assert!(sync_plugin_pair(&source_so, &source_conf, &target_so, &target_conf).is_err());
+        assert_eq!(fs::read(&target_so).unwrap(), b"old-so");
+        assert!(target_conf.is_dir() || !target_conf.exists());
+    }
+
+    #[test]
+    fn atomic_update_leaves_no_temporary_files() {
+        let dir = TestDir::new();
+        let source_so = dir.path().join("source.so");
+        let source_conf = dir.path().join("source.conf");
+        let target_so = dir.path().join("target.so");
+        let target_conf = dir.path().join("target.conf");
+        fs::write(&source_so, b"so").unwrap();
+        fs::write(&source_conf, b"conf").unwrap();
+
+        sync_plugin_pair(&source_so, &source_conf, &target_so, &target_conf).unwrap();
+        let leftovers = fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .filter(|name| name.contains(".tmp-"))
+            .collect::<Vec<_>>();
+        assert!(
+            leftovers.is_empty(),
+            "temporary files left behind: {leftovers:?}"
+        );
     }
 }

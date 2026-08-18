@@ -9,15 +9,14 @@
 //!    走辅助功能 API 直读焦点元素的选区，**不**触碰剪贴板。
 //! 2. **macOS / Windows** Cmd+C / Ctrl+C：snapshot 用户原剪贴板 → 模拟复制 → 80ms
 //!    后读出新内容 → 还原原剪贴板。
-//! 3. **Linux**：fcitx5 插件 `GetSelectionText`（DBus）读 clipboard addon 维护的
-//!    PRIMARY 选区缓存（X11 XFIXES / Wayland data-control），与 fcitx 剪贴板模块
-//!    的来源一致，**不**触碰剪贴板；插件不可用时视为无选区。
+//! 3. **Linux**：通过 fcitx5 插件的 `GetSelectionText()` DBus 方法读取 PRIMARY
+//!    选区缓存，不触碰用户剪贴板；插件不可用、调用失败或返回空文本均视为无选区。
 //!
 //! 截断策略：超过 4000 字符的选区只保留首 2000 + 尾 2000 + `[…truncated…]` 标记，
 //! 避免给 LLM 灌过长 context。
 //!
-//! 模块依赖：仅 `arboard`（跨平台剪贴板）+ libc + 平台 native 框架 + `linux_fcitx`
-//! （Linux 选区 DBus）；不依赖其它 Rust 模块（与 CLAUDE.md 对齐）。
+//! 模块依赖：`arboard`（跨平台剪贴板）+ libc + 平台 native 框架，Linux 另依赖
+//! `linux_fcitx` 的 DBus 客户端。
 
 use std::time::Duration;
 
@@ -140,9 +139,7 @@ pub(crate) fn capture_selection_insertion_target() -> SelectionInsertionTarget {
 ///
 /// 非 Windows/macOS（Linux / mobile）尚未实现等效的前台校验：Linux 依赖
 /// PRIMARY selection 重读做轻量校验，移动端不提供选区润色。
-pub(crate) fn selection_insertion_target_is_captured(
-    target: &SelectionInsertionTarget,
-) -> bool {
+pub(crate) fn selection_insertion_target_is_captured(target: &SelectionInsertionTarget) -> bool {
     #[cfg(target_os = "windows")]
     {
         target.windows.is_some()
@@ -222,7 +219,7 @@ pub(crate) fn validate_selection_insertion_target(
         return SelectionInsertionTargetValidation::Valid;
     }
 
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    #[cfg(target_os = "linux")]
     {
         // Linux：重读 PRIMARY selection 与捕获文本比较——用户改了选区 / 清空
         // PRIMARY 就拒绝粘贴（fcitx CommitText 直接写焦点输入上下文，无需
@@ -238,6 +235,11 @@ pub(crate) fn validate_selection_insertion_target(
             return SelectionInsertionTargetValidation::SelectionChanged;
         }
         SelectionInsertionTargetValidation::Valid
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        SelectionInsertionTargetValidation::TargetUnavailable
     }
 }
 
@@ -318,7 +320,7 @@ fn activate_app_by_pid(pid: i32) {
     }
 }
 
-/// 捕获当前选区（best-effort，不触碰用户剪贴板）。
+/// 捕获选区。Linux 只通过 fcitx5 DBus 读取 PRIMARY 选区，失败统一视为无选区。
 pub fn capture_selection_with_status() -> SelectionCaptureOutcome {
     let source_app = current_front_app();
 
@@ -366,10 +368,9 @@ pub fn capture_selection_with_status() -> SelectionCaptureOutcome {
         }
     }
 
-    // 3. Linux：fcitx5 插件 GetSelectionText（clipboard addon，X11 XFIXES /
-    //    Wayland data-control 统一维护选区缓存；插件不可用时视为无选区）。
-    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
-    match linux_selection::read_selected_text_priority() {
+    // 3. Linux：通过 fcitx5 DBus 读取 PRIMARY selection。
+    #[cfg(target_os = "linux")]
+    match linux_selection::read_selected_text() {
         linux_selection::LinuxSelectionRead::Text(text) => {
             let trimmed = text.trim();
             log::info!(
@@ -475,12 +476,7 @@ fn selected_text_for_validation() -> Option<String> {
     (!trimmed.is_empty()).then(|| truncate_selection(trimmed))
 }
 
-#[cfg(any(
-    target_os = "windows",
-    target_os = "macos",
-    target_os = "linux",
-    test
-))]
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux", test))]
 fn selection_text_matches(expected: &str, actual: Option<&str>) -> bool {
     actual.is_some_and(|actual| actual == expected)
 }
@@ -560,7 +556,7 @@ fn post_copy_shortcut() -> bool {
     windows_paste::send_ctrl_c().is_ok()
 }
 
-#[cfg(any(all(not(target_os = "macos"), not(target_os = "windows")), test))]
+#[cfg(target_os = "linux")]
 mod linux_selection {
     #[derive(Debug, PartialEq, Eq)]
     pub enum LinuxSelectionRead {
@@ -568,18 +564,12 @@ mod linux_selection {
         NoSelection,
     }
 
-    /// 读取当前 PRIMARY 选区（供划词捕获 / 粘贴前校验统一使用）。
-    ///
-    /// 通过 fcitx5 插件的 GetSelectionText 读取 clipboard addon 的 PRIMARY 选区缓存，
-    /// 与 fcitx 剪贴板模块的选区来源一致（X11 XFIXES 事件 + convertSelection，
-    /// Wayland data-control zwlr/ext 双协议），跨发行版 / 桌面环境统一，
-    /// 且不触碰用户剪贴板。
-    ///
-    /// 插件不可用 / DBus 失败（未装插件、fcitx5 未运行）时视为无选区，
-    /// 由上层（QA 面板）引导用户安装 fcitx5 插件。
-    #[cfg(target_os = "linux")]
-    pub fn read_selected_text_priority() -> LinuxSelectionRead {
-        match crate::linux_fcitx::get_selection_text() {
+    pub fn read_selected_text() -> LinuxSelectionRead {
+        classify_selection_result(crate::linux_fcitx::get_selection_text())
+    }
+
+    fn classify_selection_result(result: Result<String, String>) -> LinuxSelectionRead {
+        match result {
             Ok(text) => {
                 let trimmed = text.trim();
                 if trimmed.is_empty() {
@@ -588,18 +578,36 @@ mod linux_selection {
                     LinuxSelectionRead::Text(trimmed.to_string())
                 }
             }
-            Err(e) => {
-                log::warn!("[selection] fcitx5 plugin read failed: {e}");
+            Err(error) => {
+                log::debug!("[selection] fcitx5 GetSelectionText unavailable: {error}");
                 LinuxSelectionRead::NoSelection
             }
         }
     }
+    #[cfg(test)]
+    mod tests {
+        use super::*;
 
-    /// 非 Linux（含 macOS/Windows 的测试编译，模块 cfg 含 `test` 会编进来）：
-    /// linux_fcitx 模块本身是 Linux-only，不能引用，直接视为无选区。
-    #[cfg(not(target_os = "linux"))]
-    pub fn read_selected_text_priority() -> LinuxSelectionRead {
-        LinuxSelectionRead::NoSelection
+        #[test]
+        fn maps_dbus_text_to_selection() {
+            let result = classify_selection_result(Ok(" selected text ".to_string()));
+            assert_eq!(
+                result,
+                LinuxSelectionRead::Text("selected text".to_string())
+            );
+        }
+
+        #[test]
+        fn maps_empty_dbus_text_to_no_selection() {
+            let result = classify_selection_result(Ok(" \n".to_string()));
+            assert_eq!(result, LinuxSelectionRead::NoSelection);
+        }
+
+        #[test]
+        fn maps_dbus_error_to_no_selection() {
+            let result = classify_selection_result(Err("DBus unavailable".to_string()));
+            assert_eq!(result, LinuxSelectionRead::NoSelection);
+        }
     }
 }
 
@@ -1071,10 +1079,7 @@ mod tests {
 
         let mut another_control = captured;
         another_control.focused_window += 100;
-        assert!(!windows_selection_targets_match(
-            captured,
-            another_control
-        ));
+        assert!(!windows_selection_targets_match(captured, another_control));
     }
 
     #[cfg(target_os = "windows")]
