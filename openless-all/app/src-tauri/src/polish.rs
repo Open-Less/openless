@@ -21,6 +21,7 @@ pub(crate) use prompt_compose::*;
 
 const DEFAULT_TEMPERATURE: f32 = 0.3;
 const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
+
 const BODY_PREVIEW_LIMIT: usize = 200;
 pub const CODEX_OAUTH_PROVIDER_ID: &str = "codex_oauth";
 pub const CODEX_DEFAULT_BASE_URL: &str = "https://chatgpt.com/backend-api";
@@ -29,6 +30,67 @@ pub const CODEX_DEFAULT_BASE_URL: &str = "https://chatgpt.com/backend-api";
 // 每次润色都失败并回退原文。gpt-5.5 是该通道实测可用的模型。
 pub const CODEX_DEFAULT_MODEL: &str = "gpt-5.5";
 const CODEX_MIN_TOKEN_TTL_SECS: u64 = 60;
+/// 首字之后，两个 chunk 之间的最大间隔。流一旦开始出字，chunk 间隔都是毫秒级——
+/// 这么久没动静就是真卡住了（服务端挂起 / 中间链路断而没发 FIN），不是还在正常生成。
+/// 这把尺子跟输入长度无关，所以是常量。
+const POLISH_STREAM_IDLE_TIMEOUT_SECS: u64 = 20;
+/// 润色客户端的连接硬顶。不承担业务语义（业务超时在调用点），纯粹兜住「服务端既不
+/// 回数据也不断开」这类连接泄漏。取值远大于任何合理的润色时长。
+const POLISH_CLIENT_HARD_CAP_SECS: u64 = 900;
+
+/// 润色路径「等第一个正文字符」的动态预算。
+///
+/// 固定 30s 接不住推理模型：stepfun step-3.x-flash 这类在吐正文之前先跑一整段思考，
+/// 思考时长随输入长度增长——7 分钟录音那条（1758 字）实测首字要 43~75s，30s 把还在
+/// 正常进行的流拦腰砍断，用户拿回的是未润色的原始转写。注意这不是「模型出错」：
+/// 服务端每次都返回了完整结果，是我们的判据太短。
+///
+/// 公式与 ASR 侧三个动态超时同款（`max(30, 系数 × 量 + 余量)`，见
+/// `coordinator::whisper_transcribe_timeout` 一族）：`max(30, ceil(chars × 0.05) + 30)`。
+/// 斜率取自实测——1758 字给到 118s，覆盖最坏的 75s 仍有余量；短输入落在 30s 地板上，
+/// 与改动前逐字节一致。
+pub(crate) fn polish_first_token_timeout_secs(input_chars: usize) -> Duration {
+    let secs = ((input_chars as f64 * 0.05).ceil() as u64)
+        .saturating_add(30)
+        .max(DEFAULT_REQUEST_TIMEOUT_SECS);
+    Duration::from_secs(secs)
+}
+
+/// 流式润色的**两把尺子**，取代原先「整个请求 30s」这一把。
+///
+/// 用一把整请求超时管流式是语义错配：它分不清「模型还在正常吐字，只是这段稿子本来
+/// 就长」和「服务端卡死了」，30s 一到把两者一起砍掉。拆成两个判据后：
+/// - `first_token` 决定**用户盯着空屏干等的上限**（推理模型的思考期就落在这段里）；
+/// - `idle` 决定**出字过程中卡多久算死**。
+///
+/// 总时长不再有单独上限：只要还在稳定出字，长稿就该让它写完。
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct StreamingTimeouts {
+    pub first_token: Duration,
+    pub idle: Duration,
+}
+
+impl StreamingTimeouts {
+    /// 按输入长度定首字预算，空闲预算取常量。
+    pub(crate) fn for_input(input_chars: usize) -> Self {
+        Self {
+            first_token: polish_first_token_timeout_secs(input_chars),
+            idle: Duration::from_secs(POLISH_STREAM_IDLE_TIMEOUT_SECS),
+        }
+    }
+}
+
+/// 一次润色调用的总预算 = 首字预算 + 把正文吐完的预算。
+///
+/// 出字阶段单独给一份 `max(30, ceil(chars × 0.03) + 20)`：系数比首字小，因为正文长度
+/// 实测约为输入的 60%，且出字是连续流，不像首字那样要等一整段思考。非流式（重润色）
+/// 路径只有这一个总预算可用——它拿不到「第一个字」这个中间信号。
+pub(crate) fn polish_total_timeout_secs(input_chars: usize) -> Duration {
+    let generation_secs = ((input_chars as f64 * 0.03).ceil() as u64)
+        .saturating_add(20)
+        .max(DEFAULT_REQUEST_TIMEOUT_SECS);
+    polish_first_token_timeout_secs(input_chars) + Duration::from_secs(generation_secs)
+}
 
 #[derive(Clone, Debug)]
 pub struct OpenAICompatibleConfig {
@@ -357,6 +419,13 @@ impl ActiveLLMProvider {
 pub struct OpenAICompatibleLLMProvider {
     config: OpenAICompatibleConfig,
     client: reqwest::Client,
+    /// 润色专用客户端：**不带**按输入长度变化的整请求超时，只留一个防连接泄漏的
+    /// 硬顶。真正的判据在调用点（流式两把尺子 / 非流式一个总预算）。
+    ///
+    /// 为什么不直接把 `client` 的 timeout 改成动态值：`cached_client` 以 timeout 为
+    /// 缓存键，每句话长度不同就会造出一个新客户端，连接池全部作废——每次润色都要重新
+    /// TLS 握手，正是那层缓存当初要消灭的成本。硬顶取常量，缓存键就只有一个。
+    polish_client: reqwest::Client,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -385,7 +454,18 @@ impl OpenAICompatibleLLMProvider {
                 .build()
                 .unwrap_or_else(|_| reqwest::Client::new())
         });
-        Self { config, client }
+        let polish_base_url = config.base_url.clone();
+        let polish_client =
+            crate::net::cached_client((POLISH_CLIENT_HARD_CAP_SECS, no_proxy), || {
+                http_client_builder(&polish_base_url, POLISH_CLIENT_HARD_CAP_SECS)
+                    .build()
+                    .unwrap_or_else(|_| reqwest::Client::new())
+            });
+        Self {
+            config,
+            client,
+            polish_client,
+        }
     }
 
     pub async fn polish(
@@ -424,11 +504,20 @@ impl OpenAICompatibleLLMProvider {
             front_app.is_some(),
             prior_turns.len()
         );
+        // 预算随输入长度伸缩。写死 30s 时，7 分钟录音那条（1758 字）连着 3 次手动
+        // 重润色都撞在同一堵墙上——模型每次都在正常干活，只是我们不肯多等。
+        let budget = polish_total_timeout_secs(raw_text.chars().count());
         if prior_turns.is_empty() {
-            self.chat_completion(&system_prompt, &user_prompt).await
-        } else {
-            self.chat_completion_with_polish_history(&system_prompt, prior_turns, &user_prompt)
+            self.chat_completion(&system_prompt, &user_prompt, budget)
                 .await
+        } else {
+            self.chat_completion_with_polish_history(
+                &system_prompt,
+                prior_turns,
+                &user_prompt,
+                budget,
+            )
+            .await
         }
     }
 
@@ -475,8 +564,13 @@ impl OpenAICompatibleLLMProvider {
             prior_turns.len(),
             raw_text.chars().count()
         );
-        self.chat_completion_messages_streaming(messages, on_delta, should_cancel)
-            .await
+        self.chat_completion_messages_streaming(
+            messages,
+            StreamingTimeouts::for_input(raw_text.chars().count()),
+            on_delta,
+            should_cancel,
+        )
+        .await
     }
 
     /// 多轮划词追问，**流式**返回。`messages` 包含历史对话（user/assistant 交替），
@@ -525,7 +619,13 @@ impl OpenAICompatibleLLMProvider {
             chinese_script_preference,
             front_app,
         );
-        self.chat_completion(&system_prompt, &user_prompt).await
+        // 翻译不在本次改动范围，沿用配置里的固定预算，行为与改动前一致。
+        self.chat_completion(
+            &system_prompt,
+            &user_prompt,
+            Duration::from_secs(self.config.request_timeout_secs),
+        )
+        .await
     }
 
     /// 多轮对话感知的 polish 路径。`prior_turns` 是按时间倒序（最新在前）的
@@ -539,6 +639,7 @@ impl OpenAICompatibleLLMProvider {
         system_prompt: &str,
         prior_turns: &[(String, String)],
         user_prompt: &str,
+        budget: Duration,
     ) -> Result<String, LLMError> {
         let url = chat_completions_url(&self.config.base_url);
         let messages = build_polish_history_messages(system_prompt, prior_turns, user_prompt);
@@ -553,13 +654,14 @@ impl OpenAICompatibleLLMProvider {
         );
 
         // 复用 send_and_extract 把 chat_completion 与本函数共享 HTTP / 解析路径。
-        self.send_chat_request(&url, &body).await
+        self.send_chat_request(&url, &body, budget).await
     }
 
     async fn chat_completion(
         &self,
         system_prompt: &str,
         user_prompt: &str,
+        budget: Duration,
     ) -> Result<String, LLMError> {
         let url = chat_completions_url(&self.config.base_url);
         let body = self.chat_body(
@@ -577,7 +679,7 @@ impl OpenAICompatibleLLMProvider {
             self.config.model
         );
 
-        self.send_chat_request(&url, &body).await
+        self.send_chat_request(&url, &body, budget).await
     }
 
     fn chat_body(&self, stream: bool, messages: Vec<Value>) -> Value {
@@ -608,13 +710,31 @@ impl OpenAICompatibleLLMProvider {
 
     /// 共用的 HTTP send + body 解析。chat_completion / chat_completion_with_polish_history
     /// 各自构造好 body 后都调到这里，避免 30 行 send/parse 重复。
+    /// `budget` 是这一次调用的总预算，由调用点决定：润色按输入长度伸缩
+    /// （`polish_total_timeout_secs`），翻译等其它路径沿用配置里的固定值。
+    /// 客户端本身只带一个防连接泄漏的硬顶，业务判据全在这里。
     async fn send_chat_request(
+        &self,
+        url: &str,
+        body: &serde_json::Value,
+        budget: Duration,
+    ) -> Result<String, LLMError> {
+        match tokio::time::timeout(budget, self.send_chat_request_inner(url, body)).await {
+            Ok(result) => result,
+            Err(_) => {
+                log::error!("[llm] request timed out after {budget:?}");
+                Err(LLMError::Timeout)
+            }
+        }
+    }
+
+    async fn send_chat_request_inner(
         &self,
         url: &str,
         body: &serde_json::Value,
     ) -> Result<String, LLMError> {
         let mut request = self
-            .client
+            .polish_client
             .post(url)
             .header("Content-Type", "application/json");
         if !self.config.api_key.trim().is_empty() {
@@ -780,6 +900,7 @@ impl OpenAICompatibleLLMProvider {
     async fn chat_completion_messages_streaming<F, C>(
         &self,
         messages: Vec<Value>,
+        timeouts: StreamingTimeouts,
         on_delta: F,
         should_cancel: C,
     ) -> Result<String, LLMError>
@@ -791,7 +912,7 @@ impl OpenAICompatibleLLMProvider {
         let body = self.chat_body(true, messages);
 
         let mut request = self
-            .client
+            .polish_client
             .post(&url)
             .header("Content-Type", "application/json")
             .header("Accept", "text/event-stream");
@@ -823,6 +944,8 @@ impl OpenAICompatibleLLMProvider {
         let mut full_text = String::new();
         let mut delta_count: u64 = 0;
         let mut cancelled = false;
+        let stream_started = std::time::Instant::now();
+        let mut first_content_at: Option<Duration> = None;
         loop {
             if should_cancel() {
                 log::info!(
@@ -833,7 +956,37 @@ impl OpenAICompatibleLLMProvider {
                 cancelled = true;
                 break;
             }
-            let chunk_opt = response.chunk().await.map_err(llm_error_from_reqwest)?;
+            // 首字之前用「还剩多少首字预算」，首字之后用「两个 chunk 之间能空多久」。
+            // 注意首字预算是从请求发出起算的**总量**，不随 chunk 到达而重置——推理模型
+            // 思考期的 reasoning_content 是一串正常 chunk，若让它续命，用户干等就没有上限。
+            let budget = match first_content_at {
+                None => timeouts
+                    .first_token
+                    .saturating_sub(stream_started.elapsed()),
+                Some(_) => timeouts.idle,
+            };
+            let chunk_opt = match tokio::time::timeout(budget, response.chunk()).await {
+                Ok(result) => result.map_err(llm_error_from_reqwest)?,
+                Err(_) => {
+                    // 已经交给 on_delta 的字此刻就在用户屏幕上；上层 dictation 的 Failed
+                    // 分支拿 typed_text 当 final_text，屏幕 / history / 剪贴板保持一致。
+                    match first_content_at {
+                        None => log::error!(
+                            "[llm] polish stream timed out waiting for first content delta (budget {:?}); \
+                             模型可能仍在思考——加长首字预算或换非推理模型",
+                            timeouts.first_token
+                        ),
+                        Some(first) => log::error!(
+                            "[llm] polish stream stalled {:?} after {} chars (first delta at {:?}); \
+                             已落屏的字保留",
+                            timeouts.idle,
+                            full_text.chars().count(),
+                            first
+                        ),
+                    }
+                    return Err(LLMError::Timeout);
+                }
+            };
             let Some(chunk) = chunk_opt else { break };
             append_utf8_sse_chunk(&mut buffer, &mut utf8_pending, &chunk)?;
 
@@ -863,6 +1016,17 @@ impl OpenAICompatibleLLMProvider {
                     };
                     if let Some(delta) = v["choices"][0]["delta"]["content"].as_str() {
                         if !delta.is_empty() {
+                            if first_content_at.is_none() {
+                                let elapsed = stream_started.elapsed();
+                                first_content_at = Some(elapsed);
+                                // 首字延迟是判断「模型思考太久」还是「网络卡住」的关键读数。
+                                // 之前日志里没有它，7 分钟录音那次只能靠外部实测才量出 43s。
+                                log::info!(
+                                    "[llm] polish stream first content delta after {:.2}s (budget {:?})",
+                                    elapsed.as_secs_f64(),
+                                    timeouts.first_token
+                                );
+                            }
                             full_text.push_str(delta);
                             delta_count += 1;
                             on_delta(delta);
@@ -2156,6 +2320,32 @@ mod tests {
     static CODEX_AUTH_FIXTURE_COUNTER: AtomicU64 = AtomicU64::new(0);
     static ENV_LOCK: StdMutex<()> = StdMutex::new(());
 
+    /// 7 分钟录音那条（1758 字）实测：step-3.7-flash 首字要 43~75s，固定 30s 必然砍断。
+    /// 超时必须随输入长度伸缩，写法对齐 ASR 侧 `max(30, ...)` 的三个公式。
+    #[test]
+    fn first_token_timeout_scales_with_input_length() {
+        // 地板：短输入沿用既有 30s 预算，不因本改动变慢。
+        assert_eq!(polish_first_token_timeout_secs(0).as_secs(), 30);
+        assert_eq!(polish_first_token_timeout_secs(100).as_secs(), 35);
+        // 单调不减。
+        assert!(polish_first_token_timeout_secs(953) >= polish_first_token_timeout_secs(300));
+        // 失败那条：实测最坏 75s（reasoning_effort=minimal），预算必须留出余量。
+        assert!(polish_first_token_timeout_secs(1758).as_secs() >= 90);
+    }
+
+    /// 非流式（重润色）路径的总预算：要覆盖首字延迟 + 把正文吐完。
+    #[test]
+    fn total_timeout_covers_first_token_budget_plus_generation() {
+        for chars in [0usize, 100, 953, 1758, 10_000] {
+            assert!(
+                polish_total_timeout_secs(chars) > polish_first_token_timeout_secs(chars),
+                "chars={chars}: 总预算必须严格大于首字预算"
+            );
+        }
+        // 空输入：首字 30s 地板 + 出字 30s 地板。
+        assert_eq!(polish_total_timeout_secs(0).as_secs(), 60);
+    }
+
     #[test]
     fn retries_connect_or_request_only_when_not_timeout() {
         // connect / request 失败（非超时）→ 服务端必然没收到，重试安全。
@@ -2430,6 +2620,243 @@ mod tests {
             stream.write_all(b"\r\n").unwrap();
         }
         stream.write_all(b"0\r\n\r\n").unwrap();
+    }
+
+    /// 带间隔的 SSE 发送：每个 chunk 前先睡一段，用来模拟「思考很久才出字」和
+    /// 「出字中途卡死」两种真实流。
+    fn write_chunked_sse_response_with_delays(
+        stream: &mut std::net::TcpStream,
+        chunks: &[(&[u8], std::time::Duration)],
+    ) {
+        stream
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
+            )
+            .unwrap();
+        stream.flush().unwrap();
+        for (chunk, delay) in chunks {
+            thread::sleep(*delay);
+            if write!(stream, "{:X}\r\n", chunk.len()).is_err() {
+                return; // 客户端已按超时断开，服务端安静收工。
+            }
+            if stream.write_all(chunk).is_err() {
+                return;
+            }
+            if stream.write_all(b"\r\n").is_err() {
+                return;
+            }
+            if stream.flush().is_err() {
+                return;
+            }
+        }
+        let _ = stream.write_all(b"0\r\n\r\n");
+    }
+
+    fn content_event(text: &str) -> Vec<u8> {
+        format!("data: {{\"choices\":[{{\"delta\":{{\"content\":\"{text}\"}}}}]}}\n\n").into_bytes()
+    }
+
+    fn reasoning_event(text: &str) -> Vec<u8> {
+        format!("data: {{\"choices\":[{{\"delta\":{{\"reasoning_content\":\"{text}\"}}}}]}}\n\n")
+            .into_bytes()
+    }
+
+    fn streaming_test_provider(addr: std::net::SocketAddr) -> OpenAICompatibleLLMProvider {
+        OpenAICompatibleLLMProvider::new(OpenAICompatibleConfig::new(
+            "ark",
+            "Ark",
+            format!("http://{}", addr),
+            "",
+            "test-model",
+        ))
+    }
+
+    fn test_messages() -> Vec<Value> {
+        vec![json!({ "role": "user", "content": "hi" })]
+    }
+
+    /// 非流式（重润色）路径：预算由调用点按输入长度给，不再是写死的 30s。
+    /// 失败那条 1758 字的稿子事后手动重润色 3 次，每次都撞在同一堵 30s 墙上。
+    #[tokio::test]
+    async fn non_streaming_request_times_out_on_the_budget_it_was_given() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            read_http_request(&mut stream);
+            thread::sleep(std::time::Duration::from_millis(800));
+            let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}");
+        });
+
+        let err = streaming_test_provider(addr)
+            .chat_completion("sys", "user", std::time::Duration::from_millis(120))
+            .await
+            .expect_err("超过给定预算必须超时");
+
+        assert!(matches!(err, LLMError::Timeout), "got {err:?}");
+        drop(server);
+    }
+
+    /// 预算足够时不受影响——这条守着「别把超时改成了必然失败」。
+    #[tokio::test]
+    async fn non_streaming_request_succeeds_within_budget() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            read_http_request(&mut stream);
+            let body = r#"{"choices":[{"message":{"content":"整理好的文本"}}]}"#;
+            let _ = write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                body.len(),
+                body
+            );
+        });
+
+        let out = streaming_test_provider(addr)
+            .chat_completion("sys", "user", std::time::Duration::from_secs(30))
+            .await
+            .expect("预算充足时应当正常返回");
+
+        assert_eq!(out, "整理好的文本");
+        server.join().unwrap();
+    }
+
+    /// 本次修复的核心：只要流一直在正常吐字，总时长超过首字预算也不该被判失败。
+    /// 改动前用的是 reqwest 整请求超时（30s 一到全砍），长稿必然中途夭折。
+    #[tokio::test]
+    async fn streaming_survives_when_total_duration_exceeds_first_token_budget() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let events: Vec<Vec<u8>> = ["一", "二", "三", "四", "五"]
+            .iter()
+            .map(|t| content_event(t))
+            .collect();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            read_http_request(&mut stream);
+            let gap = std::time::Duration::from_millis(60);
+            let plan: Vec<(&[u8], std::time::Duration)> =
+                events.iter().map(|e| (e.as_slice(), gap)).collect();
+            write_chunked_sse_response_with_delays(&mut stream, &plan);
+        });
+
+        // 总时长 ~300ms，远超 120ms 的首字预算；但每个 chunk 间隔 60ms < 空闲预算。
+        let timeouts = StreamingTimeouts {
+            first_token: std::time::Duration::from_millis(120),
+            idle: std::time::Duration::from_millis(500),
+        };
+        let out = streaming_test_provider(addr)
+            .chat_completion_messages_streaming(test_messages(), timeouts, |_| {}, || false)
+            .await
+            .expect("正常吐字的流不该因为总时长被砍");
+
+        assert_eq!(out, "一二三四五");
+        server.join().unwrap();
+    }
+
+    /// 首字迟迟不来 → 按首字预算超时。用户干等的上限由这把尺子决定。
+    #[tokio::test]
+    async fn streaming_times_out_when_first_token_never_arrives() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            read_http_request(&mut stream);
+            let body = content_event("迟到");
+            write_chunked_sse_response_with_delays(
+                &mut stream,
+                &[(body.as_slice(), std::time::Duration::from_millis(800))],
+            );
+        });
+
+        let timeouts = StreamingTimeouts {
+            first_token: std::time::Duration::from_millis(120),
+            idle: std::time::Duration::from_secs(30),
+        };
+        let err = streaming_test_provider(addr)
+            .chat_completion_messages_streaming(test_messages(), timeouts, |_| {}, || false)
+            .await
+            .expect_err("首字超预算必须超时");
+
+        assert!(matches!(err, LLMError::Timeout), "got {err:?}");
+        drop(server);
+    }
+
+    /// stepfun step-3.x-flash 的真实行为：思考期间 `reasoning_content` 一直在流，
+    /// 但 `delta.content` 一个字都没有。这些 chunk 绝不能给首字预算续命——否则
+    /// 「用户干等多久」就失去上限，8572 字的思考能把人晾在空屏前一分钟。
+    #[tokio::test]
+    async fn reasoning_chunks_do_not_extend_the_first_token_budget() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            read_http_request(&mut stream);
+            let think = reasoning_event("嗯");
+            let gap = std::time::Duration::from_millis(40);
+            // 20 个思考 chunk（~800ms），间隔都很小；期间没有任何正文。
+            let plan: Vec<(&[u8], std::time::Duration)> =
+                (0..20).map(|_| (think.as_slice(), gap)).collect();
+            write_chunked_sse_response_with_delays(&mut stream, &plan);
+        });
+
+        let timeouts = StreamingTimeouts {
+            first_token: std::time::Duration::from_millis(150),
+            idle: std::time::Duration::from_secs(30),
+        };
+        let err = streaming_test_provider(addr)
+            .chat_completion_messages_streaming(test_messages(), timeouts, |_| {}, || false)
+            .await
+            .expect_err("只有思考、没有正文 → 必须按首字预算超时");
+
+        assert!(matches!(err, LLMError::Timeout), "got {err:?}");
+        drop(server);
+    }
+
+    /// 出字中途卡死：按空闲预算超时，且**已经交给 on_delta 的字必须已经落出去**——
+    /// 上层 dictation 用这些字当 final_text，屏幕与 history 才对得上。
+    #[tokio::test]
+    async fn streaming_stall_after_first_token_keeps_already_emitted_text() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            read_http_request(&mut stream);
+            let first = content_event("开头");
+            let late = content_event("补上");
+            write_chunked_sse_response_with_delays(
+                &mut stream,
+                &[
+                    (first.as_slice(), std::time::Duration::from_millis(10)),
+                    (late.as_slice(), std::time::Duration::from_millis(900)),
+                ],
+            );
+        });
+
+        let seen = StdMutex::new(String::new());
+        let timeouts = StreamingTimeouts {
+            first_token: std::time::Duration::from_secs(30),
+            idle: std::time::Duration::from_millis(150),
+        };
+        let err = streaming_test_provider(addr)
+            .chat_completion_messages_streaming(
+                test_messages(),
+                timeouts,
+                |d| seen.lock().unwrap().push_str(d),
+                || false,
+            )
+            .await
+            .expect_err("流中途卡死必须超时");
+
+        assert!(matches!(err, LLMError::Timeout), "got {err:?}");
+        assert_eq!(
+            *seen.lock().unwrap(),
+            "开头",
+            "卡死之前已经流出去的字必须留在屏幕上"
+        );
+        drop(server);
     }
 
     fn split_inside(haystack: &str, needle: &str) -> usize {
