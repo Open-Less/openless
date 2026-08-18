@@ -224,7 +224,7 @@ pub(crate) fn validate_selection_insertion_target(
         // Linux：重读 PRIMARY selection 与捕获文本比较——用户改了选区 / 清空
         // PRIMARY 就拒绝粘贴（fcitx CommitText 直接写焦点输入上下文，无需
         // 恢复窗口焦点，所以这里不需要窗口级校验）。
-        let current_selection = match linux_selection::read_selected_text_priority() {
+        let current_selection = match linux_selection::read_selected_text() {
             linux_selection::LinuxSelectionRead::Text(text) => {
                 let trimmed = text.trim();
                 (!trimmed.is_empty()).then(|| truncate_selection(trimmed))
