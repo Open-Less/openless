@@ -6,8 +6,8 @@
 // 但 reconcile 无法正确匹配旧 fiber，每切换一次条目就在 DOM 里残留一个「播放录音」按钮，
 // 长时间开着不关的窗口会叠出一整列。
 //
-// 这条契约锁的是「同层 key 表达式互不相同」，而不是某个具体命名，后续再往详情面板加
-// 带 key 的兄弟组件时同样会被拦下。
+// 这条契约锁的是「同层 key 在运行时互不相同」，而不是某个具体命名，后续再往详情面板
+// 加带 key 的兄弟组件时同样会被拦下。
 
 import { readFile } from 'node:fs/promises';
 
@@ -59,24 +59,40 @@ if (detailKeys.length < 2) {
   );
 }
 
-const seen = new Map();
-for (const { expression } of detailKeys) {
-  if (seen.has(expression)) {
-    throw new Error(
-      `历史详情面板出现重复的同层 key：\`${expression}\` 用了 ${seen.get(expression) + 1} 次。`
-        + '重复 key 会让 React 无法正确删除旧节点，切换条目时残留重复的「播放录音」按钮，'
-        + '请给每个组件加上各自的前缀（如 `audio-${item.id}` / `repolish-${item.id}`）。',
-    );
-  }
-  seen.set(expression, 1);
-}
-
 // 每个 key 仍要跟着条目 id 变化，否则切换条目时组件不重挂载，上一条的播放/润色状态会串台。
 for (const { expression } of detailKeys) {
   if (!expression.includes('item.id')) {
     throw new Error(
       `历史详情面板的 key \`${expression}\` 未随条目 id 变化，切换条目时状态会串到下一条`,
     );
+  }
+}
+
+/**
+ * React 会把非 undefined 的 key 转成字符串后参与 sibling reconciliation。
+ * 在样例条目上求值，避免 `item.id` / `String(item.id)` 这类不同源码表达式绕过唯一性检查。
+ */
+function evaluateKey(expression, itemId) {
+  const value = Function('item', `'use strict'; return (${expression});`)({ id: itemId });
+  if (value === undefined) {
+    throw new Error(`历史详情面板的 key \`${expression}\` 求值为 undefined`);
+  }
+  return String(value);
+}
+
+for (const itemId of ['history-key-contract-a', 'history-key-contract-b']) {
+  const seen = new Map();
+  for (const { expression } of detailKeys) {
+    const key = evaluateKey(expression, itemId);
+    if (seen.has(key)) {
+      throw new Error(
+        `历史详情面板出现重复的运行时 key：\`${key}\`（表达式 \`${expression}\` 与 `
+          + `\`${seen.get(key)}\` 冲突）。重复 key 会让 React 无法正确删除旧节点，`
+          + '切换条目时残留重复的「播放录音」按钮，请给每个组件加上各自的前缀（如 '
+          + '`audio-${item.id}` / `repolish-${item.id}`）。',
+      );
+    }
+    seen.set(key, expression);
   }
 }
 
