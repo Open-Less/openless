@@ -1333,9 +1333,10 @@ pub(super) async fn run_voice_agent_transcript(
     _session_id: SessionId,
     transcript: String,
     elapsed: u64,
-    // 语音路径：显示胶囊「处理中」反馈（既有行为）；打字路径（less_computer_submit_text）
-    // 传 false —— 对话在浮窗里已可见，不应在输入法 auxDown 闪「润色中」，用户已确认。
-    show_polish_capsule: bool,
+    // 语音路径 Show：显示胶囊「处理中」反馈（既有行为）；打字路径
+    // （less_computer_submit_text）Hide —— 对话在浮窗里已可见，不应在输入法
+    // auxDown 闪「润色中」，用户已确认。
+    capsule_feedback: super::CapsuleFeedback,
 ) -> Result<(), String> {
     log::info!(
         "[coord] Cloud Agent 语音：指令 {} 字",
@@ -1343,7 +1344,7 @@ pub(super) async fn run_voice_agent_transcript(
     );
     // 胶囊保留「处理中」反馈（用户熟悉的小录音条状态机）；聊天浮窗承载完整对话。
     // Linux 下会映射到 fcitx5 auxDown（"✨ 润色中..."）显示在候选词栏下方。
-    if show_polish_capsule {
+    if capsule_feedback == super::CapsuleFeedback::Show {
         emit_capsule(
             inner,
             CapsuleState::Polishing,
@@ -4089,8 +4090,14 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
 
     // Cloud Agent 语音分流：长按升级的会话不走润色/插入，转写交给 Claude 跑任务、结果弹胶囊。
     if inner.state.lock().voice_agent {
-        return run_voice_agent_transcript(inner, current_session_id, raw.text.clone(), elapsed, true)
-            .await;
+        return run_voice_agent_transcript(
+            inner,
+            current_session_id,
+            raw.text.clone(),
+            elapsed,
+            super::CapsuleFeedback::Show,
+        )
+        .await;
     }
 
     emit_capsule(inner, CapsuleState::Polishing, 0.0, elapsed, None, None);
@@ -4681,7 +4688,14 @@ async fn finish_dictation_multimodal(
 
     // Less Computer：转写文本交给 CLI agent，不走插入/历史（agent 流程自己收尾）。
     if voice_agent {
-        return run_voice_agent_transcript(inner, current_session_id, output, elapsed, true).await;
+        return run_voice_agent_transcript(
+            inner,
+            current_session_id,
+            output,
+            elapsed,
+            super::CapsuleFeedback::Show,
+        )
+        .await;
     }
 
     let correction_rules = match inner.correction_rules.list() {

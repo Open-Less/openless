@@ -121,6 +121,17 @@ enum CapsuleShowStrategy {
     FallbackShow,
 }
 
+/// 是否在回答期间显示「处理中 / 润色中」胶囊反馈。
+///
+/// 语音 / 听写路径显示（用户熟悉的小录音条状态机；Linux 下映射到 fcitx5
+/// auxDown，显示在候选词栏下方）；打字提问路径不显示（回答在 QA 面板内
+/// 流式可见，不应在输入法候选栏闪「✨ 润色中...」）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CapsuleFeedback {
+    Show,
+    Hide,
+}
+
 fn capsule_show_strategy_for_platform() -> CapsuleShowStrategy {
     // ⚠️ 如果改下面的 cfg 列表，**必须**同步更新单元测试
     // `capsule_show_strategy_matches_platform_activation_contract` 的两组 cfg —
@@ -2174,8 +2185,14 @@ impl Coordinator {
         // callback (SIGABRT). Tauri's runtime handle is safe from either thread.
         tauri::async_runtime::spawn(async move {
             let session_id = crate::coordinator_state::new_session_id();
-            if let Err(e) =
-                dictation::run_voice_agent_transcript(&inner, session_id, text, 0, false).await
+            if let Err(e) = dictation::run_voice_agent_transcript(
+                &inner,
+                session_id,
+                text,
+                0,
+                CapsuleFeedback::Hide,
+            )
+            .await
             {
                 log::warn!("[less-computer] text submit run failed: {e}");
             }

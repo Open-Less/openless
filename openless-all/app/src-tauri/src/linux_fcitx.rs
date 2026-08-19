@@ -571,13 +571,22 @@ fn is_appimage_runtime() -> bool {
     })
 }
 
+/// AppImage 里 bundled resources 下的插件子路径（相对 resource_dir）。
+///
+/// ⚠️ 与 `.github/workflows/release-tauri.yml` 的 `bundle.resources` 数组
+/// 和 AppImage 内容校验（`unsquashfs -l` 的 grep）**必须保持一致**——
+/// 改这里要同步改 CI，反之亦然。CI 校验能在打包时兜底抓失配，但那是
+/// 发布后才发现；此处常量让 Rust 侧所有引用（含测试）共享同一来源。
+#[cfg(target_os = "linux")]
+const APPIMAGE_PLUGIN_SUBDIR: &str = "linux-fcitx5-plugin";
+
 #[cfg(target_os = "linux")]
 fn appimage_resource_paths(
     resource_dir: &std::path::Path,
 ) -> (std::path::PathBuf, std::path::PathBuf) {
     (
-        resource_dir.join("linux-fcitx5-plugin/libopenless.so"),
-        resource_dir.join("linux-fcitx5-plugin/openless.conf"),
+        resource_dir.join(APPIMAGE_PLUGIN_SUBDIR).join("libopenless.so"),
+        resource_dir.join(APPIMAGE_PLUGIN_SUBDIR).join("openless.conf"),
     )
 }
 
@@ -820,6 +829,8 @@ mod tests {
 
     #[test]
     fn appimage_resources_use_the_expected_subdirectory() {
+        // 这些字面量是**契约的一部分**（与 CI 的 bundle.resources 数组一致），
+        // 故意不引用 APPIMAGE_PLUGIN_SUBDIR，避免测试与实现相互印证而漏掉契约漂移。
         let (so, conf) = appimage_resource_paths(Path::new("/opt/openless/resources"));
         assert_eq!(
             so,

@@ -1,7 +1,3 @@
-#![cfg_attr(
-    target_os = "linux",
-    allow(dead_code, unused_imports, unused_variables)
-)]
 //! 跨平台「划词捕获」工具：在用户触发 QA 快捷键时尝试拿到当前前台 app 的选区文本。
 //!
 //! 平台路径：
@@ -18,6 +14,8 @@
 //! 模块依赖：`arboard`（跨平台剪贴板）+ libc + 平台 native 框架，Linux 另依赖
 //! `linux_fcitx` 的 DBus 客户端。
 
+// 仅 macOS / Windows 的模拟复制路径用 sleep；Linux 走 fcitx5 DBus 直读，无 sleep。
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use std::time::Duration;
 
 const SELECTION_MAX_CHARS: usize = 4000;
