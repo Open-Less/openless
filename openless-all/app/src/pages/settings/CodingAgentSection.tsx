@@ -89,7 +89,9 @@ export function CodingAgentSection() {
     }
   }
 
-  if (os === 'win') return null
+  // Less Computer 仅 macOS 开放：后端只在 macOS 注册热键/创建窗口，
+  // Windows / Linux 不渲染配置入口，避免用户看到无法使用的功能。
+  if (os === 'win' || os === 'linux') return null
 
   if (!prefs) {
     return (
