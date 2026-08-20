@@ -1,22 +1,49 @@
 //! 解析 `claude --version` 与 `claude mcp list` 的输出（纯逻辑，便于单测）。
 
-/// 从 `claude --version` 输出里提取版本号。
+/// 从 `<cli> --version` 输出里提取版本号，四个后端共用。
 ///
-/// 兼容 `"2.1.161 (Claude Code)"` 与 `"Claude Code version 2.1.161"` 两种排版：
-/// 取第一个形如 `x.y.z` 的 token。
-pub fn parse_claude_version(stdout: &str) -> Option<String> {
+/// 兼容这些真实排版（都对着本机实际输出核过）：
+/// - `"2.1.161 (Claude Code)"` / `"Claude Code version 2.1.161"`（claude）
+/// - `"codex-cli 0.146.0"`（codex）
+/// - `"0.1.0-rc.6"`（dsh）
+///
+/// **预发布号必须认。** 早先的实现要求严格三段全数字，`0.1.0-rc.6` 会被切成
+/// `["0","1","0-rc","6"]` 四段而判定为「没装」——dsh 装机后设置页一直报「未检测到
+/// dsh 命令」就是这个原因，跟 PATH 无关。所以 patch 段之后跟着的 `-…` / `+…` 后缀
+/// 要原样保留（用户看到的版本号才是真的）。
+pub fn parse_cli_version(stdout: &str) -> Option<String> {
     for raw in stdout.split_whitespace() {
-        let token = raw.trim_matches(|c: char| !c.is_ascii_digit() && c != '.');
-        let parts: Vec<&str> = token.split('.').collect();
-        if parts.len() == 3
-            && parts
-                .iter()
-                .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
-        {
-            return Some(token.to_string());
+        // 跳过纯文字 token（"Claude" / "codex-cli"），从第一个数字开始看。
+        let Some(start) = raw.find(|c: char| c.is_ascii_digit()) else {
+            continue;
+        };
+        let candidate = &raw[start..];
+        let mut parts = candidate.splitn(3, '.');
+        let (Some(major), Some(minor), Some(rest)) = (parts.next(), parts.next(), parts.next())
+        else {
+            continue;
+        };
+        let all_digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+        if !all_digits(major) || !all_digits(minor) {
+            continue;
         }
+        // rest 形如 `"0"` / `"0-rc.6"` / `"3)"`：先吃掉开头的连续数字当 patch。
+        let patch_len = rest.bytes().take_while(u8::is_ascii_digit).count();
+        if patch_len == 0 {
+            continue;
+        }
+        // 只有 `-`（预发布）/ `+`（构建元数据）开头的尾巴才保留；
+        // `)` `,` 这类是排版噪声，丢掉。
+        let tail = &rest[patch_len..];
+        let keep = usize::from(tail.starts_with('-') || tail.starts_with('+')) * tail.len();
+        return Some(format!("{major}.{minor}.{}", &rest[..patch_len + keep]));
     }
     None
+}
+
+/// 旧名，保留给既有调用方。见 [`parse_cli_version`]。
+pub fn parse_claude_version(stdout: &str) -> Option<String> {
+    parse_cli_version(stdout)
 }
 
 /// MCP server 健康状态。
@@ -102,6 +129,36 @@ mod tests {
     }
 
     #[test]
+    fn parses_prerelease_versions() {
+        // 回归防线：dsh 的真实输出是 `0.1.0-rc.6`。旧实现把它切成四段直接判「没装」，
+        // 装机后设置页一直报「未检测到 dsh 命令」。预发布后缀要原样保留。
+        assert_eq!(
+            parse_cli_version("0.1.0-rc.6").as_deref(),
+            Some("0.1.0-rc.6")
+        );
+        assert_eq!(
+            parse_cli_version("2.0.0+build.7").as_deref(),
+            Some("2.0.0+build.7")
+        );
+    }
+
+    #[test]
+    fn parses_versions_from_every_backend_layout() {
+        // 四个后端的真实 --version 排版，都对着本机核过。
+        assert_eq!(
+            parse_cli_version("codex-cli 0.146.0").as_deref(),
+            Some("0.146.0")
+        );
+        assert_eq!(parse_cli_version("v1.2.3").as_deref(), Some("1.2.3"));
+        // 排版噪声不能混进版本号里。
+        assert_eq!(parse_cli_version("(1.2.3)").as_deref(), Some("1.2.3"));
+        assert_eq!(parse_cli_version("1.2.3, ok").as_deref(), Some("1.2.3"));
+        // 两段不算版本号。
+        assert_eq!(parse_cli_version("1.2"), None);
+        assert_eq!(parse_cli_version("abc"), None);
+    }
+
+    #[test]
     fn parses_mcp_list_health() {
         let stdout = "Checking MCP server health…\n\
 memory: npx -y @modelcontextprotocol/server-memory - ✓ Connected\n\
@@ -134,5 +191,33 @@ cloudflare-observability: https://observability.mcp.cloudflare.com/mcp (HTTP) - 
         }];
         assert!(has_computer_use_mcp(&with));
         assert!(!has_computer_use_mcp(&without));
+    }
+}
+
+/// 拿本机四个 CLI 的**真实** `--version` 输出跑解析器。默认 `#[ignore]`：要本机装了这些 CLI。
+/// 手动跑：`cargo test --lib coding_agent::detect::live -- --ignored --nocapture`
+#[cfg(test)]
+mod live {
+    use super::*;
+
+    #[test]
+    #[ignore = "要本机装了对应 CLI"]
+    fn every_installed_cli_version_parses() {
+        // 单测里的样例串是我抄进去的，抄错了测试照样绿。这条直接问真实 CLI 要输出，
+        // 是「设置页会不会误报没装」的唯一可信证据。
+        for exe in ["claude", "opencode", "codex", "dsh"] {
+            let out = std::process::Command::new(exe).arg("--version").output();
+            let Ok(out) = out else {
+                println!("[skip] {exe} 未安装");
+                continue;
+            };
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let parsed = parse_cli_version(&stdout);
+            println!("{exe:>9}: {:?} → {parsed:?}", stdout.trim());
+            assert!(
+                parsed.is_some(),
+                "{exe} 的版本号解析不出来 → 设置页会误报「未检测到」。原始输出: {stdout:?}"
+            );
+        }
     }
 }
