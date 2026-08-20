@@ -2737,12 +2737,24 @@ mod tests {
             let (mut stream, _) = listener.accept().unwrap();
             read_http_request(&mut stream);
             let gap = std::time::Duration::from_millis(60);
-            let plan: Vec<(&[u8], std::time::Duration)> =
-                events.iter().map(|e| (e.as_slice(), gap)).collect();
+            let plan: Vec<(&[u8], std::time::Duration)> = events
+                .iter()
+                .enumerate()
+                .map(|(index, event)| {
+                    (
+                        event.as_slice(),
+                        if index == 0 {
+                            std::time::Duration::ZERO
+                        } else {
+                            gap
+                        },
+                    )
+                })
+                .collect();
             write_chunked_sse_response_with_delays(&mut stream, &plan);
         });
 
-        // 总时长 ~300ms，远超 120ms 的首字预算；但每个 chunk 间隔 60ms < 空闲预算。
+        // 总时长 ~240ms，远超 120ms 的首字预算；但每个后续 chunk 间隔 60ms < 空闲预算。
         let timeouts = StreamingTimeouts {
             first_token: std::time::Duration::from_millis(120),
             idle: std::time::Duration::from_millis(500),
