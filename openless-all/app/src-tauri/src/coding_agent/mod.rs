@@ -1,4 +1,16 @@
-//! 无头 Claude Code 调用子系统（「快速 Agent」后端）。
+//! 无头 coding agent 调用子系统（「快速 Agent」/ Less Computer 后端）。
+//!
+//! 三个后端各有一个同形的适配器，共用 [`args::CodingAgentRequest`] /
+//! [`stream::CodingAgentEvent`] / [`CodingAgentError`]：
+//!
+//! | 后端 | 适配器 | prompt 入口 | 护栏 |
+//! |---|---|---|---|
+//! | Claude Code | 本模块顶层 + [`args`] / [`stream`] | stdin | `--settings` 逐命令 deny 清单 |
+//! | OpenCode | [`opencode`] | argv（`--` 之后） | `OPENCODE_CONFIG_CONTENT` deny 清单 |
+//! | Codex | [`codex`] | stdin（`-`） | 自带 seatbelt 沙箱 `-s` |
+//!
+//! Codex **给不了逐命令 deny 清单**，护栏落在它自己的沙箱档位上；对应地，
+//! 「撞了 deny → 弹审批卡 → 放行重跑」这条链路对它们不生效，撞墙时如实报错。
 //!
 //! - [`args`]：`claude -p` 参数构造。
 //! - [`stream`]：stream-json 输出解析为 [`stream::CodingAgentEvent`]。
@@ -9,6 +21,7 @@
 //! 那些由 coordinator 串联（镜像现有 QA 链路）。
 
 pub mod args;
+pub mod codex;
 pub mod commands;
 pub mod detect;
 pub mod guard;
@@ -28,6 +41,7 @@ pub use args::{
     build_claude_args, resolve_coding_agent_model, CodingAgentPermissionMode, CodingAgentProvider,
     CodingAgentRequest,
 };
+pub use codex::run_codex_agent;
 pub use detect::McpServerStatus;
 pub use opencode::run_opencode_agent;
 pub use stream::{parse_stream_json_line, CodingAgentEvent};
