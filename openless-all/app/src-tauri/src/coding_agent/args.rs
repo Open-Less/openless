@@ -48,6 +48,14 @@ impl CodingAgentProvider {
             Self::CodexCli => "codex",
         }
     }
+
+    /// 该后端可声明的单次美元预算上限；`None` 表示 CLI 没有可用的美元硬上限。
+    pub fn max_budget_usd(self) -> Option<f64> {
+        match self {
+            Self::ClaudeCodeCli => Some(2.0),
+            Self::OpenCodeCli | Self::CodexCli => None,
+        }
+    }
 }
 
 /// 按后端解析用户选择的模型。
@@ -229,6 +237,17 @@ mod tests {
         assert!(args.contains(&"--include-partial-messages".to_string()));
         // prompt 不能出现在 argv 里
         assert!(!args.iter().any(|a| a.contains("hello")));
+    }
+
+    #[test]
+    fn provider_budget_capability_only_belongs_to_claude() {
+        assert_eq!(
+            CodingAgentProvider::ClaudeCodeCli.max_budget_usd(),
+            Some(2.0)
+        );
+        assert_eq!(CodingAgentProvider::OpenCodeCli.max_budget_usd(), None);
+        assert_eq!(CodingAgentProvider::CodexCli.max_budget_usd(), None);
+        assert_eq!(CodingAgentRequest::new("s", "p").timeout_secs, 300);
     }
 
     #[test]

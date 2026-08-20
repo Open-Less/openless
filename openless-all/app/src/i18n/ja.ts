@@ -762,6 +762,11 @@ export const ja: typeof zhCN = {
       cliMissing: '{{name}} コマンドが見つかりません。先にインストールとログインを行うか、下の「実行ファイル」に絶対パスを入力してください。',
       sandboxGuardHint: 'このバックエンドは粗い粒度のサンドボックス段階しか持たず、コマンド単位の高リスク一覧はありません。制限に触れた場合はそのままエラーとして報告し、「このコマンドを承認」カードは表示されません。',
       codexModelHint: 'Codex のモデル名（gpt-5 など）を入力します。空欄の場合は ~/.codex/config.toml の設定を使います。',
+      codexBudgetHint: 'Codex には実行ごとの米ドル予算上限がありません。料金は設定したプロバイダーに依存します。',
+      codexMode: {
+        plan: '読み取り専用 / 計画',
+        workspaceWrite: 'ワークスペースへの書き込みを許可',
+      },
       codexModelPlaceholder: '空欄 = Codex の既定値',
       panelHotkey: 'パネルキー（音声 Agent）',
       panelHotkeyDesc: '録音 → ASR → Claude → パネルにストリーミング表示。デフォルト Cmd/Ctrl+Shift+Enter。',

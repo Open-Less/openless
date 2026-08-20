@@ -238,6 +238,25 @@ jobs:
       - name: Build frontend and run frontend/contract tests
         run: npm test
 
+      - name: Install pinned Codex CLI for sandbox contract
+        if: runner.os == 'macOS'
+        run: npm install --global @openai/codex@0.146.0
+
+      - name: Configure isolated Codex home
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          codex_home="$RUNNER_TEMP/openless-codex-home"
+          mkdir -p "$codex_home"
+          echo "CODEX_HOME=$codex_home" >> "$GITHUB_ENV"
+
+      - name: Run Codex writable-roots sandbox contract
+        if: runner.os == 'macOS'
+        env:
+          OPENLESS_CODEX_TEST_EXE: codex
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib coding_agent::codex::live::hardening_actually_narrows_the_writable_roots -- --ignored --nocapture --test-threads=1
+
       - name: Check Tauri backend (cargo check)
         run: cargo check --manifest-path src-tauri/Cargo.toml
 

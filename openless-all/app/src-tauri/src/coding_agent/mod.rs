@@ -77,6 +77,8 @@ pub enum CodingAgentError {
     Spawn(String),
     #[error("agent 进程异常退出 (code={0:?})")]
     ProcessExit(Option<i32>),
+    #[error("agent 协议错误: {0}")]
+    Protocol(String),
     #[error("agent 运行超时 ({0}s)")]
     Timeout(u64),
     #[error("已取消")]
@@ -87,7 +89,7 @@ pub enum CodingAgentError {
 
 /// 登录 shell 的 PATH，整个进程只解析一次（解析失败缓存 `None`，不反复重试）。
 #[cfg(unix)]
-static LOGIN_SHELL_PATH: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+static LOGIN_SHELL_PATH: tokio::sync::OnceCell<Option<String>> = tokio::sync::OnceCell::const_new();
 
 /// 从 shell 里回读 PATH 用的哨兵串。
 ///
@@ -98,41 +100,33 @@ const SHELL_PATH_SENTINEL: &str = "__OPENLESS_PATH__";
 
 /// 跑一次 shell 把 PATH 打回来。`flags` 形如 `-lic` / `-lc`。超时返回 `None`。
 #[cfg(unix)]
-fn probe_shell_path(shell: &str, flags: &str) -> Option<String> {
+async fn probe_shell_path(
+    shell: &str,
+    flags: &str,
+    deadline: tokio::time::Instant,
+) -> Option<String> {
     // 注意 `%s` 是给 shell 的 printf 用的字面量，`{SHELL_PATH_SENTINEL}` 才是 Rust 插值。
     let script = format!("printf '{SHELL_PATH_SENTINEL}%s' \"$PATH\"");
-    let mut child = std::process::Command::new(shell)
-        .args([flags, &script])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .spawn()
+    let mut cmd = Command::new(shell);
+    cmd.args([flags, &script])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    let out = tokio::time::timeout_at(deadline, cmd.output())
+        .await
+        .ok()?
         .ok()?;
-    // std::process 没有超时接口，自己轮询。交互式 shell 要加载 rc（nvm/插件），给 5 秒。
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) if std::time::Instant::now() < deadline => {
-                std::thread::sleep(Duration::from_millis(25));
-            }
-            Ok(None) => {
-                // shell 卡住了（rc 里有交互式提示之类）：杀掉，交给下一个候选或静态兜底。
-                let _ = child.kill();
-                let _ = child.wait();
-                log::warn!("[coding-agent] `{shell} {flags}` 读取 PATH 超时");
-                return None;
-            }
-            Err(_) => return None,
-        }
-    }
-    let out = child.wait_with_output().ok()?;
     if !out.status.success() {
         return None;
     }
     let stdout = String::from_utf8_lossy(&out.stdout);
     // 只取哨兵之后的内容；没有哨兵说明这次输出不可信。
-    let path = stdout.rsplit(SHELL_PATH_SENTINEL).next()?.trim().to_string();
+    let path = stdout
+        .rsplit(SHELL_PATH_SENTINEL)
+        .next()?
+        .trim()
+        .to_string();
     if path.is_empty() {
         None
     } else {
@@ -155,17 +149,25 @@ fn probe_shell_path(shell: &str, flags: &str) -> Option<String> {
 /// Windows 上没有「登录 shell 的 PATH」这个概念（进程直接继承系统/用户环境变量），而且装了
 /// Git Bash 的机器 `SHELL` 也可能有值——真去跑它只会莫名其妙拉起一个 bash。所以整段限定 unix。
 #[cfg(unix)]
-fn login_shell_path() -> Option<&'static str> {
+async fn login_shell_path() -> Option<&'static str> {
     LOGIN_SHELL_PATH
-        .get_or_init(|| {
-            let shell = std::env::var("SHELL").ok().filter(|s| !s.trim().is_empty())?;
-            probe_shell_path(&shell, "-lic").or_else(|| probe_shell_path(&shell, "-lc"))
+        .get_or_init(|| async {
+            let shell = std::env::var("SHELL")
+                .ok()
+                .filter(|s| !s.trim().is_empty())?;
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+            if let Some(path) = probe_shell_path(&shell, "-lic", deadline).await {
+                Some(path)
+            } else {
+                probe_shell_path(&shell, "-lc", deadline).await
+            }
         })
+        .await
         .as_deref()
 }
 
 #[cfg(not(unix))]
-fn login_shell_path() -> Option<&'static str> {
+async fn login_shell_path() -> Option<&'static str> {
     None
 }
 
@@ -230,7 +232,7 @@ fn merge_path(current: &str, extras: &[String], shell_path: Option<&str>) -> Str
 }
 
 /// 给 GUI 进程补 PATH / HOME：macOS 从 Finder 启动的进程不继承登录 shell 环境。
-pub(super) fn augment_env(cmd: &mut Command) {
+pub(super) async fn augment_env(cmd: &mut Command) {
     let current = std::env::var("PATH").unwrap_or_default();
     let extras = match std::env::var_os("HOME") {
         Some(home_os) => {
@@ -241,12 +243,15 @@ pub(super) fn augment_env(cmd: &mut Command) {
         }
         None => Vec::new(),
     };
-    cmd.env("PATH", merge_path(&current, &extras, login_shell_path()));
+    cmd.env(
+        "PATH",
+        merge_path(&current, &extras, login_shell_path().await),
+    );
 }
 
-pub(super) fn augmented_command(exe: &str) -> Command {
+pub(super) async fn augmented_command(exe: &str) -> Command {
     let mut cmd = Command::new(exe);
-    augment_env(&mut cmd);
+    augment_env(&mut cmd).await;
     cmd
 }
 
@@ -272,11 +277,8 @@ pub fn create_git_snapshot(cwd: &Path) -> Option<String> {
 
 /// 探测 `claude` 版本（`None` 表示未安装或无法运行）。
 pub async fn detect_claude(exe: &str) -> Option<String> {
-    let out = augmented_command(exe)
-        .arg("--version")
-        .output()
-        .await
-        .ok()?;
+    let mut cmd = augmented_command(exe).await;
+    let out = cmd.arg("--version").output().await.ok()?;
     if !out.status.success() {
         return None;
     }
@@ -285,7 +287,8 @@ pub async fn detect_claude(exe: &str) -> Option<String> {
 
 /// 列出 Claude Code 已配置的 MCP server（含健康状态）。
 pub async fn claude_mcp_list(exe: &str) -> Vec<McpServerStatus> {
-    match augmented_command(exe).args(["mcp", "list"]).output().await {
+    let mut cmd = augmented_command(exe).await;
+    match cmd.args(["mcp", "list"]).output().await {
         Ok(out) => detect::parse_mcp_list(&String::from_utf8_lossy(&out.stdout)),
         Err(_) => Vec::new(),
     }
@@ -309,7 +312,7 @@ pub async fn run_claude_agent(
     cancel: Arc<AtomicBool>,
 ) -> Result<(), CodingAgentError> {
     let args = build_claude_args(&req);
-    let mut cmd = augmented_command(exe);
+    let mut cmd = augmented_command(exe).await;
     cmd.args(&args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

@@ -760,6 +760,11 @@ export const zhTW: typeof zhCN = {
       cliMissing: '未偵測到 {{name}} 指令。請先安裝並登入，或在下方「執行檔」欄填它的絕對路徑。',
       sandboxGuardHint: '此後端只有粗粒度沙箱層級，沒有逐指令的高風險清單：碰到限制時會直接據實回報錯誤，不會跳出「核准這條指令」的卡片。',
       codexModelHint: '填 Codex 的模型名稱（如 gpt-5）；留空則使用 ~/.codex/config.toml 的設定。',
+      codexBudgetHint: 'Codex 沒有單次美元預算上限；費用取決於你設定的服務商。',
+      codexMode: {
+        plan: '唯讀 / 計畫',
+        workspaceWrite: '允許工作目錄寫入',
+      },
       codexModelPlaceholder: '留空 = 使用 Codex 自己的預設',
       panelHotkey: '面板鍵（語音 Agent）',
       panelHotkeyDesc: '錄音 → ASR → Claude → 結果串流進面板。預設 Cmd/Ctrl+Shift+Enter。',

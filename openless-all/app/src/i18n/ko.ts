@@ -762,6 +762,11 @@ export const ko: typeof zhCN = {
       cliMissing: '{{name}} 명령을 찾을 수 없습니다. 먼저 설치하고 로그인하거나, 아래 "실행 파일"에 절대 경로를 입력하세요.',
       sandboxGuardHint: '이 백엔드는 명령 단위 고위험 목록 없이 큰 단위의 샌드박스 등급만 제공합니다. 제한에 걸리면 "이 명령 승인" 카드를 띄우지 않고 실패를 그대로 알립니다.',
       codexModelHint: 'Codex 모델 이름(예: gpt-5)을 입력하세요. 비워 두면 ~/.codex/config.toml 설정을 사용합니다.',
+      codexBudgetHint: 'Codex에는 실행별 달러 예산 상한이 없습니다. 비용은 구성한 제공자에 따라 달라집니다.',
+      codexMode: {
+        plan: '읽기 전용 / 계획',
+        workspaceWrite: '워크스페이스 쓰기 허용',
+      },
       codexModelPlaceholder: '비워 두면 Codex 기본값',
       panelHotkey: '패널 키(음성 Agent)',
       panelHotkeyDesc: '녹음 → ASR → Claude → 패널에 스트리밍. 기본 Cmd/Ctrl+Shift+Enter.',

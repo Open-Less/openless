@@ -30,14 +30,10 @@ use super::stream::CodingAgentEvent;
 use super::{augmented_command, wait_cancel, CodingAgentEventSink, CodingAgentRequest};
 use super::{CodingAgentError, CodingAgentPermissionMode};
 
-
 /// 探测 `codex` 版本（`None` 表示未安装或无法运行）。复用 claude 的 `x.y.z` 解析。
 pub async fn detect_codex(exe: &str) -> Option<String> {
-    let out = augmented_command(exe)
-        .arg("--version")
-        .output()
-        .await
-        .ok()?;
+    let mut cmd = augmented_command(exe).await;
+    let out = cmd.arg("--version").output().await.ok()?;
     if !out.status.success() {
         return None;
     }
@@ -48,17 +44,14 @@ pub async fn detect_codex(exe: &str) -> Option<String> {
 ///
 /// Codex 给不了逐命令 deny 清单，护栏落在它自己的 seatbelt 沙箱上（用户已就此拍板）：
 /// - `Plan` → `read-only`：只读，连工作目录都不让写。
-/// - `Default` / `AcceptEdits` → `workspace-write`：写入限制在工作目录内，网络受限，
-///   越权请求在无头下自动拒。这是默认档。
-/// - `BypassPermissions` → `danger-full-access`：完全不设防。语音路径在 dictation 层
-///   已把 bypass 钳制成 AcceptEdits，这里保留映射只为「Claude 控制台」这类显式场景。
+/// - `AcceptEdits` → `workspace-write`：写入限制在工作目录内，网络受限，越权请求在无头下自动拒。
+/// - `Plan` / 遗留的 `Default` / `BypassPermissions` → `read-only`：对 Codex 统一 fail-closed。
 pub fn codex_sandbox_mode(mode: CodingAgentPermissionMode) -> &'static str {
     match mode {
-        CodingAgentPermissionMode::Plan => "read-only",
-        CodingAgentPermissionMode::Default | CodingAgentPermissionMode::AcceptEdits => {
-            "workspace-write"
-        }
-        CodingAgentPermissionMode::BypassPermissions => "danger-full-access",
+        CodingAgentPermissionMode::AcceptEdits => "workspace-write",
+        CodingAgentPermissionMode::Plan
+        | CodingAgentPermissionMode::Default
+        | CodingAgentPermissionMode::BypassPermissions => "read-only",
     }
 }
 
@@ -118,13 +111,55 @@ pub fn build_codex_args(req: &CodingAgentRequest) -> Vec<String> {
 /// **刻意不处理**的：`item.type = "error"`。Codex 会把「模型元数据没找到」这类**警告**也
 /// 塞成 error item，把它当终局会让一次本来成功的运行被误判为失败。真正的失败只看
 /// `turn.failed`；运行器另外把这些 error item 的文案留作失败时的补充说明。
+#[derive(Debug, PartialEq)]
+enum CodexProtocolEvent {
+    Output(CodingAgentEvent),
+    TurnCompleted,
+    TurnFailed(String),
+    Error(String),
+}
+
+fn protocol_error_message(value: &serde_json::Value, fallback: &str) -> String {
+    value
+        .pointer("/error/message")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| value.get("message").and_then(serde_json::Value::as_str))
+        .or_else(|| value.get("error").and_then(serde_json::Value::as_str))
+        .unwrap_or(fallback)
+        .to_string()
+}
+
+fn parse_codex_protocol_line(session_id: &str, line: &str) -> Option<CodexProtocolEvent> {
+    let value: serde_json::Value = serde_json::from_str(line.trim()).ok()?;
+    let event_type = value.get("type")?.as_str()?;
+    match event_type {
+        "turn.completed" => Some(CodexProtocolEvent::TurnCompleted),
+        "turn.failed" => Some(CodexProtocolEvent::TurnFailed(protocol_error_message(
+            &value,
+            "Codex 本轮执行失败",
+        ))),
+        "error" => Some(CodexProtocolEvent::Error(protocol_error_message(
+            &value,
+            "Codex 协议错误",
+        ))),
+        _ => parse_codex_json_line(session_id, line).map(CodexProtocolEvent::Output),
+    }
+}
+
 pub fn parse_codex_json_line(session_id: &str, line: &str) -> Option<CodingAgentEvent> {
     let line = line.trim();
     if line.is_empty() {
         return None;
     }
     let v: serde_json::Value = serde_json::from_str(line).ok()?;
-    match v.get("type")?.as_str()? {
+    let event_type = v.get("type")?.as_str()?;
+    if event_type == "error" {
+        return Some(CodingAgentEvent::Error {
+            session_id: session_id.to_string(),
+            message: protocol_error_message(&v, "Codex 协议错误"),
+        });
+    }
+    match event_type {
         "item.completed" => {
             let item = v.get("item")?;
             match item.get("type")?.as_str()? {
@@ -218,6 +253,83 @@ fn command_display_name(command: &str) -> String {
         .to_string()
 }
 
+#[derive(Default)]
+struct CodexProtocolState {
+    accumulated: String,
+    saw_turn_completed: bool,
+    protocol_error: Option<String>,
+}
+
+impl CodexProtocolState {
+    fn observe(&mut self, event: CodexProtocolEvent) -> Option<CodingAgentEvent> {
+        match event {
+            CodexProtocolEvent::Output(event) => {
+                if let CodingAgentEvent::Delta { text, .. } = &event {
+                    self.accumulated.push_str(text);
+                }
+                Some(event)
+            }
+            CodexProtocolEvent::TurnCompleted => {
+                self.saw_turn_completed = true;
+                None
+            }
+            CodexProtocolEvent::TurnFailed(message) | CodexProtocolEvent::Error(message) => {
+                if self.protocol_error.is_none() {
+                    self.protocol_error = Some(message);
+                }
+                None
+            }
+        }
+    }
+}
+
+struct CodexRunFailure {
+    error: CodingAgentError,
+    message: String,
+}
+
+fn finalize_codex_run(
+    session_id: &str,
+    state: &CodexProtocolState,
+    process_succeeded: bool,
+    exit_code: Option<i32>,
+    stderr: &str,
+) -> Result<CodingAgentEvent, CodexRunFailure> {
+    if let Some(message) = &state.protocol_error {
+        return Err(CodexRunFailure {
+            error: CodingAgentError::Protocol(message.clone()),
+            message: message.clone(),
+        });
+    }
+
+    if !process_succeeded {
+        let message = stderr.lines().last().unwrap_or("").trim().to_string();
+        return Err(CodexRunFailure {
+            error: CodingAgentError::ProcessExit(exit_code),
+            message: if message.is_empty() {
+                format!("agent 异常退出 (code={exit_code:?})")
+            } else {
+                message
+            },
+        });
+    }
+
+    if !state.saw_turn_completed {
+        let message = "Codex 进程结束但未收到 turn.completed".to_string();
+        return Err(CodexRunFailure {
+            error: CodingAgentError::Protocol(message.clone()),
+            message,
+        });
+    }
+
+    Ok(CodingAgentEvent::Completed {
+        session_id: session_id.to_string(),
+        text: state.accumulated.trim().to_string(),
+        cost_usd: None,
+        duration_ms: None,
+    })
+}
+
 /// 无头跑一次 Codex：prompt 写进 stdin，逐行解析 JSONL，把事件投到 `sink`。
 /// 支持取消与超时（都会 kill 子进程）。
 pub async fn run_codex_agent(
@@ -227,7 +339,7 @@ pub async fn run_codex_agent(
     cancel: Arc<AtomicBool>,
 ) -> Result<(), CodingAgentError> {
     let args = build_codex_args(&req);
-    let mut cmd = augmented_command(exe);
+    let mut cmd = augmented_command(exe).await;
     cmd.args(&args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -270,9 +382,8 @@ pub async fn run_codex_agent(
     let mut lines = BufReader::new(stdout).lines();
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(req.timeout_secs.max(1));
-    // Codex 的 turn.completed 不带最终文本：累计所有 agent_message 块，EOF 时合成 Completed。
-    let mut accumulated = String::new();
-    let mut got_error = false;
+    // Codex 的 turn.completed 不带最终文本：累计所有 agent_message 块，收到终局后合成 Completed。
+    let mut protocol_state = CodexProtocolState::default();
     let mut outcome: Result<(), CodingAgentError> = Ok(());
 
     loop {
@@ -290,23 +401,23 @@ pub async fn run_codex_agent(
                     session_id: req.session_id.clone(),
                     message: format!("运行超时（{}s）", req.timeout_secs),
                 });
-                got_error = true;
                 outcome = Err(CodingAgentError::Timeout(req.timeout_secs));
                 break;
             }
             line = lines.next_line() => {
                 match line {
                     Ok(Some(l)) => {
-                        if let Some(ev) = parse_codex_json_line(&req.session_id, &l) {
-                            match &ev {
-                                CodingAgentEvent::Delta { text, .. } => accumulated.push_str(text),
-                                CodingAgentEvent::Error { .. } => got_error = true,
-                                _ => {}
+                        if let Some(protocol_event) =
+                            parse_codex_protocol_line(&req.session_id, &l)
+                        {
+                            if let Some(ev) =
+                                protocol_state.observe(protocol_event)
+                            {
+                                let _ = sink.send(ev);
                             }
-                            let _ = sink.send(ev);
                         }
                     }
-                    Ok(None) => break, // EOF：正常结束
+                    Ok(None) => break, // EOF：交给终局校验
                     Err(e) => {
                         outcome = Err(CodingAgentError::Io(e.to_string()));
                         break;
@@ -321,35 +432,33 @@ pub async fn run_codex_agent(
         .await
         .map_err(|e| CodingAgentError::Io(e.to_string()))?;
 
-    if outcome.is_ok() {
-        if status.success() && !got_error {
-            let _ = sink.send(CodingAgentEvent::Completed {
-                session_id: req.session_id.clone(),
-                text: accumulated.trim().to_string(),
-                cost_usd: None,
-                duration_ms: None,
-            });
-            return Ok(());
-        }
-        if !status.success() && !got_error {
-            let stderr = match stderr_task {
-                Some(t) => t.await.unwrap_or_default(),
-                None => String::new(),
-            };
-            let summary = stderr.lines().last().unwrap_or("").trim().to_string();
-            let _ = sink.send(CodingAgentEvent::Error {
-                session_id: req.session_id.clone(),
-                message: if summary.is_empty() {
-                    format!("agent 异常退出 (code={:?})", status.code())
-                } else {
-                    summary
-                },
-            });
-            return Err(CodingAgentError::ProcessExit(status.code()));
-        }
+    if let Err(error) = outcome {
+        return Err(error);
     }
 
-    outcome
+    let stderr = match stderr_task {
+        Some(t) => t.await.unwrap_or_default(),
+        None => String::new(),
+    };
+    match finalize_codex_run(
+        &req.session_id,
+        &protocol_state,
+        status.success(),
+        status.code(),
+        &stderr,
+    ) {
+        Ok(event) => {
+            let _ = sink.send(event);
+            Ok(())
+        }
+        Err(failure) => {
+            let _ = sink.send(CodingAgentEvent::Error {
+                session_id: req.session_id.clone(),
+                message: failure.message,
+            });
+            Err(failure.error)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -401,15 +510,18 @@ mod tests {
         );
         assert_eq!(
             codex_sandbox_mode(CodingAgentPermissionMode::Default),
-            "workspace-write"
+            "read-only"
         );
         assert_eq!(
             codex_sandbox_mode(CodingAgentPermissionMode::BypassPermissions),
-            "danger-full-access"
+            "read-only"
         );
         let mut req = CodingAgentRequest::new("s", "p");
         req.permission_mode = CodingAgentPermissionMode::Plan;
-        assert_eq!(arg_value(&build_codex_args(&req), "--sandbox"), Some("read-only"));
+        assert_eq!(
+            arg_value(&build_codex_args(&req), "--sandbox"),
+            Some("read-only")
+        );
     }
 
     #[test]
@@ -511,12 +623,105 @@ mod tests {
     }
 
     #[test]
+    fn protocol_parser_distinguishes_terminal_events() {
+        assert_eq!(
+            parse_codex_protocol_line(
+                "s1",
+                r#"{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":2}}"#,
+            ),
+            Some(CodexProtocolEvent::TurnCompleted),
+        );
+        assert_eq!(
+            parse_codex_protocol_line(
+                "s1",
+                r#"{"type":"turn.failed","error":{"message":"Rate limit exceeded"}}"#,
+            ),
+            Some(CodexProtocolEvent::TurnFailed("Rate limit exceeded".into())),
+        );
+        assert_eq!(
+            parse_codex_protocol_line("s1", r#"{"type":"error","message":"stream disconnected"}"#),
+            Some(CodexProtocolEvent::Error("stream disconnected".into())),
+        );
+    }
+
+    #[test]
+    fn successful_completion_requires_turn_completed() {
+        let mut state = CodexProtocolState::default();
+        assert!(state
+            .observe(CodexProtocolEvent::Output(CodingAgentEvent::Delta {
+                session_id: "s1".into(),
+                text: "done".into(),
+            }))
+            .is_some());
+        state.observe(CodexProtocolEvent::TurnCompleted);
+        assert!(matches!(
+            finalize_codex_run("s1", &state, true, Some(0), ""),
+            Ok(CodingAgentEvent::Completed { text, .. }) if text == "done"
+        ));
+
+        let mut missing_terminal = CodexProtocolState::default();
+        missing_terminal.observe(CodexProtocolEvent::Output(CodingAgentEvent::Delta {
+            session_id: "s1".into(),
+            text: "partial".into(),
+        }));
+        let failure = finalize_codex_run("s1", &missing_terminal, true, Some(0), "")
+            .expect_err("EOF without turn.completed must fail");
+        assert!(matches!(failure.error, CodingAgentError::Protocol(_)));
+        assert!(failure.message.contains("turn.completed"));
+    }
+
+    #[test]
+    fn protocol_error_wins_even_if_completion_follows_it() {
+        let mut state = CodexProtocolState::default();
+        state.observe(CodexProtocolEvent::Error("stream disconnected".into()));
+        state.observe(CodexProtocolEvent::TurnCompleted);
+
+        let failure = finalize_codex_run("s1", &state, true, Some(0), "")
+            .expect_err("a protocol error cannot be repaired by a later completion");
+        assert!(matches!(
+            failure.error,
+            CodingAgentError::Protocol(ref message) if message == "stream disconnected"
+        ));
+        assert_eq!(failure.message, "stream disconnected");
+    }
+
+    #[test]
+    fn warning_item_can_be_followed_by_successful_completion() {
+        let warning = r#"{"type":"item.completed","item":{"type":"error","message":"metadata warning"}}"#;
+        assert_eq!(parse_codex_protocol_line("s1", warning), None);
+
+        let mut state = CodexProtocolState::default();
+        state.observe(CodexProtocolEvent::Output(CodingAgentEvent::Delta {
+            session_id: "s1".into(),
+            text: "done".into(),
+        }));
+        state.observe(CodexProtocolEvent::TurnCompleted);
+        assert!(finalize_codex_run("s1", &state, true, Some(0), "").is_ok());
+    }
+
+    #[test]
+    fn nonzero_exit_is_reported_when_protocol_has_no_error() {
+        let mut state = CodexProtocolState::default();
+        state.observe(CodexProtocolEvent::TurnCompleted);
+        let failure = finalize_codex_run("s1", &state, false, Some(23), "fatal: bad input\n")
+            .expect_err("a nonzero exit must fail");
+        assert!(matches!(
+            failure.error,
+            CodingAgentError::ProcessExit(Some(23))
+        ));
+        assert_eq!(failure.message, "fatal: bad input");
+    }
+
+    #[test]
     fn ignores_lifecycle_noise_and_garbage() {
         assert_eq!(
             parse_codex_json_line("s1", r#"{"type":"thread.started","thread_id":"abc"}"#),
             None
         );
-        assert_eq!(parse_codex_json_line("s1", r#"{"type":"turn.started"}"#), None);
+        assert_eq!(
+            parse_codex_json_line("s1", r#"{"type":"turn.started"}"#),
+            None
+        );
         assert_eq!(
             parse_codex_json_line(
                 "s1",
@@ -553,6 +758,19 @@ mod live {
         error: Option<String>,
     }
 
+    fn codex_test_exe() -> String {
+        std::env::var("OPENLESS_CODEX_TEST_EXE")
+            .ok()
+            .filter(|exe| !exe.trim().is_empty())
+            .unwrap_or_else(|| {
+                if cfg!(windows) {
+                    "codex.cmd".to_string()
+                } else {
+                    "codex".to_string()
+                }
+            })
+    }
+
     async fn run(prompt: &str, dir: &std::path::Path, mode: CodingAgentPermissionMode) -> Collected {
         let mut req = CodingAgentRequest::new("live", prompt.to_string());
         req.cwd = Some(dir.to_path_buf());
@@ -560,7 +778,8 @@ mod live {
         req.timeout_secs = 300;
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let cancel = Arc::new(AtomicBool::new(false));
-        let handle = tokio::spawn(async move { run_codex_agent("codex", req, tx, cancel).await });
+        let exe = codex_test_exe();
+        let handle = tokio::spawn(async move { run_codex_agent(&exe, req, tx, cancel).await });
         let mut c = Collected {
             tools: Vec::new(),
             completed: None,
@@ -612,8 +831,9 @@ mod live {
         // 会把当前生效的可写根打进给模型看的权限说明里。断言它只剩工作目录。
         // 键名怎么改都瞒不过这条。
         let dir = fixture_dir();
+        let codex_exe = codex_test_exe();
         let run = |extra: &[&str]| -> String {
-            let mut cmd = std::process::Command::new("codex");
+            let mut cmd = std::process::Command::new(&codex_exe);
             cmd.args(["debug", "prompt-input"])
                 .args(["-c", "sandbox_mode=\"workspace-write\""])
                 .args(extra)

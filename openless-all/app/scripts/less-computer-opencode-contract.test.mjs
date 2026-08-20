@@ -43,6 +43,11 @@ assert(
   dictation.includes('resolve_coding_agent_model(provider'),
   'Less Computer must resolve model defaults per provider',
 );
+assert(
+  settings.includes("const CODEX_PERMISSION_MODES: CodingAgentPermissionMode[] = ['plan', 'acceptEdits']") &&
+    settings.includes('normalizePermissionMode'),
+  'Codex settings must expose only read-only/plan and workspace-write permission modes and normalize legacy values',
+);
 
 const microphoneMenuStart = lib.indexOf('fn build_microphone_tray_menu');
 const microphoneMenuEnd = lib.indexOf('pub(crate) fn refresh_tray_microphone_menu');
@@ -108,6 +113,8 @@ const localizedKeys = [
   'opencodeModelsLoaded',
   'opencodeModelsEmpty',
   'opencodeModelsError',
+  'codexBudgetHint',
+  'codexMode',
   'openPanel',
   'openPanelHint',
   'openPanelAction',

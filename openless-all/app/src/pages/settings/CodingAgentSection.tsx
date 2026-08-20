@@ -30,6 +30,18 @@ const PERMISSION_MODES: CodingAgentPermissionMode[] = [
   'default',
   'bypassPermissions',
 ]
+const CODEX_PERMISSION_MODES: CodingAgentPermissionMode[] = ['plan', 'acceptEdits']
+
+function permissionModesForProvider(provider: CodingAgentProviderId) {
+  return provider === 'codex-cli' ? CODEX_PERMISSION_MODES : PERMISSION_MODES
+}
+
+function normalizePermissionMode(
+  provider: CodingAgentProviderId,
+  mode: CodingAgentPermissionMode,
+): CodingAgentPermissionMode {
+  return provider === 'codex-cli' && (mode === 'default' || mode === 'bypassPermissions') ? 'plan' : mode
+}
 
 type OpenCodeModelsStatus = 'idle' | 'loading' | 'loaded' | 'error'
 
@@ -125,6 +137,17 @@ export function CodingAgentSection() {
     }
   }, [useOpencode, prefs?.codingAgentExe])
 
+  useEffect(() => {
+    if (
+      !prefs ||
+      provider !== 'codex-cli' ||
+      (prefs.codingAgentPermissionMode !== 'default' && prefs.codingAgentPermissionMode !== 'bypassPermissions')
+    ) {
+      return
+    }
+    void savePrefs({ ...prefs, codingAgentPermissionMode: 'plan' })
+  }, [prefs, provider, savePrefs])
+
   const refreshOpencodeModels = async () => {
     setOpencodeModelsStatus('loading')
     setOpencodeModelsError('')
@@ -170,13 +193,18 @@ export function CodingAgentSection() {
           <SettingRow label={t('settings.codingAgent.provider')}>
             <SelectLite
               value={prefs.codingAgentProvider}
-              onChange={v =>
+              onChange={v => {
+                const nextProvider = v as CodingAgentProviderId
                 void savePrefs({
                   ...prefs,
-                  codingAgentProvider: v as CodingAgentProviderId,
+                  codingAgentProvider: nextProvider,
                   codingAgentModel: null,
+                  codingAgentPermissionMode: normalizePermissionMode(
+                    nextProvider,
+                    prefs.codingAgentPermissionMode,
+                  ),
                 })
-              }
+              }}
               options={PROVIDERS}
               ariaLabel={t('settings.codingAgent.provider')}
               style={{ ...inputStyle, maxWidth: 240 }}
@@ -232,13 +260,30 @@ export function CodingAgentSection() {
             </div>
           )}
 
+          {useCodex && (
+            <div
+              style={{
+                fontSize: 12,
+                lineHeight: 1.6,
+                color: 'var(--ol-ink-4)',
+                margin: '-4px 0 8px',
+              }}
+            >
+              {t('settings.codingAgent.codexBudgetHint')}
+            </div>
+          )}
+
           <SettingRow label={t('settings.codingConsole.permissionMode')}>
             <SelectLite
-              value={prefs.codingAgentPermissionMode}
+              value={normalizePermissionMode(provider, prefs.codingAgentPermissionMode)}
               onChange={v => void savePrefs({ ...prefs, codingAgentPermissionMode: v as CodingAgentPermissionMode })}
-              options={PERMISSION_MODES.map(m => ({
+              options={permissionModesForProvider(provider).map(m => ({
                 value: m,
-                label: t(`settings.codingConsole.mode.${m}`),
+                label: t(
+                  provider === 'codex-cli'
+                    ? `settings.codingAgent.codexMode.${m === 'acceptEdits' ? 'workspaceWrite' : 'plan'}`
+                    : `settings.codingConsole.mode.${m}`,
+                ),
               }))}
               ariaLabel={t('settings.codingConsole.permissionMode')}
               style={{ ...inputStyle, maxWidth: 240 }}

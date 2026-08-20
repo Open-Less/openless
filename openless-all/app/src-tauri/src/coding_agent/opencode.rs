@@ -30,11 +30,8 @@ use super::{CodingAgentError, CodingAgentPermissionMode};
 
 /// 探测 `opencode` 版本（`None` 表示未安装或无法运行）。复用 claude 的 `x.y.z` 解析。
 pub async fn detect_opencode(exe: &str) -> Option<String> {
-    let out = augmented_command(exe)
-        .arg("--version")
-        .output()
-        .await
-        .ok()?;
+    let mut cmd = augmented_command(exe).await;
+    let out = cmd.arg("--version").output().await.ok()?;
     if !out.status.success() {
         return None;
     }
@@ -79,7 +76,7 @@ pub fn parse_opencode_models_output(stdout: &str) -> Vec<String> {
 
 /// 从 OpenCode 拉取当前账号可用模型。`refresh=true` 时同步刷新 models.dev 缓存。
 pub async fn list_opencode_models(exe: &str, refresh: bool) -> Result<Vec<String>, String> {
-    let mut cmd = augmented_command(exe);
+    let mut cmd = augmented_command(exe).await;
     cmd.arg("models").kill_on_drop(true);
     if refresh {
         cmd.arg("--refresh");
@@ -209,7 +206,7 @@ pub async fn run_opencode_agent(
     cancel: Arc<AtomicBool>,
 ) -> Result<(), CodingAgentError> {
     let args = build_opencode_args(&req);
-    let mut cmd = augmented_command(exe);
+    let mut cmd = augmented_command(exe).await;
     cmd.args(&args)
         // prompt 作为最后的位置参数（OpenCode 从 argv 读取 message）。
         .arg(&req.prompt)

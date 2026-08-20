@@ -760,6 +760,11 @@ export const en: typeof zhCN = {
       cliMissing: '{{name}} command not found. Install and sign in first, or enter its absolute path under Executable below.',
       sandboxGuardHint: 'This backend only offers coarse sandbox levels, not a per-command high-risk list: when it hits a limit it reports the failure as-is instead of showing an "approve this command" card.',
       codexModelHint: 'Enter a Codex model name (e.g. gpt-5); leave empty to use the setting in ~/.codex/config.toml.',
+      codexBudgetHint: 'Codex has no per-run USD budget cap; charges depend on your configured provider.',
+      codexMode: {
+        plan: 'Read-only / plan',
+        workspaceWrite: 'Allow workspace writes',
+      },
       codexModelPlaceholder: 'Empty = Codex default',
       panelHotkey: 'Panel hotkey (voice agent)',
       panelHotkeyDesc: 'Record voice → ASR → Claude → streamed into a panel. Default Cmd/Ctrl+Shift+Enter.',

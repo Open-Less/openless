@@ -1385,9 +1385,12 @@ pub(super) async fn run_voice_agent_transcript(
         }
     }
 
+    let provider =
+        crate::coding_agent::CodingAgentProvider::from_pref(&prefs.coding_agent_provider);
     // 钳制：语音 → shell 这条全自动路径禁止 bypassPermissions 绕过护栏（无人审、动手即生效）。
-    // 即便用户在偏好里设了 bypass，这里也降级为 acceptEdits（仍带 deny 护栏）。
-    let mode = match coding_agent_mode_from_pref(&prefs.coding_agent_permission_mode) {
+    // Claude / OpenCode 保持原有的 acceptEdits 降级；Codex 的遗留 default/bypass 更严格地
+    // 归一为只读，避免旧偏好在新沙箱语义下意外获得写权限。
+    let mode = match coding_agent_mode_from_pref(provider, &prefs.coding_agent_permission_mode) {
         crate::coding_agent::CodingAgentPermissionMode::BypassPermissions => {
             log::warn!(
                 "[less-computer] 语音 Agent 路径禁止 bypassPermissions，已降级为 acceptEdits（保留护栏）"
@@ -1396,8 +1399,6 @@ pub(super) async fn run_voice_agent_transcript(
         }
         other => other,
     };
-    let provider =
-        crate::coding_agent::CodingAgentProvider::from_pref(&prefs.coding_agent_provider);
     let model =
         crate::coding_agent::resolve_coding_agent_model(provider, prefs.coding_agent_model.clone());
     let prompt = crate::coding_agent::autonomous_prompt(&transcript);
@@ -1507,10 +1508,32 @@ pub(super) async fn run_voice_agent_transcript(
 }
 
 /// 一轮无头 Less Computer 运行的结果。
+#[derive(Debug, PartialEq)]
 enum LessComputerOutcome {
     Done { text: String, cost_usd: Option<f64> },
     Failed { message: String },
     Cancelled,
+}
+
+fn resolve_less_computer_run_outcome(
+    final_text: String,
+    cost_usd: Option<f64>,
+    error: Option<String>,
+) -> LessComputerOutcome {
+    if let Some(message) = error {
+        return LessComputerOutcome::Failed { message };
+    }
+    let text = final_text.trim().to_string();
+    if text.is_empty() {
+        LessComputerOutcome::Failed {
+            message: "Agent 无结果（确认已登录且额度充足）".to_string(),
+        }
+    } else {
+        LessComputerOutcome::Done {
+            text,
+            cost_usd,
+        }
+    }
 }
 
 /// 跑一轮无头 Claude（「放行 + 护栏」），把 Delta/ToolUse 实时 stream 到聊天浮窗，
@@ -1560,9 +1583,9 @@ async fn run_less_computer_once(
     req.cwd = cwd.map(|p| p.to_path_buf());
     req.model = model.map(|m| m.to_string());
     req.permission_mode = mode;
-    // 真实任务（开应用、多步操作、读写文件）常超过 120s/0.5$ → 老是「运行超时」。放宽到
-    // 5 分钟 / 2$，给多步任务足够空间；仍有硬上限兜底，不会无限跑/烧钱。
-    req.max_budget_usd = Some(2.0);
+    // 真实任务（开应用、多步操作、读写文件）常超过 120s → 老是「运行超时」。放宽到
+    // 5 分钟；仅 Claude CLI 能力支持美元硬上限，Codex/OpenCode 保持 None。
+    req.max_budget_usd = provider.max_budget_usd();
     req.timeout_secs = 300;
     // 连续对话需要保留会话：本轮保存（供下轮 --continue），第二轮起带 --continue 续上下文。
     req.session_persistence = true;
@@ -1665,8 +1688,8 @@ async fn run_less_computer_once(
             // 无法从外部注入）。护栏是它自带的 seatbelt 沙箱，由 `-s <mode>` 决定，
             // 在 build_codex_args 里跟着 permission_mode 一起落。这里没有临时护栏文件。
             //
-            // 注意这不是「无护栏裸跑」：mode 已在上游被钳制为 acceptEdits →
-            // `-s workspace-write`，写入限制在工作目录内、网络受限、越权请求无头下自动拒。
+            // 注意这不是「无护栏裸跑」：mode 已在上游钳制为 Plan 或 AcceptEdits，分别落到
+            // `-s read-only` / `-s workspace-write`，遗留宽权限值不会放大 Codex 能力。
             // approved_patterns 对它无意义（沙箱放行只能整体降档，不能放行单条），
             // 上游也不会给它弹审批卡，见 CodingAgentProvider::supports_command_approval。
             settings_path = None;
@@ -1737,21 +1760,11 @@ async fn run_less_computer_once(
         return LessComputerOutcome::Cancelled;
     }
 
-    let trimmed = final_text.trim().to_string();
-    if !trimmed.is_empty() {
-        LessComputerOutcome::Done {
-            text: trimmed,
-            cost_usd,
-        }
-    } else {
-        let message = error_msg
-            .or_else(|| match run_result {
-                Ok(Err(e)) => Some(e.to_string()),
-                _ => None,
-            })
-            .unwrap_or_else(|| "Agent 无结果（确认已登录且额度充足）".to_string());
-        LessComputerOutcome::Failed { message }
-    }
+    let run_error = error_msg.or_else(|| match run_result {
+        Ok(Err(e)) => Some(e.to_string()),
+        _ => None,
+    });
+    resolve_less_computer_run_outcome(final_text, cost_usd, run_error)
 }
 
 /// 护栏拦截探测 + 内联审批（best-effort）。
@@ -1838,14 +1851,24 @@ async fn maybe_request_approval(
     }
 }
 
-/// 把 prefs 里的权限模式字符串映射成枚举；未知值回落到 acceptEdits（放行+护栏的默认）。
-fn coding_agent_mode_from_pref(s: &str) -> crate::coding_agent::CodingAgentPermissionMode {
+/// 把 prefs 里的权限模式字符串映射成枚举；Codex 对遗留的宽权限值 fail-closed 到只读。
+fn coding_agent_mode_from_pref(
+    provider: crate::coding_agent::CodingAgentProvider,
+    s: &str,
+) -> crate::coding_agent::CodingAgentPermissionMode {
     use crate::coding_agent::CodingAgentPermissionMode as M;
-    match s.trim() {
+    let mode = match s.trim() {
         "plan" => M::Plan,
         "default" => M::Default,
         "bypassPermissions" => M::BypassPermissions,
         _ => M::AcceptEdits,
+    };
+    if matches!(provider, crate::coding_agent::CodingAgentProvider::CodexCli)
+        && matches!(mode, M::Default | M::BypassPermissions)
+    {
+        M::Plan
+    } else {
+        mode
     }
 }
 
@@ -5051,10 +5074,11 @@ mod tests {
     use super::{
         accept_silent_retry_transcript, append_cursor_context_to_multimodal_prompt,
         append_typed_prefix, batch_asr_chunk_limit_ms, build_transcribe_failed_session,
-        default_done_message, drain_streaming_insert_deltas_with, eligible_polish_context_turns,
-        finalize_polished_text, flush_streaming_insert_buffer_with, pcm_duration_ms,
-        pcm_from_wav_bytes, retry_error_outcome, should_arm_edit_watch, should_attempt_silent_retry,
-        should_read_cursor_context, insert_delivery_failed, streaming_insert_eligible,
+        coding_agent_mode_from_pref, default_done_message, drain_streaming_insert_deltas_with,
+        eligible_polish_context_turns, finalize_polished_text, flush_streaming_insert_buffer_with,
+        pcm_duration_ms, pcm_from_wav_bytes, retry_error_outcome, should_arm_edit_watch,
+        should_attempt_silent_retry, should_read_cursor_context, insert_delivery_failed,
+        resolve_less_computer_run_outcome, streaming_insert_eligible,
         SilentRetryOutcome,
     };
     #[cfg(target_os = "macos")]
@@ -5064,6 +5088,38 @@ mod tests {
         ChineseScriptPreference, CorrectionRule, DictationSession, InsertStatus, PolishMode,
     };
     use uuid::Uuid;
+
+    #[test]
+    fn codex_legacy_permission_modes_fail_closed_to_read_only() {
+        use crate::coding_agent::{CodingAgentPermissionMode as M, CodingAgentProvider as P};
+
+        assert_eq!(
+            coding_agent_mode_from_pref(P::CodexCli, "acceptEdits"),
+            M::AcceptEdits
+        );
+        assert_eq!(coding_agent_mode_from_pref(P::CodexCli, "plan"), M::Plan);
+        assert_eq!(coding_agent_mode_from_pref(P::CodexCli, "default"), M::Plan);
+        assert_eq!(
+            coding_agent_mode_from_pref(P::CodexCli, "bypassPermissions"),
+            M::Plan
+        );
+        assert_eq!(
+            coding_agent_mode_from_pref(P::ClaudeCodeCli, "default"),
+            M::Default
+        );
+    }
+
+    #[test]
+    fn agent_error_wins_over_partial_output() {
+        assert!(matches!(
+            resolve_less_computer_run_outcome(
+                "partial output".into(),
+                None,
+                Some("Codex 协议错误".into()),
+            ),
+            super::LessComputerOutcome::Failed { message } if message == "Codex 协议错误"
+        ));
+    }
 
     #[tokio::test]
     async fn approval_request_is_denied_when_session_cancelled_during_wait() {

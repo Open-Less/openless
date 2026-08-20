@@ -758,6 +758,11 @@ export const zhCN = {
       cliMissing: '未检测到 {{name}} 命令。请先安装并登录，或在下方「可执行文件」里填它的绝对路径。',
       sandboxGuardHint: '该后端只有粗粒度沙箱档位，没有逐命令的高风险清单：撞到限制时会直接如实报错，不会弹出「批准这条命令」的卡片。',
       codexModelHint: '填 Codex 的模型名（如 gpt-5）；留空则用 ~/.codex/config.toml 里的设置。',
+      codexBudgetHint: 'Codex 没有单次美元预算上限；费用取决于你配置的服务商。',
+      codexMode: {
+        plan: '只读 / 计划',
+        workspaceWrite: '允许工作区写入',
+      },
       codexModelPlaceholder: '留空 = 用 Codex 自己的默认',
       panelHotkey: '面板键（语音 Agent）',
       panelHotkeyDesc: '录音 → ASR → Claude → 结果流式进面板。默认 Cmd/Ctrl+Shift+Enter。',
