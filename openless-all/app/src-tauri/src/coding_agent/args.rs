@@ -15,6 +15,9 @@ pub enum CodingAgentProvider {
     OpenCodeCli,
     /// Codex CLI（`codex exec`）。护栏走它自带的 seatbelt 沙箱，没有逐命令 deny 清单。
     CodexCli,
+    /// dsh / DeepSeek Harness（`dsh --profile headless`）。护栏走 `DSH_PERMISSION_MODE`
+    /// 三档沙箱；流式与工具事件靠我们自带的 tap 插件（见 [`super::dsh`]）。
+    DshCli,
 }
 
 impl CodingAgentProvider {
@@ -23,6 +26,7 @@ impl CodingAgentProvider {
         match s.trim() {
             "opencode-cli" => Self::OpenCodeCli,
             "codex-cli" => Self::CodexCli,
+            "dsh-cli" => Self::DshCli,
             _ => Self::ClaudeCodeCli,
         }
     }
@@ -36,7 +40,7 @@ impl CodingAgentProvider {
     pub fn supports_command_approval(self) -> bool {
         match self {
             Self::ClaudeCodeCli | Self::OpenCodeCli => true,
-            Self::CodexCli => false,
+            Self::CodexCli | Self::DshCli => false,
         }
     }
 
@@ -46,6 +50,7 @@ impl CodingAgentProvider {
             Self::ClaudeCodeCli => "claude",
             Self::OpenCodeCli => "opencode",
             Self::CodexCli => "codex",
+            Self::DshCli => "dsh",
         }
     }
 
@@ -63,6 +68,8 @@ impl CodingAgentProvider {
 /// - Claude：保持既有的 sonnet 默认。
 /// - OpenCode：只接受 `provider/model`，未选择或遗留的 Claude 别名均交给 OpenCode 自己的默认配置。
 /// - Codex：接受任意非空裸模型名（`gpt-5` / `o3` 等），留空交给 `~/.codex/config.toml`。
+/// - dsh：**永远返回 `None`**。headless profile 没有 `--model` 这个 flag，模型由 profile 的
+///   `agent-default-model` 插件决定；这里返回 Some 只会让调用方以为选得动。
 pub fn resolve_coding_agent_model(
     provider: CodingAgentProvider,
     configured: Option<String>,
@@ -74,6 +81,7 @@ pub fn resolve_coding_agent_model(
         CodingAgentProvider::ClaudeCodeCli => configured.or_else(|| Some("sonnet".to_string())),
         CodingAgentProvider::OpenCodeCli => configured.filter(|model| model.contains('/')),
         CodingAgentProvider::CodexCli => configured,
+        CodingAgentProvider::DshCli => None,
     }
 }
 
@@ -340,6 +348,7 @@ mod tests {
         assert_eq!(CodingAgentProvider::ClaudeCodeCli.default_exe(), "claude");
         assert_eq!(CodingAgentProvider::OpenCodeCli.default_exe(), "opencode");
         assert_eq!(CodingAgentProvider::CodexCli.default_exe(), "codex");
+        assert_eq!(CodingAgentProvider::DshCli.default_exe(), "dsh");
     }
 
     #[test]
@@ -347,6 +356,10 @@ mod tests {
         assert_eq!(
             CodingAgentProvider::from_pref("codex-cli"),
             CodingAgentProvider::CodexCli
+        );
+        assert_eq!(
+            CodingAgentProvider::from_pref("dsh-cli"),
+            CodingAgentProvider::DshCli
         );
         // 带空白也要认（prefs 来自前端，历史上出现过带空格的值）。
         assert_eq!(
@@ -361,6 +374,7 @@ mod tests {
         assert!(CodingAgentProvider::ClaudeCodeCli.supports_command_approval());
         assert!(CodingAgentProvider::OpenCodeCli.supports_command_approval());
         assert!(!CodingAgentProvider::CodexCli.supports_command_approval());
+        assert!(!CodingAgentProvider::DshCli.supports_command_approval());
     }
 
     #[test]
@@ -377,6 +391,19 @@ mod tests {
         );
         assert_eq!(
             resolve_coding_agent_model(CodingAgentProvider::CodexCli, Some("   ".into())),
+            None
+        );
+        // dsh 的 headless profile 压根没有 --model：无论用户选了什么都必须是 None，
+        // 否则调用方会以为模型选得动。
+        assert_eq!(
+            resolve_coding_agent_model(CodingAgentProvider::DshCli, None),
+            None
+        );
+        assert_eq!(
+            resolve_coding_agent_model(
+                CodingAgentProvider::DshCli,
+                Some("deepseek-v4-flash".into())
+            ),
             None
         );
     }

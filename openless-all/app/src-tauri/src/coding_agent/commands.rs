@@ -165,7 +165,7 @@ fn normalize_opencode_exe(exe: Option<String>) -> Result<String, String> {
 /// 实际用的可执行文件」三元组——三家后端的检测结果形状完全一致，没必要各造一个 wire 类型。
 ///
 /// `provider` 取 `UserPreferences.coding_agent_provider` 的字符串值。Claude / OpenCode 走
-/// 各自已有的命令（它们还要查 MCP / 模型列表），这里只认 `codex-cli`。
+/// 各自已有的命令（它们还要查 MCP / 模型列表），这里只认 `codex-cli` / `dsh-cli`。
 #[tauri::command]
 pub async fn coding_agent_detect_cli(
     window: Window,
@@ -175,7 +175,9 @@ pub async fn coding_agent_detect_cli(
     ensure_main_window(&window)?;
     let parsed = super::CodingAgentProvider::from_pref(&provider);
     let default_exe = match parsed {
-        super::CodingAgentProvider::CodexCli => parsed.default_exe(),
+        super::CodingAgentProvider::CodexCli | super::CodingAgentProvider::DshCli => {
+            parsed.default_exe()
+        }
         _ => return Err(format!("该后端不走通用检测: {provider}")),
     };
     let exe = normalize_generic_exe(exe, default_exe)?;

@@ -1425,8 +1425,8 @@ pub(super) async fn run_voice_agent_transcript(
     .await;
 
     // 审批卡只对「能精确放行单条命令」的后端弹（Claude / OpenCode 的 deny 清单）。
-    // Codex 只有沙箱档位，批准了也只能整体降档、不是放行这一条——弹卡等于给用户
-    // 一个假承诺（点了批准，重跑还是同样被拦）。它直接把失败如实报出去。
+    // Codex / dsh 只有沙箱档位，批准了也只能整体降档、不是放行这一条——弹卡等于给用户
+    // 一个假承诺（点了批准，重跑还是同样被拦）。它们直接把失败如实报出去。
     let approval = if provider.supports_command_approval() {
         maybe_request_approval(inner, &outcome).await
     } else {
@@ -1704,6 +1704,15 @@ async fn run_less_computer_once(
             let exe = configured_exe.unwrap_or_else(|| "codex".to_string());
             async_runtime::spawn(async move {
                 crate::coding_agent::run_codex_agent(&exe, req, tx, cancel_for_runner).await
+            })
+        }
+        CodingAgentProvider::DshCli => {
+            // dsh 同样只有粗粒度沙箱，经 DSH_PERMISSION_MODE 注入（在 run_dsh_agent 里设），
+            // 沙箱根 = 子进程工作目录。同上：不是裸跑，也没有可放行的单条命令。
+            settings_path = None;
+            let exe = configured_exe.unwrap_or_else(|| "dsh".to_string());
+            async_runtime::spawn(async move {
+                crate::coding_agent::run_dsh_agent(&exe, req, tx, cancel_for_runner).await
             })
         }
     };
