@@ -764,6 +764,7 @@ export const zhCN = {
         workspaceWrite: '允许工作区写入',
       },
       codexModelPlaceholder: '留空 = 用 Codex 自己的默认',
+      dshModelHint: 'dsh 的 headless 配置里没有模型开关：模型由 dsh 自己的 profile 决定，在这里改不了。',
       panelHotkey: '面板键（语音 Agent）',
       panelHotkeyDesc: '录音 → ASR → Claude → 结果流式进面板。默认 Cmd/Ctrl+Shift+Enter。',
       quickHotkey: '快取用键',

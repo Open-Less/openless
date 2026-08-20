@@ -39,8 +39,8 @@ export function codingAgentDetectOpencode(exe?: string): Promise<OpenCodeDetecti
 }
 
 /**
- * 检测 Codex 是否安装。与 OpenCode 共用同一个检测结果形状。
- * `provider` 传 prefs 里的后端 id。
+ * 检测 Codex / dsh 是否安装。与 OpenCode 共用同一个检测结果形状。
+ * `provider` 传 prefs 里的后端 id（只认 `codex-cli` / `dsh-cli`）。
  */
 export function codingAgentDetectCli(
     provider: string,
@@ -52,7 +52,7 @@ export function codingAgentDetectCli(
         () => ({
             installed: false,
             version: null,
-            exe: exe || "codex",
+            exe: exe || (provider === "dsh-cli" ? "dsh" : "codex"),
         }),
     )
 }

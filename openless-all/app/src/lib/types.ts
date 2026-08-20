@@ -218,7 +218,8 @@ export type ComboBinding = ShortcutBinding;
 export type CodingAgentProviderId =
   | "claude-code-cli"
   | "opencode-cli"
-  | "codex-cli";
+  | "codex-cli"
+  | "dsh-cli";
 export type CodingAgentPermissionMode =
   | "plan"
   | "default"
@@ -418,11 +419,12 @@ export interface UserPreferences {
   stylePackHotkeys: StylePackHotkey[];
   /** Less Computer：是否启用。默认关闭。 */
   codingAgentEnabled: boolean;
-  /** Agent 后端：claude-code-cli（默认）/ opencode-cli / codex-cli。 */
+  /** Agent 后端：claude-code-cli（默认）/ opencode-cli / codex-cli / dsh-cli。 */
   codingAgentProvider: CodingAgentProviderId;
   /**
    * Agent 模型，null = 交给后端自己的默认。
-   * Claude 走别名（sonnet 等），OpenCode 要 `provider/model`，Codex 收裸模型名。
+   * Claude 走别名（sonnet 等），OpenCode 要 `provider/model`，Codex 收裸模型名；
+   * dsh 的 headless profile 没有模型开关，这一项对它无效。
    */
   codingAgentModel: string | null;
   /** 权限模式：plan/default/acceptEdits/bypassPermissions。 */

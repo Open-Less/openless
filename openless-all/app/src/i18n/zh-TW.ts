@@ -766,6 +766,7 @@ export const zhTW: typeof zhCN = {
         workspaceWrite: '允許工作目錄寫入',
       },
       codexModelPlaceholder: '留空 = 使用 Codex 自己的預設',
+      dshModelHint: 'dsh 的 headless 設定沒有模型開關：模型由 dsh 自己的 profile 決定，這裡改不了。',
       panelHotkey: '面板鍵（語音 Agent）',
       panelHotkeyDesc: '錄音 → ASR → Claude → 結果串流進面板。預設 Cmd/Ctrl+Shift+Enter。',
       quickHotkey: '快取用鍵',

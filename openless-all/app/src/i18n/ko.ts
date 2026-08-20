@@ -768,6 +768,7 @@ export const ko: typeof zhCN = {
         workspaceWrite: '워크스페이스 쓰기 허용',
       },
       codexModelPlaceholder: '비워 두면 Codex 기본값',
+      dshModelHint: 'dsh의 headless 프로필에는 모델 전환이 없습니다. 모델은 dsh 자체 프로필에서 결정되며 여기서는 바꿀 수 없습니다.',
       panelHotkey: '패널 키(음성 Agent)',
       panelHotkeyDesc: '녹음 → ASR → Claude → 패널에 스트리밍. 기본 Cmd/Ctrl+Shift+Enter.',
       quickHotkey: '빠른 가져오기 키',

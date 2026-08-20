@@ -766,6 +766,7 @@ export const en: typeof zhCN = {
         workspaceWrite: 'Allow workspace writes',
       },
       codexModelPlaceholder: 'Empty = Codex default',
+      dshModelHint: "dsh's headless profile has no model switch: the model is decided by dsh's own profile and cannot be changed here.",
       panelHotkey: 'Panel hotkey (voice agent)',
       panelHotkeyDesc: 'Record voice → ASR → Claude → streamed into a panel. Default Cmd/Ctrl+Shift+Enter.',
       quickHotkey: 'Quick-take hotkey',
