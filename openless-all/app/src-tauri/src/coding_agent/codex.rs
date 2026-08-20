@@ -3,8 +3,7 @@
 //! 与 Claude / OpenCode 适配器同形、复用同一套 [`CodingAgentRequest`] / [`CodingAgentEvent`] /
 //! [`CodingAgentError`]，但对接的是 OpenAI Codex CLI：
 //!
-//! - 检测：`codex --version`（输出形如 `codex-cli 0.146.0`）→ 复用
-//!   [`super::detect::parse_claude_version`] 取 `x.y.z`。
+//! - 检测：`codex --version`（输出形如 `codex-cli 0.146.0`）。
 //! - 运行：`codex exec --json --color never --skip-git-repo-check -s <sandbox> [-C <cwd>]
 //!   [-m <model>] -`，**prompt 走 stdin**（末尾的 `-` 就是「从 stdin 读」的官方写法），
 //!   逐行解析 JSONL 事件。
@@ -29,16 +28,6 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use super::stream::CodingAgentEvent;
 use super::{augmented_command, wait_cancel, CodingAgentEventSink, CodingAgentRequest};
 use super::{CodingAgentError, CodingAgentPermissionMode};
-
-/// 探测 `codex` 版本（`None` 表示未安装或无法运行）。复用 claude 的 `x.y.z` 解析。
-pub async fn detect_codex(exe: &str) -> Option<String> {
-    let mut cmd = augmented_command(exe).await;
-    let out = cmd.arg("--version").output().await.ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    super::detect::parse_claude_version(&String::from_utf8_lossy(&out.stdout))
-}
 
 /// 权限模式 → Codex `-s/--sandbox` 取值。
 ///

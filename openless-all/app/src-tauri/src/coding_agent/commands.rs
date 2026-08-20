@@ -12,11 +12,10 @@ use tauri::{AppHandle, Emitter, Window};
 
 use super::detect::{has_computer_use_mcp, McpServerStatus};
 use super::guard::build_guard_settings_json;
-use super::codex::detect_codex;
-use super::opencode::{detect_opencode, list_opencode_models};
+use super::opencode::list_opencode_models;
 use super::{
-    claude_mcp_list, create_git_snapshot, detect_claude, run_claude_agent,
-    CodingAgentPermissionMode, CodingAgentRequest,
+    claude_mcp_list, create_git_snapshot, probe_cli, run_claude_agent, CodingAgentPermissionMode,
+    CodingAgentRequest,
 };
 
 /// 当前测试运行的取消标志（一次只跑一个）。
@@ -110,16 +109,18 @@ pub async fn coding_agent_detect(
 ) -> Result<ClaudeDetectionWire, String> {
     ensure_main_window(&window)?;
     let exe = normalize_exe(exe)?;
-    let version = detect_claude(&exe).await;
-    let mcp_servers = if version.is_some() {
+    let probe = probe_cli(&exe).await;
+    // MCP 列表只在命令真能跑时才查（跑不通查了也是白查）。注意判据是 installed 而不是
+    // 「解析出版本号」——见 probe_cli 的文档。
+    let mcp_servers = if probe.installed {
         claude_mcp_list(&exe).await
     } else {
         Vec::new()
     };
     let has_computer_use = has_computer_use_mcp(&mcp_servers);
     Ok(ClaudeDetectionWire {
-        installed: version.is_some(),
-        version,
+        installed: probe.installed,
+        version: probe.version,
         exe,
         mcp_servers,
         has_computer_use,
@@ -178,10 +179,10 @@ pub async fn coding_agent_detect_cli(
         _ => return Err(format!("该后端不走通用检测: {provider}")),
     };
     let exe = normalize_generic_exe(exe, default_exe)?;
-    let version = detect_codex(&exe).await;
+    let probe = probe_cli(&exe).await;
     Ok(OpenCodeDetectionWire {
-        installed: version.is_some(),
-        version,
+        installed: probe.installed,
+        version: probe.version,
         exe,
     })
 }
@@ -195,10 +196,10 @@ pub async fn coding_agent_detect_opencode(
 ) -> Result<OpenCodeDetectionWire, String> {
     ensure_main_window(&window)?;
     let exe = normalize_opencode_exe(exe)?;
-    let version = detect_opencode(&exe).await;
+    let probe = probe_cli(&exe).await;
     Ok(OpenCodeDetectionWire {
-        installed: version.is_some(),
-        version,
+        installed: probe.installed,
+        version: probe.version,
         exe,
     })
 }

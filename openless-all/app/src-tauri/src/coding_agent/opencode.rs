@@ -4,7 +4,7 @@
 //! 同一套 [`CodingAgentRequest`] / [`CodingAgentEvent`] / [`CodingAgentError`]，但对接的是
 //! OpenCode CLI（[opencode.ai](https://opencode.ai)）：
 //!
-//! - 检测：`opencode --version` → 复用 [`super::detect::parse_claude_version`] 取 `x.y.z`。
+//! - 检测：走 [`super::probe_cli`]（四个后端共用）。
 //! - 模型：`opencode models --refresh` → 拉取当前账号可用的 `provider/model` 列表。
 //! - 运行：`opencode run --format json --model <provider/model> --dir <cwd>
 //!   [--auto]`，**prompt 作为命令行参数**（OpenCode 从 argv 读，
@@ -27,16 +27,6 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use super::stream::CodingAgentEvent;
 use super::{augmented_command, wait_cancel, CodingAgentEventSink, CodingAgentRequest};
 use super::{CodingAgentError, CodingAgentPermissionMode};
-
-/// 探测 `opencode` 版本（`None` 表示未安装或无法运行）。复用 claude 的 `x.y.z` 解析。
-pub async fn detect_opencode(exe: &str) -> Option<String> {
-    let mut cmd = augmented_command(exe).await;
-    let out = cmd.arg("--version").output().await.ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    super::detect::parse_claude_version(&String::from_utf8_lossy(&out.stdout))
-}
 
 /// 去掉 OpenCode CLI 状态行里的 ANSI CSI 转义序列，保留普通文本。
 fn strip_ansi_csi(input: &str) -> String {
