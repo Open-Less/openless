@@ -71,29 +71,163 @@ pub enum CodingAgentError {
     Io(String),
 }
 
-/// 给 GUI 进程补 PATH / HOME：macOS 从 Finder 启动的进程不继承登录 shell 环境，
-/// `claude` 常装在 `~/.local/bin`、Homebrew 在 `/opt/homebrew/bin`。
-pub(super) fn augment_env(cmd: &mut Command) {
-    let mut path = std::env::var("PATH").unwrap_or_default();
-    if let Some(home_os) = std::env::var_os("HOME") {
-        let home = home_os.to_string_lossy().to_string();
-        let extras = [
-            format!("{home}/.local/bin"),
-            "/opt/homebrew/bin".to_string(),
-            "/usr/local/bin".to_string(),
-        ];
-        for extra in extras {
-            if !path.split(':').any(|p| p == extra) {
-                path = if path.is_empty() {
-                    extra
-                } else {
-                    format!("{extra}:{path}")
-                };
+/// 登录 shell 的 PATH，整个进程只解析一次（解析失败缓存 `None`，不反复重试）。
+#[cfg(unix)]
+static LOGIN_SHELL_PATH: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+
+/// 从 shell 里回读 PATH 用的哨兵串。
+///
+/// 交互式 shell 的 rc 文件可能自己往 stdout 打东西（提示、版本横幅、插件问候），
+/// 直接取整个 stdout 会把这些一起当成 PATH。加个哨兵，只取它之后的内容。
+#[cfg(unix)]
+const SHELL_PATH_SENTINEL: &str = "__OPENLESS_PATH__";
+
+/// 跑一次 shell 把 PATH 打回来。`flags` 形如 `-lic` / `-lc`。超时返回 `None`。
+#[cfg(unix)]
+fn probe_shell_path(shell: &str, flags: &str) -> Option<String> {
+    // 注意 `%s` 是给 shell 的 printf 用的字面量，`{SHELL_PATH_SENTINEL}` 才是 Rust 插值。
+    let script = format!("printf '{SHELL_PATH_SENTINEL}%s' \"$PATH\"");
+    let mut child = std::process::Command::new(shell)
+        .args([flags, &script])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+    // std::process 没有超时接口，自己轮询。交互式 shell 要加载 rc（nvm/插件），给 5 秒。
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            Ok(None) => {
+                // shell 卡住了（rc 里有交互式提示之类）：杀掉，交给下一个候选或静态兜底。
+                let _ = child.kill();
+                let _ = child.wait();
+                log::warn!("[coding-agent] `{shell} {flags}` 读取 PATH 超时");
+                return None;
+            }
+            Err(_) => return None,
+        }
+    }
+    let out = child.wait_with_output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // 只取哨兵之后的内容；没有哨兵说明这次输出不可信。
+    let path = stdout.rsplit(SHELL_PATH_SENTINEL).next()?.trim().to_string();
+    if path.is_empty() {
+        None
+    } else {
+        Some(path)
+    }
+}
+
+/// 问用户的 shell 要一份真实 PATH。**仅 unix**。
+///
+/// macOS 从 Finder / LaunchServices 启动的 GUI 进程拿到的是一份极简 PATH，不经过用户的 shell
+/// 配置，所以任何由版本管理器安装的 CLI 都不在里面。这对本模块是致命的：`dsh` 常在 nvm 的
+/// `~/.nvm/versions/node/<版本>/bin`、`codex` 常在全局 npm 前缀——这些路径**无法硬编码**
+/// （带版本号、随配置变）。唯一可靠的办法是问 shell 自己。
+///
+/// 先试 `-lic`（登录 + 交互）再退 `-lc`（仅登录），因为 **nvm 这类版本管理器通常在 `.zshrc`
+/// 里初始化，而 `.zshrc` 只有交互式 shell 才读**。本机实测：`-lc` 拿到的 PATH 里 nvm 排在
+/// `/usr/local/bin` 之后，于是 `dsh` 的 `#!/usr/bin/env node` 命中了 v20 的 node 直接崩；
+/// `-lic` 才把 nvm v24 排到最前。这个顺序是正确性问题，别为了「更安全」改回 `-lc`。
+///
+/// Windows 上没有「登录 shell 的 PATH」这个概念（进程直接继承系统/用户环境变量），而且装了
+/// Git Bash 的机器 `SHELL` 也可能有值——真去跑它只会莫名其妙拉起一个 bash。所以整段限定 unix。
+#[cfg(unix)]
+fn login_shell_path() -> Option<&'static str> {
+    LOGIN_SHELL_PATH
+        .get_or_init(|| {
+            let shell = std::env::var("SHELL").ok().filter(|s| !s.trim().is_empty())?;
+            probe_shell_path(&shell, "-lic").or_else(|| probe_shell_path(&shell, "-lc"))
+        })
+        .as_deref()
+}
+
+#[cfg(not(unix))]
+fn login_shell_path() -> Option<&'static str> {
+    None
+}
+
+/// 静态兜底目录：登录 shell 问不出来时至少覆盖几个常见落点。
+///
+/// 只对 unix 有意义（Windows 的 CLI 不落在这些位置，进程也直接继承系统 PATH）。
+/// 注意这份清单**盖不全** nvm / 全局 npm 前缀这类带版本号或可配置的路径——那是
+/// [`login_shell_path`] 的活。用户还可以在「高级 → Less Computer」直接填可执行文件绝对路径，
+/// 那条路绕过 PATH 解析，是最终兜底。
+fn static_path_extras(home: &str) -> Vec<String> {
+    if cfg!(not(unix)) {
+        return Vec::new();
+    }
+    vec![
+        format!("{home}/.local/bin"),
+        // opencode 官方安装脚本的默认落点。
+        format!("{home}/.opencode/bin"),
+        // 常见的全局 npm 前缀写法（codex / dsh 都可能装在这里）。
+        format!("{home}/.npm-global/bin"),
+        format!("{home}/.bun/bin"),
+        "/opt/homebrew/bin".to_string(),
+        "/usr/local/bin".to_string(),
+    ]
+}
+
+/// 按优先级拼出最终 PATH：登录 shell 的 PATH > 静态兜底目录 > 进程原有 PATH。
+/// 同一目录只保留第一次出现，**各段内部的相对顺序原样保留**。
+///
+/// 分隔符走 [`std::env::split_paths`] / [`std::env::join_paths`]，**不能手写 `:`**：
+/// Windows 用 `;`，而且盘符本身带冒号——按 `:` 切 `C:\Windows;C:\System32` 会把整条 PATH
+/// 打烂，之后所有子进程都找不到任何命令。（这条是踩出来的：早先的实现就是手写 `:` 切分再
+/// 用 `:` 拼回去。CI 在 Windows 上只跑 `cargo check`，编译得过，但跑起来就废。）
+///
+/// 顺序在这里同样是正确性问题：早先的实现把每一项依次前插，等于把登录 shell 的 PATH 整个
+/// **倒过来**，于是 `dsh`（装在 nvm 某个版本的 node_modules 下）被交给了错版本的 node，
+/// 一启动就崩。所以这个函数必须保序，而且必须有下面那几条单测盯着。
+fn merge_path(current: &str, extras: &[String], shell_path: Option<&str>) -> String {
+    let mut seen: std::collections::HashSet<std::path::PathBuf> = std::collections::HashSet::new();
+    let mut out: Vec<std::path::PathBuf> = Vec::new();
+    let mut push_all = |raw: &str| {
+        for seg in std::env::split_paths(raw) {
+            // 空段在 PATH 里等价于「当前目录」，是个安全隐患，丢掉。
+            if seg.as_os_str().is_empty() {
+                continue;
+            }
+            if seen.insert(seg.clone()) {
+                out.push(seg);
             }
         }
-        cmd.env("HOME", home);
+    };
+    if let Some(sp) = shell_path {
+        push_all(sp);
     }
-    cmd.env("PATH", path);
+    for extra in extras {
+        push_all(extra);
+    }
+    push_all(current);
+    // join_paths 只在段里含分隔符时才失败；真失败就退回原 PATH，绝不返回半截的。
+    std::env::join_paths(&out)
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| current.to_string())
+}
+
+/// 给 GUI 进程补 PATH / HOME：macOS 从 Finder 启动的进程不继承登录 shell 环境。
+pub(super) fn augment_env(cmd: &mut Command) {
+    let current = std::env::var("PATH").unwrap_or_default();
+    let extras = match std::env::var_os("HOME") {
+        Some(home_os) => {
+            let home = home_os.to_string_lossy().to_string();
+            let extras = static_path_extras(&home);
+            cmd.env("HOME", home);
+            extras
+        }
+        None => Vec::new(),
+    };
+    cmd.env("PATH", merge_path(&current, &extras, login_shell_path()));
 }
 
 pub(super) fn augmented_command(exe: &str) -> Command {
@@ -278,6 +412,78 @@ pub async fn run_claude_agent(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 按当前平台的 PATH 分隔符拼一串（Windows `;` / unix `:`），
+    /// 让下面的断言在三个平台上都成立——手写 `:` 的话 Windows CI 会挂。
+    fn path_str(parts: &[&str]) -> String {
+        std::env::join_paths(parts)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    fn path_parts(joined: &str) -> Vec<String> {
+        std::env::split_paths(joined)
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn merged_path_keeps_login_shell_order_intact() {
+        // 回归防线：登录 shell 的 PATH 顺序**必须原样保留**。倒过来会让 `node` /
+        // `dsh` 命中错误的版本管理器目录（本机同时装了三个 node），子进程直接崩。
+        let shell = path_str(&["/nvm/v24/bin", "/opt/homebrew/bin", "/usr/bin"]);
+        let merged = merge_path(&path_str(&["/usr/bin", "/bin"]), &[], Some(&shell));
+        let order = path_parts(&merged);
+        assert_eq!(order[0], "/nvm/v24/bin", "登录 shell 的首项必须还是首项");
+        assert_eq!(order[1], "/opt/homebrew/bin");
+        assert_eq!(order[2], "/usr/bin");
+    }
+
+    #[test]
+    fn merged_path_priority_is_shell_then_extras_then_current() {
+        let merged = merge_path(
+            &path_str(&["/current/bin"]),
+            &["/extra/bin".to_string()],
+            Some(&path_str(&["/shell/bin"])),
+        );
+        assert_eq!(
+            path_parts(&merged),
+            vec!["/shell/bin", "/extra/bin", "/current/bin"]
+        );
+    }
+
+    #[test]
+    fn merged_path_dedupes_and_drops_empties() {
+        // 重复目录只留第一次出现（优先级最高的那次）。
+        let merged = merge_path(
+            &path_str(&["/a", "/b", "/a"]),
+            &["/b".to_string()],
+            Some(&path_str(&["/b", "/c"])),
+        );
+        assert_eq!(path_parts(&merged), vec!["/b", "/c", "/a"]);
+    }
+
+    #[test]
+    fn merged_path_uses_the_platform_separator_not_a_hardcoded_colon() {
+        // 跨平台不变量：输出必须逐字等于 `join_paths` 的结果，也就是用**平台自己**的
+        // 分隔符（Windows `;` / unix `:`）。早先的实现手写 `:` 切分再用 `:` 拼回去，
+        // 在 Windows 上会把 `C:\Windows` 切成 `C` 和 `\Windows`，整条 PATH 报废。
+        // 这条在三个平台都会跑，任何一处退回手写分隔符都会当场红。
+        let merged = merge_path(&path_str(&["/a", "/b"]), &[], None);
+        assert_eq!(merged, path_str(&["/a", "/b"]));
+    }
+
+    /// 盘符（`C:`）这条只有 Windows 能构造——unix 的 PATH 段里不允许出现 `:`，
+    /// `join_paths` 会直接拒绝。所以它在 Windows CI 上跑，unix 上编译掉。
+    #[cfg(windows)]
+    #[test]
+    fn merged_path_keeps_drive_letters_intact() {
+        let current = path_str(&["C:\\Windows", "C:\\Windows\\System32"]);
+        let parts = path_parts(&merge_path(&current, &[], None));
+        assert_eq!(parts.len(), 2, "段数不能变，实际: {parts:?}");
+        assert!(!parts.iter().any(|p| p == "C"), "盘符被切开了: {parts:?}");
+    }
 
     #[test]
     fn autonomous_prompt_wraps_task_with_oneshot_directive() {
