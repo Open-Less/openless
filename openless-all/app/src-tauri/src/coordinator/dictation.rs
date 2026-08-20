@@ -1415,7 +1415,15 @@ pub(super) async fn run_voice_agent_transcript(
     )
     .await;
 
-    let final_outcome = match maybe_request_approval(inner, &outcome).await {
+    // 审批卡只对「能精确放行单条命令」的后端弹（Claude / OpenCode 的 deny 清单）。
+    // Codex 只有沙箱档位，批准了也只能整体降档、不是放行这一条——弹卡等于给用户
+    // 一个假承诺（点了批准，重跑还是同样被拦）。它直接把失败如实报出去。
+    let approval = if provider.supports_command_approval() {
+        maybe_request_approval(inner, &outcome).await
+    } else {
+        None
+    };
+    let final_outcome = match approval {
         Some(approved_pattern) => {
             log::info!("[less-computer] 审批通过，放行高风险模式后重跑：{approved_pattern}");
             run_less_computer_once(
@@ -1650,6 +1658,21 @@ async fn run_less_computer_once(
                     cancel_for_runner,
                 )
                 .await
+            })
+        }
+        CodingAgentProvider::CodexCli => {
+            // Codex 没有逐命令 deny 清单（`.rules` execpolicy 只从 $CODEX_HOME / 项目目录读，
+            // 无法从外部注入）。护栏是它自带的 seatbelt 沙箱，由 `-s <mode>` 决定，
+            // 在 build_codex_args 里跟着 permission_mode 一起落。这里没有临时护栏文件。
+            //
+            // 注意这不是「无护栏裸跑」：mode 已在上游被钳制为 acceptEdits →
+            // `-s workspace-write`，写入限制在工作目录内、网络受限、越权请求无头下自动拒。
+            // approved_patterns 对它无意义（沙箱放行只能整体降档，不能放行单条），
+            // 上游也不会给它弹审批卡，见 CodingAgentProvider::supports_command_approval。
+            settings_path = None;
+            let exe = configured_exe.unwrap_or_else(|| "codex".to_string());
+            async_runtime::spawn(async move {
+                crate::coding_agent::run_codex_agent(&exe, req, tx, cancel_for_runner).await
             })
         }
     };

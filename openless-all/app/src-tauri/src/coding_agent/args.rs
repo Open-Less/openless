@@ -13,14 +13,30 @@ pub enum CodingAgentProvider {
     ClaudeCodeCli,
     /// OpenCode CLI（`opencode`），issue #579。
     OpenCodeCli,
+    /// Codex CLI（`codex exec`）。护栏走它自带的 seatbelt 沙箱，没有逐命令 deny 清单。
+    CodexCli,
 }
 
 impl CodingAgentProvider {
-    /// 从 prefs 字符串解析。`"opencode-cli"` → OpenCode；其余（含 `"claude-code-cli"`）→ Claude。
+    /// 从 prefs 字符串解析。未知/缺省一律回落 Claude（既有默认），不破坏现有用户。
     pub fn from_pref(s: &str) -> Self {
         match s.trim() {
             "opencode-cli" => Self::OpenCodeCli,
+            "codex-cli" => Self::CodexCli,
             _ => Self::ClaudeCodeCli,
+        }
+    }
+
+    /// 该后端是否支持「撞了 deny → 弹审批卡 → 放行该命令重跑」这条链路。
+    ///
+    /// Claude / OpenCode 的护栏是**逐命令 deny 清单**，能精确地把某一条放行再跑一次，
+    /// 所以审批卡有意义。Codex / dsh 只有粗粒度沙箱档位，放行的唯一办法是整体降档
+    /// （等于把护栏关掉），不是「放行这一条」。对它们弹审批卡会给用户一个假承诺：
+    /// 点了批准，重跑还是同样被拦。所以这两家直接如实报错，不弹卡。
+    pub fn supports_command_approval(self) -> bool {
+        match self {
+            Self::ClaudeCodeCli | Self::OpenCodeCli => true,
+            Self::CodexCli => false,
         }
     }
 
@@ -29,12 +45,16 @@ impl CodingAgentProvider {
         match self {
             Self::ClaudeCodeCli => "claude",
             Self::OpenCodeCli => "opencode",
+            Self::CodexCli => "codex",
         }
     }
 }
 
-/// 按后端解析用户选择的模型。Claude 保持既有的 sonnet 默认；OpenCode 只接受
-/// `provider/model`，未选择或遗留的 Claude 别名均交给 OpenCode 自己的默认配置。
+/// 按后端解析用户选择的模型。
+///
+/// - Claude：保持既有的 sonnet 默认。
+/// - OpenCode：只接受 `provider/model`，未选择或遗留的 Claude 别名均交给 OpenCode 自己的默认配置。
+/// - Codex：接受任意非空裸模型名（`gpt-5` / `o3` 等），留空交给 `~/.codex/config.toml`。
 pub fn resolve_coding_agent_model(
     provider: CodingAgentProvider,
     configured: Option<String>,
@@ -45,6 +65,7 @@ pub fn resolve_coding_agent_model(
     match provider {
         CodingAgentProvider::ClaudeCodeCli => configured.or_else(|| Some("sonnet".to_string())),
         CodingAgentProvider::OpenCodeCli => configured.filter(|model| model.contains('/')),
+        CodingAgentProvider::CodexCli => configured,
     }
 }
 
@@ -299,6 +320,46 @@ mod tests {
     fn provider_default_exe() {
         assert_eq!(CodingAgentProvider::ClaudeCodeCli.default_exe(), "claude");
         assert_eq!(CodingAgentProvider::OpenCodeCli.default_exe(), "opencode");
+        assert_eq!(CodingAgentProvider::CodexCli.default_exe(), "codex");
+    }
+
+    #[test]
+    fn new_providers_parse_from_pref() {
+        assert_eq!(
+            CodingAgentProvider::from_pref("codex-cli"),
+            CodingAgentProvider::CodexCli
+        );
+        // 带空白也要认（prefs 来自前端，历史上出现过带空格的值）。
+        assert_eq!(
+            CodingAgentProvider::from_pref("  codex-cli  "),
+            CodingAgentProvider::CodexCli
+        );
+    }
+
+    #[test]
+    fn only_deny_list_backends_offer_command_approval() {
+        // 审批卡只对「能精确放行单条命令」的后端有意义，见 supports_command_approval 的文档。
+        assert!(CodingAgentProvider::ClaudeCodeCli.supports_command_approval());
+        assert!(CodingAgentProvider::OpenCodeCli.supports_command_approval());
+        assert!(!CodingAgentProvider::CodexCli.supports_command_approval());
+    }
+
+    #[test]
+    fn codex_takes_bare_model_names_and_dsh_takes_none() {
+        // Codex 的模型名是裸名（gpt-5 / o3），不像 OpenCode 要求 provider/model。
+        assert_eq!(
+            resolve_coding_agent_model(CodingAgentProvider::CodexCli, Some("gpt-5".into())),
+            Some("gpt-5".to_string())
+        );
+        // 留空交给 ~/.codex/config.toml，不替用户瞎猜一个默认。
+        assert_eq!(
+            resolve_coding_agent_model(CodingAgentProvider::CodexCli, None),
+            None
+        );
+        assert_eq!(
+            resolve_coding_agent_model(CodingAgentProvider::CodexCli, Some("   ".into())),
+            None
+        );
     }
 
     #[test]

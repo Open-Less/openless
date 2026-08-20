@@ -12,6 +12,7 @@ use tauri::{AppHandle, Emitter, Window};
 
 use super::detect::{has_computer_use_mcp, McpServerStatus};
 use super::guard::build_guard_settings_json;
+use super::codex::detect_codex;
 use super::opencode::{detect_opencode, list_opencode_models};
 use super::{
     claude_mcp_list, create_git_snapshot, detect_claude, run_claude_agent,
@@ -137,11 +138,13 @@ pub struct OpenCodeDetectionWire {
     pub exe: String,
 }
 
-fn normalize_opencode_exe(exe: Option<String>) -> Result<String, String> {
+/// 校验用户填的可执行文件：只接受裸文件名或绝对路径，拒绝 `..` 与相对路径。
+/// 留空时回落到 `default_exe`。
+fn normalize_generic_exe(exe: Option<String>, default_exe: &str) -> Result<String, String> {
     let exe = exe
         .map(|e| e.trim().to_string())
         .filter(|e| !e.is_empty())
-        .unwrap_or_else(|| "opencode".to_string());
+        .unwrap_or_else(|| default_exe.to_string());
     if exe.contains("..") {
         return Err("不允许的可执行文件路径: 包含 '..'".into());
     }
@@ -149,6 +152,38 @@ fn normalize_opencode_exe(exe: Option<String>) -> Result<String, String> {
         return Err("不允许的相对路径，仅接受裸可执行文件名或绝对路径".into());
     }
     Ok(exe)
+}
+
+fn normalize_opencode_exe(exe: Option<String>) -> Result<String, String> {
+    normalize_generic_exe(exe, "opencode")
+}
+
+/// 检测 Codex / dsh 是否安装、版本，供设置页提示用户先装 / 先登录。
+///
+/// 与 [`coding_agent_detect_opencode`] 共用 [`OpenCodeDetectionWire`] 这个「装没装 + 版本 +
+/// 实际用的可执行文件」三元组——三家后端的检测结果形状完全一致，没必要各造一个 wire 类型。
+///
+/// `provider` 取 `UserPreferences.coding_agent_provider` 的字符串值。Claude / OpenCode 走
+/// 各自已有的命令（它们还要查 MCP / 模型列表），这里只认 `codex-cli`。
+#[tauri::command]
+pub async fn coding_agent_detect_cli(
+    window: Window,
+    provider: String,
+    exe: Option<String>,
+) -> Result<OpenCodeDetectionWire, String> {
+    ensure_main_window(&window)?;
+    let parsed = super::CodingAgentProvider::from_pref(&provider);
+    let default_exe = match parsed {
+        super::CodingAgentProvider::CodexCli => parsed.default_exe(),
+        _ => return Err(format!("该后端不走通用检测: {provider}")),
+    };
+    let exe = normalize_generic_exe(exe, default_exe)?;
+    let version = detect_codex(&exe).await;
+    Ok(OpenCodeDetectionWire {
+        installed: version.is_some(),
+        version,
+        exe,
+    })
 }
 
 /// 检测 `opencode` 是否安装、版本。语音 Agent 选了 OpenCode 后端时，设置页据此提示

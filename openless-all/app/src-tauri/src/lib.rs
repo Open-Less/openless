@@ -220,6 +220,7 @@ macro_rules! app_invoke_handler_desktop {
             commands::cancel_dictation,
             coding_agent::commands::coding_agent_detect,
             coding_agent::commands::coding_agent_detect_opencode,
+            coding_agent::commands::coding_agent_detect_cli,
             coding_agent::commands::coding_agent_list_opencode_models,
             coding_agent::commands::coding_agent_run_test,
             coding_agent::commands::coding_agent_cancel_test,
