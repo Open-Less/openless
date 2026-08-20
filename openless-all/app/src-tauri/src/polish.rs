@@ -2736,7 +2736,7 @@ mod tests {
         let server = thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
             read_http_request(&mut stream);
-            let gap = std::time::Duration::from_millis(60);
+            let gap = std::time::Duration::from_millis(150);
             let plan: Vec<(&[u8], std::time::Duration)> = events
                 .iter()
                 .enumerate()
@@ -2754,9 +2754,9 @@ mod tests {
             write_chunked_sse_response_with_delays(&mut stream, &plan);
         });
 
-        // 总时长 ~240ms，远超 120ms 的首字预算；但每个后续 chunk 间隔 60ms < 空闲预算。
+        // 总时长 ~600ms，超过 500ms 的首字预算；但每个 chunk 间隔 150ms < 空闲预算。
         let timeouts = StreamingTimeouts {
-            first_token: std::time::Duration::from_millis(120),
+            first_token: std::time::Duration::from_millis(500),
             idle: std::time::Duration::from_millis(500),
         };
         let out = streaming_test_provider(addr)

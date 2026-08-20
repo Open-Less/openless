@@ -106,7 +106,6 @@ import {
 import {
     DownloadProgressBlock,
     FoundryPrepareProgressBlock,
-    MetalToolchainGuide,
     ModelDetailPanel,
     ModelSidebar,
     type SidebarModelEntry,
@@ -156,12 +155,13 @@ interface LocalAsrProps {
     embedded?: boolean
 }
 
+type RefreshGuard = () => boolean
+
 export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
     const { t } = useTranslation()
     const { prefs, updatePrefs } = useHotkeySettings()
     const [settings, setSettings] = useState<LocalAsrSettings | null>(null)
-    // MetalToolchain 检查发生在源码构建前；这里的提示只服务于已经成功
-    // 启动的应用，等待 native capability 查询完成，避免 Intel Mac 先闪现 MLX。
+    // 等待 native capability 查询完成，避免 Intel Mac 先闪现 MLX 渠道。
     const [supportsQwen3Mlx, setSupportsQwen3Mlx] = useState(false)
     const [models, setModels] = useState<LocalAsrModelStatus[]>([])
     // 两栏看板：右侧当前选中的模型（默认选第一个已下载的）。
@@ -234,6 +234,8 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
     >({})
     const [engineStatus, setEngineStatus] =
         useState<LocalAsrEngineStatus | null>(null)
+    const downloadDialogOpenRef = useRef(downloadDialogOpen)
+    const refreshGenerationRef = useRef(0)
     const refreshTimer = useRef<number | null>(null)
     const foundryRefreshTimer = useRef<number | null>(null)
     const sherpaRefreshTimer = useRef<number | null>(null)
@@ -254,6 +256,22 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
             setSupportsQwen3Mlx(caps.supportsLocalQwen3Mlx),
         )
     }, [])
+
+    const setDownloadDialog = (open: boolean) => {
+        if (downloadDialogOpenRef.current !== open) {
+            downloadDialogOpenRef.current = open
+            refreshGenerationRef.current += 1
+        }
+        setDownloadDialogOpen(open)
+    }
+
+    // 清理 interval 只能阻止下一次 tick；generation 还要丢弃已经在途的异步结果。
+    const makeRefreshGuard = (): RefreshGuard => {
+        const generation = refreshGenerationRef.current
+        return () =>
+            generation === refreshGenerationRef.current &&
+            !downloadDialogOpenRef.current
+    }
 
     const restoreScrollGuard = () => {
         const guard = scrollGuard.current
@@ -330,8 +348,10 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
     }
 
     const refreshEngineStatus = async () => {
+        const isCurrent = makeRefreshGuard()
         try {
             const status = await getLocalAsrEngineStatus()
+            if (!isCurrent()) return
             setEngineStatus(status)
         } catch (err) {
             console.warn("[localAsr] engine status query failed", err)
@@ -339,8 +359,10 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
     }
 
     const refreshFoundryStatus = async () => {
+        const isCurrent = makeRefreshGuard()
         try {
             const status = await getFoundryLocalAsrStatus()
+            if (!isCurrent()) return
             setFoundryStatus(status)
             if (
                 !foundrySelectionDirty.current &&
@@ -350,6 +372,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
                 void refreshFoundryModelDir(status.activeModel)
             }
         } catch (err) {
+            if (!isCurrent()) return
             const message = err instanceof Error ? err.message : String(err)
             setFoundryStatus({
                 providerId: "foundry-local-whisper",
@@ -365,8 +388,10 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
     }
 
     const refreshFoundryCatalog = async () => {
+        const isCurrent = makeRefreshGuard()
         try {
             const catalog = await getFoundryLocalAsrCatalog()
+            if (!isCurrent()) return
             setFoundryCatalog(catalog)
         } catch (err) {
             console.warn("[localAsr] Foundry catalog query failed", err)
@@ -376,8 +401,10 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
     const refreshFoundryModelDir = async (
         modelAlias: FoundryLocalAsrModelAlias,
     ) => {
+        const isCurrent = makeRefreshGuard()
         try {
             const dir = await getFoundryLocalAsrModelDir(modelAlias)
+            if (!isCurrent()) return
             setFoundryModelDir((current) => {
                 if (selectedFoundryAliasRef.current !== modelAlias) {
                     return current
@@ -391,6 +418,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
                 }
             })
         } catch (err) {
+            if (!isCurrent()) return
             console.warn("[localAsr] Foundry model dir query failed", err)
             setFoundryModelDir((current) =>
                 selectedFoundryAliasRef.current === modelAlias &&
@@ -402,8 +430,10 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
     }
 
     const refreshSherpaStatus = async () => {
+        const isCurrent = makeRefreshGuard()
         try {
             const status = await getSherpaOnnxAsrStatus()
+            if (!isCurrent()) return
             setSherpaStatus(status)
             if (
                 !sherpaSelectionDirty.current &&
@@ -413,6 +443,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
                 void refreshSherpaModelDir(status.activeModel)
             }
         } catch (err) {
+            if (!isCurrent()) return
             const message = err instanceof Error ? err.message : String(err)
             setSherpaStatus({
                 providerId: "sherpa-onnx-local",
@@ -426,8 +457,10 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
     }
 
     const refreshSherpaCatalog = async () => {
+        const isCurrent = makeRefreshGuard()
         try {
             const catalog = await getSherpaOnnxAsrCatalog()
+            if (!isCurrent()) return
             setSherpaCatalog(catalog)
         } catch (err) {
             console.warn("[localAsr] Sherpa catalog query failed", err)
@@ -435,8 +468,10 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
     }
 
     const refreshSherpaModelDir = async (modelAlias: string) => {
+        const isCurrent = makeRefreshGuard()
         try {
             const dir = await getSherpaOnnxAsrModelDir(modelAlias)
+            if (!isCurrent()) return
             setSherpaModelDir((current) => (current === dir ? current : dir))
         } catch (err) {
             console.warn("[localAsr] Sherpa model dir query failed", err)
@@ -444,12 +479,15 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
     }
 
     const refresh = async () => {
+        const isCurrent = makeRefreshGuard()
         try {
+            if (!isCurrent()) return
             setError(null)
             const [s, list] = await Promise.all([
                 getLocalAsrSettings(),
                 listLocalAsrModels(),
             ])
+            if (!isCurrent()) return
             const supportedModels = list.filter((model) =>
                 isLocalAsrModelSupportedOnOs(model.id, OS),
             )
@@ -459,6 +497,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
                 supportedModels.map(async (m) => {
                     try {
                         const dir = await getLocalAsrModelDir(m.id)
+                        if (!isCurrent()) return
                         setModelDirs((current) =>
                             current[m.id] === dir
                                 ? current
@@ -490,11 +529,14 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
                 }),
             )
         } catch (e) {
+            if (!isCurrent()) return
             setError(e instanceof Error ? e.message : String(e))
         }
     }
 
     const ensureRemoteSize = async (modelId: string, mirror: string) => {
+        const isCurrent = makeRefreshGuard()
+        if (!isCurrent()) return
         setRemoteSizes((prev) => {
             if (prev[modelId] && !prev[modelId].error) return prev
             return {
@@ -509,6 +551,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
         })
         try {
             const info = await fetchLocalAsrRemoteInfo(modelId, mirror)
+            if (!isCurrent()) return
             setRemoteSizes((prev) => ({
                 ...prev,
                 [modelId]: {
@@ -519,6 +562,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
                 },
             }))
         } catch (e) {
+            if (!isCurrent()) return
             setRemoteSizes((prev) => ({
                 ...prev,
                 [modelId]: {
@@ -561,6 +605,8 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
         modelAlias: string,
         mirror: string,
     ) => {
+        const isCurrent = makeRefreshGuard()
+        if (!isCurrent()) return
         setSherpaRemoteSizes((prev) => {
             if (prev[modelAlias] && !prev[modelAlias].error) return prev
             return {
@@ -575,6 +621,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
         })
         try {
             const info = await fetchSherpaOnnxAsrRemoteInfo(modelAlias, mirror)
+            if (!isCurrent()) return
             setSherpaRemoteSizes((prev) => ({
                 ...prev,
                 [modelAlias]: {
@@ -585,6 +632,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
                 },
             }))
         } catch (e) {
+            if (!isCurrent()) return
             setSherpaRemoteSizes((prev) => ({
                 ...prev,
                 [modelAlias]: {
@@ -599,14 +647,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
 
     useEffect(() => {
         void refresh()
-        // 3s 轮询磁盘状态：模型被外部删除 / 下载中断时前端自动跟随（删除后
-        // 看板选中自动回落、下拉回到引擎级入口），不用等重开页面。qwen3 的
-        // list 是本地 fs walk，很轻；远端尺寸有缓存不会重复请求。
-        const pollTimer = window.setInterval(() => {
-            void refresh()
-        }, 3000)
         return () => {
-            window.clearInterval(pollTimer)
             if (scrollGuardCleanup.current) scrollGuardCleanup.current()
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -620,7 +661,10 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
         const pollTimer = window.setInterval(() => {
             void refresh()
         }, 3000)
-        return () => window.clearInterval(pollTimer)
+        return () => {
+            refreshGenerationRef.current += 1
+            window.clearInterval(pollTimer)
+        }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [downloadDialogOpen])
 
@@ -1987,7 +2031,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
             null
         if (!dialogEntry || dialogEntry.isDownloaded) return
         dispatchEntryAction(dialogEntry, "download")
-        setDownloadDialogOpen(false)
+        setDownloadDialog(false)
     }
 
     const selectedEntryRemote = selectedEntry
@@ -2046,8 +2090,6 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
                 </Card>
             )}
 
-            {supportsQwen3Mlx && <MetalToolchainGuide />}
-
             {/* ─── 模型管理看板：左侧模型选择（竖排，已下载打绿勾），右侧详情
                  （HF 实时抓取的尺寸/文件数）+ 操作。全平台归一化（Qwen3 /
                  sherpa-onnx / foundry），作为设置里的单独板块而非独立窗口。 ─── */}
@@ -2078,7 +2120,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
                             // 立刻反映到列表与详情，不等 3s 轮询。
                             void refresh()
                         }}
-                        onOpenDownload={() => setDownloadDialogOpen(true)}
+                        onOpenDownload={() => setDownloadDialog(true)}
                         downloadDisabled={
                             busyModelId !== null ||
                             sherpaBusy !== null ||
@@ -2503,7 +2545,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
                         return { status: "ok" as const, card: state }
                     }}
                     onStart={startDownloadFromDialog}
-                    onClose={() => setDownloadDialogOpen(false)}
+                    onClose={() => setDownloadDialog(false)}
                 />
             )}
 

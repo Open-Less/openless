@@ -13,19 +13,6 @@ use crate::asr::RawTranscript;
 pub const MODEL_ID: &str = "whisper-large-v3-turbo";
 const QUANTIZED_MODEL_FILE: &str = "ggml-large-v3-turbo-q5_0.bin";
 
-/// 模型默认放 OpenLess 的统一模型目录；也允许用环境变量临时指定现有模型文件，
-/// 便于把 Input0 已下载的文件迁移过来而不复制 1.5GB 数据。
-pub fn model_path() -> Result<PathBuf> {
-    if let Some(path) = std::env::var_os("OPENLESS_WHISPER_MODEL_PATH") {
-        return Ok(PathBuf::from(path));
-    }
-    model_path_for_model(MODEL_ID)
-}
-
-pub fn model_ready() -> bool {
-    model_path().map(|path| path.is_file()).unwrap_or(false)
-}
-
 pub fn model_path_for_model(model_id: &str) -> Result<PathBuf> {
     let id = crate::asr::local::ModelId::from_str(model_id)
         .filter(|id| id.is_whisper())

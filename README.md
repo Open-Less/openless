@@ -62,23 +62,39 @@
 <table align="center">
   <tr>
     <td align="center" width="170">
-      <a href="https://tripmc.top/" target="_blank" rel="noopener">
-        <img src="assets/people/tripmc.png" width="80" height="80" alt="TRIP" /><br/>
-        <strong>TRIP</strong>
-      </a><br/>
-      <sub>tripmc.top</sub>
+      <img src="assets/people/tripmc.png" width="80" height="80" alt="TRIP" /><br/>
+      <strong><a href="https://tripmc.top/" target="_blank" rel="noopener">TRIP</a></strong><br/>
+      <sub>Author</sub>
     </td>
     <td align="center" width="170">
-      <a href="https://chris233.qzz.io" target="_blank" rel="noopener">
-        <img src="assets/people/Chris233.png" width="80" height="80" alt="Chris233" /><br/>
-        <strong>Chris233</strong>
-      </a><br/>
-      <sub>chris233.qzz.io</sub>
+      <img src="assets/people/Chris233.png" width="80" height="80" alt="Chris233" /><br/>
+      <strong><a href="https://github.com/H-Chris233" target="_blank" rel="noopener">Chris233</a></strong><br/>
+      <sub>Author / Maintainer</sub>
+    </td>
+    <td align="center" width="170">
+      <img src="https://image.bigsong.site/file/1787214963742_b40cd86b033a60bcc8562f7f053c4900.jpg" width="80" height="80" alt="bigsong" /><br/>
+      <strong><a href="https://bigsong.site" target="_blank" rel="noopener">bigsong</a></strong><br/>
+      <sub>Contributor / Tester</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="170">
+      <img src="https://github.com/HKLHaoBin.png" width="80" height="80" alt="HKLHaoBin" /><br/>
+      <strong><a href="https://github.com/HKLHaoBin" target="_blank" rel="noopener">HKLHaoBin</a></strong><br/>
+      <sub>Android author</sub>
+    </td>
+    <td align="center" width="170">
+      <img src="assets/people/cooper.png" width="80" height="80" alt="Cooper" /><br/>
+      <strong><a href="https://github.com/Cooper-X-Oak" target="_blank" rel="noopener">Cooper</a></strong><br/>
+      <sub>Contributor</sub>
+    </td>
+    <td align="center" width="170">
+      <img src="https://github.com/aeoform.png" width="80" height="80" alt="aeoform" /><br/>
+      <strong><a href="https://github.com/aeoform" target="_blank" rel="noopener">aeoform</a></strong><br/>
+      <sub>Contributor</sub>
     </td>
   </tr>
 </table>
-
----
 
 OpenLess is a cross-platform (macOS and Windows) voice-input application — a fully open-source alternative to commercial tools such as [Typeless](https://www.typeless.com/), [Wispr Flow](https://wisprflow.ai), [Lazy](https://heylazy.com), and Superwhisper. Official site: [openless.top](https://openless.top).
 

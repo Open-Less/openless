@@ -2,7 +2,7 @@
 // LocalAsr/index.tsx (behavior-preserving move). All are props-driven and
 // stateless beyond local render memoization.
 
-import { useMemo, useState } from "react"
+import { useMemo } from "react"
 import { createPortal } from "react-dom"
 import { useTranslation } from "react-i18next"
 import {
@@ -16,70 +16,6 @@ import { Btn, Card, Collapsible, Pill } from "../_atoms"
 import { Icon } from "../../components/Icon"
 import { formatBytes } from "./helpers"
 import type { RemoteSize } from "./types"
-
-export function MetalToolchainGuide() {
-    const { t } = useTranslation()
-    const [copied, setCopied] = useState(false)
-    const command = "xcodebuild -downloadComponent MetalToolchain"
-
-    const copyCommand = async () => {
-        try {
-            await navigator.clipboard.writeText(command)
-            setCopied(true)
-            window.setTimeout(() => setCopied(false), 1600)
-        } catch {
-            // 命令仍然直接显示在 code block 中，剪贴板不可用时不阻断引导。
-        }
-    }
-
-    return (
-        <Collapsible
-            title={t("localAsr.metalToolchainTitle")}
-            desc={t("localAsr.metalToolchainDesc")}
-            defaultOpen={false}
-        >
-            <div
-                style={{
-                    padding: "0 18px 16px",
-                    fontSize: 12.5,
-                    color: "var(--ol-ink-2)",
-                    lineHeight: 1.6,
-                }}
-            >
-                <div style={{ marginBottom: 8 }}>
-                    {t("localAsr.metalToolchainStep")}
-                </div>
-                <div
-                    style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 8,
-                        flexWrap: "wrap",
-                    }}
-                >
-                    <code
-                        style={{
-                            padding: "6px 8px",
-                            borderRadius: 6,
-                            background: "rgba(0,0,0,0.06)",
-                            fontSize: 11.5,
-                        }}
-                    >
-                        {command}
-                    </code>
-                    <Btn variant="ghost" size="sm" onClick={() => void copyCommand()}>
-                        {copied
-                            ? t("localAsr.metalToolchainCopied")
-                            : t("localAsr.metalToolchainCopy")}
-                    </Btn>
-                </div>
-                <div style={{ marginTop: 8, color: "var(--ol-ink-4)" }}>
-                    {t("localAsr.metalToolchainVerify")}
-                </div>
-            </div>
-        </Collapsible>
-    )
-}
 
 export function FoundryPrepareProgressBlock({
     progress,
