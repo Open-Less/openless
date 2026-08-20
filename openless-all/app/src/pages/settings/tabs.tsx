@@ -4,6 +4,7 @@
 import { useTranslation } from 'react-i18next';
 import { useEffect, useState } from 'react';
 import { RecordingInputSection } from './RecordingInputSection';
+import { RemoteInputSection } from './RemoteInputSection';
 import { ShortcutsSection } from './ShortcutsSection';
 import { SelectionPolishSection } from './SelectionPolishSection';
 import { LanguageSection } from './LanguageSection';
@@ -36,14 +37,16 @@ function usePlatformCaps(): PlatformCapabilities | null {
   return platformCaps;
 }
 
-// 通用：录音与输入 · 快捷键 · 主题 · 语言。
+// 通用：录音与输入 · 远程输入 · 快捷键 · 主题 · 语言。
 export function GeneralTab() {
   const platformCaps = usePlatformCaps();
   const showDesktopShortcuts = platformCaps?.supportsDesktopHotkey === true;
+  const showRemoteInput = platformCaps?.platform === 'desktop';
 
   return (
     <>
       <RecordingInputSection />
+      {showRemoteInput && <RemoteInputSection />}
       <SelectionPolishSection />
       {showDesktopShortcuts && <ShortcutsSection />}
       <ThemeSection />
