@@ -199,6 +199,7 @@ export type {
 } from "./coding-agent"
 export {
     codingAgentDetect,
+    codingAgentDetectCli,
     codingAgentDetectOpencode,
     codingAgentListOpencodeModels,
     codingAgentRunTest,

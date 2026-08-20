@@ -215,7 +215,10 @@ export type QaHotkeyBinding = ShortcutBinding;
 /** 自定义录音组合键绑定。当 hotkey.trigger == 'custom' 时使用。 */
 export type ComboBinding = ShortcutBinding;
 
-export type CodingAgentProviderId = "claude-code-cli" | "opencode-cli";
+export type CodingAgentProviderId =
+  | "claude-code-cli"
+  | "opencode-cli"
+  | "codex-cli";
 export type CodingAgentPermissionMode =
   | "plan"
   | "default"
@@ -415,9 +418,12 @@ export interface UserPreferences {
   stylePackHotkeys: StylePackHotkey[];
   /** Less Computer：是否启用。默认关闭。 */
   codingAgentEnabled: boolean;
-  /** Agent 后端：claude-code-cli（默认）/ opencode-cli。 */
+  /** Agent 后端：claude-code-cli（默认）/ opencode-cli / codex-cli。 */
   codingAgentProvider: CodingAgentProviderId;
-  /** Agent 模型，null = 运行时取便宜默认（sonnet）。 */
+  /**
+   * Agent 模型，null = 交给后端自己的默认。
+   * Claude 走别名（sonnet 等），OpenCode 要 `provider/model`，Codex 收裸模型名。
+   */
   codingAgentModel: string | null;
   /** 权限模式：plan/default/acceptEdits/bypassPermissions。 */
   codingAgentPermissionMode: CodingAgentPermissionMode;

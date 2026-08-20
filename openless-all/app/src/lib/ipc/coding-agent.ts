@@ -38,6 +38,25 @@ export function codingAgentDetectOpencode(exe?: string): Promise<OpenCodeDetecti
     )
 }
 
+/**
+ * 检测 Codex 是否安装。与 OpenCode 共用同一个检测结果形状。
+ * `provider` 传 prefs 里的后端 id。
+ */
+export function codingAgentDetectCli(
+    provider: string,
+    exe?: string,
+): Promise<OpenCodeDetection> {
+    return invokeOrMock(
+        "coding_agent_detect_cli",
+        { provider, exe },
+        () => ({
+            installed: false,
+            version: null,
+            exe: exe || "codex",
+        }),
+    )
+}
+
 /** 拉取当前 OpenCode 配置可用的 `provider/model` 列表。 */
 export function codingAgentListOpencodeModels(
     exe?: string,
