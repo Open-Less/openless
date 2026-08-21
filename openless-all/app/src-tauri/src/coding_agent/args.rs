@@ -58,7 +58,7 @@ impl CodingAgentProvider {
     pub fn max_budget_usd(self) -> Option<f64> {
         match self {
             Self::ClaudeCodeCli => Some(2.0),
-            Self::OpenCodeCli | Self::CodexCli => None,
+            Self::OpenCodeCli | Self::CodexCli | Self::DshCli => None,
         }
     }
 }
@@ -255,6 +255,7 @@ mod tests {
         );
         assert_eq!(CodingAgentProvider::OpenCodeCli.max_budget_usd(), None);
         assert_eq!(CodingAgentProvider::CodexCli.max_budget_usd(), None);
+        assert_eq!(CodingAgentProvider::DshCli.max_budget_usd(), None);
         assert_eq!(CodingAgentRequest::new("s", "p").timeout_secs, 300);
     }
 

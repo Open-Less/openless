@@ -13,7 +13,7 @@
 //!
 //! dsh 是插件栈（cordis）架构，profile 由一层层 patch 叠成，`--patch <file>` 就是官方
 //! 留给外部叠自己那层的入口。我们用它挂上 [`TAP_PLUGIN_JS`]——那是
-//! [dsh-jsonl](https://github.com/bigsongeth/dsh-jsonl) 的一份逐字副本：一个订阅
+//! [dsh-jsonl](https://github.com/bigsongeth/dsh-jsonl) 的带来源与 MIT 许可头副本：一个订阅
 //! `session/event` 的插件，把事件按有版本的公开 schema 打成 NDJSON 到 **stderr**，
 //! stdout 的「只打最终文本」契约原样不动。
 //!
@@ -32,7 +32,8 @@
 //!
 //! # 护栏
 //!
-//! dsh 没有逐命令 deny 清单，只有三档沙箱，经 `DSH_PERMISSION_MODE` 环境变量注入。
+//! dsh 没有逐命令 deny 清单，沙箱经 `DSH_PERMISSION_MODE` 环境变量注入。OpenLess 只开放
+//! `read-only` / `workspace-write` 两档；遗留权限值统一 fail-closed 到只读。
 //!
 //! **要说准它到底挡什么**：`workspace-write` 下的可写根被 dsh 写死成
 //! `[工作目录, "/tmp", $TMPDIR]`（见 `@deepseek-ai/dsh-sandbox` 的 `writableRoots`），
@@ -90,18 +91,28 @@ const TAP_PLUGIN_JS: &str = include_str!("vendor/dsh-jsonl.js");
 /// 权限模式 → `DSH_PERMISSION_MODE` 取值。
 ///
 /// dsh 的 `dsh-sandbox-policy` 插件读这个环境变量，沙箱根取子进程的工作目录
-/// （`workspaceRoot: process.cwd()`）。三档语义与 Codex 的 `-s` 一致：
+/// （`workspaceRoot: process.cwd()`）。OpenLess 只开放两档，语义与 Codex 的 `-s` 一致：
 /// - `Plan` → `read-only`
-/// - `Default` / `AcceptEdits` → `workspace-write`（默认档）
-/// - `BypassPermissions` → `danger-full-access`（语音路径已在 dictation 层钳制掉）
+/// - `AcceptEdits` → `workspace-write`
+/// - 遗留的 `Default` / `BypassPermissions` → `read-only`（fail-closed）
 pub fn dsh_permission_mode(mode: CodingAgentPermissionMode) -> &'static str {
     match mode {
-        CodingAgentPermissionMode::Plan => "read-only",
-        CodingAgentPermissionMode::Default | CodingAgentPermissionMode::AcceptEdits => {
-            "workspace-write"
-        }
-        CodingAgentPermissionMode::BypassPermissions => "danger-full-access",
+        CodingAgentPermissionMode::AcceptEdits => "workspace-write",
+        CodingAgentPermissionMode::Plan
+        | CodingAgentPermissionMode::Default
+        | CodingAgentPermissionMode::BypassPermissions => "read-only",
     }
+}
+
+fn configure_dsh_environment(
+    cmd: &mut tokio::process::Command,
+    permission_mode: CodingAgentPermissionMode,
+) {
+    cmd.env("DSH_PERMISSION_MODE", dsh_permission_mode(permission_mode))
+        // stdout 必须只保留 dsh 的最终文本；不允许继承用户环境把 JSONL 改到 stdout/文件。
+        .env("DSH_JSONL_OUT", "stderr")
+        // 原始事件可能包含不必要的内部数据，OpenLess 只消费公开 schema。
+        .env_remove("DSH_JSONL_RAW");
 }
 
 /// 构造 `dsh` 的命令行参数（不含可执行文件本身，也不含 prompt——prompt 走 patch 文件）。
@@ -232,6 +243,34 @@ fn summarize_stderr(lines: &[String]) -> String {
     lines.last().map(clean).unwrap_or_default()
 }
 
+#[derive(Default)]
+struct DshProtocolState {
+    accumulated: String,
+    protocol_error: Option<String>,
+}
+
+impl DshProtocolState {
+    fn observe(&mut self, event: CodingAgentEvent) -> CodingAgentEvent {
+        match &event {
+            CodingAgentEvent::Delta { text, .. } => self.accumulated.push_str(text),
+            CodingAgentEvent::Error { message, .. } => {
+                if self.protocol_error.is_none() {
+                    self.protocol_error = Some(message.clone());
+                }
+            }
+            _ => {}
+        }
+        event
+    }
+
+    fn finish(&self) -> Result<(), CodingAgentError> {
+        match &self.protocol_error {
+            Some(message) => Err(CodingAgentError::Protocol(message.clone())),
+            None => Ok(()),
+        }
+    }
+}
+
 /// 一次运行用的临时目录：插件 JS + patch YAML。Drop 时整个删掉。
 struct TapWorkspace {
     dir: PathBuf,
@@ -277,10 +316,9 @@ pub async fn run_dsh_agent(
     let workspace = TapWorkspace::create(&req.prompt).map_err(CodingAgentError::Io)?;
 
     let args = build_dsh_args(&workspace.patch_path);
-    let mut cmd = augmented_command(exe);
+    let mut cmd = augmented_command(exe).await;
+    configure_dsh_environment(&mut cmd, req.permission_mode);
     cmd.args(&args)
-        // 护栏：沙箱档位。沙箱根 = 下面设的 current_dir。
-        .env("DSH_PERMISSION_MODE", dsh_permission_mode(req.permission_mode))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -319,11 +357,10 @@ pub async fn run_dsh_agent(
     });
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(req.timeout_secs.max(1));
-    let mut accumulated = String::new();
+    let mut protocol_state = DshProtocolState::default();
     // dsh 自己打到 stderr 的非 JSON 行：失败时拿来做错误摘要。
     let mut plain_stderr: Vec<String> = Vec::new();
     let mut saw_tap = false;
-    let mut got_error = false;
     let mut outcome: Result<(), CodingAgentError> = Ok(());
 
     loop {
@@ -341,7 +378,6 @@ pub async fn run_dsh_agent(
                     session_id: req.session_id.clone(),
                     message: format!("运行超时（{}s）", req.timeout_secs),
                 });
-                got_error = true;
                 outcome = Err(CodingAgentError::Timeout(req.timeout_secs));
                 break;
             }
@@ -356,12 +392,7 @@ pub async fn run_dsh_agent(
                         }
                         if let Some(ev) = parse_dsh_tap_line(&req.session_id, &l) {
                             saw_tap = true;
-                            match &ev {
-                                CodingAgentEvent::Delta { text, .. } => accumulated.push_str(text),
-                                CodingAgentEvent::Error { .. } => got_error = true,
-                                _ => {}
-                            }
-                            let _ = sink.send(ev);
+                            let _ = sink.send(protocol_state.observe(ev));
                         } else if let Some(schema) = parse_dsh_schema_version(&l) {
                             saw_tap = true;
                             if schema != SUPPORTED_DSH_JSONL_SCHEMA {
@@ -407,10 +438,10 @@ pub async fn run_dsh_agent(
     }
 
     if outcome.is_ok() {
-        if status.success() && !got_error {
+        if status.success() && protocol_state.protocol_error.is_none() {
             // 最终文本优先取 stdout（dsh 稳定契约）；tap 挂了就退回累计的 delta。
             let text = if stdout_text.trim().is_empty() {
-                accumulated.trim().to_string()
+                protocol_state.accumulated.trim().to_string()
             } else {
                 stdout_text.trim().to_string()
             };
@@ -422,7 +453,7 @@ pub async fn run_dsh_agent(
             });
             return Ok(());
         }
-        if !status.success() && !got_error {
+        if !status.success() && protocol_state.protocol_error.is_none() {
             let summary = summarize_stderr(&plain_stderr);
             let _ = sink.send(CodingAgentEvent::Error {
                 session_id: req.session_id.clone(),
@@ -436,7 +467,7 @@ pub async fn run_dsh_agent(
         }
     }
 
-    outcome
+    outcome.and_then(|_| protocol_state.finish())
 }
 
 #[cfg(test)]
@@ -508,12 +539,34 @@ mod tests {
         );
         assert_eq!(
             dsh_permission_mode(CodingAgentPermissionMode::Default),
-            "workspace-write"
+            "read-only"
         );
         assert_eq!(
             dsh_permission_mode(CodingAgentPermissionMode::BypassPermissions),
-            "danger-full-access"
+            "read-only"
         );
+    }
+
+    #[test]
+    fn child_env_forces_jsonl_to_stderr_and_disables_raw_events() {
+        let mut cmd = tokio::process::Command::new("dsh");
+        configure_dsh_environment(&mut cmd, CodingAgentPermissionMode::AcceptEdits);
+        let envs: Vec<(String, Option<String>)> = cmd
+            .as_std()
+            .get_envs()
+            .map(|(key, value)| {
+                (
+                    key.to_string_lossy().into_owned(),
+                    value.map(|value| value.to_string_lossy().into_owned()),
+                )
+            })
+            .collect();
+        assert!(envs.contains(&(
+            "DSH_PERMISSION_MODE".into(),
+            Some("workspace-write".into())
+        )));
+        assert!(envs.contains(&("DSH_JSONL_OUT".into(), Some("stderr".into()))));
+        assert!(envs.contains(&("DSH_JSONL_RAW".into(), None)));
     }
 
     #[test]
@@ -529,6 +582,12 @@ mod tests {
         assert!(
             TAP_PLUGIN_JS.contains("do not edit here"),
             "vendor 文件缺少「别在这儿改」的头部标记"
+        );
+        assert!(
+            TAP_PLUGIN_JS.contains("Copyright (c) 2026 bigsong")
+                && TAP_PLUGIN_JS.contains("Permission is hereby granted")
+                && TAP_PLUGIN_JS.contains("THE SOFTWARE IS PROVIDED \"AS IS\""),
+            "vendor 文件必须保留上游 MIT 版权与许可全文"
         );
     }
 
@@ -546,8 +605,7 @@ mod tests {
             }
             assert!(!line.contains("require("), "插件不能有 require: {line}");
         }
-        // stdout 属于 dsh 的最终文本；插件默认写 stderr（`DSH_JSONL_OUT=stdout` 是用户
-        // 自己显式选的，OpenLess 不会设它）。
+        // stdout 属于 dsh 的最终文本；插件默认写 stderr，运行器也会强制固定到 stderr。
         assert!(TAP_PLUGIN_JS.contains("process.stderr"));
         // 订阅点就是这一个。
         assert!(TAP_PLUGIN_JS.contains("session/event"));
@@ -629,6 +687,29 @@ mod tests {
                 message: "dsh 本轮执行失败".into()
             })
         );
+    }
+
+    #[test]
+    fn failed_turn_is_emitted_and_returned_as_protocol_error() {
+        let mut state = DshProtocolState::default();
+        let event = parse_dsh_tap_line(
+            "s1",
+            r#"{"v":1,"seq":9,"ts":1,"type":"turn.end","turn":1,"ok":false,"error":{"message":"上游超时"}}"#,
+        )
+        .expect("失败终局必须可解析");
+        let emitted = state.observe(event);
+        assert_eq!(
+            emitted,
+            CodingAgentEvent::Error {
+                session_id: "s1".into(),
+                message: "上游超时".into(),
+            }
+        );
+
+        assert!(matches!(
+            state.finish(),
+            Err(CodingAgentError::Protocol(ref message)) if message == "上游超时"
+        ));
     }
 
     #[test]

@@ -1592,7 +1592,7 @@ async fn run_less_computer_once(
     req.model = model.map(|m| m.to_string());
     req.permission_mode = mode;
     // 真实任务（开应用、多步操作、读写文件）常超过 120s → 老是「运行超时」。放宽到
-    // 5 分钟；仅 Claude CLI 能力支持美元硬上限，Codex/OpenCode 保持 None。
+    // 5 分钟；仅 Claude CLI 能力支持美元硬上限，Codex/OpenCode/dsh 保持 None。
     req.max_budget_usd = provider.max_budget_usd();
     req.timeout_secs = 300;
     // 连续对话需要保留会话：本轮保存（供下轮 --continue），第二轮起带 --continue 续上下文。

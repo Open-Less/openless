@@ -31,17 +31,23 @@ const PERMISSION_MODES: CodingAgentPermissionMode[] = [
   'default',
   'bypassPermissions',
 ]
-const CODEX_PERMISSION_MODES: CodingAgentPermissionMode[] = ['plan', 'acceptEdits']
+const SANDBOX_PERMISSION_MODES: CodingAgentPermissionMode[] = ['plan', 'acceptEdits']
+
+function isSandboxPermissionProvider(provider: CodingAgentProviderId) {
+  return provider === 'codex-cli' || provider === 'dsh-cli'
+}
 
 function permissionModesForProvider(provider: CodingAgentProviderId) {
-  return provider === 'codex-cli' ? CODEX_PERMISSION_MODES : PERMISSION_MODES
+  return isSandboxPermissionProvider(provider) ? SANDBOX_PERMISSION_MODES : PERMISSION_MODES
 }
 
 function normalizePermissionMode(
   provider: CodingAgentProviderId,
   mode: CodingAgentPermissionMode,
 ): CodingAgentPermissionMode {
-  return provider === 'codex-cli' && (mode === 'default' || mode === 'bypassPermissions') ? 'plan' : mode
+  return isSandboxPermissionProvider(provider) && (mode === 'default' || mode === 'bypassPermissions')
+    ? 'plan'
+    : mode
 }
 
 type OpenCodeModelsStatus = 'idle' | 'loading' | 'loaded' | 'error'
@@ -144,7 +150,7 @@ export function CodingAgentSection() {
   useEffect(() => {
     if (
       !prefs ||
-      provider !== 'codex-cli' ||
+      !isSandboxPermissionProvider(provider) ||
       (prefs.codingAgentPermissionMode !== 'default' && prefs.codingAgentPermissionMode !== 'bypassPermissions')
     ) {
       return
@@ -284,7 +290,7 @@ export function CodingAgentSection() {
               options={permissionModesForProvider(provider).map(m => ({
                 value: m,
                 label: t(
-                  provider === 'codex-cli'
+                  isSandboxPermissionProvider(provider)
                     ? `settings.codingAgent.codexMode.${m === 'acceptEdits' ? 'workspaceWrite' : 'plan'}`
                     : `settings.codingConsole.mode.${m}`,
                 ),
