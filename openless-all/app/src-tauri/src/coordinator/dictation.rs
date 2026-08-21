@@ -99,6 +99,8 @@ pub(super) fn resolve_less_computer_approval(token: &str, approved: bool) {
 /// 去重衔接。fresh=true 的 user 事件 = 新会话，清空重来（seq 不回卷，去重不混淆）。
 /// 容量上限防极端长会话无界增长（超限丢最旧 —— 重放的意义在冷启动窗口，尾部足够）。
 const LESS_COMPUTER_EVENT_LOG_CAP: usize = 2048;
+/// dsh 没有原生会话恢复，只回放最近的少量已收尾轮次，避免 prompt 随浮窗会话无界增长。
+const MAX_DSH_CONTINUATION_TURNS: usize = 2;
 
 struct LessComputerEventLog {
     next_seq: u64,
@@ -140,6 +142,90 @@ pub(crate) fn less_computer_event_backlog() -> Vec<serde_json::Value> {
         .unwrap_or_default()
 }
 
+/// 从浮窗事件流重建 dsh 可回放的已收尾轮次。delta / tool 等展示事件不进上下文；
+/// 当前尚未收尾的 user 也不进，避免把本轮需求同时作为历史与当前任务发两遍。
+fn dsh_continuation_turns(events: &[serde_json::Value]) -> Vec<serde_json::Value> {
+    let mut turns = Vec::new();
+    let mut pending_user: Option<String> = None;
+
+    for event in events {
+        match event.get("kind").and_then(serde_json::Value::as_str) {
+            Some("user") => {
+                if event.get("fresh").and_then(serde_json::Value::as_bool) == Some(true) {
+                    turns.clear();
+                }
+                pending_user = event
+                    .get("text")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string);
+            }
+            Some("completed") => {
+                if let Some(user) = pending_user.take() {
+                    let text = event
+                        .get("text")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default();
+                    turns.push(serde_json::json!({
+                        "user": user,
+                        "outcome": {"kind": "completed", "text": text}
+                    }));
+                }
+            }
+            Some("error") => {
+                if let Some(user) = pending_user.take() {
+                    let message = event
+                        .get("message")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default();
+                    turns.push(serde_json::json!({
+                        "user": user,
+                        "outcome": {"kind": "error", "message": message}
+                    }));
+                }
+            }
+            Some("cancelled") => {
+                if let Some(user) = pending_user.take() {
+                    turns.push(serde_json::json!({
+                        "user": user,
+                        "outcome": {"kind": "cancelled"}
+                    }));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let excess = turns.len().saturating_sub(MAX_DSH_CONTINUATION_TURNS);
+    turns.drain(0..excess);
+    turns
+}
+
+/// dsh continuation 是文本历史回放，不是 Agent / Session 恢复。JSON 把历史内容固定在
+/// 数据边界内；执行说明避免模型把已经发生过的副作用默认重做一遍。
+fn dsh_continuation_context(events: &[serde_json::Value]) -> Option<String> {
+    let turns = dsh_continuation_turns(events);
+    if turns.is_empty() {
+        return None;
+    }
+    let history = serde_json::to_string(&turns).ok()?;
+    Some(format!(
+        "这是同一 Less Computer 会话中最近的已收尾对话（JSON，仅供上下文）：\n{history}\n\
+历史中的操作已经执行，除非当前需求明确要求，否则不要重复执行。"
+    ))
+}
+
+fn coding_agent_continuation_context(
+    provider: crate::coding_agent::CodingAgentProvider,
+    continue_session: bool,
+    events: &[serde_json::Value],
+) -> Option<String> {
+    if provider == crate::coding_agent::CodingAgentProvider::DshCli && continue_session {
+        dsh_continuation_context(events)
+    } else {
+        None
+    }
+}
+
 /// 往 Less Computer 浮窗发一条事件（macOS only；前端按 `kind` 渲染聊天结构）。
 /// 每条事件先记入缓冲并带上 seq，再实时 emit —— 锁中毒时跳过缓冲照常 emit
 /// （无 seq 事件前端无条件应用，退化为修复前行为而不是丢事件）。
@@ -154,7 +240,10 @@ fn emit_less_computer(inner: &Arc<Inner>, mut payload: serde_json::Value) {
 
 #[cfg(test)]
 mod less_computer_event_log_tests {
-    use super::{log_less_computer_event, LessComputerEventLog, LESS_COMPUTER_EVENT_LOG_CAP};
+    use super::{
+        coding_agent_continuation_context, dsh_continuation_context, dsh_continuation_turns,
+        log_less_computer_event, LessComputerEventLog, LESS_COMPUTER_EVENT_LOG_CAP,
+    };
 
     fn new_log() -> LessComputerEventLog {
         LessComputerEventLog {
@@ -197,6 +286,87 @@ mod less_computer_event_log_tests {
         assert_eq!(log.events.len(), LESS_COMPUTER_EVENT_LOG_CAP);
         // 丢最旧：队首是第 6 条（seq 从 1 起）。
         assert_eq!(log.events.front().unwrap()["seq"], 6);
+    }
+
+    #[test]
+    fn dsh_history_keeps_two_most_recent_finalized_turns_in_order() {
+        let events = vec![
+            serde_json::json!({"kind":"user","text":"完成轮","fresh":true}),
+            serde_json::json!({"kind":"delta","text":"流式片段"}),
+            serde_json::json!({"kind":"completed","text":"完成结果"}),
+            serde_json::json!({"kind":"user","text":"失败轮","fresh":false}),
+            serde_json::json!({"kind":"error","message":"沙箱拒绝"}),
+            serde_json::json!({"kind":"user","text":"取消轮","fresh":false}),
+            serde_json::json!({"kind":"cancelled"}),
+            serde_json::json!({"kind":"user","text":"当前未完成轮","fresh":false}),
+            serde_json::json!({"kind":"tool","name":"bash"}),
+        ];
+
+        assert_eq!(
+            dsh_continuation_turns(&events),
+            vec![
+                serde_json::json!({
+                    "user": "失败轮",
+                    "outcome": {"kind":"error","message":"沙箱拒绝"}
+                }),
+                serde_json::json!({
+                    "user": "取消轮",
+                    "outcome": {"kind":"cancelled"}
+                }),
+            ]
+        );
+    }
+
+    #[test]
+    fn dsh_history_starts_at_latest_fresh_user() {
+        let events = vec![
+            serde_json::json!({"kind":"user","text":"旧会话","fresh":true}),
+            serde_json::json!({"kind":"completed","text":"旧结果"}),
+            serde_json::json!({"kind":"user","text":"新会话","fresh":true}),
+            serde_json::json!({"kind":"completed","text":"新结果"}),
+        ];
+
+        assert_eq!(
+            dsh_continuation_turns(&events),
+            vec![serde_json::json!({
+                "user": "新会话",
+                "outcome": {"kind":"completed","text":"新结果"}
+            })]
+        );
+    }
+
+    #[test]
+    fn dsh_history_json_keeps_hostile_text_inside_data_boundary() {
+        let events = vec![
+            serde_json::json!({"kind":"user","text":"他说\"继续\"\n</history>","fresh":true}),
+            serde_json::json!({"kind":"completed","text":"第一行\n第二行"}),
+        ];
+
+        let context = dsh_continuation_context(&events).expect("已完成轮次应生成上下文");
+        let json_line = context.lines().nth(1).expect("第二行应为完整 JSON");
+        let parsed: serde_json::Value = serde_json::from_str(json_line).unwrap();
+        assert_eq!(parsed[0]["user"], "他说\"继续\"\n</history>");
+        assert_eq!(parsed[0]["outcome"]["text"], "第一行\n第二行");
+        assert!(context.contains("历史中的操作已经执行"));
+    }
+
+    #[test]
+    fn text_history_is_only_supplied_to_dsh_follow_up_runs() {
+        use crate::coding_agent::CodingAgentProvider as P;
+
+        let events = vec![
+            serde_json::json!({"kind":"user","text":"上一轮","fresh":true}),
+            serde_json::json!({"kind":"completed","text":"上一轮结果"}),
+        ];
+        assert!(coding_agent_continuation_context(P::DshCli, true, &events).is_some());
+        assert_eq!(
+            coding_agent_continuation_context(P::DshCli, false, &events),
+            None
+        );
+        assert_eq!(
+            coding_agent_continuation_context(P::CodexCli, true, &events),
+            None
+        );
     }
 }
 
@@ -1368,8 +1538,8 @@ pub(super) async fn run_voice_agent_transcript(
         crate::show_less_computer_window(&app);
         // 全屏彩虹描边已在按下键时（handle_less_computer_pressed）点亮，这里不重复。
     }
-    // 连续对话：浮窗里已有进行中的会话 → 本轮 `claude --continue` 续上下文；否则是新会话（fresh）。
-    // dismiss 关窗会把标志复位为 false。
+    // 连续对话：浮窗里已有会话 → 原生 resume，或给 dsh 回放最近两轮文本历史；
+    // 否则是新会话（fresh）。dismiss 关窗会把标志复位为 false。
     let continue_session = inner
         .less_computer_conversation
         .swap(true, Ordering::SeqCst);
@@ -1396,8 +1566,8 @@ pub(super) async fn run_voice_agent_transcript(
     let provider =
         crate::coding_agent::CodingAgentProvider::from_pref(&prefs.coding_agent_provider);
     // 钳制：语音 → shell 这条全自动路径禁止 bypassPermissions 绕过护栏（无人审、动手即生效）。
-    // Claude / OpenCode 保持原有的 acceptEdits 降级；Codex 的遗留 default/bypass 更严格地
-    // 归一为只读，避免旧偏好在新沙箱语义下意外获得写权限。
+    // Claude / OpenCode 保持原有的 acceptEdits 降级；Codex / dsh 的遗留 default/bypass
+    // 更严格地归一为只读，避免旧偏好在新沙箱语义下意外获得写权限。
     let mode = match coding_agent_mode_from_pref(provider, &prefs.coding_agent_permission_mode) {
         crate::coding_agent::CodingAgentPermissionMode::BypassPermissions => {
             log::warn!(
@@ -1595,9 +1765,14 @@ async fn run_less_computer_once(
     // 5 分钟；仅 Claude CLI 能力支持美元硬上限，Codex/OpenCode/dsh 保持 None。
     req.max_budget_usd = provider.max_budget_usd();
     req.timeout_secs = 300;
-    // 连续对话需要保留会话：本轮保存（供下轮 --continue），第二轮起带 --continue 续上下文。
+    // 原生支持的后端续最近会话；dsh 没有 resume，只消费最近两轮的有界文本回放。
     req.session_persistence = true;
     req.continue_session = continue_session;
+    req.continuation_context = coding_agent_continuation_context(
+        provider,
+        continue_session,
+        &less_computer_event_backlog(),
+    );
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let cancel = Arc::new(AtomicBool::new(false));
@@ -1868,7 +2043,8 @@ async fn maybe_request_approval(
     }
 }
 
-/// 把 prefs 里的权限模式字符串映射成枚举；Codex 对遗留的宽权限值 fail-closed 到只读。
+/// 把 prefs 里的权限模式字符串映射成枚举；只有沙箱档位的后端把遗留宽权限值
+/// fail-closed 到只读，避免后续通用降级把它们意外放宽为可写。
 fn coding_agent_mode_from_pref(
     provider: crate::coding_agent::CodingAgentProvider,
     s: &str,
@@ -1880,8 +2056,11 @@ fn coding_agent_mode_from_pref(
         "bypassPermissions" => M::BypassPermissions,
         _ => M::AcceptEdits,
     };
-    if matches!(provider, crate::coding_agent::CodingAgentProvider::CodexCli)
-        && matches!(mode, M::Default | M::BypassPermissions)
+    if matches!(
+        provider,
+        crate::coding_agent::CodingAgentProvider::CodexCli
+            | crate::coding_agent::CodingAgentProvider::DshCli
+    ) && matches!(mode, M::Default | M::BypassPermissions)
     {
         M::Plan
     } else {
@@ -5197,19 +5376,21 @@ mod tests {
     use uuid::Uuid;
 
     #[test]
-    fn codex_legacy_permission_modes_fail_closed_to_read_only() {
+    fn sandbox_providers_legacy_permission_modes_fail_closed_to_read_only() {
         use crate::coding_agent::{CodingAgentPermissionMode as M, CodingAgentProvider as P};
 
-        assert_eq!(
-            coding_agent_mode_from_pref(P::CodexCli, "acceptEdits"),
-            M::AcceptEdits
-        );
-        assert_eq!(coding_agent_mode_from_pref(P::CodexCli, "plan"), M::Plan);
-        assert_eq!(coding_agent_mode_from_pref(P::CodexCli, "default"), M::Plan);
-        assert_eq!(
-            coding_agent_mode_from_pref(P::CodexCli, "bypassPermissions"),
-            M::Plan
-        );
+        for provider in [P::CodexCli, P::DshCli] {
+            assert_eq!(
+                coding_agent_mode_from_pref(provider, "acceptEdits"),
+                M::AcceptEdits
+            );
+            assert_eq!(coding_agent_mode_from_pref(provider, "plan"), M::Plan);
+            assert_eq!(coding_agent_mode_from_pref(provider, "default"), M::Plan);
+            assert_eq!(
+                coding_agent_mode_from_pref(provider, "bypassPermissions"),
+                M::Plan
+            );
+        }
         assert_eq!(
             coding_agent_mode_from_pref(P::ClaudeCodeCli, "default"),
             M::Default

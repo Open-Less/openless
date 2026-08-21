@@ -209,6 +209,7 @@ export function CodingAgentSection() {
                   ...prefs,
                   codingAgentProvider: nextProvider,
                   codingAgentModel: null,
+                  codingAgentExe: null,
                   codingAgentPermissionMode: normalizePermissionMode(
                     nextProvider,
                     prefs.codingAgentPermissionMode,

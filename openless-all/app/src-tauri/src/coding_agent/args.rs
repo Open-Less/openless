@@ -141,8 +141,11 @@ pub struct CodingAgentRequest {
     pub settings_json_path: Option<PathBuf>,
     /// 是否保留会话（false 时加 `--no-session-persistence`，快取用走 false 更快）。
     pub session_persistence: bool,
-    /// 续接最近一次会话（`--continue`）。Less Computer 连续对话用：第二轮起带上下文。
+    /// 续接当前 Less Computer 会话。支持原生恢复的后端翻译成各自的 continue/resume；
+    /// 不支持的后端可消费 [`Self::continuation_context`] 做有界文本回放。
     pub continue_session: bool,
+    /// 给不支持原生会话恢复的后端使用的有界文本历史。原生 resume 后端忽略。
+    pub continuation_context: Option<String>,
 }
 
 impl CodingAgentRequest {
@@ -163,6 +166,7 @@ impl CodingAgentRequest {
             settings_json_path: None,
             session_persistence: true,
             continue_session: false,
+            continuation_context: None,
         }
     }
 }

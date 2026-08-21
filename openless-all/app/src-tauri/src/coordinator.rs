@@ -1201,8 +1201,8 @@ struct Inner {
     remote_locale: Mutex<String>,
     #[cfg(not(mobile))]
     remote_no_insert: AtomicBool,
-    /// Less Computer 连续对话：true=浮窗里已有进行中的会话，下一轮 `claude --continue` 续上下文；
-    /// 关闭浮窗（dismiss）复位为 false，下次说话开新会话。
+    /// Less Computer 连续对话：true=浮窗里已有进行中的会话，下一轮用后端原生 resume
+    /// 或 dsh 的有界文本历史回放续上下文；关闭浮窗（dismiss）复位为 false。
     less_computer_conversation: AtomicBool,
 }
 
@@ -2200,7 +2200,7 @@ impl Coordinator {
     }
 
     /// 用户点 ✕ / 按 Esc 关 Less Computer 浮窗：隐藏窗口 + 结束连续对话
-    /// （下次说话开新会话，不再 --continue 续旧上下文）。
+    /// （下次说话开新会话，不再恢复或回放旧上下文）。
     pub fn less_computer_window_dismiss(&self) {
         self.inner
             .less_computer_conversation

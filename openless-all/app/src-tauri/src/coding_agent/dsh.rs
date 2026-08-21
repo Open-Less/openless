@@ -150,6 +150,17 @@ pub fn build_dsh_patch_yaml(plugin_js_path: &Path, prompt: &str) -> Result<Strin
     ))
 }
 
+/// dsh 的 headless runner 每次都会创建 fresh Agent，没有原生 resume。续接轮次把后端
+/// 提供的有界文本历史与当前任务合并；新会话即使误带了历史也必须忽略。
+fn dsh_task_for_request(req: &CodingAgentRequest) -> String {
+    if req.continue_session {
+        if let Some(context) = req.continuation_context.as_deref() {
+            return format!("{context}\n\n当前任务：\n{}", req.prompt);
+        }
+    }
+    req.prompt.clone()
+}
+
 /// 解析一行 dsh-jsonl 输出的 NDJSON（schema v1，见插件仓库的 SCHEMA.md）。
 ///
 /// 只认我们用得上的几种；**其余一律忽略**——这是 schema 的兼容性约定：消费者必须忽略
@@ -313,7 +324,8 @@ pub async fn run_dsh_agent(
 ) -> Result<(), CodingAgentError> {
     // prompt 与 tap 插件落盘。失败即中止：不是因为护栏（护栏走 env，见下），而是因为
     // prompt 本身就在这个文件里——写不出来就没有任务可跑。
-    let workspace = TapWorkspace::create(&req.prompt).map_err(CodingAgentError::Io)?;
+    let task = dsh_task_for_request(&req);
+    let workspace = TapWorkspace::create(&task).map_err(CodingAgentError::Io)?;
 
     let args = build_dsh_args(&workspace.patch_path);
     let mut cmd = augmented_command(exe).await;
@@ -492,6 +504,31 @@ mod tests {
         let args = build_dsh_args(Path::new("/tmp/x/p.yml"));
         assert!(!args.iter().any(|a| a.contains("危险的原话")));
         assert_eq!(args.len(), 5, "argv 只应有 profile/patch/占位任务，多一个都可疑");
+    }
+
+    #[test]
+    fn continuation_context_is_used_only_for_follow_up_runs() {
+        let mut req = CodingAgentRequest::new("s1", "CURRENT_TASK_MARKER");
+        req.continuation_context = Some("HISTORY_JSON_MARKER".into());
+
+        assert_eq!(dsh_task_for_request(&req), "CURRENT_TASK_MARKER");
+
+        req.continue_session = true;
+        assert_eq!(
+            dsh_task_for_request(&req),
+            "HISTORY_JSON_MARKER\n\n当前任务：\nCURRENT_TASK_MARKER"
+        );
+    }
+
+    #[test]
+    fn continuation_context_and_current_task_are_each_injected_once() {
+        let mut req = CodingAgentRequest::new("s1", "CURRENT_TASK_MARKER");
+        req.continue_session = true;
+        req.continuation_context = Some("HISTORY_JSON_MARKER".into());
+
+        let task = dsh_task_for_request(&req);
+        assert_eq!(task.matches("HISTORY_JSON_MARKER").count(), 1);
+        assert_eq!(task.matches("CURRENT_TASK_MARKER").count(), 1);
     }
 
     #[test]
