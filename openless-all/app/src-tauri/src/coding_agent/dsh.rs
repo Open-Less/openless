@@ -35,14 +35,24 @@
 //! dsh 没有逐命令 deny 清单，沙箱经 `DSH_PERMISSION_MODE` 环境变量注入。OpenLess 只开放
 //! `read-only` / `workspace-write` 两档；遗留权限值统一 fail-closed 到只读。
 //!
-//! **要说准它到底挡什么**：`workspace-write` 下的可写根被 dsh 写死成
-//! `[工作目录, "/tmp", $TMPDIR]`（见 `@deepseek-ai/dsh-sandbox` 的 `writableRoots`），
-//! 且**没有配置项能收掉那两个临时目录**——Codex 那边有 `-c sandbox_workspace_write.
-//! exclude_*` 可以收紧，dsh 没有对应物。家目录与系统路径确实挡得住（实测报
+//! **要说准它到底挡什么**——dsh 有**两道松紧不同的围栏**（实测 0.1.0-rc.6）：
+//!
+//! | 工具 | 可写范围 |
+//! |---|---|
+//! | `bash`（seatbelt 子进程沙箱） | 工作目录 + `/tmp` + `$TMPDIR` |
+//! | `write` / `edit`（进程内 fs 围栏） | 只有工作目录 |
+//!
+//! 那三个可写根被 dsh 写死在 `@deepseek-ai/dsh-sandbox` 的 `writableRoots` 里，
+//! **没有配置项能收掉那两个临时目录**——Codex 那边有 `-c sandbox_workspace_write.
+//! exclude_*` 可以收紧，dsh 没有对应物。家目录与系统路径两道围栏都挡得住（实测报
 //! `sandbox: file access denied under workspace-write mode`）。
 //!
 //! 所以对用户的措辞只能是「撞到限制会如实报错」，不能说成「写入限制在工作目录内」。
-//! 见 `live::tmp_is_writable_by_design_and_we_cannot_narrow_it`。
+//!
+//! 上面那张表**没有做成测试**，是有意的：验证它必然要让模型去写文件，而结果取决于模型
+//! 当次挑了 `bash` 还是 `write`——那种测试的红绿反映的是模型的心情，不是被测系统的行为。
+//! `live::sandbox_blocks_writes_outside_the_workspace` 打的是家目录，两道围栏都挡，
+//! 不受工具选择影响，那条才作数。
 //!
 //! # prompt 不进 argv
 //!
@@ -880,37 +890,6 @@ mod live {
         let _ = std::fs::remove_file(&victim);
         let _ = std::fs::remove_dir_all(&dir);
         assert!(!escaped, "沙箱失效：家目录下的文件被创建了 {}", victim.display());
-    }
-
-    #[tokio::test]
-    #[ignore = "打真实 dsh CLI：要花钱、要网络"]
-    async fn tmp_is_writable_by_design_and_we_cannot_narrow_it() {
-        // 这条不是在测我们的代码，是把 **dsh 的既有行为钉成契约**：workspace-write 下
-        // `/tmp` 与 `$TMPDIR` 可写，而且写死在 dsh 里、没有配置项能收掉（Codex 那边有
-        // `-c sandbox_workspace_write.exclude_*`，dsh 没有对应物）。
-        //
-        // 所以我们对用户的说法只能是「撞到限制会如实报错」，不能说成「写入限制在工作目录内」。
-        // 哪天 dsh 收紧了这条会红——那是好消息，届时删掉本测试并更新文档。
-        let dir = fixture_dir();
-        let target =
-            std::env::temp_dir().join(format!("openless-dsh-tmp-{}.txt", uuid::Uuid::new_v4()));
-        let c = run(
-            &format!(
-                "用 bash 执行：echo ok > {} 。做完只回答 DONE 或 BLOCKED。",
-                target.display()
-            ),
-            &dir,
-            CodingAgentPermissionMode::AcceptEdits,
-        )
-        .await;
-        println!("[dsh] 写 $TMPDIR 结果 completed={:?}", c.completed);
-        let wrote = target.exists();
-        let _ = std::fs::remove_file(&target);
-        let _ = std::fs::remove_dir_all(&dir);
-        assert!(
-            wrote,
-            "dsh 似乎已把 $TMPDIR 移出可写根——好事，请更新 dsh.rs 的护栏说明并删掉本测试"
-        );
     }
 
     #[tokio::test]
