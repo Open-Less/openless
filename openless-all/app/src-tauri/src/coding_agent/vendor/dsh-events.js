@@ -1,6 +1,6 @@
-// Vendored from github.com/bigsongeth/dsh-jsonl v0.1.0 — do not edit here.
-// Run scripts/vendor-dsh-jsonl.sh <path-to-checkout> to update, then bump
-// VENDORED_DSH_JSONL_VERSION in dsh.rs to match.
+// Vendored from github.com/bigsongeth/dsh-events v0.1.0 — do not edit here.
+// Run scripts/vendor-dsh-events.sh <path-to-checkout> to update, then bump
+// VENDORED_DSH_EVENTS_VERSION in dsh.rs to match.
 //
 // MIT License
 //
@@ -24,7 +24,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 //
-// dsh-jsonl — structured event output for `dsh --profile headless`.
+// dsh-events — structured event output for `dsh --profile headless`.
 //
 // `dsh --profile headless "<task>"` prints one line: the final assistant message.
 // Everything that happened on the way — file reads, commands, streaming text,
@@ -43,18 +43,18 @@ import { appendFileSync } from 'node:fs'
 export const SCHEMA_VERSION = 1
 
 /** Stable Cordis plugin name. */
-export const name = 'dsh-jsonl'
+export const name = 'dsh-events'
 
 /**
  * Where the NDJSON goes.
  *
  * Default is stderr, not stdout: stdout carries dsh's own final-message line,
  * which is its existing contract with every current consumer. Taking it over
- * would silently break them. Set DSH_JSONL_OUT=<file> to write to a file
- * instead, or DSH_JSONL_OUT=stdout if you genuinely want them interleaved.
+ * would silently break them. Set DSH_EVENTS_OUT=<file> to write to a file
+ * instead, or DSH_EVENTS_OUT=stdout if you genuinely want them interleaved.
  */
 function makeWriter() {
-  const target = process.env.DSH_JSONL_OUT
+  const target = process.env.DSH_EVENTS_OUT
   if (!target || target === 'stderr') return line => process.stderr.write(line + '\n')
   if (target === 'stdout') return line => process.stdout.write(line + '\n')
   return line => appendFileSync(target, line + '\n')
@@ -104,7 +104,7 @@ export function apply(ctx) {
     if (Object.keys(guard).length > 0) emit('guard', { seq: guardSeq }, guard)
   }
 
-  const raw = process.env.DSH_JSONL_RAW === '1'
+  const raw = process.env.DSH_EVENTS_RAW === '1'
 
   // `session.start` is emitted lazily on the first event, not at mount time:
   // the session identity does not exist yet when the plugin is applied.
