@@ -1333,6 +1333,8 @@ export const zhCN = {
       title: '外观',
       label: '主题',
       activityHeatmapLabel: '概览页显示年度活动热力图',
+      stackedRowLayoutLabel: '易读布局（防溢出换行）',
+      stackedRowLayoutDesc: '小屏或大字时，同一行放不下的按钮和选项会自动换到下一行，避免横向挤出屏幕或文字被压扁。',
       system: '跟随系统',
       light: '浅色',
       dark: '深色',

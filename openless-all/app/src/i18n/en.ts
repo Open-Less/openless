@@ -1335,6 +1335,8 @@ export const en: typeof zhCN = {
       title: 'Appearance',
       label: 'Theme',
       activityHeatmapLabel: 'Show annual activity heatmap on Overview',
+      stackedRowLayoutLabel: 'Readable layout (wrap rows)',
+      stackedRowLayoutDesc: 'On small screens or with large text, buttons and controls that no longer fit on one line move to the next line instead of overflowing or squashing text.',
       system: 'Follow system',
       light: 'Light',
       dark: 'Dark',

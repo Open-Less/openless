@@ -1303,6 +1303,8 @@ export const ja: typeof zhCN = {
       title: '外観',
       label: 'テーマ',
       activityHeatmapLabel: '概要ページに年間アクティビティを表示',
+      stackedRowLayoutLabel: '読みやすいレイアウト（はみ出し防止）',
+      stackedRowLayoutDesc: '小さい画面や大きな文字サイズでは、1行に収まらないボタンや設定が次の行に折り返され、横方向のはみ出しや文字の潰れを防ぎます。',
       system: 'システムに従う',
       light: 'ライト',
       dark: 'ダーク',

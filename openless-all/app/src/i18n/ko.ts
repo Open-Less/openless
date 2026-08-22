@@ -1303,6 +1303,8 @@ export const ko: typeof zhCN = {
       title: '모양',
       label: '테마',
       activityHeatmapLabel: '개요 페이지에 연간 활동 표시',
+      stackedRowLayoutLabel: '읽기 쉬운 레이아웃(넘침 방지 줄바꿈)',
+      stackedRowLayoutDesc: '작은 화면이나 큰 글꼴에서 한 줄에 맞지 않는 버튼과 옵션은 다음 줄로 넘어가 가로 넘침과 글자 눌림을 방지합니다.',
       system: '시스템 따르기',
       light: '라이트',
       dark: '다크',

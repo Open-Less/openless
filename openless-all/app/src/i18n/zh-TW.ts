@@ -1301,6 +1301,8 @@ export const zhTW: typeof zhCN = {
       title: '外觀',
       label: '主題',
       activityHeatmapLabel: '概覽頁顯示年度活動熱力圖',
+      stackedRowLayoutLabel: '易讀布局（防溢出換行）',
+      stackedRowLayoutDesc: '小螢幕或大字時，同一行放不下的按鈕和選項會自動換到下一行，避免橫向擠出螢幕或文字被壓扁。',
       system: '跟隨系統',
       light: '淺色',
       dark: '深色',

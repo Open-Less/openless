@@ -14,7 +14,7 @@ import {
   validateProviderCredentials,
 } from '../../lib/ipc';
 import { emitSaved } from '../../lib/savedEvent';
-import { useMobileLayout } from '../../lib/useMobileLayout';
+import { useLayoutStack } from '../../lib/useMobileLayout';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
 import { SelectLite, type SelectOption } from '../../components/ui/SelectLite';
 import { Card } from '../_atoms';
@@ -55,18 +55,18 @@ function isLocalAsrPreset(id: string): boolean {
 
 function LlmThinkingToggle({ enabled, onToggle }: { enabled: boolean; onToggle: (next: boolean) => void }) {
   const { t } = useTranslation();
-  const mobile = useMobileLayout();
+  const layoutStack = useLayoutStack();
   return (
     <div
       title={t('settings.providers.thinkingModeHint')}
       style={{
         display: 'flex',
         alignItems: 'center',
-        flex: mobile ? '1 1 100%' : undefined,
-        flexWrap: mobile ? 'wrap' : 'nowrap',
+        flex: layoutStack ? '1 1 100%' : undefined,
+        flexWrap: layoutStack ? 'wrap' : 'nowrap',
         gap: 6,
         paddingLeft: 2,
-        whiteSpace: mobile ? 'normal' : 'nowrap',
+        whiteSpace: layoutStack ? 'normal' : 'nowrap',
       }}
     >
       <span style={{ fontSize: 11.5, color: 'var(--ol-ink-4)' }}>
@@ -304,7 +304,7 @@ export function ChannelCredentialFields({
 }) {
   const { t } = useTranslation();
   const { prefs, updatePrefs } = useHotkeySettings();
-  const mobile = useMobileLayout();
+  const layoutStack = useLayoutStack();
   const [llmModelRevision, setLlmModelRevision] = useState(0);
   const [asrModelRevision, setAsrModelRevision] = useState(0);
   const unifiedBailian = providerType === 'bailian';
@@ -421,7 +421,7 @@ export function ChannelCredentialFields({
               { value: 'api_key', label: t('settings.providers.volcengineAuthModeApiKey') },
             ]}
             ariaLabel={t('settings.providers.volcengineAuthModeLabel')}
-            style={{ ...inputStyle, width: '100%', maxWidth: mobile ? '100%' : 260 }}
+            style={{ ...inputStyle, width: '100%', maxWidth: layoutStack ? '100%' : 260 }}
           />
         </SettingRow>
         {/* 两种模式使用各自独立的凭据槽位：旧版 Access Token（volcengine.access_key）
@@ -739,7 +739,7 @@ type ProviderToolStatus = 'idle' | 'loading' | 'success' | 'empty' | 'error';
 
 function ProviderTools({ kind, modelAccount, provider, onModelSelected, onTested, onUserMutation, showFetchModels = true }: { kind: 'llm' | 'asr' | 'omni'; modelAccount: string; provider?: string; onModelSelected: () => void; onTested?: () => void; onUserMutation?: () => void; showFetchModels?: boolean }) {
   const { t } = useTranslation();
-  const mobile = useMobileLayout();
+  const layoutStack = useLayoutStack();
   const [models, setModels] = useState<string[]>([]);
   const [selectedModel, setSelectedModel] = useState('');
   const [status, setStatus] = useState<ProviderToolStatus>('idle');
@@ -827,7 +827,7 @@ function ProviderTools({ kind, modelAccount, provider, onModelSelected, onTested
 
   return (
     <SettingRow label={t('settings.providers.toolsLabel')}>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, width: '100%', maxWidth: mobile ? '100%' : 420 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, width: '100%', maxWidth: layoutStack ? '100%' : 420 }}>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', width: '100%' }}>
           <button onClick={validate} style={miniBtnStyle} disabled={status === 'loading'}>{t('settings.providers.validate')}</button>
           {showFetchModels && (
@@ -841,7 +841,7 @@ function ProviderTools({ kind, modelAccount, provider, onModelSelected, onTested
               options={models.map(model => ({ value: model, label: model }))}
               placeholder={t('settings.providers.selectModel')}
               ariaLabel={t('settings.providers.selectModel')}
-              style={{ flex: mobile ? '1 1 100%' : '1 1 180px', maxWidth: mobile ? '100%' : 220, minWidth: 0 }}
+              style={{ flex: layoutStack ? '1 1 100%' : '1 1 180px', maxWidth: layoutStack ? '100%' : 220, minWidth: 0 }}
             />
           )}
         </div>
@@ -904,7 +904,7 @@ interface CredentialFieldProps {
 
 function CredentialField({ label, account, provider, placeholder, mono, mask, defaultValue, trailing, onValueChange, onUserMutation, options }: CredentialFieldProps) {
   const { t } = useTranslation();
-  const mobile = useMobileLayout();
+  const layoutStack = useLayoutStack();
   const [value, setValue] = useState('');
   const [revealed, setRevealed] = useState(false);
   const [loaded, setLoaded] = useState(false);
@@ -1042,8 +1042,8 @@ function CredentialField({ label, account, provider, placeholder, mono, mask, de
 
   return (
     <SettingRow label={label}>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 5, width: '100%', maxWidth: mobile ? '100%' : 420 }}>
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center', width: '100%', flexWrap: mobile ? 'wrap' : 'nowrap' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 5, width: '100%', maxWidth: layoutStack ? '100%' : 420 }}>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center', width: '100%', flexWrap: layoutStack ? 'wrap' : 'nowrap' }}>
           {options && !customModelMode ? (
             <SelectLite
               value={value}
@@ -1068,7 +1068,7 @@ function CredentialField({ label, account, provider, placeholder, mono, mask, de
               placeholder={loaded ? placeholder : t('common.loading')}
               disabled={disabled}
               ariaLabel={label}
-              style={{ flex: mobile ? '1 1 180px' : 1, minWidth: 0, maxWidth: '100%', fontFamily: mono ? 'var(--ol-font-mono)' : 'inherit' }}
+              style={{ flex: layoutStack ? '1 1 180px' : 1, minWidth: 0, maxWidth: '100%', fontFamily: mono ? 'var(--ol-font-mono)' : 'inherit' }}
             />
           ) : (
             <input
@@ -1078,7 +1078,7 @@ function CredentialField({ label, account, provider, placeholder, mono, mask, de
               onChange={handleChange}
               onBlur={onBlur}
               disabled={disabled}
-              style={{ ...inputStyle, flex: mobile ? '1 1 180px' : 1, minWidth: 0, maxWidth: '100%', fontFamily: mono ? 'var(--ol-font-mono)' : 'inherit' }}
+              style={{ ...inputStyle, flex: layoutStack ? '1 1 180px' : 1, minWidth: 0, maxWidth: '100%', fontFamily: mono ? 'var(--ol-font-mono)' : 'inherit' }}
             />
           )}
           {options && customModelMode && (
@@ -1169,7 +1169,7 @@ const iconBtnStyle: CSSProperties = {
  */
 export function OmniChannelSection() {
   const { t } = useTranslation();
-  const mobile = useMobileLayout();
+  const layoutStack = useLayoutStack();
   const { prefs, updatePrefs } = useHotkeySettings();
   const [omniProvider, setOmniProvider] = useState<OmniPresetId>('custom');
   const [committedOmniProvider, setCommittedOmniProvider] = useState<OmniPresetId>('custom');
@@ -1246,7 +1246,7 @@ export function OmniChannelSection() {
           label={t('settings.providers.pipelineModeLabel')}
           desc={t('settings.providers.pipelineModeHint')}
         >
-          <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: mobile ? 'wrap' : 'nowrap' }}>
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: layoutStack ? 'wrap' : 'nowrap' }}>
             <div style={segmentedTrackStyle}>
               {(['traditional', 'multimodal'] as const).map(mode => (
                 <button
@@ -1287,7 +1287,7 @@ export function OmniChannelSection() {
                 label: t(`settings.providers.presets.${p.nameKey}`),
               }))}
               ariaLabel={t('settings.providers.providerLabel')}
-              style={{ ...inputStyle, width: '100%', maxWidth: mobile ? '100%' : 200 }}
+              style={{ ...inputStyle, width: '100%', maxWidth: layoutStack ? '100%' : 200 }}
             />
           </SettingRow>
           <CredentialField

@@ -4,7 +4,7 @@
 
 import { useState, type CSSProperties, type ReactNode } from 'react';
 import { Icon } from '../components/Icon';
-import { useMobileLayout } from '../lib/useMobileLayout';
+import { useMobileLayout, useLayoutStack } from '../lib/useMobileLayout';
 
 interface PageHeaderProps {
   kicker?: string;
@@ -16,14 +16,15 @@ interface PageHeaderProps {
 
 export function PageHeader({ kicker, title, desc, right, titleRight }: PageHeaderProps) {
   const mobile = useMobileLayout();
+  const layoutStack = useLayoutStack();
   return (
     <div style={{
       display: 'flex',
       alignItems: 'flex-start',
       justifyContent: 'space-between',
-      gap: mobile ? 12 : 24,
-      marginBottom: mobile ? 16 : 24,
-      flexWrap: mobile ? 'wrap' : 'nowrap',
+      gap: layoutStack ? 12 : mobile ? 12 : 24,
+      marginBottom: layoutStack ? 16 : mobile ? 16 : 24,
+      flexWrap: 'wrap',
     }}>
       <div style={{ minWidth: 0 }}>
         {kicker && (
@@ -33,9 +34,16 @@ export function PageHeader({ kicker, title, desc, right, titleRight }: PageHeade
           <h1 style={{ margin: 0, fontSize: mobile ? 22 : 26, fontWeight: 600, letterSpacing: '-0.02em', color: 'var(--ol-ink)' }}>{title}</h1>
           {titleRight}
         </div>
-        {desc && <p style={{ margin: '8px 0 0', fontSize: 13, color: 'var(--ol-ink-3)', maxWidth: 640, lineHeight: 1.55 }}>{desc}</p>}
+        {desc && <p style={{ margin: '8px 0 0', fontSize: 13, color: 'var(--ol-ink-3)', maxWidth: layoutStack ? undefined : 640, lineHeight: 1.55 }}>{desc}</p>}
       </div>
-      {right}
+      {right && (
+        <div
+          className={layoutStack ? 'ol-flex-row ol-flex-split' : undefined}
+          style={layoutStack ? { width: '100%' } : undefined}
+        >
+          {right}
+        </div>
+      )}
     </div>
   );
 }

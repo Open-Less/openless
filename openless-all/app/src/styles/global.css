@@ -210,6 +210,39 @@ html[data-ol-platform="android"] .ol-modal-backdrop {
   -webkit-backdrop-filter: none !important;
 }
 
+/* ── 易读布局（data-ol-stacked-layout）──────────────────────────────────────────
+   小屏或大字号时强制同行控件换行，避免横向溢出与 flex 压扁文字。 */
+.ol-flex-row {
+  display: flex;
+  min-width: 0;
+  flex-wrap: nowrap;
+  align-items: center;
+}
+
+html[data-ol-stacked-layout="true"] .ol-flex-row {
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+
+html[data-ol-stacked-layout="true"] .ol-flex-row > .ol-flex-split {
+  flex: 1 1 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+
+html[data-ol-stacked-layout="true"] .ol-flex-row > .ol-flex-push {
+  flex: 0 0 auto;
+  max-width: 100%;
+}
+
+html[data-ol-stacked-layout="true"] .ol-grid-auto-cards {
+  grid-template-columns: 1fr !important;
+}
+
+html[data-ol-stacked-layout="true"] .ol-console-main {
+  overflow-x: hidden;
+}
+
 .ol-app-shell-bg {
   background: var(--ol-app-shell-bg);
 }

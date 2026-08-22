@@ -21,6 +21,8 @@ import type {
 } from "../lib/types"
 import i18n, { outputPrefsForLocale, type SupportedLocale } from "../i18n"
 import { applyThemeFromPreference } from "../lib/themeMode"
+import { applyStackedLayoutFromPrefs } from "../lib/stackedLayout"
+import { shouldUseMobileLayout } from "../lib/useMobileLayout"
 import { emitSaved } from "../lib/savedEvent"
 
 interface HotkeySettingsContextValue {
@@ -65,6 +67,10 @@ export function HotkeySettingsProvider({ children }: { children: ReactNode }) {
                 persistedPrefsRef.current = prefsResult.value
                 setPrefs(prefsResult.value)
                 applyThemeFromPreference(prefsResult.value.themeMode ?? "system")
+                applyStackedLayoutFromPrefs(
+                    shouldUseMobileLayout(),
+                    prefsResult.value.stackedRowLayout,
+                )
             } else {
                 console.error(
                     "[hotkey-settings] failed to load preferences",
@@ -126,6 +132,10 @@ export function HotkeySettingsProvider({ children }: { children: ReactNode }) {
                         persistedPrefsRef.current = nextPrefs
                         setPrefs(nextPrefs)
                         applyThemeFromPreference(nextPrefs.themeMode ?? "system")
+                        applyStackedLayoutFromPrefs(
+                            shouldUseMobileLayout(),
+                            nextPrefs.stackedRowLayout,
+                        )
                     },
                 )
                 if (cancelled) {
@@ -200,6 +210,10 @@ export function HotkeySettingsProvider({ children }: { children: ReactNode }) {
             if (resolved === current) return
             setPrefs(resolved)
             latestPrefsRef.current = resolved
+            applyStackedLayoutFromPrefs(
+                shouldUseMobileLayout(),
+                resolved.stackedRowLayout,
+            )
             try {
                 await queueSetSettings(resolved)
                 persistedPrefsRef.current = resolved

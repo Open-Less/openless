@@ -490,6 +490,8 @@ export interface UserPreferences {
   cursorContextEnabled: boolean;
   /** 概览页是否显示「年度活动」热力图卡。默认 true；关闭只隐藏卡片，活动计数照常记录。 */
   showOverviewActivityHeatmap: boolean;
+  /** 易读布局：小屏或大字号时强制同行控件换行，避免横向溢出。默认 false。 */
+  stackedRowLayout: boolean;
   /** 主窗口启动 + 后台每 60 分钟自动检查更新。默认 true。
    *  Android：开启后自动检查并下载，校验后打开系统安装器。
    *  桌面：开启后自动检查，发现更新弹窗由用户确认安装。

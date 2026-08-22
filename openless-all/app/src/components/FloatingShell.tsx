@@ -38,6 +38,8 @@ import { MobileMoreSheet } from './MobileMoreSheet';
 import { MobileStyleSheet } from './MobileStyleSheet';
 import { subItemLabelKey } from '../lib/navLabels';
 import { useMobileLayout } from '../lib/useMobileLayout';
+import { applyStackedLayoutFromPrefs } from '../lib/stackedLayout';
+import { useHotkeySettings } from '../state/HotkeySettingsContext';
 import { useAppState, type AppTab } from '../state/useAppState';
 
 const MORE_TAB_IDS: AppTab[] = ['vocab', 'translation', 'selectionAsk'];
@@ -92,6 +94,7 @@ export function FloatingShell({ os: osProp, initialTab = 'overview', initialSett
 function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initialTab: AppTab; initialSettings: boolean }) {
   const { t } = useTranslation();
   const mobile = useMobileLayout();
+  const { prefs } = useHotkeySettings();
   const { currentTab, setCurrentTab, settingsOpen, setSettingsOpen } = useAppState(initialTab, initialSettings);
   const [settingsInitialSection, setSettingsInitialSection] = useState<SettingsSectionId | undefined>();
   const [providerPromptOpen, setProviderPromptOpen] = useState(false);
@@ -117,6 +120,10 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
   useEffect(() => {
     applyFontScale(readFontScale());
   }, []);
+
+  useEffect(() => {
+    applyStackedLayoutFromPrefs(mobile, prefs?.stackedRowLayout);
+  }, [mobile, prefs?.stackedRowLayout]);
 
   const Page = PAGE_CMP[displayTab as Exclude<AppTab, 'localAsr'>] ?? Overview;
 

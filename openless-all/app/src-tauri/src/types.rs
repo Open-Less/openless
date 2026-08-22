@@ -1169,6 +1169,9 @@ pub struct UserPreferences {
     /// 活动计数照常记录（persistence/activity.rs），再打开时全年数据仍在。
     #[serde(default = "default_true")]
     pub show_overview_activity_heatmap: bool,
+    /// 易读布局：小屏或大字号时强制同行控件换行，避免横向溢出与文字被压扁。默认 false。
+    #[serde(default)]
+    pub stacked_row_layout: bool,
     /// 主窗口启动 + 后台每 60 分钟自动检查更新。默认 true。
     /// Android 开启后自动检查并下载，校验后打开系统安装器；桌面仅自动检查 + 用户确认安装。
     /// 关闭后仅 Settings 手动「检查更新」按钮可用。
@@ -1441,6 +1444,8 @@ struct UserPreferencesWire {
     cursor_context_enabled: bool,
     #[serde(default = "default_true")]
     show_overview_activity_heatmap: bool,
+    #[serde(default)]
+    stacked_row_layout: bool,
     #[serde(default = "default_true")]
     auto_update_check: bool,
     #[serde(default)]
@@ -1591,6 +1596,7 @@ impl Default for UserPreferencesWire {
             streaming_insert_save_clipboard: prefs.streaming_insert_save_clipboard,
             cursor_context_enabled: prefs.cursor_context_enabled,
             show_overview_activity_heatmap: prefs.show_overview_activity_heatmap,
+            stacked_row_layout: prefs.stacked_row_layout,
             auto_update_check: prefs.auto_update_check,
             history_max_entries: prefs.history_max_entries,
             record_audio_for_debug: prefs.record_audio_for_debug,
@@ -1747,6 +1753,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             streaming_insert_save_clipboard: wire.streaming_insert_save_clipboard,
             cursor_context_enabled: wire.cursor_context_enabled,
             show_overview_activity_heatmap: wire.show_overview_activity_heatmap,
+            stacked_row_layout: wire.stacked_row_layout,
             auto_update_check: wire.auto_update_check,
             history_max_entries: wire.history_max_entries,
             record_audio_for_debug: wire.record_audio_for_debug,
@@ -2563,6 +2570,7 @@ impl Default for UserPreferences {
             streaming_insert_save_clipboard: true,
             cursor_context_enabled: false,
             show_overview_activity_heatmap: true,
+            stacked_row_layout: false,
             auto_update_check: true,
             history_max_entries: None,
             record_audio_for_debug: false,

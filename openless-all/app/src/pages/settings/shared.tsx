@@ -3,7 +3,7 @@
 
 import type { CSSProperties, ReactNode } from "react"
 import { Tooltip } from "../../components/Tooltip"
-import { useMobileLayout } from "../../lib/useMobileLayout"
+import { useLayoutStack } from "../../lib/useMobileLayout"
 
 // 带说明的文字统一加虚线下划线 + help 光标，暗示「悬停可看解释」。
 const hintableTextStyle: CSSProperties = {
@@ -67,7 +67,7 @@ export function SettingRow({
     children,
     controlWidth,
 }: SettingRowProps) {
-    const mobile = useMobileLayout()
+    const layoutStack = useLayoutStack()
     const labelStyle: CSSProperties = {
         fontSize: 13,
         fontWeight: 500,
@@ -78,9 +78,9 @@ export function SettingRow({
         <div
             style={{
                 display: "grid",
-                gridTemplateColumns: mobile ? "minmax(0, 1fr)" : "minmax(0, 180px) minmax(0, 1fr)",
-                gap: mobile ? 8 : 16,
-                padding: mobile ? "12px 0" : "14px 0",
+                gridTemplateColumns: layoutStack ? "minmax(0, 1fr)" : "minmax(0, 180px) minmax(0, 1fr)",
+                gap: layoutStack ? 8 : 16,
+                padding: layoutStack ? "12px 0" : "14px 0",
                 borderTop: "0.5px solid var(--ol-line-soft)",
                 alignItems: "center",
             }}
@@ -96,14 +96,15 @@ export function SettingRow({
                 )}
             </div>
             <div
+                className={layoutStack ? "ol-flex-row" : undefined}
                 style={{
                     display: "flex",
                     alignItems: "center",
                     minWidth: 0,
-                    width: mobile ? "100%" : controlWidth ?? "auto",
+                    width: layoutStack ? "100%" : controlWidth ?? "auto",
                     maxWidth: "100%",
-                    flexWrap: mobile ? "wrap" : "nowrap",
-                    gap: mobile ? 6 : undefined,
+                    flexWrap: layoutStack ? "wrap" : "nowrap",
+                    gap: layoutStack ? 6 : undefined,
                 }}
             >
                 {children}

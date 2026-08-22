@@ -6,7 +6,7 @@ import { getSettings, setSettings } from '../../../src/lib/ipc/settings';
 import type { UserPreferences } from '../../../src/lib/types';
 import { Btn, Pill } from '../../../src/pages/_atoms';
 import { SettingRow } from '../../../src/pages/settings/shared';
-import { useMobileLayout } from '../../../src/lib/useMobileLayout';
+import { useLayoutStack } from '../../../src/lib/useMobileLayout';
 import {
   getAndroidAccessibilityStatus,
   getAndroidOverlayStatus,
@@ -74,7 +74,7 @@ interface AndroidPermissionsPanelProps {
 
 export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPanelProps) {
   const { t } = useTranslation();
-  const mobile = useMobileLayout();
+  const layoutStack = useLayoutStack();
   const [androidOverlay, setAndroidOverlay] = useState<AndroidOverlayStatus | null>(null);
   const [androidAccessibility, setAndroidAccessibility] = useState<AndroidAccessibilityStatus | null>(null);
   const [androidShizuku, setAndroidShizuku] = useState<AndroidShizukuStatus | null>(null);
@@ -263,12 +263,12 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
   const showAccessibility = mode === 'all' || mode === 'accessibility';
   const showOverlayConfig = mode === 'all' || mode === 'overlayConfig';
 
-  const rowJustify = mobile ? 'flex-start' : 'flex-end';
-  const colAlign = mobile ? 'stretch' : 'flex-end';
-  const hintAlign = mobile ? 'left' : 'right';
-  const hintMaxWidth = mobile ? undefined : 300;
-  const hintMaxWidthSm = mobile ? undefined : 220;
-  const selectStyle = mobile
+  const rowJustify = layoutStack ? 'flex-start' : 'flex-end';
+  const colAlign = layoutStack ? 'stretch' : 'flex-end';
+  const hintAlign = layoutStack ? 'left' : 'right';
+  const hintMaxWidth = layoutStack ? undefined : 300;
+  const hintMaxWidthSm = layoutStack ? undefined : 220;
+  const selectStyle = layoutStack
     ? { width: '100%', maxWidth: '100%' as const }
     : { minWidth: 180, maxWidth: '100%' as const };
 
@@ -276,7 +276,7 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
     <>
       {showOverlayPermission && (
       <SettingRow label={t('settings.permissions.androidOverlayLabel')}>
-        <div style={{ display: 'flex', gap: 8, alignItems: mobile ? 'flex-start' : 'center', justifyContent: rowJustify, width: '100%', flexWrap: 'wrap', minWidth: 0 }}>
+        <div className="ol-flex-row" style={{ display: 'flex', gap: 8, alignItems: layoutStack ? 'flex-start' : 'center', justifyContent: rowJustify, width: '100%', flexWrap: 'wrap', minWidth: 0 }}>
           {androidOverlay?.message && (
             <span style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', maxWidth: hintMaxWidthSm, textAlign: hintAlign }}>
               {androidOverlay.message}
@@ -294,7 +294,7 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
       {showAccessibility && (
       <SettingRow label={t('settings.permissions.androidAccessibilityLabel')}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: colAlign, width: '100%', minWidth: 0 }}>
-          <div style={{ display: 'flex', gap: 8, alignItems: mobile ? 'flex-start' : 'center', justifyContent: rowJustify, width: '100%', flexWrap: 'wrap', minWidth: 0 }}>
+          <div className="ol-flex-row" style={{ display: 'flex', gap: 8, alignItems: layoutStack ? 'flex-start' : 'center', justifyContent: rowJustify, width: '100%', flexWrap: 'wrap', minWidth: 0 }}>
             {resolveAccessibilityMessage(t, androidAccessibility?.messageKey) && (
               <span style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', maxWidth: hintMaxWidthSm, textAlign: hintAlign }}>
                 {resolveAccessibilityMessage(t, androidAccessibility?.messageKey)}
@@ -316,7 +316,7 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
       {showAccessibility && (
       <SettingRow label={t('settings.permissions.androidShizukuLabel')}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: colAlign, width: '100%', minWidth: 0 }}>
-          <div style={{ display: 'flex', gap: 8, alignItems: mobile ? 'flex-start' : 'center', justifyContent: rowJustify, width: '100%', flexWrap: 'wrap', minWidth: 0 }}>
+          <div className="ol-flex-row" style={{ display: 'flex', gap: 8, alignItems: layoutStack ? 'flex-start' : 'center', justifyContent: rowJustify, width: '100%', flexWrap: 'wrap', minWidth: 0 }}>
             {resolveShizukuMessage(t, shizukuDisplayMessageKey) && (
               <span style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', maxWidth: hintMaxWidthSm, textAlign: hintAlign }}>
                 {resolveShizukuMessage(t, shizukuDisplayMessageKey)}
