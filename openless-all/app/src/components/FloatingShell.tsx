@@ -462,6 +462,7 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
 
       {mobile && (
         <>
+          {!settingsOpen && !styleOpen && !moreOpen && (
           <MobileBottomNav
             currentTab={currentTab}
             moreOpen={moreOpen}
@@ -483,6 +484,7 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
               setMoreOpen(true);
             }}
           />
+          )}
           <MobileStyleSheet
             open={styleOpen}
             currentTab={currentTab}

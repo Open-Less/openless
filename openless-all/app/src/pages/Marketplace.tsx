@@ -48,12 +48,14 @@ import {
   type MarketplaceInstallError,
 } from '../lib/marketplaceInstall';
 import { pickStylePackZipTargetPath, stylePackZipFileName } from '../lib/stylePackZip';
+import { useMobileLayout } from '../lib/useMobileLayout';
 import { Btn, Card, PageHeader, Pill } from './_atoms';
 
 type SortMode = 'popular' | 'new' | 'liked';
 
 export function Marketplace() {
   const { t } = useTranslation();
+  const mobile = useMobileLayout();
   const { prefs, updatePrefs } = useHotkeySettings();
 
   // 启动时尝试读缓存：上次默认视图（popular + 空 query）的列表，秒呈现。后台 refresh 校准。
@@ -539,7 +541,8 @@ export function Marketplace() {
         style={{
           display: 'flex',
           gap: 10,
-          alignItems: 'center',
+          alignItems: mobile ? 'stretch' : 'center',
+          flexDirection: mobile ? 'column' : 'row',
           padding: '4px 0 14px',
         }}
       >
@@ -571,7 +574,7 @@ export function Marketplace() {
             }}
           />
         </div>
-        <div style={{ display: 'flex', gap: 4 }}>
+        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
           {sortPills.map(p => (
             <button
               key={p.id}
@@ -642,7 +645,7 @@ export function Marketplace() {
             </div>
           </Card>
         ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 12 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: mobile ? '1fr' : 'repeat(auto-fill, minmax(260px, 1fr))', gap: 12 }}>
             <AnimatePresence mode="sync">
               {visibleItems.map(p => {
                 const isDownloading = downloadingPackId === p.id;
@@ -744,7 +747,7 @@ export function Marketplace() {
 
       {/* 详情弹窗 */}
       {selectedId && (
-        <Modal onClose={() => { setSelectedId(null); setInstallError(null); }}>
+        <Modal zIndex={mobile ? 70 : 50} onClose={() => { setSelectedId(null); setInstallError(null); }}>
           {detailLoading || !detail ? (
             <div
               style={{
@@ -872,7 +875,7 @@ export function Marketplace() {
       {/* 上传选包器 —— zIndex 60 让它叠在「我的发布」(zIndex 50) 之上 */}
       {showUpload && (
         <Modal
-          zIndex={60}
+          zIndex={mobile ? 70 : 60}
           onClose={() => {
             setShowUpload(false);
             setUploadOriginPackId(null);
@@ -962,7 +965,7 @@ export function Marketplace() {
 
       {/* 我的发布 · 弹框形态（叠在风格市场页面之上）*/}
       {showMyPacks && (
-        <Modal onClose={() => setShowMyPacks(false)}>
+        <Modal zIndex={mobile ? 70 : 50} onClose={() => setShowMyPacks(false)}>
           {/* 顶部一行：搜索 (左) + 用户名/登录 (中) + 关闭 × (右) */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
             {/* 搜索框 (最左) */}

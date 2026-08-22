@@ -88,7 +88,7 @@ export function SettingsModal({ os: _os, onClose, initialSettingsSection }: Sett
         alignItems: mobile ? 'stretch' : 'center',
         justifyContent: mobile ? 'stretch' : 'center',
         padding: mobile ? 0 : 28,
-        zIndex: 50,
+        zIndex: mobile ? 70 : 50,
         animation: mobile ? undefined : 'ol-modal-backdrop-in 0.18s var(--ol-motion-soft)',
       }}>
 

@@ -204,6 +204,12 @@ html[data-ol-platform="android"] .ol-frost::before {
   content: none;
 }
 
+/* Android WebView：modal 遮罩禁用 backdrop-filter，避免触摸迟滞与渲染异常。 */
+html[data-ol-platform="android"] .ol-modal-backdrop {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
 .ol-app-shell-bg {
   background: var(--ol-app-shell-bg);
 }
