@@ -1297,6 +1297,9 @@ export const zhTW: typeof zhCN = {
       ko: '한국어 (Beta)',
       restartHint: '部分原生菜單（系統托盤等）可能需要重啓 App 纔會切換。',
     },
+    layout: {
+      title: '布局',
+    },
     theme: {
       title: '外觀',
       label: '主題',

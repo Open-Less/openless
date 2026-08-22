@@ -9,6 +9,7 @@ import { ShortcutsSection } from './ShortcutsSection';
 import { SelectionPolishSection } from './SelectionPolishSection';
 import { LanguageSection } from './LanguageSection';
 import { ThemeSection } from './ThemeSection';
+import { LayoutSection } from './LayoutSection';
 import { ProvidersSection } from './ChannelList';
 import { NetworkSection } from './NetworkSection';
 import { MarketplaceSection } from './MarketplaceSection';
@@ -46,6 +47,7 @@ export function GeneralTab() {
   return (
     <>
       <RecordingInputSection />
+      <LayoutSection />
       {showRemoteInput && <RemoteInputSection />}
       <SelectionPolishSection />
       {showDesktopShortcuts && <ShortcutsSection />}

@@ -53,32 +53,6 @@ export function ThemeSection() {
           style={{ maxWidth: 220, minWidth: 200 }}
         />
       </SettingRow>
-      {prefs && (
-        <SettingRow
-          label={t('settings.theme.stackedRowLayoutLabel')}
-          desc={t('settings.theme.stackedRowLayoutDesc')}
-        >
-          <Toggle
-            on={prefs.stackedRowLayout === true}
-            onToggle={next =>
-              void updatePrefs(current => ({ ...current, stackedRowLayout: next }))
-            }
-          />
-        </SettingRow>
-      )}
-      {prefs && (
-        <SettingRow
-          label={t('settings.theme.conservativeLayoutLabel')}
-          desc={t('settings.theme.conservativeLayoutDesc')}
-        >
-          <Toggle
-            on={prefs.conservativeLayout === true}
-            onToggle={next =>
-              void updatePrefs(current => ({ ...current, conservativeLayout: next }))
-            }
-          />
-        </SettingRow>
-      )}
       {/* 概览页年度活动热力图开关：关闭只隐藏卡片，活动计数照常记录。 */}
       {prefs && (
         <SettingRow label={t('settings.theme.activityHeatmapLabel')}>

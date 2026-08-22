@@ -1329,6 +1329,9 @@ export const zhCN = {
       ko: '한국어 (Beta)',
       restartHint: '部分原生菜单（系统托盘等）可能需要重启 App 才会切换。',
     },
+    layout: {
+      title: '布局',
+    },
     theme: {
       title: '外观',
       label: '主题',

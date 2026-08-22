@@ -1331,6 +1331,9 @@ export const en: typeof zhCN = {
       ko: '한국어 (Beta)',
       restartHint: 'Some native menus (system tray, etc.) may require an app restart to fully switch.',
     },
+    layout: {
+      title: 'Layout',
+    },
     theme: {
       title: 'Appearance',
       label: 'Theme',
