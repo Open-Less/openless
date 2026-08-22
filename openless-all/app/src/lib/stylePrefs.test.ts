@@ -27,6 +27,7 @@ const previousPrefs: UserPreferences = {
   cursorContextEnabled: false,
   showOverviewActivityHeatmap: true,
   stackedRowLayout: false,
+  conservativeLayout: false,
   defaultMode: 'light',
   enabledModes: ['raw', 'light', 'structured'],
   activeStylePackId: '',

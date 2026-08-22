@@ -1335,6 +1335,8 @@ export const zhCN = {
       activityHeatmapLabel: '概览页显示年度活动热力图',
       stackedRowLayoutLabel: '易读布局（防溢出换行）',
       stackedRowLayoutDesc: '小屏或大字时，同一行放不下的按钮和选项会自动换到下一行，避免横向挤出屏幕或文字被压扁。',
+      conservativeLayoutLabel: '保守排版',
+      conservativeLayoutDesc: '除首页、顶栏与底栏外，设置与功能页改为单列满宽，最大程度避免横向溢出。',
       system: '跟随系统',
       light: '浅色',
       dark: '深色',

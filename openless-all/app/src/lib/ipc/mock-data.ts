@@ -111,6 +111,7 @@ export let mockSettings: UserPreferences = {
     cursorContextEnabled: false,
     showOverviewActivityHeatmap: true,
     stackedRowLayout: false,
+    conservativeLayout: false,
     autoUpdateCheck: true,
     historyMaxEntries: null,
     recordAudioForDebug: false,

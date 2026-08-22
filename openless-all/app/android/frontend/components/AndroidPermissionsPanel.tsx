@@ -6,7 +6,7 @@ import { getSettings, setSettings } from '../../../src/lib/ipc/settings';
 import type { UserPreferences } from '../../../src/lib/types';
 import { Btn, Pill } from '../../../src/pages/_atoms';
 import { SettingRow } from '../../../src/pages/settings/shared';
-import { useLayoutStack } from '../../../src/lib/useMobileLayout';
+import { useLayoutStack, useConservativeLayout } from '../../../src/lib/useMobileLayout';
 import {
   getAndroidAccessibilityStatus,
   getAndroidOverlayStatus,
@@ -74,7 +74,9 @@ interface AndroidPermissionsPanelProps {
 
 export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPanelProps) {
   const { t } = useTranslation();
-  const layoutStack = useLayoutStack();
+  const baseLayoutStack = useLayoutStack();
+  const conservative = useConservativeLayout();
+  const layoutStack = conservative || baseLayoutStack;
   const [androidOverlay, setAndroidOverlay] = useState<AndroidOverlayStatus | null>(null);
   const [androidAccessibility, setAndroidAccessibility] = useState<AndroidAccessibilityStatus | null>(null);
   const [androidShizuku, setAndroidShizuku] = useState<AndroidShizukuStatus | null>(null);

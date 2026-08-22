@@ -492,6 +492,8 @@ export interface UserPreferences {
   showOverviewActivityHeatmap: boolean;
   /** 易读布局：小屏或大字号时强制同行控件换行，避免横向溢出。默认 false。 */
   stackedRowLayout: boolean;
+  /** 保守排版：除首页、顶栏、底栏与胶囊窗外，内容区强制单列满宽。默认 false。 */
+  conservativeLayout: boolean;
   /** 主窗口启动 + 后台每 60 分钟自动检查更新。默认 true。
    *  Android：开启后自动检查并下载，校验后打开系统安装器。
    *  桌面：开启后自动检查，发现更新弹窗由用户确认安装。

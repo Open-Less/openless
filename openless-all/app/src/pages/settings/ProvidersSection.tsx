@@ -14,7 +14,7 @@ import {
   validateProviderCredentials,
 } from '../../lib/ipc';
 import { emitSaved } from '../../lib/savedEvent';
-import { useLayoutStack } from '../../lib/useMobileLayout';
+import { useLayoutStack, useConservativeLayout } from '../../lib/useMobileLayout';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
 import { SelectLite, type SelectOption } from '../../components/ui/SelectLite';
 import { Card } from '../_atoms';
@@ -55,7 +55,9 @@ function isLocalAsrPreset(id: string): boolean {
 
 function LlmThinkingToggle({ enabled, onToggle }: { enabled: boolean; onToggle: (next: boolean) => void }) {
   const { t } = useTranslation();
-  const layoutStack = useLayoutStack();
+  const baseLayoutStack = useLayoutStack();
+  const conservative = useConservativeLayout();
+  const layoutStack = conservative || baseLayoutStack;
   return (
     <div
       title={t('settings.providers.thinkingModeHint')}
@@ -304,7 +306,9 @@ export function ChannelCredentialFields({
 }) {
   const { t } = useTranslation();
   const { prefs, updatePrefs } = useHotkeySettings();
-  const layoutStack = useLayoutStack();
+  const baseLayoutStack = useLayoutStack();
+  const conservative = useConservativeLayout();
+  const layoutStack = conservative || baseLayoutStack;
   const [llmModelRevision, setLlmModelRevision] = useState(0);
   const [asrModelRevision, setAsrModelRevision] = useState(0);
   const unifiedBailian = providerType === 'bailian';
@@ -739,7 +743,9 @@ type ProviderToolStatus = 'idle' | 'loading' | 'success' | 'empty' | 'error';
 
 function ProviderTools({ kind, modelAccount, provider, onModelSelected, onTested, onUserMutation, showFetchModels = true }: { kind: 'llm' | 'asr' | 'omni'; modelAccount: string; provider?: string; onModelSelected: () => void; onTested?: () => void; onUserMutation?: () => void; showFetchModels?: boolean }) {
   const { t } = useTranslation();
-  const layoutStack = useLayoutStack();
+  const baseLayoutStack = useLayoutStack();
+  const conservative = useConservativeLayout();
+  const layoutStack = conservative || baseLayoutStack;
   const [models, setModels] = useState<string[]>([]);
   const [selectedModel, setSelectedModel] = useState('');
   const [status, setStatus] = useState<ProviderToolStatus>('idle');
@@ -904,7 +910,9 @@ interface CredentialFieldProps {
 
 function CredentialField({ label, account, provider, placeholder, mono, mask, defaultValue, trailing, onValueChange, onUserMutation, options }: CredentialFieldProps) {
   const { t } = useTranslation();
-  const layoutStack = useLayoutStack();
+  const baseLayoutStack = useLayoutStack();
+  const conservative = useConservativeLayout();
+  const layoutStack = conservative || baseLayoutStack;
   const [value, setValue] = useState('');
   const [revealed, setRevealed] = useState(false);
   const [loaded, setLoaded] = useState(false);
@@ -1169,7 +1177,9 @@ const iconBtnStyle: CSSProperties = {
  */
 export function OmniChannelSection() {
   const { t } = useTranslation();
-  const layoutStack = useLayoutStack();
+  const baseLayoutStack = useLayoutStack();
+  const conservative = useConservativeLayout();
+  const layoutStack = conservative || baseLayoutStack;
   const { prefs, updatePrefs } = useHotkeySettings();
   const [omniProvider, setOmniProvider] = useState<OmniPresetId>('custom');
   const [committedOmniProvider, setCommittedOmniProvider] = useState<OmniPresetId>('custom');

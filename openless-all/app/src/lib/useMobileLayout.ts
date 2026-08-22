@@ -31,3 +31,9 @@ export function useLayoutStack(breakpoint = 720): boolean {
   const { prefs } = useHotkeySettings();
   return mobile || prefs?.stackedRowLayout === true;
 }
+
+/** 保守排版：仅读用户偏好，不与 mobile 联动。 */
+export function useConservativeLayout(): boolean {
+  const { prefs } = useHotkeySettings();
+  return prefs?.conservativeLayout === true;
+}

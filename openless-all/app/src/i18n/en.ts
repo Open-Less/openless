@@ -1337,6 +1337,8 @@ export const en: typeof zhCN = {
       activityHeatmapLabel: 'Show annual activity heatmap on Overview',
       stackedRowLayoutLabel: 'Readable layout (wrap rows)',
       stackedRowLayoutDesc: 'On small screens or with large text, buttons and controls that no longer fit on one line move to the next line instead of overflowing or squashing text.',
+      conservativeLayoutLabel: 'Conservative layout',
+      conservativeLayoutDesc: 'Outside the home page, top bar, and bottom bar, settings and feature pages use a single full-width column to minimize horizontal overflow.',
       system: 'Follow system',
       light: 'Light',
       dark: 'Dark',

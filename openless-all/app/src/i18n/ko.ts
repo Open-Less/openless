@@ -1305,6 +1305,8 @@ export const ko: typeof zhCN = {
       activityHeatmapLabel: '개요 페이지에 연간 활동 표시',
       stackedRowLayoutLabel: '읽기 쉬운 레이아웃(넘침 방지 줄바꿈)',
       stackedRowLayoutDesc: '작은 화면이나 큰 글꼴에서 한 줄에 맞지 않는 버튼과 옵션은 다음 줄로 넘어가 가로 넘침과 글자 눌림을 방지합니다.',
+      conservativeLayoutLabel: '보수적 레이아웃',
+      conservativeLayoutDesc: '홈, 상단 바, 하단 바 외 설정·기능 페이지를 단일 열·전체 너비로 표시하여 가로 넘침을 최대한 방지합니다.',
       system: '시스템 따르기',
       light: '라이트',
       dark: '다크',

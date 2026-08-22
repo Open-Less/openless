@@ -3,7 +3,7 @@
 
 import type { CSSProperties, ReactNode } from "react"
 import { Tooltip } from "../../components/Tooltip"
-import { useLayoutStack } from "../../lib/useMobileLayout"
+import { useLayoutStack, useConservativeLayout } from "../../lib/useMobileLayout"
 
 // 带说明的文字统一加虚线下划线 + help 光标，暗示「悬停可看解释」。
 const hintableTextStyle: CSSProperties = {
@@ -68,6 +68,8 @@ export function SettingRow({
     controlWidth,
 }: SettingRowProps) {
     const layoutStack = useLayoutStack()
+    const conservative = useConservativeLayout()
+    const stackLayout = conservative || layoutStack
     const labelStyle: CSSProperties = {
         fontSize: 13,
         fontWeight: 500,
@@ -78,9 +80,9 @@ export function SettingRow({
         <div
             style={{
                 display: "grid",
-                gridTemplateColumns: layoutStack ? "minmax(0, 1fr)" : "minmax(0, 180px) minmax(0, 1fr)",
-                gap: layoutStack ? 8 : 16,
-                padding: layoutStack ? "12px 0" : "14px 0",
+                gridTemplateColumns: stackLayout ? "minmax(0, 1fr)" : "minmax(0, 180px) minmax(0, 1fr)",
+                gap: stackLayout ? 8 : 16,
+                padding: stackLayout ? "12px 0" : "14px 0",
                 borderTop: "0.5px solid var(--ol-line-soft)",
                 alignItems: "center",
             }}
@@ -96,15 +98,15 @@ export function SettingRow({
                 )}
             </div>
             <div
-                className={layoutStack ? "ol-flex-row" : undefined}
+                className={stackLayout ? "ol-flex-row" : undefined}
                 style={{
                     display: "flex",
                     alignItems: "center",
                     minWidth: 0,
-                    width: layoutStack ? "100%" : controlWidth ?? "auto",
+                    width: stackLayout ? "100%" : controlWidth ?? "auto",
                     maxWidth: "100%",
-                    flexWrap: layoutStack ? "wrap" : "nowrap",
-                    gap: layoutStack ? 6 : undefined,
+                    flexWrap: stackLayout ? "wrap" : "nowrap",
+                    gap: stackLayout ? 6 : undefined,
                 }}
             >
                 {children}

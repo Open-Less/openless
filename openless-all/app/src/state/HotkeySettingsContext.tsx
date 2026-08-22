@@ -22,6 +22,7 @@ import type {
 import i18n, { outputPrefsForLocale, type SupportedLocale } from "../i18n"
 import { applyThemeFromPreference } from "../lib/themeMode"
 import { applyStackedLayoutFromPrefs } from "../lib/stackedLayout"
+import { applyConservativeLayout } from "../lib/conservativeLayout"
 import { shouldUseMobileLayout } from "../lib/useMobileLayout"
 import { emitSaved } from "../lib/savedEvent"
 
@@ -71,6 +72,7 @@ export function HotkeySettingsProvider({ children }: { children: ReactNode }) {
                     shouldUseMobileLayout(),
                     prefsResult.value.stackedRowLayout,
                 )
+                applyConservativeLayout(prefsResult.value.conservativeLayout === true)
             } else {
                 console.error(
                     "[hotkey-settings] failed to load preferences",
@@ -136,6 +138,7 @@ export function HotkeySettingsProvider({ children }: { children: ReactNode }) {
                             shouldUseMobileLayout(),
                             nextPrefs.stackedRowLayout,
                         )
+                        applyConservativeLayout(nextPrefs.conservativeLayout === true)
                     },
                 )
                 if (cancelled) {
@@ -214,6 +217,7 @@ export function HotkeySettingsProvider({ children }: { children: ReactNode }) {
                 shouldUseMobileLayout(),
                 resolved.stackedRowLayout,
             )
+            applyConservativeLayout(resolved.conservativeLayout === true)
             try {
                 await queueSetSettings(resolved)
                 persistedPrefsRef.current = resolved
