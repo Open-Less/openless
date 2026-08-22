@@ -29,7 +29,7 @@ import {
   type Channel,
 } from '../../lib/ipc';
 import { emitSaved } from '../../lib/savedEvent';
-import { useMobileLayout } from '../../lib/useMobileLayout';
+import { useMobileLayout, useReadableLayout, useConservativeLayout } from '../../lib/useMobileLayout';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
 import { getPlatformCapabilities } from '../../lib/platform';
 import { Card } from '../_atoms';
@@ -154,6 +154,9 @@ export function ChannelList({
 }) {
   const { t } = useTranslation();
   const mobile = useMobileLayout();
+  const readable = useReadableLayout();
+  const conservative = useConservativeLayout();
+  const preferenceStack = readable || conservative;
   const os = detectOS();
   // 初值 false：getPlatformCapabilities() 的权威值是架构感知的（Apple Silicon /
   // Intel），以 os === 'mac' 起步会让 Intel Mac 打开下拉时闪现一次 MLX 预设，
@@ -452,7 +455,8 @@ export function ChannelList({
               }}
               style={{
                 display: 'flex',
-                alignItems: 'center',
+                flexDirection: preferenceStack ? 'column' : 'row',
+                alignItems: preferenceStack ? 'stretch' : 'center',
                 gap: 10,
                 // 左侧补偿 2px 竖条与 0.5px 细边的宽度差，文字基线保持对齐。
                 padding: isActive ? '10px 12px 10px 10.5px' : '10px 12px',
@@ -470,6 +474,7 @@ export function ChannelList({
                 transition: draggingId ? undefined : 'opacity 0.16s var(--ol-motion-quick)',
               }}
             >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flex: 1, width: preferenceStack ? '100%' : undefined }}>
               <span
                 onPointerDown={e => onDragHandleDown(e, channel.id)}
                 onClick={e => e.stopPropagation()}
@@ -500,6 +505,18 @@ export function ChannelList({
                   {channel.lastTest && <span>{relativeTime(channel.lastTest.at, t)}</span>}
                 </div>
               </div>
+              </div>
+              <div
+                className={conservative ? 'ol-conservative-stack' : undefined}
+                style={{
+                  display: 'flex',
+                  flexDirection: conservative ? 'column' : 'row',
+                  alignItems: conservative ? 'flex-start' : 'center',
+                  gap: 8,
+                  flexWrap: readable ? 'wrap' : 'nowrap',
+                  width: preferenceStack ? '100%' : undefined,
+                }}
+              >
               <VerifyButton
                 channel={channel}
                 testing={Boolean(testingIds[channel.id])}
@@ -512,11 +529,13 @@ export function ChannelList({
                 onClick={() => setEditingId(channel.id)}
                 title={t('settings.channels.edit')}
                 aria-label={t('settings.channels.edit')}
-                style={iconBtn}
+                style={{ ...iconBtn, ...(conservative ? { width: 'auto', padding: '0 10px', gap: 6 } : {}) }}
               >
                 <Icon name="chevRight" size={13} />
+                {conservative && <span style={{ fontSize: 12 }}>{t('settings.channels.edit')}</span>}
               </button>
             </div>
+              </div>
           );
         })}
       </div>

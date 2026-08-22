@@ -10,10 +10,9 @@ export function applyStackedLayout(enabled: boolean): void {
 }
 
 export function applyStackedLayoutFromPrefs(
-  mobile: boolean,
   stackedRowLayout?: boolean,
 ): void {
-  applyStackedLayout(mobile || stackedRowLayout === true);
+  applyStackedLayout(stackedRowLayout === true);
 }
 
 export function isStackedLayoutActive(): boolean {

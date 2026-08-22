@@ -8,7 +8,7 @@ import { Icon } from '../../components/Icon';
 import { isDialogStatus, UpdateDialog, useAutoUpdate } from '../../components/AutoUpdate';
 import type { UpdateChannel } from '../../lib/ipc';
 
-export function CheckUpdateButton({ channel }: { channel: UpdateChannel }) {
+export function CheckUpdateButton({ channel, compact = false }: { channel: UpdateChannel; compact?: boolean }) {
   const { t } = useTranslation();
   const updater = useAutoUpdate();
   const { status, checking, busy } = updater;
@@ -36,16 +36,33 @@ export function CheckUpdateButton({ channel }: { channel: UpdateChannel }) {
       <button
         onClick={() => void updater.checkForUpdates(channel)}
         disabled={checking || busy}
+        aria-label={compact ? label : undefined}
         title={
           failed
             ? (updater.errorMessage ?? t('settings.about.updateError'))
             : upToDate
               ? t('settings.about.upToDate')
-              : undefined
+              : compact
+                ? label
+                : undefined
         }
-        // 固定宽度 + 内容居中：图标（check ↔ refresh）与 label（"检查更新" ↔ "检查中…"）
-        // 切换时按钮尺寸不再跳动；图标固定容器保证旋转时绕中心转、不位移。
-        style={{ ...btnGhostStyle, color, opacity: checking || busy ? 0.7 : 1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, minWidth: 160 }}
+        // 桌面保留稳定文字宽度；紧凑布局使用带可访问名称的图标按钮。
+        style={{
+          ...btnGhostStyle,
+          color,
+          opacity: checking || busy ? 0.7 : 1,
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: 6,
+          boxSizing: 'border-box',
+          width: compact ? 32 : undefined,
+          minWidth: compact ? 32 : 160,
+          maxWidth: compact ? 32 : '100%',
+          minHeight: compact ? 32 : undefined,
+          padding: compact ? 5 : btnGhostStyle.padding,
+          flexShrink: 0,
+        }}
       >
         <span style={{ display: 'inline-flex', width: 14, height: 14, alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
           <Icon
@@ -62,6 +79,7 @@ export function CheckUpdateButton({ channel }: { channel: UpdateChannel }) {
         <span
           key={label}
           style={{
+            display: compact ? 'none' : undefined,
             whiteSpace: 'nowrap',
             // 状态文案（"检查更新" ↔ "检查中…" ↔ 结果提示）切换时淡入微滑移，
             // 与 SelectLite 选中值切换动画同款（ol-select-value-in，global.css）。

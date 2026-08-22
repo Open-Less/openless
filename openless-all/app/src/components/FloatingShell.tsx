@@ -124,9 +124,9 @@ function FloatingShellBody({ os, initialTab, initialSettings }: { os: OS; initia
   }, []);
 
   useEffect(() => {
-    applyStackedLayoutFromPrefs(mobile, prefs?.stackedRowLayout);
+    applyStackedLayoutFromPrefs(prefs?.stackedRowLayout);
     applyConservativeLayout(prefs?.conservativeLayout === true);
-  }, [mobile, prefs?.stackedRowLayout, prefs?.conservativeLayout]);
+  }, [prefs?.stackedRowLayout, prefs?.conservativeLayout]);
 
   const Page = PAGE_CMP[displayTab as Exclude<AppTab, 'localAsr'>] ?? Overview;
 

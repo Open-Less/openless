@@ -23,7 +23,6 @@ import i18n, { outputPrefsForLocale, type SupportedLocale } from "../i18n"
 import { applyThemeFromPreference } from "../lib/themeMode"
 import { applyStackedLayoutFromPrefs } from "../lib/stackedLayout"
 import { applyConservativeLayout } from "../lib/conservativeLayout"
-import { shouldUseMobileLayout } from "../lib/useMobileLayout"
 import { emitSaved } from "../lib/savedEvent"
 
 interface HotkeySettingsContextValue {
@@ -68,10 +67,7 @@ export function HotkeySettingsProvider({ children }: { children: ReactNode }) {
                 persistedPrefsRef.current = prefsResult.value
                 setPrefs(prefsResult.value)
                 applyThemeFromPreference(prefsResult.value.themeMode ?? "system")
-                applyStackedLayoutFromPrefs(
-                    shouldUseMobileLayout(),
-                    prefsResult.value.stackedRowLayout,
-                )
+                applyStackedLayoutFromPrefs(prefsResult.value.stackedRowLayout)
                 applyConservativeLayout(prefsResult.value.conservativeLayout === true)
             } else {
                 console.error(
@@ -134,10 +130,7 @@ export function HotkeySettingsProvider({ children }: { children: ReactNode }) {
                         persistedPrefsRef.current = nextPrefs
                         setPrefs(nextPrefs)
                         applyThemeFromPreference(nextPrefs.themeMode ?? "system")
-                        applyStackedLayoutFromPrefs(
-                            shouldUseMobileLayout(),
-                            nextPrefs.stackedRowLayout,
-                        )
+                        applyStackedLayoutFromPrefs(nextPrefs.stackedRowLayout)
                         applyConservativeLayout(nextPrefs.conservativeLayout === true)
                     },
                 )
@@ -213,10 +206,7 @@ export function HotkeySettingsProvider({ children }: { children: ReactNode }) {
             if (resolved === current) return
             setPrefs(resolved)
             latestPrefsRef.current = resolved
-            applyStackedLayoutFromPrefs(
-                shouldUseMobileLayout(),
-                resolved.stackedRowLayout,
-            )
+            applyStackedLayoutFromPrefs(resolved.stackedRowLayout)
             applyConservativeLayout(resolved.conservativeLayout === true)
             try {
                 await queueSetSettings(resolved)

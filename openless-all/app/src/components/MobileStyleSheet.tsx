@@ -29,7 +29,7 @@ export function MobileStyleSheet({
     <div
       onClick={onClose}
       style={{
-        position: 'absolute',
+        position: 'fixed',
         inset: 0,
         zIndex: 60,
         background: 'rgba(15,17,22,0.32)',
@@ -77,7 +77,8 @@ export function MobileStyleSheet({
                 style={rowBtnStyle}
               >
                 <Icon name={item.icon} size={16} />
-                <span style={{ flex: 1 }}>{t(subItemLabelKey(item.id))}</span>
+                <span style={rowLabelStyle}>{t(subItemLabelKey(item.id))}</span>
+                <Icon name="chevRight" size={13} />
               </button>
             );
           })}
@@ -102,6 +103,10 @@ const iconBtnStyle: CSSProperties = {
 
 const rowBtnStyle: CSSProperties = {
   display: 'flex',
+  width: '100%',
+  boxSizing: 'border-box',
+  minWidth: 0,
+  flexWrap: 'nowrap',
   alignItems: 'center',
   gap: 12,
   padding: '12px 14px',
@@ -112,4 +117,12 @@ const rowBtnStyle: CSSProperties = {
   fontSize: 14,
   cursor: 'default',
   textAlign: 'left',
+};
+
+const rowLabelStyle: CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
 };

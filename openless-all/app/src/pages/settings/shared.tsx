@@ -3,7 +3,7 @@
 
 import type { CSSProperties, ReactNode } from "react"
 import { Tooltip } from "../../components/Tooltip"
-import { useLayoutStack, useConservativeLayout } from "../../lib/useMobileLayout"
+import { useMobileLayout, useReadableLayout, useConservativeLayout } from "../../lib/useMobileLayout"
 
 // 带说明的文字统一加虚线下划线 + help 光标，暗示「悬停可看解释」。
 const hintableTextStyle: CSSProperties = {
@@ -67,9 +67,10 @@ export function SettingRow({
     children,
     controlWidth,
 }: SettingRowProps) {
-    const layoutStack = useLayoutStack()
+    const mobile = useMobileLayout()
+    const readable = useReadableLayout()
     const conservative = useConservativeLayout()
-    const stackLayout = conservative || layoutStack
+    const stackLayout = mobile || readable || conservative
     const labelStyle: CSSProperties = {
         fontSize: 13,
         fontWeight: 500,
@@ -98,10 +99,11 @@ export function SettingRow({
                 )}
             </div>
             <div
-                className={stackLayout ? "ol-flex-row" : undefined}
+                className="ol-flex-row"
                 style={{
                     display: "flex",
                     alignItems: "center",
+                    justifyContent: "flex-start",
                     minWidth: 0,
                     width: stackLayout ? "100%" : controlWidth ?? "auto",
                     maxWidth: "100%",
@@ -127,7 +129,10 @@ export function Toggle({
             onClick={() => onToggle?.(!on)}
             style={{
                 position: "relative",
+                flex: "0 0 36px",
                 width: 36,
+                minWidth: 36,
+                maxWidth: 36,
                 height: 20,
                 borderRadius: 999,
                 border: 0,

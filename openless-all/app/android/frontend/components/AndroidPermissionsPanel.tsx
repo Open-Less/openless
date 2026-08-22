@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { Icon } from '../../../src/components/Icon';
@@ -76,7 +76,7 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
   const { t } = useTranslation();
   const baseLayoutStack = useLayoutStack();
   const conservative = useConservativeLayout();
-  const layoutStack = conservative || baseLayoutStack;
+  const layoutStack = baseLayoutStack || conservative;
   const [androidOverlay, setAndroidOverlay] = useState<AndroidOverlayStatus | null>(null);
   const [androidAccessibility, setAndroidAccessibility] = useState<AndroidAccessibilityStatus | null>(null);
   const [androidShizuku, setAndroidShizuku] = useState<AndroidShizukuStatus | null>(null);
@@ -273,12 +273,21 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
   const selectStyle = layoutStack
     ? { width: '100%', maxWidth: '100%' as const }
     : { minWidth: 180, maxWidth: '100%' as const };
+  const actionRowStyle: CSSProperties = {
+    display: 'flex',
+    flexDirection: conservative ? 'column' : 'row',
+    gap: 8,
+    alignItems: conservative ? 'flex-start' : layoutStack ? 'flex-start' : 'center',
+    justifyContent: rowJustify,
+    width: '100%', flexWrap: conservative ? 'nowrap' : 'wrap', minWidth: 0,
+  };
+
 
   return (
     <>
       {showOverlayPermission && (
       <SettingRow label={t('settings.permissions.androidOverlayLabel')}>
-        <div className="ol-flex-row" style={{ display: 'flex', gap: 8, alignItems: layoutStack ? 'flex-start' : 'center', justifyContent: rowJustify, width: '100%', flexWrap: 'wrap', minWidth: 0 }}>
+        <div className="ol-flex-row" style={actionRowStyle}>
           {androidOverlay?.message && (
             <span style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', maxWidth: hintMaxWidthSm, textAlign: hintAlign }}>
               {androidOverlay.message}
@@ -296,7 +305,7 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
       {showAccessibility && (
       <SettingRow label={t('settings.permissions.androidAccessibilityLabel')}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: colAlign, width: '100%', minWidth: 0 }}>
-          <div className="ol-flex-row" style={{ display: 'flex', gap: 8, alignItems: layoutStack ? 'flex-start' : 'center', justifyContent: rowJustify, width: '100%', flexWrap: 'wrap', minWidth: 0 }}>
+          <div className="ol-flex-row" style={actionRowStyle}>
             {resolveAccessibilityMessage(t, androidAccessibility?.messageKey) && (
               <span style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', maxWidth: hintMaxWidthSm, textAlign: hintAlign }}>
                 {resolveAccessibilityMessage(t, androidAccessibility?.messageKey)}
@@ -318,7 +327,7 @@ export function AndroidPermissionsPanel({ mode = 'all' }: AndroidPermissionsPane
       {showAccessibility && (
       <SettingRow label={t('settings.permissions.androidShizukuLabel')}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: colAlign, width: '100%', minWidth: 0 }}>
-          <div className="ol-flex-row" style={{ display: 'flex', gap: 8, alignItems: layoutStack ? 'flex-start' : 'center', justifyContent: rowJustify, width: '100%', flexWrap: 'wrap', minWidth: 0 }}>
+          <div className="ol-flex-row" style={actionRowStyle}>
             {resolveShizukuMessage(t, shizukuDisplayMessageKey) && (
               <span style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', maxWidth: hintMaxWidthSm, textAlign: hintAlign }}>
                 {resolveShizukuMessage(t, shizukuDisplayMessageKey)}

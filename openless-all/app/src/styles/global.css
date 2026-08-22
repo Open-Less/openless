@@ -224,13 +224,13 @@ html[data-ol-stacked-layout="true"] .ol-flex-row {
   align-items: flex-start;
 }
 
-html[data-ol-stacked-layout="true"] .ol-flex-row > .ol-flex-split {
+html[data-ol-stacked-layout="true"] .ol-flex-row.ol-flex-split {
   flex: 1 1 100%;
   max-width: 100%;
   min-width: 0;
 }
 
-html[data-ol-stacked-layout="true"] .ol-flex-row > .ol-flex-push {
+html[data-ol-stacked-layout="true"] .ol-flex-row.ol-flex-push {
   flex: 0 0 auto;
   max-width: 100%;
 }
@@ -243,11 +243,6 @@ html[data-ol-stacked-layout="true"] .ol-console-main {
   overflow-x: hidden;
 }
 
-html[data-ol-stacked-layout="true"]:not([data-ol-conservative-layout="true"]) .ol-flex-row > * {
-  flex: 1 1 auto;
-  min-width: min(100%, 10rem);
-  max-width: 100%;
-}
 
 /* ── 保守排版（data-ol-conservative-layout）──────────────────────────────────────
    除首页、顶栏、底栏与胶囊窗外，内容区强制单列满宽。 */
@@ -255,21 +250,22 @@ html[data-ol-conservative-layout="true"] .ol-conservative-scope {
   overflow-x: hidden;
 }
 
-html[data-ol-conservative-layout="true"] .ol-conservative-scope .ol-flex-row {
+html[data-ol-conservative-layout="true"] .ol-conservative-scope .ol-conservative-stack {
+  display: flex;
   flex-direction: column;
-  align-items: stretch;
+  align-items: flex-start;
   width: 100%;
+  min-width: 0;
 }
 
-html[data-ol-conservative-layout="true"] .ol-conservative-scope .ol-flex-row > * {
-  width: 100%;
+html[data-ol-conservative-layout="true"] .ol-conservative-scope .ol-conservative-stack > * {
   max-width: 100%;
   min-width: 0;
-  flex: 1 1 auto;
+  flex: 0 0 auto;
 }
 
 html[data-ol-conservative-layout="true"] .ol-conservative-scope .ol-grid-auto-cards,
-html[data-ol-conservative-layout="true"] .ol-conservative-scope [class*="ol-grid"] {
+html[data-ol-conservative-layout="true"] .ol-conservative-scope .ol-conservative-grid {
   grid-template-columns: 1fr !important;
 }
 

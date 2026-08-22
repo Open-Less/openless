@@ -11,6 +11,7 @@ import { getPlatformCapabilities, openExternal } from '../../lib/ipc';
 import type { PlatformCapabilities } from '../../lib/types';
 import { APP_VERSION_LABEL } from '../../lib/appVersion';
 import { Card } from '../_atoms';
+import { useConservativeLayout, useLayoutStack } from '../../lib/useMobileLayout';
 import { btnGhostStyle, SectionTitle } from './shared';
 import { CheckUpdateButton } from './CheckUpdateButton';
 
@@ -19,6 +20,10 @@ const RELEASE_NOTES_URL = 'https://github.com/Open-Less/openless/releases';
 
 export function AboutSection() {
   const { t } = useTranslation();
+  const baseLayoutStack = useLayoutStack();
+  const conservativeLayout = useConservativeLayout();
+  const compactLayout = baseLayoutStack || conservativeLayout;
+  const appIconSize = compactLayout ? 36 : 56;
   const [qqCopied, setQqCopied] = useState(false);
   const [platformCaps, setPlatformCaps] = useState<PlatformCapabilities | null>(null);
   const qqCopiedRef = useRef<number | null>(null);
@@ -42,21 +47,43 @@ export function AboutSection() {
     <>
       {/* ─── 版本信息 + 检查更新（正式版）─────────────────────────────── */}
       <Card>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+        <div
+          className="ol-inline-composite"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: compactLayout ? 4 : 14,
+            minWidth: 0,
+            flexWrap: 'nowrap',
+          }}
+        >
           <img
             src="AppIcon.png"
             alt=""
-            style={{ width: 56, height: 56, borderRadius: 13, boxShadow: '0 4px 10px rgba(0,0,0,.10), 0 0 0 0.5px rgba(0,0,0,.06)' }}
+            style={{
+              width: appIconSize,
+              height: appIconSize,
+              flexShrink: 0,
+              borderRadius: 13,
+              boxShadow: '0 4px 10px rgba(0,0,0,.10), 0 0 0 0.5px rgba(0,0,0,.06)',
+            }}
           />
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 17, fontWeight: 600 }}>OpenLess</div>
-            <div style={{ fontSize: 12, color: 'var(--ol-ink-3)', marginTop: 2 }}>
+            <div style={{ fontSize: 17, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>OpenLess</div>
+            <div style={{
+              fontSize: 12,
+              color: 'var(--ol-ink-3)',
+              marginTop: 2,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}>
               {t('modal.about.tagline')} · {APP_VERSION_LABEL}
             </div>
           </div>
           {/* 图标右上方：查正式版的检查更新按钮。Beta 渠道在「高级」页。 */}
           {platformCaps?.supportsAutoUpdate === true && (
-            <CheckUpdateButton channel="stable" />
+            <CheckUpdateButton channel="stable" compact={compactLayout} />
           )}
         </div>
       </Card>
