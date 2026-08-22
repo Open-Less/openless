@@ -6,7 +6,6 @@ import android.app.Application
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
-import android.provider.Settings
 import android.util.Log
 
 /**
@@ -66,11 +65,7 @@ class OpenLessApplication : Application() {
     }
 
     private fun canDrawOverlays(): Boolean {
-        return if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
-            Settings.canDrawOverlays(this)
-        } else {
-            true
-        }
+        return OpenLessPermissionBridge.canDrawOverlaysSafely(this)
     }
 
     private fun sendOverlayAction(action: String) {
