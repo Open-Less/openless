@@ -446,7 +446,10 @@ pub mod android {
         Ok(())
     }
 
-    pub fn can_draw_overlays(env: &mut JNIEnv, context: &JObject) -> Result<bool, String> {
+    pub fn can_draw_overlays<'local>(
+        env: &mut JNIEnv<'local>,
+        context: &JObject<'local>,
+    ) -> Result<bool, String> {
         if android_sdk_int(env)? < 23 {
             return Ok(true);
         }
