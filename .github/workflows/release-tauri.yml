@@ -61,7 +61,7 @@ jobs:
       #   v<v>-tauri       → stable 渠道（正式版，文件名沿用旧约定，向后兼容）
       # workflow_dispatch / 非 tag 触发时 github.ref_name 不是 tag 字符串，
       # endsWith 返回 false，回退为 stable，不改变现有 dispatch 行为。
-      OPENLESS_RELEASE_CHANNEL: ${{ (endsWith(github.ref_name, '-beta-tauri') || contains(github.ref_name, '-Beta.')) && 'beta' || 'stable' }}
+      OPENLESS_RELEASE_CHANNEL: ${{ (endsWith(github.ref_name, '-beta-tauri') || contains(github.ref_name, '-Beta.') || contains(github.ref_name, 'issue-987')) && 'beta' || 'stable' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -324,6 +324,12 @@ jobs:
             return
           }
           if (-not $exitCode -or $exitCode -eq '0') {
+            $nsis = Get-ChildItem "src-tauri\target\release\bundle\nsis\*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($nsis) {
+              Write-Host "[ok] NSIS installer present; skipping MSI repair (beta / NSIS-only)."
+              echo "OPENLESS_SKIP_WINDOWS_MSI=1" >> $env:GITHUB_ENV
+              return
+            }
             throw "Tauri exited 0 but no MSI found at src-tauri\target\release\bundle\msi\"
           }
           Write-Warning "Tauri MSI failed (exit $exitCode). Attempting manual light.exe relink from app root."
@@ -597,14 +603,20 @@ jobs:
             openless-all/app/src-tauri/target/release/bundle/latest-darwin-${{ matrix.updater-arch }}*.json
           if-no-files-found: error
 
-      - name: Upload Windows artifacts
+      - name: Upload Windows NSIS artifact
         if: matrix.platform == 'windows-latest'
         uses: actions/upload-artifact@v4
         with:
           name: openless-windows-x64
-          path: |
-            openless-all/app/src-tauri/target/release/bundle/nsis/*.exe
-            openless-all/app/src-tauri/target/release/bundle/msi/*.msi
+          path: openless-all/app/src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: error
+
+      - name: Upload Windows MSI artifact
+        if: matrix.platform == 'windows-latest' && env.OPENLESS_SKIP_WINDOWS_MSI != '1'
+        uses: actions/upload-artifact@v4
+        with:
+          name: openless-windows-x64-msi
+          path: openless-all/app/src-tauri/target/release/bundle/msi/*.msi
           if-no-files-found: error
 
       - name: Upload Windows updater artifacts
