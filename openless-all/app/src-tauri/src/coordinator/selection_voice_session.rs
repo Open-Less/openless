@@ -10,8 +10,8 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use super::{
-    answer_qa_question_text, build_active_llm_provider, emit_capsule, open_qa_panel, polish_text,
-    qa_session, CapsuleFeedback, Coordinator, Inner, QaPhase,
+    answer_qa_question_text, emit_capsule, open_qa_panel, polish_text, qa_session,
+    CapsuleFeedback, Coordinator, Inner, QaPhase,
 };
 use crate::coordinator_state::{initial_session_id, new_session_id, SessionId};
 use crate::edit_plan::{apply_edit_plan, parse_edit_plan_json, EditPlan};
@@ -262,16 +262,30 @@ async fn resolve_intent_with_optional_llm(
     if prefs.selection_voice_intent_mode != SelectionVoiceIntentMode::Auto {
         return classification.intent;
     }
-    if let Ok(provider) = build_active_llm_provider(prefs.llm_thinking_enabled) {
-        let system = crate::polish::prompts::selection_voice_intent_classification_prompt();
-        if let Ok(raw) = provider
-            .complete(&system, instruction_polished, None)
-            .await
-        {
-            if let Some(intent) = parse_intent_classification_json(&raw) {
-                classification.intent = intent;
-                classification.source = "auto_llm";
-            }
+    let system = crate::polish::prompts::selection_voice_intent_classification_prompt();
+    let mut llm_call = None;
+    let mut polish_ms = None;
+    if let Ok(raw) = polish_text(
+        instruction_polished,
+        PolishMode::Light,
+        &[],
+        &system,
+        &prefs.working_languages,
+        prefs.chinese_script_preference,
+        prefs.output_language_preference,
+        prefs.llm_thinking_enabled,
+        None,
+        None,
+        &[],
+        &mut llm_call,
+        &mut polish_ms,
+        false,
+    )
+    .await
+    {
+        if let Some(intent) = parse_intent_classification_json(&raw) {
+            classification.intent = intent;
+            classification.source = "auto_llm";
         }
     }
     log::info!(
@@ -344,8 +358,6 @@ async fn generate_edit_plan(
     instruction_polished: &str,
 ) -> Result<EditPlan, String> {
     let prefs = inner.prefs.get();
-    let provider = build_active_llm_provider(prefs.llm_thinking_enabled)
-        .map_err(|error| error.to_string())?;
     let safe_draft =
         crate::polish::prompts::sanitize_for_xml_envelope(draft, "draft");
     let safe_instruction = crate::polish::prompts::sanitize_for_xml_envelope(
@@ -356,10 +368,26 @@ async fn generate_edit_plan(
         "<field_context></field_context>\n<draft>\n{safe_draft}\n</draft>\n\n<instruction>\n{safe_instruction}\n</instruction>"
     );
     let system = crate::polish::prompts::voice_edit_system_prompt();
-    let raw = provider
-        .complete(&system, &user_prompt, None)
-        .await
-        .map_err(|error| error.to_string())?;
+    let mut llm_call = None;
+    let mut polish_ms = None;
+    let raw = polish_text(
+        &user_prompt,
+        PolishMode::Light,
+        &[],
+        &system,
+        &prefs.working_languages,
+        prefs.chinese_script_preference,
+        prefs.output_language_preference,
+        prefs.llm_thinking_enabled,
+        None,
+        None,
+        &[],
+        &mut llm_call,
+        &mut polish_ms,
+        false,
+    )
+    .await
+    .map_err(|error| error.to_string())?;
     parse_edit_plan_json(&raw)
 }
 
