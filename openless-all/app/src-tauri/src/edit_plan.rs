@@ -2,9 +2,11 @@
 //! deterministically to a draft (issue #987 desktop MVP; EditPlan shape refs #900).
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::time::{Duration, Instant};
 
 use crate::correction::apply_rule;
+use crate::polish::clean_json_llm_output;
 
 const MAX_OPERATIONS: usize = 32;
 const MAX_OP_STRING_LEN: usize = 8_192;
@@ -82,8 +84,102 @@ impl std::error::Error for EditApplyError {}
 
 pub fn parse_edit_plan_json(raw: &str) -> Result<EditPlan, String> {
     let trimmed = raw.trim();
-    let json = extract_json_object(trimmed).unwrap_or(trimmed);
-    serde_json::from_str(json).map_err(|error| format!("invalid EditPlan JSON: {error}"))
+    match parse_edit_plan_json_candidate(trimmed) {
+        Ok(plan) => Ok(plan),
+        Err(primary) => {
+            let cleaned = clean_json_llm_output(raw);
+            if cleaned == trimmed {
+                Err(primary)
+            } else {
+                parse_edit_plan_json_candidate(&cleaned).map_err(|secondary| {
+                    format!("invalid EditPlan JSON: {primary}; cleaned retry: {secondary}")
+                })
+            }
+        }
+    }
+}
+
+fn parse_edit_plan_json_candidate(raw: &str) -> Result<EditPlan, String> {
+    let json = extract_json_object(raw).unwrap_or(raw);
+    let mut value: Value = serde_json::from_str(json)
+        .map_err(|error| format!("invalid EditPlan JSON: {error}"))?;
+    normalize_edit_plan_value(&mut value);
+    serde_json::from_value(value).map_err(|error| format!("invalid EditPlan JSON: {error}"))
+}
+
+fn normalize_edit_plan_value(value: &mut Value) {
+    let Some(obj) = value.as_object_mut() else {
+        return;
+    };
+    if !obj.contains_key("operations") {
+        if let Some(ops) = obj.remove("operation") {
+            obj.insert("operations".to_string(), ops);
+        }
+    }
+    if let Some(ops) = obj.get_mut("operations").and_then(|v| v.as_array_mut()) {
+        for op in ops {
+            normalize_edit_operation_value(op);
+        }
+    }
+}
+
+fn normalize_edit_operation_value(op: &mut Value) {
+    let Some(obj) = op.as_object_mut() else {
+        return;
+    };
+    if let Some(type_value) = obj.get("type").and_then(|v| v.as_str()) {
+        let normalized = normalize_operation_type(type_value);
+        obj.insert("type".to_string(), Value::String(normalized));
+    }
+    let op_type = obj
+        .get("type")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    if op_type == "full_rewrite" {
+        promote_alias_field(obj, "text", ["content", "body", "value", "replacement"]);
+    }
+    if op_type == "literal_replace" {
+        promote_alias_field(obj, "replace", ["replacement", "with", "value"]);
+        promote_alias_field(obj, "find", ["search", "match", "pattern"]);
+    }
+    if op_type == "regex_replace" {
+        promote_alias_field(obj, "pattern", ["regex", "find", "search"]);
+        promote_alias_field(obj, "replace", ["replacement", "with", "value"]);
+    }
+    if op_type == "range_replace" {
+        promote_alias_field(obj, "replace", ["replacement", "with", "value", "text"]);
+    }
+}
+
+fn normalize_operation_type(raw: &str) -> String {
+    let lower = raw.trim().to_ascii_lowercase();
+    match lower.as_str() {
+        "fullrewrite" | "full_rewrite" | "rewrite" | "translate" | "translation" => {
+            "full_rewrite".into()
+        }
+        "literalreplace" | "literal_replace" | "replace" | "text_replace" => {
+            "literal_replace".into()
+        }
+        "regexreplace" | "regex_replace" | "regexp_replace" => "regex_replace".into(),
+        "rangereplace" | "range_replace" | "substring_replace" => "range_replace".into(),
+        other => other.to_string(),
+    }
+}
+
+fn promote_alias_field(
+    obj: &mut serde_json::Map<String, Value>,
+    canonical: &str,
+    aliases: [&str; 4],
+) {
+    if obj.contains_key(canonical) {
+        return;
+    }
+    for alias in aliases {
+        if let Some(value) = obj.remove(alias) {
+            obj.insert(canonical.to_string(), value);
+            return;
+        }
+    }
 }
 
 fn extract_json_object(raw: &str) -> Option<&str> {
@@ -358,6 +454,19 @@ mod tests {
         assert_eq!(
             apply_edit_plan("abc", &plan),
             Err(EditApplyError::InvalidRange)
+        );
+    }
+
+    #[test]
+    fn parses_operation_alias_and_translate_type() {
+        let raw = r#"{"operation":[{"type":"translate","content":"Hello"}]}"#;
+        let plan = parse_edit_plan_json(raw).unwrap();
+        assert_eq!(plan.operations.len(), 1);
+        assert_eq!(
+            plan.operations[0],
+            EditOperation::FullRewrite {
+                text: "Hello".into()
+            }
         );
     }
 

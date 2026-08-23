@@ -10,17 +10,18 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use super::{
-    answer_qa_question_text, emit_capsule, open_qa_panel, polish_text, qa_session,
+    answer_qa_question_text, emit_capsule, open_qa_panel, polish_text, qa_session, translate_text,
     CapsuleFeedback, Coordinator, Inner, QaPhase,
 };
 use crate::coordinator_state::{initial_session_id, new_session_id, SessionId};
-use crate::edit_plan::{apply_edit_plan, parse_edit_plan_json, EditPlan};
+use crate::edit_plan::{apply_edit_plan, parse_edit_plan_json, EditOperation, EditPlan};
 use crate::selection::{SelectionContext, SelectionInsertionTarget};
 use crate::selection_voice_intent::{
     parse_intent_classification_json, resolve_selection_voice_intent, SelectionVoiceIntent,
 };
 use crate::types::{
-    CapsuleState, HistorySource, HotkeyMode, InsertStatus, PolishMode, SelectionVoiceIntentMode,
+    CapsuleState, HistorySource, HotkeyMode, InsertStatus, OutputLanguagePreference, PolishMode,
+    SelectionVoiceIntentMode, UserPreferences,
 };
 
 static SELECTION_VOICE_BUSY: AtomicBool = AtomicBool::new(false);
@@ -84,8 +85,17 @@ fn emit_selection_voice_end_error(inner: &Arc<Inner>, error: &str) {
 }
 
 fn selection_voice_end_message(error: &str) -> String {
-    if error.contains("invalid EditPlan JSON") || error.contains("edit plan") {
+    if error.contains("invalid EditPlan JSON") {
         return "编辑方案解析失败，请重试".into();
+    }
+    if error.contains("edit plan has no operations") {
+        return "未能生成有效编辑方案，请重试".into();
+    }
+    if error.contains("edit plan has too many operations") {
+        return "编辑方案过于复杂，请缩短指令".into();
+    }
+    if error.contains("edit operation exceeds size limit") {
+        return "编辑内容过长，请缩短选区或拆步操作".into();
     }
     if error.contains("global timeout") || error.contains("bailian global timeout") {
         return "语音识别超时，请重试".into();
@@ -674,6 +684,16 @@ async fn generate_edit_plan(
     instruction_polished: &str,
 ) -> Result<EditPlan, String> {
     let prefs = inner.prefs.get();
+    if selection_voice_instruction_looks_like_translation(instruction_polished) {
+        let target = infer_selection_voice_translation_target(instruction_polished, &prefs);
+        if !target.is_empty() {
+            log::info!(
+                "[selection-voice] translation edit path target={target} instruction={instruction_polished}"
+            );
+            return generate_translation_edit_plan(inner, draft, &target).await;
+        }
+    }
+
     let safe_draft =
         crate::polish::prompts::sanitize_for_xml_envelope(draft, "draft");
     let safe_instruction = crate::polish::prompts::sanitize_for_xml_envelope(
@@ -714,6 +734,19 @@ async fn generate_edit_plan(
     // #endregion
     match parse_edit_plan_json(&raw) {
         Ok(plan) => {
+            if plan.operations.is_empty() {
+                log::warn!("[selection-voice] edit plan parsed with zero operations");
+                if selection_voice_instruction_looks_like_translation(instruction_polished) {
+                    let target = infer_selection_voice_translation_target(
+                        instruction_polished,
+                        &prefs,
+                    );
+                    if !target.is_empty() {
+                        return generate_translation_edit_plan(inner, draft, &target).await;
+                    }
+                }
+                return Err("edit plan has no operations".into());
+            }
             // #region agent log
             crate::agent_debug::agent_debug_log(
                 "H6",
@@ -725,6 +758,10 @@ async fn generate_edit_plan(
             Ok(plan)
         }
         Err(error) => {
+            log::warn!(
+                "[selection-voice] edit plan parse failed: {error}; preview={}",
+                raw.chars().take(240).collect::<String>()
+            );
             // #region agent log
             crate::agent_debug::agent_debug_log(
                 "H7",
@@ -736,9 +773,99 @@ async fn generate_edit_plan(
                 }),
             );
             // #endregion
+            if selection_voice_instruction_looks_like_translation(instruction_polished) {
+                let target = infer_selection_voice_translation_target(
+                    instruction_polished,
+                    &prefs,
+                );
+                if !target.is_empty() {
+                    log::info!(
+                        "[selection-voice] falling back to translation edit path target={target}"
+                    );
+                    return generate_translation_edit_plan(inner, draft, &target).await;
+                }
+            }
             Err(error)
         }
     }
+}
+
+fn selection_voice_instruction_looks_like_translation(instruction: &str) -> bool {
+    let lower = instruction.to_lowercase();
+    lower.contains("翻译")
+        || lower.contains("译成")
+        || lower.contains("译为")
+        || lower.contains("translate")
+        || lower.contains("translation")
+}
+
+fn infer_selection_voice_translation_target(
+    instruction: &str,
+    prefs: &UserPreferences,
+) -> String {
+    let lower = instruction.to_lowercase();
+    if lower.contains("英文")
+        || lower.contains("英语")
+        || lower.contains("english")
+    {
+        return "English".into();
+    }
+    if lower.contains("日文") || lower.contains("日语") || lower.contains("japanese") {
+        return "日本語".into();
+    }
+    if lower.contains("韩文") || lower.contains("韩语") || lower.contains("korean") {
+        return "한국어".into();
+    }
+    if lower.contains("繁体") || lower.contains("繁體") {
+        return "繁體中文".into();
+    }
+    if lower.contains("简体") || lower.contains("簡體") || lower.contains("中文") {
+        return "简体中文".into();
+    }
+    let from_prefs = prefs.translation_target_language.trim();
+    if !from_prefs.is_empty() {
+        return from_prefs.to_string();
+    }
+    match prefs.output_language_preference {
+        OutputLanguagePreference::En => "English".into(),
+        OutputLanguagePreference::Ja => "日本語".into(),
+        OutputLanguagePreference::Ko => "한국어".into(),
+        OutputLanguagePreference::ZhCn => "简体中文".into(),
+        OutputLanguagePreference::ZhTw => "繁體中文".into(),
+        OutputLanguagePreference::Auto => String::new(),
+    }
+}
+
+async fn generate_translation_edit_plan(
+    inner: &Arc<Inner>,
+    draft: &str,
+    target_language: &str,
+) -> Result<EditPlan, String> {
+    let prefs = inner.prefs.get();
+    let mut llm_call = None;
+    let mut polish_ms = None;
+    let translated = translate_text(
+        draft,
+        target_language,
+        &prefs.working_languages,
+        prefs.chinese_script_preference,
+        prefs.output_language_preference,
+        prefs.llm_thinking_enabled,
+        None,
+        &mut llm_call,
+        &mut polish_ms,
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+    if translated.trim().is_empty() {
+        return Err("translation produced empty text".into());
+    }
+    Ok(EditPlan {
+        operations: vec![EditOperation::FullRewrite {
+            text: translated,
+        }],
+        summary: Some(format!("翻译为{target_language}")),
+    })
 }
 
 impl Coordinator {

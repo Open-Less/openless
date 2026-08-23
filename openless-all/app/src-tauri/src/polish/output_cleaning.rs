@@ -7,15 +7,6 @@
 
 use std::borrow::Cow;
 
-/// Best-effort cleanup of common LLM "introduction" prefixes and markdown fences.
-///
-/// Matches a small set of known leading phrases (`根据您给的内容...`, `整理如下...`, etc.)
-/// and strips them. We don't have the `regex` crate, so we use prefix checks plus
-/// an iterative trim — if the model stacks two boilerplate sentences we'll still
-/// strip both.
-///
-/// `pub(crate)` because `llm_gemini` 也要在它自己的解析路径上跑同一套清洗，
-/// 否则 polish prompt 已经禁用的"以下是整理后的内容"前缀只在 OpenAI 兼容路径生效。
 pub(crate) fn clean_polish_output(content: &str) -> String {
     let without_thinking = strip_thinking_blocks(content);
     let trimmed = without_thinking.trim();
@@ -32,6 +23,13 @@ pub(crate) fn clean_polish_output(content: &str) -> String {
     }
 
     output.trim().to_string()
+}
+
+/// JSON 结构化输出清洗：只剥离 thinking 块与 markdown 围栏，不删 boilerplate 前缀。
+pub(crate) fn clean_json_llm_output(content: &str) -> String {
+    let without_thinking = strip_thinking_blocks(content);
+    let trimmed = without_thinking.trim();
+    strip_markdown_fence(trimmed).trim().to_string()
 }
 
 /// Strip model reasoning blocks so only the final polished text is inserted.
