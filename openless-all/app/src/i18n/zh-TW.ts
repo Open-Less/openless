@@ -63,6 +63,16 @@ export const zhTW: typeof zhCN = {
     applyError: '未能應用：',
     confirmReplace: '確認並替換',
   },
+  selectionVoiceIntent: {
+    title: '你想做什麼？',
+    subtitle: '已識別你的語音指令，請選擇處理方式。',
+    loading: '載入中…',
+    sourcePrefix: '選區：',
+    errorPrefix: '未能繼續：',
+    question: '提問',
+    edit: '編輯選區',
+    cancel: '取消',
+  },
   qa: {
     title: '劃詞追問',
     headerHint: '隨時提問',
@@ -698,6 +708,21 @@ export const zhTW: typeof zhCN = {
     },
   },
   settings: {
+    selectionWorkspace: {
+      title: '選區助手',
+      hint: '選中文字後的兩種能力：① 選區潤色——不用麥克風，按風格包改寫；② 選區語音——按住快捷鍵口述指令，說完後選擇「提問」或「編輯選區」。',
+      polishHotkey: '潤色快捷鍵',
+      polishHotkeyDesc: '無需麥克風；用目前風格包改寫選中文字。',
+      polishDelivery: '潤色結果處理',
+      voiceEnable: '語音編輯',
+      voiceEnableDesc: '需麥克風；錄音方式跟隨全域設定（目前：{{recordingLabel}}）。',
+      voiceHotkey: '語音快捷鍵',
+      voiceHotkeyDesc: '預設 Ctrl+Shift+E；需先選中文字再觸發。',
+      autoIntent: '自動判斷意圖',
+      autoIntentDesc: '關閉時，每次說完後彈出選擇：提問或編輯選區。',
+      editKeywords: '編輯關鍵詞',
+      editKeywordsDesc: '僅在開啟自動判斷時生效；每行一個，命中即走編輯分支。',
+    },
     selectionPolish: {
       title: '選區潤色',
       hotkey: '觸發快捷鍵',

@@ -65,6 +65,16 @@ export const ko: typeof zhCN = {
     applyError: '적용하지 못했습니다: ',
     confirmReplace: '확인 후 교체',
   },
+  selectionVoiceIntent: {
+    title: '어떻게 하시겠어요?',
+    subtitle: '음성 지시를 인식했습니다. 처리 방법을 선택하세요.',
+    loading: '로딩 중…',
+    sourcePrefix: '선택 영역: ',
+    errorPrefix: '계속할 수 없습니다: ',
+    question: '질문하기',
+    edit: '선택 영역 편집',
+    cancel: '취소',
+  },
   qa: {
     title: '질문',
     headerHint: '언제든 질문하세요',
@@ -700,6 +710,21 @@ export const ko: typeof zhCN = {
     },
   },
   settings: {
+    selectionWorkspace: {
+      title: '선택 영역 도우미',
+      hint: '텍스트 선택 후 두 가지 기능: ① 다듬기 — 마이크 불필요, 스타일 팩으로 재작성；② 음성 — 단축키를 누르고 말한 뒤 「질문」 또는 「편집」 선택.',
+      polishHotkey: '다듬기 단축키',
+      polishHotkeyDesc: '마이크 불필요. 현재 스타일 팩으로 선택 영역을 재작성합니다.',
+      polishDelivery: '다듬기 결과 처리',
+      voiceEnable: '음성 편집',
+      voiceEnableDesc: '마이크 필요. 녹음 방식은 전역 설정을 따릅니다(현재: {{recordingLabel}}).',
+      voiceHotkey: '음성 단축키',
+      voiceHotkeyDesc: '기본 Ctrl+Shift+E. 먼저 텍스트를 선택한 뒤 실행하세요.',
+      autoIntent: '의도 자동 판별',
+      autoIntentDesc: '끄면 말할 때마다 질문 또는 편집을 선택합니다.',
+      editKeywords: '편집 키워드',
+      editKeywordsDesc: '자동 판별이 켜져 있을 때만 적용. 한 줄에 하나. 일치 시 편집으로 분기.',
+    },
     selectionPolish: {
       title: '선택 영역 다듬기',
       hotkey: '실행 단축키',
