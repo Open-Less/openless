@@ -712,14 +712,12 @@ export const ko: typeof zhCN = {
   settings: {
     selectionWorkspace: {
       title: '선택 영역 도우미',
-      hint: '텍스트 선택 후 두 가지 기능: ① 다듬기 — 마이크 불필요, 스타일 팩으로 재작성；② 음성 — 단축키를 누르고 말한 뒤 「질문」 또는 「편집」 선택.',
-      polishHotkey: '다듬기 단축키',
-      polishHotkeyDesc: '마이크 불필요. 현재 스타일 팩으로 선택 영역을 재작성합니다.',
+      hint: '텍스트 선택 후 같은 단축키: 음성 편집 끄면 바로 다듬기, 켜면 누른 채 말한 뒤 「질문」 또는 「편집」 선택.',
+      polishHotkey: '선택 영역 도우미 단축키',
+      polishHotkeyDesc: '음성 편집 끄면 바로 다듬기, 켜면 누른 채 말하기(녹음 방식은 전역 설정 따름).',
       polishDelivery: '다듬기 결과 처리',
       voiceEnable: '음성 편집',
-      voiceEnableDesc: '마이크 필요. 녹음 방식은 전역 설정을 따릅니다(현재: {{recordingLabel}}).',
-      voiceHotkey: '음성 단축키',
-      voiceHotkeyDesc: '기본 Ctrl+Shift+E. 먼저 텍스트를 선택한 뒤 실행하세요.',
+      voiceEnableDesc: '위와 같은 단축키 사용. 녹음 방식은 전역 설정을 따릅니다(현재: {{recordingLabel}}).',
       autoIntent: '의도 자동 판별',
       autoIntentDesc: '끄면 말할 때마다 질문 또는 편집을 선택합니다.',
       editKeywords: '편집 키워드',

@@ -7,10 +7,9 @@ import { detectOS } from '../../components/WindowChrome';
 import { ShortcutRecorder } from '../../components/ShortcutRecorder';
 import {
   defaultSelectionPolishShortcut,
-  defaultSelectionVoiceShortcut,
   getHotkeyStartStopLabel,
 } from '../../lib/hotkey';
-import { setSelectionPolishHotkey, setSelectionVoiceHotkey } from '../../lib/ipc';
+import { setSelectionPolishHotkey } from '../../lib/ipc';
 import { getPlatformCapabilities } from '../../lib/platform';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
 import { Card } from '../_atoms';
@@ -107,26 +106,6 @@ export function SelectionWorkspaceSection() {
           </SettingRow>
           {prefs.selectionVoiceEnabled && (
             <>
-              <SettingRow
-                label={t('settings.selectionWorkspace.voiceHotkey')}
-                desc={t('settings.selectionWorkspace.voiceHotkeyDesc')}
-              >
-                <ShortcutRecorder
-                  value={prefs.selectionVoiceHotkey}
-                  onSave={async binding => {
-                    await setSelectionVoiceHotkey(binding);
-                    await refresh();
-                  }}
-                  onDisable={async () => {
-                    await setSelectionVoiceHotkey(null);
-                    await refresh();
-                  }}
-                  onReset={async () => {
-                    await setSelectionVoiceHotkey(defaultSelectionVoiceShortcut());
-                    await refresh();
-                  }}
-                />
-              </SettingRow>
               <SettingRow
                 label={t('settings.selectionWorkspace.autoIntent')}
                 desc={t('settings.selectionWorkspace.autoIntentDesc')}

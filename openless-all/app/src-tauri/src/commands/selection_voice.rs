@@ -55,14 +55,8 @@ pub fn set_selection_voice_hotkey(
     next.selection_voice_hotkey = binding;
     reject_hotkey_collisions(&next)?;
     coord.prefs().set(next).map_err(|e| e.to_string())?;
-    if let Err(error) = coord.try_update_selection_voice_hotkey_binding() {
-        if let Err(rollback_error) = coord.prefs().set(previous) {
-            return Err(format!(
-                "{error}; additionally failed to restore previous Selection Voice shortcut: {rollback_error}"
-            ));
-        }
-        coord.update_selection_voice_hotkey_binding();
-        return Err(error);
-    }
+    // 选区语音已复用选区润色热键；此字段仅保留兼容旧配置，不再单独注册监听。
+    #[cfg(all(not(mobile), target_os = "windows"))]
+    coord.stop_selection_voice_hotkey_listener();
     Ok(())
 }

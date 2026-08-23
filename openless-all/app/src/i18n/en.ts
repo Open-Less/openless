@@ -710,14 +710,12 @@ export const en: typeof zhCN = {
   settings: {
     selectionWorkspace: {
       title: 'Selection Assistant',
-      hint: 'Two ways to work with selected text: ① Selection polish — rewrite with your style pack, no microphone; ② Selection voice — hold the shortcut, speak, then choose Ask or Edit.',
-      polishHotkey: 'Polish shortcut',
-      polishHotkeyDesc: 'No microphone; rewrites the selection with the current style pack.',
+      hint: 'Select text, then use one shortcut: polish when voice edit is off; hold and speak when voice edit is on, then choose Ask or Edit.',
+      polishHotkey: 'Selection assistant shortcut',
+      polishHotkeyDesc: 'Polishes directly when voice edit is off; hold to speak when voice edit is on (recording follows global settings).',
       polishDelivery: 'Polish result handling',
       voiceEnable: 'Voice edit',
-      voiceEnableDesc: 'Requires a microphone; recording behavior follows global settings (current: {{recordingLabel}}).',
-      voiceHotkey: 'Voice shortcut',
-      voiceHotkeyDesc: 'Default Ctrl+Shift+E; select text before triggering.',
+      voiceEnableDesc: 'Uses the same shortcut above; recording follows global settings (current: {{recordingLabel}}).',
       autoIntent: 'Auto-classify intent',
       autoIntentDesc: 'When off, you choose Ask or Edit after each utterance.',
       editKeywords: 'Edit keywords',

@@ -227,9 +227,8 @@ async fn begin_selection_voice_session(inner: &Arc<Inner>) -> Result<(), String>
         return Err("dictationActive".into());
     }
 
-    let insertion_target = crate::selection::capture_selection_insertion_target();
-    let capture = crate::selection::capture_selection_with_status();
-    let selection = capture.selection.ok_or_else(|| "selectionVoiceNoSelection".to_string())?;
+    let (selection_opt, insertion_target) = crate::selection::resolve_selection_workspace_capture();
+    let selection = selection_opt.ok_or_else(|| "selectionVoiceNoSelection".to_string())?;
     if !crate::selection::selection_insertion_target_is_captured(&insertion_target) {
         return Err("selectionVoiceTargetUnavailable".into());
     }

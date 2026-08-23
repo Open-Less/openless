@@ -92,7 +92,7 @@ impl SettingsWriter for Coordinator {
 
     #[cfg(all(not(mobile), target_os = "windows"))]
     fn refresh_selection_voice_hotkey(&self) {
-        self.update_selection_voice_hotkey_binding();
+        self.stop_selection_voice_hotkey_listener();
     }
 
     fn refresh_coding_agent_hotkey(&self) {

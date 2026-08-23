@@ -825,8 +825,7 @@ fn run_desktop() {
                 // 同步启动 QA hotkey listener。和 dictation hotkey 平行，互不抢状态。
                 coordinator.start_qa_hotkey_listener();
                 coordinator.start_selection_polish_hotkey_listener();
-                #[cfg(all(not(mobile), target_os = "windows"))]
-                coordinator.start_selection_voice_hotkey_listener();
+                // 选区语音复用选区润色热键，不再单独注册 voice hotkey。
                 // 启动「快速 Agent」双热键监听（功能默认关闭，启用后才注册）。
                 coordinator.start_coding_agent_hotkey_listener();
                 // 启动自定义组合键监听器。当 trigger == Custom 时替代 modifier-only 监听器。
@@ -853,7 +852,7 @@ fn run_desktop() {
                 coordinator.stop_qa_hotkey_listener();
                 coordinator.stop_selection_polish_hotkey_listener();
                 #[cfg(all(not(mobile), target_os = "windows"))]
-                coordinator.stop_selection_voice_hotkey_listener();
+                coordinator.stop_selection_voice_hotkey_listener(); // 清理旧版独立 voice hotkey
                 coordinator.stop_coding_agent_hotkey_listener();
                 coordinator.stop_combo_hotkey_listener();
                 coordinator.stop_translation_hotkey_listener();

@@ -712,14 +712,12 @@ export const ja: typeof zhCN = {
   settings: {
     selectionWorkspace: {
       title: '選択範囲アシスタント',
-      hint: 'テキスト選択後の2つの機能：① 推敲 — マイク不要、スタイルパックで書き換え；② 音声 — ショートカットを押して話し、終了後に「質問」か「編集」を選択。',
-      polishHotkey: '推敲ショートカット',
-      polishHotkeyDesc: 'マイク不要。現在のスタイルパックで選択範囲を書き換えます。',
+      hint: 'テキスト選択後、同じショートカットで：音声編集オフ時は推敲、オン時は押しながら話してから「質問」か「編集」を選択。',
+      polishHotkey: '選択範囲アシスタントのショートカット',
+      polishHotkeyDesc: '音声編集オフ時は推敲、オン時は押しながら話す（録音方式はグローバル設定に従う）。',
       polishDelivery: '推敲結果の処理',
       voiceEnable: '音声編集',
-      voiceEnableDesc: 'マイクが必要です。録音方式はグローバル設定に従います（現在：{{recordingLabel}}）。',
-      voiceHotkey: '音声ショートカット',
-      voiceHotkeyDesc: '既定 Ctrl+Shift+E。先にテキストを選択してから起動してください。',
+      voiceEnableDesc: '上と同じショートカットを使用。録音方式はグローバル設定に従います（現在：{{recordingLabel}}）。',
       autoIntent: '意図を自動判定',
       autoIntentDesc: 'オフの場合、話し終えるごとに質問か編集を選択します。',
       editKeywords: '編集キーワード',

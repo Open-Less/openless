@@ -38,6 +38,7 @@ pub enum HotkeyEvent {
     TranslationModifierPressed,
     QaShortcutPressed,
     SelectionPolishShortcutPressed,
+    SelectionPolishShortcutReleased,
     /// 录制态按下 Fn（浏览器不向网页层下发 Fn 的 keydown，无法通过 recorder 捕获；
     /// 由 CGEventTap 在录制态检测后上报，供前端 ShortcutRecorder 提交 Fn 绑定）。
     FnRecordingPressed,
@@ -768,6 +769,7 @@ mod platform {
             *ctx.shared.qa_trigger.read(),
             &ctx.shared.qa_trigger_held,
             HotkeyEvent::QaShortcutPressed,
+            None,
         );
         handle_optional_modifier_trigger(
             ctx,
@@ -776,6 +778,7 @@ mod platform {
             *ctx.shared.selection_polish_trigger.read(),
             &ctx.shared.selection_polish_trigger_held,
             HotkeyEvent::SelectionPolishShortcutPressed,
+            Some(HotkeyEvent::SelectionPolishShortcutReleased),
         );
         handle_optional_modifier_trigger(
             ctx,
@@ -784,6 +787,7 @@ mod platform {
             *ctx.shared.translation_trigger.read(),
             &ctx.shared.translation_trigger_held,
             HotkeyEvent::TranslationModifierPressed,
+            None,
         );
 
         let trigger = ctx.shared.binding.read().trigger;
@@ -826,7 +830,8 @@ mod platform {
         flags: CgEventFlags,
         trigger: Option<HotkeyTrigger>,
         held: &std::sync::atomic::AtomicBool,
-        event: HotkeyEvent,
+        press_event: HotkeyEvent,
+        release_event: Option<HotkeyEvent>,
     ) {
         let Some(trigger) = trigger else {
             return;
@@ -838,9 +843,15 @@ mod platform {
         let was_held = held.load(Ordering::SeqCst);
         if active && !was_held {
             held.store(true, Ordering::SeqCst);
-            send_or_log(&ctx.tx, event);
+            if matches!(press_event, HotkeyEvent::SelectionPolishShortcutPressed) {
+                crate::selection::prefetch_selection_workspace_capture();
+            }
+            send_or_log(&ctx.tx, press_event);
         } else if !active && was_held {
             held.store(false, Ordering::SeqCst);
+            if let Some(release_event) = release_event {
+                send_or_log(&ctx.tx, release_event);
+            }
         }
     }
 
@@ -1003,6 +1014,7 @@ mod platform {
                 Some(HotkeyTrigger::RightCommand),
                 &shared.qa_trigger_held,
                 HotkeyEvent::QaShortcutPressed,
+                None,
             );
             handle_optional_modifier_trigger(
                 &ctx,
@@ -1011,6 +1023,7 @@ mod platform {
                 Some(HotkeyTrigger::RightCommand),
                 &shared.qa_trigger_held,
                 HotkeyEvent::QaShortcutPressed,
+                None,
             );
             handle_optional_modifier_trigger(
                 &ctx,
@@ -1019,6 +1032,7 @@ mod platform {
                 Some(HotkeyTrigger::RightCommand),
                 &shared.qa_trigger_held,
                 HotkeyEvent::QaShortcutPressed,
+                None,
             );
             handle_optional_modifier_trigger(
                 &ctx,
@@ -1027,6 +1041,7 @@ mod platform {
                 Some(HotkeyTrigger::RightCommand),
                 &shared.qa_trigger_held,
                 HotkeyEvent::QaShortcutPressed,
+                None,
             );
 
             assert_eq!(
@@ -1338,6 +1353,7 @@ mod platform {
             *ctx.shared.qa_trigger.read(),
             &ctx.shared.qa_trigger_held,
             HotkeyEvent::QaShortcutPressed,
+            None,
         );
         handle_optional_modifier_trigger(
             ctx,
@@ -1346,6 +1362,7 @@ mod platform {
             *ctx.shared.selection_polish_trigger.read(),
             &ctx.shared.selection_polish_trigger_held,
             HotkeyEvent::SelectionPolishShortcutPressed,
+            Some(HotkeyEvent::SelectionPolishShortcutReleased),
         );
         handle_optional_modifier_trigger(
             ctx,
@@ -1354,6 +1371,7 @@ mod platform {
             *ctx.shared.translation_trigger.read(),
             &ctx.shared.translation_trigger_held,
             HotkeyEvent::TranslationModifierPressed,
+            None,
         );
 
         let trigger = ctx.shared.binding.read().trigger;
@@ -1444,7 +1462,8 @@ mod platform {
         message: usize,
         trigger: Option<HotkeyTrigger>,
         held: &std::sync::atomic::AtomicBool,
-        event: HotkeyEvent,
+        press_event: HotkeyEvent,
+        release_event: Option<HotkeyEvent>,
     ) {
         let Some(trigger) = trigger else {
             return;
@@ -1456,11 +1475,19 @@ mod platform {
             WM_KEYDOWN | WM_SYSKEYDOWN => {
                 let was_held = held.swap(true, Ordering::SeqCst);
                 if !was_held {
-                    send_or_log(&ctx.tx, event);
+                    if matches!(press_event, HotkeyEvent::SelectionPolishShortcutPressed) {
+                        crate::selection::prefetch_selection_workspace_capture();
+                    }
+                    send_or_log(&ctx.tx, press_event);
                 }
             }
             WM_KEYUP | WM_SYSKEYUP => {
-                held.store(false, Ordering::SeqCst);
+                let was_held = held.swap(false, Ordering::SeqCst);
+                if was_held {
+                    if let Some(release_event) = release_event {
+                        send_or_log(&ctx.tx, release_event);
+                    }
+                }
             }
             _ => {}
         }
@@ -1647,6 +1674,7 @@ mod platform {
                 drain(&rx),
                 vec![
                     HotkeyEvent::SelectionPolishShortcutPressed,
+                    HotkeyEvent::SelectionPolishShortcutReleased,
                     HotkeyEvent::SelectionPolishShortcutPressed,
                 ]
             );

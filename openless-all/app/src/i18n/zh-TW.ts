@@ -710,14 +710,12 @@ export const zhTW: typeof zhCN = {
   settings: {
     selectionWorkspace: {
       title: '選區助手',
-      hint: '選中文字後的兩種能力：① 選區潤色——不用麥克風，按風格包改寫；② 選區語音——按住快捷鍵口述指令，說完後選擇「提問」或「編輯選區」。',
-      polishHotkey: '潤色快捷鍵',
-      polishHotkeyDesc: '無需麥克風；用目前風格包改寫選中文字。',
+      hint: '選中文字後按同一快捷鍵：關閉語音編輯時直接潤色；開啟後口述指令，說完再選擇「提問」或「編輯選區」。',
+      polishHotkey: '選區助手快捷鍵',
+      polishHotkeyDesc: '關閉語音編輯時直接潤色；開啟語音編輯時按住口述指令（錄音方式跟隨全域設定）。',
       polishDelivery: '潤色結果處理',
       voiceEnable: '語音編輯',
-      voiceEnableDesc: '需麥克風；錄音方式跟隨全域設定（目前：{{recordingLabel}}）。',
-      voiceHotkey: '語音快捷鍵',
-      voiceHotkeyDesc: '預設 Ctrl+Shift+E；需先選中文字再觸發。',
+      voiceEnableDesc: '與上方同一快捷鍵；錄音方式跟隨全域設定（目前：{{recordingLabel}}）。',
       autoIntent: '自動判斷意圖',
       autoIntentDesc: '關閉時，每次說完後彈出選擇：提問或編輯選區。',
       editKeywords: '編輯關鍵詞',
