@@ -87,6 +87,8 @@ mod remote_input;
 mod selection_polish;
 #[cfg(not(mobile))]
 mod selection_polish_preview;
+#[cfg(all(not(mobile), target_os = "windows"))]
+mod selection_voice;
 mod settings;
 #[cfg(not(mobile))]
 mod sherpa_asr;
@@ -118,6 +120,8 @@ pub use settings::*;
 pub use selection_polish::*;
 #[cfg(not(mobile))]
 pub use selection_polish_preview::*;
+#[cfg(all(not(mobile), target_os = "windows"))]
+pub use selection_voice::*;
 #[cfg(not(mobile))]
 #[allow(unused_imports)]
 pub use sherpa_asr::*;

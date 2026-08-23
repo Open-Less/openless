@@ -7,6 +7,7 @@ import { RecordingInputSection } from './RecordingInputSection';
 import { RemoteInputSection } from './RemoteInputSection';
 import { ShortcutsSection } from './ShortcutsSection';
 import { SelectionPolishSection } from './SelectionPolishSection';
+import { SelectionVoiceSection } from './SelectionVoiceSection';
 import { LanguageSection } from './LanguageSection';
 import { ThemeSection } from './ThemeSection';
 import { LayoutSection } from './LayoutSection';
@@ -50,6 +51,7 @@ export function GeneralTab() {
       <LayoutSection />
       {showRemoteInput && <RemoteInputSection />}
       <SelectionPolishSection />
+      <SelectionVoiceSection />
       {showDesktopShortcuts && <ShortcutsSection />}
       <ThemeSection />
       <LanguageSection />

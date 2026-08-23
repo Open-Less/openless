@@ -265,6 +265,9 @@ export type ThemeMode = 'system' | 'light' | 'dark';
 /** 选区润色结果直接替换，或先在可编辑预览中确认。 */
 export type SelectionPolishOutputMode = 'directReplace' | 'previewConfirm';
 
+export type SelectionVoiceIntentMode = 'auto' | 'manual' | 'heuristic';
+export type SelectionVoiceManualIntent = 'question' | 'edit';
+
 export interface CustomStylePrompts {
   raw: string;
   light: string;
@@ -405,6 +408,16 @@ export interface UserPreferences {
   selectionPolishStylePackId: string;
   /** 选区润色结果的交付方式。 */
   selectionPolishOutputMode: SelectionPolishOutputMode;
+  /** 选区语音编辑（issue #987 Windows MVP）。默认关闭。 */
+  selectionVoiceEnabled: boolean;
+  /** 选区语音编辑专用快捷键。null = 未配置。 */
+  selectionVoiceHotkey: ShortcutBinding | null;
+  /** 选区语音意图分流：自动 / 手动 / 关键词启发。 */
+  selectionVoiceIntentMode: SelectionVoiceIntentMode;
+  /** manual 模式下固定的意图。 */
+  selectionVoiceManualIntent: SelectionVoiceManualIntent;
+  /** heuristic 模式下命中即走编辑分支的关键词。 */
+  selectionVoiceEditKeywords: string[];
   /** 是否把 Q&A 历史写到本地存档。详见 issue #118。 */
   qaSaveHistory: boolean;
   /** 自定义录音组合键。当 hotkey.trigger == 'custom' 时使用。null = 未设置。 */

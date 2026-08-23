@@ -29,6 +29,8 @@ pub(crate) trait SettingsWriter {
     fn refresh_switch_style_hotkey(&self);
     fn refresh_open_app_hotkey(&self);
     fn refresh_selection_polish_hotkey(&self);
+    #[cfg(all(not(mobile), target_os = "windows"))]
+    fn refresh_selection_voice_hotkey(&self);
     fn refresh_coding_agent_hotkey(&self);
     // 默认 no-op：测试 mock 不关心风格快捷键；真实实现（Coordinator / Arc<T>）覆写。
     fn refresh_style_pack_hotkeys(&self) {}
@@ -88,6 +90,11 @@ impl SettingsWriter for Coordinator {
     #[cfg(mobile)]
     fn refresh_selection_polish_hotkey(&self) {}
 
+    #[cfg(all(not(mobile), target_os = "windows"))]
+    fn refresh_selection_voice_hotkey(&self) {
+        self.update_selection_voice_hotkey_binding();
+    }
+
     fn refresh_coding_agent_hotkey(&self) {
         self.update_coding_agent_hotkey_binding();
     }
@@ -143,6 +150,11 @@ impl<T: SettingsWriter + ?Sized> SettingsWriter for Arc<T> {
 
     fn refresh_selection_polish_hotkey(&self) {
         (**self).refresh_selection_polish_hotkey();
+    }
+
+    #[cfg(all(not(mobile), target_os = "windows"))]
+    fn refresh_selection_voice_hotkey(&self) {
+        (**self).refresh_selection_voice_hotkey();
     }
 
     fn refresh_coding_agent_hotkey(&self) {
@@ -339,6 +351,8 @@ pub(crate) fn persist_settings_with_keyboard_apply<T: SettingsWriter>(
     let style_pack_hotkeys_changed = previous.style_pack_hotkeys != prefs.style_pack_hotkeys;
     let selection_polish_changed =
         previous.selection_polish_hotkey != prefs.selection_polish_hotkey;
+    let selection_voice_changed = previous.selection_voice_enabled != prefs.selection_voice_enabled
+        || previous.selection_voice_hotkey != prefs.selection_voice_hotkey;
     let coding_agent_changed = previous.coding_agent_enabled != prefs.coding_agent_enabled
         || previous.coding_agent_voice_hotkey != prefs.coding_agent_voice_hotkey;
     let windows_keyboard_list_changed = previous.windows_sendinput_insertion_only
@@ -432,6 +446,10 @@ pub(crate) fn persist_settings_with_keyboard_apply<T: SettingsWriter>(
     }
     if selection_polish_changed {
         coord.refresh_selection_polish_hotkey();
+    }
+    #[cfg(all(not(mobile), target_os = "windows"))]
+    if selection_voice_changed {
+        coord.refresh_selection_voice_hotkey();
     }
     if coding_agent_changed {
         coord.refresh_coding_agent_hotkey();

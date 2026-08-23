@@ -429,6 +429,121 @@ pub(super) fn take_selection_polish_hotkey_on_main_thread(inner: &Arc<Inner>) {
     }
 }
 
+// ─────────────────────── Selection Voice hotkey (Windows MVP) ───────────────────────
+
+#[cfg(all(not(mobile), target_os = "windows"))]
+pub(super) fn selection_voice_hotkey_supervisor_loop(inner: Arc<Inner>) {
+    let mut attempts = 0_u32;
+    loop {
+        if inner.shutdown.load(Ordering::SeqCst) {
+            return;
+        }
+        match try_update_selection_voice_hotkey_binding(&inner) {
+            Ok(()) => return,
+            Err(error) => {
+                attempts += 1;
+                if attempts <= 3 || attempts % 10 == 0 {
+                    log::warn!(
+                        "[selection-voice] hotkey registration attempt #{attempts} failed: {error}; retrying in 3s"
+                    );
+                }
+                std::thread::sleep(std::time::Duration::from_secs(3));
+            }
+        }
+    }
+}
+
+#[cfg(all(not(mobile), target_os = "windows"))]
+pub(super) fn try_update_selection_voice_hotkey_binding(inner: &Arc<Inner>) -> Result<(), String> {
+    if !inner.prefs.get().selection_voice_enabled {
+        take_selection_voice_hotkey_on_main_thread(inner);
+        return Ok(());
+    }
+    let binding = inner
+        .prefs
+        .get()
+        .selection_voice_hotkey
+        .clone()
+        .ok_or_else(|| "Selection Voice hotkey disabled".to_string())?;
+    if crate::shortcut_binding::legacy_modifier_trigger(&binding).is_some() {
+        take_selection_voice_hotkey_on_main_thread(inner);
+        return Ok(());
+    }
+    let app = inner
+        .app
+        .lock()
+        .clone()
+        .ok_or_else(|| "AppHandle unavailable while registering Selection Voice hotkey".to_string())?;
+    let (result_tx, result_rx) = mpsc::sync_channel(1);
+    let inner_for_main = Arc::clone(inner);
+    app.run_on_main_thread(move || {
+        let result = update_selection_voice_hotkey_on_main_thread(inner_for_main, binding)
+            .map_err(|error| error.to_string());
+        let _ = result_tx.send(result);
+    })
+    .map_err(|error| error.to_string())?;
+    result_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .map_err(|_| "Selection Voice hotkey registration timed out".to_string())?
+}
+
+#[cfg(all(not(mobile), target_os = "windows"))]
+fn update_selection_voice_hotkey_on_main_thread(
+    inner: Arc<Inner>,
+    binding: crate::types::ShortcutBinding,
+) -> Result<(), ComboHotkeyError> {
+    if let Some(monitor) = inner.selection_voice_hotkey.lock().as_ref() {
+        monitor.update_binding(binding)?;
+        return Ok(());
+    }
+    let (tx, rx) = mpsc::channel::<ComboHotkeyEvent>();
+    let monitor = ComboHotkeyMonitor::start(binding, tx)?;
+    *inner.selection_voice_hotkey.lock() = Some(monitor);
+    let bridge_inner = Arc::clone(&inner);
+    std::thread::Builder::new()
+        .name("openless-selection-voice-hotkey-bridge".into())
+        .spawn(move || selection_voice_hotkey_bridge_loop(bridge_inner, rx))
+        .map_err(|error| ComboHotkeyError::RegisterFailed(format!("spawn bridge thread: {error}")))?;
+    Ok(())
+}
+
+#[cfg(all(not(mobile), target_os = "windows"))]
+fn selection_voice_hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<ComboHotkeyEvent>) {
+    while let Ok(event) = rx.recv() {
+        if inner.shortcut_recording_active.load(Ordering::SeqCst) {
+            continue;
+        }
+        let inner_cloned = Arc::clone(&inner);
+        match event {
+            ComboHotkeyEvent::Pressed { .. } => {
+                async_runtime::block_on(async {
+                    super::selection_voice_session::handle_selection_voice_pressed(&inner_cloned)
+                        .await;
+                });
+            }
+            ComboHotkeyEvent::Released { .. } => {
+                async_runtime::block_on(async {
+                    super::selection_voice_session::handle_selection_voice_released(&inner_cloned)
+                        .await;
+                });
+            }
+        }
+    }
+}
+
+#[cfg(all(not(mobile), target_os = "windows"))]
+pub(super) fn take_selection_voice_hotkey_on_main_thread(inner: &Arc<Inner>) {
+    let app = inner.app.lock().clone();
+    if let Some(app) = app {
+        let inner = Arc::clone(inner);
+        let _ = app.run_on_main_thread(move || {
+            inner.selection_voice_hotkey.lock().take();
+        });
+    } else {
+        inner.selection_voice_hotkey.lock().take();
+    }
+}
+
 // ─────────────────────────── combo hotkey supervisor ───────────────────────────
 
 // ─────────────────────── coding agent hotkey supervisor ───────────────────────

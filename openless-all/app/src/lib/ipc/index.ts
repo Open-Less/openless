@@ -124,6 +124,7 @@ export {
     validateShortcutBinding,
     setDictationHotkey,
     setSelectionPolishHotkey,
+    setSelectionVoiceHotkey,
     setTranslationHotkey,
     setSwitchStyleHotkey,
     setOpenAppHotkey,
@@ -155,6 +156,12 @@ export {
     confirmSelectionPolishPreview,
     cancelSelectionPolishPreview,
 } from './selection-polish-preview'
+
+export {
+    getSelectionVoicePreview,
+    confirmSelectionVoicePreview,
+    cancelSelectionVoicePreview,
+} from './selection-voice-preview'
 
 // less-computer
 export {

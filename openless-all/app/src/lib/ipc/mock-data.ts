@@ -21,6 +21,7 @@ import {
     defaultAppShortcutModifiers,
     defaultQaShortcut,
     defaultSelectionPolishShortcut,
+    defaultSelectionVoiceShortcut,
 } from "../hotkey"
 
 export let mockSettings: UserPreferences = {
@@ -69,6 +70,11 @@ export let mockSettings: UserPreferences = {
     selectionPolishStylePackId: "builtin.light",
     selectionPolishOutputMode: "directReplace",
     selectionPolishHotkey: defaultSelectionPolishShortcut(),
+    selectionVoiceEnabled: false,
+    selectionVoiceHotkey: defaultSelectionVoiceShortcut(),
+    selectionVoiceIntentMode: "auto",
+    selectionVoiceManualIntent: "question",
+    selectionVoiceEditKeywords: ["翻译", "改成", "替换", "批量", "格式"],
     chineseScriptPreference: "auto",
     outputLanguagePreference: "auto",
     qaSaveHistory: false,

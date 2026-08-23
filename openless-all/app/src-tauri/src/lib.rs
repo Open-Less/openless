@@ -30,6 +30,8 @@ mod commands;
 mod coordinator;
 mod coordinator_state;
 mod correction;
+mod edit_plan;
+mod selection_voice_intent;
 // 托盘麦克风设备变更监听：macOS CoreAudio / Windows MMDevice 原生通知（空闲零唤醒），
 // Linux 退化为纯轮询兜底。仅桌面端。详见 issue #470。
 #[cfg(not(mobile))]
@@ -273,6 +275,14 @@ macro_rules! app_invoke_handler_desktop {
             commands::get_qa_hotkey_label,
             commands::set_qa_hotkey,
             commands::set_selection_polish_hotkey,
+            #[cfg(all(not(mobile), target_os = "windows"))]
+            commands::get_selection_voice_preview,
+            #[cfg(all(not(mobile), target_os = "windows"))]
+            commands::confirm_selection_voice_preview,
+            #[cfg(all(not(mobile), target_os = "windows"))]
+            commands::cancel_selection_voice_preview,
+            #[cfg(all(not(mobile), target_os = "windows"))]
+            commands::set_selection_voice_hotkey,
             commands::validate_shortcut_binding,
             commands::set_dictation_hotkey,
             commands::set_translation_hotkey,
@@ -808,6 +818,8 @@ fn run_desktop() {
                 // 同步启动 QA hotkey listener。和 dictation hotkey 平行，互不抢状态。
                 coordinator.start_qa_hotkey_listener();
                 coordinator.start_selection_polish_hotkey_listener();
+                #[cfg(all(not(mobile), target_os = "windows"))]
+                coordinator.start_selection_voice_hotkey_listener();
                 // 启动「快速 Agent」双热键监听（功能默认关闭，启用后才注册）。
                 coordinator.start_coding_agent_hotkey_listener();
                 // 启动自定义组合键监听器。当 trigger == Custom 时替代 modifier-only 监听器。
@@ -833,6 +845,8 @@ fn run_desktop() {
                 coordinator.stop_hotkey_listener();
                 coordinator.stop_qa_hotkey_listener();
                 coordinator.stop_selection_polish_hotkey_listener();
+                #[cfg(all(not(mobile), target_os = "windows"))]
+                coordinator.stop_selection_voice_hotkey_listener();
                 coordinator.stop_coding_agent_hotkey_listener();
                 coordinator.stop_combo_hotkey_listener();
                 coordinator.stop_translation_hotkey_listener();
@@ -2654,6 +2668,65 @@ pub(crate) fn hide_selection_polish_preview<R: tauri::Runtime>(app: &AppHandle<R
         let _ = window.hide();
     }
 }
+
+/// 选区语音编辑预览窗（issue #987）：编辑分支在用户确认前不覆盖原选区。
+#[cfg(all(not(mobile), target_os = "windows"))]
+fn ensure_selection_voice_preview_window<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+) -> Option<tauri::WebviewWindow<R>> {
+    if let Some(window) = app.get_webview_window("selection-voice-preview") {
+        return Some(window);
+    }
+    WebviewWindowBuilder::new(
+        app,
+        "selection-voice-preview",
+        WebviewUrl::App("index.html?window=selection-voice-preview".into()),
+    )
+    .title("OpenLess 选区语音编辑预览")
+    .inner_size(640.0, 440.0)
+    .min_inner_size(480.0, 320.0)
+    .resizable(true)
+    .always_on_top(true)
+    .visible(false)
+    .build()
+    .map(Some)
+    .unwrap_or_else(|error| {
+        log::warn!("[selection-voice] create preview window failed: {error}");
+        None
+    })
+}
+
+#[cfg(all(not(mobile), target_os = "windows"))]
+pub(crate) fn show_selection_voice_preview<R: tauri::Runtime>(app: &AppHandle<R>) {
+    let Some(window) = ensure_selection_voice_preview_window(app) else {
+        return;
+    };
+    if let Err(error) = window.show() {
+        log::warn!("[selection-voice] show preview failed: {error}");
+        return;
+    }
+    if let Err(error) = window.set_focus() {
+        log::warn!("[selection-voice] focus preview failed: {error}");
+    }
+    let _ = app.emit_to(
+        "selection-voice-preview",
+        "selection-voice-preview:shown",
+        (),
+    );
+}
+
+#[cfg(not(all(not(mobile), target_os = "windows")))]
+pub(crate) fn show_selection_voice_preview<R: tauri::Runtime>(_app: &AppHandle<R>) {}
+
+#[cfg(all(not(mobile), target_os = "windows"))]
+pub(crate) fn hide_selection_voice_preview<R: tauri::Runtime>(app: &AppHandle<R>) {
+    if let Some(window) = app.get_webview_window("selection-voice-preview") {
+        let _ = window.hide();
+    }
+}
+
+#[cfg(not(all(not(mobile), target_os = "windows")))]
+pub(crate) fn hide_selection_voice_preview<R: tauri::Runtime>(_app: &AppHandle<R>) {}
 
 // ───────────────────────── Less Computer 浮窗 ─────────────────────────
 //

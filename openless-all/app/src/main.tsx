@@ -14,6 +14,7 @@ const windowKind = params.get("window");
 const isCapsule = windowKind === "capsule";
 const isQa = windowKind === "qa";
 const isSelectionPolishPreview = windowKind === "selection-polish-preview";
+const isSelectionVoicePreview = windowKind === "selection-voice-preview";
 const isLessComputer = windowKind === "less-computer";
 const isLessComputerGlow = windowKind === "less-computer-glow";
 const osQuery = params.get("os") as OS | null;
@@ -30,6 +31,7 @@ const renderApp = () => {
         isCapsule={isCapsule}
         isQa={isQa}
         isSelectionPolishPreview={isSelectionPolishPreview}
+        isSelectionVoicePreview={isSelectionVoicePreview}
         isLessComputer={isLessComputer}
         isLessComputerGlow={isLessComputerGlow}
         forcedOs={os}

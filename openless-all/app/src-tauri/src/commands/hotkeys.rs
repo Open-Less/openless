@@ -378,6 +378,9 @@ pub(crate) fn reject_hotkey_collisions(prefs: &UserPreferences) -> Result<(), St
     if let Some(selection_polish) = prefs.selection_polish_hotkey.as_ref() {
         reject_selection_polish_hotkey_collisions(selection_polish, prefs)?;
     }
+    if let Some(selection_voice) = prefs.selection_voice_hotkey.as_ref() {
+        reject_selection_voice_hotkey_collisions(selection_voice, prefs)?;
+    }
     reject_style_pack_hotkey_conflicts(&prefs.style_pack_hotkeys, prefs)?;
     Ok(())
 }
@@ -423,6 +426,47 @@ pub(crate) fn reject_selection_polish_hotkey_collisions(
     Ok(())
 }
 
+pub(crate) fn reject_selection_voice_hotkey_collisions(
+    selection_voice: &ShortcutBinding,
+    prefs: &UserPreferences,
+) -> Result<(), String> {
+    reject_hotkey_overlap(
+        selection_voice,
+        &prefs.dictation_hotkey,
+        "选区语音快捷键不能和听写快捷键相同",
+    )?;
+    reject_hotkey_overlap(
+        selection_voice,
+        &prefs.translation_hotkey,
+        "选区语音快捷键不能和翻译快捷键相同",
+    )?;
+    if let Some(qa) = prefs.qa_hotkey.as_ref() {
+        reject_hotkey_overlap(selection_voice, qa, "选区语音快捷键不能和 QA 快捷键相同")?;
+    }
+    if let Some(selection_polish) = prefs.selection_polish_hotkey.as_ref() {
+        reject_hotkey_overlap(
+            selection_voice,
+            selection_polish,
+            "选区语音快捷键不能和选区润色快捷键相同",
+        )?;
+    }
+    if let Some(switch_style) = prefs.switch_style_hotkey.as_ref() {
+        reject_hotkey_overlap(
+            selection_voice,
+            switch_style,
+            "选区语音快捷键不能和切换风格快捷键相同",
+        )?;
+    }
+    if let Some(open_app) = prefs.open_app_hotkey.as_ref() {
+        reject_hotkey_overlap(
+            selection_voice,
+            open_app,
+            "选区语音快捷键不能和打开应用快捷键相同",
+        )?;
+    }
+    Ok(())
+}
+
 pub(crate) fn reject_non_dictation_side_specific_shortcuts(
     prefs: &UserPreferences,
 ) -> Result<(), String> {
@@ -440,6 +484,10 @@ pub(crate) fn reject_non_dictation_side_specific_shortcuts(
         crate::shortcut_binding::validate_binding(binding).map_err(|e| e.to_string())?;
         crate::shortcut_binding::reject_side_specific_non_dictation(binding)?;
         reject_bare_shift_dictation_shortcut(binding)?;
+    }
+    if let Some(binding) = prefs.selection_voice_hotkey.as_ref() {
+        crate::shortcut_binding::validate_binding(binding).map_err(|e| e.to_string())?;
+        crate::shortcut_binding::reject_side_specific_non_dictation(binding)?;
     }
     if let Some(binding) = prefs.coding_agent_voice_hotkey.as_ref() {
         crate::shortcut_binding::reject_side_specific_non_dictation(binding)?;

@@ -72,6 +72,8 @@ mod polish_flow;
 mod qa;
 mod qa_session;
 mod resources;
+#[cfg(all(not(mobile), target_os = "windows"))]
+mod selection_voice_session;
 #[cfg(not(mobile))]
 pub(crate) mod selection_polish;
 mod silence_auto_stop;
@@ -1128,6 +1130,13 @@ struct Inner {
     /// 预览确认模式暂存的结果和原选区目标；仅在用户确认时才允许插入。
     #[cfg(not(mobile))]
     selection_polish_preview: Mutex<Option<selection_polish::PendingSelectionPolishPreview>>,
+    /// 选区语音编辑会话状态（issue #987 桌面 MVP）。
+    #[cfg(all(not(mobile), target_os = "windows"))]
+    selection_voice_state: Mutex<selection_voice_session::SelectionVoiceSessionState>,
+    #[cfg(all(not(mobile), target_os = "windows"))]
+    selection_voice_preview: Mutex<Option<selection_voice_session::PendingSelectionVoicePreview>>,
+    #[cfg(all(not(mobile), target_os = "windows"))]
+    selection_voice_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
     /// 「本次会话真的要翻译」。每次 begin_session 重置为 false；hotkey 监听器在
     /// Listening / Starting 阶段看到 Shift down 边沿（或安卓浮层请求）时，经
     /// `arm_translation_if_effective` 判定翻译确实会生效（设了目标语言、且不等于唯一工作语言）
@@ -1439,6 +1448,14 @@ impl Coordinator {
                     selection_polish_hotkey: Mutex::new(None),
                     #[cfg(not(mobile))]
                     selection_polish_preview: Mutex::new(None),
+                    #[cfg(all(not(mobile), target_os = "windows"))]
+                    selection_voice_state: Mutex::new(
+                        selection_voice_session::SelectionVoiceSessionState::default(),
+                    ),
+                    #[cfg(all(not(mobile), target_os = "windows"))]
+                    selection_voice_preview: Mutex::new(None),
+                    #[cfg(all(not(mobile), target_os = "windows"))]
+                    selection_voice_hotkey: Mutex::new(None),
                     translation_active: AtomicBool::new(false),
                     qa_hotkey: Mutex::new(None),
                     coding_agent_modifier_hotkey: Mutex::new(None),
@@ -1571,6 +1588,14 @@ impl Coordinator {
                 selection_polish_hotkey: Mutex::new(None),
                 #[cfg(not(mobile))]
                 selection_polish_preview: Mutex::new(None),
+                #[cfg(all(not(mobile), target_os = "windows"))]
+                selection_voice_state: Mutex::new(
+                    selection_voice_session::SelectionVoiceSessionState::default(),
+                ),
+                #[cfg(all(not(mobile), target_os = "windows"))]
+                selection_voice_preview: Mutex::new(None),
+                #[cfg(all(not(mobile), target_os = "windows"))]
+                selection_voice_hotkey: Mutex::new(None),
                 translation_active: AtomicBool::new(false),
                 qa_hotkey: Mutex::new(None),
                 coding_agent_modifier_hotkey: Mutex::new(None),
@@ -1873,6 +1898,32 @@ impl Coordinator {
     pub fn update_selection_polish_hotkey_binding(&self) {
         if let Err(error) = self.try_update_selection_polish_hotkey_binding() {
             log::warn!("[coord] update selection polish hotkey binding failed: {error}");
+        }
+    }
+
+    #[cfg(all(not(mobile), target_os = "windows"))]
+    pub fn start_selection_voice_hotkey_listener(&self) {
+        let inner = Arc::clone(&self.inner);
+        std::thread::Builder::new()
+            .name("openless-selection-voice-hotkey-supervisor".into())
+            .spawn(move || selection_voice_hotkey_supervisor_loop(inner))
+            .ok();
+    }
+
+    #[cfg(all(not(mobile), target_os = "windows"))]
+    pub fn stop_selection_voice_hotkey_listener(&self) {
+        take_selection_voice_hotkey_on_main_thread(&self.inner);
+    }
+
+    #[cfg(all(not(mobile), target_os = "windows"))]
+    pub fn try_update_selection_voice_hotkey_binding(&self) -> Result<(), String> {
+        try_update_selection_voice_hotkey_binding(&self.inner)
+    }
+
+    #[cfg(all(not(mobile), target_os = "windows"))]
+    pub fn update_selection_voice_hotkey_binding(&self) {
+        if let Err(error) = self.try_update_selection_voice_hotkey_binding() {
+            log::warn!("[coord] update selection voice hotkey binding failed: {error}");
         }
     }
 

@@ -1849,6 +1849,105 @@ where
         .await?)
 }
 
+#[cfg(all(not(mobile), target_os = "windows"))]
+fn selection_voice_recording_can_continue(inner: &Arc<Inner>, session_id: SessionId) -> bool {
+    let state = inner.selection_voice_state.lock();
+    state.session_id == session_id
+        && matches!(
+            state.phase,
+            super::selection_voice_session::SelectionVoicePhase::Recording
+        )
+}
+
+#[cfg(all(not(mobile), target_os = "windows"))]
+pub(super) async fn start_selection_voice_recorder(
+    inner: &Arc<Inner>,
+    session_id: SessionId,
+) -> Result<(), String> {
+    if pipeline_multimodal_enabled(&inner.prefs.get()) {
+        return Err("selectionVoiceOmniUnsupported".into());
+    }
+    ensure_asr_credentials().map_err(|message| format!("缺少 ASR 凭据：{message}"))?;
+    let active_asr = CredentialsVault::get_active_asr();
+    let qa_asr = match build_qa_asr_start(inner, &active_asr).await {
+        Ok((qa_asr, _)) => qa_asr,
+        Err(message) => return Err(format!("ASR 初始化失败: {message}")),
+    };
+    ensure_microphone_permission(inner).map_err(|message| message)?;
+
+    let consumer = qa_asr.recorder_consumer();
+    store_qa_asr_for_session(inner, session_id, qa_asr.active_asr());
+
+    let inner_for_level = Arc::clone(inner);
+    let level_handler: Arc<dyn Fn(f32) + Send + Sync> = Arc::new(move |level| {
+        if !selection_voice_recording_can_continue(&inner_for_level, session_id) {
+            return;
+        }
+        emit_capsule(
+            &inner_for_level,
+            CapsuleState::Recording,
+            level,
+            0,
+            None,
+            None,
+        );
+    });
+
+    let microphone_device_name = selected_microphone_device_name(inner);
+    stop_microphone_preview_monitor(inner, "selection-voice recorder");
+    acquire_recording_mute(inner, "selection-voice").await;
+    if !selection_voice_recording_can_continue(inner, session_id) {
+        cancel_qa_asr_for_session(inner, session_id);
+        release_recording_mute(inner, "selection-voice");
+        return Ok(());
+    }
+    match Recorder::start(microphone_device_name, consumer, level_handler, None) {
+        Ok((rec, runtime_errors, archive_active)) => {
+            if !selection_voice_recording_can_continue(inner, session_id) {
+                drop(rec);
+                cancel_qa_asr_for_session(inner, session_id);
+                release_recording_mute(inner, "selection-voice");
+                return Ok(());
+            }
+            inner
+                .audio_archive_active
+                .store(archive_active, std::sync::atomic::Ordering::Relaxed);
+            store_qa_recorder_for_session(inner, session_id, rec);
+            spawn_qa_recorder_error_monitor(inner, session_id, runtime_errors);
+        }
+        Err(error) => {
+            cancel_qa_asr_for_session(inner, session_id);
+            release_recording_mute(inner, "selection-voice");
+            return Err(error.user_message());
+        }
+    }
+
+    qa_asr.open_streaming_session().await.map_err(|error| {
+        stop_qa_recorder_for_session(inner, session_id);
+        cancel_qa_asr_for_session(inner, session_id);
+        format!("ASR 连接失败: {error}")
+    })?;
+    Ok(())
+}
+
+#[cfg(all(not(mobile), target_os = "windows"))]
+pub(super) async fn finish_selection_voice_transcript(
+    inner: &Arc<Inner>,
+    session_id: SessionId,
+) -> Result<String, String> {
+    stop_qa_recorder_for_session(inner, session_id);
+    let asr = take_qa_asr_for_session(inner, session_id)
+        .ok_or_else(|| "selectionVoiceAsrUnavailable".to_string())?;
+    let transcript = match transcribe_overlay_dictation_asr(inner, session_id, asr).await {
+        OverlayDictationTranscribeOutcome::Done(result) => result?.text,
+        OverlayDictationTranscribeOutcome::Cancelled => {
+            return Err("selectionVoiceCancelled".into());
+        }
+    };
+    release_recording_mute(inner, "selection-voice");
+    Ok(transcript)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

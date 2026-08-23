@@ -61,6 +61,7 @@ pub enum HistorySource {
     #[default]
     Voice,
     SelectionPolish,
+    SelectionVoiceEdit,
 }
 
 impl PolishMode {
@@ -184,6 +185,25 @@ pub enum SelectionPolishOutputMode {
     #[default]
     DirectReplace,
     PreviewConfirm,
+}
+
+/// 选区语音会话的意图分流模式（issue #987 桌面 MVP）。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum SelectionVoiceIntentMode {
+    #[default]
+    Auto,
+    Manual,
+    Heuristic,
+}
+
+/// manual 模式下用户固定的意图。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum SelectionVoiceManualIntent {
+    #[default]
+    Question,
+    Edit,
 }
 
 /// 前台应用标签拆分结果：人读的应用名 +（macOS 的）bundle id。
@@ -997,6 +1017,18 @@ pub struct UserPreferences {
     /// 选区润色直接覆盖，或先在可编辑预览中确认。
     #[serde(default)]
     pub selection_polish_output_mode: SelectionPolishOutputMode,
+    /// 选区语音编辑（issue #987 桌面 MVP）。默认关闭。
+    #[serde(default)]
+    pub selection_voice_enabled: bool,
+    /// 选区语音编辑专用快捷键。Windows 默认 Ctrl+Shift+E；其它平台默认 None。
+    #[serde(default = "default_selection_voice_hotkey")]
+    pub selection_voice_hotkey: Option<ShortcutBinding>,
+    #[serde(default)]
+    pub selection_voice_intent_mode: SelectionVoiceIntentMode,
+    #[serde(default)]
+    pub selection_voice_manual_intent: SelectionVoiceManualIntent,
+    #[serde(default = "default_selection_voice_edit_keywords")]
+    pub selection_voice_edit_keywords: Vec<String>,
     /// 是否把每次 QA 会话写进 history.json。默认 false：QA 默认临时不留痕。
     /// 详见 issue #118。
     #[serde(default)]
@@ -1369,6 +1401,16 @@ struct UserPreferencesWire {
     selection_polish_style_pack_id: String,
     #[serde(default)]
     selection_polish_output_mode: SelectionPolishOutputMode,
+    #[serde(default)]
+    selection_voice_enabled: bool,
+    #[serde(default = "default_selection_voice_hotkey")]
+    selection_voice_hotkey: Option<ShortcutBinding>,
+    #[serde(default)]
+    selection_voice_intent_mode: SelectionVoiceIntentMode,
+    #[serde(default)]
+    selection_voice_manual_intent: SelectionVoiceManualIntent,
+    #[serde(default = "default_selection_voice_edit_keywords")]
+    selection_voice_edit_keywords: Vec<String>,
     qa_save_history: bool,
     custom_combo_hotkey: Option<ComboBinding>,
     translation_hotkey: Option<ShortcutBinding>,
@@ -1558,6 +1600,11 @@ impl Default for UserPreferencesWire {
             selection_polish_hotkey: None,
             selection_polish_style_pack_id: prefs.selection_polish_style_pack_id,
             selection_polish_output_mode: prefs.selection_polish_output_mode,
+            selection_voice_enabled: prefs.selection_voice_enabled,
+            selection_voice_hotkey: prefs.selection_voice_hotkey,
+            selection_voice_intent_mode: prefs.selection_voice_intent_mode,
+            selection_voice_manual_intent: prefs.selection_voice_manual_intent,
+            selection_voice_edit_keywords: prefs.selection_voice_edit_keywords,
             qa_save_history: prefs.qa_save_history,
             custom_combo_hotkey: prefs.custom_combo_hotkey,
             translation_hotkey: None,
@@ -1710,6 +1757,11 @@ impl<'de> Deserialize<'de> for UserPreferences {
             selection_polish_hotkey,
             selection_polish_style_pack_id: wire.selection_polish_style_pack_id,
             selection_polish_output_mode: wire.selection_polish_output_mode,
+            selection_voice_enabled: wire.selection_voice_enabled,
+            selection_voice_hotkey: wire.selection_voice_hotkey,
+            selection_voice_intent_mode: wire.selection_voice_intent_mode,
+            selection_voice_manual_intent: wire.selection_voice_manual_intent,
+            selection_voice_edit_keywords: wire.selection_voice_edit_keywords,
             qa_save_history: wire.qa_save_history,
             coding_agent_enabled: wire.coding_agent_enabled,
             coding_agent_provider: wire.coding_agent_provider,
@@ -1915,6 +1967,30 @@ fn default_selection_polish_hotkey() -> Option<ShortcutBinding> {
     {
         None
     }
+}
+
+fn default_selection_voice_hotkey() -> Option<ShortcutBinding> {
+    #[cfg(target_os = "windows")]
+    {
+        Some(ShortcutBinding {
+            primary: "E".into(),
+            modifiers: vec!["ctrl".into(), "shift".into()],
+        })
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        None
+    }
+}
+
+fn default_selection_voice_edit_keywords() -> Vec<String> {
+    vec![
+        "翻译".into(),
+        "改成".into(),
+        "替换".into(),
+        "批量".into(),
+        "格式".into(),
+    ]
 }
 
 fn is_right_control_modifier_shortcut(binding: &ShortcutBinding) -> bool {
@@ -2536,6 +2612,11 @@ impl Default for UserPreferences {
             selection_polish_hotkey: default_selection_polish_hotkey(),
             selection_polish_style_pack_id: default_active_style_pack_id(),
             selection_polish_output_mode: SelectionPolishOutputMode::default(),
+            selection_voice_enabled: false,
+            selection_voice_hotkey: default_selection_voice_hotkey(),
+            selection_voice_intent_mode: SelectionVoiceIntentMode::default(),
+            selection_voice_manual_intent: SelectionVoiceManualIntent::default(),
+            selection_voice_edit_keywords: default_selection_voice_edit_keywords(),
             qa_save_history: false,
             custom_combo_hotkey: None,
             translation_hotkey: default_translation_hotkey(),

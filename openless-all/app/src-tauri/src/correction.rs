@@ -23,7 +23,7 @@ pub fn apply_correction_rules(text: &str, rules: &[CorrectionRule]) -> String {
     current
 }
 
-fn apply_rule(text: &str, pattern: &str, replacement: &str) -> String {
+pub(crate) fn apply_rule(text: &str, pattern: &str, replacement: &str) -> String {
     let token_count = pattern.matches(NUM_TOKEN).count();
     if token_count == 0 {
         if replacement.contains(NUM_TOKEN) {
