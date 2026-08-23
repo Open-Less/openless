@@ -115,7 +115,7 @@ pub fn parse_edit_plan_xml(raw: &str) -> Result<EditPlan, String> {
     let cleaned = clean_xml_llm_output(raw);
     let candidate = if cleaned.is_empty() { raw.trim() } else { cleaned.trim() };
     let block = extract_edit_plan_block(candidate).unwrap_or_else(|| candidate.to_string());
-    let (inner, _) = extract_element_block(block, EDIT_PLAN_ROOT_TAG, 0)
+    let (inner, _) = extract_element_block(&block, EDIT_PLAN_ROOT_TAG, 0)
         .map_err(|error| format!("missing <{EDIT_PLAN_ROOT_TAG}> root: {error}"))?;
     let summary = extract_child_text(&inner, "summary");
     let operations = parse_operations_xml(&inner)?;
@@ -153,7 +153,7 @@ fn parse_operations_xml(edit_plan_inner: &str) -> Result<Vec<EditOperation>, Str
             Some((pos, tag)) => {
                 let (inner, opening_tag, consumed) =
                     extract_element_block(edit_plan_inner, tag, pos)?;
-                operations.push(parse_operation_xml(tag, &inner, opening_tag)?);
+                operations.push(parse_operation_xml(tag, &inner, &opening_tag)?);
                 cursor = pos + consumed;
             }
         }
@@ -186,10 +186,10 @@ fn parse_operation_xml(
         }
         "range_replace" => {
             let start = parse_u32_attr(opening_tag, "start")
-                .or_else(|| extract_child_text(inner, "start").and_then(parse_u32_text))
+                .or_else(|| extract_child_text(inner, "start").and_then(|text| parse_u32_text(&text)))
                 .unwrap_or(0);
             let end = parse_u32_attr(opening_tag, "end")
-                .or_else(|| extract_child_text(inner, "end").and_then(parse_u32_text))
+                .or_else(|| extract_child_text(inner, "end").and_then(|text| parse_u32_text(&text)))
                 .unwrap_or(0);
             Ok(EditOperation::RangeReplace {
                 start,
@@ -226,7 +226,7 @@ fn extract_element_block(
     let after_name = start + tag.len() + 1; // '<' + tag
     let open_end_rel = content[after_name..]
         .find('>')
-        .map_err(|_| format!("<{tag}> opening tag incomplete"))?;
+        .ok_or_else(|| format!("<{tag}> opening tag incomplete"))?;
     let open_end = after_name + open_end_rel + 1;
     let opening_tag = content[start..open_end].to_string();
     let close_needle = format!("</{tag}>");
@@ -277,7 +277,7 @@ fn parse_bool_attr(opening_tag: &str, attr: &str) -> bool {
 }
 
 fn parse_u32_attr(opening_tag: &str, attr: &str) -> Option<u32> {
-    parse_attr_value(opening_tag, attr).and_then(parse_u32_text)
+    parse_attr_value(opening_tag, attr).and_then(|text| parse_u32_text(&text))
 }
 
 fn parse_u32_text(raw: &str) -> Option<u32> {
@@ -434,18 +434,18 @@ fn normalize_edit_operation_value(op: &mut Value) {
         .and_then(|v| v.as_str())
         .unwrap_or_default();
     if op_type == "full_rewrite" {
-        promote_alias_field(obj, "text", ["content", "body", "value", "replacement"]);
+        promote_alias_field(obj, "text", &["content", "body", "value", "replacement"]);
     }
     if op_type == "literal_replace" {
-        promote_alias_field(obj, "replace", ["replacement", "with", "value"]);
-        promote_alias_field(obj, "find", ["search", "match", "pattern"]);
+        promote_alias_field(obj, "replace", &["replacement", "with", "value"]);
+        promote_alias_field(obj, "find", &["search", "match", "pattern"]);
     }
     if op_type == "regex_replace" {
-        promote_alias_field(obj, "pattern", ["regex", "find", "search"]);
-        promote_alias_field(obj, "replace", ["replacement", "with", "value"]);
+        promote_alias_field(obj, "pattern", &["regex", "find", "search"]);
+        promote_alias_field(obj, "replace", &["replacement", "with", "value"]);
     }
     if op_type == "range_replace" {
-        promote_alias_field(obj, "replace", ["replacement", "with", "value", "text"]);
+        promote_alias_field(obj, "replace", &["replacement", "with", "value", "text"]);
     }
 }
 
