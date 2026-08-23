@@ -114,7 +114,7 @@ pub fn parse_edit_plan(raw: &str) -> Result<EditPlan, String> {
 pub fn parse_edit_plan_xml(raw: &str) -> Result<EditPlan, String> {
     let cleaned = clean_xml_llm_output(raw);
     let candidate = if cleaned.is_empty() { raw.trim() } else { cleaned.trim() };
-    let block = extract_edit_plan_block(candidate).unwrap_or(candidate);
+    let block = extract_edit_plan_block(candidate).unwrap_or_else(|| candidate.to_string());
     let (inner, _) = extract_element_block(block, EDIT_PLAN_ROOT_TAG, 0)
         .map_err(|error| format!("missing <{EDIT_PLAN_ROOT_TAG}> root: {error}"))?;
     let summary = extract_child_text(&inner, "summary");
@@ -142,8 +142,7 @@ fn parse_operations_xml(edit_plan_inner: &str) -> Result<Vec<EditOperation>, Str
     while cursor < edit_plan_inner.len() {
         let mut next: Option<(usize, &'static str)> = None;
         for tag in EDIT_OPERATION_TAGS {
-            if let Some(rel) = find_open_tag(&edit_plan_inner[cursor..], tag, 0) {
-                let pos = cursor + rel;
+            if let Some(pos) = find_open_tag(edit_plan_inner, tag, cursor) {
                 if next.map_or(true, |(best, _)| pos < best) {
                     next = Some((pos, tag));
                 }
@@ -213,7 +212,7 @@ fn extract_rewrite_text(inner: &str) -> String {
 
 fn extract_child_text(parent: &str, tag: &str) -> Option<String> {
     let start = find_open_tag(parent, tag, 0)?;
-    let (inner, _) = extract_element_block(parent, tag, start)?;
+    let (inner, _, _) = extract_element_block(parent, tag, start).ok()?;
     Some(decode_xml_text(inner.trim()))
 }
 
@@ -222,9 +221,8 @@ fn extract_element_block(
     tag: &str,
     from: usize,
 ) -> Result<(String, String, usize), String> {
-    let rel_start = find_open_tag(&content[from..], tag, 0)
-        .map_err(|_| format!("<{tag}> not found"))?;
-    let start = from + rel_start;
+    let start = find_open_tag(content, tag, from)
+        .ok_or_else(|| format!("<{tag}> not found"))?;
     let after_name = start + tag.len() + 1; // '<' + tag
     let open_end_rel = content[after_name..]
         .find('>')
@@ -233,17 +231,15 @@ fn extract_element_block(
     let opening_tag = content[start..open_end].to_string();
     let close_needle = format!("</{tag}>");
     let close_rel = find_ci_substr(&content[open_end..], &close_needle)
-        .map_err(|_| format!("</{tag}> not found"))?;
+        .ok_or_else(|| format!("</{tag}> not found"))?;
     let inner = content[open_end..open_end + close_rel].to_string();
     let consumed = open_end + close_rel + close_needle.len() - from;
     Ok((inner, opening_tag, consumed))
 }
 
-fn find_open_tag(content: &str, tag: &str, from: usize) -> Result<usize, String> {
+fn find_open_tag(content: &str, tag: &str, from: usize) -> Option<usize> {
     let needle = format!("<{tag}");
-    find_ci_substr(&content[from..], &needle)
-        .map(|rel| from + rel)
-        .ok_or_else(|| format!("<{tag}> not found"))
+    find_ci_substr(&content[from..], &needle).map(|rel| from + rel)
 }
 
 fn find_ci_substr(haystack: &str, needle: &str) -> Option<usize> {
@@ -276,7 +272,7 @@ fn starts_with_ci(haystack: &[u8], needle: &str) -> bool {
 
 fn parse_bool_attr(opening_tag: &str, attr: &str) -> bool {
     parse_attr_value(opening_tag, attr)
-        .map(|value| matches!(value, "1" | "true" | "yes" | "on"))
+        .map(|value| matches!(value.as_str(), "1" | "true" | "yes" | "on"))
         .unwrap_or(false)
 }
 
@@ -471,7 +467,7 @@ fn normalize_operation_type(raw: &str) -> String {
 fn promote_alias_field(
     obj: &mut serde_json::Map<String, Value>,
     canonical: &str,
-    aliases: [&str; 4],
+    aliases: &[&str],
 ) {
     if obj.contains_key(canonical) {
         return;
