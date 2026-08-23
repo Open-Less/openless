@@ -63,6 +63,39 @@ fn emit_selection_voice_begin_error(inner: &Arc<Inner>, error: &str) {
     );
 }
 
+fn emit_selection_voice_end_error(inner: &Arc<Inner>, error: &str) {
+    log::warn!("[selection-voice] workflow failed: {error}");
+    // #region agent log
+    crate::agent_debug::agent_debug_log(
+        "H7",
+        "selection_voice_session.rs:end",
+        "selection voice end workflow failed",
+        serde_json::json!({ "error": error }),
+    );
+    // #endregion
+    emit_capsule(
+        inner,
+        CapsuleState::Error,
+        0.0,
+        0,
+        Some(selection_voice_end_message(error)),
+        None,
+    );
+}
+
+fn selection_voice_end_message(error: &str) -> String {
+    if error.contains("invalid EditPlan JSON") || error.contains("edit plan") {
+        return "编辑方案解析失败，请重试".into();
+    }
+    if error.contains("global timeout") || error.contains("bailian global timeout") {
+        return "语音识别超时，请重试".into();
+    }
+    if error.contains("selectionVoiceAsrUnavailable") {
+        return "语音识别不可用，请重试".into();
+    }
+    selection_voice_user_message(error)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum SelectionVoicePhase {
     Idle,
@@ -168,7 +201,9 @@ pub(super) async fn handle_selection_voice_pressed(inner: &Arc<Inner>) {
     match (mode, phase) {
         (HotkeyMode::Toggle, SelectionVoicePhase::Recording)
         | (HotkeyMode::Auto, SelectionVoicePhase::Recording) => {
-            let _ = end_selection_voice_session(inner).await;
+            if let Err(error) = end_selection_voice_session(inner).await {
+                log::warn!("[selection-voice] end on stop press failed: {error}");
+            }
             SELECTION_VOICE_BUSY.store(false, Ordering::Release);
             {
                 let mut state = inner.selection_voice_state.lock();
@@ -260,7 +295,9 @@ pub(super) async fn handle_selection_voice_released(inner: &Arc<Inner>) {
         return;
     }
     if mode == HotkeyMode::Hold {
-        let _ = end_selection_voice_session(inner).await;
+        if let Err(error) = end_selection_voice_session(inner).await {
+            log::warn!("[selection-voice] end on hold release failed: {error}");
+        }
         SELECTION_VOICE_BUSY.store(false, Ordering::Release);
         return;
     }
@@ -277,7 +314,9 @@ pub(super) async fn handle_selection_voice_released(inner: &Arc<Inner>) {
                 .unwrap_or(false)
         };
         if held_long {
-            let _ = end_selection_voice_session(inner).await;
+            if let Err(error) = end_selection_voice_session(inner).await {
+                log::warn!("[selection-voice] end on auto hold release failed: {error}");
+            }
         } else {
             log::info!("[selection-voice] auto short-tap latched; next press stops");
         }
@@ -336,65 +375,131 @@ async fn end_selection_voice_session(inner: &Arc<Inner>) -> Result<(), String> {
         let mut state = inner.selection_voice_state.lock();
         state.phase = SelectionVoicePhase::Processing;
     }
-    emit_capsule(inner, CapsuleState::Transcribing, 0.0, 0, None, None);
+    emit_capsule(
+        inner,
+        CapsuleState::Transcribing,
+        0.0,
+        0,
+        Some("正在识别指令...".into()),
+        None,
+    );
 
-    let transcript = qa_session::finish_selection_voice_transcript(inner, session_id).await?;
-    if transcript.trim().is_empty() {
-        reset_selection_voice_session(inner);
-        emit_capsule(inner, CapsuleState::Cancelled, 0.0, 0, Some("未识别到指令".into()), None);
-        return Ok(());
-    }
+    let workflow = async {
+        let transcript = qa_session::finish_selection_voice_transcript(inner, session_id).await?;
+        // #region agent log
+        crate::agent_debug::agent_debug_log(
+            "H6",
+            "selection_voice_session.rs:end",
+            "transcript ready",
+            serde_json::json!({ "chars": transcript.chars().count() }),
+        );
+        // #endregion
+        if transcript.trim().is_empty() {
+            reset_selection_voice_session(inner);
+            emit_capsule(
+                inner,
+                CapsuleState::Cancelled,
+                0.0,
+                0,
+                Some("未识别到指令".into()),
+                None,
+            );
+            return Ok(EndWorkflowOutcome::Finished);
+        }
 
-    let (selection, insertion_target) = {
-        let state = inner.selection_voice_state.lock();
-        (
-            state.selection.clone(),
-            state.insertion_target.clone(),
-        )
-    };
-    let selection = selection.ok_or_else(|| "selectionVoiceNoSelection".to_string())?;
-    let rules = inner.correction_rules.list().map_err(|e| e.to_string())?;
-    let instruction_raw = crate::correction::apply_correction_rules(&transcript, &rules);
+        let (selection, insertion_target) = {
+            let state = inner.selection_voice_state.lock();
+            (
+                state.selection.clone(),
+                state.insertion_target.clone(),
+            )
+        };
+        let selection = selection.ok_or_else(|| "selectionVoiceNoSelection".to_string())?;
+        let rules = inner.correction_rules.list().map_err(|e| e.to_string())?;
+        let instruction_raw = crate::correction::apply_correction_rules(&transcript, &rules);
 
-    emit_capsule(inner, CapsuleState::Polishing, 0.0, 0, None, None);
-    let instruction_polished = polish_selection_voice_instruction(inner, &instruction_raw).await?;
-    {
-        let mut state = inner.selection_voice_state.lock();
-        state.instruction_raw = Some(instruction_raw);
-        state.instruction_polished = Some(instruction_polished.clone());
-    }
-
-    let prefs = inner.prefs.get();
-    if prefs.selection_voice_intent_mode == SelectionVoiceIntentMode::Prompt {
-        *inner.selection_voice_intent_prompt.lock() = Some(PendingSelectionVoiceIntentPrompt {
-            session_id,
-            selection: selection.clone(),
-            insertion_target: insertion_target.clone(),
-            instruction_polished: instruction_polished.clone(),
-        });
+        emit_capsule(
+            inner,
+            CapsuleState::Polishing,
+            0.0,
+            0,
+            Some("正在理解指令...".into()),
+            None,
+        );
+        let instruction_polished = polish_selection_voice_instruction(inner, &instruction_raw).await?;
         {
             let mut state = inner.selection_voice_state.lock();
-            state.phase = SelectionVoicePhase::AwaitingIntent;
+            state.instruction_raw = Some(instruction_raw);
+            state.instruction_polished = Some(instruction_polished.clone());
         }
-        emit_capsule(inner, CapsuleState::Idle, 0.0, 0, None, None);
-        if let Some(app) = inner.app.lock().clone() {
-            crate::show_selection_voice_intent_prompt(&app);
-        }
-        return Ok(());
-    }
 
-    let intent = resolve_intent_with_optional_llm(inner, &instruction_polished).await;
-    continue_selection_voice_with_intent(
-        inner,
-        session_id,
-        &selection,
-        &insertion_target,
-        &instruction_polished,
-        intent,
-    )
-    .await?;
-    reset_selection_voice_session(inner);
-    Ok(())
+        let prefs = inner.prefs.get();
+        if prefs.selection_voice_intent_mode == SelectionVoiceIntentMode::Prompt {
+            *inner.selection_voice_intent_prompt.lock() = Some(PendingSelectionVoiceIntentPrompt {
+                session_id,
+                selection: selection.clone(),
+                insertion_target: insertion_target.clone(),
+                instruction_polished: instruction_polished.clone(),
+            });
+            {
+                let mut state = inner.selection_voice_state.lock();
+                state.phase = SelectionVoicePhase::AwaitingIntent;
+            }
+            emit_capsule(inner, CapsuleState::Idle, 0.0, 0, None, None);
+            if let Some(app) = inner.app.lock().clone() {
+                crate::show_selection_voice_intent_prompt(&app);
+            }
+            return Ok(EndWorkflowOutcome::AwaitingIntent);
+        }
+
+        let intent = resolve_intent_with_optional_llm(inner, &instruction_polished).await;
+        // #region agent log
+        crate::agent_debug::agent_debug_log(
+            "H6",
+            "selection_voice_session.rs:end",
+            "intent resolved",
+            serde_json::json!({ "intent": format!("{:?}", intent) }),
+        );
+        // #endregion
+        continue_selection_voice_with_intent(
+            inner,
+            session_id,
+            &selection,
+            &insertion_target,
+            &instruction_polished,
+            intent,
+        )
+        .await?;
+        // #region agent log
+        crate::agent_debug::agent_debug_log(
+            "H6",
+            "selection_voice_session.rs:end",
+            "selection voice workflow completed",
+            serde_json::json!({}),
+        );
+        // #endregion
+        Ok(EndWorkflowOutcome::Finished)
+    }
+    .await;
+
+    match workflow {
+        Ok(EndWorkflowOutcome::AwaitingIntent) => Ok(()),
+        Ok(EndWorkflowOutcome::Finished) => {
+            reset_selection_voice_session(inner);
+            Ok(())
+        }
+        Err(error) => {
+            reset_selection_voice_session(inner);
+            emit_selection_voice_end_error(inner, &error);
+            Err(error)
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EndWorkflowOutcome {
+    Finished,
+    AwaitingIntent,
 }
 
 async fn continue_selection_voice_with_intent(
@@ -532,6 +637,14 @@ async fn run_selection_voice_edit(
     insertion_target: &SelectionInsertionTarget,
     instruction_polished: &str,
 ) -> Result<(), String> {
+    emit_capsule(
+        inner,
+        CapsuleState::Polishing,
+        0.0,
+        0,
+        Some("正在生成编辑方案...".into()),
+        None,
+    );
     let plan = generate_edit_plan(inner, &selection.text, instruction_polished).await?;
     let preview = apply_edit_plan(&selection.text, &plan).map_err(|error| error.to_string())?;
     *inner.selection_voice_preview.lock() = Some(PendingSelectionVoicePreview {
@@ -591,7 +704,41 @@ async fn generate_edit_plan(
     )
     .await
     .map_err(|error| error.to_string())?;
-    parse_edit_plan_json(&raw)
+    // #region agent log
+    crate::agent_debug::agent_debug_log(
+        "H6",
+        "selection_voice_session.rs:edit_plan",
+        "edit plan llm response received",
+        serde_json::json!({ "rawChars": raw.chars().count() }),
+    );
+    // #endregion
+    match parse_edit_plan_json(&raw) {
+        Ok(plan) => {
+            // #region agent log
+            crate::agent_debug::agent_debug_log(
+                "H6",
+                "selection_voice_session.rs:edit_plan",
+                "edit plan parsed",
+                serde_json::json!({ "operations": plan.operations.len() }),
+            );
+            // #endregion
+            Ok(plan)
+        }
+        Err(error) => {
+            // #region agent log
+            crate::agent_debug::agent_debug_log(
+                "H7",
+                "selection_voice_session.rs:edit_plan",
+                "edit plan parse failed",
+                serde_json::json!({
+                    "error": error,
+                    "preview": raw.chars().take(240).collect::<String>(),
+                }),
+            );
+            // #endregion
+            Err(error)
+        }
+    }
 }
 
 impl Coordinator {
