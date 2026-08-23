@@ -436,7 +436,7 @@ async fn resolve_intent_with_optional_llm(
 
 async fn run_selection_voice_question(
     inner: &Arc<Inner>,
-    session_id: SessionId,
+    _session_id: SessionId,
     selection: &SelectionContext,
     instruction_polished: &str,
 ) -> Result<(), String> {

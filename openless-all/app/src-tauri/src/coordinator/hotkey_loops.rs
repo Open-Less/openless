@@ -445,8 +445,8 @@ pub(super) fn selection_voice_hotkey_supervisor_loop(inner: Arc<Inner>) {
             prefs.selection_voice_enabled, prefs.selection_voice_hotkey
         );
         let registered = inner.selection_voice_hotkey.lock().is_some();
-        let needs_update =
-            signature != last_signature || (prefs.selection_voice_enabled && !registered);
+        let needs_update = last_signature.as_deref() != Some(signature.as_str())
+            || (prefs.selection_voice_enabled && !registered);
         if needs_update {
             match try_update_selection_voice_hotkey_binding(&inner) {
                 Ok(()) => {
