@@ -495,12 +495,13 @@ mod tests {
 
     #[test]
     fn selection_voice_session_active_checks_phase() {
+        let session_id = new_session_id();
         let state = SelectionVoiceSessionState {
             phase: SelectionVoicePhase::Recording,
-            session_id: 7,
+            session_id,
             ..SelectionVoiceSessionState::default()
         };
-        assert!(selection_voice_recording_active(&state, 7));
-        assert!(!selection_voice_recording_active(&state, 8));
+        assert!(selection_voice_recording_active(&state, session_id));
+        assert!(!selection_voice_recording_active(&state, new_session_id()));
     }
 }

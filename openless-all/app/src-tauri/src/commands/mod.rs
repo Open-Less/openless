@@ -756,6 +756,9 @@ mod tests {
 
         fn refresh_selection_polish_hotkey(&self) {}
 
+        #[cfg(all(not(mobile), target_os = "windows"))]
+        fn refresh_selection_voice_hotkey(&self) {}
+
         fn refresh_coding_agent_hotkey(&self) {
             *self.coding_agent_refreshes.lock().unwrap() += 1;
         }

@@ -591,6 +591,9 @@ mod tests {
         fn refresh_open_app_hotkey(&self) {}
         fn refresh_selection_polish_hotkey(&self) {}
 
+        #[cfg(all(not(mobile), target_os = "windows"))]
+        fn refresh_selection_voice_hotkey(&self) {}
+
         fn refresh_coding_agent_hotkey(&self) {}
     }
 
@@ -1060,6 +1063,8 @@ mod persist_settings_tests {
         fn refresh_switch_style_hotkey(&self) {}
         fn refresh_open_app_hotkey(&self) {}
         fn refresh_selection_polish_hotkey(&self) {}
+        #[cfg(all(not(mobile), target_os = "windows"))]
+        fn refresh_selection_voice_hotkey(&self) {}
         fn refresh_coding_agent_hotkey(&self) {}
     }
 
