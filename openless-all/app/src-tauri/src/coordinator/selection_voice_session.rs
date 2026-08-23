@@ -14,7 +14,7 @@ use super::{
     CapsuleFeedback, Coordinator, Inner, QaPhase,
 };
 use crate::coordinator_state::{initial_session_id, new_session_id, SessionId};
-use crate::edit_plan::{apply_edit_plan, parse_edit_plan_json, EditOperation, EditPlan};
+use crate::edit_plan::{apply_edit_plan, parse_edit_plan, EditOperation, EditPlan};
 use crate::selection::{SelectionContext, SelectionInsertionTarget};
 use crate::selection_voice_intent::{
     parse_intent_classification_json, resolve_selection_voice_intent, SelectionVoiceIntent,
@@ -85,7 +85,7 @@ fn emit_selection_voice_end_error(inner: &Arc<Inner>, error: &str) {
 }
 
 fn selection_voice_end_message(error: &str) -> String {
-    if error.contains("invalid EditPlan JSON") {
+    if error.contains("invalid EditPlan XML") || error.contains("invalid EditPlan JSON") {
         return "编辑方案解析失败，请重试".into();
     }
     if error.contains("edit plan has no operations") {
@@ -732,7 +732,7 @@ async fn generate_edit_plan(
         serde_json::json!({ "rawChars": raw.chars().count() }),
     );
     // #endregion
-    match parse_edit_plan_json(&raw) {
+    match parse_edit_plan(&raw) {
         Ok(plan) => {
             if plan.operations.is_empty() {
                 log::warn!("[selection-voice] edit plan parsed with zero operations");

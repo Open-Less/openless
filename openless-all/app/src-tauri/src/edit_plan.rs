@@ -6,7 +6,7 @@ use serde_json::Value;
 use std::time::{Duration, Instant};
 
 use crate::correction::apply_rule;
-use crate::polish::clean_json_llm_output;
+use crate::polish::{clean_json_llm_output, clean_xml_llm_output};
 
 const MAX_OPERATIONS: usize = 32;
 const MAX_OP_STRING_LEN: usize = 8_192;
@@ -81,6 +81,308 @@ impl std::fmt::Display for EditApplyError {
 }
 
 impl std::error::Error for EditApplyError {}
+
+const EDIT_PLAN_ROOT_TAG: &str = "edit_plan";
+const EDIT_OPERATION_TAGS: &[&str] = &[
+    "literal_replace",
+    "regex_replace",
+    "range_replace",
+    "full_rewrite",
+];
+
+/// Parse LLM edit-plan output (XML primary, JSON legacy fallback).
+pub fn parse_edit_plan(raw: &str) -> Result<EditPlan, String> {
+    let trimmed = raw.trim();
+    if trimmed.contains('<') {
+        match parse_edit_plan_xml(trimmed) {
+            Ok(plan) => return Ok(plan),
+            Err(xml_error) => {
+                if trimmed.contains('{') {
+                    return parse_edit_plan_json(trimmed).map_err(|json_error| {
+                        format!(
+                            "invalid EditPlan XML: {xml_error}; JSON fallback: {json_error}"
+                        )
+                    });
+                }
+                return Err(format!("invalid EditPlan XML: {xml_error}"));
+            }
+        }
+    }
+    parse_edit_plan_json(trimmed)
+}
+
+pub fn parse_edit_plan_xml(raw: &str) -> Result<EditPlan, String> {
+    let cleaned = clean_xml_llm_output(raw);
+    let candidate = if cleaned.is_empty() { raw.trim() } else { cleaned.trim() };
+    let block = extract_edit_plan_block(candidate).unwrap_or(candidate);
+    let (inner, _) = extract_element_block(block, EDIT_PLAN_ROOT_TAG, 0)
+        .map_err(|error| format!("missing <{EDIT_PLAN_ROOT_TAG}> root: {error}"))?;
+    let summary = extract_child_text(&inner, "summary");
+    let operations = parse_operations_xml(&inner)?;
+    if operations.is_empty() {
+        return Err("edit plan has no operations".into());
+    }
+    Ok(EditPlan {
+        operations,
+        summary,
+    })
+}
+
+fn extract_edit_plan_block(raw: &str) -> Option<String> {
+    let start = find_open_tag(raw, EDIT_PLAN_ROOT_TAG, 0)?;
+    let close_needle = format!("</{EDIT_PLAN_ROOT_TAG}>");
+    let close_start = find_ci_substr(&raw[start..], &close_needle)?;
+    let end = start + close_start + close_needle.len();
+    Some(raw[start..end].to_string())
+}
+
+fn parse_operations_xml(edit_plan_inner: &str) -> Result<Vec<EditOperation>, String> {
+    let mut operations = Vec::new();
+    let mut cursor = 0;
+    while cursor < edit_plan_inner.len() {
+        let mut next: Option<(usize, &'static str)> = None;
+        for tag in EDIT_OPERATION_TAGS {
+            if let Some(rel) = find_open_tag(&edit_plan_inner[cursor..], tag, 0) {
+                let pos = cursor + rel;
+                if next.map_or(true, |(best, _)| pos < best) {
+                    next = Some((pos, tag));
+                }
+            }
+        }
+        match next {
+            None => break,
+            Some((pos, tag)) => {
+                let (inner, opening_tag, consumed) =
+                    extract_element_block(edit_plan_inner, tag, pos)?;
+                operations.push(parse_operation_xml(tag, &inner, opening_tag)?);
+                cursor = pos + consumed;
+            }
+        }
+    }
+    Ok(operations)
+}
+
+fn parse_operation_xml(
+    tag: &str,
+    inner: &str,
+    opening_tag: &str,
+) -> Result<EditOperation, String> {
+    match tag {
+        "literal_replace" => Ok(EditOperation::LiteralReplace {
+            find: extract_child_text(inner, "find").unwrap_or_default(),
+            replace: extract_child_text(inner, "replace").unwrap_or_default(),
+        }),
+        "regex_replace" => {
+            let flags = RegexFlags {
+                case_insensitive: parse_bool_attr(opening_tag, "case_insensitive"),
+                multiline: parse_bool_attr(opening_tag, "multiline"),
+            };
+            Ok(EditOperation::RegexReplace {
+                pattern: extract_child_text(inner, "pattern")
+                    .or_else(|| extract_child_text(inner, "regex"))
+                    .unwrap_or_default(),
+                replace: extract_child_text(inner, "replace").unwrap_or_default(),
+                flags,
+            })
+        }
+        "range_replace" => {
+            let start = parse_u32_attr(opening_tag, "start")
+                .or_else(|| extract_child_text(inner, "start").and_then(parse_u32_text))
+                .unwrap_or(0);
+            let end = parse_u32_attr(opening_tag, "end")
+                .or_else(|| extract_child_text(inner, "end").and_then(parse_u32_text))
+                .unwrap_or(0);
+            Ok(EditOperation::RangeReplace {
+                start,
+                end,
+                replace: extract_child_text(inner, "replace").unwrap_or_default(),
+            })
+        }
+        "full_rewrite" => Ok(EditOperation::FullRewrite {
+            text: extract_rewrite_text(inner),
+        }),
+        other => Err(format!("unknown edit operation tag: {other}")),
+    }
+}
+
+fn extract_rewrite_text(inner: &str) -> String {
+    extract_child_text(inner, "text")
+        .or_else(|| extract_child_text(inner, "content"))
+        .unwrap_or_else(|| decode_xml_text(inner.trim()))
+}
+
+fn extract_child_text(parent: &str, tag: &str) -> Option<String> {
+    let start = find_open_tag(parent, tag, 0)?;
+    let (inner, _) = extract_element_block(parent, tag, start)?;
+    Some(decode_xml_text(inner.trim()))
+}
+
+fn extract_element_block(
+    content: &str,
+    tag: &str,
+    from: usize,
+) -> Result<(String, String, usize), String> {
+    let rel_start = find_open_tag(&content[from..], tag, 0)
+        .map_err(|_| format!("<{tag}> not found"))?;
+    let start = from + rel_start;
+    let after_name = start + tag.len() + 1; // '<' + tag
+    let open_end_rel = content[after_name..]
+        .find('>')
+        .map_err(|_| format!("<{tag}> opening tag incomplete"))?;
+    let open_end = after_name + open_end_rel + 1;
+    let opening_tag = content[start..open_end].to_string();
+    let close_needle = format!("</{tag}>");
+    let close_rel = find_ci_substr(&content[open_end..], &close_needle)
+        .map_err(|_| format!("</{tag}> not found"))?;
+    let inner = content[open_end..open_end + close_rel].to_string();
+    let consumed = open_end + close_rel + close_needle.len() - from;
+    Ok((inner, opening_tag, consumed))
+}
+
+fn find_open_tag(content: &str, tag: &str, from: usize) -> Result<usize, String> {
+    let needle = format!("<{tag}");
+    find_ci_substr(&content[from..], &needle)
+        .map(|rel| from + rel)
+        .ok_or_else(|| format!("<{tag}> not found"))
+}
+
+fn find_ci_substr(haystack: &str, needle: &str) -> Option<usize> {
+    if needle.is_empty() {
+        return Some(0);
+    }
+    let hb = haystack.as_bytes();
+    let nb = needle.as_bytes();
+    if hb.len() < nb.len() {
+        return None;
+    }
+    for i in 0..=hb.len() - nb.len() {
+        if starts_with_ci(&hb[i..], needle) {
+            return Some(i);
+        }
+    }
+    None
+}
+
+fn starts_with_ci(haystack: &[u8], needle: &str) -> bool {
+    let nb = needle.as_bytes();
+    if haystack.len() < nb.len() {
+        return false;
+    }
+    haystack
+        .iter()
+        .zip(nb.iter())
+        .all(|(left, right)| left.eq_ignore_ascii_case(right))
+}
+
+fn parse_bool_attr(opening_tag: &str, attr: &str) -> bool {
+    parse_attr_value(opening_tag, attr)
+        .map(|value| matches!(value, "1" | "true" | "yes" | "on"))
+        .unwrap_or(false)
+}
+
+fn parse_u32_attr(opening_tag: &str, attr: &str) -> Option<u32> {
+    parse_attr_value(opening_tag, attr).and_then(parse_u32_text)
+}
+
+fn parse_u32_text(raw: &str) -> Option<u32> {
+    raw.trim().parse().ok()
+}
+
+fn parse_attr_value(opening_tag: &str, attr: &str) -> Option<String> {
+    let lower = opening_tag.to_lowercase();
+    let attr_lower = attr.to_lowercase();
+    let mut search_from = 0;
+    while let Some(rel) = lower[search_from..].find(&attr_lower) {
+        let idx = search_from + rel + attr_lower.len();
+        let rest = opening_tag[idx..].trim_start();
+        if let Some(rest) = rest.strip_prefix('=') {
+            let rest = rest.trim_start();
+            if let Some(value) = read_quoted_attr_value(rest) {
+                return Some(value);
+            }
+        }
+        search_from = search_from + rel + 1;
+    }
+    None
+}
+
+fn read_quoted_attr_value(raw: &str) -> Option<String> {
+    let first = raw.chars().next()?;
+    if first != '"' && first != '\'' {
+        return None;
+    }
+    let mut out = String::new();
+    let mut escaped = false;
+    for ch in raw.chars().skip(1) {
+        if escaped {
+            out.push(ch);
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' {
+            escaped = true;
+            continue;
+        }
+        if ch == first {
+            return Some(out);
+        }
+        out.push(ch);
+    }
+    None
+}
+
+fn decode_xml_text(raw: &str) -> String {
+    let trimmed = raw.trim();
+    let cdata = trimmed
+        .strip_prefix("<![CDATA[")
+        .and_then(|rest| rest.strip_suffix("]]>"))
+        .map(str::trim);
+    let source = cdata.unwrap_or(trimmed);
+    let mut out = String::with_capacity(source.len());
+    let mut chars = source.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '&' {
+            let mut entity = String::new();
+            while let Some(&next) = chars.peek() {
+                if next == ';' {
+                    chars.next();
+                    break;
+                }
+                if next.is_alphanumeric() || next == '#' {
+                    entity.push(next);
+                    chars.next();
+                } else {
+                    break;
+                }
+            }
+            match entity.as_str() {
+                "lt" => out.push('<'),
+                "gt" => out.push('>'),
+                "amp" => out.push('&'),
+                "quot" => out.push('"'),
+                "apos" => out.push('\''),
+                other if other.starts_with('#x") => {
+                    if let Ok(code) = u32::from_str_radix(other[2..].trim(), 16) {
+                        if let Some(decoded) = char::from_u32(code) {
+                            out.push(decoded);
+                        }
+                    }
+                }
+                other if other.starts_with('#") => {
+                    if let Ok(code) = other[1..].trim().parse::<u32>() {
+                        if let Some(decoded) = char::from_u32(code) {
+                            out.push(decoded);
+                        }
+                    }
+                }
+                _ => out.push('&'),
+            }
+            continue;
+        }
+        out.push(ch);
+    }
+    out
+}
 
 pub fn parse_edit_plan_json(raw: &str) -> Result<EditPlan, String> {
     let trimmed = raw.trim();
@@ -454,6 +756,44 @@ mod tests {
         assert_eq!(
             apply_edit_plan("abc", &plan),
             Err(EditApplyError::InvalidRange)
+        );
+    }
+
+    #[test]
+    fn parses_xml_literal_replace() {
+        let raw = r#"<edit_plan>
+  <summary>replace email</summary>
+  <literal_replace>
+    <find>old@mail.com</find>
+    <replace>user@company.com</replace>
+  </literal_replace>
+</edit_plan>"#;
+        let plan = parse_edit_plan_xml(raw).unwrap();
+        assert_eq!(plan.summary.as_deref(), Some("replace email"));
+        assert_eq!(plan.operations.len(), 1);
+        assert_eq!(
+            plan.operations[0],
+            EditOperation::LiteralReplace {
+                find: "old@mail.com".into(),
+                replace: "user@company.com".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn parses_xml_full_rewrite_multiline() {
+        let raw = r#"<edit_plan>
+  <full_rewrite>
+    <text>Line one
+Line two</text>
+  </full_rewrite>
+</edit_plan>"#;
+        let plan = parse_edit_plan_xml(raw).unwrap();
+        assert_eq!(
+            plan.operations[0],
+            EditOperation::FullRewrite {
+                text: "Line one\nLine two".into()
+            }
         );
     }
 

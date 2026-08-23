@@ -25,6 +25,45 @@ pub(crate) fn clean_polish_output(content: &str) -> String {
     output.trim().to_string()
 }
 
+/// XML 结构化输出清洗：剥离 thinking 块，保留 edit_plan 信封。
+pub(crate) fn clean_xml_llm_output(content: &str) -> String {
+    let without_thinking = strip_thinking_blocks(content);
+    let trimmed = without_thinking.trim();
+    if let Some(start) = find_ci_tag_open(trimmed, "edit_plan") {
+        let close = "</edit_plan>";
+        if let Some(close_rel) = find_ci_substr(&trimmed[start..], close) {
+            let end = start + close_rel + close.len();
+            return trimmed[start..end].trim().to_string();
+        }
+    }
+    trimmed.to_string()
+}
+
+fn find_ci_tag_open(content: &str, tag: &str) -> Option<usize> {
+    find_ci_substr(content, &format!("<{tag}"))
+}
+
+fn find_ci_substr(haystack: &str, needle: &str) -> Option<usize> {
+    if needle.is_empty() {
+        return Some(0);
+    }
+    let hb = haystack.as_bytes();
+    let nb = needle.as_bytes();
+    if hb.len() < nb.len() {
+        return None;
+    }
+    for i in 0..=hb.len() - nb.len() {
+        if hb[i..]
+            .iter()
+            .zip(nb.iter())
+            .all(|(left, right)| left.eq_ignore_ascii_case(right))
+        {
+            return Some(i);
+        }
+    }
+    None
+}
+
 /// JSON 结构化输出清洗：只剥离 thinking 块与 markdown 围栏，不删 boilerplate 前缀。
 pub(crate) fn clean_json_llm_output(content: &str) -> String {
     let without_thinking = strip_thinking_blocks(content);
