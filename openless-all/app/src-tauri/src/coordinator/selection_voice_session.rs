@@ -1,7 +1,5 @@
 //! Selection-voice edit session (issue #987 desktop MVP, Windows-first).
 
-#[cfg(all(not(mobile), target_os = "windows"))]
-mod imp {
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -13,7 +11,7 @@ use uuid::Uuid;
 
 use super::{
     answer_qa_question_text, build_active_llm_provider, emit_capsule, open_qa_panel, polish_text,
-    CapsuleFeedback, Coordinator, Inner, QaPhase,
+    qa_session, CapsuleFeedback, Coordinator, Inner, QaPhase,
 };
 use crate::coordinator_state::{initial_session_id, new_session_id, SessionId};
 use crate::edit_plan::{apply_edit_plan, parse_edit_plan_json, EditPlan};
@@ -158,7 +156,7 @@ async fn begin_selection_voice_session(inner: &Arc<Inner>) -> Result<(), String>
     }
 
     emit_capsule(inner, CapsuleState::Recording, 0.0, 0, None, None);
-    super::qa_session::start_selection_voice_recorder(inner, session_id).await?;
+    qa_session::start_selection_voice_recorder(inner, session_id).await?;
     Ok(())
 }
 
@@ -176,8 +174,7 @@ async fn end_selection_voice_session(inner: &Arc<Inner>) -> Result<(), String> {
     }
     emit_capsule(inner, CapsuleState::Transcribing, 0.0, 0, None, None);
 
-    let transcript =
-        super::qa_session::finish_selection_voice_transcript(inner, session_id).await?;
+    let transcript = qa_session::finish_selection_voice_transcript(inner, session_id).await?;
     if transcript.trim().is_empty() {
         reset_selection_voice_session(inner);
         emit_capsule(inner, CapsuleState::Cancelled, 0.0, 0, Some("未识别到指令".into()), None);
@@ -479,10 +476,3 @@ mod tests {
         assert!(!selection_voice_recording_active(&state, 8));
     }
 }
-}
-
-#[cfg(all(not(mobile), target_os = "windows"))]
-pub(super) use imp::{
-    handle_selection_voice_pressed, handle_selection_voice_released, PendingSelectionVoicePreview,
-    SelectionVoicePhase, SelectionVoicePreviewPayload, SelectionVoiceSessionState,
-};

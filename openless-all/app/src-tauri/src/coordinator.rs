@@ -73,7 +73,7 @@ mod qa;
 mod qa_session;
 mod resources;
 #[cfg(all(not(mobile), target_os = "windows"))]
-mod selection_voice_session;
+pub(crate) mod selection_voice_session;
 #[cfg(not(mobile))]
 pub(crate) mod selection_polish;
 mod silence_auto_stop;
