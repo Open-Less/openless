@@ -463,6 +463,8 @@ fn handle_selection_workspace_hotkey_released(inner: &Arc<Inner>) {
             super::selection_voice_session::handle_selection_voice_released(&inner_cloned).await;
         });
     }
+    #[cfg(not(target_os = "windows"))]
+    let _ = inner;
 }
 
 #[cfg(not(mobile))]
