@@ -384,7 +384,7 @@ async fn end_selection_voice_session(inner: &Arc<Inner>) -> Result<(), String> {
         None,
     );
 
-    let workflow = async {
+    let workflow: Result<EndWorkflowOutcome, String> = async {
         let transcript = qa_session::finish_selection_voice_transcript(inner, session_id).await?;
         // #region agent log
         crate::agent_debug::agent_debug_log(
