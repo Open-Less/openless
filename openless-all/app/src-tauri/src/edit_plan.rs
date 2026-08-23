@@ -115,7 +115,7 @@ pub fn parse_edit_plan_xml(raw: &str) -> Result<EditPlan, String> {
     let cleaned = clean_xml_llm_output(raw);
     let candidate = if cleaned.is_empty() { raw.trim() } else { cleaned.trim() };
     let block = extract_edit_plan_block(candidate).unwrap_or_else(|| candidate.to_string());
-    let (inner, _) = extract_element_block(&block, EDIT_PLAN_ROOT_TAG, 0)
+    let (inner, _, _) = extract_element_block(&block, EDIT_PLAN_ROOT_TAG, 0)
         .map_err(|error| format!("missing <{EDIT_PLAN_ROOT_TAG}> root: {error}"))?;
     let summary = extract_child_text(&inner, "summary");
     let operations = parse_operations_xml(&inner)?;
@@ -432,6 +432,7 @@ fn normalize_edit_operation_value(op: &mut Value) {
     let op_type = obj
         .get("type")
         .and_then(|v| v.as_str())
+        .map(str::to_string)
         .unwrap_or_default();
     if op_type == "full_rewrite" {
         promote_alias_field(obj, "text", &["content", "body", "value", "replacement"]);
@@ -473,7 +474,8 @@ fn promote_alias_field(
         return;
     }
     for alias in aliases {
-        if let Some(value) = obj.remove(alias) {
+        let key = (*alias).to_string();
+        if let Some(value) = obj.remove(&key) {
             obj.insert(canonical.to_string(), value);
             return;
         }
