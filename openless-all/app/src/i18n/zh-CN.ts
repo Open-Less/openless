@@ -61,6 +61,16 @@ export const zhCN = {
     applyError: '未能应用：',
     confirmReplace: '确认并替换',
   },
+  selectionVoiceIntent: {
+    title: '你想做什么？',
+    subtitle: '已识别你的语音指令，请选择处理方式。',
+    loading: '加载中…',
+    sourcePrefix: '选区：',
+    errorPrefix: '未能继续：',
+    question: '提问',
+    edit: '编辑选区',
+    cancel: '取消',
+  },
   qa: {
     title: '划词追问',
     headerHint: '随时提问',
@@ -696,6 +706,21 @@ export const zhCN = {
     },
   },
   settings: {
+    selectionWorkspace: {
+      title: '选区助手',
+      hint: '选中文字后的两种能力：① 选区润色——不用麦克风，按风格包改写；② 选区语音——按住快捷键口述指令，说完后选择「提问」或「编辑选区」。',
+      polishHotkey: '润色快捷键',
+      polishHotkeyDesc: '无需麦克风；用当前风格包改写选中文字。',
+      polishDelivery: '润色结果处理',
+      voiceEnable: '语音编辑',
+      voiceEnableDesc: '需麦克风；录音方式跟随全局设置（当前：{{recordingLabel}}）。',
+      voiceHotkey: '语音快捷键',
+      voiceHotkeyDesc: '默认 Ctrl+Shift+E；需先选中文字再触发。',
+      autoIntent: '自动判断意图',
+      autoIntentDesc: '关闭时，每次说完后弹出选择：提问或编辑选区。',
+      editKeywords: '编辑关键词',
+      editKeywordsDesc: '仅在开启自动判断时生效；每行一个，命中即走编辑分支。',
+    },
     selectionPolish: {
       title: '选区润色',
       hotkey: '触发快捷键',

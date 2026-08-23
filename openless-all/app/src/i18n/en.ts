@@ -63,6 +63,16 @@ export const en: typeof zhCN = {
     applyError: 'Could not apply: ',
     confirmReplace: 'Confirm & replace',
   },
+  selectionVoiceIntent: {
+    title: 'What would you like to do?',
+    subtitle: 'Your voice instruction was recognized. Choose how to proceed.',
+    loading: 'Loading…',
+    sourcePrefix: 'Selection: ',
+    errorPrefix: 'Could not continue: ',
+    question: 'Ask a question',
+    edit: 'Edit selection',
+    cancel: 'Cancel',
+  },
   qa: {
     title: 'Ask',
     headerHint: 'Ask anytime',
@@ -698,6 +708,21 @@ export const en: typeof zhCN = {
     },
   },
   settings: {
+    selectionWorkspace: {
+      title: 'Selection Assistant',
+      hint: 'Two ways to work with selected text: ① Selection polish — rewrite with your style pack, no microphone; ② Selection voice — hold the shortcut, speak, then choose Ask or Edit.',
+      polishHotkey: 'Polish shortcut',
+      polishHotkeyDesc: 'No microphone; rewrites the selection with the current style pack.',
+      polishDelivery: 'Polish result handling',
+      voiceEnable: 'Voice edit',
+      voiceEnableDesc: 'Requires a microphone; recording behavior follows global settings (current: {{recordingLabel}}).',
+      voiceHotkey: 'Voice shortcut',
+      voiceHotkeyDesc: 'Default Ctrl+Shift+E; select text before triggering.',
+      autoIntent: 'Auto-classify intent',
+      autoIntentDesc: 'When off, you choose Ask or Edit after each utterance.',
+      editKeywords: 'Edit keywords',
+      editKeywordsDesc: 'Only when auto-classify is on; one keyword per line routes to edit.',
+    },
     selectionPolish: {
       title: 'Selection Polish',
       hotkey: 'Trigger shortcut',

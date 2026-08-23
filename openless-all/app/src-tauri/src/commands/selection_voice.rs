@@ -1,6 +1,26 @@
 use super::*;
 
 #[tauri::command]
+pub fn get_selection_voice_intent_prompt(
+    coord: CoordinatorState<'_>,
+) -> Option<crate::coordinator::selection_voice_session::SelectionVoiceIntentPromptPayload> {
+    coord.selection_voice_intent_prompt()
+}
+
+#[tauri::command]
+pub fn confirm_selection_voice_intent_prompt(
+    coord: CoordinatorState<'_>,
+    intent: String,
+) -> Result<(), String> {
+    coord.confirm_selection_voice_intent_prompt(intent)
+}
+
+#[tauri::command]
+pub fn cancel_selection_voice_intent_prompt(coord: CoordinatorState<'_>) {
+    coord.cancel_selection_voice_intent_prompt();
+}
+
+#[tauri::command]
 pub fn get_selection_voice_preview(
     coord: CoordinatorState<'_>,
 ) -> Option<crate::coordinator::selection_voice_session::SelectionVoicePreviewPayload> {

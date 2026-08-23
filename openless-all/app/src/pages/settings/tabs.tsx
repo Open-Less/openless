@@ -6,8 +6,7 @@ import { useEffect, useState } from 'react';
 import { RecordingInputSection } from './RecordingInputSection';
 import { RemoteInputSection } from './RemoteInputSection';
 import { ShortcutsSection } from './ShortcutsSection';
-import { SelectionPolishSection } from './SelectionPolishSection';
-import { SelectionVoiceSection } from './SelectionVoiceSection';
+import { SelectionWorkspaceSection } from './SelectionWorkspaceSection';
 import { LanguageSection } from './LanguageSection';
 import { ThemeSection } from './ThemeSection';
 import { LayoutSection } from './LayoutSection';
@@ -50,8 +49,7 @@ export function GeneralTab() {
       <RecordingInputSection />
       <LayoutSection />
       {showRemoteInput && <RemoteInputSection />}
-      <SelectionPolishSection />
-      <SelectionVoiceSection />
+      <SelectionWorkspaceSection />
       {showDesktopShortcuts && <ShortcutsSection />}
       <ThemeSection />
       <LanguageSection />

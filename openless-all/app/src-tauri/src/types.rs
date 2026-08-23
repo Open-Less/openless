@@ -191,7 +191,9 @@ pub enum SelectionPolishOutputMode {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum SelectionVoiceIntentMode {
+    /// 说完后由用户选择提问或编辑（默认）。
     #[default]
+    Prompt,
     Auto,
     Manual,
     Heuristic,

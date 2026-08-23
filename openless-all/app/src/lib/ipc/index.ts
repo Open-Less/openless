@@ -158,6 +158,9 @@ export {
 } from './selection-polish-preview'
 
 export {
+    getSelectionVoiceIntentPrompt,
+    confirmSelectionVoiceIntentPrompt,
+    cancelSelectionVoiceIntentPrompt,
     getSelectionVoicePreview,
     confirmSelectionVoicePreview,
     cancelSelectionVoicePreview,

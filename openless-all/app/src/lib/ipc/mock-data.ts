@@ -72,7 +72,7 @@ export let mockSettings: UserPreferences = {
     selectionPolishHotkey: defaultSelectionPolishShortcut(),
     selectionVoiceEnabled: false,
     selectionVoiceHotkey: defaultSelectionVoiceShortcut(),
-    selectionVoiceIntentMode: "auto",
+    selectionVoiceIntentMode: "prompt",
     selectionVoiceManualIntent: "question",
     selectionVoiceEditKeywords: ["翻译", "改成", "替换", "批量", "格式"],
     chineseScriptPreference: "auto",

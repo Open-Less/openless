@@ -265,7 +265,7 @@ export type ThemeMode = 'system' | 'light' | 'dark';
 /** 选区润色结果直接替换，或先在可编辑预览中确认。 */
 export type SelectionPolishOutputMode = 'directReplace' | 'previewConfirm';
 
-export type SelectionVoiceIntentMode = 'auto' | 'manual' | 'heuristic';
+export type SelectionVoiceIntentMode = 'prompt' | 'auto' | 'manual' | 'heuristic';
 export type SelectionVoiceManualIntent = 'question' | 'edit';
 
 export interface CustomStylePrompts {

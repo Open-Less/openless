@@ -25,11 +25,36 @@ use crate::types::{
 
 static SELECTION_VOICE_BUSY: AtomicBool = AtomicBool::new(false);
 
+pub(super) fn selection_voice_busy_for_debug() -> bool {
+    SELECTION_VOICE_BUSY.load(Ordering::SeqCst)
+}
+
+fn selection_voice_user_message(error: &str) -> String {
+    match error {
+        "dictationActive" => "正在听写，请先结束录音".into(),
+        "selectionVoiceNoSelection" => "请先选中文字".into(),
+        "selectionVoiceTargetUnavailable" => "无法定位选区，请重试".into(),
+        other => other.into(),
+    }
+}
+
+fn emit_selection_voice_begin_error(inner: &Arc<Inner>, error: &str) {
+    emit_capsule(
+        inner,
+        CapsuleState::Error,
+        0.0,
+        0,
+        Some(selection_voice_user_message(error)),
+        None,
+    );
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum SelectionVoicePhase {
     Idle,
     Recording,
     Processing,
+    AwaitingIntent,
 }
 
 #[derive(Debug, Clone)]
@@ -63,6 +88,21 @@ pub(crate) struct SelectionVoicePreviewPayload {
     pub summary: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SelectionVoiceIntentPromptPayload {
+    pub instruction: String,
+    pub source_text: String,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PendingSelectionVoiceIntentPrompt {
+    session_id: SessionId,
+    selection: SelectionContext,
+    insertion_target: SelectionInsertionTarget,
+    instruction_polished: String,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct PendingSelectionVoicePreview {
     insertion_target: SelectionInsertionTarget,
@@ -85,18 +125,51 @@ fn selection_voice_recording_active(
 
 pub(super) async fn handle_selection_voice_pressed(inner: &Arc<Inner>) {
     if !inner.prefs.get().selection_voice_enabled {
+        // #region agent log
+        crate::agent_debug::agent_debug_log(
+            "H2",
+            "selection_voice_session.rs:pressed",
+            "ignored: selection voice disabled",
+            serde_json::json!({}),
+        );
+        // #endregion
         return;
     }
     if SELECTION_VOICE_BUSY.swap(true, Ordering::AcqRel) {
+        // #region agent log
+        crate::agent_debug::agent_debug_log(
+            "H2",
+            "selection_voice_session.rs:pressed",
+            "ignored: selection voice busy",
+            serde_json::json!({}),
+        );
+        // #endregion
         return;
     }
 
     let mode = inner.prefs.get().hotkey.mode;
     let phase = inner.selection_voice_state.lock().phase;
+    // #region agent log
+    crate::agent_debug::agent_debug_log(
+        "H3",
+        "selection_voice_session.rs:pressed",
+        "handling press",
+        serde_json::json!({ "hotkeyMode": format!("{:?}", mode), "phase": format!("{:?}", phase) }),
+    );
+    // #endregion
     match (mode, phase) {
         (HotkeyMode::Toggle, SelectionVoicePhase::Idle) => {
             if let Err(error) = begin_selection_voice_session(inner).await {
                 log::warn!("[selection-voice] begin failed: {error}");
+                emit_selection_voice_begin_error(inner, &error);
+                // #region agent log
+                crate::agent_debug::agent_debug_log(
+                    "H3",
+                    "selection_voice_session.rs:pressed",
+                    "begin failed",
+                    serde_json::json!({ "error": error }),
+                );
+                // #endregion
                 SELECTION_VOICE_BUSY.store(false, Ordering::Release);
             }
         }
@@ -107,10 +180,27 @@ pub(super) async fn handle_selection_voice_pressed(inner: &Arc<Inner>) {
         (HotkeyMode::Hold | HotkeyMode::Auto, SelectionVoicePhase::Idle) => {
             if let Err(error) = begin_selection_voice_session(inner).await {
                 log::warn!("[selection-voice] begin failed: {error}");
+                emit_selection_voice_begin_error(inner, &error);
+                // #region agent log
+                crate::agent_debug::agent_debug_log(
+                    "H3",
+                    "selection_voice_session.rs:pressed",
+                    "begin failed",
+                    serde_json::json!({ "error": error }),
+                );
+                // #endregion
                 SELECTION_VOICE_BUSY.store(false, Ordering::Release);
             }
         }
         _ => {
+            // #region agent log
+            crate::agent_debug::agent_debug_log(
+                "H3",
+                "selection_voice_session.rs:pressed",
+                "ignored: unexpected phase/mode",
+                serde_json::json!({ "hotkeyMode": format!("{:?}", mode), "phase": format!("{:?}", phase) }),
+            );
+            // #endregion
             SELECTION_VOICE_BUSY.store(false, Ordering::Release);
         }
     }
@@ -145,6 +235,7 @@ async fn begin_selection_voice_session(inner: &Arc<Inner>) -> Result<(), String>
     }
 
     let session_id = new_session_id();
+    let selection_text_len = selection.text.len();
     {
         let mut state = inner.selection_voice_state.lock();
         state.phase = SelectionVoicePhase::Recording;
@@ -157,6 +248,14 @@ async fn begin_selection_voice_session(inner: &Arc<Inner>) -> Result<(), String>
 
     emit_capsule(inner, CapsuleState::Recording, 0.0, 0, None, None);
     qa_session::start_selection_voice_recorder(inner, session_id).await?;
+    // #region agent log
+    crate::agent_debug::agent_debug_log(
+        "H3",
+        "selection_voice_session.rs:begin",
+        "selection voice session started",
+        serde_json::json!({ "sessionId": session_id.to_string(), "selectionLen": selection_text_len }),
+    );
+    // #endregion
     Ok(())
 }
 
@@ -200,23 +299,62 @@ async fn end_selection_voice_session(inner: &Arc<Inner>) -> Result<(), String> {
         state.instruction_polished = Some(instruction_polished.clone());
     }
 
+    let prefs = inner.prefs.get();
+    if prefs.selection_voice_intent_mode == SelectionVoiceIntentMode::Prompt {
+        *inner.selection_voice_intent_prompt.lock() = Some(PendingSelectionVoiceIntentPrompt {
+            session_id,
+            selection: selection.clone(),
+            insertion_target: insertion_target.clone(),
+            instruction_polished: instruction_polished.clone(),
+        });
+        {
+            let mut state = inner.selection_voice_state.lock();
+            state.phase = SelectionVoicePhase::AwaitingIntent;
+        }
+        emit_capsule(inner, CapsuleState::Idle, 0.0, 0, None, None);
+        if let Some(app) = inner.app.lock().clone() {
+            crate::show_selection_voice_intent_prompt(&app);
+        }
+        return Ok(());
+    }
+
     let intent = resolve_intent_with_optional_llm(inner, &instruction_polished).await;
+    continue_selection_voice_with_intent(
+        inner,
+        session_id,
+        &selection,
+        &insertion_target,
+        &instruction_polished,
+        intent,
+    )
+    .await?;
+    reset_selection_voice_session(inner);
+    Ok(())
+}
+
+async fn continue_selection_voice_with_intent(
+    inner: &Arc<Inner>,
+    session_id: SessionId,
+    selection: &SelectionContext,
+    insertion_target: &SelectionInsertionTarget,
+    instruction_polished: &str,
+    intent: SelectionVoiceIntent,
+) -> Result<(), String> {
     match intent {
         SelectionVoiceIntent::Question => {
-            run_selection_voice_question(inner, session_id, &selection, &instruction_polished)
+            run_selection_voice_question(inner, session_id, selection, instruction_polished)
                 .await?;
         }
         SelectionVoiceIntent::Edit => {
             run_selection_voice_edit(
                 inner,
-                &selection,
-                &insertion_target,
-                &instruction_polished,
+                selection,
+                insertion_target,
+                instruction_polished,
             )
             .await?;
         }
     }
-    reset_selection_voice_session(inner);
     Ok(())
 }
 
@@ -392,6 +530,61 @@ async fn generate_edit_plan(
 }
 
 impl Coordinator {
+    pub(crate) fn selection_voice_intent_prompt(
+        &self,
+    ) -> Option<SelectionVoiceIntentPromptPayload> {
+        self.inner
+            .selection_voice_intent_prompt
+            .lock()
+            .as_ref()
+            .map(|prompt| SelectionVoiceIntentPromptPayload {
+                instruction: prompt.instruction_polished.clone(),
+                source_text: prompt.selection.text.clone(),
+            })
+    }
+
+    pub(crate) fn cancel_selection_voice_intent_prompt(&self) {
+        self.inner.selection_voice_intent_prompt.lock().take();
+        reset_selection_voice_session(&self.inner);
+        if let Some(app) = self.inner.app.lock().clone() {
+            crate::hide_selection_voice_intent_prompt(&app);
+        }
+    }
+
+    pub(crate) fn confirm_selection_voice_intent_prompt(
+        &self,
+        intent: String,
+    ) -> Result<(), String> {
+        let prompt = self
+            .inner
+            .selection_voice_intent_prompt
+            .lock()
+            .take()
+            .ok_or_else(|| "selectionVoiceIntentPromptUnavailable".to_string())?;
+        if let Some(app) = self.inner.app.lock().clone() {
+            crate::hide_selection_voice_intent_prompt(&app);
+        }
+        let resolved = match intent.as_str() {
+            "question" => SelectionVoiceIntent::Question,
+            "edit" => SelectionVoiceIntent::Edit,
+            other => return Err(format!("selectionVoiceInvalidIntent:{other}")),
+        };
+        let inner = Arc::clone(&self.inner);
+        tauri::async_runtime::block_on(async move {
+            continue_selection_voice_with_intent(
+                &inner,
+                prompt.session_id,
+                &prompt.selection,
+                &prompt.insertion_target,
+                &prompt.instruction_polished,
+                resolved,
+            )
+            .await?;
+            reset_selection_voice_session(&inner);
+            Ok(())
+        })
+    }
+
     pub(crate) fn selection_voice_preview(&self) -> Option<SelectionVoicePreviewPayload> {
         self.inner.selection_voice_preview.lock().as_ref().map(|preview| {
             SelectionVoicePreviewPayload {

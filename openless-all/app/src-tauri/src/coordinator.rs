@@ -1136,6 +1136,9 @@ struct Inner {
     #[cfg(all(not(mobile), target_os = "windows"))]
     selection_voice_preview: Mutex<Option<selection_voice_session::PendingSelectionVoicePreview>>,
     #[cfg(all(not(mobile), target_os = "windows"))]
+    selection_voice_intent_prompt:
+        Mutex<Option<selection_voice_session::PendingSelectionVoiceIntentPrompt>>,
+    #[cfg(all(not(mobile), target_os = "windows"))]
     selection_voice_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
     /// 「本次会话真的要翻译」。每次 begin_session 重置为 false；hotkey 监听器在
     /// Listening / Starting 阶段看到 Shift down 边沿（或安卓浮层请求）时，经
@@ -1454,6 +1457,7 @@ impl Coordinator {
                     ),
                     #[cfg(all(not(mobile), target_os = "windows"))]
                     selection_voice_preview: Mutex::new(None),
+                    selection_voice_intent_prompt: Mutex::new(None),
                     #[cfg(all(not(mobile), target_os = "windows"))]
                     selection_voice_hotkey: Mutex::new(None),
                     translation_active: AtomicBool::new(false),
@@ -1594,6 +1598,8 @@ impl Coordinator {
                 ),
                 #[cfg(all(not(mobile), target_os = "windows"))]
                 selection_voice_preview: Mutex::new(None),
+                #[cfg(all(not(mobile), target_os = "windows"))]
+                selection_voice_intent_prompt: Mutex::new(None),
                 #[cfg(all(not(mobile), target_os = "windows"))]
                 selection_voice_hotkey: Mutex::new(None),
                 translation_active: AtomicBool::new(false),

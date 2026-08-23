@@ -14,6 +14,7 @@
 //! - coordinator: dictation state machine glue
 //! - commands: Tauri IPC surface
 
+mod agent_debug;
 mod android;
 #[cfg(test)]
 mod build_target;
@@ -275,6 +276,12 @@ macro_rules! app_invoke_handler_desktop {
             commands::get_qa_hotkey_label,
             commands::set_qa_hotkey,
             commands::set_selection_polish_hotkey,
+            #[cfg(all(not(mobile), target_os = "windows"))]
+            commands::get_selection_voice_intent_prompt,
+            #[cfg(all(not(mobile), target_os = "windows"))]
+            commands::confirm_selection_voice_intent_prompt,
+            #[cfg(all(not(mobile), target_os = "windows"))]
+            commands::cancel_selection_voice_intent_prompt,
             #[cfg(all(not(mobile), target_os = "windows"))]
             commands::get_selection_voice_preview,
             #[cfg(all(not(mobile), target_os = "windows"))]
@@ -2727,6 +2734,65 @@ pub(crate) fn hide_selection_voice_preview<R: tauri::Runtime>(app: &AppHandle<R>
 
 #[cfg(not(all(not(mobile), target_os = "windows")))]
 pub(crate) fn hide_selection_voice_preview<R: tauri::Runtime>(_app: &AppHandle<R>) {}
+
+/// 选区语音：说完后由用户选择提问或编辑。
+#[cfg(all(not(mobile), target_os = "windows"))]
+fn ensure_selection_voice_intent_prompt_window<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+) -> Option<tauri::WebviewWindow<R>> {
+    if let Some(window) = app.get_webview_window("selection-voice-intent") {
+        return Some(window);
+    }
+    WebviewWindowBuilder::new(
+        app,
+        "selection-voice-intent",
+        WebviewUrl::App("index.html?window=selection-voice-intent".into()),
+    )
+    .title("OpenLess 选区语音")
+    .inner_size(420.0, 280.0)
+    .min_inner_size(360.0, 240.0)
+    .resizable(true)
+    .always_on_top(true)
+    .visible(false)
+    .build()
+    .map(Some)
+    .unwrap_or_else(|error| {
+        log::warn!("[selection-voice] create intent prompt window failed: {error}");
+        None
+    })
+}
+
+#[cfg(all(not(mobile), target_os = "windows"))]
+pub(crate) fn show_selection_voice_intent_prompt<R: tauri::Runtime>(app: &AppHandle<R>) {
+    let Some(window) = ensure_selection_voice_intent_prompt_window(app) else {
+        return;
+    };
+    if let Err(error) = window.show() {
+        log::warn!("[selection-voice] show intent prompt failed: {error}");
+        return;
+    }
+    if let Err(error) = window.set_focus() {
+        log::warn!("[selection-voice] focus intent prompt failed: {error}");
+    }
+    let _ = app.emit_to(
+        "selection-voice-intent",
+        "selection-voice-intent:shown",
+        (),
+    );
+}
+
+#[cfg(not(all(not(mobile), target_os = "windows")))]
+pub(crate) fn show_selection_voice_intent_prompt<R: tauri::Runtime>(_app: &AppHandle<R>) {}
+
+#[cfg(all(not(mobile), target_os = "windows"))]
+pub(crate) fn hide_selection_voice_intent_prompt<R: tauri::Runtime>(app: &AppHandle<R>) {
+    if let Some(window) = app.get_webview_window("selection-voice-intent") {
+        let _ = window.hide();
+    }
+}
+
+#[cfg(not(all(not(mobile), target_os = "windows")))]
+pub(crate) fn hide_selection_voice_intent_prompt<R: tauri::Runtime>(_app: &AppHandle<R>) {}
 
 // ───────────────────────── Less Computer 浮窗 ─────────────────────────
 //

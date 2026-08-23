@@ -434,22 +434,58 @@ pub(super) fn take_selection_polish_hotkey_on_main_thread(inner: &Arc<Inner>) {
 #[cfg(all(not(mobile), target_os = "windows"))]
 pub(super) fn selection_voice_hotkey_supervisor_loop(inner: Arc<Inner>) {
     let mut attempts = 0_u32;
+    let mut last_signature: Option<String> = None;
     loop {
         if inner.shutdown.load(Ordering::SeqCst) {
             return;
         }
-        match try_update_selection_voice_hotkey_binding(&inner) {
-            Ok(()) => return,
-            Err(error) => {
-                attempts += 1;
-                if attempts <= 3 || attempts % 10 == 0 {
-                    log::warn!(
-                        "[selection-voice] hotkey registration attempt #{attempts} failed: {error}; retrying in 3s"
+        let prefs = inner.prefs.get();
+        let signature = format!(
+            "{}|{:?}",
+            prefs.selection_voice_enabled, prefs.selection_voice_hotkey
+        );
+        let registered = inner.selection_voice_hotkey.lock().is_some();
+        let needs_update =
+            signature != last_signature || (prefs.selection_voice_enabled && !registered);
+        if needs_update {
+            match try_update_selection_voice_hotkey_binding(&inner) {
+                Ok(()) => {
+                    attempts = 0;
+                    last_signature = Some(signature);
+                    // #region agent log
+                    crate::agent_debug::agent_debug_log(
+                        "H1",
+                        "hotkey_loops.rs:supervisor",
+                        "selection voice hotkey binding updated",
+                        serde_json::json!({
+                            "enabled": prefs.selection_voice_enabled,
+                            "registered": inner.selection_voice_hotkey.lock().is_some(),
+                            "hotkey": format!("{:?}", prefs.selection_voice_hotkey),
+                        }),
                     );
+                    // #endregion
                 }
-                std::thread::sleep(std::time::Duration::from_secs(3));
+                Err(error) => {
+                    attempts += 1;
+                    if attempts <= 3 || attempts % 10 == 0 {
+                        log::warn!(
+                            "[selection-voice] hotkey registration attempt #{attempts} failed: {error}; retrying in 3s"
+                        );
+                    }
+                    // #region agent log
+                    crate::agent_debug::agent_debug_log(
+                        "H1",
+                        "hotkey_loops.rs:supervisor",
+                        "selection voice hotkey registration failed",
+                        serde_json::json!({ "error": error, "attempt": attempts }),
+                    );
+                    // #endregion
+                    std::thread::sleep(std::time::Duration::from_secs(3));
+                    continue;
+                }
             }
         }
+        std::thread::sleep(std::time::Duration::from_secs(1));
     }
 }
 
@@ -511,17 +547,44 @@ fn update_selection_voice_hotkey_on_main_thread(
 fn selection_voice_hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<ComboHotkeyEvent>) {
     while let Ok(event) = rx.recv() {
         if inner.shortcut_recording_active.load(Ordering::SeqCst) {
+            // #region agent log
+            crate::agent_debug::agent_debug_log(
+                "H5",
+                "hotkey_loops.rs:bridge",
+                "skipped selection voice hotkey while shortcut recording active",
+                serde_json::json!({}),
+            );
+            // #endregion
             continue;
         }
         let inner_cloned = Arc::clone(&inner);
         match event {
             ComboHotkeyEvent::Pressed { .. } => {
+                // #region agent log
+                crate::agent_debug::agent_debug_log(
+                    "H2",
+                    "hotkey_loops.rs:bridge",
+                    "selection voice hotkey pressed",
+                    serde_json::json!({
+                        "enabled": inner_cloned.prefs.get().selection_voice_enabled,
+                        "busy": super::selection_voice_session::selection_voice_busy_for_debug(),
+                    }),
+                );
+                // #endregion
                 async_runtime::block_on(async {
                     super::selection_voice_session::handle_selection_voice_pressed(&inner_cloned)
                         .await;
                 });
             }
             ComboHotkeyEvent::Released { .. } => {
+                // #region agent log
+                crate::agent_debug::agent_debug_log(
+                    "H2",
+                    "hotkey_loops.rs:bridge",
+                    "selection voice hotkey released",
+                    serde_json::json!({}),
+                );
+                // #endregion
                 async_runtime::block_on(async {
                     super::selection_voice_session::handle_selection_voice_released(&inner_cloned)
                         .await;

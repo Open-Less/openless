@@ -36,6 +36,10 @@ pub fn resolve_selection_voice_intent(
     instruction_polished: &str,
 ) -> SelectionVoiceIntentClassification {
     match prefs.selection_voice_intent_mode {
+        SelectionVoiceIntentMode::Prompt => SelectionVoiceIntentClassification {
+            intent: SelectionVoiceIntent::Question,
+            source: "prompt_pending",
+        },
         SelectionVoiceIntentMode::Manual => SelectionVoiceIntentClassification {
             intent: match prefs.selection_voice_manual_intent {
                 SelectionVoiceManualIntent::Question => SelectionVoiceIntent::Question,
