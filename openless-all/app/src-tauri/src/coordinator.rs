@@ -1457,6 +1457,7 @@ impl Coordinator {
                     ),
                     #[cfg(all(not(mobile), target_os = "windows"))]
                     selection_voice_preview: Mutex::new(None),
+                    #[cfg(all(not(mobile), target_os = "windows"))]
                     selection_voice_intent_prompt: Mutex::new(None),
                     #[cfg(all(not(mobile), target_os = "windows"))]
                     selection_voice_hotkey: Mutex::new(None),
