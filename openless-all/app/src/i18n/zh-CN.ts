@@ -715,9 +715,9 @@ export const zhCN = {
       voiceEnable: '语音编辑',
       voiceEnableDesc: '与上方同一快捷键；录音方式跟随全局设置（当前：{{recordingLabel}}）。',
       autoIntent: '自动判断意图',
-      autoIntentDesc: '关闭时，每次说完后弹出选择：提问或编辑选区。',
+      autoIntentDesc: '开启后由 AI 判断是提问还是编辑选区；关闭后使用下方关键词启发式匹配。',
       editKeywords: '编辑关键词',
-      editKeywordsDesc: '仅在开启自动判断时生效；每行一个，命中即走编辑分支。',
+      editKeywordsDesc: '关闭自动判断时生效；每行一个，指令中包含关键词则进入编辑模式，否则走提问。',
     },
     selectionPolish: {
       title: '选区润色',

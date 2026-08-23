@@ -719,9 +719,9 @@ export const ja: typeof zhCN = {
       voiceEnable: '音声編集',
       voiceEnableDesc: '上と同じショートカットを使用。録音方式はグローバル設定に従います（現在：{{recordingLabel}}）。',
       autoIntent: '意図を自動判定',
-      autoIntentDesc: 'オフの場合、話し終えるごとに質問か編集を選択します。',
+      autoIntentDesc: 'オンで AI が質問か編集を判定。オフでは下のキーワードでヒューリスティック判定。',
       editKeywords: '編集キーワード',
-      editKeywordsDesc: '自動判定がオンのときのみ有効。1行1語。一致すると編集に分岐します。',
+      editKeywordsDesc: '自動判定オフ時のみ。1行1語。含まれると編集、なければ質問。',
     },
     selectionPolish: {
       title: '選択範囲の推敲',

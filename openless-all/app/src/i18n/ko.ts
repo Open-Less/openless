@@ -719,9 +719,9 @@ export const ko: typeof zhCN = {
       voiceEnable: '음성 편집',
       voiceEnableDesc: '위와 같은 단축키 사용. 녹음 방식은 전역 설정을 따릅니다(현재: {{recordingLabel}}).',
       autoIntent: '의도 자동 판별',
-      autoIntentDesc: '끄면 말할 때마다 질문 또는 편집을 선택합니다.',
+      autoIntentDesc: '켜면 AI가 질문/편집을 판별하고, 끄면 아래 키워드로 휴리스틱 판별합니다.',
       editKeywords: '편집 키워드',
-      editKeywordsDesc: '자동 판별이 켜져 있을 때만 적용. 한 줄에 하나. 일치 시 편집으로 분기.',
+      editKeywordsDesc: '자동 판별 끔일 때만 적용. 한 줄에 하나. 포함 시 편집, 아니면 질문.',
     },
     selectionPolish: {
       title: '선택 영역 다듬기',

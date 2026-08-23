@@ -717,9 +717,9 @@ export const en: typeof zhCN = {
       voiceEnable: 'Voice edit',
       voiceEnableDesc: 'Uses the same shortcut above; recording follows global settings (current: {{recordingLabel}}).',
       autoIntent: 'Auto-classify intent',
-      autoIntentDesc: 'When off, you choose Ask or Edit after each utterance.',
+      autoIntentDesc: 'When on, AI chooses Ask or Edit; when off, keyword heuristics below decide.',
       editKeywords: 'Edit keywords',
-      editKeywordsDesc: 'Only when auto-classify is on; one keyword per line routes to edit.',
+      editKeywordsDesc: 'Only when auto-classify is off; one keyword per line routes to edit, otherwise Ask.',
     },
     selectionPolish: {
       title: 'Selection Polish',

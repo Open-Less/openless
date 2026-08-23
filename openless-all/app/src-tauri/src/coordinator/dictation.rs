@@ -2086,6 +2086,10 @@ pub(super) async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
 /// begin_session 的带参版本，voice_agent=true 时在 Starting 阶段就标记好，
 /// 防止 finish_starting_session 处理 pending_stop 时丢失标志。
 pub(super) async fn begin_session_as(inner: &Arc<Inner>, voice_agent: bool) -> Result<(), String> {
+    if super::selection_voice_session::selection_voice_blocks_other_recording(inner) {
+        log::info!("[coord] dictation blocked: selection voice session active");
+        return Ok(());
+    }
     let current_session_id = {
         let mut state = inner.state.lock();
         let Some(session_id) =

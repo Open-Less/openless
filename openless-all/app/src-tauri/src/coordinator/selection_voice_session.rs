@@ -25,8 +25,21 @@ use crate::types::{
 
 static SELECTION_VOICE_BUSY: AtomicBool = AtomicBool::new(false);
 
+/// 与听写 Auto 模式一致：短于该阈值视为点按（切换式锁存），否则视为按住说话。
+const AUTO_HOLD_THRESHOLD: std::time::Duration = std::time::Duration::from_millis(350);
+
 pub(super) fn selection_voice_busy_for_debug() -> bool {
     SELECTION_VOICE_BUSY.load(Ordering::SeqCst)
+}
+
+/// 选区语音会话占用麦克风时，禁止再开听写/追问录音。
+pub(super) fn selection_voice_blocks_other_recording(inner: &Arc<Inner>) -> bool {
+    matches!(
+        inner.selection_voice_state.lock().phase,
+        SelectionVoicePhase::Recording
+            | SelectionVoicePhase::Processing
+            | SelectionVoicePhase::AwaitingIntent
+    )
 }
 
 fn selection_voice_user_message(error: &str) -> String {
@@ -34,6 +47,7 @@ fn selection_voice_user_message(error: &str) -> String {
         "dictationActive" => "正在听写，请先结束录音".into(),
         "selectionVoiceNoSelection" => "请先选中文字".into(),
         "selectionVoiceTargetUnavailable" => "无法定位选区，请重试".into(),
+        "selectionVoiceBusy" => "选区语音会话进行中".into(),
         other => other.into(),
     }
 }
@@ -65,6 +79,8 @@ pub(super) struct SelectionVoiceSessionState {
     pub(super) insertion_target: SelectionInsertionTarget,
     pub(super) instruction_raw: Option<String>,
     pub(super) instruction_polished: Option<String>,
+    /// Auto 模式判定短按/长按的按下时刻。
+    pub(super) auto_press_at: Option<std::time::Instant>,
 }
 
 impl Default for SelectionVoiceSessionState {
@@ -76,6 +92,7 @@ impl Default for SelectionVoiceSessionState {
             insertion_target: SelectionInsertionTarget::default(),
             instruction_raw: None,
             instruction_polished: None,
+            auto_press_at: None,
         }
     }
 }
@@ -135,6 +152,33 @@ pub(super) async fn handle_selection_voice_pressed(inner: &Arc<Inner>) {
         // #endregion
         return;
     }
+
+    let mode = inner.prefs.get().hotkey.mode;
+    let phase = inner.selection_voice_state.lock().phase;
+    // #region agent log
+    crate::agent_debug::agent_debug_log(
+        "H3",
+        "selection_voice_session.rs:pressed",
+        "handling press",
+        serde_json::json!({ "hotkeyMode": format!("{:?}", mode), "phase": format!("{:?}", phase) }),
+    );
+    // #endregion
+
+    // 切换式 / Auto 锁存态的「再按一次停止」不能被子 busy 挡住。
+    match (mode, phase) {
+        (HotkeyMode::Toggle, SelectionVoicePhase::Recording)
+        | (HotkeyMode::Auto, SelectionVoicePhase::Recording) => {
+            let _ = end_selection_voice_session(inner).await;
+            SELECTION_VOICE_BUSY.store(false, Ordering::Release);
+            {
+                let mut state = inner.selection_voice_state.lock();
+                state.auto_press_at = None;
+            }
+            return;
+        }
+        _ => {}
+    }
+
     if SELECTION_VOICE_BUSY.swap(true, Ordering::AcqRel) {
         // #region agent log
         crate::agent_debug::agent_debug_log(
@@ -147,50 +191,19 @@ pub(super) async fn handle_selection_voice_pressed(inner: &Arc<Inner>) {
         return;
     }
 
-    let mode = inner.prefs.get().hotkey.mode;
-    let phase = inner.selection_voice_state.lock().phase;
-    // #region agent log
-    crate::agent_debug::agent_debug_log(
-        "H3",
-        "selection_voice_session.rs:pressed",
-        "handling press",
-        serde_json::json!({ "hotkeyMode": format!("{:?}", mode), "phase": format!("{:?}", phase) }),
-    );
-    // #endregion
-    match (mode, phase) {
+    let begin_result = match (mode, phase) {
         (HotkeyMode::Toggle, SelectionVoicePhase::Idle) => {
-            if let Err(error) = begin_selection_voice_session(inner).await {
-                log::warn!("[selection-voice] begin failed: {error}");
-                emit_selection_voice_begin_error(inner, &error);
-                // #region agent log
-                crate::agent_debug::agent_debug_log(
-                    "H3",
-                    "selection_voice_session.rs:pressed",
-                    "begin failed",
-                    serde_json::json!({ "error": error }),
-                );
-                // #endregion
-                SELECTION_VOICE_BUSY.store(false, Ordering::Release);
-            }
+            begin_selection_voice_session(inner).await
         }
-        (HotkeyMode::Toggle, SelectionVoicePhase::Recording) => {
-            let _ = end_selection_voice_session(inner).await;
-            SELECTION_VOICE_BUSY.store(false, Ordering::Release);
+        (HotkeyMode::Hold, SelectionVoicePhase::Idle) => {
+            begin_selection_voice_session(inner).await
         }
-        (HotkeyMode::Hold | HotkeyMode::Auto, SelectionVoicePhase::Idle) => {
-            if let Err(error) = begin_selection_voice_session(inner).await {
-                log::warn!("[selection-voice] begin failed: {error}");
-                emit_selection_voice_begin_error(inner, &error);
-                // #region agent log
-                crate::agent_debug::agent_debug_log(
-                    "H3",
-                    "selection_voice_session.rs:pressed",
-                    "begin failed",
-                    serde_json::json!({ "error": error }),
-                );
-                // #endregion
-                SELECTION_VOICE_BUSY.store(false, Ordering::Release);
+        (HotkeyMode::Auto, SelectionVoicePhase::Idle) => {
+            {
+                let mut state = inner.selection_voice_state.lock();
+                state.auto_press_at = Some(std::time::Instant::now());
             }
+            begin_selection_voice_session(inner).await
         }
         _ => {
             // #region agent log
@@ -202,8 +215,27 @@ pub(super) async fn handle_selection_voice_pressed(inner: &Arc<Inner>) {
             );
             // #endregion
             SELECTION_VOICE_BUSY.store(false, Ordering::Release);
+            return;
+        }
+    };
+
+    if let Err(error) = begin_result {
+        log::warn!("[selection-voice] begin failed: {error}");
+        emit_selection_voice_begin_error(inner, &error);
+        // #region agent log
+        crate::agent_debug::agent_debug_log(
+            "H3",
+            "selection_voice_session.rs:pressed",
+            "begin failed",
+            serde_json::json!({ "error": error }),
+        );
+        // #endregion
+        {
+            let mut state = inner.selection_voice_state.lock();
+            state.auto_press_at = None;
         }
     }
+    SELECTION_VOICE_BUSY.store(false, Ordering::Release);
 }
 
 pub(super) async fn handle_selection_voice_released(inner: &Arc<Inner>) {
@@ -211,20 +243,54 @@ pub(super) async fn handle_selection_voice_released(inner: &Arc<Inner>) {
         return;
     }
     let mode = inner.prefs.get().hotkey.mode;
-    if !matches!(mode, HotkeyMode::Hold | HotkeyMode::Auto) {
+    // #region agent log
+    crate::agent_debug::agent_debug_log(
+        "H5",
+        "selection_voice_session.rs:released",
+        "handling release",
+        serde_json::json!({ "hotkeyMode": format!("{:?}", mode) }),
+    );
+    // #endregion
+    if mode == HotkeyMode::Toggle {
         return;
     }
-    if inner.selection_voice_state.lock().phase != SelectionVoicePhase::Recording {
+    let phase = inner.selection_voice_state.lock().phase;
+    if phase != SelectionVoicePhase::Recording {
         SELECTION_VOICE_BUSY.store(false, Ordering::Release);
         return;
     }
-    let _ = end_selection_voice_session(inner).await;
-    SELECTION_VOICE_BUSY.store(false, Ordering::Release);
+    if mode == HotkeyMode::Hold {
+        let _ = end_selection_voice_session(inner).await;
+        SELECTION_VOICE_BUSY.store(false, Ordering::Release);
+        return;
+    }
+    if mode == HotkeyMode::Auto {
+        let released_at = std::time::Instant::now();
+        let held_long = {
+            let mut state = inner.selection_voice_state.lock();
+            state
+                .auto_press_at
+                .take()
+                .map(|pressed_at| {
+                    released_at.saturating_duration_since(pressed_at) >= AUTO_HOLD_THRESHOLD
+                })
+                .unwrap_or(false)
+        };
+        if held_long {
+            let _ = end_selection_voice_session(inner).await;
+        } else {
+            log::info!("[selection-voice] auto short-tap latched; next press stops");
+        }
+        SELECTION_VOICE_BUSY.store(false, Ordering::Release);
+    }
 }
 
 async fn begin_selection_voice_session(inner: &Arc<Inner>) -> Result<(), String> {
     if !matches!(inner.state.lock().phase, crate::coordinator_state::SessionPhase::Idle) {
         return Err("dictationActive".into());
+    }
+    if selection_voice_blocks_other_recording(inner) {
+        return Err("selectionVoiceBusy".into());
     }
 
     let (selection_opt, insertion_target) = crate::selection::resolve_selection_workspace_capture();

@@ -55,11 +55,8 @@ pub fn resolve_selection_voice_intent(
             source: "heuristic",
         },
         SelectionVoiceIntentMode::Auto => SelectionVoiceIntentClassification {
-            intent: resolve_selection_voice_intent_heuristic(
-                instruction_polished,
-                &prefs.selection_voice_edit_keywords,
-            ),
-            source: "auto_heuristic_fallback",
+            intent: SelectionVoiceIntent::Question,
+            source: "auto_default",
         },
     }
 }

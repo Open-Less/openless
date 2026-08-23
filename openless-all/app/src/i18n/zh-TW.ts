@@ -717,9 +717,9 @@ export const zhTW: typeof zhCN = {
       voiceEnable: '語音編輯',
       voiceEnableDesc: '與上方同一快捷鍵；錄音方式跟隨全域設定（目前：{{recordingLabel}}）。',
       autoIntent: '自動判斷意圖',
-      autoIntentDesc: '關閉時，每次說完後彈出選擇：提問或編輯選區。',
+      autoIntentDesc: '開啟後由 AI 判斷提問或編輯；關閉後使用下方關鍵詞啟發式匹配。',
       editKeywords: '編輯關鍵詞',
-      editKeywordsDesc: '僅在開啟自動判斷時生效；每行一個，命中即走編輯分支。',
+      editKeywordsDesc: '關閉自動判斷時生效；每行一個，指令含關鍵詞則進入編輯，否則走提問。',
     },
     selectionPolish: {
       title: '選區潤色',
