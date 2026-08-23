@@ -361,14 +361,14 @@ fn decode_xml_text(raw: &str) -> String {
                 "amp" => out.push('&'),
                 "quot" => out.push('"'),
                 "apos" => out.push('\''),
-                other if other.starts_with('#x") => {
+                other if other.starts_with("#x") => {
                     if let Ok(code) = u32::from_str_radix(other[2..].trim(), 16) {
                         if let Some(decoded) = char::from_u32(code) {
                             out.push(decoded);
                         }
                     }
                 }
-                other if other.starts_with('#") => {
+                other if other.starts_with('#') => {
                     if let Ok(code) = other[1..].trim().parse::<u32>() {
                         if let Some(decoded) = char::from_u32(code) {
                             out.push(decoded);
