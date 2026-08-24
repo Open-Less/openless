@@ -609,6 +609,8 @@ export interface QaStatePayload {
   error?: string;
   /** answer_delta 事件时附带的本帧增量字符串。 */
   chunk?: string;
+  /** 选区语音编辑结果可「替换选区」。 */
+  edit_apply_available?: boolean;
 }
 
 /**

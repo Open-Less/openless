@@ -110,6 +110,29 @@ export function SelectionWorkspaceSection() {
           {voiceEnabled && (
             <>
               <SettingRow
+                label={t('settings.selectionWorkspace.polishDelivery')}
+                desc={t('settings.selectionWorkspace.voiceDeliveryDesc')}
+              >
+                <div style={{ ...segmentedTrackStyle, flexWrap: 'wrap', gap: 4 }}>
+                  {outputOptions.map(option => {
+                    const selected = prefs.selectionPolishOutputMode === option.value;
+                    return (
+                      <button
+                        key={option.value}
+                        title={t(`settings.selectionPolish.${option.value}Hint`)}
+                        onClick={() => void updatePrefs(current => ({ ...current, selectionPolishOutputMode: option.value }))}
+                        style={{
+                          ...chipSelectedStyle(selected), border: 0, borderRadius: 6, padding: '6px 10px',
+                          fontFamily: 'inherit', fontSize: 12, cursor: 'default', fontWeight: selected ? 600 : 500,
+                        }}
+                      >
+                        {t(`settings.selectionPolish.${option.value}`)}
+                      </button>
+                    );
+                  })}
+                </div>
+              </SettingRow>
+              <SettingRow
                 label={t('settings.selectionWorkspace.autoIntent')}
                 desc={t('settings.selectionWorkspace.autoIntentDesc')}
               >

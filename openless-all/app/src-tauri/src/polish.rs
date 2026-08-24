@@ -2196,9 +2196,10 @@ pub mod prompts {
     pub fn selection_voice_intent_classification_prompt() -> String {
         "# 任务（意图分类）\n\
          判断用户指令是要**提问**（question）还是对选区**编辑**（edit）。\n\
-         只输出 JSON：{\"intent\":\"question\"|\"edit\",\"confidence\":0.0-1.0}\n\
-         编辑类：翻译、替换、改格式、批量处理、润色方向等。\n\
-         提问类：解释、含义、区别、总结、评价等。"
+         只输出 XML：<intent>edit</intent> 或 <intent>question</intent>\n\
+         编辑类：翻译、替换、改格式、批量处理、润色、改写、删改等。\n\
+         提问类：解释、含义、区别、总结、评价、是什么等。\n\
+         不要输出其它文字。"
             .to_string()
     }
 
