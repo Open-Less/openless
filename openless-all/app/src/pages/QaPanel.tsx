@@ -79,6 +79,7 @@ import {
   qaSubmitText,
   qaToggleRecording,
   qaWindowDismiss,
+  revertSelectionVoicePreview,
 } from '../lib/ipc';
 import { acceptQaSessionEvent, splitQaUserMessage } from '../lib/qaMessage';
 import type { QaChatMessage, QaStatePayload } from '../lib/types';
@@ -133,6 +134,7 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
   /** 流式 LLM 答案：answer_delta 累积、answer 事件来时清空（最终内容已落到 messages）。 */
   const [streamingAnswer, setStreamingAnswer] = useState<string>('');
   const [editApplyAvailable, setEditApplyAvailable] = useState(false);
+  const [editRevertAvailable, setEditRevertAvailable] = useState(false);
   const [editApplyBusy, setEditApplyBusy] = useState(false);
   const activeSessionIdRef = useRef<string | null>(null);
   const { enterEpoch, closing } = useChatPanelLifecycle();
@@ -169,6 +171,9 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
           if (typeof payload.edit_apply_available === 'boolean') {
             setEditApplyAvailable(payload.edit_apply_available);
           }
+          if (typeof payload.edit_revert_available === 'boolean') {
+            setEditRevertAvailable(payload.edit_revert_available);
+          }
           switch (payload.kind) {
             case 'idle':
               setStatus('idle');
@@ -176,6 +181,7 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
               setErrorMsg('');
               setStreamingAnswer('');
               setEditApplyAvailable(false);
+              setEditRevertAvailable(false);
               break;
             case 'recording':
               setStatus('recording');
@@ -183,6 +189,7 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
               setErrorMsg('');
               setStreamingAnswer('');
               setEditApplyAvailable(false);
+              setEditRevertAvailable(false);
               break;
             case 'loading':
               // ASR 在 finalize、user message 还没 push 的过渡帧。提前切到 thinking
@@ -194,6 +201,7 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
               setErrorMsg('');
               setStreamingAnswer('');
               setEditApplyAvailable(false);
+              setEditRevertAvailable(false);
               break;
             case 'thinking':
               setStatus('thinking');
@@ -203,6 +211,7 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
               setErrorMsg('');
               setStreamingAnswer('');
               setEditApplyAvailable(false);
+              setEditRevertAvailable(false);
               break;
             case 'answer_delta':
               // 流式增量。仍保持 thinking 状态——直到 answer 事件落定后才回 idle。
@@ -221,6 +230,7 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
               setErrorMsg(payload.error ?? tRef.current('qa.error'));
               setStreamingAnswer('');
               setEditApplyAvailable(false);
+              setEditRevertAvailable(false);
               break;
           }
         });
@@ -311,6 +321,22 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
       }
       await confirmSelectionVoicePreview(text);
       setEditApplyAvailable(false);
+      setEditRevertAvailable(false);
+    } catch (error) {
+      setErrorMsg(error instanceof Error ? error.message : String(error));
+      setStatus('error');
+    } finally {
+      setEditApplyBusy(false);
+    }
+  };
+
+  const onRevertEdit = async () => {
+    if (!editRevertAvailable || editApplyBusy) return;
+    setEditApplyBusy(true);
+    setErrorMsg('');
+    try {
+      await revertSelectionVoicePreview();
+      setEditRevertAvailable(false);
     } catch (error) {
       setErrorMsg(error instanceof Error ? error.message : String(error));
       setStatus('error');
@@ -435,15 +461,28 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
             <SelectionChip text={selectionPreview} t={t} />
           )}
           {editApplyAvailable && status === 'idle' && (
-            <Button
-              type="button"
-              className="w-full"
-              disabled={editApplyBusy}
-              onClick={() => void onApplyEdit()}
-            >
-              <CheckIcon />
-              {t('qa.editApplyReplace')}
-            </Button>
+            <div className="flex w-full flex-col gap-2">
+              {editRevertAvailable && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full"
+                  disabled={editApplyBusy}
+                  onClick={() => void onRevertEdit()}
+                >
+                  {t('qa.editRevertPrevious')}
+                </Button>
+              )}
+              <Button
+                type="button"
+                className="w-full"
+                disabled={editApplyBusy}
+                onClick={() => void onApplyEdit()}
+              >
+                <CheckIcon />
+                {t('qa.editApplyReplace')}
+              </Button>
+            </div>
           )}
           <Composer
             value={composerText}

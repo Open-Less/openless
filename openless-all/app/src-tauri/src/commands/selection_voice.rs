@@ -41,6 +41,11 @@ pub fn cancel_selection_voice_preview(coord: CoordinatorState<'_>) {
 }
 
 #[tauri::command]
+pub fn revert_selection_voice_preview(coord: CoordinatorState<'_>) -> Result<(), String> {
+    coord.revert_selection_voice_preview()
+}
+
+#[tauri::command]
 pub fn set_selection_voice_hotkey(
     coord: CoordinatorState<'_>,
     binding: Option<ShortcutBinding>,

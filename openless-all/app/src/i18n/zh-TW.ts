@@ -101,6 +101,7 @@ export const zhTW: typeof zhCN = {
     jumpToLatest: '跳到最新',
     editApplyReplace: '確認並替換選區',
     editApplyUnavailable: '沒有可替換的編輯結果',
+    editRevertPrevious: '保留上一版本',
   },
   lessComputer: {
     title: 'Less Computer',

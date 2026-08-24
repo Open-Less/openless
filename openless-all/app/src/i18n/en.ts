@@ -99,8 +99,9 @@ export const en: typeof zhCN = {
     statusThinking: 'Thinking',
     statusError: 'Error',
     jumpToLatest: 'Jump to latest',
-    editApplyReplace: 'Confirm and replace selection',
+    editApplyReplace: 'Preview and confirm insert',
     editApplyUnavailable: 'No edit result to apply',
+    editRevertPrevious: 'Keep previous version',
   },
   lessComputer: {
     title: 'Less Computer',

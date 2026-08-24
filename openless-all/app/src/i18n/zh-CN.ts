@@ -97,8 +97,9 @@ export const zhCN = {
     statusThinking: '思考中',
     statusError: '出错了',
     jumpToLatest: '跳到最新',
-    editApplyReplace: '确认并替换选区',
+    editApplyReplace: '预览并确认插入',
     editApplyUnavailable: '没有可替换的编辑结果',
+    editRevertPrevious: '保留上一版本',
   },
   lessComputer: {
     title: 'Less Computer',

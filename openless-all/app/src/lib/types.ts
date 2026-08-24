@@ -611,6 +611,8 @@ export interface QaStatePayload {
   chunk?: string;
   /** 选区语音编辑结果可「替换选区」。 */
   edit_apply_available?: boolean;
+  /** 可回退到上一轮编辑预览。 */
+  edit_revert_available?: boolean;
 }
 
 /**

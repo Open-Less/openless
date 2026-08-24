@@ -220,6 +220,19 @@ pub(super) async fn submit_qa_text_question(
         return Ok(());
     }
 
+    if inner.selection_voice_preview.lock().is_some() {
+        let qa = inner.qa_state.lock();
+        if qa.panel_visible && qa.phase == QaPhase::Idle {
+            let session_id = qa.session_id;
+            return super::selection_voice_session::submit_selection_voice_follow_up_edit(
+                inner,
+                question,
+                session_id,
+            )
+            .await;
+        }
+    }
+
     let session_id = {
         let mut state = inner.qa_state.lock();
         if !state.panel_visible {

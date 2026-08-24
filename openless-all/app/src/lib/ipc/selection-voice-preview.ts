@@ -41,3 +41,7 @@ export function confirmSelectionVoicePreview(text: string): Promise<void> {
 export function cancelSelectionVoicePreview(): Promise<void> {
   return invokeOrMock('cancel_selection_voice_preview', undefined, () => undefined);
 }
+
+export function revertSelectionVoicePreview(): Promise<void> {
+  return invokeOrMock('revert_selection_voice_preview', undefined, () => undefined);
+}

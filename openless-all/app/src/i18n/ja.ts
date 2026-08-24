@@ -101,8 +101,9 @@ export const ja: typeof zhCN = {
     statusThinking: '思考中',
     statusError: 'エラー',
     jumpToLatest: '最新へ移動',
-    editApplyReplace: '確認して選択範囲を置換',
+    editApplyReplace: 'プレビューして挿入を確認',
     editApplyUnavailable: '適用できる編集結果がありません',
+    editRevertPrevious: '前のバージョンを保持',
   },
   lessComputer: {
     title: 'Less Computer',

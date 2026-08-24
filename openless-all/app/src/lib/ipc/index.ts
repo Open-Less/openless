@@ -164,6 +164,7 @@ export {
     getSelectionVoicePreview,
     confirmSelectionVoicePreview,
     cancelSelectionVoicePreview,
+    revertSelectionVoicePreview,
 } from './selection-voice-preview'
 
 // less-computer

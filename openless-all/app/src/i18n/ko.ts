@@ -101,8 +101,9 @@ export const ko: typeof zhCN = {
     statusThinking: '생각 중',
     statusError: '오류',
     jumpToLatest: '최신으로 이동',
-    editApplyReplace: '확인하고 선택 영역 교체',
+    editApplyReplace: '미리보기 후 삽입 확인',
     editApplyUnavailable: '적용할 편집 결과가 없습니다',
+    editRevertPrevious: '이전 버전 유지',
   },
   lessComputer: {
     title: 'Less Computer',
