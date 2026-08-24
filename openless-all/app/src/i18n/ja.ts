@@ -724,7 +724,7 @@ export const ja: typeof zhCN = {
       voiceEnable: '音声編集',
       voiceEnableDesc: '上と同じショートカットを使用。録音方式はグローバル設定に従います（現在：{{recordingLabel}}）。',
       autoIntent: '意図を自動判定',
-      autoIntentDesc: 'オンで疑問文は質問、それ以外（要約/翻訳/書き換え）は編集。短い曖昧文のみ AI 補助。',
+      autoIntentDesc: 'オン時は設定モデルが質問/編集を判定。モデル失敗時のみ？/疑問語ヒューリスティックにフォールバック。',
       editKeywords: '追加の疑問手がかり',
       editKeywordsDesc: '自動判定オフ時のみ。1行1語で質問扱い。なければ？/疑問語ヒューリスティック。',
     },

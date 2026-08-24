@@ -722,7 +722,7 @@ export const zhTW: typeof zhCN = {
       voiceEnable: '語音編輯',
       voiceEnableDesc: '與上方同一快捷鍵；錄音方式跟隨全域設定（目前：{{recordingLabel}}）。',
       autoIntent: '自動判斷意圖',
-      autoIntentDesc: '開啟後依是否為問句分流：問句走提問，非問句（總結/翻譯/改寫等）走編輯；極短模糊句才用 AI 兜底。',
+      autoIntentDesc: '開啟後預設用服務配置的模型判斷問句 vs 編輯；模型不可用或解析失敗時回退到問句啟發式。',
       editKeywords: '額外問句線索',
       editKeywordsDesc: '關閉自動判斷時生效；每行一個，指令含則視為提問，否則仍按問句啟發式判定。',
     },

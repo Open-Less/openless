@@ -724,7 +724,7 @@ export const ko: typeof zhCN = {
       voiceEnable: '음성 편집',
       voiceEnableDesc: '위와 같은 단축키 사용. 녹음 방식은 전역 설정을 따릅니다(현재: {{recordingLabel}}).',
       autoIntent: '의도 자동 판별',
-      autoIntentDesc: '켜면 의문문은 질문, 비의문(요약/번역/개사)은 편집. 짧은 모호한 문장만 AI 보조.',
+      autoIntentDesc: '켜면 설정된 모델이 질문/편집을 판별합니다. 모델 실패 시에만 의문사 휴리스틱으로 폴백합니다.',
       editKeywords: '추가 의문 단서',
       editKeywordsDesc: '자동 판별 끔일 때만. 한 줄에 하나면 질문. 없으면 ?/의문사 휴리스틱.',
     },

@@ -539,6 +539,36 @@ async fn end_selection_voice_session(inner: &Arc<Inner>) -> Result<(), String> {
         }
 
         let intent = resolve_intent_with_optional_llm(inner, &instruction_polished).await;
+        if preview_mode {
+            let edit_mode = intent == SelectionVoiceIntent::Edit;
+            let mut qa = inner.qa_state.lock();
+            qa.edit_instruction_mode = edit_mode;
+            let session_id = qa.session_id;
+            if let Some(app) = inner.app.lock().clone() {
+                let _ = app.emit_to(
+                    qa_event_target(),
+                    "qa:state",
+                    serde_json::json!({
+                        "kind": "thinking",
+                        "session_id": session_id,
+                        "messages": qa.messages.clone(),
+                        "edit_instruction_mode": edit_mode,
+                    }),
+                );
+            }
+            // #region agent log
+            crate::agent_debug::agent_debug_log(
+                "H4",
+                "selection_voice_session.rs:end",
+                "sync edit_instruction_mode after intent",
+                serde_json::json!({
+                    "intent": format!("{:?}", intent),
+                    "editInstructionMode": edit_mode,
+                    "panelVisible": qa.panel_visible,
+                }),
+            );
+            // #endregion
+        }
         // #region agent log
         crate::agent_debug::agent_debug_log(
             "H6",
@@ -631,24 +661,18 @@ async fn resolve_intent_with_optional_llm(
     instruction_polished: &str,
 ) -> SelectionVoiceIntent {
     let prefs = inner.prefs.get();
-    let mut classification = resolve_selection_voice_intent(&prefs, instruction_polished);
+    let heuristic = resolve_selection_voice_intent(&prefs, instruction_polished);
     if prefs.selection_voice_intent_mode != SelectionVoiceIntentMode::Auto {
         log::info!(
             "[selection-voice] intent={:?} source={}",
-            classification.intent,
-            classification.source
+            heuristic.intent,
+            heuristic.source
         );
-        return classification.intent;
+        return heuristic.intent;
     }
-    // Clear question / non-question heuristics win — only ask LLM when ambiguous.
-    if !crate::selection_voice_intent::intent_heuristic_is_ambiguous(instruction_polished) {
-        log::info!(
-            "[selection-voice] intent={:?} source={}",
-            classification.intent,
-            classification.source
-        );
-        return classification.intent;
-    }
+
+    // Auto：默认走服务配置的 LLM 判问句 vs 编辑；启发式仅作 LLM 失败时的兜底。
+    let mut classification = heuristic;
     let system = crate::polish::prompts::selection_voice_intent_classification_prompt();
     let mut llm_call = None;
     let mut polish_ms = None;
@@ -676,20 +700,26 @@ async fn resolve_intent_with_optional_llm(
                 classification.source = "auto_llm";
             } else {
                 log::warn!(
-                    "[selection-voice] intent LLM unparsable; keep {:?} preview={}",
+                    "[selection-voice] intent LLM unparsable; fallback to heuristic {:?} preview={}",
                     classification.intent,
                     raw.chars().take(120).collect::<String>()
                 );
+                classification.source = "auto_heuristic_fallback";
             }
         }
         Err(error) => {
-            log::warn!("[selection-voice] intent LLM failed: {error}");
+            log::warn!(
+                "[selection-voice] intent LLM failed: {error}; fallback to heuristic {:?}",
+                classification.intent
+            );
+            classification.source = "auto_heuristic_fallback";
         }
     }
     log::info!(
-        "[selection-voice] intent={:?} source={}",
+        "[selection-voice] intent={:?} source={} instruction_len={}",
         classification.intent,
-        classification.source
+        classification.source,
+        instruction_polished.chars().count()
     );
     // #region agent log
     crate::agent_debug::agent_debug_log(
@@ -699,6 +729,7 @@ async fn resolve_intent_with_optional_llm(
         serde_json::json!({
             "intent": format!("{:?}", classification.intent),
             "source": classification.source,
+            "instructionPreview": instruction_polished.chars().take(80).collect::<String>(),
         }),
     );
     // #endregion
@@ -1058,15 +1089,18 @@ fn infer_selection_voice_translation_target(
     prefs: &UserPreferences,
 ) -> String {
     if let Some(target) = extract_translation_target_after_cue(instruction) {
+        // #region agent log
+        crate::agent_debug::agent_debug_log(
+            "H3",
+            "selection_voice_session.rs:translation_target",
+            "target from cue",
+            serde_json::json!({ "target": target, "instructionPreview": instruction.chars().take(60).collect::<String>() }),
+        );
+        // #endregion
         return target;
     }
     let lower = instruction.to_lowercase();
-    if lower.contains("英文")
-        || lower.contains("英语")
-        || lower.contains("english")
-    {
-        return "English".into();
-    }
+    // 无「译成/translate to」时，才用指令里出现的语言词作兜底（可能指源语言，慎用）。
     if lower.contains("日文") || lower.contains("日语") || lower.contains("japanese") {
         return "日本語".into();
     }
@@ -1078,6 +1112,9 @@ fn infer_selection_voice_translation_target(
     }
     if lower.contains("简体") || lower.contains("簡體") || lower.contains("中文") {
         return "简体中文".into();
+    }
+    if lower.contains("英文") || lower.contains("英语") || lower.contains("english") {
+        return "English".into();
     }
     let from_prefs = prefs.translation_target_language.trim();
     if !from_prefs.is_empty() {

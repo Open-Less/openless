@@ -722,7 +722,7 @@ export const en: typeof zhCN = {
       voiceEnable: 'Voice edit',
       voiceEnableDesc: 'Uses the same shortcut above; recording follows global settings (current: {{recordingLabel}}).',
       autoIntent: 'Auto-classify intent',
-      autoIntentDesc: 'When on, interrogatives go to Ask; non-questions (summarize/translate/rewrite) go to Edit. AI only for short ambiguous lines.',
+      autoIntentDesc: 'When on, the configured model classifies question vs edit by default; falls back to question-word heuristics if the model fails.',
       editKeywords: 'Extra question cues',
       editKeywordsDesc: 'Only when auto-classify is off; one cue per line forces Ask; otherwise use ? / question-word heuristics.',
     },

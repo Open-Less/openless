@@ -720,7 +720,7 @@ export const zhCN = {
       voiceEnable: '语音编辑',
       voiceEnableDesc: '与上方同一快捷键；录音方式跟随全局设置（当前：{{recordingLabel}}）。',
       autoIntent: '自动判断意图',
-      autoIntentDesc: '开启后按是否为问句分流：问句走提问，非问句（总结/翻译/改写等）走编辑；极短模糊句才用 AI 兜底。',
+      autoIntentDesc: '开启后默认用服务配置的模型判断问句 vs 编辑；模型不可用或解析失败时回退到问句启发式。',
       editKeywords: '额外问句线索',
       editKeywordsDesc: '关闭自动判断时生效；每行一个，指令中包含则视为提问，否则仍按问句启发式（？/吗/什么…）判定。',
     },

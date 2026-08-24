@@ -83,6 +83,26 @@ pub(super) async fn handle_qa_option_edge(inner: &Arc<Inner>) {
 }
 
 pub(super) fn open_qa_panel(inner: &Arc<Inner>) {
+    // 选区语音 early_qa 已打开面板时，勿重置 edit_instruction_mode / 历史。
+    {
+        let qa = inner.qa_state.lock();
+        if qa.panel_visible {
+            let edit_mode = qa.edit_instruction_mode;
+            // #region agent log
+            crate::agent_debug::agent_debug_log(
+                "H4",
+                "qa.rs:open_qa_panel",
+                "panel already visible — skip reset",
+                serde_json::json!({ "editInstructionMode": edit_mode }),
+            );
+            // #endregion
+            drop(qa);
+            if let Some(app) = inner.app.lock().clone() {
+                crate::show_qa_window(&app, "idle");
+            }
+            return;
+        }
+    }
     let session_id = {
         let mut state = inner.qa_state.lock();
         state.panel_visible = true;
