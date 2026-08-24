@@ -10,6 +10,11 @@ rust-version = "1.88"
 name = "openless_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[[bin]]
+name = "egui_popup"
+path = "src/bin/egui_popup.rs"
+required-features = ["egui-popup-bin"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 # Compile vendored Open-Less/qwen-asr C sources for the local ASR engine on macOS.
@@ -78,6 +83,8 @@ enigo = "0.3"
 arboard = { version = "3", features = ["wayland-data-control"] }
 rcgen = "^0.13"
 local-ip-address = "^0.6"
+egui = "=0.33.3"
+eframe = { version = "=0.33.3", default-features = false, features = ["glow", "default_fonts", "accesskit"] }
 rustls = { version = "^0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 tokio-rustls = { version = "^0.26", default-features = false, features = ["ring", "tls12", "logging"] }
 axum = { version = "^0.7", default-features = false, features = ["ws", "http1", "tokio", "query"] }
@@ -103,12 +110,8 @@ libc = "0.2"
 [target.'cfg(target_os = "linux")'.dependencies]
 dbus = "0.9"
 gtk = "0.18"
-# egui 浮窗宿主 —— Linux 上用 egui 替代 Tauri WebView 渲染「选区润色预览 / QA 面板」弹窗。
-# 仅 Linux 编译，其它平台保持 WebView 版（避免引入 winit 对非目标平台的额外依赖）。
-# 用 eframe 默认 features（已含 wayland + x11 + glow + default_fonts），
-# Wayland 与 X11 都走原生浮窗；winit 用于 eframe 的 EventLoopBuilder 配置。
-egui = "0.36"
-eframe = { version = "0.36", default-features = false, features = ["wayland", "x11", "glow", "default_fonts", "accesskit"] }
+# Linux 为桌面端 eframe 依赖追加 Wayland/X11 后端；QA 本身在三桌面平台启用。
+eframe = { version = "=0.33.3", default-features = false, features = ["wayland", "x11"] }
 winit = { version = "0.30", features = ["wayland", "x11"] }
 [target.'cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))'.dependencies.keyring]
 version = "3.6.3"
@@ -173,6 +176,9 @@ window-vibrancy = "0.7"
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
+# 独立 popup bin 仅用于本地调试；发布版通过隐藏参数复用主程序。
+# required-features 防止 Android/iOS 的 cargo check 自动构建桌面 egui bin。
+egui-popup-bin = []
 
 [profile.release]
 # 之前没有 [profile.release] —— 发布版走 Cargo 默认（无 LTO、不 strip、

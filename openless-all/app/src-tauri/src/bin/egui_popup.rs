@@ -116,7 +116,15 @@ impl eframe::App for PopupApp {
         egui::Color32::TRANSPARENT.to_normalized_gamma_f32()
     }
 
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        egui::CentralPanel::default()
+            .frame(egui::Frame::NONE)
+            .show(ctx, |ui| self.render(ui, frame));
+    }
+}
+
+impl PopupApp {
+    fn render(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         // 强制持续重绘，确保按钮点击、键盘输入、流式消息都能及时响应。
         ui.ctx().request_repaint();
 
@@ -251,19 +259,30 @@ fn render_preview(
         // 原版中原文是 textarea 后、按钮前的普通内容块，不属于 footer，
         // 最多占两行（42px）。必须预留完整高度，避免长原文压到按钮区域。
         let source_h = if source.is_empty() { 0.0 } else { 50.0 };
-        let resp = ui.add_sized(
-            [
+        let editor_rect = egui::Rect::from_min_size(
+            ui.cursor().min,
+            egui::vec2(
                 ui.available_width(),
                 (ui.available_height() - source_h).max(80.0),
-            ],
+            ),
+        );
+        ui.allocate_rect(editor_rect, egui::Sense::hover());
+        ui.painter().rect_filled(
+            editor_rect,
+            egui::CornerRadius::same(10),
+            egui::Color32::WHITE,
+        );
+        ui.painter().rect_stroke(
+            editor_rect,
+            egui::CornerRadius::same(10),
+            egui::Stroke::new(1.0, egui::Color32::from_gray(210)),
+            egui::StrokeKind::Inside,
+        );
+        let resp = ui.put(
+            editor_rect.shrink(8.0),
             egui::TextEdit::multiline(text)
                 .desired_width(f32::INFINITY)
-                .frame(
-                    egui::Frame::new()
-                        .stroke(egui::Stroke::new(1.0, egui::Color32::from_gray(210)))
-                        .corner_radius(10.0)
-                        .inner_margin(8),
-                ),
+                .frame(false),
         );
         if *focus {
             *focus = false;
@@ -413,7 +432,7 @@ fn render_qa(ui: &mut egui::Ui, s: &mut QaViewState, outgoing: &mut Vec<String>)
                 input_rect,
                 egui::TextEdit::singleline(&mut s.composer_text)
                     .hint_text("输入问题，Enter 发送")
-                    .frame(egui::Frame::NONE),
+                    .frame(false),
             );
             let submit_key = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             let mic_rect = egui::Rect::from_min_size(
