@@ -32,9 +32,9 @@ use crate::asr::{
 use crate::combo_hotkey::{ComboHotkeyError, ComboHotkeyEvent, ComboHotkeyMonitor};
 use crate::coordinator_state::{
     begin_cancel_session_state, begin_recording_abort_before_restore, begin_session_state,
-    finish_cancel_session_state, finish_starting_session_state, new_session_id,
-    publish_abort_idle_after_restore, start_processing_if_listening, startup_race_status,
-    BeginOutcome, SessionId, SessionPhase, SessionState, StartupRaceStatus,
+    begin_session_state_with_id, finish_cancel_session_state, finish_starting_session_state,
+    new_session_id, publish_abort_idle_after_restore, start_processing_if_listening,
+    startup_race_status, BeginOutcome, SessionId, SessionPhase, SessionState, StartupRaceStatus,
 };
 use crate::correction::apply_correction_rules;
 use crate::hotkey::{HotkeyEvent, HotkeyMonitor};
@@ -74,6 +74,8 @@ mod qa_session;
 mod resources;
 #[cfg(not(mobile))]
 pub(crate) mod selection_polish;
+#[cfg(not(mobile))]
+pub(crate) mod selection_correction;
 mod silence_auto_stop;
 
 use asr_wiring::*;
@@ -102,8 +104,9 @@ pub(super) fn qa_event_target() -> &'static str {
 #[cfg(test)]
 use dictation::dictation_error_code;
 use dictation::{
-    begin_session, begin_session_as, cancel_session, end_session, handle_pressed_edge,
-    handle_released_edge, handle_trigger_combined, request_stop_during_starting,
+    begin_session, begin_session_as, cancel_session, cancel_session_after_escape, end_session,
+    handle_pressed_edge, handle_released_edge, handle_trigger_combined,
+    request_stop_during_starting,
 };
 #[cfg(any(debug_assertions, test))]
 use dictation::{handle_pressed, handle_released};
@@ -1030,11 +1033,17 @@ struct Inner {
     #[cfg(target_os = "windows")]
     sherpa_onnx_runtime: Arc<SherpaOnnxRuntime>,
     recorder: Mutex<Option<SessionResource<Recorder>>>,
+    /// 恢复被 Esc 打断的录音时，旧 WAV 中的 PCM 前缀。新 ASR 启动后先消费这段，
+    /// Recorder 同时把它写回同一个归档，再追加新的麦克风音频。
+    resume_audio_pcm: Mutex<Option<SessionResource<Vec<u8>>>>,
     /// 当前 dictation / QA session 的 wav 归档是否真的被写到磁盘上。
     /// 由 Recorder::start 返回值 (archive_active) 写入；history.append 路径读取，
     /// 决定 DictationSession.has_audio_recording 字段。比单纯读 prefs.record_audio_for_debug
     /// 更准确：用户开了开关但路径无法创建（权限 / 磁盘满）也算 false。
     audio_archive_active: AtomicBool,
+    /// 当前 3 秒「是否继续」提示对应的录音 id。只影响 CapsulePayload；历史记录和 WAV
+    /// 已在显示提示前持久化，因此提示消失或应用退出都不会丢失恢复入口。
+    cancelled_recording_recovery: Mutex<Option<String>>,
     /// 上一次落字之后武装的手改监听（macOS）。
     ///
     /// 存在 `Inner` 上只为了「下一次听写开始时解除上一次的」这一条生命周期规则 ——
@@ -1128,6 +1137,10 @@ struct Inner {
     /// 预览确认模式暂存的结果和原选区目标；仅在用户确认时才允许插入。
     #[cfg(not(mobile))]
     selection_polish_preview: Mutex<Option<selection_polish::PendingSelectionPolishPreview>>,
+    /// 最近一次听写落字范围内的选区、正在进行的语音纠错，以及气泡展示状态。
+    /// 只在内存中存在；文档快照不会进入历史或持久化。
+    #[cfg(not(mobile))]
+    selection_correction: Mutex<selection_correction::SelectionCorrectionRuntime>,
     /// 「本次会话真的要翻译」。每次 begin_session 重置为 false；hotkey 监听器在
     /// Listening / Starting 阶段看到 Shift down 边沿（或安卓浮层请求）时，经
     /// `arm_translation_if_effective` 判定翻译确实会生效（设了目标语言、且不等于唯一工作语言）
@@ -1407,7 +1420,9 @@ impl Coordinator {
                     asr_label: Mutex::new(None),
                     omni_pcm: Mutex::new(None),
                     recorder: Mutex::new(None),
+                    resume_audio_pcm: Mutex::new(None),
                     audio_archive_active: AtomicBool::new(false),
+                    cancelled_recording_recovery: Mutex::new(None),
                     edit_watcher: Mutex::new(None),
                     edit_watch_generation: std::sync::atomic::AtomicU64::new(0),
                     pending_corrections: Mutex::new(Vec::new()),
@@ -1439,6 +1454,10 @@ impl Coordinator {
                     selection_polish_hotkey: Mutex::new(None),
                     #[cfg(not(mobile))]
                     selection_polish_preview: Mutex::new(None),
+                    #[cfg(not(mobile))]
+                    selection_correction: Mutex::new(
+                        selection_correction::SelectionCorrectionRuntime::default(),
+                    ),
                     translation_active: AtomicBool::new(false),
                     qa_hotkey: Mutex::new(None),
                     coding_agent_modifier_hotkey: Mutex::new(None),
@@ -1539,7 +1558,9 @@ impl Coordinator {
                 asr_label: Mutex::new(None),
                 omni_pcm: Mutex::new(None),
                 recorder: Mutex::new(None),
+                resume_audio_pcm: Mutex::new(None),
                 audio_archive_active: AtomicBool::new(false),
+                cancelled_recording_recovery: Mutex::new(None),
                 edit_watcher: Mutex::new(None),
                 edit_watch_generation: std::sync::atomic::AtomicU64::new(0),
                 pending_corrections: Mutex::new(Vec::new()),
@@ -1569,8 +1590,12 @@ impl Coordinator {
                 style_pack_hotkeys: Mutex::new(std::collections::HashMap::new()),
                 #[cfg(not(mobile))]
                 selection_polish_hotkey: Mutex::new(None),
-                #[cfg(not(mobile))]
-                selection_polish_preview: Mutex::new(None),
+                    #[cfg(not(mobile))]
+                    selection_polish_preview: Mutex::new(None),
+                    #[cfg(not(mobile))]
+                    selection_correction: Mutex::new(
+                        selection_correction::SelectionCorrectionRuntime::default(),
+                    ),
                 translation_active: AtomicBool::new(false),
                 qa_hotkey: Mutex::new(None),
                 coding_agent_modifier_hotkey: Mutex::new(None),
@@ -2290,6 +2315,25 @@ impl Coordinator {
     pub fn vocab(&self) -> &DictionaryStore {
         &self.inner.vocab
     }
+    pub fn dictionary_delivery_preview(&self) -> crate::types::DictionaryDeliveryReport {
+        let active = self.inner.prefs.get().active_asr_provider;
+        let model = CredentialsVault::get(CredentialAccount::AsrModel)
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        let effective = resolve_effective_asr_provider(&active, &model).unwrap_or(active);
+        dictionary_delivery_report_for_provider(&effective, &asr_vocab_phrases(&self.inner))
+    }
+    pub fn active_project_key(&self) -> Option<String> {
+        current_project_key(&self.inner)
+    }
+    pub fn temporary_vocab_expiry(&self) -> String {
+        let days = self.inner.prefs.get().temporary_vocab_ttl_days.clamp(1, 365);
+        (Utc::now() + chrono::Duration::days(days as i64)).to_rfc3339()
+    }
+    pub fn temporary_vocab_capacity(&self) -> u32 {
+        self.inner.prefs.get().temporary_vocab_capacity.clamp(1, 10_000)
+    }
     pub fn correction_rules(&self) -> &CorrectionRuleStore {
         &self.inner.correction_rules
     }
@@ -2321,11 +2365,26 @@ impl Coordinator {
     }
 
     fn take_pending_correction(&self, id: &str) -> Option<crate::types::PendingCorrection> {
-        let mut pending = self.inner.pending_corrections.lock();
-        pending
-            .iter()
-            .position(|p| p.id == id)
-            .map(|idx| pending.remove(idx))
+        let in_memory = {
+            let mut pending = self.inner.pending_corrections.lock();
+            pending
+                .iter()
+                .position(|p| p.id == id)
+                .map(|idx| pending.remove(idx))
+        };
+        if let Some(item) = in_memory {
+            if let Err(error) = self.inner.vocab.remove_suggestion(id) {
+                log::warn!("[vocab-inbox] remove accepted/rejected suggestion failed: {error}");
+            }
+            return Some(item);
+        }
+        match self.inner.vocab.take_suggestion(id) {
+            Ok(item) => item,
+            Err(error) => {
+                log::warn!("[vocab-inbox] read accepted/rejected suggestion failed: {error}");
+                None
+            }
+        }
     }
 
     /// 逐条点完之后重排卡片：还有剩的就按新行数重算高度，空了就收起来。
@@ -2505,6 +2564,98 @@ impl Coordinator {
 
     pub fn cancel_dictation(&self) {
         cancel_session(&self.inner);
+    }
+
+    /// 从历史或 3 秒浮层恢复一条被 Esc 打断的录音。旧 PCM 会在新麦克风启动前喂给
+    /// 当前识别器，并作为新 WAV 的前缀，因此后续停止时处理的是完整语音。
+    pub async fn resume_cancelled_recording(&self, session_id: &str) -> Result<(), String> {
+        if self.inner.state.lock().phase != SessionPhase::Idle {
+            return Err("another dictation session is active".into());
+        }
+        let entry = self
+            .inner
+            .history
+            .list()
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .find(|entry| entry.id == session_id)
+            .ok_or_else(|| "history entry not found".to_string())?;
+        if entry.error_code.as_deref() != Some("recordingCancelled") {
+            return Err("history entry is not a cancelled recording".into());
+        }
+        if entry.has_audio_recording != Some(true) {
+            return Err("recording not found".into());
+        }
+        let parsed_id =
+            uuid::Uuid::parse_str(session_id).map_err(|_| "invalid session id".to_string())?;
+        let path = crate::persistence::recording_path_for_session(session_id)
+            .map_err(|error| error.to_string())?;
+        let wav = tokio::fs::read(path).await.map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                "recording not found".to_string()
+            } else {
+                format!("read wav failed: {error}")
+            }
+        })?;
+        if wav.len() <= 44 {
+            return Err("recording is empty or corrupt".into());
+        }
+        let pcm = wav[44..].to_vec();
+        // 先移除占位条目，再开启同 id 的新会话。若等会话已经启动后才删，用户在这段
+        // 极短窗口里再次按 Esc，取消路径会先 upsert 新占位，随后这里却会把它误删。
+        // 启动失败时恢复原条目，保证历史不会因恢复尝试而丢失。
+        self.inner
+            .history
+            .delete(session_id)
+            .map_err(|error| format!("remove history placeholder failed: {error}"))?;
+        *self.inner.cancelled_recording_recovery.lock() = None;
+        let resume_result = dictation::resume_cancelled_recording(
+            &self.inner,
+            parsed_id,
+            entry.duration_ms.unwrap_or_default(),
+            pcm,
+        )
+        .await;
+
+        let resumed = {
+            let state = self.inner.state.lock();
+            state.session_id == parsed_id
+                && matches!(
+                    state.phase,
+                    SessionPhase::Starting | SessionPhase::Listening
+                )
+        };
+        if let Err(error) = resume_result {
+            let prefs = self.inner.prefs.get();
+            if let Err(restore_error) = self.inner.history.insert_if_missing_with_retention(
+                entry,
+                prefs.history_retention_days,
+                prefs.history_max_entries,
+            ) {
+                log::error!(
+                    "[coord] failed to restore cancelled recording after resume error: {restore_error}"
+                );
+            }
+            return Err(error);
+        }
+        if !resumed {
+            let prefs = self.inner.prefs.get();
+            if let Err(error) = self.inner.history.insert_if_missing_with_retention(
+                entry,
+                prefs.history_retention_days,
+                prefs.history_max_entries,
+            ) {
+                log::error!(
+                    "[coord] failed to restore cancelled recording after resume race: {error}"
+                );
+            }
+            return Err("cancelled recording could not be resumed".into());
+        }
+        Ok(())
+    }
+
+    pub fn dismiss_cancelled_recording_recovery(&self, session_id: Option<&str>) {
+        dictation::dismiss_cancelled_recording_recovery(&self.inner, session_id);
     }
 
     #[cfg(not(mobile))]
@@ -3646,14 +3797,15 @@ fn read_xfyun_credentials() -> crate::asr::XfyunCredentials {
 }
 
 fn enabled_hotwords(inner: &Arc<Inner>) -> Vec<DictionaryHotword> {
+    let project_key = current_project_key(inner);
     inner
         .vocab
-        .list()
+        .active(project_key.as_deref())
         .unwrap_or_default()
         .into_iter()
         .map(|e| DictionaryHotword {
             phrase: e.phrase,
-            enabled: e.enabled,
+            enabled: true,
         })
         .collect()
 }
@@ -3699,6 +3851,86 @@ impl AsrCallLabel {
             model: model.filter(|m| !m.trim().is_empty()),
         }
     }
+}
+
+fn count_nonblank_phrases(phrases: &[String]) -> u32 {
+    phrases
+        .iter()
+        .filter(|phrase| !phrase.trim().is_empty())
+        .count()
+        .min(u32::MAX as usize) as u32
+}
+
+fn dictionary_delivery_report_for_provider(
+    provider: &str,
+    phrases: &[String],
+) -> crate::types::DictionaryDeliveryReport {
+    use crate::types::{DictionaryDeliveryMode, DictionaryDeliveryReport};
+
+    let total = count_nonblank_phrases(phrases);
+    let (mode, sent_count, dropped_count, reason) = if provider == "volcengine" {
+        let sent = total.min(crate::asr::volcengine::HOTWORD_CAP as u32);
+        (
+            DictionaryDeliveryMode::Dedicated,
+            sent,
+            total.saturating_sub(sent),
+            None,
+        )
+    } else if provider == "stepfun" {
+        (DictionaryDeliveryMode::Dedicated, total, 0, None)
+    } else if provider == crate::asr::stepfun_realtime::PROVIDER_ID {
+        let (sent, dropped) = crate::asr::whisper::prompt_delivery_counts(phrases);
+        (DictionaryDeliveryMode::Prompt, sent, dropped, None)
+    } else if matches!(provider, "openrouter" | ZENMUX_ASR_PROVIDER_ID) {
+        (
+            DictionaryDeliveryMode::Unsupported,
+            0,
+            total,
+            Some("request_format_omits_dictionary".to_string()),
+        )
+    } else if is_whisper_compatible_provider(provider) {
+        let (sent, dropped) = crate::asr::whisper::prompt_delivery_counts(phrases);
+        (DictionaryDeliveryMode::Prompt, sent, dropped, None)
+    } else {
+        (
+            DictionaryDeliveryMode::Unsupported,
+            0,
+            total,
+            Some("provider_does_not_accept_local_dictionary".to_string()),
+        )
+    };
+    DictionaryDeliveryReport {
+        provider: provider.to_string(),
+        mode,
+        sent_count,
+        dropped_count,
+        reason,
+    }
+}
+
+fn dictionary_delivery_report(
+    inner: &Arc<Inner>,
+    label: &AsrCallLabel,
+) -> crate::types::DictionaryDeliveryReport {
+    dictionary_delivery_report_for_provider(&label.provider, &asr_vocab_phrases(inner))
+}
+
+fn llm_dictionary_delivery_report(
+    provider: Option<&str>,
+    sent_count: u32,
+    multimodal: bool,
+) -> Option<crate::types::DictionaryDeliveryReport> {
+    provider.map(|provider| crate::types::DictionaryDeliveryReport {
+        provider: provider.to_string(),
+        mode: if multimodal {
+            crate::types::DictionaryDeliveryMode::MultimodalPrompt
+        } else {
+            crate::types::DictionaryDeliveryMode::Prompt
+        },
+        sent_count,
+        dropped_count: 0,
+        reason: None,
+    })
 }
 
 /// Volcengine resource id 进历史前的 allowlist：只放行 `volc.` 命名空间的产品标识
@@ -3892,12 +4124,19 @@ mod tests {
             enabled: true,
             hits,
             created_at: String::new(),
+            source: crate::types::DictionarySource::Manual,
+            scope: crate::types::DictionaryScope::Persistent,
+            pinned: false,
+            last_hit_at: None,
+            expires_at: None,
+            project_key: None,
         }
     }
 
     fn learned_vocab_entry(phrase: &str, hits: u64) -> crate::types::DictionaryEntry {
         let mut entry = vocab_entry(phrase, hits);
         entry.note = Some(super::dictation::LEARNED_VOCAB_NOTE.to_string());
+        entry.source = crate::types::DictionarySource::Learned;
         entry
     }
 
@@ -4018,6 +4257,30 @@ mod tests {
         let ordered = super::prioritize_vocab_for_asr(entries);
 
         assert_eq!(ordered, vec!["Claude", "other"]);
+    }
+
+    #[test]
+    fn dictionary_delivery_report_exposes_provider_channel_and_budget_loss() {
+        use crate::types::DictionaryDeliveryMode;
+
+        let phrases = (0..81).map(|index| format!("term{index}")).collect::<Vec<_>>();
+        let volc = super::dictionary_delivery_report_for_provider("volcengine", &phrases);
+        assert_eq!(volc.mode, DictionaryDeliveryMode::Dedicated);
+        assert_eq!(volc.sent_count, 80);
+        assert_eq!(volc.dropped_count, 1);
+
+        let whisper = super::dictionary_delivery_report_for_provider("groq", &phrases);
+        assert_eq!(whisper.mode, DictionaryDeliveryMode::Prompt);
+        assert_eq!(whisper.sent_count + whisper.dropped_count, 81);
+
+        let unsupported = super::dictionary_delivery_report_for_provider("openrouter", &phrases);
+        assert_eq!(unsupported.mode, DictionaryDeliveryMode::Unsupported);
+        assert_eq!(unsupported.sent_count, 0);
+        assert_eq!(unsupported.dropped_count, 81);
+        assert_eq!(
+            unsupported.reason.as_deref(),
+            Some("request_format_omits_dictionary")
+        );
     }
 
     #[test]
@@ -5838,13 +6101,19 @@ mod tests {
     }
 }
 
+fn current_project_key(inner: &Arc<Inner>) -> Option<String> {
+    let front_app = inner.state.lock().front_app.clone();
+    let front = crate::types::split_front_app_opt(front_app.as_deref());
+    front.bundle_id.or(front.name)
+}
+
 fn enabled_phrases(inner: &Arc<Inner>) -> Vec<String> {
+    let project_key = current_project_key(inner);
     inner
         .vocab
-        .list()
+        .active(project_key.as_deref())
         .unwrap_or_default()
         .into_iter()
-        .filter(|e| e.enabled)
         .map(|e| e.phrase)
         .collect()
 }
@@ -5869,12 +6138,12 @@ fn enabled_phrases(inner: &Arc<Inner>) -> Vec<String> {
 /// 2. 其余按命中次数降序。
 /// 3. 同词异形（`claude` / `Claude`）只留命中多的那个写法。
 fn asr_vocab_phrases(inner: &Arc<Inner>) -> Vec<String> {
+    let project_key = current_project_key(inner);
     let entries: Vec<crate::types::DictionaryEntry> = inner
         .vocab
-        .list()
+        .active(project_key.as_deref())
         .unwrap_or_default()
         .into_iter()
-        .filter(|e| e.enabled)
         .collect();
     prioritize_vocab_for_asr(entries)
 }
@@ -5887,10 +6156,16 @@ const FRESH_VOCAB_SEATS: usize = 5;
 /// `entries` 必须是词典的原始顺序（最近添加在前）——保底席位靠它取「最近」，
 /// 不去解析 `created_at` 字符串（历史文件由 Swift 版写入，格式不保证一致）。
 fn prioritize_vocab_for_asr(entries: Vec<crate::types::DictionaryEntry>) -> Vec<String> {
+    let mut pinned = Vec::new();
     let mut fresh_manual = Vec::with_capacity(FRESH_VOCAB_SEATS.min(entries.len()));
     let mut ranked = Vec::with_capacity(entries.len());
     for entry in entries {
-        let learned = entry.note.as_deref() == Some(dictation::LEARNED_VOCAB_NOTE);
+        if entry.pinned {
+            pinned.push(entry);
+            continue;
+        }
+        let learned = entry.source == crate::types::DictionarySource::Learned
+            || entry.note.as_deref() == Some(dictation::LEARNED_VOCAB_NOTE);
         if !learned && fresh_manual.len() < FRESH_VOCAB_SEATS {
             fresh_manual.push(entry);
         } else {
@@ -5900,8 +6175,9 @@ fn prioritize_vocab_for_asr(entries: Vec<crate::types::DictionaryEntry>) -> Vec<
     // 保底席位之外的全部词条按命中降序；`sort_by_key` 是稳定排序，同命中次数的保持
     // 词典原顺序（最近添加在前）。学习词条也在这里，不会被拿来填空缺的手动保底席位。
     ranked.sort_by_key(|e| std::cmp::Reverse(e.hits));
-    fresh_manual.extend(ranked);
-    let ordered = fresh_manual;
+    pinned.extend(fresh_manual);
+    pinned.extend(ranked);
+    let ordered = pinned;
 
     // 同一个词的不同写法（`claude` / `Claude`）只留一个：既省预算，也免得两种
     // 写法一起进词表让模型无所适从。留**命中多**的那个写法，但位置取最靠前那次
@@ -5942,6 +6218,11 @@ const CAPSULE_AUTO_HIDE_DELAY_MS: u64 = 2000;
 /// 不需要像 Done/Error 那样停留 2 秒给用户读——立刻回 Idle，由前端 capsule-out
 /// 淡出动画（520ms）负责优雅收尾，观感上「按下即消失」（对齐 Typeless）。
 const CAPSULE_CANCEL_HIDE_DELAY_MS: u64 = 0;
+/// 给连续双击 Esc 留出的判定窗口。期间录音已经停止、WAV 与历史已经保存，只延后展示
+/// 恢复入口；第二次 Esc 会直接清掉入口，因此不会发生浮层闪现。
+const CANCELLED_RECORDING_RECOVERY_PROMPT_DELAY_MS: u64 = 240;
+/// Esc 录音恢复提示停留时间。历史/WAV 在提示出现前已经保存，超时只收起提示。
+const CANCELLED_RECORDING_RECOVERY_TIMEOUT_MS: u64 = 3_000;
 
 /// Toggle 模式下，end_session 将 phase 设为 Idle 后在此时间内禁止新的 begin_session。
 /// 避免用户三连按时第 3 次按下误激活新听写（此时胶囊仍在离场动画周期内）。

@@ -471,8 +471,22 @@ pub fn set_settings(
     // 切换）为止 —— 也就是用户明确关掉开关之后，我们还在读他正在写的那个文档，最长
     // 一分钟。功能本身是否还有用不重要：**开关关掉的那一刻就该停**，这是这个功能敢
     // 默认存在的全部前提。
-    if remote_prev.cursor_context_enabled && !prefs.cursor_context_enabled {
+    if (remote_prev.cursor_context_enabled && !prefs.cursor_context_enabled)
+        || (remote_prev.edit_learning_enabled && !prefs.edit_learning_enabled)
+    {
         coord.disarm_edit_watch();
+    }
+    if remote_prev.temporary_vocab_capacity != prefs.temporary_vocab_capacity {
+        coord
+            .vocab()
+            .enforce_temporary_capacity(prefs.temporary_vocab_capacity)
+            .map_err(|error| format!("temporary vocabulary capacity update failed: {error}"))?;
+    }
+    if remote_prev.vocab_suggestion_inbox_enabled && !prefs.vocab_suggestion_inbox_enabled {
+        coord
+            .vocab()
+            .clear_suggestions()
+            .map_err(|error| format!("clear vocabulary suggestion inbox failed: {error}"))?;
     }
     #[cfg(target_os = "android")]
     coord.apply_android_overlay_settings_change(&remote_prev, &prefs);

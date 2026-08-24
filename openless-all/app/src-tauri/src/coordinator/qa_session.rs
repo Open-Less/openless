@@ -906,6 +906,9 @@ pub(super) async fn answer_qa_question_text(
             pipeline_mode: None,
             asr_ms: None,
             polish_ms: None,
+            asr_dictionary_delivery: None,
+            llm_dictionary_sent_count: None,
+            llm_dictionary_delivery: None,
         };
         let prefs_snapshot = inner.prefs.get();
         if let Err(error) = inner.history.append_with_retention(

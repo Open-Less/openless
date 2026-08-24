@@ -14,12 +14,18 @@ constexpr size_t kMaxJsonLineBytes = 64 * 1024;
 struct SubmitMessage {
   std::wstring type;
   std::wstring session_id;
+  std::wstring request_id;
   std::wstring text;
   int protocol_version = 0;
+  int before_chars = 0;
+  int after_chars = 0;
   bool has_type = false;
   bool has_session_id = false;
+  bool has_request_id = false;
   bool has_text = false;
   bool has_protocol_version = false;
+  bool has_before_chars = false;
+  bool has_after_chars = false;
 };
 
 std::wstring HResultErrorCode(HRESULT hr) {
@@ -267,6 +273,24 @@ bool ParseSubmitMessage(const std::string& json, SubmitMessage* message) {
     } else if (key == L"text") {
       message->has_text = ParseJsonString(json, &pos, &message->text);
       if (!message->has_text) {
+        return false;
+      }
+    } else if (key == L"requestId") {
+      message->has_request_id =
+          ParseJsonString(json, &pos, &message->request_id);
+      if (!message->has_request_id) {
+        return false;
+      }
+    } else if (key == L"beforeChars") {
+      message->has_before_chars =
+          ParseJsonInteger(json, &pos, &message->before_chars);
+      if (!message->has_before_chars) {
+        return false;
+      }
+    } else if (key == L"afterChars") {
+      message->has_after_chars =
+          ParseJsonInteger(json, &pos, &message->after_chars);
+      if (!message->has_after_chars) {
         return false;
       }
     } else if (key == L"protocolVersion") {
@@ -526,26 +550,66 @@ bool OpenLessPipeServer::ReadJsonLine(HANDLE pipe, std::string* line) {
 void OpenLessPipeServer::HandleSubmitLine(HANDLE pipe, const std::string& line) {
   SubmitMessage message;
   if (!ParseSubmitMessage(line, &message) || !message.has_type ||
-      !message.has_protocol_version || !message.has_session_id ||
-      !message.has_text || message.protocol_version != 1 ||
-      message.type != L"submitText") {
+      !message.has_protocol_version || message.protocol_version != 1) {
     WriteResult(pipe, message.session_id, L"failed", L"protocolError");
     return;
   }
 
   if (service_ == nullptr) {
-    WriteResult(pipe, message.session_id, L"failed", L"serviceUnavailable");
+    if (message.type == L"queryContext") {
+      WriteContextResult(pipe, message.request_id, L"unavailable",
+                         std::wstring(), 0, L"serviceUnavailable");
+    } else {
+      WriteResult(pipe, message.session_id, L"failed", L"serviceUnavailable");
+    }
     return;
   }
 
-  const HRESULT hr =
-      service_->SubmitTextFromPipe(message.session_id, message.text);
-  if (SUCCEEDED(hr)) {
-    WriteResult(pipe, message.session_id, L"committed", nullptr);
-  } else {
-    const std::wstring error_code = HResultErrorCode(hr);
-    WriteResult(pipe, message.session_id, L"rejected", error_code.c_str());
+  if (message.type == L"submitText") {
+    if (!message.has_session_id || !message.has_text) {
+      WriteResult(pipe, message.session_id, L"failed", L"protocolError");
+      return;
+    }
+    const HRESULT hr =
+        service_->SubmitTextFromPipe(message.session_id, message.text);
+    if (SUCCEEDED(hr)) {
+      WriteResult(pipe, message.session_id, L"committed", nullptr);
+    } else {
+      const std::wstring error_code = HResultErrorCode(hr);
+      WriteResult(pipe, message.session_id, L"rejected", error_code.c_str());
+    }
+    return;
   }
+
+  if (message.type == L"queryContext") {
+    if (!message.has_request_id || !message.has_before_chars ||
+        !message.has_after_chars) {
+      WriteContextResult(pipe, message.request_id, L"failed", std::wstring(),
+                         0, L"protocolError");
+      return;
+    }
+    std::wstring text;
+    uint32_t cursor_utf16 = 0;
+    bool blocked = false;
+    const HRESULT hr = service_->ReadContextFromPipe(
+        static_cast<uint32_t>(message.before_chars),
+        static_cast<uint32_t>(message.after_chars), &text, &cursor_utf16,
+        &blocked);
+    if (blocked) {
+      WriteContextResult(pipe, message.request_id, L"blocked", std::wstring(),
+                         0, L"passwordInputScope");
+    } else if (SUCCEEDED(hr)) {
+      WriteContextResult(pipe, message.request_id, L"ok", text,
+                         cursor_utf16, nullptr);
+    } else {
+      const std::wstring error_code = HResultErrorCode(hr);
+      WriteContextResult(pipe, message.request_id, L"unavailable",
+                         std::wstring(), 0, error_code.c_str());
+    }
+    return;
+  }
+
+  WriteResult(pipe, message.session_id, L"failed", L"protocolError");
 }
 
 bool OpenLessPipeServer::WriteResult(HANDLE pipe,
@@ -572,6 +636,43 @@ bool OpenLessPipeServer::WriteResult(HANDLE pipe,
     return false;
   }
 
+  DWORD bytes_written = 0;
+  return RunOverlapped(pipe, /*is_write=*/true, utf8_response.data(),
+                       static_cast<DWORD>(utf8_response.size()),
+                       &bytes_written) &&
+         bytes_written == utf8_response.size();
+}
+
+bool OpenLessPipeServer::WriteContextResult(
+    HANDLE pipe,
+    const std::wstring& request_id,
+    const wchar_t* status,
+    const std::wstring& text,
+    uint32_t cursor_utf16,
+    const wchar_t* error_code) {
+  std::wstring response = L"{\"type\":\"contextResult\",\"protocolVersion\":1,";
+  response += L"\"requestId\":\"";
+  response += EscapeJsonString(request_id);
+  response += L"\",\"status\":\"";
+  response += status;
+  response += L"\",\"text\":\"";
+  response += EscapeJsonString(text);
+  response += L"\",\"cursorUtf16\":";
+  response += std::to_wstring(cursor_utf16);
+  response += L",\"errorCode\":";
+  if (error_code == nullptr) {
+    response += L"null";
+  } else {
+    response += L"\"";
+    response += EscapeJsonString(error_code);
+    response += L"\"";
+  }
+  response += L"}\n";
+
+  std::string utf8_response;
+  if (!WideToUtf8(response, &utf8_response)) {
+    return false;
+  }
   DWORD bytes_written = 0;
   return RunOverlapped(pipe, /*is_write=*/true, utf8_response.data(),
                        static_cast<DWORD>(utf8_response.size()),

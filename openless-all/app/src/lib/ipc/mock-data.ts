@@ -109,6 +109,11 @@ export let mockSettings: UserPreferences = {
     streamingInsertDefaultMigrated: true,
     streamingInsertSaveClipboard: true,
     cursorContextEnabled: false,
+    cursorContextLlmEnabled: false,
+    editLearningEnabled: false,
+    vocabSuggestionInboxEnabled: false,
+    temporaryVocabTtlDays: 7,
+    temporaryVocabCapacity: 100,
     showOverviewActivityHeatmap: true,
     stackedRowLayout: false,
     conservativeLayout: false,
@@ -614,6 +619,12 @@ export const mockVocab: DictionaryEntry[] = OL_DATA.vocab.map((v, i) => ({
     enabled: true,
     hits: v.count,
     createdAt: new Date().toISOString(),
+    source: "manual",
+    scope: "persistent",
+    pinned: false,
+    lastHitAt: null,
+    expiresAt: null,
+    projectKey: null,
 }))
 
 export const mockCorrectionRules: CorrectionRule[] = [

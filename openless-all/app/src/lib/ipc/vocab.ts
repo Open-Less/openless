@@ -1,6 +1,8 @@
 import type {
     CorrectionRule,
+    DictionaryDeliveryReport,
     DictionaryEntry,
+    DictionaryScope,
     PendingCorrection,
     VocabPresetStore,
 } from "../types"
@@ -22,6 +24,73 @@ export function addVocab(
         enabled: true,
         hits: 0,
         createdAt: new Date().toISOString(),
+        source: "manual" as const,
+        scope: "persistent" as const,
+        pinned: false,
+        lastHitAt: null,
+        expiresAt: null,
+        projectKey: null,
+    }))
+}
+
+export function addVocabWithMetadata(
+    phrase: string,
+    scope: DictionaryScope,
+    expiresAt?: string,
+    note?: string,
+    projectKey?: string,
+): Promise<DictionaryEntry> {
+    return invokeOrMock(
+        "add_vocab_with_metadata",
+        { phrase, note, scope, projectKey, expiresAt },
+        () => ({
+            id: `vocab-new-${Date.now()}`,
+            phrase,
+            note: note ?? null,
+            enabled: true,
+            hits: 0,
+            createdAt: new Date().toISOString(),
+            source: "manual" as const,
+            scope,
+            pinned: false,
+            lastHitAt: null,
+            expiresAt: expiresAt ?? null,
+            projectKey: projectKey ?? null,
+        }),
+    )
+}
+
+export function setVocabMetadata(
+    id: string,
+    pinned: boolean,
+    scope: DictionaryScope,
+    expiresAt?: string,
+    projectKey?: string,
+): Promise<DictionaryEntry> {
+    return invokeOrMock(
+        "set_vocab_metadata",
+        { id, pinned, scope, projectKey, expiresAt },
+        () => ({
+            ...mockVocab.find(item => item.id === id)!,
+            pinned,
+            scope,
+            expiresAt: expiresAt ?? null,
+            projectKey: projectKey ?? null,
+        }),
+    )
+}
+
+export function listVocabSuggestions(): Promise<PendingCorrection[]> {
+    return invokeOrMock("list_vocab_suggestions", undefined, () => [])
+}
+
+export function getDictionaryDeliveryPreview(): Promise<DictionaryDeliveryReport> {
+    return invokeOrMock("get_dictionary_delivery_preview", undefined, () => ({
+        provider: "mock",
+        mode: "unsupported",
+        sentCount: 0,
+        droppedCount: 0,
+        reason: "mock",
     }))
 }
 

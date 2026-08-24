@@ -21,7 +21,13 @@ pub(super) fn esc_cancel_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<()>) 
         if inner.shortcut_recording_active.load(Ordering::SeqCst) {
             continue;
         }
-        cancel_session(&inner);
+        // 第一次 Esc 已保存录音并进入「是否继续」恢复窗口后，下一次 Esc 的唯一语义
+        // 是收起这个入口。它同样覆盖连续双击：第二个事件会排在第一次取消（含 WAV
+        // 落盘）之后消费，清掉待展示状态，因此恢复提示不会真正出现。
+        if dictation::dismiss_cancelled_recording_recovery(&inner, None) {
+            continue;
+        }
+        cancel_session_after_escape(&inner);
     }
 }
 
@@ -1975,6 +1981,42 @@ mod tests {
                 std::time::Duration::from_secs(2)
             ),
             "录制结束后取消信号应恢复生效"
+        );
+
+        drop(tx);
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn esc_cancel_bridge_dismisses_recording_recovery_before_cancelling_session() {
+        let coordinator = Coordinator::new();
+        *coordinator.inner.cancelled_recording_recovery.lock() = Some("saved-session".into());
+        emit_capsule(
+            &coordinator.inner,
+            CapsuleState::Cancelled,
+            0.0,
+            0,
+            None,
+            None,
+        );
+        let (tx, handle) = spawn_loop(&coordinator.inner);
+
+        tx.send(()).unwrap();
+        assert!(
+            wait_until(
+                || {
+                    coordinator.inner.cancelled_recording_recovery.lock().is_none()
+                        && coordinator.inner.last_capsule_state.lock().as_ref().copied()
+                            == Some(CapsuleState::Idle)
+                },
+                std::time::Duration::from_secs(2)
+            ),
+            "第二次 Esc 应清除恢复入口并收起胶囊"
+        );
+        assert!(!coordinator.inner.state.lock().cancelled);
+        assert_eq!(
+            coordinator.inner.last_capsule_state.lock().as_ref().copied(),
+            Some(CapsuleState::Idle)
         );
 
         drop(tx);

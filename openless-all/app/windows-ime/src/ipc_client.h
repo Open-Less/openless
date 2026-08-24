@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <cstdint>
 #include <string>
 #include <thread>
 #include <windows.h>
@@ -26,6 +27,12 @@ class OpenLessPipeServer {
                    const std::wstring& session_id,
                    const wchar_t* status,
                    const wchar_t* error_code);
+  bool WriteContextResult(HANDLE pipe,
+                          const std::wstring& request_id,
+                          const wchar_t* status,
+                          const std::wstring& text,
+                          uint32_t cursor_utf16,
+                          const wchar_t* error_code);
   // Issues one overlapped read or write and waits until it completes or the
   // stop event is signaled. Returns true only on successful completion, with
   // the transferred byte count stored in *bytes. Overlapped I/O keeps every

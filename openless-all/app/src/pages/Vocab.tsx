@@ -6,15 +6,21 @@ import { useTranslation } from 'react-i18next';
 import {
   addCorrectionRule,
   addVocab,
+  addVocabWithMetadata,
+  acceptPendingCorrection,
+  getDictionaryDeliveryPreview,
   isTauri,
   listCorrectionRules,
   listVocab,
+  listVocabSuggestions,
+  rejectPendingCorrection,
   removeCorrectionRule,
   removeVocab,
   setCorrectionRuleEnabled,
   setVocabEnabled,
+  setVocabMetadata,
 } from '../lib/ipc';
-import type { CorrectionRule, DictionaryEntry, VocabPreset } from '../lib/types';
+import type { CorrectionRule, DictionaryDeliveryReport, DictionaryEntry, PendingCorrection, VocabPreset } from '../lib/types';
 import { DEFAULT_VOCAB_PRESETS, loadVocabPresets, persistVocabPresets } from '../lib/vocabPresets';
 import { useMobileLayout } from '../lib/useMobileLayout';
 import { Btn, Card, Collapsible, PageHeader } from './_atoms';
@@ -39,6 +45,12 @@ export function Vocab() {
   const mobile = useMobileLayout();
   const [entries, setEntries] = useState<DictionaryEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [sourceFilter, setSourceFilter] = useState<'all' | 'manual' | 'learned' | 'imported'>('all');
+  const [scopeFilter, setScopeFilter] = useState<'all' | 'persistent' | 'temporary'>('all');
+  const [addScope, setAddScope] = useState<'persistent' | 'temporary'>('persistent');
+  const [suggestions, setSuggestions] = useState<PendingCorrection[]>([]);
+  const [delivery, setDelivery] = useState<DictionaryDeliveryReport | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const [error, setError] = useState<string | null>(null);
@@ -76,9 +88,19 @@ export function Vocab() {
     }
   };
 
+  const refreshVocabMeta = async () => {
+    const [inbox, capability] = await Promise.allSettled([
+      listVocabSuggestions(),
+      getDictionaryDeliveryPreview(),
+    ]);
+    if (inbox.status === 'fulfilled') setSuggestions(inbox.value);
+    if (capability.status === 'fulfilled') setDelivery(capability.value);
+  };
+
   const refreshAll = () => {
     void refresh();
     void refreshCorrectionRules();
+    void refreshVocabMeta();
   };
 
   useEffect(() => {
@@ -108,9 +130,18 @@ export function Vocab() {
   const onAdd = async () => {
     const phrase = inputRef.current?.value.trim();
     if (!phrase) return;
-    await addVocab(phrase);
-    if (inputRef.current) inputRef.current.value = '';
-    refresh();
+    try {
+      if (addScope === 'temporary') {
+        await addVocabWithMetadata(phrase, 'temporary');
+      } else {
+        await addVocab(phrase);
+      }
+      if (inputRef.current) inputRef.current.value = '';
+      await refresh();
+      await refreshVocabMeta();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -164,10 +195,19 @@ export function Vocab() {
     setCorrectionRules(prev => prev.filter(r => !removed.includes(r.id)));
   };
 
-  // 自动收集的词条靠 note 认。分成两区显示 —— 见下面渲染处的说明。
+  const normalizedSearch = searchQuery.trim().toLocaleLowerCase();
+  const visibleEntries = entries.filter(entry => {
+    if (sourceFilter !== 'all' && entry.source !== sourceFilter) return false;
+    if (scopeFilter !== 'all' && entry.scope !== scopeFilter) return false;
+    if (!normalizedSearch) return true;
+    return [entry.phrase, entry.note ?? '', entry.source, entry.scope, entry.projectKey ?? '']
+      .some(value => value.toLocaleLowerCase().includes(normalizedSearch));
+  });
+
+  // source 是 v1.4 的显式字段；note 回落只为还没被后端迁移的 mock/旧数据。
   const LEARNED_NOTE = '从手改中自动收集';
-  const manualEntries = entries.filter(e => e.note !== LEARNED_NOTE);
-  const learnedEntries = entries.filter(e => e.note === LEARNED_NOTE);
+  const manualEntries = visibleEntries.filter(e => e.source !== 'learned' && e.note !== LEARNED_NOTE);
+  const learnedEntries = visibleEntries.filter(e => e.source === 'learned' || e.note === LEARNED_NOTE);
 
   const onRemoveAllLearnedEntries = async () => {
     // 逐条删而不是加一条批量后端命令：词条是几十条量级，为此多开一条 IPC 不值得，
@@ -214,6 +254,43 @@ export function Vocab() {
       await setVocabEnabled(entry.id, next);
     } catch (err) {
       setEntries(prev => prev.map(e => (e.id === entry.id ? { ...e, enabled: entry.enabled } : e)));
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const onTogglePin = async (entry: DictionaryEntry) => {
+    try {
+      const updated = await setVocabMetadata(
+        entry.id,
+        !entry.pinned,
+        entry.scope,
+        entry.expiresAt ?? undefined,
+        entry.projectKey ?? undefined,
+      );
+      setEntries(prev => prev.map(item => (item.id === updated.id ? updated : item)));
+      await refreshVocabMeta();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const onUpgradeToGlobal = async (entry: DictionaryEntry) => {
+    try {
+      const updated = await setVocabMetadata(entry.id, entry.pinned, 'persistent');
+      setEntries(prev => prev.map(item => (item.id === updated.id ? updated : item)));
+      await refreshVocabMeta();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const onResolveSuggestion = async (item: PendingCorrection, accept: boolean) => {
+    try {
+      if (accept) await acceptPendingCorrection(item.id);
+      else await rejectPendingCorrection(item.id);
+      setSuggestions(prev => prev.filter(candidate => candidate.id !== item.id));
+      if (accept) await refresh();
+    } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
   };
@@ -416,7 +493,33 @@ export function Vocab() {
           title={t('vocab.sectionTitle')}
           desc={t('vocab.tip')}
         >
-          <div style={{ display: 'flex', gap: 8 }}>
+          {delivery && (
+            <div style={{ marginBottom: 12, padding: '9px 11px', borderRadius: 8, background: 'var(--ol-surface-2)', border: '0.5px solid var(--ol-line-soft)', fontSize: 12, color: 'var(--ol-ink-3)', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <strong style={{ color: 'var(--ol-ink)' }}>{delivery.provider}</strong>
+              <span>{t('vocab.deliveryMode', { defaultValue: 'ASR delivery: {{mode}}', mode: delivery.mode })}</span>
+              <span>{t('vocab.deliveryCounts', { defaultValue: '{{sent}} sent · {{dropped}} omitted', sent: delivery.sentCount, dropped: delivery.droppedCount })}</span>
+              {delivery.reason && <code>{delivery.reason}</code>}
+            </div>
+          )}
+          {suggestions.length > 0 && (
+            <div style={{ marginBottom: 12, display: 'grid', gap: 7 }}>
+              <div style={{ fontSize: 12, color: 'var(--ol-ink-3)' }}>
+                {t('vocab.inboxTitle', { defaultValue: 'Pending suggestions ({{count}})', count: suggestions.length })}
+              </div>
+              {suggestions.map(item => (
+                <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 9px', borderRadius: 8, background: 'var(--ol-surface-2)' }}>
+                  <span style={{ minWidth: 0, flex: 1, fontSize: 12 }}>
+                    <span style={{ color: 'var(--ol-ink-4)', textDecoration: 'line-through' }}>{item.pattern}</span>
+                    {' → '}{item.replacement}
+                    <small style={{ marginLeft: 6, color: 'var(--ol-ink-4)' }}>{item.attribution} · {item.confidence}</small>
+                  </span>
+                  <Btn size="sm" variant="primary" onClick={() => void onResolveSuggestion(item, true)}>{t('vocabCard.accept')}</Btn>
+                  <Btn size="sm" variant="ghost" onClick={() => void onResolveSuggestion(item, false)}>{t('vocabCard.reject')}</Btn>
+                </div>
+              ))}
+            </div>
+          )}
+          <div style={{ display: 'flex', gap: 8, flexWrap: mobile ? 'wrap' : 'nowrap' }}>
             <input
               ref={inputRef}
               placeholder={t('vocab.placeholder')}
@@ -430,7 +533,45 @@ export function Vocab() {
                 transition: 'border-color 0.16s var(--ol-motion-quick), box-shadow 0.18s var(--ol-motion-soft), background 0.16s var(--ol-motion-quick)',
               }}
             />
+            <select
+              value={addScope}
+              onChange={event => setAddScope(event.target.value as 'persistent' | 'temporary')}
+              title={t('vocab.scopeTitle', { defaultValue: 'Entry scope' })}
+              style={{ height: 36, border: '0.5px solid var(--ol-line-strong)', borderRadius: 8, padding: '0 9px', background: 'var(--ol-surface-2)', color: 'var(--ol-ink)' }}
+            >
+              <option value="persistent">{t('vocab.scopeGlobal', { defaultValue: 'Global' })}</option>
+              <option value="temporary">{t('vocab.scopeProjectTemporary', { defaultValue: 'Current app · temporary' })}</option>
+            </select>
             <Btn variant="primary" icon="plus" onClick={onAdd}>{t('common.add')}</Btn>
+          </div>
+          <div style={{ marginTop: 9, display: 'grid', gridTemplateColumns: mobile ? '1fr' : 'minmax(180px, 1fr) auto auto', gap: 7 }}>
+            <input
+              value={searchQuery}
+              onChange={event => setSearchQuery(event.target.value)}
+              placeholder={t('vocab.searchPlaceholder', { defaultValue: 'Search terms or notes…' })}
+              style={{ width: '100%', boxSizing: 'border-box', height: 32, padding: '0 10px', border: '0.5px solid var(--ol-line-soft)', borderRadius: 8, background: 'var(--ol-surface-2)', color: 'var(--ol-ink)' }}
+            />
+            <select
+              value={sourceFilter}
+              onChange={event => setSourceFilter(event.target.value as typeof sourceFilter)}
+              aria-label={t('vocab.sourceFilter', { defaultValue: 'Filter by source' })}
+              style={{ height: 32, border: '0.5px solid var(--ol-line-soft)', borderRadius: 8, padding: '0 8px', background: 'var(--ol-surface-2)', color: 'var(--ol-ink)' }}
+            >
+              <option value="all">{t('vocab.sourceAll', { defaultValue: 'All sources' })}</option>
+              <option value="manual">{t('vocab.sourceManual', { defaultValue: 'Manual' })}</option>
+              <option value="learned">{t('vocab.sourceLearned', { defaultValue: 'Learned' })}</option>
+              <option value="imported">{t('vocab.sourceImported', { defaultValue: 'Imported' })}</option>
+            </select>
+            <select
+              value={scopeFilter}
+              onChange={event => setScopeFilter(event.target.value as typeof scopeFilter)}
+              aria-label={t('vocab.scopeFilter', { defaultValue: 'Filter by scope' })}
+              style={{ height: 32, border: '0.5px solid var(--ol-line-soft)', borderRadius: 8, padding: '0 8px', background: 'var(--ol-surface-2)', color: 'var(--ol-ink)' }}
+            >
+              <option value="all">{t('vocab.scopeAll', { defaultValue: 'All scopes' })}</option>
+              <option value="persistent">{t('vocab.scopePersistent', { defaultValue: 'Permanent' })}</option>
+              <option value="temporary">{t('vocab.scopeTemporaryBadge', { defaultValue: 'Temporary' })}</option>
+            </select>
           </div>
           <div style={{ marginTop: 12, display: 'flex', flexWrap: 'wrap', gap: 8, minHeight: 80 }}>
             {loading && <div style={{ fontSize: 12, color: 'var(--ol-ink-4)' }}>{t('common.loading')}</div>}
@@ -445,7 +586,7 @@ export function Vocab() {
               </div>
             )}
             {!error && manualEntries.map(e => (
-              <VocabChip key={e.id} entry={e} onRemove={() => onRemove(e.id)} onToggle={() => onToggle(e)} />
+              <VocabChip key={e.id} entry={e} onRemove={() => onRemove(e.id)} onToggle={() => onToggle(e)} onTogglePin={() => onTogglePin(e)} onUpgrade={() => onUpgradeToGlobal(e)} />
             ))}
           </div>
           {/* 自动收集的单独一区。不给每个词条挂 badge —— 混在一堆里要逐个看；
@@ -472,7 +613,7 @@ export function Vocab() {
               </div>
               <div style={{ marginTop: 10, display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                 {learnedEntries.map(e => (
-                  <VocabChip key={e.id} entry={e} onRemove={() => onRemove(e.id)} onToggle={() => onToggle(e)} />
+                  <VocabChip key={e.id} entry={e} onRemove={() => onRemove(e.id)} onToggle={() => onToggle(e)} onTogglePin={() => onTogglePin(e)} onUpgrade={() => onUpgradeToGlobal(e)} />
                 ))}
               </div>
             </>
@@ -545,11 +686,20 @@ interface VocabChipProps {
   entry: DictionaryEntry;
   onRemove: () => void;
   onToggle: () => void;
+  onTogglePin: () => void;
+  onUpgrade: () => void;
 }
 
-function VocabChip({ entry, onRemove, onToggle }: VocabChipProps) {
+function VocabChip({ entry, onRemove, onToggle, onTogglePin, onUpgrade }: VocabChipProps) {
   const { t } = useTranslation();
   const enabled = entry.enabled;
+  const temporary = entry.scope === 'temporary' || Boolean(entry.expiresAt);
+  const details = [
+    entry.source,
+    entry.scope === 'temporary' ? entry.projectKey ?? 'project' : 'global',
+    entry.lastHitAt ? `last hit ${new Date(entry.lastHitAt).toLocaleString()}` : null,
+    entry.expiresAt ? `expires ${new Date(entry.expiresAt).toLocaleString()}` : null,
+  ].filter(Boolean).join(' · ');
   return (
     <span
       style={{
@@ -563,7 +713,7 @@ function VocabChip({ entry, onRemove, onToggle }: VocabChipProps) {
         maxWidth: '100%',
         boxSizing: 'border-box',
         display: 'inline-flex', alignItems: 'center', gap: 6,
-        padding: '5px 10px 5px 12px',
+        padding: '5px 8px 5px 12px',
         borderRadius: 999,
         border: '0.5px solid var(--ol-line-strong)',
         background: enabled ? (entry.hits > 0 ? 'var(--ol-blue-soft)' : 'var(--ol-surface)') : 'var(--ol-surface-2)',
@@ -590,6 +740,15 @@ function VocabChip({ entry, onRemove, onToggle }: VocabChipProps) {
       >
         {entry.phrase}
       </button>
+      <span title={details} style={{ flexShrink: 0, padding: '1px 5px', borderRadius: 5, background: 'rgba(0,0,0,0.05)', color: 'var(--ol-ink-4)', fontSize: 9, fontFamily: 'var(--ol-font-sans)' }}>
+        {temporary
+          ? t('vocab.scopeTemporaryBadge', { defaultValue: 'temporary' })
+          : entry.source === 'learned'
+            ? t('vocab.sourceLearned', { defaultValue: 'learned' })
+            : entry.source === 'imported'
+              ? t('vocab.sourceImported', { defaultValue: 'imported' })
+              : t('vocab.sourceManual', { defaultValue: 'manual' })}
+      </span>
       <span
         style={{
           minWidth: 18, height: 18, padding: '0 5px',
@@ -601,6 +760,23 @@ function VocabChip({ entry, onRemove, onToggle }: VocabChipProps) {
           fontFamily: 'var(--ol-font-sans)',
         }}
       >{entry.hits}</span>
+      <button
+        onClick={onTogglePin}
+        title={entry.pinned ? t('vocab.unpin', { defaultValue: 'Unpin' }) : t('vocab.pin', { defaultValue: 'Pin for ASR priority' })}
+        aria-label={entry.pinned ? t('vocab.unpin', { defaultValue: 'Unpin' }) : t('vocab.pin', { defaultValue: 'Pin' })}
+        style={{ width: 16, height: 16, padding: 0, border: 0, background: 'transparent', color: entry.pinned ? 'var(--ol-blue)' : 'var(--ol-ink-4)', flexShrink: 0 }}
+      >
+        <svg width="10" height="10" viewBox="0 0 12 12" aria-hidden="true"><path d="M4 1h4l-.6 3L9.5 6v1H6.7v4L6 11.7 5.3 11V7H2.5V6l2.1-2L4 1Z" fill={entry.pinned ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="1" /></svg>
+      </button>
+      {temporary && (
+        <button
+          onClick={onUpgrade}
+          title={t('vocab.upgradeGlobal', { defaultValue: 'Keep permanently as a global term' })}
+          style={{ height: 18, padding: '0 5px', border: '0.5px solid var(--ol-line-soft)', borderRadius: 5, background: 'transparent', color: 'var(--ol-ink-3)', fontSize: 9, flexShrink: 0 }}
+        >
+          {t('vocab.keep', { defaultValue: 'Keep' })}
+        </button>
+      )}
       <button
         onClick={onRemove}
         aria-label={t('vocab.removeAria')}

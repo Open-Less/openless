@@ -942,8 +942,7 @@ fn finalize_polished_text(
 /// 该不该武装手改监听。
 ///
 /// 三个条件缺一不可：
-/// - **开关开着**。手改学习和光标上下文共用 `cursorContextEnabled`：两者用的是同一套
-///   AX 读取、面对的是同一个隐私问题，拆成两个开关只会让用户以为关掉一个就安全了。
+/// - **总开关与手改子开关都开着**。总开关是隐私边界，子开关决定是否启动观察器。
 /// - **真的落字了**。`PasteSent` / `CopiedFallback` / `Failed` 意味着文字压根没进目标
 ///   控件，或者进没进我们并不知道 —— 拿它当基线只会学到幻觉。
 /// - **落的字非空**。空文本没有「用户改了哪个词」可言。
@@ -1004,7 +1003,41 @@ async fn read_cursor_context_for_prompt(enabled: bool) -> Option<String> {
 /// 面对的是同一个隐私问题，分成两个开关只会让用户以为关掉一个就安全了。
 ///
 /// 任何一步失败都只是「学不到东西」，绝不影响已经落到屏幕上的文字。
-fn arm_edit_watch(inner: &Arc<Inner>, status: InsertStatus, typed_text: &str) {
+#[derive(Clone)]
+struct EditAttributionSnapshot {
+    asr_original: Option<String>,
+    asr_corrected: Option<String>,
+    llm_final: String,
+    source_app: Option<String>,
+}
+
+fn classify_edit_attribution(
+    edit: &crate::host_document::EditPair,
+    snapshot: &EditAttributionSnapshot,
+) -> crate::types::CorrectionAttribution {
+    if snapshot
+        .asr_original
+        .as_deref()
+        .is_some_and(|text| text.contains(&edit.source))
+        || snapshot
+            .asr_corrected
+            .as_deref()
+            .is_some_and(|text| text.contains(&edit.source))
+    {
+        crate::types::CorrectionAttribution::Asr
+    } else if snapshot.llm_final.contains(&edit.source) {
+        crate::types::CorrectionAttribution::Llm
+    } else {
+        crate::types::CorrectionAttribution::Unknown
+    }
+}
+
+fn arm_edit_watch(
+    inner: &Arc<Inner>,
+    status: InsertStatus,
+    typed_text: &str,
+    attribution: EditAttributionSnapshot,
+) {
     use std::sync::atomic::Ordering;
 
     // 无论如何都先把上一次的解除掉：哪怕这次不武装，旧观察器也不该继续活着。
@@ -1012,41 +1045,82 @@ fn arm_edit_watch(inner: &Arc<Inner>, status: InsertStatus, typed_text: &str) {
     super::disarm_edit_watch(inner);
     let generation = inner.edit_watch_generation.load(Ordering::SeqCst);
 
-    if !should_arm_edit_watch(inner.prefs.get().cursor_context_enabled, status, typed_text) {
+    let prefs = inner.prefs.get();
+    let edit_learning_enabled = prefs.edit_learning_enabled;
+    if !should_arm_edit_watch(
+        // 划词纠错和手改学习共用同一条受安全闸门保护的观察器，但各自有独立语义：
+        // 关掉「从手改学习」只是不产词条建议，不应让显式选区气泡一起失效。
+        prefs.cursor_context_enabled,
+        status,
+        typed_text,
+    ) {
         return;
     }
     let mut slot = inner.edit_watcher.lock();
     let inner_for_edit = Arc::clone(inner);
-    *slot = crate::host_document::watch_for_edits(typed_text.to_string(), move |edit| {
-        // 代次对不上 = 这条来自已经被换掉的观察器，丢掉。不打 info：正常解除也会走到
-        // 这里，日常并不稀奇。
-        let current = inner_for_edit.edit_watch_generation.load(Ordering::SeqCst);
-        if current != generation {
-            log::debug!(
-                "[cursor-context] dropping a late report from watch generation {generation} (now {current})"
+    let inner_for_selection = Arc::clone(inner);
+    let attribution_for_selection = attribution.clone();
+    *slot = crate::host_document::watch_for_edits_and_selection(
+        typed_text.to_string(),
+        move |observation| {
+            // 代次对不上 = 这条来自已经被换掉的观察器，丢掉。不打 info：正常解除也会走到
+            // 这里，日常并不稀奇。
+            let current = inner_for_edit.edit_watch_generation.load(Ordering::SeqCst);
+            if current != generation {
+                log::debug!(
+                    "[cursor-context] dropping a late report from watch generation {generation} (now {current})"
+                );
+                return;
+            }
+            if !edit_learning_enabled {
+                return;
+            }
+            log::info!(
+                "[cursor-context] user edit detected: source={:?} target={:?}",
+                observation.edit.source,
+                observation.edit.target
             );
-            return;
-        }
-        log::info!(
-            "[cursor-context] user edit detected: source={:?} target={:?}",
-            edit.source,
-            edit.target
-        );
-        handle_user_edit(&inner_for_edit, edit);
-    });
+            handle_user_edit(&inner_for_edit, observation, &attribution);
+        },
+        move |selection| {
+            let current = inner_for_selection
+                .edit_watch_generation
+                .load(Ordering::SeqCst);
+            if current != generation {
+                return;
+            }
+            #[cfg(not(mobile))]
+            super::selection_correction::handle_selection_observation(
+                &inner_for_selection,
+                selection,
+                attribution_for_selection.source_app.clone(),
+            );
+        },
+    );
 }
 
 /// 两条听写管线共同的插入后反馈：先武装手改监听，再累计词条命中并通知前端。
-fn handle_post_insert_feedback(inner: &Arc<Inner>, status: InsertStatus, typed_text: &str) -> u64 {
-    arm_edit_watch(inner, status, typed_text);
+fn handle_post_insert_feedback(
+    inner: &Arc<Inner>,
+    status: InsertStatus,
+    typed_text: &str,
+    attribution: EditAttributionSnapshot,
+) -> u64 {
+    arm_edit_watch(inner, status, typed_text, attribution);
 
-    let total_hits = match inner.vocab.record_hits(typed_text) {
-        Ok(hits) => hits,
-        Err(error) => {
-            log::error!("[coord] record_hits failed: {error}");
-            0
-        }
-    };
+    let project_key = super::current_project_key(inner);
+    let temporary_ttl_days = inner.prefs.get().temporary_vocab_ttl_days;
+    let total_hits =
+        match inner
+            .vocab
+            .record_hits(typed_text, project_key.as_deref(), temporary_ttl_days)
+        {
+            Ok(hits) => hits,
+            Err(error) => {
+                log::error!("[coord] record_hits failed: {error}");
+                0
+            }
+        };
     if total_hits > 0 {
         if let Some(app) = inner.app.lock().clone() {
             let _ = app.emit("vocab:updated", total_hits);
@@ -1063,12 +1137,22 @@ fn handle_post_insert_feedback(inner: &Arc<Inner>, status: InsertStatus, typed_t
 /// typeless`）。观察器看到的是编辑过程中的每一帧，而中间态和一次纠错在文本上没有区别。
 ///
 /// 分不出来就别猜 —— 一律弹卡片，让用户点勾或点叉。
-fn handle_user_edit(inner: &Arc<Inner>, edit: crate::host_document::EditPair) {
-    let Some(rule) = crate::host_document::learned_rule(&edit) else {
+fn handle_user_edit(
+    inner: &Arc<Inner>,
+    observation: crate::host_document::EditObservation,
+    attribution: &EditAttributionSnapshot,
+) {
+    let Some(rule) = crate::host_document::learned_rule(&observation.edit) else {
         log::debug!("[cursor-context] edit is not word-like; logged only");
         return;
     };
-    queue_correction_suggestion(inner, &rule);
+    queue_correction_suggestion(
+        inner,
+        &rule,
+        observation.confidence,
+        classify_edit_attribution(&observation.edit, attribution),
+        attribution.source_app.clone(),
+    );
 }
 
 /// 排进待确认队列，并把卡片弹到胶囊那个位置。
@@ -1078,7 +1162,27 @@ fn handle_user_edit(inner: &Arc<Inner>, edit: crate::host_document::EditPair) {
 ///
 /// 卡片本身不抢焦点 —— 胶囊窗口是 nonactivating panel，你在别的 app 里打字时它弹
 /// 出来不会把光标夺走。
-fn queue_correction_suggestion(inner: &Arc<Inner>, rule: &crate::host_document::LearnedRule) {
+fn queue_correction_suggestion(
+    inner: &Arc<Inner>,
+    rule: &crate::host_document::LearnedRule,
+    confidence: crate::types::CorrectionConfidence,
+    attribution: crate::types::CorrectionAttribution,
+    source_app: Option<String>,
+) {
+    let prefs = inner.prefs.get();
+    let created_at = Utc::now();
+    let suggestion = crate::types::PendingCorrection {
+        id: uuid::Uuid::new_v4().to_string(),
+        pattern: rule.pattern.clone(),
+        replacement: rule.replacement.clone(),
+        confidence,
+        attribution,
+        created_at: created_at.to_rfc3339(),
+        expires_at: prefs
+            .vocab_suggestion_inbox_enabled
+            .then(|| (created_at + chrono::Duration::days(7)).to_rfc3339()),
+        source_app,
+    };
     {
         let mut pending = inner.pending_corrections.lock();
         // 同一条建议重复出现（用户在不同会话里犯了同样的错）不重复排队。
@@ -1091,11 +1195,12 @@ fn queue_correction_suggestion(inner: &Arc<Inner>, rule: &crate::host_document::
         if pending.len() >= crate::types::MAX_PENDING_CORRECTIONS {
             pending.remove(0);
         }
-        pending.push(crate::types::PendingCorrection {
-            id: uuid::Uuid::new_v4().to_string(),
-            pattern: rule.pattern.clone(),
-            replacement: rule.replacement.clone(),
-        });
+        pending.push(suggestion.clone());
+    }
+    if prefs.vocab_suggestion_inbox_enabled {
+        if let Err(error) = inner.vocab.save_suggestion(suggestion) {
+            log::warn!("[cursor-context] save vocab suggestion inbox failed: {error}");
+        }
     }
     log::info!(
         "[cursor-context] vocabulary suggested (awaiting confirmation): {:?} (was {:?})",
@@ -1103,6 +1208,22 @@ fn queue_correction_suggestion(inner: &Arc<Inner>, rule: &crate::host_document::
         rule.pattern
     );
     super::show_vocab_suggestion_card(inner);
+}
+
+/// 显式「直接替换」完成后的高置信建议。仍然只进入待确认卡片，不静默写词典；与后台
+/// 手改学习共用去重、收件箱和容量策略。
+pub(super) fn queue_explicit_correction_suggestion(
+    inner: &Arc<Inner>,
+    rule: &crate::host_document::LearnedRule,
+    source_app: Option<String>,
+) {
+    queue_correction_suggestion(
+        inner,
+        rule,
+        crate::types::CorrectionConfidence::High,
+        crate::types::CorrectionAttribution::Asr,
+        source_app,
+    );
 }
 
 /// 收进词汇表。**只写词汇表，不写纠正规则。**
@@ -2120,11 +2241,63 @@ pub(super) async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
 /// begin_session 的带参版本，voice_agent=true 时在 Starting 阶段就标记好，
 /// 防止 finish_starting_session 处理 pending_stop 时丢失标志。
 pub(super) async fn begin_session_as(inner: &Arc<Inner>, voice_agent: bool) -> Result<(), String> {
+    begin_session_as_with_resume(inner, voice_agent, None, false).await
+}
+
+#[cfg(not(mobile))]
+pub(super) async fn begin_selection_correction_session(inner: &Arc<Inner>) -> Result<(), String> {
+    begin_session_as_with_resume(inner, false, None, true).await
+}
+
+struct ResumedRecording {
+    session_id: SessionId,
+    prior_duration_ms: u64,
+    pcm: Vec<u8>,
+}
+
+pub(super) async fn resume_cancelled_recording(
+    inner: &Arc<Inner>,
+    session_id: SessionId,
+    prior_duration_ms: u64,
+    pcm: Vec<u8>,
+) -> Result<(), String> {
+    begin_session_as_with_resume(
+        inner,
+        false,
+        Some(ResumedRecording {
+            session_id,
+            prior_duration_ms,
+            pcm,
+        }),
+        false,
+    )
+    .await
+}
+
+async fn begin_session_as_with_resume(
+    inner: &Arc<Inner>,
+    voice_agent: bool,
+    resume: Option<ResumedRecording>,
+    selection_correction: bool,
+) -> Result<(), String> {
+    let resume_identity = resume
+        .as_ref()
+        .map(|value| (value.session_id, value.prior_duration_ms));
     let current_session_id = {
         let mut state = inner.state.lock();
-        let Some(session_id) =
-            begin_session_state(&mut state, capture_focus_target(), capture_frontmost_app())
-        else {
+        let focus_target = capture_focus_target();
+        let front_app = capture_frontmost_app();
+        let session_id = match resume_identity {
+            Some((session_id, prior_duration_ms)) => begin_session_state_with_id(
+                &mut state,
+                focus_target,
+                front_app,
+                session_id,
+                std::time::Duration::from_millis(prior_duration_ms),
+            ),
+            None => begin_session_state(&mut state, focus_target, front_app),
+        };
+        let Some(session_id) = session_id else {
             return Ok(());
         };
         if voice_agent {
@@ -2135,6 +2308,29 @@ pub(super) async fn begin_session_as(inner: &Arc<Inner>, voice_agent: bool) -> R
         }
         session_id
     };
+    #[cfg(not(mobile))]
+    if selection_correction {
+        if let Err(error) =
+            super::selection_correction::bind_active_session(inner, current_session_id)
+        {
+            inner.state.lock().phase = SessionPhase::Idle;
+            return Err(error);
+        }
+    } else {
+        super::selection_correction::dismiss_candidate(inner);
+    }
+    inner.audio_archive_active.store(false, Ordering::Relaxed);
+    *inner.cancelled_recording_recovery.lock() = None;
+    if let Some(resume) = resume {
+        store_resume_audio_for_session(inner, current_session_id, resume.pcm);
+        log::info!(
+            "[coord] resuming cancelled recording session={} prior_duration_ms={}",
+            current_session_id,
+            resume.prior_duration_ms
+        );
+    } else {
+        *inner.resume_audio_pcm.lock() = None;
+    }
     // 新一次听写开始 → 上一次的手改监听作废。用户已经不在改上一段了，继续盯着只会
     // 把新的输入误判成对旧文本的修改。这是「必须保证解除」的四条规则之一。
     //
@@ -2171,7 +2367,15 @@ pub(super) async fn begin_session_as(inner: &Arc<Inner>, voice_agent: bool) -> R
     // 这样把「视觉反馈」与「麦克风就绪」解耦：即时反馈 + 完整入场动画，同时用预备→点亮的
     // 过渡守住「不漏首字」。若随后凭证/权限校验失败，下面分支会用 Error 覆盖这一帧。
     inner.capsule_warming.store(true, Ordering::SeqCst);
-    emit_capsule(inner, CapsuleState::Recording, 0.0, 0, None, None);
+    let initial_elapsed = inner.state.lock().started_at.elapsed().as_millis() as u64;
+    emit_capsule(
+        inner,
+        CapsuleState::Recording,
+        0.0,
+        initial_elapsed,
+        None,
+        None,
+    );
 
     // 多模态（Omni）模式：不构建 ASR，录音 PCM 直接进缓冲器，松键后一步出文。
     if pipeline_multimodal_enabled(&inner.prefs.get()) {
@@ -3080,11 +3284,18 @@ pub(super) async fn start_recorder_for_starting(
         );
         crate::persistence::recording_path_for_session(&session_id.to_string()).ok()
     };
-    match Recorder::start(
+    let resume_pcm = take_resume_audio_for_session(inner, session_id);
+    if let Some(prefix) = resume_pcm.as_deref() {
+        // 新建的 ASR / omni consumer 必须先看到误按 Esc 前的完整 PCM，再接实时麦克风块。
+        // Recorder 也会把同一前缀写回归档，最终 history 播放与实际转写输入完全一致。
+        consumer.consume_pcm_chunk(prefix);
+    }
+    match Recorder::start_with_archive_prefix(
         microphone_device_name,
         consumer,
         level_handler,
         audio_archive_path,
+        resume_pcm,
     ) {
         Ok((rec, runtime_errors, archive_active)) => {
             // 把 archive 实际创建状态存到 Inner，让 history 写入路径（含 empty-transcript
@@ -3277,6 +3488,9 @@ fn build_transcribe_failed_session(
         pipeline_mode: None,
         asr_ms: Some(asr_ms),
         polish_ms: None,
+        asr_dictionary_delivery: None,
+        llm_dictionary_sent_count: None,
+        llm_dictionary_delivery: None,
     }
 }
 
@@ -3302,6 +3516,7 @@ fn write_transcribe_failed_history(
     if let Some(label) = asr_call_label {
         session.asr_provider = Some(label.provider.clone());
         session.asr_model = label.model.clone();
+        session.asr_dictionary_delivery = Some(super::dictionary_delivery_report(inner, label));
     }
     if let Err(e) = inner.history.append_with_retention(
         session,
@@ -3325,6 +3540,8 @@ fn fail_dictation(
     err: String,
     asr_call_label: Option<&AsrCallLabel>,
 ) -> Result<(), String> {
+    #[cfg(not(mobile))]
+    let selection_correction = super::selection_correction::is_active_session(inner, session_id);
     write_transcribe_failed_history(inner, session_id, elapsed, asr_ms, asr_call_label);
     emit_capsule(
         inner,
@@ -3335,6 +3552,10 @@ fn fail_dictation(
         None,
     );
     restore_prepared_windows_ime_session(inner, session_id);
+    #[cfg(not(mobile))]
+    if selection_correction {
+        super::selection_correction::cancel_active(inner);
+    }
     inner.state.lock().phase = SessionPhase::Idle;
     // 与成功 / 取消收尾一致：回 Idle 即设冷却，把识别中缓存在 hotkey channel 里的 Pressed
     // 一并静默丢弃（issue #856）——否则失败收尾后那条排队按下会立刻开出一条新录音，用户以为
@@ -4326,6 +4547,9 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
         Some(label) => (Some(label.provider.clone()), label.model.clone()),
         None => (None, None),
     };
+    let asr_dictionary_delivery = asr_call_label
+        .as_ref()
+        .map(|label| super::dictionary_delivery_report(inner, label));
 
     // ASR 返回空转写护栏（来自 PR #66）：写一条 emptyTranscript 失败历史 + 错误胶囊，
     // 与 main 上其它 error 路径保持一致（带 schedule_capsule_idle 让胶囊自动消失）。
@@ -4343,6 +4567,28 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     }
 
     if raw.text.trim().is_empty() {
+        #[cfg(not(mobile))]
+        if super::selection_correction::is_active_session(inner, current_session_id) {
+            restore_prepared_windows_ime_session(inner, current_session_id);
+            return super::selection_correction::finish_transcript(
+                inner,
+                current_session_id,
+                raw.text.clone(),
+                raw.duration_ms,
+                super::selection_correction::SelectionCorrectionHistoryMetadata {
+                    asr_provider,
+                    asr_model,
+                    asr_ms: Some(asr_ms),
+                    asr_dictionary_delivery,
+                    llm_provider: None,
+                    llm_model: None,
+                    pipeline_mode: None,
+                    polish_ms: None,
+                    has_audio_recording: Some(inner.audio_archive_active.load(Ordering::Relaxed)),
+                },
+            )
+            .await;
+        }
         // 失败条目同样记下当时的前台应用：排查「在某个 app 里总是识别不到」时，这一列
         // 就是线索本身。
         let empty_front =
@@ -4380,6 +4626,9 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
             pipeline_mode: None,
             asr_ms: Some(asr_ms),
             polish_ms: None,
+            asr_dictionary_delivery: asr_dictionary_delivery.clone(),
+            llm_dictionary_sent_count: None,
+            llm_dictionary_delivery: None,
         };
         let prefs_snapshot = inner.prefs.get();
         if let Err(e) = inner.history.append_with_retention(
@@ -4452,6 +4701,29 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
             );
             asr_transcript = Some(std::mem::replace(&mut raw.text, corrected));
         }
+    }
+
+    #[cfg(not(mobile))]
+    if super::selection_correction::is_active_session(inner, current_session_id) {
+        restore_prepared_windows_ime_session(inner, current_session_id);
+        return super::selection_correction::finish_transcript(
+            inner,
+            current_session_id,
+            raw.text.clone(),
+            raw.duration_ms,
+            super::selection_correction::SelectionCorrectionHistoryMetadata {
+                asr_provider,
+                asr_model,
+                asr_ms: Some(asr_ms),
+                asr_dictionary_delivery,
+                llm_provider: None,
+                llm_model: None,
+                pipeline_mode: None,
+                polish_ms: None,
+                has_audio_recording: Some(inner.audio_archive_active.load(Ordering::Relaxed)),
+            },
+        )
+        .await;
     }
 
     // Cloud Agent 语音分流：长按升级的会话不走润色/插入，转写交给 Claude 跑任务、结果弹胶囊。
@@ -4553,7 +4825,7 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
 
     // 此刻焦点仍在目标 app 上；开关关闭时公共入口会在任何 AX 调用前返回。
     let cursor_context = read_cursor_context_for_prompt(should_read_cursor_context(
-        prefs.cursor_context_enabled,
+        prefs.cursor_context_enabled && prefs.cursor_context_llm_enabled,
         false,
     ))
     .await;
@@ -4716,7 +4988,17 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
     let inserted_chars = polished.chars().count() as u32;
 
     // `polished` 在流式路径下就是实际打到屏幕上的 typed_text；公共入口据此武装监听并计数。
-    let total_hits = handle_post_insert_feedback(inner, status, &polished);
+    let total_hits = handle_post_insert_feedback(
+        inner,
+        status,
+        &polished,
+        EditAttributionSnapshot {
+            asr_original: Some(asr_transcript.clone().unwrap_or_else(|| raw.text.clone())),
+            asr_corrected: Some(raw.text.clone()),
+            llm_final: polished.clone(),
+            source_app: front_app.clone(),
+        },
+    );
 
     // polish 失败时在 history 里标记 polishFailed，让用户能在历史详情看到为什么这次输出
     // 不是预期的 mode 风格。即使失败也不丢词 — final_text 仍是原文（保留"用户的话不丢"语义）。
@@ -4768,6 +5050,15 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
         pipeline_mode: None,
         asr_ms: Some(asr_ms),
         polish_ms,
+        asr_dictionary_delivery,
+        llm_dictionary_sent_count: llm_call
+            .as_ref()
+            .map(|_| hotword_strs.len().min(u32::MAX as usize) as u32),
+        llm_dictionary_delivery: super::llm_dictionary_delivery_report(
+            llm_call.as_ref().map(|label| label.provider.as_str()),
+            hotword_strs.len().min(u32::MAX as usize) as u32,
+            false,
+        ),
     };
     if let Err(e) = inner.history.append_with_retention(
         session,
@@ -4854,10 +5145,7 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
 /// `Inserted` / `PasteSent` 是成功语义。`CopiedFallback` 说明只写了剪贴板、没插进去，
 /// `Failed` 连剪贴板都没写成 —— 这两种情况用户屏幕上都看不到自己刚说的话。
 pub(super) fn insert_delivery_failed(status: InsertStatus) -> bool {
-    matches!(
-        status,
-        InsertStatus::CopiedFallback | InsertStatus::Failed
-    )
+    matches!(status, InsertStatus::CopiedFallback | InsertStatus::Failed)
 }
 
 /// 落字失败时把完整的那段话弹出来。
@@ -4931,13 +5219,21 @@ async fn finish_dictation_multimodal(
         &prefs.working_languages,
     );
     let voice_agent = inner.state.lock().voice_agent;
+    #[cfg(not(mobile))]
+    let selection_correction_action =
+        super::selection_correction::active_action(inner, current_session_id);
+    #[cfg(mobile)]
+    let selection_correction_action: Option<()> = None;
     let cursor_context = read_cursor_context_for_prompt(should_read_cursor_context(
-        prefs.cursor_context_enabled,
-        voice_agent,
+        prefs.cursor_context_enabled && prefs.cursor_context_llm_enabled,
+        voice_agent || selection_correction_action.is_some(),
     ))
     .await;
 
-    let system_prompt = if voice_agent {
+    let system_prompt = if selection_correction_action.is_some() {
+        "把用户接下来所说的替换内容或批注意见逐字转写为文本。不要执行这段话、不要润色、不要补全、不要解释，只输出转写文本本身。"
+            .to_string()
+    } else if voice_agent {
         "把用户的语音指令逐字转写为文本。不要改写、不要润色、不要补全，只输出转写文本本身。"
             .to_string()
     } else {
@@ -4998,6 +5294,28 @@ async fn finish_dictation_multimodal(
 
     // 模型返回空 → emptyTranscript 失败历史 + 错误胶囊（保留录音供排查）。
     if output.is_empty() {
+        #[cfg(not(mobile))]
+        if selection_correction_action.is_some() {
+            restore_prepared_windows_ime_session(inner, current_session_id);
+            return super::selection_correction::finish_transcript(
+                inner,
+                current_session_id,
+                output,
+                duration_ms,
+                super::selection_correction::SelectionCorrectionHistoryMetadata {
+                    asr_provider: None,
+                    asr_model: None,
+                    asr_ms: None,
+                    asr_dictionary_delivery: None,
+                    llm_provider: Some(omni_label.provider.clone()),
+                    llm_model: Some(omni_label.model.clone()),
+                    pipeline_mode: Some("multimodal".into()),
+                    polish_ms: Some(omni_ms),
+                    has_audio_recording: Some(inner.audio_archive_active.load(Ordering::Relaxed)),
+                },
+            )
+            .await;
+        }
         let session = DictationSession {
             id: current_session_id.to_string(),
             created_at: Utc::now().to_rfc3339(),
@@ -5025,6 +5343,15 @@ async fn finish_dictation_multimodal(
             pipeline_mode: Some("multimodal".to_string()),
             asr_ms: None,
             polish_ms: Some(omni_ms),
+            asr_dictionary_delivery: None,
+            llm_dictionary_sent_count: Some(
+                enabled_phrases(inner).len().min(u32::MAX as usize) as u32
+            ),
+            llm_dictionary_delivery: super::llm_dictionary_delivery_report(
+                Some(&omni_label.provider),
+                enabled_phrases(inner).len().min(u32::MAX as usize) as u32,
+                true,
+            ),
         };
         let prefs_snapshot = inner.prefs.get();
         if let Err(e) = inner.history.append_with_retention(
@@ -5061,6 +5388,38 @@ async fn finish_dictation_multimodal(
             output,
             elapsed,
             super::CapsuleFeedback::Show,
+        )
+        .await;
+    }
+
+    #[cfg(not(mobile))]
+    if selection_correction_action.is_some() {
+        let correction_rules = inner.correction_rules.list().unwrap_or_else(|error| {
+            log::warn!("[selection-correction] load correction rules failed: {error}; continuing");
+            Vec::new()
+        });
+        let transcript = if correction_rules.is_empty() {
+            output
+        } else {
+            apply_correction_rules(&output, &correction_rules)
+        };
+        restore_prepared_windows_ime_session(inner, current_session_id);
+        return super::selection_correction::finish_transcript(
+            inner,
+            current_session_id,
+            transcript,
+            duration_ms,
+            super::selection_correction::SelectionCorrectionHistoryMetadata {
+                asr_provider: None,
+                asr_model: None,
+                asr_ms: None,
+                asr_dictionary_delivery: None,
+                llm_provider: Some(omni_label.provider),
+                llm_model: Some(omni_label.model),
+                pipeline_mode: Some("multimodal".into()),
+                polish_ms: Some(omni_ms),
+                has_audio_recording: Some(inner.audio_archive_active.load(Ordering::Relaxed)),
+            },
         )
         .await;
     }
@@ -5119,7 +5478,17 @@ async fn finish_dictation_multimodal(
     restore_prepared_windows_ime_session(inner, current_session_id);
     let inserted_chars = polished.chars().count() as u32;
 
-    let total_hits = handle_post_insert_feedback(inner, status, &polished);
+    let total_hits = handle_post_insert_feedback(
+        inner,
+        status,
+        &polished,
+        EditAttributionSnapshot {
+            asr_original: None,
+            asr_corrected: None,
+            llm_final: polished.clone(),
+            source_app: inner.state.lock().front_app.clone(),
+        },
+    );
 
     let error_code = dictation_error_code(
         status,
@@ -5158,6 +5527,19 @@ async fn finish_dictation_multimodal(
         pipeline_mode: Some("multimodal".to_string()),
         asr_ms: None,
         polish_ms: Some(omni_ms),
+        asr_dictionary_delivery: Some(crate::types::DictionaryDeliveryReport {
+            provider: omni_label.provider.clone(),
+            mode: crate::types::DictionaryDeliveryMode::MultimodalPrompt,
+            sent_count: enabled_phrases(inner).len().min(u32::MAX as usize) as u32,
+            dropped_count: 0,
+            reason: None,
+        }),
+        llm_dictionary_sent_count: Some(enabled_phrases(inner).len().min(u32::MAX as usize) as u32),
+        llm_dictionary_delivery: super::llm_dictionary_delivery_report(
+            Some(&omni_label.provider),
+            enabled_phrases(inner).len().min(u32::MAX as usize) as u32,
+            true,
+        ),
     };
     if let Err(e) = inner.history.append_with_retention(
         session,
@@ -5227,6 +5609,8 @@ fn fail_dictation_multimodal(
     user_msg: String,
     err: String,
 ) -> Result<(), String> {
+    #[cfg(not(mobile))]
+    let selection_correction = super::selection_correction::is_active_session(inner, session_id);
     let prefs = inner.prefs.get();
     let front_app = inner.state.lock().front_app.clone();
     let mut session = build_transcribe_failed_session(
@@ -5254,6 +5638,10 @@ fn fail_dictation_multimodal(
         None,
     );
     restore_prepared_windows_ime_session(inner, session_id);
+    #[cfg(not(mobile))]
+    if selection_correction {
+        super::selection_correction::cancel_active(inner);
+    }
     inner.state.lock().phase = SessionPhase::Idle;
     {
         let now = std::time::Instant::now();
@@ -5288,6 +5676,16 @@ pub(super) fn dictation_error_code(
 }
 
 pub(super) fn cancel_session(inner: &Arc<Inner>) -> bool {
+    cancel_session_impl(inner, false)
+}
+
+/// 全局 Esc 的录音阶段专用路径：仍然取消会话，但先保存 WAV + 待处理历史，并短暂给出
+/// 「是否继续」入口。组合键误触撤销、显式取消按钮等仍走原 `cancel_session`，不会污染历史。
+pub(super) fn cancel_session_after_escape(inner: &Arc<Inner>) -> bool {
+    cancel_session_impl(inner, true)
+}
+
+fn cancel_session_impl(inner: &Arc<Inner>, recover_recording: bool) -> bool {
     let Some(decision) = ({
         let mut state = inner.state.lock();
         let phase = state.phase;
@@ -5299,6 +5697,20 @@ pub(super) fn cancel_session(inner: &Arc<Inner>) -> bool {
     }) else {
         return false;
     };
+    #[cfg(not(mobile))]
+    let selection_correction =
+        super::selection_correction::is_active_session(inner, decision.session_id);
+    #[cfg(mobile)]
+    let selection_correction = false;
+    let should_offer_recovery = recover_recording
+        && matches!(
+            decision.phase,
+            SessionPhase::Starting | SessionPhase::Listening
+        )
+        && !inner.state.lock().voice_agent
+        && !selection_correction;
+    let elapsed = inner.state.lock().started_at.elapsed().as_millis() as u64;
+    *inner.cancelled_recording_recovery.lock() = None;
 
     // 顺序要紧：先把 UI 收干净，再去拆麦克风 / ASR。
     //
@@ -5306,7 +5718,8 @@ pub(super) fn cancel_session(inner: &Arc<Inner>) -> bool {
     // `Recorder::stop()` 要 join 音频线程，而音频线程退出前要 join liveness watchdog，
     // watchdog 又睡在自己的检查间隔里，实测撤销到胶囊消失能差 0.8~1 秒。用户按 Option+Q
     // 或按 Esc 的观感就是「明明已经取消了，胶囊还赖着」。拆资源不需要 UI 等它，反正
-    // 这段时间录到的音频整条会话都要丢。
+    // 传统取消路径会丢弃这段会话；Esc 恢复路径则在 join 完成、WAV header 回填后才写历史
+    // 并显示「是否继续」，不会把仍在写入的文件暴露给恢复入口。
     //
     // 代价：胶囊消失后麦克风还会多开一小会儿（系统菜单栏的录音小圆点晚灭）。这段窗口
     // 必须足够短 —— 否则紧接着那次真想说话的按下会在旧 recorder 还占着麦克风时
@@ -5328,7 +5741,6 @@ pub(super) fn cancel_session(inner: &Arc<Inner>) -> bool {
     // phase 拼 payload，提到前面会发出「还在进行中」的那一帧。
     emit_capsule(inner, CapsuleState::Cancelled, 0.0, 0, None, None);
     log::info!("[coord] session cancelled (was {:?})", decision.phase);
-    schedule_capsule_idle(inner, CAPSULE_CANCEL_HIDE_DELAY_MS);
     // 取消时也熄灭整屏彩虹描边（dictation session 没开描边，hide 是无害 no-op）。
     if let Some(app) = inner.app.lock().clone() {
         crate::hide_less_computer_glow(&app);
@@ -5337,7 +5749,134 @@ pub(super) fn cancel_session(inner: &Arc<Inner>) -> bool {
     stop_recorder_for_session(inner, decision.session_id);
     cancel_asr_for_session(inner, decision.session_id);
     restore_prepared_windows_ime_session(inner, decision.session_id);
+    #[cfg(not(mobile))]
+    if selection_correction {
+        super::selection_correction::cancel_active(inner);
+    }
+
+    if should_offer_recovery
+        && write_cancelled_recording_history(inner, decision.session_id, elapsed)
+    {
+        let session_id = decision.session_id.to_string();
+        *inner.cancelled_recording_recovery.lock() = Some(session_id.clone());
+        // 恢复入口存在期间第二次 Esc 归 OpenLess 消费，不透传给用户正在操作的 App。
+        // 提示稍晚一拍再显示：连续双击 Esc 时第二个事件会先清掉 pending，用户只看到
+        // 录音结束，不会闪出一个马上消失的浮层；单按时延迟很短，仍然近乎即时。
+        crate::hotkey::set_esc_exclusive(true);
+        schedule_cancelled_recording_recovery_prompt(inner, session_id, elapsed);
+    } else {
+        schedule_capsule_idle(inner, CAPSULE_CANCEL_HIDE_DELAY_MS);
+    }
     true
+}
+
+fn write_cancelled_recording_history(
+    inner: &Arc<Inner>,
+    session_id: SessionId,
+    duration_ms: u64,
+) -> bool {
+    if !inner.audio_archive_active.load(Ordering::Relaxed) {
+        return false;
+    }
+    let Ok(path) = crate::persistence::recording_path_for_session(&session_id.to_string()) else {
+        return false;
+    };
+    let has_pcm = std::fs::metadata(&path)
+        .map(|metadata| metadata.len() > 44)
+        .unwrap_or(false);
+    if !has_pcm {
+        log::info!("[coord] Esc cancelled before any PCM was archived; skipping recovery history");
+        return false;
+    }
+
+    let prefs = inner.prefs.get();
+    let front_app = inner.state.lock().front_app.clone();
+    let mut session = build_transcribe_failed_session(
+        session_id,
+        duration_ms,
+        0,
+        prefs.default_mode,
+        true,
+        front_app.as_deref(),
+    );
+    session.error_code = Some("recordingCancelled".to_string());
+    session.asr_ms = None;
+    match inner.history.upsert_with_retention(
+        session,
+        prefs.history_retention_days,
+        prefs.history_max_entries,
+    ) {
+        Ok(()) => true,
+        Err(error) => {
+            log::error!("[coord] cancelled recording history upsert failed: {error}");
+            false
+        }
+    }
+}
+
+pub(super) fn dismiss_cancelled_recording_recovery(
+    inner: &Arc<Inner>,
+    session_id: Option<&str>,
+) -> bool {
+    let should_dismiss = {
+        let mut pending = inner.cancelled_recording_recovery.lock();
+        match (pending.as_deref(), session_id) {
+            (Some(active), Some(requested)) if active != requested => false,
+            (Some(_), _) => {
+                pending.take();
+                true
+            }
+            (None, _) => false,
+        }
+    };
+    if should_dismiss && inner.state.lock().phase == SessionPhase::Idle {
+        // `hide_capsule_if_all_sessions_idle` 还会发出 Idle payload，从同一个状态出口
+        // 解除 Esc 独占；历史记录和 WAV 不在这条 UI 清理路径里，始终保留。
+        hide_capsule_if_all_sessions_idle(inner);
+    }
+    should_dismiss
+}
+
+fn schedule_cancelled_recording_recovery_prompt(
+    inner: &Arc<Inner>,
+    session_id: String,
+    elapsed_ms: u64,
+) {
+    let inner = Arc::clone(inner);
+    async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(
+            CANCELLED_RECORDING_RECOVERY_PROMPT_DELAY_MS,
+        ))
+        .await;
+        let matches =
+            inner.cancelled_recording_recovery.lock().as_deref() == Some(session_id.as_str());
+        if !matches || inner.state.lock().phase != SessionPhase::Idle {
+            return;
+        }
+        emit_capsule(&inner, CapsuleState::Cancelled, 0.0, elapsed_ms, None, None);
+        schedule_cancelled_recording_recovery_idle(&inner, session_id);
+    });
+}
+
+fn schedule_cancelled_recording_recovery_idle(inner: &Arc<Inner>, session_id: String) {
+    let expect = inner.last_capsule_state.lock().as_ref().copied();
+    let inner = Arc::clone(inner);
+    async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(
+            CANCELLED_RECORDING_RECOVERY_TIMEOUT_MS,
+        ))
+        .await;
+        if inner.last_capsule_state.lock().as_ref().copied() != expect {
+            return;
+        }
+        let matches =
+            inner.cancelled_recording_recovery.lock().as_deref() == Some(session_id.as_str());
+        if !matches {
+            return;
+        }
+        *inner.cancelled_recording_recovery.lock() = None;
+        hide_capsule_if_all_sessions_idle(&inner);
+    });
 }
 
 fn append_typed_prefix(target: &mut String, delta: &str, typed_chars: usize) -> usize {
@@ -5792,6 +6331,9 @@ mod tests {
             pipeline_mode: None,
             asr_ms: None,
             polish_ms: None,
+            asr_dictionary_delivery: None,
+            llm_dictionary_sent_count: None,
+            llm_dictionary_delivery: None,
         }
     }
 

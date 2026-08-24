@@ -7,7 +7,7 @@
     "pretest": "npm run build",
     "test": "node scripts/frontend-test-runner.mjs",
     "dev": "vite",
-    "prebuild": "node scripts/android-ipc-import-boundary.test.mjs",
+    "prebuild": "node scripts/android-ipc-import-boundary.test.mjs && node scripts/context-adapters-contract.test.mjs",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "check:macos-metal-toolchain": "node scripts/verify-macos-metal-toolchain.mjs",
@@ -28,6 +28,7 @@
     "check:hotkey-side-modifiers": "tsx src/lib/hotkeySideModifiers.test.ts",
     "check:windows-startup-lifecycle": "node scripts/windows-startup-lifecycle-contract.test.mjs",
     "check:windows-ui-config": "node scripts/windows-ui-config.test.mjs",
+    "check:context-adapters": "node scripts/context-adapters-contract.test.mjs",
     "check:pin-persistence-security": "node scripts/pin-persistence-security-contract.test.mjs",
     "check:android-updater-pubkey": "node scripts/check-android-updater-pubkey.mjs",
     "check:android-shizuku-scaffolding": "node scripts/merge-android-shizuku-manifest.test.mjs && node scripts/patch-android-shizuku-deps.test.mjs"

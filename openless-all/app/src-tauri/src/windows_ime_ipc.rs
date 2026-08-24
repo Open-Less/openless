@@ -1,7 +1,7 @@
 #![allow(dead_code, unused_imports, unused_variables)]
 use std::time::Duration;
 
-use crate::windows_ime_protocol::ImeSubmitStatus;
+use crate::windows_ime_protocol::{ImeContextStatus, ImeSubmitStatus};
 
 pub const IME_CLIENT_WAIT_TIMEOUT: Duration = Duration::from_millis(700);
 const IME_OWNER_THREAD_MESSAGE_TIMEOUT_MS: u64 = 2000;
@@ -114,6 +114,103 @@ pub struct ImeSubmitTarget {
     pub thread_id: u32,
 }
 
+#[derive(Debug, Clone)]
+pub struct ImeContextRequest {
+    pub request_id: String,
+    pub before_chars: u32,
+    pub after_chars: u32,
+    pub target: Option<ImeSubmitTarget>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImeContextResponse {
+    pub status: ImeContextStatus,
+    pub text: String,
+    pub cursor_utf16: u32,
+    pub error_code: Option<String>,
+}
+
+/// 取当前真正有键盘焦点的 GUI thread；同一目标解析同时供提交与上下文查询使用。
+#[cfg(target_os = "windows")]
+pub fn capture_focused_ime_target() -> Option<ImeSubmitTarget> {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetForegroundWindow, GetGUIThreadInfo, GetWindowThreadProcessId, GUITHREADINFO,
+    };
+    unsafe {
+        let foreground = GetForegroundWindow();
+        if foreground.0.is_null() {
+            return None;
+        }
+        let mut foreground_process_id = 0u32;
+        let foreground_thread_id =
+            GetWindowThreadProcessId(foreground, Some(&mut foreground_process_id));
+        if foreground_thread_id == 0 {
+            return None;
+        }
+        let mut gui_info = GUITHREADINFO {
+            cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
+            ..Default::default()
+        };
+        let target_window = if GetGUIThreadInfo(foreground_thread_id, &mut gui_info).is_ok()
+            && !gui_info.hwndFocus.0.is_null()
+        {
+            gui_info.hwndFocus
+        } else {
+            foreground
+        };
+        let mut process_id = 0u32;
+        let thread_id = GetWindowThreadProcessId(target_window, Some(&mut process_id));
+        (thread_id != 0 && process_id != 0).then_some(ImeSubmitTarget {
+            process_id,
+            thread_id,
+        })
+    }
+}
+
+#[cfg(target_os = "windows")]
+pub fn focused_target_block_reason(
+    target: ImeSubmitTarget,
+) -> Result<Option<&'static str>, String> {
+    use windows::core::PWSTR;
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
+        PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, target.process_id) }
+        .map_err(|error| format!("cannot confirm focused process identity: {error}"))?;
+    let mut buffer = vec![0u16; 1024];
+    let mut length = buffer.len() as u32;
+    let query = unsafe {
+        QueryFullProcessImageNameW(
+            process,
+            PROCESS_NAME_WIN32,
+            PWSTR(buffer.as_mut_ptr()),
+            &mut length,
+        )
+    };
+    let _ = unsafe { CloseHandle(process) };
+    query.map_err(|error| format!("cannot confirm focused process identity: {error}"))?;
+    let path = String::from_utf16_lossy(&buffer[..length as usize]).to_ascii_lowercase();
+    let file = path.rsplit('\\').next().unwrap_or(path.as_str());
+    const BLOCKED: &[&str] = &[
+        "cmd.exe",
+        "powershell.exe",
+        "pwsh.exe",
+        "windowsterminal.exe",
+        "wt.exe",
+        "wezterm-gui.exe",
+        "alacritty.exe",
+        "kitty.exe",
+        "warp.exe",
+        "1password.exe",
+        "bitwarden.exe",
+        "keepassxc.exe",
+        "dashlane.exe",
+    ];
+    Ok(BLOCKED.contains(&file).then_some("blocked_process"))
+}
+
 #[derive(Clone)]
 pub struct WindowsImeIpcServer {
     inner: std::sync::Arc<parking_lot::Mutex<WindowsImeIpcState>>,
@@ -158,6 +255,24 @@ impl WindowsImeIpcServer {
             ))
         }
     }
+
+    pub async fn query_context(
+        &self,
+        request: ImeContextRequest,
+    ) -> WindowsImeIpcResult<ImeContextResponse> {
+        #[cfg(target_os = "windows")]
+        {
+            let _ = self;
+            windows_pipe::query_context_over_pipe(request).await
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = (self, request);
+            Err(WindowsImeIpcError::Unavailable(
+                "OpenLess IME context is only available on Windows".to_string(),
+            ))
+        }
+    }
 }
 
 impl Default for WindowsImeIpcServer {
@@ -183,7 +298,8 @@ mod windows_pipe {
     use tokio::net::windows::named_pipe::{ClientOptions, NamedPipeClient};
 
     use super::{
-        ImeSubmitRequest, PendingImeSubmit, WindowsImeIpcError, WindowsImeIpcResult,
+        ImeContextRequest, ImeContextResponse, ImeSubmitRequest, PendingImeSubmit,
+        WindowsImeIpcError, WindowsImeIpcResult,
         IME_CLIENT_WAIT_TIMEOUT, IME_PIPE_RETRY_INTERVAL, IME_SUBMIT_TIMEOUT,
     };
     use crate::windows_ime_protocol::{
@@ -264,6 +380,79 @@ mod windows_pipe {
             ))),
             _ => Err(WindowsImeIpcError::Protocol(
                 "message is not a submit result".to_string(),
+            )),
+        }
+    }
+
+    pub async fn query_context_over_pipe(
+        request: ImeContextRequest,
+    ) -> WindowsImeIpcResult<ImeContextResponse> {
+        let target = request.target.ok_or(WindowsImeIpcError::NoReadyClient)?;
+        let (pipe_name, pipe) = open_pipe_with_retry(target).await?;
+        let (read_half, mut write_half) = tokio::io::split(pipe);
+        let mut reader = BufReader::new(read_half);
+        let request_id = request.request_id;
+        let line = encode_message(&ImePipeMessage::QueryContext {
+            protocol_version: OPENLESS_IME_PROTOCOL_VERSION,
+            request_id: request_id.clone(),
+            before_chars: request.before_chars,
+            after_chars: request.after_chars,
+        })
+        .map_err(|error| WindowsImeIpcError::Protocol(error.to_string()))?;
+
+        let response = tokio::time::timeout(IME_SUBMIT_TIMEOUT, async {
+            log::debug!("[windows-ime] querying context over pipe {pipe_name}");
+            write_half
+                .write_all(line.as_bytes())
+                .await
+                .map_err(|error| WindowsImeIpcError::Io(error.to_string()))?;
+            write_half
+                .flush()
+                .await
+                .map_err(|error| WindowsImeIpcError::Io(error.to_string()))?;
+            let mut response = String::new();
+            let bytes_read = reader
+                .read_line(&mut response)
+                .await
+                .map_err(|error| WindowsImeIpcError::Io(error.to_string()))?;
+            if bytes_read == 0 {
+                return Err(WindowsImeIpcError::Io(
+                    "IME pipe closed before context result".to_string(),
+                ));
+            }
+            Ok(response)
+        })
+        .await
+        .map_err(|_| WindowsImeIpcError::Timeout)??;
+
+        match decode_message(response.trim_end())
+            .map_err(|error| WindowsImeIpcError::Protocol(error.to_string()))?
+        {
+            ImePipeMessage::ContextResult {
+                protocol_version,
+                request_id: response_id,
+                status,
+                text,
+                cursor_utf16,
+                error_code,
+            } if protocol_version == OPENLESS_IME_PROTOCOL_VERSION
+                && response_id == request_id => Ok(ImeContextResponse {
+                    status,
+                    text,
+                    cursor_utf16,
+                    error_code,
+                }),
+            ImePipeMessage::ContextResult { protocol_version, .. }
+                if protocol_version != OPENLESS_IME_PROTOCOL_VERSION => {
+                    Err(WindowsImeIpcError::Protocol(format!(
+                        "unsupported IME protocol version {protocol_version}"
+                    )))
+                }
+            ImePipeMessage::ContextResult { .. } => Err(WindowsImeIpcError::Protocol(
+                "context result belongs to a different request".to_string(),
+            )),
+            _ => Err(WindowsImeIpcError::Protocol(
+                "message is not a context result".to_string(),
             )),
         }
     }

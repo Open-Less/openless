@@ -63,6 +63,20 @@ pub enum ImePipeMessage {
         status: ImeSubmitStatus,
         error_code: Option<String>,
     },
+    QueryContext {
+        protocol_version: u32,
+        request_id: String,
+        before_chars: u32,
+        after_chars: u32,
+    },
+    ContextResult {
+        protocol_version: u32,
+        request_id: String,
+        status: ImeContextStatus,
+        text: String,
+        cursor_utf16: u32,
+        error_code: Option<String>,
+    },
     CancelSession {
         protocol_version: u32,
         session_id: String,
@@ -77,6 +91,15 @@ pub enum ImePipeMessage {
 pub enum ImeSubmitStatus {
     Committed,
     Rejected,
+    Failed,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ImeContextStatus {
+    Ok,
+    Blocked,
+    Unavailable,
     Failed,
 }
 
@@ -170,5 +193,21 @@ mod tests {
 
         assert!(is_result_for_pending_session(&result, "current-session").is_err());
         assert!(is_result_for_pending_session(&result, "old-session").is_ok());
+    }
+
+    #[test]
+    fn query_context_roundtrips_with_utf16_cursor() {
+        let message = ImePipeMessage::ContextResult {
+            protocol_version: OPENLESS_IME_PROTOCOL_VERSION,
+            request_id: "context-1".to_string(),
+            status: ImeContextStatus::Ok,
+            text: "前文🙂后文".to_string(),
+            cursor_utf16: 4,
+            error_code: None,
+        };
+        let json = encode_message(&message).expect("encode");
+        assert!(json.contains("\"contextResult\""));
+        assert!(json.contains("\"cursorUtf16\""));
+        assert_eq!(decode_message(json.trim_end()).expect("decode"), message);
     }
 }

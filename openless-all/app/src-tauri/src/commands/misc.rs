@@ -255,6 +255,34 @@ pub async fn debug_read_cursor_context(
     result
 }
 
+/// 注视/视觉 ROI 的独立可行性探针。
+///
+/// 当前桌面链路没有接入系统级 gaze signal；因此这里明确返回 unsupported，而不是借
+/// 「视觉 ROI」之名静默截屏或启用 OCR。该结论可以被诊断页/自动化读取，产品层不展示
+/// 一个实际没有数据源的假开关。
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VisualRoiCapability {
+    supported: bool,
+    source: Option<&'static str>,
+    default_enabled: bool,
+    captures_screen: bool,
+    stores_data: bool,
+    reason: &'static str,
+}
+
+#[tauri::command]
+pub fn probe_visual_roi_capability() -> VisualRoiCapability {
+    VisualRoiCapability {
+        supported: false,
+        source: None,
+        default_enabled: false,
+        captures_screen: false,
+        stores_data: false,
+        reason: "no_system_gaze_signal_source_connected",
+    }
+}
+
 // ─────────────────────────── unused but exported (silences dead_code) ───────────────────────────
 
 #[allow(dead_code)]

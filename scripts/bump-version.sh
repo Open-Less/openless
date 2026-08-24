@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# 同步更新 OpenLess 四处版本号。
+# 同步更新 OpenLess 五处版本号。
 # 用法：
 #     ./scripts/bump-version.sh 1.2.21
+#     ./scripts/bump-version.sh 1.4.0-Beta.1
 #
 # 改的位置（CLAUDE.md 强调必须同时改，否则 release-tauri.yml 失败）：
 #   - openless-all/app/package.json                "version": "X.Y.Z"
@@ -10,20 +11,20 @@
 #   - openless-all/app/src-tauri/Cargo.toml        version = "X.Y.Z" (顶层)
 #   - openless-all/app/src-tauri/Cargo.lock        通过 cargo update -p openless 同步
 #
-# CI 的 cross-platform 任务最后一步会校验四个文件版本号一致；漏改一处直接 fail。
+# CI 的 cross-platform 任务最后一步会校验五处版本号一致；漏改一处直接 fail。
 
 set -euo pipefail
 
 if [ "${1:-}" = "" ]; then
   echo "用法: $0 <new-version>" >&2
-  echo "例:   $0 1.2.21" >&2
+  echo "例:   $0 1.2.21 或 $0 1.4.0-Beta.1" >&2
   exit 1
 fi
 
 NEW="$1"
 
-if ! [[ "$NEW" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  echo "错误：版本号必须是 X.Y.Z 数字格式 (拿到 '$NEW')" >&2
+if ! [[ "$NEW" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]; then
+  echo "错误：版本号必须是 X.Y.Z 或 X.Y.Z-prerelease 格式 (拿到 '$NEW')" >&2
   exit 1
 fi
 
@@ -51,7 +52,7 @@ echo "▶ 升 package.json + package-lock.json → $NEW"
 # tauri.conf.json：BSD sed 与 GNU sed 都支持 -E + -i.bak 后缀；不用行号范围地址。
 echo "▶ 升 tauri.conf.json → $NEW"
 sed -E -i.bak \
-  "s/\"version\":[[:space:]]*\"[0-9]+\.[0-9]+\.[0-9]+\"/\"version\": \"$NEW\"/" \
+  "s/\"version\":[[:space:]]*\"[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?\"/\"version\": \"$NEW\"/" \
   "$TAURI_CONF"
 rm "$TAURI_CONF.bak"
 
@@ -62,8 +63,8 @@ rm "$TAURI_CONF.bak"
 echo "▶ 升 Cargo.toml → $NEW"
 awk -v new="$NEW" '
   /^\[package\]$/ { in_package = 1 }
-  in_package && !done && /^version = "[0-9]+\.[0-9]+\.[0-9]+"$/ {
-    sub(/"[0-9]+\.[0-9]+\.[0-9]+"/, "\"" new "\"")
+  in_package && !done && /^version = "[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?"$/ {
+    sub(/"[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?"/, "\"" new "\"")
     done = 1
   }
   { print }
@@ -82,8 +83,7 @@ LOCK_ROOT=$(node -p "require('$PKG_LOCK').version")
 LOCK_NESTED=$(node -p "require('$PKG_LOCK').packages[''].version")
 TAU=$(node -p "require('$TAURI_CONF').version")
 CRG=$(grep -E '^version = ' "$CARGO_TOML" | head -1 | sed -E 's/^version = "(.+)"$/\1/')
-CARGO_LOCK_VER=$(awk '/^name = "openless"$/{getline; if (match($0, /version = "([0-9.]+)"/, a)) {print a[1]; exit}}' "$CARGO_LOCK" 2>/dev/null \
-  || awk 'BEGIN{found=0} /^name = "openless"$/{found=1; next} found && /^version = /{gsub(/"/,""); print $3; exit}' "$CARGO_LOCK")
+CARGO_LOCK_VER=$(awk 'BEGIN{found=0} /^name = "openless"$/{found=1; next} found && /^version = /{gsub(/"/,""); print $3; exit}' "$CARGO_LOCK")
 
 printf '%-22s %s\n' 'package.json:'        "$PKG"
 printf '%-22s %s\n' 'package-lock root:'   "$LOCK_ROOT"

@@ -32,21 +32,34 @@ static SELECTION_POLISH_BUSY: AtomicBool = AtomicBool::new(false);
 pub(crate) struct SelectionPolishPreviewPayload {
     pub text: String,
     pub source_text: String,
+    pub review_annotation: Option<String>,
 }
 
 /// 待用户确认的选区润色任务。它只存在于内存，取消或确认后立即清除。
 #[derive(Debug, Clone)]
 pub(crate) struct PendingSelectionPolishPreview {
-    insertion_target: SelectionInsertionTarget,
-    source_text: String,
-    polished_text: String,
-    source_app: Option<String>,
-    mode: PolishMode,
-    style_pack_id: String,
-    llm_provider: Option<String>,
-    llm_model: Option<String>,
-    polish_ms: Option<u64>,
-    started_at: std::time::Instant,
+    pub(super) insertion_target: SelectionInsertionTarget,
+    pub(super) source_text: String,
+    pub(super) polished_text: String,
+    pub(super) source_app: Option<String>,
+    pub(super) mode: PolishMode,
+    pub(super) style_pack_id: String,
+    pub(super) llm_provider: Option<String>,
+    pub(super) llm_model: Option<String>,
+    pub(super) llm_dictionary_sent_count: u32,
+    pub(super) polish_ms: Option<u64>,
+    pub(super) started_at: std::time::Instant,
+    /// Review 生成期间的整篇控件快照。确认时必须仍完全一致，否则拒绝覆盖。
+    pub(super) expected_document_text: Option<String>,
+    pub(super) review_annotation: Option<String>,
+    pub(super) history_raw_transcript: Option<String>,
+    pub(super) history_source: crate::types::HistorySource,
+    pub(super) asr_provider: Option<String>,
+    pub(super) asr_model: Option<String>,
+    pub(super) asr_ms: Option<u64>,
+    pub(super) asr_dictionary_delivery: Option<crate::types::DictionaryDeliveryReport>,
+    pub(super) has_audio_recording: Option<bool>,
+    pub(super) pipeline_mode: Option<String>,
 }
 
 impl PendingSelectionPolishPreview {
@@ -54,6 +67,7 @@ impl PendingSelectionPolishPreview {
         SelectionPolishPreviewPayload {
             text: self.polished_text.clone(),
             source_text: self.source_text.clone(),
+            review_annotation: self.review_annotation.clone(),
         }
     }
 }
@@ -287,8 +301,19 @@ pub(super) async fn run_selection_polish(inner: &Arc<Inner>) -> Result<(), Strin
                 style_pack_id: pack.id,
                 llm_provider,
                 llm_model,
+                llm_dictionary_sent_count: hotwords.len().min(u32::MAX as usize) as u32,
                 polish_ms,
                 started_at,
+                expected_document_text: None,
+                review_annotation: None,
+                history_raw_transcript: None,
+                history_source: crate::types::HistorySource::SelectionPolish,
+                asr_provider: None,
+                asr_model: None,
+                asr_ms: None,
+                asr_dictionary_delivery: None,
+                has_audio_recording: None,
+                pipeline_mode: None,
             });
             if let Some(app) = inner.app.lock().clone() {
                 crate::show_selection_polish_preview(&app);
@@ -305,7 +330,11 @@ pub(super) async fn run_selection_polish(inner: &Arc<Inner>) -> Result<(), Strin
         }
     };
     let dictionary_entry_count = if status != InsertStatus::Failed {
-        match inner.vocab.record_hits(&text_to_insert) {
+        match inner.vocab.record_hits(
+            &text_to_insert,
+            super::current_project_key(inner).as_deref(),
+            prefs.temporary_vocab_ttl_days,
+        ) {
             Ok(hits) => Some(hits.min(u32::MAX as u64) as u32),
             Err(error) => {
                 log::error!("[selection-polish] record vocabulary hits failed: {error}");
@@ -319,6 +348,9 @@ pub(super) async fn run_selection_polish(inner: &Arc<Inner>) -> Result<(), Strin
         Some(label) => (Some(label.provider), Some(label.model)),
         None => (None, None),
     };
+    let llm_dictionary_count = hotwords.len().min(u32::MAX as usize) as u32;
+    let llm_dictionary_delivery =
+        super::llm_dictionary_delivery_report(llm_provider.as_deref(), llm_dictionary_count, false);
     let raw_chars = raw_text.chars().count();
     // 与听写路径同口径：应用名与 bundle id 分开存。
     let source_front = crate::types::split_front_app_opt(source_app.as_deref());
@@ -349,6 +381,9 @@ pub(super) async fn run_selection_polish(inner: &Arc<Inner>) -> Result<(), Strin
         pipeline_mode: None,
         asr_ms: None,
         polish_ms,
+        asr_dictionary_delivery: None,
+        llm_dictionary_sent_count: Some(llm_dictionary_count),
+        llm_dictionary_delivery,
     };
     if let Err(error) = inner.history.append_with_retention(
         session,
@@ -405,7 +440,10 @@ impl Coordinator {
         }
     }
 
-    pub(crate) fn confirm_selection_polish_preview(&self, text: String) -> Result<(), String> {
+    pub(crate) async fn confirm_selection_polish_preview(
+        &self,
+        text: String,
+    ) -> Result<(), String> {
         let text = text.trim().to_string();
         if text.is_empty() {
             return Err("selectionPolishEmptyOutput".into());
@@ -419,6 +457,14 @@ impl Coordinator {
 
         if !crate::selection::reactivate_selection_insertion_target(&preview.insertion_target) {
             return Err("selectionPolishTargetUnavailable".into());
+        }
+        if let Some(expected_document) = preview.expected_document_text.as_deref() {
+            let current_document = crate::host_document::read_focused_document_text()
+                .await
+                .ok_or_else(|| "selectionPolishTargetUnavailable".to_string())?;
+            if current_document != expected_document {
+                return Err("selectionCorrectionDocumentChanged".into());
+            }
         }
         let validation = crate::selection::validate_selection_insertion_target(
             &preview.insertion_target,
@@ -440,7 +486,11 @@ impl Coordinator {
         let dictionary_entry_count = self
             .inner
             .vocab
-            .record_hits(&text)
+            .record_hits(
+                &text,
+                super::current_project_key(&self.inner).as_deref(),
+                prefs.temporary_vocab_ttl_days,
+            )
             .map(|hits| Some(hits.min(u32::MAX as u64) as u32))
             .unwrap_or_else(|error| {
                 log::error!("[selection-polish] record vocabulary hits failed: {error}");
@@ -449,16 +499,23 @@ impl Coordinator {
         // 与听写路径同口径：应用名与 bundle id 分开存，详情页才不会把一长串 bundle id
         // 糊进正文。
         let preview_front = crate::types::split_front_app_opt(preview.source_app.as_deref());
+        let llm_dictionary_delivery = super::llm_dictionary_delivery_report(
+            preview.llm_provider.as_deref(),
+            preview.llm_dictionary_sent_count,
+            false,
+        );
         let session = DictationSession {
             id: Uuid::new_v4().to_string(),
             created_at: Utc::now().to_rfc3339(),
-            source: crate::types::HistorySource::SelectionPolish,
-            raw_transcript: preview.source_text,
+            source: preview.history_source,
+            raw_transcript: preview
+                .history_raw_transcript
+                .unwrap_or_else(|| preview.source_text.clone()),
             // 同上：选区润色的输入是用户选中的文字，不经过 ASR。
             asr_transcript: None,
             final_text: text.clone(),
             mode: preview.mode,
-            style_pack_id: Some(preview.style_pack_id),
+            style_pack_id: (!preview.style_pack_id.is_empty()).then_some(preview.style_pack_id),
             translation_active: false,
             polish_source: None,
             app_bundle_id: preview_front.bundle_id,
@@ -467,14 +524,17 @@ impl Coordinator {
             error_code: None,
             duration_ms: Some(preview.started_at.elapsed().as_millis() as u64),
             dictionary_entry_count,
-            has_audio_recording: None,
-            asr_provider: None,
-            asr_model: None,
+            has_audio_recording: preview.has_audio_recording,
+            asr_provider: preview.asr_provider,
+            asr_model: preview.asr_model,
             llm_provider: preview.llm_provider,
             llm_model: preview.llm_model,
-            pipeline_mode: None,
-            asr_ms: None,
+            pipeline_mode: preview.pipeline_mode,
+            asr_ms: preview.asr_ms,
             polish_ms: preview.polish_ms,
+            asr_dictionary_delivery: preview.asr_dictionary_delivery,
+            llm_dictionary_sent_count: Some(preview.llm_dictionary_sent_count),
+            llm_dictionary_delivery,
         };
         if let Err(error) = self.inner.history.append_with_retention(
             session,

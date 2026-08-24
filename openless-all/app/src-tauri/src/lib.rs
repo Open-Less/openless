@@ -91,7 +91,6 @@ mod unicode_keystroke;
 #[cfg(target_os = "windows")]
 mod windows_ime_ipc;
 mod windows_ime_profile;
-#[cfg(target_os = "windows")]
 mod windows_ime_protocol;
 mod windows_ime_restore;
 #[cfg(target_os = "windows")]
@@ -209,8 +208,12 @@ macro_rules! app_invoke_handler_desktop {
             commands::marketplace_logout,
             commands::list_vocab,
             commands::add_vocab,
+            commands::add_vocab_with_metadata,
             commands::remove_vocab,
             commands::set_vocab_enabled,
+            commands::set_vocab_metadata,
+            commands::list_vocab_suggestions,
+            commands::get_dictionary_delivery_preview,
             commands::list_correction_rules,
             commands::add_correction_rule,
             commands::remove_correction_rule,
@@ -220,6 +223,8 @@ macro_rules! app_invoke_handler_desktop {
             commands::start_dictation,
             commands::stop_dictation,
             commands::cancel_dictation,
+            commands::resume_cancelled_recording,
+            commands::dismiss_cancelled_recording_recovery,
             coding_agent::commands::coding_agent_detect,
             coding_agent::commands::coding_agent_detect_opencode,
             coding_agent::commands::coding_agent_detect_cli,
@@ -238,6 +243,16 @@ macro_rules! app_invoke_handler_desktop {
             commands::confirm_selection_polish_preview,
             #[cfg(not(mobile))]
             commands::cancel_selection_polish_preview,
+            #[cfg(not(mobile))]
+            commands::get_selection_correction,
+            #[cfg(not(mobile))]
+            commands::start_selection_correction,
+            #[cfg(not(mobile))]
+            commands::stop_selection_correction,
+            #[cfg(not(mobile))]
+            commands::cancel_selection_correction,
+            #[cfg(not(mobile))]
+            commands::dismiss_selection_correction,
             commands::repolish,
             commands::list_style_packs,
             commands::create_style_pack_from_template,
@@ -350,6 +365,7 @@ macro_rules! app_invoke_handler_desktop {
             commands::sherpa_onnx_asr_reveal_model_dir,
             commands::export_error_log,
             commands::debug_read_cursor_context,
+            commands::probe_visual_roi_capability,
             commands::accept_pending_correction,
             commands::reject_pending_correction,
             commands::dismiss_vocab_suggestions,
@@ -428,8 +444,12 @@ macro_rules! app_invoke_handler_mobile {
             $crate::commands::marketplace_logout,
             $crate::commands::list_vocab,
             $crate::commands::add_vocab,
+            $crate::commands::add_vocab_with_metadata,
             $crate::commands::remove_vocab,
             $crate::commands::set_vocab_enabled,
+            $crate::commands::set_vocab_metadata,
+            $crate::commands::list_vocab_suggestions,
+            $crate::commands::get_dictionary_delivery_preview,
             $crate::commands::list_correction_rules,
             $crate::commands::add_correction_rule,
             $crate::commands::remove_correction_rule,
@@ -439,6 +459,8 @@ macro_rules! app_invoke_handler_mobile {
             $crate::commands::start_dictation,
             $crate::commands::stop_dictation,
             $crate::commands::cancel_dictation,
+            $crate::commands::resume_cancelled_recording,
+            $crate::commands::dismiss_cancelled_recording_recovery,
             $crate::commands::qa_window_dismiss,
             $crate::commands::qa_toggle_recording,
             $crate::commands::qa_submit_text,
@@ -1867,6 +1889,42 @@ fn bottom_visual_position(
     (x, y)
 }
 
+/// 把紧凑浮层放到指针右下侧；右侧或下方空间不足时翻转到左侧/上方，最终再钳制到
+/// 当前显示器内。这里保持为纯函数，方便覆盖多显示器负坐标和屏幕边缘。
+fn pointer_adjacent_position(
+    frame: LogicalMonitorFrame,
+    pointer_x: f64,
+    pointer_y: f64,
+    window_width: f64,
+    window_height: f64,
+    gap: f64,
+    margin: f64,
+) -> (f64, f64) {
+    let right = frame.x + frame.width;
+    let bottom = frame.y + frame.height;
+    let preferred_right = pointer_x + gap;
+    let preferred_below = pointer_y + gap;
+    let x = if preferred_right + window_width + margin <= right {
+        preferred_right
+    } else {
+        pointer_x - window_width - gap
+    }
+    .clamp(
+        frame.x + margin,
+        (right - window_width - margin).max(frame.x + margin),
+    );
+    let y = if preferred_below + window_height + margin <= bottom {
+        preferred_below
+    } else {
+        pointer_y - window_height - gap
+    }
+    .clamp(
+        frame.y + margin,
+        (bottom - window_height - margin).max(frame.y + margin),
+    );
+    (x, y)
+}
+
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn frame_contains_point(frame: LogicalMonitorFrame, x: f64, y: f64) -> bool {
     x >= frame.x && x < frame.x + frame.width && y >= frame.y && y < frame.y + frame.height
@@ -1893,6 +1951,10 @@ pub(crate) struct CapsuleTargetMonitor {
     pub(crate) physical_y: i32,
     pub(crate) physical_width: u32,
     pub(crate) physical_height: u32,
+    pub(crate) physical_work_x: i32,
+    pub(crate) physical_work_y: i32,
+    pub(crate) physical_work_width: u32,
+    pub(crate) physical_work_height: u32,
     pub(crate) scale: f64,
 }
 
@@ -1904,6 +1966,16 @@ impl CapsuleTargetMonitor {
             self.physical_y,
             self.physical_width,
             self.physical_height,
+            self.scale,
+        )
+    }
+
+    fn logical_work_frame(self) -> LogicalMonitorFrame {
+        logical_monitor_frame(
+            self.physical_work_x,
+            self.physical_work_y,
+            self.physical_work_width,
+            self.physical_work_height,
             self.scale,
         )
     }
@@ -1941,11 +2013,16 @@ fn monitor_for_anchor_point<R: tauri::Runtime>(
     let mut nearest: Option<(f64, CapsuleTargetMonitor)> = None;
 
     for monitor in monitors {
+        let work_area = monitor.work_area();
         let target = CapsuleTargetMonitor {
             physical_x: monitor.position().x,
             physical_y: monitor.position().y,
             physical_width: monitor.size().width,
             physical_height: monitor.size().height,
+            physical_work_x: work_area.position.x,
+            physical_work_y: work_area.position.y,
+            physical_work_width: work_area.size.width,
+            physical_work_height: work_area.size.height,
             scale: monitor.scale_factor(),
         };
         let frame = target.logical_frame();
@@ -2655,6 +2732,130 @@ pub(crate) fn hide_selection_polish_preview<R: tauri::Runtime>(app: &AppHandle<R
     }
 }
 
+// ───────────────────────── 划词纠错气泡（macOS） ─────────────────────────
+
+#[cfg(target_os = "macos")]
+const SELECTION_CORRECTION_WIDTH: f64 = 316.0;
+#[cfg(target_os = "macos")]
+const SELECTION_CORRECTION_HEIGHT: f64 = 104.0;
+
+#[cfg(target_os = "macos")]
+fn ensure_selection_correction_window<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+) -> Option<tauri::WebviewWindow<R>> {
+    if let Some(window) = app.get_webview_window("selection-correction") {
+        return Some(window);
+    }
+    match WebviewWindowBuilder::new(
+        app,
+        "selection-correction",
+        WebviewUrl::App("index.html?window=selection-correction".into()),
+    )
+    .title("OpenLess 划词纠错")
+    .inner_size(SELECTION_CORRECTION_WIDTH, SELECTION_CORRECTION_HEIGHT)
+    .decorations(false)
+    .transparent(true)
+    .shadow(true)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .resizable(false)
+    .focused(false)
+    .visible(false)
+    .accept_first_mouse(true)
+    .build()
+    {
+        Ok(window) => {
+            let panel = window.clone();
+            let _ = app.run_on_main_thread(move || {
+                make_chat_window_panel_macos(&panel, "selection-correction");
+            });
+            Some(window)
+        }
+        Err(error) => {
+            log::warn!("[selection-correction] create bubble failed: {error}");
+            None
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn position_selection_correction_window<R: tauri::Runtime>(
+    window: &tauri::WebviewWindow<R>,
+) -> tauri::Result<()> {
+    // 用户刚完成拖选时，鼠标位置就是最准确、也最符合预期的视觉锚点。AX 在部分
+    // Electron/WebView 宿主里只能给出整个输入框的矩形，会把气泡错误地钉在窗口边角。
+    let Some((anchor_x, anchor_y)) =
+        macos_mouse_cursor_point().or_else(macos_focused_input_anchor_point)
+    else {
+        return Ok(());
+    };
+    let Some(monitor) = monitor_for_anchor_point(window, anchor_x, anchor_y) else {
+        return Ok(());
+    };
+    // work_area 来自 macOS NSScreen.visibleFrame，会扣除菜单栏与当前 Dock；Dock 在
+    // 底部、左侧或右侧都不需要写死高度。显示器判定仍使用完整 frame，因为鼠标可以
+    // 落在 Dock 区域，真正摆放浮层时才收紧到 work area。
+    let frame = monitor.logical_work_frame();
+    let (x, y) = pointer_adjacent_position(
+        frame,
+        anchor_x,
+        anchor_y,
+        SELECTION_CORRECTION_WIDTH,
+        SELECTION_CORRECTION_HEIGHT,
+        12.0,
+        10.0,
+    );
+    window.set_size(LogicalSize::new(
+        SELECTION_CORRECTION_WIDTH,
+        SELECTION_CORRECTION_HEIGHT,
+    ))?;
+    window.set_position(LogicalPosition::new(x, y))
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn show_selection_correction_bubble<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    payload: &crate::coordinator::selection_correction::SelectionCorrectionBubblePayload,
+) {
+    let Some(window) = ensure_selection_correction_window(app) else {
+        return;
+    };
+    // 只在新的选区气泡首次出现时取鼠标锚点。点击“直接替换”或“批注修改”之后，
+    // 状态更新会再次调用 show；此时鼠标已经落在气泡上，不能让窗口追着点击位置漂移。
+    if matches!(
+        payload.state,
+        crate::coordinator::selection_correction::SelectionCorrectionBubbleState::Actions
+    ) {
+        if let Err(error) = position_selection_correction_window(&window) {
+            log::warn!("[selection-correction] position bubble failed: {error}");
+        }
+    }
+    let _ = window.set_ignore_cursor_events(false);
+    if let Err(error) = window.show() {
+        log::warn!("[selection-correction] show bubble failed: {error}");
+        return;
+    }
+    // nonactivating NSPanel + focused(false)：show 不会把宿主输入框和选区抢走。
+    let _ = app.emit_to(
+        "selection-correction",
+        "selection-correction:state",
+        payload,
+    );
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn show_selection_correction_bubble<R: tauri::Runtime>(
+    _app: &AppHandle<R>,
+    _payload: &crate::coordinator::selection_correction::SelectionCorrectionBubblePayload,
+) {
+}
+
+pub(crate) fn hide_selection_correction_bubble<R: tauri::Runtime>(app: &AppHandle<R>) {
+    if let Some(window) = app.get_webview_window("selection-correction") {
+        let _ = window.hide();
+    }
+}
+
 // ───────────────────────── Less Computer 浮窗 ─────────────────────────
 //
 // Less Computer 语音 Agent 的聊天浮窗（窗口 label = "less-computer"）。
@@ -3081,9 +3282,9 @@ mod tests {
         bottom_center_position, bottom_visual_position, capsule_height_for_qa,
         capsule_visual_height, capsule_window_bounds, clamp_to_monitor, frame_contains_point,
         frame_distance_to_point_squared, logical_monitor_frame, parse_tray_style_pack_menu_id,
-        resolve_tray_style_pack_id, rotate_log_if_too_large, tray_style_menu_enabled,
-        tray_style_pack_menu_entries, tray_style_pack_menu_id, LogicalMonitorFrame, TrayLabels,
-        LOG_ROTATE_LIMIT_BYTES,
+        pointer_adjacent_position, resolve_tray_style_pack_id, rotate_log_if_too_large,
+        tray_style_menu_enabled, tray_style_pack_menu_entries, tray_style_pack_menu_id,
+        LogicalMonitorFrame, TrayLabels, LOG_ROTATE_LIMIT_BYTES,
     };
     use crate::types::{builtin_style_pack_for_mode, PolishMode, StylePack, StylePackKind};
     use std::io::Write;
@@ -3324,6 +3525,53 @@ mod tests {
         assert_eq!(frame_distance_to_point_squared(frame, 100.0, -100.0), 0.0);
         assert_eq!(frame_distance_to_point_squared(frame, 100.0, 20.0), 400.0);
         assert_eq!(frame_distance_to_point_squared(frame, -10.0, -910.0), 200.0);
+    }
+
+    #[test]
+    fn compact_popover_defaults_to_the_pointer_bottom_right() {
+        let frame = LogicalMonitorFrame {
+            x: 0.0,
+            y: 0.0,
+            width: 1440.0,
+            height: 900.0,
+        };
+
+        assert_eq!(
+            pointer_adjacent_position(frame, 600.0, 400.0, 316.0, 104.0, 12.0, 10.0),
+            (612.0, 412.0)
+        );
+    }
+
+    #[test]
+    fn compact_popover_flips_away_from_the_screen_edges() {
+        let frame = LogicalMonitorFrame {
+            x: 0.0,
+            y: 0.0,
+            width: 1440.0,
+            height: 900.0,
+        };
+
+        assert_eq!(
+            pointer_adjacent_position(frame, 1435.0, 895.0, 316.0, 104.0, 12.0, 10.0),
+            (1107.0, 779.0)
+        );
+    }
+
+    #[test]
+    fn compact_popover_flips_above_a_bottom_dock_work_area() {
+        // 900pt 显示器上，菜单栏占顶部 25pt、Dock 占底部 75pt；鼠标虽然仍在整屏
+        // 范围内，但气泡必须以 visibleFrame 的底边 825 为界翻到指针上方。
+        let work_area = LogicalMonitorFrame {
+            x: 0.0,
+            y: 25.0,
+            width: 1440.0,
+            height: 800.0,
+        };
+
+        assert_eq!(
+            pointer_adjacent_position(work_area, 600.0, 760.0, 316.0, 104.0, 12.0, 10.0),
+            (612.0, 644.0)
+        );
     }
 
     #[test]

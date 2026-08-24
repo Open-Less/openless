@@ -80,19 +80,71 @@ export function DataStorageSection() {
           style={{ ...inputStyle, width: 80, textAlign: 'right' }}
         />
       </SettingRow>
-      {/* 光标上下文。放在「隐私」而不是「润色」下是有意的：这个开关真正的代价不是
-          token，而是「把别的 app 里的文字发给 LLM 服务商」。只在 macOS 显示——
-          其余平台没有实现，摆一个拨不动结果的开关只会误导。 */}
-      {detectOS() === 'mac' && (
-        <SettingRow
-          label={t('settings.dataStorage.cursorContextLabel')}
-          desc={t('settings.dataStorage.cursorContextDesc')}
-        >
-          <Toggle
-            on={prefs.cursorContextEnabled}
-            onToggle={next => void savePrefs({ ...prefs, cursorContextEnabled: next })}
-          />
-        </SettingRow>
+      {/* 这是读取别的 app 正文的隐私总闸。子能力各自可关，但运行时还必须同时通过总闸。 */}
+      {detectOS() !== 'android' && (
+        <>
+          <SettingRow
+            label={t('settings.dataStorage.cursorContextLabel')}
+            desc={t('settings.dataStorage.cursorContextDesc')}
+          >
+            <Toggle
+              on={prefs.cursorContextEnabled}
+              onToggle={next => void savePrefs({ ...prefs, cursorContextEnabled: next })}
+            />
+          </SettingRow>
+          <div style={{ paddingLeft: 16, opacity: prefs.cursorContextEnabled ? 1 : 0.55 }}>
+            <SettingRow
+              label={t('settings.dataStorage.cursorContextLlmLabel', { defaultValue: 'Use document context for LLM polish' })}
+              desc={t('settings.dataStorage.cursorContextLlmDesc', { defaultValue: 'Reads a short window around the caret and includes it in the configured LLM request.' })}
+            >
+              <Toggle
+                on={Boolean(prefs.cursorContextLlmEnabled)}
+                onToggle={prefs.cursorContextEnabled ? next => void savePrefs({ ...prefs, cursorContextLlmEnabled: next }) : undefined}
+              />
+            </SettingRow>
+            <SettingRow
+              label={t('settings.dataStorage.editLearningLabel', { defaultValue: 'Learn vocabulary from edits' })}
+              desc={t('settings.dataStorage.editLearningDesc', { defaultValue: 'Watches only the text span just inserted by OpenLess and asks before saving a term.' })}
+            >
+              <Toggle
+                on={Boolean(prefs.editLearningEnabled)}
+                onToggle={prefs.cursorContextEnabled ? next => void savePrefs({ ...prefs, editLearningEnabled: next }) : undefined}
+              />
+            </SettingRow>
+            <SettingRow
+              label={t('settings.dataStorage.vocabInboxLabel', { defaultValue: 'Keep a vocabulary suggestion inbox' })}
+              desc={t('settings.dataStorage.vocabInboxDesc', { defaultValue: 'Unresolved edit suggestions remain available on the Vocabulary page for seven days.' })}
+            >
+              <Toggle
+                on={Boolean(prefs.vocabSuggestionInboxEnabled)}
+                onToggle={next => void savePrefs({ ...prefs, vocabSuggestionInboxEnabled: next })}
+              />
+            </SettingRow>
+            <SettingRow label={t('settings.dataStorage.temporaryVocabTtlLabel', { defaultValue: 'Temporary app vocabulary lifetime (days)' })}>
+              <input
+                type="number"
+                min={1}
+                max={365}
+                value={prefs.temporaryVocabTtlDays ?? 7}
+                onChange={event => void savePrefs({ ...prefs, temporaryVocabTtlDays: clamp(Number.parseInt(event.target.value || '7', 10), 1, 365) })}
+                style={{ ...inputStyle, width: 80, textAlign: 'right' }}
+              />
+            </SettingRow>
+            <SettingRow
+              label={t('settings.dataStorage.temporaryVocabCapacityLabel', { defaultValue: 'Temporary vocabulary capacity' })}
+              desc={t('settings.dataStorage.temporaryVocabCapacityDesc', { defaultValue: 'Least-recently-used temporary terms are removed first; pinned and permanent terms are never evicted.' })}
+            >
+              <input
+                type="number"
+                min={1}
+                max={10000}
+                value={prefs.temporaryVocabCapacity ?? 100}
+                onChange={event => void savePrefs({ ...prefs, temporaryVocabCapacity: clamp(Number.parseInt(event.target.value || '100', 10), 1, 10000) })}
+                style={{ ...inputStyle, width: 80, textAlign: 'right' }}
+              />
+            </SettingRow>
+          </div>
+        </>
       )}
     </Card>
   );

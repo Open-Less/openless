@@ -593,7 +593,7 @@ fn log_dropped_phrases_when_changed(included: &[&str], dropped: &[&str]) {
     );
 }
 
-pub fn build_prompt_from_phrases(phrases: &[String]) -> Option<String> {
+fn partition_prompt_phrases(phrases: &[String]) -> (Vec<&str>, Vec<&str>) {
     let mut included: Vec<&str> = Vec::new();
     let mut dropped: Vec<&str> = Vec::new();
     let mut total_chars: usize = 0;
@@ -618,6 +618,20 @@ pub fn build_prompt_from_phrases(phrases: &[String]) -> Option<String> {
         total_chars += added;
     }
 
+    (included, dropped)
+}
+
+/// 与实际 prompt 构造共用同一份预算算法，供 history/词汇表展示「发送/丢弃」实数。
+pub fn prompt_delivery_counts(phrases: &[String]) -> (u32, u32) {
+    let (included, dropped) = partition_prompt_phrases(phrases);
+    (
+        included.len().min(u32::MAX as usize) as u32,
+        dropped.len().min(u32::MAX as usize) as u32,
+    )
+}
+
+pub fn build_prompt_from_phrases(phrases: &[String]) -> Option<String> {
+    let (included, dropped) = partition_prompt_phrases(phrases);
     log_dropped_phrases_when_changed(&included, &dropped);
 
     if included.is_empty() {

@@ -5,9 +5,8 @@
 //!
 //! ## 边界
 //!
-//! 所有平台差异关在本模块内。非 macOS 一律返回 [`HostDocumentStatus::Unsupported`]：
-//! Windows 没有任何 UIAutomation 代码且 TSF 只在提交瞬间激活；Linux 的 fcitx5
-//! SurroundingText 多数客户端不支持。留着接口形状一致，将来补实现不用改调用方。
+//! 所有平台差异关在本模块内。macOS 走 AX；Linux 走 OpenLess fcitx5 插件提供的
+//! SurroundingText。宿主不支持或插件未安装时按诊断原因降级，不影响听写主链路。
 //!
 //! ## 三条硬约束（新代码不得违反，哪怕仓库里的旧 AX 代码就是这么写的）
 //!
@@ -20,10 +19,11 @@
 //! 3. **读之前先过安全闸门**。我们读的是别的应用里的任意文本，最终会进 LLM 请求体。
 //!    密码框、Secure Input、密码管理器、终端一律不读，一次 AX 都不发。
 //!
-//! ## 本里程碑的范围
+//! ## 产品链路
 //!
-//! 模块可用但**不接产品链路** —— 只有一个 debug 命令 `debug_read_cursor_context`
-//! 在调它。接进润色 prompt 是下一步的事，那里才引入用户可见的开关（默认关）。
+//! 用户显式开启隐私总开关及「发给 LLM」子开关后，本模块会把截窗结果接进润色
+//! prompt；关闭时不会触发平台读取。debug 命令保留完整诊断，便于区分安全拦截、宿主
+//! 不支持与适配器未安装。
 
 mod diff;
 mod window;
@@ -34,8 +34,31 @@ mod macos;
 // `minimal_edit` 目前只有 macOS 的观察回调在用，非 macOS 构建下没有消费方。
 #[allow(unused_imports)]
 pub use diff::{
-    edit_is_within_typed_text, is_vocab_worthy, learned_rule, minimal_edit, EditPair, LearnedRule,
+    edit_is_within_typed_text, is_vocab_worthy, learned_rule, minimal_edit, multiple_edits,
+    EditPair, LearnedRule, PositionedEdit,
 };
+
+/// 观察器上报的一处编辑及围栏置信度。high 必须来自位置范围命中；内容 contains 回落
+/// 永远只能是 low，并会在确认卡片与收件箱中明确展示。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EditObservation {
+    pub edit: EditPair,
+    pub confidence: crate::types::CorrectionConfidence,
+}
+
+/// 用户在本轮 OpenLess 落字范围内选中的一段文本。
+///
+/// 这不是一个通用的「系统选区」事件：macOS 观察器只有在能用位置锚证明选区完整落在
+/// 最近一次插入文本内时才会上报。`document_text` 只在内存中短暂保留，供 Review 生成
+/// 修改建议及确认前做文档快照校验；不会写入历史或词典。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelectionObservation {
+    pub selected_text: String,
+    pub document_text: String,
+    pub selection_start_utf16: usize,
+    pub selection_length_utf16: usize,
+    pub whole_field_selected: bool,
+}
 
 // `WindowSpan` 目前只有 `plan_window` 的返回类型用到，本 crate 内没有别的引用点；
 // 跟着一起导出是为了让调用方能给它命名（对齐 `unicode_keystroke` 的既有写法）。
@@ -57,6 +80,12 @@ const AX_MESSAGING_TIMEOUT_SECS: f32 = 0.2;
 /// 比 `AX_MESSAGING_TIMEOUT_SECS` 大是故意的：一次读取要发 5~6 条 AX 消息，逐条
 /// 200ms 封顶。超时只是让调用方别再等；阻塞线程会自己按 AX 超时收尾。
 #[cfg(target_os = "macos")]
+const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(1200);
+
+#[cfg(target_os = "linux")]
+const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(1200);
+
+#[cfg(target_os = "windows")]
 const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(1200);
 
 /// 手改监听最长存活多久。
@@ -108,7 +137,7 @@ impl DocumentWindow {
 pub enum HostDocumentStatus {
     /// 读到了。
     Ok,
-    /// 安全闸门拦下，一次 AX 都没发。
+    /// 安全闸门拦下；macOS 上会在可行时保证一次 AX 都不发。
     Blocked,
     /// 本平台没有实现。（macOS 编译时构造不到它，故显式 allow。）
     #[allow(dead_code)]
@@ -273,6 +302,35 @@ pub async fn read_around_cursor(budget_chars: usize) -> Option<DocumentWindow> {
     probe_around_cursor(budget_chars).await.window
 }
 
+/// 读取当前焦点文本控件的完整内容，用于 Review 预览确认前的快照一致性校验。
+///
+/// 这条入口沿用光标上下文的安全闸门、AX 单消息超时与 async 总超时；超过 20k UTF-16
+/// 单元的控件直接返回 `None`，不会做无界全文读取。当前仅 macOS 的自动选区气泡使用。
+pub async fn read_focused_document_text() -> Option<String> {
+    #[cfg(target_os = "macos")]
+    {
+        let (_, bundle_id) = crate::selection::current_front_app_parts();
+        let gate = GateInputs {
+            secure_input: crate::unicode_keystroke::is_secure_input_enabled(),
+            bundle_id,
+            role: None,
+            subrole: None,
+        };
+        if evaluate_gate(&gate).is_some() {
+            return None;
+        }
+        let handle = tokio::task::spawn_blocking(move || macos::read_full_document_blocking(gate));
+        return match tokio::time::timeout(READ_TIMEOUT, handle).await {
+            Ok(Ok(text)) => text,
+            _ => None,
+        };
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        None
+    }
+}
+
 /// 带诊断信息的读取。debug 命令用它，装机验证时靠 `status` / `reason` 判断各 app
 /// 的真实覆盖情况。
 pub async fn probe_around_cursor(budget_chars: usize) -> HostDocumentReadResult {
@@ -280,13 +338,142 @@ pub async fn probe_around_cursor(budget_chars: usize) -> HostDocumentReadResult 
     {
         macos_probe(budget_chars).await
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    {
+        linux_probe(budget_chars).await
+    }
+    #[cfg(target_os = "windows")]
+    {
+        windows_probe(budget_chars).await
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     {
         let _ = budget_chars;
         HostDocumentReadResult::new(
             HostDocumentStatus::Unsupported,
-            Some("cursor context is macOS-only for now".to_string()),
+            Some("cursor context is unavailable on this platform".to_string()),
         )
+    }
+}
+
+#[cfg(target_os = "windows")]
+async fn windows_probe(budget_chars: usize) -> HostDocumentReadResult {
+    use crate::windows_ime_ipc::{
+        capture_focused_ime_target, focused_target_block_reason, ImeContextRequest,
+        WindowsImeIpcServer,
+    };
+    use crate::windows_ime_protocol::ImeContextStatus;
+
+    let started = std::time::Instant::now();
+    let finish = |mut result: HostDocumentReadResult| {
+        result.elapsed_ms = started.elapsed().as_millis() as u64;
+        result
+    };
+    let Some(target) = capture_focused_ime_target() else {
+        return finish(HostDocumentReadResult::new(
+            HostDocumentStatus::Unavailable,
+            Some("no_focused_gui_thread".to_string()),
+        ));
+    };
+    match focused_target_block_reason(target) {
+        Ok(Some(reason)) => {
+            return finish(HostDocumentReadResult::new(
+                HostDocumentStatus::Blocked,
+                Some(reason.to_string()),
+            ));
+        }
+        Err(reason) => {
+            return finish(HostDocumentReadResult::new(
+                HostDocumentStatus::Blocked,
+                Some(reason),
+            ));
+        }
+        Ok(None) => {}
+    }
+    let per_side = budget_chars.clamp(1, 1200).min(u32::MAX as usize) as u32;
+    let request = ImeContextRequest {
+        request_id: uuid::Uuid::new_v4().to_string(),
+        before_chars: per_side,
+        after_chars: per_side,
+        target: Some(target),
+    };
+    let query = WindowsImeIpcServer::new().query_context(request);
+    match tokio::time::timeout(READ_TIMEOUT, query).await {
+        Ok(Ok(response)) if response.status == ImeContextStatus::Ok => {
+            let cursor =
+                utf16_offset_to_char_offset(&response.text, response.cursor_utf16 as usize);
+            let window = window_around_cursor(&response.text, cursor, budget_chars);
+            finish(HostDocumentReadResult {
+                window: Some(window),
+                ..HostDocumentReadResult::new(HostDocumentStatus::Ok, None)
+            })
+        }
+        Ok(Ok(response)) if response.status == ImeContextStatus::Blocked => {
+            finish(HostDocumentReadResult::new(
+                HostDocumentStatus::Blocked,
+                response.error_code.or(Some("sensitive_input".to_string())),
+            ))
+        }
+        Ok(Ok(response)) => finish(HostDocumentReadResult::new(
+            HostDocumentStatus::Unavailable,
+            response
+                .error_code
+                .or(Some("tsf_context_unavailable".to_string())),
+        )),
+        Ok(Err(error)) => finish(HostDocumentReadResult::new(
+            HostDocumentStatus::Unavailable,
+            Some(error.to_string()),
+        )),
+        Err(_) => finish(HostDocumentReadResult::new(
+            HostDocumentStatus::Timeout,
+            Some(format!("no response within {}ms", READ_TIMEOUT.as_millis())),
+        )),
+    }
+}
+
+#[cfg(target_os = "linux")]
+async fn linux_probe(budget_chars: usize) -> HostDocumentReadResult {
+    let started = std::time::Instant::now();
+    let finish = |mut result: HostDocumentReadResult| {
+        result.elapsed_ms = started.elapsed().as_millis() as u64;
+        result
+    };
+    let handle = tokio::task::spawn_blocking(crate::linux_fcitx::get_surrounding_text);
+    match tokio::time::timeout(READ_TIMEOUT, handle).await {
+        Ok(Ok(Ok((text, cursor_byte, reason)))) if reason.is_empty() => {
+            let cursor_byte = cursor_byte as usize;
+            if cursor_byte > text.len() || !text.is_char_boundary(cursor_byte) {
+                return finish(HostDocumentReadResult::new(
+                    HostDocumentStatus::Unavailable,
+                    Some("invalid_utf8_cursor".to_string()),
+                ));
+            }
+            let cursor_chars = text[..cursor_byte].chars().count();
+            let window = window_around_cursor(&text, cursor_chars, budget_chars);
+            finish(HostDocumentReadResult {
+                window: Some(window),
+                ..HostDocumentReadResult::new(HostDocumentStatus::Ok, None)
+            })
+        }
+        Ok(Ok(Ok((_text, _cursor, reason)))) if reason == "blocked_sensitive" => finish(
+            HostDocumentReadResult::new(HostDocumentStatus::Blocked, Some(reason)),
+        ),
+        Ok(Ok(Ok((_text, _cursor, reason)))) => finish(HostDocumentReadResult::new(
+            HostDocumentStatus::Unavailable,
+            Some(reason),
+        )),
+        Ok(Ok(Err(error))) => finish(HostDocumentReadResult::new(
+            HostDocumentStatus::Unavailable,
+            Some(error),
+        )),
+        Ok(Err(join_error)) => finish(HostDocumentReadResult::new(
+            HostDocumentStatus::Unavailable,
+            Some(format!("blocking task failed: {join_error}")),
+        )),
+        Err(_) => finish(HostDocumentReadResult::new(
+            HostDocumentStatus::Timeout,
+            Some(format!("no response within {}ms", READ_TIMEOUT.as_millis())),
+        )),
     }
 }
 
@@ -340,7 +527,10 @@ async fn macos_probe(budget_chars: usize) -> HostDocumentReadResult {
 
 #[cfg(target_os = "macos")]
 fn blocked_result(reason: BlockReason) -> HostDocumentReadResult {
-    HostDocumentReadResult::new(HostDocumentStatus::Blocked, Some(reason.as_str().to_string()))
+    HostDocumentReadResult::new(
+        HostDocumentStatus::Blocked,
+        Some(reason.as_str().to_string()),
+    )
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -361,8 +551,7 @@ impl EditWatcher {
     /// 主动解除。幂等，drop 时会自动调用。
     pub fn disarm(&self) {
         #[cfg(target_os = "macos")]
-        self.stop
-            .store(true, std::sync::atomic::Ordering::Relaxed);
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
     }
 }
 
@@ -372,29 +561,31 @@ impl Drop for EditWatcher {
     }
 }
 
-/// 武装「用户改了我们刚插入的文本」的监听。
+/// 在原有手改监听之外，同时观察「本轮落字范围内的显式选区」。
 ///
-/// `typed_text` 必须是**用户实际看到落到屏幕上的那段文字**：流式路径下它是真正打出去的
-/// 内容，可能短于完整的 LLM 输出（中途失败、被取消）。拿完整输出当基线会让所有没打完的
-/// 会话都被判成「用户删掉了一大段」。
-///
-/// `on_edit` 在观察线程上被调用，可能多次。任何失败都返回 `None` —— 学不到东西是可以
-/// 接受的，影响落字不行。
-pub fn watch_for_edits<F>(typed_text: String, on_edit: F) -> Option<EditWatcher>
+/// `on_selection(None)` 表示选区折叠、越过本轮落字边界，或观察器自然结束；调用方应
+/// 收起对应操作气泡。非 macOS 平台保持原有降级：不创建观察器。
+pub fn watch_for_edits_and_selection<F, S>(
+    typed_text: String,
+    on_edit: F,
+    on_selection: S,
+) -> Option<EditWatcher>
 where
-    F: Fn(EditPair) + Send + Sync + 'static,
+    F: Fn(EditObservation) + Send + Sync + 'static,
+    S: Fn(Option<SelectionObservation>) + Send + Sync + 'static,
 {
     #[cfg(target_os = "macos")]
     {
         if typed_text.trim().is_empty() {
             return None;
         }
-        let stop = macos::spawn_edit_watcher(typed_text, Box::new(on_edit))?;
+        let stop =
+            macos::spawn_edit_watcher(typed_text, Box::new(on_edit), Box::new(on_selection))?;
         Some(EditWatcher { stop })
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (typed_text, on_edit);
+        let _ = (typed_text, on_edit, on_selection);
         None
     }
 }
@@ -463,7 +654,11 @@ mod tests {
     #[test]
     fn secure_text_field_role_blocks() {
         assert_eq!(
-            evaluate_gate(&gate(Some("com.apple.Safari"), Some("AXSecureTextField"), None)),
+            evaluate_gate(&gate(
+                Some("com.apple.Safari"),
+                Some("AXSecureTextField"),
+                None
+            )),
             Some(BlockReason::SecureTextField)
         );
     }

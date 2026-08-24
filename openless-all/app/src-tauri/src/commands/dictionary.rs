@@ -15,6 +15,38 @@ pub fn add_vocab(
 }
 
 #[tauri::command]
+pub fn add_vocab_with_metadata(
+    coord: CoordinatorState<'_>,
+    phrase: String,
+    note: Option<String>,
+    scope: DictionaryScope,
+    project_key: Option<String>,
+    expires_at: Option<String>,
+) -> Result<DictionaryEntry, String> {
+    let expires_at = if scope == DictionaryScope::Temporary {
+        expires_at.or_else(|| Some(coord.temporary_vocab_expiry()))
+    } else {
+        expires_at
+    };
+    let project_key = if scope == DictionaryScope::Temporary {
+        project_key.or_else(|| coord.active_project_key())
+    } else {
+        None
+    };
+    let entry = coord
+        .vocab()
+        .add_with_metadata(phrase, note, scope, project_key, expires_at)
+        .map_err(|e| e.to_string())?;
+    if scope == DictionaryScope::Temporary {
+        coord
+            .vocab()
+            .enforce_temporary_capacity(coord.temporary_vocab_capacity())
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(entry)
+}
+
+#[tauri::command]
 pub fn remove_vocab(coord: CoordinatorState<'_>, id: String) -> Result<(), String> {
     coord.vocab().remove(&id).map_err(|e| e.to_string())
 }
@@ -29,6 +61,58 @@ pub fn set_vocab_enabled(
         .vocab()
         .set_enabled(&id, enabled)
         .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn set_vocab_metadata(
+    coord: CoordinatorState<'_>,
+    id: String,
+    pinned: bool,
+    scope: DictionaryScope,
+    project_key: Option<String>,
+    expires_at: Option<String>,
+) -> Result<DictionaryEntry, String> {
+    let expires_at = if scope == DictionaryScope::Temporary {
+        expires_at.or_else(|| Some(coord.temporary_vocab_expiry()))
+    } else {
+        None
+    };
+    let project_key = if scope == DictionaryScope::Temporary {
+        project_key.or_else(|| coord.active_project_key())
+    } else {
+        None
+    };
+    let entry = coord
+        .vocab()
+        .set_metadata(&id, pinned, scope, project_key, expires_at)
+        .map_err(|e| e.to_string())?;
+    if scope == DictionaryScope::Temporary {
+        coord
+            .vocab()
+            .enforce_temporary_capacity(coord.temporary_vocab_capacity())
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(entry)
+}
+
+#[tauri::command]
+pub fn list_vocab_suggestions(
+    coord: CoordinatorState<'_>,
+) -> Result<Vec<PendingCorrection>, String> {
+    if !coord.prefs().get().vocab_suggestion_inbox_enabled {
+        return Ok(Vec::new());
+    }
+    coord
+        .vocab()
+        .list_suggestions()
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn get_dictionary_delivery_preview(
+    coord: CoordinatorState<'_>,
+) -> DictionaryDeliveryReport {
+    coord.dictionary_delivery_preview()
 }
 
 #[tauri::command]

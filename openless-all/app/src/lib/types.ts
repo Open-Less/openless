@@ -31,6 +31,16 @@ export type PipelineMode = 'traditional' | 'multimodal';
 
 export type InsertStatus = 'inserted' | 'pasteSent' | 'copiedFallback' | 'failed';
 
+export type DictionaryDeliveryMode = 'dedicated' | 'prompt' | 'unsupported' | 'multimodalPrompt';
+
+export interface DictionaryDeliveryReport {
+  provider: string;
+  mode: DictionaryDeliveryMode;
+  sentCount: number;
+  droppedCount: number;
+  reason: string | null;
+}
+
 /** 概览页年度活动热力图的单日计数（date = 本地日期 YYYY-MM-DD）。 */
 export interface ActivityDay {
   date: string;
@@ -77,7 +87,15 @@ export interface DictationSession {
   asrMs: number | null;
   /** LLM 润色/翻译调用的实测耗时（毫秒）。未调用 LLM 时为 null。 */
   polishMs: number | null;
+  /** 本次 ASR 请求实际如何投递本地词典；旧历史没有该字段。 */
+  asrDictionaryDelivery?: DictionaryDeliveryReport | null;
+  /** 本次 LLM prompt 实际携带的词条数量。 */
+  llmDictionarySentCount?: number | null;
+  llmDictionaryDelivery?: DictionaryDeliveryReport | null;
 }
+
+export type DictionarySource = 'manual' | 'learned' | 'imported';
+export type DictionaryScope = 'persistent' | 'temporary';
 
 export interface DictionaryEntry {
   id: string;
@@ -86,6 +104,12 @@ export interface DictionaryEntry {
   enabled: boolean;
   hits: number;
   createdAt: string;
+  source: DictionarySource;
+  scope: DictionaryScope;
+  pinned: boolean;
+  lastHitAt: string | null;
+  expiresAt: string | null;
+  projectKey: string | null;
 }
 
 /** 一条纠正规则是怎么来的。老的 correction-rules.json 没有这个字段，后端反序列化时
@@ -113,12 +137,16 @@ export interface HostDocumentReadResult {
   elapsedMs: number;
 }
 
-/** 一条等待用户确认的纠正建议（Tier2）。后端只存在内存里，重启即空——建议本身是
- *  易逝的，用户下次犯同样的错会再产生一条。 */
+/** 一条等待用户确认的纠正建议；收件箱开启时可跨重启保留到 expiresAt。 */
 export interface PendingCorrection {
   id: string;
   pattern: string;
   replacement: string;
+  confidence: 'high' | 'low';
+  attribution: 'asr' | 'llm' | 'unknown';
+  createdAt: string;
+  expiresAt: string | null;
+  sourceApp: string | null;
 }
 
 /** 为什么这段话没落进目标 app。只用于后端日志，卡片本身不渲染它。 */
@@ -488,6 +516,15 @@ export interface UserPreferences {
    *  默认 false —— 开启后每次听写都会读取前台 app 的正文并把其中一段发给 LLM 服务商。
    *  仅 macOS 有实现；密码框 / Secure Input / 密码管理器 / 终端一律硬拦。 */
   cursorContextEnabled: boolean;
+  /** 总开关内的 LLM 上下文子开关。 */
+  cursorContextLlmEnabled?: boolean;
+  /** 总开关内的落字后手改学习子开关。 */
+  editLearningEnabled?: boolean;
+  /** 让未处理的即时建议进入可跨重启收件箱。 */
+  vocabSuggestionInboxEnabled?: boolean;
+  /** project 临时词条默认过期天数。 */
+  temporaryVocabTtlDays?: number;
+  temporaryVocabCapacity?: number;
   /** 概览页是否显示「年度活动」热力图卡。默认 true；关闭只隐藏卡片，活动计数照常记录。 */
   showOverviewActivityHeatmap: boolean;
   /** 易读布局：小屏或大字号时强制同行控件换行，避免横向溢出。默认 false。 */
@@ -685,6 +722,8 @@ export interface CapsulePayload {
    * 语音/QA 胶囊行为，兼容旧后端 payload。
    */
   selectionPolish?: boolean;
+  /** Esc 取消后可继续录音的历史/WAV session id；只在 3 秒恢复提示期间存在。 */
+  recoverySessionId?: string | null;
 }
 
 export interface CredentialsStatus {

@@ -324,6 +324,9 @@ mod retranscribe_tests {
             pipeline_mode: None,
             asr_ms: Some(15000),
             polish_ms: Some(1200),
+            asr_dictionary_delivery: None,
+            llm_dictionary_sent_count: None,
+            llm_dictionary_delivery: None,
         }
     }
 

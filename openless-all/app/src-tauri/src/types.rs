@@ -61,6 +61,7 @@ pub enum HistorySource {
     #[default]
     Voice,
     SelectionPolish,
+    SelectionCorrection,
 }
 
 impl PolishMode {
@@ -257,6 +258,33 @@ pub struct ActivityDay {
     pub duration_ms: u64,
 }
 
+/// 本次会话的词典到底如何进入了识别请求。历史记录保存的是会话创建时的实际快照，
+/// 而不是事后按当前设置推测，方便用户判断某个词条为什么没有对当前 ASR 生效。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DictionaryDeliveryReport {
+    pub provider: String,
+    pub mode: DictionaryDeliveryMode,
+    pub sent_count: u32,
+    pub dropped_count: u32,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum DictionaryDeliveryMode {
+    /// 供应商有独立 hotwords / vocabulary 参数。
+    Dedicated,
+    /// 词条被拼进 ASR 的 prompt 参数。
+    Prompt,
+    /// 当前 ASR 不接受本地词典；词条仍可能在后续 LLM 润色阶段生效。
+    #[default]
+    Unsupported,
+    /// 多模态单模型管线把词条放进同一个 system prompt。
+    MultimodalPrompt,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DictationSession {
@@ -327,6 +355,39 @@ pub struct DictationSession {
     /// LLM 润色/翻译调用的实测耗时（毫秒）。未调用 LLM 时 None。
     #[serde(default)]
     pub polish_ms: Option<u64>,
+    /// ASR 请求创建时的词典投递报告。旧历史没有此字段时隐藏。
+    #[serde(default)]
+    pub asr_dictionary_delivery: Option<DictionaryDeliveryReport>,
+    /// 本次真实进入 LLM / 多模态提示词的词条数量。Raw 直通或没有调用 LLM 时为 None。
+    #[serde(default)]
+    pub llm_dictionary_sent_count: Option<u32>,
+    /// 本次 LLM 请求的词典投递报告。保留上面的计数字段用于读取 v1.4 早期构建历史；
+    /// 新 UI 优先读取本结构，以同时展示通道、丢弃数和原因。
+    #[serde(default)]
+    pub llm_dictionary_delivery: Option<DictionaryDeliveryReport>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum DictionarySource {
+    /// 用户手工添加，兼容旧 dictionary.json 的默认值。
+    #[default]
+    Manual,
+    /// 用户确认过的手改学习候选。
+    Learned,
+    /// 从旧版、Typeless 或其它外部来源导入。
+    Imported,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum DictionaryScope {
+    #[default]
+    #[serde(alias = "global")]
+    Persistent,
+    /// 仅在 project_key 与当前宿主应用/项目键一致且未过期时参与请求。
+    #[serde(alias = "project")]
+    Temporary,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -346,6 +407,21 @@ pub struct DictionaryEntry {
     /// Swift 写 ISO8601;Rust 也用 String,直接通过。
     #[serde(default)]
     pub created_at: String,
+    /// 显式来源取代旧版依赖中文 note 文案的隐式判定。
+    #[serde(default)]
+    pub source: DictionarySource,
+    #[serde(default)]
+    pub scope: DictionaryScope,
+    #[serde(default)]
+    pub pinned: bool,
+    #[serde(default)]
+    pub last_hit_at: Option<String>,
+    /// 有值即为临时词条；到期后仍可在管理页看到，但不再进入 ASR/LLM。
+    #[serde(default)]
+    pub expires_at: Option<String>,
+    /// temporary scope 的稳定键。桌面端优先使用 bundle id / 进程标识。
+    #[serde(default)]
+    pub project_key: Option<String>,
 }
 
 /// 一条纠正规则是怎么来的。
@@ -380,9 +456,8 @@ pub struct CorrectionRule {
 
 /// 一条等待用户确认的词条建议。
 ///
-/// 只存在内存里，不落盘：建议是易逝的 —— 卡片消失就当没发生，用户下次改同一个词会再
-/// 产生一条。这也是不做「拒绝名单」的原因：一份用户看不见的名单，只会让他将来纳闷
-/// 「为什么这个词它不学了」。
+/// 默认只存在内存里；用户开启建议收件箱后，会在本机侧车文件中保留到过期。拒绝只删除
+/// 当前建议，不维护隐藏拒绝名单，避免未来相同修改被永久静默忽略。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct PendingCorrection {
@@ -391,6 +466,35 @@ pub struct PendingCorrection {
     pub pattern: String,
     /// 用户最后要的那个词 —— 点「好」之后进词汇表的就是它。
     pub replacement: String,
+    /// 位置围栏命中为 high；只有内容回落命中时为 low。
+    #[serde(default)]
+    pub confidence: CorrectionConfidence,
+    #[serde(default)]
+    pub attribution: CorrectionAttribution,
+    #[serde(default)]
+    pub created_at: String,
+    /// 开启候选收件箱时的自动清理时间；即时卡片可为 None。
+    #[serde(default)]
+    pub expires_at: Option<String>,
+    #[serde(default)]
+    pub source_app: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum CorrectionConfidence {
+    High,
+    #[default]
+    Low,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum CorrectionAttribution {
+    Asr,
+    Llm,
+    #[default]
+    Unknown,
 }
 
 /// 一张卡片上最多列几条。同一次听写里改好几个词会合并到一张卡；再多就该丢最老的了，
@@ -853,6 +957,14 @@ fn default_silence_auto_stop_seconds() -> f32 {
     3.0
 }
 
+fn default_temporary_vocab_ttl_days() -> u32 {
+    7
+}
+
+fn default_temporary_vocab_capacity() -> u32 {
+    100
+}
+
 fn resolve_windows_insertion_mode(
     mode: WindowsInsertionMode,
     legacy_sendinput_only: bool,
@@ -1164,12 +1276,27 @@ pub struct UserPreferences {
     ///
     /// **默认 false，且必须保持 false。** 开启后每次听写都会读取前台 app 的正文并把
     /// 其中一段发给 LLM 服务商——这是用户没有主动交给我们的数据，只能由用户显式选择。
-    /// 关闭时 `host_document` 一次 AX 都不发，prompt 与本功能存在之前逐字节相同。
+    /// 关闭时 `host_document` 不调用任何平台文档读取接口，prompt 与本功能存在之前一致。
     ///
-    /// 目前仅 macOS 有实现；Windows / Linux 开了也读不到，优雅降级为无上下文。
-    /// 密码框 / Secure Input / 密码管理器 / 终端一律硬拦，与本开关无关。
+    /// macOS 走 AX，Windows 走 OpenLess TSF 服务，Linux 走 fcitx5 SurroundingText；
+    /// 适配器不可用时优雅降级为无上下文。密码框、敏感能力、密码管理器与终端一律硬拦。
     #[serde(default)]
     pub cursor_context_enabled: bool,
+    /// 总开关开启后，是否把宿主文档上下文送进 LLM。旧配置缺失时继承总开关。
+    #[serde(default)]
+    pub cursor_context_llm_enabled: bool,
+    /// 总开关开启后，是否监听本次落字的后续手改并生成可确认候选。旧配置缺失时继承总开关。
+    #[serde(default)]
+    pub edit_learning_enabled: bool,
+    /// 即时卡片消失后是否把未处理候选保存在本机收件箱。
+    #[serde(default)]
+    pub vocab_suggestion_inbox_enabled: bool,
+    /// 新建临时词条的默认生命周期，只影响临时层。
+    #[serde(default = "default_temporary_vocab_ttl_days")]
+    pub temporary_vocab_ttl_days: u32,
+    /// 临时层总容量；固定词条永不因容量被淘汰，因此极端情况下可暂时超过此值。
+    #[serde(default = "default_temporary_vocab_capacity")]
+    pub temporary_vocab_capacity: u32,
     /// 概览页是否显示「年度活动」热力图卡。默认 true；关闭只隐藏卡片，
     /// 活动计数照常记录（persistence/activity.rs），再打开时全年数据仍在。
     #[serde(default = "default_true")]
@@ -1450,6 +1577,17 @@ struct UserPreferencesWire {
     streaming_insert_save_clipboard: bool,
     #[serde(default)]
     cursor_context_enabled: bool,
+    /// Option 区分旧文件缺字段和用户明确关闭；缺失时从总开关迁移。
+    #[serde(default)]
+    cursor_context_llm_enabled: Option<bool>,
+    #[serde(default)]
+    edit_learning_enabled: Option<bool>,
+    #[serde(default)]
+    vocab_suggestion_inbox_enabled: bool,
+    #[serde(default = "default_temporary_vocab_ttl_days")]
+    temporary_vocab_ttl_days: u32,
+    #[serde(default = "default_temporary_vocab_capacity")]
+    temporary_vocab_capacity: u32,
     #[serde(default = "default_true")]
     show_overview_activity_heatmap: bool,
     #[serde(default)]
@@ -1605,6 +1743,11 @@ impl Default for UserPreferencesWire {
             streaming_insert_default_migrated: prefs.streaming_insert_default_migrated,
             streaming_insert_save_clipboard: prefs.streaming_insert_save_clipboard,
             cursor_context_enabled: prefs.cursor_context_enabled,
+            cursor_context_llm_enabled: Some(prefs.cursor_context_llm_enabled),
+            edit_learning_enabled: Some(prefs.edit_learning_enabled),
+            vocab_suggestion_inbox_enabled: prefs.vocab_suggestion_inbox_enabled,
+            temporary_vocab_ttl_days: prefs.temporary_vocab_ttl_days,
+            temporary_vocab_capacity: prefs.temporary_vocab_capacity,
             show_overview_activity_heatmap: prefs.show_overview_activity_heatmap,
             stacked_row_layout: prefs.stacked_row_layout,
             conservative_layout: prefs.conservative_layout,
@@ -1763,6 +1906,15 @@ impl<'de> Deserialize<'de> for UserPreferences {
             streaming_insert_default_migrated: true,
             streaming_insert_save_clipboard: wire.streaming_insert_save_clipboard,
             cursor_context_enabled: wire.cursor_context_enabled,
+            cursor_context_llm_enabled: wire
+                .cursor_context_llm_enabled
+                .unwrap_or(wire.cursor_context_enabled),
+            edit_learning_enabled: wire
+                .edit_learning_enabled
+                .unwrap_or(wire.cursor_context_enabled),
+            vocab_suggestion_inbox_enabled: wire.vocab_suggestion_inbox_enabled,
+            temporary_vocab_ttl_days: wire.temporary_vocab_ttl_days.clamp(1, 365),
+            temporary_vocab_capacity: wire.temporary_vocab_capacity.clamp(1, 10_000),
             show_overview_activity_heatmap: wire.show_overview_activity_heatmap,
             stacked_row_layout: wire.stacked_row_layout,
             conservative_layout: wire.conservative_layout,
@@ -2581,6 +2733,11 @@ impl Default for UserPreferences {
             streaming_insert_default_migrated: true,
             streaming_insert_save_clipboard: true,
             cursor_context_enabled: false,
+            cursor_context_llm_enabled: false,
+            edit_learning_enabled: false,
+            vocab_suggestion_inbox_enabled: false,
+            temporary_vocab_ttl_days: default_temporary_vocab_ttl_days(),
+            temporary_vocab_capacity: default_temporary_vocab_capacity(),
             show_overview_activity_heatmap: true,
             stacked_row_layout: false,
             conservative_layout: false,
@@ -3297,6 +3454,10 @@ pub struct CapsulePayload {
     /// 窗口，但前端据此切换为一行状态提示，避免改变既有语音光效与文案。
     #[serde(default)]
     pub selection_polish: bool,
+    /// Esc 在录音阶段取消后，这里携带可恢复录音的 session id。前端据此在原胶囊位置
+    /// 渲染一个 3 秒「是否继续」提示；其它状态为 None，兼容旧前端。
+    #[serde(default)]
+    pub recovery_session_id: Option<String>,
 }
 
 /// Snapshot of credentials read from vault — only what the UI needs to know
@@ -4059,6 +4220,50 @@ mod tests {
     }
 
     #[test]
+    fn legacy_cursor_context_value_migrates_both_purpose_switches() {
+        for (legacy, expected) in [(true, true), (false, false)] {
+            let json = format!(r#"{{ "cursorContextEnabled": {legacy} }}"#);
+            let prefs: UserPreferences = serde_json::from_str(&json).unwrap();
+            assert_eq!(prefs.cursor_context_enabled, expected);
+            assert_eq!(prefs.cursor_context_llm_enabled, expected);
+            assert_eq!(prefs.edit_learning_enabled, expected);
+        }
+
+        let explicit: UserPreferences = serde_json::from_str(
+            r#"{
+                "cursorContextEnabled": true,
+                "cursorContextLlmEnabled": false,
+                "editLearningEnabled": true
+            }"#,
+        )
+        .unwrap();
+        assert!(!explicit.cursor_context_llm_enabled);
+        assert!(explicit.edit_learning_enabled);
+        assert_eq!(explicit.temporary_vocab_ttl_days, 7);
+        assert_eq!(explicit.temporary_vocab_capacity, 100);
+    }
+
+    #[test]
+    fn dictionary_scope_migrates_legacy_names_and_writes_the_v1_4_contract() {
+        assert_eq!(
+            serde_json::from_str::<DictionaryScope>(r#""global""#).unwrap(),
+            DictionaryScope::Persistent
+        );
+        assert_eq!(
+            serde_json::from_str::<DictionaryScope>(r#""project""#).unwrap(),
+            DictionaryScope::Temporary
+        );
+        assert_eq!(
+            serde_json::to_string(&DictionaryScope::Persistent).unwrap(),
+            r#""persistent""#
+        );
+        assert_eq!(
+            serde_json::to_string(&DictionaryScope::Temporary).unwrap(),
+            r#""temporary""#
+        );
+    }
+
+    #[test]
     fn paste_shortcut_round_trips_explicit_values() {
         for (raw, expected) in [
             ("ctrlV", PasteShortcut::CtrlV),
@@ -4231,6 +4436,9 @@ mod tests {
             pipeline_mode: None,
             asr_ms: Some(230),
             polish_ms: Some(1450),
+            asr_dictionary_delivery: None,
+            llm_dictionary_sent_count: None,
+            llm_dictionary_delivery: None,
         };
         let json = serde_json::to_value(&session).expect("serialize");
         assert_eq!(json["source"], "selection_polish");

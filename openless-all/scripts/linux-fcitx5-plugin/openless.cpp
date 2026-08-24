@@ -19,6 +19,8 @@
  *    SetAuxDown(s: text)                 — 在候选词列表下方显示状态文本
  *    ClearAuxDown()                      — 清除候选词列表下方文本
  *    GetSelectionText() -> s             — 读取当前 PRIMARY 选区文本（由 clipboard addon 维护）
+ *    GetSurroundingText() -> (s,u,s)     — 当前输入上下文、UTF-8 byte 光标与状态原因
+ *                                          密码/敏感/终端上下文只返回 blocked_sensitive
  *  信号:
  *    DictationKeyEvent(uub: sym, states, isPress) — 听写热键按下/抬起
  *    QaShortcutEvent(uub: sym, states, isPress)   — QA 快捷键按下/抬起
@@ -28,6 +30,7 @@
 
 #include <memory>
 #include <string>
+#include <tuple>
 #include <vector>
 
 #include <fcitx-config/configuration.h>
@@ -472,6 +475,47 @@ public:
         return text;
     }
 
+    /// 读取 fcitx 客户端主动上报的 surrounding text。
+    ///
+    /// 返回 `(text, cursorByte, reason)`：reason 为空表示成功。敏感上下文不抛 DBus
+    /// error，而是返回稳定机器码，Rust 侧才能把它与「插件没装」区分成 Blocked。
+    std::tuple<std::string, uint32_t, std::string> getSurroundingText() {
+        InputContext *ic = nullptr;
+        auto &mgr = instance_->inputContextManager();
+        mgr.foreachFocused([&](InputContext *focusedIc) {
+            ic = focusedIc;
+            return false;
+        });
+        if (!ic) {
+            ic = savedIc_;
+        }
+        if (!ic) {
+            return {std::string(), 0, "no_input_context"};
+        }
+
+        const auto capabilities = ic->capabilityFlags();
+        if (capabilities.test(CapabilityFlag::Password) ||
+            capabilities.test(CapabilityFlag::Sensitive) ||
+            capabilities.test(CapabilityFlag::Terminal)) {
+            FCITX_LOGC(openless, Debug)
+                << "GetSurroundingText: blocked sensitive input context";
+            return {std::string(), 0, "blocked_sensitive"};
+        }
+
+        const auto &surrounding = ic->surroundingText();
+        if (!surrounding.isValid()) {
+            return {std::string(), 0, "surrounding_text_unavailable"};
+        }
+        const auto cursor = surrounding.cursor();
+        if (cursor < 0 || static_cast<size_t>(cursor) > surrounding.text().size()) {
+            return {std::string(), 0, "invalid_cursor"};
+        }
+        FCITX_LOGC(openless, Debug)
+            << "GetSurroundingText: " << surrounding.text().size()
+            << " bytes, cursor=" << cursor;
+        return {surrounding.text(), static_cast<uint32_t>(cursor), std::string()};
+    }
+
     FCITX_OBJECT_VTABLE_METHOD(commitText, "CommitText", "s", "");
     FCITX_OBJECT_VTABLE_METHOD(setAuxDown, "SetAuxDown", "s", "");
     FCITX_OBJECT_VTABLE_METHOD(clearAuxDown, "ClearAuxDown", "", "");
@@ -482,6 +526,7 @@ public:
     FCITX_OBJECT_VTABLE_METHOD(setSelectionPolishHotkeyRaw, "SetSelectionPolishHotkeyRaw", "uu", "");
     FCITX_OBJECT_VTABLE_METHOD(setTranslationHotkeyRaw, "SetTranslationHotkeyRaw", "uu", "");
     FCITX_OBJECT_VTABLE_METHOD(getSelectionText, "GetSelectionText", "", "s");
+    FCITX_OBJECT_VTABLE_METHOD(getSurroundingText, "GetSurroundingText", "", "sus");
     FCITX_OBJECT_VTABLE_SIGNAL(dictationKeyEvent, "DictationKeyEvent", "uub");
     FCITX_OBJECT_VTABLE_SIGNAL(dictationKeyCombined, "DictationKeyCombined", "uub");
     FCITX_OBJECT_VTABLE_SIGNAL(qaShortcutEvent, "QaShortcutEvent", "uub");

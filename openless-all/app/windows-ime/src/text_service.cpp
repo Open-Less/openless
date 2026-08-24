@@ -12,12 +12,21 @@ namespace {
 
 constexpr wchar_t kMessageWindowClassName[] = L"OpenLessImeMessageWindow";
 constexpr UINT kSubmitTextMessage = WM_APP + 1;
+constexpr UINT kReadContextMessage = WM_APP + 2;
 constexpr UINT kSubmitTextTimeoutMs = 2000;
 
 struct SubmitTextRequest {
   const std::wstring* session_id = nullptr;
   const std::wstring* text = nullptr;
   std::shared_ptr<OpenLessAsyncEditState> async_completion;
+  bool wait_for_async_completion = false;
+  HRESULT result = E_UNEXPECTED;
+};
+
+struct ReadContextRequest {
+  uint32_t before_chars = 0;
+  uint32_t after_chars = 0;
+  std::shared_ptr<OpenLessContextReadState> state;
   bool wait_for_async_completion = false;
   HRESULT result = E_UNEXPECTED;
 };
@@ -39,6 +48,49 @@ HRESULT WaitForAsyncEditCompletion(
     return HRESULT_FROM_WIN32(ERROR_TIMEOUT);
   }
   return HRESULT_FROM_WIN32(GetLastError());
+}
+
+HRESULT WaitForContextReadCompletion(
+    const std::shared_ptr<OpenLessContextReadState>& completion) {
+  if (!completion || !completion->IsValid()) {
+    return HRESULT_FROM_WIN32(completion && completion->create_error != ERROR_SUCCESS
+                                  ? completion->create_error
+                                  : ERROR_INVALID_HANDLE);
+  }
+  const DWORD wait_result =
+      WaitForSingleObject(completion->event, kSubmitTextTimeoutMs);
+  if (wait_result == WAIT_OBJECT_0) {
+    return completion->result;
+  }
+  if (wait_result == WAIT_TIMEOUT) {
+    return HRESULT_FROM_WIN32(ERROR_TIMEOUT);
+  }
+  return HRESULT_FROM_WIN32(GetLastError());
+}
+
+HRESULT FinishContextRead(
+    HRESULT request_result,
+    const std::shared_ptr<OpenLessContextReadState>& state,
+    bool wait_for_async_completion,
+    std::wstring* text,
+    uint32_t* cursor_utf16,
+    bool* blocked) {
+  HRESULT hr = request_result;
+  if (wait_for_async_completion) {
+    hr = WaitForContextReadCompletion(state);
+  }
+  if (state) {
+    *blocked = state->blocked;
+  }
+  if (FAILED(hr)) {
+    return hr;
+  }
+  if (!state) {
+    return E_UNEXPECTED;
+  }
+  *text = state->text;
+  *cursor_utf16 = state->cursor_utf16;
+  return S_OK;
 }
 
 }  // namespace
@@ -160,6 +212,47 @@ HRESULT OpenLessTextService::SubmitTextFromPipe(
   }
 
   return request.result;
+}
+
+HRESULT OpenLessTextService::ReadContextFromPipe(
+    uint32_t before_chars,
+    uint32_t after_chars,
+    std::wstring* text,
+    uint32_t* cursor_utf16,
+    bool* blocked) {
+  if (text == nullptr || cursor_utf16 == nullptr || blocked == nullptr) {
+    return E_POINTER;
+  }
+  text->clear();
+  *cursor_utf16 = 0;
+  *blocked = false;
+
+  if (GetCurrentThreadId() == owner_thread_id_) {
+    std::shared_ptr<OpenLessContextReadState> state;
+    bool wait = false;
+    const HRESULT hr = ReadContextOnOwnerThread(
+        before_chars, after_chars, &state, &wait);
+    return FinishContextRead(hr, state, wait, text, cursor_utf16, blocked);
+  }
+  if (message_window_ == nullptr) {
+    return E_UNEXPECTED;
+  }
+
+  ReadContextRequest request;
+  request.before_chars = before_chars;
+  request.after_chars = after_chars;
+  DWORD_PTR message_result = 0;
+  const LRESULT sent = SendMessageTimeoutW(
+      message_window_, kReadContextMessage, 0,
+      reinterpret_cast<LPARAM>(&request), SMTO_ABORTIFHUNG,
+      kSubmitTextTimeoutMs, &message_result);
+  if (sent == 0) {
+    const DWORD error = GetLastError();
+    return HRESULT_FROM_WIN32(error != ERROR_SUCCESS ? error : ERROR_TIMEOUT);
+  }
+  return FinishContextRead(request.result, request.state,
+                           request.wait_for_async_completion, text,
+                           cursor_utf16, blocked);
 }
 
 HRESULT OpenLessTextService::StartIpcServer() {
@@ -300,6 +393,86 @@ HRESULT OpenLessTextService::CommitTextOnOwnerThread(
   return S_OK;
 }
 
+HRESULT OpenLessTextService::ReadContextOnOwnerThread(
+    uint32_t before_chars,
+    uint32_t after_chars,
+    std::shared_ptr<OpenLessContextReadState>* state,
+    bool* wait_for_async_completion) {
+  if (state == nullptr || wait_for_async_completion == nullptr) {
+    return E_POINTER;
+  }
+  *wait_for_async_completion = false;
+  if (thread_mgr_ == nullptr || client_id_ == TF_CLIENTID_NULL) {
+    return E_UNEXPECTED;
+  }
+
+  ITfDocumentMgr* document_mgr = nullptr;
+  HRESULT hr = thread_mgr_->GetFocus(&document_mgr);
+  if (FAILED(hr) || document_mgr == nullptr) {
+    return FAILED(hr) ? hr : E_FAIL;
+  }
+  ITfContext* context = nullptr;
+  hr = document_mgr->GetTop(&context);
+  document_mgr->Release();
+  if (FAILED(hr) || context == nullptr) {
+    return FAILED(hr) ? hr : E_FAIL;
+  }
+
+  auto completion = std::make_shared<OpenLessContextReadState>();
+  if (!completion->IsValid()) {
+    context->Release();
+    return HRESULT_FROM_WIN32(completion->create_error != ERROR_SUCCESS
+                                  ? completion->create_error
+                                  : ERROR_INVALID_HANDLE);
+  }
+  auto* session = new (std::nothrow) OpenLessContextReadSession(
+      context, before_chars, after_chars, completion);
+  if (session == nullptr) {
+    context->Release();
+    return E_OUTOFMEMORY;
+  }
+  HRESULT edit_result = S_OK;
+  hr = context->RequestEditSession(client_id_, session,
+                                   TF_ES_SYNC | TF_ES_READ, &edit_result);
+  session->Release();
+
+  const bool synchronous_rejected =
+      hr == TF_E_SYNCHRONOUS ||
+      (SUCCEEDED(hr) && edit_result == TF_E_SYNCHRONOUS);
+  if (!synchronous_rejected) {
+    context->Release();
+    *state = std::move(completion);
+    return FAILED(hr) ? hr : edit_result;
+  }
+
+  completion = std::make_shared<OpenLessContextReadState>();
+  if (!completion->IsValid()) {
+    context->Release();
+    return E_OUTOFMEMORY;
+  }
+  auto* async_session = new (std::nothrow) OpenLessContextReadSession(
+      context, before_chars, after_chars, completion);
+  if (async_session == nullptr) {
+    context->Release();
+    return E_OUTOFMEMORY;
+  }
+  HRESULT async_edit_result = S_OK;
+  hr = context->RequestEditSession(client_id_, async_session,
+                                   TF_ES_ASYNC | TF_ES_READ,
+                                   &async_edit_result);
+  async_session->Release();
+  context->Release();
+  if (FAILED(hr)) {
+    return hr;
+  }
+  if (FAILED(async_edit_result)) {
+    return async_edit_result;
+  }
+  *state = std::move(completion);
+  *wait_for_async_completion = true;
+  return S_OK;
+}
+
 LRESULT CALLBACK OpenLessTextService::MessageWindowProc(HWND window,
                                                         UINT message,
                                                         WPARAM wparam,
@@ -324,6 +497,16 @@ LRESULT CALLBACK OpenLessTextService::MessageWindowProc(HWND window,
 
     request->result = service->CommitTextOnOwnerThread(
         *request->session_id, *request->text, &request->async_completion,
+        &request->wait_for_async_completion);
+    return 1;
+  }
+  if (message == kReadContextMessage && service != nullptr) {
+    auto* request = reinterpret_cast<ReadContextRequest*>(lparam);
+    if (request == nullptr) {
+      return 0;
+    }
+    request->result = service->ReadContextOnOwnerThread(
+        request->before_chars, request->after_chars, &request->state,
         &request->wait_for_async_completion);
     return 1;
   }

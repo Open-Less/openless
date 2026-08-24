@@ -128,12 +128,17 @@ export function VocabSuggestionCard({ suggestions }: VocabSuggestionCardProps) {
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
                 }}
-                title={`${s.pattern} → ${s.replacement}`}
+                title={`${s.pattern} → ${s.replacement} · ${s.attribution} · ${s.confidence}`}
               >
                 <span style={{ opacity: 0.4 }}>{s.pattern}</span>
                 <span style={{ opacity: 0.3, margin: '0 5px' }}>→</span>
                 {s.replacement}
               </span>
+              {s.confidence === 'low' && (
+                <span style={{ flexShrink: 0, fontSize: 9, opacity: 0.55 }}>
+                  {t('vocabCard.lowConfidence', { defaultValue: 'check' })}
+                </span>
+              )}
               <CardButton
                 kind="accept"
                 label={t('vocabCard.accept')}

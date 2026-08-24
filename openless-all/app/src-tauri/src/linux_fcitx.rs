@@ -312,6 +312,23 @@ pub fn get_selection_text() -> Result<String, String> {
         .map_err(|e| format!("GetSelectionText reply: {e}"))
 }
 
+/// 读取当前 fcitx InputContext 上报的 surrounding text。
+///
+/// `cursor` 是 fcitx 协议里的 UTF-8 byte offset；调用方在截窗前负责转成 char offset。
+/// 第三个返回值是稳定状态码，空字符串表示成功。
+pub fn get_surrounding_text() -> Result<(String, u32, String), String> {
+    let conn =
+        dbus::blocking::Connection::new_session().map_err(|e| format!("dbus session: {e}"))?;
+    let msg = dbus::Message::new_method_call(DEST, PATH, IFACE, "GetSurroundingText")
+        .map_err(|e| format!("build msg: {e}"))?;
+    let reply = conn
+        .send_with_reply_and_block(msg, TIMEOUT)
+        .map_err(|e| format!("GetSurroundingText: {e}"))?;
+    reply
+        .read3::<String, u32, String>()
+        .map_err(|e| format!("GetSurroundingText reply: {e}"))
+}
+
 /// 启动 fcitx5 DictationKeyEvent 信号监听线程。
 ///
 /// 当 fcitx5 OpenLess 插件检测到配置的听写热键被按下或松开时，

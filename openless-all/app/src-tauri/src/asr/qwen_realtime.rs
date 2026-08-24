@@ -121,6 +121,9 @@ struct SyncState {
     pending_audio: Vec<u8>,
     audio_scratch: Vec<u8>,
     bytes_received: u64,
+    /// 已经真正写入 WebSocket 的 PCM 字节数。恢复录音时旧音频会一次性进入发送队列，
+    /// 需要用它估算队列还要按实时节奏排空多久，避免固定 12s 收尾超时提前中断。
+    bytes_sent: u64,
     session_started: bool,
     session_finished: bool,
     session_start_error: Option<String>,
@@ -201,9 +204,21 @@ impl Qwen3RealtimeASR {
         let writer_for_worker = Arc::clone(&self.writer);
         let weak_self_for_worker = Arc::downgrade(self);
         tokio::spawn(async move {
+            // Qwen realtime 按实时流消费音频。正常录音时 recorder 本来就约每 100ms
+            // 送来一帧；恢复录音则会把之前保存的 PCM 一次性灌进队列。若不节流，这批
+            // 帧会在几毫秒内全部写进 WebSocket，服务端会把它当成超实时突发而漏掉旧段。
+            let mut next_audio_send_at: Option<tokio::time::Instant> = None;
             while let Some(item) = send_rx.recv().await {
                 match item {
                     SendItem::Audio(chunk) => {
+                        let now = tokio::time::Instant::now();
+                        let frame_started_at = match next_audio_send_at {
+                            Some(deadline) if deadline > now => {
+                                tokio::time::sleep_until(deadline).await;
+                                deadline
+                            }
+                            _ => now,
+                        };
                         if let Err(e) =
                             send_text(&writer_for_worker, append_audio_message(&chunk)).await
                         {
@@ -213,6 +228,15 @@ impl Qwen3RealtimeASR {
                             }
                             break;
                         }
+                        if let Some(this) = weak_self_for_worker.upgrade() {
+                            let mut st = this.state.lock();
+                            st.bytes_sent = st.bytes_sent.saturating_add(chunk.len() as u64);
+                        }
+                        // 以上一帧的计划时刻为基准，避免把每次 WebSocket write 的耗时
+                        // 累加进节拍；网络偶发卡顿时则从当前时刻重新起算，不追赶突发。
+                        next_audio_send_at = Some(
+                            frame_started_at + realtime_audio_duration(chunk.len() as u64),
+                        );
                     }
                     SendItem::Finish(done) => {
                         let result = send_text(&writer_for_worker, finish_session_message())
@@ -284,7 +308,17 @@ impl Qwen3RealtimeASR {
     }
 
     pub async fn send_last_frame(&self) -> Result<(), Qwen3ASRError> {
-        let result = tokio::time::timeout(FINAL_RESULT_TIMEOUT, async {
+        let (finish_timeout, pending_audio_bytes) = {
+            let st = self.state.lock();
+            let pending = st.bytes_received.saturating_sub(st.bytes_sent);
+            (final_result_timeout(pending), pending)
+        };
+        if pending_audio_bytes > TARGET_AUDIO_CHUNK_BYTES as u64 {
+            log::info!(
+                "[qwen3-asr] draining {pending_audio_bytes} queued audio bytes at realtime cadence before finish"
+            );
+        }
+        let result = tokio::time::timeout(finish_timeout, async {
             let finished = self.session_finished.notified();
             tokio::pin!(finished);
             finished.as_mut().enable();
@@ -583,6 +617,16 @@ fn drain_audio_chunks(buffer: &mut Vec<u8>) -> Vec<Vec<u8>> {
         chunks.push(buffer.drain(..TARGET_AUDIO_CHUNK_BYTES).collect());
     }
     chunks
+}
+
+/// PCM 为 16kHz / 16-bit / mono，即每毫秒 32 字节。向上取整以免尾帧得到 0ms。
+fn realtime_audio_duration(bytes: u64) -> Duration {
+    Duration::from_millis(bytes.saturating_add(BYTES_PER_MS - 1) / BYTES_PER_MS)
+}
+
+/// 固定的服务端收尾窗口之外，为尚未发出的音频保留完整实时播放时长。
+fn final_result_timeout(pending_audio_bytes: u64) -> Duration {
+    FINAL_RESULT_TIMEOUT.saturating_add(realtime_audio_duration(pending_audio_bytes))
 }
 
 /// VAD 句段拼接：CJK 之间直接相连；拉丁词之间补空格，避免英文句段黏连。
@@ -977,5 +1021,22 @@ mod tests {
         let chunks = drain_audio_chunks(&mut buffer);
         assert_eq!(chunks.len(), 2);
         assert_eq!(buffer.len(), 17);
+    }
+
+    #[test]
+    fn realtime_pacing_uses_pcm_duration() {
+        assert_eq!(
+            realtime_audio_duration(TARGET_AUDIO_CHUNK_BYTES as u64),
+            Duration::from_millis(100)
+        );
+        assert_eq!(realtime_audio_duration(1), Duration::from_millis(1));
+    }
+
+    #[test]
+    fn finish_timeout_includes_queued_replay_duration() {
+        assert_eq!(
+            final_result_timeout(64_000),
+            FINAL_RESULT_TIMEOUT + Duration::from_secs(2)
+        );
     }
 }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <msctf.h>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <windows.h>
@@ -8,6 +9,7 @@
 #include "ipc_client.h"
 
 struct OpenLessAsyncEditState;
+struct OpenLessContextReadState;
 
 class OpenLessTextService final : public ITfTextInputProcessorEx {
  public:
@@ -28,6 +30,11 @@ class OpenLessTextService final : public ITfTextInputProcessorEx {
 
   HRESULT SubmitTextFromPipe(const std::wstring& session_id,
                              const std::wstring& text);
+  HRESULT ReadContextFromPipe(uint32_t before_chars,
+                              uint32_t after_chars,
+                              std::wstring* text,
+                              uint32_t* cursor_utf16,
+                              bool* blocked);
 
  private:
   HRESULT StartIpcServer();
@@ -38,6 +45,11 @@ class OpenLessTextService final : public ITfTextInputProcessorEx {
       const std::wstring& session_id,
       const std::wstring& text,
       std::shared_ptr<OpenLessAsyncEditState>* async_completion,
+      bool* wait_for_async_completion);
+  HRESULT ReadContextOnOwnerThread(
+      uint32_t before_chars,
+      uint32_t after_chars,
+      std::shared_ptr<OpenLessContextReadState>* state,
       bool* wait_for_async_completion);
 
   static LRESULT CALLBACK MessageWindowProc(HWND window,

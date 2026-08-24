@@ -73,6 +73,62 @@ impl HistoryStore {
         self.write_locked(&sessions)
     }
 
+    /// 以 session id 为键写入。Esc 恢复录音会沿用同一个 id；再次误按 Esc 时应更新
+    /// 原待处理条目，而不是在历史里制造两个指向同一 WAV 的重复记录。
+    pub fn upsert_with_retention(
+        &self,
+        session: DictationSession,
+        retention_days: u32,
+        max_entries: Option<u32>,
+    ) -> Result<()> {
+        let _guard = self.lock.lock();
+        let mut sessions = self.read_locked()?;
+        sessions.retain(|existing| existing.id != session.id);
+        sessions.insert(0, session);
+        if retention_days > 0 {
+            let cutoff = chrono::Utc::now() - chrono::Duration::days(i64::from(retention_days));
+            sessions.retain(|s| {
+                chrono::DateTime::parse_from_rfc3339(&s.created_at)
+                    .map(|t| t.with_timezone(&chrono::Utc) >= cutoff)
+                    .unwrap_or(true)
+            });
+        }
+        let cap = max_entries
+            .map(|n| (n as usize).clamp(5, HISTORY_CAP))
+            .unwrap_or(HISTORY_CAP);
+        sessions.truncate(sessions.len().min(cap));
+        self.write_locked(&sessions)
+    }
+
+    /// 仅当同 id 条目仍不存在时恢复占位。恢复录音启动失败会走这里；若用户已经再次
+    /// 按 Esc，取消路径写入的新条目必须获胜，不能被较旧的占位状态覆盖。
+    pub fn insert_if_missing_with_retention(
+        &self,
+        session: DictationSession,
+        retention_days: u32,
+        max_entries: Option<u32>,
+    ) -> Result<()> {
+        let _guard = self.lock.lock();
+        let mut sessions = self.read_locked()?;
+        if sessions.iter().any(|existing| existing.id == session.id) {
+            return Ok(());
+        }
+        sessions.insert(0, session);
+        if retention_days > 0 {
+            let cutoff = chrono::Utc::now() - chrono::Duration::days(i64::from(retention_days));
+            sessions.retain(|s| {
+                chrono::DateTime::parse_from_rfc3339(&s.created_at)
+                    .map(|t| t.with_timezone(&chrono::Utc) >= cutoff)
+                    .unwrap_or(true)
+            });
+        }
+        let cap = max_entries
+            .map(|n| (n as usize).clamp(5, HISTORY_CAP))
+            .unwrap_or(HISTORY_CAP);
+        sessions.truncate(sessions.len().min(cap));
+        self.write_locked(&sessions)
+    }
+
     /// 返回最近 N 分钟内的会话（newest-first）。`minutes == 0` → 空 Vec，
     /// 调用方据此跳过对话感知 polish 路径。
     pub fn recent_within_minutes(&self, minutes: u32) -> Result<Vec<DictationSession>> {

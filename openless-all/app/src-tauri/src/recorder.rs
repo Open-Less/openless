@@ -91,6 +91,24 @@ impl Recorder {
         level_handler: Arc<dyn Fn(f32) + Send + Sync>,
         audio_archive_path: Option<PathBuf>,
     ) -> Result<(Self, Receiver<RecorderError>, bool), RecorderError> {
+        Self::start_with_archive_prefix(
+            microphone_device_name,
+            consumer,
+            level_handler,
+            audio_archive_path,
+            None,
+        )
+    }
+
+    /// 恢复被 Esc 打断的录音：`archive_prefix_pcm` 是旧 WAV 的 PCM data，创建新归档时
+    /// 先写回它，再继续追加实时麦克风数据。这样中途恢复不会覆盖误按前已经说过的内容。
+    pub fn start_with_archive_prefix(
+        microphone_device_name: Option<String>,
+        consumer: Arc<dyn AudioConsumer>,
+        level_handler: Arc<dyn Fn(f32) + Send + Sync>,
+        audio_archive_path: Option<PathBuf>,
+        archive_prefix_pcm: Option<Vec<u8>>,
+    ) -> Result<(Self, Receiver<RecorderError>, bool), RecorderError> {
         // 启动信号：子线程构造 Stream 完成后通过 startup_tx 报告结果。
         let (startup_tx, startup_rx) = channel::<Result<(), RecorderError>>();
         // 运行期错误：Stream 已成功启动后，cpal 通过 err_cb 异步上报。
@@ -100,11 +118,16 @@ impl Recorder {
 
         // 同步路径上尝试创建 WavArchiver——成功 / 失败都立刻知道，传给 caller 决定
         // 是否在 history 标 has_audio_recording。失败仅 log::warn 不抛错，主路径继续。
-        let archiver = audio_archive_path.and_then(|path| match WavArchiver::create(&path) {
-            Ok(arch) => Some(Arc::new(Mutex::new(arch))),
-            Err(err) => {
-                log::warn!("[recorder] wav archive create failed at {path:?}: {err}");
-                None
+        let archiver = audio_archive_path.and_then(|path| {
+            match WavArchiver::create_with_prefix(
+                &path,
+                archive_prefix_pcm.as_deref().unwrap_or_default(),
+            ) {
+                Ok(arch) => Some(Arc::new(Mutex::new(arch))),
+                Err(err) => {
+                    log::warn!("[recorder] wav archive create failed at {path:?}: {err}");
+                    None
+                }
             }
         });
         let archive_active = archiver.is_some();
@@ -762,16 +785,17 @@ struct WavArchiver {
 }
 
 impl WavArchiver {
-    fn create(path: &Path) -> std::io::Result<Self> {
+    fn create_with_prefix(path: &Path, prefix_pcm: &[u8]) -> std::io::Result<Self> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
         let mut file = std::fs::File::create(path)?;
         use std::io::Write;
         file.write_all(&build_wav_header(0))?;
+        file.write_all(prefix_pcm)?;
         Ok(Self {
             file,
-            bytes_written: 0,
+            bytes_written: prefix_pcm.len().min(u32::MAX as usize) as u32,
         })
     }
 
@@ -837,6 +861,22 @@ mod tests {
             .chunks_exact(2)
             .map(|chunk| i16::from_le_bytes([chunk[0], chunk[1]]))
             .collect()
+    }
+
+    #[test]
+    fn wav_archiver_prefix_is_preserved_before_new_audio() {
+        let path = std::env::temp_dir().join(format!(
+            "openless-recorder-resume-{}.wav",
+            uuid::Uuid::new_v4()
+        ));
+        {
+            let mut archiver = WavArchiver::create_with_prefix(&path, &[1, 0, 2, 0]).unwrap();
+            archiver.append(&[3, 0, 4, 0]);
+        }
+        let wav = std::fs::read(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(&wav[44..], &[1, 0, 2, 0, 3, 0, 4, 0]);
+        assert_eq!(u32::from_le_bytes(wav[40..44].try_into().unwrap()), 8);
     }
 
     #[test]

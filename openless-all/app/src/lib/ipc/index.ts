@@ -61,8 +61,12 @@ export {
 export {
     listVocab,
     addVocab,
+    addVocabWithMetadata,
     removeVocab,
     setVocabEnabled,
+    setVocabMetadata,
+    listVocabSuggestions,
+    getDictionaryDeliveryPreview,
     listCorrectionRules,
     addCorrectionRule,
     acceptPendingCorrection,
@@ -82,6 +86,8 @@ export {
     startDictation,
     stopDictation,
     cancelDictation,
+    resumeCancelledRecording,
+    dismissCancelledRecordingRecovery,
     handleWindowHotkeyEvent,
 } from "./dictation"
 
@@ -155,6 +161,19 @@ export {
     confirmSelectionPolishPreview,
     cancelSelectionPolishPreview,
 } from './selection-polish-preview'
+
+export type {
+    SelectionCorrectionAction,
+    SelectionCorrectionBubblePayload,
+    SelectionCorrectionBubbleState,
+} from './selection-correction'
+export {
+    getSelectionCorrection,
+    startSelectionCorrection,
+    stopSelectionCorrection,
+    cancelSelectionCorrection,
+    dismissSelectionCorrection,
+} from './selection-correction'
 
 // less-computer
 export {

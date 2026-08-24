@@ -41,6 +41,199 @@ pub struct EditPair {
     pub after: String,
 }
 
+/// 带原文位置的一处独立改动。范围按 Unicode char 计，半开区间与 Rust slice 习惯一致。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PositionedEdit {
+    pub edit: EditPair,
+    pub source_start: usize,
+    pub source_end: usize,
+    pub target_start: usize,
+    pub target_end: usize,
+}
+
+/// Myers 搜索的最大编辑距离。正常纠词通常只有个位数；超过说明整段被重写或控件内容
+/// 被应用重建，停止精确搜索并交给低置信度兜底，避免在 2 万字文档上退化成巨量内存。
+const MAX_MULTI_EDIT_DISTANCE: usize = 512;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DiffOp {
+    Equal,
+    Delete,
+    Insert,
+}
+
+/// 提取多处互不相邻的编辑。返回 None 表示编辑距离超过安全上限，调用方可退回单段算法。
+/// 返回 Some(empty) 表示没有可学习的替换（例如只有纯插入或排版变化）。
+pub fn multiple_edits(before_text: &str, after_text: &str) -> Option<Vec<PositionedEdit>> {
+    let before_text = before_text.trim_end();
+    let after_text = after_text.trim_end();
+    if before_text == after_text {
+        return Some(Vec::new());
+    }
+    let old: Vec<char> = before_text.chars().collect();
+    let new: Vec<char> = after_text.chars().collect();
+    let ops = myers_ops(&old, &new, MAX_MULTI_EDIT_DISTANCE)?;
+
+    let mut edits = Vec::new();
+    let (mut old_index, mut new_index) = (0usize, 0usize);
+    let mut hunk_start: Option<(usize, usize)> = None;
+
+    let flush = |edits: &mut Vec<PositionedEdit>,
+                 hunk_start: &mut Option<(usize, usize)>,
+                 old_end: usize,
+                 new_end: usize| {
+        let Some((old_start, new_start)) = hunk_start.take() else {
+            return;
+        };
+        let source: String = old[old_start..old_end].iter().collect();
+        let target: String = new[new_start..new_end].iter().collect();
+        if let Some(edit) = build_edit_pair(&old, old_start, old_end, source, target) {
+            edits.push(PositionedEdit {
+                edit,
+                source_start: old_start,
+                source_end: old_end,
+                target_start: new_start,
+                target_end: new_end,
+            });
+        }
+    };
+
+    for op in ops {
+        match op {
+            DiffOp::Equal => {
+                flush(
+                    &mut edits,
+                    &mut hunk_start,
+                    old_index,
+                    new_index,
+                );
+                old_index += 1;
+                new_index += 1;
+            }
+            DiffOp::Delete => {
+                hunk_start.get_or_insert((old_index, new_index));
+                old_index += 1;
+            }
+            DiffOp::Insert => {
+                hunk_start.get_or_insert((old_index, new_index));
+                new_index += 1;
+            }
+        }
+    }
+    flush(
+        &mut edits,
+        &mut hunk_start,
+        old_index,
+        new_index,
+    );
+    Some(edits)
+}
+
+fn build_edit_pair(
+    old: &[char],
+    source_start: usize,
+    source_end: usize,
+    source: String,
+    target: String,
+) -> Option<EditPair> {
+    if source.is_empty() || source.chars().count().max(target.chars().count()) > MAX_EDIT_CHARS {
+        return None;
+    }
+    if source.trim().is_empty() || strip_whitespace(&source) == strip_whitespace(&target) {
+        return None;
+    }
+    let before: String = old[source_start.saturating_sub(CONTEXT_CHARS)..source_start]
+        .iter()
+        .collect();
+    let after: String = old[source_end..(source_end + CONTEXT_CHARS).min(old.len())]
+        .iter()
+        .collect();
+    Some(EditPair {
+        source,
+        target,
+        before,
+        after,
+    })
+}
+
+/// Myers O((N+M)D) 差异；对“小改大文档”近似线性，并用编辑距离上限封住最坏情况。
+fn myers_ops(old: &[char], new: &[char], max_distance: usize) -> Option<Vec<DiffOp>> {
+    let n = old.len() as isize;
+    let m = new.len() as isize;
+    let max = (old.len() + new.len()).min(max_distance);
+    let offset = max as isize + 1;
+    let width = max * 2 + 3;
+    let mut v = vec![0isize; width];
+    let index = |k: isize| (k + offset) as usize;
+    v[index(1)] = 0;
+    let mut trace: Vec<Vec<isize>> = Vec::with_capacity(max + 1);
+
+    for d in 0..=max {
+        trace.push(v.clone());
+        let d = d as isize;
+        let mut k = -d;
+        while k <= d {
+            let mut x = if k == -d || (k != d && v[index(k - 1)] < v[index(k + 1)]) {
+                v[index(k + 1)]
+            } else {
+                v[index(k - 1)] + 1
+            };
+            let mut y = x - k;
+            while x < n && y < m && old[x as usize] == new[y as usize] {
+                x += 1;
+                y += 1;
+            }
+            v[index(k)] = x;
+            if x >= n && y >= m {
+                return Some(backtrack_myers(&trace, old.len(), new.len(), offset));
+            }
+            k += 2;
+        }
+    }
+    None
+}
+
+fn backtrack_myers(
+    trace: &[Vec<isize>],
+    old_len: usize,
+    new_len: usize,
+    offset: isize,
+) -> Vec<DiffOp> {
+    let index = |k: isize| (k + offset) as usize;
+    let (mut x, mut y) = (old_len as isize, new_len as isize);
+    let mut reversed = Vec::with_capacity(old_len + new_len);
+
+    for d in (0..trace.len()).rev() {
+        let d_i = d as isize;
+        let v = &trace[d];
+        let k = x - y;
+        let prev_k = if k == -d_i || (k != d_i && v[index(k - 1)] < v[index(k + 1)]) {
+            k + 1
+        } else {
+            k - 1
+        };
+        let prev_x = v[index(prev_k)];
+        let prev_y = prev_x - prev_k;
+        while x > prev_x && y > prev_y {
+            reversed.push(DiffOp::Equal);
+            x -= 1;
+            y -= 1;
+        }
+        if d == 0 {
+            break;
+        }
+        if x == prev_x {
+            reversed.push(DiffOp::Insert);
+            y -= 1;
+        } else {
+            reversed.push(DiffOp::Delete);
+            x -= 1;
+        }
+    }
+    reversed.reverse();
+    reversed
+}
+
 /// 从「改之前 → 改之后」里抠出最小改动；不值得学的一律返回 `None`。
 ///
 /// 拒绝的六种情况，按判定顺序：
@@ -191,6 +384,30 @@ pub fn is_vocab_worthy(edit: &EditPair) -> bool {
     if crosses_a_sentence_boundary(source) || crosses_a_sentence_boundary(target) {
         return false;
     }
+    // 英文逐字重打会产生 `ap → ype` 这种夹在完整 token 中间的半截。目标同时与左右
+    // ASCII 字母/数字黏连时，等到完整词边界再判断。只黏一侧不能直接拒绝：
+    // `Codex → Cursor` 的最小差异是 `odex → ursor`，两者共享的 `C` 会留在左上下文。
+    let left_continues_word = target
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_alphanumeric())
+        && edit
+            .before
+            .chars()
+            .last()
+            .is_some_and(|c| c.is_ascii_alphanumeric());
+    let right_continues_word = target
+        .chars()
+        .last()
+        .is_some_and(|c| c.is_ascii_alphanumeric())
+        && edit
+            .after
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphanumeric());
+    if left_continues_word && right_continues_word {
+        return false;
+    }
     target.chars().count() <= MAX_PHRASE_CHARS && source.chars().count() <= MAX_PHRASE_CHARS
 }
 
@@ -321,6 +538,56 @@ mod tests {
             edit("我们用扣德克斯写代码", "我们用 Codex 写代码"),
             Some(("扣德克斯".to_string(), " Codex ".to_string()))
         );
+    }
+
+    #[test]
+    fn extracts_multiple_disjoint_word_edits_with_positions() {
+        let edits = multiple_edits(
+            "今天用扣德克斯写接口，然后部署到维塞尔。",
+            "今天用 Codex 写接口，然后部署到 Vercel。",
+        )
+        .expect("small multi edit");
+        assert_eq!(edits.len(), 2);
+        assert_eq!(edits[0].edit.source, "扣德克斯");
+        assert_eq!(edits[0].edit.target, " Codex ");
+        assert_eq!(edits[1].edit.source, "维塞尔");
+        assert_eq!(edits[1].edit.target, " Vercel");
+        assert!(edits[0].source_end <= edits[1].source_start);
+    }
+
+    #[test]
+    fn multiple_edits_do_not_merge_the_text_between_changes() {
+        let edits = multiple_edits("甲错一中间错二乙", "甲对一中间对二乙").expect("diff");
+        let pairs: Vec<_> = edits
+            .into_iter()
+            .map(|item| (item.edit.source, item.edit.target))
+            .collect();
+        assert_eq!(
+            pairs,
+            vec![
+                ("错".to_string(), "对".to_string()),
+                ("错".to_string(), "对".to_string())
+            ]
+        );
+    }
+
+    #[test]
+    fn incomplete_ascii_word_is_not_vocab_worthy() {
+        let edit = EditPair {
+            source: "ap".into(),
+            target: "ype".into(),
+            before: "T".into(),
+            after: "Script".into(),
+        };
+        assert!(!is_vocab_worthy(&edit));
+
+        let complete = EditPair {
+            source: "扣德克斯".into(),
+            target: "Codex".into(),
+            before: "用".into(),
+            after: "写".into(),
+        };
+        assert!(is_vocab_worthy(&complete));
     }
 
     #[test]
