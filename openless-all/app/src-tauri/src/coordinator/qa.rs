@@ -35,6 +35,8 @@ pub(super) struct QaSessionState {
     pub(super) panel_visible: bool,
     /// 多轮对话累积。每轮 user→assistant 加两条；关浮窗清空。
     pub(super) messages: Vec<crate::types::QaChatMessage>,
+    /// 划词提问面板「编辑指令」开关：勾选则文字/麦克风走编辑，否则走提问。
+    pub(super) edit_instruction_mode: bool,
 }
 
 impl Default for QaSessionState {
@@ -48,6 +50,7 @@ impl Default for QaSessionState {
             session_id: initial_session_id(),
             panel_visible: false,
             messages: Vec::new(),
+            edit_instruction_mode: false,
         }
     }
 }
@@ -87,6 +90,7 @@ pub(super) fn open_qa_panel(inner: &Arc<Inner>) {
         state.cancelled = false;
         state.messages.clear();
         state.selection = None;
+        state.edit_instruction_mode = false;
         state.front_app = capture_frontmost_app();
         // 在 show_qa_window 抢前台之前抓一下：每次 begin_qa_session 抓选区时拿这个 HWND
         // 临时把焦点还回去，让 simulate_copy 跑在用户原 app 上。issue #466 focus-dance。
@@ -118,6 +122,8 @@ pub(super) fn open_qa_panel(inner: &Arc<Inner>) {
                     "kind": "idle",
                     "session_id": session_id,
                     "messages": Vec::<crate::types::QaChatMessage>::new(),
+                    "edit_instruction_mode": false,
+                    "edit_apply_available": false,
                 }),
             );
         }
@@ -132,6 +138,7 @@ pub(super) fn close_qa_panel(inner: &Arc<Inner>) {
         state.panel_visible = false;
         state.messages.clear();
         state.selection = None;
+        state.edit_instruction_mode = false;
         state.front_app = None;
         state.qa_focus_target = None;
         state.phase = QaPhase::Idle;
@@ -164,5 +171,6 @@ mod tests {
         assert!(st.qa_focus_target.is_none());
         assert!(!st.panel_visible, "浮窗默认不可见，等用户 toggle");
         assert!(st.messages.is_empty(), "新建会话历史必须为空");
+        assert!(!st.edit_instruction_mode, "默认不进入编辑指令模式");
     }
 }

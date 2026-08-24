@@ -102,6 +102,7 @@ export const en: typeof zhCN = {
     editApplyReplace: 'Preview and confirm insert',
     editApplyUnavailable: 'No edit result to apply',
     editRevertPrevious: 'Keep previous version',
+    editInstructionMode: 'Edit instruction',
   },
   lessComputer: {
     title: 'Less Computer',
@@ -721,9 +722,9 @@ export const en: typeof zhCN = {
       voiceEnable: 'Voice edit',
       voiceEnableDesc: 'Uses the same shortcut above; recording follows global settings (current: {{recordingLabel}}).',
       autoIntent: 'Auto-classify intent',
-      autoIntentDesc: 'When on, keywords/AI choose Ask or Edit; cues like translate/replace route to Edit.',
-      editKeywords: 'Edit keywords',
-      editKeywordsDesc: 'Only when auto-classify is off; one keyword per line routes to edit, otherwise Ask.',
+      autoIntentDesc: 'When on, interrogatives go to Ask; non-questions (summarize/translate/rewrite) go to Edit. AI only for short ambiguous lines.',
+      editKeywords: 'Extra question cues',
+      editKeywordsDesc: 'Only when auto-classify is off; one cue per line forces Ask; otherwise use ? / question-word heuristics.',
     },
     selectionPolish: {
       title: 'Selection Polish',

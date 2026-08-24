@@ -100,6 +100,7 @@ export const zhCN = {
     editApplyReplace: '预览并确认插入',
     editApplyUnavailable: '没有可替换的编辑结果',
     editRevertPrevious: '保留上一版本',
+    editInstructionMode: '编辑指令',
   },
   lessComputer: {
     title: 'Less Computer',
@@ -719,9 +720,9 @@ export const zhCN = {
       voiceEnable: '语音编辑',
       voiceEnableDesc: '与上方同一快捷键；录音方式跟随全局设置（当前：{{recordingLabel}}）。',
       autoIntent: '自动判断意图',
-      autoIntentDesc: '开启后优先用关键词/AI 判断是提问还是编辑；含「翻译」「替换」等编辑词会走编辑。',
-      editKeywords: '编辑关键词',
-      editKeywordsDesc: '关闭自动判断时生效；每行一个，指令中包含关键词则进入编辑模式，否则走提问。',
+      autoIntentDesc: '开启后按是否为问句分流：问句走提问，非问句（总结/翻译/改写等）走编辑；极短模糊句才用 AI 兜底。',
+      editKeywords: '额外问句线索',
+      editKeywordsDesc: '关闭自动判断时生效；每行一个，指令中包含则视为提问，否则仍按问句启发式（？/吗/什么…）判定。',
     },
     selectionPolish: {
       title: '选区润色',

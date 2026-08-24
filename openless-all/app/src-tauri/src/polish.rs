@@ -2192,13 +2192,13 @@ pub mod prompts {
         )
     }
 
-    /// auto 意图分类：question vs edit。
+    /// auto 意图分类：问句 vs 非问句（执行/祈使/肯定）。
     pub fn selection_voice_intent_classification_prompt() -> String {
         "# 任务（意图分类）\n\
-         判断用户指令是要**提问**（question）还是对选区**编辑**（edit）。\n\
+         判断用户指令是**问句**（question）还是**非问句**（edit：祈使、肯定、执行意图）。\n\
          只输出 XML：<intent>edit</intent> 或 <intent>question</intent>\n\
-         编辑类：翻译、替换、改格式、批量处理、润色、改写、删改等。\n\
-         提问类：解释、含义、区别、总结、评价、是什么等。\n\
+         问句：带疑问语气或疑问词（什么意思、为什么、是否、吗、？ 等）。\n\
+         非问句/编辑：总结、翻译、改写、替换、删改、改成… 等执行要求（即使含「总结」也算 edit）。\n\
          不要输出其它文字。"
             .to_string()
     }

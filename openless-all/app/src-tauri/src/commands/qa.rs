@@ -47,6 +47,12 @@ pub async fn qa_submit_text(coord: CoordinatorState<'_>, text: String) -> Result
     coord.qa_submit_text(text).await
 }
 
+/// 划词提问面板「编辑指令」复选框。
+#[tauri::command]
+pub fn qa_set_edit_instruction_mode(coord: CoordinatorState<'_>, enabled: bool) {
+    coord.qa_set_edit_instruction_mode(enabled);
+}
+
 /// 用户点 ✕ / 按 Esc 关 Less Computer 浮窗。
 #[tauri::command]
 pub fn less_computer_window_dismiss(coord: CoordinatorState<'_>) {

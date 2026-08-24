@@ -613,6 +613,8 @@ export interface QaStatePayload {
   edit_apply_available?: boolean;
   /** 可回退到上一轮编辑预览。 */
   edit_revert_available?: boolean;
+  /** 划词提问面板「编辑指令」复选框。 */
+  edit_instruction_mode?: boolean;
 }
 
 /**

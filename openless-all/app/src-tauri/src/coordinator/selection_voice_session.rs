@@ -11,9 +11,9 @@ use tauri::Emitter;
 use uuid::Uuid;
 
 use super::{
-    answer_qa_question_text, close_qa_panel, emit_capsule, open_qa_panel, polish_text,
-    qa_event_target, qa_session, schedule_capsule_idle, translate_text, CapsuleFeedback,
-    Coordinator, Inner, QaPhase,
+    answer_qa_question_text, capture_external_focus_target, close_qa_panel, emit_capsule,
+    open_qa_panel, polish_text, qa_event_target, qa_session, restore_focus_target_if_possible,
+    schedule_capsule_idle, translate_text, CapsuleFeedback, Coordinator, Inner, QaPhase,
 };
 use crate::coordinator_state::{initial_session_id, new_session_id, SessionId};
 use crate::edit_plan::{apply_edit_plan, parse_edit_plan, EditOperation, EditPlan};
@@ -623,28 +623,7 @@ async fn polish_selection_voice_instruction(
     inner: &Arc<Inner>,
     instruction_raw: &str,
 ) -> Result<String, String> {
-    let prefs = inner.prefs.get();
-    let mut llm_call = None;
-    let mut polish_ms = None;
-    let prompt = crate::polish::prompts::selection_voice_instruction_polish_prompt();
-    polish_text(
-        instruction_raw,
-        PolishMode::Light,
-        &[],
-        &prompt,
-        &prefs.working_languages,
-        prefs.chinese_script_preference,
-        prefs.output_language_preference,
-        prefs.llm_thinking_enabled,
-        None,
-        None,
-        &[],
-        &mut llm_call,
-        &mut polish_ms,
-        false,
-    )
-    .await
-    .map_err(|error| error.to_string())
+    qa_session::polish_voice_instruction(inner, instruction_raw).await
 }
 
 async fn resolve_intent_with_optional_llm(
@@ -661,8 +640,8 @@ async fn resolve_intent_with_optional_llm(
         );
         return classification.intent;
     }
-    // Clear edit cues already win — skip flaky LLM classification.
-    if classification.intent == SelectionVoiceIntent::Edit {
+    // Clear question / non-question heuristics win — only ask LLM when ambiguous.
+    if !crate::selection_voice_intent::intent_heuristic_is_ambiguous(instruction_polished) {
         log::info!(
             "[selection-voice] intent={:?} source={}",
             classification.intent,
@@ -695,14 +674,6 @@ async fn resolve_intent_with_optional_llm(
             if let Some(intent) = parse_intent_classification_json(&raw) {
                 classification.intent = intent;
                 classification.source = "auto_llm";
-            } else if crate::selection_voice_intent::looks_like_edit_instruction(instruction_polished)
-            {
-                log::warn!(
-                    "[selection-voice] intent LLM unparsable; heuristic edit fallback preview={}",
-                    raw.chars().take(120).collect::<String>()
-                );
-                classification.intent = SelectionVoiceIntent::Edit;
-                classification.source = "auto_heuristic_fallback";
             } else {
                 log::warn!(
                     "[selection-voice] intent LLM unparsable; keep {:?} preview={}",
@@ -713,10 +684,6 @@ async fn resolve_intent_with_optional_llm(
         }
         Err(error) => {
             log::warn!("[selection-voice] intent LLM failed: {error}");
-            if crate::selection_voice_intent::looks_like_edit_instruction(instruction_polished) {
-                classification.intent = SelectionVoiceIntent::Edit;
-                classification.source = "auto_heuristic_fallback";
-            }
         }
     }
     log::info!(
@@ -744,12 +711,15 @@ async fn run_selection_voice_question(
     selection: &SelectionContext,
     instruction_polished: &str,
 ) -> Result<(), String> {
+    let need_open = !inner.qa_state.lock().panel_visible;
+    if need_open {
+        open_qa_panel(inner);
+    }
     let qa_session_id = {
         let mut qa = inner.qa_state.lock();
         qa.selection = Some(selection.clone());
-        if !qa.panel_visible {
-            open_qa_panel(inner);
-            let mut qa = inner.qa_state.lock();
+        qa.edit_instruction_mode = false;
+        if need_open {
             qa.session_id = new_session_id();
             qa.messages.clear();
         }
@@ -777,13 +747,17 @@ async fn run_selection_voice_edit(
     let prefs = inner.prefs.get();
     let preview_mode = selection_voice_preview_mode(&prefs);
     let qa_session_id = if preview_mode {
+        let need_open = !inner.qa_state.lock().panel_visible;
+        if need_open {
+            open_qa_panel(inner);
+        }
         let mut qa = inner.qa_state.lock();
         qa.selection = Some(selection.clone());
-        if !qa.panel_visible {
-            open_qa_panel(inner);
-            let mut qa = inner.qa_state.lock();
+        qa.edit_instruction_mode = true;
+        if need_open {
             qa.session_id = new_session_id();
             qa.messages.clear();
+            qa.edit_instruction_mode = true;
         }
         qa.phase = QaPhase::Processing;
         qa.panel_visible = true;
@@ -797,6 +771,7 @@ async fn run_selection_voice_edit(
                     "session_id": session_id,
                     "selection_preview": selection.text.chars().take(60).collect::<String>(),
                     "messages": qa.messages.clone(),
+                    "edit_instruction_mode": true,
                 }),
             );
         }
@@ -872,6 +847,7 @@ async fn run_selection_voice_edit(
             },
         ];
         qa.phase = QaPhase::Idle;
+        qa.edit_instruction_mode = true;
         let messages = qa.messages.clone();
         if let Some(app) = inner.app.lock().clone() {
             let _ = app.emit_to(
@@ -883,6 +859,7 @@ async fn run_selection_voice_edit(
                     "messages": messages,
                     "edit_apply_available": true,
                     "edit_revert_available": false,
+                    "edit_instruction_mode": true,
                 }),
             );
         }
@@ -1213,7 +1190,11 @@ pub(super) async fn submit_selection_voice_follow_up_edit(
 
     {
         let mut qa = inner.qa_state.lock();
-        if qa.session_id != qa_session_id || qa.phase != QaPhase::Idle || !qa.panel_visible {
+        if qa.session_id != qa_session_id || !qa.panel_visible {
+            return Err("QA is busy".to_string());
+        }
+        // Idle：文字提交入口；Processing：麦克风 end_qa_session 已进入处理中。
+        if qa.phase != QaPhase::Idle && qa.phase != QaPhase::Processing {
             return Err("QA is busy".to_string());
         }
         qa.phase = QaPhase::Processing;
@@ -1267,6 +1248,7 @@ pub(super) async fn submit_selection_voice_follow_up_edit(
         selection_text: None,
     });
     qa.phase = QaPhase::Idle;
+    qa.edit_instruction_mode = true;
     let messages = qa.messages.clone();
     if let Some(app) = inner.app.lock().clone() {
         let _ = app.emit_to(
@@ -1278,10 +1260,173 @@ pub(super) async fn submit_selection_voice_follow_up_edit(
                 "messages": messages,
                 "edit_apply_available": true,
                 "edit_revert_available": true,
+                "edit_instruction_mode": true,
             }),
         );
     }
     Ok(())
+}
+
+/// 划词提问面板勾选「编辑指令」且尚无 preview：对当前选区跑一轮编辑写入预览。
+pub(super) async fn submit_selection_voice_edit_from_qa_selection(
+    inner: &Arc<Inner>,
+    instruction: String,
+    qa_session_id: SessionId,
+) -> Result<(), String> {
+    let instruction = instruction.trim().to_string();
+    if instruction.is_empty() {
+        return Ok(());
+    }
+
+    let selection = {
+        let qa = inner.qa_state.lock();
+        if qa.session_id != qa_session_id || !qa.panel_visible {
+            return Err("QA is busy".to_string());
+        }
+        qa.selection.clone()
+    };
+    let selection = match selection.filter(|s| !s.text.trim().is_empty()) {
+        Some(selection) => selection,
+        None => {
+            #[cfg(target_os = "windows")]
+            {
+                let saved_target = {
+                    let mut state = inner.qa_state.lock();
+                    if let Some(current_external) = capture_external_focus_target() {
+                        state.qa_focus_target = Some(current_external);
+                    }
+                    state.qa_focus_target
+                };
+                let _ = restore_focus_target_if_possible(saved_target);
+            }
+            let captured = crate::selection::capture_selection_with_status().selection;
+            #[cfg(target_os = "windows")]
+            if let Some(app) = inner.app.lock().clone() {
+                crate::refocus_qa_window(&app);
+            }
+            let Some(selection) = captured.filter(|s| !s.text.trim().is_empty()) else {
+                return Err("无选区可编辑".to_string());
+            };
+            {
+                let mut qa = inner.qa_state.lock();
+                if qa.session_id != qa_session_id {
+                    return Ok(());
+                }
+                qa.selection = Some(selection.clone());
+            }
+            selection
+        }
+    };
+
+    let insertion_target = {
+        #[cfg(target_os = "windows")]
+        {
+            let saved_target = {
+                let mut state = inner.qa_state.lock();
+                if let Some(current_external) = capture_external_focus_target() {
+                    state.qa_focus_target = Some(current_external);
+                }
+                state.qa_focus_target
+            };
+            let _ = restore_focus_target_if_possible(saved_target);
+        }
+        let target = crate::selection::capture_selection_insertion_target();
+        #[cfg(target_os = "windows")]
+        if let Some(app) = inner.app.lock().clone() {
+            crate::refocus_qa_window(&app);
+        }
+        target
+    };
+
+    {
+        let mut qa = inner.qa_state.lock();
+        if qa.session_id != qa_session_id || !qa.panel_visible {
+            return Err("QA is busy".to_string());
+        }
+        if qa.phase != QaPhase::Idle && qa.phase != QaPhase::Processing {
+            return Err("QA is busy".to_string());
+        }
+        qa.phase = QaPhase::Processing;
+        qa.messages.push(crate::types::QaChatMessage {
+            role: "user".into(),
+            content: format!("# 编辑指令\n{instruction}"),
+            selection_text: Some(selection.text.clone()),
+        });
+        let messages = qa.messages.clone();
+        if let Some(app) = inner.app.lock().clone() {
+            let _ = app.emit_to(
+                qa_event_target(),
+                "qa:state",
+                serde_json::json!({
+                    "kind": "thinking",
+                    "session_id": qa_session_id,
+                    "selection_preview": selection.text.chars().take(60).collect::<String>(),
+                    "messages": messages,
+                    "edit_instruction_mode": true,
+                }),
+            );
+        }
+    }
+
+    let plan = generate_edit_plan(inner, &selection.text, &instruction).await?;
+    let preview = apply_edit_plan(&selection.text, &plan).map_err(|error| error.to_string())?;
+
+    *inner.selection_voice_preview.lock() = Some(PendingSelectionVoicePreview {
+        insertion_target,
+        source_text: selection.text.clone(),
+        preview_text: preview.clone(),
+        previous_preview_text: None,
+        summary: plan.summary.clone(),
+        source_app: selection.source_app.clone(),
+    });
+
+    let summary_line = plan
+        .summary
+        .as_deref()
+        .map(|s| format!("（{s}）\n\n"))
+        .unwrap_or_default();
+    let assistant_content = format!("{summary_line}{preview}");
+
+    let mut qa = inner.qa_state.lock();
+    if qa.session_id != qa_session_id {
+        return Ok(());
+    }
+    qa.messages.push(crate::types::QaChatMessage {
+        role: "assistant".into(),
+        content: assistant_content,
+        selection_text: None,
+    });
+    qa.phase = QaPhase::Idle;
+    qa.edit_instruction_mode = true;
+    let messages = qa.messages.clone();
+    if let Some(app) = inner.app.lock().clone() {
+        let _ = app.emit_to(
+            qa_event_target(),
+            "qa:state",
+            serde_json::json!({
+                "kind": "answer",
+                "session_id": qa_session_id,
+                "messages": messages,
+                "edit_apply_available": true,
+                "edit_revert_available": false,
+                "edit_instruction_mode": true,
+            }),
+        );
+    }
+    Ok(())
+}
+
+/// 划词提问面板「编辑指令」统一入口：有 preview 则 follow-up，否则对选区首轮编辑。
+pub(super) async fn apply_qa_panel_edit_instruction(
+    inner: &Arc<Inner>,
+    instruction: String,
+    qa_session_id: SessionId,
+) -> Result<(), String> {
+    let has_preview = inner.selection_voice_preview.lock().is_some();
+    if has_preview {
+        return submit_selection_voice_follow_up_edit(inner, instruction, qa_session_id).await;
+    }
+    submit_selection_voice_edit_from_qa_selection(inner, instruction, qa_session_id).await
 }
 
 pub(super) fn revert_selection_voice_preview_state(
@@ -1311,6 +1456,7 @@ pub(super) fn revert_selection_voice_preview_state(
     }
     qa.phase = QaPhase::Idle;
     let messages = qa.messages.clone();
+    let edit_mode = qa.edit_instruction_mode;
     if let Some(app) = inner.app.lock().clone() {
         let _ = app.emit_to(
             qa_event_target(),
@@ -1321,6 +1467,7 @@ pub(super) fn revert_selection_voice_preview_state(
                 "messages": messages,
                 "edit_apply_available": true,
                 "edit_revert_available": false,
+                "edit_instruction_mode": edit_mode,
             }),
         );
     }

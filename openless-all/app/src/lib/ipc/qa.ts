@@ -23,3 +23,7 @@ export function qaToggleRecording(): Promise<void> {
 export function qaSubmitText(text: string): Promise<void> {
     return invokeOrMock("qa_submit_text", { text }, () => undefined)
 }
+
+export function qaSetEditInstructionMode(enabled: boolean): Promise<void> {
+    return invokeOrMock("qa_set_edit_instruction_mode", { enabled }, () => undefined)
+}

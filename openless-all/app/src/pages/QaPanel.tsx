@@ -76,6 +76,7 @@ import {
   confirmSelectionVoicePreview,
   getSelectionVoicePreview,
   isTauri,
+  qaSetEditInstructionMode,
   qaSubmitText,
   qaToggleRecording,
   qaWindowDismiss,
@@ -136,6 +137,7 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
   const [editApplyAvailable, setEditApplyAvailable] = useState(false);
   const [editRevertAvailable, setEditRevertAvailable] = useState(false);
   const [editApplyBusy, setEditApplyBusy] = useState(false);
+  const [editInstructionMode, setEditInstructionMode] = useState(false);
   const activeSessionIdRef = useRef<string | null>(null);
   const { enterEpoch, closing } = useChatPanelLifecycle();
   const tRef = useRef(t);
@@ -173,6 +175,9 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
           }
           if (typeof payload.edit_revert_available === 'boolean') {
             setEditRevertAvailable(payload.edit_revert_available);
+          }
+          if (typeof payload.edit_instruction_mode === 'boolean') {
+            setEditInstructionMode(payload.edit_instruction_mode);
           }
           switch (payload.kind) {
             case 'idle':
@@ -271,6 +276,7 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
     setStreamingAnswer('');
     setSelectionPreview('');
     setComposerText('');
+    setEditInstructionMode(false);
   }, [closing]);
 
   // ── Esc 关闭 ────────────────────────────────────────────────────────
@@ -306,6 +312,13 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
     if (status === 'thinking') return;
     void qaToggleRecording().catch(error => {
       console.error('[QaPanel] qa_toggle_recording failed', error);
+    });
+  };
+
+  const onEditInstructionModeChange = (enabled: boolean) => {
+    setEditInstructionMode(enabled);
+    void qaSetEditInstructionMode(enabled).catch(error => {
+      console.error('[QaPanel] qa_set_edit_instruction_mode failed', error);
     });
   };
 
@@ -489,6 +502,8 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
             status={status}
             ring={ring}
             embedded={embedded}
+            editInstructionMode={editInstructionMode}
+            onEditInstructionModeChange={onEditInstructionModeChange}
             onChange={setComposerText}
             onSubmit={onSubmitText}
             onToggleRecording={onToggleRecording}
@@ -512,6 +527,8 @@ function Composer({
   status,
   ring,
   embedded,
+  editInstructionMode,
+  onEditInstructionModeChange,
   onChange,
   onSubmit,
   onToggleRecording,
@@ -521,6 +538,8 @@ function Composer({
   status: Status;
   ring: 'recording' | 'thinking' | undefined;
   embedded: boolean;
+  editInstructionMode: boolean;
+  onEditInstructionModeChange: (enabled: boolean) => void;
   onChange: (value: string) => void;
   onSubmit: () => void;
   onToggleRecording: () => void;
@@ -563,6 +582,16 @@ function Composer({
           onPointerDown={embedded ? undefined : () => void chatPanelFocusKeyboard()}
         />
         <InputGroupAddon align="block-end" className="pt-1">
+          <label className="mr-auto flex cursor-pointer items-center gap-1.5 pl-1 text-[11.5px] text-muted-foreground select-none">
+            <input
+              type="checkbox"
+              className="size-3.5 accent-foreground"
+              checked={editInstructionMode}
+              disabled={busy}
+              onChange={event => onEditInstructionModeChange(event.currentTarget.checked)}
+            />
+            {t('qa.editInstructionMode')}
+          </label>
           <InputGroupButton
             type="button"
             size="icon-sm"
@@ -579,7 +608,6 @@ function Composer({
             type="submit"
             variant="default"
             size="icon-sm"
-            className="ml-auto"
             disabled={busy || !value.trim()}
           >
             <ArrowUpIcon />

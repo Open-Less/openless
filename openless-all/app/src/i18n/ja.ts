@@ -104,6 +104,7 @@ export const ja: typeof zhCN = {
     editApplyReplace: 'プレビューして挿入を確認',
     editApplyUnavailable: '適用できる編集結果がありません',
     editRevertPrevious: '前のバージョンを保持',
+    editInstructionMode: '編集指示',
   },
   lessComputer: {
     title: 'Less Computer',
@@ -723,9 +724,9 @@ export const ja: typeof zhCN = {
       voiceEnable: '音声編集',
       voiceEnableDesc: '上と同じショートカットを使用。録音方式はグローバル設定に従います（現在：{{recordingLabel}}）。',
       autoIntent: '意図を自動判定',
-      autoIntentDesc: 'オンでキーワード/AI が質問か編集を判定。「翻訳」「置換」などは編集へ。',
-      editKeywords: '編集キーワード',
-      editKeywordsDesc: '自動判定オフ時のみ。1行1語。含まれると編集、なければ質問。',
+      autoIntentDesc: 'オンで疑問文は質問、それ以外（要約/翻訳/書き換え）は編集。短い曖昧文のみ AI 補助。',
+      editKeywords: '追加の疑問手がかり',
+      editKeywordsDesc: '自動判定オフ時のみ。1行1語で質問扱い。なければ？/疑問語ヒューリスティック。',
     },
     selectionPolish: {
       title: '選択範囲の推敲',

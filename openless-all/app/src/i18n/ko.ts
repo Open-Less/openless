@@ -104,6 +104,7 @@ export const ko: typeof zhCN = {
     editApplyReplace: '미리보기 후 삽입 확인',
     editApplyUnavailable: '적용할 편집 결과가 없습니다',
     editRevertPrevious: '이전 버전 유지',
+    editInstructionMode: '편집 지시',
   },
   lessComputer: {
     title: 'Less Computer',
@@ -723,9 +724,9 @@ export const ko: typeof zhCN = {
       voiceEnable: '음성 편집',
       voiceEnableDesc: '위와 같은 단축키 사용. 녹음 방식은 전역 설정을 따릅니다(현재: {{recordingLabel}}).',
       autoIntent: '의도 자동 판별',
-      autoIntentDesc: '켜면 키워드/AI가 질문·편집을 판별합니다. 「번역」「교체」 등은 편집으로 갑니다.',
-      editKeywords: '편집 키워드',
-      editKeywordsDesc: '자동 판별 끔일 때만 적용. 한 줄에 하나. 포함 시 편집, 아니면 질문.',
+      autoIntentDesc: '켜면 의문문은 질문, 비의문(요약/번역/개사)은 편집. 짧은 모호한 문장만 AI 보조.',
+      editKeywords: '추가 의문 단서',
+      editKeywordsDesc: '자동 판별 끔일 때만. 한 줄에 하나면 질문. 없으면 ?/의문사 휴리스틱.',
     },
     selectionPolish: {
       title: '선택 영역 다듬기',

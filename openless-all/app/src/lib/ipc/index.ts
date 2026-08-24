@@ -149,6 +149,7 @@ export {
     qaWindowDismiss,
     qaToggleRecording,
     qaSubmitText,
+    qaSetEditInstructionMode,
 } from "./qa"
 
 export {

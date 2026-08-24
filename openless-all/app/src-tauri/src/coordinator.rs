@@ -2772,6 +2772,39 @@ impl Coordinator {
         submit_qa_text_question(&self.inner, text).await
     }
 
+    pub fn qa_set_edit_instruction_mode(&self, enabled: bool) {
+        let mut qa = self.inner.qa_state.lock();
+        if !qa.panel_visible {
+            return;
+        }
+        qa.edit_instruction_mode = enabled;
+        let session_id = qa.session_id;
+        let messages = qa.messages.clone();
+        let edit_apply = {
+            #[cfg(all(not(mobile), target_os = "windows"))]
+            {
+                self.inner.selection_voice_preview.lock().is_some()
+            }
+            #[cfg(not(all(not(mobile), target_os = "windows")))]
+            {
+                false
+            }
+        };
+        if let Some(app) = self.inner.app.lock().clone() {
+            let _ = app.emit_to(
+                qa_event_target(),
+                "qa:state",
+                serde_json::json!({
+                    "kind": "answer",
+                    "session_id": session_id,
+                    "messages": messages,
+                    "edit_instruction_mode": enabled,
+                    "edit_apply_available": edit_apply,
+                }),
+            );
+        }
+    }
+
     pub fn set_shortcut_recording_active(&self, active: bool) {
         self.inner
             .shortcut_recording_active

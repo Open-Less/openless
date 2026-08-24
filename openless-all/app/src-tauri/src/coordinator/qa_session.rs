@@ -24,6 +24,35 @@ fn compose_qa_user_content(selection_text: &str, question: &str) -> String {
     }
 }
 
+/// 选区语音 / 划词提问共用的指令润色（纠正规则之后）。
+pub(super) async fn polish_voice_instruction(
+    inner: &Arc<Inner>,
+    instruction_raw: &str,
+) -> Result<String, String> {
+    let prefs = inner.prefs.get();
+    let mut llm_call = None;
+    let mut polish_ms = None;
+    let prompt = crate::polish::prompts::selection_voice_instruction_polish_prompt();
+    polish_text(
+        instruction_raw,
+        PolishMode::Light,
+        &[],
+        &prompt,
+        &prefs.working_languages,
+        prefs.chinese_script_preference,
+        prefs.output_language_preference,
+        prefs.llm_thinking_enabled,
+        None,
+        None,
+        &[],
+        &mut llm_call,
+        &mut polish_ms,
+        false,
+    )
+    .await
+    .map_err(|error| error.to_string())
+}
+
 fn qa_user_message_from_state(
     state: &QaSessionState,
     question: &str,
@@ -220,28 +249,35 @@ pub(super) async fn submit_qa_text_question(
         return Ok(());
     }
 
-    #[cfg(all(not(mobile), target_os = "windows"))]
-    {
-        let follow_up = {
-            let preview_active = inner.selection_voice_preview.lock().is_some();
-            if preview_active {
-                let qa = inner.qa_state.lock();
-                if qa.panel_visible && qa.phase == QaPhase::Idle {
-                    Some((question.clone(), qa.session_id))
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        };
-        if let Some((instruction, session_id)) = follow_up {
-            return super::selection_voice_session::submit_selection_voice_follow_up_edit(
+    let edit_instruction_mode = {
+        let qa = inner.qa_state.lock();
+        qa.edit_instruction_mode && qa.panel_visible && qa.phase == QaPhase::Idle
+    };
+
+    if edit_instruction_mode {
+        #[cfg(all(not(mobile), target_os = "windows"))]
+        {
+            let session_id = inner.qa_state.lock().session_id;
+            return match super::selection_voice_session::apply_qa_panel_edit_instruction(
                 inner,
-                instruction,
+                question,
                 session_id,
             )
-            .await;
+            .await
+            {
+                Ok(()) => Ok(()),
+                Err(error) => {
+                    finish_qa_with_error_if_current(inner, session_id, error.clone());
+                    Err(error)
+                }
+            };
+        }
+        #[cfg(not(all(not(mobile), target_os = "windows")))]
+        {
+            let session_id = inner.qa_state.lock().session_id;
+            let message = "选区编辑仅支持 Windows".to_string();
+            finish_qa_with_error_if_current(inner, session_id, message.clone());
+            return Err(message);
         }
     }
 
@@ -1701,9 +1737,56 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
         return Ok(());
     }
 
+    let mut instruction = question;
+    if let Ok(rules) = inner.correction_rules.list() {
+        let corrected = apply_correction_rules(&instruction, &rules);
+        if corrected != instruction {
+            instruction = corrected;
+        }
+    }
+
+    let instruction = match polish_voice_instruction(inner, &instruction).await {
+        Ok(polished) => polished,
+        Err(error) => {
+            finish_qa_with_error_if_current(inner, session_id, format!("指令润色失败: {error}"));
+            return Err(error);
+        }
+    };
+
+    if !qa_turn_can_continue(&inner.qa_state.lock(), session_id) {
+        log::info!("[coord] QA cancel detected after instruction polish — discarding");
+        return Ok(());
+    }
+
+    let edit_instruction_mode = inner.qa_state.lock().edit_instruction_mode;
+    if edit_instruction_mode {
+        #[cfg(all(not(mobile), target_os = "windows"))]
+        {
+            return match super::selection_voice_session::apply_qa_panel_edit_instruction(
+                inner,
+                instruction,
+                session_id,
+            )
+            .await
+            {
+                Ok(()) => Ok(()),
+                Err(error) => {
+                    finish_qa_with_error_if_current(inner, session_id, error.clone());
+                    Err(error)
+                }
+            };
+        }
+        #[cfg(not(all(not(mobile), target_os = "windows")))]
+        {
+            let message = "选区编辑仅支持 Windows".to_string();
+            finish_qa_with_error_if_current(inner, session_id, message.clone());
+            return Err(message);
+        }
+    }
+
     answer_qa_question_text(
         inner,
-        question,
+        instruction,
         raw.duration_ms,
         session_id,
         None,
