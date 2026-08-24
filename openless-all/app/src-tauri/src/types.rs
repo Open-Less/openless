@@ -1986,13 +1986,9 @@ fn default_selection_voice_hotkey() -> Option<ShortcutBinding> {
 }
 
 fn default_selection_voice_edit_keywords() -> Vec<String> {
-    vec![
-        "翻译".into(),
-        "改成".into(),
-        "替换".into(),
-        "批量".into(),
-        "格式".into(),
-    ]
+    // Pre-#987 defaults were edit imperatives; interrogative routing treats these
+    // as extra question cues — empty default avoids misrouting e.g. 「改成」.
+    Vec::new()
 }
 
 fn is_right_control_modifier_shortcut(binding: &ShortcutBinding) -> bool {

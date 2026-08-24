@@ -758,6 +758,17 @@ async fn run_selection_voice_question(
         qa.panel_visible = true;
         qa.session_id
     };
+    // #region agent log
+    crate::agent_debug::agent_debug_log(
+        "H1",
+        "selection_voice_session.rs:run_selection_voice_question",
+        "starting selection-voice question path",
+        serde_json::json!({
+            "qaSessionId": qa_session_id,
+            "instructionPreview": instruction_polished.chars().take(80).collect::<String>(),
+        }),
+    );
+    // #endregion
     answer_qa_question_text(
         inner,
         instruction_polished.to_string(),

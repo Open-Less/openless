@@ -19,6 +19,9 @@ pub struct SelectionVoiceIntentClassification {
     pub source: &'static str,
 }
 
+/// Pre-#987 default edit keywords; must not force Question after interrogative routing.
+pub const LEGACY_EDIT_KEYWORD_DEFAULTS: &[&str] = &["翻译", "改成", "替换", "批量", "格式"];
+
 /// Built-in question cues (substring match after lowercasing).
 pub const BUILTIN_QUESTION_CUES: &[&str] = &[
     "吗",
@@ -91,18 +94,60 @@ pub fn intent_heuristic_is_ambiguous(instruction: &str) -> bool {
     chars < 4
 }
 
+fn is_legacy_edit_keyword_default(keyword: &str) -> bool {
+    let trimmed = keyword.trim();
+    LEGACY_EDIT_KEYWORD_DEFAULTS
+        .iter()
+        .any(|legacy| legacy.eq_ignore_ascii_case(trimmed))
+}
+
+/// User-configured extra question cues, excluding legacy edit-keyword defaults.
+pub fn effective_question_keywords(keywords: &[String]) -> Vec<&str> {
+    keywords
+        .iter()
+        .filter_map(|keyword| {
+            let trimmed = keyword.trim();
+            if trimmed.is_empty() || is_legacy_edit_keyword_default(trimmed) {
+                None
+            } else {
+                Some(trimmed)
+            }
+        })
+        .collect()
+}
+
 pub fn resolve_selection_voice_intent_heuristic(
     instruction_polished: &str,
     question_keywords: &[String],
 ) -> SelectionVoiceIntent {
     let normalized = instruction_polished.to_lowercase();
-    if question_keywords.iter().any(|keyword| {
-        let keyword = keyword.trim();
-        !keyword.is_empty() && normalized.contains(&keyword.to_lowercase())
-    }) {
-        return SelectionVoiceIntent::Question;
+    for keyword in effective_question_keywords(question_keywords) {
+        if normalized.contains(&keyword.to_lowercase()) {
+            // #region agent log
+            crate::agent_debug::agent_debug_log(
+                "H1",
+                "selection_voice_intent.rs:heuristic",
+                "custom question keyword matched",
+                serde_json::json!({
+                    "keyword": keyword,
+                    "instructionPreview": instruction_polished.chars().take(80).collect::<String>(),
+                }),
+            );
+            // #endregion
+            return SelectionVoiceIntent::Question;
+        }
     }
-    if looks_like_question_instruction(&normalized) {
+    if looks_like_question_instruction(instruction_polished) {
+        // #region agent log
+        crate::agent_debug::agent_debug_log(
+            "H1",
+            "selection_voice_intent.rs:heuristic",
+            "builtin question cue matched",
+            serde_json::json!({
+                "instructionPreview": instruction_polished.chars().take(80).collect::<String>(),
+            }),
+        );
+        // #endregion
         SelectionVoiceIntent::Question
     } else {
         SelectionVoiceIntent::Edit
@@ -257,6 +302,23 @@ mod tests {
         };
         let result = resolve_selection_voice_intent(&prefs, "请解读这段文字");
         assert_eq!(result.intent, SelectionVoiceIntent::Question);
+    }
+
+    #[test]
+    fn legacy_edit_keyword_defaults_do_not_force_question() {
+        let prefs = UserPreferences {
+            selection_voice_intent_mode: SelectionVoiceIntentMode::Heuristic,
+            selection_voice_edit_keywords: LEGACY_EDIT_KEYWORD_DEFAULTS
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect(),
+            ..UserPreferences::default()
+        };
+        let result = resolve_selection_voice_intent(
+            &prefs,
+            "把\"牵引\"改成\"迁移\"，用\"拆迁\"的\"迁\"和\"移动\"的\"移\"。",
+        );
+        assert_eq!(result.intent, SelectionVoiceIntent::Edit);
     }
 
     #[test]
