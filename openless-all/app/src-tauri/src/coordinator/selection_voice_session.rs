@@ -55,6 +55,10 @@ fn selection_voice_user_message(error: &str) -> String {
     }
 }
 
+fn selection_voice_preview_mode(prefs: &UserPreferences) -> bool {
+    prefs.selection_polish_output_mode != SelectionPolishOutputMode::DirectReplace
+}
+
 fn emit_selection_voice_begin_error(inner: &Arc<Inner>, error: &str) {
     emit_capsule(
         inner,

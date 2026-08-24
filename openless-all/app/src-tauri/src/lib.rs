@@ -288,6 +288,7 @@ macro_rules! app_invoke_handler_desktop {
             commands::confirm_selection_voice_preview,
             #[cfg(all(not(mobile), target_os = "windows"))]
             commands::cancel_selection_voice_preview,
+            #[cfg(all(not(mobile), target_os = "windows"))]
             commands::revert_selection_voice_preview,
             #[cfg(all(not(mobile), target_os = "windows"))]
             commands::set_selection_voice_hotkey,

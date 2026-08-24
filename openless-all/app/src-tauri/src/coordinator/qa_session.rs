@@ -220,13 +220,25 @@ pub(super) async fn submit_qa_text_question(
         return Ok(());
     }
 
-    if inner.selection_voice_preview.lock().is_some() {
-        let qa = inner.qa_state.lock();
-        if qa.panel_visible && qa.phase == QaPhase::Idle {
-            let session_id = qa.session_id;
+    #[cfg(all(not(mobile), target_os = "windows"))]
+    {
+        let follow_up = {
+            let preview_active = inner.selection_voice_preview.lock().is_some();
+            if preview_active {
+                let qa = inner.qa_state.lock();
+                if qa.panel_visible && qa.phase == QaPhase::Idle {
+                    Some((question.clone(), qa.session_id))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        };
+        if let Some((instruction, session_id)) = follow_up {
             return super::selection_voice_session::submit_selection_voice_follow_up_edit(
                 inner,
-                question,
+                instruction,
                 session_id,
             )
             .await;
