@@ -80,8 +80,9 @@ fn main() {
         let mut options = eframe::NativeOptions {
             viewport: egui::ViewportBuilder::default()
                 .with_title(if kind == "--qa" { "OpenLess QA" } else { "OpenLess 选区润色预览" })
-                .with_inner_size(if kind == "--qa" { [440.0, 560.0] } else { [640.0, 440.0] })
-                .with_min_inner_size([360.0, 320.0])
+                .with_inner_size(if kind == "--qa" { [480.0, 620.0] } else { [640.0, 480.0] })
+                .with_min_inner_size([420.0, 360.0])
+                .with_resizable(true)
                 .with_decorations(false)
                 .with_always_on_top(),
             ..Default::default()
@@ -174,21 +175,49 @@ fn render_preview(
     focus: &mut bool,
     outgoing: &mut Vec<String>,
 ) {
-    egui::CentralPanel::default().show(ui, |ui| {
-        // 顶栏
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("选区润色预览").strong().size(15.0));
-            if ui.button("✕").clicked() {
-                outgoing.push("{ \"action\": \"cancel\" }".into());
-                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
-            }
+    // 顶栏（固定高度）：左标题 + 右关闭。
+    egui::Panel::top("preview_titlebar")
+        .exact_size(38.0)
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("选区润色预览").strong().size(15.0));
+                // 把 ✕ 推到最右。
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("✕").clicked() {
+                        outgoing.push("{ \"action\": \"cancel\" }".into());
+                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                });
+            });
         });
-        ui.separator();
-        // 可编辑区
-        let edit_height = (ui.available_height() - 100.0).max(120.0);
+
+    // 底部操作区（固定高度）：确认 + 取消。
+    egui::Panel::bottom("preview_footer")
+        .exact_size(44.0)
+        .show(ui, |ui| {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .add_enabled(!text.trim().is_empty(), egui::Button::new("确认并替换"))
+                    .clicked()
+                {
+                    outgoing.push(format!("{{ \"action\": \"confirm\", \"text\": {} }}", json_escape(text)));
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+                if ui.button("取消").clicked() {
+                    outgoing.push("{ \"action\": \"cancel\" }".into());
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            });
+        });
+
+    // 中央可编辑区。
+    egui::CentralPanel::default().show(ui, |ui| {
         let resp = ui.add_sized(
-            [ui.available_width(), edit_height],
-            egui::TextEdit::multiline(text).hint_text("润色结果").desired_rows(8),
+            [ui.available_width(), ui.available_height() - 24.0],
+            egui::TextEdit::multiline(text)
+                .hint_text("润色结果")
+                .desired_rows(8)
+                .desired_width(f32::INFINITY),
         );
         if *focus {
             *focus = false;
@@ -197,99 +226,134 @@ fn render_preview(
         if !source.is_empty() {
             ui.label(egui::RichText::new(format!("原文：{source}")).size(11.0));
         }
-        // 底部按钮
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.add_enabled(!text.trim().is_empty(), egui::Button::new("确认并替换")).clicked() {
-                outgoing.push(format!("{{ \"action\": \"confirm\", \"text\": {} }}", json_escape(text)));
-                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
-            }
-            if ui.button("取消").clicked() {
-                outgoing.push("{ \"action\": \"cancel\" }".into());
-                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
-            }
-        });
     });
 }
 
 // ───────────────────────── QA UI ─────────────────────────
 
 fn render_qa(ui: &mut egui::Ui, s: &mut QaViewState, outgoing: &mut Vec<String>) {
-    egui::CentralPanel::default().show(ui, |ui| {
-        // 顶栏
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("AI 问答").strong().size(15.0));
-            if ui.button("✕").clicked() {
-                outgoing.push("{ \"action\": \"dismiss\" }".into());
-                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
-            }
-        });
-        ui.separator();
-
-        // 消息滚动区
-        let avail = ui.available_size();
-        let body_height = (avail.y - 70.0).max(80.0);
-        egui::ScrollArea::vertical().stick_to_bottom(true).max_height(body_height).show(ui, |ui| {
-            let empty = s.messages.is_empty() && s.streaming_answer.is_empty();
-            if empty {
-                ui.centered_and_justified(|ui| {
-                    ui.label(egui::RichText::new("还没有问题，试试按住说话或输入问题。").size(13.0).color(ui.visuals().weak_text_color()));
+    // 顶栏（固定高度）：左标题 + 右关闭。
+    egui::Panel::top("qa_titlebar")
+        .exact_size(38.0)
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("AI 问答").strong().size(15.0));
+                // 把 ✕ 推到最右。
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("✕").clicked() {
+                        outgoing.push("{ \"action\": \"dismiss\" }".into());
+                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
                 });
-                return;
-            }
-            for msg in &s.messages {
-                let is_user = msg.role == "user";
-                ui.with_layout(if is_user { egui::Layout::right_to_left(egui::Align::Min) } else { egui::Layout::left_to_right(egui::Align::Min) }, |ui| {
-                    egui::Frame::new()
-                        .corner_radius(6.0)
-                        .fill(if is_user { ui.visuals().selection.bg_fill } else { ui.visuals().extreme_bg_color })
-                        .inner_margin(egui::Margin::symmetric(8, 6))
-                        .show(ui, |ui| {
-                            ui.set_max_width(ui.available_width() * 0.8);
-                            ui.label(egui::RichText::new(&msg.content).size(13.0));
-                        });
-                });
-                ui.add_space(6.0);
-            }
-            if !s.streaming_answer.is_empty() {
-                ui.label(egui::RichText::new(&s.streaming_answer).size(13.0).color(ui.visuals().weak_text_color()));
-            }
-            if matches!(s.current_kind.as_str(), "thinking" | "loading") && s.streaming_answer.is_empty() {
-                ui.label(egui::RichText::new("思考中…").size(13.0).color(ui.visuals().weak_text_color()));
-            }
-            if let Some(error) = &s.error {
-                ui.colored_label(ui.visuals().error_fg_color, error);
-            }
+            });
         });
 
-        // 录音选区 chip
-        if s.current_kind == "recording" {
-            if let Some(preview) = &s.selection_preview {
-                ui.label(egui::RichText::new(format!("选区：{}", truncate(preview, 60))).size(11.0).color(ui.visuals().weak_text_color()));
-            }
-        }
-
-        ui.separator();
-        let recording = s.current_kind == "recording";
-        let busy = matches!(s.current_kind.as_str(), "thinking" | "loading") || recording;
-        ui.horizontal(|ui| {
-            let input = egui::TextEdit::singleline(&mut s.composer_text)
-                .hint_text("输入问题，回车发送")
-                .desired_width(ui.available_width() - 40.0);
-            let resp = ui.add(input);
-            let submit_key = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            let mic_label = if recording { "■ 停止" } else { "🎤 说话" };
-            if ui.add_enabled(!busy || recording, egui::Button::new(mic_label)).clicked() {
-                outgoing.push("{ \"action\": \"toggle_record\" }".into());
-            }
-            let can_send = !busy && !s.composer_text.trim().is_empty();
-            if ui.add_enabled(can_send, egui::Button::new("发送")).clicked() || (submit_key && can_send) {
-                let text = s.composer_text.trim().to_string();
-                if !text.is_empty() {
-                    s.composer_text.clear();
-                    outgoing.push(format!("{{ \"action\": \"submit\", \"text\": {} }}", json_escape(&text)));
+    // 底部输入区（固定高度）：输入框 + 麦克风 + 发送。
+    egui::Panel::bottom("qa_input")
+        .exact_size(50.0)
+        .show(ui, |ui| {
+            let recording = s.current_kind == "recording";
+            let busy = matches!(s.current_kind.as_str(), "thinking" | "loading") || recording;
+            // 录音选区 chip。
+            if recording {
+                if let Some(preview) = &s.selection_preview {
+                    ui.label(
+                        egui::RichText::new(format!("选区：{}", truncate(preview, 60)))
+                            .size(11.0)
+                            .color(ui.visuals().weak_text_color()),
+                    );
                 }
             }
+            ui.horizontal(|ui| {
+                let mic_label = if recording { "■ 停止" } else { "🎤 说话" };
+                let mic_w = 72.0;
+                let send_w = 48.0;
+                let input_w = (ui.available_width() - mic_w - send_w - 16.0).max(80.0);
+                let resp = ui.add(
+                    egui::TextEdit::singleline(&mut s.composer_text)
+                        .hint_text("输入问题，回车发送")
+                        .desired_width(input_w),
+                );
+                let submit_key = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if ui
+                    .add_enabled(!busy || recording, egui::Button::new(mic_label).min_size(egui::vec2(mic_w, 0.0)))
+                    .clicked()
+                {
+                    outgoing.push("{ \"action\": \"toggle_record\" }".into());
+                }
+                let can_send = !busy && !s.composer_text.trim().is_empty();
+                if ui
+                    .add_enabled(can_send, egui::Button::new("发送").min_size(egui::vec2(send_w, 0.0)))
+                    .clicked()
+                    || (submit_key && can_send)
+                {
+                    let text = s.composer_text.trim().to_string();
+                    if !text.is_empty() {
+                        s.composer_text.clear();
+                        outgoing.push(format!("{{ \"action\": \"submit\", \"text\": {} }}", json_escape(&text)));
+                    }
+                }
+            });
         });
+
+    // 中央消息滚动区（占满剩余空间）。
+    egui::CentralPanel::default().show(ui, |ui| {
+        egui::ScrollArea::vertical()
+            .stick_to_bottom(true)
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                let empty = s.messages.is_empty() && s.streaming_answer.is_empty();
+                if empty {
+                    ui.centered_and_justified(|ui| {
+                        ui.label(
+                            egui::RichText::new("还没有问题，试试按住说话或输入问题。")
+                                .size(13.0)
+                                .color(ui.visuals().weak_text_color()),
+                        );
+                    });
+                    return;
+                }
+                for msg in &s.messages {
+                    let is_user = msg.role == "user";
+                    ui.with_layout(
+                        if is_user {
+                            egui::Layout::right_to_left(egui::Align::Min)
+                        } else {
+                            egui::Layout::left_to_right(egui::Align::Min)
+                        },
+                        |ui| {
+                            egui::Frame::new()
+                                .corner_radius(6.0)
+                                .fill(if is_user {
+                                    ui.visuals().selection.bg_fill
+                                } else {
+                                    ui.visuals().extreme_bg_color
+                                })
+                                .inner_margin(egui::Margin::symmetric(8, 6))
+                                .show(ui, |ui| {
+                                    ui.set_max_width(ui.available_width() * 0.8);
+                                    ui.label(egui::RichText::new(&msg.content).size(13.0));
+                                });
+                        },
+                    );
+                    ui.add_space(6.0);
+                }
+                if !s.streaming_answer.is_empty() {
+                    ui.label(
+                        egui::RichText::new(&s.streaming_answer)
+                            .size(13.0)
+                            .color(ui.visuals().weak_text_color()),
+                    );
+                }
+                if matches!(s.current_kind.as_str(), "thinking" | "loading")
+                    && s.streaming_answer.is_empty()
+                {
+                    ui.label(egui::RichText::new("思考中…").size(13.0).color(ui.visuals().weak_text_color()));
+                }
+                if let Some(error) = &s.error {
+                    ui.colored_label(ui.visuals().error_fg_color, error);
+                }
+            });
     });
 }
 
