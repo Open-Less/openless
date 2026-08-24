@@ -103,6 +103,13 @@ libc = "0.2"
 [target.'cfg(target_os = "linux")'.dependencies]
 dbus = "0.9"
 gtk = "0.18"
+# egui 浮窗宿主 —— Linux 上用 egui 替代 Tauri WebView 渲染「选区润色预览 / QA 面板」弹窗。
+# 仅 Linux 编译，其它平台保持 WebView 版（避免引入 winit 对非目标平台的额外依赖）。
+# 用 eframe 默认 features（已含 wayland + x11 + glow + default_fonts），
+# Wayland 与 X11 都走原生浮窗；winit 用于 eframe 的 EventLoopBuilder 配置。
+egui = "0.36"
+eframe = { version = "0.36", default-features = false, features = ["wayland", "x11", "glow", "default_fonts", "accesskit"] }
+winit = { version = "0.30", features = ["wayland", "x11"] }
 [target.'cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))'.dependencies.keyring]
 version = "3.6.3"
 default-features = false
