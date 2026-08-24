@@ -1,6 +1,6 @@
 //! # egui 浮窗宿主（egui host）
 //!
-//! 在 **Linux** 上用 egui 原生窗口渲染弹窗，替代 Tauri WebView 浮窗。
+//! 在桌面端用 egui 原生窗口渲染 QA；选区润色预览仅在 Linux 替代 WebView。
 //! 采用「**每个弹窗一个独立进程、单窗口**」的方案，避免 eframe 多 viewport 在
 //! Wayland 下的局限性（root 泄漏 / child 内容闪烁）。每个弹窗的 UI 是仓库里的
 //! 独立二进制 `egui_popup`（`src/bin/egui_popup.rs`），主进程按需 spawn、用
@@ -10,8 +10,7 @@
 //! - **选区润色预览**（`--preview`）—— 一次性进程。
 //! - **QA 问答面板**（`--qa`）—— 常驻进程，流式双向 IPC。
 //!
-//! 其它平台（macOS/Windows/Android/iOS）维持 WebView 版，本模块整体
-//! `#[cfg(target_os = "linux")]` 门控。
+//! QA 覆盖 Linux/macOS/Windows；润色预览在 macOS/Windows 维持 WebView 版。
 //!
 //! ## 为何用独立进程而非多 viewport
 //! eframe 0.36 的 `show_viewport_deferred` + 隐藏 root 在 Wayland 下实测 root 会
@@ -27,6 +26,11 @@
 //! 进程、以及稳定的 JSON 协议都不动。这就是「切换期留出的空间」。
 
 pub mod fonts;
+// 与独立 bin 共用同一份 popup 实现；主程序可通过隐藏参数直接进入该入口，
+// 从而把 Linux 产物打包成单个 ELF 文件。
+pub mod popup {
+    include!("../bin/egui_popup.rs");
+}
 pub mod qa;
 pub mod qa_event;
 
@@ -38,9 +42,13 @@ use crate::coordinator::Coordinator;
 use qa_event::QaStateEvent;
 use tauri::Manager;
 
-/// 是否启用 egui 浮窗宿主：Linux + 未显式禁用。
-/// 环境变量 `OPENLESS_EGUI_PREVIEW=0` 可关闭（用于回退 WebView / 排查）。
+/// 是否启用跨平台 egui QA。环境变量可用于紧急回退 WebView。
 pub fn enabled() -> bool {
+    std::env::var("OPENLESS_EGUI_QA").as_deref() != Ok("0")
+}
+
+/// 选区润色 egui 预览严格限制在 Linux。
+fn preview_enabled() -> bool {
     cfg!(target_os = "linux") && std::env::var("OPENLESS_EGUI_PREVIEW").as_deref() != Ok("0")
 }
 
@@ -78,16 +86,10 @@ pub struct SelectionPreviewPayload {
 
 // ───────────────────────── 独立进程可执行路径 ─────────────────────────
 
-/// 定位 `egui_popup` 可执行文件路径。
-/// 优先用当前 exe 所在目录（开发/发布 sibling），否则回退到 PATH。
+/// 定位 popup 执行入口。桌面端通过隐藏参数重新执行当前主程序，保持单文件发布。
 fn popup_bin_path() -> Option<std::path::PathBuf> {
     if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let candidate = dir.join("egui_popup");
-            if candidate.exists() {
-                return Some(candidate);
-            }
-        }
+        return Some(exe);
     }
     // 回退：target/debug 或 target/release（开发便捷）。
     if let Ok(cwd) = std::env::current_dir() {
@@ -106,10 +108,13 @@ fn popup_bin_path() -> Option<std::path::PathBuf> {
 /// 打开划词润色预览窗（专用入口）。成功返回 true；未启用/无 pending payload /
 /// 无法定位子进程，返回 false，由 lib.rs 回退到 WebView 版。
 pub(crate) fn show_preview<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> bool {
-    if !enabled() {
+    if !preview_enabled() {
         return false;
     }
-    let Some(host) = app.try_state::<Arc<dyn EguiHost>>().map(|s| s.inner().clone()) else {
+    let Some(host) = app
+        .try_state::<Arc<dyn EguiHost>>()
+        .map(|s| s.inner().clone())
+    else {
         log::warn!("[egui-host] egui host state unavailable");
         return false;
     };
@@ -123,6 +128,7 @@ pub(crate) fn show_preview<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> bool
     };
 
     let mut child = match Command::new(&bin)
+        .arg("--openless-egui-popup")
         .arg("--preview")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -173,7 +179,7 @@ pub(crate) fn show_preview<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> bool
 
 pub(crate) fn hide_preview() -> bool {
     // 预览窗是一次性进程，用户确认/取消后会自行退出；hide 无需额外动作。
-    enabled()
+    preview_enabled()
 }
 
 // ───────────────────────── QA 面板（常驻进程）─────────────────────────
@@ -204,7 +210,10 @@ pub(crate) fn show_qa<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> bool {
     if !enabled() {
         return false;
     }
-    let Some(host) = app.try_state::<Arc<dyn EguiHost>>().map(|s| s.inner().clone()) else {
+    let Some(host) = app
+        .try_state::<Arc<dyn EguiHost>>()
+        .map(|s| s.inner().clone())
+    else {
         log::warn!("[egui-host] egui host state unavailable");
         return false;
     };
@@ -220,6 +229,7 @@ pub(crate) fn show_qa<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> bool {
     }
 
     let mut child = match Command::new(&bin)
+        .arg("--openless-egui-popup")
         .arg("--qa")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -240,7 +250,10 @@ pub(crate) fn show_qa<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> bool {
     // 后台线程读 stdout：把 QA 用户操作分发给 HostActions。
     let stdout = {
         let mut guard = proc.child.lock().unwrap();
-        guard.as_mut().and_then(|c| c.stdout.take()).expect("stdout piped")
+        guard
+            .as_mut()
+            .and_then(|c| c.stdout.take())
+            .expect("stdout piped")
     };
     let host_for_thread = host.clone();
     std::thread::spawn(move || {
@@ -323,10 +336,12 @@ impl EguiHost for CoordinatorHostAdapter {}
 
 impl HostPoller for CoordinatorHostAdapter {
     fn selection_polish_preview(&self) -> Option<SelectionPreviewPayload> {
-        self.coordinator.selection_polish_preview().map(|p| SelectionPreviewPayload {
-            text: p.text,
-            source_text: p.source_text,
-        })
+        self.coordinator
+            .selection_polish_preview()
+            .map(|p| SelectionPreviewPayload {
+                text: p.text,
+                source_text: p.source_text,
+            })
     }
 }
 
@@ -400,7 +415,11 @@ fn extract_str(line: &str, key: &str) -> Option<String> {
     if let Some(stripped) = rest.strip_prefix('"') {
         let end = stripped.find('"')?;
         let raw = &stripped[..end];
-        Some(raw.replace("\\\"", "\"").replace("\\n", "\n").replace("\\\\", "\\"))
+        Some(
+            raw.replace("\\\"", "\"")
+                .replace("\\n", "\n")
+                .replace("\\\\", "\\"),
+        )
     } else {
         None
     }

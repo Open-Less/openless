@@ -14,11 +14,14 @@
 //! - coordinator: dictation state machine glue
 //! - commands: Tauri IPC surface
 
+// 让被内嵌复用的 popup 源码在 lib crate 中也能使用 `openless_lib::...` 路径。
+extern crate self as openless_lib;
+
 mod android;
-#[cfg(test)]
-mod build_target;
 mod asr;
 mod audio_mute;
+#[cfg(test)]
+mod build_target;
 mod cli;
 mod coding_agent;
 #[cfg(not(mobile))]
@@ -34,9 +37,8 @@ mod correction;
 // Linux 退化为纯轮询兜底。仅桌面端。详见 issue #470。
 #[cfg(not(mobile))]
 mod device_watch;
-// Linux 上把「选区润色预览 / QA 面板」弹窗改用 egui 渲染（替代 Tauri WebView 浮窗）。
-// 模块内部用 cfg(target_os = "linux") 门控，其它平台保持 WebView 版。
-#[cfg(target_os = "linux")]
+// 桌面端 QA 面板统一使用 egui；选区润色预览仅 Linux 使用 egui。
+#[cfg(not(mobile))]
 pub mod egui_host;
 mod endpoint_security;
 mod external_url;
@@ -805,10 +807,10 @@ fn run_desktop() {
                 dispatch_cli_intent(app.handle(), intent);
             }
 
-            // Linux + egui 浮窗：后端把 `qa:state` 发给 "qa" webview window。egui 版
+            // 桌面端 egui 浮窗：后端把 `qa:state` 发给 "qa" webview window。egui 版
             // 没有该 window，但仍要收到状态事件驱动 QA 面板渲染——这里在宿主侧订阅
-            // 全局事件并转发到 egui host。事件只在 Linux 生效，其它平台用 WebView 版。
-            #[cfg(target_os = "linux")]
+            // 全局事件并转发到 egui host。
+            #[cfg(not(mobile))]
             if crate::egui_host::enabled() {
                 // 用 listen_any：后端 emit_to("qa", ...) 只发给 "qa" window，
                 // 普通 listen（target=App）收不到；listen_any 能收到任意 target。
@@ -2331,9 +2333,9 @@ pub(crate) fn show_qa_window<R: tauri::Runtime>(app: &AppHandle<R>, content_kind
         return;
     }
 
-    // Linux：优先走 egui 原生浮窗；未启用（禁用/失败）回退 WebView 版。
+    // 桌面端统一优先走 egui 原生 QA；启动失败时回退 WebView 版。
     // egui 侧通过 lib.rs 的 app.listen("qa:state") 接收后续状态事件。
-    #[cfg(target_os = "linux")]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     if crate::egui_host::show_qa(app) {
         return;
     }
@@ -2640,8 +2642,8 @@ pub(crate) fn hide_qa_window<R: tauri::Runtime>(app: &AppHandle<R>) {
         return;
     }
 
-    // Linux：egui 浮窗的隐藏走宿主；WebView 版不存在时静默。
-    #[cfg(target_os = "linux")]
+    // 桌面端 egui QA 的隐藏走宿主；WebView 回退窗不存在时静默。
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     if crate::egui_host::hide_qa() {
         return;
     }

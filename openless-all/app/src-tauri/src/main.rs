@@ -2,6 +2,12 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    if std::env::args().nth(1).as_deref() == Some("--openless-egui-popup") {
+        openless_lib::egui_host::popup::main();
+        return;
+    }
+
     // Work around WebKitGTK compositing bugs on Linux Wayland:
     // - WEBKIT_DISABLE_COMPOSITING_MODE=1 fixes "whole window unresponsive
     //   to clicks until maximize/restore" (tauri#9394)
