@@ -109,6 +109,9 @@ mod asr {
 
 #[path = "../../src/coordinator_state.rs"]
 mod coordinator_state;
+mod selection {
+    pub fn prefetch_selection_workspace_capture() {}
+}
 #[path = "../../src/global_hotkey_runtime.rs"]
 mod global_hotkey_runtime;
 #[path = "../../src/combo_hotkey.rs"]
