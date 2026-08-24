@@ -114,6 +114,9 @@ impl eframe::App for PopupApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // 强制持续重绘，确保按钮点击、键盘输入、流式消息都能及时响应。
+        ui.ctx().request_repaint();
+
         // 读取 stdin 消息。
         while let Ok(msg) = self.rx.try_recv() {
             match msg {

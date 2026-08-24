@@ -18,14 +18,21 @@
 //! 泄漏成可见窗、child 内容渲染不稳定（一闪而过）。独立进程单窗口是 Wayland/X11
 //! 下最简单、最稳妥的形态：每个进程只有一个原生窗口，没有隐藏宿主、没有多
 //! viewport 生命周期，不用时杀掉进程即可。
+//!
+//! ## 可替换的宿主边界（HostActions）
+//! 本模块**不直接依赖** `Coordinator`。它只依赖一个 [`HostActions`] trait：
+//! 主进程把子进程吐出的动作（确认/取消/提交/录音/关闭）翻译成语义化回调。
+//! 现在这个 trait 由 Tauri 侧的 `CoordinatorAdapter` 实现（内部调 `Coordinator`）；
+//! 将来替换掉 Tauri 时，只需换一个 `HostActions` 实现，本模块与 `egui_popup`
+//! 进程、以及稳定的 JSON 协议都不动。这就是「切换期留出的空间」。
 
 pub mod fonts;
-pub(crate) mod qa;
-pub(crate) mod qa_event;
+pub mod qa;
+pub mod qa_event;
 
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::coordinator::Coordinator;
 use qa_event::QaStateEvent;
@@ -33,8 +40,40 @@ use tauri::Manager;
 
 /// 是否启用 egui 浮窗宿主：Linux + 未显式禁用。
 /// 环境变量 `OPENLESS_EGUI_PREVIEW=0` 可关闭（用于回退 WebView / 排查）。
-pub(crate) fn enabled() -> bool {
+pub fn enabled() -> bool {
     cfg!(target_os = "linux") && std::env::var("OPENLESS_EGUI_PREVIEW").as_deref() != Ok("0")
+}
+
+// ───────────────────────── 宿主动作边界（薄适配层）─────────────────────────
+
+/// 弹窗子进程吐出的、需要宿主响应的语义化动作。
+/// 这是与 Tauri 解耦的边界：将来替换宿主只需实现这个 trait。
+#[allow(dead_code)]
+pub trait HostActions: Send + Sync + 'static {
+    /// 用户确认了划词润色预览（可能编辑过 `text`）。
+    fn confirm_selection_polish_preview(&self, text: String) -> Result<(), String>;
+    /// 用户取消了划词润色预览。
+    fn cancel_selection_polish_preview(&self);
+    /// 用户关闭了 QA 面板。
+    fn qa_window_dismiss(&self);
+    /// 用户提交了一个问题（异步）。
+    fn qa_submit_text(&self, text: String);
+    /// 用户切换了录音状态（异步）。
+    fn qa_toggle_recording(&self);
+}
+
+/// 读取 QA 弹窗当前 selection 预览 payload（同步，供 show_preview 取初始内容）。
+#[allow(dead_code)]
+pub trait HostPoller {
+    fn selection_polish_preview(&self) -> Option<SelectionPreviewPayload>;
+}
+
+/// 划词润色预览的初始 payload（与 coordinator 侧结构对齐的轻量定义）。
+#[derive(Clone)]
+#[allow(dead_code)]
+pub struct SelectionPreviewPayload {
+    pub text: String,
+    pub source_text: String,
 }
 
 // ───────────────────────── 独立进程可执行路径 ─────────────────────────
@@ -70,11 +109,11 @@ pub(crate) fn show_preview<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> bool
     if !enabled() {
         return false;
     }
-    let Some(coordinator) = app.try_state::<Arc<Coordinator>>().map(|s| s.inner().clone()) else {
-        log::warn!("[egui-host] coordinator state unavailable");
+    let Some(host) = app.try_state::<Arc<dyn EguiHost>>().map(|s| s.inner().clone()) else {
+        log::warn!("[egui-host] egui host state unavailable");
         return false;
     };
-    let Some(payload) = coordinator.selection_polish_preview() else {
+    let Some(payload) = host.selection_polish_preview() else {
         log::warn!("[egui-host] no pending preview payload");
         return false;
     };
@@ -108,9 +147,9 @@ pub(crate) fn show_preview<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> bool
         let _ = stdin.flush();
     }
 
-    // 后台线程读 stdout：收到 confirm/cancel 就回调 coordinator。
+    // 后台线程读 stdout：收到 confirm/cancel 就回调宿主动作。
     let stdout = child.stdout.take().expect("stdout piped");
-    let coordinator_for_thread = coordinator.clone();
+    let host_for_thread = host.clone();
     std::thread::spawn(move || {
         let reader = BufReader::new(stdout);
         for line in reader.lines() {
@@ -118,10 +157,10 @@ pub(crate) fn show_preview<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> bool
             let trimmed = line.trim();
             if trimmed.contains("\"confirm\"") {
                 let text = extract_str(trimmed, "text").unwrap_or_default();
-                let _ = coordinator_for_thread.confirm_selection_polish_preview(text);
+                let _ = host_for_thread.confirm_selection_polish_preview(text);
                 break;
             } else if trimmed.contains("\"cancel\"") {
-                coordinator_for_thread.cancel_selection_polish_preview();
+                host_for_thread.cancel_selection_polish_preview();
                 break;
             }
         }
@@ -134,25 +173,30 @@ pub(crate) fn show_preview<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> bool
 
 pub(crate) fn hide_preview() -> bool {
     // 预览窗是一次性进程，用户确认/取消后会自行退出；hide 无需额外动作。
-    // 返回 true 表示「已由 egui 接管」（未启用时返回 false 让 WebView 兜底）。
     enabled()
 }
 
 // ───────────────────────── QA 面板（常驻进程）─────────────────────────
 
-/// QA 子进程管理器（进程级单例）。
-struct QaProcess {
+/// QA 子进程生命周期（进程级单例）。
+struct QaProc {
     child: Mutex<Option<Child>>,
     stdin: Mutex<Option<ChildStdin>>,
 }
 
-static QA_PROC: OnceLock<QaProcess> = OnceLock::new();
+impl QaProc {
+    fn new() -> Self {
+        Self {
+            child: Mutex::new(None),
+            stdin: Mutex::new(None),
+        }
+    }
+}
 
-fn qa_proc() -> &'static QaProcess {
-    QA_PROC.get_or_init(|| QaProcess {
-        child: Mutex::new(None),
-        stdin: Mutex::new(None),
-    })
+/// 用 `OnceLock` 存 QA 进程单例。
+static QA_PROC: OnceLock<QaProc> = OnceLock::new();
+fn qa_proc() -> &'static QaProc {
+    QA_PROC.get_or_init(QaProc::new)
 }
 
 /// 打开 QA 问答面板窗。成功返回 true；未启用/无法启动返回 false，回退 WebView。
@@ -160,8 +204,8 @@ pub(crate) fn show_qa<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> bool {
     if !enabled() {
         return false;
     }
-    let Some(coordinator) = app.try_state::<Arc<Coordinator>>().map(|s| s.inner().clone()) else {
-        log::warn!("[egui-host] coordinator state unavailable");
+    let Some(host) = app.try_state::<Arc<dyn EguiHost>>().map(|s| s.inner().clone()) else {
+        log::warn!("[egui-host] egui host state unavailable");
         return false;
     };
     let Some(bin) = popup_bin_path() else {
@@ -193,13 +237,12 @@ pub(crate) fn show_qa<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> bool {
     *proc.stdin.lock().unwrap() = stdin;
     *proc.child.lock().unwrap() = Some(child);
 
-    // 后台线程读 stdout：处理 QA 用户操作 → coordinator。
-    let mut child_to_wait = proc.child.lock().unwrap().take();
-    let stdout = child_to_wait
-        .as_mut()
-        .and_then(|c| c.stdout.take())
-        .expect("stdout piped");
-    let coordinator_for_thread = coordinator.clone();
+    // 后台线程读 stdout：把 QA 用户操作分发给 HostActions。
+    let stdout = {
+        let mut guard = proc.child.lock().unwrap();
+        guard.as_mut().and_then(|c| c.stdout.take()).expect("stdout piped")
+    };
+    let host_for_thread = host.clone();
     std::thread::spawn(move || {
         let reader = BufReader::new(stdout);
         for line in reader.lines() {
@@ -207,26 +250,19 @@ pub(crate) fn show_qa<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> bool {
             let trimmed = line.trim();
             if trimmed.contains("\"submit\"") {
                 let text = extract_str(trimmed, "text").unwrap_or_default();
-                let coord = coordinator_for_thread.clone();
-                tauri::async_runtime::spawn(async move {
-                    let _ = coord.qa_submit_text(text).await;
-                });
+                host_for_thread.qa_submit_text(text);
             } else if trimmed.contains("\"toggle_record\"") {
-                let coord = coordinator_for_thread.clone();
-                tauri::async_runtime::spawn(async move {
-                    coord.qa_toggle_recording().await;
-                });
+                host_for_thread.qa_toggle_recording();
             } else if trimmed.contains("\"dismiss\"") {
-                coordinator_for_thread.qa_window_dismiss();
+                host_for_thread.qa_window_dismiss();
+                break;
             }
         }
-        // stdout 关闭（子进程退出）→ 清空 child。
-        *qa_proc().child.lock().unwrap() = None;
-        *qa_proc().stdin.lock().unwrap() = None;
-        // 回收子进程。
-        if let Some(mut c) = child_to_wait {
+        // stdout 关闭（子进程退出）→ 清空 child（回收，避免僵尸进程）。
+        if let Some(mut c) = qa_proc().child.lock().unwrap().take() {
             let _ = c.wait();
         }
+        *qa_proc().stdin.lock().unwrap() = None;
     });
 
     log::info!("[egui-host] qa egui_popup spawned");
@@ -242,11 +278,10 @@ pub(crate) fn hide_qa() -> bool {
     if let Some(mut stdin) = proc.stdin.lock().unwrap().take() {
         let _ = stdin.write_all(b"{\"action\":\"hide\"}\n");
         let _ = stdin.flush();
-        // 等待子进程退出。
-        if let Some(mut child) = proc.child.lock().unwrap().take() {
-            let _ = child.kill(); // 兜底：若 hide 未让进程退出则强制结束。
-            let _ = child.wait();
-        }
+    }
+    if let Some(mut child) = proc.child.lock().unwrap().take() {
+        let _ = child.kill();
+        let _ = child.wait();
     }
     true
 }
@@ -262,6 +297,60 @@ pub(crate) fn push_qa_state(event: QaStateEvent) {
     if let Some(mut stdin) = proc.stdin.lock().unwrap().as_mut() {
         let _ = stdin.write_all(line.as_bytes());
         let _ = stdin.flush();
+    }
+}
+
+// ───────────────────────── Coordinator 适配层（临时接线）─────────────────────────
+
+/// 宿主要实现的动作 + 数据拉取。组合 trait，方便用单个 trait 对象走 state。
+#[allow(dead_code)]
+pub trait EguiHost: HostActions + HostPoller {}
+
+/// 把 [`HostActions`] 桥接到 Tauri 侧的 [`Coordinator`] 实现。
+/// 将来替换 Tauri 时，仅替换此适配层，`egui_host` 与 `egui_popup` 均不动。
+#[allow(dead_code)]
+pub struct CoordinatorHostAdapter {
+    coordinator: Arc<Coordinator>,
+}
+
+impl CoordinatorHostAdapter {
+    pub fn new(coordinator: Arc<Coordinator>) -> Self {
+        Self { coordinator }
+    }
+}
+
+impl EguiHost for CoordinatorHostAdapter {}
+
+impl HostPoller for CoordinatorHostAdapter {
+    fn selection_polish_preview(&self) -> Option<SelectionPreviewPayload> {
+        self.coordinator.selection_polish_preview().map(|p| SelectionPreviewPayload {
+            text: p.text,
+            source_text: p.source_text,
+        })
+    }
+}
+
+impl HostActions for CoordinatorHostAdapter {
+    fn confirm_selection_polish_preview(&self, text: String) -> Result<(), String> {
+        self.coordinator.confirm_selection_polish_preview(text)
+    }
+    fn cancel_selection_polish_preview(&self) {
+        self.coordinator.cancel_selection_polish_preview();
+    }
+    fn qa_window_dismiss(&self) {
+        self.coordinator.qa_window_dismiss();
+    }
+    fn qa_submit_text(&self, text: String) {
+        let coord = self.coordinator.clone();
+        tauri::async_runtime::spawn(async move {
+            let _ = coord.qa_submit_text(text).await;
+        });
+    }
+    fn qa_toggle_recording(&self) {
+        let coord = self.coordinator.clone();
+        tauri::async_runtime::spawn(async move {
+            coord.qa_toggle_recording().await;
+        });
     }
 }
 

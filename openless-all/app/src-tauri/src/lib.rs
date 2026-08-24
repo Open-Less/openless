@@ -491,6 +491,9 @@ fn run_desktop() {
     ));
     #[cfg(not(target_os = "windows"))]
     let coordinator = Arc::new(coordinator::Coordinator::new());
+    let egui_host: std::sync::Arc<dyn crate::egui_host::EguiHost> = std::sync::Arc::new(
+        crate::egui_host::CoordinatorHostAdapter::new(coordinator.clone()),
+    );
     #[cfg(target_os = "windows")]
     if let Err(error) = coordinator.sync_active_asr_provider_from_preferences() {
         log::warn!("[startup] sync active ASR provider from preferences failed: {error}");
@@ -549,6 +552,7 @@ fn run_desktop() {
             None,
         ))
         .manage(coordinator.clone())
+        .manage(egui_host.clone())
         .manage(local_asr_download_manager.clone())
         .manage(sherpa_download_manager.clone())
         .manage(foundry_local_runtime.clone())
@@ -818,6 +822,16 @@ fn run_desktop() {
                         }
                     }
                 });
+
+                // 临时验证钩子：OPENLESS_EGUI_TEST_QA=1 时启动即打开 QA 弹窗并注入演示状态。
+                // 验收后删除。
+                if std::env::var("OPENLESS_EGUI_TEST_QA").ok().as_deref() == Some("1") {
+                    if crate::egui_host::show_qa(app.handle()) {
+                        log::info!("[egui-host][test] qa egui_popup spawned via test hook");
+                    } else {
+                        log::warn!("[egui-host][test] qa show_qa returned false");
+                    }
+                }
             }
 
             Ok(())
