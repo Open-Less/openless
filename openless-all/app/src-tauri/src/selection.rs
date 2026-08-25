@@ -193,7 +193,7 @@ pub(crate) fn prefetch_selection_workspace_capture() {
             log::info!(
                 "[selection] prefetch missed (no selection at hotkey edge) reason={} front_app={} target_captured={}",
                 reason.as_str(),
-                capture_selection_source_app_hint(),
+                capture_selection_source_app_hint().as_deref().unwrap_or("-"),
                 selection_insertion_target_is_captured(&insertion_target)
             );
             guard.take();
@@ -654,6 +654,7 @@ fn capture_selection_with_status_diag() -> (SelectionCaptureOutcome, SelectionCa
         }
     }
 
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     (
         SelectionCaptureOutcome { selection: None },
         SelectionCaptureMissReason::NoCapturePath,
