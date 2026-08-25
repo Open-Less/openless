@@ -28,6 +28,7 @@ const MAX_FRAME_BYTES: usize = 1024 * 1024;
 const DIAGNOSTIC_TAIL_BYTES: usize = 64 * 1024;
 const START_TIMEOUT: Duration = Duration::from_secs(10);
 const LOAD_TIMEOUT: Duration = Duration::from_secs(120);
+const LOAD_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -498,7 +499,9 @@ impl MlxWorkerClient {
         let load_started = Instant::now();
         let request_id = self.next_request_id();
         let mut stream = self.io.lock().map_err(|_| user_error(MlxErrorCode::Io))?;
-        stream.set_read_timeout(Some(LOAD_TIMEOUT))?;
+        // 使用固定短轮询保持 120 秒总截止时间，同时避免 macOS 在 peer 已关闭后
+        // 再次 setsockopt(SO_RCVTIMEO) 返回 EINVAL，掩盖真正的 worker EOF。
+        stream.set_read_timeout(Some(LOAD_POLL_INTERVAL))?;
         stream.set_write_timeout(Some(START_TIMEOUT))?;
         write_frame(
             &mut stream,
@@ -509,11 +512,9 @@ impl MlxWorkerClient {
         )
         .map_err(|error| self.io_failure(error, WorkerPhase::ModelLoad))?;
         loop {
-            let remaining = LOAD_TIMEOUT.saturating_sub(load_started.elapsed());
-            if remaining.is_zero() {
+            if load_started.elapsed() >= LOAD_TIMEOUT {
                 return Err(self.timeout_failure(WorkerPhase::ModelLoad));
             }
-            stream.set_read_timeout(Some(remaining))?;
             let response = match read_frame::<WorkerResponse>(&mut stream) {
                 Ok(Some(response)) => response,
                 Ok(None) => {
@@ -524,7 +525,7 @@ impl MlxWorkerClient {
                         matches!(io.kind(), ErrorKind::TimedOut | ErrorKind::WouldBlock)
                     }) =>
                 {
-                    return Err(self.timeout_failure(WorkerPhase::ModelLoad));
+                    continue;
                 }
                 Err(error) => return Err(self.io_failure(error, WorkerPhase::ModelLoad)),
             };
@@ -1132,8 +1133,9 @@ mod tests {
     use std::sync::mpsc;
 
     fn test_dir() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "openless-mlx-worker-test-{}-{}",
+        // macOS 的测试 TMPDIR 同样可能超过 Unix socket 的 SUN_LEN。
+        let dir = Path::new("/tmp").join(format!(
+            "ol-mlx-test-{}-{}",
             std::process::id(),
             uuid::Uuid::new_v4()
         ));
