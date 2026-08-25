@@ -4,12 +4,59 @@
 //! 16-bit PCM，因此这里只做一次临时 WAV 封装；模型本身保持驻留并跨会话复用。
 
 use std::collections::BTreeMap;
+use std::ffi::CStr;
+use std::os::raw::{c_char, c_void};
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, Once};
 
 use anyhow::{Context, Result};
 use qwen3_asr_rs::inference::AsrInference;
 use qwen3_asr_rs::tensor::Device;
+
+// mlx-c 的默认错误处理器会调用 exit(-1)。这会把可恢复的 Metal/MLX
+// 初始化错误伪装成“应用闪退”，而且 Rust 层完全没有机会记录上下文。
+// 在 OpenLess 进程内改成只记录错误；调用方随后检查标志并返回 anyhow::Error。
+type MlxErrorHandler = extern "C" fn(*const c_char, *mut c_void);
+
+unsafe extern "C" {
+    fn mlx_set_error_handler(
+        handler: Option<MlxErrorHandler>,
+        data: *mut c_void,
+        dtor: Option<extern "C" fn(*mut c_void)>,
+    );
+}
+
+static MLX_ERROR_HANDLER_ONCE: Once = Once::new();
+static MLX_NATIVE_ERROR: AtomicBool = AtomicBool::new(false);
+
+extern "C" fn handle_mlx_error(message: *const c_char, _data: *mut c_void) {
+    let message = if message.is_null() {
+        "unknown MLX error".to_owned()
+    } else {
+        // SAFETY: mlx-c passes a valid, NUL-terminated error string for the
+        // duration of this callback.
+        unsafe { CStr::from_ptr(message) }
+            .to_string_lossy()
+            .into_owned()
+    };
+    MLX_NATIVE_ERROR.store(true, Ordering::Release);
+    log::error!("[local-qwen3-mlx] native MLX error: {message}");
+}
+
+fn install_mlx_error_handler() {
+    MLX_ERROR_HANDLER_ONCE.call_once(|| unsafe {
+        mlx_set_error_handler(Some(handle_mlx_error), std::ptr::null_mut(), None);
+    });
+}
+
+fn clear_mlx_native_error() {
+    MLX_NATIVE_ERROR.store(false, Ordering::Release);
+}
+
+fn take_mlx_native_error() -> bool {
+    MLX_NATIVE_ERROR.swap(false, Ordering::AcqRel)
+}
 
 pub struct MlxQwenAsrEngine {
     inference: Mutex<AsrInference>,
@@ -18,15 +65,24 @@ pub struct MlxQwenAsrEngine {
 impl MlxQwenAsrEngine {
     pub fn load(model_dir: &Path) -> Result<Self> {
         ensure_tokenizer_json(model_dir)?;
+        install_mlx_error_handler();
+        clear_mlx_native_error();
         // qwen3_asr_rs 的 CLI 会在加载模型前做这一步；OpenLess 直接调用库 API，
         // 必须自行初始化全局 MLX stream，否则首次创建张量会 panic。
         qwen3_asr_rs::backend::mlx::stream::init_mlx(true);
+        if take_mlx_native_error() {
+            anyhow::bail!("MLX/Metal 初始化失败，请查看 native MLX error 日志");
+        }
         log::info!(
             "[local-qwen3-mlx] loading model from {}",
             model_dir.display()
         );
+        clear_mlx_native_error();
         let inference = AsrInference::load(model_dir, Device::gpu())
             .with_context(|| format!("加载 Qwen3-ASR MLX 模型失败: {}", model_dir.display()))?;
+        if take_mlx_native_error() {
+            anyhow::bail!("Qwen3-ASR MLX 加载触发 native MLX error");
+        }
         Ok(Self {
             inference: Mutex::new(inference),
         })
