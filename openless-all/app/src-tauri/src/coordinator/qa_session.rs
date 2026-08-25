@@ -644,9 +644,8 @@ pub(super) async fn transcribe_overlay_dictation_asr(
                 }
             };
             if result.is_err() {
-                // 超时只放弃结果：解码任务仍在 spawn_blocking 里跑并持有引擎锁，
-                // cancel() 中止不了它。驱逐引擎让下次会话加载新引擎（与
-                // coordinator/dictation.rs 同款处理）。
+                // MLX 的 cancel() 会终止隔离 worker；C 后端仍让旧
+                // spawn_blocking 任务自行收尾。两者都驱逐 cache，避免复用超时引擎。
                 log::warn!(
                     "[coord] QA local Qwen3-ASR 超时 {}s，驱逐引擎避免下次会话排队",
                     timeout_duration.as_secs()
@@ -1561,9 +1560,8 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
                 }
             };
             if result.is_err() {
-                // 超时只放弃结果：解码任务仍在 spawn_blocking 里跑并持有引擎锁，
-                // cancel() 中止不了它。驱逐引擎让下次会话加载新引擎（与
-                // coordinator/dictation.rs 同款处理）。
+                // MLX 的 cancel() 会终止隔离 worker；C 后端仍让旧
+                // spawn_blocking 任务自行收尾。两者都驱逐 cache，避免复用超时引擎。
                 log::warn!(
                     "[coord] QA local Qwen3-ASR 超时 {}s，驱逐引擎避免下次会话排队",
                     timeout_duration.as_secs()

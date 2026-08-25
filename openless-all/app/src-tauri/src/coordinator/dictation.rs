@@ -4096,10 +4096,8 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
                     let result =
                         tokio::time::timeout(timeout_duration, local.clone().transcribe()).await;
                     if result.is_err() {
-                        // 超时只放弃结果：spawn_blocking 里的解码任务仍在跑并持有引擎锁，
-                        // cancel() 只能关 token 门控、中止不了它。直接驱逐引擎，让下次
-                        // 会话加载新引擎而不是排队等旧任务跑完（旧任务持有的 Arc 会在
-                        // 完成后自动释放内存）。
+                        // MLX 的 cancel() 会终止隔离 worker；C 后端仍只能驱逐 cache，
+                        // 让旧 spawn_blocking 任务自行收尾。两者都不复用超时后的引擎。
                         local.cancel();
                         log::warn!(
                             "[coord] local Qwen3-ASR 超时 {}s，驱逐引擎避免下次会话排队",

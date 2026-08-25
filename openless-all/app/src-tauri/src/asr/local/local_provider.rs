@@ -84,6 +84,7 @@ impl LocalQwenAsr {
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::Release);
         self.buffer.lock().clear();
+        self.engine.cancel();
     }
 }
 

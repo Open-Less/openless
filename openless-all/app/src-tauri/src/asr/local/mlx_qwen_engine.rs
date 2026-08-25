@@ -4,134 +4,39 @@
 //! 16-bit PCM，因此这里只做一次临时 WAV 封装；模型本身保持驻留并跨会话复用。
 
 use std::collections::BTreeMap;
-use std::ffi::CStr;
-use std::os::raw::{c_char, c_void};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, Once};
 
+use super::mlx_worker::MlxWorkerClient;
 use anyhow::{Context, Result};
-use qwen3_asr_rs::inference::AsrInference;
-use qwen3_asr_rs::tensor::Device;
-
-// mlx-c 的默认错误处理器会调用 exit(-1)。这会把可恢复的 Metal/MLX
-// 初始化错误伪装成“应用闪退”，而且 Rust 层完全没有机会记录上下文。
-// 在 OpenLess 进程内改成只记录错误；调用方随后检查标志并返回 anyhow::Error。
-type MlxErrorHandler = extern "C" fn(*const c_char, *mut c_void);
-
-unsafe extern "C" {
-    fn mlx_set_error_handler(
-        handler: Option<MlxErrorHandler>,
-        data: *mut c_void,
-        dtor: Option<extern "C" fn(*mut c_void)>,
-    );
-}
-
-static MLX_ERROR_HANDLER_ONCE: Once = Once::new();
-static MLX_NATIVE_ERROR: AtomicBool = AtomicBool::new(false);
-
-extern "C" fn handle_mlx_error(message: *const c_char, _data: *mut c_void) {
-    let message = if message.is_null() {
-        "unknown MLX error".to_owned()
-    } else {
-        // SAFETY: mlx-c passes a valid, NUL-terminated error string for the
-        // duration of this callback.
-        unsafe { CStr::from_ptr(message) }
-            .to_string_lossy()
-            .into_owned()
-    };
-    MLX_NATIVE_ERROR.store(true, Ordering::Release);
-    log::error!("[local-qwen3-mlx] native MLX error: {message}");
-}
-
-fn install_mlx_error_handler() {
-    MLX_ERROR_HANDLER_ONCE.call_once(|| unsafe {
-        mlx_set_error_handler(Some(handle_mlx_error), std::ptr::null_mut(), None);
-    });
-}
-
-fn clear_mlx_native_error() {
-    MLX_NATIVE_ERROR.store(false, Ordering::Release);
-}
-
-fn take_mlx_native_error() -> bool {
-    MLX_NATIVE_ERROR.swap(false, Ordering::AcqRel)
-}
 
 pub struct MlxQwenAsrEngine {
-    inference: Mutex<AsrInference>,
+    worker: MlxWorkerClient,
 }
 
 impl MlxQwenAsrEngine {
     pub fn load(model_dir: &Path) -> Result<Self> {
-        ensure_tokenizer_json(model_dir)?;
-        install_mlx_error_handler();
-        clear_mlx_native_error();
-        // qwen3_asr_rs 的 CLI 会在加载模型前做这一步；OpenLess 直接调用库 API，
-        // 必须自行初始化全局 MLX stream，否则首次创建张量会 panic。
-        qwen3_asr_rs::backend::mlx::stream::init_mlx(true);
-        if take_mlx_native_error() {
-            anyhow::bail!("MLX/Metal 初始化失败，请查看 native MLX error 日志");
-        }
-        log::info!(
-            "[local-qwen3-mlx] loading model from {}",
-            model_dir.display()
-        );
-        clear_mlx_native_error();
-        let inference = AsrInference::load(model_dir, Device::gpu())
-            .with_context(|| format!("加载 Qwen3-ASR MLX 模型失败: {}", model_dir.display()))?;
-        if take_mlx_native_error() {
-            anyhow::bail!("Qwen3-ASR MLX 加载触发 native MLX error");
-        }
         Ok(Self {
-            inference: Mutex::new(inference),
+            worker: MlxWorkerClient::load(model_dir)?,
         })
     }
 
     pub fn transcribe_pcm(&self, samples: &[f32]) -> Result<String> {
-        // 临时 WAV 用 guard 兜底清理：解码 panic、锁中毒提前 return 时也不会
-        // 把文件泄漏到系统临时目录。
-        let wav = TempWav::new(samples)?;
-        let path_string = wav.path.to_string_lossy().into_owned();
-        let output = self
-            .inference
-            .lock()
-            .map_err(|_| anyhow::anyhow!("Qwen3-ASR MLX 引擎锁已中毒"))?
-            .transcribe(&path_string, None)
-            .context("Qwen3-ASR MLX batch 解码失败")?;
-        Ok(output.text.trim().to_string())
+        self.worker.transcribe_pcm(samples)
     }
-}
 
-/// 临时 WAV 的 RAII 清理 guard：Drop 时删除文件。
-struct TempWav {
-    path: std::path::PathBuf,
-}
-
-impl TempWav {
-    fn new(samples: &[f32]) -> Result<Self> {
-        let path =
-            std::env::temp_dir().join(format!("openless-qwen3-{}.wav", uuid::Uuid::new_v4()));
-        let pcm: Vec<i16> = samples
-            .iter()
-            .map(|sample| (sample.clamp(-1.0, 1.0) * 32767.0) as i16)
-            .collect();
-        std::fs::write(&path, crate::asr::wav::encode_wav_16k_mono(&pcm))
-            .with_context(|| format!("写入临时 Qwen3-ASR 音频失败: {}", path.display()))?;
-        Ok(Self { path })
+    pub fn abort(&self) {
+        self.worker.abort();
     }
-}
 
-impl Drop for TempWav {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
+    pub fn is_healthy(&self) -> bool {
+        self.worker.is_healthy()
     }
 }
 
 /// Qwen 官方 ASR 权重通常只有 `vocab.json` + `merges.txt`，而 qwen3_asr_rs
 /// 使用 HuggingFace 的统一 `tokenizer.json`。这里在首次加载时本地生成一次，
 /// 避免要求用户安装 Python/Transformers；如果模型包已经带 tokenizer.json，则直接复用。
-fn ensure_tokenizer_json(model_dir: &Path) -> Result<()> {
+pub(super) fn ensure_tokenizer_json(model_dir: &Path) -> Result<()> {
     let tokenizer_path = model_dir.join("tokenizer.json");
     if tokenizer_path.is_file() {
         return Ok(());

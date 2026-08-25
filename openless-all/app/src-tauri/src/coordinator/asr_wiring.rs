@@ -310,9 +310,9 @@ pub(super) fn emit_local_asr_engine_status(_inner: &Arc<Inner>) {}
 
 /// 统一通过本地 ASR 生命周期门闩驱逐 Qwen / Whisper cache。
 ///
-/// `spawn_blocking` 被 timeout 或取消时不会停止 native 解码；此时只丢弃
-/// future 会让旧引擎继续持有 context 锁。驱逐 cache 后下一次会话可以加载
-/// 新引擎，旧任务仍由自身持有的 `Arc` 安全收尾。
+/// `spawn_blocking` 被 timeout 或取消时，单纯丢弃 future 不会停止 native 解码。
+/// MLX provider 的 cancel 会终止隔离 worker；C / Whisper 保持原有行为，由 cache
+/// 驱逐保证下一次会话可以加载新引擎，旧任务仍由自身持有的 `Arc` 安全收尾。
 #[cfg(not(target_os = "android"))]
 fn release_local_asr_engines_locked(
     inner: &Arc<Inner>,

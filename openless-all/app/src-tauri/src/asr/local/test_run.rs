@@ -113,9 +113,17 @@ pub async fn run_test(
     // batch transcribe 也是阻塞 + 重活，同样扔到 blocking pool。
     let trans_start = Instant::now();
     let engine_clone = Arc::clone(&engine);
-    let text = tauri::async_runtime::spawn_blocking(move || engine_clone.transcribe_pcm(&samples))
-        .await
-        .map_err(|e| anyhow::anyhow!("spawn_blocking join failed: {e:#}"))??;
+    let transcribe =
+        tauri::async_runtime::spawn_blocking(move || engine_clone.transcribe_pcm(&samples));
+    let text = match tokio::time::timeout(std::time::Duration::from_secs(30), transcribe).await {
+        Ok(joined) => {
+            joined.map_err(|e| anyhow::anyhow!("spawn_blocking join failed: {e:#}"))??
+        }
+        Err(_) => {
+            engine.cancel();
+            anyhow::bail!("本地 Qwen3-ASR 加载并测试转写超时（30 秒）");
+        }
+    };
     let transcribe_ms = trans_start.elapsed().as_millis() as u64;
 
     Ok(TestResult {

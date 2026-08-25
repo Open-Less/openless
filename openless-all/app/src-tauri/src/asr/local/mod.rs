@@ -38,6 +38,8 @@ pub use sherpa_runtime::SherpaOnnxRuntime;
 mod apple_speech_provider;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod mlx_qwen_engine;
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+mod mlx_worker;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod qwen_engine;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -50,6 +52,8 @@ pub use apple_speech_provider::{native_name_to_apple_locale, AppleSpeechAsr};
 pub use local_provider::LocalQwenAsr;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub use mlx_qwen_engine::MlxQwenAsrEngine;
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+pub(crate) use mlx_worker::run_if_requested as run_mlx_worker_if_requested;
 #[cfg(target_os = "macos")]
 pub(crate) use whisper_provider::WhisperEngine;
 #[cfg(target_os = "macos")]
@@ -138,6 +142,22 @@ impl LocalQwenEngine {
             #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
             Self::Mlx(engine) => engine.transcribe_pcm(samples),
             Self::C(engine) => engine.transcribe_audio(samples),
+        }
+    }
+
+    pub fn cancel(&self) {
+        match self {
+            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+            Self::Mlx(engine) => engine.abort(),
+            Self::C(_) => {}
+        }
+    }
+
+    pub fn is_healthy(&self) -> bool {
+        match self {
+            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+            Self::Mlx(engine) => engine.is_healthy(),
+            Self::C(_) => true,
         }
     }
 

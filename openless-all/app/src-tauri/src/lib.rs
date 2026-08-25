@@ -141,6 +141,9 @@ use crate::types::{PolishMode, StylePack, StylePackKind};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    asr::local::run_mlx_worker_if_requested();
+
     #[cfg(mobile)]
     {
         mobile_runtime::run();

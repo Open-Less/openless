@@ -3002,9 +3002,8 @@ impl Coordinator {
                     local_qwen_transcribe_timeout((local.buffer_duration_ms() as f64) / 1000.0);
                 let out = tokio::time::timeout(dur, local.clone().transcribe()).await;
                 if out.is_err() {
-                    // 超时只放弃结果：解码任务仍在 spawn_blocking 里跑并持有引擎锁，
-                    // cancel() 中止不了它。驱逐引擎让下次会话加载新引擎（与
-                    // coordinator/dictation.rs 同款处理）。
+                    // MLX 的 cancel() 会终止隔离 worker；C 后端仍让旧
+                    // spawn_blocking 任务自行收尾。两者都驱逐 cache，避免复用超时引擎。
                     local.cancel();
                     log::warn!(
                         "[coord] 重新转录超时 {}s，驱逐本地 Qwen3-ASR 引擎",

@@ -36,55 +36,104 @@ echo "▶ Cargo release strip: ${CARGO_PROFILE_RELEASE_STRIP} (macOS only)"
 echo "▶ Rust proc-macro host wrapper: ${RUSTC_WRAPPER}"
 
 echo "▶ tauri build"
-TAURI_BUILD_ARGS=(build --ci --bundles app)
+TAURI_BUILD_ARGS=(build --ci)
+case "$(uname -m)" in
+  arm64)
+    MAC_BUNDLE_ARCH="aarch64"
+    TAURI_BUILD_ARGS+=(--config src-tauri/tauri.macos-mlx.conf.json)
+    ;;
+  x86_64)
+    MAC_BUNDLE_ARCH="x64"
+    ;;
+  *)
+    echo "✗ 不支持的 macOS 构建架构：$(uname -m)"
+    exit 1
+    ;;
+esac
 if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ] || [ -n "${TAURI_SIGNING_PRIVATE_KEY_PATH:-}" ]; then
   TAURI_BUILD_ARGS+=(--config '{"bundle":{"createUpdaterArtifacts":true}}')
 fi
 npm run tauri -- "${TAURI_BUILD_ARGS[@]}"
 
-echo "▶ 打包 MLX Metal kernel library"
-# MLX 的默认 metallib 由 qwen3-asr-rs 的 CMake build 生成在 Cargo 临时目录，
-# 不会自动进入 .app；发布包必须把它放进 app，并通过 MacOS 下的链接让 MLX 找到。
-MLX_METALLIB="$(find src-tauri/target/release/build \
-  -path '*/qwen3-asr-rs-*/out/lib/mlx.metallib' \
-  -type f -size +1c -print | sort | tail -n 1)"
-if [ -z "$MLX_METALLIB" ]; then
-  echo "✗ 未找到 MLX metallib；Qwen3-ASR MLX 无法随 app 运行"
-  exit 1
-fi
-mkdir -p "$APP/Contents/Resources"
-cp "$MLX_METALLIB" "$APP/Contents/Resources/mlx.metallib"
-ln -sfn ../Resources/mlx.metallib "$APP/Contents/MacOS/mlx.metallib"
-echo "✓ MLX metallib: $MLX_METALLIB"
-
-# 上面的资源复制发生在 Tauri 签名之后，需要重新签名 app，避免新增资源破坏
-# CodeResources；同时保留麦克风 entitlement。
-SIGNING_IDENTITY="${APPLE_SIGNING_IDENTITY:--}"
-codesign --force --sign "$SIGNING_IDENTITY" \
-  --entitlements src-tauri/Entitlements.plist "$APP"
-
-echo "▶ 生成无 GUI 依赖的 DMG"
 APP_VERSION="$(node -p "require('./package.json').version")"
-case "$(uname -m)" in
-  arm64) DMG_ARCH="aarch64" ;;
-  x86_64) DMG_ARCH="x64" ;;
-  *) DMG_ARCH="$(uname -m)" ;;
-esac
-DMG_PATH="$DMG_DIR/OpenLess_${APP_VERSION}_${DMG_ARCH}.dmg"
-DMG_STAGING="$(mktemp -d "${TMPDIR:-/tmp}/openless-dmg.XXXXXX")"
-trap 'rm -rf "$DMG_STAGING"' EXIT
-mkdir -p "$DMG_DIR"
-cp -R "$APP" "$DMG_STAGING/OpenLess.app"
-ln -s /Applications "$DMG_STAGING/Applications"
-rm -f "$DMG_PATH"
-hdiutil create -volname OpenLess -srcfolder "$DMG_STAGING" -ov -format UDZO "$DMG_PATH"
-echo "✓ DMG: $DMG_PATH"
+DMG_PATH="$DMG_DIR/OpenLess_${APP_VERSION}_${MAC_BUNDLE_ARCH}.dmg"
 
 echo "▶ 校验 Info.plist / 签名"
 /usr/libexec/PlistBuddy -c "Print :NSMicrophoneUsageDescription" "$INFO" >/dev/null
 bash scripts/check-macos-speech-usage-description.sh "$INFO"
 codesign -d --entitlements :- "$APP" 2>/dev/null | grep -q "com.apple.security.device.audio-input"
 codesign --verify --deep --strict --verbose=2 "$APP" 2>&1 | tail -2
+
+if [ "$MAC_BUNDLE_ARCH" = "aarch64" ]; then
+  echo "▶ 校验 MLX metallib 已进入 app / DMG / updater"
+  APP_METALLIB="$APP/Contents/MacOS/mlx.metallib"
+  if [ ! -s "$APP_METALLIB" ]; then
+    echo "✗ Apple Silicon app 缺少 Contents/MacOS/mlx.metallib"
+    exit 1
+  fi
+  APP_METALLIB_SHA="$(shasum -a 256 "$APP_METALLIB" | awk '{print $1}')"
+
+  if [ ! -f "$DMG_PATH" ]; then
+    echo "✗ 未找到 Tauri 生成的 DMG：$DMG_PATH"
+    exit 1
+  fi
+  DMG_MOUNT="$(mktemp -d "${TMPDIR:-/tmp}/openless-dmg-verify.XXXXXX")"
+  cleanup_dmg_mount() {
+    hdiutil detach "$DMG_MOUNT" >/dev/null 2>&1 || true
+    rmdir "$DMG_MOUNT" >/dev/null 2>&1 || true
+  }
+  trap cleanup_dmg_mount EXIT
+  hdiutil attach "$DMG_PATH" -readonly -nobrowse -mountpoint "$DMG_MOUNT" >/dev/null
+  DMG_METALLIB="$DMG_MOUNT/OpenLess.app/Contents/MacOS/mlx.metallib"
+  if [ ! -s "$DMG_METALLIB" ]; then
+    echo "✗ DMG 中缺少 OpenLess.app/Contents/MacOS/mlx.metallib"
+    exit 1
+  fi
+  DMG_METALLIB_SHA="$(shasum -a 256 "$DMG_METALLIB" | awk '{print $1}')"
+  if [ "$DMG_METALLIB_SHA" != "$APP_METALLIB_SHA" ]; then
+    echo "✗ app 与 DMG 中的 mlx.metallib SHA-256 不一致"
+    exit 1
+  fi
+  cleanup_dmg_mount
+  trap - EXIT
+
+  if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ] || [ -n "${TAURI_SIGNING_PRIVATE_KEY_PATH:-}" ]; then
+    UPDATER_ARCHIVE="src-tauri/target/release/bundle/macos/OpenLess.app.tar.gz"
+    if [ ! -f "$UPDATER_ARCHIVE" ]; then
+      echo "✗ 未找到 Tauri updater archive：$UPDATER_ARCHIVE"
+      exit 1
+    fi
+    UPDATER_METALLIB_SHA="$(tar -xOf "$UPDATER_ARCHIVE" \
+      OpenLess.app/Contents/MacOS/mlx.metallib | shasum -a 256 | awk '{print $1}')"
+    if [ "$UPDATER_METALLIB_SHA" != "$APP_METALLIB_SHA" ]; then
+      echo "✗ app 与 updater 中的 mlx.metallib SHA-256 不一致"
+      exit 1
+    fi
+  fi
+  echo "✓ MLX metallib sha256=$APP_METALLIB_SHA"
+elif [ -e "$APP/Contents/MacOS/mlx.metallib" ]; then
+  echo "✗ Intel app 不应包含 Apple Silicon MLX metallib"
+  exit 1
+fi
+
+HAS_DEVELOPER_ID=0
+if [ -n "${APPLE_CERTIFICATE:-}" ] \
+  || { [ -n "${APPLE_SIGNING_IDENTITY:-}" ] && [ "${APPLE_SIGNING_IDENTITY}" != "-" ]; }; then
+  HAS_DEVELOPER_ID=1
+fi
+HAS_NOTARIZATION_CREDENTIALS=0
+if { [ -n "${APPLE_ID:-}" ] \
+    && [ -n "${APPLE_PASSWORD:-}" ] \
+    && [ -n "${APPLE_TEAM_ID:-}" ]; } \
+  || { [ -n "${APPLE_API_KEY:-}" ] && [ -n "${APPLE_API_ISSUER:-}" ]; }; then
+  HAS_NOTARIZATION_CREDENTIALS=1
+fi
+if [ "$HAS_DEVELOPER_ID" = "1" ] && [ "$HAS_NOTARIZATION_CREDENTIALS" = "1" ]; then
+  echo "▶ 校验 Gatekeeper 与公证票据"
+  spctl --assess --type execute --verbose=2 "$APP"
+  xcrun stapler validate "$APP"
+  xcrun stapler validate "$DMG_PATH"
+fi
 
 echo "▶ 清理发布产物扩展属性"
 # 这只能保证 CI/本机构建产物本身干净；浏览器下载仍可能重新加 quarantine。
