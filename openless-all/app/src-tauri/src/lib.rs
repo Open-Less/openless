@@ -782,10 +782,6 @@ fn run_desktop() {
             // Spin up hotkey listener; coordinator owns the lifecycle.
             let app_handle = app.handle().clone();
             coordinator.bind_app(app_handle);
-            // 远程输入只在 prefs 变化时 refresh；启动时若开关已开也要拉起，
-            // 否则重启后界面显示「已启用」但 8443 没在听。
-            #[cfg(not(mobile))]
-            coordinator.refresh_remote_server();
             coordinator.start_hotkey_listener();
             // QA / custom combo hotkeys use `global-hotkey` (Carbon on macOS).
             // Start those after RunEvent::Ready, when the AppKit event loop is live.
@@ -820,6 +816,12 @@ fn run_desktop() {
                 coordinator.start_switch_style_hotkey_listener();
                 coordinator.start_open_app_hotkey_listener();
                 coordinator.start_style_pack_hotkey_listeners();
+                // 远程输入只在 prefs 变化时 refresh；启动时若开关已开也要拉起，
+                // 否则重启后界面显示「已启用」但 8443 没在听。
+                // 放到 Ready：setup() 里 spawn 的异步任务在 Windows 上可能还没
+                // 跑到 runtime 就开始被丢掉，表现为开关开着、端口没在听。
+                #[cfg(not(mobile))]
+                coordinator.refresh_remote_server();
             }
             #[cfg(target_os = "macos")]
             RunEvent::Reopen { .. } => show_main_window(app),

@@ -2606,6 +2606,7 @@ impl Coordinator {
 
     #[cfg(not(mobile))]
     pub fn refresh_remote_server(self: &Arc<Self>) {
+        log::info!("[remote-input] scheduling refresh");
         let coord = Arc::clone(self);
         let gen = self.inner.remote_refresh_gen.fetch_add(1, Ordering::SeqCst) + 1;
         tauri::async_runtime::spawn(async move {
@@ -2619,6 +2620,12 @@ impl Coordinator {
             }
             let prefs = coord.inner.prefs.get();
             let app = coord.inner.app.lock().clone();
+            log::info!(
+                "[remote-input] refresh begin enabled={} port={} app={}",
+                prefs.remote_input_enabled,
+                prefs.remote_input_port,
+                app.is_some()
+            );
             if !prefs.remote_input_enabled {
                 if let Some(app) = &app {
                     let _ = app.emit(
@@ -2631,25 +2638,36 @@ impl Coordinator {
             let Some(app) = app else {
                 return;
             };
-            let pin = if let Some(pin) = coord.inner.remote_pin.lock().clone() {
-                pin
-            } else {
-                match crate::remote_server::load_or_create_pin(&app) {
-                    Ok(pin) => {
-                        *coord.inner.remote_pin.lock() = Some(pin.clone());
-                        pin
-                    }
-                    Err(error) => {
-                        let reason = format!("persist pairing PIN failed: {error}");
-                        let _ = app.emit(
-                            "remote-input:error",
-                            serde_json::json!({"reason": reason, "port": prefs.remote_input_port}),
-                        );
-                        log::error!("[remote-input] {reason}");
-                        return;
-                    }
+            let existing_pin = coord.inner.remote_pin.lock().clone();
+            let pin_app = app.clone();
+            log::info!("[remote-input] loading pin");
+            let pin = match tauri::async_runtime::spawn_blocking(move || {
+                if let Some(pin) = existing_pin {
+                    return Ok(pin);
+                }
+                crate::remote_server::load_or_create_pin(&pin_app)
+            })
+            .await
+            {
+                Ok(Ok(pin)) => {
+                    *coord.inner.remote_pin.lock() = Some(pin.clone());
+                    pin
+                }
+                Ok(Err(error)) => {
+                    let reason = format!("persist pairing PIN failed: {error}");
+                    let _ = app.emit(
+                        "remote-input:error",
+                        serde_json::json!({"reason": reason, "port": prefs.remote_input_port}),
+                    );
+                    log::error!("[remote-input] {reason}");
+                    return;
+                }
+                Err(error) => {
+                    log::error!("[remote-input] pin worker failed: {error}");
+                    return;
                 }
             };
+            log::info!("[remote-input] pin ready");
             let port = prefs.remote_input_port;
             match crate::remote_server::start(crate::remote_server::RemoteServerConfig {
                 port,
@@ -2660,7 +2678,11 @@ impl Coordinator {
             .await
             {
                 Ok(handle) => {
-                    let urls = crate::remote_server::access_urls(port);
+                    let urls = tauri::async_runtime::spawn_blocking(move || {
+                        crate::remote_server::access_urls(port)
+                    })
+                    .await
+                    .unwrap_or_default();
                     *coord.inner.remote_server.lock() = Some(handle);
                     let _ = app.emit(
                         "remote-input:running",

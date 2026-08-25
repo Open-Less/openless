@@ -124,11 +124,20 @@ pub fn generate_pin() -> String {
     }
 }
 
+fn app_config_dir(app: &AppHandle) -> Option<std::path::PathBuf> {
+    // Windows 上 Tauri 的 path API 从 async runtime 调会和主线程互相等，卡住
+    // 远程输入启动。标识符固定为 com.openless.app，直接拼 APPDATA 即可。
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(appdata) = std::env::var_os("APPDATA") {
+            return Some(std::path::PathBuf::from(appdata).join("com.openless.app"));
+        }
+    }
+    app.path().app_config_dir().ok()
+}
+
 fn pin_path(app: &AppHandle) -> Option<std::path::PathBuf> {
-    app.path()
-        .app_config_dir()
-        .ok()
-        .map(|d| d.join("remote-input-pin.txt"))
+    app_config_dir(app).map(|d| d.join("remote-input-pin.txt"))
 }
 
 mod pin_persistence;
@@ -164,8 +173,8 @@ fn is_private_lan(ip: &Ipv4Addr) -> bool {
             || (o[0] == 172 && (16..=31).contains(&o[1])))
 }
 
-/// 本机所有局域网 IPv4（过滤回环 / link-local / 虚拟网卡的非私网段）。
-pub fn local_lan_ipv4s() -> Vec<Ipv4Addr> {
+#[cfg(not(target_os = "windows"))]
+fn local_lan_ipv4s_from_netifas() -> Vec<Ipv4Addr> {
     let mut out: Vec<Ipv4Addr> = Vec::new();
     if let Ok(ifaces) = local_ip_address::list_afinet_netifas() {
         for (_name, ip) in ifaces {
@@ -179,6 +188,47 @@ pub fn local_lan_ipv4s() -> Vec<Ipv4Addr> {
     out.sort();
     out.dedup();
     out
+}
+
+/// 用 UDP connect 查默认路由出口 IP，不枚举网卡。
+/// `list_afinet_netifas` / `ipconfig` 在 Windows 上碰到 NordVPN / QuickFox 会卡住。
+fn local_lan_ipv4s_from_route() -> Vec<Ipv4Addr> {
+    use std::net::UdpSocket;
+    let mut out = Vec::new();
+    for dest in ["8.8.8.8:80", "1.1.1.1:80", "192.168.8.1:80", "192.168.1.1:80"] {
+        let Ok(socket) = UdpSocket::bind("0.0.0.0:0") else {
+            continue;
+        };
+        let _ = socket.set_write_timeout(Some(Duration::from_millis(200)));
+        if socket.connect(dest).is_err() {
+            continue;
+        }
+        if let Ok(SocketAddr::V4(addr)) = socket.local_addr() {
+            if is_private_lan(addr.ip()) {
+                out.push(*addr.ip());
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// 本机所有局域网 IPv4（过滤回环 / link-local / 虚拟网卡的非私网段）。
+pub fn local_lan_ipv4s() -> Vec<Ipv4Addr> {
+    #[cfg(target_os = "windows")]
+    {
+        local_lan_ipv4s_from_route()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let ips = local_lan_ipv4s_from_netifas();
+        if ips.is_empty() {
+            local_lan_ipv4s_from_route()
+        } else {
+            ips
+        }
+    }
 }
 
 /// 给前端展示的访问网址列表。
@@ -433,13 +483,20 @@ async fn mobileconfig_handler(State(state): State<Arc<WsState>>) -> impl IntoRes
 
 pub async fn start(cfg: RemoteServerConfig) -> Result<RemoteServerHandle, String> {
     let _ = HEADER_HTML; // index 用 axum Html() 自带 content-type
-    let mut sans = vec!["localhost".to_string(), "127.0.0.1".to_string()];
-    for ip in local_lan_ipv4s() {
-        sans.push(ip.to_string());
-    }
-    // 证书目录用 app 配置目录（跨重启稳定）；拿不到则退回内存生成（不持久化）。
-    let cert_dir = cfg.app.path().app_config_dir().ok();
-    let (cert_der, key_der) = load_or_generate_cert(cert_dir.as_deref(), &sans)?;
+    log::info!("[remote-input] starting server on port {}", cfg.port);
+    let app_for_cert = cfg.app.clone();
+    let (cert_der, key_der) = tauri::async_runtime::spawn_blocking(move || {
+        let mut sans = vec!["localhost".to_string(), "127.0.0.1".to_string()];
+        let lan_ips = local_lan_ipv4s();
+        log::info!("[remote-input] lan ips for cert SAN: {lan_ips:?}");
+        for ip in lan_ips {
+            sans.push(ip.to_string());
+        }
+        let cert_dir = app_config_dir(&app_for_cert);
+        load_or_generate_cert(cert_dir.as_deref(), &sans)
+    })
+    .await
+    .map_err(|e| format!("cert worker failed: {e}"))??;
     let rustls_config = build_server_config(cert_der.clone(), key_der)?;
     let acceptor = TlsAcceptor::from(rustls_config);
 

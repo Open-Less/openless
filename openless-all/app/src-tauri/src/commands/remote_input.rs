@@ -15,11 +15,15 @@ pub fn get_remote_input_status(
 }
 
 #[tauri::command]
-pub fn list_local_ips() -> Vec<String> {
-    crate::remote_server::local_lan_ipv4s()
-        .iter()
-        .map(|ip| ip.to_string())
-        .collect()
+pub async fn list_local_ips() -> Vec<String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        crate::remote_server::local_lan_ipv4s()
+            .iter()
+            .map(|ip| ip.to_string())
+            .collect()
+    })
+    .await
+    .unwrap_or_default()
 }
 
 #[tauri::command]
@@ -28,15 +32,10 @@ pub fn regenerate_remote_pin(coord: CoordinatorState<'_>) -> Result<String, Stri
 }
 
 /// 同步 PC 端界面语言到远程输入服务，H5 录音页据此显示对应语言。
+///
+/// 不要在这里 `run_on_main_thread` 刷托盘：本命令是同步 IPC，设置页一挂载就调用。
+/// 等主线程会和 WebView 互相卡住，窗口变成「未响应」。
 #[tauri::command]
-pub fn set_remote_locale(app: AppHandle, coord: CoordinatorState<'_>, locale: String) {
+pub fn set_remote_locale(coord: CoordinatorState<'_>, locale: String) {
     coord.set_remote_locale(locale);
-    let refresh_app = app.clone();
-    if let Err(err) = app.run_on_main_thread(move || {
-        if let Err(err) = crate::refresh_tray_microphone_menu(&refresh_app) {
-            log::warn!("[tray] refresh menu after locale change failed: {err}");
-        }
-    }) {
-        log::warn!("[tray] dispatch locale refresh failed: {err}");
-    }
 }
