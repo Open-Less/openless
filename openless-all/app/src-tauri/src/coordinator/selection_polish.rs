@@ -145,9 +145,14 @@ pub(super) async fn run_selection_polish(inner: &Arc<Inner>) -> Result<(), Strin
     // final check below deliberately does *not* restore this target: a user who
     // changed windows made an intentional context switch, so the safe behavior
     // is to leave both apps untouched.
-    let (selection_opt, insertion_target) = crate::selection::resolve_selection_workspace_capture();
+    let (selection_opt, insertion_target, capture_diag) =
+        crate::selection::resolve_selection_workspace_capture_with_diag();
     if selection_polish_plan(selection_opt.as_ref()) == SelectionPolishPlan::NoSelection {
         let code = "selectionPolishNoSelection";
+        log::warn!(
+            "[selection-polish] no selection ({})",
+            capture_diag.summary()
+        );
         finish_selection_polish_capsule(
             inner,
             CapsuleState::Cancelled,
