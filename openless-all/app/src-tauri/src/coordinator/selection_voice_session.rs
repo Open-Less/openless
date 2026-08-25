@@ -14,6 +14,7 @@ use super::{
     answer_qa_question_text, capture_external_focus_target, close_qa_panel, emit_capsule,
     open_qa_panel, polish_text, qa_event_target, qa_session, restore_focus_target_if_possible,
     schedule_capsule_idle, translate_text, CapsuleFeedback, Coordinator, Inner, QaPhase,
+    CAPSULE_AUTO_HIDE_DELAY_MS,
 };
 use crate::coordinator_state::{initial_session_id, new_session_id, SessionId};
 use crate::edit_plan::{apply_edit_plan, parse_edit_plan, EditOperation, EditPlan};
@@ -64,6 +65,18 @@ fn emit_selection_voice_begin_error(inner: &Arc<Inner>, error: &str) {
         Some(selection_voice_user_message(error)),
         None,
     );
+    schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
+    // #region agent log
+    crate::agent_debug::agent_debug_log(
+        "H8",
+        "selection_voice_session.rs:begin_error",
+        "scheduled capsule auto-hide after begin failure",
+        serde_json::json!({
+            "error": error,
+            "delayMs": CAPSULE_AUTO_HIDE_DELAY_MS,
+        }),
+    );
+    // #endregion
 }
 
 fn emit_selection_voice_end_error(inner: &Arc<Inner>, error: &str) {
