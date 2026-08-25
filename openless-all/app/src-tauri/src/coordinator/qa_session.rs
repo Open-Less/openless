@@ -852,20 +852,7 @@ pub(super) async fn answer_qa_question_text(
         (state.messages.clone(), state.front_app.clone())
     };
 
-    let cancel_was_set = inner.qa_stream_cancelled.load(Ordering::Relaxed);
     inner.qa_stream_cancelled.store(false, Ordering::SeqCst);
-    // #region agent log
-    crate::agent_debug::agent_debug_log(
-        "H2",
-        "qa_session.rs:answer_qa_question_text",
-        "reset qa_stream_cancelled before provider stream",
-        serde_json::json!({
-            "cancelWasSet": cancel_was_set,
-            "sessionId": session_id,
-            "questionPreview": question.chars().take(60).collect::<String>(),
-        }),
-    );
-    // #endregion
 
     let captured_session_id = session_id;
     let inner_for_delta = Arc::clone(inner);
@@ -892,24 +879,7 @@ pub(super) async fn answer_qa_question_text(
     let should_cancel = move || {
         let cancel_requested = cancel_flag.load(Ordering::Relaxed);
         let state = inner_for_cancel.qa_state.lock();
-        let session_mismatch = state.session_id != session_id;
-        let cancel = qa_provider_should_cancel(&state, session_id, cancel_requested);
-        if cancel {
-            // #region agent log
-            crate::agent_debug::agent_debug_log(
-                "H2",
-                "qa_session.rs:answer_qa_question_text",
-                "provider stream cancel requested",
-                serde_json::json!({
-                    "cancelRequested": cancel_requested,
-                    "sessionMismatch": session_mismatch,
-                    "sessionId": session_id,
-                    "stateSessionId": state.session_id,
-                }),
-            );
-            // #endregion
-        }
-        cancel
+        qa_provider_should_cancel(&state, session_id, cancel_requested)
     };
 
     let answer = match answer_chat_dispatch(

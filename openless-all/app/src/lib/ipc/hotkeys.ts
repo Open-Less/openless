@@ -73,13 +73,6 @@ export function setSelectionPolishHotkey(binding: ShortcutBinding | null): Promi
     })
 }
 
-export function setSelectionVoiceHotkey(binding: ShortcutBinding | null): Promise<void> {
-    return invokeOrMock("set_selection_voice_hotkey", { binding }, () => {
-        mockSetSettings({ ...mockSettings, selectionVoiceHotkey: binding })
-        return undefined
-    })
-}
-
 export function setTranslationHotkey(binding: ShortcutBinding): Promise<void> {
     return invokeOrMock("set_translation_hotkey", { binding }, () => undefined)
 }

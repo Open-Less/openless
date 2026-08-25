@@ -178,20 +178,6 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
           }
           if (typeof payload.edit_instruction_mode === 'boolean') {
             setEditInstructionMode(payload.edit_instruction_mode);
-            // #region agent log
-            fetch('http://127.0.0.1:7629/ingest/9807abd5-4136-4176-a8bc-802261868f3b', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'ddfc8d' },
-              body: JSON.stringify({
-                sessionId: 'ddfc8d',
-                hypothesisId: 'H4',
-                location: 'QaPanel.tsx:qa:state',
-                message: 'edit_instruction_mode synced',
-                data: { kind: payload.kind, editInstructionMode: payload.edit_instruction_mode },
-                timestamp: Date.now(),
-              }),
-            }).catch(() => {});
-            // #endregion
           }
           switch (payload.kind) {
             case 'idle':
@@ -341,12 +327,16 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
     setEditApplyBusy(true);
     setErrorMsg('');
     try {
-      const preview = await getSelectionVoicePreview();
+      const qaSessionId = activeSessionIdRef.current;
+      if (!qaSessionId) {
+        throw new Error(t('qa.editApplyUnavailable'));
+      }
+      const preview = await getSelectionVoicePreview(qaSessionId);
       const text = preview?.text?.trim();
       if (!text) {
         throw new Error(t('qa.editApplyUnavailable'));
       }
-      await confirmSelectionVoicePreview(text);
+      await confirmSelectionVoicePreview(text, qaSessionId);
       setEditApplyAvailable(false);
       setEditRevertAvailable(false);
     } catch (error) {
@@ -362,7 +352,11 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
     setEditApplyBusy(true);
     setErrorMsg('');
     try {
-      await revertSelectionVoicePreview();
+      const qaSessionId = activeSessionIdRef.current;
+      if (!qaSessionId) {
+        throw new Error(t('qa.editApplyUnavailable'));
+      }
+      await revertSelectionVoicePreview(qaSessionId);
       setEditRevertAvailable(false);
     } catch (error) {
       setErrorMsg(error instanceof Error ? error.message : String(error));

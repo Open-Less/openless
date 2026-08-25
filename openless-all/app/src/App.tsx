@@ -35,7 +35,6 @@ const Onboarding = lazy(() =>
 );
 const QaPanel = lazy(() => import('./pages/QaPanel').then(m => ({ default: m.QaPanel })));
 const SelectionPolishPreview = lazy(() => import('./pages/SelectionPolishPreview').then(m => ({ default: m.SelectionPolishPreview })));
-const SelectionVoicePreview = lazy(() => import('./pages/SelectionVoicePreview').then(m => ({ default: m.SelectionVoicePreview })));
 const SelectionVoiceIntentPicker = lazy(() => import('./pages/SelectionVoiceIntentPicker').then(m => ({ default: m.SelectionVoiceIntentPicker })));
 // Less Computer 仅 macOS 开放（后端只在 macOS 注册热键/创建窗口）。Tauri 构建时
 // TAURI_ENV_PLATFORM 是编译期字面量：非 macOS 平台下面两个三元的 import() 分支
@@ -54,7 +53,6 @@ interface AppProps {
   isCapsule: boolean;
   isQa: boolean;
   isSelectionPolishPreview: boolean;
-  isSelectionVoicePreview: boolean;
   isSelectionVoiceIntent: boolean;
   isLessComputer: boolean;
   isLessComputerGlow: boolean;
@@ -64,7 +62,7 @@ interface AppProps {
 type Gate = 'onboarding' | 'ready';
 const ANDROID_SETUP_WIZARD_COMPLETE_KEY = 'openless.androidSetupWizardComplete';
 
-export function App({ isCapsule, isQa, isSelectionPolishPreview, isSelectionVoicePreview, isSelectionVoiceIntent, isLessComputer, isLessComputerGlow, forcedOs }: AppProps) {
+export function App({ isCapsule, isQa, isSelectionPolishPreview, isSelectionVoiceIntent, isLessComputer, isLessComputerGlow, forcedOs }: AppProps) {
   if (isCapsule) {
     return <Capsule os={forcedOs} />;
   }
@@ -77,9 +75,6 @@ export function App({ isCapsule, isQa, isSelectionPolishPreview, isSelectionVoic
   }
   if (isSelectionPolishPreview) {
     return <Suspense fallback={null}><SelectionPolishPreview /></Suspense>;
-  }
-  if (isSelectionVoicePreview) {
-    return <Suspense fallback={null}><SelectionVoicePreview /></Suspense>;
   }
   if (isSelectionVoiceIntent) {
     return <Suspense fallback={null}><SelectionVoiceIntentPicker /></Suspense>;

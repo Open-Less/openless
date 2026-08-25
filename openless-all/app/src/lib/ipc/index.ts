@@ -124,7 +124,6 @@ export {
     validateShortcutBinding,
     setDictationHotkey,
     setSelectionPolishHotkey,
-    setSelectionVoiceHotkey,
     setTranslationHotkey,
     setSwitchStyleHotkey,
     setOpenAppHotkey,
@@ -164,7 +163,6 @@ export {
     cancelSelectionVoiceIntentPrompt,
     getSelectionVoicePreview,
     confirmSelectionVoicePreview,
-    cancelSelectionVoicePreview,
     revertSelectionVoicePreview,
 } from './selection-voice-preview'
 

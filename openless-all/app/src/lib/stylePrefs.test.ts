@@ -25,7 +25,6 @@ const previousPrefs: UserPreferences = {
   selectionPolishStylePackId: 'builtin.light',
   selectionPolishOutputMode: 'directReplace',
   selectionVoiceEnabled: false,
-  selectionVoiceHotkey: { primary: 'E', modifiers: ['ctrl', 'shift'] },
   selectionVoiceIntentMode: 'auto',
   selectionVoiceManualIntent: 'question',
   selectionVoiceEditKeywords: ['翻译', '替换'],

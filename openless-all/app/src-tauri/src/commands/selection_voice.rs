@@ -1,4 +1,5 @@
 use super::*;
+use crate::coordinator_state::SessionId;
 
 #[tauri::command]
 pub fn get_selection_voice_intent_prompt(
@@ -8,11 +9,11 @@ pub fn get_selection_voice_intent_prompt(
 }
 
 #[tauri::command]
-pub fn confirm_selection_voice_intent_prompt(
+pub async fn confirm_selection_voice_intent_prompt(
     coord: CoordinatorState<'_>,
     intent: String,
 ) -> Result<(), String> {
-    coord.confirm_selection_voice_intent_prompt(intent)
+    coord.confirm_selection_voice_intent_prompt(intent).await
 }
 
 #[tauri::command]
@@ -23,45 +24,24 @@ pub fn cancel_selection_voice_intent_prompt(coord: CoordinatorState<'_>) {
 #[tauri::command]
 pub fn get_selection_voice_preview(
     coord: CoordinatorState<'_>,
+    qa_session_id: SessionId,
 ) -> Option<crate::coordinator::selection_voice_session::SelectionVoicePreviewPayload> {
-    coord.selection_voice_preview()
+    coord.selection_voice_preview(qa_session_id)
 }
 
 #[tauri::command]
 pub fn confirm_selection_voice_preview(
     coord: CoordinatorState<'_>,
     text: String,
+    qa_session_id: SessionId,
 ) -> Result<(), String> {
-    coord.confirm_selection_voice_preview(text)
+    coord.confirm_selection_voice_preview(text, Some(qa_session_id))
 }
 
 #[tauri::command]
-pub fn cancel_selection_voice_preview(coord: CoordinatorState<'_>) {
-    coord.cancel_selection_voice_preview();
-}
-
-#[tauri::command]
-pub fn revert_selection_voice_preview(coord: CoordinatorState<'_>) -> Result<(), String> {
-    coord.revert_selection_voice_preview()
-}
-
-#[tauri::command]
-pub fn set_selection_voice_hotkey(
+pub fn revert_selection_voice_preview(
     coord: CoordinatorState<'_>,
-    binding: Option<ShortcutBinding>,
+    qa_session_id: SessionId,
 ) -> Result<(), String> {
-    if let Some(binding) = binding.as_ref() {
-        crate::shortcut_binding::validate_binding(binding).map_err(|e| e.to_string())?;
-        crate::shortcut_binding::reject_side_specific_non_dictation(binding)?;
-        reject_bare_shift_dictation_shortcut(binding)?;
-    }
-    let previous = coord.prefs().get();
-    let mut next = previous.clone();
-    next.selection_voice_hotkey = binding;
-    reject_hotkey_collisions(&next)?;
-    coord.prefs().set(next).map_err(|e| e.to_string())?;
-    // 选区语音已复用选区润色热键；此字段仅保留兼容旧配置，不再单独注册监听。
-    #[cfg(all(not(mobile), target_os = "windows"))]
-    coord.stop_selection_voice_hotkey_listener();
-    Ok(())
+    coord.revert_selection_voice_preview(qa_session_id)
 }

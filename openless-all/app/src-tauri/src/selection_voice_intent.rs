@@ -123,31 +123,10 @@ pub fn resolve_selection_voice_intent_heuristic(
     let normalized = instruction_polished.to_lowercase();
     for keyword in effective_question_keywords(question_keywords) {
         if normalized.contains(&keyword.to_lowercase()) {
-            // #region agent log
-            crate::agent_debug::agent_debug_log(
-                "H1",
-                "selection_voice_intent.rs:heuristic",
-                "custom question keyword matched",
-                serde_json::json!({
-                    "keyword": keyword,
-                    "instructionPreview": instruction_polished.chars().take(80).collect::<String>(),
-                }),
-            );
-            // #endregion
             return SelectionVoiceIntent::Question;
         }
     }
     if looks_like_question_instruction(instruction_polished) {
-        // #region agent log
-        crate::agent_debug::agent_debug_log(
-            "H1",
-            "selection_voice_intent.rs:heuristic",
-            "builtin question cue matched",
-            serde_json::json!({
-                "instructionPreview": instruction_polished.chars().take(80).collect::<String>(),
-            }),
-        );
-        // #endregion
         SelectionVoiceIntent::Question
     } else {
         SelectionVoiceIntent::Edit

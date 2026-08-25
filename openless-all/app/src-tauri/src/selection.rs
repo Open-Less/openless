@@ -125,14 +125,6 @@ pub(crate) fn prefetch_selection_workspace_capture() {
                 "[selection] prefetched workspace selection ({} chars)",
                 chars
             );
-            // #region agent log
-            crate::agent_debug::agent_debug_log(
-                "H2",
-                "selection.rs:prefetch",
-                "prefetch hit at hotkey edge",
-                serde_json::json!({ "chars": chars }),
-            );
-            // #endregion
             *guard = Some(PrefetchedSelectionWorkspace {
                 selection,
                 insertion_target,
@@ -140,14 +132,6 @@ pub(crate) fn prefetch_selection_workspace_capture() {
         }
         None => {
             log::info!("[selection] prefetch missed (no selection at hotkey edge)");
-            // #region agent log
-            crate::agent_debug::agent_debug_log(
-                "H1",
-                "selection.rs:prefetch",
-                "prefetch missed at hotkey edge",
-                serde_json::json!({}),
-            );
-            // #endregion
             guard.take();
         }
     }
@@ -177,31 +161,10 @@ pub(crate) fn take_prefetched_selection_workspace(
 pub(crate) fn resolve_selection_workspace_capture(
 ) -> (Option<SelectionContext>, SelectionInsertionTarget) {
     if let Some((selection, insertion_target)) = take_prefetched_selection_workspace() {
-        let chars = selection.text.chars().count();
-        // #region agent log
-        crate::agent_debug::agent_debug_log(
-            "H2",
-            "selection.rs:resolve",
-            "using prefetched selection workspace capture",
-            serde_json::json!({ "chars": chars }),
-        );
-        // #endregion
         return (Some(selection), insertion_target);
     }
     let insertion_target = capture_selection_insertion_target();
     let capture = capture_selection_with_status();
-    let chars = capture
-        .selection
-        .as_ref()
-        .map(|selection| selection.text.chars().count());
-    // #region agent log
-    crate::agent_debug::agent_debug_log(
-        "H1",
-        "selection.rs:resolve",
-        "live selection workspace capture",
-        serde_json::json!({ "chars": chars, "hadSelection": capture.selection.is_some() }),
-    );
-    // #endregion
     (capture.selection, insertion_target)
 }
 

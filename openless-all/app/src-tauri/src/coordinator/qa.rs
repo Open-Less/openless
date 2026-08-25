@@ -87,15 +87,6 @@ pub(super) fn open_qa_panel(inner: &Arc<Inner>) {
     {
         let qa = inner.qa_state.lock();
         if qa.panel_visible {
-            let edit_mode = qa.edit_instruction_mode;
-            // #region agent log
-            crate::agent_debug::agent_debug_log(
-                "H4",
-                "qa.rs:open_qa_panel",
-                "panel already visible — skip reset",
-                serde_json::json!({ "editInstructionMode": edit_mode }),
-            );
-            // #endregion
             drop(qa);
             if let Some(app) = inner.app.lock().clone() {
                 crate::show_qa_window(&app, "idle");
@@ -166,6 +157,7 @@ pub(super) fn close_qa_panel(inner: &Arc<Inner>) {
         // 让仍在阻塞选区捕获或 provider await 中的旧任务无法在关闭后写回状态。
         state.session_id = new_session_id();
     }
+    super::selection_voice_session::clear_qa_bound_selection_voice_preview(inner);
     if let Some(app) = inner.app.lock().clone() {
         crate::hide_qa_window(&app);
     }

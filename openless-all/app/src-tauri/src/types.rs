@@ -1022,9 +1022,6 @@ pub struct UserPreferences {
     /// 选区语音编辑（issue #987 桌面 MVP）。默认关闭。
     #[serde(default)]
     pub selection_voice_enabled: bool,
-    /// 选区语音编辑专用快捷键。Windows 默认 Ctrl+Shift+E；其它平台默认 None。
-    #[serde(default = "default_selection_voice_hotkey")]
-    pub selection_voice_hotkey: Option<ShortcutBinding>,
     #[serde(default)]
     pub selection_voice_intent_mode: SelectionVoiceIntentMode,
     #[serde(default)]
@@ -1405,8 +1402,6 @@ struct UserPreferencesWire {
     selection_polish_output_mode: SelectionPolishOutputMode,
     #[serde(default)]
     selection_voice_enabled: bool,
-    #[serde(default = "default_selection_voice_hotkey")]
-    selection_voice_hotkey: Option<ShortcutBinding>,
     #[serde(default)]
     selection_voice_intent_mode: SelectionVoiceIntentMode,
     #[serde(default)]
@@ -1603,7 +1598,6 @@ impl Default for UserPreferencesWire {
             selection_polish_style_pack_id: prefs.selection_polish_style_pack_id,
             selection_polish_output_mode: prefs.selection_polish_output_mode,
             selection_voice_enabled: prefs.selection_voice_enabled,
-            selection_voice_hotkey: prefs.selection_voice_hotkey,
             selection_voice_intent_mode: prefs.selection_voice_intent_mode,
             selection_voice_manual_intent: prefs.selection_voice_manual_intent,
             selection_voice_edit_keywords: prefs.selection_voice_edit_keywords,
@@ -1760,7 +1754,6 @@ impl<'de> Deserialize<'de> for UserPreferences {
             selection_polish_style_pack_id: wire.selection_polish_style_pack_id,
             selection_polish_output_mode: wire.selection_polish_output_mode,
             selection_voice_enabled: wire.selection_voice_enabled,
-            selection_voice_hotkey: wire.selection_voice_hotkey,
             selection_voice_intent_mode: wire.selection_voice_intent_mode,
             selection_voice_manual_intent: wire.selection_voice_manual_intent,
             selection_voice_edit_keywords: wire.selection_voice_edit_keywords,
@@ -1966,20 +1959,6 @@ fn default_selection_polish_hotkey() -> Option<ShortcutBinding> {
         })
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    {
-        None
-    }
-}
-
-fn default_selection_voice_hotkey() -> Option<ShortcutBinding> {
-    #[cfg(target_os = "windows")]
-    {
-        Some(ShortcutBinding {
-            primary: "E".into(),
-            modifiers: vec!["ctrl".into(), "shift".into()],
-        })
-    }
-    #[cfg(not(target_os = "windows"))]
     {
         None
     }
@@ -2611,7 +2590,6 @@ impl Default for UserPreferences {
             selection_polish_style_pack_id: default_active_style_pack_id(),
             selection_polish_output_mode: SelectionPolishOutputMode::default(),
             selection_voice_enabled: false,
-            selection_voice_hotkey: default_selection_voice_hotkey(),
             selection_voice_intent_mode: SelectionVoiceIntentMode::default(),
             selection_voice_manual_intent: SelectionVoiceManualIntent::default(),
             selection_voice_edit_keywords: default_selection_voice_edit_keywords(),
@@ -3555,6 +3533,22 @@ mod translation_effective_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn obsolete_selection_voice_hotkey_is_ignored_and_not_serialized() {
+        let prefs: UserPreferences = serde_json::from_str(
+            r#"{
+                "selectionVoiceEnabled": true,
+                "selectionVoiceHotkey": { "primary": "E", "modifiers": ["ctrl", "shift"] }
+            }"#,
+        )
+        .unwrap();
+
+        assert!(prefs.selection_voice_enabled);
+        assert!(!serde_json::to_string(&prefs)
+            .unwrap()
+            .contains("selectionVoiceHotkey"));
+    }
 
     #[test]
     fn local_asr_model_preferences_migrate_without_cross_provider_overwrite() {

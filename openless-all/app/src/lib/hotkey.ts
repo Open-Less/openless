@@ -13,11 +13,6 @@ export function defaultSelectionPolishShortcut(): ShortcutBinding {
   return { primary: 'RightAlt', modifiers: [] };
 }
 
-/** 选区语音编辑默认快捷键（Ctrl+Shift+E），与后端 default_selection_voice_hotkey 一致。 */
-export function defaultSelectionVoiceShortcut(): ShortcutBinding {
-  return { primary: 'E', modifiers: ['ctrl', 'shift'] };
-}
-
 export function defaultAppShortcutModifiers(): string[] {
   return currentPlatform().isMac ? ['cmd', 'shift'] : ['ctrl', 'shift'];
 }

@@ -4238,6 +4238,7 @@ dependencies = [
  "qwen3-asr-rs",
  "raw-window-handle",
  "rcgen",
+ "regex",
  "reqwest 0.12.28",
  "rustls",
  "serde",

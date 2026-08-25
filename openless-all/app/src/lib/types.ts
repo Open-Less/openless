@@ -410,8 +410,6 @@ export interface UserPreferences {
   selectionPolishOutputMode: SelectionPolishOutputMode;
   /** 选区语音编辑（issue #987 Windows MVP）。默认关闭。 */
   selectionVoiceEnabled: boolean;
-  /** 选区语音编辑专用快捷键。null = 未配置。 */
-  selectionVoiceHotkey: ShortcutBinding | null;
   /** 选区语音意图分流：自动 / 手动 / 关键词启发。 */
   selectionVoiceIntentMode: SelectionVoiceIntentMode;
   /** manual 模式下固定的意图。 */
