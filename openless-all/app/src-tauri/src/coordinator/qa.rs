@@ -157,6 +157,7 @@ pub(super) fn close_qa_panel(inner: &Arc<Inner>) {
         // 让仍在阻塞选区捕获或 provider await 中的旧任务无法在关闭后写回状态。
         state.session_id = new_session_id();
     }
+    #[cfg(all(not(mobile), target_os = "windows"))]
     super::selection_voice_session::clear_qa_bound_selection_voice_preview(inner);
     if let Some(app) = inner.app.lock().clone() {
         crate::hide_qa_window(&app);
