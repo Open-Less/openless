@@ -42,6 +42,27 @@ if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ] || [ -n "${TAURI_SIGNING_PRIVATE_KEY_
 fi
 npm run tauri -- "${TAURI_BUILD_ARGS[@]}"
 
+echo "▶ 打包 MLX Metal kernel library"
+# MLX 的默认 metallib 由 qwen3-asr-rs 的 CMake build 生成在 Cargo 临时目录，
+# 不会自动进入 .app；发布包必须把它放进 app，并通过 MacOS 下的链接让 MLX 找到。
+MLX_METALLIB="$(find src-tauri/target/release/build \
+  -path '*/qwen3-asr-rs-*/out/lib/mlx.metallib' \
+  -type f -size +1c -print | sort | tail -n 1)"
+if [ -z "$MLX_METALLIB" ]; then
+  echo "✗ 未找到 MLX metallib；Qwen3-ASR MLX 无法随 app 运行"
+  exit 1
+fi
+mkdir -p "$APP/Contents/Resources"
+cp "$MLX_METALLIB" "$APP/Contents/Resources/mlx.metallib"
+ln -sfn ../Resources/mlx.metallib "$APP/Contents/MacOS/mlx.metallib"
+echo "✓ MLX metallib: $MLX_METALLIB"
+
+# 上面的资源复制发生在 Tauri 签名之后，需要重新签名 app，避免新增资源破坏
+# CodeResources；同时保留麦克风 entitlement。
+SIGNING_IDENTITY="${APPLE_SIGNING_IDENTITY:--}"
+codesign --force --sign "$SIGNING_IDENTITY" \
+  --entitlements src-tauri/Entitlements.plist "$APP"
+
 echo "▶ 生成无 GUI 依赖的 DMG"
 APP_VERSION="$(node -p "require('./package.json').version")"
 case "$(uname -m)" in
