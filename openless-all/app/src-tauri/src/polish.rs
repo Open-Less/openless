@@ -924,7 +924,19 @@ impl OpenAICompatibleLLMProvider {
         }
         let request = request.json(&body);
 
-        let response = send_with_transient_retry(request).await?;
+        // 建连 / 请求写出阶段也可能挂住（服务端只 accept 不响应）。若只在下面 SSE
+        // 循环里查 should_cancel，一个字都没收到时永远等不到那个检查点——跟转写阶段
+        // 修复前（PR #798）同一类问题。让它和取消轮询赛跑，命中取消就直接放弃这次请求。
+        let response = tokio::select! {
+            _ = wait_until_cancelled(&should_cancel) => {
+                log::info!("[llm] polish stream cancelled by caller before response arrived");
+                return Err(LLMError::InvalidResponse {
+                    status: 200,
+                    body: "empty polish stream".to_string(),
+                });
+            }
+            result = send_with_transient_retry(request) => result?,
+        };
 
         let status = response.status();
         if !status.is_success() {
@@ -947,15 +959,6 @@ impl OpenAICompatibleLLMProvider {
         let stream_started = std::time::Instant::now();
         let mut first_content_at: Option<Duration> = None;
         loop {
-            if should_cancel() {
-                log::info!(
-                    "[llm] polish stream cancelled by caller after {} deltas ({} chars); breaking SSE loop",
-                    delta_count,
-                    full_text.chars().count()
-                );
-                cancelled = true;
-                break;
-            }
             // 首字之前用「还剩多少首字预算」，首字之后用「两个 chunk 之间能空多久」。
             // 注意首字预算是从请求发出起算的**总量**，不随 chunk 到达而重置——推理模型
             // 思考期的 reasoning_content 是一串正常 chunk，若让它续命，用户干等就没有上限。
@@ -965,27 +968,42 @@ impl OpenAICompatibleLLMProvider {
                     .saturating_sub(stream_started.elapsed()),
                 Some(_) => timeouts.idle,
             };
-            let chunk_opt = match tokio::time::timeout(budget, response.chunk()).await {
-                Ok(result) => result.map_err(llm_error_from_reqwest)?,
-                Err(_) => {
-                    // 已经交给 on_delta 的字此刻就在用户屏幕上；上层 dictation 的 Failed
-                    // 分支拿 typed_text 当 final_text，屏幕 / history / 剪贴板保持一致。
-                    match first_content_at {
-                        None => log::error!(
-                            "[llm] polish stream timed out waiting for first content delta (budget {:?}); \
-                             模型可能仍在思考——加长首字预算或换非推理模型",
-                            timeouts.first_token
-                        ),
-                        Some(first) => log::error!(
-                            "[llm] polish stream stalled {:?} after {} chars (first delta at {:?}); \
-                             已落屏的字保留",
-                            timeouts.idle,
-                            full_text.chars().count(),
-                            first
-                        ),
-                    }
-                    return Err(LLMError::Timeout);
+            // 取消检查不再只在循环顶部查一次：卡在单次 chunk() 等待里时，旧写法要等这次
+            // await 自然到点（budget 最长数十秒）才会看到取消旗；现在跟取消轮询赛跑，最多
+            // ~75ms 就能感知到并中断连接（reqwest 的 Response 一旦被 drop，底层 TCP 连接
+            // 随之中断——跟转写阶段 wait_for_processing_cancel 依赖的是同一条保证）。
+            let chunk_opt = tokio::select! {
+                _ = wait_until_cancelled(&should_cancel) => {
+                    log::info!(
+                        "[llm] polish stream cancelled by caller after {} deltas ({} chars); breaking SSE loop",
+                        delta_count,
+                        full_text.chars().count()
+                    );
+                    cancelled = true;
+                    break;
                 }
+                timed = tokio::time::timeout(budget, response.chunk()) => match timed {
+                    Ok(result) => result.map_err(llm_error_from_reqwest)?,
+                    Err(_) => {
+                        // 已经交给 on_delta 的字此刻就在用户屏幕上；上层 dictation 的 Failed
+                        // 分支拿 typed_text 当 final_text，屏幕 / history / 剪贴板保持一致。
+                        match first_content_at {
+                            None => log::error!(
+                                "[llm] polish stream timed out waiting for first content delta (budget {:?}); \
+                                 模型可能仍在思考——加长首字预算或换非推理模型",
+                                timeouts.first_token
+                            ),
+                            Some(first) => log::error!(
+                                "[llm] polish stream stalled {:?} after {} chars (first delta at {:?}); \
+                                 已落屏的字保留",
+                                timeouts.idle,
+                                full_text.chars().count(),
+                                first
+                            ),
+                        }
+                        return Err(LLMError::Timeout);
+                    }
+                },
             };
             let Some(chunk) = chunk_opt else { break };
             append_utf8_sse_chunk(&mut buffer, &mut utf8_pending, &chunk)?;
@@ -1500,6 +1518,20 @@ pub(crate) fn http_client_builder(base_url: &str, timeout_secs: u64) -> reqwest:
         builder.no_proxy()
     } else {
         builder
+    }
+}
+
+/// 轮询 `should_cancel`，用于跟网络 I/O 的 future 通过 `tokio::select!` 赛跑，让取消
+/// 不必等当前这一次网络 await 自然结束才被看到。轮询间隔跟 `coordinator::dictation::
+/// wait_for_processing_cancel`（转写阶段取消轮询，PR #798 引入）保持一致——75ms 对
+/// 用户不可感知，且不依赖任何唤醒信号，没有「取消边沿在注册 waiter 之前触发就被错过」
+/// 的竞态。
+async fn wait_until_cancelled<C: Fn() -> bool>(should_cancel: &C) {
+    loop {
+        if should_cancel() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(75)).await;
     }
 }
 
@@ -2337,7 +2369,7 @@ mod tests {
             "https://user:pass@example.com/v1/chat/completions?token=query-secret#client-fragment"
         );
     }
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::Mutex as StdMutex;
     use std::thread;
 
@@ -2891,6 +2923,56 @@ mod tests {
             *seen.lock().unwrap(),
             "开头",
             "卡死之前已经流出去的字必须留在屏幕上"
+        );
+        drop(server);
+    }
+
+    /// 服务端 accept 了连接、收到了请求，但一个字节都不回——这正是本机日志复现的真实
+    /// 故障（润色阶段配置 deepseek-v4-flash 时，取消要等 32~53s 才生效，胶囊卡死到只能
+    /// 强制重启 App）。取消信号必须在 ~75ms 轮询周期内生效，不能悬挂到 first_token 预算
+    /// （这里刻意设得很长）自然到点才被看到。
+    #[tokio::test]
+    async fn cancellation_before_response_arrives_does_not_wait_out_the_budget() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            read_http_request(&mut stream);
+            // 故意什么都不回——连接保持打开，模拟服务端只 accept 不响应。
+            thread::sleep(std::time::Duration::from_secs(5));
+            let _ = stream;
+        });
+
+        let cancelled = std::sync::Arc::new(AtomicBool::new(false));
+        let cancelled_setter = cancelled.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            cancelled_setter.store(true, Ordering::SeqCst);
+        });
+
+        let timeouts = StreamingTimeouts {
+            first_token: std::time::Duration::from_secs(30),
+            idle: std::time::Duration::from_secs(30),
+        };
+        let started = std::time::Instant::now();
+        let err = streaming_test_provider(addr)
+            .chat_completion_messages_streaming(
+                test_messages(),
+                timeouts,
+                |_| {},
+                move || cancelled.load(Ordering::SeqCst),
+            )
+            .await
+            .expect_err("取消之后必须尽快返回错误，不能悬挂到 budget 结束");
+        let elapsed = started.elapsed();
+
+        assert!(
+            elapsed < std::time::Duration::from_secs(2),
+            "取消应在一个轮询周期内生效，而不是等 30s 的首字预算，实际耗时 {elapsed:?}"
+        );
+        assert!(
+            matches!(err, LLMError::InvalidResponse { status: 200, .. }),
+            "got {err:?}"
         );
         drop(server);
     }
