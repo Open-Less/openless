@@ -1336,6 +1336,7 @@ export const zhTW: typeof zhCN = {
       certHint: '首次存取瀏覽器會提示憑證不受信任，按提示選擇「繼續存取」。',
       certTrustWarning:
         '該憑證僅用於本機遠端輸入服務（無法簽發其他憑證），請勿信任來源不明的憑證；不再使用時可在手機系統設定中移除。',
+      waitingStart: '服務尚未啟動。請關閉開關再打開一次，不要重啟軟體。',
     },
     about: {
       tagline: '自然說話，完美書寫',

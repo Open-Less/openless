@@ -782,6 +782,10 @@ fn run_desktop() {
             // Spin up hotkey listener; coordinator owns the lifecycle.
             let app_handle = app.handle().clone();
             coordinator.bind_app(app_handle);
+            // 远程输入只在 prefs 变化时 refresh；启动时若开关已开也要拉起，
+            // 否则重启后界面显示「已启用」但 8443 没在听。
+            #[cfg(not(mobile))]
+            coordinator.refresh_remote_server();
             coordinator.start_hotkey_listener();
             // QA / custom combo hotkeys use `global-hotkey` (Carbon on macOS).
             // Start those after RunEvent::Ready, when the AppKit event loop is live.

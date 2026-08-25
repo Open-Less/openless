@@ -248,6 +248,15 @@ export function RemoteInputSection() {
         </>
       )}
 
+      {enabled && !status?.running && startError == null && (
+        <div style={{ fontSize: 12, color: 'var(--ol-ink-3)', marginTop: 8 }}>
+          {t(
+            'settings.remoteInput.waitingStart',
+            '服务尚未启动。请关闭开关再打开一次，不要重启软件。',
+          )}
+        </div>
+      )}
+
       {enabled && startError != null && (
         <div style={{ fontSize: 12, color: 'var(--ol-red, #ef4444)', marginTop: 8 }}>
           {startError.reason === 'port-in-use'

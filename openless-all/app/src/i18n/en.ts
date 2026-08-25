@@ -1370,6 +1370,7 @@ export const en: typeof zhCN = {
       certHint: 'On first visit the browser warns the certificate is untrusted — choose "Proceed".',
       certTrustWarning:
         'The certificate is only used by this PC’s remote input service (it cannot issue other certificates). Never trust certificates from unknown sources; remove it from your phone’s settings when no longer needed.',
+      waitingStart: 'The service is not running yet. Turn the switch off, then on again. Do not restart the app.',
     },
     about: {
       tagline: 'Speak naturally, write perfectly',
