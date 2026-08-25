@@ -31,14 +31,33 @@ npm run check:macos-metal-toolchain
 # 可能报 "mis-aligned LINKEDIT string pool"。仅官方 macOS 发布脚本降级
 # 为 debuginfo；Cargo.toml 的全局 profile 仍让 Linux/Windows/Android 使用 symbols。
 export CARGO_PROFILE_RELEASE_STRIP=debuginfo
+export RUSTC_WRAPPER="$PWD/scripts/rustc-macos-proc-macro-wrapper.sh"
 echo "▶ Cargo release strip: ${CARGO_PROFILE_RELEASE_STRIP} (macOS only)"
+echo "▶ Rust proc-macro host wrapper: ${RUSTC_WRAPPER}"
 
 echo "▶ tauri build"
-TAURI_BUILD_ARGS=(build)
+TAURI_BUILD_ARGS=(build --ci --bundles app)
 if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ] || [ -n "${TAURI_SIGNING_PRIVATE_KEY_PATH:-}" ]; then
   TAURI_BUILD_ARGS+=(--config '{"bundle":{"createUpdaterArtifacts":true}}')
 fi
 npm run tauri -- "${TAURI_BUILD_ARGS[@]}"
+
+echo "▶ 生成无 GUI 依赖的 DMG"
+APP_VERSION="$(node -p "require('./package.json').version")"
+case "$(uname -m)" in
+  arm64) DMG_ARCH="aarch64" ;;
+  x86_64) DMG_ARCH="x64" ;;
+  *) DMG_ARCH="$(uname -m)" ;;
+esac
+DMG_PATH="$DMG_DIR/OpenLess_${APP_VERSION}_${DMG_ARCH}.dmg"
+DMG_STAGING="$(mktemp -d "${TMPDIR:-/tmp}/openless-dmg.XXXXXX")"
+trap 'rm -rf "$DMG_STAGING"' EXIT
+mkdir -p "$DMG_DIR"
+cp -R "$APP" "$DMG_STAGING/OpenLess.app"
+ln -s /Applications "$DMG_STAGING/Applications"
+rm -f "$DMG_PATH"
+hdiutil create -volname OpenLess -srcfolder "$DMG_STAGING" -ov -format UDZO "$DMG_PATH"
+echo "✓ DMG: $DMG_PATH"
 
 echo "▶ 校验 Info.plist / 签名"
 /usr/libexec/PlistBuddy -c "Print :NSMicrophoneUsageDescription" "$INFO" >/dev/null

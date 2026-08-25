@@ -115,3 +115,11 @@ CapsWriter
 
 .reasonix
 /.codex
+/.idea/.gitignore
+/.idea/git_toolbox_prj.xml
+/.idea/misc.xml
+/.idea/modules.xml
+/.idea/openless.iml
+/.idea/vcs.xml
+/openless-all/app/pnpm-lock.yaml
+/openless-all/app/pnpm-workspace.yaml
