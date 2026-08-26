@@ -5536,7 +5536,7 @@ mod tests {
         append_typed_prefix, batch_asr_chunk_limit_ms, build_transcribe_failed_session,
         coding_agent_mode_from_pref, default_done_message, drain_streaming_insert_deltas_with,
         eligible_polish_context_turns, finalize_polished_text, flush_streaming_insert_buffer_with,
-        insert_delivery_failed, pcm_duration_ms, pcm_from_wav_bytes,
+        insert_delivery_failed, pcm_duration_ms, pcm_from_wav_bytes, pcm_i16_le_rms,
         resolve_less_computer_run_outcome, resolve_macos_newline_mode, retry_error_outcome,
         should_arm_edit_watch, should_attempt_silent_retry, should_read_cursor_context,
         streaming_insert_eligible, SilentRetryOutcome,
