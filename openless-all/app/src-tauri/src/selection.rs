@@ -708,6 +708,11 @@ fn simulate_copy_and_read_diag() -> Result<String, SelectionCaptureMissReason> {
 
     // c) 模拟 Cmd+C / Ctrl+C
     let post_ok = post_copy_shortcut();
+    log::info!(
+        "[selection] DEBUG post_copy: post_ok={} original_was_some={}",
+        post_ok,
+        original.is_some()
+    );
     if !post_ok {
         log::warn!("[selection] post_copy_shortcut failed");
         // 不立刻 return：剪贴板可能已经被某些路径污染，按下方还原流程恢复。
@@ -720,7 +725,7 @@ fn simulate_copy_and_read_diag() -> Result<String, SelectionCaptureMissReason> {
     let captured = clipboard.get_text().ok();
 
     // f) 还原原剪贴板
-    if let Some(prev) = original {
+    if let Some(ref prev) = original {
         if let Err(e) = clipboard.set_text(prev) {
             log::warn!("[selection] clipboard restore failed: {e}");
         }
@@ -738,8 +743,20 @@ fn simulate_copy_and_read_diag() -> Result<String, SelectionCaptureMissReason> {
         return Err(SelectionCaptureMissReason::ClipboardReadFailed);
     };
     if captured == sentinel {
+        log::info!(
+            "[selection] DEBUG sentinel_check: sentinel_eq_captured=true sentinel_prefix='{}' captured_len={} original_was_some={}",
+            &sentinel[..32.min(sentinel.len())],
+            captured.len(),
+            original.is_some()
+        );
         return Err(SelectionCaptureMissReason::ClipboardUnchangedSentinel);
     }
+    log::info!(
+        "[selection] DEBUG sentinel_check: sentinel_eq_captured=false sentinel_prefix='{}' captured_len={} captured_preview='{}'",
+        &sentinel[..32.min(sentinel.len())],
+        captured.len(),
+        &captured[..captured.len().min(50)]
+    );
     if captured.is_empty() {
         return Err(SelectionCaptureMissReason::ClipboardEmptyAfterCopy);
     }
