@@ -258,6 +258,21 @@ pub(super) fn store_recorder_for_session(
     *inner.recorder.lock() = Some(SessionResource::new(session_id, recorder));
 }
 
+pub(super) fn store_resume_audio_for_session(
+    inner: &Arc<Inner>,
+    session_id: SessionId,
+    pcm: Vec<u8>,
+) {
+    *inner.resume_audio_pcm.lock() = Some(SessionResource::new(session_id, pcm));
+}
+
+pub(super) fn take_resume_audio_for_session(
+    inner: &Arc<Inner>,
+    session_id: SessionId,
+) -> Option<Vec<u8>> {
+    take_session_resource(&mut inner.resume_audio_pcm.lock(), session_id)
+}
+
 pub(super) fn selected_microphone_device_name(inner: &Arc<Inner>) -> Option<String> {
     let name = inner.prefs.get().microphone_device_name.trim().to_string();
     if name.is_empty() {
@@ -415,6 +430,7 @@ pub(super) fn stop_recorder_for_session(inner: &Arc<Inner>, session_id: SessionI
 pub(super) fn discard_startup_resources_for_session(inner: &Arc<Inner>, session_id: SessionId) {
     stop_recorder_for_session(inner, session_id);
     cancel_asr_for_session(inner, session_id);
+    let _ = take_resume_audio_for_session(inner, session_id);
 }
 
 pub(super) fn stop_recorder_if_pending_start_stop(inner: &Arc<Inner>) {

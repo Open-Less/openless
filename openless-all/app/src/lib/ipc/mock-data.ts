@@ -47,6 +47,7 @@ export let mockSettings: UserPreferences = {
     audioCueOnRecord: true,
     silenceAutoStopEnabled: false,
     silenceAutoStopSeconds: 3,
+    escRecordingRecoveryEnabled: false,
     microphoneDeviceName: "",
     activeAsrProvider: "foundry-local-whisper",
     activeLlmProvider: "ark",

@@ -32,9 +32,9 @@ use crate::asr::{
 use crate::combo_hotkey::{ComboHotkeyError, ComboHotkeyEvent, ComboHotkeyMonitor};
 use crate::coordinator_state::{
     begin_cancel_session_state, begin_recording_abort_before_restore, begin_session_state,
-    finish_cancel_session_state, finish_starting_session_state, new_session_id,
-    publish_abort_idle_after_restore, start_processing_if_listening, startup_race_status,
-    BeginOutcome, SessionId, SessionPhase, SessionState, StartupRaceStatus,
+    begin_session_state_with_id, finish_cancel_session_state, finish_starting_session_state,
+    new_session_id, publish_abort_idle_after_restore, start_processing_if_listening,
+    startup_race_status, BeginOutcome, SessionId, SessionPhase, SessionState, StartupRaceStatus,
 };
 use crate::correction::apply_correction_rules;
 use crate::hotkey::{HotkeyEvent, HotkeyMonitor};
@@ -106,8 +106,9 @@ pub(super) fn qa_event_target() -> &'static str {
 #[cfg(test)]
 use dictation::dictation_error_code;
 use dictation::{
-    begin_session, begin_session_as, cancel_session, end_session, handle_pressed_edge,
-    handle_released_edge, handle_trigger_combined, request_stop_during_starting,
+    begin_session, begin_session_as, cancel_session, cancel_session_after_escape, end_session,
+    handle_pressed_edge, handle_released_edge, handle_trigger_combined,
+    request_stop_during_starting,
 };
 #[cfg(any(debug_assertions, test))]
 use dictation::{handle_pressed, handle_released};
@@ -1034,11 +1035,17 @@ struct Inner {
     #[cfg(target_os = "windows")]
     sherpa_onnx_runtime: Arc<SherpaOnnxRuntime>,
     recorder: Mutex<Option<SessionResource<Recorder>>>,
+    /// 恢复被 Esc 打断的录音时，旧 WAV 中的 PCM 前缀。新 ASR 启动后先消费这段，
+    /// Recorder 同时把它写回同一个归档，再追加新的麦克风音频。
+    resume_audio_pcm: Mutex<Option<SessionResource<Vec<u8>>>>,
     /// 当前 dictation / QA session 的 wav 归档是否真的被写到磁盘上。
     /// 由 Recorder::start 返回值 (archive_active) 写入；history.append 路径读取，
     /// 决定 DictationSession.has_audio_recording 字段。比单纯读 prefs.record_audio_for_debug
     /// 更准确：用户开了开关但路径无法创建（权限 / 磁盘满）也算 false。
     audio_archive_active: AtomicBool,
+    /// 当前 3 秒「是否继续」提示对应的录音 id。只影响 CapsulePayload；历史记录和 WAV
+    /// 已在显示提示前持久化，因此提示消失或应用退出都不会丢失恢复入口。
+    cancelled_recording_recovery: Mutex<Option<String>>,
     /// 上一次落字之后武装的手改监听（macOS）。
     ///
     /// 存在 `Inner` 上只为了「下一次听写开始时解除上一次的」这一条生命周期规则 ——
@@ -1419,7 +1426,9 @@ impl Coordinator {
                     asr_label: Mutex::new(None),
                     omni_pcm: Mutex::new(None),
                     recorder: Mutex::new(None),
+                    resume_audio_pcm: Mutex::new(None),
                     audio_archive_active: AtomicBool::new(false),
+                    cancelled_recording_recovery: Mutex::new(None),
                     edit_watcher: Mutex::new(None),
                     edit_watch_generation: std::sync::atomic::AtomicU64::new(0),
                     pending_corrections: Mutex::new(Vec::new()),
@@ -1559,7 +1568,9 @@ impl Coordinator {
                 asr_label: Mutex::new(None),
                 omni_pcm: Mutex::new(None),
                 recorder: Mutex::new(None),
+                resume_audio_pcm: Mutex::new(None),
                 audio_archive_active: AtomicBool::new(false),
+                cancelled_recording_recovery: Mutex::new(None),
                 edit_watcher: Mutex::new(None),
                 edit_watch_generation: std::sync::atomic::AtomicU64::new(0),
                 pending_corrections: Mutex::new(Vec::new()),
@@ -2533,6 +2544,98 @@ impl Coordinator {
 
     pub fn cancel_dictation(&self) {
         cancel_session(&self.inner);
+    }
+
+    /// 从历史或 3 秒浮层恢复一条被 Esc 打断的录音。旧 PCM 会在新麦克风启动前喂给
+    /// 当前识别器，并作为新 WAV 的前缀，因此后续停止时处理的是完整语音。
+    pub async fn resume_cancelled_recording(&self, session_id: &str) -> Result<(), String> {
+        if self.inner.state.lock().phase != SessionPhase::Idle {
+            return Err("another dictation session is active".into());
+        }
+        let entry = self
+            .inner
+            .history
+            .list()
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .find(|entry| entry.id == session_id)
+            .ok_or_else(|| "history entry not found".to_string())?;
+        if entry.error_code.as_deref() != Some("recordingCancelled") {
+            return Err("history entry is not a cancelled recording".into());
+        }
+        if entry.has_audio_recording != Some(true) {
+            return Err("recording not found".into());
+        }
+        let parsed_id =
+            uuid::Uuid::parse_str(session_id).map_err(|_| "invalid session id".to_string())?;
+        let path = crate::persistence::recording_path_for_session(session_id)
+            .map_err(|error| error.to_string())?;
+        let wav = tokio::fs::read(path).await.map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                "recording not found".to_string()
+            } else {
+                format!("read wav failed: {error}")
+            }
+        })?;
+        if wav.len() <= 44 {
+            return Err("recording is empty or corrupt".into());
+        }
+        let pcm = wav[44..].to_vec();
+        // 先移除占位条目，再开启同 id 的新会话。若等会话已经启动后才删，用户在这段
+        // 极短窗口里再次按 Esc，取消路径会先 upsert 新占位，随后这里却会把它误删。
+        // 启动失败时恢复原条目，保证历史不会因恢复尝试而丢失。
+        self.inner
+            .history
+            .delete(session_id)
+            .map_err(|error| format!("remove history placeholder failed: {error}"))?;
+        *self.inner.cancelled_recording_recovery.lock() = None;
+        let resume_result = dictation::resume_cancelled_recording(
+            &self.inner,
+            parsed_id,
+            entry.duration_ms.unwrap_or_default(),
+            pcm,
+        )
+        .await;
+
+        let resumed = {
+            let state = self.inner.state.lock();
+            state.session_id == parsed_id
+                && matches!(
+                    state.phase,
+                    SessionPhase::Starting | SessionPhase::Listening
+                )
+        };
+        if let Err(error) = resume_result {
+            let prefs = self.inner.prefs.get();
+            if let Err(restore_error) = self.inner.history.insert_if_missing_with_retention(
+                entry,
+                prefs.history_retention_days,
+                prefs.history_max_entries,
+            ) {
+                log::error!(
+                    "[coord] failed to restore cancelled recording after resume error: {restore_error}"
+                );
+            }
+            return Err(error);
+        }
+        if !resumed {
+            let prefs = self.inner.prefs.get();
+            if let Err(error) = self.inner.history.insert_if_missing_with_retention(
+                entry,
+                prefs.history_retention_days,
+                prefs.history_max_entries,
+            ) {
+                log::error!(
+                    "[coord] failed to restore cancelled recording after resume race: {error}"
+                );
+            }
+            return Err("cancelled recording could not be resumed".into());
+        }
+        Ok(())
+    }
+
+    pub fn dismiss_cancelled_recording_recovery(&self, session_id: Option<&str>) {
+        dictation::dismiss_cancelled_recording_recovery(&self.inner, session_id);
     }
 
     #[cfg(not(mobile))]
@@ -6030,6 +6133,11 @@ const CAPSULE_AUTO_HIDE_DELAY_MS: u64 = 2000;
 /// 不需要像 Done/Error 那样停留 2 秒给用户读——立刻回 Idle，由前端 capsule-out
 /// 淡出动画（520ms）负责优雅收尾，观感上「按下即消失」（对齐 Typeless）。
 const CAPSULE_CANCEL_HIDE_DELAY_MS: u64 = 0;
+/// 给连续双击 Esc 留出的判定窗口。期间录音已经停止、WAV 与历史已经保存，只延后展示
+/// 恢复入口；第二次 Esc 会直接清掉入口，因此不会发生浮层闪现。
+const CANCELLED_RECORDING_RECOVERY_PROMPT_DELAY_MS: u64 = 240;
+/// Esc 录音恢复提示停留时间。历史/WAV 在提示出现前已经保存，超时只收起提示。
+const CANCELLED_RECORDING_RECOVERY_TIMEOUT_MS: u64 = 3_000;
 
 /// Toggle 模式下，end_session 将 phase 设为 Idle 后在此时间内禁止新的 begin_session。
 /// 避免用户三连按时第 3 次按下误激活新听写（此时胶囊仍在离场动画周期内）。

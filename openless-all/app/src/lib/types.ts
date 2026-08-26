@@ -361,6 +361,8 @@ export interface UserPreferences {
   silenceAutoStopEnabled: boolean;
   /** 语音后的连续静音阈值（秒）。可选 1 / 1.5 / 2 / 3 / 4 / 5，默认 3。 */
   silenceAutoStopSeconds: number;
+  /** 录音中按 Esc 时保留已录音频，并提供继续录音入口。默认关闭。 */
+  escRecordingRecoveryEnabled: boolean;
   /** 录音输入设备名称。空字符串 = 使用系统默认麦克风。 */
   microphoneDeviceName: string;
   activeAsrProvider: string;
@@ -702,6 +704,8 @@ export interface CapsulePayload {
    * 语音/QA 胶囊行为，兼容旧后端 payload。
    */
   selectionPolish?: boolean;
+  /** Esc 取消后可继续录音的历史/WAV session id；只在 3 秒恢复提示期间存在。 */
+  recoverySessionId?: string | null;
 }
 
 export interface CredentialsStatus {

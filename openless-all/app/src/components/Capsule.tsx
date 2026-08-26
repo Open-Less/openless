@@ -11,7 +11,11 @@ import {
 import { useTranslation } from 'react-i18next';
 import { detectOS, type OS } from './WindowChrome';
 import { SiriGL, warmUpSiriShaders } from './SiriGL';
-import { cancelDictation, stopDictation } from '../lib/ipc/dictation';
+import {
+  cancelDictation,
+  resumeCancelledRecording,
+  stopDictation,
+} from '../lib/ipc/dictation';
 import {
   getCapsuleHostMetrics,
   getCapsuleMessageLayout,
@@ -283,6 +287,78 @@ function SelectionPolishNotice({ state, message }: SelectionPolishNoticeProps) {
         {label}
       </span>
     </div>
+  );
+}
+
+function RecordingRecoveryPrompt({
+  sessionId,
+  os,
+}: {
+  sessionId: string;
+  os: OS;
+}) {
+  const { t } = useTranslation();
+  const [resuming, setResuming] = useState(false);
+  const [failed, setFailed] = useState(false);
+
+  const resume = async () => {
+    if (resuming) return;
+    setResuming(true);
+    setFailed(false);
+    try {
+      await resumeCancelledRecording(sessionId);
+    } catch (error) {
+      console.error('[capsule] resume cancelled recording failed', error);
+      setFailed(true);
+      setResuming(false);
+    }
+  };
+
+  const continueLabel = t('capsule.recovery.continue');
+  const failedLabel = t('capsule.recovery.failed');
+
+  return (
+    <button
+      type="button"
+      className="ol-frost ol-capsule-pill"
+      aria-live="polite"
+      aria-busy={resuming}
+      aria-label={failed ? `${continueLabel}. ${failedLabel}` : undefined}
+      title={failed ? failedLabel : undefined}
+      onClick={() => void resume()}
+      onMouseDown={event => {
+        event.preventDefault();
+        event.stopPropagation();
+      }}
+      disabled={resuming}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        minWidth: os === 'win' ? 160 : 144,
+        maxWidth: os === 'win' ? 216 : 196,
+        height: os === 'win' ? 52 : 42,
+        padding: os === 'win' ? '0 22px' : '0 18px',
+        borderRadius: 999,
+        background: 'var(--ol-capsule-pill-bg)',
+        border: '1px solid var(--ol-capsule-pill-border)',
+        boxShadow: 'var(--ol-capsule-pill-shadow), var(--ol-capsule-pill-inset)',
+        color: failed ? 'var(--ol-err)' : 'var(--ol-blue)',
+        fontFamily: 'var(--ol-font-sans)',
+        fontSize: 11.5,
+        fontWeight: 600,
+        lineHeight: 1,
+        letterSpacing: '0.005em',
+        whiteSpace: 'nowrap',
+        pointerEvents: 'auto',
+        boxSizing: 'border-box',
+        appearance: 'none',
+        cursor: 'default',
+        opacity: resuming ? 0.46 : 0.92,
+      }}
+    >
+      {resuming ? t('capsule.recovery.resuming') : continueLabel}
+    </button>
   );
 }
 
@@ -713,6 +789,7 @@ function getPreviewCapsulePayload() {
       translation: false,
       warming: false,
       selectionPolish: false,
+      recoverySessionId: null,
       style: 'siri' as CapsuleStyle,
     };
   }
@@ -730,6 +807,7 @@ function getPreviewCapsulePayload() {
     translation: params.get('translation') === '1',
     warming: params.get('warming') === '1',
     selectionPolish: params.get('selectionPolish') === '1',
+    recoverySessionId: params.get('recoverySessionId'),
     // 浏览器预览：?style=classic 直接看经典药丸。
     style: params.get('style') === 'classic' ? ('classic' as CapsuleStyle) : ('siri' as CapsuleStyle),
   };
@@ -750,6 +828,9 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   const [localAsrText, setLocalAsrText] = useState('');
   const [translation, setTranslation] = useState<boolean>(preview.translation);
   const [selectionPolish, setSelectionPolish] = useState<boolean>(preview.selectionPolish);
+  const [recoverySessionId, setRecoverySessionId] = useState<string | null>(
+    preview.recoverySessionId,
+  );
   // 胶囊样式（siri / classic）：随 capsule:state payload 下发；设置里切换后还会经
   // prefs:changed 广播即时到达（见下方监听），无需等下一次录音。
   const [capsuleStyle, setCapsuleStyle] = useState<CapsuleStyle>(preview.style);
@@ -774,6 +855,9 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
     preview.selectionPolish,
   );
   const [lastVisibleMessage, setLastVisibleMessage] = useState<string | undefined>(preview.message);
+  const [lastVisibleRecoverySessionId, setLastVisibleRecoverySessionId] = useState<string | null>(
+    preview.recoverySessionId,
+  );
   // 退出动画时长跟随样式；leaving effect 故意只依赖 state，所以经 ref 读取最新值。
   const exitMsRef = useRef(isClassic ? EXIT_ANIM_MS_CLASSIC : EXIT_ANIM_MS_SIRI);
   exitMsRef.current = isClassic ? EXIT_ANIM_MS_CLASSIC : EXIT_ANIM_MS_SIRI;
@@ -824,6 +908,7 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
         setTranslation(p.translation === true);
         setWarming(p.warming === true);
         setSelectionPolish(p.selectionPolish === true);
+        setRecoverySessionId(p.recoverySessionId ?? null);
         if (p.capsuleStyle != null) setCapsuleStyle(p.capsuleStyle);
         if (p.insertedChars != null) insertedCharsRef.current = p.insertedChars;
         operatingRef.current = p.operating === true;
@@ -926,7 +1011,8 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
     if (state === 'idle') return;
     setLastVisibleSelectionPolish(selectionPolish);
     setLastVisibleMessage(message);
-  }, [state, selectionPolish, message]);
+    setLastVisibleRecoverySessionId(recoverySessionId);
+  }, [state, selectionPolish, message, recoverySessionId]);
 
   // 学习「预备态持续多久」= 麦克风就绪耗时，EMA 更新 warmupMs（预测展开的基准时长）。
   useEffect(() => {
@@ -974,7 +1060,9 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
     : state === 'transcribing' && localAsrText
       ? localAsrText
       : message;
-
+  const renderedRecoverySessionId = state === 'idle'
+    ? lastVisibleRecoverySessionId
+    : recoverySessionId;
   return (
     <div
       style={{
@@ -1001,7 +1089,12 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
         willChange: 'transform, opacity',
       }}
     >
-      {!renderedSelectionPolish && (isClassic ? (
+      {renderedRecoverySessionId ? (
+        <RecordingRecoveryPrompt
+          sessionId={renderedRecoverySessionId}
+          os={os}
+        />
+      ) : !renderedSelectionPolish && (isClassic ? (
         <ClassicCapsule
           os={os}
           state={renderedState}

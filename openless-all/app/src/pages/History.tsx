@@ -7,7 +7,7 @@ import { Icon } from '../components/Icon';
 import { Tooltip } from '../components/Tooltip';
 import { detectOS } from '../components/WindowChrome';
 import { formatComboLabel } from '../lib/hotkey';
-import { clearHistory, deleteHistoryEntry, listHistory, listStylePacks, readAudioRecording, repolish, retranscribeRecording, isTauri } from '../lib/ipc';
+import { clearHistory, deleteHistoryEntry, listHistory, listStylePacks, readAudioRecording, repolish, resumeCancelledRecording, retranscribeRecording, isTauri } from '../lib/ipc';
 import { defaultPackId, packDisplayName, resolveRepolishRetryPackIdWithFallback } from '../lib/history-repolish';
 import { useMobileLayout } from '../lib/useMobileLayout';
 import type { DictationSession, PolishMode, StylePack } from '../lib/types';
@@ -81,6 +81,7 @@ export function History() {
   const [justCopiedRaw, setJustCopiedRaw] = useState(false);
   // 「重新转录」进行中：禁用按钮 + 显示「转录中…」，避免重复点击发起多次 ASR。
   const [retranscribing, setRetranscribing] = useState(false);
+  const [resumingRecording, setResumingRecording] = useState(false);
   // 录音文件 lazily-detected missing 状态：retention / 条数 cap 清理后磁盘上 wav
   // 可能已被删，但 history 条目 hasAudioRecording 仍写 true。任一组件
   // （播放 / 导出）首次 IPC 拿到 'recording not found' 时把 id 加进来，
@@ -294,7 +295,7 @@ export function History() {
   // 返回整条记录；前端据此局部刷新。失败保留 + 自动重试已让这些条目的录音留得住，这里给
   // 持久失败（重试也没救回来）一个手动重转入口。
   const onRetranscribe = async () => {
-    if (!item || !item.hasAudioRecording) return;
+    if (!item || !item.hasAudioRecording || resumingRecording) return;
     setRetranscribing(true);
     setActionError(null);
     try {
@@ -311,6 +312,29 @@ export function History() {
       setActionError(t('history.retranscribeFailed', { err: msg }));
     } finally {
       setRetranscribing(false);
+    }
+  };
+
+  const onResumeRecording = async () => {
+    if (!item || item.errorCode !== 'recordingCancelled' || retranscribing) return;
+    const resumedId = item.id;
+    setResumingRecording(true);
+    setActionError(null);
+    try {
+      await resumeCancelledRecording(resumedId);
+      setItems(prev => prev.filter(session => session.id !== resumedId));
+      setSelectedId(null);
+      if (mobile) setMobileDetailOpen(false);
+    } catch (error) {
+      console.error('[history] resume recording failed', error);
+      const msg = errorMessage(error);
+      if (msg.includes('recording not found') || msg.includes('not found')) {
+        markAudioMissing(resumedId);
+      } else {
+        setActionError(t('history.continueRecordingFailed', { err: msg }));
+      }
+    } finally {
+      setResumingRecording(false);
     }
   };
 
@@ -416,7 +440,9 @@ export function History() {
                   </span>
                 </div>
                 <div style={{ fontSize: 12, color: 'var(--ol-ink-2)', lineHeight: 1.45, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
-                  {s.finalText.split('\n')[0]}
+                  {s.errorCode === 'recordingCancelled'
+                    ? t('history.cancelledRecording')
+                    : s.finalText.split('\n')[0]}
                 </div>
                 {/* tone 仍按 baseMode 走：颜色保留原来的粗分类信息，文字换成实际风格包名。 */}
                 <div style={{ display: 'flex', minWidth: 0 }} title={styleLabel(s)}>
@@ -455,20 +481,36 @@ export function History() {
                   <span style={{ fontSize: 11, color: 'var(--ol-ink-4)' }}>{t('history.recorded', { duration: formatDuration(item.durationMs, t) })}</span>
                 </div>
                 <div style={{ display: 'flex', gap: 6 }}>
+                  {item.errorCode === 'recordingCancelled'
+                    && item.hasAudioRecording
+                    && !audioMissingIds.has(item.id) && (
+                    <Btn icon="mic" variant="primary" size="sm" disabled={resumingRecording || retranscribing} onClick={() => void onResumeRecording()}>
+                      {resumingRecording ? t('history.continuingRecording') : t('history.continueRecording')}
+                    </Btn>
+                  )}
                   {item.hasAudioRecording && !audioMissingIds.has(item.id) && (
-                    <Btn icon="download" variant="ghost" size="sm" onClick={() => void onExportAudio()}>{t('history.exportRecording')}</Btn>
+                    <Btn icon="download" variant="ghost" size="sm" disabled={resumingRecording || retranscribing} onClick={() => void onExportAudio()}>{t('history.exportRecording')}</Btn>
                   )}
                   {item.hasAudioRecording
                     && !audioMissingIds.has(item.id)
                     && item.pipelineMode !== 'multimodal'
-                    && (item.errorCode === 'transcribeFailed' || item.errorCode === 'emptyTranscript') && (
-                    <Btn icon="refresh" variant="ghost" size="sm" disabled={retranscribing} onClick={() => void onRetranscribe()}>
-                      {retranscribing ? t('history.retranscribing') : t('history.retranscribe')}
+                    && (item.errorCode === 'transcribeFailed' || item.errorCode === 'emptyTranscript' || item.errorCode === 'recordingCancelled') && (
+                    <Btn icon="refresh" variant="ghost" size="sm" disabled={retranscribing || resumingRecording} onClick={() => void onRetranscribe()}>
+                      {retranscribing
+                        ? t('history.retranscribing')
+                        : item.errorCode === 'recordingCancelled'
+                          ? t('history.startTranscription')
+                          : t('history.retranscribe')}
                     </Btn>
                   )}
-                  <Btn icon="trash" variant="ghost" size="sm" onClick={onDelete}>{t('common.delete')}</Btn>
+                  <Btn icon="trash" variant="ghost" size="sm" disabled={resumingRecording || retranscribing} onClick={onDelete}>{t('common.delete')}</Btn>
                 </div>
               </div>
+              {item.errorCode === 'recordingCancelled' && (
+                <div style={{ marginBottom: 14, padding: '9px 11px', borderRadius: 9, background: 'var(--ol-blue-soft)', color: 'var(--ol-ink-2)', fontSize: 12, lineHeight: 1.55 }}>
+                  {t('history.cancelledRecordingHint')}
+                </div>
+              )}
               {/* key 必须带组件前缀：下面的 RepolishPanel 是同一层的兄弟节点，两个都写
                   裸 `item.id` 会让同层出现重复 key，React 只警告不报错，但 reconcile 匹配
                   不上旧 fiber —— 每切换一次历史条目就在 DOM 里残留一个「播放录音」按钮，
@@ -529,7 +571,11 @@ export function History() {
                       ? t('history.pasteSent')
                     : item.insertStatus === 'copiedFallback'
                       ? t('history.copiedFallback', { shortcut: os === 'mac' ? '⌘V' : 'Ctrl+V' })
-                      : t('history.insertFailed')
+                      : item.errorCode === 'recordingCancelled'
+                        ? t('history.pendingTranscription')
+                        : item.errorCode == null && item.hasAudioRecording && item.rawTranscript
+                          ? t('history.transcribedOnly')
+                          : t('history.insertFailed')
                 }</span>
               </div>
               {/* minWidth: 0 —— grid 子项默认 min-width: auto，任何不换行的内容（这里是风格包名

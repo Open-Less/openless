@@ -2120,16 +2120,61 @@ pub(super) async fn begin_session(inner: &Arc<Inner>) -> Result<(), String> {
 /// begin_session 的带参版本，voice_agent=true 时在 Starting 阶段就标记好，
 /// 防止 finish_starting_session 处理 pending_stop 时丢失标志。
 pub(super) async fn begin_session_as(inner: &Arc<Inner>, voice_agent: bool) -> Result<(), String> {
+    begin_session_as_with_resume(inner, voice_agent, None).await
+}
+
+struct ResumedRecording {
+    session_id: SessionId,
+    prior_duration_ms: u64,
+    pcm: Vec<u8>,
+}
+
+pub(super) async fn resume_cancelled_recording(
+    inner: &Arc<Inner>,
+    session_id: SessionId,
+    prior_duration_ms: u64,
+    pcm: Vec<u8>,
+) -> Result<(), String> {
+    begin_session_as_with_resume(
+        inner,
+        false,
+        Some(ResumedRecording {
+            session_id,
+            prior_duration_ms,
+            pcm,
+        }),
+    )
+    .await
+}
+
+async fn begin_session_as_with_resume(
+    inner: &Arc<Inner>,
+    voice_agent: bool,
+    resume: Option<ResumedRecording>,
+) -> Result<(), String> {
     #[cfg(all(not(mobile), target_os = "windows"))]
     if super::selection_voice_session::selection_voice_blocks_other_recording(inner) {
         log::info!("[coord] dictation blocked: selection voice session active");
         return Ok(());
     }
+    let resume_identity = resume
+        .as_ref()
+        .map(|value| (value.session_id, value.prior_duration_ms));
     let current_session_id = {
         let mut state = inner.state.lock();
-        let Some(session_id) =
-            begin_session_state(&mut state, capture_focus_target(), capture_frontmost_app())
-        else {
+        let focus_target = capture_focus_target();
+        let front_app = capture_frontmost_app();
+        let session_id = match resume_identity {
+            Some((session_id, prior_duration_ms)) => begin_session_state_with_id(
+                &mut state,
+                focus_target,
+                front_app,
+                session_id,
+                std::time::Duration::from_millis(prior_duration_ms),
+            ),
+            None => begin_session_state(&mut state, focus_target, front_app),
+        };
+        let Some(session_id) = session_id else {
             return Ok(());
         };
         if voice_agent {
@@ -2140,6 +2185,18 @@ pub(super) async fn begin_session_as(inner: &Arc<Inner>, voice_agent: bool) -> R
         }
         session_id
     };
+    inner.audio_archive_active.store(false, Ordering::Relaxed);
+    *inner.cancelled_recording_recovery.lock() = None;
+    if let Some(resume) = resume {
+        store_resume_audio_for_session(inner, current_session_id, resume.pcm);
+        log::info!(
+            "[coord] resuming cancelled recording session={} prior_duration_ms={}",
+            current_session_id,
+            resume.prior_duration_ms
+        );
+    } else {
+        *inner.resume_audio_pcm.lock() = None;
+    }
     // 新一次听写开始 → 上一次的手改监听作废。用户已经不在改上一段了，继续盯着只会
     // 把新的输入误判成对旧文本的修改。这是「必须保证解除」的四条规则之一。
     //
@@ -2176,7 +2233,15 @@ pub(super) async fn begin_session_as(inner: &Arc<Inner>, voice_agent: bool) -> R
     // 这样把「视觉反馈」与「麦克风就绪」解耦：即时反馈 + 完整入场动画，同时用预备→点亮的
     // 过渡守住「不漏首字」。若随后凭证/权限校验失败，下面分支会用 Error 覆盖这一帧。
     inner.capsule_warming.store(true, Ordering::SeqCst);
-    emit_capsule(inner, CapsuleState::Recording, 0.0, 0, None, None);
+    let initial_elapsed = inner.state.lock().started_at.elapsed().as_millis() as u64;
+    emit_capsule(
+        inner,
+        CapsuleState::Recording,
+        0.0,
+        initial_elapsed,
+        None,
+        None,
+    );
 
     // 多模态（Omni）模式：不构建 ASR，录音 PCM 直接进缓冲器，松键后一步出文。
     if pipeline_multimodal_enabled(&inner.prefs.get()) {
@@ -3085,11 +3150,18 @@ pub(super) async fn start_recorder_for_starting(
         );
         crate::persistence::recording_path_for_session(&session_id.to_string()).ok()
     };
-    match Recorder::start(
+    let resume_pcm = take_resume_audio_for_session(inner, session_id);
+    if let Some(prefix) = resume_pcm.as_deref() {
+        // 新建的 ASR / omni consumer 必须先看到误按 Esc 前的完整 PCM，再接实时麦克风块。
+        // Recorder 也会把同一前缀写回归档，最终 history 播放与实际转写输入完全一致。
+        consumer.consume_pcm_chunk(prefix);
+    }
+    match Recorder::start_with_archive_prefix(
         microphone_device_name,
         consumer,
         level_handler,
         audio_archive_path,
+        resume_pcm,
     ) {
         Ok((rec, runtime_errors, archive_active)) => {
             // 把 archive 实际创建状态存到 Inner，让 history 写入路径（含 empty-transcript
@@ -5291,6 +5363,26 @@ pub(super) fn dictation_error_code(
 }
 
 pub(super) fn cancel_session(inner: &Arc<Inner>) -> bool {
+    cancel_session_impl(inner, false)
+}
+
+/// 全局 Esc 的录音阶段专用路径：用户开启恢复设置时，取消前保存 WAV + 待处理历史，
+/// 并短暂给出「是否继续」入口；默认关闭时等价于普通取消。组合键误触撤销、显式取消
+/// 按钮等始终走原 `cancel_session`，不会污染历史。
+pub(super) fn cancel_session_after_escape(inner: &Arc<Inner>) -> bool {
+    let recover_recording = inner.prefs.get().esc_recording_recovery_enabled;
+    cancel_session_impl(inner, recover_recording)
+}
+
+fn should_offer_escape_recording_recovery(
+    enabled: bool,
+    phase: SessionPhase,
+    voice_agent: bool,
+) -> bool {
+    enabled && matches!(phase, SessionPhase::Starting | SessionPhase::Listening) && !voice_agent
+}
+
+fn cancel_session_impl(inner: &Arc<Inner>, recover_recording: bool) -> bool {
     let Some(decision) = ({
         let mut state = inner.state.lock();
         let phase = state.phase;
@@ -5302,6 +5394,13 @@ pub(super) fn cancel_session(inner: &Arc<Inner>) -> bool {
     }) else {
         return false;
     };
+    let should_offer_recovery = should_offer_escape_recording_recovery(
+        recover_recording,
+        decision.phase,
+        inner.state.lock().voice_agent,
+    );
+    let elapsed = inner.state.lock().started_at.elapsed().as_millis() as u64;
+    *inner.cancelled_recording_recovery.lock() = None;
 
     // 顺序要紧：先把 UI 收干净，再去拆麦克风 / ASR。
     //
@@ -5309,7 +5408,8 @@ pub(super) fn cancel_session(inner: &Arc<Inner>) -> bool {
     // `Recorder::stop()` 要 join 音频线程，而音频线程退出前要 join liveness watchdog，
     // watchdog 又睡在自己的检查间隔里，实测撤销到胶囊消失能差 0.8~1 秒。用户按 Option+Q
     // 或按 Esc 的观感就是「明明已经取消了，胶囊还赖着」。拆资源不需要 UI 等它，反正
-    // 这段时间录到的音频整条会话都要丢。
+    // 传统取消路径会丢弃这段会话；Esc 恢复路径则在 join 完成、WAV header 回填后才写历史
+    // 并显示「是否继续」，不会把仍在写入的文件暴露给恢复入口。
     //
     // 代价：胶囊消失后麦克风还会多开一小会儿（系统菜单栏的录音小圆点晚灭）。这段窗口
     // 必须足够短 —— 否则紧接着那次真想说话的按下会在旧 recorder 还占着麦克风时
@@ -5331,7 +5431,6 @@ pub(super) fn cancel_session(inner: &Arc<Inner>) -> bool {
     // phase 拼 payload，提到前面会发出「还在进行中」的那一帧。
     emit_capsule(inner, CapsuleState::Cancelled, 0.0, 0, None, None);
     log::info!("[coord] session cancelled (was {:?})", decision.phase);
-    schedule_capsule_idle(inner, CAPSULE_CANCEL_HIDE_DELAY_MS);
     // 取消时也熄灭整屏彩虹描边（dictation session 没开描边，hide 是无害 no-op）。
     if let Some(app) = inner.app.lock().clone() {
         crate::hide_less_computer_glow(&app);
@@ -5340,7 +5439,137 @@ pub(super) fn cancel_session(inner: &Arc<Inner>) -> bool {
     stop_recorder_for_session(inner, decision.session_id);
     cancel_asr_for_session(inner, decision.session_id);
     restore_prepared_windows_ime_session(inner, decision.session_id);
+
+    if should_offer_recovery
+        && write_cancelled_recording_history(inner, decision.session_id, elapsed)
+    {
+        let session_id = decision.session_id.to_string();
+        *inner.cancelled_recording_recovery.lock() = Some(session_id.clone());
+        // 恢复入口存在期间第二次 Esc 归 OpenLess 消费，不透传给用户正在操作的 App。
+        // 提示稍晚一拍再显示：连续双击 Esc 时第二个事件会先清掉 pending，用户只看到
+        // 录音结束，不会闪出一个马上消失的浮层；单按时延迟很短，仍然近乎即时。
+        crate::hotkey::set_esc_exclusive(true);
+        schedule_cancelled_recording_recovery_prompt(inner, session_id, elapsed);
+    } else {
+        schedule_capsule_idle(inner, CAPSULE_CANCEL_HIDE_DELAY_MS);
+    }
     true
+}
+
+fn write_cancelled_recording_history(
+    inner: &Arc<Inner>,
+    session_id: SessionId,
+    duration_ms: u64,
+) -> bool {
+    if !inner.audio_archive_active.load(Ordering::Relaxed) {
+        return false;
+    }
+    let Ok(path) = crate::persistence::recording_path_for_session(&session_id.to_string()) else {
+        return false;
+    };
+    let has_pcm = std::fs::metadata(&path)
+        .map(|metadata| metadata.len() > 44)
+        .unwrap_or(false);
+    if !has_pcm {
+        log::info!("[coord] Esc cancelled before any PCM was archived; skipping recovery history");
+        return false;
+    }
+
+    let prefs = inner.prefs.get();
+    let front_app = inner.state.lock().front_app.clone();
+    let mut session = build_transcribe_failed_session(
+        session_id,
+        duration_ms,
+        0,
+        prefs.default_mode,
+        true,
+        front_app.as_deref(),
+    );
+    session.error_code = Some("recordingCancelled".to_string());
+    session.asr_ms = None;
+    match inner.history.upsert_with_retention(
+        session,
+        prefs.history_retention_days,
+        prefs.history_max_entries,
+    ) {
+        Ok(()) => true,
+        Err(error) => {
+            log::error!("[coord] cancelled recording history upsert failed: {error}");
+            false
+        }
+    }
+}
+
+pub(super) fn dismiss_cancelled_recording_recovery(
+    inner: &Arc<Inner>,
+    session_id: Option<&str>,
+) -> bool {
+    let should_dismiss = {
+        let mut pending = inner.cancelled_recording_recovery.lock();
+        match (pending.as_deref(), session_id) {
+            (Some(active), Some(requested)) if active != requested => false,
+            (Some(_), _) => {
+                pending.take();
+                true
+            }
+            (None, _) => false,
+        }
+    };
+    if should_dismiss && inner.state.lock().phase == SessionPhase::Idle {
+        // `hide_capsule_if_all_sessions_idle` 还会发出 Idle payload，从同一个状态出口
+        // 解除 Esc 独占；历史记录和 WAV 不在这条 UI 清理路径里，始终保留。
+        hide_capsule_if_all_sessions_idle(inner);
+    }
+    should_dismiss
+}
+
+fn schedule_cancelled_recording_recovery_prompt(
+    inner: &Arc<Inner>,
+    session_id: String,
+    elapsed_ms: u64,
+) {
+    let inner = Arc::clone(inner);
+    async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(
+            CANCELLED_RECORDING_RECOVERY_PROMPT_DELAY_MS,
+        ))
+        .await;
+        let matches =
+            inner.cancelled_recording_recovery.lock().as_deref() == Some(session_id.as_str());
+        if !matches || inner.state.lock().phase != SessionPhase::Idle {
+            return;
+        }
+        emit_capsule(
+            &inner,
+            CapsuleState::Cancelled,
+            0.0,
+            elapsed_ms,
+            None,
+            None,
+        );
+        schedule_cancelled_recording_recovery_idle(&inner, session_id);
+    });
+}
+
+fn schedule_cancelled_recording_recovery_idle(inner: &Arc<Inner>, session_id: String) {
+    let expect = inner.last_capsule_state.lock().as_ref().copied();
+    let inner = Arc::clone(inner);
+    async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(
+            CANCELLED_RECORDING_RECOVERY_TIMEOUT_MS,
+        ))
+        .await;
+        if inner.last_capsule_state.lock().as_ref().copied() != expect {
+            return;
+        }
+        let matches =
+            inner.cancelled_recording_recovery.lock().as_deref() == Some(session_id.as_str());
+        if !matches {
+            return;
+        }
+        *inner.cancelled_recording_recovery.lock() = None;
+        hide_capsule_if_all_sessions_idle(&inner);
+    });
 }
 
 fn append_typed_prefix(target: &mut String, delta: &str, typed_chars: usize) -> usize {
@@ -5402,12 +5631,14 @@ mod tests {
         eligible_polish_context_turns, finalize_polished_text, flush_streaming_insert_buffer_with,
         insert_delivery_failed, pcm_duration_ms, pcm_from_wav_bytes,
         resolve_less_computer_run_outcome, resolve_macos_newline_mode, retry_error_outcome,
-        should_arm_edit_watch, should_attempt_silent_retry, should_read_cursor_context,
+        should_arm_edit_watch, should_attempt_silent_retry,
+        should_offer_escape_recording_recovery, should_read_cursor_context,
         streaming_insert_eligible, SilentRetryOutcome,
     };
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     use super::{desktop_keyless_dictation_provider, DesktopKeylessDictationProvider};
     use crate::coordinator::RetranscribeError;
+    use crate::coordinator_state::SessionPhase;
     use crate::types::{
         ChineseScriptPreference, CorrectionRule, DictationSession, InsertStatus, MacosNewlineMode,
         PolishMode,
@@ -6235,6 +6466,35 @@ mod tests {
         assert!(insert_delivery_failed(InsertStatus::Failed));
         assert!(!insert_delivery_failed(InsertStatus::Inserted));
         assert!(!insert_delivery_failed(InsertStatus::PasteSent));
+    }
+
+    #[test]
+    fn escape_recording_recovery_requires_opt_in_recording_phase() {
+        assert!(!should_offer_escape_recording_recovery(
+            false,
+            SessionPhase::Listening,
+            false,
+        ));
+        assert!(should_offer_escape_recording_recovery(
+            true,
+            SessionPhase::Starting,
+            false,
+        ));
+        assert!(should_offer_escape_recording_recovery(
+            true,
+            SessionPhase::Listening,
+            false,
+        ));
+        assert!(!should_offer_escape_recording_recovery(
+            true,
+            SessionPhase::Processing,
+            false,
+        ));
+        assert!(!should_offer_escape_recording_recovery(
+            true,
+            SessionPhase::Listening,
+            true,
+        ));
     }
 
     #[test]

@@ -49,6 +49,7 @@ const previousPrefs: UserPreferences = {
   audioCueOnRecord: true,
   silenceAutoStopEnabled: false,
   silenceAutoStopSeconds: 3,
+  escRecordingRecoveryEnabled: false,
   microphoneDeviceName: '',
   activeAsrProvider: 'volcengine',
   activeLlmProvider: 'ark',

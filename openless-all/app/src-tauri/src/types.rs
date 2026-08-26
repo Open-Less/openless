@@ -930,6 +930,10 @@ pub struct UserPreferences {
     /// 语音后的连续静音阈值（秒）。可选 1 / 1.5 / 2 / 3 / 4 / 5，默认 3。
     #[serde(default = "default_silence_auto_stop_seconds")]
     pub silence_auto_stop_seconds: f32,
+    /// 录音中按 Esc 时，是否保留已录 WAV、写入待处理历史并提供「继续录音」入口。
+    /// 默认关闭：Esc 直接取消并丢弃本次录音，保持原有行为且不弹出恢复胶囊。
+    #[serde(default)]
+    pub esc_recording_recovery_enabled: bool,
     /// 录音输入设备名称。空字符串 = 使用系统默认麦克风。
     #[serde(default)]
     pub microphone_device_name: String,
@@ -1356,6 +1360,8 @@ struct UserPreferencesWire {
     #[serde(default = "default_silence_auto_stop_seconds")]
     silence_auto_stop_seconds: f32,
     #[serde(default)]
+    esc_recording_recovery_enabled: bool,
+    #[serde(default)]
     microphone_device_name: String,
     active_asr_provider: String,
     active_llm_provider: String,
@@ -1578,6 +1584,7 @@ impl Default for UserPreferencesWire {
             audio_cue_on_record: prefs.audio_cue_on_record,
             silence_auto_stop_enabled: prefs.silence_auto_stop_enabled,
             silence_auto_stop_seconds: prefs.silence_auto_stop_seconds,
+            esc_recording_recovery_enabled: prefs.esc_recording_recovery_enabled,
             microphone_device_name: prefs.microphone_device_name,
             active_asr_provider: prefs.active_asr_provider,
             active_llm_provider: prefs.active_llm_provider,
@@ -1728,6 +1735,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             audio_cue_on_record: wire.audio_cue_on_record,
             silence_auto_stop_enabled: wire.silence_auto_stop_enabled,
             silence_auto_stop_seconds: wire.silence_auto_stop_seconds,
+            esc_recording_recovery_enabled: wire.esc_recording_recovery_enabled,
             microphone_device_name: wire.microphone_device_name,
             active_asr_provider: wire.active_asr_provider,
             active_llm_provider: wire.active_llm_provider,
@@ -2570,6 +2578,7 @@ impl Default for UserPreferences {
             audio_cue_on_record: true,
             silence_auto_stop_enabled: false,
             silence_auto_stop_seconds: default_silence_auto_stop_seconds(),
+            esc_recording_recovery_enabled: false,
             microphone_device_name: String::new(),
             active_asr_provider: default_active_asr_provider(),
             active_llm_provider: "ark".into(),
@@ -3354,6 +3363,10 @@ pub struct CapsulePayload {
     /// 窗口，但前端据此切换为一行状态提示，避免改变既有语音光效与文案。
     #[serde(default)]
     pub selection_polish: bool,
+    /// Esc 在录音阶段取消后，这里携带可恢复录音的 session id。前端据此在原胶囊位置
+    /// 渲染一个 3 秒「是否继续」提示；其它状态为 None，兼容旧前端。
+    #[serde(default)]
+    pub recovery_session_id: Option<String>,
 }
 
 /// Snapshot of credentials read from vault — only what the UI needs to know
@@ -3898,6 +3911,22 @@ mod tests {
 
         let restored: UserPreferences = serde_json::from_str(&json).unwrap();
         assert!(!restored.audio_cue_on_record);
+    }
+
+    #[test]
+    fn esc_recording_recovery_defaults_off_and_round_trips_enabled() {
+        let missing: UserPreferences = serde_json::from_str("{}").unwrap();
+        assert!(!missing.esc_recording_recovery_enabled);
+
+        let enabled = UserPreferences {
+            esc_recording_recovery_enabled: true,
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&enabled).unwrap();
+        assert!(json.contains(r#""escRecordingRecoveryEnabled":true"#));
+
+        let restored: UserPreferences = serde_json::from_str(&json).unwrap();
+        assert!(restored.esc_recording_recovery_enabled);
     }
 
     #[test]

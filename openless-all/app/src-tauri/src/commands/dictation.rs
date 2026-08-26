@@ -16,6 +16,22 @@ pub fn cancel_dictation(coord: CoordinatorState<'_>) {
 }
 
 #[tauri::command]
+pub async fn resume_cancelled_recording(
+    coord: CoordinatorState<'_>,
+    session_id: String,
+) -> Result<(), String> {
+    coord.resume_cancelled_recording(&session_id).await
+}
+
+#[tauri::command]
+pub fn dismiss_cancelled_recording_recovery(
+    coord: CoordinatorState<'_>,
+    session_id: Option<String>,
+) {
+    coord.dismiss_cancelled_recording_recovery(session_id.as_deref());
+}
+
+#[tauri::command]
 pub async fn handle_window_hotkey_event(
     coord: CoordinatorState<'_>,
     event_type: String,

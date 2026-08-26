@@ -355,14 +355,19 @@ pub(super) fn hide_capsule_window_if_present() {
 #[cfg(not(target_os = "windows"))]
 pub(super) fn hide_capsule_window_if_present() {}
 
-/// Esc 独占判定：胶囊显示「进行中」（录音/转写/润色）且确为 dictation 会话（phase 非
-/// Idle）时为 true——tap/hook 吞掉 Esc 不透传宿主应用。phase 条件专门排除 QA：QA 也走
-/// 胶囊，但它的 Esc 由聚焦浮窗处理（#161），全局吞键反而会把它挡掉。纯函数便于表格测试。
-fn esc_exclusive_for_capsule(state: CapsuleState, phase: SessionPhase) -> bool {
-    matches!(
-        state,
-        CapsuleState::Recording | CapsuleState::Transcribing | CapsuleState::Polishing
-    ) && !matches!(phase, SessionPhase::Idle)
+/// Esc 独占判定：进行中的 dictation 或 Esc 取消后的恢复入口为 true——tap/hook 吞掉
+/// Esc 不透传宿主应用。phase 条件仍专门排除 QA；恢复入口虽处于 Idle，但第二次 Esc
+/// 明确用于收起它。纯函数便于表格测试。
+fn esc_exclusive_for_capsule(
+    state: CapsuleState,
+    phase: SessionPhase,
+    recording_recovery_active: bool,
+) -> bool {
+    recording_recovery_active
+        || (matches!(
+            state,
+            CapsuleState::Recording | CapsuleState::Transcribing | CapsuleState::Polishing
+        ) && !matches!(phase, SessionPhase::Idle))
 }
 
 pub(super) fn emit_capsule(
@@ -463,7 +468,11 @@ pub(super) fn apply_capsule_window_payload<R: tauri::Runtime>(
 ) {
     // Selection Polish 没有独立显示开关，因为这是它唯一的反馈。
     let prefs_snapshot = inner.prefs.get();
-    let show_capsule = payload.selection_polish || prefs_snapshot.show_capsule;
+    // 恢复提示是防止误操作丢录音的即时入口，即便用户平时关闭了录音动效也应显示；
+    // 超时后历史与 WAV 仍保留，这里只临时借用胶囊窗口承载操作。
+    let show_capsule = payload.selection_polish
+        || payload.recovery_session_id.is_some()
+        || prefs_snapshot.show_capsule;
     let classic_style = matches!(prefs_snapshot.capsule_style, CapsuleStyle::Classic);
     inner.capsule_style.store(
         if classic_style { 1 } else { 0 },
@@ -508,6 +517,7 @@ pub(super) fn apply_capsule_window_payload<R: tauri::Runtime>(
                         | CapsuleState::Transcribing
                         | CapsuleState::Polishing
                 );
+            let interactive = interactive || payload.recovery_session_id.is_some();
             let want_passthrough = !interactive;
             if inner
                 .capsule_cursor_passthrough
@@ -573,13 +583,20 @@ fn emit_capsule_with_context_locked(
     // 在 app 句柄校验之前记录，便于无 GUI 的测试断言「按下热键 → 弹了哪种胶囊」。
     // replace 顺带取回上一帧 state，用于判断本次是不是「入场帧」（见下方 defer_capsule_emit）。
     let prev_state = inner.last_capsule_state.lock().replace(state);
+    let recovery_session_id = matches!(state, CapsuleState::Cancelled)
+        .then(|| inner.cancelled_recording_recovery.lock().clone())
+        .flatten();
     // Esc 独占窗口：胶囊显示进行中（录音/转写/润色）且确为 dictation 会话（phase 非
     // Idle）时，tap/hook 吞掉 Esc 不透传宿主应用——此刻 Esc 的语义是「取消这个会话」，
     // 双重派发会顺带触发宿主应用的 Esc（如取消 Claude 正在生成的回复）。phase 条件排除
     // QA：QA 会话也走胶囊，但它的 Esc 由聚焦的浮窗窗口处理，吞键反而会把它挡掉。
     // 终止帧（Done/Cancelled/Error/Idle）自然清除。emit_capsule 是所有会话状态变化的
     // 单一出口（含 #77 审计保证的全部终止路径），在此维护不会漏路径。
-    let esc_exclusive = esc_exclusive_for_capsule(state, inner.state.lock().phase);
+    let esc_exclusive = esc_exclusive_for_capsule(
+        state,
+        inner.state.lock().phase,
+        recovery_session_id.is_some(),
+    );
     crate::hotkey::set_esc_exclusive(esc_exclusive);
     let app_opt = inner.app.lock().clone();
     let Some(app) = app_opt else {
@@ -609,6 +626,7 @@ fn emit_capsule_with_context_locked(
             1 => CapsuleStyle::Classic,
             _ => CapsuleStyle::Siri,
         },
+        recovery_session_id,
     };
     defer_capsule_payload_if_fallback_active(inner, &payload);
 
@@ -923,6 +941,7 @@ mod tests {
             warming: false,
             selection_polish: false,
             capsule_style: CapsuleStyle::Siri,
+            recovery_session_id: None,
         }
     }
 
@@ -994,7 +1013,7 @@ mod tests {
             (CapsuleState::Recording, SessionPhase::Inserting),
         ] {
             assert!(
-                esc_exclusive_for_capsule(state, phase),
+                esc_exclusive_for_capsule(state, phase, false),
                 "{state:?} @ {phase:?} 应独占 Esc"
             );
         }
@@ -1007,7 +1026,7 @@ mod tests {
             (CapsuleState::Idle, SessionPhase::Idle),
         ] {
             assert!(
-                !esc_exclusive_for_capsule(state, phase),
+                !esc_exclusive_for_capsule(state, phase, false),
                 "{state:?} @ {phase:?} 不应独占 Esc"
             );
         }
@@ -1019,9 +1038,14 @@ mod tests {
             (CapsuleState::Polishing, SessionPhase::Idle),
         ] {
             assert!(
-                !esc_exclusive_for_capsule(state, phase),
+                !esc_exclusive_for_capsule(state, phase, false),
                 "{state:?} @ {phase:?}（QA）不应独占 Esc"
             );
         }
+
+        assert!(
+            esc_exclusive_for_capsule(CapsuleState::Cancelled, SessionPhase::Idle, true),
+            "恢复入口显示期间第二次 Esc 应由 OpenLess 独占"
+        );
     }
 }

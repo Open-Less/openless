@@ -82,6 +82,8 @@ export {
     startDictation,
     stopDictation,
     cancelDictation,
+    resumeCancelledRecording,
+    dismissCancelledRecordingRecovery,
     handleWindowHotkeyEvent,
 } from "./dictation"
 

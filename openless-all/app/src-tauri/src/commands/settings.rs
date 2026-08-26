@@ -461,6 +461,11 @@ pub fn set_settings(
     // 主线程闭包的 ~30Hz 同步（Windows 主线程拥塞时闭包延迟 → 整场显示旧样式）。
     // 前端也会通过 prefs:changed 广播收到新样式，录音中切换即时换肤。
     coord.sync_capsule_style_from_preferences();
+    // 用户关掉 Esc 录音恢复时，已经显示或正等待显示的恢复入口也必须立即收起。
+    // 历史/WAV 已经落盘，不在设置切换时删除；开关只控制后续 Esc 是否创建恢复记录。
+    if remote_prev.esc_recording_recovery_enabled && !prefs.esc_recording_recovery_enabled {
+        coord.dismiss_cancelled_recording_recovery(None);
+    }
     // 系统代理开关变化时立即重建客户端连接池（issue #869）。
     if remote_prev.use_system_proxy != prefs.use_system_proxy {
         crate::net::set_use_system_proxy(prefs.use_system_proxy);

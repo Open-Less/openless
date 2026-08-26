@@ -150,6 +150,7 @@ export function RecordingInputSection() {
   const isAndroid = platformCaps?.platform === 'android';
   const showDesktopHotkey = platformCaps?.supportsDesktopHotkey === true;
   const showDesktopInsert = showDesktopHotkey && os !== 'linux';
+  const showEscRecordingRecovery = showDesktopHotkey && (os === 'mac' || os === 'win');
   const showDesktopStartup = showDesktopHotkey;
   const effectivePasteShortcut = os === 'win' && prefs.pasteShortcut === 'shiftInsert'
     ? 'ctrlV'
@@ -383,6 +384,17 @@ export function RecordingInputSection() {
             </div>
           </div>
         </div>
+        )}
+        {showEscRecordingRecovery && (
+          <SettingRow
+            label={t('settings.recording.escRecordingRecoveryLabel')}
+            desc={t('settings.recording.escRecordingRecoveryDesc')}
+          >
+            <Toggle
+              on={prefs.escRecordingRecoveryEnabled ?? false}
+              onToggle={next => savePrefs({ ...prefs, escRecordingRecoveryEnabled: next })}
+            />
+          </SettingRow>
         )}
         <SettingRow label={t('settings.recording.microphoneLabel')} desc={t('settings.recording.microphoneDesc')}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
