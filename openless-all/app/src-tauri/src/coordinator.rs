@@ -2601,7 +2601,9 @@ impl Coordinator {
 
     #[cfg(not(mobile))]
     pub fn cancel_remote_dictation(&self) {
+        let session_id = self.inner.state.lock().session_id;
         cancel_session(&self.inner);
+        clear_remote_mic_path(&self.inner, session_id);
     }
 
     #[cfg(not(mobile))]
