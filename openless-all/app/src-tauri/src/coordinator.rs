@@ -1191,6 +1191,10 @@ struct Inner {
     shutdown: AtomicBool,
     #[cfg(not(mobile))]
     remote_audio_sink: Mutex<Option<Arc<dyn crate::recorder::AudioConsumer>>>,
+    /// 远程听写开链前先挂上的 PCM 缓冲。手机在 `start` 握手完成前就会推音频，
+    /// 没有这层的话前几百毫秒会被丢掉，听起来像「手机麦没声」。
+    #[cfg(not(mobile))]
+    remote_pcm_bridge: Mutex<Option<Arc<DeferredAsrBridge>>>,
     #[cfg(not(mobile))]
     remote_server: Mutex<Option<crate::remote_server::RemoteServerHandle>>,
     #[cfg(not(mobile))]
@@ -1480,6 +1484,8 @@ impl Coordinator {
                     #[cfg(not(mobile))]
                     remote_audio_sink: Mutex::new(None),
                     #[cfg(not(mobile))]
+                    remote_pcm_bridge: Mutex::new(None),
+                    #[cfg(not(mobile))]
                     remote_server: Mutex::new(None),
                     #[cfg(not(mobile))]
                     remote_refresh_gen: AtomicU64::new(0),
@@ -1617,6 +1623,8 @@ impl Coordinator {
                 shutdown: AtomicBool::new(false),
                 #[cfg(not(mobile))]
                 remote_audio_sink: Mutex::new(None),
+                #[cfg(not(mobile))]
+                remote_pcm_bridge: Mutex::new(None),
                 #[cfg(not(mobile))]
                 remote_server: Mutex::new(None),
                 #[cfg(not(mobile))]
@@ -2540,7 +2548,7 @@ impl Coordinator {
 
     #[cfg(not(mobile))]
     pub async fn start_remote_dictation(&self) -> Result<(), String> {
-        begin_session(&self.inner).await
+        begin_session_as(&self.inner, false, true).await
     }
 
     #[cfg(not(mobile))]
@@ -2555,6 +2563,7 @@ impl Coordinator {
         }
     }
 
+
     #[cfg(not(mobile))]
     pub async fn stop_remote_dictation(&self) -> Result<(), String> {
         if self.inner.state.lock().phase == SessionPhase::Starting {
@@ -2567,7 +2576,7 @@ impl Coordinator {
     #[cfg(not(mobile))]
     pub fn cancel_remote_dictation(&self) {
         cancel_session(&self.inner);
-        *self.inner.remote_audio_sink.lock() = None;
+        clear_remote_mic_path(&self.inner);
     }
 
     #[cfg(not(mobile))]
@@ -6193,9 +6202,15 @@ fn schedule_selection_polish_capsule_idle(inner: &Arc<Inner>, event_epoch: u64, 
     });
 }
 
+#[cfg(not(mobile))]
+fn clear_remote_mic_path(inner: &Inner) {
+    *inner.remote_audio_sink.lock() = None;
+    *inner.remote_pcm_bridge.lock() = None;
+}
+
 // ─────────────────────────── audio bridge ───────────────────────────
 
-struct DeferredAsrBridge {
+pub(super) struct DeferredAsrBridge {
     state: Mutex<DeferredAsrState>,
 }
 
@@ -6206,7 +6221,7 @@ struct DeferredAsrState {
 }
 
 impl DeferredAsrBridge {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             state: Mutex::new(DeferredAsrState {
                 target: None,

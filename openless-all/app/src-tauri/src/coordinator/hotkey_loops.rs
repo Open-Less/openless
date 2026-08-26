@@ -693,7 +693,7 @@ pub(super) async fn handle_less_computer_pressed(inner: &Arc<Inner>) {
 
     // voice_agent=true 在 Starting 阶段就写入 state，防止 finish_starting_session
     // 处理 pending_stop 时（快速松手 race）丢失标志，导致意外走普通听写路径。
-    if begin_session_as(inner, true).await.is_err() {
+    if begin_session_as(inner, true, false).await.is_err() {
         return;
     }
     let started = {

@@ -415,6 +415,8 @@ pub(super) fn stop_recorder_for_session(inner: &Arc<Inner>, session_id: SessionI
 pub(super) fn discard_startup_resources_for_session(inner: &Arc<Inner>, session_id: SessionId) {
     stop_recorder_for_session(inner, session_id);
     cancel_asr_for_session(inner, session_id);
+    #[cfg(not(mobile))]
+    super::clear_remote_mic_path(inner);
 }
 
 pub(super) fn stop_recorder_if_pending_start_stop(inner: &Arc<Inner>) {
