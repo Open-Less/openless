@@ -1371,6 +1371,8 @@ export const en: typeof zhCN = {
       certTrustWarning:
         'The certificate is only used by this PC’s remote input service (it cannot issue other certificates). Never trust certificates from unknown sources; remove it from your phone’s settings when no longer needed.',
       waitingStart: 'The service is not running yet. Turn the switch off, then on again. Do not restart the app.',
+      starting: 'Starting the remote input service…',
+      urlsStale: 'These addresses come from the previous run and may be out of date.',
     },
     about: {
       tagline: 'Speak naturally, write perfectly',

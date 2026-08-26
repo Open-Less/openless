@@ -3,17 +3,21 @@ import { invokeOrMock } from "./shared"
 // ── Remote input (局域网手机录音) ──────────────────────────────────────
 export interface RemoteInputStatus {
     running: boolean
+    starting: boolean
     port: number
     pin: string
     urls: string[]
+    urlsStale: boolean
 }
 
 export function getRemoteInputStatus(): Promise<RemoteInputStatus> {
     return invokeOrMock("get_remote_input_status", undefined, () => ({
         running: false,
+        starting: false,
         port: 8443,
         pin: "000000",
         urls: [],
+        urlsStale: false,
     }))
 }
 

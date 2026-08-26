@@ -15,9 +15,10 @@ pub fn get_remote_input_status(
 }
 
 #[tauri::command]
-pub async fn list_local_ips() -> Vec<String> {
-    tauri::async_runtime::spawn_blocking(|| {
-        crate::remote_server::local_lan_ipv4s()
+pub async fn list_local_ips(app: AppHandle) -> Vec<String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::remote_server::discover_lan_addresses(&app)
+            .ips
             .iter()
             .map(|ip| ip.to_string())
             .collect()

@@ -30,6 +30,8 @@ use tokio_rustls::TlsAcceptor;
 
 use crate::coordinator::Coordinator;
 
+mod lan_addresses;
+
 mod assets {
     pub const INDEX_HTML: &str = include_str!("assets/index.html");
     pub const APP_JS: &str = include_str!("assets/app.js");
@@ -84,6 +86,8 @@ pub struct RemoteServerHandle {
     pub bound_port: u16,
     #[allow(dead_code)]
     pub pin: String,
+    pub urls: Vec<String>,
+    pub urls_stale: bool,
 }
 
 impl RemoteServerHandle {
@@ -101,9 +105,11 @@ impl RemoteServerHandle {
 #[serde(rename_all = "camelCase")]
 pub struct RemoteInputStatus {
     pub running: bool,
+    pub starting: bool,
     pub port: u16,
     pub pin: String,
     pub urls: Vec<String>,
+    pub urls_stale: bool,
 }
 
 // ───────────────────────── 工具函数 ─────────────────────────
@@ -164,77 +170,13 @@ pub fn save_pin(app: &AppHandle, pin: &str) -> std::io::Result<()> {
     pin_persistence::persist_pin_atomically(&path, pin)
 }
 
-fn is_private_lan(ip: &Ipv4Addr) -> bool {
-    let o = ip.octets();
-    !ip.is_loopback()
-        && !ip.is_link_local()
-        && ((o[0] == 192 && o[1] == 168)
-            || o[0] == 10
-            || (o[0] == 172 && (16..=31).contains(&o[1])))
+pub(crate) fn discover_lan_addresses(app: &AppHandle) -> lan_addresses::LanAddressSnapshot {
+    lan_addresses::discover_lan_addresses(app_config_dir(app).as_deref())
 }
 
-#[cfg(not(target_os = "windows"))]
-fn local_lan_ipv4s_from_netifas() -> Vec<Ipv4Addr> {
-    let mut out: Vec<Ipv4Addr> = Vec::new();
-    if let Ok(ifaces) = local_ip_address::list_afinet_netifas() {
-        for (_name, ip) in ifaces {
-            if let IpAddr::V4(v4) = ip {
-                if is_private_lan(&v4) {
-                    out.push(v4);
-                }
-            }
-        }
-    }
-    out.sort();
-    out.dedup();
-    out
-}
-
-/// 用 UDP connect 查默认路由出口 IP，不枚举网卡。
-/// `list_afinet_netifas` / `ipconfig` 在 Windows 上碰到 NordVPN / QuickFox 会卡住。
-fn local_lan_ipv4s_from_route() -> Vec<Ipv4Addr> {
-    use std::net::UdpSocket;
-    let mut out = Vec::new();
-    for dest in ["8.8.8.8:80", "1.1.1.1:80", "192.168.8.1:80", "192.168.1.1:80"] {
-        let Ok(socket) = UdpSocket::bind("0.0.0.0:0") else {
-            continue;
-        };
-        let _ = socket.set_write_timeout(Some(Duration::from_millis(200)));
-        if socket.connect(dest).is_err() {
-            continue;
-        }
-        if let Ok(SocketAddr::V4(addr)) = socket.local_addr() {
-            if is_private_lan(addr.ip()) {
-                out.push(*addr.ip());
-            }
-        }
-    }
-    out.sort();
-    out.dedup();
-    out
-}
-
-/// 本机所有局域网 IPv4（过滤回环 / link-local / 虚拟网卡的非私网段）。
-pub fn local_lan_ipv4s() -> Vec<Ipv4Addr> {
-    #[cfg(target_os = "windows")]
-    {
-        local_lan_ipv4s_from_route()
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        let ips = local_lan_ipv4s_from_netifas();
-        if ips.is_empty() {
-            local_lan_ipv4s_from_route()
-        } else {
-            ips
-        }
-    }
-}
-
-/// 给前端展示的访问网址列表。
-pub fn access_urls(port: u16) -> Vec<String> {
-    local_lan_ipv4s()
-        .iter()
+/// 给前端展示的访问网址列表。地址必须来自已经完成的快照，避免状态查询再次探测网卡。
+pub fn access_urls(ips: &[Ipv4Addr], port: u16) -> Vec<String> {
+    ips.iter()
         .map(|ip| format!("https://{ip}:{port}"))
         .collect()
 }
@@ -485,15 +427,20 @@ pub async fn start(cfg: RemoteServerConfig) -> Result<RemoteServerHandle, String
     let _ = HEADER_HTML; // index 用 axum Html() 自带 content-type
     log::info!("[remote-input] starting server on port {}", cfg.port);
     let app_for_cert = cfg.app.clone();
-    let (cert_der, key_der) = tauri::async_runtime::spawn_blocking(move || {
+    let (cert_der, key_der, lan_snapshot) = tauri::async_runtime::spawn_blocking(move || {
         let mut sans = vec!["localhost".to_string(), "127.0.0.1".to_string()];
-        let lan_ips = local_lan_ipv4s();
-        log::info!("[remote-input] lan ips for cert SAN: {lan_ips:?}");
-        for ip in lan_ips {
+        let lan_snapshot = discover_lan_addresses(&app_for_cert);
+        log::info!(
+            "[remote-input] lan ips for cert SAN: {:?} (stale={})",
+            lan_snapshot.ips,
+            lan_snapshot.stale
+        );
+        for ip in &lan_snapshot.ips {
             sans.push(ip.to_string());
         }
         let cert_dir = app_config_dir(&app_for_cert);
         load_or_generate_cert(cert_dir.as_deref(), &sans)
+            .map(|(cert, key)| (cert, key, lan_snapshot))
     })
     .await
     .map_err(|e| format!("cert worker failed: {e}"))??;
@@ -509,6 +456,7 @@ pub async fn start(cfg: RemoteServerConfig) -> Result<RemoteServerHandle, String
         }
     })?;
     let bound_port = listener.local_addr().map(|a| a.port()).unwrap_or(cfg.port);
+    let urls = access_urls(&lan_snapshot.ips, bound_port);
 
     let (conn_shutdown_tx, conn_shutdown_rx) = tokio::sync::watch::channel(false);
     let state = Arc::new(WsState {
@@ -569,6 +517,8 @@ pub async fn start(cfg: RemoteServerConfig) -> Result<RemoteServerHandle, String
         join,
         bound_port,
         pin: cfg.pin,
+        urls,
+        urls_stale: lan_snapshot.stale,
     })
 }
 

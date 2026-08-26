@@ -122,6 +122,8 @@ mod hotkey;
 mod insertion;
 #[path = "../../src/remote_server/pin_persistence.rs"]
 mod pin_persistence;
+#[path = "../../src/remote_server/lan_addresses.rs"]
+mod lan_addresses;
 #[path = "../../src/recorder.rs"]
 mod recorder;
 #[path = "../../src/shortcut_binding.rs"]

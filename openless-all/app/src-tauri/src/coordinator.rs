@@ -1196,7 +1196,11 @@ struct Inner {
     #[cfg(not(mobile))]
     remote_refresh_gen: AtomicU64,
     #[cfg(not(mobile))]
+    remote_refresh_generation_lock: Mutex<()>,
+    #[cfg(not(mobile))]
     remote_refresh_lock: tokio::sync::Mutex<()>,
+    #[cfg(not(mobile))]
+    remote_server_starting: AtomicU64,
     #[cfg(not(mobile))]
     remote_pin: Mutex<Option<String>>,
     #[cfg(not(mobile))]
@@ -1206,6 +1210,16 @@ struct Inner {
     /// Less Computer 连续对话：true=浮窗里已有进行中的会话，下一轮用后端原生 resume
     /// 或 dsh 的有界文本历史回放续上下文；关闭浮窗（dismiss）复位为 false。
     less_computer_conversation: AtomicBool,
+}
+
+#[cfg(not(mobile))]
+fn clear_remote_server_starting(inner: &Inner, generation: u64) {
+    let _ = inner.remote_server_starting.compare_exchange(
+        generation,
+        0,
+        Ordering::AcqRel,
+        Ordering::Acquire,
+    );
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1470,7 +1484,11 @@ impl Coordinator {
                     #[cfg(not(mobile))]
                     remote_refresh_gen: AtomicU64::new(0),
                     #[cfg(not(mobile))]
+                    remote_refresh_generation_lock: Mutex::new(()),
+                    #[cfg(not(mobile))]
                     remote_refresh_lock: tokio::sync::Mutex::new(()),
+                    #[cfg(not(mobile))]
+                    remote_server_starting: AtomicU64::new(0),
                     #[cfg(not(mobile))]
                     remote_pin: Mutex::new(None),
                     #[cfg(not(mobile))]
@@ -1604,7 +1622,11 @@ impl Coordinator {
                 #[cfg(not(mobile))]
                 remote_refresh_gen: AtomicU64::new(0),
                 #[cfg(not(mobile))]
+                remote_refresh_generation_lock: Mutex::new(()),
+                #[cfg(not(mobile))]
                 remote_refresh_lock: tokio::sync::Mutex::new(()),
+                #[cfg(not(mobile))]
+                remote_server_starting: AtomicU64::new(0),
                 #[cfg(not(mobile))]
                 remote_pin: Mutex::new(None),
                 #[cfg(not(mobile))]
@@ -2558,16 +2580,17 @@ impl Coordinator {
             .map(|h| h.bound_port)
             .unwrap_or(prefs.remote_input_port);
         let pin = self.inner.remote_pin.lock().clone().unwrap_or_default();
-        let urls = if running {
-            crate::remote_server::access_urls(port)
-        } else {
-            Vec::new()
-        };
+        let urls = handle.as_ref().map(|h| h.urls.clone()).unwrap_or_default();
+        let urls_stale = handle.as_ref().map(|h| h.urls_stale).unwrap_or(false);
+        let generation = self.inner.remote_refresh_gen.load(Ordering::Acquire);
+        let starting_generation = self.inner.remote_server_starting.load(Ordering::Acquire);
         crate::remote_server::RemoteInputStatus {
             running,
+            starting: generation != 0 && starting_generation == generation,
             port,
             pin,
             urls,
+            urls_stale,
         }
     }
 
@@ -2607,8 +2630,18 @@ impl Coordinator {
     #[cfg(not(mobile))]
     pub fn refresh_remote_server(self: &Arc<Self>) {
         log::info!("[remote-input] scheduling refresh");
+        let gen = {
+            // Serialise generation publication with handle installation. This closes the
+            // race where an obsolete start could pass its generation check just before a
+            // newer refresh publishes its generation and then overwrite the new handle.
+            let _generation_guard = self.inner.remote_refresh_generation_lock.lock();
+            let gen = self.inner.remote_refresh_gen.fetch_add(1, Ordering::SeqCst) + 1;
+            self.inner
+                .remote_server_starting
+                .store(gen, Ordering::Release);
+            gen
+        };
         let coord = Arc::clone(self);
-        let gen = self.inner.remote_refresh_gen.fetch_add(1, Ordering::SeqCst) + 1;
         tauri::async_runtime::spawn(async move {
             let _serial = coord.inner.remote_refresh_lock.lock().await;
             if coord.inner.remote_refresh_gen.load(Ordering::SeqCst) != gen {
@@ -2617,6 +2650,9 @@ impl Coordinator {
             let old = coord.inner.remote_server.lock().take();
             if let Some(handle) = old {
                 handle.shutdown().await;
+            }
+            if coord.inner.remote_refresh_gen.load(Ordering::SeqCst) != gen {
+                return;
             }
             let prefs = coord.inner.prefs.get();
             let app = coord.inner.app.lock().clone();
@@ -2627,15 +2663,23 @@ impl Coordinator {
                 app.is_some()
             );
             if !prefs.remote_input_enabled {
+                clear_remote_server_starting(&coord.inner, gen);
                 if let Some(app) = &app {
                     let _ = app.emit(
                         "remote-input:running",
-                        serde_json::json!({"running": false}),
+                        serde_json::json!({
+                            "running": false,
+                            "starting": false,
+                            "port": prefs.remote_input_port,
+                            "urls": [],
+                            "urlsStale": false
+                        }),
                     );
                 }
                 return;
             }
             let Some(app) = app else {
+                clear_remote_server_starting(&coord.inner, gen);
                 return;
             };
             let existing_pin = coord.inner.remote_pin.lock().clone();
@@ -2650,50 +2694,109 @@ impl Coordinator {
             .await
             {
                 Ok(Ok(pin)) => {
+                    if coord.inner.remote_refresh_gen.load(Ordering::SeqCst) != gen {
+                        return;
+                    }
                     *coord.inner.remote_pin.lock() = Some(pin.clone());
                     pin
                 }
                 Ok(Err(error)) => {
+                    if coord.inner.remote_refresh_gen.load(Ordering::SeqCst) != gen {
+                        return;
+                    }
+                    clear_remote_server_starting(&coord.inner, gen);
                     let reason = format!("persist pairing PIN failed: {error}");
                     let _ = app.emit(
                         "remote-input:error",
-                        serde_json::json!({"reason": reason, "port": prefs.remote_input_port}),
+                        serde_json::json!({
+                            "reason": reason,
+                            "port": prefs.remote_input_port,
+                            "starting": false,
+                            "urls": [],
+                            "urlsStale": false
+                        }),
                     );
                     log::error!("[remote-input] {reason}");
                     return;
                 }
                 Err(error) => {
-                    log::error!("[remote-input] pin worker failed: {error}");
+                    if coord.inner.remote_refresh_gen.load(Ordering::SeqCst) != gen {
+                        return;
+                    }
+                    clear_remote_server_starting(&coord.inner, gen);
+                    let reason = format!("pin worker failed: {error}");
+                    let _ = app.emit(
+                        "remote-input:error",
+                        serde_json::json!({
+                            "reason": reason,
+                            "port": prefs.remote_input_port,
+                            "starting": false,
+                            "urls": [],
+                            "urlsStale": false
+                        }),
+                    );
+                    log::error!("[remote-input] {reason}");
                     return;
                 }
             };
             log::info!("[remote-input] pin ready");
             let port = prefs.remote_input_port;
-            match crate::remote_server::start(crate::remote_server::RemoteServerConfig {
+            let result = crate::remote_server::start(crate::remote_server::RemoteServerConfig {
                 port,
                 pin: pin.clone(),
                 coordinator: Arc::clone(&coord),
                 app: app.clone(),
             })
-            .await
-            {
+            .await;
+            if coord.inner.remote_refresh_gen.load(Ordering::SeqCst) != gen {
+                if let Ok(handle) = result {
+                    handle.shutdown().await;
+                }
+                return;
+            }
+            match result {
                 Ok(handle) => {
-                    let urls = tauri::async_runtime::spawn_blocking(move || {
-                        crate::remote_server::access_urls(port)
-                    })
-                    .await
-                    .unwrap_or_default();
-                    *coord.inner.remote_server.lock() = Some(handle);
-                    let _ = app.emit(
-                        "remote-input:running",
-                        serde_json::json!({"running": true, "port": port, "urls": urls, "pin": pin}),
-                    );
-                    log::info!("[remote-input] server started on port {port}");
+                    let bound_port = handle.bound_port;
+                    let urls = handle.urls.clone();
+                    let urls_stale = handle.urls_stale;
+                    let stale_handle = {
+                        let _generation_guard = coord.inner.remote_refresh_generation_lock.lock();
+                        if coord.inner.remote_refresh_gen.load(Ordering::SeqCst) != gen {
+                            Some(handle)
+                        } else {
+                            *coord.inner.remote_server.lock() = Some(handle);
+                            clear_remote_server_starting(&coord.inner, gen);
+                            let _ = app.emit(
+                                "remote-input:running",
+                                serde_json::json!({
+                                    "running": true,
+                                    "starting": false,
+                                    "port": bound_port,
+                                    "urls": urls,
+                                    "urlsStale": urls_stale,
+                                    "pin": pin
+                                }),
+                            );
+                            None
+                        }
+                    };
+                    if let Some(handle) = stale_handle {
+                        handle.shutdown().await;
+                        return;
+                    }
+                    log::info!("[remote-input] server started on port {bound_port}");
                 }
                 Err(e) => {
+                    clear_remote_server_starting(&coord.inner, gen);
                     let _ = app.emit(
                         "remote-input:error",
-                        serde_json::json!({"reason": e, "port": port}),
+                        serde_json::json!({
+                            "reason": e,
+                            "port": port,
+                            "starting": false,
+                            "urls": [],
+                            "urlsStale": false
+                        }),
                     );
                     log::error!("[remote-input] server start failed: {e}");
                 }

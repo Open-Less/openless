@@ -1369,6 +1369,8 @@ export const zhCN = {
       certTrustWarning:
         '该证书仅用于本机远程输入服务（不能签发其他证书），请勿信任来源不明的证书；不再使用时可在手机系统设置中移除。',
       waitingStart: '服务尚未启动。请关闭开关再打开一次，不要重启软件。',
+      starting: '正在启动远程输入服务…',
+      urlsStale: '这些地址来自上次运行，可能已经过期。',
     },
     about: {
       tagline: '自然说话，完美书写',
