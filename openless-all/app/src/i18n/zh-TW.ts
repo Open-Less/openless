@@ -53,6 +53,16 @@ export const zhTW: typeof zhCN = {
     applyError: '未能應用：',
     confirmReplace: '確認並替換',
   },
+  selectionVoiceIntent: {
+    title: '你想做什麼？',
+    subtitle: '已識別你的語音指令，請選擇處理方式。',
+    loading: '載入中…',
+    sourcePrefix: '選區：',
+    errorPrefix: '未能繼續：',
+    question: '提問',
+    edit: '編輯選區',
+    cancel: '取消',
+  },
   qa: {
     title: '劃詞追問',
     headerHint: '隨時提問',
@@ -79,6 +89,10 @@ export const zhTW: typeof zhCN = {
     statusThinking: '思考中',
     statusError: '出錯了',
     jumpToLatest: '跳到最新',
+    editApplyReplace: '確認並替換選區',
+    editApplyUnavailable: '沒有可替換的編輯結果',
+    editRevertPrevious: '保留上一版本',
+    editInstructionMode: '編輯指令',
   },
   lessComputer: {
     title: 'Less Computer',
@@ -688,6 +702,20 @@ export const zhTW: typeof zhCN = {
     },
   },
   settings: {
+    selectionWorkspace: {
+      title: '選區助手',
+      hint: '選中文字後按同一快捷鍵：關閉語音編輯時直接潤色；開啟後口述指令，說完再選擇「提問」或「編輯選區」。',
+      polishHotkey: '選區助手快捷鍵',
+      polishHotkeyDesc: '關閉語音編輯時直接潤色；開啟語音編輯時按住口述指令（錄音方式跟隨全域設定）。',
+      polishDelivery: '結果處理',
+      voiceDeliveryDesc: '語音編輯完成後：直接替換選區，或在華詞面板中預覽後再確認。',
+      voiceEnable: '語音編輯',
+      voiceEnableDesc: '與上方同一快捷鍵；錄音方式跟隨全域設定（目前：{{recordingLabel}}）。',
+      autoIntent: '自動判斷意圖',
+      autoIntentDesc: '開啟後預設用服務配置的模型判斷問句 vs 編輯；模型不可用或解析失敗時回退到問句啟發式。',
+      editKeywords: '額外問句線索',
+      editKeywordsDesc: '關閉自動判斷時生效；每行一個，指令含則視為提問，否則仍按問句啟發式判定。',
+    },
     selectionPolish: {
       title: '選區潤色',
       hotkey: '觸發快捷鍵',

@@ -51,6 +51,16 @@ export const zhCN = {
     applyError: '未能应用：',
     confirmReplace: '确认并替换',
   },
+  selectionVoiceIntent: {
+    title: '你想做什么？',
+    subtitle: '已识别你的语音指令，请选择处理方式。',
+    loading: '加载中…',
+    sourcePrefix: '选区：',
+    errorPrefix: '未能继续：',
+    question: '提问',
+    edit: '编辑选区',
+    cancel: '取消',
+  },
   qa: {
     title: '划词追问',
     headerHint: '随时提问',
@@ -77,6 +87,10 @@ export const zhCN = {
     statusThinking: '思考中',
     statusError: '出错了',
     jumpToLatest: '跳到最新',
+    editApplyReplace: '预览并确认插入',
+    editApplyUnavailable: '没有可替换的编辑结果',
+    editRevertPrevious: '保留上一版本',
+    editInstructionMode: '编辑指令',
   },
   lessComputer: {
     title: 'Less Computer',
@@ -686,6 +700,20 @@ export const zhCN = {
     },
   },
   settings: {
+    selectionWorkspace: {
+      title: '选区助手',
+      hint: '选中文字后按同一快捷键：关闭语音编辑时直接润色；开启后口述指令，说完再选择「提问」或「编辑选区」。',
+      polishHotkey: '选区助手快捷键',
+      polishHotkeyDesc: '关闭语音编辑时直接润色；开启语音编辑时按住口述指令（录音方式跟随全局设置）。',
+      polishDelivery: '结果处理',
+      voiceDeliveryDesc: '语音编辑完成后：直接替换选区，或在华词面板中预览后再确认。',
+      voiceEnable: '语音编辑',
+      voiceEnableDesc: '与上方同一快捷键；录音方式跟随全局设置（当前：{{recordingLabel}}）。',
+      autoIntent: '自动判断意图',
+      autoIntentDesc: '开启后默认用服务配置的模型判断问句 vs 编辑；模型不可用或解析失败时回退到问句启发式。',
+      editKeywords: '额外问句线索',
+      editKeywordsDesc: '关闭自动判断时生效；每行一个，指令中包含则视为提问，否则仍按问句启发式（？/吗/什么…）判定。',
+    },
     selectionPolish: {
       title: '选区润色',
       hotkey: '触发快捷键',

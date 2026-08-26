@@ -5,77 +5,57 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::atomic::AtomicBool;
 
+use super::mlx_worker::MlxWorkerClient;
 use anyhow::{Context, Result};
-use qwen3_asr_rs::inference::AsrInference;
-use qwen3_asr_rs::tensor::Device;
 
 pub struct MlxQwenAsrEngine {
-    inference: Mutex<AsrInference>,
+    worker: MlxWorkerClient,
 }
 
 impl MlxQwenAsrEngine {
     pub fn load(model_dir: &Path) -> Result<Self> {
-        ensure_tokenizer_json(model_dir)?;
-        // qwen3_asr_rs 的 CLI 会在加载模型前做这一步；OpenLess 直接调用库 API，
-        // 必须自行初始化全局 MLX stream，否则首次创建张量会 panic。
-        qwen3_asr_rs::backend::mlx::stream::init_mlx(true);
-        log::info!(
-            "[local-qwen3-mlx] loading model from {}",
-            model_dir.display()
-        );
-        let inference = AsrInference::load(model_dir, Device::gpu())
-            .with_context(|| format!("加载 Qwen3-ASR MLX 模型失败: {}", model_dir.display()))?;
         Ok(Self {
-            inference: Mutex::new(inference),
+            worker: MlxWorkerClient::load(model_dir)?,
         })
     }
 
     pub fn transcribe_pcm(&self, samples: &[f32]) -> Result<String> {
-        // 临时 WAV 用 guard 兜底清理：解码 panic、锁中毒提前 return 时也不会
-        // 把文件泄漏到系统临时目录。
-        let wav = TempWav::new(samples)?;
-        let path_string = wav.path.to_string_lossy().into_owned();
-        let output = self
-            .inference
-            .lock()
-            .map_err(|_| anyhow::anyhow!("Qwen3-ASR MLX 引擎锁已中毒"))?
-            .transcribe(&path_string, None)
-            .context("Qwen3-ASR MLX batch 解码失败")?;
-        Ok(output.text.trim().to_string())
+        self.worker.transcribe_pcm(samples)
     }
-}
 
-/// 临时 WAV 的 RAII 清理 guard：Drop 时删除文件。
-struct TempWav {
-    path: std::path::PathBuf,
-}
-
-impl TempWav {
-    fn new(samples: &[f32]) -> Result<Self> {
-        let path =
-            std::env::temp_dir().join(format!("openless-qwen3-{}.wav", uuid::Uuid::new_v4()));
-        let pcm: Vec<i16> = samples
-            .iter()
-            .map(|sample| (sample.clamp(-1.0, 1.0) * 32767.0) as i16)
-            .collect();
-        std::fs::write(&path, crate::asr::wav::encode_wav_16k_mono(&pcm))
-            .with_context(|| format!("写入临时 Qwen3-ASR 音频失败: {}", path.display()))?;
-        Ok(Self { path })
+    pub fn next_operation_id(&self) -> u64 {
+        self.worker.next_operation_id()
     }
-}
 
-impl Drop for TempWav {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
+    pub fn transcribe_pcm_for_operation(
+        &self,
+        operation_id: u64,
+        samples: &[f32],
+        cancelled: &AtomicBool,
+    ) -> Result<String> {
+        self.worker
+            .transcribe_pcm_for_operation(operation_id, samples, cancelled)
+    }
+
+    pub fn cancel_operation(&self, operation_id: u64) {
+        self.worker.cancel_operation(operation_id);
+    }
+
+    pub fn abort(&self) {
+        self.worker.abort();
+    }
+
+    pub fn is_healthy(&self) -> bool {
+        self.worker.is_healthy()
     }
 }
 
 /// Qwen 官方 ASR 权重通常只有 `vocab.json` + `merges.txt`，而 qwen3_asr_rs
 /// 使用 HuggingFace 的统一 `tokenizer.json`。这里在首次加载时本地生成一次，
 /// 避免要求用户安装 Python/Transformers；如果模型包已经带 tokenizer.json，则直接复用。
-fn ensure_tokenizer_json(model_dir: &Path) -> Result<()> {
+pub(super) fn ensure_tokenizer_json(model_dir: &Path) -> Result<()> {
     let tokenizer_path = model_dir.join("tokenizer.json");
     if tokenizer_path.is_file() {
         return Ok(());

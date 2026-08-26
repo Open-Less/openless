@@ -38,6 +38,8 @@ pub use sherpa_runtime::SherpaOnnxRuntime;
 mod apple_speech_provider;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod mlx_qwen_engine;
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+mod mlx_worker;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod qwen_engine;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -50,6 +52,8 @@ pub use apple_speech_provider::{native_name_to_apple_locale, AppleSpeechAsr};
 pub use local_provider::LocalQwenAsr;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub use mlx_qwen_engine::MlxQwenAsrEngine;
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+pub(crate) use mlx_worker::run_if_requested as run_mlx_worker_if_requested;
 #[cfg(target_os = "macos")]
 pub(crate) use whisper_provider::WhisperEngine;
 #[cfg(target_os = "macos")]
@@ -141,10 +145,46 @@ impl LocalQwenEngine {
         }
     }
 
+    pub fn next_operation_id(&self) -> u64 {
+        match self {
+            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+            Self::Mlx(engine) => engine.next_operation_id(),
+            Self::C(_) => 0,
+        }
+    }
+
+    pub fn cancel_operation(&self, operation_id: u64) {
+        match self {
+            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+            Self::Mlx(engine) => engine.cancel_operation(operation_id),
+            Self::C(_) => {
+                let _ = operation_id;
+            }
+        }
+    }
+
+    pub fn cancel(&self) {
+        match self {
+            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+            Self::Mlx(engine) => engine.abort(),
+            Self::C(_) => {}
+        }
+    }
+
+    pub fn is_healthy(&self) -> bool {
+        match self {
+            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+            Self::Mlx(engine) => engine.is_healthy(),
+            Self::C(_) => true,
+        }
+    }
+
     /// Dictation 转写保持各后端原有语义：MLX 整段 batch；C 追加 0.5 秒静音后
     /// 走流式解码，并将稳定 token 交给调用方实时显示。
     pub fn transcribe_dictation_with_handler<F>(
         &self,
+        operation_id: u64,
+        cancelled: &std::sync::atomic::AtomicBool,
         mut samples: Vec<f32>,
         handler: F,
     ) -> anyhow::Result<String>
@@ -153,8 +193,11 @@ impl LocalQwenEngine {
     {
         match self {
             #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-            Self::Mlx(engine) => engine.transcribe_pcm(&samples),
+            Self::Mlx(engine) => {
+                engine.transcribe_pcm_for_operation(operation_id, &samples, cancelled)
+            }
             Self::C(engine) => {
+                let _ = (operation_id, cancelled);
                 append_c_stream_tail_padding(&mut samples);
                 engine.transcribe_stream_with_handler(&samples, handler)
             }

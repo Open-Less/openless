@@ -28,6 +28,7 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboa
 import { useTranslation } from 'react-i18next';
 import {
   ArrowUpIcon,
+  CheckIcon,
   MessageCircleDashedIcon,
   MicIcon,
   SquareIcon,
@@ -72,10 +73,14 @@ import { useChatPanelLifecycle } from '../components/chat/lifecycle';
 import { cn } from '../components/chat/lib/utils';
 import {
   chatPanelFocusKeyboard,
+  confirmSelectionVoicePreview,
+  getSelectionVoicePreview,
   isTauri,
+  qaSetEditInstructionMode,
   qaSubmitText,
   qaToggleRecording,
   qaWindowDismiss,
+  revertSelectionVoicePreview,
 } from '../lib/ipc';
 import { acceptQaSessionEvent, splitQaUserMessage } from '../lib/qaMessage';
 import type { QaChatMessage, QaStatePayload } from '../lib/types';
@@ -129,6 +134,10 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
   const [composerText, setComposerText] = useState<string>('');
   /** 流式 LLM 答案：answer_delta 累积、answer 事件来时清空（最终内容已落到 messages）。 */
   const [streamingAnswer, setStreamingAnswer] = useState<string>('');
+  const [editApplyAvailable, setEditApplyAvailable] = useState(false);
+  const [editRevertAvailable, setEditRevertAvailable] = useState(false);
+  const [editApplyBusy, setEditApplyBusy] = useState(false);
+  const [editInstructionMode, setEditInstructionMode] = useState(false);
   const activeSessionIdRef = useRef<string | null>(null);
   const { enterEpoch, closing } = useChatPanelLifecycle();
   const tRef = useRef(t);
@@ -161,18 +170,31 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
           if (payload.messages) {
             setMessages(payload.messages);
           }
+          if (typeof payload.edit_apply_available === 'boolean') {
+            setEditApplyAvailable(payload.edit_apply_available);
+          }
+          if (typeof payload.edit_revert_available === 'boolean') {
+            setEditRevertAvailable(payload.edit_revert_available);
+          }
+          if (typeof payload.edit_instruction_mode === 'boolean') {
+            setEditInstructionMode(payload.edit_instruction_mode);
+          }
           switch (payload.kind) {
             case 'idle':
               setStatus('idle');
               setSelectionPreview('');
               setErrorMsg('');
               setStreamingAnswer('');
+              setEditApplyAvailable(false);
+              setEditRevertAvailable(false);
               break;
             case 'recording':
               setStatus('recording');
               setSelectionPreview(payload.selection_preview ?? '');
               setErrorMsg('');
               setStreamingAnswer('');
+              setEditApplyAvailable(false);
+              setEditRevertAvailable(false);
               break;
             case 'loading':
               // ASR 在 finalize、user message 还没 push 的过渡帧。提前切到 thinking
@@ -183,6 +205,8 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
               }
               setErrorMsg('');
               setStreamingAnswer('');
+              setEditApplyAvailable(false);
+              setEditRevertAvailable(false);
               break;
             case 'thinking':
               setStatus('thinking');
@@ -191,6 +215,8 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
               }
               setErrorMsg('');
               setStreamingAnswer('');
+              setEditApplyAvailable(false);
+              setEditRevertAvailable(false);
               break;
             case 'answer_delta':
               // 流式增量。仍保持 thinking 状态——直到 answer 事件落定后才回 idle。
@@ -208,6 +234,8 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
               setStatus('error');
               setErrorMsg(payload.error ?? tRef.current('qa.error'));
               setStreamingAnswer('');
+              setEditApplyAvailable(false);
+              setEditRevertAvailable(false);
               break;
           }
         });
@@ -248,6 +276,7 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
     setStreamingAnswer('');
     setSelectionPreview('');
     setComposerText('');
+    setEditInstructionMode(false);
   }, [closing]);
 
   // ── Esc 关闭 ────────────────────────────────────────────────────────
@@ -284,6 +313,57 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
     void qaToggleRecording().catch(error => {
       console.error('[QaPanel] qa_toggle_recording failed', error);
     });
+  };
+
+  const onEditInstructionModeChange = (enabled: boolean) => {
+    setEditInstructionMode(enabled);
+    void qaSetEditInstructionMode(enabled).catch(error => {
+      console.error('[QaPanel] qa_set_edit_instruction_mode failed', error);
+    });
+  };
+
+  const onApplyEdit = async () => {
+    if (!editApplyAvailable || editApplyBusy) return;
+    setEditApplyBusy(true);
+    setErrorMsg('');
+    try {
+      const qaSessionId = activeSessionIdRef.current;
+      if (!qaSessionId) {
+        throw new Error(t('qa.editApplyUnavailable'));
+      }
+      const preview = await getSelectionVoicePreview(qaSessionId);
+      const text = preview?.text?.trim();
+      if (!text) {
+        throw new Error(t('qa.editApplyUnavailable'));
+      }
+      await confirmSelectionVoicePreview(text, qaSessionId);
+      setEditApplyAvailable(false);
+      setEditRevertAvailable(false);
+    } catch (error) {
+      setErrorMsg(error instanceof Error ? error.message : String(error));
+      setStatus('error');
+    } finally {
+      setEditApplyBusy(false);
+    }
+  };
+
+  const onRevertEdit = async () => {
+    if (!editRevertAvailable || editApplyBusy) return;
+    setEditApplyBusy(true);
+    setErrorMsg('');
+    try {
+      const qaSessionId = activeSessionIdRef.current;
+      if (!qaSessionId) {
+        throw new Error(t('qa.editApplyUnavailable'));
+      }
+      await revertSelectionVoicePreview(qaSessionId);
+      setEditRevertAvailable(false);
+    } catch (error) {
+      setErrorMsg(error instanceof Error ? error.message : String(error));
+      setStatus('error');
+    } finally {
+      setEditApplyBusy(false);
+    }
   };
 
   const lastRole = messages[messages.length - 1]?.role;
@@ -401,11 +481,37 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
           {status === 'recording' && selectionPreview && (
             <SelectionChip text={selectionPreview} t={t} />
           )}
+          {editApplyAvailable && status === 'idle' && (
+            <div className="flex w-full flex-col gap-2">
+              {editRevertAvailable && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full"
+                  disabled={editApplyBusy}
+                  onClick={() => void onRevertEdit()}
+                >
+                  {t('qa.editRevertPrevious')}
+                </Button>
+              )}
+              <Button
+                type="button"
+                className="w-full"
+                disabled={editApplyBusy}
+                onClick={() => void onApplyEdit()}
+              >
+                <CheckIcon />
+                {t('qa.editApplyReplace')}
+              </Button>
+            </div>
+          )}
           <Composer
             value={composerText}
             status={status}
             ring={ring}
             embedded={embedded}
+            editInstructionMode={editInstructionMode}
+            onEditInstructionModeChange={onEditInstructionModeChange}
             onChange={setComposerText}
             onSubmit={onSubmitText}
             onToggleRecording={onToggleRecording}
@@ -429,6 +535,8 @@ function Composer({
   status,
   ring,
   embedded,
+  editInstructionMode,
+  onEditInstructionModeChange,
   onChange,
   onSubmit,
   onToggleRecording,
@@ -438,6 +546,8 @@ function Composer({
   status: Status;
   ring: 'recording' | 'thinking' | undefined;
   embedded: boolean;
+  editInstructionMode: boolean;
+  onEditInstructionModeChange: (enabled: boolean) => void;
   onChange: (value: string) => void;
   onSubmit: () => void;
   onToggleRecording: () => void;
@@ -480,6 +590,16 @@ function Composer({
           onPointerDown={embedded ? undefined : () => void chatPanelFocusKeyboard()}
         />
         <InputGroupAddon align="block-end" className="pt-1">
+          <label className="mr-auto flex cursor-pointer items-center gap-1.5 pl-1 text-[11.5px] text-muted-foreground select-none">
+            <input
+              type="checkbox"
+              className="size-3.5 accent-foreground"
+              checked={editInstructionMode}
+              disabled={busy}
+              onChange={event => onEditInstructionModeChange(event.currentTarget.checked)}
+            />
+            {t('qa.editInstructionMode')}
+          </label>
           <InputGroupButton
             type="button"
             size="icon-sm"
@@ -496,7 +616,6 @@ function Composer({
             type="submit"
             variant="default"
             size="icon-sm"
-            className="ml-auto"
             disabled={busy || !value.trim()}
           >
             <ArrowUpIcon />

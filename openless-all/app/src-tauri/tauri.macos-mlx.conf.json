@@ -1,0 +1,13 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "build": {
+    "beforeBundleCommand": "node scripts/stage-macos-mlx-metallib.mjs"
+  },
+  "bundle": {
+    "macOS": {
+      "files": {
+        "MacOS/mlx.metallib": "target/release/openless-mlx/mlx.metallib"
+      }
+    }
+  }
+}

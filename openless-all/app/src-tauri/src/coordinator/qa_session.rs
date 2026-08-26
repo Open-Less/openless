@@ -24,6 +24,35 @@ fn compose_qa_user_content(selection_text: &str, question: &str) -> String {
     }
 }
 
+/// 选区语音 / 划词提问共用的指令润色（纠正规则之后）。
+pub(super) async fn polish_voice_instruction(
+    inner: &Arc<Inner>,
+    instruction_raw: &str,
+) -> Result<String, String> {
+    let prefs = inner.prefs.get();
+    let mut llm_call = None;
+    let mut polish_ms = None;
+    let prompt = crate::polish::prompts::selection_voice_instruction_polish_prompt();
+    polish_text(
+        instruction_raw,
+        PolishMode::Light,
+        &[],
+        &prompt,
+        &prefs.working_languages,
+        prefs.chinese_script_preference,
+        prefs.output_language_preference,
+        prefs.llm_thinking_enabled,
+        None,
+        None,
+        &[],
+        &mut llm_call,
+        &mut polish_ms,
+        false,
+    )
+    .await
+    .map_err(|error| error.to_string())
+}
+
 fn qa_user_message_from_state(
     state: &QaSessionState,
     question: &str,
@@ -218,6 +247,38 @@ pub(super) async fn submit_qa_text_question(
     let question = text.trim().to_string();
     if question.is_empty() {
         return Ok(());
+    }
+
+    let edit_instruction_mode = {
+        let qa = inner.qa_state.lock();
+        qa.edit_instruction_mode && qa.panel_visible && qa.phase == QaPhase::Idle
+    };
+
+    if edit_instruction_mode {
+        #[cfg(all(not(mobile), target_os = "windows"))]
+        {
+            let session_id = inner.qa_state.lock().session_id;
+            return match super::selection_voice_session::apply_qa_panel_edit_instruction(
+                inner,
+                question,
+                session_id,
+            )
+            .await
+            {
+                Ok(()) => Ok(()),
+                Err(error) => {
+                    finish_qa_with_error_if_current(inner, session_id, error.clone());
+                    Err(error)
+                }
+            };
+        }
+        #[cfg(not(all(not(mobile), target_os = "windows")))]
+        {
+            let session_id = inner.qa_state.lock().session_id;
+            let message = "选区编辑仅支持 Windows".to_string();
+            finish_qa_with_error_if_current(inner, session_id, message.clone());
+            return Err(message);
+        }
     }
 
     let session_id = {
@@ -644,9 +705,8 @@ pub(super) async fn transcribe_overlay_dictation_asr(
                 }
             };
             if result.is_err() {
-                // 超时只放弃结果：解码任务仍在 spawn_blocking 里跑并持有引擎锁，
-                // cancel() 中止不了它。驱逐引擎让下次会话加载新引擎（与
-                // coordinator/dictation.rs 同款处理）。
+                // MLX 的 cancel() 会终止隔离 worker；C 后端仍让旧
+                // spawn_blocking 任务自行收尾。两者都驱逐 cache，避免复用超时引擎。
                 log::warn!(
                     "[coord] QA local Qwen3-ASR 超时 {}s，驱逐引擎避免下次会话排队",
                     timeout_duration.as_secs()
@@ -791,6 +851,8 @@ pub(super) async fn answer_qa_question_text(
         (state.messages.clone(), state.front_app.clone())
     };
 
+    inner.qa_stream_cancelled.store(false, Ordering::SeqCst);
+
     let captured_session_id = session_id;
     let inner_for_delta = Arc::clone(inner);
     let on_delta = move |chunk: &str| {
@@ -814,11 +876,9 @@ pub(super) async fn answer_qa_question_text(
     let cancel_flag = Arc::clone(&inner.qa_stream_cancelled);
     let inner_for_cancel = Arc::clone(inner);
     let should_cancel = move || {
-        qa_provider_should_cancel(
-            &inner_for_cancel.qa_state.lock(),
-            session_id,
-            cancel_flag.load(Ordering::Relaxed),
-        )
+        let cancel_requested = cancel_flag.load(Ordering::Relaxed);
+        let state = inner_for_cancel.qa_state.lock();
+        qa_provider_should_cancel(&state, session_id, cancel_requested)
     };
 
     let answer = match answer_chat_dispatch(
@@ -1561,9 +1621,8 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
                 }
             };
             if result.is_err() {
-                // 超时只放弃结果：解码任务仍在 spawn_blocking 里跑并持有引擎锁，
-                // cancel() 中止不了它。驱逐引擎让下次会话加载新引擎（与
-                // coordinator/dictation.rs 同款处理）。
+                // MLX 的 cancel() 会终止隔离 worker；C 后端仍让旧
+                // spawn_blocking 任务自行收尾。两者都驱逐 cache，避免复用超时引擎。
                 log::warn!(
                     "[coord] QA local Qwen3-ASR 超时 {}s，驱逐引擎避免下次会话排队",
                     timeout_duration.as_secs()
@@ -1676,9 +1735,56 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
         return Ok(());
     }
 
+    let mut instruction = question;
+    if let Ok(rules) = inner.correction_rules.list() {
+        let corrected = apply_correction_rules(&instruction, &rules);
+        if corrected != instruction {
+            instruction = corrected;
+        }
+    }
+
+    let instruction = match polish_voice_instruction(inner, &instruction).await {
+        Ok(polished) => polished,
+        Err(error) => {
+            finish_qa_with_error_if_current(inner, session_id, format!("指令润色失败: {error}"));
+            return Err(error);
+        }
+    };
+
+    if !qa_turn_can_continue(&inner.qa_state.lock(), session_id) {
+        log::info!("[coord] QA cancel detected after instruction polish — discarding");
+        return Ok(());
+    }
+
+    let edit_instruction_mode = inner.qa_state.lock().edit_instruction_mode;
+    if edit_instruction_mode {
+        #[cfg(all(not(mobile), target_os = "windows"))]
+        {
+            return match super::selection_voice_session::apply_qa_panel_edit_instruction(
+                inner,
+                instruction,
+                session_id,
+            )
+            .await
+            {
+                Ok(()) => Ok(()),
+                Err(error) => {
+                    finish_qa_with_error_if_current(inner, session_id, error.clone());
+                    Err(error)
+                }
+            };
+        }
+        #[cfg(not(all(not(mobile), target_os = "windows")))]
+        {
+            let message = "选区编辑仅支持 Windows".to_string();
+            finish_qa_with_error_if_current(inner, session_id, message.clone());
+            return Err(message);
+        }
+    }
+
     answer_qa_question_text(
         inner,
-        question,
+        instruction,
         raw.duration_ms,
         session_id,
         None,
@@ -1847,6 +1953,105 @@ where
             should_cancel,
         )
         .await?)
+}
+
+#[cfg(all(not(mobile), target_os = "windows"))]
+fn selection_voice_recording_can_continue(inner: &Arc<Inner>, session_id: SessionId) -> bool {
+    let state = inner.selection_voice_state.lock();
+    state.session_id == session_id
+        && matches!(
+            state.phase,
+            super::selection_voice_session::SelectionVoicePhase::Recording
+        )
+}
+
+#[cfg(all(not(mobile), target_os = "windows"))]
+pub(super) async fn start_selection_voice_recorder(
+    inner: &Arc<Inner>,
+    session_id: SessionId,
+) -> Result<(), String> {
+    if pipeline_multimodal_enabled(&inner.prefs.get()) {
+        return Err("selectionVoiceOmniUnsupported".into());
+    }
+    ensure_asr_credentials().map_err(|message| format!("缺少 ASR 凭据：{message}"))?;
+    let active_asr = CredentialsVault::get_active_asr();
+    let qa_asr = match build_qa_asr_start(inner, &active_asr).await {
+        Ok((qa_asr, _)) => qa_asr,
+        Err(message) => return Err(format!("ASR 初始化失败: {message}")),
+    };
+    ensure_microphone_permission(inner).map_err(|message| message)?;
+
+    let consumer = qa_asr.recorder_consumer();
+    store_qa_asr_for_session(inner, session_id, qa_asr.active_asr());
+
+    let inner_for_level = Arc::clone(inner);
+    let level_handler: Arc<dyn Fn(f32) + Send + Sync> = Arc::new(move |level| {
+        if !selection_voice_recording_can_continue(&inner_for_level, session_id) {
+            return;
+        }
+        emit_capsule(
+            &inner_for_level,
+            CapsuleState::Recording,
+            level,
+            0,
+            None,
+            None,
+        );
+    });
+
+    let microphone_device_name = selected_microphone_device_name(inner);
+    stop_microphone_preview_monitor(inner, "selection-voice recorder");
+    acquire_recording_mute(inner, "selection-voice").await;
+    if !selection_voice_recording_can_continue(inner, session_id) {
+        cancel_qa_asr_for_session(inner, session_id);
+        release_recording_mute(inner, "selection-voice");
+        return Ok(());
+    }
+    match Recorder::start(microphone_device_name, consumer, level_handler, None) {
+        Ok((rec, runtime_errors, archive_active)) => {
+            if !selection_voice_recording_can_continue(inner, session_id) {
+                drop(rec);
+                cancel_qa_asr_for_session(inner, session_id);
+                release_recording_mute(inner, "selection-voice");
+                return Ok(());
+            }
+            inner
+                .audio_archive_active
+                .store(archive_active, std::sync::atomic::Ordering::Relaxed);
+            store_qa_recorder_for_session(inner, session_id, rec);
+            spawn_qa_recorder_error_monitor(inner, session_id, runtime_errors);
+        }
+        Err(error) => {
+            cancel_qa_asr_for_session(inner, session_id);
+            release_recording_mute(inner, "selection-voice");
+            return Err(error.user_message());
+        }
+    }
+
+    qa_asr.open_streaming_session().await.map_err(|error| {
+        stop_qa_recorder_for_session(inner, session_id);
+        cancel_qa_asr_for_session(inner, session_id);
+        format!("ASR 连接失败: {error}")
+    })?;
+    Ok(())
+}
+
+#[cfg(all(not(mobile), target_os = "windows"))]
+pub(super) async fn finish_selection_voice_transcript(
+    inner: &Arc<Inner>,
+    session_id: SessionId,
+) -> Result<String, String> {
+    stop_qa_recorder_for_session(inner, session_id);
+    let asr = take_qa_asr_for_session(inner, session_id)
+        .ok_or_else(|| "selectionVoiceAsrUnavailable".to_string())?;
+    let transcript = match transcribe_overlay_dictation_asr(inner, session_id, asr).await {
+        OverlayDictationTranscribeOutcome::Done(result) => result?.text,
+        OverlayDictationTranscribeOutcome::Cancelled => {
+            return Err("selectionVoiceCancelled".into());
+        }
+    };
+    release_recording_mute(inner, "selection-voice");
+    Ok(transcript)
 }
 
 #[cfg(test)]

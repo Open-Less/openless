@@ -64,16 +64,24 @@ impl LocalAsrCache {
         {
             let mut slot = self.inner.lock();
             if let Some(cached) = slot.as_mut() {
-                if cached.model_id == model_id && cached.backend == backend {
+                let same_target = cached.model_id == model_id && cached.backend == backend;
+                if same_target && cached.engine.is_healthy() {
                     cached.last_used = Instant::now();
                     log::info!("[local-asr cache] reuse engine: {model_id}");
                     return Ok(Arc::clone(&cached.engine));
                 }
-                log::info!(
-                    "[local-asr cache] active model changed {} -> {}, drop old",
-                    cached.model_id,
-                    model_id
-                );
+                if same_target {
+                    log::warn!(
+                        "[local-asr cache] cached engine {} is unhealthy, reload",
+                        cached.model_id
+                    );
+                } else {
+                    log::info!(
+                        "[local-asr cache] active model changed {} -> {}, drop old",
+                        cached.model_id,
+                        model_id
+                    );
+                }
                 slot.take();
             }
         }
@@ -133,26 +141,47 @@ impl LocalAsrCache {
         false
     }
 
+    /// 从 cache 立刻驱逐，但不终止仍持有引擎的并发会话。会话结束、取消或超时后的
+    /// 自动清理走这里，避免一个会话误杀另一个共享 MLX worker 的在途转写。
+    pub fn evict_now(&self) {
+        self.release_now_inner(false);
+    }
+
     /// 立刻释放（用户点"立即释放"、切走 provider、删模型时调）。
     pub fn release_now(&self) {
+        self.release_now_inner(true);
+    }
+
+    fn release_now_inner(&self, abort_in_use: bool) {
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         {
             let taken = self.inner.lock().take();
             if let Some(cached) = taken {
+                let action = if abort_in_use { "release" } else { "evict" };
                 log::info!(
-                    "[local-asr cache] release engine {} on demand",
-                    cached.model_id
+                    "[local-asr cache] {action} engine {}",
+                    cached.model_id,
                 );
+                if abort_in_use && Arc::strong_count(&cached.engine) > 1 {
+                    cached.engine.cancel();
+                }
                 drop(cached);
                 pressure_relief();
             }
         }
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        let _ = abort_in_use;
     }
 
     pub fn loaded_model_id(&self) -> Option<String> {
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         {
-            return self.inner.lock().as_ref().map(|c| c.model_id.clone());
+            return self
+                .inner
+                .lock()
+                .as_ref()
+                .filter(|cached| cached.engine.is_healthy())
+                .map(|cached| cached.model_id.clone());
         }
         #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         None

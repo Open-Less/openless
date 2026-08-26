@@ -56,6 +56,7 @@ parking_lot = "0.12"
 once_cell = "1"
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
+regex = "1"
 bytes = "1"
 url = "2"
 raw-window-handle = "0.6"

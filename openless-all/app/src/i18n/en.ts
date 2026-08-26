@@ -53,6 +53,16 @@ export const en: typeof zhCN = {
     applyError: 'Could not apply: ',
     confirmReplace: 'Confirm & replace',
   },
+  selectionVoiceIntent: {
+    title: 'What would you like to do?',
+    subtitle: 'Your voice instruction was recognized. Choose how to proceed.',
+    loading: 'Loading…',
+    sourcePrefix: 'Selection: ',
+    errorPrefix: 'Could not continue: ',
+    question: 'Ask a question',
+    edit: 'Edit selection',
+    cancel: 'Cancel',
+  },
   qa: {
     title: 'Ask',
     headerHint: 'Ask anytime',
@@ -79,6 +89,10 @@ export const en: typeof zhCN = {
     statusThinking: 'Thinking',
     statusError: 'Error',
     jumpToLatest: 'Jump to latest',
+    editApplyReplace: 'Preview and confirm insert',
+    editApplyUnavailable: 'No edit result to apply',
+    editRevertPrevious: 'Keep previous version',
+    editInstructionMode: 'Edit instruction',
   },
   lessComputer: {
     title: 'Less Computer',
@@ -688,6 +702,20 @@ export const en: typeof zhCN = {
     },
   },
   settings: {
+    selectionWorkspace: {
+      title: 'Selection Assistant',
+      hint: 'Select text, then use one shortcut: polish when voice edit is off; hold and speak when voice edit is on, then choose Ask or Edit.',
+      polishHotkey: 'Selection assistant shortcut',
+      polishHotkeyDesc: 'Polishes directly when voice edit is off; hold to speak when voice edit is on (recording follows global settings).',
+      polishDelivery: 'Result handling',
+      voiceDeliveryDesc: 'After voice edit: replace selection directly, or preview in Ask panel then confirm.',
+      voiceEnable: 'Voice edit',
+      voiceEnableDesc: 'Uses the same shortcut above; recording follows global settings (current: {{recordingLabel}}).',
+      autoIntent: 'Auto-classify intent',
+      autoIntentDesc: 'When on, the configured model classifies question vs edit by default; falls back to question-word heuristics if the model fails.',
+      editKeywords: 'Extra question cues',
+      editKeywordsDesc: 'Only when auto-classify is off; one cue per line forces Ask; otherwise use ? / question-word heuristics.',
+    },
     selectionPolish: {
       title: 'Selection Polish',
       hotkey: 'Trigger shortcut',

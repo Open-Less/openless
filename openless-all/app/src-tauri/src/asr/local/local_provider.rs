@@ -26,6 +26,7 @@ use tauri::{AppHandle, Emitter};
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 pub struct LocalQwenAsr {
     engine: Arc<LocalQwenEngine>,
+    operation_id: u64,
     cancelled: Arc<AtomicBool>,
     buffer: Mutex<Vec<u8>>,
     app: AppHandle,
@@ -34,8 +35,10 @@ pub struct LocalQwenAsr {
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 impl LocalQwenAsr {
     pub fn new(app: AppHandle, engine: Arc<LocalQwenEngine>) -> Self {
+        let operation_id = engine.next_operation_id();
         Self {
             engine,
+            operation_id,
             cancelled: Arc::new(AtomicBool::new(false)),
             buffer: Mutex::new(Vec::new()),
             app,
@@ -62,17 +65,24 @@ impl LocalQwenAsr {
         let duration_ms = pcm_duration_ms(pcm_bytes.len());
         let samples_f32 = i16_le_bytes_to_f32(&pcm_bytes);
         let engine = Arc::clone(&self.engine);
+        let operation_id = self.operation_id;
         let app = self.app.clone();
         let cancelled = Arc::clone(&self.cancelled);
+        let worker_cancelled = Arc::clone(&cancelled);
         let text = tauri::async_runtime::spawn_blocking(move || {
-            engine.transcribe_dictation_with_handler(samples_f32, move |piece: &str| {
-                if !token_emission_enabled(&cancelled) {
-                    return;
-                }
-                if let Err(error) = app.emit("local-asr-token", piece.to_string()) {
-                    log::warn!("[local-asr] emit token failed: {error}");
-                }
-            })
+            engine.transcribe_dictation_with_handler(
+                operation_id,
+                &worker_cancelled,
+                samples_f32,
+                move |piece: &str| {
+                    if !token_emission_enabled(&cancelled) {
+                        return;
+                    }
+                    if let Err(error) = app.emit("local-asr-token", piece.to_string()) {
+                        log::warn!("[local-asr] emit token failed: {error}");
+                    }
+                },
+            )
         })
         .await
         .context("transcribe spawn_blocking join 失败")?
@@ -84,6 +94,7 @@ impl LocalQwenAsr {
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::Release);
         self.buffer.lock().clear();
+        self.engine.cancel_operation(self.operation_id);
     }
 }
 

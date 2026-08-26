@@ -310,17 +310,22 @@ pub(super) fn emit_local_asr_engine_status(_inner: &Arc<Inner>) {}
 
 /// 统一通过本地 ASR 生命周期门闩驱逐 Qwen / Whisper cache。
 ///
-/// `spawn_blocking` 被 timeout 或取消时不会停止 native 解码；此时只丢弃
-/// future 会让旧引擎继续持有 context 锁。驱逐 cache 后下一次会话可以加载
-/// 新引擎，旧任务仍由自身持有的 `Arc` 安全收尾。
+/// `spawn_blocking` 被 timeout 或取消时，单纯丢弃 future 不会停止 native 解码。
+/// MLX provider 的 operation cancel 会终止自己的隔离 worker；cache 自动驱逐不再
+/// 终止其它共享会话。C / Whisper 保持原有行为，旧任务由自身持有的 `Arc` 安全收尾。
 #[cfg(not(target_os = "android"))]
 fn release_local_asr_engines_locked(
     inner: &Arc<Inner>,
     release_qwen: bool,
     release_whisper: bool,
+    abort_qwen_in_use: bool,
 ) {
     if release_qwen {
-        inner.local_asr_cache.release_now();
+        if abort_qwen_in_use {
+            inner.local_asr_cache.release_now();
+        } else {
+            inner.local_asr_cache.evict_now();
+        }
     }
     #[cfg(target_os = "macos")]
     if release_whisper {
@@ -337,11 +342,30 @@ pub(super) fn release_local_asr_engines_now(
     release_whisper: bool,
 ) {
     let _lifecycle_guard = inner.local_asr_lifecycle.lock();
-    release_local_asr_engines_locked(inner, release_qwen, release_whisper);
+    release_local_asr_engines_locked(inner, release_qwen, release_whisper, false);
 }
 
 #[cfg(target_os = "android")]
 pub(super) fn release_local_asr_engines_now(
+    _inner: &Arc<Inner>,
+    _release_qwen: bool,
+    _release_whisper: bool,
+) {
+}
+
+/// 用户主动释放、切换 provider 或删除模型时保留原有全局终止语义。
+#[cfg(not(target_os = "android"))]
+pub(super) fn abort_local_asr_engines_now(
+    inner: &Arc<Inner>,
+    release_qwen: bool,
+    release_whisper: bool,
+) {
+    let _lifecycle_guard = inner.local_asr_lifecycle.lock();
+    release_local_asr_engines_locked(inner, release_qwen, release_whisper, true);
+}
+
+#[cfg(target_os = "android")]
+pub(super) fn abort_local_asr_engines_now(
     _inner: &Arc<Inner>,
     _release_qwen: bool,
     _release_whisper: bool,
@@ -532,7 +556,7 @@ fn load_current_local_qwen_engine(
         .get_or_load(backend, model_id, model_dir)?;
     if !target_is_current() {
         drop(engine);
-        release_local_asr_engines_locked(inner, true, false);
+        release_local_asr_engines_locked(inner, true, false, true);
         anyhow::bail!("本地 Qwen3-ASR 加载期间目标已切换，丢弃旧后端");
     }
     Ok(engine)
@@ -629,7 +653,7 @@ fn load_current_local_whisper_engine(
         .get_or_load(model_id, model_path)?;
     if !target_is_current() {
         drop(engine);
-        release_local_asr_engines_locked(inner, false, true);
+        release_local_asr_engines_locked(inner, false, true, true);
         anyhow::bail!("本地 Whisper 加载期间目标已切换，丢弃旧后端");
     }
     Ok(engine)

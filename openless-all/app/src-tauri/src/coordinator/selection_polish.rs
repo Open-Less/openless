@@ -145,9 +145,8 @@ pub(super) async fn run_selection_polish(inner: &Arc<Inner>) -> Result<(), Strin
     // final check below deliberately does *not* restore this target: a user who
     // changed windows made an intentional context switch, so the safe behavior
     // is to leave both apps untouched.
-    let insertion_target = crate::selection::capture_selection_insertion_target();
-    let capture = crate::selection::capture_selection_with_status();
-    if selection_polish_plan(capture.selection.as_ref()) == SelectionPolishPlan::NoSelection {
+    let (selection_opt, insertion_target) = crate::selection::resolve_selection_workspace_capture();
+    if selection_polish_plan(selection_opt.as_ref()) == SelectionPolishPlan::NoSelection {
         let code = "selectionPolishNoSelection";
         finish_selection_polish_capsule(
             inner,
@@ -156,7 +155,7 @@ pub(super) async fn run_selection_polish(inner: &Arc<Inner>) -> Result<(), Strin
         );
         return Err(code.to_string());
     }
-    let selection = capture.selection.expect("selection plan checked above");
+    let selection = selection_opt.expect("selection plan checked above");
     if !crate::selection::selection_insertion_target_is_captured(&insertion_target) {
         let code = "selectionPolishTargetUnavailable";
         finish_selection_polish_capsule(

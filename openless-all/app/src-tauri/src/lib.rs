@@ -30,6 +30,8 @@ mod commands;
 mod coordinator;
 mod coordinator_state;
 mod correction;
+mod edit_plan;
+mod selection_voice_intent;
 // 托盘麦克风设备变更监听：macOS CoreAudio / Windows MMDevice 原生通知（空闲零唤醒），
 // Linux 退化为纯轮询兜底。仅桌面端。详见 issue #470。
 #[cfg(not(mobile))]
@@ -141,6 +143,9 @@ use crate::types::{PolishMode, StylePack, StylePackKind};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    asr::local::run_mlx_worker_if_requested();
+
     #[cfg(mobile)]
     {
         mobile_runtime::run();
@@ -273,6 +278,19 @@ macro_rules! app_invoke_handler_desktop {
             commands::get_qa_hotkey_label,
             commands::set_qa_hotkey,
             commands::set_selection_polish_hotkey,
+            #[cfg(all(not(mobile), target_os = "windows"))]
+            commands::get_selection_voice_intent_prompt,
+            #[cfg(all(not(mobile), target_os = "windows"))]
+            commands::confirm_selection_voice_intent_prompt,
+            #[cfg(all(not(mobile), target_os = "windows"))]
+            commands::cancel_selection_voice_intent_prompt,
+            #[cfg(all(not(mobile), target_os = "windows"))]
+            commands::get_selection_voice_preview,
+            #[cfg(all(not(mobile), target_os = "windows"))]
+            commands::confirm_selection_voice_preview,
+            #[cfg(all(not(mobile), target_os = "windows"))]
+            #[cfg(all(not(mobile), target_os = "windows"))]
+            commands::revert_selection_voice_preview,
             commands::validate_shortcut_binding,
             commands::set_dictation_hotkey,
             commands::set_translation_hotkey,
@@ -282,6 +300,7 @@ macro_rules! app_invoke_handler_desktop {
             commands::qa_window_dismiss,
             commands::qa_toggle_recording,
             commands::qa_submit_text,
+            commands::qa_set_edit_instruction_mode,
             commands::less_computer_window_dismiss,
             commands::less_computer_window_open,
             commands::chat_panel_focus_keyboard,
@@ -442,6 +461,7 @@ macro_rules! app_invoke_handler_mobile {
             $crate::commands::qa_window_dismiss,
             $crate::commands::qa_toggle_recording,
             $crate::commands::qa_submit_text,
+            $crate::commands::qa_set_edit_instruction_mode,
             $crate::commands::repolish,
             $crate::commands::list_style_packs,
             $crate::commands::create_style_pack_from_template,
@@ -808,6 +828,7 @@ fn run_desktop() {
                 // 同步启动 QA hotkey listener。和 dictation hotkey 平行，互不抢状态。
                 coordinator.start_qa_hotkey_listener();
                 coordinator.start_selection_polish_hotkey_listener();
+                // 选区语音复用选区润色热键，不再单独注册 voice hotkey。
                 // 启动「快速 Agent」双热键监听（功能默认关闭，启用后才注册）。
                 coordinator.start_coding_agent_hotkey_listener();
                 // 启动自定义组合键监听器。当 trigger == Custom 时替代 modifier-only 监听器。
@@ -2660,6 +2681,65 @@ pub(crate) fn hide_selection_polish_preview<R: tauri::Runtime>(app: &AppHandle<R
         let _ = window.hide();
     }
 }
+
+/// 选区语音：说完后由用户选择提问或编辑。
+#[cfg(all(not(mobile), target_os = "windows"))]
+fn ensure_selection_voice_intent_prompt_window<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+) -> Option<tauri::WebviewWindow<R>> {
+    if let Some(window) = app.get_webview_window("selection-voice-intent") {
+        return Some(window);
+    }
+    WebviewWindowBuilder::new(
+        app,
+        "selection-voice-intent",
+        WebviewUrl::App("index.html?window=selection-voice-intent".into()),
+    )
+    .title("OpenLess 选区语音")
+    .inner_size(420.0, 280.0)
+    .min_inner_size(360.0, 240.0)
+    .resizable(true)
+    .always_on_top(true)
+    .visible(false)
+    .build()
+    .map(Some)
+    .unwrap_or_else(|error| {
+        log::warn!("[selection-voice] create intent prompt window failed: {error}");
+        None
+    })
+}
+
+#[cfg(all(not(mobile), target_os = "windows"))]
+pub(crate) fn show_selection_voice_intent_prompt<R: tauri::Runtime>(app: &AppHandle<R>) {
+    let Some(window) = ensure_selection_voice_intent_prompt_window(app) else {
+        return;
+    };
+    if let Err(error) = window.show() {
+        log::warn!("[selection-voice] show intent prompt failed: {error}");
+        return;
+    }
+    if let Err(error) = window.set_focus() {
+        log::warn!("[selection-voice] focus intent prompt failed: {error}");
+    }
+    let _ = app.emit_to(
+        "selection-voice-intent",
+        "selection-voice-intent:shown",
+        (),
+    );
+}
+
+#[cfg(not(all(not(mobile), target_os = "windows")))]
+pub(crate) fn show_selection_voice_intent_prompt<R: tauri::Runtime>(_app: &AppHandle<R>) {}
+
+#[cfg(all(not(mobile), target_os = "windows"))]
+pub(crate) fn hide_selection_voice_intent_prompt<R: tauri::Runtime>(app: &AppHandle<R>) {
+    if let Some(window) = app.get_webview_window("selection-voice-intent") {
+        let _ = window.hide();
+    }
+}
+
+#[cfg(not(all(not(mobile), target_os = "windows")))]
+pub(crate) fn hide_selection_voice_intent_prompt<R: tauri::Runtime>(_app: &AppHandle<R>) {}
 
 // ───────────────────────── Less Computer 浮窗 ─────────────────────────
 //

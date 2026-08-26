@@ -55,6 +55,16 @@ export const ja: typeof zhCN = {
     applyError: '適用できません：',
     confirmReplace: '確認して置き換え',
   },
+  selectionVoiceIntent: {
+    title: 'どうしますか？',
+    subtitle: '音声指示を認識しました。処理方法を選んでください。',
+    loading: '読み込み中…',
+    sourcePrefix: '選択範囲：',
+    errorPrefix: '続行できません：',
+    question: '質問する',
+    edit: '選択範囲を編集',
+    cancel: 'キャンセル',
+  },
   qa: {
     title: '質問',
     headerHint: 'いつでも質問',
@@ -81,6 +91,10 @@ export const ja: typeof zhCN = {
     statusThinking: '思考中',
     statusError: 'エラー',
     jumpToLatest: '最新へ移動',
+    editApplyReplace: 'プレビューして挿入を確認',
+    editApplyUnavailable: '適用できる編集結果がありません',
+    editRevertPrevious: '前のバージョンを保持',
+    editInstructionMode: '編集指示',
   },
   lessComputer: {
     title: 'Less Computer',
@@ -690,6 +704,20 @@ export const ja: typeof zhCN = {
     },
   },
   settings: {
+    selectionWorkspace: {
+      title: '選択範囲アシスタント',
+      hint: 'テキスト選択後、同じショートカットで：音声編集オフ時は推敲、オン時は押しながら話してから「質問」か「編集」を選択。',
+      polishHotkey: '選択範囲アシスタントのショートカット',
+      polishHotkeyDesc: '音声編集オフ時は推敲、オン時は押しながら話す（録音方式はグローバル設定に従う）。',
+      polishDelivery: '結果の処理',
+      voiceDeliveryDesc: '音声編集後：選択範囲を直接置換するか、Ask パネルで確認してから置換します。',
+      voiceEnable: '音声編集',
+      voiceEnableDesc: '上と同じショートカットを使用。録音方式はグローバル設定に従います（現在：{{recordingLabel}}）。',
+      autoIntent: '意図を自動判定',
+      autoIntentDesc: 'オン時は設定モデルが質問/編集を判定。モデル失敗時のみ？/疑問語ヒューリスティックにフォールバック。',
+      editKeywords: '追加の疑問手がかり',
+      editKeywordsDesc: '自動判定オフ時のみ。1行1語で質問扱い。なければ？/疑問語ヒューリスティック。',
+    },
     selectionPolish: {
       title: '選択範囲の推敲',
       hotkey: '起動ショートカット',

@@ -100,6 +100,82 @@ pub struct SelectionCaptureOutcome {
     pub selection: Option<SelectionContext>,
 }
 
+#[derive(Debug, Clone)]
+struct PrefetchedSelectionWorkspace {
+    selection: SelectionContext,
+    insertion_target: SelectionInsertionTarget,
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+static PREFETCHED_SELECTION_WORKSPACE: std::sync::Mutex<Option<PrefetchedSelectionWorkspace>> =
+    std::sync::Mutex::new(None);
+
+/// 在修饰键热键边沿、目标应用尚未因 Alt 菜单等副作用丢失选区之前，抢先快照选区。
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+pub(crate) fn prefetch_selection_workspace_capture() {
+    let insertion_target = capture_selection_insertion_target();
+    let capture = capture_selection_with_status();
+    let mut guard = PREFETCHED_SELECTION_WORKSPACE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    match capture.selection {
+        Some(selection) => {
+            let chars = selection.text.chars().count();
+            log::info!(
+                "[selection] prefetched workspace selection ({} chars)",
+                chars
+            );
+            *guard = Some(PrefetchedSelectionWorkspace {
+                selection,
+                insertion_target,
+            });
+        }
+        None => {
+            log::info!("[selection] prefetch missed (no selection at hotkey edge)");
+            guard.take();
+        }
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+pub(crate) fn take_prefetched_selection_workspace(
+) -> Option<(SelectionContext, SelectionInsertionTarget)> {
+    PREFETCHED_SELECTION_WORKSPACE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .take()
+        .map(|prefetched| (prefetched.selection, prefetched.insertion_target))
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+pub(crate) fn prefetch_selection_workspace_capture() {}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+pub(crate) fn take_prefetched_selection_workspace(
+) -> Option<(SelectionContext, SelectionInsertionTarget)> {
+    None
+}
+
+/// 优先消费热键边沿预取的选区；若无预取则回退到即时捕获。
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+pub(crate) fn resolve_selection_workspace_capture(
+) -> (Option<SelectionContext>, SelectionInsertionTarget) {
+    if let Some((selection, insertion_target)) = take_prefetched_selection_workspace() {
+        return (Some(selection), insertion_target);
+    }
+    let insertion_target = capture_selection_insertion_target();
+    let capture = capture_selection_with_status();
+    (capture.selection, insertion_target)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+pub(crate) fn resolve_selection_workspace_capture(
+) -> (Option<SelectionContext>, SelectionInsertionTarget) {
+    let insertion_target = capture_selection_insertion_target();
+    let capture = capture_selection_with_status();
+    (capture.selection, insertion_target)
+}
+
 /// Snapshot the insertion target before starting an asynchronous Selection
 /// Polish request.  Windows is intentionally fail-closed when this cannot
 /// identify a concrete foreground target; macOS records the frontmost app so

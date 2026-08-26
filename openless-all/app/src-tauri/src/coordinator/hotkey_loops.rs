@@ -400,20 +400,55 @@ fn update_selection_polish_hotkey_on_main_thread(
 #[cfg(not(mobile))]
 fn selection_polish_hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<ComboHotkeyEvent>) {
     while let Ok(event) = rx.recv() {
-        if inner.shortcut_recording_active.load(Ordering::SeqCst)
-            || !matches!(event, ComboHotkeyEvent::Pressed { .. })
-        {
+        if inner.shortcut_recording_active.load(Ordering::SeqCst) {
             continue;
         }
-        let coordinator = Coordinator {
-            inner: Arc::clone(&inner),
-        };
-        async_runtime::spawn(async move {
-            if let Err(error) = coordinator.trigger_selection_polish().await {
-                log::warn!("[selection-polish] combo hotkey workflow failed: {error}");
+        match event {
+            ComboHotkeyEvent::Pressed { .. } => {
+                crate::selection::prefetch_selection_workspace_capture();
+                handle_selection_workspace_hotkey_pressed(&inner);
             }
+            ComboHotkeyEvent::Released { .. } => {
+                handle_selection_workspace_hotkey_released(&inner);
+            }
+        }
+    }
+}
+
+#[cfg(not(mobile))]
+fn handle_selection_workspace_hotkey_pressed(inner: &Arc<Inner>) {
+    #[cfg(target_os = "windows")]
+    if inner.prefs.get().selection_voice_enabled {
+        let inner_cloned = Arc::clone(inner);
+        async_runtime::spawn(async move {
+            super::selection_voice_session::handle_selection_voice_pressed(&inner_cloned).await;
+        });
+        return;
+    }
+    let coordinator = Coordinator {
+        inner: Arc::clone(inner),
+    };
+    async_runtime::spawn(async move {
+        if let Err(error) = coordinator.trigger_selection_polish().await {
+            log::warn!("[selection-polish] hotkey workflow failed: {error}");
+        }
+    });
+}
+
+#[cfg(not(mobile))]
+fn handle_selection_workspace_hotkey_released(inner: &Arc<Inner>) {
+    #[cfg(target_os = "windows")]
+    {
+        if !inner.prefs.get().selection_voice_enabled {
+            return;
+        }
+        let inner_cloned = Arc::clone(inner);
+        async_runtime::spawn(async move {
+            super::selection_voice_session::handle_selection_voice_released(&inner_cloned).await;
         });
     }
+    #[cfg(not(target_os = "windows"))]
+    let _ = inner;
 }
 
 #[cfg(not(mobile))]
@@ -587,7 +622,7 @@ pub(super) fn less_computer_modifier_bridge_loop(
             // combo_abort_bridge_loop（见各自函数注释）。
             HotkeyEvent::TranslationModifierPressed | HotkeyEvent::QaShortcutPressed => {}
             #[cfg(not(mobile))]
-            HotkeyEvent::SelectionPolishShortcutPressed => {}
+            HotkeyEvent::SelectionPolishShortcutPressed | HotkeyEvent::SelectionPolishShortcutReleased => {}
             #[cfg(not(mobile))]
             HotkeyEvent::FnRecordingPressed => {}
         }
@@ -1614,17 +1649,11 @@ pub(super) fn hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<HotkeyEve
             }
             #[cfg(not(mobile))]
             HotkeyEvent::SelectionPolishShortcutPressed => {
-                let coordinator = Coordinator {
-                    inner: Arc::clone(&inner_cloned),
-                };
-                // Selection Polish has no paired release edge. Run the cloud
-                // workflow independently so its network wait cannot stall the
-                // shared modifier-key bridge (Esc, dictation, QA, etc.).
-                async_runtime::spawn(async move {
-                    if let Err(error) = coordinator.trigger_selection_polish().await {
-                        log::warn!("[selection-polish] hotkey workflow failed: {error}");
-                    }
-                });
+                handle_selection_workspace_hotkey_pressed(&inner_cloned);
+            }
+            #[cfg(not(mobile))]
+            HotkeyEvent::SelectionPolishShortcutReleased => {
+                handle_selection_workspace_hotkey_released(&inner_cloned);
             }
             // 非录制态不会出现（CGEventTap 仅在 recording_active 时上报）；防御性忽略。
             #[cfg(not(mobile))]
