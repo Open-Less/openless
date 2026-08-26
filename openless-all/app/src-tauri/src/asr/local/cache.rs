@@ -141,23 +141,36 @@ impl LocalAsrCache {
         false
     }
 
+    /// 从 cache 立刻驱逐，但不终止仍持有引擎的并发会话。会话结束、取消或超时后的
+    /// 自动清理走这里，避免一个会话误杀另一个共享 MLX worker 的在途转写。
+    pub fn evict_now(&self) {
+        self.release_now_inner(false);
+    }
+
     /// 立刻释放（用户点"立即释放"、切走 provider、删模型时调）。
     pub fn release_now(&self) {
+        self.release_now_inner(true);
+    }
+
+    fn release_now_inner(&self, abort_in_use: bool) {
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         {
             let taken = self.inner.lock().take();
             if let Some(cached) = taken {
+                let action = if abort_in_use { "release" } else { "evict" };
                 log::info!(
-                    "[local-asr cache] release engine {} on demand",
-                    cached.model_id
+                    "[local-asr cache] {action} engine {}",
+                    cached.model_id,
                 );
-                if Arc::strong_count(&cached.engine) > 1 {
+                if abort_in_use && Arc::strong_count(&cached.engine) > 1 {
                     cached.engine.cancel();
                 }
                 drop(cached);
                 pressure_relief();
             }
         }
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        let _ = abort_in_use;
     }
 
     pub fn loaded_model_id(&self) -> Option<String> {

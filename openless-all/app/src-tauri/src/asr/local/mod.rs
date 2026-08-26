@@ -145,6 +145,24 @@ impl LocalQwenEngine {
         }
     }
 
+    pub fn next_operation_id(&self) -> u64 {
+        match self {
+            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+            Self::Mlx(engine) => engine.next_operation_id(),
+            Self::C(_) => 0,
+        }
+    }
+
+    pub fn cancel_operation(&self, operation_id: u64) {
+        match self {
+            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+            Self::Mlx(engine) => engine.cancel_operation(operation_id),
+            Self::C(_) => {
+                let _ = operation_id;
+            }
+        }
+    }
+
     pub fn cancel(&self) {
         match self {
             #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
@@ -165,6 +183,8 @@ impl LocalQwenEngine {
     /// 走流式解码，并将稳定 token 交给调用方实时显示。
     pub fn transcribe_dictation_with_handler<F>(
         &self,
+        operation_id: u64,
+        cancelled: &std::sync::atomic::AtomicBool,
         mut samples: Vec<f32>,
         handler: F,
     ) -> anyhow::Result<String>
@@ -173,8 +193,11 @@ impl LocalQwenEngine {
     {
         match self {
             #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-            Self::Mlx(engine) => engine.transcribe_pcm(&samples),
+            Self::Mlx(engine) => {
+                engine.transcribe_pcm_for_operation(operation_id, &samples, cancelled)
+            }
             Self::C(engine) => {
+                let _ = (operation_id, cancelled);
                 append_c_stream_tail_padding(&mut samples);
                 engine.transcribe_stream_with_handler(&samples, handler)
             }

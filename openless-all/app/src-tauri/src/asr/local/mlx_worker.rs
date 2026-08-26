@@ -56,6 +56,8 @@ enum MlxErrorCode {
     AllocationFailure,
     NativeProcessExit,
     Timeout,
+    Busy,
+    Cancelled,
     Io,
 }
 
@@ -295,6 +297,8 @@ fn user_error(code: MlxErrorCode) -> anyhow::Error {
         MlxErrorCode::WorkerStart => "MLX worker 启动失败",
         MlxErrorCode::NativeProcessExit => "MLX worker 异常退出",
         MlxErrorCode::Io => "MLX worker 通信失败",
+        MlxErrorCode::Busy => "MLX worker 正在处理另一个转写请求",
+        MlxErrorCode::Cancelled => "MLX worker 转写已取消",
     };
     anyhow::anyhow!(message)
 }
@@ -307,9 +311,26 @@ pub(super) struct MlxWorkerClient {
     last_exit_status: Mutex<Option<String>>,
     healthy: AtomicBool,
     next_request_id: AtomicU64,
+    next_operation_id: AtomicU64,
+    active_operation: Mutex<Option<u64>>,
     last_phase: Mutex<WorkerPhase>,
     diagnostics: Diagnostics,
     capture_threads: Mutex<Vec<JoinHandle<()>>>,
+}
+
+struct ActiveOperationGuard<'a> {
+    active_operation: &'a Mutex<Option<u64>>,
+    operation_id: u64,
+}
+
+impl Drop for ActiveOperationGuard<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut active) = self.active_operation.lock() {
+            if *active == Some(self.operation_id) {
+                *active = None;
+            }
+        }
+    }
 }
 
 impl MlxWorkerClient {
@@ -434,6 +455,8 @@ impl MlxWorkerClient {
             last_exit_status: Mutex::new(None),
             healthy: AtomicBool::new(true),
             next_request_id: AtomicU64::new(1),
+            next_operation_id: AtomicU64::new(1),
+            active_operation: Mutex::new(None),
             last_phase: Mutex::new(WorkerPhase::Handshake),
             diagnostics,
             capture_threads: Mutex::new(capture_threads),
@@ -457,6 +480,10 @@ impl MlxWorkerClient {
 
     fn next_request_id(&self) -> u64 {
         self.next_request_id.fetch_add(1, Ordering::Relaxed)
+    }
+
+    pub(super) fn next_operation_id(&self) -> u64 {
+        self.next_operation_id.fetch_add(1, Ordering::Relaxed)
     }
 
     fn handshake(&self, timeout: Duration) -> Result<()> {
@@ -554,6 +581,17 @@ impl MlxWorkerClient {
     }
 
     pub(super) fn transcribe_pcm(&self, samples: &[f32]) -> Result<String> {
+        let cancelled = AtomicBool::new(false);
+        self.transcribe_pcm_for_operation(self.next_operation_id(), samples, &cancelled)
+    }
+
+    pub(super) fn transcribe_pcm_for_operation(
+        &self,
+        operation_id: u64,
+        samples: &[f32],
+        cancelled: &AtomicBool,
+    ) -> Result<String> {
+        let _operation = self.claim_operation(operation_id, cancelled)?;
         if !self.is_healthy() {
             return Err(user_error(MlxErrorCode::NativeProcessExit));
         }
@@ -598,6 +636,41 @@ impl MlxWorkerClient {
                     ));
                 }
             }
+        }
+    }
+
+    fn claim_operation(
+        &self,
+        operation_id: u64,
+        cancelled: &AtomicBool,
+    ) -> Result<ActiveOperationGuard<'_>> {
+        // cancel() 先置 cancelled，再取同一把短锁检查 owner。这里在锁内同时检查
+        // 标志并登记 owner，封住“已取消但 blocking task 尚未开始”的竞态。
+        let mut active = self
+            .active_operation
+            .lock()
+            .map_err(|_| user_error(MlxErrorCode::Io))?;
+        if cancelled.load(Ordering::Acquire) {
+            return Err(user_error(MlxErrorCode::Cancelled));
+        }
+        if active.is_some() {
+            return Err(user_error(MlxErrorCode::Busy));
+        }
+        *active = Some(operation_id);
+        Ok(ActiveOperationGuard {
+            active_operation: &self.active_operation,
+            operation_id,
+        })
+    }
+
+    pub(super) fn cancel_operation(&self, operation_id: u64) {
+        let owns_worker = self
+            .active_operation
+            .lock()
+            .map(|active| *active == Some(operation_id))
+            .unwrap_or(false);
+        if owns_worker {
+            self.abort();
         }
     }
 
@@ -1154,6 +1227,8 @@ mod tests {
             last_exit_status: Mutex::new(None),
             healthy: AtomicBool::new(true),
             next_request_id: AtomicU64::new(10),
+            next_operation_id: AtomicU64::new(1),
+            active_operation: Mutex::new(None),
             last_phase: Mutex::new(WorkerPhase::Inference),
             diagnostics: Diagnostics::default(),
             capture_threads: Mutex::new(Vec::new()),
@@ -1570,6 +1645,111 @@ mod tests {
         assert_eq!(error.to_string(), "MLX worker 异常退出");
         assert_eq!(client.phase(), WorkerPhase::Inference);
         assert!(!Path::new(&path_rx.recv().unwrap()).exists());
+        assert!(!client.is_healthy());
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn cancelling_non_owner_does_not_abort_active_operation_and_busy_is_explicit() {
+        let dir = test_dir();
+        let (client_stream, mut worker_stream) = UnixStream::pair().unwrap();
+        let client = Arc::new(test_client(client_stream, dir, sleeping_child()));
+        let active_operation = client.next_operation_id();
+        let other_operation = client.next_operation_id();
+        let active_cancelled = Arc::new(AtomicBool::new(false));
+        let other_cancelled = AtomicBool::new(false);
+        let (request_tx, request_rx) = mpsc::channel();
+        let (finish_tx, finish_rx) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            let request = read_frame::<WorkerRequest>(&mut worker_stream)
+                .unwrap()
+                .unwrap();
+            let WorkerRequest::Transcribe { request_id, .. } = request else {
+                panic!("expected transcribe request");
+            };
+            request_tx.send(()).unwrap();
+            finish_rx.recv().unwrap();
+            write_frame(
+                &mut worker_stream,
+                &WorkerResponse::Transcript {
+                    request_id,
+                    text: "active".to_string(),
+                },
+            )
+            .unwrap();
+        });
+        let transcribing = {
+            let client = Arc::clone(&client);
+            let cancelled = Arc::clone(&active_cancelled);
+            thread::spawn(move || {
+                client.transcribe_pcm_for_operation(active_operation, &[0.0], &cancelled)
+            })
+        };
+        request_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+
+        let error = client
+            .transcribe_pcm_for_operation(other_operation, &[0.0], &other_cancelled)
+            .unwrap_err();
+        assert_eq!(error.to_string(), "MLX worker 正在处理另一个转写请求");
+        other_cancelled.store(true, Ordering::Release);
+        client.cancel_operation(other_operation);
+        assert!(client.is_healthy());
+
+        finish_tx.send(()).unwrap();
+        assert_eq!(transcribing.join().unwrap().unwrap(), "active");
+        worker.join().unwrap();
+        client.abort();
+    }
+
+    #[test]
+    fn cancelling_before_registration_prevents_the_operation_without_aborting_worker() {
+        let dir = test_dir();
+        let (client_stream, _worker_stream) = UnixStream::pair().unwrap();
+        let client = test_client(client_stream, dir, sleeping_child());
+        let operation_id = client.next_operation_id();
+        let cancelled = AtomicBool::new(true);
+
+        client.cancel_operation(operation_id);
+        let error = client
+            .transcribe_pcm_for_operation(operation_id, &[0.0], &cancelled)
+            .unwrap_err();
+
+        assert_eq!(error.to_string(), "MLX worker 转写已取消");
+        assert!(client.is_healthy());
+        client.abort();
+    }
+
+    #[test]
+    fn cancelling_owner_unblocks_its_inflight_request() {
+        let dir = test_dir();
+        let (client_stream, mut worker_stream) = UnixStream::pair().unwrap();
+        let client = Arc::new(test_client(client_stream, dir, sleeping_child()));
+        let operation_id = client.next_operation_id();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let (request_tx, request_rx) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            let request = read_frame::<WorkerRequest>(&mut worker_stream)
+                .unwrap()
+                .unwrap();
+            assert!(matches!(request, WorkerRequest::Transcribe { .. }));
+            request_tx.send(()).unwrap();
+            thread::sleep(Duration::from_secs(1));
+        });
+        let transcribing = {
+            let client = Arc::clone(&client);
+            let cancelled = Arc::clone(&cancelled);
+            thread::spawn(move || {
+                client.transcribe_pcm_for_operation(operation_id, &[0.0], &cancelled)
+            })
+        };
+        request_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+
+        cancelled.store(true, Ordering::Release);
+        let started = Instant::now();
+        client.cancel_operation(operation_id);
+
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(transcribing.join().unwrap().is_err());
         assert!(!client.is_healthy());
         worker.join().unwrap();
     }

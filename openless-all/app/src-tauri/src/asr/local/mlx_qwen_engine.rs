@@ -5,6 +5,7 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::sync::atomic::AtomicBool;
 
 use super::mlx_worker::MlxWorkerClient;
 use anyhow::{Context, Result};
@@ -22,6 +23,24 @@ impl MlxQwenAsrEngine {
 
     pub fn transcribe_pcm(&self, samples: &[f32]) -> Result<String> {
         self.worker.transcribe_pcm(samples)
+    }
+
+    pub fn next_operation_id(&self) -> u64 {
+        self.worker.next_operation_id()
+    }
+
+    pub fn transcribe_pcm_for_operation(
+        &self,
+        operation_id: u64,
+        samples: &[f32],
+        cancelled: &AtomicBool,
+    ) -> Result<String> {
+        self.worker
+            .transcribe_pcm_for_operation(operation_id, samples, cancelled)
+    }
+
+    pub fn cancel_operation(&self, operation_id: u64) {
+        self.worker.cancel_operation(operation_id);
     }
 
     pub fn abort(&self) {

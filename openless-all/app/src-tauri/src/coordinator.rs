@@ -1664,7 +1664,7 @@ impl Coordinator {
     }
 
     fn release_local_asr_engines(&self, release_qwen: bool, release_whisper: bool) {
-        release_local_asr_engines_now(&self.inner, release_qwen, release_whisper);
+        abort_local_asr_engines_now(&self.inner, release_qwen, release_whisper);
     }
 
     /// 释放当前缓存的本地 ASR 引擎（用户主动点 / 或 删除模型时调）。
