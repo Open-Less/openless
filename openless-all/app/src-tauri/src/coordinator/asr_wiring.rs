@@ -556,7 +556,7 @@ fn load_current_local_qwen_engine(
         .get_or_load(backend, model_id, model_dir)?;
     if !target_is_current() {
         drop(engine);
-        release_local_asr_engines_locked(inner, true, false);
+        release_local_asr_engines_locked(inner, true, false, true);
         anyhow::bail!("本地 Qwen3-ASR 加载期间目标已切换，丢弃旧后端");
     }
     Ok(engine)
@@ -653,7 +653,7 @@ fn load_current_local_whisper_engine(
         .get_or_load(model_id, model_path)?;
     if !target_is_current() {
         drop(engine);
-        release_local_asr_engines_locked(inner, false, true);
+        release_local_asr_engines_locked(inner, false, true, true);
         anyhow::bail!("本地 Whisper 加载期间目标已切换，丢弃旧后端");
     }
     Ok(engine)
