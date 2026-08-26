@@ -930,9 +930,11 @@ impl OpenAICompatibleLLMProvider {
         let response = tokio::select! {
             _ = wait_until_cancelled(&should_cancel) => {
                 log::info!("[llm] polish stream cancelled by caller before response arrived");
+                // status 用 0 而不是 200：这条路径上一个 HTTP 响应字节都没收到，
+                // 编一个 200 会让日志读起来像「服务端回了 200 但内容为空」，把排查带偏。
                 return Err(LLMError::InvalidResponse {
-                    status: 200,
-                    body: "empty polish stream".to_string(),
+                    status: 0,
+                    body: "polish stream cancelled before response arrived".to_string(),
                 });
             }
             result = send_with_transient_retry(request) => result?,
@@ -2927,10 +2929,9 @@ mod tests {
         drop(server);
     }
 
-    /// 服务端 accept 了连接、收到了请求，但一个字节都不回——这正是本机日志复现的真实
-    /// 故障（润色阶段配置 deepseek-v4-flash 时，取消要等 32~53s 才生效，胶囊卡死到只能
-    /// 强制重启 App）。取消信号必须在 ~75ms 轮询周期内生效，不能悬挂到 first_token 预算
-    /// （这里刻意设得很长）自然到点才被看到。
+    /// 覆盖**建连/请求写出**阶段的取消：服务端 accept 了连接、收到了请求，但连状态行都
+    /// 不回，`send_with_transient_retry` 因此一直不 resolve。这一路锁的是 `send` 之前那个
+    /// `select!`。真实故障（0 deltas 后卡住）走的是下面 `cancellation_mid_stream_*` 那条。
     #[tokio::test]
     async fn cancellation_before_response_arrives_does_not_wait_out_the_budget() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -2970,6 +2971,63 @@ mod tests {
             elapsed < std::time::Duration::from_secs(2),
             "取消应在一个轮询周期内生效，而不是等 30s 的首字预算，实际耗时 {elapsed:?}"
         );
+        assert!(
+            matches!(err, LLMError::InvalidResponse { status: 0, .. }),
+            "got {err:?}"
+        );
+        drop(server);
+    }
+
+    /// 覆盖 **SSE 循环内**的取消，也就是 issue #1000 日志里真正发生的那条路径：日志打出了
+    /// `cancelled by caller after 0 deltas ... breaking SSE loop`，说明 response 头已经到达、
+    /// 代码已经进了循环，卡住的是 `response.chunk()` 那一次 await。
+    ///
+    /// 这里服务端立刻回 200 header（客户端由此进入 SSE 循环），随后长时间不发任何 delta。
+    /// 若把循环里的 `select!` 还原成「只在循环顶部查一次 should_cancel」，本用例会一直等到
+    /// 30s 首字预算耗尽才返回 `Timeout`，两条断言都会失败——它锁住的正是本次修复的核心。
+    #[tokio::test]
+    async fn cancellation_mid_stream_does_not_wait_out_the_budget() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            read_http_request(&mut stream);
+            // header 立刻回，body 迟迟不来：模拟「连接活着、模型一个字都不吐」。
+            let never = content_event("永远来不了");
+            write_chunked_sse_response_with_delays(
+                &mut stream,
+                &[(never.as_slice(), std::time::Duration::from_secs(5))],
+            );
+        });
+
+        let cancelled = std::sync::Arc::new(AtomicBool::new(false));
+        let cancelled_setter = cancelled.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            cancelled_setter.store(true, Ordering::SeqCst);
+        });
+
+        let timeouts = StreamingTimeouts {
+            first_token: std::time::Duration::from_secs(30),
+            idle: std::time::Duration::from_secs(30),
+        };
+        let started = std::time::Instant::now();
+        let err = streaming_test_provider(addr)
+            .chat_completion_messages_streaming(
+                test_messages(),
+                timeouts,
+                |_| {},
+                move || cancelled.load(Ordering::SeqCst),
+            )
+            .await
+            .expect_err("一个 delta 都没收到就取消，最终应落到空流错误");
+        let elapsed = started.elapsed();
+
+        assert!(
+            elapsed < std::time::Duration::from_secs(2),
+            "SSE 循环内的取消应在一个轮询周期内生效，而不是等满首字预算，实际耗时 {elapsed:?}"
+        );
+        // 走的是「break 出循环 → full_text 为空」这条既有路径，status 200 是真实收到的。
         assert!(
             matches!(err, LLMError::InvalidResponse { status: 200, .. }),
             "got {err:?}"
