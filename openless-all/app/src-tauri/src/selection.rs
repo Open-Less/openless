@@ -742,21 +742,85 @@ fn simulate_copy_and_read_diag() -> Result<String, SelectionCaptureMissReason> {
     let Some(captured) = captured else {
         return Err(SelectionCaptureMissReason::ClipboardReadFailed);
     };
-    if captured == sentinel {
+
+    #[cfg(target_os = "macos")]
+    {
+        // macOS：无法确认 Ctrl+C 是否真的生效（Sentinel 方案）。
+        // captured == sentinel → 应用没写剪贴板（没选区 / Ctrl+C 未生效）
+        // captured != sentinel → 应用写了剪贴板
+        if captured == sentinel {
+            log::info!(
+                "[selection] DEBUG sentinel_check: sentinel_eq_captured=true sentinel_prefix='{}' captured_len={} original_was_some={}",
+                &sentinel[..32.min(sentinel.len())],
+                captured.len(),
+                original.is_some()
+            );
+            return Err(SelectionCaptureMissReason::ClipboardUnchangedSentinel);
+        }
         log::info!(
-            "[selection] DEBUG sentinel_check: sentinel_eq_captured=true sentinel_prefix='{}' captured_len={} original_was_some={}",
+            "[selection] DEBUG sentinel_check: sentinel_eq_captured=false sentinel_prefix='{}' captured_len={} captured_preview='{}'",
             &sentinel[..32.min(sentinel.len())],
             captured.len(),
-            original.is_some()
+            &captured[..captured.len().min(50)]
         );
-        return Err(SelectionCaptureMissReason::ClipboardUnchangedSentinel);
     }
-    log::info!(
-        "[selection] DEBUG sentinel_check: sentinel_eq_captured=false sentinel_prefix='{}' captured_len={} captured_preview='{}'",
-        &sentinel[..32.min(sentinel.len())],
-        captured.len(),
-        &captured[..captured.len().min(50)]
-    );
+
+    #[cfg(target_os = "windows")]
+    {
+        // Windows：用内容变化检测替代 Sentinel 检查。
+        // Sentinel 检查过于严格——Chrome/VSCode/Notepad 等应用在焦点变化、UI 状态、
+        // 安全沙箱限制下，SendInput(Ctrl+C) 可能被应用忽略，导致剪贴板不更新。
+        // 但 `captured != sentinel && captured != original` 说明 Ctrl+C 确实触发了剪贴板写入。
+        //
+        // 场景分析（captured vs original vs sentinel）：
+        //   - captured=sentinel, original=Some("foo") → sentinel 未覆盖，应用无选区/未响应
+        //   - captured=sentinel, original=None → sentinel 未覆盖，应用无选区/未响应
+        //   - captured="foo", original=Some("foo") → 内容未变，应用可能有选区但内容相同
+        //   - captured="bar", original=Some("foo") → 应用写了新内容，选区有效
+        //   - captured="bar", original=None → 应用写了新内容，选区有效
+        //
+        // 核心判断：
+        //   captured == sentinel → 失败（应用未响应）
+        //   captured != sentinel && captured != original → 成功（应用写了新内容）
+        //   captured != sentinel && captured == original → 失败（应用未写新内容）
+        let original_str = original.as_ref().map(|s| s.as_str()).unwrap_or("");
+        let captured_changed = captured != sentinel && captured != original_str;
+        let app_responded = captured != sentinel;
+
+        if !app_responded {
+            // 应用未响应 Ctrl+C
+            log::info!(
+                "[selection] DEBUG windows_content_check: app_responded=false captured_is_sentinel=true original_was_some={}",
+                original.is_some()
+            );
+            return Err(SelectionCaptureMissReason::ClipboardUnchangedSentinel);
+        }
+
+        if captured_changed {
+            // 应用写了新内容——选区有效
+            log::info!(
+                "[selection] DEBUG windows_content_check: app_responded=true captured_changed=true captured_len={} captured_preview='{}'",
+                captured.len(),
+                &captured[..captured.len().min(50)]
+            );
+        } else {
+            // 应用未写新内容（内容与原内容相同或为空）
+            log::info!(
+                "[selection] DEBUG windows_content_check: app_responded=true captured_changed=false captured_len={} captured_preview='{}' original_was_some={}",
+                captured.len(),
+                &captured[..captured.len().min(50)],
+                original.is_some()
+            );
+            return Err(SelectionCaptureMissReason::ClipboardEmptyAfterCopy);
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        // Linux 不走此函数
+        unreachable!();
+    }
+
     if captured.is_empty() {
         return Err(SelectionCaptureMissReason::ClipboardEmptyAfterCopy);
     }
