@@ -2199,6 +2199,8 @@ pub(super) async fn begin_session_as(
             );
             restore_prepared_windows_ime_session(inner, current_session_id);
             inner.state.lock().phase = SessionPhase::Idle;
+            #[cfg(not(mobile))]
+            super::clear_remote_mic_path(inner, current_session_id);
             return Err(message);
         }
         if !remote {
@@ -2214,6 +2216,8 @@ pub(super) async fn begin_session_as(
                 );
                 restore_prepared_windows_ime_session(inner, current_session_id);
                 inner.state.lock().phase = SessionPhase::Idle;
+                #[cfg(not(mobile))]
+                super::clear_remote_mic_path(inner, current_session_id);
                 return Err(message);
             }
         }
@@ -2236,6 +2240,8 @@ pub(super) async fn begin_session_as(
         );
         restore_prepared_windows_ime_session(inner, current_session_id);
         inner.state.lock().phase = SessionPhase::Idle;
+        #[cfg(not(mobile))]
+        super::clear_remote_mic_path(inner, current_session_id);
         return Err(message);
     }
 
@@ -2259,6 +2265,8 @@ pub(super) async fn begin_session_as(
             restore_prepared_windows_ime_session(inner, current_session_id);
             inner.state.lock().phase = SessionPhase::Idle;
             schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
+            #[cfg(not(mobile))]
+            super::clear_remote_mic_path(inner, current_session_id);
             return Err(message);
         }
     };
@@ -2364,6 +2372,8 @@ pub(super) async fn begin_session_as(
                 restore_prepared_windows_ime_session(inner, current_session_id);
                 inner.state.lock().phase = SessionPhase::Idle;
                 schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
+                #[cfg(not(mobile))]
+                super::clear_remote_mic_path(inner, current_session_id);
                 return Err(format!("sherpa-onnx init failed: {e}"));
             }
         };
@@ -2398,6 +2408,8 @@ pub(super) async fn begin_session_as(
                         restore_prepared_windows_ime_session(inner, current_session_id);
                         inner.state.lock().phase = SessionPhase::Idle;
                         schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
+                        #[cfg(not(mobile))]
+                        super::clear_remote_mic_path(inner, current_session_id);
                         return Err(format!("local ASR init failed: {e}"));
                     }
                 };
@@ -2454,6 +2466,8 @@ pub(super) async fn begin_session_as(
                         restore_prepared_windows_ime_session(inner, current_session_id);
                         inner.state.lock().phase = SessionPhase::Idle;
                         schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
+                        #[cfg(not(mobile))]
+                        super::clear_remote_mic_path(inner, current_session_id);
                         return Err(format!("local Whisper init failed: {error}"));
                     }
                 };
@@ -3808,7 +3822,7 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
         release_recording_mute(inner, "dictation");
     }
     #[cfg(not(mobile))]
-    super::clear_remote_mic_path(inner);
+    super::clear_remote_mic_path(inner, current_session_id);
 
     // 多模态（Omni）模式：不走 ASR 转写 + LLM 润色，录音 PCM 直接编码 WAV，
     // 一次调用出最终文本（issue #902）。两套配置隔离，缺 omni 配置时明确报错。
@@ -5457,7 +5471,7 @@ pub(super) fn cancel_session(inner: &Arc<Inner>) -> bool {
     stop_recorder_for_session(inner, decision.session_id);
     cancel_asr_for_session(inner, decision.session_id);
     #[cfg(not(mobile))]
-    super::clear_remote_mic_path(inner);
+    super::clear_remote_mic_path(inner, decision.session_id);
     restore_prepared_windows_ime_session(inner, decision.session_id);
     true
 }

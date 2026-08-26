@@ -2576,7 +2576,6 @@ impl Coordinator {
     #[cfg(not(mobile))]
     pub fn cancel_remote_dictation(&self) {
         cancel_session(&self.inner);
-        clear_remote_mic_path(&self.inner);
     }
 
     #[cfg(not(mobile))]
@@ -6203,7 +6202,13 @@ fn schedule_selection_polish_capsule_idle(inner: &Arc<Inner>, event_epoch: u64, 
 }
 
 #[cfg(not(mobile))]
-fn clear_remote_mic_path(inner: &Inner) {
+fn clear_remote_mic_path(inner: &Inner, session_id: SessionId) {
+    if inner.state.lock().session_id != session_id {
+        log::info!(
+            "[coord] skip stale remote mic cleanup for session {session_id}"
+        );
+        return;
+    }
     *inner.remote_audio_sink.lock() = None;
     *inner.remote_pcm_bridge.lock() = None;
 }
