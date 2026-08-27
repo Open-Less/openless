@@ -14,14 +14,17 @@ assert.equal(
   "node scripts/stage-macos-mlx-metallib.mjs",
 )
 assert.equal(
-  overlay.bundle.macOS.files["MacOS/mlx.metallib"],
+  overlay.bundle.macOS.files["Resources/mlx.metallib"],
   "target/release/openless-mlx/mlx.metallib",
 )
+assert.equal(overlay.bundle.macOS.files["MacOS/mlx.metallib"], undefined)
 assert.match(buildScript, /arm64\)[\s\S]*tauri\.macos-mlx\.conf\.json/)
 assert.doesNotMatch(buildScript, /--bundles app/)
 assert.doesNotMatch(buildScript, /codesign --force/)
 assert.doesNotMatch(buildScript, /hdiutil create/)
 assert.match(buildScript, /OpenLess\.app\.tar\.gz/)
 assert.match(buildScript, /stapler validate/)
+assert.match(buildScript, /Contents\/Resources\/mlx\.metallib/)
+assert.match(buildScript, /Contents\/MacOS\/mlx\.metallib/)
 
 console.log("macOS MLX bundle contract tests passed")
