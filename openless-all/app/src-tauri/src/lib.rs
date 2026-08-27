@@ -14,11 +14,14 @@
 //! - coordinator: dictation state machine glue
 //! - commands: Tauri IPC surface
 
+// 让被内嵌复用的 popup 源码在 lib crate 中也能使用 `openless_lib::...` 路径。
+extern crate self as openless_lib;
+
 mod android;
-#[cfg(test)]
-mod build_target;
 mod asr;
 mod audio_mute;
+#[cfg(test)]
+mod build_target;
 mod cli;
 mod coding_agent;
 #[cfg(not(mobile))]
@@ -36,6 +39,9 @@ mod selection_voice_intent;
 // Linux 退化为纯轮询兜底。仅桌面端。详见 issue #470。
 #[cfg(not(mobile))]
 mod device_watch;
+// 桌面端 QA 面板统一使用 egui；选区润色预览仅 Linux 使用 egui。
+#[cfg(not(mobile))]
+pub mod egui_host;
 mod endpoint_security;
 mod external_url;
 #[cfg(not(mobile))]
@@ -131,8 +137,8 @@ use tauri::menu::{
 #[cfg(not(mobile))]
 use tauri::tray::{MouseButton, TrayIconBuilder, TrayIconEvent};
 use tauri::{
-    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, PhysicalPosition, PhysicalSize,
-    RunEvent, Runtime,
+    AppHandle, Emitter, Listener, LogicalPosition, LogicalSize, Manager, PhysicalPosition,
+    PhysicalSize, RunEvent, Runtime,
 };
 // 桌面专用：移动端 WebviewWindowBuilder 没有 decorations/shadow 等方法，懒创建只在桌面用。
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -507,6 +513,9 @@ fn run_desktop() {
     ));
     #[cfg(not(target_os = "windows"))]
     let coordinator = Arc::new(coordinator::Coordinator::new());
+    let egui_host: std::sync::Arc<dyn crate::egui_host::EguiHost> = std::sync::Arc::new(
+        crate::egui_host::CoordinatorHostAdapter::new(coordinator.clone()),
+    );
     #[cfg(target_os = "windows")]
     if let Err(error) = coordinator.sync_active_asr_provider_from_preferences() {
         log::warn!("[startup] sync active ASR provider from preferences failed: {error}");
@@ -565,6 +574,7 @@ fn run_desktop() {
             None,
         ))
         .manage(coordinator.clone())
+        .manage(egui_host.clone())
         .manage(local_asr_download_manager.clone())
         .manage(sherpa_download_manager.clone())
         .manage(foundry_local_runtime.clone())
@@ -815,6 +825,35 @@ fn run_desktop() {
             if let Some(intent) = cli::parse_cli_intent(&first_run_args) {
                 log::info!("[startup] first-run CLI intent={intent:?}, dispatching");
                 dispatch_cli_intent(app.handle(), intent);
+            }
+
+            // 桌面端 egui 浮窗：后端把 `qa:state` 发给 "qa" webview window。egui 版
+            // 没有该 window，但仍要收到状态事件驱动 QA 面板渲染——这里在宿主侧订阅
+            // 全局事件并转发到 egui host。
+            #[cfg(not(mobile))]
+            if crate::egui_host::enabled() {
+                // 用 listen_any：后端 emit_to("qa", ...) 只发给 "qa" window，
+                // 普通 listen（target=App）收不到；listen_any 能收到任意 target。
+                let _ = app.listen_any("qa:state", |event| {
+                    let payload = event.payload();
+                    match serde_json::from_str::<crate::egui_host::qa_event::QaStateEvent>(payload)
+                    {
+                        Ok(parsed) => crate::egui_host::push_qa_state(parsed),
+                        Err(error) => {
+                            log::warn!("[egui-host] parse qa:state failed: {error}");
+                        }
+                    }
+                });
+
+                // 临时验证钩子：OPENLESS_EGUI_TEST_QA=1 时启动即打开 QA 弹窗并注入演示状态。
+                // 验收后删除。
+                if std::env::var("OPENLESS_EGUI_TEST_QA").ok().as_deref() == Some("1") {
+                    if crate::egui_host::show_qa(app.handle()) {
+                        log::info!("[egui-host][test] qa egui_popup spawned via test hook");
+                    } else {
+                        log::warn!("[egui-host][test] qa show_qa returned false");
+                    }
+                }
             }
 
             Ok(())
@@ -2321,6 +2360,13 @@ pub(crate) fn show_qa_window<R: tauri::Runtime>(app: &AppHandle<R>, content_kind
         return;
     }
 
+    // 桌面端统一优先走 egui 原生 QA；启动失败时回退 WebView 版。
+    // egui 侧通过 lib.rs 的 app.listen("qa:state") 接收后续状态事件。
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    if crate::egui_host::show_qa(app) {
+        return;
+    }
+
     let Some(window) = ensure_qa_window(app) else {
         log::info!("[qa] show 跳过：qa 窗口不存在 (content_kind={content_kind})");
         return;
@@ -2623,6 +2669,12 @@ pub(crate) fn hide_qa_window<R: tauri::Runtime>(app: &AppHandle<R>) {
         return;
     }
 
+    // 桌面端 egui QA 的隐藏走宿主；WebView 回退窗不存在时静默。
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    if crate::egui_host::hide_qa() {
+        return;
+    }
+
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     hide_chat_window_animated(app, "qa", &QA_PANEL_EPOCH);
 }
@@ -2656,6 +2708,12 @@ fn ensure_selection_polish_preview_window<R: tauri::Runtime>(
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub(crate) fn show_selection_polish_preview<R: tauri::Runtime>(app: &AppHandle<R>) {
+    // Linux：优先走 egui 原生浮窗；未启用（禁用/失败）回退 WebView 版。
+    #[cfg(target_os = "linux")]
+    if crate::egui_host::show_preview(app) {
+        return;
+    }
+
     let Some(window) = ensure_selection_polish_preview_window(app) else {
         return;
     };
@@ -2677,6 +2735,12 @@ pub(crate) fn show_selection_polish_preview<R: tauri::Runtime>(app: &AppHandle<R
 pub(crate) fn show_selection_polish_preview<R: tauri::Runtime>(_app: &AppHandle<R>) {}
 
 pub(crate) fn hide_selection_polish_preview<R: tauri::Runtime>(app: &AppHandle<R>) {
+    // Linux：egui 浮窗的隐藏走宿主；WebView 版不存在时静默。
+    #[cfg(target_os = "linux")]
+    if crate::egui_host::hide_preview() {
+        return;
+    }
+
     if let Some(window) = app.get_webview_window("selection-polish-preview") {
         let _ = window.hide();
     }

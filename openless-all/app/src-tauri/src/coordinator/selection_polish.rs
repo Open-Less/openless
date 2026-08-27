@@ -100,7 +100,8 @@ impl Drop for SelectionPolishBusyGuard<'_> {
 
 /// 面向 capsule 的短提示必须是稳定、无敏感信息的用户文案。底层 provider 错误仍写入
 /// 日志并作为调用结果返回，但不会把 endpoint / 认证等实现细节浮到用户正在输入的应用上。
-fn selection_polish_feedback_message(code: &str) -> &'static str {
+/// `pub(crate)` 供 egui 预览窗（egui_host::polish_preview）复用同一套提示文案。
+pub(crate) fn selection_polish_feedback_message(code: &str) -> &'static str {
     match code {
         "selectionPolishNoSelection" => "未选中内容",
         "selectionPolishEmptyOutput" => "未生成可替换文本",
