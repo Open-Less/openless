@@ -430,7 +430,9 @@ mod platform {
         start_listener_thread, update_shared_binding, update_shared_modifier_shortcuts,
         HotkeyAdapter, HotkeyEvent, Shared, StartupTx,
     };
-    use crate::types::{HotkeyAdapterKind, HotkeyBinding, HotkeyInstallError, HotkeyTrigger};
+    use crate::types::{
+        HotkeyAdapterKind, HotkeyBinding, HotkeyInstallError, HotkeyMode, HotkeyTrigger,
+    };
 
     pub fn start_adapter(
         binding: HotkeyBinding,
@@ -565,6 +567,9 @@ mod platform {
     const KEY_DOWN: CgEventType = 10;
     const KEY_UP: CgEventType = 11;
     const FLAGS_CHANGED: CgEventType = 12;
+    /// Brightness / volume / keyboard-backlight and similar macOS function-layer
+    /// actions are delivered as system-defined events instead of KEY_DOWN.
+    const SYSTEM_DEFINED: CgEventType = 14;
     const TAP_DISABLED_BY_TIMEOUT: CgEventType = 0xFFFF_FFFE;
     const TAP_DISABLED_BY_USER_INPUT: CgEventType = 0xFFFF_FFFF;
 
@@ -577,6 +582,15 @@ mod platform {
     const FLAG_MASK_SECONDARY_FN: CgEventFlags = 0x0080_0000;
 
     const ESC_KEYCODE: i64 = 53;
+    // IOKit hidsystem/IOLLEvent.h + ev_keymap.h. systemDefined subtype 8 carries
+    // auxiliary control keys in data1's high 16 bits; 0..=23 are the scanned
+    // brightness / volume / media / illumination family. Globe/Menu is 25 and
+    // must stay excluded, otherwise a plain Fn tap could cancel itself.
+    const NX_SUBTYPE_AUX_CONTROL_BUTTONS: i16 = 8;
+    const NX_NUM_SCANNED_SPECIAL_KEYS: u16 = 24;
+    /// Auto / Toggle 下 Fn 是双用途键：短按用于听写，明显长按留给 macOS 功能层。
+    /// 与 Auto 模式既有的 350ms 短按 / 长按分界保持一致。
+    const FN_TAP_MAX_DURATION: std::time::Duration = std::time::Duration::from_millis(350);
 
     type CgEventTapCallBack = extern "C" fn(
         proxy: *mut c_void,
@@ -621,6 +635,8 @@ mod platform {
         cancel_tx: Sender<()>,
         /// 组合键撤销专用通道，见模块注释——不与 tx 挤同一条串行 bridge。
         combo_tx: Sender<u64>,
+        /// Auto / Toggle 下 Fn 延迟到松开才决定是否派发：短按派发，长按或功能层组合丢弃。
+        fn_pressed_at: parking_lot::Mutex<Option<std::time::Instant>>,
         /// 与 MacHotkeyAdapter 共享的 (tap, runloop) refs。tap re-enable on
         /// TAP_DISABLED_BY_TIMEOUT 走 handles.tap；adapter shutdown 也走这两个 lock。
         handles: Arc<MacShutdownHandles>,
@@ -638,7 +654,8 @@ mod platform {
     ) {
         let mask: CgEventMask = (1u64 << FLAGS_CHANGED)
             | (1u64 << KEY_DOWN)
-            | (1u64 << KEY_UP);
+            | (1u64 << KEY_UP)
+            | (1u64 << SYSTEM_DEFINED);
         let handles = Arc::new(MacShutdownHandles {
             tap: std::sync::Mutex::new(None),
             runloop: std::sync::Mutex::new(None),
@@ -648,6 +665,7 @@ mod platform {
             tx,
             cancel_tx,
             combo_tx,
+            fn_pressed_at: parking_lot::Mutex::new(None),
             handles: Arc::clone(&handles),
         }));
 
@@ -721,6 +739,13 @@ mod platform {
                 let keycode = unsafe { CGEventGetIntegerValueField(event, KEYBOARD_EVENT_KEYCODE) };
                 crate::side_aware_combo::platform::dispatch_keycode(keycode, false, 0, false);
             }
+            // Fn+亮度 / 音量 / 键盘背光等不会产生 KEY_DOWN，而是 systemDefined。
+            // 只要 Fn 触发键正按住，就把它视为功能层组合，不能同时唤起听写。
+            SYSTEM_DEFINED => {
+                if let Some((subtype, data1)) = system_defined_event_payload(event) {
+                    note_fn_function_layer_event(ctx, subtype, data1);
+                }
+            }
             _ => {}
         }
         event
@@ -744,6 +769,9 @@ mod platform {
                 ctx.shared.recording_fn_held.store(false, Ordering::SeqCst);
                 log::info!("[hotkey] 录制态 Fn↑（松开）");
             }
+            // 录制态只负责把 Fn 交给 ShortcutRecorder。不要同时更新听写触发 latch，
+            // 否则前端保存 Fn、退出录制态后，同一次物理松手会被误当成一次听写短按。
+            return;
         }
 
         // Shift 是翻译模式修饰键 — 与触发键的 keycode 检查独立，任何时刻按 Shift 都生效。
@@ -790,17 +818,40 @@ mod platform {
             None,
         );
 
-        let trigger = ctx.shared.binding.read().trigger;
-        if trigger == HotkeyTrigger::Custom {
+        handle_dictation_trigger_flags_changed(
+            ctx,
+            keycode,
+            flags,
+            std::time::Instant::now(),
+        );
+    }
+
+    fn fn_uses_tap_only_semantics(trigger: HotkeyTrigger, mode: HotkeyMode) -> bool {
+        trigger == HotkeyTrigger::Fn && matches!(mode, HotkeyMode::Auto | HotkeyMode::Toggle)
+    }
+
+    /// 处理 modifier-only 听写触发键的 flagsChanged 边沿。
+    ///
+    /// Fn 在 Auto / Toggle 下不能沿用其他修饰键的“按下即触发”：它同时是 macOS
+    /// 功能层修饰键。这里先记住按下，等松开后确认是短按且未叠加功能键，才补发一对
+    /// Pressed / Released。这样长按、Fn+F1/音量/亮度等系统操作从未启动听写，不会闪胶囊。
+    fn handle_dictation_trigger_flags_changed(
+        ctx: &CallbackContext,
+        keycode: i64,
+        flags: CgEventFlags,
+        now: std::time::Instant,
+    ) {
+        let (trigger, mode) = {
+            let binding = ctx.shared.binding.read();
+            (binding.trigger, binding.mode)
+        };
+        if trigger == HotkeyTrigger::Custom || keycode != trigger_to_keycode(trigger) {
             return;
         }
-        let expected_keycode = trigger_to_keycode(trigger);
-        if keycode != expected_keycode {
-            return;
-        }
-        let mask = trigger_to_flag_mask(trigger);
-        let is_active = (flags & mask) != 0;
+
+        let is_active = (flags & trigger_to_flag_mask(trigger)) != 0;
         let was_held = ctx.shared.trigger_held.load(Ordering::SeqCst);
+        let tap_only_fn = fn_uses_tap_only_semantics(trigger, mode);
 
         if is_active && !was_held {
             ctx.shared.trigger_held.store(true, Ordering::SeqCst);
@@ -811,16 +862,52 @@ mod platform {
             ctx.shared
                 .trigger_companion_seen
                 .store(0, Ordering::SeqCst);
-            send_or_log(
-                &ctx.tx,
-                HotkeyEvent::Pressed {
-                    at: std::time::Instant::now(),
-                    press_id,
-                },
-            );
-        } else if !is_active && was_held {
+            if tap_only_fn {
+                *ctx.fn_pressed_at.lock() = Some(now);
+                log::debug!("[hotkey] Fn↓ 等待松开后判定短按 / 功能层操作");
+            } else {
+                send_or_log(
+                    &ctx.tx,
+                    HotkeyEvent::Pressed {
+                        at: now,
+                        press_id,
+                    },
+                );
+            }
+            return;
+        }
+
+        if !is_active && was_held {
             ctx.shared.trigger_held.store(false, Ordering::SeqCst);
-            send_or_log(&ctx.tx, HotkeyEvent::Released { at: std::time::Instant::now() });
+            if !tap_only_fn {
+                send_or_log(&ctx.tx, HotkeyEvent::Released { at: now });
+                return;
+            }
+
+            let pressed_at = ctx.fn_pressed_at.lock().take();
+            let press_id = ctx.shared.trigger_press_id.load(Ordering::SeqCst);
+            let companion_seen = press_id != 0
+                && ctx.shared.trigger_companion_seen.load(Ordering::SeqCst) == press_id;
+            let held_for = pressed_at.map(|at| now.saturating_duration_since(at));
+            if !companion_seen && held_for.is_some_and(|duration| duration < FN_TAP_MAX_DURATION) {
+                let pressed_at = pressed_at.expect("checked above");
+                send_or_log(
+                    &ctx.tx,
+                    HotkeyEvent::Pressed {
+                        at: pressed_at,
+                        press_id,
+                    },
+                );
+                send_or_log(&ctx.tx, HotkeyEvent::Released { at: now });
+            } else {
+                log::info!(
+                    "[hotkey] Fn 操作未触发听写（held_ms={}, companion_seen={companion_seen}）",
+                    held_for.map(|duration| duration.as_millis()).unwrap_or(0)
+                );
+            }
+        } else if !is_active && trigger == HotkeyTrigger::Fn {
+            // 录制态 / binding 更新会主动重置 held latch；物理松手仍需清掉旧时间戳。
+            ctx.fn_pressed_at.lock().take();
         }
     }
 
@@ -865,6 +952,40 @@ mod platform {
         note_companion_key_down(ctx);
     }
 
+    fn system_defined_event_payload(event: CgEventRef) -> Option<(i16, isize)> {
+        use objc2::msg_send;
+        use objc2::runtime::{AnyClass, AnyObject};
+
+        if event.is_null() {
+            return None;
+        }
+        let cls = AnyClass::get("NSEvent")?;
+        let ns_event: *mut AnyObject =
+            unsafe { msg_send![cls, eventWithCGEvent: event.cast::<c_void>()] };
+        if ns_event.is_null() {
+            return None;
+        }
+        let subtype: i16 = unsafe { msg_send![ns_event, subtype] };
+        let data1: isize = unsafe { msg_send![ns_event, data1] };
+        Some((subtype, data1))
+    }
+
+    fn is_auxiliary_function_key_event(subtype: i16, data1: isize) -> bool {
+        if subtype != NX_SUBTYPE_AUX_CONTROL_BUTTONS {
+            return false;
+        }
+        let key_type = ((data1 as u64 >> 16) & 0xffff) as u16;
+        key_type < NX_NUM_SCANNED_SPECIAL_KEYS
+    }
+
+    fn note_fn_function_layer_event(ctx: &CallbackContext, subtype: i16, data1: isize) {
+        if is_auxiliary_function_key_event(subtype, data1)
+            && ctx.shared.binding.read().trigger == HotkeyTrigger::Fn
+        {
+            note_companion_key_down(ctx);
+        }
+    }
+
     /// 触发键按住期间按下任意普通键 = 用户在打组合键（Option+任意字母/数字键、Option+Tab…），
     /// 不是想说话 —— 往组合键撤销通道发一次让上层撤销这次按下。
     ///
@@ -886,6 +1007,16 @@ mod platform {
                 .compare_exchange(0, press_id, Ordering::SeqCst, Ordering::SeqCst)
                 .is_err()
         {
+            return;
+        }
+        let deferred_fn = {
+            let binding = ctx.shared.binding.read();
+            fn_uses_tap_only_semantics(binding.trigger, binding.mode)
+        };
+        if deferred_fn {
+            // Auto / Toggle 下 Fn 尚未向 coordinator 派发 Pressed；记住 companion 即可，
+            // 松手时会整次丢弃。此时发送 abort 只会留下一个永远等不到 Pressed 的 pending id。
+            log::info!("[hotkey] Fn 功能层组合按下 —— 本次短按候选作废");
             return;
         }
         log::info!("[hotkey] 触发键与其他键组合按下 —— 撤销本次触发");
@@ -967,6 +1098,7 @@ mod platform {
                     tx,
                     cancel_tx,
                     combo_tx,
+                    fn_pressed_at: parking_lot::Mutex::new(None),
                     handles: Arc::new(MacShutdownHandles {
                         tap: std::sync::Mutex::new(None),
                         runloop: std::sync::Mutex::new(None),
@@ -1083,6 +1215,141 @@ mod platform {
 
             // 撤销全程不碰 Pressed/Released 那条串行通道 —— 它此刻正卡在 begin_session 里。
             assert!(drain(&rx).is_empty());
+        }
+
+        #[test]
+        fn mac_fn_auto_short_tap_dispatches_only_after_release() {
+            let shared = shared(HotkeyTrigger::Fn);
+            shared.binding.write().mode = HotkeyMode::Auto;
+            let (ctx, rx, combo_rx) = callback_context_with_combo(Arc::clone(&shared));
+            let pressed_at = std::time::Instant::now();
+
+            handle_dictation_trigger_flags_changed(
+                &ctx,
+                trigger_to_keycode(HotkeyTrigger::Fn),
+                FLAG_MASK_SECONDARY_FN,
+                pressed_at,
+            );
+            assert!(drain(&rx).is_empty(), "Fn down must stay a tap candidate");
+
+            let released_at = pressed_at + std::time::Duration::from_millis(120);
+            handle_dictation_trigger_flags_changed(
+                &ctx,
+                trigger_to_keycode(HotkeyTrigger::Fn),
+                0,
+                released_at,
+            );
+
+            assert_eq!(edge_names(drain(&rx)), vec!["pressed", "released"]);
+            assert_eq!(drain_combo(&combo_rx), 0);
+        }
+
+        #[test]
+        fn mac_fn_auto_long_hold_is_reserved_for_system_functions() {
+            let shared = shared(HotkeyTrigger::Fn);
+            shared.binding.write().mode = HotkeyMode::Auto;
+            let (ctx, rx, combo_rx) = callback_context_with_combo(Arc::clone(&shared));
+            let pressed_at = std::time::Instant::now();
+
+            handle_dictation_trigger_flags_changed(
+                &ctx,
+                trigger_to_keycode(HotkeyTrigger::Fn),
+                FLAG_MASK_SECONDARY_FN,
+                pressed_at,
+            );
+            handle_dictation_trigger_flags_changed(
+                &ctx,
+                trigger_to_keycode(HotkeyTrigger::Fn),
+                0,
+                pressed_at + FN_TAP_MAX_DURATION,
+            );
+
+            assert!(drain(&rx).is_empty());
+            assert_eq!(drain_combo(&combo_rx), 0);
+        }
+
+        #[test]
+        fn mac_fn_function_layer_event_suppresses_tap_without_pending_abort() {
+            let shared = shared(HotkeyTrigger::Fn);
+            shared.binding.write().mode = HotkeyMode::Toggle;
+            let (ctx, rx, combo_rx) = callback_context_with_combo(Arc::clone(&shared));
+            let pressed_at = std::time::Instant::now();
+
+            handle_dictation_trigger_flags_changed(
+                &ctx,
+                trigger_to_keycode(HotkeyTrigger::Fn),
+                FLAG_MASK_SECONDARY_FN,
+                pressed_at,
+            );
+            // brightness-up (NX_KEYTYPE_BRIGHTNESS_UP=2) 的 subtype/data1 编码。
+            note_fn_function_layer_event(
+                &ctx,
+                NX_SUBTYPE_AUX_CONTROL_BUTTONS,
+                (2_i64 << 16) as isize,
+            );
+            handle_dictation_trigger_flags_changed(
+                &ctx,
+                trigger_to_keycode(HotkeyTrigger::Fn),
+                0,
+                pressed_at + std::time::Duration::from_millis(80),
+            );
+
+            assert!(drain(&rx).is_empty());
+            assert_eq!(drain_combo(&combo_rx), 0);
+        }
+
+        #[test]
+        fn mac_system_defined_event_does_not_abort_non_fn_dictation() {
+            let shared = shared(HotkeyTrigger::LeftOption);
+            let (ctx, rx, combo_rx) = callback_context_with_combo(Arc::clone(&shared));
+            shared.trigger_press_id.store(7, Ordering::SeqCst);
+            shared.trigger_held.store(true, Ordering::SeqCst);
+
+            note_fn_function_layer_event(
+                &ctx,
+                NX_SUBTYPE_AUX_CONTROL_BUTTONS,
+                (2_i64 << 16) as isize,
+            );
+
+            assert_eq!(shared.trigger_companion_seen.load(Ordering::SeqCst), 0);
+            assert!(drain(&rx).is_empty());
+            assert_eq!(drain_combo(&combo_rx), 0);
+        }
+
+        #[test]
+        fn mac_globe_system_event_is_not_mistaken_for_a_function_layer_key() {
+            assert!(!is_auxiliary_function_key_event(
+                NX_SUBTYPE_AUX_CONTROL_BUTTONS,
+                (25_i64 << 16) as isize,
+            ));
+            assert!(!is_auxiliary_function_key_event(
+                0,
+                (2_i64 << 16) as isize,
+            ));
+        }
+
+        #[test]
+        fn mac_fn_hold_mode_keeps_press_to_talk_semantics() {
+            let shared = shared(HotkeyTrigger::Fn);
+            shared.binding.write().mode = HotkeyMode::Hold;
+            let (ctx, rx) = callback_context(Arc::clone(&shared));
+            let pressed_at = std::time::Instant::now();
+
+            handle_dictation_trigger_flags_changed(
+                &ctx,
+                trigger_to_keycode(HotkeyTrigger::Fn),
+                FLAG_MASK_SECONDARY_FN,
+                pressed_at,
+            );
+            assert_eq!(edge_names(drain(&rx)), vec!["pressed"]);
+
+            handle_dictation_trigger_flags_changed(
+                &ctx,
+                trigger_to_keycode(HotkeyTrigger::Fn),
+                0,
+                pressed_at + std::time::Duration::from_secs(1),
+            );
+            assert_eq!(edge_names(drain(&rx)), vec!["released"]);
         }
     }
 }

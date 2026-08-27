@@ -1366,9 +1366,19 @@ async fn begin_session_from_press(inner: &Arc<Inner>, press_id: u64) {
 /// 让它白等这一下纯粹是掉延迟。等待放在防抖 / 冷却判定之后，那些判定用的仍是未被本
 /// 窗口推迟的时刻。
 async fn press_resolves_to_combo(inner: &Arc<Inner>, press_id: u64) -> bool {
-    let binding = inner.prefs.get().dictation_hotkey;
-    if crate::shortcut_binding::legacy_modifier_trigger(&binding).is_none() {
+    let prefs = inner.prefs.get();
+    let trigger = crate::shortcut_binding::legacy_modifier_trigger(&prefs.dictation_hotkey);
+    if trigger.is_none() {
         return false;
+    }
+    // macOS Auto / Toggle 下的 Fn 已在 event tap 中延迟到松开：只有“短按且未叠加
+    // 功能键”才会派发 Pressed。这里再等一次通用 150ms 仲裁没有新增信息，只会让
+    // Fn 短按变钝；直接消费可能已到达的 companion 标记即可。Hold 仍走通用路径。
+    #[cfg(target_os = "macos")]
+    if trigger == Some(crate::types::HotkeyTrigger::Fn)
+        && matches!(prefs.hotkey.mode, HotkeyMode::Auto | HotkeyMode::Toggle)
+    {
+        return combo_seen_for_press(inner, press_id);
     }
     tokio::time::sleep(COMBO_ARBITRATION_GRACE).await;
     let combined = combo_seen_for_press(inner, press_id);
@@ -5807,6 +5817,19 @@ mod tests {
         let started = std::time::Instant::now();
         assert!(!super::press_resolves_to_combo(&coordinator.inner, 1).await);
         assert!(!super::combo_seen_for_press(&coordinator.inner, 0));
+        assert!(started.elapsed() < super::COMBO_ARBITRATION_GRACE);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn mac_fn_tap_skips_the_redundant_arbitration_window() {
+        let coordinator = coordinator_with_dictation_hotkey(crate::types::ShortcutBinding {
+            primary: "Fn".into(),
+            modifiers: vec![],
+        });
+
+        let started = std::time::Instant::now();
+        assert!(!super::press_resolves_to_combo(&coordinator.inner, 1).await);
         assert!(started.elapsed() < super::COMBO_ARBITRATION_GRACE);
     }
 
