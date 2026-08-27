@@ -1860,6 +1860,19 @@ pub(crate) fn apply_openai_compatible_thinking_control(
                 "type": if thinking_enabled { "adaptive" } else { "disabled" },
             });
         }
+        // LM Studio（llama.cpp 系本地服务，默认端口 1234）：Gemma 4 等思考模型的
+        // chat template 默认 enable_thinking=true，不显式下发关闭参数时 openless
+        // 「关闭思考」设置无效。关闭时在 `chat_template_kwargs.enable_thinking=false`
+        // 之外同时下发 OpenAI 风格 `reasoning_effort="none"` /
+        // `reasoning.type="disabled"`（LM Studio 均接受，多重兜底）；开启时只显式
+        // 发 enable_thinking=true，不附带后两个字段。
+        Some(ThinkingControl::LmStudioThinking) => {
+            body["chat_template_kwargs"] = json!({ "enable_thinking": thinking_enabled });
+            if !thinking_enabled {
+                body["reasoning_effort"] = json!("none");
+                body["reasoning"] = json!({ "type": "disabled" });
+            }
+        }
         None => {}
     }
 }
@@ -1871,6 +1884,7 @@ pub(crate) enum ThinkingControl {
     OpenRouterReasoning,
     DeepSeekThinking,
     MiniMaxThinking,
+    LmStudioThinking,
 }
 
 pub(crate) fn openai_compatible_thinking_control(provider_id: &str) -> Option<ThinkingControl> {
@@ -1883,6 +1897,10 @@ pub(crate) fn openai_compatible_thinking_control(provider_id: &str) -> Option<Th
         // StepFun step-3.x-flash 系列按官方文档接受 reasoning_effort（low/medium/high，
         // 无法完全关闭思考）；非推理模型（如 step-1o-turbo-vision）会忽略该字段。
         "openai" | "codingPlanX" | "stepfun" => Some(ThinkingControl::ReasoningEffort),
+        // LM Studio：本地服务无厂商域名可匹配，主要靠 base_url 兜底按默认端口
+        // 1234 识别（见下方 for_base_url）；这里登记 provider_id 以便将来若新增
+        // "lmstudio" preset 时自动生效。
+        "lmstudio" => Some(ThinkingControl::LmStudioThinking),
         // custom / 其他未声明 provider 走 base_url 兜底识别——用户用自定义
         // endpoint 接入 MiniMax 时,根据 base_url 命中即下发官方 thinking 参数。
         _ => None,
@@ -1893,7 +1911,8 @@ pub(crate) fn openai_compatible_thinking_control(provider_id: &str) -> Option<Th
 /// 通过 base_url 推断该走哪种 thinking 控制策略。返回 `None` 表示无法
 /// 识别,沿用原"不主动干预"行为。
 ///
-/// 命中策略:base_url 主机名包含厂商关键字。
+/// 命中策略:base_url 主机名包含厂商关键字；LM Studio 等本地服务无厂商域名，
+/// 改按默认端口 1234 识别（用户自定义了 LM Studio 端口则无法自动识别）。
 pub(crate) fn openai_compatible_thinking_control_for_base_url(
     base_url: &str,
 ) -> Option<ThinkingControl> {
@@ -1922,6 +1941,11 @@ pub(crate) fn openai_compatible_thinking_control_for_base_url(
     }
     if host.contains("stepfun") {
         return Some(ThinkingControl::ReasoningEffort);
+    }
+    // LM Studio 默认服务端口是 1234（host 提取结果形如 "localhost:1234"，
+    // 带 ":" 前缀匹配可避免误伤 12345 等其它端口）。
+    if host.ends_with(":1234") {
+        return Some(ThinkingControl::LmStudioThinking);
     }
     None
 }
@@ -3744,6 +3768,92 @@ mod tests {
     }
 
     #[test]
+    fn openai_chat_body_disables_lmstudio_thinking_by_default_port() {
+        // LM Studio 默认端口 1234 + "custom" preset：Gemma 4 等思考模型的 chat
+        // template 默认 enable_thinking=true，openless 默认「关闭思考」时必须
+        // 显式下发关闭参数，否则 UI 开关无效。三个字段与实测可用的请求一致。
+        let provider = OpenAICompatibleLLMProvider::new(
+            OpenAICompatibleConfig::new(
+                "custom",
+                "Custom",
+                "http://localhost:1234/v1",
+                "lm-studio",
+                "google/gemma-4-12b-qat",
+            )
+            .with_thinking_enabled(false),
+        );
+
+        let body = provider.chat_body(false, vec![json!({ "role": "user", "content": "hi" })]);
+
+        assert_eq!(body["chat_template_kwargs"]["enable_thinking"], false);
+        assert_eq!(body["reasoning_effort"], "none");
+        assert_eq!(body["reasoning"]["type"], "disabled");
+    }
+
+    #[test]
+    fn openai_chat_body_enables_lmstudio_thinking_explicitly() {
+        // 开启思考时只显式下发 enable_thinking=true，不附带关闭用的两个字段。
+        let provider = OpenAICompatibleLLMProvider::new(
+            OpenAICompatibleConfig::new(
+                "custom",
+                "Custom",
+                "http://localhost:1234/v1",
+                "lm-studio",
+                "google/gemma-4-12b-qat",
+            )
+            .with_thinking_enabled(true),
+        );
+
+        let body = provider.chat_body(false, vec![json!({ "role": "user", "content": "hi" })]);
+
+        assert_eq!(body["chat_template_kwargs"]["enable_thinking"], true);
+        assert!(body.get("reasoning_effort").is_none());
+        assert!(body.get("reasoning").is_none());
+    }
+
+    #[test]
+    fn openai_chat_body_lmstudio_fallback_handles_slash_path_and_lan_ip() {
+        // base_url 尾斜杠 / /v1 后缀 / LAN IP 接入都要能命中端口识别。
+        for base_url in [
+            "http://localhost:1234/v1",
+            "http://localhost:1234/v1/",
+            "http://127.0.0.1:1234",
+            "http://192.168.1.50:1234/v1",
+        ] {
+            let provider = OpenAICompatibleLLMProvider::new(
+                OpenAICompatibleConfig::new("custom", "Custom", base_url, "lm-studio", "m")
+                    .with_thinking_enabled(false),
+            );
+            let body = provider.chat_body(false, vec![json!({ "role": "user", "content": "hi" })]);
+            assert_eq!(
+                body["chat_template_kwargs"]["enable_thinking"], false,
+                "base_url={base_url} should trigger LM Studio thinking control"
+            );
+        }
+    }
+
+    #[test]
+    fn openai_chat_body_omits_lmstudio_control_for_other_local_ports() {
+        // 端口 12345 等不能误命中 LM Studio 默认端口 1234。
+        let provider = OpenAICompatibleLLMProvider::new(
+            OpenAICompatibleConfig::new(
+                "custom",
+                "Custom",
+                "http://localhost:12345/v1",
+                "lm-studio",
+                "m",
+            )
+            .with_thinking_enabled(false),
+        );
+
+        let body = provider.chat_body(false, vec![json!({ "role": "user", "content": "hi" })]);
+
+        assert!(body.get("chat_template_kwargs").is_none());
+        assert!(body.get("reasoning_effort").is_none());
+        assert!(body.get("reasoning").is_none());
+    }
+
+    #[test]
     fn openai_chat_body_omits_thinking_control_for_unknown_provider() {
         let provider = OpenAICompatibleLLMProvider::new(
             OpenAICompatibleConfig::new(
@@ -3761,6 +3871,7 @@ mod tests {
         assert!(body.get("reasoning_effort").is_none());
         assert!(body.get("enable_thinking").is_none());
         assert!(body.get("reasoning").is_none());
+        assert!(body.get("chat_template_kwargs").is_none());
     }
 
     #[test]
