@@ -390,7 +390,7 @@ export interface UserPreferences {
   macosNewlineMode: MacosNewlineMode;
   /** 旧版兼容：`true` 等价于 `windowsInsertionMode === 'sendInput'`。 */
   windowsSendInputInsertionOnly: boolean;
-  /** Windows：SendInput 模式下是否在系统键盘列表（Win+Space）中显示 OpenLess。 */
+  /** Windows：非 TSF 插入方式下是否在系统键盘列表（Win+Space）中显示 OpenLess。 */
   windowsShowOpenlessInKeyboardList: boolean;
   /** 用户的工作语言（多选，原生名）；作为前提注入 LLM polish/translate prompt 头部。 */
   workingLanguages: string[];

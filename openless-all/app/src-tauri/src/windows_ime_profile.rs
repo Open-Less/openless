@@ -3,7 +3,9 @@ pub const OPENLESS_TSF_LANG_ID: u16 = 0x0804;
 pub const OPENLESS_TEXT_SERVICE_CLSID_BRACED: &str = "{6B9F3F4F-5EE7-42D6-9C61-9F80B03A5D7D}";
 pub const OPENLESS_PROFILE_GUID_BRACED: &str = "{9B5F5E04-23F6-47DA-9A26-D221F6C3F02E}";
 
-use crate::types::{UserPreferences, WindowsImeInstallState, WindowsImeStatus};
+use crate::types::{
+    UserPreferences, WindowsImeInstallState, WindowsImeStatus, WindowsInsertionMode,
+};
 
 #[cfg(target_os = "windows")]
 fn parse_guid(value: &str) -> WindowsImeProfileResult<windows::core::GUID> {
@@ -173,8 +175,14 @@ pub fn get_windows_ime_status() -> WindowsImeStatus {
 }
 
 /// 根据偏好决定 OpenLess 语言配置文件是否应在用户键盘列表中启用。
+///
+/// TSF 插入必须能 `ActivateLanguageProfile`，因此始终返回 `true`。
+/// SendInput / 剪贴板粘贴不依赖 IME 切换，跟随 `windows_show_openless_in_keyboard_list`。
 pub fn desired_openless_language_profile_enabled(prefs: &UserPreferences) -> bool {
-    if !prefs.windows_sendinput_insertion_only {
+    if !matches!(
+        prefs.windows_insertion_mode,
+        WindowsInsertionMode::SendInput | WindowsInsertionMode::Paste
+    ) {
         return true;
     }
     prefs.windows_show_openless_in_keyboard_list
@@ -216,8 +224,8 @@ pub fn is_openless_language_profile_enabled() -> WindowsImeProfileResult<bool> {
 /// - `desired == true`（显示）也只能是 no-op（没东西可启用）。
 ///
 /// 两支都必须是 `Ok(())`。此前「不显示 + 未安装」错误地返回 `Err`，经 settings.rs 的
-/// `apply_keyboard_list(&prefs)?` 传播，导致整个设置保存事务回滚（用户勾「仅 SendInput
-/// 插入」+「不在键盘列表显示」且未装 TSF IME 时，之后任何设置都存不进）。
+/// `apply_keyboard_list(&prefs)?` 传播，导致整个设置保存事务回滚（用户在非 TSF 插入方式下
+/// 勾「不在键盘列表显示」且未装 TSF IME 时，之后任何设置都存不进）。
 fn keyboard_list_pref_short_circuit(
     install_state: WindowsImeInstallState,
     _desired: bool,
@@ -229,7 +237,7 @@ fn keyboard_list_pref_short_circuit(
     }
 }
 
-/// 将「SendInput + 键盘列表可见性」偏好同步到当前用户的 TSF 语言配置文件。
+/// 将「非 TSF 插入方式下的键盘列表可见性」偏好同步到当前用户的 TSF 语言配置文件。
 pub fn apply_windows_openless_keyboard_list_pref(prefs: &UserPreferences) -> Result<(), String> {
     let desired = desired_openless_language_profile_enabled(prefs);
     #[cfg(target_os = "windows")]
@@ -874,27 +882,28 @@ mod tests {
     }
 
     #[test]
-    fn desired_openless_language_profile_enabled_follows_sendinput_and_visibility_pref() {
-        let tsf_only = UserPreferences {
-            windows_sendinput_insertion_only: false,
-            windows_show_openless_in_keyboard_list: false,
-            ..UserPreferences::default()
-        };
-        assert!(desired_openless_language_profile_enabled(&tsf_only));
-
-        let sendinput_show = UserPreferences {
-            windows_sendinput_insertion_only: true,
-            windows_show_openless_in_keyboard_list: true,
-            ..UserPreferences::default()
-        };
-        assert!(desired_openless_language_profile_enabled(&sendinput_show));
-
-        let sendinput_hide = UserPreferences {
-            windows_sendinput_insertion_only: true,
-            windows_show_openless_in_keyboard_list: false,
-            ..UserPreferences::default()
-        };
-        assert!(!desired_openless_language_profile_enabled(&sendinput_hide));
+    fn desired_openless_language_profile_enabled_truth_table() {
+        let cases = [
+            (WindowsInsertionMode::Tsf, true, true),
+            (WindowsInsertionMode::Tsf, false, true),
+            (WindowsInsertionMode::SendInput, true, true),
+            (WindowsInsertionMode::SendInput, false, false),
+            (WindowsInsertionMode::Paste, true, true),
+            (WindowsInsertionMode::Paste, false, false),
+        ];
+        for (mode, show, expected) in cases {
+            let prefs = UserPreferences {
+                windows_insertion_mode: mode,
+                windows_sendinput_insertion_only: mode == WindowsInsertionMode::SendInput,
+                windows_show_openless_in_keyboard_list: show,
+                ..UserPreferences::default()
+            };
+            assert_eq!(
+                desired_openless_language_profile_enabled(&prefs),
+                expected,
+                "mode={mode:?} show={show}"
+            );
+        }
     }
 
     // ── Fix: TSF IME 未安装时「键盘列表可见性」偏好不应报错 ──

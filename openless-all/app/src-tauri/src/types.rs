@@ -986,8 +986,9 @@ pub struct UserPreferences {
         alias = "windowsSendinputInsertionOnly"
     )]
     pub windows_sendinput_insertion_only: bool,
-    /// Windows：SendInput 模式下是否在系统键盘列表（Win+Space）中显示 OpenLess TSF 输入法。
-    /// 默认 true 保持现有行为；关闭后用户级禁用语言配置文件，无需管理员权限。
+    /// Windows：非 TSF 插入方式（SendInput / 剪贴板粘贴）下是否在系统键盘列表（Win+Space）
+    /// 中显示 OpenLess TSF 输入法。默认 true 保持现有行为；关闭后用户级禁用语言配置文件，
+    /// 无需管理员权限。TSF 模式仍会强制启用 profile，但不会改写本偏好。
     #[serde(default = "default_true", rename = "windowsShowOpenlessInKeyboardList")]
     pub windows_show_openless_in_keyboard_list: bool,
     /// 用户的工作语言（多选，原生名）。会作为前提注入 LLM polish/translate 的 system prompt 头部，

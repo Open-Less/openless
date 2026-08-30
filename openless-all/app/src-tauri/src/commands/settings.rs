@@ -341,10 +341,9 @@ pub(crate) fn persist_settings_with_keyboard_apply<T: SettingsWriter>(
         previous.selection_polish_hotkey != prefs.selection_polish_hotkey;
     let coding_agent_changed = previous.coding_agent_enabled != prefs.coding_agent_enabled
         || previous.coding_agent_voice_hotkey != prefs.coding_agent_voice_hotkey;
-    let windows_keyboard_list_changed = previous.windows_sendinput_insertion_only
-        != prefs.windows_sendinput_insertion_only
-        || previous.windows_show_openless_in_keyboard_list
-            != prefs.windows_show_openless_in_keyboard_list;
+    let windows_keyboard_list_changed =
+        crate::windows_ime_profile::desired_openless_language_profile_enabled(&previous)
+            != crate::windows_ime_profile::desired_openless_language_profile_enabled(&prefs);
     let active_asr_provider_changed = previous.active_asr_provider != prefs.active_asr_provider;
     let active_asr_provider = prefs.active_asr_provider.clone();
 
@@ -1045,36 +1044,65 @@ mod persist_settings_tests {
         fn refresh_coding_agent_hotkey(&self) {}
     }
 
+    fn apply_sendinput_hide(next: &mut UserPreferences) {
+        next.windows_insertion_mode = crate::types::WindowsInsertionMode::SendInput;
+        next.windows_sendinput_insertion_only = true;
+        next.windows_show_openless_in_keyboard_list = false;
+    }
+
+    fn record_desired(prefs: &UserPreferences, dest: &RefCell<Vec<bool>>) {
+        dest.borrow_mut()
+            .push(crate::windows_ime_profile::desired_openless_language_profile_enabled(prefs));
+    }
+
     #[test]
     fn keyboard_apply_failure_does_not_sync_asr_or_write_prefs() {
         let writer = MockWriter::new(UserPreferences::default());
         let mut next = writer.read_settings();
-        next.windows_sendinput_insertion_only = true;
-        next.windows_show_openless_in_keyboard_list = false;
+        apply_sendinput_hide(&mut next);
         next.active_asr_provider = "other-asr".into();
 
-        let result = persist_settings_with_keyboard_apply(&writer, next, |_| {
-            Err("apply failed".into())
-        });
+        let result =
+            persist_settings_with_keyboard_apply(&writer, next, |_| Err("apply failed".into()));
 
         assert!(result.is_err());
         assert_eq!(*writer.write_calls.borrow(), 0);
         assert!(writer.asr_sync_calls.borrow().is_empty());
-        assert!(writer.read_settings().windows_show_openless_in_keyboard_list);
+        assert!(
+            writer
+                .read_settings()
+                .windows_show_openless_in_keyboard_list
+        );
+        assert_eq!(
+            writer.read_settings().windows_insertion_mode,
+            crate::types::WindowsInsertionMode::Tsf
+        );
     }
 
     #[test]
     fn keyboard_apply_success_writes_prefs() {
         let writer = MockWriter::new(UserPreferences::default());
         let mut next = writer.read_settings();
-        next.windows_sendinput_insertion_only = true;
-        next.windows_show_openless_in_keyboard_list = false;
+        apply_sendinput_hide(&mut next);
 
-        let result = persist_settings_with_keyboard_apply(&writer, next.clone(), |_| Ok(()));
+        let desired = RefCell::new(Vec::new());
+        let result = persist_settings_with_keyboard_apply(&writer, next.clone(), |prefs| {
+            record_desired(prefs, &desired);
+            Ok(())
+        });
 
         assert!(result.is_ok());
         assert_eq!(*writer.write_calls.borrow(), 1);
-        assert!(!writer.read_settings().windows_show_openless_in_keyboard_list);
+        assert_eq!(*desired.borrow(), vec![false]);
+        assert!(
+            !writer
+                .read_settings()
+                .windows_show_openless_in_keyboard_list
+        );
+        assert_eq!(
+            writer.read_settings().windows_insertion_mode,
+            crate::types::WindowsInsertionMode::SendInput
+        );
     }
 
     #[test]
@@ -1088,20 +1116,23 @@ mod persist_settings_tests {
             fail_rollback_asr_sync: false,
         };
         let mut next = writer.read_settings();
-        next.windows_sendinput_insertion_only = true;
-        next.windows_show_openless_in_keyboard_list = false;
+        apply_sendinput_hide(&mut next);
         next.active_asr_provider = "other-asr".into();
 
-        let apply_calls = RefCell::new(0);
-        let result = persist_settings_with_keyboard_apply(&writer, next, |_| {
-            *apply_calls.borrow_mut() += 1;
+        let desired = RefCell::new(Vec::new());
+        let result = persist_settings_with_keyboard_apply(&writer, next, |prefs| {
+            record_desired(prefs, &desired);
             Ok(())
         });
 
         assert!(result.is_err());
         assert_eq!(*writer.write_calls.borrow(), 0);
-        assert_eq!(*apply_calls.borrow(), 2);
-        assert!(writer.read_settings().windows_show_openless_in_keyboard_list);
+        assert_eq!(*desired.borrow(), vec![false, true]);
+        assert!(
+            writer
+                .read_settings()
+                .windows_show_openless_in_keyboard_list
+        );
     }
 
     #[test]
@@ -1115,20 +1146,17 @@ mod persist_settings_tests {
             fail_rollback_asr_sync: false,
         };
         let mut next = writer.read_settings();
-        next.windows_sendinput_insertion_only = true;
-        next.windows_show_openless_in_keyboard_list = false;
+        apply_sendinput_hide(&mut next);
 
-        let rollback_calls = RefCell::new(0);
+        let desired = RefCell::new(Vec::new());
         let result = persist_settings_with_keyboard_apply(&writer, next, |prefs| {
-            if prefs.windows_show_openless_in_keyboard_list {
-                *rollback_calls.borrow_mut() += 1;
-            }
+            record_desired(prefs, &desired);
             Ok(())
         });
 
         assert!(result.is_err());
         assert_eq!(*writer.write_calls.borrow(), 1);
-        assert_eq!(*rollback_calls.borrow(), 1);
+        assert_eq!(*desired.borrow(), vec![false, true]);
         assert!(writer.asr_sync_calls.borrow().is_empty());
     }
 
@@ -1143,21 +1171,18 @@ mod persist_settings_tests {
             fail_rollback_asr_sync: false,
         };
         let mut next = writer.read_settings();
-        next.windows_sendinput_insertion_only = true;
-        next.windows_show_openless_in_keyboard_list = false;
+        apply_sendinput_hide(&mut next);
         next.active_asr_provider = "other-asr".into();
 
-        let rollback_calls = RefCell::new(0);
+        let desired = RefCell::new(Vec::new());
         let result = persist_settings_with_keyboard_apply(&writer, next, |prefs| {
-            if prefs.windows_show_openless_in_keyboard_list {
-                *rollback_calls.borrow_mut() += 1;
-            }
+            record_desired(prefs, &desired);
             Ok(())
         });
 
         assert!(result.is_err());
         assert_eq!(*writer.write_calls.borrow(), 1);
-        assert_eq!(*rollback_calls.borrow(), 1);
+        assert_eq!(*desired.borrow(), vec![false, true]);
     }
 
     #[test]
@@ -1171,20 +1196,189 @@ mod persist_settings_tests {
             fail_rollback_asr_sync: true,
         };
         let mut next = writer.read_settings();
-        next.windows_sendinput_insertion_only = true;
-        next.windows_show_openless_in_keyboard_list = false;
+        apply_sendinput_hide(&mut next);
         next.active_asr_provider = "other-asr".into();
 
-        let apply_calls = RefCell::new(0);
-        let result = persist_settings_with_keyboard_apply(&writer, next.clone(), |_| {
-            *apply_calls.borrow_mut() += 1;
+        let desired = RefCell::new(Vec::new());
+        let result = persist_settings_with_keyboard_apply(&writer, next.clone(), |prefs| {
+            record_desired(prefs, &desired);
             Ok(())
         });
 
         assert!(result.is_ok());
         assert_eq!(*writer.write_calls.borrow(), 2);
-        assert_eq!(*apply_calls.borrow(), 1);
-        assert!(!writer.read_settings().windows_show_openless_in_keyboard_list);
+        assert_eq!(*desired.borrow(), vec![false]);
+        assert!(
+            !writer
+                .read_settings()
+                .windows_show_openless_in_keyboard_list
+        );
+    }
+
+    #[test]
+    fn tsf_hide_pref_to_paste_applies_desired_false() {
+        let writer = MockWriter::new(UserPreferences {
+            windows_show_openless_in_keyboard_list: false,
+            ..UserPreferences::default()
+        });
+        let mut next = writer.read_settings();
+        next.windows_insertion_mode = crate::types::WindowsInsertionMode::Paste;
+        next.windows_sendinput_insertion_only = false;
+        next.windows_show_openless_in_keyboard_list = false;
+
+        let desired = RefCell::new(Vec::new());
+        let result = persist_settings_with_keyboard_apply(&writer, next, |prefs| {
+            record_desired(prefs, &desired);
+            Ok(())
+        });
+
+        assert!(result.is_ok());
+        assert_eq!(*desired.borrow(), vec![false]);
+        assert_eq!(*writer.write_calls.borrow(), 1);
+        assert_eq!(
+            writer.read_settings().windows_insertion_mode,
+            crate::types::WindowsInsertionMode::Paste
+        );
+        assert!(
+            !writer
+                .read_settings()
+                .windows_show_openless_in_keyboard_list
+        );
+    }
+
+    #[test]
+    fn paste_hide_pref_to_tsf_applies_desired_true_without_rewriting_pref() {
+        let writer = MockWriter::new(UserPreferences {
+            windows_insertion_mode: crate::types::WindowsInsertionMode::Paste,
+            windows_sendinput_insertion_only: false,
+            windows_show_openless_in_keyboard_list: false,
+            ..UserPreferences::default()
+        });
+        let mut next = writer.read_settings();
+        next.windows_insertion_mode = crate::types::WindowsInsertionMode::Tsf;
+        next.windows_sendinput_insertion_only = false;
+        next.windows_show_openless_in_keyboard_list = false;
+
+        let desired = RefCell::new(Vec::new());
+        let result = persist_settings_with_keyboard_apply(&writer, next, |prefs| {
+            record_desired(prefs, &desired);
+            Ok(())
+        });
+
+        assert!(result.is_ok());
+        assert_eq!(*desired.borrow(), vec![true]);
+        assert_eq!(*writer.write_calls.borrow(), 1);
+        assert_eq!(
+            writer.read_settings().windows_insertion_mode,
+            crate::types::WindowsInsertionMode::Tsf
+        );
+        assert!(
+            !writer
+                .read_settings()
+                .windows_show_openless_in_keyboard_list
+        );
+    }
+
+    #[test]
+    fn sendinput_hide_to_paste_skips_apply_when_desired_unchanged() {
+        let writer = MockWriter::new(UserPreferences {
+            windows_insertion_mode: crate::types::WindowsInsertionMode::SendInput,
+            windows_sendinput_insertion_only: true,
+            windows_show_openless_in_keyboard_list: false,
+            ..UserPreferences::default()
+        });
+        let mut next = writer.read_settings();
+        next.windows_insertion_mode = crate::types::WindowsInsertionMode::Paste;
+        next.windows_sendinput_insertion_only = false;
+        next.windows_show_openless_in_keyboard_list = false;
+
+        let desired = RefCell::new(Vec::new());
+        let result = persist_settings_with_keyboard_apply(&writer, next, |prefs| {
+            record_desired(prefs, &desired);
+            Ok(())
+        });
+
+        assert!(result.is_ok());
+        assert!(desired.borrow().is_empty());
+        assert_eq!(*writer.write_calls.borrow(), 1);
+        assert_eq!(
+            writer.read_settings().windows_insertion_mode,
+            crate::types::WindowsInsertionMode::Paste
+        );
+        assert!(
+            !writer
+                .read_settings()
+                .windows_show_openless_in_keyboard_list
+        );
+    }
+
+    #[test]
+    fn paste_toggle_hide_applies_desired_false_and_persists() {
+        let writer = MockWriter::new(UserPreferences {
+            windows_insertion_mode: crate::types::WindowsInsertionMode::Paste,
+            windows_sendinput_insertion_only: false,
+            windows_show_openless_in_keyboard_list: true,
+            ..UserPreferences::default()
+        });
+        let mut next = writer.read_settings();
+        next.windows_show_openless_in_keyboard_list = false;
+
+        let desired = RefCell::new(Vec::new());
+        let result = persist_settings_with_keyboard_apply(&writer, next, |prefs| {
+            record_desired(prefs, &desired);
+            Ok(())
+        });
+
+        assert!(result.is_ok());
+        assert_eq!(*desired.borrow(), vec![false]);
+        assert_eq!(*writer.write_calls.borrow(), 1);
+        assert_eq!(
+            writer.read_settings().windows_insertion_mode,
+            crate::types::WindowsInsertionMode::Paste
+        );
+        assert!(
+            !writer
+                .read_settings()
+                .windows_show_openless_in_keyboard_list
+        );
+    }
+
+    #[test]
+    fn tsf_to_paste_write_failure_rolls_back_desired_sequence() {
+        let writer = MockWriter {
+            prefs: RefCell::new(UserPreferences {
+                windows_show_openless_in_keyboard_list: false,
+                ..UserPreferences::default()
+            }),
+            write_calls: RefCell::new(0),
+            asr_sync_calls: RefCell::new(Vec::new()),
+            write_fail_count: 1,
+            fail_forward_asr_sync: false,
+            fail_rollback_asr_sync: false,
+        };
+        let mut next = writer.read_settings();
+        next.windows_insertion_mode = crate::types::WindowsInsertionMode::Paste;
+        next.windows_sendinput_insertion_only = false;
+        next.windows_show_openless_in_keyboard_list = false;
+
+        let desired = RefCell::new(Vec::new());
+        let result = persist_settings_with_keyboard_apply(&writer, next, |prefs| {
+            record_desired(prefs, &desired);
+            Ok(())
+        });
+
+        assert!(result.is_err());
+        assert_eq!(*desired.borrow(), vec![false, true]);
+        assert_eq!(*writer.write_calls.borrow(), 1);
+        assert_eq!(
+            writer.read_settings().windows_insertion_mode,
+            crate::types::WindowsInsertionMode::Tsf
+        );
+        assert!(
+            !writer
+                .read_settings()
+                .windows_show_openless_in_keyboard_list
+        );
     }
 }
 
