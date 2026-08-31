@@ -358,6 +358,25 @@ mod tests {
             &whisper_keyless_ready
         ));
 
+        let tencent_cloud = CredentialsSnapshot {
+            tencent_cloud_app_id: Some("app".into()),
+            tencent_cloud_secret_id: Some("secret-id".into()),
+            tencent_cloud_secret_key: Some("secret-key".into()),
+            ..snapshot()
+        };
+        assert!(asr_configured_for_provider(
+            crate::asr::tencent_cloud::PROVIDER_ID,
+            &tencent_cloud
+        ));
+        assert!(!asr_configured_for_provider(
+            crate::asr::tencent_cloud::PROVIDER_ID,
+            &CredentialsSnapshot {
+                tencent_cloud_app_id: Some("app".into()),
+                tencent_cloud_secret_id: Some("secret-id".into()),
+                ..snapshot()
+            }
+        ));
+
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         {
             assert!(asr_configured_for_provider(

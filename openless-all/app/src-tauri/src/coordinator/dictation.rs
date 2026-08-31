@@ -2512,7 +2512,8 @@ pub(super) async fn begin_session_as(
         | ActiveAsrProviderKind::ElevenLabs
         | ActiveAsrProviderKind::WhisperCompatible
         | ActiveAsrProviderKind::Volcengine
-        | ActiveAsrProviderKind::Xfyun => {}
+        | ActiveAsrProviderKind::Xfyun
+        | ActiveAsrProviderKind::TencentCloud => {}
     }
 
     if is_bailian_provider(&effective_asr) {
@@ -2905,6 +2906,76 @@ pub(super) async fn begin_session_as(
         let target: Arc<dyn crate::asr::AudioConsumer> = asr;
         let flushed_bytes = bridge.attach(target);
         log::info!("[coord] iFlytek ASR connected; flushed {flushed_bytes} deferred audio bytes");
+        finish_starting_session(inner, current_session_id).await;
+    } else if is_tencent_cloud_provider(&effective_asr) {
+        let creds = read_tencent_cloud_credentials();
+        let asr_call_label =
+            AsrCallLabel::new(effective_asr.clone(), Some(creds.model.clone()));
+        let asr = Arc::new(TencentCloudStreamingASR::new(creds));
+        let bridge = Arc::new(DeferredAsrBridge::new());
+        let consumer: Arc<dyn crate::recorder::AudioConsumer> = bridge.clone();
+        store_asr_for_session(
+            inner,
+            current_session_id,
+            ActiveAsr::TencentCloud(Arc::clone(&asr)),
+            asr_call_label,
+        );
+        start_recorder_for_starting(inner, current_session_id, &active_asr, consumer, remote)
+            .await?;
+
+        if let Err(error) = asr.open_session().await {
+            log::error!("[coord] open Tencent Cloud ASR session failed: {error}");
+            match startup_race_status_for_starting(inner, current_session_id) {
+                StartupRaceStatus::StaleContinuation => {
+                    asr.cancel();
+                    discard_startup_resources_for_session(inner, current_session_id);
+                    restore_prepared_windows_ime_session(inner, current_session_id);
+                    return Ok(());
+                }
+                StartupRaceStatus::CancelRaced => {
+                    asr.cancel();
+                    discard_startup_resources_for_session(inner, current_session_id);
+                    restore_prepared_windows_ime_session(inner, current_session_id);
+                    set_phase_idle_if_session_matches(inner, current_session_id);
+                    return Ok(());
+                }
+                StartupRaceStatus::ActiveStarting => asr.cancel(),
+            }
+            discard_startup_resources_for_session(inner, current_session_id);
+            emit_capsule(
+                inner,
+                CapsuleState::Error,
+                0.0,
+                0,
+                Some(format!("ASR 连接失败: {error}")),
+                None,
+            );
+            restore_prepared_windows_ime_session(inner, current_session_id);
+            set_phase_idle_if_session_matches(inner, current_session_id);
+            schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
+            return Err(error.to_string());
+        }
+        match startup_race_status_for_starting(inner, current_session_id) {
+            StartupRaceStatus::ActiveStarting => {}
+            StartupRaceStatus::CancelRaced => {
+                asr.cancel();
+                discard_startup_resources_for_session(inner, current_session_id);
+                restore_prepared_windows_ime_session(inner, current_session_id);
+                set_phase_idle_if_session_matches(inner, current_session_id);
+                return Ok(());
+            }
+            StartupRaceStatus::StaleContinuation => {
+                asr.cancel();
+                discard_startup_resources_for_session(inner, current_session_id);
+                restore_prepared_windows_ime_session(inner, current_session_id);
+                return Ok(());
+            }
+        }
+        let target: Arc<dyn crate::asr::AudioConsumer> = asr;
+        let flushed_bytes = bridge.attach(target);
+        log::info!(
+            "[coord] Tencent Cloud ASR connected; flushed {flushed_bytes} deferred audio bytes"
+        );
         finish_starting_session(inner, current_session_id).await;
     } else {
         let hotwords = enabled_hotwords(inner);
@@ -4119,6 +4190,36 @@ pub(super) async fn end_session(inner: &Arc<Inner>) -> Result<(), String> {
                             Err(TranscribeFail::new(
                                 "识别超时".to_string(),
                                 "xfyun global timeout".to_string(),
+                            ))
+                        }
+                    }
+                }
+                ActiveAsr::TencentCloud(asr) => {
+                    debug_assert!(uses_global_timeout);
+                    if let Err(error) = asr.send_last_frame().await {
+                        log::error!("[coord] Tencent Cloud ASR send last frame failed: {error}");
+                    }
+                    let timeout_duration =
+                        std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS);
+                    match tokio::time::timeout(timeout_duration, asr.await_final_result()).await {
+                        Ok(Ok(result)) => Ok(result),
+                        Ok(Err(error)) => {
+                            log::error!("[coord] Tencent Cloud ASR await final failed: {error}");
+                            asr.cancel();
+                            Err(TranscribeFail::new(
+                                format!("识别失败: {error}"),
+                                error.to_string(),
+                            ))
+                        }
+                        Err(_) => {
+                            log::error!(
+                                "[coord] Tencent Cloud ASR 全局超时 {} 秒",
+                                COORDINATOR_GLOBAL_TIMEOUT_SECS
+                            );
+                            asr.cancel();
+                            Err(TranscribeFail::new(
+                                "识别超时".to_string(),
+                                "tencent cloud global timeout".to_string(),
                             ))
                         }
                     }

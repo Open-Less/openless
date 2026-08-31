@@ -27,7 +27,8 @@ use crate::asr::local::{
 use crate::asr::{
     BailianCredentials, BailianRealtimeASR, DashScopeMultimodalASR, DictionaryHotword,
     ElevenLabsBatchASR, MimoBatchASR, Qwen3RealtimeASR, Qwen3RealtimeCredentials, RawTranscript,
-    VolcengineCredentials, VolcengineStreamingASR, WhisperBatchASR,
+    TencentCloudCredentials, TencentCloudStreamingASR, VolcengineCredentials,
+    VolcengineStreamingASR, WhisperBatchASR,
 };
 use crate::combo_hotkey::{ComboHotkeyError, ComboHotkeyEvent, ComboHotkeyMonitor};
 use crate::coordinator_state::{
@@ -642,6 +643,8 @@ enum ActiveAsr {
     StepfunRealtime(Arc<crate::asr::StepfunRealtimeASR>),
     /// 讯飞开放平台实时语音转写（RTASR）流式。
     Xfyun(Arc<crate::asr::XfyunStreamingASR>),
+    /// 腾讯云实时语音识别（混元 Hy-ASR）。
+    TencentCloud(Arc<TencentCloudStreamingASR>),
     #[cfg(target_os = "windows")]
     FoundryLocalWhisper(Arc<FoundryLocalWhisperAsr>),
     /// Windows sherpa-onnx 本地 ASR（offline batch + 实验 online streaming）。
@@ -691,6 +694,7 @@ pub(crate) enum ActiveAsrProviderKind {
     WhisperCompatible,
     Volcengine,
     Xfyun,
+    TencentCloud,
 }
 
 /// 「能否开始一次会话」所需的凭据形态（对应 `ensure_asr_credentials` 预检门）。
@@ -702,6 +706,8 @@ pub(crate) enum AsrPreflightCredential {
     VolcAppKey,
     /// 需要讯飞 AppID + APIKey。
     XfyunAppKey,
+    /// 需要腾讯云 AppID + SecretID + SecretKey。
+    TencentCloudKeys,
 }
 
 /// 概览页「已配置 / 未配置」状态所需的字段（对应 `asr_configured_for_provider`）。
@@ -718,6 +724,8 @@ pub(crate) enum AsrConfiguredFields {
     VolcAppKey,
     /// 讯飞 AppID + APIKey。
     XfyunAppKey,
+    /// 腾讯云 AppID + SecretID + SecretKey。
+    TencentCloudKeys,
 }
 
 impl ActiveAsrProviderKind {
@@ -732,6 +740,7 @@ impl ActiveAsrProviderKind {
             | ActiveAsrProviderKind::WhisperCompatible => AsrPreflightCredential::AsrApiKey,
             ActiveAsrProviderKind::Volcengine => AsrPreflightCredential::VolcAppKey,
             ActiveAsrProviderKind::Xfyun => AsrPreflightCredential::XfyunAppKey,
+            ActiveAsrProviderKind::TencentCloud => AsrPreflightCredential::TencentCloudKeys,
         }
     }
 
@@ -751,6 +760,7 @@ impl ActiveAsrProviderKind {
             }
             ActiveAsrProviderKind::Volcengine => AsrConfiguredFields::VolcAppKey,
             ActiveAsrProviderKind::Xfyun => AsrConfiguredFields::XfyunAppKey,
+            ActiveAsrProviderKind::TencentCloud => AsrConfiguredFields::TencentCloudKeys,
         }
     }
 }
@@ -772,6 +782,8 @@ pub(crate) fn active_asr_provider_kind(id: &str) -> ActiveAsrProviderKind {
         ActiveAsrProviderKind::WhisperCompatible
     } else if is_xfyun_provider(id) {
         ActiveAsrProviderKind::Xfyun
+    } else if is_tencent_cloud_provider(id) {
+        ActiveAsrProviderKind::TencentCloud
     } else {
         ActiveAsrProviderKind::Volcengine
     }
@@ -3127,6 +3139,13 @@ impl Coordinator {
                     .map_err(|_| "重新转录超时".to_string())?
                     .map_err(|e| e.to_string())?
             }
+            ActiveAsr::TencentCloud(asr) => {
+                asr.send_last_frame().await.map_err(|e| e.to_string())?;
+                tokio::time::timeout(timeout, asr.await_final_result())
+                    .await
+                    .map_err(|_| "重新转录超时".to_string())?
+                    .map_err(|e| e.to_string())?
+            }
             ActiveAsr::Whisper(w) => tokio::time::timeout(timeout, w.transcribe())
                 .await
                 .map_err(|_| "重新转录超时".to_string())?
@@ -3856,6 +3875,31 @@ fn read_xfyun_credentials() -> crate::asr::XfyunCredentials {
         .flatten()
         .unwrap_or_default();
     crate::asr::XfyunCredentials { app_id, api_key }
+}
+
+fn read_tencent_cloud_credentials() -> TencentCloudCredentials {
+    let app_id = CredentialsVault::get(CredentialAccount::TencentCloudAppId)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let secret_id = CredentialsVault::get(CredentialAccount::TencentCloudSecretId)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let secret_key = CredentialsVault::get(CredentialAccount::TencentCloudSecretKey)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let model = CredentialsVault::get(CredentialAccount::AsrModel)
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| crate::asr::tencent_cloud::DEFAULT_MODEL.to_string());
+    TencentCloudCredentials {
+        app_id,
+        secret_id,
+        secret_key,
+        model,
+    }
 }
 
 fn enabled_hotwords(inner: &Arc<Inner>) -> Vec<DictionaryHotword> {
@@ -4824,6 +4868,10 @@ mod tests {
             ActiveAsrProviderKind::ElevenLabs
         );
         assert_eq!(
+            active_asr_provider_kind(crate::asr::tencent_cloud::PROVIDER_ID),
+            ActiveAsrProviderKind::TencentCloud
+        );
+        assert_eq!(
             active_asr_provider_kind("volcengine"),
             ActiveAsrProviderKind::Volcengine
         );
@@ -4849,6 +4897,7 @@ mod tests {
         assert_eq!(WhisperCompatible.preflight_credential(), AsrApiKey);
         assert_eq!(Volcengine.preflight_credential(), VolcAppKey);
         assert_eq!(Xfyun.preflight_credential(), XfyunAppKey);
+        assert_eq!(TencentCloud.preflight_credential(), TencentCloudKeys);
     }
 
     #[test]
@@ -4988,6 +5037,7 @@ mod tests {
         assert_eq!(WhisperCompatible.configured_fields(), EndpointModelOnly);
         assert_eq!(Volcengine.configured_fields(), VolcAppKey);
         assert_eq!(Xfyun.configured_fields(), XfyunAppKey);
+        assert_eq!(TencentCloud.configured_fields(), TencentCloudKeys);
     }
 
     #[cfg(target_os = "windows")]

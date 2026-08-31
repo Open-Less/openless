@@ -183,6 +183,14 @@ pub(super) fn ensure_asr_credentials() -> Result<(), String> {
                 Err("请先在设置中填写讯飞 AppID 和 API Key".to_string())
             }
         }
+        AsrPreflightCredential::TencentCloudKeys => {
+            let creds = read_tencent_cloud_credentials();
+            if creds.auth_ok() {
+                Ok(())
+            } else {
+                Err("请先在设置中填写腾讯云 AppID、SecretID 和 SecretKey".to_string())
+            }
+        }
     }
 }
 
@@ -863,6 +871,10 @@ pub(super) fn is_xfyun_provider(id: &str) -> bool {
     id == crate::asr::xfyun::PROVIDER_ID
 }
 
+pub(super) fn is_tencent_cloud_provider(id: &str) -> bool {
+    id == crate::asr::tencent_cloud::PROVIDER_ID
+}
+
 pub(super) fn apply_chinese_script_preference(text: &str, pref: ChineseScriptPreference) -> String {
     if text.is_empty() {
         return String::new();
@@ -905,6 +917,10 @@ pub(super) enum QaAsrStart {
         asr: Arc<crate::asr::XfyunStreamingASR>,
         bridge: Arc<DeferredAsrBridge>,
     },
+    TencentCloud {
+        asr: Arc<TencentCloudStreamingASR>,
+        bridge: Arc<DeferredAsrBridge>,
+    },
     Ready {
         active: ActiveAsr,
         consumer: Arc<dyn crate::recorder::AudioConsumer>,
@@ -919,6 +935,9 @@ impl QaAsrStart {
             QaAsrStart::Qwen3Realtime { asr, .. } => ActiveAsr::Qwen3Realtime(Arc::clone(asr)),
             QaAsrStart::StepfunRealtime { asr, .. } => ActiveAsr::StepfunRealtime(Arc::clone(asr)),
             QaAsrStart::Xfyun { asr, .. } => ActiveAsr::Xfyun(Arc::clone(asr)),
+            QaAsrStart::TencentCloud { asr, .. } => {
+                ActiveAsr::TencentCloud(Arc::clone(asr))
+            }
             QaAsrStart::Ready { active, .. } => active.clone(),
         }
     }
@@ -930,6 +949,7 @@ impl QaAsrStart {
             QaAsrStart::Qwen3Realtime { bridge, .. } => Arc::clone(bridge) as _,
             QaAsrStart::StepfunRealtime { bridge, .. } => Arc::clone(bridge) as _,
             QaAsrStart::Xfyun { bridge, .. } => Arc::clone(bridge) as _,
+            QaAsrStart::TencentCloud { bridge, .. } => Arc::clone(bridge) as _,
             QaAsrStart::Ready { consumer, .. } => Arc::clone(consumer),
         }
     }
@@ -976,6 +996,15 @@ impl QaAsrStart {
                 let flushed = bridge.attach(target);
                 log::info!(
                     "[coord] QA iFlytek ASR connected; flushed {flushed} deferred audio bytes"
+                );
+                Ok(())
+            }
+            QaAsrStart::TencentCloud { asr, bridge } => {
+                asr.open_session().await.map_err(|e| e.to_string())?;
+                let target: Arc<dyn crate::asr::AudioConsumer> = Arc::clone(asr) as _;
+                let flushed = bridge.attach(target);
+                log::info!(
+                    "[coord] QA Tencent Cloud ASR connected; flushed {flushed} deferred audio bytes"
                 );
                 Ok(())
             }
@@ -1192,6 +1221,17 @@ pub(super) async fn build_qa_asr_start(
             Ok((
                 QaAsrStart::Xfyun {
                     asr: Arc::new(crate::asr::XfyunStreamingASR::new(creds)),
+                    bridge: Arc::new(DeferredAsrBridge::new()),
+                },
+                label,
+            ))
+        }
+        ActiveAsrProviderKind::TencentCloud => {
+            let creds = read_tencent_cloud_credentials();
+            let label = AsrCallLabel::new(effective_asr.clone(), Some(creds.model.clone()));
+            Ok((
+                QaAsrStart::TencentCloud {
+                    asr: Arc::new(TencentCloudStreamingASR::new(creds)),
                     bridge: Arc::new(DeferredAsrBridge::new()),
                 },
                 label,

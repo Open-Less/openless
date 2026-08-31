@@ -259,6 +259,9 @@ export const ASR_PRESETS = [
   // 讯飞实时语音转写（RTASR）流式：无 baseUrl/model 配置，凭据是 AppID + APIKey
   // 两字段（asr/xfyun.rs）；音频 16k/16bit/mono，与 recorder 输出一致。
   { id: 'iflytek',      nameKey: 'asrIflytek',      baseUrl: '',                                              model: ''                              },
+  // 腾讯云实时语音识别：AppID + SecretID + SecretKey 签名鉴权，默认使用当前最新
+  // 混元 Hy-ASR Preview；专用 WebSocket client 见 asr/tencent_cloud.rs。
+  { id: 'tencent-cloud', nameKey: 'asrTencentCloud', baseUrl: '',                                             model: 'Hy-ASR-3.0-preview'            },
   { id: 'foundry-local-whisper', nameKey: 'asrFoundryLocalWhisper', baseUrl: '',                              model: ''                              },
   { id: 'local-whisper', nameKey: 'asrLocalWhisper', baseUrl: '',                                         model: ''                              },
   // 本地引擎（Foundry / sherpa-onnx / Qwen3）：无 baseUrl/model 配置，

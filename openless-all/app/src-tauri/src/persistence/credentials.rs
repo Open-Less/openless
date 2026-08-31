@@ -341,6 +341,15 @@ struct CredsAsrEntry {
     /// 讯飞实时语音转写 APIKey（接口密钥）。
     #[serde(skip_serializing_if = "Option::is_none")]
     xfyunApiKey: Option<String>,
+    /// 腾讯云账号 AppID（实时语音识别 WebSocket 路径参数）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tencentCloudAppId: Option<String>,
+    /// 腾讯云 API 密钥 SecretID。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tencentCloudSecretId: Option<String>,
+    /// 腾讯云 API 密钥 SecretKey。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tencentCloudSecretKey: Option<String>,
 }
 
 impl CredsAsrEntry {
@@ -370,6 +379,9 @@ impl CredsAsrEntry {
             && self.advancedConfig.as_deref().unwrap_or("").is_empty()
             && self.xfyunAppId.as_deref().unwrap_or("").is_empty()
             && self.xfyunApiKey.as_deref().unwrap_or("").is_empty()
+            && self.tencentCloudAppId.as_deref().unwrap_or("").is_empty()
+            && self.tencentCloudSecretId.as_deref().unwrap_or("").is_empty()
+            && self.tencentCloudSecretKey.as_deref().unwrap_or("").is_empty()
     }
 }
 
@@ -1609,6 +1621,15 @@ fn lookup_account(root: &CredsRoot, account: CredentialAccount) -> Option<String
         CredentialAccount::AsrAdvancedConfig => asr.and_then(|e| pick(&e.advancedConfig)),
         CredentialAccount::XfyunAppId => asr.and_then(|e| pick(&e.xfyunAppId)),
         CredentialAccount::XfyunApiKey => asr.and_then(|e| pick(&e.xfyunApiKey)),
+        CredentialAccount::TencentCloudAppId => {
+            asr.and_then(|e| pick(&e.tencentCloudAppId))
+        }
+        CredentialAccount::TencentCloudSecretId => {
+            asr.and_then(|e| pick(&e.tencentCloudSecretId))
+        }
+        CredentialAccount::TencentCloudSecretKey => {
+            asr.and_then(|e| pick(&e.tencentCloudSecretKey))
+        }
         CredentialAccount::OmniApiKey => omni.and_then(|e| pick(&e.apiKey)),
         CredentialAccount::OmniEndpoint => omni.and_then(|e| pick(&e.baseURL)),
         CredentialAccount::OmniModel => omni.and_then(|e| pick(&e.model)),
@@ -1681,6 +1702,18 @@ fn write_account(root: &mut CredsRoot, account: CredentialAccount, value: Option
             let entry = root.providers.asr.entry(asr_id).or_default();
             entry.xfyunApiKey = normalized;
         }
+        CredentialAccount::TencentCloudAppId => {
+            let entry = root.providers.asr.entry(asr_id).or_default();
+            entry.tencentCloudAppId = normalized;
+        }
+        CredentialAccount::TencentCloudSecretId => {
+            let entry = root.providers.asr.entry(asr_id).or_default();
+            entry.tencentCloudSecretId = normalized;
+        }
+        CredentialAccount::TencentCloudSecretKey => {
+            let entry = root.providers.asr.entry(asr_id).or_default();
+            entry.tencentCloudSecretKey = normalized;
+        }
         CredentialAccount::OmniApiKey => {
             let entry = root.omni.providers.entry(omni_id).or_default();
             entry.apiKey = normalized;
@@ -1721,6 +1754,12 @@ pub enum CredentialAccount {
     XfyunAppId,
     /// 讯飞实时语音转写 APIKey。
     XfyunApiKey,
+    /// 腾讯云账号 AppID。
+    TencentCloudAppId,
+    /// 腾讯云 API 密钥 SecretID。
+    TencentCloudSecretId,
+    /// 腾讯云 API 密钥 SecretKey。
+    TencentCloudSecretKey,
     /// 多模态（Omni）模型的 API Key。仅多模态管线读取。
     OmniApiKey,
     /// 多模态（Omni）模型的 Base URL。
@@ -1750,6 +1789,9 @@ impl CredentialAccount {
             CredentialAccount::AsrAdvancedConfig => "asr.advanced_config",
             CredentialAccount::XfyunAppId => "xfyun.app_id",
             CredentialAccount::XfyunApiKey => "xfyun.api_key",
+            CredentialAccount::TencentCloudAppId => "tencent_cloud.app_id",
+            CredentialAccount::TencentCloudSecretId => "tencent_cloud.secret_id",
+            CredentialAccount::TencentCloudSecretKey => "tencent_cloud.secret_key",
             CredentialAccount::OmniApiKey => "omni.api_key",
             CredentialAccount::OmniEndpoint => "omni.endpoint",
             CredentialAccount::OmniModel => "omni.model",
@@ -1773,6 +1815,9 @@ impl CredentialAccount {
             CredentialAccount::AsrAdvancedConfig,
             CredentialAccount::XfyunAppId,
             CredentialAccount::XfyunApiKey,
+            CredentialAccount::TencentCloudAppId,
+            CredentialAccount::TencentCloudSecretId,
+            CredentialAccount::TencentCloudSecretKey,
             CredentialAccount::OmniApiKey,
             CredentialAccount::OmniEndpoint,
             CredentialAccount::OmniModel,
@@ -1793,6 +1838,9 @@ pub struct CredentialsSnapshot {
     pub asr_model: Option<String>,
     pub xfyun_app_id: Option<String>,
     pub xfyun_api_key: Option<String>,
+    pub tencent_cloud_app_id: Option<String>,
+    pub tencent_cloud_secret_id: Option<String>,
+    pub tencent_cloud_secret_key: Option<String>,
     pub ark_api_key: Option<String>,
     pub ark_model_id: Option<String>,
     pub ark_endpoint: Option<String>,
@@ -2616,6 +2664,15 @@ impl CredentialsVault {
             asr_model: lookup_account(&root, CredentialAccount::AsrModel),
             xfyun_app_id: lookup_account(&root, CredentialAccount::XfyunAppId),
             xfyun_api_key: lookup_account(&root, CredentialAccount::XfyunApiKey),
+            tencent_cloud_app_id: lookup_account(&root, CredentialAccount::TencentCloudAppId),
+            tencent_cloud_secret_id: lookup_account(
+                &root,
+                CredentialAccount::TencentCloudSecretId,
+            ),
+            tencent_cloud_secret_key: lookup_account(
+                &root,
+                CredentialAccount::TencentCloudSecretKey,
+            ),
             ark_api_key: lookup_account(&root, CredentialAccount::ArkApiKey),
             ark_model_id: lookup_account(&root, CredentialAccount::ArkModelId),
             ark_endpoint: lookup_account(&root, CredentialAccount::ArkEndpoint),
