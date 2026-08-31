@@ -52,6 +52,7 @@ const LLM_NAME_KEY_BY_ID: Record<string, string> = {
   openrouterFree: 'openrouterFree',
   alibabaCoding: 'alibabaCoding',
   codingPlanX: 'codingPlanX',
+  tencentTokenHub: 'tencentTokenHub',
   custom: 'custom',
 };
 

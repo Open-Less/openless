@@ -231,6 +231,7 @@ pub(super) fn cancel_active_asr(asr: ActiveAsr) {
         ActiveAsr::Qwen3Realtime(q) => q.cancel(),
         ActiveAsr::StepfunRealtime(s) => s.cancel(),
         ActiveAsr::Xfyun(x) => x.cancel(),
+        ActiveAsr::TencentCloud(t) => t.cancel(),
         #[cfg(target_os = "windows")]
         ActiveAsr::FoundryLocalWhisper(local) => local.cancel(),
         #[cfg(target_os = "windows")]

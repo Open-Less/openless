@@ -116,6 +116,11 @@ pub(crate) fn asr_configured_for_provider(provider: &str, snap: &CredentialsSnap
         AsrConfiguredFields::XfyunAppKey => {
             configured(&snap.xfyun_app_id) && configured(&snap.xfyun_api_key)
         }
+        AsrConfiguredFields::TencentCloudKeys => {
+            configured(&snap.tencent_cloud_app_id)
+                && configured(&snap.tencent_cloud_secret_id)
+                && configured(&snap.tencent_cloud_secret_key)
+        }
     }
 }
 
@@ -431,7 +436,10 @@ fn account_channel_kind(account: CredentialAccount) -> ChannelKind {
         | CredentialAccount::AsrVocabularyId
         | CredentialAccount::AsrAdvancedConfig
         | CredentialAccount::XfyunAppId
-        | CredentialAccount::XfyunApiKey => ChannelKind::Asr,
+        | CredentialAccount::XfyunApiKey
+        | CredentialAccount::TencentCloudAppId
+        | CredentialAccount::TencentCloudSecretId
+        | CredentialAccount::TencentCloudSecretKey => ChannelKind::Asr,
         // Omni 凭据走独立命名空间、从不按渠道 id 定位（前端写入不带 provider）；
         // 映射到 Asr 只为穷尽 match，实际调用点不可达。
         CredentialAccount::OmniApiKey
@@ -465,6 +473,9 @@ fn parse_account(s: &str) -> Result<CredentialAccount, String> {
         "asr.advanced_config" => Ok(CredentialAccount::AsrAdvancedConfig),
         "xfyun.app_id" => Ok(CredentialAccount::XfyunAppId),
         "xfyun.api_key" => Ok(CredentialAccount::XfyunApiKey),
+        "tencent_cloud.app_id" => Ok(CredentialAccount::TencentCloudAppId),
+        "tencent_cloud.secret_id" => Ok(CredentialAccount::TencentCloudSecretId),
+        "tencent_cloud.secret_key" => Ok(CredentialAccount::TencentCloudSecretKey),
         "omni.api_key" => Ok(CredentialAccount::OmniApiKey),
         "omni.endpoint" => Ok(CredentialAccount::OmniEndpoint),
         "omni.model" => Ok(CredentialAccount::OmniModel),

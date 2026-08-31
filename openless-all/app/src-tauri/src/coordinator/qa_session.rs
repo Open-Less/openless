@@ -569,6 +569,21 @@ pub(super) async fn transcribe_overlay_dictation_asr(
                 }
             }
         }
+        ActiveAsr::TencentCloud(asr) => {
+            debug_assert!(uses_global_timeout);
+            if let Err(error) = asr.send_last_frame().await {
+                log::error!("[coord] overlay QA: Tencent Cloud ASR send last frame failed: {error}");
+            }
+            let timeout_duration = std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS);
+            match tokio::time::timeout(timeout_duration, asr.await_final_result()).await {
+                Ok(Ok(raw)) => Ok(raw),
+                Ok(Err(error)) => Err(error.to_string()),
+                Err(_) => {
+                    asr.cancel();
+                    Err("tencent cloud global timeout".to_string())
+                }
+            }
+        }
         ActiveAsr::Whisper(whisper) => {
             debug_assert!(uses_global_timeout);
             let timeout_duration = std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS);
@@ -1358,6 +1373,34 @@ pub(super) async fn end_qa_session(inner: &Arc<Inner>) -> Result<(), String> {
                     asr.cancel();
                     finish_qa_with_error_if_current(inner, session_id, "识别超时".to_string());
                     return Err("xfyun global timeout".to_string());
+                }
+            }
+        }
+        ActiveAsr::TencentCloud(asr) => {
+            debug_assert!(uses_global_timeout);
+            if let Err(error) = asr.send_last_frame().await {
+                log::error!("[coord] QA: Tencent Cloud ASR send last frame failed: {error}");
+            }
+            let timeout_duration = std::time::Duration::from_secs(COORDINATOR_GLOBAL_TIMEOUT_SECS);
+            match tokio::time::timeout(timeout_duration, asr.await_final_result()).await {
+                Ok(Ok(raw)) => raw,
+                Ok(Err(error)) => {
+                    log::error!("[coord] QA: Tencent Cloud ASR await final failed: {error}");
+                    finish_qa_with_error_if_current(
+                        inner,
+                        session_id,
+                        format!("识别失败: {error}"),
+                    );
+                    return Err(error.to_string());
+                }
+                Err(_) => {
+                    log::error!(
+                        "[coord] QA: Tencent Cloud ASR 全局超时 {} 秒",
+                        COORDINATOR_GLOBAL_TIMEOUT_SECS
+                    );
+                    asr.cancel();
+                    finish_qa_with_error_if_current(inner, session_id, "识别超时".to_string());
+                    return Err("tencent cloud global timeout".to_string());
                 }
             }
         }

@@ -457,6 +457,9 @@ async fn validate_asr_provider(scope: &ProviderScope) -> Result<(), String> {
     if active_asr == crate::asr::xfyun::PROVIDER_ID {
         return validate_xfyun_asr_provider(scope).await;
     }
+    if active_asr == crate::asr::tencent_cloud::PROVIDER_ID {
+        return validate_tencent_cloud_asr_provider(scope).await;
+    }
     // 火山走专属 WS 协议与 volcengine.* 凭据槽位，不能落进下面的 OpenAI 兼容
     // HTTP 兜底（那条路只认 asr.api_key —— 火山从不写入的槽位，填对也必报
     // 「API Key 为空」）。
@@ -520,6 +523,56 @@ async fn validate_xfyun_asr_provider(scope: &ProviderScope) -> Result<(), String
         Ok(_) => Ok(()),
         Err(crate::asr::xfyun::XfyunASRError::NoFinalResult) => Ok(()),
         Err(e) => Err(e.to_string()),
+    }
+}
+
+/// 腾讯云实时 ASR 验证：真实签名建连，发送 1 秒静音后正常收尾。
+async fn validate_tencent_cloud_asr_provider(scope: &ProviderScope) -> Result<(), String> {
+    let app_id = scope
+        .get(CredentialAccount::TencentCloudAppId)
+        .map_err(|error| error.to_string())?
+        .unwrap_or_default();
+    let secret_id = scope
+        .get(CredentialAccount::TencentCloudSecretId)
+        .map_err(|error| error.to_string())?
+        .unwrap_or_default();
+    let secret_key = scope
+        .get(CredentialAccount::TencentCloudSecretKey)
+        .map_err(|error| error.to_string())?
+        .unwrap_or_default();
+    if app_id.trim().is_empty() {
+        return Err("腾讯云 AppID 为空".to_string());
+    }
+    if secret_id.trim().is_empty() {
+        return Err("腾讯云 SecretID 为空".to_string());
+    }
+    if secret_key.trim().is_empty() {
+        return Err("腾讯云 SecretKey 为空".to_string());
+    }
+    let model = scope
+        .get(CredentialAccount::AsrModel)
+        .map_err(|error| error.to_string())?
+        .filter(|model| !model.trim().is_empty())
+        .unwrap_or_else(|| crate::asr::tencent_cloud::DEFAULT_MODEL.to_string());
+    let asr = std::sync::Arc::new(crate::asr::TencentCloudStreamingASR::new(
+        crate::asr::TencentCloudCredentials {
+            app_id,
+            secret_id,
+            secret_key,
+            model,
+        },
+    ));
+    asr.open_session().await.map_err(|error| error.to_string())?;
+    crate::asr::AudioConsumer::consume_pcm_chunk(
+        &*asr,
+        &vec![0u8; crate::asr::tencent_cloud::TARGET_AUDIO_CHUNK_BYTES * 5],
+    );
+    asr.send_last_frame()
+        .await
+        .map_err(|error| error.to_string())?;
+    match asr.await_final_result().await {
+        Ok(_) | Err(crate::asr::tencent_cloud::TencentCloudASRError::NoFinalResult) => Ok(()),
+        Err(error) => Err(error.to_string()),
     }
 }
 

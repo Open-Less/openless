@@ -176,6 +176,7 @@ fn is_builtin_llm_provider(provider_id: &str) -> bool {
             | "codingPlanX"
             | "minimax"
             | "stepfun"
+            | "tencentTokenHub"
     )
 }
 
@@ -1818,7 +1819,7 @@ pub(crate) fn apply_openai_compatible_thinking_control(
     thinking_enabled: bool,
 ) {
     // 优先按 provider_id 预设分派；custom / 未声明 provider 时回退到 base_url 兜底,
-    // 让用户用"自定义"preset 接入 MiniMax 也能正确下发 thinking 控制参数。
+    // 让用户用"自定义"preset 接入已知厂商时也能正确下发 thinking 控制参数。
     let control = openai_compatible_thinking_control(provider_id)
         .or_else(|| openai_compatible_thinking_control_for_base_url(base_url));
     match control {
@@ -1860,6 +1861,14 @@ pub(crate) fn apply_openai_compatible_thinking_control(
                 "type": if thinking_enabled { "adaptive" } else { "disabled" },
             });
         }
+        Some(ThinkingControl::TokenHubThinking) => {
+            body["thinking"] = json!({
+                "type": if thinking_enabled { "enabled" } else { "disabled" },
+            });
+            if thinking_enabled {
+                body["reasoning_effort"] = json!("medium");
+            }
+        }
         None => {}
     }
 }
@@ -1871,6 +1880,7 @@ pub(crate) enum ThinkingControl {
     OpenRouterReasoning,
     DeepSeekThinking,
     MiniMaxThinking,
+    TokenHubThinking,
 }
 
 pub(crate) fn openai_compatible_thinking_control(provider_id: &str) -> Option<ThinkingControl> {
@@ -1882,9 +1892,11 @@ pub(crate) fn openai_compatible_thinking_control(provider_id: &str) -> Option<Th
         "alibabaCoding" => Some(ThinkingControl::EnableThinking),
         // StepFun step-3.x-flash 系列按官方文档接受 reasoning_effort（low/medium/high，
         // 无法完全关闭思考）；非推理模型（如 step-1o-turbo-vision）会忽略该字段。
-        "openai" | "codingPlanX" | "stepfun" => Some(ThinkingControl::ReasoningEffort),
-        // custom / 其他未声明 provider 走 base_url 兜底识别——用户用自定义
-        // endpoint 接入 MiniMax 时,根据 base_url 命中即下发官方 thinking 参数。
+        "openai" | "codingPlanX" | "stepfun" => {
+            Some(ThinkingControl::ReasoningEffort)
+        }
+        "tencentTokenHub" => Some(ThinkingControl::TokenHubThinking),
+        // custom / 其他未声明 provider 走 base_url 兜底识别。
         _ => None,
     }
 }
@@ -1922,6 +1934,9 @@ pub(crate) fn openai_compatible_thinking_control_for_base_url(
     }
     if host.contains("stepfun") {
         return Some(ThinkingControl::ReasoningEffort);
+    }
+    if host.contains("tokenhub.tencentmaas.com") || host.contains("api.lkeap.cloud.tencent.com") {
+        return Some(ThinkingControl::TokenHubThinking);
     }
     None
 }
@@ -3741,6 +3756,48 @@ mod tests {
         let body = provider.chat_body(false, vec![json!({ "role": "user", "content": "hi" })]);
 
         assert_eq!(body["reasoning_effort"], "low");
+    }
+
+    #[test]
+    fn openai_chat_body_controls_tokenhub_thinking() {
+        for (thinking_enabled, expected) in [(true, "enabled"), (false, "disabled")] {
+            let provider = OpenAICompatibleLLMProvider::new(
+                OpenAICompatibleConfig::new(
+                    "tencentTokenHub",
+                    "Tencent TokenHub",
+                    "https://tokenhub.tencentmaas.com/v1",
+                    "k",
+                    "hy3",
+                )
+                .with_thinking_enabled(thinking_enabled),
+            );
+
+            let body = provider.chat_body(false, vec![json!({ "role": "user", "content": "hi" })]);
+
+            assert_eq!(body["thinking"]["type"], expected);
+            assert_eq!(
+                body.get("reasoning_effort").and_then(Value::as_str),
+                thinking_enabled.then_some("medium")
+            );
+        }
+    }
+
+    #[test]
+    fn openai_chat_body_detects_custom_tokenhub_endpoint() {
+        for base_url in [
+            "https://tokenhub.tencentmaas.com/v1/",
+            "https://api.lkeap.cloud.tencent.com/plan/v3",
+        ] {
+            let provider = OpenAICompatibleLLMProvider::new(
+                OpenAICompatibleConfig::new("custom", "Custom", base_url, "k", "hy3")
+                    .with_thinking_enabled(false),
+            );
+
+            let body =
+                provider.chat_body(false, vec![json!({ "role": "user", "content": "hi" })]);
+
+            assert_eq!(body["thinking"]["type"], "disabled");
+        }
     }
 
     #[test]
