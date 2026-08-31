@@ -101,38 +101,30 @@ HRESULT OpenLessEditSession::InsertText(TfEditCookie edit_cookie) {
     return hr;
   }
 
-  ITfRange* query_range = nullptr;
+  if (cancellation_ && cancellation_->load()) {
+    insert_at_selection->Release();
+    return HRESULT_FROM_WIN32(ERROR_CANCELLED);
+  }
+
+  // Commit in a single call. Some Chromium-backed text stores surface a
+  // full-text QUERYONLY preflight as an edit and then duplicate the real commit.
+  ITfRange* committed_range = nullptr;
   hr = insert_at_selection->InsertTextAtSelection(
-      edit_cookie, TF_IAS_QUERYONLY, text_.c_str(),
-      static_cast<LONG>(text_.size()), &query_range);
-  if (query_range != nullptr) {
-    query_range->Release();
-    query_range = nullptr;
-  }
-
-  if (SUCCEEDED(hr) && cancellation_ && cancellation_->load()) {
-    hr = HRESULT_FROM_WIN32(ERROR_CANCELLED);
-  }
-
-  if (SUCCEEDED(hr)) {
-    ITfRange* committed_range = nullptr;
-    hr = insert_at_selection->InsertTextAtSelection(
-        edit_cookie, 0, text_.c_str(), static_cast<LONG>(text_.size()),
-        &committed_range);
-    if (committed_range != nullptr) {
-      if (SUCCEEDED(hr)) {
-        const HRESULT collapse_hr =
-            committed_range->Collapse(edit_cookie, TF_ANCHOR_END);
-        if (SUCCEEDED(collapse_hr)) {
-          TF_SELECTION selection = {};
-          selection.range = committed_range;
-          selection.style.ase = TF_AE_END;
-          selection.style.fInterimChar = FALSE;
-          (void)context_->SetSelection(edit_cookie, 1, &selection);
-        }
+      edit_cookie, 0, text_.c_str(), static_cast<LONG>(text_.size()),
+      &committed_range);
+  if (committed_range != nullptr) {
+    if (SUCCEEDED(hr)) {
+      const HRESULT collapse_hr =
+          committed_range->Collapse(edit_cookie, TF_ANCHOR_END);
+      if (SUCCEEDED(collapse_hr)) {
+        TF_SELECTION selection = {};
+        selection.range = committed_range;
+        selection.style.ase = TF_AE_END;
+        selection.style.fInterimChar = FALSE;
+        (void)context_->SetSelection(edit_cookie, 1, &selection);
       }
-      committed_range->Release();
     }
+    committed_range->Release();
   }
 
   insert_at_selection->Release();
