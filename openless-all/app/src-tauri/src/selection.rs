@@ -1237,9 +1237,12 @@ fn windows_wait_clipboard_settle_after_write() -> WindowsClipboardSettle {
     let mut seq_stable = false;
 
     while (start.elapsed().as_millis() as u64) < MAX_MS {
-        let open = unsafe { GetOpenClipboardWindow() };
+        let open_is_free = match unsafe { GetOpenClipboardWindow() } {
+            Ok(hwnd) => hwnd.0.is_null(),
+            Err(_) => true,
+        };
         let seq = unsafe { GetClipboardSequenceNumber() };
-        if open.0.is_null() {
+        if open_is_free {
             open_cleared = true;
             if seq == last_seq {
                 stable_rounds += 1;
@@ -1359,7 +1362,8 @@ fn windows_copy_env_snapshot(phase: &'static str) -> WindowsCopyEnvSnapshot {
     };
 
     unsafe {
-        let key_down = |vk| (GetAsyncKeyState(vk.0 as i32) as u16) & 0x8000 != 0;
+        use windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY;
+        let key_down = |vk: VIRTUAL_KEY| ((GetAsyncKeyState(vk.0 as i32) as u16) & 0x8000) != 0;
         let ctrl_down = key_down(VK_CONTROL);
         let alt_down = key_down(VK_MENU);
         let shift_down = key_down(VK_SHIFT);
@@ -1394,6 +1398,11 @@ fn windows_copy_env_snapshot(phase: &'static str) -> WindowsCopyEnvSnapshot {
             String::from_utf16_lossy(&buf[..n as usize])
         };
 
+        let open_clipboard_hwnd = GetOpenClipboardWindow()
+            .ok()
+            .map(|hwnd| hwnd.0 as usize)
+            .unwrap_or(0);
+
         WindowsCopyEnvSnapshot {
             phase,
             ctrl_down,
@@ -1405,7 +1414,7 @@ fn windows_copy_env_snapshot(phase: &'static str) -> WindowsCopyEnvSnapshot {
             fg_class: class_of(foreground),
             focus_class: class_of(focus),
             clipboard_seq: Some(GetClipboardSequenceNumber()),
-            open_clipboard_hwnd: GetOpenClipboardWindow().0 as usize,
+            open_clipboard_hwnd,
         }
     }
 }
