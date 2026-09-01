@@ -1236,7 +1236,7 @@ fn windows_wait_clipboard_settle_after_write() -> WindowsClipboardSettle {
     let mut open_cleared = false;
     let mut seq_stable = false;
 
-    while start.elapsed().as_millis() as u64 < MAX_MS {
+    while (start.elapsed().as_millis() as u64) < MAX_MS {
         let open = unsafe { GetOpenClipboardWindow() };
         let seq = unsafe { GetClipboardSequenceNumber() };
         if open.0.is_null() {
@@ -1289,7 +1289,7 @@ fn windows_poll_clipboard_after_copy(
     let mut resent_ctrl_c = false;
     let mut captured = None;
 
-    while start.elapsed().as_millis() as u64 < MAX_MS {
+    while (start.elapsed().as_millis() as u64) < MAX_MS {
         attempts += 1;
         match clipboard.get_text() {
             Ok(text) if text != sentinel => {
@@ -1305,7 +1305,7 @@ fn windows_poll_clipboard_after_copy(
         }
 
         // Halfway through: if still on sentinel, resend Ctrl+C once.
-        if !resent_ctrl_c && start.elapsed().as_millis() as u64 >= 150 {
+        if !resent_ctrl_c && (start.elapsed().as_millis() as u64) >= 150 {
             if post_copy_shortcut() {
                 *post_ok = true;
                 resent_ctrl_c = true;
