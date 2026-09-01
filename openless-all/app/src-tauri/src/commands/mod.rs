@@ -251,7 +251,9 @@ mod tests {
     };
     use crate::commands::providers::{
         active_asr_is_keyless_for_validation, asr_transcriptions_url, fetch_provider_models,
-        is_gemini_base_url, models_url, parse_gemini_model_ids, parse_model_ids, ProviderConfig,
+        is_gemini_base_url, is_orcarouter_base_url, models_url, parse_gemini_model_ids,
+        parse_model_ids, parse_orcarouter_asr_model_ids, parse_orcarouter_model_ids,
+        ProviderConfig,
     };
     use crate::commands::settings::{
         parse_latest_beta_from_atom, persist_settings, SettingsWriter,
@@ -686,6 +688,22 @@ mod tests {
         assert!(llm_configured_for_provider("atlascloud", &ready));
     }
 
+    #[test]
+    fn credentials_status_requires_api_key_for_orcarouter() {
+        let keyless = CredentialsSnapshot {
+            ark_endpoint: Some("https://api.orcarouter.ai/v1".into()),
+            ark_model_id: Some("orcarouter/fusion-flash".into()),
+            ..snapshot()
+        };
+        assert!(!llm_configured_for_provider("orcarouter", &keyless));
+
+        let ready = CredentialsSnapshot {
+            ark_api_key: Some("key".into()),
+            ..keyless
+        };
+        assert!(llm_configured_for_provider("orcarouter", &ready));
+    }
+
     impl SettingsWriter for FakeSettingsWriter {
         fn read_settings(&self) -> UserPreferences {
             self.saved.lock().unwrap().clone().unwrap_or_default()
@@ -807,6 +825,51 @@ mod tests {
             parse_model_ids(r#"{ "data": [{ "id": "b" }, { "id": "a" }, { "id": "b" }] }"#)
                 .unwrap();
         assert_eq!(models, vec!["a".to_string(), "b".to_string()]);
+    }
+
+    #[test]
+    fn orcarouter_catalog_filters_non_chat_models() {
+        let body = r#"{"data":[
+            {"id":"orcarouter/fusion-flash","supported_endpoint_types":["openai","anthropic"]},
+            {"id":"openai/gpt-5-mini","supported_endpoint_types":["openai"]},
+            {"id":"openai/sora-2","supported_endpoint_types":["openai-video"]},
+            {"id":"openai/text-embedding-3-small","supported_endpoint_types":["embeddings"]},
+            {"id":"legacy/chat-model"}
+        ]}"#;
+        assert_eq!(
+            parse_orcarouter_model_ids(body).unwrap(),
+            vec![
+                "legacy/chat-model".to_string(),
+                "openai/gpt-5-mini".to_string(),
+                "orcarouter/fusion-flash".to_string(),
+            ]
+        );
+        assert!(is_orcarouter_base_url("https://api.orcarouter.ai/v1"));
+        assert!(!is_orcarouter_base_url("https://orcarouter.ai/v1"));
+        assert!(!is_orcarouter_base_url(
+            "https://api.orcarouter.ai.example/v1"
+        ));
+    }
+
+    #[test]
+    fn orcarouter_asr_catalog_keeps_audio_input_gemini_models_only() {
+        let body = r#"{"data":[
+            {"id":"google/gemini-2.5-flash","supported_endpoint_types":["openai"]},
+            {"id":"google/gemini-3.5-flash","supported_endpoint_types":["openai"]},
+            {"id":"google/gemini-2.5-flash-image-preview","supported_endpoint_types":["openai"]},
+            {"id":"google/gemini-2.5-flash-tts","supported_endpoint_types":["openai"]},
+            {"id":"openai/whisper-large-v3","supported_endpoint_types":["openai"]},
+            {"id":"google/gemini-legacy"},
+            {"id":"google/gemini-native","supported_endpoint_types":["google"]}
+        ]}"#;
+        assert_eq!(
+            parse_orcarouter_asr_model_ids(body).unwrap(),
+            vec![
+                "google/gemini-2.5-flash".to_string(),
+                "google/gemini-3.5-flash".to_string(),
+                "google/gemini-legacy".to_string(),
+            ]
+        );
     }
 
     #[test]

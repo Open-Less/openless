@@ -1,6 +1,15 @@
 import type { CredentialsStatus } from "../types"
-import { invokeOrMock } from "./shared"
+import { invokeOrMock, isTauri } from "./shared"
 import { mockCredentialsStatus } from "./mock-data"
+
+const browserCredentialMock = new Map<string, string>([
+    ["orcarouter-asr:asr.endpoint", "https://api.orcarouter.ai/v1"],
+    ["orcarouter-asr:asr.model", "google/gemini-2.5-flash"],
+])
+
+function browserCredentialKey(account: string, provider?: string): string {
+    return `${provider ?? "active"}:${account}`
+}
 
 export interface ProviderCheckResult {
     ok: boolean
@@ -19,7 +28,9 @@ export function getCredentials(): Promise<CredentialsStatus> {
 }
 
 export function setCredential(account: string, value: string, provider?: string): Promise<void> {
-    return invokeOrMock("set_credential", { account, value, provider }, () => undefined)
+    return invokeOrMock("set_credential", { account, value, provider }, () => {
+        browserCredentialMock.set(browserCredentialKey(account, provider), value)
+    })
 }
 
 export function setActiveAsrProvider(provider: string): Promise<void> {
@@ -50,7 +61,7 @@ export function readCredential(account: string, provider?: string): Promise<stri
     return invokeOrMock<string | null>(
         "read_credential",
         { account, provider },
-        () => null,
+        () => browserCredentialMock.get(browserCredentialKey(account, provider)) ?? null,
     )
 }
 
@@ -64,10 +75,46 @@ export function validateProviderCredentials(
     }))
 }
 
-export function listProviderModels(
+export async function listProviderModels(
     kind: "llm" | "asr" | "omni",
     channelId?: string,
 ): Promise<ProviderModelsResult> {
+    if (!isTauri && (kind === "llm" || kind === "asr")) {
+        const endpointAccount = kind === "llm" ? "ark.endpoint" : "asr.endpoint"
+        const endpoint = browserCredentialMock.get(
+            browserCredentialKey(endpointAccount, channelId),
+        )
+        if (endpoint) {
+            const host = new URL(endpoint).hostname.toLowerCase()
+            if (host === "api.orcarouter.ai") {
+                const response = await fetch("/__openless_dev/orcarouter/models")
+                if (!response.ok) {
+                    throw new Error(`OrcaRouter /models returned ${response.status}`)
+                }
+                const payload = await response.json() as {
+                    data?: Array<{
+                        id?: string
+                        supported_endpoint_types?: string[]
+                    }>
+                }
+                return {
+                    models: (payload.data ?? [])
+                        .filter(model => (
+                            !model.supported_endpoint_types
+                            || model.supported_endpoint_types.includes("openai")
+                        ))
+                        .map(model => model.id?.trim() ?? "")
+                        .filter(model => {
+                            if (!model) return false
+                            if (kind === "llm") return true
+                            const id = model.toLowerCase()
+                            return id.startsWith("google/gemini")
+                                && !/(image|tts|embedding|robotics)/.test(id)
+                        }),
+                }
+            }
+        }
+    }
     return invokeOrMock("list_provider_models", { kind, channelId }, () => ({
         models:
             kind === "llm"

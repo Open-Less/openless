@@ -31,6 +31,15 @@ export default defineConfig(async () => ({
         ? { protocol: "ws", host, port: 1421 }
         : undefined,
     watch: { ignored: ["**/src-tauri/**"] },
+    proxy: {
+      // Browser-only preview parity: the native app calls OrcaRouter directly,
+      // while Vite needs a same-origin bridge because /models does not advertise CORS.
+      "/__openless_dev/orcarouter/models": {
+        target: "https://api.orcarouter.ai",
+        changeOrigin: true,
+        rewrite: () => "/v1/models",
+      },
+    },
   },
   envPrefix: ["VITE_", "TAURI_"],
   build: {

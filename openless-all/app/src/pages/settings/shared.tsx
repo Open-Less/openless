@@ -245,6 +245,9 @@ export const ASR_PRESETS = [
   // OpenRouter 的 /audio/transcriptions 走 application/json + base64（issue #582），
   // 后端 coordinator.rs::whisper_request_format 对该 id 切换到 OpenRouterJson 编码。
   { id: 'openrouter',   nameKey: 'asrOpenrouter',   baseUrl: 'https://openrouter.ai/api/v1',                   model: 'openai/whisper-large-v3-turbo' },
+  // OrcaRouter 的 ASR 走 /chat/completions + input_audio，由 /models 动态筛选
+  // 支持音频输入的 Gemini；不是 Whisper /audio/transcriptions 协议。
+  { id: 'orcarouter',   nameKey: 'orcarouter',      baseUrl: 'https://api.orcarouter.ai/v1',                  model: 'google/gemini-2.5-flash'         },
   // ZenMux 聚合平台的 /audio/transcriptions 同为 application/json + base64
   // （issue #837），后端 whisper_request_format 对该 id 切 ZenMuxJson；
   // 语言跟随工作语言，enable_itn 开关见 AsrAdvancedOptions（仅该预设显示）。

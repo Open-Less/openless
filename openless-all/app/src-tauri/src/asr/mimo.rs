@@ -20,11 +20,19 @@ const MIMO_MAX_CHUNK_DURATION_MS: u64 = 180_000;
 pub const PROVIDER_ID: &str = "xiaomi-mimo-asr";
 pub const DEFAULT_ENDPOINT: &str = "https://api.xiaomimimo.com/v1";
 pub const DEFAULT_MODEL: &str = "mimo-v2.5-asr";
+pub const ORCAROUTER_PROVIDER_ID: &str = "orcarouter";
+pub const ORCAROUTER_DEFAULT_ENDPOINT: &str = "https://api.orcarouter.ai/v1";
+pub const ORCAROUTER_DEFAULT_MODEL: &str = "google/gemini-2.5-flash";
+const ORCAROUTER_TRANSCRIPTION_PROMPT: &str =
+    "Transcribe this audio verbatim. Return only the transcript, without commentary.";
 
 pub struct MimoBatchASR {
     api_key: String,
     base_url: String,
     model: String,
+    provider_name: &'static str,
+    prompt: Option<&'static str>,
+    audio_data_url: bool,
     buffer: Mutex<Vec<u8>>,
 }
 
@@ -34,6 +42,21 @@ impl MimoBatchASR {
             api_key,
             base_url,
             model,
+            provider_name: "MiMo",
+            prompt: None,
+            audio_data_url: true,
+            buffer: Mutex::new(Vec::new()),
+        }
+    }
+
+    pub fn new_orcarouter(api_key: String, base_url: String, model: String) -> Self {
+        Self {
+            api_key,
+            base_url,
+            model,
+            provider_name: "OrcaRouter",
+            prompt: Some(ORCAROUTER_TRANSCRIPTION_PROMPT),
+            audio_data_url: false,
             buffer: Mutex::new(Vec::new()),
         }
     }
@@ -56,7 +79,7 @@ impl MimoBatchASR {
 
     async fn transcribe_inner(&self, pcm: &[u8]) -> Result<RawTranscript> {
         if self.api_key.trim().is_empty() {
-            anyhow::bail!("MiMo API key missing");
+            anyhow::bail!("{} API key missing", self.provider_name);
         }
 
         let duration_ms = pcm_duration_ms(pcm);
@@ -78,7 +101,7 @@ impl MimoBatchASR {
             .map(|chunk| i16::from_le_bytes([chunk[0], chunk[1]]))
             .collect();
         let wav = encode_wav_16k_mono(&samples);
-        let body = mimo_chat_body(&self.model, &wav);
+        let body = audio_input_chat_body(&self.model, &wav, self.prompt, self.audio_data_url);
         let url = mimo_chat_completions_url(&self.base_url)?;
         let client = crate::net::http();
         let resp = client
@@ -87,15 +110,18 @@ impl MimoBatchASR {
             .json(&body)
             .send()
             .await
-            .context("MiMo ASR HTTP request failed")?;
+            .with_context(|| format!("{} ASR HTTP request failed", self.provider_name))?;
 
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            anyhow::bail!("MiMo ASR API error {}: {}", status, body);
+            anyhow::bail!("{} ASR API error {}: {}", self.provider_name, status, body);
         }
 
-        let json: Value = resp.json().await.context("parse MiMo ASR response")?;
+        let json: Value = resp
+            .json()
+            .await
+            .with_context(|| format!("parse {} ASR response", self.provider_name))?;
         Ok(extract_mimo_text(&json).trim().to_string())
     }
 
@@ -126,22 +152,42 @@ pub fn mimo_chat_completions_url(base_url: &str) -> Result<String> {
 }
 
 pub fn mimo_chat_body(model: &str, wav: &[u8]) -> Value {
-    let audio_data = format!(
-        "data:audio/wav;base64,{}",
-        base64::engine::general_purpose::STANDARD.encode(wav)
-    );
+    audio_input_chat_body(model, wav, None, true)
+}
+
+pub fn orcarouter_chat_body(model: &str, wav: &[u8]) -> Value {
+    audio_input_chat_body(model, wav, Some(ORCAROUTER_TRANSCRIPTION_PROMPT), false)
+}
+
+fn audio_input_chat_body(
+    model: &str,
+    wav: &[u8],
+    prompt: Option<&str>,
+    audio_data_url: bool,
+) -> Value {
+    let encoded = base64::engine::general_purpose::STANDARD.encode(wav);
+    let audio_data = if audio_data_url {
+        format!("data:audio/wav;base64,{encoded}")
+    } else {
+        encoded
+    };
+    let mut content = Vec::with_capacity(if prompt.is_some() { 2 } else { 1 });
+    if let Some(text) = prompt {
+        content.push(serde_json::json!({ "type": "text", "text": text }));
+    }
+    content.push(serde_json::json!({
+        "type": "input_audio",
+        "input_audio": {
+            "data": audio_data,
+            "format": "wav",
+        },
+    }));
     serde_json::json!({
         "model": model,
         "stream": false,
         "messages": [{
             "role": "user",
-            "content": [{
-                "type": "input_audio",
-                "input_audio": {
-                    "data": audio_data,
-                    "format": "wav",
-                },
-            }],
+            "content": content,
         }],
     })
 }
@@ -294,6 +340,21 @@ mod tests {
             .as_str()
             .unwrap()
             .starts_with("data:audio/wav;base64,"));
+    }
+
+    #[test]
+    fn orcarouter_body_uses_prompt_and_raw_base64_audio() {
+        let body = orcarouter_chat_body(ORCAROUTER_DEFAULT_MODEL, b"wav");
+        assert_eq!(body["model"], ORCAROUTER_DEFAULT_MODEL);
+        assert_eq!(body["messages"][0]["content"][0]["type"], "text");
+        assert_eq!(
+            body["messages"][0]["content"][0]["text"],
+            ORCAROUTER_TRANSCRIPTION_PROMPT
+        );
+        let audio = &body["messages"][0]["content"][1];
+        assert_eq!(audio["type"], "input_audio");
+        assert_eq!(audio["input_audio"]["format"], "wav");
+        assert_eq!(audio["input_audio"]["data"], "d2F2");
     }
 
     #[test]

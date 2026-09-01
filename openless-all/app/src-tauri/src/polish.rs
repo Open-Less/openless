@@ -172,6 +172,7 @@ fn is_builtin_llm_provider(provider_id: &str) -> bool {
             | "mimo"
             | "cometapi"
             | "openrouterFree"
+            | "orcarouter"
             | "alibabaCoding"
             | "codingPlanX"
             | "minimax"
@@ -3492,6 +3493,10 @@ mod tests {
         );
         assert_eq!(
             openai_compatible_temperature_for_provider("atlascloud", None),
+            Some(DEFAULT_TEMPERATURE)
+        );
+        assert_eq!(
+            openai_compatible_temperature_for_provider("orcarouter", None),
             Some(DEFAULT_TEMPERATURE)
         );
     }

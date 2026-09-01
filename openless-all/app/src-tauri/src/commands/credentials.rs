@@ -148,6 +148,7 @@ fn llm_provider_default_endpoint(provider: &str) -> Option<&'static str> {
         "mimo" => Some("https://api.xiaomimimo.com/v1"),
         "cometapi" => Some("https://api.cometapi.com/v1"),
         "openrouterFree" => Some("https://openrouter.ai/api/v1"),
+        "orcarouter" => Some("https://api.orcarouter.ai/v1"),
         "alibabaCoding" => Some("https://coding-intl.dashscope.aliyuncs.com/v1"),
         "codingPlanX" => Some("https://api.codingplanx.ai/v1"),
         "stepfun" => Some("https://api.stepfun.com/v1"),

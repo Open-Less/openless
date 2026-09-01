@@ -75,8 +75,18 @@ const mockChannels: Record<ChannelKind, Channel[]> = {
             order: 1,
             lastTest: null,
         },
+        {
+            id: "orcarouter-asr",
+            name: "OrcaRouter-ASR",
+            providerType: "orcarouter",
+            enabled: false,
+            order: 2,
+            lastTest: null,
+        },
     ],
 }
+
+let mockChannelSequence = 0
 
 export function listChannels(kind: ChannelKind): Promise<Channel[]> {
     return invokeOrMock("list_channels", { kind }, () => mockChannels[kind])
@@ -91,7 +101,19 @@ export function createChannel(
     return invokeOrMock(
         "create_channel",
         { kind, providerType, name },
-        () => providerType,
+        () => {
+            mockChannelSequence += 1
+            const id = `preview-${kind}-${mockChannelSequence}`
+            mockChannels[kind].push({
+                id,
+                name,
+                providerType,
+                enabled: true,
+                order: mockChannels[kind].length,
+                lastTest: null,
+            })
+            return id
+        },
     )
 }
 
@@ -104,7 +126,11 @@ export function setChannelProviderType(
     return invokeOrMock(
         "set_channel_provider_type",
         { kind, id, providerType },
-        () => undefined,
+        () => {
+            const channel = mockChannels[kind].find(item => item.id === id)
+            if (channel) channel.providerType = providerType
+            return undefined
+        },
     )
 }
 
@@ -113,7 +139,11 @@ export function deleteChannelIfBlank(
     kind: ChannelKind,
     id: string,
 ): Promise<boolean> {
-    return invokeOrMock("delete_channel_if_blank", { kind, id }, () => true)
+    return invokeOrMock("delete_channel_if_blank", { kind, id }, () => {
+        const before = mockChannels[kind].length
+        mockChannels[kind] = mockChannels[kind].filter(channel => channel.id !== id)
+        return mockChannels[kind].length !== before
+    })
 }
 
 export function renameChannel(
@@ -121,11 +151,18 @@ export function renameChannel(
     id: string,
     name: string,
 ): Promise<void> {
-    return invokeOrMock("rename_channel", { kind, id, name }, () => undefined)
+    return invokeOrMock("rename_channel", { kind, id, name }, () => {
+        const channel = mockChannels[kind].find(item => item.id === id)
+        if (channel) channel.name = name
+        return undefined
+    })
 }
 
 export function deleteChannel(kind: ChannelKind, id: string): Promise<void> {
-    return invokeOrMock("delete_channel", { kind, id }, () => undefined)
+    return invokeOrMock("delete_channel", { kind, id }, () => {
+        mockChannels[kind] = mockChannels[kind].filter(channel => channel.id !== id)
+        return undefined
+    })
 }
 
 export function setChannelEnabled(
@@ -136,7 +173,11 @@ export function setChannelEnabled(
     return invokeOrMock(
         "set_channel_enabled",
         { kind, id, enabled },
-        () => undefined,
+        () => {
+            const channel = mockChannels[kind].find(item => item.id === id)
+            if (channel) channel.enabled = enabled
+            return undefined
+        },
     )
 }
 
@@ -171,6 +212,17 @@ export function recordChannelTest(
     return invokeOrMock(
         "record_channel_test",
         { kind, id, ok, latencyMs, error },
-        () => undefined,
+        () => {
+            const channel = mockChannels[kind].find(item => item.id === id)
+            if (channel) {
+                channel.lastTest = {
+                    ok,
+                    latencyMs,
+                    error,
+                    at: Math.floor(Date.now() / 1000),
+                }
+            }
+            return undefined
+        },
     )
 }

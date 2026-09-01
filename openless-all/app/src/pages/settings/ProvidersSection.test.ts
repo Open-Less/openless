@@ -1,4 +1,4 @@
-import { LLM_PRESETS } from './ProvidersSection';
+import { LLM_PRESETS, prioritizeOrcaRouterModels } from './ProvidersSection';
 import { ASR_PRESETS } from './shared';
 
 const atlascloudPreset = LLM_PRESETS.find(p => p.id === 'atlascloud');
@@ -13,6 +13,50 @@ if (atlascloudPreset.baseUrl !== 'https://api.atlascloud.ai/v1') {
 
 if (atlascloudPreset.modelPlaceholder !== 'qwen/qwen3.5-flash') {
   throw new Error(`unexpected Atlas Cloud default model: ${atlascloudPreset.modelPlaceholder}`);
+}
+
+const orcarouterPreset = LLM_PRESETS.find(p => p.id === 'orcarouter');
+
+if (!orcarouterPreset) {
+  throw new Error('OrcaRouter LLM preset is missing');
+}
+
+if (orcarouterPreset.baseUrl !== 'https://api.orcarouter.ai/v1') {
+  throw new Error(`unexpected OrcaRouter base URL: ${orcarouterPreset.baseUrl}`);
+}
+
+if (orcarouterPreset.modelPlaceholder !== 'orcarouter/fusion-flash') {
+  throw new Error(`unexpected OrcaRouter default model: ${orcarouterPreset.modelPlaceholder}`);
+}
+
+const orcarouterAsrPreset = ASR_PRESETS.find(p => p.id === 'orcarouter');
+
+if (!orcarouterAsrPreset) {
+  throw new Error('OrcaRouter ASR preset is missing');
+}
+
+if (orcarouterAsrPreset.baseUrl !== 'https://api.orcarouter.ai/v1') {
+  throw new Error(`unexpected OrcaRouter ASR base URL: ${orcarouterAsrPreset.baseUrl}`);
+}
+
+if (orcarouterAsrPreset.model !== 'google/gemini-2.5-flash') {
+  throw new Error(`unexpected OrcaRouter ASR default model: ${orcarouterAsrPreset.model}`);
+}
+
+const prioritizedOrcaRouterModels = prioritizeOrcaRouterModels([
+  'openai/gpt-5-mini',
+  'orcarouter/fusion-mini',
+  'anthropic/claude-haiku-4.5',
+  'orcarouter/fusion-flash',
+]);
+
+if (prioritizedOrcaRouterModels.join(',') !== [
+  'orcarouter/fusion-flash',
+  'orcarouter/fusion-mini',
+  'anthropic/claude-haiku-4.5',
+  'openai/gpt-5-mini',
+].join(',')) {
+  throw new Error(`unexpected OrcaRouter model ordering: ${prioritizedOrcaRouterModels.join(',')}`);
 }
 
 const openAiCompatiblePreset = ASR_PRESETS.find(p => p.id === 'openai-compatible');
