@@ -706,8 +706,16 @@ fn simulate_copy_and_read_diag() -> Result<String, SelectionCaptureMissReason> {
         // 即使设置 sentinel 失败，也尝试发 Cmd+C 看能不能直接拿到东西
     }
 
+    // Windows + Clipboard History: writing the sentinel wakes an async listener that may
+    // briefly own/open the clipboard. Target-app Ctrl+C then fails silently and leaves
+    // the sentinel in place (user A/B: history OFF → OK, history ON → fail). Settle first.
+    #[cfg(target_os = "windows")]
+    let settle = windows_wait_clipboard_settle_after_write();
+
     // c) 模拟 Cmd+C / Ctrl+C
-    let post_ok = post_copy_shortcut();
+    #[cfg(target_os = "windows")]
+    let pre_copy_env = windows_copy_env_snapshot("pre_send");
+    let mut post_ok = post_copy_shortcut();
     log::info!(
         "[selection] DEBUG post_copy: post_ok={} original_was_some={}",
         post_ok,
@@ -718,11 +726,56 @@ fn simulate_copy_and_read_diag() -> Result<String, SelectionCaptureMissReason> {
         // 不立刻 return：剪贴板可能已经被某些路径污染，按下方还原流程恢复。
     }
 
-    // d) 等剪贴板更新（macOS / Windows 都需要少量时间让目标 app 把数据 put 进去）
-    std::thread::sleep(Duration::from_millis(80));
+    // d) 等剪贴板更新；Windows 在开启剪贴板历史时需要轮询 + 必要时重发 Ctrl+C。
+    #[cfg(not(target_os = "windows"))]
+    {
+        std::thread::sleep(Duration::from_millis(80));
+    }
 
-    // e) 读新值
+    #[cfg(target_os = "windows")]
+    let (captured, copy_poll) = {
+        let poll = windows_poll_clipboard_after_copy(&mut clipboard, &sentinel, &mut post_ok);
+        (poll.captured.clone(), poll)
+    };
+    #[cfg(not(target_os = "windows"))]
     let captured = clipboard.get_text().ok();
+
+    #[cfg(target_os = "windows")]
+    let post_wait_env = windows_copy_env_snapshot("post_wait");
+
+    // #region agent log
+    #[cfg(target_os = "windows")]
+    {
+        let seq_delta = post_wait_env
+            .clipboard_seq
+            .zip(pre_copy_env.clipboard_seq)
+            .map(|(after, before)| after.wrapping_sub(before));
+        let payload = serde_json::json!({
+            "sessionId": "ddfc8d",
+            "runId": "post-fix",
+            "hypothesisId": "A",
+            "location": "selection.rs:simulate_copy_and_read_diag",
+            "message": "windows copy after clipboard-history settle",
+            "data": {
+                "post_ok": post_ok,
+                "captured_is_sentinel": captured.as_ref() == Some(&sentinel),
+                "captured_len": captured.as_ref().map(|s| s.len()),
+                "seq_delta": seq_delta,
+                "settle_ms": settle.waited_ms,
+                "settle_open_cleared": settle.open_cleared,
+                "settle_seq_stable": settle.seq_stable,
+                "poll_ms": copy_poll.waited_ms,
+                "poll_attempts": copy_poll.attempts,
+                "resent_ctrl_c": copy_poll.resent_ctrl_c,
+                "pre": pre_copy_env,
+                "post_wait": post_wait_env,
+            },
+            "timestamp": chrono::Utc::now().timestamp_millis(),
+        });
+        log::info!("[selection] DEBUG agent_env {}", payload);
+        agent_debug_ndjson(&payload);
+    }
+    // #endregion
 
     // f) 还原原剪贴板
     if let Some(ref prev) = original {
@@ -767,52 +820,20 @@ fn simulate_copy_and_read_diag() -> Result<String, SelectionCaptureMissReason> {
 
     #[cfg(target_os = "windows")]
     {
-        // Windows：用内容变化检测替代 Sentinel 检查。
-        // Sentinel 检查过于严格——Chrome/VSCode/Notepad 等应用在焦点变化、UI 状态、
-        // 安全沙箱限制下，SendInput(Ctrl+C) 可能被应用忽略，导致剪贴板不更新。
-        // 但 `captured != sentinel && captured != original` 说明 Ctrl+C 确实触发了剪贴板写入。
-        //
-        // 场景分析（captured vs original vs sentinel）：
-        //   - captured=sentinel, original=Some("foo") → sentinel 未覆盖，应用无选区/未响应
-        //   - captured=sentinel, original=None → sentinel 未覆盖，应用无选区/未响应
-        //   - captured="foo", original=Some("foo") → 内容未变，应用可能有选区但内容相同
-        //   - captured="bar", original=Some("foo") → 应用写了新内容，选区有效
-        //   - captured="bar", original=None → 应用写了新内容，选区有效
-        //
-        // 核心判断：
-        //   captured == sentinel → 失败（应用未响应）
-        //   captured != sentinel && captured != original → 成功（应用写了新内容）
-        //   captured != sentinel && captured == original → 失败（应用未写新内容）
-        let original_str = original.as_ref().map(|s| s.as_str()).unwrap_or("");
-        let captured_changed = captured != sentinel && captured != original_str;
-        let app_responded = captured != sentinel;
-
-        if !app_responded {
-            // 应用未响应 Ctrl+C
+        // Runtime evidence (Beta.9 / ChatGPT+Notepad+Chrome): when Ctrl+C is ignored,
+        // captured stays equal to sentinel. Content-vs-original checks do not recover that
+        // case; keep the same sentinel gate as macOS and rely on agent_env probes instead.
+        if captured == sentinel {
             log::info!(
-                "[selection] DEBUG windows_content_check: app_responded=false captured_is_sentinel=true original_was_some={}",
+                "[selection] DEBUG sentinel_check: sentinel_eq_captured=true original_was_some={}",
                 original.is_some()
             );
             return Err(SelectionCaptureMissReason::ClipboardUnchangedSentinel);
         }
-
-        if captured_changed {
-            // 应用写了新内容——选区有效
-            log::info!(
-                "[selection] DEBUG windows_content_check: app_responded=true captured_changed=true captured_len={} captured_preview='{}'",
-                captured.len(),
-                &captured[..captured.len().min(50)]
-            );
-        } else {
-            // 应用未写新内容（内容与原内容相同或为空）
-            log::info!(
-                "[selection] DEBUG windows_content_check: app_responded=true captured_changed=false captured_len={} captured_preview='{}' original_was_some={}",
-                captured.len(),
-                &captured[..captured.len().min(50)],
-                original.is_some()
-            );
-            return Err(SelectionCaptureMissReason::ClipboardEmptyAfterCopy);
-        }
+        log::info!(
+            "[selection] DEBUG sentinel_check: sentinel_eq_captured=false captured_len={}",
+            captured.len()
+        );
     }
 
     #[cfg(target_os = "linux")]
@@ -1185,6 +1206,230 @@ mod macos_paste {
 }
 
 // ─────────────────────────── Windows Ctrl+C send ───────────────────────────
+
+#[cfg(target_os = "windows")]
+struct WindowsClipboardSettle {
+    waited_ms: u64,
+    open_cleared: bool,
+    seq_stable: bool,
+}
+
+#[cfg(target_os = "windows")]
+struct WindowsCopyPollResult {
+    captured: Option<String>,
+    waited_ms: u64,
+    attempts: u32,
+    resent_ctrl_c: bool,
+}
+
+/// After we write a sentinel, Clipboard History (and other listeners) may briefly open
+/// the clipboard. Wait until nobody holds it and the sequence number stops moving.
+#[cfg(target_os = "windows")]
+fn windows_wait_clipboard_settle_after_write() -> WindowsClipboardSettle {
+    use windows::Win32::System::DataExchange::{GetClipboardSequenceNumber, GetOpenClipboardWindow};
+
+    const MAX_MS: u64 = 250;
+    const STEP_MS: u64 = 10;
+    let start = std::time::Instant::now();
+    let mut last_seq = unsafe { GetClipboardSequenceNumber() };
+    let mut stable_rounds = 0u32;
+    let mut open_cleared = false;
+    let mut seq_stable = false;
+
+    while start.elapsed().as_millis() as u64 < MAX_MS {
+        let open = unsafe { GetOpenClipboardWindow() };
+        let seq = unsafe { GetClipboardSequenceNumber() };
+        if open.0.is_null() {
+            open_cleared = true;
+            if seq == last_seq {
+                stable_rounds += 1;
+                // ~30ms of unchanged seq with clipboard free → history likely caught up.
+                if stable_rounds >= 3 {
+                    seq_stable = true;
+                    break;
+                }
+            } else {
+                stable_rounds = 0;
+                last_seq = seq;
+            }
+        } else {
+            open_cleared = false;
+            stable_rounds = 0;
+            last_seq = seq;
+        }
+        std::thread::sleep(Duration::from_millis(STEP_MS));
+    }
+
+    let waited_ms = start.elapsed().as_millis() as u64;
+    log::info!(
+        "[selection] DEBUG clipboard_settle: waited_ms={} open_cleared={} seq_stable={}",
+        waited_ms,
+        open_cleared,
+        seq_stable
+    );
+    WindowsClipboardSettle {
+        waited_ms,
+        open_cleared,
+        seq_stable,
+    }
+}
+
+/// Poll until clipboard leaves the sentinel (selection copy landed). One Ctrl+C resend
+/// mid-window covers the case where the first chord hit a still-busy clipboard.
+#[cfg(target_os = "windows")]
+fn windows_poll_clipboard_after_copy(
+    clipboard: &mut arboard::Clipboard,
+    sentinel: &str,
+    post_ok: &mut bool,
+) -> WindowsCopyPollResult {
+    const MAX_MS: u64 = 450;
+    const STEP_MS: u64 = 25;
+    let start = std::time::Instant::now();
+    let mut attempts = 0u32;
+    let mut resent_ctrl_c = false;
+    let mut captured = None;
+
+    while start.elapsed().as_millis() as u64 < MAX_MS {
+        attempts += 1;
+        match clipboard.get_text() {
+            Ok(text) if text != sentinel => {
+                captured = Some(text);
+                break;
+            }
+            Ok(text) => {
+                captured = Some(text);
+            }
+            Err(_) => {
+                captured = None;
+            }
+        }
+
+        // Halfway through: if still on sentinel, resend Ctrl+C once.
+        if !resent_ctrl_c && start.elapsed().as_millis() as u64 >= 150 {
+            if post_copy_shortcut() {
+                *post_ok = true;
+                resent_ctrl_c = true;
+                log::info!("[selection] DEBUG clipboard_poll: resent Ctrl+C after settle miss");
+            }
+        }
+        std::thread::sleep(Duration::from_millis(STEP_MS));
+    }
+
+    let waited_ms = start.elapsed().as_millis() as u64;
+    log::info!(
+        "[selection] DEBUG clipboard_poll: waited_ms={} attempts={} resent={} still_sentinel={}",
+        waited_ms,
+        attempts,
+        resent_ctrl_c,
+        captured.as_deref() == Some(sentinel)
+    );
+    WindowsCopyPollResult {
+        captured,
+        waited_ms,
+        attempts,
+        resent_ctrl_c,
+    }
+}
+
+#[cfg(target_os = "windows")]
+#[derive(Debug, serde::Serialize)]
+struct WindowsCopyEnvSnapshot {
+    phase: &'static str,
+    ctrl_down: bool,
+    alt_down: bool,
+    shift_down: bool,
+    win_down: bool,
+    fg_hwnd: usize,
+    focus_hwnd: usize,
+    fg_class: String,
+    focus_class: String,
+    clipboard_seq: Option<u32>,
+    open_clipboard_hwnd: usize,
+}
+
+#[cfg(target_os = "windows")]
+fn windows_copy_env_snapshot(phase: &'static str) -> WindowsCopyEnvSnapshot {
+    use windows::Win32::System::DataExchange::{GetClipboardSequenceNumber, GetOpenClipboardWindow};
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        GetAsyncKeyState, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetClassNameW, GetForegroundWindow, GetGUIThreadInfo, GetWindowThreadProcessId,
+        GUITHREADINFO,
+    };
+
+    unsafe {
+        let key_down = |vk| (GetAsyncKeyState(vk.0 as i32) as u16) & 0x8000 != 0;
+        let ctrl_down = key_down(VK_CONTROL);
+        let alt_down = key_down(VK_MENU);
+        let shift_down = key_down(VK_SHIFT);
+        let win_down = key_down(VK_LWIN) || key_down(VK_RWIN);
+
+        let foreground = GetForegroundWindow();
+        let mut gui_info = GUITHREADINFO {
+            cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
+            ..Default::default()
+        };
+        let focus = if !foreground.0.is_null() {
+            let tid = GetWindowThreadProcessId(foreground, None);
+            if tid != 0 && GetGUIThreadInfo(tid, &mut gui_info).is_ok() && !gui_info.hwndFocus.0.is_null()
+            {
+                gui_info.hwndFocus
+            } else {
+                foreground
+            }
+        } else {
+            foreground
+        };
+
+        let class_of = |hwnd: windows::Win32::Foundation::HWND| -> String {
+            if hwnd.0.is_null() {
+                return String::new();
+            }
+            let mut buf = [0u16; 256];
+            let n = GetClassNameW(hwnd, &mut buf);
+            if n <= 0 {
+                return String::new();
+            }
+            String::from_utf16_lossy(&buf[..n as usize])
+        };
+
+        WindowsCopyEnvSnapshot {
+            phase,
+            ctrl_down,
+            alt_down,
+            shift_down,
+            win_down,
+            fg_hwnd: foreground.0 as usize,
+            focus_hwnd: focus.0 as usize,
+            fg_class: class_of(foreground),
+            focus_class: class_of(focus),
+            clipboard_seq: Some(GetClipboardSequenceNumber()),
+            open_clipboard_hwnd: GetOpenClipboardWindow().0 as usize,
+        }
+    }
+}
+
+// #region agent log
+#[cfg(target_os = "windows")]
+fn agent_debug_ndjson(payload: &serde_json::Value) {
+    use std::io::Write;
+    let line = payload.to_string();
+    for path in [
+        std::path::Path::new("debug-ddfc8d.log"),
+        std::path::Path::new(r"f:\编程\openless-agent-eval-960\debug-ddfc8d.log"),
+    ] {
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+        {
+            let _ = writeln!(f, "{line}");
+            break;
+        }
+    }
+}
+// #endregion
 
 #[cfg(target_os = "windows")]
 mod windows_paste {
