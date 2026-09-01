@@ -848,7 +848,10 @@ pub(super) fn is_stepfun_realtime_provider(id: &str) -> bool {
 }
 
 pub(super) fn is_mimo_provider(id: &str) -> bool {
-    id == crate::asr::mimo::PROVIDER_ID
+    matches!(
+        id,
+        crate::asr::mimo::PROVIDER_ID | crate::asr::mimo::ORCAROUTER_PROVIDER_ID
+    )
 }
 
 pub(super) fn is_dashscope_multimodal_provider(id: &str) -> bool {
@@ -1128,7 +1131,13 @@ pub(super) async fn build_qa_asr_start(
         ActiveAsrProviderKind::Mimo => {
             let (api_key, base_url, model) = read_mimo_credentials();
             let label = AsrCallLabel::new(effective_asr.clone(), Some(model.clone()));
-            let mimo = Arc::new(MimoBatchASR::new(api_key, base_url, model));
+            let mimo = Arc::new(
+                if effective_asr == crate::asr::mimo::ORCAROUTER_PROVIDER_ID {
+                    MimoBatchASR::new_orcarouter(api_key, base_url, model)
+                } else {
+                    MimoBatchASR::new(api_key, base_url, model)
+                },
+            );
             let active = ActiveAsr::Mimo(Arc::clone(&mimo));
             let consumer: Arc<dyn crate::recorder::AudioConsumer> = mimo;
             Ok((QaAsrStart::Ready { active, consumer }, label))

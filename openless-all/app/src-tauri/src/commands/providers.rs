@@ -189,6 +189,14 @@ pub async fn list_provider_models(
         });
     }
     if scope.kind == ProviderKind::Asr
+        && scope.provider_type() == crate::asr::mimo::ORCAROUTER_PROVIDER_ID
+    {
+        let config = read_openai_provider_config(scope)?;
+        return fetch_orcarouter_asr_models(&config)
+            .await
+            .map(|models| ProviderModelsResult { models });
+    }
+    if scope.kind == ProviderKind::Asr
         && scope.provider_type() == crate::asr::dashscope_multimodal::PROVIDER_ID
     {
         // multimodal-generation 无模型列表 HTTP 接口；与 mimo 同，返回静态别名。
@@ -242,7 +250,11 @@ fn read_openai_provider_config(scope: &ProviderScope) -> Result<ProviderConfig, 
         ProviderKind::Asr => (
             CredentialAccount::AsrApiKey,
             CredentialAccount::AsrEndpoint,
-            scope.provider_type() != crate::coordinator::OPENAI_COMPATIBLE_ASR_PROVIDER_ID,
+            !matches!(
+                scope.provider_type().as_str(),
+                crate::coordinator::OPENAI_COMPATIBLE_ASR_PROVIDER_ID
+                    | crate::asr::mimo::ORCAROUTER_PROVIDER_ID
+            ),
         ),
         // 多模态（Omni）模型：独立命名空间，OpenAI 兼容通道要求 API Key + Base URL。
         ProviderKind::Omni => (
@@ -440,7 +452,10 @@ async fn validate_asr_provider(scope: &ProviderScope) -> Result<(), String> {
     if active_asr == crate::asr::qwen_realtime::PROVIDER_ID {
         return validate_qwen3_realtime_asr_provider(scope).await;
     }
-    if active_asr == crate::asr::mimo::PROVIDER_ID {
+    if matches!(
+        active_asr.as_str(),
+        crate::asr::mimo::PROVIDER_ID | crate::asr::mimo::ORCAROUTER_PROVIDER_ID
+    ) {
         return validate_mimo_asr_provider(scope).await;
     }
     if active_asr == crate::asr::dashscope_multimodal::PROVIDER_ID {
@@ -645,8 +660,18 @@ async fn validate_mimo_asr_provider(scope: &ProviderScope) -> Result<(), String>
         .get(CredentialAccount::AsrModel)
         .map_err(|e| e.to_string())?
         .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| crate::asr::mimo::DEFAULT_MODEL.to_string());
-    let asr = crate::asr::MimoBatchASR::new(config.api_key, config.base_url, model);
+        .unwrap_or_else(|| {
+            if scope.provider_type() == crate::asr::mimo::ORCAROUTER_PROVIDER_ID {
+                crate::asr::mimo::ORCAROUTER_DEFAULT_MODEL.to_string()
+            } else {
+                crate::asr::mimo::DEFAULT_MODEL.to_string()
+            }
+        });
+    let asr = if scope.provider_type() == crate::asr::mimo::ORCAROUTER_PROVIDER_ID {
+        crate::asr::MimoBatchASR::new_orcarouter(config.api_key, config.base_url, model)
+    } else {
+        crate::asr::MimoBatchASR::new(config.api_key, config.base_url, model)
+    };
     crate::recorder::AudioConsumer::consume_pcm_chunk(
         &asr,
         &encode_wav_16k_mono_silence(250)[44..],
@@ -1150,8 +1175,20 @@ fn provider_request_error_message(error: &reqwest::Error) -> &'static str {
 }
 
 pub(crate) async fn fetch_provider_models(config: &ProviderConfig) -> Result<Vec<String>, String> {
+    fetch_provider_models_for_catalog(config, false).await
+}
+
+async fn fetch_orcarouter_asr_models(config: &ProviderConfig) -> Result<Vec<String>, String> {
+    fetch_provider_models_for_catalog(config, true).await
+}
+
+async fn fetch_provider_models_for_catalog(
+    config: &ProviderConfig,
+    orcarouter_asr: bool,
+) -> Result<Vec<String>, String> {
     let url = models_url(&config.base_url);
     let is_gemini = is_gemini_base_url(&config.base_url);
+    let is_orcarouter = is_orcarouter_base_url(&config.base_url);
     let log_context = provider_log_context(&url, is_gemini);
     log::info!("[provider-check] {log_context}");
     let client = http_client_builder(&config.base_url, 15)
@@ -1194,6 +1231,10 @@ pub(crate) async fn fetch_provider_models(config: &ProviderConfig) -> Result<Vec
     }
     if is_gemini {
         parse_gemini_model_ids(&body)
+    } else if is_orcarouter && orcarouter_asr {
+        parse_orcarouter_asr_model_ids(&body)
+    } else if is_orcarouter {
+        parse_orcarouter_model_ids(&body)
     } else {
         parse_model_ids(&body)
     }
@@ -1201,6 +1242,13 @@ pub(crate) async fn fetch_provider_models(config: &ProviderConfig) -> Result<Vec
 
 pub(crate) fn is_gemini_base_url(base_url: &str) -> bool {
     base_url.contains("generativelanguage.googleapis.com")
+}
+
+pub(crate) fn is_orcarouter_base_url(base_url: &str) -> bool {
+    reqwest::Url::parse(base_url.trim())
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_ascii_lowercase))
+        .is_some_and(|host| host == "api.orcarouter.ai")
 }
 
 pub(crate) fn models_url(base_url: &str) -> String {
@@ -1233,6 +1281,77 @@ pub(crate) fn parse_model_ids(body: &str) -> Result<Vec<String>, String> {
         .filter_map(|item| item.get("id").and_then(|id| id.as_str()))
         .map(str::trim)
         .filter(|id| !id.is_empty())
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    models.sort();
+    models.dedup();
+    Ok(models)
+}
+
+/// OrcaRouter's catalog covers chat, image, video, and embedding endpoints.
+/// OpenLess polish uses OpenAI Chat Completions, so only expose entries that
+/// advertise the `openai` endpoint type. Missing capability metadata is kept
+/// for forward compatibility with older/self-hosted catalog responses.
+pub(crate) fn parse_orcarouter_model_ids(body: &str) -> Result<Vec<String>, String> {
+    let json: Value =
+        serde_json::from_str(body).map_err(|e| format!("模型列表不是有效 JSON: {e}"))?;
+    let data = json
+        .get("data")
+        .and_then(|value| value.as_array())
+        .ok_or_else(|| "模型列表缺少 data 数组".to_string())?;
+    let mut models = data
+        .iter()
+        .filter(|item| {
+            item.get("supported_endpoint_types")
+                .and_then(|value| value.as_array())
+                .is_none_or(|endpoint_types| {
+                    endpoint_types
+                        .iter()
+                        .any(|endpoint| endpoint.as_str() == Some("openai"))
+                })
+        })
+        .filter_map(|item| item.get("id").and_then(|id| id.as_str()))
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    models.sort();
+    models.dedup();
+    Ok(models)
+}
+
+/// OrcaRouter exposes audio input through OpenAI-shaped Chat Completions.
+/// Its public catalog currently does not publish an ASR capability flag, so
+/// restrict ASR choices to the documented multimodal Gemini family and remove
+/// image/TTS/embedding variants. The endpoint metadata still has to advertise
+/// the OpenAI protocol when present.
+pub(crate) fn parse_orcarouter_asr_model_ids(body: &str) -> Result<Vec<String>, String> {
+    let json: Value =
+        serde_json::from_str(body).map_err(|e| format!("模型列表不是有效 JSON: {e}"))?;
+    let data = json
+        .get("data")
+        .and_then(|value| value.as_array())
+        .ok_or_else(|| "模型列表缺少 data 数组".to_string())?;
+    let mut models = data
+        .iter()
+        .filter(|item| {
+            item.get("supported_endpoint_types")
+                .and_then(|value| value.as_array())
+                .is_none_or(|endpoint_types| {
+                    endpoint_types
+                        .iter()
+                        .any(|endpoint| endpoint.as_str() == Some("openai"))
+                })
+        })
+        .filter_map(|item| item.get("id").and_then(|id| id.as_str()))
+        .map(str::trim)
+        .filter(|id| {
+            let normalized = id.to_ascii_lowercase();
+            normalized.starts_with("google/gemini")
+                && !["image", "tts", "embedding", "robotics"]
+                    .iter()
+                    .any(|marker| normalized.contains(marker))
+        })
         .map(ToOwned::to_owned)
         .collect::<Vec<_>>();
     models.sort();

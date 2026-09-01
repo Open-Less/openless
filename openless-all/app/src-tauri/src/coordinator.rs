@@ -3640,6 +3640,8 @@ fn whisper_credential_defaults(provider_id: &str) -> (String, String) {
 }
 
 fn read_mimo_credentials() -> (String, String, String) {
+    let active_asr = CredentialsVault::get_active_asr();
+    let orcarouter = active_asr == crate::asr::mimo::ORCAROUTER_PROVIDER_ID;
     let api_key = CredentialsVault::get(CredentialAccount::AsrApiKey)
         .ok()
         .flatten()
@@ -3648,12 +3650,24 @@ fn read_mimo_credentials() -> (String, String, String) {
         .ok()
         .flatten()
         .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| crate::asr::mimo::DEFAULT_ENDPOINT.to_string());
+        .unwrap_or_else(|| {
+            if orcarouter {
+                crate::asr::mimo::ORCAROUTER_DEFAULT_ENDPOINT.to_string()
+            } else {
+                crate::asr::mimo::DEFAULT_ENDPOINT.to_string()
+            }
+        });
     let model = CredentialsVault::get(CredentialAccount::AsrModel)
         .ok()
         .flatten()
         .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| crate::asr::mimo::DEFAULT_MODEL.to_string());
+        .unwrap_or_else(|| {
+            if orcarouter {
+                crate::asr::mimo::ORCAROUTER_DEFAULT_MODEL.to_string()
+            } else {
+                crate::asr::mimo::DEFAULT_MODEL.to_string()
+            }
+        });
     (api_key, base_url, model)
 }
 
@@ -4576,6 +4590,9 @@ mod tests {
         assert!(!is_whisper_compatible_provider(
             crate::asr::mimo::PROVIDER_ID
         ));
+        assert!(!is_whisper_compatible_provider(
+            crate::asr::mimo::ORCAROUTER_PROVIDER_ID
+        ));
     }
 
     #[test]
@@ -4813,6 +4830,10 @@ mod tests {
         );
         assert_eq!(
             active_asr_provider_kind(crate::asr::mimo::PROVIDER_ID),
+            ActiveAsrProviderKind::Mimo
+        );
+        assert_eq!(
+            active_asr_provider_kind(crate::asr::mimo::ORCAROUTER_PROVIDER_ID),
             ActiveAsrProviderKind::Mimo
         );
         assert_eq!(

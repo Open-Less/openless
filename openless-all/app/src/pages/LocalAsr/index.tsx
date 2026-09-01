@@ -1994,7 +1994,8 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
             sidebarEntries.some((e) => e.id === selectedModelId)
         if (stillExists) return
         const firstDownloaded = sidebarEntries.find((e) => e.isDownloaded)
-        setSelectedModelId(firstDownloaded?.id ?? sidebarEntries[0]?.id ?? null)
+        const fallbackId = firstDownloaded?.id ?? sidebarEntries[0]?.id ?? null
+        if (fallbackId !== selectedModelId) setSelectedModelId(fallbackId)
     }, [sidebarEntries, selectedModelId, downloadDialogOpen])
 
     // 从侧栏/看板分派引擎动作。不再有 setActive——激活 = 在 ASR 语音转写里

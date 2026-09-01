@@ -86,6 +86,12 @@ export function shouldRecycleDraft(draftId: string | null, touched: boolean): bo
   return draftId != null && !touched;
 }
 
+/** OrcaRouter 渠道使用统一的无空格品牌名；只填空名称，不覆盖用户自定义命名。 */
+export function defaultChannelNameForProvider(providerType: string, currentName: string): string {
+  if (currentName.trim() || providerType !== 'orcarouter') return currentName;
+  return 'OrcaRouter';
+}
+
 function presetLabel(
   kind: ChannelKind,
   providerType: string,
@@ -723,6 +729,15 @@ function ChannelModal({
       if (kind === 'llm') {
         const preset = LLM_PRESETS.find(p => p.id === next);
         if (!preset || preset.id === 'custom' || preset.id === 'codex_oauth') return;
+        // OrcaRouter's model field immediately calls its /models catalog. A
+        // provider switch must therefore replace the previous vendor endpoint
+        // before that field mounts, otherwise the first catalog request could
+        // be sent to the old provider.
+        if (preset.id === 'orcarouter') {
+          await setCredential('ark.endpoint', preset.baseUrl, channel.id);
+          await setCredential('ark.model_id', preset.modelPlaceholder, channel.id);
+          return;
+        }
         if (preset.baseUrl && !(await readCredential('ark.endpoint', channel.id))?.trim()) {
           await setCredential('ark.endpoint', preset.baseUrl, channel.id);
         }
@@ -736,6 +751,13 @@ function ChannelModal({
       }
       const preset = ASR_PRESETS.find(p => p.id === next);
       if (!preset) return;
+      // 与 LLM 渠道一致，切换到 OrcaRouter 时先替换旧供应商的地址和模型，
+      // 让随后挂载的目录字段从正确的 /models 加载。
+      if (preset.id === 'orcarouter') {
+        await setCredential('asr.endpoint', preset.baseUrl, channel.id);
+        await setCredential('asr.model', preset.model, channel.id);
+        return;
+      }
       if (preset.baseUrl && !(await readCredential('asr.endpoint', channel.id))?.trim()) {
         await setCredential('asr.endpoint', preset.baseUrl, channel.id);
       }
@@ -750,10 +772,23 @@ function ChannelModal({
   const changeProvider = async (next: string) => {
     const previous = providerType;
     onUserMutation();
-    setProviderType(next);
     try {
       await setChannelProviderType(kind, channel.id, next);
       await fillProviderDefaults(next);
+      // Mount the new provider fields only after their defaults are persisted;
+      // catalog-backed fields can then load without racing stale credentials.
+      setProviderType(next);
+
+      const defaultName = defaultChannelNameForProvider(next, name);
+      if (defaultName !== name) {
+        try {
+          await renameChannel(kind, channel.id, defaultName);
+          setName(defaultName);
+        } catch (error) {
+          console.error('[channels] failed to apply provider default name', error);
+          emitSaved('failed', t('common.operationFailed'));
+        }
+      }
       await onChanged();
     } catch (error) {
       console.error('[channels] change provider failed', error);

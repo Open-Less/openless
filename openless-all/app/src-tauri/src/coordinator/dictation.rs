@@ -2758,7 +2758,13 @@ pub(super) async fn begin_session_as(
     } else if is_mimo_provider(&effective_asr) {
         let (api_key, base_url, model) = read_mimo_credentials();
         let asr_call_label = AsrCallLabel::new(effective_asr.clone(), Some(model.clone()));
-        let mimo = Arc::new(MimoBatchASR::new(api_key, base_url, model));
+        let mimo = Arc::new(
+            if effective_asr == crate::asr::mimo::ORCAROUTER_PROVIDER_ID {
+                MimoBatchASR::new_orcarouter(api_key, base_url, model)
+            } else {
+                MimoBatchASR::new(api_key, base_url, model)
+            },
+        );
         store_asr_for_session(
             inner,
             current_session_id,

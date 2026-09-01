@@ -48,6 +48,10 @@ interface SelectLiteProps {
   ariaLabel?: string;
   /** 下拉打开 / 关闭时回调 —— 让调用方按开合状态启停副作用（如电平监听）。 */
   onOpenChange?: (open: boolean) => void;
+  /** 长列表可在 popover 顶部显示搜索框；筛选只匹配 label/value，不改原 options。 */
+  searchable?: boolean;
+  searchPlaceholder?: string;
+  emptyMessage?: string;
 }
 
 const DEFAULT_TRIGGER_STYLE: CSSProperties = {
@@ -80,12 +84,17 @@ export function SelectLite({
   style,
   ariaLabel,
   onOpenChange,
+  searchable = false,
+  searchPlaceholder = 'Search…',
+  emptyMessage = 'No matching options',
 }: SelectLiteProps) {
   const [open, setOpen] = useState(false);
   // leaving 让 popover 在卸载前播完 exit keyframe（用户报"没有收缩动画"——之前直接 unmount）
   const [leaving, setLeaving] = useState(false);
   const [highlight, setHighlight] = useState<number>(-1);
+  const [query, setQuery] = useState('');
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
   const popoverRef = useRef<HTMLDivElement | null>(null);
   const [anchor, setAnchor] = useState<{ left: number; top: number; width: number } | null>(null);
   // popoverMounted 让 useLayoutEffect 在 popover 实际进入 DOM 后再触发一次 positionPopover，
@@ -96,6 +105,14 @@ export function SelectLite({
     () => options.find(opt => opt.value === value),
     [options, value],
   );
+  const filteredOptions = useMemo(() => {
+    const needle = query.trim().toLocaleLowerCase();
+    if (!needle) return options;
+    return options.filter(option => (
+      option.label.toLocaleLowerCase().includes(needle)
+      || option.value.toLocaleLowerCase().includes(needle)
+    ));
+  }, [options, query]);
   const displayLabel = selected?.label ?? placeholder ?? '';
 
   const positionPopover = useCallback(() => {
@@ -157,8 +174,31 @@ export function SelectLite({
     const target = popoverRef.current?.querySelector(
       `[data-option-index="${highlight}"]`,
     ) as HTMLElement | null;
-    target?.scrollIntoView({ block: 'nearest' });
+    const scrollContainer = target?.parentElement;
+    if (!target || !scrollContainer) return;
+    const optionTop = target.offsetTop;
+    const optionBottom = optionTop + target.offsetHeight;
+    if (optionTop < scrollContainer.scrollTop) {
+      scrollContainer.scrollTop = optionTop;
+    } else if (optionBottom > scrollContainer.scrollTop + scrollContainer.clientHeight) {
+      scrollContainer.scrollTop = optionBottom - scrollContainer.clientHeight;
+    }
   }, [highlight, open]);
+
+  useEffect(() => {
+    if (!open || !searchable || !popoverMounted) return;
+    searchRef.current?.focus();
+  }, [open, popoverMounted, searchable]);
+
+  useEffect(() => {
+    if (!open) return;
+    const selectedIndex = filteredOptions.findIndex(
+      option => option.value === value && !option.disabled,
+    );
+    setHighlight(selectedIndex >= 0
+      ? selectedIndex
+      : filteredOptions.findIndex(option => !option.disabled));
+  }, [filteredOptions, open, value]);
 
   // 点击外部 / 滚动外部 → 关闭。popover 内部 scroll 保持打开。
   useEffect(() => {
@@ -177,8 +217,8 @@ export function SelectLite({
       if (target && popoverRef.current?.contains(target)) return;
       closeMenu();
     };
-    // window resize 强制关闭：重算位置成本高且大多数 resize 表明 user 不再想看 popover。
-    const handleResize = () => closeMenu();
+    // 窗口尺寸变化时保持展开并重新锚定，避免桌面窗口轻微调整就丢失当前筛选。
+    const handleResize = () => positionPopover();
 
     document.addEventListener('mousedown', handlePointerDown);
     window.addEventListener('scroll', handleScrollOutside, { capture: true, passive: true });
@@ -192,10 +232,11 @@ export function SelectLite({
     };
     // closeMenu 是稳定引用（无 React state 依赖），不放 deps。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  }, [open, positionPopover]);
 
   const openMenu = () => {
     if (disabled) return;
+    setQuery('');
     const initial = options.findIndex(opt => opt.value === value && !opt.disabled);
     setHighlight(initial >= 0 ? initial : options.findIndex(opt => !opt.disabled));
     setLeaving(false);
@@ -211,12 +252,13 @@ export function SelectLite({
       setOpen(false);
       setLeaving(false);
       setHighlight(-1);
+      setQuery('');
       setAnchor(null);
     }, EXIT_ANIM_MS);
   };
 
   const selectIndex = (index: number) => {
-    const option = options[index];
+    const option = filteredOptions[index];
     if (!option || option.disabled) return;
     onChange(option.value);
     closeMenu();
@@ -224,11 +266,11 @@ export function SelectLite({
   };
 
   const moveHighlight = (direction: 1 | -1) => {
-    if (options.length === 0) return;
+    if (filteredOptions.length === 0) return;
     let next = highlight;
-    for (let i = 0; i < options.length; i += 1) {
-      next = (next + direction + options.length) % options.length;
-      if (!options[next]?.disabled) {
+    for (let i = 0; i < filteredOptions.length; i += 1) {
+      next = (next + direction + filteredOptions.length) % filteredOptions.length;
+      if (!filteredOptions[next]?.disabled) {
         setHighlight(next);
         return;
       }
@@ -258,6 +300,22 @@ export function SelectLite({
       if (highlight >= 0) selectIndex(highlight);
     } else if (event.key === 'Tab') {
       closeMenu();
+    }
+  };
+
+  const handleSearchKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      closeMenu();
+    } else if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      moveHighlight(1);
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      moveHighlight(-1);
+    } else if (event.key === 'Enter' && highlight >= 0) {
+      event.preventDefault();
+      selectIndex(highlight);
     }
   };
 
@@ -313,8 +371,8 @@ export function SelectLite({
             // 锁到 trigger 宽（不是 minWidth），避免 content 撑大让 popover 跑出
             // trigger 范围；长 label 走 textOverflow:ellipsis 截断。
             width: anchor.width,
-            maxHeight: 280,
-            overflowY: 'auto',
+            maxHeight: searchable ? 320 : 280,
+            overflow: 'hidden',
             padding: 4,
             borderRadius: 10,
             border: '0.5px solid var(--ol-select-popover-border)',
@@ -331,48 +389,101 @@ export function SelectLite({
             transformOrigin: 'top center',
           }}
         >
-          {options.map((option, index) => {
-            const isSelected = option.value === value;
-            const isHighlighted = index === highlight;
-            return (
-              <div
-                key={option.value || `__opt_${index}`}
-                data-option-index={index}
-                role="option"
-                aria-selected={isSelected}
-                aria-disabled={option.disabled}
-                onMouseEnter={() => !option.disabled && setHighlight(index)}
-                onMouseDown={event => {
-                  event.preventDefault();
-                  selectIndex(index);
-                }}
+          {searchable && (
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 7,
+                margin: '1px 1px 4px',
+                padding: '0 9px',
+                height: 34,
+                borderRadius: 7,
+                border: '0.5px solid var(--ol-line-strong)',
+                background: 'var(--ol-select-trigger-bg)',
+                color: 'var(--ol-ink-4)',
+              }}
+            >
+              <Icon name="search" size={13} />
+              <input
+                ref={searchRef}
+                value={query}
+                onChange={event => setQuery(event.target.value)}
+                onKeyDown={handleSearchKeyDown}
+                placeholder={searchPlaceholder}
+                aria-label={searchPlaceholder}
                 style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
-                  padding: '7px 10px',
-                  borderRadius: 6,
-                  cursor: option.disabled ? 'not-allowed' : 'default',
-                  opacity: option.disabled ? 0.45 : 1,
-                  background: isHighlighted && !option.disabled
-                    ? 'var(--ol-select-option-hover-bg)'
-                    : 'transparent',
-                  color: isSelected ? 'var(--ol-blue)' : 'var(--ol-ink)',
-                  fontWeight: isSelected ? 600 : 500,
-                  whiteSpace: 'nowrap',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  transition: 'background 0.10s var(--ol-motion-quick)',
+                  flex: 1,
+                  minWidth: 0,
+                  border: 0,
+                  outline: 0,
+                  padding: 0,
+                  background: 'transparent',
+                  color: 'var(--ol-ink)',
+                  font: 'inherit',
+                }}
+              />
+              <span style={{ fontSize: 10.5, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
+                {filteredOptions.length}/{options.length}
+              </span>
+            </div>
+          )}
+          <div style={{ maxHeight: searchable ? 274 : 272, overflowY: 'auto' }}>
+            {filteredOptions.length === 0 && (
+              <div
+                style={{
+                  padding: '18px 10px',
+                  textAlign: 'center',
+                  color: 'var(--ol-ink-4)',
+                  fontSize: 12,
                 }}
               >
-                <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {option.label}
-                </span>
-                {option.trailing}
-                {isSelected && <Icon name="check" size={12} />}
+                {emptyMessage}
               </div>
-            );
-          })}
+            )}
+            {filteredOptions.map((option, index) => {
+              const isSelected = option.value === value;
+              const isHighlighted = index === highlight;
+              return (
+                <div
+                  key={option.value || `__opt_${index}`}
+                  data-option-index={index}
+                  role="option"
+                  aria-selected={isSelected}
+                  aria-disabled={option.disabled}
+                  onMouseEnter={() => !option.disabled && setHighlight(index)}
+                  onMouseDown={event => {
+                    event.preventDefault();
+                    selectIndex(index);
+                  }}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    padding: '7px 10px',
+                    borderRadius: 6,
+                    cursor: option.disabled ? 'not-allowed' : 'default',
+                    opacity: option.disabled ? 0.45 : 1,
+                    background: isHighlighted && !option.disabled
+                      ? 'var(--ol-select-option-hover-bg)'
+                      : 'transparent',
+                    color: isSelected ? 'var(--ol-blue)' : 'var(--ol-ink)',
+                    fontWeight: isSelected ? 600 : 500,
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    transition: 'background 0.10s var(--ol-motion-quick)',
+                  }}
+                >
+                  <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {option.label}
+                  </span>
+                  {option.trailing}
+                  {isSelected && <Icon name="check" size={12} />}
+                </div>
+              );
+            })}
+          </div>
         </div>,
         document.body,
       )}
