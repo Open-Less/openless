@@ -1010,6 +1010,7 @@ export const en: typeof zhCN = {
         codingPlanX: 'CodingPlanX',
         minimax: 'MiniMax (M3)',
         stepfun: 'StepFun',
+        opencode: 'OpenCode Zen',
         custom: 'Custom',
         asrVolcengine: 'Volcengine bigasr',
         asrBailian: 'Alibaba Bailian realtime ASR',

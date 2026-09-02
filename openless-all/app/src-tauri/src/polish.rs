@@ -176,6 +176,7 @@ fn is_builtin_llm_provider(provider_id: &str) -> bool {
             | "codingPlanX"
             | "minimax"
             | "stepfun"
+            | "opencode"
     )
 }
 
@@ -1875,7 +1876,7 @@ pub(crate) enum ThinkingControl {
 
 pub(crate) fn openai_compatible_thinking_control(provider_id: &str) -> Option<ThinkingControl> {
     match provider_id.trim() {
-        "deepseek" => Some(ThinkingControl::DeepSeekThinking),
+        "deepseek" | "opencode" => Some(ThinkingControl::DeepSeekThinking),
         // provider_id 预设(见 ProvidersSection.tsx::LLM_PRESETS)。
         "minimax" => Some(ThinkingControl::MiniMaxThinking),
         "openrouterFree" => Some(ThinkingControl::OpenRouterReasoning),
@@ -1911,7 +1912,7 @@ pub(crate) fn openai_compatible_thinking_control_for_base_url(
     if host.contains("minimax") {
         return Some(ThinkingControl::MiniMaxThinking);
     }
-    if host.contains("deepseek") {
+    if host.contains("deepseek") || host.contains("opencode.ai") {
         return Some(ThinkingControl::DeepSeekThinking);
     }
     if host.contains("openrouter") {
@@ -3613,6 +3614,39 @@ mod tests {
             "k",
             "any-model",
         ));
+
+        let body = provider.chat_body(false, vec![json!({ "role": "user", "content": "hi" })]);
+
+        assert_eq!(body["thinking"]["type"], "disabled");
+    }
+
+    #[test]
+    fn openai_chat_body_adds_deepseek_thinking_toggle_for_opencode() {
+        let provider = OpenAICompatibleLLMProvider::new(OpenAICompatibleConfig::new(
+            "opencode",
+            "OpenCode Zen",
+            "https://opencode.ai/zen/v1",
+            "k",
+            "deepseek-v4-flash",
+        ));
+
+        let body = provider.chat_body(false, vec![json!({ "role": "user", "content": "hi" })]);
+
+        assert_eq!(body["thinking"]["type"], "disabled");
+    }
+
+    #[test]
+    fn openai_chat_body_falls_back_to_base_url_for_custom_opencode_endpoint() {
+        let provider = OpenAICompatibleLLMProvider::new(
+            OpenAICompatibleConfig::new(
+                "custom",
+                "Custom",
+                "https://opencode.ai/zen/go/v1",
+                "k",
+                "deepseek-v4-flash",
+            )
+            .with_thinking_enabled(false),
+        );
 
         let body = provider.chat_body(false, vec![json!({ "role": "user", "content": "hi" })]);
 

@@ -1012,6 +1012,7 @@ export const ko: typeof zhCN = {
         codingPlanX: 'CodingPlanX',
         minimax: 'MiniMax (M3)',
         stepfun: 'StepFun',
+        opencode: 'OpenCode Zen',
         custom: '사용자 정의',
         asrVolcengine: 'Volcengine bigasr',
         asrBailian: 'Alibaba Bailian 실시간 ASR',

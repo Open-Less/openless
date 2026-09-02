@@ -151,6 +151,7 @@ fn llm_provider_default_endpoint(provider: &str) -> Option<&'static str> {
         "alibabaCoding" => Some("https://coding-intl.dashscope.aliyuncs.com/v1"),
         "codingPlanX" => Some("https://api.codingplanx.ai/v1"),
         "stepfun" => Some("https://api.stepfun.com/v1"),
+        "opencode" => Some("https://opencode.ai/zen/v1"),
         _ => None,
     }
 }

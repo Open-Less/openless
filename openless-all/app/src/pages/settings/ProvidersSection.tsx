@@ -189,6 +189,16 @@ export const LLM_PRESETS = [
     modelPlaceholder: 'step-1o-turbo-vision',
   },
   {
+    // OpenCode Zen：OpenAI 兼容 /zen/v1/chat/completions。
+    // 默认模型 deepseek-v4-flash（官方 model id，见 https://opencode.ai/docs/zen）。
+    // OpenCode Go 订阅把 Base URL 改成 https://opencode.ai/zen/go/v1，Key 用 Go 控制台那把。
+    // provider_id 在后端 polish.rs 命中 "opencode" → DeepSeekThinking（默认模型是 Flash）。
+    id: 'opencode',
+    nameKey: 'opencode',
+    baseUrl: 'https://opencode.ai/zen/v1',
+    modelPlaceholder: 'deepseek-v4-flash',
+  },
+  {
     id: 'custom',
     nameKey: 'custom',
     baseUrl: '',
