@@ -1008,6 +1008,7 @@ export const zhCN = {
         codingPlanX: 'CodingPlanX',
         minimax: 'MiniMax（M3）',
         stepfun: 'StepFun（阶跃星辰）',
+        opencode: 'OpenCode Zen',
         custom: '自定义',
         asrVolcengine: '火山引擎 bigasr',
         asrBailian: '阿里云百炼实时 ASR',

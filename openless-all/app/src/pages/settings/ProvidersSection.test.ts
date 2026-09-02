@@ -15,6 +15,26 @@ if (atlascloudPreset.modelPlaceholder !== 'qwen/qwen3.5-flash') {
   throw new Error(`unexpected Atlas Cloud default model: ${atlascloudPreset.modelPlaceholder}`);
 }
 
+const opencodePreset = LLM_PRESETS.find(p => p.id === 'opencode');
+
+if (!opencodePreset) {
+  throw new Error('OpenCode LLM preset is missing');
+}
+
+if (opencodePreset.baseUrl !== 'https://opencode.ai/zen/v1') {
+  throw new Error(`unexpected OpenCode base URL: ${opencodePreset.baseUrl}`);
+}
+
+if (opencodePreset.modelPlaceholder !== 'deepseek-v4-flash') {
+  throw new Error(`unexpected OpenCode default model: ${opencodePreset.modelPlaceholder}`);
+}
+
+const customPresetIndex = LLM_PRESETS.findIndex(p => p.id === 'custom');
+const opencodePresetIndex = LLM_PRESETS.findIndex(p => p.id === 'opencode');
+if (customPresetIndex < 0 || opencodePresetIndex < 0 || opencodePresetIndex >= customPresetIndex) {
+  throw new Error('OpenCode preset must sit before the custom fallback preset');
+}
+
 const openAiCompatiblePreset = ASR_PRESETS.find(p => p.id === 'openai-compatible');
 
 if (!openAiCompatiblePreset) {

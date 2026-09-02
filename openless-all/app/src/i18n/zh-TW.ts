@@ -1010,6 +1010,7 @@ export const zhTW: typeof zhCN = {
         codingPlanX: 'CodingPlanX',
         minimax: 'MiniMax（M3）',
         stepfun: 'StepFun（階躍星辰）',
+        opencode: 'OpenCode Zen',
         custom: '自定義',
         asrVolcengine: '火山引擎 bigasr',
         asrBailian: '阿里雲百煉即時 ASR',
