@@ -10,7 +10,7 @@ The runnable sources live in `app/` with three explicit layers:
 - `app/src-tauri`: macOS, Windows, and Android Tauri Adapter plus the React frontend;
 - `app/linux-egui`: Linux non-UI Adapter consumed by the separately developed egui frontend; it does not depend on Tauri or WebKitGTK.
 
-The macOS Tauri build links a vendored C ASR engine (`Open-Less/qwen-asr`, forked from `antirez/qwen-asr`) tracked as a git submodule under `app/src-tauri/vendor/qwen-asr/`. The root core/Linux workspace excludes `src-tauri`, so Linux checks do not need that submodule.
+Desktop native hosts use a vendored C ASR engine (`Open-Less/qwen-asr`, forked from `antirez/qwen-asr`) tracked as a shared git submodule under `app/vendor/qwen-asr/`. Linux and Tauri consume the same source without either host owning it.
 
 ```bash
 # macOS Tauri development only — pull in vendored submodules

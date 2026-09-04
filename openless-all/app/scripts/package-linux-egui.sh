@@ -7,10 +7,10 @@ ARCH=${OPENLESS_LINUX_ARCH:-x86_64}
 TARGET_DIR=${CARGO_TARGET_DIR:-"$APP_ROOT/target"}
 BINARY="$TARGET_DIR/release/openless-linux-egui"
 PLUGIN_ROOT="$APP_ROOT/../scripts/linux-fcitx5-plugin/build"
-QWEN_RUNTIME="$APP_ROOT/src-tauri/vendor/qwen-asr/qwen_asr"
+QWEN_RUNTIME="$APP_ROOT/vendor/qwen-asr/qwen_asr"
 PACKAGING="$APP_ROOT/linux-egui/packaging"
 OUTPUT="$TARGET_DIR/linux-egui-packages"
-ICON="$APP_ROOT/src-tauri/icons/128x128@2x.png"
+ICON="$APP_ROOT/public/AppIcon.png"
 
 test -x "$BINARY"
 test -s "$PLUGIN_ROOT/libopenless.so"

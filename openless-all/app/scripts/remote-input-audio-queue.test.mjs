@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { runInNewContext } from 'node:vm';
 
 const source = await readFile(
-  new URL('../src-tauri/src/remote_server/assets/app.js', import.meta.url),
+  new URL('../assets/remote-input/app.js', import.meta.url),
   'utf8',
 );
 const html = await readFile(

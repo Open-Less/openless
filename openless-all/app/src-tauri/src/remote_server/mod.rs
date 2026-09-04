@@ -27,12 +27,12 @@ use tokio::net::TcpListener;
 use tokio_rustls::TlsAcceptor;
 
 mod assets {
-    pub const INDEX_HTML: &str = include_str!("assets/index.html");
-    pub const APP_JS: &str = include_str!("assets/app.js");
-    pub const STYLE_CSS: &str = include_str!("assets/style.css");
-    pub const ICON_PNG: &[u8] = include_bytes!("assets/icon.png");
-    pub const MIC_PNG: &[u8] = include_bytes!("assets/mic.png");
-    pub const DONE_PNG: &[u8] = include_bytes!("assets/done.png");
+    pub const INDEX_HTML: &str = include_str!("../../../assets/remote-input/index.html");
+    pub const APP_JS: &str = include_str!("../../../assets/remote-input/app.js");
+    pub const STYLE_CSS: &str = include_str!("../../../assets/remote-input/style.css");
+    pub const ICON_PNG: &[u8] = include_bytes!("../../../assets/remote-input/icon.png");
+    pub const MIC_PNG: &[u8] = include_bytes!("../../../assets/remote-input/mic.png");
+    pub const DONE_PNG: &[u8] = include_bytes!("../../../assets/remote-input/done.png");
 }
 
 const HEADER_HTML: &str = "text/html; charset=utf-8";

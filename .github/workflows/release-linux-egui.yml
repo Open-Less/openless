@@ -93,10 +93,10 @@ jobs:
           test -s build/openless.conf
 
       - name: Checkout pinned Qwen ASR runtime source
-        run: git submodule update --init --depth 1 -- openless-all/app/src-tauri/vendor/qwen-asr
+        run: git submodule update --init --depth 1 -- openless-all/app/vendor/qwen-asr
 
       - name: Build portable Qwen ASR runtime
-        working-directory: openless-all/app/src-tauri/vendor/qwen-asr
+        working-directory: openless-all/app/vendor/qwen-asr
         run: |
           make blas CFLAGS_BASE="-Wall -Wextra -O3 -ffast-math -mtune=generic"
           test -x qwen_asr
@@ -127,9 +127,9 @@ jobs:
             exit 0
           fi
           case "$RELEASE_TAG" in
-            v*-tauri) ;;
+            v*) ;;
             *)
-              echo "::error::release_tag must name an existing v*-tauri release"
+              echo "::error::release_tag must name an existing v* release"
               exit 1
               ;;
           esac
@@ -157,7 +157,7 @@ jobs:
             VERSION=${RELEASE_TAG#v}
             VERSION=${VERSION%-tauri}
           else
-            VERSION=$(sed -n 's/^version = "\([^"]*\)"/\1/p' src-tauri/Cargo.toml | head -1)
+            VERSION=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "openless-linux-egui") | .version')
           fi
           test -n "$VERSION"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
@@ -179,7 +179,7 @@ jobs:
           test "$(find "$OUTPUT" -maxdepth 1 -name '*.AppImage' | wc -l)" -eq 1
           ! ldd target/release/openless-linux-egui | grep -q 'not found'
           ! ldd target/release/openless-linux-egui | grep -Eqi 'webkit|wry|tauri'
-          ! ldd src-tauri/vendor/qwen-asr/qwen_asr | grep -q 'not found'
+          ! ldd vendor/qwen-asr/qwen_asr | grep -q 'not found'
           dpkg-deb -c "$OUTPUT"/*.deb | grep -q 'usr/bin/openless'
           dpkg-deb -c "$OUTPUT"/*.deb | grep -q 'fcitx5/libopenless.so'
           dpkg-deb -c "$OUTPUT"/*.deb | grep -q 'usr/lib/openless/resources/qwen-asr/qwen_asr'

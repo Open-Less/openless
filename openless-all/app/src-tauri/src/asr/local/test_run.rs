@@ -20,10 +20,10 @@ use serde::Serialize;
 
 use super::models::ModelId;
 
-/// 内嵌测试音频。原始文件 `vendor/qwen-asr/samples/test_speech.wav`
+/// 内嵌测试音频。原始文件 `../vendor/qwen-asr/samples/test_speech.wav`
 /// 内容："Hello. This is a test of the Voxtrail speech-to-text system."
 #[cfg(any(target_os = "macos", target_os = "linux"))]
-const TEST_WAV: &[u8] = include_bytes!("../../../vendor/qwen-asr/samples/test_speech.wav");
+const TEST_WAV: &[u8] = include_bytes!("../../../../vendor/qwen-asr/samples/test_speech.wav");
 
 /// 测试结果给前端展示。
 #[derive(Debug, Serialize)]

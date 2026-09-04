@@ -98,7 +98,7 @@ int openless_common_controls_v6_manifest_dependency_anchor = 0;
 /// `-march=native` 这里**不**用——分发二进制要可移植，cc crate 在 release 下
 /// 默认带 `-O2`，加上 `-O3` 提一档；NEON/AVX 在源码里有 `#ifdef` 自动分派。
 fn build_qwen_asr(target_os: &str) {
-    const VENDOR: &str = "vendor/qwen-asr";
+    const VENDOR: &str = "../vendor/qwen-asr";
     const SOURCES: &[&str] = &[
         "qwen_asr.c",
         "qwen_asr_kernels.c",
