@@ -4,12 +4,16 @@ fn main() {
 }
 
 #[cfg(target_os = "linux")]
+mod ui;
+
+#[cfg(target_os = "linux")]
 mod linux_app {
     use std::future::Future;
     use std::sync::mpsc;
     use std::sync::Arc;
     use std::time::Duration;
 
+    use crate::ui::{shell, theme};
     use eframe::egui;
     use openless_core::{
         BackendConfig, BackendError, BackendEvent, BackendEventKind, BackendSnapshot,
@@ -124,6 +128,7 @@ mod linux_app {
         pending_channel_delete: Option<String>,
         status: String,
         startup_error: Option<String>,
+        active_page: shell::Page,
         tx: mpsc::Sender<UiResult>,
         rx: mpsc::Receiver<UiResult>,
     }
@@ -173,6 +178,7 @@ mod linux_app {
                         pending_channel_delete: None,
                         status: "Core 2.0 已启动".to_string(),
                         startup_error: None,
+                        active_page: shell::Page::Overview,
                         tx,
                         rx,
                     };
@@ -214,6 +220,7 @@ mod linux_app {
                     pending_channel_delete: None,
                     status: "启动失败".to_string(),
                     startup_error: Some(error),
+                    active_page: shell::Page::Overview,
                     tx,
                     rx,
                 },
@@ -1514,36 +1521,30 @@ mod linux_app {
                     });
                 }
             }
-            egui::TopBottomPanel::top("status").show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.strong("OpenLess 2.0");
-                    ui.separator();
-                    ui.label(&self.status);
-                });
-            });
-            egui::CentralPanel::default().show(ctx, |ui| {
+            shell::titlebar(ctx);
+            shell::sidebar(ctx, &mut self.active_page, &self.status);
+            let active_page = self.active_page;
+            shell::content_panel(ctx, active_page, |ui| {
                 if let Some(error) = &self.startup_error {
                     ui.heading("启动失败");
                     ui.colored_label(egui::Color32::RED, error);
                     return;
                 }
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    self.dictation_ui(ui);
-                    ui.separator();
-                    self.qa_ui(ui);
-                    if self.qa_visible {
+                match active_page {
+                    shell::Page::Overview => {
+                        self.dictation_ui(ui);
                         ui.separator();
+                        self.qa_ui(ui);
+                        if self.qa_visible {
+                            ui.separator();
+                        }
+                        self.selection_ui(ui);
                     }
-                    self.selection_ui(ui);
-                    ui.separator();
-                    self.less_computer_ui(ui);
-                    ui.separator();
-                    self.models_ui(ui);
-                    ui.separator();
-                    self.settings_ui(ui);
-                    ui.separator();
-                    self.history_ui(ui);
-                });
+                    shell::Page::History => self.history_ui(ui),
+                    shell::Page::Providers => self.settings_ui(ui),
+                    shell::Page::Models => self.models_ui(ui),
+                    shell::Page::Assistant => self.less_computer_ui(ui),
+                }
             });
             ctx.request_repaint_after(Duration::from_millis(50));
         }
@@ -2109,13 +2110,22 @@ mod linux_app {
                 .map_err(|error| error.to_string())
         })();
         let options = eframe::NativeOptions {
-            viewport: egui::ViewportBuilder::default().with_inner_size([960.0, 720.0]),
+            viewport: egui::ViewportBuilder::default()
+                .with_title("OpenLess")
+                .with_inner_size([1240.0, 800.0])
+                .with_min_inner_size([960.0, 640.0])
+                .with_decorations(false)
+                .with_transparent(false)
+                .with_resizable(true),
             ..Default::default()
         };
         eframe::run_native(
             "OpenLess",
             options,
-            Box::new(move |_| Ok(Box::new(OpenLessEguiApp::new(tokio, native)))),
+            Box::new(move |cc| {
+                theme::install(&cc.egui_ctx);
+                Ok(Box::new(OpenLessEguiApp::new(tokio, native)))
+            }),
         )
         .map_err(|error| error.to_string())
     }
