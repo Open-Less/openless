@@ -51,6 +51,8 @@ mod linux_app {
         Marketplace(Result<Vec<openless_core::MarketplaceListItem>, String>),
         MarketplaceFlow(Result<openless_core::OAuthDeviceFlow, String>),
         MarketplaceAuthPoll(Result<openless_core::OAuthPollResult, String>),
+        MarketplaceDetail(Result<openless_core::MarketplaceDetail, String>),
+        MarketplaceMine(Result<(Vec<openless_core::MarketplaceMyPackItem>, Vec<String>), String>),
         Microphones(Result<Vec<openless_core::MicrophoneDevice>, String>),
         UpdateCheck(Result<Option<UpdateManifest>, String>),
         UpdateProgress(openless_linux_egui::DownloadProgress),
@@ -166,6 +168,9 @@ mod linux_app {
         marketplace_items: Vec<openless_core::MarketplaceListItem>,
         marketplace_query: String,
         marketplace_flow: Option<openless_core::OAuthDeviceFlow>,
+        marketplace_detail: Option<openless_core::MarketplaceDetail>,
+        marketplace_my_packs: Vec<openless_core::MarketplaceMyPackItem>,
+        marketplace_my_likes: Vec<String>,
         style_editor: Option<openless_core::StylePack>,
         status: String,
         startup_error: Option<String>,
@@ -241,6 +246,9 @@ mod linux_app {
                         marketplace_items: Vec::new(),
                         marketplace_query: String::new(),
                         marketplace_flow: None,
+                        marketplace_detail: None,
+                        marketplace_my_packs: Vec::new(),
+                        marketplace_my_likes: Vec::new(),
                         style_editor: None,
                         status: "Core 2.0 已启动".to_string(),
                         startup_error: None,
@@ -308,6 +316,9 @@ mod linux_app {
                     marketplace_items: Vec::new(),
                     marketplace_query: String::new(),
                     marketplace_flow: None,
+                    marketplace_detail: None,
+                    marketplace_my_packs: Vec::new(),
+                    marketplace_my_likes: Vec::new(),
                     style_editor: None,
                     status: "启动失败".to_string(),
                     startup_error: Some(error),
@@ -677,6 +688,23 @@ mod linux_app {
                     .await
                     .map_err(|error| error.to_string());
                 let _ = tx.send(UiResult::Marketplace(result));
+            });
+        }
+
+        fn load_marketplace_mine(&self) {
+            let Some(backend) = self.backend() else {
+                return;
+            };
+            let tx = self.tx.clone();
+            self.tokio.spawn(async move {
+                let result = async {
+                    let packs = backend.services().marketplace.my_packs().await?;
+                    let likes = backend.services().marketplace.my_likes().await?;
+                    Ok::<_, BackendError>((packs, likes))
+                }
+                .await
+                .map_err(|error| error.to_string());
+                let _ = tx.send(UiResult::MarketplaceMine(result));
             });
         }
 
@@ -1372,6 +1400,18 @@ mod linux_app {
                         }
                     },
                     UiResult::MarketplaceAuthPoll(Err(error)) => self.status = error,
+                    UiResult::MarketplaceDetail(Ok(detail)) => {
+                        self.status = format!("已加载风格详情：{}", detail.summary.name);
+                        self.marketplace_detail = Some(detail);
+                    }
+                    UiResult::MarketplaceDetail(Err(error)) => self.status = error,
+                    UiResult::MarketplaceMine(Ok((packs, likes))) => {
+                        self.status =
+                            format!("我的发布 {} 个，喜欢 {} 个", packs.len(), likes.len());
+                        self.marketplace_my_packs = packs;
+                        self.marketplace_my_likes = likes;
+                    }
+                    UiResult::MarketplaceMine(Err(error)) => self.status = error,
                     UiResult::Microphones(Ok(devices)) => {
                         let selected = self
                             .preferences
@@ -2661,6 +2701,9 @@ mod linux_app {
                         });
                     }
                 }
+                if ui.button("我的发布/喜欢").clicked() {
+                    self.load_marketplace_mine();
+                }
             });
             if let Some(flow) = self.marketplace_flow.clone() {
                 ui.horizontal(|ui| {
@@ -2694,6 +2737,22 @@ mod linux_app {
                 ui.label("尚未加载 Marketplace；点击“搜索/刷新”。");
                 return;
             }
+            if let Some(detail) = &self.marketplace_detail {
+                ui.group(|ui| {
+                    ui.heading(format!("详情：{}", detail.summary.name));
+                    ui.label(format!("状态：{}", detail.state));
+                    ui.label(&detail.prompt);
+                });
+            }
+            if !self.marketplace_my_packs.is_empty() || !self.marketplace_my_likes.is_empty() {
+                ui.group(|ui| {
+                    ui.heading("我的 Marketplace");
+                    ui.label(format!("喜欢的风格：{}", self.marketplace_my_likes.len()));
+                    for pack in &self.marketplace_my_packs {
+                        ui.label(format!("{} · {}", pack.summary.name, pack.state));
+                    }
+                });
+            }
             let mut action: Option<(String, &'static str)> = None;
             for pack in &self.marketplace_items {
                 egui::Frame::group(ui.style()).show(ui, |ui| {
@@ -2713,20 +2772,133 @@ mod linux_app {
                         if ui.button("喜欢/取消喜欢").clicked() {
                             action = Some((pack.id.clone(), "like"));
                         }
+                        if ui.button("详情").clicked() {
+                            action = Some((pack.id.clone(), "detail"));
+                        }
+                        if ui.button("下载 ZIP").clicked() {
+                            action = Some((pack.id.clone(), "download"));
+                        }
                     });
                 });
                 ui.add_space(8.0);
             }
             if let (Some(backend), Some((id, operation))) = (self.backend(), action) {
-                self.spawn(async move {
+                let tx = self.tx.clone();
+                self.tokio.spawn(async move {
                     match operation {
                         "install" => {
-                            let pack = backend.services().marketplace.install(id).await?;
-                            Ok(format!("已安装风格包：{}", pack.name))
+                            let result = backend
+                                .services()
+                                .marketplace
+                                .install(id)
+                                .await
+                                .map(|pack| format!("已安装风格包：{}", pack.name))
+                                .map_err(|error| error.to_string());
+                            let _ =
+                                tx.send(UiResult::Message(result.unwrap_or_else(|error| error)));
                         }
                         "like" => {
-                            let result = backend.services().marketplace.toggle_like(id).await?;
-                            Ok(format!("喜欢数：{}", result.like_count))
+                            let result = backend.services().marketplace.toggle_like(id).await;
+                            let message = result
+                                .map(|result| format!("喜欢数：{}", result.like_count))
+                                .unwrap_or_else(|error| error.to_string());
+                            let _ = tx.send(UiResult::Message(message));
+                        }
+                        "detail" => {
+                            let result = backend
+                                .services()
+                                .marketplace
+                                .detail(id)
+                                .await
+                                .map_err(|error| error.to_string());
+                            let _ = tx.send(UiResult::MarketplaceDetail(result));
+                        }
+                        "download" => {
+                            let result = async {
+                                let bytes = backend
+                                    .services()
+                                    .marketplace
+                                    .download_archive(id.clone())
+                                    .await?;
+                                let destination = tokio::task::spawn_blocking(move || {
+                                    rfd::FileDialog::new()
+                                        .add_filter("OpenLess style pack", &["zip"])
+                                        .set_file_name(format!("openless-marketplace-{id}.zip"))
+                                        .save_file()
+                                })
+                                .await
+                                .map_err(|error| {
+                                    BackendError::new(
+                                        openless_core::BackendErrorCode::Internal,
+                                        error.to_string(),
+                                    )
+                                })?
+                                .ok_or_else(|| {
+                                    BackendError::new(
+                                        openless_core::BackendErrorCode::Cancelled,
+                                        "Marketplace 下载已取消",
+                                    )
+                                })?;
+                                tokio::task::spawn_blocking(move || {
+                                    openless_linux_egui::atomic_save(&destination, &bytes)
+                                })
+                                .await
+                                .map_err(|error| {
+                                    BackendError::new(
+                                        openless_core::BackendErrorCode::Internal,
+                                        error.to_string(),
+                                    )
+                                })?
+                                .map_err(|error| {
+                                    BackendError::new(
+                                        openless_core::BackendErrorCode::Platform,
+                                        error.to_string(),
+                                    )
+                                })?;
+                                Ok::<_, BackendError>("Marketplace ZIP 已保存".to_string())
+                            }
+                            .await
+                            .unwrap_or_else(|error| error.to_string());
+                            let _ = tx.send(UiResult::Message(result));
+                        }
+                        _ => unreachable!(),
+                    }
+                });
+            }
+            ui.separator();
+            ui.heading("发布本地风格包");
+            let mut local_action: Option<(String, Option<String>, &'static str)> = None;
+            for pack in self
+                .style_packs
+                .iter()
+                .filter(|pack| pack.kind == openless_core::StylePackKind::Imported)
+            {
+                ui.horizontal(|ui| {
+                    ui.label(&pack.name);
+                    if ui.button("上传/更新").clicked() {
+                        local_action =
+                            Some((pack.id.clone(), pack.origin_pack_id.clone(), "upload"));
+                    }
+                });
+            }
+            for pack in &self.marketplace_my_packs {
+                ui.horizontal(|ui| {
+                    ui.label(format!("已发布：{}", pack.summary.name));
+                    if ui.button("删除发布").clicked() {
+                        local_action = Some((pack.summary.id.clone(), None, "delete"));
+                    }
+                });
+            }
+            if let (Some(backend), Some((id, origin, operation))) = (self.backend(), local_action) {
+                self.spawn(async move {
+                    match operation {
+                        "upload" => {
+                            let result = backend.services().marketplace.upload(id, origin).await?;
+                            Ok(format!("发布状态：{} · {}", result.state, result.message))
+                        }
+                        "delete" => {
+                            backend.services().marketplace.delete(id).await?;
+                            Ok("Marketplace 发布已删除".to_string())
                         }
                         _ => unreachable!(),
                     }
