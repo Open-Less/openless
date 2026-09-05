@@ -81,6 +81,60 @@ mod linux_app {
         style_packs: Vec<openless_core::StylePack>,
     }
 
+    #[derive(Default)]
+    struct SettingsDirty {
+        streaming_insert: bool,
+        coding_agent_enabled: bool,
+        start_minimized: bool,
+        launch_at_login: bool,
+        auto_update_check: bool,
+        update_channel: bool,
+        remote_input_enabled: bool,
+        remote_input_port: bool,
+    }
+
+    impl SettingsDirty {
+        fn any(&self) -> bool {
+            self.streaming_insert
+                || self.coding_agent_enabled
+                || self.start_minimized
+                || self.launch_at_login
+                || self.auto_update_check
+                || self.update_channel
+                || self.remote_input_enabled
+                || self.remote_input_port
+        }
+
+        fn merge(&self, latest: &UserPreferences, draft: &UserPreferences) -> UserPreferences {
+            let mut merged = latest.clone();
+            if self.streaming_insert {
+                merged.streaming_insert = draft.streaming_insert;
+            }
+            if self.coding_agent_enabled {
+                merged.coding_agent_enabled = draft.coding_agent_enabled;
+            }
+            if self.start_minimized {
+                merged.start_minimized = draft.start_minimized;
+            }
+            if self.launch_at_login {
+                merged.launch_at_login = draft.launch_at_login;
+            }
+            if self.auto_update_check {
+                merged.auto_update_check = draft.auto_update_check;
+            }
+            if self.update_channel {
+                merged.update_channel = draft.update_channel;
+            }
+            if self.remote_input_enabled {
+                merged.remote_input_enabled = draft.remote_input_enabled;
+            }
+            if self.remote_input_port {
+                merged.remote_input_port = draft.remote_input_port;
+            }
+            merged
+        }
+    }
+
     #[derive(Clone)]
     enum ProvidersState {
         Loading,
@@ -121,6 +175,7 @@ mod linux_app {
         subscription: Option<openless_core::EventSubscription>,
         snapshot: Option<BackendSnapshot>,
         preferences: Option<UserPreferences>,
+        settings_dirty: SettingsDirty,
         models: ModelsState,
         transcript: String,
         transcript_state: TranscriptAccumulator,
@@ -199,6 +254,7 @@ mod linux_app {
                         subscription: Some(subscription),
                         snapshot: Some(snapshot),
                         preferences: Some(preferences),
+                        settings_dirty: SettingsDirty::default(),
                         models: ModelsState::Loading,
                         transcript: String::new(),
                         transcript_state: TranscriptAccumulator::default(),
@@ -269,6 +325,7 @@ mod linux_app {
                     subscription: None,
                     snapshot: None,
                     preferences: None,
+                    settings_dirty: SettingsDirty::default(),
                     models: ModelsState::Loading,
                     transcript: String::new(),
                     transcript_state: TranscriptAccumulator::default(),
@@ -1023,7 +1080,13 @@ mod linux_app {
                 }
                 BackendEventKind::PreferencesChanged(_) => {
                     if let Some(backend) = self.backend() {
-                        self.preferences = Some(backend.get_preferences());
+                        let latest = backend.get_preferences();
+                        self.preferences = Some(match self.preferences.as_ref() {
+                            Some(draft) if self.settings_dirty.any() => {
+                                self.settings_dirty.merge(&latest, draft)
+                            }
+                            _ => latest,
+                        });
                     }
                     self.load_remote_status();
                     self.load_library();
@@ -2195,12 +2258,24 @@ mod linux_app {
             self.provider_management_ui(ui);
             ui.separator();
             let mut remote_update = None;
+            let mut save_settings = false;
             if let Some(preferences) = self.preferences.as_mut() {
-                ui.checkbox(&mut preferences.streaming_insert, "流式插入");
-                ui.checkbox(&mut preferences.coding_agent_enabled, "启用 Less Computer");
-                ui.checkbox(&mut preferences.start_minimized, "启动时隐藏主窗口");
-                ui.checkbox(&mut preferences.launch_at_login, "开机启动");
-                ui.checkbox(&mut preferences.auto_update_check, "自动检查更新");
+                self.settings_dirty.streaming_insert |= ui
+                    .checkbox(&mut preferences.streaming_insert, "流式插入")
+                    .changed();
+                self.settings_dirty.coding_agent_enabled |= ui
+                    .checkbox(&mut preferences.coding_agent_enabled, "启用 Less Computer")
+                    .changed();
+                self.settings_dirty.start_minimized |= ui
+                    .checkbox(&mut preferences.start_minimized, "启动时隐藏主窗口")
+                    .changed();
+                self.settings_dirty.launch_at_login |= ui
+                    .checkbox(&mut preferences.launch_at_login, "开机启动")
+                    .changed();
+                self.settings_dirty.auto_update_check |= ui
+                    .checkbox(&mut preferences.auto_update_check, "自动检查更新")
+                    .changed();
+                let previous_channel = preferences.update_channel;
                 egui::ComboBox::from_label("更新渠道")
                     .selected_text(match preferences.update_channel {
                         openless_core::shared_types::UpdateChannel::Stable => "稳定版",
@@ -2218,27 +2293,52 @@ mod linux_app {
                             "Beta",
                         );
                     });
-                ui.checkbox(&mut preferences.remote_input_enabled, "启用远程输入");
-                ui.add(
-                    egui::DragValue::new(&mut preferences.remote_input_port)
-                        .range(1..=u16::MAX)
-                        .prefix("端口 "),
-                );
+                self.settings_dirty.update_channel |=
+                    preferences.update_channel != previous_channel;
+                self.settings_dirty.remote_input_enabled |= ui
+                    .checkbox(&mut preferences.remote_input_enabled, "启用远程输入")
+                    .changed();
+                self.settings_dirty.remote_input_port |= ui
+                    .add(
+                        egui::DragValue::new(&mut preferences.remote_input_port)
+                            .range(1..=u16::MAX)
+                            .prefix("端口 "),
+                    )
+                    .changed();
                 if ui.button("保存设置").clicked() {
-                    if let (Some(native), Some(snapshot)) = (&self.native, &self.snapshot) {
-                        match native
-                            .host()
-                            .save_settings(preferences.clone(), snapshot.preferences_revision)
-                        {
-                            Ok(_) => {
-                                self.status = "设置已保存".to_string();
-                                remote_update = Some(openless_core::RemoteInputConfig {
-                                    enabled: preferences.remote_input_enabled,
-                                    port: preferences.remote_input_port,
-                                });
-                            }
-                            Err(error) => self.status = error.to_string(),
+                    save_settings = true;
+                }
+            }
+            if save_settings {
+                if let (Some(native), Some(draft), Some(snapshot)) =
+                    (&self.native, self.preferences.clone(), &self.snapshot)
+                {
+                    let first = native
+                        .host()
+                        .save_settings(draft.clone(), snapshot.preferences_revision);
+                    let outcome = match first {
+                        Err(error) if error.code == openless_core::BackendErrorCode::Busy => {
+                            let latest_snapshot = native.host().snapshot();
+                            let latest = native.host().backend().get_preferences();
+                            let merged = self.settings_dirty.merge(&latest, &draft);
+                            native
+                                .host()
+                                .save_settings(merged, latest_snapshot.preferences_revision)
                         }
+                        result => result,
+                    };
+                    match outcome {
+                        Ok(outcome) => {
+                            self.preferences = Some(outcome.preferences.clone());
+                            self.snapshot = Some(native.host().snapshot());
+                            self.settings_dirty = SettingsDirty::default();
+                            self.status = "设置已保存".to_string();
+                            remote_update = Some(openless_core::RemoteInputConfig {
+                                enabled: outcome.preferences.remote_input_enabled,
+                                port: outcome.preferences.remote_input_port,
+                            });
+                        }
+                        Err(error) => self.status = error.to_string(),
                     }
                 }
             }
@@ -4171,6 +4271,25 @@ mod linux_app {
             let state = app.qa_state.as_ref().unwrap();
             assert_eq!(state.chunk.as_deref(), Some("Hello world"));
             assert_eq!(state.messages.as_ref().unwrap()[0].content, "question");
+        }
+
+        #[test]
+        fn settings_conflict_merge_preserves_only_dirty_draft_fields() {
+            let mut latest = UserPreferences::default();
+            latest.remote_input_port = 9443;
+            latest.streaming_insert = false;
+            let mut draft = UserPreferences::default();
+            draft.remote_input_port = 7777;
+            draft.streaming_insert = true;
+            let dirty = SettingsDirty {
+                streaming_insert: true,
+                ..Default::default()
+            };
+
+            let merged = dirty.merge(&latest, &draft);
+
+            assert!(merged.streaming_insert);
+            assert_eq!(merged.remote_input_port, 9443);
         }
     }
 }
