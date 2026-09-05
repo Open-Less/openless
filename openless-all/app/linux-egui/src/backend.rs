@@ -876,9 +876,11 @@ impl LinuxBackendBuilder {
             None => Arc::new(LinuxTaskSpawner::capture_current()?),
         };
         let repositories = BackendRepositories::open(&self.config.data_dir)?;
-        let recorder = self
-            .recorder
-            .unwrap_or_else(|| Arc::new(LinuxCpalRecorder::new(None)) as Arc<dyn AudioRecorder>);
+        let recordings_dir = self.config.data_dir.join("recordings");
+        let recorder = self.recorder.unwrap_or_else(|| {
+            Arc::new(LinuxCpalRecorder::with_recordings_dir(None, recordings_dir))
+                as Arc<dyn AudioRecorder>
+        });
         let text_inserter = self
             .text_inserter
             .unwrap_or_else(|| Arc::new(Fcitx5TextInserter::new(true)) as Arc<dyn TextInserter>);

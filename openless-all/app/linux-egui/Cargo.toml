@@ -26,6 +26,7 @@ dbus = "0.9"
 arboard = { version = "3", features = ["wayland-data-control"] }
 keyring = { version = "3.6.3", default-features = false, features = ["linux-native-sync-persistent", "crypto-rust"] }
 cpal = "0.15"
+rfd = { version = "0.16", default-features = false, features = ["xdg-portal", "tokio"] }
 egui = "=0.33.3"
 eframe = { version = "=0.33.3", default-features = false, features = ["accesskit", "default_fonts", "glow", "wayland", "x11"] }
 libc = "0.2"

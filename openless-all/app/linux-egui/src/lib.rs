@@ -17,6 +17,7 @@ mod hotkeys;
 mod marketplace;
 mod popup;
 mod qa;
+mod recordings;
 mod remote_input;
 mod resources;
 mod runtime;
@@ -31,8 +32,8 @@ pub use backend::{LinuxBackendBuilder, LinuxBackendRuntime};
 pub use capabilities::{LinuxCapabilitySnapshot, LinuxDesktopSession, LinuxPlatformApi};
 pub use credentials::LinuxCredentialStore;
 pub use desktop::{
-    atomic_save, notify, open_external, validate_save_path, AutostartManager, DesktopError,
-    Notification,
+    atomic_save, notify, open_external, open_local_file, validate_save_path, AutostartManager,
+    DesktopError, Notification,
 };
 pub use fcitx5::{
     available as fcitx5_available, commit_text as fcitx5_commit_text,
@@ -50,6 +51,7 @@ pub use popup::{
     ProtocolErrorKind as PopupProtocolErrorKind, QaPopupState, MAX_JSONL_LINE_BYTES,
     POPUP_PROTOCOL_VERSION,
 };
+pub use recordings::{read_recording_wav, recording_path, recording_pcm, RecordingError};
 pub use resources::{
     LinuxPackageKind, LinuxResourceLayout, LinuxResourceResolver, FCITX_PLUGIN_CONFIG,
     FCITX_PLUGIN_LIBRARY,

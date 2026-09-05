@@ -234,6 +234,39 @@ pub fn open_external(url: &str) -> Result<(), DesktopError> {
     open_external_with(url, &[("xdg-open", &[]), ("gio", &["open"])])
 }
 
+/// Opens a validated regular local file with the user's desktop handler.
+pub fn open_local_file(path: &Path) -> Result<(), DesktopError> {
+    if !path.is_absolute() {
+        return Err(DesktopError::InvalidInput(
+            "local file path must be absolute".into(),
+        ));
+    }
+    let metadata =
+        fs::symlink_metadata(path).map_err(|error| io_error("inspect local file", error))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(DesktopError::InvalidInput(
+            "local file must be a regular non-symlink file".into(),
+        ));
+    }
+    let mut unavailable = Vec::new();
+    for (program, prefix) in [("xdg-open", &[][..]), ("gio", &["open"][..])] {
+        match Command::new(program).args(prefix).arg(path).status() {
+            Ok(status) if status.success() => return Ok(()),
+            Ok(status) => {
+                return Err(DesktopError::LauncherFailed {
+                    program: program.into(),
+                    status,
+                });
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                unavailable.push(format!("{program}: {error}"));
+            }
+            Err(error) => return Err(io_error("launch local file handler", error)),
+        }
+    }
+    Err(DesktopError::LauncherUnavailable(unavailable))
+}
+
 fn validate_external_url(url: &str) -> Result<(), DesktopError> {
     if !(url.starts_with("https://") || url.starts_with("http://")) {
         return Err(DesktopError::InvalidInput(

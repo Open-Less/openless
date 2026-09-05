@@ -2577,6 +2577,18 @@ mod linux_app {
                                         item.raw_transcript.clone(),
                                     ));
                                 }
+                                if item.has_audio_recording == Some(true) {
+                                    if ui.small_button("播放录音").clicked() {
+                                        action = Some((item.id.clone(), "play", String::new()));
+                                    }
+                                    if ui.small_button("导出录音").clicked() {
+                                        action = Some((item.id.clone(), "export", String::new()));
+                                    }
+                                    if ui.small_button("重新转写").clicked() {
+                                        action =
+                                            Some((item.id.clone(), "retranscribe", String::new()));
+                                    }
+                                }
                                 if ui.small_button("删除").clicked() {
                                     action = Some((item.id.clone(), "delete", String::new()));
                                 }
@@ -2609,6 +2621,140 @@ mod linux_app {
                                 backend.delete_history(&id)?;
                                 Ok("历史记录已删除".to_string())
                             }),
+                            "play" => {
+                                let data_dir = backend.config().data_dir.clone();
+                                self.spawn(async move {
+                                    let path = openless_linux_egui::recording_path(&data_dir, &id)
+                                        .map_err(|error| {
+                                            BackendError::new(
+                                                openless_core::BackendErrorCode::Persistence,
+                                                error.to_string(),
+                                            )
+                                        })?;
+                                    tokio::task::spawn_blocking(move || {
+                                        openless_linux_egui::open_local_file(&path)
+                                    })
+                                    .await
+                                    .map_err(|error| {
+                                        BackendError::new(
+                                            openless_core::BackendErrorCode::Internal,
+                                            error.to_string(),
+                                        )
+                                    })?
+                                    .map_err(|error| {
+                                        BackendError::new(
+                                            openless_core::BackendErrorCode::Platform,
+                                            error.to_string(),
+                                        )
+                                    })?;
+                                    Ok("已交给系统播放器".to_string())
+                                });
+                            }
+                            "export" => {
+                                let data_dir = backend.config().data_dir.clone();
+                                self.spawn(async move {
+                                    let file_name = format!("openless-recording-{id}.wav");
+                                    let destination = tokio::task::spawn_blocking(move || {
+                                        rfd::FileDialog::new()
+                                            .add_filter("WAV audio", &["wav"])
+                                            .set_file_name(file_name)
+                                            .save_file()
+                                    })
+                                    .await
+                                    .map_err(|error| {
+                                        BackendError::new(
+                                            openless_core::BackendErrorCode::Internal,
+                                            error.to_string(),
+                                        )
+                                    })?
+                                    .ok_or_else(|| {
+                                        BackendError::new(
+                                            openless_core::BackendErrorCode::Cancelled,
+                                            "录音导出已取消",
+                                        )
+                                    })?;
+                                    let wav = tokio::task::spawn_blocking(move || {
+                                        openless_linux_egui::read_recording_wav(&data_dir, &id)
+                                    })
+                                    .await
+                                    .map_err(|error| {
+                                        BackendError::new(
+                                            openless_core::BackendErrorCode::Internal,
+                                            error.to_string(),
+                                        )
+                                    })?
+                                    .map_err(|error| {
+                                        BackendError::new(
+                                            openless_core::BackendErrorCode::Persistence,
+                                            error.to_string(),
+                                        )
+                                    })?;
+                                    let saved = tokio::task::spawn_blocking(move || {
+                                        openless_linux_egui::atomic_save(&destination, &wav)
+                                    })
+                                    .await
+                                    .map_err(|error| {
+                                        BackendError::new(
+                                            openless_core::BackendErrorCode::Internal,
+                                            error.to_string(),
+                                        )
+                                    })?
+                                    .map_err(|error| {
+                                        BackendError::new(
+                                            openless_core::BackendErrorCode::Platform,
+                                            error.to_string(),
+                                        )
+                                    })?;
+                                    Ok(format!("录音已导出：{}", saved.display()))
+                                });
+                            }
+                            "retranscribe" => {
+                                let data_dir = backend.config().data_dir.clone();
+                                self.spawn(async move {
+                                    let recording_id = id.clone();
+                                    let wav = tokio::task::spawn_blocking(move || {
+                                        openless_linux_egui::read_recording_wav(
+                                            &data_dir,
+                                            &recording_id,
+                                        )
+                                    })
+                                    .await
+                                    .map_err(|error| {
+                                        BackendError::new(
+                                            openless_core::BackendErrorCode::Internal,
+                                            error.to_string(),
+                                        )
+                                    })?
+                                    .map_err(|error| {
+                                        BackendError::new(
+                                            openless_core::BackendErrorCode::Persistence,
+                                            error.to_string(),
+                                        )
+                                    })?;
+                                    let pcm = openless_linux_egui::recording_pcm(&wav)
+                                        .map_err(|error| {
+                                            BackendError::new(
+                                                openless_core::BackendErrorCode::Persistence,
+                                                error.to_string(),
+                                            )
+                                        })?
+                                        .to_vec();
+                                    let started = std::time::Instant::now();
+                                    let result = backend
+                                        .services()
+                                        .auxiliary
+                                        .retranscribe_pcm(pcm)
+                                        .await
+                                        .map_err(|failure| failure.error)?;
+                                    let entry = backend.apply_history_retranscription(
+                                        &id,
+                                        result.text,
+                                        &result.asr,
+                                        started.elapsed().as_millis() as u64,
+                                    )?;
+                                    Ok(format!("重新转写完成：{}", entry.final_text))
+                                });
+                            }
                             _ => unreachable!(),
                         }
                     }
