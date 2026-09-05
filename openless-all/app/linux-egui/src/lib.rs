@@ -10,6 +10,7 @@ mod backend;
 mod capabilities;
 mod coding_agent;
 mod credentials;
+mod desktop;
 mod fcitx5;
 mod host_actions;
 mod hotkeys;
@@ -27,6 +28,10 @@ pub use audio::LinuxCpalRecorder;
 pub use backend::{LinuxBackendBuilder, LinuxBackendRuntime};
 pub use capabilities::{LinuxCapabilitySnapshot, LinuxDesktopSession, LinuxPlatformApi};
 pub use credentials::LinuxCredentialStore;
+pub use desktop::{
+    atomic_save, notify, open_external, validate_save_path, AutostartManager, DesktopError,
+    Notification,
+};
 pub use fcitx5::{
     available as fcitx5_available, commit_text as fcitx5_commit_text,
     ensure_plugin_installed as ensure_fcitx5_plugin_installed,
