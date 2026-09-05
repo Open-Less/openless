@@ -1,18 +1,105 @@
 //! Verified AppImage replacement primitives.
 //!
-//! Network transport and minisign verification are intentionally injected.
-//! The current Linux crate has neither an HTTP client nor a minisign verifier;
-//! callers cannot accidentally turn either missing capability into success.
+//! Network transport is HTTPS-only and every replacement is verified against
+//! the same pinned minisign key used by the existing desktop updater.
 
+use base64::Engine as _;
+use futures_util::StreamExt;
+use minisign_verify::{PublicKey, Signature};
 use serde::Deserialize;
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 pub const MANIFEST_SCHEMA_VERSION: u32 = 1;
 pub const MANIFEST_HOST: &str = "linux-egui";
 pub const DEFAULT_MAX_APPIMAGE_BYTES: u64 = 1024 * 1024 * 1024;
+pub const DEFAULT_MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
+pub const STARTUP_CHECK_DELAY: Duration = Duration::from_secs(15);
+pub const PERIODIC_CHECK_INTERVAL: Duration = Duration::from_secs(60 * 60);
+pub const RELEASES_URL: &str = "https://github.com/Open-Less/openless/releases";
+pub const DIRECT_RELEASE_BASE: &str = "https://github.com/Open-Less/openless";
+pub const BETA_RELEASES_API: &str =
+    "https://api.github.com/repos/Open-Less/openless/releases?per_page=30";
+
+/// Pinned OpenLess updater key. This is deliberately compiled into the host,
+/// rather than accepted from a manifest fetched over the network. It matches
+/// the existing OpenLess updater signing key used by the release workflows.
+pub const PINNED_MINISIGN_PUBLIC_KEY: &str =
+    "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDFERUFBODAzNTY0QzMyM0YKUldRL01reFdBNmpxSGE1K0JadlpONXNWTzhJcGZCRGxjUVdIWExNNFJpeUNsSGZwazdlQThhemkK";
+
+pub use openless_core::shared_types::UpdateChannel;
+
+pub fn manifest_urls(channel: UpdateChannel, arch: &str, beta_tag: Option<&str>) -> Vec<String> {
+    let name = format!("latest-linux-egui-{arch}.json");
+    match channel {
+        UpdateChannel::Stable => vec![format!(
+            "{DIRECT_RELEASE_BASE}/releases/latest/download/{name}"
+        )],
+        UpdateChannel::Beta => beta_tag
+            .filter(|tag| valid_release_tag(tag))
+            .map(|tag| {
+                vec![format!(
+                    "{DIRECT_RELEASE_BASE}/releases/download/{tag}/{name}"
+                )]
+            })
+            .unwrap_or_default(),
+    }
+}
+
+fn valid_release_tag(tag: &str) -> bool {
+    !tag.is_empty()
+        && tag.starts_with('v')
+        && !tag.contains("..")
+        && tag
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b".-_".contains(&byte))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckReason {
+    Startup,
+    Periodic,
+    Manual,
+}
+
+/// Pure elapsed-time scheduler. The UI owns the timer and calls `poll`; no
+/// updater task can block an egui frame.
+#[derive(Debug, Clone)]
+pub struct UpdateSchedule {
+    startup_due: Duration,
+    periodic_due: Duration,
+    startup_pending: bool,
+}
+
+impl UpdateSchedule {
+    pub fn new(now: Duration) -> Self {
+        Self {
+            startup_due: now.saturating_add(STARTUP_CHECK_DELAY),
+            periodic_due: now.saturating_add(PERIODIC_CHECK_INTERVAL),
+            startup_pending: true,
+        }
+    }
+
+    pub fn poll(&mut self, now: Duration, manual: bool) -> Option<CheckReason> {
+        if manual {
+            self.periodic_due = now.saturating_add(PERIODIC_CHECK_INTERVAL);
+            return Some(CheckReason::Manual);
+        }
+        if self.startup_pending && now >= self.startup_due {
+            self.startup_pending = false;
+            self.periodic_due = now.saturating_add(PERIODIC_CHECK_INTERVAL);
+            return Some(CheckReason::Startup);
+        }
+        if now >= self.periodic_due {
+            self.periodic_due = now.saturating_add(PERIODIC_CHECK_INTERVAL);
+            return Some(CheckReason::Periodic);
+        }
+        None
+    }
+}
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -83,7 +170,13 @@ impl UpdateManifest {
     }
 
     pub fn has_new_version(&self, current: &str) -> bool {
-        normalize_version(&self.version) != normalize_version(current)
+        match (
+            semver::Version::parse(normalize_version(&self.version)),
+            semver::Version::parse(normalize_version(current)),
+        ) {
+            (Ok(remote), Ok(current)) => remote > current,
+            _ => normalize_version(&self.version) != normalize_version(current),
+        }
     }
 }
 
@@ -130,6 +223,7 @@ pub enum UpdateError {
         operation: &'static str,
         source: io::Error,
     },
+    Http(String),
 }
 
 impl fmt::Display for UpdateError {
@@ -153,6 +247,7 @@ impl fmt::Display for UpdateError {
                 )
             }
             Self::Io { operation, source } => write!(f, "{operation}: {source}"),
+            Self::Http(message) => write!(f, "update request failed: {message}"),
         }
     }
 }
@@ -189,6 +284,292 @@ impl SignatureVerifier for UnavailableSignatureVerifier {
             "the Linux host was built without a minisign verifier".into(),
         ))
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct PinnedMinisignVerifier {
+    public_key: PublicKey,
+}
+
+impl PinnedMinisignVerifier {
+    pub fn new() -> Result<Self, UpdateError> {
+        let public_key_file = base64::engine::general_purpose::STANDARD
+            .decode(PINNED_MINISIGN_PUBLIC_KEY)
+            .map_err(|error| UpdateError::SignatureUnavailable(error.to_string()))?;
+        let public_key_file = std::str::from_utf8(&public_key_file)
+            .map_err(|error| UpdateError::SignatureUnavailable(error.to_string()))?;
+        let public_key = PublicKey::decode(public_key_file)
+            .map_err(|error| UpdateError::SignatureUnavailable(error.to_string()))?;
+        Ok(Self { public_key })
+    }
+}
+
+impl SignatureVerifier for PinnedMinisignVerifier {
+    fn verify_base64_minisign(
+        &self,
+        artifact: &Path,
+        encoded_signature: &str,
+    ) -> Result<(), UpdateError> {
+        let signature_file = base64::engine::general_purpose::STANDARD
+            .decode(encoded_signature.trim())
+            .map_err(|error| UpdateError::SignatureRejected(error.to_string()))?;
+        let signature_file = std::str::from_utf8(&signature_file)
+            .map_err(|error| UpdateError::SignatureRejected(error.to_string()))?;
+        let signature = Signature::decode(signature_file)
+            .map_err(|error| UpdateError::SignatureRejected(error.to_string()))?;
+        let mut input = File::open(artifact)
+            .map_err(|error| io_error("open AppImage for signature verification", error))?;
+        let mut verifier = self
+            .public_key
+            .verify_stream(&signature)
+            .map_err(|error| UpdateError::SignatureRejected(error.to_string()))?;
+        let mut buffer = [0u8; 64 * 1024];
+        loop {
+            let read = input
+                .read(&mut buffer)
+                .map_err(|error| io_error("read AppImage for signature verification", error))?;
+            if read == 0 {
+                break;
+            }
+            verifier.update(&buffer[..read]);
+        }
+        verifier
+            .finalize()
+            .map_err(|error| UpdateError::SignatureRejected(error.to_string()))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DownloadProgress {
+    pub downloaded: u64,
+    pub content_length: Option<u64>,
+}
+
+/// Fully initialized AppImage updater. Construction fails for deb/rpm,
+/// development binaries, malformed pinned keys, or HTTP client failures.
+#[derive(Clone)]
+pub struct AppImageUpdater {
+    client: reqwest::Client,
+    target: AppImageTarget,
+    verifier: PinnedMinisignVerifier,
+    expected_arch: &'static str,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubRelease {
+    tag_name: String,
+    prerelease: bool,
+    draft: bool,
+}
+
+#[derive(Clone)]
+pub enum LinuxUpdateSupport {
+    AppImage(AppImageUpdater),
+    /// deb/rpm and development builds must leave package replacement to their
+    /// package manager and only offer the upstream releases page.
+    ManualOnly {
+        releases_url: &'static str,
+    },
+}
+
+impl LinuxUpdateSupport {
+    pub fn initialize(package_kind: crate::LinuxPackageKind) -> Self {
+        if package_kind == crate::LinuxPackageKind::AppImage {
+            if let Ok(updater) = AppImageUpdater::initialize() {
+                return Self::AppImage(updater);
+            }
+        }
+        Self::ManualOnly {
+            releases_url: RELEASES_URL,
+        }
+    }
+
+    pub fn supports_auto_update(&self) -> bool {
+        matches!(self, Self::AppImage(_))
+    }
+
+    pub fn manual_download_url(&self) -> &'static str {
+        RELEASES_URL
+    }
+}
+
+impl AppImageUpdater {
+    pub fn initialize() -> Result<Self, UpdateError> {
+        let target = AppImageTarget::detect()?;
+        let verifier = PinnedMinisignVerifier::new()?;
+        let client = reqwest::Client::builder()
+            .https_only(true)
+            .timeout(Duration::from_secs(30))
+            .user_agent(concat!("OpenLess-Linux/", env!("CARGO_PKG_VERSION")))
+            .build()
+            .map_err(|error| UpdateError::Http(error.to_string()))?;
+        Ok(Self {
+            client,
+            target,
+            verifier,
+            expected_arch: std::env::consts::ARCH,
+        })
+    }
+
+    pub fn target(&self) -> &AppImageTarget {
+        &self.target
+    }
+
+    pub async fn check(
+        &self,
+        channel: UpdateChannel,
+    ) -> Result<Option<UpdateManifest>, UpdateError> {
+        let beta_tag = match channel {
+            UpdateChannel::Stable => None,
+            UpdateChannel::Beta => Some(self.latest_beta_tag().await?),
+        };
+        let urls = manifest_urls(channel, self.expected_arch, beta_tag.as_deref());
+        if urls.is_empty() {
+            return Err(UpdateError::InvalidManifest(
+                "a valid beta release tag is required".into(),
+            ));
+        }
+        let mut last_error = None;
+        for url in urls {
+            let result = async {
+                let response = self
+                    .client
+                    .get(&url)
+                    .send()
+                    .await
+                    .map_err(|error| UpdateError::Http(error.to_string()))?
+                    .error_for_status()
+                    .map_err(|error| UpdateError::Http(error.to_string()))?;
+                let bytes = response_bytes_limited(response, DEFAULT_MAX_MANIFEST_BYTES).await?;
+                UpdateManifest::parse(&bytes, self.expected_arch)
+            }
+            .await;
+            match result {
+                Ok(manifest) => {
+                    return Ok(manifest
+                        .has_new_version(env!("CARGO_PKG_VERSION"))
+                        .then_some(manifest));
+                }
+                Err(error) => last_error = Some(error),
+            }
+        }
+        Err(last_error.unwrap_or_else(|| UpdateError::Http("no manifest URL available".into())))
+    }
+
+    async fn latest_beta_tag(&self) -> Result<String, UpdateError> {
+        let response = self
+            .client
+            .get(BETA_RELEASES_API)
+            .send()
+            .await
+            .map_err(|error| UpdateError::Http(error.to_string()))?
+            .error_for_status()
+            .map_err(|error| UpdateError::Http(error.to_string()))?;
+        let bytes = response_bytes_limited(response, DEFAULT_MAX_MANIFEST_BYTES).await?;
+        let releases: Vec<GithubRelease> = serde_json::from_slice(&bytes)
+            .map_err(|error| UpdateError::InvalidManifest(error.to_string()))?;
+        releases
+            .into_iter()
+            .find(|release| {
+                !release.draft && release.prerelease && valid_release_tag(&release.tag_name)
+            })
+            .map(|release| release.tag_name)
+            .ok_or_else(|| UpdateError::InvalidManifest("no beta release is available".into()))
+    }
+
+    pub async fn download_and_install(
+        &self,
+        manifest: UpdateManifest,
+        mut progress: impl FnMut(DownloadProgress),
+    ) -> Result<InstalledUpdate, UpdateError> {
+        manifest.validate(self.expected_arch)?;
+        let response = self
+            .client
+            .get(&manifest.url)
+            .send()
+            .await
+            .map_err(|error| UpdateError::Http(error.to_string()))?
+            .error_for_status()
+            .map_err(|error| UpdateError::Http(error.to_string()))?;
+        let total = response.content_length();
+        if total.is_some_and(|length| length > DEFAULT_MAX_APPIMAGE_BYTES) {
+            return Err(UpdateError::TooLarge {
+                limit: DEFAULT_MAX_APPIMAGE_BYTES,
+            });
+        }
+        let parent = self.target.path().parent().ok_or_else(|| {
+            UpdateError::NotAppImage("current AppImage has no parent directory".into())
+        })?;
+        let download = parent.join(format!(".openless-download-{}", uuid::Uuid::new_v4()));
+        let result = async {
+            let mut output = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&download)
+                .map_err(|error| io_error("create AppImage download", error))?;
+            let mut downloaded = 0u64;
+            let mut stream = response.bytes_stream();
+            while let Some(chunk) = stream.next().await {
+                let chunk = chunk.map_err(|error| UpdateError::Http(error.to_string()))?;
+                downloaded =
+                    downloaded
+                        .checked_add(chunk.len() as u64)
+                        .ok_or(UpdateError::TooLarge {
+                            limit: DEFAULT_MAX_APPIMAGE_BYTES,
+                        })?;
+                if downloaded > DEFAULT_MAX_APPIMAGE_BYTES {
+                    return Err(UpdateError::TooLarge {
+                        limit: DEFAULT_MAX_APPIMAGE_BYTES,
+                    });
+                }
+                output
+                    .write_all(&chunk)
+                    .map_err(|error| io_error("write AppImage download", error))?;
+                progress(DownloadProgress {
+                    downloaded,
+                    content_length: total,
+                });
+            }
+            output
+                .sync_all()
+                .map_err(|error| io_error("sync AppImage download", error))?;
+            drop(output);
+            let input = File::open(&download)
+                .map_err(|error| io_error("open completed AppImage download", error))?;
+            install_verified_appimage(
+                &manifest,
+                self.expected_arch,
+                input,
+                &self.target,
+                &self.verifier,
+            )
+        }
+        .await;
+        let _ = fs::remove_file(download);
+        result
+    }
+}
+
+async fn response_bytes_limited(
+    response: reqwest::Response,
+    limit: u64,
+) -> Result<Vec<u8>, UpdateError> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > limit)
+    {
+        return Err(UpdateError::TooLarge { limit });
+    }
+    let mut bytes = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|error| UpdateError::Http(error.to_string()))?;
+        if (bytes.len() as u64).saturating_add(chunk.len() as u64) > limit {
+            return Err(UpdateError::TooLarge { limit });
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(bytes)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -593,6 +974,26 @@ mod tests {
         let mut bad_url: serde_json::Value = serde_json::from_slice(&valid).unwrap();
         bad_url["url"] = "http://example.test/update".into();
         assert!(UpdateManifest::parse(&serde_json::to_vec(&bad_url).unwrap(), "x86_64").is_err());
+    }
+
+    #[test]
+    fn update_urls_use_only_upstream_https_release_assets() {
+        assert_eq!(
+            manifest_urls(UpdateChannel::Stable, "x86_64", None),
+            vec![format!(
+                "{DIRECT_RELEASE_BASE}/releases/latest/download/latest-linux-egui-x86_64.json"
+            )]
+        );
+        assert!(manifest_urls(UpdateChannel::Beta, "x86_64", Some("../bad")).is_empty());
+        assert_eq!(
+            manifest_urls(UpdateChannel::Beta, "x86_64", Some("v2.0.0-beta.1")).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn pinned_release_key_decodes() {
+        PinnedMinisignVerifier::new().expect("repository updater key must remain valid");
     }
 
     #[test]

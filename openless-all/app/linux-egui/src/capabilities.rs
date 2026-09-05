@@ -67,16 +67,23 @@ impl LinuxCapabilitySnapshot {
         }
     }
 
-    pub fn detect(tray_available: bool, package_kind: LinuxPackageKind) -> Self {
+    pub fn detect(
+        tray_available: bool,
+        package_kind: LinuxPackageKind,
+        updater_available: bool,
+    ) -> Self {
         let wayland = std::env::var("WAYLAND_DISPLAY").ok();
         let x11 = std::env::var("DISPLAY").ok();
-        Self::from_environment(
+        let mut snapshot = Self::from_environment(
             wayland.as_deref(),
             x11.as_deref(),
             fcitx5_available(),
             tray_available,
             package_kind,
-        )
+        );
+        snapshot.capabilities.supports_auto_update =
+            package_kind == LinuxPackageKind::AppImage && updater_available;
+        snapshot
     }
 }
 
