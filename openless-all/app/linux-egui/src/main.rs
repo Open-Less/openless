@@ -22,11 +22,12 @@ mod linux_app {
         TranscriptAccumulator, UserPreferences,
     };
     use openless_linux_egui::{
-        drain_events, ensure_fcitx5_plugin_installed, write_jsonl, EventDrainOutcome,
-        Fcitx5HotkeyListener, FcitxPluginInstallPlan, FcitxPluginStatus, HostToPopup,
-        LinuxBackendBuilder, LinuxCapabilitySnapshot, LinuxLaunchIntent, LinuxNativeRuntime,
-        LinuxPackageKind, LinuxResourceLayout, PopupKind, PopupState, PopupToHost,
-        SingleInstanceBroker, SingleInstanceRole, POPUP_PROTOCOL_VERSION,
+        drain_events, ensure_fcitx5_plugin_installed, open_external, write_jsonl,
+        EventDrainOutcome, Fcitx5HotkeyListener, FcitxPluginInstallPlan, FcitxPluginStatus,
+        HostToPopup, LinuxBackendBuilder, LinuxCapabilitySnapshot, LinuxLaunchIntent,
+        LinuxNativeRuntime, LinuxPackageKind, LinuxResourceLayout, PopupChatMessage, PopupKind,
+        PopupState, PopupSupervisor, PopupSupervisorEvent, PopupToHost, SingleInstanceBroker,
+        SingleInstanceRole, POPUP_PROTOCOL_VERSION,
     };
 
     enum UiResult {
@@ -145,6 +146,9 @@ mod linux_app {
         correction_pattern: String,
         correction_replacement: String,
         history_search: String,
+        qa_popup: Option<PopupSupervisor>,
+        preview_popup: Option<PopupSupervisor>,
+        capsule_popup: Option<PopupSupervisor>,
         status: String,
         startup_error: Option<String>,
         active_page: shell::Page,
@@ -203,6 +207,9 @@ mod linux_app {
                         correction_pattern: String::new(),
                         correction_replacement: String::new(),
                         history_search: String::new(),
+                        qa_popup: None,
+                        preview_popup: None,
+                        capsule_popup: None,
                         status: "Core 2.0 已启动".to_string(),
                         startup_error: None,
                         active_page: shell::Page::Overview,
@@ -254,6 +261,9 @@ mod linux_app {
                     correction_pattern: String::new(),
                     correction_replacement: String::new(),
                     history_search: String::new(),
+                    qa_popup: None,
+                    preview_popup: None,
+                    capsule_popup: None,
                     status: "启动失败".to_string(),
                     startup_error: Some(error),
                     active_page: shell::Page::Overview,
@@ -267,6 +277,213 @@ mod linux_app {
             self.native
                 .as_ref()
                 .map(|native| Arc::clone(native.host().backend()))
+        }
+
+        fn popup_slot(&mut self, kind: PopupKind) -> &mut Option<PopupSupervisor> {
+            match kind {
+                PopupKind::Qa => &mut self.qa_popup,
+                PopupKind::Preview => &mut self.preview_popup,
+                PopupKind::Capsule => &mut self.capsule_popup,
+            }
+        }
+
+        fn ensure_popup(&mut self, kind: PopupKind) {
+            if self.popup_slot(kind).is_some() {
+                return;
+            }
+            match std::env::current_exe() {
+                Ok(executable) => {
+                    let supervisor = PopupSupervisor::spawn(self.tokio.handle(), executable, kind);
+                    *self.popup_slot(kind) = Some(supervisor);
+                }
+                Err(error) => self.status = format!("无法启动原生弹窗：{error}"),
+            }
+        }
+
+        fn send_popup(&mut self, kind: PopupKind, message: HostToPopup) {
+            if let Some(supervisor) = self.popup_slot(kind) {
+                if let Err(error) = supervisor.try_send(message) {
+                    self.status = format!("原生弹窗通道不可用：{error:?}");
+                }
+            }
+        }
+
+        fn hide_popup(&mut self, kind: PopupKind, session_id: String, sequence: u64) {
+            self.send_popup(
+                kind,
+                HostToPopup::Hide {
+                    version: POPUP_PROTOCOL_VERSION,
+                    session_id,
+                    sequence,
+                },
+            );
+        }
+
+        fn show_qa_popup(&mut self) {
+            self.ensure_popup(PopupKind::Qa);
+            let Some(state) = self.qa_state.clone() else {
+                return;
+            };
+            self.send_popup(
+                PopupKind::Qa,
+                HostToPopup::QaSnapshot {
+                    version: POPUP_PROTOCOL_VERSION,
+                    session_id: state.session_id.unwrap_or_else(|| "qa".to_string()),
+                    sequence: self.last_event_sequence.saturating_mul(2),
+                    phase: format!("{:?}", state.kind),
+                    messages: state
+                        .messages
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|message| PopupChatMessage {
+                            role: message.role,
+                            content: message.content,
+                            selection_text: message.selection_text,
+                        })
+                        .collect(),
+                    selection_preview: state.selection_preview,
+                    streaming_answer: state.chunk.unwrap_or_default(),
+                    error: state.error,
+                },
+            );
+        }
+
+        fn show_selection_popup(&mut self) {
+            self.ensure_popup(PopupKind::Preview);
+            let Some(selection) = self.selection.clone() else {
+                return;
+            };
+            let Some(session_id) = selection.session_id else {
+                return;
+            };
+            self.send_popup(
+                PopupKind::Preview,
+                HostToPopup::Preview {
+                    version: POPUP_PROTOCOL_VERSION,
+                    session_id: session_id.to_string(),
+                    sequence: self.last_event_sequence.saturating_mul(2),
+                    text: selection.preview_text.unwrap_or_default(),
+                    source: selection.source_text.unwrap_or_default(),
+                },
+            );
+        }
+
+        fn show_capsule_popup(&mut self) {
+            self.ensure_popup(PopupKind::Capsule);
+            let Some(snapshot) = self
+                .snapshot
+                .as_ref()
+                .map(|snapshot| snapshot.dictation.clone())
+            else {
+                return;
+            };
+            let Some(session_id) = snapshot.session_id else {
+                return;
+            };
+            self.send_popup(
+                PopupKind::Capsule,
+                HostToPopup::Capsule {
+                    version: POPUP_PROTOCOL_VERSION,
+                    session_id: session_id.to_string(),
+                    sequence: self.last_event_sequence.saturating_mul(2),
+                    phase: format!("{:?}", snapshot.phase),
+                    text: snapshot.message.unwrap_or_default(),
+                    audio_level: Some(snapshot.level),
+                },
+            );
+        }
+
+        fn poll_popup_supervisors(&mut self) {
+            let mut events = Vec::new();
+            for kind in [PopupKind::Qa, PopupKind::Preview, PopupKind::Capsule] {
+                if let Some(supervisor) = self.popup_slot(kind) {
+                    while let Ok(event) = supervisor.try_recv() {
+                        events.push((kind, event));
+                    }
+                }
+            }
+            for (kind, event) in events {
+                match event {
+                    PopupSupervisorEvent::Message(PopupToHost::SubmitQa { text, .. }) => {
+                        if let Some(backend) = self.backend() {
+                            self.spawn(async move {
+                                backend.services().qa.submit_text(text).await?;
+                                Ok("问答已提交".to_string())
+                            });
+                        }
+                    }
+                    PopupSupervisorEvent::Message(PopupToHost::ToggleQaRecording { .. }) => {
+                        if let Some(backend) = self.backend() {
+                            self.spawn(async move {
+                                backend.services().qa.toggle_recording().await?;
+                                Ok("问答录音状态已更新".to_string())
+                            });
+                        }
+                    }
+                    PopupSupervisorEvent::Message(PopupToHost::DismissQa { .. }) => {
+                        if let Some(backend) = self.backend() {
+                            self.spawn(async move {
+                                backend.services().qa.dismiss().await?;
+                                Ok("问答已关闭".to_string())
+                            });
+                        }
+                    }
+                    PopupSupervisorEvent::Message(PopupToHost::ConfirmPreview {
+                        session_id,
+                        text,
+                        ..
+                    }) => match session_id.parse::<uuid::Uuid>() {
+                        Ok(session_id) => {
+                            let session_id = openless_core::SessionId::from_uuid(session_id);
+                            if let Some(backend) = self.backend() {
+                                self.spawn(async move {
+                                    backend
+                                        .services()
+                                        .selection
+                                        .confirm(session_id, Some(text))
+                                        .await?;
+                                    Ok("选区替换已确认".to_string())
+                                });
+                            }
+                        }
+                        Err(error) => self.status = format!("弹窗 session 无效：{error}"),
+                    },
+                    PopupSupervisorEvent::Message(PopupToHost::CancelPreview {
+                        session_id,
+                        ..
+                    }) => match session_id.parse::<uuid::Uuid>() {
+                        Ok(session_id) => {
+                            let session_id = openless_core::SessionId::from_uuid(session_id);
+                            if let Some(backend) = self.backend() {
+                                self.spawn(async move {
+                                    backend
+                                        .services()
+                                        .selection
+                                        .cancel(Some(session_id))
+                                        .await?;
+                                    Ok("选区替换已取消".to_string())
+                                });
+                            }
+                        }
+                        Err(error) => self.status = format!("弹窗 session 无效：{error}"),
+                    },
+                    PopupSupervisorEvent::Message(PopupToHost::Ready { .. })
+                    | PopupSupervisorEvent::Message(PopupToHost::DismissCapsule { .. }) => {}
+                    PopupSupervisorEvent::ProtocolError(error) => {
+                        self.status = format!("原生弹窗协议错误：{error}");
+                    }
+                    PopupSupervisorEvent::SpawnFailed(error) => {
+                        self.status = format!("原生弹窗启动失败：{error}");
+                        *self.popup_slot(kind) = None;
+                    }
+                    PopupSupervisorEvent::Exited { code, crashed } => {
+                        if crashed {
+                            self.status = format!("原生弹窗异常退出：{code:?}");
+                        }
+                        *self.popup_slot(kind) = None;
+                    }
+                }
+            }
         }
 
         fn spawn<F>(&self, future: F)
@@ -429,6 +646,7 @@ mod linux_app {
             if event.sequence <= self.last_event_sequence {
                 return;
             }
+            let event_sequence = event.sequence;
             self.last_event_sequence = event.sequence;
             let session_id = event.session_id;
             match event.kind {
@@ -439,6 +657,19 @@ mod linux_app {
                         self.transcript_session = state.session_id;
                     }
                     self.status = format!("听写：{:?}", state.phase);
+                    if let Some(session_id) = state.session_id {
+                        self.send_popup(
+                            PopupKind::Capsule,
+                            HostToPopup::Capsule {
+                                version: POPUP_PROTOCOL_VERSION,
+                                session_id: session_id.to_string(),
+                                sequence: event_sequence.saturating_mul(2),
+                                phase: format!("{:?}", state.phase),
+                                text: state.message.unwrap_or_default(),
+                                audio_level: Some(state.level),
+                            },
+                        );
+                    }
                 }
                 BackendEventKind::TranscriptDelta(delta)
                     if session_id == self.transcript_session =>
@@ -585,11 +816,49 @@ mod linux_app {
                     {
                         self.qa_state = Some(state);
                     }
+                    if let Some(state) = self.qa_state.clone() {
+                        let session_id =
+                            state.session_id.clone().unwrap_or_else(|| "qa".to_string());
+                        self.send_popup(
+                            PopupKind::Qa,
+                            HostToPopup::QaSnapshot {
+                                version: POPUP_PROTOCOL_VERSION,
+                                session_id,
+                                sequence: event_sequence.saturating_mul(2),
+                                phase: format!("{:?}", state.kind),
+                                messages: state
+                                    .messages
+                                    .unwrap_or_default()
+                                    .into_iter()
+                                    .map(|message| PopupChatMessage {
+                                        role: message.role,
+                                        content: message.content,
+                                        selection_text: message.selection_text,
+                                    })
+                                    .collect(),
+                                selection_preview: state.selection_preview,
+                                streaming_answer: state.chunk.unwrap_or_default(),
+                                error: state.error,
+                            },
+                        );
+                    }
                 }
                 BackendEventKind::SelectionStateChanged(snapshot) => {
                     if snapshot.phase == SelectionPhase::Preview {
                         self.selection_draft = snapshot.preview_text.clone().unwrap_or_default();
                         self.selection_preview_visible = true;
+                    }
+                    if let Some(session_id) = snapshot.session_id {
+                        self.send_popup(
+                            PopupKind::Preview,
+                            HostToPopup::Preview {
+                                version: POPUP_PROTOCOL_VERSION,
+                                session_id: session_id.to_string(),
+                                sequence: event_sequence.saturating_mul(2),
+                                text: snapshot.preview_text.clone().unwrap_or_default(),
+                                source: snapshot.source_text.clone().unwrap_or_default(),
+                            },
+                        );
                     }
                     self.selection = Some(snapshot);
                 }
@@ -637,7 +906,9 @@ mod linux_app {
                         HostAction::Notify(message) => self.status = message,
                         HostAction::OpenExternalUrl(url) | HostAction::OpenSystemSettings(url) => {
                             std::thread::spawn(move || {
-                                let _ = std::process::Command::new("xdg-open").arg(url).status();
+                                if let Err(error) = open_external(&url) {
+                                    eprintln!("OpenLess external URL failed: {error}");
+                                }
                             });
                         }
                         HostAction::RequestRestart => {
@@ -645,20 +916,57 @@ mod linux_app {
                         }
                         HostAction::ShowSelectionPreview => {
                             self.selection_preview_visible = true;
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                            self.show_selection_popup();
                         }
                         HostAction::HideSelectionPreview => {
                             self.selection_preview_visible = false;
+                            let session_id = self
+                                .selection
+                                .as_ref()
+                                .and_then(|selection| selection.session_id)
+                                .map(|id| id.to_string())
+                                .unwrap_or_else(|| "selection".to_string());
+                            self.hide_popup(
+                                PopupKind::Preview,
+                                session_id,
+                                self.last_event_sequence.saturating_mul(2).saturating_add(1),
+                            );
                         }
                         HostAction::ShowQa => {
                             self.qa_visible = true;
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                            self.show_qa_popup();
                         }
-                        HostAction::HideQa => self.qa_visible = false,
-                        HostAction::ShowDictationFeedback | HostAction::HideDictationFeedback => {}
+                        HostAction::HideQa => {
+                            self.qa_visible = false;
+                            let session_id = self
+                                .qa_state
+                                .as_ref()
+                                .and_then(|state| state.session_id.clone())
+                                .unwrap_or_else(|| "qa".to_string());
+                            self.hide_popup(
+                                PopupKind::Qa,
+                                session_id,
+                                self.last_event_sequence.saturating_mul(2).saturating_add(1),
+                            );
+                        }
+                        HostAction::ShowDictationFeedback => self.show_capsule_popup(),
+                        HostAction::HideDictationFeedback => {
+                            let session_id = self
+                                .snapshot
+                                .as_ref()
+                                .and_then(|snapshot| snapshot.dictation.session_id)
+                                .map(|id| id.to_string())
+                                .unwrap_or_else(|| "dictation".to_string());
+                            self.hide_popup(
+                                PopupKind::Capsule,
+                                session_id,
+                                self.last_event_sequence.saturating_mul(2).saturating_add(1),
+                            );
+                        }
                     }
                 }
             }
+            self.poll_popup_supervisors();
             let mut events = Vec::new();
             let drain = self
                 .subscription
