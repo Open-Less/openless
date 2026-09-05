@@ -79,6 +79,8 @@ mod linux_app {
         vocabulary: Vec<openless_core::DictionaryEntry>,
         correction_rules: Vec<openless_core::CorrectionRule>,
         style_packs: Vec<openless_core::StylePack>,
+        vocab_preset_store: openless_core::VocabPresetStore,
+        vocab_presets: Vec<openless_core::VocabPreset>,
     }
 
     #[derive(Default)]
@@ -208,6 +210,10 @@ mod linux_app {
         vocabulary_note: String,
         correction_pattern: String,
         correction_replacement: String,
+        vocab_preset_store: openless_core::VocabPresetStore,
+        vocab_presets: Vec<openless_core::VocabPreset>,
+        vocab_preset_name: String,
+        vocab_preset_phrases: String,
         history_search: String,
         qa_popup: Option<PopupSupervisor>,
         preview_popup: Option<PopupSupervisor>,
@@ -288,6 +294,10 @@ mod linux_app {
                         vocabulary_note: String::new(),
                         correction_pattern: String::new(),
                         correction_replacement: String::new(),
+                        vocab_preset_store: openless_core::VocabPresetStore::default(),
+                        vocab_presets: Vec::new(),
+                        vocab_preset_name: String::new(),
+                        vocab_preset_phrases: String::new(),
                         history_search: String::new(),
                         qa_popup: None,
                         preview_popup: None,
@@ -360,6 +370,10 @@ mod linux_app {
                     vocabulary_note: String::new(),
                     correction_pattern: String::new(),
                     correction_replacement: String::new(),
+                    vocab_preset_store: openless_core::VocabPresetStore::default(),
+                    vocab_presets: Vec::new(),
+                    vocab_preset_name: String::new(),
+                    vocab_preset_phrases: String::new(),
                     history_search: String::new(),
                     qa_popup: None,
                     preview_popup: None,
@@ -784,10 +798,14 @@ mod linux_app {
             self.tokio.spawn(async move {
                 let result = (|| {
                     let preferences = backend.get_preferences();
+                    let vocab_preset_store = backend.list_vocabulary_presets()?;
+                    let vocab_presets = openless_core::resolve_vocab_presets(&vocab_preset_store);
                     Ok::<_, BackendError>(LibraryPanel {
                         vocabulary: backend.list_vocabulary()?,
                         correction_rules: backend.list_correction_rules()?,
                         style_packs: backend.list_style_packs(&preferences.active_style_pack_id)?,
+                        vocab_preset_store,
+                        vocab_presets,
                     })
                 })()
                 .map_err(|error| error.to_string());
@@ -1515,6 +1533,8 @@ mod linux_app {
                         self.vocabulary = library.vocabulary;
                         self.correction_rules = library.correction_rules;
                         self.style_packs = library.style_packs;
+                        self.vocab_preset_store = library.vocab_preset_store;
+                        self.vocab_presets = library.vocab_presets;
                     }
                     UiResult::Library(Err(error)) => self.status = error,
                     UiResult::Marketplace(Ok(items)) => {
@@ -2541,6 +2561,120 @@ mod linux_app {
                     ui.separator();
                 }
             }
+            ui.heading("词汇预设");
+            ui.label("预设由 Core 合并内置版本、用户覆盖和自定义内容。");
+            let mut preset_action: Option<(String, String)> = None;
+            for preset in &self.vocab_presets {
+                ui.horizontal_wrapped(|ui| {
+                    ui.strong(&preset.name);
+                    ui.label(format!("{} 个词", preset.phrases.len()));
+                    if ui.small_button("应用").clicked() {
+                        preset_action = Some((preset.id.clone(), "apply".into()));
+                    }
+                    if self
+                        .vocab_preset_store
+                        .custom
+                        .iter()
+                        .any(|custom| custom.id == preset.id)
+                        && ui.small_button("删除").clicked()
+                    {
+                        preset_action = Some((preset.id.clone(), "delete".into()));
+                    } else if openless_core::builtin_vocab_presets()
+                        .iter()
+                        .any(|builtin| builtin.id == preset.id)
+                        && ui.small_button("隐藏内置预设").clicked()
+                    {
+                        preset_action = Some((preset.id.clone(), "disable".into()));
+                    }
+                    ui.weak(preset.phrases.join("、"));
+                });
+            }
+            for id in self.vocab_preset_store.disabled_builtin_preset_ids.clone() {
+                if ui.small_button(format!("恢复内置预设：{id}")).clicked() {
+                    preset_action = Some((id, "enable".into()));
+                }
+            }
+            ui.group(|ui| {
+                ui.label("新建自定义预设");
+                ui.text_edit_singleline(&mut self.vocab_preset_name);
+                ui.add(
+                    egui::TextEdit::multiline(&mut self.vocab_preset_phrases)
+                        .hint_text("每行或逗号分隔一个词")
+                        .desired_rows(3),
+                );
+                if ui.button("保存预设").clicked()
+                    && !self.vocab_preset_name.trim().is_empty()
+                    && !self.vocab_preset_phrases.trim().is_empty()
+                {
+                    preset_action = Some((String::new(), "create".into()));
+                }
+            });
+            if let (Some(backend), Some((id, operation))) = (self.backend(), preset_action) {
+                let name = std::mem::take(&mut self.vocab_preset_name);
+                let phrases_text = std::mem::take(&mut self.vocab_preset_phrases);
+                let selected = self
+                    .vocab_presets
+                    .iter()
+                    .find(|preset| preset.id == id)
+                    .cloned();
+                self.spawn(async move {
+                    match operation.as_str() {
+                        "apply" => {
+                            let preset = selected.ok_or_else(|| {
+                                BackendError::new(
+                                    openless_core::BackendErrorCode::Cancelled,
+                                    "词汇预设已不存在",
+                                )
+                            })?;
+                            for phrase in preset.phrases {
+                                backend.add_vocabulary(
+                                    phrase,
+                                    Some(format!("预设：{}", preset.name)),
+                                )?;
+                            }
+                        }
+                        "create" => {
+                            let mut phrases = phrases_text
+                                .split([',', '，', '\n'])
+                                .map(str::trim)
+                                .filter(|phrase| !phrase.is_empty())
+                                .map(ToOwned::to_owned)
+                                .collect::<Vec<_>>();
+                            phrases.sort();
+                            phrases.dedup();
+                            let mut store = backend.list_vocabulary_presets()?;
+                            store.custom.push(openless_core::VocabPreset {
+                                id: uuid::Uuid::new_v4().to_string(),
+                                name: name.trim().to_string(),
+                                phrases,
+                            });
+                            backend.save_vocabulary_presets(&store)?;
+                        }
+                        "delete" => {
+                            let mut store = backend.list_vocabulary_presets()?;
+                            store.custom.retain(|preset| preset.id != id);
+                            backend.save_vocabulary_presets(&store)?;
+                        }
+                        "disable" => {
+                            let mut store = backend.list_vocabulary_presets()?;
+                            if !store.disabled_builtin_preset_ids.contains(&id) {
+                                store.disabled_builtin_preset_ids.push(id);
+                            }
+                            backend.save_vocabulary_presets(&store)?;
+                        }
+                        "enable" => {
+                            let mut store = backend.list_vocabulary_presets()?;
+                            store
+                                .disabled_builtin_preset_ids
+                                .retain(|preset_id| preset_id != &id);
+                            backend.save_vocabulary_presets(&store)?;
+                        }
+                        _ => unreachable!(),
+                    }
+                    Ok("词汇预设已更新".to_string())
+                });
+            }
+            ui.separator();
             ui.heading("自定义词汇");
             ui.horizontal(|ui| {
                 ui.label("词语");
