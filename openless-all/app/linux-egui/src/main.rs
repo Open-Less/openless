@@ -94,6 +94,7 @@ mod linux_app {
         update_channel: bool,
         remote_input_enabled: bool,
         remote_input_port: bool,
+        hotkeys: bool,
     }
 
     impl SettingsDirty {
@@ -106,6 +107,7 @@ mod linux_app {
                 || self.update_channel
                 || self.remote_input_enabled
                 || self.remote_input_port
+                || self.hotkeys
         }
 
         fn merge(&self, latest: &UserPreferences, draft: &UserPreferences) -> UserPreferences {
@@ -133,6 +135,16 @@ mod linux_app {
             }
             if self.remote_input_port {
                 merged.remote_input_port = draft.remote_input_port;
+            }
+            if self.hotkeys {
+                merged.dictation_hotkey = draft.dictation_hotkey.clone();
+                merged.hotkey = draft.hotkey.clone();
+                merged.qa_hotkey = draft.qa_hotkey.clone();
+                merged.translation_hotkey = draft.translation_hotkey.clone();
+                merged.switch_style_hotkey = draft.switch_style_hotkey.clone();
+                merged.open_app_hotkey = draft.open_app_hotkey.clone();
+                merged.selection_polish_hotkey = draft.selection_polish_hotkey.clone();
+                merged.coding_agent_voice_hotkey = draft.coding_agent_voice_hotkey.clone();
             }
             merged
         }
@@ -2396,6 +2408,38 @@ mod linux_app {
                 self.settings_dirty.coding_agent_enabled |= ui
                     .checkbox(&mut preferences.coding_agent_enabled, "启用 Less Computer")
                     .changed();
+                ui.collapsing("fcitx5 快捷键", |ui| {
+                    self.settings_dirty.hotkeys |=
+                        shortcut_editor(ui, "听写", &mut preferences.dictation_hotkey);
+                    self.settings_dirty.hotkeys |=
+                        optional_shortcut_editor(ui, "QA", &mut preferences.qa_hotkey, ";");
+                    self.settings_dirty.hotkeys |=
+                        shortcut_editor(ui, "翻译修饰键", &mut preferences.translation_hotkey);
+                    self.settings_dirty.hotkeys |= optional_shortcut_editor(
+                        ui,
+                        "选区润色",
+                        &mut preferences.selection_polish_hotkey,
+                        "P",
+                    );
+                    self.settings_dirty.hotkeys |= optional_shortcut_editor(
+                        ui,
+                        "切换风格",
+                        &mut preferences.switch_style_hotkey,
+                        "S",
+                    );
+                    self.settings_dirty.hotkeys |= optional_shortcut_editor(
+                        ui,
+                        "打开应用",
+                        &mut preferences.open_app_hotkey,
+                        "O",
+                    );
+                    self.settings_dirty.hotkeys |= optional_shortcut_editor(
+                        ui,
+                        "Coding Agent 语音",
+                        &mut preferences.coding_agent_voice_hotkey,
+                        "L",
+                    );
+                });
                 self.settings_dirty.start_minimized |= ui
                     .checkbox(&mut preferences.start_minimized, "启动时隐藏主窗口")
                     .changed();
@@ -2449,13 +2493,20 @@ mod linux_app {
                     let tx = self.tx.clone();
                     self.tokio.spawn(async move {
                         let outcome = tokio::task::spawn_blocking(move || {
-                            match host.save_settings(draft.clone(), revision) {
+                            let save = |preferences, revision| {
+                                if dirty.hotkeys {
+                                    host.update_settings_strict(preferences, revision)
+                                } else {
+                                    host.save_settings(preferences, revision)
+                                }
+                            };
+                            match save(draft.clone(), revision) {
                                 Err(error)
                                     if error.code == openless_core::BackendErrorCode::Busy =>
                                 {
                                     let latest_snapshot = host.snapshot();
                                     let latest = host.backend().get_preferences();
-                                    host.save_settings(
+                                    save(
                                         dirty.merge(&latest, &draft),
                                         latest_snapshot.preferences_revision,
                                     )
@@ -4162,6 +4213,61 @@ mod linux_app {
         }
     }
 
+    fn shortcut_editor(
+        ui: &mut egui::Ui,
+        label: &str,
+        binding: &mut openless_core::shared_types::ShortcutBinding,
+    ) -> bool {
+        let mut changed = false;
+        ui.horizontal(|ui| {
+            ui.label(label);
+            changed |= ui.text_edit_singleline(&mut binding.primary).changed();
+            for (modifier, caption) in [
+                ("ctrl", "Ctrl"),
+                ("alt", "Alt"),
+                ("shift", "Shift"),
+                ("super", "Super"),
+            ] {
+                let mut enabled = binding
+                    .modifiers
+                    .iter()
+                    .any(|value| value.eq_ignore_ascii_case(modifier));
+                if ui.checkbox(&mut enabled, caption).changed() {
+                    changed = true;
+                    binding
+                        .modifiers
+                        .retain(|value| !value.eq_ignore_ascii_case(modifier));
+                    if enabled {
+                        binding.modifiers.push(modifier.to_string());
+                    }
+                }
+            }
+        });
+        changed
+    }
+
+    fn optional_shortcut_editor(
+        ui: &mut egui::Ui,
+        label: &str,
+        binding: &mut Option<openless_core::shared_types::ShortcutBinding>,
+        default_primary: &str,
+    ) -> bool {
+        let mut enabled = binding.is_some();
+        let mut changed = ui.checkbox(&mut enabled, format!("启用{label}")).changed();
+        if enabled && binding.is_none() {
+            *binding = Some(openless_core::shared_types::ShortcutBinding {
+                primary: default_primary.to_string(),
+                modifiers: vec!["ctrl".into(), "shift".into()],
+            });
+        } else if !enabled && binding.is_some() {
+            *binding = None;
+        }
+        if let Some(binding) = binding {
+            changed |= shortcut_editor(ui, label, binding);
+        }
+        changed
+    }
+
     fn set_style_pack_hotkey(
         preferences: &mut UserPreferences,
         pack_id: &str,
@@ -4947,6 +5053,24 @@ mod linux_app {
             assert_eq!(preferences.style_pack_hotkeys.len(), 1);
             assert_eq!(preferences.style_pack_hotkeys[0].pack_id, "second");
             assert_eq!(preferences.style_pack_hotkeys[0].binding, second);
+        }
+
+        #[test]
+        fn settings_conflict_merge_preserves_hotkey_drafts_as_one_domain() {
+            let latest = UserPreferences::default();
+            let mut draft = latest.clone();
+            draft.open_app_hotkey = Some(openless_core::shared_types::ShortcutBinding {
+                primary: "O".into(),
+                modifiers: vec!["ctrl".into(), "shift".into()],
+            });
+            let dirty = SettingsDirty {
+                hotkeys: true,
+                ..Default::default()
+            };
+
+            let merged = dirty.merge(&latest, &draft);
+
+            assert_eq!(merged.open_app_hotkey, draft.open_app_hotkey);
         }
     }
 }
