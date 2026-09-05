@@ -55,6 +55,7 @@ mod linux_app {
         UpdateCheck(Result<Option<UpdateManifest>, String>),
         UpdateProgress(openless_linux_egui::DownloadProgress),
         UpdateInstalled(Result<openless_linux_egui::InstalledUpdate, String>),
+        ModelMutation(Result<String, String>),
     }
 
     #[derive(Clone)]
@@ -823,6 +824,17 @@ mod linux_app {
             });
         }
 
+        fn spawn_model_mutation<F>(&self, future: F)
+        where
+            F: Future<Output = Result<String, BackendError>> + Send + 'static,
+        {
+            let tx = self.tx.clone();
+            self.tokio.spawn(async move {
+                let result = future.await.map_err(|error| error.to_string());
+                let _ = tx.send(UiResult::ModelMutation(result));
+            });
+        }
+
         fn request_provider_models(&self, kind: openless_core::ChannelKind, channel_id: String) {
             let Some(backend) = self.backend() else {
                 return;
@@ -1405,6 +1417,11 @@ mod linux_app {
                         self.update_busy = false;
                         self.status = format!("安装更新失败：{error}");
                     }
+                    UiResult::ModelMutation(result) => {
+                        self.status = result.unwrap_or_else(|error| error);
+                        self.models = ModelsState::Loading;
+                        self.load_models();
+                    }
                 }
             }
             if let Some(backend) = self.backend() {
@@ -1639,6 +1656,42 @@ mod linux_app {
                     self.models = ModelsState::Loading;
                     self.load_models();
                 }
+                if ui.button("预加载当前模型").clicked() {
+                    if let Some(backend) = self.backend() {
+                        self.spawn_model_mutation(async move {
+                            backend
+                                .services()
+                                .local_asr
+                                .preload(LocalAsrRuntime::Generic)
+                                .await?;
+                            Ok("当前模型已预加载".to_string())
+                        });
+                    }
+                }
+                if ui.button("释放模型").clicked() {
+                    if let Some(backend) = self.backend() {
+                        self.spawn_model_mutation(async move {
+                            backend
+                                .services()
+                                .local_asr
+                                .release(LocalAsrRuntime::Generic)
+                                .await?;
+                            Ok("模型已释放".to_string())
+                        });
+                    }
+                }
+                if ui.button("取消准备").clicked() {
+                    if let Some(backend) = self.backend() {
+                        self.spawn_model_mutation(async move {
+                            backend
+                                .services()
+                                .local_asr
+                                .cancel_prepare(LocalAsrRuntime::Generic)
+                                .await?;
+                            Ok("已请求取消模型准备".to_string())
+                        });
+                    }
+                }
             });
             let models = match self.models.clone() {
                 ModelsState::Loading => {
@@ -1655,6 +1708,7 @@ mod linux_app {
                 }
                 ModelsState::Loaded(models) => models,
             };
+            let mut action: Option<(openless_core::LocalAsrTarget, &'static str)> = None;
             for model in models {
                 ui.horizontal(|ui| {
                     ui.label(format!(
@@ -1668,17 +1722,10 @@ mod linux_app {
                         }
                     ));
                     if !model.installed && ui.button("下载").clicked() {
-                        if let Some(backend) = self.backend() {
-                            let target = model.target.clone();
-                            self.spawn(async move {
-                                backend
-                                    .services()
-                                    .local_asr
-                                    .start_download(target, None)
-                                    .await?;
-                                Ok("模型下载完成".to_string())
-                            });
-                        }
+                        action = Some((model.target.clone(), "download"));
+                    }
+                    if !model.installed && ui.button("取消下载").clicked() {
+                        action = Some((model.target.clone(), "cancel_download"));
                     }
                     if model.installed && ui.button("激活").clicked() {
                         if let Some(backend) = self.backend() {
@@ -1732,6 +1779,49 @@ mod linux_app {
                                 Ok("模型下载已取消".to_string())
                             });
                         }
+                    }
+                    if model.installed && ui.button("验证/准备").clicked() {
+                        action = Some((model.target.clone(), "prepare"));
+                    }
+                    if model.installed && ui.button("测试").clicked() {
+                        action = Some((model.target.clone(), "test"));
+                    }
+                    if model.installed && ui.button("删除").clicked() {
+                        action = Some((model.target.clone(), "delete"));
+                    }
+                });
+            }
+            if let (Some(backend), Some((target, operation))) = (self.backend(), action) {
+                self.spawn_model_mutation(async move {
+                    match operation {
+                        "download" => {
+                            backend
+                                .services()
+                                .local_asr
+                                .start_download(target, None)
+                                .await?;
+                            Ok("模型下载完成".to_string())
+                        }
+                        "cancel_download" => {
+                            backend.services().local_asr.cancel_download(target).await?;
+                            Ok("已请求取消模型下载".to_string())
+                        }
+                        "prepare" => {
+                            let prepared = backend.services().local_asr.prepare(target).await?;
+                            Ok(format!("模型验证完成：{prepared}"))
+                        }
+                        "test" => {
+                            let result = backend.services().local_asr.test_model(target).await?;
+                            Ok(format!(
+                                "模型测试完成：{}（{} ms）",
+                                result.transcribed_text, result.transcribe_ms
+                            ))
+                        }
+                        "delete" => {
+                            backend.services().local_asr.delete_model(target).await?;
+                            Ok("模型已删除".to_string())
+                        }
+                        _ => unreachable!(),
                     }
                 });
             }
