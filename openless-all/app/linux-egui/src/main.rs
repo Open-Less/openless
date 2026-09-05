@@ -46,16 +46,7 @@ mod linux_app {
             result: Result<Vec<String>, String>,
         },
         ProviderMutation(Result<String, String>),
-        Library(
-            Result<
-                (
-                    Vec<openless_core::DictionaryEntry>,
-                    Vec<openless_core::CorrectionRule>,
-                    Vec<openless_core::StylePack>,
-                ),
-                String,
-            >,
-        ),
+        Library(Result<LibraryPanel, String>),
         Marketplace(Result<Vec<openless_core::MarketplaceListItem>, String>),
         MarketplaceFlow(Result<openless_core::OAuthDeviceFlow, String>),
         MarketplaceAuthPoll(Result<openless_core::OAuthPollResult, String>),
@@ -74,6 +65,12 @@ mod linux_app {
         descriptors: Vec<openless_core::ProviderDescriptor>,
         channels: Vec<openless_core::ChannelSummary>,
         active_provider: String,
+    }
+
+    struct LibraryPanel {
+        vocabulary: Vec<openless_core::DictionaryEntry>,
+        correction_rules: Vec<openless_core::CorrectionRule>,
+        style_packs: Vec<openless_core::StylePack>,
     }
 
     #[derive(Clone)]
@@ -584,11 +581,11 @@ mod linux_app {
             self.tokio.spawn(async move {
                 let result = (|| {
                     let preferences = backend.get_preferences();
-                    Ok::<_, BackendError>((
-                        backend.list_vocabulary()?,
-                        backend.list_correction_rules()?,
-                        backend.list_style_packs(&preferences.active_style_pack_id)?,
-                    ))
+                    Ok::<_, BackendError>(LibraryPanel {
+                        vocabulary: backend.list_vocabulary()?,
+                        correction_rules: backend.list_correction_rules()?,
+                        style_packs: backend.list_style_packs(&preferences.active_style_pack_id)?,
+                    })
                 })()
                 .map_err(|error| error.to_string());
                 let _ = tx.send(UiResult::Library(result));
@@ -705,11 +702,10 @@ mod linux_app {
                     }
                 }
                 BackendEventKind::TranscriptDelta(delta)
-                    if session_id == self.transcript_session =>
+                    if session_id == self.transcript_session
+                        && self.transcript_state.apply(&delta).is_ok() =>
                 {
-                    if self.transcript_state.apply(&delta).is_ok() {
-                        self.transcript = self.transcript_state.text().to_string();
-                    }
+                    self.transcript = self.transcript_state.text().to_string();
                 }
                 BackendEventKind::PolishDelta(delta) if delta.is_final => {
                     self.transcript = delta.text;
@@ -1157,10 +1153,10 @@ mod linux_app {
                         self.provider_models.clear();
                         self.load_providers(self.provider_kind);
                     }
-                    UiResult::Library(Ok((vocabulary, correction_rules, style_packs))) => {
-                        self.vocabulary = vocabulary;
-                        self.correction_rules = correction_rules;
-                        self.style_packs = style_packs;
+                    UiResult::Library(Ok(library)) => {
+                        self.vocabulary = library.vocabulary;
+                        self.correction_rules = library.correction_rules;
+                        self.style_packs = library.style_packs;
                     }
                     UiResult::Library(Err(error)) => self.status = error,
                     UiResult::Marketplace(Ok(items)) => {
