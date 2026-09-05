@@ -144,6 +144,7 @@ mod linux_app {
         vocabulary_note: String,
         correction_pattern: String,
         correction_replacement: String,
+        history_search: String,
         status: String,
         startup_error: Option<String>,
         active_page: shell::Page,
@@ -201,6 +202,7 @@ mod linux_app {
                         vocabulary_note: String::new(),
                         correction_pattern: String::new(),
                         correction_replacement: String::new(),
+                        history_search: String::new(),
                         status: "Core 2.0 已启动".to_string(),
                         startup_error: None,
                         active_page: shell::Page::Overview,
@@ -251,6 +253,7 @@ mod linux_app {
                     vocabulary_note: String::new(),
                     correction_pattern: String::new(),
                     correction_replacement: String::new(),
+                    history_search: String::new(),
                     status: "启动失败".to_string(),
                     startup_error: Some(error),
                     active_page: shell::Page::Overview,
@@ -1702,6 +1705,18 @@ mod linux_app {
 
         fn history_ui(&mut self, ui: &mut egui::Ui) {
             ui.heading("历史");
+            ui.horizontal(|ui| {
+                ui.label("搜索");
+                ui.text_edit_singleline(&mut self.history_search);
+                if ui.button("清空全部").clicked() {
+                    if let Some(backend) = self.backend() {
+                        self.spawn(async move {
+                            backend.clear_history()?;
+                            Ok("历史已清空".to_string())
+                        });
+                    }
+                }
+            });
             let Some(backend) = self.backend() else {
                 return;
             };
@@ -1710,7 +1725,18 @@ mod linux_app {
                     ui.label("暂无历史记录");
                 }
                 Ok(history) => {
-                    for item in history.into_iter().rev().take(20) {
+                    let query = self.history_search.trim().to_lowercase();
+                    let mut action: Option<(String, &'static str, String)> = None;
+                    for item in history
+                        .into_iter()
+                        .rev()
+                        .filter(|item| {
+                            query.is_empty()
+                                || item.final_text.to_lowercase().contains(&query)
+                                || item.raw_transcript.to_lowercase().contains(&query)
+                        })
+                        .take(100)
+                    {
                         let delivery = match item.insert_status {
                             HistoryInsertStatus::Inserted => "已插入",
                             HistoryInsertStatus::CopiedFallback => "已复制",
@@ -1718,10 +1744,55 @@ mod linux_app {
                             HistoryInsertStatus::Failed => "失败",
                             HistoryInsertStatus::NotRequested => "未请求插入",
                         };
-                        ui.label(format!(
-                            "{} · {} · {}",
-                            item.created_at, delivery, item.final_text
-                        ));
+                        egui::Frame::group(ui.style()).show(ui, |ui| {
+                            ui.label(format!("{} · {}", item.created_at, delivery));
+                            ui.label(&item.final_text);
+                            ui.horizontal(|ui| {
+                                if ui.small_button("复制").clicked() {
+                                    action =
+                                        Some((item.id.clone(), "copy", item.final_text.clone()));
+                                }
+                                if ui.small_button("重新润色").clicked() {
+                                    action = Some((
+                                        item.id.clone(),
+                                        "repolish",
+                                        item.raw_transcript.clone(),
+                                    ));
+                                }
+                                if ui.small_button("删除").clicked() {
+                                    action = Some((item.id.clone(), "delete", String::new()));
+                                }
+                            });
+                        });
+                        ui.add_space(6.0);
+                    }
+                    if let Some((id, operation, text)) = action {
+                        match operation {
+                            "copy" => match arboard::Clipboard::new()
+                                .and_then(|mut clipboard| clipboard.set_text(text))
+                            {
+                                Ok(()) => self.status = "历史文本已复制".to_string(),
+                                Err(error) => self.status = format!("复制失败：{error}"),
+                            },
+                            "repolish" => {
+                                let service = Arc::clone(&backend.services().auxiliary);
+                                self.spawn(async move {
+                                    let polished = service
+                                        .repolish(openless_core::RepolishRequest {
+                                            raw_text: text,
+                                            style_pack_id: None,
+                                            front_app: None,
+                                        })
+                                        .await?;
+                                    Ok(format!("重新润色完成：{polished}"))
+                                });
+                            }
+                            "delete" => self.spawn(async move {
+                                backend.delete_history(&id)?;
+                                Ok("历史记录已删除".to_string())
+                            }),
+                            _ => unreachable!(),
+                        }
                     }
                 }
                 Err(error) => {
