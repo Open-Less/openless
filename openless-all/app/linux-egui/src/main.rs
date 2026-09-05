@@ -3068,6 +3068,7 @@ mod linux_app {
         if let Some(kind) = popup_kind(&args) {
             return run_popup_process(kind);
         }
+        let start_minimized = args.iter().any(|arg| arg == "--minimized");
         let tokio = Arc::new(tokio::runtime::Runtime::new().map_err(|error| error.to_string())?);
         let config = backend_config()?;
         let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR")
@@ -3115,7 +3116,8 @@ mod linux_app {
                 .with_min_inner_size([960.0, 640.0])
                 .with_decorations(false)
                 .with_transparent(false)
-                .with_resizable(true),
+                .with_resizable(true)
+                .with_visible(!start_minimized),
             ..Default::default()
         };
         eframe::run_native(
