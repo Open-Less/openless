@@ -45,6 +45,16 @@ mod linux_app {
             result: Result<Vec<String>, String>,
         },
         ProviderMutation(Result<String, String>),
+        Library(
+            Result<
+                (
+                    Vec<openless_core::DictionaryEntry>,
+                    Vec<openless_core::CorrectionRule>,
+                    Vec<openless_core::StylePack>,
+                ),
+                String,
+            >,
+        ),
     }
 
     #[derive(Clone)]
@@ -127,6 +137,13 @@ mod linux_app {
         new_provider_type: String,
         new_channel_name: String,
         pending_channel_delete: Option<String>,
+        vocabulary: Vec<openless_core::DictionaryEntry>,
+        correction_rules: Vec<openless_core::CorrectionRule>,
+        style_packs: Vec<openless_core::StylePack>,
+        vocabulary_phrase: String,
+        vocabulary_note: String,
+        correction_pattern: String,
+        correction_replacement: String,
         status: String,
         startup_error: Option<String>,
         active_page: shell::Page,
@@ -177,6 +194,13 @@ mod linux_app {
                         new_provider_type: String::new(),
                         new_channel_name: String::new(),
                         pending_channel_delete: None,
+                        vocabulary: Vec::new(),
+                        correction_rules: Vec::new(),
+                        style_packs: Vec::new(),
+                        vocabulary_phrase: String::new(),
+                        vocabulary_note: String::new(),
+                        correction_pattern: String::new(),
+                        correction_replacement: String::new(),
                         status: "Core 2.0 已启动".to_string(),
                         startup_error: None,
                         active_page: shell::Page::Overview,
@@ -186,6 +210,7 @@ mod linux_app {
                     app.load_models();
                     app.load_remote_status();
                     app.load_providers(openless_core::ChannelKind::Asr);
+                    app.load_library();
                     app
                 }
                 Err(error) => Self {
@@ -219,6 +244,13 @@ mod linux_app {
                     new_provider_type: String::new(),
                     new_channel_name: String::new(),
                     pending_channel_delete: None,
+                    vocabulary: Vec::new(),
+                    correction_rules: Vec::new(),
+                    style_packs: Vec::new(),
+                    vocabulary_phrase: String::new(),
+                    vocabulary_note: String::new(),
+                    correction_pattern: String::new(),
+                    correction_replacement: String::new(),
                     status: "启动失败".to_string(),
                     startup_error: Some(error),
                     active_page: shell::Page::Overview,
@@ -309,6 +341,25 @@ mod linux_app {
                 .await
                 .map_err(|error| error.to_string());
                 let _ = tx.send(UiResult::Providers(result));
+            });
+        }
+
+        fn load_library(&self) {
+            let Some(backend) = self.backend() else {
+                return;
+            };
+            let tx = self.tx.clone();
+            self.tokio.spawn(async move {
+                let result = (|| {
+                    let preferences = backend.get_preferences();
+                    Ok::<_, BackendError>((
+                        backend.list_vocabulary()?,
+                        backend.list_correction_rules()?,
+                        backend.list_style_packs(&preferences.active_style_pack_id)?,
+                    ))
+                })()
+                .map_err(|error| error.to_string());
+                let _ = tx.send(UiResult::Library(result));
             });
         }
 
@@ -497,6 +548,10 @@ mod linux_app {
                         self.preferences = Some(backend.get_preferences());
                     }
                     self.load_remote_status();
+                    self.load_library();
+                }
+                BackendEventKind::VocabularyChanged(_) | BackendEventKind::StylePacksChanged(_) => {
+                    self.load_library()
                 }
                 BackendEventKind::QaState(state) => {
                     if state.kind == QaStateKind::AnswerDelta {
@@ -758,6 +813,12 @@ mod linux_app {
                         self.provider_models.clear();
                         self.load_providers(self.provider_kind);
                     }
+                    UiResult::Library(Ok((vocabulary, correction_rules, style_packs))) => {
+                        self.vocabulary = vocabulary;
+                        self.correction_rules = correction_rules;
+                        self.style_packs = style_packs;
+                    }
+                    UiResult::Library(Err(error)) => self.status = error,
                 }
             }
             if let Some(backend) = self.backend() {
@@ -1480,6 +1541,165 @@ mod linux_app {
             }
         }
 
+        fn vocabulary_ui(&mut self, ui: &mut egui::Ui) {
+            ui.heading("自定义词汇");
+            ui.horizontal(|ui| {
+                ui.label("词语");
+                ui.text_edit_singleline(&mut self.vocabulary_phrase);
+                ui.label("备注");
+                ui.text_edit_singleline(&mut self.vocabulary_note);
+                if ui.button("添加").clicked() && !self.vocabulary_phrase.trim().is_empty() {
+                    if let Some(backend) = self.backend() {
+                        let phrase = std::mem::take(&mut self.vocabulary_phrase);
+                        let note = std::mem::take(&mut self.vocabulary_note);
+                        self.spawn(async move {
+                            backend.add_vocabulary(
+                                phrase,
+                                (!note.trim().is_empty()).then_some(note),
+                            )?;
+                            Ok("词汇已保存".to_string())
+                        });
+                    }
+                }
+            });
+            let mut vocabulary_action = None;
+            for entry in &self.vocabulary {
+                ui.horizontal(|ui| {
+                    let mut enabled = entry.enabled;
+                    if ui.checkbox(&mut enabled, "").changed() {
+                        vocabulary_action = Some((entry.id.clone(), Some(enabled)));
+                    }
+                    ui.label(egui::RichText::new(&entry.phrase).strong());
+                    if let Some(note) = &entry.note {
+                        ui.label(note);
+                    }
+                    ui.label(format!("命中 {}", entry.hits));
+                    if ui.small_button("删除").clicked() {
+                        vocabulary_action = Some((entry.id.clone(), None));
+                    }
+                });
+            }
+            if let (Some(backend), Some((id, enabled))) = (self.backend(), vocabulary_action) {
+                self.spawn(async move {
+                    if let Some(enabled) = enabled {
+                        backend.set_vocabulary_enabled(&id, enabled)?;
+                    } else {
+                        backend.remove_vocabulary(&id)?;
+                    }
+                    Ok("词汇已更新".to_string())
+                });
+            }
+
+            ui.separator();
+            ui.heading("纠错规则");
+            ui.horizontal(|ui| {
+                ui.text_edit_singleline(&mut self.correction_pattern);
+                ui.label("→");
+                ui.text_edit_singleline(&mut self.correction_replacement);
+                if ui.button("添加规则").clicked()
+                    && !self.correction_pattern.trim().is_empty()
+                    && !self.correction_replacement.trim().is_empty()
+                {
+                    if let Some(backend) = self.backend() {
+                        let pattern = std::mem::take(&mut self.correction_pattern);
+                        let replacement = std::mem::take(&mut self.correction_replacement);
+                        self.spawn(async move {
+                            backend.add_correction_rule(pattern, replacement)?;
+                            Ok("纠错规则已保存".to_string())
+                        });
+                    }
+                }
+            });
+            let mut correction_action = None;
+            for rule in &self.correction_rules {
+                ui.horizontal(|ui| {
+                    let mut enabled = rule.enabled;
+                    if ui.checkbox(&mut enabled, "").changed() {
+                        correction_action = Some((rule.id.clone(), Some(enabled)));
+                    }
+                    ui.label(format!("{} → {}", rule.pattern, rule.replacement));
+                    ui.label(format!("{:?}", rule.source));
+                    if ui.small_button("删除").clicked() {
+                        correction_action = Some((rule.id.clone(), None));
+                    }
+                });
+            }
+            if let (Some(backend), Some((id, enabled))) = (self.backend(), correction_action) {
+                self.spawn(async move {
+                    if let Some(enabled) = enabled {
+                        backend.set_correction_rule_enabled(&id, enabled)?;
+                    } else {
+                        backend.remove_correction_rule(&id)?;
+                    }
+                    Ok("纠错规则已更新".to_string())
+                });
+            }
+        }
+
+        fn styles_ui(&mut self, ui: &mut egui::Ui) {
+            ui.label("风格包数据直接来自 Core repository；运行时 Prompt 由 Core 组合。");
+            let mut action: Option<(String, &'static str, bool)> = None;
+            for pack in self.style_packs.clone() {
+                egui::Frame::group(ui.style()).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.heading(&pack.name);
+                        if pack.active {
+                            ui.label(egui::RichText::new("当前").color(theme::BLUE));
+                        }
+                        ui.label(format!("{:?} · {:?}", pack.kind, pack.base_mode));
+                    });
+                    ui.label(&pack.description);
+                    if let Some(author) = &pack.author {
+                        ui.label(format!("作者：{author} · 版本 {}", pack.version));
+                    }
+                    ui.horizontal(|ui| {
+                        if !pack.active && ui.button("设为当前").clicked() {
+                            action = Some((pack.id.clone(), "activate", true));
+                        }
+                        let mut enabled = pack.enabled;
+                        if ui.checkbox(&mut enabled, "启用").changed() {
+                            action = Some((pack.id.clone(), "enabled", enabled));
+                        }
+                        if ui.button("运行时 Prompt 预览").clicked() {
+                            if let Some(backend) = self.backend() {
+                                let diagnostics = backend.preview_style_pack_runtime(&pack);
+                                self.status = format!(
+                                    "{}：单轮 {} 字，多轮 {} 字，热词 {} 个",
+                                    diagnostics.pack_name,
+                                    diagnostics.single_turn_prompt_chars,
+                                    diagnostics.multi_turn_prompt_chars,
+                                    diagnostics.hotwords.len()
+                                );
+                            }
+                        }
+                        if pack.kind == openless_core::StylePackKind::Imported
+                            && ui.button("删除").clicked()
+                        {
+                            action = Some((pack.id.clone(), "delete", false));
+                        }
+                    });
+                });
+                ui.add_space(8.0);
+            }
+            if let (Some(backend), Some((id, operation, value))) = (self.backend(), action) {
+                self.spawn(async move {
+                    match operation {
+                        "activate" => {
+                            backend.activate_style_pack(&id)?;
+                        }
+                        "enabled" => {
+                            backend.set_style_pack_enabled(&id, value)?;
+                        }
+                        "delete" => {
+                            backend.remove_style_pack(&id)?;
+                        }
+                        _ => unreachable!(),
+                    }
+                    Ok("风格包已更新".to_string())
+                });
+            }
+        }
+
         fn history_ui(&mut self, ui: &mut egui::Ui) {
             ui.heading("历史");
             let Some(backend) = self.backend() else {
@@ -1542,6 +1762,8 @@ mod linux_app {
                         self.selection_ui(ui);
                     }
                     shell::Page::History => self.history_ui(ui),
+                    shell::Page::Vocabulary => self.vocabulary_ui(ui),
+                    shell::Page::Styles => self.styles_ui(ui),
                     shell::Page::Providers => self.settings_ui(ui),
                     shell::Page::Models => self.models_ui(ui),
                     shell::Page::Assistant => self.less_computer_ui(ui),
