@@ -14,6 +14,7 @@ mod fcitx5;
 mod host_actions;
 mod hotkeys;
 mod marketplace;
+mod popup;
 mod qa;
 mod remote_input;
 mod resources;
@@ -35,6 +36,13 @@ pub use fcitx5::{
 };
 pub use host_actions::LinuxHostActions;
 pub use hotkeys::{Fcitx5HotkeyListener, LinuxHotkeyEvent};
+pub use popup::{
+    read_jsonl, run_popup, write_jsonl, ApplyOutcome as PopupApplyOutcome, CapsulePopupState,
+    HostToPopup, PopupChatMessage, PopupKind, PopupSendError, PopupState, PopupSupervisor,
+    PopupSupervisorEvent, PopupToHost, PreviewPopupState, ProtocolError as PopupProtocolError,
+    ProtocolErrorKind as PopupProtocolErrorKind, QaPopupState, MAX_JSONL_LINE_BYTES,
+    POPUP_PROTOCOL_VERSION,
+};
 pub use resources::{
     LinuxPackageKind, LinuxResourceLayout, LinuxResourceResolver, FCITX_PLUGIN_CONFIG,
     FCITX_PLUGIN_LIBRARY,
