@@ -25,9 +25,10 @@ mod linux_app {
         drain_events, ensure_fcitx5_plugin_installed, open_external, write_jsonl,
         EventDrainOutcome, Fcitx5HotkeyListener, FcitxPluginInstallPlan, FcitxPluginStatus,
         HostToPopup, LinuxBackendBuilder, LinuxCapabilitySnapshot, LinuxLaunchIntent,
-        LinuxNativeRuntime, LinuxPackageKind, LinuxResourceLayout, PopupChatMessage, PopupKind,
-        PopupState, PopupSupervisor, PopupSupervisorEvent, PopupToHost, SingleInstanceBroker,
-        SingleInstanceRole, POPUP_PROTOCOL_VERSION,
+        LinuxNativeRuntime, LinuxPackageKind, LinuxResourceLayout, LinuxUpdateSupport,
+        PopupChatMessage, PopupKind, PopupState, PopupSupervisor, PopupSupervisorEvent,
+        PopupToHost, SingleInstanceBroker, SingleInstanceRole, UpdateManifest, UpdateSchedule,
+        POPUP_PROTOCOL_VERSION,
     };
 
     enum UiResult {
@@ -50,6 +51,10 @@ mod linux_app {
         Marketplace(Result<Vec<openless_core::MarketplaceListItem>, String>),
         MarketplaceFlow(Result<openless_core::OAuthDeviceFlow, String>),
         MarketplaceAuthPoll(Result<openless_core::OAuthPollResult, String>),
+        Microphones(Result<Vec<openless_core::MicrophoneDevice>, String>),
+        UpdateCheck(Result<Option<UpdateManifest>, String>),
+        UpdateProgress(openless_linux_egui::DownloadProgress),
+        UpdateInstalled(Result<openless_linux_egui::InstalledUpdate, String>),
     }
 
     #[derive(Clone)]
@@ -149,9 +154,18 @@ mod linux_app {
         qa_popup: Option<PopupSupervisor>,
         preview_popup: Option<PopupSupervisor>,
         capsule_popup: Option<PopupSupervisor>,
+        tray: Option<openless_linux_egui::LinuxTray>,
+        exit_requested: bool,
+        update_support: LinuxUpdateSupport,
+        update_schedule: UpdateSchedule,
+        update_started: std::time::Instant,
+        update_manifest: Option<UpdateManifest>,
+        update_busy: bool,
+        update_progress: Option<openless_linux_egui::DownloadProgress>,
         marketplace_items: Vec<openless_core::MarketplaceListItem>,
         marketplace_query: String,
         marketplace_flow: Option<openless_core::OAuthDeviceFlow>,
+        style_archive_path: String,
         status: String,
         startup_error: Option<String>,
         active_page: shell::Page,
@@ -163,6 +177,8 @@ mod linux_app {
         fn new(
             tokio: Arc<tokio::runtime::Runtime>,
             native: Result<LinuxNativeRuntime, String>,
+            tray: Option<openless_linux_egui::LinuxTray>,
+            update_support: LinuxUpdateSupport,
         ) -> Self {
             let (tx, rx) = mpsc::channel();
             match native {
@@ -213,9 +229,18 @@ mod linux_app {
                         qa_popup: None,
                         preview_popup: None,
                         capsule_popup: None,
+                        tray,
+                        exit_requested: false,
+                        update_support,
+                        update_schedule: UpdateSchedule::new(Duration::ZERO),
+                        update_started: std::time::Instant::now(),
+                        update_manifest: None,
+                        update_busy: false,
+                        update_progress: None,
                         marketplace_items: Vec::new(),
                         marketplace_query: String::new(),
                         marketplace_flow: None,
+                        style_archive_path: String::new(),
                         status: "Core 2.0 已启动".to_string(),
                         startup_error: None,
                         active_page: shell::Page::Overview,
@@ -226,6 +251,7 @@ mod linux_app {
                     app.load_remote_status();
                     app.load_providers(openless_core::ChannelKind::Asr);
                     app.load_library();
+                    app.load_microphones();
                     app
                 }
                 Err(error) => Self {
@@ -270,9 +296,18 @@ mod linux_app {
                     qa_popup: None,
                     preview_popup: None,
                     capsule_popup: None,
+                    tray,
+                    exit_requested: false,
+                    update_support,
+                    update_schedule: UpdateSchedule::new(Duration::ZERO),
+                    update_started: std::time::Instant::now(),
+                    update_manifest: None,
+                    update_busy: false,
+                    update_progress: None,
                     marketplace_items: Vec::new(),
                     marketplace_query: String::new(),
                     marketplace_flow: None,
+                    style_archive_path: String::new(),
                     status: "启动失败".to_string(),
                     startup_error: Some(error),
                     active_page: shell::Page::Overview,
@@ -413,7 +448,16 @@ mod linux_app {
             }
             for (kind, event) in events {
                 match event {
-                    PopupSupervisorEvent::Message(PopupToHost::SubmitQa { text, .. }) => {
+                    PopupSupervisorEvent::Message(PopupToHost::SubmitQa {
+                        session_id,
+                        text,
+                        ..
+                    }) if self
+                        .qa_state
+                        .as_ref()
+                        .and_then(|state| state.session_id.as_deref())
+                        == Some(session_id.as_str()) =>
+                    {
                         if let Some(backend) = self.backend() {
                             self.spawn(async move {
                                 backend.services().qa.submit_text(text).await?;
@@ -421,7 +465,15 @@ mod linux_app {
                             });
                         }
                     }
-                    PopupSupervisorEvent::Message(PopupToHost::ToggleQaRecording { .. }) => {
+                    PopupSupervisorEvent::Message(PopupToHost::ToggleQaRecording {
+                        session_id,
+                        ..
+                    }) if self
+                        .qa_state
+                        .as_ref()
+                        .and_then(|state| state.session_id.as_deref())
+                        == Some(session_id.as_str()) =>
+                    {
                         if let Some(backend) = self.backend() {
                             self.spawn(async move {
                                 backend.services().qa.toggle_recording().await?;
@@ -429,7 +481,14 @@ mod linux_app {
                             });
                         }
                     }
-                    PopupSupervisorEvent::Message(PopupToHost::DismissQa { .. }) => {
+                    PopupSupervisorEvent::Message(PopupToHost::DismissQa {
+                        session_id, ..
+                    }) if self
+                        .qa_state
+                        .as_ref()
+                        .and_then(|state| state.session_id.as_deref())
+                        == Some(session_id.as_str()) =>
+                    {
                         if let Some(backend) = self.backend() {
                             self.spawn(async move {
                                 backend.services().qa.dismiss().await?;
@@ -478,6 +537,13 @@ mod linux_app {
                     },
                     PopupSupervisorEvent::Message(PopupToHost::Ready { .. })
                     | PopupSupervisorEvent::Message(PopupToHost::DismissCapsule { .. }) => {}
+                    PopupSupervisorEvent::Message(
+                        PopupToHost::SubmitQa { .. }
+                        | PopupToHost::ToggleQaRecording { .. }
+                        | PopupToHost::DismissQa { .. },
+                    ) => {
+                        self.status = "已忽略迟到的问答弹窗操作".to_string();
+                    }
                     PopupSupervisorEvent::ProtocolError(error) => {
                         self.status = format!("原生弹窗协议错误：{error}");
                     }
@@ -611,6 +677,115 @@ mod linux_app {
                     .map_err(|error| error.to_string());
                 let _ = tx.send(UiResult::Marketplace(result));
             });
+        }
+
+        fn load_microphones(&self) {
+            let Some(backend) = self.backend() else {
+                return;
+            };
+            let tx = self.tx.clone();
+            self.tokio.spawn(async move {
+                let result = backend
+                    .services()
+                    .platform
+                    .microphone_devices()
+                    .await
+                    .map_err(|error| error.to_string());
+                let _ = tx.send(UiResult::Microphones(result));
+            });
+        }
+
+        fn request_update_check(&mut self, channel: openless_core::shared_types::UpdateChannel) {
+            let LinuxUpdateSupport::AppImage(updater) = self.update_support.clone() else {
+                self.status = "当前安装包由系统包管理器更新".to_string();
+                return;
+            };
+            if self.update_busy {
+                return;
+            }
+            self.update_busy = true;
+            self.update_progress = None;
+            let tx = self.tx.clone();
+            self.tokio.spawn(async move {
+                let result = updater
+                    .check(channel)
+                    .await
+                    .map_err(|error| error.to_string());
+                let _ = tx.send(UiResult::UpdateCheck(result));
+            });
+        }
+
+        fn install_update(&mut self) {
+            let (LinuxUpdateSupport::AppImage(updater), Some(manifest)) =
+                (self.update_support.clone(), self.update_manifest.clone())
+            else {
+                return;
+            };
+            if self.update_busy {
+                return;
+            }
+            self.update_busy = true;
+            self.update_progress = Some(openless_linux_egui::DownloadProgress {
+                downloaded: 0,
+                content_length: None,
+            });
+            let tx = self.tx.clone();
+            self.tokio.spawn(async move {
+                let progress_tx = tx.clone();
+                let result = updater
+                    .download_and_install(manifest, move |progress| {
+                        let _ = progress_tx.send(UiResult::UpdateProgress(progress));
+                    })
+                    .await
+                    .map_err(|error| error.to_string());
+                let _ = tx.send(UiResult::UpdateInstalled(result));
+            });
+        }
+
+        fn drain_tray(&mut self, ctx: &egui::Context) {
+            let mut commands = Vec::new();
+            if let Some(tray) = &self.tray {
+                tray.drain(|command| commands.push(command));
+                if let Some(error) = tray.take_error() {
+                    self.status = format!("系统托盘已停止：{error}");
+                    self.tray = None;
+                }
+            }
+            for command in commands {
+                match command {
+                    openless_linux_egui::TrayCommand::ShowMain => {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                    }
+                    openless_linux_egui::TrayCommand::ActivatePreviousStyle => {
+                        if let Some(backend) = self.backend() {
+                            self.spawn(async move {
+                                let pack = backend.activate_previous_style_pack()?;
+                                Ok(pack
+                                    .map(|pack| format!("已切换风格：{}", pack.name))
+                                    .unwrap_or_else(|| "没有可切换的上一风格".to_string()))
+                            });
+                        }
+                    }
+                    openless_linux_egui::TrayCommand::SelectMicrophone(name) => {
+                        if let Some(backend) = self.backend() {
+                            let selected = if name.is_empty() {
+                                "系统默认".to_string()
+                            } else {
+                                name.clone()
+                            };
+                            self.spawn(async move {
+                                backend.select_microphone_device(name)?;
+                                Ok(format!("已选择麦克风：{selected}"))
+                            });
+                        }
+                    }
+                    openless_linux_egui::TrayCommand::Quit => {
+                        self.exit_requested = true;
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                }
+            }
         }
 
         fn load_provider_editor(
@@ -1185,6 +1360,51 @@ mod linux_app {
                         }
                     },
                     UiResult::MarketplaceAuthPoll(Err(error)) => self.status = error,
+                    UiResult::Microphones(Ok(devices)) => {
+                        let selected = self
+                            .preferences
+                            .as_ref()
+                            .map(|prefs| prefs.microphone_device_name.as_str())
+                            .unwrap_or_default();
+                        if let Some(tray) = &self.tray {
+                            let microphones = devices
+                                .into_iter()
+                                .map(|device| openless_linux_egui::TrayMicrophone {
+                                    selected: !selected.is_empty()
+                                        && (selected == device.id || selected == device.name),
+                                    name: device.name,
+                                    is_default: device.is_default,
+                                })
+                                .collect();
+                            if let Err(error) = tray.set_microphones(microphones) {
+                                self.status = error.to_string();
+                            }
+                        }
+                    }
+                    UiResult::Microphones(Err(error)) => self.status = error,
+                    UiResult::UpdateCheck(Ok(Some(manifest))) => {
+                        self.update_busy = false;
+                        self.status = format!("发现新版本 {}", manifest.version);
+                        self.update_manifest = Some(manifest);
+                    }
+                    UiResult::UpdateCheck(Ok(None)) => {
+                        self.update_busy = false;
+                        self.status = "当前已是最新版本".to_string();
+                    }
+                    UiResult::UpdateCheck(Err(error)) => {
+                        self.update_busy = false;
+                        self.status = format!("检查更新失败：{error}");
+                    }
+                    UiResult::UpdateProgress(progress) => self.update_progress = Some(progress),
+                    UiResult::UpdateInstalled(Ok(installed)) => {
+                        self.update_busy = false;
+                        self.update_manifest = None;
+                        self.status = format!("已安装 {}，请重启 OpenLess", installed.version);
+                    }
+                    UiResult::UpdateInstalled(Err(error)) => {
+                        self.update_busy = false;
+                        self.status = format!("安装更新失败：{error}");
+                    }
                 }
             }
             if let Some(backend) = self.backend() {
@@ -1848,6 +2068,26 @@ mod linux_app {
             if let Some(preferences) = self.preferences.as_mut() {
                 ui.checkbox(&mut preferences.streaming_insert, "流式插入");
                 ui.checkbox(&mut preferences.coding_agent_enabled, "启用 Less Computer");
+                ui.checkbox(&mut preferences.start_minimized, "启动时隐藏主窗口");
+                ui.checkbox(&mut preferences.launch_at_login, "开机启动");
+                ui.checkbox(&mut preferences.auto_update_check, "自动检查更新");
+                egui::ComboBox::from_label("更新渠道")
+                    .selected_text(match preferences.update_channel {
+                        openless_core::shared_types::UpdateChannel::Stable => "稳定版",
+                        openless_core::shared_types::UpdateChannel::Beta => "Beta",
+                    })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(
+                            &mut preferences.update_channel,
+                            openless_core::shared_types::UpdateChannel::Stable,
+                            "稳定版",
+                        );
+                        ui.selectable_value(
+                            &mut preferences.update_channel,
+                            openless_core::shared_types::UpdateChannel::Beta,
+                            "Beta",
+                        );
+                    });
                 ui.checkbox(&mut preferences.remote_input_enabled, "启用远程输入");
                 ui.add(
                     egui::DragValue::new(&mut preferences.remote_input_port)
@@ -1905,9 +2145,92 @@ mod linux_app {
                     }
                 }
             }
+            ui.separator();
+            ui.heading("软件更新");
+            let channel = self
+                .preferences
+                .as_ref()
+                .map(|preferences| preferences.update_channel)
+                .unwrap_or_default();
+            match &self.update_support {
+                LinuxUpdateSupport::AppImage(_) => {
+                    ui.horizontal(|ui| {
+                        if ui
+                            .add_enabled(!self.update_busy, egui::Button::new("立即检查"))
+                            .clicked()
+                        {
+                            self.request_update_check(channel);
+                        }
+                        if self.update_manifest.is_some()
+                            && ui
+                                .add_enabled(!self.update_busy, egui::Button::new("下载并安装"))
+                                .clicked()
+                        {
+                            self.install_update();
+                        }
+                    });
+                    if let Some(manifest) = &self.update_manifest {
+                        ui.label(format!("可用版本：{}", manifest.version));
+                    }
+                    if let Some(progress) = self.update_progress {
+                        let fraction = progress
+                            .content_length
+                            .filter(|total| *total > 0)
+                            .map(|total| progress.downloaded as f32 / total as f32);
+                        if let Some(fraction) = fraction {
+                            ui.add(egui::ProgressBar::new(fraction.clamp(0.0, 1.0)));
+                        }
+                        ui.label(format!("已下载 {} 字节", progress.downloaded));
+                    }
+                }
+                LinuxUpdateSupport::ManualOnly { releases_url } => {
+                    ui.label("deb/rpm 与开发构建由包管理器或发布页更新。");
+                    if ui.button("打开发布页").clicked() {
+                        let url = (*releases_url).to_string();
+                        std::thread::spawn(move || {
+                            let _ = open_external(&url);
+                        });
+                    }
+                }
+            }
         }
 
         fn vocabulary_ui(&mut self, ui: &mut egui::Ui) {
+            if let Some(backend) = self.backend() {
+                let pending = backend.pending_corrections();
+                if !pending.is_empty() {
+                    ui.heading("待确认的手改建议");
+                    let mut action: Option<(String, bool)> = None;
+                    for suggestion in pending {
+                        ui.horizontal(|ui| {
+                            ui.label(format!(
+                                "{} → {}",
+                                suggestion.pattern, suggestion.replacement
+                            ));
+                            if ui.small_button("接受").clicked() {
+                                action = Some((suggestion.id.clone(), true));
+                            }
+                            if ui.small_button("忽略").clicked() {
+                                action = Some((suggestion.id.clone(), false));
+                            }
+                        });
+                    }
+                    if ui.button("全部关闭").clicked() {
+                        backend.dismiss_pending_corrections();
+                    }
+                    if let Some((id, accept)) = action {
+                        self.spawn(async move {
+                            if accept {
+                                backend.accept_pending_correction(&id)?;
+                            } else {
+                                backend.reject_pending_correction(&id);
+                            }
+                            Ok("词汇建议已处理".to_string())
+                        });
+                    }
+                    ui.separator();
+                }
+            }
             ui.heading("自定义词汇");
             ui.horizontal(|ui| {
                 ui.label("词语");
@@ -2004,6 +2327,19 @@ mod linux_app {
 
         fn styles_ui(&mut self, ui: &mut egui::Ui) {
             ui.label("风格包数据直接来自 Core repository；运行时 Prompt 由 Core 组合。");
+            ui.horizontal(|ui| {
+                ui.label("ZIP 路径");
+                ui.text_edit_singleline(&mut self.style_archive_path);
+                if ui.button("导入 ZIP").clicked() && !self.style_archive_path.trim().is_empty() {
+                    if let Some(backend) = self.backend() {
+                        let path = std::path::PathBuf::from(self.style_archive_path.trim());
+                        self.spawn(async move {
+                            let pack = backend.import_style_pack_path(&path)?;
+                            Ok(format!("已导入风格包：{}", pack.name))
+                        });
+                    }
+                }
+            });
             let mut action: Option<(String, &'static str, bool)> = None;
             for pack in self.style_packs.clone() {
                 egui::Frame::group(ui.style()).show(ui, |ui| {
@@ -2043,11 +2379,22 @@ mod linux_app {
                         {
                             action = Some((pack.id.clone(), "delete", false));
                         }
+                        if pack.kind == openless_core::StylePackKind::Builtin
+                            && ui.button("恢复内置默认").clicked()
+                        {
+                            action = Some((pack.id.clone(), "reset", false));
+                        }
+                        if ui.button("导出 ZIP").clicked()
+                            && !self.style_archive_path.trim().is_empty()
+                        {
+                            action = Some((pack.id.clone(), "export", false));
+                        }
                     });
                 });
                 ui.add_space(8.0);
             }
             if let (Some(backend), Some((id, operation, value))) = (self.backend(), action) {
+                let archive_path = self.style_archive_path.clone();
                 self.spawn(async move {
                     match operation {
                         "activate" => {
@@ -2058,6 +2405,13 @@ mod linux_app {
                         }
                         "delete" => {
                             backend.remove_style_pack(&id)?;
+                        }
+                        "reset" => {
+                            backend.reset_builtin_style_pack(&id)?;
+                        }
+                        "export" => {
+                            let path = std::path::PathBuf::from(archive_path.trim());
+                            backend.export_style_pack_path(&id, &path)?;
                         }
                         _ => unreachable!(),
                     }
@@ -2269,6 +2623,33 @@ mod linux_app {
     impl eframe::App for OpenLessEguiApp {
         fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
             self.poll(ctx);
+            self.drain_tray(ctx);
+            let auto_check = self
+                .preferences
+                .as_ref()
+                .is_some_and(|preferences| preferences.auto_update_check);
+            if auto_check
+                && !self.update_busy
+                && self.update_manifest.is_none()
+                && self
+                    .update_schedule
+                    .poll(self.update_started.elapsed(), false)
+                    .is_some()
+            {
+                let channel = self
+                    .preferences
+                    .as_ref()
+                    .map(|preferences| preferences.update_channel)
+                    .unwrap_or_default();
+                self.request_update_check(channel);
+            }
+            if ctx.input(|input| input.viewport().close_requested())
+                && !self.exit_requested
+                && self.tray.is_some()
+            {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            }
             if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
                 if let Some(backend) = self.backend() {
                     self.spawn(async move {
@@ -2778,7 +3159,10 @@ mod linux_app {
         }
     }
 
-    fn backend_config() -> Result<BackendConfig, String> {
+    fn backend_config(
+        tray_available: bool,
+        updater_available: bool,
+    ) -> Result<BackendConfig, String> {
         let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
         let data_dir = std::env::var_os("XDG_DATA_HOME")
             .map(std::path::PathBuf::from)
@@ -2793,7 +3177,8 @@ mod linux_app {
         std::fs::create_dir_all(&data_dir).map_err(|error| error.to_string())?;
         std::fs::create_dir_all(&cache_dir).map_err(|error| error.to_string())?;
         let kind = package_kind();
-        let capabilities = LinuxCapabilitySnapshot::detect(false, kind).capabilities;
+        let capabilities =
+            LinuxCapabilitySnapshot::detect(tray_available, kind, updater_available).capabilities;
         Ok(BackendConfig {
             data_dir,
             cache_dir,
@@ -3066,7 +3451,12 @@ mod linux_app {
         }
         let start_minimized = args.iter().any(|arg| arg == "--minimized");
         let tokio = Arc::new(tokio::runtime::Runtime::new().map_err(|error| error.to_string())?);
-        let config = backend_config()?;
+        let tray = openless_linux_egui::LinuxTray::start().ok();
+        let tray_available = tray.is_some();
+        let kind = package_kind();
+        let update_support = LinuxUpdateSupport::initialize(kind);
+        let updater_available = update_support.supports_auto_update();
+        let config = backend_config(tray_available, updater_available)?;
         let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| config.cache_dir.join("runtime"));
@@ -3113,7 +3503,7 @@ mod linux_app {
                 .with_decorations(false)
                 .with_transparent(false)
                 .with_resizable(true)
-                .with_visible(!start_minimized),
+                .with_visible(!start_minimized || !tray_available),
             ..Default::default()
         };
         eframe::run_native(
@@ -3121,7 +3511,12 @@ mod linux_app {
             options,
             Box::new(move |cc| {
                 theme::install(&cc.egui_ctx);
-                Ok(Box::new(OpenLessEguiApp::new(tokio, native)))
+                Ok(Box::new(OpenLessEguiApp::new(
+                    tokio,
+                    native,
+                    tray,
+                    update_support,
+                )))
             }),
         )
         .map_err(|error| error.to_string())
@@ -3136,6 +3531,10 @@ mod linux_app {
             let mut app = OpenLessEguiApp::new(
                 Arc::new(tokio::runtime::Runtime::new().unwrap()),
                 Err("fixture".into()),
+                None,
+                LinuxUpdateSupport::ManualOnly {
+                    releases_url: openless_linux_egui::RELEASES_URL,
+                },
             );
             let first = openless_core::SessionId::new();
             let second = openless_core::SessionId::new();
@@ -3210,6 +3609,10 @@ mod linux_app {
             let mut app = OpenLessEguiApp::new(
                 Arc::new(tokio::runtime::Runtime::new().unwrap()),
                 Err("fixture".into()),
+                None,
+                LinuxUpdateSupport::ManualOnly {
+                    releases_url: openless_linux_egui::RELEASES_URL,
+                },
             );
             let session = openless_core::SessionId::new();
             let mut thinking = QaStateEvent::simple(QaStateKind::Thinking);

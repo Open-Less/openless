@@ -23,6 +23,7 @@ mod runtime;
 mod selection;
 mod settings;
 mod single_instance;
+mod tray;
 mod updater;
 
 pub use audio::LinuxCpalRecorder;
@@ -59,10 +60,14 @@ pub use settings::{LinuxSettingsEffects, LinuxSettingsRuntime};
 pub use single_instance::{
     LinuxLaunchIntent, SingleInstanceBroker, SingleInstanceGuard, SingleInstanceRole,
 };
+pub use tray::{LinuxTray, TrayCommand, TrayError, TrayMicrophone};
 pub use updater::{
-    install_verified_appimage, install_verified_appimage_with_limit, AppImageTarget,
-    InstalledUpdate, SignatureVerifier, UnavailableSignatureVerifier, UpdateError, UpdateManifest,
-    DEFAULT_MAX_APPIMAGE_BYTES, MANIFEST_HOST, MANIFEST_SCHEMA_VERSION,
+    install_verified_appimage, install_verified_appimage_with_limit, manifest_urls, AppImageTarget,
+    AppImageUpdater, CheckReason, DownloadProgress, InstalledUpdate, LinuxUpdateSupport,
+    PinnedMinisignVerifier, SignatureVerifier, UnavailableSignatureVerifier, UpdateChannel,
+    UpdateError, UpdateManifest, UpdateSchedule, BETA_RELEASES_API, DEFAULT_MAX_APPIMAGE_BYTES,
+    DEFAULT_MAX_MANIFEST_BYTES, DIRECT_RELEASE_BASE, MANIFEST_HOST, MANIFEST_SCHEMA_VERSION,
+    PERIODIC_CHECK_INTERVAL, PINNED_MINISIGN_PUBLIC_KEY, RELEASES_URL, STARTUP_CHECK_DELAY,
 };
 
 pub use openless_core::contract::*;
