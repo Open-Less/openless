@@ -110,6 +110,7 @@ jobs:
           cargo clippy --locked -p openless-core --all-targets -- -D warnings
           cargo test --locked -p openless-linux-egui --all-targets
           cargo check --locked -p openless-linux-egui --all-targets
+          node scripts/linux-egui-tauri-free-contract.test.mjs
           ./scripts/check-core-deps.ps1
           ./scripts/check-core-deps.ps1 openless-linux-egui
           ./scripts/check-core-secret-surface.ps1
