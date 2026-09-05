@@ -12,6 +12,7 @@ pub enum Page {
     History,
     Vocabulary,
     Styles,
+    Marketplace,
     Providers,
     Models,
     Assistant,
@@ -24,6 +25,7 @@ impl Page {
             Self::History => "历史",
             Self::Vocabulary => "词汇与纠错",
             Self::Styles => "风格包",
+            Self::Marketplace => "Marketplace",
             Self::Providers => "Provider 与设置",
             Self::Models => "本地模型",
             Self::Assistant => "Less Computer",
@@ -102,6 +104,7 @@ pub fn sidebar(ctx: &egui::Context, active: &mut Page, status: &str) {
             nav(ui, active, Page::History, "◷", "历史");
             nav(ui, active, Page::Vocabulary, "≡", "词汇与纠错");
             nav(ui, active, Page::Styles, "✎", "风格包");
+            nav(ui, active, Page::Marketplace, "◇", "Marketplace");
             ui.add_space(12.0);
             ui.label(egui::RichText::new("能力").size(10.5).color(theme::INK_4));
             ui.add_space(5.0);

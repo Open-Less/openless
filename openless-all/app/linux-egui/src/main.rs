@@ -56,6 +56,9 @@ mod linux_app {
                 String,
             >,
         ),
+        Marketplace(Result<Vec<openless_core::MarketplaceListItem>, String>),
+        MarketplaceFlow(Result<openless_core::OAuthDeviceFlow, String>),
+        MarketplaceAuthPoll(Result<openless_core::OAuthPollResult, String>),
     }
 
     #[derive(Clone)]
@@ -149,6 +152,9 @@ mod linux_app {
         qa_popup: Option<PopupSupervisor>,
         preview_popup: Option<PopupSupervisor>,
         capsule_popup: Option<PopupSupervisor>,
+        marketplace_items: Vec<openless_core::MarketplaceListItem>,
+        marketplace_query: String,
+        marketplace_flow: Option<openless_core::OAuthDeviceFlow>,
         status: String,
         startup_error: Option<String>,
         active_page: shell::Page,
@@ -210,6 +216,9 @@ mod linux_app {
                         qa_popup: None,
                         preview_popup: None,
                         capsule_popup: None,
+                        marketplace_items: Vec::new(),
+                        marketplace_query: String::new(),
+                        marketplace_flow: None,
                         status: "Core 2.0 已启动".to_string(),
                         startup_error: None,
                         active_page: shell::Page::Overview,
@@ -264,6 +273,9 @@ mod linux_app {
                     qa_popup: None,
                     preview_popup: None,
                     capsule_popup: None,
+                    marketplace_items: Vec::new(),
+                    marketplace_query: String::new(),
+                    marketplace_flow: None,
                     status: "启动失败".to_string(),
                     startup_error: Some(error),
                     active_page: shell::Page::Overview,
@@ -580,6 +592,27 @@ mod linux_app {
                 })()
                 .map_err(|error| error.to_string());
                 let _ = tx.send(UiResult::Library(result));
+            });
+        }
+
+        fn load_marketplace(&self) {
+            let Some(backend) = self.backend() else {
+                return;
+            };
+            let query = self.marketplace_query.trim().to_string();
+            let tx = self.tx.clone();
+            self.tokio.spawn(async move {
+                let result = backend
+                    .services()
+                    .marketplace
+                    .list(openless_core::MarketplaceQuery {
+                        query: (!query.is_empty()).then_some(query),
+                        sort: Some("updated".to_string()),
+                        limit: Some(100),
+                    })
+                    .await
+                    .map_err(|error| error.to_string());
+                let _ = tx.send(UiResult::Marketplace(result));
             });
         }
 
@@ -1130,6 +1163,32 @@ mod linux_app {
                         self.style_packs = style_packs;
                     }
                     UiResult::Library(Err(error)) => self.status = error,
+                    UiResult::Marketplace(Ok(items)) => {
+                        self.status = format!("Marketplace 已加载 {} 个风格包", items.len());
+                        self.marketplace_items = items;
+                    }
+                    UiResult::Marketplace(Err(error)) => self.status = error,
+                    UiResult::MarketplaceFlow(Ok(flow)) => {
+                        self.status = format!("GitHub 设备码：{}", flow.user_code);
+                        self.marketplace_flow = Some(flow);
+                    }
+                    UiResult::MarketplaceFlow(Err(error)) => self.status = error,
+                    UiResult::MarketplaceAuthPoll(Ok(result)) => match result {
+                        openless_core::OAuthPollResult::Authorized { login } => {
+                            self.marketplace_flow = None;
+                            self.status = format!("Marketplace 已登录：{login}");
+                        }
+                        openless_core::OAuthPollResult::Pending => {
+                            self.status = "GitHub 授权仍在等待".to_string();
+                        }
+                        openless_core::OAuthPollResult::SlowDown => {
+                            self.status = "GitHub 要求降低检查频率".to_string();
+                        }
+                        openless_core::OAuthPollResult::Error { message } => {
+                            self.status = message;
+                        }
+                    },
+                    UiResult::MarketplaceAuthPoll(Err(error)) => self.status = error,
                 }
             }
             if let Some(backend) = self.backend() {
@@ -2011,6 +2070,107 @@ mod linux_app {
             }
         }
 
+        fn marketplace_ui(&mut self, ui: &mut egui::Ui) {
+            ui.horizontal(|ui| {
+                ui.text_edit_singleline(&mut self.marketplace_query);
+                if ui.button("搜索/刷新").clicked() {
+                    self.load_marketplace();
+                }
+                if ui.button("GitHub 登录").clicked() {
+                    if let Some(backend) = self.backend() {
+                        let tx = self.tx.clone();
+                        self.tokio.spawn(async move {
+                            let result = backend
+                                .services()
+                                .marketplace
+                                .start_device_flow()
+                                .await
+                                .map_err(|error| error.to_string());
+                            let _ = tx.send(UiResult::MarketplaceFlow(result));
+                        });
+                    }
+                }
+                if ui.button("退出登录").clicked() {
+                    if let Some(backend) = self.backend() {
+                        self.spawn(async move {
+                            backend.services().marketplace.logout().await?;
+                            Ok("Marketplace 已退出登录".to_string())
+                        });
+                    }
+                }
+            });
+            if let Some(flow) = self.marketplace_flow.clone() {
+                ui.horizontal(|ui| {
+                    ui.label(format!("设备码：{}", flow.user_code));
+                    if ui.button("打开 GitHub").clicked() {
+                        let url = flow.verification_uri.clone();
+                        std::thread::spawn(move || {
+                            if let Err(error) = open_external(&url) {
+                                eprintln!("OpenLess GitHub login URL failed: {error}");
+                            }
+                        });
+                    }
+                    if ui.button("检查授权").clicked() {
+                        if let Some(backend) = self.backend() {
+                            let tx = self.tx.clone();
+                            let flow_id = flow.flow_id.clone();
+                            self.tokio.spawn(async move {
+                                let result = backend
+                                    .services()
+                                    .marketplace
+                                    .poll_device_flow(flow_id)
+                                    .await
+                                    .map_err(|error| error.to_string());
+                                let _ = tx.send(UiResult::MarketplaceAuthPoll(result));
+                            });
+                        }
+                    }
+                });
+            }
+            if self.marketplace_items.is_empty() {
+                ui.label("尚未加载 Marketplace；点击“搜索/刷新”。");
+                return;
+            }
+            let mut action: Option<(String, &'static str)> = None;
+            for pack in &self.marketplace_items {
+                egui::Frame::group(ui.style()).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.heading(&pack.name);
+                        ui.label(format!("@{} · {}", pack.author_login, pack.version));
+                    });
+                    ui.label(&pack.description);
+                    ui.label(format!(
+                        "喜欢 {} · 下载 {} · {}",
+                        pack.like_count, pack.download_count, pack.base_mode
+                    ));
+                    ui.horizontal(|ui| {
+                        if ui.button("安装").clicked() {
+                            action = Some((pack.id.clone(), "install"));
+                        }
+                        if ui.button("喜欢/取消喜欢").clicked() {
+                            action = Some((pack.id.clone(), "like"));
+                        }
+                    });
+                });
+                ui.add_space(8.0);
+            }
+            if let (Some(backend), Some((id, operation))) = (self.backend(), action) {
+                self.spawn(async move {
+                    match operation {
+                        "install" => {
+                            let pack = backend.services().marketplace.install(id).await?;
+                            Ok(format!("已安装风格包：{}", pack.name))
+                        }
+                        "like" => {
+                            let result = backend.services().marketplace.toggle_like(id).await?;
+                            Ok(format!("喜欢数：{}", result.like_count))
+                        }
+                        _ => unreachable!(),
+                    }
+                });
+            }
+        }
+
         fn history_ui(&mut self, ui: &mut egui::Ui) {
             ui.heading("历史");
             ui.horizontal(|ui| {
@@ -2143,6 +2303,7 @@ mod linux_app {
                     shell::Page::History => self.history_ui(ui),
                     shell::Page::Vocabulary => self.vocabulary_ui(ui),
                     shell::Page::Styles => self.styles_ui(ui),
+                    shell::Page::Marketplace => self.marketplace_ui(ui),
                     shell::Page::Providers => self.settings_ui(ui),
                     shell::Page::Models => self.models_ui(ui),
                     shell::Page::Assistant => self.less_computer_ui(ui),
