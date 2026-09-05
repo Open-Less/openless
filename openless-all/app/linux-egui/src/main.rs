@@ -166,7 +166,7 @@ mod linux_app {
         marketplace_items: Vec<openless_core::MarketplaceListItem>,
         marketplace_query: String,
         marketplace_flow: Option<openless_core::OAuthDeviceFlow>,
-        style_archive_path: String,
+        style_editor: Option<openless_core::StylePack>,
         status: String,
         startup_error: Option<String>,
         active_page: shell::Page,
@@ -241,7 +241,7 @@ mod linux_app {
                         marketplace_items: Vec::new(),
                         marketplace_query: String::new(),
                         marketplace_flow: None,
-                        style_archive_path: String::new(),
+                        style_editor: None,
                         status: "Core 2.0 已启动".to_string(),
                         startup_error: None,
                         active_page: shell::Page::Overview,
@@ -308,7 +308,7 @@ mod linux_app {
                     marketplace_items: Vec::new(),
                     marketplace_query: String::new(),
                     marketplace_flow: None,
-                    style_archive_path: String::new(),
+                    style_editor: None,
                     status: "启动失败".to_string(),
                     startup_error: Some(error),
                     active_page: shell::Page::Overview,
@@ -2418,18 +2418,105 @@ mod linux_app {
         fn styles_ui(&mut self, ui: &mut egui::Ui) {
             ui.label("风格包数据直接来自 Core repository；运行时 Prompt 由 Core 组合。");
             ui.horizontal(|ui| {
-                ui.label("ZIP 路径");
-                ui.text_edit_singleline(&mut self.style_archive_path);
-                if ui.button("导入 ZIP").clicked() && !self.style_archive_path.trim().is_empty() {
+                if ui.button("新建风格包").clicked() {
+                    self.style_editor = Some(openless_core::StylePack {
+                        id: uuid::Uuid::new_v4().to_string(),
+                        name: "新风格".to_string(),
+                        ..Default::default()
+                    });
+                }
+                if ui.button("导入 ZIP").clicked() {
                     if let Some(backend) = self.backend() {
-                        let path = std::path::PathBuf::from(self.style_archive_path.trim());
                         self.spawn(async move {
-                            let pack = backend.import_style_pack_path(&path)?;
+                            let path = tokio::task::spawn_blocking(|| {
+                                rfd::FileDialog::new()
+                                    .add_filter("OpenLess style pack", &["zip"])
+                                    .pick_file()
+                            })
+                            .await
+                            .map_err(|error| {
+                                BackendError::new(
+                                    openless_core::BackendErrorCode::Internal,
+                                    error.to_string(),
+                                )
+                            })?
+                            .ok_or_else(|| {
+                                BackendError::new(
+                                    openless_core::BackendErrorCode::Cancelled,
+                                    "风格包导入已取消",
+                                )
+                            })?;
+                            let pack = tokio::task::spawn_blocking(move || {
+                                backend.import_style_pack_path(&path)
+                            })
+                            .await
+                            .map_err(|error| {
+                                BackendError::new(
+                                    openless_core::BackendErrorCode::Internal,
+                                    error.to_string(),
+                                )
+                            })??;
                             Ok(format!("已导入风格包：{}", pack.name))
                         });
                     }
                 }
             });
+            if let Some(editor) = self.style_editor.as_mut() {
+                ui.group(|ui| {
+                    ui.heading("风格包编辑器");
+                    ui.horizontal(|ui| {
+                        ui.label("名称");
+                        ui.text_edit_singleline(&mut editor.name);
+                        ui.label("版本");
+                        ui.text_edit_singleline(&mut editor.version);
+                    });
+                    ui.label("描述");
+                    ui.text_edit_multiline(&mut editor.description);
+                    egui::ComboBox::from_label("基础模式")
+                        .selected_text(editor.base_mode.display_name())
+                        .show_ui(ui, |ui| {
+                            for mode in [
+                                openless_core::PolishMode::Raw,
+                                openless_core::PolishMode::Light,
+                                openless_core::PolishMode::Structured,
+                                openless_core::PolishMode::Formal,
+                            ] {
+                                ui.selectable_value(
+                                    &mut editor.base_mode,
+                                    mode,
+                                    mode.display_name(),
+                                );
+                            }
+                        });
+                    ui.label("听写 Prompt");
+                    ui.add(egui::TextEdit::multiline(&mut editor.prompt).desired_rows(6));
+                    ui.label("选区 Prompt（留空则使用 Core 默认）");
+                    ui.add(egui::TextEdit::multiline(&mut editor.selection_prompt).desired_rows(4));
+                });
+                let mut save = false;
+                let mut cancel = false;
+                ui.horizontal(|ui| {
+                    save = ui.button("保存风格包").clicked();
+                    cancel = ui.button("取消编辑").clicked();
+                });
+                if cancel {
+                    self.style_editor = None;
+                } else if save {
+                    let pack = self.style_editor.take().expect("editor exists");
+                    if let Some(backend) = self.backend() {
+                        let exists = self.style_packs.iter().any(|item| item.id == pack.id);
+                        self.spawn(async move {
+                            let saved = if exists {
+                                backend.update_style_pack(pack)?
+                            } else {
+                                backend.create_style_pack(pack)?
+                            };
+                            Ok(format!("风格包已保存：{}", saved.name))
+                        });
+                    }
+                }
+                ui.separator();
+            }
             let mut action: Option<(String, &'static str, bool)> = None;
             for pack in self.style_packs.clone() {
                 egui::Frame::group(ui.style()).show(ui, |ui| {
@@ -2465,6 +2552,11 @@ mod linux_app {
                             }
                         }
                         if pack.kind == openless_core::StylePackKind::Imported
+                            && ui.button("编辑").clicked()
+                        {
+                            self.style_editor = Some(pack.clone());
+                        }
+                        if pack.kind == openless_core::StylePackKind::Imported
                             && ui.button("删除").clicked()
                         {
                             action = Some((pack.id.clone(), "delete", false));
@@ -2474,9 +2566,7 @@ mod linux_app {
                         {
                             action = Some((pack.id.clone(), "reset", false));
                         }
-                        if ui.button("导出 ZIP").clicked()
-                            && !self.style_archive_path.trim().is_empty()
-                        {
+                        if ui.button("导出 ZIP").clicked() {
                             action = Some((pack.id.clone(), "export", false));
                         }
                     });
@@ -2484,7 +2574,6 @@ mod linux_app {
                 ui.add_space(8.0);
             }
             if let (Some(backend), Some((id, operation, value))) = (self.backend(), action) {
-                let archive_path = self.style_archive_path.clone();
                 self.spawn(async move {
                     match operation {
                         "activate" => {
@@ -2500,8 +2589,42 @@ mod linux_app {
                             backend.reset_builtin_style_pack(&id)?;
                         }
                         "export" => {
-                            let path = std::path::PathBuf::from(archive_path.trim());
-                            backend.export_style_pack_path(&id, &path)?;
+                            let bytes = backend.export_style_pack_bytes(&id)?;
+                            let destination = tokio::task::spawn_blocking(move || {
+                                rfd::FileDialog::new()
+                                    .add_filter("OpenLess style pack", &["zip"])
+                                    .set_file_name(format!("openless-style-{id}.zip"))
+                                    .save_file()
+                            })
+                            .await
+                            .map_err(|error| {
+                                BackendError::new(
+                                    openless_core::BackendErrorCode::Internal,
+                                    error.to_string(),
+                                )
+                            })?
+                            .ok_or_else(|| {
+                                BackendError::new(
+                                    openless_core::BackendErrorCode::Cancelled,
+                                    "风格包导出已取消",
+                                )
+                            })?;
+                            tokio::task::spawn_blocking(move || {
+                                openless_linux_egui::atomic_save(&destination, &bytes)
+                            })
+                            .await
+                            .map_err(|error| {
+                                BackendError::new(
+                                    openless_core::BackendErrorCode::Internal,
+                                    error.to_string(),
+                                )
+                            })?
+                            .map_err(|error| {
+                                BackendError::new(
+                                    openless_core::BackendErrorCode::Platform,
+                                    error.to_string(),
+                                )
+                            })?;
                         }
                         _ => unreachable!(),
                     }
