@@ -23,6 +23,7 @@ mod runtime;
 mod selection;
 mod settings;
 mod single_instance;
+mod updater;
 
 pub use audio::LinuxCpalRecorder;
 pub use backend::{LinuxBackendBuilder, LinuxBackendRuntime};
@@ -57,6 +58,11 @@ pub use selection::LinuxSelectionRuntime;
 pub use settings::{LinuxSettingsEffects, LinuxSettingsRuntime};
 pub use single_instance::{
     LinuxLaunchIntent, SingleInstanceBroker, SingleInstanceGuard, SingleInstanceRole,
+};
+pub use updater::{
+    install_verified_appimage, install_verified_appimage_with_limit, AppImageTarget,
+    InstalledUpdate, SignatureVerifier, UnavailableSignatureVerifier, UpdateError, UpdateManifest,
+    DEFAULT_MAX_APPIMAGE_BYTES, MANIFEST_HOST, MANIFEST_SCHEMA_VERSION,
 };
 
 pub use openless_core::contract::*;
