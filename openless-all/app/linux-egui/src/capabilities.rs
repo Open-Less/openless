@@ -29,7 +29,7 @@ impl LinuxCapabilitySnapshot {
         x11_display: Option<&str>,
         fcitx5_ready: bool,
         tray_available: bool,
-        package_kind: LinuxPackageKind,
+        _package_kind: LinuxPackageKind,
     ) -> Self {
         let session = if wayland_display.is_some_and(|value| !value.trim().is_empty()) {
             LinuxDesktopSession::Wayland
@@ -51,7 +51,10 @@ impl LinuxCapabilitySnapshot {
                 supports_local_asr: desktop,
                 supports_local_qwen3_mlx: false,
                 supports_in_app_dictation: false,
-                supports_auto_update: package_kind == LinuxPackageKind::AppImage,
+                // AppImage detection alone is not an updater capability. Keep
+                // this false until transport and a pinned minisign verifier
+                // have both initialized successfully.
+                supports_auto_update: false,
             },
             permissions: PermissionSnapshot {
                 microphone: if desktop {
@@ -237,7 +240,7 @@ mod tests {
         );
         assert_eq!(x11.session, LinuxDesktopSession::X11);
         assert!(x11.capabilities.supports_overlay);
-        assert!(x11.capabilities.supports_auto_update);
+        assert!(!x11.capabilities.supports_auto_update);
 
         let wayland = LinuxCapabilitySnapshot::from_environment(
             Some("wayland-0"),
