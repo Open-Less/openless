@@ -1,5 +1,8 @@
 use super::*;
 
+#[cfg(not(mobile))]
+use tauri_plugin_autostart::ManagerExt;
+
 #[tauri::command]
 pub fn get_settings(core: CoreState<'_>) -> UserPreferences {
     core.get_preferences()
@@ -12,11 +15,25 @@ pub fn get_default_style_system_prompts() -> StyleSystemPrompts {
 
 struct TauriSettingsRuntime<'a> {
     coord: &'a Coordinator,
+    #[cfg(not(mobile))]
+    app: Option<&'a AppHandle>,
 }
 
 impl<'a> TauriSettingsRuntime<'a> {
     fn new(coord: &'a Coordinator) -> Self {
-        Self { coord }
+        Self {
+            coord,
+            #[cfg(not(mobile))]
+            app: None,
+        }
+    }
+
+    #[cfg(not(mobile))]
+    fn with_app(coord: &'a Coordinator, app: &'a AppHandle) -> Self {
+        Self {
+            coord,
+            app: Some(app),
+        }
     }
 
     fn platform_error(message: impl Into<String>) -> openless_core::BackendError {
@@ -44,6 +61,32 @@ impl<'a> TauriSettingsRuntime<'a> {
             .apply_hotkey_runtime_change(change)
             .map_err(Self::platform_error)
     }
+
+    fn apply_launch_at_login(&self, enabled: bool) -> Result<(), openless_core::BackendError> {
+        #[cfg(not(mobile))]
+        {
+            let app = self.app.ok_or_else(|| {
+                openless_core::BackendError::new(
+                    openless_core::BackendErrorCode::Unsupported,
+                    "launch-at-login changes require a desktop application handle",
+                )
+            })?;
+            let result = if enabled {
+                app.autolaunch().enable()
+            } else {
+                app.autolaunch().disable()
+            };
+            return result.map_err(|error| Self::platform_error(error.to_string()));
+        }
+        #[cfg(mobile)]
+        {
+            let _ = enabled;
+            Err(openless_core::BackendError::new(
+                openless_core::BackendErrorCode::Unsupported,
+                "launch-at-login is unavailable on mobile",
+            ))
+        }
+    }
 }
 
 impl openless_core::SettingsRuntime for TauriSettingsRuntime<'_> {
@@ -52,6 +95,16 @@ impl openless_core::SettingsRuntime for TauriSettingsRuntime<'_> {
         plan: &openless_core::SettingsEffectPlan,
     ) -> Result<openless_core::SettingsEffectReceipt, openless_core::SettingsEffectFailure> {
         let mut receipt = openless_core::SettingsEffectReceipt::default();
+        if let Some(change) = &plan.launch_at_login {
+            if let Err(error) = self.apply_launch_at_login(change.next) {
+                return Err(openless_core::SettingsEffectFailure::after_side_effect(
+                    error, receipt,
+                ));
+            }
+            receipt
+                .applied
+                .push(openless_core::SettingsEffectKind::LaunchAtLogin);
+        }
         if let Some(change) = &plan.windows_keyboard {
             if let Err(error) = self.apply_windows_keyboard(&change.next) {
                 return Err(openless_core::SettingsEffectFailure::after_side_effect(
@@ -106,6 +159,11 @@ impl openless_core::SettingsRuntime for TauriSettingsRuntime<'_> {
         let mut failures = Vec::new();
         for effect in receipt.applied.iter().rev() {
             let result = match effect {
+                openless_core::SettingsEffectKind::LaunchAtLogin => plan
+                    .launch_at_login
+                    .as_ref()
+                    .map(|change| self.apply_launch_at_login(change.previous))
+                    .unwrap_or(Ok(())),
                 openless_core::SettingsEffectKind::Hotkeys => plan
                     .hotkeys
                     .as_ref()
@@ -147,13 +205,30 @@ impl openless_core::SettingsRuntime for TauriSettingsRuntime<'_> {
 }
 
 pub(crate) fn persist_settings(coord: &Coordinator, prefs: UserPreferences) -> Result<(), String> {
+    persist_settings_with_runtime(coord, prefs, &TauriSettingsRuntime::new(coord))
+}
+
+#[cfg(not(mobile))]
+fn persist_settings_with_app(
+    coord: &Coordinator,
+    app: &AppHandle,
+    prefs: UserPreferences,
+) -> Result<(), String> {
+    persist_settings_with_runtime(coord, prefs, &TauriSettingsRuntime::with_app(coord, app))
+}
+
+fn persist_settings_with_runtime(
+    coord: &Coordinator,
+    prefs: UserPreferences,
+    runtime: &dyn openless_core::SettingsRuntime,
+) -> Result<(), String> {
     let _host_guard = coord.lock_settings_host();
     coord
         .backend()
         .update_settings(
             prefs,
             openless_core::SettingsUpdateOptions::SETTINGS_DOCUMENT,
-            &TauriSettingsRuntime::new(coord),
+            runtime,
         )
         .map(|outcome| {
             if outcome.reconciled_hotkey_count > 0 {
@@ -201,7 +276,7 @@ pub async fn set_settings(
     // 广播给所有 webview。issue #205：QaPanel 跑在独立 webview，
     // 没有 HotkeySettingsContext，必须靠事件感知录音键变化，否则面板可见时
     // 用户改键会让浮窗里的 "{recordHotkey}" 文案一直停留在旧值。
-    persist_settings(&*coord, prefs)?;
+    persist_settings_with_app(&*coord, &app, prefs)?;
     let prefs = coord.backend().get_preferences();
     // 保存即同步胶囊样式原子：下一次录音的入场帧就携带新样式，不依赖 emit_capsule
     // 主线程闭包的 ~30Hz 同步（Windows 主线程拥塞时闭包延迟 → 整场显示旧样式）。

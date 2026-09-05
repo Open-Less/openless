@@ -281,6 +281,7 @@ async fn forwarded_launch_intents_use_core_state_and_semantic_host_actions() {
 struct RecordingSettingsEffects {
     hotkeys: Mutex<Vec<HotkeyRuntimeTarget>>,
     active_asr_providers: Mutex<Vec<String>>,
+    launch_at_login: Mutex<Vec<bool>>,
     fail_next_hotkey: std::sync::atomic::AtomicBool,
 }
 
@@ -310,6 +311,11 @@ impl LinuxSettingsEffects for RecordingSettingsEffects {
             .lock()
             .unwrap()
             .push(provider_id.to_string());
+        Ok(())
+    }
+
+    fn set_launch_at_login(&self, enabled: bool) -> Result<(), openless_linux_egui::BackendError> {
+        self.launch_at_login.lock().unwrap().push(enabled);
         Ok(())
     }
 }
@@ -379,6 +385,7 @@ fn linux_public_settings_contract_is_validated_transactional_and_runtime_backed(
         primary: "F9".to_string(),
         modifiers: vec!["ctrl".to_string()],
     };
+    runtime_failure.launch_at_login = true;
     let error = host
         .update_settings_strict(runtime_failure, revision)
         .expect_err("Linux runtime failure must fail the settings transaction");
@@ -393,6 +400,11 @@ fn linux_public_settings_contract_is_validated_transactional_and_runtime_backed(
     assert_eq!(applied.len(), 3, "next apply plus previous-target restore");
     assert_eq!(applied.last().unwrap().dictation, saved.dictation_hotkey);
     drop(applied);
+    assert_eq!(
+        effects.launch_at_login.lock().unwrap().as_slice(),
+        [true, false],
+        "a later commit failure must restore the previous launch-at-login state"
+    );
 
     let mut provider_change = backend.get_preferences();
     provider_change.active_asr_provider = "linux-fixture-asr".to_string();

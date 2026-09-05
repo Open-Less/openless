@@ -97,6 +97,8 @@ pub struct SettingsValueChange<T> {
 #[serde(rename_all = "camelCase")]
 pub struct SettingsEffectPlan {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_at_login: Option<SettingsValueChange<bool>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hotkeys: Option<SettingsValueChange<HotkeyRuntimeTarget>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_asr_provider: Option<SettingsValueChange<String>>,
@@ -111,6 +113,7 @@ impl SettingsEffectPlan {
         }
 
         Self {
+            launch_at_login: changed(previous.launch_at_login, next.launch_at_login),
             hotkeys: changed(previous.into(), next.into()),
             active_asr_provider: changed(
                 previous.active_asr_provider.clone(),
@@ -121,7 +124,8 @@ impl SettingsEffectPlan {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.hotkeys.is_none()
+        self.launch_at_login.is_none()
+            && self.hotkeys.is_none()
             && self.active_asr_provider.is_none()
             && self.windows_keyboard.is_none()
     }
@@ -130,6 +134,7 @@ impl SettingsEffectPlan {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SettingsEffectKind {
+    LaunchAtLogin,
     WindowsKeyboard,
     ActiveAsrProvider,
     Hotkeys,
@@ -208,4 +213,32 @@ pub struct SettingsUpdateOutcome {
 #[serde(rename_all = "camelCase")]
 pub struct StylePackRemovalOutcome {
     pub effects: SettingsEffectPlan,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn effect_plan_tracks_launch_at_login_as_a_reversible_change() {
+        let previous = UserPreferences::default();
+        let mut next = previous.clone();
+        next.launch_at_login = !previous.launch_at_login;
+
+        let plan = SettingsEffectPlan::between(&previous, &next);
+
+        assert_eq!(
+            plan.launch_at_login,
+            Some(SettingsValueChange {
+                previous: previous.launch_at_login,
+                next: next.launch_at_login,
+            })
+        );
+        assert!(!plan.is_empty());
+        let wire = serde_json::to_value(&plan).unwrap();
+        assert_eq!(
+            wire["launchAtLogin"],
+            serde_json::json!({ "previous": previous.launch_at_login, "next": next.launch_at_login })
+        );
+    }
 }
