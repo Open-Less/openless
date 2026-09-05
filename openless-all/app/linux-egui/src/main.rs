@@ -2501,6 +2501,49 @@ mod linux_app {
                     }
                 }
             }
+            if ui.button("导出错误日志").clicked() {
+                if let Some(backend) = self.backend() {
+                    let source = openless_linux_egui::log_path(&backend.config().data_dir);
+                    self.spawn(async move {
+                        let destination = tokio::task::spawn_blocking(|| {
+                            rfd::FileDialog::new()
+                                .add_filter("Log", &["log"])
+                                .set_file_name("openless.log")
+                                .save_file()
+                        })
+                        .await
+                        .map_err(|error| {
+                            BackendError::new(
+                                openless_core::BackendErrorCode::Internal,
+                                error.to_string(),
+                            )
+                        })?
+                        .ok_or_else(|| {
+                            BackendError::new(
+                                openless_core::BackendErrorCode::Cancelled,
+                                "日志导出已取消",
+                            )
+                        })?;
+                        tokio::task::spawn_blocking(move || {
+                            openless_linux_egui::export_error_log(&source, &destination)
+                        })
+                        .await
+                        .map_err(|error| {
+                            BackendError::new(
+                                openless_core::BackendErrorCode::Internal,
+                                error.to_string(),
+                            )
+                        })?
+                        .map_err(|error| {
+                            BackendError::new(
+                                openless_core::BackendErrorCode::Platform,
+                                error.to_string(),
+                            )
+                        })?;
+                        Ok("错误日志已导出".to_string())
+                    });
+                }
+            }
             ui.separator();
             ui.heading("软件更新");
             let channel = self
@@ -4675,6 +4718,9 @@ mod linux_app {
         let update_support = LinuxUpdateSupport::initialize(kind);
         let updater_available = update_support.supports_auto_update();
         let config = backend_config(tray_available, updater_available)?;
+        if let Err(error) = openless_linux_egui::init_file_logger(&config.data_dir) {
+            eprintln!("OpenLess file logger unavailable: {error}");
+        }
         let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| config.cache_dir.join("runtime"));

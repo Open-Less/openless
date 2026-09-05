@@ -13,6 +13,7 @@ tokio = { version = "1", features = ["io-util", "macros", "net", "process", "rt-
 fs2 = "0.4"
 futures-util = "0.3"
 log = "0.4"
+simplelog = "0.12"
 base64 = "0.22"
 minisign-verify = "0.2.5"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }

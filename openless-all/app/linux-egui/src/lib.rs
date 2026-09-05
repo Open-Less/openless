@@ -14,6 +14,7 @@ mod desktop;
 mod fcitx5;
 mod host_actions;
 mod hotkeys;
+mod logging;
 mod marketplace;
 mod popup;
 mod qa;
@@ -44,6 +45,7 @@ pub use fcitx5::{
 };
 pub use host_actions::LinuxHostActions;
 pub use hotkeys::{Fcitx5HotkeyListener, LinuxHotkeyEvent};
+pub use logging::{export_error_log, init_file_logger, log_path};
 pub use popup::{
     read_jsonl, run_popup, write_jsonl, ApplyOutcome as PopupApplyOutcome, CapsulePopupState,
     HostToPopup, PopupActionGuard, PopupChatMessage, PopupKind, PopupSendError, PopupState,
