@@ -22,10 +22,11 @@ mod linux_app {
         TranscriptAccumulator, UserPreferences,
     };
     use openless_linux_egui::{
-        drain_events, ensure_fcitx5_plugin_installed, EventDrainOutcome, Fcitx5HotkeyListener,
-        FcitxPluginInstallPlan, FcitxPluginStatus, LinuxBackendBuilder, LinuxCapabilitySnapshot,
-        LinuxLaunchIntent, LinuxNativeRuntime, LinuxPackageKind, LinuxResourceLayout,
-        SingleInstanceBroker, SingleInstanceRole,
+        drain_events, ensure_fcitx5_plugin_installed, write_jsonl, EventDrainOutcome,
+        Fcitx5HotkeyListener, FcitxPluginInstallPlan, FcitxPluginStatus, HostToPopup,
+        LinuxBackendBuilder, LinuxCapabilitySnapshot, LinuxLaunchIntent, LinuxNativeRuntime,
+        LinuxPackageKind, LinuxResourceLayout, PopupKind, PopupState, PopupToHost,
+        SingleInstanceBroker, SingleInstanceRole, POPUP_PROTOCOL_VERSION,
     };
 
     enum UiResult {
@@ -2067,13 +2068,249 @@ mod linux_app {
         }
     }
 
+    struct NativePopupApp {
+        kind: PopupKind,
+        state: PopupState,
+        incoming: mpsc::Receiver<HostToPopup>,
+        qa_input: String,
+        outgoing_sequence: u64,
+        ready_sent: bool,
+    }
+
+    impl NativePopupApp {
+        fn send(&mut self, message: PopupToHost) {
+            let mut stdout = std::io::stdout().lock();
+            if let Err(error) = write_jsonl(&mut stdout, &message) {
+                eprintln!("OpenLess popup output failed: {error}");
+            }
+        }
+
+        fn next_sequence(&mut self) -> u64 {
+            self.outgoing_sequence = self.outgoing_sequence.saturating_add(1);
+            self.outgoing_sequence
+        }
+
+        fn session_id(&self) -> Option<String> {
+            self.state.session_id.clone()
+        }
+
+        fn dismiss(&mut self, ctx: &egui::Context) {
+            let Some(session_id) = self.session_id() else {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                return;
+            };
+            let version = POPUP_PROTOCOL_VERSION;
+            let sequence = self.next_sequence();
+            let message = match self.kind {
+                PopupKind::Qa => PopupToHost::DismissQa {
+                    version,
+                    session_id,
+                    sequence,
+                },
+                PopupKind::Preview => PopupToHost::CancelPreview {
+                    version,
+                    session_id,
+                    sequence,
+                },
+                PopupKind::Capsule => PopupToHost::DismissCapsule {
+                    version,
+                    session_id,
+                    sequence,
+                },
+            };
+            self.send(message);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+    }
+
+    impl eframe::App for NativePopupApp {
+        fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+            while let Ok(message) = self.incoming.try_recv() {
+                let shutdown = matches!(message, HostToPopup::Shutdown { .. });
+                let outcome = self.state.apply(message);
+                if outcome == openless_linux_egui::PopupApplyOutcome::Applied {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(self.state.visible));
+                }
+                if shutdown || self.state.shutdown_requested {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    return;
+                }
+            }
+            if !self.ready_sent {
+                if let Some(session_id) = self.session_id() {
+                    let sequence = self.next_sequence();
+                    self.send(PopupToHost::Ready {
+                        version: POPUP_PROTOCOL_VERSION,
+                        session_id,
+                        sequence,
+                        kind: self.kind,
+                    });
+                    self.ready_sent = true;
+                }
+            }
+            if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+                self.dismiss(ctx);
+                return;
+            }
+            egui::CentralPanel::default()
+                .frame(
+                    egui::Frame::NONE
+                        .fill(theme::SURFACE)
+                        .corner_radius(egui::CornerRadius::same(12))
+                        .inner_margin(egui::Margin::same(18)),
+                )
+                .show(ctx, |ui| match self.kind {
+                    PopupKind::Preview => {
+                        ui.heading("插入预览");
+                        ui.label(&self.state.preview.source);
+                        ui.add(
+                            egui::TextEdit::multiline(&mut self.state.preview.text)
+                                .desired_rows(6)
+                                .desired_width(f32::INFINITY),
+                        );
+                        ui.horizontal(|ui| {
+                            if ui.button("取消").clicked() {
+                                self.dismiss(ctx);
+                            }
+                            if ui.button("插入").clicked() {
+                                if let Some(session_id) = self.session_id() {
+                                    let sequence = self.next_sequence();
+                                    self.send(PopupToHost::ConfirmPreview {
+                                        version: POPUP_PROTOCOL_VERSION,
+                                        session_id,
+                                        sequence,
+                                        text: self.state.preview.text.clone(),
+                                    });
+                                }
+                            }
+                        });
+                    }
+                    PopupKind::Qa => {
+                        ui.heading("划词追问");
+                        if let Some(selection) = &self.state.qa.selection_preview {
+                            ui.label(egui::RichText::new(selection).italics().color(theme::INK_3));
+                        }
+                        egui::ScrollArea::vertical()
+                            .max_height(300.0)
+                            .show(ui, |ui| {
+                                for message in &self.state.qa.messages {
+                                    ui.label(egui::RichText::new(&message.role).strong());
+                                    ui.label(&message.content);
+                                }
+                                if !self.state.qa.streaming_answer.is_empty() {
+                                    ui.label(&self.state.qa.streaming_answer);
+                                }
+                                if let Some(error) = &self.state.qa.error {
+                                    ui.colored_label(egui::Color32::RED, error);
+                                }
+                            });
+                        ui.text_edit_singleline(&mut self.qa_input);
+                        ui.horizontal(|ui| {
+                            if ui.button("关闭").clicked() {
+                                self.dismiss(ctx);
+                            }
+                            if ui.button("发送").clicked() && !self.qa_input.trim().is_empty() {
+                                if let Some(session_id) = self.session_id() {
+                                    let sequence = self.next_sequence();
+                                    let text = std::mem::take(&mut self.qa_input);
+                                    self.send(PopupToHost::SubmitQa {
+                                        version: POPUP_PROTOCOL_VERSION,
+                                        session_id,
+                                        sequence,
+                                        text,
+                                    });
+                                }
+                            }
+                        });
+                    }
+                    PopupKind::Capsule => {
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.strong(&self.state.capsule.phase);
+                        });
+                        if !self.state.capsule.text.is_empty() {
+                            ui.label(&self.state.capsule.text);
+                        }
+                        if let Some(level) = self.state.capsule.audio_level {
+                            ui.add(egui::ProgressBar::new(level.clamp(0.0, 1.0)));
+                        }
+                    }
+                });
+            ctx.request_repaint_after(Duration::from_millis(33));
+        }
+    }
+
+    fn popup_kind(args: &[String]) -> Option<PopupKind> {
+        if !args.iter().any(|arg| arg == "--openless-egui-popup") {
+            return None;
+        }
+        if args.iter().any(|arg| arg == "--qa") {
+            Some(PopupKind::Qa)
+        } else if args.iter().any(|arg| arg == "--preview") {
+            Some(PopupKind::Preview)
+        } else if args.iter().any(|arg| arg == "--capsule") {
+            Some(PopupKind::Capsule)
+        } else {
+            None
+        }
+    }
+
+    fn run_popup_process(kind: PopupKind) -> Result<(), String> {
+        let (tx, rx) = mpsc::sync_channel(256);
+        std::thread::Builder::new()
+            .name("openless-popup-input".into())
+            .spawn(move || {
+                let stdin = std::io::stdin();
+                let mut reader = std::io::BufReader::new(stdin.lock());
+                if let Err(error) = openless_linux_egui::run_popup(&mut reader, |message| {
+                    let _ = tx.try_send(message);
+                }) {
+                    eprintln!("OpenLess popup input failed: {error}");
+                }
+            })
+            .map_err(|error| error.to_string())?;
+        let size = match kind {
+            PopupKind::Qa => [520.0, 520.0],
+            PopupKind::Preview => [480.0, 300.0],
+            PopupKind::Capsule => [340.0, 112.0],
+        };
+        let options = eframe::NativeOptions {
+            viewport: egui::ViewportBuilder::default()
+                .with_title("OpenLess")
+                .with_inner_size(size)
+                .with_decorations(false)
+                .with_always_on_top()
+                .with_visible(false),
+            ..Default::default()
+        };
+        eframe::run_native(
+            "OpenLess Popup",
+            options,
+            Box::new(move |cc| {
+                theme::install(&cc.egui_ctx);
+                Ok(Box::new(NativePopupApp {
+                    kind,
+                    state: PopupState::default(),
+                    incoming: rx,
+                    qa_input: String::new(),
+                    outgoing_sequence: 0,
+                    ready_sent: false,
+                }))
+            }),
+        )
+        .map_err(|error| error.to_string())
+    }
+
     pub fn run() -> Result<(), String> {
+        let args = std::env::args().collect::<Vec<_>>();
+        if let Some(kind) = popup_kind(&args) {
+            return run_popup_process(kind);
+        }
         let tokio = Arc::new(tokio::runtime::Runtime::new().map_err(|error| error.to_string())?);
         let config = backend_config()?;
         let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| config.cache_dir.join("runtime"));
-        let args = std::env::args().collect::<Vec<_>>();
         let broker = match SingleInstanceBroker::acquire_or_forward(
             &runtime_dir.join("openless.lock"),
             &runtime_dir.join("openless.sock"),
