@@ -48,6 +48,7 @@ mod linux_app {
         },
         ProviderMutation(Result<String, String>),
         Library(Result<LibraryPanel, String>),
+        SettingsSaved(Box<Result<openless_core::SettingsUpdateOutcome, String>>),
         Marketplace(Result<Vec<openless_core::MarketplaceListItem>, String>),
         MarketplaceFlow(Result<openless_core::OAuthDeviceFlow, String>),
         MarketplaceAuthPoll(Result<openless_core::OAuthPollResult, String>),
@@ -83,7 +84,7 @@ mod linux_app {
         vocab_presets: Vec<openless_core::VocabPreset>,
     }
 
-    #[derive(Default)]
+    #[derive(Default, Clone, Copy)]
     struct SettingsDirty {
         streaming_insert: bool,
         coding_agent_enabled: bool,
@@ -234,6 +235,9 @@ mod linux_app {
         marketplace_my_packs: Vec<openless_core::MarketplaceMyPackItem>,
         marketplace_my_likes: Vec<String>,
         style_editor: Option<openless_core::StylePack>,
+        style_hotkey_pack_id: String,
+        style_hotkey_primary: String,
+        style_hotkey_modifiers: String,
         status: String,
         startup_error: Option<String>,
         active_page: shell::Page,
@@ -318,6 +322,9 @@ mod linux_app {
                         marketplace_my_packs: Vec::new(),
                         marketplace_my_likes: Vec::new(),
                         style_editor: None,
+                        style_hotkey_pack_id: String::new(),
+                        style_hotkey_primary: String::new(),
+                        style_hotkey_modifiers: String::new(),
                         status: "Core 2.0 已启动".to_string(),
                         startup_error: None,
                         active_page: shell::Page::Overview,
@@ -394,6 +401,9 @@ mod linux_app {
                     marketplace_my_packs: Vec::new(),
                     marketplace_my_likes: Vec::new(),
                     style_editor: None,
+                    style_hotkey_pack_id: String::new(),
+                    style_hotkey_primary: String::new(),
+                    style_hotkey_modifiers: String::new(),
                     status: "启动失败".to_string(),
                     startup_error: Some(error),
                     active_page: shell::Page::Overview,
@@ -1537,6 +1547,27 @@ mod linux_app {
                         self.vocab_presets = library.vocab_presets;
                     }
                     UiResult::Library(Err(error)) => self.status = error,
+                    UiResult::SettingsSaved(result) => match *result {
+                        Ok(outcome) => {
+                            self.preferences = Some(outcome.preferences.clone());
+                            if let Some(native) = &self.native {
+                                self.snapshot = Some(native.host().snapshot());
+                            }
+                            self.settings_dirty = SettingsDirty::default();
+                            self.status = "设置已保存".to_string();
+                            if let Some(backend) = self.backend() {
+                                let config = openless_core::RemoteInputConfig {
+                                    enabled: outcome.preferences.remote_input_enabled,
+                                    port: outcome.preferences.remote_input_port,
+                                };
+                                self.spawn(async move {
+                                    backend.services().remote_input.configure(config).await?;
+                                    Ok("远程输入状态已更新".to_string())
+                                });
+                            }
+                        }
+                        Err(error) => self.status = error,
+                    },
                     UiResult::Marketplace(Ok(items)) => {
                         self.status = format!("Marketplace 已加载 {} 个风格包", items.len());
                         self.marketplace_items = items;
@@ -2357,7 +2388,6 @@ mod linux_app {
             }
             self.provider_management_ui(ui);
             ui.separator();
-            let mut remote_update = None;
             let mut save_settings = false;
             if let Some(preferences) = self.preferences.as_mut() {
                 self.settings_dirty.streaming_insert |= ui
@@ -2413,40 +2443,32 @@ mod linux_app {
                 if let (Some(native), Some(draft), Some(snapshot)) =
                     (&self.native, self.preferences.clone(), &self.snapshot)
                 {
-                    let first = native
-                        .host()
-                        .save_settings(draft.clone(), snapshot.preferences_revision);
-                    let outcome = match first {
-                        Err(error) if error.code == openless_core::BackendErrorCode::Busy => {
-                            let latest_snapshot = native.host().snapshot();
-                            let latest = native.host().backend().get_preferences();
-                            let merged = self.settings_dirty.merge(&latest, &draft);
-                            native
-                                .host()
-                                .save_settings(merged, latest_snapshot.preferences_revision)
-                        }
-                        result => result,
-                    };
-                    match outcome {
-                        Ok(outcome) => {
-                            self.preferences = Some(outcome.preferences.clone());
-                            self.snapshot = Some(native.host().snapshot());
-                            self.settings_dirty = SettingsDirty::default();
-                            self.status = "设置已保存".to_string();
-                            remote_update = Some(openless_core::RemoteInputConfig {
-                                enabled: outcome.preferences.remote_input_enabled,
-                                port: outcome.preferences.remote_input_port,
-                            });
-                        }
-                        Err(error) => self.status = error.to_string(),
-                    }
+                    let host = native.host_arc();
+                    let revision = snapshot.preferences_revision;
+                    let dirty = self.settings_dirty;
+                    let tx = self.tx.clone();
+                    self.tokio.spawn(async move {
+                        let outcome = tokio::task::spawn_blocking(move || {
+                            match host.save_settings(draft.clone(), revision) {
+                                Err(error)
+                                    if error.code == openless_core::BackendErrorCode::Busy =>
+                                {
+                                    let latest_snapshot = host.snapshot();
+                                    let latest = host.backend().get_preferences();
+                                    host.save_settings(
+                                        dirty.merge(&latest, &draft),
+                                        latest_snapshot.preferences_revision,
+                                    )
+                                }
+                                result => result,
+                            }
+                        })
+                        .await
+                        .map_err(|error| error.to_string())
+                        .and_then(|result| result.map_err(|error| error.to_string()));
+                        let _ = tx.send(UiResult::SettingsSaved(Box::new(outcome)));
+                    });
                 }
-            }
-            if let (Some(config), Some(backend)) = (remote_update, self.backend()) {
-                self.spawn(async move {
-                    backend.services().remote_input.configure(config).await?;
-                    Ok("远程输入状态已更新".to_string())
-                });
             }
             if let Some((remote, pin)) = &self.remote_access {
                 ui.label(if remote.running {
@@ -2457,6 +2479,10 @@ mod linux_app {
                     "远程输入：已停止"
                 });
                 if remote.enabled {
+                    ui.label(format!(
+                        "语言：{} · 连接数：{}",
+                        remote.locale, remote.connection_count
+                    ));
                     ui.monospace(format!("PIN：{pin}"));
                     for url in &remote.urls {
                         ui.monospace(url);
@@ -2771,6 +2797,105 @@ mod linux_app {
 
         fn styles_ui(&mut self, ui: &mut egui::Ui) {
             ui.label("风格包数据直接来自 Core repository；运行时 Prompt 由 Core 组合。");
+            ui.group(|ui| {
+                ui.strong("风格包直达快捷键");
+                let previous_id = self.style_hotkey_pack_id.clone();
+                egui::ComboBox::from_id_salt("style-hotkey-pack")
+                    .selected_text(
+                        self.style_packs
+                            .iter()
+                            .find(|pack| pack.id == self.style_hotkey_pack_id)
+                            .map(|pack| pack.name.as_str())
+                            .unwrap_or("选择风格包"),
+                    )
+                    .show_ui(ui, |ui| {
+                        for pack in &self.style_packs {
+                            ui.selectable_value(
+                                &mut self.style_hotkey_pack_id,
+                                pack.id.clone(),
+                                &pack.name,
+                            );
+                        }
+                    });
+                if previous_id != self.style_hotkey_pack_id {
+                    let binding = self.preferences.as_ref().and_then(|preferences| {
+                        preferences
+                            .style_pack_hotkeys
+                            .iter()
+                            .find(|hotkey| hotkey.pack_id == self.style_hotkey_pack_id)
+                            .map(|hotkey| hotkey.binding.clone())
+                    });
+                    self.style_hotkey_primary = binding
+                        .as_ref()
+                        .map(|binding| binding.primary.clone())
+                        .unwrap_or_default();
+                    self.style_hotkey_modifiers = binding
+                        .map(|binding| binding.modifiers.join("+"))
+                        .unwrap_or_default();
+                }
+                ui.horizontal(|ui| {
+                    ui.label("主键");
+                    ui.text_edit_singleline(&mut self.style_hotkey_primary);
+                    ui.label("修饰键（+ 分隔）");
+                    ui.text_edit_singleline(&mut self.style_hotkey_modifiers);
+                });
+                let save = ui
+                    .add_enabled(
+                        !self.style_hotkey_pack_id.is_empty()
+                            && !self.style_hotkey_primary.trim().is_empty(),
+                        egui::Button::new("保存直达快捷键"),
+                    )
+                    .clicked();
+                let remove = ui
+                    .add_enabled(
+                        !self.style_hotkey_pack_id.is_empty(),
+                        egui::Button::new("移除直达快捷键"),
+                    )
+                    .clicked();
+                if save || remove {
+                    if let (Some(native), Some(mut preferences), Some(snapshot)) =
+                        (&self.native, self.preferences.clone(), &self.snapshot)
+                    {
+                        let pack_id = self.style_hotkey_pack_id.clone();
+                        let desired = save.then(|| openless_core::shared_types::ShortcutBinding {
+                            primary: self.style_hotkey_primary.trim().to_string(),
+                            modifiers: self
+                                .style_hotkey_modifiers
+                                .split('+')
+                                .map(str::trim)
+                                .filter(|modifier| !modifier.is_empty())
+                                .map(ToOwned::to_owned)
+                                .collect(),
+                        });
+                        set_style_pack_hotkey(&mut preferences, &pack_id, desired.clone());
+                        let host = native.host_arc();
+                        let revision = snapshot.preferences_revision;
+                        self.spawn(async move {
+                            tokio::task::spawn_blocking(move || {
+                                match host.update_settings_strict(preferences, revision) {
+                                    Err(error)
+                                        if error.code == openless_core::BackendErrorCode::Busy =>
+                                    {
+                                        let mut latest = host.backend().get_preferences();
+                                        set_style_pack_hotkey(&mut latest, &pack_id, desired);
+                                        let revision = host.snapshot().preferences_revision;
+                                        host.update_settings_strict(latest, revision)
+                                    }
+                                    result => result,
+                                }
+                            })
+                            .await
+                            .map_err(|error| {
+                                BackendError::new(
+                                    openless_core::BackendErrorCode::Internal,
+                                    error.to_string(),
+                                )
+                            })??;
+                            Ok("风格包快捷键已更新".to_string())
+                        });
+                    }
+                }
+            });
             ui.horizontal(|ui| {
                 if ui.button("新建风格包").clicked() {
                     self.style_editor = Some(openless_core::StylePack {
@@ -3994,6 +4119,24 @@ mod linux_app {
         }
     }
 
+    fn set_style_pack_hotkey(
+        preferences: &mut UserPreferences,
+        pack_id: &str,
+        binding: Option<openless_core::shared_types::ShortcutBinding>,
+    ) {
+        preferences
+            .style_pack_hotkeys
+            .retain(|hotkey| hotkey.pack_id != pack_id);
+        if let Some(binding) = binding {
+            preferences
+                .style_pack_hotkeys
+                .push(openless_core::shared_types::StylePackHotkey {
+                    pack_id: pack_id.to_string(),
+                    binding,
+                });
+        }
+    }
+
     fn package_kind() -> LinuxPackageKind {
         if std::env::var_os("APPDIR").is_some() {
             LinuxPackageKind::AppImage
@@ -4738,6 +4881,26 @@ mod linux_app {
 
             assert!(merged.streaming_insert);
             assert_eq!(merged.remote_input_port, 9443);
+        }
+
+        #[test]
+        fn style_pack_hotkey_update_preserves_other_pack_bindings() {
+            let mut preferences = UserPreferences::default();
+            let first = openless_core::shared_types::ShortcutBinding {
+                primary: "1".into(),
+                modifiers: vec!["ctrl".into()],
+            };
+            let second = openless_core::shared_types::ShortcutBinding {
+                primary: "2".into(),
+                modifiers: vec!["alt".into()],
+            };
+            set_style_pack_hotkey(&mut preferences, "first", Some(first.clone()));
+            set_style_pack_hotkey(&mut preferences, "second", Some(second.clone()));
+            set_style_pack_hotkey(&mut preferences, "first", None);
+
+            assert_eq!(preferences.style_pack_hotkeys.len(), 1);
+            assert_eq!(preferences.style_pack_hotkeys[0].pack_id, "second");
+            assert_eq!(preferences.style_pack_hotkeys[0].binding, second);
         }
     }
 }
