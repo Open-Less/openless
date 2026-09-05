@@ -127,6 +127,15 @@ impl HostToPopup {
             | Self::Shutdown { sequence, .. } => *sequence,
         }
     }
+
+    pub fn content_kind(&self) -> Option<PopupKind> {
+        match self {
+            Self::Preview { .. } => Some(PopupKind::Preview),
+            Self::QaSnapshot { .. } => Some(PopupKind::Qa),
+            Self::Capsule { .. } => Some(PopupKind::Capsule),
+            Self::Hide { .. } | Self::Shutdown { .. } => None,
+        }
+    }
 }
 
 /// Actions written by a popup to the host's stdout.
@@ -184,6 +193,94 @@ impl PopupToHost {
             | Self::DismissQa { version, .. }
             | Self::DismissCapsule { version, .. } => *version,
         }
+    }
+
+    pub fn session_id(&self) -> &str {
+        match self {
+            Self::Ready { session_id, .. }
+            | Self::ConfirmPreview { session_id, .. }
+            | Self::CancelPreview { session_id, .. }
+            | Self::SubmitQa { session_id, .. }
+            | Self::ToggleQaRecording { session_id, .. }
+            | Self::DismissQa { session_id, .. }
+            | Self::DismissCapsule { session_id, .. } => session_id,
+        }
+    }
+
+    pub fn sequence(&self) -> u64 {
+        match self {
+            Self::Ready { sequence, .. }
+            | Self::ConfirmPreview { sequence, .. }
+            | Self::CancelPreview { sequence, .. }
+            | Self::SubmitQa { sequence, .. }
+            | Self::ToggleQaRecording { sequence, .. }
+            | Self::DismissQa { sequence, .. }
+            | Self::DismissCapsule { sequence, .. } => *sequence,
+        }
+    }
+
+    pub fn kind(&self) -> PopupKind {
+        match self {
+            Self::Ready { kind, .. } => *kind,
+            Self::ConfirmPreview { .. } | Self::CancelPreview { .. } => PopupKind::Preview,
+            Self::SubmitQa { .. } | Self::ToggleQaRecording { .. } | Self::DismissQa { .. } => {
+                PopupKind::Qa
+            }
+            Self::DismissCapsule { .. } => PopupKind::Capsule,
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct PopupActionSlot {
+    session_id: Option<String>,
+    sequence: u64,
+}
+
+/// Rejects stale, cross-session and cross-kind actions received from popup
+/// children. Each newly spawned process resets only its own sequence domain.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct PopupActionGuard {
+    qa: PopupActionSlot,
+    preview: PopupActionSlot,
+    capsule: PopupActionSlot,
+}
+
+impl PopupActionGuard {
+    fn slot_mut(&mut self, kind: PopupKind) -> &mut PopupActionSlot {
+        match kind {
+            PopupKind::Qa => &mut self.qa,
+            PopupKind::Preview => &mut self.preview,
+            PopupKind::Capsule => &mut self.capsule,
+        }
+    }
+
+    pub fn reset(&mut self, kind: PopupKind) {
+        *self.slot_mut(kind) = PopupActionSlot::default();
+    }
+
+    pub fn accept(
+        &mut self,
+        process_kind: PopupKind,
+        message: &PopupToHost,
+        expected_session_id: &str,
+    ) -> bool {
+        if message.version() != POPUP_PROTOCOL_VERSION
+            || message.kind() != process_kind
+            || message.session_id() != expected_session_id
+        {
+            return false;
+        }
+        let slot = self.slot_mut(process_kind);
+        if slot.session_id.as_deref() != Some(expected_session_id) {
+            slot.session_id = Some(expected_session_id.to_owned());
+            slot.sequence = 0;
+        }
+        if message.sequence() <= slot.sequence {
+            return false;
+        }
+        slot.sequence = message.sequence();
+        true
     }
 }
 
@@ -837,6 +934,65 @@ mod tests {
         }
         assert_eq!(state.apply(retired), ApplyOutcome::Stale);
         assert_eq!(state.preview.text, "next");
+    }
+
+    #[test]
+    fn popup_action_guard_rejects_replay_cross_session_and_cross_kind() {
+        let mut guard = PopupActionGuard::default();
+        let submit = PopupToHost::SubmitQa {
+            version: POPUP_PROTOCOL_VERSION,
+            session_id: "qa-session".into(),
+            sequence: 2,
+            text: "question".into(),
+        };
+        assert!(guard.accept(PopupKind::Qa, &submit, "qa-session"));
+        assert!(!guard.accept(PopupKind::Qa, &submit, "qa-session"));
+
+        let stale = PopupToHost::DismissQa {
+            version: POPUP_PROTOCOL_VERSION,
+            session_id: "qa-session".into(),
+            sequence: 1,
+        };
+        assert!(!guard.accept(PopupKind::Qa, &stale, "qa-session"));
+        assert!(!guard.accept(PopupKind::Preview, &submit, "qa-session"));
+        assert!(!guard.accept(PopupKind::Qa, &submit, "new-session"));
+    }
+
+    #[test]
+    fn popup_action_guard_reset_starts_a_new_child_sequence_domain() {
+        let mut guard = PopupActionGuard::default();
+        let ready = PopupToHost::Ready {
+            version: POPUP_PROTOCOL_VERSION,
+            session_id: "session".into(),
+            sequence: 1,
+            kind: PopupKind::Preview,
+        };
+        assert!(guard.accept(PopupKind::Preview, &ready, "session"));
+        assert!(!guard.accept(PopupKind::Preview, &ready, "session"));
+        guard.reset(PopupKind::Preview);
+        assert!(guard.accept(PopupKind::Preview, &ready, "session"));
+    }
+
+    #[test]
+    fn popup_messages_are_bound_to_their_process_kind() {
+        assert_eq!(
+            preview("text".into()).content_kind(),
+            Some(PopupKind::Preview)
+        );
+        let hide = HostToPopup::Hide {
+            version: POPUP_PROTOCOL_VERSION,
+            session_id: "session".into(),
+            sequence: 8,
+        };
+        assert_eq!(hide.content_kind(), None);
+
+        let wrong_version = PopupToHost::DismissCapsule {
+            version: POPUP_PROTOCOL_VERSION + 1,
+            session_id: "session".into(),
+            sequence: 1,
+        };
+        let mut guard = PopupActionGuard::default();
+        assert!(!guard.accept(PopupKind::Capsule, &wrong_version, "session"));
     }
 
     #[tokio::test]

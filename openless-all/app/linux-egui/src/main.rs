@@ -22,13 +22,13 @@ mod linux_app {
         TranscriptAccumulator, UserPreferences,
     };
     use openless_linux_egui::{
-        drain_events, ensure_fcitx5_plugin_installed, open_external, write_jsonl,
+        drain_events, ensure_fcitx5_plugin_installed, notify, open_external, write_jsonl,
         EventDrainOutcome, Fcitx5HotkeyListener, FcitxPluginInstallPlan, FcitxPluginStatus,
         HostToPopup, LinuxBackendBuilder, LinuxCapabilitySnapshot, LinuxLaunchIntent,
         LinuxNativeRuntime, LinuxPackageKind, LinuxResourceLayout, LinuxUpdateSupport,
-        PopupChatMessage, PopupKind, PopupState, PopupSupervisor, PopupSupervisorEvent,
-        PopupToHost, SingleInstanceBroker, SingleInstanceRole, UpdateManifest, UpdateSchedule,
-        POPUP_PROTOCOL_VERSION,
+        Notification, PopupActionGuard, PopupChatMessage, PopupKind, PopupState, PopupSupervisor,
+        PopupSupervisorEvent, PopupToHost, SingleInstanceBroker, SingleInstanceRole,
+        UpdateManifest, UpdateSchedule, POPUP_PROTOCOL_VERSION,
     };
 
     enum UiResult {
@@ -212,6 +212,7 @@ mod linux_app {
         qa_popup: Option<PopupSupervisor>,
         preview_popup: Option<PopupSupervisor>,
         capsule_popup: Option<PopupSupervisor>,
+        popup_action_guard: PopupActionGuard,
         tray: Option<openless_linux_egui::LinuxTray>,
         exit_requested: bool,
         update_support: LinuxUpdateSupport,
@@ -291,6 +292,7 @@ mod linux_app {
                         qa_popup: None,
                         preview_popup: None,
                         capsule_popup: None,
+                        popup_action_guard: PopupActionGuard::default(),
                         tray,
                         exit_requested: false,
                         update_support,
@@ -362,6 +364,7 @@ mod linux_app {
                     qa_popup: None,
                     preview_popup: None,
                     capsule_popup: None,
+                    popup_action_guard: PopupActionGuard::default(),
                     tray,
                     exit_requested: false,
                     update_support,
@@ -406,6 +409,7 @@ mod linux_app {
             }
             match std::env::current_exe() {
                 Ok(executable) => {
+                    self.popup_action_guard.reset(kind);
                     let supervisor = PopupSupervisor::spawn(self.tokio.handle(), executable, kind);
                     *self.popup_slot(kind) = Some(supervisor);
                 }
@@ -414,9 +418,17 @@ mod linux_app {
         }
 
         fn send_popup(&mut self, kind: PopupKind, message: HostToPopup) {
+            let retry = message.clone();
             if let Some(supervisor) = self.popup_slot(kind) {
                 if let Err(error) = supervisor.try_send(message) {
-                    self.status = format!("原生弹窗通道不可用：{error:?}");
+                    self.status = format!("原生弹窗通道重建：{error:?}");
+                    *self.popup_slot(kind) = None;
+                    self.ensure_popup(kind);
+                    if let Some(supervisor) = self.popup_slot(kind) {
+                        if let Err(retry_error) = supervisor.try_send(retry) {
+                            self.status = format!("原生弹窗恢复失败：{retry_error:?}");
+                        }
+                    }
                 }
             }
         }
@@ -430,6 +442,25 @@ mod linux_app {
                     sequence,
                 },
             );
+        }
+
+        fn expected_popup_session(&self, kind: PopupKind) -> Option<String> {
+            match kind {
+                PopupKind::Qa => self
+                    .qa_state
+                    .as_ref()
+                    .map(|state| state.session_id.clone().unwrap_or_else(|| "qa".to_string())),
+                PopupKind::Preview => self
+                    .selection
+                    .as_ref()
+                    .and_then(|selection| selection.session_id)
+                    .map(|session_id| session_id.to_string()),
+                PopupKind::Capsule => self
+                    .snapshot
+                    .as_ref()
+                    .and_then(|snapshot| snapshot.dictation.session_id)
+                    .map(|session_id| session_id.to_string()),
+            }
         }
 
         fn show_qa_popup(&mut self) {
@@ -516,6 +547,19 @@ mod linux_app {
                 }
             }
             for (kind, event) in events {
+                if let PopupSupervisorEvent::Message(message) = &event {
+                    let Some(expected_session) = self.expected_popup_session(kind) else {
+                        self.status = "已忽略没有活动会话的弹窗操作".to_string();
+                        continue;
+                    };
+                    if !self
+                        .popup_action_guard
+                        .accept(kind, message, &expected_session)
+                    {
+                        self.status = "已忽略迟到、重复或跨类型的弹窗操作".to_string();
+                        continue;
+                    }
+                }
                 match event {
                     PopupSupervisorEvent::Message(PopupToHost::SubmitQa {
                         session_id,
@@ -604,8 +648,16 @@ mod linux_app {
                         }
                         Err(error) => self.status = format!("弹窗 session 无效：{error}"),
                     },
-                    PopupSupervisorEvent::Message(PopupToHost::Ready { .. })
-                    | PopupSupervisorEvent::Message(PopupToHost::DismissCapsule { .. }) => {}
+                    PopupSupervisorEvent::Message(PopupToHost::Ready { .. }) => match kind {
+                        PopupKind::Qa => self.show_qa_popup(),
+                        PopupKind::Preview => self.show_selection_popup(),
+                        PopupKind::Capsule => self.show_capsule_popup(),
+                    },
+                    PopupSupervisorEvent::Message(PopupToHost::DismissCapsule { .. }) => {
+                        if let Some(snapshot) = self.snapshot.as_mut() {
+                            snapshot.dictation.message = None;
+                        }
+                    }
                     PopupSupervisorEvent::Message(
                         PopupToHost::SubmitQa { .. }
                         | PopupToHost::ToggleQaRecording { .. }
@@ -625,6 +677,22 @@ mod linux_app {
                             self.status = format!("原生弹窗异常退出：{code:?}");
                         }
                         *self.popup_slot(kind) = None;
+                        if crashed {
+                            match kind {
+                                PopupKind::Qa if self.qa_visible => self.show_qa_popup(),
+                                PopupKind::Preview if self.selection_preview_visible => {
+                                    self.show_selection_popup();
+                                }
+                                PopupKind::Capsule
+                                    if self.snapshot.as_ref().is_some_and(|snapshot| {
+                                        snapshot.dictation.phase != DictationPhase::Idle
+                                    }) =>
+                                {
+                                    self.show_capsule_popup();
+                                }
+                                _ => {}
+                            }
+                        }
                     }
                 }
             }
@@ -1210,7 +1278,19 @@ mod linux_app {
                         HostAction::FocusMain => {
                             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                         }
-                        HostAction::Notify(message) => self.status = message,
+                        HostAction::Notify(message) => {
+                            self.status = message.clone();
+                            std::thread::spawn(move || {
+                                if let Err(error) = notify(Notification {
+                                    summary: "OpenLess",
+                                    body: &message,
+                                    icon: "openless",
+                                    timeout_ms: 0,
+                                }) {
+                                    eprintln!("OpenLess desktop notification failed: {error}");
+                                }
+                            });
+                        }
                         HostAction::OpenExternalUrl(url) | HostAction::OpenSystemSettings(url) => {
                             std::thread::spawn(move || {
                                 if let Err(error) = open_external(&url) {
@@ -3846,16 +3926,17 @@ mod linux_app {
         kind: PopupKind,
         state: PopupState,
         incoming: mpsc::Receiver<HostToPopup>,
+        outgoing: mpsc::Sender<PopupToHost>,
         qa_input: String,
         outgoing_sequence: u64,
         ready_sent: bool,
+        preview_focus_requested: bool,
     }
 
     impl NativePopupApp {
         fn send(&mut self, message: PopupToHost) {
-            let mut stdout = std::io::stdout().lock();
-            if let Err(error) = write_jsonl(&mut stdout, &message) {
-                eprintln!("OpenLess popup output failed: {error}");
+            if self.outgoing.send(message).is_err() {
+                eprintln!("OpenLess popup output channel closed");
             }
         }
 
@@ -3897,9 +3978,191 @@ mod linux_app {
         }
     }
 
+    fn popup_heading(ui: &mut egui::Ui, title: &str) {
+        let response = ui
+            .horizontal(|ui| ui.heading(title))
+            .response
+            .interact(egui::Sense::drag());
+        if response.drag_started() {
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+        }
+    }
+
+    /// Lightweight Markdown renderer ported from #997. It intentionally covers
+    /// the structures emitted by QA without introducing a WebView dependency.
+    fn render_popup_markdown(ui: &mut egui::Ui, markdown: &str) {
+        let mut code = String::new();
+        let mut in_code = false;
+        for line in markdown.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("```") {
+                if in_code {
+                    render_popup_code(ui, code.trim_end());
+                    code.clear();
+                }
+                in_code = !in_code;
+                continue;
+            }
+            if in_code {
+                code.push_str(line);
+                code.push('\n');
+                continue;
+            }
+            if trimmed.is_empty() {
+                ui.add_space(4.0);
+                continue;
+            }
+            let (text, size, strong, italics, bullet) =
+                if let Some(value) = trimmed.strip_prefix("### ") {
+                    (value, 14.0, true, false, false)
+                } else if let Some(value) = trimmed.strip_prefix("## ") {
+                    (value, 15.0, true, false, false)
+                } else if let Some(value) = trimmed.strip_prefix("# ") {
+                    (value, 16.0, true, false, false)
+                } else if let Some(value) = trimmed.strip_prefix("> ") {
+                    (value, 13.0, false, true, false)
+                } else if let Some(value) = trimmed
+                    .strip_prefix("- ")
+                    .or_else(|| trimmed.strip_prefix("* "))
+                {
+                    (value, 13.0, false, false, true)
+                } else {
+                    (trimmed, 13.0, false, false, false)
+                };
+            let display = if bullet {
+                format!("• {text}")
+            } else {
+                text.to_string()
+            };
+            render_popup_inline(ui, &display, size, strong, italics);
+        }
+        if in_code && !code.is_empty() {
+            render_popup_code(ui, code.trim_end());
+        }
+    }
+
+    fn render_popup_code(ui: &mut egui::Ui, code: &str) {
+        egui::Frame::new()
+            .fill(theme::SURFACE_2)
+            .corner_radius(egui::CornerRadius::same(6))
+            .inner_margin(egui::Margin::symmetric(8, 6))
+            .show(ui, |ui| {
+                ui.add(egui::Label::new(egui::RichText::new(code).monospace().size(12.0)).wrap());
+            });
+    }
+
+    fn render_popup_inline(
+        ui: &mut egui::Ui,
+        text: &str,
+        size: f32,
+        base_strong: bool,
+        base_italics: bool,
+    ) {
+        let mut job = egui::text::LayoutJob::default();
+        job.wrap.max_width = ui.available_width();
+        let mut rest = text;
+        while !rest.is_empty() {
+            let mut matched = false;
+            for (open, close, strong, italics, monospace) in [
+                ("**", "**", true, false, false),
+                ("__", "__", true, false, false),
+                ("`", "`", false, false, true),
+                ("*", "*", false, true, false),
+                ("_", "_", false, true, false),
+            ] {
+                if let Some(after_open) = rest.strip_prefix(open) {
+                    if let Some(end) = after_open.find(close) {
+                        append_popup_text(
+                            &mut job,
+                            &after_open[..end],
+                            size,
+                            base_strong || strong,
+                            base_italics || italics,
+                            monospace,
+                            ui,
+                        );
+                        rest = &after_open[end + close.len()..];
+                        matched = true;
+                        break;
+                    }
+                }
+            }
+            if matched {
+                continue;
+            }
+            let next = ["**", "__", "`", "*", "_"]
+                .iter()
+                .filter_map(|marker| rest.find(marker))
+                .min()
+                .unwrap_or(rest.len());
+            let length = if next == 0 {
+                rest.chars().next().map(char::len_utf8).unwrap_or(0)
+            } else {
+                next
+            };
+            append_popup_text(
+                &mut job,
+                &rest[..length],
+                size,
+                base_strong,
+                base_italics,
+                false,
+                ui,
+            );
+            rest = &rest[length..];
+        }
+        ui.add(egui::Label::new(job).wrap());
+    }
+
+    fn append_popup_text(
+        job: &mut egui::text::LayoutJob,
+        text: &str,
+        size: f32,
+        strong: bool,
+        italics: bool,
+        monospace: bool,
+        ui: &egui::Ui,
+    ) {
+        job.append(
+            text,
+            0.0,
+            egui::TextFormat {
+                font_id: egui::FontId::new(
+                    size,
+                    if monospace {
+                        egui::FontFamily::Monospace
+                    } else {
+                        egui::FontFamily::Proportional
+                    },
+                ),
+                color: if strong {
+                    ui.visuals().strong_text_color()
+                } else {
+                    ui.visuals().text_color()
+                },
+                background: if monospace {
+                    theme::SURFACE_2
+                } else {
+                    egui::Color32::TRANSPARENT
+                },
+                italics,
+                ..Default::default()
+            },
+        );
+    }
+
     impl eframe::App for NativePopupApp {
         fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
             while let Ok(message) = self.incoming.try_recv() {
+                if message
+                    .content_kind()
+                    .is_some_and(|message_kind| message_kind != self.kind)
+                {
+                    continue;
+                }
+                if matches!(message, HostToPopup::Preview { .. }) {
+                    self.preview_focus_requested = false;
+                }
                 let shutdown = matches!(message, HostToPopup::Shutdown { .. });
                 let outcome = self.state.apply(message);
                 if outcome == openless_linux_egui::PopupApplyOutcome::Applied {
@@ -3935,13 +4198,17 @@ mod linux_app {
                 )
                 .show(ctx, |ui| match self.kind {
                     PopupKind::Preview => {
-                        ui.heading("插入预览");
+                        popup_heading(ui, "插入预览");
                         ui.label(&self.state.preview.source);
-                        ui.add(
+                        let editor = ui.add(
                             egui::TextEdit::multiline(&mut self.state.preview.text)
                                 .desired_rows(6)
                                 .desired_width(f32::INFINITY),
                         );
+                        if !self.preview_focus_requested {
+                            editor.request_focus();
+                            self.preview_focus_requested = true;
+                        }
                         ui.horizontal(|ui| {
                             if ui.button("取消").clicked() {
                                 self.dismiss(ctx);
@@ -3955,12 +4222,13 @@ mod linux_app {
                                         sequence,
                                         text: self.state.preview.text.clone(),
                                     });
+                                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                                 }
                             }
                         });
                     }
                     PopupKind::Qa => {
-                        ui.heading("划词追问");
+                        popup_heading(ui, "划词追问");
                         if let Some(selection) = &self.state.qa.selection_preview {
                             ui.label(egui::RichText::new(selection).italics().color(theme::INK_3));
                         }
@@ -3969,21 +4237,41 @@ mod linux_app {
                             .show(ui, |ui| {
                                 for message in &self.state.qa.messages {
                                     ui.label(egui::RichText::new(&message.role).strong());
-                                    ui.label(&message.content);
+                                    render_popup_markdown(ui, &message.content);
                                 }
                                 if !self.state.qa.streaming_answer.is_empty() {
-                                    ui.label(&self.state.qa.streaming_answer);
+                                    render_popup_markdown(ui, &self.state.qa.streaming_answer);
                                 }
                                 if let Some(error) = &self.state.qa.error {
                                     ui.colored_label(egui::Color32::RED, error);
                                 }
                             });
-                        ui.text_edit_singleline(&mut self.qa_input);
+                        let input = ui.text_edit_singleline(&mut self.qa_input);
                         ui.horizontal(|ui| {
                             if ui.button("关闭").clicked() {
                                 self.dismiss(ctx);
                             }
-                            if ui.button("发送").clicked() && !self.qa_input.trim().is_empty() {
+                            if ui
+                                .button(if self.state.qa.phase == "Recording" {
+                                    "停止录音"
+                                } else {
+                                    "语音提问"
+                                })
+                                .clicked()
+                            {
+                                if let Some(session_id) = self.session_id() {
+                                    let sequence = self.next_sequence();
+                                    self.send(PopupToHost::ToggleQaRecording {
+                                        version: POPUP_PROTOCOL_VERSION,
+                                        session_id,
+                                        sequence,
+                                    });
+                                }
+                            }
+                            let submit = ui.button("发送").clicked()
+                                || (input.lost_focus()
+                                    && ui.input(|state| state.key_pressed(egui::Key::Enter)));
+                            if submit && !self.qa_input.trim().is_empty() {
                                 if let Some(session_id) = self.session_id() {
                                     let sequence = self.next_sequence();
                                     let text = std::mem::take(&mut self.qa_input);
@@ -3998,10 +4286,16 @@ mod linux_app {
                         });
                     }
                     PopupKind::Capsule => {
-                        ui.horizontal(|ui| {
-                            ui.spinner();
-                            ui.strong(&self.state.capsule.phase);
-                        });
+                        let response = ui
+                            .horizontal(|ui| {
+                                ui.spinner();
+                                ui.strong(&self.state.capsule.phase);
+                            })
+                            .response
+                            .interact(egui::Sense::drag());
+                        if response.drag_started() {
+                            ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                        }
                         if !self.state.capsule.text.is_empty() {
                             ui.label(&self.state.capsule.text);
                         }
@@ -4037,9 +4331,23 @@ mod linux_app {
                 let stdin = std::io::stdin();
                 let mut reader = std::io::BufReader::new(stdin.lock());
                 if let Err(error) = openless_linux_egui::run_popup(&mut reader, |message| {
-                    let _ = tx.try_send(message);
+                    let _ = tx.send(message);
                 }) {
                     eprintln!("OpenLess popup input failed: {error}");
+                }
+            })
+            .map_err(|error| error.to_string())?;
+        let (outgoing_tx, outgoing_rx) = mpsc::channel::<PopupToHost>();
+        std::thread::Builder::new()
+            .name("openless-popup-output".into())
+            .spawn(move || {
+                let stdout = std::io::stdout();
+                let mut writer = stdout.lock();
+                while let Ok(message) = outgoing_rx.recv() {
+                    if let Err(error) = write_jsonl(&mut writer, &message) {
+                        eprintln!("OpenLess popup output failed: {error}");
+                        break;
+                    }
                 }
             })
             .map_err(|error| error.to_string())?;
@@ -4066,9 +4374,11 @@ mod linux_app {
                     kind,
                     state: PopupState::default(),
                     incoming: rx,
+                    outgoing: outgoing_tx,
                     qa_input: String::new(),
                     outgoing_sequence: 0,
                     ready_sent: false,
+                    preview_focus_requested: false,
                 }))
             }),
         )
@@ -4275,12 +4585,16 @@ mod linux_app {
 
         #[test]
         fn settings_conflict_merge_preserves_only_dirty_draft_fields() {
-            let mut latest = UserPreferences::default();
-            latest.remote_input_port = 9443;
-            latest.streaming_insert = false;
-            let mut draft = UserPreferences::default();
-            draft.remote_input_port = 7777;
-            draft.streaming_insert = true;
+            let latest = UserPreferences {
+                remote_input_port: 9443,
+                streaming_insert: false,
+                ..Default::default()
+            };
+            let draft = UserPreferences {
+                remote_input_port: 7777,
+                streaming_insert: true,
+                ..Default::default()
+            };
             let dirty = SettingsDirty {
                 streaming_insert: true,
                 ..Default::default()
