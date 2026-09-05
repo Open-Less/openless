@@ -55,40 +55,6 @@ impl LinuxSettingsRuntime {
     pub fn with_effects(effects: Arc<dyn LinuxSettingsEffects>) -> Self {
         Self { effects }
     }
-
-    fn reject_unsupported_hotkey_changes(plan: &SettingsEffectPlan) -> Result<(), BackendError> {
-        let Some(change) = &plan.hotkeys else {
-            return Ok(());
-        };
-        let previous = &change.previous;
-        let next = &change.next;
-        let unsupported = [
-            (
-                previous.switch_style != next.switch_style,
-                "switch-style hotkey",
-            ),
-            (previous.open_app != next.open_app, "open-app hotkey"),
-            (
-                previous.style_packs != next.style_packs,
-                "style-pack hotkeys",
-            ),
-        ];
-        let names = unsupported
-            .into_iter()
-            .filter_map(|(changed, name)| changed.then_some(name))
-            .collect::<Vec<_>>();
-        if names.is_empty() {
-            Ok(())
-        } else {
-            Err(BackendError::new(
-                BackendErrorCode::Unsupported,
-                format!(
-                    "Linux fcitx5 settings adapter does not support changing {}",
-                    names.join(", ")
-                ),
-            ))
-        }
-    }
 }
 
 impl SettingsRuntime for LinuxSettingsRuntime {
@@ -126,8 +92,6 @@ impl SettingsRuntime for LinuxSettingsRuntime {
         plan: &SettingsEffectPlan,
         receipt: &mut SettingsEffectReceipt,
     ) -> Result<(), SettingsEffectFailure> {
-        Self::reject_unsupported_hotkey_changes(plan)
-            .map_err(SettingsEffectFailure::before_side_effect)?;
         let Some(change) = &plan.hotkeys else {
             return Ok(());
         };
@@ -205,6 +169,17 @@ impl LinuxSettingsEffects for Fcitx5SettingsEffects {
             target.selection_polish.as_ref(),
         )?;
         apply_action_hotkey("SetTranslationHotkeyRaw", Some(&target.translation))?;
+        apply_action_hotkey("SetSwitchStyleHotkeyRaw", target.switch_style.as_ref())?;
+        apply_action_hotkey("SetOpenAppHotkeyRaw", target.open_app.as_ref())?;
+        let style_pack_hotkeys = target
+            .style_packs
+            .iter()
+            .map(|hotkey| {
+                shortcut_to_raw(&hotkey.binding)
+                    .map(|(symbol, states)| (hotkey.pack_id.clone(), symbol, states))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        crate::fcitx5::set_style_pack_hotkeys(style_pack_hotkeys)?;
         let (symbol, states) = target
             .coding_agent_voice
             .as_ref()
@@ -284,7 +259,7 @@ fn normalize_fcitx_primary(primary: &str) -> String {
     }
 }
 
-fn shortcut_to_raw(binding: &ShortcutBinding) -> Result<(u32, u32), BackendError> {
+pub(crate) fn shortcut_to_raw(binding: &ShortcutBinding) -> Result<(u32, u32), BackendError> {
     if let Some(trigger) = legacy_modifier_trigger(binding) {
         return Ok((modifier_trigger_keysym(trigger)?, 0));
     }

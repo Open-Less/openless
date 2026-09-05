@@ -505,6 +505,23 @@ pub(crate) fn set_raw_hotkey(method: &str, symbol: u32, states: u32) -> Result<(
     send_message(method, |message| message.append2(symbol, states))
 }
 
+#[cfg(target_os = "linux")]
+pub(crate) fn set_style_pack_hotkeys(
+    bindings: Vec<(String, u32, u32)>,
+) -> Result<(), BackendError> {
+    send_message("SetStylePackHotkeys", |message| message.append1(bindings))
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn set_style_pack_hotkeys(
+    _bindings: Vec<(String, u32, u32)>,
+) -> Result<(), BackendError> {
+    Err(BackendError::new(
+        BackendErrorCode::Unsupported,
+        "fcitx5 hotkey settings are only available on Linux",
+    ))
+}
+
 #[cfg(not(target_os = "linux"))]
 pub(crate) fn set_raw_hotkey(
     _method: &str,

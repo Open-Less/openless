@@ -195,8 +195,7 @@ use tokio_rustls::TlsAcceptor;
 
 #[cfg(target_os = "linux")]
 mod assets {
-    pub const INDEX_HTML: &str =
-        include_str!("../../assets/remote-input/index.html");
+    pub const INDEX_HTML: &str = include_str!("../../assets/remote-input/index.html");
     pub const APP_JS: &str = include_str!("../../assets/remote-input/app.js");
     pub const STYLE_CSS: &str = include_str!("../../assets/remote-input/style.css");
     pub const ICON_PNG: &[u8] = include_bytes!("../../assets/remote-input/icon.png");

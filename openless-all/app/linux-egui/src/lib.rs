@@ -395,6 +395,35 @@ impl LinuxHost {
                 }
                 Ok(None)
             }
+            LinuxHotkeyEvent::SwitchStylePressed => {
+                self.backend.activate_previous_style_pack()?;
+                Ok(None)
+            }
+            LinuxHotkeyEvent::OpenAppPressed => {
+                self.backend.request_host_action(HostAction::ShowMain)?;
+                self.backend.request_host_action(HostAction::FocusMain)?;
+                Ok(None)
+            }
+            LinuxHotkeyEvent::StylePackPressed { symbol, states } => {
+                let preferences = self.backend.get_preferences();
+                let pack_id = preferences
+                    .style_pack_hotkeys
+                    .iter()
+                    .find_map(|hotkey| {
+                        crate::settings::shortcut_to_raw(&hotkey.binding)
+                            .ok()
+                            .filter(|raw| *raw == (symbol, states))
+                            .map(|_| hotkey.pack_id.clone())
+                    })
+                    .ok_or_else(|| {
+                        BackendError::new(
+                            BackendErrorCode::Cancelled,
+                            "style-pack hotkey no longer matches current settings",
+                        )
+                    })?;
+                self.backend.activate_style_pack(&pack_id)?;
+                Ok(None)
+            }
         }
     }
 
