@@ -79,9 +79,7 @@ pub(super) fn run_restore_flow(
             }
         }
     }
-    log::error!(
-        "[windows-ime] restore failed after retry — IME may remain on OpenLess"
-    );
+    log::error!("[windows-ime] restore failed after retry — IME may remain on OpenLess");
     RestoreOutcome::FailedAfterRetry
 }
 

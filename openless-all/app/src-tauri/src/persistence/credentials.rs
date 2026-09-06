@@ -31,6 +31,8 @@ use anyhow::{Context, Result};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
+pub use openless_core::{ChannelKind, ChannelSummary, ChannelTestSummary};
+
 // `anyhow!` is only invoked from the keyring (non-Android) code paths; gating the
 // import keeps the Android build free of an unused-import warning.
 #[cfg(not(target_os = "android"))]
@@ -86,13 +88,13 @@ fn android_marketplace_legacy_scrubbed() -> &'static Mutex<bool> {
 /// Process-wide credentials cache.
 ///
 /// Without this cache every `CredentialsVault::get_*` / `snapshot` call hits
-/// `load_credentials()` → `load_keyring_credentials()` and reads the OS
-/// credential store again. On macOS each distinct Keychain entry has its own
-/// ACL, so an ad-hoc-signed binary (or any binary whose ACL grants have not
-/// been set up yet) prompts on every entry read. macOS now stores the payload
-/// in one entry; older installs are migrated from the former manifest + chunk
-/// layout after their first successful read. Other platforms retain chunking
-/// for Windows Credential Manager's small per-entry limit.
+/// `load_credentials()` → `load_keyring_credentials()` which reads the
+/// manifest entry plus every chunk entry from the OS keyring. On macOS each
+/// distinct keychain entry has its own ACL — so an ad-hoc-signed binary (or
+/// any binary whose ACL grants haven't been set up yet) prompts on every read
+/// of every entry. A single dictation cycle reads credentials 5–10 times,
+/// times (1 manifest + N chunks) entries → tens of "OpenLess wants to use
+/// the keychain" prompts per recording.
 ///
 /// With this cache the first read populates `Some(CredsRoot)` and every
 /// subsequent read in the same process is silent. `save_credentials` keeps
@@ -131,6 +133,8 @@ struct CredsRoot {
     /// 运行时只在 `pipeline_mode == multimodal` 时读取，切换模式不删除。
     #[serde(default)]
     omni: CredsOmni,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    metadata_revision: u64,
     #[serde(default, skip_serializing_if = "CredsMarketplace::is_empty")]
     marketplace: CredsMarketplace,
 }
@@ -268,7 +272,7 @@ struct ChannelMeta {
 
 /// 手写 `Default` 而不是 derive：`bool::default()` 是 `false`，而 `write_account`
 /// 用 `map.entry(id).or_default()` 创建 entry —— derive 会让新写入的渠道一出生就是
-/// 禁用状态，`sync_active_channels` 直接忽略它，表现为"填了 key 却不生效"。
+/// 禁用状态，Core directory 会忽略它，表现为"填了 key 却不生效"。
 impl Default for ChannelMeta {
     fn default() -> Self {
         Self {
@@ -286,6 +290,10 @@ fn channel_default_enabled() -> bool {
 
 fn is_true(value: &bool) -> bool {
     *value
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
 }
 
 /// 「测试连通」的结果，持久化以便重启后仍能看到上次测试的延迟。
@@ -457,7 +465,7 @@ fn channel_provider_type<'a, V: HasChannelMeta>(key: &'a str, entry: &'a V) -> &
     entry.meta().providerType.as_deref().unwrap_or(key)
 }
 
-/// 「当前使用」= 启用渠道里 order 最小的那个；order 相同则按 id 字母序，保证确定性。
+/// 仅供 v1 -> v2 migration 修复遗失的 active；运行期 active policy 在 Core。
 fn current_channel_id<V: HasChannelMeta>(map: &HashMap<String, V>) -> Option<String> {
     map.iter()
         .filter(|(_, entry)| entry.meta().enabled)
@@ -475,11 +483,11 @@ fn current_channel_id<V: HasChannelMeta>(map: &HashMap<String, V>) -> Option<Str
 ///
 /// 幂等的两个支点：
 ///   1. 迁移出来的渠道 **id 直接沿用原 preset id**，不生成 uuid —— 老用户的 map key
-///      一个字节都不变，重复执行结果完全一致（新建卡片才用 uuid）。
+///      一个字节都不变，重复执行结果完全一致；新 id 由 Core directory 统一分配。
 ///   2. 已带 `providerType` 的 entry 一律跳过。
 ///
-/// order 按「原 active 排第一，其余按 id 字母序」分配。用字母序而不是 preset 表顺序，
-/// 是因为后端不知道前端 LLM_PRESETS / ASR_PRESETS 的排列，而字母序是确定的。
+/// order 按「原 active 排第一，其余按 id 字母序」分配。迁移 reader 不读取当前 Core
+/// descriptor 的展示顺序；字母序对同一份 v1 数据始终确定，能保证重复迁移幂等。
 fn migrate_channel_map<V: HasChannelMeta>(map: &mut HashMap<String, V>, active: &str) -> bool {
     if map.is_empty()
         || map
@@ -549,7 +557,26 @@ fn migrate_channels(root: &mut CredsRoot) -> bool {
         false
     };
 
-    asr_changed || llm_changed || seeded
+    let changed = asr_changed || llm_changed || seeded;
+    if changed {
+        if !root
+            .providers
+            .asr
+            .get(&root.active.asr)
+            .is_some_and(|entry| entry.meta().enabled)
+        {
+            root.active.asr = current_channel_id(&root.providers.asr).unwrap_or_default();
+        }
+        if !root
+            .providers
+            .llm
+            .get(&root.active.llm)
+            .is_some_and(|entry| entry.meta().enabled)
+        {
+            root.active.llm = current_channel_id(&root.providers.llm).unwrap_or_default();
+        }
+    }
+    changed
 }
 
 /// 全新安装的平台预置。
@@ -587,28 +614,6 @@ fn seed_default_channels(root: &mut CredsRoot) -> bool {
     false
 }
 
-/// 把 `active.asr` / `active.llm` 重算成"启用列表的第一个渠道 id"。
-///
-/// `active` 字段在渠道化后不再是用户直接选择的厂商，而是排序与开关的**派生结果**；
-/// `lookup_account` / `write_account` 仍然读它，因此每次改动排序、开关或删除渠道后
-/// 都必须调用本函数，否则会出现"列表第一张是 A、实际请求打的是 B"。
-///
-/// 一个渠道都没启用时清空 active —— 让 `lookup_account` 落到 `None`（未配置），
-/// 而不是保留指向已禁用渠道的旧 id（entry 仍在，运行时照常读得到凭据）。
-fn sync_active_channels(root: &mut CredsRoot) {
-    match current_channel_id(&root.providers.asr) {
-        Some(id) => root.active.asr = id,
-        // 全部禁用时**清空**而不是保留旧 id：旧 id 对应的 entry 还在（只是 enabled
-        // 为 false），`lookup_account` 会命中它，运行时就会继续用已禁用渠道的凭据，
-        // 与「第一个启用的 = 当前生效」的心智相悖。清空后 lookup 落到 None（未配置）。
-        None => root.active.asr.clear(),
-    }
-    match current_channel_id(&root.providers.llm) {
-        Some(id) => root.active.llm = id,
-        None => root.active.llm.clear(),
-    }
-}
-
 fn active_llm_extra_headers(root: &CredsRoot) -> HashMap<String, String> {
     root.providers
         .llm
@@ -617,12 +622,16 @@ fn active_llm_extra_headers(root: &CredsRoot) -> HashMap<String, String> {
         .unwrap_or_default()
 }
 
-fn active_omni_extra_headers(root: &CredsRoot) -> HashMap<String, String> {
+fn omni_extra_headers(root: &CredsRoot, provider_id: &str) -> HashMap<String, String> {
     root.omni
         .providers
-        .get(&root.omni.active)
+        .get(provider_id)
         .and_then(|entry| entry.extraHeaders.clone())
         .unwrap_or_default()
+}
+
+fn active_omni_extra_headers(root: &CredsRoot) -> HashMap<String, String> {
+    omni_extra_headers(root, &root.omni.active)
 }
 
 fn is_valid_llm_temperature(temperature: f64) -> bool {
@@ -645,6 +654,30 @@ fn active_llm_temperature_string(root: &CredsRoot) -> Option<String> {
     active_llm_temperature_value(root).map(|temperature| temperature.to_string())
 }
 
+fn set_llm_temperature_for_provider_in_root(
+    root: &mut CredsRoot,
+    provider_id: &str,
+    temperature: Option<f64>,
+) {
+    root.providers
+        .llm
+        .entry(provider_id.to_string())
+        .or_default()
+        .temperature = temperature;
+}
+
+fn set_llm_extra_headers_for_provider_in_root(
+    root: &mut CredsRoot,
+    provider_id: &str,
+    headers: HashMap<String, String>,
+) {
+    root.providers
+        .llm
+        .entry(provider_id.to_string())
+        .or_default()
+        .extraHeaders = (!headers.is_empty()).then_some(headers);
+}
+
 fn active_llm_extra_headers_json(root: &CredsRoot) -> Result<Option<String>> {
     let headers = active_llm_extra_headers(root);
     if headers.is_empty() {
@@ -656,8 +689,8 @@ fn active_llm_extra_headers_json(root: &CredsRoot) -> Result<Option<String>> {
         .context("encode LLM extra headers")
 }
 
-fn active_omni_extra_headers_json(root: &CredsRoot) -> Result<Option<String>> {
-    let headers = active_omni_extra_headers(root);
+fn omni_extra_headers_json(root: &CredsRoot, provider_id: &str) -> Result<Option<String>> {
+    let headers = omni_extra_headers(root, provider_id);
     if headers.is_empty() {
         return Ok(None);
     }
@@ -667,12 +700,20 @@ fn active_omni_extra_headers_json(root: &CredsRoot) -> Result<Option<String>> {
         .context("encode omni extra headers")
 }
 
-fn active_omni_temperature_value(root: &CredsRoot) -> Option<f64> {
+fn active_omni_extra_headers_json(root: &CredsRoot) -> Result<Option<String>> {
+    omni_extra_headers_json(root, &root.omni.active)
+}
+
+fn omni_temperature_value(root: &CredsRoot, provider_id: &str) -> Option<f64> {
     root.omni
         .providers
-        .get(&root.omni.active)
+        .get(provider_id)
         .and_then(|entry| entry.temperature)
         .filter(|temperature| is_valid_llm_temperature(*temperature))
+}
+
+fn active_omni_temperature_value(root: &CredsRoot) -> Option<f64> {
+    omni_temperature_value(root, &root.omni.active)
 }
 
 fn active_omni_temperature(root: &CredsRoot) -> Option<f32> {
@@ -681,6 +722,10 @@ fn active_omni_temperature(root: &CredsRoot) -> Option<f32> {
 
 fn active_omni_temperature_string(root: &CredsRoot) -> Option<String> {
     active_omni_temperature_value(root).map(|temperature| temperature.to_string())
+}
+
+fn omni_temperature_string(root: &CredsRoot, provider_id: &str) -> Option<String> {
+    omni_temperature_value(root, provider_id).map(|temperature| temperature.to_string())
 }
 
 fn parse_extra_headers_json(value: &str) -> Result<HashMap<String, String>> {
@@ -1135,31 +1180,6 @@ fn read_chunk_manifest(json: &str) -> Option<CredsChunkManifest> {
     }
 }
 
-enum KeyringPayload {
-    Direct(CredsRoot),
-    Chunked(CredsChunkManifest),
-}
-
-/// Decode the first Keychain/keyring entry without accidentally accepting a
-/// malformed chunk manifest as an empty `CredsRoot` (all root fields have
-/// serde defaults for backwards compatibility).
-fn decode_keyring_payload(json: &str) -> Result<KeyringPayload> {
-    let value: serde_json::Value =
-        serde_json::from_str(json).context("decode system credential vault payload")?;
-    if value.get("openless_credentials_storage").is_some() {
-        let manifest: CredsChunkManifest =
-            serde_json::from_value(value).context("decode system credential vault manifest")?;
-        if manifest.openless_credentials_storage != "chunked" || manifest.version != 1 {
-            anyhow::bail!("invalid system credential vault manifest");
-        }
-        return Ok(KeyringPayload::Chunked(manifest));
-    }
-
-    serde_json::from_value::<CredsRoot>(value)
-        .map(KeyringPayload::Direct)
-        .context("decode system credential vault payload")
-}
-
 /// Windows Credential Manager (`CredReadW`) can transiently fail right after
 /// login / under contention when we read the manifest entry plus every chunk
 /// entry in quick succession. A single failed read makes the whole credential
@@ -1237,10 +1257,8 @@ fn load_keyring_credentials() -> Result<Option<CredsRoot>> {
         return Ok(None);
     };
 
-    let manifest = match decode_keyring_payload(&json_or_manifest)? {
-        KeyringPayload::Direct(root) => return Ok(Some(root)),
-        KeyringPayload::Chunked(manifest) => manifest,
-    };
+    let manifest = read_chunk_manifest(&json_or_manifest)
+        .ok_or_else(|| anyhow!("invalid system credential vault manifest"))?;
     let mut json = String::new();
     for index in 0..manifest.chunks {
         let account = chunk_account(manifest.generation.as_deref(), index);
@@ -1249,38 +1267,9 @@ fn load_keyring_credentials() -> Result<Option<CredsRoot>> {
         json.push_str(&chunk);
     }
 
-    let root = serde_json::from_str::<CredsRoot>(&json)
-        .context("decode system credential vault payload")?;
-
-    // macOS Keychain authorizes each generic-password item separately. The old
-    // manifest + one chunk layout therefore produced exactly two authorization
-    // dialogs on every ad-hoc dev rebuild. Once both legacy entries have been
-    // read successfully, collapse them into the single direct payload used by
-    // current macOS builds. Write the self-contained item before deleting any
-    // chunks, so an interrupted migration cannot lose credentials.
-    #[cfg(target_os = "macos")]
-    match keyring_entry().and_then(|entry| {
-        entry
-            .set_password(&json)
-            .context("migrate macOS credential vault to single entry")
-    }) {
-        Ok(()) => {
-            for index in 0..manifest.chunks {
-                delete_keyring_password(&chunk_account(manifest.generation.as_deref(), index));
-            }
-            log::info!(
-                "[vault] migrated macOS credentials from manifest + {} chunk(s) to one Keychain entry",
-                manifest.chunks
-            );
-        }
-        Err(error) => {
-            // Reading succeeded, so keep serving the in-memory root. Migration
-            // is an optimization and will be retried next launch.
-            log::warn!("[vault] macOS single-entry migration failed: {error}");
-        }
-    }
-
-    Ok(Some(root))
+    serde_json::from_str::<CredsRoot>(&json)
+        .map(Some)
+        .context("decode system credential vault payload")
 }
 
 #[cfg(not(target_os = "android"))]
@@ -1354,9 +1343,14 @@ fn migrate_legacy_sources() -> CredsRoot {
 fn migrate_legacy_sources_for_update() -> Result<CredsRoot> {
     if let Some(legacy) = load_legacy_credentials() {
         save_credentials(&legacy)?;
+        let persisted = credentials_cache()
+            .lock()
+            .as_ref()
+            .cloned()
+            .unwrap_or(legacy);
         #[cfg(not(target_os = "android"))]
         remove_legacy_keyring_credentials();
-        return Ok(legacy);
+        return Ok(persisted);
     }
 
     #[cfg(not(target_os = "android"))]
@@ -1364,8 +1358,13 @@ fn migrate_legacy_sources_for_update() -> Result<CredsRoot> {
         let legacy_vault = load_legacy_keyring_credentials_for_update()?;
         if legacy_vault_has_credentials(&legacy_vault) {
             save_credentials(&legacy_vault)?;
+            let persisted = credentials_cache()
+                .lock()
+                .as_ref()
+                .cloned()
+                .unwrap_or(legacy_vault);
             remove_legacy_keyring_credentials();
-            return Ok(legacy_vault);
+            return Ok(persisted);
         }
     }
 
@@ -1400,14 +1399,12 @@ fn load_android_credentials_into_cache_with(
 fn load_credentials() -> CredsRoot {
     let mut root = load_credentials_raw();
     migrate_channels(&mut root);
-    sync_active_channels(&mut root);
     root
 }
 
 fn load_credentials_for_update() -> Result<CredsRoot> {
     let mut root = load_credentials_for_update_raw()?;
     migrate_channels(&mut root);
-    sync_active_channels(&mut root);
     Ok(root)
 }
 
@@ -1493,9 +1490,14 @@ fn load_credentials_for_update_raw() -> Result<CredsRoot> {
 
 fn save_credentials(root: &CredsRoot) -> Result<()> {
     let mut cleaned = clean_credentials(root);
-    // 落盘的 active 必须与"启用列表第一个"一致：删除或关闭当前渠道后若不重算，
-    // 磁盘上会留下指向已消失渠道的 active，下次冷启动直接读成"未配置"。
-    sync_active_channels(&mut cleaned);
+    let current_revision = credentials_cache()
+        .lock()
+        .as_ref()
+        .map(|cached| cached.metadata_revision)
+        .unwrap_or(0);
+    if cleaned.metadata_revision <= current_revision {
+        cleaned.metadata_revision = current_revision.saturating_add(1);
+    }
     let cleaned = cleaned;
 
     #[cfg(target_os = "android")]
@@ -1512,77 +1514,54 @@ fn save_credentials(root: &CredsRoot) -> Result<()> {
             .ok()
             .flatten()
             .and_then(|value| read_chunk_manifest(&value));
+        let chunks = chunk_json_payload(&json);
 
-        // A macOS Keychain ACL belongs to one item. Keep the entire payload in
-        // that one item so a newly rebuilt ad-hoc development binary needs at
-        // most one authorization, not one for the manifest plus one per chunk.
-        // Keychain does not have Windows Credential Manager's 2560-byte blob
-        // limit, so platform-specific direct storage is safe here.
-        #[cfg(target_os = "macos")]
-        {
-            keyring_entry()?
-                .set_password(&json)
-                .context("write macOS credential vault")?;
-            if let Some(previous) = previous_manifest {
-                for index in 0..previous.chunks {
-                    delete_keyring_password(&chunk_account(previous.generation.as_deref(), index));
-                }
-            }
-            remove_legacy_credentials_file_best_effort();
-            store_credentials_cache(&cleaned);
-            return Ok(());
+        // 先写所有 chunks（稳定名），再写 manifest —— 保证 partial-write 不会让
+        // manifest 指向不完整 chunks。stable name 让 macOS Keychain ACL 一次允许后
+        // 长期有效，不再因 UUID 轮换反复弹窗（这是 PR #277 早期 UUID-rotation
+        // 设计的回退）。
+        for (index, chunk) in chunks.iter().enumerate() {
+            let account = chunk_account(None, index);
+            keyring_entry_for(&account)?
+                .set_password(chunk)
+                .with_context(|| format!("write system credential vault chunk {index}"))?;
         }
 
-        #[cfg(not(target_os = "macos"))]
-        {
-            let chunks = chunk_json_payload(&json);
+        let manifest = CredsChunkManifest {
+            openless_credentials_storage: "chunked".to_string(),
+            version: 1,
+            generation: None,
+            chunks: chunks.len(),
+        };
+        let manifest_json =
+            serde_json::to_string(&manifest).context("encode credential manifest failed")?;
+        keyring_entry()?
+            .set_password(&manifest_json)
+            .context("write system credential vault manifest")?;
 
-            // 先写所有 chunks（稳定名），再写 manifest —— 保证 partial-write 不会让
-            // manifest 指向不完整 chunks。稳定名也避免早期 PR #277 的
-            // UUID rotation 让系统凭据条目不断增长。
-            for (index, chunk) in chunks.iter().enumerate() {
-                let account = chunk_account(None, index);
-                keyring_entry_for(&account)?
-                    .set_password(chunk)
-                    .with_context(|| format!("write system credential vault chunk {index}"))?;
-            }
-
-            let manifest = CredsChunkManifest {
-                openless_credentials_storage: "chunked".to_string(),
-                version: 1,
-                generation: None,
-                chunks: chunks.len(),
-            };
-            let manifest_json =
-                serde_json::to_string(&manifest).context("encode credential manifest failed")?;
-            keyring_entry()?
-                .set_password(&manifest_json)
-                .context("write system credential vault manifest")?;
-
-            // 清理旧 chunks：
-            // 1) 旧 manifest 用 UUID generation → 那一代 chunks 全删（迁移到 stable name）
-            // 2) 旧 manifest 也是 stable name，但 chunks 数量比这次多 → 删多余的 idx
-            if let Some(previous) = previous_manifest {
-                match previous.generation.as_deref() {
-                    Some(prev_gen) => {
-                        for index in 0..previous.chunks {
-                            delete_keyring_password(&chunk_account(Some(prev_gen), index));
-                        }
+        // 清理旧 chunks：
+        // 1) 旧 manifest 用 UUID generation → 那一代 chunks 全删（迁移到 stable name）
+        // 2) 旧 manifest 也是 stable name，但 chunks 数量比这次多 → 删多余的 idx
+        if let Some(previous) = previous_manifest {
+            match previous.generation.as_deref() {
+                Some(prev_gen) => {
+                    for index in 0..previous.chunks {
+                        delete_keyring_password(&chunk_account(Some(prev_gen), index));
                     }
-                    None => {
-                        for index in chunks.len()..previous.chunks {
-                            delete_keyring_password(&chunk_account(None, index));
-                        }
+                }
+                None => {
+                    for index in chunks.len()..previous.chunks {
+                        delete_keyring_password(&chunk_account(None, index));
                     }
                 }
             }
-
-            remove_legacy_credentials_file_best_effort();
-            // 写完成功后立刻刷新 process cache —— 同进程后续读不再回 Keychain。
-            // 见 CREDENTIALS_CACHE 的 doc。
-            store_credentials_cache(&cleaned);
-            Ok(())
         }
+
+        remove_legacy_credentials_file_best_effort();
+        // 写完成功后立刻刷新 process cache —— 同进程后续读不再回 Keychain。
+        // 见 CREDENTIALS_CACHE 的 doc。
+        store_credentials_cache(&cleaned);
+        Ok(())
     }
 }
 
@@ -1613,6 +1592,43 @@ fn lookup_account(root: &CredsRoot, account: CredentialAccount) -> Option<String
         CredentialAccount::OmniEndpoint => omni.and_then(|e| pick(&e.baseURL)),
         CredentialAccount::OmniModel => omni.and_then(|e| pick(&e.model)),
     }
+}
+
+fn lookup_omni_account(
+    root: &CredsRoot,
+    provider_id: &str,
+    account: CredentialAccount,
+) -> Result<Option<String>> {
+    let entry = root.omni.providers.get(provider_id);
+    let pick = |value: &Option<String>| value.as_ref().filter(|v| !v.is_empty()).cloned();
+    let value = match account {
+        CredentialAccount::OmniApiKey => entry.and_then(|entry| pick(&entry.apiKey)),
+        CredentialAccount::OmniEndpoint => entry.and_then(|entry| pick(&entry.baseURL)),
+        CredentialAccount::OmniModel => entry.and_then(|entry| pick(&entry.model)),
+        _ => anyhow::bail!("credential account is not Omni-scoped"),
+    };
+    Ok(value)
+}
+
+fn write_omni_account(
+    root: &mut CredsRoot,
+    provider_id: &str,
+    account: CredentialAccount,
+    value: Option<String>,
+) -> Result<()> {
+    let entry = root
+        .omni
+        .providers
+        .entry(provider_id.to_string())
+        .or_default();
+    let normalized = value.and_then(|value| (!value.is_empty()).then_some(value));
+    match account {
+        CredentialAccount::OmniApiKey => entry.apiKey = normalized,
+        CredentialAccount::OmniEndpoint => entry.baseURL = normalized,
+        CredentialAccount::OmniModel => entry.model = normalized,
+        _ => anyhow::bail!("credential account is not Omni-scoped"),
+    }
+    Ok(())
 }
 
 fn write_account(root: &mut CredsRoot, account: CredentialAccount, value: Option<String>) {
@@ -1802,44 +1818,32 @@ pub struct CredentialsSnapshot {
     pub omni_model: Option<String>,
 }
 
-/// 渠道所属的功能面。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ChannelKind {
-    Asr,
-    Llm,
-}
-
-impl ChannelKind {
-    pub fn parse(value: &str) -> Result<Self> {
-        match value {
-            "asr" => Ok(ChannelKind::Asr),
-            "llm" => Ok(ChannelKind::Llm),
-            other => anyhow::bail!("unknown channel kind: {other}"),
-        }
+fn credentials_snapshot(root: &CredsRoot, include_omni: bool) -> CredentialsSnapshot {
+    CredentialsSnapshot {
+        volcengine_app_key: lookup_account(root, CredentialAccount::VolcengineAppKey),
+        volcengine_access_key: lookup_account(root, CredentialAccount::VolcengineAccessKey),
+        volcengine_resource_id: lookup_account(root, CredentialAccount::VolcengineResourceId),
+        volcengine_auth_mode: lookup_account(root, CredentialAccount::VolcengineAuthMode),
+        volcengine_api_key: lookup_account(root, CredentialAccount::VolcengineApiKey),
+        asr_api_key: lookup_account(root, CredentialAccount::AsrApiKey),
+        asr_endpoint: lookup_account(root, CredentialAccount::AsrEndpoint),
+        asr_model: lookup_account(root, CredentialAccount::AsrModel),
+        xfyun_app_id: lookup_account(root, CredentialAccount::XfyunAppId),
+        xfyun_api_key: lookup_account(root, CredentialAccount::XfyunApiKey),
+        ark_api_key: lookup_account(root, CredentialAccount::ArkApiKey),
+        ark_model_id: lookup_account(root, CredentialAccount::ArkModelId),
+        ark_endpoint: lookup_account(root, CredentialAccount::ArkEndpoint),
+        active_omni_provider: root.omni.active.clone(),
+        omni_api_key: include_omni
+            .then(|| lookup_account(root, CredentialAccount::OmniApiKey))
+            .flatten(),
+        omni_endpoint: include_omni
+            .then(|| lookup_account(root, CredentialAccount::OmniEndpoint))
+            .flatten(),
+        omni_model: include_omni
+            .then(|| lookup_account(root, CredentialAccount::OmniModel))
+            .flatten(),
     }
-}
-
-/// 一张渠道卡片对前端的投影。凭据本身不在这里 —— 前端按 id 走
-/// `read_credential(account, provider = id)` 单独取，避免密钥随列表批量出栈。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ChannelSummary {
-    pub id: String,
-    /// 用户取的名字；空字符串表示未命名，由前端回落到 preset 显示名。
-    pub name: String,
-    pub provider_type: String,
-    pub enabled: bool,
-    pub order: u32,
-    pub last_test: Option<ChannelTestSummary>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ChannelTestSummary {
-    pub ok: bool,
-    pub latency_ms: Option<u32>,
-    pub at: i64,
-    pub error: Option<String>,
 }
 
 impl From<&ChannelTest> for ChannelTestSummary {
@@ -1847,6 +1851,17 @@ impl From<&ChannelTest> for ChannelTestSummary {
         Self {
             ok: value.ok,
             latency_ms: value.latencyMs,
+            at: value.at,
+            error: value.error.clone(),
+        }
+    }
+}
+
+impl From<&ChannelTestSummary> for ChannelTest {
+    fn from(value: &ChannelTestSummary) -> Self {
+        Self {
+            ok: value.ok,
+            latencyMs: value.latency_ms,
             at: value.at,
             error: value.error.clone(),
         }
@@ -1880,108 +1895,81 @@ fn channel_summaries<V: HasChannelMeta>(
     list
 }
 
-/// 生成一个未被占用的渠道 id：首选厂商 id 本身，冲突则 `-2` / `-3` 递增。
-///
-/// 刻意不用 uuid：第一张卡片的 id 就等于 preset id，与 `migrate_channel_map`
-/// 的"沿用原 preset id"完全一致；credentials.json 排障时也一眼能看懂是哪家。
-fn allocate_channel_id<V>(map: &HashMap<String, V>, provider_type: &str) -> String {
-    if !map.contains_key(provider_type) {
-        return provider_type.to_string();
-    }
-    for suffix in 2..u32::MAX {
-        let candidate = format!("{provider_type}-{suffix}");
-        if !map.contains_key(&candidate) {
-            return candidate;
-        }
-    }
-    unreachable!("channel id space exhausted")
+fn credential_metadata(root: &CredsRoot) -> openless_core::CredentialMetadata {
+    openless_core::CredentialMetadata::from_parts(
+        channel_summaries(&root.providers.asr, |entry| {
+            entry.displayName.clone().unwrap_or_default()
+        }),
+        channel_summaries(&root.providers.llm, |entry| {
+            entry.displayName.clone().unwrap_or_default()
+        }),
+        root.active.asr.clone(),
+        root.active.llm.clone(),
+        root.omni.active.clone(),
+        root.metadata_revision,
+    )
 }
 
-/// 关闭渠道时把它排到末尾，重新打开时排到**启用组**末尾。
-///
-/// 重新打开不回原位是刻意的：回原位要额外持久化"关闭前的位置"，而用户重开一张卡片
-/// 通常就是想试试它，落到启用组末尾最不打扰当前生效的渠道。
-fn reposition_after_toggle<V: HasChannelMeta>(map: &mut HashMap<String, V>, id: &str) {
-    let Some(enabled) = map.get(id).map(|entry| entry.meta().enabled) else {
-        return;
-    };
-    let target = if enabled {
-        // 启用组末尾 = 最大的启用 order + 1（不含自己）。
-        map.iter()
-            .filter(|(key, entry)| key.as_str() != id && entry.meta().enabled)
-            .filter_map(|(_, entry)| entry.meta().order)
-            .max()
-            .map(|max| max.saturating_add(1))
-            .unwrap_or(0)
-    } else {
-        // 整个列表末尾。
-        map.iter()
-            .filter(|(key, _)| key.as_str() != id)
-            .filter_map(|(_, entry)| entry.meta().order)
-            .max()
-            .map(|max| max.saturating_add(1))
-            .unwrap_or(0)
-    };
-    if let Some(entry) = map.get_mut(id) {
-        entry.meta_mut().order = Some(target);
-    }
-    // 关掉的那张要沉到所有启用项之后：把启用项整体前移，重新压实 order。
-    compact_orders(map);
-}
-
-/// 重排 order 为 0..n 的连续整数，顺序为「启用项在前（按原 order），禁用项在后」。
-fn compact_orders<V: HasChannelMeta>(map: &mut HashMap<String, V>) {
-    let mut ids: Vec<String> = map.keys().cloned().collect();
-    ids.sort_by(|left, right| {
-        let left_meta = map.get(left).map(|e| e.meta());
-        let right_meta = map.get(right).map(|e| e.meta());
-        let key_of = |meta: Option<&ChannelMeta>| {
-            let meta = meta.expect("id came from this map");
-            // false < true：启用的排前面。
-            (!meta.enabled, meta.order.unwrap_or(u32::MAX))
-        };
-        key_of(left_meta)
-            .cmp(&key_of(right_meta))
-            .then_with(|| left.cmp(right))
-    });
-    for (index, id) in ids.iter().enumerate() {
-        if let Some(entry) = map.get_mut(id) {
-            entry.meta_mut().order = Some(index as u32);
-        }
+fn replace_channel_metadata<V: Default + HasChannelMeta>(
+    map: &mut HashMap<String, V>,
+    channels: Vec<ChannelSummary>,
+    mut set_name: impl FnMut(&mut V, Option<String>),
+) {
+    let mut previous = std::mem::take(map);
+    for channel in channels {
+        let mut entry = previous.remove(&channel.id).unwrap_or_default();
+        let meta = entry.meta_mut();
+        meta.providerType = Some(channel.provider_type);
+        meta.order = Some(channel.order);
+        meta.enabled = channel.enabled;
+        meta.lastTest = channel.last_test.as_ref().map(ChannelTest::from);
+        let name = (!channel.name.trim().is_empty()).then(|| channel.name.trim().to_string());
+        set_name(&mut entry, name);
+        map.insert(channel.id, entry);
     }
 }
 
-/// 新建渠道的 order：排到启用组末尾（禁用项始终在其后，由 compact_orders 保证）。
-fn next_order<V: HasChannelMeta>(map: &HashMap<String, V>) -> u32 {
-    map.values()
-        .filter(|entry| entry.meta().enabled)
-        .filter_map(|entry| entry.meta().order)
-        .max()
-        .map(|max| max.saturating_add(1))
-        .unwrap_or(0)
+fn apply_credential_metadata(
+    root: &mut CredsRoot,
+    metadata: openless_core::CredentialMetadata,
+) -> Result<()> {
+    let expected = root.metadata_revision.saturating_add(1);
+    if metadata.revision() != expected {
+        anyhow::bail!(
+            "credential metadata revision conflict: expected {expected}, got {}",
+            metadata.revision()
+        );
+    }
+    replace_channel_metadata(
+        &mut root.providers.asr,
+        metadata.list_channels(ChannelKind::Asr),
+        |entry, name| entry.displayName = name,
+    );
+    replace_channel_metadata(
+        &mut root.providers.llm,
+        metadata.list_channels(ChannelKind::Llm),
+        |entry, name| entry.displayName = name,
+    );
+    root.active.asr = metadata.active_provider(openless_core::ProviderSlot::Asr);
+    root.active.llm = metadata.active_provider(openless_core::ProviderSlot::Llm);
+    root.omni.active = metadata.active_provider(openless_core::ProviderSlot::Omni);
+    root.metadata_revision = metadata.revision();
+    Ok(())
 }
 
-/// 按前端给的 id 顺序重排；未提及的渠道保持在末尾（相对顺序不变）。
-fn apply_order<V: HasChannelMeta>(map: &mut HashMap<String, V>, ordered_ids: &[String]) {
-    for (index, id) in ordered_ids.iter().enumerate() {
-        if let Some(entry) = map.get_mut(id) {
-            entry.meta_mut().order = Some(index as u32);
-        }
+fn channel_has_secrets(root: &CredsRoot, kind: ChannelKind, id: &str) -> bool {
+    match kind {
+        ChannelKind::Asr => root
+            .providers
+            .asr
+            .get(id)
+            .is_some_and(|entry| !entry.has_no_content()),
+        ChannelKind::Llm => root
+            .providers
+            .llm
+            .get(id)
+            .is_some_and(|entry| !entry.has_no_content()),
     }
-    // 没被提到的排到末尾，避免与显式序号撞车。
-    let tail_base = ordered_ids.len() as u32;
-    let unlisted: Vec<String> = map
-        .keys()
-        .filter(|id| !ordered_ids.contains(id))
-        .cloned()
-        .collect();
-    for (offset, id) in unlisted.iter().enumerate() {
-        if let Some(entry) = map.get_mut(id) {
-            entry.meta_mut().order = Some(tail_base.saturating_add(offset as u32));
-        }
-    }
-    // 拖拽后禁用项仍须沉底。
-    compact_orders(map);
 }
 
 /// 凭据存储——系统凭据库；旧 JSON 文件只作为迁移来源。
@@ -1990,6 +1978,23 @@ pub struct CredentialsVault;
 impl CredentialsVault {
     /// 系统凭据库 service name；macOS 下对应 Keychain service。
     pub const SERVICE_NAME: &'static str = "com.openless.app";
+
+    pub fn load_metadata() -> openless_core::CredentialMetadata {
+        let _guard = credentials_lock().lock();
+        credential_metadata(&load_credentials())
+    }
+
+    pub fn save_metadata(metadata: openless_core::CredentialMetadata) -> Result<()> {
+        let _guard = credentials_lock().lock();
+        let mut root = load_credentials_for_update()?;
+        apply_credential_metadata(&mut root, metadata)?;
+        save_credentials(&root)
+    }
+
+    pub fn channel_has_secrets(kind: ChannelKind, id: &str) -> bool {
+        let _guard = credentials_lock().lock();
+        channel_has_secrets(&load_credentials(), kind, id)
+    }
 
     pub fn get(account: CredentialAccount) -> Result<Option<String>> {
         let _guard = credentials_lock().lock();
@@ -2140,17 +2145,11 @@ impl CredentialsVault {
     }
 
     pub fn set_active_asr_provider(id: &str) -> Result<()> {
-        let _guard = credentials_lock().lock();
-        let mut root = load_credentials_for_update()?;
-        root.active.asr = id.to_string();
-        save_credentials(&root)
+        Self::select_active_provider(openless_core::ProviderSlot::Asr, id)
     }
 
     pub fn set_active_llm_provider(id: &str) -> Result<()> {
-        let _guard = credentials_lock().lock();
-        let mut root = load_credentials_for_update()?;
-        root.active.llm = id.to_string();
-        save_credentials(&root)
+        Self::select_active_provider(openless_core::ProviderSlot::Llm, id)
     }
 
     /// 当前 LLM 渠道的**厂商 id（providerType）**。理由同 `get_active_asr`。
@@ -2163,293 +2162,6 @@ impl CredentialsVault {
             .get(&id)
             .map(|entry| channel_provider_type(&id, entry).to_string())
             .unwrap_or(id)
-    }
-
-    // ---- 渠道卡片管理 ----
-
-    pub fn list_channels(kind: ChannelKind) -> Vec<ChannelSummary> {
-        let _guard = credentials_lock().lock();
-        let root = load_credentials();
-        match kind {
-            ChannelKind::Asr => channel_summaries(&root.providers.asr, |entry| {
-                entry.displayName.clone().unwrap_or_default()
-            }),
-            ChannelKind::Llm => channel_summaries(&root.providers.llm, |entry| {
-                entry.displayName.clone().unwrap_or_default()
-            }),
-        }
-    }
-
-    /// 新建一张渠道卡片，返回分配到的 id。新卡片排在**启用组末尾**。
-    pub fn create_channel(kind: ChannelKind, provider_type: &str, name: &str) -> Result<String> {
-        let provider_type = provider_type.trim();
-        if provider_type.is_empty() {
-            anyhow::bail!("provider type cannot be empty");
-        }
-        let _guard = credentials_lock().lock();
-        let mut root = load_credentials_for_update()?;
-        let name = name.trim();
-
-        let id = match kind {
-            ChannelKind::Asr => {
-                let id = allocate_channel_id(&root.providers.asr, provider_type);
-                root.providers.asr.insert(
-                    id.clone(),
-                    CredsAsrEntry {
-                        channel: ChannelMeta {
-                            providerType: Some(provider_type.to_string()),
-                            order: Some(next_order(&root.providers.asr)),
-                            enabled: true,
-                            lastTest: None,
-                        },
-                        displayName: (!name.is_empty()).then(|| name.to_string()),
-                        ..Default::default()
-                    },
-                );
-                // 存在禁用项时 `next_order`（启用项 max + 1）可能与其 order 同号，
-                // 列表排序会按 id 字母序把它们混排、破坏「禁用沉底」。压实成 0..n。
-                compact_orders(&mut root.providers.asr);
-                id
-            }
-            ChannelKind::Llm => {
-                let id = allocate_channel_id(&root.providers.llm, provider_type);
-                root.providers.llm.insert(
-                    id.clone(),
-                    CredsLlmEntry {
-                        channel: ChannelMeta {
-                            providerType: Some(provider_type.to_string()),
-                            order: Some(next_order(&root.providers.llm)),
-                            enabled: true,
-                            lastTest: None,
-                        },
-                        displayName: (!name.is_empty()).then(|| name.to_string()),
-                        ..Default::default()
-                    },
-                );
-                compact_orders(&mut root.providers.llm);
-                id
-            }
-        };
-
-        save_credentials(&root)?;
-        Ok(id)
-    }
-
-    /// 改一张卡片的厂商。
-    ///
-    /// 「添加渠道」被合并成单个弹窗后，用户是在**已经建好的草稿卡片上**换供应商的，
-    /// 所以这不是内部细节而是常规操作。旧厂商的凭据字段留着不动：不同厂商用不同的
-    /// 凭据槽（volcengine.* / xfyun.* / asr.*），互不覆盖，换回去时原样还在。
-    pub fn set_channel_provider_type(
-        kind: ChannelKind,
-        id: &str,
-        provider_type: &str,
-    ) -> Result<()> {
-        let provider_type = provider_type.trim();
-        if provider_type.is_empty() {
-            anyhow::bail!("provider type cannot be empty");
-        }
-        let _guard = credentials_lock().lock();
-        let mut root = load_credentials_for_update()?;
-        let meta = match kind {
-            ChannelKind::Asr => root
-                .providers
-                .asr
-                .get_mut(id)
-                .map(|entry| entry.meta_mut())
-                .with_context(|| format!("unknown ASR channel: {id}"))?,
-            ChannelKind::Llm => root
-                .providers
-                .llm
-                .get_mut(id)
-                .map(|entry| entry.meta_mut())
-                .with_context(|| format!("unknown LLM channel: {id}"))?,
-        };
-        meta.providerType = Some(provider_type.to_string());
-        // 换了厂商，之前那次测试结果就不再代表这张卡片了。
-        meta.lastTest = None;
-        save_credentials(&root)
-    }
-
-    /// 回收一张「什么都没填」的草稿渠道，返回是否真的删了。
-    ///
-    /// 单弹窗流程下，点开「添加渠道」就会先建一张草稿卡片（凭据必须按渠道 id 写入，
-    /// 没有 id 就没处可写）。用户什么都没填就关掉弹窗时用这个把草稿收走，
-    /// 免得列表里留下一张空卡片。填过任何一个字段就保留。
-    pub fn delete_channel_if_blank(kind: ChannelKind, id: &str) -> Result<bool> {
-        let _guard = credentials_lock().lock();
-        let mut root = load_credentials_for_update()?;
-        let blank = match kind {
-            ChannelKind::Asr => root
-                .providers
-                .asr
-                .get(id)
-                .map(|entry| entry.has_no_content())
-                .unwrap_or(false),
-            ChannelKind::Llm => root
-                .providers
-                .llm
-                .get(id)
-                .map(|entry| entry.has_no_content())
-                .unwrap_or(false),
-        };
-        if !blank {
-            return Ok(false);
-        }
-        match kind {
-            ChannelKind::Asr => {
-                root.providers.asr.remove(id);
-                compact_orders(&mut root.providers.asr);
-            }
-            ChannelKind::Llm => {
-                root.providers.llm.remove(id);
-                compact_orders(&mut root.providers.llm);
-            }
-        }
-        save_credentials(&root)?;
-        Ok(true)
-    }
-
-    pub fn rename_channel(kind: ChannelKind, id: &str, name: &str) -> Result<()> {
-        let _guard = credentials_lock().lock();
-        let mut root = load_credentials_for_update()?;
-        let name = name.trim();
-        let name = (!name.is_empty()).then(|| name.to_string());
-        match kind {
-            ChannelKind::Asr => {
-                let entry = root
-                    .providers
-                    .asr
-                    .get_mut(id)
-                    .with_context(|| format!("unknown ASR channel: {id}"))?;
-                entry.displayName = name;
-            }
-            ChannelKind::Llm => {
-                let entry = root
-                    .providers
-                    .llm
-                    .get_mut(id)
-                    .with_context(|| format!("unknown LLM channel: {id}"))?;
-                entry.displayName = name;
-            }
-        }
-        save_credentials(&root)
-    }
-
-    pub fn delete_channel(kind: ChannelKind, id: &str) -> Result<()> {
-        let _guard = credentials_lock().lock();
-        let mut root = load_credentials_for_update()?;
-        match kind {
-            ChannelKind::Asr => {
-                root.providers
-                    .asr
-                    .remove(id)
-                    .with_context(|| format!("unknown ASR channel: {id}"))?;
-                compact_orders(&mut root.providers.asr);
-            }
-            ChannelKind::Llm => {
-                root.providers
-                    .llm
-                    .remove(id)
-                    .with_context(|| format!("unknown LLM channel: {id}"))?;
-                compact_orders(&mut root.providers.llm);
-            }
-        }
-        // save_credentials 内部会 sync_active_channels，把 active 顺延到下一张。
-        save_credentials(&root)
-    }
-
-    pub fn set_channel_enabled(kind: ChannelKind, id: &str, enabled: bool) -> Result<()> {
-        let _guard = credentials_lock().lock();
-        let mut root = load_credentials_for_update()?;
-        match kind {
-            ChannelKind::Asr => {
-                let entry = root
-                    .providers
-                    .asr
-                    .get_mut(id)
-                    .with_context(|| format!("unknown ASR channel: {id}"))?;
-                entry.channel.enabled = enabled;
-                reposition_after_toggle(&mut root.providers.asr, id);
-            }
-            ChannelKind::Llm => {
-                let entry = root
-                    .providers
-                    .llm
-                    .get_mut(id)
-                    .with_context(|| format!("unknown LLM channel: {id}"))?;
-                entry.channel.enabled = enabled;
-                reposition_after_toggle(&mut root.providers.llm, id);
-            }
-        }
-        save_credentials(&root)
-    }
-
-    /// 按前端给的完整 id 顺序重排。列表里没提到的渠道保持在末尾。
-    pub fn reorder_channels(kind: ChannelKind, ordered_ids: &[String]) -> Result<()> {
-        let _guard = credentials_lock().lock();
-        let mut root = load_credentials_for_update()?;
-        match kind {
-            ChannelKind::Asr => apply_order(&mut root.providers.asr, ordered_ids),
-            ChannelKind::Llm => apply_order(&mut root.providers.llm, ordered_ids),
-        }
-        save_credentials(&root)
-    }
-
-    /// 记录一次「测试连通」的结果。
-    pub fn record_channel_test(
-        kind: ChannelKind,
-        id: &str,
-        ok: bool,
-        latency_ms: Option<u32>,
-        at: i64,
-        error: Option<String>,
-    ) -> Result<()> {
-        let test = ChannelTest {
-            ok,
-            latencyMs: latency_ms,
-            at,
-            error,
-        };
-        let _guard = credentials_lock().lock();
-        let mut root = load_credentials_for_update()?;
-        match kind {
-            ChannelKind::Asr => {
-                let entry = root
-                    .providers
-                    .asr
-                    .get_mut(id)
-                    .with_context(|| format!("unknown ASR channel: {id}"))?;
-                entry.channel.lastTest = Some(test);
-            }
-            ChannelKind::Llm => {
-                let entry = root
-                    .providers
-                    .llm
-                    .get_mut(id)
-                    .with_context(|| format!("unknown LLM channel: {id}"))?;
-                entry.channel.lastTest = Some(test);
-            }
-        }
-        save_credentials(&root)
-    }
-
-    /// 某张卡片的厂商 id。「测试连通」要按用户点的那张卡片决定协议，而不是当前生效的那张。
-    pub fn get_channel_provider_type(kind: ChannelKind, id: &str) -> Option<String> {
-        let _guard = credentials_lock().lock();
-        let root = load_credentials();
-        match kind {
-            ChannelKind::Asr => root
-                .providers
-                .asr
-                .get(id)
-                .map(|entry| channel_provider_type(id, entry).to_string()),
-            ChannelKind::Llm => root
-                .providers
-                .llm
-                .get(id)
-                .map(|entry| channel_provider_type(id, entry).to_string()),
-        }
     }
 
     /// 指定 LLM 渠道的自定义请求头（测试连通用；不传渠道时用 `get_active_llm_extra_headers`）。
@@ -2496,9 +2208,38 @@ impl CredentialsVault {
     }
 
     pub fn set_active_omni_provider(id: &str) -> Result<()> {
+        Self::select_active_provider(openless_core::ProviderSlot::Omni, id)
+    }
+
+    fn select_active_provider(slot: openless_core::ProviderSlot, id: &str) -> Result<()> {
         let _guard = credentials_lock().lock();
         let mut root = load_credentials_for_update()?;
-        root.omni.active = id.to_string();
+        let mut metadata = credential_metadata(&root);
+        let revision = metadata.revision();
+        metadata
+            .select_active_provider(slot, id.to_string())
+            .map_err(|error| anyhow::anyhow!(error.message))?;
+        if metadata.revision() == revision {
+            return Ok(());
+        }
+        apply_credential_metadata(&mut root, metadata)?;
+        save_credentials(&root)
+    }
+
+    pub fn get_for_omni_provider(id: &str, account: CredentialAccount) -> Result<Option<String>> {
+        let _guard = credentials_lock().lock();
+        lookup_omni_account(&load_credentials(), id, account)
+    }
+
+    pub fn set_for_omni_provider(id: &str, account: CredentialAccount, value: &str) -> Result<()> {
+        let _guard = credentials_lock().lock();
+        let mut root = load_credentials_for_update()?;
+        write_omni_account(
+            &mut root,
+            id,
+            account,
+            (!value.is_empty()).then(|| value.to_string()),
+        )?;
         save_credentials(&root)
     }
 
@@ -2512,6 +2253,11 @@ impl CredentialsVault {
         active_omni_extra_headers_json(&load_credentials())
     }
 
+    pub fn get_omni_extra_headers_json_for_provider(id: &str) -> Result<Option<String>> {
+        let _guard = credentials_lock().lock();
+        omni_extra_headers_json(&load_credentials(), id)
+    }
+
     pub fn get_active_omni_temperature() -> Option<f32> {
         let _guard = credentials_lock().lock();
         active_omni_temperature(&load_credentials())
@@ -2520,6 +2266,11 @@ impl CredentialsVault {
     pub fn get_active_omni_temperature_string() -> Option<String> {
         let _guard = credentials_lock().lock();
         active_omni_temperature_string(&load_credentials())
+    }
+
+    pub fn get_omni_temperature_string_for_provider(id: &str) -> Option<String> {
+        let _guard = credentials_lock().lock();
+        omni_temperature_string(&load_credentials(), id)
     }
 
     pub fn set_active_omni_temperature(value: &str) -> Result<()> {
@@ -2532,6 +2283,18 @@ impl CredentialsVault {
             .entry(root.omni.active.clone())
             .or_default();
         entry.temperature = temperature;
+        save_credentials(&root)
+    }
+
+    pub fn set_omni_temperature_for_provider(id: &str, value: &str) -> Result<()> {
+        let _guard = credentials_lock().lock();
+        let temperature = parse_llm_temperature(value)?;
+        let mut root = load_credentials_for_update()?;
+        root.omni
+            .providers
+            .entry(id.to_string())
+            .or_default()
+            .temperature = temperature;
         save_credentials(&root)
     }
 
@@ -2549,6 +2312,18 @@ impl CredentialsVault {
         } else {
             Some(headers)
         };
+        save_credentials(&root)
+    }
+
+    pub fn set_omni_extra_headers_json_for_provider(id: &str, value: &str) -> Result<()> {
+        let _guard = credentials_lock().lock();
+        let headers = parse_extra_headers_json(value)?;
+        let mut root = load_credentials_for_update()?;
+        root.omni
+            .providers
+            .entry(id.to_string())
+            .or_default()
+            .extraHeaders = (!headers.is_empty()).then_some(headers);
         save_credentials(&root)
     }
 
@@ -2585,6 +2360,15 @@ impl CredentialsVault {
         save_credentials(&root)
     }
 
+    /// 写入指定 LLM 渠道的采样温度，不改变 active 渠道。
+    pub fn set_llm_temperature_for_provider(id: &str, value: &str) -> Result<()> {
+        let _guard = credentials_lock().lock();
+        let temperature = parse_llm_temperature(value)?;
+        let mut root = load_credentials_for_update()?;
+        set_llm_temperature_for_provider_in_root(&mut root, id, temperature);
+        save_credentials(&root)
+    }
+
     pub fn set_active_llm_extra_headers_json(value: &str) -> Result<()> {
         let _guard = credentials_lock().lock();
         let headers = parse_extra_headers_json(value)?;
@@ -2602,28 +2386,23 @@ impl CredentialsVault {
         save_credentials(&root)
     }
 
+    /// 写入指定 LLM 渠道的额外请求头，不改变 active 渠道。
+    pub fn set_llm_extra_headers_json_for_provider(id: &str, value: &str) -> Result<()> {
+        let _guard = credentials_lock().lock();
+        let headers = parse_extra_headers_json(value)?;
+        let mut root = load_credentials_for_update()?;
+        set_llm_extra_headers_for_provider_in_root(&mut root, id, headers);
+        save_credentials(&root)
+    }
+
     pub fn snapshot() -> CredentialsSnapshot {
+        Self::snapshot_for_pipeline(true)
+    }
+
+    pub fn snapshot_for_pipeline(include_omni: bool) -> CredentialsSnapshot {
         let _guard = credentials_lock().lock();
         let root = load_credentials();
-        CredentialsSnapshot {
-            volcengine_app_key: lookup_account(&root, CredentialAccount::VolcengineAppKey),
-            volcengine_access_key: lookup_account(&root, CredentialAccount::VolcengineAccessKey),
-            volcengine_resource_id: lookup_account(&root, CredentialAccount::VolcengineResourceId),
-            volcengine_auth_mode: lookup_account(&root, CredentialAccount::VolcengineAuthMode),
-            volcengine_api_key: lookup_account(&root, CredentialAccount::VolcengineApiKey),
-            asr_api_key: lookup_account(&root, CredentialAccount::AsrApiKey),
-            asr_endpoint: lookup_account(&root, CredentialAccount::AsrEndpoint),
-            asr_model: lookup_account(&root, CredentialAccount::AsrModel),
-            xfyun_app_id: lookup_account(&root, CredentialAccount::XfyunAppId),
-            xfyun_api_key: lookup_account(&root, CredentialAccount::XfyunApiKey),
-            ark_api_key: lookup_account(&root, CredentialAccount::ArkApiKey),
-            ark_model_id: lookup_account(&root, CredentialAccount::ArkModelId),
-            ark_endpoint: lookup_account(&root, CredentialAccount::ArkEndpoint),
-            active_omni_provider: root.omni.active.clone(),
-            omni_api_key: lookup_account(&root, CredentialAccount::OmniApiKey),
-            omni_endpoint: lookup_account(&root, CredentialAccount::OmniEndpoint),
-            omni_model: lookup_account(&root, CredentialAccount::OmniModel),
-        }
+        credentials_snapshot(&root, include_omni)
     }
 }
 
@@ -2633,12 +2412,14 @@ mod tests {
     use super::load_android_credentials_from_source_with_crypto;
     use super::{
         android_persistable_credentials, chunk_json_payload, credentials_cache,
-        decode_keyring_payload, get_android_marketplace_token_at,
-        load_android_credentials_from_path, load_android_credentials_from_path_with_crypto,
-        load_android_credentials_into_cache_with, lookup_account, lookup_marketplace_github_token,
-        parse_extra_headers_json, parse_llm_temperature, reset_credentials_cache_for_tests,
-        write_account, write_marketplace_github_token, CredentialAccount, CredsAsrEntry,
-        CredsLlmEntry, CredsRoot, KeyringPayload, MarketplaceGithubToken,
+        get_android_marketplace_token_at, load_android_credentials_from_path,
+        load_android_credentials_from_path_with_crypto, load_android_credentials_into_cache_with,
+        lookup_account, lookup_marketplace_github_token, lookup_omni_account,
+        omni_extra_headers_json, omni_temperature_string, parse_extra_headers_json,
+        parse_llm_temperature, reset_credentials_cache_for_tests,
+        set_llm_extra_headers_for_provider_in_root, set_llm_temperature_for_provider_in_root,
+        write_account, write_marketplace_github_token, write_omni_account, CredentialAccount,
+        CredsAsrEntry, CredsLlmEntry, CredsRoot, MarketplaceGithubToken,
         KEYRING_CHUNK_MAX_UTF16_UNITS,
     };
     use anyhow::anyhow;
@@ -2659,38 +2440,6 @@ mod tests {
         assert!(chunks
             .iter()
             .all(|chunk| chunk.encode_utf16().count() <= KEYRING_CHUNK_MAX_UTF16_UNITS));
-    }
-
-    #[test]
-    fn keyring_payload_accepts_single_entry_credentials() {
-        let json = r#"{"version":1,"active":{"asr":"single-asr","llm":"single-llm"}}"#;
-        let decoded = decode_keyring_payload(json).expect("direct payload should decode");
-        let KeyringPayload::Direct(root) = decoded else {
-            panic!("direct credentials were mistaken for a chunk manifest");
-        };
-        assert_eq!(root.active.asr, "single-asr");
-        assert_eq!(root.active.llm, "single-llm");
-    }
-
-    #[test]
-    fn keyring_payload_keeps_legacy_chunk_manifest_compatible() {
-        let json = r#"{"openless_credentials_storage":"chunked","version":1,"chunks":2}"#;
-        let decoded = decode_keyring_payload(json).expect("chunk manifest should decode");
-        let KeyringPayload::Chunked(manifest) = decoded else {
-            panic!("chunk manifest was mistaken for direct credentials");
-        };
-        assert_eq!(manifest.chunks, 2);
-        assert!(manifest.generation.is_none());
-    }
-
-    #[test]
-    fn keyring_payload_rejects_unknown_manifest_versions() {
-        let json = r#"{"openless_credentials_storage":"chunked","version":99,"chunks":1}"#;
-        let error = decode_keyring_payload(json)
-            .err()
-            .expect("unknown manifest version must not become empty credentials")
-            .to_string();
-        assert!(error.contains("invalid system credential vault manifest"));
     }
 
     #[test]
@@ -2735,6 +2484,84 @@ mod tests {
             lookup_account(&root, CredentialAccount::OmniModel).as_deref(),
             Some("gpt-4o-audio-preview")
         );
+
+        // 显式 provider id 的运行时读取不得依赖或改写 active provider。
+        write_omni_account(
+            &mut root,
+            "custom",
+            CredentialAccount::OmniApiKey,
+            Some("custom-key".into()),
+        )
+        .unwrap();
+        write_omni_account(
+            &mut root,
+            "custom",
+            CredentialAccount::OmniEndpoint,
+            Some("https://custom.example.com/v1".into()),
+        )
+        .unwrap();
+        write_omni_account(
+            &mut root,
+            "custom",
+            CredentialAccount::OmniModel,
+            Some("custom-model".into()),
+        )
+        .unwrap();
+        let custom = root.omni.providers.get_mut("custom").unwrap();
+        custom.temperature = Some(0.4);
+        custom.extraHeaders = Some(HashMap::from([("x-tenant".into(), "custom".into())]));
+
+        assert_eq!(root.omni.active, "openai");
+        assert_eq!(
+            lookup_omni_account(&root, "custom", CredentialAccount::OmniApiKey)
+                .unwrap()
+                .as_deref(),
+            Some("custom-key")
+        );
+        assert_eq!(
+            lookup_omni_account(&root, "custom", CredentialAccount::OmniEndpoint)
+                .unwrap()
+                .as_deref(),
+            Some("https://custom.example.com/v1")
+        );
+        assert_eq!(
+            lookup_omni_account(&root, "custom", CredentialAccount::OmniModel)
+                .unwrap()
+                .as_deref(),
+            Some("custom-model")
+        );
+        assert_eq!(
+            omni_temperature_string(&root, "custom").as_deref(),
+            Some("0.4")
+        );
+        assert_eq!(
+            omni_extra_headers_json(&root, "custom").unwrap().as_deref(),
+            Some(r#"{"x-tenant":"custom"}"#)
+        );
+    }
+
+    #[test]
+    fn traditional_pipeline_snapshot_does_not_extract_omni_secrets() {
+        let mut root = CredsRoot::default();
+        root.omni.active = "custom".into();
+        root.omni.providers.insert(
+            "custom".into(),
+            super::CredsOmniEntry {
+                apiKey: Some("omni-secret".into()),
+                baseURL: Some("https://omni.example/v1".into()),
+                model: Some("omni-model".into()),
+                ..Default::default()
+            },
+        );
+
+        let hidden = super::credentials_snapshot(&root, false);
+        assert_eq!(hidden.omni_api_key, None);
+        assert_eq!(hidden.omni_endpoint, None);
+        assert_eq!(hidden.omni_model, None);
+
+        let visible = super::credentials_snapshot(&root, true);
+        assert_eq!(visible.omni_api_key.as_deref(), Some("omni-secret"));
+        assert_eq!(visible.omni_model.as_deref(), Some("omni-model"));
     }
 
     #[test]
@@ -3072,6 +2899,33 @@ mod tests {
     }
 
     #[test]
+    fn llm_extra_headers_and_temperature_writes_stay_on_the_explicit_channel() {
+        let mut root = CredsRoot::default();
+        root.active.llm = "channel-a".to_string();
+        root.providers
+            .llm
+            .insert("channel-a".to_string(), CredsLlmEntry::default());
+        set_llm_temperature_for_provider_in_root(&mut root, "channel-b", Some(0.7));
+        set_llm_extra_headers_for_provider_in_root(
+            &mut root,
+            "channel-b",
+            HashMap::from([(String::from("x-tenant"), String::from("b"))]),
+        );
+
+        assert_eq!(root.active.llm, "channel-a");
+        assert_eq!(root.providers.llm["channel-b"].temperature, Some(0.7));
+        assert_eq!(
+            root.providers.llm["channel-b"].extraHeaders,
+            Some(HashMap::from([(
+                String::from("x-tenant"),
+                String::from("b")
+            )]))
+        );
+        assert!(root.providers.llm["channel-a"].temperature.is_none());
+        assert!(root.providers.llm["channel-a"].extraHeaders.is_none());
+    }
+
+    #[test]
     fn active_llm_temperature_ignores_invalid_persisted_values() {
         for temperature in [-0.1, 2.5] {
             let mut root = CredsRoot::default();
@@ -3165,71 +3019,12 @@ mod tests {
     fn migrated_credentials_still_resolve_through_lookup_account() {
         let mut root = v1_root_with_two_asr_providers();
         super::migrate_channels(&mut root);
-        super::sync_active_channels(&mut root);
 
         // 迁移后凭据读取行为不变 —— 这是老用户升级不炸的底线。
         assert_eq!(
             lookup_account(&root, CredentialAccount::VolcengineAppKey).as_deref(),
             Some("vk")
         );
-    }
-
-    #[test]
-    fn active_follows_order_and_enabled_not_user_choice() {
-        let mut root = v1_root_with_two_asr_providers();
-        super::migrate_channels(&mut root);
-
-        // 把 groq 拖到第一。
-        root.providers.asr.get_mut("groq").unwrap().channel.order = Some(0);
-        root.providers
-            .asr
-            .get_mut("volcengine")
-            .unwrap()
-            .channel
-            .order = Some(1);
-        super::sync_active_channels(&mut root);
-        assert_eq!(root.active.asr, "groq");
-
-        // 关掉 groq 后，当前渠道顺延到下一个启用的。
-        root.providers.asr.get_mut("groq").unwrap().channel.enabled = false;
-        super::sync_active_channels(&mut root);
-        assert_eq!(root.active.asr, "volcengine");
-    }
-
-    #[test]
-    fn every_channel_disabled_clears_active_so_lookup_reports_unconfigured() {
-        let mut root = v1_root_with_two_asr_providers();
-        super::migrate_channels(&mut root);
-        for entry in root.providers.asr.values_mut() {
-            entry.channel.enabled = false;
-        }
-        super::sync_active_channels(&mut root);
-        // 清空而不是保留旧 id：entry 还在，保留会让 lookup 继续命中已禁用渠道。
-        assert_eq!(root.active.asr, "");
-        assert_eq!(
-            lookup_account(&root, CredentialAccount::VolcengineAppKey),
-            None
-        );
-    }
-
-    #[test]
-    fn every_llm_channel_disabled_clears_active_so_lookup_reports_unconfigured() {
-        let mut root = CredsRoot::default();
-        root.active.llm = "ark".into();
-        root.providers.llm.insert(
-            "ark".into(),
-            CredsLlmEntry {
-                apiKey: Some("sk-ark".into()),
-                ..Default::default()
-            },
-        );
-        super::migrate_channels(&mut root);
-        for entry in root.providers.llm.values_mut() {
-            entry.channel.enabled = false;
-        }
-        super::sync_active_channels(&mut root);
-        assert_eq!(root.active.llm, "");
-        assert_eq!(lookup_account(&root, CredentialAccount::ArkApiKey), None);
     }
 
     /// `active` 指向一个**不存在的 entry** 是真实会发生的：前端 prefs 里的
@@ -3257,15 +3052,24 @@ mod tests {
         );
 
         super::migrate_channels(&mut root);
-        super::sync_active_channels(&mut root);
 
         // 迁移只写 providerType / order，凭据一个字节都不动。
         assert_eq!(
-            root.providers.asr.get("volcengine").unwrap().appKey.as_deref(),
+            root.providers
+                .asr
+                .get("volcengine")
+                .unwrap()
+                .appKey
+                .as_deref(),
             Some("vk")
         );
         assert_eq!(
-            root.providers.asr.get("volcengine").unwrap().accessKey.as_deref(),
+            root.providers
+                .asr
+                .get("volcengine")
+                .unwrap()
+                .accessKey
+                .as_deref(),
             Some("ak")
         );
         assert_eq!(
@@ -3301,7 +3105,6 @@ mod tests {
         );
 
         super::migrate_channels(&mut root);
-        super::sync_active_channels(&mut root);
 
         assert_eq!(root.active.asr, "volcengine");
         // 凭据确实能通过正常读取路径拿到 —— 也就是 UI 上会显示"已配置"。
@@ -3368,172 +3171,68 @@ mod tests {
         );
     }
 
-    // ---- 排序 / 开关 ----
-
-    /// 造一组 ASR 渠道：`(id, order, enabled)`。
-    fn channels(spec: &[(&str, u32, bool)]) -> HashMap<String, CredsAsrEntry> {
-        spec.iter()
-            .map(|(id, order, enabled)| {
-                (
-                    (*id).to_string(),
-                    CredsAsrEntry {
-                        channel: super::ChannelMeta {
-                            providerType: Some((*id).to_string()),
-                            order: Some(*order),
-                            enabled: *enabled,
-                            lastTest: None,
-                        },
-                        ..Default::default()
+    #[test]
+    fn metadata_projection_preserves_remaining_secrets_and_removes_deleted_channels() {
+        let mut root = CredsRoot::default();
+        root.metadata_revision = 4;
+        for (id, order, key) in [("deepseek", 0, "key-a"), ("deepseek-2", 1, "key-b")] {
+            root.providers.llm.insert(
+                id.into(),
+                CredsLlmEntry {
+                    channel: super::ChannelMeta {
+                        providerType: Some("deepseek".into()),
+                        order: Some(order),
+                        enabled: true,
+                        lastTest: None,
                     },
-                )
-            })
-            .collect()
-    }
-
-    /// 按 order 升序取出 `(id, enabled)`，用来断言列表的可见顺序。
-    fn ordered(map: &HashMap<String, CredsAsrEntry>) -> Vec<(String, bool)> {
-        let mut list: Vec<_> = map
-            .iter()
-            .map(|(id, entry)| {
-                (
-                    id.clone(),
-                    entry.channel.enabled,
-                    entry.channel.order.unwrap_or(u32::MAX),
-                )
-            })
-            .collect();
-        list.sort_by(|left, right| left.2.cmp(&right.2).then_with(|| left.0.cmp(&right.0)));
-        list.into_iter()
-            .map(|(id, enabled, _)| (id, enabled))
-            .collect()
-    }
-
-    #[test]
-    fn disabling_a_channel_sinks_it_below_every_enabled_one() {
-        let mut map = channels(&[("a", 0, true), ("b", 1, true), ("c", 2, true)]);
-        map.get_mut("a").unwrap().channel.enabled = false;
-        super::reposition_after_toggle(&mut map, "a");
-
-        assert_eq!(
-            ordered(&map),
-            vec![("b".into(), true), ("c".into(), true), ("a".into(), false),]
-        );
-    }
-
-    #[test]
-    fn re_enabling_a_channel_lands_at_the_end_of_the_enabled_group() {
-        let mut map = channels(&[("a", 0, true), ("b", 1, true), ("c", 2, false)]);
-        map.get_mut("c").unwrap().channel.enabled = true;
-        super::reposition_after_toggle(&mut map, "c");
-
-        // 不回原位、也不抢第一 —— 落到启用组末尾，不打扰当前生效的 a。
-        assert_eq!(
-            ordered(&map),
-            vec![("a".into(), true), ("b".into(), true), ("c".into(), true)]
-        );
-    }
-
-    #[test]
-    fn compact_orders_keeps_disabled_channels_at_the_bottom() {
-        let mut map = channels(&[("a", 5, false), ("b", 9, true), ("c", 1, true)]);
-        super::compact_orders(&mut map);
-
-        assert_eq!(
-            ordered(&map),
-            vec![("c".into(), true), ("b".into(), true), ("a".into(), false),]
-        );
-        // order 压实成 0..n，避免反复拖拽后数值发散。
-        let mut orders: Vec<u32> = map
-            .values()
-            .map(|entry| entry.channel.order.unwrap())
-            .collect();
-        orders.sort_unstable();
-        assert_eq!(orders, vec![0, 1, 2]);
-    }
-
-    #[test]
-    fn reorder_puts_the_dragged_channel_first_and_drives_active() {
-        let mut root = CredsRoot::default();
-        root.providers.asr = channels(&[("a", 0, true), ("b", 1, true)]);
-        super::apply_order(&mut root.providers.asr, &["b".to_string(), "a".to_string()]);
-        super::sync_active_channels(&mut root);
-
-        assert_eq!(ordered(&root.providers.asr)[0].0, "b");
-        assert_eq!(root.active.asr, "b");
-    }
-
-    #[test]
-    fn reorder_tolerates_ids_the_frontend_did_not_mention() {
-        let mut map = channels(&[("a", 0, true), ("b", 1, true), ("c", 2, true)]);
-        // 前端只发了两个 id（比如 c 是刚被另一个窗口加进来的）。
-        super::apply_order(&mut map, &["c".to_string(), "a".to_string()]);
-
-        let order = ordered(&map);
-        assert_eq!(order[0].0, "c");
-        assert_eq!(order[1].0, "a");
-        // 没提到的 b 落到末尾而不是消失或撞车。
-        assert_eq!(order[2].0, "b");
-    }
-
-    #[test]
-    fn new_channel_id_falls_back_to_numbered_suffix_for_same_provider() {
-        let mut map = channels(&[("deepseek", 0, true)]);
-        let second = super::allocate_channel_id(&map, "deepseek");
-        assert_eq!(second, "deepseek-2");
-
-        map.insert(second, Default::default());
-        assert_eq!(super::allocate_channel_id(&map, "deepseek"), "deepseek-3");
-        // 不同厂商仍拿到干净的 id。
-        assert_eq!(super::allocate_channel_id(&map, "groq"), "groq");
-    }
-
-    #[test]
-    fn new_channel_lands_at_the_end_of_the_enabled_group() {
-        // 禁用项的 order 更大，但新卡片要排在启用组末尾，而不是整个列表末尾。
-        let map = channels(&[("a", 0, true), ("b", 1, true), ("c", 2, false)]);
-        assert_eq!(super::next_order(&map), 2);
-    }
-
-    #[test]
-    fn create_channel_with_disabled_present_keeps_disabled_at_the_bottom() {
-        // 与 `create_channel` 相同的路径：allocate → insert（order = next_order）
-        // → compact_orders。修复前新卡与禁用项 `c` 同 order，列表会按 id 字母序
-        // 混排；压实后新启用卡在启用组末尾、禁用项仍沉底。
-        let mut root = CredsRoot::default();
-        root.providers.asr = channels(&[("a", 0, true), ("b", 1, true), ("c", 2, false)]);
-        let id = super::allocate_channel_id(&root.providers.asr, "deepseek");
-        root.providers.asr.insert(
-            id.clone(),
-            CredsAsrEntry {
-                channel: super::ChannelMeta {
-                    providerType: Some("deepseek".into()),
-                    order: Some(super::next_order(&root.providers.asr)),
-                    enabled: true,
-                    lastTest: None,
+                    apiKey: Some(key.into()),
+                    ..Default::default()
                 },
-                ..Default::default()
-            },
-        );
-        super::compact_orders(&mut root.providers.asr);
+            );
+        }
+        root.active.llm = "deepseek".into();
 
+        let mut metadata = super::credential_metadata(&root);
+        metadata
+            .apply_channel_mutation(
+                openless_core::ChannelMutation::Delete {
+                    kind: openless_core::ChannelKind::Llm,
+                    id: "deepseek".into(),
+                },
+                |_| false,
+            )
+            .unwrap();
+        super::apply_credential_metadata(&mut root, metadata).unwrap();
+
+        assert!(!root.providers.llm.contains_key("deepseek"));
         assert_eq!(
-            ordered(&root.providers.asr),
-            vec![
-                ("a".into(), true),
-                ("b".into(), true),
-                ("deepseek".into(), true),
-                ("c".into(), false),
-            ]
+            root.providers
+                .llm
+                .get("deepseek-2")
+                .and_then(|entry| entry.apiKey.as_deref()),
+            Some("key-b")
         );
-        // order 连续无重复，杜绝与禁用项同号。
-        let mut orders: Vec<u32> = root
-            .providers
-            .asr
-            .values()
-            .map(|entry| entry.channel.order.unwrap())
-            .collect();
-        orders.sort_unstable();
-        assert_eq!(orders, vec![0, 1, 2, 3]);
+        assert_eq!(root.active.llm, "deepseek-2");
+        assert_eq!(root.metadata_revision, 5);
+    }
+
+    #[test]
+    fn stale_metadata_revision_cannot_overwrite_newer_vault_contents() {
+        let mut root = CredsRoot {
+            metadata_revision: 3,
+            ..CredsRoot::default()
+        };
+        let stale = openless_core::CredentialMetadata::from_parts(
+            Vec::new(),
+            Vec::new(),
+            "",
+            "",
+            "custom",
+            3,
+        );
+
+        assert!(super::apply_credential_metadata(&mut root, stale).is_err());
+        assert_eq!(root.metadata_revision, 3);
     }
 
     #[test]
@@ -3555,7 +3254,7 @@ mod tests {
                 },
             );
         }
-        super::sync_active_channels(&mut root);
+        root.active.llm = "uuid-a".into();
         assert_eq!(root.active.llm, "uuid-a");
 
         let entry = root.providers.llm.get(&root.active.llm).unwrap();

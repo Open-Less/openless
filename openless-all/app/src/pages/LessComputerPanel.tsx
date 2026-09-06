@@ -67,7 +67,8 @@ import {
   lessComputerSync,
   lessComputerWindowDismiss,
 } from '../lib/ipc';
-import type { CapsulePayload, LessComputerEvent } from '../lib/types';
+import { reconcileLessComputerReplay, reduceLessComputerVoice } from '../lib/lessComputerReplay';
+import type { LessComputerEvent, LessComputerVoiceEvent } from '../lib/types';
 import '../components/chat/chat.css';
 
 type RunStatus = 'idle' | 'working' | 'done' | 'error' | 'cancelled';
@@ -190,6 +191,7 @@ export function LessComputerPanel() {
   const { t } = useTranslation();
   // 连续对话：每按一次说话键追加一轮（除非后端标记 fresh=新会话则清空重开）。
   const [turns, setTurns] = useState<Turn[]>(getPreviewTurns);
+  const [voice, setVoice] = useState<LessComputerVoiceEvent | null>(null);
   // 新会话计数：fresh 时 +1，作为壳 key 重放入场动画 —— 浮窗是常驻 webview
   // （hide/show 复用），没有这个的话再次唤起时内容直接闪现，很突兀。
   const [sessionSeq, setSessionSeq] = useState(0);
@@ -229,14 +231,29 @@ export function LessComputerPanel() {
           return;
         }
         unlisten = handle;
-        const backlog = await lessComputerSync().catch(error => {
+        const replay = await lessComputerSync(lcAppliedSeq).catch(error => {
           console.error('[LessComputer] sync failed', error);
-          return [] as LessComputerEvent[];
+          return {
+            events: [] as LessComputerEvent[],
+            latestSequence: lcAppliedSeq,
+            truncated: false,
+            voiceState: undefined,
+          };
         });
         if (cancelled) return;
-        for (const ev of backlog) applyDeduped(ev);
+        const reconciled = reconcileLessComputerReplay(lcAppliedSeq, replay, pending);
+        if (reconciled.reset) {
+          setTurns([]);
+          setVoice(null);
+        }
+        // 投影有自己的原始seq，不推进聊天流水位；读取投影期间到达的普通事件仍需应用。
+        if (replay.voiceState) {
+          const snapshot = replay.voiceState;
+          setVoice(previous => reduceLessComputerVoice(previous, snapshot, true));
+        }
+        for (const ev of reconciled.events) applyEvent(ev);
+        lcAppliedSeq = reconciled.latestAppliedSequence;
         synced = true;
-        for (const ev of pending) applyDeduped(ev);
         pending.length = 0;
       } catch (error) {
         console.error('[LessComputer] listener setup failed', error);
@@ -250,6 +267,9 @@ export function LessComputerPanel() {
 
   const applyEvent = (ev: LessComputerEvent) => {
     switch (ev.kind) {
+      case 'voice_state':
+        setVoice(previous => reduceLessComputerVoice(previous, ev));
+        break;
       case 'user': {
         // 一轮新对话。fresh=true（后端无可续会话→新会话）则清空历史重开；否则追加为后续轮次。
         setTurns(prev => (ev.fresh ? [emptyTurn(ev.text)] : [...prev, emptyTurn(ev.text)]));
@@ -448,7 +468,7 @@ export function LessComputerPanel() {
           )}
         </CardContent>
         <CardFooter className="flex-col gap-2">
-          <Composer working={working} t={t} />
+          <Composer working={working} voice={voice} t={t} />
         </CardFooter>
       </Card>
     </MessageScrollerProvider>
@@ -462,63 +482,32 @@ export function LessComputerPanel() {
 //   守卫）。点进输入框时 chat_panel_focus_keyboard 让非激活面板成为 key window
 //   （不激活 app，主窗口不动）。
 // · 语音：录音红光、转译思考黑光绕输入组一圈圈跑（olchat-ring），输入框本体
-//   保持可见；指令落定（user 事件到、agent 开跑）即停 —— 监听 capsule:state
-//   的 operating 会话获得状态，与屏幕下方胶囊同一数据源。
+//   保持可见；只显示Core提供的voice_state，与聊天事件共用seq重放和session归属。
 function Composer({
   working,
+  voice,
   t,
 }: {
   working: boolean;
+  voice: LessComputerVoiceEvent | null;
   t: ReturnType<typeof useTranslation>['t'];
 }) {
   const [text, setText] = useState('');
-  const [voice, setVoice] = useState<
-    { state: 'recording'; level: number } | { state: 'thinking' } | null
-  >(null);
+  const busy = working || (voice !== null && voice.phase !== 'idle');
   // 输入组环形光：录音红光 → 转译黑光 → 指令落定（agent 已在跑）即停。
   const ring =
-    voice?.state === 'recording'
+    voice?.phase === 'recording'
       ? 'recording'
-      : voice?.state === 'thinking' && !working
+      : (voice?.phase === 'starting' || voice?.phase === 'transcribing') && !working
         ? 'thinking'
         : undefined;
   // IME 组合期间的 Enter 是「选字确认」不是「发送」。keydown 里 isComposing
   // 已覆盖大部分场景，keyCode 229 兜底 WebKit 老行为。
   const composingRef = useRef(false);
 
-  useEffect(() => {
-    if (!isTauri) return;
-    let unlisten: (() => void) | undefined;
-    let cancelled = false;
-    (async () => {
-      try {
-        const { listen } = await import('@tauri-apps/api/event');
-        const handle = await listen<CapsulePayload>('capsule:state', event => {
-          const p = event.payload;
-          if (p.operating !== true) return;
-          if (p.state === 'recording') {
-            setVoice({ state: 'recording', level: p.level ?? 0 });
-          } else if (p.state === 'transcribing' || p.state === 'polishing') {
-            setVoice(prev => (prev?.state === 'thinking' ? prev : { state: 'thinking' }));
-          } else {
-            setVoice(null);
-          }
-        });
-        if (cancelled) handle();
-        else unlisten = handle;
-      } catch (error) {
-        console.error('[LessComputer] capsule listener setup failed', error);
-      }
-    })();
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
-  }, []);
-
   const send = () => {
     const trimmed = text.trim();
-    if (!trimmed || working) return;
+    if (!trimmed || busy) return;
     setText('');
     void lessComputerSubmitText(trimmed);
   };
@@ -554,12 +543,22 @@ function Composer({
           onPointerDown={() => void chatPanelFocusKeyboard()}
         />
         <InputGroupAddon align="block-end" className="pt-1">
+          {voice && voice.phase !== 'idle' && (
+            <span className="mr-auto flex items-center gap-2 text-xs text-muted-foreground" role="status">
+              {voice.phase === 'recording'
+                ? t('overview.inAppDictation.recording')
+                : voice.phase === 'starting' ? t('common.loading') : t('overview.inAppDictation.processing')}
+              {voice.phase === 'recording' && (
+                <meter className="w-16" min={0} max={1} value={voice.level} aria-label={t('overview.inAppDictation.recording')} />
+              )}
+            </span>
+          )}
           <InputGroupButton
             type="submit"
             variant="default"
             size="icon-sm"
             className="ml-auto"
-            disabled={working || !text.trim()}
+            disabled={busy || !text.trim()}
           >
             <ArrowUpIcon />
             <span className="sr-only">{t('lessComputer.send')}</span>

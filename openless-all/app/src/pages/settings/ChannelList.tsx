@@ -18,6 +18,7 @@ import {
   deleteChannel,
   deleteChannelIfBlank,
   listChannels,
+  listProviderDescriptors,
   readCredential,
   recordChannelTest,
   renameChannel,
@@ -27,6 +28,7 @@ import {
   setCredential,
   validateProviderCredentials,
   type Channel,
+  type ProviderDescriptor,
 } from '../../lib/ipc';
 import { emitSaved } from '../../lib/savedEvent';
 import { useMobileLayout, useReadableLayout, useConservativeLayout } from '../../lib/useMobileLayout';
@@ -35,17 +37,20 @@ import { getPlatformCapabilities } from '../../lib/platform';
 import { Card } from '../_atoms';
 import {
   ChannelCredentialFields,
-  LLM_PRESETS,
-  LOCAL_ASR_PROVIDER_IDS,
+  LLM_LABELS,
   OmniChannelSection,
 } from './ProvidersSection';
-import { ASR_PRESETS, inputStyle, SectionTitle, Toggle } from './shared';
+import { ASR_LABELS, inputStyle, SectionTitle, Toggle } from './shared';
 
 type ChannelKind = 'llm' | 'asr';
 
 interface PresetOption {
   id: string;
   nameKey: string;
+  defaultEndpoint?: string;
+  defaultModel?: string;
+  authRequirement?: ProviderDescriptor['authRequirement'];
+  staticModels?: string[];
 }
 
 /** 「添加渠道」下拉里的供应商清单。本地引擎与 Codex OAuth 也在其中 —— 它们不是预置的
@@ -55,11 +60,19 @@ export function presetsFor(
   os: OS,
   supportsQwen3Mlx = true,
   currentProviderId?: string,
+  descriptors: ProviderDescriptor[] = [],
 ): PresetOption[] {
-  if (kind === 'llm') {
-    return LLM_PRESETS.map(p => ({ id: p.id, nameKey: p.nameKey }));
-  }
-  const visible = ASR_PRESETS.filter(p => {
+  const descriptorPresets = descriptors.map(descriptor => ({
+    id: descriptor.providerType,
+    nameKey: descriptor.labelKey,
+    defaultEndpoint: descriptor.defaultEndpoint ?? undefined,
+    defaultModel: descriptor.defaultModel ?? undefined,
+    authRequirement: descriptor.authRequirement,
+    staticModels: descriptor.staticModels,
+  }));
+  if (kind === 'llm') return descriptorPresets;
+  const available = descriptorPresets;
+  const visible = available.filter(p => {
     // 本地引擎严格按其实际支持的平台暴露；Linux / Android 不展示桌面专有实现。
     if (p.id === 'local-qwen3-mlx') return os === 'mac' && supportsQwen3Mlx;
     if (p.id === 'local-whisper' || p.id === 'apple-speech') return os === 'mac';
@@ -75,10 +88,10 @@ export function presetsFor(
   // 新建渠道继续隐藏历史别名；编辑已有渠道时把当前值补回，避免 Select value
   // 找不到对应 option 而显示为空。只接受注册表里已知的 preset，不放行任意字符串。
   if (currentProviderId && !visible.some(preset => preset.id === currentProviderId)) {
-    const current = ASR_PRESETS.find(preset => preset.id === currentProviderId);
+    const current = available.find(preset => preset.id === currentProviderId);
     if (current) visible.push(current);
   }
-  return visible.map(p => ({ id: p.id, nameKey: p.nameKey }));
+  return visible;
 }
 
 /** 只有从未发生用户交互的新建草稿才允许走空白回收。 */
@@ -90,9 +103,12 @@ function presetLabel(
   kind: ChannelKind,
   providerType: string,
   t: ReturnType<typeof useTranslation>['t'],
+  descriptors: ProviderDescriptor[],
 ): string {
+  const descriptor = descriptors.find(item => item.providerType === providerType);
+  if (descriptor) return t(`settings.providers.presets.${descriptor.labelKey}`);
   const list: readonly { id: string; nameKey: string }[] =
-    kind === 'llm' ? LLM_PRESETS : ASR_PRESETS;
+    kind === 'llm' ? LLM_LABELS : ASR_LABELS;
   const preset = list.find(p => p.id === providerType);
   return preset
     ? t(`settings.providers.presets.${preset.nameKey}`)
@@ -162,7 +178,8 @@ export function ChannelList({
   // Intel），以 os === 'mac' 起步会让 Intel Mac 打开下拉时闪现一次 MLX 预设，
   // 再由异步纠正消失。Apple Silicon 上 MLX 选项晚一帧出现，可接受。
   const [supportsQwen3Mlx, setSupportsQwen3Mlx] = useState(false);
-  const presets = presetsFor(kind, os, supportsQwen3Mlx);
+  const [descriptors, setDescriptors] = useState<ProviderDescriptor[]>([]);
+  const presets = presetsFor(kind, os, supportsQwen3Mlx, undefined, descriptors);
   const [channels, setChannels] = useState<Channel[]>([]);
   const [models, setModels] = useState<Record<string, string>>({});
   const [loaded, setLoaded] = useState(false);
@@ -178,6 +195,12 @@ export function ChannelList({
   useEffect(() => {
     void getPlatformCapabilities().then(caps => setSupportsQwen3Mlx(caps.supportsLocalQwen3Mlx));
   }, []);
+
+  useEffect(() => {
+    void listProviderDescriptors(kind)
+      .then(setDescriptors)
+      .catch(error => console.error('[channels] failed to load provider descriptors', error));
+  }, [kind]);
 
   const refresh = useCallback(async () => {
     try {
@@ -443,7 +466,7 @@ export function ChannelList({
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         {channels.map(channel => {
           const isActive = channel.id === activeId;
-          const label = channel.name.trim() || presetLabel(kind, channel.providerType, t);
+          const label = channel.name.trim() || presetLabel(kind, channel.providerType, t, descriptors);
           const model = models[channel.id] ?? '';
           const failed = channel.lastTest && !channel.lastTest.ok;
           return (
@@ -499,7 +522,7 @@ export function ChannelList({
                     列表高度参差看起来像坏了。 */}
                 <div style={{ fontSize: 11, color: 'var(--ol-ink-4)', marginTop: 2, minHeight: 15, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                   {/* 未命名时主标题已经是厂商名，副行再来一遍就成了重复的两行同名。 */}
-                  {channel.name.trim() && <span>{presetLabel(kind, channel.providerType, t)}</span>}
+                  {channel.name.trim() && <span>{presetLabel(kind, channel.providerType, t, descriptors)}</span>}
                   {model && <span style={{ fontFamily: 'var(--ol-font-mono)' }}>{model}</span>}
                   {/* 验证结果什么时候来的 —— 让"这条结论会过期"这件事可见。 */}
                   {channel.lastTest && <span>{relativeTime(channel.lastTest.at, t)}</span>}
@@ -552,7 +575,7 @@ export function ChannelList({
         <ChannelModal
           kind={kind}
           channel={editingChannel}
-          presets={presetsFor(kind, os, supportsQwen3Mlx, editingChannel.providerType)}
+          presets={presetsFor(kind, os, supportsQwen3Mlx, editingChannel.providerType, descriptors)}
           isDraft={isDraft}
           mobile={mobile}
           onClose={() => void closeModal()}
@@ -720,27 +743,15 @@ function ChannelModal({
   // OpenAI 兼容（baseUrl/model 为空）自然跳过。失败只记日志，不影响换厂商本身。
   const fillProviderDefaults = async (next: string) => {
     try {
-      if (kind === 'llm') {
-        const preset = LLM_PRESETS.find(p => p.id === next);
-        if (!preset || preset.id === 'custom' || preset.id === 'codex_oauth') return;
-        if (preset.baseUrl && !(await readCredential('ark.endpoint', channel.id))?.trim()) {
-          await setCredential('ark.endpoint', preset.baseUrl, channel.id);
-        }
-        if (
-          preset.modelPlaceholder &&
-          !(await readCredential('ark.model_id', channel.id))?.trim()
-        ) {
-          await setCredential('ark.model_id', preset.modelPlaceholder, channel.id);
-        }
-        return;
-      }
-      const preset = ASR_PRESETS.find(p => p.id === next);
+      const preset = presets.find(item => item.id === next);
       if (!preset) return;
-      if (preset.baseUrl && !(await readCredential('asr.endpoint', channel.id))?.trim()) {
-        await setCredential('asr.endpoint', preset.baseUrl, channel.id);
+      const endpointAccount = kind === 'llm' ? 'ark.endpoint' : 'asr.endpoint';
+      const modelAccount = kind === 'llm' ? 'ark.model_id' : 'asr.model';
+      if (preset.defaultEndpoint && !(await readCredential(endpointAccount, channel.id))?.trim()) {
+        await setCredential(endpointAccount, preset.defaultEndpoint, channel.id);
       }
-      if (preset.model && !(await readCredential('asr.model', channel.id))?.trim()) {
-        await setCredential('asr.model', preset.model, channel.id);
+      if (preset.defaultModel && !(await readCredential(modelAccount, channel.id))?.trim()) {
+        await setCredential(modelAccount, preset.defaultModel, channel.id);
       }
     } catch (error) {
       console.error('[channels] failed to fill provider defaults', error);
@@ -773,7 +784,8 @@ function ChannelModal({
     }
   };
 
-  const isLocalEngine = LOCAL_ASR_PROVIDER_IDS.includes(providerType);
+  const descriptor = presets.find(item => item.id === providerType);
+  const isLocalEngine = descriptor?.authRequirement === 'none';
 
   return (
     <Modal onClose={onClose} width={mobile ? 'min(560px, 100%)' : 'min(600px, 100%)'}>
@@ -811,6 +823,7 @@ function ChannelModal({
         kind={kind}
         providerType={providerType}
         channelId={channel.id}
+        descriptor={descriptor}
         onTested={() => void onChanged()}
         onUserMutation={onUserMutation}
       />

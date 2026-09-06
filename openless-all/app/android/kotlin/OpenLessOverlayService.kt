@@ -51,6 +51,13 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
 
     override fun onCreate() {
         super.onCreate()
+        try {
+            OpenLessNative.requireBackendContract()
+        } catch (error: Throwable) {
+            Log.e(TAG, "backend contract handshake failed", error)
+            stopSelf()
+            return
+        }
         instance = this
         OpenLessOverlayBridge.listener = this
     }

@@ -163,4 +163,3 @@ mod macos {
         rx.recv().unwrap_or(false)
     }
 }
-

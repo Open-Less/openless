@@ -1,42 +1,36 @@
-import { LLM_PRESETS } from './ProvidersSection';
-import { ASR_PRESETS } from './shared';
+import { LLM_LABELS } from './ProvidersSection';
+import { ASR_LABELS } from './shared';
+import { presetsFor } from './ChannelList';
 
-const atlascloudPreset = LLM_PRESETS.find(p => p.id === 'atlascloud');
+const atlascloudPreset = LLM_LABELS.find(p => p.id === 'atlascloud');
 
 if (!atlascloudPreset) {
   throw new Error('Atlas Cloud LLM preset is missing');
 }
 
-if (atlascloudPreset.baseUrl !== 'https://api.atlascloud.ai/v1') {
-  throw new Error(`unexpected Atlas Cloud base URL: ${atlascloudPreset.baseUrl}`);
-}
-
-if (atlascloudPreset.modelPlaceholder !== 'qwen/qwen3.5-flash') {
-  throw new Error(`unexpected Atlas Cloud default model: ${atlascloudPreset.modelPlaceholder}`);
-}
-
-const openAiCompatiblePreset = ASR_PRESETS.find(p => p.id === 'openai-compatible');
+const openAiCompatiblePreset = ASR_LABELS.find(p => p.id === 'openai-compatible');
 
 if (!openAiCompatiblePreset) {
   throw new Error('Custom OpenAI-compatible ASR preset is missing');
 }
 
-if (openAiCompatiblePreset.baseUrl !== '' || openAiCompatiblePreset.model !== '') {
-  throw new Error(
-    `Custom OpenAI-compatible ASR preset must have no defaults (got baseUrl=${openAiCompatiblePreset.baseUrl}, model=${openAiCompatiblePreset.model})`,
-  );
-}
-
-const zenmuxPreset = ASR_PRESETS.find(p => p.id === 'zenmux');
+const zenmuxPreset = ASR_LABELS.find(p => p.id === 'zenmux');
 
 if (!zenmuxPreset) {
   throw new Error('ZenMux ASR preset is missing');
 }
 
-if (zenmuxPreset.baseUrl !== 'https://zenmux.ai/api/v1') {
-  throw new Error(`unexpected ZenMux base URL: ${zenmuxPreset.baseUrl}`);
-}
+const coreAsr = presetsFor('asr', 'win', true, undefined, [{
+  kind: 'asr',
+  providerType: 'openai-compatible',
+  labelKey: 'asrOpenAiCompatible',
+  defaultEndpoint: null,
+  defaultModel: null,
+  authRequirement: 'endpoint_model_optional_api_key',
+  validationProbe: 'asr_silence',
+  staticModels: [],
+}]);
 
-if (zenmuxPreset.model !== 'qwen/qwen3-asr-flash') {
-  throw new Error(`unexpected ZenMux default model: ${zenmuxPreset.model}`);
+if (coreAsr.length !== 1 || coreAsr[0].authRequirement !== 'endpoint_model_optional_api_key') {
+  throw new Error('Core provider descriptor must replace the browser fallback in the channel picker');
 }

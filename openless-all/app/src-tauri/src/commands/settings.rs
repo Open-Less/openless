@@ -1,8 +1,8 @@
 use super::*;
 
 #[tauri::command]
-pub fn get_settings(coord: CoordinatorState<'_>) -> UserPreferences {
-    coord.prefs().get()
+pub fn get_settings(core: CoreState<'_>) -> UserPreferences {
+    core.get_preferences()
 }
 
 #[tauri::command]
@@ -10,453 +10,196 @@ pub fn get_default_style_system_prompts() -> StyleSystemPrompts {
     StyleSystemPrompts::default()
 }
 
-pub(crate) trait SettingsWriter {
-    fn read_settings(&self) -> UserPreferences;
-    fn write_settings(&self, prefs: UserPreferences) -> Result<(), String>;
-    fn write_settings_preserving_current_style_preferences(
+struct TauriSettingsRuntime<'a> {
+    coord: &'a Coordinator,
+}
+
+impl<'a> TauriSettingsRuntime<'a> {
+    fn new(coord: &'a Coordinator) -> Self {
+        Self { coord }
+    }
+
+    fn platform_error(message: impl Into<String>) -> openless_core::BackendError {
+        openless_core::BackendError::new(openless_core::BackendErrorCode::Platform, message)
+    }
+
+    fn apply_windows_keyboard(
         &self,
-        mut prefs: UserPreferences,
-    ) -> Result<(), String> {
-        let current = self.read_settings();
-        prefs.preserve_style_preferences_from(&current);
-        self.write_settings(prefs)
-    }
-    fn sync_active_asr_provider(&self, provider: &str) -> Result<(), String>;
-    fn refresh_dictation_hotkey(&self);
-    fn refresh_qa_hotkey(&self);
-    fn refresh_combo_hotkey(&self);
-    fn refresh_translation_hotkey(&self);
-    fn refresh_switch_style_hotkey(&self);
-    fn refresh_open_app_hotkey(&self);
-    fn refresh_selection_polish_hotkey(&self);
-    fn refresh_coding_agent_hotkey(&self);
-    // 默认 no-op：测试 mock 不关心风格快捷键；真实实现（Coordinator / Arc<T>）覆写。
-    fn refresh_style_pack_hotkeys(&self) {}
-}
-
-impl SettingsWriter for Coordinator {
-    fn read_settings(&self) -> UserPreferences {
-        self.prefs().get()
+        target: &openless_core::WindowsKeyboardRuntimeTarget,
+    ) -> Result<(), openless_core::BackendError> {
+        crate::windows_ime_profile::apply_windows_openless_keyboard_list(
+            target.openless_language_profile_enabled,
+        )
+        .map_err(Self::platform_error)
     }
 
-    fn write_settings(&self, prefs: UserPreferences) -> Result<(), String> {
-        self.prefs().set(prefs).map_err(|e| e.to_string())
-    }
-
-    fn write_settings_preserving_current_style_preferences(
+    fn apply_hotkeys(
         &self,
-        prefs: UserPreferences,
-    ) -> Result<(), String> {
-        self.prefs()
-            .set_preserving_current_style_preferences(prefs)
-            .map_err(|e| e.to_string())
-    }
-
-    fn sync_active_asr_provider(&self, provider: &str) -> Result<(), String> {
-        self.sync_active_asr_provider_to_vault(provider)
-    }
-
-    fn refresh_dictation_hotkey(&self) {
-        self.update_hotkey_binding();
-    }
-
-    fn refresh_qa_hotkey(&self) {
-        self.update_qa_hotkey_binding();
-    }
-
-    fn refresh_combo_hotkey(&self) {
-        self.update_combo_hotkey_binding();
-    }
-
-    fn refresh_translation_hotkey(&self) {
-        self.update_translation_hotkey_binding();
-    }
-
-    fn refresh_switch_style_hotkey(&self) {
-        self.update_switch_style_hotkey_binding();
-    }
-
-    fn refresh_open_app_hotkey(&self) {
-        self.update_open_app_hotkey_binding();
-    }
-
-    #[cfg(not(mobile))]
-    fn refresh_selection_polish_hotkey(&self) {
-        self.update_selection_polish_hotkey_binding();
-    }
-
-    #[cfg(mobile)]
-    fn refresh_selection_polish_hotkey(&self) {}
-
-    fn refresh_coding_agent_hotkey(&self) {
-        self.update_coding_agent_hotkey_binding();
-    }
-
-    fn refresh_style_pack_hotkeys(&self) {
-        self.update_style_pack_hotkey_bindings();
+        change: &openless_core::SettingsValueChange<openless_core::HotkeyRuntimeTarget>,
+    ) -> Result<(), openless_core::BackendError> {
+        self.coord
+            .apply_hotkey_runtime_change(change)
+            .map_err(Self::platform_error)
     }
 }
 
-impl<T: SettingsWriter + ?Sized> SettingsWriter for Arc<T> {
-    fn read_settings(&self) -> UserPreferences {
-        (**self).read_settings()
-    }
-
-    fn write_settings(&self, prefs: UserPreferences) -> Result<(), String> {
-        (**self).write_settings(prefs)
-    }
-
-    fn write_settings_preserving_current_style_preferences(
+impl openless_core::SettingsRuntime for TauriSettingsRuntime<'_> {
+    fn prepare(
         &self,
-        prefs: UserPreferences,
-    ) -> Result<(), String> {
-        (**self).write_settings_preserving_current_style_preferences(prefs)
-    }
-
-    fn sync_active_asr_provider(&self, provider: &str) -> Result<(), String> {
-        (**self).sync_active_asr_provider(provider)
-    }
-
-    fn refresh_dictation_hotkey(&self) {
-        (**self).refresh_dictation_hotkey();
-    }
-
-    fn refresh_qa_hotkey(&self) {
-        (**self).refresh_qa_hotkey();
-    }
-
-    fn refresh_combo_hotkey(&self) {
-        (**self).refresh_combo_hotkey();
-    }
-
-    fn refresh_translation_hotkey(&self) {
-        (**self).refresh_translation_hotkey();
-    }
-
-    fn refresh_switch_style_hotkey(&self) {
-        (**self).refresh_switch_style_hotkey();
-    }
-
-    fn refresh_open_app_hotkey(&self) {
-        (**self).refresh_open_app_hotkey();
-    }
-
-    fn refresh_selection_polish_hotkey(&self) {
-        (**self).refresh_selection_polish_hotkey();
-    }
-
-    fn refresh_coding_agent_hotkey(&self) {
-        (**self).refresh_coding_agent_hotkey();
-    }
-
-    fn refresh_style_pack_hotkeys(&self) {
-        (**self).refresh_style_pack_hotkeys();
-    }
-}
-
-/// 非核心热键，用于保存兜底的冲突化解。dictation 是核心热键，永不参与调整。
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum NonCoreHotkey {
-    Translation,
-    Qa,
-    SwitchStyle,
-    OpenApp,
-    SelectionPolish,
-    LessComputer,
-}
-
-impl NonCoreHotkey {
-    fn get(&self, prefs: &UserPreferences) -> Option<ShortcutBinding> {
-        match self {
-            Self::Translation => Some(prefs.translation_hotkey.clone()),
-            Self::Qa => prefs.qa_hotkey.clone(),
-            Self::SwitchStyle => prefs.switch_style_hotkey.clone(),
-            Self::OpenApp => prefs.open_app_hotkey.clone(),
-            Self::SelectionPolish => prefs.selection_polish_hotkey.clone(),
-            Self::LessComputer => prefs.coding_agent_voice_hotkey.clone(),
-        }
-    }
-
-    fn set(&self, prefs: &mut UserPreferences, value: Option<ShortcutBinding>) {
-        match self {
-            // translation 是必填键，None 表示恢复失败时保持旧值不动。
-            Self::Translation => {
-                if let Some(value) = value {
-                    prefs.translation_hotkey = value;
-                }
-            }
-            Self::Qa => prefs.qa_hotkey = value,
-            Self::SwitchStyle => prefs.switch_style_hotkey = value,
-            Self::OpenApp => prefs.open_app_hotkey = value,
-            Self::SelectionPolish => prefs.selection_polish_hotkey = value,
-            Self::LessComputer => prefs.coding_agent_voice_hotkey = value,
-        }
-    }
-}
-
-/// 单个非核心热键是否非法。与 `reject_non_dictation_side_specific_shortcuts`
-/// 的逐键校验保持精确一致，避免把非冲突键一并停用。
-fn non_core_hotkey_invalid(key: NonCoreHotkey, binding: &ShortcutBinding) -> bool {
-    if crate::shortcut_binding::reject_side_specific_non_dictation(binding).is_err() {
-        return true;
-    }
-    match key {
-        NonCoreHotkey::SelectionPolish => {
-            crate::shortcut_binding::validate_binding(binding).is_err()
-                || reject_bare_shift_dictation_shortcut(binding).is_err()
-        }
-        _ => false,
-    }
-}
-
-/// 保存兜底（#904）：热键冲突不能把整份设置挡在保存之外。
-///
-/// 按核心度从高到低处理每个非核心热键：凡与更高优先级键重叠、或本身非法
-/// （侧特定修饰键等）的，恢复为旧值；旧值仍冲突/非法（历史遗留，例如 1.3.15
-/// 升级注入的选区润色默认键与录音键重复）时停用（translation 回退默认 Shift）。
-/// 返回被调整的键数量。dictation 永远保留，不参与调整。
-pub(crate) fn reconcile_hotkey_collisions(
-    prefs: &mut UserPreferences,
-    previous: &UserPreferences,
-) -> usize {
-    // 处理顺序 = 核心度从高到低：处理某项时，更高优先级的键已定稿。
-    const ORDER: [NonCoreHotkey; 6] = [
-        NonCoreHotkey::Translation,
-        NonCoreHotkey::Qa,
-        NonCoreHotkey::SwitchStyle,
-        NonCoreHotkey::OpenApp,
-        NonCoreHotkey::SelectionPolish,
-        NonCoreHotkey::LessComputer,
-    ];
-    let mut higher: Vec<ShortcutBinding> = vec![prefs.dictation_hotkey.clone()];
-    let mut adjusted = 0;
-    for key in ORDER {
-        let Some(current) = key.get(prefs) else {
-            continue;
-        };
-        let collides = higher
-            .iter()
-            .any(|held| crate::shortcut_binding::bindings_overlap(held, &current));
-        if !collides && !non_core_hotkey_invalid(key, &current) {
-            higher.push(current);
-            continue;
-        }
-        let fallback = key.get(previous).filter(|candidate| {
-            !higher
-                .iter()
-                .any(|held| crate::shortcut_binding::bindings_overlap(held, candidate))
-                && !non_core_hotkey_invalid(key, candidate)
-        });
-        // translation 不能停用：旧值仍冲突/非法时回退到默认 Shift（不会与任何键重叠）。
-        let resolved = if key == NonCoreHotkey::Translation && fallback.is_none() {
-            Some(UserPreferences::default().translation_hotkey.clone())
-        } else {
-            fallback
-        };
-        key.set(prefs, resolved.clone());
-        adjusted += 1;
-        if let Some(value) = resolved {
-            higher.push(value);
-        }
-    }
-    // 风格包直达快捷键是最低优先级：与更高优先级键重叠、非法或集合内重复的条目，
-    // 先尝试恢复该风格包的旧绑定，仍不行则整条移除（不影响其余设置落盘）。
-    let mut kept: Vec<StylePackHotkey> = Vec::new();
-    for entry in &prefs.style_pack_hotkeys {
-        let candidate_ok = |candidate: &StylePackHotkey| {
-            !candidate.pack_id.trim().is_empty()
-                && crate::shortcut_binding::validate_binding(&candidate.binding).is_ok()
-                && crate::shortcut_binding::reject_side_specific_non_dictation(&candidate.binding)
-                    .is_ok()
-                && reject_modifier_only_action_shortcut(&candidate.binding).is_ok()
-                && !kept.iter().any(|held: &StylePackHotkey| {
-                    held.pack_id == candidate.pack_id
-                        || crate::shortcut_binding::bindings_overlap(
-                            &held.binding,
-                            &candidate.binding,
-                        )
-                })
-                && !higher.iter().any(|held| {
-                    crate::shortcut_binding::bindings_overlap(held, &candidate.binding)
-                })
-        };
-        if candidate_ok(entry) {
-            kept.push(entry.clone());
-            continue;
-        }
-        adjusted += 1;
-        if let Some(fallback) = previous
-            .style_pack_hotkeys
-            .iter()
-            .find(|old| old.pack_id == entry.pack_id)
-            .filter(|old| candidate_ok(old))
-        {
-            kept.push(fallback.clone());
-        }
-    }
-    if kept != prefs.style_pack_hotkeys {
-        prefs.style_pack_hotkeys = kept;
-    }
-    adjusted
-}
-
-pub(crate) fn persist_settings<T: SettingsWriter>(
-    coord: &T,
-    prefs: UserPreferences,
-) -> Result<(), String> {
-    persist_settings_with_keyboard_apply(
-        coord,
-        prefs,
-        crate::windows_ime_profile::apply_windows_openless_keyboard_list_pref,
-    )
-}
-
-pub(crate) fn persist_settings_with_keyboard_apply<T: SettingsWriter>(
-    coord: &T,
-    mut prefs: UserPreferences,
-    apply_keyboard_list: impl Fn(&UserPreferences) -> Result<(), String>,
-) -> Result<(), String> {
-    let mut previous = coord.read_settings();
-    sync_dictation_hotkey_legacy_fields(&mut previous);
-    sync_dictation_hotkey_legacy_fields(&mut prefs);
-    if let Err(collision_error) = reject_hotkey_collisions(&prefs) {
-        // 兜底（#904）：热键冲突（含历史遗留的重复键）不能拒绝整份设置保存。
-        // 自动把冲突/非法的非核心热键恢复旧值或停用，其余设置照常落盘。
-        let adjusted = reconcile_hotkey_collisions(&mut prefs, &previous);
-        reject_hotkey_collisions(&prefs).map_err(|leftover| {
-            format!("{collision_error}; 自动化解 {adjusted} 项后仍无法通过校验: {leftover}")
-        })?;
-        log::warn!(
-            "[settings] 热键冲突已自动化解（调整 {adjusted} 项）后保存: {collision_error}"
-        );
-    }
-    let dictation_shortcut_changed = previous.dictation_hotkey != prefs.dictation_hotkey;
-    let dictation_mode_changed = previous.hotkey.mode != prefs.hotkey.mode;
-    let qa_changed = previous.qa_hotkey != prefs.qa_hotkey;
-    let translation_changed = previous.translation_hotkey != prefs.translation_hotkey;
-    let switch_style_changed = previous.switch_style_hotkey != prefs.switch_style_hotkey;
-    let open_app_changed = previous.open_app_hotkey != prefs.open_app_hotkey;
-    let style_pack_hotkeys_changed = previous.style_pack_hotkeys != prefs.style_pack_hotkeys;
-    let selection_polish_changed =
-        previous.selection_polish_hotkey != prefs.selection_polish_hotkey;
-    let coding_agent_changed = previous.coding_agent_enabled != prefs.coding_agent_enabled
-        || previous.coding_agent_voice_hotkey != prefs.coding_agent_voice_hotkey;
-    let windows_keyboard_list_changed = previous.windows_sendinput_insertion_only
-        != prefs.windows_sendinput_insertion_only
-        || previous.windows_show_openless_in_keyboard_list
-            != prefs.windows_show_openless_in_keyboard_list;
-    let active_asr_provider_changed = previous.active_asr_provider != prefs.active_asr_provider;
-    let active_asr_provider = prefs.active_asr_provider.clone();
-
-    if windows_keyboard_list_changed {
-        apply_keyboard_list(&prefs)?;
-    }
-
-    if active_asr_provider_changed {
-        if let Err(asr_err) = coord.sync_active_asr_provider(&active_asr_provider) {
-            if windows_keyboard_list_changed {
-                if let Err(kb_rollback_err) = apply_keyboard_list(&previous) {
-                    return Err(format!(
-                        "{asr_err}; additionally failed to rollback keyboard list visibility: {kb_rollback_err}"
-                    ));
-                }
-                log::warn!(
-                    "[windows-ime] rolled back keyboard list visibility after ASR provider sync failure"
-                );
-            }
-            return Err(asr_err);
-        }
-    }
-
-    if let Err(error) = coord.write_settings_preserving_current_style_preferences(prefs.clone()) {
-        if active_asr_provider_changed {
-            match coord.sync_active_asr_provider(&previous.active_asr_provider) {
-                Ok(()) => {
-                    if windows_keyboard_list_changed {
-                        if let Err(rollback_err) = apply_keyboard_list(&previous) {
-                            return Err(format!(
-                                "{error}; additionally failed to rollback keyboard list visibility: {rollback_err}"
-                            ));
-                        }
-                        log::warn!(
-                            "[windows-ime] rolled back keyboard list visibility after settings write failure"
-                        );
-                    }
-                    return Err(error);
-                }
-                Err(rollback_error) => {
-                    // ASR vault 无法回滚时 roll-forward prefs；键盘列表保持新状态，避免三者分叉。
-                    coord
-                        .write_settings_preserving_current_style_preferences(prefs)
-                        .map_err(|roll_forward_error| {
-                            format!(
-                                "{error}; additionally failed to restore active ASR provider: {rollback_error}; additionally failed to preserve active ASR provider consistency: {roll_forward_error}"
-                            )
-                        })?;
-                }
-            }
-        } else if windows_keyboard_list_changed {
-            if let Err(rollback_err) = apply_keyboard_list(&previous) {
-                return Err(format!(
-                    "{error}; additionally failed to rollback keyboard list visibility: {rollback_err}"
+        plan: &openless_core::SettingsEffectPlan,
+    ) -> Result<openless_core::SettingsEffectReceipt, openless_core::SettingsEffectFailure> {
+        let mut receipt = openless_core::SettingsEffectReceipt::default();
+        if let Some(change) = &plan.windows_keyboard {
+            if let Err(error) = self.apply_windows_keyboard(&change.next) {
+                return Err(openless_core::SettingsEffectFailure::after_side_effect(
+                    error, receipt,
                 ));
             }
-            log::warn!(
-                "[windows-ime] rolled back keyboard list visibility after settings write failure"
-            );
-            return Err(error);
+            receipt
+                .applied
+                .push(openless_core::SettingsEffectKind::WindowsKeyboard);
+        }
+        if let Some(change) = &plan.active_asr_provider {
+            if let Err(error) =
+                sync_active_asr_provider_to_vault(&change.next).map_err(Self::platform_error)
+            {
+                return Err(openless_core::SettingsEffectFailure::after_side_effect(
+                    error, receipt,
+                ));
+            }
+            receipt
+                .applied
+                .push(openless_core::SettingsEffectKind::ActiveAsrProvider);
+        }
+        Ok(receipt)
+    }
+
+    fn commit(
+        &self,
+        plan: &openless_core::SettingsEffectPlan,
+        receipt: &mut openless_core::SettingsEffectReceipt,
+    ) -> Result<(), openless_core::SettingsEffectFailure> {
+        let Some(change) = &plan.hotkeys else {
+            return Ok(());
+        };
+        if !receipt
+            .applied
+            .contains(&openless_core::SettingsEffectKind::Hotkeys)
+        {
+            receipt
+                .applied
+                .push(openless_core::SettingsEffectKind::Hotkeys);
+        }
+        self.apply_hotkeys(change).map_err(|error| {
+            openless_core::SettingsEffectFailure::after_side_effect(error, receipt.clone())
+        })
+    }
+
+    fn restore(
+        &self,
+        plan: &openless_core::SettingsEffectPlan,
+        receipt: &openless_core::SettingsEffectReceipt,
+    ) -> Result<(), openless_core::BackendError> {
+        let mut failures = Vec::new();
+        for effect in receipt.applied.iter().rev() {
+            let result = match effect {
+                openless_core::SettingsEffectKind::Hotkeys => plan
+                    .hotkeys
+                    .as_ref()
+                    .map(|change| {
+                        let reverse = openless_core::SettingsValueChange {
+                            previous: change.next.clone(),
+                            next: change.previous.clone(),
+                        };
+                        self.apply_hotkeys(&reverse)
+                    })
+                    .unwrap_or(Ok(())),
+                openless_core::SettingsEffectKind::ActiveAsrProvider => plan
+                    .active_asr_provider
+                    .as_ref()
+                    .map(|change| {
+                        sync_active_asr_provider_to_vault(&change.previous)
+                            .map_err(Self::platform_error)
+                    })
+                    .unwrap_or(Ok(())),
+                openless_core::SettingsEffectKind::WindowsKeyboard => plan
+                    .windows_keyboard
+                    .as_ref()
+                    .map(|change| self.apply_windows_keyboard(&change.previous))
+                    .unwrap_or(Ok(())),
+            };
+            if let Err(error) = result {
+                failures.push(error.message);
+            }
+        }
+        if failures.is_empty() {
+            Ok(())
         } else {
-            return Err(error);
+            Err(Self::platform_error(format!(
+                "failed to restore settings runtime: {}",
+                failures.join("; ")
+            )))
         }
     }
-    if dictation_shortcut_changed || dictation_mode_changed {
-        coord.refresh_dictation_hotkey();
-    }
-    if dictation_shortcut_changed {
-        coord.refresh_combo_hotkey();
-    }
-    if qa_changed {
-        coord.refresh_qa_hotkey();
-    }
-    if translation_changed {
-        coord.refresh_translation_hotkey();
-    }
-    if switch_style_changed {
-        coord.refresh_switch_style_hotkey();
-    }
-    if open_app_changed {
-        coord.refresh_open_app_hotkey();
-    }
-    if style_pack_hotkeys_changed {
-        coord.refresh_style_pack_hotkeys();
-    }
-    if selection_polish_changed {
-        coord.refresh_selection_polish_hotkey();
-    }
-    if coding_agent_changed {
-        coord.refresh_coding_agent_hotkey();
-    }
-    Ok(())
+}
+
+pub(crate) fn persist_settings(coord: &Coordinator, prefs: UserPreferences) -> Result<(), String> {
+    let _host_guard = coord.lock_settings_host();
+    coord
+        .backend()
+        .update_settings(
+            prefs,
+            openless_core::SettingsUpdateOptions::SETTINGS_DOCUMENT,
+            &TauriSettingsRuntime::new(coord),
+        )
+        .map(|outcome| {
+            if outcome.reconciled_hotkey_count > 0 {
+                log::warn!(
+                    "[settings] 热键冲突已自动化解（调整 {} 项）后保存",
+                    outcome.reconciled_hotkey_count
+                );
+            }
+        })
+        .map_err(|error| error.to_string())
+}
+
+pub(crate) fn persist_strict_settings(
+    coord: &Coordinator,
+    prefs: UserPreferences,
+) -> Result<(), String> {
+    let _host_guard = coord.lock_settings_host();
+    coord
+        .backend()
+        .update_settings(
+            prefs,
+            openless_core::SettingsUpdateOptions::STRICT,
+            &TauriSettingsRuntime::new(coord),
+        )
+        .map(|_| ())
+        .map_err(|error| error.to_string())
 }
 
 #[cfg(not(mobile))]
 #[tauri::command]
-pub fn set_settings(
+pub async fn set_settings(
     coord: CoordinatorState<'_>,
     app: AppHandle,
     tray_microphones: State<'_, TrayMicrophoneMenuState>,
     mut prefs: UserPreferences,
 ) -> Result<(), String> {
     // 捕获旧值用于远程输入服务的 diff（persist 后端口/开关变化时启停/重启）。
-    let remote_prev = coord.prefs().get();
-    let packs = coord.style_packs().list().map_err(|e| e.to_string())?;
+    let remote_prev = coord.backend().get_preferences();
+    let packs = coord
+        .backend()
+        .list_style_packs(&prefs.active_style_pack_id)
+        .map_err(|e| e.to_string())?;
     sync_style_pack_preferences(&mut prefs, &packs);
     prefs.android_overlay_trigger = prefs.android_overlay_trigger.normalized();
     // 广播给所有 webview。issue #205：QaPanel 跑在独立 webview，
     // 没有 HotkeySettingsContext，必须靠事件感知录音键变化，否则面板可见时
     // 用户改键会让浮窗里的 "{recordHotkey}" 文案一直停留在旧值。
     persist_settings(&*coord, prefs)?;
-    let prefs = coord.prefs().get();
+    let prefs = coord.backend().get_preferences();
     // 保存即同步胶囊样式原子：下一次录音的入场帧就携带新样式，不依赖 emit_capsule
     // 主线程闭包的 ~30Hz 同步（Windows 主线程拥塞时闭包延迟 → 整场显示旧样式）。
     // 前端也会通过 prefs:changed 广播收到新样式，录音中切换即时换肤。
@@ -465,21 +208,12 @@ pub fn set_settings(
     if remote_prev.use_system_proxy != prefs.use_system_proxy {
         crate::net::set_use_system_proxy(prefs.use_system_proxy);
     }
-    // 关掉「光标上下文」时立刻解除已经武装的手改观察器。
-    //
-    // 不这么做的话，上一次听写留下的观察器会一直活到它自己的 60 秒硬超时（或前台 app
-    // 切换）为止 —— 也就是用户明确关掉开关之后，我们还在读他正在写的那个文档，最长
-    // 一分钟。功能本身是否还有用不重要：**开关关掉的那一刻就该停**，这是这个功能敢
-    // 默认存在的全部前提。
-    if remote_prev.cursor_context_enabled && !prefs.cursor_context_enabled {
-        coord.disarm_edit_watch();
-    }
     #[cfg(target_os = "android")]
     coord.apply_android_overlay_settings_change(&remote_prev, &prefs);
     // refresh_tray_microphone_menu 内部会调用 NSStatusItem.set_menu，必须在主线程上跑。
-    // set_settings 本身是同步 Tauri command，在 IPC handler 线程上执行；从这里直接调
+    // set_settings 是异步 Tauri command，执行期间不在 macOS UI 主线程；从这里直接调
     // 会触发 macOS 主线程断言或在 dispatch 队列上死锁，导致整个 UI 无响应（用户改
-    // 偏好后所有按键都没反应即此根因）。dispatch 到主线程后立即返回，IPC 线程不阻塞。
+    // 偏好后所有按键都没反应即此根因）。dispatch 到主线程后继续处理，异步任务不阻塞。
     let app_for_main = app.clone();
     let prefs_for_main = prefs.clone();
     let _ = app.run_on_main_thread(move || {
@@ -495,29 +229,36 @@ pub fn set_settings(
     // 抑制 unused 警告：tray_microphones 现在改在闭包里通过 app.state 取，
     // 但函数签名保留 State 入参，以便 Tauri 在调用前注入。
     let _ = tray_microphones;
-    let _ = app.emit("prefs:changed", &prefs);
     // 远程输入：开关 / 端口变化时启停或重启服务（PIN 变化走 regenerate_remote_pin 命令）。
     if remote_prev.remote_input_enabled != prefs.remote_input_enabled
         || remote_prev.remote_input_port != prefs.remote_input_port
     {
-        coord.refresh_remote_server();
+        coord
+            .backend()
+            .services()
+            .remote_input
+            .configure(openless_core::RemoteInputConfig {
+                enabled: prefs.remote_input_enabled,
+                port: prefs.remote_input_port,
+            })
+            .await
+            .map_err(|error| error.message)?;
     }
     Ok(())
 }
 
 #[cfg(mobile)]
 #[tauri::command]
-pub fn set_settings(
-    coord: CoordinatorState<'_>,
-    app: AppHandle,
-    mut prefs: UserPreferences,
-) -> Result<(), String> {
-    let previous = coord.prefs().get();
-    let packs = coord.style_packs().list().map_err(|e| e.to_string())?;
+pub fn set_settings(coord: CoordinatorState<'_>, mut prefs: UserPreferences) -> Result<(), String> {
+    let previous = coord.backend().get_preferences();
+    let packs = coord
+        .backend()
+        .list_style_packs(&prefs.active_style_pack_id)
+        .map_err(|e| e.to_string())?;
     sync_style_pack_preferences(&mut prefs, &packs);
     prefs.android_overlay_trigger = prefs.android_overlay_trigger.normalized();
     persist_settings(&*coord, prefs)?;
-    let prefs = coord.prefs().get();
+    let prefs = coord.backend().get_preferences();
     // 保存即同步胶囊样式原子（Android 通知胶囊 payload 同源，见 emit_capsule）。
     coord.sync_capsule_style_from_preferences();
     // 系统代理开关变化时立即重建客户端连接池（issue #869）。
@@ -526,55 +267,12 @@ pub fn set_settings(
     }
     #[cfg(target_os = "android")]
     coord.apply_android_overlay_settings_change(&previous, &prefs);
-    let _ = app.emit("prefs:changed", &prefs);
-    let _ = app.emit_to("main", "prefs:changed", &prefs);
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-
-    #[derive(Default)]
-    struct RaceSettingsWriter {
-        reads: Mutex<Vec<UserPreferences>>,
-        saved: Mutex<Option<UserPreferences>>,
-    }
-
-    impl SettingsWriter for RaceSettingsWriter {
-        fn read_settings(&self) -> UserPreferences {
-            let mut reads = self.reads.lock().unwrap();
-            if reads.is_empty() {
-                return self.saved.lock().unwrap().clone().unwrap_or_default();
-            }
-            reads.remove(0)
-        }
-
-        fn write_settings(&self, prefs: UserPreferences) -> Result<(), String> {
-            *self.saved.lock().unwrap() = Some(prefs);
-            Ok(())
-        }
-
-        fn sync_active_asr_provider(&self, _provider: &str) -> Result<(), String> {
-            Ok(())
-        }
-
-        fn refresh_dictation_hotkey(&self) {}
-
-        fn refresh_qa_hotkey(&self) {}
-
-        fn refresh_combo_hotkey(&self) {}
-
-        fn refresh_translation_hotkey(&self) {}
-
-        fn refresh_switch_style_hotkey(&self) {}
-
-        fn refresh_open_app_hotkey(&self) {}
-        fn refresh_selection_polish_hotkey(&self) {}
-
-        fn refresh_coding_agent_hotkey(&self) {}
-    }
 
     #[test]
     fn settings_save_preserves_current_style_preferences_before_write() {
@@ -599,131 +297,6 @@ mod tests {
         );
         assert_eq!(stale_settings_payload.default_mode, PolishMode::Light);
     }
-
-    #[test]
-    fn persist_settings_keeps_style_change_that_lands_before_write() {
-        let active_before_request = UserPreferences {
-            default_mode: PolishMode::Formal,
-            active_style_pack_id: builtin_style_pack_id(PolishMode::Formal).to_string(),
-            ..UserPreferences::default()
-        };
-        let active_before_write = UserPreferences {
-            default_mode: PolishMode::Light,
-            active_style_pack_id: builtin_style_pack_id(PolishMode::Light).to_string(),
-            ..UserPreferences::default()
-        };
-        let stale_payload = UserPreferences {
-            default_mode: PolishMode::Formal,
-            active_style_pack_id: builtin_style_pack_id(PolishMode::Formal).to_string(),
-            microphone_device_name: "External Mic".to_string(),
-            ..UserPreferences::default()
-        };
-        let writer = RaceSettingsWriter {
-            reads: Mutex::new(vec![active_before_request, active_before_write]),
-            saved: Mutex::new(None),
-        };
-
-        persist_settings(&writer, stale_payload).unwrap();
-
-        let saved = writer.saved.lock().unwrap().clone().expect("prefs saved");
-        assert_eq!(
-            saved.active_style_pack_id,
-            builtin_style_pack_id(PolishMode::Light)
-        );
-        assert_eq!(saved.default_mode, PolishMode::Light);
-        assert_eq!(saved.microphone_device_name, "External Mic");
-    }
-
-    #[test]
-    fn reconcile_clears_legacy_dictation_selection_polish_duplication() {
-        // #904 历史遗留：1.3.15 升级注入的选区润色默认键（右 Alt）与录音键相同。
-        let prefs = UserPreferences {
-            hotkey: crate::types::HotkeyBinding {
-                trigger: crate::types::HotkeyTrigger::RightAlt,
-                mode: crate::types::HotkeyMode::Hold,
-                keys: None,
-            },
-            dictation_hotkey: ShortcutBinding {
-                primary: "RightAlt".into(),
-                modifiers: vec![],
-            },
-            selection_polish_hotkey: Some(ShortcutBinding {
-                primary: "RightAlt".into(),
-                modifiers: vec![],
-            }),
-            ..Default::default()
-        };
-        let mut next = prefs.clone();
-
-        let adjusted = reconcile_hotkey_collisions(&mut next, &prefs);
-
-        assert!(adjusted >= 1);
-        assert!(next.selection_polish_hotkey.is_none());
-        assert!(reject_hotkey_collisions(&next).is_ok());
-    }
-
-    #[test]
-    fn persist_settings_reconciles_legacy_collision_and_still_saves_mode() {
-        // #904 复现：历史冲突存在时，用户切「自动」必须能保存成功，
-        // 冲突的选区润色键被停用，而不是整份设置被拒。
-        let collision = UserPreferences {
-            hotkey: crate::types::HotkeyBinding {
-                trigger: crate::types::HotkeyTrigger::RightAlt,
-                mode: crate::types::HotkeyMode::Hold,
-                keys: None,
-            },
-            dictation_hotkey: ShortcutBinding {
-                primary: "RightAlt".into(),
-                modifiers: vec![],
-            },
-            selection_polish_hotkey: Some(ShortcutBinding {
-                primary: "RightAlt".into(),
-                modifiers: vec![],
-            }),
-            ..Default::default()
-        };
-        let mut next = collision.clone();
-        next.hotkey.mode = crate::types::HotkeyMode::Auto;
-        let writer = RaceSettingsWriter {
-            reads: Mutex::new(vec![collision]),
-            saved: Mutex::new(None),
-        };
-
-        persist_settings_with_keyboard_apply(&writer, next, |_| Ok(())).unwrap();
-
-        let saved = writer.saved.lock().unwrap().clone().expect("prefs saved");
-        assert_eq!(saved.hotkey.mode, crate::types::HotkeyMode::Auto);
-        assert!(saved.selection_polish_hotkey.is_none());
-    }
-
-    #[test]
-    fn reconcile_resolves_non_core_overlap_and_invalid_side_specific_hotkey() {
-        // QA 与翻译键相同：较低优先级的 QA 恢复旧值，旧值仍冲突则停用。
-        let previous = UserPreferences {
-            qa_hotkey: Some(ShortcutBinding {
-                primary: "E".into(),
-                modifiers: vec!["ctrl".into(), "shift".into()],
-            }),
-            ..Default::default()
-        };
-        let mut next = previous.clone();
-        next.qa_hotkey = Some(ShortcutBinding {
-            primary: "Shift".into(),
-            modifiers: vec![],
-        });
-        // 侧特定修饰键对非 dictation 非法（SIDE_SPECIFIC_NON_DICTATION_MSG）。
-        next.translation_hotkey = ShortcutBinding {
-            primary: "D".into(),
-            modifiers: vec!["cmd-left".into()],
-        };
-
-        let adjusted = reconcile_hotkey_collisions(&mut next, &previous);
-
-        assert!(adjusted >= 2);
-        assert_eq!(next.qa_hotkey, previous.qa_hotkey);
-        assert_eq!(next.translation_hotkey, previous.translation_hotkey);
-        assert!(reject_hotkey_collisions(&next).is_ok());
-    }
 }
 
 // ─────────────────────────── release channel (Beta opt-in) ───────────────────────────
@@ -740,23 +313,21 @@ mod tests {
 // Release assets 里物理分离）。
 
 #[tauri::command]
-pub fn get_update_channel(coord: CoordinatorState<'_>) -> UpdateChannel {
-    coord.prefs().get().update_channel
+pub fn get_update_channel(core: CoreState<'_>) -> UpdateChannel {
+    core.get_preferences().update_channel
 }
 
 #[tauri::command]
 pub fn set_update_channel(
     coord: CoordinatorState<'_>,
-    app: AppHandle,
     channel: UpdateChannel,
 ) -> Result<(), String> {
-    let mut prefs = coord.prefs().get();
+    let mut prefs = coord.backend().get_preferences();
     if prefs.update_channel == channel {
         return Ok(());
     }
     prefs.update_channel = channel;
     persist_settings(&*coord, prefs)?;
-    let _ = app.emit("prefs:changed", &coord.prefs().get());
     Ok(())
 }
 
@@ -906,7 +477,7 @@ pub async fn app_check_update_with_channel<R: tauri::Runtime>(
 ) -> Result<Option<AppUpdateMetadata>, String> {
     use tauri_plugin_updater::UpdaterExt;
 
-    let channel = channel.unwrap_or_else(|| coord.prefs().get().update_channel);
+    let channel = channel.unwrap_or_else(|| coord.backend().get_preferences().update_channel);
     let mut builder = webview.updater_builder();
     if let Some(ms) = timeout_ms {
         builder = builder.timeout(std::time::Duration::from_millis(ms));
@@ -970,221 +541,13 @@ pub async fn app_check_update_with_channel(
 ) -> Result<Option<AppUpdateMetadata>, String> {
     #[cfg(target_os = "android")]
     {
-        let channel = channel.unwrap_or_else(|| coord.prefs().get().update_channel);
+        let channel = channel.unwrap_or_else(|| coord.backend().get_preferences().update_channel);
         return crate::android::updater::check_update(channel).await;
     }
     #[cfg(not(target_os = "android"))]
     {
         let _ = (coord, channel);
         Err("应用内更新仅支持 Android".to_string())
-    }
-}
-
-#[cfg(test)]
-mod persist_settings_tests {
-    use super::*;
-    use std::cell::RefCell;
-
-    struct MockWriter {
-        prefs: RefCell<UserPreferences>,
-        write_calls: RefCell<u32>,
-        asr_sync_calls: RefCell<Vec<String>>,
-        /// 前 N 次 write_settings 调用返回失败；0 = 从不失败。
-        write_fail_count: u32,
-        fail_forward_asr_sync: bool,
-        fail_rollback_asr_sync: bool,
-    }
-
-    impl MockWriter {
-        fn new(prefs: UserPreferences) -> Self {
-            Self {
-                prefs: RefCell::new(prefs),
-                write_calls: RefCell::new(0),
-                asr_sync_calls: RefCell::new(Vec::new()),
-                write_fail_count: 0,
-                fail_forward_asr_sync: false,
-                fail_rollback_asr_sync: false,
-            }
-        }
-    }
-
-    impl SettingsWriter for MockWriter {
-        fn read_settings(&self) -> UserPreferences {
-            self.prefs.borrow().clone()
-        }
-
-        fn write_settings(&self, prefs: UserPreferences) -> Result<(), String> {
-            let mut calls = self.write_calls.borrow_mut();
-            *calls += 1;
-            if *calls <= self.write_fail_count {
-                return Err("write failed".into());
-            }
-            *self.prefs.borrow_mut() = prefs;
-            Ok(())
-        }
-
-        fn sync_active_asr_provider(&self, provider: &str) -> Result<(), String> {
-            self.asr_sync_calls.borrow_mut().push(provider.to_string());
-            let stored = self.prefs.borrow().active_asr_provider.clone();
-            if self.fail_forward_asr_sync && provider != stored {
-                return Err("asr forward sync failed".into());
-            }
-            if self.fail_rollback_asr_sync && provider == stored {
-                return Err("asr rollback sync failed".into());
-            }
-            Ok(())
-        }
-
-        fn refresh_dictation_hotkey(&self) {}
-        fn refresh_qa_hotkey(&self) {}
-        fn refresh_combo_hotkey(&self) {}
-        fn refresh_translation_hotkey(&self) {}
-        fn refresh_switch_style_hotkey(&self) {}
-        fn refresh_open_app_hotkey(&self) {}
-        fn refresh_selection_polish_hotkey(&self) {}
-        fn refresh_coding_agent_hotkey(&self) {}
-    }
-
-    #[test]
-    fn keyboard_apply_failure_does_not_sync_asr_or_write_prefs() {
-        let writer = MockWriter::new(UserPreferences::default());
-        let mut next = writer.read_settings();
-        next.windows_sendinput_insertion_only = true;
-        next.windows_show_openless_in_keyboard_list = false;
-        next.active_asr_provider = "other-asr".into();
-
-        let result = persist_settings_with_keyboard_apply(&writer, next, |_| {
-            Err("apply failed".into())
-        });
-
-        assert!(result.is_err());
-        assert_eq!(*writer.write_calls.borrow(), 0);
-        assert!(writer.asr_sync_calls.borrow().is_empty());
-        assert!(writer.read_settings().windows_show_openless_in_keyboard_list);
-    }
-
-    #[test]
-    fn keyboard_apply_success_writes_prefs() {
-        let writer = MockWriter::new(UserPreferences::default());
-        let mut next = writer.read_settings();
-        next.windows_sendinput_insertion_only = true;
-        next.windows_show_openless_in_keyboard_list = false;
-
-        let result = persist_settings_with_keyboard_apply(&writer, next.clone(), |_| Ok(()));
-
-        assert!(result.is_ok());
-        assert_eq!(*writer.write_calls.borrow(), 1);
-        assert!(!writer.read_settings().windows_show_openless_in_keyboard_list);
-    }
-
-    #[test]
-    fn asr_sync_failure_rolls_back_keyboard_list() {
-        let writer = MockWriter {
-            prefs: RefCell::new(UserPreferences::default()),
-            write_calls: RefCell::new(0),
-            asr_sync_calls: RefCell::new(Vec::new()),
-            write_fail_count: 0,
-            fail_forward_asr_sync: true,
-            fail_rollback_asr_sync: false,
-        };
-        let mut next = writer.read_settings();
-        next.windows_sendinput_insertion_only = true;
-        next.windows_show_openless_in_keyboard_list = false;
-        next.active_asr_provider = "other-asr".into();
-
-        let apply_calls = RefCell::new(0);
-        let result = persist_settings_with_keyboard_apply(&writer, next, |_| {
-            *apply_calls.borrow_mut() += 1;
-            Ok(())
-        });
-
-        assert!(result.is_err());
-        assert_eq!(*writer.write_calls.borrow(), 0);
-        assert_eq!(*apply_calls.borrow(), 2);
-        assert!(writer.read_settings().windows_show_openless_in_keyboard_list);
-    }
-
-    #[test]
-    fn keyboard_write_failure_rolls_back_profile_without_asr_change() {
-        let writer = MockWriter {
-            prefs: RefCell::new(UserPreferences::default()),
-            write_calls: RefCell::new(0),
-            asr_sync_calls: RefCell::new(Vec::new()),
-            write_fail_count: 1,
-            fail_forward_asr_sync: false,
-            fail_rollback_asr_sync: false,
-        };
-        let mut next = writer.read_settings();
-        next.windows_sendinput_insertion_only = true;
-        next.windows_show_openless_in_keyboard_list = false;
-
-        let rollback_calls = RefCell::new(0);
-        let result = persist_settings_with_keyboard_apply(&writer, next, |prefs| {
-            if prefs.windows_show_openless_in_keyboard_list {
-                *rollback_calls.borrow_mut() += 1;
-            }
-            Ok(())
-        });
-
-        assert!(result.is_err());
-        assert_eq!(*writer.write_calls.borrow(), 1);
-        assert_eq!(*rollback_calls.borrow(), 1);
-        assert!(writer.asr_sync_calls.borrow().is_empty());
-    }
-
-    #[test]
-    fn keyboard_write_failure_rolls_back_profile_when_asr_rollback_succeeds() {
-        let writer = MockWriter {
-            prefs: RefCell::new(UserPreferences::default()),
-            write_calls: RefCell::new(0),
-            asr_sync_calls: RefCell::new(Vec::new()),
-            write_fail_count: 1,
-            fail_forward_asr_sync: false,
-            fail_rollback_asr_sync: false,
-        };
-        let mut next = writer.read_settings();
-        next.windows_sendinput_insertion_only = true;
-        next.windows_show_openless_in_keyboard_list = false;
-        next.active_asr_provider = "other-asr".into();
-
-        let rollback_calls = RefCell::new(0);
-        let result = persist_settings_with_keyboard_apply(&writer, next, |prefs| {
-            if prefs.windows_show_openless_in_keyboard_list {
-                *rollback_calls.borrow_mut() += 1;
-            }
-            Ok(())
-        });
-
-        assert!(result.is_err());
-        assert_eq!(*writer.write_calls.borrow(), 1);
-        assert_eq!(*rollback_calls.borrow(), 1);
-    }
-
-    #[test]
-    fn keyboard_write_failure_keeps_new_keyboard_when_asr_roll_forward_succeeds() {
-        let writer = MockWriter {
-            prefs: RefCell::new(UserPreferences::default()),
-            write_calls: RefCell::new(0),
-            asr_sync_calls: RefCell::new(Vec::new()),
-            write_fail_count: 1,
-            fail_forward_asr_sync: false,
-            fail_rollback_asr_sync: true,
-        };
-        let mut next = writer.read_settings();
-        next.windows_sendinput_insertion_only = true;
-        next.windows_show_openless_in_keyboard_list = false;
-        next.active_asr_provider = "other-asr".into();
-
-        let apply_calls = RefCell::new(0);
-        let result = persist_settings_with_keyboard_apply(&writer, next.clone(), |_| {
-            *apply_calls.borrow_mut() += 1;
-            Ok(())
-        });
-
-        assert!(result.is_ok());
-        assert_eq!(*writer.write_calls.borrow(), 2);
-        assert_eq!(*apply_calls.borrow(), 1);
-        assert!(!writer.read_settings().windows_show_openless_in_keyboard_list);
     }
 }
 

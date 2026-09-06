@@ -3,7 +3,7 @@ name: CI
 # 多平台跨语言质量门禁。release-tauri.yml 是发版流水线（仅打包构建），这里负责
 # 在合并前快速验证两件事：
 #   1. 全部前端/契约测试与 vite bundle 通过（捕获行为、合同及跨 locale 类型 drift）
-#   2. Rust 后端在 macOS / Windows / Linux 都能 cargo check 过（捕获 cfg 漏分支 / 平台 API 误用）
+#   2. Tauri 后端在 macOS / Windows、移动端在 Android 编译；Linux 只测试共享 core。
 # 跑 build-mac.sh / windows-package-msvc.ps1 / Tauri bundle 太重；只跑轻量 cargo check + vite build。
 
 on:
@@ -107,7 +107,7 @@ jobs:
         run: node scripts/ci-disable-macos-qwen3.mjs
 
       - name: Check Tauri backend (Android target)
-        run: cargo check --manifest-path src-tauri/Cargo.toml --target aarch64-linux-android
+        run: cargo check --locked --manifest-path src-tauri/Cargo.toml --target aarch64-linux-android
 
       - name: Initialize generated Android project
         run: npm run tauri -- android init --ci
@@ -121,7 +121,7 @@ jobs:
           WRY_ANDROID_PACKAGE: com.openless.app
         run: |
           mkdir -p "$WRY_ANDROID_KOTLIN_FILES_OUT_DIR"
-          cargo check --manifest-path src-tauri/Cargo.toml --target x86_64-linux-android
+          cargo check --locked --manifest-path src-tauri/Cargo.toml --target x86_64-linux-android
 
       - name: Copy Android production and test scaffolding
         run: node scripts/copy-android-scaffolding.mjs
@@ -165,6 +165,26 @@ jobs:
             -x :app:rustBuildX86_64Debug
             --no-daemon
 
+  linux-core-contract:
+    name: Linux core tests
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: openless-all/app
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: 'openless-all/app -> target'
+
+      - name: Test Core
+        run: cargo test --locked -p openless-core
+
   cross-platform:
     name: ${{ matrix.label }} checks
     strategy:
@@ -178,23 +198,21 @@ jobs:
           - os: windows-latest
             label: Windows
             preflight: true
-          - os: ubuntu-latest
-            label: Linux
-            preflight: false
     runs-on: ${{ matrix.os }}
+    env:
+      # 新增 shared Core 后，macOS 首次编译同时构建 MLX C++ 依赖和完整
+      # Tauri test binary；限制并发避免 arm64 runner 在峰值内存处被系统终止。
+      CARGO_BUILD_JOBS: 2
+      CARGO_PROFILE_TEST_DEBUG: 0
+      CMAKE_BUILD_PARALLEL_LEVEL: 2
     defaults:
       run:
         working-directory: openless-all/app
     steps:
       - uses: actions/checkout@v4
         with:
-          # 只在 macOS 初始化 MLX 子模块；Linux 的 C 后端单独初始化 qwen-asr。
+          # 只在 macOS 初始化 MLX 子模块；Windows 不解析该依赖。
           submodules: ${{ matrix.os == 'macos-latest' && 'recursive' || 'false' }}
-
-      - name: Initialize Linux C ASR submodule
-        if: runner.os == 'Linux'
-        shell: bash
-        run: git submodule update --init src-tauri/vendor/qwen-asr
       - name: Disable macOS-only Qwen3 MLX dependency
         if: runner.os != 'macOS'
         run: node scripts/ci-disable-macos-qwen3.mjs
@@ -214,21 +232,10 @@ jobs:
         with:
           workspaces: 'openless-all/app/src-tauri -> target'
 
-      - name: Install Linux check dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            curl \
-            file \
-            libasound2-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            libssl-dev \
-            libwebkit2gtk-4.1-dev \
-            libxdo-dev \
-            wget
+      - name: Prepare Windows Sherpa static libraries
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/prepare-windows-sherpa.ps1
 
       - name: Install frontend dependencies
         run: npm ci
@@ -242,7 +249,7 @@ jobs:
         if: matrix.preflight
         shell: pwsh
         run: |
-          foreach ($script in @("./scripts/windows-preflight.ps1", "./scripts/windows-build-gnu.ps1", "./scripts/windows-runtime-smoke.ps1")) {
+          foreach ($script in @("./scripts/windows-preflight.ps1", "./scripts/windows-build-gnu.ps1", "./scripts/windows-runtime-smoke.ps1", "./scripts/prepare-windows-sherpa.ps1")) {
             $errors = $null
             [System.Management.Automation.PSParser]::Tokenize((Get-Content -Raw $script), [ref]$errors) | Out-Null
             if ($errors) {
@@ -271,27 +278,27 @@ jobs:
         if: runner.os == 'macOS'
         env:
           OPENLESS_CODEX_TEST_EXE: codex
-        run: cargo test --manifest-path src-tauri/Cargo.toml --lib coding_agent::codex::live::hardening_actually_narrows_the_writable_roots -- --ignored --nocapture --test-threads=1
+        run: cargo test --locked -p openless-core hardening_actually_narrows_the_writable_roots -- --ignored --nocapture --test-threads=1
 
       - name: Check Tauri backend (cargo check)
-        run: cargo check --manifest-path src-tauri/Cargo.toml
+        run: cargo check --locked --manifest-path src-tauri/Cargo.toml
 
       - name: Run Rust backend unit tests
         if: runner.os != 'Windows'
-        run: cargo test --manifest-path src-tauri/Cargo.toml --lib
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --lib
 
       - name: Compile Rust backend unit tests (Windows)
         # Windows runner 能链接 lib test binary，但干净镜像缺少可选 native runtime
         # DLL entrypoint 时，进程会在 test harness 启动前退出。这里保留 cfg/link
-        # 覆盖；Rust-only 后端单测由下一步实际执行。
+        # 覆盖；共享 Core 的公开 compatibility contract 由下一步实际执行。
         if: runner.os == 'Windows'
-        run: cargo test --manifest-path src-tauri/Cargo.toml --lib --no-run
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --lib --no-run
 
       - name: Run Rust-only backend unit tests (Windows)
-        # 只把纯 Rust 后端模块编进独立 test crate，不链接完整 Tauri app lib。
-        # 这样 Windows CI 能实际执行 coordinator/hotkey/recorder/insertion 逻辑单测。
+        # 独立 test crate 不链接完整 Tauri app lib，只验证公开 Core contract。
+        # Windows 专属 Tauri 测试在此 runner 只做上一步的 cfg/link 编译覆盖。
         if: runner.os == 'Windows'
-        run: cargo test --manifest-path src-tauri/backend-tests/Cargo.toml
+        run: cargo test --locked --manifest-path src-tauri/backend-tests/Cargo.toml
 
       - name: Check Tauri backend with Rust 1.88 MSRV
         run: cargo +1.88.0 check --locked --manifest-path src-tauri/Cargo.toml

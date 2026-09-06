@@ -90,8 +90,8 @@ export function ClaudeConsoleSection() {
           case 'completed':
             setRunning(false)
             setSummary(
-              ev.cost_usd != null
-                ? t('settings.codingConsole.doneCost', { cost: ev.cost_usd.toFixed(4) })
+              ev.costUsd != null
+                ? t('settings.codingConsole.doneCost', { cost: ev.costUsd.toFixed(4) })
                 : t('settings.codingConsole.done'),
             )
             if (ev.text.trim()) setOutput(prev => (prev.trim() ? prev : ev.text))

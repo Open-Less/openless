@@ -18,7 +18,7 @@ import {
 import type { ActivityDay, CredentialsStatus, DictationSession, PolishMode } from '../lib/types';
 import { useHotkeySettings } from '../state/HotkeySettingsContext';
 import { Btn, Card, PageHeader, Pill } from './_atoms';
-import { ASR_PRESETS } from './settings/shared';
+import { ASR_LABELS } from './settings/shared';
 
 function useModeLabels(): Record<PolishMode, string> {
   const { t } = useTranslation();
@@ -34,10 +34,10 @@ interface OverviewProps {
   onOpenHistory?: () => void;
 }
 
-// id → i18n nameKey，从 ASR_PRESETS 单一来源派生，避免这里再手维护一份 id 列表
+// id → i18n nameKey；这里只保留展示文案，provider 行为来自 Core descriptor。
 // （之前漏了 bailian-qwen3-realtime / apple-speech，会退化成显示裸 id）。
 const ASR_NAME_KEY_BY_ID: Record<string, string> = Object.fromEntries(
-  ASR_PRESETS.map(p => [p.id, p.nameKey]),
+  ASR_LABELS.map(p => [p.id, p.nameKey]),
 );
 
 const LLM_NAME_KEY_BY_ID: Record<string, string> = {

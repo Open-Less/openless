@@ -20,6 +20,10 @@ fn main() {
 
     if target_os == "macos" {
         link_macos_compiler_runtime();
+        let target_arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
+        if target_arch == "aarch64" {
+            compile_mlx_metallib_path_shim();
+        }
     }
 
     if target_os == "android" {
@@ -49,7 +53,9 @@ fn link_macos_compiler_runtime() {
         .expect("macOS compiler resource directory was not UTF-8")
         .trim()
         .to_owned();
-    let runtime_dir = std::path::PathBuf::from(resource_dir).join("lib").join("darwin");
+    let runtime_dir = std::path::PathBuf::from(resource_dir)
+        .join("lib")
+        .join("darwin");
     if !runtime_dir.join("libclang_rt.osx.a").exists() {
         panic!(
             "macOS compiler runtime not found at {}",
@@ -59,6 +65,18 @@ fn link_macos_compiler_runtime() {
 
     println!("cargo:rustc-link-search=native={}", runtime_dir.display());
     println!("cargo:rustc-link-lib=static=clang_rt.osx");
+}
+
+/// Apple Silicon 发布包把 mlx.metallib 放在 Contents/Resources。
+/// mlx-c 默认只在可执行文件旁边找，这里补一个 C 入口去调用 set_metallib_path。
+fn compile_mlx_metallib_path_shim() {
+    const SOURCE: &str = "src/asr/local/mlx_set_metallib_path.cpp";
+    println!("cargo:rerun-if-changed={SOURCE}");
+    cc::Build::new()
+        .cpp(true)
+        .std("c++17")
+        .file(SOURCE)
+        .compile("openless_mlx_set_metallib_path");
 }
 
 /// cpal → oboe → oboe-sys 会编译 C++；最终 cdylib 需显式链接 NDK libc++。

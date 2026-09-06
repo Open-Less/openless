@@ -390,7 +390,7 @@ export interface UserPreferences {
   macosNewlineMode: MacosNewlineMode;
   /** 旧版兼容：`true` 等价于 `windowsInsertionMode === 'sendInput'`。 */
   windowsSendInputInsertionOnly: boolean;
-  /** Windows：SendInput 模式下是否在系统键盘列表（Win+Space）中显示 OpenLess。 */
+  /** Windows：非 TSF 插入方式下是否在系统键盘列表（Win+Space）中显示 OpenLess。 */
   windowsShowOpenlessInKeyboardList: boolean;
   /** 用户的工作语言（多选，原生名）；作为前提注入 LLM polish/translate prompt 头部。 */
   workingLanguages: string[];
@@ -444,7 +444,7 @@ export interface UserPreferences {
   codingAgentWorkdir: string | null;
   /** Agent 可执行文件路径/命令，null 或空 = 按后端取默认（claude / opencode）。 */
   codingAgentExe: string | null;
-  /** Less Computer 按住说话快捷键。null = 停用；目前仅 macOS 显示/生效。 */
+  /** Windows/macOS Less Computer 按住说话快捷键。null = 停用。 */
   codingAgentVoiceHotkey: ShortcutBinding | null;
   /** 热键 1：语音 Agent 面板键。null = 停用。 */
   codingAgentPanelHotkey: ShortcutBinding | null;
@@ -586,6 +586,8 @@ export type QaStateKind =
   | 'thinking'
   | 'answer_delta'
   | 'answer'
+  | 'awaiting_approval'
+  | 'cancelled'
   | 'error';
 
 export interface QaChatMessage {
@@ -598,21 +600,23 @@ export interface QaChatMessage {
 export interface QaStatePayload {
   kind: QaStateKind;
   /** 后端会话 token；前端用它丢弃关闭/重开后迟到的旧轮事件。 */
-  session_id?: string;
+  sessionId?: string;
   /** 后端权威：当前已有的多轮对话历史（user → assistant 交替）。answer 事件带完整版。 */
   messages?: QaChatMessage[];
   /** recording 状态时附带的选区预览（前 60 字）。 */
-  selection_preview?: string | null;
+  selectionPreview?: string | null;
   /** error 状态时附带的提示。 */
   error?: string;
   /** answer_delta 事件时附带的本帧增量字符串。 */
   chunk?: string;
   /** 选区语音编辑结果可「替换选区」。 */
-  edit_apply_available?: boolean;
+  editApplyAvailable?: boolean;
   /** 可回退到上一轮编辑预览。 */
-  edit_revert_available?: boolean;
+  editRevertAvailable?: boolean;
   /** 划词提问面板「编辑指令」复选框。 */
-  edit_instruction_mode?: boolean;
+  editInstructionMode?: boolean;
+  /** 当前轮等待工具审批时的 session-scoped token。 */
+  approvalToken?: string;
 }
 
 /**
@@ -620,6 +624,8 @@ export interface QaStatePayload {
  * `less-computer:event`）。后端按 `kind` 标记，前端据此把交互渲染成聊天结构。
  */
 export type LessComputerEvent = (
+  /** Core语音生命周期快照；seq去重、sessionId防止旧会话的终态/电平覆盖新录音。 */
+  | { kind: 'voice_state'; sessionId: string; phase: 'starting' | 'recording' | 'transcribing' | 'idle'; level: number; elapsedMs: number }
   /** 一轮用户气泡（语音指令转写）。fresh=true 表示新会话（清空历史）；否则追加为后续轮次。 */
   | { kind: 'user'; text: string; fresh?: boolean }
   /** Agent 启动，进入运行态。 */
@@ -643,6 +649,19 @@ export type LessComputerEvent = (
    *  缓冲锁异常时后端可能省略，无 seq 的事件前端无条件应用。 */
   seq?: number;
 };
+
+export type LessComputerVoiceEvent = Extract<LessComputerEvent, { kind: 'voice_state' }>;
+
+/** `less_computer_sync` 的有界 replay 结果。`truncated=true` 表示调用方的水位
+ * 已早于后端仍保留的最老事件，前端必须清空派生视图后再应用 `events`。 */
+export interface LessComputerSyncResult {
+  events: LessComputerEvent[];
+  oldestSequence?: number;
+  latestSequence: number;
+  truncated: boolean;
+  /** 最新Core语音显示投影，即使长转写的阶段事件已被有界replay驱逐也可恢复。 */
+  voiceState?: LessComputerVoiceEvent;
+}
 
 /** 内置语言列表 — 前端 Settings UI 用，后端只接收原生名字符串拼 prompt。
  *  添加新语言时直接在这里加一项（原生名），无需修改后端。 */
