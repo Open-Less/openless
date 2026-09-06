@@ -9,9 +9,8 @@ use openless_core::{
     PipelineDictationEngine, PolishFailurePolicy, ProviderService, SettingsRuntime,
     SharedAuxiliaryTextPolisher, SharedCloudTextPolisher, SharedCloudTranscriptionEngine,
     SharedOmniDictationEngine, TextInserter, TextPolisher, TextPolisherRouter, TextStreamSink,
-    TokioTaskSpawner, TranscriptOutput, TranscriptionEngine, TranscriptionRouter,
-    TranscriptionSession, SHARED_CLOUD_ASR_PROVIDER_TYPES, SHARED_CLOUD_LLM_PROVIDER_TYPES,
-    SHARED_OMNI_PROVIDER_TYPES,
+    TranscriptOutput, TranscriptionEngine, TranscriptionRouter, TranscriptionSession,
+    SHARED_CLOUD_ASR_PROVIDER_TYPES, SHARED_CLOUD_LLM_PROVIDER_TYPES, SHARED_OMNI_PROVIDER_TYPES,
 };
 
 use crate::qa::LinuxQaRuntime;
@@ -24,6 +23,28 @@ pub struct LinuxBackendRuntime {
     pub backend: Arc<OpenLessBackend>,
     pub host_actions: Arc<LinuxHostActions>,
     pub settings_runtime: Arc<dyn SettingsRuntime>,
+}
+
+/// Own the executor handle, not the executor. cpal and native teardown may call
+/// Core from plain OS threads; they must enqueue on the already-running host
+/// runtime even though those threads have no Tokio thread-local context.
+struct LinuxTaskSpawner(tokio::runtime::Handle);
+
+impl LinuxTaskSpawner {
+    fn capture_current() -> Result<Self, BackendError> {
+        tokio::runtime::Handle::try_current().map(Self).map_err(|_| {
+            BackendError::new(
+                BackendErrorCode::InvalidState,
+                "Linux backend construction requires an entered host Tokio runtime or an explicit TaskSpawner",
+            )
+        })
+    }
+}
+
+impl openless_core::TaskSpawner for LinuxTaskSpawner {
+    fn spawn(&self, task: BoxFuture<'static, ()>) {
+        self.0.spawn(task);
+    }
 }
 
 const QWEN_PREPARE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
@@ -658,7 +679,7 @@ pub struct LinuxBackendBuilder {
     settings_runtime: Option<Arc<dyn SettingsRuntime>>,
     local_asr_runtime: Option<Arc<dyn openless_core::ModelRuntimeAdapter>>,
     polish_failure_policy: PolishFailurePolicy,
-    task_spawner: Arc<dyn openless_core::TaskSpawner>,
+    task_spawner: Option<Arc<dyn openless_core::TaskSpawner>>,
 }
 
 impl LinuxBackendBuilder {
@@ -666,8 +687,14 @@ impl LinuxBackendBuilder {
     /// implementations and credential routing owned by shared core.
     ///
     /// The egui layer supplies only [`BackendConfig`]. It does not select
-    /// protocol implementations or read credential accounts.
+    /// protocol implementations or read credential accounts. Call inside the
+    /// host's Tokio runtime (or a scoped `Handle::enter`) so native callbacks can
+    /// retain that executor; this factory never creates a second runtime.
     pub fn from_shared_providers(config: BackendConfig) -> Result<Self, BackendError> {
+        // Resolve before touching stores: missing executor is a construction
+        // error, not a reason to create credentials/directories then lose work.
+        let task_spawner: Arc<dyn openless_core::TaskSpawner> =
+            Arc::new(LinuxTaskSpawner::capture_current()?);
         let store = LinuxCredentialStore::open(&config.data_dir)?;
         // Only a host that supplies a home directory opts into reading legacy
         // credentials. Data-only builders and integration tests leave it unset;
@@ -685,7 +712,6 @@ impl LinuxBackendBuilder {
             }
         }
         let credential_store: Arc<dyn CredentialStore> = Arc::new(store.clone());
-        let task_spawner: Arc<dyn openless_core::TaskSpawner> = Arc::new(TokioTaskSpawner);
 
         let transcription = Arc::new(TranscriptionRouter::default());
         let cloud_transcription: Arc<dyn TranscriptionEngine> =
@@ -780,12 +806,14 @@ impl LinuxBackendBuilder {
             settings_runtime: None,
             local_asr_runtime: None,
             polish_failure_policy: PolishFailurePolicy::UseRawText,
-            task_spawner: Arc::new(TokioTaskSpawner),
+            task_spawner: None,
         }
     }
 
-    fn with_task_spawner(mut self, task_spawner: Arc<dyn openless_core::TaskSpawner>) -> Self {
-        self.task_spawner = task_spawner;
+    /// Custom hosts built outside Tokio must supply an executor that accepts
+    /// calls from arbitrary native threads and remains alive through shutdown.
+    pub fn with_task_spawner(mut self, task_spawner: Arc<dyn openless_core::TaskSpawner>) -> Self {
+        self.task_spawner = Some(task_spawner);
         self
     }
 
@@ -843,6 +871,10 @@ impl LinuxBackendBuilder {
     }
 
     pub fn build(self) -> Result<LinuxBackendRuntime, BackendError> {
+        let task_spawner = match self.task_spawner {
+            Some(spawner) => spawner,
+            None => Arc::new(LinuxTaskSpawner::capture_current()?),
+        };
         let repositories = BackendRepositories::open(&self.config.data_dir)?;
         let recorder = self
             .recorder
@@ -907,7 +939,7 @@ impl LinuxBackendBuilder {
                 host_actions: host_actions.clone(),
                 text_inserter,
                 dictation_engine,
-                task_spawner: self.task_spawner,
+                task_spawner,
                 credential_store,
                 services,
                 local_asr_runtime: Some(
@@ -943,7 +975,81 @@ mod tests {
     use super::*;
 
     #[test]
-    fn shared_provider_builder_requires_no_ui_or_provider_factory() {
+    fn builder_requires_an_executor_before_opening_stores() {
+        let data_dir = std::env::temp_dir().join(format!(
+            "openless-linux-executor-required-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let config = BackendConfig {
+            data_dir: data_dir.clone(),
+            ..BackendConfig::default()
+        };
+        let error = LinuxBackendBuilder::from_shared_providers(config.clone())
+            .err()
+            .expect("production construction outside the runtime must fail explicitly");
+        assert_eq!(error.code, BackendErrorCode::InvalidState);
+        let custom = || {
+            LinuxBackendBuilder::new(
+                config.clone(),
+                Arc::new(FixtureTranscriptionEngine::successful("unused", 0)),
+                Arc::new(FixtureTextPolisher::successful("unused")),
+            )
+        };
+        let error = custom()
+            .build()
+            .err()
+            .expect("custom default construction must not silently choose a thread-local spawner");
+        assert_eq!(error.code, BackendErrorCode::InvalidState);
+        assert!(
+            !data_dir.exists(),
+            "executor errors precede persistence effects"
+        );
+
+        // A host may construct synchronously if it explicitly supplies its own
+        // existing runtime handle. Keeping the Runtime here models host lifetime;
+        // the adapter itself never creates or owns an executor.
+        let executor = tokio::runtime::Runtime::new().unwrap();
+        let backend = custom()
+            .with_task_spawner(Arc::new(LinuxTaskSpawner(executor.handle().clone())))
+            .build()
+            .unwrap();
+        assert!(!backend.backend.snapshot().running);
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[tokio::test]
+    async fn native_callback_tasks_use_the_production_builder_runtime() {
+        let data_dir = std::env::temp_dir().join(format!(
+            "openless-linux-native-task-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let builder = LinuxBackendBuilder::from_shared_providers(BackendConfig {
+            data_dir: data_dir.clone(),
+            ..BackendConfig::default()
+        })
+        .unwrap();
+        let spawner = Arc::clone(builder.task_spawner.as_ref().unwrap());
+        let (completed, completion) = tokio::sync::oneshot::channel();
+        std::thread::spawn(move || {
+            assert!(tokio::runtime::Handle::try_current().is_err());
+            spawner.spawn(Box::pin(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                let _ = completed.send(());
+            }));
+        })
+        .join()
+        .unwrap();
+        let result = tokio::time::timeout(std::time::Duration::from_secs(2), completion).await;
+        let _ = std::fs::remove_dir_all(data_dir);
+        assert_eq!(
+            result,
+            Ok(Ok(())),
+            "cpal/native cleanup callbacks must reach the existing host executor"
+        );
+    }
+
+    #[tokio::test]
+    async fn shared_provider_builder_requires_no_ui_or_provider_factory() {
         let data_dir = std::env::temp_dir().join(format!(
             "openless-linux-shared-provider-builder-{}-{}",
             std::process::id(),
@@ -966,8 +1072,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(data_dir);
     }
 
-    #[test]
-    fn shared_provider_builder_registers_the_core_marketplace_service() {
+    #[tokio::test]
+    async fn shared_provider_builder_registers_the_core_marketplace_service() {
         let data_dir = std::env::temp_dir().join(format!(
             "openless-linux-marketplace-builder-{}-{}",
             std::process::id(),

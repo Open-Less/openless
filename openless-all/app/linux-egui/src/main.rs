@@ -2090,10 +2090,16 @@ mod linux_app {
             // from a plugin fcitx5 has never loaded.
             ensure_fcitx5_ready(&config)?;
             let hotkeys = Fcitx5HotkeyListener::start().map_err(|error| error.to_string())?;
-            let backend = LinuxBackendBuilder::from_shared_providers(config)
-                .map_err(|error| error.to_string())?
-                .build()
-                .map_err(|error| error.to_string())?;
+            let backend = {
+                // Construction captures the existing executor for cpal/native
+                // callbacks. The GUI thread leaves its context before block_on;
+                // no extra runtime or per-callback runtime is created.
+                let _runtime_context = tokio.enter();
+                LinuxBackendBuilder::from_shared_providers(config)
+                    .map_err(|error| error.to_string())?
+                    .build()
+                    .map_err(|error| error.to_string())?
+            };
             tokio
                 .block_on(LinuxNativeRuntime::start(
                     backend,

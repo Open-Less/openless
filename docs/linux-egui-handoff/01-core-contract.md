@@ -22,6 +22,8 @@
 
 现有[backend.rs](../../openless-all/app/linux-egui/src/backend.rs)、[runtime.rs](../../openless-all/app/linux-egui/src/runtime.rs)和[headless示例](../../openless-all/app/linux-egui/examples/headless_host.rs)是实际构造依据。
 
+`from_shared_providers`和未显式注入executor的`build`必须在Host已经创建的Tokio runtime内调用；同步GUI初始化可用短作用域`runtime.enter()`包住构造，退出该作用域再`block_on`启动。builder捕获同一runtime的Handle，录音回调、静音终止和资源析构即使来自普通OS线程也能提交任务。未进入runtime时构造明确失败，不新建runtime或静默丢任务。使用自定义`LinuxBackendBuilder::new`的Host可通过`with_task_spawner`提供自己的实现，但它必须接受任意原生线程调用；Host保持executor存活直至shutdown与原生清理完成。不要用只查“当前线程runtime”的默认spawner承接cpal回调。
+
 ## 3. 公开能力与调用位置
 
 | 领域 | 入口/来源 | Host/UI使用要求 |

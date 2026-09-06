@@ -36,6 +36,17 @@ pub(crate) fn backend_slot() -> BackendSlot {
     Arc::new(Mutex::new(None))
 }
 
+/// Native audio callbacks and resource destructors do not inherit Tokio's
+/// thread-local context. Always enqueue on Tauri's shared executor instead of
+/// asking the callback thread for a runtime and silently losing its cleanup.
+struct TauriTaskSpawner;
+
+impl openless_core::TaskSpawner for TauriTaskSpawner {
+    fn spawn(&self, task: BoxFuture<'static, ()>) {
+        tauri::async_runtime::spawn(task);
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct TauriNativeAsrDependencies {
     foundry: Arc<crate::asr::local::FoundryLocalRuntime>,
@@ -98,8 +109,7 @@ pub(crate) fn backend_dependencies(
     // The Tauri host owns the Tokio executor used by shared core providers.
     // Keep this spawner explicit so core never falls back to constructing a
     // runtime during cancellation or background cleanup.
-    let task_spawner: Arc<dyn openless_core::TaskSpawner> =
-        Arc::new(openless_core::TokioTaskSpawner);
+    let task_spawner: Arc<dyn openless_core::TaskSpawner> = Arc::new(TauriTaskSpawner);
     let model_store = crate::persistence::models_root()
         .ok()
         .and_then(|root| openless_core::ModelStoreConfig::new(root).ok())
@@ -2983,6 +2993,33 @@ fn map_tauri_error(error: impl std::fmt::Display) -> BackendError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_callback_tasks_run_on_the_tauri_host_runtime() {
+        use openless_core::TaskSpawner;
+
+        // The application executor is alive, but cpal callbacks and native
+        // destructors run on ordinary OS threads without Tokio's thread-local
+        // context. Test that boundary instead of calling spawn inside tokio::test.
+        let _host_runtime = tauri::async_runtime::handle();
+        let (completed, completion) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            assert!(tokio::runtime::Handle::try_current().is_err());
+            TauriTaskSpawner.spawn(Box::pin(async move {
+                // A timer also proves the task has the host's runtime services,
+                // not merely a manually polled future on the callback thread.
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                completed.send(()).unwrap();
+            }));
+        })
+        .join()
+        .unwrap();
+        assert_eq!(
+            completion.recv_timeout(std::time::Duration::from_secs(2)),
+            Ok(()),
+            "native audio/cancellation work must not be dropped outside Tokio threads"
+        );
+    }
 
     #[cfg(not(mobile))]
     #[derive(Default)]

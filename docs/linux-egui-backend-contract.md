@@ -43,7 +43,7 @@ Tokio runtime、窗口/托盘、fcitx5、麦克风、凭据和系统操作。egu
 5. 调用 `start()`，把返回的 `StartupSnapshot` 放入 UI view model。
 6. 只有启动成功后才启用热键、设备 watcher 和下载 watcher。
 
-Linux 生产宿主不自行组装 provider，也不读取 credential account。唯一生产 factory 为：
+Linux 生产宿主不自行组装 provider，也不读取 credential account。以下生产 factory 必须在Host已有的Tokio runtime上下文中调用；同步GUI初始化用短作用域`runtime.enter()`包住构造，随后退出作用域再启动运行时任务。具体executor生命周期与自定义注入约定见[当前接入说明](./linux-egui-handoff/01-core-contract.md)。
 
 ```rust
 let runtime = LinuxBackendBuilder::from_shared_providers(config)?.build()?;

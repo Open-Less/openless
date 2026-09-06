@@ -101,6 +101,17 @@
 
 第四轮最终本地验证：Core 726 passed / 1 ignored，生命周期14项及其它合同6/24/18/3/24/13/15/15通过；Windows Tauri 444 passed / 1 ignored；TypeScript/Vite与67个前端测试入口、Linux Windows-host 48+4、headless示例、Core/Linux严格Clippy、Rust1.88 Tauri检查、六个架构/安全/兼容基线检查和定向格式检查均通过。独立修复复核确认R53全部10个原有Hide出口共用归属判断，没有复制遗漏。此提交后继续第五轮全新团队审核。
 
+### 第五轮：`fc9824ee...87e09e1c`
+
+新的Windows/macOS审查员各自完整审核该PR，未确认独立Standards违规；确认两项Spec问题。`90cbd014`的Windows/Linux/Android CI通过，macOS被新提交自动取消，不计通过。为`87e09e1c`发起的桌面手动打包验证`34009260079`在本轮发现新问题后主动取消，待代码复审收敛再为最终head重建，不将旧产物当作新head证据。
+
+| ID | 确定问题 | 修复/验证状态 |
+| --- | --- | --- |
+| R55 / P2 | Tauri与Linux Host注入仅查当前线程Handle的TokioTaskSpawner；真实麦克风OS线程没有runtime上下文，QA/Less/Selection静音与故障收尾任务被直接丢弃，检测器已fired后不会重试 | Tauri使用框架共享executor，Linux捕获已有Host Handle并用于所有原生线程；默认构造无runtime时在开仓前显式失败，自定义Host可显式注入。两Host真实std::thread回归先红（Disconnected/RecvError）后绿，Core不私建runtime；交接01及main构造已同步 |
+| R56 / P2 | EventBus在锁外分配seq，backlog更新与broadcast也不处于同一临界区；并发原生/Agent事件乱序，UI最大seq去重丢有效事件，replay水位可能先于入队 | 8线程回归先红（首条seq=6，预期1）后绿；复用backlog锁覆盖分配、投影、入队及发送，replay在同锁内读取水位，事件完整10项通过。不是只对重放结果排序 |
+
+第五轮最终本地验证：Core 727 passed / 1 ignored，生命周期14项及其它合同6/24/18/3/24/13/15/15通过；Windows Tauri 445 passed / 1 ignored；Linux Windows-host 50+4、headless、TypeScript/Vite与67个前端测试入口、Core/Linux严格Clippy、Rust1.88 Tauri检查和六个架构/安全/兼容基线检查通过。R56线程回归另连续10轮、共8万消息通过；独立有界复核未发现锁序或消费者语义问题。R55两端从真正OS线程调用生产同型spawner，避免只在tokio测试线程内验证。旧大合同的构造示例也已链接当前executor前置说明。修复提交后交第六轮全新团队，不提前宣称闭环。
+
 后续独立团队的最终结论和新head CI写入原PR描述；本文保留已复现问题及修复证据，不预填尚未完成的审核或设备结果。
 
 ## 不得混同的完成条件

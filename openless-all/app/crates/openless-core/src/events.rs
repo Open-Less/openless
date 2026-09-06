@@ -429,6 +429,12 @@ impl EventBus {
     }
 
     pub fn publish(&self, session_id: Option<SessionId>, mut kind: BackendEventKind) {
+        // One existing lock linearizes sequence allocation, projection, replay
+        // and live delivery. Native audio and Agent threads publish concurrently:
+        // assigning a number before locking (or sending after unlocking) lets a
+        // higher sequence overtake an earlier event, which UI watermarks discard.
+        // No asynchronous work or Host callback belongs in this critical section.
+        let mut backlog = self.backlog.lock().expect("event backlog lock poisoned");
         let sequence = self.sequence.fetch_add(1, Ordering::Relaxed) + 1;
         if let BackendEventKind::LessComputerEvent(event) = &mut kind {
             event.seq = Some(sequence);
@@ -471,12 +477,9 @@ impl EventBus {
                 }
             }
         }
-        {
-            let mut backlog = self.backlog.lock().expect("event backlog lock poisoned");
-            backlog.push_back(event.clone());
-            while backlog.len() > EVENT_REPLAY_CAPACITY {
-                backlog.pop_front();
-            }
+        backlog.push_back(event.clone());
+        while backlog.len() > EVENT_REPLAY_CAPACITY {
+            backlog.pop_front();
         }
         let _ = self.sender.send(event);
     }
@@ -490,6 +493,8 @@ impl EventBus {
     pub fn replay_after(&self, sequence: u64) -> EventReplay {
         let backlog = self.backlog.lock().expect("event backlog lock poisoned");
         let oldest_sequence = backlog.front().map(|event| event.sequence);
+        // Publish holds this same lock through send, so this watermark never
+        // advances past an event which has not yet entered the replay buffer.
         let latest_sequence = self.sequence.load(Ordering::Acquire);
         let truncated = oldest_sequence.is_some_and(|oldest| sequence.saturating_add(1) < oldest);
         let events = backlog
@@ -612,6 +617,40 @@ mod tests {
         assert_eq!(subscription.recv().await, Err(EventRecvError::Lagged(1)));
         let event = subscription.recv().await;
         assert_eq!(event.unwrap().sequence, 2);
+    }
+
+    #[test]
+    fn native_publishers_keep_live_and_replay_sequences_in_the_same_order() {
+        const THREADS: usize = 8;
+        const PER_THREAD: usize = 1000;
+        let bus = EventBus::new(THREADS * PER_THREAD);
+        let mut subscription = bus.subscribe();
+        let barrier = std::sync::Barrier::new(THREADS);
+        // Native audio, Agent output and Core transitions are independent OS
+        // threads. Capacity covers every message, so a failure here is order
+        // corruption, not the documented bounded-subscription lag behavior.
+        std::thread::scope(|scope| {
+            for _ in 0..THREADS {
+                scope.spawn(|| {
+                    barrier.wait();
+                    for _ in 0..PER_THREAD {
+                        bus.publish(None, BackendEventKind::BackendStarted);
+                    }
+                });
+            }
+        });
+        for expected in 1..=(THREADS * PER_THREAD) as u64 {
+            assert_eq!(subscription.try_recv().unwrap().sequence, expected);
+        }
+        assert_eq!(subscription.try_recv(), Err(EventRecvError::Empty));
+        let replay = bus.replay_after(0);
+        assert!(replay.truncated);
+        assert_eq!(replay.events.len(), EVENT_REPLAY_CAPACITY);
+        assert_eq!(replay.latest_sequence, (THREADS * PER_THREAD) as u64);
+        let first = replay.latest_sequence - EVENT_REPLAY_CAPACITY as u64 + 1;
+        for (expected, event) in (first..=replay.latest_sequence).zip(replay.events) {
+            assert_eq!(event.sequence, expected);
+        }
     }
 
     #[test]
