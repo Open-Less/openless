@@ -633,6 +633,19 @@ impl SelectionVoiceApplyOutcome {
 pub trait SelectionVoiceApi: Send + Sync {
     #[doc(hidden)]
     fn bind_qa(&self, _qa: std::sync::Weak<dyn QaApi>) {}
+    /// Register the Host's capture/target cleanup before asynchronous startup.
+    /// Every cancellation entry uses this same session-scoped controller.
+    #[doc(hidden)]
+    fn bind_recording_control(
+        &self,
+        _session_id: SessionId,
+        _control: Arc<dyn crate::ports::RecordingControlSink>,
+    ) -> Result<(), BackendError> {
+        Err(BackendError::new(
+            BackendErrorCode::Unsupported,
+            "selection voice recording control is unavailable",
+        ))
+    }
     fn dispatch_hotkey_edge(
         &self,
         _edge: SelectionVoiceHotkeyEdge,

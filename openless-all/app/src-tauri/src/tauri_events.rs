@@ -328,7 +328,10 @@ fn map_dictation_state(
         inserted_chars: None,
         translation: snapshot.translation_active,
         operating: false,
-        warming: snapshot.phase == DictationPhase::Starting,
+        warming: matches!(
+            snapshot.phase,
+            DictationPhase::Starting | DictationPhase::Recording
+        ) && !snapshot.recording_ready,
         capsule_style,
         selection_polish: false,
     }
@@ -416,6 +419,7 @@ mod tests {
                     level: 0.25,
                     message: Some("fixture".to_string()),
                     translation_active: true,
+                    recording_ready: phase != DictationPhase::Starting,
                 },
                 CapsuleStyle::Classic,
             );

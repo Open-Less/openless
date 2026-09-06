@@ -237,13 +237,23 @@ assert.match(
 );
 assert.match(
   coordinatorDictation,
-  /dispatch_dictation_hotkey_edge_with_session_options/,
+  /\.dispatch_dictation_hotkey_edge\(edge\)/,
   'Tauri dictation hotkeys must delegate the complete session transition to Core',
 );
 assert.match(
   coordinatorDictation,
-  /CliDispatchOutcome::DictationCompleted/,
-  'Tauri dictation bookkeeping must consume the typed Core terminal outcome',
+  /async fn dispatch\([^]*?Result<openless_core::CliDispatchOutcome,\s*openless_core::BackendError>/,
+  'the hotkey adapter must retain the typed Core transition result',
+);
+assert.match(
+  coordinatorHotkeys,
+  /\.update_dictation_translation_requested\(true\)/,
+  'translation hotkeys must update the current Core session',
+);
+assert.doesNotMatch(
+  coordinatorBusinessSources,
+  /inner\.translation_active|translation_active:\s*AtomicBool|fn finish_bookkeeping\(/,
+  'translation intent must not survive in Host state or depend on one stop entry for cleanup',
 );
 const coordinatorInner = coordinator.match(/struct Inner \{([^]*?)\n\}/)?.[1];
 assert.ok(coordinatorInner, 'Coordinator Inner must remain inspectable by the architecture contract');
@@ -396,8 +406,14 @@ for (const mode of ['Hold', 'Toggle', 'Auto']) {
     `Selection Voice ${mode} policy must remain in openless-core`,
   );
 }
+// The trailing, explicitly test-only fixture configures HotkeyMode to exercise
+// the real Core path. The shipping adapter must still contain no mode policy.
+const selectionVoiceProduction = selectionVoiceCoordinator.replace(
+  /\n#\[cfg\(all\(test, target_os = "windows"\)\)\]\r?\nmod tests \{[^]*\n\}\s*$/,
+  '',
+);
 assert.doesNotMatch(
-  selectionVoiceCoordinator,
+  selectionVoiceProduction,
   /HotkeyMode|selection_polish_output_mode|classify_selection_voice_intent|SelectionVoiceIntent::/,
   'the Tauri selection-voice coordinator must only execute Core actions and host effects',
 );

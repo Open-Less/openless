@@ -33,6 +33,15 @@ fn startup_and_enum_wire_shapes_match_the_canonical_contract() {
         serde_json::from_value(fixture["startupSnapshot"]["sample"].clone()).unwrap();
     assert_eq!(startup.contract_version, BACKEND_CONTRACT_VERSION);
     assert_eq!(
+        serde_json::to_value(startup).unwrap(),
+        fixture["startupSnapshot"]["sample"],
+        "startup fixtures must include every serialized snapshot field"
+    );
+    assert_eq!(
+        fixture["androidJni"]["sample"]["payload"], fixture["startupSnapshot"]["sample"]["backend"],
+        "JNI and startup must use the same complete backend snapshot"
+    );
+    assert_eq!(
         serde_json::to_value([
             DictationInsertStatus::Inserted,
             DictationInsertStatus::PasteSent,

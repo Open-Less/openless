@@ -1,4 +1,3 @@
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use super::{qa::handle_qa_option_edge, Inner};
@@ -52,26 +51,7 @@ async fn dispatch(
     if !inner.backend.snapshot().running {
         inner.backend.start().await?;
     }
-    let translation_requested = inner.translation_active.load(Ordering::SeqCst);
-    inner
-        .backend
-        .dispatch_dictation_hotkey_edge_with_session_options(
-            edge,
-            openless_core::DictationHotkeyDispatchOptions {
-                start: openless_core::DictationStartOptions {
-                    translation_requested,
-                    ..openless_core::DictationStartOptions::default()
-                },
-                stop: openless_core::DictationStopOptions {
-                    translation_requested: translation_requested.then_some(true),
-                },
-            },
-        )
-        .await
-}
-
-fn finish_bookkeeping(inner: &Arc<Inner>) {
-    inner.translation_active.store(false, Ordering::SeqCst);
+    inner.backend.dispatch_dictation_hotkey_edge(edge).await
 }
 
 pub(super) async fn handle_pressed_edge(
@@ -94,8 +74,6 @@ pub(super) async fn handle_pressed_edge(
     )
     .await
     {
-        Ok(openless_core::CliDispatchOutcome::DictationCompleted(_))
-        | Ok(openless_core::CliDispatchOutcome::DictationCancelled) => finish_bookkeeping(inner),
         Ok(_) => {}
         Err(error) => log::warn!("[coord] core dictation press failed: {error}"),
     }
@@ -120,8 +98,6 @@ pub(super) async fn handle_released_edge(
     )
     .await
     {
-        Ok(openless_core::CliDispatchOutcome::DictationCompleted(_))
-        | Ok(openless_core::CliDispatchOutcome::DictationCancelled) => finish_bookkeeping(inner),
         Ok(_) => {}
         Err(error) => log::warn!("[coord] core dictation release failed: {error}"),
     }
@@ -136,7 +112,6 @@ pub(super) fn handle_trigger_combined(inner: &Arc<Inner>, edge: crate::hotkey::H
         },
     ));
     match result {
-        Ok(openless_core::CliDispatchOutcome::DictationCancelled) => finish_bookkeeping(inner),
         Ok(_) => {}
         Err(error) => log::warn!("[coord] core dictation combo cancel failed: {error}"),
     }
@@ -172,7 +147,6 @@ pub(super) async fn cancel_active_session(inner: &Arc<Inner>) -> bool {
     match inner.backend.cancel_active_voice_session(None).await {
         Ok(()) => {
             inner.host.hide_less_computer_glow();
-            finish_bookkeeping(inner);
             true
         }
         Err(error) if error.code == openless_core::BackendErrorCode::InvalidState => false,

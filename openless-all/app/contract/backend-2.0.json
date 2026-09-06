@@ -12,7 +12,8 @@
           "elapsedMs": 0,
           "level": 0.0,
           "message": null,
-          "translationActive": false
+          "translationActive": false,
+          "recordingReady": false
         },
         "vocabularyRevision": 0,
         "historyRevision": 0,
@@ -68,7 +69,7 @@
     "samples": {
       "backend_started": {"sequence": 1, "sessionId": null, "kind": {"type": "backend_started"}},
       "backend_stopping": {"sequence": 1, "sessionId": null, "kind": {"type": "backend_stopping"}},
-      "dictation_state_changed": {"sequence": 1, "sessionId": null, "kind": {"type": "dictation_state_changed", "payload": {"phase": "idle", "sessionId": null, "elapsedMs": 0, "level": 0.0, "message": null, "translationActive": false}}},
+      "dictation_state_changed": {"sequence": 1, "sessionId": null, "kind": {"type": "dictation_state_changed", "payload": {"phase": "idle", "sessionId": null, "elapsedMs": 0, "level": 0.0, "message": null, "translationActive": false, "recordingReady": false}}},
       "transcript_delta": {"sequence": 1, "sessionId": null, "kind": {"type": "transcript_delta", "payload": {"text": "delta", "offset": 0, "isFinal": false}}},
       "polish_delta": {"sequence": 1, "sessionId": null, "kind": {"type": "polish_delta", "payload": {"text": "delta", "offset": 0, "isFinal": false}}},
       "dictation_completed": {"sequence": 1, "sessionId": null, "kind": {"type": "dictation_completed", "payload": {"sessionId": "00000000-0000-4000-8000-000000000000", "rawText": "raw", "polishedText": "final", "polishSource": null, "durationMs": 0, "inserted": "inserted"}}},
@@ -104,7 +105,7 @@
   },
   "androidJni": {
     "fields": ["contractVersion", "ok", "payload", "error"],
-    "sample": {"contractVersion": "2.0.0", "ok": true, "payload": {"running": true, "dictation": {"phase": "idle", "sessionId": null, "elapsedMs": 0, "level": 0.0, "message": null, "translationActive": false}, "vocabularyRevision": 0, "historyRevision": 0, "stylePackRevision": 0, "preferencesRevision": 0, "credentials": {"activeAsrProvider": "", "activeLlmProvider": "", "pipelineMode": "traditional", "asrConfigured": false, "llmConfigured": false, "omniConfigured": false, "volcengineConfigured": false, "arkConfigured": false}}, "error": null}
+    "sample": {"contractVersion": "2.0.0", "ok": true, "payload": {"running": true, "dictation": {"phase": "idle", "sessionId": null, "elapsedMs": 0, "level": 0.0, "message": null, "translationActive": false, "recordingReady": false}, "vocabularyRevision": 0, "historyRevision": 0, "stylePackRevision": 0, "preferencesRevision": 0, "credentials": {"activeAsrProvider": "", "activeLlmProvider": "", "pipelineMode": "traditional", "asrConfigured": false, "llmConfigured": false, "omniConfigured": false, "volcengineConfigured": false, "arkConfigured": false}}, "error": null}
   },
   "linuxFacade": {
     "startupFields": ["contractVersion", "backend"],

@@ -70,6 +70,25 @@
 
 第二轮综合验证：Core 722 passed / 1 ignored，生命周期10项、其它合同6/24/17/3/24/12/15/15全部通过；Windows Tauri 440 passed / 1 ignored；前端构建与67个测试入口通过；Linux Windows-host 48+4、headless示例、Core/Linux严格Clippy、依赖和公开合同检查通过。MSRV与最终远端CI按精确修复head记录。`98a0ca38`的CI `34002890692`四平台通过，但不能代替第二轮修复提交的CI。
 
+第二轮修复提交`c0807d97`已推送；CI `34006442463`的Windows、macOS、Linux、Android全部通过。Linux artifact按PR条件跳过，不算产物验收。
+
+### 第三轮：`fc9824ee...c0807d97`
+
+两名新的独立审查员交叉检查桌面原生路径与整个共享Core，主代理复现并处理完成回调竞态。本轮确认以下6项Spec问题，未确认独立Standards违规。
+
+| ID | 确定问题 | 修复/验证状态 |
+| --- | --- | --- |
+| R46 / P1 | Selection Voice通用Esc/故障/shutdown只取消Core状态，Host麦克风与slot仍存活；冷启动也可能留下目标owner | 在首await前绑定既有RecordingControlSink，所有终止入口只调用同一所属capture清理；同步撤销Starting目标，原生stop/ASR清理完成前保留resource hold。Core与真实Tauri Host seam先红后绿 |
+| R47 / P2 | QA Completed/Failed/Cancelled仍拦截通用取消路由，Selection Voice不能收到Esc | 路由仅匹配Recording/Thinking/AwaitingApproval；三种QA终态与Selection并存的公开回归先红后绿 |
+| R48 / P2 | Less在Agent启动前遇到recorder.stop、ASR.finish或空转写错误，仅回Idle/日志，没有可见错误 | 复用capture_fault原子终态认领，发布一次安全错误且返回脱敏错误；用户取消不报Error。各错误及取消排除回归先红后绿 |
+| R49 / P2 | Host翻译标志可跨按钮/CLI/静音停止泄漏到下次会话；Starting捕获上下文期间的翻译请求又会丢失 | 删除Host重复状态，Core保存当轮意图并在所有停止入口统一应用冻结上下文，显式stop override优先；冷启动、三种停止入口与失败补偿回归通过 |
+| R50 / P2 | Host重建Core胶囊payload丢失warming等字段，native start返回后首PCM未到却显示已就绪 | 透传完整payload；兼容缺省的recordingReady仅在首个实际PCM回调置真，零电平/0ms首帧亦有效；Less遵循同一首帧语义。Core、Host和事件桥回归通过 |
+| R51 / P1 | A发布Completed后等待设置锁，期间A取消且B启动；A迟到回调会清B状态并为旧文本注册编辑观察 | 观察注册在锁后复核session，迟到原生注册按generation撤销；完成复用按session复位并检查反馈归属。确定性并发回归先红（B被置空）后绿 |
+
+第三轮综合验证时，新增wire字段暴露canonical fixture未同步、旧热键source合同仍绑定被删除的Host路径；同步实际合同而不跳过断言。完成回调并发测试改用多worker测试runtime，保持Core生产runtime边界检查不变。
+
+第三轮最终本地验证：Core 725 passed / 1 ignored，生命周期14项、其它合同6/24/17/3/24/12/15/15全部通过；Windows Tauri 444 passed / 1 ignored；前端构建与67个测试入口通过；Linux Windows-host 48+4、headless示例、Core/Linux严格Clippy、Rust1.88 Tauri检查、依赖/秘密/隔离/runtime/公开面/command-event检查均通过。修复提交的远端平台CI与第四轮新团队结论仍单独记录，不把本地验证表述为macOS设备验收。
+
 后续独立团队的最终结论和新head CI写入原PR描述；本文保留已复现问题及修复证据，不预填尚未完成的审核或设备结果。
 
 ## 不得混同的完成条件

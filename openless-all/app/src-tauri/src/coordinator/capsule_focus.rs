@@ -189,6 +189,38 @@ fn emit_capsule_with_context_locked(
     inserted_chars: Option<u32>,
     selection_polish: bool,
 ) -> u64 {
+    let dictation = inner.backend.snapshot().dictation;
+    let payload = CapsulePayload {
+        state,
+        level,
+        elapsed_ms,
+        message,
+        inserted_chars,
+        translation: !selection_polish && dictation.translation_active,
+        operating: !selection_polish && inner.backend.less_computer_active_session().is_some(),
+        warming: !selection_polish
+            && state == CapsuleState::Recording
+            && matches!(
+                dictation.phase,
+                openless_core::DictationPhase::Starting | openless_core::DictationPhase::Recording
+            )
+            && !dictation.recording_ready,
+        selection_polish,
+        capsule_style: inner.host.cached_capsule_style(),
+    };
+    emit_capsule_payload_locked(inner, payload)
+}
+
+/// Core 反馈完整进入同一个原生显示出口；包括 warming、translation 等字段，
+/// 不经过旧的“按 Host 状态重建 payload”路径。
+pub(super) fn emit_core_capsule(inner: &Arc<Inner>, payload: CapsulePayload) -> u64 {
+    let _event_guard = inner.capsule_event_lock.lock();
+    emit_capsule_payload_locked(inner, payload)
+}
+
+fn emit_capsule_payload_locked(inner: &Arc<Inner>, payload: CapsulePayload) -> u64 {
+    let state = payload.state;
+    let selection_polish = payload.selection_polish;
     // 每次 payload 都推进代数。这样一个选区润色终态的旧 timer 在之后出现任何
     // selection / voice / QA 状态时都失效，不会把新的可见状态强行收回 Idle。
     let event_epoch = inner
@@ -217,30 +249,11 @@ fn emit_capsule_with_context_locked(
         || selection_voice_active;
     let esc_exclusive = esc_exclusive_for_capsule(state, session_active);
     crate::hotkey::set_esc_exclusive(esc_exclusive);
+    // 即使窗口尚未绑定，也保留卡片期间最新的完整反馈，重显时不能倒退到旧准备态。
+    defer_capsule_payload_if_fallback_active(inner, &payload);
     let Some(capsule) = inner.host.capsule_window() else {
         return event_epoch;
     };
-    // 选区润色不属于语音翻译 / Less Computer，会话之间残留的标志不能带进其提示。
-    let translation = !selection_polish && inner.translation_active.load(Ordering::SeqCst);
-    let operating = !selection_polish && inner.backend.less_computer_active_session().is_some();
-    // 预备态只对 Recording 有意义：麦克风还没吐第一帧 PCM 时（capsule_warming=true）把
-    // warming 打成 true，前端渲染「待命」光效；level_handler 首触发后翻 false → 光条点亮。
-    let warming = false;
-    let payload = CapsulePayload {
-        state,
-        level,
-        elapsed_ms,
-        message,
-        inserted_chars,
-        translation,
-        operating,
-        warming,
-        selection_polish,
-        // 用户选择的胶囊样式：读 Tauri Host 上的原子缓存（主线程闭包每帧从 prefs 同步），
-        // 不在音频回调线程碰偏好锁。设置里切换后下一次录音即生效。
-        capsule_style: inner.host.cached_capsule_style(),
-    };
-    defer_capsule_payload_if_fallback_active(inner, &payload);
 
     #[cfg(target_os = "android")]
     crate::android::notify_capsule_state(&payload);

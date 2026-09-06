@@ -1933,22 +1933,8 @@ pub(super) async fn arm_translation_if_effective(inner: &Arc<Inner>) -> bool {
     ) {
         return false;
     }
-    let prefs = inner.backend.get_preferences();
-    if !crate::types::translation_effective(
-        true,
-        &prefs.translation_target_language,
-        &prefs.working_languages,
-    ) {
-        // 明确记录「按了但不翻」的原因，否则用户只能看到胶囊不提示、无从判断是没生效
-        // 还是没按到。
-        log::info!(
-            "[coord] translation requested during {phase:?} but translation is a no-op \
-             (target={:?} working={:?}); staying in plain polish",
-            prefs.translation_target_language,
-            prefs.working_languages
-        );
-        return false;
-    }
+    // 目标语言和有效性由 Core 本轮冻结的上下文解释。Host 只转交真实按键，
+    // 不保存跨会话标志，也不读取可能已在录音期间被修改的设置重做业务判定。
     if let Err(error) = inner
         .backend
         .update_dictation_translation_requested(true)
@@ -1957,9 +1943,9 @@ pub(super) async fn arm_translation_if_effective(inner: &Arc<Inner>) -> bool {
         log::warn!("[coord] failed to update active core translation state: {error}");
         return false;
     }
-    inner.translation_active.store(true, Ordering::SeqCst);
-    log::info!("[coord] translation active during {phase:?}");
-    true
+    let effective = inner.backend.snapshot().dictation.translation_active;
+    log::info!("[coord] translation requested during {phase:?}, effective={effective}");
+    effective
 }
 
 pub(super) fn hotkey_bridge_loop(inner: Arc<Inner>, rx: mpsc::Receiver<HotkeyEvent>) {
@@ -2201,11 +2187,11 @@ pub(super) fn window_key_matches_trigger(
 }
 
 #[cfg(all(test, target_os = "windows"))]
-mod windows_less_computer_tests {
+pub(crate) mod windows_less_computer_tests {
     use super::*;
 
     // 只替换设备/云边界；边沿、取消、Host slot和Core lease都使用生产实现。
-    fn fixture_coordinator(
+    pub(crate) fn fixture_coordinator(
         mode: crate::types::HotkeyMode,
         startup_delay: std::time::Duration,
     ) -> (
@@ -2227,6 +2213,11 @@ mod windows_less_computer_tests {
                 },
                 openless_core::BackendDependencies {
                     host_actions: Arc::new(openless_core::ports::NoopHostActions),
+                    text_inserter: Arc::new(
+                        openless_core::testing::FixtureTextInserter::with_outcome(
+                            openless_core::InsertOutcome::Inserted,
+                        ),
+                    ),
                     dictation_engine: Arc::new(openless_core::PipelineDictationEngine::new(
                         Arc::new(DelayedFixtureRecorder {
                             recorder: recorder.clone(),
@@ -2271,7 +2262,6 @@ mod windows_less_computer_tests {
                 selection_voice_session::SelectionVoiceHostState::default(),
             )),
             selection_voice_capture: Mutex::new(None),
-            translation_active: AtomicBool::new(false),
             qa_hotkey: Mutex::new(None),
             coding_agent_modifier_hotkey: Mutex::new(None),
             coding_agent_combo_hotkey: Mutex::new(None),
@@ -2283,6 +2273,84 @@ mod windows_less_computer_tests {
             shutdown: AtomicBool::new(false),
         });
         (Coordinator { inner }, recorder, data_dir)
+    }
+
+    #[tokio::test]
+    async fn translation_stopped_outside_the_hotkey_does_not_leak_to_the_next_session() {
+        for stop_entry in ["button", "cli", "silence"] {
+            let (coordinator, _, data_dir) =
+                fixture_coordinator(crate::types::HotkeyMode::Toggle, std::time::Duration::ZERO);
+            let inner = &coordinator.inner;
+            let mut prefs = inner.backend.get_preferences();
+            prefs.translation_target_language = "English".into();
+            prefs.working_languages = vec!["简体中文".into()];
+            crate::set_backend_preferences_for_test(&inner.backend, prefs);
+            let at = std::time::Instant::now();
+            handle_pressed_edge(inner, at, 1).await;
+            handle_released_edge(inner, at + std::time::Duration::from_millis(300), 1).await;
+            assert!(arm_translation_if_effective(inner).await);
+            match stop_entry {
+                "cli" => {
+                    inner
+                        .backend
+                        .dispatch_cli_intent(openless_core::CliIntent::ToggleDictation)
+                        .await
+                        .unwrap();
+                }
+                "silence" => {
+                    inner
+                        .backend
+                        .stop_dictation_session(
+                            inner.backend.snapshot().dictation.session_id.unwrap(),
+                        )
+                        .await
+                        .unwrap();
+                }
+                _ => {
+                    inner.backend.stop_dictation().await.unwrap();
+                }
+            }
+            assert!(inner.backend.list_history().unwrap()[0].translation_active);
+            handle_pressed_edge(inner, at + std::time::Duration::from_secs(2), 2).await;
+            assert_eq!(
+                inner.backend.snapshot().dictation.phase,
+                openless_core::DictationPhase::Recording
+            );
+            assert!(
+                !inner.backend.snapshot().dictation.translation_active,
+                "{stop_entry} must not retain the previous request"
+            );
+            inner.backend.cancel_dictation(None).await.unwrap();
+            drop(coordinator);
+            std::fs::remove_dir_all(data_dir).unwrap();
+        }
+    }
+
+    #[test]
+    fn core_capsule_preserves_complete_feedback_before_the_window_is_bound() {
+        let (coordinator, _, data_dir) =
+            fixture_coordinator(crate::types::HotkeyMode::Toggle, std::time::Duration::ZERO);
+        coordinator.inner.host.begin_insert_fallback_card();
+        let expected = CapsulePayload {
+            state: CapsuleState::Recording,
+            level: 0.0,
+            elapsed_ms: 0,
+            message: Some("准备录音".into()),
+            inserted_chars: None,
+            warming: true,
+            translation: true,
+            operating: true,
+            selection_polish: false,
+            capsule_style: CapsuleStyle::Classic,
+        };
+        coordinator.present_core_capsule(expected.clone());
+        let (_, actual) = coordinator.inner.host.dismiss_insert_fallback_card();
+        assert_eq!(
+            serde_json::to_value(actual).unwrap(),
+            serde_json::to_value(expected).unwrap()
+        );
+        drop(coordinator);
+        std::fs::remove_dir_all(data_dir).unwrap();
     }
 
     struct DelayedFixtureRecorder {

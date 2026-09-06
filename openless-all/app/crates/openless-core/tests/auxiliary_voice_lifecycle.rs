@@ -17,9 +17,58 @@ impl RecordingControlSink for Control {
         Ok(())
     }
 }
+struct StopFailure;
+impl AudioRecorder for StopFailure {
+    fn start(
+        &self,
+        _: SessionId,
+        _: Arc<DictationContext>,
+        _: Arc<dyn AudioConsumer>,
+        _: Arc<dyn RecordingProgressSink>,
+    ) -> BoxFuture<'static, Result<Box<dyn ActiveRecording>, BackendError>> {
+        Box::pin(async { Ok(Box::new(StopFailure) as Box<dyn ActiveRecording>) })
+    }
+}
+impl ActiveRecording for StopFailure {
+    fn stop(self: Box<Self>) -> BoxFuture<'static, Result<(), BackendError>> {
+        Box::pin(async {
+            Err(BackendError::new(
+                BackendErrorCode::Platform,
+                "native stop failed: secret-api-key=https://private.example/token",
+            ))
+        })
+    }
+}
 struct Progress;
 impl RecordingProgressSink for Progress {
     fn publish_level(&self, _: u64, _: f32) -> Result<(), BackendError> {
+        Ok(())
+    }
+}
+
+// The Host owns its slot/target; the opaque Core capture owns native cleanup.
+// Model the same synchronous slot transfer as Tauri's recording-control adapter.
+#[derive(Default)]
+struct SelectionHostControl {
+    owner: Mutex<Option<SessionId>>,
+    capture: Mutex<Option<Arc<VoiceTranscriptionSession>>>,
+    cancellations: AtomicUsize,
+}
+impl RecordingControlSink for SelectionHostControl {
+    fn request(&self, id: SessionId, action: RecordingControlAction) -> Result<(), BackendError> {
+        if action != RecordingControlAction::Cancel {
+            return Ok(());
+        }
+        let mut owner = self.owner.lock().unwrap();
+        if *owner != Some(id) {
+            return Ok(());
+        }
+        *owner = None;
+        self.cancellations.fetch_add(1, Ordering::SeqCst);
+        let capture = self.capture.lock().unwrap().take();
+        if let Some(capture) = capture {
+            tokio::spawn(capture.cancel());
+        }
         Ok(())
     }
 }
@@ -802,6 +851,17 @@ async fn less_voice_feedback_preserves_phases_and_rejects_late_levels() {
         .await
         .unwrap();
     let sink = progress.lock().unwrap().clone().unwrap();
+    assert!(matches!(
+        backend.event_publisher().latest_less_computer_voice_state(),
+        Some(LessComputerEvent {
+            kind: LessComputerEventKind::VoiceState {
+                phase: LessComputerVoicePhase::Starting,
+                ..
+            },
+            ..
+        })
+    ));
+    sink.publish_level(0, 0.0).unwrap();
     sink.publish_level(80, 0.7).unwrap();
     let _ = capture.finish().await;
     sink.publish_level(100, 0.8).unwrap();
@@ -887,4 +947,297 @@ async fn non_inserting_dictation_keeps_gate_while_native_stop_is_in_flight() {
     .unwrap();
     backend.abort_less_computer_capture(next).unwrap();
     std::fs::remove_dir_all(path).unwrap();
+}
+
+#[tokio::test]
+async fn selection_terminal_entries_close_host_capture_and_retain_native_cleanup_hold() {
+    for entry in ["cancel", "general", "fault", "shutdown"] {
+        let stopped = Arc::new(Semaphore::new(0));
+        let stop_gate = Arc::new(Semaphore::new(0));
+        let asr = Arc::new(testing::FixtureTranscriptionEngine::successful(
+            "instruction",
+            10,
+        ));
+        let (backend, path) = backend(
+            Arc::new(Recorder {
+                starts: Arc::new(AtomicUsize::new(0)),
+                stopped: stopped.clone(),
+                stop_gate: stop_gate.clone(),
+                archive: None,
+            }),
+            asr.clone(),
+            Arc::new(QaRuntime::default()),
+        );
+        backend.start().await.unwrap();
+        let id = backend
+            .services()
+            .selection_voice
+            .begin(SelectionCapture {
+                text: "selected text".into(),
+                source_app: None,
+            })
+            .await
+            .unwrap();
+        let host = Arc::new(SelectionHostControl::default());
+        *host.owner.lock().unwrap() = Some(id);
+        *host.capture.lock().unwrap() = Some(Arc::new(
+            backend
+                .start_selection_voice_capture(id, host.clone())
+                .await
+                .unwrap(),
+        ));
+        match entry {
+            "cancel" => backend
+                .services()
+                .selection_voice
+                .cancel(Some(id))
+                .await
+                .unwrap(),
+            "general" => backend.cancel_active_voice_session(None).await.unwrap(),
+            "fault" => backend
+                .services()
+                .selection_voice
+                .recording_fault(
+                    id,
+                    BackendError::new(BackendErrorCode::Platform, "device disconnected"),
+                )
+                .await
+                .unwrap(),
+            _ => backend.shutdown().await.unwrap(),
+        }
+        assert_eq!(
+            *host.owner.lock().unwrap(),
+            None,
+            "{entry} must revoke the Host target"
+        );
+        assert!(
+            host.capture.lock().unwrap().is_none(),
+            "{entry} must transfer the native handle"
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(2), stopped.acquire())
+            .await
+            .unwrap()
+            .unwrap()
+            .forget();
+        assert_eq!(
+            backend
+                .begin_less_computer_capture(SessionId::new())
+                .unwrap_err()
+                .code,
+            BackendErrorCode::Busy,
+            "{entry} must keep the hold through native stop"
+        );
+        stop_gate.add_permits(1);
+        let next = SessionId::new();
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                if backend.begin_less_computer_capture(next).is_ok() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(asr.cancel_count(), 1);
+        backend
+            .services()
+            .selection_voice
+            .cancel(Some(id))
+            .await
+            .unwrap();
+        assert_eq!(host.cancellations.load(Ordering::SeqCst), 1);
+        assert_eq!(backend.less_computer_active_session(), Some(next));
+        backend.abort_less_computer_capture(next).unwrap();
+        std::fs::remove_dir_all(path).unwrap();
+    }
+}
+
+#[tokio::test]
+async fn selection_cold_start_cancel_revokes_host_before_late_native_cleanup() {
+    let entered = Arc::new(Semaphore::new(0));
+    let start_gate = Arc::new(Semaphore::new(0));
+    let stopped = Arc::new(Semaphore::new(0));
+    let stop_gate = Arc::new(Semaphore::new(0));
+    let (backend, path) = backend(
+        Arc::new(SlowRecorder {
+            inner: Recorder {
+                starts: Arc::new(AtomicUsize::new(0)),
+                stopped: stopped.clone(),
+                stop_gate: stop_gate.clone(),
+                archive: None,
+            },
+            entered: entered.clone(),
+            gate: start_gate.clone(),
+            progress: Arc::new(Mutex::new(None)),
+        }),
+        Arc::new(testing::FixtureTranscriptionEngine::successful("late", 10)),
+        Arc::new(QaRuntime::default()),
+    );
+    backend.start().await.unwrap();
+    let id = backend
+        .services()
+        .selection_voice
+        .begin(SelectionCapture {
+            text: "selected text".into(),
+            source_app: None,
+        })
+        .await
+        .unwrap();
+    let host = Arc::new(SelectionHostControl::default());
+    *host.owner.lock().unwrap() = Some(id);
+    let starting = tokio::spawn({
+        let backend = backend.clone();
+        let host = host.clone();
+        async move { backend.start_selection_voice_capture(id, host).await }
+    });
+    entered.acquire().await.unwrap().forget();
+    backend.cancel_active_voice_session(Some(id)).await.unwrap();
+    assert_eq!(*host.owner.lock().unwrap(), None);
+    starting.abort();
+    let _ = starting.await;
+    start_gate.add_permits(1);
+    stopped.acquire().await.unwrap().forget();
+    assert_eq!(
+        backend
+            .begin_less_computer_capture(SessionId::new())
+            .unwrap_err()
+            .code,
+        BackendErrorCode::Busy
+    );
+    stop_gate.add_permits(1);
+    let next = SessionId::new();
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            if backend.begin_less_computer_capture(next).is_ok() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    backend.abort_less_computer_capture(next).unwrap();
+    std::fs::remove_dir_all(path).unwrap();
+}
+
+#[tokio::test]
+async fn qa_terminal_states_do_not_intercept_selection_voice_cancellation() {
+    for phase in [QaPhase::Completed, QaPhase::Failed, QaPhase::Cancelled] {
+        let qa = Arc::new(QaRuntime::default());
+        let (backend, path) = backend(
+            Arc::new(testing::FixtureAudioRecorder::default()),
+            Arc::new(testing::FixtureTranscriptionEngine::successful(
+                "unused", 10,
+            )),
+            qa.clone(),
+        );
+        backend.start().await.unwrap();
+        qa.fail.store(phase == QaPhase::Failed, Ordering::SeqCst);
+        let _ = backend.services().qa.submit_text("question".into()).await;
+        if phase == QaPhase::Cancelled {
+            backend.services().qa.cancel(None).await.unwrap();
+        }
+        let before = backend.services().qa.snapshot().await.unwrap();
+        assert_eq!(before.phase, phase);
+        let id = backend
+            .services()
+            .selection_voice
+            .begin(SelectionCapture {
+                text: "selected text".into(),
+                source_app: None,
+            })
+            .await
+            .unwrap();
+        backend.cancel_active_voice_session(None).await.unwrap();
+        assert_eq!(
+            backend
+                .services()
+                .selection_voice
+                .snapshot()
+                .await
+                .unwrap()
+                .phase,
+            SelectionVoicePhase::Cancelled,
+            "QA {phase:?} must not intercept cancel"
+        );
+        assert_eq!(backend.services().qa.snapshot().await.unwrap(), before);
+        assert_eq!(
+            backend
+                .services()
+                .selection_voice
+                .snapshot()
+                .await
+                .unwrap()
+                .session_id,
+            Some(id)
+        );
+        std::fs::remove_dir_all(path).unwrap();
+    }
+}
+
+#[tokio::test]
+async fn less_voice_finish_errors_publish_one_safe_error_but_cancellation_does_not() {
+    for (asr, cancelled, stop_fails) in [
+        (
+            testing::FixtureTranscriptionEngine::failing(BackendError::new(
+                BackendErrorCode::Provider,
+                "HTTP 401 secret-api-key=https://private.example/token",
+            )),
+            false,
+            false,
+        ),
+        (
+            testing::FixtureTranscriptionEngine::successful("  ", 10),
+            false,
+            false,
+        ),
+        (
+            testing::FixtureTranscriptionEngine::successful("unused", 10),
+            false,
+            true,
+        ),
+        (
+            testing::FixtureTranscriptionEngine::failing(BackendError::new(
+                BackendErrorCode::Cancelled,
+                "user cancelled",
+            )),
+            true,
+            false,
+        ),
+    ] {
+        let recorder: Arc<dyn AudioRecorder> = if stop_fails {
+            Arc::new(StopFailure)
+        } else {
+            Arc::new(testing::FixtureAudioRecorder::default())
+        };
+        let (backend, path) = backend(recorder, Arc::new(asr), Arc::new(QaRuntime::default()));
+        let mut events = backend.subscribe();
+        let id = SessionId::new();
+        let capture = backend
+            .start_less_computer_voice(id, Arc::new(Control))
+            .await
+            .unwrap();
+        let error = capture.finish().await.unwrap_err();
+        assert!(!error.message.contains("secret-api-key"));
+        assert!(!error.message.contains("private.example"));
+        let errors = std::iter::from_fn(|| events.try_recv().ok())
+            .filter_map(|event| match event.kind {
+                BackendEventKind::LessComputerEvent(LessComputerEvent {
+                    kind: LessComputerEventKind::Error { message },
+                    ..
+                }) => {
+                    assert_eq!(event.session_id, Some(id));
+                    Some(message)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(errors.len(), usize::from(!cancelled));
+        for error in errors {
+            assert!(!error.contains("secret-api-key"));
+            assert!(!error.contains("private.example"));
+        }
+        std::fs::remove_dir_all(path).unwrap();
+    }
 }

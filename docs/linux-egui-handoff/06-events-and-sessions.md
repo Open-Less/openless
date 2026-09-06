@@ -13,7 +13,10 @@
 
 恢复时保留各领域的不同策略：听写恢复状态，QA以完整messages校准，Less Computer按轮归属处理；不是一个通用“取最新事件”就能替代。
 
+听写`DictationStateSnapshot.recording_ready`的JSON字段为`recordingReady`，每轮初始为`false`；`phase=recording`仅说明原生启动已返回，不能据此提前显示麦克风就绪。AudioRecorder必须先向consumer交付非空PCM，再报告该帧的level；Core仅在这个首帧回调后将`recordingReady`置为`true`，即使首帧是`elapsedMs=0,level=0`也必须发布状态。不得用启动定时器或预填零电平伪造首帧。UI在`starting/recording`且`recordingReady=false`时显示待命；终态退出待命，新会话重新从`false`开始。旧JSON缺字段时Core按`false`读取。
+
 Less Computer语音提供`voice_state {sessionId, phase, level, elapsedMs}`及`BackendEventPublisher::latest_less_computer_voice_state()`固定一条最新投影。`phase`为`starting/recording/transcribing/idle`；投影保留原seq，供阶段事件被有界replay驱逐后恢复显示，不能推进聊天去重水位。Linux Host/UI接手此显示消费；旧session的Idle或迟到电平不得覆盖当前录音。
+该语音投影复用相同首PCM合同：原生start返回后仍保留`starting`，首帧level才转为`recording`；Host/UI不能自行补发就绪态。
 
 ## 2. TranscriptDelta不是简单追加
 

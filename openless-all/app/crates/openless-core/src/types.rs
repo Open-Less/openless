@@ -218,6 +218,10 @@ pub struct DictationStateSnapshot {
     pub message: Option<String>,
     #[serde(default)]
     pub translation_active: bool,
+    /// Native capture startup can return before its first PCM callback. Hosts
+    /// must keep their warming presentation until that callback is observed.
+    #[serde(default)]
+    pub recording_ready: bool,
 }
 
 impl Default for DictationStateSnapshot {
@@ -229,6 +233,7 @@ impl Default for DictationStateSnapshot {
             level: 0.0,
             message: None,
             translation_active: false,
+            recording_ready: false,
         }
     }
 }
@@ -426,6 +431,7 @@ mod tests {
             level: 0.5,
             message: None,
             translation_active: true,
+            recording_ready: true,
         };
         let value = serde_json::to_value(snapshot).unwrap();
         assert_eq!(value["phase"], "transcribing");

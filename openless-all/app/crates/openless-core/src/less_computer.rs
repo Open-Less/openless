@@ -20,6 +20,7 @@ use crate::types::SessionId;
 
 const DEFAULT_APPROVAL_TIMEOUT: Duration = Duration::from_secs(90);
 const MAX_DSH_CONTINUATION_TURNS: usize = 2;
+pub(crate) const VOICE_CAPTURE_FAILED: &str = "Less Computer voice input failed. Please try again.";
 
 struct LessComputerState {
     conversation_active: AtomicBool,
@@ -456,7 +457,7 @@ impl LessComputerApi for LessComputerService {
                 BackendEventKind::LessComputerEvent(LessComputerEvent {
                     seq: None,
                     kind: LessComputerEventKind::Error {
-                        message: "Less Computer recording failed".to_string(),
+                        message: VOICE_CAPTURE_FAILED.to_string(),
                     },
                 }),
             );

@@ -100,10 +100,7 @@ pub async fn confirm_selection_voice_intent_prompt(
 }
 
 #[tauri::command]
-pub async fn cancel_selection_voice_intent_prompt(
-    core: CoreState<'_>,
-    coord: CoordinatorState<'_>,
-) -> Result<(), String> {
+pub async fn cancel_selection_voice_intent_prompt(core: CoreState<'_>) -> Result<(), String> {
     let Some(session_id) = core
         .services()
         .selection_voice
@@ -120,9 +117,7 @@ pub async fn cancel_selection_voice_intent_prompt(
         .selection_voice
         .cancel(Some(session_id))
         .await
-        .map_err(selection_voice_error)?;
-    coord.finish_cancelled_selection_voice_host(session_id);
-    Ok(())
+        .map_err(selection_voice_error)
 }
 
 #[tauri::command]

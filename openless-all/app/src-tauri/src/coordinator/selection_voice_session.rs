@@ -88,6 +88,12 @@ impl openless_core::RecordingControlSink for SelectionVoiceRecordingControl {
                 "selection voice host session is no longer available",
             )
         })?;
+        if action == openless_core::RecordingControlAction::Cancel {
+            // 取消必须先同步撤销Starting owner。它不能排队等待capture
+            // 安装：Core已使token失效，迟到的原生句柄只会关闭，不会attach。
+            Self::apply(&inner, session_id, action);
+            return Ok(());
+        }
         // 与 flush 串行化：不能在 flush 读空队列以后才把启动事件排入。
         let mut pending = self.pending.lock();
         let ready = inner
@@ -555,6 +561,8 @@ impl Coordinator {
         });
         if was_current {
             self.inner.host.hide_selection_voice_intent_prompt();
+            emit_capsule(&self.inner, CapsuleState::Idle, 0.0, 0, None, None);
+            schedule_capsule_idle(&self.inner, 0);
         }
     }
 
@@ -654,5 +662,83 @@ impl Coordinator {
         clear_host_session(&self.inner, session_id);
         emit_capsule(&self.inner, CapsuleState::Idle, 0.0, 0, None, None);
         schedule_capsule_idle(&self.inner, 0);
+    }
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod tests {
+    use super::*;
+    use openless_core::RecordingControlSink;
+
+    #[tokio::test]
+    async fn selection_cancel_revokes_a_starting_host_target_without_waiting_for_attach() {
+        let (coordinator, _, data_dir) =
+            super::super::hotkey_loops::windows_less_computer_tests::fixture_coordinator(
+                crate::types::HotkeyMode::Toggle,
+                std::time::Duration::ZERO,
+            );
+        let id = CoreSessionId::new();
+        coordinator
+            .inner
+            .selection_voice_host
+            .lock()
+            .target_session_id = Some(id);
+        let control = SelectionVoiceRecordingControl::new(&coordinator.inner);
+        control
+            .request(id, openless_core::RecordingControlAction::Cancel)
+            .unwrap();
+        assert_eq!(
+            coordinator
+                .inner
+                .selection_voice_host
+                .lock()
+                .target_session_id,
+            None
+        );
+        assert!(
+            control.pending.lock().is_empty(),
+            "取消不能等候永远不会发生的attach"
+        );
+        drop(coordinator);
+        std::fs::remove_dir_all(data_dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn selection_esc_clears_the_real_host_slot_and_stops_its_capture() {
+        let (coordinator, recorder, data_dir) =
+            super::super::hotkey_loops::windows_less_computer_tests::fixture_coordinator(
+                crate::types::HotkeyMode::Toggle,
+                std::time::Duration::ZERO,
+            );
+        let inner = &coordinator.inner;
+        let id = inner
+            .backend
+            .services()
+            .selection_voice
+            .begin(SelectionCapture {
+                text: "selected text".into(),
+                source_app: None,
+            })
+            .await
+            .unwrap();
+        inner.selection_voice_host.lock().target_session_id = Some(id);
+        let capture = inner
+            .backend
+            .start_selection_voice_capture(id, Arc::new(SelectionVoiceRecordingControl::new(inner)))
+            .await
+            .unwrap();
+        *inner.selection_voice_capture.lock() = Some(Arc::new(capture));
+        assert!(super::super::dictation::cancel_active_session(inner).await);
+        assert_eq!(inner.selection_voice_host.lock().target_session_id, None);
+        assert!(inner.selection_voice_capture.lock().is_none());
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while recorder.stop_count() != 1 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        drop(coordinator);
+        std::fs::remove_dir_all(data_dir).unwrap();
     }
 }

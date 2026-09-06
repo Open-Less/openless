@@ -481,14 +481,6 @@ struct Inner {
     selection_voice_host: Arc<Mutex<selection_voice_session::SelectionVoiceHostState>>,
     #[cfg(all(not(mobile), target_os = "windows"))]
     selection_voice_capture: Mutex<Option<Arc<openless_core::VoiceTranscriptionSession>>>,
-    /// 「本次会话真的要翻译」。每次 begin_session 重置为 false；hotkey 监听器在
-    /// Listening / Starting 阶段看到 Shift down 边沿（或安卓浮层请求）时，经
-    /// `arm_translation_if_effective` 判定翻译确实会生效（设了目标语言、且不等于唯一工作语言）
-    /// 后才 set true。
-    ///
-    /// 判定收在写入侧：读取侧之一是音频回调线程上的 emit_capsule，不能碰偏好锁。
-    /// 胶囊提示与 end_session 的 polish 分派因此读到同一个真值。详见 issue #4。
-    translation_active: AtomicBool,
     /// 划词语音问答（issue #118）：与 dictation hotkey 平行的全局快捷键
     /// 监听器（global-hotkey crate）。`None` 表示功能关闭或还没成功安装。
     qa_hotkey: Mutex<Option<QaHotkeyMonitor>>,
@@ -637,7 +629,6 @@ impl Coordinator {
                 )),
                 #[cfg(all(not(mobile), target_os = "windows"))]
                 selection_voice_capture: Mutex::new(None),
-                translation_active: AtomicBool::new(false),
                 qa_hotkey: Mutex::new(None),
                 coding_agent_modifier_hotkey: Mutex::new(None),
                 coding_agent_combo_hotkey: Mutex::new(None),
@@ -745,7 +736,6 @@ impl Coordinator {
             selection_voice_host: Arc::clone(&selection_voice_host),
             #[cfg(all(not(mobile), target_os = "windows"))]
             selection_voice_capture: Mutex::new(None),
-            translation_active: AtomicBool::new(false),
             qa_hotkey: Mutex::new(None),
             coding_agent_modifier_hotkey: Mutex::new(None),
             coding_agent_combo_hotkey: Mutex::new(None),
@@ -773,15 +763,11 @@ impl Coordinator {
     }
 
     pub fn present_core_capsule(&self, payload: CapsulePayload) {
-        emit_capsule(
-            &self.inner,
-            payload.state,
-            payload.level,
-            payload.elapsed_ms,
-            payload.message,
-            payload.inserted_chars,
-        );
-        if let Some(delay_ms) = core_capsule_hide_delay(payload.state) {
+        let state = payload.state;
+        // Core 已拥有本帧的翻译、准备态和会话归属；不可在窗口层按迟到的
+        // 当前状态重新拼装，否则冷启动或快速切换会丢失真实反馈。
+        emit_core_capsule(&self.inner, payload);
+        if let Some(delay_ms) = core_capsule_hide_delay(state) {
             schedule_capsule_idle(&self.inner, delay_ms);
         }
     }

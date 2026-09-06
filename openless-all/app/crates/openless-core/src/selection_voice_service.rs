@@ -41,7 +41,7 @@ struct StoredPreview {
     summary: Option<String>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 struct SelectionVoiceState {
     phase: SelectionVoicePhase,
     session_id: Option<SessionId>,
@@ -54,6 +54,7 @@ struct SelectionVoiceState {
     applying_ticket: Option<SelectionVoiceApplyTicket>,
     apply_outcome: Option<SelectionVoiceApplyOutcome>,
     started_at: Option<std::time::Instant>,
+    recording_control: Option<Arc<dyn crate::ports::RecordingControlSink>>,
 }
 
 impl SelectionVoiceState {
@@ -548,6 +549,34 @@ impl SelectionVoiceApi for SelectionVoiceService {
             .expect("selection voice QA binding lock poisoned") = Some(qa);
     }
 
+    fn bind_recording_control(
+        &self,
+        session_id: SessionId,
+        control: Arc<dyn crate::ports::RecordingControlSink>,
+    ) -> Result<(), BackendError> {
+        let mut state = self
+            .state
+            .write()
+            .expect("selection voice state lock poisoned");
+        if state.session_id != Some(session_id) || state.phase != SelectionVoicePhase::Recording {
+            // Cancellation may win between acquiring the resource hold and
+            // registering its Host slot. Revoke that late owner as well.
+            drop(state);
+            cancel_recording_control(Some(control), session_id)?;
+            return Err(cancelled(
+                "selection voice was cancelled before capture registration",
+            ));
+        }
+        if state.recording_control.is_some() {
+            return Err(BackendError::new(
+                BackendErrorCode::Busy,
+                "selection voice capture is already registered",
+            ));
+        }
+        state.recording_control = Some(control);
+        Ok(())
+    }
+
     fn dispatch_hotkey_edge(
         &self,
         edge: SelectionVoiceHotkeyEdge,
@@ -628,24 +657,25 @@ impl SelectionVoiceApi for SelectionVoiceService {
         let voice_sessions = Arc::clone(&self.voice_sessions);
         let polisher = self.workflow.polisher.clone();
         Box::pin(async move {
-            let snapshot = {
+            let (snapshot, control) = {
                 let mut state = state.write().expect("selection voice state lock poisoned");
                 state.ensure_session(session_id)?;
                 if state.phase != SelectionVoicePhase::Recording {
                     return Err(invalid_state("selection voice is not recording"));
                 }
                 state.phase = SelectionVoicePhase::Failed;
-                state.snapshot()
+                (state.snapshot(), state.recording_control.take())
             };
             events.publish(
                 Some(session_id),
                 BackendEventKind::SelectionVoiceStateChanged(snapshot),
             );
             voice_sessions.release(session_id);
+            let host_result = cancel_recording_control(control, session_id);
             if let Some(polisher) = polisher {
                 polisher.cancel(session_id).await?;
             }
-            Ok(())
+            host_result
         })
     }
 
@@ -1349,7 +1379,7 @@ impl SelectionVoiceApi for SelectionVoiceService {
         let polisher = self.workflow.polisher.clone();
         let voice_sessions = Arc::clone(&self.voice_sessions);
         Box::pin(async move {
-            let (active_session, snapshot) = {
+            let (active_session, snapshot, control) = {
                 let mut state = state.write().expect("selection voice state lock poisoned");
                 let Some(active_session) = state.session_id else {
                     return Ok(());
@@ -1364,21 +1394,38 @@ impl SelectionVoiceApi for SelectionVoiceService {
                 state.intent_prompt = None;
                 state.preview = None;
                 state.applying_ticket = None;
-                (active_session, state.snapshot())
+                (
+                    active_session,
+                    state.snapshot(),
+                    state.recording_control.take(),
+                )
             };
             events.publish(
                 Some(active_session),
                 BackendEventKind::SelectionVoiceStateChanged(snapshot),
             );
             voice_sessions.release(active_session);
+            // The token prevents late startup; this controller actually takes
+            // the Host capture and invokes its owned stop/ASR cleanup. Its
+            // resource hold remains live until those native effects settle.
+            let host_result = cancel_recording_control(control, active_session);
             if let Some(polisher) = polisher {
                 if let Err(error) = polisher.cancel(active_session).await {
                     log::warn!("failed to cancel selection voice model request: {error}");
                 }
             }
-            Ok(())
+            host_result
         })
     }
+}
+
+fn cancel_recording_control(
+    control: Option<Arc<dyn crate::ports::RecordingControlSink>>,
+    session_id: SessionId,
+) -> Result<(), BackendError> {
+    control.map_or(Ok(()), |control| {
+        control.request(session_id, crate::events::RecordingControlAction::Cancel)
+    })
 }
 
 fn matching_preview_mut(
