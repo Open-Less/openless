@@ -1,0 +1,29 @@
+# Localization strict allowlist (do NOT grow this silently).
+#
+# Every Simplified-Chinese string literal that lives outside src/i18n.rs must be
+# listed here AND be one of the genuinely non-UI / protocol / test literals below.
+# If a string is user-visible UI chrome or a control label, translate it in
+# src/i18n.rs and call tr_l10n/fmt_l10n with the resolved Lang instead of adding
+# it here. Each entry below is justified:
+#   - fcitx5 startup error text and its test-substring match (fcitx5 is out of
+#     scope for this Linux-egui i18n work; it stays a raw Host error string).
+#   - popup.rs / overview-test fixtures exercising unicode & JSONL round-trips.
+#   - audio_mute.rs host parsing of PulseAudio's *localized* mute reply ("是")
+#     plus its unit-test fixtures, and qa.rs's dynamic fallback payload used as
+#     the user's message when a voice question had no transcript.
+# The localization_contract test asserts the size stays tiny and that no other
+# raw CJK literal is introduced anywhere outside the catalog.
+OpenLess fcitx5 插件
+session-一
+session-二
+今天第一句
+今日第一句 has 5 chars
+他说：\"你好\" C:\\\\tmp\\\\文件
+前天
+原文 \\\\ source
+昨天
+是
+未找到 OpenLess fcitx5 插件；请重新安装当前软件包
+静音：否
+静音：是
+（语音问题）

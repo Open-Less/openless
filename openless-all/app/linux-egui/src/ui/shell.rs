@@ -1,5 +1,7 @@
 use eframe::egui;
 
+use openless_linux_egui::{tr_l10n, Lang};
+
 use super::theme;
 
 pub const SIDEBAR_WIDTH: f32 = 188.0;
@@ -19,17 +21,36 @@ pub enum Page {
 }
 
 impl Page {
-    pub fn title(self) -> &'static str {
-        match self {
-            Self::Overview => "概览",
-            Self::History => "历史",
-            Self::Vocabulary => "词汇与纠错",
-            Self::Styles => "风格包",
-            Self::Marketplace => "Marketplace",
-            Self::Providers => "Provider 与设置",
-            Self::Models => "本地模型",
-            Self::Assistant => "Less Computer",
-        }
+    /// Localized title used for the content heading (and overview-style pages).
+    pub fn title(self, lang: Lang) -> &'static str {
+        let key = match self {
+            Self::Overview => "nav.overview",
+            Self::History => "nav.history",
+            Self::Vocabulary => "nav.vocab",
+            Self::Styles => "nav.styles",
+            Self::Marketplace => "nav.marketplace",
+            Self::Providers => "nav.providers",
+            Self::Models => "nav.models",
+            Self::Assistant => "nav.assistant",
+        };
+        tr_l10n(lang, key)
+    }
+
+    /// Short sidebar navigation label. Mostly identical to [`Page::title`], but
+    /// the settings entry is a compact "Settings" while its page title stays
+    /// the fuller "Providers & Settings".
+    pub fn nav_title(self, lang: Lang) -> &'static str {
+        let key = match self {
+            Self::Overview => "nav.overview",
+            Self::History => "nav.history",
+            Self::Vocabulary => "nav.vocab",
+            Self::Styles => "nav.styles",
+            Self::Marketplace => "nav.marketplace",
+            Self::Providers => "nav.settings",
+            Self::Models => "nav.models",
+            Self::Assistant => "nav.assistant",
+        };
+        tr_l10n(lang, key)
     }
 }
 
@@ -88,7 +109,7 @@ fn chrome_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
     )
 }
 
-pub fn sidebar(ctx: &egui::Context, active: &mut Page, status: &str) {
+pub fn sidebar(ctx: &egui::Context, active: &mut Page, status: &str, lang: Lang) {
     egui::SidePanel::left("openless-sidebar")
         .exact_width(SIDEBAR_WIDTH)
         .resizable(false)
@@ -98,20 +119,28 @@ pub fn sidebar(ctx: &egui::Context, active: &mut Page, status: &str) {
                 .inner_margin(egui::Margin::symmetric(10, 12)),
         )
         .show(ctx, |ui| {
-            ui.label(egui::RichText::new("工作台").size(10.5).color(theme::INK_4));
+            ui.label(
+                egui::RichText::new(tr_l10n(lang, "shell.workspace"))
+                    .size(10.5)
+                    .color(theme::INK_4),
+            );
             ui.add_space(5.0);
-            nav(ui, active, Page::Overview, "⌂", "概览");
-            nav(ui, active, Page::History, "◷", "历史");
-            nav(ui, active, Page::Vocabulary, "≡", "词汇与纠错");
-            nav(ui, active, Page::Styles, "✎", "风格包");
-            nav(ui, active, Page::Marketplace, "◇", "Marketplace");
+            nav(ui, active, Page::Overview, "⌂", lang);
+            nav(ui, active, Page::History, "◷", lang);
+            nav(ui, active, Page::Vocabulary, "≡", lang);
+            nav(ui, active, Page::Styles, "✎", lang);
+            nav(ui, active, Page::Marketplace, "◇", lang);
             ui.add_space(12.0);
-            ui.label(egui::RichText::new("能力").size(10.5).color(theme::INK_4));
+            ui.label(
+                egui::RichText::new(tr_l10n(lang, "shell.capabilities"))
+                    .size(10.5)
+                    .color(theme::INK_4),
+            );
             ui.add_space(5.0);
-            nav(ui, active, Page::Assistant, "✦", "Less Computer");
-            nav(ui, active, Page::Models, "↓", "本地模型");
+            nav(ui, active, Page::Assistant, "✦", lang);
+            nav(ui, active, Page::Models, "↓", lang);
             ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
-                nav(ui, active, Page::Providers, "⚙", "设置");
+                nav(ui, active, Page::Providers, "⚙", lang);
                 ui.separator();
                 ui.label(egui::RichText::new(status).size(10.5).color(theme::INK_4));
                 ui.horizontal(|ui| {
@@ -131,8 +160,9 @@ pub fn sidebar(ctx: &egui::Context, active: &mut Page, status: &str) {
         });
 }
 
-fn nav(ui: &mut egui::Ui, active: &mut Page, page: Page, icon: &str, label: &str) {
+fn nav(ui: &mut egui::Ui, active: &mut Page, page: Page, icon: &str, lang: Lang) {
     let selected = *active == page;
+    let label = page.nav_title(lang);
     let text = egui::RichText::new(format!("{icon}   {label}"))
         .size(13.0)
         .color(if selected { theme::INK } else { theme::INK_3 });
@@ -152,7 +182,12 @@ fn nav(ui: &mut egui::Ui, active: &mut Page, page: Page, icon: &str, label: &str
     }
 }
 
-pub fn content_panel(ctx: &egui::Context, active: Page, add_contents: impl FnOnce(&mut egui::Ui)) {
+pub fn content_panel(
+    ctx: &egui::Context,
+    active: Page,
+    lang: Lang,
+    add_contents: impl FnOnce(&mut egui::Ui),
+) {
     egui::CentralPanel::default()
         .frame(
             egui::Frame::NONE
@@ -161,7 +196,7 @@ pub fn content_panel(ctx: &egui::Context, active: Page, add_contents: impl FnOnc
         )
         .show(ctx, |ui| {
             ui.heading(
-                egui::RichText::new(active.title())
+                egui::RichText::new(active.title(lang))
                     .size(23.0)
                     .color(theme::INK),
             );

@@ -16,6 +16,7 @@ mod desktop;
 mod fcitx5;
 mod host_actions;
 mod hotkeys;
+mod i18n;
 mod logging;
 mod marketplace;
 mod popup;
@@ -28,6 +29,7 @@ mod selection;
 mod settings;
 mod single_instance;
 mod tray;
+mod ui_state;
 mod updater;
 
 pub use audio::LinuxCpalRecorder;
@@ -49,6 +51,7 @@ pub use fcitx5::{
 };
 pub use host_actions::LinuxHostActions;
 pub use hotkeys::{Fcitx5HotkeyListener, LinuxHotkeyEvent};
+pub use i18n::{fmt_catalog as fmt_l10n, tr_catalog as tr_l10n, Lang, LocalePref, LANGS};
 pub use logging::{export_error_log, init_file_logger, log_path};
 pub use popup::{
     read_jsonl, run_popup, write_jsonl, ApplyOutcome as PopupApplyOutcome, CapsulePopupState,
@@ -69,6 +72,7 @@ pub use single_instance::{
     LinuxLaunchIntent, SingleInstanceBroker, SingleInstanceGuard, SingleInstanceRole,
 };
 pub use tray::{LinuxTray, TrayCommand, TrayError, TrayMicrophone};
+pub use ui_state::{load_locale_pref, save_locale_pref, ui_state_dir, ui_state_path, UiStateError};
 pub use updater::{
     install_verified_appimage, install_verified_appimage_with_limit, manifest_urls, AppImageTarget,
     AppImageUpdater, CheckReason, DownloadProgress, InstalledUpdate, LinuxUpdateSupport,

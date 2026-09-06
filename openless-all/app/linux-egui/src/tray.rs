@@ -12,6 +12,8 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
+use crate::{tr_l10n, Lang};
+
 const ITEM_PATH: &str = "/StatusNotifierItem";
 const MENU_PATH: &str = "/MenuBar";
 const ITEM_INTERFACE: &str = "org.kde.StatusNotifierItem";
@@ -65,6 +67,7 @@ impl std::error::Error for TrayError {}
 
 enum TrayControl {
     SetMicrophones(Vec<TrayMicrophone>),
+    SetLang(Lang),
     Shutdown,
 }
 
@@ -72,6 +75,7 @@ enum TrayControl {
 struct TrayMenuState {
     revision: u32,
     microphones: Vec<TrayMicrophone>,
+    lang: Option<Lang>,
 }
 
 impl TrayMenuState {
@@ -167,6 +171,15 @@ impl LinuxTray {
             .map_err(|_| TrayError::Worker("tray worker has stopped".into()))
     }
 
+    /// Set the UI language used for the tray menu labels. Callers should keep
+    /// this in sync with the persisted Linux-UI locale preference whenever it
+    /// changes so a system tray re-layout reads the right language.
+    pub fn set_lang(&self, lang: Lang) -> Result<(), TrayError> {
+        self.control
+            .send(TrayControl::SetLang(lang))
+            .map_err(|_| TrayError::Worker("tray worker has stopped".into()))
+    }
+
     pub fn take_error(&self) -> Option<String> {
         self.last_error
             .lock()
@@ -254,6 +267,21 @@ fn run_dbus_worker(
                         TrayError::Dbus("failed to publish tray menu update".into())
                     })?;
                 }
+                TrayControl::SetLang(lang) => {
+                    let revision = {
+                        let mut state = menu.lock().expect("tray menu lock poisoned");
+                        state.lang = Some(lang);
+                        state.revision = state.revision.wrapping_add(1).max(1);
+                        state.revision
+                    };
+                    let signal =
+                        dbus::Message::new_signal(MENU_PATH, MENU_INTERFACE, "LayoutUpdated")
+                            .map_err(TrayError::Dbus)?
+                            .append2(revision, 0i32);
+                    connection.send(signal).map_err(|_| {
+                        TrayError::Dbus("failed to publish tray menu update".into())
+                    })?;
+                }
                 TrayControl::Shutdown => return Ok(()),
             }
         }
@@ -300,9 +328,10 @@ fn menu_item(
 
 #[cfg(target_os = "linux")]
 fn menu_layout(state: &TrayMenuState) -> (i32, Properties, Children) {
+    let lang = state.lang.unwrap_or(Lang::ZhCn);
     let mut microphone_children = Vec::new();
     let default_selected = state.microphones.iter().all(|device| !device.selected);
-    let mut default_props = menu_properties("系统默认");
+    let mut default_props = menu_properties(tr_l10n(lang, "settings.system_default"));
     default_props.insert("toggle-type".into(), property("checkmark".to_string()));
     default_props.insert("toggle-state".into(), property(i32::from(default_selected)));
     microphone_children.push(menu_item(FIRST_MICROPHONE_ID, default_props, Vec::new()));
@@ -319,22 +348,30 @@ fn menu_layout(state: &TrayMenuState) -> (i32, Properties, Children) {
             Vec::new(),
         ));
     }
-    let mut microphone_props = menu_properties("麦克风");
+    let mut microphone_props = menu_properties(tr_l10n(lang, "settings.microphone"));
     microphone_props.insert("children-display".into(), property("submenu".to_string()));
     let separator = HashMap::from([("type".into(), property("separator".to_string()))]);
     (
         0,
         HashMap::new(),
         vec![
-            menu_item(SHOW_ID, menu_properties("显示 OpenLess"), Vec::new()),
+            menu_item(
+                SHOW_ID,
+                menu_properties(tr_l10n(lang, "tray.show")),
+                Vec::new(),
+            ),
             menu_item(
                 PREVIOUS_STYLE_ID,
-                menu_properties("切换到上一风格"),
+                menu_properties(tr_l10n(lang, "tray.previous_style")),
                 Vec::new(),
             ),
             menu_item(MICROPHONES_ID, microphone_props, microphone_children),
             menu_item(SEPARATOR_ID, separator, Vec::new()),
-            menu_item(QUIT_ID, menu_properties("退出"), Vec::new()),
+            menu_item(
+                QUIT_ID,
+                menu_properties(tr_l10n(lang, "tray.quit")),
+                Vec::new(),
+            ),
         ],
     )
 }
@@ -508,6 +545,7 @@ mod tests {
                 is_default: true,
                 selected: true,
             }],
+            lang: None,
         };
         assert_eq!(state.command_for_id(SHOW_ID), Some(TrayCommand::ShowMain));
         assert_eq!(

@@ -31,6 +31,9 @@ mod linux_app {
         PopupState, PopupSupervisor, PopupSupervisorEvent, PopupToHost, SingleInstanceBroker,
         SingleInstanceRole, UpdateManifest, UpdateSchedule, POPUP_PROTOCOL_VERSION,
     };
+    use openless_linux_egui::{
+        fmt_l10n, load_locale_pref, save_locale_pref, tr_l10n, Lang, LocalePref, LANGS,
+    };
 
     enum UiResult {
         Message(String),
@@ -370,49 +373,60 @@ mod linux_app {
         }
     }
 
-    fn format_duration(ms: u64) -> String {
+    fn format_duration(ms: u64, lang: Lang) -> String {
         if ms < 1000 {
-            format!("{ms} 毫秒")
+            fmt_l10n(lang, "dur.ms", &[&ms])
         } else if ms < 60_000 {
-            format!("{:.1} 秒", ms as f64 / 1000.0)
+            fmt_l10n(lang, "dur.sec", &[&format!("{:.1}", ms as f64 / 1000.0)])
         } else {
             let minutes = ms / 60_000;
             let seconds = (ms % 60_000) / 1000;
-            format!("{minutes} 分 {seconds} 秒")
+            fmt_l10n(lang, "dur.min_sec", &[&minutes, &seconds])
         }
     }
 
-    fn overview_provider_cards(ui: &mut egui::Ui, summary: &OverviewSummary) {
+    fn overview_provider_cards(ui: &mut egui::Ui, summary: &OverviewSummary, lang: Lang) {
         ui.columns(2, |columns| {
             overview_provider_card(
                 &mut columns[0],
-                "ASR 语音识别",
+                tr_l10n(lang, "overview.provider_cards"),
                 &summary.asr_provider,
                 summary.asr_configured,
+                lang,
             );
             overview_provider_card(
                 &mut columns[1],
-                "LLM 大模型",
+                tr_l10n(lang, "overview.provider_cards_llm"),
                 &summary.llm_provider,
                 summary.llm_configured,
+                lang,
             );
         });
     }
 
-    fn overview_provider_card(ui: &mut egui::Ui, kind: &str, provider: &str, configured: bool) {
+    fn overview_provider_card(
+        ui: &mut egui::Ui,
+        kind: &str,
+        provider: &str,
+        configured: bool,
+        lang: Lang,
+    ) {
         egui::Frame::group(ui.style()).show(ui, |ui| {
             ui.set_min_width(140.0);
             ui.label(egui::RichText::new(kind).weak());
             let name = if provider.is_empty() {
-                "(未设置)".to_string()
+                tr_l10n(lang, "overview.not_set").to_string()
             } else {
                 provider.to_string()
             };
             ui.label(egui::RichText::new(name).strong());
             if configured {
-                ui.colored_label(egui::Color32::from_rgb(60, 160, 90), "● 已配置");
+                ui.colored_label(
+                    egui::Color32::from_rgb(60, 160, 90),
+                    tr_l10n(lang, "overview.configured_dot"),
+                );
             } else {
-                ui.label("未配置");
+                ui.label(tr_l10n(lang, "overview.unconfigured"));
             }
         });
     }
@@ -428,11 +442,11 @@ mod linux_app {
         });
     }
 
-    fn overview_metric_row(ui: &mut egui::Ui, summary: &OverviewSummary) {
+    fn overview_metric_row(ui: &mut egui::Ui, summary: &OverviewSummary, lang: Lang) {
         let latency_trend = if summary.segments_today > 0 {
             "".to_string()
         } else {
-            "今日暂无".to_string()
+            tr_l10n(lang, "metric.no_data_today").to_string()
         };
         egui::Grid::new("overview_metric_row")
             .num_columns(4)
@@ -440,39 +454,40 @@ mod linux_app {
             .show(ui, |ui| {
                 overview_metric(
                     ui,
-                    "今日字数",
+                    tr_l10n(lang, "metric.chars_today"),
                     summary.chars_today.to_string(),
-                    &format!("共 {} 段", summary.segments_today),
+                    &fmt_l10n(lang, "metric.total_segments", &[&summary.segments_today]),
                 );
                 overview_metric(
                     ui,
-                    "今日时长",
-                    format_duration(summary.duration_ms_today),
+                    tr_l10n(lang, "metric.duration_today"),
+                    format_duration(summary.duration_ms_today, lang),
                     "",
                 );
                 overview_metric(
                     ui,
-                    "平均延迟",
-                    format_duration(summary.avg_latency_ms),
+                    tr_l10n(lang, "metric.avg_latency"),
+                    format_duration(summary.avg_latency_ms, lang),
                     &latency_trend,
                 );
                 overview_metric(
                     ui,
-                    "累计记录",
+                    tr_l10n(lang, "metric.total"),
                     summary.history_total.to_string(),
-                    &format!(
-                        "近7天 {} 段 · 近30天 {} 段",
-                        summary.last_7.segments, summary.last_30.segments
+                    &fmt_l10n(
+                        lang,
+                        "metric.near7",
+                        &[&summary.last_7.segments, &summary.last_30.segments],
                     ),
                 );
                 ui.end_row();
             });
     }
 
-    fn overview_recent(ui: &mut egui::Ui, summary: &OverviewSummary) {
-        ui.label(egui::RichText::new("最近识别").strong());
+    fn overview_recent(ui: &mut egui::Ui, summary: &OverviewSummary, lang: Lang) {
+        ui.label(egui::RichText::new(tr_l10n(lang, "heading.recent")).strong());
         if summary.recent.is_empty() {
-            ui.label("暂无识别记录，点击上方「开始」说第一句吧。");
+            ui.label(tr_l10n(lang, "overview.recent_empty"));
             return;
         }
         for entry in &summary.recent {
@@ -480,10 +495,10 @@ mod linux_app {
                 ui.label(format!(
                     "{} · {}",
                     entry.created_at,
-                    format_duration(entry.duration_ms.unwrap_or(0))
+                    format_duration(entry.duration_ms.unwrap_or(0), lang)
                 ));
                 let text = if entry.final_text.trim().is_empty() {
-                    "(无文本)".to_string()
+                    tr_l10n(lang, "overview.no_text").to_string()
                 } else {
                     entry.final_text.clone()
                 };
@@ -503,11 +518,11 @@ mod linux_app {
         }
     }
 
-    fn overview_heatmap(ui: &mut egui::Ui, summary: &OverviewSummary) {
-        ui.label(egui::RichText::new("近一年每日活动次数").strong());
+    fn overview_heatmap(ui: &mut egui::Ui, summary: &OverviewSummary, lang: Lang) {
+        ui.label(egui::RichText::new(tr_l10n(lang, "overview.heatmap_title")).strong());
         let weeks = &summary.heatmap_weeks;
         if weeks.is_empty() {
-            ui.label("暂无活动数据");
+            ui.label(tr_l10n(lang, "overview.heatmap_empty"));
             return;
         }
         let cell = 10.0f32;
@@ -530,16 +545,17 @@ mod linux_app {
             }
         }
         ui.horizontal(|ui| {
-            ui.label("少");
+            ui.label(tr_l10n(lang, "overview.heatmap_less"));
             for count in [0u32, 1, 4, 8, 15] {
                 let (swatch, _) =
                     ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
                 ui.painter().rect_filled(swatch, 2.0, heat_color(count));
             }
-            ui.label("多");
-            ui.label(format!(
-                "（近 {} 天 · {} 天有记录）",
-                summary.heatmap_days, summary.activity_days_total
+            ui.label(tr_l10n(lang, "overview.heatmap_more"));
+            ui.label(fmt_l10n(
+                lang,
+                "overview.heatmap_footnote",
+                &[&summary.heatmap_days, &summary.activity_days_total],
             ));
         });
     }
@@ -642,6 +658,8 @@ mod linux_app {
         style_hotkey_modifiers: String,
         status: String,
         startup_error: Option<String>,
+        locale_pref: LocalePref,
+        lang: Lang,
         active_page: shell::Page,
         tx: mpsc::Sender<UiResult>,
         rx: mpsc::Receiver<UiResult>,
@@ -655,6 +673,14 @@ mod linux_app {
             update_support: LinuxUpdateSupport,
         ) -> Self {
             let (tx, rx) = mpsc::channel();
+            let locale_pref = load_locale_pref();
+            let lang = locale_pref.resolve();
+            if let Some(tray) = tray.as_ref() {
+                // The tray renders labels in the resolved UI language. It runs
+                // in its own worker, so push the resolved language through the
+                // same control channel that updates microphone checkmarks.
+                let _ = tray.set_lang(lang);
+            }
             match native {
                 Ok(native) => {
                     let backend = native.host().backend();
@@ -730,8 +756,10 @@ mod linux_app {
                         style_hotkey_pack_id: String::new(),
                         style_hotkey_primary: String::new(),
                         style_hotkey_modifiers: String::new(),
-                        status: "Core 2.0 已启动".to_string(),
+                        status: tr_l10n(lang, "status.core_started").to_string(),
                         startup_error: None,
+                        locale_pref,
+                        lang,
                         active_page: shell::Page::Overview,
                         tx,
                         rx,
@@ -813,8 +841,10 @@ mod linux_app {
                     style_hotkey_pack_id: String::new(),
                     style_hotkey_primary: String::new(),
                     style_hotkey_modifiers: String::new(),
-                    status: "启动失败".to_string(),
+                    status: tr_l10n(lang, "status.startup_failed").to_string(),
                     startup_error: Some(error),
+                    locale_pref,
+                    lang,
                     active_page: shell::Page::Overview,
                     tx,
                     rx,
@@ -837,6 +867,7 @@ mod linux_app {
         }
 
         fn ensure_popup(&mut self, kind: PopupKind) {
+            let lang = self.lang;
             if self.popup_slot(kind).is_some() {
                 return;
             }
@@ -846,20 +877,25 @@ mod linux_app {
                     let supervisor = PopupSupervisor::spawn(self.tokio.handle(), executable, kind);
                     *self.popup_slot(kind) = Some(supervisor);
                 }
-                Err(error) => self.status = format!("无法启动原生弹窗：{error}"),
+                Err(error) => self.status = fmt_l10n(lang, "popup.start_failed", &[&error]),
             }
         }
 
         fn send_popup(&mut self, kind: PopupKind, message: HostToPopup) {
+            let lang = self.lang;
             let retry = message.clone();
             if let Some(supervisor) = self.popup_slot(kind) {
                 if let Err(error) = supervisor.try_send(message) {
-                    self.status = format!("原生弹窗通道重建：{error:?}");
+                    self.status = fmt_l10n(lang, "popup.channel_rebuild", &[&format!("{error:?}")]);
                     *self.popup_slot(kind) = None;
                     self.ensure_popup(kind);
                     if let Some(supervisor) = self.popup_slot(kind) {
                         if let Err(retry_error) = supervisor.try_send(retry) {
-                            self.status = format!("原生弹窗恢复失败：{retry_error:?}");
+                            self.status = fmt_l10n(
+                                lang,
+                                "popup.recover_failed",
+                                &[&format!("{retry_error:?}")],
+                            );
                         }
                     }
                 }
@@ -971,6 +1007,7 @@ mod linux_app {
         }
 
         fn poll_popup_supervisors(&mut self) {
+            let lang = self.lang;
             let mut events = Vec::new();
             for kind in [PopupKind::Qa, PopupKind::Preview, PopupKind::Capsule] {
                 if let Some(supervisor) = self.popup_slot(kind) {
@@ -982,14 +1019,14 @@ mod linux_app {
             for (kind, event) in events {
                 if let PopupSupervisorEvent::Message(message) = &event {
                     let Some(expected_session) = self.expected_popup_session(kind) else {
-                        self.status = "已忽略没有活动会话的弹窗操作".to_string();
+                        self.status = tr_l10n(lang, "popup.ignore_no_session").to_string();
                         continue;
                     };
                     if !self
                         .popup_action_guard
                         .accept(kind, message, &expected_session)
                     {
-                        self.status = "已忽略迟到、重复或跨类型的弹窗操作".to_string();
+                        self.status = tr_l10n(lang, "popup.ignore_stale").to_string();
                         continue;
                     }
                 }
@@ -1007,7 +1044,7 @@ mod linux_app {
                         if let Some(backend) = self.backend() {
                             self.spawn(async move {
                                 backend.services().qa.submit_text(text).await?;
-                                Ok("问答已提交".to_string())
+                                Ok(tr_l10n(lang, "qa.submitted").to_string())
                             });
                         }
                     }
@@ -1023,7 +1060,7 @@ mod linux_app {
                         if let Some(backend) = self.backend() {
                             self.spawn(async move {
                                 backend.services().qa.toggle_recording().await?;
-                                Ok("问答录音状态已更新".to_string())
+                                Ok(tr_l10n(lang, "qa.recording_updated").to_string())
                             });
                         }
                     }
@@ -1038,7 +1075,7 @@ mod linux_app {
                         if let Some(backend) = self.backend() {
                             self.spawn(async move {
                                 backend.services().qa.dismiss().await?;
-                                Ok("问答已关闭".to_string())
+                                Ok(tr_l10n(lang, "qa.closed").to_string())
                             });
                         }
                     }
@@ -1056,11 +1093,13 @@ mod linux_app {
                                         .selection
                                         .confirm(session_id, Some(text))
                                         .await?;
-                                    Ok("选区替换已确认".to_string())
+                                    Ok(tr_l10n(lang, "selection.replaced").to_string())
                                 });
                             }
                         }
-                        Err(error) => self.status = format!("弹窗 session 无效：{error}"),
+                        Err(error) => {
+                            self.status = fmt_l10n(lang, "popup.session_invalid", &[&error])
+                        }
                     },
                     PopupSupervisorEvent::Message(PopupToHost::CancelPreview {
                         session_id,
@@ -1075,11 +1114,13 @@ mod linux_app {
                                         .selection
                                         .cancel(Some(session_id))
                                         .await?;
-                                    Ok("选区替换已取消".to_string())
+                                    Ok(tr_l10n(lang, "selection.cancelled").to_string())
                                 });
                             }
                         }
-                        Err(error) => self.status = format!("弹窗 session 无效：{error}"),
+                        Err(error) => {
+                            self.status = fmt_l10n(lang, "popup.session_invalid", &[&error])
+                        }
                     },
                     PopupSupervisorEvent::Message(PopupToHost::Ready { .. }) => match kind {
                         PopupKind::Qa => self.show_qa_popup(),
@@ -1096,18 +1137,18 @@ mod linux_app {
                         | PopupToHost::ToggleQaRecording { .. }
                         | PopupToHost::DismissQa { .. },
                     ) => {
-                        self.status = "已忽略迟到的问答弹窗操作".to_string();
+                        self.status = tr_l10n(lang, "popup.ignore_late_qa").to_string();
                     }
                     PopupSupervisorEvent::ProtocolError(error) => {
-                        self.status = format!("原生弹窗协议错误：{error}");
+                        self.status = fmt_l10n(lang, "popup.protocol_error", &[&error]);
                     }
                     PopupSupervisorEvent::SpawnFailed(error) => {
-                        self.status = format!("原生弹窗启动失败：{error}");
+                        self.status = fmt_l10n(lang, "popup.spawn_failed", &[&error]);
                         *self.popup_slot(kind) = None;
                     }
                     PopupSupervisorEvent::Exited { code, crashed } => {
                         if crashed {
-                            self.status = format!("原生弹窗异常退出：{code:?}");
+                            self.status = fmt_l10n(lang, "popup.exited", &[&format!("{code:?}")]);
                         }
                         *self.popup_slot(kind) = None;
                         if crashed {
@@ -1330,8 +1371,9 @@ mod linux_app {
         }
 
         fn request_update_check(&mut self, channel: openless_core::shared_types::UpdateChannel) {
+            let lang = self.lang;
             let LinuxUpdateSupport::AppImage(updater) = self.update_support.clone() else {
-                self.status = "当前安装包由系统包管理器更新".to_string();
+                self.status = tr_l10n(lang, "update.system_managed").to_string();
                 return;
             };
             if self.update_busy {
@@ -1377,11 +1419,12 @@ mod linux_app {
         }
 
         fn drain_tray(&mut self, ctx: &egui::Context) {
+            let lang = self.lang;
             let mut commands = Vec::new();
             if let Some(tray) = &self.tray {
                 tray.drain(|command| commands.push(command));
                 if let Some(error) = tray.take_error() {
-                    self.status = format!("系统托盘已停止：{error}");
+                    self.status = fmt_l10n(lang, "status.tray_stopped", &[&error]);
                     self.tray = None;
                 }
             }
@@ -1395,22 +1438,25 @@ mod linux_app {
                         if let Some(backend) = self.backend() {
                             self.spawn(async move {
                                 let pack = backend.activate_previous_style_pack()?;
-                                Ok(pack
-                                    .map(|pack| format!("已切换风格：{}", pack.name))
-                                    .unwrap_or_else(|| "没有可切换的上一风格".to_string()))
+                                Ok(match pack {
+                                    Some(pack) => {
+                                        fmt_l10n(lang, "status.style_switched", &[&pack.name])
+                                    }
+                                    None => tr_l10n(lang, "status.no_previous_style").to_string(),
+                                })
                             });
                         }
                     }
                     openless_linux_egui::TrayCommand::SelectMicrophone(name) => {
                         if let Some(backend) = self.backend() {
                             let selected = if name.is_empty() {
-                                "系统默认".to_string()
+                                tr_l10n(lang, "settings.system_default").to_string()
                             } else {
                                 name.clone()
                             };
                             self.spawn(async move {
                                 backend.select_microphone_device(name)?;
-                                Ok(format!("已选择麦克风：{selected}"))
+                                Ok(fmt_l10n(lang, "status.mic_selected", &[&selected]))
                             });
                         }
                     }
@@ -1525,6 +1571,7 @@ mod linux_app {
         }
 
         fn apply_event(&mut self, event: BackendEvent) {
+            let lang = self.lang;
             if event.sequence <= self.last_event_sequence {
                 return;
             }
@@ -1549,7 +1596,11 @@ mod linux_app {
                         self.transcript.clear();
                         self.transcript_session = state.session_id;
                     }
-                    self.status = format!("听写：{:?}", state.phase);
+                    self.status = fmt_l10n(
+                        lang,
+                        "status.dictation_phase",
+                        &[&format!("{:?}", state.phase)],
+                    );
                     if let Some(session_id) = state.session_id {
                         self.send_popup(
                             PopupKind::Capsule,
@@ -1575,7 +1626,11 @@ mod linux_app {
                 }
                 BackendEventKind::DictationCompleted(result) => {
                     self.transcript = result.polished_text;
-                    self.status = format!("听写完成：{:?}", result.inserted);
+                    self.status = fmt_l10n(
+                        lang,
+                        "status.dictation_done",
+                        &[&format!("{:?}", result.inserted)],
+                    );
                 }
                 BackendEventKind::RecordingControlRequested(request) => {
                     if let Some(backend) = self.backend() {
@@ -1588,7 +1643,7 @@ mod linux_app {
                                     backend.cancel_dictation(Some(request.session_id)).await?;
                                 }
                             }
-                            Ok("录音已自动结束".to_string())
+                            Ok(tr_l10n(lang, "status.auto_stopped").to_string())
                         });
                     }
                 }
@@ -1617,16 +1672,16 @@ mod linux_app {
                         LessComputerEventKind::VoiceState { .. } => {}
                         LessComputerEventKind::User { .. } => {}
                         LessComputerEventKind::Started => {
-                            self.status = "Less Computer 正在运行".to_string();
+                            self.status = tr_l10n(lang, "status.less_running").to_string();
                         }
                         LessComputerEventKind::Delta { text } => {
                             self.less_computer_output.push_str(&text);
                         }
                         LessComputerEventKind::Tool { name } => {
-                            self.status = format!("Less Computer 正在使用工具：{name}");
+                            self.status = fmt_l10n(lang, "status.less_tool", &[&name]);
                         }
                         LessComputerEventKind::Compaction => {
-                            self.status = "Less Computer 已压缩上下文".to_string();
+                            self.status = tr_l10n(lang, "status.less_compacted").to_string();
                         }
                         LessComputerEventKind::Completed { text, .. } => {
                             // A terminal is authoritative even for final-only
@@ -1635,11 +1690,11 @@ mod linux_app {
                                 .truncate(self.less_computer_turn_start);
                             self.less_computer_output.push_str(&text);
                             self.pending_approval = None;
-                            self.status = "Less Computer 已完成".to_string();
+                            self.status = tr_l10n(lang, "less_computer.done").to_string();
                         }
                         LessComputerEventKind::Approval { token, command, .. } => {
                             self.pending_approval = Some((token, command));
-                            self.status = "Less Computer 等待审批".to_string();
+                            self.status = tr_l10n(lang, "status.less_waiting").to_string();
                         }
                         LessComputerEventKind::Error { message } => {
                             self.pending_approval = None;
@@ -1647,17 +1702,20 @@ mod linux_app {
                         }
                         LessComputerEventKind::Cancelled => {
                             self.pending_approval = None;
-                            self.status = "Less Computer 已取消".to_string();
+                            self.status = tr_l10n(lang, "less_computer.cancelled").to_string();
                         }
                     }
                 }
                 BackendEventKind::LocalAsrDownloadProgress(progress) => {
-                    self.status = format!(
-                        "模型 {}：{:?} {}/{}",
-                        progress.model_id,
-                        progress.phase,
-                        progress.bytes_downloaded,
-                        progress.bytes_total
+                    self.status = fmt_l10n(
+                        lang,
+                        "status.model_progress",
+                        &[
+                            &progress.model_id,
+                            &format!("{:?}", progress.phase),
+                            &progress.bytes_downloaded,
+                            &progress.bytes_total,
+                        ],
                     );
                     if matches!(
                         progress.phase,
@@ -1767,6 +1825,7 @@ mod linux_app {
         }
 
         fn poll(&mut self, ctx: &egui::Context) {
+            let lang = self.lang;
             if let Some(native) = &self.native {
                 let (launch_intents, hotkey_events, errors) = native.drain_native_events();
                 let host = native.host_arc();
@@ -1774,14 +1833,14 @@ mod linux_app {
                     let host = Arc::clone(&host);
                     self.spawn(async move {
                         host.dispatch_launch_intent(intent).await?;
-                        Ok("已处理启动请求".to_string())
+                        Ok(tr_l10n(lang, "status.launch_handled").to_string())
                     });
                 }
                 for event in hotkey_events {
                     let host = Arc::clone(&host);
                     self.spawn(async move {
                         host.dispatch_hotkey_event(event).await?;
-                        Ok("已处理快捷键".to_string())
+                        Ok(tr_l10n(lang, "status.hotkey_handled").to_string())
                     });
                 }
                 if let Some(error) = errors.last() {
@@ -1822,7 +1881,7 @@ mod linux_app {
                             });
                         }
                         HostAction::RequestRestart => {
-                            self.status = "请手动重启 OpenLess".to_string();
+                            self.status = tr_l10n(lang, "status.request_restart").to_string();
                         }
                         HostAction::ShowSelectionPreview => {
                             self.selection_preview_visible = true;
@@ -1915,9 +1974,9 @@ mod linux_app {
                         self.apply_event(event);
                     }
                     self.status = if replay.truncated {
-                        format!("事件积压 {dropped} 条，已重置派生界面并重放可用事件")
+                        fmt_l10n(lang, "status.backlog_reset", &[&dropped])
                     } else {
-                        format!("事件积压 {dropped} 条，已从 Core 重放补齐")
+                        fmt_l10n(lang, "status.backlog_replay", &[&dropped])
                     };
                 }
             }
@@ -2017,7 +2076,11 @@ mod linux_app {
                         {
                             match result {
                                 Ok(models) => {
-                                    self.status = format!("已读取 {} 个模型", models.len());
+                                    self.status = fmt_l10n(
+                                        lang,
+                                        "status.provider_models_loaded",
+                                        &[&models.len()],
+                                    );
                                     self.provider_models = models;
                                 }
                                 Err(error) => self.status = error,
@@ -2049,7 +2112,7 @@ mod linux_app {
                                 self.snapshot = Some(native.host().snapshot());
                             }
                             self.settings_dirty = SettingsDirty::default();
-                            self.status = "设置已保存".to_string();
+                            self.status = tr_l10n(lang, "status.settings_saved").to_string();
                             // Appearance (e.g. the Overview heatmap toggle) and any
                             // provider/credential edits may change Overview state.
                             self.load_overview();
@@ -2060,32 +2123,32 @@ mod linux_app {
                                 };
                                 self.spawn(async move {
                                     backend.services().remote_input.configure(config).await?;
-                                    Ok("远程输入状态已更新".to_string())
+                                    Ok(tr_l10n(lang, "status.remote_updated").to_string())
                                 });
                             }
                         }
                         Err(error) => self.status = error,
                     },
                     UiResult::Marketplace(Ok(items)) => {
-                        self.status = format!("Marketplace 已加载 {} 个风格包", items.len());
+                        self.status = fmt_l10n(lang, "status.marketplace_loaded", &[&items.len()]);
                         self.marketplace_items = items;
                     }
                     UiResult::Marketplace(Err(error)) => self.status = error,
                     UiResult::MarketplaceFlow(Ok(flow)) => {
-                        self.status = format!("GitHub 设备码：{}", flow.user_code);
+                        self.status = fmt_l10n(lang, "status.device_code", &[&flow.user_code]);
                         self.marketplace_flow = Some(flow);
                     }
                     UiResult::MarketplaceFlow(Err(error)) => self.status = error,
                     UiResult::MarketplaceAuthPoll(Ok(result)) => match result {
                         openless_core::OAuthPollResult::Authorized { login } => {
                             self.marketplace_flow = None;
-                            self.status = format!("Marketplace 已登录：{login}");
+                            self.status = fmt_l10n(lang, "status.logged_in", &[&login]);
                         }
                         openless_core::OAuthPollResult::Pending => {
-                            self.status = "GitHub 授权仍在等待".to_string();
+                            self.status = tr_l10n(lang, "status.oauth_pending").to_string();
                         }
                         openless_core::OAuthPollResult::SlowDown => {
-                            self.status = "GitHub 要求降低检查频率".to_string();
+                            self.status = tr_l10n(lang, "status.oauth_slowdown").to_string();
                         }
                         openless_core::OAuthPollResult::Error { message } => {
                             self.status = message;
@@ -2093,13 +2156,17 @@ mod linux_app {
                     },
                     UiResult::MarketplaceAuthPoll(Err(error)) => self.status = error,
                     UiResult::MarketplaceDetail(Ok(detail)) => {
-                        self.status = format!("已加载风格详情：{}", detail.summary.name);
+                        self.status =
+                            fmt_l10n(lang, "status.detail_loaded", &[&detail.summary.name]);
                         self.marketplace_detail = Some(detail);
                     }
                     UiResult::MarketplaceDetail(Err(error)) => self.status = error,
                     UiResult::MarketplaceMine(Ok((packs, likes))) => {
-                        self.status =
-                            format!("我的发布 {} 个，喜欢 {} 个", packs.len(), likes.len());
+                        self.status = fmt_l10n(
+                            lang,
+                            "status.my_publish_likes",
+                            &[&packs.len(), &likes.len()],
+                        );
                         self.marketplace_my_packs = packs;
                         self.marketplace_my_likes = likes;
                     }
@@ -2134,26 +2201,27 @@ mod linux_app {
                     }
                     UiResult::UpdateCheck(Ok(Some(manifest))) => {
                         self.update_busy = false;
-                        self.status = format!("发现新版本 {}", manifest.version);
+                        self.status = fmt_l10n(lang, "update.discovered", &[&manifest.version]);
                         self.update_manifest = Some(manifest);
                     }
                     UiResult::UpdateCheck(Ok(None)) => {
                         self.update_busy = false;
-                        self.status = "当前已是最新版本".to_string();
+                        self.status = tr_l10n(lang, "update.up_to_date").to_string();
                     }
                     UiResult::UpdateCheck(Err(error)) => {
                         self.update_busy = false;
-                        self.status = format!("检查更新失败：{error}");
+                        self.status = fmt_l10n(lang, "update.check_failed", &[&error]);
                     }
                     UiResult::UpdateProgress(progress) => self.update_progress = Some(progress),
                     UiResult::UpdateInstalled(Ok(installed)) => {
                         self.update_busy = false;
                         self.update_manifest = None;
-                        self.status = format!("已安装 {}，请重启 OpenLess", installed.version);
+                        self.status =
+                            fmt_l10n(lang, "update.installed_restart", &[&installed.version]);
                     }
                     UiResult::UpdateInstalled(Err(error)) => {
                         self.update_busy = false;
-                        self.status = format!("安装更新失败：{error}");
+                        self.status = fmt_l10n(lang, "update.install_failed", &[&error]);
                     }
                     UiResult::ModelMutation(result) => {
                         self.status = result.unwrap_or_else(|error| error);
@@ -2168,11 +2236,12 @@ mod linux_app {
         }
 
         fn overview_summary_ui(&mut self, ui: &mut egui::Ui) {
+            let lang = self.lang;
             let mut reload = false;
             ui.horizontal(|ui| {
-                ui.heading("概览");
+                ui.heading(tr_l10n(lang, "heading.overview"));
                 ui.add_space(8.0);
-                if ui.button("刷新").clicked() {
+                if ui.button(tr_l10n(lang, "btn.refresh")).clicked() {
                     reload = true;
                 }
             });
@@ -2185,15 +2254,15 @@ mod linux_app {
                 OverviewState::Loading => {
                     ui.horizontal(|ui| {
                         ui.spinner();
-                        ui.label("正在加载概览数据…");
+                        ui.label(tr_l10n(lang, "loading.overview"));
                     });
                 }
                 OverviewState::Failed(error) => {
                     ui.colored_label(
                         egui::Color32::from_rgb(220, 80, 80),
-                        format!("概览加载失败：{error}"),
+                        format!("{}: {error}", tr_l10n(lang, "overview.load_failed")),
                     );
-                    if ui.button("重试").clicked() {
+                    if ui.button(tr_l10n(lang, "btn.retry")).clicked() {
                         reload = true;
                     }
                 }
@@ -2205,14 +2274,14 @@ mod linux_app {
                         .unwrap_or(true);
                     let today = chrono::Local::now().date_naive();
                     if let Some(summary) = self.overview.summary(today) {
-                        overview_provider_cards(ui, &summary);
+                        overview_provider_cards(ui, &summary, lang);
                         ui.add_space(6.0);
-                        overview_metric_row(ui, &summary);
+                        overview_metric_row(ui, &summary, lang);
                         ui.add_space(6.0);
-                        overview_recent(ui, &summary);
+                        overview_recent(ui, &summary, lang);
                         if show_heatmap && summary.activity_days_total > 0 {
                             ui.add_space(6.0);
-                            overview_heatmap(ui, &summary);
+                            overview_heatmap(ui, &summary, lang);
                         }
                     }
                 }
@@ -2224,7 +2293,8 @@ mod linux_app {
         }
 
         fn dictation_ui(&mut self, ui: &mut egui::Ui) {
-            ui.heading("听写");
+            let lang = self.lang;
+            ui.heading(tr_l10n(lang, "heading.dictation"));
             let phase = self
                 .snapshot
                 .as_ref()
@@ -2232,77 +2302,93 @@ mod linux_app {
                 .unwrap_or(DictationPhase::Idle);
             ui.horizontal(|ui| {
                 if ui
-                    .add_enabled(phase == DictationPhase::Idle, egui::Button::new("开始"))
+                    .add_enabled(
+                        phase == DictationPhase::Idle,
+                        egui::Button::new(tr_l10n(lang, "btn.start")),
+                    )
                     .clicked()
                 {
                     if let Some(backend) = self.backend() {
                         self.transcript.clear();
                         self.spawn(async move {
                             backend.start_dictation().await?;
-                            Ok("正在录音".to_string())
+                            Ok(tr_l10n(lang, "dictation.recording").to_string())
                         });
                     }
                 }
                 if ui
                     .add_enabled(
                         phase == DictationPhase::Recording,
-                        egui::Button::new("停止"),
+                        egui::Button::new(tr_l10n(lang, "btn.stop")),
                     )
                     .clicked()
                 {
                     if let Some(backend) = self.backend() {
                         self.spawn(async move {
                             let result = backend.stop_dictation().await?;
-                            Ok(format!("完成：{} 字", result.polished_text.chars().count()))
+                            Ok(fmt_l10n(
+                                lang,
+                                "status.done_chars",
+                                &[&result.polished_text.chars().count()],
+                            ))
                         });
                     }
                 }
                 if ui
-                    .add_enabled(phase != DictationPhase::Idle, egui::Button::new("取消"))
+                    .add_enabled(
+                        phase != DictationPhase::Idle,
+                        egui::Button::new(tr_l10n(lang, "btn.cancel")),
+                    )
                     .clicked()
                 {
                     if let Some(backend) = self.backend() {
                         self.spawn(async move {
                             backend.cancel_dictation(None).await?;
-                            Ok("听写已取消".to_string())
+                            Ok(tr_l10n(lang, "status.dictation_cancelled").to_string())
                         });
                     }
                 }
             });
             ui.label(if self.transcript.is_empty() {
-                "尚无转写结果"
+                tr_l10n(lang, "dictation.no_transcript")
             } else {
                 &self.transcript
             });
         }
 
         fn less_computer_ui(&mut self, ui: &mut egui::Ui) {
+            let lang = self.lang;
             ui.heading("Less Computer");
             ui.text_edit_multiline(&mut self.less_computer_input);
             ui.horizontal(|ui| {
-                if ui.button("运行").clicked() && !self.less_computer_input.trim().is_empty() {
+                if ui.button(tr_l10n(lang, "btn.run")).clicked()
+                    && !self.less_computer_input.trim().is_empty()
+                {
                     if let Some(backend) = self.backend() {
                         let prompt = self.less_computer_input.clone();
                         self.less_computer_output.clear();
                         self.spawn(async move {
                             backend.submit_less_computer(prompt).await?;
-                            Ok("Less Computer 已完成".to_string())
+                            Ok(tr_l10n(lang, "less_computer.done").to_string())
                         });
                     }
                 }
-                if ui.button("取消").clicked() {
+                if ui.button(tr_l10n(lang, "btn.cancel")).clicked() {
                     if let Some(backend) = self.backend() {
                         self.spawn(async move {
                             backend.cancel_less_computer(None).await?;
-                            Ok("Less Computer 已取消".to_string())
+                            Ok(tr_l10n(lang, "less_computer.cancelled").to_string())
                         });
                     }
                 }
             });
             if let Some((token, command)) = self.pending_approval.clone() {
-                ui.label(format!("请求执行：{command}"));
+                ui.label(fmt_l10n(lang, "approval.request_run", &[&command]));
                 ui.horizontal(|ui| {
-                    for (label, approved) in [("允许", true), ("拒绝", false)] {
+                    for (label, approved) in [
+                        (tr_l10n(lang, "btn.allow"), true),
+                        (tr_l10n(lang, "btn.deny"), false),
+                    ] {
                         if ui.button(label).clicked() {
                             if let Some(backend) = self.backend() {
                                 let token = token.clone();
@@ -2313,7 +2399,7 @@ mod linux_app {
                                         .less_computer
                                         .approve(token, approved)
                                         .await?;
-                                    Ok("审批已提交".to_string())
+                                    Ok(tr_l10n(lang, "approval.submitted").to_string())
                                 });
                             }
                         }
@@ -2321,7 +2407,7 @@ mod linux_app {
                 });
             }
             ui.label(if self.less_computer_output.is_empty() {
-                "尚无 Agent 输出"
+                tr_l10n(lang, "less_computer.no_output")
             } else {
                 &self.less_computer_output
             });
@@ -2331,7 +2417,8 @@ mod linux_app {
             if !self.qa_visible {
                 return;
             }
-            ui.heading("问答");
+            let lang = self.lang;
+            ui.heading(tr_l10n(lang, "heading.qa"));
             if let Some(state) = &self.qa_state {
                 if let Some(messages) = &state.messages {
                     for message in messages {
@@ -2353,33 +2440,35 @@ mod linux_app {
                     .is_some_and(|state| state.kind == QaStateKind::Recording);
                 if ui
                     .button(if recording {
-                        "结束录音"
+                        tr_l10n(lang, "btn.end_recording")
                     } else {
-                        "语音提问"
+                        tr_l10n(lang, "btn.voice_ask")
                     })
                     .clicked()
                 {
                     if let Some(backend) = self.backend() {
                         self.spawn(async move {
                             backend.services().qa.toggle_recording().await?;
-                            Ok("问答录音状态已更新".to_string())
+                            Ok(tr_l10n(lang, "qa.recording_updated").to_string())
                         });
                     }
                 }
-                if ui.button("发送").clicked() && !self.qa_input.trim().is_empty() {
+                if ui.button(tr_l10n(lang, "btn.send")).clicked()
+                    && !self.qa_input.trim().is_empty()
+                {
                     if let Some(backend) = self.backend() {
                         let text = std::mem::take(&mut self.qa_input);
                         self.spawn(async move {
                             backend.services().qa.submit_text(text).await?;
-                            Ok("问答已提交".to_string())
+                            Ok(tr_l10n(lang, "qa.submitted").to_string())
                         });
                     }
                 }
-                if ui.button("关闭").clicked() {
+                if ui.button(tr_l10n(lang, "btn.close")).clicked() {
                     if let Some(backend) = self.backend() {
                         self.spawn(async move {
                             backend.services().qa.dismiss().await?;
-                            Ok("问答已关闭".to_string())
+                            Ok(tr_l10n(lang, "qa.closed").to_string())
                         });
                     }
                 }
@@ -2390,11 +2479,12 @@ mod linux_app {
             let Some(selection) = self.selection.clone() else {
                 return;
             };
+            let lang = self.lang;
             if self.selection_preview_visible && selection.phase == SelectionPhase::Preview {
-                ui.heading("选区预览");
+                ui.heading(tr_l10n(lang, "heading.selection_preview"));
                 ui.text_edit_multiline(&mut self.selection_draft);
                 ui.horizontal(|ui| {
-                    if ui.button("确认替换").clicked() {
+                    if ui.button(tr_l10n(lang, "btn.confirm_replace")).clicked() {
                         if let (Some(backend), Some(session_id)) =
                             (self.backend(), selection.session_id)
                         {
@@ -2405,11 +2495,11 @@ mod linux_app {
                                     .selection
                                     .confirm(session_id, Some(text))
                                     .await?;
-                                Ok("选区替换已确认".to_string())
+                                Ok(tr_l10n(lang, "selection.replaced").to_string())
                             });
                         }
                     }
-                    if ui.button("取消").clicked() {
+                    if ui.button(tr_l10n(lang, "btn.cancel")).clicked() {
                         if let (Some(backend), Some(session_id)) =
                             (self.backend(), selection.session_id)
                         {
@@ -2419,7 +2509,7 @@ mod linux_app {
                                     .selection
                                     .cancel(Some(session_id))
                                     .await?;
-                                Ok("选区替换已取消".to_string())
+                                Ok(tr_l10n(lang, "selection.cancelled").to_string())
                             });
                         }
                     }
@@ -2428,14 +2518,14 @@ mod linux_app {
                 && selection.revert_outcome.is_none()
             {
                 ui.horizontal(|ui| {
-                    ui.label("最近一次选区替换已完成");
-                    if ui.button("撤销").clicked() {
+                    ui.label(tr_l10n(lang, "selection.replace_completed"));
+                    if ui.button(tr_l10n(lang, "btn.undo")).clicked() {
                         if let (Some(backend), Some(session_id)) =
                             (self.backend(), selection.session_id)
                         {
                             self.spawn(async move {
                                 backend.services().selection.revert(session_id).await?;
-                                Ok("选区替换已撤销".to_string())
+                                Ok(tr_l10n(lang, "selection.reverted").to_string())
                             });
                         }
                     }
@@ -2444,13 +2534,14 @@ mod linux_app {
         }
 
         fn models_ui(&mut self, ui: &mut egui::Ui) {
+            let lang = self.lang;
             ui.horizontal(|ui| {
-                ui.heading("本地模型");
-                if ui.button("刷新").clicked() {
+                ui.heading(tr_l10n(lang, "heading.local_models"));
+                if ui.button(tr_l10n(lang, "btn.refresh")).clicked() {
                     self.models = ModelsState::Loading;
                     self.load_models();
                 }
-                if ui.button("预加载当前模型").clicked() {
+                if ui.button(tr_l10n(lang, "btn.preload_current")).clicked() {
                     if let Some(backend) = self.backend() {
                         self.spawn_model_mutation(async move {
                             backend
@@ -2458,11 +2549,11 @@ mod linux_app {
                                 .local_asr
                                 .preload(LocalAsrRuntime::Generic)
                                 .await?;
-                            Ok("当前模型已预加载".to_string())
+                            Ok(tr_l10n(lang, "status.preloaded").to_string())
                         });
                     }
                 }
-                if ui.button("释放模型").clicked() {
+                if ui.button(tr_l10n(lang, "btn.release_model")).clicked() {
                     if let Some(backend) = self.backend() {
                         self.spawn_model_mutation(async move {
                             backend
@@ -2470,11 +2561,11 @@ mod linux_app {
                                 .local_asr
                                 .release(LocalAsrRuntime::Generic)
                                 .await?;
-                            Ok("模型已释放".to_string())
+                            Ok(tr_l10n(lang, "status.model_released").to_string())
                         });
                     }
                 }
-                if ui.button("取消准备").clicked() {
+                if ui.button(tr_l10n(lang, "btn.cancel_prepare")).clicked() {
                     if let Some(backend) = self.backend() {
                         self.spawn_model_mutation(async move {
                             backend
@@ -2482,14 +2573,14 @@ mod linux_app {
                                 .local_asr
                                 .cancel_prepare(LocalAsrRuntime::Generic)
                                 .await?;
-                            Ok("已请求取消模型准备".to_string())
+                            Ok(tr_l10n(lang, "status.cancel_prepare_ok").to_string())
                         });
                     }
                 }
             });
             let models = match self.models.clone() {
                 ModelsState::Loading => {
-                    ui.label("正在加载模型目录…");
+                    ui.label(tr_l10n(lang, "models.loading_dir"));
                     return;
                 }
                 ModelsState::Failed(error) => {
@@ -2497,7 +2588,7 @@ mod linux_app {
                     return;
                 }
                 ModelsState::Loaded(models) if models.is_empty() => {
-                    ui.label("模型目录未返回任何可用模型");
+                    ui.label(tr_l10n(lang, "models.empty"));
                     return;
                 }
                 ModelsState::Loaded(models) => models,
@@ -2505,23 +2596,23 @@ mod linux_app {
             let mut action: Option<(openless_core::LocalAsrTarget, &'static str)> = None;
             for model in models {
                 ui.horizontal(|ui| {
+                    let state = if model.installed {
+                        tr_l10n(lang, "models.installed")
+                    } else {
+                        tr_l10n(lang, "models.not_installed")
+                    };
                     ui.label(format!(
                         "{} · {} · {}",
-                        model.display_name,
-                        model.family,
-                        if model.installed {
-                            "已安装"
-                        } else {
-                            "未安装"
-                        }
+                        model.display_name, model.family, state
                     ));
-                    if !model.installed && ui.button("下载").clicked() {
+                    if !model.installed && ui.button(tr_l10n(lang, "btn.download")).clicked() {
                         action = Some((model.target.clone(), "download"));
                     }
-                    if !model.installed && ui.button("取消下载").clicked() {
+                    if !model.installed && ui.button(tr_l10n(lang, "btn.cancel_download")).clicked()
+                    {
                         action = Some((model.target.clone(), "cancel_download"));
                     }
-                    if model.installed && ui.button("激活").clicked() {
+                    if model.installed && ui.button(tr_l10n(lang, "btn.activate")).clicked() {
                         if let Some(backend) = self.backend() {
                             let target = model.target.clone();
                             self.spawn(async move {
@@ -2561,26 +2652,26 @@ mod linux_app {
                                         provider_id,
                                     })
                                     .await?;
-                                Ok("本地模型已激活并预加载".to_string())
+                                Ok(tr_l10n(lang, "status.activated").to_string())
                             });
                         }
                     }
-                    if ui.button("取消").clicked() {
+                    if ui.button(tr_l10n(lang, "btn.cancel")).clicked() {
                         if let Some(backend) = self.backend() {
                             let target = model.target.clone();
                             self.spawn(async move {
                                 backend.services().local_asr.cancel_download(target).await?;
-                                Ok("模型下载已取消".to_string())
+                                Ok(tr_l10n(lang, "status.download_cancelled").to_string())
                             });
                         }
                     }
-                    if model.installed && ui.button("验证/准备").clicked() {
+                    if model.installed && ui.button(tr_l10n(lang, "btn.verify_prepare")).clicked() {
                         action = Some((model.target.clone(), "prepare"));
                     }
-                    if model.installed && ui.button("测试").clicked() {
+                    if model.installed && ui.button(tr_l10n(lang, "btn.test")).clicked() {
                         action = Some((model.target.clone(), "test"));
                     }
-                    if model.installed && ui.button("删除").clicked() {
+                    if model.installed && ui.button(tr_l10n(lang, "btn.delete")).clicked() {
                         action = Some((model.target.clone(), "delete"));
                     }
                 });
@@ -2594,26 +2685,27 @@ mod linux_app {
                                 .local_asr
                                 .start_download(target, None)
                                 .await?;
-                            Ok("模型下载完成".to_string())
+                            Ok(tr_l10n(lang, "status.download_done").to_string())
                         }
                         "cancel_download" => {
                             backend.services().local_asr.cancel_download(target).await?;
-                            Ok("已请求取消模型下载".to_string())
+                            Ok(tr_l10n(lang, "status.download_cancel_requested").to_string())
                         }
                         "prepare" => {
                             let prepared = backend.services().local_asr.prepare(target).await?;
-                            Ok(format!("模型验证完成：{prepared}"))
+                            Ok(fmt_l10n(lang, "status.prepare_done", &[&prepared]))
                         }
                         "test" => {
                             let result = backend.services().local_asr.test_model(target).await?;
-                            Ok(format!(
-                                "模型测试完成：{}（{} ms）",
-                                result.transcribed_text, result.transcribe_ms
+                            Ok(fmt_l10n(
+                                lang,
+                                "status.test_done",
+                                &[&result.transcribed_text, &result.transcribe_ms],
                             ))
                         }
                         "delete" => {
                             backend.services().local_asr.delete_model(target).await?;
-                            Ok("模型已删除".to_string())
+                            Ok(tr_l10n(lang, "status.model_deleted").to_string())
                         }
                         _ => unreachable!(),
                     }
@@ -2622,8 +2714,9 @@ mod linux_app {
         }
 
         fn provider_management_ui(&mut self, ui: &mut egui::Ui) {
+            let lang = self.lang;
             ui.horizontal(|ui| {
-                ui.strong("凭据渠道");
+                ui.strong(tr_l10n(lang, "providers.credentials"));
                 for (kind, label) in [
                     (openless_core::ChannelKind::Asr, "ASR"),
                     (openless_core::ChannelKind::Llm, "LLM"),
@@ -2642,7 +2735,7 @@ mod linux_app {
                         self.load_providers(kind);
                     }
                 }
-                if ui.button("刷新渠道").clicked() {
+                if ui.button(tr_l10n(lang, "btn.refresh_channel")).clicked() {
                     self.providers = ProvidersState::Loading;
                     self.load_providers(self.provider_kind);
                 }
@@ -2650,7 +2743,7 @@ mod linux_app {
 
             let panel = match self.providers.clone() {
                 ProvidersState::Loading => {
-                    ui.label("正在读取 Core 渠道目录…");
+                    ui.label(tr_l10n(lang, "providers.loading_dir"));
                     return;
                 }
                 ProvidersState::Failed(error) => {
@@ -2661,7 +2754,7 @@ mod linux_app {
             };
 
             ui.group(|ui| {
-                ui.label("新增渠道");
+                ui.label(tr_l10n(lang, "btn.new_channel"));
                 ui.horizontal(|ui| {
                     egui::ComboBox::from_id_salt("new-provider-type")
                         .selected_text(
@@ -2670,7 +2763,9 @@ mod linux_app {
                                 .iter()
                                 .find(|item| item.provider_type.as_str() == self.new_provider_type)
                                 .map(provider_descriptor_label)
-                                .unwrap_or_else(|| "选择 Provider".to_string()),
+                                .unwrap_or_else(|| {
+                                    tr_l10n(lang, "lbl.choose_provider").to_string()
+                                }),
                         )
                         .show_ui(ui, |ui| {
                             for descriptor in &panel.descriptors {
@@ -2685,7 +2780,7 @@ mod linux_app {
                     if ui
                         .add_enabled(
                             !self.new_provider_type.is_empty(),
-                            egui::Button::new("创建"),
+                            egui::Button::new(tr_l10n(lang, "btn.create")),
                         )
                         .clicked()
                     {
@@ -2706,16 +2801,16 @@ mod linux_app {
                             self.new_channel_name.clear();
                             self.spawn_provider_mutation(async move {
                                 backend.create_channel(kind, provider_type, name).await?;
-                                Ok("渠道已创建".to_string())
+                                Ok(tr_l10n(lang, "status.channel_created").to_string())
                             });
                         }
                     }
                 });
-                ui.small("Provider 类型、默认 Endpoint/Model 与鉴权要求均来自 Core descriptor。");
+                ui.small(tr_l10n(lang, "providers.core_note"));
             });
 
             if panel.channels.is_empty() {
-                ui.label("尚无渠道；先从上方 Core Provider 列表创建一个。");
+                ui.label(tr_l10n(lang, "providers.empty"));
                 return;
             }
 
@@ -2723,15 +2818,22 @@ mod linux_app {
                 let active = channel.id == panel.active_provider;
                 ui.horizontal(|ui| {
                     let selected = self.selected_channel_id.as_deref() == Some(channel.id.as_str());
+                    let active_suffix = if active {
+                        tr_l10n(lang, "btn.status_active")
+                    } else {
+                        ""
+                    };
+                    let disabled_suffix = if channel.enabled {
+                        ""
+                    } else {
+                        tr_l10n(lang, "btn.status_disabled")
+                    };
                     if ui
                         .selectable_label(
                             selected,
                             format!(
-                                "{} · {}{}{}",
-                                channel.name,
-                                channel.provider_type,
-                                if active { " · active" } else { "" },
-                                if channel.enabled { "" } else { " · 已禁用" },
+                                "{} · {}{active_suffix}{disabled_suffix}",
+                                channel.name, channel.provider_type,
                             ),
                         )
                         .clicked()
@@ -2748,18 +2850,25 @@ mod linux_app {
                             self.load_provider_editor(panel.kind, channel, descriptor);
                         }
                     }
-                    if !active && channel.enabled && ui.button("设为 active").clicked() {
+                    if !active
+                        && channel.enabled
+                        && ui.button(tr_l10n(lang, "btn.set_active")).clicked()
+                    {
                         if let Some(backend) = self.backend() {
                             let slot = provider_slot(panel.kind);
                             let channel_id = channel.id.clone();
                             self.spawn_provider_mutation(async move {
                                 backend.set_active_provider(slot, channel_id).await?;
-                                Ok("active 渠道已更新".to_string())
+                                Ok(tr_l10n(lang, "status.channel_active").to_string())
                             });
                         }
                     }
                     if ui
-                        .button(if channel.enabled { "禁用" } else { "启用" })
+                        .button(if channel.enabled {
+                            tr_l10n(lang, "btn.disable")
+                        } else {
+                            tr_l10n(lang, "btn.enable")
+                        })
                         .clicked()
                     {
                         if let Some(backend) = self.backend() {
@@ -2770,11 +2879,11 @@ mod linux_app {
                                 backend
                                     .set_channel_enabled(kind, channel_id, enabled)
                                     .await?;
-                                Ok("渠道启用状态已更新".to_string())
+                                Ok(tr_l10n(lang, "status.channel_enabled").to_string())
                             });
                         }
                     }
-                    if index > 0 && ui.button("上移").clicked() {
+                    if index > 0 && ui.button(tr_l10n(lang, "btn.move_up")).clicked() {
                         if let Some(backend) = self.backend() {
                             let kind = panel.kind;
                             let mut ids = panel
@@ -2785,11 +2894,13 @@ mod linux_app {
                             ids.swap(index, index - 1);
                             self.spawn_provider_mutation(async move {
                                 backend.reorder_channels(kind, ids).await?;
-                                Ok("渠道顺序已更新".to_string())
+                                Ok(tr_l10n(lang, "status.channel_reordered").to_string())
                             });
                         }
                     }
-                    if index + 1 < panel.channels.len() && ui.button("下移").clicked() {
+                    if index + 1 < panel.channels.len()
+                        && ui.button(tr_l10n(lang, "btn.move_down")).clicked()
+                    {
                         if let Some(backend) = self.backend() {
                             let kind = panel.kind;
                             let mut ids = panel
@@ -2800,26 +2911,26 @@ mod linux_app {
                             ids.swap(index, index + 1);
                             self.spawn_provider_mutation(async move {
                                 backend.reorder_channels(kind, ids).await?;
-                                Ok("渠道顺序已更新".to_string())
+                                Ok(tr_l10n(lang, "status.channel_reordered").to_string())
                             });
                         }
                     }
                     if self.pending_channel_delete.as_deref() == Some(channel.id.as_str()) {
-                        if ui.button("确认删除").clicked() {
+                        if ui.button(tr_l10n(lang, "btn.confirm_delete")).clicked() {
                             self.pending_channel_delete = None;
                             if let Some(backend) = self.backend() {
                                 let kind = panel.kind;
                                 let channel_id = channel.id.clone();
                                 self.spawn_provider_mutation(async move {
                                     backend.delete_channel(kind, channel_id).await?;
-                                    Ok("渠道已删除".to_string())
+                                    Ok(tr_l10n(lang, "status.channel_deleted").to_string())
                                 });
                             }
                         }
-                        if ui.button("取消删除").clicked() {
+                        if ui.button(tr_l10n(lang, "btn.cancel_delete")).clicked() {
                             self.pending_channel_delete = None;
                         }
-                    } else if ui.button("删除").clicked() {
+                    } else if ui.button(tr_l10n(lang, "btn.delete")).clicked() {
                         // Channel deletion may remove the last usable provider
                         // and its persisted secrets, so require a deliberate
                         // second click even in this intentionally compact UI.
@@ -2831,7 +2942,11 @@ mod linux_app {
             match self.provider_editor.clone() {
                 ProviderEditorState::Idle => {}
                 ProviderEditorState::Loading { kind, channel_id } => {
-                    ui.label(format!("正在读取 {:?} 渠道 {channel_id}…", kind));
+                    ui.label(fmt_l10n(
+                        lang,
+                        "providers.reading_channel",
+                        &[&format!("{kind:?}"), &channel_id],
+                    ));
                 }
                 ProviderEditorState::Failed(error) => {
                     ui.colored_label(egui::Color32::RED, error);
@@ -2839,7 +2954,7 @@ mod linux_app {
                 ProviderEditorState::Loaded(editor) => {
                     let mut editor = *editor;
                     ui.separator();
-                    ui.strong(format!("编辑渠道 {}", editor.channel.id));
+                    ui.strong(fmt_l10n(lang, "providers.editing", &[&editor.channel.id]));
                     let mut provider_type = editor.descriptor.provider_type.as_str().to_string();
                     egui::ComboBox::from_id_salt("edit-provider-type")
                         .selected_text(provider_descriptor_label(&editor.descriptor))
@@ -2860,58 +2975,61 @@ mod linux_app {
                                 backend
                                     .set_channel_provider_type(kind, channel_id, provider_type)
                                     .await?;
-                                Ok("Provider 类型已更新".to_string())
+                                Ok(tr_l10n(lang, "status.provider_type_updated").to_string())
                             });
                         }
                         return;
                     }
 
-                    ui.label(format!(
-                        "鉴权：{} · 探针：{:?}",
-                        auth_requirement_label(editor.descriptor.auth_requirement),
-                        editor.descriptor.validation_probe
+                    ui.label(fmt_l10n(
+                        lang,
+                        "providers.auth_probe",
+                        &[
+                            &auth_requirement_label(lang, editor.descriptor.auth_requirement),
+                            &format!("{:?}", editor.descriptor.validation_probe),
+                        ],
                     ));
                     ui.horizontal(|ui| {
-                        ui.label("名称");
+                        ui.label(tr_l10n(lang, "providers.name"));
                         ui.text_edit_singleline(&mut editor.name);
                     });
-                    provider_fields_ui(ui, &mut editor);
+                    provider_fields_ui(ui, lang, &mut editor);
 
                     ui.horizontal(|ui| {
-                        if ui.button("保存字段/Secret").clicked() {
+                        if ui.button(tr_l10n(lang, "btn.save_fields")).clicked() {
                             if let Some(backend) = self.backend() {
                                 let saved = editor.clone();
                                 self.spawn_provider_mutation(async move {
                                     save_provider_editor(backend, saved).await?;
-                                    Ok("渠道配置已保存".to_string())
+                                    Ok(tr_l10n(lang, "status.channel_saved").to_string())
                                 });
                             }
                         }
-                        if ui.button("清除 Secret").clicked() {
+                        if ui.button(tr_l10n(lang, "btn.clear_secret")).clicked() {
                             if let Some(backend) = self.backend() {
                                 let cleared = editor.clone();
                                 self.spawn_provider_mutation(async move {
                                     clear_provider_secrets(backend, &cleared).await?;
-                                    Ok("渠道 Secret 已清除".to_string())
+                                    Ok(tr_l10n(lang, "status.secret_cleared").to_string())
                                 });
                             }
                         }
-                        if ui.button("验证连接").clicked() {
+                        if ui.button(tr_l10n(lang, "btn.validate")).clicked() {
                             if let Some(backend) = self.backend() {
                                 let kind = editor.kind;
                                 let channel_id = editor.channel.id.clone();
                                 self.spawn_provider_mutation(async move {
-                                    validate_provider_channel(backend, kind, channel_id).await
+                                    validate_provider_channel(lang, backend, kind, channel_id).await
                                 });
                             }
                         }
-                        if ui.button("列出模型").clicked() {
+                        if ui.button(tr_l10n(lang, "btn.list_models")).clicked() {
                             self.provider_models.clear();
                             self.request_provider_models(editor.kind, editor.channel.id.clone());
                         }
                     });
                     if !self.provider_models.is_empty() {
-                        ui.label("模型列表（点击填入）：");
+                        ui.label(tr_l10n(lang, "providers.model_list"));
                         for model in self.provider_models.clone() {
                             if ui.button(&model).clicked() {
                                 editor.model = model;
@@ -2923,27 +3041,97 @@ mod linux_app {
             }
         }
 
+        /// Apply a newly chosen UI locale immediately: persist it as Linux-UI
+        /// state (never Core business truth), resolve it to a concrete language
+        /// and let the next frame re-render every localized surface. Persistence
+        /// is offloaded off the egui frame so the write can never stall a repaint.
+        fn apply_locale_pref(&mut self, pref: LocalePref) {
+            if pref == self.locale_pref {
+                return;
+            }
+            self.locale_pref = pref;
+            self.lang = pref.resolve();
+            if let Some(tray) = &self.tray {
+                let _ = tray.set_lang(self.lang);
+            }
+            let runtime = self.tokio.clone();
+            runtime.spawn_blocking(move || {
+                let _ = save_locale_pref(pref);
+            });
+        }
+
+        /// The language selector row shown in Settings. Changing it re-renders
+        /// the whole window immediately (shell, headings, labels, popups later
+        /// pick it up from the persisted UI state on their next launch).
+        fn language_selector_ui(&mut self, ui: &mut egui::Ui) {
+            let mut chosen: Option<LocalePref> = None;
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(tr_l10n(self.lang, "settings.language")).strong());
+                let pref = self.locale_pref;
+                let lang = self.lang;
+                let selected = match pref {
+                    LocalePref::System => {
+                        tr_l10n(lang, "settings.language_follow_system").to_string()
+                    }
+                    LocalePref::Lang(explicit) => {
+                        tr_l10n(explicit, locale_key(explicit)).to_string()
+                    }
+                };
+                egui::ComboBox::from_id_salt("openless-ui-language")
+                    .width(240.0)
+                    .selected_text(selected)
+                    .show_ui(ui, |ui| {
+                        if ui
+                            .selectable_label(
+                                pref == LocalePref::System,
+                                tr_l10n(lang, "settings.language_follow_system"),
+                            )
+                            .clicked()
+                        {
+                            chosen = Some(LocalePref::System);
+                        }
+                        for option in LANGS {
+                            let native_label = tr_l10n(option, locale_key(option));
+                            if ui
+                                .selectable_label(pref == LocalePref::Lang(option), native_label)
+                                .clicked()
+                            {
+                                chosen = Some(LocalePref::Lang(option));
+                            }
+                        }
+                    });
+            });
+            if let Some(pref) = chosen {
+                self.apply_locale_pref(pref);
+                self.status = tr_l10n(self.lang, "settings.locale_saved").to_string();
+                ui.ctx().request_repaint();
+            }
+        }
+
         fn settings_ui(&mut self, ui: &mut egui::Ui) {
-            ui.heading("Provider 与设置");
+            let lang = self.lang;
+            ui.heading(tr_l10n(lang, "nav.providers"));
+            self.language_selector_ui(ui);
+            ui.separator();
             if let Some(snapshot) = &self.snapshot {
                 let credentials = &snapshot.credentials;
+                let asr_state = if credentials.asr_configured {
+                    tr_l10n(lang, "overview.configured")
+                } else {
+                    tr_l10n(lang, "overview.unconfigured")
+                };
+                let llm_state = if credentials.llm_configured {
+                    tr_l10n(lang, "overview.configured")
+                } else {
+                    tr_l10n(lang, "overview.unconfigured")
+                };
                 ui.label(format!(
-                    "ASR：{}（{}）",
-                    credentials.active_asr_provider,
-                    if credentials.asr_configured {
-                        "已配置"
-                    } else {
-                        "未配置"
-                    }
+                    "ASR：{}（{asr_state}）",
+                    credentials.active_asr_provider
                 ));
                 ui.label(format!(
-                    "LLM：{}（{}）",
-                    credentials.active_llm_provider,
-                    if credentials.llm_configured {
-                        "已配置"
-                    } else {
-                        "未配置"
-                    }
+                    "LLM：{}（{llm_state}）",
+                    credentials.active_llm_provider
                 ));
             }
             self.provider_management_ui(ui);
@@ -2951,43 +3139,73 @@ mod linux_app {
             let mut save_settings = false;
             if let Some(preferences) = self.preferences.as_mut() {
                 self.settings_dirty.streaming_insert |= ui
-                    .checkbox(&mut preferences.streaming_insert, "流式插入")
+                    .checkbox(
+                        &mut preferences.streaming_insert,
+                        tr_l10n(lang, "settings.streaming_insert"),
+                    )
                     .changed();
                 self.settings_dirty.coding_agent_enabled |= ui
-                    .checkbox(&mut preferences.coding_agent_enabled, "启用 Less Computer")
+                    .checkbox(
+                        &mut preferences.coding_agent_enabled,
+                        tr_l10n(lang, "settings.enable_coding_agent"),
+                    )
                     .changed();
-                ui.collapsing("录音与输入", |ui| {
+                ui.collapsing(tr_l10n(lang, "settings.recording_input"), |ui| {
                     let previous_mode = preferences.hotkey.mode;
-                    egui::ComboBox::from_label("录音方式")
+                    egui::ComboBox::from_label(tr_l10n(lang, "settings.rec_mode"))
                         .selected_text(match preferences.hotkey.mode {
-                            openless_core::shared_types::HotkeyMode::Toggle => "切换",
-                            openless_core::shared_types::HotkeyMode::Hold => "按住说话",
-                            openless_core::shared_types::HotkeyMode::DoubleClick => "双击",
-                            openless_core::shared_types::HotkeyMode::Auto => "自动识别",
+                            openless_core::shared_types::HotkeyMode::Toggle => {
+                                tr_l10n(lang, "recmode.toggle")
+                            }
+                            openless_core::shared_types::HotkeyMode::Hold => {
+                                tr_l10n(lang, "recmode.hold")
+                            }
+                            openless_core::shared_types::HotkeyMode::DoubleClick => {
+                                tr_l10n(lang, "recmode.double_click")
+                            }
+                            openless_core::shared_types::HotkeyMode::Auto => {
+                                tr_l10n(lang, "recmode.auto")
+                            }
                         })
                         .show_ui(ui, |ui| {
-                            for (mode, label) in [
-                                (openless_core::shared_types::HotkeyMode::Toggle, "切换"),
-                                (openless_core::shared_types::HotkeyMode::Hold, "按住说话"),
-                                (openless_core::shared_types::HotkeyMode::Auto, "自动识别"),
+                            for (mode, key) in [
+                                (
+                                    openless_core::shared_types::HotkeyMode::Toggle,
+                                    "recmode.toggle",
+                                ),
+                                (
+                                    openless_core::shared_types::HotkeyMode::Hold,
+                                    "recmode.hold",
+                                ),
+                                (
+                                    openless_core::shared_types::HotkeyMode::Auto,
+                                    "recmode.auto",
+                                ),
                             ] {
-                                ui.selectable_value(&mut preferences.hotkey.mode, mode, label);
+                                ui.selectable_value(
+                                    &mut preferences.hotkey.mode,
+                                    mode,
+                                    tr_l10n(lang, key),
+                                );
                             }
                         });
                     self.settings_dirty.recording |= preferences.hotkey.mode != previous_mode;
                     self.settings_dirty.recording |= ui
-                        .checkbox(&mut preferences.silence_auto_stop_enabled, "说完后自动停止")
+                        .checkbox(
+                            &mut preferences.silence_auto_stop_enabled,
+                            tr_l10n(lang, "settings.auto_stop"),
+                        )
                         .changed();
                     if preferences.silence_auto_stop_enabled {
                         let previous = preferences.silence_auto_stop_seconds;
-                        egui::ComboBox::from_label("连续静音时长")
-                            .selected_text(format!("{} 秒", previous))
+                        egui::ComboBox::from_label(tr_l10n(lang, "settings.silence_duration"))
+                            .selected_text(fmt_l10n(lang, "settings.seconds", &[&previous]))
                             .show_ui(ui, |ui| {
                                 for seconds in [1.0, 1.5, 2.0, 3.0, 4.0, 5.0] {
                                     ui.selectable_value(
                                         &mut preferences.silence_auto_stop_seconds,
                                         seconds,
-                                        format!("{seconds} 秒"),
+                                        fmt_l10n(lang, "settings.seconds", &[&seconds]),
                                     );
                                 }
                             });
@@ -2995,18 +3213,18 @@ mod linux_app {
                             preferences.silence_auto_stop_seconds != previous;
                     }
                     let selected_microphone = if preferences.microphone_device_name.is_empty() {
-                        "系统默认".to_string()
+                        tr_l10n(lang, "settings.system_default").to_string()
                     } else {
                         preferences.microphone_device_name.clone()
                     };
                     let previous_microphone = preferences.microphone_device_name.clone();
-                    egui::ComboBox::from_label("麦克风")
+                    egui::ComboBox::from_label(tr_l10n(lang, "settings.microphone"))
                         .selected_text(selected_microphone)
                         .show_ui(ui, |ui| {
                             ui.selectable_value(
                                 &mut preferences.microphone_device_name,
                                 String::new(),
-                                "系统默认",
+                                tr_l10n(lang, "settings.system_default"),
                             );
                             for device in &self.microphones {
                                 ui.selectable_value(
@@ -3021,93 +3239,127 @@ mod linux_app {
                     self.settings_dirty.recording |= ui
                         .checkbox(
                             &mut preferences.mute_during_recording,
-                            "录音期间暂时静音系统声音",
+                            tr_l10n(lang, "settings.mute_while"),
                         )
                         .changed();
                     self.settings_dirty.recording |= ui
                         .checkbox(
                             &mut preferences.audio_cue_on_record,
-                            "录音开始/结束播放提示音",
+                            tr_l10n(lang, "settings.cue_audio"),
                         )
                         .changed();
                 });
-                ui.collapsing("外观", |ui| {
+                ui.collapsing(tr_l10n(lang, "settings.appearance"), |ui| {
                     let previous_theme = preferences.theme_mode;
-                    egui::ComboBox::from_label("主题")
+                    egui::ComboBox::from_label(tr_l10n(lang, "settings.theme"))
                         .selected_text(match preferences.theme_mode {
-                            openless_core::shared_types::ThemeMode::System => "跟随系统",
-                            openless_core::shared_types::ThemeMode::Light => "浅色",
-                            openless_core::shared_types::ThemeMode::Dark => "深色",
+                            openless_core::shared_types::ThemeMode::System => {
+                                tr_l10n(lang, "theme.follow_system")
+                            }
+                            openless_core::shared_types::ThemeMode::Light => {
+                                tr_l10n(lang, "theme.light")
+                            }
+                            openless_core::shared_types::ThemeMode::Dark => {
+                                tr_l10n(lang, "theme.dark")
+                            }
                         })
                         .show_ui(ui, |ui| {
-                            for (mode, label) in [
-                                (openless_core::shared_types::ThemeMode::System, "跟随系统"),
-                                (openless_core::shared_types::ThemeMode::Light, "浅色"),
-                                (openless_core::shared_types::ThemeMode::Dark, "深色"),
+                            for (mode, key) in [
+                                (
+                                    openless_core::shared_types::ThemeMode::System,
+                                    "theme.follow_system",
+                                ),
+                                (openless_core::shared_types::ThemeMode::Light, "theme.light"),
+                                (openless_core::shared_types::ThemeMode::Dark, "theme.dark"),
                             ] {
-                                ui.selectable_value(&mut preferences.theme_mode, mode, label);
+                                ui.selectable_value(
+                                    &mut preferences.theme_mode,
+                                    mode,
+                                    tr_l10n(lang, key),
+                                );
                             }
                         });
                     self.settings_dirty.appearance |= preferences.theme_mode != previous_theme;
                     self.settings_dirty.appearance |= ui
                         .checkbox(
                             &mut preferences.show_overview_activity_heatmap,
-                            "显示活动热力图",
+                            tr_l10n(lang, "settings.show_heatmap"),
                         )
                         .changed();
                 });
-                ui.collapsing("fcitx5 快捷键", |ui| {
+                ui.collapsing(tr_l10n(lang, "settings.hotkeys_group"), |ui| {
+                    self.settings_dirty.hotkeys |= shortcut_editor(
+                        ui,
+                        tr_l10n(lang, "hotkey.dictation"),
+                        &mut preferences.dictation_hotkey,
+                    );
                     self.settings_dirty.hotkeys |=
-                        shortcut_editor(ui, "听写", &mut preferences.dictation_hotkey);
-                    self.settings_dirty.hotkeys |=
-                        optional_shortcut_editor(ui, "QA", &mut preferences.qa_hotkey, ";");
-                    self.settings_dirty.hotkeys |=
-                        shortcut_editor(ui, "翻译修饰键", &mut preferences.translation_hotkey);
+                        optional_shortcut_editor(ui, lang, "QA", &mut preferences.qa_hotkey, ";");
+                    self.settings_dirty.hotkeys |= shortcut_editor(
+                        ui,
+                        tr_l10n(lang, "hotkey.translation"),
+                        &mut preferences.translation_hotkey,
+                    );
                     self.settings_dirty.hotkeys |= optional_shortcut_editor(
                         ui,
-                        "选区润色",
+                        lang,
+                        tr_l10n(lang, "hotkey.selection_polish"),
                         &mut preferences.selection_polish_hotkey,
                         "P",
                     );
                     self.settings_dirty.hotkeys |= optional_shortcut_editor(
                         ui,
-                        "切换风格",
+                        lang,
+                        tr_l10n(lang, "hotkey.switch_style"),
                         &mut preferences.switch_style_hotkey,
                         "S",
                     );
                     self.settings_dirty.hotkeys |= optional_shortcut_editor(
                         ui,
-                        "打开应用",
+                        lang,
+                        tr_l10n(lang, "hotkey.open_app"),
                         &mut preferences.open_app_hotkey,
                         "O",
                     );
                     self.settings_dirty.hotkeys |= optional_shortcut_editor(
                         ui,
-                        "Coding Agent 语音",
+                        lang,
+                        tr_l10n(lang, "hotkey.coding_agent"),
                         &mut preferences.coding_agent_voice_hotkey,
                         "L",
                     );
                 });
                 self.settings_dirty.start_minimized |= ui
-                    .checkbox(&mut preferences.start_minimized, "启动时隐藏主窗口")
+                    .checkbox(
+                        &mut preferences.start_minimized,
+                        tr_l10n(lang, "settings.start_minimized"),
+                    )
                     .changed();
                 self.settings_dirty.launch_at_login |= ui
-                    .checkbox(&mut preferences.launch_at_login, "开机启动")
+                    .checkbox(
+                        &mut preferences.launch_at_login,
+                        tr_l10n(lang, "settings.launch_at_login"),
+                    )
                     .changed();
                 self.settings_dirty.auto_update_check |= ui
-                    .checkbox(&mut preferences.auto_update_check, "自动检查更新")
+                    .checkbox(
+                        &mut preferences.auto_update_check,
+                        tr_l10n(lang, "settings.auto_update"),
+                    )
                     .changed();
                 let previous_channel = preferences.update_channel;
-                egui::ComboBox::from_label("更新渠道")
+                egui::ComboBox::from_label(tr_l10n(lang, "settings.update_channel"))
                     .selected_text(match preferences.update_channel {
-                        openless_core::shared_types::UpdateChannel::Stable => "稳定版",
+                        openless_core::shared_types::UpdateChannel::Stable => {
+                            tr_l10n(lang, "channel.stable")
+                        }
                         openless_core::shared_types::UpdateChannel::Beta => "Beta",
                     })
                     .show_ui(ui, |ui| {
                         ui.selectable_value(
                             &mut preferences.update_channel,
                             openless_core::shared_types::UpdateChannel::Stable,
-                            "稳定版",
+                            tr_l10n(lang, "channel.stable"),
                         );
                         ui.selectable_value(
                             &mut preferences.update_channel,
@@ -3118,16 +3370,19 @@ mod linux_app {
                 self.settings_dirty.update_channel |=
                     preferences.update_channel != previous_channel;
                 self.settings_dirty.remote_input_enabled |= ui
-                    .checkbox(&mut preferences.remote_input_enabled, "启用远程输入")
+                    .checkbox(
+                        &mut preferences.remote_input_enabled,
+                        tr_l10n(lang, "settings.enable_remote"),
+                    )
                     .changed();
                 self.settings_dirty.remote_input_port |= ui
                     .add(
                         egui::DragValue::new(&mut preferences.remote_input_port)
                             .range(1..=u16::MAX)
-                            .prefix("端口 "),
+                            .prefix(tr_l10n(lang, "settings.port")),
                     )
                     .changed();
-                if ui.button("保存设置").clicked() {
+                if ui.button(tr_l10n(lang, "btn.save_settings")).clicked() {
                     save_settings = true;
                 }
             }
@@ -3170,23 +3425,25 @@ mod linux_app {
                 }
             }
             if let Some((remote, pin)) = &self.remote_access {
-                ui.label(if remote.running {
-                    "远程输入：运行中"
+                let remote_state = if remote.running {
+                    tr_l10n(lang, "remote.running")
                 } else if remote.starting {
-                    "远程输入：启动中"
+                    tr_l10n(lang, "remote.starting")
                 } else {
-                    "远程输入：已停止"
-                });
+                    tr_l10n(lang, "remote.stopped")
+                };
+                ui.label(remote_state);
                 if remote.enabled {
-                    ui.label(format!(
-                        "语言：{} · 连接数：{}",
-                        remote.locale, remote.connection_count
+                    ui.label(fmt_l10n(
+                        lang,
+                        "remote.lang_conns",
+                        &[&remote.locale, &remote.connection_count],
                     ));
                     ui.monospace(format!("PIN：{pin}"));
                     for url in &remote.urls {
                         ui.monospace(url);
                     }
-                    if ui.button("重置配对码").clicked() {
+                    if ui.button(tr_l10n(lang, "btn.reset_pairing")).clicked() {
                         if let Some(backend) = self.backend() {
                             self.spawn(async move {
                                 backend
@@ -3194,13 +3451,13 @@ mod linux_app {
                                     .remote_input
                                     .regenerate_pairing_pin()
                                     .await?;
-                                Ok("远程输入配对码已重置".to_string())
+                                Ok(tr_l10n(lang, "status.remote_pin_reset").to_string())
                             });
                         }
                     }
                 }
             }
-            if ui.button("导出错误日志").clicked() {
+            if ui.button(tr_l10n(lang, "btn.export_error_log")).clicked() {
                 if let Some(backend) = self.backend() {
                     let source = openless_linux_egui::log_path(&backend.config().data_dir);
                     self.spawn(async move {
@@ -3220,7 +3477,7 @@ mod linux_app {
                         .ok_or_else(|| {
                             BackendError::new(
                                 openless_core::BackendErrorCode::Cancelled,
-                                "日志导出已取消",
+                                tr_l10n(lang, "dialog.export_log_cancelled"),
                             )
                         })?;
                         tokio::task::spawn_blocking(move || {
@@ -3239,12 +3496,12 @@ mod linux_app {
                                 error.to_string(),
                             )
                         })?;
-                        Ok("错误日志已导出".to_string())
+                        Ok(tr_l10n(lang, "status.export_log_done").to_string())
                     });
                 }
             }
             ui.separator();
-            ui.heading("软件更新");
+            ui.heading(tr_l10n(lang, "head.software_update"));
             let channel = self
                 .preferences
                 .as_ref()
@@ -3254,21 +3511,27 @@ mod linux_app {
                 LinuxUpdateSupport::AppImage(_) => {
                     ui.horizontal(|ui| {
                         if ui
-                            .add_enabled(!self.update_busy, egui::Button::new("立即检查"))
+                            .add_enabled(
+                                !self.update_busy,
+                                egui::Button::new(tr_l10n(lang, "btn.check_now")),
+                            )
                             .clicked()
                         {
                             self.request_update_check(channel);
                         }
                         if self.update_manifest.is_some()
                             && ui
-                                .add_enabled(!self.update_busy, egui::Button::new("下载并安装"))
+                                .add_enabled(
+                                    !self.update_busy,
+                                    egui::Button::new(tr_l10n(lang, "btn.download_install")),
+                                )
                                 .clicked()
                         {
                             self.install_update();
                         }
                     });
                     if let Some(manifest) = &self.update_manifest {
-                        ui.label(format!("可用版本：{}", manifest.version));
+                        ui.label(fmt_l10n(lang, "update.available", &[&manifest.version]));
                     }
                     if let Some(progress) = self.update_progress {
                         let fraction = progress
@@ -3278,12 +3541,12 @@ mod linux_app {
                         if let Some(fraction) = fraction {
                             ui.add(egui::ProgressBar::new(fraction.clamp(0.0, 1.0)));
                         }
-                        ui.label(format!("已下载 {} 字节", progress.downloaded));
+                        ui.label(fmt_l10n(lang, "update.downloaded", &[&progress.downloaded]));
                     }
                 }
                 LinuxUpdateSupport::ManualOnly { releases_url } => {
-                    ui.label("deb/rpm 与开发构建由包管理器或发布页更新。");
-                    if ui.button("打开发布页").clicked() {
+                    ui.label(tr_l10n(lang, "update.manual_notice"));
+                    if ui.button(tr_l10n(lang, "btn.open_releases")).clicked() {
                         let url = (*releases_url).to_string();
                         std::thread::spawn(move || {
                             let _ = open_external(&url);
@@ -3294,10 +3557,11 @@ mod linux_app {
         }
 
         fn vocabulary_ui(&mut self, ui: &mut egui::Ui) {
+            let lang = self.lang;
             if let Some(backend) = self.backend() {
                 let pending = backend.pending_corrections();
                 if !pending.is_empty() {
-                    ui.heading("待确认的手改建议");
+                    ui.heading(tr_l10n(lang, "head.pending_corrections"));
                     let mut action: Option<(String, bool)> = None;
                     for suggestion in pending {
                         ui.horizontal(|ui| {
@@ -3305,15 +3569,15 @@ mod linux_app {
                                 "{} → {}",
                                 suggestion.pattern, suggestion.replacement
                             ));
-                            if ui.small_button("接受").clicked() {
+                            if ui.small_button(tr_l10n(lang, "btn.accept")).clicked() {
                                 action = Some((suggestion.id.clone(), true));
                             }
-                            if ui.small_button("忽略").clicked() {
+                            if ui.small_button(tr_l10n(lang, "btn.ignore")).clicked() {
                                 action = Some((suggestion.id.clone(), false));
                             }
                         });
                     }
-                    if ui.button("全部关闭").clicked() {
+                    if ui.button(tr_l10n(lang, "btn.close_all")).clicked() {
                         backend.dismiss_pending_corrections();
                     }
                     if let Some((id, accept)) = action {
@@ -3323,20 +3587,20 @@ mod linux_app {
                             } else {
                                 backend.reject_pending_correction(&id);
                             }
-                            Ok("词汇建议已处理".to_string())
+                            Ok(tr_l10n(lang, "status.suggestion_handled").to_string())
                         });
                     }
                     ui.separator();
                 }
             }
-            ui.heading("词汇预设");
-            ui.label("预设由 Core 合并内置版本、用户覆盖和自定义内容。");
+            ui.heading(tr_l10n(lang, "head.vocab_presets"));
+            ui.label(tr_l10n(lang, "lbl.preset_note"));
             let mut preset_action: Option<(String, String)> = None;
             for preset in &self.vocab_presets {
                 ui.horizontal_wrapped(|ui| {
                     ui.strong(&preset.name);
-                    ui.label(format!("{} 个词", preset.phrases.len()));
-                    if ui.small_button("应用").clicked() {
+                    ui.label(fmt_l10n(lang, "lbl.preset_count", &[&preset.phrases.len()]));
+                    if ui.small_button(tr_l10n(lang, "btn.apply")).clicked() {
                         preset_action = Some((preset.id.clone(), "apply".into()));
                     }
                     if self
@@ -3344,13 +3608,13 @@ mod linux_app {
                         .custom
                         .iter()
                         .any(|custom| custom.id == preset.id)
-                        && ui.small_button("删除").clicked()
+                        && ui.small_button(tr_l10n(lang, "btn.delete")).clicked()
                     {
                         preset_action = Some((preset.id.clone(), "delete".into()));
                     } else if openless_core::builtin_vocab_presets()
                         .iter()
                         .any(|builtin| builtin.id == preset.id)
-                        && ui.small_button("隐藏内置预设").clicked()
+                        && ui.small_button(tr_l10n(lang, "btn.hide_builtin")).clicked()
                     {
                         preset_action = Some((preset.id.clone(), "disable".into()));
                     }
@@ -3358,19 +3622,22 @@ mod linux_app {
                 });
             }
             for id in self.vocab_preset_store.disabled_builtin_preset_ids.clone() {
-                if ui.small_button(format!("恢复内置预设：{id}")).clicked() {
+                if ui
+                    .small_button(fmt_l10n(lang, "btn.restore_builtin", &[&id]))
+                    .clicked()
+                {
                     preset_action = Some((id, "enable".into()));
                 }
             }
             ui.group(|ui| {
-                ui.label("新建自定义预设");
+                ui.label(tr_l10n(lang, "lbl.new_custom_preset"));
                 ui.text_edit_singleline(&mut self.vocab_preset_name);
                 ui.add(
                     egui::TextEdit::multiline(&mut self.vocab_preset_phrases)
-                        .hint_text("每行或逗号分隔一个词")
+                        .hint_text(tr_l10n(lang, "hint.preset_phrases"))
                         .desired_rows(3),
                 );
-                if ui.button("保存预设").clicked()
+                if ui.button(tr_l10n(lang, "btn.save_preset")).clicked()
                     && !self.vocab_preset_name.trim().is_empty()
                     && !self.vocab_preset_phrases.trim().is_empty()
                 {
@@ -3391,13 +3658,13 @@ mod linux_app {
                             let preset = selected.ok_or_else(|| {
                                 BackendError::new(
                                     openless_core::BackendErrorCode::Cancelled,
-                                    "词汇预设已不存在",
+                                    tr_l10n(lang, "status.preset_gone"),
                                 )
                             })?;
                             for phrase in preset.phrases {
                                 backend.add_vocabulary(
                                     phrase,
-                                    Some(format!("预设：{}", preset.name)),
+                                    Some(fmt_l10n(lang, "status.from_preset", &[&preset.name])),
                                 )?;
                             }
                         }
@@ -3439,17 +3706,19 @@ mod linux_app {
                         }
                         _ => unreachable!(),
                     }
-                    Ok("词汇预设已更新".to_string())
+                    Ok(tr_l10n(lang, "status.preset_updated").to_string())
                 });
             }
             ui.separator();
-            ui.heading("自定义词汇");
+            ui.heading(tr_l10n(lang, "head.custom_vocab"));
             ui.horizontal(|ui| {
-                ui.label("词语");
+                ui.label(tr_l10n(lang, "lbl.phrase"));
                 ui.text_edit_singleline(&mut self.vocabulary_phrase);
-                ui.label("备注");
+                ui.label(tr_l10n(lang, "lbl.note"));
                 ui.text_edit_singleline(&mut self.vocabulary_note);
-                if ui.button("添加").clicked() && !self.vocabulary_phrase.trim().is_empty() {
+                if ui.button(tr_l10n(lang, "btn.add")).clicked()
+                    && !self.vocabulary_phrase.trim().is_empty()
+                {
                     if let Some(backend) = self.backend() {
                         let phrase = std::mem::take(&mut self.vocabulary_phrase);
                         let note = std::mem::take(&mut self.vocabulary_note);
@@ -3458,7 +3727,7 @@ mod linux_app {
                                 phrase,
                                 (!note.trim().is_empty()).then_some(note),
                             )?;
-                            Ok("词汇已保存".to_string())
+                            Ok(tr_l10n(lang, "status.vocab_saved").to_string())
                         });
                     }
                 }
@@ -3474,8 +3743,8 @@ mod linux_app {
                     if let Some(note) = &entry.note {
                         ui.label(note);
                     }
-                    ui.label(format!("命中 {}", entry.hits));
-                    if ui.small_button("删除").clicked() {
+                    ui.label(fmt_l10n(lang, "lbl.hits", &[&entry.hits]));
+                    if ui.small_button(tr_l10n(lang, "btn.delete")).clicked() {
                         vocabulary_action = Some((entry.id.clone(), None));
                     }
                 });
@@ -3487,17 +3756,17 @@ mod linux_app {
                     } else {
                         backend.remove_vocabulary(&id)?;
                     }
-                    Ok("词汇已更新".to_string())
+                    Ok(tr_l10n(lang, "status.vocab_updated").to_string())
                 });
             }
 
             ui.separator();
-            ui.heading("纠错规则");
+            ui.heading(tr_l10n(lang, "head.correction_rules"));
             ui.horizontal(|ui| {
                 ui.text_edit_singleline(&mut self.correction_pattern);
                 ui.label("→");
                 ui.text_edit_singleline(&mut self.correction_replacement);
-                if ui.button("添加规则").clicked()
+                if ui.button(tr_l10n(lang, "btn.add_rule")).clicked()
                     && !self.correction_pattern.trim().is_empty()
                     && !self.correction_replacement.trim().is_empty()
                 {
@@ -3506,7 +3775,7 @@ mod linux_app {
                         let replacement = std::mem::take(&mut self.correction_replacement);
                         self.spawn(async move {
                             backend.add_correction_rule(pattern, replacement)?;
-                            Ok("纠错规则已保存".to_string())
+                            Ok(tr_l10n(lang, "status.correction_saved").to_string())
                         });
                     }
                 }
@@ -3520,7 +3789,7 @@ mod linux_app {
                     }
                     ui.label(format!("{} → {}", rule.pattern, rule.replacement));
                     ui.label(format!("{:?}", rule.source));
-                    if ui.small_button("删除").clicked() {
+                    if ui.small_button(tr_l10n(lang, "btn.delete")).clicked() {
                         correction_action = Some((rule.id.clone(), None));
                     }
                 });
@@ -3532,15 +3801,16 @@ mod linux_app {
                     } else {
                         backend.remove_correction_rule(&id)?;
                     }
-                    Ok("纠错规则已更新".to_string())
+                    Ok(tr_l10n(lang, "status.correction_updated").to_string())
                 });
             }
         }
 
         fn styles_ui(&mut self, ui: &mut egui::Ui) {
-            ui.label("风格包数据直接来自 Core repository；运行时 Prompt 由 Core 组合。");
+            let lang = self.lang;
+            ui.label(tr_l10n(lang, "lbl.style_note"));
             ui.group(|ui| {
-                ui.strong("风格包直达快捷键");
+                ui.strong(tr_l10n(lang, "lbl.direct_hotkey"));
                 let previous_id = self.style_hotkey_pack_id.clone();
                 egui::ComboBox::from_id_salt("style-hotkey-pack")
                     .selected_text(
@@ -3548,7 +3818,7 @@ mod linux_app {
                             .iter()
                             .find(|pack| pack.id == self.style_hotkey_pack_id)
                             .map(|pack| pack.name.as_str())
-                            .unwrap_or("选择风格包"),
+                            .unwrap_or_else(|| tr_l10n(lang, "lbl.choose_style")),
                     )
                     .show_ui(ui, |ui| {
                         for pack in &self.style_packs {
@@ -3576,22 +3846,22 @@ mod linux_app {
                         .unwrap_or_default();
                 }
                 ui.horizontal(|ui| {
-                    ui.label("主键");
+                    ui.label(tr_l10n(lang, "lbl.primary"));
                     ui.text_edit_singleline(&mut self.style_hotkey_primary);
-                    ui.label("修饰键（+ 分隔）");
+                    ui.label(tr_l10n(lang, "lbl.modifiers"));
                     ui.text_edit_singleline(&mut self.style_hotkey_modifiers);
                 });
                 let save = ui
                     .add_enabled(
                         !self.style_hotkey_pack_id.is_empty()
                             && !self.style_hotkey_primary.trim().is_empty(),
-                        egui::Button::new("保存直达快捷键"),
+                        egui::Button::new(tr_l10n(lang, "btn.save_direct_hotkey")),
                     )
                     .clicked();
                 let remove = ui
                     .add_enabled(
                         !self.style_hotkey_pack_id.is_empty(),
-                        egui::Button::new("移除直达快捷键"),
+                        egui::Button::new(tr_l10n(lang, "btn.remove_direct_hotkey")),
                     )
                     .clicked();
                 if save || remove {
@@ -3633,20 +3903,20 @@ mod linux_app {
                                     error.to_string(),
                                 )
                             })??;
-                            Ok("风格包快捷键已更新".to_string())
+                            Ok(tr_l10n(lang, "status.style_hotkey_saved").to_string())
                         });
                     }
                 }
             });
             ui.horizontal(|ui| {
-                if ui.button("新建风格包").clicked() {
+                if ui.button(tr_l10n(lang, "btn.new_style")).clicked() {
                     self.style_editor = Some(openless_core::StylePack {
                         id: uuid::Uuid::new_v4().to_string(),
-                        name: "新风格".to_string(),
+                        name: tr_l10n(lang, "lbl.new_style_default").to_string(),
                         ..Default::default()
                     });
                 }
-                if ui.button("导入 ZIP").clicked() {
+                if ui.button(tr_l10n(lang, "btn.import_zip")).clicked() {
                     if let Some(backend) = self.backend() {
                         self.spawn(async move {
                             let path = tokio::task::spawn_blocking(|| {
@@ -3664,7 +3934,7 @@ mod linux_app {
                             .ok_or_else(|| {
                                 BackendError::new(
                                     openless_core::BackendErrorCode::Cancelled,
-                                    "风格包导入已取消",
+                                    tr_l10n(lang, "dialog.style_import_cancelled"),
                                 )
                             })?;
                             let pack = tokio::task::spawn_blocking(move || {
@@ -3677,23 +3947,23 @@ mod linux_app {
                                     error.to_string(),
                                 )
                             })??;
-                            Ok(format!("已导入风格包：{}", pack.name))
+                            Ok(fmt_l10n(lang, "status.style_imported", &[&pack.name]))
                         });
                     }
                 }
             });
             if let Some(editor) = self.style_editor.as_mut() {
                 ui.group(|ui| {
-                    ui.heading("风格包编辑器");
+                    ui.heading(tr_l10n(lang, "head.style_pack_editor"));
                     ui.horizontal(|ui| {
-                        ui.label("名称");
+                        ui.label(tr_l10n(lang, "lbl.name"));
                         ui.text_edit_singleline(&mut editor.name);
-                        ui.label("版本");
+                        ui.label(tr_l10n(lang, "lbl.version"));
                         ui.text_edit_singleline(&mut editor.version);
                     });
-                    ui.label("描述");
+                    ui.label(tr_l10n(lang, "lbl.description"));
                     ui.text_edit_multiline(&mut editor.description);
-                    egui::ComboBox::from_label("基础模式")
+                    egui::ComboBox::from_label(tr_l10n(lang, "lbl.base_mode"))
                         .selected_text(editor.base_mode.display_name())
                         .show_ui(ui, |ui| {
                             for mode in [
@@ -3709,16 +3979,16 @@ mod linux_app {
                                 );
                             }
                         });
-                    ui.label("听写 Prompt");
+                    ui.label(tr_l10n(lang, "lbl.dictation_prompt"));
                     ui.add(egui::TextEdit::multiline(&mut editor.prompt).desired_rows(6));
-                    ui.label("选区 Prompt（留空则使用 Core 默认）");
+                    ui.label(tr_l10n(lang, "lbl.selection_prompt"));
                     ui.add(egui::TextEdit::multiline(&mut editor.selection_prompt).desired_rows(4));
                 });
                 let mut save = false;
                 let mut cancel = false;
                 ui.horizontal(|ui| {
-                    save = ui.button("保存风格包").clicked();
-                    cancel = ui.button("取消编辑").clicked();
+                    save = ui.button(tr_l10n(lang, "btn.save_style")).clicked();
+                    cancel = ui.button(tr_l10n(lang, "btn.cancel_edit")).clicked();
                 });
                 if cancel {
                     self.style_editor = None;
@@ -3732,7 +4002,7 @@ mod linux_app {
                             } else {
                                 backend.create_style_pack(pack)?
                             };
-                            Ok(format!("风格包已保存：{}", saved.name))
+                            Ok(fmt_l10n(lang, "status.style_saved", &[&saved.name]))
                         });
                     }
                 }
@@ -3744,50 +4014,63 @@ mod linux_app {
                     ui.horizontal(|ui| {
                         ui.heading(&pack.name);
                         if pack.active {
-                            ui.label(egui::RichText::new("当前").color(theme::BLUE));
+                            ui.label(
+                                egui::RichText::new(tr_l10n(lang, "lbl.current"))
+                                    .color(theme::BLUE),
+                            );
                         }
                         ui.label(format!("{:?} · {:?}", pack.kind, pack.base_mode));
                     });
                     ui.label(&pack.description);
                     if let Some(author) = &pack.author {
-                        ui.label(format!("作者：{author} · 版本 {}", pack.version));
+                        ui.label(fmt_l10n(
+                            lang,
+                            "lbl.author_version",
+                            &[author, &pack.version],
+                        ));
                     }
                     ui.horizontal(|ui| {
-                        if !pack.active && ui.button("设为当前").clicked() {
+                        if !pack.active && ui.button(tr_l10n(lang, "btn.set_current")).clicked() {
                             action = Some((pack.id.clone(), "activate", true));
                         }
                         let mut enabled = pack.enabled;
-                        if ui.checkbox(&mut enabled, "启用").changed() {
+                        if ui
+                            .checkbox(&mut enabled, tr_l10n(lang, "btn.enable_label"))
+                            .changed()
+                        {
                             action = Some((pack.id.clone(), "enabled", enabled));
                         }
-                        if ui.button("运行时 Prompt 预览").clicked() {
+                        if ui.button(tr_l10n(lang, "btn.preview_runtime")).clicked() {
                             if let Some(backend) = self.backend() {
                                 let diagnostics = backend.preview_style_pack_runtime(&pack);
-                                self.status = format!(
-                                    "{}：单轮 {} 字，多轮 {} 字，热词 {} 个",
-                                    diagnostics.pack_name,
-                                    diagnostics.single_turn_prompt_chars,
-                                    diagnostics.multi_turn_prompt_chars,
-                                    diagnostics.hotwords.len()
+                                self.status = fmt_l10n(
+                                    lang,
+                                    "status.style_preview",
+                                    &[
+                                        &diagnostics.pack_name,
+                                        &diagnostics.single_turn_prompt_chars,
+                                        &diagnostics.multi_turn_prompt_chars,
+                                        &diagnostics.hotwords.len(),
+                                    ],
                                 );
                             }
                         }
                         if pack.kind == openless_core::StylePackKind::Imported
-                            && ui.button("编辑").clicked()
+                            && ui.button(tr_l10n(lang, "btn.edit")).clicked()
                         {
                             self.style_editor = Some(pack.clone());
                         }
                         if pack.kind == openless_core::StylePackKind::Imported
-                            && ui.button("删除").clicked()
+                            && ui.button(tr_l10n(lang, "btn.delete")).clicked()
                         {
                             action = Some((pack.id.clone(), "delete", false));
                         }
                         if pack.kind == openless_core::StylePackKind::Builtin
-                            && ui.button("恢复内置默认").clicked()
+                            && ui.button(tr_l10n(lang, "btn.reset_builtin")).clicked()
                         {
                             action = Some((pack.id.clone(), "reset", false));
                         }
-                        if ui.button("导出 ZIP").clicked() {
+                        if ui.button(tr_l10n(lang, "btn.export_zip")).clicked() {
                             action = Some((pack.id.clone(), "export", false));
                         }
                     });
@@ -3827,7 +4110,7 @@ mod linux_app {
                             .ok_or_else(|| {
                                 BackendError::new(
                                     openless_core::BackendErrorCode::Cancelled,
-                                    "风格包导出已取消",
+                                    tr_l10n(lang, "dialog.style_export_cancelled"),
                                 )
                             })?;
                             tokio::task::spawn_blocking(move || {
@@ -3849,18 +4132,19 @@ mod linux_app {
                         }
                         _ => unreachable!(),
                     }
-                    Ok("风格包已更新".to_string())
+                    Ok(tr_l10n(lang, "status.style_updated").to_string())
                 });
             }
         }
 
         fn marketplace_ui(&mut self, ui: &mut egui::Ui) {
+            let lang = self.lang;
             ui.horizontal(|ui| {
                 ui.text_edit_singleline(&mut self.marketplace_query);
-                if ui.button("搜索/刷新").clicked() {
+                if ui.button(tr_l10n(lang, "btn.search_refresh")).clicked() {
                     self.load_marketplace();
                 }
-                if ui.button("GitHub 登录").clicked() {
+                if ui.button(tr_l10n(lang, "btn.github_login")).clicked() {
                     if let Some(backend) = self.backend() {
                         let tx = self.tx.clone();
                         self.tokio.spawn(async move {
@@ -3874,22 +4158,22 @@ mod linux_app {
                         });
                     }
                 }
-                if ui.button("退出登录").clicked() {
+                if ui.button(tr_l10n(lang, "btn.logout")).clicked() {
                     if let Some(backend) = self.backend() {
                         self.spawn(async move {
                             backend.services().marketplace.logout().await?;
-                            Ok("Marketplace 已退出登录".to_string())
+                            Ok(tr_l10n(lang, "status.logout_done").to_string())
                         });
                     }
                 }
-                if ui.button("我的发布/喜欢").clicked() {
+                if ui.button(tr_l10n(lang, "btn.my_publish_like")).clicked() {
                     self.load_marketplace_mine();
                 }
             });
             if let Some(flow) = self.marketplace_flow.clone() {
                 ui.horizontal(|ui| {
-                    ui.label(format!("设备码：{}", flow.user_code));
-                    if ui.button("打开 GitHub").clicked() {
+                    ui.label(fmt_l10n(lang, "lbl.device_code", &[&flow.user_code]));
+                    if ui.button(tr_l10n(lang, "btn.open_github")).clicked() {
                         let url = flow.verification_uri.clone();
                         std::thread::spawn(move || {
                             if let Err(error) = open_external(&url) {
@@ -3897,7 +4181,7 @@ mod linux_app {
                             }
                         });
                     }
-                    if ui.button("检查授权").clicked() {
+                    if ui.button(tr_l10n(lang, "btn.check_auth")).clicked() {
                         if let Some(backend) = self.backend() {
                             let tx = self.tx.clone();
                             let flow_id = flow.flow_id.clone();
@@ -3915,20 +4199,28 @@ mod linux_app {
                 });
             }
             if self.marketplace_items.is_empty() {
-                ui.label("尚未加载 Marketplace；点击“搜索/刷新”。");
+                ui.label(tr_l10n(lang, "marketplace.not_loaded"));
                 return;
             }
             if let Some(detail) = &self.marketplace_detail {
                 ui.group(|ui| {
-                    ui.heading(format!("详情：{}", detail.summary.name));
-                    ui.label(format!("状态：{}", detail.state));
+                    ui.heading(fmt_l10n(
+                        lang,
+                        "head.marketplace_detail",
+                        &[&detail.summary.name],
+                    ));
+                    ui.label(fmt_l10n(lang, "lbl.status_colon", &[&detail.state]));
                     ui.label(&detail.prompt);
                 });
             }
             if !self.marketplace_my_packs.is_empty() || !self.marketplace_my_likes.is_empty() {
                 ui.group(|ui| {
-                    ui.heading("我的 Marketplace");
-                    ui.label(format!("喜欢的风格：{}", self.marketplace_my_likes.len()));
+                    ui.heading(tr_l10n(lang, "head.marketplace_mine"));
+                    ui.label(fmt_l10n(
+                        lang,
+                        "lbl.liked",
+                        &[&self.marketplace_my_likes.len()],
+                    ));
                     for pack in &self.marketplace_my_packs {
                         ui.label(format!("{} · {}", pack.summary.name, pack.state));
                     }
@@ -3942,21 +4234,22 @@ mod linux_app {
                         ui.label(format!("@{} · {}", pack.author_login, pack.version));
                     });
                     ui.label(&pack.description);
-                    ui.label(format!(
-                        "喜欢 {} · 下载 {} · {}",
-                        pack.like_count, pack.download_count, pack.base_mode
+                    ui.label(fmt_l10n(
+                        lang,
+                        "lbl.like_dl",
+                        &[&pack.like_count, &pack.download_count, &pack.base_mode],
                     ));
                     ui.horizontal(|ui| {
-                        if ui.button("安装").clicked() {
+                        if ui.button(tr_l10n(lang, "btn.install")).clicked() {
                             action = Some((pack.id.clone(), "install"));
                         }
-                        if ui.button("喜欢/取消喜欢").clicked() {
+                        if ui.button(tr_l10n(lang, "btn.toggle_like")).clicked() {
                             action = Some((pack.id.clone(), "like"));
                         }
-                        if ui.button("详情").clicked() {
+                        if ui.button(tr_l10n(lang, "btn.detail")).clicked() {
                             action = Some((pack.id.clone(), "detail"));
                         }
-                        if ui.button("下载 ZIP").clicked() {
+                        if ui.button(tr_l10n(lang, "btn.download_zip")).clicked() {
                             action = Some((pack.id.clone(), "download"));
                         }
                     });
@@ -3973,7 +4266,9 @@ mod linux_app {
                                 .marketplace
                                 .install(id)
                                 .await
-                                .map(|pack| format!("已安装风格包：{}", pack.name))
+                                .map(|pack| {
+                                    fmt_l10n(lang, "status.marketplace_installed", &[&pack.name])
+                                })
                                 .map_err(|error| error.to_string());
                             let _ =
                                 tx.send(UiResult::Message(result.unwrap_or_else(|error| error)));
@@ -3981,7 +4276,9 @@ mod linux_app {
                         "like" => {
                             let result = backend.services().marketplace.toggle_like(id).await;
                             let message = result
-                                .map(|result| format!("喜欢数：{}", result.like_count))
+                                .map(|result| {
+                                    fmt_l10n(lang, "status.marketplace_like", &[&result.like_count])
+                                })
                                 .unwrap_or_else(|error| error.to_string());
                             let _ = tx.send(UiResult::Message(message));
                         }
@@ -4017,7 +4314,7 @@ mod linux_app {
                                 .ok_or_else(|| {
                                     BackendError::new(
                                         openless_core::BackendErrorCode::Cancelled,
-                                        "Marketplace 下载已取消",
+                                        tr_l10n(lang, "dialog.marketplace_zip_cancelled"),
                                     )
                                 })?;
                                 tokio::task::spawn_blocking(move || {
@@ -4036,7 +4333,9 @@ mod linux_app {
                                         error.to_string(),
                                     )
                                 })?;
-                                Ok::<_, BackendError>("Marketplace ZIP 已保存".to_string())
+                                Ok::<_, BackendError>(
+                                    tr_l10n(lang, "status.marketplace_zip_saved").to_string(),
+                                )
                             }
                             .await
                             .unwrap_or_else(|error| error.to_string());
@@ -4047,7 +4346,7 @@ mod linux_app {
                 });
             }
             ui.separator();
-            ui.heading("发布本地风格包");
+            ui.heading(tr_l10n(lang, "head.publish_local"));
             let mut local_action: Option<(String, Option<String>, &'static str)> = None;
             for pack in self
                 .style_packs
@@ -4056,7 +4355,7 @@ mod linux_app {
             {
                 ui.horizontal(|ui| {
                     ui.label(&pack.name);
-                    if ui.button("上传/更新").clicked() {
+                    if ui.button(tr_l10n(lang, "btn.upload_update")).clicked() {
                         local_action =
                             Some((pack.id.clone(), pack.origin_pack_id.clone(), "upload"));
                     }
@@ -4064,8 +4363,8 @@ mod linux_app {
             }
             for pack in &self.marketplace_my_packs {
                 ui.horizontal(|ui| {
-                    ui.label(format!("已发布：{}", pack.summary.name));
-                    if ui.button("删除发布").clicked() {
+                    ui.label(fmt_l10n(lang, "lbl.published", &[&pack.summary.name]));
+                    if ui.button(tr_l10n(lang, "btn.delete_publish")).clicked() {
                         local_action = Some((pack.summary.id.clone(), None, "delete"));
                     }
                 });
@@ -4075,11 +4374,15 @@ mod linux_app {
                     match operation {
                         "upload" => {
                             let result = backend.services().marketplace.upload(id, origin).await?;
-                            Ok(format!("发布状态：{} · {}", result.state, result.message))
+                            Ok(fmt_l10n(
+                                lang,
+                                "status.marketplace_published",
+                                &[&result.state, &result.message],
+                            ))
                         }
                         "delete" => {
                             backend.services().marketplace.delete(id).await?;
-                            Ok("Marketplace 发布已删除".to_string())
+                            Ok(tr_l10n(lang, "status.marketplace_deleted").to_string())
                         }
                         _ => unreachable!(),
                     }
@@ -4088,15 +4391,16 @@ mod linux_app {
         }
 
         fn history_ui(&mut self, ui: &mut egui::Ui) {
-            ui.heading("历史");
+            let lang = self.lang;
+            ui.heading(tr_l10n(lang, "nav.history"));
             ui.horizontal(|ui| {
-                ui.label("搜索");
+                ui.label(tr_l10n(lang, "lbl.search"));
                 ui.text_edit_singleline(&mut self.history_search);
-                if ui.button("清空全部").clicked() {
+                if ui.button(tr_l10n(lang, "btn.clear_all")).clicked() {
                     if let Some(backend) = self.backend() {
                         self.spawn(async move {
                             backend.clear_history()?;
-                            Ok("历史已清空".to_string())
+                            Ok(tr_l10n(lang, "status.history_cleared").to_string())
                         });
                     }
                 }
@@ -4106,7 +4410,7 @@ mod linux_app {
             };
             match backend.list_history() {
                 Ok(history) if history.is_empty() => {
-                    ui.label("暂无历史记录");
+                    ui.label(tr_l10n(lang, "history.empty"));
                 }
                 Ok(history) => {
                     let query = self.history_search.trim().to_lowercase();
@@ -4122,21 +4426,25 @@ mod linux_app {
                         .take(100)
                     {
                         let delivery = match item.insert_status {
-                            HistoryInsertStatus::Inserted => "已插入",
-                            HistoryInsertStatus::CopiedFallback => "已复制",
-                            HistoryInsertStatus::PasteSent => "已发送粘贴",
-                            HistoryInsertStatus::Failed => "失败",
-                            HistoryInsertStatus::NotRequested => "未请求插入",
+                            HistoryInsertStatus::Inserted => tr_l10n(lang, "history.inserted"),
+                            HistoryInsertStatus::CopiedFallback => {
+                                tr_l10n(lang, "history.copied_fallback")
+                            }
+                            HistoryInsertStatus::PasteSent => tr_l10n(lang, "history.paste_sent"),
+                            HistoryInsertStatus::Failed => tr_l10n(lang, "history.failed"),
+                            HistoryInsertStatus::NotRequested => {
+                                tr_l10n(lang, "history.not_requested")
+                            }
                         };
                         egui::Frame::group(ui.style()).show(ui, |ui| {
                             ui.label(format!("{} · {}", item.created_at, delivery));
                             ui.label(&item.final_text);
                             ui.horizontal(|ui| {
-                                if ui.small_button("复制").clicked() {
+                                if ui.small_button(tr_l10n(lang, "btn.copy")).clicked() {
                                     action =
                                         Some((item.id.clone(), "copy", item.final_text.clone()));
                                 }
-                                if ui.small_button("重新润色").clicked() {
+                                if ui.small_button(tr_l10n(lang, "btn.repolish")).clicked() {
                                     action = Some((
                                         item.id.clone(),
                                         "repolish",
@@ -4144,18 +4452,25 @@ mod linux_app {
                                     ));
                                 }
                                 if item.has_audio_recording == Some(true) {
-                                    if ui.small_button("播放录音").clicked() {
+                                    if ui
+                                        .small_button(tr_l10n(lang, "btn.play_recording"))
+                                        .clicked()
+                                    {
                                         action = Some((item.id.clone(), "play", String::new()));
                                     }
-                                    if ui.small_button("导出录音").clicked() {
+                                    if ui
+                                        .small_button(tr_l10n(lang, "btn.export_recording"))
+                                        .clicked()
+                                    {
                                         action = Some((item.id.clone(), "export", String::new()));
                                     }
-                                    if ui.small_button("重新转写").clicked() {
+                                    if ui.small_button(tr_l10n(lang, "btn.retranscribe")).clicked()
+                                    {
                                         action =
                                             Some((item.id.clone(), "retranscribe", String::new()));
                                     }
                                 }
-                                if ui.small_button("删除").clicked() {
+                                if ui.small_button(tr_l10n(lang, "btn.delete")).clicked() {
                                     action = Some((item.id.clone(), "delete", String::new()));
                                 }
                             });
@@ -4167,8 +4482,12 @@ mod linux_app {
                             "copy" => match arboard::Clipboard::new()
                                 .and_then(|mut clipboard| clipboard.set_text(text))
                             {
-                                Ok(()) => self.status = "历史文本已复制".to_string(),
-                                Err(error) => self.status = format!("复制失败：{error}"),
+                                Ok(()) => {
+                                    self.status = tr_l10n(lang, "status.history_copied").to_string()
+                                }
+                                Err(error) => {
+                                    self.status = fmt_l10n(lang, "status.copy_failed", &[&error])
+                                }
                             },
                             "repolish" => {
                                 let service = Arc::clone(&backend.services().auxiliary);
@@ -4180,12 +4499,12 @@ mod linux_app {
                                             front_app: None,
                                         })
                                         .await?;
-                                    Ok(format!("重新润色完成：{polished}"))
+                                    Ok(fmt_l10n(lang, "status.repolish_done", &[&polished]))
                                 });
                             }
                             "delete" => self.spawn(async move {
                                 backend.delete_history(&id)?;
-                                Ok("历史记录已删除".to_string())
+                                Ok(tr_l10n(lang, "status.history_deleted").to_string())
                             }),
                             "play" => {
                                 let data_dir = backend.config().data_dir.clone();
@@ -4213,7 +4532,7 @@ mod linux_app {
                                             error.to_string(),
                                         )
                                     })?;
-                                    Ok("已交给系统播放器".to_string())
+                                    Ok(tr_l10n(lang, "status.opened_player").to_string())
                                 });
                             }
                             "export" => {
@@ -4236,7 +4555,7 @@ mod linux_app {
                                     .ok_or_else(|| {
                                         BackendError::new(
                                             openless_core::BackendErrorCode::Cancelled,
-                                            "录音导出已取消",
+                                            tr_l10n(lang, "dialog.recording_export_cancelled"),
                                         )
                                     })?;
                                     let wav = tokio::task::spawn_blocking(move || {
@@ -4271,7 +4590,11 @@ mod linux_app {
                                             error.to_string(),
                                         )
                                     })?;
-                                    Ok(format!("录音已导出：{}", saved.display()))
+                                    Ok(fmt_l10n(
+                                        lang,
+                                        "status.recording_exported",
+                                        &[&saved.display()],
+                                    ))
                                 });
                             }
                             "retranscribe" => {
@@ -4318,7 +4641,7 @@ mod linux_app {
                                         &result.asr,
                                         started.elapsed().as_millis() as u64,
                                     )?;
-                                    Ok(format!("重新转写完成：{}", entry.final_text))
+                                    Ok(fmt_l10n(lang, "status.retranscribed", &[&entry.final_text]))
                                 });
                             }
                             _ => unreachable!(),
@@ -4370,19 +4693,20 @@ mod linux_app {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
             }
             if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+                let lang = self.lang;
                 if let Some(backend) = self.backend() {
                     self.spawn(async move {
                         backend.cancel_active_voice_session(None).await?;
-                        Ok("语音会话已取消".to_string())
+                        Ok(tr_l10n(lang, "voice.cancelled").to_string())
                     });
                 }
             }
             shell::titlebar(ctx);
-            shell::sidebar(ctx, &mut self.active_page, &self.status);
+            shell::sidebar(ctx, &mut self.active_page, &self.status, self.lang);
             let active_page = self.active_page;
-            shell::content_panel(ctx, active_page, |ui| {
+            shell::content_panel(ctx, active_page, self.lang, |ui| {
                 if let Some(error) = &self.startup_error {
-                    ui.heading("启动失败");
+                    ui.heading(tr_l10n(self.lang, "status.startup_failed"));
                     ui.colored_label(egui::Color32::RED, error);
                     return;
                 }
@@ -4416,6 +4740,18 @@ mod linux_app {
             if let Some(native) = self.native.take() {
                 let _ = self.tokio.block_on(native.shutdown());
             }
+        }
+    }
+
+    /// Map a concrete UI language to its display-name catalog key, shown in
+    /// that language's own native script regardless of the current UI language.
+    fn locale_key(lang: Lang) -> &'static str {
+        match lang {
+            Lang::ZhCn => "lang.zh-CN",
+            Lang::ZhTw => "lang.zh-TW",
+            Lang::En => "lang.en",
+            Lang::Ja => "lang.ja",
+            Lang::Ko => "lang.ko",
         }
     }
 
@@ -4481,20 +4817,24 @@ mod linux_app {
         )
     }
 
-    fn auth_requirement_label(requirement: openless_core::AuthRequirement) -> &'static str {
-        match requirement {
-            openless_core::AuthRequirement::None => "无需 Secret",
-            openless_core::AuthRequirement::ApiKey => "API Key",
+    fn auth_requirement_label(
+        lang: Lang,
+        requirement: openless_core::AuthRequirement,
+    ) -> &'static str {
+        let key = match requirement {
+            openless_core::AuthRequirement::None => "auth.none",
+            openless_core::AuthRequirement::ApiKey => "auth.api_key",
             openless_core::AuthRequirement::EndpointModelOptionalApiKey => {
-                "Endpoint + Model，API Key 可选"
+                "auth.endpoint_model_optional"
             }
             openless_core::AuthRequirement::ApiKeyUnlessCustomEndpoint => {
-                "公共 Endpoint 需要 API Key；自建 Endpoint 可无 Key"
+                "auth.api_key_unless_custom"
             }
-            openless_core::AuthRequirement::Volcengine => "火山引擎凭据",
-            openless_core::AuthRequirement::Xfyun => "讯飞 AppID + API Key",
-            openless_core::AuthRequirement::OAuth => "OAuth",
-        }
+            openless_core::AuthRequirement::Volcengine => "auth.volcengine",
+            openless_core::AuthRequirement::Xfyun => "auth.xfyun",
+            openless_core::AuthRequirement::OAuth => "auth.oauth",
+        };
+        tr_l10n(lang, key)
     }
 
     fn provider_channel_descriptor(
@@ -4593,16 +4933,16 @@ mod linux_app {
         });
     }
 
-    fn provider_fields_ui(ui: &mut egui::Ui, editor: &mut ProviderEditor) {
+    fn provider_fields_ui(ui: &mut egui::Ui, lang: Lang, editor: &mut ProviderEditor) {
         // This match chooses which input controls to render; it does not decide
         // whether credentials are sufficient. ProviderService validates the
         // descriptor's AuthRequirement again before any protocol request.
         match editor.descriptor.auth_requirement {
             openless_core::AuthRequirement::None => {
-                ui.label("此 Provider 不使用云凭据；模型由本地模型面板管理。");
+                ui.label(tr_l10n(lang, "providers.no_cloud_note"));
             }
             openless_core::AuthRequirement::OAuth => {
-                ui.label("此 Provider 使用 OAuth；Linux egui 不读取或显示 OAuth token。");
+                ui.label(tr_l10n(lang, "providers.oauth_note"));
             }
             openless_core::AuthRequirement::Volcengine => {
                 egui::ComboBox::from_id_salt("volcengine-auth-mode")
@@ -4639,7 +4979,11 @@ mod linux_app {
                 secret_edit(ui, "API Key", &mut editor.secondary_secret);
             }
             _ => {
-                secret_edit(ui, "API Key（留空表示不修改）", &mut editor.primary_secret);
+                secret_edit(
+                    ui,
+                    tr_l10n(lang, "providers.api_key_hint"),
+                    &mut editor.primary_secret,
+                );
                 ui.horizontal(|ui| {
                     ui.label("Endpoint");
                     ui.text_edit_singleline(&mut editor.endpoint);
@@ -4834,6 +5178,7 @@ mod linux_app {
     }
 
     async fn validate_provider_channel(
+        lang: Lang,
         backend: Arc<openless_core::OpenLessBackend>,
         kind: openless_core::ChannelKind,
         channel_id: String,
@@ -4853,7 +5198,7 @@ mod linux_app {
                 backend
                     .record_channel_test(kind, channel_id, true, Some(latency_ms), None)
                     .await?;
-                Ok(format!("Provider 验证通过（{latency_ms} ms）"))
+                Ok(fmt_l10n(lang, "status.provider_validated", &[&latency_ms]))
             }
             Err(error) => {
                 let _ = backend
@@ -4905,12 +5250,15 @@ mod linux_app {
 
     fn optional_shortcut_editor(
         ui: &mut egui::Ui,
+        lang: Lang,
         label: &str,
         binding: &mut Option<openless_core::shared_types::ShortcutBinding>,
         default_primary: &str,
     ) -> bool {
         let mut enabled = binding.is_some();
-        let mut changed = ui.checkbox(&mut enabled, format!("启用{label}")).changed();
+        let mut changed = ui
+            .checkbox(&mut enabled, fmt_l10n(lang, "hotkey.enable", &[&label]))
+            .changed();
         if enabled && binding.is_none() {
             *binding = Some(openless_core::shared_types::ShortcutBinding {
                 primary: default_primary.to_string(),
@@ -5031,6 +5379,7 @@ mod linux_app {
         outgoing_sequence: u64,
         ready_sent: bool,
         preview_focus_requested: bool,
+        lang: Lang,
     }
 
     impl NativePopupApp {
@@ -5289,6 +5638,7 @@ mod linux_app {
                 self.dismiss(ctx);
                 return;
             }
+            let lang = self.lang;
             egui::CentralPanel::default()
                 .frame(
                     egui::Frame::NONE
@@ -5298,7 +5648,7 @@ mod linux_app {
                 )
                 .show(ctx, |ui| match self.kind {
                     PopupKind::Preview => {
-                        popup_heading(ui, "插入预览");
+                        popup_heading(ui, tr_l10n(lang, "heading.insert_preview"));
                         ui.label(&self.state.preview.source);
                         let editor = ui.add(
                             egui::TextEdit::multiline(&mut self.state.preview.text)
@@ -5310,10 +5660,10 @@ mod linux_app {
                             self.preview_focus_requested = true;
                         }
                         ui.horizontal(|ui| {
-                            if ui.button("取消").clicked() {
+                            if ui.button(tr_l10n(lang, "btn.cancel")).clicked() {
                                 self.dismiss(ctx);
                             }
-                            if ui.button("插入").clicked() {
+                            if ui.button(tr_l10n(lang, "btn.insert")).clicked() {
                                 if let Some(session_id) = self.session_id() {
                                     let sequence = self.next_sequence();
                                     self.send(PopupToHost::ConfirmPreview {
@@ -5328,7 +5678,7 @@ mod linux_app {
                         });
                     }
                     PopupKind::Qa => {
-                        popup_heading(ui, "划词追问");
+                        popup_heading(ui, tr_l10n(lang, "heading.qa_preview"));
                         if let Some(selection) = &self.state.qa.selection_preview {
                             ui.label(egui::RichText::new(selection).italics().color(theme::INK_3));
                         }
@@ -5348,14 +5698,14 @@ mod linux_app {
                             });
                         let input = ui.text_edit_singleline(&mut self.qa_input);
                         ui.horizontal(|ui| {
-                            if ui.button("关闭").clicked() {
+                            if ui.button(tr_l10n(lang, "btn.close")).clicked() {
                                 self.dismiss(ctx);
                             }
                             if ui
                                 .button(if self.state.qa.phase == "Recording" {
-                                    "停止录音"
+                                    tr_l10n(lang, "btn.stop_recording")
                                 } else {
-                                    "语音提问"
+                                    tr_l10n(lang, "btn.voice_ask")
                                 })
                                 .clicked()
                             {
@@ -5368,7 +5718,7 @@ mod linux_app {
                                     });
                                 }
                             }
-                            let submit = ui.button("发送").clicked()
+                            let submit = ui.button(tr_l10n(lang, "btn.send")).clicked()
                                 || (input.lost_focus()
                                     && ui.input(|state| state.key_pressed(egui::Key::Enter)));
                             if submit && !self.qa_input.trim().is_empty() {
@@ -5479,6 +5829,9 @@ mod linux_app {
                     outgoing_sequence: 0,
                     ready_sent: false,
                     preview_focus_requested: false,
+                    // The popup is a separate process, so it re-reads the
+                    // persisted UI-locale preference rather than sharing state.
+                    lang: load_locale_pref().resolve(),
                 }))
             }),
         )
