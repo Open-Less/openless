@@ -148,6 +148,8 @@ mod linux_app {
                 merged.hotkey.mode = draft.hotkey.mode;
                 merged.silence_auto_stop_enabled = draft.silence_auto_stop_enabled;
                 merged.silence_auto_stop_seconds = draft.silence_auto_stop_seconds;
+                merged.mute_during_recording = draft.mute_during_recording;
+                merged.audio_cue_on_record = draft.audio_cue_on_record;
             }
             if self.microphone {
                 merged.microphone_device_name = draft.microphone_device_name.clone();
@@ -582,6 +584,7 @@ mod linux_app {
         transcript: String,
         transcript_state: TranscriptAccumulator,
         transcript_session: Option<openless_core::SessionId>,
+        recording_phase_active: bool,
         last_event_sequence: u64,
         less_computer_input: String,
         less_computer_output: String,
@@ -671,6 +674,7 @@ mod linux_app {
                         transcript: String::new(),
                         transcript_state: TranscriptAccumulator::default(),
                         transcript_session: None,
+                        recording_phase_active: false,
                         last_event_sequence: 0,
                         less_computer_input: String::new(),
                         less_computer_output: String::new(),
@@ -753,6 +757,7 @@ mod linux_app {
                     transcript: String::new(),
                     transcript_state: TranscriptAccumulator::default(),
                     transcript_session: None,
+                    recording_phase_active: false,
                     last_event_sequence: 0,
                     less_computer_input: String::new(),
                     less_computer_output: String::new(),
@@ -1487,6 +1492,38 @@ mod linux_app {
             });
         }
 
+        /// Play the native recording start/stop cue on a worker thread, gated by
+        /// the `audio_cue_on_record` preference. The start cue is additionally
+        /// suppressed while `mute_during_recording` is active: playing into a
+        /// deliberately muted sink is both inaudible and a needless PipeWire/
+        /// KDE sink-input blip. The stop cue plays after output has been
+        /// restored. Absent preferences default to Core's defaults (cue on,
+        /// mute off).
+        fn play_record_cue(&self, at_start: bool) {
+            let enabled = self
+                .preferences
+                .as_ref()
+                .map(|prefs| prefs.audio_cue_on_record)
+                .unwrap_or(true);
+            if !enabled {
+                return;
+            }
+            if at_start
+                && self
+                    .preferences
+                    .as_ref()
+                    .map(|prefs| prefs.mute_during_recording)
+                    .unwrap_or(false)
+            {
+                return;
+            }
+            if at_start {
+                openless_linux_egui::play_cue_start();
+            } else {
+                openless_linux_egui::play_cue_stop();
+            }
+        }
+
         fn apply_event(&mut self, event: BackendEvent) {
             if event.sequence <= self.last_event_sequence {
                 return;
@@ -1496,6 +1533,17 @@ mod linux_app {
             let session_id = event.session_id;
             match event.kind {
                 BackendEventKind::DictationStateChanged(state) => {
+                    // Native start/stop audio cues are a Linux host effect (no
+                    // webview to synthesize them), gated by `audio_cue_on_record`
+                    // and muted-aware. They must never block this frame, so the
+                    // cue module plays on its own worker thread.
+                    let was_recording = self.recording_phase_active;
+                    self.recording_phase_active = state.phase == DictationPhase::Recording;
+                    if state.phase == DictationPhase::Recording && !was_recording {
+                        self.play_record_cue(true);
+                    } else if !self.recording_phase_active && was_recording {
+                        self.play_record_cue(false);
+                    }
                     if state.phase == DictationPhase::Starting {
                         self.transcript_state = TranscriptAccumulator::default();
                         self.transcript.clear();
@@ -2970,6 +3018,18 @@ mod linux_app {
                         });
                     self.settings_dirty.microphone |=
                         preferences.microphone_device_name != previous_microphone;
+                    self.settings_dirty.recording |= ui
+                        .checkbox(
+                            &mut preferences.mute_during_recording,
+                            "录音期间暂时静音系统声音",
+                        )
+                        .changed();
+                    self.settings_dirty.recording |= ui
+                        .checkbox(
+                            &mut preferences.audio_cue_on_record,
+                            "录音开始/结束播放提示音",
+                        )
+                        .changed();
                 });
                 ui.collapsing("外观", |ui| {
                     let previous_theme = preferences.theme_mode;
@@ -5697,6 +5757,8 @@ mod linux_app {
             draft.hotkey.mode = openless_core::shared_types::HotkeyMode::Auto;
             draft.silence_auto_stop_enabled = true;
             draft.silence_auto_stop_seconds = 1.5;
+            draft.mute_during_recording = true;
+            draft.audio_cue_on_record = false;
             draft.microphone_device_name = "USB microphone".into();
             draft.theme_mode = openless_core::shared_types::ThemeMode::Dark;
             draft.show_overview_activity_heatmap = false;
@@ -5713,6 +5775,8 @@ mod linux_app {
             assert_eq!(merged.hotkey.mode, draft.hotkey.mode);
             assert!(merged.silence_auto_stop_enabled);
             assert_eq!(merged.silence_auto_stop_seconds, 1.5);
+            assert!(merged.mute_during_recording);
+            assert!(!merged.audio_cue_on_record);
             assert_eq!(merged.microphone_device_name, "USB microphone");
             assert_eq!(
                 merged.theme_mode,

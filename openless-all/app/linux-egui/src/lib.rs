@@ -6,6 +6,8 @@
 //! added without making the core depend on egui or Tauri.
 
 mod audio;
+mod audio_cue;
+mod audio_mute;
 mod backend;
 mod capabilities;
 mod coding_agent;
@@ -29,6 +31,8 @@ mod tray;
 mod updater;
 
 pub use audio::LinuxCpalRecorder;
+pub use audio_cue::{play_cue_start, play_cue_stop, CueTone};
+pub use audio_mute::AudioMuteGuard;
 pub use backend::{LinuxBackendBuilder, LinuxBackendRuntime};
 pub use capabilities::{LinuxCapabilitySnapshot, LinuxDesktopSession, LinuxPlatformApi};
 pub use credentials::LinuxCredentialStore;

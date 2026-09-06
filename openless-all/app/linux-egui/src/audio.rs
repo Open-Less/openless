@@ -44,6 +44,9 @@ impl AudioRecorder for LinuxCpalRecorder {
             .microphone_device_name
             .clone()
             .or_else(|| self.preferred_device_name.clone());
+        // Platform effect, applied by the host recorder exactly like the Tauri
+        // audio adapter. Never owned by Core; restore is the guard's Drop.
+        let mute_during_recording = context.recording.mute_during_recording;
         let recordings_dir = self.recordings_dir.clone();
         Box::pin(async move {
             #[cfg(target_os = "linux")]
@@ -53,6 +56,7 @@ impl AudioRecorder for LinuxCpalRecorder {
                         session_id,
                         preferred_device_name,
                         recordings_dir,
+                        mute_during_recording,
                         consumer,
                         progress,
                     )
@@ -83,6 +87,20 @@ struct LinuxActiveRecording {
     thread: Option<std::thread::JoinHandle<()>>,
     runtime_error: Arc<std::sync::Mutex<Option<BackendError>>>,
     archive: Option<Arc<LinuxRecordingArchive>>,
+    /// Holds the output-mute guard while capture is live. Its `Drop` restores
+    /// the sink on every terminal path (stop/cancel/error/drop/shutdown).
+    mute: Option<crate::audio_mute::AudioMuteGuard>,
+}
+
+impl Drop for LinuxActiveRecording {
+    fn drop(&mut self) {
+        // Taking the guard here forces the field to be consumed (and therefore
+        // restored) even if `stop()` is never reached — e.g. the handle is
+        // dropped directly on an early error or during Core shutdown before it
+        // had a chance to call stop. Double restore is harmless because Drop
+        // of an already-taken guard is a no-op.
+        self.mute.take();
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -175,11 +193,26 @@ fn start_linux_recording(
     session_id: SessionId,
     preferred_device_name: Option<String>,
     recordings_dir: Option<std::path::PathBuf>,
+    mute_during_recording: bool,
     consumer: Arc<dyn AudioConsumer>,
     progress: Arc<dyn RecordingProgressSink>,
 ) -> Result<Box<dyn ActiveRecording>, BackendError> {
     use std::sync::atomic::AtomicBool;
 
+    // Mute is best-effort and independent of capture availability (mirrors the
+    // Tauri reference): if it fails we log and continue recording. If capture
+    // later fails on this path, the guard drops here and restores the sink.
+    let mute = if mute_during_recording {
+        match crate::audio_mute::AudioMuteGuard::activate() {
+            Ok(guard) => Some(guard),
+            Err(error) => {
+                log::warn!("[audio-mute] failed to mute output; capture continues: {error}");
+                None
+            }
+        }
+    } else {
+        None
+    };
     let stop = Arc::new(AtomicBool::new(false));
     let runtime_error = Arc::new(std::sync::Mutex::new(None));
     let (startup_tx, startup_rx) = std::sync::mpsc::sync_channel(1);
@@ -225,13 +258,16 @@ fn start_linux_recording(
             thread: Some(thread),
             runtime_error,
             archive,
+            mute,
         })),
         Ok(Err(error)) => {
             let _ = thread.join();
+            // `mute` is dropped on the error path, restoring the sink.
             Err(error)
         }
         Err(error) => {
             let _ = thread.join();
+            // `mute` is dropped on the error path, restoring the sink.
             Err(BackendError::new(
                 BackendErrorCode::Platform,
                 format!("Linux recorder thread exited during startup: {error}"),

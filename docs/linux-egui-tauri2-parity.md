@@ -14,6 +14,11 @@ Windows, macOS, and Android remain on Tauri.
   strict collision checks and survive fcitx5 restart
 - CPAL recording with canonical WAV archives, Core retention policy, history
   playback/export and failed-session retranscription
+- Native `mute_during_recording` (PipeWire `wpctl`/PulseAudio `pactl`) with
+  guaranteed sink restore by RAII across stop/cancel/error/drop/shutdown
+- Native recording start/stop audio cues synthesized to the default sink on a
+  worker thread (never blocking the egui frame), gated by `audio_cue_on_record`
+  and muted-aware (`audio_mute`/`audio_cue` modules)
 - Core-backed history search/delete/clear/copy/re-polish/retranscribe, vocabulary,
   pending corrections, shared vocabulary presets, correction rules, and complete
   style-pack CRUD/reset/prompt diagnostics/ZIP import-export/direct hotkeys
@@ -54,10 +59,18 @@ Windows, macOS, and Android remain on Tauri.
   polish and QA remain available.
 - Generic Qwen is the Linux local runtime. Windows Foundry and Apple MLX are not
   Linux parity requirements.
-- Foreground-application context, native post-insertion edit observation, system
-  mute/restore, and start/stop sounds are not claimed by this stack. They remain
-  explicit follow-up host-adapter work from PR #1019's L02/L03 register, rather
-  than simulated UI data or false capabilities.
+- Foreground-application identity and native post-insertion edit observation
+  are explicit `Unsupported` on Linux: fcitx5 exposes surrounding text but no
+  reliable app/control identity across X11/Wayland, PRIMARY cannot prove an
+  original selection, and there is deliberately no IBus/global-hotkey fallback.
+  The factory keeps Core's Noop HostContext/EditObservation adapters (reporting
+  `source_app = None`) instead of faking edits. These are L02/L03 follow-ups,
+  not simulated UI data or false capabilities.
+- Mute/restore and start/stop cues are implemented (`audio_mute`/`audio_cue`),
+  but the cpal cue-playback and real sink mute/restore paths still require
+  X11/Wayland device runs before being recorded as verified; a Linux output
+  stream is a PipeWire/KDE sink-input, so device evidence must confirm the cue
+  does not disturb the session or trigger unexpected volume OSD.
 - X11 and Wayland device runs are still required for focus, Unicode insertion,
   popup positioning, tray, fcitx5 reload/rebind, microphone unplug/recovery,
   Secret Service, real phone Remote Input, real Qwen inference, and signed
