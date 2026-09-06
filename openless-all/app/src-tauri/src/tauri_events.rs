@@ -17,16 +17,27 @@ pub fn start(app: AppHandle, backend: Arc<OpenLessBackend>) {
     let mut events = backend.subscribe();
     let backend_for_events = Arc::clone(&backend);
     tauri::async_runtime::spawn(async move {
+        // Only a native-transcription notice needs this temporary display
+        // owner. Normal capsule events retain their existing lifecycle.
+        let mut transcription_notice_owner = None;
         loop {
             match events.recv().await {
                 Ok(event) => {
                     let _ = app.emit("backend:event", &event);
-                    forward_legacy_event(&app, &backend_for_events, event.kind);
+                    forward_legacy_event(
+                        &app,
+                        &backend_for_events,
+                        event.session_id,
+                        event.kind,
+                        &mut transcription_notice_owner,
+                    )
+                    .await;
                 }
                 Err(EventRecvError::Lagged(dropped)) => {
                     log::warn!(
                         "[core-events] Tauri bridge lagged by {dropped} event(s); resyncing snapshots"
                     );
+                    transcription_notice_owner = None;
                     emit_resync(&app, &backend_for_events).await;
                 }
                 Err(EventRecvError::Closed) => break,
@@ -71,7 +82,13 @@ pub(crate) fn publish<R: tauri::Runtime>(
     backend.event_publisher().publish(session_id, kind);
 }
 
-fn forward_legacy_event(app: &AppHandle, backend: &OpenLessBackend, kind: BackendEventKind) {
+async fn forward_legacy_event(
+    app: &AppHandle,
+    backend: &OpenLessBackend,
+    session_id: Option<SessionId>,
+    kind: BackendEventKind,
+    transcription_notice_owner: &mut Option<SessionId>,
+) {
     match kind {
         BackendEventKind::PreferencesChanged(_) => emit_preferences(app, backend),
         BackendEventKind::CredentialsChanged(status) => {
@@ -83,10 +100,12 @@ fn forward_legacy_event(app: &AppHandle, backend: &OpenLessBackend, kind: Backen
             let _ = app.emit("vocab:updated", ());
         }
         BackendEventKind::DictationStateChanged(snapshot) => {
+            *transcription_notice_owner = None;
             emit_dictation_state(app, backend, snapshot)
         }
         BackendEventKind::TranscriptDelta(_) => {}
         BackendEventKind::DictationCompleted(result) => {
+            *transcription_notice_owner = None;
             if let Some(coordinator) = app.try_state::<Arc<crate::coordinator::Coordinator>>() {
                 let message = match &result.inserted {
                     openless_core::DictationInsertStatus::Inserted => "已输入",
@@ -160,6 +179,7 @@ fn forward_legacy_event(app: &AppHandle, backend: &OpenLessBackend, kind: Backen
                     if let Some(coordinator) =
                         app.try_state::<Arc<crate::coordinator::Coordinator>>()
                     {
+                        *transcription_notice_owner = None;
                         use openless_core::LessComputerVoicePhase;
                         let state = match phase {
                             LessComputerVoicePhase::Starting
@@ -233,7 +253,44 @@ fn forward_legacy_event(app: &AppHandle, backend: &OpenLessBackend, kind: Backen
             );
         }
         BackendEventKind::QaState(state) => {
+            // QA uses Loading for ASR and Thinking for its LLM. Its ordinary
+            // events only update the chat panel, so explicitly retire a CPU
+            // download notice when this same turn leaves transcription.
+            if finish_qa_transcription_notice(transcription_notice_owner, session_id, state.kind) {
+                emit_dictation_state(app, backend, DictationStateSnapshot::default());
+            }
             let _ = app.emit_to(crate::coordinator::qa_event_target(), "qa:state", state);
+        }
+        BackendEventKind::Notification(notice) => {
+            let qa = backend.services().qa.snapshot().await.ok();
+            let less_voice = backend
+                .event_publisher()
+                .latest_less_computer_voice_state()
+                .filter(|event| {
+                    matches!(&event.kind,
+                    openless_core::LessComputerEventKind::VoiceState { session_id, .. }
+                        if backend.less_computer_active_session() == Some(*session_id))
+                });
+            // Recheck the current owner after awaiting QA. A queued callback
+            // from a cancelled native operation must not replace a new capsule.
+            if let Some(payload) = transcription_notice_payload(
+                session_id,
+                &notice.message,
+                &backend.snapshot().dictation,
+                qa.as_ref(),
+                less_voice.as_ref(),
+                backend.get_preferences().capsule_style,
+            ) {
+                if let Some(coordinator) = app.try_state::<Arc<crate::coordinator::Coordinator>>() {
+                    coordinator.present_core_capsule(payload);
+                    *transcription_notice_owner = session_id;
+                }
+            }
+        }
+        BackendEventKind::BackendStopping => {
+            if transcription_notice_owner.take().is_some() {
+                emit_dictation_state(app, backend, DictationStateSnapshot::default());
+            }
         }
         BackendEventKind::RemoteInputStatusChanged(status) => {
             let _ = app.emit("remote-input:running", status);
@@ -250,7 +307,6 @@ fn forward_legacy_event(app: &AppHandle, backend: &OpenLessBackend, kind: Backen
         // These domains either have no legacy push event or require a
         // window-specific payload that remains owned by the compatibility host.
         BackendEventKind::BackendStarted
-        | BackendEventKind::BackendStopping
         | BackendEventKind::SelectionStateChanged(_)
         | BackendEventKind::SelectionVoiceStateChanged(_)
         | BackendEventKind::PolishDelta(_)
@@ -258,8 +314,7 @@ fn forward_legacy_event(app: &AppHandle, backend: &OpenLessBackend, kind: Backen
         | BackendEventKind::StylePacksChanged(_)
         | BackendEventKind::DownloadProgress(_)
         | BackendEventKind::PermissionChanged(_)
-        | BackendEventKind::HotkeyStatusChanged(_)
-        | BackendEventKind::Notification(_) => {}
+        | BackendEventKind::HotkeyStatusChanged(_) => {}
     }
 }
 
@@ -342,6 +397,74 @@ fn emit_preferences(app: &AppHandle, backend: &OpenLessBackend) {
     let _ = app.emit("prefs:changed", &preferences);
 }
 
+fn transcription_notice_payload(
+    session_id: Option<SessionId>,
+    message: &str,
+    dictation: &DictationStateSnapshot,
+    qa: Option<&QaSnapshot>,
+    less_voice: Option<&openless_core::LessComputerEvent>,
+    style: CapsuleStyle,
+) -> Option<CapsulePayload> {
+    let session_id = session_id?;
+    if message.trim().is_empty() {
+        return None;
+    }
+    let (elapsed_ms, operating) = if dictation.phase != DictationPhase::Idle {
+        if dictation.session_id != Some(session_id)
+            || dictation.phase != DictationPhase::Transcribing
+        {
+            return None;
+        }
+        (dictation.elapsed_ms, false)
+    } else if let Some(openless_core::LessComputerEvent {
+        kind:
+            openless_core::LessComputerEventKind::VoiceState {
+                session_id: owner,
+                phase,
+                elapsed_ms,
+                ..
+            },
+        ..
+    }) = less_voice
+    {
+        if *owner != session_id || *phase != openless_core::LessComputerVoicePhase::Transcribing {
+            return None;
+        }
+        (*elapsed_ms, true)
+    } else {
+        let qa = qa?;
+        if qa.session_id != Some(session_id) || qa.phase != openless_core::QaPhase::Thinking {
+            return None;
+        }
+        (0, false)
+    };
+    Some(CapsulePayload {
+        state: CapsuleState::Transcribing,
+        level: 0.0,
+        elapsed_ms,
+        message: Some(message.to_string()),
+        inserted_chars: None,
+        translation: dictation.translation_active,
+        operating,
+        warming: false,
+        capsule_style: style,
+        selection_polish: false,
+    })
+}
+
+fn finish_qa_transcription_notice(
+    owner: &mut Option<SessionId>,
+    session_id: Option<SessionId>,
+    kind: openless_core::QaStateKind,
+) -> bool {
+    if owner.is_some() && *owner == session_id && kind != openless_core::QaStateKind::Loading {
+        *owner = None;
+        true
+    } else {
+        false
+    }
+}
+
 async fn emit_resync(app: &AppHandle, backend: &OpenLessBackend) {
     emit_preferences(app, backend);
     let snapshot = backend.snapshot();
@@ -365,8 +488,9 @@ async fn emit_resync(app: &AppHandle, backend: &OpenLessBackend) {
             None
         }
     };
+    let mut transcription_notice_owner = None;
     for kind in resync_domain_events(qa, remote_input) {
-        forward_legacy_event(app, backend, kind);
+        forward_legacy_event(app, backend, None, kind, &mut transcription_notice_owner).await;
     }
 }
 
@@ -391,6 +515,162 @@ fn resync_domain_events(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transcription_notice_projects_only_its_live_owner() {
+        let id = SessionId::new();
+        let stale = SessionId::new();
+        let mut dictation = DictationStateSnapshot {
+            session_id: Some(id),
+            phase: DictationPhase::Transcribing,
+            elapsed_ms: 123,
+            ..Default::default()
+        };
+        let payload = transcription_notice_payload(
+            Some(id),
+            "正在下载 CPU 模型，首次使用可能较慢…",
+            &dictation,
+            None,
+            None,
+            CapsuleStyle::Classic,
+        )
+        .expect("active Foundry notice must be displayed in the capsule");
+        assert_eq!(payload.state, CapsuleState::Transcribing);
+        assert_eq!(
+            payload.message.as_deref(),
+            Some("正在下载 CPU 模型，首次使用可能较慢…")
+        );
+        assert_eq!(payload.elapsed_ms, 123);
+        assert!(!payload.operating);
+        for session_id in [None, Some(stale)] {
+            assert!(transcription_notice_payload(
+                session_id,
+                "old",
+                &dictation,
+                None,
+                None,
+                CapsuleStyle::Classic
+            )
+            .is_none());
+        }
+        for phase in [
+            DictationPhase::Starting,
+            DictationPhase::Recording,
+            DictationPhase::Polishing,
+            DictationPhase::Completed,
+            DictationPhase::Cancelled,
+            DictationPhase::Failed,
+            DictationPhase::Idle,
+        ] {
+            dictation.phase = phase;
+            assert!(
+                transcription_notice_payload(
+                    Some(id),
+                    "old",
+                    &dictation,
+                    None,
+                    None,
+                    CapsuleStyle::Classic
+                )
+                .is_none(),
+                "{phase:?}"
+            );
+        }
+        let mut qa = QaSnapshot {
+            phase: openless_core::QaPhase::Thinking,
+            session_id: Some(id),
+            ..Default::default()
+        };
+        assert!(transcription_notice_payload(
+            Some(id),
+            "QA notice",
+            &dictation,
+            Some(&qa),
+            None,
+            CapsuleStyle::Classic
+        )
+        .is_some());
+        for phase in [
+            openless_core::QaPhase::Cancelled,
+            openless_core::QaPhase::Completed,
+            openless_core::QaPhase::Failed,
+            openless_core::QaPhase::Idle,
+        ] {
+            qa.phase = phase;
+            assert!(transcription_notice_payload(
+                Some(id),
+                "old",
+                &dictation,
+                Some(&qa),
+                None,
+                CapsuleStyle::Classic
+            )
+            .is_none());
+        }
+        let voice = openless_core::LessComputerEvent {
+            seq: Some(1),
+            kind: openless_core::LessComputerEventKind::VoiceState {
+                session_id: id,
+                phase: openless_core::LessComputerVoicePhase::Transcribing,
+                level: 0.0,
+                elapsed_ms: 456,
+            },
+        };
+        let payload = transcription_notice_payload(
+            Some(id),
+            "Less notice",
+            &dictation,
+            None,
+            Some(&voice),
+            CapsuleStyle::Classic,
+        )
+        .unwrap();
+        assert!(payload.operating);
+        assert_eq!(payload.elapsed_ms, 456);
+        dictation.phase = DictationPhase::Starting;
+        dictation.session_id = Some(stale);
+        assert!(transcription_notice_payload(
+            Some(id),
+            "old Less notice",
+            &dictation,
+            None,
+            Some(&voice),
+            CapsuleStyle::Classic
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn transcription_notice_is_cleared_when_qa_leaves_transcription() {
+        use openless_core::QaStateKind;
+        let id = SessionId::new();
+        for kind in [
+            QaStateKind::Thinking,
+            QaStateKind::Answer,
+            QaStateKind::Cancelled,
+            QaStateKind::Error,
+            QaStateKind::Idle,
+        ] {
+            let mut owner = Some(id);
+            assert!(!finish_qa_transcription_notice(
+                &mut owner,
+                Some(SessionId::new()),
+                kind
+            ));
+            assert!(!finish_qa_transcription_notice(
+                &mut owner,
+                Some(id),
+                QaStateKind::Loading
+            ));
+            assert_eq!(owner, Some(id));
+            assert!(
+                finish_qa_transcription_notice(&mut owner, Some(id), kind),
+                "{kind:?}"
+            );
+            assert_eq!(owner, None);
+            assert!(!finish_qa_transcription_notice(&mut owner, Some(id), kind));
+        }
+    }
 
     #[test]
     fn core_dictation_state_maps_to_the_legacy_capsule_contract() {

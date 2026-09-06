@@ -138,6 +138,7 @@ pub(crate) fn backend_dependencies(
     let native_asr: Arc<dyn TranscriptionEngine> = Arc::new(TauriNativeTranscriptionEngine::new(
         native_asr_dependencies,
         model_store.clone(),
+        Arc::clone(&backend),
     ));
     #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
     let _ = native_asr_dependencies;
@@ -443,15 +444,18 @@ impl openless_core::ModelRuntimeAdapter for TauriLocalAsrRuntimeAdapter {
             match settings.runtime {
                 openless_core::LocalAsrRuntime::Generic => {
                     #[cfg(target_os = "macos")]
-                    let mut loaded = qwen_cache.loaded_model_id();
+                    let loaded =
+                        if openless_core::LocalAsrModelId::from_wire_id(&settings.active_model)
+                            .is_some_and(openless_core::LocalAsrModelId::is_whisper)
+                        {
+                            whisper_cache.loaded_model_id()
+                        } else {
+                            qwen_cache.loaded_model_id()
+                        };
                     #[cfg(target_os = "linux")]
                     let loaded = qwen_cache.loaded_model_id();
                     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
                     let loaded: Option<String> = None;
-                    #[cfg(target_os = "macos")]
-                    if loaded.is_none() {
-                        loaded = whisper_cache.loaded_model_id();
-                    }
                     Ok(openless_core::LocalAsrRuntimeStatus {
                         runtime: settings.runtime,
                         provider_id: settings.provider_id,
@@ -701,11 +705,122 @@ impl openless_core::ModelRuntimeAdapter for TauriLocalAsrRuntimeAdapter {
         })
     }
 
+    fn claim_lease(&self, lease: openless_core::LocalAsrRuntimeLease) {
+        if lease.target.runtime != openless_core::LocalAsrRuntime::Generic {
+            return;
+        }
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        if native_local_asr_model(&lease.target).is_ok_and(|model| model.is_qwen()) {
+            self.native
+                .qwen_cache
+                .claim_lease(lease.target.model_id(), lease.generation);
+        }
+        #[cfg(target_os = "macos")]
+        if native_local_asr_model(&lease.target).is_ok_and(|model| model.is_whisper()) {
+            self.native
+                .whisper_cache
+                .claim_lease(lease.target.model_id(), lease.generation);
+        }
+    }
+
+    fn release_lease(
+        &self,
+        lease: openless_core::LocalAsrRuntimeLease,
+    ) -> BoxFuture<'static, Result<(), BackendError>> {
+        if lease.target.runtime != openless_core::LocalAsrRuntime::Generic {
+            return self.release(lease.target.runtime);
+        }
+        // Generic 在 macOS 下有两个独立 cache。由 cache 同锁校验模型及激活代次，
+        // 不能整体 release(Generic)，也不能先查询 ID 再清空以免释放新模型。
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        if native_local_asr_model(&lease.target).is_ok_and(|model| model.is_qwen()) {
+            self.native
+                .qwen_cache
+                .release_lease(lease.target.model_id(), lease.generation);
+        }
+        #[cfg(target_os = "macos")]
+        if native_local_asr_model(&lease.target).is_ok_and(|model| model.is_whisper()) {
+            self.native
+                .whisper_cache
+                .release_lease(lease.target.model_id(), lease.generation);
+        }
+        Box::pin(async { Ok(()) })
+    }
+
     fn preload(
         &self,
         target: openless_core::LocalAsrTarget,
         model_dir: PathBuf,
         provider_type: String,
+    ) -> BoxFuture<'static, Result<(), BackendError>> {
+        self.preload_for_lease(target, model_dir, provider_type, None)
+    }
+
+    fn preload_lease(
+        &self,
+        lease: openless_core::LocalAsrRuntimeLease,
+        model_dir: PathBuf,
+        provider_type: String,
+    ) -> BoxFuture<'static, Result<(), BackendError>> {
+        self.preload_for_lease(
+            lease.target,
+            model_dir,
+            provider_type,
+            Some(lease.generation),
+        )
+    }
+
+    fn test_model(
+        &self,
+        target: openless_core::LocalAsrTarget,
+        model_dir: PathBuf,
+    ) -> BoxFuture<'static, Result<openless_core::LocalAsrTestResult, BackendError>> {
+        let preferences = Arc::clone(&self.preferences);
+        Box::pin(async move {
+            if target.runtime != openless_core::LocalAsrRuntime::Generic {
+                return Err(BackendError::new(
+                    BackendErrorCode::Unsupported,
+                    "native model smoke test is only available for generic local ASR",
+                ));
+            }
+            let backend = crate::asr::local::qwen_backend_for_provider(
+                &preferences.get().active_asr_provider,
+            );
+            let result = crate::asr::local::test_run::run_test(
+                native_local_asr_model(&target)?,
+                backend,
+                model_dir,
+            )
+            .await
+            .map_err(|error| {
+                local_asr_backend_error(BackendErrorCode::Platform, format!("{error:#}"))
+            })?;
+            Ok(openless_core::LocalAsrTestResult {
+                target,
+                backend: result.backend,
+                expected_text: result.expected_text,
+                transcribed_text: result.transcribed_text,
+                audio_ms: result.audio_ms,
+                load_ms: result.load_ms,
+                transcribe_ms: result.transcribe_ms,
+            })
+        })
+    }
+
+    fn invalidate_route(&self, runtime: openless_core::LocalAsrRuntime) {
+        if runtime == openless_core::LocalAsrRuntime::Foundry {
+            self.native.foundry.invalidate_route();
+        }
+    }
+}
+
+impl TauriLocalAsrRuntimeAdapter {
+    fn preload_for_lease(
+        &self,
+        target: openless_core::LocalAsrTarget,
+        model_dir: PathBuf,
+        provider_type: String,
+        _activation_generation: Option<u64>,
     ) -> BoxFuture<'static, Result<(), BackendError>> {
         #[cfg(target_os = "windows")]
         let foundry = Arc::clone(&self.native.foundry);
@@ -768,7 +883,12 @@ impl openless_core::ModelRuntimeAdapter for TauriLocalAsrRuntimeAdapter {
                     }
                     let model_id = model.as_str().to_string();
                     tauri::async_runtime::spawn_blocking(move || {
-                        qwen_cache.get_or_load(backend, &model_id, &model_dir)
+                        qwen_cache.get_or_load_for_lease(
+                            backend,
+                            &model_id,
+                            &model_dir,
+                            _activation_generation,
+                        )
                     })
                     .await
                     .map_err(map_native_asr_error)?
@@ -783,7 +903,11 @@ impl openless_core::ModelRuntimeAdapter for TauriLocalAsrRuntimeAdapter {
                         crate::asr::local::whisper_model_path_for_model(&model_id, &model_dir)
                             .map_err(map_native_asr_error)?;
                     tauri::async_runtime::spawn_blocking(move || {
-                        whisper_cache.get_or_load(&model_id, &model_path)
+                        whisper_cache.get_or_load_for_lease(
+                            &model_id,
+                            &model_path,
+                            _activation_generation,
+                        )
                     })
                     .await
                     .map_err(map_native_asr_error)?
@@ -798,49 +922,6 @@ impl openless_core::ModelRuntimeAdapter for TauriLocalAsrRuntimeAdapter {
                 format!("generic local ASR provider is unavailable: {provider_type}"),
             ))
         })
-    }
-
-    fn test_model(
-        &self,
-        target: openless_core::LocalAsrTarget,
-        model_dir: PathBuf,
-    ) -> BoxFuture<'static, Result<openless_core::LocalAsrTestResult, BackendError>> {
-        let preferences = Arc::clone(&self.preferences);
-        Box::pin(async move {
-            if target.runtime != openless_core::LocalAsrRuntime::Generic {
-                return Err(BackendError::new(
-                    BackendErrorCode::Unsupported,
-                    "native model smoke test is only available for generic local ASR",
-                ));
-            }
-            let backend = crate::asr::local::qwen_backend_for_provider(
-                &preferences.get().active_asr_provider,
-            );
-            let result = crate::asr::local::test_run::run_test(
-                native_local_asr_model(&target)?,
-                backend,
-                model_dir,
-            )
-            .await
-            .map_err(|error| {
-                local_asr_backend_error(BackendErrorCode::Platform, format!("{error:#}"))
-            })?;
-            Ok(openless_core::LocalAsrTestResult {
-                target,
-                backend: result.backend,
-                expected_text: result.expected_text,
-                transcribed_text: result.transcribed_text,
-                audio_ms: result.audio_ms,
-                load_ms: result.load_ms,
-                transcribe_ms: result.transcribe_ms,
-            })
-        })
-    }
-
-    fn invalidate_route(&self, runtime: openless_core::LocalAsrRuntime) {
-        if runtime == openless_core::LocalAsrRuntime::Foundry {
-            self.native.foundry.invalidate_route();
-        }
     }
 }
 
@@ -1411,6 +1492,8 @@ impl openless_core::PlatformApi for TauriPlatformApi {
 struct TauriNativeTranscriptionEngine {
     dependencies: TauriNativeAsrDependencies,
     model_store: Option<Arc<openless_core::ModelStore>>,
+    #[cfg(target_os = "windows")]
+    backend: BackendSlot,
 }
 
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
@@ -1418,10 +1501,13 @@ impl TauriNativeTranscriptionEngine {
     fn new(
         dependencies: TauriNativeAsrDependencies,
         model_store: Option<Arc<openless_core::ModelStore>>,
+        _backend: BackendSlot,
     ) -> Self {
         Self {
             dependencies,
             model_store,
+            #[cfg(target_os = "windows")]
+            backend: _backend,
         }
     }
 }
@@ -1464,7 +1550,10 @@ enum TauriNativeTranscriptionSessionKind {
 struct TauriNativeTranscriptionSession {
     kind: TauriNativeTranscriptionSessionKind,
     asr_call_label: openless_core::AsrCallLabel,
-    notifications: Arc<Mutex<Vec<openless_core::NotificationPayload>>>,
+    #[cfg(target_os = "windows")]
+    backend: BackendSlot,
+    #[cfg(target_os = "windows")]
+    session_id: SessionId,
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     partials: Arc<dyn TextStreamSink>,
     #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -1501,6 +1590,8 @@ impl TranscriptionEngine for TauriNativeTranscriptionEngine {
 
         #[cfg(target_os = "windows")]
         let foundry = Arc::clone(&self.dependencies.foundry);
+        #[cfg(target_os = "windows")]
+        let backend = Arc::clone(&self.backend);
         #[cfg(target_os = "windows")]
         let sherpa = Arc::clone(&self.dependencies.sherpa);
         #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -1767,7 +1858,10 @@ impl TranscriptionEngine for TauriNativeTranscriptionEngine {
             Ok(Arc::new(TauriNativeTranscriptionSession {
                 kind,
                 asr_call_label,
-                notifications: Arc::new(Mutex::new(Vec::new())),
+                #[cfg(target_os = "windows")]
+                backend,
+                #[cfg(target_os = "windows")]
+                session_id: _session_id,
                 #[cfg(any(target_os = "macos", target_os = "linux"))]
                 partials,
                 #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -1817,10 +1911,6 @@ impl TranscriptionSession for TauriNativeTranscriptionSession {
         Some(self.asr_call_label.clone())
     }
 
-    fn take_progress_notifications(&self) -> Vec<openless_core::NotificationPayload> {
-        std::mem::take(&mut *self.notifications.lock())
-    }
-
     fn finish(&self) -> BoxFuture<'static, Result<TranscriptOutput, BackendError>> {
         #[cfg(target_os = "windows")]
         use crate::asr::local::foundry_runtime as foundry;
@@ -1831,7 +1921,6 @@ impl TranscriptionSession for TauriNativeTranscriptionSession {
         let partials = Arc::clone(&self.partials);
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         let next_offset = Arc::clone(&self.next_offset);
-        let notifications = Arc::clone(&self.notifications);
         Box::pin(async move {
             #[cfg(target_os = "windows")]
             let mut recovery = None;
@@ -1843,18 +1932,14 @@ impl TranscriptionSession for TauriNativeTranscriptionSession {
                 TauriNativeTranscriptionSessionKind::Foundry { provider, .. } => {
                     let timeout = openless_core::provider_rules::native_transcribe_timeout(
                         "foundry-local-whisper", provider.buffer_duration_ms());
-                    let fallback_notifications = Arc::clone(&notifications);
                     let result = match provider
                         .transcribe_with_fallback_notice(
                             timeout,
-                            Arc::new(move |_| {
-                                fallback_notifications.lock().push(
-                                    openless_core::NotificationPayload {
-                                        level: openless_core::NotificationLevel::Warning,
-                                        message: "GPU 转写不可用，已切换到 CPU".into(),
-                                    },
-                                );
-                            }),
+                            foundry_transcription_notices(
+                                Arc::clone(&session.backend),
+                                session.session_id,
+                                Arc::clone(&session.released),
+                            ),
                         )
                         .await
                     {
@@ -1998,6 +2083,31 @@ impl TranscriptionSession for TauriNativeTranscriptionSession {
             Ok(())
         })
     }
+}
+
+#[cfg(target_os = "windows")]
+fn foundry_transcription_notices(
+    backend: BackendSlot,
+    session_id: SessionId,
+    released: Arc<AtomicBool>,
+) -> crate::asr::local::foundry_runtime::FoundryFallbackNoticeCallback {
+    Arc::new(move |notice| {
+        // 直接进入同一Core事件流：CPU首次下载可能很久，不能等finish返回后
+        // 才发提示。回调只持Weak Backend，finish/失败/cancel共用released收尾。
+        if released.load(Ordering::Acquire) {
+            return;
+        }
+        let Some(backend) = backend.lock().as_ref().and_then(std::sync::Weak::upgrade) else {
+            return;
+        };
+        backend.event_publisher().publish(
+            Some(session_id),
+            openless_core::BackendEventKind::Notification(openless_core::NotificationPayload {
+                level: openless_core::NotificationLevel::Warning,
+                message: notice.message().into(),
+            }),
+        );
+    })
 }
 
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
@@ -3008,6 +3118,51 @@ fn map_tauri_error(error: impl std::fmt::Display) -> BackendError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn foundry_notices_publish_before_transcription_finishes_and_stop_after_release() {
+        use crate::asr::local::foundry_runtime::FoundryFallbackNotice;
+        let directory =
+            std::env::temp_dir().join(format!("openless-foundry-notice-{}", uuid::Uuid::new_v4()));
+        let backend = Arc::new(
+            openless_core::OpenLessBackend::new(
+                openless_core::BackendConfig {
+                    data_dir: directory.clone(),
+                    ..Default::default()
+                },
+                openless_core::BackendDependencies::unsupported(),
+            )
+            .unwrap(),
+        );
+        let slot = backend_slot();
+        *slot.lock() = Some(Arc::downgrade(&backend));
+        let session_id = SessionId::new();
+        let released = Arc::new(AtomicBool::new(false));
+        let callback = foundry_transcription_notices(slot, session_id, Arc::clone(&released));
+        let mut events = backend.subscribe();
+        for notice in [
+            FoundryFallbackNotice::SwitchingToCpu,
+            FoundryFallbackNotice::DownloadingCpu,
+        ] {
+            callback(notice);
+            let event = events
+                .try_recv()
+                .expect("native notice must reach the UI while transcription is still pending");
+            assert_eq!(event.session_id, Some(session_id));
+            assert!(matches!(event.kind,
+                openless_core::BackendEventKind::Notification(ref payload)
+                    if payload.message == notice.message()));
+        }
+        released.store(true, Ordering::Release);
+        callback(FoundryFallbackNotice::DownloadingCpu);
+        assert_eq!(
+            events.try_recv().unwrap_err(),
+            openless_core::EventRecvError::Empty
+        );
+        drop(backend);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 
     #[test]
     fn optional_recording_preparation_failure_keeps_microphone_options_usable() {

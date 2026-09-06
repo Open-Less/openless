@@ -134,6 +134,10 @@ pub trait ModelRuntimeAdapter: Send + Sync {
         self.release(lease.target.runtime)
     }
 
+    /// Adopt an already loaded model before starting an activation transaction.
+    /// A later ordinary preload/use must revoke this lease's cleanup authority.
+    fn claim_lease(&self, _lease: LocalAsrRuntimeLease) {}
+
     fn preload(
         &self,
         _target: LocalAsrTarget,
@@ -141,6 +145,17 @@ pub trait ModelRuntimeAdapter: Send + Sync {
         _provider_type: String,
     ) -> BoxFuture<'static, Result<(), BackendError>> {
         unsupported("runtime preload")
+    }
+
+    /// Activation-owned preload. Hosts with independent caches retain this
+    /// identity so releasing an old lease cannot evict a newer use of the model.
+    fn preload_lease(
+        &self,
+        lease: LocalAsrRuntimeLease,
+        model_dir: PathBuf,
+        provider_type: String,
+    ) -> BoxFuture<'static, Result<(), BackendError>> {
+        self.preload(lease.target, model_dir, provider_type)
     }
 
     fn test_model(
@@ -422,11 +437,16 @@ async fn restore_activation_runtime(
     model_store: &Arc<crate::model_store::ModelStore>,
     operation_generation: u64,
     requested: &LocalAsrTarget,
-    previous: Option<&LocalAsrTarget>,
+    previous: Option<&LocalAsrRuntimeLease>,
     previous_preferences: &UserPreferences,
     progress: ModelPrepareProgressSink,
 ) -> Vec<BackendError> {
-    if previous == Some(requested) {
+    // Native Windows runtimes already replace their own model during prepare;
+    // preserve their existing same-target rollback behavior. Generic cache
+    // ownership must be restored even when only the activation owner changed.
+    if requested.runtime != LocalAsrRuntime::Generic
+        && previous.map(|lease| &lease.target) == Some(requested)
+    {
         return Vec::new();
     }
     let mut errors = Vec::new();
@@ -440,18 +460,18 @@ async fn restore_activation_runtime(
         errors.push(error);
     }
     if let Some(previous) = previous {
-        match model_store.runtime_model_dir(previous) {
+        match model_store.runtime_model_dir(&previous.target) {
             Ok(model_dir) => {
                 let source = FoundryRuntimeSource::from_legacy(
                     &previous_preferences.foundry_local_runtime_source,
                 );
                 match adapter
-                    .prepare(previous.clone(), source, model_dir.clone(), progress)
+                    .prepare(previous.target.clone(), source, model_dir.clone(), progress)
                     .await
                 {
                     Ok(_) => {
                         if let Err(error) = adapter
-                            .preload(
+                            .preload_lease(
                                 previous.clone(),
                                 model_dir,
                                 previous_preferences.active_asr_provider.clone(),
@@ -596,6 +616,17 @@ impl LocalAsrApi for LocalAsrService {
             Self::validate_activation_provider(&request.target, &provider_type)?;
             let generation = generation_clock.fetch_add(1, Ordering::AcqRel) + 1;
             let previous_target = Self::target_for_active_preferences(&previous_preferences);
+            let previous_lease = active_lease
+                .lock()
+                .expect("local ASR activation lease lock poisoned")
+                .clone()
+                .filter(|lease| previous_target.as_ref() == Some(&lease.target))
+                .or_else(|| {
+                    previous_target.map(|target| LocalAsrRuntimeLease {
+                        target,
+                        generation: generation.saturating_sub(1),
+                    })
+                });
             if !model_store.is_native(&request.target)?
                 && !model_store.is_installed(&request.target)?
             {
@@ -605,6 +636,9 @@ impl LocalAsrApi for LocalAsrService {
                 ));
             }
             let model_dir = model_store.runtime_model_dir(&request.target)?;
+            if let Some(previous) = previous_lease.as_ref() {
+                adapter.claim_lease(previous.clone());
+            }
             let progress_events = events.clone();
             let progress: ModelPrepareProgressSink = Arc::new(move |progress| {
                 progress_events.publish(None, BackendEventKind::LocalAsrPrepareProgress(progress));
@@ -628,7 +662,7 @@ impl LocalAsrApi for LocalAsrService {
                         &model_store,
                         generation,
                         &request.target,
-                        previous_target.as_ref(),
+                        previous_lease.as_ref(),
                         &previous_preferences,
                         progress,
                     )
@@ -637,8 +671,11 @@ impl LocalAsrApi for LocalAsrService {
                 }
             };
             if let Err(error) = adapter
-                .preload(
-                    request.target.clone(),
+                .preload_lease(
+                    LocalAsrRuntimeLease {
+                        target: request.target.clone(),
+                        generation,
+                    },
                     model_dir.clone(),
                     provider_type.clone(),
                 )
@@ -649,7 +686,7 @@ impl LocalAsrApi for LocalAsrService {
                     &model_store,
                     generation,
                     &request.target,
-                    previous_target.as_ref(),
+                    previous_lease.as_ref(),
                     &previous_preferences,
                     progress,
                 )
@@ -661,23 +698,19 @@ impl LocalAsrApi for LocalAsrService {
             // selected channel. A user may choose another channel while native
             // preparation awaits; rolling back an old channel snapshot would
             // erase that choice. Channel persistence is the final commit point.
-            let previous_lease = active_lease
-                .lock()
-                .expect("local ASR activation lease lock poisoned")
-                .clone()
-                .or_else(|| {
-                    previous_target.clone().map(|target| LocalAsrRuntimeLease {
-                        target,
-                        generation: generation.saturating_sub(1),
-                    })
-                });
-            if let Some(previous_lease) = previous_lease {
-                if previous_lease.target.runtime != request.target.runtime {
+            if let Some(previous_lease) = previous_lease.as_ref() {
+                // Generic is a catalog group, not a single native cache: macOS
+                // Qwen and Whisper have independent engines. Retire the old
+                // model lease even when the replacement has the same runtime.
+                if previous_lease.target.runtime != request.target.runtime
+                    || (request.target.runtime == LocalAsrRuntime::Generic
+                        && previous_lease.target != request.target)
+                {
                     if let Err(error) = release_activation_lease(
                         &adapter,
                         &generation_clock,
                         generation,
-                        previous_lease,
+                        previous_lease.clone(),
                     )
                     .await
                     {
@@ -686,7 +719,7 @@ impl LocalAsrApi for LocalAsrService {
                             &model_store,
                             generation,
                             &request.target,
-                            previous_target.as_ref(),
+                            Some(previous_lease),
                             &previous_preferences,
                             progress,
                         )
@@ -708,7 +741,7 @@ impl LocalAsrApi for LocalAsrService {
                         &model_store,
                         generation,
                         &request.target,
-                        previous_target.as_ref(),
+                        previous_lease.as_ref(),
                         &previous_preferences,
                         progress,
                     )
@@ -743,7 +776,7 @@ impl LocalAsrApi for LocalAsrService {
                             &model_store,
                             generation,
                             &request.target,
-                            previous_target.as_ref(),
+                            previous_lease.as_ref(),
                             &previous_preferences,
                             progress,
                         )

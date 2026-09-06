@@ -124,6 +124,21 @@
 
 第六轮最终本地验证：Tauri 447 passed / 1 ignored，Rust1.88检查通过；Core 727 passed / 1 ignored、生命周期14项及全部领域合同、Linux Windows-host 50+4、headless、严格Clippy、前端构建67项和六个架构/安全/兼容基线检查通过。`588fb35b` CI `34009963206`四平台已通过，但修复提交须重新独立验证；Linux artifact条件跳过不算产物通过。
 
+### 第七轮：`fc9824ee...5f668b1d`
+
+两名全新审查员确认3项Spec问题，主代理再复现QA跨线程关闭竞态，合计4项；Standards无独立硬性违规。macOS目标恢复失败复制候选未计缺陷：被引用的1.x失败分支在macOS不可达，不能仅按共享函数片段推断旧平台语义。
+
+| ID | 确定问题 | 修复/验证状态 |
+| --- | --- | --- |
+| R58 / P2 | Windows默认Agent裸名无法定位npm生成的.cmd入口，产品推荐的安装方式导致检测/运行NotFound | Windows Host按有效PATH解析必要可执行扩展，显式路径不变，复用stdlib转义及原有Job/管道；真实shim先红NotFound后绿，含.exe/显式.cmd/裸名.cmd和空格、引号、元字符参数 |
+| R59 / P2 | macOS Qwen/Whisper同属Generic但有独立cache；原子激活不释放同runtime旧lease，状态又优先报Qwen，切Whisper后仍显示旧模型并长期驻留 | 已按真实previous target认领/预载/释放代次；cache同锁核对模型和owner，状态按目标家族读取。Core合同先红双缓存后绿，覆盖同ID新代次、普通使用撤销旧权限、渠道切换和失败补偿；普通ASR迟到加载可用未缓存Arc继续本轮，激活所属迟到加载报错且不覆盖新cache |
+| R60 / P2 | Foundry GPU→CPU切换/首次CPU下载提示被延迟缓存到转写完成，Notification又无Tauri消费者，原1.x实时反馈消失 | Native回调立即发布冻结session通知，released拒绝迟到回调；桥核验当前归属/阶段并显示胶囊，QA离开转写、取消与窗口接管清所属提示。实时/展示/清理回归先红后绿，无真实GPU验收声明 |
+| R61 / P2 | QA dismiss在两个同步state锁之间允许另一OS线程重开；旧操作清空并隐藏B，发生在首await之前，R31原异步清理回归未覆盖 | 公开事件订阅边界控制线程交错后确定红：B录音返回Cancelled。presentation锁收口录音/文本/仅显示与关闭，所有native await在锁外；状态/回调/模式/答案替换与对应事件在同一state guard内发布，旧阶段先核对session/phase，Host动作不持state锁。三种重开及QA合同25项通过；独立复核又确认并关闭模式切换/撤回旧答案快照窗口 |
+
+修复提交后继续第八轮全新团队审查；未运行的macOS模型、真实GPU/GUI等仍按设备边界记录，不以源码合同替代。
+
+第七轮最终本地验证：Core 727 passed / 1 ignored，生命周期14项及合同6/26/18/3/25/13/15/15全部通过；Windows Tauri 452 passed / 1 ignored；Linux Windows-host 50+4、headless、TypeScript/Vite与67项前端入口、Core/Linux严格Clippy、Rust1.88 Tauri和六个架构/安全/兼容基线检查通过。Windows CLI回归还覆盖大小写重复PATH的实际最后覆盖值；R59普通ASR加载与自动清理出口均保留新owner，R61所有当前修改已完成有界复核。实际macOS cache代码仍必须由新head的macOS CI编译，不沿用前一提交结果。
+
 后续独立团队的最终结论和新head CI写入原PR描述；本文保留已复现问题及修复证据，不预填尚未完成的审核或设备结果。
 
 ## 不得混同的完成条件

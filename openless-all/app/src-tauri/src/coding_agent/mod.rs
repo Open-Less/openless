@@ -112,6 +112,34 @@ async fn augment_path(_command: &mut tokio::process::Command, cancel: &Cancellat
     true
 }
 
+#[cfg(windows)]
+fn windows_executable(request: &AgentCommand) -> PathBuf {
+    let executable = std::path::Path::new(&request.executable);
+    // Preserve explicit paths and extensions. Bare npm commands need their
+    // .cmd shim selected before stdlib builds the safely quoted command line;
+    // CreateProcess's default .exe lookup does not use PATHEXT.
+    if executable.components().count() != 1 || executable.extension().is_some() {
+        return executable.to_path_buf();
+    }
+    let path = request
+        .env
+        .iter()
+        .rev()
+        .find(|(key, _)| key.eq_ignore_ascii_case("PATH"))
+        .map(|(_, value)| std::ffi::OsString::from(value))
+        .or_else(|| std::env::var_os("PATH"))
+        .unwrap_or_default();
+    for directory in std::env::split_paths(&path) {
+        for extension in ["exe", "com", "cmd", "bat"] {
+            let candidate = directory.join(executable).with_extension(extension);
+            if candidate.is_file() {
+                return candidate;
+            }
+        }
+    }
+    executable.to_path_buf()
+}
+
 impl CodingAgentProcessAdapter for TauriCodingAgentProcessAdapter {
     fn execute(
         &self,
@@ -127,6 +155,9 @@ impl CodingAgentProcessAdapter for TauriCodingAgentProcessAdapter {
                 });
             }
             let _workspace = materialize_temporary_files(&mut request)?;
+            #[cfg(windows)]
+            let mut command = tokio::process::Command::new(windows_executable(&request));
+            #[cfg(not(windows))]
             let mut command = tokio::process::Command::new(&request.executable);
             if !augment_path(&mut command, &cancel).await {
                 return Ok(ProcessExit {
@@ -297,6 +328,139 @@ mod tests {
 
     impl ProcessOutputSink for IgnoreOutput {
         fn write(&self, _line: ProcessOutputLine) {}
+    }
+
+    #[derive(Default)]
+    struct CaptureOutput(std::sync::Mutex<Vec<String>>);
+
+    impl ProcessOutputSink for CaptureOutput {
+        fn write(&self, output: ProcessOutputLine) {
+            self.0.lock().unwrap().push(output.line);
+        }
+    }
+
+    #[tokio::test]
+    async fn windows_cli_commands_resolve_npm_shims_and_preserve_arguments() {
+        let directory = std::env::temp_dir().join(format!(
+            "openless agent shim {}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let _workspace = TemporaryWorkspace(directory.clone());
+        let executable = std::env::current_exe().unwrap();
+        let shim_name = format!("openless-fixture-{}", uuid::Uuid::new_v4().simple());
+        let shim = directory.join(format!("{shim_name}.cmd"));
+        // Same forwarding shape as an npm shim: quote the program path and
+        // forward the caller's arguments through %*. No real Agent is invoked.
+        std::fs::write(
+            &shim,
+            "@echo off\r\n\"%OPENLESS_AGENT_TEST_EXE%\" --exact coding_agent::tests::argument_echo_child --nocapture %*\r\n",
+        )
+        .unwrap();
+        let mut search = vec![
+            directory.clone(),
+            executable.parent().unwrap().to_path_buf(),
+        ];
+        search.extend(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_default(),
+        ));
+        let path = std::env::join_paths(search)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let expected = vec![
+            "with spaces".to_string(),
+            "with \"quotes\"".to_string(),
+            "literal&pipe|redirect>less<caret^percent%bang!".to_string(),
+        ];
+        let arguments = expected
+            .iter()
+            .flat_map(|value| ["--skip".to_string(), value.clone()])
+            .collect::<Vec<_>>();
+        for (program, is_shim) in [
+            (executable.to_string_lossy().into_owned(), false),
+            (
+                executable
+                    .file_stem()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned(),
+                false,
+            ),
+            (shim.to_string_lossy().into_owned(), true),
+            (shim_name, true),
+        ] {
+            let mut argv = if is_shim {
+                Vec::new()
+            } else {
+                vec![
+                    "--exact".into(),
+                    "coding_agent::tests::argument_echo_child".into(),
+                    "--nocapture".into(),
+                ]
+            };
+            argv.extend(arguments.clone());
+            let output = Arc::new(CaptureOutput::default());
+            let result = TauriCodingAgentProcessAdapter
+                .execute(
+                    AgentCommand {
+                        executable: program.clone(),
+                        argv,
+                        env: BTreeMap::from([
+                            // Windows keys are case-insensitive: envs() applies
+                            // the last entry, so resolution must use it too.
+                            (
+                                "PATH".into(),
+                                directory
+                                    .join("not-the-search-path")
+                                    .to_string_lossy()
+                                    .into_owned(),
+                            ),
+                            ("Path".into(), path.clone()),
+                            (
+                                "OPENLESS_AGENT_TEST_EXE".into(),
+                                executable.to_string_lossy().into_owned(),
+                            ),
+                            ("OPENLESS_AGENT_TEST_ARGUMENTS".into(), "1".into()),
+                        ]),
+                        cwd: None,
+                        prompt: PromptPayload::Stdin(String::new()),
+                        temporary_files: Vec::new(),
+                    },
+                    output.clone(),
+                    CancellationToken::new(),
+                )
+                .await
+                .unwrap_or_else(|error| panic!("{program}: {error}"));
+            let lines = output.0.lock().unwrap();
+            assert!(result.success, "{program}: {lines:?}");
+            let actual = lines
+                .iter()
+                .find_map(|line| line.strip_prefix("OPENLESS_AGENT_ARGUMENTS="))
+                .unwrap_or_else(|| panic!("argument fixture did not run for {program}: {lines:?}"));
+            assert_eq!(
+                serde_json::from_str::<Vec<String>>(actual).unwrap(),
+                expected,
+                "{program}"
+            );
+        }
+    }
+
+    #[test]
+    fn argument_echo_child() {
+        if std::env::var("OPENLESS_AGENT_TEST_ARGUMENTS").as_deref() != Ok("1") {
+            return;
+        }
+        let argv = std::env::args().collect::<Vec<_>>();
+        let forwarded = argv
+            .windows(2)
+            .filter(|pair| pair[0] == "--skip")
+            .map(|pair| pair[1].clone())
+            .collect::<Vec<_>>();
+        println!(
+            "OPENLESS_AGENT_ARGUMENTS={}",
+            serde_json::to_string(&forwarded).unwrap()
+        );
     }
 
     #[tokio::test]

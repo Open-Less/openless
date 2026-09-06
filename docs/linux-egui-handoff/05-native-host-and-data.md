@@ -49,6 +49,8 @@
 
 这些模块有生产实现；缺真实凭据、模型或设备结果时写“待实测”，不要整模块标“未实现”。
 
+若Host实现驻留模型缓存，须在`ModelRuntimeAdapter::claim_lease/preload_lease/release_lease`中原子维护模型与激活代次；同属Generic不代表同一缓存。普通使用应撤销旧激活的释放权，迟到加载不能覆盖新缓存，也不能取消仍有效的旧会话。Core负责激活失败补偿与metadata提交，Host不得仅按模型ID查询后再无条件释放整个runtime。
+
 ## 5. 系统集成仍需实现
 
 现有[main.rs](../../openless-all/app/linux-egui/src/main.rs)将tray能力传为false；通知仅显示状态栏，`RequestRestart`仅提示手动重启，缺自启与实际更新器。

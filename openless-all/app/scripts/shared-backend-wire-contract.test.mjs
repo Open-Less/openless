@@ -585,9 +585,39 @@ assert.match(
 );
 assert.match(
   localAsrActivation,
-  /\.prepare\([^]*?\.preload\([^]*?preferences\.update\([^]*?\.mutate_channel\(ChannelMutation::ActivateLocalAsr/,
+  /\.prepare\([^]*?\.preload_lease\([^]*?preferences\.update\([^]*?\.mutate_channel\(ChannelMutation::ActivateLocalAsr/,
   'channel activation must commit only after native preparation and preference persistence succeed',
 );
+assert.match(
+  coreAdapters,
+  /fn preload_lease\([^]*?preload_for_lease\(\s*lease\.target,\s*model_dir,\s*provider_type,\s*Some\(lease\.generation\),?\s*\)/,
+  'the Tauri native cache must receive the Core activation generation',
+);
+assert.match(
+  coreAdapters,
+  /let loaded\s*=\s*if openless_core::LocalAsrModelId::from_wire_id\(\s*&settings\.active_model,?\s*\)[^]*?is_whisper\)[^]*?whisper_cache\.loaded_model_id\(\)[^]*?else[^]*?qwen_cache\.loaded_model_id\(\)/,
+  'macOS engine status must select the active model family rather than prefer any loaded Qwen cache',
+);
+for (const cache of await Promise.all([
+  read('src-tauri/src/asr/local/cache.rs'),
+  read('src-tauri/src/asr/local/whisper_provider.rs'),
+])) {
+  const release = cache.match(/pub\(crate\) fn release_lease\([^]*?(?=\r?\n    (?:pub|\/\/))/)?.[0];
+  assert.ok(release, 'each native cache must implement model-scoped activation cleanup');
+  assert.match(release, /inner\.lock\(\)[^]*?cached\.model_id == model_id\s*&&\s*cached\.activation_generation == Some\(generation\)[^]*?slot\.take\(\)/,
+    'model and generation checks must happen under the same lock as cache eviction');
+  assert.doesNotMatch(release, /\.cancel\(/, 'retiring a cache lease must preserve an in-flight transcription Arc');
+  assert.match(cache, /get_or_load_for_lease\([^\n]*None\)/,
+    'ordinary preload or transcription must revoke the previous activation owner');
+  assert.match(cache, /if self\.load_generation\.load\(Ordering::Acquire\) != load_generation\s*\{\s*if activation_generation\.is_some\(\)\s*\{\s*anyhow::bail!\([^]*?\);\s*\}\s*return Ok\(engine\);\s*\}\s*(?:\*slot = Some|slot\.replace)/,
+    'a superseded activation must fail, while ordinary ASR keeps its uncached Arc without replacing the current cache');
+  for (const method of ['finish_use', 'release_current_if_idle', 'release_if_idle']) {
+    const cleanup = cache.match(new RegExp(`pub fn ${method}\\([^]*?(?=\\r?\\n    (?:pub|//))`))?.[0];
+    assert.ok(cleanup, `${method} must remain an explicit native cache cleanup path`);
+    assert.match(cleanup, /inner\.lock\(\)[^]*?activation_generation\.is_none\(\)[^]*?slot\.take\(\)/,
+      `${method} must preserve a newer activation owner even when it reuses the same Arc`);
+  }
+}
 assert.equal(
   localAsrActivation.match(/\.mutate_channel\(/g)?.length,
   1,

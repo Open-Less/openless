@@ -252,6 +252,121 @@ impl QaRuntimeAdapter for FixtureQaRuntime {
 
 struct FailingShowQaHost;
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn synchronous_dismiss_cannot_reset_or_hide_a_concurrent_reopen() {
+    use futures_util::task::{waker_ref, ArcWake};
+    use std::future::Future;
+
+    struct PauseDelivery {
+        once: AtomicBool,
+        entered: tokio::sync::Notify,
+        release: (Mutex<bool>, std::sync::Condvar),
+    }
+    impl ArcWake for PauseDelivery {
+        fn wake_by_ref(this: &Arc<Self>) {
+            if !this.once.swap(true, Ordering::AcqRel) {
+                this.entered.notify_one();
+                let mut released = this.release.0.lock().unwrap();
+                while !*released {
+                    released = this.release.1.wait(released).unwrap();
+                }
+            }
+        }
+    }
+    struct ReleaseOnDrop(Arc<PauseDelivery>);
+    impl ReleaseOnDrop {
+        fn release(&self) {
+            *self.0.release.0.lock().unwrap() = true;
+            self.0.release.1.notify_all();
+        }
+    }
+    impl Drop for ReleaseOnDrop {
+        fn drop(&mut self) {
+            self.release();
+        }
+    }
+
+    for entry in ["recording", "text", "show"] {
+        let runtime = Arc::new(FixtureQaRuntime::responding("first answer"));
+        let host = Arc::new(openless_core::testing::RecordingHostActions::default());
+        let (backend, data_dir) = backend_with_host(runtime, host.clone());
+        let qa = Arc::clone(&backend.services().qa);
+        qa.submit_text("first question".into()).await.unwrap();
+        let shown_before = host.actions().len();
+        let pause = Arc::new(PauseDelivery {
+            once: AtomicBool::new(false),
+            entered: tokio::sync::Notify::new(),
+            release: (Mutex::new(false), std::sync::Condvar::new()),
+        });
+        let release = ReleaseOnDrop(pause.clone());
+        let mut events = backend.subscribe();
+        let mut receive = Box::pin(events.recv());
+        let waker = waker_ref(&pause);
+        assert!(receive
+            .as_mut()
+            .poll(&mut std::task::Context::from_waker(&waker))
+            .is_pending());
+
+        // Pause delivery at the public event boundary: the OS can preempt the
+        // dismiss thread here even though the async method has not reached await.
+        // No private state hook or physical device is involved.
+        let executor = tokio::runtime::Handle::current();
+        let dismiss = std::thread::spawn({
+            let qa = qa.clone();
+            let executor = executor.clone();
+            move || executor.block_on(qa.dismiss())
+        });
+        pause.entered.notified().await;
+        let recording = std::thread::spawn({
+            let qa = qa.clone();
+            move || {
+                executor.block_on(async move {
+                    match entry {
+                        "text" => qa.submit_text("second question".into()).await,
+                        "show" => qa.show().await,
+                        _ => qa.toggle_recording().await,
+                    }
+                })
+            }
+        });
+        // A correctly serialized implementation may keep B queued. Otherwise let
+        // B reach its Show before resuming A, exposing the old second state reset.
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(100), async {
+            while host.actions().len() == shown_before {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        release.release();
+        let (dismissed, started) = tokio::task::spawn_blocking(move || {
+            (dismiss.join().unwrap(), recording.join().unwrap())
+        })
+        .await
+        .unwrap();
+        dismissed.unwrap();
+        assert!(
+            started.is_ok(),
+            "old dismiss cannot invalidate B: {started:?}"
+        );
+        let snapshot = qa.snapshot().await.unwrap();
+        match entry {
+            "text" => {
+                assert_eq!(snapshot.phase, QaPhase::Completed);
+                assert_eq!(
+                    snapshot.messages.first().unwrap().content,
+                    "second question"
+                );
+            }
+            "show" => assert_eq!(snapshot, QaSnapshot::default()),
+            _ => assert_eq!(snapshot.phase, QaPhase::Recording),
+        }
+        assert_eq!(host.actions().last(), Some(&HostAction::ShowQa));
+        drop(receive);
+        qa.cancel(None).await.unwrap();
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+}
+
 #[tokio::test]
 async fn dismiss_cleanup_cannot_clear_a_reopened_qa_conversation() {
     let runtime = Arc::new(FixtureQaRuntime::responding("new answer"));
