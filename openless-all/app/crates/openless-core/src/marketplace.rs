@@ -64,15 +64,6 @@ impl MarketplaceConfig {
     }
 }
 
-fn is_loopback_url(url: &reqwest::Url) -> bool {
-    url.host_str().is_some_and(|host| {
-        host.eq_ignore_ascii_case("localhost")
-            || host
-                .parse::<std::net::IpAddr>()
-                .is_ok_and(|address| address.is_loopback())
-    })
-}
-
 #[derive(Clone)]
 struct SecretDeviceCode(String);
 
@@ -225,8 +216,6 @@ impl DeviceFlowRegistry {
 #[derive(Clone)]
 pub(crate) struct MarketplaceService {
     config: MarketplaceConfig,
-    anonymous_http: reqwest::Client,
-    credential_http: reqwest::Client,
     #[allow(dead_code)]
     credential_store: Arc<dyn CredentialStore>,
     #[allow(dead_code)]
@@ -253,41 +242,8 @@ impl MarketplaceService {
         events: BackendEventPublisher,
         style_pack_revision: Arc<AtomicU64>,
     ) -> Result<Self, BackendError> {
-        let bypass_proxy = [
-            &config.base_url,
-            &config.github_device_code_url,
-            &config.github_access_token_url,
-            &config.github_user_url,
-        ]
-        .into_iter()
-        .all(is_loopback_url);
-        let client = || {
-            let builder = reqwest::Client::builder()
-                .connect_timeout(Duration::from_secs(8))
-                .pool_idle_timeout(Duration::from_secs(90))
-                .pool_max_idle_per_host(8)
-                .tcp_keepalive(Duration::from_secs(30))
-                .redirect(reqwest::redirect::Policy::none())
-                .user_agent(concat!("OpenLess/", env!("CARGO_PKG_VERSION")));
-            // Loopback-only configs back deterministic contract servers and
-            // local development services. Proxying OAuth device codes away
-            // from localhost is both incorrect and a secret-boundary leak.
-            let builder = if bypass_proxy {
-                builder.no_proxy()
-            } else {
-                builder
-            };
-            builder.build().map_err(|error| {
-                BackendError::new(
-                    BackendErrorCode::Internal,
-                    format!("build Marketplace HTTP client failed: {error}"),
-                )
-            })
-        };
         Ok(Self {
             config,
-            anonymous_http: client()?,
-            credential_http: client()?,
             credential_store,
             preferences,
             style_packs,
@@ -337,8 +293,15 @@ impl MarketplaceService {
         url: reqwest::Url,
         timeout: Duration,
     ) -> Result<reqwest::Response, BackendError> {
+        // Resolve the cached client for every request so a saved or live proxy
+        // opt-out takes effect. Anonymous requests add no auth to this client;
+        // the shared no-redirect policy also protects OAuth/bearer requests.
         let response = self
-            .send_with_retry(|| self.anonymous_http.get(url.clone()).timeout(timeout))
+            .send_with_retry(|| {
+                crate::net::credential_http_for_url(url.as_str())
+                    .get(url.clone())
+                    .timeout(timeout)
+            })
             .await?;
         if response.status().is_redirection() {
             return Err(BackendError::new(
@@ -477,7 +440,7 @@ impl MarketplaceService {
         let url = self.public_url(path)?;
         let response = self
             .send_with_retry(|| {
-                self.credential_http
+                crate::net::credential_http_for_url(url.as_str())
                     .request(method.clone(), url.clone())
                     .bearer_auth(token.expose_secret())
                     .timeout(timeout)
@@ -547,7 +510,7 @@ impl MarketplaceService {
                 if let Some(origin) = &upload_origin {
                     form = form.text("origin_pack_id", origin.clone());
                 }
-                self.credential_http
+                crate::net::credential_http_for_url(url.as_str())
                     .post(url.clone())
                     .bearer_auth(token.expose_secret())
                     .timeout(Duration::from_secs(30))
@@ -589,7 +552,7 @@ impl MarketplaceService {
         let result = async {
             let response = self
                 .send_with_retry(|| {
-                    self.credential_http
+                    crate::net::credential_http_for_url(self.config.github_device_code_url.as_str())
                         .post(self.config.github_device_code_url.clone())
                         .header("Accept", "application/json")
                         .timeout(Duration::from_secs(15))
@@ -708,7 +671,7 @@ impl MarketplaceService {
         };
         let token_response = self
             .send_with_retry(|| {
-                self.credential_http
+                crate::net::credential_http_for_url(self.config.github_access_token_url.as_str())
                     .post(self.config.github_access_token_url.clone())
                     .header("Accept", "application/json")
                     .timeout(Duration::from_secs(15))
@@ -760,7 +723,7 @@ impl MarketplaceService {
             let access_token = SecretValue::new(token);
             let user_response = self
                 .send_with_retry(|| {
-                    self.credential_http
+                    crate::net::credential_http_for_url(self.config.github_user_url.as_str())
                         .get(self.config.github_user_url.clone())
                         .header("Accept", "application/vnd.github+json")
                         .timeout(Duration::from_secs(15))
@@ -915,9 +878,8 @@ impl MarketplaceApi for MarketplaceService {
                 pairs.append_pair("limit", &limit.to_string());
             }
         }
-        let client = self.anonymous_http.clone();
         Box::pin(async move {
-            let response = client
+            let response = crate::net::credential_http_for_url(url.as_str())
                 .get(url)
                 .timeout(Duration::from_secs(10))
                 .send()

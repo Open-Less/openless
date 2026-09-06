@@ -352,8 +352,11 @@ impl RemoteInputService {
         peer: String,
         candidate: SecretValue,
     ) -> Result<RemoteAuthResult, BackendError> {
-        let expected = self.ensure_pairing_pin().await?;
         let _lifecycle = self.lifecycle.lock().await;
+        // PIN rotation holds this same gate through persistence and server
+        // restart. Read the secret only after acquiring it: otherwise an auth
+        // queued during rotation can accept the old PIN on the new server.
+        let expected = self.ensure_pairing_pin().await?;
         let mut state = self.state.lock().expect("remote input state lock poisoned");
         if !state.running {
             return Err(BackendError::new(

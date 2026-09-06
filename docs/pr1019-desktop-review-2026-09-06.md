@@ -89,6 +89,18 @@
 
 第三轮最终本地验证：Core 725 passed / 1 ignored，生命周期14项、其它合同6/24/17/3/24/12/15/15全部通过；Windows Tauri 444 passed / 1 ignored；前端构建与67个测试入口通过；Linux Windows-host 48+4、headless示例、Core/Linux严格Clippy、Rust1.88 Tauri检查、依赖/秘密/隔离/runtime/公开面/command-event检查均通过。修复提交的远端平台CI与第四轮新团队结论仍单独记录，不把本地验证表述为macOS设备验收。
 
+### 第四轮：`fc9824ee...90cbd014`
+
+新的Windows/macOS审查员再次审查整个PR，主代理复核共享合同和数据接线。本轮Standards未确认独立违规；确认以下3项Spec问题。第三轮提交已逐Git对象核对SHA后上传至原PR，未重写历史。
+
+| ID | 确定问题 | 修复/验证状态 |
+| --- | --- | --- |
+| R52 / P2 | 市场服务在构造时独立保存HTTP client，绕过共享net代理缓存；关闭useSystemProxy仍使用系统代理，且运行中切换不生效。1.x市场/OAuth使用共享client | 已删除固定client和重复builder，逐请求URL复用共享net缓存，仍禁止重定向并为loopback直连；独立进程假代理回归先红后绿，覆盖启动关闭、同服务true→false→true及混合配置OAuth回环 |
+| R53 / P2 | 取消A的原生清理已完成并释放资源，但A调用方尚未恢复时B可以启动；A迟到回复无条件发送HideDictationFeedback。其他失败/shutdown出口也缺归属检查 | 已统一所有Hide出口的session守卫，检查和同步Host enqueue保持同锁；手工延迟cancel回复的公开回归先红（Hide覆盖Show）后绿，R51回归保持通过。Tauri当前该HostAction是no-op，故这是共享Core合同问题，不声称已复现桌面胶囊故障 |
+| R54 / P1 | Remote鉴权在获取lifecycle锁前读取旧PIN；轮换持锁期间已读取旧值的鉴权等待后可在新服务代次放行，生产WS没有第二次PIN检查 | 已将PIN读取置于与轮换相同的生命周期临界区；公开接口并发回归先红（Ok，预期BadPin）后绿，旧PIN被拒、新PIN仍可认证 |
+
+第四轮最终本地验证：Core 726 passed / 1 ignored，生命周期14项及其它合同6/24/18/3/24/13/15/15通过；Windows Tauri 444 passed / 1 ignored；TypeScript/Vite与67个前端测试入口、Linux Windows-host 48+4、headless示例、Core/Linux严格Clippy、Rust1.88 Tauri检查、六个架构/安全/兼容基线检查和定向格式检查均通过。独立修复复核确认R53全部10个原有Hide出口共用归属判断，没有复制遗漏。此提交后继续第五轮全新团队审核。
+
 后续独立团队的最终结论和新head CI写入原PR描述；本文保留已复现问题及修复证据，不预填尚未完成的审核或设备结果。
 
 ## 不得混同的完成条件

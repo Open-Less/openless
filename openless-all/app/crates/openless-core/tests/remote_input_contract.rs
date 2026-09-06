@@ -24,6 +24,8 @@ struct FixtureRemoteRuntime {
     insert_preferences: Mutex<Vec<bool>>,
     stop_started: Option<Arc<tokio::sync::Notify>>,
     release_stop: Option<Arc<tokio::sync::Notify>>,
+    persist_started: Option<Arc<tokio::sync::Notify>>,
+    release_persist: Option<Arc<tokio::sync::Notify>>,
 }
 
 impl RemoteInputRuntimeAdapter for FixtureRemoteRuntime {
@@ -51,7 +53,17 @@ impl RemoteInputRuntimeAdapter for FixtureRemoteRuntime {
         }
         self.persist_count.fetch_add(1, Ordering::AcqRel);
         *self.persisted_pin.lock().unwrap() = Some(pin.into_exposed());
-        Box::pin(async { Ok(()) })
+        let started = self.persist_started.clone();
+        let release = self.release_persist.clone();
+        Box::pin(async move {
+            if let Some(started) = started {
+                started.notify_one();
+            }
+            if let Some(release) = release {
+                release.notified().await;
+            }
+            Ok(())
+        })
     }
 
     fn start_server(
@@ -154,6 +166,54 @@ async fn authenticate(remote: &dyn RemoteInputApi, connection_id: SessionId) {
             .unwrap(),
         RemoteAuthResult::Ok
     );
+}
+
+#[tokio::test]
+async fn authentication_queued_during_pin_rotation_rejects_the_previous_pin() {
+    let persist_started = Arc::new(tokio::sync::Notify::new());
+    let release_persist = Arc::new(tokio::sync::Notify::new());
+    let runtime = Arc::new(FixtureRemoteRuntime {
+        persisted_pin: Mutex::new(Some("123456".into())),
+        persist_started: Some(Arc::clone(&persist_started)),
+        release_persist: Some(Arc::clone(&release_persist)),
+        ..Default::default()
+    });
+    let (backend, data_dir) = backend(Arc::clone(&runtime));
+    let remote = &backend.services().remote_input;
+    remote
+        .configure(RemoteInputConfig {
+            enabled: true,
+            port: 8443,
+        })
+        .await
+        .unwrap();
+    let previous_pin = remote.read_pairing_pin().await.unwrap();
+
+    // Hold the native persistence boundary while rotation owns the lifecycle
+    // gate. Polling explicitly queues authentication behind that rotation,
+    // without relying on scheduler timing or a real socket/keychain.
+    let rotation = loop {
+        let mut rotation = remote.regenerate_pairing_pin();
+        assert!(futures_util::poll!(rotation.as_mut()).is_pending());
+        persist_started.notified().await;
+        // The generator can legitimately repeat one of its million values.
+        // Select a changed PIN so this concurrency test never fails by chance.
+        if runtime.persisted_pin.lock().unwrap().as_deref() != Some(previous_pin.expose_secret()) {
+            break rotation;
+        }
+        release_persist.notify_one();
+        rotation.await.unwrap();
+    };
+    let mut authentication =
+        remote.authenticate(SessionId::new(), "192.168.1.8".into(), previous_pin);
+    assert!(futures_util::poll!(authentication.as_mut()).is_pending());
+    release_persist.notify_one();
+    rotation.await.unwrap();
+
+    assert_eq!(authentication.await.unwrap(), RemoteAuthResult::BadPin);
+    authenticate(remote.as_ref(), SessionId::new()).await;
+    assert_eq!(remote.status().unwrap().connection_count, 1);
+    let _ = std::fs::remove_dir_all(data_dir);
 }
 
 #[test]

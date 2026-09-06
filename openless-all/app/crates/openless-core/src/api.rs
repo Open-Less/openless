@@ -3102,10 +3102,9 @@ impl OpenLessBackend {
         };
         if let Some(cleanup) = dictation_cleanup {
             let cancel_result = cleanup.await;
-            let host_result = self
-                .deps
-                .host_actions
-                .request(HostAction::HideDictationFeedback);
+            let host_result = active_session
+                .map(|session_id| self.hide_dictation_feedback(session_id))
+                .unwrap_or(Ok(()));
             cancel_result?;
             host_result?;
         }
@@ -4576,10 +4575,7 @@ impl OpenLessBackend {
                         None,
                         None,
                     );
-                    let _ = self
-                        .deps
-                        .host_actions
-                        .request(HostAction::HideDictationFeedback);
+                    let _ = self.hide_dictation_feedback(session_id);
                     self.reset_dictation_session(session_id);
                     return Err(error);
                 }
@@ -4627,10 +4623,7 @@ impl OpenLessBackend {
                 );
             }
             let _ = self.cancel_session_adapters(session_id).await;
-            let _ = self
-                .deps
-                .host_actions
-                .request(HostAction::HideDictationFeedback);
+            let _ = self.hide_dictation_feedback(session_id);
             self.reset_dictation_session(session_id);
             return Err(error);
         }
@@ -4778,10 +4771,7 @@ impl OpenLessBackend {
                     None,
                 );
                 let _ = self.cancel_session_adapters(session_id).await;
-                let _ = self
-                    .deps
-                    .host_actions
-                    .request(HostAction::HideDictationFeedback);
+                let _ = self.hide_dictation_feedback(session_id);
                 self.reset_dictation_session(session_id);
                 return Err(error);
             }
@@ -4846,10 +4836,7 @@ impl OpenLessBackend {
                     );
                 }
                 let _ = self.cancel_text_insertion(session_id).await;
-                let _ = self
-                    .deps
-                    .host_actions
-                    .request(HostAction::HideDictationFeedback);
+                let _ = self.hide_dictation_feedback(session_id);
                 self.reset_dictation_session(session_id);
                 return Err(error);
             }
@@ -4877,10 +4864,7 @@ impl OpenLessBackend {
                 engine_result.llm_call_label.clone(),
             );
             let _ = self.cancel_text_insertion(session_id).await;
-            let _ = self
-                .deps
-                .host_actions
-                .request(HostAction::HideDictationFeedback);
+            let _ = self.hide_dictation_feedback(session_id);
             self.reset_dictation_session(session_id);
             return Err(error);
         }
@@ -4967,10 +4951,7 @@ impl OpenLessBackend {
                         engine_result.llm_call_label.clone(),
                     );
                     let _ = self.cancel_text_insertion(session_id).await;
-                    let _ = self
-                        .deps
-                        .host_actions
-                        .request(HostAction::HideDictationFeedback);
+                    let _ = self.hide_dictation_feedback(session_id);
                     self.reset_dictation_session(session_id);
                     return Err(error);
                 }
@@ -5035,18 +5016,7 @@ impl OpenLessBackend {
             insert_outcome,
             &result.polished_text,
         );
-        let host_result = {
-            let state = self.state.read().expect("backend state lock poisoned");
-            // Keep the identity check and synchronous Host enqueue in the same
-            // critical section; a successor's Show cannot overtake this Hide.
-            if state.dictation.session_id == Some(session_id) {
-                self.deps
-                    .host_actions
-                    .request(HostAction::HideDictationFeedback)
-            } else {
-                Ok(())
-            }
-        };
+        let host_result = self.hide_dictation_feedback(session_id);
         // Reuse the same identity-checked reset as failure/cancellation. A
         // delayed successful completion must not clear its successor's state,
         // transcript, silence detector or physical-hotkey generation.
@@ -5203,6 +5173,25 @@ impl OpenLessBackend {
         }
     }
 
+    fn hide_dictation_feedback(&self, session_id: SessionId) -> Result<(), BackendError> {
+        let state = self.state.read().expect("backend state lock poisoned");
+        if state
+            .dictation
+            .session_id
+            .is_some_and(|current| current != session_id)
+        {
+            return Ok(());
+        }
+        // Cancellation resets its snapshot before awaiting native cleanup, so
+        // Idle still permits its Hide. Any live successor suppresses it. Keep
+        // the check and synchronous Host enqueue under one read guard so the
+        // successor's Show cannot overtake an old terminal action. All success,
+        // failure, cancellation and shutdown exits share this same boundary.
+        self.deps
+            .host_actions
+            .request(HostAction::HideDictationFeedback)
+    }
+
     fn reset_dictation_session(&self, session_id: SessionId) {
         let mut state = self.state.write().expect("backend state lock poisoned");
         let mut released = false;
@@ -5347,10 +5336,7 @@ impl OpenLessBackend {
             None,
         );
         let cancel_result = self.cancel_session_adapters(session_id).await;
-        let _ = self
-            .deps
-            .host_actions
-            .request(HostAction::HideDictationFeedback);
+        let _ = self.hide_dictation_feedback(session_id);
         self.reset_dictation_session(session_id);
         cancel_result
     }
@@ -5391,10 +5377,7 @@ impl OpenLessBackend {
         // cleanup still owns the shared resource. Reject new capture until that
         // cleanup finishes, including on its error path.
         self.voice_sessions.release(active);
-        let host_result = self
-            .deps
-            .host_actions
-            .request(HostAction::HideDictationFeedback);
+        let host_result = self.hide_dictation_feedback(active);
         cancel_result?;
         host_result?;
         Ok(())
@@ -8287,6 +8270,37 @@ mod tests {
                 "a frozen true preference cannot restart native document observation"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn delayed_cancel_reply_cannot_hide_a_successor_session() {
+        let (backend, host) = backend();
+        backend.start().await.unwrap();
+        let first = backend.start_dictation().await.unwrap();
+        let mut cancelling = Box::pin(backend.cancel_dictation(Some(first)));
+        assert!(futures_util::poll!(cancelling.as_mut()).is_pending());
+        // Run executor-owned native cleanup, but intentionally do not resume
+        // its caller. Releasing resources must not authorize a late Hide of B.
+        let second = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                match backend.start_dictation().await {
+                    Ok(id) => break id,
+                    Err(error) if error.code == BackendErrorCode::Busy => {
+                        tokio::task::yield_now().await;
+                    }
+                    Err(error) => panic!("unexpected start failure: {error}"),
+                }
+            }
+        })
+        .await
+        .unwrap();
+        cancelling.await.unwrap();
+        assert_eq!(backend.snapshot().dictation.session_id, Some(second));
+        assert_eq!(
+            host.0.lock().unwrap().last(),
+            Some(&HostAction::ShowDictationFeedback)
+        );
+        backend.cancel_dictation(Some(second)).await.unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

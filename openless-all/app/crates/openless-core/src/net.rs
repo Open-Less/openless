@@ -95,7 +95,15 @@ pub fn http() -> reqwest::Client {
 /// HTTP client for requests carrying OAuth device credentials or bearer tokens.
 /// Redirects are disabled so secrets are never replayed to a different origin.
 pub fn credential_http() -> reqwest::Client {
-    let no_proxy = !use_system_proxy();
+    credential_http_for_url("")
+}
+
+/// No-redirect client selected for the current request, not backend startup.
+/// A loopback OAuth endpoint must remain direct even when other endpoints in
+/// the same service are public. This client caches no credentials; bearer
+/// tokens and device codes belong only to the individual request builder.
+pub fn credential_http_for_url(base_url: &str) -> reqwest::Client {
+    let no_proxy = should_bypass_proxy(base_url, use_system_proxy());
     cached_client((1, no_proxy), || {
         base_client_builder(no_proxy)
             .redirect(reqwest::redirect::Policy::none())

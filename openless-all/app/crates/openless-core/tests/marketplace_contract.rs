@@ -43,6 +43,133 @@ fn marketplace_backend(base_url: String, name: &str) -> (OpenLessBackend, std::p
     (backend, data_dir)
 }
 
+#[tokio::test]
+async fn marketplace_follows_live_proxy_policy_and_bypasses_each_loopback_endpoint() {
+    const CHILD: &str = "OPENLESS_MARKETPLACE_PROXY_CONTRACT";
+    if let Ok(device_url) = std::env::var(CHILD) {
+        // The subprocess owns both environment and Core's global proxy policy;
+        // no concurrently running contract test can see this test's toggles.
+        openless_core::net::set_use_system_proxy(false);
+        let (backend, data_dir) = marketplace_backend(
+            format!("http://{}.invalid", uuid::Uuid::new_v4()),
+            "proxy-policy",
+        );
+        let marketplace = &backend.services().marketplace;
+        let query = || MarketplaceQuery {
+            query: None,
+            sort: None,
+            limit: None,
+        };
+        // .invalid has no origin server. Success therefore proves that the
+        // local test proxy was used; an error proves direct routing was kept.
+        assert!(
+            marketplace.list(query()).await.is_err(),
+            "saved proxy opt-out was ignored"
+        );
+        openless_core::net::set_use_system_proxy(true);
+        assert!(marketplace.list(query()).await.unwrap().is_empty());
+        openless_core::net::set_use_system_proxy(false);
+        assert!(
+            marketplace.list(query()).await.is_err(),
+            "live proxy opt-out was ignored"
+        );
+        openless_core::net::set_use_system_proxy(true);
+        assert!(marketplace.list(query()).await.unwrap().is_empty());
+
+        let mut dependencies = BackendDependencies::unsupported();
+        dependencies.credential_store = Arc::new(InMemoryCredentialStore::default());
+        let mut config = MarketplaceConfig::production();
+        // The other endpoints remain non-loopback: bypass must be selected for
+        // this request URL, not only when every configured endpoint is local.
+        config.github_device_code_url = device_url.parse().unwrap();
+        dependencies.marketplace_config = Some(config);
+        let oauth_data_dir = data_dir.join("oauth");
+        let oauth = OpenLessBackend::new(
+            BackendConfig {
+                data_dir: oauth_data_dir,
+                ..BackendConfig::default()
+            },
+            dependencies,
+        )
+        .unwrap();
+        assert_eq!(
+            oauth
+                .services()
+                .marketplace
+                .start_device_flow()
+                .await
+                .unwrap()
+                .user_code,
+            "ABCD-EFGH",
+        );
+        let _ = std::fs::remove_dir_all(data_dir);
+        return;
+    }
+
+    let proxy = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let proxy_url = format!("http://{}", proxy.local_addr().unwrap());
+    let proxy_requests = Arc::new(AtomicUsize::new(0));
+    let proxy_count = Arc::clone(&proxy_requests);
+    let proxy_server = tokio::spawn(async move {
+        loop {
+            let (mut stream, _) = proxy.accept().await.unwrap();
+            let mut request = [0; 4096];
+            let _ = stream.read(&mut request).await.unwrap();
+            proxy_count.fetch_add(1, Ordering::SeqCst);
+            stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n[]").await.unwrap();
+        }
+    });
+    let direct = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let device_url = format!("http://{}/device", direct.local_addr().unwrap());
+    let direct_server = tokio::spawn(async move {
+        let (mut stream, _) = direct.accept().await.unwrap();
+        let mut request = [0; 4096];
+        let _ = stream.read(&mut request).await.unwrap();
+        let body = r#"{"device_code":"fixture-secret","user_code":"ABCD-EFGH","verification_uri":"https://github.com/login/device","expires_in":600,"interval":5}"#;
+        stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+    });
+    let output = tokio::task::spawn_blocking(move || {
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command.args([
+            "--exact",
+            "marketplace_follows_live_proxy_policy_and_bypasses_each_loopback_endpoint",
+            "--nocapture",
+        ]);
+        for name in [
+            "HTTP_PROXY",
+            "http_proxy",
+            "HTTPS_PROXY",
+            "https_proxy",
+            "ALL_PROXY",
+            "all_proxy",
+            "NO_PROXY",
+            "no_proxy",
+        ] {
+            command.env_remove(name);
+        }
+        command
+            .env("HTTP_PROXY", proxy_url)
+            .env(CHILD, device_url)
+            .output()
+            .unwrap()
+    })
+    .await
+    .unwrap();
+    proxy_server.abort();
+    direct_server.abort();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        proxy_requests.load(Ordering::SeqCst),
+        2,
+        "only the two proxy-enabled public requests may reach the proxy"
+    );
+}
+
 #[test]
 fn marketplace_result_dtos_have_stable_host_facing_json() {
     let upload = MarketplaceUploadResult {
