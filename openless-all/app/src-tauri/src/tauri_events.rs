@@ -13,13 +13,23 @@ use openless_core::{
 };
 use tauri::{AppHandle, Emitter, Manager};
 
+#[derive(Default)]
+struct CapsuleOwners {
+    transcription_notice: Option<SessionId>,
+    // Presentation ownership only: Recording/level proves this turn used audio.
+    // Keep a known owner across resync; a Thinking snapshot alone cannot tell a
+    // voice turn from a text turn if its initial Recording event was dropped.
+    qa_voice: Option<SessionId>,
+    // Keep the last successful native epoch after rejection: a late CPU notice
+    // or resync for that same turn must not reclaim a replaced display.
+    qa_capsule: Option<(SessionId, u64)>,
+}
+
 pub fn start(app: AppHandle, backend: Arc<OpenLessBackend>) {
     let mut events = backend.subscribe();
     let backend_for_events = Arc::clone(&backend);
     tauri::async_runtime::spawn(async move {
-        // Only a native-transcription notice needs this temporary display
-        // owner. Normal capsule events retain their existing lifecycle.
-        let mut transcription_notice_owner = None;
+        let mut capsule_owners = CapsuleOwners::default();
         loop {
             match events.recv().await {
                 Ok(event) => {
@@ -29,7 +39,7 @@ pub fn start(app: AppHandle, backend: Arc<OpenLessBackend>) {
                         &backend_for_events,
                         event.session_id,
                         event.kind,
-                        &mut transcription_notice_owner,
+                        &mut capsule_owners,
                     )
                     .await;
                 }
@@ -37,8 +47,8 @@ pub fn start(app: AppHandle, backend: Arc<OpenLessBackend>) {
                     log::warn!(
                         "[core-events] Tauri bridge lagged by {dropped} event(s); resyncing snapshots"
                     );
-                    transcription_notice_owner = None;
-                    emit_resync(&app, &backend_for_events).await;
+                    capsule_owners.transcription_notice = None;
+                    emit_resync(&app, &backend_for_events, &mut capsule_owners).await;
                 }
                 Err(EventRecvError::Closed) => break,
                 Err(EventRecvError::Empty) => unreachable!("async receive never returns Empty"),
@@ -87,8 +97,43 @@ async fn forward_legacy_event(
     backend: &OpenLessBackend,
     session_id: Option<SessionId>,
     kind: BackendEventKind,
-    transcription_notice_owner: &mut Option<SessionId>,
+    capsule_owners: &mut CapsuleOwners,
 ) {
+    if matches!(
+        kind,
+        BackendEventKind::QaLevel(_) | BackendEventKind::QaState(_)
+    ) {
+        let selection = backend.services().selection.snapshot().await.ok();
+        let selection_voice = backend.services().selection_voice.snapshot().await.ok();
+        // Read QA after the other async snapshots. Queued levels/terminals from
+        // an old turn must not be presented over its successor or another voice.
+        let qa = backend.services().qa.snapshot().await.ok();
+        let other_voice_active = qa_capsule_blocked(
+            backend.snapshot().dictation.phase,
+            backend
+                .less_computer_active_session()
+                .is_some_and(|session_id| !backend.less_computer_capture_cancelled(session_id)),
+            selection.map(|snapshot| snapshot.phase),
+            selection_voice.map(|snapshot| snapshot.phase),
+        );
+        let previous_voice = capsule_owners.qa_voice;
+        if let Some(payload) = qa_capsule_payload(
+            capsule_owners,
+            session_id,
+            &kind,
+            qa.as_ref(),
+            other_voice_active,
+            backend.get_preferences().capsule_style,
+        ) {
+            if let Some(coordinator) = app.try_state::<Arc<crate::coordinator::Coordinator>>() {
+                if let Some(owner) = capsule_owners.qa_voice.or(previous_voice) {
+                    present_qa_capsule(capsule_owners, owner, payload, |payload, expected| {
+                        coordinator.present_core_capsule_if_current(payload, expected)
+                    });
+                }
+            }
+        }
+    }
     match kind {
         BackendEventKind::PreferencesChanged(_) => emit_preferences(app, backend),
         BackendEventKind::CredentialsChanged(status) => {
@@ -100,12 +145,18 @@ async fn forward_legacy_event(
             let _ = app.emit("vocab:updated", ());
         }
         BackendEventKind::DictationStateChanged(snapshot) => {
-            *transcription_notice_owner = None;
+            capsule_owners.transcription_notice = None;
+            if snapshot.phase != DictationPhase::Idle {
+                capsule_owners.qa_voice = None;
+                capsule_owners.qa_capsule = None;
+            }
             emit_dictation_state(app, backend, snapshot)
         }
         BackendEventKind::TranscriptDelta(_) => {}
         BackendEventKind::DictationCompleted(result) => {
-            *transcription_notice_owner = None;
+            capsule_owners.transcription_notice = None;
+            capsule_owners.qa_voice = None;
+            capsule_owners.qa_capsule = None;
             if let Some(coordinator) = app.try_state::<Arc<crate::coordinator::Coordinator>>() {
                 let message = match &result.inserted {
                     openless_core::DictationInsertStatus::Inserted => "已输入",
@@ -179,8 +230,12 @@ async fn forward_legacy_event(
                     if let Some(coordinator) =
                         app.try_state::<Arc<crate::coordinator::Coordinator>>()
                     {
-                        *transcription_notice_owner = None;
+                        capsule_owners.transcription_notice = None;
                         use openless_core::LessComputerVoicePhase;
+                        if *phase != LessComputerVoicePhase::Idle {
+                            capsule_owners.qa_voice = None;
+                            capsule_owners.qa_capsule = None;
+                        }
                         let state = match phase {
                             LessComputerVoicePhase::Starting
                             | LessComputerVoicePhase::Recording => CapsuleState::Recording,
@@ -253,12 +308,6 @@ async fn forward_legacy_event(
             );
         }
         BackendEventKind::QaState(state) => {
-            // QA uses Loading for ASR and Thinking for its LLM. Its ordinary
-            // events only update the chat panel, so explicitly retire a CPU
-            // download notice when this same turn leaves transcription.
-            if finish_qa_transcription_notice(transcription_notice_owner, session_id, state.kind) {
-                emit_dictation_state(app, backend, DictationStateSnapshot::default());
-            }
             let _ = app.emit_to(crate::coordinator::qa_event_target(), "qa:state", state);
         }
         BackendEventKind::Notification(notice) => {
@@ -282,13 +331,34 @@ async fn forward_legacy_event(
                 backend.get_preferences().capsule_style,
             ) {
                 if let Some(coordinator) = app.try_state::<Arc<crate::coordinator::Coordinator>>() {
-                    coordinator.present_core_capsule(payload);
-                    *transcription_notice_owner = session_id;
+                    if let Some(owner) = session_id.filter(|id| {
+                        qa.as_ref()
+                            .is_some_and(|snapshot| snapshot.session_id == Some(*id))
+                    }) {
+                        // A live native-ASR notice also proves audio ownership
+                        // when the initial Recording event was lost to lag.
+                        if present_qa_capsule(
+                            capsule_owners,
+                            owner,
+                            payload,
+                            |payload, expected| {
+                                coordinator.present_core_capsule_if_current(payload, expected)
+                            },
+                        ) {
+                            capsule_owners.qa_voice = Some(owner);
+                            capsule_owners.transcription_notice = Some(owner);
+                        }
+                    } else {
+                        coordinator.present_core_capsule(payload);
+                        capsule_owners.transcription_notice = session_id;
+                    }
                 }
             }
         }
         BackendEventKind::BackendStopping => {
-            if transcription_notice_owner.take().is_some() {
+            let notice_visible = capsule_owners.transcription_notice.take().is_some();
+            let qa_visible = capsule_owners.qa_voice.take().is_some();
+            if notice_visible || qa_visible {
                 emit_dictation_state(app, backend, DictationStateSnapshot::default());
             }
         }
@@ -465,10 +535,178 @@ fn finish_qa_transcription_notice(
     }
 }
 
-async fn emit_resync(app: &AppHandle, backend: &OpenLessBackend) {
+fn qa_capsule_payload(
+    owners: &mut CapsuleOwners,
+    session_id: Option<SessionId>,
+    event: &BackendEventKind,
+    qa: Option<&QaSnapshot>,
+    other_voice_active: bool,
+    style: CapsuleStyle,
+) -> Option<CapsulePayload> {
+    use openless_core::{QaPhase, QaStateKind};
+
+    if other_voice_active {
+        // Once another domain owns the capsule, a later QA terminal must not
+        // regain its old display merely because that domain has just finished.
+        let previous = owners.qa_voice.take();
+        if owners.transcription_notice == previous {
+            owners.transcription_notice = None;
+        }
+        return None;
+    }
+    let qa = qa?;
+    let (kind, level, error) = match event {
+        BackendEventKind::QaState(state) => (state.kind, 0.0, state.error.as_ref()),
+        BackendEventKind::QaLevel(level) => (QaStateKind::Recording, level.level, None),
+        _ => return None,
+    };
+    let terminal = matches!(
+        kind,
+        QaStateKind::Idle | QaStateKind::Answer | QaStateKind::Cancelled | QaStateKind::Error
+    );
+    if session_id != qa.session_id && !(terminal && qa.session_id.is_none()) {
+        return None;
+    }
+    if kind == QaStateKind::Recording
+        && qa.phase == QaPhase::Recording
+        && session_id.is_some()
+        && session_id == qa.session_id
+    {
+        owners.qa_voice = session_id;
+    }
+    let owns_voice = owners.qa_voice.is_some()
+        && (owners.qa_voice == session_id
+            || (kind == QaStateKind::Idle && session_id.is_none() && qa.session_id.is_none()));
+    let state = if owns_voice {
+        match kind {
+            QaStateKind::Recording if qa.phase == QaPhase::Recording => CapsuleState::Recording,
+            QaStateKind::Loading if qa.phase == QaPhase::Thinking => CapsuleState::Transcribing,
+            QaStateKind::Thinking | QaStateKind::AwaitingApproval
+                if matches!(qa.phase, QaPhase::Thinking | QaPhase::AwaitingApproval) =>
+            {
+                CapsuleState::Polishing
+            }
+            QaStateKind::Error if qa.phase == QaPhase::Failed => CapsuleState::Error,
+            QaStateKind::Answer if qa.phase == QaPhase::Completed || qa.session_id.is_none() => {
+                CapsuleState::Idle
+            }
+            QaStateKind::Cancelled if qa.phase == QaPhase::Cancelled || qa.session_id.is_none() => {
+                CapsuleState::Idle
+            }
+            QaStateKind::Idle if matches!(qa.phase, QaPhase::Idle | QaPhase::Completed) => {
+                CapsuleState::Idle
+            }
+            _ => return None,
+        }
+    } else if owners.qa_voice.is_some() && session_id.is_some() && session_id == qa.session_id {
+        // A following text turn owns no voice feedback. Retire only the old QA
+        // display; do not show its Loading/Thinking events as a new recording.
+        CapsuleState::Idle
+    } else {
+        return None;
+    };
+    if matches!(state, CapsuleState::Idle | CapsuleState::Error) {
+        let previous = owners.qa_voice.take();
+        if owners.transcription_notice == previous {
+            owners.transcription_notice = None;
+        }
+    } else {
+        finish_qa_transcription_notice(&mut owners.transcription_notice, session_id, kind);
+    }
+    Some(CapsulePayload {
+        state,
+        level: if level.is_finite() {
+            level.clamp(0.0, 1.0)
+        } else {
+            0.0
+        },
+        elapsed_ms: 0,
+        message: (state == CapsuleState::Error).then(|| {
+            error
+                .or(qa.last_error.as_ref())
+                .filter(|message| !message.trim().is_empty())
+                .cloned()
+                .unwrap_or_else(|| "QA 处理失败，请重试".to_string())
+        }),
+        inserted_chars: None,
+        translation: false,
+        operating: false,
+        // Core announces Recording before native startup completes; only a
+        // real PCM level proves the microphone is ready, including level zero.
+        warming: state == CapsuleState::Recording && !matches!(event, BackendEventKind::QaLevel(_)),
+        capsule_style: style,
+        selection_polish: false,
+    })
+}
+
+fn qa_capsule_blocked(
+    dictation: DictationPhase,
+    less_voice_active: bool,
+    selection: Option<openless_core::SelectionPhase>,
+    selection_voice: Option<openless_core::SelectionVoicePhase>,
+) -> bool {
+    dictation != DictationPhase::Idle
+        || less_voice_active
+        || matches!(
+            selection,
+            Some(
+                openless_core::SelectionPhase::Capturing | openless_core::SelectionPhase::Applying
+            )
+        )
+        || matches!(
+            selection_voice,
+            Some(
+                openless_core::SelectionVoicePhase::Recording
+                    | openless_core::SelectionVoicePhase::Processing
+                    | openless_core::SelectionVoicePhase::AwaitingIntent
+                    | openless_core::SelectionVoicePhase::Applying
+            )
+        )
+}
+
+fn present_qa_capsule(
+    owners: &mut CapsuleOwners,
+    session_id: SessionId,
+    payload: CapsulePayload,
+    present: impl FnOnce(CapsulePayload, Option<u64>) -> Option<u64>,
+) -> bool {
+    let expected = owners
+        .qa_capsule
+        .filter(|(owner, _)| *owner == session_id)
+        .map(|(_, epoch)| epoch);
+    if let Some(epoch) = present(payload, expected) {
+        owners.qa_capsule = Some((session_id, epoch));
+        true
+    } else {
+        if owners.qa_voice == Some(session_id) {
+            owners.qa_voice = None;
+        }
+        if owners.transcription_notice == Some(session_id) {
+            owners.transcription_notice = None;
+        }
+        false
+    }
+}
+
+async fn emit_resync(app: &AppHandle, backend: &OpenLessBackend, owners: &mut CapsuleOwners) {
     emit_preferences(app, backend);
     let snapshot = backend.snapshot();
-    emit_dictation_state(app, backend, snapshot.dictation.clone());
+    if let Some((owner, _)) = owners
+        .qa_capsule
+        .filter(|_| snapshot.dictation.phase == DictationPhase::Idle)
+    {
+        if let Some(coordinator) = app.try_state::<Arc<crate::coordinator::Coordinator>>() {
+            let payload = map_dictation_state(
+                snapshot.dictation.clone(),
+                backend.get_preferences().capsule_style,
+            );
+            present_qa_capsule(owners, owner, payload, |payload, expected| {
+                coordinator.present_core_capsule_if_current(payload, expected)
+            });
+        }
+    } else {
+        emit_dictation_state(app, backend, snapshot.dictation.clone());
+    }
     let _ = app.emit("credentials:changed", snapshot.credentials);
     let _ = app.emit("vocab:updated", ());
 
@@ -488,9 +726,12 @@ async fn emit_resync(app: &AppHandle, backend: &OpenLessBackend) {
             None
         }
     };
-    let mut transcription_notice_owner = None;
+    let qa_session_id = qa.as_ref().and_then(|snapshot| snapshot.session_id);
     for kind in resync_domain_events(qa, remote_input) {
-        forward_legacy_event(app, backend, None, kind, &mut transcription_notice_owner).await;
+        let session_id = matches!(kind, BackendEventKind::QaState(_))
+            .then_some(qa_session_id)
+            .flatten();
+        forward_legacy_event(app, backend, session_id, kind, owners).await;
     }
 }
 
@@ -515,6 +756,383 @@ fn resync_domain_events(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn qa_native_epoch_is_not_reacquired_by_notice_or_resync_after_rejection() {
+        let session_id = SessionId::new();
+        let mut owners = CapsuleOwners {
+            qa_voice: Some(session_id),
+            ..Default::default()
+        };
+        let payload =
+            || map_dictation_state(DictationStateSnapshot::default(), CapsuleStyle::Classic);
+        assert!(present_qa_capsule(
+            &mut owners,
+            session_id,
+            payload(),
+            |_, expected| {
+                assert_eq!(expected, None);
+                Some(11)
+            }
+        ));
+        assert_eq!(owners.qa_capsule, Some((session_id, 11)));
+        for _ in 0..3 {
+            // The first call is the delayed QA state; later calls use the same
+            // production exit for native notices and snapshot replay.
+            assert!(!present_qa_capsule(
+                &mut owners,
+                session_id,
+                payload(),
+                |_, expected| {
+                    assert_eq!(expected, Some(11));
+                    None
+                }
+            ));
+            assert_eq!(owners.qa_voice, None);
+            assert_eq!(owners.qa_capsule, Some((session_id, 11)));
+        }
+        let next = SessionId::new();
+        assert!(present_qa_capsule(
+            &mut owners,
+            next,
+            payload(),
+            |_, expected| {
+                assert_eq!(expected, None);
+                Some(13)
+            }
+        ));
+        assert_eq!(owners.qa_capsule, Some((next, 13)));
+    }
+
+    #[test]
+    fn qa_voice_events_restore_the_capsule_lifecycle() {
+        use openless_core::{QaPhase, QaStateKind};
+        let session_id = SessionId::new();
+        let mut qa = QaSnapshot {
+            session_id: Some(session_id),
+            phase: QaPhase::Recording,
+            ..Default::default()
+        };
+        let mut owners = CapsuleOwners::default();
+        let payload = qa_capsule_payload(
+            &mut owners,
+            Some(session_id),
+            &BackendEventKind::QaState(openless_core::QaStateEvent::from_snapshot(&qa)),
+            Some(&qa),
+            false,
+            CapsuleStyle::Classic,
+        )
+        .expect("ordinary QA recording must show the existing capsule");
+        assert_eq!(payload.state, CapsuleState::Recording);
+        assert!(payload.warming);
+        assert_eq!(owners.qa_voice, Some(session_id));
+        for expected_level in [0.0, 0.35] {
+            let level = qa_capsule_payload(
+                &mut owners,
+                Some(session_id),
+                &BackendEventKind::QaLevel(openless_core::QaRecordingLevel {
+                    session_id: session_id.to_string(),
+                    level: expected_level,
+                }),
+                Some(&qa),
+                false,
+                CapsuleStyle::Classic,
+            )
+            .unwrap();
+            assert_eq!(level.state, CapsuleState::Recording);
+            assert_eq!(level.level, expected_level);
+            assert!(!level.warming && !level.translation && !level.operating);
+        }
+
+        for (phase, kind, expected) in [
+            (
+                QaPhase::Thinking,
+                QaStateKind::Loading,
+                CapsuleState::Transcribing,
+            ),
+            (
+                QaPhase::Thinking,
+                QaStateKind::Thinking,
+                CapsuleState::Polishing,
+            ),
+            (QaPhase::Completed, QaStateKind::Answer, CapsuleState::Idle),
+            (
+                QaPhase::Recording,
+                QaStateKind::Recording,
+                CapsuleState::Recording,
+            ),
+            (QaPhase::Failed, QaStateKind::Error, CapsuleState::Error),
+            (
+                QaPhase::Recording,
+                QaStateKind::Recording,
+                CapsuleState::Recording,
+            ),
+            (
+                QaPhase::Cancelled,
+                QaStateKind::Cancelled,
+                CapsuleState::Idle,
+            ),
+        ] {
+            qa.phase = phase;
+            let mut event = openless_core::QaStateEvent::from_snapshot(&qa);
+            event.kind = kind;
+            event.error = (kind == QaStateKind::Error).then(|| "QA permission denied".into());
+            if kind == QaStateKind::Thinking {
+                owners.transcription_notice = Some(session_id);
+            }
+            let payload = qa_capsule_payload(
+                &mut owners,
+                Some(session_id),
+                &BackendEventKind::QaState(event),
+                Some(&qa),
+                false,
+                CapsuleStyle::Classic,
+            )
+            .unwrap_or_else(|| panic!("QA {kind:?} must retain its capsule feedback"));
+            assert_eq!(payload.state, expected, "{kind:?}");
+            if kind == QaStateKind::Thinking {
+                assert_eq!(
+                    owners.transcription_notice, None,
+                    "replace the CPU notice with Polishing"
+                );
+            }
+            if kind == QaStateKind::Error {
+                assert_eq!(payload.message.as_deref(), Some("QA permission denied"));
+            }
+        }
+        assert_eq!(owners.qa_voice, None);
+    }
+
+    #[test]
+    fn qa_capsule_rejects_queued_events_after_another_owner_takes_over() {
+        use openless_core::{QaPhase, QaStateKind};
+        let old = SessionId::new();
+        let current = SessionId::new();
+        let qa = QaSnapshot {
+            session_id: Some(current),
+            phase: QaPhase::Recording,
+            ..Default::default()
+        };
+        let mut owners = CapsuleOwners {
+            qa_voice: Some(current),
+            transcription_notice: Some(current),
+            ..Default::default()
+        };
+        for kind in [
+            QaStateKind::Recording,
+            QaStateKind::Loading,
+            QaStateKind::Thinking,
+            QaStateKind::Answer,
+            QaStateKind::Cancelled,
+            QaStateKind::Error,
+            QaStateKind::Idle,
+        ] {
+            assert!(
+                qa_capsule_payload(
+                    &mut owners,
+                    Some(old),
+                    &BackendEventKind::QaState(openless_core::QaStateEvent::simple(kind)),
+                    Some(&qa),
+                    false,
+                    CapsuleStyle::Classic,
+                )
+                .is_none(),
+                "old {kind:?} must not overwrite the new QA capsule"
+            );
+            assert_eq!(owners.qa_voice, Some(current));
+            assert_eq!(owners.transcription_notice, Some(current));
+        }
+        assert!(qa_capsule_payload(
+            &mut owners,
+            Some(old),
+            &BackendEventKind::QaLevel(openless_core::QaRecordingLevel {
+                session_id: old.to_string(),
+                level: 0.8,
+            }),
+            Some(&qa),
+            false,
+            CapsuleStyle::Classic,
+        )
+        .is_none());
+        let mut completed = qa.clone();
+        completed.phase = QaPhase::Completed;
+        for blocked in [
+            qa_capsule_blocked(DictationPhase::Starting, false, None, None),
+            qa_capsule_blocked(DictationPhase::Idle, true, None, None),
+            qa_capsule_blocked(
+                DictationPhase::Idle,
+                false,
+                Some(openless_core::SelectionPhase::Capturing),
+                None,
+            ),
+            qa_capsule_blocked(
+                DictationPhase::Idle,
+                false,
+                None,
+                Some(openless_core::SelectionVoicePhase::Recording),
+            ),
+        ] {
+            assert!(blocked);
+            owners.qa_voice = Some(current);
+            assert!(
+                qa_capsule_payload(
+                    &mut owners,
+                    Some(current),
+                    &BackendEventKind::QaState(openless_core::QaStateEvent::from_snapshot(
+                        &completed
+                    )),
+                    Some(&completed),
+                    blocked,
+                    CapsuleStyle::Classic,
+                )
+                .is_none(),
+                "an old QA terminal must not hide the other voice capsule"
+            );
+            assert_eq!(owners.qa_voice, None);
+            assert!(
+                qa_capsule_payload(
+                    &mut owners,
+                    Some(current),
+                    &BackendEventKind::QaLevel(openless_core::QaRecordingLevel {
+                        session_id: current.to_string(),
+                        level: 0.8,
+                    }),
+                    Some(&completed),
+                    false,
+                    CapsuleStyle::Classic,
+                )
+                .is_none(),
+                "a late level from completed QA cannot reclaim retired feedback"
+            );
+            assert_eq!(owners.qa_voice, None);
+            assert!(
+                qa_capsule_payload(
+                    &mut owners,
+                    Some(current),
+                    &BackendEventKind::QaLevel(openless_core::QaRecordingLevel {
+                        session_id: current.to_string(),
+                        level: 0.8,
+                    }),
+                    Some(&qa),
+                    blocked,
+                    CapsuleStyle::Classic,
+                )
+                .is_none(),
+                "a queued QA level must not replace another voice capsule"
+            );
+            assert_eq!(owners.qa_voice, None);
+            assert!(
+                qa_capsule_payload(
+                    &mut owners,
+                    Some(current),
+                    &BackendEventKind::QaState(openless_core::QaStateEvent::from_snapshot(
+                        &completed
+                    )),
+                    Some(&completed),
+                    false,
+                    CapsuleStyle::Classic,
+                )
+                .is_none(),
+                "a late terminal cannot regain ownership after the other voice finishes"
+            );
+        }
+    }
+
+    #[test]
+    fn qa_capsule_keeps_text_turns_quiet_and_recovers_only_known_voice_from_resync() {
+        use openless_core::{QaPhase, QaStateKind};
+        let session_id = SessionId::new();
+        let mut qa = QaSnapshot {
+            session_id: Some(session_id),
+            phase: QaPhase::Thinking,
+            ..Default::default()
+        };
+        let mut owners = CapsuleOwners::default();
+        for phase in [
+            QaPhase::Thinking,
+            QaPhase::Completed,
+            QaPhase::Failed,
+            QaPhase::Cancelled,
+        ] {
+            qa.phase = phase;
+            assert!(
+                qa_capsule_payload(
+                    &mut owners,
+                    Some(session_id),
+                    &BackendEventKind::QaState(openless_core::QaStateEvent::from_snapshot(&qa)),
+                    Some(&qa),
+                    false,
+                    CapsuleStyle::Classic,
+                )
+                .is_none(),
+                "text-only or unknown {phase:?} is not a voice recording"
+            );
+        }
+        owners.qa_voice = Some(SessionId::new());
+        qa.phase = QaPhase::Thinking;
+        let idle = qa_capsule_payload(
+            &mut owners,
+            Some(session_id),
+            &BackendEventKind::QaState(openless_core::QaStateEvent::from_snapshot(&qa)),
+            Some(&qa),
+            false,
+            CapsuleStyle::Classic,
+        )
+        .expect("a following text turn retires the previous voice feedback");
+        assert_eq!(idle.state, CapsuleState::Idle);
+        assert_eq!(owners.qa_voice, None);
+
+        qa.phase = QaPhase::Recording;
+        assert_eq!(
+            qa_capsule_payload(
+                &mut owners,
+                Some(session_id),
+                &BackendEventKind::QaState(openless_core::QaStateEvent::from_snapshot(&qa)),
+                Some(&qa),
+                false,
+                CapsuleStyle::Classic,
+            )
+            .unwrap()
+            .state,
+            CapsuleState::Recording
+        );
+        qa.phase = QaPhase::Thinking;
+        assert_eq!(
+            qa_capsule_payload(
+                &mut owners,
+                Some(session_id),
+                &BackendEventKind::QaState(openless_core::QaStateEvent::from_snapshot(&qa)),
+                Some(&qa),
+                false,
+                CapsuleStyle::Classic,
+            )
+            .unwrap()
+            .state,
+            CapsuleState::Polishing
+        );
+
+        let closed = QaSnapshot::default();
+        assert_eq!(
+            qa_capsule_payload(
+                &mut owners,
+                None,
+                &BackendEventKind::QaState(openless_core::QaStateEvent::simple(QaStateKind::Idle)),
+                Some(&closed),
+                false,
+                CapsuleStyle::Classic,
+            )
+            .unwrap()
+            .state,
+            CapsuleState::Idle
+        );
+        assert_eq!(owners.qa_voice, None);
+        assert!(!qa_capsule_blocked(
+            DictationPhase::Idle,
+            false,
+            None,
+            Some(openless_core::SelectionVoicePhase::Preview)
+        ));
+    }
 
     #[test]
     fn transcription_notice_projects_only_its_live_owner() {

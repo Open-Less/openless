@@ -484,6 +484,13 @@ pub trait TextPolisher: Send + Sync {
 }
 
 pub trait TextInserter: Send + Sync {
+    /// Freeze the native destination before context or credentials can await.
+    /// Only capture identity here; input-source changes belong to `begin` and
+    /// its existing cancellation cleanup. Target-independent adapters use None.
+    fn capture_target(&self) -> Option<Arc<dyn TextInserter>> {
+        None
+    }
+
     fn begin(
         &self,
         session_id: SessionId,

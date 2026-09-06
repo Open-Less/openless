@@ -504,15 +504,19 @@ impl DictationEngine for PipelineDictationEngine {
                     progress: Arc::clone(&progress),
                 });
                 let polish_started = std::time::Instant::now();
-                let result = match polisher
-                    .polish(
-                        session_id,
-                        context,
-                        transcript.text.clone(),
-                        polish_partials,
-                    )
-                    .await
-                {
+                let output = if let Some(error) = context.deferred_llm_error.clone() {
+                    Err(error)
+                } else {
+                    polisher
+                        .polish(
+                            session_id,
+                            context,
+                            transcript.text.clone(),
+                            polish_partials,
+                        )
+                        .await
+                };
+                let result = match output {
                     Ok(text) => (text, false),
                     Err(error) if can_fallback_to_raw(policy, &error) => (
                         crate::ports::PolishOutput::text(transcript.text.clone()),

@@ -2598,8 +2598,10 @@ fn map_recorder_error(error: RecorderError) -> BackendError {
     BackendError::new(code, error.user_message())
 }
 
+#[derive(Clone)]
 pub(crate) struct TauriTextInserter {
     app: AppHandleSlot,
+    insertion_target: Option<crate::selection::SelectionInsertionTarget>,
     #[cfg(target_os = "windows")]
     windows_ime: Arc<crate::windows_ime_session::WindowsImeSessionController>,
 }
@@ -2629,6 +2631,7 @@ impl TauriTextInserter {
     fn new(app: AppHandleSlot) -> Self {
         Self {
             app,
+            insertion_target: None,
             #[cfg(target_os = "windows")]
             windows_ime: Arc::new(crate::windows_ime_session::WindowsImeSessionController::new()),
         }
@@ -2660,20 +2663,29 @@ where
 }
 
 impl CoreTextInserter for TauriTextInserter {
+    fn capture_target(&self) -> Option<Arc<dyn CoreTextInserter>> {
+        Some(Arc::new(Self {
+            insertion_target: Some(crate::selection::capture_selection_insertion_target()),
+            ..self.clone()
+        }))
+    }
+
     fn begin(
         &self,
         session_id: SessionId,
         context: Arc<DictationContext>,
     ) -> BoxFuture<'static, Result<Arc<dyn TextInsertionSession>, BackendError>> {
         let app = Arc::clone(&self.app);
+        let insertion_target = self.insertion_target.clone();
         #[cfg(target_os = "windows")]
         let windows_ime = Arc::clone(&self.windows_ime);
         Box::pin(async move {
-            // Capture before ASR begins and retain this opaque native target in
+            // Retain the target captured before context/credential awaits in
             // the insertion resource. Every later write must reactivate it; a
             // failed restore becomes an explicit error instead of typing into
             // whichever application happens to be focused at the end.
-            let insertion_target = crate::selection::capture_selection_insertion_target();
+            let insertion_target = insertion_target
+                .unwrap_or_else(crate::selection::capture_selection_insertion_target);
             #[cfg(target_os = "windows")]
             let prepared = if context.insertion.windows_insertion_mode
                 == openless_core::shared_types::WindowsInsertionMode::Tsf

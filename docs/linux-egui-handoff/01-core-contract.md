@@ -45,12 +45,14 @@ DTO和平台Interface集中在[domains.rs](../../openless-all/app/crates/openles
 
 - 听写、QA、Selection Voice、Less Computer共享语音互斥：Busy拒绝新会话，不抢占旧会话。
 - provider/channel/model与上下文按会话冻结；只有已有合同允许的停止时翻译切换可更新该轮。
+- Core按实际管线解析渠道：Omni不依赖传统ASR/LLM，Less/Selection录音只依赖ASR，QA文本不依赖ASR。Raw允许没有可用LLM；若停止时改为翻译，Pipeline使用冻结的LLM或`deferred_llm_error`，不会偷偷切到录音期间新增/启用的渠道。
 - 停止、取消、timeout、设备fault与迟到结果必须保持单一终态，不能让旧任务改变新session。
 - 逻辑取消会立即使本代token失效；原生初始化、stop或ASR清理仍在途时，Core资源hold继续阻止新语音。收到取消终态不表示已经可以绕过Core强行打开另一个麦克风。
 - 自定义`DictationEngine`须原样接收/转发`start_voice_capture`与`start_audio_capture`的`CancellationToken`；ASR启动返回后、开麦前及原生初始化完成后均检查它，迟到句柄必须关闭。生产factory已接好，不要替换成一个永不取消的新token。
 - `Inserted`、`PasteSent`、`CopiedFallback`、`NotRequested`和错误`OutcomeUnknown`不可互换。结果未知不得自动再插一次。
 - 流式尾段协调、纠错执行顺序、历史/统计归因留在Core；Host只回报真实效果。
 - 插入`begin()`本身也可能切换输入源。Core在准备前登记同一可等待结果，取消/丢弃调用方不能跳过尚未完成的原生恢复。
+- `TextInserter::capture_target()`在听写认领后、上下文/凭据等待和反馈前同步调用；焦点敏感Host返回仅持本轮原生目标的插入器，异步`begin()`再准备输入源。原生句柄不进入Core DTO，无需插入时不捕获；不依赖焦点的Adapter保留默认`None`。Linux Host接入原目标快照时应覆写此入口，不能等凭据读取后重新抓当前焦点。
 
 ## 5. 秘密和数据
 

@@ -24,7 +24,7 @@ use crate::events::{
 };
 use crate::ports::{
     ActiveRecording, AudioConsumer, CapturedPcm, EditObservationSink, EngineFailureStage,
-    EngineProgress, EngineProgressSink, EngineStage, HostAction, InsertOutcome,
+    EngineProgress, EngineProgressSink, EngineStage, HostAction, InsertOutcome, TextInserter,
     TextInsertionSession, TextStreamChunk, TextStreamSink, TranscriptionSession,
 };
 use crate::shared_types::{
@@ -103,6 +103,20 @@ pub enum LessComputerHotkeyAction {
 pub struct DictationHotkeyDispatchOptions {
     pub start: DictationStartOptions,
     pub stop: DictationStopOptions,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DictationContextPurpose {
+    Dictation,
+    AsrOnly,
+    QaText,
+    QaVoice,
+}
+
+struct DictationReservation {
+    session_id: SessionId,
+    resources: Arc<crate::voice_session::VoiceResourceHold>,
+    inserter: Arc<dyn TextInserter>,
 }
 
 /// Core-owned audio-to-Agent session shared by native hosts.
@@ -2384,16 +2398,13 @@ impl OpenLessBackend {
                 return Err(error);
             }
             let context = match self
-                .capture_dictation_context(&DictationStartOptions::default())
+                .capture_dictation_context(
+                    &DictationStartOptions::default(),
+                    DictationContextPurpose::AsrOnly,
+                )
                 .await
             {
-                Ok(mut context) => {
-                    // Less Computer is a transcript-to-agent flow; it always uses
-                    // the active ASR provider, even when normal dictation is in
-                    // multimodal/Omni mode.
-                    context.pipeline_mode = crate::shared_types::PipelineMode::Traditional;
-                    Arc::new(context)
-                }
+                Ok(context) => Arc::new(context),
                 Err(error) => {
                     let _ = self.deps.services.less_computer.abort_capture(session_id);
                     return Err(error);
@@ -2565,9 +2576,11 @@ impl OpenLessBackend {
             ));
         }
         let mut context = self
-            .capture_dictation_context(&DictationStartOptions::default())
+            .capture_dictation_context(
+                &DictationStartOptions::default(),
+                DictationContextPurpose::AsrOnly,
+            )
             .await?;
-        context.pipeline_mode = crate::shared_types::PipelineMode::Traditional;
         context.recording.archive_enabled = false;
         let context = Arc::new(context);
         let started_at = std::time::Instant::now();
@@ -2620,7 +2633,9 @@ impl OpenLessBackend {
         progress: Arc<dyn crate::ports::RecordingProgressSink>,
     ) -> Result<QaVoiceCaptureSession, BackendError> {
         let resources = self.voice_sessions.hold_resources(session_id)?;
-        let mut context = self.capture_dictation_context(&options).await?;
+        let mut context = self
+            .capture_dictation_context(&options, DictationContextPurpose::QaVoice)
+            .await?;
         // QA audio is private and memory-only in both ASR and Omni modes,
         // independent of the main dictation debug-recording preference.
         context.recording.archive_enabled = false;
@@ -2927,15 +2942,18 @@ impl OpenLessBackend {
         ))
     }
 
-    /// Capture the same immutable provider/preferences snapshot used by the
-    /// main dictation pipeline for a host-owned auxiliary audio flow such as
-    /// QA. This is an adapter seam, not a UI use-case.
+    /// Capture the immutable response-provider/preferences snapshot for a QA
+    /// text turn. ASR is not required; QA voice captures both stages through
+    /// `start_qa_voice_capture`. This is an adapter seam, not a UI use-case.
     #[doc(hidden)]
     pub async fn capture_host_dictation_context(
         &self,
         options: DictationStartOptions,
     ) -> Result<Arc<DictationContext>, BackendError> {
-        Ok(Arc::new(self.capture_dictation_context(&options).await?))
+        Ok(Arc::new(
+            self.capture_dictation_context(&options, DictationContextPurpose::QaText)
+                .await?,
+        ))
     }
 
     pub fn subscribe(&self) -> EventSubscription {
@@ -3258,7 +3276,7 @@ impl OpenLessBackend {
             // before releasing the interpreter lock. An older CLI/button stop
             // must not clear this press between its Start decision and claim.
             let reservation = matches!(intent, HotkeyIntent::Start { .. })
-                .then(|| self.reserve_dictation_session());
+                .then(|| self.reserve_dictation_session(options.start.insert_text));
             (intent, reservation)
         };
         let (intent, reservation) = if let HotkeyIntent::WaitForModifierGrace { press_id } = intent
@@ -3275,7 +3293,7 @@ impl OpenLessBackend {
                 .expect("hotkey interpreter lock poisoned");
             let intent = hotkey.after_modifier_grace(press_id, self.snapshot().dictation.phase);
             let reservation = matches!(intent, HotkeyIntent::Start { .. })
-                .then(|| self.reserve_dictation_session());
+                .then(|| self.reserve_dictation_session(options.start.insert_text));
             (intent, reservation)
         } else {
             (intent, reservation)
@@ -3287,8 +3305,8 @@ impl OpenLessBackend {
             }
             HotkeyIntent::Start { press_id } => {
                 let result = match reservation.expect("Start intent must claim its session") {
-                    Ok((session_id, resources)) => {
-                        self.start_reserved_dictation(session_id, resources, options.start)
+                    Ok(reservation) => {
+                        self.start_reserved_dictation(reservation, options.start)
                             .await
                     }
                     Err(error) => Err(error),
@@ -4431,7 +4449,8 @@ impl OpenLessBackend {
 
     fn reserve_dictation_session(
         &self,
-    ) -> Result<(SessionId, Arc<crate::voice_session::VoiceResourceHold>), BackendError> {
+        insert_text: bool,
+    ) -> Result<DictationReservation, BackendError> {
         {
             let state = self.state.read().expect("backend state lock poisoned");
             ensure_running(&state)?;
@@ -4448,6 +4467,12 @@ impl OpenLessBackend {
             crate::voice_session::VoiceSessionKind::Dictation,
         )?;
         let starting_resources = self.voice_sessions.hold_resources(session_id)?;
+        // Freeze the destination before context/credential awaits or feedback
+        // can change foreground focus. No native preparation happens yet.
+        let inserter = insert_text
+            .then(|| self.deps.text_inserter.capture_target())
+            .flatten()
+            .unwrap_or_else(|| Arc::clone(&self.deps.text_inserter));
         self.disarm_edit_observation();
         // Context capture can await AX, a keyring, or another host service.
         // Publish ownership before that first await so Esc/stop see Starting
@@ -4470,25 +4495,35 @@ impl OpenLessBackend {
             );
             self.phase_changed.notify_waiters();
         }
-        Ok((session_id, starting_resources))
+        Ok(DictationReservation {
+            session_id,
+            resources: starting_resources,
+            inserter,
+        })
     }
 
     pub async fn start_dictation_with_options(
         &self,
         options: DictationStartOptions,
     ) -> Result<SessionId, BackendError> {
-        let (session_id, starting_resources) = self.reserve_dictation_session()?;
-        self.start_reserved_dictation(session_id, starting_resources, options)
-            .await
+        let reservation = self.reserve_dictation_session(options.insert_text)?;
+        self.start_reserved_dictation(reservation, options).await
     }
 
     async fn start_reserved_dictation(
         &self,
-        session_id: SessionId,
-        starting_resources: Arc<crate::voice_session::VoiceResourceHold>,
+        reservation: DictationReservation,
         options: DictationStartOptions,
     ) -> Result<SessionId, BackendError> {
-        let context = match self.capture_dictation_context(&options).await {
+        let DictationReservation {
+            session_id,
+            resources: starting_resources,
+            inserter,
+        } = reservation;
+        let context = match self
+            .capture_dictation_context(&options, DictationContextPurpose::Dictation)
+            .await
+        {
             Ok(context) => Arc::new(context),
             Err(error) => {
                 self.mark_dictation_failed(session_id, &error);
@@ -4541,7 +4576,6 @@ impl OpenLessBackend {
             return Err(error);
         }
         if context.insertion.enabled {
-            let inserter = Arc::clone(&self.deps.text_inserter);
             let insertion_context = Arc::clone(&context);
             let task_spawner = Arc::clone(&self.deps.task_spawner);
             let resources = Arc::clone(&starting_resources);
@@ -5429,6 +5463,7 @@ impl OpenLessBackend {
     async fn capture_dictation_context(
         &self,
         options: &DictationStartOptions,
+        purpose: DictationContextPurpose,
     ) -> Result<DictationContext, BackendError> {
         let preferences = self.get_preferences();
         let mut captured_options = options.clone();
@@ -5472,15 +5507,53 @@ impl OpenLessBackend {
             .filter(|entry| entry.enabled)
             .map(|entry| entry.phrase)
             .collect();
-        let active_asr_provider = self
-            .resolve_session_provider(ProviderSlot::Asr, &preferences.active_asr_provider)
-            .await?;
-        let active_llm_provider = self
-            .resolve_session_provider(ProviderSlot::Llm, &preferences.active_llm_provider)
-            .await?;
-        let active_omni_provider = self
-            .resolve_session_provider(ProviderSlot::Omni, &preferences.active_omni_provider)
-            .await?;
+        // Less/Selection audio always uses ASR. QA text needs no microphone
+        // provider; Omni needs neither traditional channel. An unused channel
+        // must not turn a valid route into a startup failure.
+        let pipeline_mode = if purpose == DictationContextPurpose::AsrOnly {
+            crate::shared_types::PipelineMode::Traditional
+        } else {
+            crate::shared_types::effective_pipeline_mode(
+                preferences.multimodal_pipeline_enabled,
+                preferences.pipeline_mode,
+            )
+        };
+        let traditional = pipeline_mode == crate::shared_types::PipelineMode::Traditional;
+        let active_asr_provider = if traditional && purpose != DictationContextPurpose::QaText {
+            self.resolve_session_provider(ProviderSlot::Asr, &preferences.active_asr_provider)
+                .await?
+        } else {
+            crate::dictation_context::ProviderInvocation::for_provider(
+                &preferences.active_asr_provider,
+            )
+        };
+        let mut deferred_llm_error = None;
+        let active_llm_provider = if traditional && purpose != DictationContextPurpose::AsrOnly {
+            match self
+                .resolve_session_provider(ProviderSlot::Llm, &preferences.active_llm_provider)
+                .await
+            {
+                Ok(provider) => provider,
+                Err(error) => {
+                    deferred_llm_error = Some(error);
+                    crate::dictation_context::ProviderInvocation::for_provider(
+                        &preferences.active_llm_provider,
+                    )
+                }
+            }
+        } else {
+            crate::dictation_context::ProviderInvocation::for_provider(
+                &preferences.active_llm_provider,
+            )
+        };
+        let active_omni_provider = if traditional {
+            crate::dictation_context::ProviderInvocation::for_provider(
+                &preferences.active_omni_provider,
+            )
+        } else {
+            self.resolve_session_provider(ProviderSlot::Omni, &preferences.active_omni_provider)
+                .await?
+        };
         let recent_history = if preferences.polish_context_window_minutes == 0 {
             Vec::new()
         } else {
@@ -5509,6 +5582,13 @@ impl OpenLessBackend {
             recent_history,
             options,
         );
+        context.pipeline_mode = pipeline_mode;
+        if let Some(error) = deferred_llm_error {
+            if purpose != DictationContextPurpose::Dictation || context.uses_llm_polisher() {
+                return Err(error);
+            }
+            context.deferred_llm_error = Some(error);
+        }
         context.correction_rules = self
             .correction_rules
             .list()?
@@ -9701,6 +9781,161 @@ mod tests {
             .unwrap()
             .iter()
             .all(|entry| entry.error_code.is_none()));
+        backend.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn raw_dictation_remains_usable_when_the_last_llm_channel_is_disabled() {
+        let data_dir = TestDataDir::new("raw-disabled-llm");
+        let polisher = Arc::new(crate::testing::FixtureTextPolisher::successful(
+            "must not run",
+        ));
+        let backend = backend_with_dictation_engine(
+            data_dir.path().to_path_buf(),
+            Arc::new(crate::PipelineDictationEngine::new(
+                Arc::new(crate::testing::FixtureAudioRecorder::default()),
+                Arc::new(crate::testing::FixtureTranscriptionEngine::successful(
+                    "raw words",
+                    80,
+                )),
+                polisher.clone(),
+            )),
+        );
+        let llm = backend
+            .create_channel(
+                ChannelKind::Llm,
+                "ark".to_string(),
+                "Unused LLM".to_string(),
+            )
+            .await
+            .unwrap();
+        let mut preferences = backend.get_preferences();
+        preferences.active_llm_provider = llm.clone();
+        preferences.working_languages = vec!["简体中文".to_string()];
+        preferences.translation_target_language = "English".to_string();
+        backend.set_preferences(preferences).unwrap();
+        backend
+            .set_active_provider(ProviderSlot::Llm, llm.clone())
+            .await
+            .unwrap();
+        backend
+            .set_channel_enabled(ChannelKind::Llm, llm.clone(), false)
+            .await
+            .unwrap();
+        backend.activate_style_pack("builtin.raw").unwrap();
+        backend.start().await.unwrap();
+
+        backend
+            .start_dictation()
+            .await
+            .expect("Raw does not require an enabled LLM channel");
+        let result = backend.stop_dictation().await.unwrap();
+        assert_eq!(result.polished_text, "raw words");
+
+        // A late translation gesture may use only the start-time channel
+        // snapshot, not the channel the user enables during this recording.
+        backend.start_dictation().await.unwrap();
+        backend
+            .set_channel_enabled(ChannelKind::Llm, llm.clone(), true)
+            .await
+            .unwrap();
+        let error = backend
+            .stop_dictation_with_options(DictationStopOptions {
+                translation_requested: Some(true),
+            })
+            .await
+            .expect_err("translation must retain the unavailable LLM snapshot");
+        assert_eq!(error.code, BackendErrorCode::InvalidState);
+        assert_eq!(backend.snapshot().dictation.phase, DictationPhase::Idle);
+
+        // Unlike Raw, a normal polish route still rejects a disabled LLM.
+        backend
+            .set_channel_enabled(ChannelKind::Llm, llm, false)
+            .await
+            .unwrap();
+        backend.activate_style_pack("builtin.light").unwrap();
+        assert_eq!(
+            backend.start_dictation().await.unwrap_err().code,
+            BackendErrorCode::InvalidState
+        );
+        assert_eq!(backend.snapshot().dictation.phase, DictationPhase::Idle);
+        assert!(polisher.inputs().is_empty());
+        backend.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn omni_dictation_ignores_disabled_traditional_channels() {
+        let data_dir = TestDataDir::new("omni-disabled-traditional-channels");
+        let backend = backend_with_dictation_engine(
+            data_dir.path().to_path_buf(),
+            Arc::new(crate::testing::FixtureDictationEngine::successful(
+                "omni raw",
+                "omni final",
+            )),
+        );
+        let mut preferences = backend.get_preferences();
+        preferences.multimodal_pipeline_enabled = true;
+        preferences.pipeline_mode = crate::shared_types::PipelineMode::Multimodal;
+        for (kind, slot, provider_type) in [
+            (ChannelKind::Asr, ProviderSlot::Asr, "volcengine"),
+            (ChannelKind::Llm, ProviderSlot::Llm, "ark"),
+        ] {
+            let id = backend
+                .create_channel(kind, provider_type.to_string(), "Unused".to_string())
+                .await
+                .unwrap();
+            match slot {
+                ProviderSlot::Asr => preferences.active_asr_provider = id.clone(),
+                ProviderSlot::Llm => preferences.active_llm_provider = id.clone(),
+                ProviderSlot::Omni => unreachable!(),
+            }
+            backend.set_active_provider(slot, id.clone()).await.unwrap();
+            backend.set_channel_enabled(kind, id, false).await.unwrap();
+        }
+        backend.set_preferences(preferences).unwrap();
+        backend.start().await.unwrap();
+
+        backend
+            .start_dictation()
+            .await
+            .expect("Omni does not require traditional ASR or LLM channels");
+        let result = backend.stop_dictation().await.unwrap();
+        assert_eq!(result.polished_text, "omni final");
+
+        let mut preferences = backend.get_preferences();
+        preferences.multimodal_pipeline_enabled = false;
+        backend.set_preferences(preferences).unwrap();
+        assert_eq!(
+            backend.start_dictation().await.unwrap_err().code,
+            BackendErrorCode::InvalidState
+        );
+        assert_eq!(
+            backend
+                .capture_host_dictation_context(DictationStartOptions::default())
+                .await
+                .unwrap_err()
+                .code,
+            BackendErrorCode::InvalidState
+        );
+        let llm = backend
+            .list_channels(ChannelKind::Llm)
+            .await
+            .unwrap()
+            .remove(0)
+            .id;
+        backend
+            .set_channel_enabled(ChannelKind::Llm, llm.clone(), true)
+            .await
+            .unwrap();
+        backend
+            .set_active_provider(ProviderSlot::Llm, llm)
+            .await
+            .unwrap();
+        let qa_text = backend
+            .capture_host_dictation_context(DictationStartOptions::default())
+            .await
+            .expect("text QA needs its LLM but not the disabled ASR channel");
+        assert_eq!(qa_text.llm.provider_type, "ark");
         backend.shutdown().await.unwrap();
     }
 

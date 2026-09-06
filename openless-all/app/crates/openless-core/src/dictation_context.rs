@@ -150,6 +150,10 @@ pub struct DictationContext {
     pub correction_rules: Vec<crate::types::CorrectionRule>,
     pub asr: ProviderInvocation,
     pub llm: ProviderInvocation,
+    /// Raw may start without an LLM. If translation is requested at stop,
+    /// preserve the start-time resolution failure instead of using a disabled
+    /// channel or silently selecting a newly configured provider.
+    pub deferred_llm_error: Option<crate::errors::BackendError>,
     pub omni: ProviderInvocation,
     pub polish: DictationPolishContext,
     pub insertion: DictationInsertionContext,
@@ -259,6 +263,7 @@ impl DictationContext {
             correction_rules: Vec::new(),
             asr,
             llm,
+            deferred_llm_error: None,
             omni,
             polish: DictationPolishContext {
                 mode: style_pack.base_mode,
@@ -324,7 +329,7 @@ impl DictationContext {
     }
 
     /// Match the legacy dictation rule: the untouched built-in Raw style is a
-    /// true passthrough and must not read credentials or open an LLM request.
+    /// true passthrough and must not require an LLM channel or open an LLM request.
     /// A custom Raw prompt and every translation request still use the
     /// polisher.
     pub fn uses_llm_polisher(&self) -> bool {

@@ -213,9 +213,39 @@ fn emit_capsule_with_context_locked(
 
 /// Core 反馈完整进入同一个原生显示出口；包括 warming、translation 等字段，
 /// 不经过旧的“按 Host 状态重建 payload”路径。
-pub(super) fn emit_core_capsule(inner: &Arc<Inner>, payload: CapsulePayload) -> u64 {
-    let _event_guard = inner.capsule_event_lock.lock();
-    emit_capsule_payload_locked(inner, payload)
+pub(super) fn emit_core_capsule(
+    inner: &Arc<Inner>,
+    payload: CapsulePayload,
+    expected_epoch: Option<u64>,
+) -> Option<u64> {
+    emit_capsule_at_epoch(
+        &inner.capsule_event_lock,
+        &inner.capsule_event_epoch,
+        expected_epoch,
+        || emit_capsule_payload_locked(inner, payload),
+    )
+}
+
+fn emit_capsule_at_epoch(
+    event_lock: &Mutex<()>,
+    current_epoch: &AtomicU64,
+    expected_epoch: Option<u64>,
+    emit: impl FnOnce() -> u64,
+) -> Option<u64> {
+    let _event_guard = event_lock.lock();
+    if expected_epoch.is_some_and(|expected| current_epoch.load(Ordering::SeqCst) != expected) {
+        return None;
+    }
+    Some(emit())
+}
+
+pub(super) fn hide_core_capsule_if_current(inner: &Arc<Inner>, expected_epoch: u64) {
+    let _ = emit_capsule_at_epoch(
+        &inner.capsule_event_lock,
+        &inner.capsule_event_epoch,
+        Some(expected_epoch),
+        || emit_capsule_with_context_locked(inner, CapsuleState::Idle, 0.0, 0, None, None, false),
+    );
 }
 
 fn emit_capsule_payload_locked(inner: &Arc<Inner>, payload: CapsulePayload) -> u64 {
@@ -456,6 +486,41 @@ pub(super) fn hide_selection_polish_capsule_if_current(inner: &Arc<Inner>, expec
     let _event_guard = inner.capsule_event_lock.lock();
     if selection_polish_capsule_epoch_is_current(inner, expected_epoch) {
         emit_capsule_with_context_locked(inner, CapsuleState::Idle, 0.0, 0, None, None, false);
+    }
+}
+
+#[cfg(test)]
+mod epoch_tests {
+    use super::*;
+
+    #[test]
+    fn queued_qa_terminal_and_timer_cannot_hide_direct_native_feedback() {
+        for initial in [CapsuleState::Polishing, CapsuleState::Error] {
+            let lock = Mutex::new(());
+            let epoch = AtomicU64::new(0);
+            let visible = Mutex::new(CapsuleState::Idle);
+            let write = |state| {
+                assert!(
+                    lock.try_lock().is_none(),
+                    "the native write must remain under the epoch lock"
+                );
+                *visible.lock() = state;
+                epoch.fetch_add(1, Ordering::SeqCst) + 1
+            };
+            let qa_epoch = emit_capsule_at_epoch(&lock, &epoch, None, || write(initial)).unwrap();
+            // Selection Voice publishes directly, then its Core phase is already
+            // terminal when the queued QA Answer or error timer reaches the host.
+            {
+                let _guard = lock.lock();
+                write(CapsuleState::Error);
+            }
+            assert!(
+                emit_capsule_at_epoch(&lock, &epoch, Some(qa_epoch), || write(CapsuleState::Idle))
+                    .is_none()
+            );
+            assert_eq!(*visible.lock(), CapsuleState::Error);
+            assert_eq!(epoch.load(Ordering::SeqCst), 2);
+        }
     }
 }
 

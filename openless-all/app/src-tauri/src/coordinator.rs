@@ -763,13 +763,26 @@ impl Coordinator {
     }
 
     pub fn present_core_capsule(&self, payload: CapsulePayload) {
+        let _ = self.present_core_capsule_if_current(payload, None);
+    }
+
+    pub(crate) fn present_core_capsule_if_current(
+        &self,
+        payload: CapsulePayload,
+        expected_epoch: Option<u64>,
+    ) -> Option<u64> {
         let state = payload.state;
         // Core 已拥有本帧的翻译、准备态和会话归属；不可在窗口层按迟到的
         // 当前状态重新拼装，否则冷启动或快速切换会丢失真实反馈。
-        emit_core_capsule(&self.inner, payload);
+        let epoch = emit_core_capsule(&self.inner, payload, expected_epoch)?;
         if let Some(delay_ms) = core_capsule_hide_delay(state) {
-            schedule_capsule_idle(&self.inner, delay_ms);
+            let inner = Arc::clone(&self.inner);
+            self.inner.host.spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                hide_core_capsule_if_current(&inner, epoch);
+            });
         }
+        Some(epoch)
     }
 
     pub(crate) fn tauri_host(&self) -> crate::tauri_coordinator_host::TauriCoordinatorHost {
