@@ -11,6 +11,8 @@ pub(crate) struct LessComputerEventReplay {
     pub(crate) oldest_sequence: Option<u64>,
     pub(crate) latest_sequence: u64,
     pub(crate) truncated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) voice_state: Option<openless_core::LessComputerEvent>,
 }
 
 pub(crate) fn less_computer_event_replay_after(
@@ -39,6 +41,7 @@ pub(crate) fn less_computer_event_replay_after(
         oldest_sequence: replay.oldest_sequence,
         latest_sequence: replay.latest_sequence,
         truncated: replay.truncated,
+        voice_state: backend.event_publisher().latest_less_computer_voice_state(),
     }
 }
 
@@ -158,6 +161,14 @@ pub(super) async fn handle_released(
 }
 
 pub(super) async fn cancel_active_session(inner: &Arc<Inner>) -> bool {
+    match super::hotkey_loops::cancel_active_less_computer(inner).await {
+        Ok(true) => return true,
+        Ok(false) => {}
+        Err(error) => {
+            log::warn!("[coord] Less Computer cancel failed: {error}");
+            return false;
+        }
+    }
     match inner.backend.cancel_active_voice_session(None).await {
         Ok(()) => {
             inner.host.hide_less_computer_glow();

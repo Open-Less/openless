@@ -255,12 +255,16 @@ pub trait DictationEngine: Send + Sync {
         })
     }
 
+    /// Initialize ASR, then the microphone, honoring cancellation between the
+    /// two effects. A handle produced after cancellation must be stopped before
+    /// this future settles; Core keeps the voice resource hold for that lifetime.
     fn start_voice_capture(
         &self,
         _session_id: SessionId,
         _context: Arc<DictationContext>,
         _partials: Arc<dyn TextStreamSink>,
         _progress: Arc<dyn RecordingProgressSink>,
+        _cancel: crate::CancellationToken,
     ) -> BoxFuture<'static, Result<VoiceCapture, BackendError>> {
         Box::pin(async {
             Err(BackendError::new(
@@ -271,11 +275,13 @@ pub trait DictationEngine: Send + Sync {
     }
 
     #[doc(hidden)]
+    /// Recorder-only variant with the same cancellation and cleanup contract.
     fn start_audio_capture(
         &self,
         _session_id: SessionId,
         _context: Arc<DictationContext>,
         _progress: Arc<dyn RecordingProgressSink>,
+        _cancel: crate::CancellationToken,
     ) -> BoxFuture<'static, Result<AudioCapture, BackendError>> {
         Box::pin(async {
             Err(BackendError::new(

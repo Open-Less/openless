@@ -170,8 +170,8 @@ assert.match(
 );
 assert.match(
   lessComputerPanel,
-  /reconciled\.reset\) setTurns\(\[\]\)/,
-  'a truncated replay must reset the derived Less Computer view',
+  /reconciled\.reset\) \{\s*setTurns\(\[\]\);\s*setVoice\(null\)/,
+  'a truncated replay must reset both the conversation and voice presentation',
 );
 
 assert.match(
@@ -465,8 +465,13 @@ assert.doesNotMatch(
 );
 assert.match(
   qaCommand,
-  /less_computer_window_dismiss\([^]*?core\.services\(\)\.less_computer\.dismiss\(\)/,
-  'Less Computer dismiss must clear the Core conversation before hiding the host window',
+  /less_computer_window_dismiss\([^]*?coord\.dismiss_less_computer\(\)\.await/,
+  'Less Computer dismiss must await the Host capture cleanup seam',
+);
+assert.match(
+  coordinator,
+  /async fn dismiss_less_computer\([^]*?less_computer\.dismiss\(\)[^]*?hide_less_computer\(\)[^]*?cancel_active_less_computer\(&self\.inner\)\.await/,
+  'closing Less Computer must clear Core conversation, hide the panel, and release its capture',
 );
 assert.match(
   qaCommand,

@@ -122,6 +122,14 @@ pub enum CodingAgentStreamEvent {
     rename_all_fields = "camelCase"
 )]
 pub enum LessComputerEventKind {
+    /// Core voice presentation snapshot. Session ownership prevents a late
+    /// meter or terminal update from replacing a newer recording.
+    VoiceState {
+        session_id: SessionId,
+        phase: LessComputerVoicePhase,
+        level: f32,
+        elapsed_ms: u64,
+    },
     User {
         text: String,
         fresh: bool,
@@ -148,6 +156,15 @@ pub enum LessComputerEventKind {
         message: String,
     },
     Cancelled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LessComputerVoicePhase {
+    Starting,
+    Recording,
+    Transcribing,
+    Idle,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -395,6 +412,9 @@ pub struct EventBus {
     sequence: AtomicU64,
     sender: broadcast::Sender<BackendEvent>,
     backlog: Mutex<VecDeque<BackendEvent>>,
+    // Retain one presentation snapshot independently of the bounded replay so
+    // a reopened host can recover a long-running transcription.
+    latest_less_voice: Mutex<Option<LessComputerEvent>>,
 }
 
 impl EventBus {
@@ -404,6 +424,7 @@ impl EventBus {
             sequence: AtomicU64::new(0),
             sender,
             backlog: Mutex::new(VecDeque::with_capacity(EVENT_REPLAY_CAPACITY)),
+            latest_less_voice: Mutex::new(None),
         }
     }
 
@@ -417,6 +438,39 @@ impl EventBus {
             session_id,
             kind,
         };
+        if let BackendEventKind::LessComputerEvent(voice) = &event.kind {
+            if let LessComputerEventKind::VoiceState {
+                session_id, phase, ..
+            } = &voice.kind
+            {
+                let mut latest = self
+                    .latest_less_voice
+                    .lock()
+                    .expect("voice projection lock poisoned");
+                let superseded = latest.as_ref().is_some_and(|previous| {
+                    if previous.seq >= voice.seq {
+                        return true;
+                    }
+                    let LessComputerEventKind::VoiceState {
+                        session_id: previous_id,
+                        phase: previous_phase,
+                        ..
+                    } = &previous.kind
+                    else {
+                        return false;
+                    };
+                    if previous_id != session_id {
+                        return *phase != LessComputerVoicePhase::Starting;
+                    }
+                    *previous_phase == LessComputerVoicePhase::Idle
+                        || (*previous_phase == LessComputerVoicePhase::Transcribing
+                            && *phase == LessComputerVoicePhase::Recording)
+                });
+                if !superseded {
+                    *latest = Some(voice.clone());
+                }
+            }
+        }
         {
             let mut backlog = self.backlog.lock().expect("event backlog lock poisoned");
             backlog.push_back(event.clone());
@@ -450,6 +504,13 @@ impl EventBus {
             truncated,
         }
     }
+
+    pub fn latest_less_computer_voice_state(&self) -> Option<LessComputerEvent> {
+        self.latest_less_voice
+            .lock()
+            .expect("voice projection lock poisoned")
+            .clone()
+    }
 }
 
 /// Cloneable typed event sink for platform and transport Adapters.
@@ -474,6 +535,10 @@ impl BackendEventPublisher {
 
     pub fn replay_after(&self, sequence: u64) -> EventReplay {
         self.bus.replay_after(sequence)
+    }
+
+    pub fn latest_less_computer_voice_state(&self) -> Option<LessComputerEvent> {
+        self.bus.latest_less_computer_voice_state()
     }
 }
 
@@ -637,6 +702,50 @@ mod tests {
             panic!("expected Less Computer event");
         };
         assert_eq!(event.seq, Some(replay.events[0].sequence));
+    }
+
+    #[test]
+    fn voice_projection_survives_replay_eviction_and_ignores_a_stale_owner() {
+        let bus = EventBus::new(2);
+        let a = SessionId::new();
+        let b = SessionId::new();
+        for (session_id, phase) in [
+            (a, LessComputerVoicePhase::Starting),
+            (b, LessComputerVoicePhase::Starting),
+            (b, LessComputerVoicePhase::Transcribing),
+            (a, LessComputerVoicePhase::Idle),
+        ] {
+            bus.publish(
+                Some(session_id),
+                BackendEventKind::LessComputerEvent(LessComputerEvent {
+                    seq: None,
+                    kind: LessComputerEventKind::VoiceState {
+                        session_id,
+                        phase,
+                        level: 0.0,
+                        elapsed_ms: 120,
+                    },
+                }),
+            );
+        }
+        for _ in 0..EVENT_REPLAY_CAPACITY {
+            bus.publish(None, BackendEventKind::BackendStarted);
+        }
+        assert!(bus.replay_after(0).truncated);
+        assert!(!bus
+            .replay_after(0)
+            .events
+            .iter()
+            .any(|event| matches!(event.kind, BackendEventKind::LessComputerEvent(_))));
+        let current = bus.latest_less_computer_voice_state().unwrap();
+        assert_eq!(
+            current.seq,
+            Some(3),
+            "projection retains the original event sequence"
+        );
+        assert!(matches!(current.kind, LessComputerEventKind::VoiceState {
+            session_id, phase: LessComputerVoicePhase::Transcribing, ..
+        } if session_id == b));
     }
 
     #[test]

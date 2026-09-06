@@ -61,6 +61,37 @@ fn runtime_wire_rejects_non_2_contracts() {
 }
 
 #[test]
+fn less_computer_voice_feedback_matches_the_shared_wire_contract() {
+    use openless_core::{LessComputerEvent, LessComputerEventKind, LessComputerVoicePhase};
+    let fixture = fixture();
+    let event: LessComputerEvent =
+        serde_json::from_value(fixture["lessComputerVoice"]["sample"].clone()).unwrap();
+    assert!(matches!(
+        event.kind,
+        LessComputerEventKind::VoiceState {
+            phase: LessComputerVoicePhase::Recording,
+            level: 0.5,
+            elapsed_ms: 120,
+            ..
+        }
+    ));
+    assert_eq!(
+        serde_json::to_value(event).unwrap(),
+        fixture["lessComputerVoice"]["sample"]
+    );
+    assert_eq!(
+        serde_json::to_value([
+            LessComputerVoicePhase::Starting,
+            LessComputerVoicePhase::Recording,
+            LessComputerVoicePhase::Transcribing,
+            LessComputerVoicePhase::Idle,
+        ])
+        .unwrap(),
+        fixture["lessComputerVoice"]["phases"]
+    );
+}
+
+#[test]
 fn every_core_event_has_a_canonical_camel_case_round_trip_fixture() {
     let fixture = fixture();
     let expected = fixture["backendEvent"]["kinds"]

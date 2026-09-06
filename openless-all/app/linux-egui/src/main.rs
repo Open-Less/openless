@@ -428,6 +428,8 @@ mod linux_app {
                         return;
                     }
                     match event.kind {
+                        // Linux已有独立录音显示；新typed反馈供接手Host/UI团队继续接入。
+                        LessComputerEventKind::VoiceState { .. } => {}
                         LessComputerEventKind::User { .. } => {}
                         LessComputerEventKind::Started => {
                             self.status = "Less Computer 正在运行".to_string();

@@ -118,6 +118,7 @@ pub struct LessComputerVoiceSession {
     request: crate::domains::LessComputerRunRequest,
     partials: Arc<VoiceTranscriptSink>,
     received_bytes: AtomicU64,
+    archive_successful_recording: bool,
 }
 
 pub struct VoiceTranscriptionSession {
@@ -126,6 +127,7 @@ pub struct VoiceTranscriptionSession {
     recording: Mutex<Option<Box<dyn crate::ports::ActiveRecording>>>,
     partials: Arc<VoiceTranscriptSink>,
     lifecycle: Arc<VoiceCaptureLifecycle>,
+    task_spawner: Arc<dyn TaskSpawner>,
 }
 
 pub struct QaVoiceCaptureSession {
@@ -135,6 +137,7 @@ pub struct QaVoiceCaptureSession {
     pcm: Option<Arc<CapturedPcm>>,
     recording_progress: Arc<QaRecordingProgress>,
     lifecycle: Arc<VoiceCaptureLifecycle>,
+    task_spawner: Arc<dyn TaskSpawner>,
 }
 
 #[derive(Default, PartialEq, Eq)]
@@ -150,12 +153,36 @@ enum VoiceCapturePhase {
 /// the cancellation window. Both voice entry points retain this shared state
 /// until the provider result is committed or cancellation wins.
 #[derive(Default)]
-struct VoiceCaptureLifecycle(Mutex<VoiceCapturePhase>);
+struct VoiceCaptureLifecycle {
+    phase: Mutex<VoiceCapturePhase>,
+    resources: Mutex<Option<Arc<crate::voice_session::VoiceResourceHold>>>,
+}
 
 impl VoiceCaptureLifecycle {
+    fn with_resources(resources: Arc<crate::voice_session::VoiceResourceHold>) -> Self {
+        Self {
+            phase: Mutex::default(),
+            resources: Mutex::new(Some(resources)),
+        }
+    }
+
+    fn resources(&self) -> Option<Arc<crate::voice_session::VoiceResourceHold>> {
+        self.resources
+            .lock()
+            .expect("voice resource lock poisoned")
+            .clone()
+    }
+
+    fn release_resources(&self) {
+        self.resources
+            .lock()
+            .expect("voice resource lock poisoned")
+            .take();
+    }
+
     fn begin_finish(&self) -> Result<(), BackendError> {
         let mut phase = self
-            .0
+            .phase
             .lock()
             .expect("voice capture lifecycle lock poisoned");
         match *phase {
@@ -173,7 +200,7 @@ impl VoiceCaptureLifecycle {
 
     fn is_cancelled(&self) -> bool {
         *self
-            .0
+            .phase
             .lock()
             .expect("voice capture lifecycle lock poisoned")
             == VoiceCapturePhase::Cancelled
@@ -184,7 +211,7 @@ impl VoiceCaptureLifecycle {
     /// never stop the native recorder or discard its archive twice.
     fn claim_cancel(&self) -> bool {
         let mut phase = self
-            .0
+            .phase
             .lock()
             .expect("voice capture lifecycle lock poisoned");
         if matches!(
@@ -199,7 +226,7 @@ impl VoiceCaptureLifecycle {
 
     fn settle<T>(&self, result: Result<T, BackendError>) -> (Result<T, BackendError>, bool) {
         let mut phase = self
-            .0
+            .phase
             .lock()
             .expect("voice capture lifecycle lock poisoned");
         if *phase == VoiceCapturePhase::Cancelled {
@@ -262,10 +289,15 @@ struct LessComputerRecordingProgress {
     task_spawner: Arc<dyn TaskSpawner>,
     started_at: std::time::Instant,
     silence: Mutex<Option<crate::silence_auto_stop::SilenceAutoStop>>,
+    feedback: Arc<LessVoiceFeedback>,
 }
 
 impl crate::ports::RecordingProgressSink for LessComputerRecordingProgress {
     fn publish_level(&self, elapsed_ms: u64, level: f32) -> Result<(), BackendError> {
+        if self.less_computer.capture_cancelled(self.session_id) {
+            return Ok(());
+        }
+        self.feedback.level(elapsed_ms, level);
         let decision = self
             .silence
             .lock()
@@ -549,6 +581,163 @@ struct VoiceCaptureControl {
     transcription: Arc<dyn TranscriptionSession>,
     recording: Mutex<Option<Box<dyn crate::ports::ActiveRecording>>>,
     closed: std::sync::atomic::AtomicBool,
+    resources: Mutex<Option<Arc<crate::voice_session::VoiceResourceHold>>>,
+    task_spawner: Arc<dyn TaskSpawner>,
+    feedback: Mutex<Option<LessVoiceFeedbackGuard>>,
+}
+
+struct LessVoiceFeedback {
+    publisher: BackendEventPublisher,
+    session_id: SessionId,
+    state: Mutex<(crate::events::LessComputerVoicePhase, u64)>,
+}
+
+impl LessVoiceFeedback {
+    fn phase(&self, phase: crate::events::LessComputerVoicePhase) {
+        let mut state = self.state.lock().expect("voice feedback lock poisoned");
+        if state.0 == crate::events::LessComputerVoicePhase::Idle {
+            return;
+        }
+        state.0 = phase;
+        self.emit(phase, 0.0, state.1);
+    }
+
+    fn level(&self, elapsed_ms: u64, level: f32) {
+        let mut state = self.state.lock().expect("voice feedback lock poisoned");
+        if state.0 != crate::events::LessComputerVoicePhase::Recording {
+            return;
+        }
+        state.1 = elapsed_ms;
+        self.emit(state.0, level.clamp(0.0, 1.0), elapsed_ms);
+    }
+
+    fn emit(&self, phase: crate::events::LessComputerVoicePhase, level: f32, elapsed_ms: u64) {
+        self.publisher.publish(
+            Some(self.session_id),
+            BackendEventKind::LessComputerEvent(crate::events::LessComputerEvent {
+                seq: None,
+                kind: crate::events::LessComputerEventKind::VoiceState {
+                    session_id: self.session_id,
+                    phase,
+                    level,
+                    elapsed_ms,
+                },
+            }),
+        );
+    }
+}
+
+struct LessVoiceFeedbackGuard(Arc<LessVoiceFeedback>);
+impl Drop for LessVoiceFeedbackGuard {
+    fn drop(&mut self) {
+        self.0.phase(crate::events::LessComputerVoicePhase::Idle);
+    }
+}
+
+/// Committed native effects outlive the caller waiting on their reply. In
+/// particular, dropping an IPC future cannot release a hold while a native
+/// spawn_blocking recorder stop or decoder is still running.
+fn own_voice_effect<T: Send + 'static>(
+    spawner: &Arc<dyn TaskSpawner>,
+    effect: futures_util::future::BoxFuture<'static, Result<T, BackendError>>,
+) -> futures_util::future::BoxFuture<'static, Result<T, BackendError>> {
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    spawner.spawn(Box::pin(async move {
+        let _ = sender.send(effect.await);
+    }));
+    Box::pin(async move {
+        receiver.await.map_err(|_| {
+            BackendError::new(
+                BackendErrorCode::Internal,
+                "voice task did not return a result",
+            )
+        })?
+    })
+}
+
+async fn own_voice_start<T: Send + 'static>(
+    spawner: &Arc<dyn TaskSpawner>,
+    resources: Arc<crate::voice_session::VoiceResourceHold>,
+    start: futures_util::future::BoxFuture<'static, Result<T, BackendError>>,
+    cleanup: impl FnOnce(T) -> futures_util::future::BoxFuture<'static, Result<(), BackendError>>
+        + Send
+        + 'static,
+) -> Result<T, BackendError> {
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    let (claimed, claim) = tokio::sync::oneshot::channel();
+    let slot = Arc::new(Mutex::new(None));
+    let task_slot = Arc::clone(&slot);
+    let cancel = resources.cancel.clone();
+    spawner.spawn(Box::pin(async move {
+        if resources.cancel.is_cancelled() {
+            let _ = sender.send(Err(VoiceCaptureLifecycle::cancelled_error()));
+            return;
+        }
+        let result = start.await;
+        // Even an adapter which cannot interrupt initialization must close a
+        // late handle. The resource hold remains live through this cleanup.
+        if resources.cancel.is_cancelled() {
+            if let Ok(resource) = result {
+                let _ = cleanup(resource).await;
+            }
+            let _ = sender.send(Err(VoiceCaptureLifecycle::cancelled_error()));
+        } else {
+            match result {
+                Ok(resource) => {
+                    *task_slot
+                        .lock()
+                        .expect("voice startup handoff lock poisoned") = Some(resource);
+                    // Keep the native handle here until the caller actually
+                    // claims it. Sending a handle through oneshot directly can
+                    // drop it without stop() if the reply is never consumed.
+                    if sender.send(Ok(())).is_err() || claim.await.is_err() {
+                        let resource = task_slot
+                            .lock()
+                            .expect("voice startup handoff lock poisoned")
+                            .take();
+                        if let Some(resource) = resource {
+                            let _ = cleanup(resource).await;
+                        }
+                    }
+                }
+                Err(error) => {
+                    let _ = sender.send(Err(error));
+                }
+            }
+        }
+        drop(resources);
+    }));
+    receiver.await.map_err(|_| {
+        BackendError::new(
+            BackendErrorCode::Internal,
+            "voice startup task did not return a result",
+        )
+    })??;
+    if cancel.is_cancelled() {
+        return Err(VoiceCaptureLifecycle::cancelled_error());
+    }
+    let resource = slot
+        .lock()
+        .expect("voice startup handoff lock poisoned")
+        .take()
+        .ok_or_else(|| {
+            BackendError::new(
+                BackendErrorCode::Internal,
+                "voice startup handle is unavailable",
+            )
+        })?;
+    let _ = claimed.send(());
+    Ok(resource)
+}
+
+fn discard_voice_capture(
+    capture: crate::ports::VoiceCapture,
+) -> futures_util::future::BoxFuture<'static, Result<(), BackendError>> {
+    Box::pin(async move {
+        let stopped = capture.recording.stop().await;
+        let cancelled = capture.transcription.cancel().await;
+        stopped.and(cancelled)
+    })
 }
 
 impl VoiceCaptureControl {
@@ -559,14 +748,33 @@ impl VoiceCaptureControl {
             .take()
     }
 
-    async fn cancel_resources(&self) -> Result<(), BackendError> {
+    fn cancel_resources(
+        self: &Arc<Self>,
+    ) -> futures_util::future::BoxFuture<'static, Result<(), BackendError>> {
         self.closed.store(true, Ordering::Release);
-        let recording = match self.take_recording() {
-            Some(recording) => recording.stop().await,
-            None => Ok(()),
-        };
-        let transcription = self.transcription.cancel().await;
-        recording.and(transcription)
+        let control = Arc::clone(self);
+        let resources = self
+            .resources
+            .lock()
+            .expect("voice resource lock poisoned")
+            .take();
+        own_voice_effect(
+            &self.task_spawner,
+            Box::pin(async move {
+                let _resources = resources;
+                let recording = match control.take_recording() {
+                    Some(recording) => recording.stop().await,
+                    None => Ok(()),
+                };
+                let transcription = control.transcription.cancel().await;
+                control
+                    .feedback
+                    .lock()
+                    .expect("voice feedback lock poisoned")
+                    .take();
+                recording.and(transcription)
+            }),
+        )
     }
 }
 
@@ -578,6 +786,16 @@ struct VoiceControlGuard {
 
 impl Drop for VoiceControlGuard {
     fn drop(&mut self) {
+        self.control
+            .feedback
+            .lock()
+            .expect("voice feedback lock poisoned")
+            .take();
+        self.control
+            .resources
+            .lock()
+            .expect("voice resource lock poisoned")
+            .take();
         let mut controls = self.controls.lock().expect("voice control lock poisoned");
         if controls
             .get(&self.session_id)
@@ -690,17 +908,20 @@ impl LessComputerVoiceSession {
         let controls = Arc::clone(&self.controls);
         let less_computer = Arc::clone(&self.less_computer);
         let session_id = self.session_id;
-        Box::pin(async move {
-            let _guard = VoiceControlGuard {
-                session_id,
-                control: Arc::clone(&control),
-                controls,
-            };
-            let service_result = less_computer.cancel(Some(session_id)).await;
-            let resource_result = control.cancel_resources().await;
-            let _ = less_computer.abort_capture(session_id);
-            resource_result.and(service_result)
-        })
+        own_voice_effect(
+            &self.control.task_spawner,
+            Box::pin(async move {
+                let _guard = VoiceControlGuard {
+                    session_id,
+                    control: Arc::clone(&control),
+                    controls,
+                };
+                let service_result = less_computer.cancel(Some(session_id)).await;
+                let resource_result = control.cancel_resources().await;
+                let _ = less_computer.abort_capture(session_id);
+                resource_result.and(service_result)
+            }),
+        )
     }
 
     pub fn finish(
@@ -722,69 +943,111 @@ impl LessComputerVoiceSession {
         let controls = Arc::clone(&self.controls);
         let transcription = Arc::clone(&control.transcription);
         let recording = control.take_recording();
+        let archive = recording.as_ref().and_then(|recording| recording.archive());
+        let archive_successful_recording = self.archive_successful_recording;
         let less_computer = Arc::clone(&self.less_computer);
         let request = self.request;
         let partials = Arc::clone(&self.partials);
         let session_id = self.session_id;
-        Box::pin(async move {
-            let _guard = VoiceControlGuard {
-                session_id,
-                control,
-                controls,
-            };
-            if less_computer.capture_cancelled(session_id) {
+        let resources = control
+            .resources
+            .lock()
+            .expect("voice resource lock poisoned")
+            .clone();
+        let task_spawner = Arc::clone(&control.task_spawner);
+        if let Some(feedback) = control
+            .feedback
+            .lock()
+            .expect("voice feedback lock poisoned")
+            .as_ref()
+        {
+            feedback
+                .0
+                .phase(crate::events::LessComputerVoicePhase::Transcribing);
+        }
+        own_voice_effect(
+            &task_spawner,
+            Box::pin(async move {
+                let resources = resources;
+                let _guard = VoiceControlGuard {
+                    session_id,
+                    control,
+                    controls,
+                };
+                if less_computer.capture_cancelled(session_id) {
+                    if let Some(recording) = recording {
+                        let _ = recording.stop().await;
+                    }
+                    let _ = transcription.cancel().await;
+                    let _ = less_computer.abort_capture(session_id);
+                    return Err(BackendError::new(
+                        BackendErrorCode::Cancelled,
+                        "Less Computer voice session was cancelled",
+                    ));
+                }
                 if let Some(recording) = recording {
-                    let _ = recording.stop().await;
+                    if let Err(error) = recording.stop().await {
+                        let _ = transcription.cancel().await;
+                        let _ = less_computer.abort_capture(session_id);
+                        return Err(error);
+                    }
                 }
-                let _ = transcription.cancel().await;
-                let _ = less_computer.abort_capture(session_id);
-                return Err(BackendError::new(
-                    BackendErrorCode::Cancelled,
-                    "Less Computer voice session was cancelled",
-                ));
-            }
-            if let Some(recording) = recording {
-                if let Err(error) = recording.stop().await {
+                let transcript = match transcription.finish().await {
+                    Ok(output) => output.text,
+                    Err(error) => {
+                        let _ = transcription.cancel().await;
+                        let _ = less_computer.abort_capture(session_id);
+                        return Err(error);
+                    }
+                };
+                if less_computer.capture_cancelled(session_id) {
                     let _ = transcription.cancel().await;
                     let _ = less_computer.abort_capture(session_id);
-                    return Err(error);
+                    return Err(BackendError::new(
+                        BackendErrorCode::Cancelled,
+                        "Less Computer voice session was cancelled while transcribing",
+                    ));
                 }
-            }
-            let transcript = match transcription.finish().await {
-                Ok(output) => output.text,
-                Err(error) => {
-                    let _ = transcription.cancel().await;
+                let transcript = transcript.trim().to_string();
+                if transcript.is_empty() {
                     let _ = less_computer.abort_capture(session_id);
-                    return Err(error);
+                    return Err(BackendError::new(
+                        BackendErrorCode::Provider,
+                        "transcription provider returned an empty transcript",
+                    ));
                 }
-            };
-            if less_computer.capture_cancelled(session_id) {
-                let _ = transcription.cancel().await;
-                let _ = less_computer.abort_capture(session_id);
-                return Err(BackendError::new(
-                    BackendErrorCode::Cancelled,
-                    "Less Computer voice session was cancelled while transcribing",
-                ));
-            }
-            let transcript = transcript.trim().to_string();
-            if transcript.is_empty() {
-                let _ = less_computer.abort_capture(session_id);
-                return Err(BackendError::new(
-                    BackendErrorCode::Provider,
-                    "transcription provider returned an empty transcript",
-                ));
-            }
-            partials.publish_final(transcript.clone())?;
-            let mut request = request;
-            request.transcript = transcript;
-            match less_computer.submit(request).await {
-                Ok(result) => Ok(result),
-                Err(error) => {
-                    let _ = less_computer.abort_capture(session_id);
-                    Err(error)
+                // Preserve failed/debug audio, but successful voice-agent ASR obeys
+                // the same retention switch as ordinary 1.x dictation. Agent failure
+                // after this point is not an ASR failure and must not retain the WAV.
+                if !archive_successful_recording {
+                    if let Some(archive) = archive.filter(|archive| archive.is_available()) {
+                        if let Err(error) = archive.discard().await {
+                            log::warn!(
+                                "failed to discard successful Less Computer recording: {error}"
+                            );
+                        }
+                    }
                 }
-            }
-        })
+                if less_computer.capture_cancelled(session_id) {
+                    return Err(VoiceCaptureLifecycle::cancelled_error());
+                }
+                partials.publish_final(transcript.clone())?;
+                drop(_guard);
+                // Keep the hold through capture -> run promotion. If cancellation
+                // won immediately before submit, acquire() must reject this old id
+                // instead of treating its removed capture as a fresh text request.
+                let _resources = resources;
+                let mut request = request;
+                request.transcript = transcript;
+                match less_computer.submit(request).await {
+                    Ok(result) => Ok(result),
+                    Err(error) => {
+                        let _ = less_computer.abort_capture(session_id);
+                        Err(error)
+                    }
+                }
+            }),
+        )
     }
 }
 
@@ -805,32 +1068,38 @@ impl VoiceTranscriptionSession {
         let transcription = Arc::clone(&self.transcription);
         let partials = Arc::clone(&self.partials);
         let lifecycle = Arc::clone(&self.lifecycle);
-        Box::pin(async move {
-            let result = async {
-                if let Some(recording) = recording {
-                    stop_and_discard_recording(recording).await?;
+        let resources = lifecycle.resources();
+        own_voice_effect(
+            &self.task_spawner,
+            Box::pin(async move {
+                let _resources = resources;
+                let result = async {
+                    if let Some(recording) = recording {
+                        stop_and_discard_recording(recording).await?;
+                    }
+                    if lifecycle.is_cancelled() {
+                        return Err(VoiceCaptureLifecycle::cancelled_error());
+                    }
+                    let transcript = transcription.finish().await?.text.trim().to_string();
+                    if transcript.is_empty() {
+                        return Err(BackendError::new(
+                            BackendErrorCode::Provider,
+                            "transcription provider returned an empty transcript",
+                        ));
+                    }
+                    Ok(transcript)
                 }
-                if lifecycle.is_cancelled() {
-                    return Err(VoiceCaptureLifecycle::cancelled_error());
+                .await;
+                let (result, cancel_provider) = lifecycle.settle(result);
+                if cancel_provider {
+                    let _ = transcription.cancel().await;
                 }
-                let transcript = transcription.finish().await?.text.trim().to_string();
-                if transcript.is_empty() {
-                    return Err(BackendError::new(
-                        BackendErrorCode::Provider,
-                        "transcription provider returned an empty transcript",
-                    ));
-                }
+                lifecycle.release_resources();
+                let transcript = result?;
+                partials.publish_final(transcript.clone())?;
                 Ok(transcript)
-            }
-            .await;
-            let (result, cancel_provider) = lifecycle.settle(result);
-            if cancel_provider {
-                let _ = transcription.cancel().await;
-            }
-            let transcript = result?;
-            partials.publish_final(transcript.clone())?;
-            Ok(transcript)
-        })
+            }),
+        )
     }
 
     pub fn cancel(&self) -> futures_util::future::BoxFuture<'static, Result<(), BackendError>> {
@@ -843,19 +1112,26 @@ impl VoiceTranscriptionSession {
             .expect("voice transcription recording lock poisoned")
             .take();
         let transcription = Arc::clone(&self.transcription);
-        Box::pin(async move {
-            let (recording_result, transcription_result) = futures_util::future::join(
-                async move {
-                    match recording {
-                        Some(recording) => stop_and_discard_recording(recording).await,
-                        None => Ok(()),
-                    }
-                },
-                transcription.cancel(),
-            )
-            .await;
-            recording_result.and(transcription_result)
-        })
+        let lifecycle = Arc::clone(&self.lifecycle);
+        let resources = lifecycle.resources();
+        own_voice_effect(
+            &self.task_spawner,
+            Box::pin(async move {
+                let _resources = resources;
+                let (recording_result, transcription_result) = futures_util::future::join(
+                    async move {
+                        match recording {
+                            Some(recording) => stop_and_discard_recording(recording).await,
+                            None => Ok(()),
+                        }
+                    },
+                    transcription.cancel(),
+                )
+                .await;
+                lifecycle.release_resources();
+                recording_result.and(transcription_result)
+            }),
+        )
     }
 }
 
@@ -885,50 +1161,56 @@ impl QaVoiceCaptureSession {
         let transcription = self.transcription.clone();
         let pcm = self.pcm.clone();
         let lifecycle = Arc::clone(&self.lifecycle);
-        Box::pin(async move {
-            let result = async {
-                if let Some(recording) = recording {
-                    stop_and_discard_recording(recording).await?;
-                }
-                if lifecycle.is_cancelled() {
-                    return Err(VoiceCaptureLifecycle::cancelled_error());
-                }
-                match (&transcription, pcm) {
-                    (Some(transcription), None) => {
-                        let output = transcription.finish().await?;
-                        let transcript = output.text.trim().to_string();
-                        if transcript.is_empty() {
-                            return Err(BackendError::new(
-                                BackendErrorCode::Provider,
-                                "transcription provider returned an empty transcript",
-                            ));
-                        }
-                        Ok(QaVoiceCaptureResult {
-                            transcript: Some(transcript),
-                            audio_wav: None,
-                            duration_ms: output.duration_ms,
-                        })
+        let resources = lifecycle.resources();
+        own_voice_effect(
+            &self.task_spawner,
+            Box::pin(async move {
+                let _resources = resources;
+                let result = async {
+                    if let Some(recording) = recording {
+                        stop_and_discard_recording(recording).await?;
                     }
-                    (None, Some(pcm)) => Ok(QaVoiceCaptureResult {
-                        transcript: None,
-                        audio_wav: Some(crate::audio::encode_dictation_wav(&pcm.snapshot())?),
-                        duration_ms: pcm.duration_ms(),
-                    }),
-                    _ => Err(BackendError::new(
-                        BackendErrorCode::Internal,
-                        "QA voice capture has an invalid pipeline shape",
-                    )),
+                    if lifecycle.is_cancelled() {
+                        return Err(VoiceCaptureLifecycle::cancelled_error());
+                    }
+                    match (&transcription, pcm) {
+                        (Some(transcription), None) => {
+                            let output = transcription.finish().await?;
+                            let transcript = output.text.trim().to_string();
+                            if transcript.is_empty() {
+                                return Err(BackendError::new(
+                                    BackendErrorCode::Provider,
+                                    "transcription provider returned an empty transcript",
+                                ));
+                            }
+                            Ok(QaVoiceCaptureResult {
+                                transcript: Some(transcript),
+                                audio_wav: None,
+                                duration_ms: output.duration_ms,
+                            })
+                        }
+                        (None, Some(pcm)) => Ok(QaVoiceCaptureResult {
+                            transcript: None,
+                            audio_wav: Some(crate::audio::encode_dictation_wav(&pcm.snapshot())?),
+                            duration_ms: pcm.duration_ms(),
+                        }),
+                        _ => Err(BackendError::new(
+                            BackendErrorCode::Internal,
+                            "QA voice capture has an invalid pipeline shape",
+                        )),
+                    }
                 }
-            }
-            .await;
-            let (result, cancel_provider) = lifecycle.settle(result);
-            if cancel_provider {
-                if let Some(transcription) = transcription {
-                    let _ = transcription.cancel().await;
+                .await;
+                let (result, cancel_provider) = lifecycle.settle(result);
+                if cancel_provider {
+                    if let Some(transcription) = transcription {
+                        let _ = transcription.cancel().await;
+                    }
                 }
-            }
-            result
-        })
+                lifecycle.release_resources();
+                result
+            }),
+        )
     }
 
     pub fn cancel(&self) -> futures_util::future::BoxFuture<'static, Result<(), BackendError>> {
@@ -941,24 +1223,31 @@ impl QaVoiceCaptureSession {
             .expect("QA voice recording lock poisoned")
             .take();
         let transcription = self.transcription.clone();
-        Box::pin(async move {
-            let (recording_result, transcription_result) = futures_util::future::join(
-                async move {
-                    match recording {
-                        Some(recording) => stop_and_discard_recording(recording).await,
-                        None => Ok(()),
-                    }
-                },
-                async move {
-                    match transcription {
-                        Some(transcription) => transcription.cancel().await,
-                        None => Ok(()),
-                    }
-                },
-            )
-            .await;
-            recording_result.and(transcription_result)
-        })
+        let lifecycle = Arc::clone(&self.lifecycle);
+        let resources = lifecycle.resources();
+        own_voice_effect(
+            &self.task_spawner,
+            Box::pin(async move {
+                let _resources = resources;
+                let (recording_result, transcription_result) = futures_util::future::join(
+                    async move {
+                        match recording {
+                            Some(recording) => stop_and_discard_recording(recording).await,
+                            None => Ok(()),
+                        }
+                    },
+                    async move {
+                        match transcription {
+                            Some(transcription) => transcription.cancel().await,
+                            None => Ok(()),
+                        }
+                    },
+                )
+                .await;
+                lifecycle.release_resources();
+                recording_result.and(transcription_result)
+            }),
+        )
     }
 }
 
@@ -1042,6 +1331,13 @@ struct SilenceMonitor {
     detector: crate::silence_auto_stop::SilenceAutoStop,
 }
 
+// Preparation itself can switch a native input source. Register one shared
+// future before polling it so cancellation can join and restore even when the
+// original start caller is dropped. Synchronous progress only sees ready values.
+type TextInsertionPreparation = futures_util::future::Shared<
+    futures_util::future::BoxFuture<'static, Result<Arc<ActiveTextInsertion>, BackendError>>,
+>;
+
 struct ActiveTextInsertion {
     platform: Arc<dyn TextInsertionSession>,
     streaming: bool,
@@ -1050,8 +1346,11 @@ struct ActiveTextInsertion {
     state: Mutex<ActiveTextInsertionState>,
     drained: tokio::sync::Notify,
     task_spawner: Arc<dyn TaskSpawner>,
+    _resources: Arc<crate::voice_session::VoiceResourceHold>,
+    cancel_result: std::sync::OnceLock<Result<(), BackendError>>,
     // 0: open, 1: native finalization in flight, 2: cancellation owns cleanup,
-    // 3: native finalization settled. Cancellation must join state 1 rather
+    // 3: native finalization settled, 4: cancellation cleanup settled.
+    // Cancellation must join state 1 or 2 rather
     // than release the next voice session while its committed input continues.
     terminal: AtomicU8,
 }
@@ -1067,6 +1366,7 @@ impl ActiveTextInsertion {
         platform: Arc<dyn TextInsertionSession>,
         context: &DictationContext,
         task_spawner: Arc<dyn TaskSpawner>,
+        resources: Arc<crate::voice_session::VoiceResourceHold>,
     ) -> Arc<Self> {
         let windows_non_streaming = cfg!(target_os = "windows")
             && context.insertion.windows_insertion_mode
@@ -1087,6 +1387,8 @@ impl ActiveTextInsertion {
             state: Mutex::new(ActiveTextInsertionState::default()),
             drained: tokio::sync::Notify::new(),
             task_spawner,
+            _resources: resources,
+            cancel_result: std::sync::OnceLock::new(),
             terminal: AtomicU8::new(0),
         })
     }
@@ -1260,38 +1562,46 @@ impl ActiveTextInsertion {
         Ok(InsertOutcome::CopiedFallback)
     }
 
-    async fn cancel(&self) -> Result<(), BackendError> {
+    async fn cancel(self: &Arc<Self>) -> Result<(), BackendError> {
         {
             let mut state = self.state.lock().expect("text insertion lock poisoned");
             state.stream.pending.clear();
             state.stream.failed = Some("text insertion session was cancelled".to_string());
         }
-        match self
+        if self
             .terminal
             .compare_exchange(0, 2, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
         {
-            Ok(_) => {
-                // A native write may already be sending an indivisible chunk.
-                // Discarding queued text cannot stop that effect. Drain it
-                // before restoring TIS/focus, as the 1.x typer join did; otherwise
-                // the remaining keys can be interpreted by the restored IME.
-                self.wait_for_stream_drain().await;
-                self.platform.cancel().await
-            }
-            Err(1) => {
-                // A final native write cannot be rolled back safely. Let its
-                // owner finish and restore the input source before cancellation
-                // admits another recording; never retry an unknown outcome.
-                loop {
-                    let notified = self.drained.notified();
-                    if self.terminal.load(Ordering::Acquire) != 1 {
-                        break;
-                    }
-                    notified.await;
+            // A native write may already be sending an indivisible chunk.
+            // Discarding queued text cannot stop that effect. Drain it
+            // before restoring TIS/focus, as the 1.x typer join did; otherwise
+            // the remaining keys can be interpreted by the restored IME.
+            let insertion = Arc::clone(self);
+            self.task_spawner.spawn(Box::pin(async move {
+                insertion.wait_for_stream_drain().await;
+                let result = insertion.platform.cancel().await;
+                let _ = insertion.cancel_result.set(result);
+                insertion.terminal.store(4, Ordering::Release);
+                insertion.drained.notify_waiters();
+            }));
+        }
+        // A late starter and an explicit cancel can reach this same session.
+        // Both must await the single cleanup; treating the second call as an
+        // immediate success would admit B while A still restores its source.
+        loop {
+            let notified = self.drained.notified();
+            match self.terminal.load(Ordering::Acquire) {
+                1 | 2 => notified.await,
+                4 => {
+                    return self
+                        .cancel_result
+                        .get()
+                        .expect("cleanup result precedes terminal")
+                        .clone()
                 }
-                Ok(())
+                _ => return Ok(()),
             }
-            Err(_) => Ok(()),
         }
     }
 }
@@ -1300,7 +1610,7 @@ struct BackendEngineProgress {
     events: Arc<EventBus>,
     state: Arc<RwLock<MutableState>>,
     phase_changed: Arc<tokio::sync::Notify>,
-    text_insertions: Arc<Mutex<HashMap<SessionId, Arc<ActiveTextInsertion>>>>,
+    text_insertions: Arc<Mutex<HashMap<SessionId, TextInsertionPreparation>>>,
 }
 
 impl EngineProgressSink for BackendEngineProgress {
@@ -1433,6 +1743,8 @@ impl EngineProgressSink for BackendEngineProgress {
                     .lock()
                     .expect("text insertion registry lock poisoned")
                     .get(&session_id)
+                    .and_then(|preparation| preparation.peek())
+                    .and_then(|result| result.as_ref().ok())
                     .cloned()
                 {
                     insertion.push(&delta);
@@ -1468,7 +1780,7 @@ pub struct OpenLessBackend {
     settings_write_gate: Mutex<()>,
     pending_corrections: Arc<Mutex<Vec<PendingCorrection>>>,
     edit_observation_generation: Arc<AtomicU64>,
-    text_insertions: Arc<Mutex<HashMap<SessionId, Arc<ActiveTextInsertion>>>>,
+    text_insertions: Arc<Mutex<HashMap<SessionId, TextInsertionPreparation>>>,
     voice_sessions: Arc<crate::voice_session::VoiceSessionGate>,
     less_computer_voice_controls: Arc<Mutex<HashMap<SessionId, Arc<VoiceCaptureControl>>>>,
 }
@@ -1974,174 +2286,216 @@ impl OpenLessBackend {
             ));
         }
         self.deps.services.less_computer.begin_capture(session_id)?;
-        // Reserve before the first await so Esc can revoke even a cold start.
-        let ensure_capture = || {
-            if self.less_computer_capture_cancelled(session_id) {
-                let _ = self.deps.services.less_computer.abort_capture(session_id);
-                return Err(BackendError::new(
-                    BackendErrorCode::Cancelled,
-                    "Less Computer voice session was cancelled while starting",
-                ));
-            }
-            Ok(())
-        };
-        let qa = self.deps.services.qa.snapshot().await;
-        ensure_capture()?;
-        if qa.is_ok_and(|snapshot| snapshot.phase != crate::domains::QaPhase::Idle) {
-            let _ = self.deps.services.less_computer.abort_capture(session_id);
-            return Err(BackendError::new(
-                BackendErrorCode::Busy,
-                "QA voice session is already active",
-            ));
-        }
-        let selection_voice = self.deps.services.selection_voice.snapshot().await;
-        ensure_capture()?;
-        if selection_voice.is_ok_and(|snapshot| {
-            matches!(
-                snapshot.phase,
-                crate::domains::SelectionVoicePhase::Recording
-                    | crate::domains::SelectionVoicePhase::Processing
-                    | crate::domains::SelectionVoicePhase::AwaitingIntent
-                    | crate::domains::SelectionVoicePhase::Applying
-            )
-        }) {
-            let _ = self.deps.services.less_computer.abort_capture(session_id);
-            return Err(BackendError::new(
-                BackendErrorCode::Busy,
-                "selection voice session is already active",
-            ));
-        }
-        if let Err(error) = self.deps.host_actions.request(HostAction::ShowLessComputer) {
-            let _ = self.deps.services.less_computer.abort_capture(session_id);
-            return Err(error);
-        }
-        let context = match self
-            .capture_dictation_context(&DictationStartOptions::default())
-            .await
-        {
-            Ok(mut context) => {
-                // Less Computer is a transcript-to-agent flow; it always uses
-                // the active ASR provider, even when normal dictation is in
-                // multimodal/Omni mode.
-                context.pipeline_mode = crate::shared_types::PipelineMode::Traditional;
-                Arc::new(context)
-            }
-            Err(error) => {
-                let _ = self.deps.services.less_computer.abort_capture(session_id);
-                return Err(error);
-            }
-        };
-        ensure_capture()?;
-        let partials = Arc::new(VoiceTranscriptSink {
+        let resources = self.voice_sessions.hold_resources(session_id)?;
+        let feedback = Arc::new(LessVoiceFeedback {
             publisher: self.event_publisher(),
             session_id,
-            transcript: Mutex::new(crate::types::TranscriptAccumulator::default()),
+            state: Mutex::new((crate::events::LessComputerVoicePhase::Starting, 0)),
         });
-        let started_at = std::time::Instant::now();
-        let recording_progress = Arc::new(LessComputerRecordingProgress {
-            session_id,
-            less_computer: Arc::clone(&self.deps.services.less_computer),
-            control: recording_control,
-            task_spawner: Arc::clone(&self.deps.task_spawner),
-            started_at,
-            silence: Mutex::new(context.recording.silence_after_ms.map(|silence_ms| {
-                crate::silence_auto_stop::SilenceAutoStop::new(
-                    std::time::Duration::from_millis(silence_ms),
-                    started_at,
-                )
-            })),
-        });
-        let voice_capture = self
-            .deps
-            .dictation_engine
-            .start_voice_capture(
-                session_id,
-                Arc::clone(&context),
-                Arc::clone(&partials) as Arc<dyn TextStreamSink>,
-                recording_progress,
-            )
-            .await;
-        let (transcription, recording) = match voice_capture {
-            Ok(capture) => (capture.transcription, Some(capture.recording)),
-            Err(error) if error.code == BackendErrorCode::Unsupported => {
-                ensure_capture()?;
-                match self
-                    .deps
-                    .dictation_engine
-                    .start_transcription(
-                        session_id,
-                        Arc::clone(&context),
-                        Arc::clone(&partials) as Arc<dyn TextStreamSink>,
-                    )
-                    .await
-                {
-                    Ok(session) => (session, None),
-                    Err(error) => {
-                        let _ = self.deps.services.less_computer.abort_capture(session_id);
-                        return Err(error);
-                    }
+        feedback.phase(crate::events::LessComputerVoicePhase::Starting);
+        let feedback_guard = LessVoiceFeedbackGuard(Arc::clone(&feedback));
+        let result = async {
+            // Reserve before the first await so Esc can revoke even a cold start.
+            let ensure_capture = || {
+                if self.less_computer_capture_cancelled(session_id) {
+                    let _ = self.deps.services.less_computer.abort_capture(session_id);
+                    return Err(BackendError::new(
+                        BackendErrorCode::Cancelled,
+                        "Less Computer voice session was cancelled while starting",
+                    ));
                 }
+                Ok(())
+            };
+            let qa = self.deps.services.qa.snapshot().await;
+            ensure_capture()?;
+            if qa.is_ok_and(|snapshot| {
+                matches!(
+                    snapshot.phase,
+                    crate::domains::QaPhase::Recording
+                        | crate::domains::QaPhase::Thinking
+                        | crate::domains::QaPhase::AwaitingApproval
+                )
+            }) {
+                let _ = self.deps.services.less_computer.abort_capture(session_id);
+                return Err(BackendError::new(
+                    BackendErrorCode::Busy,
+                    "QA voice session is already active",
+                ));
             }
-            Err(error) => {
+            let selection_voice = self.deps.services.selection_voice.snapshot().await;
+            ensure_capture()?;
+            if selection_voice.is_ok_and(|snapshot| {
+                matches!(
+                    snapshot.phase,
+                    crate::domains::SelectionVoicePhase::Recording
+                        | crate::domains::SelectionVoicePhase::Processing
+                        | crate::domains::SelectionVoicePhase::AwaitingIntent
+                        | crate::domains::SelectionVoicePhase::Applying
+                )
+            }) {
+                let _ = self.deps.services.less_computer.abort_capture(session_id);
+                return Err(BackendError::new(
+                    BackendErrorCode::Busy,
+                    "selection voice session is already active",
+                ));
+            }
+            if let Err(error) = self.deps.host_actions.request(HostAction::ShowLessComputer) {
                 let _ = self.deps.services.less_computer.abort_capture(session_id);
                 return Err(error);
             }
-        };
-        if self
-            .deps
-            .services
-            .less_computer
-            .capture_cancelled(session_id)
-        {
-            if let Some(recording) = recording {
-                let _ = recording.stop().await;
-            }
-            let _ = transcription.cancel().await;
-            let _ = self.deps.services.less_computer.abort_capture(session_id);
-            return Err(BackendError::new(
-                BackendErrorCode::Cancelled,
-                "Less Computer voice session was cancelled while starting",
-            ));
-        }
-        let request =
-            match self.build_less_computer_request(session_id, String::new(), &preferences) {
-                Ok(request) => request,
+            let context = match self
+                .capture_dictation_context(&DictationStartOptions::default())
+                .await
+            {
+                Ok(mut context) => {
+                    // Less Computer is a transcript-to-agent flow; it always uses
+                    // the active ASR provider, even when normal dictation is in
+                    // multimodal/Omni mode.
+                    context.pipeline_mode = crate::shared_types::PipelineMode::Traditional;
+                    Arc::new(context)
+                }
                 Err(error) => {
-                    if let Some(recording) = recording {
-                        let _ = recording.stop().await;
-                    }
-                    let _ = transcription.cancel().await;
                     let _ = self.deps.services.less_computer.abort_capture(session_id);
                     return Err(error);
                 }
             };
-        let control = Arc::new(VoiceCaptureControl {
-            transcription,
-            recording: Mutex::new(recording),
-            closed: std::sync::atomic::AtomicBool::new(false),
-        });
-        self.less_computer_voice_controls
-            .lock()
-            .expect("voice control lock poisoned")
-            .insert(session_id, Arc::clone(&control));
-        if let Err(error) = ensure_capture() {
-            let _guard = VoiceControlGuard {
+            ensure_capture()?;
+            let partials = Arc::new(VoiceTranscriptSink {
+                publisher: self.event_publisher(),
                 session_id,
-                control: Arc::clone(&control),
-                controls: Arc::clone(&self.less_computer_voice_controls),
+                transcript: Mutex::new(crate::types::TranscriptAccumulator::default()),
+            });
+            let started_at = std::time::Instant::now();
+            let recording_progress = Arc::new(LessComputerRecordingProgress {
+                session_id,
+                less_computer: Arc::clone(&self.deps.services.less_computer),
+                control: recording_control,
+                task_spawner: Arc::clone(&self.deps.task_spawner),
+                started_at,
+                silence: Mutex::new(context.recording.silence_after_ms.map(|silence_ms| {
+                    crate::silence_auto_stop::SilenceAutoStop::new(
+                        std::time::Duration::from_millis(silence_ms),
+                        started_at,
+                    )
+                })),
+                feedback: Arc::clone(&feedback),
+            });
+            let voice_capture = own_voice_start(
+                &self.deps.task_spawner,
+                Arc::clone(&resources),
+                self.deps.dictation_engine.start_voice_capture(
+                    session_id,
+                    Arc::clone(&context),
+                    Arc::clone(&partials) as Arc<dyn TextStreamSink>,
+                    recording_progress,
+                    resources.cancel.clone(),
+                ),
+                discard_voice_capture,
+            )
+            .await;
+            let (transcription, recording) = match voice_capture {
+                Ok(capture) => (capture.transcription, Some(capture.recording)),
+                Err(error) if error.code == BackendErrorCode::Unsupported => {
+                    ensure_capture()?;
+                    match own_voice_start(
+                        &self.deps.task_spawner,
+                        Arc::clone(&resources),
+                        self.deps.dictation_engine.start_transcription(
+                            session_id,
+                            Arc::clone(&context),
+                            Arc::clone(&partials) as Arc<dyn TextStreamSink>,
+                        ),
+                        |transcription| transcription.cancel(),
+                    )
+                    .await
+                    {
+                        Ok(session) => (session, None),
+                        Err(error) => {
+                            let _ = self.deps.services.less_computer.abort_capture(session_id);
+                            return Err(error);
+                        }
+                    }
+                }
+                Err(error) => {
+                    let _ = self.deps.services.less_computer.abort_capture(session_id);
+                    return Err(error);
+                }
             };
-            let _ = control.cancel_resources().await;
-            return Err(error);
+            let request = if self.less_computer_capture_cancelled(session_id) {
+                Err(BackendError::new(
+                    BackendErrorCode::Cancelled,
+                    "Less Computer voice session was cancelled while starting",
+                ))
+            } else {
+                self.build_less_computer_request(session_id, String::new(), &preferences)
+            };
+            let request = match request {
+                Ok(request) => request,
+                Err(error) => {
+                    let less_computer = Arc::clone(&self.deps.services.less_computer);
+                    let _ = own_voice_effect(
+                        &self.deps.task_spawner,
+                        Box::pin(async move {
+                            let _resources = resources;
+                            if let Some(recording) = recording {
+                                let _ = recording.stop().await;
+                            }
+                            let _ = transcription.cancel().await;
+                            less_computer.abort_capture(session_id)
+                        }),
+                    )
+                    .await;
+                    return Err(error);
+                }
+            };
+            let control = Arc::new(VoiceCaptureControl {
+                transcription,
+                recording: Mutex::new(recording),
+                closed: std::sync::atomic::AtomicBool::new(false),
+                resources: Mutex::new(Some(resources)),
+                task_spawner: Arc::clone(&self.deps.task_spawner),
+                feedback: Mutex::new(Some(feedback_guard)),
+            });
+            self.less_computer_voice_controls
+                .lock()
+                .expect("voice control lock poisoned")
+                .insert(session_id, Arc::clone(&control));
+            if let Err(error) = ensure_capture() {
+                let _guard = VoiceControlGuard {
+                    session_id,
+                    control: Arc::clone(&control),
+                    controls: Arc::clone(&self.less_computer_voice_controls),
+                };
+                let _ = control.cancel_resources().await;
+                return Err(error);
+            }
+            feedback.phase(crate::events::LessComputerVoicePhase::Recording);
+            Ok(LessComputerVoiceSession {
+                session_id,
+                control,
+                controls: Arc::clone(&self.less_computer_voice_controls),
+                less_computer: Arc::clone(&self.deps.services.less_computer),
+                request,
+                partials,
+                received_bytes: AtomicU64::new(0),
+                archive_successful_recording: context.recording.archive_successful_recording,
+            })
         }
-        Ok(LessComputerVoiceSession {
-            session_id,
-            control,
-            controls: Arc::clone(&self.less_computer_voice_controls),
-            less_computer: Arc::clone(&self.deps.services.less_computer),
-            request,
-            partials,
-            received_bytes: AtomicU64::new(0),
-        })
+        .await;
+        if let Err(error) = &result {
+            if error.code != BackendErrorCode::Cancelled {
+                self.event_publisher().publish(
+                    Some(session_id),
+                    BackendEventKind::LessComputerEvent(crate::events::LessComputerEvent {
+                        seq: None,
+                        kind: crate::events::LessComputerEventKind::Error {
+                            message: error.message.clone(),
+                        },
+                    }),
+                );
+            }
+        }
+        result
     }
 
     pub async fn start_selection_voice_capture(
@@ -2149,6 +2503,7 @@ impl OpenLessBackend {
         session_id: SessionId,
         control: Arc<dyn crate::ports::RecordingControlSink>,
     ) -> Result<VoiceTranscriptionSession, BackendError> {
+        let resources = self.voice_sessions.hold_resources(session_id)?;
         if self.snapshot().dictation.phase != DictationPhase::Idle
             || self.less_computer_active_session().is_some()
         {
@@ -2183,10 +2538,10 @@ impl OpenLessBackend {
             session_id,
             transcript: Mutex::new(crate::types::TranscriptAccumulator::default()),
         });
-        let capture = self
-            .deps
-            .dictation_engine
-            .start_voice_capture(
+        let capture = own_voice_start(
+            &self.deps.task_spawner,
+            Arc::clone(&resources),
+            self.deps.dictation_engine.start_voice_capture(
                 session_id,
                 context,
                 Arc::clone(&partials) as Arc<dyn TextStreamSink>,
@@ -2198,14 +2553,18 @@ impl OpenLessBackend {
                     started_at,
                     silence: Mutex::new(silence),
                 }),
-            )
-            .await?;
+                resources.cancel.clone(),
+            ),
+            discard_voice_capture,
+        )
+        .await?;
         Ok(VoiceTranscriptionSession {
             session_id,
             transcription: capture.transcription,
             recording: Mutex::new(Some(capture.recording)),
             partials,
-            lifecycle: Arc::new(VoiceCaptureLifecycle::default()),
+            lifecycle: Arc::new(VoiceCaptureLifecycle::with_resources(resources)),
+            task_spawner: Arc::clone(&self.deps.task_spawner),
         })
     }
 
@@ -2216,6 +2575,7 @@ impl OpenLessBackend {
         options: DictationStartOptions,
         progress: Arc<dyn crate::ports::RecordingProgressSink>,
     ) -> Result<QaVoiceCaptureSession, BackendError> {
+        let resources = self.voice_sessions.hold_resources(session_id)?;
         let context = Arc::new(self.capture_dictation_context(&options).await?);
         let started_at = std::time::Instant::now();
         let recording_progress = Arc::new(QaRecordingProgress {
@@ -2235,37 +2595,51 @@ impl OpenLessBackend {
         let progress =
             Arc::clone(&recording_progress) as Arc<dyn crate::ports::RecordingProgressSink>;
         if context.pipeline_mode == crate::shared_types::PipelineMode::Multimodal {
-            let capture = self
-                .deps
-                .dictation_engine
-                .start_audio_capture(session_id, Arc::clone(&context), progress)
-                .await?;
+            let capture = own_voice_start(
+                &self.deps.task_spawner,
+                Arc::clone(&resources),
+                self.deps.dictation_engine.start_audio_capture(
+                    session_id,
+                    Arc::clone(&context),
+                    progress,
+                    resources.cancel.clone(),
+                ),
+                |capture| {
+                    Box::pin(async move { stop_and_discard_recording(capture.recording).await })
+                },
+            )
+            .await?;
             Ok(QaVoiceCaptureSession {
                 context,
                 recording: Mutex::new(Some(capture.recording)),
                 transcription: None,
                 pcm: Some(capture.pcm),
                 recording_progress,
-                lifecycle: Arc::new(VoiceCaptureLifecycle::default()),
+                lifecycle: Arc::new(VoiceCaptureLifecycle::with_resources(resources)),
+                task_spawner: Arc::clone(&self.deps.task_spawner),
             })
         } else {
-            let capture = self
-                .deps
-                .dictation_engine
-                .start_voice_capture(
+            let capture = own_voice_start(
+                &self.deps.task_spawner,
+                Arc::clone(&resources),
+                self.deps.dictation_engine.start_voice_capture(
                     session_id,
                     Arc::clone(&context),
                     Arc::new(DiscardTextStream),
                     progress,
-                )
-                .await?;
+                    resources.cancel.clone(),
+                ),
+                discard_voice_capture,
+            )
+            .await?;
             Ok(QaVoiceCaptureSession {
                 context,
                 recording: Mutex::new(Some(capture.recording)),
                 transcription: Some(capture.transcription),
                 pcm: None,
                 recording_progress,
-                lifecycle: Arc::new(VoiceCaptureLifecycle::default()),
+                lifecycle: Arc::new(VoiceCaptureLifecycle::with_resources(resources)),
+                task_spawner: Arc::clone(&self.deps.task_spawner),
             })
         }
     }
@@ -2410,7 +2784,37 @@ impl OpenLessBackend {
         &self,
         session_id: Option<SessionId>,
     ) -> Result<(), BackendError> {
-        self.deps.services.less_computer.cancel(session_id).await
+        let Some(session_id) = session_id.or_else(|| self.less_computer_active_session()) else {
+            return Ok(());
+        };
+        let control = self
+            .less_computer_voice_controls
+            .lock()
+            .expect("voice control lock poisoned")
+            .get(&session_id)
+            .cloned();
+        let controls = Arc::clone(&self.less_computer_voice_controls);
+        let less_computer = Arc::clone(&self.deps.services.less_computer);
+        own_voice_effect(
+            &self.deps.task_spawner,
+            Box::pin(async move {
+                let service_result = less_computer.cancel(Some(session_id)).await;
+                let resource_result = match control {
+                    Some(control) => {
+                        let _guard = VoiceControlGuard {
+                            session_id,
+                            control: Arc::clone(&control),
+                            controls,
+                        };
+                        control.cancel_resources().await
+                    }
+                    None => Ok(()),
+                };
+                let _ = less_computer.abort_capture(session_id);
+                resource_result.and(service_result)
+            }),
+        )
+        .await
     }
 
     pub async fn cancel_active_voice_session(
@@ -2434,29 +2838,7 @@ impl OpenLessBackend {
                     "voice cancellation targets a different session",
                 ));
             }
-            let control = self
-                .less_computer_voice_controls
-                .lock()
-                .expect("voice control lock poisoned")
-                .get(&session_id)
-                .cloned();
-            let service_result = self
-                .deps
-                .services
-                .less_computer
-                .cancel(Some(session_id))
-                .await;
-            let resource_result = match control {
-                Some(control) => control.cancel_resources().await,
-                None => Ok(()),
-            };
-            let _ = self.deps.services.less_computer.abort_capture(session_id);
-            self.less_computer_voice_controls
-                .lock()
-                .expect("voice control lock poisoned")
-                .remove(&session_id);
-            resource_result?;
-            return service_result;
+            return self.cancel_less_computer(Some(session_id)).await;
         }
 
         if self
@@ -2595,9 +2977,10 @@ impl OpenLessBackend {
             active_session
         };
         self.disarm_edit_observation();
-        if let Some(session_id) = active_session {
-            self.voice_sessions.release(session_id);
-        }
+        // Start native teardown before awaiting unrelated domain shutdown.
+        // This also retains a cleanup hold if the shutdown caller disappears.
+        let dictation_cleanup =
+            active_session.map(|session_id| self.cancel_session_adapters(session_id));
         let selection_result = match self.deps.services.selection.snapshot().await {
             Ok(snapshot)
                 if matches!(
@@ -2668,8 +3051,8 @@ impl OpenLessBackend {
             Err(error) if error.code == BackendErrorCode::Unsupported => Ok(()),
             Err(error) => Err(error),
         };
-        if let Some(session_id) = active_session {
-            let cancel_result = self.cancel_session_adapters(session_id).await;
+        if let Some(cleanup) = dictation_cleanup {
+            let cancel_result = cleanup.await;
             let host_result = self
                 .deps
                 .host_actions
@@ -2680,7 +3063,7 @@ impl OpenLessBackend {
         selection_result?;
         selection_voice_result?;
         qa_result?;
-        self.deps.services.less_computer.cancel(None).await?;
+        self.cancel_less_computer(None).await?;
         self.deps.services.less_computer.dismiss();
         self.dismiss_pending_corrections();
         remote_input_result
@@ -2727,11 +3110,15 @@ impl OpenLessBackend {
                 Ok(CliDispatchOutcome::QaToggled)
             }
             crate::cli::CliIntent::CancelDictation => {
-                let session_id = self.snapshot().dictation.session_id;
-                if session_id.is_none() {
+                if let Some(session_id) = self.snapshot().dictation.session_id {
+                    self.cancel_dictation(Some(session_id)).await?;
+                } else if let Some(session_id) = self.less_computer_active_session() {
+                    // 1.x voice_agent shared the dictation cancellation scope.
+                    // Keep the separate QA domain outside this launcher intent.
+                    self.cancel_less_computer(Some(session_id)).await?;
+                } else {
                     return Ok(CliDispatchOutcome::Noop);
                 }
-                self.cancel_dictation(session_id).await?;
                 Ok(CliDispatchOutcome::DictationCancelled)
             }
         }
@@ -3720,8 +4107,16 @@ impl OpenLessBackend {
         insert_outcome: Option<InsertOutcome>,
         typed_text: &str,
     ) {
+        // Privacy changes are not a frozen dictation option. Serialize this
+        // native registration with settings updates so a mid-session opt-out
+        // cannot be undone by an older dictation completing afterwards.
+        let _settings_guard = self
+            .settings_write_gate
+            .lock()
+            .expect("settings write gate poisoned");
         self.disarm_edit_observation();
         if !enabled
+            || !self.get_preferences().cursor_context_enabled
             || !matches!(insert_outcome, Some(InsertOutcome::Inserted))
             || typed_text.trim().is_empty()
         {
@@ -3976,6 +4371,7 @@ impl OpenLessBackend {
             session_id,
             crate::voice_session::VoiceSessionKind::Dictation,
         )?;
+        let starting_resources = self.voice_sessions.hold_resources(session_id)?;
         self.disarm_edit_observation();
         // Context capture can await AX, a keyring, or another host service.
         // Publish ownership before that first await so Esc/stop see Starting
@@ -4046,14 +4442,64 @@ impl OpenLessBackend {
             return Err(error);
         }
         if context.insertion.enabled {
-            let platform_insertion = match self
-                .deps
-                .text_inserter
-                .begin(session_id, Arc::clone(&context))
-                .await
+            let inserter = Arc::clone(&self.deps.text_inserter);
+            let insertion_context = Arc::clone(&context);
+            let task_spawner = Arc::clone(&self.deps.task_spawner);
+            let resources = Arc::clone(&starting_resources);
+            let preparing: futures_util::future::BoxFuture<
+                'static,
+                Result<Arc<ActiveTextInsertion>, BackendError>,
+            > = Box::pin(async move {
+                let platform = inserter
+                    .begin(session_id, Arc::clone(&insertion_context))
+                    .await?;
+                Ok(ActiveTextInsertion::new(
+                    platform,
+                    &insertion_context,
+                    task_spawner,
+                    resources,
+                ))
+            });
+            let preparation = futures_util::FutureExt::shared(preparing);
             {
-                Ok(session) => session,
+                // Publish preparation while ownership is still checked under
+                // the same state lock cancellation uses. No native effect is
+                // polled before its cancellable registry entry exists.
+                let state = self.state.read().expect("backend state lock poisoned");
+                ensure_active_session(&state, session_id)?;
+                self.text_insertions
+                    .lock()
+                    .expect("text insertion registry lock poisoned")
+                    .insert(session_id, preparation.clone());
+            }
+            let prepared = preparation.await;
+            let still_active = self
+                .state
+                .read()
+                .expect("backend state lock poisoned")
+                .dictation
+                .session_id
+                == Some(session_id);
+            if !still_active {
+                if let Ok(insertion) = prepared {
+                    let _ = insertion.cancel().await;
+                }
+                self.text_insertions
+                    .lock()
+                    .expect("text insertion registry lock poisoned")
+                    .remove(&session_id);
+                return Err(BackendError::new(
+                    BackendErrorCode::Cancelled,
+                    "dictation session was cancelled while insertion was starting",
+                ));
+            }
+            match prepared {
+                Ok(_) => {}
                 Err(error) => {
+                    self.text_insertions
+                        .lock()
+                        .expect("text insertion registry lock poisoned")
+                        .remove(&session_id);
                     self.mark_dictation_failed(session_id, &error);
                     self.persist_failed_dictation(
                         &context,
@@ -4077,41 +4523,31 @@ impl OpenLessBackend {
                     self.reset_dictation_session(session_id);
                     return Err(error);
                 }
-            };
-            let insertion = ActiveTextInsertion::new(
-                platform_insertion,
-                &context,
-                Arc::clone(&self.deps.task_spawner),
-            );
-            let still_active = self
-                .state
-                .read()
-                .expect("backend state lock poisoned")
-                .dictation
-                .session_id
-                == Some(session_id);
-            if !still_active {
-                let _ = insertion.cancel().await;
-                return Err(BackendError::new(
-                    BackendErrorCode::Cancelled,
-                    "dictation session was cancelled while insertion was starting",
-                ));
             }
-            self.text_insertions
-                .lock()
-                .expect("text insertion registry lock poisoned")
-                .insert(session_id, insertion);
         }
-        if let Err(error) = self
-            .deps
-            .dictation_engine
-            .start(
-                session_id,
-                Arc::clone(&context),
-                self.engine_progress_sink(),
-            )
-            .await
-        {
+        let engine = Arc::clone(&self.deps.dictation_engine);
+        let engine_context = Arc::clone(&context);
+        let progress = self.engine_progress_sink();
+        let resources = Arc::clone(&starting_resources);
+        // Recorder startup can own a blocking native operation even when the
+        // start caller disappears. Keep its hold in the executor, and perform
+        // late cancellation here rather than relying on that caller to resume.
+        let starting = own_voice_effect(
+            &self.deps.task_spawner,
+            Box::pin(async move {
+                let _resources = resources;
+                if _resources.cancel.is_cancelled() {
+                    return Err(VoiceCaptureLifecycle::cancelled_error());
+                }
+                let result = engine.start(session_id, engine_context, progress).await;
+                if _resources.cancel.is_cancelled() {
+                    let _ = engine.cancel(session_id).await;
+                    return Err(VoiceCaptureLifecycle::cancelled_error());
+                }
+                result
+            }),
+        );
+        if let Err(error) = starting.await {
             if error.code != BackendErrorCode::Cancelled {
                 self.mark_dictation_failed(session_id, &error);
                 self.persist_failed_dictation(
@@ -4291,11 +4727,32 @@ impl OpenLessBackend {
         }
 
         let progress = self.engine_progress_sink();
-        let mut engine_result = match self
-            .deps
-            .dictation_engine
-            .finish(session_id, progress)
-            .await
+        let resources = self.voice_sessions.hold_resources(session_id)?;
+        let finishing = self.deps.dictation_engine.finish(session_id, progress);
+        // finish() has taken the recorder out of the engine's registry. Cancel
+        // can no longer join that stop through engine.cancel(), so its original
+        // owner must retain the shared lease even without a text insertion.
+        let mut engine_result = match own_voice_effect(
+            &self.deps.task_spawner,
+            Box::pin(async move {
+                if resources.cancel.is_cancelled() {
+                    return Ok(Err(crate::ports::EngineFailure::from(
+                        VoiceCaptureLifecycle::cancelled_error(),
+                    )));
+                }
+                let result = finishing.await;
+                Ok(if resources.cancel.is_cancelled() {
+                    Err(crate::ports::EngineFailure::from(
+                        VoiceCaptureLifecycle::cancelled_error(),
+                    ))
+                } else {
+                    result
+                })
+            }),
+        )
+        .await
+        .map_err(crate::ports::EngineFailure::from)
+        .and_then(std::convert::identity)
         {
             Ok(result) => result,
             Err(failure) => {
@@ -4385,6 +4842,8 @@ impl OpenLessBackend {
             .lock()
             .expect("text insertion registry lock poisoned")
             .get(&session_id)
+            .and_then(|preparation| preparation.peek())
+            .and_then(|result| result.as_ref().ok())
             .is_some_and(|insertion| insertion.has_written_text());
         if !correction_rules.is_empty() && !streamed_text_is_visible {
             engine_result.polished_text =
@@ -4699,11 +5158,27 @@ impl OpenLessBackend {
         }
     }
 
-    async fn cancel_session_adapters(&self, session_id: SessionId) -> Result<(), BackendError> {
-        let engine_result = self.deps.dictation_engine.cancel(session_id).await;
-        let inserter_result = self.cancel_text_insertion(session_id).await;
-        engine_result?;
-        inserter_result
+    fn cancel_session_adapters(
+        &self,
+        session_id: SessionId,
+    ) -> futures_util::future::BoxFuture<'static, Result<(), BackendError>> {
+        let engine = Arc::clone(&self.deps.dictation_engine);
+        let resources = self.voice_sessions.hold_resources(session_id).ok();
+        let insertion = self.cancel_text_insertion(session_id);
+        // Revoke startup before scheduling cleanup. A queued engine.start must
+        // observe cancellation even when its original caller has disappeared.
+        // The owned cleanup hold keeps Busy until native stop/restore settles.
+        self.voice_sessions.release(session_id);
+        own_voice_effect(
+            &self.deps.task_spawner,
+            Box::pin(async move {
+                let _resources = resources;
+                let engine_result = engine.cancel(session_id).await;
+                let inserter_result = insertion.await;
+                engine_result?;
+                inserter_result
+            }),
+        )
     }
 
     async fn finish_text_insertion(
@@ -4723,6 +5198,7 @@ impl OpenLessBackend {
                     "text insertion session is not active",
                 )
             })?;
+        let insertion = insertion.await?;
         let result = insertion.finish(final_text).await;
         let mut insertions = self
             .text_insertions
@@ -4730,23 +5206,31 @@ impl OpenLessBackend {
             .expect("text insertion registry lock poisoned");
         if insertions
             .get(&session_id)
-            .is_some_and(|current| Arc::ptr_eq(current, &insertion))
+            .and_then(|preparation| preparation.peek())
+            .is_some_and(
+                |current| matches!(current, Ok(current) if Arc::ptr_eq(current, &insertion)),
+            )
         {
             insertions.remove(&session_id);
         }
         result
     }
 
-    async fn cancel_text_insertion(&self, session_id: SessionId) -> Result<(), BackendError> {
+    fn cancel_text_insertion(
+        &self,
+        session_id: SessionId,
+    ) -> futures_util::future::BoxFuture<'static, Result<(), BackendError>> {
         let insertion = self
             .text_insertions
             .lock()
             .expect("text insertion registry lock poisoned")
             .remove(&session_id);
-        match insertion {
-            Some(insertion) => insertion.cancel().await,
-            None => Ok(()),
-        }
+        Box::pin(async move {
+            match insertion {
+                Some(preparation) => preparation.await?.cancel().await,
+                None => Ok(()),
+            }
+        })
     }
 
     pub async fn report_recording_fault(
@@ -5784,6 +6268,7 @@ mod tests {
                 _: Arc<DictationContext>,
                 _: Arc<dyn TextStreamSink>,
                 _: Arc<dyn crate::ports::RecordingProgressSink>,
+                _: crate::CancellationToken,
             ) -> BoxFuture<'static, Result<crate::ports::VoiceCapture, BackendError>> {
                 self.started.store(true, Ordering::Release);
                 let gate = self.gate.capture(false);
@@ -5853,12 +6338,19 @@ mod tests {
                 .await
                 .unwrap();
             let successor = SessionId::new();
-            backend.begin_less_computer_capture(successor).unwrap();
+            assert_eq!(
+                backend
+                    .begin_less_computer_capture(successor)
+                    .unwrap_err()
+                    .code,
+                BackendErrorCode::Busy
+            );
             release.notify_one();
             match starting.await.unwrap() {
                 Err(error) => assert_eq!(error.code, BackendErrorCode::Cancelled),
                 Ok(_) => panic!("cancelled startup must not return a live capture"),
             }
+            backend.begin_less_computer_capture(successor).unwrap();
             assert_eq!(started.load(Ordering::Acquire), !block_context);
             assert_eq!(stopped.load(Ordering::Acquire), !block_context);
             assert_eq!(
@@ -5956,15 +6448,21 @@ mod tests {
         )
         .unwrap();
 
+        let first_id = SessionId::new();
+        backend
+            .voice_sessions
+            .acquire(first_id, crate::voice_session::VoiceSessionKind::Qa)
+            .unwrap();
         let capture = backend
             .start_qa_voice_capture(
-                SessionId::new(),
+                first_id,
                 DictationStartOptions::default(),
                 Arc::new(VoiceRecordingProgress),
             )
             .await
             .unwrap();
         let result = capture.finish().await.unwrap();
+        backend.voice_sessions.release(first_id);
 
         assert_eq!(result.transcript.as_deref(), Some("voice question"));
         assert!(result.audio_wav.is_none());
@@ -5976,9 +6474,14 @@ mod tests {
         preferences.multimodal_pipeline_enabled = true;
         preferences.pipeline_mode = crate::shared_types::PipelineMode::Multimodal;
         backend.set_preferences(preferences).unwrap();
+        let second_id = SessionId::new();
+        backend
+            .voice_sessions
+            .acquire(second_id, crate::voice_session::VoiceSessionKind::Qa)
+            .unwrap();
         let capture = backend
             .start_qa_voice_capture(
-                SessionId::new(),
+                second_id,
                 DictationStartOptions::default(),
                 Arc::new(VoiceRecordingProgress),
             )
@@ -6041,6 +6544,7 @@ mod tests {
                 terminal: Mutex::new(QaRecordingTerminalState::default()),
             }),
             lifecycle: Arc::new(VoiceCaptureLifecycle::default()),
+            task_spawner: Arc::new(TokioTaskSpawner),
         };
         let finishing = tokio::spawn(capture.finish());
         transcription.entered.acquire().await.unwrap().forget();
@@ -6082,6 +6586,7 @@ mod tests {
                 transcript: Mutex::new(crate::types::TranscriptAccumulator::default()),
             }),
             lifecycle: Arc::new(VoiceCaptureLifecycle::default()),
+            task_spawner: Arc::new(TokioTaskSpawner),
         };
         let finishing = tokio::spawn(capture.finish());
         transcription.entered.acquire().await.unwrap().forget();
@@ -6196,6 +6701,11 @@ mod tests {
         let started_at = std::time::Instant::now();
         let progress = LessComputerRecordingProgress {
             session_id: stop_session,
+            feedback: Arc::new(LessVoiceFeedback {
+                publisher: backend.event_publisher(),
+                session_id: stop_session,
+                state: Mutex::new((crate::events::LessComputerVoicePhase::Recording, 0)),
+            }),
             less_computer: Arc::clone(&backend.services().less_computer),
             control: Arc::clone(&control) as Arc<dyn crate::ports::RecordingControlSink>,
             task_spawner: Arc::new(TokioTaskSpawner),
@@ -6229,6 +6739,11 @@ mod tests {
             .unwrap();
         let fault_progress = LessComputerRecordingProgress {
             session_id: fault_session,
+            feedback: Arc::new(LessVoiceFeedback {
+                publisher: backend.event_publisher(),
+                session_id: fault_session,
+                state: Mutex::new((crate::events::LessComputerVoicePhase::Recording, 0)),
+            }),
             less_computer: Arc::clone(&backend.services().less_computer),
             control: Arc::clone(&control) as Arc<dyn crate::ports::RecordingControlSink>,
             task_spawner: Arc::new(TokioTaskSpawner),
@@ -7658,6 +8173,54 @@ mod tests {
             .unwrap();
         observation.publish(0, edit);
         assert!(backend.pending_corrections().is_empty());
+    }
+
+    #[tokio::test]
+    async fn disabled_cursor_context_is_not_rearmed_by_an_older_dictation() {
+        for streaming in [false, true] {
+            let data_dir = TestDataDir::new("privacy-disabled-during-dictation");
+            let observation = Arc::new(FakeEditObservation::default());
+            let mut services = crate::domains::BackendServices::unsupported();
+            services.edit_observation = observation.clone();
+            let backend = OpenLessBackend::new(
+                BackendConfig {
+                    data_dir: data_dir.path().to_path_buf(),
+                    ..BackendConfig::default()
+                },
+                BackendDependencies {
+                    host_actions: Arc::new(FakeHost::default()),
+                    text_inserter: Arc::new(FakeInserter),
+                    dictation_engine: Arc::new(FakeEngine),
+                    credential_store: Arc::new(
+                        crate::credentials::InMemoryCredentialStore::default(),
+                    ),
+                    task_spawner: Arc::new(TokioTaskSpawner),
+                    services,
+                    ..BackendDependencies::unsupported()
+                },
+            )
+            .unwrap();
+            let mut preferences = backend.get_preferences();
+            preferences.cursor_context_enabled = true;
+            preferences.streaming_insert = streaming;
+            backend.set_preferences(preferences).unwrap();
+            backend.start().await.unwrap();
+            backend.start_dictation().await.unwrap();
+            let mut preferences = backend.get_preferences();
+            preferences.cursor_context_enabled = false;
+            backend
+                .update_settings(
+                    preferences,
+                    crate::SettingsUpdateOptions::STRICT,
+                    &crate::NoopSettingsRuntime,
+                )
+                .unwrap();
+            backend.stop_dictation().await.unwrap();
+            assert!(
+                observation.typed_texts.lock().unwrap().is_empty(),
+                "a frozen true preference cannot restart native document observation"
+            );
+        }
     }
 
     #[tokio::test]
@@ -9140,10 +9703,18 @@ mod tests {
         context.insertion.streaming = true;
         context.insertion.windows_insertion_mode =
             crate::shared_types::WindowsInsertionMode::SendInput;
+        let gate = Arc::new(crate::voice_session::VoiceSessionGate::default());
+        let session_id = SessionId::new();
+        gate.acquire(
+            session_id,
+            crate::voice_session::VoiceSessionKind::Dictation,
+        )
+        .unwrap();
         let insertion = ActiveTextInsertion::new(
             Arc::new(FinalOnlySession(delivered.clone())),
             &context,
             Arc::new(TokioTaskSpawner),
+            gate.hold_resources(session_id).unwrap(),
         );
         insertion.push(&crate::types::PolishDelta {
             offset: 0,
@@ -9736,6 +10307,128 @@ mod tests {
         assert_eq!(backend.snapshot().dictation.phase, DictationPhase::Idle);
     }
 
+    async fn assert_pending_insertion_cleanup(drop_start: bool) {
+        struct DelayedSession {
+            restoring: Arc<tokio::sync::Semaphore>,
+            restored: Arc<std::sync::atomic::AtomicUsize>,
+        }
+        impl TextInsertionSession for DelayedSession {
+            fn write(
+                &self,
+                _: String,
+            ) -> BoxFuture<'static, Result<InsertWriteResult, BackendError>> {
+                boxed(async { unreachable!() })
+            }
+            fn finish(&self, _: String) -> BoxFuture<'static, Result<InsertOutcome, BackendError>> {
+                boxed(async { unreachable!() })
+            }
+            fn copy(&self, _: String) -> BoxFuture<'static, Result<(), BackendError>> {
+                boxed(async { unreachable!() })
+            }
+            fn cancel(&self) -> BoxFuture<'static, Result<(), BackendError>> {
+                let restoring = self.restoring.clone();
+                let restored = self.restored.clone();
+                boxed(async move {
+                    restoring.acquire().await.unwrap().forget();
+                    restored.fetch_add(1, Ordering::AcqRel);
+                    Ok(())
+                })
+            }
+        }
+        struct DelayedInserter {
+            preparing: Arc<tokio::sync::Semaphore>,
+            session: Arc<DelayedSession>,
+        }
+        impl TextInserter for DelayedInserter {
+            fn begin(
+                &self,
+                _: SessionId,
+                _: Arc<DictationContext>,
+            ) -> BoxFuture<'static, Result<Arc<dyn TextInsertionSession>, BackendError>>
+            {
+                let preparing = self.preparing.clone();
+                let session: Arc<dyn TextInsertionSession> = self.session.clone();
+                boxed(async move {
+                    preparing.acquire().await.unwrap().forget();
+                    Ok(session)
+                })
+            }
+        }
+        let preparing = Arc::new(tokio::sync::Semaphore::new(0));
+        let restoring = Arc::new(tokio::sync::Semaphore::new(0));
+        let restored = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let data_dir = TestDataDir::new("cancel-during-insertion-prepare");
+        let backend = OpenLessBackend::new(
+            BackendConfig {
+                data_dir: data_dir.path().to_path_buf(),
+                ..BackendConfig::default()
+            },
+            BackendDependencies {
+                host_actions: Arc::new(FakeHost::default()),
+                text_inserter: Arc::new(DelayedInserter {
+                    preparing: preparing.clone(),
+                    session: Arc::new(DelayedSession {
+                        restoring: restoring.clone(),
+                        restored: restored.clone(),
+                    }),
+                }),
+                dictation_engine: Arc::new(FakeEngine),
+                credential_store: Arc::new(crate::credentials::InMemoryCredentialStore::default()),
+                task_spawner: Arc::new(TokioTaskSpawner),
+                ..BackendDependencies::unsupported()
+            },
+        )
+        .unwrap();
+        backend.start().await.unwrap();
+        let mut starting = Some(Box::pin(backend.start_dictation()));
+        assert!(futures_util::poll!(starting.as_mut().unwrap().as_mut()).is_pending());
+        let session_id = backend.snapshot().dictation.session_id.unwrap();
+        let mut cancel = std::pin::pin!(backend.cancel_dictation(Some(session_id)));
+        assert!(
+            futures_util::poll!(cancel.as_mut()).is_pending(),
+            "cancel must still own the pending native preparation"
+        );
+        assert_eq!(
+            backend.start_dictation().await.unwrap_err().code,
+            BackendErrorCode::Busy
+        );
+        if drop_start {
+            // Cancellation still owns the shared preparation even if the IPC
+            // caller disappears; dropping its response cannot abandon TIS.
+            drop(starting.take());
+        }
+        preparing.add_permits(1);
+        // The late starter and explicit cancel both reach the same prepared
+        // session. Exactly one restores it; the other must join that cleanup.
+        if let Some(starting) = starting.as_mut() {
+            assert!(futures_util::poll!(starting.as_mut()).is_pending());
+        }
+        assert!(futures_util::poll!(cancel.as_mut()).is_pending());
+        assert_eq!(
+            backend.start_dictation().await.unwrap_err().code,
+            BackendErrorCode::Busy
+        );
+        restoring.add_permits(1);
+        if let Some(starting) = starting {
+            let (start_result, cancel_result) = tokio::join!(starting, cancel);
+            assert_eq!(start_result.unwrap_err().code, BackendErrorCode::Cancelled);
+            cancel_result.unwrap();
+        } else {
+            cancel.await.unwrap();
+        }
+        assert_eq!(restored.load(Ordering::Acquire), 1);
+    }
+
+    #[tokio::test]
+    async fn cancelling_pending_insertion_joins_preparation_and_native_restore() {
+        assert_pending_insertion_cleanup(false).await;
+    }
+
+    #[tokio::test]
+    async fn pending_insertion_cleanup_survives_a_dropped_start_caller() {
+        assert_pending_insertion_cleanup(true).await;
+    }
+
     #[tokio::test]
     async fn pending_stop_does_not_follow_a_replacement_dictation_session() {
         let release = Arc::new(tokio::sync::Notify::new());
@@ -9774,16 +10467,26 @@ mod tests {
         let mut pending_stop = std::pin::pin!(backend.stop_dictation());
         assert!(futures_util::poll!(pending_stop.as_mut()).is_pending());
         backend.cancel_dictation(Some(first_session)).await.unwrap();
+        assert_eq!(
+            backend.start_dictation().await.unwrap_err().code,
+            BackendErrorCode::Busy
+        );
+        // Native startup still owns resources after logical cancellation. Let
+        // it clean up before B starts, while deliberately not polling A's old
+        // stop request: that request must remain bound to A after B is ready.
+        release.notify_one();
+        assert_eq!(
+            first_start.await.unwrap_err().code,
+            BackendErrorCode::Cancelled
+        );
 
         let mut second_start = std::pin::pin!(backend.start_dictation());
         assert!(futures_util::poll!(second_start.as_mut()).is_pending());
         let second_session = backend.snapshot().dictation.session_id.unwrap();
         assert_ne!(first_session, second_session);
-        release.notify_waiters();
-        assert_eq!(
-            first_start.await.unwrap_err().code,
-            BackendErrorCode::Cancelled
-        );
+        // Owned startup may not have polled the engine yet. Keep the permit
+        // instead of sending a broadcast which only wakes existing waiters.
+        release.notify_one();
         assert_eq!(second_start.await.unwrap(), second_session);
 
         let error = pending_stop

@@ -1,4 +1,24 @@
-import type { LessComputerEvent, LessComputerSyncResult } from './types';
+import type { LessComputerEvent, LessComputerSyncResult, LessComputerVoiceEvent } from './types';
+
+/** Consume Core presentation snapshots. Keep the idle waterline so a late
+ * meter cannot revive a finished session; an explicit snapshot may recover a
+ * new owner whose starting event was already evicted from the bounded replay. */
+export function reduceLessComputerVoice(
+  previous: LessComputerVoiceEvent | null,
+  event: LessComputerEvent,
+  fromSnapshot = false,
+): LessComputerVoiceEvent | null {
+  if (event.kind !== 'voice_state') return previous;
+  if (previous) {
+    if (typeof event.seq === 'number' && typeof previous.seq === 'number' && event.seq <= previous.seq) return previous;
+    if (!fromSnapshot && event.sessionId !== previous.sessionId && event.phase !== 'starting') return previous;
+    if (event.sessionId === previous.sessionId && (
+      previous.phase === 'idle'
+      || (previous.phase === 'transcribing' && event.phase === 'recording')
+    )) return previous;
+  }
+  return event;
+}
 
 export interface ReconciledLessComputerReplay {
   events: LessComputerEvent[];

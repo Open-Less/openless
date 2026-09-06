@@ -1,6 +1,6 @@
 # Linux egui 接入交接
 
-更新：2026-09-06；源码快照：`2b315572`。需求依据：[2.0范围](../2.0-requirements.md)。
+更新：2026-09-06；接口以本目录所在提交的代码为准。初始缺口盘点基于`2b315572`，后续资源生命周期与VoiceState合同更新见01/06。需求依据：[2.0范围](../2.0-requirements.md)。
 
 本批2.0完整交付Windows/macOS。Linux交付共享Core及接入资料；egui团队负责余下Linux Host、UI、集成和Linux发布验收。
 已有`linux-egui`代码和包构建是可复用起点，不等于Linux产品已完成。

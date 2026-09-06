@@ -13,6 +13,8 @@
 
 恢复时保留各领域的不同策略：听写恢复状态，QA以完整messages校准，Less Computer按轮归属处理；不是一个通用“取最新事件”就能替代。
 
+Less Computer语音提供`voice_state {sessionId, phase, level, elapsedMs}`及`BackendEventPublisher::latest_less_computer_voice_state()`固定一条最新投影。`phase`为`starting/recording/transcribing/idle`；投影保留原seq，供阶段事件被有界replay驱逐后恢复显示，不能推进聊天去重水位。Linux Host/UI接手此显示消费；旧session的Idle或迟到电平不得覆盖当前录音。
+
 ## 2. TranscriptDelta不是简单追加
 
 `offset`表示Unicode scalar（Rust `char`）数量，不是UTF-8字节或UTF-16单元。
@@ -28,6 +30,7 @@
 - 面板关闭/重开时丢弃旧owner的迟到输出；语音finish期间仍须能取消实际ASR。
 - Less Computer每个新User轮更新当前session，`fresh`仅决定是否清除会话显示；续聊也必须接收新轮输出与审批。
 - 工具/审批事件按Core标识关联，不在UI另建可绕过Core的approval token registry。
+- Less Computer录音反馈使用typed `voice_state`：`sessionId`、`phase`（starting/recording/transcribing/idle）、`level`、`elapsedMs`。与同一事件流的sequence一起消费，旧session的idle/电平不能清除新录音；Linux页面接入这组反馈仍由egui团队完成。
 
 源码参考：[qa.rs](../../openless-all/app/linux-egui/src/qa.rs)、[Core QA/Agent接口](../../openless-all/app/crates/openless-core/src/domains.rs)。
 
@@ -38,6 +41,7 @@
 
 录音移交给finish后仍要保留共享取消句柄；不能`take()`唯一资源后让取消路径找不到ASR。
 Core已有capture控制与单一终态规则；Host保留有效句柄并如实返回错误，UI只显示最终状态。
+Core资源hold覆盖在途原生初始化与收尾；关闭页面、取消回复或丢弃调用future不能让旧任务恢复新会话的静音/输入源。不要把Core暂时返回Busy当成可以在Host绕开的锁。
 
 Remote socket下行只发本连接所属session；客户端stop后到finish结束之间仍保留取消路由。
 停止native listener/服务后再shutdown Core；退出过程中不接新业务。

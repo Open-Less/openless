@@ -229,13 +229,25 @@ impl DictationEngine for PipelineDictationEngine {
         context: Arc<DictationContext>,
         partials: Arc<dyn TextStreamSink>,
         progress: Arc<dyn RecordingProgressSink>,
+        cancel: crate::CancellationToken,
     ) -> BoxFuture<'static, Result<VoiceCapture, BackendError>> {
         let recorder = Arc::clone(&self.recorder);
         let transcription_engine = Arc::clone(&self.transcription);
         Box::pin(async move {
+            if cancel.is_cancelled() {
+                return Err(cancelled_error(
+                    "voice capture cancelled before ASR startup",
+                ));
+            }
             let transcription = transcription_engine
                 .start(session_id, Arc::clone(&context), partials)
                 .await?;
+            if cancel.is_cancelled() {
+                let _ = transcription.cancel().await;
+                return Err(cancelled_error(
+                    "voice capture cancelled while ASR was starting",
+                ));
+            }
             let consumer: Arc<dyn AudioConsumer> = Arc::new(SessionAudioConsumer {
                 session: Arc::clone(&transcription),
             });
@@ -243,6 +255,13 @@ impl DictationEngine for PipelineDictationEngine {
                 .start(session_id, context, consumer, progress)
                 .await
             {
+                Ok(recording) if cancel.is_cancelled() => {
+                    let _ = recording.stop().await;
+                    let _ = transcription.cancel().await;
+                    Err(cancelled_error(
+                        "voice capture cancelled while recorder was starting",
+                    ))
+                }
                 Ok(recording) => Ok(VoiceCapture {
                     recording,
                     transcription,
@@ -260,14 +279,26 @@ impl DictationEngine for PipelineDictationEngine {
         session_id: SessionId,
         context: Arc<DictationContext>,
         progress: Arc<dyn RecordingProgressSink>,
+        cancel: crate::CancellationToken,
     ) -> BoxFuture<'static, Result<AudioCapture, BackendError>> {
         let recorder = Arc::clone(&self.recorder);
         Box::pin(async move {
+            if cancel.is_cancelled() {
+                return Err(cancelled_error(
+                    "voice capture cancelled before recorder startup",
+                ));
+            }
             let pcm = Arc::new(CapturedPcm::default());
             let consumer: Arc<dyn AudioConsumer> = pcm.clone();
             let recording = recorder
                 .start(session_id, context, consumer, progress)
                 .await?;
+            if cancel.is_cancelled() {
+                let _ = recording.stop().await;
+                return Err(cancelled_error(
+                    "voice capture cancelled while recorder was starting",
+                ));
+            }
             Ok(AudioCapture { recording, pcm })
         })
     }

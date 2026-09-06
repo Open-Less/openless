@@ -73,9 +73,8 @@ pub async fn qa_set_edit_instruction_mode(
 
 /// 用户点 ✕ / 按 Esc 关 Less Computer 浮窗。
 #[tauri::command]
-pub fn less_computer_window_dismiss(core: CoreState<'_>, coord: CoordinatorState<'_>) {
-    core.services().less_computer.dismiss();
-    coord.tauri_host().hide_less_computer();
+pub async fn less_computer_window_dismiss(coord: CoordinatorState<'_>) -> Result<(), String> {
+    coord.dismiss_less_computer().await
 }
 
 /// 聊天面板（qa / less-computer）请求键盘焦点。

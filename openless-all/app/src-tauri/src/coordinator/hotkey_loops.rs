@@ -695,12 +695,12 @@ pub(super) fn less_computer_modifier_bridge_loop(
         }
         let inner_cloned = Arc::clone(&inner);
         match evt {
-            HotkeyEvent::Pressed { press_id, .. } => {
+            HotkeyEvent::Pressed { press_id, at } => {
                 inner.host.block_on(async {
-                    handle_less_computer_modifier_pressed(&inner_cloned, press_id).await
+                    handle_less_computer_modifier_pressed(&inner_cloned, press_id, at).await
                 });
             }
-            HotkeyEvent::Released { press_id, .. } => {
+            HotkeyEvent::Released { press_id, at } => {
                 if inner.less_computer_press_generation.load(Ordering::SeqCst) != press_id {
                     continue;
                 }
@@ -710,7 +710,7 @@ pub(super) fn less_computer_modifier_bridge_loop(
                     .as_ref()
                     .map(LessComputerHostCapture::session_id);
                 inner.host.block_on(async {
-                    handle_less_computer_released(&inner_cloned, session_id).await
+                    handle_less_computer_released(&inner_cloned, session_id, press_id, at).await
                 });
             }
             // Esc 取消与组合键撤销都不在此枚举里：分别走 esc_cancel_bridge_loop /
@@ -728,28 +728,35 @@ pub(super) fn less_computer_modifier_bridge_loop(
 /// Less Computer 触发键被当修饰键用（Option+任意字母/数字键之类）：撤销这次按下开出的语音会话。
 /// handle_less_computer_pressed 只在 Idle 时开会话，所以此刻还在跑的 voice_agent
 /// 会话必然就是这次按下开出来的；其他情况（按下被忽略）什么都不动。
-async fn handle_less_computer_modifier_pressed(inner: &Arc<Inner>, press_id: u64) {
-    if press_id == 0 {
-        let _ = handle_less_computer_pressed(inner).await;
-        return;
-    }
+async fn handle_less_computer_modifier_pressed(
+    inner: &Arc<Inner>,
+    press_id: u64,
+    at: std::time::Instant,
+) {
     inner
         .less_computer_press_generation
         .store(press_id, Ordering::SeqCst);
-    if inner
-        .less_computer_combo_pending_press
-        .compare_exchange(press_id, 0, Ordering::SeqCst, Ordering::SeqCst)
-        .is_ok()
-    {
+    if take_pending_less_combined(inner, press_id).is_some() {
         return;
     }
-    let _ = handle_less_computer_pressed(inner).await;
-    if inner
-        .less_computer_combo_pending_press
-        .compare_exchange(press_id, 0, Ordering::SeqCst, Ordering::SeqCst)
-        .is_ok()
+    let session_id = handle_less_computer_pressed(inner, press_id, at).await;
+    if let Some(edge) = take_pending_less_combined(inner, press_id) {
+        cancel_less_computer_voice_session(inner, press_id, edge.at, session_id);
+    }
+}
+
+fn take_pending_less_combined(
+    inner: &Arc<Inner>,
+    press_id: u64,
+) -> Option<crate::hotkey::HotkeyCombinedEdge> {
+    let mut pending = inner.less_computer_combo_pending_press.lock();
+    if pending
+        .as_ref()
+        .is_some_and(|edge| edge.press_id == press_id)
     {
-        cancel_less_computer_voice_session(inner, press_id, std::time::Instant::now());
+        pending.take()
+    } else {
+        None
     }
 }
 
@@ -758,13 +765,16 @@ fn cancel_less_computer_press(inner: &Arc<Inner>, edge: crate::hotkey::HotkeyCom
     if press_id == 0 {
         return;
     }
-    inner
-        .less_computer_combo_pending_press
-        .store(press_id, Ordering::SeqCst);
+    *inner.less_computer_combo_pending_press.lock() = Some(edge);
     if inner.less_computer_press_generation.load(Ordering::SeqCst) != press_id {
         return;
     }
-    cancel_less_computer_voice_session(inner, press_id, edge.at);
+    let session_id = inner
+        .less_computer_voice
+        .lock()
+        .as_ref()
+        .map(LessComputerHostCapture::session_id);
+    cancel_less_computer_voice_session(inner, press_id, edge.at, session_id);
 }
 
 /// Tauri half of the Core-owned Less Computer recording controller.
@@ -775,14 +785,17 @@ fn cancel_less_computer_press(inner: &Arc<Inner>, edge: crate::hotkey::HotkeyCom
 /// returning; they are queued by session id and flushed immediately after the
 /// handle enters the slot, so a cold ASR startup cannot lose an early directive.
 pub(super) enum LessComputerHostCapture {
-    Starting(openless_core::SessionId),
+    Starting(
+        openless_core::SessionId,
+        Arc<dyn openless_core::RecordingControlSink>,
+    ),
     Recording(openless_core::LessComputerVoiceSession),
 }
 
 impl LessComputerHostCapture {
     fn session_id(&self) -> openless_core::SessionId {
         match self {
-            Self::Starting(session_id) => *session_id,
+            Self::Starting(session_id, _) => *session_id,
             Self::Recording(session) => session.session_id(),
         }
     }
@@ -793,7 +806,7 @@ impl LessComputerHostCapture {
     ) -> Result<(), openless_core::BackendError> {
         match self {
             // 冷启动还没有原生handle，Core session id依然是精确的取消归属。
-            Self::Starting(session_id) => backend.cancel_less_computer(Some(session_id)).await,
+            Self::Starting(session_id, _) => backend.cancel_less_computer(Some(session_id)).await,
             Self::Recording(session) => session.cancel().await,
         }
     }
@@ -817,7 +830,7 @@ fn attach_less_computer_recording(
     session: openless_core::LessComputerVoiceSession,
 ) -> Result<(), openless_core::LessComputerVoiceSession> {
     let mut slot = slot.lock();
-    if !matches!(slot.as_ref(), Some(LessComputerHostCapture::Starting(id)) if *id == session.session_id())
+    if !matches!(slot.as_ref(), Some(LessComputerHostCapture::Starting(id, _)) if *id == session.session_id())
     {
         return Err(session);
     }
@@ -852,7 +865,7 @@ impl LessComputerRecordingControl {
             openless_core::RecordingControlAction::Stop => {
                 let task_inner = Arc::clone(inner);
                 inner.host.spawn(async move {
-                    finish_less_computer_voice_session(&task_inner, Some(session_id)).await;
+                    let _ = finish_less_computer_voice_session(&task_inner, Some(session_id)).await;
                 });
             }
             openless_core::RecordingControlAction::Cancel => {
@@ -896,6 +909,9 @@ impl openless_core::RecordingControlSink for LessComputerRecordingControl {
                 "Less Computer host session is no longer available",
             )
         })?;
+        // 与flush共用pending锁：ready=false与入队之间不允许attach后的flush穿过。
+        // 唯一嵌套锁序为pending→slot；attach先释放slot再flush，取消不持pending等待。
+        let mut pending = self.pending.lock();
         let ready = inner
             .less_computer_voice
             .lock()
@@ -904,9 +920,10 @@ impl openless_core::RecordingControlSink for LessComputerRecordingControl {
                 LessComputerHostCapture::Recording(session) if session.session_id() == session_id
             ));
         if ready {
+            drop(pending);
             Self::apply(&inner, session_id, action);
         } else {
-            self.pending.lock().push((session_id, action));
+            pending.push((session_id, action));
         }
         Ok(())
     }
@@ -956,35 +973,73 @@ pub(super) fn cancel_less_computer_capture(
                 log::warn!("[less-computer] cancel failed: {error}");
             }
         }
-        host.hide_less_computer_glow();
+        if backend.less_computer_active_session().is_none() {
+            host.hide_less_computer_glow();
+        }
     });
 }
 
-fn cancel_less_computer_voice_session(inner: &Arc<Inner>, press_id: u64, at: std::time::Instant) {
-    let _ = inner
-        .less_computer_combo_pending_press
-        .swap(0, Ordering::SeqCst);
+/// Esc和关闭窗口都必须先同步转移Host资源所有权，再等待Core取消。
+/// 没有capture时只取消此刻的Less Agent id，不能误取消QA/主听写或后来的会话。
+pub(super) async fn cancel_active_less_computer(
+    inner: &Arc<Inner>,
+) -> Result<bool, openless_core::BackendError> {
+    let capture = take_less_computer_host_capture(&inner.less_computer_voice, None);
+    let session_id = capture
+        .as_ref()
+        .map(LessComputerHostCapture::session_id)
+        .or_else(|| inner.backend.less_computer_active_session());
+    let Some(session_id) = session_id else {
+        return Ok(false);
+    };
+    inner
+        .less_computer_press_generation
+        .store(0, Ordering::SeqCst);
+    inner.less_computer_combo_pending_press.lock().take();
+    let result = match capture {
+        Some(capture) => capture.cancel(&inner.backend).await,
+        None => inner.backend.cancel_less_computer(Some(session_id)).await,
+    };
+    if inner.backend.less_computer_active_session().is_none() {
+        inner.host.hide_less_computer_glow();
+    }
+    result.map(|()| true)
+}
+
+fn cancel_less_computer_voice_session(
+    inner: &Arc<Inner>,
+    press_id: u64,
+    at: std::time::Instant,
+    session_id: Option<openless_core::SessionId>,
+) {
+    // 保留待处理边沿，直到启动桥越过资源交接后再取走；启动前取消不能丢失。
+    let Some(session_id) = session_id else { return };
+    if inner.less_computer_press_generation.load(Ordering::SeqCst) != press_id {
+        return;
+    }
     let _ = inner.backend.dispatch_less_computer_hotkey_edge(
         openless_core::DictationHotkeyEdge::Combined { press_id, at },
     );
     log::info!("[less-computer] 触发键与其他键组合按下 —— 取消本次按下开出的会话");
-    cancel_less_computer_capture(inner, None);
+    cancel_less_computer_capture(inner, Some(session_id));
 }
 
-async fn finish_less_computer_voice_session(
+pub(super) async fn finish_less_computer_voice_session(
     inner: &Arc<Inner>,
     expected_session_id: Option<openless_core::SessionId>,
-) {
+) -> Result<bool, openless_core::BackendError> {
     let session = take_less_computer_capture(inner, expected_session_id);
-    if let Some(session) = session {
-        if let Err(error) = session.finish().await {
-            log::warn!("[less-computer] finish failed: {error}");
-        }
-    } else if expected_session_id.is_some() {
-        // A later session owns both the slot and the glow now.
-        return;
+    let Some(session) = session else {
+        return Ok(false);
+    };
+    let result = session.finish().await;
+    if let Err(error) = &result {
+        log::warn!("[less-computer] finish failed: {error}");
     }
-    inner.host.hide_less_computer_glow();
+    if inner.backend.less_computer_active_session().is_none() {
+        inner.host.hide_less_computer_glow();
+    }
+    result.map(|_| true)
 }
 
 pub(super) fn less_computer_combo_bridge_loop(
@@ -998,17 +1053,22 @@ pub(super) fn less_computer_combo_bridge_loop(
         }
         let inner_cloned = Arc::clone(&inner);
         match evt {
-            ComboHotkeyEvent::Pressed { .. } => {
+            ComboHotkeyEvent::Pressed { at } => {
+                let press_id = crate::hotkey::next_press_id();
                 owned_session = inner
                     .host
-                    .block_on(async { handle_less_computer_pressed(&inner_cloned).await });
+                    .block_on(async {
+                        handle_less_computer_pressed(&inner_cloned, press_id, at).await
+                    })
+                    .map(|session_id| (session_id, press_id));
             }
-            ComboHotkeyEvent::Released { .. } => {
-                let Some(session_id) = owned_session.take() else {
+            ComboHotkeyEvent::Released { at } => {
+                let Some((session_id, press_id)) = owned_session.take() else {
                     continue;
                 };
                 inner.host.block_on(async {
-                    handle_less_computer_released(&inner_cloned, Some(session_id)).await
+                    handle_less_computer_released(&inner_cloned, Some(session_id), press_id, at)
+                        .await
                 });
             }
         }
@@ -1017,36 +1077,46 @@ pub(super) fn less_computer_combo_bridge_loop(
 
 pub(super) async fn handle_less_computer_pressed(
     inner: &Arc<Inner>,
+    press_id: u64,
+    at: std::time::Instant,
 ) -> Option<openless_core::SessionId> {
     if !hotkey_runtime_target(inner).coding_agent_enabled {
         return None;
     }
+    inner
+        .less_computer_press_generation
+        .store(press_id, Ordering::SeqCst);
     let action = inner.backend.dispatch_less_computer_hotkey_edge(
-        openless_core::DictationHotkeyEdge::Pressed {
-            press_id: 0,
-            at: std::time::Instant::now(),
-        },
+        openless_core::DictationHotkeyEdge::Pressed { press_id, at },
     );
     if matches!(action, openless_core::LessComputerHotkeyAction::Noop) {
         return None;
     }
     if !matches!(action, openless_core::LessComputerHotkeyAction::Start) {
         if matches!(action, openless_core::LessComputerHotkeyAction::Finish) {
-            finish_less_computer_voice_session(inner, None).await;
+            let _ = finish_less_computer_voice_session(inner, None).await;
         } else if matches!(action, openless_core::LessComputerHotkeyAction::Cancel) {
-            cancel_less_computer_voice_session(inner, 0, std::time::Instant::now());
+            let session_id = inner
+                .less_computer_voice
+                .lock()
+                .as_ref()
+                .map(LessComputerHostCapture::session_id);
+            cancel_less_computer_voice_session(inner, press_id, at, session_id);
         }
         return None;
     }
     let session_id = openless_core::SessionId::new();
+    let recording_control = Arc::new(LessComputerRecordingControl::new(inner));
     {
         let mut slot = inner.less_computer_voice.lock();
         if slot.is_some() {
             return None;
         }
-        *slot = Some(LessComputerHostCapture::Starting(session_id));
+        *slot = Some(LessComputerHostCapture::Starting(
+            session_id,
+            recording_control.clone(),
+        ));
     }
-    let recording_control = Arc::new(LessComputerRecordingControl::new(inner));
     match inner
         .backend
         .start_less_computer_voice(
@@ -1074,7 +1144,7 @@ pub(super) async fn handle_less_computer_pressed(
         }
         Err(error) => {
             let mut slot = inner.less_computer_voice.lock();
-            if matches!(slot.as_ref(), Some(LessComputerHostCapture::Starting(id)) if *id == session_id)
+            if matches!(slot.as_ref(), Some(LessComputerHostCapture::Starting(id, _)) if *id == session_id)
             {
                 slot.take();
             }
@@ -1087,29 +1157,29 @@ pub(super) async fn handle_less_computer_pressed(
 pub(super) async fn handle_less_computer_released(
     inner: &Arc<Inner>,
     expected_session_id: Option<openless_core::SessionId>,
+    press_id: u64,
+    at: std::time::Instant,
 ) {
     let Some(session_id) = expected_session_id else {
         return;
     };
-    if inner
-        .less_computer_voice
-        .lock()
-        .as_ref()
-        .map(LessComputerHostCapture::session_id)
-        != Some(session_id)
+    if inner.less_computer_press_generation.load(Ordering::SeqCst) != press_id
+        || inner
+            .less_computer_voice
+            .lock()
+            .as_ref()
+            .map(LessComputerHostCapture::session_id)
+            != Some(session_id)
     {
         return;
     }
     let action = inner.backend.dispatch_less_computer_hotkey_edge(
-        openless_core::DictationHotkeyEdge::Released {
-            press_id: 0,
-            at: std::time::Instant::now(),
-        },
+        openless_core::DictationHotkeyEdge::Released { press_id, at },
     );
     if !matches!(action, openless_core::LessComputerHotkeyAction::Finish) {
         return;
     }
-    finish_less_computer_voice_session(inner, Some(session_id)).await;
+    let _ = finish_less_computer_voice_session(inner, Some(session_id)).await;
 }
 
 pub(super) fn take_coding_agent_hotkeys_on_main_thread(inner: &Arc<Inner>) {
@@ -2134,6 +2204,312 @@ pub(super) fn window_key_matches_trigger(
 mod windows_less_computer_tests {
     use super::*;
 
+    // 只替换设备/云边界；边沿、取消、Host slot和Core lease都使用生产实现。
+    fn fixture_coordinator(
+        mode: crate::types::HotkeyMode,
+        startup_delay: std::time::Duration,
+    ) -> (
+        Coordinator,
+        Arc<openless_core::testing::FixtureAudioRecorder>,
+        std::path::PathBuf,
+    ) {
+        use openless_core::testing::{
+            FixtureAudioRecorder, FixtureTextPolisher, FixtureTranscriptionEngine,
+        };
+        let data_dir =
+            std::env::temp_dir().join(format!("openless-less-host-{}", uuid::Uuid::new_v4()));
+        let recorder = Arc::new(FixtureAudioRecorder::default());
+        let backend = Arc::new(
+            openless_core::OpenLessBackend::new(
+                openless_core::BackendConfig {
+                    data_dir: data_dir.clone(),
+                    ..Default::default()
+                },
+                openless_core::BackendDependencies {
+                    host_actions: Arc::new(openless_core::ports::NoopHostActions),
+                    dictation_engine: Arc::new(openless_core::PipelineDictationEngine::new(
+                        Arc::new(DelayedFixtureRecorder {
+                            recorder: recorder.clone(),
+                            startup_delay,
+                        }),
+                        Arc::new(FixtureTranscriptionEngine::successful("voice", 120)),
+                        Arc::new(FixtureTextPolisher::successful("unused")),
+                    )),
+                    ..openless_core::BackendDependencies::unsupported()
+                },
+            )
+            .unwrap(),
+        );
+        let mut prefs = backend.get_preferences();
+        prefs.coding_agent_enabled = true;
+        prefs.hotkey.mode = mode;
+        crate::set_backend_preferences_for_test(&backend, prefs);
+        let inner = Arc::new(Inner {
+            host: crate::tauri_coordinator_host::TauriCoordinatorHost::new(
+                crate::core_adapters::app_handle_slot(),
+            ),
+            hotkey_runtime_target: Mutex::new((&backend.get_preferences()).into()),
+            backend,
+            less_computer_voice: Mutex::new(None),
+            settings_host_gate: Mutex::new(()),
+            inserter: TextInserter::new(),
+            vocab_card_visible: AtomicBool::new(false),
+            hotkey: Mutex::new(None),
+            hotkey_status: Arc::new(Mutex::new(HotkeyStatus::default())),
+            window_hotkey_press_id: AtomicU64::new(0),
+            shortcut_recording_active: AtomicBool::new(false),
+            less_computer_press_generation: AtomicU64::new(0),
+            less_computer_combo_pending_press: Mutex::new(None),
+            combo_hotkey: Mutex::new(None),
+            side_aware_combo: Mutex::new(None),
+            translation_hotkey: Mutex::new(None),
+            switch_style_hotkey: Mutex::new(None),
+            open_app_hotkey: Mutex::new(None),
+            style_pack_hotkeys: Mutex::new(std::collections::HashMap::new()),
+            selection_polish_hotkey: Mutex::new(None),
+            selection_voice_host: Arc::new(Mutex::new(
+                selection_voice_session::SelectionVoiceHostState::default(),
+            )),
+            selection_voice_capture: Mutex::new(None),
+            translation_active: AtomicBool::new(false),
+            qa_hotkey: Mutex::new(None),
+            coding_agent_modifier_hotkey: Mutex::new(None),
+            coding_agent_combo_hotkey: Mutex::new(None),
+            last_capsule_state: Mutex::new(None),
+            capsule_event_epoch: AtomicU64::new(0),
+            capsule_event_lock: Mutex::new(()),
+            selection_polish_capsule_active: AtomicBool::new(false),
+            qa_context: Arc::new(TauriQaHostContext::default()),
+            shutdown: AtomicBool::new(false),
+        });
+        (Coordinator { inner }, recorder, data_dir)
+    }
+
+    struct DelayedFixtureRecorder {
+        recorder: Arc<openless_core::testing::FixtureAudioRecorder>,
+        startup_delay: std::time::Duration,
+    }
+
+    impl openless_core::AudioRecorder for DelayedFixtureRecorder {
+        fn start(
+            &self,
+            session_id: openless_core::SessionId,
+            context: Arc<openless_core::DictationContext>,
+            consumer: Arc<dyn openless_core::AudioConsumer>,
+            progress: Arc<dyn openless_core::RecordingProgressSink>,
+        ) -> futures_util::future::BoxFuture<
+            'static,
+            Result<Box<dyn openless_core::ActiveRecording>, openless_core::BackendError>,
+        > {
+            let recorder = self.recorder.clone();
+            let delay = self.startup_delay;
+            Box::pin(async move {
+                tokio::time::sleep(delay).await;
+                recorder
+                    .start(session_id, context, consumer, progress)
+                    .await
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn escape_after_toggle_release_allows_the_next_less_recording() {
+        let (coordinator, recorder, data_dir) =
+            fixture_coordinator(crate::types::HotkeyMode::Toggle, std::time::Duration::ZERO);
+        let inner = &coordinator.inner;
+        let first = handle_less_computer_pressed(inner, 1, std::time::Instant::now())
+            .await
+            .unwrap();
+        handle_less_computer_released(inner, Some(first), 1, std::time::Instant::now()).await;
+        assert!(super::super::dictation::cancel_active_session(inner).await);
+        assert_eq!(recorder.stop_count(), 1);
+        assert!(
+            handle_less_computer_pressed(inner, 2, std::time::Instant::now())
+                .await
+                .is_some(),
+            "Esc must release the Host capture slot as well as the Core lease"
+        );
+        super::super::dictation::cancel_active_session(inner).await;
+        drop(coordinator);
+        std::fs::remove_dir_all(data_dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn cli_cancel_releases_less_capture_and_allows_recording_again() {
+        let (coordinator, recorder, data_dir) =
+            fixture_coordinator(crate::types::HotkeyMode::Toggle, std::time::Duration::ZERO);
+        handle_less_computer_pressed(&coordinator.inner, 1, std::time::Instant::now())
+            .await
+            .unwrap();
+        assert_eq!(
+            coordinator.cancel_dictation_from_cli().await.unwrap(),
+            openless_core::CliDispatchOutcome::DictationCancelled
+        );
+        assert_eq!(recorder.stop_count(), 1);
+        assert!(
+            handle_less_computer_pressed(&coordinator.inner, 2, std::time::Instant::now())
+                .await
+                .is_some()
+        );
+        coordinator.dismiss_less_computer().await.unwrap();
+        drop(coordinator);
+        std::fs::remove_dir_all(data_dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn dismiss_less_window_stops_capture_and_allows_reopening() {
+        let (coordinator, recorder, data_dir) =
+            fixture_coordinator(crate::types::HotkeyMode::Toggle, std::time::Duration::ZERO);
+        handle_less_computer_pressed(&coordinator.inner, 1, std::time::Instant::now())
+            .await
+            .unwrap();
+        coordinator.dismiss_less_computer().await.unwrap();
+        assert_eq!(
+            recorder.stop_count(),
+            1,
+            "closing the panel must stop the microphone"
+        );
+        assert!(
+            handle_less_computer_pressed(&coordinator.inner, 2, std::time::Instant::now())
+                .await
+                .is_some()
+        );
+        coordinator.dismiss_less_computer().await.unwrap();
+        drop(coordinator);
+        std::fs::remove_dir_all(data_dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn auto_short_tap_keeps_recording_after_a_slow_native_start() {
+        // 两种原生监听器都排队保存原始时间，不能把设备启动耗时算进物理按住时长。
+        for combo in [false, true] {
+            let (coordinator, recorder, data_dir) = fixture_coordinator(
+                crate::types::HotkeyMode::Auto,
+                std::time::Duration::from_millis(450),
+            );
+            let inner = coordinator.inner.clone();
+            let pressed = std::time::Instant::now();
+            let released = pressed + std::time::Duration::from_millis(50);
+            let bridge = if combo {
+                let (tx, rx) = mpsc::channel();
+                tx.send(ComboHotkeyEvent::Pressed { at: pressed }).unwrap();
+                tx.send(ComboHotkeyEvent::Released { at: released })
+                    .unwrap();
+                drop(tx);
+                std::thread::spawn(move || less_computer_combo_bridge_loop(inner, rx))
+            } else {
+                let (tx, rx) = mpsc::channel();
+                tx.send(HotkeyEvent::Pressed {
+                    at: pressed,
+                    press_id: 47,
+                })
+                .unwrap();
+                tx.send(HotkeyEvent::Released {
+                    at: released,
+                    press_id: 47,
+                })
+                .unwrap();
+                drop(tx);
+                std::thread::spawn(move || less_computer_modifier_bridge_loop(inner, rx))
+            };
+            tokio::task::spawn_blocking(move || bridge.join().unwrap())
+                .await
+                .unwrap();
+            assert_eq!(
+                recorder.stop_count(),
+                0,
+                "50ms Auto tap must not become a Hold release after 450ms native startup"
+            );
+            coordinator.dismiss_less_computer().await.unwrap();
+            drop(coordinator);
+            std::fs::remove_dir_all(data_dir).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn recording_control_stop_is_delivered_once_on_both_sides_of_handoff() {
+        use openless_core::RecordingControlSink;
+        for before_handoff in [true, false] {
+            let (coordinator, recorder, data_dir) =
+                fixture_coordinator(crate::types::HotkeyMode::Toggle, std::time::Duration::ZERO);
+            let inner = &coordinator.inner;
+            let id = openless_core::SessionId::new();
+            let control = Arc::new(LessComputerRecordingControl::new(inner));
+            *inner.less_computer_voice.lock() =
+                Some(LessComputerHostCapture::Starting(id, control.clone()));
+            let session = inner
+                .backend
+                .start_less_computer_voice(id, control.clone())
+                .await
+                .unwrap();
+            if before_handoff {
+                control
+                    .request(id, openless_core::RecordingControlAction::Stop)
+                    .unwrap();
+            }
+            assert!(attach_less_computer_recording(&inner.less_computer_voice, session).is_ok());
+            if !before_handoff {
+                control
+                    .request(id, openless_core::RecordingControlAction::Stop)
+                    .unwrap();
+            }
+            control.flush(id);
+            control.flush(id);
+            tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                while recorder.stop_count() != 1
+                    || inner.backend.less_computer_active_session().is_some()
+                {
+                    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                }
+            })
+            .await
+            .expect("Stop must reach native capture and release the lease");
+            assert_eq!(recorder.stop_count(), 1);
+            drop(coordinator);
+            std::fs::remove_dir_all(data_dir).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn capsule_stop_during_starting_waits_for_one_native_handoff() {
+        let (coordinator, recorder, data_dir) = fixture_coordinator(
+            crate::types::HotkeyMode::Toggle,
+            std::time::Duration::from_millis(100),
+        );
+        let inner = coordinator.inner.clone();
+        let starting = tokio::spawn(async move {
+            handle_less_computer_pressed(&inner, 1, std::time::Instant::now()).await
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while coordinator
+                .backend()
+                .less_computer_active_session()
+                .is_none()
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(coordinator.stop_less_computer_recording().await.unwrap());
+        starting.await.unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while recorder.stop_count() != 1
+                || coordinator
+                    .backend()
+                    .less_computer_active_session()
+                    .is_some()
+            {
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .expect("the queued capsule Stop must be applied after recorder startup");
+        assert_eq!(recorder.stop_count(), 1);
+        drop(coordinator);
+        std::fs::remove_dir_all(data_dir).unwrap();
+    }
+
     struct IgnoreRecordingControl;
 
     impl openless_core::RecordingControlSink for IgnoreRecordingControl {
@@ -2178,7 +2554,10 @@ mod windows_less_computer_tests {
         // 冷启动只有session id。取走slot后立即释放所属lease，不能等未来的Released。
         let pending = openless_core::SessionId::new();
         backend.begin_less_computer_capture(pending).unwrap();
-        let slot = Mutex::new(Some(LessComputerHostCapture::Starting(pending)));
+        let slot = Mutex::new(Some(LessComputerHostCapture::Starting(
+            pending,
+            Arc::new(IgnoreRecordingControl),
+        )));
         take_less_computer_host_capture(&slot, None)
             .unwrap()
             .cancel(&backend)
@@ -2212,7 +2591,10 @@ mod windows_less_computer_tests {
             .await
             .unwrap();
         let new_owner = openless_core::SessionId::new();
-        *slot.lock() = Some(LessComputerHostCapture::Starting(new_owner));
+        *slot.lock() = Some(LessComputerHostCapture::Starting(
+            new_owner,
+            Arc::new(IgnoreRecordingControl),
+        ));
         attach_less_computer_recording(&slot, late)
             .unwrap_err()
             .cancel()
@@ -2231,7 +2613,7 @@ mod windows_less_computer_tests {
         // 旧id的异步取消不能影响替换会话；没有Host capture也不会发全局取消。
         let replacement = openless_core::SessionId::new();
         backend.begin_less_computer_capture(replacement).unwrap();
-        LessComputerHostCapture::Starting(pending)
+        LessComputerHostCapture::Starting(pending, Arc::new(IgnoreRecordingControl))
             .cancel(&backend)
             .await
             .unwrap();

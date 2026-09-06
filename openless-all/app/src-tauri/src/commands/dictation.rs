@@ -24,8 +24,14 @@ pub async fn start_dictation(core: CoreState<'_>) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn stop_dictation(core: CoreState<'_>) -> Result<(), String> {
+pub async fn stop_dictation(
+    core: CoreState<'_>,
+    coord: CoordinatorState<'_>,
+) -> Result<(), String> {
     ensure_core_started(&core).await?;
+    if coord.stop_less_computer_recording().await? {
+        return Ok(());
+    }
     core.stop_dictation()
         .await
         .map(|_| ())
@@ -33,13 +39,12 @@ pub async fn stop_dictation(core: CoreState<'_>) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn cancel_dictation(core: CoreState<'_>) -> Result<(), String> {
+pub async fn cancel_dictation(
+    core: CoreState<'_>,
+    coord: CoordinatorState<'_>,
+) -> Result<(), String> {
     ensure_core_started(&core).await?;
-    if let Err(error) = core.cancel_dictation(None).await {
-        if error.code != openless_core::BackendErrorCode::InvalidState {
-            log::warn!("[dictation] cancel failed: {error}");
-        }
-    }
+    coord.cancel_active_voice().await;
     Ok(())
 }
 

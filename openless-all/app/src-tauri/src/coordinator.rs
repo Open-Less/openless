@@ -460,7 +460,7 @@ struct Inner {
     shortcut_recording_active: AtomicBool,
     /// Less Computer modifier 热键的按下代次与待处理组合键事件。
     less_computer_press_generation: AtomicU64,
-    less_computer_combo_pending_press: AtomicU64,
+    less_computer_combo_pending_press: Mutex<Option<crate::hotkey::HotkeyCombinedEdge>>,
     /// 自定义组合键监听器（global-hotkey crate）。当 `prefs.hotkey.trigger == Custom` 时
     /// 代替 modifier-only 的 hotkey monitor。`None` 表示不使用自定义组合键或还没成功安装。
     combo_hotkey: Mutex<Option<ComboHotkeyMonitor>>,
@@ -622,7 +622,7 @@ impl Coordinator {
                 window_hotkey_press_id: AtomicU64::new(0),
                 shortcut_recording_active: AtomicBool::new(false),
                 less_computer_press_generation: AtomicU64::new(0),
-                less_computer_combo_pending_press: AtomicU64::new(0),
+                less_computer_combo_pending_press: Mutex::new(None),
                 combo_hotkey: Mutex::new(None),
                 side_aware_combo: Mutex::new(None),
                 translation_hotkey: Mutex::new(None),
@@ -732,7 +732,7 @@ impl Coordinator {
             window_hotkey_press_id: AtomicU64::new(0),
             shortcut_recording_active: AtomicBool::new(false),
             less_computer_press_generation: AtomicU64::new(0),
-            less_computer_combo_pending_press: AtomicU64::new(0),
+            less_computer_combo_pending_press: Mutex::new(None),
             combo_hotkey: Mutex::new(None),
             side_aware_combo: Mutex::new(None),
             translation_hotkey: Mutex::new(None),
@@ -1493,6 +1493,55 @@ impl Coordinator {
 
     pub(crate) fn lock_settings_host(&self) -> parking_lot::MutexGuard<'_, ()> {
         self.inner.settings_host_gate.lock()
+    }
+
+    pub(crate) async fn dismiss_less_computer(&self) -> Result<(), String> {
+        // 先结束当前对话身份，随后精确释放Host capture/Core run；隐藏窗口不等于停麦。
+        self.inner.backend.services().less_computer.dismiss();
+        // 立即隐藏。若清理期间用户重新开启窗口，其show epoch会撤销这次退出动画。
+        self.inner.host.hide_less_computer();
+        let result = cancel_active_less_computer(&self.inner).await;
+        result.map(|_| ()).map_err(|error| error.to_string())
+    }
+
+    pub(crate) async fn stop_less_computer_recording(&self) -> Result<bool, String> {
+        let starting = {
+            let slot = self.inner.less_computer_voice.lock();
+            match slot.as_ref() {
+                Some(LessComputerHostCapture::Starting(id, control)) => {
+                    Some((*id, control.clone()))
+                }
+                _ => None,
+            }
+        };
+        if let Some((id, control)) = starting {
+            // 胶囊停止与静音停止共用交接队列，冷启动期间点击不能被吞掉。
+            return control
+                .request(id, openless_core::RecordingControlAction::Stop)
+                .map(|_| true)
+                .map_err(|error| error.to_string());
+        }
+        finish_less_computer_voice_session(&self.inner, None)
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    pub(crate) async fn cancel_active_voice(&self) {
+        dictation::cancel_active_session(&self.inner).await;
+    }
+
+    pub(crate) async fn cancel_dictation_from_cli(
+        &self,
+    ) -> Result<openless_core::CliDispatchOutcome, openless_core::BackendError> {
+        // CLI取消与1.x主session范围一致：先释放Less Host slot，之后只委托主听写取消。
+        // 不复用全局Esc的QA/Selection分支，以免扩大既有CLI命令的作用域。
+        if cancel_active_less_computer(&self.inner).await? {
+            return Ok(openless_core::CliDispatchOutcome::DictationCancelled);
+        }
+        self.inner
+            .backend
+            .dispatch_cli_intent(crate::cli::CliIntent::CancelDictation)
+            .await
     }
 
     pub fn hotkey_capability(&self) -> HotkeyCapability {

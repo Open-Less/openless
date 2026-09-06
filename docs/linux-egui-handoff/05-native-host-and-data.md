@@ -11,6 +11,7 @@
 - 补充[RecordingPlan](../../openless-all/app/crates/openless-core/src/dictation_context.rs)的适用效果及[RecordingArchive/read_pcm](../../openless-all/app/crates/openless-core/src/ports.rs)；保存与清理须遵循独立音频保留设置，不能误用历史条数。
 - 用户取消、设备断开、启动失败和正常停止都必须恢复已改变的系统音量；不要覆盖录音期间用户主动修改的新状态。
 - 提示音、录音胶囊/overlay尚未接入；消费Core阶段/反馈事件，避免UI自己猜测处理已结束。
+- Less Computer成功非debug录音的归档清理由Core执行；Host需提供真实`RecordingArchive`和可执行的`discard`。未提供archive不等于已经验证文件保留策略，失败/debug场景也不能无条件删除。
 
 验收：真实输入设备切换/拔出、无声停止、权限失败、归档开关/上限、失败重试与取消、历史录音播放/重转、各终态音量恢复。
 

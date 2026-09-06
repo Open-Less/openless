@@ -145,6 +145,44 @@ fn forward_legacy_event(app: &AppHandle, backend: &OpenLessBackend, kind: Backen
             let _ = app.emit("coding-agent:test", event);
         }
         BackendEventKind::LessComputerEvent(event) => {
+            if let openless_core::LessComputerEventKind::VoiceState {
+                session_id,
+                phase,
+                level,
+                elapsed_ms,
+            } = &event.kind
+            {
+                // 胶囊只展示Core语音快照。已开始的其它会话拥有共享窗口，旧Less终态不得盖掉它。
+                let current = backend.less_computer_active_session();
+                if !current.is_some_and(|current| current != *session_id)
+                    && backend.snapshot().dictation.phase == DictationPhase::Idle
+                {
+                    if let Some(coordinator) =
+                        app.try_state::<Arc<crate::coordinator::Coordinator>>()
+                    {
+                        use openless_core::LessComputerVoicePhase;
+                        let state = match phase {
+                            LessComputerVoicePhase::Starting
+                            | LessComputerVoicePhase::Recording => CapsuleState::Recording,
+                            LessComputerVoicePhase::Transcribing => CapsuleState::Transcribing,
+                            LessComputerVoicePhase::Idle => CapsuleState::Idle,
+                        };
+                        coordinator.present_core_capsule(CapsulePayload {
+                            state,
+                            level: *level,
+                            elapsed_ms: *elapsed_ms,
+                            message: (*phase == LessComputerVoicePhase::Starting)
+                                .then(|| "正在准备语音…".to_string()),
+                            inserted_chars: None,
+                            translation: false,
+                            operating: true,
+                            warming: *phase == LessComputerVoicePhase::Starting,
+                            capsule_style: backend.get_preferences().capsule_style,
+                            selection_polish: false,
+                        });
+                    }
+                }
+            }
             let _ = app.emit_to("less-computer", "less-computer:event", event);
         }
         BackendEventKind::LocalAsrPrepareProgress(progress) => {

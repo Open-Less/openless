@@ -1702,11 +1702,11 @@ pub(crate) fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
 /// 2. single-instance 回调（第二个进程被拦截后转发 argv）
 ///
 /// 异步动作通过 Tauri runtime spawn，不阻塞回调线程：
-/// - ToggleDictation / CancelDictation 进入共享 Core facade；阶段判断只读 Core snapshot
+/// - ToggleDictation 进入共享 Core facade；CancelDictation先释放Less Host capture再取消Core
 /// - ToggleQa 直接转发到 handle_qa_hotkey_pressed（语义等同于按一次 QA 热键）
 fn dispatch_cli_intent<R: Runtime>(app: &AppHandle<R>, intent: cli::CliIntent) {
     match intent {
-        cli::CliIntent::ToggleDictation | cli::CliIntent::CancelDictation => {
+        cli::CliIntent::ToggleDictation => {
             let backend = app
                 .try_state::<Arc<openless_core::OpenLessBackend>>()
                 .map(|state| Arc::clone(&*state));
@@ -1724,6 +1724,20 @@ fn dispatch_cli_intent<R: Runtime>(app: &AppHandle<R>, intent: cli::CliIntent) {
                 }
                 if let Err(error) = backend.dispatch_cli_intent(intent).await {
                     log::warn!("[cli] core intent failed: {error}");
+                }
+            });
+        }
+        cli::CliIntent::CancelDictation => {
+            let coordinator = app
+                .try_state::<Arc<coordinator::Coordinator>>()
+                .map(|state| Arc::clone(&*state));
+            let Some(coordinator) = coordinator else {
+                log::warn!("[cli] coordinator not yet managed; dropping cancel intent");
+                return;
+            };
+            tauri::async_runtime::spawn(async move {
+                if let Err(error) = coordinator.cancel_dictation_from_cli().await {
+                    log::warn!("[cli] cancel failed: {error}");
                 }
             });
         }

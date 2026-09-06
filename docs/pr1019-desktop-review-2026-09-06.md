@@ -48,6 +48,30 @@
 
 第一轮修复、综合验证并推送后，派全新的团队审查整个PR；若发现确定问题，继续修复、验证、推送，再交新的团队复审。准确head、测试计数和最终结论在完成时补录，不沿用旧head证据冒充新验证。
 
+### 第二轮：`fc9824ee...98a0ca38`
+
+两名全新Windows/macOS审查员交叉覆盖整个PR的原生路径、React入口与共享领域，主代理补充复现及修复复核。不是仅审查第一轮补丁；本轮确认以下9项Spec问题，未确认独立Standards违规。
+
+| ID | 确定问题 | 修复/验证状态 |
+| --- | --- | --- |
+| R37 / P1 | Less Toggle/Auto松键后Esc仅清Core，Host Recording slot常驻导致永久无法再开；关闭面板也未清原生捕获 | 已统一Esc、关闭、胶囊及CLI取消的所属capture收尾；Core CLI回归先红后绿，保留QA独立作用域；Host可取消后复录 |
+| R38 / P2 | Less桥丢弃原生Instant，在ASR冷启动排队后重建now，把Auto短按当成长按 | 已透传modifier/combo真实Instant及generation；450ms启动+50ms短按回归先红后绿 |
+| R39 / P2 | 录音控制ready-check与pending.push之间可被attach/flush穿过，静音Stop永久丢失 | 已固定pending→slot锁序；Starting保存同一control，静音和胶囊Stop交接前后恰执行一次 |
+| R40 / P2 | Less录音、电平与转写没有生产事件，Composer只等旧operating胶囊状态，Windows无glow可代替 | 已接Core typed VoiceState、React/胶囊；保留一条带原seq/session的有效投影供截断重放恢复，拒绝旧终态覆盖新录音；语音忙时保留草稿且不提交 |
+| R41 / P1 | Less成功非debug语音未删除WAV，回退到共享Core后丢失1.x成功归档清理 | 已按成功/非debug条件discard，debug与失败保留；录音保留策略回归先红后绿 |
+| R42 / P1 | text_inserter.begin尚未登记时取消会释放voice lease；迟到TIS准备/恢复干扰新会话 | 已在begin前登记Shared preparation并持hold，取消与迟到start共同等待一次恢复；原回归和丢弃start回复回归通过 |
+| R43 / P1 | 会话中关闭cursor_context_enabled后，完成仍按冻结true重启AX编辑观察 | 已与设置事务串行并读当前开关，普通/流式两分支回归先红后绿 |
+| R44 / P1 | QA/Less先release gate再等待native stop，旧mute恢复可破坏新录音；冷ASR取消后仍可开mic | 已分离逻辑取消与资源hold，初始化/stop/ASR清理完毕前Busy；recorder前检查token，已提交任务持有收尾；也覆盖主听写无插入、初始化/停止/取消回复被丢弃与shutdown清理 |
+| R45 / P2 | QA Completed/Failed/Cancelled被`phase != Idle`误判仍在使用语音，阻止Less启动 | 已只阻止真实活动阶段，三个QA终态保持面板打开也可启动Less；公开回归通过 |
+
+第二轮问题全部修复、测试并推送前，不将`98a0ca38`标为最终闭环；下一轮须由新的审查团队复审。
+
+第二轮定向证据：Windows Host最终8项通过；Core生命周期10项（含最后CLI回归）、typed VoiceState合同及最近投影回归通过；插入准备、隐私、丢弃回复的回归通过。曾挂起的旧stop测试因owned startup首次poll前使用notify_waiters丢通知，已改为保留permit的notify_one，单项再次通过；不是跳过测试。
+
+第二轮综合验证：Core 722 passed / 1 ignored，生命周期10项、其它合同6/24/17/3/24/12/15/15全部通过；Windows Tauri 440 passed / 1 ignored；前端构建与67个测试入口通过；Linux Windows-host 48+4、headless示例、Core/Linux严格Clippy、依赖和公开合同检查通过。MSRV与最终远端CI按精确修复head记录。`98a0ca38`的CI `34002890692`四平台通过，但不能代替第二轮修复提交的CI。
+
+后续独立团队的最终结论和新head CI写入原PR描述；本文保留已复现问题及修复证据，不预填尚未完成的审核或设备结果。
+
 ## 不得混同的完成条件
 
 - 源码/自动验证：本记录跟踪确定缺陷是否全部关闭。

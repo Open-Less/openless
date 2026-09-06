@@ -624,6 +624,8 @@ export interface QaStatePayload {
  * `less-computer:event`）。后端按 `kind` 标记，前端据此把交互渲染成聊天结构。
  */
 export type LessComputerEvent = (
+  /** Core语音生命周期快照；seq去重、sessionId防止旧会话的终态/电平覆盖新录音。 */
+  | { kind: 'voice_state'; sessionId: string; phase: 'starting' | 'recording' | 'transcribing' | 'idle'; level: number; elapsedMs: number }
   /** 一轮用户气泡（语音指令转写）。fresh=true 表示新会话（清空历史）；否则追加为后续轮次。 */
   | { kind: 'user'; text: string; fresh?: boolean }
   /** Agent 启动，进入运行态。 */
@@ -648,6 +650,8 @@ export type LessComputerEvent = (
   seq?: number;
 };
 
+export type LessComputerVoiceEvent = Extract<LessComputerEvent, { kind: 'voice_state' }>;
+
 /** `less_computer_sync` 的有界 replay 结果。`truncated=true` 表示调用方的水位
  * 已早于后端仍保留的最老事件，前端必须清空派生视图后再应用 `events`。 */
 export interface LessComputerSyncResult {
@@ -655,6 +659,8 @@ export interface LessComputerSyncResult {
   oldestSequence?: number;
   latestSequence: number;
   truncated: boolean;
+  /** 最新Core语音显示投影，即使长转写的阶段事件已被有界replay驱逐也可恢复。 */
+  voiceState?: LessComputerVoiceEvent;
 }
 
 /** 内置语言列表 — 前端 Settings UI 用，后端只接收原生名字符串拼 prompt。

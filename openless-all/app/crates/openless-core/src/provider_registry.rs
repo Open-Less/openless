@@ -331,12 +331,13 @@ impl DictationEngine for DictationEngineRouter {
         context: Arc<DictationContext>,
         partials: Arc<dyn TextStreamSink>,
         progress: Arc<dyn RecordingProgressSink>,
+        cancel: crate::CancellationToken,
     ) -> BoxFuture<'static, Result<VoiceCapture, BackendError>> {
         let engine = match self.resolve(&context) {
             Ok(engine) => engine,
             Err(error) => return Box::pin(async move { Err(error) }),
         };
-        engine.start_voice_capture(session_id, context, partials, progress)
+        engine.start_voice_capture(session_id, context, partials, progress, cancel)
     }
 
     fn start_audio_capture(
@@ -344,9 +345,10 @@ impl DictationEngine for DictationEngineRouter {
         session_id: SessionId,
         context: Arc<DictationContext>,
         progress: Arc<dyn RecordingProgressSink>,
+        cancel: crate::CancellationToken,
     ) -> BoxFuture<'static, Result<crate::ports::AudioCapture, BackendError>> {
         self.traditional
-            .start_audio_capture(session_id, context, progress)
+            .start_audio_capture(session_id, context, progress, cancel)
     }
 
     fn finish(

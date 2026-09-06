@@ -239,9 +239,10 @@ pub use errors::{BackendError, BackendErrorCode};
 pub use events::{
     BackendEvent, BackendEventKind, BackendEventPublisher, CodingAgentStreamEvent, EventRecvError,
     EventReplay, EventSubscription, LessComputerEvent, LessComputerEventKind,
-    LocalAsrDownloadPhase, LocalAsrDownloadProgress, LocalAsrPreparePhase, LocalAsrPrepareProgress,
-    LocalAsrRuntimeKind, QaRecordingLevel, QaStateEvent, QaStateKind, RecordingControlAction,
-    RecordingControlRequest, RemoteInputErrorEvent, RemoteInputRuntimeEvent,
+    LessComputerVoicePhase, LocalAsrDownloadPhase, LocalAsrDownloadProgress, LocalAsrPreparePhase,
+    LocalAsrPrepareProgress, LocalAsrRuntimeKind, QaRecordingLevel, QaStateEvent, QaStateKind,
+    RecordingControlAction, RecordingControlRequest, RemoteInputErrorEvent,
+    RemoteInputRuntimeEvent,
 };
 pub use external_audio::{AudioRecorderRouter, ExternalAudioRecorder};
 pub use history::{HistoryStore, HISTORY_CAP};

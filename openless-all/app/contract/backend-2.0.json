@@ -98,6 +98,10 @@
       "vocabulary_suggestions_changed": {"sequence": 1, "sessionId": null, "kind": {"type": "vocabulary_suggestions_changed", "payload": [{"id": "1", "pattern": "old", "replacement": "new"}]}}
     }
   },
+  "lessComputerVoice": {
+    "phases": ["starting", "recording", "transcribing", "idle"],
+    "sample": {"seq": 3, "kind": "voice_state", "sessionId": "00000000-0000-4000-8000-000000000000", "phase": "recording", "level": 0.5, "elapsedMs": 120}
+  },
   "androidJni": {
     "fields": ["contractVersion", "ok", "payload", "error"],
     "sample": {"contractVersion": "2.0.0", "ok": true, "payload": {"running": true, "dictation": {"phase": "idle", "sessionId": null, "elapsedMs": 0, "level": 0.0, "message": null, "translationActive": false}, "vocabularyRevision": 0, "historyRevision": 0, "stylePackRevision": 0, "preferencesRevision": 0, "credentials": {"activeAsrProvider": "", "activeLlmProvider": "", "pipelineMode": "traditional", "asrConfigured": false, "llmConfigured": false, "omniConfigured": false, "volcengineConfigured": false, "arkConfigured": false}}, "error": null}

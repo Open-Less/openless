@@ -356,6 +356,7 @@ Voice preview 并请求宿主隐藏面板；窗口 focus、NSPanel 和键盘仲�
 
 | `kind` | 字段 | 规则 |
 | --- | --- | --- |
+| `voice_state` | `sessionId`, `phase`, `level`, `elapsedMs` | Core语音快照；phase为`starting/recording/transcribing/idle`，按原`seq`去重；旧session终态不得覆盖新录音 |
 | `user` | `text`, `fresh` | Core 接受输入后发布；`fresh=true` 表示 dismiss 后的新会话 |
 | `started` | — | runtime 已启动 |
 | `delta` | `text` | 增量输出，按事件 `seq` 去重后追加 |
@@ -369,6 +370,8 @@ Voice preview 并请求宿主隐藏面板；窗口 focus、NSPanel 和键盘仲�
 Core 维护实例级 conversation flag、最多两轮 dsh continuation、approval token registry 和
 90 秒 approval timeout。`dismiss()` 会取消当前 runtime、拒绝所有 pending approval、清空
 continuation，并使下一轮 `user.fresh=true`。egui 只保存渲染所需的派生消息，不复制上述状态机。
+
+语音显示还可从`backend.event_publisher().latest_less_computer_voice_state()`读取最后一条有效投影，保留原session/seq且占用固定一条空间。Tauri既有`less_computer_sync`返回可选`voiceState`，即使长转写的阶段事件已被2048条replay驱逐，重开也能恢复；该投影不推进聊天事件水位。合同版本仍为`2.0.0`，没有新增IPC入口。
 
 `RemoteInputStatus` 字段和规则如下：
 
