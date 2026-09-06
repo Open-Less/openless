@@ -94,6 +94,9 @@ mod linux_app {
         update_channel: bool,
         remote_input_enabled: bool,
         remote_input_port: bool,
+        recording: bool,
+        microphone: bool,
+        appearance: bool,
         hotkeys: bool,
     }
 
@@ -107,6 +110,9 @@ mod linux_app {
                 || self.update_channel
                 || self.remote_input_enabled
                 || self.remote_input_port
+                || self.recording
+                || self.microphone
+                || self.appearance
                 || self.hotkeys
         }
 
@@ -135,6 +141,18 @@ mod linux_app {
             }
             if self.remote_input_port {
                 merged.remote_input_port = draft.remote_input_port;
+            }
+            if self.recording {
+                merged.hotkey.mode = draft.hotkey.mode;
+                merged.silence_auto_stop_enabled = draft.silence_auto_stop_enabled;
+                merged.silence_auto_stop_seconds = draft.silence_auto_stop_seconds;
+            }
+            if self.microphone {
+                merged.microphone_device_name = draft.microphone_device_name.clone();
+            }
+            if self.appearance {
+                merged.theme_mode = draft.theme_mode;
+                merged.show_overview_activity_heatmap = draft.show_overview_activity_heatmap;
             }
             if self.hotkeys {
                 merged.dictation_hotkey = draft.dictation_hotkey.clone();
@@ -191,6 +209,7 @@ mod linux_app {
         snapshot: Option<BackendSnapshot>,
         preferences: Option<UserPreferences>,
         settings_dirty: SettingsDirty,
+        microphones: Vec<openless_core::MicrophoneDevice>,
         models: ModelsState,
         transcript: String,
         transcript_state: TranscriptAccumulator,
@@ -278,6 +297,7 @@ mod linux_app {
                         snapshot: Some(snapshot),
                         preferences: Some(preferences),
                         settings_dirty: SettingsDirty::default(),
+                        microphones: Vec::new(),
                         models: ModelsState::Loading,
                         transcript: String::new(),
                         transcript_state: TranscriptAccumulator::default(),
@@ -357,6 +377,7 @@ mod linux_app {
                     snapshot: None,
                     preferences: None,
                     settings_dirty: SettingsDirty::default(),
+                    microphones: Vec::new(),
                     models: ModelsState::Loading,
                     transcript: String::new(),
                     transcript_state: TranscriptAccumulator::default(),
@@ -1619,6 +1640,7 @@ mod linux_app {
                     }
                     UiResult::MarketplaceMine(Err(error)) => self.status = error,
                     UiResult::Microphones(Ok(devices)) => {
+                        self.microphones = devices.clone();
                         let selected = self
                             .preferences
                             .as_ref()
@@ -2408,6 +2430,94 @@ mod linux_app {
                 self.settings_dirty.coding_agent_enabled |= ui
                     .checkbox(&mut preferences.coding_agent_enabled, "启用 Less Computer")
                     .changed();
+                ui.collapsing("录音与输入", |ui| {
+                    let previous_mode = preferences.hotkey.mode;
+                    egui::ComboBox::from_label("录音方式")
+                        .selected_text(match preferences.hotkey.mode {
+                            openless_core::shared_types::HotkeyMode::Toggle => "切换",
+                            openless_core::shared_types::HotkeyMode::Hold => "按住说话",
+                            openless_core::shared_types::HotkeyMode::DoubleClick => "双击",
+                            openless_core::shared_types::HotkeyMode::Auto => "自动识别",
+                        })
+                        .show_ui(ui, |ui| {
+                            for (mode, label) in [
+                                (openless_core::shared_types::HotkeyMode::Toggle, "切换"),
+                                (openless_core::shared_types::HotkeyMode::Hold, "按住说话"),
+                                (openless_core::shared_types::HotkeyMode::Auto, "自动识别"),
+                            ] {
+                                ui.selectable_value(&mut preferences.hotkey.mode, mode, label);
+                            }
+                        });
+                    self.settings_dirty.recording |= preferences.hotkey.mode != previous_mode;
+                    self.settings_dirty.recording |= ui
+                        .checkbox(&mut preferences.silence_auto_stop_enabled, "说完后自动停止")
+                        .changed();
+                    if preferences.silence_auto_stop_enabled {
+                        let previous = preferences.silence_auto_stop_seconds;
+                        egui::ComboBox::from_label("连续静音时长")
+                            .selected_text(format!("{} 秒", previous))
+                            .show_ui(ui, |ui| {
+                                for seconds in [1.0, 1.5, 2.0, 3.0, 4.0, 5.0] {
+                                    ui.selectable_value(
+                                        &mut preferences.silence_auto_stop_seconds,
+                                        seconds,
+                                        format!("{seconds} 秒"),
+                                    );
+                                }
+                            });
+                        self.settings_dirty.recording |=
+                            preferences.silence_auto_stop_seconds != previous;
+                    }
+                    let selected_microphone = if preferences.microphone_device_name.is_empty() {
+                        "系统默认".to_string()
+                    } else {
+                        preferences.microphone_device_name.clone()
+                    };
+                    let previous_microphone = preferences.microphone_device_name.clone();
+                    egui::ComboBox::from_label("麦克风")
+                        .selected_text(selected_microphone)
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut preferences.microphone_device_name,
+                                String::new(),
+                                "系统默认",
+                            );
+                            for device in &self.microphones {
+                                ui.selectable_value(
+                                    &mut preferences.microphone_device_name,
+                                    device.name.clone(),
+                                    &device.name,
+                                );
+                            }
+                        });
+                    self.settings_dirty.microphone |=
+                        preferences.microphone_device_name != previous_microphone;
+                });
+                ui.collapsing("外观", |ui| {
+                    let previous_theme = preferences.theme_mode;
+                    egui::ComboBox::from_label("主题")
+                        .selected_text(match preferences.theme_mode {
+                            openless_core::shared_types::ThemeMode::System => "跟随系统",
+                            openless_core::shared_types::ThemeMode::Light => "浅色",
+                            openless_core::shared_types::ThemeMode::Dark => "深色",
+                        })
+                        .show_ui(ui, |ui| {
+                            for (mode, label) in [
+                                (openless_core::shared_types::ThemeMode::System, "跟随系统"),
+                                (openless_core::shared_types::ThemeMode::Light, "浅色"),
+                                (openless_core::shared_types::ThemeMode::Dark, "深色"),
+                            ] {
+                                ui.selectable_value(&mut preferences.theme_mode, mode, label);
+                            }
+                        });
+                    self.settings_dirty.appearance |= preferences.theme_mode != previous_theme;
+                    self.settings_dirty.appearance |= ui
+                        .checkbox(
+                            &mut preferences.show_overview_activity_heatmap,
+                            "显示活动热力图",
+                        )
+                        .changed();
+                });
                 ui.collapsing("fcitx5 快捷键", |ui| {
                     self.settings_dirty.hotkeys |=
                         shortcut_editor(ui, "听写", &mut preferences.dictation_hotkey);
@@ -3688,6 +3798,13 @@ mod linux_app {
         fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
             self.poll(ctx);
             self.drain_tray(ctx);
+            theme::apply_visuals(
+                ctx,
+                self.preferences
+                    .as_ref()
+                    .map(|preferences| preferences.theme_mode)
+                    .unwrap_or_default(),
+            );
             let auto_check = self
                 .preferences
                 .as_ref()
@@ -5088,6 +5205,39 @@ mod linux_app {
             let merged = dirty.merge(&latest, &draft);
 
             assert_eq!(merged.open_app_hotkey, draft.open_app_hotkey);
+        }
+
+        #[test]
+        fn settings_conflict_merge_preserves_recording_device_and_appearance_domains() {
+            let mut latest = UserPreferences::default();
+            latest.remote_input_port = 9443;
+            let mut draft = latest.clone();
+            draft.hotkey.mode = openless_core::shared_types::HotkeyMode::Auto;
+            draft.silence_auto_stop_enabled = true;
+            draft.silence_auto_stop_seconds = 1.5;
+            draft.microphone_device_name = "USB microphone".into();
+            draft.theme_mode = openless_core::shared_types::ThemeMode::Dark;
+            draft.show_overview_activity_heatmap = false;
+            draft.remote_input_port = 7777;
+            let dirty = SettingsDirty {
+                recording: true,
+                microphone: true,
+                appearance: true,
+                ..Default::default()
+            };
+
+            let merged = dirty.merge(&latest, &draft);
+
+            assert_eq!(merged.hotkey.mode, draft.hotkey.mode);
+            assert!(merged.silence_auto_stop_enabled);
+            assert_eq!(merged.silence_auto_stop_seconds, 1.5);
+            assert_eq!(merged.microphone_device_name, "USB microphone");
+            assert_eq!(
+                merged.theme_mode,
+                openless_core::shared_types::ThemeMode::Dark
+            );
+            assert!(!merged.show_overview_activity_heatmap);
+            assert_eq!(merged.remote_input_port, 9443);
         }
 
         #[test]

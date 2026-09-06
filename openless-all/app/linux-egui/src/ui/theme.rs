@@ -66,19 +66,36 @@ pub fn install(ctx: &egui::Context) {
     }
     ctx.set_fonts(fonts);
 
-    let mut visuals = egui::Visuals::light();
-    visuals.panel_fill = CANVAS;
-    visuals.window_fill = SURFACE;
-    visuals.faint_bg_color = SURFACE_2;
-    visuals.selection.bg_fill = BLUE_SOFT;
-    visuals.selection.stroke = egui::Stroke::new(1.0, BLUE);
-    visuals.widgets.inactive.corner_radius = egui::CornerRadius::same(7);
-    visuals.widgets.hovered.corner_radius = egui::CornerRadius::same(7);
-    visuals.widgets.active.corner_radius = egui::CornerRadius::same(7);
-    ctx.set_visuals(visuals);
+    apply_visuals(ctx, openless_core::shared_types::ThemeMode::System);
 
     let mut style = (*ctx.style()).clone();
     style.spacing.item_spacing = egui::vec2(8.0, 8.0);
     style.spacing.button_padding = egui::vec2(10.0, 6.0);
     ctx.set_style(style);
+}
+
+pub fn apply_visuals(ctx: &egui::Context, mode: openless_core::shared_types::ThemeMode) {
+    let dark = match mode {
+        openless_core::shared_types::ThemeMode::System => {
+            ctx.system_theme() == Some(egui::Theme::Dark)
+        }
+        openless_core::shared_types::ThemeMode::Light => false,
+        openless_core::shared_types::ThemeMode::Dark => true,
+    };
+    let mut visuals = if dark {
+        egui::Visuals::dark()
+    } else {
+        egui::Visuals::light()
+    };
+    if !dark {
+        visuals.panel_fill = CANVAS;
+        visuals.window_fill = SURFACE;
+        visuals.faint_bg_color = SURFACE_2;
+        visuals.selection.bg_fill = BLUE_SOFT;
+    }
+    visuals.selection.stroke = egui::Stroke::new(1.0, BLUE);
+    visuals.widgets.inactive.corner_radius = egui::CornerRadius::same(7);
+    visuals.widgets.hovered.corner_radius = egui::CornerRadius::same(7);
+    visuals.widgets.active.corner_radius = egui::CornerRadius::same(7);
+    ctx.set_visuals(visuals);
 }
