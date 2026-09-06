@@ -111,6 +111,7 @@ jobs:
           cargo test --locked -p openless-linux-egui --all-targets
           cargo check --locked -p openless-linux-egui --all-targets
           node scripts/linux-egui-tauri-free-contract.test.mjs
+          node scripts/linux-egui-release-contract.test.mjs
           ./scripts/check-core-deps.ps1
           ./scripts/check-core-deps.ps1 openless-linux-egui
           ./scripts/check-core-secret-surface.ps1
@@ -195,6 +196,18 @@ jobs:
           squashfs-root/usr/lib/openless/resources/qwen-asr/qwen_asr --help >/dev/null 2>&1
           rm -rf squashfs-root
 
+      - name: Generate release checksums
+        working-directory: openless-all/app
+        run: |
+          set -euo pipefail
+          OUTPUT=target/linux-egui-packages
+          test "$(find "$OUTPUT" -maxdepth 1 -name '*.deb' | wc -l)" -eq 1
+          test "$(find "$OUTPUT" -maxdepth 1 -name '*.rpm' | wc -l)" -eq 1
+          test "$(find "$OUTPUT" -maxdepth 1 -name '*.AppImage' | wc -l)" -eq 1
+          ( cd "$OUTPUT" && sha256sum ./*.deb ./*.rpm ./*.AppImage > SHA256SUMS )
+          test "$(wc -l < "$OUTPUT/SHA256SUMS")" -eq 3
+          cat "$OUTPUT/SHA256SUMS"
+
       - name: Sign AppImage and write independent updater manifest
         working-directory: openless-all/app
         env:
@@ -245,6 +258,8 @@ jobs:
             --arg repository "$RELEASE_REPOSITORY" \
             '.schemaVersion == 1 and .host == "linux-egui" and .arch == "x86_64" and .sha256 == $sha256 and (.url | startswith("https://github.com/" + $repository + "/releases/download/"))' \
             "$MANIFEST" >/dev/null
+          test -s "$OUTPUT/SHA256SUMS"
+          ( cd "$OUTPUT" && sha256sum -c SHA256SUMS >/dev/null )
 
       - name: Upload Linux egui workflow artifacts
         uses: actions/upload-artifact@v4
