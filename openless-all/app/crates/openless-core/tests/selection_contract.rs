@@ -27,6 +27,7 @@ struct RecordingSelectionRuntime {
     applied: Arc<Mutex<Vec<(SessionId, String, String)>>>,
     apply_outcome: InsertOutcome,
     apply_error: Option<BackendError>,
+    apply_gate: Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
     reverted: Arc<Mutex<Vec<SessionId>>>,
     revert_outcome: Option<InsertOutcome>,
     cancels: Arc<std::sync::atomic::AtomicUsize>,
@@ -42,6 +43,7 @@ impl RecordingSelectionRuntime {
             applied: Arc::new(Mutex::new(Vec::new())),
             apply_outcome: InsertOutcome::Inserted,
             apply_error: None,
+            apply_gate: None,
             reverted: Arc::new(Mutex::new(Vec::new())),
             revert_outcome: None,
             cancels: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
@@ -95,6 +97,7 @@ impl SelectionRuntimeAdapter for RecordingSelectionRuntime {
         let applied = Arc::clone(&self.applied);
         let outcome = self.apply_outcome;
         let error = self.apply_error.clone();
+        let gate = self.apply_gate.clone();
         Box::pin(async move {
             if let Some(error) = error {
                 return Err(error);
@@ -104,6 +107,10 @@ impl SelectionRuntimeAdapter for RecordingSelectionRuntime {
                 source_text,
                 replacement_text,
             ));
+            if let Some((entered, release)) = gate {
+                entered.notify_one();
+                release.notified().await;
+            }
             Ok(outcome)
         })
     }
@@ -168,6 +175,125 @@ fn selection_snapshot_serde_fixture_is_stable_for_hosts() {
         serde_json::from_value::<SelectionSnapshot>(wire).unwrap(),
         snapshot
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn completed_selection_history_survives_a_concurrent_new_capture() {
+    use futures_util::task::{waker_ref, ArcWake};
+    use std::future::Future;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    struct PauseDelivery {
+        once: AtomicBool,
+        entered: tokio::sync::Notify,
+        release: (Mutex<bool>, std::sync::Condvar),
+    }
+    impl ArcWake for PauseDelivery {
+        fn wake_by_ref(this: &Arc<Self>) {
+            if !this.once.swap(true, Ordering::AcqRel) {
+                this.entered.notify_one();
+                let mut released = this.release.0.lock().unwrap();
+                while !*released {
+                    released = this.release.1.wait(released).unwrap();
+                }
+            }
+        }
+    }
+    struct ReleaseOnDrop(Arc<PauseDelivery>);
+    impl ReleaseOnDrop {
+        fn release(&self) {
+            *self.0.release.0.lock().unwrap() = true;
+            self.0.release.1.notify_all();
+        }
+    }
+    impl Drop for ReleaseOnDrop {
+        fn drop(&mut self) {
+            self.release();
+        }
+    }
+
+    let applied = Arc::new(tokio::sync::Notify::new());
+    let finish_apply = Arc::new(tokio::sync::Notify::new());
+    let mut runtime = RecordingSelectionRuntime::new("source A");
+    runtime.apply_gate = Some((applied.clone(), finish_apply.clone()));
+    let (backend, data_dir) = backend_with_selection(runtime);
+    let mut preferences = backend.get_preferences();
+    preferences.selection_polish_output_mode = SelectionPolishOutputMode::PreviewConfirm;
+    write_preferences(&backend, preferences);
+    let selection = Arc::clone(&backend.services().selection);
+    let first = selection
+        .begin_polish(SelectionPolishRequest {
+            selected_text: None,
+            mode: PolishMode::Light,
+            instruction: None,
+        })
+        .await
+        .unwrap();
+    let executor = tokio::runtime::Handle::current();
+    let confirming = std::thread::spawn({
+        let selection = selection.clone();
+        let executor = executor.clone();
+        move || executor.block_on(selection.confirm(first, Some("output A".into())))
+    });
+    applied.notified().await;
+
+    let pause = Arc::new(PauseDelivery {
+        once: AtomicBool::new(false),
+        entered: tokio::sync::Notify::new(),
+        release: (Mutex::new(false), std::sync::Condvar::new()),
+    });
+    let release = ReleaseOnDrop(pause.clone());
+    let mut events = backend.subscribe();
+    let mut receive = Box::pin(events.recv());
+    let waker = waker_ref(&pause);
+    assert!(receive
+        .as_mut()
+        .poll(&mut std::task::Context::from_waker(&waker))
+        .is_pending());
+    finish_apply.notify_one();
+    pause.entered.notified().await;
+    assert_eq!(
+        selection.snapshot().await.unwrap().phase,
+        SelectionPhase::Completed
+    );
+
+    // Pause A at its public Completed event. B can publish its new state before
+    // A's history write; the history must use A's frozen text and metadata.
+    let starting = std::thread::spawn({
+        let selection = selection.clone();
+        move || {
+            executor.block_on(selection.begin_polish(SelectionPolishRequest {
+                selected_text: Some("source B".into()),
+                mode: PolishMode::Formal,
+                instruction: None,
+            }))
+        }
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while selection.snapshot().await.unwrap().session_id == Some(first) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    release.release();
+    let (completed, second) =
+        tokio::task::spawn_blocking(move || (confirming.join().unwrap(), starting.join().unwrap()))
+            .await
+            .unwrap();
+    completed.unwrap();
+    let second = second.unwrap();
+    drop(receive);
+    let history = backend.list_history().unwrap();
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].id, first.to_string());
+    assert_eq!(history[0].raw_transcript, "source A");
+    assert_eq!(history[0].final_text, "output A");
+    assert_eq!(history[0].mode, PolishMode::Light);
+    assert!(history[0].polish_ms.is_some());
+    assert!(history[0].llm_provider.is_some());
+    selection.cancel(Some(second)).await.unwrap();
+    std::fs::remove_dir_all(data_dir).unwrap();
 }
 
 fn backend_with_selection(

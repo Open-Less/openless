@@ -134,6 +134,60 @@ struct SlowAsr {
     gate: Arc<Semaphore>,
     inner: testing::FixtureTranscriptionEngine,
 }
+
+// Model only the native archive boundary: once an archive was requested, a
+// filesystem sharing violation would make its final deletion fail. PCM remains
+// available in memory and must not depend on this optional disk side effect.
+struct ArchivePolicyRecorder {
+    inner: testing::FixtureAudioRecorder,
+    plans: Arc<Mutex<Vec<RecordingPlan>>>,
+}
+struct ArchivePolicyRecording {
+    inner: Box<dyn ActiveRecording>,
+    archive_enabled: bool,
+}
+struct LockedArchive;
+impl RecordingArchive for LockedArchive {
+    fn is_available(&self) -> bool {
+        true
+    }
+    fn discard(&self) -> BoxFuture<'static, Result<(), BackendError>> {
+        Box::pin(async {
+            Err(BackendError::new(
+                BackendErrorCode::Persistence,
+                "archive is locked by another process",
+            ))
+        })
+    }
+}
+impl ActiveRecording for ArchivePolicyRecording {
+    fn archive(&self) -> Option<Arc<dyn RecordingArchive>> {
+        self.archive_enabled
+            .then(|| Arc::new(LockedArchive) as Arc<dyn RecordingArchive>)
+    }
+    fn stop(self: Box<Self>) -> BoxFuture<'static, Result<(), BackendError>> {
+        self.inner.stop()
+    }
+}
+impl AudioRecorder for ArchivePolicyRecorder {
+    fn start(
+        &self,
+        id: SessionId,
+        context: Arc<DictationContext>,
+        consumer: Arc<dyn AudioConsumer>,
+        progress: Arc<dyn RecordingProgressSink>,
+    ) -> BoxFuture<'static, Result<Box<dyn ActiveRecording>, BackendError>> {
+        self.plans.lock().unwrap().push(context.recording.clone());
+        let archive_enabled = context.recording.archive_enabled;
+        let starting = self.inner.start(id, context, consumer, progress);
+        Box::pin(async move {
+            Ok(Box::new(ArchivePolicyRecording {
+                inner: starting.await?,
+                archive_enabled,
+            }) as Box<dyn ActiveRecording>)
+        })
+    }
+}
 struct SlowRecorder {
     inner: Recorder,
     entered: Arc<Semaphore>,
@@ -267,6 +321,121 @@ fn backend(
         .update_settings(prefs, SettingsUpdateOptions::STRICT, &NoopSettingsRuntime)
         .unwrap();
     (backend, path)
+}
+
+#[tokio::test]
+async fn qa_and_selection_voice_never_request_disk_archives() {
+    for entry in ["qa", "qa-omni", "selection", "dictation", "less"] {
+        let plans = Arc::new(Mutex::new(Vec::new()));
+        let recorder = testing::FixtureAudioRecorder::new(vec![vec![0; 320]], Vec::new());
+        let (backend, path) = backend(
+            Arc::new(ArchivePolicyRecorder {
+                inner: recorder.clone(),
+                plans: plans.clone(),
+            }),
+            Arc::new(testing::FixtureTranscriptionEngine::successful(
+                "instruction",
+                10,
+            )),
+            Arc::new(QaRuntime::default()),
+        );
+        // The main-path debug switch must not opt private QA/Selection audio
+        // into disk retention. Traditional and Omni QA share this boundary.
+        let mut prefs = backend.get_preferences();
+        prefs.record_audio_for_debug = true;
+        if entry == "qa-omni" {
+            prefs.multimodal_pipeline_enabled = true;
+            prefs.pipeline_mode = shared_types::PipelineMode::Multimodal;
+        }
+        backend
+            .update_settings(prefs, SettingsUpdateOptions::STRICT, &NoopSettingsRuntime)
+            .unwrap();
+        backend.start().await.unwrap();
+        match entry {
+            "qa" | "qa-omni" => {
+                backend.services().qa.toggle_recording().await.unwrap();
+                let id = backend
+                    .services()
+                    .qa
+                    .snapshot()
+                    .await
+                    .unwrap()
+                    .session_id
+                    .unwrap();
+                let capture = backend
+                    .start_qa_voice_capture(
+                        id,
+                        DictationStartOptions::default(),
+                        Arc::new(Progress),
+                    )
+                    .await
+                    .unwrap();
+                let output = capture
+                    .finish()
+                    .await
+                    .expect("private QA must not create a fallible archive");
+                if entry == "qa" {
+                    assert_eq!(output.transcript.as_deref(), Some("instruction"));
+                } else {
+                    assert!(output.audio_wav.is_some());
+                }
+                backend.services().qa.dismiss().await.unwrap();
+            }
+            "selection" => {
+                let id = backend
+                    .services()
+                    .selection_voice
+                    .begin(SelectionCapture {
+                        text: "selection".into(),
+                        source_app: None,
+                    })
+                    .await
+                    .unwrap();
+                let capture = backend
+                    .start_selection_voice_capture(id, Arc::new(Control))
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    capture
+                        .finish()
+                        .await
+                        .expect("private Selection audio must stay in memory"),
+                    "instruction"
+                );
+                backend
+                    .services()
+                    .selection_voice
+                    .cancel(Some(id))
+                    .await
+                    .unwrap();
+            }
+            "dictation" => {
+                backend
+                    .start_dictation_with_options(DictationStartOptions {
+                        insert_text: false,
+                        ..DictationStartOptions::default()
+                    })
+                    .await
+                    .unwrap();
+                let _ = backend.cancel_dictation(None).await;
+            }
+            "less" => {
+                let capture = backend
+                    .start_less_computer_voice(SessionId::new(), Arc::new(Control))
+                    .await
+                    .unwrap();
+                let _ = capture.cancel().await;
+            }
+            _ => unreachable!(),
+        }
+        assert_eq!(
+            plans.lock().unwrap()[0].archive_enabled,
+            matches!(entry, "dictation" | "less"),
+            "{entry}"
+        );
+        assert_eq!(recorder.stop_count(), 1, "{entry}");
+        std::fs::remove_dir_all(path).unwrap();
+    }
 }
 
 #[tokio::test]

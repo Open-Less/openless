@@ -31,6 +31,7 @@
 5. 目标失效、取消、重复确认和未知插入结果都应保持安全，不能绕过 Core 事务直接粘贴。
 
 Linux QA 的 target rekey 适配和现有 Selection runtime可以复用；headless直接调用Core的测试不算生产接线完成。
+QA 内的预览必须传当前 turn token，使用 `QaApi::begin_edit_preview_apply`／`revert_edit_preview`；原生应用完成后用 `dismiss_session` 只关闭所属回合。不要拆成读取 conversation owner 后直接改 Selection Voice，再无条件关闭 QA。独立 Selection Voice 的 `begin_preview_apply`／`revert_preview` 是无异步原生效果的同步状态操作；`PasteSent` 只表示已发送，不能标成 `Inserted` 或失败。
 
 ## 3. 共同交互规则
 

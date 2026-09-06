@@ -620,6 +620,7 @@ pub struct SelectionVoiceApplyTicket {
 #[serde(rename_all = "snake_case")]
 pub enum SelectionVoiceApplyOutcome {
     Inserted,
+    PasteSent,
     CopiedFallback,
     Failed,
 }
@@ -717,15 +718,19 @@ pub trait SelectionVoiceApi: Send + Sync {
         &self,
         owner_session_id: Option<SessionId>,
     ) -> BoxFuture<'static, Result<Option<SelectionVoicePreview>, BackendError>>;
+    /// Revert and return the preview under one local state lock; no native work
+    /// or await is involved. QA can include this mutation in its turn transaction.
     fn revert_preview(
         &self,
         owner_session_id: Option<SessionId>,
-    ) -> BoxFuture<'static, Result<(), BackendError>>;
+    ) -> Result<SelectionVoicePreview, BackendError>;
+    /// Synchronously reserve one native apply ticket. QA uses this local
+    /// operation while holding its turn guard; native work starts afterwards.
     fn begin_preview_apply(
         &self,
         owner_session_id: Option<SessionId>,
         text: String,
-    ) -> BoxFuture<'static, Result<SelectionVoiceApplyTicket, BackendError>>;
+    ) -> Result<SelectionVoiceApplyTicket, BackendError>;
     fn finish_preview_apply(
         &self,
         ticket_id: SessionId,
@@ -948,16 +953,34 @@ pub trait QaApi: Send + Sync {
         &self,
         enabled: bool,
     ) -> BoxFuture<'static, Result<(), BackendError>>;
-    fn replace_last_answer(
+    /// Revert the edit preview and its displayed answer atomically for this
+    /// completed turn. Reject stale requests with Cancelled even within one conversation.
+    fn revert_edit_preview(
         &self,
-        _text: String,
-        _edit_revert_available: bool,
+        _session_id: SessionId,
     ) -> BoxFuture<'static, Result<(), BackendError>> {
         unsupported("QA")
+    }
+    /// Validate the completed turn and reserve its preview together, so a
+    /// delayed confirmation cannot apply old text to a newer turn's preview.
+    fn begin_edit_preview_apply(
+        &self,
+        _session_id: SessionId,
+        _text: String,
+    ) -> BoxFuture<'static, Result<SelectionVoiceApplyTicket, BackendError>> {
+        unsupported("QA selection edit")
     }
     fn cancel(&self, session_id: Option<SessionId>)
         -> BoxFuture<'static, Result<(), BackendError>>;
     fn dismiss(&self) -> BoxFuture<'static, Result<(), BackendError>>;
+    /// Close only this turn. Stale requests return Cancelled without clearing
+    /// or hiding a newer turn, including a newly shown panel with no turn yet.
+    fn dismiss_session(
+        &self,
+        _session_id: SessionId,
+    ) -> BoxFuture<'static, Result<(), BackendError>> {
+        unsupported("QA")
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1621,15 +1644,21 @@ impl SelectionVoiceApi for UnsupportedDomainServices {
     ) -> BoxFuture<'static, Result<Option<SelectionVoicePreview>, BackendError>> {
         unsupported("selection voice")
     }
-    fn revert_preview(&self, _: Option<SessionId>) -> BoxFuture<'static, Result<(), BackendError>> {
-        unsupported("selection voice")
+    fn revert_preview(&self, _: Option<SessionId>) -> Result<SelectionVoicePreview, BackendError> {
+        Err(BackendError::new(
+            BackendErrorCode::Unsupported,
+            "selection voice service is not configured",
+        ))
     }
     fn begin_preview_apply(
         &self,
         _: Option<SessionId>,
         _: String,
-    ) -> BoxFuture<'static, Result<SelectionVoiceApplyTicket, BackendError>> {
-        unsupported("selection voice")
+    ) -> Result<SelectionVoiceApplyTicket, BackendError> {
+        Err(BackendError::new(
+            BackendErrorCode::Unsupported,
+            "selection voice service is not configured",
+        ))
     }
     fn finish_preview_apply(
         &self,

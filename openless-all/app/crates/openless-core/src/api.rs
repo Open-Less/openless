@@ -1406,7 +1406,8 @@ impl ActiveTextInsertion {
         let platform_streaming = platform.supports_streaming();
         Arc::new(Self {
             platform,
-            streaming: platform_streaming
+            streaming: context.uses_llm_polisher()
+                && platform_streaming
                 && crate::streaming_insert::streaming_insert_eligible(
                     context.insertion.streaming,
                     context.polish.translation_active,
@@ -2567,6 +2568,7 @@ impl OpenLessBackend {
             .capture_dictation_context(&DictationStartOptions::default())
             .await?;
         context.pipeline_mode = crate::shared_types::PipelineMode::Traditional;
+        context.recording.archive_enabled = false;
         let context = Arc::new(context);
         let started_at = std::time::Instant::now();
         let silence = context.recording.silence_after_ms.map(|silence_ms| {
@@ -2618,7 +2620,11 @@ impl OpenLessBackend {
         progress: Arc<dyn crate::ports::RecordingProgressSink>,
     ) -> Result<QaVoiceCaptureSession, BackendError> {
         let resources = self.voice_sessions.hold_resources(session_id)?;
-        let context = Arc::new(self.capture_dictation_context(&options).await?);
+        let mut context = self.capture_dictation_context(&options).await?;
+        // QA audio is private and memory-only in both ASR and Omni modes,
+        // independent of the main dictation debug-recording preference.
+        context.recording.archive_enabled = false;
+        let context = Arc::new(context);
         let started_at = std::time::Instant::now();
         let recording_progress = Arc::new(QaRecordingProgress {
             session_id,
@@ -3231,15 +3237,15 @@ impl OpenLessBackend {
         };
         let preferences = self.get_preferences();
         let mode = preferences.hotkey.mode;
-        let phase = self.snapshot().dictation.phase;
         let modifier_only =
             crate::shortcut_types::legacy_modifier_trigger(&preferences.dictation_hotkey).is_some();
-        let intent = {
+        let (intent, reservation) = {
             let mut hotkey = self
                 .hotkey
                 .lock()
                 .expect("hotkey interpreter lock poisoned");
-            match edge {
+            let phase = self.snapshot().dictation.phase;
+            let intent = match edge {
                 DictationHotkeyEdge::Pressed { press_id, at } => {
                     hotkey.press(press_id, at, mode, phase, modifier_only)
                 }
@@ -3247,21 +3253,32 @@ impl OpenLessBackend {
                     hotkey.release(press_id, at, mode, phase)
                 }
                 DictationHotkeyEdge::Combined { press_id, at: _ } => hotkey.combined(press_id),
-            }
+            };
+            // Bind an accepted physical press to its actual Starting session
+            // before releasing the interpreter lock. An older CLI/button stop
+            // must not clear this press between its Start decision and claim.
+            let reservation = matches!(intent, HotkeyIntent::Start { .. })
+                .then(|| self.reserve_dictation_session());
+            (intent, reservation)
         };
-        let intent = if let HotkeyIntent::WaitForModifierGrace { press_id } = intent {
+        let (intent, reservation) = if let HotkeyIntent::WaitForModifierGrace { press_id } = intent
+        {
             // Only modifier-only triggers pay this delay. The separate Combined
             // bridge can mark the same generation while this task is sleeping.
             tokio::time::sleep(
                 crate::hotkey_interpreter::HotkeyInterpreter::MODIFIER_ARBITRATION_GRACE,
             )
             .await;
-            self.hotkey
+            let mut hotkey = self
+                .hotkey
                 .lock()
-                .expect("hotkey interpreter lock poisoned")
-                .after_modifier_grace(press_id, self.snapshot().dictation.phase)
+                .expect("hotkey interpreter lock poisoned");
+            let intent = hotkey.after_modifier_grace(press_id, self.snapshot().dictation.phase);
+            let reservation = matches!(intent, HotkeyIntent::Start { .. })
+                .then(|| self.reserve_dictation_session());
+            (intent, reservation)
         } else {
-            intent
+            (intent, reservation)
         };
 
         match intent {
@@ -3269,7 +3286,13 @@ impl OpenLessBackend {
                 Ok(CliDispatchOutcome::Noop)
             }
             HotkeyIntent::Start { press_id } => {
-                let result = self.start_dictation_with_options(options.start).await;
+                let result = match reservation.expect("Start intent must claim its session") {
+                    Ok((session_id, resources)) => {
+                        self.start_reserved_dictation(session_id, resources, options.start)
+                            .await
+                    }
+                    Err(error) => Err(error),
+                };
                 // Microphone and ASR startup can take long enough for Combined
                 // to overtake this task. Re-check before reporting a live session.
                 let combined = self
@@ -4406,10 +4429,9 @@ impl OpenLessBackend {
         self.deps.dictation_engine.feed_audio(session_id, pcm)
     }
 
-    pub async fn start_dictation_with_options(
+    fn reserve_dictation_session(
         &self,
-        options: DictationStartOptions,
-    ) -> Result<SessionId, BackendError> {
+    ) -> Result<(SessionId, Arc<crate::voice_session::VoiceResourceHold>), BackendError> {
         {
             let state = self.state.read().expect("backend state lock poisoned");
             ensure_running(&state)?;
@@ -4448,6 +4470,24 @@ impl OpenLessBackend {
             );
             self.phase_changed.notify_waiters();
         }
+        Ok((session_id, starting_resources))
+    }
+
+    pub async fn start_dictation_with_options(
+        &self,
+        options: DictationStartOptions,
+    ) -> Result<SessionId, BackendError> {
+        let (session_id, starting_resources) = self.reserve_dictation_session()?;
+        self.start_reserved_dictation(session_id, starting_resources, options)
+            .await
+    }
+
+    async fn start_reserved_dictation(
+        &self,
+        session_id: SessionId,
+        starting_resources: Arc<crate::voice_session::VoiceResourceHold>,
+        options: DictationStartOptions,
+    ) -> Result<SessionId, BackendError> {
         let context = match self.capture_dictation_context(&options).await {
             Ok(context) => Arc::new(context),
             Err(error) => {
@@ -4835,7 +4875,9 @@ impl OpenLessBackend {
                         llm_call_label,
                     );
                 }
-                let _ = self.cancel_text_insertion(session_id).await;
+                // A failed finish can leave provider/recorder state in the engine.
+                // Close both adapters before releasing this session's voice lease.
+                let _ = self.cancel_session_adapters(session_id).await;
                 let _ = self.hide_dictation_feedback(session_id);
                 self.reset_dictation_session(session_id);
                 return Err(error);
@@ -5193,24 +5235,25 @@ impl OpenLessBackend {
     }
 
     fn reset_dictation_session(&self, session_id: SessionId) {
+        // Match modifier-grace dispatch's hotkey -> state lock order. Clearing
+        // the physical generation must precede exposing Idle/releasing audio;
+        // otherwise an accepted successor press can be erased by this terminal.
+        let mut hotkey = self
+            .hotkey
+            .lock()
+            .expect("hotkey interpreter lock poisoned");
         let mut state = self.state.write().expect("backend state lock poisoned");
-        let mut released = false;
-        if state.dictation.session_id == Some(session_id) {
-            state.dictation = DictationStateSnapshot::default();
-            state.dictation_context = None;
-            state.silence_monitor = None;
-            state.transcripts.remove(&session_id);
-            self.phase_changed.notify_waiters();
-            released = true;
+        if state.dictation.session_id != Some(session_id) {
+            return;
         }
+        state.dictation = DictationStateSnapshot::default();
+        state.dictation_context = None;
+        state.silence_monitor = None;
+        state.transcripts.remove(&session_id);
+        hotkey.terminal(std::time::Instant::now());
+        self.phase_changed.notify_waiters();
         drop(state);
-        if released {
-            self.voice_sessions.release(session_id);
-            self.hotkey
-                .lock()
-                .expect("hotkey interpreter lock poisoned")
-                .terminal(std::time::Instant::now());
-        }
+        self.voice_sessions.release(session_id);
     }
 
     fn cancel_session_adapters(
@@ -5737,7 +5780,7 @@ mod tests {
         }
     }
 
-    struct FailingEngine;
+    struct FailingEngine(std::sync::atomic::AtomicUsize);
 
     impl DictationEngine for FailingEngine {
         fn start(
@@ -5763,6 +5806,7 @@ mod tests {
         }
 
         fn cancel(&self, _session_id: SessionId) -> BoxFuture<'static, Result<(), BackendError>> {
+            self.0.fetch_add(1, Ordering::AcqRel);
             boxed(async { Ok(()) })
         }
     }
@@ -5917,6 +5961,104 @@ mod tests {
             },
             host,
         )
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn old_cli_completion_cannot_erase_an_accepted_physical_hold_press() {
+        use crate::shared_types::{HotkeyMode, ShortcutBinding};
+
+        // Hold the interpreter while the public key entry and a CLI-style stop
+        // queue on separate threads. Mutex wake order is not a contract, so
+        // repeat the overlap and check every new press that was accepted.
+        for iteration in 0..32 {
+            let (backend, _) = backend();
+            let backend = Arc::new(backend);
+            let mut preferences = backend.get_preferences();
+            preferences.hotkey.mode = HotkeyMode::Hold;
+            preferences.dictation_hotkey = ShortcutBinding {
+                primary: "F11".into(),
+                modifiers: vec!["ctrl".into()],
+            };
+            backend
+                .update_settings(
+                    preferences,
+                    crate::SettingsUpdateOptions::STRICT,
+                    &crate::NoopSettingsRuntime,
+                )
+                .unwrap();
+            backend.start().await.unwrap();
+            let (locked, lock_ready) = tokio::sync::oneshot::channel();
+            let (unlock, unlock_rx) = std::sync::mpsc::channel();
+            let locking = std::thread::spawn({
+                let backend = backend.clone();
+                move || {
+                    let _interpreter = backend.hotkey.lock().unwrap();
+                    let _ = locked.send(());
+                    let _ = unlock_rx.recv();
+                }
+            });
+            lock_ready.await.unwrap();
+            let pressed_at = std::time::Instant::now();
+            let press_id = 1;
+            let pressing = tokio::spawn({
+                let backend = backend.clone();
+                async move {
+                    backend
+                        .dispatch_dictation_hotkey_edge(DictationHotkeyEdge::Pressed {
+                            press_id,
+                            at: pressed_at,
+                        })
+                        .await
+                }
+            });
+            tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                while backend.hotkey_dispatch_gate.try_lock().is_ok() {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            // The key entry owns the FIFO dispatch gate and is waiting for the
+            // interpreter. Starting/stopping by another public entry is legal.
+            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+            let first = backend.start_dictation().await.unwrap();
+            let stopping = tokio::spawn({
+                let backend = backend.clone();
+                async move { backend.stop_dictation_session(first).await }
+            });
+            let _ = tokio::time::timeout(std::time::Duration::from_millis(30), async {
+                while backend.snapshot().dictation.phase != DictationPhase::Idle {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await;
+            unlock.send(()).unwrap();
+            tokio::task::spawn_blocking(move || locking.join().unwrap())
+                .await
+                .unwrap();
+            let press = pressing.await.unwrap();
+            stopping.await.unwrap().unwrap();
+
+            match press {
+                Ok(CliDispatchOutcome::DictationStarted(second)) => {
+                    let released = backend
+                        .dispatch_dictation_hotkey_edge(DictationHotkeyEdge::Released {
+                            press_id,
+                            at: pressed_at + std::time::Duration::from_secs(1),
+                        })
+                        .await
+                        .unwrap();
+                    assert!(matches!(released, CliDispatchOutcome::DictationCompleted(ref result)
+                        if result.session_id == second),
+                        "old stop erased accepted Hold generation in iteration {iteration}: {released:?}");
+                }
+                Ok(CliDispatchOutcome::Noop) => {}
+                Err(error) if error.code == BackendErrorCode::Busy => {}
+                result => panic!("unexpected key result: {result:?}"),
+            }
+            assert_eq!(backend.snapshot().dictation.phase, DictationPhase::Idle);
+            backend.shutdown().await.unwrap();
+        }
     }
 
     #[tokio::test]
@@ -9510,6 +9652,59 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn raw_style_runs_through_the_real_pipeline_without_a_polishing_stage() {
+        let data_dir = TestDataDir::new("raw-real-pipeline");
+        let polisher = crate::testing::FixtureTextPolisher::successful("must not run");
+        let recorder = Arc::new(crate::testing::FixtureAudioRecorder::default());
+        let engine = Arc::new(crate::PipelineDictationEngine::new(
+            recorder.clone(),
+            Arc::new(crate::testing::FixtureTranscriptionEngine::successful(
+                "raw words",
+                80,
+            )),
+            Arc::new(polisher.clone()),
+        ));
+        let backend = OpenLessBackend::new(
+            BackendConfig {
+                data_dir: data_dir.path().to_path_buf(),
+                ..Default::default()
+            },
+            BackendDependencies {
+                host_actions: Arc::new(FakeHost::default()),
+                text_inserter: Arc::new(crate::testing::FixtureTextInserter::with_outcome(
+                    InsertOutcome::Inserted,
+                )),
+                dictation_engine: engine,
+                credential_store: Arc::new(crate::credentials::InMemoryCredentialStore::default()),
+                ..BackendDependencies::unsupported()
+            },
+        )
+        .unwrap();
+        backend.activate_style_pack("builtin.raw").unwrap();
+        backend.start().await.unwrap();
+        // Exercise the production backend progress validator, not the loose
+        // sink used by engine-only tests; Raw never enters the LLM stage.
+        for _ in 0..2 {
+            backend.start_dictation().await.unwrap();
+            let result = backend
+                .stop_dictation()
+                .await
+                .expect("Raw ASR must remain usable");
+            assert_eq!(result.raw_text, "raw words");
+            assert_eq!(result.polished_text, "raw words");
+            assert_eq!(backend.snapshot().dictation.phase, DictationPhase::Idle);
+        }
+        assert!(polisher.inputs().is_empty(), "Raw must not call the LLM");
+        assert_eq!(recorder.stop_count(), 2);
+        assert!(backend
+            .list_history()
+            .unwrap()
+            .iter()
+            .all(|entry| entry.error_code.is_none()));
+        backend.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
     async fn pipeline_asr_failure_preserves_archive_and_timing_diagnostics() {
         let data_dir = std::env::temp_dir().join(format!(
             "openless-core-asr-diagnostics-history-{}",
@@ -10182,6 +10377,7 @@ mod tests {
     async fn engine_failure_publishes_failed_state_and_preserves_session_identity() {
         let host = Arc::new(FakeHost::default());
         let data_dir = TestDataDir::new("engine-failure");
+        let engine = Arc::new(FailingEngine(std::sync::atomic::AtomicUsize::new(0)));
         let backend = OpenLessBackend::new(
             BackendConfig {
                 data_dir: data_dir.path().to_path_buf(),
@@ -10190,7 +10386,7 @@ mod tests {
             BackendDependencies {
                 host_actions: host,
                 text_inserter: Arc::new(FakeInserter),
-                dictation_engine: Arc::new(FailingEngine),
+                dictation_engine: engine.clone(),
                 task_spawner: Arc::new(TokioTaskSpawner),
                 credential_store: Arc::new(crate::credentials::InMemoryCredentialStore::default()),
                 services: crate::domains::BackendServices::unsupported(),
@@ -10224,6 +10420,11 @@ mod tests {
             }
         }
         assert_eq!(failed_session, Some(session));
+        assert_eq!(
+            engine.0.load(Ordering::Acquire),
+            1,
+            "finish errors must cancel remaining engine resources"
+        );
     }
 
     #[tokio::test]

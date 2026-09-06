@@ -8,7 +8,7 @@
 
 - `LinuxCpalRecorder::start`目前只消费计划中的设备名称，没有执行录音期间系统静音/恢复。
 - `LinuxActiveRecording`没有覆写`archive()`；Core默认返回None。因此录音归档、失败归档恢复、同归档静默重试的音频来源尚不完整。
-- 补充[RecordingPlan](../../openless-all/app/crates/openless-core/src/dictation_context.rs)的适用效果及[RecordingArchive/read_pcm](../../openless-all/app/crates/openless-core/src/ports.rs)；保存与清理须遵循独立音频保留设置，不能误用历史条数。
+- 补充[RecordingPlan](../../openless-all/app/crates/openless-core/src/dictation_context.rs)的适用效果及[RecordingArchive/read_pcm](../../openless-all/app/crates/openless-core/src/ports.rs)；`archive_enabled=false`（QA/划词语音）时不得创建临时归档，不能用成功后删除代替不落盘。主听写/Less Computer 的保存与清理须遵循独立音频保留设置，不能误用历史条数。
 - 用户取消、设备断开、启动失败和正常停止都必须恢复已改变的系统音量；不要覆盖录音期间用户主动修改的新状态。
 - 提示音、录音胶囊/overlay尚未接入；消费Core阶段/反馈事件，避免UI自己猜测处理已结束。
 - Less Computer成功非debug录音的归档清理由Core执行；Host需提供真实`RecordingArchive`和可执行的`discard`。未提供archive不等于已经验证文件保留策略，失败/debug场景也不能无条件删除。

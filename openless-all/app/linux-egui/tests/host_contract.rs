@@ -531,7 +531,6 @@ async fn linux_headless_selection_contract_covers_capability_and_session_edges()
         .unwrap();
     let ticket = voice
         .begin_preview_apply(Some(confirmed), "confirmed".into())
-        .await
         .unwrap();
     voice
         .finish_preview_apply(ticket.ticket_id, SelectionVoiceApplyOutcome::Inserted)
@@ -561,7 +560,6 @@ async fn linux_headless_selection_contract_covers_capability_and_session_edges()
         .unwrap();
     let ticket = voice
         .begin_preview_apply(Some(unknown), "unknown preview".into())
-        .await
         .unwrap();
     voice
         .finish_preview_apply(ticket.ticket_id, SelectionVoiceApplyOutcome::CopiedFallback)

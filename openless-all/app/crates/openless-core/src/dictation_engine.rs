@@ -481,7 +481,8 @@ impl DictationEngine for PipelineDictationEngine {
                     is_final: true,
                 }),
             )?;
-            let (polish_output, polish_failed, polish_ms) = if context.uses_llm_polisher() {
+            let uses_polisher = context.uses_llm_polisher();
+            let (polish_output, polish_failed, polish_ms) = if uses_polisher {
                 publish_progress(
                     &session,
                     session_id,
@@ -553,16 +554,21 @@ impl DictationEngine for PipelineDictationEngine {
                     cancelled_error("dictation was cancelled after polishing finished").into(),
                 );
             }
-            publish_progress(
-                &session,
-                session_id,
-                &progress,
-                EngineProgress::PolishDelta(PolishDelta {
-                    text: polish_output.text.clone(),
-                    offset: 0,
-                    is_final: true,
-                }),
-            )?;
+            // Untouched Raw is ASR passthrough: it never entered Polishing,
+            // so emitting a polish event violates the real backend validator.
+            // Its final text still travels in EngineResult for one-shot input.
+            if uses_polisher {
+                publish_progress(
+                    &session,
+                    session_id,
+                    &progress,
+                    EngineProgress::PolishDelta(PolishDelta {
+                        text: polish_output.text.clone(),
+                        offset: 0,
+                        is_final: true,
+                    }),
+                )?;
+            }
 
             remove_session(&sessions, session_id, &session);
             Ok(EngineResult {

@@ -139,6 +139,23 @@
 
 第七轮最终本地验证：Core 727 passed / 1 ignored，生命周期14项及合同6/26/18/3/25/13/15/15全部通过；Windows Tauri 452 passed / 1 ignored；Linux Windows-host 50+4、headless、TypeScript/Vite与67项前端入口、Core/Linux严格Clippy、Rust1.88 Tauri和六个架构/安全/兼容基线检查通过。Windows CLI回归还覆盖大小写重复PATH的实际最后覆盖值；R59普通ASR加载与自动清理出口均保留新owner，R61所有当前修改已完成有界复核。实际macOS cache代码仍必须由新head的macOS CI编译，不沿用前一提交结果。
 
+### 第八轮：`fc9824ee...2d8fd1b7`
+
+两名全新Windows/macOS审查员覆盖整个PR，主代理沿失败及并发链路补充复现，共确认以下8项Spec问题；没有独立Standards硬性违规。`2d8fd1b7`的CI `34013888722`四平台通过，但仍存在这些行为缺陷，绿灯不能替代产品合同复核。
+
+| ID | 确定问题 | 修复/验证状态 |
+| --- | --- | --- |
+| R62 / P1 | Windows npm OpenCode `.cmd`可检测但无法运行：Core总会加入多行自动化提示，旧Argv传输被Rust Windows批处理参数校验拒绝 | 复用现有stdin管道；官方OpenCode v1.18.29及v1.2.18均读取非TTY stdin。实际Windows `.cmd`进程fixture先检测、再传Core多行提示，先红（换行参数被拒绝）后绿；不是已运行真实模型的OpenCode验收，不引入shell自拼转义 |
+| R63 / P2 | Selection Voice把Windows已发送的PasteSent判成失败，预览可重复确认且历史丢失；QA确认又丢弃真实回执 | PasteSent贯通原生映射、Core状态、历史与IPC，保持“已发送”不同于“已确认插入”；直接/QA预览、重复确认、失败重试与wire回归通过 |
+| R64 / P1 | 默认Raw不经过Polishing，却由真实Pipeline无条件发送最终PolishDelta，被Backend判InvalidState；finish异常也没有回收残留engine资源 | Raw仅返回最终EngineResult并走一次性落字，不准备流式/TIS；只在真实LLM阶段发PolishDelta。真实Pipeline连续两次Raw先红后绿；EngineFailure清理回归先红cancel=0后绿cancel=1，复用已有owned清理入口 |
+| R65 / P1 | QA语音编辑已持QA麦克风lease，却通过SelectionVoice.begin再次领麦克风而Busy；文本预览还会长期占音频，阻止语音续问/主听写 | 纯编辑直接进入Processing，不创建音频占用；Preview只释放匹配session的逻辑lease，保留原生cleanup hold。公共回归原4项Busy失败修至5项全通过，覆盖活动录音互斥及原生清理等待 |
+| R66 / P1 | QA撤销在会话owner读取、预览撤回、答案写回之间被新turn抢占；确认应用的同根因可拿B预览应用旧文本，或由旧完成回调关闭B | 撤销与签发均收为Core单个按turn校验的状态事务，删除Host三段编排及无身份replace_last_answer；原生完成仅dismiss_session所属回合，stale不撤销真实回执。两类撤销与两类确认窗口均先红后绿，共5项覆盖同conversation、新conversation、仅show空面板、失败重试及重复确认；主按钮/热键dismiss语义不变 |
+| R67 / P1 | 旧CLI/按钮停止与已排队物理Press重叠，B已返回Started但A清掉其generation，Hold松开变Noop | 公开入口先真红；只改reset锁序仍红，最终将phase读取、Start决定和真实Starting认领置于同hotkey锁，锁外继续原异步启动。普通入口复用同一认领函数，无新增状态；32轮受控交错绿，runtime seam检查通过 |
+| R68 / P1 | QA/划词语音迁移后被Tauri无条件写WAV，违反1.x不落盘边界；归档删除失败还阻断已有内存转写 | Core冻结RecordingPlan.archive_enabled=false，Host跳过归档目录/文件及prune，保留实际停止/清理错误；两种QA管线、划词语音与主听写/Less对照回归先红Persistence后绿，不以忽略删除失败替代不落盘 |
+| R69 / P2 | Selection A发Completed后persist重新读全局state；此时B已begin，A历史被写为B/空原文及错误指标 | 在完成原锁内克隆既有SelectionState，并只持该快照持久化；公共事件边界回归先红空原文后绿，核对A原文、结果、LLM与耗时；没有新增并行状态或锁 |
+
+第八轮最终本地验证：Core 729 passed / 1 ignored，生命周期15项及合同6/26/18/3/5/25/5/13/16/16全部通过；Windows Tauri 455 passed / 1 ignored、Rust1.88检查通过；Linux Windows-host 50+4、headless示例、Core/Linux严格Clippy、TypeScript/Vite与68个前端入口、六个架构/安全/兼容基线检查全部通过。Tauri首轮并行测试在共享全局side-combo监听的既有测试无超时recv处挂起，已终止且不计通过；最终完整测试按单线程执行，两次通过，没有跳过该测试或改动生产监听。Raw/归档独立交叉复核无新增发现，R67已通过完整Core复验，R66完整5项通过后停改。修复提交后继续第九轮全新团队审核；新head平台CI与真实设备验收仍分别记录。
+
 后续独立团队的最终结论和新head CI写入原PR描述；本文保留已复现问题及修复证据，不预填尚未完成的审核或设备结果。
 
 ## 不得混同的完成条件

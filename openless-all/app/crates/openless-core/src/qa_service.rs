@@ -559,8 +559,8 @@ impl QaService {
             let (runtime_session_id, conversation_id, publish_cancelled) = {
                 let mut state = self.state.lock().expect("QA state lock poisoned");
                 let active_session_id = state.snapshot.session_id;
-                if let (Some(requested), Some(active)) = (requested_session_id, active_session_id) {
-                    if requested != active {
+                if let Some(requested) = requested_session_id {
+                    if Some(requested) != active_session_id {
                         return Err(BackendError::new(
                             BackendErrorCode::Cancelled,
                             "QA session is no longer active",
@@ -788,15 +788,24 @@ impl QaApi for QaService {
         })
     }
 
-    fn replace_last_answer(
+    fn revert_edit_preview(
         &self,
-        text: String,
-        edit_revert_available: bool,
+        session_id: SessionId,
     ) -> BoxFuture<'static, Result<(), BackendError>> {
         let service = self.clone();
         Box::pin(async move {
             {
                 let mut state = service.state.lock().expect("QA state lock poisoned");
+                // Lock order is QA state -> Selection Voice state. Selection
+                // routing releases its own state before calling QA; the local
+                // revert below performs no await or native callback.
+                ensure_current_phase(&state.snapshot, session_id, QaPhase::Completed)?;
+                let owner = state.snapshot.conversation_id.ok_or_else(|| {
+                    BackendError::new(
+                        BackendErrorCode::InvalidState,
+                        "QA conversation owner is unavailable",
+                    )
+                })?;
                 let message = state
                     .snapshot
                     .messages
@@ -809,9 +818,19 @@ impl QaApi for QaService {
                             "QA assistant answer is unavailable",
                         )
                     })?;
-                message.content = text;
+                let preview = service
+                    .selection_voice
+                    .as_ref()
+                    .ok_or_else(|| {
+                        BackendError::new(
+                            BackendErrorCode::Unsupported,
+                            "QA selection edit is unavailable",
+                        )
+                    })?
+                    .revert_preview(Some(owner))?;
+                message.content = preview.text;
                 state.snapshot.edit_apply_available = true;
-                state.snapshot.edit_revert_available = edit_revert_available;
+                state.snapshot.edit_revert_available = false;
                 publish_qa_snapshot(
                     &service.event_publisher(),
                     &state.snapshot,
@@ -821,6 +840,34 @@ impl QaApi for QaService {
                 );
             }
             Ok(())
+        })
+    }
+
+    fn begin_edit_preview_apply(
+        &self,
+        session_id: SessionId,
+        text: String,
+    ) -> BoxFuture<'static, Result<crate::domains::SelectionVoiceApplyTicket, BackendError>> {
+        let service = self.clone();
+        Box::pin(async move {
+            let state = service.state.lock().expect("QA state lock poisoned");
+            ensure_current_phase(&state.snapshot, session_id, QaPhase::Completed)?;
+            let owner = state.snapshot.conversation_id.ok_or_else(|| {
+                BackendError::new(
+                    BackendErrorCode::InvalidState,
+                    "QA conversation owner is unavailable",
+                )
+            })?;
+            service
+                .selection_voice
+                .as_ref()
+                .ok_or_else(|| {
+                    BackendError::new(
+                        BackendErrorCode::Unsupported,
+                        "QA selection edit is unavailable",
+                    )
+                })?
+                .begin_preview_apply(Some(owner), text)
         })
     }
 
@@ -835,6 +882,14 @@ impl QaApi for QaService {
     fn dismiss(&self) -> BoxFuture<'static, Result<(), BackendError>> {
         let service = self.clone();
         Box::pin(async move { service.cancel_inner(None, true).await })
+    }
+
+    fn dismiss_session(
+        &self,
+        session_id: SessionId,
+    ) -> BoxFuture<'static, Result<(), BackendError>> {
+        let service = self.clone();
+        Box::pin(async move { service.cancel_inner(Some(session_id), true).await })
     }
 }
 

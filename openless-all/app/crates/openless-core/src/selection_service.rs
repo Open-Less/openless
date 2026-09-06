@@ -27,7 +27,7 @@ use crate::{
     StylePackStore,
 };
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct SelectionState {
     snapshot: SelectionSnapshot,
     source_app: Option<String>,
@@ -369,39 +369,33 @@ impl SelectionServiceInner {
         Self::ensure_active(&state, session_id)?;
         state.snapshot.insert_outcome = Some(outcome);
         state.snapshot.phase = SelectionPhase::Completed;
-        let snapshot = state.snapshot.clone();
-        let context = state.context.clone();
+        // Completion makes a new capture admissible. Freeze all history fields
+        // before publishing it so a successor cannot replace this turn's text.
+        let completed = state.clone();
         let duration_ms = state
             .started_at
             .map(|started_at| started_at.elapsed().as_millis().min(u128::from(u64::MAX)) as u64);
         drop(state);
         self.events.publish(
             Some(session_id),
-            BackendEventKind::SelectionStateChanged(snapshot),
+            BackendEventKind::SelectionStateChanged(completed.snapshot.clone()),
         );
-        if let Some(context) = context {
-            self.persist_completed(session_id, &context, outcome, duration_ms);
-        }
+        self.persist_completed(session_id, completed, outcome, duration_ms);
         Ok(())
     }
 
     fn persist_completed(
         &self,
         session_id: SessionId,
-        context: &DictationContext,
+        completed: SelectionState,
         outcome: crate::ports::InsertOutcome,
         duration_ms: Option<u64>,
     ) {
-        let (source_text, final_text, polish_source, polish_ms, llm_used) = {
-            let state = self.state.read().expect("selection state lock poisoned");
-            (
-                state.snapshot.source_text.clone().unwrap_or_default(),
-                state.snapshot.preview_text.clone().unwrap_or_default(),
-                state.polish_source.clone(),
-                state.polish_ms,
-                state.llm_used,
-            )
+        let Some(context) = completed.context else {
+            return;
         };
+        let source_text = completed.snapshot.source_text.unwrap_or_default();
+        let final_text = completed.snapshot.preview_text.unwrap_or_default();
         let front_app =
             crate::shared_types::split_front_app_opt(context.polish.front_app.as_deref());
         let insert_status = match outcome {
@@ -437,7 +431,7 @@ impl SelectionServiceInner {
             mode: context.polish.mode,
             style_pack_id: Some(context.polish.style_pack_id.clone()),
             translation_active: false,
-            polish_source,
+            polish_source: completed.polish_source,
             app_bundle_id: front_app.bundle_id,
             app_name: front_app.name,
             insert_status,
@@ -447,11 +441,14 @@ impl SelectionServiceInner {
             has_audio_recording: None,
             asr_provider: None,
             asr_model: None,
-            llm_provider: llm_used.then(|| context.llm.provider_id.clone()),
-            llm_model: llm_used.then(|| context.llm.model.clone()).flatten(),
+            llm_provider: completed.llm_used.then(|| context.llm.provider_id.clone()),
+            llm_model: completed
+                .llm_used
+                .then(|| context.llm.model.clone())
+                .flatten(),
             pipeline_mode: Some("traditional".to_string()),
             asr_ms: None,
-            polish_ms,
+            polish_ms: completed.polish_ms,
         };
         let mut changed = false;
         match self.history.append_with_retention(

@@ -133,6 +133,9 @@ pub struct DictationInsertionContext {
 pub struct RecordingPlan {
     pub microphone_device_name: Option<String>,
     pub mute_during_recording: bool,
+    /// Whether the Host may create an audio archive at all. QA/Selection Voice
+    /// keep PCM in memory; successful-recording retention is a separate policy.
+    pub archive_enabled: bool,
     pub archive_successful_recording: bool,
     pub retention_days: u32,
     pub max_entries: Option<u32>,
@@ -239,6 +242,7 @@ impl DictationContext {
             recording: RecordingPlan {
                 microphone_device_name: non_blank(&preferences.microphone_device_name),
                 mute_during_recording: preferences.mute_during_recording,
+                archive_enabled: true,
                 archive_successful_recording: preferences.record_audio_for_debug,
                 retention_days: preferences.history_retention_days,
                 // Recordings and transcript history have independent caps in

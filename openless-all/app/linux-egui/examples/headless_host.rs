@@ -249,9 +249,7 @@ async fn exercise_selection_voice(services: &BackendServices) -> Result<(), Back
         })
         .await?;
     assert!(voice.preview(Some(confirmed)).await?.is_some());
-    let ticket = voice
-        .begin_preview_apply(Some(confirmed), "confirmed preview".into())
-        .await?;
+    let ticket = voice.begin_preview_apply(Some(confirmed), "confirmed preview".into())?;
     voice
         .finish_preview_apply(ticket.ticket_id, SelectionVoiceApplyOutcome::Inserted)
         .await?;
@@ -275,9 +273,7 @@ async fn exercise_selection_voice(services: &BackendServices) -> Result<(), Back
             summary: None,
         })
         .await?;
-    let ticket = voice
-        .begin_preview_apply(Some(unknown), "unknown preview".into())
-        .await?;
+    let ticket = voice.begin_preview_apply(Some(unknown), "unknown preview".into())?;
     voice
         .finish_preview_apply(ticket.ticket_id, SelectionVoiceApplyOutcome::CopiedFallback)
         .await?;

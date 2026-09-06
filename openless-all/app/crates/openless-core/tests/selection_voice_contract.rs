@@ -535,7 +535,6 @@ async fn preview_apply_consumes_state_only_after_the_host_confirms_success() {
 
     let ticket = voice
         .begin_preview_apply(Some(session_id), "edited 1粒".to_string())
-        .await
         .unwrap();
     assert_eq!(ticket.replacement_text, "edited 1例");
     voice
@@ -547,7 +546,6 @@ async fn preview_apply_consumes_state_only_after_the_host_confirms_success() {
 
     let ticket = voice
         .begin_preview_apply(Some(session_id), "edited 1粒".to_string())
-        .await
         .unwrap();
     voice
         .finish_preview_apply(ticket.ticket_id, SelectionVoiceApplyOutcome::Inserted)
@@ -567,6 +565,82 @@ async fn preview_apply_consumes_state_only_after_the_host_confirms_success() {
     );
 
     let _ = std::fs::remove_dir_all(data_dir);
+}
+
+#[tokio::test]
+async fn paste_sent_completes_direct_and_qa_previews_once_without_claiming_insertion() {
+    let paste_sent: SelectionVoiceApplyOutcome = serde_json::from_str("\"paste_sent\"")
+        .expect("Windows paste dispatch must be represented in the shared result contract");
+    for qa_preview in [false, true] {
+        let (backend, data_dir) = backend();
+        let voice = &backend.services().selection_voice;
+        let session_id = voice
+            .begin(SelectionCapture {
+                text: "source".into(),
+                source_app: None,
+            })
+            .await
+            .unwrap();
+        let owner = qa_preview.then(SessionId::new);
+        voice.mark_processing(session_id).await.unwrap();
+        voice
+            .set_preview(SelectionVoicePreviewUpdate {
+                session_id,
+                owner_session_id: owner,
+                text: "preview".into(),
+                summary: None,
+            })
+            .await
+            .unwrap();
+
+        let failed = voice
+            .begin_preview_apply(owner, "replacement".into())
+            .unwrap();
+        voice
+            .finish_preview_apply(failed.ticket_id, SelectionVoiceApplyOutcome::Failed)
+            .await
+            .unwrap();
+        assert!(voice.preview(owner).await.unwrap().is_some());
+        assert!(backend.list_history().unwrap().is_empty());
+
+        let ticket = voice
+            .begin_preview_apply(owner, "replacement".into())
+            .unwrap();
+        assert!(voice
+            .begin_preview_apply(owner, "duplicate".into())
+            .is_err());
+        voice
+            .finish_preview_apply(ticket.ticket_id, paste_sent)
+            .await
+            .unwrap();
+        let snapshot = voice.snapshot().await.unwrap();
+        assert_eq!(snapshot.phase, SelectionVoicePhase::Completed);
+        assert_eq!(
+            serde_json::to_value(snapshot).unwrap()["applyOutcome"],
+            "paste_sent"
+        );
+        assert!(voice.preview(owner).await.unwrap().is_none());
+        assert!(voice
+            .finish_preview_apply(ticket.ticket_id, paste_sent)
+            .await
+            .is_err());
+        assert!(voice
+            .begin_preview_apply(owner, "duplicate".into())
+            .is_err());
+        let history = backend.list_history().unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].final_text, "replacement");
+        assert_eq!(
+            history[0].insert_status,
+            openless_core::HistoryInsertStatus::PasteSent
+        );
+        assert_eq!(
+            history[0].source,
+            openless_core::HistorySource::SelectionVoiceEdit
+        );
+        drop(backend);
+        std::fs::remove_dir_all(data_dir).unwrap();
+    }
 }
 
 #[tokio::test]
@@ -598,7 +672,6 @@ async fn stale_preview_requests_preserve_the_current_owner_and_revert_is_single_
     let stale = openless_core::SessionId::new();
     let error = voice
         .revert_preview(Some(stale))
-        .await
         .expect_err("stale owner must not mutate the current preview");
     assert_eq!(error.code, BackendErrorCode::Cancelled);
     assert_eq!(
@@ -606,14 +679,12 @@ async fn stale_preview_requests_preserve_the_current_owner_and_revert_is_single_
         "second"
     );
 
-    voice.revert_preview(Some(session_id)).await.unwrap();
-    let preview = voice.preview(Some(session_id)).await.unwrap().unwrap();
+    let preview = voice.revert_preview(Some(session_id)).unwrap();
     assert_eq!(preview.text, "first");
     assert!(!preview.can_revert);
     assert_eq!(
         voice
             .revert_preview(Some(session_id))
-            .await
             .expect_err("only the immediately previous preview can be restored")
             .code,
         BackendErrorCode::InvalidState

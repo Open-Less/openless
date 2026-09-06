@@ -464,6 +464,75 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn windows_opencode_npm_shim_accepts_the_core_multiline_prompt() {
+        let directory = std::env::temp_dir().join(format!(
+            "openless opencode stdin {}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let _workspace = TemporaryWorkspace(directory.clone());
+        let shim = directory.join("opencode.cmd");
+        std::fs::write(
+            &shim,
+            "@echo off\r\nif \"%~1\"==\"--version\" (echo 1.18.29& exit /b 0)\r\n\"%OPENLESS_AGENT_TEST_EXE%\" --exact coding_agent::tests::stdin_echo_child --nocapture\r\n",
+        )
+        .unwrap();
+        let prompt = openless_core::autonomous_prompt("第一行：\"hello\" & %PATH%\r\n第二行：🙂");
+        let mut request = openless_core::CodingAgentRequest::new("stdin", prompt.clone());
+        request.provider = openless_core::CodingAgentProvider::OpenCodeCli;
+        let run = openless_core::build_agent_command(&request).unwrap();
+        let mut detect = run.clone();
+        detect.argv = vec!["--version".into()];
+        detect.prompt = PromptPayload::Stdin(String::new());
+        for (mut command, marker, expected) in [
+            (detect, "1.18.29", None),
+            (run, "OPENLESS_AGENT_STDIN=", Some(prompt)),
+        ] {
+            command
+                .env
+                .insert("PATH".into(), directory.to_string_lossy().into_owned());
+            command.env.insert(
+                "OPENLESS_AGENT_TEST_EXE".into(),
+                std::env::current_exe()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned(),
+            );
+            command
+                .env
+                .insert("OPENLESS_AGENT_TEST_STDIN".into(), "1".into());
+            let output = Arc::new(CaptureOutput::default());
+            let result = TauriCodingAgentProcessAdapter
+                .execute(command, output.clone(), CancellationToken::new())
+                .await
+                .expect("the detected npm shim must also accept a real Less Computer request");
+            let lines = output.0.lock().unwrap();
+            assert!(result.success, "{lines:?}");
+            let value = lines
+                .iter()
+                .find_map(|line| line.strip_prefix(marker))
+                .unwrap_or_else(|| panic!("missing {marker}: {lines:?}"));
+            if let Some(expected) = expected {
+                assert_eq!(serde_json::from_str::<String>(value).unwrap(), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn stdin_echo_child() {
+        if std::env::var("OPENLESS_AGENT_TEST_STDIN").as_deref() != Ok("1") {
+            return;
+        }
+        use std::io::Read;
+        let mut prompt = String::new();
+        std::io::stdin().read_to_string(&mut prompt).unwrap();
+        println!(
+            "OPENLESS_AGENT_STDIN={}",
+            serde_json::to_string(&prompt).unwrap()
+        );
+    }
+
+    #[tokio::test]
     async fn cancellation_kills_a_windows_process_tree_with_blocked_stdin() {
         // Windows' async pipe adapter can buffer a 1 MiB write internally. Keep
         // the requested prompt-size regression and exceed that buffering too,

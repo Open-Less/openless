@@ -531,7 +531,7 @@ pub fn codex_sandbox_mode(mode: CodingAgentPermissionMode) -> &'static str {
     }
 }
 
-/// 构造 OpenCode 无头参数；prompt 必须由宿主追加在 `--` 之后。
+/// 构造 OpenCode 无头参数；prompt 由宿主写入 stdin。
 pub fn build_opencode_args(request: &CodingAgentRequest) -> Vec<String> {
     let mut args = vec!["run".into(), "--format".into(), "json".into()];
     if let Some(model) = &request.model {
@@ -930,7 +930,10 @@ pub fn build_agent_command(request: &CodingAgentRequest) -> Result<AgentCommand,
             );
             (
                 build_opencode_args(request),
-                PromptPayload::Argv(request.prompt.clone()),
+                // OpenCode v1.18.29 run.ts:400-402（v1.2.18:322同样支持）读取
+                // 非TTY stdin。避免Windows npm .cmd拒绝自动化prompt中的换行。
+                // https://github.com/anomalyco/opencode/blob/v1.18.29/packages/opencode/src/cli/cmd/run.ts#L400-L402
+                PromptPayload::Stdin(request.prompt.clone()),
             )
         }
         CodingAgentProvider::CodexCli => (
@@ -2249,14 +2252,11 @@ mod tests {
                 .iter()
                 .any(|argument| argument.contains("-line")));
             match provider {
-                CodingAgentProvider::ClaudeCodeCli | CodingAgentProvider::CodexCli => {
+                CodingAgentProvider::ClaudeCodeCli
+                | CodingAgentProvider::OpenCodeCli
+                | CodingAgentProvider::CodexCli => {
                     assert!(
                         matches!(command.prompt, PromptPayload::Stdin(value) if value == prompt)
-                    );
-                }
-                CodingAgentProvider::OpenCodeCli => {
-                    assert!(
-                        matches!(command.prompt, PromptPayload::Argv(value) if value == prompt)
                     );
                 }
                 CodingAgentProvider::DshCli => {

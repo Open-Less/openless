@@ -208,6 +208,60 @@ impl SelectionVoiceService {
                 )
             })
     }
+
+    fn begin_session(
+        &self,
+        capture: SelectionCapture,
+        phase: SelectionVoicePhase,
+    ) -> Result<SessionId, BackendError> {
+        if capture.text.trim().is_empty() {
+            return Err(BackendError::new(
+                BackendErrorCode::InvalidArgument,
+                "selected text must not be empty",
+            ));
+        }
+        let mut state = self
+            .state
+            .write()
+            .expect("selection voice state lock poisoned");
+        if matches!(
+            state.phase,
+            SelectionVoicePhase::Recording
+                | SelectionVoicePhase::Processing
+                | SelectionVoicePhase::AwaitingIntent
+                | SelectionVoicePhase::Preview
+                | SelectionVoicePhase::Applying
+        ) {
+            return Err(BackendError::new(
+                BackendErrorCode::Busy,
+                "a selection voice session is already active",
+            ));
+        }
+        let session_id = SessionId::new();
+        // QA has already captured its input and owns any voice lease itself.
+        // A pure edit starts in Processing without inventing a second recorder;
+        // actual Selection Voice capture still reserves audio until Preview.
+        if phase == SelectionVoicePhase::Recording {
+            self.voice_sessions.acquire(
+                session_id,
+                crate::voice_session::VoiceSessionKind::SelectionVoice,
+            )?;
+        }
+        *state = SelectionVoiceState {
+            phase,
+            session_id: Some(session_id),
+            selection: Some(capture),
+            started_at: Some(std::time::Instant::now()),
+            ..SelectionVoiceState::default()
+        };
+        let snapshot = state.snapshot();
+        drop(state);
+        self.events.publish(
+            Some(session_id),
+            BackendEventKind::SelectionVoiceStateChanged(snapshot),
+        );
+        Ok(session_id)
+    }
 }
 
 struct DiscardTextStream;
@@ -483,6 +537,7 @@ impl SelectionVoicePersistence {
         let front = crate::shared_types::split_front_app_opt(ticket.source_app.as_deref());
         let insert_status = match outcome {
             SelectionVoiceApplyOutcome::Inserted => HistoryInsertStatus::Inserted,
+            SelectionVoiceApplyOutcome::PasteSent => HistoryInsertStatus::PasteSent,
             SelectionVoiceApplyOutcome::CopiedFallback => HistoryInsertStatus::CopiedFallback,
             SelectionVoiceApplyOutcome::Failed => return,
         };
@@ -693,50 +748,8 @@ impl SelectionVoiceApi for SelectionVoiceService {
         &self,
         capture: SelectionCapture,
     ) -> BoxFuture<'static, Result<SessionId, BackendError>> {
-        let state = Arc::clone(&self.state);
-        let events = self.events.clone();
-        let voice_sessions = Arc::clone(&self.voice_sessions);
-        Box::pin(async move {
-            if capture.text.trim().is_empty() {
-                return Err(BackendError::new(
-                    BackendErrorCode::InvalidArgument,
-                    "selected text must not be empty",
-                ));
-            }
-            let mut state = state.write().expect("selection voice state lock poisoned");
-            if matches!(
-                state.phase,
-                SelectionVoicePhase::Recording
-                    | SelectionVoicePhase::Processing
-                    | SelectionVoicePhase::AwaitingIntent
-                    | SelectionVoicePhase::Preview
-                    | SelectionVoicePhase::Applying
-            ) {
-                return Err(BackendError::new(
-                    BackendErrorCode::Busy,
-                    "a selection voice session is already active",
-                ));
-            }
-            let session_id = SessionId::new();
-            voice_sessions.acquire(
-                session_id,
-                crate::voice_session::VoiceSessionKind::SelectionVoice,
-            )?;
-            *state = SelectionVoiceState {
-                phase: SelectionVoicePhase::Recording,
-                session_id: Some(session_id),
-                selection: Some(capture),
-                started_at: Some(std::time::Instant::now()),
-                ..SelectionVoiceState::default()
-            };
-            let snapshot = state.snapshot();
-            drop(state);
-            events.publish(
-                Some(session_id),
-                BackendEventKind::SelectionVoiceStateChanged(snapshot),
-            );
-            Ok(session_id)
-        })
+        let service = self.clone();
+        Box::pin(async move { service.begin_session(capture, SelectionVoicePhase::Recording) })
     }
 
     fn mark_processing(
@@ -1088,11 +1101,8 @@ impl SelectionVoiceApi for SelectionVoiceService {
             let created_session = reusable_session.is_none();
             let session_id = match reusable_session {
                 Some(session_id) => session_id,
-                None => {
-                    let session_id = service.begin(request.capture.clone()).await?;
-                    service.mark_processing(session_id).await?;
-                    session_id
-                }
+                None => service
+                    .begin_session(request.capture.clone(), SelectionVoicePhase::Processing)?,
             };
             let generated = service
                 .workflow
@@ -1132,6 +1142,7 @@ impl SelectionVoiceApi for SelectionVoiceService {
     ) -> BoxFuture<'static, Result<(), BackendError>> {
         let state = Arc::clone(&self.state);
         let events = self.events.clone();
+        let voice_sessions = Arc::clone(&self.voice_sessions);
         Box::pin(async move {
             if update.text.trim().is_empty() {
                 return Err(BackendError::new(
@@ -1151,6 +1162,10 @@ impl SelectionVoiceApi for SelectionVoiceService {
                 summary: update.summary,
             });
             state.phase = SelectionVoicePhase::Preview;
+            // A pending text preview does not own audio. Release only this
+            // session's logical lease: any native cleanup hold remains Busy,
+            // and a QA/dictation microphone with a different owner is untouched.
+            voice_sessions.release(update.session_id);
             let snapshot = state.snapshot();
             drop(state);
             events.publish(
@@ -1210,84 +1225,84 @@ impl SelectionVoiceApi for SelectionVoiceService {
     fn revert_preview(
         &self,
         owner_session_id: Option<SessionId>,
-    ) -> BoxFuture<'static, Result<(), BackendError>> {
-        let state = Arc::clone(&self.state);
-        let events = self.events.clone();
-        Box::pin(async move {
-            let mut state = state.write().expect("selection voice state lock poisoned");
-            if state.phase != SelectionVoicePhase::Preview {
-                return Err(invalid_state("selection voice preview is unavailable"));
-            }
-            let preview = matching_preview_mut(&mut state, owner_session_id)?;
-            let previous = preview
-                .previous_text
-                .take()
-                .ok_or_else(|| invalid_state("selection voice preview cannot be reverted"))?;
-            preview.text = previous;
-            preview.summary = None;
-            let session_id = state.session_id;
-            let snapshot = state.snapshot();
-            drop(state);
-            events.publish(
-                session_id,
-                BackendEventKind::SelectionVoiceStateChanged(snapshot),
-            );
-            Ok(())
-        })
+    ) -> Result<SelectionVoicePreview, BackendError> {
+        let mut state = self
+            .state
+            .write()
+            .expect("selection voice state lock poisoned");
+        if state.phase != SelectionVoicePhase::Preview {
+            return Err(invalid_state("selection voice preview is unavailable"));
+        }
+        let preview = matching_preview_mut(&mut state, owner_session_id)?;
+        let previous = preview
+            .previous_text
+            .take()
+            .ok_or_else(|| invalid_state("selection voice preview cannot be reverted"))?;
+        preview.text = previous;
+        preview.summary = None;
+        let snapshot = state.snapshot();
+        let preview = snapshot
+            .preview
+            .clone()
+            .ok_or_else(|| invalid_state("selection voice preview is unavailable"))?;
+        drop(state);
+        self.events.publish(
+            snapshot.session_id,
+            BackendEventKind::SelectionVoiceStateChanged(snapshot),
+        );
+        Ok(preview)
     }
 
     fn begin_preview_apply(
         &self,
         owner_session_id: Option<SessionId>,
         text: String,
-    ) -> BoxFuture<'static, Result<SelectionVoiceApplyTicket, BackendError>> {
-        let state = Arc::clone(&self.state);
-        let events = self.events.clone();
-        let persistence = Arc::clone(&self.persistence);
-        Box::pin(async move {
-            let replacement_text = persistence.corrected_text(text.trim().to_string());
-            if replacement_text.is_empty() {
-                return Err(BackendError::new(
-                    BackendErrorCode::InvalidArgument,
-                    "selection voice output must not be empty",
-                ));
-            }
-            let mut state = state.write().expect("selection voice state lock poisoned");
-            if state.phase != SelectionVoicePhase::Preview || state.applying_ticket.is_some() {
-                return Err(invalid_state("selection voice preview is not applyable"));
-            }
-            let summary = {
-                let preview = matching_preview_mut(&mut state, owner_session_id)?;
-                preview.text = replacement_text.clone();
-                preview.summary.clone()
-            };
-            let session_id = state
-                .session_id
-                .ok_or_else(|| invalid_state("selection voice session is unavailable"))?;
-            let selection = state
-                .selection
-                .as_ref()
-                .ok_or_else(|| invalid_state("selection voice capture is unavailable"))?;
-            let ticket = SelectionVoiceApplyTicket {
-                ticket_id: SessionId::new(),
-                session_id,
-                owner_session_id,
-                source_text: selection.text.clone(),
-                replacement_text,
-                summary,
-                source_app: selection.source_app.clone(),
-            };
-            state.applying_ticket = Some(ticket.clone());
-            state.apply_outcome = None;
-            state.phase = SelectionVoicePhase::Applying;
-            let snapshot = state.snapshot();
-            drop(state);
-            events.publish(
-                Some(session_id),
-                BackendEventKind::SelectionVoiceStateChanged(snapshot),
-            );
-            Ok(ticket)
-        })
+    ) -> Result<SelectionVoiceApplyTicket, BackendError> {
+        let replacement_text = self.persistence.corrected_text(text.trim().to_string());
+        if replacement_text.is_empty() {
+            return Err(BackendError::new(
+                BackendErrorCode::InvalidArgument,
+                "selection voice output must not be empty",
+            ));
+        }
+        let mut state = self
+            .state
+            .write()
+            .expect("selection voice state lock poisoned");
+        if state.phase != SelectionVoicePhase::Preview || state.applying_ticket.is_some() {
+            return Err(invalid_state("selection voice preview is not applyable"));
+        }
+        let summary = {
+            let preview = matching_preview_mut(&mut state, owner_session_id)?;
+            preview.text = replacement_text.clone();
+            preview.summary.clone()
+        };
+        let session_id = state
+            .session_id
+            .ok_or_else(|| invalid_state("selection voice session is unavailable"))?;
+        let selection = state
+            .selection
+            .as_ref()
+            .ok_or_else(|| invalid_state("selection voice capture is unavailable"))?;
+        let ticket = SelectionVoiceApplyTicket {
+            ticket_id: SessionId::new(),
+            session_id,
+            owner_session_id,
+            source_text: selection.text.clone(),
+            replacement_text,
+            summary,
+            source_app: selection.source_app.clone(),
+        };
+        state.applying_ticket = Some(ticket.clone());
+        state.apply_outcome = None;
+        state.phase = SelectionVoicePhase::Applying;
+        let snapshot = state.snapshot();
+        drop(state);
+        self.events.publish(
+            Some(session_id),
+            BackendEventKind::SelectionVoiceStateChanged(snapshot),
+        );
+        Ok(ticket)
     }
 
     fn finish_preview_apply(

@@ -167,6 +167,19 @@ fn selection_voice_end_message(error: &str) -> String {
     selection_voice_user_message(error)
 }
 
+fn selection_voice_apply_outcome(
+    status: InsertStatus,
+) -> Result<SelectionVoiceApplyOutcome, String> {
+    match status {
+        InsertStatus::Inserted => Ok(SelectionVoiceApplyOutcome::Inserted),
+        InsertStatus::PasteSent => Ok(SelectionVoiceApplyOutcome::PasteSent),
+        InsertStatus::CopiedFallback => Ok(SelectionVoiceApplyOutcome::CopiedFallback),
+        InsertStatus::Failed | InsertStatus::NotRequested => {
+            Err("selectionVoiceInsertFailed".to_string())
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub(super) struct SelectionVoiceHostState {
     /// Opaque native target only. Selection text, instruction, intent and
@@ -582,7 +595,7 @@ impl Coordinator {
         &self,
         text: String,
         qa_session_id: Option<SessionId>,
-    ) -> Result<(), String> {
+    ) -> Result<SelectionVoiceApplyOutcome, String> {
         let text = text.trim().to_string();
         if text.is_empty() {
             return Err("selectionVoiceEmptyOutput".into());
@@ -600,9 +613,8 @@ impl Coordinator {
             .services()
             .selection_voice
             .begin_preview_apply(owner, text.clone())
-            .await
             .map_err(core_error)?;
-        match self.apply_selection_voice_preview_ticket(&ticket) {
+        let outcome = match self.apply_selection_voice_preview_ticket(&ticket) {
             Ok(outcome) => {
                 self.inner
                     .backend
@@ -611,6 +623,7 @@ impl Coordinator {
                     .finish_preview_apply(ticket.ticket_id, outcome)
                     .await
                     .map_err(core_error)?;
+                outcome
             }
             Err(error) => {
                 let _ = self
@@ -622,10 +635,10 @@ impl Coordinator {
                     .await;
                 return Err(error);
             }
-        }
+        };
 
         self.finish_selection_voice_preview_host(ticket.session_id);
-        Ok(())
+        Ok(outcome)
     }
 
     pub(crate) fn apply_selection_voice_preview_ticket(
@@ -649,13 +662,7 @@ impl Coordinator {
             prefs.restore_clipboard_after_paste,
             prefs.paste_shortcut,
         );
-        match status {
-            InsertStatus::Inserted => Ok(SelectionVoiceApplyOutcome::Inserted),
-            InsertStatus::CopiedFallback => Ok(SelectionVoiceApplyOutcome::CopiedFallback),
-            InsertStatus::PasteSent | InsertStatus::Failed | InsertStatus::NotRequested => {
-                Err("selectionVoiceInsertFailed".to_string())
-            }
-        }
+        selection_voice_apply_outcome(status)
     }
 
     pub(crate) fn finish_selection_voice_preview_host(&self, session_id: CoreSessionId) {
@@ -669,6 +676,22 @@ impl Coordinator {
 mod tests {
     use super::*;
     use openless_core::RecordingControlSink;
+
+    #[test]
+    fn paste_dispatch_is_a_terminal_receipt_without_claiming_inserted() {
+        for (status, wire) in [
+            (InsertStatus::Inserted, "inserted"),
+            (InsertStatus::PasteSent, "paste_sent"),
+            (InsertStatus::CopiedFallback, "copied_fallback"),
+        ] {
+            let outcome = selection_voice_apply_outcome(status).unwrap();
+            assert_eq!(serde_json::to_value(outcome).unwrap(), wire);
+            assert!(outcome.may_have_applied());
+        }
+        for status in [InsertStatus::Failed, InsertStatus::NotRequested] {
+            assert!(selection_voice_apply_outcome(status).is_err());
+        }
+    }
 
     #[tokio::test]
     async fn selection_cancel_revokes_a_starting_host_target_without_waiting_for_attach() {

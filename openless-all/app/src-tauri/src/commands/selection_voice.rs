@@ -145,12 +145,12 @@ pub async fn confirm_selection_voice_preview(
     coord: CoordinatorState<'_>,
     text: String,
     qa_session_id: SessionId,
-) -> Result<(), String> {
-    let owner_session_id = qa_preview_owner(&core, qa_session_id).await?;
+) -> Result<openless_core::SelectionVoiceApplyOutcome, String> {
+    let qa_turn = openless_core::SessionId::from_uuid(qa_session_id);
     let ticket = core
         .services()
-        .selection_voice
-        .begin_preview_apply(Some(owner_session_id), text)
+        .qa
+        .begin_edit_preview_apply(qa_turn, text)
         .await
         .map_err(selection_voice_error)?;
     let outcome = match coord.apply_selection_voice_preview_ticket(&ticket) {
@@ -173,11 +173,14 @@ pub async fn confirm_selection_voice_preview(
         .await
         .map_err(selection_voice_error)?;
     coord.finish_selection_voice_preview_host(ticket.session_id);
-    core.services()
-        .qa
-        .dismiss()
-        .await
-        .map_err(|error| error.message)
+    if let Err(error) = core.services().qa.dismiss_session(qa_turn).await {
+        // Native delivery has already finished. A reopened panel belongs to
+        // another turn and cannot revoke this Inserted/PasteSent/copy receipt.
+        if error.code != openless_core::BackendErrorCode::Cancelled {
+            return Err(error.message);
+        }
+    }
+    Ok(outcome)
 }
 
 #[tauri::command]
@@ -185,11 +188,9 @@ pub async fn revert_selection_voice_preview(
     core: CoreState<'_>,
     qa_session_id: SessionId,
 ) -> Result<(), String> {
-    let owner_session_id = qa_preview_owner(&core, qa_session_id).await?;
-    let owner = Some(owner_session_id);
     core.services()
-        .selection_voice
-        .revert_preview(owner)
+        .qa
+        .revert_edit_preview(openless_core::SessionId::from_uuid(qa_session_id))
         .await
         .map_err(|error| {
             if error.code == openless_core::BackendErrorCode::InvalidState {
@@ -197,20 +198,7 @@ pub async fn revert_selection_voice_preview(
             } else {
                 selection_voice_error(error)
             }
-        })?;
-    let text = core
-        .services()
-        .selection_voice
-        .preview(owner)
-        .await
-        .map_err(selection_voice_error)?
-        .ok_or_else(|| "selectionVoicePreviewUnavailable".to_string())?
-        .text;
-    core.services()
-        .qa
-        .replace_last_answer(text, false)
-        .await
-        .map_err(|error| error.message)
+        })
 }
 
 #[cfg(test)]

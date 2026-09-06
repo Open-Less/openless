@@ -2468,13 +2468,14 @@ impl ActiveRecording for TauriActiveRecording {
 /// macOS音量脚本失败，都不意味着输入麦克风不可用。分别告警并关闭失败的辅助项，
 /// 让后面的Recorder::start独立报告真实采集错误；成功的静音guard仍由录音资源持有。
 fn prepare_recording_options<M>(
-    archive_path: Result<PathBuf, impl std::fmt::Display>,
+    archive_path: Result<Option<PathBuf>, impl std::fmt::Display>,
     mute_enabled: bool,
     activate_mute: impl FnOnce() -> Result<M, String>,
 ) -> (Option<PathBuf>, Option<M>) {
     let archive_path = archive_path
         .map_err(|error| log::warn!("[recordings] archive unavailable; capture continues: {error}"))
-        .ok();
+        .ok()
+        .flatten();
     let mute = mute_enabled.then(activate_mute).and_then(|result| {
         result
             .map_err(|error| {
@@ -2504,17 +2505,23 @@ impl AudioRecorder for TauriAudioRecorder {
                     preview.stop();
                 }
             }
-            let archive_path =
-                crate::persistence::recording_path_for_session(&session_id.to_string());
+            // QA/划词语音沿用1.x不落盘语义；不要先创建WAV，再依赖停止时删除。
+            let archive_path = context
+                .recording
+                .archive_enabled
+                .then(|| crate::persistence::recording_path_for_session(&session_id.to_string()))
+                .transpose();
             let microphone = context.recording.microphone_device_name.clone();
             let recording_plan = context.recording.clone();
             let fault_progress = Arc::clone(&progress);
             let (recording, runtime_errors) = tauri::async_runtime::spawn_blocking(move || {
-                if let Err(error) = crate::persistence::prune_recordings(
-                    recording_plan.retention_days,
-                    recording_plan.max_entries,
-                ) {
-                    log::warn!("[recordings] prune before capture failed: {error:#}");
+                if recording_plan.archive_enabled {
+                    if let Err(error) = crate::persistence::prune_recordings(
+                        recording_plan.retention_days,
+                        recording_plan.max_entries,
+                    ) {
+                        log::warn!("[recordings] prune before capture failed: {error:#}");
+                    }
                 }
                 let (archive_path, mute) = prepare_recording_options(
                     archive_path,
@@ -2694,7 +2701,8 @@ impl CoreTextInserter for TauriTextInserter {
                     )
                 })?;
                 let (previous, streaming_ready) = prepare_streaming_input_source(
-                    openless_core::streaming_insert::streaming_insert_eligible(
+                    context.uses_llm_polisher()
+                        && openless_core::streaming_insert::streaming_insert_eligible(
                         context.insertion.streaming,
                         context.polish.translation_active,
                         context.polish.chinese_script_preference
@@ -3173,7 +3181,7 @@ mod tests {
             let archive_result = if archive_fails {
                 Err("recordings directory cannot be created")
             } else {
-                Ok(PathBuf::from("fixture.wav"))
+                Ok(Some(PathBuf::from("fixture.wav")))
             };
             let (archive, mute) = prepare_recording_options(archive_result, true, || {
                 if mute_fails {
@@ -3202,7 +3210,7 @@ mod tests {
         let restored = Arc::new(AtomicU64::new(0));
         let path = PathBuf::from("fixture.wav");
         let (archive, mute) =
-            prepare_recording_options(Ok::<_, String>(path.clone()), true, || {
+            prepare_recording_options(Ok::<_, String>(Some(path.clone())), true, || {
                 Ok(MuteGuard(Arc::clone(&restored)))
             });
         assert_eq!(archive, Some(path.clone()));
@@ -3210,8 +3218,14 @@ mod tests {
         // 成功的guard必须交给录音资源，而不是在准备结束时提前恢复音量。
         drop(mute);
         assert_eq!(restored.load(Ordering::SeqCst), 1);
+        let (archive, mute) =
+            prepare_recording_options(Ok::<_, String>(None), false, || -> Result<(), String> {
+                panic!("disabled muting must not call the platform")
+            });
+        assert!(archive.is_none());
+        assert!(mute.is_none());
         let (archive, mute) = prepare_recording_options(
-            Ok::<_, String>(path.clone()),
+            Ok::<_, String>(Some(path.clone())),
             false,
             || -> Result<(), String> { panic!("disabled muting must not call the platform") },
         );
