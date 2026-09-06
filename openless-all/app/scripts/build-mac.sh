@@ -71,6 +71,11 @@ if [ "$MAC_BUNDLE_ARCH" = "aarch64" ]; then
     echo "✗ Apple Silicon app 缺少 Contents/Resources/mlx.metallib"
     exit 1
   fi
+  # Contents/MacOS 里的非 Mach-O 会被 codesign 当成 nested code。
+  if [ -e "$APP/Contents/MacOS/mlx.metallib" ]; then
+    echo "✗ mlx.metallib 不能放在 Contents/MacOS（ad-hoc codesign 会失败）"
+    exit 1
+  fi
   APP_METALLIB_SHA="$(shasum -a 256 "$APP_METALLIB" | awk '{print $1}')"
 
   if [ ! -f "$DMG_PATH" ]; then
@@ -87,6 +92,10 @@ if [ "$MAC_BUNDLE_ARCH" = "aarch64" ]; then
   DMG_METALLIB="$DMG_MOUNT/OpenLess.app/Contents/Resources/mlx.metallib"
   if [ ! -s "$DMG_METALLIB" ]; then
     echo "✗ DMG 中缺少 OpenLess.app/Contents/Resources/mlx.metallib"
+    exit 1
+  fi
+  if [ -e "$DMG_MOUNT/OpenLess.app/Contents/MacOS/mlx.metallib" ]; then
+    echo "✗ DMG 中的 mlx.metallib 不能放在 Contents/MacOS"
     exit 1
   fi
   DMG_METALLIB_SHA="$(shasum -a 256 "$DMG_METALLIB" | awk '{print $1}')"
@@ -111,7 +120,7 @@ if [ "$MAC_BUNDLE_ARCH" = "aarch64" ]; then
     fi
   fi
   echo "✓ MLX metallib sha256=$APP_METALLIB_SHA"
-elif [ -e "$APP/Contents/Resources/mlx.metallib" ]; then
+elif [ -e "$APP/Contents/MacOS/mlx.metallib" ] || [ -e "$APP/Contents/Resources/mlx.metallib" ]; then
   echo "✗ Intel app 不应包含 Apple Silicon MLX metallib"
   exit 1
 fi

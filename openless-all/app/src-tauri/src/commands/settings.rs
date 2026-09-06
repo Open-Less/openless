@@ -27,13 +27,10 @@ impl<'a> TauriSettingsRuntime<'a> {
         &self,
         target: &openless_core::WindowsKeyboardRuntimeTarget,
     ) -> Result<(), openless_core::BackendError> {
-        let preferences = UserPreferences {
-            windows_sendinput_insertion_only: target.send_input_insertion_only,
-            windows_show_openless_in_keyboard_list: target.show_openless_in_keyboard_list,
-            ..UserPreferences::default()
-        };
-        crate::windows_ime_profile::apply_windows_openless_keyboard_list_pref(&preferences)
-            .map_err(Self::platform_error)
+        crate::windows_ime_profile::apply_windows_openless_keyboard_list(
+            target.openless_language_profile_enabled,
+        )
+        .map_err(Self::platform_error)
     }
 
     fn apply_hotkeys(

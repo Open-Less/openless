@@ -598,14 +598,17 @@ fn run_desktop() {
             log::info!("=== OpenLess 启动 ===");
 
             #[cfg(target_os = "windows")]
-            if let Err(err) =
-                crate::windows_ime_profile::apply_windows_openless_keyboard_list_pref(
-                    &coordinator.backend().get_preferences(),
-                )
             {
-                log::warn!(
-                    "[windows-ime] apply keyboard list visibility pref on startup failed: {err}"
+                let target = openless_core::WindowsKeyboardRuntimeTarget::from(
+                    &coordinator.backend().get_preferences(),
                 );
+                if let Err(err) = crate::windows_ime_profile::apply_windows_openless_keyboard_list(
+                    target.openless_language_profile_enabled,
+                ) {
+                    log::warn!(
+                        "[windows-ime] apply keyboard list visibility pref on startup failed: {err}"
+                    );
+                }
             }
 
             // Capsule 启动时定位到屏幕底部居中并隐藏；coordinator 按需显示。
