@@ -42,6 +42,8 @@ const [
   hostDocumentMacos,
   linuxFcitx,
   localAsrPage,
+  localAsrCore,
+  credentialCore,
   mobileHotkey,
   mobileSelection,
 ] =
@@ -85,6 +87,8 @@ const [
     read('src-tauri/src/host_document/macos.rs'),
     read('linux-egui/src/fcitx5.rs'),
     read('src/pages/LocalAsr/index.tsx'),
+    read('crates/openless-core/src/local_asr_service.rs'),
+    read('crates/openless-core/src/credentials.rs'),
     read('src-tauri/src/mobile_stubs/hotkey.rs'),
     read('src-tauri/src/mobile_stubs/selection.rs'),
   ]);
@@ -539,10 +543,49 @@ assert.match(
   /export function App\([^]*?getStartupSnapshot\(\)[^]*?return <ReadyApp \{\.\.\.props\} \/>/,
   'every Tauri webview route must mount behind the shared readiness handshake',
 );
-assert.match(
+assert.doesNotMatch(
   localAsrPage,
-  /find\(c => c\.providerType === providerType\)[^]*?return current\.id/,
-  'local ASR activation must pass the concrete provider channel id, not its provider type',
+  /\b(?:createChannel|setChannelEnabled|reorderChannels|setActiveAsrProvider)\s*\(/,
+  'the model page must not mutate channels before Core activation commits',
+);
+for (const activation of [
+  /activateLocalAsr\("generic", modelId, provider\)/,
+  /activateLocalAsr\("foundry", alias, "foundry-local-whisper"\)/,
+  /activateLocalAsr\("sherpa_onnx", modelAlias, "sherpa-onnx-local"\)/,
+]) {
+  assert.match(localAsrPage, activation, 'every local runtime must use the single Core activation');
+}
+const localAsrActivation = localAsrCore.match(/    fn activate\([^]*?(?=\r?\n    fn )/)?.[0];
+assert.ok(localAsrActivation, 'Core must own local ASR activation');
+assert.match(
+  localAsrActivation,
+  /list_channels\(ChannelKind::Asr\)[^]*?channel\.id == request\.provider_id[^]*?channel\.provider_type == request\.provider_id/,
+  'Core must resolve a concrete channel ID or provider type without a prior UI write',
+);
+assert.match(
+  localAsrActivation,
+  /\.prepare\([^]*?\.preload\([^]*?preferences\.update\([^]*?\.mutate_channel\(ChannelMutation::ActivateLocalAsr/,
+  'channel activation must commit only after native preparation and preference persistence succeed',
+);
+assert.equal(
+  localAsrActivation.match(/\.mutate_channel\(/g)?.length,
+  1,
+  'activation must commit channel creation, enabling, ordering and selection as one metadata mutation',
+);
+assert.doesNotMatch(
+  localAsrActivation,
+  /\.set_active_provider\(/,
+  'activation must not layer a separate active-provider write around the metadata transaction',
+);
+assert.match(
+  localAsrActivation,
+  /Ok\(ChannelMutationResult::Activated\(id\)\)\s*=>\s*id[^]*?LocalAsrActivationResult\s*\{[^]*?provider_id,/,
+  'activation must return the channel ID allocated or selected by the final transaction',
+);
+assert.match(
+  credentialCore,
+  /ChannelMutation::ActivateLocalAsr \{ id, provider_type \} => \{[^]*?allocate_channel_id[^]*?channel\.enabled = true[^]*?channels\.insert\(0, channel\)[^]*?ChannelMutationResult::Activated\(id\)/,
+  'Core metadata must create or enable and promote the activated channel in the same mutation',
 );
 assert.doesNotMatch(
   localAsrPage,

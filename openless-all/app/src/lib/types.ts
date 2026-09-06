@@ -444,7 +444,7 @@ export interface UserPreferences {
   codingAgentWorkdir: string | null;
   /** Agent 可执行文件路径/命令，null 或空 = 按后端取默认（claude / opencode）。 */
   codingAgentExe: string | null;
-  /** Less Computer 按住说话快捷键。null = 停用；目前仅 macOS 显示/生效。 */
+  /** Windows/macOS Less Computer 按住说话快捷键。null = 停用。 */
   codingAgentVoiceHotkey: ShortcutBinding | null;
   /** 热键 1：语音 Agent 面板键。null = 停用。 */
   codingAgentPanelHotkey: ShortcutBinding | null;

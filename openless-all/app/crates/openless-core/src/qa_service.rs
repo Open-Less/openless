@@ -568,22 +568,30 @@ impl QaService {
         if publish_cancelled {
             self.publish_snapshot(QaStateKind::Cancelled);
         }
+        // Close the logical conversation and its panel before cleanup can
+        // yield. A new turn or show-only reopen during native cancellation
+        // owns the new state; the old dismiss must not clear or hide it later.
+        // Host actions run outside the state lock so hosts can inspect QA.
+        let host_result = if clear {
+            {
+                let mut state = self.state.lock().expect("QA state lock poisoned");
+                state.snapshot = QaSnapshot::default();
+            }
+            self.publish_snapshot(QaStateKind::Idle);
+            self.host_actions.request(HostAction::HideQa)
+        } else {
+            Ok(())
+        };
         let runtime_result = if let Some(session_id) = runtime_session_id {
             self.runtime.cancel(session_id).await
         } else {
             Ok(())
         };
         if clear {
+            // Only the captured conversation owner may lose its preview.
             self.clear_edit_preview_best_effort(conversation_id).await;
         }
-        if clear {
-            {
-                let mut state = self.state.lock().expect("QA state lock poisoned");
-                state.snapshot = QaSnapshot::default();
-            }
-            self.publish_snapshot(QaStateKind::Idle);
-            self.host_actions.request(HostAction::HideQa)?;
-        }
+        host_result?;
         runtime_result
     }
 

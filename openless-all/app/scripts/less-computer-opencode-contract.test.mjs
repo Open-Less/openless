@@ -6,6 +6,13 @@ import { fileURLToPath } from 'node:url';
 const appRoot = fileURLToPath(new URL('..', import.meta.url));
 const read = (relativePath) => readFile(join(appRoot, relativePath), 'utf8');
 
+const shortcuts = await read('src/pages/settings/ShortcutsSection.tsx');
+const agentSettings = await read('src/pages/settings/CodingAgentSection.tsx');
+const settingsTabs = await read('src/pages/settings/tabs.tsx');
+assert(!/if \(os === 'win'/.test(agentSettings), 'Windows must expose Less Computer configuration and its text entry point');
+assert(shortcuts.includes("(os === 'mac' || os === 'win') && ("), 'Windows must expose the Less Computer voice shortcut');
+assert(settingsTabs.includes("(os === 'mac' || os === 'win') && <CodingAgentSection />"), 'the settings tab must mount Less Computer on Windows');
+
 const [settings, ipc, opencode, dictation, lib, onboarding, lessComputerIpc, qaCommands, credentialCommands, miscCommands, coreAdapters, coordinatorHost, coreApi] = await Promise.all([
   read('src/pages/settings/CodingAgentSection.tsx'),
   read('src/lib/ipc/coding-agent.ts'),

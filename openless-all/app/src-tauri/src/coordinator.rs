@@ -440,7 +440,7 @@ struct StylePackHotkeyRegistration {
 struct Inner {
     host: crate::tauri_coordinator_host::TauriCoordinatorHost,
     backend: Arc<openless_core::OpenLessBackend>,
-    less_computer_voice: Mutex<Option<openless_core::LessComputerVoiceSession>>,
+    less_computer_voice: Mutex<Option<LessComputerHostCapture>>,
     /// 实际安装在宿主上的快捷键目标。设置事务只通过显式 target 更新这里，
     /// 监听器安装/恢复不得回读尚未提交或已回滚的 preferences。
     hotkey_runtime_target: Mutex<openless_core::HotkeyRuntimeTarget>,
@@ -937,8 +937,8 @@ impl Coordinator {
         take_coding_agent_hotkeys_on_main_thread(&self.inner);
     }
 
-    pub(crate) fn update_coding_agent_hotkey_binding(&self) {
-        update_coding_agent_hotkey_binding_now(&self.inner);
+    pub(crate) fn update_coding_agent_hotkey_binding(&self) -> Result<(), String> {
+        update_coding_agent_hotkey_binding_now(&self.inner)
     }
 
     pub fn stop_qa_hotkey_listener(&self) {
@@ -1483,7 +1483,10 @@ impl Coordinator {
         if previous.coding_agent_enabled != next.coding_agent_enabled
             || previous.coding_agent_voice != next.coding_agent_voice
         {
-            self.update_coding_agent_hotkey_binding();
+            // 旧键被注销后不会再有 Released；只取消其尚在采集的 Less 会话。
+            // Agent 已处理的任务已取走 capture，不在这个 slot 中。
+            cancel_less_computer_capture(&self.inner, None);
+            self.update_coding_agent_hotkey_binding()?;
         }
         Ok(())
     }
@@ -1549,6 +1552,13 @@ impl Coordinator {
         });
         #[cfg(mobile)]
         let sync_ok = None;
+        #[cfg(not(mobile))]
+        if let Some(monitor) = self.inner.coding_agent_modifier_hotkey.lock().as_ref() {
+            monitor.set_recording_active(active);
+            if active {
+                monitor.reset_held_state();
+            }
+        }
         if active {
             reset_shortcut_held_state(&self.inner);
         }

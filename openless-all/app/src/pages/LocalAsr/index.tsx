@@ -17,13 +17,7 @@ import {
 } from "react"
 import { useTranslation } from "react-i18next"
 import { restartApp } from "../../lib/ipc/permissions"
-import {
-    createChannel,
-    isTauri,
-    listChannels,
-    reorderChannels,
-    setChannelEnabled,
-} from "../../lib/ipc"
+import { isTauri } from "../../lib/ipc"
 import {
     FOUNDRY_LOCAL_ASR_MODELS,
     SHERPA_ONNX_ASR_MODELS,
@@ -108,32 +102,6 @@ import {
     DownloadDialog,
 } from "./components"
 import type { RemoteSize } from "./types"
-
-// 渠道化后「当前生效」由渠道列表第一个启用卡派生（见 docs/provider-channels-plan.md）。
-// Core 原子 activation 同步 preferences、credential active channel 与 runtime；
-// UI 只负责确保目标渠道存在并发起一个 use-case。
-async function ensureLocalAsrChannel(providerType: string): Promise<string> {
-    let channels = await listChannels("asr")
-    let current = channels.find(c => c.providerType === providerType)
-    if (!current) {
-        const id = await createChannel("asr", providerType, "")
-        channels = await listChannels("asr")
-        current = channels.find(c => c.id === id)
-    }
-    if (!current) {
-        throw new Error(`local ASR channel was not created: ${providerType}`)
-    }
-    if (!current.enabled) {
-        await setChannelEnabled("asr", current.id, true)
-    }
-    if (channels[0]?.id !== current.id) {
-        await reorderChannels(
-            "asr",
-            [current.id, ...channels.filter(c => c.id !== current.id).map(c => c.id)],
-        )
-    }
-    return current.id
-}
 
 // Foundry Local Whisper 后端只在 Windows 编译实体（foundry_local_sdk 仅 Windows），
 // 非 Windows 平台 runtime 是 stub 永远 unavailable。前端这一页对应的卡片、状态拉取、
@@ -1085,8 +1053,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
         setFoundryBusy("enable")
         try {
             setError(null)
-            const providerId = await ensureLocalAsrChannel("foundry-local-whisper")
-            await activateLocalAsr("foundry", alias, providerId)
+            await activateLocalAsr("foundry", alias, "foundry-local-whisper")
             foundrySelectionDirty.current = false
             await refreshFoundryStatus()
         } catch (e) {
@@ -1110,8 +1077,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
         })
         try {
             setError(null)
-            const providerId = await ensureLocalAsrChannel("foundry-local-whisper")
-            await activateLocalAsr("foundry", alias, providerId)
+            await activateLocalAsr("foundry", alias, "foundry-local-whisper")
             foundrySelectionDirty.current = false
             await refreshFoundryStatus()
             await refreshFoundryCatalog()
@@ -1199,8 +1165,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
     }
 
     const activateSherpaProvider = async (modelAlias: SherpaOnnxModelAlias) => {
-        const providerId = await ensureLocalAsrChannel("sherpa-onnx-local")
-        await activateLocalAsr("sherpa_onnx", modelAlias, providerId)
+        await activateLocalAsr("sherpa_onnx", modelAlias, "sherpa-onnx-local")
         sherpaSelectionDirty.current = false
     }
 
@@ -1562,8 +1527,7 @@ export function LocalAsr({ embedded = false }: LocalAsrProps = {}) {
                   : "local-qwen3-c",
     ) => {
         try {
-            const providerId = await ensureLocalAsrChannel(provider)
-            await activateLocalAsr("generic", modelId, providerId)
+            await activateLocalAsr("generic", modelId, provider)
             await refresh()
         } catch (e) {
             setError(e instanceof Error ? e.message : String(e))

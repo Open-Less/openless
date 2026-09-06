@@ -269,14 +269,15 @@ impl LessComputerService {
     }
 
     fn capture_cancelled_inner(&self, session_id: SessionId) -> bool {
-        self.state
+        !self
+            .state
             .active_lease
             .lock()
             .expect("Less Computer active-lease lock poisoned")
             .as_ref()
             .is_some_and(|lease| match lease {
                 ActiveLease::Capture(capture) => {
-                    capture.session_id == session_id && capture.cancel.load(Ordering::Acquire)
+                    capture.session_id == session_id && !capture.cancel.load(Ordering::Acquire)
                 }
                 ActiveLease::Run(_) => false,
             })
@@ -1314,6 +1315,11 @@ mod tests {
         assert!(!service.capture_cancelled(session_id));
         service.cancel(Some(session_id)).await.unwrap();
         assert_eq!(service.active_session(), None);
+        assert!(service.capture_cancelled(session_id));
+        let successor = SessionId::new();
+        service.begin_capture(successor).unwrap();
+        assert!(service.capture_cancelled(session_id));
+        assert!(!service.capture_cancelled(successor));
         let event = events.recv().await.unwrap();
         assert_eq!(event.session_id, Some(session_id));
         assert!(matches!(
@@ -1366,6 +1372,14 @@ mod tests {
 
         let duplicate = service.submit(request(SessionId::new())).await.unwrap_err();
         assert_eq!(duplicate.code, BackendErrorCode::Busy);
+        assert!(
+            service.capture_cancelled(first_id),
+            "an Agent run is no longer a capture"
+        );
+        assert!(!service
+            .current_cancel(Some(first_id))
+            .unwrap()
+            .load(Ordering::Acquire));
         service.cancel(Some(first_id)).await.unwrap();
         let result = first.await.unwrap().unwrap();
         assert_eq!(result.outcome, LessComputerRunOutcome::Cancelled);

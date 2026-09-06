@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use futures_util::future::BoxFuture;
 
-use crate::credentials::{ChannelKind, CredentialStore, ProviderSlot};
+use crate::credentials::{ChannelKind, ChannelMutation, ChannelMutationResult, CredentialStore};
 use crate::domains::{
     LocalAsrActivationRequest, LocalAsrActivationResult, LocalAsrApi, LocalAsrModel,
     LocalAsrModelCard, LocalAsrRemoteInfo, LocalAsrRuntimeStatus, LocalAsrSettings,
@@ -570,25 +570,29 @@ impl LocalAsrApi for LocalAsrService {
         Box::pin(async move {
             let _guard = activation_lock.lock().await;
             let previous_preferences = preferences.get();
-            let provider_type = match credentials.list_channels(ChannelKind::Asr).await {
-                Ok(channels) => match channels
-                    .into_iter()
-                    .find(|channel| channel.id == request.provider_id)
-                {
-                    Some(channel) if channel.enabled => channel.provider_type,
-                    Some(_) => {
-                        return Err(BackendError::new(
-                            BackendErrorCode::InvalidState,
-                            "the selected local ASR channel is disabled",
-                        ));
-                    }
-                    None => request.provider_id.clone(),
-                },
-                Err(error) if error.code == BackendErrorCode::Unsupported => {
-                    request.provider_id.clone()
-                }
-                Err(error) => return Err(error),
-            };
+            let channels = credentials.list_channels(ChannelKind::Asr).await?;
+            // A model page can name a provider before it has a channel. Existing
+            // channel IDs remain distinct from provider types, including renamed
+            // cards whose old ID now names another protocol.
+            let channel = channels
+                .iter()
+                .find(|channel| {
+                    channel.id == request.provider_id
+                        && Self::validate_activation_provider(
+                            &request.target,
+                            &channel.provider_type,
+                        )
+                        .is_ok()
+                })
+                .or_else(|| {
+                    channels
+                        .iter()
+                        .find(|channel| channel.provider_type == request.provider_id)
+                });
+            let channel_id = channel.map(|channel| channel.id.clone());
+            let provider_type = channel
+                .map(|channel| channel.provider_type.clone())
+                .unwrap_or_else(|| request.provider_id.clone());
             Self::validate_activation_provider(&request.target, &provider_type)?;
             let generation = generation_clock.fetch_add(1, Ordering::AcqRel) + 1;
             let previous_target = Self::target_for_active_preferences(&previous_preferences);
@@ -712,30 +716,42 @@ impl LocalAsrApi for LocalAsrService {
                     return Err(activation_error(error, rollback));
                 }
             };
-            if let Err(error) = credentials
-                .set_active_provider(ProviderSlot::Asr, request.provider_id.clone())
-                .await
-            {
-                let mut rollback = restore_activation_preferences(
-                    &preferences,
-                    &committed_previous,
-                    &request,
-                    &provider_type,
-                );
-                rollback.extend(
-                    restore_activation_runtime(
-                        &adapter,
-                        &model_store,
-                        generation,
-                        &request.target,
-                        previous_target.as_ref(),
-                        &previous_preferences,
-                        progress,
-                    )
-                    .await,
-                );
-                return Err(activation_error(error, rollback));
-            }
+            let channel_commit = credentials
+                .mutate_channel(ChannelMutation::ActivateLocalAsr {
+                    id: channel_id,
+                    provider_type: provider_type.clone(),
+                })
+                .await;
+            let provider_id = match channel_commit {
+                Ok(ChannelMutationResult::Activated(id)) => id,
+                result => {
+                    let error = result.err().unwrap_or_else(|| {
+                        BackendError::new(
+                            BackendErrorCode::Internal,
+                            "credential store returned an invalid local ASR activation result",
+                        )
+                    });
+                    let mut rollback = restore_activation_preferences(
+                        &preferences,
+                        &committed_previous,
+                        &request,
+                        &provider_type,
+                    );
+                    rollback.extend(
+                        restore_activation_runtime(
+                            &adapter,
+                            &model_store,
+                            generation,
+                            &request.target,
+                            previous_target.as_ref(),
+                            &previous_preferences,
+                            progress,
+                        )
+                        .await,
+                    );
+                    return Err(activation_error(error, rollback));
+                }
+            };
 
             *active_lease
                 .lock()
@@ -760,7 +776,7 @@ impl LocalAsrApi for LocalAsrService {
             .await;
             Ok(LocalAsrActivationResult {
                 target: request.target,
-                provider_id: request.provider_id,
+                provider_id,
                 generation,
                 prepared_model,
             })

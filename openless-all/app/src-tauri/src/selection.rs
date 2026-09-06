@@ -339,13 +339,18 @@ pub(crate) fn reactivate_selection_insertion_target(target: &SelectionInsertionT
     #[cfg(target_os = "windows")]
     {
         use windows::Win32::Foundation::HWND;
-        use windows::Win32::UI::WindowsAndMessaging::{BringWindowToTop, SetForegroundWindow};
+        use windows::Win32::UI::WindowsAndMessaging::{
+            BringWindowToTop, IsIconic, SetForegroundWindow, ShowWindow, SW_RESTORE,
+        };
 
         let Some(captured) = target.windows else {
             return false;
         };
         unsafe {
             let foreground = HWND(captured.foreground_window as *mut _);
+            if IsIconic(foreground).as_bool() {
+                let _ = ShowWindow(foreground, SW_RESTORE);
+            }
             let _ = BringWindowToTop(foreground);
             let _ = SetForegroundWindow(foreground);
         }

@@ -1090,8 +1090,8 @@ mod platform {
 
 #[cfg(target_os = "windows")]
 mod platform {
+    use std::cell::Cell;
     use std::sync::atomic::Ordering;
-    use std::sync::atomic::{AtomicPtr, Ordering as AtomicOrdering};
     use std::sync::mpsc::Sender;
     use std::sync::Arc;
 
@@ -1130,7 +1130,12 @@ mod platform {
     const VK_RWIN: u32 = 0x5C;
     const VK_LWIN: u32 = 0x5B;
     const VK_MEDIA_PLAY_PAUSE: u32 = 0xB3;
-    static HOOK_CONTEXT: AtomicPtr<CallbackContext> = AtomicPtr::new(std::ptr::null_mut());
+    thread_local! {
+        // WH_KEYBOARD_LL 回调由安装 hook 的线程执行。主听写与 Less Computer
+        // 各有监听线程，进程全局指针会被第二个 monitor 覆盖，并在它退出后悬垂。
+        // 每个线程只拥有自己的 context；先 unhook/清槽，再释放 Box。
+        static HOOK_CONTEXT: Cell<*mut CallbackContext> = const { Cell::new(std::ptr::null_mut()) };
+    }
 
     pub fn start_adapter(
         binding: HotkeyBinding,
@@ -1185,6 +1190,10 @@ mod platform {
             reset_shared_held_state(&self.shared);
         }
 
+        fn set_recording_active(&self, active: bool) {
+            self.shared.recording_active.store(active, Ordering::SeqCst);
+        }
+
         fn shutdown(&self) {
             unsafe {
                 if let Err(err) = PostThreadMessageW(self.thread_id, WM_QUIT, WPARAM(0), LPARAM(0))
@@ -1205,9 +1214,6 @@ mod platform {
         hook: std::sync::Mutex<Option<HHOOK>>,
     }
 
-    unsafe impl Send for CallbackContext {}
-    unsafe impl Sync for CallbackContext {}
-
     fn run_listen_loop(
         shared: Arc<Shared>,
         tx: Sender<HotkeyEvent>,
@@ -1223,7 +1229,7 @@ mod platform {
             combo_tx,
             hook: std::sync::Mutex::new(None),
         }));
-        HOOK_CONTEXT.store(context, AtomicOrdering::SeqCst);
+        HOOK_CONTEXT.set(context);
 
         unsafe {
             let hook = SetWindowsHookExW(WH_KEYBOARD_LL, Some(low_level_keyboard_proc), None, 0);
@@ -1231,10 +1237,16 @@ mod platform {
                 Ok(hook) => {
                     *(*context).hook.lock().unwrap() = Some(hook);
                     log::info!("[hotkey] Windows low-level keyboard hook 已启动");
-                    let _ = status_tx.send(Ok(thread_id));
+                    if status_tx.send(Ok(thread_id)).is_err() {
+                        // 启动调用方超时退出后已无人持有 monitor，不能留下孤立 hook。
+                        let _ = UnhookWindowsHookEx(hook);
+                        HOOK_CONTEXT.set(std::ptr::null_mut());
+                        let _ = Box::from_raw(context);
+                        return;
+                    }
                 }
                 Err(err) => {
-                    HOOK_CONTEXT.store(std::ptr::null_mut(), AtomicOrdering::SeqCst);
+                    HOOK_CONTEXT.set(std::ptr::null_mut());
                     let _ = Box::from_raw(context);
                     let _ = status_tx.send(Err(install_error(
                         "hook_install_failed",
@@ -1266,7 +1278,7 @@ mod platform {
             // hook 消息循环异常结束）。先清理内部锁存，避免下一次监听器复用
             // 共享状态时把旧的按下状态带过去。
             super::reset_shared_held_state(&(*context).shared);
-            HOOK_CONTEXT.store(std::ptr::null_mut(), AtomicOrdering::SeqCst);
+            HOOK_CONTEXT.set(std::ptr::null_mut());
             let _ = Box::from_raw(context);
         }
     }
@@ -1292,7 +1304,7 @@ mod platform {
     }
 
     unsafe fn callback_context<'a>() -> Option<&'a CallbackContext> {
-        let ptr = HOOK_CONTEXT.load(AtomicOrdering::SeqCst);
+        let ptr = HOOK_CONTEXT.get();
         if ptr.is_null() {
             None
         } else {
@@ -1301,6 +1313,10 @@ mod platform {
     }
 
     fn dispatch_keyboard_event(ctx: &CallbackContext, vk_code: u32, message: usize) -> bool {
+        // 快捷键录制由前端接收真实键盘事件，主听写/Agent hook 都不得吞键。
+        if ctx.shared.recording_active.load(Ordering::SeqCst) {
+            return false;
+        }
         let pressed = matches!(message, WM_KEYDOWN | WM_SYSKEYDOWN);
         if vk_code == VK_ESCAPE && (message == WM_KEYDOWN || message == WM_SYSKEYDOWN) {
             note_companion_key_down(ctx);
@@ -1335,7 +1351,8 @@ mod platform {
                 }
                 _ => {}
             }
-            return false;
+            // Shift 仍需经过下方配置触发键的匹配，否则左右 Shift 的 Hold
+            // 语音键只有翻译通知、没有 Pressed/Released，会成为可保存的死键。
         }
 
         handle_optional_modifier_trigger(
@@ -1584,6 +1601,136 @@ mod platform {
                     _ => None,
                 })
                 .collect()
+        }
+
+        #[test]
+        fn windows_hook_context_belongs_to_its_listener_thread() {
+            let (ctx, _) = callback_context(shared(HotkeyTrigger::RightControl));
+            let mut ctx = Box::new(ctx);
+            HOOK_CONTEXT.set(&mut *ctx);
+            let other_thread_has_no_context =
+                std::thread::spawn(|| unsafe { super::callback_context().is_none() })
+                    .join()
+                    .unwrap();
+            HOOK_CONTEXT.set(std::ptr::null_mut());
+            assert!(
+                other_thread_has_no_context,
+                "another listener must never see this hook's context"
+            );
+        }
+
+        #[test]
+        fn windows_shift_trigger_keeps_both_recording_edges() {
+            for (trigger, key) in [
+                (HotkeyTrigger::LeftShift, VK_LSHIFT),
+                (HotkeyTrigger::RightShift, VK_RSHIFT),
+            ] {
+                let (ctx, rx) = callback_context(shared(trigger));
+                assert!(dispatch_keyboard_event(&ctx, key, WM_KEYDOWN));
+                assert!(dispatch_keyboard_event(&ctx, key, WM_KEYUP));
+                let events: Vec<_> = rx
+                    .try_iter()
+                    .filter(|event| !matches!(event, HotkeyEvent::TranslationModifierPressed))
+                    .collect();
+                assert!(matches!(
+                    events.as_slice(),
+                    [HotkeyEvent::Pressed { .. }, HotkeyEvent::Released { .. }]
+                ));
+            }
+        }
+
+        #[test]
+        fn windows_shortcut_recording_passes_bound_keys_to_the_frontend() {
+            let state = shared(HotkeyTrigger::LeftControl);
+            state.recording_active.store(true, Ordering::SeqCst);
+            let (ctx, rx) = callback_context(Arc::clone(&state));
+            assert!(!dispatch_keyboard_event(&ctx, VK_LCONTROL, WM_KEYDOWN));
+            assert!(!dispatch_keyboard_event(&ctx, VK_LCONTROL, WM_KEYUP));
+            assert!(rx.try_recv().is_err());
+            state.recording_active.store(false, Ordering::SeqCst);
+            assert!(dispatch_keyboard_event(&ctx, VK_LCONTROL, WM_KEYDOWN));
+            assert!(dispatch_keyboard_event(&ctx, VK_LCONTROL, WM_KEYUP));
+            assert_eq!(rx.try_iter().count(), 2);
+        }
+
+        #[test]
+        #[ignore = "interactive Windows smoke: injects captured Ctrl keys into real hooks"]
+        fn windows_multiple_native_monitors_survive_independent_shutdown() {
+            use crate::hotkey::HotkeyMonitor;
+            use windows::Win32::UI::Input::KeyboardAndMouse::{
+                SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VIRTUAL_KEY,
+            };
+
+            let start = |trigger| {
+                let (tx, rx) = mpsc::channel();
+                let (cancel_tx, _) = mpsc::channel();
+                let (combo_tx, _) = mpsc::channel();
+                let monitor = HotkeyMonitor::start(
+                    HotkeyBinding {
+                        trigger,
+                        mode: crate::types::HotkeyMode::Hold,
+                        keys: None,
+                    },
+                    tx,
+                    cancel_tx,
+                    combo_tx,
+                )
+                .unwrap();
+                (monitor, rx)
+            };
+            let press_and_release = |key: u32, rx: &mpsc::Receiver<HotkeyEvent>| {
+                let input = |flags| INPUT {
+                    r#type: INPUT_KEYBOARD,
+                    Anonymous: INPUT_0 {
+                        ki: KEYBDINPUT {
+                            wVk: VIRTUAL_KEY(key as u16),
+                            dwFlags: flags,
+                            ..Default::default()
+                        },
+                    },
+                };
+                // 两个 Ctrl 都由各自 hook 吞掉，不向目标应用输入文字。
+                assert_eq!(
+                    unsafe {
+                        SendInput(
+                            &[input(Default::default()), input(KEYEVENTF_KEYUP)],
+                            std::mem::size_of::<INPUT>() as i32,
+                        )
+                    },
+                    2
+                );
+                let pressed = rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
+                let released = rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
+                assert!(matches!((pressed, released), (
+                    HotkeyEvent::Pressed { press_id: left, .. },
+                    HotkeyEvent::Released { press_id: right, .. }
+                ) if left != 0 && left == right));
+            };
+            let (dictation, dictation_rx) = start(HotkeyTrigger::RightControl);
+            let (agent, agent_rx) = start(HotkeyTrigger::LeftControl);
+            press_and_release(VK_RCONTROL, &dictation_rx);
+            assert!(agent_rx.try_recv().is_err());
+            press_and_release(VK_LCONTROL, &agent_rx);
+            assert!(dictation_rx.try_recv().is_err());
+            drop(agent);
+            assert_eq!(
+                agent_rx.recv_timeout(std::time::Duration::from_secs(2)),
+                Err(mpsc::RecvTimeoutError::Disconnected)
+            );
+            press_and_release(VK_RCONTROL, &dictation_rx);
+            let (replacement, replacement_rx) = start(HotkeyTrigger::LeftControl);
+            press_and_release(VK_LCONTROL, &replacement_rx);
+            drop(dictation);
+            assert_eq!(
+                dictation_rx.recv_timeout(std::time::Duration::from_secs(2)),
+                Err(mpsc::RecvTimeoutError::Disconnected)
+            );
+            press_and_release(VK_LCONTROL, &replacement_rx);
+            drop(replacement);
+            assert_eq!(
+                replacement_rx.recv_timeout(std::time::Duration::from_secs(2)),
+                Err(mpsc::RecvTimeoutError::Disconnected)
+            );
         }
 
         #[test]

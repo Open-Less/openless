@@ -33,6 +33,8 @@ struct FixtureQaRuntime {
     answer_started: Arc<tokio::sync::Notify>,
     answer_gate: Arc<tokio::sync::Semaphore>,
     cancel_count: AtomicUsize,
+    block_cancel: AtomicBool,
+    cancel_gate: Arc<tokio::sync::Semaphore>,
     complete_count: AtomicUsize,
 }
 
@@ -60,6 +62,8 @@ impl Default for FixtureQaRuntime {
             answer_started: Arc::new(tokio::sync::Notify::new()),
             answer_gate: Arc::new(tokio::sync::Semaphore::new(0)),
             cancel_count: AtomicUsize::new(0),
+            block_cancel: AtomicBool::new(false),
+            cancel_gate: Arc::new(tokio::sync::Semaphore::new(0)),
             complete_count: AtomicUsize::new(0),
         }
     }
@@ -235,11 +239,116 @@ impl QaRuntimeAdapter for FixtureQaRuntime {
     fn cancel(&self, session_id: SessionId) -> BoxFuture<'static, Result<(), BackendError>> {
         self.cancel_count.fetch_add(1, Ordering::AcqRel);
         self.live_contexts.lock().unwrap().remove(&session_id);
-        Box::pin(async { Ok(()) })
+        let block = self.block_cancel.load(Ordering::Acquire);
+        let gate = Arc::clone(&self.cancel_gate);
+        Box::pin(async move {
+            if block {
+                gate.acquire().await.unwrap().forget();
+            }
+            Ok(())
+        })
     }
 }
 
 struct FailingShowQaHost;
+
+#[tokio::test]
+async fn dismiss_cleanup_cannot_clear_a_reopened_qa_conversation() {
+    let runtime = Arc::new(FixtureQaRuntime::responding("new answer"));
+    runtime.block_cancel.store(true, Ordering::Release);
+    let host = Arc::new(openless_core::testing::RecordingHostActions::default());
+    let (backend, data_dir) = backend_with_host(Arc::clone(&runtime), host.clone());
+    let qa = &backend.services().qa;
+    qa.toggle_recording().await.unwrap();
+
+    // Native capture cleanup can wait for ASR/recorder shutdown. Reopening the
+    // panel during that wait must create a new owner, not be erased by the old
+    // dismiss future when its platform cancellation eventually completes.
+    let mut dismiss = std::pin::pin!(qa.dismiss());
+    assert!(futures_util::poll!(dismiss.as_mut()).is_pending());
+    qa.submit_text("new question".into()).await.unwrap();
+    let reopened = qa.snapshot().await.unwrap();
+    assert_eq!(reopened.phase, QaPhase::Completed);
+    assert_eq!(reopened.messages.last().unwrap().content, "new answer");
+    let reopened_actions = host.actions();
+    assert_eq!(reopened_actions.last(), Some(&HostAction::ShowQa));
+
+    runtime.cancel_gate.add_permits(1);
+    dismiss.await.unwrap();
+    let after_cleanup = qa.snapshot().await.unwrap();
+    assert_eq!(after_cleanup.session_id, reopened.session_id);
+    assert_eq!(after_cleanup.messages, reopened.messages);
+    assert_eq!(after_cleanup.phase, QaPhase::Completed);
+    assert_eq!(host.actions(), reopened_actions);
+    let _ = std::fs::remove_dir_all(data_dir);
+}
+
+#[tokio::test]
+async fn dismiss_cleanup_cannot_hide_a_panel_reopened_without_a_turn() {
+    let runtime = Arc::new(FixtureQaRuntime::responding("unused"));
+    runtime.block_cancel.store(true, Ordering::Release);
+    let host = Arc::new(openless_core::testing::RecordingHostActions::default());
+    let (backend, data_dir) = backend_with_host(Arc::clone(&runtime), host.clone());
+    let qa = &backend.services().qa;
+    qa.toggle_recording().await.unwrap();
+    let mut dismiss = std::pin::pin!(qa.dismiss());
+    assert!(futures_util::poll!(dismiss.as_mut()).is_pending());
+
+    qa.show().await.unwrap();
+    let reopened_actions = host.actions();
+    assert_eq!(reopened_actions.last(), Some(&HostAction::ShowQa));
+    runtime.cancel_gate.add_permits(1);
+    dismiss.await.unwrap();
+
+    assert_eq!(host.actions(), reopened_actions);
+    assert_eq!(qa.snapshot().await.unwrap(), QaSnapshot::default());
+    let _ = std::fs::remove_dir_all(data_dir);
+}
+
+#[tokio::test]
+async fn dismiss_cleanup_only_clears_the_captured_preview_owner() {
+    let runtime = Arc::new(FixtureQaRuntime::responding("new answer"));
+    runtime.block_cancel.store(true, Ordering::Release);
+    let (backend, data_dir) = backend_with_selection_voice(Arc::clone(&runtime));
+    let qa = &backend.services().qa;
+    let selection_voice = &backend.services().selection_voice;
+    qa.toggle_recording().await.unwrap();
+    let old_owner = qa.snapshot().await.unwrap().conversation_id;
+    let mut dismiss = std::pin::pin!(qa.dismiss());
+    assert!(futures_util::poll!(dismiss.as_mut()).is_pending());
+
+    qa.submit_text("new question".into()).await.unwrap();
+    let new_owner = qa.snapshot().await.unwrap().conversation_id;
+    assert_ne!(new_owner, old_owner);
+    let preview_session_id = selection_voice
+        .begin(SelectionCapture {
+            text: "new selection".into(),
+            source_app: None,
+        })
+        .await
+        .unwrap();
+    selection_voice
+        .mark_processing(preview_session_id)
+        .await
+        .unwrap();
+    selection_voice
+        .set_preview(SelectionVoicePreviewUpdate {
+            session_id: preview_session_id,
+            owner_session_id: new_owner,
+            text: "new preview".into(),
+            summary: None,
+        })
+        .await
+        .unwrap();
+
+    runtime.cancel_gate.add_permits(1);
+    dismiss.await.unwrap();
+    let preview = selection_voice.preview(new_owner).await.unwrap().unwrap();
+    assert_eq!(preview.session_id, preview_session_id);
+    assert_eq!(preview.text, "new preview");
+    assert_eq!(qa.snapshot().await.unwrap().conversation_id, new_owner);
+    let _ = std::fs::remove_dir_all(data_dir);
+}
 
 impl HostActions for FailingShowQaHost {
     fn request(&self, action: HostAction) -> Result<(), BackendError> {
@@ -255,11 +364,22 @@ impl HostActions for FailingShowQaHost {
 }
 
 fn backend(runtime: Arc<FixtureQaRuntime>) -> (Arc<OpenLessBackend>, std::path::PathBuf) {
+    backend_with_host(
+        runtime,
+        Arc::new(openless_core::testing::RecordingHostActions::default()),
+    )
+}
+
+fn backend_with_host(
+    runtime: Arc<FixtureQaRuntime>,
+    host: Arc<dyn HostActions>,
+) -> (Arc<OpenLessBackend>, std::path::PathBuf) {
     let data_dir = std::env::temp_dir().join(format!(
         "openless-qa-contract-{}",
         uuid::Uuid::new_v4().simple()
     ));
     let mut dependencies = BackendDependencies::unsupported();
+    dependencies.host_actions = host;
     dependencies.services.qa = Arc::new(QaService::new(
         runtime,
         Arc::clone(&dependencies.host_actions),

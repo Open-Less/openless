@@ -2674,7 +2674,14 @@ impl TauriTextInsertionSession {
     }
 
     async fn insert_final(&self, text: String) -> Result<InsertOutcome, BackendError> {
-        self.restore_insertion_target()?;
+        if let Err(error) = self.restore_insertion_target() {
+            // 原目标不可用时只复制，不能向当前焦点粘贴或发送按键。
+            #[cfg(target_os = "windows")]
+            if self.context.insertion.allow_non_tsf_fallback {
+                return self.copy_fallback(text).await;
+            }
+            return Err(error);
+        }
         #[cfg(target_os = "windows")]
         {
             let status = match self.context.insertion.windows_insertion_mode {

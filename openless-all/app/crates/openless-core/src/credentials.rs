@@ -129,6 +129,11 @@ pub struct ChannelTestSummary {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChannelMutation {
+    /// Commit a prepared local runtime and its channel in one metadata revision.
+    ActivateLocalAsr {
+        id: Option<String>,
+        provider_type: String,
+    },
     Create {
         kind: ChannelKind,
         provider_type: String,
@@ -174,6 +179,7 @@ pub enum ChannelMutation {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChannelMutationResult {
     Applied,
+    Activated(String),
     Created(String),
     DeletedIfBlank(bool),
 }
@@ -510,6 +516,7 @@ impl CredentialMetadata {
         has_credentials: impl Fn(&str) -> bool,
     ) -> Result<ChannelMutationResult, BackendError> {
         let mutation_kind = match &mutation {
+            ChannelMutation::ActivateLocalAsr { .. } => ChannelKind::Asr,
             ChannelMutation::Create { kind, .. }
             | ChannelMutation::SetProviderType { kind, .. }
             | ChannelMutation::DeleteIfBlank { kind, .. }
@@ -521,12 +528,60 @@ impl CredentialMetadata {
         };
         let slot = slot_for_kind(mutation_kind);
         let active = self.active_provider(slot);
-        let active_was_managed = active.is_empty()
+        let active_was_managed = matches!(&mutation, ChannelMutation::ActivateLocalAsr { .. })
+            || active.is_empty()
             || self
                 .channels
                 .get(&mutation_kind)
                 .is_some_and(|channels| channels.iter().any(|channel| channel.id == active));
         let (kind, result) = match mutation {
+            ChannelMutation::ActivateLocalAsr { id, provider_type } => {
+                if provider_type.trim().is_empty() {
+                    return Err(BackendError::new(
+                        BackendErrorCode::InvalidArgument,
+                        "local ASR provider type must not be blank",
+                    ));
+                }
+                let channels = self.channels.entry(ChannelKind::Asr).or_default();
+                normalize_channel_order(channels);
+                let index = match id {
+                    Some(id) => Some(
+                        channels
+                            .iter()
+                            .position(|channel| channel.id == id)
+                            .ok_or_else(|| unknown_channel(ChannelKind::Asr, &id))?,
+                    ),
+                    None => channels
+                        .iter()
+                        .position(|channel| channel.provider_type == provider_type),
+                };
+                let mut channel = match index {
+                    Some(index) => {
+                        if channels[index].provider_type != provider_type {
+                            return Err(BackendError::new(
+                                BackendErrorCode::InvalidState,
+                                "local ASR channel changed during activation",
+                            ));
+                        }
+                        channels.remove(index)
+                    }
+                    None => ChannelSummary {
+                        id: allocate_channel_id(channels, &provider_type),
+                        provider_type,
+                        name: String::new(),
+                        enabled: true,
+                        order: 0,
+                        last_test: None,
+                    },
+                };
+                channel.enabled = true;
+                let id = channel.id.clone();
+                channels.insert(0, channel);
+                for (order, channel) in channels.iter_mut().enumerate() {
+                    channel.order = order as u32;
+                }
+                (ChannelKind::Asr, ChannelMutationResult::Activated(id))
+            }
             ChannelMutation::Create {
                 kind,
                 provider_type,

@@ -2,11 +2,11 @@ use futures_util::future::BoxFuture;
 use openless_core::{
     normalize_foundry_language_hint, normalize_sherpa_language_hint, BackendConfig,
     BackendDependencies, BackendError, BackendErrorCode, BackendEventKind, ChannelKind,
-    CredentialKey, CredentialStore, CredentialsStatus, FoundryRuntimeSource,
-    InMemoryCredentialStore, LocalAsrActivationRequest, LocalAsrMirror, LocalAsrRuntime,
-    LocalAsrRuntimeLease, LocalAsrRuntimeStatus, LocalAsrSettings, LocalAsrTarget,
-    ModelRuntimeAdapter, ModelStore, ModelStoreConfig, NativeModelState, OpenLessBackend,
-    PreferencesStore, ProviderSlot, SecretValue,
+    ChannelMutation, ChannelMutationResult, ChannelSummary, CredentialKey, CredentialStore,
+    CredentialsStatus, FoundryRuntimeSource, InMemoryCredentialStore, LocalAsrActivationRequest,
+    LocalAsrMirror, LocalAsrRuntime, LocalAsrRuntimeLease, LocalAsrRuntimeStatus, LocalAsrSettings,
+    LocalAsrTarget, ModelRuntimeAdapter, ModelStore, ModelStoreConfig, NativeModelState,
+    OpenLessBackend, PreferencesStore, ProviderSlot, SecretValue,
 };
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -326,6 +326,31 @@ impl CredentialStore for FailingActiveCredentialStore {
         self.inner.remove(key)
     }
 
+    fn list_channels(
+        &self,
+        kind: ChannelKind,
+    ) -> BoxFuture<'static, Result<Vec<ChannelSummary>, BackendError>> {
+        self.inner.list_channels(kind)
+    }
+
+    fn mutate_channel(
+        &self,
+        mutation: ChannelMutation,
+    ) -> BoxFuture<'static, Result<ChannelMutationResult, BackendError>> {
+        if self
+            .fail_set
+            .swap(false, std::sync::atomic::Ordering::SeqCst)
+        {
+            return Box::pin(async {
+                Err(BackendError::new(
+                    BackendErrorCode::Platform,
+                    "fixture active provider save failed",
+                ))
+            });
+        }
+        self.inner.mutate_channel(mutation)
+    }
+
     fn active_provider(
         &self,
         slot: ProviderSlot,
@@ -385,6 +410,108 @@ fn local_asr_backend_with_credentials(
     )
     .unwrap();
     (data_dir, runtime, backend)
+}
+
+#[tokio::test]
+async fn local_asr_activation_owns_channel_creation_and_enabling() {
+    for (runtime_kind, model_id, provider_id) in [
+        (LocalAsrRuntime::Generic, "qwen3-asr-0.6b", "local-qwen3-c"),
+        (
+            LocalAsrRuntime::Foundry,
+            "whisper-medium",
+            "foundry-local-whisper",
+        ),
+        (
+            LocalAsrRuntime::SherpaOnnx,
+            "sense-voice-small-zh",
+            "sherpa-onnx-local",
+        ),
+    ] {
+        for (cloud_exists, existing) in [(false, false), (true, false), (true, true)] {
+            let (data_dir, runtime, backend) = local_asr_backend();
+            let cloud = if cloud_exists {
+                backend
+                    .create_channel(ChannelKind::Asr, "openai-compatible".into(), "Cloud".into())
+                    .await
+                    .unwrap()
+            } else {
+                String::new()
+            };
+            if existing {
+                let id = backend
+                    .create_channel(ChannelKind::Asr, provider_id.into(), "Local".into())
+                    .await
+                    .unwrap();
+                backend
+                    .set_channel_enabled(ChannelKind::Asr, id, false)
+                    .await
+                    .unwrap();
+            }
+            let previous = backend.list_channels(ChannelKind::Asr).await.unwrap();
+            let request = LocalAsrActivationRequest {
+                target: LocalAsrTarget::parse(runtime_kind, model_id).unwrap(),
+                provider_id: provider_id.into(),
+            };
+
+            if runtime_kind != LocalAsrRuntime::Foundry {
+                assert!(backend.activate_local_asr(request.clone()).await.is_err());
+                assert_eq!(
+                    backend.list_channels(ChannelKind::Asr).await.unwrap(),
+                    previous
+                );
+                assert_eq!(
+                    backend.active_provider(ProviderSlot::Asr).await.unwrap(),
+                    cloud
+                );
+                let store =
+                    ModelStore::new(ModelStoreConfig::new(data_dir.join("models")).unwrap())
+                        .unwrap();
+                let model_dir = store.model_dir(&request.target).unwrap();
+                std::fs::create_dir_all(&model_dir).unwrap();
+                std::fs::write(
+                    model_dir.join(openless_core::MODEL_READY_SENTINEL),
+                    b"ready",
+                )
+                .unwrap();
+                if runtime_kind == LocalAsrRuntime::SherpaOnnx {
+                    std::fs::write(model_dir.join("model.int8.onnx"), b"model").unwrap();
+                    std::fs::write(model_dir.join("tokens.txt"), b"tokens").unwrap();
+                }
+            }
+
+            runtime
+                .fail_prepare
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            assert!(backend.activate_local_asr(request.clone()).await.is_err());
+            assert_eq!(
+                backend.list_channels(ChannelKind::Asr).await.unwrap(),
+                previous
+            );
+            assert_eq!(
+                backend.active_provider(ProviderSlot::Asr).await.unwrap(),
+                cloud
+            );
+
+            runtime
+                .fail_prepare
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+            let result = backend.activate_local_asr(request).await.unwrap();
+            let channels = backend.list_channels(ChannelKind::Asr).await.unwrap();
+            assert_eq!(channels.len(), if cloud_exists { 2 } else { 1 });
+            assert_eq!(channels[0].id, result.provider_id);
+            assert_eq!(channels[0].provider_type, provider_id);
+            assert!(channels[0].enabled);
+            assert_eq!(channels[0].name, if existing { "Local" } else { "" });
+            if cloud_exists {
+                assert_eq!(channels[1].id, cloud);
+            }
+            assert_eq!(
+                backend.active_provider(ProviderSlot::Asr).await.unwrap(),
+                result.provider_id
+            );
+            let _ = std::fs::remove_dir_all(data_dir);
+        }
+    }
 }
 
 #[tokio::test]
@@ -555,6 +682,82 @@ async fn local_asr_activation_keeps_channel_id_and_provider_type_distinct() {
     assert_eq!(
         backend.get_preferences().active_asr_provider,
         "foundry-local-whisper"
+    );
+
+    // The model page names the provider type. A reused canonical ID must not
+    // route it into another protocol or make it create a duplicate local card.
+    backend
+        .set_channel_provider_type(ChannelKind::Asr, first, "openai-compatible".into())
+        .await
+        .unwrap();
+    let request = LocalAsrActivationRequest {
+        target: LocalAsrTarget::parse(LocalAsrRuntime::Foundry, "whisper-medium").unwrap(),
+        provider_id: "foundry-local-whisper".into(),
+    };
+    let result = backend.activate_local_asr(request.clone()).await.unwrap();
+    assert_eq!(result.provider_id, second);
+    backend
+        .delete_channel(ChannelKind::Asr, second)
+        .await
+        .unwrap();
+    let result = backend.activate_local_asr(request).await.unwrap();
+    let channels = backend.list_channels(ChannelKind::Asr).await.unwrap();
+    assert_eq!(channels.len(), 2);
+    assert_eq!(channels[0].id, result.provider_id);
+    assert_eq!(channels[0].provider_type, "foundry-local-whisper");
+    assert_eq!(channels[1].provider_type, "openai-compatible");
+    let _ = std::fs::remove_dir_all(data_dir);
+}
+
+#[tokio::test]
+async fn local_asr_activation_preserves_a_channel_edited_during_preparation() {
+    use futures_util::FutureExt;
+    let credentials = Arc::new(InMemoryCredentialStore::default());
+    let (data_dir, runtime, backend) =
+        local_asr_backend_with_credentials(credentials.clone(), Some("openai-compatible"));
+    let cloud = backend
+        .create_channel(ChannelKind::Asr, "openai-compatible".into(), "Cloud".into())
+        .await
+        .unwrap();
+    let local = backend
+        .create_channel(
+            ChannelKind::Asr,
+            "foundry-local-whisper".into(),
+            "Local".into(),
+        )
+        .await
+        .unwrap();
+    let edited = local.clone();
+    *runtime.during_prepare.lock().unwrap() = Some(Box::new(move || {
+        credentials
+            .mutate_channel(ChannelMutation::SetProviderType {
+                kind: ChannelKind::Asr,
+                id: edited,
+                provider_type: "openai-compatible".into(),
+            })
+            .now_or_never()
+            .unwrap()
+            .unwrap();
+    }));
+    let error = backend
+        .activate_local_asr(LocalAsrActivationRequest {
+            target: LocalAsrTarget::parse(LocalAsrRuntime::Foundry, "whisper-medium").unwrap(),
+            provider_id: local.clone(),
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, BackendErrorCode::InvalidState);
+    assert_eq!(
+        backend.active_provider(ProviderSlot::Asr).await.unwrap(),
+        cloud
+    );
+    let channels = backend.list_channels(ChannelKind::Asr).await.unwrap();
+    assert_eq!(channels.len(), 2);
+    assert_eq!(channels[1].id, local);
+    assert_eq!(channels[1].provider_type, "openai-compatible");
+    assert_eq!(
+        backend.get_preferences().active_asr_provider,
+        "openai-compatible"
     );
     let _ = std::fs::remove_dir_all(data_dir);
 }
