@@ -2005,16 +2005,30 @@ fn monitor_for_anchor_point<R: tauri::Runtime>(
     y: f64,
 ) -> Option<CapsuleTargetMonitor> {
     let monitors = window.available_monitors().ok()?;
-    let mut nearest: Option<(f64, CapsuleTargetMonitor)> = None;
-
-    for monitor in monitors {
-        let target = CapsuleTargetMonitor {
+    pick_monitor_for_anchor_point(
+        monitors.into_iter().map(|monitor| CapsuleTargetMonitor {
             physical_x: monitor.position().x,
             physical_y: monitor.position().y,
             physical_width: monitor.size().width,
             physical_height: monitor.size().height,
             scale: monitor.scale_factor(),
-        };
+        }),
+        x,
+        y,
+    )
+}
+
+/// 选屏本身的纯逻辑（不碰 Tauri / AppKit，便于单测多屏排列）：先返回包含该点的屏，
+/// 都不包含时退到距离最近的屏。
+#[cfg(target_os = "macos")]
+fn pick_monitor_for_anchor_point(
+    monitors: impl IntoIterator<Item = CapsuleTargetMonitor>,
+    x: f64,
+    y: f64,
+) -> Option<CapsuleTargetMonitor> {
+    let mut nearest: Option<(f64, CapsuleTargetMonitor)> = None;
+
+    for target in monitors {
         let frame = target.logical_frame();
         if frame_contains_point(frame, x, y) {
             return Some(target);
@@ -2027,6 +2041,39 @@ fn monitor_for_anchor_point<R: tauri::Runtime>(
     }
 
     nearest.map(|(_, target)| target)
+}
+
+/// 浮窗（QA / Less Computer 面板 / glow 描边）该摆到哪块显示器。
+///
+/// macOS 走和胶囊同一条信号 —— 鼠标光标所在的屏（见 [`capsule_target_monitor`]），
+/// 于是浮窗永远和胶囊出现在同一块屏上。其它平台没有这条通路，仍用窗口自己的
+/// `current_monitor`。
+///
+/// 关键：**不能**只问浮窗自己的 `current_monitor`。这几个浮窗都是懒创建 + 常驻隐藏，
+/// 隐藏时它停在上一次出现的屏，而它这辈子第一次出现就在系统默认（主）屏 —— 于是
+/// 每次 show 都算出主屏、又铺回主屏，多显示器下被永久钉死，跟胶囊分家。胶囊自己
+/// 踩过并修好了这个坑（见 `capsule_target_monitor` 的注释），三个浮窗漏了，这里补齐。
+fn floating_window_monitor_frame<R: tauri::Runtime>(
+    window: &tauri::WebviewWindow<R>,
+) -> tauri::Result<Option<LogicalMonitorFrame>> {
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(monitor) = capsule_target_monitor(window) {
+            return Ok(Some(monitor.logical_frame()));
+        }
+    }
+    let Some(monitor) = window.current_monitor()? else {
+        return Ok(None);
+    };
+    let size = monitor.size();
+    let pos = monitor.position();
+    Ok(Some(logical_monitor_frame(
+        pos.x,
+        pos.y,
+        size.width,
+        size.height,
+        monitor.scale_factor(),
+    )))
 }
 
 #[cfg(target_os = "macos")]
@@ -2309,14 +2356,9 @@ fn clamp_to_monitor(
 /// 把 QA 浮窗放到屏幕底部居中、紧贴胶囊上方。tauri 启动期 + show 之前都会调一次，
 /// 防止用户切换显示器后位置错乱。
 fn position_qa_window<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) -> tauri::Result<()> {
-    let monitor = match window.current_monitor()? {
-        Some(m) => m,
-        None => return Ok(()),
+    let Some(frame) = floating_window_monitor_frame(window)? else {
+        return Ok(());
     };
-    let scale = monitor.scale_factor();
-    let size = monitor.size();
-    let pos = monitor.position();
-    let frame = logical_monitor_frame(pos.x, pos.y, size.width, size.height, scale);
     let capsule_height = capsule_height_for_qa();
     let (x, y) = bottom_center_position(
         frame,
@@ -2830,14 +2872,9 @@ const LESS_COMPUTER_WINDOW_HEIGHT: f64 = 540.0;
 fn position_less_computer_window<R: tauri::Runtime>(
     window: &tauri::WebviewWindow<R>,
 ) -> tauri::Result<()> {
-    let monitor = match window.current_monitor()? {
-        Some(m) => m,
-        None => return Ok(()),
+    let Some(frame) = floating_window_monitor_frame(window)? else {
+        return Ok(());
     };
-    let scale = monitor.scale_factor();
-    let size = monitor.size();
-    let pos = monitor.position();
-    let frame = logical_monitor_frame(pos.x, pos.y, size.width, size.height, scale);
     let capsule_height = capsule_height_for_qa();
     let (x, y) = bottom_center_position(
         frame,
@@ -2931,25 +2968,27 @@ pub(crate) fn show_less_computer_glow<R: tauri::Runtime>(app: &AppHandle<R>) {
     let Some(window) = ensure_less_computer_glow_window(app) else {
         return;
     };
-    // 盖满当前（否则主）显示器，含菜单栏/Dock 区域。关键：用「逻辑坐标」(物理/缩放) ——
-    // Retina 上 monitor.size() 是物理像素(2x)，直接 set_size 会把窗口铺成两倍、错位、不贴边。
-    let monitor = window
-        .current_monitor()
+    // 盖满胶囊所在的那块显示器（跟随鼠标光标，见 floating_window_monitor_frame），
+    // 含菜单栏/Dock 区域。frame 已是「逻辑坐标」—— Retina 上 monitor.size() 是物理像素(2x)，
+    // 直接拿去 set_size 会把窗口铺成两倍、错位、不贴边。
+    let frame = floating_window_monitor_frame(&window)
         .ok()
         .flatten()
-        .or_else(|| app.primary_monitor().ok().flatten());
-    if let Some(monitor) = monitor {
-        let scale = monitor.scale_factor();
-        let size = monitor.size();
-        let pos = monitor.position();
-        let _ = window.set_position(tauri::LogicalPosition::new(
-            pos.x as f64 / scale,
-            pos.y as f64 / scale,
-        ));
-        let _ = window.set_size(tauri::LogicalSize::new(
-            size.width as f64 / scale,
-            size.height as f64 / scale,
-        ));
+        .or_else(|| {
+            let monitor = app.primary_monitor().ok().flatten()?;
+            let size = monitor.size();
+            let pos = monitor.position();
+            Some(logical_monitor_frame(
+                pos.x,
+                pos.y,
+                size.width,
+                size.height,
+                monitor.scale_factor(),
+            ))
+        });
+    if let Some(frame) = frame {
+        let _ = window.set_position(tauri::LogicalPosition::new(frame.x, frame.y));
+        let _ = window.set_size(tauri::LogicalSize::new(frame.width, frame.height));
     }
     // 点击穿透：纯视觉浮层，绝不拦截鼠标。
     let _ = window.set_ignore_cursor_events(true);
@@ -3254,6 +3293,8 @@ mod tests {
         tray_style_pack_menu_entries, tray_style_pack_menu_id, LogicalMonitorFrame, TrayLabels,
         LOG_ROTATE_LIMIT_BYTES,
     };
+    #[cfg(target_os = "macos")]
+    use super::{pick_monitor_for_anchor_point, CapsuleTargetMonitor};
     use crate::types::{builtin_style_pack_for_mode, PolishMode, StylePack, StylePackKind};
     use std::io::Write;
 
@@ -3493,6 +3534,63 @@ mod tests {
         assert_eq!(frame_distance_to_point_squared(frame, 100.0, -100.0), 0.0);
         assert_eq!(frame_distance_to_point_squared(frame, 100.0, 20.0), 400.0);
         assert_eq!(frame_distance_to_point_squared(frame, -10.0, -910.0), 200.0);
+    }
+
+    /// 内置 Retina 屏在左、外接 1x 屏在右的典型双屏排列。物理坐标按每块屏
+    /// 自己的缩放表示，因此 1x 外接屏从内屏的逻辑右边缘 x=1512 开始。
+    #[cfg(target_os = "macos")]
+    fn built_in_and_external_monitors() -> [CapsuleTargetMonitor; 2] {
+        [
+            CapsuleTargetMonitor {
+                physical_x: 0,
+                physical_y: 0,
+                physical_width: 3024,
+                physical_height: 1964,
+                scale: 2.0,
+            },
+            CapsuleTargetMonitor {
+                physical_x: 1512,
+                physical_y: 0,
+                physical_width: 2560,
+                physical_height: 1440,
+                scale: 1.0,
+            },
+        ]
+    }
+
+    /// 浮窗（QA / Less Computer 面板 / glow 描边）跟的是光标所在屏，不是窗口自己
+    /// 上一次停留的屏 —— 这条一旦回退，多显示器下浮窗会被钉死在主屏。
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn anchor_point_selects_the_monitor_under_the_cursor() {
+        let monitors = built_in_and_external_monitors();
+
+        let on_external = pick_monitor_for_anchor_point(monitors, 2000.0, 600.0)
+            .expect("external monitor should win when the cursor is on it");
+        assert_eq!(on_external, monitors[1]);
+
+        let on_built_in = pick_monitor_for_anchor_point(monitors, 700.0, 600.0)
+            .expect("built-in monitor should win when the cursor is on it");
+        assert_eq!(on_built_in, monitors[0]);
+    }
+
+    /// 光标短暂落在两屏之间的空隙（排列错位 / 屏幕刚拔掉）时退到最近的屏，
+    /// 而不是返回 None 让浮窗留在原地。
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn anchor_point_outside_every_monitor_falls_back_to_the_nearest() {
+        let monitors = built_in_and_external_monitors();
+
+        // x=-100 落在所有屏左侧，离内置屏最近。
+        let picked = pick_monitor_for_anchor_point(monitors, -100.0, 600.0)
+            .expect("nearest monitor should be returned for an off-screen point");
+        assert_eq!(picked, monitors[0]);
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn anchor_point_without_any_monitor_yields_none() {
+        assert!(pick_monitor_for_anchor_point(Vec::new(), 0.0, 0.0).is_none());
     }
 
     #[test]
