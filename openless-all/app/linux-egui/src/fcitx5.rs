@@ -742,6 +742,69 @@ pub fn available() -> bool {
     false
 }
 
+/// Ask a running fcitx5 daemon to reload so it loads a freshly written
+/// OpenLess addon, mirroring the legacy Tauri `linux_fcitx` adapter.
+///
+/// Only an instance that currently owns the `org.fcitx.Fcitx5` DBus name is
+/// restarted. On a first install fcitx5 may not be running yet; that is fine,
+/// because the next fcitx5 start scans the per-user addon directory and loads
+/// the addon on its own, so we never force-spawn a daemon (first-install
+/// semantics are preserved). On an update the running instance is restarted so
+/// the new `.so` is actually loaded (restart semantics).
+///
+/// Failures are logged and never fatal: startup continues down the fcitx5
+/// DBus path instead of degrading to a global-hotkey fallback. Returns true
+/// when a reload was issued against a live instance.
+#[cfg(target_os = "linux")]
+pub fn reload_running_fcitx5() -> bool {
+    if !fcitx5_name_has_owner() {
+        return false;
+    }
+    match std::process::Command::new("fcitx5").arg("-r").status() {
+        Ok(status) if status.success() => {
+            log::info!("[fcitx] reloaded fcitx5 after addon update");
+            true
+        }
+        Ok(status) => {
+            log::warn!("[fcitx] fcitx5 -r failed with status {status}");
+            false
+        }
+        Err(error) => {
+            log::warn!("[fcitx] could not run fcitx5 -r: {error}");
+            false
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn reload_running_fcitx5() -> bool {
+    false
+}
+
+/// Whether the fcitx5 daemon itself is registered on the session bus. This is
+/// distinct from `available()` (which pings the OpenLess addon interface): the
+/// daemon may be running without having loaded our addon yet, and that is
+/// exactly the case where a reload is required.
+#[cfg(target_os = "linux")]
+fn fcitx5_name_has_owner() -> bool {
+    use dbus::blocking::BlockingSender;
+    let Ok(connection) = dbus::blocking::Connection::new_session() else {
+        return false;
+    };
+    let Ok(message) = dbus::Message::new_method_call(
+        "org.freedesktop.DBus",
+        "/org/freedesktop/DBus",
+        "org.freedesktop.DBus",
+        "NameHasOwner",
+    ) else {
+        return false;
+    };
+    connection
+        .send_with_reply_and_block(message.append1(DESTINATION), Duration::from_millis(1000))
+        .map(|reply| reply.read1::<bool>().unwrap_or(false))
+        .unwrap_or(false)
+}
+
 #[cfg(target_os = "linux")]
 fn copy_to_clipboard(text: &str) -> Result<(), BackendError> {
     let mut clipboard = arboard::Clipboard::new()

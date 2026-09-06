@@ -38,7 +38,7 @@ pub use desktop::{
 };
 pub use fcitx5::{
     available as fcitx5_available, commit_text as fcitx5_commit_text,
-    ensure_plugin_installed as ensure_fcitx5_plugin_installed,
+    ensure_plugin_installed as ensure_fcitx5_plugin_installed, reload_running_fcitx5,
     selection_text as fcitx5_selection_text, set_hotkeys as set_fcitx5_hotkeys,
     set_less_computer_hotkey_raw as set_fcitx5_less_computer_hotkey_raw, Fcitx5TextInserter,
     FcitxPluginInstallPlan, FcitxPluginStatus,

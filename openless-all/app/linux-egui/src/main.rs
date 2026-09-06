@@ -22,13 +22,13 @@ mod linux_app {
         TranscriptAccumulator, UserPreferences,
     };
     use openless_linux_egui::{
-        drain_events, ensure_fcitx5_plugin_installed, notify, open_external, write_jsonl,
-        EventDrainOutcome, Fcitx5HotkeyListener, FcitxPluginInstallPlan, FcitxPluginStatus,
-        HostToPopup, LinuxBackendBuilder, LinuxCapabilitySnapshot, LinuxLaunchIntent,
-        LinuxNativeRuntime, LinuxPackageKind, LinuxResourceLayout, LinuxUpdateSupport,
-        Notification, PopupActionGuard, PopupChatMessage, PopupKind, PopupState, PopupSupervisor,
-        PopupSupervisorEvent, PopupToHost, SingleInstanceBroker, SingleInstanceRole,
-        UpdateManifest, UpdateSchedule, POPUP_PROTOCOL_VERSION,
+        drain_events, ensure_fcitx5_plugin_installed, notify, open_external, reload_running_fcitx5,
+        write_jsonl, EventDrainOutcome, Fcitx5HotkeyListener, FcitxPluginInstallPlan,
+        FcitxPluginStatus, HostToPopup, LinuxBackendBuilder, LinuxCapabilitySnapshot,
+        LinuxLaunchIntent, LinuxNativeRuntime, LinuxPackageKind, LinuxResourceLayout,
+        LinuxUpdateSupport, Notification, PopupActionGuard, PopupChatMessage, PopupKind,
+        PopupState, PopupSupervisor, PopupSupervisorEvent, PopupToHost, SingleInstanceBroker,
+        SingleInstanceRole, UpdateManifest, UpdateSchedule, POPUP_PROTOCOL_VERSION,
     };
 
     enum UiResult {
@@ -4336,12 +4336,29 @@ mod linux_app {
         let layout = LinuxResourceLayout::detect(None).map_err(|error| error.to_string())?;
         let plan =
             FcitxPluginInstallPlan::for_layout(&layout, home).map_err(|error| error.to_string())?;
-        match ensure_fcitx5_plugin_installed(&plan).map_err(|error| error.to_string())? {
+        let status = ensure_fcitx5_plugin_installed(&plan).map_err(|error| error.to_string())?;
+        reconcile_fcitx5_install(status, || {
+            reload_running_fcitx5();
+        })
+    }
+
+    /// Map an fcitx5 addon install result onto startup.
+    ///
+    /// A freshly written addon (`Updated`) is harmless: the addon is loaded
+    /// either by the next fcitx5 start or, when a daemon is already running, by
+    /// `reload` right now. Both `Ready` and `Updated` let startup continue down
+    /// the normal fcitx5 DBus path — never a global-hotkey fallback — and only a
+    /// genuinely missing plugin aborts startup.
+    fn reconcile_fcitx5_install(
+        status: FcitxPluginStatus,
+        mut reload: impl FnMut(),
+    ) -> Result<(), String> {
+        match status {
             FcitxPluginStatus::Ready => Ok(()),
-            FcitxPluginStatus::Updated => Err(
-                "fcitx5 插件已安装或更新；请先重载 fcitx5（fcitx5-remote -r）再重启 OpenLess"
-                    .to_string(),
-            ),
+            FcitxPluginStatus::Updated => {
+                reload();
+                Ok(())
+            }
             FcitxPluginStatus::Missing => {
                 Err("未找到 OpenLess fcitx5 插件；请重新安装当前软件包".to_string())
             }
@@ -5071,6 +5088,36 @@ mod linux_app {
             let merged = dirty.merge(&latest, &draft);
 
             assert_eq!(merged.open_app_hotkey, draft.open_app_hotkey);
+        }
+
+        #[test]
+        fn updated_install_reloads_running_fcitx5_and_continues_startup() {
+            let mut reloads = 0;
+            let reload = || reloads += 1;
+
+            // A freshly written addon must reload a running fcitx5 and then let
+            // startup continue (not hard-error as it used to).
+            assert!(reconcile_fcitx5_install(FcitxPluginStatus::Updated, reload).is_ok());
+            assert_eq!(reloads, 1, "Updated must issue one fcitx5 reload");
+        }
+
+        #[test]
+        fn ready_install_needs_no_reload_but_continues() {
+            let mut reloads = 0;
+            assert!(reconcile_fcitx5_install(FcitxPluginStatus::Ready, || reloads += 1).is_ok());
+            assert_eq!(reloads, 0, "Ready must not reload fcitx5");
+        }
+
+        #[test]
+        fn missing_install_aborts_without_reloading() {
+            let mut reloads = 0;
+            let error = reconcile_fcitx5_install(FcitxPluginStatus::Missing, || reloads += 1)
+                .expect_err("a missing plugin must abort startup");
+            assert!(
+                error.contains("OpenLess fcitx5 插件"),
+                "unexpected Missing message: {error}"
+            );
+            assert_eq!(reloads, 0, "Missing must never reload fcitx5");
         }
     }
 }
