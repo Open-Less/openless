@@ -1,6 +1,6 @@
 # Linux egui / Tauri 2 parity tracker
 
-This local stack is based on PR #1019 head `dc350780`. Linux ships one
+This local stack is based on PR #1019 head `5f668b1d`. Linux ships one
 `openless-linux-egui` executable and does not link Tauri, Wry, or WebKitGTK.
 Windows, macOS, and Android remain on Tauri.
 
