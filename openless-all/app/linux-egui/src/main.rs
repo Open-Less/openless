@@ -14,6 +14,7 @@ mod linux_app {
     use std::time::Duration;
 
     use crate::ui::{shell, theme};
+    use chrono::Datelike;
     use eframe::egui;
     use openless_core::{
         BackendConfig, BackendError, BackendEvent, BackendEventKind, BackendSnapshot,
@@ -55,6 +56,7 @@ mod linux_app {
         MarketplaceDetail(Result<openless_core::MarketplaceDetail, String>),
         MarketplaceMine(Result<(Vec<openless_core::MarketplaceMyPackItem>, Vec<String>), String>),
         Microphones(Result<Vec<openless_core::MicrophoneDevice>, String>),
+        Overview(Result<OverviewData, String>),
         UpdateCheck(Result<Option<UpdateManifest>, String>),
         UpdateProgress(openless_linux_egui::DownloadProgress),
         UpdateInstalled(Result<openless_linux_egui::InstalledUpdate, String>),
@@ -168,11 +170,376 @@ mod linux_app {
         }
     }
 
+    // ---- Native Overview summary (Tauri parity) -----------------------------
+    //
+    // The Tauri Overview derives its dashboard from three real Core sources:
+    //   * `CredentialsStatus`  -> active ASR/LLM provider and its configured state
+    //   * `HistoryStore`       -> today's metrics, total count and recent entries
+    //   * `ActivityStore`      -> trailing-window aggregates + daily heatmap
+    // Fetching happens off the egui frame in a tokio task (`load_overview`); the
+    // pure helpers below only shape already-loaded data and are unit tested
+    // without a runtime, a backend or any UI.
+
+    /// Raw snapshot fetched asynchronously from Core for the Overview tab.
+    #[derive(Clone, Debug)]
+    struct OverviewData {
+        credentials: openless_core::CredentialsStatus,
+        history: Vec<openless_core::DictationSession>,
+        activity: Vec<openless_core::ActivityDay>,
+    }
+
+    #[derive(Clone, Debug, Default)]
+    struct RecentEntry {
+        created_at: String,
+        final_text: String,
+        duration_ms: Option<u64>,
+    }
+
+    /// Activity aggregate over a trailing calendar window. Zero days that never
+    /// recorded activity are absent from the store, so a window may cover more
+    /// calendar days than `active_days`.
+    #[derive(Clone, Debug, Default, PartialEq, Eq)]
+    struct ActivityAggregate {
+        active_days: usize,
+        segments: u64,
+        chars: u64,
+        duration_ms: u64,
+    }
+
+    /// Fully derived, display-ready Overview summary (computed purely, tested).
+    #[derive(Clone, Debug, Default)]
+    struct OverviewSummary {
+        asr_provider: String,
+        llm_provider: String,
+        asr_configured: bool,
+        llm_configured: bool,
+        chars_today: u64,
+        segments_today: usize,
+        duration_ms_today: u64,
+        avg_latency_ms: u64,
+        history_total: usize,
+        recent: Vec<RecentEntry>,
+        last_7: ActivityAggregate,
+        last_30: ActivityAggregate,
+        /// GitHub-style weekly columns (Sunday-first). Chronological oldest
+        /// first; a partial leading week keeps left-edge calendar alignment.
+        heatmap_weeks: Vec<[u32; 7]>,
+        heatmap_days: u32,
+        activity_days_total: usize,
+    }
+
+    #[derive(Clone, Debug)]
+    enum OverviewState {
+        Loading,
+        Loaded(OverviewData),
+        Failed(String),
+    }
+
     #[derive(Clone)]
     enum ProvidersState {
         Loading,
         Loaded(ProviderPanel),
         Failed(String),
+    }
+
+    /// Trailing annual window rendered by the Overview heatmap.
+    const OVERVIEW_HEATMAP_DAYS: i64 = 364;
+
+    impl OverviewState {
+        fn summary(&self, today: chrono::NaiveDate) -> Option<OverviewSummary> {
+            match self {
+                OverviewState::Loaded(data) => Some(overview_summary(data, today)),
+                OverviewState::Loading | OverviewState::Failed(_) => None,
+            }
+        }
+    }
+
+    /// RFC3339 history timestamp -> local calendar date. A value that cannot
+    /// be parsed simply yields `None` and contributes nothing to the summary.
+    fn history_local_date(created_at: &str) -> Option<chrono::NaiveDate> {
+        chrono::DateTime::parse_from_rfc3339(created_at)
+            .ok()
+            .map(|instant| instant.with_timezone(&chrono::Local).date_naive())
+    }
+
+    /// Sum one activity window's segments/chars/duration over `[today-days+1, today]`.
+    fn aggregate_window(
+        by_date: &std::collections::BTreeMap<chrono::NaiveDate, &openless_core::ActivityDay>,
+        today: chrono::NaiveDate,
+        days: i64,
+    ) -> ActivityAggregate {
+        let start = today - chrono::Duration::days(days - 1);
+        let mut aggregate = ActivityAggregate::default();
+        for (_, day) in by_date.range(start..=today) {
+            aggregate.active_days += 1;
+            aggregate.segments += u64::from(day.count);
+            aggregate.chars += day.chars;
+            aggregate.duration_ms += day.duration_ms;
+        }
+        aggregate
+    }
+
+    /// Build a Sunday-first weekly heatmap grid over the trailing `days` window
+    /// (inclusive) ending at `today`. Columns are chronological weeks; the first
+    /// column may be partial so weekday edges align like a GitHub contribution
+    /// graph. Dates absent from the store render as an inactive (0) cell.
+    fn build_heatmap_weeks(
+        by_date: &std::collections::BTreeMap<chrono::NaiveDate, &openless_core::ActivityDay>,
+        today: chrono::NaiveDate,
+        days: i64,
+    ) -> Vec<[u32; 7]> {
+        let mut weeks: Vec<[u32; 7]> = Vec::new();
+        let mut date = today - chrono::Duration::days(days - 1);
+        while date <= today {
+            let weekday = date.weekday().num_days_from_sunday() as usize;
+            if weekday == 0 || weeks.is_empty() {
+                // A fresh column. Sunday starts a new week; a partial leading
+                // column is created on the first non-Sunday date instead.
+                weeks.push([0u32; 7]);
+            }
+            weeks
+                .last_mut()
+                .expect("a heatmap week always exists before writing a cell")[weekday] =
+                by_date.get(&date).map(|day| day.count).unwrap_or(0);
+            date += chrono::Duration::days(1);
+        }
+        weeks
+    }
+
+    /// Shape the fetched Core snapshot into the display summary. Pure and free of
+    /// any runtime/IO so it can be exercised by focused unit tests.
+    fn overview_summary(data: &OverviewData, today: chrono::NaiveDate) -> OverviewSummary {
+        let mut segments_today = 0usize;
+        let mut chars_today = 0u64;
+        let mut duration_ms_today = 0u64;
+        for session in &data.history {
+            if history_local_date(&session.created_at) == Some(today) {
+                segments_today += 1;
+                chars_today += session.final_text.chars().count() as u64;
+                duration_ms_today += session.duration_ms.unwrap_or(0);
+            }
+        }
+        let avg_latency_ms = if segments_today > 0 {
+            duration_ms_today / segments_today as u64
+        } else {
+            0
+        };
+
+        // Newest five entries. `created_at` is RFC3339 in a constant UTC offset,
+        // so lexicographic ordering is a valid chronological ordering.
+        let mut recent: Vec<RecentEntry> = data
+            .history
+            .iter()
+            .map(|session| RecentEntry {
+                created_at: session.created_at.clone(),
+                final_text: session.final_text.clone(),
+                duration_ms: session.duration_ms,
+            })
+            .collect();
+        recent.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        recent.truncate(5);
+
+        let mut by_date: std::collections::BTreeMap<
+            chrono::NaiveDate,
+            &openless_core::ActivityDay,
+        > = std::collections::BTreeMap::new();
+        for day in &data.activity {
+            if let Ok(date) = chrono::NaiveDate::parse_from_str(&day.date, "%Y-%m-%d") {
+                by_date.insert(date, day);
+            }
+        }
+
+        OverviewSummary {
+            asr_provider: data.credentials.active_asr_provider.clone(),
+            llm_provider: data.credentials.active_llm_provider.clone(),
+            asr_configured: data.credentials.asr_configured,
+            llm_configured: data.credentials.llm_configured,
+            chars_today,
+            segments_today,
+            duration_ms_today,
+            avg_latency_ms,
+            history_total: data.history.len(),
+            recent,
+            last_7: aggregate_window(&by_date, today, 7),
+            last_30: aggregate_window(&by_date, today, 30),
+            heatmap_weeks: build_heatmap_weeks(&by_date, today, OVERVIEW_HEATMAP_DAYS),
+            heatmap_days: OVERVIEW_HEATMAP_DAYS as u32,
+            activity_days_total: by_date.len(),
+        }
+    }
+
+    fn format_duration(ms: u64) -> String {
+        if ms < 1000 {
+            format!("{ms} 毫秒")
+        } else if ms < 60_000 {
+            format!("{:.1} 秒", ms as f64 / 1000.0)
+        } else {
+            let minutes = ms / 60_000;
+            let seconds = (ms % 60_000) / 1000;
+            format!("{minutes} 分 {seconds} 秒")
+        }
+    }
+
+    fn overview_provider_cards(ui: &mut egui::Ui, summary: &OverviewSummary) {
+        ui.columns(2, |columns| {
+            overview_provider_card(
+                &mut columns[0],
+                "ASR 语音识别",
+                &summary.asr_provider,
+                summary.asr_configured,
+            );
+            overview_provider_card(
+                &mut columns[1],
+                "LLM 大模型",
+                &summary.llm_provider,
+                summary.llm_configured,
+            );
+        });
+    }
+
+    fn overview_provider_card(ui: &mut egui::Ui, kind: &str, provider: &str, configured: bool) {
+        egui::Frame::group(ui.style()).show(ui, |ui| {
+            ui.set_min_width(140.0);
+            ui.label(egui::RichText::new(kind).weak());
+            let name = if provider.is_empty() {
+                "(未设置)".to_string()
+            } else {
+                provider.to_string()
+            };
+            ui.label(egui::RichText::new(name).strong());
+            if configured {
+                ui.colored_label(egui::Color32::from_rgb(60, 160, 90), "● 已配置");
+            } else {
+                ui.label("未配置");
+            }
+        });
+    }
+
+    fn overview_metric(ui: &mut egui::Ui, label: &str, value: String, trend: &str) {
+        ui.vertical(|ui| {
+            ui.set_min_width(120.0);
+            ui.label(egui::RichText::new(label).weak());
+            ui.label(egui::RichText::new(value).strong().size(18.0));
+            if !trend.is_empty() {
+                ui.label(egui::RichText::new(trend).small().weak());
+            }
+        });
+    }
+
+    fn overview_metric_row(ui: &mut egui::Ui, summary: &OverviewSummary) {
+        let latency_trend = if summary.segments_today > 0 {
+            "".to_string()
+        } else {
+            "今日暂无".to_string()
+        };
+        egui::Grid::new("overview_metric_row")
+            .num_columns(4)
+            .spacing([16.0, 8.0])
+            .show(ui, |ui| {
+                overview_metric(
+                    ui,
+                    "今日字数",
+                    summary.chars_today.to_string(),
+                    &format!("共 {} 段", summary.segments_today),
+                );
+                overview_metric(
+                    ui,
+                    "今日时长",
+                    format_duration(summary.duration_ms_today),
+                    "",
+                );
+                overview_metric(
+                    ui,
+                    "平均延迟",
+                    format_duration(summary.avg_latency_ms),
+                    &latency_trend,
+                );
+                overview_metric(
+                    ui,
+                    "累计记录",
+                    summary.history_total.to_string(),
+                    &format!(
+                        "近7天 {} 段 · 近30天 {} 段",
+                        summary.last_7.segments, summary.last_30.segments
+                    ),
+                );
+                ui.end_row();
+            });
+    }
+
+    fn overview_recent(ui: &mut egui::Ui, summary: &OverviewSummary) {
+        ui.label(egui::RichText::new("最近识别").strong());
+        if summary.recent.is_empty() {
+            ui.label("暂无识别记录，点击上方「开始」说第一句吧。");
+            return;
+        }
+        for entry in &summary.recent {
+            egui::Frame::group(ui.style()).show(ui, |ui| {
+                ui.label(format!(
+                    "{} · {}",
+                    entry.created_at,
+                    format_duration(entry.duration_ms.unwrap_or(0))
+                ));
+                let text = if entry.final_text.trim().is_empty() {
+                    "(无文本)".to_string()
+                } else {
+                    entry.final_text.clone()
+                };
+                ui.label(text);
+            });
+            ui.add_space(4.0);
+        }
+    }
+
+    fn heat_color(count: u32) -> egui::Color32 {
+        match count {
+            0 => egui::Color32::from_gray(60),
+            1..=2 => egui::Color32::from_rgb(80, 140, 220),
+            3..=5 => egui::Color32::from_rgb(90, 120, 235),
+            6..=10 => egui::Color32::from_rgb(110, 100, 235),
+            _ => egui::Color32::from_rgb(150, 90, 235),
+        }
+    }
+
+    fn overview_heatmap(ui: &mut egui::Ui, summary: &OverviewSummary) {
+        ui.label(egui::RichText::new("近一年每日活动次数").strong());
+        let weeks = &summary.heatmap_weeks;
+        if weeks.is_empty() {
+            ui.label("暂无活动数据");
+            return;
+        }
+        let cell = 10.0f32;
+        let gap = 2.0f32;
+        let width = gap + weeks.len() as f32 * (cell + gap);
+        let height = gap + 7.0f32 * (cell + gap);
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
+        let painter = ui.painter();
+        for (column, week) in weeks.iter().enumerate() {
+            for (row, count) in week.iter().enumerate() {
+                let min = egui::pos2(
+                    rect.left() + gap + column as f32 * (cell + gap),
+                    rect.top() + gap + row as f32 * (cell + gap),
+                );
+                painter.rect_filled(
+                    egui::Rect::from_min_size(min, egui::vec2(cell, cell)),
+                    2.0,
+                    heat_color(*count),
+                );
+            }
+        }
+        ui.horizontal(|ui| {
+            ui.label("少");
+            for count in [0u32, 1, 4, 8, 15] {
+                let (swatch, _) =
+                    ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+                ui.painter().rect_filled(swatch, 2.0, heat_color(count));
+            }
+            ui.label("多");
+            ui.label(format!(
+                "（近 {} 天 · {} 天有记录）",
+                summary.heatmap_days, summary.activity_days_total
+            ));
+        });
     }
 
     #[derive(Clone)]
@@ -209,6 +576,7 @@ mod linux_app {
         snapshot: Option<BackendSnapshot>,
         preferences: Option<UserPreferences>,
         settings_dirty: SettingsDirty,
+        overview: OverviewState,
         microphones: Vec<openless_core::MicrophoneDevice>,
         models: ModelsState,
         transcript: String,
@@ -297,6 +665,7 @@ mod linux_app {
                         snapshot: Some(snapshot),
                         preferences: Some(preferences),
                         settings_dirty: SettingsDirty::default(),
+                        overview: OverviewState::Loading,
                         microphones: Vec::new(),
                         models: ModelsState::Loading,
                         transcript: String::new(),
@@ -368,6 +737,7 @@ mod linux_app {
                     app.load_providers(openless_core::ChannelKind::Asr);
                     app.load_library();
                     app.load_microphones();
+                    app.load_overview();
                     app
                 }
                 Err(error) => Self {
@@ -377,6 +747,7 @@ mod linux_app {
                     snapshot: None,
                     preferences: None,
                     settings_dirty: SettingsDirty::default(),
+                    overview: OverviewState::Loading,
                     microphones: Vec::new(),
                     models: ModelsState::Loading,
                     transcript: String::new(),
@@ -907,6 +1278,49 @@ mod linux_app {
                     .await
                     .map_err(|error| error.to_string());
                 let _ = tx.send(UiResult::Microphones(result));
+            });
+        }
+
+        /// Load the real Core-backed Overview data off the egui frame. The only
+        /// blocking reads (`list_history`, `list_activity`) are pushed to a
+        /// blocking task so an egui frame never waits on disk/repository IO.
+        fn load_overview(&self) {
+            let Some(backend) = self.backend() else {
+                return;
+            };
+            let tx = self.tx.clone();
+            self.tokio.spawn(async move {
+                let result = async {
+                    let credentials = backend.get_credentials_status().await?;
+                    let history_backend = Arc::clone(&backend);
+                    let activity_backend = Arc::clone(&backend);
+                    let history =
+                        tokio::task::spawn_blocking(move || history_backend.list_history())
+                            .await
+                            .map_err(|error| {
+                                BackendError::new(
+                                    openless_core::BackendErrorCode::Internal,
+                                    error.to_string(),
+                                )
+                            })??;
+                    let activity =
+                        tokio::task::spawn_blocking(move || activity_backend.list_activity())
+                            .await
+                            .map_err(|error| {
+                                BackendError::new(
+                                    openless_core::BackendErrorCode::Internal,
+                                    error.to_string(),
+                                )
+                            })??;
+                    Ok::<_, BackendError>(OverviewData {
+                        credentials,
+                        history,
+                        activity,
+                    })
+                }
+                .await
+                .map_err(|error| error.to_string());
+                let _ = tx.send(UiResult::Overview(result));
             });
         }
 
@@ -1588,6 +2002,9 @@ mod linux_app {
                             }
                             self.settings_dirty = SettingsDirty::default();
                             self.status = "设置已保存".to_string();
+                            // Appearance (e.g. the Overview heatmap toggle) and any
+                            // provider/credential edits may change Overview state.
+                            self.load_overview();
                             if let Some(backend) = self.backend() {
                                 let config = openless_core::RemoteInputConfig {
                                     enabled: outcome.preferences.remote_input_enabled,
@@ -1662,6 +2079,11 @@ mod linux_app {
                         }
                     }
                     UiResult::Microphones(Err(error)) => self.status = error,
+                    UiResult::Overview(Ok(data)) => self.overview = OverviewState::Loaded(data),
+                    UiResult::Overview(Err(error)) => {
+                        self.status = error.clone();
+                        self.overview = OverviewState::Failed(error);
+                    }
                     UiResult::UpdateCheck(Ok(Some(manifest))) => {
                         self.update_busy = false;
                         self.status = format!("发现新版本 {}", manifest.version);
@@ -1694,6 +2116,62 @@ mod linux_app {
             }
             if let Some(backend) = self.backend() {
                 self.snapshot = Some(backend.snapshot());
+            }
+        }
+
+        fn overview_summary_ui(&mut self, ui: &mut egui::Ui) {
+            let mut reload = false;
+            ui.horizontal(|ui| {
+                ui.heading("概览");
+                ui.add_space(8.0);
+                if ui.button("刷新").clicked() {
+                    reload = true;
+                }
+            });
+            if reload {
+                self.overview = OverviewState::Loading;
+                self.load_overview();
+                return;
+            }
+            match &self.overview {
+                OverviewState::Loading => {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label("正在加载概览数据…");
+                    });
+                }
+                OverviewState::Failed(error) => {
+                    ui.colored_label(
+                        egui::Color32::from_rgb(220, 80, 80),
+                        format!("概览加载失败：{error}"),
+                    );
+                    if ui.button("重试").clicked() {
+                        reload = true;
+                    }
+                }
+                OverviewState::Loaded(_) => {
+                    let show_heatmap = self
+                        .preferences
+                        .as_ref()
+                        .map(|preferences| preferences.show_overview_activity_heatmap)
+                        .unwrap_or(true);
+                    let today = chrono::Local::now().date_naive();
+                    if let Some(summary) = self.overview.summary(today) {
+                        overview_provider_cards(ui, &summary);
+                        ui.add_space(6.0);
+                        overview_metric_row(ui, &summary);
+                        ui.add_space(6.0);
+                        overview_recent(ui, &summary);
+                        if show_heatmap && summary.activity_days_total > 0 {
+                            ui.add_space(6.0);
+                            overview_heatmap(ui, &summary);
+                        }
+                    }
+                }
+            }
+            if reload {
+                self.overview = OverviewState::Loading;
+                self.load_overview();
             }
         }
 
@@ -3850,6 +4328,8 @@ mod linux_app {
                 }
                 match active_page {
                     shell::Page::Overview => {
+                        self.overview_summary_ui(ui);
+                        ui.separator();
                         self.dictation_ui(ui);
                         ui.separator();
                         self.qa_ui(ui);
@@ -5209,8 +5689,10 @@ mod linux_app {
 
         #[test]
         fn settings_conflict_merge_preserves_recording_device_and_appearance_domains() {
-            let mut latest = UserPreferences::default();
-            latest.remote_input_port = 9443;
+            let latest = UserPreferences {
+                remote_input_port: 9443,
+                ..Default::default()
+            };
             let mut draft = latest.clone();
             draft.hotkey.mode = openless_core::shared_types::HotkeyMode::Auto;
             draft.silence_auto_stop_enabled = true;
@@ -5268,6 +5750,164 @@ mod linux_app {
                 "unexpected Missing message: {error}"
             );
             assert_eq!(reloads, 0, "Missing must never reload fcitx5");
+        }
+
+        // ---- Overview summary (Tauri parity) -----------------------------
+
+        fn session_entry(
+            created_at: &str,
+            final_text: &str,
+            duration_ms: Option<u64>,
+        ) -> openless_core::DictationSession {
+            openless_core::DictationSession {
+                id: String::new(),
+                created_at: created_at.to_string(),
+                source: openless_core::HistorySource::Voice,
+                raw_transcript: String::new(),
+                asr_transcript: None,
+                final_text: final_text.to_string(),
+                mode: openless_core::PolishMode::Raw,
+                style_pack_id: None,
+                translation_active: false,
+                polish_source: None,
+                app_bundle_id: None,
+                app_name: None,
+                insert_status: openless_core::HistoryInsertStatus::Inserted,
+                error_code: None,
+                duration_ms,
+                dictionary_entry_count: None,
+                has_audio_recording: None,
+                asr_provider: None,
+                asr_model: None,
+                llm_provider: None,
+                llm_model: None,
+                pipeline_mode: None,
+                asr_ms: None,
+                polish_ms: None,
+            }
+        }
+
+        fn activity_day(date: &str, count: u32) -> openless_core::ActivityDay {
+            openless_core::ActivityDay {
+                date: date.to_string(),
+                count,
+                chars: 0,
+                duration_ms: 0,
+            }
+        }
+
+        #[test]
+        fn overview_metrics_aggregate_only_today_from_history() {
+            let now = chrono::Local::now();
+            let today = now.date_naive();
+            let history = vec![
+                session_entry(&now.to_rfc3339(), "今天第一句", Some(2000)),
+                session_entry(
+                    &(now - chrono::Duration::days(1)).to_rfc3339(),
+                    "昨天",
+                    Some(999),
+                ),
+                session_entry(
+                    &(now - chrono::Duration::days(2)).to_rfc3339(),
+                    "前天",
+                    None,
+                ),
+            ];
+            let credentials = openless_core::CredentialsStatus {
+                active_asr_provider: "volcengine".to_string(),
+                active_llm_provider: "ark".to_string(),
+                asr_configured: true,
+                ..Default::default()
+            };
+
+            let summary = overview_summary(
+                &OverviewData {
+                    credentials,
+                    history,
+                    activity: Vec::new(),
+                },
+                today,
+            );
+
+            assert_eq!(summary.segments_today, 1, "only today's entry counts");
+            assert_eq!(summary.chars_today, 5, "今日第一句 has 5 chars");
+            assert_eq!(summary.duration_ms_today, 2000);
+            assert_eq!(summary.avg_latency_ms, 2000);
+            assert_eq!(summary.history_total, 3);
+            assert_eq!(summary.asr_provider, "volcengine");
+            assert!(summary.asr_configured);
+            assert!(!summary.llm_configured);
+            assert_eq!(summary.recent.len(), 3, "newest three retained");
+            assert_eq!(
+                summary.recent[0].final_text, "今天第一句",
+                "recent list is newest-first"
+            );
+            assert_eq!(summary.recent[0].duration_ms, Some(2000));
+        }
+
+        #[test]
+        fn overview_activity_windows_and_heatmap_are_windowed_by_date() {
+            let today = chrono::NaiveDate::from_ymd_opt(2026, 1, 15).unwrap();
+            let credentials = openless_core::CredentialsStatus::default();
+            let activity = vec![
+                activity_day("2026-01-15", 5),
+                activity_day("2026-01-08", 2),
+                activity_day("2026-01-01", 3),
+                activity_day("2025-06-01", 9),
+            ];
+
+            let summary = overview_summary(
+                &OverviewData {
+                    credentials,
+                    history: Vec::new(),
+                    activity,
+                },
+                today,
+            );
+
+            // Last-7 window covers only Jan 15.
+            assert_eq!(summary.last_7.active_days, 1);
+            assert_eq!(summary.last_7.segments, 5);
+            // Last-30 window covers Jan 15, Jan 8 and Jan 1.
+            assert_eq!(summary.last_30.active_days, 3);
+            assert_eq!(summary.last_30.segments, 10);
+            assert_eq!(summary.activity_days_total, 4);
+
+            // The trailing 364-day heatmap sums every in-window day.
+            let heat_total: u32 = summary
+                .heatmap_weeks
+                .iter()
+                .flat_map(|week| week.iter())
+                .sum();
+            assert_eq!(heat_total, 19);
+            assert_eq!(summary.heatmap_days, 364);
+        }
+
+        #[test]
+        fn overview_heatmap_excludes_days_outside_trailing_window() {
+            let today = chrono::NaiveDate::from_ymd_opt(2026, 1, 15).unwrap();
+            let far = (today - chrono::Duration::days(400))
+                .format("%Y-%m-%d")
+                .to_string();
+            let summary = overview_summary(
+                &OverviewData {
+                    credentials: openless_core::CredentialsStatus::default(),
+                    history: Vec::new(),
+                    activity: vec![activity_day("2026-01-15", 3), activity_day(&far, 7)],
+                },
+                today,
+            );
+
+            let heat_total: u32 = summary
+                .heatmap_weeks
+                .iter()
+                .flat_map(|week| week.iter())
+                .sum();
+            assert_eq!(
+                heat_total, 3,
+                "days older than the trailing window must not appear in the heatmap"
+            );
+            assert_eq!(summary.activity_days_total, 2);
         }
     }
 }

@@ -3244,6 +3244,7 @@ dependencies = [
  "arboard",
  "axum",
  "base64",
+ "chrono",
  "cpal",
  "dbus",
  "eframe",
