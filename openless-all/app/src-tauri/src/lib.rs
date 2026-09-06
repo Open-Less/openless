@@ -3453,8 +3453,8 @@ mod tests {
         assert_eq!(frame_distance_to_point_squared(frame, -10.0, -910.0), 200.0);
     }
 
-    /// 内置 Retina 屏在左、外接 1x 屏在右的典型双屏排列。物理坐标 + 各自缩放，
-    /// 与 Tauri `available_monitors()` 给出的形状一致。
+    /// 内置 Retina 屏在左、外接 1x 屏在右的典型双屏排列。物理坐标按每块屏
+    /// 自己的缩放表示，因此 1x 外接屏从内屏的逻辑右边缘 x=1512 开始。
     #[cfg(target_os = "macos")]
     fn built_in_and_external_monitors() -> [CapsuleTargetMonitor; 2] {
         [
@@ -3466,7 +3466,7 @@ mod tests {
                 scale: 2.0,
             },
             CapsuleTargetMonitor {
-                physical_x: 3024,
+                physical_x: 1512,
                 physical_y: 0,
                 physical_width: 2560,
                 physical_height: 1440,
@@ -3482,7 +3482,7 @@ mod tests {
     fn anchor_point_selects_the_monitor_under_the_cursor() {
         let monitors = built_in_and_external_monitors();
 
-        let on_external = pick_monitor_for_anchor_point(monitors, 3500.0, 600.0)
+        let on_external = pick_monitor_for_anchor_point(monitors, 2000.0, 600.0)
             .expect("external monitor should win when the cursor is on it");
         assert_eq!(on_external, monitors[1]);
 
@@ -3498,8 +3498,8 @@ mod tests {
     fn anchor_point_outside_every_monitor_falls_back_to_the_nearest() {
         let monitors = built_in_and_external_monitors();
 
-        // x=2000 落在内置屏逻辑右边缘(1512)与外接屏左边缘(3024)之间，离内置屏更近。
-        let picked = pick_monitor_for_anchor_point(monitors, 2000.0, 600.0)
+        // x=-100 落在所有屏左侧，离内置屏最近。
+        let picked = pick_monitor_for_anchor_point(monitors, -100.0, 600.0)
             .expect("nearest monitor should be returned for an off-screen point");
         assert_eq!(picked, monitors[0]);
     }
