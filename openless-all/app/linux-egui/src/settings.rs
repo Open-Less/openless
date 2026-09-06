@@ -169,8 +169,14 @@ impl LinuxSettingsEffects for Fcitx5SettingsEffects {
             target.selection_polish.as_ref(),
         )?;
         apply_action_hotkey("SetTranslationHotkeyRaw", Some(&target.translation))?;
-        apply_action_hotkey("SetSwitchStyleHotkeyRaw", target.switch_style.as_ref())?;
-        apply_action_hotkey("SetOpenAppHotkeyRaw", target.open_app.as_ref())?;
+        tolerate_optional_fcitx_method(apply_action_hotkey(
+            "SetSwitchStyleHotkeyRaw",
+            target.switch_style.as_ref(),
+        ))?;
+        tolerate_optional_fcitx_method(apply_action_hotkey(
+            "SetOpenAppHotkeyRaw",
+            target.open_app.as_ref(),
+        ))?;
         let style_pack_hotkeys = target
             .style_packs
             .iter()
@@ -179,7 +185,7 @@ impl LinuxSettingsEffects for Fcitx5SettingsEffects {
                     .map(|(symbol, states)| (hotkey.pack_id.clone(), symbol, states))
             })
             .collect::<Result<Vec<_>, _>>()?;
-        crate::fcitx5::set_style_pack_hotkeys(style_pack_hotkeys)?;
+        tolerate_optional_fcitx_method(crate::fcitx5::set_style_pack_hotkeys(style_pack_hotkeys))?;
         let (symbol, states) = target
             .coding_agent_voice
             .as_ref()
@@ -189,7 +195,7 @@ impl LinuxSettingsEffects for Fcitx5SettingsEffects {
             .map(shortcut_to_raw)
             .transpose()?
             .unwrap_or((0, 0));
-        crate::fcitx5::set_less_computer_hotkey_raw(symbol, states)
+        tolerate_optional_fcitx_method(crate::fcitx5::set_less_computer_hotkey_raw(symbol, states))
     }
 
     fn set_active_asr_provider(&self, provider_id: &str) -> Result<(), BackendError> {
@@ -213,6 +219,22 @@ impl LinuxSettingsEffects for Fcitx5SettingsEffects {
                 format!("update XDG launch-at-login entry: {error}"),
             )
         })
+    }
+}
+
+fn tolerate_optional_fcitx_method(result: Result<(), BackendError>) -> Result<(), BackendError> {
+    match result {
+        Err(error)
+            if error.message.contains("Unknown method")
+                || error.message.contains("UnknownMethod") =>
+        {
+            log::warn!(
+                "[fcitx] running addon lacks an optional extended hotkey method; continuing with the legacy interface: {}",
+                error.message
+            );
+            Ok(())
+        }
+        result => result,
     }
 }
 
@@ -400,5 +422,28 @@ mod tests {
             modifiers: vec!["ctrl".into()],
         };
         assert_eq!(shortcut_to_raw(&shortcut).unwrap(), (b'/' as u32, 5));
+    }
+
+    #[test]
+    fn legacy_addon_may_omit_optional_extended_hotkey_methods() {
+        for message in [
+            "Unknown method SetSwitchStyleHotkeyRaw",
+            "org.freedesktop.DBus.Error.UnknownMethod",
+        ] {
+            assert!(tolerate_optional_fcitx_method(Err(BackendError::new(
+                BackendErrorCode::Platform,
+                message,
+            )))
+            .is_ok());
+        }
+    }
+
+    #[test]
+    fn optional_hotkey_compatibility_does_not_hide_other_failures() {
+        let error = BackendError::new(BackendErrorCode::Platform, "session bus unavailable");
+        assert_eq!(
+            tolerate_optional_fcitx_method(Err(error.clone())).unwrap_err(),
+            error
+        );
     }
 }
