@@ -1,8 +1,15 @@
 use super::*;
 
 #[tauri::command]
-pub fn get_platform_capabilities() -> crate::types::PlatformCapabilities {
-    crate::types::PlatformCapabilities::current()
+pub async fn get_platform_capabilities(
+    core: CoreState<'_>,
+) -> Result<crate::types::PlatformCapabilities, String> {
+    Ok(core
+        .services()
+        .platform
+        .capabilities()
+        .await
+        .unwrap_or_default())
 }
 
 #[tauri::command]
@@ -68,23 +75,70 @@ pub fn open_external_url(url: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn check_accessibility_permission() -> PermissionStatus {
-    permissions::check_accessibility()
+pub async fn check_accessibility_permission(
+    core: CoreState<'_>,
+) -> Result<PermissionStatus, String> {
+    Ok(core
+        .services()
+        .platform
+        .accessibility_permission()
+        .await
+        .map(|snapshot| map_core_permission(snapshot.accessibility))
+        .unwrap_or(PermissionStatus::NotApplicable))
 }
 
 #[tauri::command]
-pub fn request_accessibility_permission() -> PermissionStatus {
-    permissions::request_accessibility()
+pub async fn request_accessibility_permission(
+    core: CoreState<'_>,
+) -> Result<PermissionStatus, String> {
+    if let Err(error) = core
+        .services()
+        .platform
+        .request_accessibility_permission()
+        .await
+    {
+        log::warn!("request accessibility permission through core failed: {error}");
+        return Ok(PermissionStatus::NotApplicable);
+    }
+    check_accessibility_permission(core).await
 }
 
 #[tauri::command]
-pub fn check_microphone_permission() -> PermissionStatus {
-    permissions::check_microphone()
+pub async fn check_microphone_permission(core: CoreState<'_>) -> Result<PermissionStatus, String> {
+    Ok(core
+        .services()
+        .platform
+        .microphone_permission()
+        .await
+        .map(|snapshot| map_core_permission(snapshot.microphone))
+        .unwrap_or(PermissionStatus::NotApplicable))
 }
 
 #[tauri::command]
-pub fn request_microphone_permission(app: AppHandle) -> PermissionStatus {
-    crate::request_microphone_from_foreground(&app)
+pub async fn request_microphone_permission(
+    core: CoreState<'_>,
+) -> Result<PermissionStatus, String> {
+    if let Err(error) = core
+        .services()
+        .platform
+        .request_microphone_permission()
+        .await
+    {
+        log::warn!("request microphone permission through core failed: {error}");
+        return Ok(PermissionStatus::NotApplicable);
+    }
+    check_microphone_permission(core).await
+}
+
+fn map_core_permission(state: openless_core::PermissionState) -> PermissionStatus {
+    match state {
+        openless_core::PermissionState::Unknown => PermissionStatus::NotDetermined,
+        openless_core::PermissionState::Granted => PermissionStatus::Granted,
+        openless_core::PermissionState::Denied => PermissionStatus::Denied,
+        openless_core::PermissionState::Restricted => PermissionStatus::Restricted,
+        openless_core::PermissionState::NoDevice => PermissionStatus::NoDevice,
+        openless_core::PermissionState::Unsupported => PermissionStatus::NotApplicable,
+    }
 }
 
 /// 跳到 macOS 系统设置的指定隐私面板。pane: "accessibility" | "microphone".
@@ -154,8 +208,8 @@ pub fn open_system_settings(pane: String) -> Result<(), String> {
 /// 与 Swift `MicrophonePermission.request()` 同语义：只信系统权限回调，
 /// 不用 cpal stream 成功与否伪造授权状态。
 #[tauri::command]
-pub fn trigger_microphone_prompt(app: AppHandle) -> Result<(), String> {
-    let status = crate::request_microphone_from_foreground(&app);
+pub async fn trigger_microphone_prompt(core: CoreState<'_>) -> Result<(), String> {
+    let status = request_microphone_permission(core).await?;
     if matches!(
         status,
         PermissionStatus::Granted | PermissionStatus::NotApplicable
@@ -163,5 +217,44 @@ pub fn trigger_microphone_prompt(app: AppHandle) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!("microphone permission is {status:?}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn core_permission_states_preserve_the_legacy_ipc_contract() {
+        let cases = [
+            (
+                openless_core::PermissionState::Unknown,
+                PermissionStatus::NotDetermined,
+            ),
+            (
+                openless_core::PermissionState::Granted,
+                PermissionStatus::Granted,
+            ),
+            (
+                openless_core::PermissionState::Denied,
+                PermissionStatus::Denied,
+            ),
+            (
+                openless_core::PermissionState::Restricted,
+                PermissionStatus::Restricted,
+            ),
+            (
+                openless_core::PermissionState::NoDevice,
+                PermissionStatus::NoDevice,
+            ),
+            (
+                openless_core::PermissionState::Unsupported,
+                PermissionStatus::NotApplicable,
+            ),
+        ];
+
+        for (core, legacy) in cases {
+            assert_eq!(map_core_permission(core), legacy);
+        }
     }
 }

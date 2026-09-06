@@ -6,89 +6,6 @@ pub const DEFAULT_MODEL_ALIAS: &str = "whisper-small";
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 #[allow(dead_code)]
-pub struct FoundryWhisperModel {
-    pub alias: &'static str,
-    pub display_name: &'static str,
-    pub quality_tier: &'static str,
-}
-
-#[allow(dead_code)]
-pub const MODELS: &[FoundryWhisperModel] = &[
-    FoundryWhisperModel {
-        alias: "whisper-small",
-        display_name: "Whisper Small",
-        quality_tier: "balanced",
-    },
-    FoundryWhisperModel {
-        alias: "whisper-medium",
-        display_name: "Whisper Medium",
-        quality_tier: "high-quality",
-    },
-    FoundryWhisperModel {
-        alias: "whisper-large-v3-turbo",
-        display_name: "Whisper Large V3 Turbo",
-        quality_tier: "max-quality",
-    },
-    FoundryWhisperModel {
-        alias: "whisper-base",
-        display_name: "Whisper Base",
-        quality_tier: "low-resource",
-    },
-    FoundryWhisperModel {
-        alias: "whisper-tiny",
-        display_name: "Whisper Tiny",
-        quality_tier: "smoke-test",
-    },
-];
-
-#[allow(dead_code)]
-pub fn is_foundry_local_whisper(id: &str) -> bool {
-    id == PROVIDER_ID
-}
-
-#[allow(dead_code)]
-pub fn model_alias_is_known(alias: &str) -> bool {
-    MODELS.iter().any(|model| model.alias == alias)
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-#[allow(dead_code)]
-pub struct FoundryCatalogModel {
-    pub alias: String,
-    pub display_name: String,
-    pub cached: bool,
-    pub file_size_mb: Option<u64>,
-}
-
-impl FoundryCatalogModel {
-    #[allow(dead_code)]
-    pub fn from_static(model: &FoundryWhisperModel) -> Self {
-        Self {
-            alias: model.alias.to_string(),
-            display_name: model.display_name.to_string(),
-            cached: false,
-            file_size_mb: None,
-        }
-    }
-}
-
-#[allow(dead_code)]
-pub fn static_catalog_models() -> Vec<FoundryCatalogModel> {
-    MODELS
-        .iter()
-        .map(FoundryCatalogModel::from_static)
-        .collect()
-}
-
-#[allow(dead_code)]
-pub fn default_language_hint() -> Option<String> {
-    None
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-#[allow(dead_code)]
 pub enum FoundryPreparePhase {
     Runtime,
     Model,
@@ -221,17 +138,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn provider_id_is_stable() {
-        assert!(is_foundry_local_whisper("foundry-local-whisper"));
-        assert!(!is_foundry_local_whisper("local-qwen3"));
-    }
-
-    #[test]
-    fn default_model_is_registered() {
-        assert!(model_alias_is_known(DEFAULT_MODEL_ALIAS));
-    }
-
-    #[test]
     fn unavailable_runtime_status_uses_native_audio_shape() {
         let status = FoundryRuntimeStatus::unavailable("whisper-base".to_string(), "not ready");
 
@@ -243,26 +149,6 @@ mod tests {
         assert_eq!(status.loaded_model_id, None);
         assert_eq!(status.endpoint, None);
         assert_eq!(status.error.as_deref(), Some("not ready"));
-    }
-
-    #[test]
-    fn static_foundry_catalog_preserves_ui_order() {
-        let catalog = static_catalog_models();
-
-        assert_eq!(
-            catalog
-                .iter()
-                .map(|model| model.alias.as_str())
-                .collect::<Vec<_>>(),
-            vec![
-                "whisper-small",
-                "whisper-medium",
-                "whisper-large-v3-turbo",
-                "whisper-base",
-                "whisper-tiny"
-            ]
-        );
-        assert!(catalog.iter().all(|model| !model.cached));
     }
 
     #[test]

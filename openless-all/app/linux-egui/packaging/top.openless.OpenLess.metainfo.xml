@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>top.openless.OpenLess</id>
+  <name>OpenLess</name>
+  <summary>Voice dictation, Less Computer, and writing assistant</summary>
+  <description>
+    <p>OpenLess turns speech into polished text and helps you write faster.</p>
+  </description>
+  <url type="homepage">https://github.com/Open-Less/openless</url>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>AGPL-3.0-only</project_license>
+  <launchable type="desktop-id">openless.desktop</launchable>
+  <provides>
+    <binary>openless</binary>
+  </provides>
+</component>

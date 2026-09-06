@@ -72,7 +72,6 @@ if [ "$MAC_BUNDLE_ARCH" = "aarch64" ]; then
     exit 1
   fi
   # Contents/MacOS 里的非 Mach-O 会被 codesign 当成 nested code。
-  # 克隆仓 ad-hoc 签名（identity "-"）会因此直接 bundle 失败。
   if [ -e "$APP/Contents/MacOS/mlx.metallib" ]; then
     echo "✗ mlx.metallib 不能放在 Contents/MacOS（ad-hoc codesign 会失败）"
     exit 1

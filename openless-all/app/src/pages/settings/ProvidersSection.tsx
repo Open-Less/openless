@@ -1,17 +1,19 @@
 // 服务 → AI 提供商：LLM 润色模型 + ASR 语音转写两张卡片。
 // 自 Settings.tsx 整体迁出，逻辑零改动；i18n key 全部保持 `settings.providers.*`。
 
-import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../../components/Icon';
 import { detectOS } from '../../components/WindowChrome';
 import {
   listProviderModels,
+  listProviderDescriptors,
   readCredential,
   recordChannelTest,
   setActiveOmniProvider,
   setCredential,
   validateProviderCredentials,
+  type ProviderDescriptor,
 } from '../../lib/ipc';
 import { emitSaved } from '../../lib/savedEvent';
 import { useLayoutStack, useConservativeLayout } from '../../lib/useMobileLayout';
@@ -24,8 +26,6 @@ import {
   Toggle,
   inputStyle,
   segmentedTrackStyle,
-  ASR_PRESETS,
-  type AsrPresetId,
 } from './shared';
 import {
   parseAdvancedAsrConfig,
@@ -82,121 +82,16 @@ function LlmThinkingToggle({ enabled, onToggle }: { enabled: boolean; onToggle: 
   );
 }
 
-export const LLM_PRESETS = [
-  {
-    id: 'ark',
-    nameKey: 'ark',
-    baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
-    modelPlaceholder: 'deepseek-v3-2',
-  },
-  {
-    id: 'deepseek',
-    nameKey: 'deepseek',
-    baseUrl: 'https://api.deepseek.com/v1',
-    modelPlaceholder: 'deepseek-v4-flash',
-  },
-  {
-    id: 'siliconflow',
-    nameKey: 'siliconflow',
-    baseUrl: 'https://api.siliconflow.cn/v1',
-    modelPlaceholder: 'Qwen/Qwen2.5-7B-Instruct',
-  },
-  {
-    id: 'atlascloud',
-    nameKey: 'atlascloud',
-    baseUrl: 'https://api.atlascloud.ai/v1',
-    modelPlaceholder: 'qwen/qwen3.5-flash',
-  },
-  {
-    id: 'openai',
-    nameKey: 'openai',
-    baseUrl: 'https://api.openai.com/v1',
-    modelPlaceholder: 'gpt-4o',
-  },
-  {
-    // 谷歌官方 Gemini API（原生 generateContent，不走 OpenAI 兼容 shim）。
-    // baseUrl 末尾 /v1beta 是当前 Generally Available 的 path（ai.google.dev/api）。
-    // 后端 llm_gemini.rs 会拼成 `{baseUrl}/models/{model}:generateContent`，
-    // 并按 Gemini 原生通道级 thinkingConfig 关闭或压低思考，不在前端维护模型适配表。
-    // 模型列表用 ProviderTools「拉取模型」按钮取，
-    // 由 commands.rs::fetch_provider_models 识别 generativelanguage 域名后按 Gemini shape 解析。
-    id: 'gemini',
-    nameKey: 'gemini',
-    baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
-    modelPlaceholder: 'gemini-2.5-flash',
-  },
-  {
-    id: 'codex_oauth',
-    nameKey: 'codexOAuth',
-    baseUrl: '',
-    // gpt-5.3-codex-spark 对 ChatGPT 账号的 Codex 通道会被 400 拒绝，
-    // 默认与占位一律用实测可用的 gpt-5.5（见 polish.rs::CODEX_DEFAULT_MODEL）。
-    modelPlaceholder: 'gpt-5.5',
-  },
-  {
-    id: 'mimo',
-    nameKey: 'mimo',
-    baseUrl: 'https://api.xiaomimimo.com/v1',
-    modelPlaceholder: 'xiaomi/mimo-v2-flash',
-  },
-  {
-    id: 'cometapi',
-    nameKey: 'cometapi',
-    baseUrl: 'https://api.cometapi.com/v1',
-    modelPlaceholder: 'gpt-4o',
-  },
-  {
-    id: 'openrouterFree',
-    nameKey: 'openrouterFree',
-    baseUrl: 'https://openrouter.ai/api/v1',
-    modelPlaceholder: 'qwen/qwen3-coder:free',
-  },
-  {
-    id: 'alibabaCoding',
-    nameKey: 'alibabaCoding',
-    baseUrl: 'https://coding-intl.dashscope.aliyuncs.com/v1',
-    modelPlaceholder: 'qwen3-coder-plus',
-  },
-  {
-    id: 'codingPlanX',
-    nameKey: 'codingPlanX',
-    baseUrl: 'https://api.codingplanx.ai/v1',
-    modelPlaceholder: 'gpt-5-mini',
-  },
-  {
-    // MiniMax 国内开放平台（minimaxi.com），OpenAI 兼容 /v1/chat/completions。
-    // M3 默认开启 thinking，可通过 `thinking.type = disabled` 关闭。
-    // provider_id 在后端 polish.rs::openai_compatible_thinking_control 命中
-    // "minimax" → MiniMaxThinking 分支，关闭时下发 disabled、开启时发 adaptive。
-    // 走"自定义"preset 接入时由 base_url 含 "minimax" 兜底识别,见 polish.rs。
-    // 文档: https://platform.minimaxi.com/docs/api-reference/text-chat-openai#thinking-控制
-    id: 'minimax',
-    nameKey: 'minimax',
-    baseUrl: 'https://api.minimaxi.com/v1',
-    modelPlaceholder: 'MiniMax-M3',
-  },
-  {
-    // StepFun（阶跃星辰）OpenAI 兼容 /v1/chat/completions。
-    // 默认模型选 step-1o-turbo-vision：step-3.x-flash 系列是推理模型且思考无法关闭
-    // （reasoning_effort 只能调档，正式内容要等隐藏思考结束，润色场景 TTFT 2s+），
-    // 而 step-1o-turbo-vision 无思考、TTFT ~0.3s，润色忠实度实测更适合听写链路。
-    // provider_id 在后端 polish.rs::openai_compatible_thinking_control 命中
-    // "stepfun" → ReasoningEffort 分支；走"自定义"preset 接入时由 base_url
-    // 含 "stepfun" 兜底识别，见 polish.rs。
-    id: 'stepfun',
-    nameKey: 'stepfun',
-    baseUrl: 'https://api.stepfun.com/v1',
-    modelPlaceholder: 'step-1o-turbo-vision',
-  },
-  {
-    id: 'custom',
-    nameKey: 'custom',
-    baseUrl: '',
-    modelPlaceholder: '',
-  },
-] as const;
-
-type LlmPresetId = typeof LLM_PRESETS[number]['id'];
+// React 只保留本地化标签。endpoint、model、auth 与能力必须来自 Core
+// ProviderDescriptor，避免每个平台各维护一份会漂移的业务真相。
+export const LLM_LABELS = [
+  ['ark', 'ark'], ['deepseek', 'deepseek'], ['siliconflow', 'siliconflow'],
+  ['atlascloud', 'atlascloud'], ['openai', 'openai'], ['gemini', 'gemini'],
+  ['codex_oauth', 'codexOAuth'], ['mimo', 'mimo'], ['cometapi', 'cometapi'],
+  ['openrouterFree', 'openrouterFree'], ['alibabaCoding', 'alibabaCoding'],
+  ['codingPlanX', 'codingPlanX'], ['minimax', 'minimax'], ['stepfun', 'stepfun'],
+  ['custom', 'custom'],
+].map(([id, nameKey]) => ({ id, nameKey })) as readonly { id: string; nameKey: string }[];
 
 // 多模态（Omni）模型预设（issue #902）：一个模型同时接收「提示词 + 音频」一步输出
 // 最终文本。凭据走独立 `omni.*` 命名空间，与上方 LLM/ASR 两套配置完全隔离。
@@ -204,80 +99,7 @@ type LlmPresetId = typeof LLM_PRESETS[number]['id'];
 // - gemini       : Gemini 原生 generateContent（inlineData audio/wav）
 // - dashscope-omni: 阿里云百炼 OpenAI 兼容通道（qwen3-omni-flash 等）
 // - custom       : 任意 OpenAI 兼容多模态网关
-export const OMNI_PRESETS = [
-  {
-    id: 'openai',
-    nameKey: 'omniOpenai',
-    baseUrl: 'https://api.openai.com/v1',
-    modelPlaceholder: 'gpt-4o-audio-preview',
-  },
-  {
-    id: 'gemini',
-    nameKey: 'omniGemini',
-    baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
-    modelPlaceholder: 'gemini-2.5-flash',
-  },
-  {
-    id: 'dashscope-omni',
-    nameKey: 'omniDashscope',
-    baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-    modelPlaceholder: 'qwen3-omni-flash',
-  },
-  {
-    id: 'custom',
-    nameKey: 'custom',
-    baseUrl: '',
-    modelPlaceholder: '',
-  },
-] as const;
-
-type OmniPresetId = typeof OMNI_PRESETS[number]['id'];
-
 const ASR_DEFAULT_RESOURCE_ID = 'volc.seedasr.sauc.duration';
-
-/// 无 key / 无地址的本地引擎：卡片编辑里没有凭据字段，模型下载仍在「高级 → 本地模型」。
-export const LOCAL_ASR_PROVIDER_IDS: string[] = [
-  'local-qwen3',
-  'local-qwen3-mlx',
-  'local-qwen3-c',
-  'local-whisper',
-  'sherpa-onnx-local',
-  'foundry-local-whisper',
-  'apple-speech',
-];
-
-// ASR_PRESETS 已上移到 settings/shared.tsx 作为单一来源（AsrPresetId 由其派生，
-// Overview 的显示名映射也从那里取）。新增厂商的步骤见 shared.tsx 的注释。
-
-// 云端 ASR 模型预设（下拉可选）——千问新发布的 ASR 优先：qwen3-asr-flash 是
-// Qwen-ASR 的 OpenAI 兼容 HTTP 形态，另有实时变体（flash-realtime）；fun-asr
-// 系列是百炼原生推荐，paraformer 为老一代兜底。
-// 注意：qwen3-asr-flash-filetrans 官方只接受公网音频 URL，与本地录音链路不兼容，
-// 后端会显式拒绝（coordinator.rs::resolve_effective_asr_provider），不放预设。
-const BAILIAN_ASR_MODELS: string[] = [
-  'qwen3-asr-flash-realtime',
-  'qwen3-asr-flash',
-  'fun-asr-realtime',
-  'fun-asr',
-  'fun-asr-flash-2026-06-15',
-  'fun-asr-mtl',
-  'paraformer-realtime-v2',
-  'paraformer-v2',
-];
-
-// OpenAI 兼容（/audio/transcriptions）厂商共用的模型预设。
-const OPENAI_COMPAT_ASR_MODELS: string[] = [
-  'whisper-large-v3-turbo',
-  'whisper-large-v3',
-  'whisper-1',
-  'FunAudioLLM/SenseVoiceSmall',
-  'qwen3-asr-flash',
-];
-
-// 走 Whisper 兼容 /audio/transcriptions 协议的厂商（与后端
-// coordinator.rs::is_whisper_compatible_provider 保持一致）。其余非百炼厂商
-// （zhipu / stepfun / mimo / elevenlabs 等）协议不同，不给预设下拉，保持输入框。
-const WHISPER_COMPAT_ASR_PROVIDERS: AsrPresetId[] = ['whisper', 'groq', 'siliconflow', 'openrouter', 'openai-compatible'];
 
 /** 模型预设下拉里的「自定义模型…」哨兵值：选中即切回输入框手输。 */
 const CUSTOM_MODEL_OPTION_VALUE = '__custom_model__';
@@ -293,12 +115,14 @@ export function ChannelCredentialFields({
   kind,
   providerType,
   channelId,
+  descriptor,
   onTested,
   onUserMutation,
 }: {
   kind: 'llm' | 'asr';
   providerType: string;
   channelId: string;
+  descriptor?: Partial<Pick<ProviderDescriptor, 'authRequirement' | 'defaultEndpoint' | 'defaultModel' | 'staticModels'>>;
   /** 测试连通出结果后通知外层刷新卡片上的延迟/标红。 */
   onTested?: () => void;
   /** 新建草稿发生用户交互时同步通知外层，避免关闭流程误删。 */
@@ -338,9 +162,16 @@ export function ChannelCredentialFields({
     });
   };
 
+  // Provider policy 必须 fail-closed：Core descriptor 尚未返回或加载失败时，
+  // 不短暂渲染一套猜测的凭据字段，避免用户把秘密写进错误槽位。
+  if (!descriptor) {
+    return <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)' }}>{t('common.loading')}</div>;
+  }
+
   if (kind === 'llm') {
-    const preset = LLM_PRESETS.find(p => p.id === providerType) ?? LLM_PRESETS[LLM_PRESETS.length - 1];
-    const codexOAuthSelected = providerType === 'codex_oauth';
+    const defaultEndpoint = descriptor?.defaultEndpoint;
+    const defaultModel = descriptor?.defaultModel;
+    const codexOAuthSelected = descriptor?.authRequirement === 'o_auth';
     return (
       <>
         {codexOAuthSelected ? (
@@ -353,8 +184,8 @@ export function ChannelCredentialFields({
               account="ark.api_key" provider={channelId} mono mask onUserMutation={onUserMutation} />
             <CredentialField key={`${channelId}:endpoint`} label={t('settings.providers.baseUrlLabel')}
               account="ark.endpoint" provider={channelId}
-              placeholder={preset.baseUrl || 'https://your-endpoint/v1'}
-              defaultValue={preset.baseUrl || undefined} onUserMutation={onUserMutation} />
+              placeholder={defaultEndpoint || 'https://your-endpoint/v1'}
+              defaultValue={defaultEndpoint || undefined} onUserMutation={onUserMutation} />
             {providerType === 'custom' && (
               <>
                 <CredentialField
@@ -380,8 +211,8 @@ export function ChannelCredentialFields({
         )}
         <CredentialField key={`${channelId}:model:${llmModelRevision}`} label={t('settings.providers.modelLabel')}
           account="ark.model_id" provider={channelId}
-          placeholder={preset.modelPlaceholder || 'model-name'} mono
-          defaultValue={preset.modelPlaceholder || undefined}
+          placeholder={defaultModel || 'model-name'} mono
+          defaultValue={defaultModel || undefined}
           onUserMutation={onUserMutation}
           trailing={(
             <LlmThinkingToggle
@@ -397,9 +228,10 @@ export function ChannelCredentialFields({
     );
   }
 
-  const asrPreset = ASR_PRESETS.find(p => p.id === providerType);
+  const defaultEndpoint = descriptor?.defaultEndpoint;
+  const defaultModel = descriptor?.defaultModel;
 
-  if (providerType === 'volcengine') {
+  if (descriptor?.authRequirement === 'volcengine') {
     return (
       <>
         <SettingRow label={t('settings.providers.volcengineAuthModeLabel')}>
@@ -461,7 +293,7 @@ export function ChannelCredentialFields({
     );
   }
 
-  if (providerType === 'iflytek') {
+  if (descriptor?.authRequirement === 'xfyun') {
     return (
       <>
         <CredentialField key={`${channelId}:app_id`} label={t('settings.providers.xfyunAppIdLabel')}
@@ -480,7 +312,7 @@ export function ChannelCredentialFields({
 
   // 本地引擎（qwen3 / sherpa / foundry / Apple 语音）没有 key 与地址；模型的下载与
   // 切换仍由「高级 → 本地模型」里的 <LocalAsr embedded /> 负责，这里只说明一句。
-  if (LOCAL_ASR_PROVIDER_IDS.includes(providerType)) {
+  if (descriptor?.authRequirement === 'none') {
     return (
       <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.6 }}>
         {t('settings.providers.localEngineNoCredentials')}
@@ -495,19 +327,17 @@ export function ChannelCredentialFields({
       {/* 统一百炼保留 endpoint 供用户选择区域或工作空间域名；后端按模型转换协议与路径。 */}
       <CredentialField key={`${channelId}:endpoint`} label={t('settings.providers.baseUrlLabel')}
         account="asr.endpoint" provider={channelId}
-        placeholder={asrPreset?.baseUrl || 'https://api.openai.com/v1'}
-        defaultValue={asrPreset?.baseUrl || undefined} onUserMutation={onUserMutation} />
+        placeholder={defaultEndpoint || 'https://your-endpoint/v1'}
+        defaultValue={defaultEndpoint || undefined} onUserMutation={onUserMutation} />
       <CredentialField key={`${channelId}:model:${asrModelRevision}`} label={t('settings.providers.modelLabel')}
         account="asr.model" provider={channelId}
-        placeholder={unifiedBailian ? 'fun-asr-realtime' : (asrPreset?.model || 'whisper-1')}
-        defaultValue={asrPreset?.model || undefined}
+        placeholder={defaultModel || 'model-name'}
+        defaultValue={defaultModel || undefined}
         onUserMutation={onUserMutation}
         onValueChange={unifiedBailian ? setBailianModel : undefined}
-        options={unifiedBailian
-          ? BAILIAN_ASR_MODELS.map(m => ({ value: m, label: m }))
-          : WHISPER_COMPAT_ASR_PROVIDERS.includes(providerType as AsrPresetId)
-            ? OPENAI_COMPAT_ASR_MODELS.map(m => ({ value: m, label: m }))
-            : undefined} />
+        options={descriptor?.staticModels?.length
+          ? descriptor.staticModels.map(model => ({ value: model, label: model }))
+          : undefined} />
       {unifiedBailian && (
         <BailianProtocolHint key={`${channelId}:proto:${asrModelRevision}`} currentModel={bailianModel} />
       )}
@@ -1181,22 +1011,36 @@ export function OmniChannelSection() {
   const conservative = useConservativeLayout();
   const layoutStack = conservative || baseLayoutStack;
   const { prefs, updatePrefs } = useHotkeySettings();
-  const [omniProvider, setOmniProvider] = useState<OmniPresetId>('custom');
-  const [committedOmniProvider, setCommittedOmniProvider] = useState<OmniPresetId>('custom');
+  const [descriptors, setDescriptors] = useState<ProviderDescriptor[]>([]);
+  const [omniProvider, setOmniProvider] = useState('custom');
+  const [committedOmniProvider, setCommittedOmniProvider] = useState('custom');
   const omniSwitchSeqRef = useRef(0);
   const [omniModelRevision, setOmniModelRevision] = useState(0);
 
   useEffect(() => {
+    void listProviderDescriptors('omni')
+      .then(setDescriptors)
+      .catch(error => console.error('[settings] failed to load omni provider descriptors', error));
+  }, []);
+
+  const omniPresets = useMemo(() => descriptors.map(descriptor => ({
+      id: descriptor.providerType,
+      nameKey: descriptor.labelKey,
+      baseUrl: descriptor.defaultEndpoint ?? '',
+      modelPlaceholder: descriptor.defaultModel ?? '',
+    })), [descriptors]);
+
+  useEffect(() => {
     if (!prefs) return;
-    const knownOmni = OMNI_PRESETS.find(x => x.id === prefs.activeOmniProvider);
+    const knownOmni = omniPresets.find(x => x.id === prefs.activeOmniProvider);
     const omniId = knownOmni ? knownOmni.id : 'custom';
     setOmniProvider(omniId);
     setCommittedOmniProvider(omniId);
-  }, [prefs]);
+  }, [prefs, omniPresets]);
 
   // 与 LLM 卡同语义：受控下拉立即反馈 + committed 控制 CredentialField remount
   // + seq 守卫防 stale 覆盖，只是凭据落到 omni.* 槽。
-  const onOmniProviderChange = async (id: OmniPresetId) => {
+  const onOmniProviderChange = async (id: string) => {
     setOmniProvider(id);
     const seq = ++omniSwitchSeqRef.current;
     emitSaved('saving', t('common.saving'));
@@ -1210,7 +1054,7 @@ export function OmniChannelSection() {
         await updatePrefs(next);
         if (seq !== omniSwitchSeqRef.current) return;
       }
-      const preset = OMNI_PRESETS.find(p => p.id === id);
+      const preset = omniPresets.find(p => p.id === id);
       // 切到非 custom 预设强制覆盖 endpoint/model 默认值（与 LLM 卡同语义），
       // 保证「切换」真切到位，不残留旧厂商的槽值。
       if (preset && preset.id !== 'custom') {
@@ -1247,7 +1091,7 @@ export function OmniChannelSection() {
 
   if (prefs?.multimodalPipelineEnabled !== true) return null;
   const multimodalMode = prefs?.pipelineMode === 'multimodal';
-  const omniPreset = OMNI_PRESETS.find(p => p.id === committedOmniProvider);
+  const omniPreset = omniPresets.find(p => p.id === committedOmniProvider);
 
   return (
     <>
@@ -1291,8 +1135,8 @@ export function OmniChannelSection() {
           <SettingRow label={t('settings.providers.providerLabel')}>
             <SelectLite
               value={omniProvider}
-              onChange={next => onOmniProviderChange(next as OmniPresetId)}
-              options={OMNI_PRESETS.map(p => ({
+              onChange={next => onOmniProviderChange(next)}
+              options={omniPresets.map(p => ({
                 value: p.id,
                 label: t(`settings.providers.presets.${p.nameKey}`),
               }))}

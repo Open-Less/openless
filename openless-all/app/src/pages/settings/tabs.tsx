@@ -120,8 +120,8 @@ export function AdvancedTab() {
 
   return (
     <>
-      {/* Less Computer / Claude 控制台仅 macOS 开放：后端只在 macOS 注册热键/创建窗口 */}
-      {showDesktopAdvanced && os === 'mac' && <CodingAgentSection />}
+      {/* Less Computer 在 Windows/macOS 交付；Claude 控制台保留原有平台范围。 */}
+      {showDesktopAdvanced && (os === 'mac' || os === 'win') && <CodingAgentSection />}
       {showDesktopAdvanced && os === 'mac' && <ClaudeConsoleSection />}
       <MultimodalPipelineSection />
       {showDebugTools && <DebugToolsSection />}

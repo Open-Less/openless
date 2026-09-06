@@ -10,6 +10,7 @@
 //! `SherpaOnnxRuntime::transcribe_pcm`。Online 模型在独立 worker 中实时消费 PCM，
 //! partial token 通过回调上抛，停止录音后返回 final `RawTranscript`。
 
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
@@ -22,12 +23,12 @@ use parking_lot::Mutex;
 
 use crate::asr::RawTranscript;
 
-use super::sherpa;
 use super::sherpa_runtime::{SherpaOnlineSession, SherpaOnnxRuntime};
 
 pub struct SherpaOnnxAsr {
     runtime: Arc<SherpaOnnxRuntime>,
     model_alias: String,
+    model_dir: PathBuf,
     language_hint: Option<String>,
     mode: SherpaProviderMode,
     cancel_generation: AtomicU64,
@@ -58,11 +59,13 @@ impl SherpaOnnxAsr {
     pub fn new(
         runtime: Arc<SherpaOnnxRuntime>,
         model_alias: String,
+        model_dir: PathBuf,
         language_hint: Option<String>,
     ) -> Self {
         Self {
             runtime,
             model_alias,
+            model_dir,
             language_hint: normalize_language_hint(language_hint),
             mode: SherpaProviderMode::Offline {
                 buffer: Mutex::new(Vec::new()),
@@ -74,14 +77,23 @@ impl SherpaOnnxAsr {
     pub async fn new_for_model(
         runtime: Arc<SherpaOnnxRuntime>,
         model_alias: String,
+        model_dir: PathBuf,
         language_hint: Option<String>,
         token_handler: Option<SherpaTokenHandler>,
     ) -> Result<Self> {
-        if sherpa::alias_is_online(&model_alias) {
-            let session = runtime.create_online_session(&model_alias).await?;
+        let target = openless_core::LocalAsrTarget::parse(
+            openless_core::LocalAsrRuntime::SherpaOnnx,
+            model_alias.clone(),
+        )
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        if target.sherpa_execution_mode() == Some(openless_core::LocalAsrExecutionMode::Online) {
+            let session = runtime
+                .create_online_session(&model_alias, &model_dir)
+                .await?;
             Ok(Self {
                 runtime,
                 model_alias,
+                model_dir,
                 language_hint: normalize_language_hint(language_hint),
                 mode: SherpaProviderMode::Online {
                     worker: Mutex::new(Some(OnlineWorker::spawn(session, token_handler))),
@@ -89,7 +101,7 @@ impl SherpaOnnxAsr {
                 cancel_generation: AtomicU64::new(0),
             })
         } else {
-            Ok(Self::new(runtime, model_alias, language_hint))
+            Ok(Self::new(runtime, model_alias, model_dir, language_hint))
         }
     }
 
@@ -144,7 +156,13 @@ impl SherpaOnnxAsr {
         let duration_ms = pcm_duration_ms(&pcm);
         let result = self
             .runtime
-            .transcribe_pcm(&self.model_alias, &pcm, self.language_hint(), audio_timeout)
+            .transcribe_pcm(
+                &self.model_alias,
+                &self.model_dir,
+                &pcm,
+                self.language_hint(),
+                audio_timeout,
+            )
             .await;
 
         if self.cancel_generation.load(Ordering::SeqCst) != cancel_generation {
@@ -372,6 +390,7 @@ mod tests {
         SherpaOnnxAsr::new(
             Arc::new(SherpaOnnxRuntime::new()),
             "sense-voice-small-zh".into(),
+            PathBuf::from("unused"),
             Some("  ZH  ".into()),
         )
     }
@@ -387,6 +406,7 @@ mod tests {
         let provider = SherpaOnnxAsr::new(
             Arc::new(SherpaOnnxRuntime::new()),
             "paraformer-zh".into(),
+            PathBuf::from("unused"),
             Some("   ".into()),
         );
         assert!(provider.language_hint().is_none());
@@ -428,6 +448,7 @@ mod tests {
         let provider = SherpaOnnxAsr::new(
             Arc::new(SherpaOnnxRuntime::new()),
             "unknown-sherpa-model".into(),
+            PathBuf::from("unused"),
             None,
         );
         provider.consume_pcm_chunk(&vec![0u8; 32_000]);
@@ -445,6 +466,7 @@ mod tests {
         let provider = SherpaOnnxAsr::new(
             Arc::clone(&runtime),
             "sense-voice-small-zh".into(),
+            PathBuf::from("unused"),
             Some("  ZH  ".into()),
         );
         provider.consume_pcm_chunk(&[1, 2, 3, 4]);

@@ -1,10 +1,12 @@
 //! Android cross-app text insertion strategies.
 
 #![cfg(target_os = "android")]
-use crate::android::accessibility::{is_accessibility_enabled, paste_via_accessibility_with_result};
+use crate::android::accessibility::{
+    is_accessibility_enabled, paste_via_accessibility_with_result,
+};
 use crate::android::insert_tiers::{
-    resolve_tiered_insert_status, TieredInsertOutcome, PASTE_RESULT_SUCCESS,
-    PASTE_RESULT_SHIZUKU_UNAVAILABLE,
+    resolve_tiered_insert_status, TieredInsertOutcome, PASTE_RESULT_SHIZUKU_UNAVAILABLE,
+    PASTE_RESULT_SUCCESS,
 };
 use crate::android::shizuku::paste_via_shizuku_with_result;
 use crate::android::types::AndroidInsertStrategy;
@@ -31,7 +33,9 @@ pub fn android_insert_with_strategy(
 fn insert_with_tiered_fallback(inserter: &TextInserter, text: &str) -> InsertStatus {
     let previous_clip: Option<String> =
         crate::android::jni::android::with_android_env(|env, context| {
-            Ok(crate::android::jni::android::get_primary_clip_text(env, context))
+            Ok(crate::android::jni::android::get_primary_clip_text(
+                env, context,
+            ))
         })
         .ok()
         .flatten();
@@ -67,10 +71,7 @@ fn insert_with_tiered_fallback(inserter: &TextInserter, text: &str) -> InsertSta
         }
     }
 
-    match resolve_tiered_insert_status(
-        accessibility_result.as_deref(),
-        shizuku_result.as_deref(),
-    ) {
+    match resolve_tiered_insert_status(accessibility_result.as_deref(), shizuku_result.as_deref()) {
         TieredInsertOutcome::Inserted => {
             restore_clipboard_after_success(previous_clip);
             InsertStatus::Inserted
@@ -81,11 +82,9 @@ fn insert_with_tiered_fallback(inserter: &TextInserter, text: &str) -> InsertSta
 
 fn restore_clipboard_after_success(previous_clip: Option<String>) {
     if let Some(prev) = previous_clip {
-        if let Err(e) =
-            crate::android::jni::android::with_android_env(|env, context| {
-                crate::android::jni::android::set_primary_clip_text(env, context, &prev)
-            })
-        {
+        if let Err(e) = crate::android::jni::android::with_android_env(|env, context| {
+            crate::android::jni::android::set_primary_clip_text(env, context, &prev)
+        }) {
             log::warn!("[android-insert] failed to restore clipboard: {e}");
         }
     }

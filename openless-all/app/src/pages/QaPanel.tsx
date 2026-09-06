@@ -170,14 +170,14 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
           if (payload.messages) {
             setMessages(payload.messages);
           }
-          if (typeof payload.edit_apply_available === 'boolean') {
-            setEditApplyAvailable(payload.edit_apply_available);
+          if (typeof payload.editApplyAvailable === 'boolean') {
+            setEditApplyAvailable(payload.editApplyAvailable);
           }
-          if (typeof payload.edit_revert_available === 'boolean') {
-            setEditRevertAvailable(payload.edit_revert_available);
+          if (typeof payload.editRevertAvailable === 'boolean') {
+            setEditRevertAvailable(payload.editRevertAvailable);
           }
-          if (typeof payload.edit_instruction_mode === 'boolean') {
-            setEditInstructionMode(payload.edit_instruction_mode);
+          if (typeof payload.editInstructionMode === 'boolean') {
+            setEditInstructionMode(payload.editInstructionMode);
           }
           switch (payload.kind) {
             case 'idle':
@@ -190,7 +190,7 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
               break;
             case 'recording':
               setStatus('recording');
-              setSelectionPreview(payload.selection_preview ?? '');
+              setSelectionPreview(payload.selectionPreview ?? '');
               setErrorMsg('');
               setStreamingAnswer('');
               setEditApplyAvailable(false);
@@ -200,8 +200,8 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
               // ASR 在 finalize、user message 还没 push 的过渡帧。提前切到 thinking
               // 视图避免 UI 卡 recording 几百 ms 反馈缺失。详见 issue #161。
               setStatus('thinking');
-              if (payload.selection_preview != null) {
-                setSelectionPreview(payload.selection_preview);
+              if (payload.selectionPreview != null) {
+                setSelectionPreview(payload.selectionPreview);
               }
               setErrorMsg('');
               setStreamingAnswer('');
@@ -210,8 +210,8 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
               break;
             case 'thinking':
               setStatus('thinking');
-              if (payload.selection_preview != null) {
-                setSelectionPreview(payload.selection_preview);
+              if (payload.selectionPreview != null) {
+                setSelectionPreview(payload.selectionPreview);
               }
               setErrorMsg('');
               setStreamingAnswer('');
@@ -224,11 +224,21 @@ export function QaPanel({ embedded = false, onRequestClose }: QaPanelProps = {})
                 setStreamingAnswer(prev => prev + payload.chunk);
               }
               break;
+            case 'awaiting_approval':
+              setStatus('thinking');
+              break;
             case 'answer':
               setStatus('idle');
               setErrorMsg('');
               // messages 已被上面的 setMessages 落定，清掉流式 buffer 避免和最终气泡重影。
               setStreamingAnswer('');
+              break;
+            case 'cancelled':
+              setStatus('idle');
+              setErrorMsg('');
+              setStreamingAnswer('');
+              setEditApplyAvailable(false);
+              setEditRevertAvailable(false);
               break;
             case 'error':
               setStatus('error');

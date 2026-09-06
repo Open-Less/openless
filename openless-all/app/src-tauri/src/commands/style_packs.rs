@@ -9,34 +9,13 @@ fn refresh_tray_menu_async(app: &AppHandle) {
     });
 }
 
-fn emit_prefs_changed(app: &AppHandle, prefs: &UserPreferences) {
-    let _ = app.emit("prefs:changed", prefs);
-    let _ = app.emit_to("main", "prefs:changed", prefs);
-}
-
-pub(crate) fn sync_style_pack_prefs_and_persist(
-    coord: &Coordinator,
-    app: &AppHandle,
-    mut prefs: UserPreferences,
-) -> Result<UserPreferences, String> {
-    let packs = coord.style_packs().list().map_err(|e| e.to_string())?;
-    sync_style_pack_preferences(&mut prefs, &packs);
-    coord
-        .prefs()
-        .set(prefs.clone())
-        .map_err(|e| e.to_string())?;
-    emit_prefs_changed(app, &prefs);
-    refresh_tray_menu_async(app);
-    Ok(prefs)
-}
-
 pub(crate) fn activate_style_pack_by_id(
     coord: &Coordinator,
     app: &AppHandle,
     id: &str,
 ) -> Result<StylePack, String> {
-    let mut prefs = coord.prefs().get();
-    let pack = coord.style_packs().get(id).map_err(|e| e.to_string())?;
+    let backend = coord.backend();
+    let pack = backend.get_style_pack(id).map_err(|e| e.to_string())?;
     log::info!(
         "[style-pack] activate helper requested id={} kind={:?} base_mode={:?} enabled={}",
         pack.id,
@@ -44,23 +23,10 @@ pub(crate) fn activate_style_pack_by_id(
         pack.base_mode,
         pack.enabled
     );
-    if !pack.enabled {
-        coord
-            .style_packs()
-            .set_enabled(id, true)
-            .map_err(|e| e.to_string())?;
-    }
-    prefs.active_style_pack_id = id.to_string();
-    sync_style_pack_prefs_and_persist(coord, app, prefs)?;
+    let pack = backend.activate_style_pack(id).map_err(|e| e.to_string())?;
+    refresh_tray_menu_async(app);
     log::info!("[style-pack] activate helper applied id={id}");
-    coord
-        .style_packs()
-        .get(id)
-        .map(|mut pack| {
-            pack.active = true;
-            pack
-        })
-        .map_err(|e| e.to_string())
+    Ok(pack)
 }
 
 pub(crate) fn activate_builtin_style_mode(
@@ -81,17 +47,15 @@ pub(crate) fn activate_builtin_style_mode(
 // ─────────────────────────── style packs ───────────────────────────
 
 #[tauri::command]
-pub fn list_style_packs(coord: CoordinatorState<'_>) -> Result<Vec<StylePack>, String> {
-    let prefs = coord.prefs().get();
-    coord
-        .style_packs()
-        .list_with_active(&prefs.active_style_pack_id)
+pub fn list_style_packs(core: CoreState<'_>) -> Result<Vec<StylePack>, String> {
+    let prefs = core.get_preferences();
+    core.list_style_packs(&prefs.active_style_pack_id)
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn create_style_pack_from_template(
-    coord: CoordinatorState<'_>,
+    core: CoreState<'_>,
     app: AppHandle,
     template: StylePack,
 ) -> Result<StylePack, String> {
@@ -100,18 +64,16 @@ pub fn create_style_pack_from_template(
         template.name,
         template.base_mode
     );
-    let created = coord
-        .style_packs()
-        .create_from_template(template)
+    let created = core
+        .create_style_pack(template)
         .map_err(|e| e.to_string())?;
-    let prefs = coord.prefs().get();
-    let _ = sync_style_pack_prefs_and_persist(&*coord, &app, prefs)?;
+    refresh_tray_menu_async(&app);
     Ok(created)
 }
 
 #[tauri::command]
 pub fn save_style_pack(
-    coord: CoordinatorState<'_>,
+    core: CoreState<'_>,
     app: AppHandle,
     style_pack: StylePack,
 ) -> Result<StylePack, String> {
@@ -121,20 +83,16 @@ pub fn save_style_pack(
         style_pack.kind,
         style_pack.base_mode
     );
-    let saved = coord
-        .style_packs()
-        .upsert(style_pack)
+    let saved = core
+        .update_style_pack(style_pack)
         .map_err(|e| e.to_string())?;
-    if saved.kind == StylePackKind::Builtin {
-        let prefs = coord.prefs().get();
-        let _ = sync_style_pack_prefs_and_persist(&*coord, &app, prefs)?;
-    }
+    refresh_tray_menu_async(&app);
     Ok(saved)
 }
 
 #[tauri::command]
 pub fn preview_style_pack_runtime(
-    coord: CoordinatorState<'_>,
+    core: CoreState<'_>,
     style_pack: StylePack,
 ) -> Result<StylePackRuntimeDiagnostics, String> {
     log::info!(
@@ -143,7 +101,7 @@ pub fn preview_style_pack_runtime(
         style_pack.base_mode,
         style_pack.prompt.chars().count()
     );
-    Ok(coord.preview_style_pack_runtime(&style_pack))
+    Ok(core.preview_style_pack_runtime(&style_pack))
 }
 
 #[tauri::command]
@@ -157,7 +115,7 @@ pub fn set_active_style_pack(
 
 #[tauri::command]
 pub fn set_style_pack_enabled(
-    coord: CoordinatorState<'_>,
+    core: CoreState<'_>,
     app: AppHandle,
     id: String,
     enabled: bool,
@@ -167,70 +125,52 @@ pub fn set_style_pack_enabled(
         id,
         enabled
     );
-    coord
-        .style_packs()
-        .set_enabled(&id, enabled)
+    core.set_style_pack_enabled(&id, enabled)
         .map_err(|e| e.to_string())?;
-    let mut prefs = coord.prefs().get();
-    if !enabled && prefs.active_style_pack_id == id {
-        prefs.active_style_pack_id = default_active_style_pack_id();
-    }
-    let prefs = sync_style_pack_prefs_and_persist(&*coord, &app, prefs)?;
-    coord
-        .style_packs()
-        .list_with_active(&prefs.active_style_pack_id)
+    refresh_tray_menu_async(&app);
+    let prefs = core.get_preferences();
+    core.list_style_packs(&prefs.active_style_pack_id)
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn reset_builtin_style_pack(
-    coord: CoordinatorState<'_>,
+    core: CoreState<'_>,
     app: AppHandle,
     id: String,
 ) -> Result<StylePack, String> {
     log::info!("[style-pack] command reset_builtin requested id={id}");
-    let saved = coord
-        .style_packs()
-        .reset_builtin(&id)
+    let saved = core
+        .reset_builtin_style_pack(&id)
         .map_err(|e| e.to_string())?;
-    let prefs = coord.prefs().get();
-    let _ = sync_style_pack_prefs_and_persist(&*coord, &app, prefs)?;
+    refresh_tray_menu_async(&app);
     Ok(saved)
 }
 
 #[tauri::command]
 pub fn delete_style_pack(
     coord: CoordinatorState<'_>,
+    core: CoreState<'_>,
     app: AppHandle,
     id: String,
 ) -> Result<(), String> {
-    let mut prefs = coord.prefs().get();
+    let _host_guard = coord.lock_settings_host();
     log::info!("[style-pack] command delete requested id={id}");
-    coord
-        .style_packs()
-        .remove_imported(&id)
-        .map_err(|e| e.to_string())?;
-    // 孤儿清理：删除包时一并移除指向它的风格快捷键，避免残留一条按了没反应的绑定。
-    let hotkeys_before = prefs.style_pack_hotkeys.len();
-    prefs.style_pack_hotkeys.retain(|entry| entry.pack_id != id);
-    let removed_hotkey = prefs.style_pack_hotkeys.len() != hotkeys_before;
-    if prefs.active_style_pack_id == id {
-        prefs.active_style_pack_id = default_active_style_pack_id();
-        let _ = sync_style_pack_prefs_and_persist(&*coord, &app, prefs)?;
-    } else if removed_hotkey {
-        let _ = sync_style_pack_prefs_and_persist(&*coord, &app, prefs)?;
-    } else {
-        refresh_tray_menu_async(&app);
-    }
-    if removed_hotkey {
-        coord.update_style_pack_hotkey_bindings();
+    let outcome = core.remove_style_pack(&id).map_err(|e| e.to_string())?;
+    refresh_tray_menu_async(&app);
+    if let Some(change) = &outcome.effects.hotkeys {
+        if let Err(error) = coord.apply_hotkey_runtime_change(change) {
+            // Core 删除事务已经提交；保留新的显式 target，让常驻 supervisor 继续收敛，
+            // 不再从偏好文档反推本次删除意图。
+            log::warn!("[style-pack] refresh hotkeys after delete failed: {error}");
+        }
     }
     Ok(())
 }
 
 #[tauri::command]
 pub fn import_style_pack_from_zip(
-    coord: CoordinatorState<'_>,
+    core: CoreState<'_>,
     zip_path: String,
 ) -> Result<StylePack, String> {
     log::info!(
@@ -247,20 +187,17 @@ pub fn import_style_pack_from_zip(
             &zip_path,
             crate::persistence::STYLE_PACK_ARCHIVE_MAX_COMPRESSED_BYTES,
         )?;
-        return coord
-            .style_packs()
-            .import_from_zip_bytes(&bytes, "Android document provider")
+        return core
+            .import_style_pack_bytes(&bytes)
             .map_err(|error| error.to_string());
     }
-    coord
-        .style_packs()
-        .import_from_zip(std::path::Path::new(&zip_path))
+    core.import_style_pack_path(std::path::Path::new(&zip_path))
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn export_style_pack_to_zip(
-    coord: CoordinatorState<'_>,
+    core: CoreState<'_>,
     id: String,
     target_path: String,
 ) -> Result<String, String> {
@@ -269,9 +206,7 @@ pub fn export_style_pack_to_zip(
         id,
         target_path
     );
-    coord
-        .style_packs()
-        .export_to_zip(&id, std::path::Path::new(&target_path))
+    core.export_style_pack_path(&id, std::path::Path::new(&target_path))
         .map_err(|e| e.to_string())?;
     Ok(target_path)
 }
@@ -289,7 +224,7 @@ pub fn set_default_polish_mode(
 
 #[tauri::command]
 pub fn set_style_enabled(
-    coord: CoordinatorState<'_>,
+    core: CoreState<'_>,
     app: AppHandle,
     mode: PolishMode,
     enabled: bool,
@@ -301,14 +236,8 @@ pub fn set_style_enabled(
         pack_id,
         enabled
     );
-    coord
-        .style_packs()
-        .set_enabled(&pack_id, enabled)
+    core.set_style_pack_enabled(&pack_id, enabled)
         .map_err(|e| e.to_string())?;
-    let mut prefs = coord.prefs().get();
-    if !enabled && prefs.active_style_pack_id == pack_id {
-        prefs.active_style_pack_id = default_active_style_pack_id();
-    }
-    let _ = sync_style_pack_prefs_and_persist(&*coord, &app, prefs)?;
+    refresh_tray_menu_async(&app);
     Ok(())
 }

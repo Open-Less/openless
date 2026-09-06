@@ -7,7 +7,8 @@
   <meta name="theme-color" content="#0f1115">
   <title>OpenLess</title>
   <link rel="stylesheet" href="/style.css">
-  <script>window.__OL_LANG__ = "%%OL_LANG%%";</script>
+  <!-- 首页由 PC 注入当前语言和默认录音方式；手机已保存的模式仍优先。 -->
+  <script>window.__OL_LANG__ = "%%OL_LANG%%"; window.__OL_DEFAULT_MODE__ = "%%OL_DEFAULT_MODE%%";</script>
 </head>
 <body>
   <div id="app">

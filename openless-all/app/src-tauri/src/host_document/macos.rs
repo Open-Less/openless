@@ -27,10 +27,9 @@ use core_foundation::runloop::{
     kCFRunLoopDefaultMode, CFRunLoop, CFRunLoopRunResult, CFRunLoopSource, CFRunLoopSourceRef,
 };
 
-use super::diff::{edit_is_within_typed_text, is_vocab_worthy, minimal_edit};
 use super::{
-    evaluate_gate, plan_window, utf16_offset_to_char_offset, window_around_cursor, EditPair,
-    GateInputs, ReadOutcome, AX_MESSAGING_TIMEOUT_SECS, EDIT_WATCH_MAX_LIFETIME,
+    evaluate_gate, minimal_edit, plan_window, utf16_offset_to_char_offset, window_around_cursor,
+    EditPair, GateInputs, ReadOutcome, AX_MESSAGING_TIMEOUT_SECS, EDIT_WATCH_MAX_LIFETIME,
 };
 
 /// 超过这个 UTF-16 长度就不整篇 `AXValue` 读回来，改走 `AXStringForRange` 只取光标附近。
@@ -90,7 +89,7 @@ const CARET_MOVE_QUIET: Duration = Duration::from_millis(300);
 /// ```
 ///
 /// 结果要么超长/跨句被拒（这次纠正白做），要么变成一条被污染的建议。这跟「改完按回车
-/// 撑成整句」是同一个根：[`minimal_edit`](super::diff::minimal_edit) 只能表达**一处
+/// 撑成整句」是同一个根：[`minimal_edit`](super::minimal_edit) 只能表达**一处
 /// 连续**差异，用户做两处改动时中间的字必然被卷进来。
 ///
 /// **没有在这里收紧**，因为两个方向都会退化掉更重要的东西：
@@ -276,9 +275,7 @@ unsafe fn focused_element_passing_the_gate(mut gate: GateInputs) -> GatedElement
         .flatten();
     let Some(owner) = owner else {
         CFRelease(focused as CFTypeRef);
-        return GatedElement::Unavailable(
-            "could not confirm which app owns the focused element",
-        );
+        return GatedElement::Unavailable("could not confirm which app owns the focused element");
     };
     gate.bundle_id = Some(owner);
     // Secure Input 是全局状态，顺手也刷新一次 —— 同样可能在这几次 AX 调用期间才打开。
@@ -581,10 +578,7 @@ struct WatchContext {
     armed_at: Instant,
     /// 我们这次实际打出去的文本。只有落在这段文字里的改动才算「用户改了我们插的东西」。
     typed_text: String,
-    on_edit: Box<dyn Fn(EditPair) + Send + Sync>,
-    /// 已上报过的 `(source, target)`。用户改一个词要敲好几下，每一下都发一次通知，
-    /// 不去重会把同一处改动刷成一串日志。
-    reported: std::cell::RefCell<std::collections::HashSet<(String, String)>>,
+    on_edit: Box<dyn Fn(EditPair) -> bool + Send + Sync>,
     /// 本次武装期间上报了几处改动。
     reports: std::cell::Cell<u64>,
     /// 上一次通知时看到的文本。
@@ -658,7 +652,11 @@ unsafe extern "C" fn value_changed_shim(
             log::debug!(
                 "[cursor-context] baseline anchored at {} chars ({})",
                 current.chars().count(),
-                if inserted { "insertion landed" } else { "timeout" }
+                if inserted {
+                    "insertion landed"
+                } else {
+                    "timeout"
+                }
             );
             // 两者必须一起推进：`baseline` 是比对起点，`last_text` 是「上次看到的样子」。
             // 只更新前者的话，锚定后第一条通知会把「插入生效」当成一次用户编辑。
@@ -724,56 +722,14 @@ unsafe fn settle_pending_edit(ctx: &WatchContext, force: bool) {
         );
         return;
     };
-    if !edit_is_within_typed_text(&edit, &ctx.typed_text) {
-        log::debug!(
-            "[cursor-context] edit {:?}→{:?} is outside the text we inserted; ignored",
-            edit.source,
-            edit.target
-        );
+    // Core 决定这次修改是否属于刚插入的文本、能否成为词条建议。拒绝时刻意保留旧
+    // 基线：先删除、后输入仍应合并为一次替换，不能拆成两个无法学习的半截修改。
+    // AX 层只拥有原生观察时序，不拥有词条业务规则。
+    if !(ctx.on_edit)(edit) {
         return;
     }
-    // 用**下游同一个判据**决定这一处算不算「有结论」。
-    //
-    // 这里曾经是无条件上报 + 推进基线，而真正的过滤在下游 `handle_user_edit` 里
-    // （`is_vocab_worthy` 判 target 为空就丢掉）—— 观察器看不到那个决定，于是把一次
-    // 注定被丢弃的改动当成了「已结论」，顺手吃掉了基线。
-    //
-    // 代价正是最自然的那个纠错动作学不到：**删掉错词 → 停顿 → 敲正确的词**。删词那
-    // 一下先 settle（光标移开安静 300ms，或 5 秒兜底），纯删除被上报、基线推进到「已
-    // 删词」；等用户把新词敲完，相对新基线只剩一条「空 → 新词」的纯插入，而
-    // `minimal_edit` 对纯插入一律返回 None。于是只要中间停顿一下，这次纠正就永远
-    // 学不进去。
-    //
-    // 判据统一之后：注定学不到的改动既不上报（少一条噪声日志）也不动基线，用户把新
-    // 词敲完时，相对原基线算出来的正是完整的「错词 → 正确词」。
-    if !is_vocab_worthy(&edit) {
-        log::debug!(
-            "[cursor-context] settled edit {:?}→{:?} can't become a vocab entry; baseline kept",
-            edit.source,
-            edit.target
-        );
-        return;
-    }
-    let key = (edit.source.clone(), edit.target.clone());
-    let first_time = ctx.reported.borrow_mut().insert(key);
-
-    // 基线在**去重之前**推进：去重管的是「别重复上报」，不是「这处改动没发生」。
-    //
-    // 同一处 `(source, target)` 在一次观察窗口里出现两次是常事 —— 听错的专名在好几句
-    // 里都出现，用户逐个改过去。第二次被去重挡掉时如果不推进基线，基线就停在「只改了
-    // 第一处」的状态，而文档已经改了两处。之后用户再改任何东西，`minimal_edit` 都是拿
-    // 这个陈旧基线去比，算出来的 span 把「已经有结论的那处重复改动」和「新改动」搅在
-    // 一起 —— 多半过不了 `edit_is_within_typed_text`，于是新的那次纠正被静默丢掉。
-    //
-    // 换句话说：**有结论就推进，无论这个结论是不是新的。** 上面两道 return（不是我们
-    // 插的文字、注定成不了词条）才是「还没有结论」，那两处保留基线是对的。
     *ctx.baseline.borrow_mut() = current;
-
-    if !first_time {
-        return;
-    }
     ctx.reports.set(ctx.reports.get() + 1);
-    (ctx.on_edit)(edit);
 }
 
 /// 观察器愿意盯的文档上限（UTF-16 code unit）。
@@ -800,7 +756,7 @@ const EDIT_WATCH_MAX_UTF16: usize = 20_000;
 /// `spawn_blocking` 好 —— 那个要排 tokio 阻塞池的队，负载高时反而更晚。
 pub(super) fn spawn_edit_watcher(
     typed_text: String,
-    on_edit: Box<dyn Fn(EditPair) + Send + Sync>,
+    on_edit: Box<dyn Fn(EditPair) -> bool + Send + Sync>,
 ) -> Option<Arc<AtomicBool>> {
     let stop = Arc::new(AtomicBool::new(false));
     let thread_stop = Arc::clone(&stop);
@@ -835,7 +791,6 @@ pub(super) fn spawn_edit_watcher(
                     pending_since: std::cell::Cell::new(None),
                     typed_text,
                     on_edit,
-                    reported: std::cell::RefCell::new(std::collections::HashSet::new()),
                     reports: std::cell::Cell::new(0),
                     notifications: std::cell::Cell::new(0),
                 },
@@ -975,7 +930,9 @@ fn run_edit_watch_loop(
             }
         }
         if registered.is_empty() {
-            log::info!("[cursor-context] no usable AX notification on this element; edit watch off");
+            log::info!(
+                "[cursor-context] no usable AX notification on this element; edit watch off"
+            );
             CFRelease(observer as CFTypeRef);
             return;
         }
@@ -1109,7 +1066,11 @@ mod tests {
     fn a_negative_caret_location_is_not_the_start_of_the_document() {
         assert_eq!(caret_offset_from_location(0), Some(0), "光标真在开头");
         assert_eq!(caret_offset_from_location(42), Some(42));
-        assert_eq!(caret_offset_from_location(-1), None, "kCFNotFound：没有光标");
+        assert_eq!(
+            caret_offset_from_location(-1),
+            None,
+            "kCFNotFound：没有光标"
+        );
         assert_eq!(caret_offset_from_location(isize::MIN), None);
     }
 }

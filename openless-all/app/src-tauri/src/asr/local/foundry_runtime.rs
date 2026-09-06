@@ -2,6 +2,14 @@
 
 use std::sync::Arc;
 
+#[derive(Debug, Clone)]
+pub struct FoundryNativeModelState {
+    pub alias: String,
+    pub cached: bool,
+    pub size_bytes: Option<u64>,
+    pub display_name: Option<String>,
+}
+
 /// CPU 回退期间向调用方报告的最小状态。调用方只决定如何展示，不参与模型选择。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FoundryFallbackNotice {
@@ -112,7 +120,16 @@ mod imp {
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
     };
-    use std::time::{Duration, Instant};
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+    const PROGRESS_EMIT_MIN_INTERVAL_MS: u64 = 100;
+
+    fn now_millis() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_millis() as u64)
+            .unwrap_or_default()
+    }
 
     use anyhow::{Context, Result};
     use foundry_local_sdk::{DeviceType, FoundryLocalConfig, FoundryLocalManager, Model};
@@ -124,8 +141,7 @@ mod imp {
         FoundryTemporaryCpuFallbackLease, FoundryTranscriptionOutcome,
     };
     use crate::asr::local::foundry::{
-        FoundryCatalogModel, FoundryPrepareProgressPayload, FoundryRuntimeStatus, MODELS,
-        PROVIDER_ID,
+        FoundryPrepareProgressPayload, FoundryRuntimeStatus, PROVIDER_ID,
     };
     use crate::asr::local::foundry_native::{self, RuntimeSource};
 
@@ -725,6 +741,16 @@ mod imp {
             }
         }
 
+        /// 激活事务的 prepare 回执：LoadedModel 只在 SDK load 成功后发布。
+        /// SDK model_id 可包含具体设备后缀，必须以保存的 alias 匹配用户请求。
+        pub(crate) fn is_loaded_for(&self, alias: &str) -> bool {
+            self.state
+                .lock()
+                .loaded
+                .as_ref()
+                .is_some_and(|loaded| loaded.alias == alias)
+        }
+
         pub async fn ensure_loaded(&self, alias: &str, runtime_source: &str) -> Result<String> {
             self.ensure_loaded_with_progress(alias, runtime_source, |_| {})
                 .await
@@ -751,10 +777,8 @@ mod imp {
             let last_emit = Arc::new(AtomicU64::new(0));
             let progress: FoundryPrepareProgressCallback = Arc::new(move |payload| {
                 if payload.percent.is_some() {
-                    let now = crate::asr::local::download::now_millis();
-                    if now - last_emit.load(Ordering::Relaxed)
-                        < crate::asr::local::download::PROGRESS_EMIT_MIN_INTERVAL_MS
-                    {
+                    let now = now_millis();
+                    if now - last_emit.load(Ordering::Relaxed) < PROGRESS_EMIT_MIN_INTERVAL_MS {
                         return;
                     }
                     last_emit.store(now, Ordering::Relaxed);
@@ -807,34 +831,6 @@ mod imp {
         #[cfg(test)]
         pub(crate) fn cancel_prepare_requested_for_tests(&self) -> bool {
             self.cancel_prepare.load(Ordering::SeqCst)
-        }
-
-        pub async fn catalog_snapshot(&self) -> Result<Vec<FoundryCatalogModel>> {
-            let _lifecycle = self.lifecycle.lock().await;
-            if !foundry_native::runtime_ready() || self.state.lock().manager.is_none() {
-                return Ok(crate::asr::local::foundry::static_catalog_models());
-            }
-            let manager = self.manager()?;
-            let mut catalog = Vec::with_capacity(MODELS.len());
-            for known in MODELS {
-                let model = manager
-                    .catalog()
-                    .get_model(known.alias)
-                    .await
-                    .with_context(|| format!("get Foundry catalog model {}", known.alias))?;
-                let info = model.info();
-                let cached = model.is_cached().await.unwrap_or(info.cached);
-                catalog.push(FoundryCatalogModel {
-                    alias: known.alias.to_string(),
-                    display_name: info
-                        .display_name
-                        .clone()
-                        .unwrap_or_else(|| known.display_name.to_string()),
-                    cached,
-                    file_size_mb: info.file_size_mb,
-                });
-            }
-            Ok(catalog)
         }
 
         /// 整段录音（所有分片 + CPU 回退的首次下载/加载）在单次 lifecycle 锁持有内
@@ -927,6 +923,22 @@ mod imp {
             Ok(true)
         }
 
+        /// 等到 native lifecycle 锁之后再次校验 Host 的使用代次。仅在排队前检查会
+        /// 留下 TOCTOU：等待旧推理释放锁期间，新会话/设置页已经开始加载新模型。
+        pub(crate) async fn release_if_generation(
+            &self,
+            generation: &AtomicU64,
+            expected: u64,
+        ) -> Result<bool> {
+            let _lifecycle = self.lifecycle.lock().await;
+            if generation.load(Ordering::Acquire) != expected {
+                return Ok(false);
+            }
+            self.release_now_locked().await?;
+            self.advance_route_epoch();
+            Ok(true)
+        }
+
         /// 取消当前录音时仅清理精确匹配的临时 CPU 模型；正常 alias 模型仍遵循用户已有的
         /// 保活设置。该方法会等待在途下载/加载/推理释放 lifecycle 锁。
         pub async fn release_temporary_cpu_fallback(
@@ -971,6 +983,44 @@ mod imp {
                 .path()
                 .await
                 .with_context(|| format!("get Foundry model path {alias}"))
+        }
+
+        pub async fn inspect_models(
+            &self,
+            aliases: &[String],
+        ) -> Result<Vec<super::FoundryNativeModelState>> {
+            let _lifecycle = self.lifecycle.lock().await;
+            if !foundry_native::runtime_ready() {
+                return Ok(aliases
+                    .iter()
+                    .map(|alias| super::FoundryNativeModelState {
+                        alias: alias.clone(),
+                        cached: false,
+                        size_bytes: None,
+                        display_name: None,
+                    })
+                    .collect());
+            }
+            let manager = self.manager()?;
+            let mut states = Vec::with_capacity(aliases.len());
+            for alias in aliases {
+                let model = manager
+                    .catalog()
+                    .get_model(alias)
+                    .await
+                    .with_context(|| format!("get Foundry catalog model {alias}"))?;
+                let info = model.info();
+                let cached = model.is_cached().await.unwrap_or(info.cached);
+                states.push(super::FoundryNativeModelState {
+                    alias: alias.clone(),
+                    cached,
+                    size_bytes: info
+                        .file_size_mb
+                        .map(|size| size.saturating_mul(1024 * 1024)),
+                    display_name: info.display_name.clone(),
+                });
+            }
+            Ok(states)
         }
 
         pub async fn delete_model(&self, alias: &str) -> Result<()> {
@@ -1565,11 +1615,7 @@ mod imp {
     }
 
     fn model_display_label(alias: &str) -> String {
-        MODELS
-            .iter()
-            .find(|model| model.alias == alias)
-            .map(|model| model.display_name.to_string())
-            .unwrap_or_else(|| alias.to_string())
+        alias.to_string()
     }
 
     fn normalized_language_hint(language_hint: Option<&str>) -> Option<String> {
@@ -1597,6 +1643,26 @@ mod imp {
 
     #[cfg(test)]
     mod lifecycle_tests {
+        #[tokio::test]
+        async fn release_generation_is_rechecked_after_waiting_for_native_lifecycle() {
+            let runtime = super::FoundryLocalRuntime::new();
+            let generation = std::sync::atomic::AtomicU64::new(1);
+            let guard = runtime.lifecycle.lock().await;
+            let release = runtime.release_if_generation(&generation, 1);
+            tokio::pin!(release);
+            assert!(
+                tokio::time::timeout(std::time::Duration::from_millis(1), &mut release)
+                    .await
+                    .is_err()
+            );
+            generation.store(2, std::sync::atomic::Ordering::Release);
+            drop(guard);
+            assert!(
+                !release.await.unwrap(),
+                "stale cleanup must leave the newly-owned runtime intact"
+            );
+        }
+
         use super::{
             cpu_load_completion, foundry_native_dir_candidates, is_cuda_cudnn_failure,
             is_cuda_fallback_candidate, may_reuse_loaded_model, normalized_language_hint,
@@ -2352,12 +2418,6 @@ impl FoundryLocalRuntime {
 
     pub fn invalidate_route(&self) {}
 
-    pub async fn catalog_snapshot(
-        &self,
-    ) -> anyhow::Result<Vec<super::foundry::FoundryCatalogModel>> {
-        Ok(super::foundry::static_catalog_models())
-    }
-
     pub(crate) async fn transcribe_audio_files(
         &self,
         _route_epoch: FoundryRouteEpoch,
@@ -2388,6 +2448,21 @@ impl FoundryLocalRuntime {
 
     pub async fn model_dir_for_alias(&self, alias: &str) -> anyhow::Result<std::path::PathBuf> {
         anyhow::bail!("Foundry Local Whisper is only available on Windows: {alias}");
+    }
+
+    pub async fn inspect_models(
+        &self,
+        aliases: &[String],
+    ) -> anyhow::Result<Vec<FoundryNativeModelState>> {
+        Ok(aliases
+            .iter()
+            .map(|alias| FoundryNativeModelState {
+                alias: alias.clone(),
+                cached: false,
+                size_bytes: None,
+                display_name: None,
+            })
+            .collect())
     }
 
     pub async fn delete_model(&self, alias: &str) -> anyhow::Result<()> {

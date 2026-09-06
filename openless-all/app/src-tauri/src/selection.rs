@@ -339,18 +339,25 @@ pub(crate) fn reactivate_selection_insertion_target(target: &SelectionInsertionT
     #[cfg(target_os = "windows")]
     {
         use windows::Win32::Foundation::HWND;
-        use windows::Win32::UI::WindowsAndMessaging::{BringWindowToTop, SetForegroundWindow};
+        use windows::Win32::UI::WindowsAndMessaging::{
+            BringWindowToTop, IsIconic, SetForegroundWindow, ShowWindow, SW_RESTORE,
+        };
 
         let Some(captured) = target.windows else {
             return false;
         };
         unsafe {
             let foreground = HWND(captured.foreground_window as *mut _);
+            if IsIconic(foreground).as_bool() {
+                let _ = ShowWindow(foreground, SW_RESTORE);
+            }
             let _ = BringWindowToTop(foreground);
             let _ = SetForegroundWindow(foreground);
         }
         std::thread::sleep(Duration::from_millis(80));
-        return true;
+        // Windows 的防抢焦点规则可能拒绝 SetForegroundWindow。只有重新捕获到完全一致的
+        // 窗口/控件指纹才算恢复成功；不能因为激活调用返回了就向当前应用盲目粘贴。
+        return capture_windows_selection_target().as_ref() == Some(&captured);
     }
 
     #[cfg(target_os = "macos")]
@@ -364,7 +371,9 @@ pub(crate) fn reactivate_selection_insertion_target(target: &SelectionInsertionT
         // 预览窗是 OpenLess 自己的窗口，确认后需要把焦点交还原应用再粘贴。
         activate_app_by_pid(pid);
         std::thread::sleep(Duration::from_millis(120));
-        return true;
+        // NSRunningApplication 激活也是 best-effort；必须复核 pid，失败就明确走
+        // copied/error，不能向此刻偶然持有焦点的应用盲写。
+        return current_front_app_pid() == Some(pid);
     }
 
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
