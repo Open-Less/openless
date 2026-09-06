@@ -2811,9 +2811,9 @@ pub(crate) fn hide_selection_voice_intent_prompt<R: tauri::Runtime>(_app: &AppHa
 // ───────────────────────── Less Computer 浮窗 ─────────────────────────
 //
 // Less Computer 语音 Agent 的聊天浮窗（窗口 label = "less-computer"）。
-// 仅 macOS：和 coordinator / 前端对 Less Computer 的 gating 一致（Windows/Linux
-// 不注册热键、前端 detectOS 不渲染入口），所以这些窗口操作全部 `#[cfg(macos)]`，
-// 其它平台是 no-op，避免在非目标平台动 NSWindow / 弹一个空浮窗。
+// Windows/macOS 均提供入口、热键和聊天浮窗，共用 Core 的会话与事件；原生窗口
+// 操作仍按平台分支，macOS 的 NSWindow/AppKit 调整不能流入 Windows 构建。
+// Linux 的产品窗口由 egui Host 接入，不在 Tauri 创建；不支持的平台保留 no-op。
 
 /// Less Computer 浮窗尺寸：与 QA 同款「统一聊天面板」固定大小 —— 窗口出现即
 /// 定死，内容只在面板内部的 MessageScroller 里滚动，不再按内容自适应缩放窗口。

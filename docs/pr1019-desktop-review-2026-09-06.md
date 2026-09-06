@@ -112,6 +112,18 @@
 
 第五轮最终本地验证：Core 727 passed / 1 ignored，生命周期14项及其它合同6/24/18/3/24/13/15/15通过；Windows Tauri 445 passed / 1 ignored；Linux Windows-host 50+4、headless、TypeScript/Vite与67个前端测试入口、Core/Linux严格Clippy、Rust1.88 Tauri检查和六个架构/安全/兼容基线检查通过。R56线程回归另连续10轮、共8万消息通过；独立有界复核未发现锁序或消费者语义问题。R55两端从真正OS线程调用生产同型spawner，避免只在tokio测试线程内验证。旧大合同的构造示例也已链接当前executor前置说明。修复提交后交第六轮全新团队，不提前宣称闭环。
 
+### 第六轮：`fc9824ee...588fb35b`
+
+两名全新审查员再次覆盖整个PR；macOS专项没有新增确定发现，Windows专项确认以下一项同时影响Windows/macOS的共享Tauri录音回归。Standards没有独立硬性违规；同时纠正两处非阻塞过时注释（Windows Less入口、Codex非流式能力/共享分流位置），不将其计作新功能缺失。
+
+| ID | 确定问题 | 修复/验证状态 |
+| --- | --- | --- |
+| R57 / P2 | 可选录音准备被升级为硬依赖：输出设备不存在/静音操作失败，或归档目录路径准备失败时，TauriAudioRecorder直接返回Err而不启动可用麦克风。1.x对静音失败仅告警，归档路径以Option传入Recorder | 已恢复辅助效果告警降级；三种失败组合以旧策略复验均返回Err，新策略回归通过；成功guard持有/释放及禁用不调用平台另有回归。真实Recorder.start错误仍传播，归档为None时不伪造文件。这里验证准备函数与生产接线，不声称真实麦克风已实测 |
+
+第六轮独立Windows定向验证：Agent 5项、hook 12项、IME 50项通过，交互键盘注入1项未运行；macOS相关源码合同通过，Speech检查在Windows明确跳过。以上并未覆盖R57，不能以绿灯代替新增回归。修复提交后继续第七轮全新团队审核。
+
+第六轮最终本地验证：Tauri 447 passed / 1 ignored，Rust1.88检查通过；Core 727 passed / 1 ignored、生命周期14项及全部领域合同、Linux Windows-host 50+4、headless、严格Clippy、前端构建67项和六个架构/安全/兼容基线检查通过。`588fb35b` CI `34009963206`四平台已通过，但修复提交须重新独立验证；Linux artifact条件跳过不算产物通过。
+
 后续独立团队的最终结论和新head CI写入原PR描述；本文保留已复现问题及修复证据，不预填尚未完成的审核或设备结果。
 
 ## 不得混同的完成条件

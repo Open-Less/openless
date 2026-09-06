@@ -234,9 +234,9 @@ impl ActiveLLMProvider {
         }
     }
 
-    /// v1 流式润色只在 OpenAI-compatible 走通；Codex 走 Responses API，shape 与
-    /// chat completions SSE 不同，留给 v2。Gemini 在 coordinator.rs 路径上自己分流，
-    /// 不进 ActiveLLMProvider 枚举。
+    /// 流式润色仅支持 OpenAI-compatible；Codex 使用 Responses API，保留 1.x 的
+    /// 非流式润色能力。调用方须先检查此能力，不能把不同的 SSE 协议混用。
+    /// Gemini 由共享 cloud_providers 单独分流，不进入 ActiveLLMProvider 枚举。
     pub fn supports_streaming_polish(&self) -> bool {
         matches!(self, Self::OpenAI(_))
     }

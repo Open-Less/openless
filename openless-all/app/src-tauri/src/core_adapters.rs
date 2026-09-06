@@ -2247,7 +2247,7 @@ impl LegacyAudioConsumer for AudioConsumerBridge {
 
 struct TauriActiveRecording {
     recorder: Option<Recorder>,
-    archive: Arc<TauriRecordingArchive>,
+    archive: Option<Arc<TauriRecordingArchive>>,
     _mute: Option<crate::audio_mute::AudioMuteGuard>,
 }
 
@@ -2326,7 +2326,9 @@ impl RecordingArchive for TauriRecordingArchive {
 
 impl ActiveRecording for TauriActiveRecording {
     fn archive(&self) -> Option<Arc<dyn RecordingArchive>> {
-        Some(self.archive.clone())
+        self.archive
+            .as_ref()
+            .map(|archive| archive.clone() as Arc<dyn RecordingArchive>)
     }
 
     fn stop(mut self: Box<Self>) -> BoxFuture<'static, Result<(), BackendError>> {
@@ -2352,6 +2354,27 @@ impl ActiveRecording for TauriActiveRecording {
     }
 }
 
+/// 归档和系统输出静音沿用1.x的best-effort语义：目录不可写、没有默认扬声器或
+/// macOS音量脚本失败，都不意味着输入麦克风不可用。分别告警并关闭失败的辅助项，
+/// 让后面的Recorder::start独立报告真实采集错误；成功的静音guard仍由录音资源持有。
+fn prepare_recording_options<M>(
+    archive_path: Result<PathBuf, impl std::fmt::Display>,
+    mute_enabled: bool,
+    activate_mute: impl FnOnce() -> Result<M, String>,
+) -> (Option<PathBuf>, Option<M>) {
+    let archive_path = archive_path
+        .map_err(|error| log::warn!("[recordings] archive unavailable; capture continues: {error}"))
+        .ok();
+    let mute = mute_enabled.then(activate_mute).and_then(|result| {
+        result
+            .map_err(|error| {
+                log::warn!("[audio-mute] failed to mute output; capture continues: {error}")
+            })
+            .ok()
+    });
+    (archive_path, mute)
+}
+
 impl AudioRecorder for TauriAudioRecorder {
     fn start(
         &self,
@@ -2371,15 +2394,8 @@ impl AudioRecorder for TauriAudioRecorder {
                     preview.stop();
                 }
             }
-            let archive_path = crate::persistence::recording_path_for_session(
-                &session_id.to_string(),
-            )
-            .map_err(|error| {
-                BackendError::new(
-                    BackendErrorCode::Persistence,
-                    format!("resolve dictation recording path: {error}"),
-                )
-            })?;
+            let archive_path =
+                crate::persistence::recording_path_for_session(&session_id.to_string());
             let microphone = context.recording.microphone_device_name.clone();
             let recording_plan = context.recording.clone();
             let fault_progress = Arc::clone(&progress);
@@ -2390,11 +2406,11 @@ impl AudioRecorder for TauriAudioRecorder {
                 ) {
                     log::warn!("[recordings] prune before capture failed: {error:#}");
                 }
-                let mute = recording_plan
-                    .mute_during_recording
-                    .then(crate::audio_mute::AudioMuteGuard::activate)
-                    .transpose()
-                    .map_err(|error| BackendError::new(BackendErrorCode::Platform, error))?;
+                let (archive_path, mute) = prepare_recording_options(
+                    archive_path,
+                    recording_plan.mute_during_recording,
+                    crate::audio_mute::AudioMuteGuard::activate,
+                );
                 let started_at = Instant::now();
                 let level_progress = Arc::clone(&progress);
                 let level_handler: Arc<dyn Fn(f32) + Send + Sync> = Arc::new(move |level| {
@@ -2404,25 +2420,24 @@ impl AudioRecorder for TauriAudioRecorder {
                 let consumer: Arc<dyn LegacyAudioConsumer> =
                     Arc::new(AudioConsumerBridge { inner: consumer });
                 let recorder_archive_path = archive_path.clone();
-                let start_result = Recorder::start(
-                    microphone,
-                    consumer,
-                    level_handler,
-                    Some(recorder_archive_path),
-                );
+                let start_result =
+                    Recorder::start(microphone, consumer, level_handler, recorder_archive_path);
                 let (recorder, runtime_errors, archive_active) = match start_result {
                     Ok(started) => started,
                     Err(error) => {
                         // Recorder::start may create the WAV before the native
                         // stream fails. No archive handle is returned on this
                         // path, so remove that partial file here.
-                        let _ = std::fs::remove_file(&archive_path);
+                        if let Some(path) = &archive_path {
+                            let _ = std::fs::remove_file(path);
+                        }
                         return Err(map_recorder_error(error));
                     }
                 };
                 let recording = Box::new(TauriActiveRecording {
                     recorder: Some(recorder),
-                    archive: Arc::new(TauriRecordingArchive::new(archive_path, archive_active)),
+                    archive: archive_path
+                        .map(|path| Arc::new(TauriRecordingArchive::new(path, archive_active))),
                     _mute: mute,
                 }) as Box<dyn ActiveRecording>;
                 Ok((recording, runtime_errors))
@@ -2993,6 +3008,61 @@ fn map_tauri_error(error: impl std::fmt::Display) -> BackendError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn optional_recording_preparation_failure_keeps_microphone_options_usable() {
+        // 这里只替代文件系统/输出静音边界，不启动真实麦克风或修改系统音量。
+        // 1.x 的这两项准备都允许失败；准备结果仍必须能交给 Recorder::start。
+        let mut options = Vec::new();
+        for (archive_fails, mute_fails) in [(true, false), (false, true), (true, true)] {
+            let archive_result = if archive_fails {
+                Err("recordings directory cannot be created")
+            } else {
+                Ok(PathBuf::from("fixture.wav"))
+            };
+            let (archive, mute) = prepare_recording_options(archive_result, true, || {
+                if mute_fails {
+                    Err("default render endpoint is unavailable".to_string())
+                } else {
+                    Ok(())
+                }
+            });
+            options.push((archive.is_some(), mute.is_some()));
+        }
+        assert_eq!(
+            options,
+            vec![(false, true), (true, false), (false, false)],
+            "optional effects must not prevent capture"
+        );
+    }
+
+    #[test]
+    fn optional_recording_preparation_preserves_guard_ownership_and_disabled_behavior() {
+        struct MuteGuard(Arc<AtomicU64>);
+        impl Drop for MuteGuard {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        let restored = Arc::new(AtomicU64::new(0));
+        let path = PathBuf::from("fixture.wav");
+        let (archive, mute) =
+            prepare_recording_options(Ok::<_, String>(path.clone()), true, || {
+                Ok(MuteGuard(Arc::clone(&restored)))
+            });
+        assert_eq!(archive, Some(path.clone()));
+        assert_eq!(restored.load(Ordering::SeqCst), 0);
+        // 成功的guard必须交给录音资源，而不是在准备结束时提前恢复音量。
+        drop(mute);
+        assert_eq!(restored.load(Ordering::SeqCst), 1);
+        let (archive, mute) = prepare_recording_options(
+            Ok::<_, String>(path.clone()),
+            false,
+            || -> Result<(), String> { panic!("disabled muting must not call the platform") },
+        );
+        assert_eq!(archive, Some(path));
+        assert!(mute.is_none());
+    }
 
     #[test]
     fn native_callback_tasks_run_on_the_tauri_host_runtime() {
