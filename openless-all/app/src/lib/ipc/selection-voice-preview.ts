@@ -34,8 +34,10 @@ export function getSelectionVoicePreview(qaSessionId: string): Promise<Selection
   }));
 }
 
-export function confirmSelectionVoicePreview(text: string, qaSessionId: string): Promise<void> {
-  return invokeOrMock('confirm_selection_voice_preview', { text, qaSessionId }, () => undefined);
+export type SelectionVoiceApplyOutcome = 'inserted' | 'paste_sent' | 'copied_fallback';
+
+export function confirmSelectionVoicePreview(text: string, qaSessionId: string): Promise<SelectionVoiceApplyOutcome> {
+  return invokeOrMock('confirm_selection_voice_preview', { text, qaSessionId }, () => 'paste_sent');
 }
 
 export function revertSelectionVoicePreview(qaSessionId: string): Promise<void> {

@@ -14,7 +14,7 @@ assert.equal(
   "node scripts/stage-macos-mlx-metallib.mjs",
 )
 assert.equal(
-  overlay.bundle.macOS.files["MacOS/mlx.metallib"],
+  overlay.bundle.macOS.files["Resources/mlx.metallib"],
   "target/release/openless-mlx/mlx.metallib",
 )
 assert.match(buildScript, /arm64\)[\s\S]*tauri\.macos-mlx\.conf\.json/)

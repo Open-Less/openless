@@ -5,7 +5,7 @@
 // 订阅三套本地 ASR 引擎的下载进度事件并维护本地 state，与页面状态解耦，页面
 // 重渲染不会拖累它，它也不会让页面跟随每个进度事件重渲染。
 //
-// 事件在 Rust 侧已按 ≥150ms 节流（见 download.rs PROGRESS_EMIT_MIN_INTERVAL_MS），
+// 事件在 Core ModelStore 内已按 ≥150ms 节流，
 // 进度条不会因高频 IPC 抽搐；这里只做展示 + 取消入口，不参与模型状态管理。
 //
 // portal 到 body 的原因与 DownloadDialog 相同：WindowChrome 根节点的常驻

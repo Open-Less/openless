@@ -39,17 +39,17 @@ assertEqual(legacy.selection, '旧选区', 'legacy messages still expose their s
 assertEqual(legacy.question, '旧问题', 'legacy messages still expose their question');
 
 assertEqual(
-  acceptQaSessionEvent('new-session', { kind: 'answer_delta', session_id: 'old-session' }).accepted,
+  acceptQaSessionEvent('new-session', { kind: 'answer_delta', sessionId: 'old-session' }).accepted,
   false,
   'a late delta from an invalidated session is rejected',
 );
 assertEqual(
-  acceptQaSessionEvent('old-session', { kind: 'recording', session_id: 'new-session' }).sessionId,
+  acceptQaSessionEvent('old-session', { kind: 'recording', sessionId: 'new-session' }).sessionId,
   'new-session',
   'a recording event activates the next turn token',
 );
 assertEqual(
-  acceptQaSessionEvent('old-session', { kind: 'idle', session_id: 'new-session' }).sessionId,
+  acceptQaSessionEvent('old-session', { kind: 'idle', sessionId: 'new-session' }).sessionId,
   'new-session',
   'a panel-open idle activates the reopened panel token',
 );

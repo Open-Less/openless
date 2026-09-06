@@ -325,11 +325,9 @@ pub(super) fn report_restore_step_results(
     }
     match (legacy_result, modern_result) {
         (Ok(()), _) | (_, Ok(())) => Ok(()),
-        (Err(legacy_error), Err(modern_error)) => Err(WindowsImeProfileError::WindowsApi(
-            format!(
-                "both legacy and modern restore failed: legacy={legacy_error}; modern={modern_error}"
-            ),
-        )),
+        (Err(legacy_error), Err(modern_error)) => Err(WindowsImeProfileError::WindowsApi(format!(
+            "both legacy and modern restore failed: legacy={legacy_error}; modern={modern_error}"
+        ))),
     }
 }
 
@@ -340,13 +338,13 @@ mod windows_impl {
     use std::path::Path;
     use std::ptr;
     use windows::core::{GUID, HRESULT};
+    use windows::Win32::Foundation::BOOL;
     use windows::Win32::Foundation::RPC_E_CHANGED_MODE;
     use windows::Win32::System::Com::{
         CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER,
         COINIT_APARTMENTTHREADED,
     };
     use windows::Win32::UI::Input::KeyboardAndMouse::HKL;
-    use windows::Win32::Foundation::BOOL;
     use windows::Win32::UI::TextServices::{
         CLSID_TF_InputProcessorProfiles, ITfInputProcessorProfileMgr, ITfInputProcessorProfiles,
         GUID_TFCAT_TIP_KEYBOARD, TF_INPUTPROCESSORPROFILE, TF_IPPMF_DONTCARECURRENTINPUTLANGUAGE,
@@ -556,12 +554,7 @@ mod windows_impl {
         let enable_flag = BOOL::from(enabled);
 
         with_input_processor_profiles(|profiles| unsafe {
-            profiles.EnableLanguageProfile(
-                &clsid,
-                OPENLESS_TSF_LANG_ID,
-                &profile_guid,
-                enable_flag,
-            )
+            profiles.EnableLanguageProfile(&clsid, OPENLESS_TSF_LANG_ID, &profile_guid, enable_flag)
         })
     }
 
@@ -570,11 +563,8 @@ mod windows_impl {
         let profile_guid = parse_guid(OPENLESS_PROFILE_GUID_BRACED)?;
 
         with_input_processor_profiles(|profiles| unsafe {
-            let enabled = profiles.IsEnabledLanguageProfile(
-                &clsid,
-                OPENLESS_TSF_LANG_ID,
-                &profile_guid,
-            )?;
+            let enabled =
+                profiles.IsEnabledLanguageProfile(&clsid, OPENLESS_TSF_LANG_ID, &profile_guid)?;
             Ok(enabled.as_bool())
         })
     }

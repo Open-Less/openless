@@ -32,6 +32,17 @@ else()
     message(FATAL_ERROR "Cannot find fcitx5 module headers (fcitx-module/dbus/dbus_public.h)")
 endif()
 
+include(CTest)
+if(BUILD_TESTING)
+    add_executable(input_target_contract input_target_contract.cpp)
+    # Release packaging runs this executable too; assertions are its contract,
+    # so NDEBUG must never turn the validation into a no-op.
+    target_compile_options(input_target_contract PRIVATE -UNDEBUG)
+    target_include_directories(input_target_contract PRIVATE "${FCITX5_MODULE_INCLUDE_DIR}")
+    target_link_libraries(input_target_contract PRIVATE Fcitx5::Core Fcitx5::Utils Fcitx5::Module::Clipboard)
+    add_test(NAME input_target_contract COMMAND input_target_contract)
+endif()
+
 # Install the plugin .so to fcitx5 addon dir
 install(TARGETS openless
     LIBRARY DESTINATION "${FCITX_INSTALL_ADDONDIR}")

@@ -67,6 +67,9 @@ assert.match(script, /\[switch\]\$SkipNpmCi/, "script should support reusing exi
 assert.match(script, /\[switch\]\$CleanArtifacts/, "script should support cleaning the output directory");
 assert.doesNotMatch(script, /WixTools314/, "MSVC packaging must not hard-code a single Tauri WiX tools version");
 assert.doesNotMatch(ciWorkflow, /WixTools314/, "CI MSI repair must not hard-code a single Tauri WiX tools version");
+assert.match(script, /cmd\.exe \/V:ON \/d \/c/, "MSVC packaging must preserve the VsDevCmd environment with delayed expansion");
+assert.match(script, /PATH=\$CargoBin;!PATH!/, "MSVC packaging must expand PATH after VsDevCmd runs");
+assert.doesNotMatch(script, /PATH=\$CargoBin;%PATH%/, "MSVC packaging must not eagerly expand PATH before VsDevCmd");
 assert.match(script, /-Filter "WixTools\*"/, "MSVC packaging should discover Tauri WiX tools by WixTools* glob");
 assert.match(ciWorkflow, /WixTools\*\\light\.exe/, "CI MSI repair should discover Tauri WiX tools by WixTools* glob");
 
@@ -100,6 +103,7 @@ assert.equal(tauriConfig.bundle.windows.nsis.installerHooks, "nsis/openless-ime-
 
 assert.match(imeSolution, /Release\|Win32/, "IME solution should include a Win32 Release configuration");
 assert.match(imeProject, /Release\|Win32/, "IME project should include a Win32 Release configuration");
+assert.match(imeProject, /<AdditionalOptions>\/utf-8 %\(AdditionalOptions\)<\/AdditionalOptions>/, "IME project must decode UTF-8 source independently of the runner code page");
 assert.match(imeTextService, /TF_E_SYNCHRONOUS/, "IME should detect hosts like Word that reject synchronous edit sessions");
 assert.match(imeTextService, /TF_ES_ASYNC \| TF_ES_READWRITE/, "IME should retry Word-hosted commits with an async edit session");
 assert.match(imeTextService, /WaitForSingleObject/, "IME pipe submit should wait for async edit-session completion");

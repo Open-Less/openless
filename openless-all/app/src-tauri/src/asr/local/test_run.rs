@@ -18,8 +18,6 @@ use std::time::Instant;
 use anyhow::Result;
 use serde::Serialize;
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
-use super::models::model_dir;
 use super::models::ModelId;
 
 /// 内嵌测试音频。原始文件 `vendor/qwen-asr/samples/test_speech.wav`
@@ -44,16 +42,17 @@ pub struct TestResult {
 pub async fn run_test(
     model_id: ModelId,
     backend: Option<super::QwenBackend>,
+    model_dir: std::path::PathBuf,
 ) -> Result<TestResult> {
     if model_id.is_whisper() {
         #[cfg(target_os = "macos")]
-        return run_whisper_test(model_id).await;
+        return run_whisper_test(model_id, model_dir).await;
         #[cfg(target_os = "linux")]
         anyhow::bail!("本地 Whisper 测试仅支持 macOS");
     }
     let backend =
         backend.ok_or_else(|| anyhow::anyhow!("当前系统不支持所选的本地 Qwen3-ASR 后端"))?;
-    let dir = model_dir(model_id)?;
+    let dir = model_dir;
     if !dir.exists() {
         anyhow::bail!("模型目录不存在：{}（请先下载）", dir.display());
     }
@@ -143,10 +142,10 @@ pub async fn run_test(
 }
 
 #[cfg(target_os = "macos")]
-async fn run_whisper_test(model_id: ModelId) -> Result<TestResult> {
+async fn run_whisper_test(model_id: ModelId, model_dir: std::path::PathBuf) -> Result<TestResult> {
     use super::whisper_provider::{LocalWhisperCache, WhisperEngine};
 
-    let path = super::whisper_provider::model_path_for_model(model_id.as_str())?;
+    let path = super::whisper_provider::model_path_for_model(model_id.as_str(), &model_dir)?;
     if !path.is_file() {
         anyhow::bail!("模型文件不存在：{}（请先下载）", path.display());
     }
@@ -186,6 +185,7 @@ async fn run_whisper_test(model_id: ModelId) -> Result<TestResult> {
 pub async fn run_test(
     _model_id: ModelId,
     _backend: Option<super::QwenBackend>,
+    _model_dir: std::path::PathBuf,
 ) -> Result<TestResult> {
     anyhow::bail!("本地 Qwen3-ASR C 后端目前仅支持 macOS/Linux；MLX 后端仅支持 macOS")
 }

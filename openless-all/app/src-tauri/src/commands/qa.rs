@@ -1,8 +1,12 @@
 use super::*;
 
 #[tauri::command]
-pub fn get_qa_hotkey_label(coord: CoordinatorState<'_>) -> String {
-    coord.qa_hotkey_label()
+pub fn get_qa_hotkey_label(core: CoreState<'_>) -> String {
+    core.get_preferences()
+        .qa_hotkey
+        .as_ref()
+        .map(|binding| binding.display_label())
+        .unwrap_or_default()
 }
 
 /// 设置 QA 快捷键并热更新 monitor。
@@ -16,47 +20,61 @@ pub fn set_qa_hotkey(
     if let Some(binding) = binding.as_ref() {
         crate::shortcut_binding::validate_binding(binding).map_err(|e| e.to_string())?;
         crate::shortcut_binding::reject_side_specific_non_dictation(binding)?;
-        if binding.modifiers.is_empty() && binding.primary.eq_ignore_ascii_case("shift") {
-            return Err("Shift 单键目前只能用于翻译快捷键".into());
-        }
+        reject_bare_shift_dictation_shortcut(binding)?;
     }
-    let mut prefs = coord.prefs().get();
+    let mut prefs = coord.backend().get_preferences();
     prefs.qa_hotkey = binding;
     reject_hotkey_collisions(&prefs)?;
-    coord.prefs().set(prefs).map_err(|e| e.to_string())?;
-    coord.update_qa_hotkey_binding();
-    Ok(())
+    super::settings::persist_strict_settings(&coord, prefs)
 }
 
 /// 用户点 ✕ / 按 Esc 关 QA 浮窗。
 #[tauri::command]
-pub fn qa_window_dismiss(coord: CoordinatorState<'_>) {
-    coord.qa_window_dismiss();
+pub async fn qa_window_dismiss(core: CoreState<'_>) -> Result<(), String> {
+    core.services()
+        .qa
+        .dismiss()
+        .await
+        .map_err(|error| error.message)
 }
 
 /// 移动端 QA 面板录音按钮：Idle -> begin_qa_session，Recording -> end_qa_session。
 #[tauri::command]
-pub async fn qa_toggle_recording(coord: CoordinatorState<'_>) -> Result<(), String> {
-    coord.qa_toggle_recording().await;
-    Ok(())
+pub async fn qa_toggle_recording(core: CoreState<'_>) -> Result<(), String> {
+    core.services()
+        .qa
+        .toggle_recording()
+        .await
+        .map_err(|error| error.message)
 }
 
 /// QA 面板键盘输入：复用语音 QA 的 LLM 管线，只替换问题来源。
 #[tauri::command]
-pub async fn qa_submit_text(coord: CoordinatorState<'_>, text: String) -> Result<(), String> {
-    coord.qa_submit_text(text).await
+pub async fn qa_submit_text(core: CoreState<'_>, text: String) -> Result<(), String> {
+    core.services()
+        .qa
+        .submit_text(text)
+        .await
+        .map_err(|error| error.message)
 }
 
 /// 划词提问面板「编辑指令」复选框。
 #[tauri::command]
-pub fn qa_set_edit_instruction_mode(coord: CoordinatorState<'_>, enabled: bool) {
-    coord.qa_set_edit_instruction_mode(enabled);
+pub async fn qa_set_edit_instruction_mode(
+    core: CoreState<'_>,
+    enabled: bool,
+) -> Result<(), String> {
+    core.services()
+        .qa
+        .set_edit_instruction_mode(enabled)
+        .await
+        .map_err(|error| error.message)
 }
 
 /// 用户点 ✕ / 按 Esc 关 Less Computer 浮窗。
 #[tauri::command]
-pub fn less_computer_window_dismiss(coord: CoordinatorState<'_>) {
-    coord.less_computer_window_dismiss();
+pub async fn less_computer_window_dismiss(coord: CoordinatorState<'_>) -> Result<(), String> {
+    coord.dismiss_less_computer().await
 }
 
 /// 聊天面板（qa / less-computer）请求键盘焦点。
@@ -117,8 +135,18 @@ pub fn chat_panel_focus_keyboard(window: Window) -> Result<(), String> {
 
 /// 浮窗打字输入：文字指令直接进入 Less Computer 执行链（跳过录音与 ASR）。
 #[tauri::command]
-pub fn less_computer_submit_text(coord: CoordinatorState<'_>, text: String) {
-    coord.less_computer_submit_text(text);
+pub fn less_computer_submit_text(core: CoreState<'_>, coord: CoordinatorState<'_>, text: String) {
+    let text = text.trim().to_string();
+    if text.is_empty() {
+        return;
+    }
+    let host = coord.tauri_host();
+    let backend = Arc::clone(&*core);
+    host.spawn(async move {
+        if let Err(error) = backend.submit_less_computer(text).await {
+            log::warn!("[less-computer] text submit run failed: {error}");
+        }
+    });
 }
 
 /// 主设置页的文字测试入口。浮窗自身无需也不允许反向调用这个命令。
@@ -130,7 +158,7 @@ pub fn less_computer_window_open(
     if window.label() != "main" {
         return Err("Less Computer can only be opened from the main window".to_string());
     }
-    coord.less_computer_window_open();
+    coord.tauri_host().show_less_computer();
     Ok(())
 }
 
@@ -141,11 +169,18 @@ pub fn less_computer_window_open(
 /// mount 后先注册 listener 再调本命令重放积压，按 seq 去重衔接实时流。
 /// 会话内容敏感，仅允许 less-computer 窗口调用（与 less_computer_approve 同款收紧）。
 #[tauri::command]
-pub fn less_computer_sync(window: Window) -> Result<Vec<serde_json::Value>, String> {
+pub fn less_computer_sync(
+    window: Window,
+    core: CoreState<'_>,
+    after_sequence: Option<u64>,
+) -> Result<crate::coordinator::LessComputerEventReplay, String> {
     if window.label() != "less-computer" {
         return Err("sync can only be requested from the Less Computer window".to_string());
     }
-    Ok(crate::coordinator::less_computer_event_backlog())
+    Ok(crate::coordinator::less_computer_event_replay_after(
+        &core,
+        after_sequence.unwrap_or(0),
+    ))
 }
 
 /// 内联审批卡的 Approve / Deny 回执。token 关联到等待中的拦截动作。
@@ -153,15 +188,18 @@ pub fn less_computer_sync(window: Window) -> Result<Vec<serde_json::Value>, Stri
 /// 安全：审批 UI 渲染在 less-computer 窗口（LessComputerPanel），故仅允许该窗口提交，
 /// 拦截 main / capsule / qa / glow 等其它窗口伪造审批 —— 把可调用窗口从 5 个收紧到 1 个。
 #[tauri::command]
-pub fn less_computer_approve(
+pub async fn less_computer_approve(
     window: Window,
-    coord: CoordinatorState<'_>,
+    core: CoreState<'_>,
     token: String,
     approved: bool,
 ) -> Result<(), String> {
     if window.label() != "less-computer" {
         return Err("approval can only be submitted from the Less Computer window".to_string());
     }
-    coord.less_computer_approve(&token, approved);
-    Ok(())
+    core.services()
+        .less_computer
+        .approve(token, approved)
+        .await
+        .map_err(|error| error.to_string())
 }

@@ -156,8 +156,11 @@ function Invoke-MsvcBuild {
   $msiPath = Get-MsiPath
   Remove-Item -LiteralPath $msiPath -Force -ErrorAction SilentlyContinue
 
-  $buildCommand = "call `"$VsDevCmd`" -arch=x64 -host_arch=x64 && set `"PATH=$CargoBin;%PATH%`" && set `"OPENLESS_IME_DLL_X64=$env:OPENLESS_IME_DLL_X64`" && set `"OPENLESS_IME_DLL_X86=$env:OPENLESS_IME_DLL_X86`" && npm.cmd run tauri build -- --target x86_64-pc-windows-msvc --bundles msi"
-  & cmd.exe /d /c $buildCommand
+  # cmd expands %PATH% before executing `call VsDevCmd`, which would discard
+  # the MSVC paths and select Git/MSYS `link.exe`. Delayed expansion keeps the
+  # environment produced by VsDevCmd intact for Cargo and Tauri.
+  $buildCommand = "call `"$VsDevCmd`" -arch=x64 -host_arch=x64 && set `"PATH=$CargoBin;!PATH!`" && set `"OPENLESS_IME_DLL_X64=$env:OPENLESS_IME_DLL_X64`" && set `"OPENLESS_IME_DLL_X86=$env:OPENLESS_IME_DLL_X86`" && npm.cmd run tauri build -- --target x86_64-pc-windows-msvc --bundles msi"
+  & cmd.exe /V:ON /d /c $buildCommand
   if ($LASTEXITCODE -ne 0) {
     Write-Warning "Tauri Windows MSI build returned exit code $LASTEXITCODE. Trying to finish MSI linking from generated WiX objects."
     Repair-TauriMsiBundle
@@ -320,6 +323,7 @@ try {
 
   $cargoBin = Join-Path $env:USERPROFILE ".cargo\bin"
   Invoke-OpenLessImeBuild
+  . (Join-Path $PSScriptRoot "prepare-windows-sherpa.ps1") -AppRoot $appRoot
   Invoke-MsvcBuild -VsDevCmd $vsDevCmd -CargoBin $cargoBin
   Copy-WindowsArtifacts
 } finally {

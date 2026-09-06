@@ -265,8 +265,14 @@ mod tests {
 
         forward_loop(8, event_rx, out_tx);
 
-        assert!(matches!(out_rx.recv().unwrap(), ComboHotkeyEvent::Released { .. }));
-        assert!(matches!(out_rx.recv().unwrap(), ComboHotkeyEvent::Pressed { .. }));
+        assert!(matches!(
+            out_rx.recv().unwrap(),
+            ComboHotkeyEvent::Released { .. }
+        ));
+        assert!(matches!(
+            out_rx.recv().unwrap(),
+            ComboHotkeyEvent::Pressed { .. }
+        ));
         assert!(out_rx.try_recv().is_err());
     }
 }

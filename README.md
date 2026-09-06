@@ -5,7 +5,7 @@
 <h1 align="center">OpenLess</h1>
 
 <p align="center">
-  <strong>Open-source voice input for macOS &amp; Windows</strong>
+  <strong>Open-source voice input for macOS, Windows &amp; Linux</strong>
 </p>
 
 <p align="center">
@@ -33,6 +33,7 @@
 <p align="center">
   <img alt="macOS" src="https://img.shields.io/badge/macOS-12%2B-1f425f?style=flat-square&logo=apple&logoColor=white" />
   <img alt="Windows" src="https://img.shields.io/badge/Windows-10%2B-0078d4?style=flat-square&logo=windows&logoColor=white" />
+  <img alt="Linux" src="https://img.shields.io/badge/Linux-egui-fcc624?style=flat-square&logo=linux&logoColor=black" />
   <img alt="Tauri" src="https://img.shields.io/badge/Tauri-2-24c8db?style=flat-square&logo=tauri&logoColor=white" />
   <img alt="Rust" src="https://img.shields.io/badge/Rust-2021-ce422b?style=flat-square&logo=rust&logoColor=white" />
 </p>
@@ -193,7 +194,7 @@ OpenLess does one thing: it **turns speech into usable written text — AI promp
 
 Every item below is one more layer sedimented into a default — a capability you authorize once and then never manage again. This is the infrastructure you stand on after launch:
 
-- Tauri 2 backend in Rust with a React/TypeScript frontend. macOS 14+, Windows 10+.
+- The shared Rust backend lives in `openless-core`. macOS and Windows use a thin Tauri 2 host with the React/TypeScript frontend; Android keeps the Tauri mobile host. Linux uses a separate native host and will not compile Tauri or WebKitGTK.
 - 🎨 **Style Pack Marketplace** — browse, install, and like community **style packs** from the in-app Marketplace, and publish your own (custom system prompt per pack, switchable by hotkey). Backed by a moderated marketplace backend; uploads are reviewed before they go public.
 - ⚡ **Streaming insertion** — polished text is written to the cursor character by character to reduce perceived latency, with an automatic one-shot-paste fallback. Toggle in Settings → Recording.
 - **Toggle and push-to-talk** recording modes, plus a **MediaPlayPause trigger** so wired-earbud inline controls can start and stop recording. `Esc` cancels at any phase, including polish and insertion.
@@ -205,9 +206,9 @@ Every item below is one more layer sedimented into a default — a capability yo
 - **Main window**: Overview / History / Vocab / Style / Marketplace / Settings. Persistent tray icon, plus a mini status capsule that floats on screen and follows the display you are typing on (multi-monitor).
 - **Local model management** — manage on-disk local-ASR model storage from Settings.
 - **Multilingual UI** — Settings → Language switches between 简体中文 / 繁體中文 / English / 日本語 / 한국어 (auto-detected on first launch).
-- **In-app auto-update** — Settings → About → Check; signed updater artifacts via the Tauri updater plugin.
+- **In-app auto-update on the Tauri hosts** — Settings → About → Check; signed updater artifacts via the Tauri updater plugin on macOS, Windows, and Android. Linux has an independent manifest and updater contract.
 - **Beta channel (opt-in)** — Settings → About → Join Beta channel exposes the latest pre-release build for manual download. Beta releases never reach Stable users automatically (see [Contributing workflow](#contributing-workflow)).
-- **Distribution channels** — direct DMG/EXE from [Releases](../../releases), Homebrew Cask (`brew install --cask openless`), and a Windows installer.
+- **Distribution channels** — direct DMG/EXE from [Releases](../../releases), Homebrew Cask (`brew install --cask openless`), and a Windows installer. Linux packages are not published until the separate egui UI is complete and its release gate is enabled.
 - **Single-instance lock** — prevents two OpenLess processes from racing the same hotkey edge.
 - Dictionary entries are injected as Volcengine ASR `context.hotwords` and as semantic hints during polish; hits accumulate per session.
 - Platform-native global hotkey: CGEventTap on macOS, low-level keyboard hook (`WH_KEYBOARD_LL`) on Windows.
@@ -229,6 +230,7 @@ Go to [Releases](../../releases) and download:
   - In-app updates (Settings → About) use `latest-android-{arch}.json` manifests; Beta users join Beta in Advanced settings.
   - Debug smoke builds: `OpenLess-android-debug-{abi}-*.apk` from workflow_dispatch artifacts.
   - If unsure, run `adb shell getprop ro.product.cpu.abi` and pick the matching APK.
+- **Linux**: the Tauri/WebView build has been retired. `linux-egui` now contains a native `eframe` UI backed by the shared Core 2.0 services. Production release still requires Linux CI artifacts plus real Ubuntu audio, focus/input, install, upgrade, and rollback evidence.
 - **macOS (Homebrew)**:
   ```bash
   brew tap Open-Less/openless https://github.com/Open-Less/openless
@@ -256,28 +258,31 @@ For the full end-user walkthrough, see [USAGE.md](USAGE.md).
 
 ## Build from source (developers)
 
-The active codebase lives in `openless-all/app/` (Tauri 2 + Rust + React/TS). The macOS build links a vendored C ASR engine ([`Open-Less/qwen-asr`](https://github.com/Open-Less/qwen-asr), forked from `antirez/qwen-asr`) pulled in as a git submodule under `src-tauri/vendor/qwen-asr/`, so initialize submodules on first clone. **Recursive submodule initialization is required on every platform** — the macOS-only `qwen3-asr-rs` path dependency is still parsed by Cargo on Windows/Linux (skipping it fails `cargo check` at resolution time), and Linux builds compile the vendored C engine too.
+The active workspace lives in `openless-all/app/`. `crates/openless-core` is the framework-independent backend, `src-tauri` hosts macOS/Windows/Android, and `linux-egui` contains the native Linux UI and its platform adapters. The macOS Tauri build links a vendored C ASR engine ([`Open-Less/qwen-asr`](https://github.com/Open-Less/qwen-asr), forked from `antirez/qwen-asr`) under `src-tauri/vendor/qwen-asr/`; initialize submodules for macOS Tauri development. The root core/Linux workspace deliberately excludes `src-tauri`, so Linux core and host checks neither initialize that submodule nor parse the Tauri manifest.
 
 Rust 1.88 is the minimum supported toolchain for source builds; the latest stable Rust is recommended. CI verifies both Rust 1.88 and stable on macOS, Windows, and Linux.
 
 On Apple Silicon, compiling the optional Qwen3-ASR MLX backend requires Xcode's MetalToolchain component. Install it with `xcodebuild -downloadComponent MetalToolchain` and verify it with `xcrun --find metal`. This is a source-build dependency; packaged OpenLess applications do not require it at runtime.
 
 ```bash
-# First clone only — pull in vendored submodules
-git submodule update --init --recursive
-
 cd "openless-all/app"
 npm ci
 
-# Dev: Vite at :1420 + Tauri shell
+# macOS/Windows/Android: Vite at :1420 + Tauri host
+# Initialize submodules first when building the macOS local-ASR target.
+git submodule update --init --recursive
 npm run tauri dev
 
 # macOS release build (signs, installs, resets TCC)
 ./scripts/build-mac.sh
 INSTALL=0 ./scripts/build-mac.sh   # build only, skip install
 
-# Rust type-check without a full compile
-cargo check --manifest-path src-tauri/Cargo.toml
+# Shared backend and Linux non-UI host (no Tauri/WebKitGTK)
+cargo check -p openless-core
+cargo check -p openless-linux-egui --all-targets
+
+# Tauri host type-check
+cargo check --manifest-path "src-tauri/Cargo.toml"
 
 # Frontend TS check
 npm run build
@@ -376,24 +381,17 @@ The main window is organized as Home / History / Dictionary / Settings. The Dict
 
 ## Architecture
 
-The active implementation is Tauri 2 (`openless-all/app/`). Releases are split into two channels: **Stable** (`v<v>-tauri` tag, auto-updated for all users) and **Beta** (`v<v>-beta-tauri` tag, GitHub pre-release, manually downloaded by opt-in users). Signed updater artifacts are produced by CI on every release tag.
-
-**Tauri backend (Rust)** — each module depends only on `types.rs`:
+The application has one shared backend Interface and platform hosts:
 
 ```
-types.rs         Pure value types: DictationSession, PolishMode, HotkeyBinding, errors
-hotkey.rs        Global hotkey (CGEventTap on macOS, WH_KEYBOARD_LL on Windows, rdev on Linux)
-recorder.rs      Mic → 16 kHz mono Int16 PCM, RMS callback
-asr/             Streaming ASR clients (Volcengine / Bailian / Qwen3 / StepFun / iFlytek over WebSocket) + Whisper-compatible batch HTTP
-polish.rs        OpenAI-compatible chat completions (Ark / DeepSeek / etc.)
-insertion.rs     AX focused-element → clipboard + Cmd+V → copy-only fallback
-persistence.rs   History / preferences / vocab JSON + platform credential vault
-permissions.rs   TCC checks (Accessibility / Microphone)
-coordinator.rs   State machine: Idle → Starting → Listening → Processing
-commands.rs      Tauri IPC surface
+React UI ── Tauri Adapter (macOS/Windows/Android) ──┐
+                                                   ├── openless-core
+egui UI  ── Linux Adapter (no Tauri/WebKitGTK) ────┘
 ```
 
-**React frontend (`src/`)** — state via Recoil atoms (`pages/_atoms.tsx`); hotkey capability and binding via `HotkeySettingsContext`; all backend calls go through `lib/ipc.ts`.
+`openless-core` owns the stable DTOs, errors, semantic events, repositories, credentials contract, and host-facing use-case Interface. Host-only concerns—IPC, windows, tray, permissions, updater, keyring, fcitx5, and package resource paths—are implemented by Adapters. Legacy React command/event names stay in the Tauri compatibility Adapter; Linux calls the typed Rust Interface in process. See [`docs/linux-egui-backend-contract.md`](docs/linux-egui-backend-contract.md) and the [full migration plan](docs/linux-egui-shared-backend-plan.md).
+
+The `v<version>-tauri` / `v<version>-Beta.N-tauri` workflows publish the macOS, Windows, and Android hosts. Linux deb/rpm/AppImage assets are built by `release-linux-egui.yml` with an independent manifest; automatic release remains gated on successful artifacts and real Ubuntu install/runtime/upgrade/rollback evidence.
 
 The dictation pipeline: `hotkey edge → Recorder.start + ASR.openSession → [audio frames] → hotkey edge → Recorder.stop + ASR.sendLastFrame → Polish → Insert → History.save`.
 
@@ -414,7 +412,7 @@ OpenLess ships two release channels. The branch name equals the channel name (se
 
 ### Common prep (both channels)
 
-- Bump the version in **all five** files: `package.json`, `package-lock.json` (root + nested entry under `packages.""`), `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, and `Cargo.lock` (look for the `name = "openless"` block). CI's `Verify version sync` step will otherwise fail the build.
+- Bump the Tauri application version in **all five** locations: `package.json`, `package-lock.json` (root + nested entry under `packages.""`), `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, and `src-tauri/Cargo.lock` (look for the `name = "openless"` block). CI's `Verify version sync` step will otherwise fail the build. The root `Cargo.lock` belongs only to `openless-core` and `openless-linux-egui`.
 - Run `INSTALL=0 ./scripts/build-mac.sh` and confirm the `.app` launches.
 - Smoke-test on a clean machine: permission flow, hotkey, recording, ASR, polish, insertion, and clipboard fallback.
 - Confirm that `TAURI_SIGNING_PRIVATE_KEY` and (for macOS) the Apple signing/notarization secrets are set on the repo.
@@ -448,4 +446,5 @@ This acknowledgement does not imply official endorsement or affiliation.
 
 ## License
 
-OpenLess is released under the [MIT License](LICENSE).
+OpenLess 2.0.0-Beta.1 is released under the [AGPL-3.0-only license](LICENSE).
+Published 1.x releases remain available under their original MIT license.

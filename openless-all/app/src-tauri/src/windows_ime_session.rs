@@ -1,6 +1,6 @@
 #![allow(dead_code, unused_imports, unused_variables)]
 use crate::types::InsertStatus;
-use crate::windows_ime_ipc::{ImeSubmitRequest, WindowsImeIpcError, WindowsImeIpcServer};
+use crate::windows_ime_ipc::{ImeSubmitRequest, WindowsImeIpcServer};
 use crate::windows_ime_profile::{
     is_openless_profile_snapshot, restore_decision, ImeProfileSnapshot, ProfileRestoreDecision,
     WindowsImeProfileManager,
@@ -27,24 +27,24 @@ impl std::fmt::Display for WindowsImeSessionError {
 
 impl std::error::Error for WindowsImeSessionError {}
 
+impl WindowsImeSessionError {
+    pub fn is_outcome_unknown(&self) -> bool {
+        matches!(self, Self::OutcomeUnknown(_))
+    }
+}
+
 pub fn map_ime_status_to_insert_status(status: ImeSubmitStatus) -> InsertStatus {
     match status {
         ImeSubmitStatus::Committed => InsertStatus::Inserted,
-        ImeSubmitStatus::Rejected | ImeSubmitStatus::Failed => InsertStatus::CopiedFallback,
+        // DLL 的拒绝/失败只能证明“没有提交”，它从未写入剪贴板。
+        // 返回 Failed 让调用方按用户设置执行真实回退；只有剪贴板写入成功的
+        // 路径才有资格报告 CopiedFallback。OutcomeUnknown 仍通过 Err 单独传递。
+        ImeSubmitStatus::Rejected | ImeSubmitStatus::Failed => InsertStatus::Failed,
     }
 }
 
 pub fn should_fallback_after_ime_result(status: ImeSubmitStatus) -> bool {
     !matches!(status, ImeSubmitStatus::Committed)
-}
-
-fn map_ipc_error(error: WindowsImeIpcError) -> WindowsImeSessionError {
-    match error {
-        WindowsImeIpcError::OutcomeUnknown(message) => {
-            WindowsImeSessionError::OutcomeUnknown(message)
-        }
-        error => WindowsImeSessionError::Ipc(error.to_string()),
-    }
 }
 
 fn describe_snapshot(snapshot: &ImeProfileSnapshot) -> String {
@@ -159,7 +159,13 @@ impl WindowsImeSessionController {
             ));
         }
 
-        let status = self.ipc.submit_text(request).await.map_err(map_ipc_error)?;
+        let status = self.ipc.submit_text(request).await.map_err(|error| {
+            if error.is_outcome_unknown() {
+                WindowsImeSessionError::OutcomeUnknown(error.to_string())
+            } else {
+                WindowsImeSessionError::Ipc(error.to_string())
+            }
+        })?;
         if should_fallback_after_ime_result(status) {
             log::warn!(
                 "[windows-ime] TSF submit returned {status:?}; falling back to non-TSF insertion"
@@ -232,6 +238,16 @@ mod tests {
     }
 
     #[test]
+    fn rejected_ime_result_never_claims_that_the_clipboard_was_written() {
+        for status in [ImeSubmitStatus::Rejected, ImeSubmitStatus::Failed] {
+            assert_eq!(
+                map_ime_status_to_insert_status(status),
+                InsertStatus::Failed
+            );
+        }
+    }
+
+    #[test]
     fn rejected_ime_result_requests_fallback() {
         assert!(should_fallback_after_ime_result(ImeSubmitStatus::Rejected));
         assert!(should_fallback_after_ime_result(ImeSubmitStatus::Failed));
@@ -241,14 +257,9 @@ mod tests {
     }
 
     #[test]
-    fn unknown_ipc_outcome_stays_distinct_from_definitive_failure() {
-        assert!(matches!(
-            map_ipc_error(WindowsImeIpcError::OutcomeUnknown(
-                "native commit timed out".to_string()
-            )),
-            WindowsImeSessionError::OutcomeUnknown(message)
-                if message == "native commit timed out"
-        ));
+    fn outcome_unknown_is_distinct_from_a_definite_ipc_failure() {
+        assert!(WindowsImeSessionError::OutcomeUnknown("fixture".to_string()).is_outcome_unknown());
+        assert!(!WindowsImeSessionError::Ipc("fixture".to_string()).is_outcome_unknown());
     }
 
     #[tokio::test]

@@ -1,57 +1,440 @@
 use super::*;
 
-const LLM_EXTRA_HEADERS_ACCOUNT: &str = "ark.extra_headers";
-const LLM_TEMPERATURE_ACCOUNT: &str = "ark.temperature";
-const OMNI_EXTRA_HEADERS_ACCOUNT: &str = "omni.extra_headers";
-const OMNI_TEMPERATURE_ACCOUNT: &str = "omni.temperature";
+const LLM_EXTRA_HEADERS_ACCOUNT: &str = openless_core::credentials::LLM_EXTRA_HEADERS_ACCOUNT;
+const LLM_TEMPERATURE_ACCOUNT: &str = openless_core::credentials::LLM_TEMPERATURE_ACCOUNT;
+const OMNI_EXTRA_HEADERS_ACCOUNT: &str = openless_core::credentials::OMNI_EXTRA_HEADERS_ACCOUNT;
+const OMNI_TEMPERATURE_ACCOUNT: &str = openless_core::credentials::OMNI_TEMPERATURE_ACCOUNT;
+const MARKETPLACE_GITHUB_TOKEN_ACCOUNT: &str = "github.oauth_token";
 
-#[tauri::command]
-pub async fn get_credentials() -> Result<CredentialsStatus, String> {
-    tauri::async_runtime::spawn_blocking(|| {
-        let snap = CredentialsVault::snapshot();
-        let active_asr_provider = CredentialsVault::get_active_asr();
-        let active_llm_provider = CredentialsVault::get_active_llm();
-        let pipeline_mode = PreferencesStore::new()
-            .map(|store| store.get().pipeline_mode)
-            .unwrap_or(crate::types::PipelineMode::Traditional);
-        let volcengine_configured = volcengine_configured(&snap);
-        let asr_configured = asr_configured_for_provider(&active_asr_provider, &snap);
-        let llm_configured = llm_configured_for_provider(&active_llm_provider, &snap);
-        let omni_configured = omni_configured_for_active_provider(&snap);
-        CredentialsStatus {
-            active_asr_provider,
-            active_llm_provider,
-            pipeline_mode,
-            asr_configured,
-            llm_configured,
-            omni_configured,
-            volcengine_configured,
-            ark_configured: llm_configured,
-        }
-    })
-    .await
-    .map_err(|e| format!("credential status worker failed: {e}"))
+/// Tauri host adapter for the framework-independent core credential port.
+///
+/// The implementation keeps the existing system vault format while Core's
+/// [`openless_core::credentials::CredentialDirectory`] owns channel policy.
+/// Secrets cross the boundary only as [`openless_core::SecretValue`].
+pub(crate) struct SystemCredentialStore {
+    model_store: Option<std::sync::Arc<openless_core::ModelStore>>,
+    directory: openless_core::credentials::CredentialDirectory,
 }
 
-fn volcengine_configured(snap: &CredentialsSnapshot) -> bool {
-    use crate::asr::volcengine::VolcengineAuthMode;
-    let mode = snap
-        .volcengine_auth_mode
-        .as_deref()
-        .map(VolcengineAuthMode::from_str)
-        .unwrap_or(VolcengineAuthMode::AppIdToken);
-    // 两种模式的密钥来源不同：AppIdToken 读 Access Token 槽，ApiKey 读独立的 API Key 槽。
-    let (app_id, secret) = match mode {
-        VolcengineAuthMode::AppIdToken => (
-            snap.volcengine_app_key.as_deref().unwrap_or(""),
-            snap.volcengine_access_key.as_deref().unwrap_or(""),
-        ),
-        VolcengineAuthMode::ApiKey => ("", snap.volcengine_api_key.as_deref().unwrap_or("")),
+impl SystemCredentialStore {
+    pub(crate) fn new(model_store: Option<std::sync::Arc<openless_core::ModelStore>>) -> Self {
+        let metadata_store: std::sync::Arc<
+            dyn openless_core::credentials::CredentialMetadataStore,
+        > = std::sync::Arc::new(SystemCredentialMetadataStore);
+        Self {
+            model_store,
+            directory: openless_core::credentials::CredentialDirectory::new(metadata_store),
+        }
+    }
+}
+
+struct SystemCredentialMetadataStore;
+
+impl openless_core::credentials::CredentialMetadataStore for SystemCredentialMetadataStore {
+    fn load_metadata(
+        &self,
+    ) -> futures_util::future::BoxFuture<
+        'static,
+        Result<openless_core::CredentialMetadata, openless_core::BackendError>,
+    > {
+        run_credential_task(|| Ok(CredentialsVault::load_metadata()))
+    }
+
+    fn save_metadata(
+        &self,
+        metadata: openless_core::CredentialMetadata,
+    ) -> futures_util::future::BoxFuture<'static, Result<(), openless_core::BackendError>> {
+        run_credential_task(move || {
+            CredentialsVault::save_metadata(metadata).map_err(credential_persistence_error)
+        })
+    }
+
+    fn channel_has_secrets(
+        &self,
+        kind: openless_core::ChannelKind,
+        channel_id: String,
+    ) -> futures_util::future::BoxFuture<'static, Result<bool, openless_core::BackendError>> {
+        run_credential_task(move || Ok(CredentialsVault::channel_has_secrets(kind, &channel_id)))
+    }
+}
+
+pub(crate) fn sync_active_asr_provider_to_vault(provider: &str) -> Result<(), String> {
+    if CredentialsVault::get_active_asr() == provider {
+        return Ok(());
+    }
+    CredentialsVault::set_active_asr_provider(provider).map_err(|error| error.to_string())
+}
+
+pub(crate) fn active_apple_speech_asr_is_supported(provider: &str) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        provider == crate::asr::local::APPLE_SPEECH_PROVIDER_ID
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = provider;
+        false
+    }
+}
+
+pub(crate) fn active_foundry_asr_is_supported(provider: &str) -> bool {
+    #[cfg(all(not(mobile), target_os = "windows"))]
+    {
+        provider == FOUNDRY_LOCAL_PROVIDER_ID
+    }
+    #[cfg(not(all(not(mobile), target_os = "windows")))]
+    {
+        let _ = provider;
+        false
+    }
+}
+
+pub(crate) fn active_sherpa_asr_is_supported(provider: &str) -> bool {
+    #[cfg(all(not(mobile), target_os = "windows"))]
+    {
+        provider == crate::asr::local::sherpa::PROVIDER_ID
+    }
+    #[cfg(not(all(not(mobile), target_os = "windows")))]
+    {
+        let _ = provider;
+        false
+    }
+}
+
+impl openless_core::CredentialStore for SystemCredentialStore {
+    fn status(
+        &self,
+        preferences: UserPreferences,
+    ) -> futures_util::future::BoxFuture<
+        'static,
+        Result<CredentialsStatus, openless_core::BackendError>,
+    > {
+        let model_store = self.model_store.clone();
+        run_credential_task(move || Ok(credentials_status(preferences, model_store.as_deref())))
+    }
+
+    fn read(
+        &self,
+        key: openless_core::CredentialKey,
+    ) -> futures_util::future::BoxFuture<
+        'static,
+        Result<Option<openless_core::SecretValue>, openless_core::BackendError>,
+    > {
+        run_credential_task(move || {
+            read_vault_credential(&key).map(|value| value.map(openless_core::SecretValue::new))
+        })
+    }
+
+    fn write(
+        &self,
+        key: openless_core::CredentialKey,
+        value: openless_core::SecretValue,
+    ) -> futures_util::future::BoxFuture<'static, Result<(), openless_core::BackendError>> {
+        run_credential_task(move || write_vault_credential(&key, value.expose_secret()))
+    }
+
+    fn remove(
+        &self,
+        key: openless_core::CredentialKey,
+    ) -> futures_util::future::BoxFuture<'static, Result<(), openless_core::BackendError>> {
+        run_credential_task(move || write_vault_credential(&key, ""))
+    }
+
+    fn list_channels(
+        &self,
+        kind: openless_core::ChannelKind,
+    ) -> futures_util::future::BoxFuture<
+        'static,
+        Result<Vec<openless_core::ChannelSummary>, openless_core::BackendError>,
+    > {
+        let directory = self.directory.clone();
+        Box::pin(async move { directory.list_channels(kind).await })
+    }
+
+    fn mutate_channel(
+        &self,
+        mutation: openless_core::ChannelMutation,
+    ) -> futures_util::future::BoxFuture<
+        'static,
+        Result<openless_core::ChannelMutationResult, openless_core::BackendError>,
+    > {
+        let directory = self.directory.clone();
+        Box::pin(async move { directory.mutate_channel(mutation).await })
+    }
+
+    fn active_provider(
+        &self,
+        slot: openless_core::ProviderSlot,
+    ) -> futures_util::future::BoxFuture<'static, Result<String, openless_core::BackendError>> {
+        let directory = self.directory.clone();
+        Box::pin(async move { directory.active_provider(slot).await })
+    }
+
+    fn set_active_provider(
+        &self,
+        slot: openless_core::ProviderSlot,
+        provider_id: String,
+    ) -> futures_util::future::BoxFuture<'static, Result<(), openless_core::BackendError>> {
+        let directory = self.directory.clone();
+        Box::pin(async move { directory.set_active_provider(slot, provider_id).await })
+    }
+}
+
+fn run_credential_task<T: Send + 'static>(
+    task: impl FnOnce() -> Result<T, openless_core::BackendError> + Send + 'static,
+) -> futures_util::future::BoxFuture<'static, Result<T, openless_core::BackendError>> {
+    Box::pin(async move {
+        tauri::async_runtime::spawn_blocking(task)
+            .await
+            .map_err(|error| {
+                openless_core::BackendError::new(
+                    openless_core::BackendErrorCode::Internal,
+                    format!("credential worker failed: {error}"),
+                )
+            })?
+    })
+}
+
+fn credentials_status(
+    preferences: UserPreferences,
+    model_store: Option<&openless_core::ModelStore>,
+) -> CredentialsStatus {
+    let pipeline_mode = openless_core::shared_types::effective_pipeline_mode(
+        preferences.multimodal_pipeline_enabled,
+        preferences.pipeline_mode,
+    );
+    let snap = CredentialsVault::snapshot_for_pipeline(
+        pipeline_mode == openless_core::shared_types::PipelineMode::Multimodal,
+    );
+    let active_asr_provider = CredentialsVault::get_active_asr();
+    let active_llm_provider = CredentialsVault::get_active_llm();
+    let configuration = credential_configuration(
+        &snap,
+        &active_llm_provider,
+        CodexOAuthCredentials::load_default().is_ok(),
+    );
+    let volcengine_configured =
+        openless_core::provider_rules::volcengine_configured(&configuration);
+    let asr_configured = openless_core::provider_rules::asr_configured(
+        &active_asr_provider,
+        &configuration,
+        local_asr_configured(&active_asr_provider, model_store),
+    );
+    let llm_configured =
+        openless_core::provider_rules::llm_configured(&active_llm_provider, &configuration);
+    let omni_configured = pipeline_mode == openless_core::shared_types::PipelineMode::Multimodal
+        && openless_core::provider_rules::omni_configured(
+            &snap.active_omni_provider,
+            &configuration,
+        );
+    CredentialsStatus {
+        active_asr_provider,
+        active_llm_provider,
+        pipeline_mode,
+        asr_configured,
+        llm_configured,
+        omni_configured,
+        volcengine_configured,
+        ark_configured: llm_configured,
+    }
+}
+
+fn read_vault_credential(
+    key: &openless_core::CredentialKey,
+) -> Result<Option<String>, openless_core::BackendError> {
+    let result = match (key.namespace, key.account.as_str()) {
+        (openless_core::CredentialNamespace::Llm, LLM_EXTRA_HEADERS_ACCOUNT) => {
+            match key.provider_id.as_deref() {
+                Some(provider) => serde_json::to_string(
+                    &CredentialsVault::get_llm_extra_headers_for_channel(provider),
+                )
+                .map(Some)
+                .map_err(anyhow::Error::from),
+                None => CredentialsVault::get_active_llm_extra_headers_json(),
+            }
+        }
+        (openless_core::CredentialNamespace::Llm, LLM_TEMPERATURE_ACCOUNT) => {
+            Ok(match key.provider_id.as_deref() {
+                Some(provider) => CredentialsVault::get_llm_temperature_for_channel(provider)
+                    .map(|value| value.to_string()),
+                None => CredentialsVault::get_active_llm_temperature_string(),
+            })
+        }
+        (openless_core::CredentialNamespace::Omni, OMNI_EXTRA_HEADERS_ACCOUNT) => {
+            match key.provider_id.as_deref() {
+                Some(provider) => {
+                    CredentialsVault::get_omni_extra_headers_json_for_provider(provider)
+                }
+                None => CredentialsVault::get_active_omni_extra_headers_json(),
+            }
+        }
+        (openless_core::CredentialNamespace::Omni, OMNI_TEMPERATURE_ACCOUNT) => {
+            Ok(match key.provider_id.as_deref() {
+                Some(provider) => {
+                    CredentialsVault::get_omni_temperature_string_for_provider(provider)
+                }
+                None => CredentialsVault::get_active_omni_temperature_string(),
+            })
+        }
+        (openless_core::CredentialNamespace::Marketplace, MARKETPLACE_GITHUB_TOKEN_ACCOUNT) => {
+            CredentialsVault::get_marketplace_github_token()
+        }
+        (openless_core::CredentialNamespace::Application, _) => {
+            return Err(invalid_credential_key(key));
+        }
+        _ => {
+            let account = parse_vault_account(key)?;
+            if let Some(provider) = key.provider_id.as_deref() {
+                match account_provider_kind(account) {
+                    CredentialProviderKind::Asr => {
+                        CredentialsVault::get_for_asr_provider(provider, account)
+                    }
+                    CredentialProviderKind::Llm => {
+                        CredentialsVault::get_for_llm_provider(provider, account)
+                    }
+                    CredentialProviderKind::Omni => {
+                        CredentialsVault::get_for_omni_provider(provider, account)
+                    }
+                }
+            } else {
+                CredentialsVault::get(account)
+            }
+        }
     };
-    mode.auth_ok(app_id, secret) && configured(&snap.volcengine_resource_id)
+    result.map_err(credential_persistence_error)
+}
+
+fn write_vault_credential(
+    key: &openless_core::CredentialKey,
+    value: &str,
+) -> Result<(), openless_core::BackendError> {
+    let result = match (key.namespace, key.account.as_str()) {
+        (openless_core::CredentialNamespace::Llm, LLM_EXTRA_HEADERS_ACCOUNT) => {
+            match key.provider_id.as_deref() {
+                Some(provider) => {
+                    CredentialsVault::set_llm_extra_headers_json_for_provider(provider, value)
+                }
+                None => CredentialsVault::set_active_llm_extra_headers_json(value),
+            }
+        }
+        (openless_core::CredentialNamespace::Llm, LLM_TEMPERATURE_ACCOUNT) => {
+            match key.provider_id.as_deref() {
+                Some(provider) => {
+                    CredentialsVault::set_llm_temperature_for_provider(provider, value)
+                }
+                None => CredentialsVault::set_active_llm_temperature(value),
+            }
+        }
+        (openless_core::CredentialNamespace::Omni, OMNI_EXTRA_HEADERS_ACCOUNT) => {
+            match key.provider_id.as_deref() {
+                Some(provider) => {
+                    CredentialsVault::set_omni_extra_headers_json_for_provider(provider, value)
+                }
+                None => CredentialsVault::set_active_omni_extra_headers_json(value),
+            }
+        }
+        (openless_core::CredentialNamespace::Omni, OMNI_TEMPERATURE_ACCOUNT) => {
+            match key.provider_id.as_deref() {
+                Some(provider) => {
+                    CredentialsVault::set_omni_temperature_for_provider(provider, value)
+                }
+                None => CredentialsVault::set_active_omni_temperature(value),
+            }
+        }
+        (openless_core::CredentialNamespace::Marketplace, MARKETPLACE_GITHUB_TOKEN_ACCOUNT) => {
+            if value.trim().is_empty() {
+                CredentialsVault::remove_marketplace_github_token()
+            } else {
+                CredentialsVault::set_marketplace_github_token(value)
+            }
+        }
+        (openless_core::CredentialNamespace::Application, _) => {
+            return Err(invalid_credential_key(key));
+        }
+        _ => {
+            let account = parse_vault_account(key)?;
+            if let Some(provider) = key.provider_id.as_deref() {
+                match account_provider_kind(account) {
+                    CredentialProviderKind::Asr => {
+                        CredentialsVault::set_for_asr_provider(provider, account, value)
+                    }
+                    CredentialProviderKind::Llm => {
+                        CredentialsVault::set_for_llm_provider(provider, account, value)
+                    }
+                    CredentialProviderKind::Omni => {
+                        CredentialsVault::set_for_omni_provider(provider, account, value)
+                    }
+                }
+            } else if value.is_empty() {
+                CredentialsVault::remove(account)
+            } else {
+                CredentialsVault::set(account, value)
+            }
+        }
+    };
+    result.map_err(credential_persistence_error)
+}
+
+fn parse_vault_account(
+    key: &openless_core::CredentialKey,
+) -> Result<CredentialAccount, openless_core::BackendError> {
+    let account = parse_account(&key.account).map_err(|_| invalid_credential_key(key))?;
+    let expected_namespace = match account {
+        CredentialAccount::ArkApiKey
+        | CredentialAccount::ArkModelId
+        | CredentialAccount::ArkEndpoint => openless_core::CredentialNamespace::Llm,
+        CredentialAccount::OmniApiKey
+        | CredentialAccount::OmniEndpoint
+        | CredentialAccount::OmniModel => openless_core::CredentialNamespace::Omni,
+        _ => openless_core::CredentialNamespace::Asr,
+    };
+    if key.namespace != expected_namespace {
+        return Err(invalid_credential_key(key));
+    }
+    Ok(account)
+}
+
+fn invalid_credential_key(key: &openless_core::CredentialKey) -> openless_core::BackendError {
+    openless_core::BackendError::new(
+        openless_core::BackendErrorCode::InvalidArgument,
+        format!("unsupported credential account: {}", key.account),
+    )
+}
+
+fn credential_persistence_error(error: anyhow::Error) -> openless_core::BackendError {
+    openless_core::BackendError::new(
+        openless_core::BackendErrorCode::Persistence,
+        format!("credential vault operation failed: {error}"),
+    )
+}
+
+#[tauri::command]
+pub async fn get_credentials(core: CoreState<'_>) -> Result<CredentialsStatus, String> {
+    core.get_credentials_status()
+        .await
+        .map_err(|error| error.to_string())
 }
 
 pub(crate) fn asr_configured_for_provider(provider: &str, snap: &CredentialsSnapshot) -> bool {
+    asr_configured_for_provider_with_model_store(provider, snap, None)
+}
+
+fn asr_configured_for_provider_with_model_store(
+    provider: &str,
+    snap: &CredentialsSnapshot,
+    model_store: Option<&openless_core::ModelStore>,
+) -> bool {
+    openless_core::provider_rules::asr_configured(
+        provider,
+        &credential_configuration(snap, "", false),
+        local_asr_configured(provider, model_store),
+    )
+}
+
+fn local_asr_configured(
+    provider: &str,
+    model_store: Option<&openless_core::ModelStore>,
+) -> Option<bool> {
     if crate::asr::local::is_local_whisper(provider) {
         #[cfg(target_os = "macos")]
         {
@@ -59,111 +442,51 @@ pub(crate) fn asr_configured_for_provider(provider: &str, snap: &CredentialsSnap
                 .ok()
                 .map(|store| store.get().local_whisper_active_model)
                 .filter(|id| {
-                    crate::asr::local::ModelId::from_str(id)
+                    crate::asr::local::ModelId::from_wire_id(id)
                         .map(|model| model.is_whisper())
                         .unwrap_or(false)
                 })
                 .unwrap_or_else(|| crate::asr::local::WHISPER_MODEL_ID.to_string());
-            return crate::asr::local::whisper_model_ready_for_model(&model_id);
+            return Some(model_store.is_some_and(|store| {
+                crate::asr::local::whisper_model_ready_for_model(store, &model_id)
+            }));
         }
         #[cfg(not(target_os = "macos"))]
         {
-            return false;
+            return Some(false);
         }
-    }
-    // 本地 / 无凭据引擎不属于云端分类枚举（ActiveAsrProviderKind），由平台 cfg 门
-    // 在此单独判定；移动端上这些引擎不可用直接判未配置。
-    if cfg!(mobile)
-        && (crate::asr::local::is_local_qwen3(provider)
-            || crate::asr::local::is_local_whisper(provider)
-            || provider == crate::asr::local::sherpa::PROVIDER_ID
-            || provider == crate::asr::local::foundry::PROVIDER_ID
-            || provider == crate::asr::local::APPLE_SPEECH_PROVIDER_ID)
-    {
-        return false;
     }
     if crate::asr::local::is_local_qwen3(provider) {
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         {
-            return crate::asr::local::qwen_backend_for_provider(provider).is_some();
+            return Some(crate::asr::local::qwen_backend_for_provider(provider).is_some());
         }
         #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         {
-            return false;
+            return Some(false);
         }
     }
-    if active_apple_speech_asr_is_supported(provider)
-        || active_foundry_asr_is_supported(provider)
-        || active_sherpa_asr_is_supported(provider)
-    {
-        // 本地 ASR 不依赖云端凭据。
-        return true;
+    if provider == crate::asr::local::APPLE_SPEECH_PROVIDER_ID {
+        return Some(active_apple_speech_asr_is_supported(provider));
     }
-    // 云端 provider：所需字段由 ActiveAsrProviderKind 统一判定（穷尽 match，新增
-    // kind 编译器强制补齐）。volcengine 亦经此路（VolcAppKey）。
-    use crate::coordinator::{active_asr_provider_kind, AsrConfiguredFields};
-    match active_asr_provider_kind(provider).configured_fields() {
-        AsrConfiguredFields::ApiKeyOnly => configured(&snap.asr_api_key),
-        AsrConfiguredFields::ApiKeyEndpointModel => {
-            configured(&snap.asr_api_key)
-                && configured(&snap.asr_endpoint)
-                && configured(&snap.asr_model)
-        }
-        AsrConfiguredFields::EndpointModelOnly => {
-            configured(&snap.asr_endpoint) && configured(&snap.asr_model)
-        }
-        AsrConfiguredFields::VolcAppKey => volcengine_configured(snap),
-        AsrConfiguredFields::XfyunAppKey => {
-            configured(&snap.xfyun_app_id) && configured(&snap.xfyun_api_key)
-        }
+    if provider == crate::asr::local::foundry::PROVIDER_ID {
+        return Some(active_foundry_asr_is_supported(provider));
     }
+    if provider == crate::asr::local::sherpa::PROVIDER_ID {
+        return Some(active_sherpa_asr_is_supported(provider));
+    }
+    None
 }
 
 pub(crate) fn llm_configured_for_provider(provider: &str, snap: &CredentialsSnapshot) -> bool {
-    if provider == CODEX_OAUTH_PROVIDER_ID {
-        return CodexOAuthCredentials::load_default().is_ok();
-    }
-    let endpoint = snap.ark_endpoint.as_deref().unwrap_or_default();
-    let endpoint_and_model = configured(&snap.ark_endpoint) && configured(&snap.ark_model_id);
-    if endpoint_and_model
-        && llm_provider_default_endpoint(provider)
-            .map(|default| same_llm_endpoint(endpoint, default))
-            .unwrap_or(false)
-    {
-        return configured(&snap.ark_api_key);
-    }
-    endpoint_and_model
-}
-
-fn llm_provider_default_endpoint(provider: &str) -> Option<&'static str> {
-    match provider {
-        "ark" => Some("https://ark.cn-beijing.volces.com/api/v3"),
-        "deepseek" => Some("https://api.deepseek.com/v1"),
-        "siliconflow" => Some("https://api.siliconflow.cn/v1"),
-        "atlascloud" => Some("https://api.atlascloud.ai/v1"),
-        "openai" => Some("https://api.openai.com/v1"),
-        // 谷歌 Gemini 原生 API（v1beta）。后端 llm_gemini.rs 会拼成
-        // `{baseUrl}/models/{model}:generateContent`，认证用 x-goog-api-key 头。
-        "gemini" => Some("https://generativelanguage.googleapis.com/v1beta"),
-        "mimo" => Some("https://api.xiaomimimo.com/v1"),
-        "cometapi" => Some("https://api.cometapi.com/v1"),
-        "openrouterFree" => Some("https://openrouter.ai/api/v1"),
-        "alibabaCoding" => Some("https://coding-intl.dashscope.aliyuncs.com/v1"),
-        "codingPlanX" => Some("https://api.codingplanx.ai/v1"),
-        "stepfun" => Some("https://api.stepfun.com/v1"),
-        _ => None,
-    }
-}
-
-fn same_llm_endpoint(a: &str, b: &str) -> bool {
-    fn normalize(value: &str) -> &str {
-        value
-            .trim()
-            .trim_end_matches('/')
-            .trim_end_matches("/chat/completions")
-            .trim_end_matches('/')
-    }
-    normalize(a).eq_ignore_ascii_case(normalize(b))
+    openless_core::provider_rules::llm_configured(
+        provider,
+        &credential_configuration(
+            snap,
+            provider,
+            CodexOAuthCredentials::load_default().is_ok(),
+        ),
+    )
 }
 
 fn configured(field: &Option<String>) -> bool {
@@ -176,13 +499,45 @@ fn configured(field: &Option<String>) -> bool {
 /// 多模态（Omni）模型是否已配置：OpenAI 兼容通道要求 API Key + Base URL + Model；
 /// Gemini 通道要求 API Key + Model（Base URL 为空时后端走官方默认）。
 pub(crate) fn omni_configured_for_active_provider(snap: &CredentialsSnapshot) -> bool {
-    let provider = &snap.active_omni_provider;
-    let has_api_key = configured(&snap.omni_api_key);
-    let has_model = configured(&snap.omni_model);
-    if provider == "gemini" {
-        return has_api_key && has_model;
+    openless_core::provider_rules::omni_configured(
+        &snap.active_omni_provider,
+        &credential_configuration(snap, "", false),
+    )
+}
+
+fn credential_configuration(
+    snap: &CredentialsSnapshot,
+    llm_provider: &str,
+    codex_oauth: bool,
+) -> openless_core::provider_rules::CredentialConfiguration {
+    let llm_endpoint = snap
+        .ark_endpoint
+        .as_deref()
+        .filter(|value| !value.trim().is_empty());
+    openless_core::provider_rules::CredentialConfiguration {
+        asr_api_key: configured(&snap.asr_api_key),
+        asr_endpoint: configured(&snap.asr_endpoint),
+        asr_model: configured(&snap.asr_model),
+        volcengine_auth_mode: snap.volcengine_auth_mode.clone(),
+        volcengine_app_key: configured(&snap.volcengine_app_key),
+        volcengine_access_key: configured(&snap.volcengine_access_key),
+        volcengine_api_key: configured(&snap.volcengine_api_key),
+        volcengine_resource_id: configured(&snap.volcengine_resource_id),
+        xfyun_app_id: configured(&snap.xfyun_app_id),
+        xfyun_api_key: configured(&snap.xfyun_api_key),
+        llm_api_key: configured(&snap.ark_api_key),
+        llm_endpoint: llm_endpoint.is_some(),
+        llm_endpoint_matches_default: llm_endpoint.is_some_and(|endpoint| {
+            openless_core::provider_rules::default_llm_endpoint(llm_provider).is_some_and(
+                |default| openless_core::provider_rules::equivalent_endpoint(endpoint, default),
+            )
+        }),
+        llm_model: configured(&snap.ark_model_id),
+        codex_oauth,
+        omni_api_key: configured(&snap.omni_api_key),
+        omni_endpoint: configured(&snap.omni_endpoint),
+        omni_model: configured(&snap.omni_model),
     }
-    has_api_key && configured(&snap.omni_endpoint) && has_model
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -232,68 +587,29 @@ pub(crate) async fn release_sherpa_runtime_if_inactive(
 
 #[tauri::command]
 pub async fn set_credential(
+    core: CoreState<'_>,
     window: Window,
     account: String,
     value: String,
     provider: Option<String>,
 ) -> Result<(), String> {
     ensure_main_window(&window)?;
-    let extra_headers = account == LLM_EXTRA_HEADERS_ACCOUNT;
-    let temperature = account == LLM_TEMPERATURE_ACCOUNT;
-    let omni_extra_headers = account == OMNI_EXTRA_HEADERS_ACCOUNT;
-    let omni_temperature = account == OMNI_TEMPERATURE_ACCOUNT;
-    let parsed = if extra_headers || temperature || omni_extra_headers || omni_temperature {
-        None
+    let key = credential_key(&account, provider)?;
+    if value.is_empty() {
+        core.remove_credential(key)
+            .await
+            .map_err(|error| error.to_string())?;
     } else {
-        Some(parse_account(&account)?)
-    };
-    tauri::async_runtime::spawn_blocking(move || {
-        if extra_headers {
-            return CredentialsVault::set_active_llm_extra_headers_json(&value)
-                .map_err(|e| e.to_string());
-        }
-        if temperature {
-            return CredentialsVault::set_active_llm_temperature(&value).map_err(|e| e.to_string());
-        }
-        if omni_extra_headers {
-            return CredentialsVault::set_active_omni_extra_headers_json(&value)
-                .map_err(|e| e.to_string());
-        }
-        if omni_temperature {
-            return CredentialsVault::set_active_omni_temperature(&value)
-                .map_err(|e| e.to_string());
-        }
-        let acc = parsed.expect("non-extra credential account must be parsed");
-        if let Some(provider) = provider {
-            // 渠道化后 `provider` 是**渠道 id**，LLM 侧同样需要按 id 定位 —— 用户编辑
-            // 的可能是列表里第 3 张卡片，而不是当前生效的那张。
-            match account_channel_kind(acc) {
-                ChannelKind::Asr => CredentialsVault::set_for_asr_provider(&provider, acc, &value)
-                    .map_err(|e| e.to_string()),
-                ChannelKind::Llm => CredentialsVault::set_for_llm_provider(&provider, acc, &value)
-                    .map_err(|e| e.to_string()),
-            }
-        } else if value.is_empty() {
-            CredentialsVault::remove(acc).map_err(|e| e.to_string())
-        } else {
-            CredentialsVault::set(acc, &value).map_err(|e| e.to_string())
-        }
-    })
-    .await
-    .map_err(|e| format!("credential write worker failed: {e}"))??;
-    // 通知前端凭据已变更（如 Overview 页需要刷新 asrConfigured 状态）。
-    // issue #532 / #573：在 Settings 填写凭据但不切换提供商时，Overview 不会重拉状态，
-    // 仍显示「未配置」。该修复曾随 #538 合入 main，但被 beta→main 合并覆盖，beta 上缺失。
-    let _ = window.emit("credentials:changed", ());
+        core.set_credential(key, openless_core::SecretValue::new(value))
+            .await
+            .map_err(|error| error.to_string())?;
+    }
     Ok(())
 }
 
 #[cfg(mobile)]
 #[tauri::command]
-pub async fn set_active_asr_provider(
-    _coord: CoordinatorState<'_>,
-    provider: String,
-) -> Result<(), String> {
+pub async fn set_active_asr_provider(core: CoreState<'_>, provider: String) -> Result<(), String> {
     if crate::asr::local::is_local_qwen3(&provider)
         || crate::asr::local::is_local_whisper(&provider)
         || provider == crate::asr::local::sherpa::PROVIDER_ID
@@ -302,20 +618,23 @@ pub async fn set_active_asr_provider(
     {
         return Err("Local ASR is not available on mobile".to_string());
     }
-    if CredentialsVault::get_active_asr() == provider {
+    if core
+        .active_provider(openless_core::ProviderSlot::Asr)
+        .await
+        .map_err(|error| error.to_string())?
+        == provider
+    {
         return Ok(());
     }
-    CredentialsVault::set_active_asr_provider(&provider).map_err(|e| e.to_string())
+    core.set_active_provider(openless_core::ProviderSlot::Asr, provider)
+        .await
+        .map(|_| ())
+        .map_err(|error| error.to_string())
 }
 
 #[cfg(not(mobile))]
 #[tauri::command]
-pub async fn set_active_asr_provider(
-    coord: CoordinatorState<'_>,
-    runtime: State<'_, Arc<FoundryLocalRuntime>>,
-    sherpa_runtime: State<'_, Arc<SherpaOnnxRuntime>>,
-    provider: String,
-) -> Result<(), String> {
+pub async fn set_active_asr_provider(core: CoreState<'_>, provider: String) -> Result<(), String> {
     if crate::asr::local::is_local_qwen3(&provider)
         && crate::asr::local::qwen_backend_for_provider(&provider).is_none()
     {
@@ -337,89 +656,125 @@ pub async fn set_active_asr_provider(
     {
         return Err("Apple Speech recognition is only available on macOS".to_string());
     }
-    if CredentialsVault::get_active_asr() == provider {
+    if core
+        .active_provider(openless_core::ProviderSlot::Asr)
+        .await
+        .map_err(|error| error.to_string())?
+        == provider
+    {
         return Ok(());
     }
-    CredentialsVault::set_active_asr_provider(&provider).map_err(|e| e.to_string())?;
+    core.set_active_provider(openless_core::ProviderSlot::Asr, provider.clone())
+        .await
+        .map_err(|error| error.to_string())?;
     let release_plan = local_asr_release_plan_for_provider(&provider);
-    coord.release_inactive_local_asr_engines(release_plan.qwen, release_plan.whisper);
-    release_foundry_runtime_if_inactive(runtime.inner(), release_plan.foundry).await;
-    release_sherpa_runtime_if_inactive(sherpa_runtime.inner(), release_plan.sherpa).await;
-    coord.emit_local_asr_engine_status();
+    if release_plan.qwen || release_plan.whisper {
+        core.services()
+            .local_asr
+            .release(openless_core::LocalAsrRuntime::Generic)
+            .await
+            .map_err(|error| error.to_string())?;
+    }
+    if release_plan.foundry {
+        core.services()
+            .local_asr
+            .release(openless_core::LocalAsrRuntime::Foundry)
+            .await
+            .map_err(|error| error.to_string())?;
+    }
+    if release_plan.sherpa {
+        core.services()
+            .local_asr
+            .release(openless_core::LocalAsrRuntime::SherpaOnnx)
+            .await
+            .map_err(|error| error.to_string())?;
+    }
     if crate::asr::local::is_local_qwen3(&provider)
         || crate::asr::local::is_local_whisper(&provider)
     {
-        // 所有非目标本地 runtime 已释放后再预加载，避免切换时两个大模型同时驻留。
-        coord.preload_local_asr_in_background();
+        core.services()
+            .local_asr
+            .preload(openless_core::LocalAsrRuntime::Generic)
+            .await
+            .map_err(|error| error.to_string())?;
     }
     Ok(())
 }
 
 #[tauri::command]
-pub fn set_active_llm_provider(provider: String) -> Result<(), String> {
-    CredentialsVault::set_active_llm_provider(&provider).map_err(|e| e.to_string())
+pub async fn set_active_llm_provider(core: CoreState<'_>, provider: String) -> Result<(), String> {
+    core.set_active_provider(openless_core::ProviderSlot::Llm, provider)
+        .await
+        .map(|_| ())
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-pub fn set_active_omni_provider(provider: String) -> Result<(), String> {
-    CredentialsVault::set_active_omni_provider(&provider).map_err(|e| e.to_string())
+pub async fn set_active_omni_provider(core: CoreState<'_>, provider: String) -> Result<(), String> {
+    core.set_active_provider(openless_core::ProviderSlot::Omni, provider)
+        .await
+        .map(|_| ())
+        .map_err(|error| error.to_string())
 }
 
 /// 读出某个账号的实际值（用于设置页预填表单）。
 /// 凭据来自系统凭据库；只允许主设置窗口读取 raw secret，避免胶囊 / QA 等辅助窗口默认暴露。
 #[tauri::command]
 pub async fn read_credential(
+    core: CoreState<'_>,
     window: Window,
     account: String,
     provider: Option<String>,
 ) -> Result<Option<String>, String> {
     ensure_main_window(&window)?;
-    let extra_headers = account == LLM_EXTRA_HEADERS_ACCOUNT;
-    let temperature = account == LLM_TEMPERATURE_ACCOUNT;
-    let omni_extra_headers = account == OMNI_EXTRA_HEADERS_ACCOUNT;
-    let omni_temperature = account == OMNI_TEMPERATURE_ACCOUNT;
-    let parsed = if extra_headers || temperature || omni_extra_headers || omni_temperature {
-        None
-    } else {
-        Some(parse_account(&account)?)
-    };
-    tauri::async_runtime::spawn_blocking(move || {
-        if extra_headers {
-            return CredentialsVault::get_active_llm_extra_headers_json()
-                .map_err(|e| e.to_string());
-        }
-        if temperature {
-            return Ok(CredentialsVault::get_active_llm_temperature_string());
-        }
-        if omni_extra_headers {
-            return CredentialsVault::get_active_omni_extra_headers_json()
-                .map_err(|e| e.to_string());
-        }
-        if omni_temperature {
-            return Ok(CredentialsVault::get_active_omni_temperature_string());
-        }
-        let acc = parsed.expect("non-extra credential account must be parsed");
-        if let Some(provider) = provider {
-            match account_channel_kind(acc) {
-                ChannelKind::Asr => CredentialsVault::get_for_asr_provider(&provider, acc)
-                    .map_err(|e| e.to_string()),
-                ChannelKind::Llm => CredentialsVault::get_for_llm_provider(&provider, acc)
-                    .map_err(|e| e.to_string()),
-            }
-        } else {
-            CredentialsVault::get(acc).map_err(|e| e.to_string())
-        }
-    })
-    .await
-    .map_err(|e| format!("credential read worker failed: {e}"))?
+    core.read_credential(credential_key(&account, provider)?)
+        .await
+        .map(|value| value.map(openless_core::SecretValue::into_exposed))
+        .map_err(|error| error.to_string())
 }
 
-/// 一个凭据账户属于 ASR 面还是 LLM 面 —— 决定按渠道 id 定位时查哪张 map。
-fn account_channel_kind(account: CredentialAccount) -> ChannelKind {
+fn credential_key(
+    account: &str,
+    provider: Option<String>,
+) -> Result<openless_core::CredentialKey, String> {
+    let namespace = match account {
+        LLM_EXTRA_HEADERS_ACCOUNT | LLM_TEMPERATURE_ACCOUNT => {
+            openless_core::CredentialNamespace::Llm
+        }
+        OMNI_EXTRA_HEADERS_ACCOUNT | OMNI_TEMPERATURE_ACCOUNT => {
+            openless_core::CredentialNamespace::Omni
+        }
+        MARKETPLACE_GITHUB_TOKEN_ACCOUNT => openless_core::CredentialNamespace::Marketplace,
+        _ => {
+            let parsed = parse_account(account)?;
+            match parsed {
+                CredentialAccount::ArkApiKey
+                | CredentialAccount::ArkModelId
+                | CredentialAccount::ArkEndpoint => openless_core::CredentialNamespace::Llm,
+                CredentialAccount::OmniApiKey
+                | CredentialAccount::OmniEndpoint
+                | CredentialAccount::OmniModel => openless_core::CredentialNamespace::Omni,
+                _ => openless_core::CredentialNamespace::Asr,
+            }
+        }
+    };
+    openless_core::CredentialKey::new(namespace, provider, account)
+        .map_err(|error| error.to_string())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CredentialProviderKind {
+    Asr,
+    Llm,
+    Omni,
+}
+
+/// 一个凭据账户所属的 provider map —— 决定显式 provider id 应路由到哪个命名空间。
+fn account_provider_kind(account: CredentialAccount) -> CredentialProviderKind {
     match account {
         CredentialAccount::ArkApiKey
         | CredentialAccount::ArkModelId
-        | CredentialAccount::ArkEndpoint => ChannelKind::Llm,
+        | CredentialAccount::ArkEndpoint => CredentialProviderKind::Llm,
         CredentialAccount::VolcengineAppKey
         | CredentialAccount::VolcengineAccessKey
         | CredentialAccount::VolcengineResourceId
@@ -431,12 +786,10 @@ fn account_channel_kind(account: CredentialAccount) -> ChannelKind {
         | CredentialAccount::AsrVocabularyId
         | CredentialAccount::AsrAdvancedConfig
         | CredentialAccount::XfyunAppId
-        | CredentialAccount::XfyunApiKey => ChannelKind::Asr,
-        // Omni 凭据走独立命名空间、从不按渠道 id 定位（前端写入不带 provider）；
-        // 映射到 Asr 只为穷尽 match，实际调用点不可达。
+        | CredentialAccount::XfyunApiKey => CredentialProviderKind::Asr,
         CredentialAccount::OmniApiKey
         | CredentialAccount::OmniEndpoint
-        | CredentialAccount::OmniModel => ChannelKind::Asr,
+        | CredentialAccount::OmniModel => CredentialProviderKind::Omni,
     }
 }
 
@@ -469,5 +822,52 @@ fn parse_account(s: &str) -> Result<CredentialAccount, String> {
         "omni.endpoint" => Ok(CredentialAccount::OmniEndpoint),
         "omni.model" => Ok(CredentialAccount::OmniModel),
         _ => Err(format!("unknown account: {s}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn omni_credential_keys_preserve_the_explicit_provider_scope() {
+        for account in [
+            "omni.api_key",
+            "omni.endpoint",
+            "omni.model",
+            OMNI_EXTRA_HEADERS_ACCOUNT,
+            OMNI_TEMPERATURE_ACCOUNT,
+        ] {
+            let key = credential_key(account, Some("frozen-provider".to_string())).unwrap();
+            assert_eq!(key.namespace, openless_core::CredentialNamespace::Omni);
+            assert_eq!(key.provider_id.as_deref(), Some("frozen-provider"));
+        }
+        for account in [
+            CredentialAccount::OmniApiKey,
+            CredentialAccount::OmniEndpoint,
+            CredentialAccount::OmniModel,
+        ] {
+            assert_eq!(account_provider_kind(account), CredentialProviderKind::Omni);
+        }
+    }
+
+    #[test]
+    fn core_llm_accounts_are_supported_by_the_tauri_vault_adapter() {
+        for account in [
+            openless_core::credentials::LLM_API_KEY_ACCOUNT,
+            openless_core::credentials::LLM_MODEL_ACCOUNT,
+            openless_core::credentials::LLM_ENDPOINT_ACCOUNT,
+        ] {
+            let key = openless_core::CredentialKey::new(
+                openless_core::CredentialNamespace::Llm,
+                Some("channel".to_string()),
+                account,
+            )
+            .unwrap();
+            assert!(
+                parse_vault_account(&key).is_ok(),
+                "Core LLM account must be accepted by the Tauri vault adapter: {account}"
+            );
+        }
     }
 }

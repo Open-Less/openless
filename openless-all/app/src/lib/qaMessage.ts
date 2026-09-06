@@ -28,9 +28,9 @@ function splitQaUserContent(content: string): { selection: string; question: str
 
 export function acceptQaSessionEvent(
   currentSessionId: string | null,
-  payload: Pick<QaStatePayload, 'kind' | 'session_id'>,
+  payload: Pick<QaStatePayload, 'kind' | 'sessionId'>,
 ): { accepted: boolean; sessionId: string | null } {
-  if (!payload.session_id) {
+  if (!payload.sessionId) {
     return { accepted: true, sessionId: currentSessionId };
   }
   // idle 一律视为新会话 token：open_qa_panel 的 idle 总是携带新生成的 session_id，
@@ -39,11 +39,11 @@ export function acceptQaSessionEvent(
     || payload.kind === 'loading'
     || payload.kind === 'thinking'
     || payload.kind === 'idle';
-  if (currentSessionId && !startsTurn && currentSessionId !== payload.session_id) {
+  if (currentSessionId && !startsTurn && currentSessionId !== payload.sessionId) {
     return { accepted: false, sessionId: currentSessionId };
   }
   return {
     accepted: true,
-    sessionId: !currentSessionId || startsTurn ? payload.session_id : currentSessionId,
+    sessionId: !currentSessionId || startsTurn ? payload.sessionId : currentSessionId,
   };
 }

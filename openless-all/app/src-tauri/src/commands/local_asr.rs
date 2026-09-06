@@ -1,11 +1,37 @@
 use super::*;
 
-use crate::asr::local::{
-    download::{fetch_hf_card, fetch_remote_info, HfModelCard, RemoteInfo},
-    DownloadManager, ModelId, ModelStatus, PROVIDER_ID as LOCAL_PROVIDER_ID,
-};
+use std::path::PathBuf;
 
-#[derive(Serialize)]
+use openless_core::{LocalAsrMirror, LocalAsrRuntime, LocalAsrTarget};
+
+fn core_error(error: openless_core::BackendError) -> String {
+    error.to_string()
+}
+
+fn target(runtime: LocalAsrRuntime, model_id: String) -> Result<LocalAsrTarget, String> {
+    LocalAsrTarget::parse(runtime, model_id).map_err(core_error)
+}
+
+fn parse_mirror(value: Option<String>) -> Option<LocalAsrMirror> {
+    value.map(|value| LocalAsrMirror::from_legacy(&value))
+}
+
+fn display_path(path: PathBuf) -> String {
+    path.display().to_string()
+}
+
+#[tauri::command]
+pub async fn local_asr_activate(
+    backend: CoreState<'_>,
+    request: openless_core::LocalAsrActivationRequest,
+) -> Result<openless_core::LocalAsrActivationResult, String> {
+    backend
+        .activate_local_asr(request)
+        .await
+        .map_err(core_error)
+}
+
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalAsrSettings {
     pub provider_id: String,
@@ -17,35 +43,16 @@ pub struct LocalAsrSettings {
     pub engine_available: bool,
 }
 
-#[tauri::command]
-pub fn local_asr_get_settings(coord: CoordinatorState<'_>) -> LocalAsrSettings {
-    let prefs = coord.prefs().get();
-    let active_provider = CredentialsVault::get_active_asr();
-    let models_base_dir = non_empty_string(prefs.local_asr_models_base_dir.clone());
-    let models_root_dir = crate::persistence::models_root_for_base_dir(models_base_dir.as_deref())
-        .map(|path| path.display().to_string())
-        .unwrap_or_default();
-    let active_model = if crate::asr::local::is_local_whisper(&active_provider) {
-        prefs.local_whisper_active_model
-    } else {
-        prefs.local_asr_active_model
-    };
-    LocalAsrSettings {
-        provider_id: LOCAL_PROVIDER_ID.into(),
-        active_model,
-        mirror: prefs.local_asr_mirror,
-        models_base_dir,
-        models_root_dir,
-        engine_available: cfg!(any(target_os = "macos", target_os = "linux")),
-    }
-}
-
-fn non_empty_string(value: String) -> Option<String> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_string())
+impl From<openless_core::LocalAsrSettings> for LocalAsrSettings {
+    fn from(settings: openless_core::LocalAsrSettings) -> Self {
+        Self {
+            provider_id: settings.provider_id,
+            active_model: settings.active_model,
+            mirror: settings.mirror.as_str().into(),
+            models_base_dir: settings.models_base_dir.map(display_path),
+            models_root_dir: display_path(settings.models_root_dir),
+            engine_available: settings.engine_available,
+        }
     }
 }
 
@@ -55,252 +62,123 @@ pub struct LocalAsrStorageSettings {
     pub models_base_dir: Option<String>,
     pub models_root_dir: String,
     pub is_default: bool,
+    pub restart_required: bool,
 }
 
-#[tauri::command]
-pub fn local_asr_storage_settings(
-    coord: CoordinatorState<'_>,
-) -> Result<LocalAsrStorageSettings, String> {
-    let prefs = coord.prefs().get();
-    let models_base_dir = non_empty_string(prefs.local_asr_models_base_dir);
-    let models_root_dir = crate::persistence::models_root_for_base_dir(models_base_dir.as_deref())
-        .map_err(|e| format!("{e:#}"))?
-        .display()
-        .to_string();
-    Ok(LocalAsrStorageSettings {
-        is_default: models_base_dir.is_none(),
-        models_base_dir,
-        models_root_dir,
-    })
-}
-
-#[tauri::command]
-pub async fn local_asr_set_models_base_dir(
-    coord: CoordinatorState<'_>,
-    qwen_manager: State<'_, Arc<DownloadManager>>,
-    foundry_runtime: State<'_, Arc<FoundryLocalRuntime>>,
-    sherpa_manager: State<'_, Arc<SherpaDownloadManager>>,
-    sherpa_runtime: State<'_, Arc<SherpaOnnxRuntime>>,
-    models_base_dir: Option<String>,
-) -> Result<LocalAsrStorageSettings, String> {
-    let next_base_dir = models_base_dir
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string);
-    let new_root = crate::persistence::validate_models_base_dir(next_base_dir.as_deref())
-        .map_err(|e| format!("{e:#}"))?;
-
-    let prefs = coord.prefs().get();
-    let current_base_dir = non_empty_string(prefs.local_asr_models_base_dir.clone());
-    let old_root = crate::persistence::models_root_for_base_dir(current_base_dir.as_deref())
-        .map_err(|e| format!("{e:#}"))?;
-    let same_root = same_path_for_command(&old_root, &new_root);
-    if same_root && current_base_dir == next_base_dir {
-        return local_asr_storage_settings(coord);
-    }
-    if !same_root && foundry_runtime.storage_configuration_locked() {
-        return Err(
-            "Foundry Local has already been initialized in this app session; restart OpenLess before changing the model storage location"
-                .to_string(),
-        );
-    }
-
-    quiesce_local_asr_storage_users(
-        coord.inner(),
-        qwen_manager.inner(),
-        foundry_runtime.inner(),
-        sherpa_manager.inner(),
-        sherpa_runtime.inner(),
-    )
-    .await?;
-    crate::persistence::migrate_models_root(&old_root, &new_root).map_err(|e| format!("{e:#}"))?;
-
-    let mut prefs = prefs;
-    prefs.local_asr_models_base_dir = next_base_dir.clone().unwrap_or_default();
-    coord.prefs().set(prefs).map_err(|e| e.to_string())?;
-    local_asr_storage_settings(coord)
-}
-
-fn same_path_for_command(left: &std::path::Path, right: &std::path::Path) -> bool {
-    match (left.canonicalize(), right.canonicalize()) {
-        (Ok(left), Ok(right)) => left == right,
-        _ => false,
-    }
-}
-
-async fn quiesce_local_asr_storage_users(
-    coord: &Arc<Coordinator>,
-    qwen_manager: &Arc<DownloadManager>,
-    foundry_runtime: &Arc<FoundryLocalRuntime>,
-    sherpa_manager: &Arc<SherpaDownloadManager>,
-    sherpa_runtime: &Arc<SherpaOnnxRuntime>,
-) -> Result<(), String> {
-    for model_id in ModelId::all() {
-        qwen_manager.cancel(*model_id);
-    }
-    for model in crate::asr::local::sherpa::MODELS {
-        sherpa_manager.cancel(model.alias);
-    }
-    foundry_runtime.request_cancel_prepare();
-    sherpa_runtime.request_cancel_prepare();
-    coord.release_local_asr_engine();
-    foundry_runtime
-        .release_now()
-        .await
-        .map_err(|e| format!("{e:#}"))?;
-    sherpa_runtime
-        .release_now()
-        .await
-        .map_err(|e| format!("{e:#}"))?;
-
-    for _ in 0..50 {
-        let qwen_active = ModelId::all()
-            .iter()
-            .any(|model_id| qwen_manager.is_active(*model_id));
-        let sherpa_active = crate::asr::local::sherpa::MODELS
-            .iter()
-            .any(|model| sherpa_manager.is_active(model.alias));
-        if !qwen_active && !sherpa_active {
-            return Ok(());
+impl From<openless_core::LocalAsrStorageSettings> for LocalAsrStorageSettings {
+    fn from(settings: openless_core::LocalAsrStorageSettings) -> Self {
+        Self {
+            models_base_dir: settings.models_base_dir.map(display_path),
+            models_root_dir: display_path(settings.models_root_dir),
+            is_default: settings.is_default,
+            restart_required: settings.restart_required,
         }
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
-    Err("local ASR downloads are still stopping; retry after cancellation finishes".to_string())
 }
 
-#[tauri::command]
-pub fn local_asr_set_active_model(
-    coord: CoordinatorState<'_>,
-    model_id: String,
-) -> Result<(), String> {
-    let model =
-        ModelId::from_str(&model_id).ok_or_else(|| format!("unknown model id: {model_id}"))?;
-    if !model.is_qwen() && !model.is_whisper() {
-        return Err(format!("unknown model id: {model_id}"));
-    }
-    let mut prefs = coord.prefs().get();
-    if model.is_whisper() {
-        prefs.local_whisper_active_model = model_id;
-    } else {
-        prefs.local_asr_active_model = model_id;
-    }
-    coord.prefs().set(prefs).map_err(|e| e.to_string())
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalAsrModelStatus {
+    pub id: String,
+    pub hf_repo: String,
+    pub downloaded_bytes: u64,
+    pub is_downloaded: bool,
 }
 
-#[tauri::command]
-pub fn local_asr_set_mirror(coord: CoordinatorState<'_>, mirror: String) -> Result<(), String> {
-    let _normalized = Mirror::from_str(&mirror);
-    let mut prefs = coord.prefs().get();
-    prefs.local_asr_mirror = mirror;
-    coord.prefs().set(prefs).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub fn local_asr_list_models() -> Vec<ModelStatus> {
-    crate::asr::local::models::list_status()
-}
-
-/// 实时去 HuggingFace API 拉某个模型的真实文件清单 + 总尺寸；
-/// 前端在显示模型卡时调一次，避免硬编码尺寸过期。
-#[tauri::command]
-pub async fn local_asr_fetch_remote_info(
-    model_id: String,
-    mirror: Option<String>,
-) -> Result<RemoteInfo, String> {
-    let id = ModelId::from_str(&model_id).ok_or_else(|| format!("unknown model id: {model_id}"))?;
-    let m = mirror.as_deref().map(Mirror::from_str).unwrap_or_default();
-    fetch_remote_info(id, m).await.map_err(|e| format!("{e:#}"))
-}
-
-#[tauri::command]
-pub async fn local_asr_fetch_hf_card(
-    model_id: String,
-    mirror: Option<String>,
-) -> Result<HfModelCard, String> {
-    let id = ModelId::from_str(&model_id).ok_or_else(|| format!("unknown model id: {model_id}"))?;
-    let m = mirror.as_deref().map(Mirror::from_str).unwrap_or_default();
-    fetch_hf_card(id, m).await.map_err(|e| format!("{e:#}"))
-}
-
-#[tauri::command]
-pub fn local_asr_download_model(
-    app: AppHandle,
-    manager: State<'_, Arc<DownloadManager>>,
-    model_id: String,
-    mirror: Option<String>,
-) -> Result<(), String> {
-    let id = ModelId::from_str(&model_id).ok_or_else(|| format!("unknown model id: {model_id}"))?;
-    let m = mirror.as_deref().map(Mirror::from_str).unwrap_or_default();
-    manager.start(app, id, m);
-    Ok(())
-}
-
-#[tauri::command]
-pub fn local_asr_cancel_download(
-    manager: State<'_, Arc<DownloadManager>>,
-    model_id: String,
-) -> Result<(), String> {
-    let id = ModelId::from_str(&model_id).ok_or_else(|| format!("unknown model id: {model_id}"))?;
-    manager.cancel(id);
-    Ok(())
-}
-
-#[tauri::command]
-pub fn local_asr_delete_model(coord: CoordinatorState<'_>, model_id: String) -> Result<(), String> {
-    let id = ModelId::from_str(&model_id).ok_or_else(|| format!("unknown model id: {model_id}"))?;
-    // 如果内存里加载的就是要删的这个模型，先释放：否则 mmap 残留指向已 unlink 的文件，
-    // 且 RAM 直到下次切模型 / 用户手动按"释放"才回收。
-    if coord.local_asr_loaded_model().as_deref() == Some(id.as_str()) {
-        if id.is_whisper() {
-            coord.release_local_whisper_engine();
-        } else {
-            coord.release_local_qwen_engine();
+impl From<openless_core::LocalAsrModel> for LocalAsrModelStatus {
+    fn from(model: openless_core::LocalAsrModel) -> Self {
+        Self {
+            id: model.target.model_id().to_string(),
+            hf_repo: model.repository.unwrap_or_default(),
+            downloaded_bytes: model.downloaded_bytes,
+            is_downloaded: model.installed,
         }
-        coord.emit_local_asr_engine_status();
     }
-    crate::asr::local::models::delete_model(id).map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-pub fn local_asr_model_dir(model_id: String) -> Result<String, String> {
-    let id = ModelId::from_str(&model_id).ok_or_else(|| format!("unknown model id: {model_id}"))?;
-    crate::asr::local::models::model_dir(id)
-        .map(|path| path.display().to_string())
-        .map_err(|e| format!("{e:#}"))
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalAsrRemoteFile {
+    pub path: String,
+    pub size: u64,
 }
 
-#[tauri::command]
-pub fn local_asr_reveal_model_dir(model_id: String) -> Result<(), String> {
-    let id = ModelId::from_str(&model_id).ok_or_else(|| format!("unknown model id: {model_id}"))?;
-    let dir = crate::asr::local::models::model_dir(id).map_err(|e| format!("{e:#}"))?;
-    std::fs::create_dir_all(&dir).map_err(|e| format!("create {} failed: {e}", dir.display()))?;
-    open_path_in_file_manager(&dir)
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalAsrRemoteInfo {
+    pub model_id: String,
+    pub mirror: String,
+    pub files: Vec<LocalAsrRemoteFile>,
+    pub total_bytes: u64,
 }
 
-#[tauri::command]
-pub fn local_asr_reveal_models_root(coord: CoordinatorState<'_>) -> Result<(), String> {
-    let prefs = coord.prefs().get();
-    let base_dir = non_empty_string(prefs.local_asr_models_base_dir);
-    let dir = crate::persistence::models_root_for_base_dir(base_dir.as_deref())
-        .map_err(|e| format!("{e:#}"))?;
-    open_path_in_file_manager(&dir)
+impl From<openless_core::LocalAsrRemoteInfo> for LocalAsrRemoteInfo {
+    fn from(info: openless_core::LocalAsrRemoteInfo) -> Self {
+        Self {
+            model_id: info.target.model_id().to_string(),
+            mirror: info.mirror.as_str().into(),
+            files: info
+                .files
+                .into_iter()
+                .map(|file| LocalAsrRemoteFile {
+                    path: file.path,
+                    size: file.size_bytes,
+                })
+                .collect(),
+            total_bytes: info.total_bytes,
+        }
+    }
 }
 
-#[tauri::command]
-pub async fn local_asr_test_model(
-    coord: CoordinatorState<'_>,
-    model_id: String,
-) -> Result<crate::asr::local::test_run::TestResult, String> {
-    let id = ModelId::from_str(&model_id).ok_or_else(|| format!("unknown model id: {model_id}"))?;
-    let backend =
-        crate::asr::local::qwen_backend_for_provider(&coord.prefs().get().active_asr_provider);
-    crate::asr::local::test_run::run_test(id, backend)
-        .await
-        .map_err(|e| format!("{e:#}"))
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HfModelCard {
+    pub model_id: String,
+    pub mirror: String,
+    pub downloads: u64,
+    pub likes: u64,
+    pub description: String,
 }
 
-#[derive(Serialize, Clone)]
+impl From<openless_core::LocalAsrModelCard> for HfModelCard {
+    fn from(card: openless_core::LocalAsrModelCard) -> Self {
+        Self {
+            model_id: card.target.model_id().to_string(),
+            mirror: card.mirror.as_str().into(),
+            downloads: card.downloads,
+            likes: card.likes,
+            description: card.description,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalAsrTestResult {
+    pub backend: String,
+    pub model_id: String,
+    pub expected_text: String,
+    pub transcribed_text: String,
+    pub audio_ms: u64,
+    pub load_ms: u64,
+    pub transcribe_ms: u64,
+}
+
+impl From<openless_core::LocalAsrTestResult> for LocalAsrTestResult {
+    fn from(result: openless_core::LocalAsrTestResult) -> Self {
+        Self {
+            backend: result.backend,
+            model_id: result.target.model_id().to_string(),
+            expected_text: result.expected_text,
+            transcribed_text: result.transcribed_text,
+            audio_ms: result.audio_ms,
+            load_ms: result.load_ms,
+            transcribe_ms: result.transcribe_ms,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalAsrEngineStatus {
     pub loaded: bool,
@@ -308,35 +186,307 @@ pub struct LocalAsrEngineStatus {
     pub keep_loaded_secs: u32,
 }
 
-#[tauri::command]
-pub fn local_asr_engine_status(coord: CoordinatorState<'_>) -> LocalAsrEngineStatus {
-    let prefs = coord.prefs().get();
-    let model_id = coord.local_asr_loaded_model();
-    LocalAsrEngineStatus {
-        loaded: model_id.is_some(),
-        model_id,
-        keep_loaded_secs: prefs.local_asr_keep_loaded_secs,
+impl From<openless_core::LocalAsrRuntimeStatus> for LocalAsrEngineStatus {
+    fn from(status: openless_core::LocalAsrRuntimeStatus) -> Self {
+        Self {
+            loaded: status.loaded,
+            model_id: status.model_id,
+            keep_loaded_secs: status.keep_loaded_secs,
+        }
     }
 }
 
 #[tauri::command]
-pub fn local_asr_release_engine(coord: CoordinatorState<'_>) {
-    coord.release_local_asr_engine();
+pub async fn local_asr_get_settings(backend: CoreState<'_>) -> Result<LocalAsrSettings, String> {
+    backend
+        .services()
+        .local_asr
+        .settings(LocalAsrRuntime::Generic)
+        .await
+        .map(LocalAsrSettings::from)
+        .map_err(core_error)
 }
 
 #[tauri::command]
-pub fn local_asr_preload(coord: tauri::State<'_, std::sync::Arc<crate::coordinator::Coordinator>>) {
-    coord.preload_local_asr_in_background();
+pub async fn local_asr_storage_settings(
+    backend: CoreState<'_>,
+) -> Result<LocalAsrStorageSettings, String> {
+    backend
+        .services()
+        .local_asr
+        .storage_settings()
+        .await
+        .map(LocalAsrStorageSettings::from)
+        .map_err(core_error)
 }
 
 #[tauri::command]
-pub fn local_asr_set_keep_loaded_secs(
-    coord: CoordinatorState<'_>,
+pub async fn local_asr_set_models_base_dir(
+    backend: CoreState<'_>,
+    models_base_dir: Option<String>,
+) -> Result<LocalAsrStorageSettings, String> {
+    let path = models_base_dir
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from);
+    backend
+        .services()
+        .local_asr
+        .set_models_base_dir(path)
+        .await
+        .map(LocalAsrStorageSettings::from)
+        .map_err(core_error)
+}
+
+#[tauri::command]
+pub async fn local_asr_set_active_model(
+    backend: CoreState<'_>,
+    model_id: String,
+) -> Result<(), String> {
+    backend
+        .services()
+        .local_asr
+        .set_active_model(target(LocalAsrRuntime::Generic, model_id)?)
+        .await
+        .map_err(core_error)
+}
+
+#[tauri::command]
+pub async fn local_asr_set_mirror(backend: CoreState<'_>, mirror: String) -> Result<(), String> {
+    backend
+        .services()
+        .local_asr
+        .set_mirror(LocalAsrMirror::from_legacy(&mirror))
+        .await
+        .map_err(core_error)
+}
+
+#[tauri::command]
+pub async fn local_asr_list_models(
+    backend: CoreState<'_>,
+) -> Result<Vec<LocalAsrModelStatus>, String> {
+    backend
+        .services()
+        .local_asr
+        .list_models(LocalAsrRuntime::Generic)
+        .await
+        .map(|models| models.into_iter().map(LocalAsrModelStatus::from).collect())
+        .map_err(core_error)
+}
+
+/// 实时读取模型文件清单与总尺寸，避免前端硬编码远端元数据。
+#[tauri::command]
+pub async fn local_asr_fetch_remote_info(
+    backend: CoreState<'_>,
+    model_id: String,
+    mirror: Option<String>,
+) -> Result<LocalAsrRemoteInfo, String> {
+    backend
+        .services()
+        .local_asr
+        .remote_info(
+            target(LocalAsrRuntime::Generic, model_id)?,
+            parse_mirror(mirror),
+        )
+        .await
+        .map(LocalAsrRemoteInfo::from)
+        .map_err(core_error)
+}
+
+#[tauri::command]
+pub async fn local_asr_fetch_hf_card(
+    backend: CoreState<'_>,
+    model_id: String,
+    mirror: Option<String>,
+) -> Result<HfModelCard, String> {
+    backend
+        .services()
+        .local_asr
+        .model_card(
+            target(LocalAsrRuntime::Generic, model_id)?,
+            parse_mirror(mirror),
+        )
+        .await
+        .map(HfModelCard::from)
+        .map_err(core_error)
+}
+
+#[tauri::command]
+pub async fn local_asr_download_model(
+    backend: CoreState<'_>,
+    model_id: String,
+    mirror: Option<String>,
+) -> Result<(), String> {
+    backend
+        .services()
+        .local_asr
+        .start_download(
+            target(LocalAsrRuntime::Generic, model_id)?,
+            parse_mirror(mirror),
+        )
+        .await
+        .map_err(core_error)
+}
+
+#[tauri::command]
+pub async fn local_asr_cancel_download(
+    backend: CoreState<'_>,
+    model_id: String,
+) -> Result<(), String> {
+    backend
+        .services()
+        .local_asr
+        .cancel_download(target(LocalAsrRuntime::Generic, model_id)?)
+        .await
+        .map_err(core_error)
+}
+
+#[tauri::command]
+pub async fn local_asr_delete_model(
+    backend: CoreState<'_>,
+    model_id: String,
+) -> Result<(), String> {
+    backend
+        .services()
+        .local_asr
+        .delete_model(target(LocalAsrRuntime::Generic, model_id)?)
+        .await
+        .map_err(core_error)
+}
+
+#[tauri::command]
+pub async fn local_asr_model_dir(
+    backend: CoreState<'_>,
+    model_id: String,
+) -> Result<String, String> {
+    backend
+        .services()
+        .local_asr
+        .model_dir(target(LocalAsrRuntime::Generic, model_id)?)
+        .await
+        .map(display_path)
+        .map_err(core_error)
+}
+
+#[tauri::command]
+pub async fn local_asr_reveal_model_dir(
+    backend: CoreState<'_>,
+    model_id: String,
+) -> Result<(), String> {
+    let dir = backend
+        .services()
+        .local_asr
+        .model_dir(target(LocalAsrRuntime::Generic, model_id)?)
+        .await
+        .map_err(core_error)?;
+    std::fs::create_dir_all(&dir)
+        .map_err(|error| format!("create {} failed: {error}", dir.display()))?;
+    open_path_in_file_manager(&dir)
+}
+
+#[tauri::command]
+pub async fn local_asr_reveal_models_root(backend: CoreState<'_>) -> Result<(), String> {
+    let settings = backend
+        .services()
+        .local_asr
+        .storage_settings()
+        .await
+        .map_err(core_error)?;
+    open_path_in_file_manager(&settings.models_root_dir)
+}
+
+#[tauri::command]
+pub async fn local_asr_test_model(
+    backend: CoreState<'_>,
+    model_id: String,
+) -> Result<LocalAsrTestResult, String> {
+    backend
+        .services()
+        .local_asr
+        .test_model(target(LocalAsrRuntime::Generic, model_id)?)
+        .await
+        .map(LocalAsrTestResult::from)
+        .map_err(core_error)
+}
+
+#[tauri::command]
+pub async fn local_asr_engine_status(
+    backend: CoreState<'_>,
+) -> Result<LocalAsrEngineStatus, String> {
+    backend
+        .services()
+        .local_asr
+        .runtime_status(LocalAsrRuntime::Generic)
+        .await
+        .map(LocalAsrEngineStatus::from)
+        .map_err(core_error)
+}
+
+#[tauri::command]
+pub async fn local_asr_release_engine(backend: CoreState<'_>) -> Result<(), String> {
+    backend
+        .services()
+        .local_asr
+        .release(LocalAsrRuntime::Generic)
+        .await
+        .map_err(core_error)
+}
+
+#[tauri::command]
+pub async fn local_asr_preload(backend: CoreState<'_>) -> Result<(), String> {
+    backend
+        .services()
+        .local_asr
+        .preload(LocalAsrRuntime::Generic)
+        .await
+        .map_err(core_error)
+}
+
+#[tauri::command]
+pub async fn local_asr_set_keep_loaded_secs(
+    backend: CoreState<'_>,
     seconds: u32,
 ) -> Result<(), String> {
-    let mut prefs = coord.prefs().get();
-    prefs.local_asr_keep_loaded_secs = seconds;
-    coord.prefs().set(prefs).map_err(|e| e.to_string())?;
-    coord.emit_local_asr_engine_status();
-    Ok(())
+    backend
+        .services()
+        .local_asr
+        .set_keep_loaded_secs(LocalAsrRuntime::Generic, seconds)
+        .await
+        .map_err(core_error)
+}
+
+#[cfg(test)]
+mod wire_contract_tests {
+    use super::*;
+
+    #[test]
+    fn generic_settings_keep_the_legacy_react_wire_shape() {
+        let core = openless_core::LocalAsrSettings {
+            runtime: openless_core::LocalAsrRuntime::Generic,
+            provider_id: "local-qwen3".into(),
+            active_model: "qwen3-asr-0.6b".into(),
+            mirror: openless_core::LocalAsrMirror::HfMirror,
+            models_base_dir: None,
+            models_root_dir: std::path::PathBuf::from("C:/models"),
+            engine_available: true,
+            language_hint: None,
+            runtime_source: None,
+            keep_loaded_secs: 300,
+        };
+
+        let value = serde_json::to_value(LocalAsrSettings::from(core)).unwrap();
+
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "providerId": "local-qwen3",
+                "activeModel": "qwen3-asr-0.6b",
+                "mirror": "hf-mirror",
+                "modelsBaseDir": null,
+                "modelsRootDir": "C:/models",
+                "engineAvailable": true,
+            })
+        );
+    }
 }

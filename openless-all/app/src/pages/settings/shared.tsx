@@ -1,5 +1,4 @@
-// 共享在设置各 section 间的原子（SettingRow / Toggle / inputStyle）。
-// AsrPresetId 也放在这里，让 settings/ 下各 section 都从同一处来源拿。
+// 共享在设置各 section 间的原子（SettingRow / Toggle / inputStyle）和纯 i18n 标签。
 
 import type { CSSProperties, ReactNode } from "react"
 import { Tooltip } from "../../components/Tooltip"
@@ -209,67 +208,30 @@ export const inputStyle: CSSProperties = {
         "background 0.16s var(--ol-motion-quick), border-color 0.16s var(--ol-motion-quick)",
 }
 
-// ASR provider preset 清单 —— 单一来源，放这里让 ProvidersSection /
-// LocalModelSection / Overview 都从同一处取，不再各维护一份 id 列表导致漂移。
-// `AsrPresetId` 由此派生（与 ProvidersSection 的 LLM_PRESETS→LlmPresetId 同构）。
-//
-// 新增兼容厂商：
-//   1. 这里加一项 `{ id, nameKey, baseUrl, model }`；
-//   2. 后端 `coordinator.rs::active_asr_provider_kind` 加 id→kind 映射 —— 之后
-//      `preflight_credential` / `configured_fields` 等穷尽 match 会被编译器逐个
-//      报错逼你补齐；走 Whisper 协议再加进 `is_whisper_compatible_provider`，
-//      专有协议另配独立 ASR client 与 provider kind；
-//   3. i18n 的 `settings.providers.presets.<nameKey>` 补各语言文案。
-export const ASR_PRESETS = [
-  { id: 'volcengine',   nameKey: 'asrVolcengine',   baseUrl: '',                                              model: ''                              },
-  { id: 'elevenlabs',   nameKey: 'asrElevenLabs',   baseUrl: 'https://api.elevenlabs.io/v1',                  model: 'scribe_v2'                     },
-  { id: 'bailian',      nameKey: 'asrBailian',     baseUrl: 'wss://dashscope.aliyuncs.com/api-ws/v1/inference/', model: 'fun-asr-realtime'             },
-  // Qwen3-ASR-Flash 实时：OpenAI Realtime 风格 WS（/api-ws/v1/realtime），
-  // 与上面经典 inference 协议不同，由 asr/qwen_realtime.rs 专用 client 处理。
-  // 业务空间专属域名（wss://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/api-ws/v1/realtime）同样可用。
-  { id: 'bailian-qwen3-realtime', nameKey: 'asrBailianQwen3', baseUrl: 'wss://dashscope.aliyuncs.com/api-ws/v1/realtime', model: 'qwen3-asr-flash-realtime' },
-  // Fun-ASR-Flash 录音文件识别：非实时，走 DashScope 私有的
-  // multimodal-generation HTTP 接口（既非实时 WS，也非 OpenAI /audio/transcriptions），
-  // 由 asr/dashscope_multimodal.rs 专用批量 client 处理。API key 与百炼同一把。
-  { id: 'bailian-fun-asr-flash', nameKey: 'asrBailianFunAsrFlash', baseUrl: 'https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation', model: 'fun-asr-flash-2026-06-15' },
-  { id: 'siliconflow',  nameKey: 'asrSiliconflow',  baseUrl: 'https://api.siliconflow.cn/v1',                  model: 'FunAudioLLM/SenseVoiceSmall' },
-  // 阶跃星辰 StepAudio：一个入口双协议（照百炼先例，后端按模型名二次路由）。
-  // 默认批式模型走 Whisper 兼容 multipart，词典经一等 hotwords 参数生效；
-  // 模型改成 stepaudio-2.5-asr-stream 则走实时 WS（asr/stepfun_realtime.rs），
-  // 词典改经 transcription.prompt 生效。endpoint 一律填 https base，
-  // wss URL 由后端自动派生。
-  { id: 'stepfun',      nameKey: 'asrStepfun',      baseUrl: 'https://api.stepfun.com/v1',                     model: 'stepaudio-2.5-asr'           },
-  { id: 'zhipu',        nameKey: 'asrZhipu',        baseUrl: 'https://open.bigmodel.cn/api/paas/v4',           model: 'glm-asr-2512'                },
-  { id: 'groq',         nameKey: 'asrGroq',         baseUrl: 'https://api.groq.com/openai/v1',                 model: 'whisper-large-v3-turbo'      },
-  { id: 'whisper',      nameKey: 'asrWhisper',      baseUrl: 'https://api.openai.com/v1',                      model: 'whisper-1'                   },
-  // OpenRouter 的 /audio/transcriptions 走 application/json + base64（issue #582），
-  // 后端 coordinator.rs::whisper_request_format 对该 id 切换到 OpenRouterJson 编码。
-  { id: 'openrouter',   nameKey: 'asrOpenrouter',   baseUrl: 'https://openrouter.ai/api/v1',                   model: 'openai/whisper-large-v3-turbo' },
-  // ZenMux 聚合平台的 /audio/transcriptions 同为 application/json + base64
-  // （issue #837），后端 whisper_request_format 对该 id 切 ZenMuxJson；
-  // 语言跟随工作语言，enable_itn 开关见 AsrAdvancedOptions（仅该预设显示）。
-  { id: 'zenmux',       nameKey: 'asrZenmux',       baseUrl: 'https://zenmux.ai/api/v1',                      model: 'qwen/qwen3-asr-flash'          },
-  // 通用 OpenAI 兼容端点（自建 / 局域网 llama.cpp 等）：无默认 endpoint/model，
-  // 用户必填；verbose_json 与分片时长由高级选项按 provider 配置（见
-  // ProvidersSection 的 AsrAdvancedOptions），默认行为最保守。
-  { id: 'openai-compatible', nameKey: 'asrOpenAiCompatible', baseUrl: '',                              model: ''                              },
-  // 小米 MiMo ASR 按官方文档走 /chat/completions + input_audio，不是
-  // Whisper /audio/transcriptions；后端由 asr/mimo.rs 专用 client 处理。
-  { id: 'xiaomi-mimo-asr', nameKey: 'asrXiaomiMimo', baseUrl: 'https://api.xiaomimimo.com/v1',                  model: 'mimo-v2.5-asr'               },
-  // 讯飞实时语音转写（RTASR）流式：无 baseUrl/model 配置，凭据是 AppID + APIKey
-  // 两字段（asr/xfyun.rs）；音频 16k/16bit/mono，与 recorder 输出一致。
-  { id: 'iflytek',      nameKey: 'asrIflytek',      baseUrl: '',                                              model: ''                              },
-  { id: 'foundry-local-whisper', nameKey: 'asrFoundryLocalWhisper', baseUrl: '',                              model: ''                              },
-  { id: 'local-whisper', nameKey: 'asrLocalWhisper', baseUrl: '',                                         model: ''                              },
-  // 本地引擎（Foundry / sherpa-onnx / Qwen3）：无 baseUrl/model 配置，
-  // 模型在「高级 → 本地模型」里下载与切换。
-  { id: 'sherpa-onnx-local',     nameKey: 'asrSherpaOnnxLocal',     baseUrl: '',                              model: ''                              },
-  { id: 'local-qwen3-mlx', nameKey: 'asrLocalQwen3Mlx', baseUrl: '',                                          model: ''                              },
-  { id: 'local-qwen3-c',   nameKey: 'asrLocalQwen3C', baseUrl: '',                                            model: ''                              },
-  // 历史配置兼容：不在新建下拉显示，但编辑旧渠道时仍按本地引擎处理。
-  { id: 'local-qwen3', nameKey: 'asrLocalQwen3', baseUrl: '',                                                 model: ''                              },
-  // Apple 系统语音识别（macOS）：无 baseUrl/model、无下载、无凭据。
-  { id: 'apple-speech', nameKey: 'asrAppleSpeech',  baseUrl: '',                                              model: ''                              },
+// React 只保留展示标签。endpoint、model、auth、probe 与能力全部来自
+// Core ProviderDescriptor，避免任一 Host 再拥有一份会漂移的 provider 策略。
+// 这里的顺序和键仅用于本地化回退；协议说明也应写在 Core provider_rules 附近。
+export const ASR_LABELS = [
+  { id: 'volcengine', nameKey: 'asrVolcengine' },
+  { id: 'elevenlabs', nameKey: 'asrElevenLabs' },
+  { id: 'bailian', nameKey: 'asrBailian' },
+  { id: 'bailian-qwen3-realtime', nameKey: 'asrBailianQwen3' },
+  { id: 'bailian-fun-asr-flash', nameKey: 'asrBailianFunAsrFlash' },
+  { id: 'siliconflow', nameKey: 'asrSiliconflow' },
+  { id: 'stepfun', nameKey: 'asrStepfun' },
+  { id: 'zhipu', nameKey: 'asrZhipu' },
+  { id: 'groq', nameKey: 'asrGroq' },
+  { id: 'whisper', nameKey: 'asrWhisper' },
+  { id: 'openrouter', nameKey: 'asrOpenrouter' },
+  { id: 'zenmux', nameKey: 'asrZenmux' },
+  { id: 'openai-compatible', nameKey: 'asrOpenAiCompatible' },
+  { id: 'xiaomi-mimo-asr', nameKey: 'asrXiaomiMimo' },
+  { id: 'iflytek', nameKey: 'asrIflytek' },
+  { id: 'foundry-local-whisper', nameKey: 'asrFoundryLocalWhisper' },
+  { id: 'local-whisper', nameKey: 'asrLocalWhisper' },
+  { id: 'sherpa-onnx-local', nameKey: 'asrSherpaOnnxLocal' },
+  { id: 'local-qwen3-mlx', nameKey: 'asrLocalQwen3Mlx' },
+  { id: 'local-qwen3-c', nameKey: 'asrLocalQwen3C' },
+  { id: 'local-qwen3', nameKey: 'asrLocalQwen3' },
+  { id: 'apple-speech', nameKey: 'asrAppleSpeech' },
 ] as const;
-
-export type AsrPresetId = typeof ASR_PRESETS[number]['id'];

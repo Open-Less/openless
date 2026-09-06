@@ -49,7 +49,9 @@ fn link_macos_compiler_runtime() {
         .expect("macOS compiler resource directory was not UTF-8")
         .trim()
         .to_owned();
-    let runtime_dir = std::path::PathBuf::from(resource_dir).join("lib").join("darwin");
+    let runtime_dir = std::path::PathBuf::from(resource_dir)
+        .join("lib")
+        .join("darwin");
     if !runtime_dir.join("libclang_rt.osx.a").exists() {
         panic!(
             "macOS compiler runtime not found at {}",

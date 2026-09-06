@@ -10,7 +10,7 @@ mod android_impl {
 
     use crate::android::updater_logic::{
         beta_manifest_urls, format_manifest_error, map_abi_to_arch, stable_manifest_urls,
-        UPDATER_PUBKEY_B64, INSTALLER_NOT_OPENED_MSG, version_is_newer,
+        version_is_newer, INSTALLER_NOT_OPENED_MSG, UPDATER_PUBKEY_B64,
     };
     use crate::commands::{
         fetch_latest_beta_release, parse_latest_beta_from_atom, AppUpdateMetadata,
@@ -125,10 +125,10 @@ mod android_impl {
     }
 
     fn verify_signature(apk_bytes: &[u8], signature_b64: &str) -> Result<(), String> {
-        let public_key =
-            PublicKey::from_base64(UPDATER_PUBKEY_B64).map_err(|e| format!("parse updater pubkey: {e}"))?;
-        let signature =
-            Signature::decode(signature_b64.trim()).map_err(|e| format!("decode signature: {e}"))?;
+        let public_key = PublicKey::from_base64(UPDATER_PUBKEY_B64)
+            .map_err(|e| format!("parse updater pubkey: {e}"))?;
+        let signature = Signature::decode(signature_b64.trim())
+            .map_err(|e| format!("decode signature: {e}"))?;
         public_key
             .verify(apk_bytes, &signature, false)
             .map_err(|e| format!("signature verify failed: {e}"))?;
