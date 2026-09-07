@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, Weak};
 
-use super::{emit_capsule, schedule_capsule_idle, Coordinator, Inner};
+use super::{emit_capsule, schedule_capsule_idle, Coordinator, Inner, CAPSULE_AUTO_HIDE_DELAY_MS};
 use crate::coordinator_state::SessionId;
 use crate::selection::SelectionInsertionTarget;
 use crate::types::{CapsuleState, InsertStatus};
@@ -132,6 +132,11 @@ fn emit_selection_voice_begin_error(inner: &Arc<Inner>, error: &str) {
         0,
         Some(selection_voice_user_message(error)),
         None,
+    );
+    // 无选区等 begin 失败时胶囊会停在 Error；与听写 Done/Error 同口径，2s 后自动收回。
+    schedule_capsule_idle(inner, CAPSULE_AUTO_HIDE_DELAY_MS);
+    log::info!(
+        "[selection-voice] begin error capsule shown error={error} auto_hide_ms={CAPSULE_AUTO_HIDE_DELAY_MS}"
     );
 }
 
@@ -292,9 +297,27 @@ pub(super) async fn handle_selection_voice_released(inner: &Arc<Inner>) {
 }
 
 async fn begin_selection_voice_session(inner: &Arc<Inner>) -> Result<(), String> {
-    let (selection_opt, insertion_target) = crate::selection::resolve_selection_workspace_capture();
-    let selection = selection_opt.ok_or_else(|| "selectionVoiceNoSelection".to_string())?;
+    let (selection_opt, insertion_target, capture_diag) =
+        crate::selection::resolve_selection_workspace_capture_with_diag();
+    log::info!(
+        "[selection-voice] begin capture diag={}",
+        capture_diag.summary()
+    );
+    let selection = match selection_opt {
+        Some(selection) => selection,
+        None => {
+            log::warn!(
+                "[selection-voice] begin failed: selectionVoiceNoSelection ({})",
+                capture_diag.summary()
+            );
+            return Err("selectionVoiceNoSelection".into());
+        }
+    };
     if !crate::selection::selection_insertion_target_is_captured(&insertion_target) {
+        log::warn!(
+            "[selection-voice] begin failed: selectionVoiceTargetUnavailable ({})",
+            capture_diag.summary()
+        );
         return Err("selectionVoiceTargetUnavailable".into());
     }
 
