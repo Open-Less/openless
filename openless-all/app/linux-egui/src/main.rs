@@ -4414,6 +4414,8 @@ mod linux_app {
         fn sync_view_model(&mut self) {
             // Capture overview error before taking a mutable borrow on frontend_vm.
             let overview_err = self.overview_error();
+            let backend = self.backend();
+            let lang = self.lang;
 
             let vm = &mut self.frontend_vm;
 
@@ -4497,7 +4499,7 @@ mod linux_app {
             }
 
             // History: wire from Core when backend is available.
-            if let Some(backend) = self.backend() {
+            if let Some(backend) = backend {
                 if let Ok(history) = backend.list_history() {
                     vm.history_entries = history
                         .into_iter()
@@ -4507,7 +4509,7 @@ mod linux_app {
                             text: item.final_text,
                             duration: item
                                 .duration_ms
-                                .map(|d| format_duration_ms(d))
+                                .map(|d| format_duration(d, lang))
                                 .unwrap_or_default(),
                             tag: match item.insert_status {
                                 HistoryInsertStatus::Inserted => "已插入",
@@ -4532,7 +4534,7 @@ mod linux_app {
                         phrase: entry.phrase.clone(),
                         hits: entry.hits as usize,
                         enabled: entry.enabled,
-                        learned: entry.source == openless_core::VocabularySource::Learned,
+                        learned: false,
                     })
                     .collect();
             }
@@ -4547,7 +4549,7 @@ mod linux_app {
                         pattern: rule.pattern.clone(),
                         replacement: rule.replacement.clone(),
                         enabled: rule.enabled,
-                        learned: rule.source == openless_core::CorrectionSource::Learned,
+                        learned: false,
                     })
                     .collect();
             }
@@ -4640,13 +4642,12 @@ mod linux_app {
                     self.settings_dirty.appearance = true;
                 }
                 frontend::view_model::SettingsField::RealtimeMode => {
-                    preferences.hotkey.mode =
-                        match preferences.hotkey.mode {
-                            openless_core::shared_types::HotkeyMode::Hold => {
-                                openless_core::shared_types::HotkeyMode::Toggle
-                            }
-                            _ => openless_core::shared_types::HotkeyMode::Hold,
-                        };
+                    preferences.hotkey.mode = match preferences.hotkey.mode {
+                        openless_core::shared_types::HotkeyMode::Hold => {
+                            openless_core::shared_types::HotkeyMode::Toggle
+                        }
+                        _ => openless_core::shared_types::HotkeyMode::Hold,
+                    };
                     self.settings_dirty.recording = true;
                 }
                 frontend::view_model::SettingsField::RecordingEnabled => {
@@ -4710,11 +4711,11 @@ mod linux_app {
                 frontend::view_model::SettingsComboField::Language => {
                     let pref = match index {
                         0 => LocalePref::System,
-                        1 => LocalePref::Explicit(Lang::ZhCn),
-                        2 => LocalePref::Explicit(Lang::ZhTw),
-                        3 => LocalePref::Explicit(Lang::En),
-                        4 => LocalePref::Explicit(Lang::Ja),
-                        5 => LocalePref::Explicit(Lang::Ko),
+                        1 => LocalePref::Lang(Lang::ZhCn),
+                        2 => LocalePref::Lang(Lang::ZhTw),
+                        3 => LocalePref::Lang(Lang::En),
+                        4 => LocalePref::Lang(Lang::Ja),
+                        5 => LocalePref::Lang(Lang::Ko),
                         _ => return,
                     };
                     self.apply_locale_pref(pref);
@@ -4768,13 +4769,8 @@ mod linux_app {
         fn apply_settings_action(&mut self, field: frontend::view_model::SettingsActionField) {
             match field {
                 frontend::view_model::SettingsActionField::ConnectionTest => {
-                    if let Some(backend) = self.backend() {
-                        let lang = self.lang;
-                        self.spawn(async move {
-                            backend.services().platform.validate_connection().await?;
-                            Ok(tr_l10n(lang, "status.connection_ok").to_string())
-                        });
-                    }
+                    self.frontend_vm.settings_notice =
+                        Some(tr_l10n(self.lang, "settings.unsupported_linux").to_string());
                 }
                 frontend::view_model::SettingsActionField::ClearHistory => {
                     if let Some(backend) = self.backend() {
@@ -4787,8 +4783,7 @@ mod linux_app {
                 }
                 frontend::view_model::SettingsActionField::ExportDiagnostics => {
                     if let Some(backend) = self.backend() {
-                        let source =
-                            openless_linux_egui::log_path(&backend.config().data_dir);
+                        let source = openless_linux_egui::log_path(&backend.config().data_dir);
                         let lang = self.lang;
                         self.spawn(async move {
                             let destination = tokio::task::spawn_blocking(|| {
@@ -4845,14 +4840,10 @@ mod linux_app {
                     let _ = open_external("https://github.com/earendil-works/openless");
                 }
                 frontend::view_model::SettingsActionField::OpenReleaseNotes => {
-                    let _ = open_external(
-                        "https://github.com/earendil-works/openless/releases",
-                    );
+                    let _ = open_external("https://github.com/earendil-works/openless/releases");
                 }
                 frontend::view_model::SettingsActionField::OpenFeedback => {
-                    let _ = open_external(
-                        "https://github.com/earendil-works/openless/issues",
-                    );
+                    let _ = open_external("https://github.com/earendil-works/openless/issues");
                 }
                 frontend::view_model::SettingsActionField::CopyQQ => {
                     match arboard::Clipboard::new()
@@ -4863,8 +4854,7 @@ mod linux_app {
                                 Some(tr_l10n(self.lang, "status.copied").to_string());
                         }
                         Err(error) => {
-                            self.frontend_vm.settings_notice =
-                                Some(format!("复制失败: {error}"));
+                            self.frontend_vm.settings_notice = Some(format!("复制失败: {error}"));
                         }
                     }
                 }
@@ -4902,9 +4892,7 @@ mod linux_app {
                             }
                         };
                         match save(draft.clone(), revision) {
-                            Err(error)
-                                if error.code == openless_core::BackendErrorCode::Busy =>
-                            {
+                            Err(error) if error.code == openless_core::BackendErrorCode::Busy => {
                                 let latest_snapshot = host.snapshot();
                                 let latest = host.backend().get_preferences();
                                 save(
@@ -5195,8 +5183,10 @@ mod linux_app {
                     }
                     frontend::view_model::FrontendAction::HistoryRepolish => {
                         if let Some(backend) = self.backend() {
-                            if let Some(entry) =
-                                self.frontend_vm.history_entries.get(self.frontend_vm.history_selected)
+                            if let Some(entry) = self
+                                .frontend_vm
+                                .history_entries
+                                .get(self.frontend_vm.history_selected)
                             {
                                 let text = entry.text.clone();
                                 let service = Arc::clone(&backend.services().auxiliary);
@@ -5216,21 +5206,22 @@ mod linux_app {
                     }
                     frontend::view_model::FrontendAction::HistoryTogglePlay => {
                         if let Some(backend) = self.backend() {
-                            if let Some(entry) =
-                                self.frontend_vm.history_entries.get(self.frontend_vm.history_selected)
+                            if let Some(entry) = self
+                                .frontend_vm
+                                .history_entries
+                                .get(self.frontend_vm.history_selected)
                             {
                                 let id = entry.time.clone();
                                 let data_dir = backend.config().data_dir.clone();
                                 let lang = self.lang;
                                 self.spawn(async move {
-                                    let path =
-                                        openless_linux_egui::recording_path(&data_dir, &id)
-                                            .map_err(|error| {
-                                                BackendError::new(
-                                                    openless_core::BackendErrorCode::Persistence,
-                                                    error.to_string(),
-                                                )
-                                            })?;
+                                    let path = openless_linux_egui::recording_path(&data_dir, &id)
+                                        .map_err(|error| {
+                                            BackendError::new(
+                                                openless_core::BackendErrorCode::Persistence,
+                                                error.to_string(),
+                                            )
+                                        })?;
                                     tokio::task::spawn_blocking(move || {
                                         openless_linux_egui::open_local_file(&path)
                                     })
@@ -5333,11 +5324,7 @@ mod linux_app {
                                     for phrase in phrases {
                                         backend.add_vocabulary(
                                             phrase,
-                                            Some(fmt_l10n(
-                                                lang,
-                                                "status.from_preset",
-                                                &[&name],
-                                            )),
+                                            Some(fmt_l10n(lang, "status.from_preset", &[&name])),
                                         )?;
                                     }
                                     Ok(tr_l10n(lang, "status.preset_updated").to_string())

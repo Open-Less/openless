@@ -622,18 +622,6 @@ fn services(ui: &mut egui::Ui, vm: &mut FrontendViewModel, actions: &mut Vec<Fro
     );
     card(
         ui,
-        "本地模型",
-        "在桌面端使用本地语音识别模型。",
-        |ui| {
-            toggle_row(ui, "启用本地模型", vm.settings.local_model, || {
-                actions.push(FrontendAction::SettingsToggle(SettingsField::LocalModel));
-            });
-            text_row(ui, "模型目录", "未选择目录");
-            action_row(ui, "模型管理", "选择目录", None, actions);
-        },
-    );
-    card(
-        ui,
         "扩展市场",
         "浏览和安装风格包及输入扩展。",
         |ui| {

@@ -75,14 +75,6 @@ pub fn render(ctx: &egui::Context, vm: &mut FrontendViewModel, actions: &mut Vec
                         pages::overview_page(ui, vm, actions);
                     }
                     Page::Vocab => {
-                        ui.add_space(28.0);
-                        ui.label(
-                            egui::RichText::new("词汇表")
-                                .size(28.0)
-                                .strong()
-                                .color(theme::INK),
-                        );
-                        ui.add_space(22.0);
                         pages::vocab_page(ui, vm, actions);
                     }
                     Page::Marketplace => {
