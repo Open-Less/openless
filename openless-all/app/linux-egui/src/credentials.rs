@@ -431,9 +431,13 @@ impl CredentialStore for LinuxCredentialStore {
                     OMNI_MODEL_ACCOUNT,
                 ),
             };
+            // Linux ships no local inference engine, so every native/local ASR
+            // provider id is reported unconfigured rather than gated on a Qwen
+            // runtime that is never present.
             let local_asr_configured = match asr_provider_type.as_str() {
-                "local-qwen3" | "local-qwen3-c" => Some(crate::backend::qwen_engine_available()),
-                "local-qwen3-mlx"
+                "local-qwen3"
+                | "local-qwen3-c"
+                | "local-qwen3-mlx"
                 | "local-whisper"
                 | "apple-speech"
                 | "foundry-local-whisper"

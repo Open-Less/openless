@@ -3252,6 +3252,7 @@ dependencies = [
  "fs2",
  "futures-util",
  "hyper-util",
+ "image",
  "keyring",
  "libc",
  "local-ip-address",

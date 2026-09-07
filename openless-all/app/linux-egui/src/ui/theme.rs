@@ -12,6 +12,7 @@ pub const INK: egui::Color32 = egui::Color32::from_rgb(9, 9, 11);
 pub const INK_2: egui::Color32 = egui::Color32::from_rgb(63, 63, 70);
 pub const INK_3: egui::Color32 = egui::Color32::from_rgb(113, 113, 122);
 pub const INK_4: egui::Color32 = egui::Color32::from_rgb(161, 161, 170);
+pub const OK: egui::Color32 = egui::Color32::from_rgb(22, 163, 74);
 
 /// Install the same Linux font fallback strategy as the redesigned prototype,
 /// without shipping its large duplicate font bundle.

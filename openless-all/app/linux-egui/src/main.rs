@@ -13,14 +13,14 @@ mod linux_app {
     use std::sync::Arc;
     use std::time::Duration;
 
+    use crate::ui::frontend::{self, view_model::FrontendViewModel};
     use crate::ui::{shell, theme};
     use chrono::Datelike;
     use eframe::egui;
     use openless_core::{
         BackendConfig, BackendError, BackendEvent, BackendEventKind, BackendSnapshot,
-        DictationPhase, HistoryInsertStatus, HostAction, LessComputerEventKind, LocalAsrModel,
-        LocalAsrRuntime, QaStateEvent, QaStateKind, SelectionPhase, SelectionSnapshot,
-        TranscriptAccumulator, UserPreferences,
+        DictationPhase, HistoryInsertStatus, HostAction, LessComputerEventKind, QaStateEvent,
+        QaStateKind, SelectionPhase, SelectionSnapshot, TranscriptAccumulator, UserPreferences,
     };
     use openless_linux_egui::{
         drain_events, ensure_fcitx5_plugin_installed, notify, open_external, reload_running_fcitx5,
@@ -37,7 +37,6 @@ mod linux_app {
 
     enum UiResult {
         Message(String),
-        Models(Result<Vec<LocalAsrModel>, String>),
         Remote(Result<(openless_core::RemoteInputStatus, String), String>),
         Providers(Result<ProviderPanel, String>),
         ProviderEditor {
@@ -63,14 +62,6 @@ mod linux_app {
         UpdateCheck(Result<Option<UpdateManifest>, String>),
         UpdateProgress(openless_linux_egui::DownloadProgress),
         UpdateInstalled(Result<openless_linux_egui::InstalledUpdate, String>),
-        ModelMutation(Result<String, String>),
-    }
-
-    #[derive(Clone)]
-    enum ModelsState {
-        Loading,
-        Loaded(Vec<LocalAsrModel>),
-        Failed(String),
     }
 
     #[derive(Clone)]
@@ -596,7 +587,6 @@ mod linux_app {
         settings_dirty: SettingsDirty,
         overview: OverviewState,
         microphones: Vec<openless_core::MicrophoneDevice>,
-        models: ModelsState,
         transcript: String,
         transcript_state: TranscriptAccumulator,
         transcript_session: Option<openless_core::SessionId>,
@@ -661,6 +651,7 @@ mod linux_app {
         locale_pref: LocalePref,
         lang: Lang,
         active_page: shell::Page,
+        frontend_vm: FrontendViewModel,
         tx: mpsc::Sender<UiResult>,
         rx: mpsc::Receiver<UiResult>,
     }
@@ -696,7 +687,6 @@ mod linux_app {
                         settings_dirty: SettingsDirty::default(),
                         overview: OverviewState::Loading,
                         microphones: Vec::new(),
-                        models: ModelsState::Loading,
                         transcript: String::new(),
                         transcript_state: TranscriptAccumulator::default(),
                         transcript_session: None,
@@ -761,10 +751,10 @@ mod linux_app {
                         locale_pref,
                         lang,
                         active_page: shell::Page::Overview,
+                        frontend_vm: FrontendViewModel::default(),
                         tx,
                         rx,
                     };
-                    app.load_models();
                     app.load_remote_status();
                     app.load_providers(openless_core::ChannelKind::Asr);
                     app.load_library();
@@ -781,7 +771,6 @@ mod linux_app {
                     settings_dirty: SettingsDirty::default(),
                     overview: OverviewState::Loading,
                     microphones: Vec::new(),
-                    models: ModelsState::Loading,
                     transcript: String::new(),
                     transcript_state: TranscriptAccumulator::default(),
                     transcript_session: None,
@@ -846,6 +835,7 @@ mod linux_app {
                     locale_pref,
                     lang,
                     active_page: shell::Page::Overview,
+                    frontend_vm: FrontendViewModel::default(),
                     tx,
                     rx,
                 },
@@ -1183,22 +1173,6 @@ mod linux_app {
             });
         }
 
-        fn load_models(&self) {
-            let Some(backend) = self.backend() else {
-                return;
-            };
-            let tx = self.tx.clone();
-            self.tokio.spawn(async move {
-                let models = backend
-                    .services()
-                    .local_asr
-                    .list_models(LocalAsrRuntime::Generic)
-                    .await
-                    .map_err(|error| error.to_string());
-                let _ = tx.send(UiResult::Models(models));
-            });
-        }
-
         fn load_remote_status(&self) {
             let Some(backend) = self.backend() else {
                 return;
@@ -1503,17 +1477,6 @@ mod linux_app {
             });
         }
 
-        fn spawn_model_mutation<F>(&self, future: F)
-        where
-            F: Future<Output = Result<String, BackendError>> + Send + 'static,
-        {
-            let tx = self.tx.clone();
-            self.tokio.spawn(async move {
-                let result = future.await.map_err(|error| error.to_string());
-                let _ = tx.send(UiResult::ModelMutation(result));
-            });
-        }
-
         fn request_provider_models(&self, kind: openless_core::ChannelKind, channel_id: String) {
             let Some(backend) = self.backend() else {
                 return;
@@ -1704,27 +1667,6 @@ mod linux_app {
                             self.pending_approval = None;
                             self.status = tr_l10n(lang, "less_computer.cancelled").to_string();
                         }
-                    }
-                }
-                BackendEventKind::LocalAsrDownloadProgress(progress) => {
-                    self.status = fmt_l10n(
-                        lang,
-                        "status.model_progress",
-                        &[
-                            &progress.model_id,
-                            &format!("{:?}", progress.phase),
-                            &progress.bytes_downloaded,
-                            &progress.bytes_total,
-                        ],
-                    );
-                    if matches!(
-                        progress.phase,
-                        openless_core::LocalAsrDownloadPhase::Finished
-                            | openless_core::LocalAsrDownloadPhase::Failed
-                            | openless_core::LocalAsrDownloadPhase::Cancelled
-                    ) {
-                        self.models = ModelsState::Loading;
-                        self.load_models();
                     }
                 }
                 BackendEventKind::PreferencesChanged(_) => {
@@ -1983,11 +1925,6 @@ mod linux_app {
             while let Ok(result) = self.rx.try_recv() {
                 match result {
                     UiResult::Message(message) => self.status = message,
-                    UiResult::Models(Ok(models)) => self.models = ModelsState::Loaded(models),
-                    UiResult::Models(Err(error)) => {
-                        self.models = ModelsState::Failed(error.clone());
-                        self.status = error;
-                    }
                     UiResult::Remote(Ok(remote)) => self.remote_access = Some(remote),
                     UiResult::Remote(Err(error)) => self.status = error,
                     UiResult::Providers(Ok(panel)) => {
@@ -2222,11 +2159,6 @@ mod linux_app {
                     UiResult::UpdateInstalled(Err(error)) => {
                         self.update_busy = false;
                         self.status = fmt_l10n(lang, "update.install_failed", &[&error]);
-                    }
-                    UiResult::ModelMutation(result) => {
-                        self.status = result.unwrap_or_else(|error| error);
-                        self.models = ModelsState::Loading;
-                        self.load_models();
                     }
                 }
             }
@@ -2528,186 +2460,6 @@ mod linux_app {
                                 Ok(tr_l10n(lang, "selection.reverted").to_string())
                             });
                         }
-                    }
-                });
-            }
-        }
-
-        fn models_ui(&mut self, ui: &mut egui::Ui) {
-            let lang = self.lang;
-            ui.horizontal(|ui| {
-                ui.heading(tr_l10n(lang, "heading.local_models"));
-                if ui.button(tr_l10n(lang, "btn.refresh")).clicked() {
-                    self.models = ModelsState::Loading;
-                    self.load_models();
-                }
-                if ui.button(tr_l10n(lang, "btn.preload_current")).clicked() {
-                    if let Some(backend) = self.backend() {
-                        self.spawn_model_mutation(async move {
-                            backend
-                                .services()
-                                .local_asr
-                                .preload(LocalAsrRuntime::Generic)
-                                .await?;
-                            Ok(tr_l10n(lang, "status.preloaded").to_string())
-                        });
-                    }
-                }
-                if ui.button(tr_l10n(lang, "btn.release_model")).clicked() {
-                    if let Some(backend) = self.backend() {
-                        self.spawn_model_mutation(async move {
-                            backend
-                                .services()
-                                .local_asr
-                                .release(LocalAsrRuntime::Generic)
-                                .await?;
-                            Ok(tr_l10n(lang, "status.model_released").to_string())
-                        });
-                    }
-                }
-                if ui.button(tr_l10n(lang, "btn.cancel_prepare")).clicked() {
-                    if let Some(backend) = self.backend() {
-                        self.spawn_model_mutation(async move {
-                            backend
-                                .services()
-                                .local_asr
-                                .cancel_prepare(LocalAsrRuntime::Generic)
-                                .await?;
-                            Ok(tr_l10n(lang, "status.cancel_prepare_ok").to_string())
-                        });
-                    }
-                }
-            });
-            let models = match self.models.clone() {
-                ModelsState::Loading => {
-                    ui.label(tr_l10n(lang, "models.loading_dir"));
-                    return;
-                }
-                ModelsState::Failed(error) => {
-                    ui.colored_label(egui::Color32::RED, error);
-                    return;
-                }
-                ModelsState::Loaded(models) if models.is_empty() => {
-                    ui.label(tr_l10n(lang, "models.empty"));
-                    return;
-                }
-                ModelsState::Loaded(models) => models,
-            };
-            let mut action: Option<(openless_core::LocalAsrTarget, &'static str)> = None;
-            for model in models {
-                ui.horizontal(|ui| {
-                    let state = if model.installed {
-                        tr_l10n(lang, "models.installed")
-                    } else {
-                        tr_l10n(lang, "models.not_installed")
-                    };
-                    ui.label(format!(
-                        "{} · {} · {}",
-                        model.display_name, model.family, state
-                    ));
-                    if !model.installed && ui.button(tr_l10n(lang, "btn.download")).clicked() {
-                        action = Some((model.target.clone(), "download"));
-                    }
-                    if !model.installed && ui.button(tr_l10n(lang, "btn.cancel_download")).clicked()
-                    {
-                        action = Some((model.target.clone(), "cancel_download"));
-                    }
-                    if model.installed && ui.button(tr_l10n(lang, "btn.activate")).clicked() {
-                        if let Some(backend) = self.backend() {
-                            let target = model.target.clone();
-                            self.spawn(async move {
-                                let descriptor =
-                                    openless_core::provider_rules::provider_descriptor(
-                                        openless_core::ProviderKind::Asr,
-                                        "local-qwen3-c",
-                                    )
-                                    .ok_or_else(|| {
-                                        openless_core::BackendError::new(
-                                            openless_core::BackendErrorCode::Unsupported,
-                                            "local Qwen provider is unavailable",
-                                        )
-                                    })?;
-                                let provider_type = descriptor.provider_type.as_str().to_string();
-                                let existing = backend
-                                    .list_channels(openless_core::ChannelKind::Asr)
-                                    .await?
-                                    .into_iter()
-                                    .find(|channel| channel.provider_type == provider_type)
-                                    .map(|channel| channel.id);
-                                let provider_id = match existing {
-                                    Some(provider_id) => provider_id,
-                                    None => {
-                                        backend
-                                            .create_channel(
-                                                openless_core::ChannelKind::Asr,
-                                                provider_type,
-                                                descriptor.label_key,
-                                            )
-                                            .await?
-                                    }
-                                };
-                                backend
-                                    .activate_local_asr(openless_core::LocalAsrActivationRequest {
-                                        target,
-                                        provider_id,
-                                    })
-                                    .await?;
-                                Ok(tr_l10n(lang, "status.activated").to_string())
-                            });
-                        }
-                    }
-                    if ui.button(tr_l10n(lang, "btn.cancel")).clicked() {
-                        if let Some(backend) = self.backend() {
-                            let target = model.target.clone();
-                            self.spawn(async move {
-                                backend.services().local_asr.cancel_download(target).await?;
-                                Ok(tr_l10n(lang, "status.download_cancelled").to_string())
-                            });
-                        }
-                    }
-                    if model.installed && ui.button(tr_l10n(lang, "btn.verify_prepare")).clicked() {
-                        action = Some((model.target.clone(), "prepare"));
-                    }
-                    if model.installed && ui.button(tr_l10n(lang, "btn.test")).clicked() {
-                        action = Some((model.target.clone(), "test"));
-                    }
-                    if model.installed && ui.button(tr_l10n(lang, "btn.delete")).clicked() {
-                        action = Some((model.target.clone(), "delete"));
-                    }
-                });
-            }
-            if let (Some(backend), Some((target, operation))) = (self.backend(), action) {
-                self.spawn_model_mutation(async move {
-                    match operation {
-                        "download" => {
-                            backend
-                                .services()
-                                .local_asr
-                                .start_download(target, None)
-                                .await?;
-                            Ok(tr_l10n(lang, "status.download_done").to_string())
-                        }
-                        "cancel_download" => {
-                            backend.services().local_asr.cancel_download(target).await?;
-                            Ok(tr_l10n(lang, "status.download_cancel_requested").to_string())
-                        }
-                        "prepare" => {
-                            let prepared = backend.services().local_asr.prepare(target).await?;
-                            Ok(fmt_l10n(lang, "status.prepare_done", &[&prepared]))
-                        }
-                        "test" => {
-                            let result = backend.services().local_asr.test_model(target).await?;
-                            Ok(fmt_l10n(
-                                lang,
-                                "status.test_done",
-                                &[&result.transcribed_text, &result.transcribe_ms],
-                            ))
-                        }
-                        "delete" => {
-                            backend.services().local_asr.delete_model(target).await?;
-                            Ok(tr_l10n(lang, "status.model_deleted").to_string())
-                        }
-                        _ => unreachable!(),
                     }
                 });
             }
@@ -4653,9 +4405,344 @@ mod linux_app {
                 }
             }
         }
+
+        // ── Frontend bridge ─────────────────────────────────────────────────
+
+        /// Sync backend state into the frontend view model each frame before
+        /// rendering. Only fields that have real data sources are populated;
+        /// unwired fields remain in their default empty / loading state.
+        fn sync_view_model(&mut self) {
+            // Capture overview error before taking a mutable borrow on frontend_vm.
+            let overview_err = self.overview_error();
+
+            let vm = &mut self.frontend_vm;
+
+            // Map shell::Page to frontend::Page.
+            vm.active_page = match self.active_page {
+                shell::Page::Overview => frontend::view_model::Page::Overview,
+                shell::Page::History => frontend::view_model::Page::History,
+                shell::Page::Vocabulary => frontend::view_model::Page::Vocab,
+                shell::Page::Styles => frontend::view_model::Page::Style,
+                shell::Page::Marketplace => frontend::view_model::Page::Marketplace,
+                shell::Page::Providers => frontend::view_model::Page::Settings,
+                shell::Page::Assistant => frontend::view_model::Page::SelectionAsk,
+            };
+
+            vm.status = self.status.clone();
+            vm.version = env!("CARGO_PKG_VERSION").to_string();
+
+            // Overview: wire real data when available.
+            if let Some(summary) = self.overview.summary(chrono::Local::now().date_naive()) {
+                vm.overview_loading = false;
+                vm.overview_error = None;
+                vm.overview = Some(frontend::view_model::OverviewSummary {
+                    asr_provider: summary.asr_provider,
+                    llm_provider: summary.llm_provider,
+                    asr_configured: summary.asr_configured,
+                    llm_configured: summary.llm_configured,
+                    chars_today: summary.chars_today,
+                    segments_today: summary.segments_today,
+                    duration_ms_today: summary.duration_ms_today,
+                    avg_latency_ms: summary.avg_latency_ms,
+                    history_total: summary.history_total,
+                    recent: summary
+                        .recent
+                        .into_iter()
+                        .map(|entry| frontend::view_model::OverviewRecentEntry {
+                            created_at: entry.created_at,
+                            final_text: entry.final_text,
+                            duration_ms: entry.duration_ms,
+                        })
+                        .collect(),
+                    last_7_segments: summary.last_7.segments,
+                    last_30_segments: summary.last_30.segments,
+                    heatmap_weeks: summary.heatmap_weeks,
+                    heatmap_days: summary.heatmap_days,
+                    activity_days_total: summary.activity_days_total,
+                });
+            } else if let Some(error) = overview_err {
+                vm.overview_loading = false;
+                vm.overview_error = Some(error);
+                vm.overview = None;
+            } else {
+                vm.overview_loading = true;
+                vm.overview_error = None;
+                vm.overview = None;
+            }
+
+            // Settings: populate from preferences.
+            if let Some(prefs) = &self.preferences {
+                let s = &mut vm.settings;
+                s.streaming_insert = prefs.streaming_insert;
+                s.start_minimized = prefs.start_minimized;
+                s.auto_update = prefs.auto_update_check;
+                s.remote_input = prefs.remote_input_enabled;
+                s.remote_port = prefs.remote_input_port.to_string();
+                s.activity_heatmap = prefs.show_overview_activity_heatmap;
+                s.theme = match prefs.theme_mode {
+                    openless_core::shared_types::ThemeMode::System => 0,
+                    openless_core::shared_types::ThemeMode::Light => 1,
+                    openless_core::shared_types::ThemeMode::Dark => 2,
+                };
+                s.recording_enabled = true;
+                s.realtime_mode = matches!(
+                    prefs.hotkey.mode,
+                    openless_core::shared_types::HotkeyMode::Hold
+                );
+                s.restore_clipboard = true;
+                s.remember_history = true;
+            }
+
+            // Marketplace: wire from Core data when available.
+            if !self.marketplace_items.is_empty() {
+                vm.marketplace_loading = false;
+                vm.marketplace_unsupported = false;
+                vm.marketplace_packs = self
+                    .marketplace_items
+                    .iter()
+                    .map(|item| frontend::view_model::MarketplacePack {
+                        name: item.name.clone(),
+                        version: item.version.clone(),
+                        description: item.description.clone(),
+                        mode: item.base_mode.clone(),
+                        author: item.author_login.clone(),
+                        tags: vec![item.base_mode.clone()],
+                        likes: item.like_count as u32,
+                        downloads: item.download_count as u32,
+                        is_new: false,
+                    })
+                    .collect();
+            }
+
+            // Startup error.
+            if let Some(error) = &self.startup_error {
+                vm.status = format!("启动失败: {error}");
+            }
+        }
+
+        /// Returns the overview error string if the overview is in a failed state.
+        fn overview_error(&self) -> Option<String> {
+            match &self.overview {
+                crate::linux_app::OverviewState::Failed(error) => Some(error.clone()),
+                _ => None,
+            }
+        }
+
+        /// Dispatch frontend actions to existing Core / backend methods.
+        fn apply_frontend_actions(
+            &mut self,
+            actions: Vec<frontend::view_model::FrontendAction>,
+            ctx: &egui::Context,
+        ) {
+            for action in actions {
+                match action {
+                    frontend::view_model::FrontendAction::Navigate(page) => {
+                        self.active_page = match page {
+                            frontend::view_model::Page::Overview => shell::Page::Overview,
+                            frontend::view_model::Page::History => shell::Page::History,
+                            frontend::view_model::Page::Vocab => shell::Page::Vocabulary,
+                            frontend::view_model::Page::Style => shell::Page::Styles,
+                            frontend::view_model::Page::Marketplace => shell::Page::Marketplace,
+                            frontend::view_model::Page::SelectionAsk => shell::Page::Assistant,
+                            frontend::view_model::Page::Translation => shell::Page::Assistant,
+                            frontend::view_model::Page::Settings => shell::Page::Providers,
+                        };
+                    }
+                    frontend::view_model::FrontendAction::ToggleSettings => {
+                        self.frontend_vm.settings_open = !self.frontend_vm.settings_open;
+                        if self.frontend_vm.settings_open {
+                            self.frontend_vm.active_page = frontend::view_model::Page::Settings;
+                        }
+                    }
+                    frontend::view_model::FrontendAction::CloseSettings => {
+                        self.frontend_vm.settings_open = false;
+                        self.frontend_vm.active_page = frontend::view_model::Page::Overview;
+                    }
+                    frontend::view_model::FrontendAction::SidebarToggleStyle => {
+                        self.frontend_vm.style_open = !self.frontend_vm.style_open;
+                    }
+                    frontend::view_model::FrontendAction::SidebarToggleTools => {
+                        self.frontend_vm.tools_open = !self.frontend_vm.tools_open;
+                    }
+                    frontend::view_model::FrontendAction::WindowClose => {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                    frontend::view_model::FrontendAction::WindowMaximize => {
+                        let maximized =
+                            ctx.input(|input| input.viewport().maximized.unwrap_or(false));
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
+                    }
+                    frontend::view_model::FrontendAction::WindowMinimize => {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+                    }
+                    frontend::view_model::FrontendAction::MarketplaceRefresh => {
+                        self.load_marketplace();
+                    }
+                    frontend::view_model::FrontendAction::MarketplaceMyPacks => {
+                        self.load_marketplace_mine();
+                    }
+                    frontend::view_model::FrontendAction::MarketplaceSearch(query) => {
+                        self.marketplace_query = query;
+                    }
+                    frontend::view_model::FrontendAction::MarketplaceCloseDetail => {
+                        self.frontend_vm.marketplace_selected = None;
+                    }
+                    frontend::view_model::FrontendAction::MarketplaceDetail(index) => {
+                        self.frontend_vm.marketplace_selected = Some(index);
+                    }
+                    frontend::view_model::FrontendAction::MarketplaceInstall(index) => {
+                        if let Some(item) = self.marketplace_items.get(index) {
+                            if let Some(backend) = self.backend() {
+                                let id = item.id.clone();
+                                let lang = self.lang;
+                                self.spawn(async move {
+                                    let pack = backend.services().marketplace.install(id).await?;
+                                    Ok(fmt_l10n(
+                                        lang,
+                                        "status.marketplace_installed",
+                                        &[&pack.name],
+                                    ))
+                                });
+                            }
+                        }
+                    }
+                    frontend::view_model::FrontendAction::MarketplaceDownload(index) => {
+                        if let Some(item) = self.marketplace_items.get(index) {
+                            if let Some(backend) = self.backend() {
+                                let id = item.id.clone();
+                                let lang = self.lang;
+                                let tx = self.tx.clone();
+                                self.tokio.spawn(async move {
+                                    let result = async {
+                                        let bytes = backend
+                                            .services()
+                                            .marketplace
+                                            .download_archive(id.clone())
+                                            .await?;
+                                        let destination = tokio::task::spawn_blocking(move || {
+                                            rfd::FileDialog::new()
+                                                .add_filter("OpenLess style pack", &["zip"])
+                                                .set_file_name(format!(
+                                                    "openless-marketplace-{id}.zip"
+                                                ))
+                                                .save_file()
+                                        })
+                                        .await
+                                        .map_err(|error| {
+                                            BackendError::new(
+                                                openless_core::BackendErrorCode::Internal,
+                                                error.to_string(),
+                                            )
+                                        })?
+                                        .ok_or_else(|| {
+                                            BackendError::new(
+                                                openless_core::BackendErrorCode::Cancelled,
+                                                tr_l10n(lang, "dialog.marketplace_zip_cancelled"),
+                                            )
+                                        })?;
+                                        tokio::task::spawn_blocking(move || {
+                                            openless_linux_egui::atomic_save(&destination, &bytes)
+                                                .map_err(|error| {
+                                                    BackendError::new(
+                                                        openless_core::BackendErrorCode::Internal,
+                                                        error.to_string(),
+                                                    )
+                                                })
+                                        })
+                                        .await
+                                        .map_err(
+                                            |error| {
+                                                BackendError::new(
+                                                    openless_core::BackendErrorCode::Internal,
+                                                    error.to_string(),
+                                                )
+                                            },
+                                        )??;
+                                        Ok::<_, BackendError>(
+                                            tr_l10n(lang, "status.marketplace_zip_saved")
+                                                .to_string(),
+                                        )
+                                    }
+                                    .await
+                                    .unwrap_or_else(|error| error.to_string());
+                                    let _ = tx.send(UiResult::Message(result));
+                                });
+                            }
+                        }
+                    }
+                    frontend::view_model::FrontendAction::MarketplaceToggleLike(index) => {
+                        if let Some(item) = self.marketplace_items.get(index) {
+                            if let Some(backend) = self.backend() {
+                                let id = item.id.clone();
+                                let lang = self.lang;
+                                self.spawn(async move {
+                                    let result =
+                                        backend.services().marketplace.toggle_like(id).await?;
+                                    Ok(fmt_l10n(
+                                        lang,
+                                        "status.marketplace_like",
+                                        &[&result.like_count],
+                                    ))
+                                });
+                            }
+                        }
+                    }
+                    frontend::view_model::FrontendAction::MarketplaceSort(_sort) => {
+                        // Sort is handled locally in the frontend for now.
+                    }
+                    frontend::view_model::FrontendAction::HistoryClear => {
+                        if let Some(backend) = self.backend() {
+                            let lang = self.lang;
+                            self.spawn(async move {
+                                backend.clear_history()?;
+                                Ok(tr_l10n(lang, "status.history_cleared").to_string())
+                            });
+                        }
+                    }
+                    frontend::view_model::FrontendAction::HistoryRefresh => {
+                        self.frontend_vm.history_cleared = false;
+                    }
+                    frontend::view_model::FrontendAction::HistorySearch(query) => {
+                        self.frontend_vm.history_query = query;
+                    }
+                    frontend::view_model::FrontendAction::HistoryFilter(index) => {
+                        self.frontend_vm.history_filter = index;
+                    }
+                    frontend::view_model::FrontendAction::HistorySelect(index) => {
+                        self.frontend_vm.history_selected = index;
+                    }
+                    frontend::view_model::FrontendAction::HistoryTogglePlay => {
+                        self.frontend_vm.history_audio_playing =
+                            !self.frontend_vm.history_audio_playing;
+                    }
+                    frontend::view_model::FrontendAction::HistoryRepolish => {
+                        self.frontend_vm.history_repolished = true;
+                    }
+                    frontend::view_model::FrontendAction::HistoryDelete(_index) => {
+                        // Delete from Core history would go here.
+                    }
+                    frontend::view_model::FrontendAction::HistoryExport(_index) => {
+                        // Export recording would go here.
+                    }
+                    frontend::view_model::FrontendAction::SettingsSection(section) => {
+                        self.frontend_vm.settings_section = section;
+                    }
+                    frontend::view_model::FrontendAction::SettingsNotice(msg) => {
+                        self.frontend_vm.settings_notice = Some(msg);
+                    }
+                    // Other actions are no-ops for now — they will be wired in
+                    // subsequent stages as the backend data bridges are completed.
+                    _ => {}
+                }
+            }
+        }
     }
 
     impl eframe::App for OpenLessEguiApp {
+        fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+            egui::Color32::TRANSPARENT.to_normalized_gamma_f32()
+        }
+
         fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
             self.poll(ctx);
             self.drain_tray(ctx);
@@ -4701,36 +4788,15 @@ mod linux_app {
                     });
                 }
             }
-            shell::titlebar(ctx);
-            shell::sidebar(ctx, &mut self.active_page, &self.status, self.lang);
-            let active_page = self.active_page;
-            shell::content_panel(ctx, active_page, self.lang, |ui| {
-                if let Some(error) = &self.startup_error {
-                    ui.heading(tr_l10n(self.lang, "status.startup_failed"));
-                    ui.colored_label(egui::Color32::RED, error);
-                    return;
-                }
-                match active_page {
-                    shell::Page::Overview => {
-                        self.overview_summary_ui(ui);
-                        ui.separator();
-                        self.dictation_ui(ui);
-                        ui.separator();
-                        self.qa_ui(ui);
-                        if self.qa_visible {
-                            ui.separator();
-                        }
-                        self.selection_ui(ui);
-                    }
-                    shell::Page::History => self.history_ui(ui),
-                    shell::Page::Vocabulary => self.vocabulary_ui(ui),
-                    shell::Page::Styles => self.styles_ui(ui),
-                    shell::Page::Marketplace => self.marketplace_ui(ui),
-                    shell::Page::Providers => self.settings_ui(ui),
-                    shell::Page::Models => self.models_ui(ui),
-                    shell::Page::Assistant => self.less_computer_ui(ui),
-                }
-            });
+
+            // Build the view model from current backend state, then render the
+            // production frontend. Actions are collected and dispatched to
+            // existing Core / backend methods.
+            self.sync_view_model();
+            let mut actions = Vec::new();
+            frontend::render(ctx, &mut self.frontend_vm, &mut actions);
+            self.apply_frontend_actions(actions, ctx);
+
             ctx.request_repaint_after(Duration::from_millis(50));
         }
     }
@@ -5898,7 +5964,7 @@ mod linux_app {
                 .with_inner_size([1240.0, 800.0])
                 .with_min_inner_size([960.0, 640.0])
                 .with_decorations(false)
-                .with_transparent(false)
+                .with_transparent(true)
                 .with_resizable(true)
                 .with_visible(!start_minimized || !tray_available),
             ..Default::default()

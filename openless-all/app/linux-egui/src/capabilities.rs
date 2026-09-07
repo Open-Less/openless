@@ -48,7 +48,10 @@ impl LinuxCapabilitySnapshot {
                 supports_tray: desktop && tray_available,
                 supports_overlay: session == LinuxDesktopSession::X11,
                 supports_ime_input: desktop && fcitx5_ready,
-                supports_local_asr: desktop,
+                // Linux ships no local inference engine (Generic/Qwen, MLX or
+                // Foundry). Report false on every desktop session so the UI and
+                // downstream gate on the honest answer.
+                supports_local_asr: false,
                 supports_local_qwen3_mlx: false,
                 supports_in_app_dictation: false,
                 // AppImage detection alone is not an updater capability. Keep
@@ -247,6 +250,7 @@ mod tests {
         );
         assert_eq!(x11.session, LinuxDesktopSession::X11);
         assert!(x11.capabilities.supports_overlay);
+        assert!(!x11.capabilities.supports_local_asr);
         assert!(!x11.capabilities.supports_auto_update);
 
         let wayland = LinuxCapabilitySnapshot::from_environment(

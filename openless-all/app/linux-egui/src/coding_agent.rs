@@ -110,12 +110,6 @@ pub(crate) fn isolate_process_group(command: &mut tokio::process::Command) {
     let _ = command;
 }
 
-pub(crate) fn kill_process_group(
-    child: &mut tokio::process::Child,
-) -> Result<(), openless_core::BackendError> {
-    kill_process_group_with_id(child, child.id())
-}
-
 fn kill_process_group_with_id(
     child: &mut tokio::process::Child,
     _process_id: Option<u32>,
