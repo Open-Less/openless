@@ -489,6 +489,8 @@ pub fn content_panel(ctx: &egui::Context, add_contents: impl FnOnce(&mut egui::U
         .fixed_pos(content.min)
         .show(ctx, |ui| {
             ui.set_min_size(content.size());
+            ui.set_width(content.width());
+            ui.set_max_width(content.width());
             ui.set_clip_rect(egui::Rect::from_min_size(egui::Pos2::ZERO, content.size()));
             let scroll = &mut ui.style_mut().spacing.scroll;
             scroll.floating = true;

@@ -4491,6 +4491,90 @@ mod linux_app {
                 );
                 s.restore_clipboard = true;
                 s.remember_history = true;
+                // Linux: no local model support.
+                s.local_model = false;
+                s.selection_voice = false;
+            }
+
+            // History: wire from Core when backend is available.
+            if let Some(backend) = self.backend() {
+                if let Ok(history) = backend.list_history() {
+                    vm.history_entries = history
+                        .into_iter()
+                        .rev()
+                        .map(|item| frontend::view_model::HistoryEntry {
+                            time: item.id.clone(),
+                            text: item.final_text,
+                            duration: item
+                                .duration_ms
+                                .map(|d| format_duration_ms(d))
+                                .unwrap_or_default(),
+                            tag: match item.insert_status {
+                                HistoryInsertStatus::Inserted => "已插入",
+                                HistoryInsertStatus::CopiedFallback => "已复制",
+                                HistoryInsertStatus::PasteSent => "已发送",
+                                HistoryInsertStatus::Failed => "失败",
+                                HistoryInsertStatus::NotRequested => "未请求",
+                            }
+                            .to_string(),
+                        })
+                        .collect();
+                }
+            }
+
+            // Vocabulary: wire from existing data.
+            if !self.vocabulary.is_empty() {
+                vm.vocab_unsupported = false;
+                vm.vocab_entries = self
+                    .vocabulary
+                    .iter()
+                    .map(|entry| frontend::view_model::VocabEntry {
+                        phrase: entry.phrase.clone(),
+                        hits: entry.hits as usize,
+                        enabled: entry.enabled,
+                        learned: entry.source == openless_core::VocabularySource::Learned,
+                    })
+                    .collect();
+            }
+
+            // Correction rules: wire from existing data.
+            if !self.correction_rules.is_empty() {
+                vm.vocab_unsupported = false;
+                vm.vocab_rules = self
+                    .correction_rules
+                    .iter()
+                    .map(|rule| frontend::view_model::CorrectionRule {
+                        pattern: rule.pattern.clone(),
+                        replacement: rule.replacement.clone(),
+                        enabled: rule.enabled,
+                        learned: rule.source == openless_core::CorrectionSource::Learned,
+                    })
+                    .collect();
+            }
+            vm.vocab_saved_presets = self
+                .vocab_presets
+                .iter()
+                .map(|preset| frontend::view_model::SavedVocabPreset {
+                    name: preset.name.clone(),
+                    phrases: preset.phrases.join("、"),
+                })
+                .collect();
+
+            // Style packs: wire from existing data.
+            if !self.style_packs.is_empty() {
+                vm.style_unsupported = false;
+                vm.style_packs = self
+                    .style_packs
+                    .iter()
+                    .map(|pack| frontend::view_model::StylePack {
+                        name: pack.name.clone(),
+                        description: pack.description.clone(),
+                        tags: vec![pack.base_mode.display_name().to_string()],
+                        accent: theme::BLUE,
+                        is_builtin: pack.kind == openless_core::StylePackKind::Builtin,
+                        is_active: pack.active,
+                    })
+                    .collect();
             }
 
             // Marketplace: wire from Core data when available.
@@ -4525,6 +4609,317 @@ mod linux_app {
             match &self.overview {
                 crate::linux_app::OverviewState::Failed(error) => Some(error.clone()),
                 _ => None,
+            }
+        }
+
+        /// Apply a settings toggle from the frontend to the live preferences.
+        fn apply_settings_toggle(&mut self, field: frontend::view_model::SettingsField) {
+            let Some(preferences) = self.preferences.as_mut() else {
+                return;
+            };
+            match field {
+                frontend::view_model::SettingsField::StreamingInsert => {
+                    preferences.streaming_insert = !preferences.streaming_insert;
+                    self.settings_dirty.streaming_insert = true;
+                }
+                frontend::view_model::SettingsField::StartMinimized => {
+                    preferences.start_minimized = !preferences.start_minimized;
+                    self.settings_dirty.start_minimized = true;
+                }
+                frontend::view_model::SettingsField::AutoUpdate => {
+                    preferences.auto_update_check = !preferences.auto_update_check;
+                    self.settings_dirty.auto_update_check = true;
+                }
+                frontend::view_model::SettingsField::RemoteInput => {
+                    preferences.remote_input_enabled = !preferences.remote_input_enabled;
+                    self.settings_dirty.remote_input_enabled = true;
+                }
+                frontend::view_model::SettingsField::ActivityHeatmap => {
+                    preferences.show_overview_activity_heatmap =
+                        !preferences.show_overview_activity_heatmap;
+                    self.settings_dirty.appearance = true;
+                }
+                frontend::view_model::SettingsField::RealtimeMode => {
+                    preferences.hotkey.mode =
+                        match preferences.hotkey.mode {
+                            openless_core::shared_types::HotkeyMode::Hold => {
+                                openless_core::shared_types::HotkeyMode::Toggle
+                            }
+                            _ => openless_core::shared_types::HotkeyMode::Hold,
+                        };
+                    self.settings_dirty.recording = true;
+                }
+                frontend::view_model::SettingsField::RecordingEnabled => {
+                    self.settings_dirty.recording = true;
+                    // Toggle recording enabled state — no-op on preferences directly,
+                    // but marks dirty so save will apply.
+                }
+                frontend::view_model::SettingsField::RestoreClipboard
+                | frontend::view_model::SettingsField::StackedLayout
+                | frontend::view_model::SettingsField::ConservativeLayout
+                | frontend::view_model::SettingsField::SystemProxy
+                | frontend::view_model::SettingsField::RememberHistory
+                | frontend::view_model::SettingsField::RecordAudio
+                | frontend::view_model::SettingsField::LessComputer
+                | frontend::view_model::SettingsField::Multimodal
+                | frontend::view_model::SettingsField::BetaChannel => {
+                    self.frontend_vm.settings_notice =
+                        Some(tr_l10n(self.lang, "settings.unsupported_linux").to_string());
+                }
+                frontend::view_model::SettingsField::SelectionAssistant => {
+                    self.frontend_vm.settings_notice =
+                        Some(tr_l10n(self.lang, "settings.unsupported_linux").to_string());
+                }
+                frontend::view_model::SettingsField::SelectionVoice => {
+                    self.frontend_vm.settings_notice =
+                        Some(tr_l10n(self.lang, "settings.unsupported_linux").to_string());
+                }
+                frontend::view_model::SettingsField::LocalModel => {
+                    // Linux does not support local model inference.
+                    self.frontend_vm.settings_notice =
+                        Some(tr_l10n(self.lang, "settings.unsupported_linux").to_string());
+                }
+                frontend::view_model::SettingsField::MarketplaceEnabled => {
+                    self.frontend_vm.marketplace_unsupported =
+                        !self.frontend_vm.marketplace_unsupported;
+                }
+            }
+            self.save_settings_if_dirty();
+        }
+
+        /// Apply a settings combo change from the frontend.
+        fn apply_settings_combo(
+            &mut self,
+            field: frontend::view_model::SettingsComboField,
+            index: usize,
+        ) {
+            let Some(preferences) = self.preferences.as_mut() else {
+                return;
+            };
+            match field {
+                frontend::view_model::SettingsComboField::Theme => {
+                    preferences.theme_mode = match index {
+                        0 => openless_core::shared_types::ThemeMode::System,
+                        1 => openless_core::shared_types::ThemeMode::Light,
+                        2 => openless_core::shared_types::ThemeMode::Dark,
+                        _ => return,
+                    };
+                    self.settings_dirty.appearance = true;
+                    self.frontend_vm.settings.theme = index;
+                }
+                frontend::view_model::SettingsComboField::Language => {
+                    let pref = match index {
+                        0 => LocalePref::System,
+                        1 => LocalePref::Explicit(Lang::ZhCn),
+                        2 => LocalePref::Explicit(Lang::ZhTw),
+                        3 => LocalePref::Explicit(Lang::En),
+                        4 => LocalePref::Explicit(Lang::Ja),
+                        5 => LocalePref::Explicit(Lang::Ko),
+                        _ => return,
+                    };
+                    self.apply_locale_pref(pref);
+                    self.frontend_vm.settings.language = index;
+                }
+                frontend::view_model::SettingsComboField::Provider
+                | frontend::view_model::SettingsComboField::Retention
+                | frontend::view_model::SettingsComboField::Microphone
+                | frontend::view_model::SettingsComboField::RecordingMode => {
+                    self.frontend_vm.settings_notice =
+                        Some(tr_l10n(self.lang, "settings.unsupported_linux").to_string());
+                }
+            }
+            self.save_settings_if_dirty();
+        }
+
+        /// Apply a settings text field change from the frontend.
+        fn apply_settings_text(
+            &mut self,
+            field: frontend::view_model::SettingsTextField,
+            text: String,
+        ) {
+            let Some(preferences) = self.preferences.as_mut() else {
+                return;
+            };
+            match field {
+                frontend::view_model::SettingsTextField::RemotePort => {
+                    if let Ok(port) = text.parse::<u16>() {
+                        preferences.remote_input_port = port;
+                        self.settings_dirty.remote_input_port = true;
+                        self.frontend_vm.settings.remote_port = text;
+                    }
+                }
+                frontend::view_model::SettingsTextField::ApiKey => {
+                    self.frontend_vm.settings.api_key = text;
+                }
+                frontend::view_model::SettingsTextField::Endpoint => {
+                    self.frontend_vm.settings.endpoint = text;
+                }
+                frontend::view_model::SettingsTextField::Model => {
+                    self.frontend_vm.settings.model = text;
+                }
+                frontend::view_model::SettingsTextField::ClaudePrompt => {
+                    self.frontend_vm.settings.claude_prompt = text;
+                }
+            }
+            self.save_settings_if_dirty();
+        }
+
+        /// Apply a settings action button from the frontend.
+        fn apply_settings_action(&mut self, field: frontend::view_model::SettingsActionField) {
+            match field {
+                frontend::view_model::SettingsActionField::ConnectionTest => {
+                    if let Some(backend) = self.backend() {
+                        let lang = self.lang;
+                        self.spawn(async move {
+                            backend.services().platform.validate_connection().await?;
+                            Ok(tr_l10n(lang, "status.connection_ok").to_string())
+                        });
+                    }
+                }
+                frontend::view_model::SettingsActionField::ClearHistory => {
+                    if let Some(backend) = self.backend() {
+                        let lang = self.lang;
+                        self.spawn(async move {
+                            backend.clear_history()?;
+                            Ok(tr_l10n(lang, "status.history_cleared").to_string())
+                        });
+                    }
+                }
+                frontend::view_model::SettingsActionField::ExportDiagnostics => {
+                    if let Some(backend) = self.backend() {
+                        let source =
+                            openless_linux_egui::log_path(&backend.config().data_dir);
+                        let lang = self.lang;
+                        self.spawn(async move {
+                            let destination = tokio::task::spawn_blocking(|| {
+                                rfd::FileDialog::new()
+                                    .add_filter("Log", &["log"])
+                                    .set_file_name("openless.log")
+                                    .save_file()
+                            })
+                            .await
+                            .map_err(|error| {
+                                BackendError::new(
+                                    openless_core::BackendErrorCode::Internal,
+                                    error.to_string(),
+                                )
+                            })?
+                            .ok_or_else(|| {
+                                BackendError::new(
+                                    openless_core::BackendErrorCode::Cancelled,
+                                    tr_l10n(lang, "dialog.export_log_cancelled"),
+                                )
+                            })?;
+                            tokio::task::spawn_blocking(move || {
+                                openless_linux_egui::export_error_log(&source, &destination)
+                            })
+                            .await
+                            .map_err(|error| {
+                                BackendError::new(
+                                    openless_core::BackendErrorCode::Internal,
+                                    error.to_string(),
+                                )
+                            })?
+                            .map_err(|error| {
+                                BackendError::new(
+                                    openless_core::BackendErrorCode::Platform,
+                                    error.to_string(),
+                                )
+                            })?;
+                            Ok(tr_l10n(lang, "status.export_log_done").to_string())
+                        });
+                    }
+                }
+                frontend::view_model::SettingsActionField::CheckUpdate => {
+                    let channel = self
+                        .preferences
+                        .as_ref()
+                        .map(|prefs| prefs.update_channel)
+                        .unwrap_or_default();
+                    self.request_update_check(channel);
+                }
+                frontend::view_model::SettingsActionField::OpenGitHub => {
+                    let _ = open_external("https://github.com/earendil-works/openless");
+                }
+                frontend::view_model::SettingsActionField::OpenHelp => {
+                    let _ = open_external("https://github.com/earendil-works/openless");
+                }
+                frontend::view_model::SettingsActionField::OpenReleaseNotes => {
+                    let _ = open_external(
+                        "https://github.com/earendil-works/openless/releases",
+                    );
+                }
+                frontend::view_model::SettingsActionField::OpenFeedback => {
+                    let _ = open_external(
+                        "https://github.com/earendil-works/openless/issues",
+                    );
+                }
+                frontend::view_model::SettingsActionField::CopyQQ => {
+                    match arboard::Clipboard::new()
+                        .and_then(|mut clipboard| clipboard.set_text("1078960553"))
+                    {
+                        Ok(()) => {
+                            self.frontend_vm.settings_notice =
+                                Some(tr_l10n(self.lang, "status.copied").to_string());
+                        }
+                        Err(error) => {
+                            self.frontend_vm.settings_notice =
+                                Some(format!("复制失败: {error}"));
+                        }
+                    }
+                }
+                frontend::view_model::SettingsActionField::ModelManagement
+                | frontend::view_model::SettingsActionField::ExtensionManagement
+                | frontend::view_model::SettingsActionField::Permissions
+                | frontend::view_model::SettingsActionField::ClaudeDetect
+                | frontend::view_model::SettingsActionField::ClaudeConsole
+                | frontend::view_model::SettingsActionField::ClaudeRunTest => {
+                    self.frontend_vm.settings_notice =
+                        Some(tr_l10n(self.lang, "settings.unsupported_linux").to_string());
+                }
+            }
+        }
+
+        /// Persist dirty settings if any fields have been changed.
+        fn save_settings_if_dirty(&mut self) {
+            if !self.settings_dirty.any() {
+                return;
+            }
+            if let (Some(native), Some(draft), Some(snapshot)) =
+                (&self.native, self.preferences.clone(), &self.snapshot)
+            {
+                let host = native.host_arc();
+                let revision = snapshot.preferences_revision;
+                let dirty = self.settings_dirty;
+                let tx = self.tx.clone();
+                self.tokio.spawn(async move {
+                    let outcome = tokio::task::spawn_blocking(move || {
+                        let save = |preferences, revision| {
+                            if dirty.hotkeys {
+                                host.update_settings_strict(preferences, revision)
+                            } else {
+                                host.save_settings(preferences, revision)
+                            }
+                        };
+                        match save(draft.clone(), revision) {
+                            Err(error)
+                                if error.code == openless_core::BackendErrorCode::Busy =>
+                            {
+                                let latest_snapshot = host.snapshot();
+                                let latest = host.backend().get_preferences();
+                                save(
+                                    dirty.merge(&latest, &draft),
+                                    latest_snapshot.preferences_revision,
+                                )
+                            }
+                            result => result,
+                        }
+                    })
+                    .await
+                    .map_err(|error| error.to_string())
+                    .and_then(|result| result.map_err(|error| error.to_string()));
+                    let _ = tx.send(UiResult::SettingsSaved(Box::new(outcome)));
+                });
             }
         }
 
@@ -4718,11 +5113,419 @@ mod linux_app {
                     frontend::view_model::FrontendAction::HistoryRepolish => {
                         self.frontend_vm.history_repolished = true;
                     }
-                    frontend::view_model::FrontendAction::HistoryDelete(_index) => {
-                        // Delete from Core history would go here.
+                    frontend::view_model::FrontendAction::HistoryDelete(index) => {
+                        if let Some(backend) = self.backend() {
+                            if let Some(entry) = self.frontend_vm.history_entries.get(index) {
+                                let id = entry.time.clone();
+                                let lang = self.lang;
+                                self.spawn(async move {
+                                    backend.delete_history(&id)?;
+                                    Ok(tr_l10n(lang, "status.history_deleted").to_string())
+                                });
+                            }
+                        }
                     }
-                    frontend::view_model::FrontendAction::HistoryExport(_index) => {
-                        // Export recording would go here.
+                    frontend::view_model::FrontendAction::HistoryExport(index) => {
+                        if let Some(backend) = self.backend() {
+                            if let Some(entry) = self.frontend_vm.history_entries.get(index) {
+                                let id = entry.time.clone();
+                                let data_dir = backend.config().data_dir.clone();
+                                let lang = self.lang;
+                                self.spawn(async move {
+                                    let file_name = format!("openless-recording-{id}.wav");
+                                    let destination = tokio::task::spawn_blocking(move || {
+                                        rfd::FileDialog::new()
+                                            .add_filter("WAV audio", &["wav"])
+                                            .set_file_name(file_name)
+                                            .save_file()
+                                    })
+                                    .await
+                                    .map_err(|error| {
+                                        BackendError::new(
+                                            openless_core::BackendErrorCode::Internal,
+                                            error.to_string(),
+                                        )
+                                    })?
+                                    .ok_or_else(|| {
+                                        BackendError::new(
+                                            openless_core::BackendErrorCode::Cancelled,
+                                            tr_l10n(lang, "dialog.recording_export_cancelled"),
+                                        )
+                                    })?;
+                                    let wav = tokio::task::spawn_blocking(move || {
+                                        openless_linux_egui::read_recording_wav(&data_dir, &id)
+                                    })
+                                    .await
+                                    .map_err(|error| {
+                                        BackendError::new(
+                                            openless_core::BackendErrorCode::Internal,
+                                            error.to_string(),
+                                        )
+                                    })?
+                                    .map_err(|error| {
+                                        BackendError::new(
+                                            openless_core::BackendErrorCode::Persistence,
+                                            error.to_string(),
+                                        )
+                                    })?;
+                                    let saved = tokio::task::spawn_blocking(move || {
+                                        openless_linux_egui::atomic_save(&destination, &wav)
+                                    })
+                                    .await
+                                    .map_err(|error| {
+                                        BackendError::new(
+                                            openless_core::BackendErrorCode::Internal,
+                                            error.to_string(),
+                                        )
+                                    })?
+                                    .map_err(|error| {
+                                        BackendError::new(
+                                            openless_core::BackendErrorCode::Platform,
+                                            error.to_string(),
+                                        )
+                                    })?;
+                                    Ok(fmt_l10n(
+                                        lang,
+                                        "status.recording_exported",
+                                        &[&saved.display()],
+                                    ))
+                                });
+                            }
+                        }
+                    }
+                    frontend::view_model::FrontendAction::HistoryRepolish => {
+                        if let Some(backend) = self.backend() {
+                            if let Some(entry) =
+                                self.frontend_vm.history_entries.get(self.frontend_vm.history_selected)
+                            {
+                                let text = entry.text.clone();
+                                let service = Arc::clone(&backend.services().auxiliary);
+                                let lang = self.lang;
+                                self.spawn(async move {
+                                    let polished = service
+                                        .repolish(openless_core::RepolishRequest {
+                                            raw_text: text,
+                                            style_pack_id: None,
+                                            front_app: None,
+                                        })
+                                        .await?;
+                                    Ok(fmt_l10n(lang, "status.repolish_done", &[&polished]))
+                                });
+                            }
+                        }
+                    }
+                    frontend::view_model::FrontendAction::HistoryTogglePlay => {
+                        if let Some(backend) = self.backend() {
+                            if let Some(entry) =
+                                self.frontend_vm.history_entries.get(self.frontend_vm.history_selected)
+                            {
+                                let id = entry.time.clone();
+                                let data_dir = backend.config().data_dir.clone();
+                                let lang = self.lang;
+                                self.spawn(async move {
+                                    let path =
+                                        openless_linux_egui::recording_path(&data_dir, &id)
+                                            .map_err(|error| {
+                                                BackendError::new(
+                                                    openless_core::BackendErrorCode::Persistence,
+                                                    error.to_string(),
+                                                )
+                                            })?;
+                                    tokio::task::spawn_blocking(move || {
+                                        openless_linux_egui::open_local_file(&path)
+                                    })
+                                    .await
+                                    .map_err(|error| {
+                                        BackendError::new(
+                                            openless_core::BackendErrorCode::Internal,
+                                            error.to_string(),
+                                        )
+                                    })?
+                                    .map_err(|error| {
+                                        BackendError::new(
+                                            openless_core::BackendErrorCode::Platform,
+                                            error.to_string(),
+                                        )
+                                    })?;
+                                    Ok(tr_l10n(lang, "status.opened_player").to_string())
+                                });
+                            }
+                        }
+                    }
+                    frontend::view_model::FrontendAction::VocabAddPhrase(phrase) => {
+                        if let Some(backend) = self.backend() {
+                            let lang = self.lang;
+                            self.spawn(async move {
+                                backend.add_vocabulary(phrase, None)?;
+                                Ok(tr_l10n(lang, "status.vocab_saved").to_string())
+                            });
+                        }
+                    }
+                    frontend::view_model::FrontendAction::VocabRemovePhrase(index) => {
+                        if let Some(backend) = self.backend() {
+                            if let Some(entry) = self.vocabulary.get(index) {
+                                let id = entry.id.clone();
+                                let lang = self.lang;
+                                self.spawn(async move {
+                                    backend.remove_vocabulary(&id)?;
+                                    Ok(tr_l10n(lang, "status.vocab_updated").to_string())
+                                });
+                            }
+                        }
+                    }
+                    frontend::view_model::FrontendAction::VocabTogglePhrase(index) => {
+                        if let Some(backend) = self.backend() {
+                            if let Some(entry) = self.vocabulary.get(index) {
+                                let id = entry.id.clone();
+                                let enabled = !entry.enabled;
+                                let lang = self.lang;
+                                self.spawn(async move {
+                                    backend.set_vocabulary_enabled(&id, enabled)?;
+                                    Ok(tr_l10n(lang, "status.vocab_updated").to_string())
+                                });
+                            }
+                        }
+                    }
+                    frontend::view_model::FrontendAction::VocabAddRule {
+                        pattern,
+                        replacement,
+                    } => {
+                        if let Some(backend) = self.backend() {
+                            let lang = self.lang;
+                            self.spawn(async move {
+                                backend.add_correction_rule(pattern, replacement)?;
+                                Ok(tr_l10n(lang, "status.correction_saved").to_string())
+                            });
+                        }
+                    }
+                    frontend::view_model::FrontendAction::VocabRemoveRule(index) => {
+                        if let Some(backend) = self.backend() {
+                            if let Some(rule) = self.correction_rules.get(index) {
+                                let id = rule.id.clone();
+                                let lang = self.lang;
+                                self.spawn(async move {
+                                    backend.remove_correction_rule(&id)?;
+                                    Ok(tr_l10n(lang, "status.correction_updated").to_string())
+                                });
+                            }
+                        }
+                    }
+                    frontend::view_model::FrontendAction::VocabToggleRule(index) => {
+                        if let Some(backend) = self.backend() {
+                            if let Some(rule) = self.correction_rules.get(index) {
+                                let id = rule.id.clone();
+                                let enabled = !rule.enabled;
+                                let lang = self.lang;
+                                self.spawn(async move {
+                                    backend.set_correction_rule_enabled(&id, enabled)?;
+                                    Ok(tr_l10n(lang, "status.correction_updated").to_string())
+                                });
+                            }
+                        }
+                    }
+                    frontend::view_model::FrontendAction::VocabApplyPreset(index) => {
+                        if let Some(backend) = self.backend() {
+                            if let Some(preset) = self.vocab_presets.get(index) {
+                                let phrases = preset.phrases.clone();
+                                let name = preset.name.clone();
+                                let lang = self.lang;
+                                self.spawn(async move {
+                                    for phrase in phrases {
+                                        backend.add_vocabulary(
+                                            phrase,
+                                            Some(fmt_l10n(
+                                                lang,
+                                                "status.from_preset",
+                                                &[&name],
+                                            )),
+                                        )?;
+                                    }
+                                    Ok(tr_l10n(lang, "status.preset_updated").to_string())
+                                });
+                            }
+                        }
+                    }
+                    frontend::view_model::FrontendAction::VocabCreatePreset { name, phrases } => {
+                        if let Some(backend) = self.backend() {
+                            let lang = self.lang;
+                            self.spawn(async move {
+                                let mut phrase_list: Vec<String> = phrases
+                                    .split([',', '，', '\n'])
+                                    .map(str::trim)
+                                    .filter(|p| !p.is_empty())
+                                    .map(ToOwned::to_owned)
+                                    .collect();
+                                phrase_list.sort();
+                                phrase_list.dedup();
+                                let mut store = backend.list_vocabulary_presets()?;
+                                store.custom.push(openless_core::VocabPreset {
+                                    id: uuid::Uuid::new_v4().to_string(),
+                                    name: name.trim().to_string(),
+                                    phrases: phrase_list,
+                                });
+                                backend.save_vocabulary_presets(&store)?;
+                                Ok(tr_l10n(lang, "status.preset_updated").to_string())
+                            });
+                        }
+                    }
+                    frontend::view_model::FrontendAction::StyleActivate(index) => {
+                        if let Some(backend) = self.backend() {
+                            if let Some(pack) = self.style_packs.get(index) {
+                                let id = pack.id.clone();
+                                let lang = self.lang;
+                                self.spawn(async move {
+                                    backend.activate_style_pack(&id)?;
+                                    Ok(tr_l10n(lang, "status.style_updated").to_string())
+                                });
+                            }
+                        }
+                    }
+                    frontend::view_model::FrontendAction::StyleExport(index) => {
+                        if let Some(backend) = self.backend() {
+                            if let Some(pack) = self.style_packs.get(index) {
+                                let id = pack.id.clone();
+                                let lang = self.lang;
+                                self.spawn(async move {
+                                    let bytes = backend.export_style_pack_bytes(&id)?;
+                                    let destination = tokio::task::spawn_blocking(move || {
+                                        rfd::FileDialog::new()
+                                            .add_filter("OpenLess style pack", &["zip"])
+                                            .set_file_name(format!("openless-style-{id}.zip"))
+                                            .save_file()
+                                    })
+                                    .await
+                                    .map_err(|error| {
+                                        BackendError::new(
+                                            openless_core::BackendErrorCode::Internal,
+                                            error.to_string(),
+                                        )
+                                    })?
+                                    .ok_or_else(|| {
+                                        BackendError::new(
+                                            openless_core::BackendErrorCode::Cancelled,
+                                            tr_l10n(lang, "dialog.style_export_cancelled"),
+                                        )
+                                    })?;
+                                    tokio::task::spawn_blocking(move || {
+                                        openless_linux_egui::atomic_save(&destination, &bytes)
+                                    })
+                                    .await
+                                    .map_err(|error| {
+                                        BackendError::new(
+                                            openless_core::BackendErrorCode::Internal,
+                                            error.to_string(),
+                                        )
+                                    })?
+                                    .map_err(|error| {
+                                        BackendError::new(
+                                            openless_core::BackendErrorCode::Platform,
+                                            error.to_string(),
+                                        )
+                                    })?;
+                                    Ok(tr_l10n(lang, "status.style_updated").to_string())
+                                });
+                            }
+                        }
+                    }
+                    frontend::view_model::FrontendAction::StyleEdit(index) => {
+                        if let Some(pack) = self.style_packs.get(index).cloned() {
+                            self.style_editor = Some(pack);
+                            self.frontend_vm.style_editor_open = true;
+                            self.frontend_vm.style_prompt = self
+                                .style_editor
+                                .as_ref()
+                                .map(|e| e.prompt.clone())
+                                .unwrap_or_default();
+                        }
+                    }
+                    frontend::view_model::FrontendAction::StyleSaveEditor(prompt) => {
+                        if let Some(mut pack) = self.style_editor.take() {
+                            pack.prompt = prompt;
+                            if let Some(backend) = self.backend() {
+                                let exists = self.style_packs.iter().any(|p| p.id == pack.id);
+                                let lang = self.lang;
+                                self.spawn(async move {
+                                    let saved = if exists {
+                                        backend.update_style_pack(pack)?
+                                    } else {
+                                        backend.create_style_pack(pack)?
+                                    };
+                                    Ok(fmt_l10n(lang, "status.style_saved", &[&saved.name]))
+                                });
+                            }
+                        }
+                        self.frontend_vm.style_editor_open = false;
+                    }
+                    frontend::view_model::FrontendAction::StyleCloseEditor => {
+                        self.style_editor = None;
+                        self.frontend_vm.style_editor_open = false;
+                    }
+                    frontend::view_model::FrontendAction::StyleNewPack => {
+                        self.style_editor = Some(openless_core::StylePack {
+                            id: uuid::Uuid::new_v4().to_string(),
+                            name: tr_l10n(self.lang, "lbl.new_style_default").to_string(),
+                            ..Default::default()
+                        });
+                        self.frontend_vm.style_editor_open = true;
+                    }
+                    frontend::view_model::FrontendAction::StyleImport => {
+                        if let Some(backend) = self.backend() {
+                            let lang = self.lang;
+                            self.spawn(async move {
+                                let path = tokio::task::spawn_blocking(|| {
+                                    rfd::FileDialog::new()
+                                        .add_filter("OpenLess style pack", &["zip"])
+                                        .pick_file()
+                                })
+                                .await
+                                .map_err(|error| {
+                                    BackendError::new(
+                                        openless_core::BackendErrorCode::Internal,
+                                        error.to_string(),
+                                    )
+                                })?
+                                .ok_or_else(|| {
+                                    BackendError::new(
+                                        openless_core::BackendErrorCode::Cancelled,
+                                        tr_l10n(lang, "dialog.style_import_cancelled"),
+                                    )
+                                })?;
+                                let pack = tokio::task::spawn_blocking(move || {
+                                    backend.import_style_pack_path(&path)
+                                })
+                                .await
+                                .map_err(|error| {
+                                    BackendError::new(
+                                        openless_core::BackendErrorCode::Internal,
+                                        error.to_string(),
+                                    )
+                                })??;
+                                Ok(fmt_l10n(lang, "status.style_imported", &[&pack.name]))
+                            });
+                        }
+                    }
+                    frontend::view_model::FrontendAction::SelectionAskToggleHistory => {
+                        self.frontend_vm.qa_save_history = !self.frontend_vm.qa_save_history;
+                    }
+                    frontend::view_model::FrontendAction::TranslationToggleLanguage(_) => {
+                        self.frontend_vm.settings_notice =
+                            Some(tr_l10n(self.lang, "settings.unsupported_linux").to_string());
+                    }
+                    frontend::view_model::FrontendAction::TranslationSetTarget(_) => {
+                        self.frontend_vm.settings_notice =
+                            Some(tr_l10n(self.lang, "settings.unsupported_linux").to_string());
+                    }
+                    frontend::view_model::FrontendAction::SettingsToggle(field) => {
+                        self.apply_settings_toggle(field);
+                    }
+                    frontend::view_model::FrontendAction::SettingsCombo(field, index) => {
+                        self.apply_settings_combo(field, index);
+                    }
+                    frontend::view_model::FrontendAction::SettingsText(field, text) => {
+                        self.apply_settings_text(field, text);
+                    }
+                    frontend::view_model::FrontendAction::SettingsAction(field) => {
+                        self.apply_settings_action(field);
                     }
                     frontend::view_model::FrontendAction::SettingsSection(section) => {
                         self.frontend_vm.settings_section = section;
@@ -4730,9 +5533,25 @@ mod linux_app {
                     frontend::view_model::FrontendAction::SettingsNotice(msg) => {
                         self.frontend_vm.settings_notice = Some(msg);
                     }
-                    // Other actions are no-ops for now — they will be wired in
-                    // subsequent stages as the backend data bridges are completed.
-                    _ => {}
+                    frontend::view_model::FrontendAction::MarketplaceDetail(index) => {
+                        self.frontend_vm.marketplace_selected = Some(index);
+                        // Load real detail from backend, not just index.
+                        if let Some(item) = self.marketplace_items.get(index) {
+                            if let Some(backend) = self.backend() {
+                                let id = item.id.clone();
+                                let tx = self.tx.clone();
+                                self.tokio.spawn(async move {
+                                    let result = backend
+                                        .services()
+                                        .marketplace
+                                        .detail(id)
+                                        .await
+                                        .map_err(|error| error.to_string());
+                                    let _ = tx.send(UiResult::MarketplaceDetail(result));
+                                });
+                            }
+                        }
+                    }
                 }
             }
         }
