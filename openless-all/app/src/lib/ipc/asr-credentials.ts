@@ -2,6 +2,7 @@ import type { CredentialsStatus } from "../types"
 import { invokeOrMock, isTauri } from "./shared"
 import { mockCredentialsStatus, mockCredentialValues } from "./mock-data"
 import { invalidateMockChannelTest } from "./channels"
+import type { LlmRequestFormat } from "./providers"
 
 export interface ProviderCheckResult {
     ok: boolean
@@ -9,6 +10,36 @@ export interface ProviderCheckResult {
 
 export interface ProviderModelsResult {
     models: string[]
+}
+
+interface OrcaRouterCatalogModel {
+    id?: string
+    supported_endpoint_types?: string[]
+    architecture?: {
+        input_modalities?: string[]
+    }
+}
+
+export function filterOrcaRouterModels(
+    models: OrcaRouterCatalogModel[],
+    kind: "llm" | "asr",
+    requestFormat: LlmRequestFormat = "chat_completions",
+): string[] {
+    const endpointType = kind === "asr"
+        ? "openai"
+        : {
+            chat_completions: "openai",
+            responses: "openai-response",
+            messages: "anthropic",
+        }[requestFormat]
+    return models
+        .filter(model => model.supported_endpoint_types?.includes(endpointType) === true)
+        .filter(model => kind === "llm" || (
+            model.id?.toLowerCase().startsWith("google/gemini") === true
+            && model.architecture?.input_modalities?.includes("audio") === true
+        ))
+        .map(model => model.id?.trim() ?? "")
+        .filter(Boolean)
 }
 
 export function getCredentials(): Promise<CredentialsStatus> {
@@ -71,39 +102,22 @@ export function validateProviderCredentials(
 export async function listProviderModels(
     kind: "llm" | "asr" | "omni",
     channelId?: string,
+    providerType?: string,
 ): Promise<ProviderModelsResult> {
-    if (!isTauri && (kind === "llm" || kind === "asr")) {
+    if (!isTauri && providerType === "orcarouter" && (kind === "llm" || kind === "asr")) {
         const endpointAccount = kind === "llm" ? "ark.endpoint" : "asr.endpoint"
         const endpoint = mockCredentialValues.get(`${channelId ?? ''}:${endpointAccount}`)
-        if (endpoint) {
-            const host = new URL(endpoint).hostname.toLowerCase()
-            if (host === "api.orcarouter.ai") {
-                const response = await fetch("/__openless_dev/orcarouter/models")
-                if (!response.ok) {
-                    throw new Error(`OrcaRouter /models returned ${response.status}`)
-                }
-                const payload = await response.json() as {
-                    data?: Array<{
-                        id?: string
-                        supported_endpoint_types?: string[]
-                    }>
-                }
-                return {
-                    models: (payload.data ?? [])
-                        .filter(model => (
-                            !model.supported_endpoint_types
-                            || model.supported_endpoint_types.includes("openai")
-                        ))
-                        .map(model => model.id?.trim() ?? "")
-                        .filter(model => {
-                            if (!model) return false
-                            if (kind === "llm") return true
-                            const id = model.toLowerCase()
-                            return id.startsWith("google/gemini")
-                                && !/(image|tts|embedding|robotics)/.test(id)
-                        }),
-                }
+        if (endpoint && new URL(endpoint).hostname.toLowerCase() === "api.orcarouter.ai") {
+            const response = await fetch("/__openless_dev/orcarouter/models")
+            if (!response.ok) {
+                throw new Error(`OrcaRouter /models returned ${response.status}`)
             }
+            const payload = await response.json() as { data?: OrcaRouterCatalogModel[] }
+            const storedFormat = mockCredentialValues.get(`${channelId ?? ''}:ark.request_format`)
+            const requestFormat: LlmRequestFormat = storedFormat === "responses" || storedFormat === "messages"
+                ? storedFormat
+                : "chat_completions"
+            return { models: filterOrcaRouterModels(payload.data ?? [], kind, requestFormat) }
         }
     }
     return invokeOrMock("list_provider_models", { kind, channelId }, () => ({

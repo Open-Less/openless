@@ -19,6 +19,7 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -93,6 +94,7 @@ export function SelectLite({
   const [leaving, setLeaving] = useState(false);
   const [highlight, setHighlight] = useState<number>(-1);
   const [query, setQuery] = useState('');
+  const listboxId = useId();
   const triggerRef = useRef<HTMLButtonElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const popoverRef = useRef<HTMLDivElement | null>(null);
@@ -114,6 +116,9 @@ export function SelectLite({
     ));
   }, [options, query]);
   const displayLabel = selected?.label ?? placeholder ?? '';
+  const highlightedOptionId = highlight >= 0
+    ? `${listboxId}-option-${highlight}`
+    : undefined;
 
   const positionPopover = useCallback(() => {
     const trigger = triggerRef.current;
@@ -303,10 +308,21 @@ export function SelectLite({
     }
   };
 
+  const moveFocusFromTrigger = (backward: boolean) => {
+    const trigger = triggerRef.current;
+    if (!trigger) return;
+    const focusable = Array.from(document.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"]), [contenteditable="true"]',
+    )).filter(element => element.getClientRects().length > 0 && !popoverRef.current?.contains(element));
+    const index = focusable.indexOf(trigger);
+    focusable[index + (backward ? -1 : 1)]?.focus();
+  };
+
   const handleSearchKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
     if (event.key === 'Escape') {
       event.preventDefault();
       closeMenu();
+      triggerRef.current?.focus();
     } else if (event.key === 'ArrowDown') {
       event.preventDefault();
       moveHighlight(1);
@@ -316,6 +332,10 @@ export function SelectLite({
     } else if (event.key === 'Enter' && highlight >= 0) {
       event.preventDefault();
       selectIndex(highlight);
+    } else if (event.key === 'Tab') {
+      event.preventDefault();
+      closeMenu();
+      moveFocusFromTrigger(event.shiftKey);
     }
   };
 
@@ -335,6 +355,8 @@ export function SelectLite({
         role="combobox"
         aria-haspopup="listbox"
         aria-expanded={open}
+        aria-controls={open ? listboxId : undefined}
+        aria-activedescendant={open && !searchable ? highlightedOptionId : undefined}
         aria-disabled={disabled}
         aria-label={ariaLabel}
         disabled={disabled}
@@ -363,7 +385,6 @@ export function SelectLite({
       {open && anchor && createPortal(
         <div
           ref={setPopoverRef}
-          role="listbox"
           style={{
             position: 'fixed',
             left: anchor.left,
@@ -407,11 +428,16 @@ export function SelectLite({
               <Icon name="search" size={13} />
               <input
                 ref={searchRef}
+                role="combobox"
                 value={query}
                 onChange={event => setQuery(event.target.value)}
                 onKeyDown={handleSearchKeyDown}
                 placeholder={searchPlaceholder}
                 aria-label={searchPlaceholder}
+                aria-autocomplete="list"
+                aria-expanded={open}
+                aria-controls={listboxId}
+                aria-activedescendant={highlightedOptionId}
                 style={{
                   flex: 1,
                   minWidth: 0,
@@ -428,7 +454,11 @@ export function SelectLite({
               </span>
             </div>
           )}
-          <div style={{ maxHeight: searchable ? 274 : 272, overflowY: 'auto' }}>
+          <div
+            id={listboxId}
+            role="listbox"
+            style={{ maxHeight: searchable ? 274 : 272, overflowY: 'auto' }}
+          >
             {filteredOptions.length === 0 && (
               <div
                 style={{
@@ -447,6 +477,7 @@ export function SelectLite({
               return (
                 <div
                   key={option.value || `__opt_${index}`}
+                  id={`${listboxId}-option-${index}`}
                   data-option-index={index}
                   role="option"
                   aria-selected={isSelected}

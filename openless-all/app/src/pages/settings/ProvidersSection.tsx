@@ -137,6 +137,7 @@ export function ChannelCredentialFields({
   const layoutStack = conservative || baseLayoutStack;
   const [llmModelRevision, setLlmModelRevision] = useState(0);
   const [configRevision, setConfigRevision] = useState(0);
+  const [orcarouterCatalogRevision, setOrcarouterCatalogRevision] = useState(0);
   const [blockedFields, setBlockedFields] = useState<Record<string, boolean>>({});
   const trackField = useCallback((account: string, blocked: boolean) => {
     setBlockedFields(previous => previous[account] === blocked ? previous : { ...previous, [account]: blocked });
@@ -191,7 +192,12 @@ export function ChannelCredentialFields({
         {!!descriptor.supportedRequestFormats?.length && descriptor.defaultRequestFormat && (
           <LlmProtocolFields channelId={channelId} defaultFormat={descriptor.defaultRequestFormat}
             formats={descriptor.supportedRequestFormats} onUserMutation={onLlmMutation}
-            onBlockedChange={trackField} onSaved={onTested} />
+            onBlockedChange={trackField} onSaved={changedAccounts => {
+              if (providerType === 'orcarouter' && changedAccounts.includes('ark.request_format')) {
+                setOrcarouterCatalogRevision(value => value + 1);
+              }
+              onTested?.();
+            }} />
         )}
         {codexOAuthSelected ? (
           <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.6, margin: '2px 0 10px' }}>
@@ -229,7 +235,7 @@ export function ChannelCredentialFields({
           </>
         )}
         {providerType === 'orcarouter' ? (
-          <CatalogModelField kind="llm" provider={channelId}
+          <CatalogModelField key={`${channelId}:catalog:${orcarouterCatalogRevision}`} kind="llm" provider={channelId}
             baseUrl={defaultEndpoint ?? ''} defaultModel={defaultModel ?? ''}
             onUserMutation={onLlmMutation} onBlockedChange={trackField}
             trailing={<LlmThinkingToggle enabled={prefs?.llmThinkingEnabled ?? false} onToggle={onLlmThinkingToggle} />} />
@@ -682,7 +688,7 @@ function CatalogModelField({
       }
       const [savedModel, result] = await Promise.all([
         readCredential(modelAccount, provider),
-        listProviderModels(kind, provider),
+        listProviderModels(kind, provider, 'orcarouter'),
       ]);
       if (requestId !== requestRef.current) return;
       const nextModels = prioritizeOrcaRouterModels(result.models);

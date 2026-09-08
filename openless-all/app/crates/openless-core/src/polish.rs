@@ -1727,7 +1727,9 @@ pub(crate) fn openai_compatible_thinking_control(provider_id: &str) -> Option<Th
         "alibabaCoding" => Some(ThinkingControl::EnableThinking),
         // StepFun step-3.x-flash 系列按官方文档接受 reasoning_effort（low/medium/high，
         // 无法完全关闭思考）；非推理模型（如 step-1o-turbo-vision）会忽略该字段。
-        "openai" | "codingPlanX" | "stepfun" => Some(ThinkingControl::ReasoningEffort),
+        "openai" | "orcarouter" | "codingPlanX" | "stepfun" => {
+            Some(ThinkingControl::ReasoningEffort)
+        }
         // custom / 其他未声明 provider 走 base_url 兜底识别——用户用自定义
         // endpoint 接入 MiniMax 时,根据 base_url 命中即下发官方 thinking 参数。
         _ => None,
@@ -2894,6 +2896,26 @@ mod tests {
         let body = provider.chat_body(false, vec![json!({ "role": "user", "content": "hi" })]);
 
         assert_eq!(body["reasoning_effort"], "medium");
+    }
+
+    #[test]
+    fn orcarouter_chat_body_maps_thinking_toggle_to_reasoning_effort() {
+        for (enabled, expected) in [(false, "low"), (true, "medium")] {
+            let provider = OpenAICompatibleLLMProvider::new(
+                OpenAICompatibleConfig::new(
+                    "orcarouter",
+                    "OrcaRouter",
+                    "https://api.orcarouter.ai/v1",
+                    "k",
+                    "google/gemini-2.5-flash",
+                )
+                .with_thinking_enabled(enabled),
+            );
+
+            let body = provider.chat_body(false, vec![json!({ "role": "user", "content": "hi" })]);
+
+            assert_eq!(body["reasoning_effort"], expected);
+        }
     }
 
     #[test]

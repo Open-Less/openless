@@ -650,6 +650,17 @@ async fn fetch_models(
         .ok_or_else(|| provider_error("provider endpoint is not configured"))?;
     let url = models_url(endpoint)?;
     let is_gemini = resolved.provider_type == "gemini";
+    let orcarouter_filter = (resolved.provider_type == "orcarouter").then(|| {
+        let endpoint_type = match (resolved.kind, resolved.protocol.format) {
+            (ProviderKind::Llm, LlmRequestFormat::Responses) => "openai-response",
+            (ProviderKind::Llm, LlmRequestFormat::Messages) => "anthropic",
+            _ => "openai",
+        };
+        OrcaRouterCatalogFilter {
+            endpoint_type,
+            kind: resolved.kind,
+        }
+    });
     let mut request_headers = Vec::new();
     if let Some(api_key) = resolved
         .api_key
@@ -658,11 +669,14 @@ async fn fetch_models(
     {
         if is_gemini {
             request_headers.push(("x-goog-api-key".to_string(), api_key.to_string()));
+        } else if orcarouter_filter.is_some() {
+            request_headers.push(("Authorization".to_string(), format!("Bearer {api_key}")));
         } else {
             request_headers.extend(resolved.protocol.format.headers(api_key));
         }
     }
-    if resolved.protocol.format == LlmRequestFormat::Messages
+    if orcarouter_filter.is_none()
+        && resolved.protocol.format == LlmRequestFormat::Messages
         && !request_headers
             .iter()
             .any(|(name, _)| name == "anthropic-version")
@@ -695,13 +709,20 @@ async fn fetch_models(
     if response.body.len() > MODEL_LIST_MAX_BYTES {
         return Err(provider_error("provider model response is too large"));
     }
-    let orcarouter_kind = (resolved.provider_type == "orcarouter"
-        || url::Url::parse(endpoint).ok().is_some_and(|url| url.host_str() == Some("api.orcarouter.ai")))
-        .then_some(resolved.kind);
-    parse_model_list(&response.body, is_gemini, orcarouter_kind)
+    parse_model_list(&response.body, is_gemini, orcarouter_filter)
 }
 
-fn parse_model_list(body: &[u8], is_gemini: bool, orcarouter_kind: Option<ProviderKind>) -> Result<Vec<String>, BackendError> {
+#[derive(Clone, Copy)]
+struct OrcaRouterCatalogFilter {
+    endpoint_type: &'static str,
+    kind: ProviderKind,
+}
+
+fn parse_model_list(
+    body: &[u8],
+    is_gemini: bool,
+    orcarouter_filter: Option<OrcaRouterCatalogFilter>,
+) -> Result<Vec<String>, BackendError> {
     let value: serde_json::Value = serde_json::from_slice(body)
         .map_err(|_| provider_error("provider model response is invalid JSON"))?;
     let models = if is_gemini {
@@ -736,19 +757,35 @@ fn parse_model_list(body: &[u8], is_gemini: bool, orcarouter_kind: Option<Provid
             .ok_or_else(|| provider_error("provider model response is missing data"))?
             .iter()
             .filter(|item| {
-                orcarouter_kind.is_none() || item.get("supported_endpoint_types")
-                    .and_then(serde_json::Value::as_array)
-                    .is_none_or(|types| types.iter().any(|value| value.as_str() == Some("openai")))
+                orcarouter_filter.is_none_or(|filter| {
+                    let supports_endpoint = item
+                        .get("supported_endpoint_types")
+                        .and_then(serde_json::Value::as_array)
+                        .is_some_and(|types| {
+                            types
+                                .iter()
+                                .any(|value| value.as_str() == Some(filter.endpoint_type))
+                        });
+                    let supports_audio = filter.kind != ProviderKind::Asr
+                        || item
+                            .pointer("/architecture/input_modalities")
+                            .and_then(serde_json::Value::as_array)
+                            .is_some_and(|modalities| {
+                                modalities
+                                    .iter()
+                                    .any(|value| value.as_str() == Some("audio"))
+                            });
+                    supports_endpoint && supports_audio
+                })
             })
             .filter_map(|item| item.get("id").and_then(serde_json::Value::as_str))
             .map(str::trim)
             .filter(|name| !name.is_empty())
             .filter(|name| {
-                if orcarouter_kind != Some(ProviderKind::Asr) { return true; }
-                // ponytail: catalog lacks an audio flag; replace this Gemini filter when one is published.
-                let name = name.to_ascii_lowercase();
-                name.starts_with("google/gemini") && !["image", "tts", "embedding", "robotics"]
-                    .iter().any(|marker| name.contains(marker))
+                if !orcarouter_filter.is_some_and(|filter| filter.kind == ProviderKind::Asr) {
+                    return true;
+                }
+                name.to_ascii_lowercase().starts_with("google/gemini")
             })
             .map(str::to_string)
             .collect::<Vec<_>>()
@@ -1328,16 +1365,17 @@ mod tests {
     async fn orcarouter_catalog_uses_core_channel_defaults_and_filters_capabilities() {
         let catalog = r#"{"data":[
             {"id":"orcarouter/fusion-flash","supported_endpoint_types":["openai","anthropic"]},
-            {"id":"google/gemini-2.5-flash","supported_endpoint_types":["openai"]},
-            {"id":"google/gemini-2.5-flash","supported_endpoint_types":["openai"]},
+            {"id":"google/gemini-2.5-flash","supported_endpoint_types":["openai"],"architecture":{"input_modalities":["text","audio"]}},
+            {"id":"google/gemini-2.5-flash","supported_endpoint_types":["openai"],"architecture":{"input_modalities":["text","audio"]}},
             {"id":"google/gemini-image","supported_endpoint_types":["openai-image"]},
-            {"id":"google/gemini-tts","supported_endpoint_types":["openai"]},
+            {"id":"google/gemini-tts","supported_endpoint_types":["openai"],"architecture":{"input_modalities":["text"]}},
+            {"id":"google/gemini-unknown","supported_endpoint_types":["openai"]},
             {"id":"openai/embedding","supported_endpoint_types":["embeddings"]},
             {"id":"legacy/chat"}
         ]}"#;
         for (kind, channel_kind, key_account, expected) in [
             (ProviderKind::Llm, ChannelKind::Llm, LLM_API_KEY_ACCOUNT,
-                vec!["google/gemini-2.5-flash", "google/gemini-tts", "legacy/chat", "orcarouter/fusion-flash"]),
+                vec!["google/gemini-2.5-flash", "google/gemini-tts", "google/gemini-unknown", "orcarouter/fusion-flash"]),
             (ProviderKind::Asr, ChannelKind::Asr, ASR_API_KEY_ACCOUNT,
                 vec!["google/gemini-2.5-flash"]),
         ] {
@@ -1356,6 +1394,99 @@ mod tests {
             assert_eq!(requests.len(), 1);
             assert_eq!(requests[0].url, "https://api.orcarouter.ai/v1/models");
         }
+    }
+
+    #[tokio::test]
+    async fn orcarouter_catalog_matches_the_selected_llm_protocol() {
+        let catalog = br#"{"data":[
+            {"id":"model/chat","supported_endpoint_types":["openai"]},
+            {"id":"model/responses","supported_endpoint_types":["openai-response"]},
+            {"id":"model/messages","supported_endpoint_types":["anthropic"]},
+            {"id":"model/all","supported_endpoint_types":["openai","openai-response","anthropic"]},
+            {"id":"model/unknown"}
+        ]}"#;
+        for (format, expected) in [
+            ("chat_completions", vec!["model/all", "model/chat"]),
+            ("responses", vec!["model/all", "model/responses"]),
+            ("messages", vec!["model/all", "model/messages"]),
+        ] {
+            let credentials = Arc::new(InMemoryCredentialStore::default());
+            let channel = create_channel_with_values(
+                &credentials,
+                ChannelKind::Llm,
+                "orcarouter",
+                &[
+                    (LLM_API_KEY_ACCOUNT, "fixture-key"),
+                    (crate::llm_protocol::REQUEST_FORMAT_ACCOUNT, format),
+                ],
+            )
+            .await;
+            let transport = Arc::new(FakeProviderTransport::default());
+            transport.push_response(200, catalog.to_vec());
+            let service = ProviderService::new_with_transport(
+                credentials,
+                Arc::new(crate::TokioTaskSpawner),
+                transport.clone(),
+            );
+
+            let result = service
+                .list_models(ProviderRequest {
+                    kind: ProviderKind::Llm,
+                    channel_id: Some(channel),
+                    thinking_enabled: false,
+                })
+                .await
+                .unwrap();
+
+            assert_eq!(result.models, expected, "request format: {format}");
+            assert_eq!(
+                transport.requests()[0].headers,
+                vec![(
+                    "Authorization".to_string(),
+                    "Bearer fixture-key".to_string()
+                )],
+                "OrcaRouter /models always uses bearer authentication"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn custom_asr_endpoint_does_not_enable_orcarouter_catalog_rules() {
+        let credentials = Arc::new(InMemoryCredentialStore::default());
+        let channel = create_channel_with_values(
+            &credentials,
+            ChannelKind::Asr,
+            "openai-compatible",
+            &[
+                (ASR_ENDPOINT_ACCOUNT, "https://api.orcarouter.ai/v1"),
+                (ASR_MODEL_ACCOUNT, "whisper-1"),
+            ],
+        )
+        .await;
+        let transport = Arc::new(FakeProviderTransport::default());
+        transport.push_response(
+            200,
+            br#"{"data":[{"id":"google/gemini-audio"},{"id":"openai/whisper-1"}]}"#.to_vec(),
+        );
+        let service = ProviderService::new_with_transport(
+            credentials,
+            Arc::new(crate::TokioTaskSpawner),
+            transport,
+        );
+
+        let result = service
+            .list_models(ProviderRequest {
+                kind: ProviderKind::Asr,
+                channel_id: Some(channel),
+                thinking_enabled: false,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            result.models,
+            vec!["google/gemini-audio", "openai/whisper-1"]
+        );
     }
 
     #[tokio::test]
