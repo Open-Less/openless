@@ -24,7 +24,11 @@ assert(opencode?.defaultRequestFormat === 'chat_completions'
   && opencode.defaultEndpoint === 'https://opencode.ai/zen/v1'
   && opencode.defaultModel === 'deepseek-v4-flash', 'OpenCode browser preset must retain Core defaults');
 assert(presets.find(p => p.id === 'custom_messages')?.defaultRequestFormat === 'messages', 'Picker must retain Core protocol defaults');
-for (const preset of presets) assert(preset.supportedRequestFormats?.length === 3, 'All compatibility presets allow switching');
+for (const preset of presets) {
+  assert(preset.supportedRequestFormats?.length === (preset.defaultRequestFormat ? 3 : 0), 'Picker must retain Core protocol capabilities');
+}
+assert(presets.find(p => p.id === 'gemini')?.defaultRequestFormat == null, 'Native Gemini must not gain compatibility formats');
+assert(presets.find(p => p.id === 'codex_oauth')?.staticModels?.length, 'OAuth static models must be available without an API key');
 
 const first = await createChannel('llm', 'opencode', 'first');
 const second = await createChannel('llm', 'custom', 'second');

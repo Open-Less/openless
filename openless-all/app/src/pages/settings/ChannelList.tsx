@@ -30,6 +30,7 @@ import {
   type Channel,
   type ProviderDescriptor,
 } from '../../lib/ipc';
+import { ProviderFormContext, useProviderForm } from './ProviderForm';
 import { emitSaved } from '../../lib/savedEvent';
 import { useMobileLayout, useReadableLayout, useConservativeLayout } from '../../lib/useMobileLayout';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
@@ -733,6 +734,7 @@ function ChannelModal({
   onUserMutation: () => void;
 }) {
   const { t } = useTranslation();
+  const form = useProviderForm();
   const [name, setName] = useState(channel.name);
   const [providerType, setProviderType] = useState(channel.providerType);
   const [changingProvider, setChangingProvider] = useState(false);
@@ -810,7 +812,8 @@ function ChannelModal({
   const isLocalEngine = descriptor?.authRequirement === 'none';
 
   return (
-    <Modal onClose={onClose} width={mobile ? 'min(560px, 100%)' : 'min(600px, 100%)'}>
+    <ProviderFormContext.Provider value={form}>
+    <Modal onClose={() => void form.finish(onClose)} width={mobile ? 'min(560px, 100%)' : 'min(600px, 100%)'}>
       <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--ol-ink)', marginBottom: 14 }}>
         {t(isDraft ? 'settings.channels.createTitle' : 'settings.channels.editTitle')}
       </div>
@@ -818,8 +821,8 @@ function ChannelModal({
       <label style={fieldLabel}>{t('settings.channels.providerLabel')}</label>
       <SelectLite
         value={providerType}
-        disabled={changingProvider}
-        onChange={next => void changeProvider(next)}
+        disabled={changingProvider || form.leaving}
+        onChange={next => void form.finish(() => changeProvider(next))}
         options={presets.map(p => ({
           value: p.id,
           label: t(`settings.providers.presets.${p.nameKey}`),
@@ -841,6 +844,7 @@ function ChannelModal({
       />
 
       {/* key 决定：换供应商时整组凭据字段重挂载，读的是新厂商对应的槽位。 */}
+      <fieldset disabled={changingProvider || form.leaving} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
       {!changingProvider && <ChannelCredentialFields
         key={`${channel.id}:${providerType}`}
         kind={kind}
@@ -850,6 +854,7 @@ function ChannelModal({
         onTested={() => void onChanged()}
         onUserMutation={onUserMutation}
       />}
+      </fieldset>
 
       {isLocalEngine && (
         <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.6, marginTop: 6 }}>
@@ -863,7 +868,7 @@ function ChannelModal({
             <span style={{ fontSize: 12, color: 'var(--ol-warn)' }}>
               {t('settings.channels.deleteConfirm')}
             </span>
-            <button onClick={() => void remove()} style={dangerBtn}>
+            <button onClick={() => void form.finish(remove)} disabled={form.leaving} style={dangerBtn}>
               {t('settings.channels.confirmDelete')}
             </button>
             <button onClick={() => setConfirmDelete(false)} style={ghostBtn}>{t('common.cancel')}</button>
@@ -873,9 +878,10 @@ function ChannelModal({
             {t('settings.channels.delete')}
           </button>
         )}
-        <button onClick={onClose} style={primaryBtn}>{t('common.close')}</button>
+        <button onClick={() => void form.finish(onClose)} disabled={form.leaving} style={primaryBtn}>{t('common.close')}</button>
       </div>
     </Modal>
+    </ProviderFormContext.Provider>
   );
 }
 

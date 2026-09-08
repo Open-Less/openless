@@ -1,3 +1,4 @@
+import mockDescriptors from './mock-provider-descriptors.json'
 import { invokeOrMock } from './shared'
 
 export type ProviderKind = 'asr' | 'llm' | 'omni'
@@ -27,23 +28,7 @@ export interface ProviderDescriptor {
 
 /** Core owns protocol, defaults, and credential requirements. */
 export function listProviderDescriptors(kind: ProviderKind): Promise<ProviderDescriptor[]> {
-  return invokeOrMock('list_provider_descriptors', { kind }, () => kind === 'llm' ? [
-    ['opencode', 'opencode', 'chat_completions'],
-    ['orcarouter', 'orcarouter', 'chat_completions'],
-    ['custom', 'customChatCompletions', 'chat_completions'],
-    ['custom_responses', 'customResponses', 'responses'],
-    ['custom_messages', 'customMessages', 'messages'],
-  ].map(([providerType, labelKey, format]) => ({
-    kind, providerType, labelKey,
-    defaultEndpoint: providerType === 'orcarouter' ? 'https://api.orcarouter.ai/v1' : providerType === 'opencode' ? 'https://opencode.ai/zen/v1' : null,
-    defaultModel: providerType === 'orcarouter' ? 'orcarouter/fusion-flash' : providerType === 'opencode' ? 'deepseek-v4-flash' : null,
-    authRequirement: 'api_key_unless_custom_endpoint', validationProbe: 'llm_text', staticModels: [],
-    defaultRequestFormat: format as LlmRequestFormat,
-    supportedRequestFormats: ['chat_completions', 'responses', 'messages'],
-  })) : kind === 'asr' ? [{
-    kind, providerType: 'orcarouter', labelKey: 'orcarouter',
-    defaultEndpoint: 'https://api.orcarouter.ai/v1', defaultModel: 'google/gemini-2.5-flash',
-    authRequirement: 'api_key', validationProbe: 'asr_silence', staticModels: [],
-    defaultRequestFormat: null, supportedRequestFormats: [],
-  }] : [])
+  // Snapshot of Core provider_rules::provider_descriptors (all three kinds).
+  return invokeOrMock('list_provider_descriptors', { kind },
+    () => (mockDescriptors as ProviderDescriptor[]).filter(descriptor => descriptor.kind === kind))
 }
