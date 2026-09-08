@@ -10,6 +10,7 @@ export type AuthRequirement =
   | 'api_key_unless_custom_endpoint'
   | 'volcengine'
   | 'xfyun'
+  | 'tencent_cloud'
   | 'o_auth'
 
 export interface ProviderDescriptor {
@@ -30,13 +31,18 @@ export function listProviderDescriptors(kind: ProviderKind): Promise<ProviderDes
   return invokeOrMock('list_provider_descriptors', { kind }, () => kind === 'llm' ? [
     ['opencode', 'opencode', 'chat_completions'],
     ['orcarouter', 'orcarouter', 'chat_completions'],
+    ['tencentTokenHub', 'tencentTokenHub', 'chat_completions'],
     ['custom', 'customChatCompletions', 'chat_completions'],
     ['custom_responses', 'customResponses', 'responses'],
     ['custom_messages', 'customMessages', 'messages'],
   ].map(([providerType, labelKey, format]) => ({
     kind, providerType, labelKey,
-    defaultEndpoint: providerType === 'orcarouter' ? 'https://api.orcarouter.ai/v1' : providerType === 'opencode' ? 'https://opencode.ai/zen/v1' : null,
-    defaultModel: providerType === 'orcarouter' ? 'orcarouter/fusion-flash' : providerType === 'opencode' ? 'deepseek-v4-flash' : null,
+    defaultEndpoint: providerType === 'orcarouter' ? 'https://api.orcarouter.ai/v1'
+      : providerType === 'opencode' ? 'https://opencode.ai/zen/v1'
+      : providerType === 'tencentTokenHub' ? 'https://tokenhub.tencentmaas.com/v1' : null,
+    defaultModel: providerType === 'orcarouter' ? 'orcarouter/fusion-flash'
+      : providerType === 'opencode' ? 'deepseek-v4-flash'
+      : providerType === 'tencentTokenHub' ? 'hy3' : null,
     authRequirement: 'api_key_unless_custom_endpoint', validationProbe: 'llm_text', staticModels: [],
     defaultRequestFormat: format as LlmRequestFormat,
     supportedRequestFormats: ['chat_completions', 'responses', 'messages'],

@@ -7,6 +7,12 @@ const atlascloudPreset = LLM_LABELS.find(p => p.id === 'atlascloud');
 if (LLM_LABELS.find(p => p.id === 'opencode')?.nameKey !== 'opencode') {
   throw new Error('OpenCode LLM label is missing');
 }
+if (LLM_LABELS.find(p => p.id === 'tencentTokenHub')?.nameKey !== 'tencentTokenHub') {
+  throw new Error('Tencent Cloud TokenHub LLM label is missing');
+}
+if (ASR_LABELS.find(p => p.id === 'tencent-cloud')?.nameKey !== 'asrTencentCloud') {
+  throw new Error('Tencent Cloud ASR label is missing');
+}
 
 if (!atlascloudPreset) {
   throw new Error('Atlas Cloud LLM preset is missing');

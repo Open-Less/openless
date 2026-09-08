@@ -5,7 +5,8 @@ use futures_util::future::BoxFuture;
 use openless_core::credentials::{
     ASR_API_KEY_ACCOUNT, ASR_ENDPOINT_ACCOUNT, ASR_MODEL_ACCOUNT, LLM_API_KEY_ACCOUNT,
     LLM_ENDPOINT_ACCOUNT, LLM_MODEL_ACCOUNT, OMNI_API_KEY_ACCOUNT, OMNI_ENDPOINT_ACCOUNT,
-    OMNI_MODEL_ACCOUNT, VOLCENGINE_ACCESS_KEY_ACCOUNT, VOLCENGINE_API_KEY_ACCOUNT,
+    OMNI_MODEL_ACCOUNT, TENCENT_CLOUD_APP_ID_ACCOUNT, TENCENT_CLOUD_SECRET_ID_ACCOUNT,
+    TENCENT_CLOUD_SECRET_KEY_ACCOUNT, VOLCENGINE_ACCESS_KEY_ACCOUNT, VOLCENGINE_API_KEY_ACCOUNT,
     VOLCENGINE_APP_KEY_ACCOUNT, VOLCENGINE_AUTH_MODE_ACCOUNT, VOLCENGINE_RESOURCE_ID_ACCOUNT,
     XFYUN_API_KEY_ACCOUNT, XFYUN_APP_ID_ACCOUNT,
 };
@@ -394,6 +395,21 @@ impl CredentialStore for LinuxCredentialStore {
                     CredentialNamespace::Asr,
                     &active_asr_provider,
                     XFYUN_API_KEY_ACCOUNT,
+                ),
+                tencent_cloud_app_id: has(
+                    CredentialNamespace::Asr,
+                    &active_asr_provider,
+                    TENCENT_CLOUD_APP_ID_ACCOUNT,
+                ),
+                tencent_cloud_secret_id: has(
+                    CredentialNamespace::Asr,
+                    &active_asr_provider,
+                    TENCENT_CLOUD_SECRET_ID_ACCOUNT,
+                ),
+                tencent_cloud_secret_key: has(
+                    CredentialNamespace::Asr,
+                    &active_asr_provider,
+                    TENCENT_CLOUD_SECRET_KEY_ACCOUNT,
                 ),
                 llm_api_key: has(
                     CredentialNamespace::Llm,

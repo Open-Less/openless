@@ -418,7 +418,7 @@ fn validate_configuration(resolved: &ResolvedProvider) -> Result<(), BackendErro
     ) && api_key.trim().is_empty()
         && !matches!(
             descriptor.auth_requirement,
-            AuthRequirement::Volcengine | AuthRequirement::Xfyun
+            AuthRequirement::Volcengine | AuthRequirement::Xfyun | AuthRequirement::TencentCloud
         )
     {
         let label = match resolved.kind {
@@ -436,7 +436,10 @@ fn validate_configuration(resolved: &ResolvedProvider) -> Result<(), BackendErro
     if model.is_none()
         && !matches!(
             descriptor.auth_requirement,
-            AuthRequirement::None | AuthRequirement::Volcengine | AuthRequirement::Xfyun
+            AuthRequirement::None
+                | AuthRequirement::Volcengine
+                | AuthRequirement::Xfyun
+                | AuthRequirement::TencentCloud
         )
     {
         return Err(invalid_request("provider model is not configured"));
@@ -450,7 +453,10 @@ fn validate_configuration(resolved: &ResolvedProvider) -> Result<(), BackendErro
         if endpoint.is_none()
             && !matches!(
                 descriptor.auth_requirement,
-                AuthRequirement::None | AuthRequirement::Volcengine | AuthRequirement::Xfyun
+                AuthRequirement::None
+                    | AuthRequirement::Volcengine
+                    | AuthRequirement::Xfyun
+                    | AuthRequirement::TencentCloud
             )
         {
             return Err(provider_error("provider endpoint is not configured"));

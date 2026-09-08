@@ -15,8 +15,9 @@ use parking_lot::{Mutex, RwLock};
 use crate::asr::{
     BailianCredentials, BailianRealtimeASR, DashScopeMultimodalASR, DictionaryHotword,
     ElevenLabsBatchASR, MimoBatchASR, Qwen3RealtimeASR, Qwen3RealtimeCredentials,
-    StepfunRealtimeASR, StepfunRealtimeCredentials, VolcengineCredentials, VolcengineStreamingASR,
-    WhisperBatchASR, XfyunCredentials, XfyunStreamingASR,
+    StepfunRealtimeASR, StepfunRealtimeCredentials, TencentCloudCredentials,
+    TencentCloudStreamingASR, VolcengineCredentials, VolcengineStreamingASR, WhisperBatchASR,
+    XfyunCredentials, XfyunStreamingASR,
 };
 use crate::config::{TaskSpawner, TokioTaskSpawner};
 use crate::credentials::{
@@ -24,7 +25,8 @@ use crate::credentials::{
     ASR_API_KEY_ACCOUNT, ASR_ENDPOINT_ACCOUNT, ASR_MODEL_ACCOUNT, ASR_VOCABULARY_ID_ACCOUNT,
     LLM_API_KEY_ACCOUNT, LLM_ENDPOINT_ACCOUNT, LLM_EXTRA_HEADERS_ACCOUNT, LLM_TEMPERATURE_ACCOUNT,
     OMNI_API_KEY_ACCOUNT, OMNI_ENDPOINT_ACCOUNT, OMNI_EXTRA_HEADERS_ACCOUNT, OMNI_MODEL_ACCOUNT,
-    OMNI_TEMPERATURE_ACCOUNT, VOLCENGINE_ACCESS_KEY_ACCOUNT, VOLCENGINE_API_KEY_ACCOUNT,
+    OMNI_TEMPERATURE_ACCOUNT, TENCENT_CLOUD_APP_ID_ACCOUNT, TENCENT_CLOUD_SECRET_ID_ACCOUNT,
+    TENCENT_CLOUD_SECRET_KEY_ACCOUNT, VOLCENGINE_ACCESS_KEY_ACCOUNT, VOLCENGINE_API_KEY_ACCOUNT,
     VOLCENGINE_APP_KEY_ACCOUNT, VOLCENGINE_AUTH_MODE_ACCOUNT, VOLCENGINE_RESOURCE_ID_ACCOUNT,
     XFYUN_API_KEY_ACCOUNT, XFYUN_APP_ID_ACCOUNT,
 };
@@ -60,6 +62,7 @@ pub const SHARED_CLOUD_ASR_PROVIDER_TYPES: &[&str] = &[
     "openai-compatible",
     "xiaomi-mimo-asr",
     "iflytek",
+    "tencent-cloud",
 ];
 
 pub const SHARED_CLOUD_LLM_PROVIDER_TYPES: &[&str] = &[
@@ -79,6 +82,7 @@ pub const SHARED_CLOUD_LLM_PROVIDER_TYPES: &[&str] = &[
     "minimax",
     "stepfun",
     "opencode",
+    "tencentTokenHub",
     "custom",
     "custom_responses",
     "custom_messages",
@@ -119,6 +123,7 @@ enum CloudTranscriptionSessionKind {
     QwenRealtime(Arc<Qwen3RealtimeASR>),
     StepfunRealtime(Arc<StepfunRealtimeASR>),
     Xfyun(Arc<XfyunStreamingASR>),
+    TencentCloud(Arc<TencentCloudStreamingASR>),
 }
 
 struct CloudTranscriptionSession {
@@ -169,6 +174,9 @@ impl AudioConsumer for CloudTranscriptionSession {
                 provider.consume_pcm_chunk(pcm)
             }
             CloudTranscriptionSessionKind::Xfyun(provider) => provider.consume_pcm_chunk(pcm),
+            CloudTranscriptionSessionKind::TencentCloud(provider) => {
+                provider.consume_pcm_chunk(pcm)
+            }
         }
     }
 }
@@ -235,6 +243,11 @@ impl TranscriptionSession for CloudTranscriptionSession {
                     timeout_transcription(Duration::from_secs(120), provider.await_final_result())
                         .await?
                 }
+                CloudTranscriptionSessionKind::TencentCloud(provider) => {
+                    let _ = provider.send_last_frame().await;
+                    timeout_transcription(Duration::from_secs(120), provider.await_final_result())
+                        .await?
+                }
             };
             Ok(TranscriptOutput {
                 text: transcript.text,
@@ -254,6 +267,7 @@ impl TranscriptionSession for CloudTranscriptionSession {
             CloudTranscriptionSessionKind::QwenRealtime(provider) => provider.cancel(),
             CloudTranscriptionSessionKind::StepfunRealtime(provider) => provider.cancel(),
             CloudTranscriptionSessionKind::Xfyun(provider) => provider.cancel(),
+            CloudTranscriptionSessionKind::TencentCloud(provider) => provider.cancel(),
         }
         Box::pin(async { Ok(()) })
     }
@@ -631,6 +645,59 @@ async fn build_cloud_transcription_session(
             provider.set_partial_sink(Arc::clone(&partials));
             provider.open_session().await.map_err(map_asr_error)?;
             (CloudTranscriptionSessionKind::Xfyun(provider), None)
+        }
+        ActiveAsrProviderKind::TencentCloud => {
+            let app_id = read_channel_credential(
+                credentials,
+                CredentialNamespace::Asr,
+                channel_id,
+                TENCENT_CLOUD_APP_ID_ACCOUNT,
+            )
+            .await?
+            .unwrap_or_default();
+            let secret_id = read_channel_credential(
+                credentials,
+                CredentialNamespace::Asr,
+                channel_id,
+                TENCENT_CLOUD_SECRET_ID_ACCOUNT,
+            )
+            .await?
+            .unwrap_or_default();
+            let secret_key = read_channel_credential(
+                credentials,
+                CredentialNamespace::Asr,
+                channel_id,
+                TENCENT_CLOUD_SECRET_KEY_ACCOUNT,
+            )
+            .await?
+            .unwrap_or_default();
+            require_configured(&app_id, "Tencent Cloud AppID")?;
+            require_configured(&secret_id, "Tencent Cloud SecretID")?;
+            require_configured(&secret_key, "Tencent Cloud SecretKey")?;
+            let model = read_channel_credential(
+                credentials,
+                CredentialNamespace::Asr,
+                channel_id,
+                ASR_MODEL_ACCOUNT,
+            )
+            .await?
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| crate::asr::tencent_cloud::DEFAULT_MODEL.to_string());
+            let provider = Arc::new(TencentCloudStreamingASR::with_task_spawner(
+                TencentCloudCredentials {
+                    app_id,
+                    secret_id,
+                    secret_key,
+                    model: model.clone(),
+                },
+                Arc::clone(&task_spawner),
+            ));
+            provider.set_partial_sink(Arc::clone(&partials));
+            provider.open_session().await.map_err(map_asr_error)?;
+            (
+                CloudTranscriptionSessionKind::TencentCloud(provider),
+                Some(model),
+            )
         }
     };
     Ok((kind, crate::AsrCallLabel::new(effective, label_model)))

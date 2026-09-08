@@ -74,6 +74,7 @@ mod linux_app {
         model: String,
         auth_mode: String,
         resource_id: String,
+        app_id: String,
         // Secret inputs are intentionally write-only. Loading an editor never
         // exposes an existing key into egui state, logs or screenshots.
         primary_secret: String,
@@ -1632,6 +1633,7 @@ mod linux_app {
             }
             openless_core::AuthRequirement::Volcengine => "火山引擎凭据",
             openless_core::AuthRequirement::Xfyun => "讯飞 AppID + API Key",
+            openless_core::AuthRequirement::TencentCloud => "腾讯云 AppID + SecretID + SecretKey",
             openless_core::AuthRequirement::OAuth => "OAuth",
         }
     }
@@ -1711,6 +1713,19 @@ mod linux_app {
             } else {
                 (String::new(), String::new())
             };
+        let app_id = if descriptor.auth_requirement == openless_core::AuthRequirement::TencentCloud
+        {
+            read_provider_value(
+                &backend,
+                kind,
+                &channel.id,
+                openless_core::credentials::TENCENT_CLOUD_APP_ID_ACCOUNT,
+            )
+            .await?
+            .unwrap_or_default()
+        } else {
+            String::new()
+        };
         Ok(ProviderEditor {
             kind,
             name: channel.name.clone(),
@@ -1720,6 +1735,7 @@ mod linux_app {
             model,
             auth_mode,
             resource_id,
+            app_id,
             primary_secret: String::new(),
             secondary_secret: String::new(),
         })
@@ -1776,6 +1792,18 @@ mod linux_app {
             openless_core::AuthRequirement::Xfyun => {
                 secret_edit(ui, "AppID", &mut editor.primary_secret);
                 secret_edit(ui, "API Key", &mut editor.secondary_secret);
+            }
+            openless_core::AuthRequirement::TencentCloud => {
+                ui.horizontal(|ui| {
+                    ui.label("腾讯云 AppID");
+                    ui.text_edit_singleline(&mut editor.app_id);
+                });
+                secret_edit(ui, "SecretID", &mut editor.primary_secret);
+                secret_edit(ui, "SecretKey", &mut editor.secondary_secret);
+                ui.horizontal(|ui| {
+                    ui.label("Model");
+                    ui.text_edit_singleline(&mut editor.model);
+                });
             }
             _ => {
                 secret_edit(ui, "API Key（留空表示不修改）", &mut editor.primary_secret);
@@ -1913,6 +1941,40 @@ mod linux_app {
                 )
                 .await?;
             }
+            openless_core::AuthRequirement::TencentCloud => {
+                write_or_remove_provider_value(
+                    &backend,
+                    editor.kind,
+                    channel_id,
+                    openless_core::credentials::TENCENT_CLOUD_APP_ID_ACCOUNT,
+                    &editor.app_id,
+                )
+                .await?;
+                write_secret_if_entered(
+                    &backend,
+                    editor.kind,
+                    channel_id,
+                    openless_core::credentials::TENCENT_CLOUD_SECRET_ID_ACCOUNT,
+                    &editor.primary_secret,
+                )
+                .await?;
+                write_secret_if_entered(
+                    &backend,
+                    editor.kind,
+                    channel_id,
+                    openless_core::credentials::TENCENT_CLOUD_SECRET_KEY_ACCOUNT,
+                    &editor.secondary_secret,
+                )
+                .await?;
+                write_or_remove_provider_value(
+                    &backend,
+                    editor.kind,
+                    channel_id,
+                    model_account(editor.kind),
+                    &editor.model,
+                )
+                .await?;
+            }
             _ => {
                 write_or_remove_provider_value(
                     &backend,
@@ -1957,6 +2019,11 @@ mod linux_app {
             openless_core::AuthRequirement::Xfyun => &[
                 openless_core::credentials::XFYUN_APP_ID_ACCOUNT,
                 openless_core::credentials::XFYUN_API_KEY_ACCOUNT,
+            ],
+            openless_core::AuthRequirement::TencentCloud => &[
+                openless_core::credentials::TENCENT_CLOUD_APP_ID_ACCOUNT,
+                openless_core::credentials::TENCENT_CLOUD_SECRET_ID_ACCOUNT,
+                openless_core::credentials::TENCENT_CLOUD_SECRET_KEY_ACCOUNT,
             ],
             _ => &[api_key_account(editor.kind)],
         };

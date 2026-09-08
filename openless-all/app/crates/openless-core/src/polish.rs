@@ -189,6 +189,7 @@ fn is_builtin_llm_provider(provider_id: &str) -> bool {
             | "minimax"
             | "stepfun"
             | "opencode"
+            | "tencentTokenHub"
     )
 }
 
@@ -1653,10 +1654,12 @@ pub(crate) fn apply_openai_compatible_thinking_control(
     // 让用户用"自定义"preset 接入 MiniMax 也能正确下发 thinking 控制参数。
     // Zen 是多模型网关，仅 DeepSeek 模型使用 DeepSeek 的思考参数。
     let is_opencode = provider_id.trim() == "opencode"
-        || (matches!(provider_id.trim(), "custom" | "custom_responses" | "custom_messages")
-            && url::Url::parse(base_url.trim())
-                .ok()
-                .is_some_and(|url| url.host_str() == Some("opencode.ai")));
+        || (matches!(
+            provider_id.trim(),
+            "custom" | "custom_responses" | "custom_messages"
+        ) && url::Url::parse(base_url.trim())
+            .ok()
+            .is_some_and(|url| url.host_str() == Some("opencode.ai")));
     let control = if is_opencode {
         model
             .trim()
@@ -1705,6 +1708,14 @@ pub(crate) fn apply_openai_compatible_thinking_control(
                 "type": if thinking_enabled { "adaptive" } else { "disabled" },
             });
         }
+        Some(ThinkingControl::TokenHubThinking) => {
+            body["thinking"] = json!({
+                "type": if thinking_enabled { "enabled" } else { "disabled" },
+            });
+            if thinking_enabled {
+                body["reasoning_effort"] = json!("medium");
+            }
+        }
         None => {}
     }
 }
@@ -1716,6 +1727,7 @@ pub(crate) enum ThinkingControl {
     OpenRouterReasoning,
     DeepSeekThinking,
     MiniMaxThinking,
+    TokenHubThinking,
 }
 
 pub(crate) fn openai_compatible_thinking_control(provider_id: &str) -> Option<ThinkingControl> {
@@ -1730,6 +1742,7 @@ pub(crate) fn openai_compatible_thinking_control(provider_id: &str) -> Option<Th
         "openai" | "orcarouter" | "codingPlanX" | "stepfun" => {
             Some(ThinkingControl::ReasoningEffort)
         }
+        "tencentTokenHub" => Some(ThinkingControl::TokenHubThinking),
         // custom / 其他未声明 provider 走 base_url 兜底识别——用户用自定义
         // endpoint 接入 MiniMax 时,根据 base_url 命中即下发官方 thinking 参数。
         _ => None,
@@ -1769,6 +1782,9 @@ pub(crate) fn openai_compatible_thinking_control_for_base_url(
     }
     if host.contains("stepfun") {
         return Some(ThinkingControl::ReasoningEffort);
+    }
+    if host.contains("tokenhub.tencentmaas.com") || host.contains("api.lkeap.cloud.tencent.com") {
+        return Some(ThinkingControl::TokenHubThinking);
     }
     None
 }
@@ -2143,8 +2159,12 @@ mod tests {
     #[tokio::test]
     async fn all_text_entrypoints_use_the_selected_protocol_over_http() {
         for (format, (preset, prefix)) in LlmRequestFormat::ALL.into_iter().flat_map(|format| {
-            [("custom", "/gateway/v1"), ("opencode", "/zen/v1"), ("opencode", "/zen/go/v1")]
-                .map(|entry| (format, entry))
+            [
+                ("custom", "/gateway/v1"),
+                ("opencode", "/zen/v1"),
+                ("opencode", "/zen/go/v1"),
+            ]
+            .map(|entry| (format, entry))
         }) {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let address = listener.local_addr().unwrap();
@@ -2311,7 +2331,11 @@ mod tests {
             ("custom", "https://opencode.ai/zen/v1", true),
             ("custom_responses", "https://opencode.ai/zen/v1", true),
             ("custom_messages", "https://opencode.ai/zen/v1", true),
-            ("custom", "https://OPENCODE.AI:443/zen/go/v1/chat/completions", true),
+            (
+                "custom",
+                "https://OPENCODE.AI:443/zen/go/v1/chat/completions",
+                true,
+            ),
             ("custom", "https://opencode.ai.example/zen/v1", false),
             ("custom", "https://fakeopencode.ai/zen/v1", false),
             ("custom", "https://opencode.ai@example.com/zen/v1", false),
@@ -2323,22 +2347,37 @@ mod tests {
                         let provider = OpenAICompatibleLLMProvider::new(
                             OpenAICompatibleConfig::new(preset, "test", endpoint, "key", model)
                                 .with_thinking_enabled(enabled)
-                                .with_protocol(LlmProtocolConfig { format, ..Default::default() }),
+                                .with_protocol(LlmProtocolConfig {
+                                    format,
+                                    ..Default::default()
+                                }),
                         );
-                        let body = provider.chat_body(false, vec![json!({"role":"user","content":"hi"})]);
+                        let body =
+                            provider.chat_body(false, vec![json!({"role":"user","content":"hi"})]);
                         match format {
-                            LlmRequestFormat::ChatCompletions if zen && model.starts_with("deepseek-") => {
-                                assert_eq!(body["thinking"]["type"], if enabled { "enabled" } else { "disabled" });
+                            LlmRequestFormat::ChatCompletions
+                                if zen && model.starts_with("deepseek-") =>
+                            {
+                                assert_eq!(
+                                    body["thinking"]["type"],
+                                    if enabled { "enabled" } else { "disabled" }
+                                );
                             }
                             LlmRequestFormat::Messages if enabled => {
                                 assert_eq!(body["thinking"]["type"], "adaptive");
                             }
-                            _ => assert!(body.get("thinking").is_none(), "{preset} {endpoint} {model} {format:?}"),
+                            _ => assert!(
+                                body.get("thinking").is_none(),
+                                "{preset} {endpoint} {model} {format:?}"
+                            ),
                         }
                         assert!(body.get("reasoning_effort").is_none());
                         assert!(body.get("enable_thinking").is_none());
                         if format == LlmRequestFormat::Responses {
-                            assert_eq!(body["reasoning"]["effort"], if enabled { "medium" } else { "low" });
+                            assert_eq!(
+                                body["reasoning"]["effort"],
+                                if enabled { "medium" } else { "low" }
+                            );
                             assert!(body.get("messages").is_none());
                         } else {
                             assert!(body.get("reasoning").is_none());
@@ -3222,6 +3261,47 @@ mod tests {
         let body = provider.chat_body(true, vec![json!({ "role": "user", "content": "hi" })]);
 
         assert_eq!(body["thinking"]["type"], "adaptive");
+    }
+
+    #[test]
+    fn openai_chat_body_controls_tokenhub_thinking() {
+        for (thinking_enabled, expected) in [(true, "enabled"), (false, "disabled")] {
+            let provider = OpenAICompatibleLLMProvider::new(
+                OpenAICompatibleConfig::new(
+                    "tencentTokenHub",
+                    "Tencent TokenHub",
+                    "https://tokenhub.tencentmaas.com/v1",
+                    "k",
+                    "hy3",
+                )
+                .with_thinking_enabled(thinking_enabled),
+            );
+
+            let body = provider.chat_body(false, vec![json!({ "role": "user", "content": "hi" })]);
+
+            assert_eq!(body["thinking"]["type"], expected);
+            assert_eq!(
+                body.get("reasoning_effort").and_then(Value::as_str),
+                thinking_enabled.then_some("medium")
+            );
+        }
+    }
+
+    #[test]
+    fn openai_chat_body_detects_custom_tokenhub_endpoint() {
+        for base_url in [
+            "https://tokenhub.tencentmaas.com/v1/",
+            "https://api.lkeap.cloud.tencent.com/plan/v3",
+        ] {
+            let provider = OpenAICompatibleLLMProvider::new(
+                OpenAICompatibleConfig::new("custom", "Custom", base_url, "k", "hy3")
+                    .with_thinking_enabled(false),
+            );
+
+            let body = provider.chat_body(false, vec![json!({ "role": "user", "content": "hi" })]);
+
+            assert_eq!(body["thinking"]["type"], "disabled");
+        }
     }
 
     #[test]

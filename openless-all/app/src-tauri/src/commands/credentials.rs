@@ -535,6 +535,9 @@ fn credential_configuration(
         volcengine_resource_id: configured(&snap.volcengine_resource_id),
         xfyun_app_id: configured(&snap.xfyun_app_id),
         xfyun_api_key: configured(&snap.xfyun_api_key),
+        tencent_cloud_app_id: configured(&snap.tencent_cloud_app_id),
+        tencent_cloud_secret_id: configured(&snap.tencent_cloud_secret_id),
+        tencent_cloud_secret_key: configured(&snap.tencent_cloud_secret_key),
         llm_api_key: configured(&snap.ark_api_key),
         llm_endpoint: llm_endpoint.is_some(),
         llm_endpoint_matches_default: llm_endpoint.is_some_and(|endpoint| {
@@ -799,7 +802,10 @@ fn account_provider_kind(account: CredentialAccount) -> CredentialProviderKind {
         | CredentialAccount::AsrVocabularyId
         | CredentialAccount::AsrAdvancedConfig
         | CredentialAccount::XfyunAppId
-        | CredentialAccount::XfyunApiKey => CredentialProviderKind::Asr,
+        | CredentialAccount::XfyunApiKey
+        | CredentialAccount::TencentCloudAppId
+        | CredentialAccount::TencentCloudSecretId
+        | CredentialAccount::TencentCloudSecretKey => CredentialProviderKind::Asr,
         CredentialAccount::OmniApiKey
         | CredentialAccount::OmniEndpoint
         | CredentialAccount::OmniModel => CredentialProviderKind::Omni,
@@ -831,6 +837,9 @@ fn parse_account(s: &str) -> Result<CredentialAccount, String> {
         "asr.advanced_config" => Ok(CredentialAccount::AsrAdvancedConfig),
         "xfyun.app_id" => Ok(CredentialAccount::XfyunAppId),
         "xfyun.api_key" => Ok(CredentialAccount::XfyunApiKey),
+        "tencent_cloud.app_id" => Ok(CredentialAccount::TencentCloudAppId),
+        "tencent_cloud.secret_id" => Ok(CredentialAccount::TencentCloudSecretId),
+        "tencent_cloud.secret_key" => Ok(CredentialAccount::TencentCloudSecretKey),
         "omni.api_key" => Ok(CredentialAccount::OmniApiKey),
         "omni.endpoint" => Ok(CredentialAccount::OmniEndpoint),
         "omni.model" => Ok(CredentialAccount::OmniModel),

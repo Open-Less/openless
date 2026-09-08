@@ -54,6 +54,7 @@ const LLM_NAME_KEY_BY_ID: Record<string, string> = {
   alibabaCoding: 'alibabaCoding',
   codingPlanX: 'codingPlanX',
   opencode: 'opencode',
+  tencentTokenHub: 'tencentTokenHub',
   custom: 'custom',
 };
 
