@@ -1012,6 +1012,7 @@ export const ko: typeof zhCN = {
         codingPlanX: 'CodingPlanX',
         minimax: 'MiniMax (M3)',
         stepfun: 'StepFun',
+        opencode: 'OpenCode Zen',
         customChatCompletions: "사용자 지정 · Chat Completions",
         customResponses: "사용자 지정 · Responses",
         customMessages: "사용자 지정 · Messages",

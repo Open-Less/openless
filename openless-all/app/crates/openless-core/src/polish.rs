@@ -187,6 +187,7 @@ fn is_builtin_llm_provider(provider_id: &str) -> bool {
             | "codingPlanX"
             | "minimax"
             | "stepfun"
+            | "opencode"
     )
 }
 
@@ -1649,8 +1650,21 @@ pub(crate) fn apply_openai_compatible_thinking_control(
 ) {
     // 优先按 provider_id 预设分派；custom / 未声明 provider 时回退到 base_url 兜底,
     // 让用户用"自定义"preset 接入 MiniMax 也能正确下发 thinking 控制参数。
-    let control = openai_compatible_thinking_control(provider_id)
-        .or_else(|| openai_compatible_thinking_control_for_base_url(base_url));
+    // Zen 是多模型网关，仅 DeepSeek 模型使用 DeepSeek 的思考参数。
+    let is_opencode = provider_id.trim() == "opencode"
+        || (matches!(provider_id.trim(), "custom" | "custom_responses" | "custom_messages")
+            && url::Url::parse(base_url.trim())
+                .ok()
+                .is_some_and(|url| url.host_str() == Some("opencode.ai")));
+    let control = if is_opencode {
+        model
+            .trim()
+            .starts_with("deepseek-")
+            .then_some(ThinkingControl::DeepSeekThinking)
+    } else {
+        openai_compatible_thinking_control(provider_id)
+            .or_else(|| openai_compatible_thinking_control_for_base_url(base_url))
+    };
     match control {
         Some(ThinkingControl::ReasoningEffort) => {
             // OpenAI 官方 Chat Completions 只在推理模型族接受 reasoning_effort；
@@ -2125,7 +2139,10 @@ mod tests {
 
     #[tokio::test]
     async fn all_text_entrypoints_use_the_selected_protocol_over_http() {
-        for format in LlmRequestFormat::ALL {
+        for (format, (preset, prefix)) in LlmRequestFormat::ALL.into_iter().flat_map(|format| {
+            [("custom", "/gateway/v1"), ("opencode", "/zen/v1"), ("opencode", "/zen/go/v1")]
+                .map(|entry| (format, entry))
+        }) {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let address = listener.local_addr().unwrap();
             let server = thread::spawn(move || {
@@ -2140,7 +2157,7 @@ mod tests {
                         LlmRequestFormat::Responses => "responses",
                         LlmRequestFormat::Messages => "messages",
                     };
-                    assert!(headers.starts_with(&format!("post /gateway/v1/{path}?tenant=1 ")));
+                    assert!(headers.starts_with(&format!("post {prefix}/{path}?tenant=1 ")));
                     if format == LlmRequestFormat::Messages {
                         assert!(headers.contains("x-api-key: fixture-key"));
                         assert!(headers.contains("anthropic-version: 2023-06-01"));
@@ -2189,9 +2206,9 @@ mod tests {
                 }
             });
             let config = OpenAICompatibleConfig::new(
-                "custom",
+                preset,
                 "test",
-                format!("http://{address}/gateway/v1/chat/completions?tenant=1"),
+                format!("http://{address}{prefix}/chat/completions?tenant=1"),
                 "fixture-key",
                 "test",
             )
@@ -2280,6 +2297,52 @@ mod tests {
             );
             assert_eq!(*output.lock().unwrap(), "你好");
             server.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn opencode_thinking_is_scoped_to_model_host_and_protocol() {
+        for (preset, endpoint, zen) in [
+            ("opencode", "https://opencode.ai/zen/v1", true),
+            ("opencode", "https://gateway.example/v1", true),
+            ("custom", "https://opencode.ai/zen/v1", true),
+            ("custom_responses", "https://opencode.ai/zen/v1", true),
+            ("custom_messages", "https://opencode.ai/zen/v1", true),
+            ("custom", "https://OPENCODE.AI:443/zen/go/v1/chat/completions", true),
+            ("custom", "https://opencode.ai.example/zen/v1", false),
+            ("custom", "https://fakeopencode.ai/zen/v1", false),
+            ("custom", "https://opencode.ai@example.com/zen/v1", false),
+            ("custom", "https://example.com/opencode.ai", false),
+        ] {
+            for model in ["deepseek-v4-flash", "minimax-m3", "gateway-model"] {
+                for enabled in [false, true] {
+                    for format in LlmRequestFormat::ALL {
+                        let provider = OpenAICompatibleLLMProvider::new(
+                            OpenAICompatibleConfig::new(preset, "test", endpoint, "key", model)
+                                .with_thinking_enabled(enabled)
+                                .with_protocol(LlmProtocolConfig { format, ..Default::default() }),
+                        );
+                        let body = provider.chat_body(false, vec![json!({"role":"user","content":"hi"})]);
+                        match format {
+                            LlmRequestFormat::ChatCompletions if zen && model.starts_with("deepseek-") => {
+                                assert_eq!(body["thinking"]["type"], if enabled { "enabled" } else { "disabled" });
+                            }
+                            LlmRequestFormat::Messages if enabled => {
+                                assert_eq!(body["thinking"]["type"], "adaptive");
+                            }
+                            _ => assert!(body.get("thinking").is_none(), "{preset} {endpoint} {model} {format:?}"),
+                        }
+                        assert!(body.get("reasoning_effort").is_none());
+                        assert!(body.get("enable_thinking").is_none());
+                        if format == LlmRequestFormat::Responses {
+                            assert_eq!(body["reasoning"]["effort"], if enabled { "medium" } else { "low" });
+                            assert!(body.get("messages").is_none());
+                        } else {
+                            assert!(body.get("reasoning").is_none());
+                        }
+                    }
+                }
+            }
         }
     }
 

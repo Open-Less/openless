@@ -76,6 +76,7 @@ pub const SHARED_CLOUD_LLM_PROVIDER_TYPES: &[&str] = &[
     "codingPlanX",
     "minimax",
     "stepfun",
+    "opencode",
     "custom",
     "custom_responses",
     "custom_messages",

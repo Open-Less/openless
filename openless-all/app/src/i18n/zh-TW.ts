@@ -1010,6 +1010,7 @@ export const zhTW: typeof zhCN = {
         codingPlanX: 'CodingPlanX',
         minimax: 'MiniMax（M3）',
         stepfun: 'StepFun（階躍星辰）',
+        opencode: 'OpenCode Zen',
         customChatCompletions: "自訂 · Chat Completions",
         customResponses: "自訂 · Responses",
         customMessages: "自訂 · Messages",

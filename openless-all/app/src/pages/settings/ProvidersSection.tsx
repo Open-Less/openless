@@ -91,6 +91,7 @@ export const LLM_LABELS = [
   ['codex_oauth', 'codexOAuth'], ['mimo', 'mimo'], ['cometapi', 'cometapi'],
   ['openrouterFree', 'openrouterFree'], ['alibabaCoding', 'alibabaCoding'],
   ['codingPlanX', 'codingPlanX'], ['minimax', 'minimax'], ['stepfun', 'stepfun'],
+  ['opencode', 'opencode'],
   ['custom', 'customChatCompletions'], ['custom_responses', 'customResponses'], ['custom_messages', 'customMessages'],
 ].map(([id, nameKey]) => ({ id, nameKey })) as readonly { id: string; nameKey: string }[];
 

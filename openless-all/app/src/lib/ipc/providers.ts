@@ -28,11 +28,14 @@ export interface ProviderDescriptor {
 /** Core owns protocol, defaults, and credential requirements. */
 export function listProviderDescriptors(kind: ProviderKind): Promise<ProviderDescriptor[]> {
   return invokeOrMock('list_provider_descriptors', { kind }, () => kind === 'llm' ? [
+    ['opencode', 'opencode', 'chat_completions'],
     ['custom', 'customChatCompletions', 'chat_completions'],
     ['custom_responses', 'customResponses', 'responses'],
     ['custom_messages', 'customMessages', 'messages'],
   ].map(([providerType, labelKey, format]) => ({
-    kind, providerType, labelKey, defaultEndpoint: null, defaultModel: null,
+    kind, providerType, labelKey,
+    defaultEndpoint: providerType === 'opencode' ? 'https://opencode.ai/zen/v1' : null,
+    defaultModel: providerType === 'opencode' ? 'deepseek-v4-flash' : null,
     authRequirement: 'api_key_unless_custom_endpoint', validationProbe: 'llm_text', staticModels: [],
     defaultRequestFormat: format as LlmRequestFormat,
     supportedRequestFormats: ['chat_completions', 'responses', 'messages'],

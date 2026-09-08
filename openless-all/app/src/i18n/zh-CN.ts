@@ -1008,6 +1008,7 @@ export const zhCN = {
         codingPlanX: 'CodingPlanX',
         minimax: 'MiniMax（M3）',
         stepfun: 'StepFun（阶跃星辰）',
+        opencode: 'OpenCode Zen',
         customChatCompletions: "自定义 · Chat Completions",
         customResponses: "自定义 · Responses",
         customMessages: "自定义 · Messages",

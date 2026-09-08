@@ -1010,6 +1010,7 @@ export const en: typeof zhCN = {
         codingPlanX: 'CodingPlanX',
         minimax: 'MiniMax (M3)',
         stepfun: 'StepFun',
+        opencode: 'OpenCode Zen',
         customChatCompletions: "Custom · Chat Completions",
         customResponses: "Custom · Responses",
         customMessages: "Custom · Messages",

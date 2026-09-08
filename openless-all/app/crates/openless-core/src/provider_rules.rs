@@ -62,6 +62,7 @@ const LLM_PROVIDER_TYPES: &[(&str, &str)] = &[
     ("codingPlanX", "codingPlanX"),
     ("minimax", "minimax"),
     ("stepfun", "stepfun"),
+    ("opencode", "opencode"),
     ("custom", "customChatCompletions"),
     ("custom_responses", "customResponses"),
     ("custom_messages", "customMessages"),
@@ -481,6 +482,7 @@ pub fn default_asr_model(provider_type: &str) -> Option<&'static str> {
 
 pub fn default_llm_endpoint(provider_type: &str) -> Option<&'static str> {
     match provider_type {
+        "opencode" => Some("https://opencode.ai/zen/v1"),
         "ark" => Some("https://ark.cn-beijing.volces.com/api/v3"),
         "deepseek" => Some("https://api.deepseek.com/v1"),
         "siliconflow" => Some("https://api.siliconflow.cn/v1"),
@@ -501,7 +503,7 @@ pub fn default_llm_endpoint(provider_type: &str) -> Option<&'static str> {
 pub fn default_llm_model(provider_type: &str) -> Option<&'static str> {
     match provider_type {
         "ark" => Some("deepseek-v3-2"),
-        "deepseek" => Some("deepseek-v4-flash"),
+        "deepseek" | "opencode" => Some("deepseek-v4-flash"),
         "siliconflow" => Some("Qwen/Qwen2.5-7B-Instruct"),
         "atlascloud" => Some("qwen/qwen3.5-flash"),
         "openai" | "cometapi" => Some("gpt-4o"),
@@ -987,6 +989,29 @@ mod tests {
         );
         assert!(parse_extra_headers(r#"{"x-trace":"enabled"}"#).is_ok());
         assert!(parse_extra_headers(r#"{"authorization":"secret"}"#).is_err());
+    }
+
+    #[test]
+    fn opencode_descriptor_supplies_defaults_formats_and_credentials() {
+        use crate::llm_protocol::LlmRequestFormat;
+        assert!(crate::cloud_providers::SHARED_CLOUD_LLM_PROVIDER_TYPES.contains(&"opencode"));
+        let descriptor = provider_descriptor(ProviderKind::Llm, "opencode").unwrap();
+        assert_eq!(descriptor.label_key, "opencode");
+        assert_eq!(descriptor.default_endpoint.as_deref(), Some("https://opencode.ai/zen/v1"));
+        assert_eq!(descriptor.default_model.as_deref(), Some("deepseek-v4-flash"));
+        assert_eq!(descriptor.default_request_format, Some(LlmRequestFormat::ChatCompletions));
+        assert_eq!(descriptor.supported_request_formats, LlmRequestFormat::ALL);
+        assert_eq!(descriptor.validation_probe, ValidationProbe::LlmText);
+        assert!(api_key_required(ProviderKind::Llm, "opencode", Some("https://opencode.ai/zen/v1/chat/completions/")));
+        let mut configuration = CredentialConfiguration {
+            llm_endpoint: true,
+            llm_endpoint_matches_default: true,
+            llm_model: true,
+            ..CredentialConfiguration::default()
+        };
+        assert!(!llm_configured("opencode", &configuration));
+        configuration.llm_api_key = true;
+        assert!(llm_configured("opencode", &configuration));
     }
 
     #[test]

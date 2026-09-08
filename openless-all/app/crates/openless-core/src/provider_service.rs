@@ -892,6 +892,9 @@ mod tests {
     async fn validation_and_model_lists_use_channel_protocol_and_thinking() {
         use crate::llm_protocol::*;
         for (format, preset, sse, path) in [
+            ("chat_completions", "opencode", "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n", "/v1/chat/completions"),
+            ("responses", "opencode", "data: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n\ndata: {\"type\":\"response.completed\"}\n\n", "/v1/responses"),
+            ("messages", "opencode", "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"ok\"}}\n\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n\ndata: {\"type\":\"message_stop\"}\n\n", "/v1/messages"),
             ("responses", "custom_responses", "data: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n\ndata: {\"type\":\"response.completed\"}\n\n", "/v1/responses"),
             ("messages", "custom_messages", "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"ok\"}}\n\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n\ndata: {\"type\":\"message_stop\"}\n\n", "/v1/messages"),
         ] {
@@ -909,13 +912,13 @@ mod tests {
                 assert!(request.starts_with(&format!("POST {path} ")));
                 let body: serde_json::Value = serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
                 if format == "responses" { assert_eq!(body["reasoning"]["effort"], if enabled { "medium" } else { "low" }); }
-                else if enabled { assert_eq!(body["thinking"]["type"], "adaptive"); }
+                else if format == "messages" && enabled { assert_eq!(body["thinking"]["type"], "adaptive"); }
                 else { assert!(body.get("thinking").is_none()); }
             }
             let (endpoint, request) = spawn_http_response("200 OK", "application/json", r#"{"data":[{"id":"model"}]}"#);
             let credentials = Arc::new(InMemoryCredentialStore::default());
-            let channel = create_channel_with_values(&credentials, ChannelKind::Llm, "openai", &[
-                (LLM_ENDPOINT_ACCOUNT, &format!("{endpoint}/{format}")), (LLM_MODEL_ACCOUNT, "test"),
+            let channel = create_channel_with_values(&credentials, ChannelKind::Llm, preset, &[
+                (LLM_ENDPOINT_ACCOUNT, &format!("{endpoint}/{}", if format == "chat_completions" { "chat/completions" } else { format })), (LLM_MODEL_ACCOUNT, "test"),
                 (LLM_API_KEY_ACCOUNT, "fixture-key"), (REQUEST_FORMAT_ACCOUNT, format),
             ]).await;
             let service = ProviderService::new(credentials, Arc::new(crate::TokioTaskSpawner));

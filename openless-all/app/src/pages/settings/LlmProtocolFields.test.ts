@@ -18,14 +18,27 @@ assert(protocolValidationError({ ...values, 'ark.messages_thinking': 'budget', '
 
 const descriptors = await listProviderDescriptors('llm');
 const presets = presetsFor('llm', 'win', true, undefined, descriptors);
-assert(presets.length === 3, 'Browser catalog should expose three compatibility presets');
+assert(presets.filter(p => p.id.startsWith('custom')).length === 3, 'Browser catalog should expose three compatibility presets');
+const opencode = presets.find(p => p.id === 'opencode');
+assert(opencode?.defaultRequestFormat === 'chat_completions'
+  && opencode.defaultEndpoint === 'https://opencode.ai/zen/v1'
+  && opencode.defaultModel === 'deepseek-v4-flash', 'OpenCode browser preset must retain Core defaults');
 assert(presets.find(p => p.id === 'custom_messages')?.defaultRequestFormat === 'messages', 'Picker must retain Core protocol defaults');
 for (const preset of presets) assert(preset.supportedRequestFormats?.length === 3, 'All compatibility presets allow switching');
 
-const first = await createChannel('llm', 'custom', 'first');
+const first = await createChannel('llm', 'opencode', 'first');
 const second = await createChannel('llm', 'custom', 'second');
 await setCredential('ark.request_format', 'messages', first);
 await setCredential('ark.api_key', 'fixture-key', first);
+await setCredential('ark.endpoint', 'https://opencode.ai/zen/go/v1', first);
+await setCredential('ark.model_id', 'deepseek-v4-flash', first);
+for (const format of ['chat_completions', 'responses', 'messages']) {
+  await setCredential('ark.request_format', format, first);
+  assert(await readCredential('ark.request_format', first) === format, 'OpenCode format must survive reload');
+  assert(await readCredential('ark.api_key', first) === 'fixture-key', 'Format changes preserve the key');
+  assert(await readCredential('ark.model_id', first) === 'deepseek-v4-flash', 'Format changes preserve the model');
+  assert(await readCredential('ark.endpoint', first) === 'https://opencode.ai/zen/go/v1', 'Format changes preserve the endpoint');
+}
 await recordChannelTest('llm', first, true, 1, null);
 await setCredential('ark.model_id', 'new-model', first);
 assert(await readCredential('ark.request_format', first) === 'messages', 'Changing model must preserve format');

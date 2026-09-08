@@ -1012,6 +1012,7 @@ export const ja: typeof zhCN = {
         codingPlanX: 'CodingPlanX',
         minimax: 'MiniMax（M3）',
         stepfun: 'StepFun（階躍星辰）',
+        opencode: 'OpenCode Zen',
         customChatCompletions: "カスタム · Chat Completions",
         customResponses: "カスタム · Responses",
         customMessages: "カスタム · Messages",
