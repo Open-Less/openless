@@ -1432,6 +1432,10 @@ export const ja: typeof zhCN = {
           title: '新しいバージョンがあります',
           desc: 'OpenLess {{version}} が見つかりました。今すぐ更新しますか？',
         },
+        stableChannelSwitch: {
+          title: '正式版に切り替える',
+          desc: '現在のバージョン：OpenLess {{currentVersion}}\n対象バージョン：OpenLess {{version}}\nBeta チャンネルから正式版に切り替えます。続行しますか？',
+        },
         downloading: {
           title: 'アップデートをダウンロード中',
           desc: 'OpenLess {{version}} をダウンロード中です。アプリを開いたままにしてください。',

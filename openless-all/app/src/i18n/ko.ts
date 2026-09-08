@@ -1432,6 +1432,10 @@ export const ko: typeof zhCN = {
           title: '새 버전 발견',
           desc: 'OpenLess {{version}} 을(를) 발견했습니다. 지금 업데이트하시겠습니까?',
         },
+        stableChannelSwitch: {
+          title: '정식 버전으로 전환',
+          desc: '현재 버전: OpenLess {{currentVersion}}\n대상 버전: OpenLess {{version}}\nBeta 채널에서 정식 버전으로 전환합니다. 계속하시겠습니까?',
+        },
         downloading: {
           title: '업데이트 다운로드 중',
           desc: 'OpenLess {{version}} 을(를) 다운로드 중입니다. 앱을 열어 두세요.',

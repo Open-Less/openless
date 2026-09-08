@@ -566,6 +566,10 @@ pub struct UserPreferences {
     /// 手动检查按钮显式指定 channel，与此 pref 解耦。
     #[serde(default)]
     pub update_channel: UpdateChannel,
+    /// 是否由用户明确选择过更新渠道。旧版默认会把 Stable 写入配置，单看
+    /// `update_channel` 无法区分默认值与主动切换；历史 Beta 则必然来自用户 opt-in。
+    #[serde(default)]
+    pub update_channel_explicit: bool,
     /// 历史记录保留天数。0 = 不按时间清理（仅受 200 条上限）。默认 7 天。
     /// 写入新条目时执行清理，避免后台轮询。
     #[serde(default = "default_history_retention_days")]
@@ -887,6 +891,8 @@ struct UserPreferencesWire {
     sherpa_onnx_keep_loaded_secs: u32,
     #[serde(default)]
     update_channel: UpdateChannel,
+    #[serde(default)]
+    update_channel_explicit: Option<bool>,
     #[serde(default = "default_history_retention_days")]
     history_retention_days: u32,
     #[serde(default = "default_polish_context_window_minutes")]
@@ -1054,6 +1060,8 @@ impl Default for UserPreferencesWire {
             sherpa_onnx_language_hint: prefs.sherpa_onnx_language_hint,
             sherpa_onnx_keep_loaded_secs: prefs.sherpa_onnx_keep_loaded_secs,
             update_channel: prefs.update_channel,
+            // None 保留旧配置缺少标记的信息；反序列化时只有历史 Beta 视为显式选择。
+            update_channel_explicit: None,
             history_retention_days: prefs.history_retention_days,
             polish_context_window_minutes: prefs.polish_context_window_minutes,
             start_minimized: prefs.start_minimized,
@@ -1121,6 +1129,9 @@ impl<'de> Deserialize<'de> for UserPreferences {
         };
         let (local_asr_active_model, local_whisper_active_model) =
             migrate_local_asr_models(wire.local_asr_active_model, wire.local_whisper_active_model);
+        let update_channel_explicit = wire
+            .update_channel_explicit
+            .unwrap_or(matches!(wire.update_channel, UpdateChannel::Beta));
 
         Ok(Self {
             hotkey: wire.hotkey,
@@ -1216,6 +1227,7 @@ impl<'de> Deserialize<'de> for UserPreferences {
             sherpa_onnx_language_hint: wire.sherpa_onnx_language_hint,
             sherpa_onnx_keep_loaded_secs: wire.sherpa_onnx_keep_loaded_secs,
             update_channel: wire.update_channel,
+            update_channel_explicit,
             history_retention_days: wire.history_retention_days,
             polish_context_window_minutes: wire.polish_context_window_minutes,
             start_minimized: wire.start_minimized,
@@ -1556,6 +1568,7 @@ impl Default for UserPreferences {
             sherpa_onnx_language_hint: String::new(),
             sherpa_onnx_keep_loaded_secs: default_local_asr_keep_loaded_secs(),
             update_channel: UpdateChannel::default(),
+            update_channel_explicit: false,
             history_retention_days: default_history_retention_days(),
             polish_context_window_minutes: default_polish_context_window_minutes(),
             start_minimized: false,
@@ -3116,6 +3129,32 @@ mod tests {
         assert!(!prefs.streaming_insert);
         assert!(prefs.streaming_insert_default_migrated);
         assert!(!prefs.streaming_insert_save_clipboard);
+    }
+
+    #[test]
+    fn update_channel_migration_preserves_only_explicit_legacy_beta_opt_in() {
+        let legacy_stable: UserPreferences =
+            serde_json::from_str(r#"{ "updateChannel": "stable" }"#).unwrap();
+        assert_eq!(legacy_stable.update_channel, UpdateChannel::Stable);
+        assert!(!legacy_stable.update_channel_explicit);
+
+        let legacy_beta: UserPreferences =
+            serde_json::from_str(r#"{ "updateChannel": "beta" }"#).unwrap();
+        assert_eq!(legacy_beta.update_channel, UpdateChannel::Beta);
+        assert!(legacy_beta.update_channel_explicit);
+
+        let explicit_stable: UserPreferences = serde_json::from_str(
+            r#"{
+                "updateChannel": "stable",
+                "updateChannelExplicit": true
+            }"#,
+        )
+        .unwrap();
+        assert!(explicit_stable.update_channel_explicit);
+
+        let round_trip: UserPreferences =
+            serde_json::from_str(&serde_json::to_string(&explicit_stable).unwrap()).unwrap();
+        assert!(round_trip.update_channel_explicit);
     }
 
     #[test]

@@ -1430,6 +1430,10 @@ export const zhTW: typeof zhCN = {
           title: '發現新版本',
           desc: '發現 OpenLess {{version}}，是否現在更新？',
         },
+        stableChannelSwitch: {
+          title: '切換到正式版',
+          desc: '目前版本：OpenLess {{currentVersion}}\n目標版本：OpenLess {{version}}\n這是從 Beta 頻道切換到正式版，是否繼續？',
+        },
         downloading: {
           title: '正在下載更新',
           desc: '正在下載 OpenLess {{version}}，請保持應用打開。',

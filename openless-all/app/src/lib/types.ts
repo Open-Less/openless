@@ -256,8 +256,7 @@ export interface WindowsImeStatus {
   dllPath: string | null;
 }
 
-/** 后台自动更新渠道。stable = 查正式版 manifest（默认）；beta = 查
- *  latest-android-{arch}-beta.json。手动「检查正式版/Beta 更新」按钮不受此字段影响。 */
+/** 后台自动更新渠道。未明确选择时跟随构建类型；手动检查按钮不受此字段影响。 */
 export type UpdateChannel = 'stable' | 'beta';
 
 export type ThemeMode = 'system' | 'light' | 'dark';
@@ -482,9 +481,11 @@ export interface UserPreferences {
   startMinimized: boolean;
   /** UI theme preference: follow OS, light, or dark. */
   themeMode: ThemeMode;
-  /** 后台自动更新渠道。stable（默认）= AutoUpdateGate 查正式版 manifest；
-   *  beta = 查 Beta manifest。About / Advanced 的手动检查按钮各自固定 stable/beta。 */
+  /** 后台自动更新渠道。用户未明确选择时跟随当前构建类型；
+   * About / Advanced 的手动检查按钮各自固定 stable/beta。 */
   updateChannel: UpdateChannel;
+  /** 是否由用户明确选择过更新渠道；缺失时由当前构建类型决定默认渠道。 */
+  updateChannelExplicit?: boolean;
   /** 流式输入：润色 SSE 一边到达一边逐字模拟键盘事件输出到当前焦点。开启后用户感知到
    *  的处理时延显著降低。v1 限定 macOS + OpenAI-compatible provider，其他配置自动回落
    *  到原一次性插入。默认 true。 */

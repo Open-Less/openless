@@ -1464,6 +1464,10 @@ export const en: typeof zhCN = {
           title: 'Update available',
           desc: 'OpenLess {{version}} is available. Update now?',
         },
+        stableChannelSwitch: {
+          title: 'Switch to Stable',
+          desc: 'Current version: OpenLess {{currentVersion}}\nTarget version: OpenLess {{version}}\nThis switches from the Beta channel to Stable. Continue?',
+        },
         downloading: {
           title: 'Downloading update',
           desc: 'Downloading OpenLess {{version}}. Keep the app open.',

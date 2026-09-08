@@ -2,7 +2,9 @@ use super::*;
 
 #[tauri::command]
 pub fn get_settings(core: CoreState<'_>) -> UserPreferences {
-    core.get_preferences()
+    let mut prefs = core.get_preferences();
+    prefs.update_channel = effective_update_channel(None, &prefs, env!("CARGO_PKG_VERSION"));
+    prefs
 }
 
 #[tauri::command]
@@ -143,8 +145,10 @@ impl openless_core::SettingsRuntime for TauriSettingsRuntime<'_> {
     }
 }
 
-pub(crate) fn persist_settings(coord: &Coordinator, prefs: UserPreferences) -> Result<(), String> {
-    let _host_guard = coord.lock_settings_host();
+fn persist_settings_with_host_lock_held(
+    coord: &Coordinator,
+    prefs: UserPreferences,
+) -> Result<(), String> {
     coord
         .backend()
         .update_settings(
@@ -163,11 +167,22 @@ pub(crate) fn persist_settings(coord: &Coordinator, prefs: UserPreferences) -> R
         .map_err(|error| error.to_string())
 }
 
-pub(crate) fn persist_strict_settings(
+fn persist_settings_preserving_update_channel(
     coord: &Coordinator,
-    prefs: UserPreferences,
+    mut prefs: UserPreferences,
 ) -> Result<(), String> {
     let _host_guard = coord.lock_settings_host();
+    // 在同一把写锁内读取并回填，避免并发渠道切换被旧设置快照覆盖。
+    preserve_update_channel_preferences(&mut prefs, &coord.backend().get_preferences());
+    persist_settings_with_host_lock_held(coord, prefs)
+}
+
+pub(crate) fn persist_strict_settings(
+    coord: &Coordinator,
+    mut prefs: UserPreferences,
+) -> Result<(), String> {
+    let _host_guard = coord.lock_settings_host();
+    preserve_update_channel_preferences(&mut prefs, &coord.backend().get_preferences());
     coord
         .backend()
         .update_settings(
@@ -214,7 +229,7 @@ pub async fn set_settings(
     // 广播给所有 webview。issue #205：QaPanel 跑在独立 webview，
     // 没有 HotkeySettingsContext，必须靠事件感知录音键变化，否则面板可见时
     // 用户改键会让浮窗里的 "{recordHotkey}" 文案一直停留在旧值。
-    persist_settings(&*coord, prefs)?;
+    persist_settings_preserving_update_channel(&*coord, prefs)?;
     let prefs = coord.backend().get_preferences();
     // 保存即同步胶囊样式原子：下一次录音的入场帧就携带新样式，不依赖 emit_capsule
     // 主线程闭包的 ~30Hz 同步（Windows 主线程拥塞时闭包延迟 → 整场显示旧样式）。
@@ -277,7 +292,7 @@ pub async fn set_settings(
     sync_style_pack_preferences(&mut prefs, &packs);
     prefs.android_overlay_trigger = prefs.android_overlay_trigger.normalized();
     invalidate_llm_tests_if_thinking_changed(&coord, &previous, &prefs).await?;
-    persist_settings(&*coord, prefs)?;
+    persist_settings_preserving_update_channel(&*coord, prefs)?;
     let prefs = coord.backend().get_preferences();
     // 保存即同步胶囊样式原子（Android 通知胶囊 payload 同源，见 emit_capsule）。
     coord.sync_capsule_style_from_preferences();
@@ -317,6 +332,63 @@ mod tests {
         );
         assert_eq!(stale_settings_payload.default_mode, PolishMode::Light);
     }
+
+    #[test]
+    fn update_channel_defaults_to_build_channel_until_user_selects_one() {
+        let mut prefs = UserPreferences::default();
+
+        assert_eq!(
+            effective_update_channel(None, &prefs, "2.0.0-Beta.1"),
+            UpdateChannel::Beta
+        );
+        assert_eq!(
+            effective_update_channel(None, &prefs, "2.0.0"),
+            UpdateChannel::Stable
+        );
+        let legacy_beta = UserPreferences {
+            update_channel: UpdateChannel::Beta,
+            update_channel_explicit: true,
+            ..UserPreferences::default()
+        };
+        assert_eq!(
+            effective_update_channel(None, &legacy_beta, "2.0.0"),
+            UpdateChannel::Beta
+        );
+        assert_eq!(
+            effective_update_channel(Some(UpdateChannel::Stable), &prefs, "2.0.0-Beta.1"),
+            UpdateChannel::Stable
+        );
+
+        assert!(select_update_channel(&mut prefs, UpdateChannel::Stable));
+        assert!(prefs.update_channel_explicit);
+        assert_eq!(
+            effective_update_channel(None, &prefs, "2.0.0-Beta.1"),
+            UpdateChannel::Stable
+        );
+        assert!(!select_update_channel(&mut prefs, UpdateChannel::Stable));
+        assert!(select_update_channel(&mut prefs, UpdateChannel::Beta));
+        assert_eq!(prefs.update_channel, UpdateChannel::Beta);
+        assert!(prefs.update_channel_explicit);
+    }
+
+    #[test]
+    fn general_settings_save_preserves_dedicated_update_channel_fields() {
+        let current = UserPreferences {
+            update_channel: UpdateChannel::Stable,
+            update_channel_explicit: true,
+            ..UserPreferences::default()
+        };
+        let mut stale_payload = UserPreferences {
+            update_channel: UpdateChannel::Beta,
+            update_channel_explicit: false,
+            ..UserPreferences::default()
+        };
+
+        preserve_update_channel_preferences(&mut stale_payload, &current);
+
+        assert_eq!(stale_payload.update_channel, UpdateChannel::Stable);
+        assert!(stale_payload.update_channel_explicit);
+    }
 }
 
 // ─────────────────────────── release channel (Beta opt-in) ───────────────────────────
@@ -332,9 +404,38 @@ mod tests {
 // （Beta tag 的 manifest 文件名带 `-beta` 后缀，跟 Stable manifest 在 GitHub
 // Release assets 里物理分离）。
 
+fn effective_update_channel(
+    requested: Option<UpdateChannel>,
+    prefs: &UserPreferences,
+    app_version: &str,
+) -> UpdateChannel {
+    requested.unwrap_or_else(|| {
+        if prefs.update_channel_explicit {
+            prefs.update_channel
+        } else if app_version.contains('-') {
+            UpdateChannel::Beta
+        } else {
+            UpdateChannel::Stable
+        }
+    })
+}
+
+fn select_update_channel(prefs: &mut UserPreferences, channel: UpdateChannel) -> bool {
+    let changed = prefs.update_channel != channel || !prefs.update_channel_explicit;
+    prefs.update_channel = channel;
+    prefs.update_channel_explicit = true;
+    changed
+}
+
+fn preserve_update_channel_preferences(incoming: &mut UserPreferences, current: &UserPreferences) {
+    incoming.update_channel = current.update_channel;
+    incoming.update_channel_explicit = current.update_channel_explicit;
+}
+
 #[tauri::command]
 pub fn get_update_channel(core: CoreState<'_>) -> UpdateChannel {
-    core.get_preferences().update_channel
+    let prefs = core.get_preferences();
+    effective_update_channel(None, &prefs, env!("CARGO_PKG_VERSION"))
 }
 
 #[tauri::command]
@@ -342,12 +443,13 @@ pub fn set_update_channel(
     coord: CoordinatorState<'_>,
     channel: UpdateChannel,
 ) -> Result<(), String> {
+    // 渠道读取和持久化必须同属一个写临界区，避免反向覆盖并发常规设置。
+    let _host_guard = coord.lock_settings_host();
     let mut prefs = coord.backend().get_preferences();
-    if prefs.update_channel == channel {
+    if !select_update_channel(&mut prefs, channel) {
         return Ok(());
     }
-    prefs.update_channel = channel;
-    persist_settings(&*coord, prefs)?;
+    persist_settings_with_host_lock_held(&*coord, prefs)?;
     Ok(())
 }
 
@@ -485,7 +587,7 @@ pub struct AppUpdateMetadata {
 
 /// 决定 manifest 来源后走 plugin-updater 的标准 check 流程。
 /// 渠道：显式传入 `channel` 时用它（关于页固定查 Stable、高级页 Beta 区查 Beta）；
-/// 不传则回落到 `prefs.update_channel`（后台 AutoUpdateGate 自动检查走这条）。
+/// 不传则使用用户明确选择的渠道；尚未选择时跟随当前构建类型。
 /// 返回 None = 当前是最新；Some(metadata) = 有新版可装。
 #[tauri::command]
 #[cfg(not(mobile))]
@@ -497,7 +599,8 @@ pub async fn app_check_update_with_channel<R: tauri::Runtime>(
 ) -> Result<Option<AppUpdateMetadata>, String> {
     use tauri_plugin_updater::UpdaterExt;
 
-    let channel = channel.unwrap_or_else(|| coord.backend().get_preferences().update_channel);
+    let prefs = coord.backend().get_preferences();
+    let channel = effective_update_channel(channel, &prefs, env!("CARGO_PKG_VERSION"));
     let mut builder = webview.updater_builder();
     if let Some(ms) = timeout_ms {
         builder = builder.timeout(std::time::Duration::from_millis(ms));
@@ -561,7 +664,8 @@ pub async fn app_check_update_with_channel(
 ) -> Result<Option<AppUpdateMetadata>, String> {
     #[cfg(target_os = "android")]
     {
-        let channel = channel.unwrap_or_else(|| coord.backend().get_preferences().update_channel);
+        let prefs = coord.backend().get_preferences();
+        let channel = effective_update_channel(channel, &prefs, env!("CARGO_PKG_VERSION"));
         return crate::android::updater::check_update(channel).await;
     }
     #[cfg(not(target_os = "android"))]

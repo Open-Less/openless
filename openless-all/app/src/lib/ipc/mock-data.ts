@@ -110,6 +110,7 @@ export let mockSettings: UserPreferences = {
     startMinimized: false,
     themeMode: "system",
     updateChannel: "stable",
+    updateChannelExplicit: false,
     streamingInsert: true,
     streamingInsertDefaultMigrated: true,
     streamingInsertSaveClipboard: true,

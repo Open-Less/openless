@@ -1462,6 +1462,10 @@ export const zhCN = {
           title: '发现新版本',
           desc: '发现 OpenLess {{version}}，是否现在更新？',
         },
+        stableChannelSwitch: {
+          title: '切换到正式版',
+          desc: '当前版本：OpenLess {{currentVersion}}\n目标版本：OpenLess {{version}}\n这是从 Beta 渠道切换到正式版，是否继续？',
+        },
         downloading: {
           title: '正在下载更新',
           desc: '正在下载 OpenLess {{version}}，请保持应用打开。',
