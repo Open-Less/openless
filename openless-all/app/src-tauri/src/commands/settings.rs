@@ -179,6 +179,21 @@ pub(crate) fn persist_strict_settings(
         .map_err(|error| error.to_string())
 }
 
+async fn invalidate_llm_tests_if_thinking_changed(
+    coord: &Coordinator,
+    previous: &UserPreferences,
+    next: &UserPreferences,
+) -> Result<(), String> {
+    if previous.llm_thinking_enabled != next.llm_thinking_enabled {
+        coord
+            .backend()
+            .invalidate_channel_tests(openless_core::ChannelKind::Llm)
+            .await
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
 #[cfg(not(mobile))]
 #[tauri::command]
 pub async fn set_settings(
@@ -195,6 +210,7 @@ pub async fn set_settings(
         .map_err(|e| e.to_string())?;
     sync_style_pack_preferences(&mut prefs, &packs);
     prefs.android_overlay_trigger = prefs.android_overlay_trigger.normalized();
+    invalidate_llm_tests_if_thinking_changed(&coord, &remote_prev, &prefs).await?;
     // 广播给所有 webview。issue #205：QaPanel 跑在独立 webview，
     // 没有 HotkeySettingsContext，必须靠事件感知录音键变化，否则面板可见时
     // 用户改键会让浮窗里的 "{recordHotkey}" 文案一直停留在旧值。
@@ -249,7 +265,10 @@ pub async fn set_settings(
 
 #[cfg(mobile)]
 #[tauri::command]
-pub fn set_settings(coord: CoordinatorState<'_>, mut prefs: UserPreferences) -> Result<(), String> {
+pub async fn set_settings(
+    coord: CoordinatorState<'_>,
+    mut prefs: UserPreferences,
+) -> Result<(), String> {
     let previous = coord.backend().get_preferences();
     let packs = coord
         .backend()
@@ -257,6 +276,7 @@ pub fn set_settings(coord: CoordinatorState<'_>, mut prefs: UserPreferences) -> 
         .map_err(|e| e.to_string())?;
     sync_style_pack_preferences(&mut prefs, &packs);
     prefs.android_overlay_trigger = prefs.android_overlay_trigger.normalized();
+    invalidate_llm_tests_if_thinking_changed(&coord, &previous, &prefs).await?;
     persist_settings(&*coord, prefs)?;
     let prefs = coord.backend().get_preferences();
     // 保存即同步胶囊样式原子（Android 通知胶囊 payload 同源，见 emit_capsule）。

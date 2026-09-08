@@ -88,6 +88,10 @@ export function invalidateMockChannelTest(id: string): void {
     if (channel) channel.lastTest = null
 }
 
+export function invalidateMockChannelTests(kind: ChannelKind): void {
+    for (const channel of mockChannels[kind]) channel.lastTest = null
+}
+
 /** 返回后端分配的渠道 id。 */
 export function createChannel(
     kind: ChannelKind,
@@ -130,7 +134,18 @@ export function deleteChannelIfBlank(
     kind: ChannelKind,
     id: string,
 ): Promise<boolean> {
-    return invokeOrMock("delete_channel_if_blank", { kind, id }, () => true)
+    return invokeOrMock("delete_channel_if_blank", { kind, id }, () => {
+        const channel = mockChannels[kind].find(channel => channel.id === id)
+        const prefix = `${id}:`
+        const hasCredentials = [...mockCredentialValues]
+            .some(([key, value]) => key.startsWith(prefix) && value.length > 0)
+        if (!channel || channel.name.trim() || hasCredentials) return false
+        mockChannels[kind] = mockChannels[kind].filter(channel => channel.id !== id)
+        for (const key of mockCredentialValues.keys()) {
+            if (key.startsWith(prefix)) mockCredentialValues.delete(key)
+        }
+        return true
+    })
 }
 
 export function renameChannel(

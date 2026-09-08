@@ -1,7 +1,8 @@
 import { protocolValidationError, type ProtocolValues } from './LlmProtocolFields';
 import { listProviderDescriptors } from '../../lib/ipc/providers';
-import { createChannel, deleteChannel, listChannels, recordChannelTest, setChannelProviderType } from '../../lib/ipc/channels';
+import { createChannel, deleteChannel, deleteChannelIfBlank, listChannels, recordChannelTest, setChannelProviderType } from '../../lib/ipc/channels';
 import { readCredential, setCredential } from '../../lib/ipc/asr-credentials';
+import { getSettings, setSettings } from '../../lib/ipc/settings';
 import { presetsFor } from './ChannelList';
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -33,5 +34,21 @@ assert((await listChannels('llm')).find(c => c.id === first)?.lastTest === null,
 await setChannelProviderType('llm', first, 'custom_responses');
 assert(await readCredential('ark.request_format', first) === null, 'Changing preset resets the format override');
 assert(await readCredential('ark.api_key', first) === 'fixture-key', 'Changing preset preserves the key');
+await recordChannelTest('llm', first, true, 1, null);
+const settings = await getSettings();
+const asrTestAt = (await listChannels('asr'))[0].lastTest?.at;
+await setSettings({ ...settings, llmThinkingEnabled: !settings.llmThinkingEnabled });
+assert((await listChannels('llm')).find(c => c.id === first)?.lastTest === null, 'Changing thinking invalidates LLM tests');
+assert((await listChannels('asr'))[0].lastTest?.at === asrTestAt, 'Changing thinking preserves ASR tests');
+await setSettings(settings);
+
+const blank = await createChannel('llm', 'custom', '');
+assert(await deleteChannelIfBlank('llm', blank), 'An empty browser draft should be recycled');
+assert(!(await listChannels('llm')).some(channel => channel.id === blank), 'A recycled browser draft must leave no channel');
+const configured = await createChannel('llm', 'custom', '');
+await setCredential('ark.api_key', 'keep-me', configured);
+assert(!(await deleteChannelIfBlank('llm', configured)), 'A configured browser draft must be preserved');
+assert((await listChannels('llm')).some(channel => channel.id === configured), 'A configured browser draft must remain visible');
+await deleteChannel('llm', configured);
 await deleteChannel('llm', first);
 await deleteChannel('llm', second);

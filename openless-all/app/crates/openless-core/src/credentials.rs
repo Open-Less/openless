@@ -133,6 +133,9 @@ pub enum ChannelMutation {
         kind: ChannelKind,
         id: String,
     },
+    InvalidateTests {
+        kind: ChannelKind,
+    },
     /// Commit a prepared local runtime and its channel in one metadata revision.
     ActivateLocalAsr {
         id: Option<String>,
@@ -524,6 +527,7 @@ impl CredentialMetadata {
             ChannelMutation::Create { kind, .. }
             | ChannelMutation::SetProviderType { kind, .. }
             | ChannelMutation::InvalidateTest { kind, .. }
+            | ChannelMutation::InvalidateTests { kind }
             | ChannelMutation::DeleteIfBlank { kind, .. }
             | ChannelMutation::Rename { kind, .. }
             | ChannelMutation::Delete { kind, .. }
@@ -637,6 +641,12 @@ impl CredentialMetadata {
             }
             ChannelMutation::InvalidateTest { kind, id } => {
                 find_channel_mut(&mut self.channels, kind, &id)?.last_test = None;
+                (kind, ChannelMutationResult::Applied)
+            }
+            ChannelMutation::InvalidateTests { kind } => {
+                for channel in self.channels.entry(kind).or_default() {
+                    channel.last_test = None;
+                }
                 (kind, ChannelMutationResult::Applied)
             }
             ChannelMutation::DeleteIfBlank { kind, id } => {

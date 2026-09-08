@@ -7,6 +7,7 @@ import {
     type StartupSnapshot,
 } from "./shared"
 import { mockSettings, mockDefaultStyleSystemPrompts, mockSetSettings } from "./mock-data"
+import { invalidateMockChannelTests } from "./channels"
 
 export { BACKEND_CONTRACT_VERSION }
 export type { StartupSnapshot }
@@ -27,7 +28,9 @@ export function getDefaultStyleSystemPrompts(): Promise<StyleSystemPrompts> {
 
 export function setSettings(prefs: UserPreferences): Promise<void> {
     return invokeOrMock("set_settings", { prefs }, () => {
+        const thinkingChanged = mockSettings.llmThinkingEnabled !== prefs.llmThinkingEnabled
         mockSetSettings(prefs)
+        if (thinkingChanged) invalidateMockChannelTests("llm")
         return undefined
     })
 }

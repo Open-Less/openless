@@ -893,7 +893,7 @@ mod tests {
         use crate::llm_protocol::*;
         for (format, preset, sse, path) in [
             ("responses", "custom_responses", "data: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n\ndata: {\"type\":\"response.completed\"}\n\n", "/v1/responses"),
-            ("messages", "custom_messages", "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"ok\"}}\n\ndata: {\"type\":\"message_stop\"}\n\n", "/v1/messages"),
+            ("messages", "custom_messages", "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"ok\"}}\n\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n\ndata: {\"type\":\"message_stop\"}\n\n", "/v1/messages"),
         ] {
             for enabled in [false, true] {
                 let (endpoint, request) = spawn_http_response("200 OK", "text/event-stream", sse);
@@ -909,7 +909,8 @@ mod tests {
                 assert!(request.starts_with(&format!("POST {path} ")));
                 let body: serde_json::Value = serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
                 if format == "responses" { assert_eq!(body["reasoning"]["effort"], if enabled { "medium" } else { "low" }); }
-                else { assert_eq!(body["thinking"]["type"], if enabled { "adaptive" } else { "disabled" }); }
+                else if enabled { assert_eq!(body["thinking"]["type"], "adaptive"); }
+                else { assert!(body.get("thinking").is_none()); }
             }
             let (endpoint, request) = spawn_http_response("200 OK", "application/json", r#"{"data":[{"id":"model"}]}"#);
             let credentials = Arc::new(InMemoryCredentialStore::default());

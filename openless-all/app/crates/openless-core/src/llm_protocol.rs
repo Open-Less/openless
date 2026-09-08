@@ -259,13 +259,14 @@ pub(crate) fn request_body(
             if !system.is_empty() {
                 body["system"] = json!(system.join("\n\n"));
             }
-            body["thinking"] = if !config.thinking_enabled {
-                json!({"type": "disabled"})
-            } else if config.protocol.messages_thinking == MessagesThinking::Adaptive {
-                json!({"type": "adaptive"})
-            } else {
-                json!({"type": "enabled", "budget_tokens": config.protocol.thinking_budget})
-            };
+            if config.thinking_enabled {
+                body["thinking"] =
+                    if config.protocol.messages_thinking == MessagesThinking::Adaptive {
+                        json!({"type": "adaptive"})
+                    } else {
+                        json!({"type": "enabled", "budget_tokens": config.protocol.thinking_budget})
+                    };
+            }
             body
         }
     };
@@ -283,13 +284,14 @@ fn response_error(message: &str) -> LLMError {
     LLMError::ParseError(message.to_string())
 }
 
-fn check_stop_reason(value: &Value) -> Result<(), LLMError> {
+fn check_stop_reason(value: &Value) -> Result<bool, LLMError> {
     if let Some(reason) = value.as_str() {
         if !matches!(reason, "end_turn" | "stop_sequence") {
             return Err(response_error("llmResponseIncomplete"));
         }
+        return Ok(true);
     }
-    Ok(())
+    Ok(false)
 }
 
 pub(crate) fn extract_text(format: LlmRequestFormat, text: &str) -> Result<String, LLMError> {
@@ -316,8 +318,7 @@ pub(crate) fn extract_text(format: LlmRequestFormat, text: &str) -> Result<Strin
             }
         }
         LlmRequestFormat::Messages => {
-            check_stop_reason(&value["stop_reason"])?;
-            if value["stop_reason"].is_null() {
+            if !check_stop_reason(&value["stop_reason"])? {
                 return Err(response_error("llmResponseIncomplete"));
             }
             append_blocks(&mut output, &value["content"], "text");
@@ -353,6 +354,7 @@ pub(crate) struct TextEventStream {
     format: LlmRequestFormat,
     buffer: String,
     pending: Vec<u8>,
+    messages_complete: bool,
     pub done: bool,
 }
 
@@ -362,6 +364,7 @@ impl TextEventStream {
             format,
             buffer: String::new(),
             pending: Vec::new(),
+            messages_complete: false,
             done: false,
         }
     }
@@ -441,10 +444,15 @@ impl TextEventStream {
                     value["delta"]["text"].as_str()
                 }
                 "message_delta" => {
-                    check_stop_reason(&value["delta"]["stop_reason"])?;
+                    if check_stop_reason(&value["delta"]["stop_reason"])? {
+                        self.messages_complete = true;
+                    }
                     None
                 }
                 "message_stop" => {
+                    if !self.messages_complete {
+                        return Err(response_error("llmResponseIncomplete"));
+                    }
                     self.done = true;
                     None
                 }
@@ -640,16 +648,18 @@ mod tests {
                 assert_eq!(body["system"], "rules");
                 assert_eq!(body["messages"], json!(&messages[1..]));
                 assert_eq!(body["max_tokens"], 8192);
-                assert_eq!(
-                    body["thinking"]["type"],
-                    if !enabled {
-                        "disabled"
-                    } else if mode == MessagesThinking::Adaptive {
-                        "adaptive"
-                    } else {
-                        "enabled"
-                    }
-                );
+                if enabled {
+                    assert_eq!(
+                        body["thinking"]["type"],
+                        if mode == MessagesThinking::Adaptive {
+                            "adaptive"
+                        } else {
+                            "enabled"
+                        }
+                    );
+                } else {
+                    assert!(body.get("thinking").is_none());
+                }
                 assert_eq!(body.get("temperature").is_none(), enabled);
                 if enabled && mode == MessagesThinking::Budget {
                     assert_eq!(body["thinking"]["budget_tokens"], 1024);
@@ -745,5 +755,18 @@ mod tests {
                 .expect("must reject unsuccessful streams");
             assert!(!error.to_string().contains("secret"));
         }
+
+        let mut stream = TextEventStream::new(LlmRequestFormat::Messages);
+        stream
+            .push(
+                b"data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"partial\"}}\n\ndata: {\"type\":\"message_stop\"}\n\n",
+            )
+            .unwrap();
+        assert!(matches!(stream.next().unwrap(), Some(StreamEvent::Text(_))));
+        let error = match stream.next() {
+            Err(error) => error,
+            Ok(_) => panic!("message_stop without stop_reason must fail"),
+        };
+        assert!(error.to_string().contains("llmResponseIncomplete"));
     }
 }

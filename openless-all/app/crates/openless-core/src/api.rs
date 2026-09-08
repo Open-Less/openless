@@ -3644,6 +3644,12 @@ impl OpenLessBackend {
         .map(|_| ())
     }
 
+    pub async fn invalidate_channel_tests(&self, kind: ChannelKind) -> Result<(), BackendError> {
+        self.apply_channel_mutation(ChannelMutation::InvalidateTests { kind })
+            .await
+            .map(|_| ())
+    }
+
     pub async fn active_provider(&self, slot: ProviderSlot) -> Result<String, BackendError> {
         self.deps.credential_store.active_provider(slot).await
     }
@@ -8321,6 +8327,40 @@ mod tests {
             events.try_recv().unwrap().kind,
             BackendEventKind::CredentialsChanged(_)
         ));
+    }
+
+    #[tokio::test]
+    async fn invalidating_llm_tests_preserves_asr_test_results() {
+        let (backend, _) = backend();
+        for (kind, provider, name) in [
+            (ChannelKind::Llm, "custom", "first"),
+            (ChannelKind::Llm, "custom_messages", "second"),
+            (ChannelKind::Asr, "openai-compatible", "asr"),
+        ] {
+            let id = backend
+                .create_channel(kind, provider.into(), name.into())
+                .await
+                .unwrap();
+            backend
+                .record_channel_test(kind, id, true, Some(1), None)
+                .await
+                .unwrap();
+        }
+
+        backend
+            .invalidate_channel_tests(ChannelKind::Llm)
+            .await
+            .unwrap();
+
+        assert!(backend
+            .list_channels(ChannelKind::Llm)
+            .await
+            .unwrap()
+            .iter()
+            .all(|channel| channel.last_test.is_none()));
+        assert!(backend.list_channels(ChannelKind::Asr).await.unwrap()[0]
+            .last_test
+            .is_some());
     }
 
     #[tokio::test]

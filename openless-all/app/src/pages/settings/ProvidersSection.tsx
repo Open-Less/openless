@@ -166,10 +166,13 @@ export function ChannelCredentialFields({
     if (!prefs) return;
     onLlmMutation();
     trackField('thinking', true);
-    void updatePrefs(current => ({ ...current, llmThinkingEnabled: enabled })).catch(error => {
-      console.error('[settings] failed to update LLM thinking mode', error);
-      emitSaved('failed', t('common.operationFailed'));
-    }).finally(() => trackField('thinking', false));
+    void updatePrefs(current => ({ ...current, llmThinkingEnabled: enabled }))
+      .then(() => onTested?.())
+      .catch(error => {
+        console.error('[settings] failed to update LLM thinking mode', error);
+        emitSaved('failed', t('common.operationFailed'));
+      })
+      .finally(() => trackField('thinking', false));
   };
 
   // Provider policy 必须 fail-closed：Core descriptor 尚未返回或加载失败时，

@@ -2178,7 +2178,7 @@ mod tests {
                         let response = match format {
                             LlmRequestFormat::ChatCompletions => "data: {\"choices\":[{\"delta\":{\"content\":\"你好\"}}]}\r\n\r\ndata: [DONE]\r\n\r\n",
                             LlmRequestFormat::Responses => "data: {\"type\":\"response.output_text.delta\",\"delta\":\"你好\"}\r\n\r\ndata: {\"type\":\"response.completed\"}\r\n\r\n",
-                            LlmRequestFormat::Messages => "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"你好\"}}\r\n\r\ndata: {\"type\":\"message_stop\"}\r\n\r\n",
+                            LlmRequestFormat::Messages => "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"你好\"}}\r\n\r\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\r\n\r\ndata: {\"type\":\"message_stop\"}\r\n\r\n",
                         };
                         let split = response.find('好').unwrap() + 1;
                         write_chunked_sse_response(
