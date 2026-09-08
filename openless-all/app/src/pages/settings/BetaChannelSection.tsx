@@ -13,6 +13,7 @@ import { CheckUpdateButton } from './CheckUpdateButton';
 export function BetaChannelSection() {
   const { t } = useTranslation();
   const [channel, setChannel] = useState<UpdateChannel>('stable');
+  const [autoCheckChannel, setAutoCheckChannel] = useState<UpdateChannel | null>(null);
   const [platformCaps, setPlatformCaps] = useState<PlatformCapabilities | null>(null);
 
   useEffect(() => {
@@ -34,7 +35,9 @@ export function BetaChannelSection() {
       await setUpdateChannel(target);
     } catch {
       setChannel(target === 'beta' ? 'stable' : 'beta');
+      return;
     }
+    setAutoCheckChannel(target);
   };
 
   if (platformCaps?.supportsAutoUpdate !== true) return null;
@@ -49,7 +52,7 @@ export function BetaChannelSection() {
         <Toggle on={channel === 'beta'} onToggle={onToggle} />
       </SettingRow>
       <div style={{ display: 'flex', justifyContent: 'flex-end', paddingTop: 4 }}>
-        <CheckUpdateButton channel="beta" />
+        <CheckUpdateButton channel="beta" autoCheckChannel={autoCheckChannel} />
       </div>
     </Card>
   );

@@ -27,6 +27,11 @@ import type {
 } from '../lib/types';
 import { VocabSuggestionCard } from './VocabSuggestionCard';
 import { InsertFallbackCard } from './InsertFallbackCard';
+import {
+  applyTranscriptEvent,
+  type BackendEvent,
+  type TranscriptViewState,
+} from '../lib/backendEvent';
 
 // 胶囊 keyframes 注入一次到 document.head，而不是放在组件 JSX 里。否则录音时音量
 // 每帧（~60Hz）setLevel 都会让 React 重新创建/reconcile 这个 <style> 元素 —— 纯属
@@ -748,6 +753,11 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
   const [level, setLevel] = useState<number>(preview.level);
   const [message, setMessage] = useState<string | undefined>(preview.message);
   const [localAsrText, setLocalAsrText] = useState('');
+  const transcriptViewRef = useRef<TranscriptViewState>({
+    sessionId: null,
+    sequence: 0,
+    text: '',
+  });
   const [translation, setTranslation] = useState<boolean>(preview.translation);
   const [selectionPolish, setSelectionPolish] = useState<boolean>(preview.selectionPolish);
   // 胶囊样式（siri / classic）：随 capsule:state payload 下发；设置里切换后还会经
@@ -828,8 +838,10 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
         if (p.insertedChars != null) insertedCharsRef.current = p.insertedChars;
         operatingRef.current = p.operating === true;
       });
-      const tokenHandle = await listen<string>('local-asr-token', event => {
-        setLocalAsrText(prev => prev + event.payload);
+      const transcriptHandle = await listen<BackendEvent>('backend:event', event => {
+        const next = applyTranscriptEvent(transcriptViewRef.current, event.payload);
+        transcriptViewRef.current = next;
+        setLocalAsrText(next.text);
       });
       const suggestHandle = await listen<PendingCorrection[]>('vocab:suggested', event => {
         setSuggestions(event.payload ?? []);
@@ -842,13 +854,13 @@ export function Capsule({ os: forcedOs }: CapsuleProps = {}) {
       );
       if (cancelled) {
         handle();
-        tokenHandle();
+        transcriptHandle();
         suggestHandle();
         fallbackHandle();
       } else {
         unlisten = () => {
           handle();
-          tokenHandle();
+          transcriptHandle();
           suggestHandle();
           fallbackHandle();
         };

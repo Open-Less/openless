@@ -1,0 +1,261 @@
+name: Release Linux egui
+
+# This workflow deliberately has no automatic tag trigger until real Ubuntu
+# audio, focus/input, install, upgrade, and rollback evidence is recorded. It is
+# already reusable by a release orchestrator: pass release_tag to upload verified packages.
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing GitHub release tag to receive Linux assets; blank only uploads Actions artifacts
+        required: false
+        type: string
+  workflow_call:
+    inputs:
+      release_tag:
+        required: false
+        type: string
+    secrets:
+      LINUX_EGUI_MINISIGN_SECRET_KEY:
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux-egui:
+    runs-on: ubuntu-22.04
+    env:
+      RELEASE_TAG: ${{ inputs.release_tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Install native build and packaging dependencies
+        run: |
+          sudo add-apt-repository -y universe || true
+          sudo apt-get update
+          sudo apt-get install -y \
+            appstream \
+            build-essential \
+            cmake \
+            desktop-file-utils \
+            extra-cmake-modules \
+            fcitx5-modules-dev \
+            file \
+            fuse \
+            libasound2-dev \
+            libdbus-1-dev \
+            libfcitx5config-dev \
+            libfcitx5core-dev \
+            libfcitx5utils-dev \
+            libopenblas-dev \
+            libssl-dev \
+            libwayland-dev \
+            libx11-dev \
+            libxkbcommon-dev \
+            patchelf \
+            pkg-config \
+            ripgrep \
+            rpm \
+            ruby-dev \
+            wget
+          sudo gem install --no-document fpm -v 1.16.0
+
+      - name: Install appimagetool
+        env:
+          APPIMAGETOOL_SHA256: b90f4a8b18967545fda78a445b27680a1642f1ef9488ced28b65398f2be7add2
+        run: |
+          wget -q https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage \
+            -O /tmp/appimagetool
+          echo "$APPIMAGETOOL_SHA256  /tmp/appimagetool" | sha256sum --check --strict
+          chmod +x /tmp/appimagetool
+          sudo install -m 0755 /tmp/appimagetool /usr/local/bin/appimagetool
+          file /usr/local/bin/appimagetool | grep -q ELF
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache Cargo
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: 'openless-all/app -> target'
+
+      - name: Build fcitx5 plugin
+        working-directory: openless-all/scripts/linux-fcitx5-plugin
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
+          cmake --build build --parallel
+          ctest --test-dir build --output-on-failure
+          test -s build/libopenless.so
+          test -s build/openless.conf
+
+      - name: Checkout pinned Qwen ASR runtime source
+        run: git submodule update --init --depth 1 -- openless-all/app/src-tauri/vendor/qwen-asr
+
+      - name: Build portable Qwen ASR runtime
+        working-directory: openless-all/app/src-tauri/vendor/qwen-asr
+        run: |
+          make blas CFLAGS_BASE="-Wall -Wextra -O3 -ffast-math -mtune=generic"
+          test -x qwen_asr
+          ./qwen_asr --help >/dev/null 2>&1
+
+      - name: Verify framework-independent Linux contract
+        working-directory: openless-all/app
+        shell: pwsh
+        run: |
+          cargo test --locked -p openless-core
+          cargo clippy --locked -p openless-core --all-targets -- -D warnings
+          cargo test --locked -p openless-linux-egui --all-targets
+          cargo check --locked -p openless-linux-egui --all-targets
+          ./scripts/check-core-deps.ps1
+          ./scripts/check-core-deps.ps1 openless-linux-egui
+          ./scripts/check-core-secret-surface.ps1
+          ./scripts/check-core-test-isolation.ps1
+          ./scripts/check-core-runtime-seam.ps1
+          ./scripts/check-linux-public-surface.ps1
+
+      - name: Validate release target and UI gate
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ -z "${RELEASE_TAG:-}" ]; then
+            exit 0
+          fi
+          case "$RELEASE_TAG" in
+            v*-tauri) ;;
+            *)
+              echo "::error::release_tag must name an existing v*-tauri release"
+              exit 1
+              ;;
+          esac
+          if grep -q 'openless-linux-egui host stub' openless-all/app/linux-egui/src/main.rs; then
+            echo "::error::The egui UI stub cannot be uploaded as a release asset"
+            exit 1
+          fi
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
+
+      - name: Validate Linux desktop metadata
+        run: |
+          desktop-file-validate openless-all/app/linux-egui/packaging/openless.desktop
+          appstreamcli validate --no-net openless-all/app/linux-egui/packaging/top.openless.OpenLess.metainfo.xml
+
+      - name: Build Linux egui host
+        working-directory: openless-all/app
+        run: cargo build --locked --release -p openless-linux-egui
+
+      - name: Resolve package version
+        id: version
+        shell: bash
+        working-directory: openless-all/app
+        run: |
+          if [ -n "${RELEASE_TAG:-}" ]; then
+            VERSION=${RELEASE_TAG#v}
+            VERSION=${VERSION%-tauri}
+          else
+            VERSION=$(sed -n 's/^version = "\([^"]*\)"/\1/p' src-tauri/Cargo.toml | head -1)
+          fi
+          test -n "$VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Package deb, rpm, and AppImage without Tauri
+        working-directory: openless-all/app
+        env:
+          OPENLESS_LINUX_VERSION: ${{ steps.version.outputs.version }}
+          OPENLESS_LINUX_ARCH: x86_64
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+        run: bash scripts/package-linux-egui.sh
+
+      - name: Verify package contents and ELF dependencies
+        working-directory: openless-all/app
+        run: |
+          OUTPUT=target/linux-egui-packages
+          test "$(find "$OUTPUT" -maxdepth 1 -name '*.deb' | wc -l)" -eq 1
+          test "$(find "$OUTPUT" -maxdepth 1 -name '*.rpm' | wc -l)" -eq 1
+          test "$(find "$OUTPUT" -maxdepth 1 -name '*.AppImage' | wc -l)" -eq 1
+          ! ldd target/release/openless-linux-egui | grep -q 'not found'
+          ! ldd target/release/openless-linux-egui | grep -Eqi 'webkit|wry|tauri'
+          ! ldd src-tauri/vendor/qwen-asr/qwen_asr | grep -q 'not found'
+          dpkg-deb -c "$OUTPUT"/*.deb | grep -q 'usr/bin/openless'
+          dpkg-deb -c "$OUTPUT"/*.deb | grep -q 'fcitx5/libopenless.so'
+          dpkg-deb -c "$OUTPUT"/*.deb | grep -q 'usr/lib/openless/resources/qwen-asr/qwen_asr'
+          rpm -qlp "$OUTPUT"/*.rpm | grep -q '/usr/bin/openless'
+          rpm -qlp "$OUTPUT"/*.rpm | grep -q '/usr/lib64/fcitx5/libopenless.so'
+          rpm -qlp "$OUTPUT"/*.rpm | grep -q '/usr/lib/openless/resources/qwen-asr/qwen_asr'
+          "$OUTPUT"/*.AppImage --appimage-extract >/dev/null
+          test -x squashfs-root/usr/bin/openless
+          test -s squashfs-root/usr/lib/openless/resources/linux-fcitx5-plugin/libopenless.so
+          test -x squashfs-root/usr/lib/openless/resources/qwen-asr/qwen_asr
+          ! ldd squashfs-root/usr/lib/openless/resources/qwen-asr/qwen_asr | grep -q 'not found'
+          squashfs-root/usr/lib/openless/resources/qwen-asr/qwen_asr --help >/dev/null 2>&1
+          rm -rf squashfs-root
+
+      - name: Sign AppImage and write independent updater manifest
+        working-directory: openless-all/app
+        env:
+          MINISIGN_SECRET: ${{ secrets.LINUX_EGUI_MINISIGN_SECRET_KEY }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          OUTPUT=target/linux-egui-packages
+          APPIMAGE=$(find "$OUTPUT" -maxdepth 1 -name '*.AppImage' -print -quit)
+          if [ -n "${RELEASE_TAG:-}" ] && [ -z "${MINISIGN_SECRET:-}" ]; then
+            echo "::error::LINUX_EGUI_MINISIGN_SECRET_KEY is required for release upload"
+            exit 1
+          fi
+          if [ -n "${MINISIGN_SECRET:-}" ]; then
+            if ! command -v minisign >/dev/null 2>&1; then
+              cargo install --locked --version 0.9.1 minisign
+            fi
+            printf '%s' "$MINISIGN_SECRET" > "$RUNNER_TEMP/linux-egui.minisign.key"
+            minisign -S -s "$RUNNER_TEMP/linux-egui.minisign.key" -m "$APPIMAGE" -x "$APPIMAGE.minisig"
+          fi
+          SHA256=$(sha256sum "$APPIMAGE" | cut -d' ' -f1)
+          ASSET=$(basename "$APPIMAGE")
+          RELEASE_REPOSITORY="${GITHUB_REPOSITORY:-Open-Less/openless}"
+          SIGNATURE=null
+          if [ -f "$APPIMAGE.minisig" ]; then
+            SIGNATURE=$(base64 -w0 "$APPIMAGE.minisig" | jq -R .)
+          fi
+          jq -n \
+            --arg version "$VERSION" \
+            --arg url "https://github.com/$RELEASE_REPOSITORY/releases/download/${RELEASE_TAG:-manual}/$ASSET" \
+            --arg sha256 "$SHA256" \
+            --argjson signature "$SIGNATURE" \
+            '{schemaVersion:1, host:"linux-egui", arch:"x86_64", version:$version, url:$url, sha256:$sha256, minisign:$signature}' \
+            > "$OUTPUT/latest-linux-egui-x86_64.json"
+
+      - name: Verify Linux updater manifest matches the artifact
+        working-directory: openless-all/app
+        run: |
+          set -euo pipefail
+          OUTPUT=target/linux-egui-packages
+          APPIMAGE=$(find "$OUTPUT" -maxdepth 1 -name '*.AppImage' -print -quit)
+          MANIFEST="$OUTPUT/latest-linux-egui-x86_64.json"
+          test -s "$APPIMAGE"
+          test -s "$MANIFEST"
+          SHA256=$(sha256sum "$APPIMAGE" | cut -d' ' -f1)
+          RELEASE_REPOSITORY="${GITHUB_REPOSITORY:-Open-Less/openless}"
+          jq -e \
+            --arg sha256 "$SHA256" \
+            --arg repository "$RELEASE_REPOSITORY" \
+            '.schemaVersion == 1 and .host == "linux-egui" and .arch == "x86_64" and .sha256 == $sha256 and (.url | startswith("https://github.com/" + $repository + "/releases/download/"))' \
+            "$MANIFEST" >/dev/null
+
+      - name: Upload Linux egui workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: openless-linux-egui-x86_64
+          path: openless-all/app/target/linux-egui-packages/*
+          if-no-files-found: error
+
+      - name: Upload Linux egui assets to existing release
+        if: inputs.release_tag != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.release_tag }}
+          files: openless-all/app/target/linux-egui-packages/*
+          fail_on_unmatched_files: true

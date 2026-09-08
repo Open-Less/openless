@@ -66,9 +66,14 @@ codesign --verify --deep --strict --verbose=2 "$APP" 2>&1 | tail -2
 
 if [ "$MAC_BUNDLE_ARCH" = "aarch64" ]; then
   echo "▶ 校验 MLX metallib 已进入 app / DMG / updater"
-  APP_METALLIB="$APP/Contents/MacOS/mlx.metallib"
+  APP_METALLIB="$APP/Contents/Resources/mlx.metallib"
   if [ ! -s "$APP_METALLIB" ]; then
-    echo "✗ Apple Silicon app 缺少 Contents/MacOS/mlx.metallib"
+    echo "✗ Apple Silicon app 缺少 Contents/Resources/mlx.metallib"
+    exit 1
+  fi
+  # Contents/MacOS 里的非 Mach-O 会被 codesign 当成 nested code。
+  if [ -e "$APP/Contents/MacOS/mlx.metallib" ]; then
+    echo "✗ mlx.metallib 不能放在 Contents/MacOS（ad-hoc codesign 会失败）"
     exit 1
   fi
   APP_METALLIB_SHA="$(shasum -a 256 "$APP_METALLIB" | awk '{print $1}')"
@@ -84,9 +89,13 @@ if [ "$MAC_BUNDLE_ARCH" = "aarch64" ]; then
   }
   trap cleanup_dmg_mount EXIT
   hdiutil attach "$DMG_PATH" -readonly -nobrowse -mountpoint "$DMG_MOUNT" >/dev/null
-  DMG_METALLIB="$DMG_MOUNT/OpenLess.app/Contents/MacOS/mlx.metallib"
+  DMG_METALLIB="$DMG_MOUNT/OpenLess.app/Contents/Resources/mlx.metallib"
   if [ ! -s "$DMG_METALLIB" ]; then
-    echo "✗ DMG 中缺少 OpenLess.app/Contents/MacOS/mlx.metallib"
+    echo "✗ DMG 中缺少 OpenLess.app/Contents/Resources/mlx.metallib"
+    exit 1
+  fi
+  if [ -e "$DMG_MOUNT/OpenLess.app/Contents/MacOS/mlx.metallib" ]; then
+    echo "✗ DMG 中的 mlx.metallib 不能放在 Contents/MacOS"
     exit 1
   fi
   DMG_METALLIB_SHA="$(shasum -a 256 "$DMG_METALLIB" | awk '{print $1}')"
@@ -104,14 +113,14 @@ if [ "$MAC_BUNDLE_ARCH" = "aarch64" ]; then
       exit 1
     fi
     UPDATER_METALLIB_SHA="$(tar -xOf "$UPDATER_ARCHIVE" \
-      OpenLess.app/Contents/MacOS/mlx.metallib | shasum -a 256 | awk '{print $1}')"
+      OpenLess.app/Contents/Resources/mlx.metallib | shasum -a 256 | awk '{print $1}')"
     if [ "$UPDATER_METALLIB_SHA" != "$APP_METALLIB_SHA" ]; then
       echo "✗ app 与 updater 中的 mlx.metallib SHA-256 不一致"
       exit 1
     fi
   fi
   echo "✓ MLX metallib sha256=$APP_METALLIB_SHA"
-elif [ -e "$APP/Contents/MacOS/mlx.metallib" ]; then
+elif [ -e "$APP/Contents/MacOS/mlx.metallib" ] || [ -e "$APP/Contents/Resources/mlx.metallib" ]; then
   echo "✗ Intel app 不应包含 Apple Silicon MLX metallib"
   exit 1
 fi

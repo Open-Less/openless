@@ -10,6 +10,10 @@ import { defaultDictationHotkey } from '../../lib/hotkey';
 import { emitSaved } from '../../lib/savedEvent';
 import { isHotkeyModeMigrationNoticeActive } from '../../lib/hotkeyMigration';
 import {
+  showWindowsOpenlessKeyboardListToggle,
+  showWindowsSendInputNewlineMode,
+} from '../../lib/windowsKeyboardListToggle';
+import {
   isTauri,
   listMicrophoneDevices,
   setDictationHotkey,
@@ -504,7 +508,10 @@ export function RecordingInputSection() {
           </SettingRow>
         )}
         {capability.adapter === 'windowsLowLevel'
-          && (prefs.windowsInsertionMode === 'sendInput' || prefs.windowsSendInputInsertionOnly) && (
+          && showWindowsSendInputNewlineMode(
+            prefs.windowsInsertionMode,
+            prefs.windowsSendInputInsertionOnly,
+          ) && (
           <SettingRow
             label={t('settings.recording.windowsSendInputNewlineModeLabel')}
             desc={t('settings.recording.windowsSendInputNewlineModeDesc')}
@@ -542,7 +549,10 @@ export function RecordingInputSection() {
           </SettingRow>
         )}
         {capability.adapter === 'windowsLowLevel'
-          && (prefs.windowsInsertionMode === 'sendInput' || prefs.windowsSendInputInsertionOnly) && (
+          && showWindowsOpenlessKeyboardListToggle(
+            prefs.windowsInsertionMode,
+            prefs.windowsSendInputInsertionOnly,
+          ) && (
           <SettingRow
             label={t('settings.recording.windowsShowOpenlessInKeyboardListLabel')}
             desc={t('settings.recording.windowsShowOpenlessInKeyboardListDesc')}

@@ -19,9 +19,11 @@ import {
   logClientError,
   openExternal,
   restartApp,
+  setUpdateChannel,
   type AppUpdateMetadata,
   type UpdateChannel,
 } from '../lib/ipc';
+import { isStableChannelSwitch } from '../lib/appVersion';
 import { Btn } from '../pages/_atoms';
 
 const UPDATE_CHECK_TIMEOUT_MS = 15_000;
@@ -50,6 +52,7 @@ export type CheckUpdateOptions = {
 
 export interface UseAutoUpdate {
   status: UpdateStatus;
+  currentVersion: string;
   version: string;
   progress: number | null;
   downloaded: number;
@@ -72,6 +75,7 @@ export function useAutoUpdate(): UseAutoUpdate {
   const updateRef = useRef<Update | null>(null);
   const androidUpdateRef = useRef<AndroidUpdatePayload | null>(null);
   const [status, setStatus] = useState<UpdateStatus>('idle');
+  const [currentVersion, setCurrentVersion] = useState('');
   const [version, setVersion] = useState('');
   const [downloaded, setDownloaded] = useState(0);
   const [contentLength, setContentLength] = useState<number | null>(null);
@@ -140,6 +144,7 @@ export function useAutoUpdate(): UseAutoUpdate {
 
   const checkForUpdates = async (channel?: UpdateChannel, options?: CheckUpdateOptions) => {
     setStatus('checking');
+    setCurrentVersion('');
     setVersion('');
     setErrorMessage(null);
     resetProgress();
@@ -157,6 +162,7 @@ export function useAutoUpdate(): UseAutoUpdate {
         setStatus('none');
         return;
       }
+      setCurrentVersion(metadata.currentVersion);
       if (isAndroid()) {
         storeAndroidMetadata(metadata);
         setVersion(metadata.version);
@@ -203,12 +209,18 @@ export function useAutoUpdate(): UseAutoUpdate {
   };
 
   const installUpdate = async () => {
+    const persistStableChannelSwitch = () =>
+      isStableChannelSwitch(currentVersion, version)
+        ? setUpdateChannel('stable')
+        : Promise.resolve();
+
     if (isAndroid()) {
       const payload = androidUpdateRef.current;
       if (!payload) return;
       resetProgress();
       setStatus('downloading');
       try {
+        await persistStableChannelSwitch();
         await appDownloadAndInstallAndroidUpdate(payload);
         androidUpdateRef.current = null;
         setStatus('downloaded');
@@ -227,6 +239,7 @@ export function useAutoUpdate(): UseAutoUpdate {
     resetProgress();
     setStatus('downloading');
     try {
+      await persistStableChannelSwitch();
       await update.download((event: DownloadEvent) => {
         if (event.event === 'Started') {
           resetProgress();
@@ -255,12 +268,14 @@ export function useAutoUpdate(): UseAutoUpdate {
     if (busy) return;
     await closeUpdate();
     setStatus('idle');
+    setCurrentVersion('');
     setVersion('');
     resetProgress();
   };
 
   return {
     status,
+    currentVersion,
     version,
     progress,
     downloaded,
@@ -280,6 +295,7 @@ export function isDialogStatus(status: UpdateStatus): status is 'available' | 'd
 
 export function UpdateDialog({
   status,
+  currentVersion,
   version,
   progress,
   downloaded,
@@ -289,6 +305,7 @@ export function UpdateDialog({
   onClose,
 }: {
   status: 'available' | 'downloading' | 'installing' | 'downloaded' | 'installError';
+  currentVersion: string;
   version: string;
   progress: number | null;
   downloaded: number;
@@ -302,6 +319,8 @@ export function UpdateDialog({
   const installing = status === 'installing';
   const installError = status === 'installError';
   const androidInstalled = isAndroid() && status === 'downloaded';
+  const switchingToStable = status === 'available'
+    && isStableChannelSwitch(currentVersion, version);
   // Portal 到 document.body：WindowChrome / 设置弹窗带常驻 transform + will-change，
   // 会创建 containing block——`position: fixed` 的遮罩会相对设置面板定位，只压暗
   // 白色内容区（侧边栏深色看不出，形成「内容变灰、断层感」，见 Modal.tsx 同款注释）。
@@ -309,13 +328,17 @@ export function UpdateDialog({
   return createPortal(
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.22)', display: 'grid', placeItems: 'center', zIndex: 40, animation: 'ol-modal-backdrop-in 0.18s var(--ol-motion-soft)' }}>
       <div style={{ width: 360, borderRadius: 16, background: 'var(--ol-surface)', border: '0.5px solid var(--ol-line-strong)', boxShadow: 'var(--ol-shadow-lg)', padding: 18 }}>
-        <div style={{ fontSize: 15, fontWeight: 650, marginBottom: 8 }}>{t(`settings.about.updateDialog.${status}.title`)}</div>
+        <div style={{ fontSize: 15, fontWeight: 650, marginBottom: 8 }}>
+          {t(`settings.about.updateDialog.${switchingToStable ? 'stableChannelSwitch' : status}.title`)}
+        </div>
         <div style={{ fontSize: 12, color: 'var(--ol-ink-3)', lineHeight: 1.6, marginBottom: 14, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
           {androidInstalled
             ? t('settings.about.updateDialog.androidInstalled.desc', { version, defaultValue: '系统安装器已打开，请按提示完成安装。安装后重新打开 OpenLess 即可使用 {{version}}。' })
             : installError
               ? t('settings.about.updateDialog.installError.desc', { error: errorMessage || t('settings.about.updateError') })
-              : t(`settings.about.updateDialog.${status}.desc`, { version })}
+              : switchingToStable
+                ? t('settings.about.updateDialog.stableChannelSwitch.desc', { currentVersion, version })
+                : t(`settings.about.updateDialog.${status}.desc`, { version })}
         </div>
         {(downloading || installing || status === 'downloaded') && (
           <div style={{ marginBottom: 14 }}>

@@ -1,15 +1,7 @@
 import type { CredentialsStatus } from "../types"
 import { invokeOrMock, isTauri } from "./shared"
-import { mockCredentialsStatus } from "./mock-data"
-
-const browserCredentialMock = new Map<string, string>([
-    ["orcarouter-asr:asr.endpoint", "https://api.orcarouter.ai/v1"],
-    ["orcarouter-asr:asr.model", "google/gemini-2.5-flash"],
-])
-
-function browserCredentialKey(account: string, provider?: string): string {
-    return `${provider ?? "active"}:${account}`
-}
+import { mockCredentialsStatus, mockCredentialValues } from "./mock-data"
+import { invalidateMockChannelTest } from "./channels"
 
 export interface ProviderCheckResult {
     ok: boolean
@@ -29,7 +21,8 @@ export function getCredentials(): Promise<CredentialsStatus> {
 
 export function setCredential(account: string, value: string, provider?: string): Promise<void> {
     return invokeOrMock("set_credential", { account, value, provider }, () => {
-        browserCredentialMock.set(browserCredentialKey(account, provider), value)
+        mockCredentialValues.set(`${provider ?? ''}:${account}`, value)
+        if (provider && account.startsWith('ark.')) invalidateMockChannelTest(provider)
     })
 }
 
@@ -61,7 +54,7 @@ export function readCredential(account: string, provider?: string): Promise<stri
     return invokeOrMock<string | null>(
         "read_credential",
         { account, provider },
-        () => browserCredentialMock.get(browserCredentialKey(account, provider)) ?? null,
+        () => mockCredentialValues.get(`${provider ?? ''}:${account}`) ?? null,
     )
 }
 
@@ -81,9 +74,7 @@ export async function listProviderModels(
 ): Promise<ProviderModelsResult> {
     if (!isTauri && (kind === "llm" || kind === "asr")) {
         const endpointAccount = kind === "llm" ? "ark.endpoint" : "asr.endpoint"
-        const endpoint = browserCredentialMock.get(
-            browserCredentialKey(endpointAccount, channelId),
-        )
+        const endpoint = mockCredentialValues.get(`${channelId ?? ''}:${endpointAccount}`)
         if (endpoint) {
             const host = new URL(endpoint).hostname.toLowerCase()
             if (host === "api.orcarouter.ai") {

@@ -2,138 +2,22 @@
 
 use global_hotkey::hotkey::{Code, HotKey, Modifiers};
 
-use crate::types::{HotkeyTrigger, ShortcutBinding};
+#[cfg(test)]
+use crate::types::HotkeyTrigger;
+use crate::types::ShortcutBinding;
 
-#[derive(Debug, thiserror::Error)]
-pub enum ShortcutBindingError {
-    #[error("不支持的修饰键: {0}")]
-    UnsupportedModifier(String),
-    #[error("不支持的主键: {0}")]
-    UnsupportedKey(String),
-}
-
-const SIDE_MODIFIER_TAGS: &[&str] = &[
-    "cmd-left",
-    "cmd-right",
-    "ctrl-left",
-    "ctrl-right",
-    "alt-left",
-    "alt-right",
-    "shift-left",
-    "shift-right",
-    "super-left",
-    "super-right",
-];
-
-pub fn is_side_specific_modifier_tag(raw: &str) -> bool {
-    SIDE_MODIFIER_TAGS.contains(&normalize_side_modifier_tag(raw).as_str())
-}
-
-pub fn binding_requires_side_aware_hook(binding: &ShortcutBinding) -> bool {
-    !binding.modifiers.is_empty()
-        && binding
-            .modifiers
-            .iter()
-            .any(|tag| is_side_specific_modifier_tag(tag))
-}
-
-pub const SIDE_SPECIFIC_NON_DICTATION_MSG: &str =
-    "Side-specific modifier shortcuts are only supported for dictation start/stop.";
-
-pub fn reject_side_specific_non_dictation(binding: &ShortcutBinding) -> Result<(), String> {
-    if binding_requires_side_aware_hook(binding) {
-        return Err(SIDE_SPECIFIC_NON_DICTATION_MSG.to_string());
-    }
-    Ok(())
-}
-
-fn physical_modifier_class(raw: &str) -> String {
-    let tag = normalize_side_modifier_tag(raw);
-    if is_side_specific_modifier_tag(&tag) {
-        if tag.starts_with("cmd-") || tag.starts_with("super-") {
-            return "Super".to_string();
-        }
-        if tag.starts_with("ctrl-") {
-            return "Control".to_string();
-        }
-        if tag.starts_with("alt-") {
-            return "Alt".to_string();
-        }
-        if tag.starts_with("shift-") {
-            return "Shift".to_string();
-        }
-    }
-    physical_class_from_generic_tag(&normalize_modifier_tag(raw))
-}
-
-fn physical_class_from_generic_tag(tag: &str) -> String {
-    match tag {
-        "ctrl" | "control" => "Control".to_string(),
-        "alt" | "option" | "opt" => "Alt".to_string(),
-        "shift" => "Shift".to_string(),
-        #[cfg(target_os = "windows")]
-        "cmd" | "command" => "Control".to_string(),
-        #[cfg(target_os = "windows")]
-        "super" | "meta" | "win" => "Super".to_string(),
-        #[cfg(not(target_os = "windows"))]
-        "cmd" | "command" | "super" | "meta" | "win" => "Super".to_string(),
-        other => other.to_string(),
-    }
-}
-
-fn physical_modifier_set(binding: &ShortcutBinding) -> std::collections::BTreeSet<String> {
-    binding
-        .modifiers
-        .iter()
-        .map(|raw| physical_modifier_class(raw))
-        .collect()
-}
-
-/// Returns true when two bindings would compete for the same physical shortcut.
-pub fn bindings_overlap(left: &ShortcutBinding, right: &ShortcutBinding) -> bool {
-    let left_legacy = legacy_modifier_trigger(left);
-    let right_legacy = legacy_modifier_trigger(right);
-    match (left_legacy, right_legacy) {
-        (Some(left), Some(right)) => left == right,
-        (Some(_), None) | (None, Some(_)) => false,
-        (None, None) => {
-            if normalize_primary(&left.primary) != normalize_primary(&right.primary) {
-                return false;
-            }
-            let left_side = binding_requires_side_aware_hook(left);
-            let right_side = binding_requires_side_aware_hook(right);
-            if left_side && right_side {
-                let left_mods: std::collections::BTreeSet<String> = left
-                    .modifiers
-                    .iter()
-                    .map(|raw| normalize_side_modifier_tag(raw))
-                    .collect();
-                let right_mods: std::collections::BTreeSet<String> = right
-                    .modifiers
-                    .iter()
-                    .map(|raw| normalize_side_modifier_tag(raw))
-                    .collect();
-                return left_mods == right_mods;
-            }
-            physical_modifier_set(left) == physical_modifier_set(right)
-        }
-    }
-}
+pub use openless_core::{
+    binding_requires_side_aware_hook, bindings_overlap, is_side_specific_modifier_tag,
+    legacy_modifier_trigger, normalize_side_modifier_tag, reject_side_specific_non_dictation,
+    ShortcutBindingError, SIDE_SPECIFIC_NON_DICTATION_MSG,
+};
 
 pub fn validate_binding(binding: &ShortcutBinding) -> Result<(), ShortcutBindingError> {
-    if legacy_modifier_trigger(binding).is_some() {
-        return Ok(());
-    }
-    if binding.modifiers.is_empty() && binding.primary.eq_ignore_ascii_case("shift") {
-        return Ok(());
-    }
-    if binding_requires_side_aware_hook(binding) {
-        parse_primary(&binding.primary)?;
-        for raw in &binding.modifiers {
-            if !is_side_specific_modifier_tag(raw) {
-                return Err(ShortcutBindingError::UnsupportedModifier(raw.clone()));
-            }
-        }
+    openless_core::validate_shortcut_binding(binding)?;
+    if legacy_modifier_trigger(binding).is_some()
+        || (binding.modifiers.is_empty() && binding.primary.eq_ignore_ascii_case("shift"))
+        || binding_requires_side_aware_hook(binding)
+    {
         return Ok(());
     }
     parse_global_hotkey(binding)?;
@@ -158,57 +42,6 @@ pub fn parse_global_hotkey(binding: &ShortcutBinding) -> Result<HotKey, Shortcut
     Ok(HotKey::new(mods, code))
 }
 
-pub fn legacy_modifier_trigger(binding: &ShortcutBinding) -> Option<HotkeyTrigger> {
-    if !binding.modifiers.is_empty() {
-        return None;
-    }
-    match normalize_primary(&binding.primary).as_str() {
-        "rightoption" | "rightalt" => Some(HotkeyTrigger::RightOption),
-        "leftoption" | "leftalt" => Some(HotkeyTrigger::LeftOption),
-        "rightcontrol" | "rightctrl" => Some(HotkeyTrigger::RightControl),
-        "leftcontrol" | "leftctrl" => Some(HotkeyTrigger::LeftControl),
-        "rightcommand" | "rightcmd" | "rightsuper" | "rightmeta" => {
-            Some(HotkeyTrigger::RightCommand)
-        }
-        "leftcommand" | "leftcmd" | "leftsuper" | "leftmeta" => Some(HotkeyTrigger::LeftCommand),
-        "leftshift" => Some(HotkeyTrigger::LeftShift),
-        "rightshift" => Some(HotkeyTrigger::RightShift),
-        "shiftleft" => Some(HotkeyTrigger::LeftShift),
-        "shiftright" => Some(HotkeyTrigger::RightShift),
-        "fn" | "function" => Some(HotkeyTrigger::Fn),
-        "mediaplaypause" | "mediaplay" | "playpause" => Some(HotkeyTrigger::MediaPlayPause),
-        _ => None,
-    }
-}
-
-pub fn binding_from_legacy_trigger(trigger: HotkeyTrigger) -> ShortcutBinding {
-    let primary = match trigger {
-        HotkeyTrigger::RightOption | HotkeyTrigger::RightAlt => "RightOption",
-        HotkeyTrigger::LeftOption => "LeftOption",
-        HotkeyTrigger::RightControl => "RightControl",
-        HotkeyTrigger::LeftControl => "LeftControl",
-        HotkeyTrigger::RightCommand => "RightCommand",
-        HotkeyTrigger::LeftCommand => "LeftCommand",
-        HotkeyTrigger::LeftShift => "LeftShift",
-        HotkeyTrigger::RightShift => "RightShift",
-        HotkeyTrigger::Fn => "Fn",
-        HotkeyTrigger::MediaPlayPause => "MediaPlayPause",
-        HotkeyTrigger::Custom => "RightOption",
-    };
-    ShortcutBinding {
-        primary: primary.into(),
-        modifiers: Vec::new(),
-    }
-}
-
-pub fn normalize_side_modifier_tag(raw: &str) -> String {
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "super-left" => "cmd-left".into(),
-        "super-right" => "cmd-right".into(),
-        tag => tag.to_string(),
-    }
-}
-
 fn normalize_modifier_tag(raw: &str) -> String {
     let tag = raw.trim().to_ascii_lowercase();
     if is_side_specific_modifier_tag(&tag) {
@@ -221,14 +54,6 @@ fn normalize_modifier_tag(raw: &str) -> String {
         }
     }
     tag
-}
-
-fn normalize_primary(raw: &str) -> String {
-    raw.trim()
-        .chars()
-        .filter(|c| !matches!(c, ' ' | '-' | '_'))
-        .collect::<String>()
-        .to_ascii_lowercase()
 }
 
 pub fn parse_primary(raw: &str) -> Result<Code, ShortcutBindingError> {

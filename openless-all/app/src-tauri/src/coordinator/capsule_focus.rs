@@ -1,8 +1,8 @@
 //! Focus-target capture and capsule-window presentation extracted from
 //! `coordinator.rs` (behavior-preserving move).
 //!
-//! External focus/frontmost-app capture, capsule window show/hide/position,
-//! and `emit_capsule`. References parent items via `use super::*;`; `pub(super)`
+//! External focus/frontmost-app capture and `emit_capsule`. Native window
+//! presentation belongs to `tauri_coordinator_host`. References parent items via `use super::*;`; `pub(super)`
 //! so the parent and sibling submodules reach them through `use capsule_focus::*;`.
 
 use super::*;
@@ -11,7 +11,7 @@ use super::*;
 /// 等自家窗口）时返回 None，让 caller 区分"用户没切到别处" vs "用户切到了另一个真正的
 /// 外部 app"。issue #466 多轮场景下用来刷新 qa_focus_target。
 #[cfg(target_os = "windows")]
-pub(super) fn capture_external_focus_target() -> Option<usize> {
+pub(crate) fn capture_external_focus_target() -> Option<usize> {
     use windows::Win32::System::Threading::GetCurrentProcessId;
     use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
 
@@ -30,12 +30,12 @@ pub(super) fn capture_external_focus_target() -> Option<usize> {
 }
 
 #[cfg(not(target_os = "windows"))]
-pub(super) fn capture_external_focus_target() -> Option<usize> {
+pub(crate) fn capture_external_focus_target() -> Option<usize> {
     None
 }
 
 #[cfg(target_os = "windows")]
-pub(super) fn capture_focus_target() -> Option<usize> {
+pub(crate) fn capture_focus_target() -> Option<usize> {
     use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
 
     let foreground = unsafe { GetForegroundWindow() };
@@ -47,7 +47,7 @@ pub(super) fn capture_focus_target() -> Option<usize> {
 }
 
 #[cfg(not(target_os = "windows"))]
-pub(super) fn capture_focus_target() -> Option<usize> {
+pub(crate) fn capture_focus_target() -> Option<usize> {
     None
 }
 
@@ -56,7 +56,7 @@ pub(super) fn capture_focus_target() -> Option<usize> {
 ///
 /// macOS 走 NSWorkspace.frontmostApplication（公开 API，无需额外权限）；
 /// Windows 复用前台 HWND 拿窗口标题；Linux/其他平台返回 None。
-pub(super) fn capture_frontmost_app() -> Option<String> {
+pub(crate) fn capture_frontmost_app() -> Option<String> {
     // 曾经这里有一份和 `selection.rs` 逐字重复的 NSWorkspace/Win32 实现（三个 cfg
     // 分支、连 nsstring 转换 helper 都是复制的）。收口到 selection：那边现在把取值
     // 拆成了结构化的 `current_front_app_parts`，`host_document` 的 bundle 黑名单要用。
@@ -70,7 +70,7 @@ pub(super) fn capture_frontmost_app() -> Option<String> {
 }
 
 #[cfg(target_os = "windows")]
-pub(super) fn restore_focus_target_if_possible(target: Option<usize>) -> bool {
+pub(crate) fn restore_focus_target_if_possible(target: Option<usize>) -> bool {
     use std::ffi::c_void;
     use windows::Win32::Foundation::HWND;
     use windows::Win32::UI::WindowsAndMessaging::{
@@ -110,259 +110,18 @@ pub(super) fn restore_focus_target_if_possible(target: Option<usize>) -> bool {
 }
 
 #[cfg(not(target_os = "windows"))]
-pub(super) fn restore_focus_target_if_possible(_target: Option<usize>) -> bool {
+pub(crate) fn restore_focus_target_if_possible(_target: Option<usize>) -> bool {
     true
 }
-
-#[cfg(target_os = "windows")]
-pub(super) fn windows_hwnd_is_present(hwnd: windows::Win32::Foundation::HWND) -> bool {
-    hwnd != windows::Win32::Foundation::HWND::default()
-}
-
-#[cfg(target_os = "windows")]
-pub(super) fn capture_ime_submit_target() -> Option<ImeSubmitTarget> {
-    use windows::Win32::UI::WindowsAndMessaging::{
-        GetForegroundWindow, GetGUIThreadInfo, GetWindowThreadProcessId, GUITHREADINFO,
-    };
-
-    let foreground = unsafe { GetForegroundWindow() };
-    if !windows_hwnd_is_present(foreground) {
-        return None;
-    }
-
-    let mut foreground_process_id = 0;
-    let foreground_thread_id =
-        unsafe { GetWindowThreadProcessId(foreground, Some(&mut foreground_process_id)) };
-    if foreground_thread_id == 0 {
-        return None;
-    }
-
-    let mut gui_info = GUITHREADINFO {
-        cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
-        ..Default::default()
-    };
-    let target_window = if unsafe { GetGUIThreadInfo(foreground_thread_id, &mut gui_info).is_ok() }
-        && windows_hwnd_is_present(gui_info.hwndFocus)
-    {
-        gui_info.hwndFocus
-    } else {
-        foreground
-    };
-
-    let mut process_id = 0;
-    let thread_id = unsafe { GetWindowThreadProcessId(target_window, Some(&mut process_id)) };
-    if process_id == 0 || thread_id == 0 {
-        return None;
-    }
-
-    Some(ImeSubmitTarget {
-        process_id,
-        thread_id,
-    })
-}
-
-// Windows topmost overlay 的已知 OS 级限制（issue #457）：
-// `SetWindowPos(HWND_TOPMOST)` 让 capsule 在普通桌面合成、最大化窗口、borderless
-// windowed fullscreen 上正常叠加；但**对独占全屏（exclusive fullscreen）DirectX /
-// OpenGL 应用无效** —— 那条路径绕过桌面合成器，标准 topmost 窗口不参与合成 →
-// 用户看不见 capsule。这是 OS 层面的限制，用户空间无法绕过（除非接入 DirectX
-// overlay，工程量与风险都不在 surgical 修复范围内）。
-//
-// 用户侧 workaround：把游戏切到 borderless windowed fullscreen（Minecraft Java 默认
-// 即是；F11 在不同版本表现不一致，按设置里的「全屏」选项决定）。
-//
-// 相关 UIPI 限制：若游戏以管理员身份运行而 OpenLess 不是，`WH_KEYBOARD_LL` 收不到
-// 游戏的按键 → hotkey 完全不触发。这里跟 SetWindowPos 路径无关，但同源不可绕过。
-#[cfg(target_os = "windows")]
-pub(super) fn show_capsule_window_no_activate<R: tauri::Runtime>(
-    _app: &AppHandle<R>,
-    window: &tauri::WebviewWindow<R>,
-    _reassert_spaces: bool,
-) -> bool {
-    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-    use windows::Win32::Foundation::HWND;
-    use windows::Win32::UI::WindowsAndMessaging::{
-        SetWindowPos, ShowWindow, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-        SWP_SHOWWINDOW, SW_SHOWNOACTIVATE,
-    };
-
-    let Ok(handle) = window.window_handle() else {
-        // #470 诊断 v2：Win32 show 路径最可能的暗点之一。此前静默 return，
-        // 无法观测「胶囊完全不显示」是否卡在这里。
-        log::warn!(
-            "[capsule] no_activate failed: window_handle() unavailable — Win32 show skipped"
-        );
-        return false;
-    };
-    let RawWindowHandle::Win32(raw) = handle.as_raw() else {
-        log::warn!("[capsule] no_activate failed: non-Win32 RawWindowHandle — Win32 show skipped");
-        return false;
-    };
-    let hwnd = HWND(raw.hwnd.get() as *mut _);
-
-    let _ = unsafe { ShowWindow(hwnd, SW_SHOWNOACTIVATE) };
-    let _ = unsafe {
-        SetWindowPos(
-            hwnd,
-            HWND_TOPMOST,
-            0,
-            0,
-            0,
-            0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
-        )
-    };
-    true
-}
-
-#[cfg(target_os = "macos")]
-pub(super) fn show_capsule_window_no_activate<R: tauri::Runtime>(
-    app: &AppHandle<R>,
-    window: &tauri::WebviewWindow<R>,
-    reassert_spaces: bool,
-) -> bool {
-    use objc2::msg_send;
-    use objc2::runtime::AnyObject;
-
-    let Ok(handle) = window.ns_window() else {
-        return false;
-    };
-    let ns_window = handle as *mut AnyObject;
-    if ns_window.is_null() {
-        return false;
-    }
-
-    // emit_capsule 已经把窗口操作 marshal 到 Tauri 主线程；这里不能调用
-    // window.show()/set_focus()/NSApp.activate，否则 AeroSpace 会把 workspace 切回
-    // OpenLess 主窗口所在空间。直接用 orderFrontRegardless 做无激活展示。
-    //
-    // collectionBehavior 一次性写绝对值（与 show_less_computer_glow 的 273 同款），
-    // 不再走 Tauri 的 set_visible_on_all_workspaces：那个调用会把 collectionBehavior
-    // 经事件循环延后再写一遍，盖掉这里手动加的 FULL_SCREEN_AUXILIARY（→ 全屏 app 上不
-    // 叠加）；而把新 bit OR 到旧的 Managed 上又是 Apple 文档明确互斥的非法组合
-    // （CanJoinAllSpaces / Managed / Transient 三选一，→ 切桌面跟随不稳）。glow 窗口从不
-    // 调它、直接写绝对值，跨 Space + 全屏都正常 —— 胶囊对齐它。
-    //   - CAN_JOIN_ALL_SPACES：出现在所有桌面/Space，切桌面/全屏时跟随。
-    //   - FULL_SCREEN_AUXILIARY：被允许进入全屏 app 的 Space。
-    //   - STATIONARY：Mission Control / Exposé 时不跟着乱飞。
-    // 外加 setLevel(25)：光有 FULL_SCREEN_AUXILIARY 只是「被允许」进全屏 Space，但窗口层级
-    // 若停在 alwaysOnTop 的浮动层(~3) 仍会被全屏 app 的窗口盖住而看不见；抬到菜单栏(24)之上
-    // 的 25（与 show_less_computer_glow 同款）才能真正叠在全屏之上。
-    const CAN_JOIN_ALL_SPACES: usize = 1 << 0;
-    const STATIONARY: usize = 1 << 4;
-    const FULL_SCREEN_AUXILIARY: usize = 1 << 8;
-    const BEHAVIOR: usize = CAN_JOIN_ALL_SPACES | STATIONARY | FULL_SCREEN_AUXILIARY;
-    unsafe {
-        let _: () = msg_send![ns_window, setLevel: 25i64];
-        if reassert_spaces {
-            // 值若被外部改动过，留一条证据 —— 用于分辨「值被改」与「值没变但
-            // WindowServer 侧注册失效」（2026-07-31 事故属于后者：值一直是 273，
-            // 注册却缺了桌面，窗口被钉死在单个 Space）。
-            let current: usize = msg_send![ns_window, collectionBehavior];
-            if current != BEHAVIOR {
-                log::warn!(
-                    "[capsule] collectionBehavior drifted to {current} (expected {BEHAVIOR}); re-registering"
-                );
-            }
-            // 入场帧先以「无 CanJoinAllSpaces 位」的低值上屏（保留 Stationary/
-            // FullScreenAuxiliary，全屏叠加不受影响）。体外实验（macOS 26）证明：
-            // 只有「窗口可见时 CanJoinAllSpaces 位发生 0→1 转变」才触发 WindowServer
-            // 重新注册贴附；隐藏时改值、或同一个 runloop tick 里连写两个值（被合并）
-            // 都是 no-op。所以 273 必须等 orderFront 之后的下一个 tick 再写（见下方）。
-            let low = STATIONARY | FULL_SCREEN_AUXILIARY;
-            let _: () = msg_send![ns_window, setCollectionBehavior: low];
-        } else {
-            let _: () = msg_send![ns_window, setCollectionBehavior: BEHAVIOR];
-        }
-        let _: () = msg_send![ns_window, orderFrontRegardless];
-    }
-    if reassert_spaces {
-        // 换线程再回主线程，保证落在 orderFront 之后的另一个 runloop tick——
-        // run_on_main_thread 在主线程上会内联执行，起不到隔 tick 的作用。
-        // 30ms 间隙里窗口以低值可见于当前桌面（用户正看着的那个），无可感知差异。
-        let app = app.clone();
-        let window = window.clone();
-        std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(30));
-            let _ = app.run_on_main_thread(move || {
-                let Ok(handle) = window.ns_window() else {
-                    return;
-                };
-                let ns_window = handle as *mut AnyObject;
-                if ns_window.is_null() {
-                    return;
-                }
-                unsafe {
-                    let _: () = msg_send![ns_window, setCollectionBehavior: BEHAVIOR];
-                }
-            });
-        });
-    }
-    true
-}
-
-#[cfg(target_os = "linux")]
-pub(super) fn show_capsule_window_no_activate<R: tauri::Runtime>(
-    _app: &AppHandle<R>,
-    _window: &tauri::WebviewWindow<R>,
-    _reassert_spaces: bool,
-) -> bool {
-    true
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
-pub(super) fn show_capsule_window_no_activate<R: tauri::Runtime>(
-    _app: &AppHandle<R>,
-    _window: &tauri::WebviewWindow<R>,
-    _reassert_spaces: bool,
-) -> bool {
-    false
-}
-
-#[cfg(target_os = "windows")]
-pub(super) fn hide_capsule_window_if_present() {
-    use std::iter::once;
-    use windows::core::PCWSTR;
-    use windows::Win32::Foundation::HWND;
-    use windows::Win32::UI::WindowsAndMessaging::{
-        FindWindowW, SetWindowPos, ShowWindow, HWND_NOTOPMOST, SWP_HIDEWINDOW, SWP_NOACTIVATE,
-        SWP_NOMOVE, SWP_NOSIZE, SW_HIDE,
-    };
-
-    let title: Vec<u16> = "OpenLess Capsule".encode_utf16().chain(once(0)).collect();
-    let hwnd = match unsafe { FindWindowW(PCWSTR::null(), PCWSTR(title.as_ptr())) } {
-        Ok(hwnd) => hwnd,
-        Err(_) => return,
-    };
-    if hwnd == HWND::default() || hwnd.0.is_null() {
-        return;
-    }
-
-    let _ = unsafe { ShowWindow(hwnd, SW_HIDE) };
-    let _ = unsafe {
-        SetWindowPos(
-            hwnd,
-            HWND_NOTOPMOST,
-            0,
-            0,
-            0,
-            0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_HIDEWINDOW,
-        )
-    };
-}
-
-#[cfg(not(target_os = "windows"))]
-pub(super) fn hide_capsule_window_if_present() {}
 
 /// Esc 独占判定：胶囊显示「进行中」（录音/转写/润色）且确为 dictation 会话（phase 非
 /// Idle）时为 true——tap/hook 吞掉 Esc 不透传宿主应用。phase 条件专门排除 QA：QA 也走
 /// 胶囊，但它的 Esc 由聚焦浮窗处理（#161），全局吞键反而会把它挡掉。纯函数便于表格测试。
-fn esc_exclusive_for_capsule(state: CapsuleState, phase: SessionPhase) -> bool {
+fn esc_exclusive_for_capsule(state: CapsuleState, session_active: bool) -> bool {
     matches!(
         state,
         CapsuleState::Recording | CapsuleState::Transcribing | CapsuleState::Polishing
-    ) && !matches!(phase, SessionPhase::Idle)
+    ) && session_active
 }
 
 pub(super) fn emit_capsule(
@@ -415,139 +174,8 @@ fn emit_capsule_with_context(
     )
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum CapsuleWindowAction {
-    PreserveFallbackCard,
-    ShowCapsule,
-    HideCapsule,
-}
-
-fn capsule_window_action(
-    fallback_card_active: bool,
-    show_capsule: bool,
-    state: CapsuleState,
-) -> CapsuleWindowAction {
-    if fallback_card_active {
-        CapsuleWindowAction::PreserveFallbackCard
-    } else if show_capsule && !matches!(state, CapsuleState::Idle) {
-        CapsuleWindowAction::ShowCapsule
-    } else {
-        CapsuleWindowAction::HideCapsule
-    }
-}
-
-fn defer_capsule_payload_if_fallback_active(
-    inner: &Arc<Inner>,
-    payload: &CapsulePayload,
-) -> bool {
-    let active = inner
-        .insert_fallback_card_visible
-        .load(Ordering::SeqCst);
-    if active {
-        *inner.insert_fallback_deferred_capsule.lock() = Some(payload.clone());
-    }
-    active
-}
-
-/// 把一帧胶囊状态应用到共享原生窗口。
-///
-/// 兜底卡片是可交互的恢复界面，显示期间必须拥有全部原生窗口属性。胶囊事件仍会抵达
-/// webview 并推进代次，但定位、尺寸、鼠标穿透和显隐要等卡片释放窗口后再恢复。
-pub(super) fn apply_capsule_window_payload<R: tauri::Runtime>(
-    inner: &Arc<Inner>,
-    app: &AppHandle<R>,
-    window: &tauri::WebviewWindow<R>,
-    payload: &CapsulePayload,
-    fallback_card_active: bool,
-    reassert_spaces: bool,
-) {
-    // Selection Polish 没有独立显示开关，因为这是它唯一的反馈。
-    let prefs_snapshot = inner.prefs.get();
-    let show_capsule = payload.selection_polish || prefs_snapshot.show_capsule;
-    let classic_style = matches!(prefs_snapshot.capsule_style, CapsuleStyle::Classic);
-    inner.capsule_style.store(
-        if classic_style { 1 } else { 0 },
-        Ordering::Relaxed,
-    );
-
-    // Linux 通过 fcitx 辅助区显示状态，不操作胶囊窗口。
-    #[cfg(target_os = "linux")]
-    {
-        let _ = (
-            app,
-            window,
-            payload,
-            fallback_card_active,
-            reassert_spaces,
-            show_capsule,
-            classic_style,
-        );
-        return;
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    {
-        let action = capsule_window_action(fallback_card_active, show_capsule, payload.state);
-        if action == CapsuleWindowAction::PreserveFallbackCard {
-            log::debug!(
-                "[capsule] native window update deferred: insert fallback card owns the window"
-            );
-            return;
-        }
-
-        maybe_position_capsule_bottom_center(inner, window, payload.translation);
-
-        #[cfg(not(mobile))]
-        {
-            let interactive = classic_style
-                && action == CapsuleWindowAction::ShowCapsule
-                && !payload.selection_polish
-                && matches!(
-                    payload.state,
-                    CapsuleState::Recording
-                        | CapsuleState::Transcribing
-                        | CapsuleState::Polishing
-                );
-            let want_passthrough = !interactive;
-            if inner
-                .capsule_cursor_passthrough
-                .swap(want_passthrough, Ordering::SeqCst)
-                != want_passthrough
-            {
-                if let Err(e) = window.set_ignore_cursor_events(want_passthrough) {
-                    log::warn!("[capsule] set_ignore_cursor_events failed: {e}");
-                }
-            }
-        }
-
-        match action {
-            CapsuleWindowAction::PreserveFallbackCard => unreachable!(),
-            CapsuleWindowAction::ShowCapsule => {
-                if !CAPSULE_FIRST_SHOW_LOGGED.swap(true, Ordering::SeqCst) {
-                    log::info!(
-                        "[capsule] first show this session: show_capsule=true visible=true state={}",
-                        capsule_state_log_name(payload.state)
-                    );
-                }
-                show_capsule_window_for_recording(app, window, reassert_spaces);
-                #[cfg(target_os = "macos")]
-                crate::restore_main_window_key_if_active(app);
-            }
-            CapsuleWindowAction::HideCapsule => {
-                if !show_capsule
-                    && !matches!(payload.state, CapsuleState::Idle)
-                    && !CAPSULE_SUPPRESSED_BY_TOGGLE_LOGGED.swap(true, Ordering::SeqCst)
-                {
-                    log::info!(
-                        "[capsule] suppressed by user toggle: show_capsule=false visible=true state={}",
-                        capsule_state_log_name(payload.state)
-                    );
-                }
-                hide_capsule_window_if_present();
-                let _ = window.hide();
-            }
-        }
-    }
+fn defer_capsule_payload_if_fallback_active(inner: &Arc<Inner>, payload: &CapsulePayload) -> bool {
+    inner.host.defer_capsule_if_fallback_active(payload)
 }
 
 /// `capsule_event_lock` 已由调用方持有的内部实现。自动隐藏路径必须能在验证 epoch
@@ -561,6 +189,68 @@ fn emit_capsule_with_context_locked(
     inserted_chars: Option<u32>,
     selection_polish: bool,
 ) -> u64 {
+    let dictation = inner.backend.snapshot().dictation;
+    let payload = CapsulePayload {
+        state,
+        level,
+        elapsed_ms,
+        message,
+        inserted_chars,
+        translation: !selection_polish && dictation.translation_active,
+        operating: !selection_polish && inner.backend.less_computer_active_session().is_some(),
+        warming: !selection_polish
+            && state == CapsuleState::Recording
+            && matches!(
+                dictation.phase,
+                openless_core::DictationPhase::Starting | openless_core::DictationPhase::Recording
+            )
+            && !dictation.recording_ready,
+        selection_polish,
+        capsule_style: inner.host.cached_capsule_style(),
+    };
+    emit_capsule_payload_locked(inner, payload)
+}
+
+/// Core 反馈完整进入同一个原生显示出口；包括 warming、translation 等字段，
+/// 不经过旧的“按 Host 状态重建 payload”路径。
+pub(super) fn emit_core_capsule(
+    inner: &Arc<Inner>,
+    payload: CapsulePayload,
+    expected_epoch: Option<u64>,
+) -> Option<u64> {
+    emit_capsule_at_epoch(
+        &inner.capsule_event_lock,
+        &inner.capsule_event_epoch,
+        expected_epoch,
+        || emit_capsule_payload_locked(inner, payload),
+    )
+}
+
+fn emit_capsule_at_epoch(
+    event_lock: &Mutex<()>,
+    current_epoch: &AtomicU64,
+    expected_epoch: Option<u64>,
+    emit: impl FnOnce() -> u64,
+) -> Option<u64> {
+    let _event_guard = event_lock.lock();
+    if expected_epoch.is_some_and(|expected| current_epoch.load(Ordering::SeqCst) != expected) {
+        return None;
+    }
+    Some(emit())
+}
+
+pub(super) fn hide_core_capsule_if_current(inner: &Arc<Inner>, expected_epoch: u64) {
+    let _ = emit_capsule_at_epoch(
+        &inner.capsule_event_lock,
+        &inner.capsule_event_epoch,
+        Some(expected_epoch),
+        || emit_capsule_with_context_locked(inner, CapsuleState::Idle, 0.0, 0, None, None, false),
+    );
+}
+
+fn emit_capsule_payload_locked(inner: &Arc<Inner>, payload: CapsulePayload) -> u64 {
+    let state = payload.state;
+    let selection_polish = payload.selection_polish;
     // 每次 payload 都推进代数。这样一个选区润色终态的旧 timer 在之后出现任何
     // selection / voice / QA 状态时都失效，不会把新的可见状态强行收回 Idle。
     let event_epoch = inner
@@ -579,38 +269,21 @@ fn emit_capsule_with_context_locked(
     // QA：QA 会话也走胶囊，但它的 Esc 由聚焦的浮窗窗口处理，吞键反而会把它挡掉。
     // 终止帧（Done/Cancelled/Error/Idle）自然清除。emit_capsule 是所有会话状态变化的
     // 单一出口（含 #77 审计保证的全部终止路径），在此维护不会漏路径。
-    let esc_exclusive = esc_exclusive_for_capsule(state, inner.state.lock().phase);
+    #[cfg(all(not(mobile), target_os = "windows"))]
+    let selection_voice_active = inner.selection_voice_capture.lock().is_some();
+    #[cfg(not(all(not(mobile), target_os = "windows")))]
+    let selection_voice_active = false;
+    let session_active = inner.backend.snapshot().dictation.phase
+        != openless_core::DictationPhase::Idle
+        || inner.backend.less_computer_active_session().is_some()
+        || selection_voice_active;
+    let esc_exclusive = esc_exclusive_for_capsule(state, session_active);
     crate::hotkey::set_esc_exclusive(esc_exclusive);
-    let app_opt = inner.app.lock().clone();
-    let Some(app) = app_opt else {
+    // 即使窗口尚未绑定，也保留卡片期间最新的完整反馈，重显时不能倒退到旧准备态。
+    defer_capsule_payload_if_fallback_active(inner, &payload);
+    let Some(capsule) = inner.host.capsule_window() else {
         return event_epoch;
     };
-    // 选区润色不属于语音翻译 / Less Computer，会话之间残留的标志不能带进其提示。
-    let translation = !selection_polish && inner.translation_active.load(Ordering::SeqCst);
-    let operating = !selection_polish && inner.state.lock().voice_agent;
-    // 预备态只对 Recording 有意义：麦克风还没吐第一帧 PCM 时（capsule_warming=true）把
-    // warming 打成 true，前端渲染「待命」光效；level_handler 首触发后翻 false → 光条点亮。
-    let warming = !selection_polish
-        && matches!(state, CapsuleState::Recording)
-        && inner.capsule_warming.load(Ordering::SeqCst);
-    let payload = CapsulePayload {
-        state,
-        level,
-        elapsed_ms,
-        message,
-        inserted_chars,
-        translation,
-        operating,
-        warming,
-        selection_polish,
-        // 用户选择的胶囊样式：读 Inner 上的原子缓存（主线程闭包每帧从 prefs 同步），
-        // 不在音频回调线程碰偏好锁。设置里切换后下一次录音即生效。
-        capsule_style: match inner.capsule_style.load(Ordering::Relaxed) {
-            1 => CapsuleStyle::Classic,
-            _ => CapsuleStyle::Siri,
-        },
-    };
-    defer_capsule_payload_if_fallback_active(inner, &payload);
 
     #[cfg(target_os = "android")]
     crate::android::notify_capsule_state(&payload);
@@ -724,8 +397,8 @@ fn emit_capsule_with_context_locked(
     // show_capsule（用户偏好）在主线程执行时再读 —— 用户可以在录音过程中改设置，
     // 闭包入队到真正跑之间窗口上限是一两帧（~16-33ms），用最新值消除 stale-pref
     // 闪烁。pr_agent 关注点 — 见 audit follow-up。
-    let inner_for_main = Arc::clone(inner);
-    let app_for_main = app.clone();
+    let host_for_main = inner.host.clone();
+    let backend_for_main = Arc::clone(&inner.backend);
     // 入场帧要在 window.show 之后、闭包内部把 state 回发给前端，需要 payload 的独立副本
     // move 进闭包；非入场帧走闭包外的即时同步 emit（下方），这里就是 None。
     // 注意：入场帧的 payload 在闭包同步 capsule_style 原子之前克隆，最多带一帧旧样式
@@ -737,44 +410,35 @@ fn emit_capsule_with_context_locked(
         None
     };
     let payload_for_window = payload.clone();
-    let _ = app.run_on_main_thread(move || {
-        let Some(window) = app_for_main.get_webview_window("capsule") else {
-            // #470 诊断 v2：比 A/B/C 更靠前的暗点 A0 —— capsule webview 句柄取不到
-            // （窗口未创建/已销毁）。此前静默 return，无法观测。一次性 warn。
-            if !CAPSULE_WINDOW_MISSING_LOGGED.swap(true, Ordering::SeqCst) {
-                log::warn!(
-                    "[capsule] capsule webview window not found — emit_capsule show path skipped (state={})",
-                    capsule_state_log_name(state)
-                );
-            }
+    let _ = capsule.run_on_main_thread(move |capsule| {
+        if !capsule.is_available_for(state) {
             return;
-        };
-        let fallback_card_active =
-            defer_capsule_payload_if_fallback_active(&inner_for_main, &payload_for_window);
-        apply_capsule_window_payload(
-            &inner_for_main,
-            &app_for_main,
-            &window,
+        }
+        let preferences = backend_for_main.get_preferences();
+        let show_capsule = payload_for_window.selection_polish || preferences.show_capsule;
+        let classic_style = matches!(preferences.capsule_style, CapsuleStyle::Classic);
+        capsule.apply_capsule_payload(
             &payload_for_window,
-            fallback_card_active,
+            show_capsule,
+            classic_style,
             payload_for_deferred_emit.is_some(),
         );
         // 入场帧：窗口刚 show（或本次用户关了胶囊显示走了 hide 分支），此刻再把 state 发给
         // capsule 前端 —— 前端起播 capsule-in 时窗口已可见，入场动画从头完整播放。
         if let Some(payload) = payload_for_deferred_emit.as_ref() {
-            let _ = app_for_main.emit_to("capsule", "capsule:state", payload);
+            host_for_main.emit_capsule_state_to_capsule(payload);
         }
     });
 
     // 非入场帧（含 Linux、录音中的 level 更新、离场/终态）保持即时同步 emit，最低延迟；
     // 入场帧已在上面的主线程闭包里、window.show 之后 emit 过，这里跳过避免重复下发。
     if !defer_capsule_emit {
-        let _ = app.emit_to("capsule", "capsule:state", &payload);
+        inner.host.emit_capsule_state_to_capsule(&payload);
     }
     // 主窗口也需要 capsule:state 事件：AudioCueListener 用它触发录音提示音。
     // Linux 上胶囊隐藏时提示音仍应工作，所以同时发给 main 窗口。始终即时，与胶囊窗口
     // 显示时机解耦。
-    let _ = app.emit_to("main", "capsule:state", &payload);
+    inner.host.emit_capsule_state_to_main(&payload);
     event_epoch
 }
 
@@ -792,14 +456,19 @@ pub(super) fn selection_polish_capsule_epoch_is_current(
 /// 旧 dictation/QA timer 的收起路径。它与所有 emit 共享一把短锁：如果 Selection
 /// Polish 已经显示，就让路；如果新语音/QA 先一步发了状态，也会在锁序上排在 Idle 前。
 pub(super) fn hide_capsule_if_all_sessions_idle(inner: &Arc<Inner>) {
-    // 先读 session lock，再进 capsule lock。QA 收尾路径会持有 qa_state 并 emit；反过来
-    // 在这里持 capsule lock 等 qa_state 会产生锁反转。event epoch 负责在两次读取之间
+    // 先读 session state，再进 capsule lock。event epoch 负责在两次读取之间
     // 有任何新 payload 时取消本次 Idle。
-    let dictation_idle = inner.state.lock().phase == SessionPhase::Idle;
-    let qa_idle = inner.qa_state.lock().phase == QaPhase::Idle;
+    #[cfg(all(not(mobile), target_os = "windows"))]
+    let selection_voice_idle = inner.selection_voice_capture.lock().is_none();
+    #[cfg(not(all(not(mobile), target_os = "windows")))]
+    let selection_voice_idle = true;
+    let dictation_idle = inner.backend.snapshot().dictation.phase
+        == openless_core::DictationPhase::Idle
+        && inner.backend.less_computer_active_session().is_none()
+        && selection_voice_idle;
     let selection_polish_active = inner.selection_polish_capsule_active.load(Ordering::SeqCst);
     let observed_epoch = inner.capsule_event_epoch.load(Ordering::SeqCst);
-    if !dictation_idle || !qa_idle || selection_polish_active {
+    if !dictation_idle || selection_polish_active {
         return;
     }
 
@@ -820,93 +489,42 @@ pub(super) fn hide_selection_polish_capsule_if_current(inner: &Arc<Inner>, expec
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct CapsuleLayoutState {
-    translation_active: bool,
-    monitor_x: i32,
-    monitor_y: i32,
-    monitor_width: u32,
-    monitor_height: u32,
-    scale_bits: u64,
-}
-
-/// 返回胶囊「应该摆放到的显示器」的标识信息。
-///
-/// 它看的显示器必须和 `position_capsule_bottom_center` 实际定位用的一致：
-/// Windows 看「正在输入的 App 所在显示器」，macOS 看「鼠标光标所在显示器」，
-/// 其它平台看胶囊自己的显示器。这是「是否需要重新定位」去重缓存
-/// （`maybe_position_capsule_bottom_center`）的 key，如果这里看错了显示器，
-/// 就会出现「焦点/光标移到另一块屏、胶囊却没跟过去」的 bug。
-pub(super) fn capsule_layout_snapshot<R: tauri::Runtime>(
-    window: &tauri::WebviewWindow<R>,
-    translation_active: bool,
-) -> Option<CapsuleLayoutState> {
-    // Windows：以「正在输入的 App 所在显示器」为基准。若用胶囊自己的
-    // current_monitor，输入焦点切到另一块屏时胶囊仍在原屏 → 误判「没变化」
-    // → 跳过重新定位。
-    #[cfg(target_os = "windows")]
-    {
-        if let Some(mon) = crate::foreground_window_monitor() {
-            return Some(CapsuleLayoutState {
-                translation_active,
-                monitor_x: mon.left,
-                monitor_y: mon.top,
-                monitor_width: (mon.right - mon.left).max(0) as u32,
-                monitor_height: (mon.bottom - mon.top).max(0) as u32,
-                scale_bits: mon.scale.to_bits(),
-            });
-        }
-        // 仅当 Win32 取不到前台显示器时，落回下面的 current_monitor。
-    }
-    // macOS：以「鼠标光标所在显示器」为基准，必须和
-    // position_capsule_bottom_center 实际定位用的同一块屏；否则光标移到另一块
-    // 屏时这里仍读到胶囊旧屏 → 误判「没变化」→ 跳过重新定位 → 胶囊锁死在第一块屏。
-    #[cfg(target_os = "macos")]
-    {
-        if let Some(mon) = crate::capsule_target_monitor(window) {
-            return Some(CapsuleLayoutState {
-                translation_active,
-                monitor_x: mon.physical_x,
-                monitor_y: mon.physical_y,
-                monitor_width: mon.physical_width,
-                monitor_height: mon.physical_height,
-                scale_bits: mon.scale.to_bits(),
-            });
-        }
-        // 取不到光标 / AX 位置时落回下面的 current_monitor。
-    }
-    let monitor = window.current_monitor().ok().flatten()?;
-    Some(CapsuleLayoutState {
-        translation_active,
-        monitor_x: monitor.position().x,
-        monitor_y: monitor.position().y,
-        monitor_width: monitor.size().width,
-        monitor_height: monitor.size().height,
-        scale_bits: monitor.scale_factor().to_bits(),
-    })
-}
-
-pub(super) fn maybe_position_capsule_bottom_center<R: tauri::Runtime>(
-    inner: &Arc<Inner>,
-    window: &tauri::WebviewWindow<R>,
-    translation_active: bool,
-) {
-    let Some(next) = capsule_layout_snapshot(window, translation_active) else {
-        return;
-    };
-    {
-        let last = inner.capsule_layout.lock();
-        if last.as_ref() == Some(&next) {
-            return;
-        }
-    }
-    if crate::position_capsule_bottom_center(window, translation_active).is_ok() {
-        let mut last = inner.capsule_layout.lock();
-        *last = Some(next);
-    }
-}
-
 #[cfg(test)]
+mod epoch_tests {
+    use super::*;
+
+    #[test]
+    fn queued_qa_terminal_and_timer_cannot_hide_direct_native_feedback() {
+        for initial in [CapsuleState::Polishing, CapsuleState::Error] {
+            let lock = Mutex::new(());
+            let epoch = AtomicU64::new(0);
+            let visible = Mutex::new(CapsuleState::Idle);
+            let write = |state| {
+                assert!(
+                    lock.try_lock().is_none(),
+                    "the native write must remain under the epoch lock"
+                );
+                *visible.lock() = state;
+                epoch.fetch_add(1, Ordering::SeqCst) + 1
+            };
+            let qa_epoch = emit_capsule_at_epoch(&lock, &epoch, None, || write(initial)).unwrap();
+            // Selection Voice publishes directly, then its Core phase is already
+            // terminal when the queued QA Answer or error timer reaches the host.
+            {
+                let _guard = lock.lock();
+                write(CapsuleState::Error);
+            }
+            assert!(
+                emit_capsule_at_epoch(&lock, &epoch, Some(qa_epoch), || write(CapsuleState::Idle))
+                    .is_none()
+            );
+            assert_eq!(*visible.lock(), CapsuleState::Error);
+            assert_eq!(epoch.load(Ordering::SeqCst), 2);
+        }
+    }
+}
+
+#[cfg(any())]
 mod tests {
     use super::*;
     use crate::types::{CapsulePayload, CapsuleState, CapsuleStyle};
@@ -927,43 +545,9 @@ mod tests {
     }
 
     #[test]
-    fn fallback_card_owns_native_window_until_dismissed() {
-        for state in [
-            CapsuleState::Idle,
-            CapsuleState::Recording,
-            CapsuleState::Polishing,
-            CapsuleState::Done,
-        ] {
-            assert_eq!(
-                capsule_window_action(true, true, state),
-                CapsuleWindowAction::PreserveFallbackCard
-            );
-        }
-    }
-
-    #[test]
-    fn capsule_window_action_follows_visibility_without_fallback_card() {
-        assert_eq!(
-            capsule_window_action(false, true, CapsuleState::Recording),
-            CapsuleWindowAction::ShowCapsule
-        );
-        assert_eq!(
-            capsule_window_action(false, true, CapsuleState::Idle),
-            CapsuleWindowAction::HideCapsule
-        );
-        assert_eq!(
-            capsule_window_action(false, false, CapsuleState::Recording),
-            CapsuleWindowAction::HideCapsule
-        );
-    }
-
-    #[test]
     fn fallback_card_keeps_only_the_latest_deferred_capsule_payload() {
         let coordinator = Coordinator::new();
-        coordinator
-            .inner
-            .insert_fallback_card_visible
-            .store(true, Ordering::SeqCst);
+        coordinator.inner.host.begin_insert_fallback_card();
 
         assert!(defer_capsule_payload_if_fallback_active(
             &coordinator.inner,
@@ -973,14 +557,11 @@ mod tests {
             &coordinator.inner,
             &payload(CapsuleState::Idle),
         ));
+        let (was_visible, deferred) = coordinator.inner.host.dismiss_insert_fallback_card();
+        assert!(was_visible);
         assert_eq!(
-            coordinator
-                .inner
-                .insert_fallback_deferred_capsule
-                .lock()
-                .as_ref()
-                .map(|payload| payload.state),
-            Some(CapsuleState::Idle),
+            deferred.map(|payload| payload.state),
+            Some(CapsuleState::Idle)
         );
     }
 

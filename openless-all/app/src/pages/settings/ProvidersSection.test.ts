@@ -1,46 +1,43 @@
-import { LLM_PRESETS, prioritizeOrcaRouterModels } from './ProvidersSection';
-import { ASR_PRESETS } from './shared';
+import { LLM_LABELS, prioritizeOrcaRouterModels } from './ProvidersSection';
+import { ASR_LABELS } from './shared';
+import { presetsFor } from './ChannelList';
 
-const atlascloudPreset = LLM_PRESETS.find(p => p.id === 'atlascloud');
+const atlascloudPreset = LLM_LABELS.find(p => p.id === 'atlascloud');
+if (LLM_LABELS.find(p => p.id === 'opencode')?.nameKey !== 'opencode') {
+  throw new Error('OpenCode LLM label is missing');
+}
 
 if (!atlascloudPreset) {
   throw new Error('Atlas Cloud LLM preset is missing');
 }
 
-if (atlascloudPreset.baseUrl !== 'https://api.atlascloud.ai/v1') {
-  throw new Error(`unexpected Atlas Cloud base URL: ${atlascloudPreset.baseUrl}`);
+const openAiCompatiblePreset = ASR_LABELS.find(p => p.id === 'openai-compatible');
+
+if (!openAiCompatiblePreset) {
+  throw new Error('Custom OpenAI-compatible ASR preset is missing');
 }
 
-if (atlascloudPreset.modelPlaceholder !== 'qwen/qwen3.5-flash') {
-  throw new Error(`unexpected Atlas Cloud default model: ${atlascloudPreset.modelPlaceholder}`);
+const zenmuxPreset = ASR_LABELS.find(p => p.id === 'zenmux');
+
+if (!zenmuxPreset) {
+  throw new Error('ZenMux ASR preset is missing');
 }
 
-const orcarouterPreset = LLM_PRESETS.find(p => p.id === 'orcarouter');
+const coreAsr = presetsFor('asr', 'win', true, undefined, [{
+  kind: 'asr',
+  providerType: 'openai-compatible',
+  labelKey: 'asrOpenAiCompatible',
+  defaultEndpoint: null,
+  defaultModel: null,
+  authRequirement: 'endpoint_model_optional_api_key',
+  validationProbe: 'asr_silence',
+  staticModels: [],
+  defaultRequestFormat: null,
+  supportedRequestFormats: [],
+}]);
 
-if (!orcarouterPreset) {
-  throw new Error('OrcaRouter LLM preset is missing');
-}
-
-if (orcarouterPreset.baseUrl !== 'https://api.orcarouter.ai/v1') {
-  throw new Error(`unexpected OrcaRouter base URL: ${orcarouterPreset.baseUrl}`);
-}
-
-if (orcarouterPreset.modelPlaceholder !== 'orcarouter/fusion-flash') {
-  throw new Error(`unexpected OrcaRouter default model: ${orcarouterPreset.modelPlaceholder}`);
-}
-
-const orcarouterAsrPreset = ASR_PRESETS.find(p => p.id === 'orcarouter');
-
-if (!orcarouterAsrPreset) {
-  throw new Error('OrcaRouter ASR preset is missing');
-}
-
-if (orcarouterAsrPreset.baseUrl !== 'https://api.orcarouter.ai/v1') {
-  throw new Error(`unexpected OrcaRouter ASR base URL: ${orcarouterAsrPreset.baseUrl}`);
-}
-
-if (orcarouterAsrPreset.model !== 'google/gemini-2.5-flash') {
-  throw new Error(`unexpected OrcaRouter ASR default model: ${orcarouterAsrPreset.model}`);
+if (coreAsr.length !== 1 || coreAsr[0].authRequirement !== 'endpoint_model_optional_api_key') {
+  throw new Error('Core provider descriptor must replace the browser fallback in the channel picker');
 }
 
 const prioritizedOrcaRouterModels = prioritizeOrcaRouterModels([
@@ -59,28 +56,9 @@ if (prioritizedOrcaRouterModels.join(',') !== [
   throw new Error(`unexpected OrcaRouter model ordering: ${prioritizedOrcaRouterModels.join(',')}`);
 }
 
-const openAiCompatiblePreset = ASR_PRESETS.find(p => p.id === 'openai-compatible');
 
-if (!openAiCompatiblePreset) {
-  throw new Error('Custom OpenAI-compatible ASR preset is missing');
-}
-
-if (openAiCompatiblePreset.baseUrl !== '' || openAiCompatiblePreset.model !== '') {
-  throw new Error(
-    `Custom OpenAI-compatible ASR preset must have no defaults (got baseUrl=${openAiCompatiblePreset.baseUrl}, model=${openAiCompatiblePreset.model})`,
-  );
-}
-
-const zenmuxPreset = ASR_PRESETS.find(p => p.id === 'zenmux');
-
-if (!zenmuxPreset) {
-  throw new Error('ZenMux ASR preset is missing');
-}
-
-if (zenmuxPreset.baseUrl !== 'https://zenmux.ai/api/v1') {
-  throw new Error(`unexpected ZenMux base URL: ${zenmuxPreset.baseUrl}`);
-}
-
-if (zenmuxPreset.model !== 'qwen/qwen3-asr-flash') {
-  throw new Error(`unexpected ZenMux default model: ${zenmuxPreset.model}`);
+for (const labels of [LLM_LABELS, ASR_LABELS]) {
+  if (!labels.some(label => label.id === 'orcarouter' && label.nameKey === 'orcarouter')) {
+    throw new Error('OrcaRouter provider label is missing');
+  }
 }

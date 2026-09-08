@@ -74,6 +74,23 @@ pub(crate) fn begin_session_state(
     focus_target: Option<usize>,
     front_app: Option<String>,
 ) -> Option<SessionId> {
+    begin_session_state_with_id(
+        state,
+        focus_target,
+        front_app,
+        new_session_id(),
+    )
+}
+
+/// 与 [`begin_session_state`] 相同，但允许宿主在进入 Coordinator 状态机前生成
+/// session id。Less Computer 需要把这个 id 同时交给 Core capture lease 和宿主录音
+/// 资源，避免两套状态各自生成 UUID 后无法可靠取消同一轮会话。
+pub(crate) fn begin_session_state_with_id(
+    state: &mut SessionState,
+    focus_target: Option<usize>,
+    front_app: Option<String>,
+    session_id: SessionId,
+) -> Option<SessionId> {
     if state.phase != SessionPhase::Idle {
         return None;
     }
@@ -82,7 +99,7 @@ pub(crate) fn begin_session_state(
     state.pending_stop = false;
     state.cancelled = false;
     state.focus_target = focus_target;
-    state.session_id = new_session_id();
+    state.session_id = session_id;
     state.front_app = front_app;
     // 每个新会话默认是普通听写；Less Computer 专用入口会显式把它标为语音 Agent。
     state.voice_agent = false;
@@ -285,6 +302,18 @@ mod tests {
         };
         begin_session_state(&mut state, None, None).unwrap();
         assert!(!state.voice_agent, "新会话必须从普通听写开始");
+    }
+
+    #[test]
+    fn begin_session_with_id_preserves_host_core_session_identity() {
+        let mut state = SessionState::default();
+        let expected = session_id(42);
+
+        let actual = begin_session_state_with_id(&mut state, None, None, expected).unwrap();
+
+        assert_eq!(actual, expected);
+        assert_eq!(state.session_id, expected);
+        assert_eq!(state.phase, SessionPhase::Starting);
     }
 
     #[test]

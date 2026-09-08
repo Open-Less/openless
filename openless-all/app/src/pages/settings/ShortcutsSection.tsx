@@ -293,7 +293,7 @@ export function ShortcutsSection() {
           }}
         />
       </SettingRow>
-      {os === 'mac' && (
+      {(os === 'mac' || os === 'win') && (
         <SettingRow label={t('settings.codingAgent.title')} desc={t('settings.codingAgent.voiceHotkeyDesc')}>
           <ShortcutRecorder
             value={prefs.codingAgentVoiceHotkey}

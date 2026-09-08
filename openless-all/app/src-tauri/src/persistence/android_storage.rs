@@ -171,21 +171,14 @@ mod tests {
             Some("/data/local/tmp/wrong"),
         )
         .expect("resolve");
-        assert_eq!(
-            path,
-            PathBuf::from("/data/user/0/com.openless.app/files")
-        );
+        assert_eq!(path, PathBuf::from("/data/user/0/com.openless.app/files"));
     }
 
     #[test]
     fn falls_back_to_env_when_jni_missing() {
-        let path =
-            resolve_android_app_files_dir(None, Some("/data/user/0/com.openless.app/files"))
-                .expect("resolve");
-        assert_eq!(
-            path,
-            PathBuf::from("/data/user/0/com.openless.app/files")
-        );
+        let path = resolve_android_app_files_dir(None, Some("/data/user/0/com.openless.app/files"))
+            .expect("resolve");
+        assert_eq!(path, PathBuf::from("/data/user/0/com.openless.app/files"));
     }
 
     #[test]

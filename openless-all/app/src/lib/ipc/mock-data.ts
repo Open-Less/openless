@@ -1,3 +1,7 @@
+export const mockCredentialValues = new Map<string, string>([
+  ["orcarouter-asr:asr.endpoint", "https://api.orcarouter.ai/v1"],
+  ["orcarouter-asr:asr.model", "google/gemini-2.5-flash"],
+])
 import type {
     ActivityDay,
     CorrectionRule,
@@ -109,6 +113,7 @@ export let mockSettings: UserPreferences = {
     startMinimized: false,
     themeMode: "system",
     updateChannel: "stable",
+    updateChannelExplicit: false,
     streamingInsert: true,
     streamingInsertDefaultMigrated: true,
     streamingInsertSaveClipboard: true,

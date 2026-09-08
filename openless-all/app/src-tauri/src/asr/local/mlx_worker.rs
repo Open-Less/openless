@@ -1031,7 +1031,44 @@ pub(crate) fn run_if_requested() {
     }
 }
 
+fn bundled_mlx_metallib_from_exe(exe: &Path) -> Option<PathBuf> {
+    let macos_dir = exe.parent()?;
+    if macos_dir.file_name().is_none_or(|name| name != "MacOS") {
+        return None;
+    }
+    Some(macos_dir.parent()?.join("Resources").join("mlx.metallib"))
+}
+
+fn apply_bundled_mlx_metallib_path() {
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let Some(metallib) = bundled_mlx_metallib_from_exe(&exe) else {
+        return;
+    };
+    if !metallib.is_file() {
+        return;
+    }
+    let Some(path) = metallib.to_str() else {
+        return;
+    };
+    let Ok(c_path) = std::ffi::CString::new(path) else {
+        return;
+    };
+    extern "C" {
+        fn openless_mlx_set_metallib_path(path: *const std::os::raw::c_char) -> i32;
+    }
+    let status = unsafe { openless_mlx_set_metallib_path(c_path.as_ptr()) };
+    if status != 0 {
+        eprintln!(
+            "failed to set MLX metallib path {}: status={status}",
+            metallib.display()
+        );
+    }
+}
+
 fn run_worker(socket_path: &Path) -> Result<()> {
+    apply_bundled_mlx_metallib_path();
     let stream = UnixStream::connect(socket_path)
         .with_context(|| format!("connect MLX worker socket: {}", socket_path.display()))?;
     let session_dir = socket_path
@@ -1240,6 +1277,21 @@ mod tests {
             .args(["-c", "sleep 30"])
             .spawn()
             .unwrap()
+    }
+
+    #[test]
+    fn bundled_metallib_uses_contents_resources_not_macos() {
+        let exe = Path::new("/Applications/OpenLess.app/Contents/MacOS/openless");
+        assert_eq!(
+            bundled_mlx_metallib_from_exe(exe).as_deref(),
+            Some(Path::new(
+                "/Applications/OpenLess.app/Contents/Resources/mlx.metallib"
+            ))
+        );
+        assert_eq!(
+            bundled_mlx_metallib_from_exe(Path::new("/target/release/openless")),
+            None
+        );
     }
 
     #[test]

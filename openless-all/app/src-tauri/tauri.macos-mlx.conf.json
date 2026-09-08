@@ -6,7 +6,7 @@
   "bundle": {
     "macOS": {
       "files": {
-        "MacOS/mlx.metallib": "target/release/openless-mlx/mlx.metallib"
+        "Resources/mlx.metallib": "target/release/openless-mlx/mlx.metallib"
       }
     }
   }

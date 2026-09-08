@@ -186,27 +186,27 @@ impl SideAwareComboMonitor {
 
         #[cfg(not(target_os = "linux"))]
         {
-        if binding.modifiers.is_empty()
-            || binding
-                .modifiers
-                .iter()
-                .any(|tag| !is_side_specific_modifier_tag(tag))
-        {
-            return Err(crate::combo_hotkey::ComboHotkeyError::UnsupportedModifier(
-                "binding is not side-specific".into(),
-            ));
-        }
-        crate::shortcut_binding::parse_primary(&binding.primary).map_err(|e| {
-            crate::combo_hotkey::ComboHotkeyError::UnsupportedKey(e.to_string())
-        })?;
+            if binding.modifiers.is_empty()
+                || binding
+                    .modifiers
+                    .iter()
+                    .any(|tag| !is_side_specific_modifier_tag(tag))
+            {
+                return Err(crate::combo_hotkey::ComboHotkeyError::UnsupportedModifier(
+                    "binding is not side-specific".into(),
+                ));
+            }
+            crate::shortcut_binding::parse_primary(&binding.primary).map_err(|e| {
+                crate::combo_hotkey::ComboHotkeyError::UnsupportedKey(e.to_string())
+            })?;
 
-        let slot = ACTIVE_MONITOR.get_or_init(|| RwLock::new(None));
-        let mut guard = slot.write().expect("side combo monitor lock poisoned");
-        *guard = Some(ActiveSideCombo {
-            tx,
-            state: Mutex::new(SideAwareComboState::new(binding)),
-        });
-        Ok(Self)
+            let slot = ACTIVE_MONITOR.get_or_init(|| RwLock::new(None));
+            let mut guard = slot.write().expect("side combo monitor lock poisoned");
+            *guard = Some(ActiveSideCombo {
+                tx,
+                state: Mutex::new(SideAwareComboState::new(binding)),
+            });
+            Ok(Self)
         }
     }
 }
@@ -271,10 +271,10 @@ pub mod platform {
 
     use windows::Win32::UI::Input::KeyboardAndMouse::{
         VK_BACK, VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE, VK_F1, VK_F10, VK_F11, VK_F12, VK_F2,
-        VK_F3, VK_F4, VK_F5, VK_F6, VK_F7, VK_F8, VK_F9, VK_HOME, VK_INSERT, VK_LCONTROL,
-        VK_LEFT, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_OEM_1, VK_OEM_2, VK_OEM_3, VK_OEM_4, VK_OEM_5,
-        VK_OEM_6, VK_OEM_7, VK_OEM_COMMA, VK_OEM_MINUS, VK_OEM_PERIOD, VK_OEM_PLUS, VK_RETURN,
-        VK_RIGHT, VK_RCONTROL, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SPACE, VK_TAB, VK_UP,
+        VK_F3, VK_F4, VK_F5, VK_F6, VK_F7, VK_F8, VK_F9, VK_HOME, VK_INSERT, VK_LCONTROL, VK_LEFT,
+        VK_LMENU, VK_LSHIFT, VK_LWIN, VK_OEM_1, VK_OEM_2, VK_OEM_3, VK_OEM_4, VK_OEM_5, VK_OEM_6,
+        VK_OEM_7, VK_OEM_COMMA, VK_OEM_MINUS, VK_OEM_PERIOD, VK_OEM_PLUS, VK_RCONTROL, VK_RETURN,
+        VK_RIGHT, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SPACE, VK_TAB, VK_UP,
     };
 
     pub fn dispatch_vk(vk_code: u32, pressed: bool) {
@@ -480,10 +480,10 @@ pub mod platform {
     /// is not a known side modifier.
     fn class_mask_for_keycode(keycode: i64) -> Option<u64> {
         match keycode {
-            55 | 54 => Some(FLAG_MASK_COMMAND),     // Cmd left / right
-            59 | 62 => Some(FLAG_MASK_CONTROL),     // Ctrl left / right
-            58 | 61 => Some(FLAG_MASK_ALTERNATE),   // Alt/Option left / right
-            56 | 60 => Some(FLAG_MASK_SHIFT),       // Shift left / right
+            55 | 54 => Some(FLAG_MASK_COMMAND),   // Cmd left / right
+            59 | 62 => Some(FLAG_MASK_CONTROL),   // Ctrl left / right
+            58 | 61 => Some(FLAG_MASK_ALTERNATE), // Alt/Option left / right
+            56 | 60 => Some(FLAG_MASK_SHIFT),     // Shift left / right
             _ => None,
         }
     }
@@ -582,7 +582,10 @@ mod tests {
         state.set_side(SideModifier::ShiftLeft, false);
         state.set_side(SideModifier::ShiftRight, true);
         assert!(state.modifiers_match());
-        assert!(matches!(state.on_primary("D", true), Some(ComboHotkeyEvent::Pressed { .. })));
+        assert!(matches!(
+            state.on_primary("D", true),
+            Some(ComboHotkeyEvent::Pressed { .. })
+        ));
     }
 
     #[test]
@@ -618,7 +621,10 @@ mod tests {
         });
         state.set_side(SideModifier::CmdLeft, true);
         assert!(state.modifiers_match());
-        assert!(matches!(state.on_primary("D", true), Some(ComboHotkeyEvent::Pressed { .. })));
+        assert!(matches!(
+            state.on_primary("D", true),
+            Some(ComboHotkeyEvent::Pressed { .. })
+        ));
     }
 
     #[test]
@@ -656,9 +662,15 @@ mod tests {
     fn normal_press_then_release_is_paired() {
         let mut state = cmd_left_d_state();
         state.set_side(SideModifier::CmdLeft, true);
-        assert!(matches!(state.on_primary("D", true), Some(ComboHotkeyEvent::Pressed { .. })));
+        assert!(matches!(
+            state.on_primary("D", true),
+            Some(ComboHotkeyEvent::Pressed { .. })
+        ));
         // Primary key up terminates the combo with exactly one Released.
-        assert!(matches!(state.on_primary("D", false), Some(ComboHotkeyEvent::Released { .. })));
+        assert!(matches!(
+            state.on_primary("D", false),
+            Some(ComboHotkeyEvent::Released { .. })
+        ));
         // No trailing events; a second key-up must not emit anything.
         assert_eq!(state.on_primary("D", false), None);
         assert!(!state.combo_active);
@@ -668,9 +680,15 @@ mod tests {
     fn modifier_release_after_press_emits_paired_released() {
         let mut state = cmd_left_d_state();
         state.set_side(SideModifier::CmdLeft, true);
-        assert!(matches!(state.on_primary("D", true), Some(ComboHotkeyEvent::Pressed { .. })));
+        assert!(matches!(
+            state.on_primary("D", true),
+            Some(ComboHotkeyEvent::Pressed { .. })
+        ));
         // Modifier lifts while primary is still down -> combo terminates once.
-        assert!(matches!(state.on_modifier_release(SideModifier::CmdLeft), Some(ComboHotkeyEvent::Released { .. })));
+        assert!(matches!(
+            state.on_modifier_release(SideModifier::CmdLeft),
+            Some(ComboHotkeyEvent::Released { .. })
+        ));
         assert!(!state.combo_active);
         // A now-orphaned primary key-up must NOT emit a second Released.
         assert_eq!(state.on_primary("D", false), None);
@@ -683,10 +701,16 @@ mod tests {
         // key-up (absolute termination) must still emit the paired Released.
         let mut state = cmd_left_d_state();
         state.set_side(SideModifier::CmdLeft, true);
-        assert!(matches!(state.on_primary("D", true), Some(ComboHotkeyEvent::Pressed { .. })));
+        assert!(matches!(
+            state.on_primary("D", true),
+            Some(ComboHotkeyEvent::Pressed { .. })
+        ));
         // Modifier physically released but the release event never arrived, so the
         // side flag is still set here. Primary up is the fallback terminator.
-        assert!(matches!(state.on_primary("D", false), Some(ComboHotkeyEvent::Released { .. })));
+        assert!(matches!(
+            state.on_primary("D", false),
+            Some(ComboHotkeyEvent::Released { .. })
+        ));
         assert!(!state.combo_active);
     }
 
@@ -715,13 +739,22 @@ mod tests {
         // Releasing the required side-modifier breaks the match, so the stale latch
         // self-heals by emitting the terminal Released here (pairing the Pressed whose
         // Released was dropped). Either way combo_active must end up cleared.
-        assert!(matches!(state.on_modifier_release(SideModifier::CmdLeft), Some(ComboHotkeyEvent::Released { .. })));
+        assert!(matches!(
+            state.on_modifier_release(SideModifier::CmdLeft),
+            Some(ComboHotkeyEvent::Released { .. })
+        ));
         assert!(!state.combo_active);
 
         // Fresh, clean press cycle now behaves normally.
         state.set_side(SideModifier::CmdLeft, true);
-        assert!(matches!(state.on_primary("D", true), Some(ComboHotkeyEvent::Pressed { .. })));
-        assert!(matches!(state.on_primary("D", false), Some(ComboHotkeyEvent::Released { .. })));
+        assert!(matches!(
+            state.on_primary("D", true),
+            Some(ComboHotkeyEvent::Pressed { .. })
+        ));
+        assert!(matches!(
+            state.on_primary("D", false),
+            Some(ComboHotkeyEvent::Released { .. })
+        ));
     }
 
     #[test]
@@ -735,7 +768,10 @@ mod tests {
         assert!(state.modifiers_match());
         assert_eq!(state.on_primary("D", true), None);
         // The real terminator (primary up) still yields exactly one Released.
-        assert!(matches!(state.on_primary("D", false), Some(ComboHotkeyEvent::Released { .. })));
+        assert!(matches!(
+            state.on_primary("D", false),
+            Some(ComboHotkeyEvent::Released { .. })
+        ));
     }
 
     // ---- Fix 2: macOS race-free FLAGS_CHANGED side classification ----

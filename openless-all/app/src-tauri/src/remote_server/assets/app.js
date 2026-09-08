@@ -35,6 +35,7 @@
       labelHoldRec: '松开结束',
       ready: '准备就绪',
       preparingMic: '正在准备麦克风…',
+      preparingBackend: '后端准备中…',
       statusRecording: '🎤 录音中',
       statusTranscribing: '🔄 识别中',
       statusPolishing: '✨ 润色中',
@@ -53,6 +54,7 @@
       micNotFound: '❌ 未找到可用麦克风。',
       micBusy: '❌ 麦克风被其他应用占用。',
       micTimeout: '❌ 麦克风准备超时，请重试。',
+      pcmQueueOverflow: '❌ 音频缓存已满，请重试。',
       micUnknown: '❌ 无法启动录音{name}。',
       errGeneric: '发生错误',
       helpTitle: '连不上？多半是手机没信任证书',
@@ -86,6 +88,7 @@
       labelHoldRec: '放開結束',
       ready: '準備就緒',
       preparingMic: '正在準備麥克風…',
+      preparingBackend: '後端準備中…',
       statusRecording: '🎤 錄音中',
       statusTranscribing: '🔄 辨識中',
       statusPolishing: '✨ 潤飾中',
@@ -104,6 +107,7 @@
       micNotFound: '❌ 找不到可用的麥克風。',
       micBusy: '❌ 麥克風被其他應用程式佔用。',
       micTimeout: '❌ 麥克風準備逾時，請重試。',
+      pcmQueueOverflow: '❌ 音訊暫存已滿，請重試。',
       micUnknown: '❌ 無法啟動錄音{name}。',
       errGeneric: '發生錯誤',
       helpTitle: '連不上？多半是手機沒信任憑證',
@@ -137,6 +141,7 @@
       labelHoldRec: 'Release to stop',
       ready: 'Ready',
       preparingMic: 'Preparing microphone…',
+      preparingBackend: 'Preparing backend…',
       statusRecording: '🎤 Recording',
       statusTranscribing: '🔄 Transcribing',
       statusPolishing: '✨ Polishing',
@@ -155,6 +160,7 @@
       micNotFound: '❌ No microphone available.',
       micBusy: '❌ Microphone is in use by another app.',
       micTimeout: '❌ Microphone setup timed out. Please try again.',
+      pcmQueueOverflow: '❌ Audio buffer is full. Please try again.',
       micUnknown: '❌ Could not start recording{name}.',
       errGeneric: 'An error occurred',
       helpTitle: "Can't connect? The phone probably doesn't trust the certificate",
@@ -188,6 +194,7 @@
       labelHoldRec: '離して終了',
       ready: '準備完了',
       preparingMic: 'マイクを準備中…',
+      preparingBackend: 'バックエンドを準備しています…',
       statusRecording: '🎤 録音中',
       statusTranscribing: '🔄 認識中',
       statusPolishing: '✨ 整文中',
@@ -206,6 +213,7 @@
       micNotFound: '❌ 利用可能なマイクが見つかりません。',
       micBusy: '❌ マイクが他のアプリで使用されています。',
       micTimeout: '❌ マイクの準備がタイムアウトしました。もう一度お試しください。',
+      pcmQueueOverflow: '❌ 音声バッファがいっぱいです。もう一度お試しください。',
       micUnknown: '❌ 録音を開始できませんでした{name}。',
       errGeneric: 'エラーが発生しました',
       helpTitle: '接続できない？多くは証明書が信頼されていません',
@@ -239,6 +247,7 @@
       labelHoldRec: '떼면 종료',
       ready: '준비 완료',
       preparingMic: '마이크 준비 중…',
+      preparingBackend: '백엔드 준비 중…',
       statusRecording: '🎤 녹음 중',
       statusTranscribing: '🔄 인식 중',
       statusPolishing: '✨ 다듬는 중',
@@ -257,6 +266,7 @@
       micNotFound: '❌ 사용 가능한 마이크가 없습니다.',
       micBusy: '❌ 마이크가 다른 앱에서 사용 중입니다.',
       micTimeout: '❌ 마이크 준비 시간이 초과되었습니다. 다시 시도하세요.',
+      pcmQueueOverflow: '❌ 오디오 버퍼가 가득 찼습니다. 다시 시도하세요.',
       micUnknown: '❌ 녹음을 시작할 수 없습니다{name}.',
       errGeneric: '오류가 발생했습니다',
       helpTitle: '연결이 안 되나요? 대개 인증서를 신뢰하지 않아서입니다',
@@ -310,6 +320,7 @@
   var PIN_KEY = 'ol_remote_pin';    // localStorage 键:上次成功的配对码
   var INSERT_KEY = 'ol_remote_insert'; // localStorage 键:电脑落字开关(默认开)
   var MIC_PREP_TIMEOUT_MS = 10000;  // 麦克风准备超时:超过则判失败让用户重试,避免无限卡"准备中"
+  var PCM_QUEUE_MAX_BYTES = 128 * 1024;
 
   // ---------- DOM ----------
   var $ = function (id) { return document.getElementById(id); };
@@ -347,6 +358,11 @@
   var busy = false;               // PC 端忙,本次禁用
   var mode = readMode();          // 'toggle' | 'hold'
   var lastPin = '';
+  var remoteSessionId = '';
+  var remoteSequence = 0;
+  var finishAfterStarted = '';      // ACK 前松手/取消：'stop' | 'cancel' | ''
+  var pendingPcm = [];
+  var pendingPcmBytes = 0;
 
   // 音频相关
   var audioCtx = null;
@@ -416,7 +432,10 @@
   function readMode() {
     var m = null;
     try { m = localStorage.getItem(MODE_KEY); } catch (e) {}
-    return m === 'hold' ? 'hold' : 'toggle';
+    // 手机明确保存的两种模式优先；首次访问、旧值损坏或存储被禁用时，
+    // 跟随 PC 当前默认值。不要把继承值写回存储，否则之后 PC 改设置就失效了。
+    if (m === 'hold' || m === 'toggle') return m;
+    return window.__OL_DEFAULT_MODE__ === 'hold' ? 'hold' : 'toggle';
   }
   function writeMode(m) {
     mode = m;
@@ -439,7 +458,7 @@
     }
   }
 
-  // 切换模式时若约定的 prefer 变化,告知 PC(若已连接)
+  // 手机手动切换后保存为本机偏好，后续访问继续优先于 PC 默认值。
   modeSwitch.addEventListener('click', function (e) {
     var t = e.target.closest('.mode-btn');
     if (!t) return;
@@ -518,8 +537,11 @@
     workTimer = setTimeout(function () {
       workTimer = null;
       if (!recording && authed) {
-        setStatus('❌ ' + L.errGeneric, 'error');
-        setLevel(0);
+        if (startSent) failRecording('❌ ' + L.errGeneric, true);
+        else {
+          setStatus('❌ ' + L.errGeneric, 'error');
+          setLevel(0);
+        }
         scheduleReady();
       }
     }, 30000);
@@ -592,9 +614,14 @@
 
     ws.onclose = function () {
       clearConnectTimeout();
+      clearReadyTimer();
+      clearWorkTimeout();
+      if (busyTimer) { clearTimeout(busyTimer); busyTimer = null; }
       var wasAuthed = authed;
       authed = false;
       recording = false;
+      detachHoldEnd();
+      resetRemoteStreamState();
       teardownAudio();
       if (wasAuthed) {
         // 已进入录音屏后断开 → 断线屏
@@ -613,6 +640,13 @@
 
   function closeWS() {
     clearConnectTimeout();
+    clearReadyTimer();
+    clearWorkTimeout();
+    if (busyTimer) { clearTimeout(busyTimer); busyTimer = null; }
+    recording = false;
+    detachHoldEnd();
+    resetRemoteStreamState();
+    teardownAudio();
     if (ws) {
       ws.onopen = ws.onmessage = ws.onerror = ws.onclose = null;
       try { ws.close(); } catch (e) {}
@@ -646,14 +680,19 @@
         applyStatusKind(msg);
         break;
 
+      case 'started':
+        handleStarted(msg.sessionId);
+        break;
+
       case 'level':
         setLevel(msg.value);
         break;
 
       case 'busy':
+        clearWorkTimeout();
         busy = true;
         recording = false;
-        startSent = false; // 本次会话被服务端拒绝,复位 start 标记
+        resetRemoteStreamState();
         teardownAudioCapture(); // 停止采集但保留 ctx
         updateRecordBtnUI();
         setStatus(fmt(L.busy, { reason: msg.reason || L.busyDefault }), 'error');
@@ -704,8 +743,12 @@
         break;
       case 'error':
         clearWorkTimeout(); // 服务端已明确报错,解除兜底超时
-        setStatus('❌ ' + (msg.message || L.errGeneric), 'error');
-        setLevel(0);
+        if (recording || startSent) failRecording('❌ ' + (msg.message || L.errGeneric), true);
+        else {
+          resetRemoteStreamState();
+          setStatus('❌ ' + (msg.message || L.errGeneric), 'error');
+          setLevel(0);
+        }
         break;
       default:
         if (msg.message) setStatus(msg.message, null);
@@ -903,14 +946,14 @@
   }
 
   function startRecording() {
-    if (recording) return;
+    if (recording || startSent) return;
     if (!ws || ws.readyState !== 1) {
       setStatus(L.connLost, 'error');
       return;
     }
     // 先乐观置态,保证 iOS 在手势同步栈内 resume()
     recording = true;
-    startSent = false;  // start 尚未真正发出(等 ensureAudio 异步完成后才发)
+    resetRemoteStreamState();
     clearReadyTimer();  // 防止上一次 done 的回 ready 定时器迟到覆盖本次状态
     clearWorkTimeout(); // 新一次录音开始,作废上一轮的识别兜底超时
     updateRecordBtnUI();
@@ -926,10 +969,11 @@
         }
         wsSendJSON({ type: 'start' });
         startSent = true; // start 已发出,stopRecording 才需要配对发 stop
-        setStatus(stripLeadingIcon(L.statusRecording), 'work');
+        setStatus(L.preparingBackend, 'work');
       })
       .catch(function (err) {
         recording = false;
+        resetRemoteStreamState();
         // 超时多半是 audioCtx 卡死(resume 永不 settle),彻底重建,否则下次重试会继续卡在
         // 同一个坏 ctx 上;非超时错误只需停采集链。
         if (err && err.name === 'TIMEOUT') resetAudioContext();
@@ -949,23 +993,29 @@
     // start 还没发出(hold 按下后立即松手,ensureAudio 尚未完成)→ 按本地取消处理:
     // 不发孤立 stop,否则 PC 无对应会话、不回 done/error,UI 会永久卡在"识别中…"。
     if (!startSent) {
+      resetRemoteStreamState();
       setStatus(L.ready, null);
       setLevel(0);
       return;
     }
-    startSent = false;
-    wsSendJSON({ type: 'stop' });
-    setStatus(stripLeadingIcon(L.statusTranscribing), 'work');
-    if (statusDots) statusDots.hidden = false;
-    setLevel(0);
-    armWorkTimeout(); // 兜底:30 秒内服务端不回 done/error 则强制回 ready
+    if (remoteSessionId) {
+      wsSendJSON({ type: 'stop' });
+      resetRemoteStreamState();
+      enterTranscribing();
+    } else {
+      // ACK 未到：先保留首段 PCM，ACK 后按序 flush，再把 stop 排在音频帧之后。
+      finishAfterStarted = 'stop';
+      setStatus(L.preparingBackend, 'work');
+      setLevel(0);
+      armWorkTimeout();
+    }
   }
 
   function cancelRecording() {
     detachHoldEnd();
-    if (!recording) {
-      // 即便未在录音也确保采集停掉
+    if (!recording && !startSent) {
       teardownAudioCapture();
+      resetRemoteStreamState();
       return;
     }
     clearReadyTimer();
@@ -973,9 +1023,16 @@
     recording = false;
     updateRecordBtnUI();
     teardownAudioCapture();
-    // 同 stopRecording:start 未发出就不发孤立 cancel
-    if (startSent) wsSendJSON({ type: 'cancel' });
-    startSent = false;
+    if (startSent) {
+      wsSendJSON({ type: 'cancel' });
+      if (remoteSessionId) resetRemoteStreamState();
+      else {
+        finishAfterStarted = 'cancel';
+        clearPendingPcm();
+      }
+    } else {
+      resetRemoteStreamState();
+    }
     setStatus(L.cancelled, null);
     setLevel(0);
   }
@@ -1214,13 +1271,133 @@
     return oi > 0 ? pcm.slice(0, oi * 2) : null;
   }
 
-  // 发送二进制音频帧(仅录音中且连接可用)
-  function sendAudio(buf) {
-    if (!recording) return;
-    if (ws && ws.readyState === 1 && buf && buf.byteLength) {
-      try { ws.send(buf); } catch (e) {}
-      updateLocalLevel(buf);
+  function clearPendingPcm() {
+    pendingPcm = [];
+    pendingPcmBytes = 0;
+  }
+
+  function resetRemoteStreamState() {
+    startSent = false;
+    remoteSessionId = '';
+    remoteSequence = 0;
+    finishAfterStarted = '';
+    clearPendingPcm();
+  }
+
+  function enterTranscribing() {
+    setStatus(stripLeadingIcon(L.statusTranscribing), 'work');
+    if (statusDots) statusDots.hidden = false;
+    setLevel(0);
+    armWorkTimeout();
+  }
+
+  function failRecording(message, notifyBackend) {
+    var waitingForAck = startSent && !remoteSessionId;
+    recording = false;
+    detachHoldEnd();
+    teardownAudioCapture();
+    if (notifyBackend && startSent) wsSendJSON({ type: 'cancel' });
+    if (waitingForAck) {
+      finishAfterStarted = 'cancel';
+      clearPendingPcm();
+    } else {
+      resetRemoteStreamState();
     }
+    updateRecordBtnUI();
+    setStatus(message, 'error');
+    setLevel(0);
+  }
+
+  function sendRemoteFrame(buf) {
+    if (!ws || ws.readyState !== 1 || !remoteSessionId) return false;
+    try {
+      ws.send(buildAudioFrame(remoteSessionId, remoteSequence, buf));
+      remoteSequence++;
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function flushPendingPcm() {
+    var queued = pendingPcm;
+    clearPendingPcm();
+    for (var i = 0; i < queued.length; i++) {
+      if (!sendRemoteFrame(queued[i])) return false;
+    }
+    return true;
+  }
+
+  function handleStarted(sessionId) {
+    if (!startSent) {
+      clearPendingPcm();
+      return;
+    }
+    if (finishAfterStarted === 'cancel') {
+      resetRemoteStreamState();
+      updateRecordBtnUI();
+      return;
+    }
+    if (remoteSessionId) return;
+    if (typeof sessionId !== 'string' ||
+        !/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(sessionId)) {
+      failRecording('❌ ' + L.errGeneric, true);
+      return;
+    }
+
+    remoteSessionId = sessionId;
+    remoteSequence = 0;
+    if (!flushPendingPcm()) {
+      failRecording(L.connLost, true);
+      return;
+    }
+    if (finishAfterStarted === 'stop') {
+      wsSendJSON({ type: 'stop' });
+      resetRemoteStreamState();
+      enterTranscribing();
+    } else if (recording) {
+      setStatus(stripLeadingIcon(L.statusRecording), 'work');
+    } else {
+      wsSendJSON({ type: 'cancel' });
+      resetRemoteStreamState();
+    }
+  }
+
+  // 发送二进制音频帧；start ACK 前最多缓存 128 KiB，避免冷启动吞掉首词。
+  function sendAudio(buf) {
+    if (!recording || !buf || !buf.byteLength) return;
+    if (!ws || ws.readyState !== 1) {
+      failRecording(L.connLost, false);
+      return;
+    }
+    if (remoteSessionId) {
+      if (!sendRemoteFrame(buf)) failRecording(L.connLost, true);
+      else updateLocalLevel(buf);
+      return;
+    }
+    if (pendingPcmBytes + buf.byteLength > PCM_QUEUE_MAX_BYTES) {
+      failRecording(L.pcmQueueOverflow, true);
+      return;
+    }
+    pendingPcm.push(buf);
+    pendingPcmBytes += buf.byteLength;
+    updateLocalLevel(buf);
+  }
+
+  function buildAudioFrame(sessionId, sequence, pcm) {
+    var hex = sessionId.replace(/-/g, '');
+    if (!/^[0-9a-fA-F]{32}$/.test(hex)) throw new Error('invalid session id');
+    var frame = new ArrayBuffer(28 + pcm.byteLength);
+    var view = new DataView(frame);
+    view.setUint8(0, 0x4f); view.setUint8(1, 0x4c);
+    view.setUint8(2, 0x32); view.setUint8(3, 0x30);
+    for (var i = 0; i < 16; i++) view.setUint8(4 + i, parseInt(hex.slice(i * 2, i * 2 + 2), 16));
+    var high = Math.floor(sequence / 0x100000000);
+    var low = sequence >>> 0;
+    view.setUint32(20, high, false);
+    view.setUint32(24, low, false);
+    new Uint8Array(frame, 28).set(new Uint8Array(pcm));
+    return frame;
   }
 
   // 本地音量可视化:直接用即将上传的 Int16 PCM 算 RMS。远程模式下 PC 端没有麦克风
