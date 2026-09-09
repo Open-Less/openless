@@ -85,7 +85,19 @@ struct Context {
     state: KeyState,
     tx: Sender<ComboHotkeyEvent>,
     stop: Arc<AtomicBool>,
+    tap: *mut c_void,
 }
+
+fn recover_disabled_tap(ctx: &mut Context, enable: impl FnOnce(*mut c_void)) {
+    if ctx.state.held {
+        let _ = ctx
+            .tx
+            .send(ComboHotkeyEvent::Released { at: Instant::now() });
+    }
+    ctx.state.held = false;
+    enable(ctx.tap);
+}
+
 extern "C" fn callback(
     _: *mut c_void,
     kind: u32,
@@ -97,17 +109,9 @@ extern "C" fn callback(
     }
     let ctx = unsafe { &mut *(data as *mut Context) };
     if kind == 0xffff_fffe || kind == 0xffff_ffff {
-        // Fail open. A disabled hook must not retain a held-key latch.
-        if ctx.state.held {
-            let _ = ctx
-                .tx
-                .send(ComboHotkeyEvent::Released { at: Instant::now() });
-        }
-        ctx.state.held = false;
-        ctx.stop.store(true, Ordering::SeqCst);
-        log::warn!(
-            "[dictation-key] native interception disabled; select the shortcut again to retry"
-        );
+        // Fail open for a held key, then restore the selected trigger in place.
+        recover_disabled_tap(ctx, |tap| unsafe { CGEventTapEnable(tap, true) });
+        log::warn!("[dictation-key] native interception was disabled and has been re-enabled");
         return event;
     }
     if event.is_null() || !matches!(kind, 10 | 11) {
@@ -165,6 +169,7 @@ impl Monitor {
                     state: KeyState::default(),
                     tx,
                     stop: thread_stop.clone(),
+                    tap: std::ptr::null_mut(),
                 };
                 let tap = CGEventTapCreate(
                     0,
@@ -178,6 +183,7 @@ impl Monitor {
                     let _ = ready_tx.send(Err("macDictationKeyPermission".to_string()));
                     return;
                 }
+                context.tap = tap;
                 let source = CFMachPortCreateRunLoopSource(std::ptr::null(), tap, 0);
                 if source.is_null() {
                     CFMachPortInvalidate(tap);
@@ -256,5 +262,27 @@ mod tests {
         assert_eq!(s.event(176, false, false, MODIFIERS), Edge::Release);
         assert_eq!(s.event(176, false, false, 0), Edge::Pass);
         assert_eq!(s.event(176, true, false, 0), Edge::Press);
+    }
+    #[test]
+    fn disabled_tap_releases_held_key_and_is_reenabled() {
+        let (tx, rx) = mpsc::channel();
+        let stop = Arc::new(AtomicBool::new(false));
+        let mut context = Context {
+            state: KeyState { held: true },
+            tx,
+            stop: stop.clone(),
+            tap: std::ptr::null_mut(),
+        };
+        let mut reenabled = false;
+
+        recover_disabled_tap(&mut context, |_| reenabled = true);
+
+        assert!(reenabled);
+        assert!(!context.state.held);
+        assert!(!stop.load(Ordering::SeqCst));
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(ComboHotkeyEvent::Released { .. })
+        ));
     }
 }
