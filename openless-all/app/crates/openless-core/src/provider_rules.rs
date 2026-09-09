@@ -1085,6 +1085,19 @@ mod tests {
     }
 
     #[test]
+    fn browser_provider_descriptor_fixture_matches_core() {
+        let fixture: Vec<ProviderDescriptor> = serde_json::from_str(include_str!(
+            "../../../src/lib/ipc/mock-provider-descriptors.json"
+        ))
+        .unwrap();
+        let actual = [ProviderKind::Llm, ProviderKind::Asr, ProviderKind::Omni]
+            .into_iter()
+            .flat_map(provider_descriptors)
+            .collect::<Vec<_>>();
+        assert_eq!(fixture, actual);
+    }
+
+    #[test]
     fn secret_like_volc_resource_ids_are_not_attributed() {
         assert_eq!(
             volc_resource_history_label("volc.seedasr.sauc.duration").as_deref(),

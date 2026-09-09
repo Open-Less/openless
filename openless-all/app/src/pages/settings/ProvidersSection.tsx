@@ -109,6 +109,53 @@ const ASR_DEFAULT_RESOURCE_ID = 'volc.seedasr.sauc.duration';
 /** 模型预设下拉里的「自定义模型…」哨兵值：选中即切回输入框手输。 */
 const CUSTOM_MODEL_OPTION_VALUE = '__custom_model__';
 
+function useRegisteredCredentialDraft(
+  account: string,
+  provider?: string,
+  onUserMutation?: () => void,
+  onBlockedChange?: (account: string, blocked: boolean) => void,
+  enabled = true,
+) {
+  const { t } = useTranslation();
+  const form = useContext(ProviderFormContext);
+  const draft = useMemo(() => new CredentialDraft(
+    () => readCredential(account, provider), value => setCredential(account, value, provider),
+  ), [account, provider]);
+  const state = useSyncExternalStore(draft.subscribe, draft.snapshot, draft.snapshot);
+  const blocked = !state.loaded || state.dirty || state.status === 'saving'
+    || state.status === 'readError' || state.status === 'saveError';
+
+  useEffect(() => {
+    if (!enabled) return;
+    void draft.load();
+    return () => draft.dispose();
+  }, [draft, enabled]);
+  useEffect(() => {
+    if (!enabled) return;
+    form?.track(account, blocked);
+    onBlockedChange?.(account, blocked);
+  }, [account, blocked, enabled, form?.track, onBlockedChange]);
+  useEffect(() => enabled ? form?.register(account, draft.flush) : undefined,
+    [account, draft, enabled, form?.register]);
+  useEffect(() => {
+    if (!enabled) return;
+    if (state.status === 'saving') emitSaved('saving', t('common.saving'));
+    if (state.status === 'saved') emitSaved('saved', t('common.saved'));
+    if (state.status === 'saveError') emitSaved('failed', t('common.operationFailed'));
+  }, [enabled, state.status, t]);
+
+  const edit = (value: string) => {
+    if (!enabled || !state.loaded) return false;
+    form?.track(account, true);
+    form?.invalidate(account);
+    onUserMutation?.();
+    draft.edit(value);
+    return true;
+  };
+
+  return { ...state, draft, edit, disabled: !enabled || !state.loaded || form?.leaving };
+}
+
 /**
  * 一张渠道卡片的凭据字段区（编辑弹窗的主体）。
  *
@@ -151,18 +198,11 @@ export function ChannelCredentialFields({
 
   const unifiedBailian = providerType === 'bailian';
   const [bailianModel, setBailianModel] = useState('');
-  const [volcengineAuthMode, setVolcengineAuthMode] = useState<'app_id_token' | 'api_key'>('app_id_token');
-
-  useEffect(() => {
-    if (providerType === 'volcengine') {
-      readCredential('volcengine.auth_mode', channelId)
-        .then(v => {
-          if (v === 'api_key') setVolcengineAuthMode('api_key');
-          else setVolcengineAuthMode('app_id_token');
-        })
-        .catch(() => setVolcengineAuthMode('app_id_token'));
-    }
-  }, [providerType, channelId]);
+  const volcengineAuth = useRegisteredCredentialDraft(
+    'volcengine.auth_mode', channelId, onUserMutation, undefined,
+    descriptor?.authRequirement === 'volcengine',
+  );
+  const volcengineAuthMode = volcengineAuth.value === 'api_key' ? 'api_key' : 'app_id_token';
 
   useEffect(() => {
     if (!unifiedBailian) setBailianModel('');
@@ -253,20 +293,13 @@ export function ChannelCredentialFields({
         <SettingRow label={t('settings.providers.volcengineAuthModeLabel')}>
           <SelectLite
             value={volcengineAuthMode}
-            onChange={async (v) => {
-              onUserMutation?.();
-              const mode = v as 'app_id_token' | 'api_key';
-              const prev = volcengineAuthMode;
-              setVolcengineAuthMode(mode);
-              try {
-                await setCredential('volcengine.auth_mode', mode, channelId);
-              } catch (error) {
-                // 写入失败必须回滚 UI 并提示：否则模式看着已切换、重启后却静默回退，
-                // 配合独立 API Key 槽会造成「Key 存在但模式不对」的混乱。
-                console.error('[settings] failed to save volcengine auth mode', error);
-                setVolcengineAuthMode(prev);
-                emitSaved('failed', t('common.operationFailed'));
-              }
+            disabled={volcengineAuth.disabled}
+            onChange={v => {
+              const save = async () => {
+                if (volcengineAuth.edit(v)) await volcengineAuth.draft.flush();
+              };
+              if (form) void form.finish(save);
+              else void save();
             }}
             options={[
               { value: 'app_id_token', label: t('settings.providers.volcengineAuthModeAppIdToken') },
@@ -275,6 +308,12 @@ export function ChannelCredentialFields({
             ariaLabel={t('settings.providers.volcengineAuthModeLabel')}
             style={{ ...inputStyle, width: '100%', maxWidth: layoutStack ? '100%' : 260 }}
           />
+          {volcengineAuth.status === 'readError' && (
+            <span style={{ fontSize: 11, color: 'var(--ol-warn)' }}>{t('settings.providers.readFailed')}</span>
+          )}
+          {volcengineAuth.status === 'saveError' && (
+            <button onClick={() => void volcengineAuth.draft.flush()} style={miniBtnStyle}>{t('common.retry')}</button>
+          )}
         </SettingRow>
         {/* 两种模式使用各自独立的凭据槽位：旧版 Access Token（volcengine.access_key）
             与方舟 API Key（volcengine.api_key）互不预填，切换模式不会残留混淆。 */}
@@ -383,7 +422,7 @@ export function ChannelCredentialFields({
         onTested={onTested}
         onUserMutation={onUserMutation} />
       {(providerType === 'openai-compatible' || providerType === 'zenmux') && (
-        <AsrAdvancedOptions provider={channelId} onUserMutation={onUserMutation} />
+        <AsrAdvancedOptions provider={channelId} providerType={providerType} onUserMutation={onUserMutation} />
       )}
     </>
   );
@@ -394,41 +433,25 @@ export function ChannelCredentialFields({
 // zenmux 暴露 enable_itn（数字归一化）开关，verbose_json / 分片对其无意义。
 function AsrAdvancedOptions({
   provider,
+  providerType,
   onUserMutation,
 }: {
   provider: string;
+  providerType: 'openai-compatible' | 'zenmux';
   onUserMutation?: () => void;
 }) {
   const { t } = useTranslation();
-  const [verboseJson, setVerboseJson] = useState(false);
+  const advanced = useRegisteredCredentialDraft('asr.advanced_config', provider, onUserMutation);
+  const config = useMemo(() => parseAdvancedAsrConfig(advanced.loaded ? advanced.value : null),
+    [advanced.loaded, advanced.value]);
   const [chunkDraft, setChunkDraft] = useState('');
-  const [enableItn, setEnableItn] = useState(true);
-  const [status, setStatus] = useState<'idle' | 'saving' | 'error'>('idle');
-  const [error, setError] = useState('');
+  const chunkInitialized = useRef(false);
 
   useEffect(() => {
-    let cancelled = false;
-    setStatus('idle');
-    setError('');
-    void (async () => {
-      try {
-        const raw = await readCredential('asr.advanced_config', provider);
-        if (cancelled) return;
-        const config = parseAdvancedAsrConfig(raw);
-        setVerboseJson(config.verboseJson);
-        setChunkDraft(config.chunkDurationMs ? String(config.chunkDurationMs) : '');
-        setEnableItn(config.enableItn);
-      } catch (err) {
-        if (!cancelled) {
-          setStatus('error');
-          setError(err instanceof Error ? err.message : String(err));
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [provider]);
+    if (!advanced.loaded || (chunkInitialized.current && advanced.status !== 'saved')) return;
+    chunkInitialized.current = true;
+    setChunkDraft(config.chunkDurationMs ? String(config.chunkDurationMs) : '');
+  }, [advanced.loaded, advanced.status, config.chunkDurationMs]);
 
   const parseChunkDraft = (draft: string): number | null => {
     const value = Number(draft);
@@ -436,32 +459,20 @@ function AsrAdvancedOptions({
     return Math.floor(value);
   };
 
-  const save = async (partial: {
+  const edit = (partial: {
     verboseJson?: boolean
     chunkDurationMs?: number | null
     enableItn?: boolean
   }) => {
-    onUserMutation?.();
-    setStatus('saving');
-    setError('');
     const next: AdvancedAsrConfig = {
-      verboseJson: partial.verboseJson ?? verboseJson,
+      verboseJson: partial.verboseJson ?? config.verboseJson,
       chunkDurationMs:
         partial.chunkDurationMs !== undefined
           ? partial.chunkDurationMs
           : parseChunkDraft(chunkDraft),
-      enableItn: partial.enableItn ?? enableItn,
+      enableItn: partial.enableItn ?? config.enableItn,
     };
-    try {
-      await setCredential('asr.advanced_config', serializeAdvancedAsrConfig(next), provider);
-      setVerboseJson(next.verboseJson);
-      setChunkDraft(next.chunkDurationMs ? String(next.chunkDurationMs) : '');
-      setEnableItn(next.enableItn);
-      setStatus('idle');
-    } catch (err) {
-      setStatus('error');
-      setError(err instanceof Error ? err.message : String(err));
-    }
+    return advanced.edit(serializeAdvancedAsrConfig(next));
   };
 
   return (
@@ -477,12 +488,15 @@ function AsrAdvancedOptions({
       >
         {t('settings.providers.asrAdvancedNote')}
       </div>
-      {provider === 'zenmux' ? (
+      <fieldset disabled={advanced.disabled} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
+      {providerType === 'zenmux' ? (
         <SettingRow
           label={t('settings.providers.asrAdvancedEnableItnLabel')}
           desc={t('settings.providers.asrAdvancedEnableItnHint')}
         >
-          <Toggle on={enableItn} onToggle={(next) => void save({ enableItn: next })} />
+          <Toggle on={config.enableItn} onToggle={(next) => {
+            if (edit({ enableItn: next })) void advanced.draft.flush();
+          }} />
         </SettingRow>
       ) : (
         <>
@@ -490,7 +504,9 @@ function AsrAdvancedOptions({
             label={t('settings.providers.asrAdvancedVerboseJsonLabel')}
             desc={t('settings.providers.asrAdvancedVerboseJsonHint')}
           >
-            <Toggle on={verboseJson} onToggle={(next) => void save({ verboseJson: next })} />
+            <Toggle on={config.verboseJson} onToggle={(next) => {
+              if (edit({ verboseJson: next })) void advanced.draft.flush();
+            }} />
           </SettingRow>
           <SettingRow
             label={t('settings.providers.asrAdvancedChunkLabel')}
@@ -502,9 +518,13 @@ function AsrAdvancedOptions({
               step={1000}
               value={chunkDraft}
               placeholder="0"
-              disabled={status === 'saving'}
-              onChange={(e) => setChunkDraft(e.target.value)}
-              onBlur={() => void save({ chunkDurationMs: parseChunkDraft(chunkDraft) })}
+              disabled={advanced.disabled}
+              onChange={(event) => {
+                const value = event.target.value;
+                setChunkDraft(value);
+                if (edit({ chunkDurationMs: parseChunkDraft(value) })) advanced.draft.schedule();
+              }}
+              onBlur={() => void advanced.draft.flush()}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
               }}
@@ -513,10 +533,14 @@ function AsrAdvancedOptions({
           </SettingRow>
         </>
       )}
-      {status === 'error' && (
+      </fieldset>
+      {advanced.status === 'readError' && (
         <div style={{ fontSize: 11, color: 'var(--ol-warn)', lineHeight: 1.4 }}>
-          {t('common.operationFailed')}: {error}
+          {t('settings.providers.readFailed')}
         </div>
+      )}
+      {advanced.status === 'saveError' && (
+        <button onClick={() => void advanced.draft.flush()} style={miniBtnStyle}>{t('common.retry')}</button>
       )}
     </>
   );
@@ -730,34 +754,15 @@ function CredentialField({ label, account, provider, placeholder, mono, mask, de
   const baseLayoutStack = useLayoutStack();
   const conservative = useConservativeLayout();
   const layoutStack = conservative || baseLayoutStack;
-  const form = useContext(ProviderFormContext);
-  const draft = useMemo(() => new CredentialDraft(
-    () => readCredential(account, provider), value => setCredential(account, value, provider),
-  ), [account, provider]);
-  const { value, loaded, dirty, status } = useSyncExternalStore(draft.subscribe, draft.snapshot, draft.snapshot);
+  const credential = useRegisteredCredentialDraft(account, provider, onUserMutation, onBlockedChange);
+  const { draft, value, loaded, status, disabled } = credential;
   const [revealed, setRevealed] = useState(false);
   const [customModelMode, setCustomModelMode] = useState(false);
   const composing = useRef(false);
-  const blocked = !loaded || dirty || status === 'saving' || status === 'readError' || status === 'saveError';
-  useEffect(() => { void draft.load(); return () => draft.dispose(); }, [draft]);
-  useEffect(() => {
-    form?.track(account, blocked);
-    onBlockedChange?.(account, blocked);
-  }, [account, blocked, form?.track, onBlockedChange]);
-  useEffect(() => form?.register(account, draft.flush), [account, draft, form?.register]);
   useEffect(() => { if (loaded) onValueChange?.(value); }, [loaded, value, onValueChange]);
-  useEffect(() => {
-    if (status === 'saving') emitSaved('saving', t('common.saving'));
-    if (status === 'saved') emitSaved('saved', t('common.saved'));
-    if (status === 'saveError') emitSaved('failed', t('common.operationFailed'));
-  }, [status, t]);
 
   const change = (next: string, immediate = false) => {
-    if (!loaded || form?.leaving) return;
-    form?.track(account, true);
-    form?.invalidate(account);
-    onUserMutation?.();
-    draft.edit(next);
+    if (!credential.edit(next)) return;
     if (immediate) void draft.flush();
     else if (!composing.current) draft.schedule();
   };
@@ -771,7 +776,6 @@ function CredentialField({ label, account, provider, placeholder, mono, mask, de
   };
 
   const inputType = mask && !revealed ? 'password' : 'text';
-  const disabled = !loaded || form?.leaving;
   const showInsecureEndpointWarning = (account === 'ark.endpoint' || account === 'asr.endpoint' || account === 'omni.endpoint')
     && value.trim().toLowerCase().startsWith('http://');
 

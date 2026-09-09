@@ -54,6 +54,29 @@ async function main() {
   failed = false;
   assert(await retry.flush() && !retry.snapshot().dirty, 'same edit must be retryable');
 
+  const authWrite = deferred<void>();
+  const advancedWrite = deferred<void>();
+  let advancedAttempts = 0;
+  const authMode = new CredentialDraft(async () => '', () => authWrite.promise);
+  const advanced = new CredentialDraft(async () => '{}', () => (
+    ++advancedAttempts === 1 ? advancedWrite.promise : Promise.resolve()
+  ));
+  await Promise.all([authMode.load(), advanced.load()]);
+  authMode.edit('api_key');
+  advanced.edit('{"verboseJson":true,"chunkDurationMs":30000,"enableItn":false}');
+  let leaveFinished = false;
+  const leave = Promise.all([authMode.flush(), advanced.flush()])
+    .then(results => results.every(Boolean))
+    .finally(() => { leaveFinished = true; });
+  await tick();
+  assert(!leaveFinished, 'leaving must wait for every registered credential write');
+  authWrite.resolve();
+  advancedWrite.reject(new Error('save'));
+  assert(!await leave, 'one failed credential write must block leaving');
+  assert(authMode.snapshot().value === 'api_key' && !authMode.snapshot().dirty, 'successful auth mode must remain saved');
+  assert(advanced.snapshot().value.includes('30000') && advanced.snapshot().dirty, 'failed advanced config must retain its draft');
+  assert(await advanced.flush() && !advanced.snapshot().dirty, 'advanced config must retry the retained value');
+
   const oldRead = deferred<string | null>();
   let reads = 0;
   const reading = new CredentialDraft(() => ++reads === 1 ? oldRead.promise : Promise.resolve('new'), async () => undefined);
@@ -63,6 +86,6 @@ async function main() {
   reading.dispose(); await reading.load(); reading.edit('typed');
   oldRead.resolve('stale'); await initial;
   assert(reading.snapshot().value === 'typed', 'old read must not replace a new scope or edit');
-  draft.dispose(); retry.dispose(); reading.dispose();
+  draft.dispose(); retry.dispose(); authMode.dispose(); advanced.dispose(); reading.dispose();
 }
 void main();
