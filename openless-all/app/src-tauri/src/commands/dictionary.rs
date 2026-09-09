@@ -48,10 +48,10 @@ pub fn add_correction_rule(
         .map_err(|e| e.to_string())
 }
 
-/// 卡片上点了勾：把这个词收进词汇表，打「自动收集」标记，随时能在词汇表页删掉。
+/// 卡片上点了勾：macOS 保存词条；Windows 保存明确确认的纠正规则，可在词汇表撤销。
 #[tauri::command]
-pub fn accept_pending_correction(coord: CoordinatorState<'_>, id: String) {
-    coord.accept_pending_correction(&id);
+pub fn accept_pending_correction(coord: CoordinatorState<'_>, id: String) -> Result<(), String> {
+    coord.accept_pending_correction(&id).map_err(|e| e.to_string())
 }
 
 /// 卡片上点了叉：丢掉这一条，什么都不记（没有拒绝名单）。

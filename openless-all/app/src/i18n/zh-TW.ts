@@ -426,6 +426,8 @@ export const zhTW: typeof zhCN = {
     },
   },
   vocabCard: {
+    windowsTitle: '記住此替換？可在詞彙表 → 糾正規則撤銷',
+    windowsAccept: '確認並記住替換，下次聽寫自動使用',
     title: '要記住這個詞嗎？',
     accept: '記住',
     reject: '不用',
@@ -704,6 +706,8 @@ export const zhTW: typeof zhCN = {
       useSystemProxyDesc: '開啟時請求跟隨系統代理；關閉後所有網路請求直連（國內服務延遲通常更低），GitHub 登入、更新等境外服務可能連不上。即時語音串流與 Less Computer 不受此開關影響。',
     },
     dataStorage: {
+      editLearningLabel: '手改詞條學習（Windows 實驗）',
+      editLearningDesc: '聽寫後最多 60 秒，僅偵測同一輸入框的改詞；停頓後詢問，確認才存入糾正規則。切換焦點即停止，不讀密碼框、終端與密碼管理器，不上傳輸入框內容。不支援的控制項不會學習。可在詞彙表停用或刪除已記住的改法。',
       title: '資料儲存',
       desc: '本機保留的歷史會話與對話上下文。',
       cursorContextLabel: '游標上下文（實驗）',

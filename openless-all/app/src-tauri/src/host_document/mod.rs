@@ -5,9 +5,8 @@
 //!
 //! ## 边界
 //!
-//! 所有平台差异关在本模块内。非 macOS 一律返回 [`HostDocumentStatus::Unsupported`]：
-//! Windows 没有任何 UIAutomation 代码且 TSF 只在提交瞬间激活；Linux 的 fcitx5
-//! SurroundingText 多数客户端不支持。留着接口形状一致，将来补实现不用改调用方。
+//! 所有平台差异关在本模块内。光标上下文读取仅支持 macOS；Windows 实现有界 UIA
+//! 手改监听（不读取/上传用于润色的光标上下文）。Linux 暂不支持。
 //!
 //! ## 三条硬约束（新代码不得违反，哪怕仓库里的旧 AX 代码就是这么写的）
 //!
@@ -27,6 +26,10 @@
 
 mod diff;
 mod window;
+#[cfg(any(target_os = "windows", test))]
+mod edit_session;
+#[cfg(target_os = "windows")]
+mod windows;
 
 #[cfg(target_os = "macos")]
 mod macos;
@@ -346,14 +349,14 @@ fn blocked_result(reason: BlockReason) -> HostDocumentReadResult {
 /// 的每次击键唤醒。所以除了这里的 RAII，观察线程自己还有 60 秒硬超时和「前台 app 一换
 /// 就自杀」两道保险。
 pub struct EditWatcher {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl EditWatcher {
     /// 主动解除。幂等，drop 时会自动调用。
     pub fn disarm(&self) {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         self.stop
             .store(true, std::sync::atomic::Ordering::Relaxed);
     }
@@ -385,7 +388,13 @@ where
         let stop = macos::spawn_edit_watcher(typed_text, Box::new(on_edit))?;
         Some(EditWatcher { stop })
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        if typed_text.trim().is_empty() { return None; }
+        let stop = windows::spawn_edit_watcher(typed_text, Box::new(on_edit))?;
+        Some(EditWatcher { stop })
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = (typed_text, on_edit);
         None
@@ -404,7 +413,7 @@ mod tests {
     ///
     /// 这条链一旦断了，症状是**静默的**：观察器活到 60 秒硬超时才停，期间继续读用户
     /// 正在写的文档、继续上报，还会和新武装的那个并行跑。所以钉一个测试在这里。
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     #[test]
     fn dropping_the_watcher_stops_the_observer_thread() {
         use std::sync::atomic::{AtomicBool, Ordering};

@@ -424,6 +424,8 @@ export const zhCN = {
     },
   },
   vocabCard: {
+    windowsTitle: '记住此替换？可在词汇表 → 纠正规则撤销',
+    windowsAccept: '确认并记住替换，下次听写自动使用',
     title: '要记住这个词吗？',
     accept: '记住',
     reject: '不用',
@@ -705,6 +707,8 @@ export const zhCN = {
       title: '数据存储',
       desc: '本机保留的历史会话与对话上下文。',
       cursorContextLabel: '光标上下文（实验）',
+      editLearningLabel: '手改词条学习（Windows 实验）',
+      editLearningDesc: '听写后最多 60 秒，仅在当前输入框检测改词；停顿后询问，确认才保存到纠正规则，下次听写自动替换。切换窗口或输入框即停止，不读密码框、终端、密码管理器；不上传输入框内容。不支持的控件不会学习。可在词汇表停用或删除已记住的改法。',
       cursorContextDesc:
         '润色时读取你正在写的那篇文档中光标附近的原文，帮模型判断同音词、专名和代词该怎么写。开启后这段文字会随请求发送给你配置的 LLM 服务商；关闭时一个字都不读。密码输入框、Secure Input、密码管理器与终端始终不读。仅 macOS。',
     },

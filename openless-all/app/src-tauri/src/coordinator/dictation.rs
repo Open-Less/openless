@@ -824,9 +824,9 @@ fn arm_edit_watch(inner: &Arc<Inner>, status: InsertStatus, typed_text: &str) {
             return;
         }
         log::info!(
-            "[cursor-context] user edit detected: source={:?} target={:?}",
-            edit.source,
-            edit.target
+            "[cursor-context] user edit detected: source_chars={} target_chars={}",
+            edit.source.chars().count(),
+            edit.target.chars().count()
         );
         handle_user_edit(&inner_for_edit, edit);
     });
@@ -894,9 +894,9 @@ fn queue_correction_suggestion(inner: &Arc<Inner>, rule: &crate::host_document::
         });
     }
     log::info!(
-        "[cursor-context] vocabulary suggested (awaiting confirmation): {:?} (was {:?})",
-        rule.replacement,
-        rule.pattern
+        "[cursor-context] vocabulary suggested (awaiting confirmation): target_chars={} source_chars={}",
+        rule.replacement.chars().count(),
+        rule.pattern.chars().count()
     );
     super::show_vocab_suggestion_card(inner);
 }

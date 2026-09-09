@@ -94,7 +94,7 @@ export function Vocab() {
     (async () => {
       const { listen } = await import('@tauri-apps/api/event');
       const handle = await listen('vocab:updated', () => {
-        void refresh();
+        refreshAll();
       });
       if (cancelled) handle();
       else unlisten = handle;

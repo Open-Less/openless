@@ -18,6 +18,7 @@ import {
   rejectPendingCorrection,
 } from '../lib/ipc';
 import type { PendingCorrection } from '../lib/types';
+import { detectOS } from './WindowChrome';
 
 /// 卡片自己消失的时间，与后端 `VOCAB_SUGGESTION_TTL_MS` 对齐。
 const TTL_MS = 10_000;
@@ -30,6 +31,7 @@ export function VocabSuggestionCard({ suggestions }: VocabSuggestionCardProps) {
   const { t } = useTranslation();
   // 点过的立刻从卡片上消失——不等后端回音，点了就该有反应。
   const [resolved, setResolved] = useState<Set<string>>(new Set());
+  const [error, setError] = useState('');
   const timerRef = useRef<number | null>(null);
 
   // 10 秒倒计时。列表一变就重新计时：同一次听写里连着改了几个词会陆续追加进来，
@@ -53,7 +55,9 @@ export function VocabSuggestionCard({ suggestions }: VocabSuggestionCardProps) {
     setResolved(prev => new Set(prev).add(id));
     try {
       await commit(id);
-    } catch {
+      setError('');
+    } catch (reason) {
+      setError(String(reason));
       setResolved(prev => {
         const next = new Set(prev);
         next.delete(id);
@@ -96,6 +100,7 @@ export function VocabSuggestionCard({ suggestions }: VocabSuggestionCardProps) {
         }}
       >
         <div
+          title={error || undefined}
           style={{
             fontSize: 11,
             opacity: 0.55,
@@ -103,7 +108,7 @@ export function VocabSuggestionCard({ suggestions }: VocabSuggestionCardProps) {
             letterSpacing: 0.2,
           }}
         >
-          {t('vocabCard.title')}
+          {error || t(detectOS() === 'win' ? 'vocabCard.windowsTitle' : 'vocabCard.title')}
         </div>
 
         <div style={{ display: 'grid', gap: 8 }}>
@@ -136,7 +141,7 @@ export function VocabSuggestionCard({ suggestions }: VocabSuggestionCardProps) {
               </span>
               <CardButton
                 kind="accept"
-                label={t('vocabCard.accept')}
+                label={t(detectOS() === 'win' ? 'vocabCard.windowsAccept' : 'vocabCard.accept')}
                 onClick={() => void resolve(s.id, acceptPendingCorrection)}
               />
               <CardButton

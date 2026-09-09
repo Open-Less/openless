@@ -55,6 +55,33 @@ impl CorrectionRuleStore {
         self.add_with_source(pattern, replacement, RuleSource::Manual)
     }
 
+    /// Only called after an explicit confirmation. Never create wildcard or
+    /// chained rules from observed edits; duplicates and conflicts are visible.
+    #[cfg(any(target_os = "windows", test))]
+    pub fn add_confirmed(&self, pattern: String, replacement: String) -> Result<CorrectionRule> {
+        let pattern = pattern.trim().to_string();
+        let replacement = replacement.trim().to_string();
+        if pattern.chars().count() < 2 || replacement.is_empty() || pattern == replacement
+            || pattern.contains(CORRECTION_NUM_TOKEN) || replacement.contains(CORRECTION_NUM_TOKEN)
+            || replacement.contains(&pattern) {
+            return Err(anyhow!("该改法不适合作为固定纠正规则，请在词汇表手动设置"));
+        }
+        let _guard = self.lock.lock();
+        let mut rules = self.read_locked()?;
+        if let Some(rule) = rules.iter().find(|r| r.pattern == pattern) {
+            if rule.enabled && rule.replacement == replacement { return Ok(rule.clone()); }
+            return Err(anyhow!("此写法已有不同或已停用的规则，请在词汇表检查"));
+        }
+        if rules.iter().filter(|r| r.enabled).any(|r|
+            replacement.contains(&r.pattern) || r.replacement.contains(&pattern)) {
+            return Err(anyhow!("此改法会与已有规则产生连锁替换，请在词汇表检查"));
+        }
+        let rule = new_rule(pattern, replacement, RuleSource::Learned);
+        rules.insert(0, rule.clone());
+        self.write_locked(&rules)?;
+        Ok(rule)
+    }
+
     fn add_with_source(
         &self,
         pattern: String,
@@ -149,6 +176,35 @@ mod tests {
     use crate::types::{CorrectionRule, RuleSource};
 
     #[test]
+    fn confirmed_rules_persist_deduplicate_and_reject_chains() {
+        let directory = std::env::temp_dir().join(format!("openless-confirmed-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join("rules.json");
+        let store = super::CorrectionRuleStore::new_at(path.clone());
+        assert!(store.list().unwrap().is_empty());
+        let rule = store.add_confirmed("玄策".into(), "旋测".into()).unwrap();
+        assert_eq!(rule.source, RuleSource::Learned);
+        let again = store.add_confirmed("玄策".into(), "旋测".into()).unwrap();
+        assert_eq!(rule.id, again.id);
+        let reopened = super::CorrectionRuleStore::new_at(path.clone());
+        let rules = reopened.list().unwrap();
+        assert_eq!(rules.len(), 1);
+        assert_eq!(crate::correction::apply_correction_rules("江苏玄策", &rules), "江苏旋测");
+        assert!(store.add_confirmed("旋测".into(), "玄策".into()).is_err());
+        assert!(store.add_confirmed("另词".into(), "玄策".into()).is_err());
+        assert!(store.add_confirmed("玄策".into(), "其他".into()).is_err());
+        assert!(store.add_confirmed("{num}".into(), "数字".into()).is_err());
+        assert!(store.add_confirmed("甲".into(), "乙".into()).is_err());
+        store.set_enabled(&rule.id, false).unwrap();
+        assert_eq!(crate::correction::apply_correction_rules("江苏玄策", &store.list().unwrap()), "江苏玄策");
+        assert!(store.add_confirmed("玄策".into(), "旋测".into()).is_err());
+        store.remove(&rule.id).unwrap();
+        assert!(store.list().unwrap().is_empty());
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_dir(directory).unwrap();
+    }
+
+    #[test]
     fn correction_rule_syntax_rejects_silent_noops() {
         assert!(validate_correction_rule_syntax("{num}粒", "{num}例").is_ok());
         assert!(validate_correction_rule_syntax("几粒", "几例").is_ok());
@@ -160,8 +216,7 @@ mod tests {
 
     /// 老的 correction-rules.json 没有 `source` 字段，反序列化必须落到 Manual。
     ///
-    /// 学习路径已经不再写纠正规则了（只写词汇表），但**早期版本写进去的 `learned`
-    /// 规则还躺在用户的文件里**，前端要能认出它们、让用户删掉。所以这个字段留着。
+    /// Windows 用户明确确认的替换使用 Learned；手动规则仍使用 Manual。
     #[test]
     fn a_rule_without_a_source_field_deserializes_as_manual() {
         let json = r#"{"id":"1","pattern":"甲","replacement":"乙","enabled":true,"createdAt":""}"#;

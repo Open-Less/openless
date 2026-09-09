@@ -428,6 +428,8 @@ export const ko: typeof zhCN = {
     },
   },
   vocabCard: {
+    windowsTitle: '이 치환을 기억할까요? 어휘의 교정 규칙에서 취소 가능',
+    windowsAccept: '확인하고 다음 음성 입력에 적용',
     title: '이 단어를 기억할까요?',
     accept: '기억하기',
     reject: '건너뛰기',
@@ -706,6 +708,8 @@ export const ko: typeof zhCN = {
       useSystemProxyDesc: '켜면 요청이 시스템 프록시를 따릅니다. 끄면 모든 요청이 직결됩니다(국내 서비스는 보통 더 빠름). GitHub 로그인·업데이트 등 해외 서비스는 연결되지 않을 수 있습니다. 실시간 음성 스트림과 Less Computer는 영향을 받지 않습니다.',
     },
     dataStorage: {
+      editLearningLabel: '수정에서 학습 (Windows 실험)',
+      editLearningDesc: '음성 입력 후 최대 60초 동안 같은 입력란의 수정을 감지하고 확인한 치환만 저장합니다. 초점이 바뀌면 중지하며 비밀번호, 터미널, 비밀번호 관리자는 제외합니다. 입력란 내용은 업로드하지 않습니다. 어휘의 교정 규칙에서 비활성화하거나 삭제할 수 있습니다.',
       title: '데이터 저장',
       desc: '이 기기에 보관되는 대화 기록과 컨텍스트.',
       cursorContextLabel: '커서 문맥 (실험적)',

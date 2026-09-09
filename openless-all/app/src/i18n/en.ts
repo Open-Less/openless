@@ -426,6 +426,8 @@ export const en: typeof zhCN = {
     },
   },
   vocabCard: {
+    windowsTitle: 'Remember replacement? Undo in Vocabulary → Correction rules',
+    windowsAccept: 'Confirm replacement for future dictation',
     title: 'Remember this word?',
     accept: 'Remember',
     reject: 'Skip',
@@ -707,6 +709,8 @@ export const en: typeof zhCN = {
       title: 'Data storage',
       desc: 'Conversation history and context kept on this device.',
       cursorContextLabel: 'Cursor context (experimental)',
+      editLearningLabel: 'Learn from edits (Windows experimental)',
+      editLearningDesc: 'For up to 60 seconds after dictation, detect edits in the same field and ask before saving a replacement. Stops on focus changes. Passwords, terminals and password managers are excluded; field contents are never uploaded. Unsupported controls are skipped. Disable or delete saved replacements in Vocabulary.',
       cursorContextDesc:
         'While polishing, read the text around your cursor in the document you are writing, so the model can tell homophones, proper nouns and pronouns apart. When on, that text is sent to your configured LLM provider with the request; when off, nothing is read at all. Password fields, Secure Input, password managers and terminals are never read. macOS only.',
     },

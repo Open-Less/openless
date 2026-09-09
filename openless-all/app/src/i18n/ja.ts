@@ -428,6 +428,8 @@ export const ja: typeof zhCN = {
     },
   },
   vocabCard: {
+    windowsTitle: '置換を記憶しますか？語彙の修正规則で取り消せます',
+    windowsAccept: '確認して次回の音声入力に適用',
     title: 'この語を覚えますか？',
     accept: '覚える',
     reject: '不要',
@@ -706,6 +708,8 @@ export const ja: typeof zhCN = {
       useSystemProxyDesc: 'オンにするとリクエストはシステムプロキシを経由します。オフにするとすべて直接接続します（国内サービスの遅延が低くなる傾向）。GitHub ログインやアップデートなど海外サービスには接続できない場合があります。リアルタイム音声ストリームと Less Computer は影響を受けません。',
     },
     dataStorage: {
+      editLearningLabel: '編集から学習（Windows 実験）',
+      editLearningDesc: '音声入力後 60 秒以内に同じ入力欄の修正を検出し、確認した置換だけを保存します。フォーカス変更で停止し、パスワード・端末・パスワード管理アプリは対象外です。入力欄を送信しません。語彙の修正规則で無効化・削除できます。',
       title: 'データ保存',
       desc: 'この端末に保存される会話履歴とコンテキスト。',
       cursorContextLabel: 'カーソル文脈（実験的）',

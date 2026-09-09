@@ -80,13 +80,12 @@ export function DataStorageSection() {
           style={{ ...inputStyle, width: 80, textAlign: 'right' }}
         />
       </SettingRow>
-      {/* 光标上下文。放在「隐私」而不是「润色」下是有意的：这个开关真正的代价不是
-          token，而是「把别的 app 里的文字发给 LLM 服务商」。只在 macOS 显示——
-          其余平台没有实现，摆一个拨不动结果的开关只会误导。 */}
-      {detectOS() === 'mac' && (
+      {/* macOS: cursor context and edit learning. Windows: local-only edit
+          learning; host-document context is never supplied to the LLM. */}
+      {(detectOS() === 'mac' || detectOS() === 'win') && (
         <SettingRow
-          label={t('settings.dataStorage.cursorContextLabel')}
-          desc={t('settings.dataStorage.cursorContextDesc')}
+          label={t(detectOS() === 'win' ? 'settings.dataStorage.editLearningLabel' : 'settings.dataStorage.cursorContextLabel')}
+          desc={t(detectOS() === 'win' ? 'settings.dataStorage.editLearningDesc' : 'settings.dataStorage.cursorContextDesc')}
         >
           <Toggle
             on={prefs.cursorContextEnabled}

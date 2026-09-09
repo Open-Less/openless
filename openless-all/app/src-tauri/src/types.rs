@@ -382,7 +382,7 @@ pub struct CorrectionRule {
 #[serde(rename_all = "camelCase")]
 pub struct PendingCorrection {
     pub id: String,
-    /// 改之前那个（错的）写法。只用来在卡片上让用户看清改的是什么，不入库。
+    /// 改之前的写法。macOS 只展示；Windows 明确确认替换后保存为纠正规则。
     pub pattern: String,
     /// 用户最后要的那个词 —— 点「好」之后进词汇表的就是它。
     pub replacement: String,

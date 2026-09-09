@@ -2295,10 +2295,22 @@ impl Coordinator {
     }
 
     /// 用户在卡片上点了勾 —— 这一条进词汇表。
-    pub fn accept_pending_correction(&self, id: &str) {
-        let Some(taken) = self.take_pending_correction(id) else {
-            return;
+    pub fn accept_pending_correction(&self, id: &str) -> anyhow::Result<()> {
+        let pending = self.inner.pending_corrections.lock().iter().find(|p| p.id == id).cloned();
+        let Some(taken) = pending else {
+            anyhow::bail!("建议已过期，请重新修改后确认");
         };
+        // Windows card explicitly asks to remember a replacement. This works
+        // with local ASR/raw mode without changing the model or adding an LLM.
+        #[cfg(target_os = "windows")]
+        {
+            self.inner.correction_rules.add_confirmed(taken.pattern.clone(), taken.replacement.clone())?;
+            log::info!("[edit-learning] confirmed correction saved");
+            if let Some(app) = self.inner.app.lock().clone() {
+                let _ = app.emit("vocab:updated", 0u64);
+            }
+        }
+        #[cfg(not(target_os = "windows"))]
         dictation::commit_learned_rule(
             &self.inner,
             &crate::host_document::LearnedRule {
@@ -2306,7 +2318,9 @@ impl Coordinator {
                 replacement: taken.replacement,
             },
         );
+        self.take_pending_correction(id);
         self.refresh_vocab_card();
+        Ok(())
     }
 
     /// 用户在卡片上点了叉 —— 这一条丢掉，什么都不记。
