@@ -1396,7 +1396,7 @@ export const en: typeof zhCN = {
       startError: 'Failed to start the remote input service: {{reason}}',
       securityHint: 'Reachable only on the same LAN and requires the pairing code; turn it off when not in use.',
       certHint: "Open “First-time setup: trust this computer” on the phone to install and trust the certificate. Older versions require one-time setup; subsequent restarts and IP changes preserve trust.",
-      certTrustWarning: "Only install the OpenLess root certificate from your own computer. It can issue certificates and its private key stays on that computer; remove it from your phone when no longer needed.",
+      certTrustWarning: "The initial certificate download cannot verify the computer's identity; a malicious device on the LAN could replace the root certificate in a man-in-the-middle attack. Install it only on a trusted home or private network, never on a public or shared network. The root CA can issue certificates and its private key stays on this computer; remove it from your phone when no longer needed.",
       certSetupLink: "Copy iPhone certificate link",
       waitingStart: 'The service is not running yet. Turn the switch off, then on again. Do not restart the app.',
       starting: 'Starting the remote input service…',
