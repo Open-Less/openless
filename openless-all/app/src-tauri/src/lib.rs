@@ -2746,12 +2746,12 @@ pub(crate) fn hide_qa_window<R: tauri::Runtime>(app: &AppHandle<R>) {
 /// 选区润色预览是独立、可编辑的小窗：模型结果不会直接覆盖，用户确认后才回到原选区粘贴。
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn ensure_selection_polish_preview_window<R: tauri::Runtime>(
-    app: &AppHandle<R>,
+    app: &tauri::AppHandle<R>,
 ) -> Option<tauri::WebviewWindow<R>> {
     if let Some(window) = app.get_webview_window("selection-polish-preview") {
         return Some(window);
     }
-    WebviewWindowBuilder::new(
+    let built = WebviewWindowBuilder::new(
         app,
         "selection-polish-preview",
         WebviewUrl::App("index.html?window=selection-polish-preview".into()),
@@ -2761,13 +2761,76 @@ fn ensure_selection_polish_preview_window<R: tauri::Runtime>(
     .min_inner_size(480.0, 320.0)
     .resizable(true)
     .always_on_top(true)
+    .skip_taskbar(true)
+    .focused(false)
     .visible(false)
-    .build()
-    .map(Some)
-    .unwrap_or_else(|error| {
-        log::warn!("[selection-polish] create preview window failed: {error}");
-        None
-    })
+    .build();
+    match built {
+        Ok(window) => {
+            // macOS：转「非激活 NSPanel」（胶囊/QA 同手法）。预览窗展示期间 LLM 可能
+            // 还在等待、用户也可能切回原 app 继续工作——普通窗口的 show + set_focus
+            // 会把 OpenLess 整个激活成 frontmost，原 app 失去前台后很多编辑器的选区
+            // 直接消失，之后 confirm 的 reactivate/validate 就「有时」失败。
+            // 转成 NonactivatingPanel 后窗口可见、可编辑，但 app 保持后台。
+            // 必须在主线程执行（NSWindow class 切换是 AppKit 操作，worker 线程
+            // 调用可能触发 NSException 直接 abort）。
+            #[cfg(target_os = "macos")]
+            {
+                let window_clone = window.clone();
+                let _ = app.run_on_main_thread(move || {
+                    make_selection_polish_preview_panel_macos(&window_clone);
+                });
+            }
+            Some(window)
+        }
+        Err(error) => {
+            log::warn!("[selection-polish] create preview window failed: {error}");
+            None
+        }
+    }
+}
+
+/// 选区润色预览窗转「非激活 NSPanel」（macOS，胶囊/QA 同手法）。
+///
+/// `set_style_mask` 是全量替换而非 OR——只设 NSPanel 位会丢掉 titled/resizable，
+/// 所以先读当前 mask 再叠加 NonactivatingPanel 位（NSWindowStyleMaskNonactivatingPanel
+/// = 1 << 7）。面板保留标题栏（用户仍可拖动定位、点 X 关闭），只是不再
+/// 激活整个 app。
+#[cfg(target_os = "macos")]
+fn make_selection_polish_preview_panel_macos<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) {
+    use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
+    use tauri_nspanel::WebviewWindowExt;
+    match window.to_panel() {
+        Ok(panel) => {
+            // style mask 要先读再 OR（set_style_mask 是全量替换）。RawNSPanel 实现
+            // 的是 objc (v0) 的 Message trait，与 objc2::msg_send 不兼容，所以按
+            // QA 的手法对原生指针直接发消息（ZST 包装指针即 ObjC 对象指针）。
+            use objc2::msg_send;
+            use objc2::runtime::AnyObject;
+            let raw = &*panel as *const _ as *mut AnyObject;
+            if !raw.is_null() {
+                unsafe {
+                    let current: i32 = msg_send![raw, styleMask];
+                    const NS_NONACTIVATING_PANEL_MASK: i32 = 1 << 7;
+                    let _: () = msg_send![raw, setStyleMask: current | NS_NONACTIVATING_PANEL_MASK];
+                    log::info!(
+                        "[selection-polish] preview converted to nonactivating NSPanel (mask {current:#x} -> {:#x})",
+                        current | NS_NONACTIVATING_PANEL_MASK
+                    );
+                }
+            }
+            // 浮层级别（NSFloatingWindowLevel）：盖普通窗口，不盖菜单栏/胶囊(25)。
+            // to_panel 类切换后显式重设一次，与 QA 同配置。
+            panel.set_level(3);
+            // 划词常发生在全屏 app 里：CanJoinAllSpaces + FullScreenAuxiliary
+            // 让面板能叠到全屏空间上（QA 同配置）。
+            panel.set_collection_behaviour(
+                NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary
+                    | NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces,
+            );
+        }
+        Err(e) => log::warn!("[selection-polish] preview to_panel failed: {e:?}"),
+    }
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -2775,25 +2838,74 @@ pub(crate) fn show_selection_polish_preview<R: tauri::Runtime>(app: &AppHandle<R
     let Some(window) = ensure_selection_polish_preview_window(app) else {
         return;
     };
-    if let Err(error) = window.show() {
-        log::warn!("[selection-polish] show preview failed: {error}");
-        return;
-    }
-    if let Err(error) = window.set_focus() {
-        log::warn!("[selection-polish] focus preview failed: {error}");
-    }
     let _ = app.emit_to(
         "selection-polish-preview",
         "selection-polish-preview:shown",
         (),
     );
+    #[cfg(target_os = "macos")]
+    {
+        // 不用 window.show()/set_focus()：tao 的 show 走 makeKeyAndOrderFront +
+        // NSApp.activate（已核对 tao 源码）——都会把 OpenLess 推成 frontmost，原
+        // app 丢前台后选区被清，之后的 confirm reactivate/validate 就「有时」失败。
+        // 改走 QA 同手法：主线程 orderFrontRegardless（可见但不抢前台、不成为 key
+        // window）；面板已是 NonactivatingPanel（ensure 阶段转换，同一主线程队列，
+        // 顺序有保证），textarea 的 autofocus 在点击/聚焦时自行 makeKey，而
+        // nonactivating 面板的 makeKey 不会激活 app。
+        let window_clone = window.clone();
+        let _ = app.run_on_main_thread(move || {
+            use objc2::msg_send;
+            use objc2::runtime::AnyObject;
+            match window_clone.ns_window() {
+                Ok(handle) => {
+                    let ns = handle as *mut AnyObject;
+                    if ns.is_null() {
+                        log::warn!("[selection-polish] ns_window null; falling back to show()");
+                        let _ = window_clone.show();
+                    } else {
+                        unsafe {
+                            let _: () = msg_send![ns, orderFrontRegardless];
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::warn!("[selection-polish] ns_window unavailable: {e}; falling back to show()");
+                    let _ = window_clone.show();
+                }
+            }
+        });
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        if let Err(error) = window.show() {
+            log::warn!("[selection-polish] show preview failed: {error}");
+            return;
+        }
+        if let Err(error) = window.set_focus() {
+            log::warn!("[selection-polish] focus preview failed: {error}");
+        }
+    }
 }
 
 #[cfg(any(target_os = "android", target_os = "ios"))]
 pub(crate) fn show_selection_polish_preview<R: tauri::Runtime>(_app: &AppHandle<R>) {}
 
 pub(crate) fn hide_selection_polish_preview<R: tauri::Runtime>(app: &AppHandle<R>) {
-    if let Some(window) = app.get_webview_window("selection-polish-preview") {
+    let Some(window) = app.get_webview_window("selection-polish-preview") else {
+        return;
+    };
+    // macOS：转换后的 NSPanel 不能从 worker 线程操作（AppKit 硬约束，resize/hide
+    // 都可能让进程 abort），统一 dispatch 回主线程；其他平台 hide 走 Tauri 内部
+    // 主线程调度即可。
+    #[cfg(target_os = "macos")]
+    {
+        let window_clone = window.clone();
+        let _ = app.run_on_main_thread(move || {
+            let _ = window_clone.hide();
+        });
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
         let _ = window.hide();
     }
 }

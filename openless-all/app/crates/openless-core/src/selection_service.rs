@@ -479,8 +479,16 @@ impl SelectionServiceInner {
 
     fn fail_if_active(&self, session_id: SessionId) -> bool {
         let mut state = self.state.write().expect("selection state lock poisoned");
+        // 只对「还在进行中」的 session 结算：Cancelled 是用户主动结束，
+        // Completed 是已粘贴成功（race：complete 与 fail 判断之间的窄窗口，
+        // 若误标 Failed 会把成功状态覆盖掉）。
         if state.snapshot.session_id == Some(session_id)
-            && !matches!(state.snapshot.phase, SelectionPhase::Cancelled)
+            && matches!(
+                state.snapshot.phase,
+                SelectionPhase::Capturing
+                    | SelectionPhase::Preview
+                    | SelectionPhase::Applying
+            )
         {
             state.snapshot.phase = SelectionPhase::Failed;
             let snapshot = state.snapshot.clone();
@@ -493,6 +501,38 @@ impl SelectionServiceInner {
         } else {
             false
         }
+    }
+
+    /// confirm 失败结算：session 已失效（stale / 目标变更 / 并发占用）结算为
+    /// Failed 并隐藏预览；瞬时的平台错误（焦点恢复 / 目标复核抖动）回退到
+    /// Preview 保持可重试——直接失败掉会让预览窗被隐藏、编辑内容丢失，
+    /// 用户看到的只是「点确认没反应」。
+    fn settle_confirm_failure(&self, session_id: SessionId, error: &BackendError) -> bool {
+        let settled = matches!(
+            error.code,
+            BackendErrorCode::Cancelled
+                | BackendErrorCode::InvalidState
+                | BackendErrorCode::InvalidArgument
+                | BackendErrorCode::Busy
+        );
+        let mut state = self.state.write().expect("selection state lock poisoned");
+        let active = state.snapshot.session_id == Some(session_id)
+            && !matches!(state.snapshot.phase, SelectionPhase::Cancelled);
+        if !active {
+            return false;
+        }
+        state.snapshot.phase = if settled {
+            SelectionPhase::Failed
+        } else {
+            SelectionPhase::Preview
+        };
+        let snapshot = state.snapshot.clone();
+        drop(state);
+        self.events.publish(
+            Some(session_id),
+            BackendEventKind::SelectionStateChanged(snapshot),
+        );
+        settled
     }
 
     fn begin_revert(&self, session_id: SessionId) -> Result<(), BackendError> {
@@ -650,7 +690,10 @@ impl SelectionApi for SelectionService {
                     Ok(())
                 }
                 Err(error) => {
-                    if inner.fail_if_active(session_id) {
+                    // 分流：session 已失效（stale / 并发 confirm）必须结算；瞬时的
+                    // 平台错误（焦点恢复 / 目标复核抖动）保持 preview 可重试——
+                    // 否则窗口被隐藏、busy 卡死，表现为「点确认没反应」。
+                    if inner.settle_confirm_failure(session_id, &error) {
                         let _ = inner.polisher.cancel(session_id).await;
                         let _ = inner.runtime.cancel(session_id).await;
                         inner.hide_preview();

@@ -507,11 +507,21 @@ pub(crate) fn reactivate_selection_insertion_target(target: &SelectionInsertionT
             return false;
         };
         // 预览窗是 OpenLess 自己的窗口，确认后需要把焦点交还原应用再粘贴。
-        activate_app_by_pid(pid);
-        std::thread::sleep(Duration::from_millis(120));
-        // NSRunningApplication 激活也是 best-effort；必须复核 pid，失败就明确走
-        // copied/error，不能向此刻偶然持有焦点的应用盲写。
-        return current_front_app_pid() == Some(pid);
+        // NSRunningApplication activate 是 best-effort，且部分 app（Electron、
+        // 自绘窗口）恢复 key window 需要 >120ms——固定 sleep 一次就核 pid 会
+        // 偶发把「还在恢复中」误判为「恢复失败」。改成短轮询：pid 一稳定立刻
+        // 返回，最多等 ~320ms。
+        for _attempt in 0..4 {
+            // 每轮都补一次 activate：NSRunningApplication activate 对「前台被
+            // 其他 app 抢走」的情况可能不生效，重复调用是幂等的。
+            activate_app_by_pid(pid);
+            std::thread::sleep(Duration::from_millis(80));
+            if current_front_app_pid() == Some(pid) {
+                return true;
+            }
+        }
+        // 仍未成为前台：必须明确失败，不能向此刻偶然持有焦点的应用盲写。
+        false
     }
 
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
