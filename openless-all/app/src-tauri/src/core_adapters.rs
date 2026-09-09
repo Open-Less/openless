@@ -1280,6 +1280,7 @@ impl openless_core::RemoteInputRuntimeAdapter for TauriRemoteInputRuntimeAdapter
                 port: handle.bound_port,
                 urls: crate::remote_server::access_urls(handle.bound_port),
                 urls_stale: false,
+                ca_fingerprint_sha256: Some(handle.ca_fingerprint_sha256.clone()),
             };
             *server.lock().await = Some(handle);
             Ok(binding)

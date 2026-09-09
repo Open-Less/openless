@@ -188,6 +188,7 @@ impl RemoteInputRuntimeAdapter for RecordingRemoteInputRuntime {
                 port: config.port,
                 urls: vec![format!("https://127.0.0.1:{}", config.port)],
                 urls_stale: false,
+                ca_fingerprint_sha256: None,
             })
         })
     }

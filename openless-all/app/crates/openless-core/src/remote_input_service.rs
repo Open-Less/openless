@@ -118,6 +118,7 @@ struct RemoteInputState {
     port: u16,
     urls: Vec<String>,
     urls_stale: bool,
+    ca_fingerprint_sha256: Option<String>,
     locale: String,
     pairing_pin: Option<SecretValue>,
     connections: HashMap<SessionId, RemoteConnectionState>,
@@ -165,6 +166,7 @@ impl RemoteInputService {
                 port,
                 urls: Vec::new(),
                 urls_stale: false,
+                ca_fingerprint_sha256: None,
                 locale,
                 pairing_pin: None,
                 connections: HashMap::new(),
@@ -221,6 +223,7 @@ impl RemoteInputService {
             state.starting = false;
             state.urls.clear();
             state.urls_stale = false;
+            state.ca_fingerprint_sha256 = None;
             sessions
         };
         let mut first_error = None;
@@ -247,6 +250,7 @@ impl RemoteInputService {
             state.running = false;
             state.urls.clear();
             state.urls_stale = false;
+            state.ca_fingerprint_sha256 = None;
         }
         self.publish_status();
         match self
@@ -261,6 +265,7 @@ impl RemoteInputService {
                 state.port = binding.port;
                 state.urls = binding.urls;
                 state.urls_stale = binding.urls_stale;
+                state.ca_fingerprint_sha256 = binding.ca_fingerprint_sha256;
                 drop(state);
                 self.publish_status();
                 Ok(())
@@ -272,6 +277,7 @@ impl RemoteInputService {
                     state.running = false;
                     state.urls.clear();
                     state.urls_stale = false;
+                    state.ca_fingerprint_sha256 = None;
                 }
                 let public = public_remote_error(&error);
                 self.event_publisher().publish(
@@ -600,6 +606,7 @@ impl RemoteInputApi for RemoteInputService {
             port: state.port,
             urls: state.urls.clone(),
             urls_stale: state.urls_stale,
+            ca_fingerprint_sha256: state.ca_fingerprint_sha256.clone(),
             locale: state.locale.clone(),
             connection_count: state.connections.len(),
             active_session_id: state

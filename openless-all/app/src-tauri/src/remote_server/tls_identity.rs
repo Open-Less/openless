@@ -28,6 +28,7 @@ struct StoredIdentity {
 pub(super) struct TlsIdentity {
     /// Only this public CA certificate is offered for phone installation.
     pub trust_cert: Vec<u8>,
+    pub ca_fingerprint_sha256: String,
     pub server_config: Arc<rustls::ServerConfig>,
 }
 
@@ -254,17 +255,24 @@ fn load_at(directory: &Path, sans: &[String], now: OffsetDateTime) -> Result<Tls
     )
     .map_err(|error| format!("remote TLS config: {error}"))?;
     Ok(TlsIdentity {
+        ca_fingerprint_sha256: fingerprint_sha256(&identity.ca_cert),
         trust_cert: identity.ca_cert,
         server_config: Arc::new(config),
     })
+}
+
+/// 对实际 DER 证书计算指纹，而非散列名称或描述文件元数据。
+/// 电脑通过本地 IPC 显示完整值，供用户从独立渠道核对。
+pub(super) fn fingerprint_sha256(cert: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    format!("{:x}", Sha256::digest(cert))
 }
 
 /// The profile contains a public CA only. IDs include its fingerprint so two
 /// computers can be trusted without replacing each other's iOS profiles.
 pub(super) fn mobileconfig(cert: &[u8]) -> String {
     use base64::Engine;
-    use sha2::{Digest, Sha256};
-    let fingerprint = format!("{:x}", Sha256::digest(cert));
+    let fingerprint = fingerprint_sha256(cert);
     let b64 = base64::engine::general_purpose::STANDARD.encode(cert);
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -280,7 +288,7 @@ pub(super) fn mobileconfig(cert: &[u8]) -> String {
 <key>PayloadDisplayName</key><string>OpenLess Remote Input CA ({short})</string>
 </dict></array>
 <key>PayloadDisplayName</key><string>OpenLess Remote Input ({short})</string>
-<key>PayloadDescription</key><string>Trust only a profile downloaded from your own computer. After installation, enable full trust in Settings &gt; General &gt; About &gt; Certificate Trust Settings. This CA can issue certificates; remove this profile when you stop using remote input.</string>
+<key>PayloadDescription</key><string>Before trusting, compare the certificate's full SHA-256 fingerprint in system certificate details with OpenLess settings on your computer. Names and profile identifiers are not proof of identity. Expect exactly one root certificate and no other settings. If the fingerprint differs or cannot be checked, do not install or enable full trust; remove the profile if already installed. This CA can issue certificates; remove it when no longer needed.</string>
 <key>PayloadIdentifier</key><string>com.openless.remote-input.{fingerprint}</string>
 <key>PayloadType</key><string>Configuration</string>
 <key>PayloadUUID</key><string>{profile_uuid}</string>
@@ -304,6 +312,60 @@ mod tests {
         read_identity(&directory.join(IDENTITY_FILE))
             .unwrap()
             .unwrap()
+    }
+
+    #[test]
+    fn fingerprint_uses_full_sha256() {
+        assert_eq!(
+            fingerprint_sha256(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+
+    #[test]
+    fn copied_profile_labels_do_not_authenticate_a_replacement_certificate() {
+        use base64::Engine;
+        let original_dir = tempfile::tempdir().unwrap();
+        let replacement_dir = tempfile::tempdir().unwrap();
+        let original = load_or_create(original_dir.path(), &names()).unwrap();
+        let replacement = load_or_create(replacement_dir.path(), &names()).unwrap();
+
+        // 两张证书的名称完全相同，描述文件的名称和标识也可以照抄。
+        assert_eq!(
+            parse_cert(&original.trust_cert).unwrap().distinguished_name,
+            parse_cert(&replacement.trust_cert).unwrap().distinguished_name
+        );
+        let encode = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
+        let substituted = mobileconfig(&original.trust_cert).replace(
+            &encode(&original.trust_cert),
+            &encode(&replacement.trust_cert),
+        );
+        assert!(substituted.contains(&original.ca_fingerprint_sha256));
+        let certificate_data = substituted
+            .split_once("<data>")
+            .unwrap()
+            .1
+            .split_once("</data>")
+            .unwrap()
+            .0;
+        let actual_certificate = base64::engine::general_purpose::STANDARD
+            .decode(certificate_data)
+            .unwrap();
+
+        // 独立查看实际证书会发现指纹不同，且原 CA 的 TLS 验证拒绝替换证书。
+        assert_ne!(
+            fingerprint_sha256(&actual_certificate),
+            original.ca_fingerprint_sha256
+        );
+        assert_eq!(
+            fingerprint_sha256(&actual_certificate),
+            replacement.ca_fingerprint_sha256
+        );
+        assert!(!verify_server(&replacement, &original.trust_cert, "localhost"));
+        assert_ne!(
+            original.ca_fingerprint_sha256,
+            fingerprint_sha256(&stored(original_dir.path()).leaf_cert)
+        );
     }
 
     fn verify_server(identity: &TlsIdentity, trusted_ca: &[u8], name: &str) -> bool {
@@ -356,6 +418,11 @@ mod tests {
             std::fs::read(dir.path().join(IDENTITY_FILE)).unwrap()
         );
         assert_eq!(first.trust_cert, second.trust_cert);
+        assert_eq!(
+            first.ca_fingerprint_sha256,
+            fingerprint_sha256(&first.trust_cert)
+        );
+        assert_eq!(first.ca_fingerprint_sha256, second.ca_fingerprint_sha256);
         for name in names() {
             assert!(verify_server(&second, &first.trust_cert, &name));
         }
@@ -386,6 +453,7 @@ mod tests {
         let after = stored(dir.path());
         assert_eq!(before.ca_cert, after.ca_cert);
         assert_eq!(before.ca_key, after.ca_key);
+        assert_eq!(first.ca_fingerprint_sha256, second.ca_fingerprint_sha256);
         assert_ne!(before.leaf_cert, after.leaf_cert);
         assert!(verify_server(&second, &first.trust_cert, "192.168.2.3"));
         // Removing an adapter does not require another leaf or CA.

@@ -1432,6 +1432,7 @@ mod tests {
                 port: 9443,
                 urls: vec!["https://192.168.1.2:9443".into()],
                 urls_stale: false,
+                ca_fingerprint_sha256: None,
                 locale: "zh-CN".into(),
                 connection_count: 1,
                 active_session_id: None,

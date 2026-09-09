@@ -994,6 +994,9 @@ pub struct RemoteInputStatus {
     pub port: u16,
     pub urls: Vec<String>,
     pub urls_stale: bool,
+    /// 由宿主提供，取自正在运行的监听器所使用的公开根证书。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ca_fingerprint_sha256: Option<String>,
     pub locale: String,
     pub connection_count: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1024,6 +1027,7 @@ pub struct RemoteInputServerBinding {
     pub port: u16,
     pub urls: Vec<String>,
     pub urls_stale: bool,
+    pub ca_fingerprint_sha256: Option<String>,
 }
 
 /// Native transport and shared-dictation bridge. TLS, sockets, H5 assets and
@@ -2026,6 +2030,7 @@ mod tests {
             port: 18989,
             urls: vec!["https://192.168.1.2:18989".into()],
             urls_stale: false,
+            ca_fingerprint_sha256: None,
             locale: "zh-CN".into(),
             connection_count: 1,
             active_session_id: Some(SessionId::new()),

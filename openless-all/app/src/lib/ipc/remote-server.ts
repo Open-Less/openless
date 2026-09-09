@@ -8,6 +8,8 @@ export interface RemoteInputStatus {
     pin: string
     urls: string[]
     urlsStale: boolean
+    /** 通过本地 IPC 获取正在运行的服务所用根证书的完整 SHA-256。 */
+    caFingerprintSha256?: string
 }
 
 export function getRemoteInputStatus(): Promise<RemoteInputStatus> {

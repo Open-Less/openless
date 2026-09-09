@@ -108,6 +108,7 @@ impl RemoteInputRuntimeAdapter for LinuxRemoteInputRuntime {
                 port: handle.bound_port,
                 urls: access_urls(handle.bound_port),
                 urls_stale: false,
+                ca_fingerprint_sha256: Some(handle.ca_fingerprint_sha256.clone()),
             };
             *server.lock().await = Some(handle);
             Ok(binding)
@@ -217,6 +218,7 @@ struct LinuxRemoteServerHandle {
     connections_shutdown: tokio::sync::watch::Sender<bool>,
     join: tokio::task::JoinHandle<()>,
     bound_port: u16,
+    ca_fingerprint_sha256: String,
 }
 
 #[cfg(target_os = "linux")]
@@ -233,6 +235,7 @@ impl LinuxRemoteServerHandle {
 #[cfg(not(target_os = "linux"))]
 struct LinuxRemoteServerHandle {
     bound_port: u16,
+    ca_fingerprint_sha256: String,
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -401,6 +404,7 @@ async fn start_server(
     sans.extend(local_lan_ipv4s());
     let identity = tls_identity::load_or_create(&data_dir.join("remote-input"), &sans)
         .map_err(remote_platform_error)?;
+    let ca_fingerprint_sha256 = identity.ca_fingerprint_sha256;
     let cert_der = identity.trust_cert;
     let acceptor = TlsAcceptor::from(identity.server_config);
     let listener = TcpListener::bind(SocketAddr::from(([0, 0, 0, 0], port)))
@@ -443,6 +447,7 @@ async fn start_server(
         connections_shutdown,
         join,
         bound_port,
+        ca_fingerprint_sha256,
     })
 }
 

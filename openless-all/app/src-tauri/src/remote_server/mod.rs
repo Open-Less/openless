@@ -64,6 +64,7 @@ pub struct RemoteServerHandle {
     conn_shutdown_tx: tokio::sync::watch::Sender<bool>,
     join: tauri::async_runtime::JoinHandle<()>,
     pub bound_port: u16,
+    pub ca_fingerprint_sha256: String,
 }
 
 impl RemoteServerHandle {
@@ -86,6 +87,8 @@ pub struct RemoteInputStatus {
     pub pin: String,
     pub urls: Vec<String>,
     pub urls_stale: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ca_fingerprint_sha256: Option<String>,
 }
 
 // ───────────────────────── 工具函数 ─────────────────────────
@@ -310,6 +313,7 @@ pub async fn start(cfg: RemoteServerConfig) -> Result<RemoteServerHandle, String
         .app_config_dir()
         .map_err(|error| format!("remote TLS config directory: {error}"))?;
     let identity = tls_identity::load_or_create(&cert_dir, &sans)?;
+    let ca_fingerprint_sha256 = identity.ca_fingerprint_sha256;
     let cert_der = identity.trust_cert;
     let acceptor = TlsAcceptor::from(identity.server_config);
 
@@ -377,6 +381,7 @@ pub async fn start(cfg: RemoteServerConfig) -> Result<RemoteServerHandle, String
         conn_shutdown_tx,
         join,
         bound_port,
+        ca_fingerprint_sha256,
     })
 }
 

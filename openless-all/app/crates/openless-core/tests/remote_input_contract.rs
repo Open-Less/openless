@@ -12,6 +12,7 @@ use openless_core::{
 #[derive(Default)]
 struct FixtureRemoteRuntime {
     persisted_pin: Mutex<Option<String>>,
+    ca_fingerprint_sha256: Mutex<Option<String>>,
     persist_count: AtomicUsize,
     reject_persist: AtomicBool,
     start_count: AtomicUsize,
@@ -72,6 +73,7 @@ impl RemoteInputRuntimeAdapter for FixtureRemoteRuntime {
     ) -> BoxFuture<'static, Result<RemoteInputServerBinding, BackendError>> {
         self.start_count.fetch_add(1, Ordering::AcqRel);
         let fail = self.fail_start.load(Ordering::Acquire);
+        let ca_fingerprint_sha256 = self.ca_fingerprint_sha256.lock().unwrap().clone();
         Box::pin(async move {
             if fail {
                 return Err(BackendError::new(BackendErrorCode::Platform, "port-in-use"));
@@ -80,6 +82,7 @@ impl RemoteInputRuntimeAdapter for FixtureRemoteRuntime {
                 port: config.port,
                 urls: vec![format!("https://192.168.1.2:{}", config.port)],
                 urls_stale: false,
+                ca_fingerprint_sha256,
             })
         })
     }
@@ -278,6 +281,79 @@ fn contract_2_audio_frames_reject_invalid_headers_and_pcm() {
         RemoteFrameCodec::decode(b"OL20").unwrap_err().code,
         BackendErrorCode::InvalidArgument
     );
+}
+
+#[tokio::test]
+async fn ca_fingerprint_tracks_the_running_listener_and_clears_on_stop_or_failure() {
+    let runtime = Arc::new(FixtureRemoteRuntime::default());
+    let first = "ab".repeat(32);
+    let replacement = "cd".repeat(32);
+    *runtime.ca_fingerprint_sha256.lock().unwrap() = Some(first.clone());
+    let (backend, data_dir) = backend(Arc::clone(&runtime));
+    let remote = &backend.services().remote_input;
+    assert_eq!(remote.status().unwrap().ca_fingerprint_sha256, None);
+
+    remote
+        .configure(RemoteInputConfig {
+            enabled: true,
+            port: 8443,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        remote.status().unwrap().ca_fingerprint_sha256,
+        Some(first.clone())
+    );
+    assert_eq!(
+        serde_json::to_value(remote.status().unwrap()).unwrap()["caFingerprintSha256"],
+        first
+    );
+
+    remote
+        .configure(RemoteInputConfig {
+            enabled: false,
+            port: 8443,
+        })
+        .await
+        .unwrap();
+    assert_eq!(remote.status().unwrap().ca_fingerprint_sha256, None);
+    assert!(serde_json::to_value(remote.status().unwrap())
+        .unwrap()
+        .get("caFingerprintSha256")
+        .is_none());
+
+    // 启动失败时不能继续展示上一次监听器的指纹。
+    *runtime.ca_fingerprint_sha256.lock().unwrap() = Some(replacement.clone());
+    runtime.fail_start.store(true, Ordering::Release);
+    assert!(remote
+        .configure(RemoteInputConfig {
+            enabled: true,
+            port: 9443,
+        })
+        .await
+        .is_err());
+    assert_eq!(remote.status().unwrap().ca_fingerprint_sha256, None);
+
+    runtime.fail_start.store(false, Ordering::Release);
+    remote
+        .configure(RemoteInputConfig {
+            enabled: true,
+            port: 9443,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        remote.status().unwrap().ca_fingerprint_sha256,
+        Some(replacement)
+    );
+    remote
+        .configure(RemoteInputConfig {
+            enabled: false,
+            port: 9443,
+        })
+        .await
+        .unwrap();
+    let _ = std::fs::remove_dir_all(data_dir);
 }
 
 #[tokio::test]

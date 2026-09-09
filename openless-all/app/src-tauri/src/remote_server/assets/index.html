@@ -38,9 +38,10 @@
       <!-- Keep setup discoverable without obscuring the pairing form. -->
       <details class="help">
         <summary class="help-title" data-i18n="helpTitle">首次设置：信任此电脑</summary>
-        <p class="help-step" data-i18n="helpIos">iPhone / iPad：下载描述文件，打开“设置 → 通用 → VPN 与设备管理”安装；再到“通用 → 关于本机 → 证书信任设置”，为 OpenLess Remote Input CA 打开“完全信任”，返回 Safari 刷新。每台电脑只需设置一次；旧版证书需要重新安装。</p>
-        <p class="help-step" data-i18n="helpAndroid">安卓：下载 CA 证书，在系统设置的“安装证书 → CA 证书”中安装，再回到本页。菜单名称因设备而异。</p>
-        <p class="help-step" data-i18n="helpTrustWarning">只安装你自己电脑提供的 OpenLess 根证书。它具备签发证书的能力，私钥保存在这台电脑；不再使用时请从手机移除。</p>
+        <p class="help-step help-verify" data-i18n="helpVerify">先打开电脑上的 OpenLess 远程输入设置，保留“本机根证书 SHA-256”。在手机系统证书详情中核对全部 64 个字符；不要使用本网页、描述文件名称或标识里的值作为证明。不一致或无法查看时，请停止并移除描述文件。描述文件必须只含一张根证书，不得有其他证书、VPN 或管理配置。</p>
+        <p class="help-step" data-i18n="helpIos">iPhone / iPad：下载描述文件，在“设置 → 通用 → VPN 与设备管理”中打开它，选择“更多详细信息”中的证书并核对指纹。确认一致且没有额外配置后再安装，并到“通用 → 关于本机 → 证书信任设置”开启完全信任。若只能在安装后查看详情，先保持完全信任关闭，核对后再开启。完成后返回 Safari 刷新。</p>
+        <p class="help-step" data-i18n="helpAndroid">安卓：下载 CA 证书，在系统证书预览中核对完整 SHA-256 后再安装。若系统无法在信任前显示指纹，请勿从此页面安装，改用已有的可信文件传输渠道。菜单名称因设备而异。</p>
+        <p class="help-step" data-i18n="helpTrustWarning">首次证书下载无法验证电脑身份，恶意局域网设备可能通过中间人攻击替换根证书。仅在可信的家庭或私人网络中安装，勿在公共或共享网络操作。根证书具备签发能力，私钥保存在这台电脑；不再使用时请从手机移除。</p>
         <div class="help-actions">
           <a class="help-link" href="/cert.mobileconfig" data-i18n="helpDownloadCert">↓ iPhone：下载描述文件</a>
           <a class="help-link help-link-ghost" href="/cert.cer" data-i18n="helpDownloadAndroid">↓ 安卓：下载 CA 证书</a>

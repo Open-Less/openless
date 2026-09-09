@@ -5,42 +5,65 @@ private certificate authority (CA) on each computer and a separate server
 certificate covering that computer's LAN addresses. The phone installs the
 public CA certificate. The CA private key stays in the computer's user data.
 
-## iPhone and iPad
+## 首次信任前的一次性核验
 
-1. Enable remote input on the computer. Use the address shown in settings, on
-   the same network as the computer. Settings also has a **Copy iPhone
-   certificate link** button for each address.
-2. Open the address in Safari. On the initial certificate warning, check the
-   address against the computer, then use **Show Details → Visit This Website**
-   to reach your own computer's setup page. This exception is only a bootstrap
-   step, not the persistent trust setup.
-3. Expand **First-time setup: trust this computer** and choose **iPhone:
-   download profile**. Alternatively, open the copied `/cert.mobileconfig` link
-   directly in Safari.
-4. Install the downloaded profile in **Settings → General → VPN & Device
-   Management**.
-5. In **Settings → General → About → Certificate Trust Settings**, enable full
-   trust for **OpenLess Remote Input CA**. Return to Safari and reload the page.
-6. Enter the pairing code and allow microphone access when Safari asks.
+根据 [#1037 的审核建议](https://github.com/Open-Less/openless/pull/1037#discussion_r3964815714)，
+在信任根证书前，通过电脑本地设置与手机系统证书详情核对身份。
 
-Installing a profile and enabling full SSL trust are separate steps. Apple
-requires the latter for profiles downloaded from a website; a desktop app
-cannot silently approve it on a personal iPhone. See
-[Apple's certificate trust instructions](https://support.apple.com/en-gb/102390).
-This setup removes certificate warnings after trust is established; browser
-microphone permissions and the pairing code remain separate controls.
+电脑设置中的 **本机根证书 SHA-256** 来自正在运行的监听器所用的公开根证书，
+经本地接口传给界面；Linux 原生界面也显示同一来源的完整指纹。
+指纹共 64 个十六进制字符，可忽略空格、冒号和大小写，但不能只核对开头几位。
+对比对象必须是将要信任的根证书，不能使用会随 IP 变化而重新签发的服务器证书。
 
-Only install a CA from your own computer. A CA can issue certificates, so its
-private key is sensitive. Remove the OpenLess profile from the phone when you
-no longer use it. The certificate fingerprint in each profile identifier keeps
-profiles for different computers from replacing one another.
+手机端必须从**系统证书详情**取得实际证书的 SHA-256。
+网页、描述文件名称、标识和描述文字都可以被替换，不能作为校验依据。
+描述文件名称末尾的短指纹仅用于区分电脑，不代表已经验证身份。
+本功能提供人工核验依据，不会自动确认手机是否正确核对，也不会代替系统开启信任。
 
-## Android
+### iPhone 和 iPad
 
-Download `/cert.cer` using the **Android: download CA** link. Install it through
-the system's **Install a certificate → CA certificate** settings, then return
-to the browser. Menu names and browser support for user-installed CAs vary by
-device. The download contains only the public root certificate.
+1. 在电脑启用远程输入，保留本地设置中的完整 SHA-256。指纹不可用时停止安装。
+2. 在可信网络中，用 Safari 打开电脑显示的地址或复制的证书链接。
+   首次 TLS 警告说明身份尚未验证；即使地址与电脑相同，也不能据此认定证书可信。
+   只有准备执行下面的独立核验时，才继续下载描述文件；否则使用已有的可信文件传输渠道。
+3. 在“设置 → 通用 → VPN 与设备管理”打开下载的描述文件。
+   先检查它**只包含一张根证书**；若有额外证书、VPN 或设备管理配置，不要安装。
+4. 在“更多详细信息”中打开根证书，查找系统显示的 SHA-256，
+   与电脑本地设置中的全部 64 个字符逐一核对。
+   若当前 iOS 只能在安装后显示完整详情，安装前仍需确认只有一张根证书，
+   且安装后先保持“完全信任”关闭，核对完毕再开启。
+5. 若指纹不一致、看不全或找不到 SHA-256，停止操作，删除下载的描述文件；
+   已安装的则移除。不要用名称、网页上的值或配对码代替核验。
+6. 只有全部一致，才到“通用 → 关于本机 → 证书信任设置”为这张根证书开启完全信任。
+   返回 Safari 刷新，输入配对码并允许麦克风访问。
+
+安装描述文件和开启完全信任是两个步骤，见[苹果说明](https://support.apple.com/en-us/102390)。
+不同 iOS 版本的菜单和完整指纹入口需要真机确认；无法独立查看指纹的设备不能声称通过了本流程。
+根证书可签发其他证书，私钥应始终保留在自己的电脑上。不再使用远程输入时请移除手机上的根证书。
+
+### Android
+
+通过“安卓：下载 CA 证书”取得 `/cert.cer`，在系统证书预览中核对完整 SHA-256，
+一致后再安装。部分设备安装 CA 即代表信任，因此必须在安装前完成核验。
+若系统无法在信任前显示完整指纹，请停止从网页安装，改用已有的可信文件传输渠道。
+菜单名称和用户 CA 支持情况因设备而异。
+
+### 真机验收与截图
+
+自动化测试可验证指纹来源、替换证书时的差异及生命周期，不能代替以下真机操作：
+
+| 检查 | 需要记录的结果 |
+| --- | --- |
+| 首次安装 | 电脑完整指纹、手机系统完整指纹一致；描述文件只有一张根证书 |
+| 信任与录音 | 核对后开启完全信任，录音能正常传到电脑 |
+| 重启 | 电脑重启后指纹不变，手机无需重新安装证书，仍可录音 |
+| IP 变化 | 使用新地址重新连接后指纹不变，仍可录音 |
+| 替换证书 | 在独立测试环境用另一台电脑生成的同名证书或替换描述文件，系统指纹不同，用户能按引导停止安装/信任 |
+
+记录设备型号、系统版本、测试提交号，以及每项通过或失败。
+截图至少包含电脑指纹、手机系统指纹和描述文件内容；录音、重启和 IP 变化可以用简短录屏或文字结果补充。
+替换测试只核对差异，不要开启对测试证书的完全信任；结束后移除测试描述文件。
+Linux 原生界面的显示与录音也需要在 Linux 上实际验收。
 
 ## What OpenLess automates
 

@@ -258,6 +258,13 @@ body {
   gap: 8px;
   margin-top: 6px;
 }
+.help-verify {
+  color: var(--ink);
+  padding: 10px;
+  border-left: 3px solid var(--blue);
+  background: var(--surface);
+  border-radius: 4px;
+}
 .help-link {
   display: inline-block;
   padding: 9px 16px;
