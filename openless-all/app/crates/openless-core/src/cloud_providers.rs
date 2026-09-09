@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 use futures_util::future::BoxFuture;
 use parking_lot::{Mutex, RwLock};
 
+use crate::asr::tencent_cloud::TencentCloudASRError;
 use crate::asr::{
     BailianCredentials, BailianRealtimeASR, DashScopeMultimodalASR, DictionaryHotword,
     ElevenLabsBatchASR, MimoBatchASR, Qwen3RealtimeASR, Qwen3RealtimeCredentials,
@@ -244,9 +245,14 @@ impl TranscriptionSession for CloudTranscriptionSession {
                         .await?
                 }
                 CloudTranscriptionSessionKind::TencentCloud(provider) => {
-                    let _ = provider.send_last_frame().await;
-                    timeout_transcription(Duration::from_secs(120), provider.await_final_result())
-                        .await?
+                    provider
+                        .send_last_frame()
+                        .await
+                        .map_err(map_tencent_asr_error)?;
+                    provider
+                        .await_final_result()
+                        .await
+                        .map_err(map_tencent_asr_error)?
                 }
             };
             Ok(TranscriptOutput {
@@ -693,7 +699,10 @@ async fn build_cloud_transcription_session(
                 Arc::clone(&task_spawner),
             ));
             provider.set_partial_sink(Arc::clone(&partials));
-            provider.open_session().await.map_err(map_asr_error)?;
+            provider
+                .open_session()
+                .await
+                .map_err(map_tencent_asr_error)?;
             (
                 CloudTranscriptionSessionKind::TencentCloud(provider),
                 Some(model),
@@ -741,6 +750,22 @@ fn map_asr_error(error: impl std::fmt::Display) -> BackendError {
         BackendErrorCode::Provider,
         format!("ASR provider failed: {error}"),
     )
+}
+
+fn map_tencent_asr_error(error: TencentCloudASRError) -> BackendError {
+    let retryable = matches!(
+        &error,
+        TencentCloudASRError::ConnectionFailed
+            | TencentCloudASRError::RateLimited
+            | TencentCloudASRError::ServiceUnavailable(_)
+            | TencentCloudASRError::NoFinalResult
+            | TencentCloudASRError::FinalResultTimeout
+    );
+    BackendError::new(
+        BackendErrorCode::Provider,
+        format!("Tencent Cloud ASR failed: {error}"),
+    )
+    .retryable(retryable)
 }
 
 pub struct SharedCloudTextPolisher {
@@ -1934,6 +1959,35 @@ fn build_omni_prompt(context: &DictationContext) -> String {
 mod tests {
     use super::*;
     use crate::{InMemoryCredentialStore, ProviderInvocation, SecretValue};
+
+    #[test]
+    fn tencent_cloud_errors_keep_retryability_and_stable_public_messages() {
+        use crate::asr::tencent_cloud::TencentCloudASRError;
+
+        for error in [
+            TencentCloudASRError::ConnectionFailed,
+            TencentCloudASRError::RateLimited,
+            TencentCloudASRError::NoFinalResult,
+            TencentCloudASRError::FinalResultTimeout,
+            TencentCloudASRError::ServiceUnavailable(5000),
+        ] {
+            let error = map_tencent_asr_error(error);
+            assert_eq!(error.code, BackendErrorCode::Provider);
+            assert!(error.retryable, "{error:?}");
+            assert!(error.details.is_none());
+        }
+        for error in [
+            TencentCloudASRError::CredentialsMissing,
+            TencentCloudASRError::AuthRejected(4002),
+            TencentCloudASRError::AccountUnavailable(4004),
+            TencentCloudASRError::TaskFailed(4001),
+        ] {
+            let error = map_tencent_asr_error(error);
+            assert_eq!(error.code, BackendErrorCode::Provider);
+            assert!(!error.retryable, "{error:?}");
+            assert!(error.details.is_none());
+        }
+    }
 
     struct IgnoreTextStreamSink;
 

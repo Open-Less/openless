@@ -1071,6 +1071,7 @@ export const ja: typeof zhCN = {
       tencentCloudSecretIdLabel: 'SecretID',
       tencentCloudSecretKeyLabel: 'SecretKey',
       tencentCloudNote: 'Tencent Cloud 音声認識 API の認証情報を使用します。既定の Hy-ASR-3.0-preview は中国語・英語・20 方言に対応します。Preview は 60 秒以内の 16kHz モノラル PCM のみ対応し、コンテキストとホットワード強化は未対応です。',
+      tencentTokenHubNote: '現在オンラインの言語モデルのみを表示します。一部のモデルは常に思考を使用し、思考をオフにしてもモデル固有の動作を維持します。',
       localAsrActiveNotice: '現在「{{name}}」を使用中。「詳細設定」タブから切り替えまたは無効化できます。',
       localAsrTakeoverHint: '「{{name}}」を有効化すると ASR プロバイダーが引き継がれます。',
       asrProviderTakenOver: 'ローカルエンジンを使用中です。上のドロップダウンで別のプロバイダーを選ぶと切り替えられます（ローカルエンジンは自動的に停止します）。ローカルモデルは「サービス → ローカルモデル」で管理します。',

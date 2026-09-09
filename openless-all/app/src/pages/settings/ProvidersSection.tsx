@@ -280,6 +280,11 @@ export function ChannelCredentialFields({
         <ProviderTools key={`${configRevision}:${form?.revision}`} disabled={Object.values(blockedFields).some(Boolean) || (!!descriptor.supportedRequestFormats?.length && blockedFields.protocol === undefined)} kind="llm" provider={channelId}
           onTested={onTested}
           onUserMutation={onUserMutation} />
+        {providerType === 'tencentTokenHub' && (
+          <div style={{ marginTop: 2, fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.6 }}>
+            {t('settings.providers.tencentTokenHubNote')}
+          </div>
+        )}
       </>
     );
   }

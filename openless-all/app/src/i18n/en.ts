@@ -1069,6 +1069,7 @@ export const en: typeof zhCN = {
       tencentCloudSecretIdLabel: 'SecretID',
       tencentCloudSecretKeyLabel: 'SecretKey',
       tencentCloudNote: 'Uses Tencent Cloud Speech Recognition API credentials. The default Hy-ASR-3.0-preview supports Chinese, English, and 20 dialects; Preview accepts only mono 16 kHz PCM up to 60 seconds and does not yet support context or hotword boosting.',
+      tencentTokenHubNote: 'Only online language models are listed. Some models always use reasoning; turning reasoning off keeps that model\'s fixed behavior.',
       localAsrActiveNotice: 'Local ASR ({{name}}) is currently active. Switch or disable it from the Advanced tab.',
       localAsrTakeoverHint: 'Once "{{name}}" is enabled, the ASR provider will be taken over.',
       asrProviderTakenOver: 'A local engine is active. Pick another provider in the dropdown above to switch (the local engine stops automatically); manage local models under Services → Local models.',

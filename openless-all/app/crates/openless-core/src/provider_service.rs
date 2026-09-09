@@ -656,6 +656,7 @@ async fn fetch_models(
         .ok_or_else(|| provider_error("provider endpoint is not configured"))?;
     let url = models_url(endpoint)?;
     let is_gemini = resolved.provider_type == "gemini";
+    let tokenhub_chat_only = resolved.provider_type == "tencentTokenHub";
     let orcarouter_filter = (resolved.provider_type == "orcarouter").then(|| {
         let endpoint_type = match (resolved.kind, resolved.protocol.format) {
             (ProviderKind::Llm, LlmRequestFormat::Responses) => "openai-response",
@@ -715,7 +716,12 @@ async fn fetch_models(
     if response.body.len() > MODEL_LIST_MAX_BYTES {
         return Err(provider_error("provider model response is too large"));
     }
-    parse_model_list(&response.body, is_gemini, orcarouter_filter)
+    parse_model_list(
+        &response.body,
+        is_gemini,
+        orcarouter_filter,
+        tokenhub_chat_only,
+    )
 }
 
 #[derive(Clone, Copy)]
@@ -728,6 +734,7 @@ fn parse_model_list(
     body: &[u8],
     is_gemini: bool,
     orcarouter_filter: Option<OrcaRouterCatalogFilter>,
+    tokenhub_chat_only: bool,
 ) -> Result<Vec<String>, BackendError> {
     let value: serde_json::Value = serde_json::from_slice(body)
         .map_err(|_| provider_error("provider model response is invalid JSON"))?;
@@ -763,6 +770,10 @@ fn parse_model_list(
             .ok_or_else(|| provider_error("provider model response is missing data"))?
             .iter()
             .filter(|item| {
+                !tokenhub_chat_only
+                    || item.get("status").and_then(serde_json::Value::as_str) == Some("online")
+            })
+            .filter(|item| {
                 orcarouter_filter.is_none_or(|filter| {
                     let supports_endpoint = item
                         .get("supported_endpoint_types")
@@ -787,6 +798,10 @@ fn parse_model_list(
             .filter_map(|item| item.get("id").and_then(serde_json::Value::as_str))
             .map(str::trim)
             .filter(|name| !name.is_empty())
+            .filter(|name| {
+                !tokenhub_chat_only
+                    || crate::provider_rules::tokenhub_chat_model_policy(name).is_some()
+            })
             .filter(|name| {
                 if !orcarouter_filter.is_some_and(|filter| filter.kind == ProviderKind::Asr) {
                     return true;
@@ -1344,6 +1359,7 @@ mod tests {
             br#"{"data":[{"id":"gpt-z"},{"id":""},{"id":"gpt-a"},{"id":"gpt-z"}]}"#,
             false,
             None,
+            false,
         )
         .unwrap();
         assert_eq!(models, vec!["gpt-a", "gpt-z"]);
@@ -1355,6 +1371,7 @@ mod tests {
             br#"{"models":[{"name":"models/gemini-z","supportedGenerationMethods":["generateContent"]},{"name":"models/embedding","supportedGenerationMethods":["embedContent"]},{"name":"gemini-a"}]}"#,
             true,
             None,
+            false,
         )
         .unwrap();
         assert_eq!(models, vec!["gemini-a", "gemini-z"]);
@@ -1362,9 +1379,85 @@ mod tests {
 
     #[test]
     fn invalid_model_response_is_a_provider_error_without_body() {
-        let error = parse_model_list(br#"{"error":"secret-key"}"#, false, None).unwrap_err();
+        let error = parse_model_list(br#"{"error":"secret-key"}"#, false, None, false).unwrap_err();
         assert_eq!(error.code, BackendErrorCode::Provider);
         assert!(!format!("{error:?}").contains("secret-key"));
+    }
+
+    #[tokio::test]
+    async fn tokenhub_catalog_lists_only_online_language_models() {
+        let credentials = Arc::new(InMemoryCredentialStore::default());
+        let channel = create_channel_with_values(
+            &credentials,
+            ChannelKind::Llm,
+            "tencentTokenHub",
+            &[(LLM_API_KEY_ACCOUNT, "fixture-key")],
+        )
+        .await;
+        let transport = Arc::new(FakeProviderTransport::default());
+        transport.push_response(
+            200,
+            br#"{"object":"list","data":[
+                {"id":"hy3","status":"online"},
+                {"id":"hy4-preview","status":"online"},
+                {"id":"hy-mt2-pro","status":"online"},
+                {"id":"hy-role","status":"online"},
+                {"id":"hunyuan-role-latest","status":"online"},
+                {"id":"deepseek/deepseek-v4-flash","status":"online"},
+                {"id":"glm-5.3","status":"online"},
+                {"id":"kimi-k3","status":"online"},
+                {"id":"minimax-m3","status":"online"},
+                {"id":"qwen3.5-flash","status":"online"},
+                {"id":"mimo-v2.5-pro","status":"online"},
+                {"id":"deepseek-v4-pro","status":"pre-offline"},
+                {"id":"glm-future"},
+                {"id":"hy-image-v3","status":"online"},
+                {"id":"hy-video-v1.5","status":"online"},
+                {"id":"HY-3D-3.1","status":"online"},
+                {"id":"hy-asr-3.0-preview","status":"online"},
+                {"id":"minimax-speech-2.8-hd","status":"online"},
+                {"id":"kinfra-text-embedding-4b","status":"online"}
+            ]}"#
+            .to_vec(),
+        );
+        let service = ProviderService::new_with_transport(
+            credentials,
+            Arc::new(crate::TokioTaskSpawner),
+            transport.clone(),
+        );
+
+        let result = service
+            .list_models(ProviderRequest {
+                kind: ProviderKind::Llm,
+                channel_id: Some(channel),
+                thinking_enabled: false,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            result.models,
+            vec![
+                "deepseek/deepseek-v4-flash",
+                "glm-5.3",
+                "hunyuan-role-latest",
+                "hy-mt2-pro",
+                "hy-role",
+                "hy3",
+                "hy4-preview",
+                "kimi-k3",
+                "mimo-v2.5-pro",
+                "minimax-m3",
+                "qwen3.5-flash",
+            ]
+        );
+        assert_eq!(
+            transport.requests()[0].headers,
+            vec![(
+                "Authorization".to_string(),
+                "Bearer fixture-key".to_string()
+            )]
+        );
     }
 
     #[tokio::test]

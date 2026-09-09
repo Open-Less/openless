@@ -1069,6 +1069,7 @@ export const zhTW: typeof zhCN = {
       tencentCloudSecretIdLabel: 'SecretID',
       tencentCloudSecretKeyLabel: 'SecretKey',
       tencentCloudNote: '使用騰訊雲「語音辨識」服務的 API 金鑰。預設 Hy-ASR-3.0-preview 支援中英與 20 種方言；Preview 僅支援 60 秒內的 16kHz 單聲道 PCM，暫不支援上下文或熱詞增強。',
+      tencentTokenHubNote: '僅顯示目前在線的語言模型。部分模型始終啟用思考；關閉思考開關時將沿用該模型的固定行為。',
       localAsrActiveNotice: '當前已啓用「{{name}}」，可在「高級」中切換或停用。',
       localAsrTakeoverHint: '啓動「{{name}}」後，ASR 提供商將被接管。',
       asrProviderTakenOver: '目前使用的是本地引擎，在上方下拉直接選其他供應商即可切換（本地引擎會自動停用）；本地模型在「服務 → 本地模型」裡管理。',

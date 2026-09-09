@@ -1071,6 +1071,7 @@ export const ko: typeof zhCN = {
       tencentCloudSecretIdLabel: 'SecretID',
       tencentCloudSecretKeyLabel: 'SecretKey',
       tencentCloudNote: 'Tencent Cloud 음성 인식 API 자격 증명을 사용합니다. 기본 Hy-ASR-3.0-preview는 중국어·영어·20개 방언을 지원합니다. Preview는 60초 이내의 16kHz 모노 PCM만 지원하며, 컨텍스트와 핫워드 강화는 아직 지원하지 않습니다.',
+      tencentTokenHubNote: '현재 온라인인 언어 모델만 표시합니다. 일부 모델은 항상 추론을 사용하며, 추론을 꺼도 해당 모델의 고정 동작을 유지합니다.',
       localAsrActiveNotice: '현재 "{{name}}" 사용 중. "고급" 탭에서 전환 또는 비활성화할 수 있습니다.',
       localAsrTakeoverHint: '"{{name}}" 활성화 시 ASR 프로바이더가 인수됩니다.',
       asrProviderTakenOver: '현재 로컬 엔진을 사용 중입니다. 위의 드롭다운에서 다른 공급자를 선택하면 전환됩니다(로컬 엔진은 자동으로 중지됨). 로컬 모델은 「서비스 → 로컬 모델」에서 관리합니다.',

@@ -23,6 +23,10 @@ const opencode = presets.find(p => p.id === 'opencode');
 assert(opencode?.defaultRequestFormat === 'chat_completions'
   && opencode.defaultEndpoint === 'https://opencode.ai/zen/v1'
   && opencode.defaultModel === 'deepseek-v4-flash', 'OpenCode browser preset must retain Core defaults');
+const tokenhub = presets.find(p => p.id === 'tencentTokenHub');
+assert(tokenhub?.defaultRequestFormat === null
+  && tokenhub.supportedRequestFormats?.length === 0,
+  'TokenHub browser preset must stay fixed to Chat Completions');
 assert(presets.find(p => p.id === 'custom_messages')?.defaultRequestFormat === 'messages', 'Picker must retain Core protocol defaults');
 for (const preset of presets) {
   assert(preset.supportedRequestFormats?.length === (preset.defaultRequestFormat ? 3 : 0), 'Picker must retain Core protocol capabilities');

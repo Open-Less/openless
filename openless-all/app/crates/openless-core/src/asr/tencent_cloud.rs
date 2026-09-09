@@ -10,9 +10,8 @@
 //! - 默认模型：`Hy-ASR-3.0-preview`（腾讯云当前最新混元 ASR Preview）。
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use base64::Engine;
 use futures_util::{SinkExt, StreamExt};
@@ -21,7 +20,7 @@ use parking_lot::Mutex as ParkingMutex;
 use serde_json::Value;
 use sha1::Sha1;
 use tokio::net::TcpStream;
-use tokio::sync::{mpsc, oneshot, Mutex as AsyncMutex, Notify};
+use tokio::sync::{mpsc, oneshot, Mutex as AsyncMutex};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
@@ -38,13 +37,20 @@ pub const DEFAULT_MODEL: &str = "Hy-ASR-3.0-preview";
 pub const TARGET_AUDIO_CHUNK_BYTES: usize = 6_400;
 
 const BYTES_PER_MS: u64 = 32;
+const MAX_AUDIO_SEND_RATE: u64 = 2;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
+const FRAME_SEND_TIMEOUT: Duration = Duration::from_secs(5);
 const FINAL_RESULT_TIMEOUT: Duration = Duration::from_secs(15);
 
 type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 type WsSink = futures_util::stream::SplitSink<WsStream, Message>;
 type SharedWriter = Arc<AsyncMutex<Option<WsSink>>>;
+
+enum SendItem {
+    Audio(Vec<u8>),
+    End(oneshot::Sender<Result<(), TencentCloudASRError>>),
+}
 
 #[derive(Clone, Debug)]
 pub struct TencentCloudCredentials {
@@ -75,16 +81,18 @@ impl TencentCloudCredentials {
 pub enum TencentCloudASRError {
     #[error("credentials missing")]
     CredentialsMissing,
-    #[error("连接失败: {0}")]
-    ConnectionFailed(String),
-    #[error("凭据被拒或服务未开通（{0}）")]
-    AuthRejected(String),
-    #[error("账户不可用（{0}）")]
-    AccountUnavailable(String),
-    #[error("并发受限（{0}）")]
-    RateLimited(String),
-    #[error("识别失败: {0}")]
-    TaskFailed(String),
+    #[error("connection failed")]
+    ConnectionFailed,
+    #[error("credentials rejected or service unavailable ({0})")]
+    AuthRejected(i64),
+    #[error("account unavailable ({0})")]
+    AccountUnavailable(i64),
+    #[error("rate limited")]
+    RateLimited,
+    #[error("service unavailable ({0})")]
+    ServiceUnavailable(i64),
+    #[error("request failed ({0})")]
+    TaskFailed(i64),
     #[error("no final result")]
     NoFinalResult,
     #[error("final result timed out")]
@@ -105,14 +113,13 @@ struct SyncState {
 
 pub struct TencentCloudStreamingASR {
     credentials: TencentCloudCredentials,
+    endpoint: String,
     task_spawner: Arc<dyn TaskSpawner>,
     state: ParkingMutex<SyncState>,
     writer: SharedWriter,
     final_rx: ParkingMutex<Option<oneshot::Receiver<Result<RawTranscript, TencentCloudASRError>>>>,
     handshake_tx: ParkingMutex<Option<oneshot::Sender<Result<(), TencentCloudASRError>>>>,
-    audio_tx: ParkingMutex<Option<mpsc::UnboundedSender<Vec<u8>>>>,
-    pending_sends: Arc<AtomicUsize>,
-    send_done: Arc<Notify>,
+    send_tx: ParkingMutex<Option<mpsc::UnboundedSender<SendItem>>>,
     partial_sink: ParkingMutex<Option<Arc<dyn TextStreamSink>>>,
 }
 
@@ -125,16 +132,23 @@ impl TencentCloudStreamingASR {
         credentials: TencentCloudCredentials,
         task_spawner: Arc<dyn TaskSpawner>,
     ) -> Self {
+        Self::with_endpoint(credentials, task_spawner, DEFAULT_ENDPOINT.to_string())
+    }
+
+    fn with_endpoint(
+        credentials: TencentCloudCredentials,
+        task_spawner: Arc<dyn TaskSpawner>,
+        endpoint: String,
+    ) -> Self {
         Self {
             credentials,
+            endpoint,
             task_spawner,
             state: ParkingMutex::new(SyncState::default()),
             writer: Arc::new(AsyncMutex::new(None)),
             final_rx: ParkingMutex::new(None),
             handshake_tx: ParkingMutex::new(None),
-            audio_tx: ParkingMutex::new(None),
-            pending_sends: Arc::new(AtomicUsize::new(0)),
-            send_done: Arc::new(Notify::new()),
+            send_tx: ParkingMutex::new(None),
             partial_sink: ParkingMutex::new(None),
         }
     }
@@ -145,6 +159,7 @@ impl TencentCloudStreamingASR {
 
     pub fn connect_url(&self) -> String {
         connect_url_at(
+            &self.endpoint,
             &self.credentials,
             chrono::Utc::now().timestamp(),
             random_nonce(),
@@ -160,21 +175,16 @@ impl TencentCloudStreamingASR {
         let request = self
             .connect_url()
             .into_client_request()
-            .map_err(|error| TencentCloudASRError::ConnectionFailed(error.to_string()))?;
+            .map_err(|_| TencentCloudASRError::ConnectionFailed)?;
         let (ws, _) = tokio::time::timeout(CONNECT_TIMEOUT, connect_async(request))
             .await
-            .map_err(|_| {
-                TencentCloudASRError::ConnectionFailed(format!(
-                    "连接超时（{} ms）",
-                    CONNECT_TIMEOUT.as_millis()
-                ))
-            })?
-            .map_err(|error| TencentCloudASRError::ConnectionFailed(error.to_string()))?;
+            .map_err(|_| TencentCloudASRError::ConnectionFailed)?
+            .map_err(|_| TencentCloudASRError::ConnectionFailed)?;
         let (write, read) = ws.split();
         *self.writer.lock().await = Some(write);
 
         let (final_tx, final_rx) = oneshot::channel();
-        let (audio_tx, mut audio_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        let (send_tx, mut send_rx) = mpsc::unbounded_channel::<SendItem>();
         let (handshake_tx, handshake_rx) = oneshot::channel();
         {
             let mut state = self.state.lock();
@@ -182,21 +192,42 @@ impl TencentCloudStreamingASR {
             state.final_tx = Some(final_tx);
         }
         *self.final_rx.lock() = Some(final_rx);
-        *self.audio_tx.lock() = Some(audio_tx);
+        *self.send_tx.lock() = Some(send_tx);
         *self.handshake_tx.lock() = Some(handshake_tx);
-        self.pending_sends.store(0, Ordering::SeqCst);
 
         let writer = Arc::clone(&self.writer);
-        let pending_sends = Arc::clone(&self.pending_sends);
-        let send_done = Arc::clone(&self.send_done);
+        let weak_self = Arc::downgrade(self);
         let task_spawner = Arc::clone(&self.task_spawner);
         task_spawner.spawn(Box::pin(async move {
-            while let Some(chunk) = audio_rx.recv().await {
-                if let Err(error) = send_binary(&writer, chunk).await {
-                    log::error!("[tencent-cloud-asr] audio frame send failed: {error}");
+            let mut next_audio_send_at = None;
+            while let Some(item) = send_rx.recv().await {
+                let (result, done) = match item {
+                    SendItem::Audio(chunk) => {
+                        if let Some(send_at) = next_audio_send_at {
+                            tokio::time::sleep_until(send_at).await;
+                        }
+                        let interval_ms =
+                            (chunk.len() as u64 / BYTES_PER_MS / MAX_AUDIO_SEND_RATE).max(1);
+                        let result = send_binary(&writer, chunk).await;
+                        next_audio_send_at =
+                            Some(tokio::time::Instant::now() + Duration::from_millis(interval_ms));
+                        (result, None)
+                    }
+                    SendItem::End(done) => {
+                        (send_text(&writer, r#"{"type":"end"}"#).await, Some(done))
+                    }
+                };
+                if let Err(error) = &result {
+                    log::error!("[tencent-cloud-asr] websocket send failed");
+                    if let Some(this) = weak_self.upgrade() {
+                        this.finish_error(error.clone());
+                    }
                 }
-                if pending_sends.fetch_sub(1, Ordering::SeqCst) == 1 {
-                    send_done.notify_waiters();
+                if let Some(done) = done {
+                    let _ = done.send(result.clone());
+                }
+                if result.is_err() {
+                    break;
                 }
             }
         }));
@@ -220,11 +251,9 @@ impl TencentCloudStreamingASR {
                         break;
                     }
                     Ok(_) => {}
-                    Err(error) => {
-                        log::error!("[tencent-cloud-asr] receive loop error: {error}");
-                        this.finish_with_partial_or_error(TencentCloudASRError::ConnectionFailed(
-                            error.to_string(),
-                        ));
+                    Err(_) => {
+                        log::error!("[tencent-cloud-asr] receive loop failed");
+                        this.finish_with_partial_or_error(TencentCloudASRError::ConnectionFailed);
                         break;
                     }
                 }
@@ -239,24 +268,30 @@ impl TencentCloudStreamingASR {
             }
             Ok(Err(_)) => {
                 self.cancel();
-                Err(TencentCloudASRError::ConnectionFailed(
-                    "握手通道提前关闭".to_string(),
-                ))
+                Err(TencentCloudASRError::ConnectionFailed)
             }
             Err(_) => {
                 self.cancel();
-                Err(TencentCloudASRError::ConnectionFailed(format!(
-                    "握手超时（{} ms）",
-                    HANDSHAKE_TIMEOUT.as_millis()
-                )))
+                Err(TencentCloudASRError::ConnectionFailed)
             }
         }
     }
 
     pub async fn send_last_frame(&self) -> Result<(), TencentCloudASRError> {
         self.flush_pending_audio();
-        self.wait_for_pending_sends().await;
-        send_text(&self.writer, r#"{"type":"end"}"#).await
+        let (done_tx, done_rx) = oneshot::channel();
+        let sender = self
+            .send_tx
+            .lock()
+            .as_ref()
+            .cloned()
+            .ok_or(TencentCloudASRError::ConnectionFailed)?;
+        sender
+            .send(SendItem::End(done_tx))
+            .map_err(|_| TencentCloudASRError::ConnectionFailed)?;
+        done_rx
+            .await
+            .map_err(|_| TencentCloudASRError::ConnectionFailed)?
     }
 
     pub async fn await_final_result(&self) -> Result<RawTranscript, TencentCloudASRError> {
@@ -288,7 +323,7 @@ impl TencentCloudStreamingASR {
     pub fn cancel(&self) {
         self.state.lock().pending_audio.clear();
         *self.handshake_tx.lock() = None;
-        *self.audio_tx.lock() = None;
+        *self.send_tx.lock() = None;
         let writer = Arc::clone(&self.writer);
         self.task_spawner.spawn(Box::pin(async move {
             let mut guard = writer.lock().await;
@@ -312,30 +347,12 @@ impl TencentCloudStreamingASR {
         self.enqueue_audio(leftover);
     }
 
-    async fn wait_for_pending_sends(&self) {
-        let deadline = Instant::now() + Duration::from_millis(1_500);
-        while self.pending_sends.load(Ordering::SeqCst) > 0 {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                log::warn!(
-                    "[tencent-cloud-asr] {} audio frames still pending at end",
-                    self.pending_sends.load(Ordering::SeqCst)
-                );
-                break;
-            }
-            let _ = tokio::time::timeout(remaining, self.send_done.notified()).await;
-        }
-    }
-
     fn enqueue_audio(&self, chunk: Vec<u8>) {
-        let Some(sender) = self.audio_tx.lock().as_ref().cloned() else {
+        let Some(sender) = self.send_tx.lock().as_ref().cloned() else {
             return;
         };
-        self.pending_sends.fetch_add(1, Ordering::SeqCst);
-        if sender.send(chunk).is_err() {
-            if self.pending_sends.fetch_sub(1, Ordering::SeqCst) == 1 {
-                self.send_done.notify_waiters();
-            }
+        if sender.send(SendItem::Audio(chunk)).is_err() {
+            self.signal_error(TencentCloudASRError::ConnectionFailed);
         }
     }
 
@@ -349,11 +366,7 @@ impl TencentCloudStreamingASR {
         };
         let code = value.get("code").and_then(Value::as_i64).unwrap_or(-1);
         if code != 0 {
-            let message = value
-                .get("message")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown error");
-            let error = classify_server_error(code, message);
+            let error = classify_server_error(code);
             if let Some(sender) = self.handshake_tx.lock().take() {
                 let _ = sender.send(Err(error.clone()));
             }
@@ -427,9 +440,7 @@ impl TencentCloudStreamingASR {
 
     fn finish_on_close(&self) {
         if let Some(sender) = self.handshake_tx.lock().take() {
-            let _ = sender.send(Err(TencentCloudASRError::ConnectionFailed(
-                "连接在握手完成前被关闭".to_string(),
-            )));
+            let _ = sender.send(Err(TencentCloudASRError::ConnectionFailed));
             return;
         }
         self.finish_with_partial_or_error(TencentCloudASRError::NoFinalResult);
@@ -470,7 +481,7 @@ impl TencentCloudStreamingASR {
             };
             (state.final_tx.take(), text, state.bytes_sent / BYTES_PER_MS)
         };
-        *self.audio_tx.lock() = None;
+        *self.send_tx.lock() = None;
         if let Some(sender) = sender {
             let _ = sender.send(Ok(RawTranscript { text, duration_ms }));
         }
@@ -486,7 +497,7 @@ impl TencentCloudStreamingASR {
             state.finished = true;
             state.final_tx.take()
         };
-        *self.audio_tx.lock() = None;
+        *self.send_tx.lock() = None;
         if let Some(sender) = sender {
             let _ = sender.send(Err(error));
         }
@@ -539,34 +550,37 @@ impl AudioConsumer for TencentCloudStreamingASR {
 async fn send_binary(writer: &SharedWriter, data: Vec<u8>) -> Result<(), TencentCloudASRError> {
     let mut guard = writer.lock().await;
     let Some(ws) = guard.as_mut() else {
-        return Err(TencentCloudASRError::ConnectionFailed(
-            "websocket not open".to_string(),
-        ));
+        return Err(TencentCloudASRError::ConnectionFailed);
     };
-    ws.send(Message::Binary(data))
+    tokio::time::timeout(FRAME_SEND_TIMEOUT, ws.send(Message::Binary(data)))
         .await
-        .map_err(|error| TencentCloudASRError::ConnectionFailed(error.to_string()))
+        .map_err(|_| TencentCloudASRError::ConnectionFailed)?
+        .map_err(|_| TencentCloudASRError::ConnectionFailed)
 }
 
 async fn send_text(writer: &SharedWriter, data: &str) -> Result<(), TencentCloudASRError> {
     let mut guard = writer.lock().await;
     let Some(ws) = guard.as_mut() else {
-        return Err(TencentCloudASRError::ConnectionFailed(
-            "websocket not open".to_string(),
-        ));
+        return Err(TencentCloudASRError::ConnectionFailed);
     };
-    ws.send(Message::Text(data.to_string()))
+    tokio::time::timeout(FRAME_SEND_TIMEOUT, ws.send(Message::Text(data.to_string())))
         .await
-        .map_err(|error| TencentCloudASRError::ConnectionFailed(error.to_string()))
+        .map_err(|_| TencentCloudASRError::ConnectionFailed)?
+        .map_err(|_| TencentCloudASRError::ConnectionFailed)
 }
 
 fn connect_url_at(
+    base_endpoint: &str,
     credentials: &TencentCloudCredentials,
     timestamp: i64,
     nonce: u32,
     voice_id: String,
 ) -> String {
-    let endpoint = format!("{}/{}", DEFAULT_ENDPOINT, credentials.app_id.trim());
+    let endpoint = format!(
+        "{}/{}",
+        base_endpoint.trim_end_matches('/'),
+        credentials.app_id.trim()
+    );
     let parsed = url::Url::parse(&endpoint).expect("static Tencent Cloud endpoint parses");
     let host_and_path = format!(
         "{}{}",
@@ -623,19 +637,40 @@ fn random_nonce() -> u32 {
     u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) % 1_000_000_000 + 1
 }
 
-fn classify_server_error(code: i64, message: &str) -> TencentCloudASRError {
-    let detail = format!("{code} {message}");
+fn classify_server_error(code: i64) -> TencentCloudASRError {
     match code {
-        4002 | 4003 => TencentCloudASRError::AuthRejected(detail),
-        4004 | 4005 => TencentCloudASRError::AccountUnavailable(detail),
-        4006 => TencentCloudASRError::RateLimited(detail),
-        _ => TencentCloudASRError::TaskFailed(detail),
+        4002 | 4003 => TencentCloudASRError::AuthRejected(code),
+        4004 | 4005 => TencentCloudASRError::AccountUnavailable(code),
+        4006 => TencentCloudASRError::RateLimited,
+        4009 => TencentCloudASRError::ConnectionFailed,
+        5000..=5002 => TencentCloudASRError::ServiceUnavailable(code),
+        _ => TencentCloudASRError::TaskFailed(code),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct DelayedFirstSpawner {
+        spawned: AtomicUsize,
+        release: Arc<tokio::sync::Semaphore>,
+    }
+
+    impl TaskSpawner for DelayedFirstSpawner {
+        fn spawn(&self, task: futures_util::future::BoxFuture<'static, ()>) {
+            if self.spawned.fetch_add(1, Ordering::SeqCst) == 0 {
+                let release = Arc::clone(&self.release);
+                tokio::spawn(async move {
+                    release.acquire_owned().await.unwrap().forget();
+                    task.await;
+                });
+            } else {
+                tokio::spawn(task);
+            }
+        }
+    }
 
     fn credentials() -> TencentCloudCredentials {
         TencentCloudCredentials {
@@ -656,7 +691,13 @@ mod tests {
 
     #[test]
     fn connect_url_uses_sorted_signed_query_and_encodes_signature() {
-        let url = connect_url_at(&credentials(), 1_700_000_000, 42, "voice-id".into());
+        let url = connect_url_at(
+            DEFAULT_ENDPOINT,
+            &credentials(),
+            1_700_000_000,
+            42,
+            "voice-id".into(),
+        );
         assert!(url.starts_with(
             "wss://asr.cloud.tencent.com/asr/v2/1259220000?engine_model_type=Hy-ASR-3.0-preview&expired=1700086400"
         ));
@@ -690,14 +731,18 @@ mod tests {
     }
 
     #[test]
-    fn server_errors_are_classified_for_actionable_messages() {
+    fn server_errors_are_classified_for_actions() {
         assert!(matches!(
-            classify_server_error(4002, "auth failed"),
+            classify_server_error(4002),
             TencentCloudASRError::AuthRejected(_)
         ));
         assert!(matches!(
-            classify_server_error(4006, "concurrency exceeded"),
-            TencentCloudASRError::RateLimited(_)
+            classify_server_error(4006),
+            TencentCloudASRError::RateLimited
+        ));
+        assert!(matches!(
+            classify_server_error(5000),
+            TencentCloudASRError::ServiceUnavailable(5000)
         ));
     }
 
@@ -711,5 +756,245 @@ mod tests {
             model: DEFAULT_MODEL.into(),
         }
         .auth_ok());
+    }
+
+    #[tokio::test]
+    async fn websocket_session_sends_all_audio_before_end_and_returns_final_text() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("ws://{}/asr/v2", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+            ws.send(Message::Text(
+                serde_json::json!({ "code": 0, "message": "success" }).to_string(),
+            ))
+            .await
+            .unwrap();
+
+            let first = ws.next().await.unwrap().unwrap();
+            let second = ws.next().await.unwrap().unwrap();
+            let end = ws.next().await.unwrap().unwrap();
+            assert!(matches!(first, Message::Binary(bytes) if bytes.len() == 6_400));
+            assert!(matches!(second, Message::Binary(bytes) if bytes.len() == 100));
+            assert_eq!(end, Message::Text(r#"{"type":"end"}"#.to_string()));
+
+            ws.send(Message::Text(
+                serde_json::json!({
+                    "code": 0,
+                    "message": "success",
+                    "result": { "slice_type": 2, "index": 0, "voice_text_str": "你好" }
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+            ws.send(Message::Text(
+                serde_json::json!({ "code": 0, "message": "success", "final": 1 }).to_string(),
+            ))
+            .await
+            .unwrap();
+        });
+        let asr = Arc::new(TencentCloudStreamingASR::with_endpoint(
+            credentials(),
+            Arc::new(TokioTaskSpawner),
+            endpoint,
+        ));
+
+        asr.open_session().await.unwrap();
+        asr.consume_pcm_chunk(&vec![1; 6_500]);
+        asr.send_last_frame().await.unwrap();
+        let transcript = asr.await_final_result().await.unwrap();
+
+        assert_eq!(transcript.text, "你好");
+        assert_eq!(transcript.duration_ms, 203);
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn end_waits_for_queued_audio_even_when_writer_start_is_delayed() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("ws://{}/asr/v2", listener.local_addr().unwrap());
+        let (first_tx, mut first_rx) = oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+            ws.send(Message::Text(
+                serde_json::json!({ "code": 0, "message": "success" }).to_string(),
+            ))
+            .await
+            .unwrap();
+            first_tx.send(ws.next().await.unwrap().unwrap()).unwrap();
+            assert!(matches!(
+                ws.next().await.unwrap().unwrap(),
+                Message::Binary(bytes) if bytes.len() == 100
+            ));
+            assert_eq!(
+                ws.next().await.unwrap().unwrap(),
+                Message::Text(r#"{"type":"end"}"#.to_string())
+            );
+            ws.send(Message::Text(
+                serde_json::json!({ "code": 0, "message": "success", "final": 1 }).to_string(),
+            ))
+            .await
+            .unwrap();
+        });
+        let release = Arc::new(tokio::sync::Semaphore::new(0));
+        let asr = Arc::new(TencentCloudStreamingASR::with_endpoint(
+            credentials(),
+            Arc::new(DelayedFirstSpawner {
+                spawned: AtomicUsize::new(0),
+                release: Arc::clone(&release),
+            }),
+            endpoint,
+        ));
+        asr.open_session().await.unwrap();
+        asr.consume_pcm_chunk(&vec![1; 6_500]);
+        let finishing = {
+            let asr = Arc::clone(&asr);
+            tokio::spawn(async move { asr.send_last_frame().await })
+        };
+
+        assert!(
+            tokio::time::timeout(Duration::from_millis(1_800), &mut first_rx)
+                .await
+                .is_err(),
+            "end must not bypass audio queued on a delayed writer"
+        );
+        release.add_permits(1);
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(2), &mut first_rx)
+                .await
+                .unwrap()
+                .unwrap(),
+            Message::Binary(bytes) if bytes.len() == 6_400
+        ));
+        finishing.await.unwrap().unwrap();
+        assert!(asr.await_final_result().await.unwrap().text.is_empty());
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn buffered_audio_replay_stays_within_tencent_rate_limit() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("ws://{}/asr/v2", listener.local_addr().unwrap());
+        let (elapsed_tx, elapsed_rx) = oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+            ws.send(Message::Text(
+                serde_json::json!({ "code": 0, "message": "success" }).to_string(),
+            ))
+            .await
+            .unwrap();
+            let mut received_at = Vec::new();
+            for _ in 0..3 {
+                assert!(matches!(
+                    ws.next().await.unwrap().unwrap(),
+                    Message::Binary(bytes) if bytes.len() == TARGET_AUDIO_CHUNK_BYTES
+                ));
+                received_at.push(tokio::time::Instant::now());
+            }
+            assert_eq!(
+                ws.next().await.unwrap().unwrap(),
+                Message::Text(r#"{"type":"end"}"#.to_string())
+            );
+            elapsed_tx
+                .send(received_at[2].duration_since(received_at[0]))
+                .unwrap();
+            ws.send(Message::Text(
+                serde_json::json!({ "code": 0, "message": "success", "final": 1 }).to_string(),
+            ))
+            .await
+            .unwrap();
+        });
+        let asr = Arc::new(TencentCloudStreamingASR::with_endpoint(
+            credentials(),
+            Arc::new(TokioTaskSpawner),
+            endpoint,
+        ));
+
+        asr.open_session().await.unwrap();
+        asr.consume_pcm_chunk(&vec![1; TARGET_AUDIO_CHUNK_BYTES * 3]);
+        asr.send_last_frame().await.unwrap();
+        asr.await_final_result().await.unwrap();
+
+        assert!(
+            elapsed_rx.await.unwrap() >= Duration::from_millis(180),
+            "buffered audio must be paced instead of sent as one burst"
+        );
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn websocket_rejection_does_not_expose_server_message() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("ws://{}/asr/v2", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+            ws.send(Message::Text(
+                serde_json::json!({
+                    "code": 4002,
+                    "message": "SENSITIVE_SERVER_RESPONSE"
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+        });
+        let asr = Arc::new(TencentCloudStreamingASR::with_endpoint(
+            credentials(),
+            Arc::new(TokioTaskSpawner),
+            endpoint,
+        ));
+
+        let error = asr.open_session().await.unwrap_err();
+
+        assert!(matches!(error, TencentCloudASRError::AuthRejected(4002)));
+        assert!(!error.to_string().contains("SENSITIVE_SERVER_RESPONSE"));
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn cancel_closes_the_socket_and_unblocks_waiters() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("ws://{}/asr/v2", listener.local_addr().unwrap());
+        let (closed_tx, closed_rx) = oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+            ws.send(Message::Text(
+                serde_json::json!({ "code": 0, "message": "success" }).to_string(),
+            ))
+            .await
+            .unwrap();
+            let closed = matches!(
+                ws.next().await,
+                Some(Ok(Message::Close(_))) | None | Some(Err(_))
+            );
+            closed_tx.send(closed).unwrap();
+        });
+        let asr = Arc::new(TencentCloudStreamingASR::with_endpoint(
+            credentials(),
+            Arc::new(TokioTaskSpawner),
+            endpoint,
+        ));
+        asr.open_session().await.unwrap();
+
+        asr.cancel();
+
+        assert!(tokio::time::timeout(Duration::from_secs(2), closed_rx)
+            .await
+            .unwrap()
+            .unwrap());
+        assert!(matches!(
+            asr.send_last_frame().await,
+            Err(TencentCloudASRError::ConnectionFailed)
+        ));
+        assert!(matches!(
+            asr.await_final_result().await,
+            Err(TencentCloudASRError::NoFinalResult)
+        ));
+        server.await.unwrap();
     }
 }

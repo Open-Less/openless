@@ -39,7 +39,7 @@ impl LlmRequestFormat {
     }
 
     pub fn selectable(provider: &str) -> bool {
-        !matches!(provider, "gemini" | "codex_oauth")
+        !matches!(provider, "gemini" | "codex_oauth" | "tencentTokenHub")
     }
 
     pub fn parse(value: &str) -> Result<Self, BackendError> {
@@ -529,6 +529,32 @@ mod tests {
         assert!(LlmProtocolConfig::load(&store, "a", "openai")
             .await
             .is_err());
+    }
+
+    #[tokio::test]
+    async fn tokenhub_is_fixed_to_chat_completions() {
+        let store = InMemoryCredentialStore::default();
+        store
+            .write(
+                CredentialKey::new(
+                    CredentialNamespace::Llm,
+                    Some("tokenhub".into()),
+                    REQUEST_FORMAT_ACCOUNT,
+                )
+                .unwrap(),
+                SecretValue::new("messages"),
+            )
+            .await
+            .unwrap();
+
+        assert!(!LlmRequestFormat::selectable("tencentTokenHub"));
+        assert_eq!(
+            LlmProtocolConfig::load(&store, "tokenhub", "tencentTokenHub")
+                .await
+                .unwrap()
+                .format,
+            LlmRequestFormat::ChatCompletions
+        );
     }
 
     #[test]
