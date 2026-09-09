@@ -8,6 +8,7 @@
 //
 // 设计原则：每个可见控件都必须可用。
 
+import { ProviderLeaveContext, useProviderForm } from '../pages/settings/ProviderForm';
 import { useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from './Icon';
@@ -57,6 +58,8 @@ const LINK_ITEMS: ModalNavItem[] = [
 ];
 
 export function SettingsModal({ os: _os, onClose, initialSettingsSection }: SettingsModalProps) {
+  const providerForm = useProviderForm();
+  const close = () => { void providerForm.finish(onClose); };
   const { t } = useTranslation();
   const mobile = useMobileLayout();
   const conservative = useConservativeLayout();
@@ -78,8 +81,9 @@ export function SettingsModal({ os: _os, onClose, initialSettingsSection }: Sett
   }, [section, mobile]);
 
   return (
+    <ProviderLeaveContext.Provider value={providerForm.register}>
     <div
-      onClick={mobile ? undefined : onClose}
+      onClick={mobile ? undefined : close}
       style={{
         position: mobile ? 'fixed' : 'absolute',
         inset: 0,
@@ -124,7 +128,7 @@ export function SettingsModal({ os: _os, onClose, initialSettingsSection }: Sett
           }}>
             <button
               type="button"
-              onClick={onClose}
+              onClick={close}
               aria-label={t('common.close')}
               style={mobileHeaderBtnStyle}
             >
@@ -140,7 +144,7 @@ export function SettingsModal({ os: _os, onClose, initialSettingsSection }: Sett
                   <button
                     key={it.id}
                     type="button"
-                    onClick={() => setSection(it.id as SettingsSectionId)}
+                    onClick={() => void providerForm.finish(() => setSection(it.id as SettingsSectionId))}
                     className={active ? 'ol-nav-btn ol-nav-btn-active' : 'ol-nav-btn'}
                     style={mobileTabChipStyle(active)}
                   >
@@ -186,7 +190,7 @@ export function SettingsModal({ os: _os, onClose, initialSettingsSection }: Sett
                 <button
                   key={it.id}
                   ref={el => { tabRefs.current[idx] = el; }}
-                  onClick={() => setSection(it.id as SettingsSectionId)}
+                  onClick={() => void providerForm.finish(() => setSection(it.id as SettingsSectionId))}
                   className={active ? 'ol-nav-btn ol-nav-btn-active' : 'ol-nav-btn'}
                   style={navBtnStyle}>
                   <Icon name={it.icon} size={14} />
@@ -223,7 +227,7 @@ export function SettingsModal({ os: _os, onClose, initialSettingsSection }: Sett
           />
           {!mobile && (
           <button
-            onClick={onClose}
+            onClick={close}
             style={{
               position: 'absolute', top: 14, right: 14, zIndex: 2,
               width: 28, height: 28, border: 0, borderRadius: 999,
@@ -288,6 +292,7 @@ export function SettingsModal({ os: _os, onClose, initialSettingsSection }: Sett
         </div>
       </div>
     </div>
+    </ProviderLeaveContext.Provider>
   );
 }
 

@@ -1,7 +1,7 @@
 // 服务 → AI 提供商：LLM 润色模型 + ASR 语音转写两张卡片。
 // 自 Settings.tsx 整体迁出，逻辑零改动；i18n key 全部保持 `settings.providers.*`。
 
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../../components/Icon';
 import { detectOS } from '../../components/WindowChrome';
@@ -15,6 +15,9 @@ import {
   validateProviderCredentials,
   type ProviderDescriptor,
 } from '../../lib/ipc';
+import { ModelCatalog } from './modelCatalog';
+import { CredentialDraft } from './credentialDraft';
+import { ProviderFormContext, useProviderForm } from './ProviderForm';
 import { LlmProtocolFields } from './LlmProtocolFields';
 import { emitSaved } from '../../lib/savedEvent';
 import { useLayoutStack, useConservativeLayout } from '../../lib/useMobileLayout';
@@ -106,6 +109,53 @@ const ASR_DEFAULT_RESOURCE_ID = 'volc.seedasr.sauc.duration';
 /** 模型预设下拉里的「自定义模型…」哨兵值：选中即切回输入框手输。 */
 const CUSTOM_MODEL_OPTION_VALUE = '__custom_model__';
 
+function useRegisteredCredentialDraft(
+  account: string,
+  provider?: string,
+  onUserMutation?: () => void,
+  onBlockedChange?: (account: string, blocked: boolean) => void,
+  enabled = true,
+) {
+  const { t } = useTranslation();
+  const form = useContext(ProviderFormContext);
+  const draft = useMemo(() => new CredentialDraft(
+    () => readCredential(account, provider), value => setCredential(account, value, provider),
+  ), [account, provider]);
+  const state = useSyncExternalStore(draft.subscribe, draft.snapshot, draft.snapshot);
+  const blocked = !state.loaded || state.dirty || state.status === 'saving'
+    || state.status === 'readError' || state.status === 'saveError';
+
+  useEffect(() => {
+    if (!enabled) return;
+    void draft.load();
+    return () => draft.dispose();
+  }, [draft, enabled]);
+  useEffect(() => {
+    if (!enabled) return;
+    form?.track(account, blocked);
+    onBlockedChange?.(account, blocked);
+  }, [account, blocked, enabled, form?.track, onBlockedChange]);
+  useEffect(() => enabled ? form?.register(account, draft.flush) : undefined,
+    [account, draft, enabled, form?.register]);
+  useEffect(() => {
+    if (!enabled) return;
+    if (state.status === 'saving') emitSaved('saving', t('common.saving'));
+    if (state.status === 'saved') emitSaved('saved', t('common.saved'));
+    if (state.status === 'saveError') emitSaved('failed', t('common.operationFailed'));
+  }, [enabled, state.status, t]);
+
+  const edit = (value: string) => {
+    if (!enabled || !state.loaded) return false;
+    form?.track(account, true);
+    form?.invalidate(account);
+    onUserMutation?.();
+    draft.edit(value);
+    return true;
+  };
+
+  return { ...state, draft, edit, disabled: !enabled || !state.loaded || form?.leaving };
+}
+
 /**
  * 一张渠道卡片的凭据字段区（编辑弹窗的主体）。
  *
@@ -135,30 +185,24 @@ export function ChannelCredentialFields({
   const baseLayoutStack = useLayoutStack();
   const conservative = useConservativeLayout();
   const layoutStack = conservative || baseLayoutStack;
-  const [llmModelRevision, setLlmModelRevision] = useState(0);
+  const form = useContext(ProviderFormContext);
   const [configRevision, setConfigRevision] = useState(0);
-  const [orcarouterCatalogRevision, setOrcarouterCatalogRevision] = useState(0);
+
   const [blockedFields, setBlockedFields] = useState<Record<string, boolean>>({});
   const trackField = useCallback((account: string, blocked: boolean) => {
+    form?.track(account, blocked);
     setBlockedFields(previous => previous[account] === blocked ? previous : { ...previous, [account]: blocked });
-  }, []);
+  }, [form?.track]);
   const onLlmMutation = () => { onUserMutation?.(); setConfigRevision(value => value + 1); };
 
-  const [asrModelRevision, setAsrModelRevision] = useState(0);
+
   const unifiedBailian = providerType === 'bailian';
   const [bailianModel, setBailianModel] = useState('');
-  const [volcengineAuthMode, setVolcengineAuthMode] = useState<'app_id_token' | 'api_key'>('app_id_token');
-
-  useEffect(() => {
-    if (providerType === 'volcengine') {
-      readCredential('volcengine.auth_mode', channelId)
-        .then(v => {
-          if (v === 'api_key') setVolcengineAuthMode('api_key');
-          else setVolcengineAuthMode('app_id_token');
-        })
-        .catch(() => setVolcengineAuthMode('app_id_token'));
-    }
-  }, [providerType, channelId]);
+  const volcengineAuth = useRegisteredCredentialDraft(
+    'volcengine.auth_mode', channelId, onUserMutation, undefined,
+    descriptor?.authRequirement === 'volcengine',
+  );
+  const volcengineAuthMode = volcengineAuth.value === 'api_key' ? 'api_key' : 'app_id_token';
 
   useEffect(() => {
     if (!unifiedBailian) setBailianModel('');
@@ -191,13 +235,8 @@ export function ChannelCredentialFields({
       <>
         {!!descriptor.supportedRequestFormats?.length && descriptor.defaultRequestFormat && (
           <LlmProtocolFields channelId={channelId} defaultFormat={descriptor.defaultRequestFormat}
-            formats={descriptor.supportedRequestFormats} onUserMutation={onLlmMutation}
-            onBlockedChange={trackField} onSaved={changedAccounts => {
-              if (providerType === 'orcarouter' && changedAccounts.includes('ark.request_format')) {
-                setOrcarouterCatalogRevision(value => value + 1);
-              }
-              onTested?.();
-            }} />
+            formats={descriptor.supportedRequestFormats} onUserMutation={() => { form?.invalidate(); onLlmMutation(); }}
+            onBlockedChange={trackField} onSaved={() => onTested?.()} />
         )}
         {codexOAuthSelected ? (
           <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.6, margin: '2px 0 10px' }}>
@@ -234,28 +273,13 @@ export function ChannelCredentialFields({
             )}
           </>
         )}
-        {providerType === 'orcarouter' ? (
-          <CatalogModelField key={`${channelId}:catalog:${orcarouterCatalogRevision}`} kind="llm" provider={channelId}
-            baseUrl={defaultEndpoint ?? ''} defaultModel={defaultModel ?? ''}
-            onUserMutation={onLlmMutation} onBlockedChange={trackField}
-            trailing={<LlmThinkingToggle enabled={prefs?.llmThinkingEnabled ?? false} onToggle={onLlmThinkingToggle} />} />
-        ) : (
-        <CredentialField key={`${channelId}:model:${llmModelRevision}`} label={t('settings.providers.modelLabel')}
-          account="ark.model_id" provider={channelId}
-          placeholder={defaultModel || 'model-name'} mono
-          defaultValue={defaultModel || undefined}
+        <ModelField kind="llm" providerType={providerType} provider={channelId}
+          staticModels={descriptor.staticModels} defaultValue={defaultModel || undefined}
           onUserMutation={onLlmMutation} onBlockedChange={trackField}
-          trailing={(
-            <LlmThinkingToggle
-              enabled={prefs?.llmThinkingEnabled ?? false}
-              onToggle={onLlmThinkingToggle}
-            />
-          )}
-        />
-        )}
-        <ProviderTools key={configRevision} disabled={Object.values(blockedFields).some(Boolean) || (!!descriptor.supportedRequestFormats?.length && blockedFields.protocol === undefined)} kind="llm" modelAccount="ark.model_id" provider={channelId}
-          onModelSelected={() => setLlmModelRevision(v => v + 1)} onTested={onTested}
-          onUserMutation={onUserMutation} showFetchModels={providerType !== 'orcarouter'} />
+          trailing={<LlmThinkingToggle enabled={prefs?.llmThinkingEnabled ?? false} onToggle={onLlmThinkingToggle} />} />
+        <ProviderTools key={`${configRevision}:${form?.revision}`} disabled={Object.values(blockedFields).some(Boolean) || (!!descriptor.supportedRequestFormats?.length && blockedFields.protocol === undefined)} kind="llm" provider={channelId}
+          onTested={onTested}
+          onUserMutation={onUserMutation} />
       </>
     );
   }
@@ -269,20 +293,13 @@ export function ChannelCredentialFields({
         <SettingRow label={t('settings.providers.volcengineAuthModeLabel')}>
           <SelectLite
             value={volcengineAuthMode}
-            onChange={async (v) => {
-              onUserMutation?.();
-              const mode = v as 'app_id_token' | 'api_key';
-              const prev = volcengineAuthMode;
-              setVolcengineAuthMode(mode);
-              try {
-                await setCredential('volcengine.auth_mode', mode, channelId);
-              } catch (error) {
-                // 写入失败必须回滚 UI 并提示：否则模式看着已切换、重启后却静默回退，
-                // 配合独立 API Key 槽会造成「Key 存在但模式不对」的混乱。
-                console.error('[settings] failed to save volcengine auth mode', error);
-                setVolcengineAuthMode(prev);
-                emitSaved('failed', t('common.operationFailed'));
-              }
+            disabled={volcengineAuth.disabled}
+            onChange={v => {
+              const save = async () => {
+                if (volcengineAuth.edit(v)) await volcengineAuth.draft.flush();
+              };
+              if (form) void form.finish(save);
+              else void save();
             }}
             options={[
               { value: 'app_id_token', label: t('settings.providers.volcengineAuthModeAppIdToken') },
@@ -291,6 +308,12 @@ export function ChannelCredentialFields({
             ariaLabel={t('settings.providers.volcengineAuthModeLabel')}
             style={{ ...inputStyle, width: '100%', maxWidth: layoutStack ? '100%' : 260 }}
           />
+          {volcengineAuth.status === 'readError' && (
+            <span style={{ fontSize: 11, color: 'var(--ol-warn)' }}>{t('settings.providers.readFailed')}</span>
+          )}
+          {volcengineAuth.status === 'saveError' && (
+            <button onClick={() => void volcengineAuth.draft.flush()} style={miniBtnStyle}>{t('common.retry')}</button>
+          )}
         </SettingRow>
         {/* 两种模式使用各自独立的凭据槽位：旧版 Access Token（volcengine.access_key）
             与方舟 API Key（volcengine.api_key）互不预填，切换模式不会残留混淆。 */}
@@ -318,8 +341,8 @@ export function ChannelCredentialFields({
             ? t('settings.providers.volcengineApiKeyNote')
             : t('settings.providers.volcengineMappingNote')}
         </div>
-        <ProviderTools kind="asr" modelAccount="asr.model" provider={channelId}
-          showFetchModels={false} onModelSelected={() => setAsrModelRevision(v => v + 1)} onTested={onTested}
+        <ProviderTools key={form?.revision} disabled={Object.values(form?.blocked ?? {}).some(Boolean)} kind="asr" provider={channelId}
+          onTested={onTested}
           onUserMutation={onUserMutation} />
       </>
     );
@@ -335,8 +358,8 @@ export function ChannelCredentialFields({
         <div style={{ marginTop: 2, fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.6 }}>
           {t('settings.providers.xfyunNote')}
         </div>
-        <ProviderTools kind="asr" modelAccount="asr.model" provider={channelId}
-          showFetchModels={false} onModelSelected={() => setAsrModelRevision(v => v + 1)} onTested={onTested}
+        <ProviderTools key={form?.revision} disabled={Object.values(form?.blocked ?? {}).some(Boolean)} kind="asr" provider={channelId}
+          onTested={onTested}
           onUserMutation={onUserMutation} />
       </>
     );
@@ -351,15 +374,15 @@ export function ChannelCredentialFields({
           account="tencent_cloud.secret_id" provider={channelId} mono mask onUserMutation={onUserMutation} />
         <CredentialField key={`${channelId}:secret_key`} label={t('settings.providers.tencentCloudSecretKeyLabel')}
           account="tencent_cloud.secret_key" provider={channelId} mono mask onUserMutation={onUserMutation} />
-        <CredentialField key={`${channelId}:model:${asrModelRevision}`} label={t('settings.providers.modelLabel')}
+        <CredentialField key={`${channelId}:model`} label={t('settings.providers.modelLabel')}
           account="asr.model" provider={channelId} mono
           placeholder={descriptor?.defaultModel || 'Hy-ASR-3.0-preview'}
           defaultValue={descriptor?.defaultModel || 'Hy-ASR-3.0-preview'} onUserMutation={onUserMutation} />
         <div style={{ marginTop: 2, fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.6 }}>
           {t('settings.providers.tencentCloudNote')}
         </div>
-        <ProviderTools kind="asr" modelAccount="asr.model" provider={channelId}
-          showFetchModels={false} onModelSelected={() => setAsrModelRevision(v => v + 1)} onTested={onTested}
+        <ProviderTools key={form?.revision} disabled={Object.values(form?.blocked ?? {}).some(Boolean)} kind="asr" provider={channelId}
+          onTested={onTested}
           onUserMutation={onUserMutation} />
       </>
     );
@@ -375,29 +398,6 @@ export function ChannelCredentialFields({
     );
   }
 
-  if (providerType === 'orcarouter') {
-    return (
-      <>
-        <CredentialField key={`${channelId}:api_key`} label={t('settings.providers.apiKeyLabel')}
-          account="asr.api_key" provider={channelId} mono mask onUserMutation={onUserMutation} />
-        <CredentialField key={`${channelId}:endpoint`} label={t('settings.providers.baseUrlLabel')}
-          account="asr.endpoint" provider={channelId}
-          placeholder={defaultEndpoint ?? undefined} defaultValue={defaultEndpoint ?? undefined}
-          onUserMutation={onUserMutation} />
-        <CatalogModelField
-          kind="asr"
-          provider={channelId}
-          baseUrl={defaultEndpoint ?? ''}
-          defaultModel={defaultModel ?? ''}
-          onUserMutation={onUserMutation}
-        />
-        <ProviderTools kind="asr" modelAccount="asr.model" provider={channelId}
-          onModelSelected={() => setAsrModelRevision(v => v + 1)} onTested={onTested}
-          onUserMutation={onUserMutation} showFetchModels={false} />
-      </>
-    );
-  }
-
   return (
     <>
       <CredentialField key={`${channelId}:api_key`} label={t('settings.providers.apiKeyLabel')}
@@ -407,17 +407,12 @@ export function ChannelCredentialFields({
         account="asr.endpoint" provider={channelId}
         placeholder={defaultEndpoint || 'https://your-endpoint/v1'}
         defaultValue={defaultEndpoint || undefined} onUserMutation={onUserMutation} />
-      <CredentialField key={`${channelId}:model:${asrModelRevision}`} label={t('settings.providers.modelLabel')}
-        account="asr.model" provider={channelId}
-        placeholder={defaultModel || 'model-name'}
-        defaultValue={defaultModel || undefined}
+      <ModelField kind="asr" providerType={providerType} provider={channelId}
+        staticModels={descriptor.staticModels} defaultValue={defaultModel || undefined}
         onUserMutation={onUserMutation}
-        onValueChange={unifiedBailian ? setBailianModel : undefined}
-        options={descriptor?.staticModels?.length
-          ? descriptor.staticModels.map(model => ({ value: model, label: model }))
-          : undefined} />
+        onValueChange={unifiedBailian ? setBailianModel : undefined} />
       {unifiedBailian && (
-        <BailianProtocolHint key={`${channelId}:proto:${asrModelRevision}`} currentModel={bailianModel} />
+        <BailianProtocolHint currentModel={bailianModel} />
       )}
       {unifiedBailian && bailianModelSupportsVocabulary(bailianModel) && (
         <>
@@ -445,12 +440,12 @@ export function ChannelCredentialFields({
           {t('settings.providers.zenmuxVocabularyNote')}
         </div>
       )}
-      {/* 统一百炼「拉取模型」只写 model，不覆盖用户选择的区域或工作空间 endpoint。 */}
-      <ProviderTools kind="asr" modelAccount="asr.model" provider={channelId}
-        onModelSelected={() => setAsrModelRevision(v => v + 1)} onTested={onTested}
+      {/* 连通性测试与目录拉取分开，不回填模型或 endpoint。 */}
+      <ProviderTools key={form?.revision} disabled={Object.values(form?.blocked ?? {}).some(Boolean)} kind="asr" provider={channelId}
+        onTested={onTested}
         onUserMutation={onUserMutation} />
       {(providerType === 'openai-compatible' || providerType === 'zenmux') && (
-        <AsrAdvancedOptions provider={channelId} onUserMutation={onUserMutation} />
+        <AsrAdvancedOptions provider={channelId} providerType={providerType} onUserMutation={onUserMutation} />
       )}
     </>
   );
@@ -461,41 +456,25 @@ export function ChannelCredentialFields({
 // zenmux 暴露 enable_itn（数字归一化）开关，verbose_json / 分片对其无意义。
 function AsrAdvancedOptions({
   provider,
+  providerType,
   onUserMutation,
 }: {
   provider: string;
+  providerType: 'openai-compatible' | 'zenmux';
   onUserMutation?: () => void;
 }) {
   const { t } = useTranslation();
-  const [verboseJson, setVerboseJson] = useState(false);
+  const advanced = useRegisteredCredentialDraft('asr.advanced_config', provider, onUserMutation);
+  const config = useMemo(() => parseAdvancedAsrConfig(advanced.loaded ? advanced.value : null),
+    [advanced.loaded, advanced.value]);
   const [chunkDraft, setChunkDraft] = useState('');
-  const [enableItn, setEnableItn] = useState(true);
-  const [status, setStatus] = useState<'idle' | 'saving' | 'error'>('idle');
-  const [error, setError] = useState('');
+  const chunkInitialized = useRef(false);
 
   useEffect(() => {
-    let cancelled = false;
-    setStatus('idle');
-    setError('');
-    void (async () => {
-      try {
-        const raw = await readCredential('asr.advanced_config', provider);
-        if (cancelled) return;
-        const config = parseAdvancedAsrConfig(raw);
-        setVerboseJson(config.verboseJson);
-        setChunkDraft(config.chunkDurationMs ? String(config.chunkDurationMs) : '');
-        setEnableItn(config.enableItn);
-      } catch (err) {
-        if (!cancelled) {
-          setStatus('error');
-          setError(err instanceof Error ? err.message : String(err));
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [provider]);
+    if (!advanced.loaded || (chunkInitialized.current && advanced.status !== 'saved')) return;
+    chunkInitialized.current = true;
+    setChunkDraft(config.chunkDurationMs ? String(config.chunkDurationMs) : '');
+  }, [advanced.loaded, advanced.status, config.chunkDurationMs]);
 
   const parseChunkDraft = (draft: string): number | null => {
     const value = Number(draft);
@@ -503,32 +482,20 @@ function AsrAdvancedOptions({
     return Math.floor(value);
   };
 
-  const save = async (partial: {
+  const edit = (partial: {
     verboseJson?: boolean
     chunkDurationMs?: number | null
     enableItn?: boolean
   }) => {
-    onUserMutation?.();
-    setStatus('saving');
-    setError('');
     const next: AdvancedAsrConfig = {
-      verboseJson: partial.verboseJson ?? verboseJson,
+      verboseJson: partial.verboseJson ?? config.verboseJson,
       chunkDurationMs:
         partial.chunkDurationMs !== undefined
           ? partial.chunkDurationMs
           : parseChunkDraft(chunkDraft),
-      enableItn: partial.enableItn ?? enableItn,
+      enableItn: partial.enableItn ?? config.enableItn,
     };
-    try {
-      await setCredential('asr.advanced_config', serializeAdvancedAsrConfig(next), provider);
-      setVerboseJson(next.verboseJson);
-      setChunkDraft(next.chunkDurationMs ? String(next.chunkDurationMs) : '');
-      setEnableItn(next.enableItn);
-      setStatus('idle');
-    } catch (err) {
-      setStatus('error');
-      setError(err instanceof Error ? err.message : String(err));
-    }
+    return advanced.edit(serializeAdvancedAsrConfig(next));
   };
 
   return (
@@ -544,12 +511,15 @@ function AsrAdvancedOptions({
       >
         {t('settings.providers.asrAdvancedNote')}
       </div>
-      {provider === 'zenmux' ? (
+      <fieldset disabled={advanced.disabled} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
+      {providerType === 'zenmux' ? (
         <SettingRow
           label={t('settings.providers.asrAdvancedEnableItnLabel')}
           desc={t('settings.providers.asrAdvancedEnableItnHint')}
         >
-          <Toggle on={enableItn} onToggle={(next) => void save({ enableItn: next })} />
+          <Toggle on={config.enableItn} onToggle={(next) => {
+            if (edit({ enableItn: next })) void advanced.draft.flush();
+          }} />
         </SettingRow>
       ) : (
         <>
@@ -557,7 +527,9 @@ function AsrAdvancedOptions({
             label={t('settings.providers.asrAdvancedVerboseJsonLabel')}
             desc={t('settings.providers.asrAdvancedVerboseJsonHint')}
           >
-            <Toggle on={verboseJson} onToggle={(next) => void save({ verboseJson: next })} />
+            <Toggle on={config.verboseJson} onToggle={(next) => {
+              if (edit({ verboseJson: next })) void advanced.draft.flush();
+            }} />
           </SettingRow>
           <SettingRow
             label={t('settings.providers.asrAdvancedChunkLabel')}
@@ -569,9 +541,13 @@ function AsrAdvancedOptions({
               step={1000}
               value={chunkDraft}
               placeholder="0"
-              disabled={status === 'saving'}
-              onChange={(e) => setChunkDraft(e.target.value)}
-              onBlur={() => void save({ chunkDurationMs: parseChunkDraft(chunkDraft) })}
+              disabled={advanced.disabled}
+              onChange={(event) => {
+                const value = event.target.value;
+                setChunkDraft(value);
+                if (edit({ chunkDurationMs: parseChunkDraft(value) })) advanced.draft.schedule();
+              }}
+              onBlur={() => void advanced.draft.flush()}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
               }}
@@ -580,10 +556,14 @@ function AsrAdvancedOptions({
           </SettingRow>
         </>
       )}
-      {status === 'error' && (
+      </fieldset>
+      {advanced.status === 'readError' && (
         <div style={{ fontSize: 11, color: 'var(--ol-warn)', lineHeight: 1.4 }}>
-          {t('common.operationFailed')}: {error}
+          {t('settings.providers.readFailed')}
         </div>
+      )}
+      {advanced.status === 'saveError' && (
+        <button onClick={() => void advanced.draft.flush()} style={miniBtnStyle}>{t('common.retry')}</button>
       )}
     </>
   );
@@ -616,22 +596,10 @@ function bailianModelSupportsVocabulary(model: string): boolean {
 }
 
 // 模型框下的一行协议提示,解决「三种模型看不出区别」——告诉用户当前模型是实时还是
-// 录音文件、行为差异如何。随 asrModelRevision(拉取/选择模型时)与挂载时重读 asr.model。
+// 录音文件、行为差异如何。只使用当前渠道模型字段的值。
 function BailianProtocolHint({ currentModel }: { currentModel: string }) {
   const { t } = useTranslation();
-  const [model, setModel] = useState('');
-
-  useEffect(() => {
-    let cancelled = false;
-    readCredential('asr.model')
-      .then(v => { if (!cancelled) setModel(v || 'fun-asr-realtime'); })
-      .catch(() => { /* 读失败按默认实时提示 */ });
-    return () => { cancelled = true; };
-  }, []);
-
-  useEffect(() => {
-    setModel(currentModel || 'fun-asr-realtime');
-  }, [currentModel]);
+  const model = currentModel || 'fun-asr-realtime';
 
   const protocol = bailianModelProtocol(model);
   const hint = protocol === 'realtime'
@@ -649,187 +617,43 @@ function BailianProtocolHint({ currentModel }: { currentModel: string }) {
 
 type ProviderToolStatus = 'idle' | 'loading' | 'success' | 'empty' | 'error';
 
-/**
- * OrcaRouter exposes a large, changing catalog. Keep its own router models at
- * the top, then sort the remaining vendor/model ids for predictable scanning.
- */
-export function prioritizeOrcaRouterModels(models: string[]): string[] {
-  return [...models].sort((left, right) => {
-    const leftOwn = left.startsWith('orcarouter/');
-    const rightOwn = right.startsWith('orcarouter/');
-    if (leftOwn !== rightOwn) return leftOwn ? -1 : 1;
-    return left.localeCompare(right);
-  });
-}
-
-function CatalogModelField({
-  kind,
-  provider,
-  baseUrl,
-  defaultModel,
-  trailing,
-  onUserMutation,
-  onBlockedChange,
-}: {
-  kind: 'llm' | 'asr';
-  provider: string;
-  baseUrl: string;
-  defaultModel: string;
-  trailing?: ReactNode;
-  onUserMutation?: () => void;
-  onBlockedChange?: (account: string, blocked: boolean) => void;
+/** 目录只提供候选；CredentialField 是选择与手填唯一的写入入口。 */
+function ModelField({ kind, providerType, staticModels = [], ...field }: Omit<CredentialFieldProps, 'account' | 'label' | 'options'> & {
+  kind: 'llm' | 'asr' | 'omni'; providerType: string; staticModels?: string[];
 }) {
   const { t } = useTranslation();
-  const baseLayoutStack = useLayoutStack();
-  const conservative = useConservativeLayout();
-  const layoutStack = conservative || baseLayoutStack;
-  const [models, setModels] = useState<string[]>([]);
-  const [selectedModel, setSelectedModel] = useState('');
-  const [status, setStatus] = useState<ProviderToolStatus>('loading');
-  const [message, setMessage] = useState(t('settings.providers.loadingModels'));
-  const requestRef = useRef(0);
-  const endpointAccount = kind === 'llm' ? 'ark.endpoint' : 'asr.endpoint';
-  const modelAccount = kind === 'llm' ? 'ark.model_id' : 'asr.model';
-
-  useEffect(() => {
-    onBlockedChange?.(modelAccount, status !== 'success');
-  }, [modelAccount, status, onBlockedChange]);
-
-  const loadModels = async (initialize: boolean) => {
-    const requestId = ++requestRef.current;
-    setStatus('loading');
-    setMessage(t('settings.providers.loadingModels'));
-    try {
-      // A newly created/migrated channel may not have received its preset yet.
-      // Fill only an empty endpoint here; an explicit endpoint edit remains
-      // respected, matching the behavior of the other named providers.
-      if (initialize) {
-        const endpoint = await readCredential(endpointAccount, provider);
-        if (!endpoint?.trim()) {
-          await setCredential(endpointAccount, baseUrl, provider);
-        }
-      }
-      const [savedModel, result] = await Promise.all([
-        readCredential(modelAccount, provider),
-        listProviderModels(kind, provider, 'orcarouter'),
-      ]);
-      if (requestId !== requestRef.current) return;
-      const nextModels = prioritizeOrcaRouterModels(result.models);
-      setModels(nextModels);
-      if (nextModels.length === 0) {
-        setSelectedModel('');
-        setStatus('empty');
-        setMessage(t('settings.providers.modelsEmpty'));
-        return;
-      }
-
-      const current = savedModel?.trim() ?? '';
-      const nextModel = nextModels.includes(current)
-        ? current
-        : nextModels.includes(defaultModel)
-          ? defaultModel
-          : nextModels[0];
-      if (nextModel !== current) {
-        await setCredential(modelAccount, nextModel, provider);
-      }
-      if (requestId !== requestRef.current) return;
-      setSelectedModel(nextModel);
-      setStatus('success');
-      setMessage(t('settings.providers.modelsLoaded', { count: nextModels.length }));
-    } catch (error) {
-      if (requestId !== requestRef.current) return;
-      setModels([]);
-      setStatus('error');
-      setMessage(providerErrorMessage(error, t));
-    }
+  const form = useContext(ProviderFormContext);
+  const loader = useMemo(() => new ModelCatalog(), [kind, field.provider, providerType]);
+  const catalog = useSyncExternalStore(loader.subscribe, loader.snapshot, loader.snapshot);
+  const version = form?.version.current ?? 0;
+  useEffect(() => () => loader.invalidate(), [loader]);
+  const loadModels = async () => {
+    if (form?.leaving || Object.values(form?.blocked ?? {}).some(Boolean)) return;
+    await loader.load(version, () => listProviderModels(kind, field.provider, providerType),
+      () => form?.version.current ?? 0);
   };
-
-  useEffect(() => {
-    void loadModels(true);
-    return () => {
-      requestRef.current += 1;
-    };
-    // The channel id defines the credential scope; changing it must reload the catalog.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [provider]);
-
-  const applyModel = async (model: string) => {
-    onUserMutation?.();
-    setStatus('loading');
-    setMessage(t('common.saving'));
-    try {
-      await setCredential(modelAccount, model, provider);
-      setSelectedModel(model);
-      setStatus('success');
-      setMessage(t('settings.providers.modelSaved', { model }));
-      emitSaved('saved', t('common.saved'));
-    } catch (error) {
-      setStatus('error');
-      setMessage(providerErrorMessage(error, t));
-      emitSaved('failed', t('common.operationFailed'));
-    }
-  };
-
-  return (
-    <SettingRow label={t('settings.providers.modelLabel')}>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, width: '100%', maxWidth: layoutStack ? '100%' : 420 }}>
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center', width: '100%', flexWrap: layoutStack ? 'wrap' : 'nowrap' }}>
-          <SelectLite
-            value={selectedModel}
-            onChange={model => void applyModel(model)}
-            options={models.map(model => ({ value: model, label: model }))}
-            placeholder={status === 'loading'
-              ? t('settings.providers.loadingModels')
-              : t('settings.providers.selectModel')}
-            disabled={status === 'loading' || models.length === 0}
-            searchable
-            searchPlaceholder={t('settings.providers.searchModels')}
-            emptyMessage={t('settings.providers.noMatchingModels')}
-            ariaLabel={t('settings.providers.selectModel')}
-            style={{
-              flex: layoutStack ? '1 1 100%' : 1,
-              width: '100%',
-              minWidth: 0,
-              maxWidth: '100%',
-              fontFamily: 'var(--ol-font-mono)',
-            }}
-          />
-          <button
-            onClick={() => {
-              onUserMutation?.();
-              void loadModels(false);
-            }}
-            title={t('common.refresh')}
-            aria-label={t('common.refresh')}
-            style={iconBtnStyle}
-            disabled={status === 'loading'}
-          >
-            <Icon name="refresh" size={13} />
-          </button>
-          {trailing}
-        </div>
-        <span style={{ fontSize: 11, color: status === 'error' ? 'var(--ol-warn)' : status === 'success' ? 'var(--ol-ok)' : 'var(--ol-ink-4)', lineHeight: 1.4 }}>
-          {message}
-        </span>
-        <span style={{ fontSize: 11, color: 'var(--ol-ink-4)', lineHeight: 1.4 }}>
-          {t(kind === 'asr'
-            ? 'settings.providers.orcarouterAsrCatalogHint'
-            : 'settings.providers.orcarouterCatalogHint')}
-        </span>
-      </div>
-    </SettingRow>
-  );
+  const active = catalog?.version === version ? catalog : null;
+  const models = [...new Set([...staticModels, ...(active?.models ?? [])])].sort((a, b) => a.localeCompare(b));
+  const message = !active ? '' : active.status === 'loading' ? t('settings.providers.loadingModels')
+    : active.status === 'error' ? providerErrorMessage(active.error, t)
+    : active.models.length ? t('settings.providers.modelsLoaded', { count: active.models.length }) : t('settings.providers.modelsEmpty');
+  return <CredentialField {...field} label={t('settings.providers.modelLabel')}
+    account={kind === 'llm' ? 'ark.model_id' : `${kind}.model`} mono
+    placeholder={field.defaultValue || 'model-name'} options={models.map(value => ({ value, label: value }))}
+    below={<>
+      <button onClick={() => void loadModels()} style={miniBtnStyle}
+        disabled={form?.leaving || Object.values(form?.blocked ?? {}).some(Boolean)}>{t('settings.providers.fetchModels')}</button>
+      {message && <span role="status" style={{ fontSize: 11, overflowWrap: 'anywhere', color: active?.status === 'error' ? 'var(--ol-warn)' : 'var(--ol-ink-4)' }}>{message}</span>}
+    </>} />;
 }
 
-function ProviderTools({ kind, modelAccount, provider, onModelSelected, onTested, onUserMutation, showFetchModels = true, disabled = false }: { disabled?: boolean; kind: 'llm' | 'asr' | 'omni'; modelAccount: string; provider?: string; onModelSelected: () => void; onTested?: () => void; onUserMutation?: () => void; showFetchModels?: boolean }) {
+function ProviderTools({ kind, provider, onTested, onUserMutation, disabled = false }: { disabled?: boolean; kind: 'llm' | 'asr' | 'omni'; provider?: string; onTested?: () => void; onUserMutation?: () => void }) {
   const { t } = useTranslation();
   const baseLayoutStack = useLayoutStack();
   const conservative = useConservativeLayout();
   const layoutStack = conservative || baseLayoutStack;
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
-  const [models, setModels] = useState<string[]>([]);
-  const [selectedModel, setSelectedModel] = useState('');
   const [status, setStatus] = useState<ProviderToolStatus>('idle');
   const [message, setMessage] = useState('');
 
@@ -855,8 +679,6 @@ function ProviderTools({ kind, modelAccount, provider, onModelSelected, onTested
   const validate = async () => {
     if (disabled) return;
     onUserMutation?.();
-    setModels([]);
-    setSelectedModel('');
     setResult('loading', t('settings.providers.validating'));
     const started = performance.now();
     try {
@@ -884,57 +706,11 @@ function ProviderTools({ kind, modelAccount, provider, onModelSelected, onTested
     }
   };
 
-  const loadModels = async () => {
-    if (disabled) return;
-    onUserMutation?.();
-    setResult('loading', t('settings.providers.loadingModels'));
-    try {
-      const result = await listProviderModels(kind, provider);
-      setModels(result.models);
-      if (result.models.length === 0) {
-        setResult('empty', t('settings.providers.modelsEmpty'));
-      } else {
-        setSelectedModel('');
-        setResult('success', t('settings.providers.modelsLoaded', { count: result.models.length }));
-      }
-    } catch (error) {
-      setModels([]);
-      setResult('error', providerErrorMessage(error, t));
-    }
-  };
-
-  const applyModel = async (model: string) => {
-    onUserMutation?.();
-    setResult('loading', t('common.saving'));
-    try {
-      await setCredential(modelAccount, model, provider);
-      setSelectedModel(model);
-      onModelSelected();
-      setResult('success', t('settings.providers.modelSaved', { model }));
-    } catch (error) {
-      setResult('error', providerErrorMessage(error, t));
-    }
-  };
-
   return (
     <SettingRow label={t('settings.providers.toolsLabel')}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8, width: '100%', maxWidth: layoutStack ? '100%' : 420 }}>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', width: '100%' }}>
           <button onClick={validate} style={miniBtnStyle} disabled={disabled || status === 'loading'}>{t('settings.providers.validate')}</button>
-          {showFetchModels && (
-            <button onClick={loadModels} style={miniBtnStyle} disabled={disabled || status === 'loading'}>{t('settings.providers.fetchModels')}</button>
-          )}
-          {showFetchModels && models.length > 0 && (
-            <SelectLite
-              value={selectedModel}
-              onChange={applyModel}
-              disabled={disabled || status === 'loading'}
-              options={models.map(model => ({ value: model, label: model }))}
-              placeholder={t('settings.providers.selectModel')}
-              ariaLabel={t('settings.providers.selectModel')}
-              style={{ flex: layoutStack ? '1 1 100%' : '1 1 180px', maxWidth: layoutStack ? '100%' : 220, minWidth: 0 }}
-            />
-          )}
         </div>
         {message && (
           <span style={{ fontSize: 11, color: status === 'error' ? 'var(--ol-warn)' : status === 'empty' ? 'var(--ol-ink-4)' : 'var(--ol-ok)', lineHeight: 1.4 }}>
@@ -978,8 +754,6 @@ function providerErrorMessage(error: unknown, t: ReturnType<typeof useTranslatio
   return t('common.operationFailed');
 }
 
-type CredentialFieldStatus = 'idle' | 'saving' | 'saved' | 'readError' | 'saveError' | 'copied' | 'copyError';
-
 interface CredentialFieldProps {
   onBlockedChange?: (account: string, blocked: boolean) => void;
   label: string;
@@ -995,156 +769,36 @@ interface CredentialFieldProps {
   onUserMutation?: () => void;
   /** 提供则渲染为下拉（预设选择）代替输入框；当前值不在预设里时附加为自定义项。 */
   options?: SelectOption[];
+  below?: ReactNode;
 }
 
-function CredentialField({ label, account, provider, placeholder, mono, mask, defaultValue, trailing, onValueChange, onUserMutation, options, onBlockedChange }: CredentialFieldProps) {
+function CredentialField({ label, account, provider, placeholder, mono, mask, defaultValue, trailing, onValueChange, onUserMutation, options, onBlockedChange, below }: CredentialFieldProps) {
   const { t } = useTranslation();
   const baseLayoutStack = useLayoutStack();
   const conservative = useConservativeLayout();
   const layoutStack = conservative || baseLayoutStack;
-  const [value, setValue] = useState('');
+  const credential = useRegisteredCredentialDraft(account, provider, onUserMutation, onBlockedChange);
+  const { draft, value, loaded, status, disabled } = credential;
   const [revealed, setRevealed] = useState(false);
-  const [loaded, setLoaded] = useState(false);
-  const [dirty, setDirty] = useState(false);
-  const [status, setStatus] = useState<CredentialFieldStatus>('idle');
-  // 预设下拉的「自定义模型…」逃生口：选中后切回输入框，保证后端支持的任意模型名都能手输。
   const [customModelMode, setCustomModelMode] = useState(false);
-  useEffect(() => {
-    onBlockedChange?.(account, !loaded || dirty || status === 'saving' || status === 'readError' || status === 'saveError');
-  }, [account, loaded, dirty, status, onBlockedChange]);
+  const composing = useRef(false);
+  useEffect(() => { if (loaded) onValueChange?.(value); }, [loaded, value, onValueChange]);
 
-  const debounceRef = useRef<number | null>(null);
-  const statusRef = useRef<number | null>(null);
-  const mountedRef = useRef(true);
-  const editRevision = useRef(0);
-  const saveQueue = useRef<Promise<void>>(Promise.resolve());
-  const markMutation = () => { editRevision.current += 1; onUserMutation?.(); };
-
-  useEffect(() => {
-    let cancelled = false;
-    setLoaded(false);
-    setDirty(false);
-    setStatus('idle');
-    setValue('');
-    onValueChange?.('');
-    if (debounceRef.current) {
-      clearTimeout(debounceRef.current);
-      debounceRef.current = null;
-    }
-    readCredential(account, provider)
-      .then(v => {
-        if (cancelled) return;
-        setValue(v ?? '');
-        onValueChange?.(v ?? '');
-        setLoaded(true);
-      })
-      .catch(error => {
-        if (cancelled) return;
-        console.error('[settings] failed to read credential', account, error);
-        onValueChange?.('');
-        setLoaded(true);
-        setStatus('readError');
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [account, provider, onValueChange]);
-
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-      if (debounceRef.current) clearTimeout(debounceRef.current);
-      if (statusRef.current) clearTimeout(statusRef.current);
-    };
-  }, []);
-
-  // 改造：除 readError（持续错误，留在输入旁标识字段不可用）外，所有 saving / saved /
-  //   saveError / copied / copyError 一律发到右上角 SavedToast。原内联文案太挤、跟其它
-  //   页面 toast 风格不统一。
-  const showTemporaryStatus = (next: CredentialFieldStatus) => {
-    if (next === 'saving') {
-      emitSaved('saving', t('common.saving'));
-    } else if (next === 'saved') {
-      emitSaved('saved', t('common.saved'));
-    } else if (next === 'saveError') {
-      emitSaved('failed', t('common.operationFailed'));
-    } else if (next === 'copied') {
-      emitSaved('saved', t('common.copied'));
-    } else if (next === 'copyError') {
-      emitSaved('failed', t('common.operationFailed'));
-    }
-    setStatus(next);
-    if (statusRef.current) clearTimeout(statusRef.current);
-    statusRef.current = window.setTimeout(() => setStatus('idle'), 1600);
+  const change = (next: string, immediate = false) => {
+    if (!credential.edit(next)) return;
+    if (immediate) void draft.flush();
+    else if (!composing.current) draft.schedule();
   };
-
-  const save = async (v: string, force = false) => {
-    if (!loaded || (!dirty && !force)) return;
-    if (!mountedRef.current) return;
-    const revision = editRevision.current;
-    setStatus('saving');
-    emitSaved('saving', t('common.saving'));
-    try {
-      // 按编辑顺序写入，旧请求完成不能把新值标记为已保存。
-      const write = saveQueue.current.catch(() => undefined).then(() => setCredential(account, v, provider));
-      saveQueue.current = write;
-      await write;
-      if (!mountedRef.current || revision !== editRevision.current) return;
-      setDirty(false);
-      showTemporaryStatus('saved');
-    } catch (error) {
-      if (!mountedRef.current || revision !== editRevision.current) return;
-      console.error('[settings] failed to save credential', account, error);
-      showTemporaryStatus('saveError');
-    }
-  };
-
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    markMutation();
-    const v = e.target.value;
-    setValue(v);
-    onValueChange?.(v);
-    if (!loaded) return;
-    setDirty(true);
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = window.setTimeout(() => save(v, true), 300);
-  };
-
-  const onBlur = () => {
-    if (!loaded || !dirty) return;
-    if (debounceRef.current) {
-      clearTimeout(debounceRef.current);
-      debounceRef.current = null;
-    }
-    void save(value, true);
-  };
-
-  const fillDefault = async () => {
-    if (!loaded || !defaultValue) return;
-    markMutation();
-    setValue(defaultValue);
-    onValueChange?.(defaultValue);
-    setDirty(true);
-    await save(defaultValue, true);
-  };
-
+  const onBlur = () => { if (!composing.current) void draft.flush(); };
   const onCopy = async () => {
     if (!value || !loaded) return;
     try {
-      if (!navigator.clipboard?.writeText) {
-        throw new Error('Clipboard API unavailable');
-      }
       await navigator.clipboard.writeText(value);
-      showTemporaryStatus('copied');
-    } catch (error) {
-      console.error('[settings] failed to copy credential', account, error);
-      showTemporaryStatus('copyError');
-    }
+      emitSaved('saved', t('common.copied'));
+    } catch { emitSaved('failed', t('common.operationFailed')); }
   };
 
   const inputType = mask && !revealed ? 'password' : 'text';
-  const disabled = !loaded;
   const showInsecureEndpointWarning = (account === 'ark.endpoint' || account === 'asr.endpoint' || account === 'omni.endpoint')
     && value.trim().toLowerCase().startsWith('http://');
 
@@ -1152,7 +806,7 @@ function CredentialField({ label, account, provider, placeholder, mono, mask, de
     <SettingRow label={label}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 5, width: '100%', maxWidth: layoutStack ? '100%' : 420 }}>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center', width: '100%', flexWrap: layoutStack ? 'wrap' : 'nowrap' }}>
-          {options && !customModelMode ? (
+          {!!options?.length && !customModelMode ? (
             <SelectLite
               value={value}
               onChange={(v) => {
@@ -1161,18 +815,16 @@ function CredentialField({ label, account, provider, placeholder, mono, mask, de
                   setCustomModelMode(true);
                   return;
                 }
-                markMutation();
-                setValue(v);
-                onValueChange?.(v);
-                if (!loaded) return;
-                setDirty(true);
-                void save(v, true);
+                change(v, true);
               }}
               options={[
                 ...(value && !options.some(o => o.value === value) ? [{ value, label: value }] : []),
                 ...options,
-                { value: CUSTOM_MODEL_OPTION_VALUE, label: t('settings.providers.customModelLabel', 'Custom model…') },
+                { value: CUSTOM_MODEL_OPTION_VALUE, label: t('settings.providers.customModelLabel'), alwaysVisible: true },
               ]}
+              searchable
+              searchPlaceholder={t('settings.providers.searchModels')}
+              emptyMessage={t('settings.providers.noMatchingModels')}
               placeholder={loaded ? placeholder : t('common.loading')}
               disabled={disabled}
               ariaLabel={label}
@@ -1183,13 +835,16 @@ function CredentialField({ label, account, provider, placeholder, mono, mask, de
               type={inputType}
               value={value}
               placeholder={loaded ? placeholder : t('common.loading')}
-              onChange={handleChange}
+              aria-label={label}
+              onChange={event => { if (options) setCustomModelMode(true); change(event.target.value); }}
+              onCompositionStart={() => { composing.current = true; draft.pause(); }}
+              onCompositionEnd={() => { composing.current = false; draft.schedule(); }}
               onBlur={onBlur}
               disabled={disabled}
               style={{ ...inputStyle, flex: layoutStack ? '1 1 180px' : 1, minWidth: 0, maxWidth: '100%', fontFamily: mono ? 'var(--ol-font-mono)' : 'inherit' }}
             />
           )}
-          {options && customModelMode && (
+          {!!options?.length && customModelMode && (
             <button
               onClick={() => setCustomModelMode(false)}
               title={t('settings.providers.presetListLabel', 'Back to presets')}
@@ -1200,7 +855,7 @@ function CredentialField({ label, account, provider, placeholder, mono, mask, de
             </button>
           )}
           {defaultValue && !value && loaded && (
-            <button onClick={fillDefault} title={t('settings.providers.fillDefault')} style={iconBtnStyle} disabled={!loaded}>
+            <button onClick={() => change(defaultValue, true)} title={t('settings.providers.fillDefault')} style={iconBtnStyle} disabled={!loaded}>
               <Icon name="check" size={13} />
             </button>
           )}
@@ -1238,6 +893,8 @@ function CredentialField({ label, account, provider, placeholder, mono, mask, de
             </span>
           )}
         </div>
+        {below && <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>{below}</div>}
+        {status === 'saveError' && <button onClick={() => void draft.flush()} style={miniBtnStyle}>{t('common.retry')}</button>}
         {showInsecureEndpointWarning && (
           <span style={{ fontSize: 11, color: 'var(--ol-warn)', lineHeight: 1.45 }}>
             {t('settings.providers.endpointHttpWarning')}
@@ -1285,7 +942,7 @@ export function OmniChannelSection() {
   const [omniProvider, setOmniProvider] = useState('custom');
   const [committedOmniProvider, setCommittedOmniProvider] = useState('custom');
   const omniSwitchSeqRef = useRef(0);
-  const [omniModelRevision, setOmniModelRevision] = useState(0);
+  const form = useProviderForm();
 
   useEffect(() => {
     void listProviderDescriptors('omni')
@@ -1298,15 +955,16 @@ export function OmniChannelSection() {
       nameKey: descriptor.labelKey,
       baseUrl: descriptor.defaultEndpoint ?? '',
       modelPlaceholder: descriptor.defaultModel ?? '',
+      staticModels: descriptor.staticModels,
     })), [descriptors]);
 
   useEffect(() => {
-    if (!prefs) return;
+    if (!prefs || form.leaving) return;
     const knownOmni = omniPresets.find(x => x.id === prefs.activeOmniProvider);
     const omniId = knownOmni ? knownOmni.id : 'custom';
     setOmniProvider(omniId);
     setCommittedOmniProvider(omniId);
-  }, [prefs, omniPresets]);
+  }, [prefs?.activeOmniProvider, omniPresets, form.leaving]);
 
   // 与 LLM 卡同语义：受控下拉立即反馈 + committed 控制 CredentialField remount
   // + seq 守卫防 stale 覆盖，只是凭据落到 omni.* 槽。
@@ -1364,7 +1022,7 @@ export function OmniChannelSection() {
   const omniPreset = omniPresets.find(p => p.id === committedOmniProvider);
 
   return (
-    <>
+    <ProviderFormContext.Provider value={form}>
       <div style={{ marginBottom: 12 }}>
         <SettingRow
           label={t('settings.providers.pipelineModeLabel')}
@@ -1375,7 +1033,7 @@ export function OmniChannelSection() {
               {(['traditional', 'multimodal'] as const).map(mode => (
                 <button
                   key={mode}
-                  onClick={() => onPipelineModeChange(mode)}
+                  disabled={form.leaving} onClick={() => void form.finish(() => onPipelineModeChange(mode))}
                   style={{
                     padding: '5px 12px', fontSize: 12, fontWeight: 500, border: 0, borderRadius: 6,
                     fontFamily: 'inherit',
@@ -1405,7 +1063,7 @@ export function OmniChannelSection() {
           <SettingRow label={t('settings.providers.providerLabel')}>
             <SelectLite
               value={omniProvider}
-              onChange={next => onOmniProviderChange(next)}
+              disabled={form.leaving} onChange={next => void form.finish(() => onOmniProviderChange(next))}
               options={omniPresets.map(p => ({
                 value: p.id,
                 label: t(`settings.providers.presets.${p.nameKey}`),
@@ -1414,6 +1072,7 @@ export function OmniChannelSection() {
               style={{ ...inputStyle, width: '100%', maxWidth: layoutStack ? '100%' : 200 }}
             />
           </SettingRow>
+          <fieldset disabled={form.leaving} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
           <CredentialField
             key={`${committedOmniProvider}:api_key`}
             label={t('settings.providers.apiKeyLabel')}
@@ -1446,21 +1105,13 @@ export function OmniChannelSection() {
               />
             </>
           )}
-          <CredentialField
-            key={`${committedOmniProvider}:model:${omniModelRevision}`}
-            label={t('settings.providers.modelLabel')}
-            account="omni.model"
-            placeholder={omniPreset?.modelPlaceholder || 'model-name'}
-            mono
-          />
-          <ProviderTools
-            key={`omni:${committedOmniProvider}`}
-            kind="omni"
-            modelAccount="omni.model"
-            onModelSelected={() => setOmniModelRevision(v => v + 1)}
-          />
+          <ModelField key={committedOmniProvider} kind="omni" providerType={committedOmniProvider}
+            staticModels={omniPreset?.staticModels} defaultValue={omniPreset?.modelPlaceholder || undefined} />
+          <ProviderTools key={`omni:${committedOmniProvider}:${form.revision}`} kind="omni"
+            disabled={Object.values(form.blocked).some(Boolean) || form.leaving} />
+          </fieldset>
         </Card>
       )}
-    </>
+    </ProviderFormContext.Provider>
   );
 }

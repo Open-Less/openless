@@ -35,6 +35,8 @@ export interface SelectOption {
   value: string;
   label: string;
   disabled?: boolean;
+  /** 搜索期间仍保留操作项，例如自定义输入入口。 */
+  alwaysVisible?: boolean;
   /** 可选：渲染在选项标签右侧、勾选标记左侧（如麦克风音量条）。 */
   trailing?: ReactNode;
 }
@@ -111,7 +113,7 @@ export function SelectLite({
     const needle = query.trim().toLocaleLowerCase();
     if (!needle) return options;
     return options.filter(option => (
-      option.label.toLocaleLowerCase().includes(needle)
+      option.alwaysVisible || option.label.toLocaleLowerCase().includes(needle)
       || option.value.toLocaleLowerCase().includes(needle)
     ));
   }, [options, query]);
@@ -263,6 +265,7 @@ export function SelectLite({
   };
 
   const selectIndex = (index: number) => {
+    if (disabled) return;
     const option = filteredOptions[index];
     if (!option || option.disabled) return;
     onChange(option.value);
@@ -319,6 +322,7 @@ export function SelectLite({
   };
 
   const handleSearchKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
     if (event.key === 'Escape') {
       event.preventDefault();
       closeMenu();
@@ -459,7 +463,7 @@ export function SelectLite({
             role="listbox"
             style={{ maxHeight: searchable ? 274 : 272, overflowY: 'auto' }}
           >
-            {filteredOptions.length === 0 && (
+            {!filteredOptions.some(option => !option.alwaysVisible) && (
               <div
                 style={{
                   padding: '18px 10px',

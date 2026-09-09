@@ -2,7 +2,7 @@ import type { CredentialsStatus } from "../types"
 import { invokeOrMock, isTauri } from "./shared"
 import { mockCredentialsStatus, mockCredentialValues } from "./mock-data"
 import { invalidateMockChannelTest } from "./channels"
-import type { LlmRequestFormat } from "./providers"
+import { listProviderDescriptors, type LlmRequestFormat } from "./providers"
 
 export interface ProviderCheckResult {
     ok: boolean
@@ -104,6 +104,10 @@ export async function listProviderModels(
     channelId?: string,
     providerType?: string,
 ): Promise<ProviderModelsResult> {
+    if (!isTauri) {
+        const descriptor = (await listProviderDescriptors(kind)).find(item => item.providerType === providerType)
+        if (descriptor?.staticModels.length) return { models: descriptor.staticModels }
+    }
     if (!isTauri && providerType === "orcarouter" && (kind === "llm" || kind === "asr")) {
         const endpointAccount = kind === "llm" ? "ark.endpoint" : "asr.endpoint"
         const endpoint = mockCredentialValues.get(`${channelId ?? ''}:${endpointAccount}`)
@@ -124,6 +128,6 @@ export async function listProviderModels(
         models:
             kind === "llm"
                 ? ["gpt-4o", "deepseek-v4-flash", "deepseek-v4-pro"]
-                : ["whisper-1"],
+                : kind === "omni" ? ["gpt-4o-audio-preview", "qwen3-omni-flash"] : ["whisper-1"],
     }))
 }

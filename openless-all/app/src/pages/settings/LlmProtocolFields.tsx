@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState } from 'react';
+import { useContext, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { SelectLite } from '../../components/ui/SelectLite';
 import { readCredential, setCredential } from '../../lib/ipc';
 import type { LlmRequestFormat } from '../../lib/ipc/providers';
 import { emitSaved } from '../../lib/savedEvent';
 import { SettingRow, inputStyle } from './shared';
+import { ProviderFormContext } from './ProviderForm';
 
 const accounts = ['ark.request_format', 'ark.messages_thinking', 'ark.max_tokens', 'ark.thinking_budget'] as const;
 type Account = typeof accounts[number];
@@ -35,6 +36,7 @@ export function LlmProtocolFields({ channelId, defaultFormat, formats, onUserMut
   onSaved?: (changedAccounts: readonly Account[]) => void;
 }) {
   const { t } = useTranslation();
+  const form = useContext(ProviderFormContext);
   const [values, setValues] = useState<ProtocolValues>(emptyValues);
   const [saved, setSaved] = useState<ProtocolValues>(emptyValues);
   const [loaded, setLoaded] = useState(false);
@@ -42,6 +44,8 @@ export function LlmProtocolFields({ channelId, defaultFormat, formats, onUserMut
   const [error, setError] = useState<'read' | 'save' | null>(null);
   const mounted = useRef(true);
   const writing = useRef(false);
+  const pendingWrite = useRef<Promise<boolean>>(Promise.resolve(true));
+  const flushRef = useRef<() => Promise<boolean>>(() => Promise.resolve(true));
   const dirty = accounts.some(account => values[account] !== saved[account]);
   const validation = protocolValidationError(values, defaultFormat);
 
@@ -60,11 +64,14 @@ export function LlmProtocolFields({ channelId, defaultFormat, formats, onUserMut
   useEffect(() => {
     onBlockedChange('protocol', !loaded || saving || dirty || error !== null || validation !== null);
   }, [loaded, saving, dirty, error, validation, onBlockedChange]);
+  useEffect(() => form?.register('protocol', () => flushRef.current()), [form?.register]);
 
-  const save = async (next: ProtocolValues) => {
-    if (!loaded || writing.current || protocolValidationError(next, defaultFormat)) return;
+  const save = (next: ProtocolValues): Promise<boolean> => {
+    if (writing.current) return pendingWrite.current;
+    if (!loaded || protocolValidationError(next, defaultFormat)) return Promise.resolve(false);
     writing.current = true;
     setSaving(true); setError(null);
+    pendingWrite.current = (async () => {
     try {
       const changedAccounts = accounts.filter(account => next[account] !== saved[account]);
       for (const account of changedAccounts) {
@@ -75,15 +82,21 @@ export function LlmProtocolFields({ channelId, defaultFormat, formats, onUserMut
         emitSaved('saved', t('common.saved'));
         onSaved?.(changedAccounts);
       }
+      return true;
     } catch {
       if (mounted.current) { setError('save'); emitSaved('failed', t('common.operationFailed')); }
+      return false;
     } finally {
       writing.current = false;
       if (mounted.current) setSaving(false);
     }
+    })();
+    return pendingWrite.current;
   };
+  flushRef.current = () => writing.current ? pendingWrite.current : dirty ? save(values) : Promise.resolve(true);
 
   const change = (account: Account, value: string, immediate = false) => {
+    if (!loaded || writing.current || form?.leaving) return;
     onUserMutation();
     const next = { ...values, [account]: value };
     setValues(next);
@@ -91,7 +104,7 @@ export function LlmProtocolFields({ channelId, defaultFormat, formats, onUserMut
   };
   const format = values['ark.request_format'] || defaultFormat;
   const mode = values['ark.messages_thinking'] || 'adaptive';
-  const disabled = !loaded || saving;
+  const disabled = !loaded || saving || form?.leaving;
   const numberField = (account: Account, label: string, placeholder: string) => (
     <SettingRow label={label}>
       <input type="number" min={account === 'ark.thinking_budget' ? 1024 : 1} step={1}

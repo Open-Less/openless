@@ -1,4 +1,4 @@
-import { LLM_LABELS, prioritizeOrcaRouterModels } from './ProvidersSection';
+import { LLM_LABELS } from './ProvidersSection';
 import { ASR_LABELS } from './shared';
 import { presetsFor } from './ChannelList';
 import { filterOrcaRouterModels } from '../../lib/ipc/asr-credentials';
@@ -45,22 +45,6 @@ const coreAsr = presetsFor('asr', 'win', true, undefined, [{
 
 if (coreAsr.length !== 1 || coreAsr[0].authRequirement !== 'endpoint_model_optional_api_key') {
   throw new Error('Core provider descriptor must replace the browser fallback in the channel picker');
-}
-
-const prioritizedOrcaRouterModels = prioritizeOrcaRouterModels([
-  'openai/gpt-5-mini',
-  'orcarouter/fusion-mini',
-  'anthropic/claude-haiku-4.5',
-  'orcarouter/fusion-flash',
-]);
-
-if (prioritizedOrcaRouterModels.join(',') !== [
-  'orcarouter/fusion-flash',
-  'orcarouter/fusion-mini',
-  'anthropic/claude-haiku-4.5',
-  'openai/gpt-5-mini',
-].join(',')) {
-  throw new Error(`unexpected OrcaRouter model ordering: ${prioritizedOrcaRouterModels.join(',')}`);
 }
 
 const protocolCatalog = [
