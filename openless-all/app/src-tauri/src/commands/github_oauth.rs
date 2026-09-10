@@ -30,8 +30,7 @@ fn command_error(error: openless_core::BackendError) -> String {
 pub async fn github_device_flow_start(
     core: CoreState<'_>,
 ) -> Result<GithubDeviceStartResponse, String> {
-    core
-        .services()
+    core.services()
         .marketplace
         .start_device_flow()
         .await
@@ -44,8 +43,7 @@ pub async fn github_device_flow_poll(
     core: CoreState<'_>,
     flow_id: String,
 ) -> Result<openless_core::OAuthPollResult, String> {
-    core
-        .services()
+    core.services()
         .marketplace
         .poll_device_flow(flow_id)
         .await
@@ -57,8 +55,7 @@ pub async fn github_device_flow_cancel(
     core: CoreState<'_>,
     flow_id: Option<String>,
 ) -> Result<(), String> {
-    core
-        .services()
+    core.services()
         .marketplace
         .cancel_device_flow(flow_id)
         .await
@@ -69,8 +66,7 @@ pub async fn github_device_flow_cancel(
 pub async fn marketplace_auth_status(
     core: CoreState<'_>,
 ) -> Result<openless_core::MarketplaceAuthStatus, String> {
-    core
-        .services()
+    core.services()
         .marketplace
         .auth_status()
         .await
@@ -79,8 +75,7 @@ pub async fn marketplace_auth_status(
 
 #[tauri::command]
 pub async fn marketplace_logout(core: CoreState<'_>) -> Result<(), String> {
-    core
-        .services()
+    core.services()
         .marketplace
         .logout()
         .await

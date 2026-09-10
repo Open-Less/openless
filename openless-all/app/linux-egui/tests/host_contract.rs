@@ -1,5 +1,7 @@
 use std::sync::{Arc, Mutex};
 
+use openless_core::shared_types::WindowsInsertionMode;
+
 use openless_linux_egui::{
     drain_events, BackendConfig, BackendDependencies, BackendErrorCode, BackendEventKind,
     BackendServices, CliDispatchOutcome, CliIntent, DictationSession, EventDrainOutcome,
@@ -415,14 +417,31 @@ fn linux_public_settings_contract_is_validated_transactional_and_runtime_backed(
     assert_eq!(backend.snapshot().preferences_revision, revision + 1);
     assert_eq!(events.try_recv(), Err(EventRecvError::Empty));
 
+    // Windows-only effects must stay explicit on the Linux host: since the
+    // Windows keyboard target is derived from the insertion mode, a raw
+    // keyboard-list toggle under the default TSF mode has no effective target
+    // and is accepted, while a change that would drive the Windows language
+    // profile is rejected as Unsupported.
+    let mut no_windows_effect = backend.get_preferences();
+    no_windows_effect.windows_show_openless_in_keyboard_list =
+        !no_windows_effect.windows_show_openless_in_keyboard_list;
+    host.update_settings_strict(no_windows_effect, revision + 1)
+        .expect("toggling the keyboard-list pref under TSF must not produce a Windows effect");
+    assert_eq!(backend.snapshot().preferences_revision, revision + 2);
+    assert!(matches!(
+        events.try_recv().unwrap().kind,
+        BackendEventKind::PreferencesChanged(_)
+    ));
+    assert_eq!(events.try_recv(), Err(EventRecvError::Empty));
+
     let mut windows_only = backend.get_preferences();
-    windows_only.windows_show_openless_in_keyboard_list =
-        !windows_only.windows_show_openless_in_keyboard_list;
+    windows_only.windows_insertion_mode = WindowsInsertionMode::SendInput;
+    windows_only.windows_show_openless_in_keyboard_list = false;
     let unsupported = host
-        .update_settings_strict(windows_only, revision + 1)
+        .update_settings_strict(windows_only, backend.snapshot().preferences_revision)
         .expect_err("Windows-only effects must be explicit on the Linux host");
     assert_eq!(unsupported.code, BackendErrorCode::Unsupported);
-    assert_eq!(backend.snapshot().preferences_revision, revision + 1);
+    assert_eq!(backend.snapshot().preferences_revision, revision + 2);
     assert_eq!(events.try_recv(), Err(EventRecvError::Empty));
     for enabled in [true, false] {
         let mut preferences = backend.get_preferences();

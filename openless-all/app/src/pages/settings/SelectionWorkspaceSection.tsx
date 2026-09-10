@@ -5,10 +5,7 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { detectOS } from '../../components/WindowChrome';
 import { ShortcutRecorder } from '../../components/ShortcutRecorder';
-import {
-  defaultSelectionPolishShortcut,
-  getHotkeyStartStopLabel,
-} from '../../lib/hotkey';
+import { defaultSelectionPolishShortcut, getHotkeyStartStopLabel } from '../../lib/hotkey';
 import { setSelectionPolishHotkey } from '../../lib/ipc';
 import { getPlatformCapabilities } from '../../lib/platform';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
@@ -33,7 +30,9 @@ export function SelectionWorkspaceSection() {
   const [platformCaps, setPlatformCaps] = useState<PlatformCapabilities | null>(null);
   const os = detectOS();
 
-  useEffect(() => { void getPlatformCapabilities().then(setPlatformCaps); }, []);
+  useEffect(() => {
+    void getPlatformCapabilities().then(setPlatformCaps);
+  }, []);
 
   if (!prefs || !capability || !platformCaps?.supportsDesktopHotkey) return null;
 
@@ -59,7 +58,7 @@ export function SelectionWorkspaceSection() {
       >
         <ShortcutRecorder
           value={prefs.selectionPolishHotkey}
-          onSave={async binding => {
+          onSave={async (binding) => {
             await setSelectionPolishHotkey(binding);
             await refresh();
           }}
@@ -76,16 +75,27 @@ export function SelectionWorkspaceSection() {
       {!voiceEnabled && (
         <SettingRow label={t('settings.selectionWorkspace.polishDelivery')}>
           <div style={{ ...segmentedTrackStyle, flexWrap: 'wrap', gap: 4 }}>
-            {outputOptions.map(option => {
+            {outputOptions.map((option) => {
               const selected = prefs.selectionPolishOutputMode === option.value;
               return (
                 <button
                   key={option.value}
                   title={t(`settings.selectionPolish.${option.value}Hint`)}
-                  onClick={() => void updatePrefs(current => ({ ...current, selectionPolishOutputMode: option.value }))}
+                  onClick={() =>
+                    void updatePrefs((current) => ({
+                      ...current,
+                      selectionPolishOutputMode: option.value,
+                    }))
+                  }
                   style={{
-                    ...chipSelectedStyle(selected), border: 0, borderRadius: 6, padding: '6px 10px',
-                    fontFamily: 'inherit', fontSize: 12, cursor: 'default', fontWeight: selected ? 600 : 500,
+                    ...chipSelectedStyle(selected),
+                    border: 0,
+                    borderRadius: 6,
+                    padding: '6px 10px',
+                    fontFamily: 'inherit',
+                    fontSize: 12,
+                    cursor: 'default',
+                    fontWeight: selected ? 600 : 500,
                   }}
                 >
                   {t(`settings.selectionPolish.${option.value}`)}
@@ -104,7 +114,9 @@ export function SelectionWorkspaceSection() {
           >
             <Toggle
               on={voiceEnabled}
-              onToggle={next => void updatePrefs(current => ({ ...current, selectionVoiceEnabled: next }))}
+              onToggle={(next) =>
+                void updatePrefs((current) => ({ ...current, selectionVoiceEnabled: next }))
+              }
             />
           </SettingRow>
           {voiceEnabled && (
@@ -114,16 +126,27 @@ export function SelectionWorkspaceSection() {
                 desc={t('settings.selectionWorkspace.voiceDeliveryDesc')}
               >
                 <div style={{ ...segmentedTrackStyle, flexWrap: 'wrap', gap: 4 }}>
-                  {outputOptions.map(option => {
+                  {outputOptions.map((option) => {
                     const selected = prefs.selectionPolishOutputMode === option.value;
                     return (
                       <button
                         key={option.value}
                         title={t(`settings.selectionPolish.${option.value}Hint`)}
-                        onClick={() => void updatePrefs(current => ({ ...current, selectionPolishOutputMode: option.value }))}
+                        onClick={() =>
+                          void updatePrefs((current) => ({
+                            ...current,
+                            selectionPolishOutputMode: option.value,
+                          }))
+                        }
                         style={{
-                          ...chipSelectedStyle(selected), border: 0, borderRadius: 6, padding: '6px 10px',
-                          fontFamily: 'inherit', fontSize: 12, cursor: 'default', fontWeight: selected ? 600 : 500,
+                          ...chipSelectedStyle(selected),
+                          border: 0,
+                          borderRadius: 6,
+                          padding: '6px 10px',
+                          fontFamily: 'inherit',
+                          fontSize: 12,
+                          cursor: 'default',
+                          fontWeight: selected ? 600 : 500,
                         }}
                       >
                         {t(`settings.selectionPolish.${option.value}`)}
@@ -138,10 +161,12 @@ export function SelectionWorkspaceSection() {
               >
                 <Toggle
                   on={autoIntent}
-                  onToggle={next => void updatePrefs(current => ({
-                    ...current,
-                    selectionVoiceIntentMode: next ? 'auto' : 'heuristic',
-                  }))}
+                  onToggle={(next) =>
+                    void updatePrefs((current) => ({
+                      ...current,
+                      selectionVoiceIntentMode: next ? 'auto' : 'heuristic',
+                    }))
+                  }
                 />
               </SettingRow>
               {!autoIntent && (
@@ -152,12 +177,12 @@ export function SelectionWorkspaceSection() {
                   <textarea
                     aria-label={t('settings.selectionWorkspace.editKeywords')}
                     value={keywordsText}
-                    onChange={event => {
+                    onChange={(event) => {
                       const lines = event.target.value
                         .split(/\n/)
-                        .map(line => line.trim())
+                        .map((line) => line.trim())
                         .filter(Boolean);
-                      void updatePrefs(current => ({
+                      void updatePrefs((current) => ({
                         ...current,
                         selectionVoiceEditKeywords: lines,
                         selectionVoiceIntentMode: 'heuristic',

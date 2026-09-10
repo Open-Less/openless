@@ -1,8 +1,6 @@
 package com.openless.app
 
-/**
- * JNI bridge from Kotlin overlay / lifecycle code into Rust Coordinator.
- */
+/** JNI bridge from Kotlin overlay / lifecycle code into Rust Coordinator. */
 object OpenLessNative {
     private const val BACKEND_CONTRACT_VERSION = "2.0.0"
 
@@ -26,7 +24,8 @@ object OpenLessNative {
 
     @JvmStatic external fun nativeBackendSnapshot(): String
 
-    @JvmStatic fun requireBackendContract() {
+    @JvmStatic
+    fun requireBackendContract() {
         val response = org.json.JSONObject(nativeBackendSnapshot())
         val version = response.optString("contractVersion")
         check(version == BACKEND_CONTRACT_VERSION) {

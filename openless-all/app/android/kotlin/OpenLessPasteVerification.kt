@@ -1,8 +1,6 @@
 package com.openless.app
 
-/**
- * Pure helpers for verifying accessibility paste actually changed editor text.
- */
+/** Pure helpers for verifying accessibility paste actually changed editor text. */
 internal object OpenLessPasteVerification {
     fun pasteAppearsApplied(
         beforeText: String,

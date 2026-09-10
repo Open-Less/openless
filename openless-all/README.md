@@ -1,19 +1,20 @@
 # OpenLess All-Platform
 
-This is the current cross-platform OpenLess workspace.
+This directory contains the cross-platform OpenLess application and design handoff material. Start with the repository [documentation index](../docs/index.md), [architecture](../docs/architecture.md), and [source structure](../docs/structure.md).
 
 ## App Directory
 
-The runnable sources live in `app/` with three explicit layers:
+The runnable sources live in `app/`:
 
 - `app/crates/openless-core`: framework-independent shared backend Interface and business rules;
-- `app/src-tauri`: macOS, Windows, and Android Tauri Adapter plus the React frontend;
-- `app/linux-egui`: Linux non-UI Adapter consumed by the separately developed egui frontend; it does not depend on Tauri or WebKitGTK.
+- `app/src`: React frontend for the Tauri hosts;
+- `app/src-tauri`: macOS, Windows, and Android Tauri Host and native adapters;
+- `app/linux-egui`: Linux Host and egui/eframe UI; it does not depend on Tauri or WebKitGTK.
 
-The macOS Tauri build links a vendored C ASR engine (`Open-Less/qwen-asr`, forked from `antirez/qwen-asr`) tracked as a git submodule under `app/src-tauri/vendor/qwen-asr/`. The root core/Linux workspace excludes `src-tauri`, so Linux checks do not need that submodule.
+The Tauri manifest includes local ASR path dependencies under `app/src-tauri/vendor/`; initialize submodules before resolving it, including for non-macOS source builds. The root Core/Linux workspace excludes `src-tauri`, so its independent checks do not require those submodules.
 
 ```bash
-# macOS Tauri development only — pull in vendored submodules
+# Tauri source development — pull in vendored submodules
 git submodule update --init --recursive
 
 cd app
@@ -23,17 +24,17 @@ npm run tauri dev
 
 ## Shared backend and Linux host
 
-The egui UI is owned by another team. This repository supplies its typed Rust Interface, semantic events, fixtures, and Linux non-UI Adapters. The checked-in `linux-egui/src/main.rs` remains a stub until that team lands `eframe::App`; do not treat the current binary as a production application.
+This repository supplies the shared typed Rust interface, semantic events, fixtures, and Linux adapters. `linux-egui/src/main.rs` now implements an egui/eframe application, with `LinuxHost` and `LinuxBackendBuilder` connecting it to Core. Remaining Host/UI work and product acceptance are tracked in the [Linux handoff](../docs/linux-egui-handoff/README.md).
 
 ```bash
 cd app
-cargo test -p openless-core
-cargo test -p openless-linux-egui --all-targets
+cargo test -p openless-core --locked
+cargo test -p openless-linux-egui --all-targets --locked
 pwsh ./scripts/check-core-deps.ps1
 pwsh ./scripts/check-core-deps.ps1 openless-linux-egui
 ```
 
-The independent Linux package workflow is `.github/workflows/release-linux-egui.yml`. It builds deb/rpm/AppImage and the fcitx5 plugin without WebKitGTK, but deliberately has no automatic tag trigger until the real egui entry point is present.
+The independent [Linux package workflow](../.github/workflows/release-linux-egui.yml) builds deb/rpm/AppImage and the fcitx5 plugin without WebKitGTK. It supports manual and reusable-workflow invocation; automatic tag triggering remains gated on real Ubuntu runtime, input, installation, upgrade, and rollback evidence.
 
 ## macOS Build
 

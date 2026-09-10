@@ -1,9 +1,8 @@
-//! Linux host seam for the egui frontend.
+//! Linux platform adapters and runtime coordination for the egui frontend.
 //!
-//! The egui team owns the `eframe::App` and all visual/UI code.  This crate is
-//! intentionally a small host adapter: it re-exports the core contract and
-//! provides a place for Linux window, tray, input and resource adapters to be
-//! added without making the core depend on egui or Tauri.
+//! `main.rs` owns the egui UI. This library constructs Core with Linux audio,
+//! credentials, input, settings and resource adapters, then forwards commands
+//! and semantic events between that backend and the UI.
 
 mod audio;
 mod backend;
@@ -48,11 +47,10 @@ pub use single_instance::{
 
 pub use openless_core::contract::*;
 
-/// Construction seam reserved for the Linux host implementation.
+/// Coordinates Core operations with Linux settings and recording lifecycles.
 ///
-/// Keeping this as a named type gives the egui package a stable home for
-/// platform adapters while the UI is developed independently.  No window or
-/// egui object is stored here.
+/// Capture state binds recorder callbacks to their owning Core session. Window
+/// objects and egui widgets stay in the frontend.
 pub struct LinuxHost {
     backend: std::sync::Arc<OpenLessBackend>,
     settings_runtime: std::sync::Arc<dyn SettingsRuntime>,

@@ -12,7 +12,7 @@ class OpenLessPasteVerificationTest {
                 beforeText = "hello ",
                 afterText = "hello world",
                 clipboardText = "world",
-            ),
+            )
         )
     }
 
@@ -23,7 +23,7 @@ class OpenLessPasteVerificationTest {
                 beforeText = "",
                 afterText = "dictation",
                 clipboardText = "dictation",
-            ),
+            )
         )
     }
 
@@ -34,7 +34,7 @@ class OpenLessPasteVerificationTest {
                 beforeText = "still empty",
                 afterText = "still empty",
                 clipboardText = "new words",
-            ),
+            )
         )
     }
 }

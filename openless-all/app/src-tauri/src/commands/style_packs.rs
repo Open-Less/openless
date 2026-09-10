@@ -105,6 +105,22 @@ pub fn preview_style_pack_runtime(
 }
 
 #[tauri::command]
+pub fn set_style_pack_icon(
+    core: CoreState<'_>,
+    id: String,
+    png: Option<Vec<u8>>,
+) -> Result<StylePack, String> {
+    core.set_style_pack_icon(&id, png.as_deref())
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn read_style_pack_icon(core: CoreState<'_>, id: String) -> Result<Option<String>, String> {
+    core.read_style_pack_icon(&id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 pub fn set_active_style_pack(
     coord: CoordinatorState<'_>,
     app: AppHandle,

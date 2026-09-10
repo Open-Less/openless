@@ -1,5 +1,12 @@
 import i18n from '../i18n';
-import type { ComboBinding, HotkeyBinding, HotkeyMode, HotkeyTrigger, QaHotkeyBinding, ShortcutBinding } from './types';
+import type {
+  ComboBinding,
+  HotkeyBinding,
+  HotkeyMode,
+  HotkeyTrigger,
+  QaHotkeyBinding,
+  ShortcutBinding,
+} from './types';
 
 export function defaultQaShortcut(): ShortcutBinding {
   return {
@@ -46,20 +53,28 @@ export function getHotkeyTriggerLabel(trigger: HotkeyTrigger | null | undefined)
 /** 根据录音方式返回追加在触发键标签后的语义后缀（如「（按住说话）」）。 */
 export function hotkeyModeSuffix(mode: HotkeyMode | null | undefined): string {
   switch (mode) {
-    case 'hold': return i18n.t('hotkey.modeHoldSuffix');
-    case 'auto': return i18n.t('hotkey.modeAutoSuffix');
-    case 'doubleClick': return i18n.t('hotkey.modeDoubleClickSuffix');
-    default: return i18n.t('hotkey.modeToggleSuffix');
+    case 'hold':
+      return i18n.t('hotkey.modeHoldSuffix');
+    case 'auto':
+      return i18n.t('hotkey.modeAutoSuffix');
+    case 'doubleClick':
+      return i18n.t('hotkey.modeDoubleClickSuffix');
+    default:
+      return i18n.t('hotkey.modeToggleSuffix');
   }
 }
 
 /** 根据录音方式返回使用说明（含触发键占位符 trigger）。 */
 function hotkeyModeUsage(mode: HotkeyMode | null | undefined, trigger: string): string {
   switch (mode) {
-    case 'hold': return i18n.t('hotkey.usageHold', { trigger });
-    case 'auto': return i18n.t('hotkey.usageAuto', { trigger });
-    case 'doubleClick': return i18n.t('hotkey.usageDoubleClick', { trigger });
-    default: return i18n.t('hotkey.usageToggle', { trigger });
+    case 'hold':
+      return i18n.t('hotkey.usageHold', { trigger });
+    case 'auto':
+      return i18n.t('hotkey.usageAuto', { trigger });
+    case 'doubleClick':
+      return i18n.t('hotkey.usageDoubleClick', { trigger });
+    default:
+      return i18n.t('hotkey.usageToggle', { trigger });
   }
 }
 
@@ -96,7 +111,7 @@ export function getHotkeyUsageHint(
 export function getHotkeyBindingCodes(binding: HotkeyBinding | null | undefined): string[] {
   if (!binding) return [];
   if (Array.isArray(binding.keys)) {
-    return binding.keys.map(key => key.code.trim()).filter(Boolean);
+    return binding.keys.map((key) => key.code.trim()).filter(Boolean);
   }
   const legacy = legacyTriggerCode(binding.trigger);
   return legacy ? [legacy] : [];
@@ -111,21 +126,18 @@ export function getHotkeyBindingLabel(binding: HotkeyBinding | null | undefined)
 export function getHotkeyCodeLabel(code: string): string {
   const zh = i18n.language.toLowerCase().startsWith('zh');
   const isMac = currentPlatform().isMac;
-  // Alt 在 macOS 是 Option（⌥），Meta 在 macOS 是 Command（⌘），Linux 上 Meta 是 Super。
-  // 之前对所有平台一律返回 "Alt" / "Win"，QA 浮窗里 macOS 用户的"右 Option" 被显示成
-  // "右 Alt"，"左 Cmd" 被显示成 "左 Win"——平台错配。下面按平台分流。
-  // 用 ⌥/⌘ 与 formatPrimary 的输出（"Right ⌥" 等）保持一致。
+  // macOS 使用 Option/Command 符号，并与组合键标签 formatPrimary 保持一致。
   const labels: Record<string, string> = {
     ControlLeft: zh ? '左Ctrl' : 'Left Ctrl',
     ControlRight: zh ? '右Ctrl' : 'Right Ctrl',
-    AltLeft: isMac ? (zh ? '左 ⌥' : 'Left ⌥') : (zh ? '左Alt' : 'Left Alt'),
-    AltRight: isMac ? (zh ? '右 ⌥' : 'Right ⌥') : (zh ? '右Alt' : 'Right Alt'),
+    AltLeft: isMac ? (zh ? '左 ⌥' : 'Left ⌥') : zh ? '左Alt' : 'Left Alt',
+    AltRight: isMac ? (zh ? '右 ⌥' : 'Right ⌥') : zh ? '右Alt' : 'Right Alt',
     ShiftLeft: zh ? '左Shift' : 'Left Shift',
     ShiftRight: zh ? '右Shift' : 'Right Shift',
-    MetaLeft: isMac ? (zh ? '左 ⌘' : 'Left ⌘') : (zh ? '左Win' : 'Left Win'),
-    MetaRight: isMac ? (zh ? '右 ⌘' : 'Right ⌘') : (zh ? '右Win' : 'Right Win'),
-    OSLeft: isMac ? (zh ? '左 ⌘' : 'Left ⌘') : (zh ? '左Win' : 'Left Win'),
-    OSRight: isMac ? (zh ? '右 ⌘' : 'Right ⌘') : (zh ? '右Win' : 'Right Win'),
+    MetaLeft: isMac ? (zh ? '左 ⌘' : 'Left ⌘') : zh ? '左Win' : 'Left Win',
+    MetaRight: isMac ? (zh ? '右 ⌘' : 'Right ⌘') : zh ? '右Win' : 'Right Win',
+    OSLeft: isMac ? (zh ? '左 ⌘' : 'Left ⌘') : zh ? '左Win' : 'Left Win',
+    OSRight: isMac ? (zh ? '右 ⌘' : 'Right ⌘') : zh ? '右Win' : 'Right Win',
     Fn: 'Fn',
     FnLock: 'FnLock',
     CapsLock: 'CapsLock',
@@ -235,12 +247,24 @@ export function formatComboParts(
 
   // 固定输出顺序：Ctrl/Cmd → Alt/Option → Shift → Super
   const modifierOrder = [
-    'cmd-left', 'cmd-right', 'cmd', 'ctrl-left', 'ctrl-right', 'ctrl',
-    'alt-left', 'alt-right', 'alt', 'shift-left', 'shift-right', 'shift',
-    'super-left', 'super-right', 'super',
+    'cmd-left',
+    'cmd-right',
+    'cmd',
+    'ctrl-left',
+    'ctrl-right',
+    'ctrl',
+    'alt-left',
+    'alt-right',
+    'alt',
+    'shift-left',
+    'shift-right',
+    'shift',
+    'super-left',
+    'super-right',
+    'super',
   ] as const;
   for (const tag of modifierOrder) {
-    if (binding.modifiers.some(m => m.toLowerCase() === tag)) {
+    if (binding.modifiers.some((m) => m.toLowerCase() === tag)) {
       parts.push(sideModifierDisplayName(tag, platform));
     }
   }
@@ -249,7 +273,9 @@ export function formatComboParts(
   return parts;
 }
 
-export function formatComboLabel(binding: ComboBinding | QaHotkeyBinding | ShortcutBinding): string {
+export function formatComboLabel(
+  binding: ComboBinding | QaHotkeyBinding | ShortcutBinding,
+): string {
   return formatComboParts(binding).join(currentPlatform().isMac ? '' : '+');
 }
 
@@ -286,10 +312,10 @@ export function genericModifiersFromPressedCodes(codes: Iterable<string>): strin
   if (isMac) {
     if (set.has('MetaLeft') || set.has('MetaRight')) modifiers.push('cmd');
   } else if (
-    set.has('MetaLeft')
-    || set.has('MetaRight')
-    || set.has('OSLeft')
-    || set.has('OSRight')
+    set.has('MetaLeft') ||
+    set.has('MetaRight') ||
+    set.has('OSLeft') ||
+    set.has('OSRight')
   ) {
     modifiers.push('super');
   }
@@ -299,20 +325,16 @@ export function genericModifiersFromPressedCodes(codes: Iterable<string>): strin
   return modifiers;
 }
 
-export function modifiersFromPressedCodes(
-  codes: Iterable<string>,
-  sideSpecific = false,
-): string[] {
+export function modifiersFromPressedCodes(codes: Iterable<string>, sideSpecific = false): string[] {
   return sideSpecific
     ? sideModifiersFromPressedCodes(codes)
     : genericModifiersFromPressedCodes(codes);
 }
 
-function modifierDisplayName(tag: string, platform: { isMac: boolean; isWindows: boolean }): string {
-  return sideModifierDisplayName(tag, platform);
-}
-
-function sideModifierDisplayName(tag: string, platform: { isMac: boolean; isWindows: boolean }): string {
+function sideModifierDisplayName(
+  tag: string,
+  platform: { isMac: boolean; isWindows: boolean },
+): string {
   const sideLabels: Record<string, string> = platform.isMac
     ? {
         'cmd-left': '左 ⌘',
@@ -339,19 +361,29 @@ function sideModifierDisplayName(tag: string, platform: { isMac: boolean; isWind
   if (sideLabels[tag]) return sideLabels[tag];
   if (platform.isMac) {
     switch (tag) {
-      case 'cmd': return '\u2318';
-      case 'ctrl': return '\u2303';
-      case 'alt': return '\u2325';
-      case 'shift': return '\u21E7';
-      case 'super': return '\u2318';
+      case 'cmd':
+        return '\u2318';
+      case 'ctrl':
+        return '\u2303';
+      case 'alt':
+        return '\u2325';
+      case 'shift':
+        return '\u21E7';
+      case 'super':
+        return '\u2318';
     }
   } else {
     switch (tag) {
-      case 'cmd': return platform.isWindows ? 'Ctrl' : 'Super';
-      case 'ctrl': return 'Ctrl';
-      case 'alt': return 'Alt';
-      case 'shift': return 'Shift';
-      case 'super': return platform.isWindows ? 'Win' : 'Super';
+      case 'cmd':
+        return platform.isWindows ? 'Ctrl' : 'Super';
+      case 'ctrl':
+        return 'Ctrl';
+      case 'alt':
+        return 'Alt';
+      case 'shift':
+        return 'Shift';
+      case 'super':
+        return platform.isWindows ? 'Win' : 'Super';
     }
   }
   return tag;
@@ -368,38 +400,60 @@ function formatPrimary(primary: string): string {
   const isMac = currentPlatform().isMac;
   if (isMac) {
     switch (trimmed.toLowerCase()) {
-      case 'macdictationkey': return i18n.t('macDictationKey.label');
-      case 'space': return '\u2423';
+      case 'macdictationkey':
+        return i18n.t('macDictationKey.label');
+      case 'space':
+        return '\u2423';
       case 'enter':
-      case 'return': return '\u21A9';
-      case 'tab': return '\u21E5';
+      case 'return':
+        return '\u21A9';
+      case 'tab':
+        return '\u21E5';
       case 'escape':
-      case 'esc': return '\u238B';
-      case 'backspace': return '\u232B';
+      case 'esc':
+        return '\u238B';
+      case 'backspace':
+        return '\u232B';
       case 'delete':
-      case 'del': return '\u2326';
+      case 'del':
+        return '\u2326';
       case 'arrowup':
-      case 'up': return '\u2191';
+      case 'up':
+        return '\u2191';
       case 'arrowdown':
-      case 'down': return '\u2193';
+      case 'down':
+        return '\u2193';
       case 'arrowleft':
-      case 'left': return '\u2190';
+      case 'left':
+        return '\u2190';
       case 'arrowright':
-      case 'right': return '\u2192';
+      case 'right':
+        return '\u2192';
     }
   }
   switch (trimmed.toLowerCase()) {
-    case 'rightoption': return isMac ? 'Right ⌥' : 'Right Alt';
-    case 'leftoption': return isMac ? 'Left ⌥' : 'Left Alt';
-    case 'rightcontrol': return isMac ? 'Right ⌃' : 'Right Ctrl';
-    case 'leftcontrol': return isMac ? 'Left ⌃' : 'Left Ctrl';
-    case 'rightcommand': return isMac ? 'Right ⌘' : (currentPlatform().isWindows ? 'Right Win' : 'Right Super');
-    case 'leftcommand': return isMac ? 'Left ⌘' : (currentPlatform().isWindows ? 'Left Win' : 'Left Super');
-    case 'leftshift': return isMac ? 'Left ⇧' : 'Left Shift';
-    case 'rightshift': return isMac ? 'Right ⇧' : 'Right Shift';
-    case 'fn': return 'Fn';
-    case 'mediaplaypause': return '⏯ Media';
-    case 'shift': return isMac ? '⇧' : 'Shift';
+    case 'rightoption':
+      return isMac ? 'Right ⌥' : 'Right Alt';
+    case 'leftoption':
+      return isMac ? 'Left ⌥' : 'Left Alt';
+    case 'rightcontrol':
+      return isMac ? 'Right ⌃' : 'Right Ctrl';
+    case 'leftcontrol':
+      return isMac ? 'Left ⌃' : 'Left Ctrl';
+    case 'rightcommand':
+      return isMac ? 'Right ⌘' : currentPlatform().isWindows ? 'Right Win' : 'Right Super';
+    case 'leftcommand':
+      return isMac ? 'Left ⌘' : currentPlatform().isWindows ? 'Left Win' : 'Left Super';
+    case 'leftshift':
+      return isMac ? 'Left ⇧' : 'Left Shift';
+    case 'rightshift':
+      return isMac ? 'Right ⇧' : 'Right Shift';
+    case 'fn':
+      return 'Fn';
+    case 'mediaplaypause':
+      return '⏯ Media';
+    case 'shift':
+      return isMac ? '⇧' : 'Shift';
   }
   return trimmed;
 }

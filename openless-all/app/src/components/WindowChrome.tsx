@@ -1,12 +1,21 @@
-import { type CSSProperties, type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
+import { Icon } from './Icon';
+import { useTranslation } from 'react-i18next';
+import {
+  type CSSProperties,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
 
 export type OS = 'mac' | 'win' | 'linux' | 'android';
 
 export function detectOS(): OS {
   if (typeof navigator === 'undefined') return 'mac';
-  const uaDataPlatform = (
-    navigator as Navigator & { userAgentData?: { platform?: string } }
-  ).userAgentData?.platform ?? '';
+  const uaDataPlatform =
+    (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform ??
+    '';
   const hints = `${navigator.userAgent || ''} ${navigator.platform || ''} ${uaDataPlatform}`;
   if (/Mac|iPhone|iPad|iPod/.test(hints)) return 'mac';
   if (/Android/i.test(hints)) return 'android';
@@ -15,8 +24,8 @@ export function detectOS(): OS {
   return 'mac';
 }
 
-const MAC_TITLEBAR_HEIGHT = 28;
-const MAC_SYSTEM_CONTROLS_RESERVED_WIDTH = 76;
+const MAC_TITLEBAR_HEIGHT = 44;
+const MAC_SYSTEM_CONTROLS_RESERVED_WIDTH = 88;
 const LINUX_TITLEBAR_HEIGHT = 36;
 const WIN_CONSOLE_RADIUS = 10;
 
@@ -27,48 +36,46 @@ interface WindowChromeProps {
   height?: number | string;
 }
 
-export function WindowChrome({
-  os = 'mac',
-  children,
-  height = 800,
-}: WindowChromeProps) {
+export function WindowChrome({ os = 'mac', children, height = 800 }: WindowChromeProps) {
   // Windows: decorations:true 时外层不画圆角/边框/阴影/标题栏，避免与原生窗口重叠。
   // Linux: decorations:false 时外层画 14px 圆角 + 自定义标题栏。
   const shellRadius = os === 'mac' ? 0 : os === 'win' || os === 'android' ? 0 : 14;
-  const consoleRadius = os === 'mac' ? 20 : os === 'win' ? WIN_CONSOLE_RADIUS : os === 'android' ? 0 : 14;
-  const titlebarHeight = os === 'mac' ? MAC_TITLEBAR_HEIGHT : os === 'linux' ? LINUX_TITLEBAR_HEIGHT : 0;
+  const consoleRadius =
+    os === 'mac' ? 20 : os === 'win' ? WIN_CONSOLE_RADIUS : os === 'android' ? 0 : 14;
+  const titlebarHeight =
+    os === 'mac' ? MAC_TITLEBAR_HEIGHT : os === 'linux' ? LINUX_TITLEBAR_HEIGHT : 0;
 
   const useSolidSurface = os === 'linux' || os === 'android';
-
-  // 主窗口底色是不透明渐变（--ol-window-bg），backdrop-filter 模糊不到任何
-  // 内容（非透明窗口拿不到窗口背后的像素，见 global.css .ol-frost 注释）——
-  // 之前 blur(36px) 是纯合成开销死代码，macOS WKWebView 在切换模型/高频
-  // 重渲染时合成层故障，整窗「消失一下又恢复」。全平台统一 none。
-  const useBackdropFilter = false;
 
   return (
     <div
       className="ol-winchrome"
-      style={{
-        '--ol-window-shell-radius': `${shellRadius}px`,
-        '--ol-window-console-radius': `${consoleRadius}px`,
-        '--ol-window-titlebar-height': `${titlebarHeight}px`,
-        width: '100%',
-        height,
-        position: 'relative',
-        borderRadius: 'var(--ol-window-shell-radius)',
-        boxShadow: os === 'win' ? 'none' : 'var(--ol-shadow-xl)',
-        overflow: 'hidden',
-        display: 'flex',
-        flexDirection: 'column',
-        border: os === 'win' ? 'none' : os === 'mac' ? 'none' : '0.5px solid var(--ol-window-border)',
-        background: useSolidSurface ? 'var(--ol-surface)' : 'var(--ol-window-bg)',
-        backdropFilter: useBackdropFilter ? 'blur(var(--ol-glass-blur-strong)) saturate(190%)' : 'none',
-        WebkitBackdropFilter: useBackdropFilter ? 'blur(var(--ol-glass-blur-strong)) saturate(190%)' : 'none',
-        animation: os === 'win' ? undefined : 'ol-window-enter 0.42s var(--ol-motion-spring) both',
-        transition: 'box-shadow 0.28s var(--ol-motion-soft), border-color 0.28s var(--ol-motion-soft)',
-        willChange: 'opacity, transform',
-      } as CSSProperties}
+      style={
+        {
+          '--ol-window-shell-radius': `${shellRadius}px`,
+          '--ol-window-console-radius': `${consoleRadius}px`,
+          '--ol-window-titlebar-height': `${titlebarHeight}px`,
+          width: '100%',
+          height,
+          position: 'relative',
+          borderRadius: 'var(--ol-window-shell-radius)',
+          boxShadow: os === 'win' ? 'none' : 'var(--ol-shadow-xl)',
+          overflow: 'hidden',
+          display: 'flex',
+          flexDirection: 'column',
+          border:
+            os === 'win' ? 'none' : os === 'mac' ? 'none' : '0.5px solid var(--ol-window-border)',
+          background: useSolidSurface ? 'var(--ol-surface)' : 'var(--ol-window-bg)',
+          // The main window is opaque; backdrop blur would only add a compositing layer.
+          backdropFilter: 'none',
+          WebkitBackdropFilter: 'none',
+          animation:
+            os === 'win' ? undefined : 'ol-window-enter 0.42s var(--ol-motion-spring) both',
+          transition:
+            'box-shadow 0.28s var(--ol-motion-soft), border-color 0.28s var(--ol-motion-soft)',
+          willChange: 'opacity, transform',
+        } as CSSProperties
+      }
     >
       {os === 'mac' && (
         <div
@@ -87,9 +94,7 @@ export function WindowChrome({
       {os === 'linux' && (
         <style>{`.ol-linux-close-btn:hover{background:rgba(220,38,38,0.12)!important;color:rgb(220,38,38)!important}`}</style>
       )}
-      <div style={{ flex: 1, minHeight: 0, display: 'flex', position: 'relative' }}>
-        {children}
-      </div>
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', position: 'relative' }}>{children}</div>
     </div>
   );
 }
@@ -99,30 +104,39 @@ export function WindowChrome({
 type TauriWindow = import('@tauri-apps/api/window').Window;
 
 function LinuxTitlebar() {
+  const { t } = useTranslation();
   const [maximized, setMaximized] = useState(false);
   const winRef = useRef<TauriWindow | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | undefined;
-    import('@tauri-apps/api/window').then(({ getCurrentWindow }) => {
-      if (cancelled) return;
-      const w = getCurrentWindow();
-      winRef.current = w;
-      w.isMaximized().then((m) => {
-        if (!cancelled) setMaximized(m);
-      }).catch(() => {});
-      // Keep icon in sync when user maximizes via double-click / keyboard shortcut
-      w.listen('tauri://resize', () => {
+    import('@tauri-apps/api/window')
+      .then(({ getCurrentWindow }) => {
         if (cancelled) return;
-        w.isMaximized().then((m) => {
-          if (!cancelled) setMaximized(m);
-        }).catch(() => {});
-      }).then((fn) => {
-        if (cancelled) fn();
-        else unlisten = fn;
-      }).catch(() => {});
-    }).catch(() => {});
+        const w = getCurrentWindow();
+        winRef.current = w;
+        w.isMaximized()
+          .then((m) => {
+            if (!cancelled) setMaximized(m);
+          })
+          .catch(() => {});
+        // Keep icon in sync when user maximizes via double-click / keyboard shortcut
+        w.listen('tauri://resize', () => {
+          if (cancelled) return;
+          w.isMaximized()
+            .then((m) => {
+              if (!cancelled) setMaximized(m);
+            })
+            .catch(() => {});
+        })
+          .then((fn) => {
+            if (cancelled) fn();
+            else unlisten = fn;
+          })
+          .catch(() => {});
+      })
+      .catch(() => {});
     return () => {
       cancelled = true;
       unlisten?.();
@@ -139,7 +153,9 @@ function LinuxTitlebar() {
     w.toggleMaximize().catch(() => {});
     // Re-query after window manager processes the toggle, in case WM rejects it
     setTimeout(() => {
-      w.isMaximized().then(setMaximized).catch(() => {});
+      w.isMaximized()
+        .then(setMaximized)
+        .catch(() => {});
     }, 300);
   }, []);
 
@@ -175,15 +191,19 @@ function LinuxTitlebar() {
         style={{ display: 'flex', gap: 4, pointerEvents: 'auto' }}
         onMouseDown={(e) => e.stopPropagation()}
       >
-        <button onClick={onMinimize} aria-label="Minimize" style={ctrlBtn}>
+        <button onClick={onMinimize} aria-label={t('windowChrome.minimize')} style={ctrlBtn}>
           <MinimizeSvg />
         </button>
-        <button onClick={onToggleMaximize} aria-label={maximized ? 'Restore' : 'Maximize'} style={ctrlBtn}>
+        <button
+          onClick={onToggleMaximize}
+          aria-label={t(maximized ? 'windowChrome.restore' : 'windowChrome.maximize')}
+          style={ctrlBtn}
+        >
           {maximized ? <RestoreSvg /> : <MaximizeSvg />}
         </button>
         <button
           onClick={onClose}
-          aria-label="Close"
+          aria-label={t('windowChrome.close')}
           className="ol-linux-close-btn"
           style={ctrlBtn}
         >
@@ -198,43 +218,33 @@ function LinuxTitlebar() {
 
 const svgWrap: CSSProperties = { width: 12, height: 12, display: 'block' };
 const ctrlBtn: CSSProperties = {
-  width: 30, height: 24,
-  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-  borderRadius: 5, border: 0, padding: 0,
-  background: 'transparent', color: 'var(--ol-ink-3)',
-  fontFamily: 'inherit', cursor: 'default',
+  width: 30,
+  height: 24,
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  borderRadius: 5,
+  border: 0,
+  padding: 0,
+  background: 'transparent',
+  color: 'var(--ol-ink-3)',
+  fontFamily: 'inherit',
+  cursor: 'default',
   transition: 'background 0.12s, color 0.12s',
 };
 
 function MinimizeSvg() {
-  return (
-    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style={svgWrap}>
-      <rect x="2" y="5.5" width="8" height="1" rx="0.5" fill="currentColor" />
-    </svg>
-  );
+  return <Icon name="minimize" size={12} strokeWidth={1.75} style={svgWrap} />;
 }
 
 function MaximizeSvg() {
-  return (
-    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style={svgWrap}>
-      <rect x="2" y="2" width="8" height="8" rx="1.5" stroke="currentColor" strokeWidth="1.1" />
-    </svg>
-  );
+  return <Icon name="maximize" size={12} strokeWidth={1.75} style={svgWrap} />;
 }
 
 function RestoreSvg() {
-  return (
-    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style={svgWrap}>
-      <rect x="3.6" y="0.6" width="7.2" height="7.2" rx="1.3" stroke="currentColor" strokeWidth="1.1" />
-      <rect x="0.6" y="3.6" width="7.2" height="7.2" rx="1.3" fill="var(--ol-surface, #fff)" stroke="currentColor" strokeWidth="1.1" />
-    </svg>
-  );
+  return <Icon name="restore" size={12} strokeWidth={1.75} style={svgWrap} />;
 }
 
 function CloseSvg() {
-  return (
-    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style={svgWrap}>
-      <path d="M2.8 2.8l6.4 6.4M9.2 2.8l-6.4 6.4" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" />
-    </svg>
-  );
+  return <Icon name="close" size={12} strokeWidth={1.75} style={svgWrap} />;
 }

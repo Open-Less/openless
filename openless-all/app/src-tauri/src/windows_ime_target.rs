@@ -55,8 +55,6 @@ mod tests {
 
     #[test]
     fn null_window_is_not_a_capture_target() {
-        assert!(!hwnd_is_present(
-            windows::Win32::Foundation::HWND::default()
-        ));
+        assert!(!hwnd_is_present(windows::Win32::Foundation::HWND::default()));
     }
 }

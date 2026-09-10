@@ -5,7 +5,8 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 const APP_URL = process.env.OPENLESS_H5_URL || 'http://127.0.0.1:1420/';
-const CHROME_PATH = process.env.CHROME_PATH || 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
+const CHROME_PATH =
+  process.env.CHROME_PATH || 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
 const OUTPUT_DIR = process.env.OPENLESS_LAYOUT_ARTIFACT_DIR || join(tmpdir(), 'openless-layout-h5');
 const VIEWPORTS = [
   { width: 360, height: 640 },
@@ -16,7 +17,7 @@ const ZOOMS = [1.1, 2];
 mkdirSync(OUTPUT_DIR, { recursive: true });
 
 function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 class CdpClient {
@@ -24,7 +25,7 @@ class CdpClient {
     this.socket = socket;
     this.nextId = 1;
     this.pending = new Map();
-    socket.addEventListener('message', event => {
+    socket.addEventListener('message', (event) => {
       const message = JSON.parse(String(event.data));
       if (!message.id) return;
       const waiter = this.pending.get(message.id);
@@ -63,7 +64,7 @@ async function waitForPageTarget(port) {
     try {
       const response = await fetch('http://127.0.0.1:' + port + '/json/list');
       const targets = await response.json();
-      const target = targets.find(item => item.type === 'page' && item.url.startsWith(APP_URL));
+      const target = targets.find((item) => item.type === 'page' && item.url.startsWith(APP_URL));
       if (target?.webSocketDebuggerUrl) return target;
     } catch {
       // Chrome is still starting.
@@ -76,15 +77,19 @@ async function waitForPageTarget(port) {
 async function launchChrome() {
   const port = 9300 + Math.floor(Math.random() * 400);
   const profile = join(tmpdir(), 'openless-layout-cdp-' + Date.now());
-  const child = spawn(CHROME_PATH, [
-    '--headless=new',
-    '--disable-gpu',
-    '--no-first-run',
-    '--no-default-browser-check',
-    '--remote-debugging-port=' + port,
-    '--user-data-dir=' + profile,
-    APP_URL,
-  ], { stdio: 'ignore' });
+  const child = spawn(
+    CHROME_PATH,
+    [
+      '--headless=new',
+      '--disable-gpu',
+      '--no-first-run',
+      '--no-default-browser-check',
+      '--remote-debugging-port=' + port,
+      '--user-data-dir=' + profile,
+      APP_URL,
+    ],
+    { stdio: 'ignore' },
+  );
   const target = await waitForPageTarget(port);
   return { child, client: await CdpClient.connect(target.webSocketDebuggerUrl) };
 }
@@ -97,14 +102,17 @@ async function evaluate(client, expression) {
   });
   if (response.exceptionDetails) {
     throw new Error(
-      response.exceptionDetails.exception?.description || response.exceptionDetails.text || 'Runtime.evaluate failed',
+      response.exceptionDetails.exception?.description ||
+        response.exceptionDetails.text ||
+        'Runtime.evaluate failed',
     );
   }
   return response.result.value;
 }
 
 async function evaluateFn(client, fn, ...args) {
-  const expression = '(' + fn.toString() + ')(' + args.map(value => JSON.stringify(value)).join(',') + ')';
+  const expression =
+    '(' + fn.toString() + ')(' + args.map((value) => JSON.stringify(value)).join(',') + ')';
   return evaluate(client, expression);
 }
 
@@ -115,38 +123,51 @@ async function waitForFn(client, fn, args = [], timeoutMs = 10000) {
     await sleep(100);
   }
   const diagnostics = await evaluateFn(client, function collectDiagnostics() {
-    const visible = element => element.getBoundingClientRect().width > 0;
+    const visible = (element) => element.getBoundingClientRect().width > 0;
     return {
-      buttons: Array.from(document.querySelectorAll('button')).filter(visible)
-        .map(button => button.innerText.trim()).filter(Boolean).slice(0, 40),
-      leaves: Array.from(document.querySelectorAll('div,span')).filter(element => (
-        visible(element) && element.children.length === 0 && element.textContent.trim()
-      )).map(element => element.textContent.trim()).slice(0, 80),
-      layoutTexts: document.body.innerText.split('\n')
-        .map(text => text.trim()).filter(text => /布局|排版|易读/.test(text)),
+      buttons: Array.from(document.querySelectorAll('button'))
+        .filter(visible)
+        .map((button) => button.innerText.trim())
+        .filter(Boolean)
+        .slice(0, 40),
+      leaves: Array.from(document.querySelectorAll('div,span'))
+        .filter(
+          (element) =>
+            visible(element) && element.children.length === 0 && element.textContent.trim(),
+        )
+        .map((element) => element.textContent.trim())
+        .slice(0, 80),
+      layoutTexts: document.body.innerText
+        .split('\n')
+        .map((text) => text.trim())
+        .filter((text) => /布局|排版|易读/.test(text)),
     };
   });
   throw new Error(
-    'Timed out waiting for browser state: ' + fn.name + ' diagnostics=' + JSON.stringify(diagnostics),
+    'Timed out waiting for browser state: ' +
+      fn.name +
+      ' diagnostics=' +
+      JSON.stringify(diagnostics),
   );
 }
 
 function hasExactButton(text) {
-  return Array.from(document.querySelectorAll('button')).some(button => (
-    button.getBoundingClientRect().width > 0 && button.innerText.trim() === text
-  ));
+  return Array.from(document.querySelectorAll('button')).some(
+    (button) => button.getBoundingClientRect().width > 0 && button.innerText.trim() === text,
+  );
 }
 
 function clickExactButton(text) {
-  const button = Array.from(document.querySelectorAll('button')).find(candidate => (
-    candidate.getBoundingClientRect().width > 0 && candidate.innerText.trim() === text
-  ));
+  const button = Array.from(document.querySelectorAll('button')).find(
+    (candidate) =>
+      candidate.getBoundingClientRect().width > 0 && candidate.innerText.trim() === text,
+  );
   if (!button) {
     return {
       ok: false,
       buttons: Array.from(document.querySelectorAll('button'))
-        .filter(candidate => candidate.getBoundingClientRect().width > 0)
-        .map(candidate => candidate.innerText.trim())
+        .filter((candidate) => candidate.getBoundingClientRect().width > 0)
+        .map((candidate) => candidate.innerText.trim())
         .filter(Boolean),
     };
   }
@@ -156,16 +177,21 @@ function clickExactButton(text) {
 
 async function clickButton(client, text) {
   const result = await evaluateFn(client, clickExactButton, text);
-  assert.equal(result.ok, true, '找不到按钮 ' + text + '，当前按钮：' + JSON.stringify(result.buttons));
+  assert.equal(
+    result.ok,
+    true,
+    '找不到按钮 ' + text + '，当前按钮：' + JSON.stringify(result.buttons),
+  );
   await sleep(180);
 }
 
 function clickCompositeRow(text) {
-  const button = Array.from(document.querySelectorAll('button.ol-nav-btn')).find(candidate => (
-    candidate.children.length === 3 &&
-    candidate.getBoundingClientRect().width > 0 &&
-    candidate.innerText.trim() === text
-  ));
+  const button = Array.from(document.querySelectorAll('button.ol-nav-btn')).find(
+    (candidate) =>
+      candidate.children.length === 3 &&
+      candidate.getBoundingClientRect().width > 0 &&
+      candidate.innerText.trim() === text,
+  );
   if (!button) return false;
   button.click();
   return true;
@@ -185,8 +211,9 @@ async function openSettings(client) {
 }
 
 function closeCurrentOverlay() {
-  const buttons = Array.from(document.querySelectorAll('button[aria-label="关闭"]'))
-    .filter(button => button.getBoundingClientRect().width > 0);
+  const buttons = Array.from(document.querySelectorAll('button[aria-label="关闭"]')).filter(
+    (button) => button.getBoundingClientRect().width > 0,
+  );
   if (!buttons.length) return false;
   buttons[0].click();
   return true;
@@ -198,8 +225,9 @@ async function closeOverlay(client) {
 }
 
 function clickSettingToggle(label) {
-  const labelNode = Array.from(document.querySelectorAll('div,span'))
-    .find(node => node.textContent.trim() === label);
+  const labelNode = Array.from(document.querySelectorAll('div,span')).find(
+    (node) => node.textContent.trim() === label,
+  );
   let row = labelNode;
   while (row && !row.querySelector('button')) row = row.parentElement;
   const button = row?.querySelector('button');
@@ -218,15 +246,24 @@ function rootPreferenceState() {
 async function setPreference(client, label, key, desired) {
   const state = await evaluateFn(client, rootPreferenceState);
   if (state[key] !== desired) {
-    assert.equal(await evaluateFn(client, clickSettingToggle, label), true, '找不到布局开关：' + label);
+    assert.equal(
+      await evaluateFn(client, clickSettingToggle, label),
+      true,
+      '找不到布局开关：' + label,
+    );
   }
-  await waitForFn(client, function waitPreference(prefKey, expected) {
-    const root = document.documentElement.dataset;
-    const actual = prefKey === 'readable'
-      ? root.olStackedLayout === 'true'
-      : root.olConservativeLayout === 'true';
-    return actual === expected;
-  }, [key, desired]);
+  await waitForFn(
+    client,
+    function waitPreference(prefKey, expected) {
+      const root = document.documentElement.dataset;
+      const actual =
+        prefKey === 'readable'
+          ? root.olStackedLayout === 'true'
+          : root.olConservativeLayout === 'true';
+      return actual === expected;
+    },
+    [key, desired],
+  );
   await sleep(180);
 }
 
@@ -238,9 +275,10 @@ async function setPreferences(client, readable, conservative) {
 }
 
 function inspectGeneralLayout(zoom) {
-  const inspectToggle = label => {
-    const labelNode = Array.from(document.querySelectorAll('div,span'))
-      .find(node => node.textContent.trim() === label);
+  const inspectToggle = (label) => {
+    const labelNode = Array.from(document.querySelectorAll('div,span')).find(
+      (node) => node.textContent.trim() === label,
+    );
     let row = labelNode;
     while (row && !row.querySelector('button')) row = row.parentElement;
     const button = row?.querySelector('button');
@@ -258,28 +296,36 @@ function inspectGeneralLayout(zoom) {
   };
 
   const settingsRoot = document.querySelector('.ol-settings-surface') || document.body;
-  const isScrollContained = element => {
-    for (let parent = element.parentElement; parent && parent !== settingsRoot; parent = parent.parentElement) {
+  const isScrollContained = (element) => {
+    for (
+      let parent = element.parentElement;
+      parent && parent !== settingsRoot;
+      parent = parent.parentElement
+    ) {
       const overflowX = getComputedStyle(parent).overflowX;
       if (overflowX === 'auto' || overflowX === 'scroll') return true;
     }
     return false;
   };
-  const outliers = Array.from(settingsRoot.querySelectorAll('button,input,select,textarea,[role="button"],.ol-inline-composite'))
-    .filter(element => {
+  const outliers = Array.from(
+    settingsRoot.querySelectorAll(
+      'button,input,select,textarea,[role="button"],.ol-inline-composite',
+    ),
+  )
+    .filter((element) => {
       const rect = element.getBoundingClientRect();
       return rect.width > 0 && rect.height > 0 && (rect.left < -1 || rect.right > innerWidth + 1);
     })
-    .filter(element => !isScrollContained(element))
+    .filter((element) => !isScrollContained(element))
     .slice(0, 12)
-    .map(element => ({
+    .map((element) => ({
       tag: element.tagName,
       text: element.textContent.trim().slice(0, 30),
       rect: Array.from([
         element.getBoundingClientRect().left,
         element.getBoundingClientRect().right,
         innerWidth,
-      ]).map(value => Number(value.toFixed(1))),
+      ]).map((value) => Number(value.toFixed(1))),
     }));
 
   return {
@@ -294,16 +340,17 @@ function inspectGeneralLayout(zoom) {
 }
 
 function inspectServiceActions() {
-  const edit = Array.from(document.querySelectorAll('button')).find(button => (
-    button.getBoundingClientRect().width > 0 &&
-    (button.getAttribute('aria-label') || '').startsWith('编辑')
-  ));
+  const edit = Array.from(document.querySelectorAll('button')).find(
+    (button) =>
+      button.getBoundingClientRect().width > 0 &&
+      (button.getAttribute('aria-label') || '').startsWith('编辑'),
+  );
   const group = edit?.parentElement;
   if (!group) return null;
   const style = getComputedStyle(group);
   const childTops = Array.from(group.children)
-    .filter(child => child.getBoundingClientRect().height > 0)
-    .map(child => Math.round(child.getBoundingClientRect().top));
+    .filter((child) => child.getBoundingClientRect().height > 0)
+    .map((child) => Math.round(child.getBoundingClientRect().top));
   return {
     className: group.className,
     flexDirection: style.flexDirection,
@@ -315,8 +362,9 @@ function inspectServiceActions() {
 
 function inspectPermissionActions() {
   const surface = document.querySelector('.ol-settings-surface');
-  const labelNode = Array.from(surface?.querySelectorAll('div,span') || [])
-    .find(node => node.textContent.trim() === '麦克风');
+  const labelNode = Array.from(surface?.querySelectorAll('div,span') || []).find(
+    (node) => node.textContent.trim() === '麦克风',
+  );
   let row = labelNode;
   while (row && getComputedStyle(row).display !== 'grid') row = row.parentElement;
   const group = row?.children[1]?.firstElementChild;
@@ -333,7 +381,7 @@ function inspectAboutComposite() {
   const row = document.querySelector('.ol-inline-composite');
   if (!row) return null;
   const rowRect = row.getBoundingClientRect();
-  const children = Array.from(row.children).map(child => {
+  const children = Array.from(row.children).map((child) => {
     const rect = child.getBoundingClientRect();
     return {
       left: Number(rect.left.toFixed(1)),
@@ -345,42 +393,55 @@ function inspectAboutComposite() {
   const style = getComputedStyle(row);
   return {
     flexDirection: style.flexDirection,
-    row: [rowRect.left, rowRect.right, rowRect.top, rowRect.bottom].map(value => Number(value.toFixed(1))),
+    row: [rowRect.left, rowRect.right, rowRect.top, rowRect.bottom].map((value) =>
+      Number(value.toFixed(1)),
+    ),
     flexWrap: style.flexWrap,
     childCount: children.length,
-    withinRow: children.every(rect => rect.left >= rowRect.left - 1 && rect.right <= rowRect.right + 1),
+    withinRow: children.every(
+      (rect) => rect.left >= rowRect.left - 1 && rect.right <= rowRect.right + 1,
+    ),
     children,
   };
 }
 
 function inspectCompositeSheet(expectedRows) {
-  const rows = Array.from(document.querySelectorAll('button.ol-nav-btn')).filter(button => (
-    button.children.length === 3 &&
-    button.getBoundingClientRect().width > 0 &&
-    getComputedStyle(button).flexDirection === 'row'
-  ));
+  const rows = Array.from(document.querySelectorAll('button.ol-nav-btn')).filter(
+    (button) =>
+      button.children.length === 3 &&
+      button.getBoundingClientRect().width > 0 &&
+      getComputedStyle(button).flexDirection === 'row',
+  );
   return {
     count: rows.length,
     expectedRows,
-    valid: rows.every(row => {
+    valid: rows.every((row) => {
       const rect = row.getBoundingClientRect();
-      const children = Array.from(row.children).map(child => child.getBoundingClientRect());
-      return rect.left >= -1 &&
+      const children = Array.from(row.children).map((child) => child.getBoundingClientRect());
+      return (
+        rect.left >= -1 &&
         rect.right <= innerWidth + 1 &&
-        children.every(child => child.top < rect.bottom && child.bottom > rect.top);
+        children.every((child) => child.top < rect.bottom && child.bottom > rect.top)
+      );
     }),
-    rows: rows.map(row => {
+    rows: rows.map((row) => {
       const rect = row.getBoundingClientRect();
       const parentRect = row.parentElement.getBoundingClientRect();
       const style = getComputedStyle(row);
       return {
         text: row.innerText.trim(),
-        rect: [rect.left, rect.right, rect.top, rect.bottom, innerWidth].map(value => Number(value.toFixed(1))),
-        parentRect: [parentRect.left, parentRect.right, parentRect.width].map(value => Number(value.toFixed(1))),
+        rect: [rect.left, rect.right, rect.top, rect.bottom, innerWidth].map((value) =>
+          Number(value.toFixed(1)),
+        ),
+        parentRect: [parentRect.left, parentRect.right, parentRect.width].map((value) =>
+          Number(value.toFixed(1)),
+        ),
         computed: { boxSizing: style.boxSizing, width: style.width, padding: style.padding },
-        children: Array.from(row.children).map(child => {
+        children: Array.from(row.children).map((child) => {
           const childRect = child.getBoundingClientRect();
-          return [childRect.left, childRect.right, childRect.top, childRect.bottom].map(value => Number(value.toFixed(1)));
+          return [childRect.left, childRect.right, childRect.top, childRect.bottom].map((value) =>
+            Number(value.toFixed(1)),
+          );
         }),
       };
     }),
@@ -390,30 +451,30 @@ function inspectCompositeSheet(expectedRows) {
 function inspectPageOutliers() {
   const root = document.querySelector('main');
   if (!root) return [{ tag: 'MISSING_MAIN' }];
-  const isScrollContained = element => {
-    for (let parent = element.parentElement; parent && parent !== root; parent = parent.parentElement) {
+  const isScrollContained = (element) => {
+    for (
+      let parent = element.parentElement;
+      parent && parent !== root;
+      parent = parent.parentElement
+    ) {
       const overflowX = getComputedStyle(parent).overflowX;
       if (overflowX === 'auto' || overflowX === 'scroll') return true;
     }
     return false;
   };
   return Array.from(root.querySelectorAll('h1,p,button,input,select,textarea'))
-    .filter(element => {
+    .filter((element) => {
       const rect = element.getBoundingClientRect();
       return rect.width > 0 && rect.height > 0 && (rect.left < -1 || rect.right > innerWidth + 1);
     })
-    .filter(element => !isScrollContained(element))
+    .filter((element) => !isScrollContained(element))
     .slice(0, 12)
-    .map(element => {
+    .map((element) => {
       const rect = element.getBoundingClientRect();
       return {
         tag: element.tagName,
         text: element.textContent.trim().slice(0, 30),
-        rect: [
-          Number(rect.left.toFixed(1)),
-          Number(rect.right.toFixed(1)),
-          innerWidth,
-        ],
+        rect: [Number(rect.left.toFixed(1)), Number(rect.right.toFixed(1)), innerWidth],
       };
     });
 }
@@ -429,14 +490,23 @@ function pageGridFingerprint() {
 
 async function openStylePage(client, label) {
   await clickButton(client, '风格');
-  await waitForFn(client, function hasComposite(labelText) {
-    return Array.from(document.querySelectorAll('button.ol-nav-btn')).some(button => (
-      button.children.length === 3 &&
-      button.getBoundingClientRect().width > 0 &&
-      button.innerText.trim() === labelText
-    ));
-  }, [label]);
-  assert.equal(await evaluateFn(client, clickCompositeRow, label), true, '找不到风格抽屉入口：' + label);
+  await waitForFn(
+    client,
+    function hasComposite(labelText) {
+      return Array.from(document.querySelectorAll('button.ol-nav-btn')).some(
+        (button) =>
+          button.children.length === 3 &&
+          button.getBoundingClientRect().width > 0 &&
+          button.innerText.trim() === labelText,
+      );
+    },
+    [label],
+  );
+  assert.equal(
+    await evaluateFn(client, clickCompositeRow, label),
+    true,
+    '找不到风格抽屉入口：' + label,
+  );
   await waitForFn(client, function hasGrid() {
     return Boolean(document.querySelector('.ol-grid-auto-cards'));
   });
@@ -478,9 +548,13 @@ async function runCase(client, viewport, zoom) {
   });
   await client.send('Page.navigate', { url: APP_URL });
   await waitForFn(client, hasExactButton, ['更多'], 15000);
-  await evaluateFn(client, function applyTestZoom(value) {
-    document.documentElement.style.zoom = String(value);
-  }, zoom);
+  await evaluateFn(
+    client,
+    function applyTestZoom(value) {
+      document.documentElement.style.zoom = String(value);
+    },
+    zoom,
+  );
   await sleep(250);
 
   await openSettings(client);
@@ -510,25 +584,35 @@ async function runCase(client, viewport, zoom) {
     assert.deepEqual(general.root, { readable, conservative });
     for (const toggle of [general.readableToggle, general.conservativeToggle]) {
       assert.ok(toggle, '布局开关未渲染');
-      assert.ok(Math.abs(toggle.normalizedWidth - 36) <= 0.75, '开关宽度不再是 36px：' + JSON.stringify(toggle));
+      assert.ok(
+        Math.abs(toggle.normalizedWidth - 36) <= 0.75,
+        '开关宽度不再是 36px：' + JSON.stringify(toggle),
+      );
       assert.equal(toggle.justifyContent, 'flex-start', '小尺寸布局开关应靠左');
-      assert.ok(toggle.buttonLeft >= -1 && toggle.buttonLeft <= toggle.rowRight, '布局开关超出设置行');
+      assert.ok(
+        toggle.buttonLeft >= -1 && toggle.buttonLeft <= toggle.rowRight,
+        '布局开关超出设置行',
+      );
     }
     assert.deepEqual(general.outliers, [], '设置页存在未被滚动容器承接的横向溢出');
 
     if (!readable && conservative) {
       await clickButton(client, '服务');
       await waitForFn(client, function hasEditAction() {
-        return Array.from(document.querySelectorAll('button')).some(button => (
-          button.getBoundingClientRect().width > 0 &&
-          (button.getAttribute('aria-label') || '').startsWith('编辑')
-        ));
+        return Array.from(document.querySelectorAll('button')).some(
+          (button) =>
+            button.getBoundingClientRect().width > 0 &&
+            (button.getAttribute('aria-label') || '').startsWith('编辑'),
+        );
       });
       const service = await evaluateFn(client, inspectServiceActions);
       assert.ok(service, '服务卡片动作组未渲染');
       assert.equal(service.flexDirection, 'column');
       assert.equal(service.alignItems, 'flex-start');
-      assert.ok(service.childCount === 3 && service.uniqueRows === 3, '服务卡片应有验证、开关、编辑三个纵排动作');
+      assert.ok(
+        service.childCount === 3 && service.uniqueRows === 3,
+        '服务卡片应有验证、开关、编辑三个纵排动作',
+      );
 
       await clickButton(client, '隐私');
       await waitForFn(client, hasSettingLabel, ['麦克风']);
@@ -552,10 +636,18 @@ async function runCase(client, viewport, zoom) {
       await closeOverlay(client);
       await openStylePage(client, '润色模式');
       const styleOutliers = await evaluateFn(client, inspectPageOutliers);
-      assert.deepEqual(styleOutliers, [], '保守排版下风格页存在横向溢出：' + JSON.stringify(styleOutliers));
+      assert.deepEqual(
+        styleOutliers,
+        [],
+        '保守排版下风格页存在横向溢出：' + JSON.stringify(styleOutliers),
+      );
       await openStylePage(client, '风格市场');
       const marketplaceOutliers = await evaluateFn(client, inspectPageOutliers);
-      assert.deepEqual(marketplaceOutliers, [], '保守排版下风格市场存在横向溢出：' + JSON.stringify(marketplaceOutliers));
+      assert.deepEqual(
+        marketplaceOutliers,
+        [],
+        '保守排版下风格市场存在横向溢出：' + JSON.stringify(marketplaceOutliers),
+      );
       await openSettings(client);
     }
 
@@ -574,7 +666,11 @@ async function runCase(client, viewport, zoom) {
   assert.deepEqual(restoredStyle, baselineStyle, '关闭两个偏好后风格页未恢复基线布局');
   await openStylePage(client, '风格市场');
   const restoredMarketplace = await evaluateFn(client, pageGridFingerprint);
-  assert.deepEqual(restoredMarketplace, baselineMarketplace, '关闭两个偏好后风格市场未恢复基线布局');
+  assert.deepEqual(
+    restoredMarketplace,
+    baselineMarketplace,
+    '关闭两个偏好后风格市场未恢复基线布局',
+  );
 
   await assertCompositeSheets(client);
   await openSettings(client);
@@ -583,7 +679,13 @@ async function runCase(client, viewport, zoom) {
   await openStylePage(client, '风格市场');
   const screenshot = await captureScreenshot(
     client,
-    'layout-' + viewport.width + 'x' + viewport.height + '-zoom-' + String(zoom).replace('.', '_') + '.png',
+    'layout-' +
+      viewport.width +
+      'x' +
+      viewport.height +
+      '-zoom-' +
+      String(zoom).replace('.', '_') +
+      '.png',
   );
 
   return {

@@ -9,19 +9,28 @@ export class CredentialDraft {
   private timer: ReturnType<typeof setTimeout> | undefined;
   private queue: Promise<unknown> = Promise.resolve();
   private pending: { revision: number; promise: Promise<boolean> } | undefined;
-  constructor(private read: () => Promise<string | null>, private write: (value: string) => Promise<void>) {}
+  constructor(
+    private read: () => Promise<string | null>,
+    private write: (value: string) => Promise<void>,
+  ) {}
   snapshot = () => this.state;
-  subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
+  subscribe = (listener: () => void) => {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  };
   private update(next: Partial<typeof this.state>) {
     this.state = { ...this.state, ...next };
-    this.listeners.forEach(listener => listener());
+    this.listeners.forEach((listener) => listener());
   }
   async load() {
     const generation = ++this.generation;
     const revision = this.revision;
     try {
       const value = await this.read();
-      if (generation === this.generation && revision === this.revision) this.update({ value: value ?? '', loaded: true });
+      if (generation === this.generation && revision === this.revision)
+        this.update({ value: value ?? '', loaded: true });
     } catch {
       if (generation === this.generation) this.update({ status: 'readError' });
     }
@@ -35,9 +44,13 @@ export class CredentialDraft {
   schedule() {
     clearTimeout(this.timer);
     const revision = this.revision;
-    this.timer = setTimeout(() => { if (revision === this.revision) void this.flush(); }, 300);
+    this.timer = setTimeout(() => {
+      if (revision === this.revision) void this.flush();
+    }, 300);
   }
-  pause() { clearTimeout(this.timer); }
+  pause() {
+    clearTimeout(this.timer);
+  }
   flush = (): Promise<boolean> => {
     clearTimeout(this.timer);
     if (!this.state.dirty) return Promise.resolve(true);
@@ -49,16 +62,27 @@ export class CredentialDraft {
     this.update({ status: 'saving' });
     const write = this.queue.catch(() => undefined).then(() => this.write(value));
     this.queue = write;
-    const promise = write.then(() => {
-      if (revision !== this.revision || generation !== this.generation) return false;
-      this.update({ dirty: false, status: 'saved' });
-      return true;
-    }, () => {
-      if (revision === this.revision && generation === this.generation) this.update({ status: 'saveError' });
-      return false;
-    }).finally(() => { if (this.pending?.revision === revision) this.pending = undefined; });
+    const promise = write
+      .then(
+        () => {
+          if (revision !== this.revision || generation !== this.generation) return false;
+          this.update({ dirty: false, status: 'saved' });
+          return true;
+        },
+        () => {
+          if (revision === this.revision && generation === this.generation)
+            this.update({ status: 'saveError' });
+          return false;
+        },
+      )
+      .finally(() => {
+        if (this.pending?.revision === revision) this.pending = undefined;
+      });
     this.pending = { revision, promise };
     return promise;
   };
-  dispose() { this.generation += 1; clearTimeout(this.timer); }
+  dispose() {
+    this.generation += 1;
+    clearTimeout(this.timer);
+  }
 }

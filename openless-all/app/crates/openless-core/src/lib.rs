@@ -12,6 +12,10 @@ pub mod audio;
 pub mod auxiliary;
 pub mod cli;
 mod cloud_providers;
+pub mod cloud_sync;
+mod cloud_sync_transaction;
+mod cloud_sync_types;
+mod cloud_sync_validation;
 pub mod coding_agent;
 pub mod coding_agent_guard;
 pub mod config;
@@ -29,6 +33,7 @@ pub mod external_audio;
 pub mod history;
 pub mod host_document;
 mod hotkey_interpreter;
+pub mod language_catalog;
 mod less_computer;
 pub mod llm_gemini;
 pub mod llm_protocol;
@@ -76,6 +81,11 @@ mod shortcut_types;
 /// major component for a breaking host contract change and document the
 /// migration in `docs/linux-egui-backend-contract.md`.
 pub const BACKEND_CONTRACT_VERSION: &str = "2.0.0";
+
+pub use cloud_sync::{
+    CloudSyncCounts, CloudSyncRestoreResult, CloudSyncStatus, CloudSyncUiPreferences,
+    SyncFontScale, SyncLocale,
+};
 
 pub fn require_backend_contract_version(version: &str) -> Result<(), errors::BackendError> {
     if version == BACKEND_CONTRACT_VERSION {

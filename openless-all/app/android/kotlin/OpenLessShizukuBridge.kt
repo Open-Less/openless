@@ -22,17 +22,13 @@ object OpenLessShizukuBridge {
     private const val SHIZUKU_PACKAGE = "moe.shizuku.privileged.api"
     private const val RECOVERY_BIND_TIMEOUT_MS = 5_000L
     private const val RECOVERY_BIND_POLL_MS = 250L
-    private val ANDROID_PACKAGE_REGEX =
-        Regex("^[a-zA-Z][a-zA-Z0-9_]*(\\.[a-zA-Z][a-zA-Z0-9_]*)*$")
+    private val ANDROID_PACKAGE_REGEX = Regex("^[a-zA-Z][a-zA-Z0-9_]*(\\.[a-zA-Z][a-zA-Z0-9_]*)*$")
 
-    @Volatile
-    private var binderWasAuthorized = false
+    @Volatile private var binderWasAuthorized = false
 
-    @Volatile
-    private var binderDead = false
+    @Volatile private var binderDead = false
 
-    @Volatile
-    private var lastPermissionMessageKey: String? = null
+    @Volatile private var lastPermissionMessageKey: String? = null
 
     @JvmStatic
     fun setLastPermissionMessageKey(key: String) {
@@ -66,16 +62,17 @@ object OpenLessShizukuBridge {
         val state = detectState(context)
         val accessibility = diagnoseAccessibility(context)
         val messageKey = resolveStatusMessageKey(legacyBackend, state, accessibility)
-        val json = JSONObject()
-            .put("state", state.name)
-            .put("messageKey", messageKey)
-            .put(
-                "accessibility",
-                JSONObject()
-                    .put("registered", accessibility.registered)
-                    .put("operational", accessibility.operational)
-                    .put("messageKey", accessibility.messageKey),
-            )
+        val json =
+            JSONObject()
+                .put("state", state.name)
+                .put("messageKey", messageKey)
+                .put(
+                    "accessibility",
+                    JSONObject()
+                        .put("registered", accessibility.registered)
+                        .put("operational", accessibility.operational)
+                        .put("messageKey", accessibility.messageKey),
+                )
         consumeLastPermissionMessageKey()?.let { key ->
             json.put("lastPermissionMessageKey", key)
         }
@@ -93,9 +90,10 @@ object OpenLessShizukuBridge {
             return false
         }
         return try {
-            val intent = Intent(context, ShizukuPermissionActivity::class.java).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
+            val intent =
+                Intent(context, ShizukuPermissionActivity::class.java).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
             context.startActivity(intent)
             true
         } catch (error: Throwable) {
@@ -120,10 +118,12 @@ object OpenLessShizukuBridge {
             }
         }
         return try {
-            val market = Intent(
-                Intent.ACTION_VIEW,
-                Uri.parse("market://details?id=$SHIZUKU_PACKAGE"),
-            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            val market =
+                Intent(
+                        Intent.ACTION_VIEW,
+                        Uri.parse("market://details?id=$SHIZUKU_PACKAGE"),
+                    )
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             context.startActivity(market)
             true
         } catch (error: Throwable) {
@@ -150,28 +150,32 @@ object OpenLessShizukuBridge {
     }
 
     /**
-     * MTK/Xiaomi ROMs NPE in UserService app_process startup; Shizuku.newProcess is private
-     * but callable via reflection and does not spawn com.openless.app:* processes.
+     * MTK/Xiaomi ROMs NPE in UserService app_process startup; Shizuku.newProcess is private but
+     * callable via reflection and does not spawn com.openless.app:* processes.
      */
     internal fun injectPasteKeyViaShizukuShell(): Boolean {
         if (!Shizuku.pingBinder()) {
             return false
         }
         return try {
-            val method = Shizuku::class.java.getDeclaredMethod(
-                "newProcess",
-                Array<String>::class.java,
-                Array<String>::class.java,
-                String::class.java,
-            )
+            val method =
+                Shizuku::class
+                    .java
+                    .getDeclaredMethod(
+                        "newProcess",
+                        Array<String>::class.java,
+                        Array<String>::class.java,
+                        String::class.java,
+                    )
             method.isAccessible = true
             @Suppress("UNCHECKED_CAST")
-            val process = method.invoke(
-                null,
-                arrayOf("input", "keyevent", KEYCODE_PASTE),
-                null,
-                null,
-            ) as Process
+            val process =
+                method.invoke(
+                    null,
+                    arrayOf("input", "keyevent", KEYCODE_PASTE),
+                    null,
+                    null,
+                ) as Process
             val exitCode = process.waitFor()
             exitCode == 0
         } catch (error: Throwable) {
@@ -198,21 +202,26 @@ object OpenLessShizukuBridge {
             return recoveryJson(RecoveryOutcome.ShellFailed, "invalid_component")
         }
 
-        val recoveryPayload = OpenLessShizukuUserServiceClient.withRecoveryLock {
-            val raw = OpenLessShizukuUserServiceClient.withService(context) { service ->
-                service.recoverAccessibilityService(serviceComponent)
-            } ?: return@withRecoveryLock recoveryJson(
-                RecoveryOutcome.ShizukuUnavailable,
-                "service_connect_failed",
-            )
-            raw
-        } ?: return recoveryJson(
-            RecoveryOutcome.ShellFailed,
-            "recovery_in_progress",
-        )
+        val recoveryPayload =
+            OpenLessShizukuUserServiceClient.withRecoveryLock {
+                val raw =
+                    OpenLessShizukuUserServiceClient.withService(context) { service ->
+                        service.recoverAccessibilityService(serviceComponent)
+                    }
+                        ?: return@withRecoveryLock recoveryJson(
+                            RecoveryOutcome.ShizukuUnavailable,
+                            "service_connect_failed",
+                        )
+                raw
+            }
+                ?: return recoveryJson(
+                    RecoveryOutcome.ShellFailed,
+                    "recovery_in_progress",
+                )
 
-        val (outcome, messageKey) = parseRecoveryPayload(recoveryPayload)
-            ?: return recoveryJson(RecoveryOutcome.ShellFailed, "parse_failed")
+        val (outcome, messageKey) =
+            parseRecoveryPayload(recoveryPayload)
+                ?: return recoveryJson(RecoveryOutcome.ShellFailed, "parse_failed")
 
         if (outcome != RecoveryOutcome.Success) {
             return recoveryJson(outcome, messageKey)
@@ -271,26 +280,30 @@ object OpenLessShizukuBridge {
 
     internal fun diagnoseAccessibility(context: Context): AccessibilityDiagnosis {
         val registered = OpenLessAccessibilityService.isEnabled(context)
-        val operational = registered && OpenLessAccessibilityService.pingAccessibilityProcess(context)
-        val messageKey = when {
-            operational -> "operational"
-            registered -> "registered_stale"
-            else -> "not_registered"
-        }
+        val operational =
+            registered && OpenLessAccessibilityService.pingAccessibilityProcess(context)
+        val messageKey =
+            when {
+                operational -> "operational"
+                registered -> "registered_stale"
+                else -> "not_registered"
+            }
         return AccessibilityDiagnosis(registered, operational, messageKey)
     }
 
     internal fun parseServiceEntries(raw: String?): LinkedHashSet<String> {
         val entries = LinkedHashSet<String>()
-        raw
-            ?.split(':')
+        raw?.split(':')
             ?.map { it.trim() }
             ?.filter { it.isNotEmpty() && it != "null" }
             ?.forEach { entries.add(it) }
         return entries
     }
 
-    internal fun mergeEnabledAccessibilityServices(current: String?, serviceComponent: String): String {
+    internal fun mergeEnabledAccessibilityServices(
+        current: String?,
+        serviceComponent: String,
+    ): String {
         val normalizedComponent = serviceComponent.trim()
         if (normalizedComponent.isEmpty()) return ""
         val canonicalOpenLess = canonicalizeServiceEntry(normalizedComponent)
@@ -347,12 +360,10 @@ object OpenLessShizukuBridge {
         }
         return when (servicesRollback) {
             ServicesRollbackResult.Restored,
-            ServicesRollbackResult.AlreadyBaseline,
-            -> true
+            ServicesRollbackResult.AlreadyBaseline -> true
             ServicesRollbackResult.Conflict,
             ServicesRollbackResult.ReadFailed,
-            ServicesRollbackResult.WriteFailed,
-            -> false
+            ServicesRollbackResult.WriteFailed -> false
         }
     }
 
@@ -403,17 +414,17 @@ object OpenLessShizukuBridge {
         wroteEnabled: Boolean,
         baselineEnabled: String,
     ): Boolean {
-        val servicesComplete = rollback.services == ServicesRollbackResult.Restored ||
-            rollback.services == ServicesRollbackResult.AlreadyBaseline
+        val servicesComplete =
+            rollback.services == ServicesRollbackResult.Restored ||
+                rollback.services == ServicesRollbackResult.AlreadyBaseline
         if (!wroteEnabled) {
             return servicesComplete
         }
         if (baselineEnabled == "1") {
-            return servicesComplete && (
-                rollback.enabled == EnabledRollbackResult.Restored ||
+            return servicesComplete &&
+                (rollback.enabled == EnabledRollbackResult.Restored ||
                     rollback.enabled == EnabledRollbackResult.AlreadyBaseline ||
-                    rollback.enabled == EnabledRollbackResult.Skipped
-                )
+                    rollback.enabled == EnabledRollbackResult.Skipped)
         }
         return false
     }
@@ -430,17 +441,20 @@ object OpenLessShizukuBridge {
         }
         val packageName = trimmed.substring(0, slash)
         val className = trimmed.substring(slash + 1)
-        if (className.isEmpty() || className.any { it.isWhitespace() || it == '\n' || it == '\r' }) {
+        if (
+            className.isEmpty() || className.any { it.isWhitespace() || it == '\n' || it == '\r' }
+        ) {
             return null
         }
         if (!isValidAndroidPackageName(packageName)) {
             return null
         }
-        val fullClassName = if (className.startsWith('.')) {
-            packageName + className
-        } else {
-            className
-        }
+        val fullClassName =
+            if (className.startsWith('.')) {
+                packageName + className
+            } else {
+                className
+            }
         if (fullClassName.any { it.isWhitespace() || it == '\n' || it == '\r' || it == '/' }) {
             return null
         }
@@ -533,7 +547,9 @@ object OpenLessShizukuBridge {
         }
         val packageName = trimmed.substring(0, slash)
         val className = trimmed.substring(slash + 1)
-        if (className.isEmpty() || className.any { it.isWhitespace() || it == '\n' || it == '\r' }) {
+        if (
+            className.isEmpty() || className.any { it.isWhitespace() || it == '\n' || it == '\r' }
+        ) {
             return false
         }
         return isValidAndroidPackageName(packageName)
@@ -566,8 +582,7 @@ object OpenLessShizukuBridge {
                     PackageManager.PackageInfoFlags.of(0),
                 )
             } else {
-                @Suppress("DEPRECATION")
-                context.packageManager.getPackageInfo(SHIZUKU_PACKAGE, 0)
+                @Suppress("DEPRECATION") context.packageManager.getPackageInfo(SHIZUKU_PACKAGE, 0)
             }
             true
         } catch (_: PackageManager.NameNotFoundException) {
@@ -592,11 +607,12 @@ object OpenLessShizukuBridge {
             ShizukuState.NotRunning -> "not_running"
             ShizukuState.NotAuthorized -> "not_authorized"
             ShizukuState.BinderDead -> "binder_dead"
-            ShizukuState.Authorized -> when {
-                accessibility.operational -> "authorized_operational"
-                accessibility.registered -> "authorized_registered_stale"
-                else -> "authorized_can_recover"
-            }
+            ShizukuState.Authorized ->
+                when {
+                    accessibility.operational -> "authorized_operational"
+                    accessibility.registered -> "authorized_registered_stale"
+                    else -> "authorized_can_recover"
+                }
         }
     }
 
@@ -617,10 +633,7 @@ object OpenLessShizukuBridge {
     }
 
     private fun recoveryJson(outcome: RecoveryOutcome, messageKey: String): String {
-        return JSONObject()
-            .put("outcome", outcome.name)
-            .put("messageKey", messageKey)
-            .toString()
+        return JSONObject().put("outcome", outcome.name).put("messageKey", messageKey).toString()
     }
 
     enum class ShizukuState {

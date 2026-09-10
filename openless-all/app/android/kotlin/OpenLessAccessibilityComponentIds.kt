@@ -1,23 +1,20 @@
 package com.openless.app
 
 /**
- * Normalizes Android accessibility service component ids for comparison.
- * Settings.Secure may store short forms (`pkg/.Class`) while callers often use full class names.
+ * Normalizes Android accessibility service component ids for comparison. Settings.Secure may store
+ * short forms (`pkg/.Class`) while callers often use full class names.
  */
 internal object OpenLessAccessibilityComponentIds {
     internal fun parseServiceEntries(raw: String?): LinkedHashSet<String> {
         val entries = LinkedHashSet<String>()
-        raw
-            ?.split(':')
+        raw?.split(':')
             ?.map { it.trim() }
             ?.filter { it.isNotEmpty() && it != "null" }
             ?.forEach { entries.add(it) }
         return entries
     }
 
-    /**
-     * Mirrors Rust [normalize_component_key]: expands `pkg/.Class` to `pkg/pkg.Class`.
-     */
+    /** Mirrors Rust [normalize_component_key]: expands `pkg/.Class` to `pkg/pkg.Class`. */
     internal fun normalizeComponentKey(component: String): String? {
         val trimmed = component.trim()
         val slash = trimmed.indexOf('/')
@@ -35,11 +32,12 @@ internal object OpenLessAccessibilityComponentIds {
         if (!isValidAndroidPackageName(packageName)) {
             return null
         }
-        val fullClassName = if (className.startsWith(".")) {
-            packageName + className
-        } else {
-            className
-        }
+        val fullClassName =
+            if (className.startsWith(".")) {
+                packageName + className
+            } else {
+                className
+            }
         if (fullClassName.any { it.isWhitespace() || it == '\n' || it == '\r' || it == '/' }) {
             return null
         }

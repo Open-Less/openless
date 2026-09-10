@@ -1,37 +1,26 @@
-# Linux egui 接入交接
+# Linux 接入交接总览
 
-更新：2026-09-06；接口以本目录所在提交的代码为准。初始缺口盘点基于`2b315572`，后续资源生命周期与VoiceState合同更新见01/06。需求依据：[2.0范围](../2.0-requirements.md)。
+状态：canonical（2026-09-07 以源码为准重写，基线 `openless-linux-egui` + Core `639c2fbf` 后的 beta）；更新：2026-09-07。
 
-本批2.0完整交付Windows/macOS。Linux交付共享Core及接入资料；egui团队负责余下Linux Host、UI、集成和Linux发布验收。
-已有`linux-egui`代码和包构建是可复用起点，不等于Linux产品已完成。
+## 1. 责任与范围
 
-## 阅读顺序
+Linux Host Adapter 的剩余实现、全局热键、窗口/托盘/权限/更新等宿主效果、egui 界面与 Linux 产品验收由 egui 团队承接；共享业务全部在 `openless-core`，发现业务接口缺项时回报 Core 负责人，不在 UI/Host 复制规则。Linux 产品完成度不阻塞 Windows/macOS 交付（见[范围](../2.0-requirements.md)）。
 
-| 文档 | 回答什么问题 |
-| --- | --- |
-| [01 Core接入合同](./01-core-contract.md) | 从哪里接、哪些规则归Core、生命周期和秘密边界 |
-| [02 缺口与实施顺序](./02-gap-register.md) | 当前Linux还缺什么、由谁做、依赖顺序和关闭标准 |
-| [03 全局热键与窗口](./03-hotkeys-and-windows.md) | 三类1.x X11热键缺口及原生注册、恢复和窗口效果 |
-| [04 页面与领域操作](./04-ui-domains.md) | 已有页面能做什么、哪些Core能力尚缺操作入口 |
-| [05 原生宿主与数据](./05-native-host-and-data.md) | 音频/插入/凭据/模型/进程/托盘/更新的接入与验证 |
-| [06 事件与会话](./06-events-and-sessions.md) | sequence、重放、Unicode增量、QA/Agent和取消时序 |
-| [07 验收与证据](./07-acceptance.md) | 自动命令、设备矩阵、Linux发布条件和回报模板 |
+## 2. 已有起点（直接复用，不另建第二套后端）
 
-## 工作规则
+- 组装：`linux-egui/src/backend.rs` — `LinuxBackendBuilder::from_shared_providers(BackendConfig)` + `with_*` 注入（recorder/polisher/inserter/credential store/host actions/settings runtime/local ASR runtime/polish failure policy）。
+- Host 门面：`lib.rs` `LinuxHost` — `snapshot` / `subscribe` / `save_settings` / `update_settings_strict` / `drain_events` / `backend()`。
+- 已实现模块：`audio.rs`（CPAL 录制）、`credentials.rs`（Secret Service）、`fcitx5.rs`（输入/选区）、`hotkeys.rs`（fcitx5 热键监听）、`selection.rs`、`qa.rs`、`coding_agent.rs`、`marketplace.rs`、`remote_input.rs`、`settings.rs`、`single_instance.rs`、`capabilities.rs`、`resources.rs`、`runtime.rs`、`ui_state.rs`。
+- 页面：`ui_state.rs` `Page` 枚举 10 页（Start/Dictation/Qa/Selection/Agent/Services/Models/Remote/History/Settings），主循环 `main.rs`。
+- 打包：`release-linux-egui.yml`（deb/rpm/AppImage，独立 manifest）。
 
-- 先复用现有Core和Linux Adapter；不复制Tauri业务、不让UI读取秘密或私有Coordinator状态。
-- Linux系统功能由团队实现Host Adapter，egui框架只提供UI能力，不会自动注册全局热键或管理系统服务。
-- Core接口不足：带最小复现、所需业务语义和期望事件回报Core负责人；不要在UI临时补另一套规则。
-- 文档中的“已有”仅表示本快照有相应代码/合同；设备与发布证据单独确认。
-- 任务关闭时更新[缺口登记](./02-gap-register.md)及对应小文档，附准确commit、测试和设备结果。
+## 3. 阅读顺序
 
-## 入口文件
+1. [01 Core 合同](01-core-contract.md)：可调用的 Core 面与合同文件。
+2. [02 缺口登记](02-gap-register.md)：L01–L12 现状、责任与关闭标准（推进主表）。
+3. [03 热键与窗口](03-hotkeys-and-windows.md)、[05 原生宿主与数据](05-native-host-and-data.md)：接线缺口细节。
+4. [04 页面与领域](04-ui-domains.md)：10 页现状与界面缺口。
+5. [06 事件与会话](06-events-and-sessions.md)：订阅、重放、取消语义。
+6. [07 验收](07-acceptance.md)：两个完成门与证据要求。
 
-- [Core公开出口](../../openless-all/app/crates/openless-core/src/lib.rs)
-- [Linux生产factory](../../openless-all/app/linux-egui/src/backend.rs)
-- [LinuxHost facade](../../openless-all/app/linux-egui/src/lib.rs)
-- [现有egui主循环/UI](../../openless-all/app/linux-egui/src/main.rs)
-- [headless示例](../../openless-all/app/linux-egui/examples/headless_host.rs)
-- [历史修复证据](../pr1019-2.0-final-review.md)
-
-旧的[长接口文档](../linux-egui-backend-contract.md)与[阶段计划](../linux-egui-shared-backend-plan.md)保留历史参考；范围冲突以新需求和本目录为准。
+接口细节见[后端契约](../linux-egui-backend-contract.md)；长接口与历史实现参考保留在契约文档。

@@ -255,7 +255,7 @@ impl MarketplaceService {
         })
     }
 
-    fn public_url(&self, path: &str) -> Result<reqwest::Url, BackendError> {
+    pub(crate) fn public_url(&self, path: &str) -> Result<reqwest::Url, BackendError> {
         self.config.base_url.join(path).map_err(|_| {
             BackendError::new(
                 BackendErrorCode::InvalidArgument,
@@ -411,7 +411,7 @@ impl MarketplaceService {
         )
     }
 
-    async fn read_access_token(&self) -> Result<SecretValue, BackendError> {
+    pub(crate) async fn read_access_token(&self) -> Result<SecretValue, BackendError> {
         if self.auth_tombstoned.load(Ordering::Acquire) {
             return Err(Self::authentication_required());
         }
@@ -424,9 +424,9 @@ impl MarketplaceService {
     async fn clear_authentication(&self) -> Result<(), BackendError> {
         self.auth_tombstoned.store(true, Ordering::Release);
         let remove_result = self.credential_store.remove(Self::token_key()?).await;
-        let mut preferences = self.preferences.get();
-        preferences.marketplace_dev_login.clear();
-        let preferences_result = self.preferences.set(preferences);
+        let preferences_result = self.preferences.update(|preferences| {
+            preferences.marketplace_dev_login.clear();
+        });
         remove_result.and(preferences_result)
     }
 
@@ -781,9 +781,9 @@ impl MarketplaceService {
                 });
             }
             self.auth_tombstoned.store(false, Ordering::Release);
-            let mut preferences = self.preferences.get();
-            preferences.marketplace_dev_login = login.clone();
-            let _ = self.preferences.set(preferences);
+            let _ = self.preferences.update(|preferences| {
+                preferences.marketplace_dev_login = login.clone();
+            });
             flows.consume(&lease);
             return Ok(OAuthPollResult::Authorized { login });
         }

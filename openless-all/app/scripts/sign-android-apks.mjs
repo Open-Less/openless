@@ -27,15 +27,11 @@ function signApk(apkPath) {
 
   // Prefer `tauri signer sign` (bundled minisign wrapper used by desktop release).
   const tauriBin = process.platform === 'win32' ? 'npx.cmd' : 'npx';
-  const result = spawnSync(
-    tauriBin,
-    ['tauri', 'signer', 'sign', apkPath],
-    {
-      stdio: 'inherit',
-      env: process.env,
-      shell: process.platform === 'win32',
-    },
-  );
+  const result = spawnSync(tauriBin, ['tauri', 'signer', 'sign', apkPath], {
+    stdio: 'inherit',
+    env: process.env,
+    shell: process.platform === 'win32',
+  });
   if (result.status !== 0) {
     throw new Error(`tauri signer sign failed for ${apkPath} (exit ${result.status ?? 'unknown'})`);
   }

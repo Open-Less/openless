@@ -1,50 +1,19 @@
-# OpenLess 火山 ASR 配置
+# 火山引擎（volcengine）ASR 配置
 
-1. 登录火山引擎  
-   <https://console.volcengine.com/auth/login/>
+状态：canonical（2026-09-07 以源码为准重写）；更新：2026-09-07。
 
-   ![登录火山引擎](./images/volcengine-setup/01-login.png)
+## 1. 代码中的定义
 
-2. 创建旧版应用  
-   创建时勾选 `豆包流式语音识别模型2.0 小时版`  
-   <https://console.volcengine.com/speech/app?opt=create>
+- Provider：`volcengine`（labelKey `asrVolcengine`），定义于 Core `provider_rules.rs`；`authRequirement = Volcengine`（专用鉴权形态），无内置默认端点/模型（`defaultEndpoint` / `defaultModel` 为空，按通道配置）。
+- 验证探针：`asr_silence_allows_no_final`（静音段允许无 final 帧，验证以可取消的静音探测完成）。
+- 凭据字段（`provider_rules.rs:300-302`）：`volcengine_auth_mode`（鉴权模式，如 ApiKey/官方端点模式）、`volcengine_app_key`、`volcengine_access_key`（布尔项 + 模式选择；具体取值在设置界面录入，凭据走系统安全存储，不落明文）。
 
-   ![创建旧版应用并勾选小时版](./images/volcengine-setup/02-create-legacy-app.png)
+## 2. 在应用内配置
 
-3. 打开豆包流式语音识别模型 2.0 管理页  
-   `APP ID` 和 `Access Token` 在页面最下方  
-   <https://console.volcengine.com/speech/service/10038?AppID=&opt=create>
+设置 → AI 服务 → 语音识别 → 添加渠道，选择火山引擎；按界面提示填入鉴权字段，保存后执行“验证”得到真实验证结果（成功/失败与时间会记录在渠道列表）。
 
-   ![流式语音识别模型 2.0 管理页](./images/volcengine-setup/03-streaming-asr-page.png)
+## 3. 端点与排错
 
-4. 复制到 OpenLess 的 `Settings` 页面
-
-   打开：
-
-   `Settings -> Providers -> ASR`
-
-   ![复制到 OpenLess 的 Settings 页面](./images/volcengine-setup/04-openless-settings.png)
-
-   填这两个：
-
-   - `APP ID`
-   - `Access Token`
-
-   不用填：
-
-   - `Secret Key`
-
-## 新版控制台（API Key 方式）
-
-新版豆包语音控制台统一使用单个 `API Key` 鉴权，无需 `APP ID` / `Access Token`（旧版应用方式见上文）。
-
-1. 在新版语音控制台创建 API Key  
-   <https://console.volcengine.com/speech/new/setting/apikeys>
-
-2. 在 OpenLess 的 `Settings -> Providers -> ASR` 中：
-
-   - 鉴权模式选择「新版控制台 API Key」
-   - 填入上一步创建的 `API Key`
-   - `Resource ID` 保持默认 `volc.seedasr.sauc.duration`（豆包流式语音识别模型 2.0 · 小时版）
-
-新旧两种模式共享同一 WebSocket 端点（`wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async`），仅握手鉴权头不同（新版为 `X-Api-Key` 单头）。官方接口文档：<https://www.volcengine.com/docs/6561/1354869>
+- ApiKey 模式使用火山官方实时 ASR 端点（历史修复 #931 后的行为，以 `crates/openless-core/src/asr/volcengine.rs` 当前实现为准）。
+- 弱网行为：连接超时与重试在 Host/Core 实现，失败信息展示在渠道验证结果中。
+- 开通服务、创建应用与获取密钥属火山控制台操作，以[火山官方文档](https://www.volcengine.com/docs)为准；本仓库只维护代码行为。

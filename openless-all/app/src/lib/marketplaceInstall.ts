@@ -1,29 +1,29 @@
 export type MarketplaceInstallError = {
-    packId: string
-    message: string
-}
+  packId: string;
+  message: string;
+};
 
 export function canStartMarketplaceInstall(installingPackId: string | null): boolean {
-    return installingPackId === null
+  return installingPackId === null;
 }
 
 export function isMarketplaceInstallActive(
-    installingPackId: string | null,
-    packId: string,
+  installingPackId: string | null,
+  packId: string,
 ): boolean {
-    return installingPackId === packId
+  return installingPackId === packId;
 }
 
 export function isMarketplaceInstallErrorForPack(
-    error: MarketplaceInstallError | null,
-    packId: string,
+  error: MarketplaceInstallError | null,
+  packId: string,
 ): error is MarketplaceInstallError {
-    return error?.packId === packId
+  return error?.packId === packId;
 }
 
 export function shouldCloseMarketplaceDetail(
-    selectedId: string | null,
-    completedPackId: string,
+  selectedId: string | null,
+  completedPackId: string,
 ): boolean {
-    return selectedId === completedPackId
+  return selectedId === completedPackId;
 }

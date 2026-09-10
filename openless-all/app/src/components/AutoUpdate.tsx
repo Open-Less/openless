@@ -83,9 +83,10 @@ export function useAutoUpdate(): UseAutoUpdate {
 
   const checking = status === 'checking';
   const busy = status === 'downloading' || status === 'installing';
-  const progress = contentLength && contentLength > 0
-    ? Math.min(100, Math.round((downloaded / contentLength) * 100))
-    : null;
+  const progress =
+    contentLength && contentLength > 0
+      ? Math.min(100, Math.round((downloaded / contentLength) * 100))
+      : null;
 
   const closeUpdate = async () => {
     const current = updateRef.current;
@@ -101,7 +102,9 @@ export function useAutoUpdate(): UseAutoUpdate {
   };
 
   useEffect(() => {
-    return () => { void closeUpdate(); };
+    return () => {
+      void closeUpdate();
+    };
   }, []);
 
   useEffect(() => {
@@ -154,10 +157,7 @@ export function useAutoUpdate(): UseAutoUpdate {
         setStatus('none');
         return;
       }
-      const metadata = await appCheckUpdateWithChannel(
-        UPDATE_CHECK_TIMEOUT_MS,
-        channel ?? null,
-      );
+      const metadata = await appCheckUpdateWithChannel(UPDATE_CHECK_TIMEOUT_MS, channel ?? null);
       if (!metadata) {
         setStatus('none');
         return;
@@ -173,7 +173,9 @@ export function useAutoUpdate(): UseAutoUpdate {
             const url = typeof raw.url === 'string' ? raw.url : '';
             const signature = typeof raw.signature === 'string' ? raw.signature : '';
             if (!url || !signature) {
-              console.warn('[auto-update] android manifest missing url/signature, falling back to manual update');
+              console.warn(
+                '[auto-update] android manifest missing url/signature, falling back to manual update',
+              );
               setStatus('available');
               return;
             }
@@ -245,7 +247,7 @@ export function useAutoUpdate(): UseAutoUpdate {
           resetProgress();
           setContentLength(event.data.contentLength ?? null);
         } else if (event.event === 'Progress') {
-          setDownloaded(value => value + event.data.chunkLength);
+          setDownloaded((value) => value + event.data.chunkLength);
         } else if (event.event === 'Finished') {
           setStatus('installing');
         }
@@ -289,8 +291,16 @@ export function useAutoUpdate(): UseAutoUpdate {
   };
 }
 
-export function isDialogStatus(status: UpdateStatus): status is 'available' | 'downloading' | 'installing' | 'downloaded' | 'installError' {
-  return status === 'available' || status === 'downloading' || status === 'installing' || status === 'downloaded' || status === 'installError';
+export function isDialogStatus(
+  status: UpdateStatus,
+): status is 'available' | 'downloading' | 'installing' | 'downloaded' | 'installError' {
+  return (
+    status === 'available' ||
+    status === 'downloading' ||
+    status === 'installing' ||
+    status === 'downloaded' ||
+    status === 'installError'
+  );
 }
 
 export function UpdateDialog({
@@ -319,49 +329,139 @@ export function UpdateDialog({
   const installing = status === 'installing';
   const installError = status === 'installError';
   const androidInstalled = isAndroid() && status === 'downloaded';
-  const switchingToStable = status === 'available'
-    && isStableChannelSwitch(currentVersion, version);
+  const switchingToStable =
+    status === 'available' && isStableChannelSwitch(currentVersion, version);
   // Portal 到 document.body：WindowChrome / 设置弹窗带常驻 transform + will-change，
   // 会创建 containing block——`position: fixed` 的遮罩会相对设置面板定位，只压暗
   // 白色内容区（侧边栏深色看不出，形成「内容变灰、断层感」，见 Modal.tsx 同款注释）。
   // portal 出去后遮罩铺满整窗，灰度均匀。0.05 极淡遮罩因此可以恢复正常遮罩透明度。
   return createPortal(
-    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.22)', display: 'grid', placeItems: 'center', zIndex: 40, animation: 'ol-modal-backdrop-in 0.18s var(--ol-motion-soft)' }}>
-      <div style={{ width: 360, borderRadius: 16, background: 'var(--ol-surface)', border: '0.5px solid var(--ol-line-strong)', boxShadow: 'var(--ol-shadow-lg)', padding: 18 }}>
+    <div
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(0,0,0,0.22)',
+        display: 'grid',
+        placeItems: 'center',
+        zIndex: 40,
+        animation: 'ol-modal-backdrop-in 0.18s var(--ol-motion-soft)',
+      }}
+    >
+      <div
+        style={{
+          width: 360,
+          borderRadius: 16,
+          background: 'var(--ol-surface)',
+          border: '0.5px solid var(--ol-line-strong)',
+          boxShadow: 'var(--ol-shadow-lg)',
+          padding: 18,
+        }}
+      >
         <div style={{ fontSize: 15, fontWeight: 650, marginBottom: 8 }}>
-          {t(`settings.about.updateDialog.${switchingToStable ? 'stableChannelSwitch' : status}.title`)}
+          {t(
+            `settings.about.updateDialog.${switchingToStable ? 'stableChannelSwitch' : status}.title`,
+          )}
         </div>
-        <div style={{ fontSize: 12, color: 'var(--ol-ink-3)', lineHeight: 1.6, marginBottom: 14, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+        <div
+          style={{
+            fontSize: 12,
+            color: 'var(--ol-ink-3)',
+            lineHeight: 1.6,
+            marginBottom: 14,
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-word',
+          }}
+        >
           {androidInstalled
-            ? t('settings.about.updateDialog.androidInstalled.desc', { version, defaultValue: '系统安装器已打开，请按提示完成安装。安装后重新打开 OpenLess 即可使用 {{version}}。' })
+            ? t('settings.about.updateDialog.androidInstalled.desc', {
+                version,
+                defaultValue:
+                  '系统安装器已打开，请按提示完成安装。安装后重新打开 OpenLess 即可使用 {{version}}。',
+              })
             : installError
-              ? t('settings.about.updateDialog.installError.desc', { error: errorMessage || t('settings.about.updateError') })
+              ? t('settings.about.updateDialog.installError.desc', {
+                  error: errorMessage || t('settings.about.updateError'),
+                })
               : switchingToStable
-                ? t('settings.about.updateDialog.stableChannelSwitch.desc', { currentVersion, version })
+                ? t('settings.about.updateDialog.stableChannelSwitch.desc', {
+                    currentVersion,
+                    version,
+                  })
                 : t(`settings.about.updateDialog.${status}.desc`, { version })}
         </div>
         {(downloading || installing || status === 'downloaded') && (
           <div style={{ marginBottom: 14 }}>
-            <div style={{ height: 8, borderRadius: 999, background: 'var(--ol-surface-2)', overflow: 'hidden', border: '0.5px solid var(--ol-line)' }}>
-              <div style={{ height: '100%', width: `${status === 'downloaded' || installing ? 100 : progress ?? 8}%`, background: 'var(--ol-blue)', transition: 'width 0.18s var(--ol-motion-soft)' }} />
+            <div
+              style={{
+                height: 8,
+                borderRadius: 999,
+                background: 'var(--ol-surface-2)',
+                overflow: 'hidden',
+                border: '0.5px solid var(--ol-line)',
+              }}
+            >
+              <div
+                style={{
+                  height: '100%',
+                  width: `${status === 'downloaded' || installing ? 100 : (progress ?? 8)}%`,
+                  background: 'var(--ol-blue)',
+                  transition: 'width 0.18s var(--ol-motion-soft)',
+                }}
+              />
             </div>
             <div style={{ marginTop: 6, fontSize: 11, color: 'var(--ol-ink-4)' }}>
               {installing
                 ? t('settings.about.updateDialog.installingLabel')
                 : progress === null
-                  ? t('settings.about.updateDialog.progressUnknown', { downloaded: formatBytes(downloaded) })
-                  : t('settings.about.updateDialog.progress', { progress, downloaded: formatBytes(downloaded), total: formatBytes(contentLength ?? 0) })}
+                  ? t('settings.about.updateDialog.progressUnknown', {
+                      downloaded: formatBytes(downloaded),
+                    })
+                  : t('settings.about.updateDialog.progress', {
+                      progress,
+                      downloaded: formatBytes(downloaded),
+                      total: formatBytes(contentLength ?? 0),
+                    })}
             </div>
           </div>
         )}
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-          {status === 'available' && <Btn size="sm" onClick={onClose}>{t('common.cancel')}</Btn>}
-          {status === 'available' && <Btn variant="blue" size="sm" onClick={onInstall}>{t('settings.about.updateDialog.install')}</Btn>}
-          {(downloading || installing) && <Btn size="sm" disabled>{installing ? t('settings.about.updateDialog.installingLabel') : t('settings.about.updateDialog.downloadingLabel')}</Btn>}
-          {status === 'downloaded' && <Btn size="sm" onClick={onClose}>{t('settings.about.updateDialog.later')}</Btn>}
-          {status === 'downloaded' && !androidInstalled && <Btn variant="blue" size="sm" onClick={restartApp}>{t('settings.about.updateDialog.restartNow')}</Btn>}
-          {installError && <Btn size="sm" onClick={onClose}>{t('common.cancel')}</Btn>}
-          {installError && <Btn variant="blue" size="sm" onClick={() => void openExternal(RELEASE_DOWNLOAD_URL)}>{t('settings.about.updateDialog.manualDownload')}</Btn>}
+          {status === 'available' && (
+            <Btn size="sm" onClick={onClose}>
+              {t('common.cancel')}
+            </Btn>
+          )}
+          {status === 'available' && (
+            <Btn variant="blue" size="sm" onClick={onInstall}>
+              {t('settings.about.updateDialog.install')}
+            </Btn>
+          )}
+          {(downloading || installing) && (
+            <Btn size="sm" disabled>
+              {installing
+                ? t('settings.about.updateDialog.installingLabel')
+                : t('settings.about.updateDialog.downloadingLabel')}
+            </Btn>
+          )}
+          {status === 'downloaded' && (
+            <Btn size="sm" onClick={onClose}>
+              {t('settings.about.updateDialog.later')}
+            </Btn>
+          )}
+          {status === 'downloaded' && !androidInstalled && (
+            <Btn variant="blue" size="sm" onClick={restartApp}>
+              {t('settings.about.updateDialog.restartNow')}
+            </Btn>
+          )}
+          {installError && (
+            <Btn size="sm" onClick={onClose}>
+              {t('common.cancel')}
+            </Btn>
+          )}
+          {installError && (
+            <Btn variant="blue" size="sm" onClick={() => void openExternal(RELEASE_DOWNLOAD_URL)}>
+              {t('settings.about.updateDialog.manualDownload')}
+            </Btn>
+          )}
         </div>
       </div>
     </div>,

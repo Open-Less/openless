@@ -18,18 +18,12 @@ OpenLessAsyncEditState::~OpenLessAsyncEditState() {
   }
 }
 
-bool OpenLessAsyncEditState::IsValid() const {
-  return event != nullptr;
-}
+bool OpenLessAsyncEditState::IsValid() const { return event != nullptr; }
 
-OpenLessEditSession::OpenLessEditSession(
-    ITfContext* context,
-    std::wstring text,
-    std::shared_ptr<OpenLessAsyncEditState> async_state,
-    std::shared_ptr<std::atomic<bool>> cancellation)
-    : context_(context),
-      text_(std::move(text)),
-      async_state_(std::move(async_state)),
+OpenLessEditSession::OpenLessEditSession(ITfContext *context, std::wstring text,
+                                         std::shared_ptr<OpenLessAsyncEditState> async_state,
+                                         std::shared_ptr<std::atomic<bool>> cancellation)
+    : context_(context), text_(std::move(text)), async_state_(std::move(async_state)),
       cancellation_(std::move(cancellation)) {
   InterlockedIncrement(&g_object_count);
   if (context_ != nullptr) {
@@ -45,14 +39,14 @@ OpenLessEditSession::~OpenLessEditSession() {
   InterlockedDecrement(&g_object_count);
 }
 
-STDMETHODIMP OpenLessEditSession::QueryInterface(REFIID iid, void** object) {
+STDMETHODIMP OpenLessEditSession::QueryInterface(REFIID iid, void **object) {
   if (object == nullptr) {
     return E_POINTER;
   }
   *object = nullptr;
 
   if (iid == IID_IUnknown || iid == IID_ITfEditSession) {
-    *object = static_cast<ITfEditSession*>(this);
+    *object = static_cast<ITfEditSession *>(this);
     AddRef();
     return S_OK;
   }
@@ -73,9 +67,8 @@ STDMETHODIMP_(ULONG) OpenLessEditSession::Release() {
 }
 
 STDMETHODIMP OpenLessEditSession::DoEditSession(TfEditCookie edit_cookie) {
-  const HRESULT hr = cancellation_ && cancellation_->load()
-                         ? HRESULT_FROM_WIN32(ERROR_CANCELLED)
-                         : InsertText(edit_cookie);
+  const HRESULT hr = cancellation_ && cancellation_->load() ? HRESULT_FROM_WIN32(ERROR_CANCELLED)
+                                                            : InsertText(edit_cookie);
   if (async_state_) {
     async_state_->result = hr;
     if (async_state_->event != nullptr) {
@@ -93,10 +86,9 @@ HRESULT OpenLessEditSession::InsertText(TfEditCookie edit_cookie) {
     return HRESULT_FROM_WIN32(ERROR_CANCELLED);
   }
 
-  ITfInsertAtSelection* insert_at_selection = nullptr;
+  ITfInsertAtSelection *insert_at_selection = nullptr;
   HRESULT hr = context_->QueryInterface(IID_ITfInsertAtSelection,
-                                        reinterpret_cast<void**>(
-                                            &insert_at_selection));
+                                        reinterpret_cast<void **>(&insert_at_selection));
   if (FAILED(hr)) {
     return hr;
   }
@@ -108,14 +100,12 @@ HRESULT OpenLessEditSession::InsertText(TfEditCookie edit_cookie) {
 
   // Commit in a single call. Some Chromium-backed text stores surface a
   // full-text QUERYONLY preflight as an edit and then duplicate the real commit.
-  ITfRange* committed_range = nullptr;
+  ITfRange *committed_range = nullptr;
   hr = insert_at_selection->InsertTextAtSelection(
-      edit_cookie, 0, text_.c_str(), static_cast<LONG>(text_.size()),
-      &committed_range);
+      edit_cookie, 0, text_.c_str(), static_cast<LONG>(text_.size()), &committed_range);
   if (committed_range != nullptr) {
     if (SUCCEEDED(hr)) {
-      const HRESULT collapse_hr =
-          committed_range->Collapse(edit_cookie, TF_ANCHOR_END);
+      const HRESULT collapse_hr = committed_range->Collapse(edit_cookie, TF_ANCHOR_END);
       if (SUCCEEDED(collapse_hr)) {
         TF_SELECTION selection = {};
         selection.range = committed_range;

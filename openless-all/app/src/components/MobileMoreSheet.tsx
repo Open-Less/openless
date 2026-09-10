@@ -7,6 +7,7 @@ const MORE_TABS: Array<{ id: AppTab; icon: string }> = [
   { id: 'vocab', icon: 'vocab' },
   { id: 'translation', icon: 'translate' },
   { id: 'selectionAsk', icon: 'selectionAsk' },
+  { id: 'corrections', icon: 'filter' },
 ];
 
 interface MobileMoreSheetProps {
@@ -42,7 +43,7 @@ export function MobileMoreSheet({
       }}
     >
       <div
-        onClick={e => e.stopPropagation()}
+        onClick={(e) => e.stopPropagation()}
         style={{
           background: 'var(--ol-surface)',
           borderTopLeftRadius: 16,
@@ -53,8 +54,17 @@ export function MobileMoreSheet({
           animation: 'ol-mobile-sheet-up 0.26s var(--ol-motion-spring)',
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '4px 8px 12px' }}>
-          <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--ol-ink)' }}>{t('nav.more')}</span>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '4px 8px 12px',
+          }}
+        >
+          <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--ol-ink)' }}>
+            {t('nav.more')}
+          </span>
           <button
             type="button"
             onClick={onClose}
@@ -65,7 +75,7 @@ export function MobileMoreSheet({
           </button>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-          {MORE_TABS.map(item => {
+          {MORE_TABS.map((item) => {
             const active = currentTab === item.id;
             return (
               <button

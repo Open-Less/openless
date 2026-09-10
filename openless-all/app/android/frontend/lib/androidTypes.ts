@@ -21,12 +21,7 @@ export interface AndroidAccessibilityStatus {
 }
 
 export type AndroidShizukuState =
-  | 'notInstalled'
-  | 'notRunning'
-  | 'notAuthorized'
-  | 'authorized'
-  | 'binderDead'
-  | 'notAndroid';
+  'notInstalled' | 'notRunning' | 'notAuthorized' | 'authorized' | 'binderDead' | 'notAndroid';
 
 export interface AndroidAccessibilityDiagnosis {
   registered: boolean;

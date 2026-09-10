@@ -1,7 +1,8 @@
 //! Shared style-pack repository and lifecycle rules.
 
+use base64::Engine;
 use std::fs;
-use std::io::{Cursor, Write};
+use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -10,7 +11,8 @@ use crate::persistence::{atomic_write, persistence_error, read_or_default};
 use crate::shared_types::UserPreferences;
 use crate::style_pack_archive::{
     cleanup_style_pack_asset_dir, persist_style_pack_icon, read_style_pack_archive,
-    read_style_pack_archive_bytes, ParsedStylePackArchive, StylePackArchiveManifest,
+    read_style_pack_archive_bytes, validate_icon_content, ParsedStylePackArchive,
+    StylePackArchiveManifest, MAX_ICON_BYTES,
 };
 use crate::style_packs::{
     builtin_style_pack_for_mode, builtin_style_pack_id, builtin_style_packs,
@@ -93,6 +95,20 @@ impl StylePackStore {
         Ok(self.lock()?.clone())
     }
 
+    pub(crate) fn cloud_sync_access(
+        &self,
+    ) -> Result<(std::sync::MutexGuard<'_, Vec<StylePack>>, &Path, &Path), BackendError> {
+        let path = self
+            .path
+            .as_deref()
+            .ok_or_else(|| persistence_error("style pack store has no persistent path"))?;
+        let assets = self
+            .asset_root
+            .as_deref()
+            .ok_or_else(|| persistence_error("style pack asset root unavailable"))?;
+        Ok((self.lock()?, path, assets))
+    }
+
     pub fn list_with_active(&self, active_id: &str) -> Result<Vec<StylePack>, BackendError> {
         let mut packs = self.list()?;
         for pack in &mut packs {
@@ -169,6 +185,148 @@ impl StylePackStore {
         let updated = slot.clone();
         self.persist_locked(&packs)?;
         Ok(updated)
+    }
+
+    /// Save a PNG icon in this pack's owned asset directory, or clear it with `None`.
+    ///
+    /// Metadata is committed before the old file is removed. A failed metadata
+    /// write leaves the previous image and in-memory pack unchanged.
+    ///
+    /// # Errors
+    /// Returns an error for an unknown/invalid pack ID, an invalid PNG, an image
+    /// over 64 KiB, an unavailable asset directory, or a failed filesystem write.
+    pub fn update_icon(&self, id: &str, png: Option<&[u8]>) -> Result<StylePack, BackendError> {
+        if id.is_empty()
+            || id == "."
+            || id == ".."
+            || !id
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || b"._-".contains(&c))
+        {
+            return Err(invalid_icon("invalid style pack id"));
+        }
+        let mut packs = self.lock()?;
+        let index = packs
+            .iter()
+            .position(|pack| pack.id == id)
+            .ok_or_else(|| not_found(id))?;
+        let old_path = packs[index].icon_path.clone();
+        let new_path = if let Some(bytes) = png {
+            if bytes.len() > MAX_ICON_BYTES {
+                return Err(invalid_icon("style pack icon exceeds 64 KiB"));
+            }
+            validate_icon_content("png", bytes).map_err(archive_error)?;
+            let root = self
+                .asset_root
+                .as_ref()
+                .filter(|root| !root.as_os_str().is_empty())
+                .ok_or_else(|| invalid_icon("style pack asset root unavailable"))?;
+            fs::create_dir_all(root)
+                .map_err(|_| persistence_error("create style pack asset root"))?;
+            let root = root
+                .canonicalize()
+                .map_err(|_| persistence_error("resolve style pack asset root"))?;
+            let directory = root.join(id);
+            fs::create_dir_all(&directory)
+                .map_err(|_| persistence_error("create style pack icon directory"))?;
+            let directory = directory
+                .canonicalize()
+                .map_err(|_| persistence_error("resolve style pack icon directory"))?;
+            if !directory.starts_with(&root) {
+                return Err(invalid_icon(
+                    "style pack icon directory is outside its asset root",
+                ));
+            }
+            // A new filename keeps the previous image valid until metadata commits.
+            let target = directory.join(format!("icon-{}.png", uuid::Uuid::new_v4().simple()));
+            atomic_write(&target, bytes)?;
+            Some(target)
+        } else {
+            None
+        };
+        let mut next = packs.clone();
+        next[index].icon_path = new_path
+            .as_ref()
+            .map(|path| path.to_string_lossy().into_owned());
+        next[index].updated_at = Some(chrono::Utc::now().to_rfc3339());
+        if let Err(error) = self.persist_locked(&next) {
+            if let Some(path) = new_path {
+                let _ = fs::remove_file(path);
+            }
+            return Err(error);
+        }
+        let saved = next[index].clone();
+        *packs = next;
+        if let (Some(root), Some(old)) = (&self.asset_root, old_path) {
+            let old = Path::new(&old);
+            if let (Ok(owned), Some(parent)) = (root.join(id).canonicalize(), old.parent()) {
+                if parent.canonicalize().ok().as_ref() == Some(&owned) {
+                    let _ = fs::remove_file(old);
+                }
+            }
+        }
+        Ok(saved)
+    }
+
+    /// Read a pack icon as a PNG/JPEG/WebP data URL without exposing filesystem access.
+    ///
+    /// Missing icons return `None`. Reads are limited to 64 KiB and must resolve
+    /// inside the repository's asset directory.
+    ///
+    /// # Errors
+    /// Returns an error for an unknown pack, an invalid image or path, or a read failure.
+    pub fn icon_data_url(&self, id: &str) -> Result<Option<String>, BackendError> {
+        let pack = self.get(id)?;
+        self.icon_data_url_for_pack(&pack)
+    }
+
+    pub(crate) fn icon_data_url_for_pack(
+        &self,
+        pack: &StylePack,
+    ) -> Result<Option<String>, BackendError> {
+        let Some(path) = &pack.icon_path else {
+            return Ok(None);
+        };
+        let root = self
+            .asset_root
+            .as_ref()
+            .ok_or_else(|| invalid_icon("style pack asset root unavailable"))?;
+        let root = root
+            .canonicalize()
+            .map_err(|_| persistence_error("resolve style pack asset root"))?;
+        let source = match Path::new(&path).canonicalize() {
+            Ok(path) => path,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(_) => return Err(persistence_error("resolve style pack icon")),
+        };
+        if !source.starts_with(&root) || !source.is_file() {
+            return Err(invalid_icon("style pack icon is outside its asset root"));
+        }
+        let extension = source
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let mime = match extension.as_str() {
+            "png" => "image/png",
+            "jpg" | "jpeg" => "image/jpeg",
+            "webp" => "image/webp",
+            _ => return Err(invalid_icon("unsupported style pack icon type")),
+        };
+        let mut bytes = Vec::new();
+        fs::File::open(&source)
+            .map_err(|_| persistence_error("open style pack icon"))?
+            .take((MAX_ICON_BYTES + 1) as u64)
+            .read_to_end(&mut bytes)
+            .map_err(|_| persistence_error("read style pack icon"))?;
+        if bytes.len() > MAX_ICON_BYTES {
+            return Err(invalid_icon("style pack icon exceeds 64 KiB"));
+        }
+        validate_icon_content(&extension, &bytes).map_err(archive_error)?;
+        Ok(Some(format!(
+            "data:{mime};base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(bytes)
+        )))
     }
 
     pub fn set_origin(
@@ -412,6 +570,12 @@ impl StylePackStore {
             None => Ok(()),
         }
     }
+}
+
+pub(crate) fn normalize_cloud_style_packs(packs: &mut Vec<StylePack>) {
+    reconcile_builtin_packs(packs);
+    ensure_at_least_one_enabled(packs);
+    sort_packs(packs);
 }
 
 pub fn migrate_style_packs_from_preferences(
@@ -722,6 +886,10 @@ fn required_text(value: &str, field: &str) -> Result<String, BackendError> {
     } else {
         Ok(value.to_string())
     }
+}
+
+fn invalid_icon(message: &str) -> BackendError {
+    BackendError::new(BackendErrorCode::InvalidArgument, message)
 }
 
 fn unique_imported_id(packs: &[StylePack], requested: &str) -> String {

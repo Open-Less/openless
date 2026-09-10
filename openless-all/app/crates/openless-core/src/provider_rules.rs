@@ -345,7 +345,9 @@ pub struct CredentialConfiguration {
 pub fn volcengine_configured(configuration: &CredentialConfiguration) -> bool {
     use crate::asr::volcengine::VolcengineAuthMode;
 
-    let credentials_ready = match configuration
+    // resource id 不是配置门槛：留空时运行时回落默认资源
+    //（见 VolcengineCredentials::resolve_resource_id），认证只取决于密钥本身。
+    match configuration
         .volcengine_auth_mode
         .as_deref()
         .map(VolcengineAuthMode::parse)
@@ -355,8 +357,7 @@ pub fn volcengine_configured(configuration: &CredentialConfiguration) -> bool {
             configuration.volcengine_app_key && configuration.volcengine_access_key
         }
         VolcengineAuthMode::ApiKey => configuration.volcengine_api_key,
-    };
-    credentials_ready && configuration.volcengine_resource_id
+    }
 }
 
 pub fn asr_configured(
@@ -919,24 +920,7 @@ pub fn whisper_supports_verbose_json(provider_id: &str, advanced: AdvancedAsrCon
 }
 
 pub fn zenmux_language_code(native_name: &str) -> Option<String> {
-    let code = match native_name.trim() {
-        "简体中文" | "繁体中文" => "zh",
-        "English" => "en",
-        "日本語" => "ja",
-        "한국어" => "ko",
-        "Français" => "fr",
-        "Deutsch" => "de",
-        "Español" => "es",
-        "Italiano" => "it",
-        "Português" => "pt",
-        "Русский" => "ru",
-        "العربية" => "ar",
-        "Tiếng Việt" => "vi",
-        "ไทย" => "th",
-        "हिन्दी" => "hi",
-        _ => return None,
-    };
-    Some(code.to_string())
+    crate::language_catalog::asr_language_code(native_name)
 }
 
 pub fn volc_resource_history_label(resource_id: &str) -> Option<String> {
@@ -1069,6 +1053,9 @@ mod tests {
         configuration.volcengine_auth_mode = Some("api_key".into());
         configuration.volcengine_api_key = true;
         configuration.volcengine_resource_id = true;
+        assert!(volcengine_configured(&configuration));
+        // resource id 留空（运行时回落默认资源）不构成「未配置」。
+        configuration.volcengine_resource_id = false;
         assert!(volcengine_configured(&configuration));
         assert!(!asr_configured(
             "foundry-local-whisper",

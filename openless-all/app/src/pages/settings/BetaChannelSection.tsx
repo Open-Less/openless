@@ -4,7 +4,12 @@
 
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { getPlatformCapabilities, getUpdateChannel, setUpdateChannel, type UpdateChannel } from '../../lib/ipc';
+import {
+  getPlatformCapabilities,
+  getUpdateChannel,
+  setUpdateChannel,
+  type UpdateChannel,
+} from '../../lib/ipc';
 import type { PlatformCapabilities } from '../../lib/types';
 import { Card } from '../_atoms';
 import { SectionTitle, SettingRow, Toggle } from './shared';
@@ -23,9 +28,15 @@ export function BetaChannelSection() {
   useEffect(() => {
     let cancelled = false;
     void getUpdateChannel()
-      .then(c => { if (!cancelled) setChannel(c); })
-      .catch(() => { /* fall back to stable already in initial state */ });
-    return () => { cancelled = true; };
+      .then((c) => {
+        if (!cancelled) setChannel(c);
+      })
+      .catch(() => {
+        /* fall back to stable already in initial state */
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const onToggle = async (next: boolean) => {

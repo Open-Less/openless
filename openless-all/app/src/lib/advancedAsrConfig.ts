@@ -5,36 +5,34 @@
 // enable_itn 默认开启）。
 
 export interface AdvancedAsrConfig {
-  verboseJson: boolean
-  chunkDurationMs: number | null
-  enableItn: boolean
+  verboseJson: boolean;
+  chunkDurationMs: number | null;
+  enableItn: boolean;
 }
 
 export function parseAdvancedAsrConfig(raw: string | null): AdvancedAsrConfig {
   if (!raw) {
-    return { verboseJson: false, chunkDurationMs: null, enableItn: true }
+    return { verboseJson: false, chunkDurationMs: null, enableItn: true };
   }
-  let value: unknown
+  let value: unknown;
   try {
-    value = JSON.parse(raw)
+    value = JSON.parse(raw);
   } catch {
-    return { verboseJson: false, chunkDurationMs: null, enableItn: true }
+    return { verboseJson: false, chunkDurationMs: null, enableItn: true };
   }
   if (typeof value !== 'object' || value === null) {
-    return { verboseJson: false, chunkDurationMs: null, enableItn: true }
+    return { verboseJson: false, chunkDurationMs: null, enableItn: true };
   }
-  const record = value as Record<string, unknown>
-  const rawMs = record.chunkDurationMs
+  const record = value as Record<string, unknown>;
+  const rawMs = record.chunkDurationMs;
   const chunkDurationMs =
-    typeof rawMs === 'number' && Number.isFinite(rawMs) && rawMs > 0
-      ? Math.floor(rawMs)
-      : null
+    typeof rawMs === 'number' && Number.isFinite(rawMs) && rawMs > 0 ? Math.floor(rawMs) : null;
   return {
     verboseJson: record.verboseJson === true,
     chunkDurationMs,
     // 缺失 / 非布尔回落默认开启（与后端 parse_advanced_asr_config 一致）。
     enableItn: record.enableItn !== false,
-  }
+  };
 }
 
 export function serializeAdvancedAsrConfig(config: AdvancedAsrConfig): string {
@@ -42,5 +40,5 @@ export function serializeAdvancedAsrConfig(config: AdvancedAsrConfig): string {
     verboseJson: config.verboseJson,
     chunkDurationMs: config.chunkDurationMs,
     enableItn: config.enableItn,
-  })
+  });
 }

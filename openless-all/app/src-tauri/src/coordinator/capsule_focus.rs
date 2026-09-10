@@ -408,9 +408,6 @@ fn emit_capsule_payload_locked(inner: &Arc<Inner>, payload: CapsulePayload) -> u
     let backend_for_main = Arc::clone(&inner.backend);
     // 入场帧要在 window.show 之后、闭包内部把 state 回发给前端，需要 payload 的独立副本
     // move 进闭包；非入场帧走闭包外的即时同步 emit（下方），这里就是 None。
-    // 注意：入场帧的 payload 在闭包同步 capsule_style 原子之前克隆，最多带一帧旧样式
-    //（设置里刚切换后的首次录音，第 2 帧 ~33ms 即纠正）。这是刻意取舍——不要在音频
-    // 线程改回直接读 prefs。前端第 1 帧处于 capsule-in 动画期间（380ms），无感知。
     let payload_for_deferred_emit = if defer_capsule_emit {
         Some(payload.clone())
     } else {
@@ -423,17 +420,17 @@ fn emit_capsule_payload_locked(inner: &Arc<Inner>, payload: CapsulePayload) -> u
         }
         let preferences = backend_for_main.get_preferences();
         let show_capsule = payload_for_window.selection_polish || preferences.show_capsule;
-        let classic_style = matches!(preferences.capsule_style, CapsuleStyle::Classic);
         capsule.apply_capsule_payload(
             &payload_for_window,
             show_capsule,
-            classic_style,
+            preferences.capsule_style,
             payload_for_deferred_emit.is_some(),
         );
         // 入场帧：窗口刚 show（或本次用户关了胶囊显示走了 hide 分支），此刻再把 state 发给
         // capsule 前端 —— 前端起播 capsule-in 时窗口已可见，入场动画从头完整播放。
-        if let Some(payload) = payload_for_deferred_emit.as_ref() {
-            host_for_main.emit_capsule_state_to_capsule(payload);
+        if let Some(mut payload) = payload_for_deferred_emit {
+            payload.capsule_style = preferences.capsule_style;
+            host_for_main.emit_capsule_state_to_capsule(&payload);
         }
     });
 

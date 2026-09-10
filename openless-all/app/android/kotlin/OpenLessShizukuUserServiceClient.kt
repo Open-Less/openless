@@ -5,15 +5,15 @@ import android.content.Context
 import android.content.ServiceConnection
 import android.os.IBinder
 import android.util.Log
-import rikka.shizuku.Shizuku
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.locks.ReentrantLock
+import rikka.shizuku.Shizuku
 
 /**
- * Binds the Shizuku UserService for synchronous privileged operations.
- * Recovery calls are serialized; unbind removes the UserService after each operation.
+ * Binds the Shizuku UserService for synchronous privileged operations. Recovery calls are
+ * serialized; unbind removes the UserService after each operation.
  */
 internal object OpenLessShizukuUserServiceClient {
     private const val TAG = "OpenLessShizukuClient"
@@ -24,8 +24,7 @@ internal object OpenLessShizukuUserServiceClient {
 
     private val recoveryLock = ReentrantLock()
 
-    @Volatile
-    private var recoveryInProgress = false
+    @Volatile private var recoveryInProgress = false
 
     fun <T> withService(context: Context, block: (IOpenLessShizukuUserService) -> T): T? {
         return bindUserService(
@@ -61,25 +60,28 @@ internal object OpenLessShizukuUserServiceClient {
         if (!Shizuku.pingBinder()) {
             return null
         }
-        val component = ComponentName(context.packageName, OpenLessShizukuUserService::class.java.name)
-        val args = Shizuku.UserServiceArgs(component)
-            .daemon(daemon)
-            .processNameSuffix(processNameSuffix)
-            .version(SERVICE_VERSION)
-            .tag(tag)
+        val component =
+            ComponentName(context.packageName, OpenLessShizukuUserService::class.java.name)
+        val args =
+            Shizuku.UserServiceArgs(component)
+                .daemon(daemon)
+                .processNameSuffix(processNameSuffix)
+                .version(SERVICE_VERSION)
+                .tag(tag)
 
         val latch = CountDownLatch(1)
         val binderRef = AtomicReference<IOpenLessShizukuUserService?>(null)
-        val connection = object : ServiceConnection {
-            override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
-                binderRef.set(IOpenLessShizukuUserService.Stub.asInterface(binder))
-                latch.countDown()
-            }
+        val connection =
+            object : ServiceConnection {
+                override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
+                    binderRef.set(IOpenLessShizukuUserService.Stub.asInterface(binder))
+                    latch.countDown()
+                }
 
-            override fun onServiceDisconnected(name: ComponentName?) {
-                binderRef.set(null)
+                override fun onServiceDisconnected(name: ComponentName?) {
+                    binderRef.set(null)
+                }
             }
-        }
 
         return try {
             Shizuku.bindUserService(args, connection)

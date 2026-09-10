@@ -23,17 +23,19 @@ export function MarketplaceSection() {
   useEffect(() => {
     let cancelled = false;
     void marketplaceAuthStatus()
-      .then(async status => {
+      .then(async (status) => {
         if (cancelled) return;
         setSignedIn(status.signedIn);
         if (!status.signedIn && prefs?.marketplaceDevLogin.trim()) {
-          await savePrefs(current => ({ ...current, marketplaceDevLogin: '' }));
+          await savePrefs((current) => ({ ...current, marketplaceDevLogin: '' }));
         }
       })
       .catch(() => {
         if (!cancelled) setSignedIn(false);
       });
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [prefs?.marketplaceDevLogin, savePrefs]);
 
   if (!prefs) {
@@ -51,7 +53,7 @@ export function MarketplaceSection() {
       try {
         await marketplaceLogout();
         setSignedIn(false);
-        await savePrefs(current => ({ ...current, marketplaceDevLogin: '' }));
+        await savePrefs((current) => ({ ...current, marketplaceDevLogin: '' }));
       } catch (error) {
         console.warn('[marketplace] sign out failed', error);
       }
@@ -123,10 +125,11 @@ export function MarketplaceSection() {
       {showLogin && (
         <GithubLoginModal
           onClose={() => setShowLogin(false)}
-          onSuccess={nextLogin => {
+          onSuccess={(nextLogin) => {
             setSignedIn(true);
-            void savePrefs(current => ({ ...current, marketplaceDevLogin: nextLogin }))
-              .catch(e => console.warn('[marketplace] save login to prefs failed', e));
+            void savePrefs((current) => ({ ...current, marketplaceDevLogin: nextLogin })).catch(
+              (e) => console.warn('[marketplace] save login to prefs failed', e),
+            );
           }}
         />
       )}

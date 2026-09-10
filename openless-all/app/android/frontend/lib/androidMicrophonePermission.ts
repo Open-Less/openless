@@ -99,6 +99,6 @@ export async function requestAndroidMicrophoneAccess(): Promise<AppPermissionSta
     }
     return 'notDetermined';
   } finally {
-    stream?.getTracks().forEach(track => track.stop());
+    stream?.getTracks().forEach((track) => track.stop());
   }
 }

@@ -30,15 +30,15 @@
     "check:windows-ui-config": "node scripts/windows-ui-config.test.mjs",
     "check:pin-persistence-security": "node scripts/pin-persistence-security-contract.test.mjs",
     "check:android-updater-pubkey": "node scripts/check-android-updater-pubkey.mjs",
-    "check:android-shizuku-scaffolding": "node scripts/merge-android-shizuku-manifest.test.mjs && node scripts/patch-android-shizuku-deps.test.mjs"
+    "check:android-shizuku-scaffolding": "node scripts/merge-android-shizuku-manifest.test.mjs && node scripts/patch-android-shizuku-deps.test.mjs",
+    "format": "prettier --write \"src/**/*.{ts,tsx,css}\" \"android/frontend/**/*.{ts,tsx}\" \"scripts/**/*.{js,mjs,sh}\" \"*.{ts,json,html,sh}\" \"src-tauri/src/remote_server/assets/*.{js,css,html}\"",
+    "format:check": "prettier --check \"src/**/*.{ts,tsx,css}\" \"android/frontend/**/*.{ts,tsx}\" \"scripts/**/*.{js,mjs,sh}\" \"*.{ts,json,html,sh}\" \"src-tauri/src/remote_server/assets/*.{js,css,html}\""
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",
-    "@formkit/auto-animate": "^0.9.0",
     "@shadcn/react": "^0.2.0",
     "@tailwindcss/vite": "^4.3.2",
     "@tauri-apps/api": "^2.1.1",
-    "@tauri-apps/plugin-autostart": "^2.5.1",
     "@tauri-apps/plugin-dialog": "^2.7.2",
     "@tauri-apps/plugin-shell": "^2.3.5",
     "@tauri-apps/plugin-updater": "^2.10.1",
@@ -61,6 +61,8 @@
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.3",
+    "prettier": "3.9.6",
+    "prettier-plugin-sh": "0.19.0",
     "shadcn": "^4.13.0",
     "tsx": "4.23.1",
     "tw-animate-css": "^1.4.0",

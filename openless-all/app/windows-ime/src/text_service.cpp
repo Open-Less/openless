@@ -30,9 +30,7 @@ struct SubmitTextRequest {
     }
   }
 
-  bool IsValid() const {
-    return completion_event != nullptr;
-  }
+  bool IsValid() const { return completion_event != nullptr; }
 
   std::wstring session_id;
   std::wstring text;
@@ -46,10 +44,8 @@ struct SubmitTextRequest {
 
 using PostedSubmitRequest = std::shared_ptr<SubmitTextRequest>;
 
-HRESULT WaitForCompletionOrCancellation(
-    HANDLE completion_event,
-    HANDLE cancellation_event,
-    const std::shared_ptr<std::atomic<bool>>& cancellation) {
+HRESULT WaitForCompletionOrCancellation(HANDLE completion_event, HANDLE cancellation_event,
+                                        const std::shared_ptr<std::atomic<bool>> &cancellation) {
   if (completion_event == nullptr) {
     return HRESULT_FROM_WIN32(ERROR_INVALID_HANDLE);
   }
@@ -61,8 +57,8 @@ HRESULT WaitForCompletionOrCancellation(
 
   const HANDLE wait_handles[2] = {completion_event, cancellation_event};
   const DWORD wait_count = cancellation_event != nullptr ? 2 : 1;
-  const DWORD wait_result = WaitForMultipleObjects(
-      wait_count, wait_handles, FALSE, kSubmitTextTimeoutMs);
+  const DWORD wait_result =
+      WaitForMultipleObjects(wait_count, wait_handles, FALSE, kSubmitTextTimeoutMs);
   if (wait_result == WAIT_OBJECT_0) {
     return S_OK;
   }
@@ -78,32 +74,29 @@ HRESULT WaitForCompletionOrCancellation(
   return HRESULT_FROM_WIN32(error != ERROR_SUCCESS ? error : ERROR_GEN_FAILURE);
 }
 
-HRESULT WaitForAsyncEditCompletion(
-    const std::shared_ptr<OpenLessAsyncEditState>& completion,
-    HANDLE cancellation_event,
-    const std::shared_ptr<std::atomic<bool>>& cancellation) {
+HRESULT WaitForAsyncEditCompletion(const std::shared_ptr<OpenLessAsyncEditState> &completion,
+                                   HANDLE cancellation_event,
+                                   const std::shared_ptr<std::atomic<bool>> &cancellation) {
   if (!completion || !completion->IsValid()) {
     return HRESULT_FROM_WIN32(completion && completion->create_error != ERROR_SUCCESS
                                   ? completion->create_error
                                   : ERROR_INVALID_HANDLE);
   }
-  const HRESULT wait_result = WaitForCompletionOrCancellation(
-      completion->event, cancellation_event, cancellation);
+  const HRESULT wait_result =
+      WaitForCompletionOrCancellation(completion->event, cancellation_event, cancellation);
   return FAILED(wait_result) ? wait_result : completion->result;
 }
 
-}  // namespace
+} // namespace
 
-OpenLessTextService::OpenLessTextService() {
-  InterlockedIncrement(&g_object_count);
-}
+OpenLessTextService::OpenLessTextService() { InterlockedIncrement(&g_object_count); }
 
 OpenLessTextService::~OpenLessTextService() {
   Deactivate();
   InterlockedDecrement(&g_object_count);
 }
 
-STDMETHODIMP OpenLessTextService::QueryInterface(REFIID iid, void** object) {
+STDMETHODIMP OpenLessTextService::QueryInterface(REFIID iid, void **object) {
   if (object == nullptr) {
     return E_POINTER;
   }
@@ -111,7 +104,7 @@ STDMETHODIMP OpenLessTextService::QueryInterface(REFIID iid, void** object) {
 
   if (iid == IID_IUnknown || iid == IID_ITfTextInputProcessor ||
       iid == IID_ITfTextInputProcessorEx) {
-    *object = static_cast<ITfTextInputProcessorEx*>(this);
+    *object = static_cast<ITfTextInputProcessorEx *>(this);
     AddRef();
     return S_OK;
   }
@@ -131,13 +124,11 @@ STDMETHODIMP_(ULONG) OpenLessTextService::Release() {
   return count;
 }
 
-STDMETHODIMP OpenLessTextService::Activate(ITfThreadMgr* thread_mgr,
-                                           TfClientId client_id) {
+STDMETHODIMP OpenLessTextService::Activate(ITfThreadMgr *thread_mgr, TfClientId client_id) {
   return ActivateEx(thread_mgr, client_id, 0);
 }
 
-STDMETHODIMP OpenLessTextService::ActivateEx(ITfThreadMgr* thread_mgr,
-                                             TfClientId client_id,
+STDMETHODIMP OpenLessTextService::ActivateEx(ITfThreadMgr *thread_mgr, TfClientId client_id,
                                              DWORD flags) {
   UNREFERENCED_PARAMETER(flags);
 
@@ -182,15 +173,13 @@ STDMETHODIMP OpenLessTextService::Deactivate() {
   return S_OK;
 }
 
-HRESULT OpenLessTextService::SubmitTextFromPipe(
-    const std::wstring& session_id,
-    const std::wstring& text,
-    HANDLE cancellation_event) {
+HRESULT OpenLessTextService::SubmitTextFromPipe(const std::wstring &session_id,
+                                                const std::wstring &text,
+                                                HANDLE cancellation_event) {
   try {
     if (GetCurrentThreadId() == owner_thread_id_) {
       auto cancellation = std::make_shared<std::atomic<bool>>(false);
-      return CommitTextOnOwnerThread(session_id, text, nullptr, nullptr,
-                                     cancellation);
+      return CommitTextOnOwnerThread(session_id, text, nullptr, nullptr, cancellation);
     }
 
     if (message_window_ == nullptr) {
@@ -199,14 +188,13 @@ HRESULT OpenLessTextService::SubmitTextFromPipe(
 
     auto request = std::make_shared<SubmitTextRequest>();
     if (!request->IsValid()) {
-      return HRESULT_FROM_WIN32(request->create_error != ERROR_SUCCESS
-                                    ? request->create_error
-                                    : ERROR_INVALID_HANDLE);
+      return HRESULT_FROM_WIN32(request->create_error != ERROR_SUCCESS ? request->create_error
+                                                                       : ERROR_INVALID_HANDLE);
     }
     request->session_id = session_id;
     request->text = text;
 
-    auto* posted_request = new (std::nothrow) PostedSubmitRequest(request);
+    auto *posted_request = new (std::nothrow) PostedSubmitRequest(request);
     if (posted_request == nullptr) {
       return E_OUTOFMEMORY;
     }
@@ -215,37 +203,30 @@ HRESULT OpenLessTextService::SubmitTextFromPipe(
                       reinterpret_cast<LPARAM>(posted_request))) {
       const DWORD error = GetLastError();
       delete posted_request;
-      return HRESULT_FROM_WIN32(error != ERROR_SUCCESS ? error
-                                                       : ERROR_GEN_FAILURE);
+      return HRESULT_FROM_WIN32(error != ERROR_SUCCESS ? error : ERROR_GEN_FAILURE);
     }
 
     const HRESULT wait_result = WaitForCompletionOrCancellation(
-        request->completion_event, cancellation_event,
-        request->cancellation);
+        request->completion_event, cancellation_event, request->cancellation);
     if (FAILED(wait_result)) {
       return wait_result;
     }
 
     if (request->wait_for_async_completion) {
-      return WaitForAsyncEditCompletion(request->async_completion,
-                                        cancellation_event,
+      return WaitForAsyncEditCompletion(request->async_completion, cancellation_event,
                                         request->cancellation);
     }
     return request->result;
-  } catch (const std::bad_alloc&) {
+  } catch (const std::bad_alloc &) {
     return E_OUTOFMEMORY;
   } catch (...) {
     return E_UNEXPECTED;
   }
 }
 
-HRESULT OpenLessTextService::StartIpcServer() {
-  return pipe_server_.Start(this);
-}
+HRESULT OpenLessTextService::StartIpcServer() { return pipe_server_.Start(this); }
 
-void OpenLessTextService::StopIpcServer() {
-  pipe_server_.Stop();
-}
+void OpenLessTextService::StopIpcServer() { pipe_server_.Stop(); }
 
 HRESULT OpenLessTextService::EnsureMessageWindow() {
   if (message_window_ != nullptr) {
@@ -264,9 +245,8 @@ HRESULT OpenLessTextService::EnsureMessageWindow() {
     }
   }
 
-  message_window_ =
-      CreateWindowExW(0, kMessageWindowClassName, L"", 0, 0, 0, 0, 0,
-                      HWND_MESSAGE, nullptr, g_module, this);
+  message_window_ = CreateWindowExW(0, kMessageWindowClassName, L"", 0, 0, 0, 0, 0, HWND_MESSAGE,
+                                    nullptr, g_module, this);
   if (message_window_ == nullptr) {
     return HRESULT_FROM_WIN32(GetLastError());
   }
@@ -277,9 +257,9 @@ HRESULT OpenLessTextService::EnsureMessageWindow() {
 void OpenLessTextService::DestroyMessageWindow() {
   if (message_window_ != nullptr) {
     MSG message = {};
-    while (PeekMessageW(&message, message_window_, kSubmitTextMessage,
-                        kSubmitTextMessage, PM_REMOVE)) {
-      delete reinterpret_cast<PostedSubmitRequest*>(message.lParam);
+    while (PeekMessageW(&message, message_window_, kSubmitTextMessage, kSubmitTextMessage,
+                        PM_REMOVE)) {
+      delete reinterpret_cast<PostedSubmitRequest *>(message.lParam);
     }
     DestroyWindow(message_window_);
     message_window_ = nullptr;
@@ -287,11 +267,9 @@ void OpenLessTextService::DestroyMessageWindow() {
 }
 
 HRESULT OpenLessTextService::CommitTextOnOwnerThread(
-    const std::wstring& session_id,
-    const std::wstring& text,
-    std::shared_ptr<OpenLessAsyncEditState>* async_completion,
-    bool* wait_for_async_completion,
-    const std::shared_ptr<std::atomic<bool>>& cancellation) {
+    const std::wstring &session_id, const std::wstring &text,
+    std::shared_ptr<OpenLessAsyncEditState> *async_completion, bool *wait_for_async_completion,
+    const std::shared_ptr<std::atomic<bool>> &cancellation) {
   UNREFERENCED_PARAMETER(session_id);
 
   if (thread_mgr_ == nullptr || client_id_ == TF_CLIENTID_NULL) {
@@ -301,7 +279,7 @@ HRESULT OpenLessTextService::CommitTextOnOwnerThread(
     return HRESULT_FROM_WIN32(ERROR_CANCELLED);
   }
 
-  ITfDocumentMgr* document_mgr = nullptr;
+  ITfDocumentMgr *document_mgr = nullptr;
   HRESULT hr = thread_mgr_->GetFocus(&document_mgr);
   if (FAILED(hr)) {
     return hr;
@@ -310,7 +288,7 @@ HRESULT OpenLessTextService::CommitTextOnOwnerThread(
     return E_FAIL;
   }
 
-  ITfContext* context = nullptr;
+  ITfContext *context = nullptr;
   hr = document_mgr->GetTop(&context);
   document_mgr->Release();
   document_mgr = nullptr;
@@ -321,22 +299,18 @@ HRESULT OpenLessTextService::CommitTextOnOwnerThread(
     return E_FAIL;
   }
 
-  auto* session =
-      new (std::nothrow) OpenLessEditSession(context, text, nullptr,
-                                            cancellation);
+  auto *session = new (std::nothrow) OpenLessEditSession(context, text, nullptr, cancellation);
   if (session == nullptr) {
     context->Release();
     return E_OUTOFMEMORY;
   }
 
   HRESULT edit_result = S_OK;
-  hr = context->RequestEditSession(client_id_, session,
-                                   TF_ES_SYNC | TF_ES_READWRITE, &edit_result);
+  hr = context->RequestEditSession(client_id_, session, TF_ES_SYNC | TF_ES_READWRITE, &edit_result);
   session->Release();
 
   const bool synchronous_rejected =
-      hr == TF_E_SYNCHRONOUS ||
-      (SUCCEEDED(hr) && edit_result == TF_E_SYNCHRONOUS);
+      hr == TF_E_SYNCHRONOUS || (SUCCEEDED(hr) && edit_result == TF_E_SYNCHRONOUS);
   if (!synchronous_rejected) {
     context->Release();
     if (FAILED(hr)) {
@@ -361,22 +335,19 @@ HRESULT OpenLessTextService::CommitTextOnOwnerThread(
   auto completion = std::make_shared<OpenLessAsyncEditState>();
   if (!completion->IsValid()) {
     context->Release();
-    return HRESULT_FROM_WIN32(completion->create_error != ERROR_SUCCESS
-                                  ? completion->create_error
-                                  : ERROR_INVALID_HANDLE);
+    return HRESULT_FROM_WIN32(completion->create_error != ERROR_SUCCESS ? completion->create_error
+                                                                        : ERROR_INVALID_HANDLE);
   }
 
-  auto* async_session =
-      new (std::nothrow) OpenLessEditSession(context, text, completion,
-                                            cancellation);
+  auto *async_session =
+      new (std::nothrow) OpenLessEditSession(context, text, completion, cancellation);
   if (async_session == nullptr) {
     context->Release();
     return E_OUTOFMEMORY;
   }
 
   HRESULT async_edit_result = S_OK;
-  hr = context->RequestEditSession(client_id_, async_session,
-                                   TF_ES_ASYNC | TF_ES_READWRITE,
+  hr = context->RequestEditSession(client_id_, async_session, TF_ES_ASYNC | TF_ES_READWRITE,
                                    &async_edit_result);
   async_session->Release();
   context->Release();
@@ -393,24 +364,20 @@ HRESULT OpenLessTextService::CommitTextOnOwnerThread(
   return S_OK;
 }
 
-LRESULT CALLBACK OpenLessTextService::MessageWindowProc(HWND window,
-                                                        UINT message,
-                                                        WPARAM wparam,
+LRESULT CALLBACK OpenLessTextService::MessageWindowProc(HWND window, UINT message, WPARAM wparam,
                                                         LPARAM lparam) {
   UNREFERENCED_PARAMETER(wparam);
 
   if (message == WM_NCCREATE) {
-    const auto* create = reinterpret_cast<CREATESTRUCTW*>(lparam);
-    SetWindowLongPtrW(window, GWLP_USERDATA,
-                      reinterpret_cast<LONG_PTR>(create->lpCreateParams));
+    const auto *create = reinterpret_cast<CREATESTRUCTW *>(lparam);
+    SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(create->lpCreateParams));
     return TRUE;
   }
 
-  auto* service = reinterpret_cast<OpenLessTextService*>(
-      GetWindowLongPtrW(window, GWLP_USERDATA));
+  auto *service = reinterpret_cast<OpenLessTextService *>(GetWindowLongPtrW(window, GWLP_USERDATA));
   if (message == kSubmitTextMessage && service != nullptr) {
     std::unique_ptr<PostedSubmitRequest> posted_request(
-        reinterpret_cast<PostedSubmitRequest*>(lparam));
+        reinterpret_cast<PostedSubmitRequest *>(lparam));
     if (!posted_request || !*posted_request) {
       return 0;
     }
@@ -423,7 +390,7 @@ LRESULT CALLBACK OpenLessTextService::MessageWindowProc(HWND window,
         request->result = service->CommitTextOnOwnerThread(
             request->session_id, request->text, &request->async_completion,
             &request->wait_for_async_completion, request->cancellation);
-      } catch (const std::bad_alloc&) {
+      } catch (const std::bad_alloc &) {
         request->result = E_OUTOFMEMORY;
       } catch (...) {
         request->result = E_UNEXPECTED;

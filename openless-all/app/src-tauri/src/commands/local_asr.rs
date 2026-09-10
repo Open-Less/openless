@@ -76,12 +76,19 @@ impl From<openless_core::LocalAsrStorageSettings> for LocalAsrStorageSettings {
     }
 }
 
+/// 与 Sherpa `SherpaCatalogWire` 对齐：透出展示名、家族、模式、语言与远端尺寸，
+/// 前端无需再为基础元数据实时访问 HuggingFace。
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalAsrModelStatus {
     pub id: String,
     pub hf_repo: String,
+    pub display_name: String,
+    pub family: String,
+    pub mode: Option<String>,
+    pub languages: Vec<String>,
     pub downloaded_bytes: u64,
+    pub size_bytes: Option<u64>,
     pub is_downloaded: bool,
 }
 
@@ -89,8 +96,13 @@ impl From<openless_core::LocalAsrModel> for LocalAsrModelStatus {
     fn from(model: openless_core::LocalAsrModel) -> Self {
         Self {
             id: model.target.model_id().to_string(),
-            hf_repo: model.repository.unwrap_or_default(),
+            hf_repo: model.repository.clone().unwrap_or_default(),
+            display_name: model.display_name,
+            family: model.family,
+            mode: model.mode,
+            languages: model.languages,
             downloaded_bytes: model.downloaded_bytes,
+            size_bytes: model.size_bytes,
             is_downloaded: model.installed,
         }
     }
@@ -355,6 +367,20 @@ pub async fn local_asr_delete_model(
         .map_err(core_error)
 }
 
+/// 清理指定模型中断下载遗留的 staging 目录，不触碰已安装模型。
+#[tauri::command]
+pub async fn local_asr_cleanup_incomplete(
+    backend: CoreState<'_>,
+    model_id: String,
+) -> Result<(), String> {
+    backend
+        .services()
+        .local_asr
+        .cleanup_incomplete(target(LocalAsrRuntime::Generic, model_id)?)
+        .await
+        .map_err(core_error)
+}
+
 #[tauri::command]
 pub async fn local_asr_model_dir(
     backend: CoreState<'_>,
@@ -486,6 +512,42 @@ mod wire_contract_tests {
                 "modelsBaseDir": null,
                 "modelsRootDir": "C:/models",
                 "engineAvailable": true,
+            })
+        );
+    }
+
+    #[test]
+    fn generic_model_status_keeps_the_legacy_fields_and_adds_catalog_metadata() {
+        let core = openless_core::LocalAsrModel {
+            target: openless_core::LocalAsrTarget::parse(
+                openless_core::LocalAsrRuntime::Generic,
+                "qwen3-asr-0.6b",
+            )
+            .unwrap(),
+            display_name: "Qwen3 ASR 0.6B".into(),
+            family: "qwen3_asr".into(),
+            mode: None,
+            repository: Some("Qwen/Qwen3-ASR-0.6B".into()),
+            languages: vec!["zh".into(), "en".into()],
+            installed: false,
+            downloaded_bytes: 4096,
+            size_bytes: Some(1_234_567),
+        };
+
+        let value = serde_json::to_value(LocalAsrModelStatus::from(core)).unwrap();
+
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "id": "qwen3-asr-0.6b",
+                "hfRepo": "Qwen/Qwen3-ASR-0.6B",
+                "displayName": "Qwen3 ASR 0.6B",
+                "family": "qwen3_asr",
+                "mode": null,
+                "languages": ["zh", "en"],
+                "downloadedBytes": 4096,
+                "sizeBytes": 1234567,
+                "isDownloaded": false,
             })
         );
     }

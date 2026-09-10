@@ -244,10 +244,15 @@ fn capsule_window_action(
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct CapsuleLayoutState {
     translation_active: bool,
+    style: CapsuleStyle,
     monitor_x: i32,
     monitor_y: i32,
     monitor_width: u32,
     monitor_height: u32,
+    work_x: i32,
+    work_y: i32,
+    work_width: u32,
+    work_height: u32,
     scale_bits: u64,
 }
 
@@ -258,6 +263,9 @@ struct CapsuleWindowState {
     fallback_card_visible: AtomicBool,
     fallback_presentation_id: AtomicU64,
     deferred_payload: Mutex<Option<CapsulePayload>>,
+    last_payload: Mutex<Option<CapsulePayload>>,
+    layout_watch_active: AtomicBool,
+    layout_watch_epoch: AtomicU64,
 }
 
 impl Default for CapsuleWindowState {
@@ -269,6 +277,9 @@ impl Default for CapsuleWindowState {
             fallback_card_visible: AtomicBool::new(false),
             fallback_presentation_id: AtomicU64::new(0),
             deferred_payload: Mutex::new(None),
+            last_payload: Mutex::new(None),
+            layout_watch_active: AtomicBool::new(false),
+            layout_watch_epoch: AtomicU64::new(0),
         }
     }
 }
@@ -276,7 +287,11 @@ impl Default for CapsuleWindowState {
 impl CapsuleWindowState {
     fn cache_style(&self, style: CapsuleStyle) {
         self.style.store(
-            u8::from(matches!(style, CapsuleStyle::Classic)),
+            match style {
+                CapsuleStyle::Siri => 0,
+                CapsuleStyle::Classic => 1,
+                CapsuleStyle::Typeless => 2,
+            },
             Ordering::Relaxed,
         );
     }
@@ -284,6 +299,7 @@ impl CapsuleWindowState {
     fn cached_style(&self) -> CapsuleStyle {
         match self.style.load(Ordering::Relaxed) {
             1 => CapsuleStyle::Classic,
+            2 => CapsuleStyle::Typeless,
             _ => CapsuleStyle::Siri,
         }
     }
@@ -361,6 +377,8 @@ impl TauriCapsuleWindow {
     }
 
     pub(crate) fn set_size(&self, width: f64, height: f64) -> tauri::Result<()> {
+        // Cards temporarily borrow this window; their geometry belongs to the card until released.
+        self.stop_layout_watch();
         if let Some(window) = self.window() {
             window.set_size(tauri::LogicalSize::new(width, height))?;
         }
@@ -383,6 +401,7 @@ impl TauriCapsuleWindow {
     }
 
     pub(crate) fn hide(&self) -> tauri::Result<()> {
+        self.stop_layout_watch();
         if let Some(window) = self.window() {
             window.hide()?;
         }
@@ -436,7 +455,11 @@ impl TauriCapsuleWindow {
 
     pub(crate) fn position_capsule_bottom_center(&self, translation: bool) -> tauri::Result<()> {
         if let Some(window) = self.window() {
-            crate::position_capsule_bottom_center(&window, translation)?;
+            crate::position_capsule_bottom_center_with_style(
+                &window,
+                translation,
+                self.state.cached_style(),
+            )?;
         }
         Ok(())
     }
@@ -445,16 +468,22 @@ impl TauriCapsuleWindow {
         &self,
         window: &tauri::WebviewWindow,
         translation_active: bool,
+        style: CapsuleStyle,
     ) -> Option<CapsuleLayoutState> {
         #[cfg(target_os = "windows")]
         {
             if let Some(mon) = crate::foreground_window_monitor() {
                 return Some(CapsuleLayoutState {
                     translation_active,
+                    style,
                     monitor_x: mon.left,
                     monitor_y: mon.top,
                     monitor_width: (mon.right - mon.left).max(0) as u32,
                     monitor_height: (mon.bottom - mon.top).max(0) as u32,
+                    work_x: mon.work_left,
+                    work_y: mon.work_top,
+                    work_width: (mon.work_right - mon.work_left).max(0) as u32,
+                    work_height: (mon.work_bottom - mon.work_top).max(0) as u32,
                     scale_bits: mon.scale.to_bits(),
                 });
             }
@@ -464,10 +493,15 @@ impl TauriCapsuleWindow {
             if let Some(mon) = crate::capsule_target_monitor(window) {
                 return Some(CapsuleLayoutState {
                     translation_active,
+                    style,
                     monitor_x: mon.physical_x,
                     monitor_y: mon.physical_y,
                     monitor_width: mon.physical_width,
                     monitor_height: mon.physical_height,
+                    work_x: mon.work_x,
+                    work_y: mon.work_y,
+                    work_width: mon.work_width,
+                    work_height: mon.work_height,
                     scale_bits: mon.scale.to_bits(),
                 });
             }
@@ -475,10 +509,15 @@ impl TauriCapsuleWindow {
         let monitor = window.current_monitor().ok().flatten()?;
         Some(CapsuleLayoutState {
             translation_active,
+            style,
             monitor_x: monitor.position().x,
             monitor_y: monitor.position().y,
             monitor_width: monitor.size().width,
             monitor_height: monitor.size().height,
+            work_x: monitor.work_area().position.x,
+            work_y: monitor.work_area().position.y,
+            work_width: monitor.work_area().size.width,
+            work_height: monitor.work_area().size.height,
             scale_bits: monitor.scale_factor().to_bits(),
         })
     }
@@ -487,14 +526,17 @@ impl TauriCapsuleWindow {
         &self,
         window: &tauri::WebviewWindow,
         translation_active: bool,
+        style: CapsuleStyle,
     ) {
-        let Some(next) = self.layout_snapshot(window, translation_active) else {
+        let Some(next) = self.layout_snapshot(window, translation_active, style) else {
             return;
         };
         if self.state.layout.lock().as_ref() == Some(&next) {
             return;
         }
-        if crate::position_capsule_bottom_center(window, translation_active).is_ok() {
+        if crate::position_capsule_bottom_center_with_style(window, translation_active, style)
+            .is_ok()
+        {
             *self.state.layout.lock() = Some(next);
         }
     }
@@ -505,18 +547,100 @@ impl TauriCapsuleWindow {
         }
     }
 
+    fn stop_layout_watch(&self) {
+        self.state
+            .layout_watch_active
+            .store(false, Ordering::SeqCst);
+        self.state.layout_watch_epoch.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// Audio callbacks stop during remote processing, but Dock and monitor changes must still apply.
+    fn start_layout_watch(&self) {
+        if self.state.layout_watch_active.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let epoch = self
+            .state
+            .layout_watch_epoch
+            .fetch_add(1, Ordering::SeqCst)
+            .wrapping_add(1);
+        let capsule = self.clone();
+        tauri::async_runtime::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                if capsule.state.layout_watch_epoch.load(Ordering::SeqCst) != epoch {
+                    break;
+                }
+                let _ = capsule.run_on_main_thread(move |capsule| {
+                    if capsule.state.layout_watch_epoch.load(Ordering::SeqCst) != epoch {
+                        return;
+                    }
+                    let Some(window) = capsule.window() else {
+                        capsule.stop_layout_watch();
+                        return;
+                    };
+                    if !window.is_visible().unwrap_or(false) {
+                        capsule.stop_layout_watch();
+                        return;
+                    }
+                    let payload = capsule.state.last_payload.lock().clone();
+                    if let Some(payload) = payload {
+                        capsule.maybe_position_capsule_bottom_center(
+                            &window,
+                            payload.translation,
+                            capsule.state.cached_style(),
+                        );
+                    }
+                });
+            }
+        });
+    }
+
+    fn update_cursor_for_payload(&self, payload: &CapsulePayload, style: CapsuleStyle) {
+        #[cfg(not(mobile))]
+        {
+            let interactive = style != CapsuleStyle::Siri
+                && !payload.selection_polish
+                && matches!(
+                    payload.state,
+                    CapsuleState::Recording | CapsuleState::Transcribing | CapsuleState::Polishing
+                );
+            let want_passthrough = !interactive;
+            if self.state.cursor_passthrough.load(Ordering::SeqCst) != want_passthrough {
+                if let Err(error) = self.set_cursor_passthrough(want_passthrough) {
+                    log::warn!("[capsule] set_ignore_cursor_events failed: {error}");
+                }
+            }
+        }
+    }
+
+    fn refresh_style(&self) {
+        let Some(window) = self.window() else {
+            return;
+        };
+        if !window.is_visible().unwrap_or(false)
+            || self.state.fallback_card_visible.load(Ordering::SeqCst)
+            || !self.state.layout_watch_active.load(Ordering::SeqCst)
+        {
+            return;
+        }
+        let payload = self.state.last_payload.lock().clone();
+        if let Some(payload) = payload {
+            let style = self.state.cached_style();
+            self.maybe_position_capsule_bottom_center(&window, payload.translation, style);
+            self.update_cursor_for_payload(&payload, style);
+        }
+    }
+
     pub(crate) fn apply_capsule_payload(
         &self,
         payload: &CapsulePayload,
         show_capsule: bool,
-        classic_style: bool,
+        style: CapsuleStyle,
         reassert_spaces: bool,
     ) {
-        self.state.cache_style(if classic_style {
-            CapsuleStyle::Classic
-        } else {
-            CapsuleStyle::Siri
-        });
+        self.state.cache_style(style);
+        *self.state.last_payload.lock() = Some(payload.clone());
         let Some(window) = self.window() else {
             return;
         };
@@ -528,7 +652,7 @@ impl TauriCapsuleWindow {
                 window,
                 payload,
                 show_capsule,
-                classic_style,
+                style,
                 fallback_card_active,
                 reassert_spaces,
             );
@@ -545,35 +669,13 @@ impl TauriCapsuleWindow {
                 return;
             }
 
-            self.maybe_position_capsule_bottom_center(&window, payload.translation);
-
-            #[cfg(not(mobile))]
-            {
-                let interactive = classic_style
-                    && action == CapsuleWindowAction::ShowCapsule
-                    && !payload.selection_polish
-                    && matches!(
-                        payload.state,
-                        CapsuleState::Recording
-                            | CapsuleState::Transcribing
-                            | CapsuleState::Polishing
-                    );
-                let want_passthrough = !interactive;
-                if self
-                    .state
-                    .cursor_passthrough
-                    .swap(want_passthrough, Ordering::SeqCst)
-                    != want_passthrough
-                {
-                    if let Err(error) = window.set_ignore_cursor_events(want_passthrough) {
-                        log::warn!("[capsule] set_ignore_cursor_events failed: {error}");
-                    }
-                }
-            }
+            self.maybe_position_capsule_bottom_center(&window, payload.translation, style);
+            self.update_cursor_for_payload(payload, style);
 
             match action {
                 CapsuleWindowAction::PreserveFallbackCard => unreachable!(),
                 CapsuleWindowAction::ShowCapsule => {
+                    self.start_layout_watch();
                     if !CAPSULE_FIRST_SHOW_LOGGED.swap(true, Ordering::SeqCst) {
                         log::info!(
                             "[capsule] first show this session: show_capsule=true visible=true state={}",
@@ -585,6 +687,7 @@ impl TauriCapsuleWindow {
                     crate::restore_main_window_key_if_active(&self.app);
                 }
                 CapsuleWindowAction::HideCapsule => {
+                    self.stop_layout_watch();
                     if !show_capsule
                         && !matches!(payload.state, CapsuleState::Idle)
                         && !CAPSULE_SUPPRESSED_BY_TOGGLE_LOGGED.swap(true, Ordering::SeqCst)
@@ -646,6 +749,9 @@ impl TauriCoordinatorHost {
 
     pub(crate) fn cache_capsule_style(&self, style: CapsuleStyle) {
         self.capsule.cache_style(style);
+        if let Some(capsule) = self.capsule_window() {
+            let _ = capsule.run_on_main_thread(|capsule| capsule.refresh_style());
+        }
     }
 
     pub(crate) fn begin_insert_fallback_card(&self) -> u64 {
@@ -861,6 +967,51 @@ impl TauriCoordinatorHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn capsule_style_cache_preserves_every_wire_variant() {
+        let state = CapsuleWindowState::default();
+        assert_eq!(state.cached_style(), CapsuleStyle::Siri);
+        for style in [
+            CapsuleStyle::Classic,
+            CapsuleStyle::Typeless,
+            CapsuleStyle::Siri,
+        ] {
+            state.cache_style(style);
+            assert_eq!(state.cached_style(), style);
+        }
+    }
+
+    #[test]
+    fn capsule_layout_cache_notices_work_area_and_style_changes() {
+        let initial = CapsuleLayoutState {
+            translation_active: false,
+            style: CapsuleStyle::Classic,
+            monitor_x: 0,
+            monitor_y: 0,
+            monitor_width: 1920,
+            monitor_height: 1080,
+            work_x: 0,
+            work_y: 0,
+            work_width: 1920,
+            work_height: 1040,
+            scale_bits: 1.0_f64.to_bits(),
+        };
+        assert_ne!(
+            initial,
+            CapsuleLayoutState {
+                work_height: 1080,
+                ..initial
+            }
+        );
+        assert_ne!(
+            initial,
+            CapsuleLayoutState {
+                style: CapsuleStyle::Typeless,
+                ..initial
+            }
+        );
+    }
 
     #[test]
     fn capsule_show_strategy_matches_platform_activation_contract() {

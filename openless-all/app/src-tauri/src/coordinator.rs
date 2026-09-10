@@ -346,8 +346,7 @@ fn hide_insert_fallback_card(inner: &Arc<Inner>) {
             // 卡片释放后把最新状态一次性应用回来；若最新是 Idle，该 helper 会正常隐藏。
             let preferences = backend.get_preferences();
             let show_capsule = payload.selection_polish || preferences.show_capsule;
-            let classic_style = matches!(preferences.capsule_style, CapsuleStyle::Classic);
-            capsule.apply_capsule_payload(&payload, show_capsule, classic_style, true);
+            capsule.apply_capsule_payload(&payload, show_capsule, preferences.capsule_style, true);
         }
     });
 }
@@ -1316,11 +1315,7 @@ impl Coordinator {
             .unwrap_or_default()
     }
 
-    /// 设置保存后立即把胶囊样式同步进 Tauri Host 缓存。
-    /// emit_capsule 的 ~30Hz 主线程闭包本来也会同步，但入场帧的 payload 是在闭包
-    /// 同步之前克隆的（会带一帧旧样式），且 Windows 上主线程拥塞时闭包可能延迟
-    /// 执行——用户反馈「切换成默认风格后仍显示流光 Siri」。在保存路径直接同步后，
-    /// 任何平台的下一次录音从入场帧起就携带最新样式，不再依赖 emit 闭包的时序。
+    /// 保存后同步样式、窗口尺寸和点击区域，不等待下一次录音状态事件。
     pub fn sync_capsule_style_from_preferences(&self) {
         self.inner
             .host

@@ -1,20 +1,13 @@
-// i18n 入口 — 必须在任意 UI 组件 import 之前完成 init。
-//
-// 设计说明：
-// - 资源在打包时静态注入（zh-CN.ts / en.ts）。无需后端推送，无网络请求。
-// - LocalStorage key `ol.locale` 持久化用户选择；首次启动按 navigator.language 推断。
-// - fallback 永远是 zh-CN：已知的产品权威文案，且 zh-CN.ts 是 source of truth。
-// - 不用 LanguageDetector 插件：它的异步 init 在 Tauri WebView 里会让首次渲染拿到的
-//   `t()` 返回 key（react-i18next useSuspense 默认 false 时返回 key 而非阻塞）。
-//   手写检测 + initImmediate: false 让 init 同步完成，渲染前 t 就能用。
+// Each UI locale is a bundled local chunk. main.tsx waits for i18nReady so the
+// first frame already uses the saved language, without briefly showing fallback text.
+// The UI preference is independent from recognition and translation languages.
 
 import i18n from 'i18next';
 import { initReactI18next } from 'react-i18next';
 import { zhCN } from './zh-CN';
-import type { UserPreferences } from '../lib/types';
 import { setRemoteLocale } from '../lib/ipc';
 
-export const SUPPORTED_LOCALES = ['zh-CN', 'zh-TW', 'en', 'ja', 'ko'] as const;
+export const SUPPORTED_LOCALES = ['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de'] as const;
 export type SupportedLocale = (typeof SUPPORTED_LOCALES)[number];
 
 export const LOCALE_STORAGE_KEY = 'ol.locale';
@@ -24,15 +17,18 @@ function detectSystemLocale(): SupportedLocale {
   if (typeof navigator === 'undefined') return 'zh-CN';
   const nav = (navigator.language || '').toLowerCase();
   if (nav.startsWith('zh')) {
-    if (nav.includes('hant') || nav.includes('tw') || nav.includes('hk') || nav.includes('mo')) return 'zh-TW';
+    if (nav.includes('hant') || nav.includes('tw') || nav.includes('hk') || nav.includes('mo'))
+      return 'zh-TW';
     return 'zh-CN';
   }
-  if (nav.startsWith('ja')) return 'ja';
-  if (nav.startsWith('ko')) return 'ko';
+  const primary = nav.split('-')[0];
+  if (SUPPORTED_LOCALES.some((locale) => locale === primary)) return primary as SupportedLocale;
   return 'en';
 }
 
-function resolveLocalePreference(pref: SupportedLocale | typeof FOLLOW_SYSTEM_VALUE): SupportedLocale {
+function resolveLocalePreference(
+  pref: SupportedLocale | typeof FOLLOW_SYSTEM_VALUE,
+): SupportedLocale {
   if (pref === FOLLOW_SYSTEM_VALUE) return detectSystemLocale();
   return pref;
 }
@@ -40,20 +36,20 @@ function resolveLocalePreference(pref: SupportedLocale | typeof FOLLOW_SYSTEM_VA
 function getStoredLocale(): SupportedLocale | null {
   if (typeof window === 'undefined') return null;
   const raw = window.localStorage.getItem(LOCALE_STORAGE_KEY);
-  return raw === 'zh-CN' || raw === 'zh-TW' || raw === 'en' || raw === 'ja' || raw === 'ko' ? raw : null;
+  return SUPPORTED_LOCALES.some((locale) => locale === raw) ? (raw as SupportedLocale) : null;
 }
 
 const initialLng: SupportedLocale = getStoredLocale() ?? detectSystemLocale();
 
-// 只把 fallback / source-of-truth 的 zh-CN 静态打进 index —— 5 个 webview 都加载 index，
-// 把 en / ja / ko / zh-TW 四份语言包拆成按需 chunk，减小每个 webview 的常驻体积。
-// 代价：非 zh-CN 用户首屏先显示 zh-CN 一瞬，语言包异步到位后切换；最坏情况（加载失败）
-// 也只停在 zh-CN（可读），不会出现 key 字面量。
+// Language files remain separate local chunks; Node tests use the same explicit loaders.
 const localeLoaders: Record<Exclude<SupportedLocale, 'zh-CN'>, () => Promise<typeof zhCN>> = {
-  'zh-TW': () => import('./zh-TW').then(m => m.zhTW),
-  en: () => import('./en').then(m => m.en),
-  ja: () => import('./ja').then(m => m.ja),
-  ko: () => import('./ko').then(m => m.ko),
+  'zh-TW': () => import('./zh-TW').then((module) => module.zhTW),
+  en: () => import('./en').then((module) => module.en),
+  ja: () => import('./ja').then((module) => module.ja),
+  ko: () => import('./ko').then((module) => module.ko),
+  es: () => import('./es').then((module) => module.es),
+  fr: () => import('./fr').then((module) => module.fr),
+  de: () => import('./de').then((module) => module.de),
 };
 
 async function ensureLocaleLoaded(lng: SupportedLocale): Promise<void> {
@@ -65,20 +61,44 @@ async function ensureLocaleLoaded(lng: SupportedLocale): Promise<void> {
   }
 }
 
-void i18n.use(initReactI18next).init({
-  // 仅内联 zh-CN（fallback）。init 仍同步完成，首屏 t() 立刻可用（非 zh-CN 暂回退 zh-CN）。
+const initialReady = i18n.use(initReactI18next).init({
+  // Simplified Chinese is the canonical fallback; the selected chunk loads before rendering.
   resources: { 'zh-CN': { translation: zhCN } },
   lng: initialLng,
   fallbackLng: 'zh-CN',
   supportedLngs: SUPPORTED_LOCALES as unknown as string[],
   partialBundledLanguages: true, // 告诉 i18next 内联资源已完整，无需 backend 拉取
   interpolation: { escapeValue: false },
-  react: { useSuspense: false }, // 不悬挂；首屏必须能拿到译文（zh-CN 已内联，同步完成）
+  react: { useSuspense: false },
 });
 
-// 初始语言非 zh-CN：异步补加载该语言包后切换（首屏先 zh-CN，到位后无缝切过去）。
-if (initialLng !== 'zh-CN') {
-  void ensureLocaleLoaded(initialLng).then(() => i18n.changeLanguage(initialLng));
+function applyDocumentLocale(locale: string) {
+  if (typeof document === 'undefined') return;
+  document.documentElement.lang = locale;
+  document.documentElement.dir = 'ltr';
+}
+i18n.on('languageChanged', applyDocumentLocale);
+let localeRequest = 0;
+
+async function applyLocale(resolved: SupportedLocale): Promise<void> {
+  const request = ++localeRequest;
+  await ensureLocaleLoaded(resolved);
+  if (request !== localeRequest) return;
+  await i18n.changeLanguage(resolved);
+  syncRemoteLocale(resolved);
+}
+
+export const i18nReady = initialReady.then(async () => {
+  await applyLocale(getStoredLocale() ?? detectSystemLocale());
+});
+
+// Auxiliary WebViews stay in the same language when the main window changes it.
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (event) => {
+    if (event.key === null || event.key === LOCALE_STORAGE_KEY) {
+      void applyLocale(resolveLocalePreference(getLocalePreference()));
+    }
+  });
 }
 
 export default i18n;
@@ -104,9 +124,7 @@ export async function setLocalePreference(
   } else {
     window.localStorage.setItem(LOCALE_STORAGE_KEY, pref);
   }
-  await ensureLocaleLoaded(resolved);
-  await i18n.changeLanguage(resolved);
-  syncRemoteLocale(resolved);
+  await applyLocale(resolved);
   return resolved;
 }
 
@@ -115,46 +133,5 @@ export async function setLocalePreference(
 function syncRemoteLocale(resolved: SupportedLocale): void {
   void setRemoteLocale(resolved).catch(() => {});
 }
-// 启动时同步一次当前语言，覆盖“开机即自动开启远程服务”的场景。
-syncRemoteLocale(i18n.language as SupportedLocale);
 
 export const FOLLOW_SYSTEM = FOLLOW_SYSTEM_VALUE;
-
-export function outputPrefsForLocale(
-  resolved: SupportedLocale,
-): Pick<UserPreferences, 'chineseScriptPreference' | 'outputLanguagePreference'> {
-  if (resolved === 'zh-CN') {
-    return {
-      chineseScriptPreference: 'simplified',
-      outputLanguagePreference: 'zhCn',
-    };
-  }
-  if (resolved === 'zh-TW') {
-    return {
-      chineseScriptPreference: 'traditional',
-      outputLanguagePreference: 'zhTw',
-    };
-  }
-  if (resolved === 'en') {
-    return {
-      chineseScriptPreference: 'auto',
-      outputLanguagePreference: 'en',
-    };
-  }
-  if (resolved === 'ja') {
-    return {
-      chineseScriptPreference: 'auto',
-      outputLanguagePreference: 'ja',
-    };
-  }
-  if (resolved === 'ko') {
-    return {
-      chineseScriptPreference: 'auto',
-      outputLanguagePreference: 'ko',
-    };
-  }
-  return {
-    chineseScriptPreference: 'auto',
-    outputLanguagePreference: 'auto',
-  };
-}

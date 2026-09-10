@@ -214,9 +214,8 @@ async fn invalidate_llm_tests_if_thinking_changed(
 pub async fn set_settings(
     coord: CoordinatorState<'_>,
     app: AppHandle,
-    tray_microphones: State<'_, TrayMicrophoneMenuState>,
     mut prefs: UserPreferences,
-) -> Result<(), String> {
+) -> Result<UserPreferences, String> {
     // 捕获旧值用于远程输入服务的 diff（persist 后端口/开关变化时启停/重启）。
     let remote_prev = coord.backend().get_preferences();
     let packs = coord
@@ -262,9 +261,6 @@ pub async fn set_settings(
             );
         }
     });
-    // 抑制 unused 警告：tray_microphones 现在改在闭包里通过 app.state 取，
-    // 但函数签名保留 State 入参，以便 Tauri 在调用前注入。
-    let _ = tray_microphones;
     // 远程输入：开关 / 端口变化时启停或重启服务（PIN 变化走 regenerate_remote_pin 命令）。
     if remote_prev.remote_input_enabled != prefs.remote_input_enabled
         || remote_prev.remote_input_port != prefs.remote_input_port
@@ -280,7 +276,7 @@ pub async fn set_settings(
             .await
             .map_err(|error| error.message)?;
     }
-    Ok(())
+    Ok(prefs)
 }
 
 #[cfg(mobile)]

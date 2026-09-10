@@ -4,36 +4,65 @@ import { SelectLite } from '../../components/ui/SelectLite';
 import { readCredential, setCredential } from '../../lib/ipc';
 import type { LlmRequestFormat } from '../../lib/ipc/providers';
 import { emitSaved } from '../../lib/savedEvent';
+import { Btn } from '../_atoms';
 import { SettingRow, inputStyle } from './shared';
 import { ProviderFormContext } from './ProviderForm';
 
-const accounts = ['ark.request_format', 'ark.messages_thinking', 'ark.max_tokens', 'ark.thinking_budget'] as const;
-type Account = typeof accounts[number];
+const accounts = [
+  'ark.request_format',
+  'ark.messages_thinking',
+  'ark.max_tokens',
+  'ark.thinking_budget',
+] as const;
+type Account = (typeof accounts)[number];
 export type ProtocolValues = Record<Account, string>;
 const emptyValues: ProtocolValues = {
-  'ark.request_format': '', 'ark.messages_thinking': '', 'ark.max_tokens': '', 'ark.thinking_budget': '',
+  'ark.request_format': '',
+  'ark.messages_thinking': '',
+  'ark.max_tokens': '',
+  'ark.thinking_budget': '',
 };
 
 /** 界面即时提示；Core 仍对实际存储和发出的请求做同样的校验。 */
-export function protocolValidationError(values: ProtocolValues, defaultFormat: LlmRequestFormat): string | null {
+export function protocolValidationError(
+  values: ProtocolValues,
+  defaultFormat: LlmRequestFormat,
+): string | null {
   const format = values['ark.request_format'] || defaultFormat;
-  if (!['chat_completions', 'responses', 'messages'].includes(format)) return 'llmRequestFormatInvalid';
+  if (!['chat_completions', 'responses', 'messages'].includes(format))
+    return 'llmRequestFormatInvalid';
   const mode = values['ark.messages_thinking'] || 'adaptive';
   if (!['adaptive', 'budget'].includes(mode)) return 'llmThinkingModeInvalid';
   const max = values['ark.max_tokens'] || '8192';
   const budget = values['ark.thinking_budget'] || '1024';
-  if (![max, budget].every(value => /^\d+$/.test(value) && Number(value) > 0 && Number(value) <= 4294967295)) return 'llmTokenLimitInvalid';
-  if (Number(budget) < 1024 || (format === 'messages' && mode === 'budget' && Number(budget) >= Number(max))) return 'llmThinkingBudgetInvalid';
+  if (
+    ![max, budget].every(
+      (value) => /^\d+$/.test(value) && Number(value) > 0 && Number(value) <= 4294967295,
+    )
+  )
+    return 'llmTokenLimitInvalid';
+  if (
+    Number(budget) < 1024 ||
+    (format === 'messages' && mode === 'budget' && Number(budget) >= Number(max))
+  )
+    return 'llmThinkingBudgetInvalid';
   return null;
 }
 
-export function LlmProtocolFields({ channelId, defaultFormat, formats, onUserMutation, onBlockedChange, onSaved }: {
+export function LlmProtocolFields({
+  channelId,
+  defaultFormat,
+  formats,
+  onUserMutation,
+  onBlockedChange,
+  onSaved,
+}: {
   channelId: string;
   defaultFormat: LlmRequestFormat;
   formats: LlmRequestFormat[];
   onUserMutation: () => void;
   onBlockedChange: (account: string, blocked: boolean) => void;
-  onSaved?: (changedAccounts: readonly Account[]) => void;
+  onSaved?: (changedAccounts?: string[]) => void;
 }) {
   const { t } = useTranslation();
   const form = useContext(ProviderFormContext);
@@ -46,54 +75,71 @@ export function LlmProtocolFields({ channelId, defaultFormat, formats, onUserMut
   const writing = useRef(false);
   const pendingWrite = useRef<Promise<boolean>>(Promise.resolve(true));
   const flushRef = useRef<() => Promise<boolean>>(() => Promise.resolve(true));
-  const dirty = accounts.some(account => values[account] !== saved[account]);
+  const dirty = accounts.some((account) => values[account] !== saved[account]);
   const validation = protocolValidationError(values, defaultFormat);
 
   useEffect(() => {
     mounted.current = true;
-    Promise.all(accounts.map(account => readCredential(account, channelId)))
-      .then(result => {
+    Promise.all(accounts.map((account) => readCredential(account, channelId)))
+      .then((result) => {
         if (!mounted.current) return;
-        const next = Object.fromEntries(accounts.map((account, index) => [account, result[index] ?? ''])) as ProtocolValues;
-        setValues(next); setSaved(next); setLoaded(true);
+        const next = Object.fromEntries(
+          accounts.map((account, index) => [account, result[index] ?? '']),
+        ) as ProtocolValues;
+        setValues(next);
+        setSaved(next);
+        setLoaded(true);
       })
-      .catch(() => { if (mounted.current) setError('read'); });
-    return () => { mounted.current = false; };
+      .catch(() => {
+        if (mounted.current) setError('read');
+      });
+    return () => {
+      mounted.current = false;
+    };
   }, [channelId]);
 
   useEffect(() => {
-    onBlockedChange('protocol', !loaded || saving || dirty || error !== null || validation !== null);
+    onBlockedChange(
+      'protocol',
+      !loaded || saving || dirty || error !== null || validation !== null,
+    );
   }, [loaded, saving, dirty, error, validation, onBlockedChange]);
+  // 关闭/切换前由宿主 Modal 收敛未落盘写入；flush 永远读取最新的 dirty 状态。
   useEffect(() => form?.register('protocol', () => flushRef.current()), [form?.register]);
 
   const save = (next: ProtocolValues): Promise<boolean> => {
     if (writing.current) return pendingWrite.current;
     if (!loaded || protocolValidationError(next, defaultFormat)) return Promise.resolve(false);
     writing.current = true;
-    setSaving(true); setError(null);
+    setSaving(true);
+    setError(null);
     pendingWrite.current = (async () => {
-    try {
-      const changedAccounts = accounts.filter(account => next[account] !== saved[account]);
-      for (const account of changedAccounts) {
-        await setCredential(account, next[account], channelId);
+      try {
+        const changedAccounts = accounts.filter((account) => next[account] !== saved[account]);
+        for (const account of changedAccounts) {
+          await setCredential(account, next[account], channelId);
+        }
+        if (mounted.current) {
+          setSaved(next);
+          emitSaved('saved', t('common.saved'));
+          onSaved?.(changedAccounts);
+        }
+        return true;
+      } catch {
+        if (mounted.current) {
+          setError('save');
+          emitSaved('failed', t('common.operationFailed'));
+        }
+        return false;
+      } finally {
+        writing.current = false;
+        if (mounted.current) setSaving(false);
       }
-      if (mounted.current) {
-        setSaved(next);
-        emitSaved('saved', t('common.saved'));
-        onSaved?.(changedAccounts);
-      }
-      return true;
-    } catch {
-      if (mounted.current) { setError('save'); emitSaved('failed', t('common.operationFailed')); }
-      return false;
-    } finally {
-      writing.current = false;
-      if (mounted.current) setSaving(false);
-    }
     })();
     return pendingWrite.current;
   };
-  flushRef.current = () => writing.current ? pendingWrite.current : dirty ? save(values) : Promise.resolve(true);
+  flushRef.current = () =>
+    writing.current ? pendingWrite.current : dirty ? save(values) : Promise.resolve(true);
 
   const change = (account: Account, value: string, immediate = false) => {
     if (!loaded || writing.current || form?.leaving) return;
@@ -107,32 +153,79 @@ export function LlmProtocolFields({ channelId, defaultFormat, formats, onUserMut
   const disabled = !loaded || saving || form?.leaving;
   const numberField = (account: Account, label: string, placeholder: string) => (
     <SettingRow label={label}>
-      <input type="number" min={account === 'ark.thinking_budget' ? 1024 : 1} step={1}
-        aria-label={label} value={values[account]} placeholder={placeholder} disabled={disabled}
-        onChange={event => change(account, event.target.value)} onBlur={() => { if (dirty) void save(values); }}
-        style={{ ...inputStyle, width: '100%', maxWidth: 420 }} />
+      <input
+        type="number"
+        min={account === 'ark.thinking_budget' ? 1024 : 1}
+        step={1}
+        aria-label={label}
+        value={values[account]}
+        placeholder={placeholder}
+        disabled={disabled}
+        onChange={(event) => change(account, event.target.value)}
+        onBlur={() => {
+          if (dirty) void save(values);
+        }}
+        style={{ ...inputStyle, width: '100%', maxWidth: 420 }}
+      />
     </SettingRow>
   );
-  return <>
-    <SettingRow label={t('settings.providers.requestFormatLabel')}>
-      <SelectLite value={format} disabled={disabled} ariaLabel={t('settings.providers.requestFormatLabel')}
-        options={formats.map(value => ({ value, label: ({ chat_completions: 'Chat Completions', responses: 'Responses', messages: 'Messages' })[value] }))}
-        onChange={value => change('ark.request_format', value, true)} />
-    </SettingRow>
-    {format === 'responses' && <p style={{ fontSize: 11.5, color: 'var(--ol-ink-4)' }}>{t('settings.providers.responsesThinkingHint')}</p>}
-    {format === 'messages' && <>
-      <SettingRow label={t('settings.providers.messagesThinkingLabel')}>
-        <SelectLite value={mode} disabled={disabled} ariaLabel={t('settings.providers.messagesThinkingLabel')}
-          options={[{ value: 'adaptive', label: t('settings.providers.thinkingAdaptive') }, { value: 'budget', label: t('settings.providers.thinkingBudget') }]}
-          onChange={value => change('ark.messages_thinking', value, true)} />
+  return (
+    <>
+      <SettingRow label={t('settings.providers.requestFormatLabel')}>
+        <SelectLite
+          value={format}
+          disabled={disabled}
+          ariaLabel={t('settings.providers.requestFormatLabel')}
+          options={formats.map((value) => ({
+            value,
+            label: {
+              chat_completions: 'Chat Completions',
+              responses: 'Responses',
+              messages: 'Messages',
+            }[value],
+          }))}
+          onChange={(value) => change('ark.request_format', value, true)}
+        />
       </SettingRow>
-      {numberField('ark.max_tokens', t('settings.providers.maxTokensLabel'), '8192')}
-      {mode === 'budget' && numberField('ark.thinking_budget', t('settings.providers.thinkingBudgetLabel'), '1024')}
-      <p style={{ fontSize: 11.5, color: 'var(--ol-ink-4)' }}>{t('settings.providers.messagesThinkingHint')}</p>
-    </>}
-    {(validation || error) && <p role="alert" style={{ fontSize: 12, color: 'var(--ol-warn)' }}>
-      {validation ? t(`settings.providers.${validation}`) : t(error === 'read' ? 'settings.providers.readFailed' : 'common.operationFailed')}
-    </p>}
-    {dirty && <button disabled={disabled || !!validation} onClick={() => void save(values)}>{t('settings.providers.saveProtocol')}</button>}
-  </>;
+      {format === 'responses' && (
+        <p style={{ fontSize: 11.5, color: 'var(--ol-ink-4)' }}>
+          {t('settings.providers.responsesThinkingHint')}
+        </p>
+      )}
+      {format === 'messages' && (
+        <>
+          <SettingRow label={t('settings.providers.messagesThinkingLabel')}>
+            <SelectLite
+              value={mode}
+              disabled={disabled}
+              ariaLabel={t('settings.providers.messagesThinkingLabel')}
+              options={[
+                { value: 'adaptive', label: t('settings.providers.thinkingAdaptive') },
+                { value: 'budget', label: t('settings.providers.thinkingBudget') },
+              ]}
+              onChange={(value) => change('ark.messages_thinking', value, true)}
+            />
+          </SettingRow>
+          {numberField('ark.max_tokens', t('settings.providers.maxTokensLabel'), '8192')}
+          {mode === 'budget' &&
+            numberField('ark.thinking_budget', t('settings.providers.thinkingBudgetLabel'), '1024')}
+          <p style={{ fontSize: 11.5, color: 'var(--ol-ink-4)' }}>
+            {t('settings.providers.messagesThinkingHint')}
+          </p>
+        </>
+      )}
+      {(validation || error) && (
+        <p role="alert" style={{ fontSize: 12, color: 'var(--ol-warn)' }}>
+          {validation
+            ? t(`settings.providers.${validation}`)
+            : t(error === 'read' ? 'settings.providers.readFailed' : 'common.operationFailed')}
+        </p>
+      )}
+      {dirty && (
+        <Btn size="sm" disabled={disabled || !!validation} onClick={() => void save(values)}>
+          {t('settings.providers.saveProtocol')}
+        </Btn>
+      )}
+    </>
+  );
 }

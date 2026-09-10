@@ -3,11 +3,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import {
-  isTauri,
-  startMicrophoneLevelMonitor,
-  stopMicrophoneLevelMonitor,
-} from '../../lib/ipc';
+import { isTauri, startMicrophoneLevelMonitor, stopMicrophoneLevelMonitor } from '../../lib/ipc';
 import type { MicrophoneDevice } from '../../lib/types';
 import { SelectLite, type SelectOption } from '../../components/ui/SelectLite';
 import { useMobileLayout } from '../../lib/useMobileLayout';
@@ -21,7 +17,12 @@ interface MicrophoneSelectProps {
   onOpen?: () => void;
 }
 
-export function MicrophoneSelect({ devices, selectedName, onSelect, onOpen }: MicrophoneSelectProps) {
+export function MicrophoneSelect({
+  devices,
+  selectedName,
+  onSelect,
+  onOpen,
+}: MicrophoneSelectProps) {
   const { t } = useTranslation();
   const mobile = useMobileLayout();
   const [open, setOpen] = useState(false);
@@ -51,7 +52,7 @@ export function MicrophoneSelect({ devices, selectedName, onSelect, onOpen }: Mi
           if (isTauri) {
             const { listen } = await import('@tauri-apps/api/event');
             if (cancelled) return;
-            const stopListening = await listen<{ level: number }>('microphone:level', event => {
+            const stopListening = await listen<{ level: number }>('microphone:level', (event) => {
               setLevel(Math.max(0, Math.min(1, event.payload.level ?? 0)));
             });
             if (cancelled) {
@@ -104,7 +105,7 @@ export function MicrophoneSelect({ devices, selectedName, onSelect, onOpen }: Mi
         label: t('settings.recording.microphoneDefault'),
         trailing: selectedName === '' ? meter : undefined,
       },
-      ...devices.map(device => ({
+      ...devices.map((device) => ({
         value: device.name,
         label: device.name,
         trailing: selectedName === device.name ? meter : undefined,
@@ -118,7 +119,7 @@ export function MicrophoneSelect({ devices, selectedName, onSelect, onOpen }: Mi
       onChange={onSelect}
       options={options}
       ariaLabel={t('settings.recording.microphoneLabel')}
-      onOpenChange={next => {
+      onOpenChange={(next) => {
         setOpen(next);
         if (next) onOpen?.();
       }}
@@ -131,7 +132,9 @@ function LevelMeter({ level }: { level: number }) {
   const amplified = Math.min(1, Math.max(0, level * 4.5));
   const bars = [0.4, 0.7, 1, 0.7, 0.4];
   return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, height: 14, flexShrink: 0 }}>
+    <span
+      style={{ display: 'inline-flex', alignItems: 'center', gap: 3, height: 14, flexShrink: 0 }}
+    >
       {bars.map((weight, index) => {
         const intensity = Math.min(1, amplified * (0.85 + weight * 0.35));
         const height = 4 + intensity * (10 * weight);

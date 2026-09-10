@@ -1,14 +1,10 @@
 import { readFile } from 'node:fs/promises';
 import ts from 'typescript';
 
-const source = await readFile(
-  new URL('../src/pages/LocalAsr/index.tsx', import.meta.url),
-  'utf-8',
-);
+const source = await readFile(new URL('../src/pages/LocalAsr/index.tsx', import.meta.url), 'utf-8');
 
-const refreshPolling = source.match(
-  /window\.setInterval\(\(\) => \{\s*void refresh\(\)\s*\}, 3000\)/g,
-) ?? [];
+const refreshPolling =
+  source.match(/window\.setInterval\(\(\) => \{\s*void refresh\(\);?\s*\}, 3000\)/g) ?? [];
 
 const sourceFile = ts.createSourceFile(
   'LocalAsr/index.tsx',
@@ -18,8 +14,7 @@ const sourceFile = ts.createSourceFile(
   ts.ScriptKind.TSX,
 );
 const localAsr = sourceFile.statements.find(
-  (statement) =>
-    ts.isFunctionDeclaration(statement) && statement.name?.text === 'LocalAsr',
+  (statement) => ts.isFunctionDeclaration(statement) && statement.name?.text === 'LocalAsr',
 );
 if (!localAsr?.body) {
   throw new Error('LocalAsr component declaration is missing');
@@ -66,7 +61,11 @@ if (refreshPolling.length !== 1) {
   throw new Error(`LocalAsr should have one refresh poller, found ${refreshPolling.length}`);
 }
 
-if (!/if \(downloadDialogOpen\) return[\s\S]{0,200}window\.setInterval\(\(\) => \{\s*void refresh\(\)/.test(source)) {
+if (
+  !/if \(downloadDialogOpen\) return[\s\S]{0,200}window\.setInterval\(\(\) => \{\s*void refresh\(\)/.test(
+    source,
+  )
+) {
   throw new Error('LocalAsr refresh polling must stop while the download dialog is open');
 }
 

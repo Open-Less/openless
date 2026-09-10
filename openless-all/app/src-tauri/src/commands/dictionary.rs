@@ -26,6 +26,12 @@ pub fn set_vocab_enabled(core: CoreState<'_>, id: String, enabled: bool) -> Resu
 }
 
 #[tauri::command]
+pub fn update_vocab(core: CoreState<'_>, id: String, phrase: String) -> Result<(), String> {
+    core.update_vocabulary_phrase(&id, phrase)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub fn list_correction_rules(core: CoreState<'_>) -> Result<Vec<CorrectionRule>, String> {
     core.list_correction_rules().map_err(|e| e.to_string())
 }
@@ -42,11 +48,7 @@ pub fn add_correction_rule(
 
 /// 卡片上点了勾：把这个词收进词汇表，打「自动收集」标记，随时能在词汇表页删掉。
 #[tauri::command]
-pub fn accept_pending_correction(
-    core: CoreState<'_>,
-    coord: CoordinatorState<'_>,
-    id: String,
-) {
+pub fn accept_pending_correction(core: CoreState<'_>, coord: CoordinatorState<'_>, id: String) {
     match core.accept_pending_correction(&id) {
         Ok(Some(suggestion)) => {
             log::info!(
@@ -63,11 +65,7 @@ pub fn accept_pending_correction(
 
 /// 卡片上点了叉：丢掉这一条，什么都不记（没有拒绝名单）。
 #[tauri::command]
-pub fn reject_pending_correction(
-    core: CoreState<'_>,
-    coord: CoordinatorState<'_>,
-    id: String,
-) {
+pub fn reject_pending_correction(core: CoreState<'_>, coord: CoordinatorState<'_>, id: String) {
     if core.reject_pending_correction(&id) {
         coord.refresh_vocab_suggestion_presentation(!core.pending_corrections().is_empty());
     }

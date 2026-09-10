@@ -23,7 +23,9 @@ export function CheckUpdateButton({
 
   useEffect(() => {
     if (status === 'none' || status === 'error') {
-      const id = window.setTimeout(() => { void updater.dismissDialog(); }, 2500);
+      const id = window.setTimeout(() => {
+        void updater.dismissDialog();
+      }, 2500);
       return () => window.clearTimeout(id);
     }
     return undefined;
@@ -34,9 +36,10 @@ export function CheckUpdateButton({
   const failed = status === 'error';
   const iconName = upToDate ? 'check' : 'refresh';
   const color = upToDate ? 'var(--ol-ok)' : failed ? 'var(--ol-err)' : 'var(--ol-ink-2)';
-  const labelKey = channel === 'beta'
-    ? 'settings.about.checkBetaUpdateBtn'
-    : 'settings.about.checkStableUpdateBtn';
+  const labelKey =
+    channel === 'beta'
+      ? 'settings.about.checkBetaUpdateBtn'
+      : 'settings.about.checkStableUpdateBtn';
   const label = checking ? t('settings.about.checkingUpdate') : t(labelKey);
 
   useEffect(() => {
@@ -78,7 +81,16 @@ export function CheckUpdateButton({
           flexShrink: 0,
         }}
       >
-        <span style={{ display: 'inline-flex', width: 14, height: 14, alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+        <span
+          style={{
+            display: 'inline-flex',
+            width: 14,
+            height: 14,
+            alignItems: 'center',
+            justifyContent: 'center',
+            flexShrink: 0,
+          }}
+        >
           <Icon
             name={iconName}
             size={12}

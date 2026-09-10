@@ -37,7 +37,9 @@ impl openless_core::credentials::CredentialMetadataStore for SystemCredentialMet
         'static,
         Result<openless_core::CredentialMetadata, openless_core::BackendError>,
     > {
-        run_credential_task(|| Ok(CredentialsVault::load_metadata()))
+        run_credential_task(|| {
+            CredentialsVault::load_metadata().map_err(credential_persistence_error)
+        })
     }
 
     fn save_metadata(
@@ -54,7 +56,10 @@ impl openless_core::credentials::CredentialMetadataStore for SystemCredentialMet
         kind: openless_core::ChannelKind,
         channel_id: String,
     ) -> futures_util::future::BoxFuture<'static, Result<bool, openless_core::BackendError>> {
-        run_credential_task(move || Ok(CredentialsVault::channel_has_secrets(kind, &channel_id)))
+        run_credential_task(move || {
+            CredentialsVault::channel_has_secrets(kind, &channel_id)
+                .map_err(credential_persistence_error)
+        })
     }
 }
 
@@ -110,7 +115,7 @@ impl openless_core::CredentialStore for SystemCredentialStore {
         Result<CredentialsStatus, openless_core::BackendError>,
     > {
         let model_store = self.model_store.clone();
-        run_credential_task(move || Ok(credentials_status(preferences, model_store.as_deref())))
+        run_credential_task(move || credentials_status(preferences, model_store.as_deref()))
     }
 
     fn read(
@@ -198,16 +203,18 @@ fn run_credential_task<T: Send + 'static>(
 fn credentials_status(
     preferences: UserPreferences,
     model_store: Option<&openless_core::ModelStore>,
-) -> CredentialsStatus {
+) -> Result<CredentialsStatus, openless_core::BackendError> {
     let pipeline_mode = openless_core::shared_types::effective_pipeline_mode(
         preferences.multimodal_pipeline_enabled,
         preferences.pipeline_mode,
     );
-    let snap = CredentialsVault::snapshot_for_pipeline(
+    let snapshot = CredentialsVault::configuration_snapshot(
         pipeline_mode == openless_core::shared_types::PipelineMode::Multimodal,
-    );
-    let active_asr_provider = CredentialsVault::get_active_asr();
-    let active_llm_provider = CredentialsVault::get_active_llm();
+    )
+    .map_err(credential_persistence_error)?;
+    let snap = snapshot.credentials;
+    let active_asr_provider = snapshot.active_asr_provider;
+    let active_llm_provider = snapshot.active_llm_provider;
     let configuration = credential_configuration(
         &snap,
         &active_llm_provider,
@@ -227,7 +234,7 @@ fn credentials_status(
             &snap.active_omni_provider,
             &configuration,
         );
-    CredentialsStatus {
+    Ok(CredentialsStatus {
         active_asr_provider,
         active_llm_provider,
         pipeline_mode,
@@ -236,7 +243,7 @@ fn credentials_status(
         omni_configured,
         volcengine_configured,
         ark_configured: llm_configured,
-    }
+    })
 }
 
 fn read_vault_credential(

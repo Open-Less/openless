@@ -7,7 +7,8 @@ export interface SelectionPolishPreview {
 
 export function getSelectionPolishPreview(): Promise<SelectionPolishPreview | null> {
   return invokeOrMock('get_selection_polish_preview', undefined, () => ({
-    text: '这里显示润色后的文字。', sourceText: '这里显示原始选区。',
+    text: '这里显示润色后的文字。',
+    sourceText: '这里显示原始选区。',
   }));
 }
 

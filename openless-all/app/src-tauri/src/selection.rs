@@ -963,7 +963,7 @@ mod macos_ax {
             buffer: *mut c_char,
             buffer_size: isize,
             encoding: u32,
-        ) -> bool;
+        ) -> u8;
         fn CFStringGetLength(s: CFStringRef) -> isize;
         fn CFStringGetMaximumSizeForEncoding(length: isize, encoding: u32) -> isize;
     }
@@ -1053,7 +1053,8 @@ mod macos_ax {
             max_bytes,
             K_CF_STRING_ENCODING_UTF8,
         );
-        if !ok {
+        // CoreFoundation's Boolean is an unsigned byte in the SDK ABI.
+        if ok == 0 {
             return None;
         }
         let cstr = CStr::from_ptr(buf.as_ptr() as *const c_char);

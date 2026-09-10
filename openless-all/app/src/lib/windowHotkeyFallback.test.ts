@@ -1,7 +1,4 @@
-import {
-  isWindowHotkeyKeyboardCandidate,
-  windowMouseHotkeyCode,
-} from './windowHotkeyFallback';
+import { isWindowHotkeyKeyboardCandidate, windowMouseHotkeyCode } from './windowHotkeyFallback';
 
 function assertEqual<T>(actual: T, expected: T, name: string) {
   if (actual !== expected) {

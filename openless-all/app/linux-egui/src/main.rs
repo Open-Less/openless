@@ -1,3 +1,6 @@
+#[cfg(any(target_os = "linux", test))]
+mod ui_state;
+
 #[cfg(not(target_os = "linux"))]
 fn main() {
     eprintln!("openless-linux-egui is only available on Linux");
@@ -5,6 +8,7 @@ fn main() {
 
 #[cfg(target_os = "linux")]
 mod linux_app {
+    use super::ui_state::{Navigation, Page};
     use std::future::Future;
     use std::sync::mpsc;
     use std::sync::Arc;
@@ -20,11 +24,12 @@ mod linux_app {
     use openless_linux_egui::{
         drain_events, ensure_fcitx5_plugin_installed, EventDrainOutcome, Fcitx5HotkeyListener,
         FcitxPluginInstallPlan, FcitxPluginStatus, LinuxBackendBuilder, LinuxCapabilitySnapshot,
-        LinuxLaunchIntent, LinuxNativeRuntime, LinuxPackageKind, LinuxResourceLayout,
-        SingleInstanceBroker, SingleInstanceRole,
+        LinuxDesktopSession, LinuxLaunchIntent, LinuxNativeRuntime, LinuxPackageKind,
+        LinuxResourceLayout, SingleInstanceBroker, SingleInstanceRole,
     };
 
     enum UiResult {
+        Environment(LinuxCapabilitySnapshot),
         Message(String),
         Models(Result<Vec<LocalAsrModel>, String>),
         Remote(Result<(openless_core::RemoteInputStatus, String), String>),
@@ -93,6 +98,12 @@ mod linux_app {
     }
 
     pub struct OpenLessEguiApp {
+        navigation: Navigation,
+        environment: Option<LinuxCapabilitySnapshot>,
+        environment_refreshing: bool,
+        plugin_check: Option<Result<FcitxPluginStatus, String>>,
+        less_computer_running: bool,
+        remote_error: Option<String>,
         tokio: Arc<tokio::runtime::Runtime>,
         native: Option<LinuxNativeRuntime>,
         subscription: Option<openless_core::EventSubscription>,
@@ -142,6 +153,12 @@ mod linux_app {
                     let preferences = backend.get_preferences();
                     let subscription = backend.subscribe();
                     let app = Self {
+                        navigation: Navigation::default(),
+                        environment: None,
+                        environment_refreshing: false,
+                        plugin_check: None,
+                        less_computer_running: false,
+                        remote_error: None,
                         tokio,
                         native: Some(native),
                         subscription: Some(subscription),
@@ -183,6 +200,12 @@ mod linux_app {
                     app
                 }
                 Err(error) => Self {
+                    navigation: Navigation::default(),
+                    environment: None,
+                    environment_refreshing: false,
+                    plugin_check: None,
+                    less_computer_running: false,
+                    remote_error: None,
                     tokio,
                     native: None,
                     subscription: None,
@@ -373,6 +396,7 @@ mod linux_app {
             let session_id = event.session_id;
             match event.kind {
                 BackendEventKind::DictationStateChanged(state) => {
+                    self.navigation.notify(Page::Dictation);
                     if state.phase == DictationPhase::Starting {
                         self.transcript_state = TranscriptAccumulator::default();
                         self.transcript.clear();
@@ -391,6 +415,7 @@ mod linux_app {
                     self.transcript = delta.text;
                 }
                 BackendEventKind::DictationCompleted(result) => {
+                    self.navigation.notify(Page::Dictation);
                     self.transcript = result.polished_text;
                     self.status = format!("听写完成：{:?}", result.inserted);
                 }
@@ -410,6 +435,13 @@ mod linux_app {
                     }
                 }
                 BackendEventKind::LessComputerEvent(event) => {
+                    // Voice capture has its own session, preceding a chat User
+                    // turn. Keep a navigation notice without assigning it to
+                    // the current chat or inventing microphone readiness.
+                    if matches!(&event.kind, LessComputerEventKind::VoiceState { .. }) {
+                        self.navigation.notify(Page::Agent);
+                        return;
+                    }
                     // Less Computer events may complete after a newer turn has
                     // already started. Session ownership, not arrival time,
                     // decides whether a delta/terminal may mutate this view.
@@ -418,6 +450,7 @@ mod linux_app {
                         // continuation. `fresh` describes conversation history,
                         // never whether this turn is allowed to receive output.
                         self.less_computer_session = session_id;
+                        self.less_computer_running = true;
                         self.pending_approval = None;
                         if *fresh {
                             self.less_computer_output.clear();
@@ -429,11 +462,13 @@ mod linux_app {
                     } else if session_id != self.less_computer_session {
                         return;
                     }
+                    self.navigation.notify(Page::Agent);
                     match event.kind {
                         // Linux已有独立录音显示；新typed反馈供接手Host/UI团队继续接入。
                         LessComputerEventKind::VoiceState { .. } => {}
                         LessComputerEventKind::User { .. } => {}
                         LessComputerEventKind::Started => {
+                            self.less_computer_running = true;
                             self.status = "Less Computer 正在运行".to_string();
                         }
                         LessComputerEventKind::Delta { text } => {
@@ -446,6 +481,7 @@ mod linux_app {
                             self.status = "Less Computer 已压缩上下文".to_string();
                         }
                         LessComputerEventKind::Completed { text, .. } => {
+                            self.less_computer_running = false;
                             // A terminal is authoritative even for final-only
                             // providers or after a missed partial event.
                             self.less_computer_output
@@ -459,16 +495,19 @@ mod linux_app {
                             self.status = "Less Computer 等待审批".to_string();
                         }
                         LessComputerEventKind::Error { message } => {
+                            self.less_computer_running = false;
                             self.pending_approval = None;
                             self.status = message;
                         }
                         LessComputerEventKind::Cancelled => {
+                            self.less_computer_running = false;
                             self.pending_approval = None;
                             self.status = "Less Computer 已取消".to_string();
                         }
                     }
                 }
                 BackendEventKind::LocalAsrDownloadProgress(progress) => {
+                    self.navigation.notify(Page::Models);
                     self.status = format!(
                         "模型 {}：{:?} {}/{}",
                         progress.model_id,
@@ -499,6 +538,7 @@ mod linux_app {
                             .as_mut()
                             .filter(|current| current.session_id == state.session_id)
                         {
+                            self.navigation.notify(Page::Qa);
                             // Core deltas deliberately omit messages. Preserve
                             // the conversation and append only this turn's text;
                             // the following Answer replaces it with Core history.
@@ -519,10 +559,12 @@ mod linux_app {
                         .as_ref()
                         .is_none_or(|current| current.session_id == state.session_id)
                     {
+                        self.navigation.notify(Page::Qa);
                         self.qa_state = Some(state);
                     }
                 }
                 BackendEventKind::SelectionStateChanged(snapshot) => {
+                    self.navigation.notify(Page::Selection);
                     if snapshot.phase == SelectionPhase::Preview {
                         self.selection_draft = snapshot.preview_text.clone().unwrap_or_default();
                         self.selection_preview_visible = true;
@@ -530,7 +572,10 @@ mod linux_app {
                     self.selection = Some(snapshot);
                 }
                 BackendEventKind::RemoteInputStatusChanged(_)
-                | BackendEventKind::RemoteInputFailed(_) => self.load_remote_status(),
+                | BackendEventKind::RemoteInputFailed(_) => {
+                    self.navigation.notify(Page::Remote);
+                    self.load_remote_status();
+                }
                 _ => {}
             }
         }
@@ -564,7 +609,11 @@ mod linux_app {
                 // back through sequenced Core events handled above.
                 for action in actions {
                     match action {
-                        HostAction::ShowMain | HostAction::ShowLessComputer => {
+                        HostAction::ShowMain => {
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                        }
+                        HostAction::ShowLessComputer => {
+                            self.navigation.open(Page::Agent);
                             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
                         }
                         HostAction::FocusMain => {
@@ -580,6 +629,7 @@ mod linux_app {
                             self.status = "请手动重启 OpenLess".to_string();
                         }
                         HostAction::ShowSelectionPreview => {
+                            self.navigation.open(Page::Selection);
                             self.selection_preview_visible = true;
                             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
                         }
@@ -587,6 +637,7 @@ mod linux_app {
                             self.selection_preview_visible = false;
                         }
                         HostAction::ShowQa => {
+                            self.navigation.open(Page::Qa);
                             self.qa_visible = true;
                             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
                         }
@@ -621,6 +672,7 @@ mod linux_app {
                         self.less_computer_output.clear();
                         self.less_computer_turn_start = 0;
                         self.less_computer_session = None;
+                        self.less_computer_running = false;
                         self.pending_approval = None;
                         self.qa_state = None;
                         self.qa_visible = false;
@@ -641,14 +693,25 @@ mod linux_app {
             }
             while let Ok(result) = self.rx.try_recv() {
                 match result {
+                    UiResult::Environment(environment) => {
+                        self.environment = Some(environment);
+                        self.environment_refreshing = false;
+                    }
                     UiResult::Message(message) => self.status = message,
                     UiResult::Models(Ok(models)) => self.models = ModelsState::Loaded(models),
                     UiResult::Models(Err(error)) => {
                         self.models = ModelsState::Failed(error.clone());
                         self.status = error;
                     }
-                    UiResult::Remote(Ok(remote)) => self.remote_access = Some(remote),
-                    UiResult::Remote(Err(error)) => self.status = error,
+                    UiResult::Remote(Ok(remote)) => {
+                        self.remote_error = None;
+                        self.remote_access = Some(remote);
+                    }
+                    UiResult::Remote(Err(error)) => {
+                        self.remote_access = None;
+                        self.remote_error = Some(error.clone());
+                        self.status = error;
+                    }
                     UiResult::Providers(Ok(panel)) => {
                         if panel.kind != self.provider_kind {
                             continue;
@@ -835,8 +898,21 @@ mod linux_app {
                     }
                 }
             });
+            ui.label(if self.less_computer_output.is_empty() {
+                "尚无 Agent 输出"
+            } else {
+                &self.less_computer_output
+            });
+        }
+
+        fn agent_approval_ui(&mut self, ui: &mut egui::Ui) {
             if let Some((token, command)) = self.pending_approval.clone() {
-                ui.label(format!("请求执行：{command}"));
+                egui::ScrollArea::vertical()
+                    .id_salt("approval_command")
+                    .max_height(72.0)
+                    .show(ui, |ui| {
+                        ui.label(format!("请求执行：{command}"));
+                    });
                 ui.horizontal(|ui| {
                     for (label, approved) in [("允许", true), ("拒绝", false)] {
                         if ui.button(label).clicked() {
@@ -856,18 +932,22 @@ mod linux_app {
                     }
                 });
             }
-            ui.label(if self.less_computer_output.is_empty() {
-                "尚无 Agent 输出"
-            } else {
-                &self.less_computer_output
-            });
         }
 
         fn qa_ui(&mut self, ui: &mut egui::Ui) {
+            ui.heading("问答");
             if !self.qa_visible {
+                ui.label("打开问答后可文字提问或语音提问。切换页面会保留当前会话；关闭会话使用下方的关闭操作。");
+                if ui.button("打开问答").clicked() {
+                    if let Some(backend) = self.backend() {
+                        self.spawn(async move {
+                            backend.services().qa.show().await?;
+                            Ok("问答已打开".to_string())
+                        });
+                    }
+                }
                 return;
             }
-            ui.heading("问答");
             if let Some(state) = &self.qa_state {
                 if let Some(messages) = &state.messages {
                     for message in messages {
@@ -919,15 +999,33 @@ mod linux_app {
                         });
                     }
                 }
+                if ui.button("取消本轮").clicked() {
+                    if let Some(backend) = self.backend() {
+                        let session_id = self
+                            .qa_state
+                            .as_ref()
+                            .and_then(|state| state.session_id.as_deref())
+                            .and_then(|id| uuid::Uuid::parse_str(id).ok())
+                            .map(openless_core::SessionId::from_uuid);
+                        self.spawn(async move {
+                            backend.services().qa.cancel(session_id).await?;
+                            Ok("问答本轮已取消".to_string())
+                        });
+                    }
+                }
             });
         }
 
         fn selection_ui(&mut self, ui: &mut egui::Ui) {
+            ui.heading("选区润色");
             let Some(selection) = self.selection.clone() else {
+                ui.label("先在目标应用中选中文字，再使用已配置的选区润色快捷键。预览会在此显示，确认前可以编辑或取消。");
+                ui.small("此入口是现有 Selection polish；Selection Voice 的完整意图路由尚未接入。");
                 return;
             };
+            ui.label(format!("当前状态：{:?}", selection.phase));
             if self.selection_preview_visible && selection.phase == SelectionPhase::Preview {
-                ui.heading("选区预览");
+                ui.strong("选区预览");
                 ui.text_edit_multiline(&mut self.selection_draft);
                 ui.horizontal(|ui| {
                     if ui.button("确认替换").clicked() {
@@ -1386,8 +1484,9 @@ mod linux_app {
             }
         }
 
-        fn settings_ui(&mut self, ui: &mut egui::Ui) {
-            ui.heading("Provider 与设置");
+        fn services_ui(&mut self, ui: &mut egui::Ui) {
+            ui.heading("AI 服务");
+            ui.label("选择 ASR 语音识别、LLM 文本处理或 Omni 服务，再编辑并校验渠道。已配置不代表网络请求已通过。");
             if let Some(snapshot) = &self.snapshot {
                 let credentials = &snapshot.credentials;
                 ui.label(format!(
@@ -1410,55 +1509,131 @@ mod linux_app {
                 ));
             }
             self.provider_management_ui(ui);
-            ui.separator();
-            let mut remote_update = None;
+        }
+
+        fn save_preferences(&mut self) {
+            let (Some(native), Some(snapshot), Some(preferences)) =
+                (&self.native, &self.snapshot, &self.preferences)
+            else {
+                return;
+            };
+            match native
+                .host()
+                .save_settings(preferences.clone(), snapshot.preferences_revision)
+            {
+                Ok(_) => {
+                    self.status = "设置已保存".to_string();
+                    let config = openless_core::RemoteInputConfig {
+                        enabled: preferences.remote_input_enabled,
+                        port: preferences.remote_input_port,
+                    };
+                    if let Some(backend) = self.backend() {
+                        self.spawn(async move {
+                            backend.services().remote_input.configure(config).await?;
+                            Ok("远程输入状态已更新".to_string())
+                        });
+                    }
+                }
+                Err(error) => self.status = error.to_string(),
+            }
+        }
+
+        fn settings_actions_ui(&mut self, ui: &mut egui::Ui) {
+            ui.horizontal_wrapped(|ui| {
+                if ui.button("保存设置").clicked() {
+                    self.save_preferences();
+                }
+                if ui.button("放弃修改并重新读取").clicked() {
+                    if let Some(backend) = self.backend() {
+                        self.preferences = Some(backend.get_preferences());
+                        self.snapshot = Some(backend.snapshot());
+                        self.status = "已重新读取设置".to_string();
+                    }
+                }
+            });
+            ui.small(
+                "环境与设置、手机输入共用设置草稿；保存会一起应用。保存冲突时可重新读取后再修改。",
+            );
+        }
+
+        fn settings_ui(&mut self, ui: &mut egui::Ui) {
+            ui.heading("环境与设置");
+            ui.strong("现有功能设置");
             if let Some(preferences) = self.preferences.as_mut() {
                 ui.checkbox(&mut preferences.streaming_insert, "流式插入");
+                ui.small("将转写逐步发送到原输入目标，实际结果以听写与历史反馈为准。");
                 ui.checkbox(&mut preferences.coding_agent_enabled, "启用 Less Computer");
+                ui.small("使用已有 Agent 配置与 CLI；进程执行仍遵循 Core 的审批规则。");
+                self.settings_actions_ui(ui);
+            }
+            ui.horizontal_wrapped(|ui| {
+                if ui.button("配置 AI 服务").clicked() {
+                    self.navigation.open(Page::Services);
+                }
+                if ui.button("设置手机输入").clicked() {
+                    self.navigation.open(Page::Remote);
+                }
+            });
+            ui.small(
+                "托盘、自启、自动更新、系统静音与额外全局热键尚未完整接入，此页没有对应开关。",
+            );
+            ui.separator();
+            self.environment_ui(ui);
+        }
+
+        fn remote_ui(&mut self, ui: &mut egui::Ui) {
+            ui.heading("手机输入");
+            ui.label(
+                "先启用并保存，再让手机连接同一局域网，打开本机提供的 HTTPS 地址并输入配对码。",
+            );
+            ui.label("首次连接需要确认并信任本服务的证书；服务运行不代表手机已连接。");
+            if let Some(preferences) = self.preferences.as_mut() {
                 ui.checkbox(&mut preferences.remote_input_enabled, "启用远程输入");
                 ui.add(
                     egui::DragValue::new(&mut preferences.remote_input_port)
                         .range(1..=u16::MAX)
                         .prefix("端口 "),
                 );
-                if ui.button("保存设置").clicked() {
-                    if let (Some(native), Some(snapshot)) = (&self.native, &self.snapshot) {
-                        match native
-                            .host()
-                            .save_settings(preferences.clone(), snapshot.preferences_revision)
-                        {
-                            Ok(_) => {
-                                self.status = "设置已保存".to_string();
-                                remote_update = Some(openless_core::RemoteInputConfig {
-                                    enabled: preferences.remote_input_enabled,
-                                    port: preferences.remote_input_port,
-                                });
-                            }
-                            Err(error) => self.status = error.to_string(),
-                        }
-                    }
-                }
+                self.settings_actions_ui(ui);
             }
-            if let (Some(config), Some(backend)) = (remote_update, self.backend()) {
-                self.spawn(async move {
-                    backend.services().remote_input.configure(config).await?;
-                    Ok("远程输入状态已更新".to_string())
-                });
+            ui.separator();
+            if ui.button("刷新连接状态").clicked() {
+                self.load_remote_status();
+            }
+            if let Some(error) = &self.remote_error {
+                ui.colored_label(
+                    egui::Color32::YELLOW,
+                    format!("暂时无法读取连接状态：{error}"),
+                );
+                ui.label("检查桌面密钥环、网络和端口后刷新；旧地址与配对码已隐藏。");
+            } else if self.remote_access.is_none() {
+                ui.label("尚未取得手机输入状态。");
             }
             if let Some((remote, pin)) = &self.remote_access {
                 ui.label(if remote.running {
-                    "远程输入：运行中"
+                    "远程输入服务：运行中"
                 } else if remote.starting {
-                    "远程输入：启动中"
+                    "远程输入服务：启动中"
                 } else {
-                    "远程输入：已停止"
+                    "远程输入服务：已停止"
                 });
-                if remote.enabled {
-                    if remote.running {
-                        ui.label("本机根证书 SHA-256");
-                        if let Some(fingerprint) = remote.ca_fingerprint_sha256.as_ref().filter(|value| {
-                            value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
-                        }) {
+                ui.label(format!("当前连接数：{}", remote.connection_count));
+                if remote.active_session_id.is_some() {
+                    ui.label("手机语音会话进行中，可使用顶部的语音取消。");
+                }
+                if remote.urls_stale {
+                    ui.colored_label(
+                        egui::Color32::YELLOW,
+                        "网络地址已过期，请检查网络后刷新状态。",
+                    );
+                }
+                if remote.enabled && remote.running && !remote.urls_stale {
+                    // 首次信任前必须核对根证书指纹：网页与描述文件名称不能证明身份。
+                    ui.label("本机根证书 SHA-256");
+                    match remote.ca_fingerprint_sha256.as_ref().filter(|value| {
+                        value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+                    }) {
+                        Some(fingerprint) => {
                             let display = fingerprint
                                 .as_bytes()
                                 .chunks(2)
@@ -1469,34 +1644,332 @@ mod linux_app {
                             if ui.button("复制完整指纹").clicked() {
                                 ui.ctx().copy_text(display);
                             }
-                        } else {
-                            ui.label("完整指纹不可用。请勿安装或信任下载的证书。");
                         }
-                        ui.label("安装或开启完全信任前，在手机系统的证书详情中核对全部 SHA-256 字符，必须与此处一致。网页、描述文件名称和标识不能证明证书身份。若不一致或无法查看，请停止并移除已下载或安装的描述文件。");
-                        ui.label("描述文件应只包含一张根证书。若有其他证书、VPN 或设备管理配置，请勿安装。首次下载仍可能被局域网攻击者替换；核验后再信任。根证书可签发其他证书，不再使用时请移除。");
+                        None => ui.label("完整指纹不可用。请勿安装或信任下载的证书。"),
                     }
+                    ui.label("安装或开启完全信任前，在手机系统的证书详情中核对全部 SHA-256 字符，必须与此处一致。网页、描述文件名称和标识不能证明证书身份。若不一致或无法查看，请停止并移除已下载或安装的描述文件。");
+                    ui.label("描述文件应只包含一张根证书。若有其他证书、VPN 或设备管理配置，请勿安装。首次下载仍可能被局域网攻击者替换；核验后再信任。根证书可签发其他证书，不再使用时请移除。");
                     ui.monospace(format!("PIN：{pin}"));
                     for url in &remote.urls {
                         ui.monospace(url);
                     }
-                    if ui.button("重置配对码").clicked() {
-                        if let Some(backend) = self.backend() {
-                            self.spawn(async move {
-                                backend
-                                    .services()
-                                    .remote_input
-                                    .regenerate_pairing_pin()
-                                    .await?;
-                                Ok("远程输入配对码已重置".to_string())
-                            });
-                        }
+                    if remote.urls.is_empty() {
+                        ui.label("服务已启动，但尚未提供可用地址；请检查本机局域网连接。");
+                    }
+                }
+                if remote.enabled && ui.button("重置配对码").clicked() {
+                    if let Some(backend) = self.backend() {
+                        self.spawn(async move {
+                            backend
+                                .services()
+                                .remote_input
+                                .regenerate_pairing_pin()
+                                .await?;
+                            Ok("远程输入配对码已重置".to_string())
+                        });
                     }
                 }
             }
         }
 
+        fn environment_ui(&mut self, ui: &mut egui::Ui) {
+            ui.strong("Linux 环境准备");
+            ui.label(if self.native.is_some() {
+                "Core 已连接。下面的环境检查不代表录音、落字或服务调用已经实测成功。"
+            } else {
+                "Core 未连接。可查看准备步骤；修复启动问题后，请退出并重新启动 OpenLess。"
+            });
+            if let Some(environment) = &self.environment {
+                ui.label(match environment.session {
+                    LinuxDesktopSession::X11 => "桌面会话：检测到 X11 环境",
+                    LinuxDesktopSession::Wayland => "桌面会话：检测到 Wayland 环境",
+                    LinuxDesktopSession::Headless => "桌面会话：未检测到 DISPLAY / WAYLAND_DISPLAY",
+                });
+                ui.label(if environment.fcitx5_ready {
+                    "fcitx5：D-Bus 探测有响应，插件加载、快捷键与目标应用落字仍需实际操作确认。"
+                } else {
+                    "fcitx5：D-Bus 探测未通过，可能是会话总线、服务或插件未就绪。"
+                });
+                ui.label(match environment.permissions.microphone {
+                    openless_core::PermissionState::Unsupported => {
+                        "麦克风：当前探测环境不支持；请进入图形桌面会话。"
+                    }
+                    _ => "麦克风：尚未验证录音。请在系统声音设置选择输入设备，再进行一次短听写。",
+                });
+            } else {
+                ui.label("尚未取得桌面环境探测结果。");
+            }
+            ui.label(match &self.plugin_check {
+                Some(Ok(FcitxPluginStatus::Ready)) => {
+                    "本次启动插件检查：找到插件文件；文件存在不代表 fcitx5 已加载它。"
+                }
+                Some(Ok(FcitxPluginStatus::Updated)) => {
+                    "本次启动插件检查：插件文件已安装或更新，需要重载配置并重新启动 fcitx5。"
+                }
+                Some(Ok(FcitxPluginStatus::Missing)) => {
+                    "本次启动插件检查：未找到插件文件，请重新安装含 OpenLess 插件的软件包。"
+                }
+                Some(Err(_)) => "本次启动插件检查：检查失败，请查看下方具体原因。",
+                None => "本次启动插件检查：未执行。",
+            });
+            if let Some(Err(error)) = &self.plugin_check {
+                ui.colored_label(egui::Color32::YELLOW, error);
+            }
+            if ui
+                .add_enabled(
+                    !self.environment_refreshing,
+                    egui::Button::new(if self.environment_refreshing {
+                        "正在检测…"
+                    } else {
+                        "重新检测会话与 D-Bus"
+                    }),
+                )
+                .clicked()
+            {
+                self.environment_refreshing = true;
+                let tx = self.tx.clone();
+                self.tokio.spawn_blocking(move || {
+                    let environment = LinuxCapabilitySnapshot::detect(false, package_kind());
+                    let _ = tx.send(UiResult::Environment(environment));
+                });
+            }
+            ui.small("重新检测只更新上面的会话与 D-Bus 信息，不安装插件，也不重新连接 Core。本次启动检查结果保留到退出。");
+            egui::CollapsingHeader::new("准备步骤与官方指南")
+                .default_open(self.native.is_none())
+                .show(ui, |ui| {
+            ui.separator();
+            ui.strong("1 · 准备输入法与桌面会话");
+            ui.label("在当前图形桌面安装并启用 fcitx5，再安装含 OpenLess 插件的当前软件包。先在普通编辑器中确认输入法可以输入。");
+            ui.label("在终端运行以下诊断，查看输入法环境与插件加载信息：");
+            command_ui(ui, "fcitx5-diagnose");
+            ui.label("插件安装或更新后可先重载配置；若插件仍未加载，退出并重新登录桌面，再启动 OpenLess：");
+            command_ui(ui, "fcitx5-remote -r");
+            ui.horizontal_wrapped(|ui| {
+                ui.hyperlink_to(
+                    "Fcitx 5 官方设置指南",
+                    "https://fcitx-im.org/wiki/Setup_Fcitx_5",
+                );
+                ui.hyperlink_to(
+                    "Wayland 桌面配置差异",
+                    "https://fcitx-im.org/wiki/Using_Fcitx_5_on_Wayland",
+                );
+            });
+            ui.small("Wayland 的输入法配置取决于桌面和应用工具包，请按官方对应章节配置；检测到 Wayland 不代表所有目标应用都支持替换。X11 的 overlay 能力标记也不代表本应用已接入录音浮层。");
+            ui.separator();
+            ui.strong("2 · 准备密钥环与识别服务");
+            ui.label("Secret Service：当前没有独立的服务连接或解锁状态检测；渠道显示“已配置”也不能证明密钥环现在可读写。");
+            ui.label("打开桌面的密码／密钥环管理器，确认当前登录会话的密钥环已解锁。然后到 AI 服务选择渠道，填写所需凭据、保存并校验；若返回锁定或访问失败，解锁后重试。");
+            ui.hyperlink_to(
+                "Secret Service 官方规范",
+                "https://specifications.freedesktop.org/secret-service/latest/",
+            );
+            ui.small("API 密钥输入只用于写入，不回显已有密钥。本地识别可在本地模型页下载并激活 Generic Qwen。");
+            ui.separator();
+            ui.strong("3 · 做一次短听写");
+            ui.label("在系统声音设置确认输入设备有电平。配置识别服务后，在目标编辑器聚焦输入框，用已有听写快捷键录制一句话并结束，检查转写和落字结果。问答、选区润色与 Agent 分别从导航进入。");
+            ui.small("请分别验证你使用的 X11／Wayland、GTK／Qt／浏览器／终端。托盘、自启和应用内自动更新仍未完整接入。");
+                });
+        }
+
+        fn start_ui(&mut self, ui: &mut egui::Ui) {
+            ui.heading("从一次听写开始");
+            ui.label("先准备 Linux 输入环境，再选择识别服务。切换页面不会停止正在进行的任务。");
+            if let Some(error) = &self.startup_error {
+                ui.colored_label(egui::Color32::YELLOW, format!("启动未完成：{error}"));
+            }
+            if let Some(snapshot) = &self.snapshot {
+                ui.label(if snapshot.running {
+                    "Core：运行中"
+                } else {
+                    "Core：未运行"
+                });
+                let credentials = &snapshot.credentials;
+                match credentials.pipeline_mode {
+                    openless_core::shared_types::PipelineMode::Multimodal => {
+                        ui.label("当前管线：多模态（Omni）");
+                        ui.label(if credentials.omni_configured {
+                            "Omni：已配置。"
+                        } else {
+                            "Omni：尚未配置，请到 AI 服务配置 Omni。"
+                        });
+                    }
+                    openless_core::shared_types::PipelineMode::Traditional => {
+                        ui.label("当前管线：传统（ASR + LLM）");
+                        ui.label(if credentials.asr_configured {
+                            "ASR 语音识别：已配置。"
+                        } else {
+                            "ASR 语音识别：尚未配置，请配置 AI 服务或激活本地模型。"
+                        });
+                        ui.label(if credentials.llm_configured {
+                            "LLM 润色：已配置。"
+                        } else {
+                            "LLM 润色：尚未配置。"
+                        });
+                    }
+                }
+                ui.small("已配置不代表校验通过；请到 AI 服务验证连接。");
+            }
+            ui.horizontal_wrapped(|ui| {
+                for (page, label) in [
+                    (Page::Settings, "1. 准备环境"),
+                    (Page::Services, "2. 配置 AI 服务"),
+                    (Page::Models, "使用本地模型"),
+                    (Page::Dictation, "3. 打开听写"),
+                ] {
+                    if ui
+                        .add_enabled(
+                            self.native.is_some() || page == Page::Settings,
+                            egui::Button::new(label),
+                        )
+                        .clicked()
+                    {
+                        self.navigation.open(page);
+                    }
+                }
+            });
+            ui.separator();
+            if self.native.is_none() {
+                self.environment_ui(ui);
+            } else {
+                ui.strong("继续其他任务");
+                ui.horizontal_wrapped(|ui| {
+                    for page in [
+                        Page::Qa,
+                        Page::Selection,
+                        Page::Agent,
+                        Page::Remote,
+                        Page::History,
+                    ] {
+                        if ui.button(page.label()).clicked() {
+                            self.navigation.open(page);
+                        }
+                    }
+                });
+                ui.label("问答支持文字与语音；选区润色保留确认、取消与撤销；Less Computer 的工具执行继续使用原有审批。");
+                ui.small(
+                    "Linux 当前提供已有 Core / Host 能力的入口，完整原生支持与发布验收仍在继续。",
+                );
+            }
+        }
+
+        fn page_activity(&self, page: Page) -> Option<&'static str> {
+            match page {
+                Page::Dictation
+                    if self.snapshot.as_ref().is_some_and(|snapshot| {
+                        matches!(
+                            snapshot.dictation.phase,
+                            DictationPhase::Starting
+                                | DictationPhase::Recording
+                                | DictationPhase::Transcribing
+                                | DictationPhase::Polishing
+                                | DictationPhase::Inserting
+                        )
+                    }) =>
+                {
+                    Some("进行中")
+                }
+                Page::Qa if self.qa_visible => Some("会话"),
+                Page::Selection
+                    if self.selection_preview_visible
+                        && self.selection.as_ref().is_some_and(|selection| {
+                            selection.phase == SelectionPhase::Preview
+                        }) =>
+                {
+                    Some("待确认")
+                }
+                Page::Agent if self.pending_approval.is_some() => Some("待审批"),
+                Page::Agent if self.less_computer_running => Some("进行中"),
+                _ if self.navigation.has_update(page) => Some("有更新"),
+                _ => None,
+            }
+        }
+
+        fn navigation_button(&mut self, ui: &mut egui::Ui, page: Page) {
+            let label = match self.page_activity(page) {
+                Some(activity) => format!("{} · {activity}", page.label()),
+                None => page.label().to_string(),
+            };
+            if ui
+                .selectable_label(self.navigation.page == page, label)
+                .clicked()
+            {
+                self.navigation.open(page);
+            }
+        }
+
+        fn activity_ui(&mut self, ui: &mut egui::Ui) {
+            ui.horizontal_wrapped(|ui| {
+                for page in Page::ALL {
+                    if let Some(activity) = self.page_activity(page) {
+                        if ui
+                            .link(format!("{} · {activity} →", page.label()))
+                            .clicked()
+                        {
+                            self.navigation.open(page);
+                        }
+                    }
+                }
+                if self.native.is_some() && ui.button("取消当前语音 · Esc").clicked() {
+                    self.cancel_voice();
+                }
+                if self.qa_visible && ui.button("取消问答").clicked() {
+                    if let Some(backend) = self.backend() {
+                        let session_id = self
+                            .qa_state
+                            .as_ref()
+                            .and_then(|state| state.session_id.as_deref())
+                            .and_then(|id| uuid::Uuid::parse_str(id).ok())
+                            .map(openless_core::SessionId::from_uuid);
+                        self.spawn(async move {
+                            backend.services().qa.cancel(session_id).await?;
+                            Ok("问答本轮已取消".to_string())
+                        });
+                    }
+                }
+                if let Some(session_id) = self
+                    .selection
+                    .as_ref()
+                    .filter(|selection| selection.phase == SelectionPhase::Preview)
+                    .and_then(|selection| selection.session_id)
+                {
+                    if ui.button("取消选区预览").clicked() {
+                        if let Some(backend) = self.backend() {
+                            self.spawn(async move {
+                                backend
+                                    .services()
+                                    .selection
+                                    .cancel(Some(session_id))
+                                    .await?;
+                                Ok("选区替换已取消".to_string())
+                            });
+                        }
+                    }
+                }
+                if (self.less_computer_running || self.pending_approval.is_some())
+                    && ui.button("取消 Agent").clicked()
+                {
+                    if let Some(backend) = self.backend() {
+                        self.spawn(async move {
+                            backend.cancel_less_computer(None).await?;
+                            Ok("Less Computer 已取消".to_string())
+                        });
+                    }
+                }
+            });
+        }
+
+        fn cancel_voice(&self) {
+            if let Some(backend) = self.backend() {
+                self.spawn(async move {
+                    backend.cancel_active_voice_session(None).await?;
+                    Ok("语音会话已取消".to_string())
+                });
+            }
+        }
+
         fn history_ui(&mut self, ui: &mut egui::Ui) {
             ui.heading("历史");
+            ui.label("最近 20 条，只读。插入、复制回退与已发送粘贴分别显示实际结果。");
             let Some(backend) = self.backend() else {
                 return;
             };
@@ -1528,48 +2001,94 @@ mod linux_app {
 
     impl eframe::App for OpenLessEguiApp {
         fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+            // Poll every frame before routing pages. Hidden pages retain their
+            // drafts, session ownership, event replay and async completion paths.
             self.poll(ctx);
             if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
-                if let Some(backend) = self.backend() {
-                    self.spawn(async move {
-                        backend.cancel_active_voice_session(None).await?;
-                        Ok("语音会话已取消".to_string())
-                    });
-                }
+                self.cancel_voice();
             }
             egui::TopBottomPanel::top("status").show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.strong("OpenLess 2.0");
                     ui.separator();
-                    ui.label(&self.status);
+                    ui.add(egui::Label::new(&self.status).truncate())
+                        .on_hover_text(&self.status);
                 });
-            });
-            egui::CentralPanel::default().show(ctx, |ui| {
-                if let Some(error) = &self.startup_error {
-                    ui.heading("启动失败");
-                    ui.colored_label(egui::Color32::RED, error);
-                    return;
+                self.activity_ui(ui);
+                if self.pending_approval.is_some() {
+                    ui.strong("Less Computer 等待审批");
+                    self.agent_approval_ui(ui);
                 }
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    self.dictation_ui(ui);
-                    ui.separator();
-                    self.qa_ui(ui);
-                    if self.qa_visible {
-                        ui.separator();
-                    }
-                    self.selection_ui(ui);
-                    ui.separator();
-                    self.less_computer_ui(ui);
-                    ui.separator();
-                    self.models_ui(ui);
-                    ui.separator();
-                    self.settings_ui(ui);
-                    ui.separator();
-                    self.history_ui(ui);
+            });
+            if ctx.screen_rect().width() < 760.0 {
+                egui::TopBottomPanel::top("compact_navigation").show(ctx, |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        for page in Page::ALL {
+                            self.navigation_button(ui, page);
+                        }
+                    });
                 });
+            } else {
+                egui::SidePanel::left("navigation")
+                    .resizable(false)
+                    .default_width(176.0)
+                    .show(ctx, |ui| {
+                        egui::ScrollArea::vertical()
+                            .id_salt("navigation_scroll")
+                            .show(ui, |ui| {
+                                ui.strong("工作空间");
+                                ui.add_space(8.0);
+                                for page in Page::ALL {
+                                    if page == Page::Services {
+                                        ui.separator();
+                                        ui.strong("准备与管理");
+                                    }
+                                    self.navigation_button(ui, page);
+                                }
+                            });
+                    });
+            }
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let page = self.navigation.page;
+                egui::ScrollArea::vertical()
+                    .id_salt(("page", page))
+                    .show(ui, |ui| {
+                        if self.native.is_none() && !matches!(page, Page::Start | Page::Settings) {
+                            ui.heading(page.label());
+                            ui.label("Core 尚未连接，请先完成 Linux 环境准备并重新启动应用。");
+                            if let Some(error) = &self.startup_error {
+                                ui.colored_label(egui::Color32::YELLOW, error);
+                            }
+                            if ui.button("查看环境准备步骤").clicked() {
+                                self.navigation.open(Page::Settings);
+                            }
+                            return;
+                        }
+                        match page {
+                            Page::Start => self.start_ui(ui),
+                            Page::Dictation => self.dictation_ui(ui),
+                            Page::Qa => self.qa_ui(ui),
+                            Page::Selection => self.selection_ui(ui),
+                            Page::Agent => self.less_computer_ui(ui),
+                            Page::Services => self.services_ui(ui),
+                            Page::Models => self.models_ui(ui),
+                            Page::Remote => self.remote_ui(ui),
+                            Page::History => self.history_ui(ui),
+                            Page::Settings => self.settings_ui(ui),
+                        }
+                    });
             });
             ctx.request_repaint_after(Duration::from_millis(50));
         }
+    }
+
+    fn command_ui(ui: &mut egui::Ui, command: &str) {
+        ui.horizontal_wrapped(|ui| {
+            ui.monospace(command);
+            if ui.button("复制命令").clicked() {
+                ui.ctx().copy_text(command.to_string());
+            }
+        });
     }
 
     impl Drop for OpenLessEguiApp {
@@ -2136,7 +2655,7 @@ mod linux_app {
         })
     }
 
-    fn ensure_fcitx5_ready(config: &BackendConfig) -> Result<(), String> {
+    fn ensure_fcitx5_ready(config: &BackendConfig) -> Result<FcitxPluginStatus, String> {
         let home = config
             .home_dir
             .as_deref()
@@ -2144,16 +2663,7 @@ mod linux_app {
         let layout = LinuxResourceLayout::detect(None).map_err(|error| error.to_string())?;
         let plan =
             FcitxPluginInstallPlan::for_layout(&layout, home).map_err(|error| error.to_string())?;
-        match ensure_fcitx5_plugin_installed(&plan).map_err(|error| error.to_string())? {
-            FcitxPluginStatus::Ready => Ok(()),
-            FcitxPluginStatus::Updated => Err(
-                "fcitx5 插件已安装或更新；请先重载 fcitx5（fcitx5-remote -r）再重启 OpenLess"
-                    .to_string(),
-            ),
-            FcitxPluginStatus::Missing => {
-                Err("未找到 OpenLess fcitx5 插件；请重新安装当前软件包".to_string())
-            }
-        }
+        ensure_fcitx5_plugin_installed(&plan).map_err(|error| error.to_string())
     }
 
     pub fn run() -> Result<(), String> {
@@ -2173,12 +2683,23 @@ mod linux_app {
             SingleInstanceRole::Primary(broker) => broker,
             SingleInstanceRole::Forwarded => return Ok(()),
         };
+        let plugin_check = ensure_fcitx5_ready(&config);
+        let environment = LinuxCapabilitySnapshot::detect(false, package_kind());
         let native = (|| {
             // AppImage may need to materialize its bundled plugin into the
             // per-user fcitx5 search path. Do that before opening the DBus
             // listener: otherwise the first run can wait forever for signals
             // from a plugin fcitx5 has never loaded.
-            ensure_fcitx5_ready(&config)?;
+            match &plugin_check {
+                Ok(FcitxPluginStatus::Ready) => {}
+                Ok(FcitxPluginStatus::Updated) => return Err(
+                    "fcitx5 插件已安装或更新；请重载配置（fcitx5-remote -r），重新启动 fcitx5 或重新登录桌面，再启动 OpenLess".to_string()
+                ),
+                Ok(FcitxPluginStatus::Missing) => return Err(
+                    "未找到 OpenLess fcitx5 插件；请重新安装当前软件包".to_string()
+                ),
+                Err(error) => return Err(error.clone()),
+            }
             let hotkeys = Fcitx5HotkeyListener::start().map_err(|error| error.to_string())?;
             let backend = {
                 // Construction captures the existing executor for cpal/native
@@ -2199,13 +2720,20 @@ mod linux_app {
                 .map_err(|error| error.to_string())
         })();
         let options = eframe::NativeOptions {
-            viewport: egui::ViewportBuilder::default().with_inner_size([960.0, 720.0]),
+            viewport: egui::ViewportBuilder::default()
+                .with_inner_size([1040.0, 760.0])
+                .with_min_inner_size([420.0, 400.0]),
             ..Default::default()
         };
         eframe::run_native(
             "OpenLess",
             options,
-            Box::new(move |_| Ok(Box::new(OpenLessEguiApp::new(tokio, native)))),
+            Box::new(move |_| {
+                let mut app = OpenLessEguiApp::new(tokio, native);
+                app.environment = Some(environment);
+                app.plugin_check = Some(plugin_check);
+                Ok(Box::new(app))
+            }),
         )
         .map_err(|error| error.to_string())
     }
@@ -2213,6 +2741,279 @@ mod linux_app {
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        fn disconnected_app() -> OpenLessEguiApp {
+            OpenLessEguiApp::new(
+                Arc::new(tokio::runtime::Runtime::new().unwrap()),
+                Err("fixture: plugin unavailable".into()),
+            )
+        }
+
+        fn rendered_text(mut draw: impl FnMut(&mut egui::Ui)) -> String {
+            let ctx = egui::Context::default();
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(720.0, 1800.0),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        draw(ui);
+                    });
+                },
+            );
+            output
+                .shapes
+                .into_iter()
+                .filter_map(|shape| match shape.shape {
+                    egui::epaint::Shape::Text(text) => Some(text.galley.job.text.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+
+        #[test]
+        fn start_page_pipeline_multimodal_uses_only_omni_configuration() {
+            use openless_core::shared_types::PipelineMode;
+
+            let mut app = disconnected_app();
+            // A pending settings draft must not override Core's effective mode.
+            app.preferences = Some(UserPreferences {
+                multimodal_pipeline_enabled: false,
+                pipeline_mode: PipelineMode::Traditional,
+                ..Default::default()
+            });
+            for omni_configured in [true, false] {
+                for (asr_configured, llm_configured) in
+                    [(false, false), (true, false), (false, true), (true, true)]
+                {
+                    app.snapshot = Some(BackendSnapshot {
+                        credentials: openless_core::shared_types::CredentialsStatus {
+                            pipeline_mode: PipelineMode::Multimodal,
+                            omni_configured,
+                            asr_configured,
+                            llm_configured,
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    });
+                    let text = rendered_text(|ui| app.start_ui(ui));
+                    let expected = if omni_configured {
+                        "Omni：已配置"
+                    } else {
+                        "Omni：尚未配置"
+                    };
+                    assert!(text.contains(expected), "missing {expected}: {text}");
+                    assert!(!text.contains("语音识别：尚未配置"), "{text}");
+                    assert!(!text.contains("ASR 语音识别："), "{text}");
+                    assert!(!text.contains("LLM 润色："), "{text}");
+                    assert!(text.contains("已配置不代表校验通过"), "{text}");
+                }
+            }
+        }
+
+        #[test]
+        fn start_page_pipeline_traditional_reports_asr_and_llm_independently() {
+            use openless_core::shared_types::PipelineMode;
+
+            let mut app = disconnected_app();
+            // Conversely, a multimodal draft must not hide the effective
+            // traditional pipeline's missing ASR or LLM configuration.
+            app.preferences = Some(UserPreferences {
+                multimodal_pipeline_enabled: true,
+                pipeline_mode: PipelineMode::Multimodal,
+                ..Default::default()
+            });
+            for omni_configured in [true, false] {
+                for (asr_configured, llm_configured) in
+                    [(false, false), (true, false), (false, true), (true, true)]
+                {
+                    app.snapshot = Some(BackendSnapshot {
+                        credentials: openless_core::shared_types::CredentialsStatus {
+                            pipeline_mode: PipelineMode::Traditional,
+                            omni_configured,
+                            asr_configured,
+                            llm_configured,
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    });
+                    let text = rendered_text(|ui| app.start_ui(ui));
+                    for expected in [
+                        if asr_configured {
+                            "ASR 语音识别：已配置"
+                        } else {
+                            "ASR 语音识别：尚未配置"
+                        },
+                        if llm_configured {
+                            "LLM 润色：已配置"
+                        } else {
+                            "LLM 润色：尚未配置"
+                        },
+                    ] {
+                        assert!(text.contains(expected), "missing {expected}: {text}");
+                    }
+                    assert!(!text.contains("Omni："), "{text}");
+                    assert!(text.contains("已配置不代表校验通过"), "{text}");
+                }
+            }
+        }
+
+        #[test]
+        fn background_approval_survives_navigation_and_stale_terminals() {
+            let mut app = disconnected_app();
+            let session = openless_core::SessionId::new();
+            for (sequence, kind) in [
+                (
+                    1,
+                    LessComputerEventKind::User {
+                        text: "task".into(),
+                        fresh: true,
+                    },
+                ),
+                (
+                    2,
+                    LessComputerEventKind::Approval {
+                        token: "approval".into(),
+                        command: "echo test".into(),
+                        reason: "fixture".into(),
+                    },
+                ),
+            ] {
+                app.apply_event(BackendEvent {
+                    sequence,
+                    session_id: Some(session),
+                    kind: BackendEventKind::LessComputerEvent(openless_core::LessComputerEvent {
+                        seq: None,
+                        kind,
+                    }),
+                });
+            }
+            for page in Page::ALL {
+                app.navigation.open(page);
+                assert_eq!(app.page_activity(Page::Agent), Some("待审批"));
+                let text = rendered_text(|ui| {
+                    app.activity_ui(ui);
+                    app.agent_approval_ui(ui);
+                });
+                for control in ["允许", "拒绝", "取消 Agent"] {
+                    assert!(
+                        text.contains(control),
+                        "missing {control} on {page:?}: {text}"
+                    );
+                }
+            }
+            app.apply_event(BackendEvent {
+                sequence: 3,
+                session_id: Some(openless_core::SessionId::new()),
+                kind: BackendEventKind::LessComputerEvent(openless_core::LessComputerEvent {
+                    seq: None,
+                    kind: LessComputerEventKind::Cancelled,
+                }),
+            });
+            assert_eq!(
+                app.pending_approval,
+                Some(("approval".into(), "echo test".into()))
+            );
+            assert!(app.less_computer_running);
+        }
+
+        #[test]
+        fn qa_and_selection_events_on_settings_keep_drafts_and_action_notices() {
+            let mut app = disconnected_app();
+            app.navigation.open(Page::Settings);
+            app.qa_input = "unsent question".into();
+            let qa_session = openless_core::SessionId::new();
+            let mut thinking = QaStateEvent::simple(QaStateKind::Thinking);
+            thinking.session_id = Some(qa_session.to_string());
+            app.apply_event(BackendEvent {
+                sequence: 1,
+                session_id: Some(qa_session),
+                kind: BackendEventKind::QaState(thinking),
+            });
+            let selection_session = openless_core::SessionId::new();
+            app.apply_event(BackendEvent {
+                sequence: 2,
+                session_id: Some(selection_session),
+                kind: BackendEventKind::SelectionStateChanged(SelectionSnapshot {
+                    phase: SelectionPhase::Preview,
+                    session_id: Some(selection_session),
+                    preview_text: Some("editable preview".into()),
+                    ..Default::default()
+                }),
+            });
+            assert_eq!(app.navigation.page, Page::Settings);
+            assert!(app.navigation.has_update(Page::Qa));
+            assert_eq!(app.page_activity(Page::Selection), Some("待确认"));
+            app.selection_draft = "user edited preview".into();
+            app.navigation.open(Page::Qa);
+            app.navigation.open(Page::Selection);
+            app.navigation.open(Page::Models);
+            assert_eq!(app.qa_input, "unsent question");
+            assert_eq!(app.selection_draft, "user edited preview");
+            assert_eq!(
+                app.selection.as_ref().unwrap().session_id,
+                Some(selection_session)
+            );
+            let text = rendered_text(|ui| app.activity_ui(ui));
+            assert!(text.contains("取消选区预览"), "{text}");
+        }
+
+        #[test]
+        fn startup_failure_keeps_preparation_steps_without_claiming_connection() {
+            let mut app = disconnected_app();
+            app.environment = Some(LinuxCapabilitySnapshot::from_environment(
+                Some("wayland-0"),
+                None,
+                false,
+                false,
+                LinuxPackageKind::AppImage,
+            ));
+            app.plugin_check = Some(Ok(FcitxPluginStatus::Updated));
+            let text = rendered_text(|ui| app.start_ui(ui));
+            for expected in [
+                "Core 未连接",
+                "Wayland",
+                "D-Bus 探测未通过",
+                "尚未验证录音",
+                "fcitx5-diagnose",
+                "fcitx5-remote -r",
+                "Secret Service",
+            ] {
+                assert!(text.contains(expected), "missing {expected}: {text}");
+            }
+            assert!(!text.contains("Core 已连接"));
+            assert!(!text.contains("Core：运行中"));
+        }
+
+        #[test]
+        fn stopped_or_stale_remote_status_never_shows_pairing_secrets_or_old_urls() {
+            let mut app = disconnected_app();
+            for (running, urls_stale) in [(false, false), (true, true)] {
+                app.remote_access = Some((
+                    openless_core::RemoteInputStatus {
+                        enabled: true,
+                        running,
+                        starting: false,
+                        port: 8443,
+                        urls: vec!["https://old.example.invalid".into()],
+                        urls_stale,
+                        locale: "en".into(),
+                        connection_count: 0,
+                        active_session_id: None,
+                    },
+                    "fixture-pin".into(),
+                ));
+                let text = rendered_text(|ui| app.remote_ui(ui));
+                assert!(!text.contains("fixture-pin"), "{text}");
+                assert!(!text.contains("https://old.example.invalid"), "{text}");
+                assert!(text.contains("当前连接数：0"), "{text}");
+            }
+        }
 
         #[test]
         fn continuation_turn_keeps_receiving_output_and_approval() {

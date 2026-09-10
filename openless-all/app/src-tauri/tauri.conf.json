@@ -16,8 +16,8 @@
       {
         "label": "main",
         "title": "OpenLess",
-        "width": 1240,
-        "height": 800,
+        "width": 1300,
+        "height": 835,
         "minWidth": 980,
         "minHeight": 640,
         "resizable": true,
@@ -26,7 +26,7 @@
         "shadow": true,
         "hiddenTitle": true,
         "titleBarStyle": "Overlay",
-        "trafficLightPosition": { "x": 14, "y": 20 },
+        "trafficLightPosition": { "x": 16, "y": 26 },
         "visible": false,
         "acceptFirstMouse": true
       },

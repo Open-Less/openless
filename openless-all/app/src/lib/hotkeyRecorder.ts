@@ -40,7 +40,7 @@ export function updateHotkeyRecorderState(
 export function orderHotkeyCodes(codes: string[]): string[] {
   const seen = new Set<string>();
   return codes
-    .filter(code => {
+    .filter((code) => {
       if (!code || seen.has(code)) return false;
       seen.add(code);
       return true;
@@ -59,14 +59,54 @@ function hotkeyCodeRank(code: string): number {
 }
 
 const HOTKEY_CODE_ORDER = [
-  'ControlLeft', 'ControlRight', 'AltLeft', 'AltRight', 'ShiftLeft', 'ShiftRight',
-  'MetaLeft', 'MetaRight', 'Fn', 'FnLock', 'CapsLock', 'ScrollLock', 'Pause',
-  'PrintScreen', 'Backspace', 'Tab', 'Enter', 'Space', 'Insert', 'Delete', 'Home',
-  'End', 'PageUp', 'PageDown', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
-  'ContextMenu', 'Backquote', 'Minus', 'Equal', 'BracketLeft', 'BracketRight',
-  'Backslash', 'Semicolon', 'Quote', 'Comma', 'Period', 'Slash', 'NumpadAdd',
-  'NumpadSubtract', 'NumpadMultiply', 'NumpadDivide', 'NumpadDecimal', 'NumpadEnter',
-  'Mouse4', 'Mouse5',
+  'ControlLeft',
+  'ControlRight',
+  'AltLeft',
+  'AltRight',
+  'ShiftLeft',
+  'ShiftRight',
+  'MetaLeft',
+  'MetaRight',
+  'Fn',
+  'FnLock',
+  'CapsLock',
+  'ScrollLock',
+  'Pause',
+  'PrintScreen',
+  'Backspace',
+  'Tab',
+  'Enter',
+  'Space',
+  'Insert',
+  'Delete',
+  'Home',
+  'End',
+  'PageUp',
+  'PageDown',
+  'ArrowUp',
+  'ArrowDown',
+  'ArrowLeft',
+  'ArrowRight',
+  'ContextMenu',
+  'Backquote',
+  'Minus',
+  'Equal',
+  'BracketLeft',
+  'BracketRight',
+  'Backslash',
+  'Semicolon',
+  'Quote',
+  'Comma',
+  'Period',
+  'Slash',
+  'NumpadAdd',
+  'NumpadSubtract',
+  'NumpadMultiply',
+  'NumpadDivide',
+  'NumpadDecimal',
+  'NumpadEnter',
+  'Mouse4',
+  'Mouse5',
 ];
 
 /** Prefer physical function-key codes; WebKit can expose a private-use key value. */

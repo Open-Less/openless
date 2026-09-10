@@ -9,7 +9,7 @@ import { useMobileLayout } from '../../lib/useMobileLayout';
 import type { HostDocumentReadResult } from '../../lib/types';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
 import { Btn, Card } from '../_atoms';
-import { SettingRow, Toggle, SectionTitle, inputStyle } from './shared';
+import { SettingRow, Toggle, inputStyle } from './shared';
 
 const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
 
@@ -26,10 +26,13 @@ export function DebugToolsSection() {
   const [probeError, setProbeError] = useState<string | null>(null);
   const probeTimerRef = useRef<number | null>(null);
 
-  useEffect(() => () => {
-    if (exportTimerRef.current) clearTimeout(exportTimerRef.current);
-    if (probeTimerRef.current) clearInterval(probeTimerRef.current);
-  }, []);
+  useEffect(
+    () => () => {
+      if (exportTimerRef.current) clearTimeout(exportTimerRef.current);
+      if (probeTimerRef.current) clearInterval(probeTimerRef.current);
+    },
+    [],
+  );
 
   /// 点一下 → 倒数几秒 → 读一次前台 app 的光标上下文。
   ///
@@ -42,7 +45,7 @@ export function DebugToolsSection() {
     setProbeCountdown(PROBE_DELAY_SECONDS);
     if (probeTimerRef.current) clearInterval(probeTimerRef.current);
     probeTimerRef.current = window.setInterval(() => {
-      setProbeCountdown(prev => {
+      setProbeCountdown((prev) => {
         if (prev <= 1 && probeTimerRef.current) clearInterval(probeTimerRef.current);
         return Math.max(0, prev - 1);
       });
@@ -101,19 +104,26 @@ export function DebugToolsSection() {
 
   return (
     <Card>
-      <SectionTitle>{t('settings.debug.title')}</SectionTitle>
       <SettingRow label={t('settings.recording.recordAudioForDebugLabel')}>
         <Toggle on={prefs.recordAudioForDebug} onToggle={onRecordAudioForDebugChange} />
       </SettingRow>
       <SettingRow label={t('settings.recording.audioRecordingMaxEntriesLabel')}>
-        <div style={{ display: 'flex', flexDirection: mobile ? 'column' : 'row', gap: 8, alignItems: mobile ? 'stretch' : 'center', width: '100%' }}>
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: mobile ? 'column' : 'row',
+            gap: 8,
+            alignItems: mobile ? 'stretch' : 'center',
+            width: '100%',
+          }}
+        >
           <input
             type="number"
             min={1}
             max={200}
             placeholder="200"
             value={prefs.audioRecordingMaxEntries ?? ''}
-            onChange={e => onAudioRecordingMaxEntriesChange(e.target.value)}
+            onChange={(e) => onAudioRecordingMaxEntriesChange(e.target.value)}
             style={{ ...inputStyle, width: mobile ? '100%' : 80, textAlign: 'right' }}
             disabled={!prefs.recordAudioForDebug}
           />
@@ -126,26 +136,36 @@ export function DebugToolsSection() {
       </SettingRow>
       {/* 光标上下文探针。里程碑 1 的产物「能肉眼看它在各 app 里读到了什么」——
           没有这个入口，那条命令就等于不存在。 */}
-      <SettingRow label={t('settings.debug.cursorProbeLabel')} desc={t('settings.debug.cursorProbeDesc')}>
+      <SettingRow
+        label={t('settings.debug.cursorProbeLabel')}
+        desc={t('settings.debug.cursorProbeDesc')}
+      >
         <div style={{ display: 'grid', gap: 6, minWidth: 0 }}>
           <div>
-            <Btn variant="ghost" size="sm" disabled={probeCountdown > 0} onClick={() => void onProbeCursorContext()}>
+            <Btn
+              variant="ghost"
+              size="sm"
+              disabled={probeCountdown > 0}
+              onClick={() => void onProbeCursorContext()}
+            >
               {probeCountdown > 0
                 ? t('settings.debug.cursorProbeCountdown', { n: probeCountdown })
                 : t('settings.debug.cursorProbeBtn')}
             </Btn>
           </div>
-          {probeError && (
-            <div style={{ fontSize: 11, color: 'var(--ol-err)' }}>{probeError}</div>
-          )}
+          {probeError && <div style={{ fontSize: 11, color: 'var(--ol-err)' }}>{probeError}</div>}
           {probeResult && (
             <div
               style={{
-                fontSize: 11, fontFamily: 'var(--ol-font-mono)', lineHeight: 1.7,
-                padding: '8px 10px', borderRadius: 8,
+                fontSize: 11,
+                fontFamily: 'var(--ol-font-mono)',
+                lineHeight: 1.7,
+                padding: '8px 10px',
+                borderRadius: 8,
                 background: 'var(--ol-surface-2)',
                 border: '0.5px solid var(--ol-line-strong)',
-                maxWidth: 420, wordBreak: 'break-word',
+                maxWidth: 420,
+                wordBreak: 'break-word',
               }}
             >
               <div>
@@ -159,7 +179,9 @@ export function DebugToolsSection() {
               {probeResult.window && (
                 <div style={{ marginTop: 4, whiteSpace: 'pre-wrap' }}>
                   {probeResult.window.text.slice(0, probeResult.window.cursor)}
-                  <span style={{ color: 'var(--ol-blue)', fontWeight: 700 }}>⟦光标⟧</span>
+                  <span style={{ color: 'var(--ol-blue)', fontWeight: 700 }}>
+                    ⟦{t('settings.debug.cursorLabel')}⟧
+                  </span>
                   {probeResult.window.text.slice(probeResult.window.cursor)}
                 </div>
               )}
@@ -170,7 +192,9 @@ export function DebugToolsSection() {
       <SettingRow label={t('modal.about.exportErrorLog')}>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <Btn variant="ghost" size="sm" disabled={exportStatus === 'busy'} onClick={onExportLog}>
-            {exportStatus === 'busy' ? t('modal.about.exporting') : t('modal.about.exportErrorLogBtn')}
+            {exportStatus === 'busy'
+              ? t('modal.about.exporting')
+              : t('modal.about.exportErrorLogBtn')}
           </Btn>
           {exportStatus === 'ok' && (
             <span
@@ -191,7 +215,13 @@ export function DebugToolsSection() {
           )}
           {exportStatus === 'err' && (
             <span
-              style={{ fontSize: 11, color: 'var(--ol-err)', lineHeight: 1.45, wordBreak: 'break-word', maxWidth: mobile ? '100%' : 280 }}
+              style={{
+                fontSize: 11,
+                color: 'var(--ol-err)',
+                lineHeight: 1.45,
+                wordBreak: 'break-word',
+                maxWidth: mobile ? '100%' : 280,
+              }}
               title={exportMessage}
             >
               {t('modal.about.exportFailed')}

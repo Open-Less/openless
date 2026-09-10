@@ -146,10 +146,7 @@ export function RemoteInputSection() {
         label={t('settings.remoteInput.enableLabel')}
         desc={t('settings.remoteInput.enableDesc')}
       >
-        <Toggle
-          on={enabled}
-          onToggle={(v) => updatePrefs({ ...prefs, remoteInputEnabled: v })}
-        />
+        <Toggle on={enabled} onToggle={(v) => updatePrefs({ ...prefs, remoteInputEnabled: v })} />
       </SettingRow>
 
       <SettingRow label={t('settings.remoteInput.portLabel')}>
@@ -172,17 +169,14 @@ export function RemoteInputSection() {
           {(['toggle', 'hold'] as const).map((m) => (
             <button
               key={m}
-              onClick={() =>
-                updatePrefs({ ...prefs, remoteInputDefaultMode: m })
-              }
+              onClick={() => updatePrefs({ ...prefs, remoteInputDefaultMode: m })}
               style={{
                 padding: '5px 12px',
                 borderRadius: 8,
                 fontSize: 12.5,
                 cursor: 'pointer',
                 border: '0.5px solid var(--ol-line-strong)',
-                background:
-                  mode === m ? 'var(--ol-blue)' : 'var(--ol-surface-2)',
+                background: mode === m ? 'var(--ol-blue)' : 'var(--ol-surface-2)',
                 color: mode === m ? '#fff' : 'var(--ol-ink)',
               }}
             >
@@ -273,11 +267,13 @@ export function RemoteInputSection() {
                         const link = `${u}/cert.mobileconfig`;
                         await copyText(link);
                         setCopied(link);
-                        window.setTimeout(() => setCopied((c) => c === link ? null : c), 1500);
+                        window.setTimeout(() => setCopied((c) => (c === link ? null : c)), 1500);
                       }}
                       style={smallBtn}
                     >
-                      {copied === `${u}/cert.mobileconfig` ? '✓' : t('settings.remoteInput.certSetupLink')}
+                      {copied === `${u}/cert.mobileconfig`
+                        ? '✓'
+                        : t('settings.remoteInput.certSetupLink')}
                     </button>
                   </div>
                 ))}
@@ -287,11 +283,7 @@ export function RemoteInputSection() {
 
           <SettingRow label={t('settings.remoteInput.pinLabel')}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <code
-                style={{ fontSize: 15, letterSpacing: 2, fontWeight: 600 }}
-              >
-                {status.pin}
-              </code>
+              <code style={{ fontSize: 15, letterSpacing: 2, fontWeight: 600 }}>{status.pin}</code>
               <button
                 onClick={async () => {
                   try {

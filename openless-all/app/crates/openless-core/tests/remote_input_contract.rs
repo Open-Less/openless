@@ -950,10 +950,16 @@ async fn locale_and_connection_status_are_core_owned() {
     let runtime = Arc::new(FixtureRemoteRuntime::default());
     let (backend, data_dir) = backend(runtime);
     let remote = &backend.services().remote_input;
-    remote.set_locale("en".to_string()).await.unwrap();
-    assert_eq!(remote.status().unwrap().locale, "en");
+    for locale in ["en", "es", "fr", "de"] {
+        remote.set_locale(locale.to_string()).await.unwrap();
+        assert_eq!(remote.status().unwrap().locale, locale);
+    }
     assert_eq!(
-        remote.set_locale("fr".to_string()).await.unwrap_err().code,
+        remote
+            .set_locale("invalid-locale".to_string())
+            .await
+            .unwrap_err()
+            .code,
         BackendErrorCode::InvalidArgument
     );
     assert_eq!(

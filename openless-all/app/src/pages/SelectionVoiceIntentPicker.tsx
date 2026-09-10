@@ -27,11 +27,17 @@ export function SelectionVoiceIntentPicker() {
     };
     void load();
     void import('@tauri-apps/api/event').then(({ listen }) =>
-      listen('selection-voice-intent:shown', () => { void load(); }).then(handle => {
-        if (cancelled) handle(); else unlisten = handle;
+      listen('selection-voice-intent:shown', () => {
+        void load();
+      }).then((handle) => {
+        if (cancelled) handle();
+        else unlisten = handle;
       }),
     );
-    return () => { cancelled = true; unlisten?.(); };
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
   }, []);
 
   const choose = async (intent: 'question' | 'edit') => {
@@ -51,15 +57,16 @@ export function SelectionVoiceIntentPicker() {
   };
 
   return (
-    <main style={{
-      display: 'flex',
-      flexDirection: 'column',
-      height: '100%',
-      boxSizing: 'border-box',
-      padding: 18,
-      background: 'var(--ol-surface)',
-      color: 'var(--ol-ink)',
-    }}
+    <main
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        height: '100%',
+        boxSizing: 'border-box',
+        padding: 18,
+        background: 'var(--ol-surface)',
+        color: 'var(--ol-ink)',
+      }}
     >
       <header style={{ marginBottom: 12 }}>
         <div style={{ fontSize: 16, fontWeight: 700 }}>{t('selectionVoiceIntent.title')}</div>
@@ -67,34 +74,38 @@ export function SelectionVoiceIntentPicker() {
           {t('selectionVoiceIntent.subtitle')}
         </div>
       </header>
-      <div style={{
-        padding: '10px 12px',
-        borderRadius: 9,
-        border: '0.5px solid var(--ol-line-strong)',
-        background: 'var(--ol-control-solid)',
-        fontSize: 14,
-        lineHeight: 1.6,
-        minHeight: 48,
-      }}
+      <div
+        style={{
+          padding: '10px 12px',
+          borderRadius: 9,
+          border: '0.5px solid var(--ol-line-strong)',
+          background: 'var(--ol-control-solid)',
+          fontSize: 14,
+          lineHeight: 1.6,
+          minHeight: 48,
+        }}
       >
         {instruction || t('selectionVoiceIntent.loading')}
       </div>
       {sourceText && (
-        <div style={{
-          marginTop: 8,
-          maxHeight: 40,
-          overflow: 'hidden',
-          fontSize: 11,
-          lineHeight: 1.5,
-          color: 'var(--ol-ink-4)',
-        }}
+        <div
+          style={{
+            marginTop: 8,
+            maxHeight: 40,
+            overflow: 'hidden',
+            fontSize: 11,
+            lineHeight: 1.5,
+            color: 'var(--ol-ink-4)',
+          }}
         >
-          {t('selectionVoiceIntent.sourcePrefix')}{sourceText}
+          {t('selectionVoiceIntent.sourcePrefix')}
+          {sourceText}
         </div>
       )}
       {error && (
         <div style={{ marginTop: 8, fontSize: 12, color: 'var(--ol-red, #dc2626)' }}>
-          {t('selectionVoiceIntent.errorPrefix')}{error}
+          {t('selectionVoiceIntent.errorPrefix')}
+          {error}
         </div>
       )}
       <footer style={{ display: 'flex', gap: 8, marginTop: 16 }}>

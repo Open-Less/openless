@@ -282,7 +282,17 @@ function visualVoice(raw: number): number {
   return Math.pow(eased, 0.42);
 }
 
-export function SiriGL({ mode, level, resolved, warming, warmupMs, speed, merging, className, style }: SiriGLProps) {
+export function SiriGL({
+  mode,
+  level,
+  resolved,
+  warming,
+  warmupMs,
+  speed,
+  merging,
+  className,
+  style,
+}: SiriGLProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   // 60Hz 的 level 更新走 ref 桥接：render 只同步数值，绘制循环在 rAF 里读，
   // 不因 props 变化重建 GL 管线。

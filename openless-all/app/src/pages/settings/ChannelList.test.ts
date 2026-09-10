@@ -27,13 +27,13 @@ const descriptors: ProviderDescriptor[] = [
   'bailian-qwen3-realtime',
   'bailian-fun-asr-flash',
   ...localProviders,
-].map(providerType => ({
+].map((providerType) => ({
   kind: 'asr',
   providerType,
   labelKey: providerType,
   defaultEndpoint: null,
   defaultModel: null,
-  authRequirement: localProviders.includes(providerType as typeof localProviders[number])
+  authRequirement: localProviders.includes(providerType as (typeof localProviders)[number])
     ? 'none'
     : 'api_key',
   validationProbe: 'unsupported',
@@ -46,7 +46,7 @@ const asrPresets = (os: OS, supportsQwen3Mlx = true, currentProviderId?: string)
   presetsFor('asr', os, supportsQwen3Mlx, currentProviderId, descriptors);
 
 for (const os of Object.keys(expectedByPlatform) as OS[]) {
-  const ids = new Set(asrPresets(os).map(preset => preset.id));
+  const ids = new Set(asrPresets(os).map((preset) => preset.id));
   const expected = new Set(expectedByPlatform[os]);
 
   for (const provider of localProviders) {
@@ -66,27 +66,27 @@ for (const os of Object.keys(expectedByPlatform) as OS[]) {
   }
 }
 
-const intelMacIds = new Set(asrPresets('mac', false).map(preset => preset.id));
+const intelMacIds = new Set(asrPresets('mac', false).map((preset) => preset.id));
 if (intelMacIds.has('local-qwen3-mlx') || !intelMacIds.has('local-qwen3-c')) {
   throw new Error('Intel macOS must expose C/CPU Qwen3 but not MLX');
 }
 
 const legacyQwenEditIds = new Set(
-  asrPresets('mac', true, 'local-qwen3').map(preset => preset.id),
+  asrPresets('mac', true, 'local-qwen3').map((preset) => preset.id),
 );
 if (!legacyQwenEditIds.has('local-qwen3')) {
   throw new Error('editing a legacy local-qwen3 channel must keep its current option visible');
 }
 
 const legacyBailianEditIds = new Set(
-  asrPresets('linux', true, 'bailian-qwen3-realtime').map(preset => preset.id),
+  asrPresets('linux', true, 'bailian-qwen3-realtime').map((preset) => preset.id),
 );
 if (!legacyBailianEditIds.has('bailian-qwen3-realtime')) {
   throw new Error('editing a legacy Bailian channel must keep its current option visible');
 }
 
 const unknownEditIds = new Set(
-  asrPresets('mac', true, 'unknown-provider').map(preset => preset.id),
+  asrPresets('mac', true, 'unknown-provider').map((preset) => preset.id),
 );
 if (unknownEditIds.has('unknown-provider')) {
   throw new Error('unknown provider ids must not be injected into preset options');

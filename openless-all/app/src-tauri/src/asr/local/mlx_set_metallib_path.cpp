@@ -6,12 +6,12 @@
 namespace mlx {
 namespace core {
 namespace metal {
-void set_metallib_path(const std::string& path);
+void set_metallib_path(const std::string &path);
 }
-}
-}
+} // namespace core
+} // namespace mlx
 
-extern "C" int openless_mlx_set_metallib_path(const char* path) {
+extern "C" int openless_mlx_set_metallib_path(const char *path) {
   if (path == nullptr || path[0] == '\0') {
     return 1;
   }

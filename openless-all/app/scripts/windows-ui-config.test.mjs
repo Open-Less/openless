@@ -21,13 +21,28 @@ const libRs = await readFile(new URL('../src-tauri/src/lib.rs', import.meta.url)
 const coordinatorRs =
   (await readFile(new URL('../src-tauri/src/coordinator.rs', import.meta.url), 'utf-8')) +
   '\n' +
-  (await readFile(new URL('../src-tauri/src/coordinator/capsule_focus.rs', import.meta.url), 'utf-8')) +
+  (await readFile(
+    new URL('../src-tauri/src/coordinator/capsule_focus.rs', import.meta.url),
+    'utf-8',
+  )) +
   '\n' +
   (await readFile(new URL('../src-tauri/src/tauri_coordinator_host.rs', import.meta.url), 'utf-8'));
-const capsuleTsx = await readFile(new URL('../src/components/Capsule.tsx', import.meta.url), 'utf-8');
-const capsuleLayoutTs = await readFile(new URL('../src/lib/capsuleLayout.ts', import.meta.url), 'utf-8');
-const windowChromeTsx = await readFile(new URL('../src/components/WindowChrome.tsx', import.meta.url), 'utf-8');
-const floatingShellTsx = await readFile(new URL('../src/components/FloatingShell.tsx', import.meta.url), 'utf-8');
+const capsuleTsx = await readFile(
+  new URL('../src/components/Capsule.tsx', import.meta.url),
+  'utf-8',
+);
+const capsuleLayoutTs = await readFile(
+  new URL('../src/lib/capsuleLayout.ts', import.meta.url),
+  'utf-8',
+);
+const windowChromeTsx = await readFile(
+  new URL('../src/components/WindowChrome.tsx', import.meta.url),
+  'utf-8',
+);
+const floatingShellTsx = await readFile(
+  new URL('../src/components/FloatingShell.tsx', import.meta.url),
+  'utf-8',
+);
 const themeModeTs = await readFile(new URL('../src/lib/themeMode.ts', import.meta.url), 'utf-8');
 const platformTs = await readFile(new URL('../src/lib/platform.ts', import.meta.url), 'utf-8');
 
@@ -40,9 +55,17 @@ if (!mainWindow) {
 assertEqual(capsuleWindow.width, 460, 'windows capsule config keeps the shared bootstrap width');
 assertEqual(capsuleWindow.height, 180, 'windows capsule config keeps the shared bootstrap height');
 assertEqual(capsuleWindow.transparent, true, 'capsule window should keep transparent visuals');
-assertEqual(capsuleWindow.alwaysOnTop, true, 'capsule window should stay above the focused app while recording');
+assertEqual(
+  capsuleWindow.alwaysOnTop,
+  true,
+  'capsule window should stay above the focused app while recording',
+);
 assertEqual(mainWindow.decorations, true, 'windows main window should keep native decorations');
-assertEqual(mainWindow.visible, false, 'windows main window should stay hidden until the intended first show point');
+assertEqual(
+  mainWindow.visible,
+  false,
+  'windows main window should stay hidden until the intended first show point',
+);
 
 assertMatch(
   libRs,
@@ -77,7 +100,9 @@ assertMatch(
 const tokensCss = await readFile(new URL('../src/styles/tokens.css', import.meta.url), 'utf-8');
 
 if (!/os === 'win' \|\| os === 'android' \? 0 : 14/.test(windowChromeTsx)) {
-  throw new Error('windows main shell should rely on native decorations instead of a frameless chrome shell');
+  throw new Error(
+    'windows main shell should rely on native decorations instead of a frameless chrome shell',
+  );
 }
 
 assertMatch(
@@ -88,16 +113,25 @@ assertMatch(
 
 assertMatch(
   windowChromeTsx,
-  /const MAC_TITLEBAR_HEIGHT = 28;/,
-  'macOS titlebar spacer should stay visually compact around the native traffic lights',
+  /const MAC_TITLEBAR_HEIGHT = 44;/,
+  'macOS drag region should reserve the native traffic-light area',
 );
+assertEqual(mainWindow.trafficLightPosition.x, 16, 'traffic lights should have a 16px left inset');
+// tao 的 inset_traffic_lights 里 y 只缩放标题栏容器（斜率 1），视觉顶距 ≈ y-14；
+// 左 16 时实测左距 21.5px，y=26 才让顶距与之相等（x==y 反而不等）。
+assertEqual(mainWindow.trafficLightPosition.y, 26, 'traffic lights should have an equal visual top inset');
+assertEqual(mainWindow.width, 1300, 'main window should use the reviewed default width');
+assertEqual(mainWindow.height, 835, 'main window should use the reviewed default height');
+assertEqual(mainWindow.resizable, true, 'users should still be able to resize the main window');
 assertMatch(
   libRs,
   /show_main_window[\s\S]*?set_focus\(\)/,
   'macOS main window should rely on native traffic lights instead of manually moving standardWindowButton frames',
 );
 if (/standardWindowButton|setFrameOrigin: origin|tune_macos_main_window_controls/.test(libRs)) {
-  throw new Error('macOS traffic lights should not be manually repositioned; keep native AppKit button frames visible');
+  throw new Error(
+    'macOS traffic lights should not be manually repositioned; keep native AppKit button frames visible',
+  );
 }
 if (!/className=\"ol-linux-close-btn\"/.test(windowChromeTsx)) {
   throw new Error('linux titlebar should keep the close button treatment');
@@ -141,8 +175,14 @@ assertMatch(
   'windows capsule hide helper should drop topmost participation when inactive',
 );
 
-if (!/export function getCapsuleHostMetrics\(\s*os: OS,\s*translationActive: boolean,\s*\): CapsuleHostMetrics/.test(capsuleLayoutTs)) {
-  throw new Error('capsule layout should define explicit host metrics separate from the visible pill metrics');
+if (
+  !/export function getCapsuleHostMetrics\(\s*os: OS,\s*translationActive: boolean,\s*style: CapsuleStyle = 'siri',?\s*\): CapsuleHostMetrics/.test(
+    capsuleLayoutTs,
+  )
+) {
+  throw new Error(
+    'capsule layout should define explicit host metrics separate from the visible pill metrics',
+  );
 }
 
 assertMatch(
@@ -155,24 +195,35 @@ assertMatch(
 
 assertMatch(
   capsuleLayoutTs,
-  /const stage = getCapsulePillMetrics\(os\);[\s\S]*?width: stage\.width,[\s\S]*?height: stage\.height,[\s\S]*?horizontalInset: 0,[\s\S]*?bottomInset: 0,[\s\S]*?badgeGap: 8,[\s\S]*?boxSizing: 'border-box'/,
-  'capsule host metrics should mirror the shared voice-orb stage without legacy Windows insets',
+  /const stage = getCapsulePillMetrics\(os\);[\s\S]*?width: stage\.width,[\s\S]*?height: style === 'siri' \? stage\.height : style === 'classic' \? 100 : 128,[\s\S]*?horizontalInset: 0,[\s\S]*?bottomInset: style === 'siri' \? 0 : 16,[\s\S]*?badgeGap: 8,[\s\S]*?boxSizing: 'border-box'/,
+  'capsule host metrics should preserve Siri and reserve compact surfaces for Classic and Typeless',
 );
 
-if (!/const hostMetrics = getCapsuleHostMetrics\(os,\s*translation\);/.test(capsuleTsx)) {
+if (
+  !/const hostMetrics = getCapsuleHostMetrics\(os,\s*translation,\s*capsuleStyle\);/.test(
+    capsuleTsx,
+  )
+) {
   throw new Error('capsule should derive host metrics from the shared layout contract');
 }
 
-if (!/return\s*\(\s*<div\s*style=\{\{[\s\S]*?width:\s*'100%',[\s\S]*?height:\s*'100%',[\s\S]*?position:\s*'relative',[\s\S]*?display:\s*'flex',[\s\S]*?alignItems:\s*'center',[\s\S]*?justifyContent:\s*'center',[\s\S]*?paddingLeft:\s*hostMetrics\.horizontalInset,[\s\S]*?paddingRight:\s*hostMetrics\.horizontalInset,[\s\S]*?\}\}/.test(capsuleTsx)) {
+if (
+  !/return\s*\(\s*<div\s*style=\{\{[\s\S]*?width:\s*'100%',[\s\S]*?height:\s*'100%',[\s\S]*?position:\s*'relative',[\s\S]*?display:\s*'flex',[\s\S]*?alignItems:\s*capsuleStyle === 'siri' \? 'center' : 'flex-end',[\s\S]*?justifyContent:\s*'center',[\s\S]*?paddingLeft:\s*hostMetrics\.horizontalInset,[\s\S]*?paddingRight:\s*hostMetrics\.horizontalInset,[\s\S]*?\}\}/.test(
+    capsuleTsx,
+  )
+) {
   throw new Error('capsule host should center the pill within the shared layout contract');
 }
 
-if (!/paddingLeft:\s*hostMetrics\.horizontalInset,/.test(capsuleTsx) || !/paddingRight:\s*hostMetrics\.horizontalInset,/.test(capsuleTsx)) {
+if (
+  !/paddingLeft:\s*hostMetrics\.horizontalInset,/.test(capsuleTsx) ||
+  !/paddingRight:\s*hostMetrics\.horizontalInset,/.test(capsuleTsx)
+) {
   throw new Error('capsule host should consume the shared horizontal inset contract');
 }
 
-if (!/paddingBottom:\s*os === 'win' \? hostMetrics\.bottomInset : 0/.test(capsuleTsx)) {
-  throw new Error('windows capsule host should respect the shared bottom inset');
+if (!/paddingBottom:\s*hostMetrics\.bottomInset/.test(capsuleTsx)) {
+  throw new Error('all capsule hosts should respect their style-specific bottom inset');
 }
 
 if (!/const badgeBottom = Math\.round\(metrics\.height \* 0\.73\);/.test(capsuleTsx)) {
@@ -181,8 +232,8 @@ if (!/const badgeBottom = Math\.round\(metrics\.height \* 0\.73\);/.test(capsule
 
 assertMatch(
   libRs,
-  /fn capsule_window_bounds\(translation_active: bool\)[\s\S]*?width: 460\.0,[\s\S]*?height: 180\.0,[\s\S]*?bottom_inset: 0\.0,/,
-  'runtime capsule bounds should match the shared 460x180 voice-orb stage',
+  /fn capsule_window_bounds_for_style\(style: types::CapsuleStyle\)[\s\S]*?types::CapsuleStyle::Typeless => 206\.0,[\s\S]*?CapsuleStyle::Siri \| types::CapsuleStyle::Classic => 460\.0,[\s\S]*?types::CapsuleStyle::Siri => 180\.0,[\s\S]*?types::CapsuleStyle::Classic => 100\.0,[\s\S]*?types::CapsuleStyle::Typeless => 57\.0,[\s\S]*?bottom_inset: 0\.0,/,
+  'native capsule bounds should match the frontend dimensions (typeless = 1/5 area of the original 460x128)',
 );
 
 assertMatch(

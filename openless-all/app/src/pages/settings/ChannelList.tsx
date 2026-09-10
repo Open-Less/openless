@@ -1,13 +1,17 @@
-// 渠道卡片列表 —— LLM 润色与 ASR 语音转写共用同一套交互。
-//
-// 心智只有一条：**排序即优先级，列表里第一个启用的就是当前生效的渠道**。
-// 开关关掉的渠道自动沉到列表末尾；后端不另存"当前选中"，避免"列表第一张是 A、
-// 实际请求打的是 B"这种两处真相。详见 docs/provider-channels-plan.md。
-//
-// 卡片解决的两件事：同一家厂商可以存多把 key；key 之间切换只是拖一下顺序，
-// 而不是把旧 key 覆盖掉。
+// LLM 与 ASR 共用的渠道列表和编辑器。
+// Core 按排序选择第一个启用渠道；每个渠道独立保存凭据，支持同一供应商的多个账号。
 
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
+import {
+  useCallback,
+  useContext,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+} from 'react';
+import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../../components/Icon';
 import { Modal } from '../../components/ui/Modal';
@@ -30,18 +34,26 @@ import {
   type Channel,
   type ProviderDescriptor,
 } from '../../lib/ipc';
-import { ProviderFormContext, useProviderForm } from './ProviderForm';
 import { emitSaved } from '../../lib/savedEvent';
-import { useMobileLayout, useReadableLayout, useConservativeLayout } from '../../lib/useMobileLayout';
+import { useExitMount } from '../../lib/useExitMount';
+import {
+  useMobileLayout,
+  useReadableLayout,
+  useConservativeLayout,
+} from '../../lib/useMobileLayout';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
 import { getPlatformCapabilities } from '../../lib/platform';
-import { Card } from '../_atoms';
+import { Btn, Pill } from '../_atoms';
 import {
   ChannelCredentialFields,
+  ChannelFormRow,
+  ChannelSectionHeading,
   LLM_LABELS,
   OmniChannelSection,
 } from './ProvidersSection';
-import { ASR_LABELS, inputStyle, SectionTitle, Toggle } from './shared';
+import { ProviderFormContext, useProviderForm } from './ProviderForm';
+import { ASR_LABELS, inputStyle } from './shared';
+import { ChannelEditorHostContext } from './ChannelEditorHostContext';
 
 type ChannelKind = 'llm' | 'asr';
 
@@ -65,7 +77,7 @@ export function presetsFor(
   currentProviderId?: string,
   descriptors: ProviderDescriptor[] = [],
 ): PresetOption[] {
-  const descriptorPresets = descriptors.map(descriptor => ({
+  const descriptorPresets = descriptors.map((descriptor) => ({
     id: descriptor.providerType,
     nameKey: descriptor.labelKey,
     defaultEndpoint: descriptor.defaultEndpoint ?? undefined,
@@ -77,7 +89,7 @@ export function presetsFor(
   }));
   if (kind === 'llm') return descriptorPresets;
   const available = descriptorPresets;
-  const visible = available.filter(p => {
+  const visible = available.filter((p) => {
     // 本地引擎严格按其实际支持的平台暴露；Linux / Android 不展示桌面专有实现。
     if (p.id === 'local-qwen3-mlx') return os === 'mac' && supportsQwen3Mlx;
     if (p.id === 'local-whisper' || p.id === 'apple-speech') return os === 'mac';
@@ -92,8 +104,8 @@ export function presetsFor(
   });
   // 新建渠道继续隐藏历史别名；编辑已有渠道时把当前值补回，避免 Select value
   // 找不到对应 option 而显示为空。只接受注册表里已知的 preset，不放行任意字符串。
-  if (currentProviderId && !visible.some(preset => preset.id === currentProviderId)) {
-    const current = available.find(preset => preset.id === currentProviderId);
+  if (currentProviderId && !visible.some((preset) => preset.id === currentProviderId)) {
+    const current = available.find((preset) => preset.id === currentProviderId);
     if (current) visible.push(current);
   }
   return visible;
@@ -116,14 +128,11 @@ function presetLabel(
   t: ReturnType<typeof useTranslation>['t'],
   descriptors: ProviderDescriptor[],
 ): string {
-  const descriptor = descriptors.find(item => item.providerType === providerType);
+  const descriptor = descriptors.find((item) => item.providerType === providerType);
   if (descriptor) return t(`settings.providers.presets.${descriptor.labelKey}`);
-  const list: readonly { id: string; nameKey: string }[] =
-    kind === 'llm' ? LLM_LABELS : ASR_LABELS;
-  const preset = list.find(p => p.id === providerType);
-  return preset
-    ? t(`settings.providers.presets.${preset.nameKey}`)
-    : providerType;
+  const list: readonly { id: string; nameKey: string }[] = kind === 'llm' ? LLM_LABELS : ASR_LABELS;
+  const preset = list.find((p) => p.id === providerType);
+  return preset ? t(`settings.providers.presets.${preset.nameKey}`) : providerType;
 }
 
 /** 卡片上模型那一行读的凭据账户 —— 与 ChannelCredentialFields 里保持一致。 */
@@ -135,10 +144,7 @@ function modelAccountFor(kind: ChannelKind): string {
  * 把后端的错误串压成按钮上放得下的短标签，且要**能指导行动**：
  * 401 是 key 不对、429 是被限流等会儿再说、超时是网络——用户看到才知道该改什么。
  */
-function shortErrorLabel(
-  raw: string | null,
-  t: ReturnType<typeof useTranslation>['t'],
-): string {
+function shortErrorLabel(raw: string | null, t: ReturnType<typeof useTranslation>['t']): string {
   const message = (raw ?? '').trim();
   if (message.startsWith('providerHttpStatus:')) {
     return message.split(':')[1] || t('settings.channels.errGeneric');
@@ -204,13 +210,13 @@ export function ChannelList({
   const autoOpenedRef = useRef(false);
 
   useEffect(() => {
-    void getPlatformCapabilities().then(caps => setSupportsQwen3Mlx(caps.supportsLocalQwen3Mlx));
+    void getPlatformCapabilities().then((caps) => setSupportsQwen3Mlx(caps.supportsLocalQwen3Mlx));
   }, []);
 
   useEffect(() => {
     void listProviderDescriptors(kind)
       .then(setDescriptors)
-      .catch(error => console.error('[channels] failed to load provider descriptors', error));
+      .catch((error) => console.error('[channels] failed to load provider descriptors', error));
   }, [kind]);
 
   const refresh = useCallback(async () => {
@@ -218,11 +224,14 @@ export function ChannelList({
       const list = await listChannels(kind);
       setChannels(list);
       setLoaded(true);
+      // 广播给服务分类 tab：语言模型/语音识别是必配项，tab 上的红/黄状态点
+      // 需要在任何增删改/启停后即时刷新。
+      window.dispatchEvent(new CustomEvent('ol-channels-changed', { detail: { kind } }));
       // 卡片上要显示每张卡当前的模型名 —— 凭据按渠道隔离，只能逐个读。
       // 渠道数量是个位数，并发读一轮的开销可以忽略。
       const account = modelAccountFor(kind);
       const entries = await Promise.all(
-        list.map(async channel => {
+        list.map(async (channel) => {
           try {
             return [channel.id, (await readCredential(account, channel.id)) ?? ''] as const;
           } catch {
@@ -270,19 +279,17 @@ export function ChannelList({
   }, [autoCreateWhenEmpty, loaded, channels.length, startCreate]);
 
   // 生效中的那张 = 第一个启用的（列表已按 order 排好）。
-  const activeId = channels.find(c => c.enabled)?.id ?? null;
+  const activeId = channels.find((c) => c.enabled)?.id ?? null;
 
   // ── 卡片上的验证 ──
   // 只在用户点的时候跑：验证是**真实的 API 调用**（LLM 走一次真的润色请求、ASR 会传
   // 一段静音音频上去）。做成打开设置就全部自动验一遍的话，等于每次开设置都按卡片数
   // 烧一遍额度，还容易把自己撞进限流。
   const [testingIds, setTestingIds] = useState<Record<string, boolean>>({});
-  /** 刚验通过的短暂高亮（id → 延迟 ms），几秒后落回常驻的灰色数字。 */
-  const [justPassed, setJustPassed] = useState<Record<string, number>>({});
 
   const runTest = async (channel: Channel) => {
     if (testingIds[channel.id]) return;
-    setTestingIds(prev => ({ ...prev, [channel.id]: true }));
+    setTestingIds((prev) => ({ ...prev, [channel.id]: true }));
     const started = performance.now();
     try {
       const result = await validateProviderCredentials(kind, channel.id);
@@ -294,16 +301,6 @@ export function ChannelList({
         result.ok ? latency : null,
         result.ok ? null : 'validateFailed',
       );
-      if (result.ok) {
-        setJustPassed(prev => ({ ...prev, [channel.id]: latency }));
-        window.setTimeout(() => {
-          setJustPassed(prev => {
-            const next = { ...prev };
-            delete next[channel.id];
-            return next;
-          });
-        }, 3000);
-      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       try {
@@ -312,7 +309,7 @@ export function ChannelList({
         console.error('[channels] failed to record test', recordError);
       }
     } finally {
-      setTestingIds(prev => ({ ...prev, [channel.id]: false }));
+      setTestingIds((prev) => ({ ...prev, [channel.id]: false }));
       await refresh();
     }
   };
@@ -344,24 +341,74 @@ export function ChannelList({
     channelsRef.current = channels;
   }, [channels]);
 
+  // FLIP 动画比较更新前后的布局位置，平滑呈现增删与排序变化。
+  // 正在拖动的行保留自己的 transform，避免滑位动画覆盖拖动态。
+  const prevRowTops = useRef(new Map<string, number>());
+  useLayoutEffect(() => {
+    // 同样只量布局位置（offsetTop）：rect.top 会被上一帧仍在飞行的 FLIP
+    // transform 污染，量出来的位移差是错的，动画本身也会跟着抖。
+    const nextTops = new Map<string, number>();
+    rowsRef.current.forEach((element, id) => nextTops.set(id, element.offsetTop));
+    rowsRef.current.forEach((element, id) => {
+      const current = nextTops.get(id);
+      if (current == null) return;
+      const previous = prevRowTops.current.get(id);
+      const isDragging = dragIdRef.current === id;
+      const lift = isDragging ? ' scale(1.012)' : '';
+      if (previous == null) {
+        element.animate(
+          [
+            { opacity: 0, transform: `translateY(-8px)${isDragging ? '' : ' scale(0.98)'}` },
+            { opacity: 1, transform: 'none' },
+          ],
+          { duration: 260, easing: 'cubic-bezier(0.16, 1, 0.3, 1)' },
+        );
+      } else if (Math.abs(previous - current) > 1) {
+        element.animate(
+          [
+            { transform: `translateY(${previous - current}px)${lift}` },
+            { transform: `translateY(0)${lift}` },
+          ],
+          { duration: 300, easing: 'cubic-bezier(0.16, 1, 0.3, 1)' },
+        );
+      }
+    });
+    prevRowTops.current = nextTops;
+  }, [channels]);
+
   const dragCleanupRef = useRef<(() => void) | null>(null);
 
-  /** 指针移到哪张卡片上，就把被拖的那张插到那个位置 —— 卡片实时跟手。 */
+  /** 按指针命中的行实时排序。使用 offsetTop 读取布局坐标，避免 FLIP 的
+   * transform 改变命中结果，导致同一指针位置反复触发互换。 */
   const moveDragTo = (pointerY: number) => {
     const dragId = dragIdRef.current;
     if (!dragId) return;
     let targetId: string | null = null;
     for (const [id, element] of rowsRef.current) {
-      const rect = element.getBoundingClientRect();
-      if (pointerY >= rect.top && pointerY <= rect.bottom) {
+      if (id === dragId) continue;
+      const parent = element.offsetParent as HTMLElement | null;
+      let top: number;
+      let bottom: number;
+      let y: number;
+      if (parent) {
+        top = element.offsetTop;
+        bottom = top + element.offsetHeight;
+        y = pointerY - parent.getBoundingClientRect().top;
+      } else {
+        const rect = element.getBoundingClientRect();
+        top = rect.top;
+        bottom = rect.bottom;
+        y = pointerY;
+      }
+      if (y >= top && y <= bottom) {
         targetId = id;
         break;
       }
     }
     if (!targetId || targetId === dragId) return;
-    setChannels(prev => {
-      const from = prev.findIndex(c => c.id === dragId);
-      const to = prev.findIndex(c => c.id === targetId);
+    setChannels((prev) => {
+      const from = prev.findIndex((c) => c.id === dragId);
+      const to = prev.findIndex((c) => c.id === targetId);
       if (from < 0 || to < 0 || from === to) return prev;
       const next = [...prev];
       next.splice(to, 0, next.splice(from, 1)[0]);
@@ -386,12 +433,13 @@ export function ChannelList({
   const endDrag = async () => {
     dragCleanupRef.current?.();
     dragCleanupRef.current = null;
+    document.body.style.cursor = '';
     const dragId = dragIdRef.current;
     dragIdRef.current = null;
     setDraggingId(null);
     if (!dragId) return;
     swallowNextClick();
-    const ids = channelsRef.current.map(c => c.id);
+    const ids = channelsRef.current.map((c) => c.id);
     const before = orderAtDragStartRef.current;
     if (ids.length === before.length && ids.every((id, index) => id === before[index])) {
       return; // 顺序没变，不打扰后端
@@ -413,8 +461,10 @@ export function ChannelList({
     event.preventDefault();
     event.stopPropagation();
     dragIdRef.current = id;
-    orderAtDragStartRef.current = channelsRef.current.map(c => c.id);
+    orderAtDragStartRef.current = channelsRef.current.map((c) => c.id);
     setDraggingId(id);
+    // 拖动期间整页光标保持 grabbing：指针滑出手柄后也能看出「正在拖」。
+    document.body.style.cursor = 'grabbing';
 
     const onMove = (moveEvent: PointerEvent) => moveDragTo(moveEvent.clientY);
     const onUp = () => void endDrag();
@@ -428,12 +478,25 @@ export function ChannelList({
     };
   };
 
-  // 组件卸载（比如关掉设置面板）时别把 window 监听留在外面。
-  useEffect(() => () => dragCleanupRef.current?.(), []);
+  // 组件卸载（比如关掉设置面板）时别把 window 监听 / grabbing 光标留在外面。
+  useEffect(
+    () => () => {
+      dragCleanupRef.current?.();
+      document.body.style.cursor = '';
+    },
+    [],
+  );
 
-  const editingChannel =
-    channels.find(c => c.id === (draftId ?? editingId)) ?? null;
+  const editingChannel = channels.find((c) => c.id === (draftId ?? editingId)) ?? null;
   const isDraft = draftId != null;
+
+  // 弹窗退场门控：closing 动画期间保留最后一次
+  // 打开的 channel/isDraft，避免动画播一半内容先消失、标题从「添加」闪回「编辑」。
+  const dialogMount = useExitMount(editingChannel !== null);
+  const lastDialogRef = useRef<{ channel: Channel; isDraft: boolean } | null>(null);
+  if (editingChannel) lastDialogRef.current = { channel: editingChannel, isDraft };
+  const dialogChannel = editingChannel ?? lastDialogRef.current?.channel ?? null;
+  const dialogIsDraft = editingChannel ? isDraft : (lastDialogRef.current?.isDraft ?? false);
 
   const markDraftTouched = () => {
     if (draftId != null) draftTouchedRef.current = true;
@@ -458,222 +521,336 @@ export function ChannelList({
   };
 
   return (
-    <Card>
-      <div style={{ marginBottom: 10 }}>
-        <SectionTitle>
-          {t(kind === 'llm' ? 'settings.providers.llmTitle' : 'settings.providers.asrTitle')}
-        </SectionTitle>
-      </div>
-      <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.6, marginBottom: 10 }}>
-        {t('settings.channels.orderHint')}
+    <section
+      aria-label={t(`settings.channels.${kind}Title`)}
+      style={{ minWidth: 0, marginBottom: 24 }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'flex-start',
+          justifyContent: 'space-between',
+          flexWrap: 'wrap',
+          gap: 16,
+          marginBottom: 20,
+        }}
+      >
+        <div style={{ flex: '1 1 260px', minWidth: 0 }}>
+          <h2 style={{ margin: 0, color: 'var(--ol-ink)', fontSize: 17, fontWeight: 600 }}>
+            {t(`settings.channels.${kind}Title`)}
+          </h2>
+          <p
+            style={{ margin: '7px 0 0', fontSize: 12, color: 'var(--ol-ink-3)', lineHeight: 1.65 }}
+          >
+            {t('settings.channels.orderHint')}
+          </p>
+        </div>
+        <Btn
+          variant="blue"
+          icon="plus"
+          disabled={creatingBusy || presets.length === 0}
+          onClick={() => void startCreate()}
+        >
+          {creatingBusy ? t('common.loading') : t('settings.channels.add')}
+        </Btn>
       </div>
 
+      {!loaded && (
+        <div role="status" style={emptyStyle}>
+          {t('common.loading')}
+        </div>
+      )}
       {loaded && channels.length === 0 && (
-        <div style={{ fontSize: 12.5, color: 'var(--ol-ink-4)', padding: '10px 0 14px', lineHeight: 1.6 }}>
-          {t('settings.channels.empty')}
+        <div style={emptyStyle}>
+          <Icon
+            name={kind === 'llm' ? 'sparkle' : 'mic'}
+            size={24}
+            style={{ color: 'var(--ol-blue)', marginBottom: 10 }}
+          />
+          <div>{t('settings.channels.empty')}</div>
         </div>
       )}
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        {channels.map(channel => {
+      {/* 生效渠道不再用蓝底 + 左侧竖条（「当前使用」徽章已经说明问题，
+          整行染色太花哨）；行改为圆角卡片，选中态只用中性灰底 + 细描边。 */}
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 6,
+          paddingTop: channels.length ? 12 : 0,
+        }}
+      >
+        {channels.map((channel) => {
           const isActive = channel.id === activeId;
-          const label = channel.name.trim() || presetLabel(kind, channel.providerType, t, descriptors);
+          const providerLabel = presetLabel(kind, channel.providerType, t, descriptors);
+          const label = channel.name.trim() || providerLabel;
           const model = models[channel.id] ?? '';
-          const failed = channel.lastTest && !channel.lastTest.ok;
+          const localEngine =
+            descriptors.find((item) => item.providerType === channel.providerType)
+              ?.authRequirement === 'none';
           return (
             <div
               key={channel.id}
-              ref={element => {
+              ref={(element) => {
                 if (element) rowsRef.current.set(channel.id, element);
                 else rowsRef.current.delete(channel.id);
               }}
               style={{
                 display: 'flex',
-                flexDirection: preferenceStack ? 'column' : 'row',
-                alignItems: preferenceStack ? 'stretch' : 'center',
-                gap: 10,
-                // 左侧补偿 2px 竖条与 0.5px 细边的宽度差，文字基线保持对齐。
-                padding: isActive ? '10px 12px 10px 10.5px' : '10px 12px',
-                borderRadius: 10,
-                border: '0.5px solid var(--ol-line-strong)',
-                // 「当前在用」只用一条竖条表达位置，**不用绿色也不用文字**：
-                // 绿色和「生效中」会被读成"这张是健康的"，可它只代表排在最前面 ——
-                // 一张 key 已经失效的卡片照样排第一。健康与否只有验证说了算。
-                borderLeft: isActive
-                  ? '2.5px solid var(--ol-blue)'
-                  : '0.5px solid var(--ol-line-strong)',
-                background: channel.enabled ? 'var(--ol-surface)' : 'var(--ol-bg-2, transparent)',
-                opacity: draggingId === channel.id ? 0.55 : channel.enabled ? 1 : 0.62,
-                boxShadow: draggingId === channel.id ? '0 6px 18px rgba(0,0,0,0.14)' : undefined,
-                transition: draggingId ? undefined : 'opacity 0.16s var(--ol-motion-quick)',
+                flexWrap: 'wrap',
+                alignItems: 'center',
+                gap: '14px 20px',
+                padding: '14px 12px',
+                borderRadius: 12,
+                // 拖动态：轻微抬升（scale + 大阴影 + 强描边 + 提高层级），
+                // 让「哪张在被拖、拖到哪了」一目了然。
+                border: '0.5px solid',
+                borderColor:
+                  draggingId === channel.id
+                    ? 'var(--ol-line-strong)'
+                    : isActive
+                      ? 'var(--ol-line)'
+                      : 'transparent',
+                background: isActive ? 'var(--ol-surface-2)' : 'transparent',
+                position: 'relative',
+                zIndex: draggingId === channel.id ? 2 : undefined,
+                transform: draggingId === channel.id ? 'scale(1.012)' : undefined,
+                boxShadow: draggingId === channel.id ? 'var(--ol-shadow-lg)' : undefined,
+                opacity: draggingId === channel.id ? 0.96 : 1,
+                transition: draggingId
+                  ? undefined
+                  : 'background 0.16s var(--ol-motion-quick), border-color 0.16s var(--ol-motion-quick), transform 0.18s var(--ol-motion-spring), box-shadow 0.18s var(--ol-motion-soft)',
               }}
             >
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flex: 1, width: preferenceStack ? '100%' : undefined }}>
-              <span
-                onPointerDown={e => onDragHandleDown(e, channel.id)}
-                onClick={e => e.stopPropagation()}
-                title={t('settings.channels.dragHint')}
-                aria-label={t('settings.channels.dragHint')}
+              <div
                 style={{
-                  color: 'var(--ol-ink-4)',
-                  fontSize: 13,
-                  flexShrink: 0,
-                  cursor: draggingId === channel.id ? 'grabbing' : 'grab',
-                  // 触摸设备上按住手柄不要变成页面滚动。
-                  touchAction: 'none',
-                  padding: '2px 2px',
-                  userSelect: 'none',
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: 10,
+                  minWidth: 0,
+                  flex: preferenceStack ? '1 1 100%' : '1 1 260px',
                 }}
               >
-                ⠿
-              </span>
-              <div style={{ minWidth: 0, flex: 1 }}>
-                <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--ol-ink)' }}>{label}</span>
-                {/* minHeight 保证「未命名 + 没验证过」的卡片不会比别的矮一截，
-                    列表高度参差看起来像坏了。 */}
-                <div style={{ fontSize: 11, color: 'var(--ol-ink-4)', marginTop: 2, minHeight: 15, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  {/* 未命名时主标题已经是厂商名，副行再来一遍就成了重复的两行同名。 */}
-                  {channel.name.trim() && <span>{presetLabel(kind, channel.providerType, t, descriptors)}</span>}
-                  {model && <span style={{ fontFamily: 'var(--ol-font-mono)' }}>{model}</span>}
-                  {/* 验证结果什么时候来的 —— 让"这条结论会过期"这件事可见。 */}
-                  {channel.lastTest && <span>{relativeTime(channel.lastTest.at, t)}</span>}
+                <span
+                  onPointerDown={(e) => onDragHandleDown(e, channel.id)}
+                  onClick={(e) => e.stopPropagation()}
+                  title={t('settings.channels.dragHint')}
+                  aria-label={t('settings.channels.dragHint')}
+                  style={{
+                    color: draggingId === channel.id ? 'var(--ol-ink)' : 'var(--ol-ink-4)',
+                    fontSize: 18,
+                    flexShrink: 0,
+                    cursor: draggingId === channel.id ? 'grabbing' : 'grab',
+                    touchAction: 'none',
+                    padding: '0 4px',
+                    userSelect: 'none',
+                    transition: 'color 0.16s var(--ol-motion-quick)',
+                  }}
+                >
+                  ⠿
+                </span>
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+                    <span
+                      style={{
+                        fontSize: 14,
+                        fontWeight: 600,
+                        color: 'var(--ol-ink)',
+                        overflowWrap: 'anywhere',
+                      }}
+                    >
+                      {label}
+                    </span>
+                    {isActive && (
+                      <Pill tone="blue" size="sm">
+                        {t('settings.channels.current')}
+                      </Pill>
+                    )}
+                    {!channel.enabled && (
+                      <Pill tone="outline" size="sm">
+                        {t('settings.channels.disabled')}
+                      </Pill>
+                    )}
+                  </div>
+                  <div
+                    style={{
+                      fontSize: 12,
+                      color: 'var(--ol-ink-3)',
+                      marginTop: 6,
+                      lineHeight: 1.6,
+                      overflowWrap: 'anywhere',
+                    }}
+                  >
+                    {channel.name.trim() && <span>{providerLabel} · </span>}
+                    <span style={{ fontFamily: model ? 'var(--ol-font-mono)' : undefined }}>
+                      {model ||
+                        t(
+                          localEngine
+                            ? 'settings.channels.localModelManaged'
+                            : 'settings.channels.modelNotSet',
+                        )}
+                    </span>
+                  </div>
+                  <ChannelTestResult
+                    channel={channel}
+                    testing={Boolean(testingIds[channel.id])}
+                    t={t}
+                  />
                 </div>
-              </div>
               </div>
               <div
                 className={conservative ? 'ol-conservative-stack' : undefined}
                 style={{
                   display: 'flex',
-                  flexDirection: conservative ? 'column' : 'row',
-                  alignItems: conservative ? 'flex-start' : 'center',
+                  alignItems: 'center',
+                  flexWrap: 'wrap',
                   gap: 8,
-                  flexWrap: readable ? 'wrap' : 'nowrap',
+                  marginLeft: preferenceStack ? 0 : 30,
                   width: preferenceStack ? '100%' : undefined,
                 }}
               >
-              <VerifyButton
-                channel={channel}
-                testing={Boolean(testingIds[channel.id])}
-                justPassedMs={justPassed[channel.id]}
-                onRun={() => void runTest(channel)}
-                t={t}
-              />
-              <Toggle on={channel.enabled} onToggle={() => void onToggle(channel)} />
-              <button
-                onClick={() => setEditingId(channel.id)}
-                title={t('settings.channels.edit')}
-                aria-label={t('settings.channels.edit')}
-                style={{ ...iconBtn, ...(conservative ? { width: 'auto', padding: '0 10px', gap: 6 } : {}) }}
-              >
-                <Icon name="chevRight" size={13} />
-                {conservative && <span style={{ fontSize: 12 }}>{t('settings.channels.edit')}</span>}
-              </button>
-            </div>
+                <Btn
+                  size="sm"
+                  disabled={Boolean(testingIds[channel.id])}
+                  onClick={() => void runTest(channel)}
+                >
+                  {t(
+                    testingIds[channel.id]
+                      ? 'settings.channels.verifying'
+                      : 'settings.channels.verify',
+                  )}
+                </Btn>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={channel.enabled}
+                  aria-label={t('settings.channels.enabledFor', { name: label })}
+                  onClick={() => void onToggle(channel)}
+                  style={{ ...ghostBtn, display: 'inline-flex', alignItems: 'center', gap: 7 }}
+                >
+                  <span
+                    aria-hidden="true"
+                    style={{
+                      width: 24,
+                      height: 14,
+                      borderRadius: 999,
+                      background: channel.enabled ? 'var(--ol-blue)' : 'var(--ol-toggle-off-bg)',
+                      position: 'relative',
+                    }}
+                  >
+                    <span
+                      style={{
+                        position: 'absolute',
+                        top: 2,
+                        left: channel.enabled ? 12 : 2,
+                        width: 10,
+                        height: 10,
+                        borderRadius: 999,
+                        background: 'var(--ol-toggle-knob)',
+                      }}
+                    />
+                  </span>
+                  {t('settings.channels.enabled')}
+                </button>
+                <button
+                  type="button"
+                  className="ol-channel-edit-button"
+                  onClick={() => setEditingId(channel.id)}
+                >
+                  <Icon name="pencil" size={14} />
+                  {t('settings.channels.edit')}
+                  <Icon name="chevRight" size={14} />
+                </button>
               </div>
+            </div>
           );
         })}
       </div>
 
-      <button
-        onClick={() => void startCreate()}
-        disabled={creatingBusy}
-        style={{ ...addBtn, marginTop: channels.length ? 10 : 0 }}
-      >
-        ＋ {t('settings.channels.add')}
-      </button>
-
-      {editingChannel && (
+      {dialogMount.mounted && dialogChannel && (
         <ChannelModal
+          key={dialogChannel.id}
           kind={kind}
-          channel={editingChannel}
-          presets={presetsFor(kind, os, supportsQwen3Mlx, editingChannel.providerType, descriptors)}
-          isDraft={isDraft}
+          channel={dialogChannel}
+          presets={presetsFor(kind, os, supportsQwen3Mlx, dialogChannel.providerType, descriptors)}
+          isDraft={dialogIsDraft}
           mobile={mobile}
+          closing={dialogMount.closing}
           onClose={() => void closeModal()}
           onChanged={refresh}
           onUserMutation={markDraftTouched}
         />
       )}
-    </Card>
+    </section>
   );
 }
 
-/**
- * 卡片上的验证按钮 —— **按钮自己就是结果容器**，不给结果另找地方摆文字。
- *
- * 通过时只显示延迟数字：它既说明"通了"，又带信息量（一眼看出哪张快）；
- * 再写一句"验证通过"是废话还占地方。失败则必须给出能指导行动的短标签
- * （401 改 key / 429 等会儿 / 超时查网络）。
- *
- * 宽度固定：让 `验证` → `284ms` → `✗ 401` 的文字变化不会把开关和箭头挤来挤去。
- */
-function VerifyButton({
+/** Selection and the last manual test are separate facts. The action keeps a
+ * stable label; result, elapsed time and age remain readable alongside it. */
+function ChannelTestResult({
   channel,
   testing,
-  justPassedMs,
-  onRun,
   t,
 }: {
   channel: Channel;
   testing: boolean;
-  justPassedMs?: number;
-  onRun: () => void;
   t: ReturnType<typeof useTranslation>['t'];
 }) {
   const last = channel.lastTest;
-  const stale =
-    last != null && Math.floor(Date.now() / 1000) - last.at > STALE_TEST_SECONDS;
-
-  let label: string;
-  let color = 'var(--ol-ink-3)';
-  if (testing) {
-    label = '···';
-    color = 'var(--ol-ink-4)';
-  } else if (justPassedMs != null) {
-    label = `✓ ${justPassedMs}ms`;
-    color = 'var(--ol-ok)';
-  } else if (!last) {
-    label = t('settings.channels.verify');
-  } else if (last.ok) {
-    label = last.latencyMs != null ? `${last.latencyMs}ms` : '✓';
-    // 旧结果褪成浅灰：不保证现在还有效。
-    color = stale ? 'var(--ol-ink-4)' : 'var(--ol-ink-3)';
-  } else {
-    label = `✗ ${shortErrorLabel(last.error, t)}`;
-    color = 'var(--ol-warn)';
-  }
-
+  const stale = last != null && Math.floor(Date.now() / 1000) - last.at > STALE_TEST_SECONDS;
+  const passed = last?.ok;
+  const elapsed = last?.latencyMs;
   return (
-    <button
-      onClick={onRun}
-      disabled={testing}
-      title={t('settings.channels.verifyHint')}
+    <div
+      role="status"
       style={{
-        width: 76,
-        height: 28,
-        flexShrink: 0,
-        border: '0.5px solid var(--ol-line-strong)',
-        borderRadius: 7,
-        background: 'var(--ol-surface)',
-        color,
-        cursor: 'default',
+        display: 'flex',
+        alignItems: 'baseline',
+        flexWrap: 'wrap',
+        gap: '3px 8px',
+        marginTop: 7,
         fontSize: 11.5,
-        fontWeight: 500,
-        opacity: stale && !testing ? 0.75 : 1,
-        overflow: 'hidden',
-        whiteSpace: 'nowrap',
+        lineHeight: 1.6,
+        color: 'var(--ol-ink-3)',
       }}
     >
-      {label}
-    </button>
+      <span>{t('settings.channels.lastCheck')}</span>
+      {testing ? (
+        <span>{t('settings.channels.verifying')}</span>
+      ) : !last ? (
+        <span>{t('settings.channels.notVerified')}</span>
+      ) : (
+        <>
+          <span
+            style={{
+              color: stale ? 'var(--ol-ink-3)' : passed ? 'var(--ol-ok)' : 'var(--ol-warn)',
+            }}
+          >
+            {passed
+              ? t('settings.channels.passed')
+              : t('settings.channels.failed', { reason: shortErrorLabel(last?.error ?? null, t) })}
+          </span>
+          {passed && elapsed != null && (
+            <span>{t('settings.channels.elapsed', { ms: elapsed })}</span>
+          )}
+          {last && (
+            <time
+              dateTime={new Date(last.at * 1000).toISOString()}
+              title={new Date(last.at * 1000).toLocaleString()}
+            >
+              {relativeTime(last.at, t)}
+            </time>
+          )}
+          {stale && <span>{t('settings.channels.staleResult')}</span>}
+        </>
+      )}
+    </div>
   );
 }
 
 /**
- * 「服务 → AI 提供商」面板：LLM 与 ASR 两张渠道列表。
- *
- * 保留 `ProvidersSection` 这个名字与 `kind` 签名，让设置页 tabs 与新手引导的调用点
- * 不用改。渠道化之后它只是两个 <ChannelList> 的容器。
+ * 为设置与新手引导提供 LLM/ASR 渠道列表；多模态管线启用时展示 Omni 配置。
  */
 export function ProvidersSection({
   kind = 'all',
@@ -692,7 +869,9 @@ export function ProvidersSection({
     <>
       {kind === 'all' && <OmniChannelSection />}
       {kind === 'all' && !multimodalMode && (
-        <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.6, marginBottom: 10 }}>
+        <div
+          style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.6, marginBottom: 10 }}
+        >
           {t('settings.providers.credentialStorageNotice')}
         </div>
       )}
@@ -707,10 +886,8 @@ export function ProvidersSection({
 }
 
 /**
- * 添加与编辑共用的同一个弹窗 —— 供应商、名字、凭据、测试连通都在这一屏里。
- *
- * 刻意不做「先创建、再填凭据」的两步：那只是实现上需要先有渠道 id 才能写凭据，
- * 不该变成用户多点一次。
+ * 添加与编辑复用同一表单。设置中挂载为右侧子页，新手引导中使用独立弹窗。
+ * 新建渠道先取得凭据所属的 ID，关闭时仅回收从未发生用户操作的空白草稿。
  */
 function ChannelModal({
   kind,
@@ -718,6 +895,7 @@ function ChannelModal({
   presets,
   isDraft,
   mobile,
+  closing = false,
   onClose,
   onChanged,
   onUserMutation,
@@ -728,17 +906,95 @@ function ChannelModal({
   /** 新建流程中的草稿卡片：标题用「添加渠道」，未触碰时允许回收。 */
   isDraft: boolean;
   mobile: boolean;
+  /** 退场中：透传给 Modal 反向播放入场动画（useExitMount 门控卸载）。 */
+  closing?: boolean;
   onClose: () => void;
   onChanged: () => void | Promise<void>;
   /** 用户对草稿做了有意义的操作；必须在异步写入前同步触发。 */
   onUserMutation: () => void;
 }) {
   const { t } = useTranslation();
+  // 关闭 / 换供应商前收敛渠道表单未落盘的异步写入（#1044 语义）。
   const form = useProviderForm();
   const [name, setName] = useState(channel.name);
   const [providerType, setProviderType] = useState(channel.providerType);
   const [changingProvider, setChangingProvider] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const nameId = useId();
+  const editorHost = useContext(ChannelEditorHostContext);
+  const embedded = Boolean(editorHost?.container && editorHost.background);
+  const closeRequestedRef = useRef(false);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  const requestClose = () => {
+    if (closeRequestedRef.current) return;
+    void form.finish(() => {
+      if (closeRequestedRef.current) return;
+      closeRequestedRef.current = true;
+      onCloseRef.current();
+    });
+  };
+
+  useEffect(() => {
+    const opener = document.activeElement;
+    const dialog = dialogRef.current;
+    const parentDialog =
+      opener instanceof HTMLElement ? opener.closest<HTMLElement>('[role="dialog"]') : null;
+    const background = embedded
+      ? editorHost?.background
+      : parentDialog !== dialog
+        ? parentDialog
+        : null;
+    const wasInert = background?.inert ?? false;
+    (
+      dialog?.querySelector<HTMLElement>('[role="combobox"], input:not([disabled])') ?? dialog
+    )?.focus();
+    // Keep body-portaled provider menus accessible while disabling the covered
+    // settings surface. aria-modal would hide those existing sibling portals.
+    if (background) background.inert = true;
+    if (embedded) editorHost?.registerClose(requestClose);
+    return () => {
+      if (embedded) editorHost?.registerClose(null);
+      if (background) background.inert = wasInert;
+      if (opener instanceof HTMLElement && opener.isConnected) opener.focus();
+    };
+  }, []);
+
+  const onDialogKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const dialog = dialogRef.current;
+    if (!dialog || event.defaultPrevented) return;
+    if (event.target instanceof Element && event.target.closest('[role="dialog"]') !== dialog)
+      return;
+    if (event.key === 'Escape') {
+      // SelectLite handles its open menu first. Never close both layers at once.
+      if (dialog.querySelector('[role="combobox"][aria-expanded="true"]')) return;
+      event.preventDefault();
+      event.stopPropagation();
+      requestClose();
+    } else if (event.key === 'Tab') {
+      const controls = Array.from(
+        dialog.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
+        ),
+      ).filter((element) => element.tabIndex >= 0 && element.getClientRects().length > 0);
+      const first = controls[0];
+      const last = controls[controls.length - 1];
+      if (!first) {
+        event.preventDefault();
+        dialog.focus();
+      } else if (
+        event.shiftKey &&
+        (document.activeElement === first || document.activeElement === dialog)
+      ) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+  };
 
   const saveName = async () => {
     if (name.trim() === channel.name.trim()) return;
@@ -756,12 +1012,13 @@ function ChannelModal({
   // OpenAI 兼容（baseUrl/model 为空）自然跳过。失败只记日志，不影响换厂商本身。
   const fillProviderDefaults = async (next: string) => {
     try {
-      const preset = presets.find(item => item.id === next);
+      const preset = presets.find((item) => item.id === next);
       if (!preset) return;
       const endpointAccount = kind === 'llm' ? 'ark.endpoint' : 'asr.endpoint';
       const modelAccount = kind === 'llm' ? 'ark.model_id' : 'asr.model';
       if (next === 'orcarouter') {
-        if (preset.defaultEndpoint) await setCredential(endpointAccount, preset.defaultEndpoint, channel.id);
+        if (preset.defaultEndpoint)
+          await setCredential(endpointAccount, preset.defaultEndpoint, channel.id);
         if (preset.defaultModel) await setCredential(modelAccount, preset.defaultModel, channel.id);
         return;
       }
@@ -779,6 +1036,7 @@ function ChannelModal({
   const changeProvider = async (next: string) => {
     const previous = providerType;
     onUserMutation();
+    await form.finish(() => undefined);
     setChangingProvider(true);
     try {
       await setChannelProviderType(kind, channel.id, next);
@@ -794,142 +1052,190 @@ function ChannelModal({
       console.error('[channels] change provider failed', error);
       setProviderType(previous);
       emitSaved('failed', t('common.operationFailed'));
-    } finally { setChangingProvider(false); }
+    } finally {
+      setChangingProvider(false);
+    }
   };
 
   const remove = async () => {
     try {
       await deleteChannel(kind, channel.id);
       emitSaved('saved', t('common.saved'));
-      onClose();
+      requestClose();
     } catch (error) {
       console.error('[channels] delete failed', error);
       emitSaved('failed', t('common.operationFailed'));
     }
   };
 
-  const descriptor = presets.find(item => item.id === providerType);
+  const descriptor = presets.find((item) => item.id === providerType);
   const isLocalEngine = descriptor?.authRequirement === 'none';
 
-  return (
+  const content = (
     <ProviderFormContext.Provider value={form}>
-    <Modal onClose={() => void form.finish(onClose)} width={mobile ? 'min(560px, 100%)' : 'min(600px, 100%)'}>
-      <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--ol-ink)', marginBottom: 14 }}>
-        {t(isDraft ? 'settings.channels.createTitle' : 'settings.channels.editTitle')}
-      </div>
-
-      <label style={fieldLabel}>{t('settings.channels.providerLabel')}</label>
-      <SelectLite
-        value={providerType}
-        disabled={changingProvider || form.leaving}
-        onChange={next => void form.finish(() => changeProvider(next))}
-        options={presets.map(p => ({
-          value: p.id,
-          label: t(`settings.providers.presets.${p.nameKey}`),
-        }))}
-        ariaLabel={t('settings.channels.providerLabel')}
-        style={{ ...inputStyle, width: '100%', marginBottom: 12 }}
-      />
-
-      <label style={fieldLabel}>{t('settings.channels.nameLabel')}</label>
-      <input
-        value={name}
-        onChange={e => {
-          onUserMutation();
-          setName(e.target.value);
-        }}
-        onBlur={() => void saveName()}
-        placeholder={t('settings.channels.namePlaceholder')}
-        style={{ ...inputStyle, width: '100%', marginBottom: 14 }}
-      />
-
-      {/* key 决定：换供应商时整组凭据字段重挂载，读的是新厂商对应的槽位。 */}
-      <fieldset disabled={changingProvider || form.leaving} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
-      {!changingProvider && <ChannelCredentialFields
-        key={`${channel.id}:${providerType}`}
-        kind={kind}
-        providerType={providerType}
-        channelId={channel.id}
-        descriptor={descriptor}
-        onTested={() => void onChanged()}
-        onUserMutation={onUserMutation}
-      />}
-      </fieldset>
-
-      {isLocalEngine && (
-        <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.6, marginTop: 6 }}>
-          {t('settings.channels.localEngineModelHint')}
-        </div>
-      )}
-
-      <div style={{ display: 'flex', gap: 8, justifyContent: 'space-between', marginTop: 20, alignItems: 'center' }}>
-        {confirmDelete ? (
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 12, color: 'var(--ol-warn)' }}>
-              {t('settings.channels.deleteConfirm')}
-            </span>
-            <button onClick={() => void form.finish(remove)} disabled={form.leaving} style={dangerBtn}>
-              {t('settings.channels.confirmDelete')}
+      <div
+        ref={dialogRef}
+        className={`ol-channel-dialog${embedded ? ' ol-channel-dialog-embedded' : ''}`}
+        data-closing={closing ? 'true' : undefined}
+        role="dialog"
+        aria-label={t(isDraft ? 'settings.channels.createTitle' : 'settings.channels.editTitle')}
+        tabIndex={-1}
+        onKeyDown={onDialogKeyDown}
+      >
+        <header className="ol-channel-dialog-header">
+          {embedded ? (
+            <button
+              type="button"
+              className="ol-settings-back"
+              onClick={requestClose}
+              aria-label={t('settings.channels.backToList')}
+              title={t('settings.channels.backToList')}
+            >
+              <Icon name="chevLeft" size={19} />
             </button>
-            <button onClick={() => setConfirmDelete(false)} style={ghostBtn}>{t('common.cancel')}</button>
+          ) : (
+            <span className="ol-channel-dialog-icon">
+              <Icon name={kind === 'llm' ? 'style' : 'mic'} size={22} />
+            </span>
+          )}
+          <div className="ol-channel-dialog-heading">
+            <div className="ol-channel-dialog-title">
+              <h2>
+                {t(isDraft ? 'settings.channels.createTitle' : 'settings.channels.editTitle')}
+              </h2>
+              <span>{t(`settings.channels.${kind}Title`)}</span>
+            </div>
+            <p>{t('settings.channels.autoSaveHint')}</p>
           </div>
-        ) : (
-          <button onClick={() => setConfirmDelete(true)} style={ghostBtn}>
-            {t('settings.channels.delete')}
-          </button>
-        )}
-        <button onClick={() => void form.finish(onClose)} disabled={form.leaving} style={primaryBtn}>{t('common.close')}</button>
+          {!embedded && (
+            <button
+              type="button"
+              className="ol-channel-dialog-close"
+              onClick={requestClose}
+              aria-label={t('common.close')}
+            >
+              <Icon name="close" size={18} />
+            </button>
+          )}
+        </header>
+
+        <div className="ol-channel-dialog-body ol-thinscroll">
+          <div className="ol-channel-form-sheet">
+            <ChannelSectionHeading icon="cloud" title={t('settings.channels.connectionTitle')} />
+            <ChannelFormRow label={t('settings.channels.providerLabel')}>
+              <SelectLite
+                value={providerType}
+                disabled={changingProvider || form.leaving}
+                onChange={(next) => void changeProvider(next)}
+                options={presets.map((p) => ({
+                  value: p.id,
+                  label: t(`settings.providers.presets.${p.nameKey}`),
+                }))}
+                ariaLabel={t('settings.channels.providerLabel')}
+                style={{ ...inputStyle, width: '100%', maxWidth: '100%', height: 38 }}
+              />
+            </ChannelFormRow>
+            <ChannelFormRow label={t('settings.channels.nameLabel')} htmlFor={nameId}>
+              <input
+                id={nameId}
+                value={name}
+                onChange={(e) => {
+                  onUserMutation();
+                  setName(e.target.value);
+                }}
+                onBlur={() => void saveName()}
+                placeholder={t('settings.channels.namePlaceholder')}
+                style={{ ...inputStyle, width: '100%', maxWidth: '100%', height: 38 }}
+              />
+              <p className="ol-channel-name-hint">{t('settings.channels.nameHint')}</p>
+            </ChannelFormRow>
+
+            {/* 模型列表、供应商特有字段与验证结果都留在同一个滚动区。 */}
+            {!changingProvider && (
+              <ChannelCredentialFields
+                key={`${channel.id}:${providerType}`}
+                kind={kind}
+                providerType={providerType}
+                channelId={channel.id}
+                descriptor={descriptor}
+                onTested={() => void onChanged()}
+                onUserMutation={onUserMutation}
+              />
+            )}
+            {isLocalEngine && (
+              <p className="ol-channel-local-hint">{t('settings.channels.localEngineModelHint')}</p>
+            )}
+          </div>
+        </div>
+
+        <footer className="ol-channel-dialog-footer">
+          {confirmDelete ? (
+            <div
+              className="ol-channel-delete-confirm"
+              role="group"
+              aria-label={t('settings.channels.delete')}
+            >
+              <p>{t('settings.channels.deleteConfirm')}</p>
+              <button
+                type="button"
+                autoFocus
+                className="ol-channel-delete-button"
+                onClick={() => void remove()}
+              >
+                <Icon name="trash" size={15} />
+                {t('settings.channels.confirmDelete')}
+              </button>
+              <button type="button" onClick={() => setConfirmDelete(false)} style={ghostBtn}>
+                {t('common.cancel')}
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              className="ol-channel-delete-button"
+              onClick={() => setConfirmDelete(true)}
+            >
+              <Icon name="trash" size={15} />
+              {t('settings.channels.delete')}
+            </button>
+          )}
+          <div className="ol-channel-dialog-footer-end">
+            <span className="ol-channel-autosave-hint">{t('modal.autoSaveHint')}</span>
+            <Btn
+              variant={embedded ? 'primary' : 'blue'}
+              onClick={requestClose}
+              disabled={form.leaving}
+            >
+              {t(embedded ? 'settings.channels.done' : 'common.close')}
+            </Btn>
+          </div>
+        </footer>
       </div>
-    </Modal>
     </ProviderFormContext.Provider>
+  );
+  return embedded ? (
+    createPortal(content, editorHost!.container!)
+  ) : (
+    <Modal
+      onClose={requestClose}
+      zIndex={1000}
+      closing={closing}
+      width={mobile ? '100%' : 'min(840px, 100%)'}
+      style={{ padding: 0, overflow: 'hidden', maxHeight: 'calc(100dvh - 40px)' }}
+    >
+      {content}
+    </Modal>
   );
 }
 
-const fieldLabel: CSSProperties = {
-  display: 'block',
-  fontSize: 12,
-  fontWeight: 500,
-  color: 'var(--ol-ink-2)',
-  marginBottom: 5,
-};
-
-const iconBtn: CSSProperties = {
-  width: 30,
-  height: 30,
-  border: '0.5px solid var(--ol-line-strong)',
-  borderRadius: 8,
-  background: 'var(--ol-surface)',
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
+const emptyStyle: CSSProperties = {
+  padding: '28px 20px',
+  textAlign: 'center',
+  fontSize: 13,
   color: 'var(--ol-ink-3)',
-  cursor: 'default',
-  flexShrink: 0,
-};
-
-const addBtn: CSSProperties = {
-  height: 34,
-  padding: '0 14px',
-  border: '0.5px dashed var(--ol-line-strong)',
-  borderRadius: 9,
-  background: 'transparent',
-  color: 'var(--ol-ink-3)',
-  cursor: 'default',
-  fontSize: 12.5,
-  fontWeight: 500,
-  width: '100%',
-};
-
-const primaryBtn: CSSProperties = {
-  height: 32,
-  padding: '0 14px',
-  border: '0.5px solid var(--ol-blue)',
-  borderRadius: 8,
-  background: 'var(--ol-blue)',
-  color: '#fff',
-  cursor: 'default',
-  fontSize: 12.5,
-  fontWeight: 500,
+  lineHeight: 1.7,
+  borderTop: '1px solid var(--ol-line)',
+  borderBottom: '1px solid var(--ol-line)',
 };
 
 const ghostBtn: CSSProperties = {
@@ -937,15 +1243,9 @@ const ghostBtn: CSSProperties = {
   padding: '0 14px',
   border: '0.5px solid var(--ol-line-strong)',
   borderRadius: 8,
-  background: 'var(--ol-surface)',
+  background: 'var(--ol-control-solid)',
   color: 'var(--ol-ink-2)',
-  cursor: 'default',
+  cursor: 'pointer',
   fontSize: 12.5,
   fontWeight: 500,
-};
-
-const dangerBtn: CSSProperties = {
-  ...ghostBtn,
-  borderColor: 'var(--ol-warn)',
-  color: 'var(--ol-warn)',
 };

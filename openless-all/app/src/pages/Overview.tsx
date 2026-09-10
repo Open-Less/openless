@@ -3,11 +3,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../components/Icon';
-import { formatComboLabel } from '../lib/hotkey';
 import { getActivityStats, getCredentials, listHistory } from '../lib/ipc';
 import { Heatmap } from '../components/Heatmap';
 import { useMobileLayout } from '../lib/useMobileLayout';
 import { countCodePoints } from '../lib/unicode';
+import {
+  formatHistoryTime,
+  formatLocaleDate,
+  formatLocaleDecimal,
+  formatLocaleNumber,
+} from '../lib/localeFormat';
+import { isDesktop } from '../lib/platform';
+import { getOverviewSetup, type OverviewSettingsSection } from '../lib/overviewSetup';
 import {
   ACTIVITY_METRICS,
   ACTIVITY_PERIODS,
@@ -32,12 +39,13 @@ function useModeLabels(): Record<PolishMode, string> {
 
 interface OverviewProps {
   onOpenHistory?: () => void;
+  onOpenSettings?: (section: 'general' | 'services' | 'privacy' | 'shortcuts') => void;
 }
 
 // id → i18n nameKey；这里只保留展示文案，provider 行为来自 Core descriptor。
 // （之前漏了 bailian-qwen3-realtime / apple-speech，会退化成显示裸 id）。
 const ASR_NAME_KEY_BY_ID: Record<string, string> = Object.fromEntries(
-  ASR_LABELS.map(p => [p.id, p.nameKey]),
+  ASR_LABELS.map((p) => [p.id, p.nameKey]),
 );
 
 const LLM_NAME_KEY_BY_ID: Record<string, string> = {
@@ -46,6 +54,7 @@ const LLM_NAME_KEY_BY_ID: Record<string, string> = {
   siliconflow: 'siliconflow',
   atlascloud: 'atlascloud',
   openai: 'openai',
+  gemini: 'gemini',
   codex_oauth: 'codexOAuth',
   mimo: 'mimo',
   cometapi: 'cometapi',
@@ -53,29 +62,26 @@ const LLM_NAME_KEY_BY_ID: Record<string, string> = {
   orcarouter: 'orcarouter',
   alibabaCoding: 'alibabaCoding',
   codingPlanX: 'codingPlanX',
+  minimax: 'minimax',
+  stepfun: 'stepfun',
   opencode: 'opencode',
   tencentTokenHub: 'tencentTokenHub',
   custom: 'custom',
 };
 
-export function Overview({ onOpenHistory }: OverviewProps) {
-  const { t } = useTranslation();
+export function Overview({ onOpenHistory, onOpenSettings }: OverviewProps) {
+  const { t, i18n } = useTranslation();
+  const locale = i18n.resolvedLanguage || i18n.language;
   const mobile = useMobileLayout();
   const modeLabel = useModeLabels();
   const [history, setHistory] = useState<DictationSession[]>([]);
   const [historyError, setHistoryError] = useState(false);
   const [credsError, setCredsError] = useState(false);
-  const [creds, setCreds] = useState<CredentialsStatus>({
-    activeAsrProvider: 'volcengine',
-    activeLlmProvider: 'ark',
-    pipelineMode: 'traditional',
-    asrConfigured: false,
-    llmConfigured: false,
-    omniConfigured: false,
-    volcengineConfigured: false,
-    arkConfigured: false,
-  });
-  const { prefs } = useHotkeySettings();
+  const [credsLoading, setCredsLoading] = useState(true);
+  const [creds, setCreds] = useState<CredentialsStatus | null>(null);
+  const { prefs, capability } = useHotkeySettings();
+  // A narrow desktop window still uses desktop shortcuts.
+  const desktop = isDesktop();
   const credentialsRequestSeq = useRef(0);
   const historyRequestSeq = useRef(0);
   const activityRequestSeq = useRef(0);
@@ -85,11 +91,11 @@ export function Overview({ onOpenHistory }: OverviewProps) {
     historyRequestSeq.current = requestSeq;
     setHistoryError(false);
     listHistory()
-      .then(entries => {
+      .then((entries) => {
         if (requestSeq !== historyRequestSeq.current) return;
         setHistory(entries);
       })
-      .catch(error => {
+      .catch((error) => {
         if (requestSeq !== historyRequestSeq.current) return;
         console.error('[overview] failed to load history', error);
         setHistoryError(true);
@@ -108,11 +114,11 @@ export function Overview({ onOpenHistory }: OverviewProps) {
     activityRequestSeq.current = requestSeq;
     setActivityError(false);
     getActivityStats()
-      .then(stats => {
+      .then((stats) => {
         if (requestSeq !== activityRequestSeq.current) return;
         setActivity(stats);
       })
-      .catch(error => {
+      .catch((error) => {
         if (requestSeq !== activityRequestSeq.current) return;
         console.error('[overview] failed to load activity stats', error);
         setActivity(null);
@@ -127,16 +133,20 @@ export function Overview({ onOpenHistory }: OverviewProps) {
     const requestSeq = credentialsRequestSeq.current + 1;
     credentialsRequestSeq.current = requestSeq;
     setCredsError(false);
+    setCredsLoading(true);
     getCredentials()
-      .then(status => {
+      .then((status) => {
         if (requestSeq !== credentialsRequestSeq.current) return;
         setCreds(status);
         setCredsError(false);
       })
-      .catch(error => {
+      .catch((error) => {
         if (requestSeq !== credentialsRequestSeq.current) return;
         console.error('[overview] failed to load credentials status', error);
         setCredsError(true);
+      })
+      .finally(() => {
+        if (requestSeq === credentialsRequestSeq.current) setCredsLoading(false);
       });
   }, []);
 
@@ -146,7 +156,13 @@ export function Overview({ onOpenHistory }: OverviewProps) {
 
   useEffect(() => {
     refreshCredentials();
-  }, [refreshCredentials, prefs?.activeLlmProvider, prefs?.activeAsrProvider]);
+  }, [
+    refreshCredentials,
+    prefs?.activeLlmProvider,
+    prefs?.activeAsrProvider,
+    prefs?.pipelineMode,
+    prefs?.activeOmniProvider,
+  ]);
 
   // ⌘R / Ctrl+R 重新拉取本页的三份数据（历史、活动、凭据），与历史页同键同语义。
   // preventDefault 拦掉 webview 默认的整页 reload，避免整个前端重挂载。
@@ -199,7 +215,7 @@ export function Overview({ onOpenHistory }: OverviewProps) {
   const metrics = useMemo(() => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    const todays = history.filter(s => new Date(s.createdAt) >= today);
+    const todays = history.filter((s) => new Date(s.createdAt) >= today);
     const charsToday = todays.reduce((acc, s) => acc + countCodePoints(s.finalText), 0);
     const segmentsToday = todays.length;
     const totalDurationMs = todays.reduce((acc, s) => acc + (s.durationMs ?? 0), 0);
@@ -219,60 +235,166 @@ export function Overview({ onOpenHistory }: OverviewProps) {
     [activity, period, metric],
   );
 
-  const asrProviderId = creds.activeAsrProvider || 'volcengine';
-  const llmProviderId = creds.activeLlmProvider || 'ark';
-  const asrNameKey = ASR_NAME_KEY_BY_ID[asrProviderId];
-  const llmNameKey = LLM_NAME_KEY_BY_ID[llmProviderId];
-  const asrProviderName = asrNameKey
-    ? t(`settings.providers.presets.${asrNameKey}`)
-    : asrProviderId;
-  const llmProviderName = llmNameKey
-    ? t(`settings.providers.presets.${llmNameKey}`)
-    : llmProviderId;
+  const setup = getOverviewSetup({
+    credentials: creds,
+    loading: credsLoading,
+    error: credsError,
+    omniProvider: prefs?.activeOmniProvider,
+    desktop,
+    hotkeyAvailable: prefs && capability ? capability.adapter !== 'unavailable' : null,
+    hasShortcut: Boolean(prefs?.dictationHotkey.primary.trim()),
+  });
+  const openSettings = (section: OverviewSettingsSection) => onOpenSettings?.(section);
+  // 已配置完成的服务商卡不再常驻（没有信息价值），只展示仍待配置的
+  // 卡作为提醒；全部配置完成后整组「当前语音服务」隐藏。凭据加载中/拉取失败
+  // （providers 为空）时保留占位卡，避免页面闪空。
+  const pendingProviders = setup.providers.filter((p) => !p.configured);
+  const showProvidersSection = setup.providers.length === 0 || pendingProviders.length > 0;
 
   return (
-    <>
-      <PageHeader title={t('overview.title')} />
+    // 单屏固定页：不滚动，撑满外壳给定的高度，所有仪表盘在一屏内
+    // 弹性分配；窗口压到很矮时由底部行内部收缩（最近识别列表内滚），页面本身不出滚动条。
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        flex: 1,
+        minHeight: 0,
+        minWidth: 0,
+        gap: 14,
+      }}
+    >
+      <PageHeader
+        compact
+        title={t('overview.title')}
+        right={
+          <Btn size="sm" icon="refresh" onClick={refreshAll}>
+            {t('overview.refresh')}
+          </Btn>
+        }
+      />
 
-      <div style={{ display: 'grid', gridTemplateColumns: mobile ? '1fr' : '1fr 1fr', gap: 12, marginBottom: 18 }}>
-        <ProviderCard
-          kind={t('overview.asrKind')}
-          name={asrProviderName}
-          subname={asrProviderId}
-          status={credsError ? 'error' : creds.asrConfigured ? 'configured' : 'notConfigured'}
-        />
-        <ProviderCard
-          kind={t('overview.llmKind')}
-          name={llmProviderName}
-          subname={llmProviderId}
-          status={credsError ? 'error' : creds.llmConfigured ? 'configured' : 'notConfigured'}
-        />
+      {showProvidersSection && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, flexShrink: 0 }}>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'baseline',
+              justifyContent: 'space-between',
+              flexWrap: 'wrap',
+              gap: 8,
+            }}
+          >
+            <h2 style={{ fontSize: 13, fontWeight: 600, color: 'var(--ol-ink-2)', margin: 0 }}>
+              {t('overview.servicesTitle')}
+            </h2>
+            <Btn
+              size="sm"
+              variant="soft"
+              disabled={!onOpenSettings}
+              onClick={() => openSettings('services')}
+            >
+              {t('overview.actions.services')}
+            </Btn>
+          </div>
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns:
+                mobile || pendingProviders.length < 2
+                  ? 'minmax(0, 1fr)'
+                  : 'repeat(2, minmax(0, 1fr))',
+              gap: 12,
+            }}
+          >
+            {pendingProviders.map((provider) => {
+              const nameKey =
+                provider.id &&
+                (provider.kind === 'asr' ? ASR_NAME_KEY_BY_ID : LLM_NAME_KEY_BY_ID)[provider.id];
+              const name = nameKey
+                ? t(`settings.providers.presets.${nameKey}`)
+                : provider.id ||
+                  t(provider.kind === 'omni' ? 'overview.omniName' : 'overview.statusUnknown');
+              return (
+                <ProviderCard
+                  key={provider.kind}
+                  kind={provider.kind}
+                  name={name}
+                  status="notConfigured"
+                  onConfigure={onOpenSettings ? () => openSettings('services') : undefined}
+                />
+              );
+            })}
+            {setup.providers.length === 0 && (
+              <Card padding={16}>
+                <div role="status" style={{ fontSize: 13, color: 'var(--ol-ink-3)' }}>
+                  {t(credsLoading ? 'overview.statusLoading' : 'overview.credentialsLoadError')}
+                </div>
+              </Card>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* 使用记录：标题 + 四张指标卡为一组。 */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, flexShrink: 0 }}>
+        <h2 style={{ fontSize: 13, fontWeight: 600, color: 'var(--ol-ink-2)', margin: 0 }}>
+          {t('overview.statsTitle')}
+        </h2>
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: mobile ? 'repeat(2, minmax(0, 1fr))' : 'repeat(4, minmax(0, 1fr))',
+            gap: 12,
+          }}
+        >
+          <Metric
+            icon="hash"
+            label={t('overview.metricChars')}
+            value={historyError ? '—' : formatLocaleNumber(metrics.charsToday, locale)}
+            trend={
+              historyError
+                ? t('overview.historyLoadError')
+                : t('overview.metricSegments', { count: metrics.segmentsToday })
+            }
+          />
+          <Metric
+            icon="mic"
+            label={t('overview.metricDuration')}
+            value={historyError ? '—' : formatDuration(metrics.totalDurationMs, t, locale)}
+            trend={historyError ? t('overview.historyLoadError') : ''}
+          />
+          <Metric
+            icon="clock"
+            label={t('overview.metricAvg')}
+            value={historyError ? '—' : formatDuration(metrics.avgLatencyMs, t, locale)}
+            trend={
+              historyError
+                ? t('overview.historyLoadError')
+                : metrics.segmentsToday > 0
+                  ? t('overview.metricAvgTrend')
+                  : t('overview.metricNoData')
+            }
+          />
+          <Metric
+            icon="bolt"
+            label={t('overview.metricTotal')}
+            value={historyError ? '—' : formatLocaleNumber(history.length, locale)}
+            trend={historyError ? t('overview.historyLoadError') : t('overview.metricTotalTrend')}
+          />
+        </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: mobile ? 'repeat(2, 1fr)' : 'repeat(4, 1fr)', gap: 12, marginBottom: 18 }}>
-        <Metric icon="hash" label={t('overview.metricChars')} value={historyError ? '—' : metrics.charsToday.toLocaleString()} trend={historyError ? t('overview.historyLoadError') : t('overview.metricSegments', { count: metrics.segmentsToday })} />
-        <Metric icon="mic" label={t('overview.metricDuration')} value={historyError ? '—' : formatDuration(metrics.totalDurationMs, t)} trend={historyError ? t('overview.historyLoadError') : ''} />
-        <Metric icon="clock" label={t('overview.metricAvg')} value={historyError ? '—' : formatDuration(metrics.avgLatencyMs, t)} trend={historyError ? t('overview.historyLoadError') : metrics.segmentsToday > 0 ? t('overview.metricAvgTrend') : t('overview.metricNoData')} />
-        <Metric icon="bolt" label={t('overview.metricTotal')} value={historyError ? '—' : String(history.length)} trend={historyError ? t('overview.historyLoadError') : t('overview.metricTotalTrend')} accent />
-      </div>
-
-      {/* 年度活动热力图（8starlabs Heatmap 规格）：过去一年每日听写次数。
-          数据来自独立的 activity 计数存储，与历史保留策略解耦；
-          可在设置 → 通用 → 外观 里单独关闭。
-          移动端（useMobileLayout）不渲染，避免窄屏横向溢出（issue #861）。 */}
-      {!mobile &&
-        prefs?.showOverviewActivityHeatmap !== false &&
-        activity &&
-        activity.length > 0 && (
-          <ActivityHeatmapCard activity={activity} />
-        )}
-
-      {/* 底部一行 = flex:1 撑满剩余高度（父 wrapper 是 display:flex/column）。
-          只有「最近识别」内部允许滚动；其他卡片按内容自然高度，不破裂底部圆角。
-          issue #243 follow-up：去掉外层 overflow 后底部圆角被裁的视觉问题。 */}
-      <div style={{ display: 'grid', gridTemplateColumns: mobile ? '1fr' : '1fr 1.4fr', gap: 12, flex: mobile ? undefined : 1, minHeight: mobile ? undefined : 0 }}>
-        {/* overflow:hidden：窗口过小时这一行 flex:1 会被压到比内容还矮，柱状图（固定高）
-            原本会溢出卡片圆角外（issue #782）。裁进卡片内，与右侧「最近识别」卡片一致。 */}
+      {/* 底部行吃掉剩余高度：周期卡图表区自适应拉高，最近识别列表内部滚动。 */}
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: mobile ? 'minmax(0, 1fr)' : 'minmax(0, 1fr) minmax(0, 1.4fr)',
+          gap: 12,
+          flex: 1,
+          minHeight: 0,
+        }}
+      >
         <PeriodMetricsCard
           series={series}
           period={period}
@@ -280,27 +402,64 @@ export function Overview({ onOpenHistory }: OverviewProps) {
           onPeriodChange={setPeriod}
           onMetricChange={setMetric}
           loadError={activityError}
+          onRetry={refreshActivity}
         />
 
-        <Card padding={0} style={{ display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden' }}>
-          <div style={{ padding: '14px 18px', borderBottom: '0.5px solid var(--ol-line)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
-            <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--ol-ink-2)' }}>{t('overview.recentTitle')}</span>
-            <Btn size="sm" variant="ghost" onClick={onOpenHistory}>{t('overview.recentAll')}</Btn>
+        <Card
+          padding={0}
+          style={{ display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'hidden' }}
+        >
+          <div
+            style={{
+              padding: '12px 18px',
+              borderBottom: '0.5px solid var(--ol-line)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              flexShrink: 0,
+            }}
+          >
+            <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--ol-ink-2)' }}>
+              {t('overview.recentTitle')}
+            </span>
+            <Btn size="sm" variant="ghost" disabled={!onOpenHistory} onClick={onOpenHistory}>
+              {t('overview.recentAll')}
+            </Btn>
           </div>
-          <div className="ol-thinscroll" style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+          <div className="ol-thinscroll" style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
             {historyError ? (
-              <div style={{ padding: 24, textAlign: 'center', fontSize: 12, color: 'var(--ol-ink-4)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
+              <div
+                style={{
+                  padding: 24,
+                  textAlign: 'center',
+                  fontSize: 12,
+                  color: 'var(--ol-ink-4)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  gap: 10,
+                }}
+              >
                 <span>{t('overview.recentLoadFailed')}</span>
-                <Btn size="sm" variant="ghost" onClick={refreshHistory}>{t('overview.historyRetry')}</Btn>
+                <Btn size="sm" variant="ghost" onClick={refreshHistory}>
+                  {t('overview.historyRetry')}
+                </Btn>
               </div>
             ) : (
               <>
                 {history.length === 0 && (
-                  <div style={{ padding: 24, textAlign: 'center', fontSize: 12, color: 'var(--ol-ink-4)' }}>
-                    {t('overview.recentEmpty', { trigger: prefs ? formatComboLabel(prefs.dictationHotkey) : '' })}
+                  <div
+                    style={{
+                      padding: 24,
+                      textAlign: 'center',
+                      fontSize: 12,
+                      color: 'var(--ol-ink-4)',
+                    }}
+                  >
+                    {t('overview.recentEmptyHint')}
                   </div>
                 )}
-                {history.slice(0, 5).map(s => (
+                {history.slice(0, 8).map((s) => (
                   <RecentRow key={s.id} session={s} modeLabel={modeLabel} />
                 ))}
               </>
@@ -308,53 +467,98 @@ export function Overview({ onOpenHistory }: OverviewProps) {
           </div>
         </Card>
       </div>
-    </>
+      {/* Independent activity storage survives history clearing; keep the existing visibility preference. */}
+      {!mobile &&
+        prefs?.showOverviewActivityHeatmap !== false &&
+        activity &&
+        activity.length > 0 && <ActivityHeatmapCard activity={activity} />}
+    </div>
   );
 }
 
 interface ProviderCardProps {
-  kind: string;
+  kind: 'asr' | 'llm' | 'omni';
   name: string;
-  subname: string;
-  status: 'configured' | 'notConfigured' | 'error';
+  status: 'configured' | 'notConfigured';
+  onConfigure?: () => void;
 }
 
-function ProviderCard({ kind, name, subname, status }: ProviderCardProps) {
+function ProviderCard({ kind, name, status, onConfigure }: ProviderCardProps) {
   const { t } = useTranslation();
-  // ASR 卡用 mic 图标，其他用 sparkle —— 通过比较译文判断会随语言改变，故改用本地化无关的字面量比较。
-  const isAsr = kind === t('overview.asrKind');
   return (
-    <Card padding={16} style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+    <Card padding={16} style={{ display: 'flex', flexDirection: 'column', gap: 12, minWidth: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <div
+          style={{
+            width: 38,
+            height: 38,
+            borderRadius: 10,
+            flexShrink: 0,
+            background: 'var(--ol-blue-soft)',
+            color: 'var(--ol-blue)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          <Icon name={kind === 'asr' ? 'mic' : 'sparkle'} size={18} />
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              flexWrap: 'wrap',
+              gap: 8,
+              marginBottom: 4,
+            }}
+          >
+            <span style={{ fontSize: 12.5, color: 'var(--ol-ink-4)', fontWeight: 600 }}>
+              {t(`overview.${kind}Kind`)}
+            </span>
+            {status === 'configured' && (
+              <Pill tone="ok" size="sm">
+                <span
+                  style={{ width: 5, height: 5, borderRadius: 999, background: 'var(--ol-ok)' }}
+                />
+                {t('overview.statusConfigured')}
+              </Pill>
+            )}
+            {status === 'notConfigured' && (
+              <Pill tone="outline" size="sm">
+                {t('overview.statusNotConfigured')}
+              </Pill>
+            )}
+          </div>
+          <div
+            style={{
+              fontSize: 15,
+              fontWeight: 600,
+              color: 'var(--ol-ink)',
+              overflowWrap: 'anywhere',
+            }}
+          >
+            {name}
+          </div>
+        </div>
+      </div>
       <div
         style={{
-          width: 38, height: 38, borderRadius: 10,
-          background: 'var(--ol-blue-soft)',
-          color: 'var(--ol-blue)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          flexWrap: 'wrap',
+          gap: 8,
         }}
       >
-        <Icon name={isAsr ? 'mic' : 'sparkle'} size={18} />
-      </div>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 2 }}>
-          <span style={{ fontSize: 11, color: 'var(--ol-ink-4)', fontWeight: 600, letterSpacing: '.06em', textTransform: 'uppercase' }}>{kind}</span>
-          {status === 'configured' && (
-            <Pill tone="ok" size="sm">
-              <span style={{ width: 5, height: 5, borderRadius: 999, background: 'var(--ol-ok)' }} />
-              {t('overview.statusConfigured')}
-            </Pill>
-          )}
-          {status === 'notConfigured' && (
-            <Pill tone="outline" size="sm">{t('overview.statusNotConfigured')}</Pill>
-          )}
-          {status === 'error' && (
-            <Pill tone="outline" size="sm" style={{ color: 'var(--ol-red, #ef4444)', borderColor: 'rgba(239,68,68,0.24)' }}>{t('overview.statusUnknown')}</Pill>
-          )}
-        </div>
-        <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--ol-ink)' }}>{name}</div>
-        <div style={{ fontSize: 11.5, color: status === 'error' ? 'var(--ol-red, #ef4444)' : 'var(--ol-ink-3)', marginTop: 1, fontFamily: status === 'error' ? undefined : 'var(--ol-font-mono)' }}>
-          {status === 'error' ? t('overview.credentialsLoadError') : subname}
-        </div>
+        <span
+          style={{ flex: '1 1 160px', fontSize: 13, color: 'var(--ol-ink-3)', lineHeight: 1.5 }}
+        >
+          {t(`overview.providerHelp.${kind}`)}
+        </span>
+        <Btn size="sm" icon="chevRight" disabled={!onConfigure} onClick={onConfigure}>
+          {t(status === 'configured' ? 'overview.manageProvider' : 'overview.configureProvider')}
+        </Btn>
       </div>
     </Card>
   );
@@ -364,20 +568,23 @@ function ProviderCard({ kind, name, subname, status }: ProviderCardProps) {
 function ActivityHeatmapCard({ activity }: { activity: ActivityDay[] }) {
   const { t, i18n } = useTranslation();
   const { endDate, startDate, data, labels } = useMemo(() => {
-    const end = new Date();
-    const start = new Date(end);
-    start.setDate(end.getDate() - 364);
-    const lang = i18n.language || 'en';
+    // 年历按日历年铺满——1 月 1 日起、12 月 31 日止，从最左排到最右；
+    // 此前的滚动 365 天窗口会让月份标号从年中开始、右侧留空，观感像「缺数据」。
+    const now = new Date();
+    const year = now.getFullYear();
+    const start = new Date(year, 0, 1);
+    const end = new Date(year, 11, 31);
+    const lang = i18n.resolvedLanguage || i18n.language || 'en';
     const monthFormat = new Intl.DateTimeFormat(lang, { month: 'short' });
     const dayFormat = new Intl.DateTimeFormat(lang, { weekday: 'short' });
     const dateFormat = new Intl.DateTimeFormat(lang, { dateStyle: 'medium' });
-    const anchor = new Date(2026, 0, 4); // 周日
+    const anchor = new Date(year, 0, 4); // 周日
     return {
       endDate: end,
       startDate: start,
-      data: activity.map(day => ({ date: day.date, value: day.count })),
+      data: activity.map((day) => ({ date: day.date, value: day.count })),
       labels: {
-        months: Array.from({ length: 12 }, (_, m) => monthFormat.format(new Date(2026, m, 1))),
+        months: Array.from({ length: 12 }, (_, m) => monthFormat.format(new Date(year, m, 1))),
         days: Array.from({ length: 7 }, (_, d) => {
           const date = new Date(anchor);
           date.setDate(anchor.getDate() + d);
@@ -386,14 +593,16 @@ function ActivityHeatmapCard({ activity }: { activity: ActivityDay[] }) {
         date: (date: Date) => dateFormat.format(date),
       },
     };
-  }, [activity, i18n.language]);
+  }, [activity, i18n.resolvedLanguage, i18n.language]);
   return (
-    // marginBottom 与上方 provider / metrics 两行的 18px 节奏保持一致：否则「年度活动」
-    // 会直接贴住下面「近 7 天 / 最近识别」那一行，中间没有间隔（issue #781）。
-    <Card padding={18} style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 18 }}>
-      <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--ol-ink-2)' }}>
+    <Card padding={12} style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 }}>
+      <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--ol-ink-2)', flexShrink: 0 }}>
         {t('overview.activityTitle')}
       </span>
+      {/* 格子不再封顶：53 列随卡片宽度铺满到右缘。
+          卡片高度收紧为内容高度（flex 默认 0 1 auto：不拉伸、窗口压矮时才收缩），
+          四边 padding 一致；腾出的高度全部让给上方周期/最近识别行，热力图整体沉底
+          。 */}
       <Heatmap
         data={data}
         startDate={startDate}
@@ -401,7 +610,7 @@ function ActivityHeatmapCard({ activity }: { activity: ActivityDay[] }) {
         monthLabels={labels.months}
         dayLabels={labels.days}
         dateDisplay={labels.date}
-        valueDisplay={count => t('overview.activityCount', { count })}
+        valueDisplay={(count) => t('overview.activityCount', { count })}
       />
     </Card>
   );
@@ -412,18 +621,36 @@ interface MetricProps {
   label: string;
   value: string;
   trend: string;
-  accent?: boolean;
 }
 
-function Metric({ icon, label, value, trend, accent }: MetricProps) {
+function Metric({ icon, label, value, trend }: MetricProps) {
   return (
-    <Card padding={16}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8, color: 'var(--ol-ink-3)' }}>
+    <Card padding={14} style={{ minWidth: 0 }}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          marginBottom: 8,
+          color: 'var(--ol-ink-3)',
+        }}
+      >
         <Icon name={icon} size={13} />
-        <span style={{ fontSize: 11.5 }}>{label}</span>
+        <span style={{ fontSize: 13 }}>{label}</span>
       </div>
-      <div style={{ fontSize: 26, fontWeight: 600, letterSpacing: '-0.02em', color: accent ? 'var(--ol-blue)' : 'var(--ol-ink)', lineHeight: 1.1 }}>{value}</div>
-      <div style={{ fontSize: 11, color: 'var(--ol-ink-4)', marginTop: 6 }}>{trend || ' '}</div>
+      <div
+        style={{
+          fontSize: 22,
+          fontWeight: 600,
+          letterSpacing: '-0.02em',
+          color: 'var(--ol-ink)',
+          lineHeight: 1.2,
+          overflowWrap: 'anywhere',
+        }}
+      >
+        {value}
+      </div>
+      <div style={{ fontSize: 12, color: 'var(--ol-ink-4)', marginTop: 6 }}>{trend || ' '}</div>
     </Card>
   );
 }
@@ -453,7 +680,7 @@ function SegmentedToggle<T extends string | number>({
         border: '0.5px solid var(--ol-line)',
       }}
     >
-      {options.map(option => {
+      {options.map((option) => {
         const selected = option.value === value;
         return (
           <button
@@ -463,7 +690,7 @@ function SegmentedToggle<T extends string | number>({
             onClick={() => onChange(option.value)}
             style={{
               padding: '3px 9px',
-              fontSize: 11,
+              fontSize: 12.5,
               fontWeight: selected ? 600 : 500,
               border: 0,
               borderRadius: 6,
@@ -472,7 +699,8 @@ function SegmentedToggle<T extends string | number>({
               cursor: 'pointer',
               fontFamily: 'inherit',
               whiteSpace: 'nowrap',
-              transition: 'background 0.16s var(--ol-motion-quick), color 0.16s var(--ol-motion-quick)',
+              transition:
+                'background 0.16s var(--ol-motion-quick), color 0.16s var(--ol-motion-quick)',
             }}
           >
             {option.label}
@@ -496,6 +724,7 @@ function PeriodMetricsCard({
   onPeriodChange,
   onMetricChange,
   loadError,
+  onRetry,
 }: {
   series: ReturnType<typeof buildPeriodSeries>;
   period: ActivityPeriod;
@@ -503,21 +732,36 @@ function PeriodMetricsCard({
   onPeriodChange: (next: ActivityPeriod) => void;
   onMetricChange: (next: ActivityMetric) => void;
   loadError: boolean;
+  onRetry: () => void;
 }) {
-  const { t } = useTranslation();
-  const periodOptions = ACTIVITY_PERIODS.map(days => ({
+  const { t, i18n } = useTranslation();
+  const locale = i18n.resolvedLanguage || i18n.language;
+  const periodOptions = ACTIVITY_PERIODS.map((days) => ({
     value: days,
     label: t(`overview.period.last${days}Days`),
   }));
-  const metricOptions = ACTIVITY_METRICS.map(id => ({
+  const metricOptions = ACTIVITY_METRICS.map((id) => ({
     value: id,
     label: t(`overview.metricName.${id}`),
   }));
 
   return (
-    <Card padding={18} style={{ display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden' }}>
+    <Card
+      padding={18}
+      style={{ display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0 }}
+    >
       {/* flexWrap：卡片在 1fr 列里较窄，两组切换器放不下时换行而不是压扁按钮。 */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 8,
+          flexWrap: 'wrap',
+          marginBottom: 12,
+          flexShrink: 0,
+        }}
+      >
         <SegmentedToggle
           value={period}
           options={periodOptions}
@@ -533,18 +777,41 @@ function PeriodMetricsCard({
       </div>
 
       {loadError ? (
-        <div style={{ height: 132, display: 'flex', alignItems: 'center', justifyContent: 'center', textAlign: 'center', fontSize: 12, color: 'var(--ol-ink-4)' }}>
+        <div
+          style={{
+            minHeight: 132,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 10,
+            alignItems: 'center',
+            justifyContent: 'center',
+            textAlign: 'center',
+            fontSize: 12,
+            color: 'var(--ol-ink-4)',
+          }}
+        >
           {t('overview.activityLoadError')}
+          <Btn size="sm" onClick={onRetry}>
+            {t('overview.historyRetry')}
+          </Btn>
         </div>
       ) : (
         <>
-          <div style={{ marginBottom: 12 }}>
-            <div style={{ fontSize: 26, fontWeight: 600, letterSpacing: '-0.02em', color: 'var(--ol-ink)', lineHeight: 1.1 }}>
-              {formatMetricValue(series.total, metric, t)}
+          <div style={{ marginBottom: 12, flexShrink: 0 }}>
+            <div
+              style={{
+                fontSize: 26,
+                fontWeight: 600,
+                letterSpacing: '-0.02em',
+                color: 'var(--ol-ink)',
+                lineHeight: 1.1,
+              }}
+            >
+              {formatMetricValue(series.total, metric, t, locale)}
             </div>
-            <div style={{ fontSize: 11, color: 'var(--ol-ink-4)', marginTop: 5 }}>
+            <div style={{ fontSize: 12, color: 'var(--ol-ink-4)', marginTop: 5 }}>
               {t('overview.period.dailyAverage', {
-                value: formatMetricValue(series.dailyAverage, metric, t),
+                value: formatMetricValue(series.dailyAverage, metric, t, locale),
               })}
             </div>
           </div>
@@ -564,58 +831,96 @@ function PeriodChart({
   series: ReturnType<typeof buildPeriodSeries>;
   metric: ActivityMetric;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const locale = i18n.resolvedLanguage || i18n.language;
   const { buckets } = series;
-  const max = Math.max(...buckets.map(b => b.value), 1);
+  const max = Math.max(...buckets.map((b) => b.value), 1);
   const dense = buckets.length > 7;
   const lastIndex = buckets.length - 1;
   const midIndex = Math.floor(lastIndex / 2);
 
+  // 图表区随卡片剩余高度拉伸（单屏固定页）：柱高按容器百分比缩放，不再固定 100px。
   return (
-    <>
-      <div style={{ display: 'flex', alignItems: 'flex-end', gap: dense ? 2 : 8, height: 100 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 60 }}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'stretch',
+          gap: dense ? 2 : 8,
+          flex: 1,
+          minHeight: 0,
+        }}
+      >
         {buckets.map((bucket, i) => {
           const isToday = i === lastIndex;
           return (
             <div
               key={bucket.date}
-              title={`${bucket.date} · ${formatMetricValue(bucket.value, metric, t)}`}
-              style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}
+              title={`${formatLocaleDate(bucket.date, locale, { dateStyle: 'medium' })} · ${formatMetricValue(bucket.value, metric, t, locale)}`}
+              style={{
+                flex: 1,
+                minWidth: 0,
+                height: '100%',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'flex-end',
+                gap: 4,
+              }}
             >
               {!dense && (
-                <div style={{ fontSize: 9.5, color: isToday ? 'var(--ol-blue)' : 'var(--ol-ink-4)', fontWeight: isToday ? 600 : 400 }}>
-                  {formatMetricValue(bucket.value, metric, t)}
+                <div
+                  style={{
+                    fontSize: 9.5,
+                    color: isToday ? 'var(--ol-blue)' : 'var(--ol-ink-4)',
+                    fontWeight: isToday ? 600 : 400,
+                    flexShrink: 0,
+                  }}
+                >
+                  {formatMetricValue(bucket.value, metric, t, locale)}
                 </div>
               )}
               <div
                 style={{
                   width: '100%',
-                  height: `${(bucket.value / max) * 80}px`,
+                  height: `${(bucket.value / max) * 88}%`,
                   minHeight: 2,
                   borderRadius: dense ? 2 : 4,
                   background: isToday ? 'var(--ol-blue)' : 'var(--ol-ink-4)',
                   opacity: bucket.value === 0 ? 0.15 : isToday ? 1 : 0.85,
-                  transition: 'height 0.18s var(--ol-motion-soft), opacity 0.18s var(--ol-motion-soft)',
+                  transition:
+                    'height 0.18s var(--ol-motion-soft), opacity 0.18s var(--ol-motion-soft)',
                 }}
               />
             </div>
           );
         })}
       </div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: 'var(--ol-ink-4)', marginTop: 8 }}>
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          fontSize: 10,
+          color: 'var(--ol-ink-4)',
+          marginTop: 8,
+          flexShrink: 0,
+        }}
+      >
         {dense
-          ? [0, midIndex, lastIndex].map(i => <span key={i}>{shortDateLabel(buckets[i].date)}</span>)
-          : buckets.map(bucket => <span key={bucket.date}>{weekDayLabel(bucket.date, t('overview.weekDays', { returnObjects: true }) as string[])}</span>)}
+          ? [0, midIndex, lastIndex].map((i) => (
+              <span key={i}>{formatLocaleDate(buckets[i].date, locale)}</span>
+            ))
+          : buckets.map((bucket) => (
+              <span key={bucket.date}>
+                {weekDayLabel(
+                  bucket.date,
+                  t('overview.weekDays', { returnObjects: true }) as string[],
+                )}
+              </span>
+            ))}
       </div>
-    </>
+    </div>
   );
-}
-
-/** `YYYY-MM-DD` → `M/D`。日期键是后端按本地日历写的，直接切字符串即可，
- *  不要 new Date(key) —— 那会按 UTC 解析再转回本地，跨时区会差一天。 */
-function shortDateLabel(dateKey: string): string {
-  const [, month, day] = dateKey.split('-');
-  return `${Number(month)}/${Number(day)}`;
 }
 
 function weekDayLabel(dateKey: string, names: string[]): string {
@@ -628,25 +933,42 @@ function formatMetricValue(
   value: number,
   metric: ActivityMetric,
   t: ReturnType<typeof useTranslation>['t'],
+  locale: string,
 ): string {
-  if (metric === 'duration') return formatLongDuration(value, t);
-  return Math.round(value).toLocaleString();
+  if (metric === 'duration') return formatLongDuration(value, t, locale);
+  return formatLocaleNumber(Math.round(value), locale);
 }
 
 /** 周期总时长可能是几十小时，不能沿用只处理秒/分的 formatDuration。 */
-function formatLongDuration(ms: number, t: ReturnType<typeof useTranslation>['t']): string {
+function formatLongDuration(
+  ms: number,
+  t: ReturnType<typeof useTranslation>['t'],
+  locale: string,
+): string {
   if (ms <= 0) return '0';
   const totalSeconds = Math.round(ms / 1000);
-  if (totalSeconds < 60) return t('common.durationSeconds', { value: totalSeconds });
+  if (totalSeconds < 60)
+    return t('common.durationSeconds', { value: formatLocaleNumber(totalSeconds, locale) });
   const totalMinutes = Math.floor(totalSeconds / 60);
-  if (totalMinutes < 60) return t('overview.period.minutes', { value: totalMinutes });
+  if (totalMinutes < 60)
+    return t('overview.period.minutes', { value: formatLocaleNumber(totalMinutes, locale) });
   const hours = Math.floor(totalMinutes / 60);
   const minutes = totalMinutes % 60;
-  return t('overview.period.hoursMinutes', { hours, minutes });
+  return t('overview.period.hoursMinutes', {
+    hours: formatLocaleNumber(hours, locale),
+    minutes: formatLocaleNumber(minutes, locale),
+  });
 }
 
-function RecentRow({ session, modeLabel }: { session: DictationSession; modeLabel: Record<PolishMode, string> }) {
-  const { t } = useTranslation();
+function RecentRow({
+  session,
+  modeLabel,
+}: {
+  session: DictationSession;
+  modeLabel: Record<PolishMode, string>;
+}) {
+  const { t, i18n } = useTranslation();
+  const locale = i18n.resolvedLanguage || i18n.language;
   const [copied, setCopied] = useState(false);
 
   const onCopy = async () => {
@@ -654,7 +976,9 @@ function RecentRow({ session, modeLabel }: { session: DictationSession; modeLabe
       if (!navigator.clipboard?.writeText) throw new Error('clipboard unavailable');
       // 与 History 一致：润色失败/未产出时 finalText 为空，回退到识别原文，
       // 避免复制到空字符串。
-      await navigator.clipboard.writeText(session.finalText.trim() ? session.finalText : session.rawTranscript);
+      await navigator.clipboard.writeText(
+        session.finalText.trim() ? session.finalText : session.rawTranscript,
+      );
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1500);
     } catch (error) {
@@ -663,19 +987,52 @@ function RecentRow({ session, modeLabel }: { session: DictationSession; modeLabe
   };
 
   return (
-    <div style={{ padding: '12px 18px', borderBottom: '0.5px solid var(--ol-line-soft)', display: 'flex', gap: 12, alignItems: 'flex-start' }}>
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 4, minWidth: 60 }}>
-        <span style={{ fontSize: 11, fontFamily: 'var(--ol-font-mono)', color: 'var(--ol-ink-3)' }}>
-          {formatTime(session.createdAt)}
+    <div
+      style={{
+        padding: '12px 18px',
+        borderBottom: '0.5px solid var(--ol-line-soft)',
+        display: 'flex',
+        gap: 12,
+        alignItems: 'flex-start',
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'flex-start',
+          gap: 4,
+          minWidth: 60,
+        }}
+      >
+        <span
+          style={{ fontSize: 12.5, fontFamily: 'var(--ol-font-mono)', color: 'var(--ol-ink-3)' }}
+        >
+          {formatHistoryTime(session.createdAt, locale)}
         </span>
-        <Pill size="sm" tone="default">{modeLabel[session.mode]}</Pill>
+        <Pill size="sm" tone="default">
+          {modeLabel[session.mode]}
+        </Pill>
       </div>
-      <div style={{ flex: 1, fontSize: 12.5, color: 'var(--ol-ink-2)', whiteSpace: 'pre-line', lineHeight: 1.55, overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
+      <div
+        style={{
+          flex: 1,
+          fontSize: 14,
+          color: 'var(--ol-ink-2)',
+          whiteSpace: 'pre-line',
+          lineHeight: 1.55,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          display: '-webkit-box',
+          WebkitLineClamp: 2,
+          WebkitBoxOrient: 'vertical',
+        }}
+      >
         {session.finalText.split('\n')[0]}
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
-        <span style={{ fontSize: 10.5, color: 'var(--ol-ink-4)', fontFamily: 'var(--ol-font-mono)' }}>
-          {formatDuration(session.durationMs ?? 0, t)}
+        <span style={{ fontSize: 12, color: 'var(--ol-ink-4)', fontFamily: 'var(--ol-font-mono)' }}>
+          {formatDuration(session.durationMs ?? 0, t, locale)}
         </span>
         <Btn
           size="sm"
@@ -691,19 +1048,13 @@ function RecentRow({ session, modeLabel }: { session: DictationSession; modeLabe
   );
 }
 
-function formatTime(iso: string): string {
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return iso;
-  const now = new Date();
-  const sameDay = d.toDateString() === now.toDateString();
-  const pad = (n: number) => String(n).padStart(2, '0');
-  if (sameDay) return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  return `${d.getMonth() + 1}/${d.getDate()}`;
-}
-
-function formatDuration(ms: number, t: ReturnType<typeof useTranslation>['t']): string {
+function formatDuration(
+  ms: number,
+  t: ReturnType<typeof useTranslation>['t'],
+  locale: string,
+): string {
   if (ms <= 0) return '—';
   const sec = ms / 1000;
-  if (sec < 60) return t('common.durationSeconds', { value: sec.toFixed(1) });
+  if (sec < 60) return t('common.durationSeconds', { value: formatLocaleDecimal(sec, locale) });
   return `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
 }

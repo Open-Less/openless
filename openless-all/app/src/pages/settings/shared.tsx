@@ -1,212 +1,254 @@
 // 共享在设置各 section 间的原子（SettingRow / Toggle / inputStyle）和纯 i18n 标签。
 
-import type { CSSProperties, ReactNode } from "react"
-import { Tooltip } from "../../components/Tooltip"
-import { useMobileLayout, useReadableLayout, useConservativeLayout } from "../../lib/useMobileLayout"
+import type { CSSProperties, ReactNode } from 'react';
+import { Icon } from '../../components/Icon';
+import { Tooltip } from '../../components/Tooltip';
+import {
+  useMobileLayout,
+  useReadableLayout,
+  useConservativeLayout,
+} from '../../lib/useMobileLayout';
 
 // 带说明的文字统一加虚线下划线 + help 光标，暗示「悬停可看解释」。
 const hintableTextStyle: CSSProperties = {
-    cursor: "help",
-    textDecoration: "underline dotted",
-    textDecorationColor: "var(--ol-ink-4)",
-    textUnderlineOffset: 3,
-}
+  cursor: 'help',
+  textDecoration: 'underline dotted',
+  textDecorationColor: 'var(--ol-ink-4)',
+  textUnderlineOffset: 3,
+};
 
 export function SectionTitle({
-    children,
-    hint,
-    style,
+  children,
+  hint,
+  style,
 }: {
-    children: ReactNode
-    /** 悬停在标题文字上时的功能说明，给 Less Computer 这类光看名字猜不出用途的板块。 */
-    hint?: string
-    style?: CSSProperties
+  children: ReactNode;
+  /** 悬停在标题文字上时的功能说明，给 Less Computer 这类光看名字猜不出用途的板块。 */
+  hint?: string;
+  style?: CSSProperties;
 }) {
-    const titleStyle: CSSProperties = {
-        fontSize: 14,
-        fontWeight: 600,
-        color: "var(--ol-ink)",
-        marginBottom: 6,
-        letterSpacing: "-0.01em",
-        ...style,
-    }
-    if (!hint) {
-        return <div style={titleStyle}>{children}</div>
-    }
-    return (
-        // display:flex 让 Tooltip 的锚点收缩到标题文字本身，提示贴着文字弹出。
-        <div style={{ ...titleStyle, display: "flex" }}>
-            <Tooltip content={hint} wrap placement="bottom" focusable>
-                <span style={hintableTextStyle}>{children}</span>
-            </Tooltip>
-        </div>
-    )
+  const titleStyle: CSSProperties = {
+    fontSize: 14,
+    fontWeight: 600,
+    color: 'var(--ol-ink)',
+    marginBottom: 6,
+    letterSpacing: '-0.01em',
+    ...style,
+  };
+  if (!hint) {
+    return <div style={titleStyle}>{children}</div>;
+  }
+  return (
+    // display:flex 让 Tooltip 的锚点收缩到标题文字本身，提示贴着文字弹出。
+    <div style={{ ...titleStyle, display: 'flex' }}>
+      <Tooltip content={hint} wrap placement="bottom" focusable>
+        <span style={hintableTextStyle}>{children}</span>
+      </Tooltip>
+    </div>
+  );
+}
+
+export function ExperimentalSectionTitle({
+  children,
+  badge,
+  hint,
+  style,
+}: {
+  children: ReactNode;
+  badge: string;
+  hint?: string;
+  style?: CSSProperties;
+}) {
+  return (
+    <SectionTitle hint={hint} style={style}>
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
+        <span>{children}</span>
+        <span
+          style={{
+            padding: '2px 6px',
+            borderRadius: 999,
+            background: 'var(--ol-blue-soft)',
+            color: 'var(--ol-blue)',
+            fontSize: 10,
+            fontWeight: 600,
+            lineHeight: 1.3,
+            letterSpacing: 0,
+          }}
+        >
+          {badge}
+        </span>
+      </span>
+    </SectionTitle>
+  );
 }
 
 // 页面瘦身：设置页描述文案全部隐藏（保留组件签名 + 调用点，便于需要时恢复）。
-export function SectionDesc(_props: {
-    children: ReactNode
-    style?: CSSProperties
-}) {
-    return null
+export function SectionDesc(_props: { children: ReactNode; style?: CSSProperties }) {
+  return null;
 }
 
 interface SettingRowProps {
-    label: string
-    desc?: string
-    children: ReactNode
-    controlWidth?: number | string
+  label: string;
+  desc?: string;
+  children: ReactNode;
+  controlWidth?: number | string;
 }
 
-// 页面瘦身后描述小字不再常驻展示；desc 改为悬停在标签文字上时以 Tooltip 弹出，
-// 布局保持紧凑的同时不牺牲可理解性。
-export function SettingRow({
-    label,
-    desc,
-    children,
-    controlWidth,
-}: SettingRowProps) {
-    const mobile = useMobileLayout()
-    const readable = useReadableLayout()
-    const conservative = useConservativeLayout()
-    const stackLayout = mobile || readable || conservative
-    const labelStyle: CSSProperties = {
-        fontSize: 13,
-        fontWeight: 500,
-        color: "var(--ol-ink)",
-        minWidth: 0,
-    }
-    return (
-        <div
-            style={{
-                display: "grid",
-                gridTemplateColumns: stackLayout ? "minmax(0, 1fr)" : "minmax(0, 180px) minmax(0, 1fr)",
-                gap: stackLayout ? 8 : 16,
-                padding: stackLayout ? "12px 0" : "14px 0",
-                borderTop: "0.5px solid var(--ol-line-soft)",
-                alignItems: "center",
-            }}
-        >
-            {/* display:flex 让 Tooltip 锚点收缩到文字宽度，提示贴着文字弹出。 */}
-            <div style={{ minWidth: 0, alignSelf: "center", display: "flex" }}>
-                {desc ? (
-                    <Tooltip content={desc} wrap placement="bottom" focusable>
-                        <span style={{ ...labelStyle, ...hintableTextStyle }}>{label}</span>
-                    </Tooltip>
-                ) : (
-                    <div style={labelStyle}>{label}</div>
-                )}
-            </div>
-            <div
-                className="ol-flex-row"
+// 设置的用途和后果直接可读，触屏和键盘用户无需依赖悬停。
+export function SettingRow({ label, desc, children, controlWidth }: SettingRowProps) {
+  const mobile = useMobileLayout();
+  const readable = useReadableLayout();
+  const conservative = useConservativeLayout();
+  const stackLayout = mobile || readable || conservative;
+  const labelStyle: CSSProperties = {
+    fontSize: 14,
+    fontWeight: 500,
+    color: 'var(--ol-ink)',
+    minWidth: 0,
+  };
+  return (
+    <div
+      style={{
+        display: 'grid',
+        gridTemplateColumns: stackLayout ? 'minmax(0, 1fr)' : 'minmax(0, 200px) minmax(0, 1fr)',
+        gap: stackLayout ? 8 : 16,
+        padding: stackLayout ? '12px 0' : '14px 0',
+        borderTop: '0.5px solid var(--ol-line-soft)',
+        alignItems: 'center',
+      }}
+    >
+      <div style={{ minWidth: 0, alignSelf: 'center' }}>
+        {/* 行内长说明不再常驻占位，统一收进标题旁的「?」，
+                    悬停 / 点击弹出（与「录音与输入」标题的提示同一交互语言）。 */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+          <span style={{ ...labelStyle, minWidth: 0 }}>{label}</span>
+          {desc && (
+            <Tooltip content={desc} wrap placement="bottom" focusable>
+              <span
+                aria-label={desc}
                 style={{
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "flex-start",
-                    minWidth: 0,
-                    width: stackLayout ? "100%" : controlWidth ?? "auto",
-                    maxWidth: "100%",
-                    flexWrap: stackLayout ? "wrap" : "nowrap",
-                    gap: stackLayout ? 6 : undefined,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  width: 16,
+                  height: 16,
+                  borderRadius: 999,
+                  border: '0.5px solid var(--ol-line-strong)',
+                  color: 'var(--ol-ink-4)',
+                  cursor: 'help',
+                  flexShrink: 0,
                 }}
-            >
-                {children}
-            </div>
+              >
+                <Icon name="help" size={10} />
+              </span>
+            </Tooltip>
+          )}
         </div>
-    )
+      </div>
+      <div
+        className="ol-flex-row"
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'flex-start',
+          minWidth: 0,
+          width: stackLayout ? '100%' : (controlWidth ?? 'auto'),
+          maxWidth: '100%',
+          flexWrap: stackLayout ? 'wrap' : 'nowrap',
+          gap: stackLayout ? 6 : undefined,
+        }}
+      >
+        {children}
+      </div>
+    </div>
+  );
 }
 
-export function Toggle({
-    on,
-    onToggle,
-}: {
-    on: boolean
-    onToggle?: (next: boolean) => void
-}) {
-    return (
-        <button
-            onClick={() => onToggle?.(!on)}
-            style={{
-                position: "relative",
-                flex: "0 0 36px",
-                width: 36,
-                minWidth: 36,
-                maxWidth: 36,
-                height: 20,
-                borderRadius: 999,
-                border: 0,
-                background: on ? "var(--ol-blue)" : "var(--ol-toggle-off-bg)",
-                boxShadow: "inset 0 1px 2px rgba(0,0,0,0.06)",
-                cursor: "default",
-                transition: "background 0.16s var(--ol-motion-quick)",
-            }}
-        >
-            <span
-                style={{
-                    position: "absolute",
-                    top: 2,
-                    left: on ? 18 : 2,
-                    width: 16,
-                    height: 16,
-                    borderRadius: 999,
-                    background: "var(--ol-toggle-knob)",
-                    boxShadow:
-                        "0 1px 2px rgba(0,0,0,.25), 0 0 0 0.5px rgba(0,0,0,.04)",
-                    transition: "left .16s var(--ol-motion-spring)",
-                }}
-            />
-        </button>
-    )
+export function Toggle({ on, onToggle }: { on: boolean; onToggle?: (next: boolean) => void }) {
+  return (
+    <button
+      onClick={() => onToggle?.(!on)}
+      style={{
+        position: 'relative',
+        // 此前写死 flex: 0 0 36px，在列方向的设置行包装里
+        // flex-basis 作用在高度上，开关被拉成 36×36 的圆球（开机自启行）。
+        // 宽高由 width/height 显式锁定，flex 只负责不伸不缩。
+        flex: '0 0 auto',
+        width: 36,
+        minWidth: 36,
+        maxWidth: 36,
+        height: 20,
+        borderRadius: 999,
+        border: 0,
+        background: on ? 'var(--ol-blue)' : 'var(--ol-toggle-off-bg)',
+        boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.06)',
+        cursor: 'default',
+        transition: 'background 0.16s var(--ol-motion-quick)',
+      }}
+    >
+      <span
+        style={{
+          position: 'absolute',
+          top: 2,
+          left: on ? 18 : 2,
+          width: 16,
+          height: 16,
+          borderRadius: 999,
+          background: 'var(--ol-toggle-knob)',
+          boxShadow: '0 1px 2px rgba(0,0,0,.25), 0 0 0 0.5px rgba(0,0,0,.04)',
+          transition: 'left .16s var(--ol-motion-spring)',
+        }}
+      />
+    </button>
+  );
 }
 
 export function chipSelectedStyle(selected: boolean): CSSProperties {
-    return {
-        background: selected ? "var(--ol-pill-selected-bg)" : "transparent",
-        border: selected
-            ? "0.5px solid var(--ol-pill-selected-border)"
-            : "0.5px solid var(--ol-line-strong)",
-        color: selected ? "var(--ol-pill-selected-ink)" : "var(--ol-ink-3)",
-    }
+  return {
+    background: selected ? 'var(--ol-pill-selected-bg)' : 'transparent',
+    border: selected
+      ? '0.5px solid var(--ol-pill-selected-border)'
+      : '0.5px solid var(--ol-line-strong)',
+    color: selected ? 'var(--ol-pill-selected-ink)' : 'var(--ol-ink-3)',
+  };
 }
 
 export const btnGhostStyle: CSSProperties = {
-    padding: "5px 10px",
-    fontSize: 12,
-    borderRadius: 6,
-    border: "0.5px solid var(--ol-line-strong)",
-    background: "var(--ol-control-solid)",
-    color: "var(--ol-ink-2)",
-    cursor: "default",
-    fontFamily: "inherit",
-    maxWidth: "100%",
-    transition:
-        "background 0.16s var(--ol-motion-quick), border-color 0.16s var(--ol-motion-quick)",
-}
+  padding: '5px 10px',
+  fontSize: 12,
+  borderRadius: 6,
+  border: '0.5px solid var(--ol-line-strong)',
+  background: 'var(--ol-control-solid)',
+  color: 'var(--ol-ink-2)',
+  cursor: 'default',
+  fontFamily: 'inherit',
+  maxWidth: '100%',
+  transition: 'background 0.16s var(--ol-motion-quick), border-color 0.16s var(--ol-motion-quick)',
+};
 
 export const segmentedTrackStyle: CSSProperties = {
-    display: "inline-flex",
-    padding: 2,
-    borderRadius: 8,
-    background: "var(--ol-segmented-bg)",
-}
+  display: 'inline-flex',
+  padding: 2,
+  borderRadius: 8,
+  background: 'var(--ol-segmented-bg)',
+};
 
 export const inputStyle: CSSProperties = {
-    flex: 1,
-    height: 32,
-    padding: "0 10px",
-    border: "0.5px solid var(--ol-line-strong)",
-    borderRadius: 8,
-    fontSize: 12.5,
-    fontFamily: "inherit",
-    outline: "none",
-    // 与 SelectLite 触发器同底色：此前用 --ol-surface-2（浅灰）会让所有输入框/
-    // 下拉与其它设置控件（麦克风/胶囊样式等 select-trigger-bg）颜色不一致。
-    background: "var(--ol-select-trigger-bg)",
-    width: "100%",
-    maxWidth: 360,
-    transition:
-        "background 0.16s var(--ol-motion-quick), border-color 0.16s var(--ol-motion-quick)",
-}
+  flex: 1,
+  height: 32,
+  padding: '0 10px',
+  border: '0.5px solid var(--ol-line-strong)',
+  borderRadius: 8,
+  fontSize: 13.5,
+  fontFamily: 'inherit',
+  outline: 'none',
+  // 与 SelectLite 触发器同底色：此前用 --ol-surface-2（浅灰）会让所有输入框/
+  // 下拉与其它设置控件（麦克风/胶囊样式等 select-trigger-bg）颜色不一致。
+  background: 'var(--ol-select-trigger-bg)',
+  width: '100%',
+  maxWidth: 360,
+  transition: 'background 0.16s var(--ol-motion-quick), border-color 0.16s var(--ol-motion-quick)',
+};
 
 // React 只保留展示标签。endpoint、model、auth、probe 与能力全部来自
 // Core ProviderDescriptor，避免任一 Host 再拥有一份会漂移的 provider 策略。

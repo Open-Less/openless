@@ -1,37 +1,37 @@
-import { invokeOrMock } from "./shared"
+import { invokeOrMock } from './shared';
 
 // ── Remote input (局域网手机录音) ──────────────────────────────────────
 export interface RemoteInputStatus {
-    running: boolean
-    starting: boolean
-    port: number
-    pin: string
-    urls: string[]
-    urlsStale: boolean
-    /** 通过本地 IPC 获取正在运行的服务所用根证书的完整 SHA-256。 */
-    caFingerprintSha256?: string
+  running: boolean;
+  starting: boolean;
+  port: number;
+  pin: string;
+  urls: string[];
+  urlsStale: boolean;
+  /** 通过本地 IPC 获取正在运行的服务所用根证书的完整 SHA-256。 */
+  caFingerprintSha256?: string;
 }
 
 export function getRemoteInputStatus(): Promise<RemoteInputStatus> {
-    return invokeOrMock("get_remote_input_status", undefined, () => ({
-        running: false,
-        starting: false,
-        port: 8443,
-        pin: "000000",
-        urls: [],
-        urlsStale: false,
-    }))
+  return invokeOrMock('get_remote_input_status', undefined, () => ({
+    running: false,
+    starting: false,
+    port: 8443,
+    pin: '000000',
+    urls: [],
+    urlsStale: false,
+  }));
 }
 
 export function listLocalIps(): Promise<string[]> {
-    return invokeOrMock("list_local_ips", undefined, () => ["192.168.1.100"])
+  return invokeOrMock('list_local_ips', undefined, () => ['192.168.1.100']);
 }
 
 export function regenerateRemotePin(): Promise<string> {
-    return invokeOrMock("regenerate_remote_pin", undefined, () => "123456")
+  return invokeOrMock('regenerate_remote_pin', undefined, () => '123456');
 }
 
 /** 把 PC 端界面语言同步给远程输入服务，H5 录音页据此显示对应语言。 */
 export function setRemoteLocale(locale: string): Promise<void> {
-    return invokeOrMock("set_remote_locale", { locale }, () => undefined)
+  return invokeOrMock('set_remote_locale', { locale }, () => undefined);
 }

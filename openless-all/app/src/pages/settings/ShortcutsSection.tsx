@@ -26,6 +26,7 @@ import { useHotkeySettings } from '../../state/HotkeySettingsContext';
 import { Card } from '../_atoms';
 import { SettingRow } from './shared';
 import { detectOS } from '../../components/WindowChrome';
+import { getStylePackPresentation } from '../../lib/stylePackPresentation';
 
 export function ShortcutsSection() {
   const { t } = useTranslation();
@@ -40,7 +41,9 @@ export function ShortcutsSection() {
 
   useEffect(() => {
     void getPlatformCapabilities().then(setPlatformCaps);
-    void listStylePacks().then(setStylePacks).catch(() => setStylePacks([]));
+    void listStylePacks()
+      .then(setStylePacks)
+      .catch(() => setStylePacks([]));
   }, []);
 
   if (!prefs || !hotkey) {
@@ -58,14 +61,15 @@ export function ShortcutsSection() {
   const stylePackHotkeys: StylePackHotkey[] = prefs.stylePackHotkeys ?? [];
   // 下拉列出全部风格包（含停用的，激活时后端自动启用）；已被其它行绑定的包置灰防重复。
   const stylePackOptions = (currentPackId: string) =>
-    stylePacks.map(pack => ({
-      value: pack.id,
-      label: pack.enabled
-        ? pack.name
-        : `${pack.name}${t('settings.shortcuts.stylePackDisabledSuffix')}`,
-      disabled:
-        pack.id !== currentPackId && stylePackHotkeys.some(entry => entry.packId === pack.id),
-    }));
+    stylePacks.map((pack) => {
+      const { name } = getStylePackPresentation(pack, t);
+      return {
+        value: pack.id,
+        label: pack.enabled ? name : `${name}${t('settings.shortcuts.stylePackDisabledSuffix')}`,
+        disabled:
+          pack.id !== currentPackId && stylePackHotkeys.some((entry) => entry.packId === pack.id),
+      };
+    });
   // 整表替换：失败时统一在本区域显示，并继续抛给 ShortcutRecorder 结束录制状态。
   const saveStylePackHotkeys = async (next: StylePackHotkey[]) => {
     setStylePackError(null);
@@ -91,11 +95,17 @@ export function ShortcutsSection() {
     [t('settings.shortcuts.cancel'), 'Esc'],
     // 胶囊右侧「✓ 确认插入」目前只在 macOS 胶囊上有，Windows/Linux 胶囊没有这个按钮，
     // 之前 os !== 'linux' 把它也展示给了 Windows，误导用户以为有个用不了的快捷键（issue #780）。
-    ...(os === 'mac' ? [[t('settings.shortcuts.confirm'), t('settings.shortcuts.confirmHint')]] as Array<[string, string]> : []),
+    ...(os === 'mac'
+      ? ([[t('settings.shortcuts.confirm'), t('settings.shortcuts.confirmHint')]] as Array<
+          [string, string]
+        >)
+      : []),
   ];
   return (
     <Card>
-      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>{t('settings.shortcuts.title')}</div>
+      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
+        {t('settings.shortcuts.title')}
+      </div>
       <SettingRow label={t('settings.shortcuts.startStop')}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, width: '100%' }}>
           <ShortcutRecorder
@@ -105,7 +115,7 @@ export function ShortcutsSection() {
             // 与「录音与输入」页一致：核心热键不可停用，置灰并提示。
             disableDisabled
             disableHint={t('settings.recording.comboDisableHint')}
-            onSave={async binding => {
+            onSave={async (binding) => {
               await setDictationHotkey(binding);
               await refresh();
             }}
@@ -118,7 +128,7 @@ export function ShortcutsSection() {
       <SettingRow label={t('translation.hotkey.title', 'Translation shortcut')}>
         <ShortcutRecorder
           value={prefs.translationHotkey}
-          onSave={async binding => {
+          onSave={async (binding) => {
             await setTranslationHotkey(binding);
             await savePrefs({ ...prefs, translationHotkey: binding });
           }}
@@ -127,7 +137,7 @@ export function ShortcutsSection() {
       <SettingRow label={t('selectionAsk.hotkey.title')}>
         <ShortcutRecorder
           value={prefs.qaHotkey}
-          onSave={async binding => {
+          onSave={async (binding) => {
             await setQaHotkey(binding);
             await savePrefs({ ...prefs, qaHotkey: binding });
           }}
@@ -145,7 +155,7 @@ export function ShortcutsSection() {
       <SettingRow label={t('settings.shortcuts.switchStyle')}>
         <ShortcutRecorder
           value={prefs.switchStyleHotkey}
-          onSave={async binding => {
+          onSave={async (binding) => {
             await setSwitchStyleHotkey(binding);
             await savePrefs({ ...prefs, switchStyleHotkey: binding });
           }}
@@ -178,7 +188,7 @@ export function ShortcutsSection() {
             options={stylePackOptions(entry.packId)}
             ariaLabel={t('settings.shortcuts.stylePackSelect')}
             style={{ width: 170, flexShrink: 0 }}
-            onChange={packId => {
+            onChange={(packId) => {
               const next = stylePackHotkeys.map((item, i) =>
                 i === index ? { ...item, packId } : item,
               );
@@ -188,7 +198,7 @@ export function ShortcutsSection() {
           <div style={{ flex: 1, minWidth: 0 }}>
             <ShortcutRecorder
               value={entry.binding}
-              onSave={async binding => {
+              onSave={async (binding) => {
                 const next = stylePackHotkeys.map((item, i) =>
                   i === index ? { ...item, binding } : item,
                 );
@@ -224,11 +234,8 @@ export function ShortcutsSection() {
             <ShortcutRecorder
               value={null}
               disabled={!draftPackId}
-              onSave={async binding => {
-                await saveStylePackHotkeys([
-                  ...stylePackHotkeys,
-                  { packId: draftPackId, binding },
-                ]);
+              onSave={async (binding) => {
+                await saveStylePackHotkeys([...stylePackHotkeys, { packId: draftPackId, binding }]);
                 setDraftOpen(false);
                 setDraftPackId('');
               }}
@@ -279,7 +286,7 @@ export function ShortcutsSection() {
       <SettingRow label={t('settings.shortcuts.openApp')}>
         <ShortcutRecorder
           value={prefs.openAppHotkey}
-          onSave={async binding => {
+          onSave={async (binding) => {
             await setOpenAppHotkey(binding);
             await savePrefs({ ...prefs, openAppHotkey: binding });
           }}
@@ -295,31 +302,51 @@ export function ShortcutsSection() {
         />
       </SettingRow>
       {(os === 'mac' || os === 'win') && (
-        <SettingRow label={t('settings.codingAgent.title')} desc={t('settings.codingAgent.voiceHotkeyDesc')}>
+        <SettingRow
+          label={t('settings.codingAgent.title')}
+          desc={t('settings.codingAgent.voiceHotkeyDesc')}
+        >
           <ShortcutRecorder
             value={prefs.codingAgentVoiceHotkey}
-            onSave={async binding => {
-              await savePrefs({ ...prefs, codingAgentEnabled: true, codingAgentVoiceHotkey: binding });
+            onSave={async (binding) => {
+              await savePrefs({
+                ...prefs,
+                codingAgentEnabled: true,
+                codingAgentVoiceHotkey: binding,
+              });
             }}
             onDisable={async () => {
               await savePrefs({ ...prefs, codingAgentVoiceHotkey: null });
             }}
             onReset={async () => {
-              await savePrefs({ ...prefs, codingAgentEnabled: true, codingAgentVoiceHotkey: defaultLessComputerShortcut() });
+              await savePrefs({
+                ...prefs,
+                codingAgentEnabled: true,
+                codingAgentVoiceHotkey: defaultLessComputerShortcut(),
+              });
             }}
           />
         </SettingRow>
       )}
       {readonlyRows.map(([k, v]) => (
         <SettingRow key={k} label={k}>
-          <kbd style={{
-            display: 'inline-flex', alignItems: 'center', gap: 4,
-            padding: '4px 10px', fontSize: 12, fontFamily: 'var(--ol-font-mono)',
-            borderRadius: 6, background: 'var(--ol-surface-2)',
-            border: '0.5px solid var(--ol-line-strong)',
-            boxShadow: '0 1px 0 rgba(0,0,0,0.04)',
-            color: 'var(--ol-ink-2)',
-          }}>{v}</kbd>
+          <kbd
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 4,
+              padding: '4px 10px',
+              fontSize: 12,
+              fontFamily: 'var(--ol-font-mono)',
+              borderRadius: 6,
+              background: 'var(--ol-surface-2)',
+              border: '0.5px solid var(--ol-line-strong)',
+              boxShadow: '0 1px 0 rgba(0,0,0,0.04)',
+              color: 'var(--ol-ink-2)',
+            }}
+          >
+            {v}
+          </kbd>
         </SettingRow>
       ))}
     </Card>

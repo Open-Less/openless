@@ -1,4 +1,6 @@
-#![allow(dead_code, unused_variables)] // Task 6 接入 coordinator 后这些路径会变成运行时路径。
+#![allow(dead_code, unused_variables)]
+//! Foundry Local Whisper 的录音缓冲与分片转写适配。
+//! Windows 路径执行原生推理；其他目标保留类型兼容分支。
 
 #[cfg(target_os = "windows")]
 use std::fs::{self, OpenOptions};

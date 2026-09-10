@@ -34,6 +34,20 @@ pub async fn check_network() -> NetworkCheckResult {
     }
 }
 
+/// 开屏 PV 首启判定：读 preferences.json 里的 `splashSeenVersion` 标记，与当前
+/// 应用主版本（`CARGO_PKG_VERSION` 的第一段，2.0.0-Beta.1 → "2"）比对。不一致
+/// （含从未写入）时由 core 写回标记并返回 true，前端播放随包开屏动画一次；
+/// 之后同一世代内永远返回 false。
+#[tauri::command]
+pub fn take_splash_playback(core: CoreState<'_>) -> bool {
+    let major = env!("CARGO_PKG_VERSION")
+        .split('.')
+        .next()
+        .unwrap_or("0")
+        .to_string();
+    core.take_splash_playback(&major)
+}
+
 #[tauri::command]
 pub async fn get_hotkey_status(core: CoreState<'_>) -> Result<HotkeyStatus, String> {
     Ok(core
@@ -257,8 +271,3 @@ pub async fn debug_read_cursor_context(
     );
     result
 }
-
-// ─────────────────────────── unused but exported (silences dead_code) ───────────────────────────
-
-#[allow(dead_code)]
-fn _ensure_snapshot_used(_: CredentialsSnapshot) {}

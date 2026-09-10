@@ -60,7 +60,10 @@ internal class AndroidKeystoreCredentialVault(private val alias: String) {
     fun open(packet: ByteArray, aad: ByteArray): ByteArray {
         return try {
             val key = existingKey() ?: return credentialResponse(CREDENTIAL_STATUS_KEY_MISSING)
-            credentialResponse(CREDENTIAL_STATUS_OK, OpenLessCredentialCipher.open(key, packet, aad))
+            credentialResponse(
+                CREDENTIAL_STATUS_OK,
+                OpenLessCredentialCipher.open(key, packet, aad),
+            )
         } catch (error: KeyPermanentlyInvalidatedException) {
             credentialResponse(credentialStatusForKeyLoadFailure(error))
         } catch (error: UnrecoverableKeyException) {
@@ -134,18 +137,20 @@ internal class AndroidKeystoreCredentialVault(private val alias: String) {
 
     @Throws(GeneralSecurityException::class, IOException::class)
     private fun getOrCreateKey(): SecretKey {
-        existingKey()?.let { return it }
+        existingKey()?.let {
+            return it
+        }
         val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, KEYSTORE_PROVIDER)
         generator.init(
             KeyGenParameterSpec.Builder(
-                alias,
-                KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
-            )
+                    alias,
+                    KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
+                )
                 .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
                 .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
                 .setKeySize(256)
                 .setRandomizedEncryptionRequired(true)
-                .build(),
+                .build()
         )
         return generator.generateKey()
     }
@@ -170,15 +175,11 @@ object OpenLessCredentialVault {
     @JvmStatic
     fun seal(plaintext: ByteArray, aad: ByteArray): ByteArray = backend.seal(plaintext, aad)
 
-    @JvmStatic
-    fun open(packet: ByteArray, aad: ByteArray): ByteArray = backend.open(packet, aad)
+    @JvmStatic fun open(packet: ByteArray, aad: ByteArray): ByteArray = backend.open(packet, aad)
 
-    @JvmStatic
-    fun deleteKey(): ByteArray = backend.deleteKey()
+    @JvmStatic fun deleteKey(): ByteArray = backend.deleteKey()
 
-    @JvmStatic
-    fun migrationComplete(): ByteArray = migrationMarker.keyExists()
+    @JvmStatic fun migrationComplete(): ByteArray = migrationMarker.keyExists()
 
-    @JvmStatic
-    fun markMigrationComplete(): ByteArray = migrationMarker.ensureKey()
+    @JvmStatic fun markMigrationComplete(): ByteArray = migrationMarker.ensureKey()
 }

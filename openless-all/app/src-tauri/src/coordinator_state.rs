@@ -74,12 +74,7 @@ pub(crate) fn begin_session_state(
     focus_target: Option<usize>,
     front_app: Option<String>,
 ) -> Option<SessionId> {
-    begin_session_state_with_id(
-        state,
-        focus_target,
-        front_app,
-        new_session_id(),
-    )
+    begin_session_state_with_id(state, focus_target, front_app, new_session_id())
 }
 
 /// 与 [`begin_session_state`] 相同，但允许宿主在进入 Coordinator 状态机前生成

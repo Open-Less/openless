@@ -23,9 +23,7 @@ import android.widget.ImageView
 import android.widget.Toast
 import kotlin.math.abs
 
-/**
- * Foreground service + TYPE_APPLICATION_OVERLAY floating dictation control.
- */
+/** Foreground service + TYPE_APPLICATION_OVERLAY floating dictation control. */
 class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateListener {
 
     private var windowManager: WindowManager? = null
@@ -82,8 +80,7 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                     stopForeground(STOP_FOREGROUND_REMOVE)
                 } else {
-                    @Suppress("DEPRECATION")
-                    stopForeground(true)
+                    @Suppress("DEPRECATION") stopForeground(true)
                 }
                 stopSelf(startId)
             }
@@ -123,7 +120,8 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
                 }
                 applyVisualState(OverlayVisualState.Recording)
             }
-            "transcribing", "polishing" -> {
+            "transcribing",
+            "polishing" -> {
                 recording = false
                 processing = true
                 applyVisualState(OverlayVisualState.Processing)
@@ -140,7 +138,8 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
                 applyVisualState(OverlayVisualState.Error)
                 message?.takeIf { it.isNotBlank() }?.let { showToast(it) }
             }
-            "cancelled", "idle" -> {
+            "cancelled",
+            "idle" -> {
                 recording = false
                 processing = false
                 setArmed(false)
@@ -199,11 +198,12 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
 
     private fun clearAllOverlayRoots(): Int {
         windowManager = windowManager ?: getSystemService(WINDOW_SERVICE) as WindowManager
-        val views = synchronized(overlayRoots) {
-            (overlayRoots + listOfNotNull(rootView)).distinct().also {
-                overlayRoots.clear()
+        val views =
+            synchronized(overlayRoots) {
+                (overlayRoots + listOfNotNull(rootView)).distinct().also {
+                    overlayRoots.clear()
+                }
             }
-        }
         views.forEach { view ->
             removeOverlayRoot(view)
         }
@@ -214,32 +214,34 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
 
     private fun attachNewOverlayRoot(): Boolean {
         val savedPosition = loadSavedPosition()
-        val params = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-            } else {
-                @Suppress("DEPRECATION")
-                WindowManager.LayoutParams.TYPE_PHONE
-            },
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
-                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-            PixelFormat.TRANSLUCENT,
-        ).apply {
-            gravity = Gravity.TOP or Gravity.START
-            x = savedPosition.first
-            y = savedPosition.second
-        }
+        val params =
+            WindowManager.LayoutParams(
+                    WindowManager.LayoutParams.WRAP_CONTENT,
+                    WindowManager.LayoutParams.WRAP_CONTENT,
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                    } else {
+                        @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE
+                    },
+                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                        WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                        WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                    PixelFormat.TRANSLUCENT,
+                )
+                .apply {
+                    gravity = Gravity.TOP or Gravity.START
+                    x = savedPosition.first
+                    y = savedPosition.second
+                }
         layoutParams = params
 
-        val root = FrameLayout(this).apply {
-            contentDescription = "OpenLess"
-            isClickable = true
-            isFocusable = false
-            setOnClickListener { handleIconClick() }
-        }
+        val root =
+            FrameLayout(this).apply {
+                contentDescription = "OpenLess"
+                isClickable = true
+                isFocusable = false
+                setOnClickListener { handleIconClick() }
+            }
         iconContainer = root
         iconButton = buildIconButton()
         root.addView(
@@ -261,7 +263,7 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
                     processing -> OverlayVisualState.Processing
                     armed -> OverlayVisualState.Armed
                     else -> OverlayVisualState.Idle
-                },
+                }
             )
             true
         } catch (error: Throwable) {
@@ -308,12 +310,16 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
     }
 
     private fun reconcileOverlayRoots() {
-        val roots = synchronized(overlayRoots) {
-            (overlayRoots + listOfNotNull(rootView)).distinct().filter { it.isAttachedToWindow }.also {
-                overlayRoots.clear()
-                overlayRoots.addAll(it)
+        val roots =
+            synchronized(overlayRoots) {
+                (overlayRoots + listOfNotNull(rootView))
+                    .distinct()
+                    .filter { it.isAttachedToWindow }
+                    .also {
+                        overlayRoots.clear()
+                        overlayRoots.addAll(it)
+                    }
             }
-        }
         if (roots.isEmpty()) {
             rootView = null
             layoutParams = null
@@ -427,20 +433,35 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
                     val dx = event.rawX.toInt() - dragStartX
                     val dy = event.rawY.toInt() - dragStartY
                     val verticalSwipe = detectVerticalSwipe(dx, dy)
-                    if (recording && verticalSwipe != null && matchesConfiguredCancelSwipe(verticalSwipe) && !swipeConsumed) {
+                    if (
+                        recording &&
+                            verticalSwipe != null &&
+                            matchesConfiguredCancelSwipe(verticalSwipe) &&
+                            !swipeConsumed
+                    ) {
                         pendingSwipe = verticalSwipe
                         swipeConsumed = true
                         applySwipePreview(verticalSwipe)
                         return@setOnTouchListener true
                     }
                     val swipe = detectHorizontalSwipe(dx, dy)
-                    if ((recording || armed || longPressRecording) && swipe != null && !swipeConsumed) {
+                    if (
+                        (recording || armed || longPressRecording) &&
+                            swipe != null &&
+                            !swipeConsumed
+                    ) {
                         pendingSwipe = swipe
                         swipeConsumed = true
                         applySwipePreview(swipe)
                         return@setOnTouchListener true
                     }
-                    if (!processing && !armed && !recording && !longPressRecording && (abs(dx) > DRAG_SLOP_PX || abs(dy) > DRAG_SLOP_PX)) {
+                    if (
+                        !processing &&
+                            !armed &&
+                            !recording &&
+                            !longPressRecording &&
+                            (abs(dx) > DRAG_SLOP_PX || abs(dy) > DRAG_SLOP_PX)
+                    ) {
                         dragging = true
                         params.x = paramStartX + dx
                         params.y = paramStartY + dy
@@ -485,43 +506,49 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
 
     private fun applyVisualState(state: OverlayVisualState) {
         if (!::iconContainer.isInitialized || !::iconButton.isInitialized) return
-        val (alpha, fill, stroke, strokeWidth, enabled) = when (state) {
-            OverlayVisualState.Idle -> VisualStyle(
-                alpha = 0.58f,
-                fill = Color.parseColor("#66202A36"),
-                stroke = Color.parseColor("#66FFFFFF"),
-                strokeWidth = 1,
-                enabled = true,
-            )
-            OverlayVisualState.Armed -> VisualStyle(
-                alpha = 1f,
-                fill = Color.parseColor("#E6111827"),
-                stroke = Color.parseColor("#38BDF8"),
-                strokeWidth = 3,
-                enabled = true,
-            )
-            OverlayVisualState.Recording -> VisualStyle(
-                alpha = 1f,
-                fill = Color.parseColor("#E6111827"),
-                stroke = Color.parseColor("#F43F5E"),
-                strokeWidth = 3,
-                enabled = true,
-            )
-            OverlayVisualState.Processing -> VisualStyle(
-                alpha = 0.86f,
-                fill = Color.parseColor("#D1111827"),
-                stroke = Color.parseColor("#38BDF8"),
-                strokeWidth = 2,
-                enabled = true,
-            )
-            OverlayVisualState.Error -> VisualStyle(
-                alpha = 0.95f,
-                fill = Color.parseColor("#E67F1D1D"),
-                stroke = Color.parseColor("#EF4444"),
-                strokeWidth = 2,
-                enabled = true,
-            )
-        }
+        val (alpha, fill, stroke, strokeWidth, enabled) =
+            when (state) {
+                OverlayVisualState.Idle ->
+                    VisualStyle(
+                        alpha = 0.58f,
+                        fill = Color.parseColor("#66202A36"),
+                        stroke = Color.parseColor("#66FFFFFF"),
+                        strokeWidth = 1,
+                        enabled = true,
+                    )
+                OverlayVisualState.Armed ->
+                    VisualStyle(
+                        alpha = 1f,
+                        fill = Color.parseColor("#E6111827"),
+                        stroke = Color.parseColor("#38BDF8"),
+                        strokeWidth = 3,
+                        enabled = true,
+                    )
+                OverlayVisualState.Recording ->
+                    VisualStyle(
+                        alpha = 1f,
+                        fill = Color.parseColor("#E6111827"),
+                        stroke = Color.parseColor("#F43F5E"),
+                        strokeWidth = 3,
+                        enabled = true,
+                    )
+                OverlayVisualState.Processing ->
+                    VisualStyle(
+                        alpha = 0.86f,
+                        fill = Color.parseColor("#D1111827"),
+                        stroke = Color.parseColor("#38BDF8"),
+                        strokeWidth = 2,
+                        enabled = true,
+                    )
+                OverlayVisualState.Error ->
+                    VisualStyle(
+                        alpha = 0.95f,
+                        fill = Color.parseColor("#E67F1D1D"),
+                        stroke = Color.parseColor("#EF4444"),
+                        strokeWidth = 2,
+                        enabled = true,
+                    )
+            }
         iconContainer.alpha = alpha
         iconContainer.isEnabled = enabled
         iconContainer.background = circleDrawable(fill, stroke, dp(strokeWidth))
@@ -702,7 +729,10 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
     }
 
     private fun tryPromoteRecordingForeground(): Boolean {
-        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+        if (
+            checkSelfPermission(Manifest.permission.RECORD_AUDIO) !=
+                PackageManager.PERMISSION_GRANTED
+        ) {
             showToast("请先授予麦克风权限")
             return false
         }
@@ -730,7 +760,11 @@ class OpenLessOverlayService : Service(), OpenLessOverlayBridge.OverlayStateList
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val nm = getSystemService(NotificationManager::class.java)
             nm.createNotificationChannel(
-                NotificationChannel(channelId, "OpenLess Overlay", NotificationManager.IMPORTANCE_LOW),
+                NotificationChannel(
+                    channelId,
+                    "OpenLess Overlay",
+                    NotificationManager.IMPORTANCE_LOW,
+                )
             )
         }
         return Notification.Builder(this, channelId)

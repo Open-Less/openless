@@ -1,39 +1,19 @@
-# OpenLess 讯飞 ASR 配置
+# 讯飞（iflytek）ASR 配置
 
-OpenLess 支持讯飞开放平台的**实时语音转写（RTASR，标准版）**，用于把录音实时转写成文字。
+状态：canonical（2026-09-07 以源码为准重写）；更新：2026-09-07。
 
-## 所需服务
+## 1. 代码中的定义
 
-- 服务：讯飞开放平台 **实时语音转写（标准版）**
-- 接口文档：<https://www.xfyun.cn/doc/asr/rtasr/API.html>
+- Provider：`iflytek`（labelKey `asrIflytek`），`authRequirement = Xfyun`；无内置默认端点/模型。
+- 凭据（`crates/openless-core/src/asr/xfyun.rs:62-69`）：`app_id` + `api_key`（两者非空才视为已配置）；连接时以 `app_id + timestamp` 计算 `signa` 签名（`compute_signa`，xfyun.rs:637）。
+- 验证探针：`asr_silence_allows_no_final`。
+- 对接的是讯飞开放平台实时语音转写（RTASR）；协议细节以 `asr/xfyun.rs` 当前实现为准。
 
-> 说明：录音文件转写（IFASR）、实时语音转写大模型（202 方言 / 37 语种免切）目前
-> **未接入**。若你有这些需求，欢迎在 issue #842 留言。
+## 2. 在应用内配置
 
-## 凭证获取
+设置 → AI 服务 → 语音识别 → 添加渠道，选择讯飞；填入 AppID 与 API Key，保存后执行“验证”。验证结果（成功/失败与时间）显示在渠道列表。
 
-1. 登录讯飞开放平台：<https://www.xfyun.cn/>
-2. 控制台 → 我的应用 → 创建应用，添加 **实时语音转写** 服务（需先在服务页领取免费额度或购买）。
-3. 在服务管理页查看并复制 **AppID** 与 **API Key**。
-4. 打开 OpenLess `Settings → Providers → ASR`，选择「讯飞实时语音转写」，填入 AppID 与 API Key。
+## 3. 开通与排错
 
-## 音频约束
-
-- 采样率 16 kHz、位深 16 bit、单声道 PCM（与 OpenLess 录音输出完全一致，无需转码）。
-- 支持中文普通话、中英混合与英文；方言/小语种需在讯飞控制台开通后由 `lang` 参数指定，
-  首期 OpenLess 固定使用中文普通话（`lang=cn`）。
-- IP 白名单：若在讯飞控制台开启了 IP 白名单，请把运行 OpenLess 机器的公网 IP 加入，
-  否则握手会返回 `10105 illegal access`。
-
-## 已知限制
-
-- 标准版 RTASR **没有请求参数级热词**：OpenLess 的词典热词不会传给讯飞，个性化热词
-  请在讯飞控制台上传。
-- 实时出字由服务端驱动：OpenLess 的胶囊 UI 在收尾阶段一次性展示最终文本（与其它
-  流式 provider 行为一致）。
-
-## 排障
-
-- `10105` / `10110`：AppID / API Key 错误、IP 白名单未放行，或账号未开通实时语音转写服务。
-- `10800`：超过授权连接数（并发路数已满）。
-- `37005`：超过 15 秒未发送音频（弱网时偶发，可重试）。
+- 服务开通、AppID/API Key 获取在[讯飞开放平台控制台](https://www.xfyun.cn/)完成（外部平台操作，以官方文档为准）。
+- 鉴权失败多为 AppID 与 Key 不配套或时间偏差；渠道验证结果会给出可读错误。

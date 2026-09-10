@@ -40,9 +40,9 @@ class OpenLessCredentialCipherTest {
 
         assertFalse(first.contentEquals(second))
         assertFalse(
-            first.copyOfRange(1, 1 + OpenLessCredentialCipher.NONCE_BYTES).contentEquals(
-                second.copyOfRange(1, 1 + OpenLessCredentialCipher.NONCE_BYTES),
-            ),
+            first
+                .copyOfRange(1, 1 + OpenLessCredentialCipher.NONCE_BYTES)
+                .contentEquals(second.copyOfRange(1, 1 + OpenLessCredentialCipher.NONCE_BYTES))
         )
     }
 
@@ -73,11 +73,12 @@ class OpenLessCredentialCipherTest {
     @Test
     fun tamperedAad() {
         val key = key()
-        val packet = OpenLessCredentialCipher.seal(
-            key,
-            "secret".toByteArray(),
-            "account-a".toByteArray(),
-        )
+        val packet =
+            OpenLessCredentialCipher.seal(
+                key,
+                "secret".toByteArray(),
+                "account-a".toByteArray(),
+            )
 
         assertThrows(GeneralSecurityException::class.java) {
             OpenLessCredentialCipher.open(key, packet, "account-b".toByteArray())
@@ -87,13 +88,14 @@ class OpenLessCredentialCipherTest {
     @Test
     fun facadeMethodsExposeExactStaticJniSignatures() {
         val facade = OpenLessCredentialVault::class.java
-        val signatures: List<Pair<String, Array<Class<*>>>> = listOf(
-            "seal" to arrayOf<Class<*>>(ByteArray::class.java, ByteArray::class.java),
-            "open" to arrayOf<Class<*>>(ByteArray::class.java, ByteArray::class.java),
-            "deleteKey" to emptyArray(),
-            "migrationComplete" to emptyArray(),
-            "markMigrationComplete" to emptyArray(),
-        )
+        val signatures: List<Pair<String, Array<Class<*>>>> =
+            listOf(
+                "seal" to arrayOf<Class<*>>(ByteArray::class.java, ByteArray::class.java),
+                "open" to arrayOf<Class<*>>(ByteArray::class.java, ByteArray::class.java),
+                "deleteKey" to emptyArray(),
+                "migrationComplete" to emptyArray(),
+                "markMigrationComplete" to emptyArray(),
+            )
         for ((name, parameters) in signatures) {
             val method = facade.getDeclaredMethod(name, *parameters)
             assertTrue("$name must be static for JNI", Modifier.isStatic(method.modifiers))

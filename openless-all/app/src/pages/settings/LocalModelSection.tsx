@@ -12,6 +12,7 @@ import { LocalAsr } from '../LocalAsr';
 import { detectOS } from '../../components/WindowChrome';
 import { getPlatformCapabilities } from '../../lib/platform';
 import { Card } from '../_atoms';
+import { ExperimentalSectionTitle } from './shared';
 
 export function LocalModelSection() {
   const { t } = useTranslation();
@@ -29,27 +30,41 @@ export function LocalModelSection() {
     <Card>
       {/* 标题 + 右上角 inline 警告小字（实验性标记保留）。
           Windows：标题区整体灰显 —— 本地 ASR 在 Win 上走 Foundry / sherpa 独立路径。 */}
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 14 }}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'flex-start',
+          justifyContent: 'space-between',
+          gap: 12,
+          marginBottom: 14,
+        }}
+      >
         <div style={{ minWidth: 0, opacity: isWin ? 0.45 : 1 }}>
-          <div style={{ fontSize: 14, fontWeight: 600, letterSpacing: '-0.01em' }}>{t('settings.advanced.localAsrTitle')}</div>
+          <ExperimentalSectionTitle badge={t('common.experimental')} style={{ marginBottom: 0 }}>
+            {t('settings.advanced.localAsrTitle')}
+          </ExperimentalSectionTitle>
         </div>
-        <div style={{
-          fontSize: 11,
-          color: '#A04500',
-          fontWeight: 500,
-          lineHeight: 1.4,
-          textAlign: 'right',
-          flexShrink: 0,
-          maxWidth: '52%',
-          paddingTop: 2,
-          opacity: isWin ? 0.45 : 1,
-        }}>
+        <div
+          style={{
+            fontSize: 11,
+            color: '#A04500',
+            fontWeight: 500,
+            lineHeight: 1.4,
+            textAlign: 'right',
+            flexShrink: 0,
+            maxWidth: '52%',
+            paddingTop: 2,
+            opacity: isWin ? 0.45 : 1,
+          }}
+        >
           ⚠️ {t('settings.advanced.localAsrWarningShort')}
         </div>
       </div>
 
       {!platformSupported ? (
-        <div style={{ fontSize: 12.5, color: 'var(--ol-ink-3)', lineHeight: 1.6, padding: '8px 0' }}>
+        <div
+          style={{ fontSize: 12.5, color: 'var(--ol-ink-3)', lineHeight: 1.6, padding: '8px 0' }}
+        >
           {t('settings.advanced.platformNotSupported')}
         </div>
       ) : (

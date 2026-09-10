@@ -26,15 +26,25 @@ function fakeElement() {
       toggle: (name, enabled) => (enabled ? classes.add(name) : classes.delete(name)),
       contains: (name) => classes.has(name),
     },
-    addEventListener(type, listener) { this.listeners[type] = listener; },
-    querySelectorAll() { return []; },
+    addEventListener(type, listener) {
+      this.listeners[type] = listener;
+    },
+    querySelectorAll() {
+      return [];
+    },
     focus() {},
     select() {},
   };
 }
 
 const fixtureRecoveryKey = '40112233-4455-4677-8899-aabbccddeeff';
-async function openRemotePage({ defaultMode, savedMode, savedWakeLock, savedRecovery, wakeLockMode = 'supported' } = {}) {
+async function openRemotePage({
+  defaultMode,
+  savedMode,
+  savedWakeLock,
+  savedRecovery,
+  wakeLockMode = 'supported',
+} = {}) {
   const elements = new Map();
   const documentListeners = {};
   const sent = [];
@@ -49,7 +59,9 @@ async function openRemotePage({ defaultMode, savedMode, savedWakeLock, savedReco
   const timers = new Map();
   let now = 0;
   let timerId = 0;
-  const flush = async () => { for (let i = 0; i < 12; i += 1) await Promise.resolve(); };
+  const flush = async () => {
+    for (let i = 0; i < 12; i += 1) await Promise.resolve();
+  };
 
   const element = (id) => {
     if (!elements.has(id)) elements.set(id, fakeElement());
@@ -69,8 +81,12 @@ async function openRemotePage({ defaultMode, savedMode, savedWakeLock, savedReco
       this.readyState = 1;
       socket = this;
     }
-    send(value) { sent.push(value); }
-    close() { this.readyState = 3; }
+    send(value) {
+      sent.push(value);
+    }
+    close() {
+      this.readyState = 3;
+    }
   }
 
   class FakeAudioWorkletNode {
@@ -89,9 +105,16 @@ async function openRemotePage({ defaultMode, savedMode, savedWakeLock, savedReco
       this.sampleRate = 48_000;
       this.audioWorklet = { addModule: () => Promise.resolve() };
     }
-    resume() { this.state = 'running'; return Promise.resolve(); }
-    suspend() { this.state = 'suspended'; }
-    createMediaStreamSource() { return { connect() {}, disconnect() {} }; }
+    resume() {
+      this.state = 'running';
+      return Promise.resolve();
+    }
+    suspend() {
+      this.state = 'suspended';
+    }
+    createMediaStreamSource() {
+      return { connect() {}, disconnect() {} };
+    }
   }
 
   const document = {
@@ -101,7 +124,9 @@ async function openRemotePage({ defaultMode, savedMode, savedWakeLock, savedReco
     getElementById: element,
     querySelectorAll: () => [],
     createElement: fakeElement,
-    addEventListener(type, listener) { documentListeners[type] = listener; },
+    addEventListener(type, listener) {
+      documentListeners[type] = listener;
+    },
     removeEventListener() {},
     execCommand() {},
   };
@@ -117,7 +142,7 @@ async function openRemotePage({ defaultMode, savedMode, savedWakeLock, savedReco
     AudioContext: FakeAudioContext,
     AudioWorkletNode: FakeAudioWorkletNode,
     WebSocket: FakeWebSocket,
-    clearTimeout: id => timers.delete(id),
+    clearTimeout: (id) => timers.delete(id),
     console,
     document,
     isNaN,
@@ -125,32 +150,55 @@ async function openRemotePage({ defaultMode, savedMode, savedWakeLock, savedReco
       ['ol_remote_pin', '123456'],
       ...(savedMode === undefined ? [] : [['ol_remote_mode', savedMode]]),
       ...(savedWakeLock === undefined ? [] : [['ol_remote_wake_lock', savedWakeLock]]),
-      ...(savedRecovery === undefined ? [] : [['ol_remote_recovery_session', JSON.stringify({ sessionId: savedRecovery, key: fixtureRecoveryKey })]]),
+      ...(savedRecovery === undefined
+        ? []
+        : [
+            [
+              'ol_remote_recovery_session',
+              JSON.stringify({ sessionId: savedRecovery, key: fixtureRecoveryKey }),
+            ],
+          ]),
     ]),
     location: { host: 'localhost:8443', origin: 'https://localhost:8443', reload() {} },
     navigator: {
       language: 'zh-CN',
-      wakeLock: wakeLockMode === 'unsupported' ? undefined : {
-        request: type => {
-          assert.equal(type, 'screen');
-          wakeRequests++;
-          if (wakeLockMode === 'rejected') return Promise.reject(new Error('system denied'));
-          const sentinel = {
-            released: false,
-            releaseCount: 0,
-            listener: null,
-            addEventListener(type, listener) { assert.equal(type, 'release'); this.listener = listener; },
-            release() { this.released = true; this.releaseCount++; this.listener?.(); return Promise.resolve(); },
-          };
-          wakeLocks.push(sentinel);
-          return wakeLockMode === 'deferred'
-            ? new Promise(resolve => wakeResolvers.push(() => resolve(sentinel)))
-            : Promise.resolve(sentinel);
-        },
-      },
+      wakeLock:
+        wakeLockMode === 'unsupported'
+          ? undefined
+          : {
+              request: (type) => {
+                assert.equal(type, 'screen');
+                wakeRequests++;
+                if (wakeLockMode === 'rejected') return Promise.reject(new Error('system denied'));
+                const sentinel = {
+                  released: false,
+                  releaseCount: 0,
+                  listener: null,
+                  addEventListener(type, listener) {
+                    assert.equal(type, 'release');
+                    this.listener = listener;
+                  },
+                  release() {
+                    this.released = true;
+                    this.releaseCount++;
+                    this.listener?.();
+                    return Promise.resolve();
+                  },
+                };
+                wakeLocks.push(sentinel);
+                return wakeLockMode === 'deferred'
+                  ? new Promise((resolve) => wakeResolvers.push(() => resolve(sentinel)))
+                  : Promise.resolve(sentinel);
+              },
+            },
       mediaDevices: {
         getUserMedia: () => {
-          const track = { stopped: false, stop() { this.stopped = true; } };
+          const track = {
+            stopped: false,
+            stop() {
+              this.stopped = true;
+            },
+          };
           tracks.push(track);
           return Promise.resolve({ getTracks: () => [track] });
         },
@@ -158,13 +206,20 @@ async function openRemotePage({ defaultMode, savedMode, savedWakeLock, savedReco
     },
     performance: { now: () => 100 },
     sessionStorage: storage([['ol_reloaded_once', '1']]),
-    setTimeout: (callback, delay) => { const id = ++timerId; timers.set(id, { callback, at: now + delay }); return id; },
-    addEventListener: (type, listener) => { windowListeners[type] = listener; },
+    setTimeout: (callback, delay) => {
+      const id = ++timerId;
+      timers.set(id, { callback, at: now + delay });
+      return id;
+    },
+    addEventListener: (type, listener) => {
+      windowListeners[type] = listener;
+    },
   };
   context.window = context;
   // Exercise the embedded HTML script too, so a missing template variable cannot
   // be hidden by setting window properties directly in the test harness.
-  const injectedScript = html.match(/<script>([\s\S]*?)<\/script>/)[1]
+  const injectedScript = html
+    .match(/<script>([\s\S]*?)<\/script>/)[1]
     .replaceAll('%%OL_LANG%%', 'zh-CN')
     .replaceAll('%%OL_DEFAULT_MODE%%', defaultMode ?? '');
   runInNewContext(injectedScript, context, { filename: 'remote-server/assets/index.html' });
@@ -178,9 +233,15 @@ async function openRemotePage({ defaultMode, savedMode, savedWakeLock, savedReco
     documentListeners,
     element,
     sent,
-    get socket() { return socket; },
-    get audioContext() { return audioContext; },
-    get wakeRequests() { return wakeRequests; },
+    get socket() {
+      return socket;
+    },
+    get audioContext() {
+      return audioContext;
+    },
+    get wakeRequests() {
+      return wakeRequests;
+    },
     wakeLocks,
     tracks,
     wakeResolvers,
@@ -203,7 +264,9 @@ async function openRemotePage({ defaultMode, savedMode, savedWakeLock, savedReco
       await flush();
       assert.ok(worklet?.port.onmessage, 'audio capture must be running');
     },
-    pcm(bytes) { worklet.port.onmessage({ data: Uint8Array.from(bytes).buffer }); },
+    pcm(bytes) {
+      worklet.port.onmessage({ data: Uint8Array.from(bytes).buffer });
+    },
   };
 }
 
@@ -224,8 +287,11 @@ for (const [defaultMode, savedMode, expected] of [
     expected === 'hold' ? 'none' : 'manipulation',
     `PC default ${defaultMode}, phone choice ${savedMode} must use ${expected}`,
   );
-  assert.equal(page.storage.getItem('ol_remote_mode'), savedMode ?? null,
-    'inheriting a PC default must not create a phone override');
+  assert.equal(
+    page.storage.getItem('ol_remote_mode'),
+    savedMode ?? null,
+    'inheriting a PC default must not create a phone override',
+  );
 }
 
 {
@@ -257,7 +323,10 @@ const sequence = (frame) => {
   });
   const frames = binaryFrames(page.sent);
   assert.deepEqual(frames.map(sequence), [0, 1]);
-  assert.deepEqual(frames.map(payload), [[1, 0, 2, 0], [3, 0]]);
+  assert.deepEqual(frames.map(payload), [
+    [1, 0, 2, 0],
+    [3, 0],
+  ]);
 }
 
 {
@@ -266,7 +335,10 @@ const sequence = (frame) => {
   page.pcm([4, 0, 5, 0]);
   page.element('btn-record').listeners.click();
   assert.equal(binaryFrames(page.sent).length, 0);
-  assert.equal(page.sent.some((value) => typeof value === 'string' && JSON.parse(value).type === 'stop'), false);
+  assert.equal(
+    page.sent.some((value) => typeof value === 'string' && JSON.parse(value).type === 'stop'),
+    false,
+  );
 
   page.socket.onmessage({
     data: JSON.stringify({ type: 'started', sessionId: '10112233-4455-6677-8899-aabbccddeeff' }),
@@ -311,14 +383,26 @@ for (const terminal of ['cancel', 'busy', 'disconnect']) {
   assert.equal(page.element('status-text').textContent, '后端准备中…');
   page.pcm([0, 0]);
   assert.match(page.element('status-text').textContent, /音频缓存已满/);
-  assert.ok(page.sent.some((value) => typeof value === 'string' && JSON.parse(value).type === 'cancel'));
+  assert.ok(
+    page.sent.some((value) => typeof value === 'string' && JSON.parse(value).type === 'cancel'),
+  );
   assert.equal(binaryFrames(page.sent).length, 0);
 }
 
-const controls = (page, type) => page.sent.filter(value => typeof value === 'string')
-  .map(value => JSON.parse(value)).filter(value => value.type === type);
+const controls = (page, type) =>
+  page.sent
+    .filter((value) => typeof value === 'string')
+    .map((value) => JSON.parse(value))
+    .filter((value) => value.type === type);
 const recordingId = '30112233-4455-4677-8899-aabbccddeeff';
-const acknowledge = page => page.socket.onmessage({ data: JSON.stringify({ type: 'started', sessionId: recordingId, recoveryKey: fixtureRecoveryKey }) });
+const acknowledge = (page) =>
+  page.socket.onmessage({
+    data: JSON.stringify({
+      type: 'started',
+      sessionId: recordingId,
+      recoveryKey: fixtureRecoveryKey,
+    }),
+  });
 
 // 息屏结束两分钟录音，已发送的帧仍在 stop 之前；重复生命周期事件不会重复结束。
 for (const defaultMode of ['toggle', 'hold']) {
@@ -333,10 +417,16 @@ for (const defaultMode of ['toggle', 'hold']) {
   page.windowListeners.pagehide();
   assert.equal(controls(page, 'stop').length, 1);
   assert.equal(controls(page, 'cancel').length, 0);
-  assert.equal(binaryFrames(page.sent).reduce((bytes, frame) => bytes + frame.byteLength - 28, 0), 120 * 32_000);
+  assert.equal(
+    binaryFrames(page.sent).reduce((bytes, frame) => bytes + frame.byteLength - 28, 0),
+    120 * 32_000,
+  );
   assert.equal(JSON.parse(page.sent.at(-1)).type, 'stop');
   assert.equal(page.wakeLocks[0].released, true);
-  assert.deepEqual(JSON.parse(page.storage.getItem('ol_remote_recovery_session')), { sessionId: recordingId, key: fixtureRecoveryKey });
+  assert.deepEqual(JSON.parse(page.storage.getItem('ol_remote_recovery_session')), {
+    sessionId: recordingId,
+    key: fixtureRecoveryKey,
+  });
   page.document.hidden = false;
   page.documentListeners.visibilitychange();
   assert.equal(controls(page, 'start').length, 1, '恢复前台不会自动打开麦克风');
@@ -421,11 +511,23 @@ for (const wakeLockMode of ['unsupported', 'rejected']) {
   page.socket.onmessage({ data: JSON.stringify({ type: 'auth', ok: true }) });
   assert.equal(controls(page, 'recover').at(-1).sessionId, recordingId);
   assert.equal(controls(page, 'recover').at(-1).recoveryKey, fixtureRecoveryKey);
-  page.socket.onmessage({ data: JSON.stringify({ type: 'recovery', sessionId: recordingId, recovery: { kind: 'pending' } }) });
+  page.socket.onmessage({
+    data: JSON.stringify({
+      type: 'recovery',
+      sessionId: recordingId,
+      recovery: { kind: 'pending' },
+    }),
+  });
   assert.equal(page.element('btn-record').disabled, true);
   await page.advance(1500);
   assert.equal(controls(page, 'recover').length, 2);
-  page.socket.onmessage({ data: JSON.stringify({ type: 'recovery', sessionId: recordingId, recovery: { kind: 'completed', text: '保留下来的两分钟录音' } }) });
+  page.socket.onmessage({
+    data: JSON.stringify({
+      type: 'recovery',
+      sessionId: recordingId,
+      recovery: { kind: 'completed', text: '保留下来的两分钟录音' },
+    }),
+  });
   assert.equal(page.element('result-text').textContent, '保留下来的两分钟录音');
   assert.equal(page.element('btn-record').disabled, false);
 }
@@ -440,10 +542,13 @@ for (const wakeLockMode of ['unsupported', 'rejected']) {
 
 for (const recovery of [{ kind: 'failed', hasAudioRecording: true }, { kind: 'unavailable' }]) {
   const page = await openRemotePage({ savedRecovery: recordingId });
-  page.socket.onmessage({ data: JSON.stringify({ type: 'recovery', sessionId: recordingId, recovery }) });
+  page.socket.onmessage({
+    data: JSON.stringify({ type: 'recovery', sessionId: recordingId, recovery }),
+  });
   assert.match(page.element('status-text').textContent, /历史记录/);
   assert.equal(page.element('btn-record').disabled, false);
-  if (recovery.kind === 'unavailable') assert.equal(page.storage.getItem('ol_remote_recovery_session'), null);
+  if (recovery.kind === 'unavailable')
+    assert.equal(page.storage.getItem('ol_remote_recovery_session'), null);
 }
 
 console.log('remote-input-audio-queue.test.mjs passed');

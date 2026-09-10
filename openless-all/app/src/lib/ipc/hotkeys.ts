@@ -1,103 +1,98 @@
-import type { ComboBinding, HotkeyCapability, HotkeyStatus, ShortcutBinding, StylePackHotkey, WindowsImeStatus } from "../types"
-import { invokeOrMock, platformCapabilities, androidHotkeyStatus, androidHotkeyCapability, androidWindowsImeStatus } from "./shared"
+import type {
+  ComboBinding,
+  HotkeyCapability,
+  HotkeyStatus,
+  ShortcutBinding,
+  StylePackHotkey,
+  WindowsImeStatus,
+} from '../types';
 import {
-    mockHotkeyStatus,
-    mockHotkeyCapability,
-    mockSettings,
-    mockSetSettings,
-    mockWindowsImeStatus,
-} from "./mock-data"
+  invokeOrMock,
+  platformCapabilities,
+  androidHotkeyStatus,
+  androidHotkeyCapability,
+  androidWindowsImeStatus,
+} from './shared';
+import {
+  mockHotkeyStatus,
+  mockHotkeyCapability,
+  mockSettings,
+  mockSetSettings,
+  mockWindowsImeStatus,
+} from './mock-data';
 
 export function getHotkeyStatus(): Promise<HotkeyStatus> {
-    return platformCapabilities().then((caps) => {
-        if (!caps.supportsDesktopHotkey) {
-            return androidHotkeyStatus
-        }
-        return invokeOrMock("get_hotkey_status", undefined, () => mockHotkeyStatus)
-    })
+  return platformCapabilities().then((caps) => {
+    if (!caps.supportsDesktopHotkey) {
+      return androidHotkeyStatus;
+    }
+    return invokeOrMock('get_hotkey_status', undefined, () => mockHotkeyStatus);
+  });
 }
 
 export function getHotkeyCapability(): Promise<HotkeyCapability> {
-    return platformCapabilities().then((caps) => {
-        if (!caps.supportsDesktopHotkey) {
-            return androidHotkeyCapability
-        }
-        return invokeOrMock(
-            "get_hotkey_capability",
-            undefined,
-            () => mockHotkeyCapability,
-        )
-    })
+  return platformCapabilities().then((caps) => {
+    if (!caps.supportsDesktopHotkey) {
+      return androidHotkeyCapability;
+    }
+    return invokeOrMock('get_hotkey_capability', undefined, () => mockHotkeyCapability);
+  });
 }
 
 export function getWindowsImeStatus(): Promise<WindowsImeStatus> {
-    return platformCapabilities().then((caps) => {
-        if (caps.platform === "android") {
-            return androidWindowsImeStatus
-        }
-        return invokeOrMock(
-            "get_windows_ime_status",
-            undefined,
-            () => mockWindowsImeStatus,
-        )
-    })
+  return platformCapabilities().then((caps) => {
+    if (caps.platform === 'android') {
+      return androidWindowsImeStatus;
+    }
+    return invokeOrMock('get_windows_ime_status', undefined, () => mockWindowsImeStatus);
+  });
 }
 
 export function validateComboHotkey(binding: ComboBinding): Promise<void> {
-    return invokeOrMock("validate_combo_hotkey", { binding }, () => undefined)
+  return invokeOrMock('validate_combo_hotkey', { binding }, () => undefined);
 }
 
 export function setComboHotkey(binding: ComboBinding): Promise<void> {
-    return invokeOrMock("set_combo_hotkey", { binding }, () => undefined)
+  return invokeOrMock('set_combo_hotkey', { binding }, () => undefined);
 }
 
-export function validateShortcutBinding(
-    binding: ShortcutBinding,
-): Promise<void> {
-    return invokeOrMock(
-        "validate_shortcut_binding",
-        { binding },
-        () => undefined,
-    )
+export function validateShortcutBinding(binding: ShortcutBinding): Promise<void> {
+  return invokeOrMock('validate_shortcut_binding', { binding }, () => undefined);
 }
 
 export function setDictationHotkey(binding: ShortcutBinding): Promise<void> {
-    return invokeOrMock("set_dictation_hotkey", { binding }, () => undefined)
+  return invokeOrMock('set_dictation_hotkey', { binding }, () => undefined);
 }
 
 // binding = null 表示停用。Tauri 端持久化后，设置页会立即重新读取 prefs。
 export function setSelectionPolishHotkey(binding: ShortcutBinding | null): Promise<void> {
-    return invokeOrMock("set_selection_polish_hotkey", { binding }, () => {
-        mockSetSettings({ ...mockSettings, selectionPolishHotkey: binding })
-        return undefined
-    })
+  return invokeOrMock('set_selection_polish_hotkey', { binding }, () => {
+    mockSetSettings({ ...mockSettings, selectionPolishHotkey: binding });
+    return undefined;
+  });
 }
 
 export function setTranslationHotkey(binding: ShortcutBinding): Promise<void> {
-    return invokeOrMock("set_translation_hotkey", { binding }, () => undefined)
+  return invokeOrMock('set_translation_hotkey', { binding }, () => undefined);
 }
 
 // binding = null 表示停用（清空全局键），与 set_qa_hotkey 一致（issue #576）。
 export function setSwitchStyleHotkey(binding: ShortcutBinding | null): Promise<void> {
-    return invokeOrMock("set_switch_style_hotkey", { binding }, () => undefined)
+  return invokeOrMock('set_switch_style_hotkey', { binding }, () => undefined);
 }
 
 export function setOpenAppHotkey(binding: ShortcutBinding | null): Promise<void> {
-    return invokeOrMock("set_open_app_hotkey", { binding }, () => undefined)
+  return invokeOrMock('set_open_app_hotkey', { binding }, () => undefined);
 }
 
 // 风格包直达快捷键：整表替换（前端任何增删改都发全量列表，issue #759）。
 export function setStylePackHotkeys(hotkeys: StylePackHotkey[]): Promise<void> {
-    return invokeOrMock("set_style_pack_hotkeys", { hotkeys }, () => {
-        mockSetSettings({ ...mockSettings, stylePackHotkeys: hotkeys })
-        return undefined
-    })
+  return invokeOrMock('set_style_pack_hotkeys', { hotkeys }, () => {
+    mockSetSettings({ ...mockSettings, stylePackHotkeys: hotkeys });
+    return undefined;
+  });
 }
 
 export function setShortcutRecordingActive(active: boolean): Promise<void> {
-    return invokeOrMock(
-        "set_shortcut_recording_active",
-        { active },
-        () => undefined,
-    )
+  return invokeOrMock('set_shortcut_recording_active', { active }, () => undefined);
 }

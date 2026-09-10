@@ -1,118 +1,172 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="%%OL_LANG%%">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="theme-color" content="#0f1115">
-  <title>OpenLess</title>
-  <link rel="stylesheet" href="/style.css">
-  <!-- 首页由 PC 注入当前语言和默认录音方式；手机已保存的模式仍优先。 -->
-  <script>window.__OL_LANG__ = "%%OL_LANG%%"; window.__OL_DEFAULT_MODE__ = "%%OL_DEFAULT_MODE%%";</script>
-</head>
-<body>
-  <div id="app">
-    <!-- ===== 首屏:PIN 配对 ===== -->
-    <section id="screen-pin" class="screen active">
-      <div class="brand">
-        <img class="brand-logo-img" src="/icon.png" alt="OpenLess" />
-        <h1 class="brand-title" data-i18n="brandTitle">OpenLess 远程输入</h1>
-        <p class="brand-sub" data-i18n="brandSub">在手机上录音，实时输入到电脑</p>
-      </div>
-
-      <div class="card">
-        <label class="field-label" for="pin-input" data-i18n="pinFieldLabel">配对码(电脑上显示的 6 位数字)</label>
-        <input
-          id="pin-input"
-          class="pin-input"
-          type="text"
-          inputmode="numeric"
-          autocomplete="off"
-          maxlength="6"
-          pattern="[0-9]*"
-          placeholder="••••••" />
-        <p id="pin-error" class="hint-error" hidden></p>
-        <button id="btn-connect" class="btn btn-primary" data-i18n="btnConnect">连接</button>
-      </div>
-
-      <!-- Keep setup discoverable without obscuring the pairing form. -->
-      <details class="help">
-        <summary class="help-title" data-i18n="helpTitle">首次设置：信任此电脑</summary>
-        <p class="help-step help-verify" data-i18n="helpVerify">先打开电脑上的 OpenLess 远程输入设置，保留“本机根证书 SHA-256”。在手机系统证书详情中核对全部 64 个字符；不要使用本网页、描述文件名称或标识里的值作为证明。不一致或无法查看时，请停止并移除描述文件。描述文件必须只含一张根证书，不得有其他证书、VPN 或管理配置。</p>
-        <p class="help-step" data-i18n="helpIos">iPhone / iPad：下载描述文件，在“设置 → 通用 → VPN 与设备管理”中打开它，选择“更多详细信息”中的证书并核对指纹。确认一致且没有额外配置后再安装，并到“通用 → 关于本机 → 证书信任设置”开启完全信任。若只能在安装后查看详情，先保持完全信任关闭，核对后再开启。完成后返回 Safari 刷新。</p>
-        <p class="help-step" data-i18n="helpAndroid">安卓：下载 CA 证书，在系统证书预览中核对完整 SHA-256 后再安装。若系统无法在信任前显示指纹，请勿从此页面安装，改用已有的可信文件传输渠道。菜单名称因设备而异。</p>
-        <p class="help-step" data-i18n="helpTrustWarning">首次证书下载无法验证电脑身份，恶意局域网设备可能通过中间人攻击替换根证书。仅在可信的家庭或私人网络中安装，勿在公共或共享网络操作。根证书具备签发能力，私钥保存在这台电脑；不再使用时请从手机移除。</p>
-        <div class="help-actions">
-          <a class="help-link" href="/cert.mobileconfig" data-i18n="helpDownloadCert">↓ iPhone：下载描述文件</a>
-          <a class="help-link help-link-ghost" href="/cert.cer" data-i18n="helpDownloadAndroid">↓ 安卓：下载 CA 证书</a>
-          <button type="button" class="help-link help-link-ghost" id="copy-cert-link" data-i18n="helpCopyLink">⧉ 复制链接</button>
-        </div>
-      </details>
-    </section>
-
-    <!-- ===== 录音屏 ===== -->
-    <section id="screen-rec" class="screen">
-      <header class="rec-header">
-        <img class="app-icon" id="app-icon" src="/icon.png" alt="OpenLess" />
-        <span class="rec-header-title">OpenLess</span>
-        <div class="mode-switch" id="mode-switch" role="group" aria-label="录音方式">
-          <button class="mode-btn" data-mode="toggle" type="button" data-i18n="modeToggle">点按</button>
-          <button class="mode-btn" data-mode="hold" type="button" data-i18n="modeHold">按住</button>
-        </div>
-      </header>
-
-      <div class="rec-main">
-        <button id="btn-record" class="record-btn" type="button" aria-label="录音按钮">
-          <span class="record-btn-ring"></span>
-          <img class="record-btn-icon" src="/mic.png" alt="" />
-          <span class="record-btn-label" id="record-label">点击开始</span>
-        </button>
-
-        <div class="level-wrap" aria-hidden="true">
-          <div class="level-bar" id="level-bar"></div>
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"
+    />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="theme-color" content="#0f1115" />
+    <title>OpenLess</title>
+    <link rel="stylesheet" href="/style.css" />
+    <!-- 首页由 PC 注入当前语言和默认录音方式；手机已保存的模式仍优先。 -->
+    <script>
+      window.__OL_LANG__ = '%%OL_LANG%%';
+      window.__OL_DEFAULT_MODE__ = '%%OL_DEFAULT_MODE%%';
+    </script>
+  </head>
+  <body>
+    <div id="app">
+      <!-- ===== 首屏:PIN 配对 ===== -->
+      <section id="screen-pin" class="screen active">
+        <div class="brand">
+          <img class="brand-logo-img" src="/icon.png" alt="OpenLess" />
+          <h1 class="brand-title" data-i18n="brandTitle">OpenLess 远程输入</h1>
+          <p class="brand-sub" data-i18n="brandSub">在手机上录音，实时输入到电脑</p>
         </div>
 
-        <div class="status-bar" id="status-bar">
-          <img class="status-icon" id="status-icon" alt="" hidden />
-          <span class="dots" id="status-dots" aria-hidden="true" hidden><i></i><i></i><i></i></span>
-          <span class="status-text" id="status-text">准备就绪</span>
+        <div class="card">
+          <label class="field-label" for="pin-input" data-i18n="pinFieldLabel"
+            >配对码(电脑上显示的 6 位数字)</label
+          >
+          <input
+            id="pin-input"
+            class="pin-input"
+            type="text"
+            inputmode="numeric"
+            autocomplete="off"
+            maxlength="6"
+            pattern="[0-9]*"
+            placeholder="••••••"
+          />
+          <p id="pin-error" class="hint-error" hidden></p>
+          <button id="btn-connect" class="btn btn-primary" data-i18n="btnConnect">连接</button>
         </div>
 
-        <!-- 电脑落字完成后回传的最终文字,让手机端直接看到这次识别/输入的结果 -->
-        <div class="result-wrap" id="result-wrap" hidden>
-          <div class="result-text" id="result-text"></div>
-          <button class="result-copy" id="result-copy" type="button" data-i18n="copy">复制</button>
+        <!-- 首次信任设置用 <details> 折叠展示：可见但不遮挡配对表单。信任一次后
+             重启 / 换 IP 都不再失效（持久本地 CA，见 tls_identity.rs）。安装前必须
+             在手机系统证书详情里核对电脑端显示的 SHA-256 指纹。 -->
+        <details class="help">
+          <summary class="help-title" data-i18n="helpTitle">首次设置：信任此电脑</summary>
+          <p class="help-step help-verify" data-i18n="helpVerify">
+            先打开电脑上的 OpenLess 远程输入设置，保留「本机根证书
+            SHA-256」。在手机系统证书详情中核对全部 64
+            个字符；不要使用本网页、描述文件名称或标识里的值作为证明。不一致或无法查看时，请停止并移除描述文件。描述文件必须只含一张根证书，不得有其他证书、VPN
+            或管理配置。
+          </p>
+          <p class="help-step" data-i18n="helpIos">
+            iPhone / iPad：下载描述文件，在“设置 → 通用 → VPN 与设备管理”中打开它，选择“更多详细信息”中的证书并核对指纹。确认一致且没有额外配置后再安装，并到“通用
+            → 关于本机 → 证书信任设置”开启完全信任。若只能在安装后查看详情，先保持完全信任关闭，核对后再开启。完成后返回
+            Safari 刷新。
+          </p>
+          <p class="help-step" data-i18n="helpAndroid">
+            安卓：下载 CA
+            证书，在系统证书预览中核对完整 SHA-256
+            后再安装。若系统无法在信任前显示指纹，请勿从此页面安装，改用已有的可信文件传输渠道。菜单名称因设备而异。
+          </p>
+          <p class="help-step" data-i18n="helpTrustWarning">
+            首次证书下载无法验证电脑身份，恶意局域网设备可能通过中间人攻击替换根证书。仅在可信的家庭或私人网络中安装，勿在公共或共享网络操作。根证书具备签发能力，私钥保存在这台电脑；不再使用时请从手机移除。
+          </p>
+          <div class="help-actions">
+            <a class="help-link" href="/cert.mobileconfig" data-i18n="helpDownloadCert">
+              ↓ iPhone：下载描述文件
+            </a>
+            <a class="help-link help-link-ghost" href="/cert.cer" data-i18n="helpDownloadAndroid">
+              ↓ 安卓：下载 CA 证书
+            </a>
+            <button
+              type="button"
+              class="help-link help-link-ghost"
+              id="copy-cert-link"
+              data-i18n="helpCopyLink"
+            >
+              ⧉ 复制链接
+            </button>
+          </div>
+        </details>
+      </section>
+
+      <!-- ===== 录音屏 ===== -->
+      <section id="screen-rec" class="screen">
+        <header class="rec-header">
+          <img class="app-icon" id="app-icon" src="/icon.png" alt="OpenLess" />
+          <span class="rec-header-title">OpenLess</span>
+          <div class="mode-switch" id="mode-switch" role="group" aria-label="录音方式">
+            <button class="mode-btn" data-mode="toggle" type="button" data-i18n="modeToggle">
+              点按
+            </button>
+            <button class="mode-btn" data-mode="hold" type="button" data-i18n="modeHold">
+              按住
+            </button>
+          </div>
+        </header>
+
+        <div class="rec-main">
+          <button id="btn-record" class="record-btn" type="button" aria-label="录音按钮">
+            <span class="record-btn-ring"></span>
+            <img class="record-btn-icon" src="/mic.png" alt="" />
+            <span class="record-btn-label" id="record-label">点击开始</span>
+          </button>
+
+          <div class="level-wrap" aria-hidden="true">
+            <div class="level-bar" id="level-bar"></div>
+          </div>
+
+          <div class="status-bar" id="status-bar">
+            <img class="status-icon" id="status-icon" alt="" hidden />
+            <span class="dots" id="status-dots" aria-hidden="true" hidden
+              ><i></i><i></i><i></i
+            ></span>
+            <span class="status-text" id="status-text">准备就绪</span>
+          </div>
+
+          <!-- 电脑落字完成后回传的最终文字,让手机端直接看到这次识别/输入的结果 -->
+          <div class="result-wrap" id="result-wrap" hidden>
+            <div class="result-text" id="result-text"></div>
+            <button class="result-copy" id="result-copy" type="button" data-i18n="copy">
+              复制
+            </button>
+          </div>
         </div>
-      </div>
 
-      <p class="rec-tip" id="rec-tip">点击大按钮开始录音，再次点击结束并识别。</p>
+        <p class="rec-tip" id="rec-tip">点击大按钮开始录音，再次点击结束并识别。</p>
 
-      <label class="insert-toggle">
-        <span class="insert-toggle-text" data-i18n="wakeLockLabel">录音时保持亮屏</span>
-        <input type="checkbox" id="wake-lock-switch" class="insert-switch" aria-describedby="wake-lock-hint" checked />
-        <span class="insert-track" aria-hidden="true"></span>
-      </label>
-      <p class="wake-lock-hint" id="wake-lock-hint" aria-live="polite"></p>
+        <!-- 录音时保持亮屏：默认开（#1049 息屏会丢音频采集）。 -->
+        <label class="insert-toggle">
+          <span class="insert-toggle-text" data-i18n="wakeLockLabel">录音时保持亮屏</span>
+          <input
+            type="checkbox"
+            id="wake-lock-switch"
+            class="insert-switch"
+            aria-describedby="wake-lock-hint"
+            checked
+          />
+          <span class="insert-track" aria-hidden="true"></span>
+        </label>
+        <p class="wake-lock-hint" id="wake-lock-hint" aria-live="polite"></p>
 
-      <!-- 电脑落字开关：关掉则这次只把文字回传到手机,不落到电脑光标 -->
-      <label class="insert-toggle">
-        <span class="insert-toggle-text" data-i18n="insertLabel">电脑落字</span>
-        <input type="checkbox" id="insert-switch" class="insert-switch" checked />
-        <span class="insert-track" aria-hidden="true"></span>
-      </label>
-    </section>
+        <!-- 电脑落字开关：关掉则这次只把文字回传到手机,不落到电脑光标 -->
+        <label class="insert-toggle">
+          <span class="insert-toggle-text" data-i18n="insertLabel">电脑落字</span>
+          <input type="checkbox" id="insert-switch" class="insert-switch" checked />
+          <span class="insert-track" aria-hidden="true"></span>
+        </label>
+      </section>
 
-    <!-- ===== 断线屏 ===== -->
-    <section id="screen-offline" class="screen">
-      <div class="card card-center">
-        <div class="offline-icon">📵</div>
-        <h2 class="offline-title" data-i18n="offlineTitle">连接已断开</h2>
-        <p class="offline-sub" id="offline-reason">与电脑的连接已中断。</p>
-        <button id="btn-reconnect" class="btn btn-primary" data-i18n="btnReconnect">重新连接</button>
-      </div>
-    </section>
-  </div>
+      <!-- ===== 断线屏 ===== -->
+      <section id="screen-offline" class="screen">
+        <div class="card card-center">
+          <div class="offline-icon">📵</div>
+          <h2 class="offline-title" data-i18n="offlineTitle">连接已断开</h2>
+          <p class="offline-sub" id="offline-reason">与电脑的连接已中断。</p>
+          <button id="btn-reconnect" class="btn btn-primary" data-i18n="btnReconnect">
+            重新连接
+          </button>
+        </div>
+      </section>
+    </div>
 
-  <script src="/app.js"></script>
-</body>
+    <script src="/app.js"></script>
+  </body>
 </html>

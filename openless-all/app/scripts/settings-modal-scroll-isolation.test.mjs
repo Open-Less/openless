@@ -16,38 +16,26 @@ const floatingShellTsx = await readFile(
   new URL('../src/components/FloatingShell.tsx', import.meta.url),
   'utf-8',
 );
-const tokensCss = await readFile(
-  new URL('../src/styles/tokens.css', import.meta.url),
-  'utf-8',
-);
+const tokensCss = await readFile(new URL('../src/styles/tokens.css', import.meta.url), 'utf-8');
 
-const lockAttributeMatches = [
-  ...floatingShellTsx.matchAll(/data-ol-settings-open=\{([^}]*)\}/g),
-];
+const lockAttributeMatches = [...floatingShellTsx.matchAll(/data-ol-settings-open=\{([^}]*)\}/g)];
 
-assertEqual(
-  lockAttributeMatches.length,
-  1,
-  '背景滚动锁标记应只出现一次',
-);
+assertEqual(lockAttributeMatches.length, 1, '背景滚动锁标记应只出现一次');
 
 const [lockAttributeMatch] = lockAttributeMatches;
 const lockAttributeExpression = lockAttributeMatch[1];
 const lockAttributeIndex = lockAttributeMatch.index;
-const backgroundScrollerIndex = floatingShellTsx.indexOf('className="ol-thinscroll', lockAttributeIndex);
+const backgroundScrollerIndex = floatingShellTsx.indexOf(
+  'className="ol-thinscroll',
+  lockAttributeIndex,
+);
 const settingsModalIndex = floatingShellTsx.indexOf('<SettingsModal', lockAttributeIndex);
 
-assertMatch(
-  lockAttributeExpression,
-  /\bsettingsOpen\b/,
-  '背景滚动锁标记应由设置弹窗状态控制',
-);
-assertMatch(
-  lockAttributeExpression,
-  /\bundefined\b/,
-  '设置弹窗关闭时应移除背景滚动锁标记',
-);
-if (!(lockAttributeIndex < backgroundScrollerIndex && backgroundScrollerIndex < settingsModalIndex)) {
+assertMatch(lockAttributeExpression, /\bsettingsOpen\b/, '背景滚动锁标记应由设置弹窗状态控制');
+assertMatch(lockAttributeExpression, /\bundefined\b/, '设置弹窗关闭时应移除背景滚动锁标记');
+if (!(
+  lockAttributeIndex < backgroundScrollerIndex && backgroundScrollerIndex < settingsModalIndex
+)) {
   throw new Error('背景滚动锁标记应先于背景滚动区和设置弹窗声明');
 }
 assertMatch(

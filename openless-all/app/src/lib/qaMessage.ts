@@ -1,8 +1,9 @@
 import type { QaChatMessage, QaStatePayload } from './types';
 
-export function splitQaUserMessage(
-  message: QaChatMessage,
-): { selection: string; question: string } {
+export function splitQaUserMessage(message: QaChatMessage): {
+  selection: string;
+  question: string;
+} {
   const parsed = splitQaUserContent(message.content);
   return {
     selection: message.selectionText ?? parsed.selection,
@@ -35,10 +36,11 @@ export function acceptQaSessionEvent(
   }
   // idle 一律视为新会话 token：open_qa_panel 的 idle 总是携带新生成的 session_id，
   // 且事件按发送顺序到达，complete/turn 收尾的 idle 一定先于下一次 open。
-  const startsTurn = payload.kind === 'recording'
-    || payload.kind === 'loading'
-    || payload.kind === 'thinking'
-    || payload.kind === 'idle';
+  const startsTurn =
+    payload.kind === 'recording' ||
+    payload.kind === 'loading' ||
+    payload.kind === 'thinking' ||
+    payload.kind === 'idle';
   if (currentSessionId && !startsTurn && currentSessionId !== payload.sessionId) {
     return { accepted: false, sessionId: currentSessionId };
   }

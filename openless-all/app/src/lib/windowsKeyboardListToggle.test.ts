@@ -21,18 +21,12 @@ assert(
   'missing mode and legacy should resolve to tsf',
 );
 
-assert(
-  !showWindowsOpenlessKeyboardListToggle('tsf'),
-  'tsf should hide keyboard list toggle',
-);
+assert(!showWindowsOpenlessKeyboardListToggle('tsf'), 'tsf should hide keyboard list toggle');
 assert(
   showWindowsOpenlessKeyboardListToggle('sendInput'),
   'sendInput should show keyboard list toggle',
 );
-assert(
-  showWindowsOpenlessKeyboardListToggle('paste'),
-  'paste should show keyboard list toggle',
-);
+assert(showWindowsOpenlessKeyboardListToggle('paste'), 'paste should show keyboard list toggle');
 assert(
   showWindowsOpenlessKeyboardListToggle(undefined, true),
   'legacy sendInput-only should show keyboard list toggle',
@@ -56,18 +50,9 @@ assert(
   'explicit paste should hide newline mode even with legacy true',
 );
 
-assert(
-  showWindowsSendInputNewlineMode('sendInput'),
-  'sendInput should show newline mode',
-);
-assert(
-  !showWindowsSendInputNewlineMode('paste'),
-  'paste should hide newline mode',
-);
-assert(
-  !showWindowsSendInputNewlineMode('tsf'),
-  'tsf should hide newline mode',
-);
+assert(showWindowsSendInputNewlineMode('sendInput'), 'sendInput should show newline mode');
+assert(!showWindowsSendInputNewlineMode('paste'), 'paste should hide newline mode');
+assert(!showWindowsSendInputNewlineMode('tsf'), 'tsf should hide newline mode');
 assert(
   showWindowsSendInputNewlineMode(undefined, true),
   'legacy sendInput-only should show newline mode',

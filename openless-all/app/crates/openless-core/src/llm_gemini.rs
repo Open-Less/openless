@@ -164,6 +164,74 @@ impl GeminiProvider {
         Ok(clean_polish_output(&raw))
     }
 
+    pub async fn polish_streaming<F, C>(
+        &self,
+        raw_text: &str,
+        mode: PolishMode,
+        hotwords: &[String],
+        style_system_prompt: &str,
+        working_languages: &[String],
+        chinese_script_preference: ChineseScriptPreference,
+        output_language_preference: OutputLanguagePreference,
+        front_app: Option<&str>,
+        cursor_context: Option<&str>,
+        prior_turns: &[(String, String)],
+        on_delta: F,
+        should_cancel: C,
+    ) -> Result<String, LLMError>
+    where
+        F: Fn(&str) + Send + Sync,
+        C: Fn() -> bool + Send + Sync,
+    {
+        let (system_prompt, user_prompt) = compose_polish_prompts(
+            raw_text,
+            mode,
+            hotwords,
+            style_system_prompt,
+            working_languages,
+            chinese_script_preference,
+            output_language_preference,
+            front_app,
+            cursor_context,
+            !prior_turns.is_empty(),
+        );
+        let body = self.build_generate_body(
+            &system_prompt,
+            build_polish_history_contents(prior_turns, &user_prompt),
+        );
+        let url = stream_generate_content_url(&self.config.base_url, &self.config.model);
+        self.send_streaming(&url, &body, on_delta, should_cancel)
+            .await
+    }
+
+    pub async fn translate_to_streaming<F, C>(
+        &self,
+        raw_text: &str,
+        target_language: &str,
+        working_languages: &[String],
+        chinese_script_preference: ChineseScriptPreference,
+        _output_language_preference: OutputLanguagePreference,
+        front_app: Option<&str>,
+        on_delta: F,
+        should_cancel: C,
+    ) -> Result<String, LLMError>
+    where
+        F: Fn(&str) + Send + Sync,
+        C: Fn() -> bool + Send + Sync,
+    {
+        let (system_prompt, user_prompt) = compose_translate_prompts(
+            raw_text,
+            target_language,
+            working_languages,
+            chinese_script_preference,
+            front_app,
+        );
+        let body = self.build_generate_body(&system_prompt, vec![user_content(&user_prompt)]);
+        let url = stream_generate_content_url(&self.config.base_url, &self.config.model);
+        self.send_streaming(&url, &body, on_delta, should_cancel)
+            .await
+    }
+
     /// 多模态（Omni）识别管线（issue #902）的 Gemini 通道：音频 + 提示词一次调用。
     /// `wav_bytes` 为 `Some` 时以 `inlineData(audio/wav)` 追加到 user parts（已是
     /// 编码好的 WAV 文件字节，PCM→WAV 的转换由 omni 层统一完成）；

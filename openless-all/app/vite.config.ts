@@ -1,15 +1,14 @@
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { defineConfig } from "vite";
-import react from "@vitejs/plugin-react";
-import tailwindcss from "@tailwindcss/vite";
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+import tailwindcss from '@tailwindcss/vite';
 
-const appRoot = fileURLToPath(new URL(".", import.meta.url));
+const appRoot = fileURLToPath(new URL('.', import.meta.url));
 
 const host = process.env.TAURI_DEV_HOST;
 const isMobileDev =
-  process.env.TAURI_ENV_PLATFORM === "android" ||
-  process.env.TAURI_ENV_PLATFORM === "ios";
+  process.env.TAURI_ENV_PLATFORM === 'android' || process.env.TAURI_ENV_PLATFORM === 'ios';
 
 export default defineConfig(async () => ({
   // tailwindcss：只服务统一聊天面板的官方 shadcn 组件（components/chat/chat.css
@@ -17,34 +16,34 @@ export default defineConfig(async () => ({
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: {
-      "@android": path.resolve(appRoot, "android/frontend"),
+      '@android': path.resolve(appRoot, 'android/frontend'),
     },
   },
   clearScreen: false,
   server: {
     port: 1420,
     strictPort: true,
-    host: isMobileDev ? "0.0.0.0" : host || false,
+    host: isMobileDev ? '0.0.0.0' : host || false,
     hmr: isMobileDev
-      ? { protocol: "ws", host: host || "0.0.0.0", port: 1421 }
+      ? { protocol: 'ws', host: host || '0.0.0.0', port: 1421 }
       : host
-        ? { protocol: "ws", host, port: 1421 }
+        ? { protocol: 'ws', host, port: 1421 }
         : undefined,
-    watch: { ignored: ["**/src-tauri/**"] },
+    watch: { ignored: ['**/src-tauri/**'] },
     proxy: {
       // Browser-only preview parity: the native app calls OrcaRouter directly,
       // while Vite needs a same-origin bridge because /models does not advertise CORS.
-      "/__openless_dev/orcarouter/models": {
-        target: "https://api.orcarouter.ai",
+      '/__openless_dev/orcarouter/models': {
+        target: 'https://api.orcarouter.ai',
         changeOrigin: true,
-        rewrite: () => "/v1/models",
+        rewrite: () => '/v1/models',
       },
     },
   },
-  envPrefix: ["VITE_", "TAURI_"],
+  envPrefix: ['VITE_', 'TAURI_'],
   build: {
-    target: process.env.TAURI_PLATFORM === "windows" ? "chrome105" : "safari13",
-    minify: !process.env.TAURI_DEBUG ? "esbuild" : false,
+    target: process.env.TAURI_PLATFORM === 'windows' ? 'chrome105' : 'safari13',
+    minify: !process.env.TAURI_DEBUG ? 'esbuild' : false,
     sourcemap: !!process.env.TAURI_DEBUG,
   },
 }));

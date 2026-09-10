@@ -8,22 +8,18 @@
 extern LONG g_lock_count;
 extern LONG g_object_count;
 
-OpenLessClassFactory::OpenLessClassFactory() {
-  InterlockedIncrement(&g_object_count);
-}
+OpenLessClassFactory::OpenLessClassFactory() { InterlockedIncrement(&g_object_count); }
 
-OpenLessClassFactory::~OpenLessClassFactory() {
-  InterlockedDecrement(&g_object_count);
-}
+OpenLessClassFactory::~OpenLessClassFactory() { InterlockedDecrement(&g_object_count); }
 
-STDMETHODIMP OpenLessClassFactory::QueryInterface(REFIID iid, void** object) {
+STDMETHODIMP OpenLessClassFactory::QueryInterface(REFIID iid, void **object) {
   if (object == nullptr) {
     return E_POINTER;
   }
   *object = nullptr;
 
   if (iid == IID_IUnknown || iid == IID_IClassFactory) {
-    *object = static_cast<IClassFactory*>(this);
+    *object = static_cast<IClassFactory *>(this);
     AddRef();
     return S_OK;
   }
@@ -43,9 +39,7 @@ STDMETHODIMP_(ULONG) OpenLessClassFactory::Release() {
   return count;
 }
 
-STDMETHODIMP OpenLessClassFactory::CreateInstance(IUnknown* outer,
-                                                  REFIID iid,
-                                                  void** object) {
+STDMETHODIMP OpenLessClassFactory::CreateInstance(IUnknown *outer, REFIID iid, void **object) {
   if (object == nullptr) {
     return E_POINTER;
   }
@@ -55,7 +49,7 @@ STDMETHODIMP OpenLessClassFactory::CreateInstance(IUnknown* outer,
     return CLASS_E_NOAGGREGATION;
   }
 
-  auto* service = new (std::nothrow) OpenLessTextService();
+  auto *service = new (std::nothrow) OpenLessTextService();
   if (service == nullptr) {
     return E_OUTOFMEMORY;
   }

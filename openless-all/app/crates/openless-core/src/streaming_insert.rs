@@ -144,11 +144,13 @@ pub fn append_typed_prefix(target: &mut String, delta: &str, typed_chars: usize)
 
 pub fn streaming_insert_eligible(
     enabled: bool,
-    translation_active: bool,
+    _translation_active: bool,
     traditional_script: bool,
     windows_paste_insertion: bool,
 ) -> bool {
-    enabled && !translation_active && !traditional_script && !windows_paste_insertion
+    // Translation providers now emit only target-language deltas, so they share
+    // the same native insertion constraints as ordinary polishing.
+    enabled && !traditional_script && !windows_paste_insertion
 }
 
 #[cfg(test)]
@@ -233,7 +235,7 @@ mod tests {
     #[test]
     fn policy_blocks_only_unsafe_modes() {
         assert!(streaming_insert_eligible(true, false, false, false));
-        assert!(!streaming_insert_eligible(true, true, false, false));
+        assert!(streaming_insert_eligible(true, true, false, false));
         assert!(!streaming_insert_eligible(true, false, true, false));
     }
 }

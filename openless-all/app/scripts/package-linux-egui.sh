@@ -19,8 +19,8 @@ test -x "$QWEN_RUNTIME"
 test -s "$PACKAGING/openless.desktop"
 test -s "$PACKAGING/top.openless.OpenLess.metainfo.xml"
 test -s "$ICON"
-command -v fpm >/dev/null
-command -v appimagetool >/dev/null
+command -v fpm > /dev/null
+command -v appimagetool > /dev/null
 
 mkdir -p "$OUTPUT"
 
@@ -76,7 +76,7 @@ install -Dm644 "$PLUGIN_ROOT/openless.conf" \
 QWEN_APPDIR="$APPDIR/usr/lib/openless/resources/qwen-asr"
 while read -r library; do
   case "$(basename "$library")" in
-    libc.so.*|libm.so.*|libpthread.so.*|libdl.so.*|librt.so.*|ld-linux-*.so.*) continue ;;
+    libc.so.* | libm.so.* | libpthread.so.* | libdl.so.* | librt.so.* | ld-linux-*.so.*) continue ;;
   esac
   install -Dm755 "$library" "$QWEN_APPDIR/$(basename "$library")"
 done < <(ldd "$QWEN_RUNTIME" | awk '$2 == "=>" && $3 ~ /^\// { print $3 }')

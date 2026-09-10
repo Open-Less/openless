@@ -258,7 +258,7 @@ For the full end-user walkthrough, see [USAGE.md](USAGE.md).
 
 ## Build from source (developers)
 
-The active workspace lives in `openless-all/app/`. `crates/openless-core` is the framework-independent backend, `src-tauri` hosts macOS/Windows/Android, and `linux-egui` contains the native Linux UI and its platform adapters. The macOS Tauri build links a vendored C ASR engine ([`Open-Less/qwen-asr`](https://github.com/Open-Less/qwen-asr), forked from `antirez/qwen-asr`) under `src-tauri/vendor/qwen-asr/`; initialize submodules for macOS Tauri development. The root core/Linux workspace deliberately excludes `src-tauri`, so Linux core and host checks neither initialize that submodule nor parse the Tauri manifest.
+The active workspace lives in `openless-all/app/`. `crates/openless-core` is the framework-independent backend, `src-tauri` hosts macOS/Windows/Android, and `linux-egui` contains the native Linux UI and its platform adapters. Initialize submodules before a Tauri source build: its manifest resolves local path dependencies even when their target-specific code is not compiled. These include macOS ASR engines such as [`Open-Less/qwen-asr`](https://github.com/Open-Less/qwen-asr) under `src-tauri/vendor/`. The root Core/Linux workspace excludes `src-tauri`, so its independent checks do not parse the Tauri manifest or require those submodules. Start with the [documentation index](docs/index.md), [architecture](docs/architecture.md), and [source structure](docs/structure.md).
 
 Rust 1.88 is the minimum supported toolchain for source builds; the latest stable Rust is recommended. CI verifies both Rust 1.88 and stable on macOS, Windows, and Linux.
 
@@ -269,7 +269,7 @@ cd "openless-all/app"
 npm ci
 
 # macOS/Windows/Android: Vite at :1420 + Tauri host
-# Initialize submodules first when building the macOS local-ASR target.
+# Initialize submodules before resolving the Tauri manifest.
 git submodule update --init --recursive
 npm run tauri dev
 
@@ -277,7 +277,7 @@ npm run tauri dev
 ./scripts/build-mac.sh
 INSTALL=0 ./scripts/build-mac.sh   # build only, skip install
 
-# Shared backend and Linux non-UI host (no Tauri/WebKitGTK)
+# Shared backend and Linux Host/UI (no Tauri/WebKitGTK)
 cargo check -p openless-core
 cargo check -p openless-linux-egui --all-targets
 
@@ -357,7 +357,7 @@ What features does this app still need?
 
 …not a list of missing features.
 
-Long-term reference rewrites are stored as `raw → polished → rule` triples and will be retrieved as similar-example references (never as conversation context) once a vector store is wired in. See [docs/polish-reference-corpus.md](docs/polish-reference-corpus.md) and [Examples/polish-reference-examples.sample.jsonl](Examples/polish-reference-examples.sample.jsonl).
+Long-term reference rewrites are represented as `raw → polished → rule` triples in [Examples/polish-reference-examples.sample.jsonl](Examples/polish-reference-examples.sample.jsonl). The sample format describes reference data; current module responsibilities are documented in [Architecture](docs/architecture.md).
 
 ## Dictionary
 
@@ -389,13 +389,13 @@ React UI ── Tauri Adapter (macOS/Windows/Android) ──┐
 egui UI  ── Linux Adapter (no Tauri/WebKitGTK) ────┘
 ```
 
-`openless-core` owns the stable DTOs, errors, semantic events, repositories, credentials contract, and host-facing use-case Interface. Host-only concerns—IPC, windows, tray, permissions, updater, keyring, fcitx5, and package resource paths—are implemented by Adapters. Legacy React command/event names stay in the Tauri compatibility Adapter; Linux calls the typed Rust Interface in process. See [`docs/linux-egui-backend-contract.md`](docs/linux-egui-backend-contract.md) and the [full migration plan](docs/linux-egui-shared-backend-plan.md).
+`openless-core` owns the stable DTOs, errors, semantic events, repositories, credentials contract, and host-facing use-case Interface. Host-only concerns—IPC, windows, tray, permissions, updater, keyring, fcitx5, and package resource paths—are implemented by Adapters. Legacy React command/event names stay in the Tauri compatibility Adapter; Linux calls the typed Rust Interface in process. See [`docs/linux-egui-backend-contract.md`](docs/linux-egui-backend-contract.md).
 
 The `v<version>-tauri` / `v<version>-Beta.N-tauri` workflows publish the macOS, Windows, and Android hosts. Linux deb/rpm/AppImage assets are built by `release-linux-egui.yml` with an independent manifest; automatic release remains gated on successful artifacts and real Ubuntu install/runtime/upgrade/rollback evidence.
 
 The dictation pipeline: `hotkey edge → Recorder.start + ASR.openSession → [audio frames] → hotkey edge → Recorder.stop + ASR.sendLastFrame → Polish → Insert → History.save`.
 
-See [CLAUDE.md](CLAUDE.md) for invariants and module-wiring rules.
+See [AGENTS.md](AGENTS.md) for repository rules and [Architecture](docs/architecture.md) for module responsibilities and wiring.
 
 ## Roadmap
 
@@ -432,7 +432,7 @@ OpenLess ships two release channels. The branch name equals the channel name (se
 
 ### Post-release verification (always run)
 
-Run the 5-step checklist in [`CLAUDE.md` → Branch & release-channel workflow → Channel distribution](CLAUDE.md): page status (pre-release flag), asset-filename channel correctness, Stable user flow, Beta opt-in flow, and raw endpoint sanity.
+Follow [RELEASING.md](RELEASING.md) and verify the release page's pre-release flag, asset-filename channel correctness, Stable user flow, Beta opt-in flow, and raw update endpoints.
 
 ## Acknowledgements
 

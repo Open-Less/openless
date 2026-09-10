@@ -2,6 +2,7 @@ import {
   getCapsuleHostMetrics,
   getCapsuleMessageLayout,
   getCapsulePillMetrics,
+  parseCapsuleStyle,
 } from './capsuleLayout.ts';
 
 function assertEqual<T>(actual: T, expected: T, name: string) {
@@ -14,7 +15,11 @@ const winMetrics = getCapsulePillMetrics('win');
 assertEqual(winMetrics.width, 460, 'windows voice orb stage uses the demo-scale width');
 assertEqual(winMetrics.height, 180, 'windows voice orb stage uses the demo-scale height');
 assertEqual(winMetrics.textWidth, 400, 'windows voice orb text stays inside the stage');
-assertEqual(winMetrics.boxSizing, 'border-box', 'windows voice orb stage width is an outer border-box metric');
+assertEqual(
+  winMetrics.boxSizing,
+  'border-box',
+  'windows voice orb stage width is an outer border-box metric',
+);
 
 const winHost = getCapsuleHostMetrics('win', false);
 assertEqual(winHost.width, 460, 'windows voice orb host matches stage width');
@@ -33,10 +38,26 @@ assertEqual(
 );
 
 const winHostWithTranslation = getCapsuleHostMetrics('win', true);
-assertEqual(winHostWithTranslation.width, 460, 'windows translation voice orb keeps the same outer width');
-assertEqual(winHostWithTranslation.height, 180, 'windows translation voice orb keeps the same outer height');
-assertEqual(winHostWithTranslation.horizontalInset, 0, 'windows translation voice orb has no side button inset');
-assertEqual(winHostWithTranslation.boxSizing, 'border-box', 'windows translation host keeps border-box sizing');
+assertEqual(
+  winHostWithTranslation.width,
+  460,
+  'windows translation voice orb keeps the same outer width',
+);
+assertEqual(
+  winHostWithTranslation.height,
+  180,
+  'windows translation voice orb keeps the same outer height',
+);
+assertEqual(
+  winHostWithTranslation.horizontalInset,
+  0,
+  'windows translation voice orb has no side button inset',
+);
+assertEqual(
+  winHostWithTranslation.boxSizing,
+  'border-box',
+  'windows translation host keeps border-box sizing',
+);
 
 const macMetrics = getCapsulePillMetrics('mac');
 assertEqual(macMetrics.width, 460, 'mac voice orb stage uses the demo-scale width');
@@ -60,3 +81,20 @@ assertEqual(winProcessingLayout.allowWrap, true, 'windows processing label wraps
 const macErrorLayout = getCapsuleMessageLayout('mac', 'error');
 assertEqual(macErrorLayout.lineClamp, 1, 'mac error message stays single-line');
 assertEqual(macErrorLayout.allowWrap, false, 'mac error message stays nowrap');
+
+for (const os of ['mac', 'win', 'linux'] as const) {
+  const classic = getCapsuleHostMetrics(os, false, 'classic');
+  const typeless = getCapsuleHostMetrics(os, true, 'typeless');
+  assertEqual(classic.height, 100, `${os}: classic uses the compact native window`);
+  assertEqual(typeless.height, 57, `${os}: typeless window is 1/5 of the old 460x128 area`);
+  assertEqual(typeless.width, 206, `${os}: typeless window keeps the 1/5 stage width`);
+  assertEqual(typeless.bottomInset, 0, `${os}: typeless pill hugs the work-area bottom edge`);
+}
+for (const style of ['siri', 'classic', 'typeless'] as const) {
+  assertEqual(parseCapsuleStyle(style), style, `${style} is accepted from preferences and events`);
+}
+assertEqual(
+  parseCapsuleStyle('unknown'),
+  undefined,
+  'unknown styles do not replace the active choice',
+);

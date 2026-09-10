@@ -1848,10 +1848,11 @@ impl TranscriptionEngine for TauriNativeTranscriptionEngine {
                             Some(model_id),
                         )
                     } else if crate::asr::local::is_apple_speech(provider_type) {
-                        let locale =
-                            context.polish.working_languages.first().and_then(|name| {
-                                crate::asr::local::native_name_to_apple_locale(name)
-                            });
+                        let locale = context.polish.working_languages.first().map(|name| {
+                            crate::asr::local::native_name_to_apple_locale(name).ok_or_else(|| {
+                                BackendError::new(BackendErrorCode::Unsupported, "Apple Speech 无法识别所选工作语言，请选择其他语言或语音识别服务。")
+                            })
+                        }).transpose()?;
                         (
                             TauriNativeTranscriptionSessionKind::AppleSpeech(Arc::new(
                                 crate::asr::local::AppleSpeechAsr::new(locale),
