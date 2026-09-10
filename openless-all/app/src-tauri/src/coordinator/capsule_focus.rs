@@ -283,8 +283,9 @@ fn emit_capsule_payload_locked(inner: &Arc<Inner>, payload: CapsulePayload) -> u
         != openless_core::DictationPhase::Idle
         || inner.backend.less_computer_active_session().is_some()
         || selection_voice_active;
-    let esc_exclusive =
-        esc_exclusive_for_capsule(state, session_active, payload.recovery_session_id.is_some());
+    let recovery_active = payload.recovery_session_id.is_some()
+        || inner.cancelled_recording_recovery.lock().is_some();
+    let esc_exclusive = esc_exclusive_for_capsule(state, session_active, recovery_active);
     crate::hotkey::set_esc_exclusive(esc_exclusive);
     // 即使窗口尚未绑定，也保留卡片期间最新的完整反馈，重显时不能倒退到旧准备态。
     defer_capsule_payload_if_fallback_active(inner, &payload);
@@ -496,6 +497,13 @@ pub(super) fn hide_selection_polish_capsule_if_current(inner: &Arc<Inner>, expec
 #[cfg(test)]
 mod epoch_tests {
     use super::*;
+
+    #[test]
+    fn pending_recording_recovery_keeps_escape_exclusive_through_terminal_frames() {
+        for state in [CapsuleState::Cancelled, CapsuleState::Idle] {
+            assert!(esc_exclusive_for_capsule(state, false, true));
+        }
+    }
 
     #[test]
     fn queued_qa_terminal_and_timer_cannot_hide_direct_native_feedback() {

@@ -4665,7 +4665,7 @@ impl OpenLessBackend {
         }
         let elapsed_offset_ms = prefix_pcm
             .as_ref()
-            .map(|pcm| (pcm.len() as u64).saturating_mul(1_000) / 32_000)
+            .map(|pcm| crate::asr::pcm::pcm_duration_ms(pcm))
             .unwrap_or(0);
         self.voice_sessions.acquire(
             session_id,
@@ -4723,6 +4723,18 @@ impl OpenLessBackend {
         session_id: SessionId,
         pcm: Vec<u8>,
     ) -> Result<SessionId, BackendError> {
+        let history_id = session_id.to_string();
+        let recoverable = self.history.list()?.into_iter().any(|entry| {
+            entry.id == history_id
+                && entry.error_code.as_deref() == Some("recordingCancelled")
+                && entry.has_audio_recording == Some(true)
+        });
+        if !recoverable {
+            return Err(BackendError::new(
+                BackendErrorCode::InvalidArgument,
+                "history entry is not a recoverable cancelled recording",
+            ));
+        }
         if pcm.is_empty() || !pcm.len().is_multiple_of(2) {
             return Err(BackendError::new(
                 BackendErrorCode::InvalidArgument,
@@ -5760,20 +5772,30 @@ impl OpenLessBackend {
             self.phase_changed.notify_waiters();
             (active, recovery_context)
         };
-        let archive = if recovery_context.is_some() {
-            self.cancel_session_adapters_preserving_archive(active)
-                .await?
-        } else {
-            self.cancel_session_adapters(active).await?;
-            None
-        };
+        let archive = self
+            .cancel_session_adapters_preserving_archive(active)
+            .await?;
         // The state can already display cancellation, but native audio/input
         // cleanup still owns the shared resource. Reject new capture until that
         // cleanup finishes, including on its error path.
         self.voice_sessions.release(active);
-        self.hide_dictation_feedback(active)?;
-
-        let Some((context, archive)) = recovery_context.zip(archive) else {
+        let context = match recovery_context {
+            Some(context) => {
+                self.hide_dictation_feedback(active)?;
+                context
+            }
+            None => {
+                let discard_result = match archive {
+                    Some(archive) => archive.discard().await,
+                    None => Ok(()),
+                };
+                let hide_result = self.hide_dictation_feedback(active);
+                discard_result?;
+                hide_result?;
+                return Ok(None);
+            }
+        };
+        let Some(archive) = archive else {
             return Ok(None);
         };
         let pcm = match archive.read_pcm().await {
@@ -5784,7 +5806,7 @@ impl OpenLessBackend {
                 return Ok(None);
             }
         };
-        let duration_ms = (pcm.len() as u64).saturating_mul(1_000) / 32_000;
+        let duration_ms = crate::asr::pcm::pcm_duration_ms(&pcm);
         let preferences = self.get_preferences();
         let session = self.build_failed_dictation_session(
             &context,
@@ -6171,6 +6193,136 @@ mod tests {
         fn cancel(&self, _session_id: SessionId) -> BoxFuture<'static, Result<(), BackendError>> {
             boxed(async { Ok(()) })
         }
+    }
+
+    struct RecoveryArchive {
+        pcm: Vec<u8>,
+        discards: std::sync::atomic::AtomicUsize,
+    }
+
+    impl crate::ports::RecordingArchive for RecoveryArchive {
+        fn is_available(&self) -> bool {
+            true
+        }
+
+        fn read_pcm(&self) -> BoxFuture<'static, Result<Vec<u8>, BackendError>> {
+            let pcm = self.pcm.clone();
+            boxed(async move { Ok(pcm) })
+        }
+
+        fn discard(&self) -> BoxFuture<'static, Result<(), BackendError>> {
+            self.discards.fetch_add(1, Ordering::AcqRel);
+            boxed(async { Ok(()) })
+        }
+    }
+
+    struct RecoveryEngine {
+        archive: Arc<RecoveryArchive>,
+        contexts: Mutex<Vec<Arc<DictationContext>>>,
+        cancels: std::sync::atomic::AtomicUsize,
+        preserving_cancels: std::sync::atomic::AtomicUsize,
+        fail_finish: bool,
+    }
+
+    impl DictationEngine for RecoveryEngine {
+        fn start(
+            &self,
+            _session_id: SessionId,
+            context: Arc<DictationContext>,
+            _progress: Arc<dyn EngineProgressSink>,
+        ) -> BoxFuture<'static, Result<(), BackendError>> {
+            self.contexts.lock().unwrap().push(context);
+            boxed(async { Ok(()) })
+        }
+
+        fn finish(
+            &self,
+            _session_id: SessionId,
+            _progress: Arc<dyn EngineProgressSink>,
+        ) -> BoxFuture<'static, Result<EngineResult, EngineFailure>> {
+            let fail = self.fail_finish;
+            boxed(async move {
+                if fail {
+                    Err(EngineFailure::from(BackendError::new(
+                        BackendErrorCode::Provider,
+                        "fixture provider failure",
+                    )))
+                } else {
+                    Ok(EngineResult {
+                        raw_text: "raw".into(),
+                        asr_transcript: None,
+                        polished_text: "polished".into(),
+                        polish_source: None,
+                        duration_ms: 1000,
+                        polish_failed: false,
+                        asr_ms: None,
+                        polish_ms: None,
+                        has_audio_recording: Some(true),
+                        asr_call_label: None,
+                        llm_call_label: None,
+                    })
+                }
+            })
+        }
+
+        fn cancel(&self, _session_id: SessionId) -> BoxFuture<'static, Result<(), BackendError>> {
+            self.cancels.fetch_add(1, Ordering::AcqRel);
+            boxed(async { Ok(()) })
+        }
+
+        fn cancel_preserving_archive(
+            &self,
+            _session_id: SessionId,
+        ) -> BoxFuture<'static, Result<Option<Arc<dyn crate::ports::RecordingArchive>>, BackendError>>
+        {
+            self.preserving_cancels.fetch_add(1, Ordering::AcqRel);
+            let archive: Arc<dyn crate::ports::RecordingArchive> = self.archive.clone();
+            boxed(async move { Ok(Some(archive)) })
+        }
+    }
+
+    fn backend_with_recovery_engine(
+        label: &str,
+        fail_finish: bool,
+    ) -> (TestBackend, Arc<RecoveryEngine>) {
+        let data_dir = TestDataDir::new(label);
+        let engine = Arc::new(RecoveryEngine {
+            archive: Arc::new(RecoveryArchive {
+                pcm: vec![0; 32_000],
+                discards: std::sync::atomic::AtomicUsize::new(0),
+            }),
+            contexts: Mutex::new(Vec::new()),
+            cancels: std::sync::atomic::AtomicUsize::new(0),
+            preserving_cancels: std::sync::atomic::AtomicUsize::new(0),
+            fail_finish,
+        });
+        let backend = OpenLessBackend::new(
+            BackendConfig {
+                data_dir: data_dir.path().to_path_buf(),
+                ..BackendConfig::default()
+            },
+            BackendDependencies {
+                host_actions: Arc::new(FakeHost::default()),
+                text_inserter: Arc::new(FakeInserter),
+                dictation_engine: engine.clone(),
+                task_spawner: Arc::new(TokioTaskSpawner),
+                credential_store: Arc::new(crate::credentials::InMemoryCredentialStore::default()),
+                services: crate::domains::BackendServices::unsupported(),
+                local_asr_runtime: None,
+                marketplace_config: None,
+                selection_runtime: None,
+                selection_polisher: None,
+                qa_runtime: None,
+            },
+        )
+        .unwrap();
+        (
+            TestBackend {
+                backend,
+                _data_dir: data_dir,
+            },
+            engine,
+        )
     }
 
     struct FakeInserter;
@@ -11397,6 +11549,119 @@ mod tests {
             backend.stop_dictation().await.unwrap_err().code,
             BackendErrorCode::InvalidState
         );
+    }
+
+    #[tokio::test]
+    async fn ordinary_cancel_discards_the_archive_without_creating_recovery_history() {
+        let (backend, engine) = backend_with_recovery_engine("ordinary-cancel-archive", false);
+        let mut preferences = backend.get_preferences();
+        preferences.esc_recording_recovery_enabled = true;
+        preferences.record_audio_for_debug = true;
+        backend.set_preferences(preferences).unwrap();
+        backend.start().await.unwrap();
+        let session_id = backend.start_dictation().await.unwrap();
+
+        backend.cancel_dictation(Some(session_id)).await.unwrap();
+
+        assert_eq!(engine.preserving_cancels.load(Ordering::Acquire), 1);
+        assert_eq!(engine.archive.discards.load(Ordering::Acquire), 1);
+        assert!(backend.list_history().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn escape_cancel_preserves_archive_and_resume_reuses_the_session_and_prefix() {
+        let (backend, engine) = backend_with_recovery_engine("escape-cancel-recovery", false);
+        let mut preferences = backend.get_preferences();
+        preferences.esc_recording_recovery_enabled = true;
+        backend.set_preferences(preferences).unwrap();
+        backend.start().await.unwrap();
+        let session_id = backend.start_dictation().await.unwrap();
+
+        let recovery = backend
+            .cancel_dictation_after_escape(Some(session_id))
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(recovery.session_id, session_id);
+        assert_eq!(recovery.duration_ms, 1000);
+        assert_eq!(engine.archive.discards.load(Ordering::Acquire), 0);
+        let history = backend.list_history().unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].id, session_id.to_string());
+        assert_eq!(history[0].error_code.as_deref(), Some("recordingCancelled"));
+        assert_eq!(history[0].has_audio_recording, Some(true));
+
+        let prefix = vec![9, 0, 8, 0];
+        assert_eq!(
+            backend
+                .resume_dictation_recording(session_id, prefix.clone())
+                .await
+                .unwrap(),
+            session_id
+        );
+        assert_eq!(
+            engine
+                .contexts
+                .lock()
+                .unwrap()
+                .last()
+                .unwrap()
+                .recording
+                .prefix_pcm,
+            Some(prefix)
+        );
+        backend.cancel_dictation(Some(session_id)).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn resume_rejects_missing_wrong_or_audio_less_history() {
+        let (backend, _) = backend_with_recovery_engine("resume-history-validation", false);
+        backend.start().await.unwrap();
+        let missing = SessionId::new();
+        assert_eq!(
+            backend
+                .resume_dictation_recording(missing, vec![1, 0])
+                .await
+                .unwrap_err()
+                .code,
+            BackendErrorCode::InvalidArgument
+        );
+
+        for (error_code, has_audio_recording) in [
+            (Some("recordingFailed"), Some(true)),
+            (Some("recordingCancelled"), Some(false)),
+        ] {
+            let session_id = SessionId::new();
+            let mut entry = history_session(&session_id.to_string());
+            entry.error_code = error_code.map(str::to_string);
+            entry.has_audio_recording = has_audio_recording;
+            backend.append_history(entry, 30, Some(20)).unwrap();
+            assert_eq!(
+                backend
+                    .resume_dictation_recording(session_id, vec![1, 0])
+                    .await
+                    .unwrap_err()
+                    .code,
+                BackendErrorCode::InvalidArgument
+            );
+        }
+        assert_eq!(backend.snapshot().dictation.phase, DictationPhase::Idle);
+    }
+
+    #[tokio::test]
+    async fn failure_cleanup_keeps_the_archive_for_history_retry() {
+        let (backend, engine) = backend_with_recovery_engine("failure-keeps-archive", true);
+        backend.start().await.unwrap();
+        backend.start_dictation().await.unwrap();
+
+        assert_eq!(
+            backend.stop_dictation().await.unwrap_err().code,
+            BackendErrorCode::Provider
+        );
+        assert_eq!(engine.cancels.load(Ordering::Acquire), 1);
+        assert_eq!(engine.preserving_cancels.load(Ordering::Acquire), 0);
+        assert_eq!(engine.archive.discards.load(Ordering::Acquire), 0);
     }
 
     #[tokio::test]

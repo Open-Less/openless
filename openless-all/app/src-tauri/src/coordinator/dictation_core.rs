@@ -170,7 +170,8 @@ pub(super) async fn cancel_active_session_after_escape(inner: &Arc<Inner>) -> bo
             return false;
         }
     }
-    if inner.backend.snapshot().dictation.session_id.is_none() {
+    let snapshot = inner.backend.snapshot();
+    let Some(active_session_id) = snapshot.dictation.session_id else {
         return match inner.backend.cancel_active_voice_session(None).await {
             Ok(()) => true,
             Err(error) if error.code == openless_core::BackendErrorCode::InvalidState => false,
@@ -179,25 +180,59 @@ pub(super) async fn cancel_active_session_after_escape(inner: &Arc<Inner>) -> bo
                 false
             }
         };
+    };
+    let pending_session_id = active_session_id.to_string();
+    let recovery_armed = inner
+        .backend
+        .get_preferences()
+        .esc_recording_recovery_enabled
+        && matches!(
+            snapshot.dictation.phase,
+            openless_core::DictationPhase::Starting | openless_core::DictationPhase::Recording
+        );
+    if recovery_armed {
+        *inner.cancelled_recording_recovery.lock() = Some(pending_session_id.clone());
+        crate::hotkey::set_esc_exclusive(true);
     }
     match inner.backend.cancel_dictation_after_escape(None).await {
         Ok(Some(recovery)) => {
             inner.host.hide_less_computer_glow();
             let session_id = recovery.session_id.to_string();
-            *inner.cancelled_recording_recovery.lock() = Some(session_id.clone());
-            crate::hotkey::set_esc_exclusive(true);
-            schedule_cancelled_recording_recovery_prompt(inner, session_id, recovery.duration_ms);
+            let should_schedule = should_schedule_cancelled_recording_recovery(inner, &session_id);
+            if should_schedule {
+                schedule_cancelled_recording_recovery_prompt(
+                    inner,
+                    session_id,
+                    recovery.duration_ms,
+                );
+            } else {
+                dismiss_cancelled_recording_recovery(inner, Some(&session_id));
+            }
             true
         }
         Ok(None) => {
             inner.host.hide_less_computer_glow();
+            if recovery_armed {
+                dismiss_cancelled_recording_recovery(inner, Some(&pending_session_id));
+            }
             true
         }
         Err(error) => {
+            if recovery_armed {
+                dismiss_cancelled_recording_recovery(inner, Some(&pending_session_id));
+            }
             log::warn!("[coord] dictation cancel after Esc failed: {error}");
             false
         }
     }
+}
+
+fn should_schedule_cancelled_recording_recovery(inner: &Arc<Inner>, session_id: &str) -> bool {
+    inner
+        .backend
+        .get_preferences()
+        .esc_recording_recovery_enabled
+        && inner.cancelled_recording_recovery.lock().as_deref() == Some(session_id)
 }
 
 pub(super) fn dismiss_cancelled_recording_recovery(
@@ -235,9 +270,18 @@ fn schedule_cancelled_recording_recovery_prompt(
         .await;
         let still_pending =
             inner.cancelled_recording_recovery.lock().as_deref() == Some(session_id.as_str());
-        if !still_pending
-            || inner.backend.snapshot().dictation.phase != openless_core::DictationPhase::Idle
+        if !still_pending {
+            return;
+        }
+        if !inner
+            .backend
+            .get_preferences()
+            .esc_recording_recovery_enabled
         {
+            dismiss_cancelled_recording_recovery(&inner, Some(&session_id));
+            return;
+        }
+        if inner.backend.snapshot().dictation.phase != openless_core::DictationPhase::Idle {
             return;
         }
         let epoch = super::capsule_focus::emit_core_capsule(
@@ -278,5 +322,87 @@ pub(super) fn windows_sendinput_options_from_prefs(
 ) -> crate::unicode_keystroke::WindowsSendInputOptions {
     crate::unicode_keystroke::WindowsSendInputOptions {
         newline_mode: preferences.windows_sendinput_newline_mode,
+    }
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod recording_recovery_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn escape_arms_recovery_before_async_cancellation_finishes() {
+        let (coordinator, _, data_dir) =
+            super::super::hotkey_loops::windows_less_computer_tests::fixture_coordinator(
+                crate::types::HotkeyMode::Toggle,
+                std::time::Duration::from_millis(100),
+            );
+        let inner = &coordinator.inner;
+        let mut preferences = inner.backend.get_preferences();
+        preferences.esc_recording_recovery_enabled = true;
+        crate::set_backend_preferences_for_test(&inner.backend, preferences);
+        inner.backend.start().await.unwrap();
+        let backend = Arc::clone(&inner.backend);
+        let starting = tokio::spawn(async move { backend.start_dictation().await });
+        while inner.backend.snapshot().dictation.session_id.is_none() {
+            tokio::task::yield_now().await;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        let session_id = inner
+            .backend
+            .snapshot()
+            .dictation
+            .session_id
+            .unwrap()
+            .to_string();
+
+        let mut cancelling = Box::pin(cancel_active_session_after_escape(inner));
+        assert!(futures_util::poll!(cancelling.as_mut()).is_pending());
+        assert_eq!(
+            inner.cancelled_recording_recovery.lock().as_deref(),
+            Some(session_id.as_str())
+        );
+
+        assert!(cancelling.await);
+        assert_eq!(
+            starting.await.unwrap().unwrap_err().code,
+            openless_core::BackendErrorCode::Cancelled
+        );
+        drop(coordinator);
+        std::fs::remove_dir_all(data_dir).unwrap();
+    }
+
+    #[test]
+    fn second_escape_and_disabled_setting_prevent_a_late_recovery_prompt() {
+        for disable_setting in [false, true] {
+            let (coordinator, _, data_dir) =
+                super::super::hotkey_loops::windows_less_computer_tests::fixture_coordinator(
+                    crate::types::HotkeyMode::Toggle,
+                    std::time::Duration::ZERO,
+                );
+            let inner = &coordinator.inner;
+            let session_id = openless_core::SessionId::new().to_string();
+            let mut preferences = inner.backend.get_preferences();
+            preferences.esc_recording_recovery_enabled = true;
+            crate::set_backend_preferences_for_test(&inner.backend, preferences);
+            *inner.cancelled_recording_recovery.lock() = Some(session_id.clone());
+            assert!(should_schedule_cancelled_recording_recovery(
+                inner,
+                &session_id
+            ));
+
+            if disable_setting {
+                let mut preferences = inner.backend.get_preferences();
+                preferences.esc_recording_recovery_enabled = false;
+                crate::set_backend_preferences_for_test(&inner.backend, preferences);
+            } else {
+                assert!(dismiss_cancelled_recording_recovery(inner, None));
+            }
+            assert!(!should_schedule_cancelled_recording_recovery(
+                inner,
+                &session_id
+            ));
+            drop(coordinator);
+            std::fs::remove_dir_all(data_dir).unwrap();
+        }
     }
 }

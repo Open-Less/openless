@@ -500,7 +500,7 @@ struct Inner {
     /// 选区润色的轻量提示仍在显示或处理中。已有语音/QA 的旧 auto-hide timer 必须在
     /// 此期间让路，避免把选区润色浮窗提前收掉。
     selection_polish_capsule_active: AtomicBool,
-    /// 当前 Esc 恢复提示对应的 session。录音与历史归 Core 管理，这里只保留窗口态。
+    /// 正在收尾或等待显示 Esc 恢复提示的 session。录音与历史归 Core 管理。
     cancelled_recording_recovery: Mutex<Option<String>>,
     /// Tauri QA window visibility. All QA business state belongs to openless-core.
     qa_context: Arc<TauriQaHostContext>,
@@ -1548,28 +1548,18 @@ impl Coordinator {
     }
 
     pub async fn resume_cancelled_recording(&self, session_id: &str) -> Result<(), String> {
-        let entry = self
-            .inner
-            .backend
-            .list_history()
-            .map_err(|error| error.to_string())?
-            .into_iter()
-            .find(|entry| entry.id == session_id)
-            .ok_or_else(|| "history entry not found".to_string())?;
-        if entry.error_code.as_deref() != Some("recordingCancelled") {
-            return Err("history entry is not a cancelled recording".into());
-        }
-        if entry.has_audio_recording != Some(true) {
-            return Err("recording not found".into());
-        }
         let session_id = openless_core::SessionId::from_uuid(
             uuid::Uuid::parse_str(session_id).map_err(|_| "invalid session id".to_string())?,
         );
         let path = crate::persistence::recording_path_for_session(&session_id.to_string())
             .map_err(|error| error.to_string())?;
-        let wav = tokio::fs::read(path)
-            .await
-            .map_err(|error| error.to_string())?;
+        let wav = tokio::fs::read(path).await.map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                "recording not found".to_string()
+            } else {
+                format!("read wav failed: {error}")
+            }
+        })?;
         let pcm = openless_core::decode_dictation_wav(&wav).map_err(|error| error.to_string())?;
         dictation::dismiss_cancelled_recording_recovery(&self.inner, Some(&session_id.to_string()));
         if !self.inner.backend.snapshot().running {
