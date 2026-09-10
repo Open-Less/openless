@@ -44,7 +44,7 @@ pub fn card<R>(
     let p = current(ui.ctx());
     egui::Frame::default()
         .fill(p.surface())
-        .stroke(egui::Stroke::new(0.5, p.line()))
+        .stroke(egui::Stroke::new(0.5_f32, p.line()))
         .rounding(egui::CornerRadius::same(tokens::radius::CARD))
         .inner_margin(egui::Margin::same(16))
         .show(ui, add_contents)

@@ -2328,7 +2328,7 @@ mod linux_app {
                 .frame(
                     egui::Frame::default()
                         .fill(p.sidebar_bg())
-                        .stroke(egui::Stroke::new(0.5, p.line()))
+                        .stroke(egui::Stroke::new(0.5_f32, p.line()))
                         .inner_margin(egui::Margin {
                             left: 10,
                             right: 10,
@@ -2395,7 +2395,7 @@ mod linux_app {
                         .color(p.ink()),
                 );
                 egui::Frame::default()
-                    .stroke(egui::Stroke::new(0.5, p.blue()))
+                    .stroke(egui::Stroke::new(0.5_f32, p.blue()))
                     .rounding(egui::CornerRadius::same(5))
                     .inner_margin(egui::Margin::symmetric(6, 1))
                     .show(ui, |ui| {
@@ -2512,7 +2512,7 @@ mod linux_app {
                 .frame(
                     egui::Frame::default()
                         .fill(p.surface())
-                        .stroke(egui::Stroke::new(0.5, p.line()))
+                        .stroke(egui::Stroke::new(0.5_f32, p.line()))
                         .inner_margin(egui::Margin::symmetric(10, 8)),
                 )
                 .show(ctx, |ui| {
@@ -2607,7 +2607,7 @@ mod linux_app {
                         .rounding(egui::CornerRadius::same(
                             openless_linux_egui::design_tokens::radius::CARD,
                         ))
-                        .stroke(egui::Stroke::new(0.5, p.line()))
+                        .stroke(egui::Stroke::new(0.5_f32, p.line()))
                         .inner_margin(egui::Margin::same(0)),
                 )
                 .show(ctx, |ui| {
@@ -2615,7 +2615,7 @@ mod linux_app {
                         .frame(
                             egui::Frame::default()
                                 .fill(p.surface())
-                                .stroke(egui::Stroke::new(0.5, p.line()))
+                                .stroke(egui::Stroke::new(0.5_f32, p.line()))
                                 .inner_margin(egui::Margin {
                                     left: 18,
                                     right: 14,
@@ -2649,7 +2649,7 @@ mod linux_app {
                         .frame(
                             egui::Frame::default()
                                 .fill(p.settings_rail_bg())
-                                .stroke(egui::Stroke::new(0.5, p.line()))
+                                .stroke(egui::Stroke::new(0.5_f32, p.line()))
                                 .inner_margin(egui::Margin {
                                     left: 10,
                                     right: 10,

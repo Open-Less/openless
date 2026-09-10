@@ -176,7 +176,7 @@ pub fn apply_theme(ctx: &egui::Context, dark: bool) {
     // 面板与浮层底色：内容区白底（暗色 surface）。
     visuals.panel_fill = p.surface();
     visuals.window_fill = p.surface();
-    visuals.window_stroke = egui::Stroke::new(0.5, p.line());
+    visuals.window_stroke = egui::Stroke::new(0.5_f32, p.line());
     visuals.faint_bg_color = p.surface_2();
     visuals.extreme_bg_color = if dark { p.canvas() } else { p.surface() };
     visuals.code_bg_color = p.surface_2();
@@ -185,7 +185,7 @@ pub fn apply_theme(ctx: &egui::Context, dark: bool) {
     visuals.warn_fg_color = p.warn();
     visuals.error_fg_color = p.err();
     visuals.selection.bg_fill = p.blue_soft();
-    visuals.selection.stroke = egui::Stroke::new(1.0, p.ink());
+    visuals.selection.stroke = egui::Stroke::new(1.0_f32, p.ink());
 
     let control_rounding = egui::CornerRadius::same(tokens::radius::CONTROL);
     // 控件观感对齐 React：默认按钮 = surface 底 + 0.5px line 边 + ink-2 文字；
@@ -193,35 +193,35 @@ pub fn apply_theme(ctx: &egui::Context, dark: bool) {
     visuals.widgets.noninteractive = widget_visuals(
         p.surface_2(),
         p.surface_2(),
-        egui::Stroke::new(0.5, p.line()),
+        egui::Stroke::new(0.5_f32, p.line()),
         p.ink_3(),
         control_rounding,
     );
     visuals.widgets.inactive = widget_visuals(
         p.surface(),
         p.surface(),
-        egui::Stroke::new(1.0, p.line()),
+        egui::Stroke::new(1.0_f32, p.line()),
         p.ink_2(),
         control_rounding,
     );
     visuals.widgets.hovered = widget_visuals(
         p.surface_2(),
         p.surface_2(),
-        egui::Stroke::new(1.0, p.line_strong()),
+        egui::Stroke::new(1.0_f32, p.line_strong()),
         p.ink(),
         control_rounding,
     );
     visuals.widgets.active = widget_visuals(
         p.blue(),
         p.blue(),
-        egui::Stroke::new(1.0, p.blue()),
+        egui::Stroke::new(1.0_f32, p.blue()),
         p.on_accent(),
         control_rounding,
     );
     visuals.widgets.open = widget_visuals(
         p.blue_soft(),
         p.blue_soft(),
-        egui::Stroke::new(1.0, p.line()),
+        egui::Stroke::new(1.0_f32, p.line()),
         p.ink(),
         control_rounding,
     );
@@ -253,14 +253,14 @@ fn widget_visuals(
     weak_bg_fill: egui::Color32,
     bg_stroke: egui::Stroke,
     ink: egui::Color32,
-    rounding: egui::CornerRadius,
+    corner_radius: egui::CornerRadius,
 ) -> egui::style::WidgetVisuals {
     egui::style::WidgetVisuals {
         bg_fill,
         weak_bg_fill,
         bg_stroke,
-        rounding,
-        fg_stroke: egui::Stroke::new(1.0, ink),
+        corner_radius,
+        fg_stroke: egui::Stroke::new(1.0_f32, ink),
         expansion: 0.0,
     }
 }
