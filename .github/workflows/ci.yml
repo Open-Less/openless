@@ -188,6 +188,43 @@ jobs:
       - name: Test remote input TLS identity and Unix key permissions
         run: cargo test --locked --manifest-path src-tauri/backend-tests/Cargo.toml --test remote_tls
 
+  linux-egui:
+    name: Linux egui host
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: openless-all/app
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: 'openless-all/app -> target'
+
+      - name: Install egui host build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libasound2-dev \
+            libdbus-1-dev \
+            libssl-dev \
+            libwayland-dev \
+            libx11-dev \
+            libxkbcommon-dev \
+            pkg-config
+
+      # 与 release-linux-egui.yml 同款命令：lib + bin + UI headless 渲染测试。
+      # egui UI 只在 Linux 目标编译，这是 2.0 界面改动的编译门禁。
+      - name: Test linux-egui (lib + bin + ui)
+        run: cargo test --locked -p openless-linux-egui --all-targets
+
+      - name: Check linux-egui
+        run: cargo check --locked -p openless-linux-egui --all-targets
+
   cross-platform:
     name: ${{ matrix.label }} checks
     strategy:

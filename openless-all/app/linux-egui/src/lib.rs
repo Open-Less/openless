@@ -9,6 +9,7 @@ mod backend;
 mod capabilities;
 mod coding_agent;
 mod credentials;
+pub mod design_tokens;
 mod fcitx5;
 mod host_actions;
 mod hotkeys;
@@ -20,6 +21,11 @@ mod runtime;
 mod selection;
 mod settings;
 mod single_instance;
+
+/// 2.0 界面承接层（主题 / 组件 / 外观偏好）。egui 是 Linux 目标依赖，
+/// 因此整棵子树只在 Linux 编译；颜色令牌本体在 [`design_tokens`]（跨平台）。
+#[cfg(target_os = "linux")]
+pub mod ui;
 
 pub use audio::LinuxCpalRecorder;
 pub use backend::{LinuxBackendBuilder, LinuxBackendRuntime};
