@@ -46,6 +46,7 @@ const HEADER_CSS: &str = "text/css; charset=utf-8";
 /// 事件订阅、进行中的远程会话全部悬挂。
 const KEEPALIVE_PING_SECS: u64 = 30;
 const IDLE_TIMEOUT_SECS: u64 = 90;
+const AUDIO_IDLE_TIMEOUT_SECS: u64 = 15;
 
 // ───────────────────────── 对外类型 ─────────────────────────
 
@@ -450,7 +451,7 @@ fn backend_event_to_phone(
 }
 
 // stop 包含 ASR/润色/插入，可能持续数十秒。让 socket select 持有并轮询 future，
-// 期间仍能收 cancel/Close/关停信号；断开时先撤销 Core lease，再丢弃此 future。
+// 期间仍能收 cancel/Close/关停信号；意外断线继续收尾，撤销权限时才取消。
 type PendingRemoteStop =
     futures_util::future::BoxFuture<'static, Result<(), openless_core::BackendError>>;
 
@@ -514,12 +515,18 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<WsState>, peer_ip: IpAddr) 
     let mut last_rx = Instant::now();
     let mut remote_session_id = None;
     let mut pending_stop: Option<PendingRemoteStop> = None;
+    let mut preserve_audio = true;
+    let mut receiving_audio = false;
+    let mut last_audio = Instant::now();
+    let mut audio_watchdog = tokio::time::interval(Duration::from_secs(2));
+    audio_watchdog.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     'connection: loop {
         tokio::select! {
             incoming = socket.recv() => {
                 last_rx = Instant::now();
                 match incoming {
                     Some(Ok(Message::Binary(pcm))) => {
+                        if !receiving_audio { continue; }
                         match parse_audio_frame(&pcm) {
                             Ok((session_id, sequence, pcm)) => {
                                 if let Err(error) = state
@@ -530,6 +537,8 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<WsState>, peer_ip: IpAddr) 
                                     .await
                                 {
                                     log::warn!("[remote-input] PCM frame rejected: {error}");
+                                } else {
+                                    last_audio = Instant::now();
                                 }
                             }
                             Err(error) => {
@@ -538,6 +547,7 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<WsState>, peer_ip: IpAddr) 
                         }
                     }
                     Some(Ok(Message::Text(txt))) => {
+                        let previous_session = remote_session_id;
                         if !handle_control(
                             &txt,
                             &state,
@@ -550,6 +560,11 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<WsState>, peer_ip: IpAddr) 
                         {
                             break;
                         }
+                        if remote_session_id != previous_session {
+                            last_audio = Instant::now();
+                            receiving_audio = remote_session_id.is_some();
+                        }
+                        if pending_stop.is_some() { receiving_audio = false; }
                     }
                     Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
                     _ => {}
@@ -561,7 +576,7 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<WsState>, peer_ip: IpAddr) 
                     Err(openless_core::EventRecvError::Lagged(_)) => {
                         state.backend.replay_events_after(last_event_sequence).events
                     }
-                    Err(openless_core::EventRecvError::Closed) => break,
+                    Err(openless_core::EventRecvError::Closed) => { preserve_audio = false; break; },
                     Err(openless_core::EventRecvError::Empty) => continue,
                 };
                 for event in received {
@@ -594,10 +609,19 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<WsState>, peer_ip: IpAddr) 
                     break;
                 }
             }
+            _ = audio_watchdog.tick(), if receiving_audio && pending_stop.is_none() && remote_session_id.is_some() => {
+                // 浏览器可能只暂停麦克风而仍自动回复 Pong，不能仅靠 TCP 探活。
+                if last_audio.elapsed() >= Duration::from_secs(AUDIO_IDLE_TIMEOUT_SECS) {
+                    receiving_audio = false;
+                    pending_stop = Some(state.backend.services().remote_input
+                        .stop_stream(connection_id, remote_session_id.unwrap()));
+                }
+            }
             changed = conn_shutdown_rx.changed() => {
                 // 服务关停（用户关闭远程输入 / 重置 PIN / 改端口触发重启）：
                 // 主动断开存量连接，撤销已配对手机的会话与落字能力。
                 if changed.is_err() || *conn_shutdown_rx.borrow() {
+                    preserve_audio = false;
                     log::info!("[remote-input] 服务关停，断开存量手机连接");
                     break;
                 }
@@ -605,8 +629,27 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<WsState>, peer_ip: IpAddr) 
         }
     }
 
-    // 4) 收尾：断连即取消未完成的远程会话，避免 ASR 句柄悬挂。
+    // 4) 断线只结束采集；识别和历史持久化继续，不依赖手机保持连接。
     log::info!("[remote-input] WS 连接已关闭");
+    drop(socket);
+    if preserve_audio && !*conn_shutdown_rx.borrow() {
+        let finishing = openless_core::finish_remote_input_connection(
+            state.backend.services().remote_input.as_ref(),
+            connection_id,
+            remote_session_id,
+            pending_stop.take(),
+        );
+        tokio::pin!(finishing);
+        tokio::select! {
+            result = &mut finishing => {
+                if let Err(error) = result { log::warn!("[remote-input] 断线录音收尾：{error}"); }
+            }
+            _ = conn_shutdown_rx.changed() => {
+                let _ = state.backend.services().remote_input.disconnect(connection_id).await;
+            }
+        }
+        return;
+    }
     let _ = state
         .backend
         .services()
@@ -634,7 +677,9 @@ async fn handle_control(
     )
     .await
     {
-        let _ = socket.send(send_json(&reply)).await;
+        if socket.send(send_json(&reply)).await.is_err() {
+            return false;
+        }
     }
     true
 }
@@ -659,6 +704,7 @@ async fn apply_remote_control(
                     return Some(serde_json::json!({
                         "type": "started",
                         "sessionId": session_id.to_string(),
+                        "recoveryKey": remote_input.recovery_key(connection_id, session_id).ok().map(|key| key.into_exposed()),
                     }));
                 }
                 Err(error) => {
@@ -687,6 +733,31 @@ async fn apply_remote_control(
             // 结果事件可能先于 Core stop 的最后几步清理到达。此时 owner 已释放，
             // 不能因为迟到的 cancel 把尚未返回的 stop future 丢掉，否则会遗留
             // Core finishing lease；让 select 正常把它轮询至完成即可。
+        }
+        "recover" => {
+            let session_id = v
+                .get("sessionId")
+                .and_then(|value| value.as_str())
+                .and_then(|value| uuid::Uuid::parse_str(value).ok())
+                .map(openless_core::SessionId::from_uuid);
+            let recovery = match session_id {
+                Some(session_id) => remote_input
+                    .recover_stream(
+                        connection_id,
+                        session_id,
+                        openless_core::SecretValue::new(
+                            v.get("recoveryKey")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or_default(),
+                        ),
+                    )
+                    .await
+                    .unwrap_or(openless_core::RemoteInputRecovery::Unavailable),
+                None => openless_core::RemoteInputRecovery::Unavailable,
+            };
+            return Some(
+                serde_json::json!({"type":"recovery", "sessionId":session_id, "recovery":recovery}),
+            );
         }
         "set_insert" => {
             // 手机端「电脑落字」开关：value=true 表示要落字。no_insert = !value。

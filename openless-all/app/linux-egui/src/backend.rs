@@ -879,6 +879,12 @@ impl LinuxBackendBuilder {
         let recorder = self
             .recorder
             .unwrap_or_else(|| Arc::new(LinuxCpalRecorder::new(None)) as Arc<dyn AudioRecorder>);
+        let recorder: Arc<dyn AudioRecorder> = Arc::new(openless_core::AudioRecorderRouter::new(
+            recorder,
+            openless_core::ExternalAudioRecorder::with_recordings_directory(
+                self.config.data_dir.join("recordings"),
+            ),
+        ));
         let text_inserter = self
             .text_inserter
             .unwrap_or_else(|| Arc::new(Fcitx5TextInserter::new(true)) as Arc<dyn TextInserter>);

@@ -298,8 +298,9 @@ pub use providers::{
 };
 pub use qa_service::QaService;
 pub use remote_input_service::{
-    constant_time_eq, validate_pairing_pin, RemoteFrameCodec, RemoteInputService,
-    RemoteStreamSequence, REMOTE_INPUT_MAX_PCM_FRAME_BYTES, REMOTE_INPUT_PAIRING_PIN_LEN,
+    constant_time_eq, finish_remote_input_connection, validate_pairing_pin, RemoteFrameCodec,
+    RemoteInputService, RemoteStreamSequence, REMOTE_INPUT_MAX_PCM_FRAME_BYTES,
+    REMOTE_INPUT_PAIRING_PIN_LEN,
 };
 pub use selection_voice_intent::SelectionVoiceIntent;
 pub use settings::*;

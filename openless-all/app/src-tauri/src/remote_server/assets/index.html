@@ -86,6 +86,13 @@
 
       <p class="rec-tip" id="rec-tip">点击大按钮开始录音，再次点击结束并识别。</p>
 
+      <label class="insert-toggle">
+        <span class="insert-toggle-text" data-i18n="wakeLockLabel">录音时保持亮屏</span>
+        <input type="checkbox" id="wake-lock-switch" class="insert-switch" aria-describedby="wake-lock-hint" checked />
+        <span class="insert-track" aria-hidden="true"></span>
+      </label>
+      <p class="wake-lock-hint" id="wake-lock-hint" aria-live="polite"></p>
+
       <!-- 电脑落字开关：关掉则这次只把文字回传到手机,不落到电脑光标 -->
       <label class="insert-toggle">
         <span class="insert-toggle-text" data-i18n="insertLabel">电脑落字</span>

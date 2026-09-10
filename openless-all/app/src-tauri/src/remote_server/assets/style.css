@@ -585,6 +585,18 @@ body {
 .insert-switch:checked ~ .insert-track::after {
   transform: translateX(18px);
 }
+.insert-switch:focus-visible ~ .insert-track {
+  outline: 2px solid var(--blue);
+  outline-offset: 3px;
+}
+.wake-lock-hint {
+  margin: 7px auto 0;
+  max-width: 340px;
+  color: var(--ink-3);
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: center;
+}
 
 /* ===== 断线屏 ===== */
 .offline-icon { font-size: 48px; }

@@ -1,12 +1,12 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
 use futures_util::future::BoxFuture;
 
 use crate::credentials::SecretValue;
 use crate::domains::{
-    RemoteAuthResult, RemoteInputApi, RemoteInputConfig, RemoteInputRuntimeAdapter,
-    RemoteInputServerConfig, RemoteInputStatus,
+    RemoteAuthResult, RemoteInputApi, RemoteInputConfig, RemoteInputRecovery,
+    RemoteInputRuntimeAdapter, RemoteInputServerConfig, RemoteInputStatus,
 };
 use crate::errors::{BackendError, BackendErrorCode};
 use crate::events::{
@@ -24,6 +24,27 @@ const PIN_LOCK_SECS: u64 = 60;
 const PIN_FAILS_MAX_ENTRIES: usize = 256;
 const PIN_GLOBAL_MAX_FAILS: u32 = 20;
 const PIN_GLOBAL_WINDOW_SECS: u64 = 60;
+const RECOVERY_SESSION_CAP: usize = 64;
+const RECOVERY_TTL: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+
+/// 意外断线后由宿主继续轮询原来的 stop，避免丢弃识别和历史记录收尾。
+/// 主动取消及撤销配对权限仍直接调用 disconnect，不经过此路径。
+pub async fn finish_remote_input_connection(
+    remote: &dyn RemoteInputApi,
+    connection_id: SessionId,
+    session_id: Option<SessionId>,
+    pending_stop: Option<BoxFuture<'static, Result<(), BackendError>>>,
+) -> Result<(), BackendError> {
+    let result = match pending_stop {
+        Some(stopping) => stopping.await,
+        None => match session_id {
+            Some(session_id) => remote.stop_stream(connection_id, session_id).await,
+            None => Ok(()),
+        },
+    };
+    let cleanup = remote.disconnect(connection_id).await;
+    result.and(cleanup)
+}
 
 pub fn validate_pairing_pin(pin: &str) -> bool {
     pin.len() == REMOTE_INPUT_PAIRING_PIN_LEN && pin.bytes().all(|byte| byte.is_ascii_digit())
@@ -121,6 +142,8 @@ struct RemoteInputState {
     locale: String,
     pairing_pin: Option<SecretValue>,
     connections: HashMap<SessionId, RemoteConnectionState>,
+    // 恢复凭据与会话 ID 分离，不能凭公开状态中的会话 ID 读取文字。
+    recoverable_sessions: VecDeque<(SessionId, SecretValue, std::time::Instant)>,
     pin_fails: HashMap<String, (u32, Option<std::time::Instant>)>,
     global_pin_fails: (u32, std::time::Instant),
 }
@@ -168,6 +191,7 @@ impl RemoteInputService {
                 locale,
                 pairing_pin: None,
                 connections: HashMap::new(),
+                recoverable_sessions: VecDeque::new(),
                 pin_fails: HashMap::new(),
                 global_pin_fails: (0, std::time::Instant::now()),
             })),
@@ -217,6 +241,7 @@ impl RemoteInputService {
                 .filter_map(|connection| connection.stream.take().map(|stream| stream.session_id))
                 .collect::<Vec<_>>();
             state.connections.clear();
+            state.recoverable_sessions.clear();
             state.running = false;
             state.starting = false;
             state.urls.clear();
@@ -484,6 +509,18 @@ impl RemoteInputService {
                         sequence: RemoteStreamSequence::new(session_id),
                         finishing: false,
                     });
+                    let now = std::time::Instant::now();
+                    state
+                        .recoverable_sessions
+                        .retain(|(_, _, created)| now.duration_since(*created) < RECOVERY_TTL);
+                    state.recoverable_sessions.push_back((
+                        session_id,
+                        SecretValue::new(uuid::Uuid::new_v4().to_string()),
+                        now,
+                    ));
+                    while state.recoverable_sessions.len() > RECOVERY_SESSION_CAP {
+                        state.recoverable_sessions.pop_front();
+                    }
                     true
                 }
                 _ => false,
@@ -538,6 +575,9 @@ impl RemoteInputService {
             let stream = ensure_remote_stream_mut(&mut state, connection_id, session_id)?;
             if cancel {
                 state.connections.get_mut(&connection_id).unwrap().stream = None;
+                state
+                    .recoverable_sessions
+                    .retain(|(id, _, _)| *id != session_id);
             } else {
                 if stream.finishing {
                     return Err(BackendError::new(
@@ -664,6 +704,108 @@ impl RemoteInputApi for RemoteInputService {
     fn disconnect(&self, connection_id: SessionId) -> BoxFuture<'static, Result<(), BackendError>> {
         let service = self.clone();
         Box::pin(async move { service.disconnect_inner(connection_id).await })
+    }
+
+    fn recover_stream(
+        &self,
+        connection_id: SessionId,
+        session_id: SessionId,
+        recovery_key: SecretValue,
+    ) -> BoxFuture<'static, Result<RemoteInputRecovery, BackendError>> {
+        let service = self.clone();
+        Box::pin(async move {
+            let allowed = |state: &RemoteInputState| {
+                state.running
+                    && state.connections.contains_key(&connection_id)
+                    && state.recoverable_sessions.iter().any(|(id, key, created)| {
+                        *id == session_id
+                            && created.elapsed() < RECOVERY_TTL
+                            && constant_time_eq(
+                                key.expose_secret().as_bytes(),
+                                recovery_key.expose_secret().as_bytes(),
+                            )
+                    })
+            };
+            let was_pending = {
+                let state = service
+                    .state
+                    .lock()
+                    .expect("remote input state lock poisoned");
+                if !allowed(&state) {
+                    return Ok(RemoteInputRecovery::Unavailable);
+                }
+                state.connections.values().any(|connection| {
+                    connection
+                        .stream
+                        .as_ref()
+                        .is_some_and(|stream| stream.session_id == session_id)
+                })
+            };
+            let history = service.runtime.read_audio_history(session_id).await?;
+            let state = service
+                .state
+                .lock()
+                .expect("remote input state lock poisoned");
+            // 查询过程中取消、关闭服务或重置 PIN，必须立即撤销恢复权限。
+            if !allowed(&state) {
+                return Ok(RemoteInputRecovery::Unavailable);
+            }
+            if let Some(entry) = history {
+                let text = if entry.final_text.trim().is_empty() {
+                    entry.raw_transcript
+                } else {
+                    entry.final_text
+                };
+                return Ok(if text.trim().is_empty() {
+                    RemoteInputRecovery::Failed {
+                        has_audio_recording: entry.has_audio_recording == Some(true),
+                    }
+                } else {
+                    RemoteInputRecovery::Completed { text }
+                });
+            }
+            Ok(
+                if was_pending
+                    || state.connections.values().any(|connection| {
+                        connection
+                            .stream
+                            .as_ref()
+                            .is_some_and(|stream| stream.session_id == session_id)
+                    })
+                {
+                    RemoteInputRecovery::Pending
+                } else {
+                    RemoteInputRecovery::Unavailable
+                },
+            )
+        })
+    }
+
+    fn recovery_key(
+        &self,
+        connection_id: SessionId,
+        session_id: SessionId,
+    ) -> Result<SecretValue, BackendError> {
+        let state = self.state.lock().expect("remote input state lock poisoned");
+        let owns_stream = state.running
+            && state
+                .connections
+                .get(&connection_id)
+                .and_then(|connection| connection.stream.as_ref())
+                .is_some_and(|stream| stream.session_id == session_id);
+        if owns_stream {
+            if let Some((_, key, _)) = state
+                .recoverable_sessions
+                .iter()
+                .find(|(id, _, _)| *id == session_id)
+            {
+                return Ok(key.clone());
+            }
+        }
+        Err(BackendError::new(
+            BackendErrorCode::Cancelled,
+            "remote recovery is unavailable",
+        ))
     }
 
     fn start_stream(

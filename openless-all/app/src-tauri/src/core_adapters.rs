@@ -193,16 +193,27 @@ pub(crate) fn backend_dependencies(
         app: Arc::clone(&app),
         backend: Arc::clone(&backend),
     });
-    let recorder =
-        AudioRecorderRouter::new(Arc::clone(&host_recorder), ExternalAudioRecorder::default());
+    let external = match crate::persistence::data_dir() {
+        Ok(directory) => {
+            ExternalAudioRecorder::with_recordings_directory(directory.join("recordings"))
+        }
+        Err(error) => {
+            log::warn!("[remote-input] 无法定位录音目录：{error}");
+            ExternalAudioRecorder::default()
+        }
+    };
+    let recorder: Arc<dyn AudioRecorder> = Arc::new(AudioRecorderRouter::new(
+        Arc::clone(&host_recorder),
+        external,
+    ));
     let traditional = Arc::new(openless_core::PipelineDictationEngine::new(
-        Arc::new(recorder),
+        Arc::clone(&recorder),
         transcription,
         Arc::clone(&polisher),
     ));
     let dictation = Arc::new(openless_core::DictationEngineRouter::new(traditional));
     let production_omni: Arc<dyn DictationEngine> = Arc::new(
-        openless_core::SharedOmniDictationEngine::new(Arc::clone(&credential_store), host_recorder),
+        openless_core::SharedOmniDictationEngine::new(Arc::clone(&credential_store), recorder),
     );
     for provider_type in openless_core::SHARED_OMNI_PROVIDER_TYPES {
         dictation
@@ -1352,6 +1363,19 @@ impl openless_core::RemoteInputRuntimeAdapter for TauriRemoteInputRuntimeAdapter
     ) -> BoxFuture<'static, Result<(), BackendError>> {
         let backend = self.backend();
         Box::pin(async move { backend?.cancel_dictation(Some(session_id)).await })
+    }
+
+    fn read_audio_history(
+        &self,
+        session_id: SessionId,
+    ) -> BoxFuture<'static, Result<Option<openless_core::DictationSession>, BackendError>> {
+        let backend = self.backend();
+        Box::pin(async move {
+            Ok(backend?
+                .list_history()?
+                .into_iter()
+                .find(|entry| entry.id == session_id.to_string()))
+        })
     }
 }
 

@@ -5,22 +5,30 @@
 //! little-endian PCM contract and routes it to the active pipeline session.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use futures_util::future::BoxFuture;
 
 use crate::dictation_context::{DictationAudioSource, DictationContext};
 use crate::errors::{BackendError, BackendErrorCode};
-use crate::ports::{ActiveRecording, AudioConsumer, AudioRecorder, RecordingProgressSink};
+use crate::ports::{
+    ActiveRecording, AudioConsumer, AudioRecorder, RecordingArchive, RecordingProgressSink,
+};
 use crate::types::SessionId;
+
+mod archive;
+use archive::ExternalRecordingArchive;
 
 #[derive(Clone, Default)]
 pub struct ExternalAudioRecorder {
     sessions: Arc<Mutex<HashMap<SessionId, Arc<ExternalRecordingSession>>>>,
+    recordings_dir: Option<PathBuf>,
 }
 
 struct ExternalRecordingSession {
     state: Mutex<ExternalRecordingState>,
+    archive: Option<Arc<ExternalRecordingArchive>>,
 }
 
 struct ExternalRecordingState {
@@ -37,6 +45,14 @@ struct ExternalActiveRecording {
 }
 
 impl ExternalAudioRecorder {
+    /// 与电脑历史记录共用 WAV 目录及保留策略，失败的远程录音也可重新转录。
+    pub fn with_recordings_directory(directory: PathBuf) -> Self {
+        Self {
+            recordings_dir: Some(directory),
+            ..Self::default()
+        }
+    }
+
     fn release(
         &self,
         session_id: SessionId,
@@ -60,6 +76,9 @@ impl ExternalAudioRecorder {
             .lock()
             .expect("external audio state lock poisoned")
             .active = false;
+        if let Some(archive) = &expected.archive {
+            archive.finish();
+        }
         sessions.remove(&session_id);
         Ok(())
     }
@@ -81,6 +100,29 @@ impl AudioRecorder for ExternalAudioRecorder {
                 ))
             });
         }
+        // 在归档创建/清理之前检查重复会话，避免误删仍在录音的文件。
+        let mut sessions = self
+            .sessions
+            .lock()
+            .expect("external audio session lock poisoned");
+        if sessions.contains_key(&session_id) {
+            return Box::pin(async {
+                Err(BackendError::new(
+                    BackendErrorCode::Busy,
+                    "external audio session already exists",
+                ))
+            });
+        }
+        let archive = self
+            .recordings_dir
+            .as_ref()
+            .filter(|_| context.recording.archive_enabled)
+            .and_then(|directory| {
+                ExternalRecordingArchive::create(directory, session_id, &context.recording)
+                    .map(Arc::new)
+                    .map_err(|error| log::warn!("[remote-input] 录音归档不可用：{error}"))
+                    .ok()
+            });
         let session = Arc::new(ExternalRecordingSession {
             state: Mutex::new(ExternalRecordingState {
                 active: true,
@@ -88,22 +130,10 @@ impl AudioRecorder for ExternalAudioRecorder {
                 consumer,
                 progress,
             }),
+            archive,
         });
-        {
-            let mut sessions = self
-                .sessions
-                .lock()
-                .expect("external audio session lock poisoned");
-            if sessions.contains_key(&session_id) {
-                return Box::pin(async {
-                    Err(BackendError::new(
-                        BackendErrorCode::Busy,
-                        "external audio session already exists",
-                    ))
-                });
-            }
-            sessions.insert(session_id, Arc::clone(&session));
-        }
+        sessions.insert(session_id, Arc::clone(&session));
+        drop(sessions);
         let recording = ExternalActiveRecording {
             recorder: self.clone(),
             session_id,
@@ -141,6 +171,9 @@ impl AudioRecorder for ExternalAudioRecorder {
                 "external audio session is not active",
             ));
         }
+        if let Some(archive) = &session.archive {
+            archive.append(pcm);
+        }
         state.consumer.consume_pcm_chunk(pcm);
         state.bytes_received = state.bytes_received.saturating_add(pcm.len() as u64);
         let elapsed_ms = state.bytes_received.saturating_mul(1_000) / 32_000;
@@ -151,6 +184,13 @@ impl AudioRecorder for ExternalAudioRecorder {
 }
 
 impl ActiveRecording for ExternalActiveRecording {
+    fn archive(&self) -> Option<Arc<dyn RecordingArchive>> {
+        self.session
+            .archive
+            .as_ref()
+            .map(|archive| Arc::clone(archive) as Arc<dyn RecordingArchive>)
+    }
+
     fn stop(self: Box<Self>) -> BoxFuture<'static, Result<(), BackendError>> {
         Box::pin(async move { self.recorder.release(self.session_id, &self.session) })
     }
@@ -251,6 +291,125 @@ mod tests {
                 ))
             })
         }
+    }
+
+    #[tokio::test]
+    async fn remote_archive_keeps_two_minutes_of_pcm_and_survives_recording_stop() {
+        let directory =
+            std::env::temp_dir().join(format!("openless-remote-archive-{}", uuid::Uuid::new_v4()));
+        let recorder = ExternalAudioRecorder::with_recordings_directory(directory.clone());
+        let id = SessionId::new();
+        let mut context = DictationContext::default();
+        context.audio_source = DictationAudioSource::External;
+        context.recording.archive_enabled = true;
+        let consumer = Arc::new(RecordingConsumer::default());
+        let recording = recorder
+            .start(
+                id,
+                Arc::new(context.clone()),
+                consumer.clone(),
+                Arc::new(RecordingProgress::default()),
+            )
+            .await
+            .unwrap();
+        let archive = recording.archive().unwrap();
+        assert!(!archive.is_available());
+        for second in 0..120 {
+            recorder.feed_pcm(id, &vec![second; 32_000]).unwrap();
+        }
+        let expected = consumer.0.lock().unwrap().clone();
+        let path = directory.join(format!("{id}.wav"));
+        let wav = std::fs::read(&path).unwrap();
+        assert_eq!(&wav[44..], expected);
+        assert_eq!(
+            u32::from_le_bytes(wav[40..44].try_into().unwrap()) as usize,
+            120 * 32_000
+        );
+        assert!(recorder
+            .start(
+                id,
+                Arc::new(context),
+                consumer,
+                Arc::new(RecordingProgress::default())
+            )
+            .await
+            .is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), wav);
+        recording.stop().await.unwrap();
+        assert!(archive.is_available());
+        assert_eq!(archive.read_pcm().await.unwrap(), expected);
+        archive.discard().await.unwrap();
+        assert!(!archive.is_available());
+        assert!(!path.exists());
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[tokio::test]
+    async fn disabled_or_unavailable_archive_does_not_block_remote_capture() {
+        let directory = std::env::temp_dir().join(format!(
+            "openless-remote-no-archive-{}",
+            uuid::Uuid::new_v4()
+        ));
+        for enabled in [false, true] {
+            if enabled {
+                std::fs::write(&directory, b"not a directory").unwrap();
+            }
+            let recorder = ExternalAudioRecorder::with_recordings_directory(directory.clone());
+            let id = SessionId::new();
+            let mut context = DictationContext::default();
+            context.audio_source = DictationAudioSource::External;
+            context.recording.archive_enabled = enabled;
+            let consumer = Arc::new(RecordingConsumer::default());
+            let recording = recorder
+                .start(
+                    id,
+                    Arc::new(context),
+                    consumer.clone(),
+                    Arc::new(RecordingProgress::default()),
+                )
+                .await
+                .unwrap();
+            assert!(recording.archive().is_none());
+            recorder.feed_pcm(id, &[1, 0, 2, 0]).unwrap();
+            assert_eq!(*consumer.0.lock().unwrap(), vec![1, 0, 2, 0]);
+            recording.stop().await.unwrap();
+            if !enabled {
+                assert!(!directory.exists());
+            }
+        }
+        let _ = std::fs::remove_file(directory);
+    }
+
+    #[tokio::test]
+    async fn remote_archive_applies_the_existing_count_limit_without_deleting_other_files() {
+        let directory = std::env::temp_dir().join(format!(
+            "openless-remote-retention-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(directory.join("user.wav"), b"keep").unwrap();
+        let recorder = ExternalAudioRecorder::with_recordings_directory(directory.clone());
+        let mut context = DictationContext::default();
+        context.audio_source = DictationAudioSource::External;
+        context.recording.archive_enabled = true;
+        context.recording.max_entries = Some(2);
+        for _ in 0..4 {
+            let id = SessionId::new();
+            let recording = recorder
+                .start(
+                    id,
+                    Arc::new(context.clone()),
+                    Arc::new(RecordingConsumer::default()),
+                    Arc::new(RecordingProgress::default()),
+                )
+                .await
+                .unwrap();
+            recorder.feed_pcm(id, &[1, 0]).unwrap();
+            recording.stop().await.unwrap();
+        }
+        assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 3);
+        assert_eq!(std::fs::read(directory.join("user.wav")).unwrap(), b"keep");
+        let _ = std::fs::remove_dir_all(directory);
     }
 
     #[tokio::test]

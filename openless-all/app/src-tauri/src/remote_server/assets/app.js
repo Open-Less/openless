@@ -14,6 +14,16 @@
   // ============================================================
   var I18N = {
     'zh-CN': {
+      wakeLockLabel: "录音时保持亮屏",
+      wakeLockHint: "息屏会结束本段录音，电脑继续处理已收到的部分。",
+      wakeLockActive: "屏幕保持亮起，录音结束后允许自动息屏。",
+      wakeLockUnavailable: "浏览器或系统未允许保持亮屏；息屏后电脑会处理已收到的录音。",
+      interrupted: "录音已中断，电脑继续识别已收到的部分…",
+      offlineRecording: "连接已断开，电脑会继续处理已收到的录音。重连后可查看结果。",
+      recovering: "电脑正在处理上次录音…",
+      recovered: "已找回上次识别结果",
+      recoveryRetry: "识别未完成，录音已保存在电脑历史记录中，可重新转录。",
+      recoveryUnavailable: "暂未找到结果，请到电脑的历史记录中查看。",
       title: 'OpenLess 远程输入',
       brandTitle: 'OpenLess 远程输入',
       brandSub: '在手机上录音，实时输入到电脑',
@@ -69,6 +79,16 @@
       copied: '已复制 ✓',
     },
     'zh-TW': {
+      wakeLockLabel: "錄音時保持螢幕開啟",
+      wakeLockHint: "螢幕關閉會結束本段錄音，電腦繼續處理已收到的部分。",
+      wakeLockActive: "螢幕保持開啟，錄音結束後允許自動關閉螢幕。",
+      wakeLockUnavailable: "瀏覽器或系統未允許保持螢幕開啟；電腦會處理已收到的錄音。",
+      interrupted: "錄音已中斷，電腦繼續辨識已收到的部分…",
+      offlineRecording: "連線已中斷，電腦會繼續處理已收到的錄音。重新連線後可查看結果。",
+      recovering: "電腦正在處理上次錄音…",
+      recovered: "已找回上次辨識結果",
+      recoveryRetry: "辨識未完成，錄音已保存在電腦歷史記錄中，可重新轉錄。",
+      recoveryUnavailable: "暫未找到結果，請到電腦的歷史記錄中查看。",
       title: 'OpenLess 遠端輸入',
       brandTitle: 'OpenLess 遠端輸入',
       brandSub: '在手機上錄音，即時輸入到電腦',
@@ -124,6 +144,16 @@
       copied: '已複製 ✓',
     },
     en: {
+      wakeLockLabel: "Keep screen awake while recording",
+      wakeLockHint: "Screen lock ends this recording. The computer processes the audio already received.",
+      wakeLockActive: "Screen stays awake until recording ends.",
+      wakeLockUnavailable: "The browser or system did not allow screen wake lock. Received audio will still be processed.",
+      interrupted: "Recording interrupted. The computer is processing the audio received…",
+      offlineRecording: "Disconnected. The computer continues processing received audio. Reconnect to see the result.",
+      recovering: "The computer is processing your last recording…",
+      recovered: "Last transcription recovered",
+      recoveryRetry: "Transcription failed. The recording is saved in computer history and can be retried.",
+      recoveryUnavailable: "Result unavailable. Please check history on the computer.",
       title: 'OpenLess Remote Input',
       brandTitle: 'OpenLess Remote Input',
       brandSub: 'Record on your phone, type to your computer in real time',
@@ -179,6 +209,16 @@
       copied: 'Copied ✓',
     },
     ja: {
+      wakeLockLabel: "録音中は画面をオンにする",
+      wakeLockHint: "画面をロックすると録音を終了し、受信済みの音声をパソコンで処理します。",
+      wakeLockActive: "録音が終わるまで画面をオンに保ちます。",
+      wakeLockUnavailable: "ブラウザーまたはシステムが画面の維持を許可しませんでした。受信済みの音声は処理されます。",
+      interrupted: "録音が中断されました。受信済みの音声をパソコンで処理しています…",
+      offlineRecording: "接続が切れました。受信済みの音声の処理は続きます。再接続すると結果を確認できます。",
+      recovering: "前回の録音をパソコンで処理しています…",
+      recovered: "前回の文字起こし結果を復元しました",
+      recoveryRetry: "文字起こしが完了しませんでした。録音はパソコンの履歴に保存され、再試行できます。",
+      recoveryUnavailable: "結果が見つかりません。パソコンの履歴を確認してください。",
       title: 'OpenLess リモート入力',
       brandTitle: 'OpenLess リモート入力',
       brandSub: 'スマホで録音し、リアルタイムでパソコンに入力',
@@ -234,6 +274,16 @@
       copied: 'コピー済み ✓',
     },
     ko: {
+      wakeLockLabel: "녹음 중 화면 켜짐 유지",
+      wakeLockHint: "화면을 잠그면 녹음이 끝나고 컴퓨터가 이미 받은 오디오를 처리합니다.",
+      wakeLockActive: "녹음이 끝날 때까지 화면을 켜진 상태로 유지합니다.",
+      wakeLockUnavailable: "브라우저 또는 시스템이 화면 켜짐 유지를 허용하지 않았습니다. 수신한 오디오는 계속 처리됩니다.",
+      interrupted: "녹음이 중단되었습니다. 컴퓨터가 받은 오디오를 처리하고 있습니다…",
+      offlineRecording: "연결이 끊겼습니다. 받은 오디오는 계속 처리됩니다. 다시 연결하면 결과를 볼 수 있습니다.",
+      recovering: "컴퓨터가 마지막 녹음을 처리하고 있습니다…",
+      recovered: "마지막 음성 인식 결과를 복구했습니다",
+      recoveryRetry: "음성 인식을 완료하지 못했습니다. 녹음은 컴퓨터 기록에 저장되며 다시 시도할 수 있습니다.",
+      recoveryUnavailable: "결과를 찾을 수 없습니다. 컴퓨터의 기록을 확인해 주세요.",
       title: 'OpenLess 원격 입력',
       brandTitle: 'OpenLess 원격 입력',
       brandSub: '휴대폰으로 녹음하여 실시간으로 컴퓨터에 입력',
@@ -329,6 +379,8 @@
   var MODE_KEY = 'ol_remote_mode';  // localStorage 键:录音方式
   var PIN_KEY = 'ol_remote_pin';    // localStorage 键:上次成功的配对码
   var INSERT_KEY = 'ol_remote_insert'; // localStorage 键:电脑落字开关(默认开)
+  var WAKE_LOCK_KEY = 'ol_remote_wake_lock';
+  var RECOVERY_KEY = 'ol_remote_recovery_session';
   var MIC_PREP_TIMEOUT_MS = 10000;  // 麦克风准备超时:超过则判失败让用户重试,避免无限卡"准备中"
   var PCM_QUEUE_MAX_BYTES = 128 * 1024;
 
@@ -355,6 +407,8 @@
   var recTip = $('rec-tip');
   var modeSwitch = $('mode-switch');
   var insertSwitch = $('insert-switch');
+  var wakeLockSwitch = $('wake-lock-switch');
+  var wakeLockHint = $('wake-lock-hint');
 
   var btnReconnect = $('btn-reconnect');
   var offlineReason = $('offline-reason');
@@ -373,6 +427,14 @@
   var finishAfterStarted = '';      // ACK 前松手/取消：'stop' | 'cancel' | ''
   var pendingPcm = [];
   var pendingPcmBytes = 0;
+  var awaitingResult = false;
+  var savedRecovery = readRecoverySession();
+  var recoverySessionId = savedRecovery.sessionId;
+  var recoveryKey = savedRecovery.key;
+  var recoveryTimer = null;
+  var wakeLock = null;
+  var wakeLockGeneration = 0;
+  var wakeLockPending = null;
 
   // 音频相关
   var audioCtx = null;
@@ -403,6 +465,114 @@
   }
   function clearPin() {
     try { localStorage.removeItem(PIN_KEY); } catch (e) {}
+    saveRecoverySession('');
+  }
+
+  // 恢复凭据仅用于本次随机会话；不请求电脑历史记录列表。
+  function readRecoverySession() {
+    try {
+      var saved = JSON.parse(localStorage.getItem(RECOVERY_KEY) || 'null');
+      if (saved && validSessionId(saved.sessionId) && validSessionId(saved.key)) return saved;
+    } catch (e) {}
+    return { sessionId: '', key: '' };
+  }
+  function validSessionId(id) {
+    return typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+  }
+  function saveRecoverySession(id, key) {
+    recoverySessionId = validSessionId(id) && validSessionId(key) ? id : '';
+    recoveryKey = recoverySessionId ? key : '';
+    try {
+      if (recoverySessionId) localStorage.setItem(RECOVERY_KEY, JSON.stringify({ sessionId: recoverySessionId, key: recoveryKey }));
+      else localStorage.removeItem(RECOVERY_KEY);
+    } catch (e) {}
+  }
+  function clearRecoveryTimer() {
+    if (recoveryTimer) { clearTimeout(recoveryTimer); recoveryTimer = null; }
+  }
+  function requestRecovery() {
+    clearRecoveryTimer();
+    if (!authed || document.hidden || recording || startSent || !recoverySessionId) return;
+    wsSendJSON({ type: 'recover', sessionId: recoverySessionId, recoveryKey: recoveryKey });
+    // 唤醒后的旧连接可能仍显示 OPEN，却再也收不到数据；超时重新认证。
+    recoveryTimer = setTimeout(function () {
+      recoveryTimer = null;
+      if (!recording && authed && !document.hidden) {
+        var pin = readPin();
+        if (pin) connect(pin);
+      }
+    }, 8000);
+  }
+  function handleRecovery(msg) {
+    if (msg.sessionId !== recoverySessionId || recording || startSent) return;
+    clearRecoveryTimer();
+    clearWorkTimeout();
+    var recovery = msg.recovery || {};
+    awaitingResult = recovery.kind === 'pending';
+    updateRecordBtnUI();
+    if (recovery.kind === 'pending') {
+      setStatus(L.recovering, 'work');
+      if (!document.hidden) recoveryTimer = setTimeout(requestRecovery, 1500);
+    } else if (recovery.kind === 'completed') {
+      showResult(recovery.text);
+      setStatus(L.recovered, 'ok');
+    } else if (recovery.kind === 'failed') {
+      setStatus(recovery.hasAudioRecording ? L.recoveryRetry : L.recoveryUnavailable, 'error');
+    } else {
+      saveRecoverySession('');
+      setStatus(L.recoveryUnavailable, 'error');
+    }
+  }
+
+  function shouldKeepAwake() {
+    return recording && !document.hidden && wakeLockSwitch && wakeLockSwitch.checked;
+  }
+  function releaseWakeLock() {
+    wakeLockGeneration++;
+    wakeLockPending = null;
+    var previous = wakeLock;
+    wakeLock = null;
+    if (previous) previous.release().catch(function () {});
+  }
+  function acquireWakeLock() {
+    if (!shouldKeepAwake() || wakeLock || wakeLockPending !== null) return;
+    if (!navigator.wakeLock || !navigator.wakeLock.request) {
+      if (wakeLockHint) wakeLockHint.textContent = L.wakeLockUnavailable;
+      return;
+    }
+    var generation = wakeLockGeneration;
+    wakeLockPending = generation;
+    navigator.wakeLock.request('screen').then(function (sentinel) {
+      if (wakeLockPending === generation) wakeLockPending = null;
+      if (generation !== wakeLockGeneration || !shouldKeepAwake()) {
+        sentinel.release().catch(function () {});
+        return;
+      }
+      wakeLock = sentinel;
+      if (wakeLockHint) wakeLockHint.textContent = L.wakeLockActive;
+      sentinel.addEventListener('release', function () {
+        if (wakeLock !== sentinel) return;
+        wakeLock = null;
+        if (shouldKeepAwake() && wakeLockHint) wakeLockHint.textContent = L.wakeLockUnavailable;
+      });
+    }).catch(function () {
+      if (wakeLockPending === generation) wakeLockPending = null;
+      if (generation === wakeLockGeneration && shouldKeepAwake() && wakeLockHint) {
+        wakeLockHint.textContent = L.wakeLockUnavailable;
+      }
+    });
+  }
+  function initWakeLockSwitch() {
+    if (!wakeLockSwitch) return;
+    try { wakeLockSwitch.checked = localStorage.getItem(WAKE_LOCK_KEY) !== '0'; }
+    catch (e) { wakeLockSwitch.checked = true; }
+    if (wakeLockHint) wakeLockHint.textContent = L.wakeLockHint;
+    wakeLockSwitch.addEventListener('change', function () {
+      try { localStorage.setItem(WAKE_LOCK_KEY, wakeLockSwitch.checked ? '1' : '0'); } catch (e) {}
+      if (wakeLockHint) wakeLockHint.textContent = L.wakeLockHint;
+      if (wakeLockSwitch.checked) acquireWakeLock();
+      else releaseWakeLock();
+    });
   }
 
   // ============================================================
@@ -548,7 +718,10 @@
       workTimer = null;
       if (!recording && authed) {
         if (startSent) failRecording('❌ ' + L.errGeneric, true);
+        else if (recoverySessionId) requestRecovery();
         else {
+          awaitingResult = false;
+          updateRecordBtnUI();
           setStatus('❌ ' + L.errGeneric, 'error');
           setLevel(0);
         }
@@ -594,6 +767,7 @@
     closeWS(); // 清理旧连接
     authed = false;
     busy = false;
+    awaitingResult = false;
 
     var url = 'wss://' + location.host + '/ws';
     try {
@@ -626,16 +800,18 @@
       clearConnectTimeout();
       clearReadyTimer();
       clearWorkTimeout();
+      clearRecoveryTimer();
       if (busyTimer) { clearTimeout(busyTimer); busyTimer = null; }
       var wasAuthed = authed;
       authed = false;
       recording = false;
+      awaitingResult = false;
       detachHoldEnd();
       resetRemoteStreamState();
       teardownAudio();
       if (wasAuthed) {
         // 已进入录音屏后断开 → 断线屏
-        offlineReason.textContent = L.offlineSub;
+        offlineReason.textContent = recoverySessionId ? L.offlineRecording : L.offlineSub;
         showScreen('offline');
       } else {
         // 未认证就关闭(握手被拒/证书不受信任/网络中断)。无论当前是否在配对屏都给出
@@ -652,8 +828,10 @@
     clearConnectTimeout();
     clearReadyTimer();
     clearWorkTimeout();
+    clearRecoveryTimer();
     if (busyTimer) { clearTimeout(busyTimer); busyTimer = null; }
     recording = false;
+    awaitingResult = false;
     detachHoldEnd();
     resetRemoteStreamState();
     teardownAudio();
@@ -675,6 +853,7 @@
           clearConnectTimeout();
           writePin(lastPin); // 配对成功 → 记住配对码,刷新后免重输
           enterRecScreen();
+          requestRecovery();
         } else {
           authed = false;
           clearPin(); // 配对码失效(错误/锁定)→ 清除,避免下次自动重连又失败
@@ -691,7 +870,11 @@
         break;
 
       case 'started':
-        handleStarted(msg.sessionId);
+        handleStarted(msg.sessionId, msg.recoveryKey);
+        break;
+
+      case 'recovery':
+        handleRecovery(msg);
         break;
 
       case 'level':
@@ -702,6 +885,7 @@
         clearWorkTimeout();
         busy = true;
         recording = false;
+        awaitingResult = false;
         resetRemoteStreamState();
         teardownAudioCapture(); // 停止采集但保留 ctx
         updateRecordBtnUI();
@@ -719,6 +903,9 @@
       case 'result':
         // 电脑落字完成后回传的最终文字,显示给手机用户看本次识别结果。
         showResult(msg.text);
+        awaitingResult = false;
+        clearRecoveryTimer();
+        updateRecordBtnUI();
         break;
     }
   }
@@ -735,6 +922,14 @@
         setStatus(stripLeadingIcon(L.statusRecording), 'work');
         break;
       case 'transcribing':
+        if (recording) {
+          recording = false;
+          detachHoldEnd();
+          resetRemoteStreamState();
+          teardownAudioCapture();
+        }
+        awaitingResult = true;
+        updateRecordBtnUI();
         setStatus(stripLeadingIcon(L.statusTranscribing), 'work');
         if (statusDots) statusDots.hidden = false; // 识别中:三点加载动效
         armWorkTimeout(); // 工作状态续上兜底超时,防止服务端中途无响应卡死
@@ -744,6 +939,8 @@
         armWorkTimeout(); // 同上
         break;
       case 'done':
+        awaitingResult = false;
+        updateRecordBtnUI();
         clearWorkTimeout(); // 正常收尾,解除兜底超时
         var n = (typeof msg.insertedChars === 'number') ? msg.insertedChars : 0;
         setStatus(stripLeadingIcon(fmt(L.statusDone, { n: n })), 'ok');
@@ -752,6 +949,8 @@
         scheduleReady();
         break;
       case 'error':
+        awaitingResult = false;
+        updateRecordBtnUI();
         clearWorkTimeout(); // 服务端已明确报错,解除兜底超时
         if (recording || startSent) failRecording('❌ ' + (msg.message || L.errGeneric), true);
         else {
@@ -888,7 +1087,8 @@
   // ============================================================
   function updateRecordBtnUI() {
     recordBtn.classList.toggle('recording', recording);
-    recordBtn.classList.toggle('busy', busy && !recording);
+    recordBtn.classList.toggle('busy', (busy || awaitingResult) && !recording);
+    recordBtn.disabled = (busy || awaitingResult) && !recording;
     if (recording) {
       recordLabel.textContent = (mode === 'hold') ? L.labelHoldRec : L.labelToggleRec;
     } else {
@@ -899,7 +1099,7 @@
   // toggle 模式:click 切换
   recordBtn.addEventListener('click', function () {
     if (mode !== 'toggle') return;
-    if (!authed || busy) return;
+    if (!authed || busy || awaitingResult) return;
     if (recording) stopRecording();
     else startRecording();
   });
@@ -928,7 +1128,7 @@
 
   recordBtn.addEventListener('pointerdown', function (e) {
     if (mode !== 'hold') return;
-    if (!authed || busy) return;
+    if (!authed || busy || awaitingResult) return;
     e.preventDefault();
     attachHoldEnd();
     if (!recording) startRecording();
@@ -956,13 +1156,15 @@
   }
 
   function startRecording() {
-    if (recording || startSent) return;
+    if (recording || startSent || awaitingResult) return;
     if (!ws || ws.readyState !== 1) {
       setStatus(L.connLost, 'error');
       return;
     }
     // 先乐观置态,保证 iOS 在手势同步栈内 resume()
     recording = true;
+    clearRecoveryTimer();
+    acquireWakeLock();
     resetRemoteStreamState();
     clearReadyTimer();  // 防止上一次 done 的回 ready 定时器迟到覆盖本次状态
     clearWorkTimeout(); // 新一次录音开始,作废上一轮的识别兜底超时
@@ -1008,6 +1210,8 @@
       setLevel(0);
       return;
     }
+    awaitingResult = true;
+    updateRecordBtnUI();
     if (remoteSessionId) {
       wsSendJSON({ type: 'stop' });
       resetRemoteStreamState();
@@ -1023,6 +1227,9 @@
 
   function cancelRecording() {
     detachHoldEnd();
+    awaitingResult = false;
+    clearRecoveryTimer();
+    saveRecoverySession('');
     if (!recording && !startSent) {
       teardownAudioCapture();
       resetRemoteStreamState();
@@ -1079,6 +1286,11 @@
         return Promise.reject(new Error('UNSUPPORTED:浏览器不支持录音,请升级或换浏览器'));
       }
       audioCtx = new AC();
+      audioCtx.onstatechange = function () {
+        if (audioCtx && recording && startSent && audioCtx.state !== 'running') {
+          interruptRecording();
+        }
+      };
     }
 
     // 注意:iOS Safari 来电/Siri 后 ctx 处于私有的 'interrupted' 状态,只判 'suspended'
@@ -1108,6 +1320,9 @@
             return null; // 交给下一步判空直接放弃
           }
           mediaStream = stream;
+          stream.getTracks().forEach(function (track) {
+            track.onended = function () { if (recording) interruptRecording(); };
+          });
           return stream;
         });
       })
@@ -1304,6 +1519,7 @@
   function failRecording(message, notifyBackend) {
     var waitingForAck = startSent && !remoteSessionId;
     recording = false;
+    awaitingResult = false;
     detachHoldEnd();
     teardownAudioCapture();
     if (notifyBackend && startSent) wsSendJSON({ type: 'cancel' });
@@ -1338,7 +1554,7 @@
     return true;
   }
 
-  function handleStarted(sessionId) {
+  function handleStarted(sessionId, key) {
     if (!startSent) {
       clearPendingPcm();
       return;
@@ -1356,9 +1572,10 @@
     }
 
     remoteSessionId = sessionId;
+    saveRecoverySession(sessionId, key);
     remoteSequence = 0;
     if (!flushPendingPcm()) {
-      failRecording(L.connLost, true);
+      interruptRecording();
       return;
     }
     if (finishAfterStarted === 'stop') {
@@ -1377,11 +1594,11 @@
   function sendAudio(buf) {
     if (!recording || !buf || !buf.byteLength) return;
     if (!ws || ws.readyState !== 1) {
-      failRecording(L.connLost, false);
+      interruptRecording();
       return;
     }
     if (remoteSessionId) {
-      if (!sendRemoteFrame(buf)) failRecording(L.connLost, true);
+      if (!sendRemoteFrame(buf)) interruptRecording();
       else updateLocalLevel(buf);
       return;
     }
@@ -1434,6 +1651,8 @@
   // ============================================================
   // 仅停止"采集/推流"(断开节点),保留 audioCtx & mediaStream 以便快速重启。
   function teardownAudioCapture() {
+    releaseWakeLock();
+    if (wakeLockHint) wakeLockHint.textContent = L.wakeLockHint;
     try { if (workletNode) { workletNode.port.onmessage = null; workletNode.disconnect(); } } catch (e) {}
     workletNode = null;
 
@@ -1495,12 +1714,40 @@
   }
 
   // ============================================================
-  // 页面可见性:切后台时若在 hold 录音则取消,避免半截音频
+  // 息屏和切后台结束本段录音，保留电脑已收到的部分。
   // ============================================================
-  document.addEventListener('visibilitychange', function () {
-    if (document.hidden && recording) {
-      cancelRecording();
+  function interruptRecording() {
+    var hadStarted = startSent;
+    if (recording) stopRecording();
+    else if (startSent && remoteSessionId) {
+      wsSendJSON({ type: 'stop' });
+      resetRemoteStreamState();
+      awaitingResult = true;
+      teardownAudioCapture();
+      updateRecordBtnUI();
     }
+    // 系统中断后释放旧轨道，下一次由用户开始录音时重新获取麦克风。
+    teardownAudio();
+    if (hadStarted) setStatus(L.interrupted, 'work');
+  }
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) {
+      if (recording) interruptRecording();
+      releaseWakeLock();
+      clearRecoveryTimer();
+      clearWorkTimeout();
+    } else {
+      if (recording) acquireWakeLock();
+      if (authed) requestRecovery();
+      else if (!ws || ws.readyState > 1) {
+        var pin = readPin();
+        if (pin) connect(pin);
+      }
+    }
+  });
+  window.addEventListener('pagehide', function () {
+    if (recording) interruptRecording();
+    releaseWakeLock();
   });
 
   // ============================================================
@@ -1531,6 +1778,7 @@
     applyStaticI18n();
     syncModeUI();
     initInsertSwitch();
+    initWakeLockSwitch();
     showScreen('pin');
     showPinError('');
     // 上次成功的配对码 → 自动填充并重连,刷新/重开页面免再输一次

@@ -9347,6 +9347,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn external_audio_saves_failed_recordings_for_history_retry_and_prunes_successful_audio()
+    {
+        for fail in [false, true] {
+            let data_dir = std::env::temp_dir()
+                .join(format!("openless-remote-history-{}", uuid::Uuid::new_v4()));
+            let transcription = if fail {
+                crate::testing::FixtureTranscriptionEngine::failing(BackendError::new(
+                    BackendErrorCode::Provider,
+                    "fixture ASR failure",
+                ))
+            } else {
+                crate::testing::FixtureTranscriptionEngine::successful("received speech", 120_000)
+            };
+            let engine = crate::PipelineDictationEngine::new(
+                Arc::new(crate::ExternalAudioRecorder::with_recordings_directory(
+                    data_dir.join("recordings"),
+                )),
+                Arc::new(transcription.clone()),
+                Arc::new(crate::testing::FixtureTextPolisher::successful(
+                    "complete transcription",
+                )),
+            );
+            let backend = backend_with_dictation_engine(data_dir.clone(), Arc::new(engine));
+            backend.start().await.unwrap();
+            let session = backend.start_external_dictation().await.unwrap();
+            let path = data_dir.join("recordings").join(format!("{session}.wav"));
+            for second in 0..120 {
+                backend
+                    .feed_external_pcm(session, &vec![second; 32_000])
+                    .unwrap();
+            }
+            let expected = transcription.pcm();
+            assert_eq!(&std::fs::read(&path).unwrap()[44..], expected);
+            let result = backend.stop_dictation_session(session).await;
+            assert_eq!(result.is_err(), fail);
+            let history = backend.list_history().unwrap();
+            assert_eq!(history.len(), 1);
+            assert_eq!(history[0].id, session.to_string());
+            assert_eq!(history[0].has_audio_recording, Some(fail));
+            if fail {
+                assert_eq!(history[0].error_code.as_deref(), Some("transcribeFailed"));
+                assert_eq!(&std::fs::read(path).unwrap()[44..], expected);
+            } else {
+                assert_eq!(history[0].final_text, "complete transcription");
+                assert!(!path.exists());
+            }
+            backend.shutdown().await.unwrap();
+            let _ = std::fs::remove_dir_all(data_dir);
+        }
+    }
+
+    #[tokio::test]
     async fn dictation_freezes_channel_identity_protocol_and_model_for_the_session() {
         let data_dir = std::env::temp_dir().join(format!(
             "openless-core-channel-snapshot-{}",
