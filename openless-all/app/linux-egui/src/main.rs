@@ -2428,10 +2428,10 @@ mod linux_app {
                 })
                 .rounding(egui::CornerRadius::same(8))
                 .inner_margin(egui::Margin {
-                    left: if indent { 30.0 } else { 10.0 },
-                    right: 10.0,
-                    top: 8.0,
-                    bottom: 8.0,
+                    left: if indent { 30 } else { 10 },
+                    right: 10,
+                    top: 8,
+                    bottom: 8,
                 });
             let response = frame
                 .show(ui, |ui| {
