@@ -1,5 +1,5 @@
 import { invokeOrMock } from "./shared"
-import type { LessComputerEvent } from "../types"
+import type { LessComputerSyncResult } from "../types"
 
 /** 用户点 ✕ / 按 Esc 关闭 Less Computer 浮窗（隐藏窗口）。 */
 export function lessComputerWindowDismiss(): Promise<void> {
@@ -34,6 +34,10 @@ export function lessComputerSubmitText(text: string): Promise<void> {
 
 /** 浮窗 mount 时拉取当前会话的事件缓冲（seq 升序），重放 webview 冷加载期间
  *  丢掉的事件（尤其首条 user —— 用户说的话）。 */
-export function lessComputerSync(): Promise<LessComputerEvent[]> {
-    return invokeOrMock("less_computer_sync", undefined, () => [])
+export function lessComputerSync(afterSequence: number): Promise<LessComputerSyncResult> {
+    return invokeOrMock(
+        "less_computer_sync",
+        { afterSequence },
+        () => ({ events: [], latestSequence: afterSequence, truncated: false }),
+    )
 }

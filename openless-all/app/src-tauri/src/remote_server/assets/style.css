@@ -243,7 +243,9 @@ body {
   font-weight: 600;
   color: var(--ink-2);
   margin-bottom: 10px;
+  cursor: pointer;
 }
+.help:not([open]) .help-title { margin-bottom: 0; }
 .help-step {
   font-size: 12.5px;
   color: var(--ink-3);
@@ -255,6 +257,13 @@ body {
   flex-wrap: wrap;
   gap: 8px;
   margin-top: 6px;
+}
+.help-verify {
+  color: var(--ink);
+  padding: 10px;
+  border-left: 3px solid var(--blue);
+  background: var(--surface);
+  border-radius: 4px;
 }
 .help-link {
   display: inline-block;
@@ -582,6 +591,18 @@ body {
 }
 .insert-switch:checked ~ .insert-track::after {
   transform: translateX(18px);
+}
+.insert-switch:focus-visible ~ .insert-track {
+  outline: 2px solid var(--blue);
+  outline-offset: 3px;
+}
+.wake-lock-hint {
+  margin: 7px auto 0;
+  max-width: 340px;
+  color: var(--ink-3);
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: center;
 }
 
 /* ===== 断线屏 ===== */

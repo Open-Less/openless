@@ -1,6 +1,7 @@
 //! macOS 本地 Whisper Large-v3 Turbo：录音结束后整段 batch 解码。
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -13,15 +14,14 @@ use crate::asr::RawTranscript;
 pub const MODEL_ID: &str = "whisper-large-v3-turbo";
 const QUANTIZED_MODEL_FILE: &str = "ggml-large-v3-turbo-q5_0.bin";
 
-pub fn model_path_for_model(model_id: &str) -> Result<PathBuf> {
-    let id = crate::asr::local::ModelId::from_str(model_id)
+pub fn model_path_for_model(model_id: &str, model_dir: &Path) -> Result<PathBuf> {
+    let id = crate::asr::local::ModelId::from_wire_id(model_id)
         .filter(|id| id.is_whisper())
         .ok_or_else(|| anyhow::anyhow!("未知的本地 Whisper 模型: {model_id}"))?;
-    let dir = crate::asr::local::models::model_dir(id)?;
     let file_name = id
         .file_name()
         .ok_or_else(|| anyhow::anyhow!("本地 Whisper 模型没有文件名: {model_id}"))?;
-    let path = model_path_in_dir(id, &dir, file_name);
+    let path = model_path_in_dir(id, model_dir, file_name);
     Ok(path)
 }
 
@@ -36,20 +36,26 @@ fn model_path_in_dir(id: crate::asr::local::ModelId, dir: &Path, file_name: &str
     path
 }
 
-pub fn model_ready_for_model(model_id: &str) -> bool {
-    model_path_for_model(model_id)
-        .map(|path| path.is_file())
-        .unwrap_or(false)
+pub fn model_ready_for_model(store: &openless_core::ModelStore, model_id: &str) -> bool {
+    store
+        .list_models(openless_core::LocalAsrRuntime::Generic)
+        .is_ok_and(|models| {
+            models
+                .iter()
+                .any(|model| model.target.model_id() == model_id && model.installed)
+        })
 }
 
 pub struct LocalWhisperCache {
     inner: Mutex<Option<CachedEngine>>,
+    load_generation: AtomicU64,
 }
 
 struct CachedEngine {
     model_id: String,
     engine: Arc<WhisperEngine>,
     last_used: Instant,
+    activation_generation: Option<u64>,
 }
 
 impl Default for LocalWhisperCache {
@@ -62,20 +68,33 @@ impl LocalWhisperCache {
     pub fn new() -> Self {
         Self {
             inner: Mutex::new(None),
+            load_generation: AtomicU64::new(0),
         }
     }
 
     pub fn get_or_load(&self, model_id: &str, path: &Path) -> Result<Arc<WhisperEngine>> {
-        {
+        self.get_or_load_for_lease(model_id, path, None)
+    }
+
+    pub(crate) fn get_or_load_for_lease(
+        &self,
+        model_id: &str,
+        path: &Path,
+        activation_generation: Option<u64>,
+    ) -> Result<Arc<WhisperEngine>> {
+        let load_generation = {
             let mut slot = self.inner.lock();
+            let generation = self.load_generation.fetch_add(1, Ordering::AcqRel) + 1;
             if let Some(cached) = slot.as_mut() {
                 if cached.model_id == model_id {
                     cached.last_used = Instant::now();
+                    cached.activation_generation = activation_generation;
                     return Ok(Arc::clone(&cached.engine));
                 }
                 slot.take();
             }
-        }
+            generation
+        };
 
         let path_str = path
             .to_str()
@@ -87,12 +106,41 @@ impl LocalWhisperCache {
         let engine = Arc::new(WhisperEngine {
             context: Mutex::new(context),
         });
-        self.inner.lock().replace(CachedEngine {
+        let mut slot = self.inner.lock();
+        // 普通听写可以用完成加载的 Arc 继续本轮，但不得覆盖后来的 cache；
+        // 激活操作必须失败，不能把已被替代的加载当作当前模型的成功回执。
+        if self.load_generation.load(Ordering::Acquire) != load_generation {
+            if activation_generation.is_some() {
+                anyhow::bail!("本地 Whisper 加载已被更新的操作替代");
+            }
+            return Ok(engine);
+        }
+        slot.replace(CachedEngine {
             model_id: model_id.to_string(),
             engine: Arc::clone(&engine),
             last_used: Instant::now(),
+            activation_generation,
         });
         Ok(engine)
+    }
+
+    pub(crate) fn claim_lease(&self, model_id: &str, generation: u64) {
+        let mut slot = self.inner.lock();
+        self.load_generation.fetch_add(1, Ordering::AcqRel);
+        if let Some(cached) = slot.as_mut().filter(|cached| cached.model_id == model_id) {
+            cached.activation_generation = Some(generation);
+        }
+    }
+
+    pub(crate) fn release_lease(&self, model_id: &str, generation: u64) {
+        let mut slot = self.inner.lock();
+        // model ID 相同不代表同一所有者，普通使用会撤销旧 activation 的释放权。
+        if slot.as_ref().is_some_and(|cached| {
+            cached.model_id == model_id && cached.activation_generation == Some(generation)
+        }) {
+            self.load_generation.fetch_add(1, Ordering::AcqRel);
+            slot.take();
+        }
     }
 
     pub fn touch(&self) {
@@ -101,10 +149,44 @@ impl LocalWhisperCache {
         }
     }
 
+    /// Whisper 的同步解码不可强制中止；取消/超时只驱逐本会话借出的实例，
+    /// 旧 worker 用自己的 Arc 安全收尾。新激活即使复用同一 Arc 也保有 cache，
+    /// 直到下一次普通 get_or_load 撤销 activation owner。
+    pub fn finish_use(&self, engine: &Arc<WhisperEngine>, discard: bool) {
+        let mut slot = self.inner.lock();
+        if slot.as_ref().is_some_and(|cached| {
+            cached.activation_generation.is_none() && Arc::ptr_eq(&cached.engine, engine)
+        }) {
+            if discard {
+                slot.take();
+            } else if let Some(cached) = slot.as_mut() {
+                cached.last_used = Instant::now();
+            }
+        }
+    }
+
+    pub fn release_current_if_idle(
+        &self,
+        engine: &std::sync::Weak<WhisperEngine>,
+        threshold: Duration,
+    ) {
+        let mut slot = self.inner.lock();
+        if slot.as_ref().is_some_and(|cached| {
+            cached.activation_generation.is_none()
+                && std::sync::Weak::ptr_eq(&Arc::downgrade(&cached.engine), engine)
+                && cached.last_used.elapsed() >= threshold
+        }) {
+            slot.take();
+        }
+    }
+
     pub fn release_if_idle(&self, threshold: Duration) -> bool {
         let mut slot = self.inner.lock();
         match slot.as_ref() {
-            Some(cached) if cached.last_used.elapsed() >= threshold => {
+            Some(cached)
+                if cached.activation_generation.is_none()
+                    && cached.last_used.elapsed() >= threshold =>
+            {
                 slot.take();
                 true
             }
@@ -113,7 +195,9 @@ impl LocalWhisperCache {
     }
 
     pub fn release_now(&self) {
-        self.inner.lock().take();
+        let mut slot = self.inner.lock();
+        self.load_generation.fetch_add(1, Ordering::AcqRel);
+        slot.take();
     }
 
     pub fn loaded_model_id(&self) -> Option<String> {

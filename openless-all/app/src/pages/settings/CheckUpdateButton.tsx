@@ -8,7 +8,15 @@ import { Icon } from '../../components/Icon';
 import { isDialogStatus, UpdateDialog, useAutoUpdate } from '../../components/AutoUpdate';
 import type { UpdateChannel } from '../../lib/ipc';
 
-export function CheckUpdateButton({ channel, compact = false }: { channel: UpdateChannel; compact?: boolean }) {
+export function CheckUpdateButton({
+  channel,
+  compact = false,
+  autoCheckChannel,
+}: {
+  channel: UpdateChannel;
+  compact?: boolean;
+  autoCheckChannel?: UpdateChannel | null;
+}) {
   const { t } = useTranslation();
   const updater = useAutoUpdate();
   const { status, checking, busy } = updater;
@@ -30,6 +38,12 @@ export function CheckUpdateButton({ channel, compact = false }: { channel: Updat
     ? 'settings.about.checkBetaUpdateBtn'
     : 'settings.about.checkStableUpdateBtn';
   const label = checking ? t('settings.about.checkingUpdate') : t(labelKey);
+
+  useEffect(() => {
+    if (autoCheckChannel) void updater.checkForUpdates(autoCheckChannel);
+    // checkForUpdates changes with updater state; this effect is driven only by a channel switch.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoCheckChannel]);
 
   return (
     <>
@@ -92,6 +106,7 @@ export function CheckUpdateButton({ channel, compact = false }: { channel: Updat
       {isDialogStatus(status) && (
         <UpdateDialog
           status={status}
+          currentVersion={updater.currentVersion}
           version={updater.version}
           progress={updater.progress}
           downloaded={updater.downloaded}

@@ -68,3 +68,11 @@ const HOTKEY_CODE_ORDER = [
   'NumpadSubtract', 'NumpadMultiply', 'NumpadDivide', 'NumpadDecimal', 'NumpadEnter',
   'Mouse4', 'Mouse5',
 ];
+
+/** Prefer physical function-key codes; WebKit can expose a private-use key value. */
+export function functionKeyPrimaryFromEvent(event: { code: string; key: string }): string | null {
+  const supported = /^F([1-9]|1[0-9]|20)$/;
+  if (supported.test(event.code)) return event.code;
+  if (supported.test(event.key)) return event.key;
+  return null;
+}

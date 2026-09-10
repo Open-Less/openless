@@ -15,6 +15,7 @@ import {
   isTauri,
   type RemoteInputStatus,
 } from '../../lib/ipc';
+import { getRemoteInputViewState } from './remoteInputViewState';
 
 async function copyText(text: string): Promise<void> {
   try {
@@ -52,36 +53,44 @@ export function RemoteInputSection() {
       getRemoteInputStatus()
         .then((s) => alive && setStatus(s))
         .catch(() => {});
-    refresh();
+    const unsubs: Array<() => void> = [];
+    const registerAndRefresh = async () => {
+      try {
+        // 先注册事件，再查询快照，避免启动事件早于首次查询完成而被错过。
+        if (isTauri) {
+          const { listen } = await import('@tauri-apps/api/event');
+          if (!alive) return;
+          const runningUnsubscribe = await listen('remote-input:running', () => {
+            if (!alive) return;
+            setStartError(null);
+            refresh();
+          });
+          // 异步注册完成时组件可能已卸载，立即退订避免监听器泄漏。
+          if (!alive) {
+            runningUnsubscribe();
+            return;
+          }
+          unsubs.push(runningUnsubscribe);
+
+          const errorUnsubscribe = await listen('remote-input:error', (e) => {
+            if (!alive) return;
+            const p = e.payload as { reason?: string; port?: number } | null;
+            setStartError({ reason: p?.reason ?? '', port: p?.port ?? 0 });
+            refresh();
+          });
+          if (!alive) {
+            errorUnsubscribe();
+            return;
+          }
+          unsubs.push(errorUnsubscribe);
+        }
+      } finally {
+        if (alive) refresh();
+      }
+    };
+    void registerAndRefresh().catch(() => {});
     // 进设置页时把当前界面语言同步给远程服务，确保 H5 录音页语言与 PC 一致。
     void setRemoteLocale(i18n.language).catch(() => {});
-    if (!isTauri) return;
-    const unsubs: Array<() => void> = [];
-    import('@tauri-apps/api/event').then(({ listen }) => {
-      listen('remote-input:running', () => {
-        if (!alive) return;
-        setStartError(null);
-        refresh();
-      }).then((u) => {
-        // 异步注册完成时组件可能已卸载，立即退订避免监听器泄漏。
-        if (!alive) {
-          u();
-        } else {
-          unsubs.push(u);
-        }
-      });
-      listen('remote-input:error', (e) => {
-        if (!alive) return;
-        const p = e.payload as { reason?: string; port?: number } | null;
-        setStartError({ reason: p?.reason ?? '', port: p?.port ?? 0 });
-      }).then((u) => {
-        if (!alive) {
-          u();
-        } else {
-          unsubs.push(u);
-        }
-      });
-    });
     return () => {
       alive = false;
       unsubs.forEach((u) => u());
@@ -91,6 +100,13 @@ export function RemoteInputSection() {
   if (!prefs) return null;
   const enabled = prefs.remoteInputEnabled;
   const mode = prefs.remoteInputDefaultMode ?? 'toggle';
+  const viewState = getRemoteInputViewState(enabled, status, startError);
+  // 只有本地监听器返回的完整指纹才能作为手机核验的依据。
+  const fingerprint = status?.caFingerprintSha256;
+  const canVerifyCertificate = typeof fingerprint === 'string' && /^[a-f0-9]{64}$/i.test(fingerprint);
+  const formattedFingerprint = canVerifyCertificate
+    ? fingerprint.toUpperCase().match(/.{2}/g)!.join(' ')
+    : '';
 
   // 提交端口草稿：非法（非有限数/越界离谱）则丢弃还原显示，合法则取整并 clamp 到 [1024, 65535]。
   const commitPort = () => {
@@ -180,46 +196,94 @@ export function RemoteInputSection() {
         </div>
       </SettingRow>
 
-      {enabled && status?.running && (
+      {enabled && (viewState === 'running' || viewState === 'stale') && status && (
         <>
-          <SettingRow label={t('settings.remoteInput.urlLabel')}>
-            <div
-              style={{
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 6,
-                minWidth: 0,
-              }}
-            >
-              {(status.urls.length
-                ? status.urls
-                : [`https://localhost:${status.port}`]
-              ).map((u) => (
-                <div
-                  key={u}
-                  style={{ display: 'flex', alignItems: 'center', gap: 8 }}
-                >
-                  <span
-                    style={{
-                      fontFamily: 'monospace',
-                      fontSize: 12.5,
-                      color: 'var(--ol-ink-2)',
-                      wordBreak: 'break-all',
-                    }}
+          <SettingRow label={t('settings.remoteInput.certFingerprintLabel')}>
+            <div style={{ minWidth: 0, width: '100%' }}>
+              {canVerifyCertificate ? (
+                <>
+                  <code
+                    aria-label={t('settings.remoteInput.certFingerprintLabel')}
+                    style={{ display: 'block', fontSize: 12, lineHeight: 1.8, overflowWrap: 'anywhere', userSelect: 'text' }}
                   >
-                    {u}
-                  </span>
+                    {formattedFingerprint}
+                  </code>
                   <button
-                    onClick={() => doCopy(u, status.pin)}
-                    title={t('settings.remoteInput.urlLabel')}
-                    style={smallBtn}
+                    type="button"
+                    onClick={async () => {
+                      await copyText(formattedFingerprint);
+                      setCopied('ca-fingerprint');
+                      window.setTimeout(() => setCopied((c) => c === 'ca-fingerprint' ? null : c), 1500);
+                    }}
+                    style={{ ...smallBtn, marginTop: 6 }}
                   >
-                    {copied === u ? '✓' : '⧉'}
+                    {copied === 'ca-fingerprint'
+                      ? t('settings.remoteInput.certFingerprintCopied')
+                      : t('settings.remoteInput.certFingerprintCopy')}
                   </button>
-                </div>
-              ))}
+                </>
+              ) : (
+                <p role="alert" style={{ color: 'var(--ol-red)', margin: 0 }}>
+                  {t('settings.remoteInput.certFingerprintUnavailable')}
+                </p>
+              )}
+              <p style={{ fontSize: 12, lineHeight: 1.6, margin: '8px 0 0' }}>
+                {t('settings.remoteInput.certVerifyHint')}
+              </p>
+              <p style={{ fontSize: 12, lineHeight: 1.6, margin: '6px 0 0' }}>
+                {t('settings.remoteInput.certProfileHint')}
+              </p>
             </div>
           </SettingRow>
+          {status.urls.length > 0 && (
+            <SettingRow label={t('settings.remoteInput.urlLabel')}>
+              <div
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 6,
+                  minWidth: 0,
+                }}
+              >
+                {status.urls.map((u) => (
+                  <div
+                    key={u}
+                    style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}
+                  >
+                    <span
+                      style={{
+                        fontFamily: 'monospace',
+                        fontSize: 12.5,
+                        color: 'var(--ol-ink-2)',
+                        wordBreak: 'break-all',
+                      }}
+                    >
+                      {u}
+                    </span>
+                    <button
+                      onClick={() => doCopy(u, status.pin)}
+                      title={t('settings.remoteInput.urlLabel')}
+                      style={smallBtn}
+                    >
+                      {copied === u ? '✓' : '⧉'}
+                    </button>
+                    <button
+                      disabled={!canVerifyCertificate}
+                      onClick={async () => {
+                        const link = `${u}/cert.mobileconfig`;
+                        await copyText(link);
+                        setCopied(link);
+                        window.setTimeout(() => setCopied((c) => c === link ? null : c), 1500);
+                      }}
+                      style={smallBtn}
+                    >
+                      {copied === `${u}/cert.mobileconfig` ? '✓' : t('settings.remoteInput.certSetupLink')}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </SettingRow>
+          )}
 
           <SettingRow label={t('settings.remoteInput.pinLabel')}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -245,7 +309,27 @@ export function RemoteInputSection() {
               </button>
             </div>
           </SettingRow>
+          {viewState === 'stale' && (
+            <div style={{ fontSize: 12, color: 'var(--ol-ink-3)', marginTop: 8 }}>
+              {t('settings.remoteInput.urlsStale')}
+            </div>
+          )}
         </>
+      )}
+
+      {enabled && viewState === 'starting' && (
+        <div style={{ fontSize: 12, color: 'var(--ol-ink-3)', marginTop: 8 }}>
+          {t('settings.remoteInput.starting')}
+        </div>
+      )}
+
+      {enabled && viewState === 'waiting' && (
+        <div style={{ fontSize: 12, color: 'var(--ol-ink-3)', marginTop: 8 }}>
+          {t(
+            'settings.remoteInput.waitingStart',
+            '服务尚未启动。请关闭开关再打开一次，不要重启软件。',
+          )}
+        </div>
       )}
 
       {enabled && startError != null && (

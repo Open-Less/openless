@@ -71,18 +71,18 @@ export function codingAgentListOpencodeModels(
 
 /** 无头 Claude 运行事件，由后端 `coding-agent:test` 流式推送（tag 为 `kind`）。 */
 export type CodingAgentEvent =
-    | { kind: "started"; session_id: string }
-    | { kind: "delta"; session_id: string; text: string }
-    | { kind: "tool_use"; session_id: string; name: string }
+    | { kind: "started"; sessionId: string }
+    | { kind: "delta"; sessionId: string; text: string }
+    | { kind: "tool_use"; sessionId: string; name: string }
     | {
           kind: "completed"
-          session_id: string
+          sessionId: string
           text: string
-          cost_usd: number | null
-          duration_ms: number | null
+          costUsd: number | null
+          durationMs: number | null
       }
-    | { kind: "cancelled"; session_id: string }
-    | { kind: "error"; session_id: string; message: string }
+    | { kind: "cancelled"; sessionId: string }
+    | { kind: "error"; sessionId: string; message: string }
 
 export function codingAgentDetect(exe?: string): Promise<ClaudeDetection> {
     return invokeOrMock(

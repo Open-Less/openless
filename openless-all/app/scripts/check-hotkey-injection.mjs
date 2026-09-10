@@ -1,33 +1,34 @@
 import { spawnSync } from 'node:child_process';
 
-if (process.platform === 'win32') {
-  // The full Tauri lib-test binary is compile-only on clean Windows runners because an
-  // optional native runtime DLL is unavailable there. CI executes this behavioral gate on
-  // macOS/Linux and still compiles the same Rust test on Windows via `cargo test --no-run`.
-  console.log('Hotkey injection runtime gate skipped on Windows (covered by lib-test compilation).');
-  process.exit(0);
-}
-
 const result = spawnSync(
   'cargo',
-  ['test', '--manifest-path', 'src-tauri/Cargo.toml', 'hotkey_injection_gate_logs_pressed_and_cancels', '--', '--nocapture'],
+  [
+    'test',
+    '--locked',
+    '-p',
+    'openless-core',
+    'shared_hotkey_edges_own_hold_auto_and_combo_abort_semantics',
+    '--',
+    '--nocapture',
+  ],
   {
-    env: { ...process.env, OPENLESS_HOTKEY_INJECTION_DRY_RUN: '1' },
+    env: process.env,
     encoding: 'utf8',
   },
 );
 
 const output = `${result.stdout ?? ''}${result.stderr ?? ''}`;
-process.stdout.write(result.stdout ?? '');
-process.stderr.write(result.stderr ?? '');
+for (const chunk of (result.stdout ?? '').match(/[\s\S]{1,8192}/g) ?? []) process.stdout.write(chunk);
+for (const chunk of (result.stderr ?? '').match(/[\s\S]{1,8192}/g) ?? []) process.stderr.write(chunk);
 
 if (result.status !== 0) {
+  if (result.error) console.error(result.error);
   process.exit(result.status ?? 1);
 }
 
-if (!output.includes('[coord] hotkey pressed')) {
-  console.error("Hotkey injection gate did not emit '[coord] hotkey pressed'.");
+if (!output.includes('test api::tests::shared_hotkey_edges_own_hold_auto_and_combo_abort_semantics ... ok')) {
+  console.error('Core hotkey edge gate did not execute the expected test.');
   process.exit(1);
 }
 
-console.log('Hotkey injection gate passed.');
+console.log('Core hotkey edge gate passed.');

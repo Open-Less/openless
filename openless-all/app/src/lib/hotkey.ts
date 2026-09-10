@@ -368,6 +368,7 @@ function formatPrimary(primary: string): string {
   const isMac = currentPlatform().isMac;
   if (isMac) {
     switch (trimmed.toLowerCase()) {
+      case 'macdictationkey': return i18n.t('macDictationKey.label');
       case 'space': return '\u2423';
       case 'enter':
       case 'return': return '\u21A9';

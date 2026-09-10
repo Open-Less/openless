@@ -544,11 +544,7 @@ mod tests {
 
     #[test]
     fn permission_errors_are_not_no_device() {
-        for message in [
-            "access denied",
-            "permission denied",
-            "not authorized",
-        ] {
+        for message in ["access denied", "permission denied", "not authorized"] {
             assert!(
                 !is_no_device_error(&message.to_lowercase()),
                 "should NOT classify as no-device: {message}"

@@ -10,6 +10,10 @@ import { defaultDictationHotkey } from '../../lib/hotkey';
 import { emitSaved } from '../../lib/savedEvent';
 import { isHotkeyModeMigrationNoticeActive } from '../../lib/hotkeyMigration';
 import {
+  showWindowsOpenlessKeyboardListToggle,
+  showWindowsSendInputNewlineMode,
+} from '../../lib/windowsKeyboardListToggle';
+import {
   isTauri,
   listMicrophoneDevices,
   setDictationHotkey,
@@ -262,17 +266,18 @@ export function RecordingInputSection() {
           <ShortcutRecorder
             value={prefs.dictationHotkey}
             sideSpecificModifiers
+            allowMacDictationKey={os === 'mac'}
             // 录音快捷键是核心热键，Rust 端不接受 null，不可停用——置灰并提示。
             disableDisabled
             disableHint={t('settings.recording.comboDisableHint')}
             onSave={async binding => {
               await setDictationHotkey(binding);
-              await savePrefs({ ...prefs, dictationHotkey: binding });
+              await refresh();
             }}
             onReset={async () => {
               const binding = defaultDictationHotkey();
               await setDictationHotkey(binding);
-              await savePrefs({ ...prefs, dictationHotkey: binding });
+              await refresh();
             }}
           />
         </SettingRow>
@@ -516,7 +521,10 @@ export function RecordingInputSection() {
           </SettingRow>
         )}
         {capability.adapter === 'windowsLowLevel'
-          && (prefs.windowsInsertionMode === 'sendInput' || prefs.windowsSendInputInsertionOnly) && (
+          && showWindowsSendInputNewlineMode(
+            prefs.windowsInsertionMode,
+            prefs.windowsSendInputInsertionOnly,
+          ) && (
           <SettingRow
             label={t('settings.recording.windowsSendInputNewlineModeLabel')}
             desc={t('settings.recording.windowsSendInputNewlineModeDesc')}
@@ -554,7 +562,10 @@ export function RecordingInputSection() {
           </SettingRow>
         )}
         {capability.adapter === 'windowsLowLevel'
-          && (prefs.windowsInsertionMode === 'sendInput' || prefs.windowsSendInputInsertionOnly) && (
+          && showWindowsOpenlessKeyboardListToggle(
+            prefs.windowsInsertionMode,
+            prefs.windowsSendInputInsertionOnly,
+          ) && (
           <SettingRow
             label={t('settings.recording.windowsShowOpenlessInKeyboardListLabel')}
             desc={t('settings.recording.windowsShowOpenlessInKeyboardListDesc')}

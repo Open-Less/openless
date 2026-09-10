@@ -1,0 +1,118 @@
+{
+  "contractVersion": "2.0.0",
+  "startupSnapshot": {
+    "fields": ["contractVersion", "backend"],
+    "sample": {
+      "contractVersion": "2.0.0",
+      "backend": {
+        "running": true,
+        "dictation": {
+          "phase": "idle",
+          "sessionId": null,
+          "elapsedMs": 0,
+          "level": 0.0,
+          "message": null,
+          "translationActive": false,
+          "recordingReady": false
+        },
+        "vocabularyRevision": 0,
+        "historyRevision": 0,
+        "stylePackRevision": 0,
+        "preferencesRevision": 0,
+        "credentials": {
+          "activeAsrProvider": "",
+          "activeLlmProvider": "",
+          "pipelineMode": "traditional",
+          "asrConfigured": false,
+          "llmConfigured": false,
+          "omniConfigured": false,
+          "volcengineConfigured": false,
+          "arkConfigured": false
+        }
+      }
+    }
+  },
+  "backendEvent": {
+    "fields": ["sequence", "sessionId", "kind"],
+    "kinds": [
+      "backend_started",
+      "backend_stopping",
+      "dictation_state_changed",
+      "transcript_delta",
+      "polish_delta",
+      "dictation_completed",
+      "recording_control_requested",
+      "selection_state_changed",
+      "selection_voice_state_changed",
+      "insert_fallback",
+      "preferences_changed",
+      "credentials_changed",
+      "history_changed",
+      "vocabulary_changed",
+      "style_packs_changed",
+      "download_progress",
+      "permission_changed",
+      "hotkey_status_changed",
+      "notification",
+      "coding_agent_test",
+      "less_computer_event",
+      "local_asr_prepare_progress",
+      "local_asr_download_progress",
+      "local_asr_engine_changed",
+      "microphone_devices_changed",
+      "qa_level",
+      "qa_state",
+      "remote_input_status_changed",
+      "remote_input_failed",
+      "vocabulary_suggestions_changed"
+    ],
+    "samples": {
+      "backend_started": {"sequence": 1, "sessionId": null, "kind": {"type": "backend_started"}},
+      "backend_stopping": {"sequence": 1, "sessionId": null, "kind": {"type": "backend_stopping"}},
+      "dictation_state_changed": {"sequence": 1, "sessionId": null, "kind": {"type": "dictation_state_changed", "payload": {"phase": "idle", "sessionId": null, "elapsedMs": 0, "level": 0.0, "message": null, "translationActive": false, "recordingReady": false}}},
+      "transcript_delta": {"sequence": 1, "sessionId": null, "kind": {"type": "transcript_delta", "payload": {"text": "delta", "offset": 0, "isFinal": false}}},
+      "polish_delta": {"sequence": 1, "sessionId": null, "kind": {"type": "polish_delta", "payload": {"text": "delta", "offset": 0, "isFinal": false}}},
+      "dictation_completed": {"sequence": 1, "sessionId": null, "kind": {"type": "dictation_completed", "payload": {"sessionId": "00000000-0000-4000-8000-000000000000", "rawText": "raw", "polishedText": "final", "polishSource": null, "durationMs": 0, "inserted": "inserted"}}},
+      "recording_control_requested": {"sequence": 1, "sessionId": "00000000-0000-4000-8000-000000000000", "kind": {"type": "recording_control_requested", "payload": {"sessionId": "00000000-0000-4000-8000-000000000000", "action": "stop"}}},
+      "selection_state_changed": {"sequence": 1, "sessionId": null, "kind": {"type": "selection_state_changed", "payload": {"phase": "idle"}}},
+      "selection_voice_state_changed": {"sequence": 1, "sessionId": null, "kind": {"type": "selection_voice_state_changed", "payload": {"phase": "idle"}}},
+      "insert_fallback": {"sequence": 1, "sessionId": null, "kind": {"type": "insert_fallback", "payload": {"reason": "clipboard_fallback", "copiedText": null}}},
+      "preferences_changed": {"sequence": 1, "sessionId": null, "kind": {"type": "preferences_changed", "payload": {"revision": 1}}},
+      "credentials_changed": {"sequence": 1, "sessionId": null, "kind": {"type": "credentials_changed", "payload": {"activeAsrProvider": "", "activeLlmProvider": "", "pipelineMode": "traditional", "asrConfigured": false, "llmConfigured": false, "omniConfigured": false, "volcengineConfigured": false, "arkConfigured": false}}},
+      "history_changed": {"sequence": 1, "sessionId": null, "kind": {"type": "history_changed", "payload": {"revision": 1}}},
+      "vocabulary_changed": {"sequence": 1, "sessionId": null, "kind": {"type": "vocabulary_changed", "payload": {"revision": 1}}},
+      "style_packs_changed": {"sequence": 1, "sessionId": null, "kind": {"type": "style_packs_changed", "payload": {"revision": 1}}},
+      "download_progress": {"sequence": 1, "sessionId": null, "kind": {"type": "download_progress", "payload": {"resourceId": "model", "completedBytes": 1, "totalBytes": null}}},
+      "permission_changed": {"sequence": 1, "sessionId": null, "kind": {"type": "permission_changed", "payload": {"microphone": "unknown", "accessibility": "unknown"}}},
+      "hotkey_status_changed": {"sequence": 1, "sessionId": null, "kind": {"type": "hotkey_status_changed", "payload": {"adapter": "unavailable", "state": "starting", "message": null, "lastError": null}}},
+      "notification": {"sequence": 1, "sessionId": null, "kind": {"type": "notification", "payload": {"level": "info", "message": "ready"}}},
+      "coding_agent_test": {"sequence": 1, "sessionId": null, "kind": {"type": "coding_agent_test", "payload": {"kind": "started", "sessionId": "agent"}}},
+      "less_computer_event": {"sequence": 1, "sessionId": null, "kind": {"type": "less_computer_event", "payload": {"seq": 1, "kind": "started"}}},
+      "local_asr_prepare_progress": {"sequence": 1, "sessionId": null, "kind": {"type": "local_asr_prepare_progress", "payload": {"runtime": "generic", "phase": "runtime", "modelAlias": "qwen3-asr-0.6b", "label": "prepare"}}},
+      "local_asr_download_progress": {"sequence": 1, "sessionId": null, "kind": {"type": "local_asr_download_progress", "payload": {"runtime": "generic", "modelId": "qwen3-asr-0.6b", "file": "config.json", "fileIndex": 0, "fileCount": 1, "bytesDownloaded": 0, "bytesTotal": 1, "phase": "started"}}},
+      "local_asr_engine_changed": {"sequence": 1, "sessionId": null, "kind": {"type": "local_asr_engine_changed", "payload": {"runtime": "generic", "providerId": "local-qwen3", "available": true, "loaded": false, "activeModel": "qwen3-asr-0.6b", "keepLoadedSecs": 0}}},
+      "microphone_devices_changed": {"sequence": 1, "sessionId": null, "kind": {"type": "microphone_devices_changed"}},
+      "qa_level": {"sequence": 1, "sessionId": null, "kind": {"type": "qa_level", "payload": {"sessionId": "qa", "level": 0.5}}},
+      "qa_state": {"sequence": 1, "sessionId": null, "kind": {"type": "qa_state", "payload": {"kind": "idle"}}},
+      "remote_input_status_changed": {"sequence": 1, "sessionId": null, "kind": {"type": "remote_input_status_changed", "payload": {"running": false}}},
+      "remote_input_failed": {"sequence": 1, "sessionId": null, "kind": {"type": "remote_input_failed", "payload": {"reason": "unavailable", "port": 18989}}},
+      "vocabulary_suggestions_changed": {"sequence": 1, "sessionId": null, "kind": {"type": "vocabulary_suggestions_changed", "payload": [{"id": "1", "pattern": "old", "replacement": "new"}]}}
+    }
+  },
+  "lessComputerVoice": {
+    "phases": ["starting", "recording", "transcribing", "idle"],
+    "sample": {"seq": 3, "kind": "voice_state", "sessionId": "00000000-0000-4000-8000-000000000000", "phase": "recording", "level": 0.5, "elapsedMs": 120}
+  },
+  "androidJni": {
+    "fields": ["contractVersion", "ok", "payload", "error"],
+    "sample": {"contractVersion": "2.0.0", "ok": true, "payload": {"running": true, "dictation": {"phase": "idle", "sessionId": null, "elapsedMs": 0, "level": 0.0, "message": null, "translationActive": false, "recordingReady": false}, "vocabularyRevision": 0, "historyRevision": 0, "stylePackRevision": 0, "preferencesRevision": 0, "credentials": {"activeAsrProvider": "", "activeLlmProvider": "", "pipelineMode": "traditional", "asrConfigured": false, "llmConfigured": false, "omniConfigured": false, "volcengineConfigured": false, "arkConfigured": false}}, "error": null}
+  },
+  "linuxFacade": {
+    "startupFields": ["contractVersion", "backend"],
+    "eventFields": ["sequence", "sessionId", "kind"]
+  },
+  "enums": {
+    "insertStatus": ["inserted", "pasteSent", "copiedFallback", "notRequested"],
+    "remoteAuthResult": ["ok", "bad_pin", "locked"]
+  }
+}

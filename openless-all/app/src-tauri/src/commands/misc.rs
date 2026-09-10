@@ -15,7 +15,7 @@ pub async fn check_network() -> NetworkCheckResult {
     // 单发、不走 send_with_retry：这是每 30s 跑一次的状态探针，要的是「快」。10 次
     // 退避重试会让被过滤 / 黑洞的网络下探测拖到近一分钟、状态灯像卡死。偶发的瞬时
     // 误判由下一个 30s 周期自动纠正。仍用 net::http() 共享连接池。
-    let url = format!("{MARKETPLACE_BASE_URL}/packs?limit=1");
+    let url = format!("{}/packs?limit=1", openless_core::MARKETPLACE_BASE_URL);
     let start = std::time::Instant::now();
     match net::http()
         .get(&url)
@@ -35,22 +35,21 @@ pub async fn check_network() -> NetworkCheckResult {
 }
 
 #[tauri::command]
-pub fn get_hotkey_status(coord: CoordinatorState<'_>) -> HotkeyStatus {
-    #[cfg(mobile)]
-    {
-        let _ = coord;
-        return HotkeyStatus {
+pub async fn get_hotkey_status(core: CoreState<'_>) -> Result<HotkeyStatus, String> {
+    Ok(core
+        .services()
+        .platform
+        .hotkey_status()
+        .await
+        .unwrap_or_else(|error| HotkeyStatus {
             adapter: crate::types::HotkeyAdapterKind::Unavailable,
             state: crate::types::HotkeyStatusState::Failed,
-            message: Some("移动端不支持全局热键".into()),
+            message: Some(error.message.clone()),
             last_error: Some(crate::types::HotkeyInstallError {
-                code: "unavailable".into(),
-                message: "Global hotkeys are not available on mobile".into(),
+                code: format!("{:?}", error.code).to_ascii_lowercase(),
+                message: error.message,
             }),
-        };
-    }
-    #[cfg(not(mobile))]
-    coord.hotkey_status()
+        }))
 }
 
 #[tauri::command]
@@ -82,19 +81,23 @@ pub fn get_windows_ime_status() -> WindowsImeStatus {
 }
 
 #[tauri::command]
-#[cfg(mobile)]
-pub async fn list_microphone_devices() -> Result<Vec<crate::recorder::MicrophoneDevice>, String> {
-    Ok(Vec::new())
-}
-
-#[tauri::command]
-#[cfg(not(mobile))]
-pub async fn list_microphone_devices() -> Result<Vec<crate::recorder::MicrophoneDevice>, String> {
-    tauri::async_runtime::spawn_blocking(|| {
-        crate::recorder::list_input_devices().map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| format!("microphone device worker failed: {e}"))?
+pub async fn list_microphone_devices(
+    core: CoreState<'_>,
+) -> Result<Vec<crate::recorder::MicrophoneDevice>, String> {
+    core.services()
+        .platform
+        .microphone_devices()
+        .await
+        .map(|devices| {
+            devices
+                .into_iter()
+                .map(|device| crate::recorder::MicrophoneDevice {
+                    name: device.name,
+                    is_default: device.is_default,
+                })
+                .collect()
+        })
+        .map_err(|error| error.message)
 }
 
 #[tauri::command]

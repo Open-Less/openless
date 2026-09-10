@@ -4,16 +4,36 @@ This is the current cross-platform OpenLess workspace.
 
 ## App Directory
 
-The runnable Tauri app lives in `app/`. The macOS build links a vendored C ASR engine (`Open-Less/qwen-asr`, forked from `antirez/qwen-asr`) tracked as a git submodule under `app/src-tauri/vendor/qwen-asr/`, so initialize submodules on first clone.
+The runnable sources live in `app/` with three explicit layers:
+
+- `app/crates/openless-core`: framework-independent shared backend Interface and business rules;
+- `app/src-tauri`: macOS, Windows, and Android Tauri Adapter plus the React frontend;
+- `app/linux-egui`: Linux non-UI Adapter consumed by the separately developed egui frontend; it does not depend on Tauri or WebKitGTK.
+
+The macOS Tauri build links a vendored C ASR engine (`Open-Less/qwen-asr`, forked from `antirez/qwen-asr`) tracked as a git submodule under `app/src-tauri/vendor/qwen-asr/`. The root core/Linux workspace excludes `src-tauri`, so Linux checks do not need that submodule.
 
 ```bash
-# First clone only — pull in vendored submodules
+# macOS Tauri development only — pull in vendored submodules
 git submodule update --init --recursive
 
 cd app
 npm ci
 npm run tauri dev
 ```
+
+## Shared backend and Linux host
+
+The egui UI is owned by another team. This repository supplies its typed Rust Interface, semantic events, fixtures, and Linux non-UI Adapters. The checked-in `linux-egui/src/main.rs` remains a stub until that team lands `eframe::App`; do not treat the current binary as a production application.
+
+```bash
+cd app
+cargo test -p openless-core
+cargo test -p openless-linux-egui --all-targets
+pwsh ./scripts/check-core-deps.ps1
+pwsh ./scripts/check-core-deps.ps1 openless-linux-egui
+```
+
+The independent Linux package workflow is `.github/workflows/release-linux-egui.yml`. It builds deb/rpm/AppImage and the fcitx5 plugin without WebKitGTK, but deliberately has no automatic tag trigger until the real egui entry point is present.
 
 ## macOS Build
 
@@ -27,7 +47,7 @@ INSTALL=0 ./scripts/build-mac.sh
 Generated macOS artifacts:
 
 - `app/src-tauri/target/release/bundle/macos/OpenLess.app`
-- `app/src-tauri/target/release/bundle/dmg/OpenLess_1.1.0_aarch64.dmg`
+- `app/src-tauri/target/release/bundle/dmg/OpenLess_<version>_aarch64.dmg`
 
 For local install during development:
 
@@ -115,7 +135,7 @@ npm run check:hotkey-injection
 
 ## Release Signing
 
-Tagged releases (`v*-tauri`) must be Developer ID signed and notarized so users can download and open the macOS app without manually removing quarantine attributes.
+Tagged Tauri releases (`v*-tauri`) must be Developer ID signed and notarized so users can download and open the macOS app without manually removing quarantine attributes. Linux packages use the separate manual egui workflow and an independent minisign secret.
 
 Required GitHub secrets:
 
@@ -138,6 +158,7 @@ The following are intentionally local-only:
 
 - `app/node_modules/`
 - `app/dist/`
+- `app/target/`
 - `app/src-tauri/target/`
 - `app/src-tauri/gen/`
 - `.DS_Store`

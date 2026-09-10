@@ -1,15 +1,62 @@
-//! JNI bridge between Kotlin overlay code and Rust Coordinator.
+//! JNI bridge between Kotlin overlay code and the shared Rust backend.
+//!
+//! Dictation lifecycle calls use [`openless_core::OpenLessBackend`] directly.
+//! [`Coordinator`] adapts Android overlay/window effects and forwards QA and
+//! style-pack actions to their Core-owned services; it is not another owner of
+//! their business state. Kotlin only receives the existing JNI wire envelope.
 
 use std::sync::{Arc, OnceLock};
+
+use openless_core::{
+    BackendError, BackendErrorCode, DictationStartOptions, DictationStopOptions, OpenLessBackend,
+};
 
 use crate::coordinator::Coordinator;
 use crate::types::{CapsulePayload, CapsuleState};
 
 static COORDINATOR: OnceLock<Arc<Coordinator>> = OnceLock::new();
+static CORE_BACKEND: OnceLock<Arc<OpenLessBackend>> = OnceLock::new();
 static OVERLAY_VISIBLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AndroidBackendSnapshotResponse {
+    contract_version: &'static str,
+    ok: bool,
+    payload: Option<openless_core::BackendSnapshot>,
+    error: Option<&'static str>,
+}
+
+fn android_backend_snapshot_response(backend: Option<&OpenLessBackend>) -> String {
+    let response = match backend {
+        Some(backend) if backend.snapshot().running => AndroidBackendSnapshotResponse {
+            contract_version: openless_core::BACKEND_CONTRACT_VERSION,
+            ok: true,
+            payload: Some(backend.snapshot()),
+            error: None,
+        },
+        Some(backend) => AndroidBackendSnapshotResponse {
+            contract_version: openless_core::BACKEND_CONTRACT_VERSION,
+            ok: false,
+            payload: Some(backend.snapshot()),
+            error: Some("backend is not running"),
+        },
+        None => AndroidBackendSnapshotResponse {
+            contract_version: openless_core::BACKEND_CONTRACT_VERSION,
+            ok: false,
+            payload: None,
+            error: Some("backend unavailable"),
+        },
+    };
+    serde_json::to_string(&response).expect("Android backend snapshot is serializable")
+}
 
 pub fn register_android_coordinator(coordinator: Arc<Coordinator>) {
     let _ = COORDINATOR.set(coordinator);
+}
+
+pub fn register_android_backend(backend: Arc<OpenLessBackend>) {
+    let _ = CORE_BACKEND.set(backend);
 }
 
 pub fn notify_capsule_state(payload: &CapsulePayload) {
@@ -148,16 +195,12 @@ pub fn overlay_trigger_mode_name() -> &'static str {
 }
 
 fn spawn_start_dictation(translation: bool) {
-    let Some(coordinator) = COORDINATOR.get().cloned() else {
-        log::warn!("[android-native] coordinator unavailable");
+    let Some(backend) = CORE_BACKEND.get().cloned() else {
+        log::warn!("[android-native] core backend unavailable");
         return;
     };
     tauri::async_runtime::spawn(async move {
-        let result = if translation {
-            coordinator.start_dictation_with_translation().await
-        } else {
-            coordinator.start_dictation().await
-        };
+        let result = start_core_dictation(&backend, translation).await;
         if let Err(error) = result {
             log::warn!(
                 "[android-native] {} failed: {error}",
@@ -172,37 +215,80 @@ fn spawn_start_dictation(translation: bool) {
 }
 
 fn spawn_stop_dictation() {
-    let Some(coordinator) = COORDINATOR.get().cloned() else {
-        log::warn!("[android-native] coordinator unavailable");
+    let Some(backend) = CORE_BACKEND.get().cloned() else {
+        log::warn!("[android-native] core backend unavailable");
         return;
     };
     tauri::async_runtime::spawn(async move {
-        if let Err(error) = coordinator.stop_dictation().await {
+        if let Err(error) = stop_core_dictation(&backend, None).await {
             log::warn!("[android-native] stop_dictation failed: {error}");
         }
     });
 }
 
 fn spawn_stop_dictation_with_translation(translation: bool) {
-    let Some(coordinator) = COORDINATOR.get().cloned() else {
-        log::warn!("[android-native] coordinator unavailable");
+    let Some(backend) = CORE_BACKEND.get().cloned() else {
+        log::warn!("[android-native] core backend unavailable");
         return;
     };
     tauri::async_runtime::spawn(async move {
-        if let Err(error) = coordinator
-            .stop_dictation_with_translation(translation)
-            .await
-        {
+        if let Err(error) = stop_core_dictation(&backend, Some(translation)).await {
             log::warn!("[android-native] stop_dictation_with_translation failed: {error}");
         }
     });
 }
 
 fn spawn_cancel_dictation() {
-    let Some(coordinator) = COORDINATOR.get().cloned() else {
+    let Some(backend) = CORE_BACKEND.get().cloned() else {
+        log::warn!("[android-native] core backend unavailable");
         return;
     };
-    coordinator.cancel_dictation();
+    tauri::async_runtime::spawn(async move {
+        if let Err(error) = cancel_core_dictation(&backend).await {
+            log::warn!("[android-native] cancel_dictation failed: {error}");
+        }
+    });
+}
+
+async fn ensure_core_started(backend: &OpenLessBackend) -> Result<(), BackendError> {
+    if !backend.snapshot().running {
+        backend.start().await?;
+    }
+    Ok(())
+}
+
+async fn start_core_dictation(
+    backend: &OpenLessBackend,
+    translation: bool,
+) -> Result<(), BackendError> {
+    ensure_core_started(backend).await?;
+    backend
+        .start_dictation_with_options(DictationStartOptions {
+            translation_requested: translation,
+            ..DictationStartOptions::default()
+        })
+        .await
+        .map(|_| ())
+}
+
+async fn stop_core_dictation(
+    backend: &OpenLessBackend,
+    translation: Option<bool>,
+) -> Result<(), BackendError> {
+    ensure_core_started(backend).await?;
+    backend
+        .stop_dictation_with_options(DictationStopOptions {
+            translation_requested: translation,
+        })
+        .await
+        .map(|_| ())
+}
+
+async fn cancel_core_dictation(backend: &OpenLessBackend) -> Result<(), BackendError> {
+    match backend.cancel_dictation(None).await {
+        Err(error) if error.code == BackendErrorCode::InvalidState => Ok(()),
+        result => result,
+    }
 }
 
 fn spawn_switch_style_pack() {
@@ -311,6 +397,18 @@ mod jni_exports {
     }
 
     #[no_mangle]
+    pub unsafe extern "system" fn Java_com_openless_app_OpenLessNative_nativeBackendSnapshot(
+        env: *mut JNIEnv,
+        _class: JClass,
+    ) -> jstring {
+        let response = android_backend_snapshot_response(CORE_BACKEND.get().map(Arc::as_ref));
+        match JniEnv::from_raw(env) {
+            Ok(mut env) => crate::android::jni::android::export_jstring(&mut env, &response),
+            Err(_) => std::ptr::null_mut(),
+        }
+    }
+
+    #[no_mangle]
     pub unsafe extern "system" fn Java_com_openless_app_OpenLessNative_nativeSwitchStylePack(
         _env: *mut JNIEnv,
         _class: JClass,
@@ -410,5 +508,96 @@ mod jni_exports {
         _class: JClass,
     ) {
         notify_overlay_destroyed();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use openless_core::testing::{
+        FixtureDictationEngine, FixtureEngineAction, FixtureTextInserter, RecordingHostActions,
+    };
+    use openless_core::{
+        BackendConfig, BackendDependencies, BackendServices, DictationPhase,
+        InMemoryCredentialStore, InsertOutcome, TokioTaskSpawner,
+    };
+
+    #[test]
+    fn android_snapshot_envelope_always_carries_contract_version() {
+        let value: serde_json::Value =
+            serde_json::from_str(&android_backend_snapshot_response(None)).unwrap();
+        assert_eq!(
+            value["contractVersion"],
+            openless_core::BACKEND_CONTRACT_VERSION
+        );
+        assert_eq!(value["ok"], false);
+        assert!(value["payload"].is_null());
+        assert_eq!(value["error"], "backend unavailable");
+    }
+
+    #[tokio::test]
+    async fn android_dictation_bridge_uses_core_and_preserves_stop_time_translation() {
+        let data_dir = std::env::temp_dir().join(format!(
+            "openless-android-core-bridge-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let engine = FixtureDictationEngine::successful("raw", "translated");
+        let backend = OpenLessBackend::new(
+            BackendConfig {
+                data_dir: data_dir.clone(),
+                ..BackendConfig::default()
+            },
+            BackendDependencies {
+                host_actions: Arc::new(RecordingHostActions::default()),
+                text_inserter: Arc::new(FixtureTextInserter::with_outcome(InsertOutcome::Inserted)),
+                dictation_engine: Arc::new(engine.clone()),
+                task_spawner: Arc::new(TokioTaskSpawner),
+                credential_store: Arc::new(InMemoryCredentialStore::default()),
+                services: BackendServices::unsupported(),
+                local_asr_runtime: None,
+                selection_runtime: None,
+                selection_polisher: None,
+                qa_runtime: None,
+                marketplace_config: None,
+            },
+        )
+        .unwrap();
+        let not_ready: serde_json::Value =
+            serde_json::from_str(&android_backend_snapshot_response(Some(&backend))).unwrap();
+        assert_eq!(not_ready["ok"], false);
+        assert_eq!(not_ready["error"], "backend is not running");
+        let mut preferences = backend.get_preferences();
+        preferences.translation_target_language = "English".to_string();
+        preferences.working_languages = vec!["简体中文".to_string()];
+        crate::set_backend_preferences_for_test(&backend, preferences);
+
+        start_core_dictation(&backend, false).await.unwrap();
+        let ready: serde_json::Value =
+            serde_json::from_str(&android_backend_snapshot_response(Some(&backend))).unwrap();
+        assert_eq!(ready["ok"], true);
+        let translated_session = backend.snapshot().dictation.session_id.unwrap();
+        stop_core_dictation(&backend, Some(true)).await.unwrap();
+        start_core_dictation(&backend, true).await.unwrap();
+        let cancelled_session = backend.snapshot().dictation.session_id.unwrap();
+        cancel_core_dictation(&backend).await.unwrap();
+
+        assert_eq!(backend.snapshot().dictation.phase, DictationPhase::Idle);
+        assert_eq!(
+            engine.actions(),
+            vec![
+                FixtureEngineAction::Start(translated_session),
+                FixtureEngineAction::UpdateContext(translated_session),
+                FixtureEngineAction::Finish(translated_session),
+                FixtureEngineAction::Start(cancelled_session),
+                FixtureEngineAction::Cancel(cancelled_session),
+            ]
+        );
+        let contexts = engine.contexts();
+        assert!(!contexts[0].polish.translation_active);
+        assert!(contexts[1].polish.translation_active);
+        assert!(contexts[2].polish.translation_active);
+
+        backend.shutdown().await.unwrap();
+        let _ = std::fs::remove_dir_all(data_dir);
     }
 }

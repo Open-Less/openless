@@ -7,7 +7,7 @@
  *
  * DBus 接口: org.fcitx.Fcitx.OpenLess1  (对象路径 /openless)
  *  方法:
- *    CommitText(s: text)           — 将文字提交到当前焦点输入上下文
+ *    CommitText(s: text) -> b      — 将文字提交到当前焦点输入上下文
  *                                    安全性：本接口在会话总线(session bus)上对同用户
  *                                    所有进程开放，此为 fcitx5/IBus 体系的标准安全模型
  *                                    （非特权进程隔离）。
@@ -16,11 +16,19 @@
  *    SetCustomDictationTrigger(s: keyString) — 设置自定义组合键 (Key::parse 格式)
  *    SetQaHotkeyRaw(uu: sym, states)     — 直接设 QA 面板触发 sym+states
  *    SetTranslationHotkeyRaw(uu: sym, states) — 直接设翻译模式触发 sym+states
+ *    SetLessComputerHotkeyRaw(uu: sym, states) — 直接设 Less Computer 触发 sym+states
  *    SetAuxDown(s: text)                 — 在候选词列表下方显示状态文本
  *    ClearAuxDown()                      — 清除候选词列表下方文本
  *    GetSelectionText() -> s             — 读取当前 PRIMARY 选区文本（由 clipboard addon 维护）
+ *    CaptureSelectionTarget(s: ticket) -> s — 捕获选区和原输入上下文
+ *    ApplySelectionTarget(sss: ticket, source, replacement) -> b — 校验后替换
+ *    RevertSelectionTarget(s: ticket) -> b — 校验光标前文本后撤销替换
+ *    RekeySelectionTarget(ss: oldTicket, newTicket) -> b — 把 QA 目标交给 Core 预览
+ *    CancelSelectionTarget(s: ticket) -> b — 释放未使用的目标
  *  信号:
  *    DictationKeyEvent(uub: sym, states, isPress) — 听写热键按下/抬起
+ *    LessComputerKeyEvent(uub: sym, states, isPress) — Less Computer 热键按下/抬起
+ *    LessComputerKeyCombined(uub: sym, states, isPress) — Less Computer 组合键撤销
  *    QaShortcutEvent(uub: sym, states, isPress)   — QA 快捷键按下/抬起
  *    SelectionPolishEvent(uub: sym, states, isPress) — 选区润色快捷键按下/抬起
  *    TranslationModifierEvent(uub: sym, states, isPress) — 翻译修饰键按下/抬起
@@ -28,6 +36,7 @@
 
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include <fcitx-config/configuration.h>
@@ -39,6 +48,7 @@
 #include <fcitx-utils/i18n.h>
 #include <fcitx-utils/key.h>
 #include <fcitx-utils/log.h>
+#include <fcitx-utils/utf8.h>
 #include <fcitx/addonfactory.h>
 #include <fcitx/addoninstance.h>
 #include <fcitx/addonmanager.h>
@@ -75,10 +85,15 @@ public:
           selectionPolishRawStates_(0),
           translationRawSym_(0),
           translationRawStates_(0),
+          lessComputerRawSym_(0),
+          lessComputerRawStates_(0),
           hasCustomDictationKey_(false),
           dictationTriggerHeld_(false),
           dictationTriggerCombined_(false),
-          savedIc_(nullptr) {
+          lessComputerTriggerHeld_(false),
+          lessComputerTriggerCombined_(false),
+          savedIc_(nullptr),
+          selectionIc_(nullptr) {
 
         // 1. 读取配置
         reloadConfig();
@@ -118,6 +133,22 @@ public:
                     auto sym = static_cast<uint32_t>(keyEvent.key().sym());
                     auto states = static_cast<uint32_t>(keyEvent.key().states());
                     bool isPress = !keyEvent.isRelease();
+
+                    if (lessComputerRawSym_ != 0 && sym == lessComputerRawSym_ &&
+                        states == lessComputerRawStates_) {
+                        lessComputerTriggerHeld_ = isPress;
+                        if (isPress) {
+                            lessComputerTriggerCombined_ = false;
+                        }
+                        lessComputerKeyEvent(sym, states, isPress);
+                        keyEvent.filterAndAccept();
+                        return;
+                    }
+                    if (isPress && lessComputerTriggerHeld_ && !isModifierKeySym(sym) &&
+                        !lessComputerTriggerCombined_) {
+                        lessComputerTriggerCombined_ = true;
+                        lessComputerKeyCombined(sym, states, true);
+                    }
 
                     // 自定义组合键：Alt 状态下字母 sym 可能大写（A vs a），归一化比较
                     if (hasCustomDictationKey_ && states == static_cast<uint32_t>(customDictationKey_.states()) &&
@@ -179,6 +210,7 @@ public:
                     }
                     if (qaRawSym_ != 0 && sym == qaRawSym_ &&
                         states == qaRawStates_) {
+                        if (isPress) selectionIc_ = keyEvent.inputContext();
                         FCITX_LOGC(openless, Debug)
                             << "QA shortcut";
                         qaShortcutEvent(qaRawSym_, qaRawStates_, isPress);
@@ -188,6 +220,7 @@ public:
                     if (selectionPolishRawSym_ != 0 &&
                         sym == selectionPolishRawSym_ &&
                         states == selectionPolishRawStates_) {
+                        if (isPress) selectionIc_ = keyEvent.inputContext();
                         FCITX_LOGC(openless, Debug)
                             << "Selection polish shortcut";
                         selectionPolishEvent(selectionPolishRawSym_,
@@ -218,6 +251,24 @@ public:
                     auto &icEvent = static_cast<InputContextEvent &>(event);
                     if (icEvent.inputContext() == savedIc_) {
                         savedIc_ = nullptr;
+                    }
+                    if (icEvent.inputContext() == selectionIc_) {
+                        selectionIc_ = nullptr;
+                    }
+                    for (auto it = selectionTargets_.begin();
+                         it != selectionTargets_.end();) {
+                        if (it->second.inputContext == icEvent.inputContext()) {
+                            it = selectionTargets_.erase(it);
+                        } else {
+                            ++it;
+                        }
+                    }
+                    for (auto it = dictationTargets_.begin(); it != dictationTargets_.end();) {
+                        if (it->second == icEvent.inputContext()) {
+                            it = dictationTargets_.erase(it);
+                        } else {
+                            ++it;
+                        }
                     }
                 }));
 
@@ -259,9 +310,9 @@ public:
     ~OpenLess() = default;
 
     // ---- DBus 方法 ----
-    // 返回 void 而非 std::tuple<>，以匹配 FCITX_OBJECT_VTABLE_METHOD 的 RET("")
+    // 返回 bool，让调用方区分“无焦点输入上下文”的安全失败和实际提交成功。
 
-    void commitText(const std::string &text) {
+    bool commitText(const std::string &text) {
         // 优先使用快捷键按下时保存的输入上下文（savedIc_），
         // 此时用户在目标 app 中，此后胶囊窗口抢焦点不影响提交。
         // 若 savedIc_ 为空则兜底用 foreachFocused。
@@ -278,10 +329,145 @@ public:
         if (!ic) {
             FCITX_LOGC(openless, Warn)
                 << "CommitText: no input context available";
-            throw std::runtime_error("no focused input context");
+            // A DBus call must not bring down the fcitx5 host when the target
+            // application has no focused input context (for example during
+            // startup or in a headless session).  The Rust adapter observes
+            // the successful method return and can use its own capability or
+            // clipboard fallback policy; fcitx5 remains alive either way.
+            return false;
         }
         FCITX_LOGC(openless, Debug) << "CommitText: " << text;
         ic->commitString(text);
+        return true;
+    }
+
+    std::string captureSelectionTarget(const std::string &ticket) {
+        if (ticket.empty() || !selectionIc_) {
+            return std::string();
+        }
+        std::string source;
+        const auto &surrounding = selectionIc_->surroundingText();
+        if (surrounding.isValid()) {
+            source = surrounding.selectedText();
+        }
+        if (source.empty()) {
+            source = getSelectionText();
+        }
+        if (source.empty()) {
+            return std::string();
+        }
+        selectionTargets_[ticket] = {
+            selectionIc_, source, std::string(), surrounding.text(),
+            surrounding.cursor(), surrounding.anchor(), surrounding.isValid()};
+        return source;
+    }
+
+    bool captureDictationTarget(const std::string &ticket) {
+        if (ticket.empty() || !savedIc_) return false;
+        // A session keeps its own native target even when later key events
+        // update savedIc_. Destruction invalidates the ticket instead of
+        // redirecting the remaining transcript to a different application.
+        return dictationTargets_.emplace(ticket, savedIc_).second;
+    }
+
+    bool commitDictationTarget(const std::string &ticket, const std::string &text) {
+        auto found = dictationTargets_.find(ticket);
+        if (found == dictationTargets_.end()) return false;
+        found->second->commitString(text);
+        return true;
+    }
+
+    bool cancelDictationTarget(const std::string &ticket) {
+        return dictationTargets_.erase(ticket) > 0;
+    }
+
+    bool applySelectionTarget(const std::string &ticket,
+                              const std::string &source,
+                              const std::string &replacement) {
+        // The ticket is the Core session generation. Never fall back to the
+        // current focus here: a preview may have focused the OpenLess window,
+        // and writing there would corrupt a different application.
+        auto found = selectionTargets_.find(ticket);
+        if (found == selectionTargets_.end() || source != found->second.source ||
+            replacement.empty()) {
+            return false;
+        }
+        auto *ic = found->second.inputContext;
+        const auto &surrounding = ic->surroundingText();
+        const auto &captured = found->second;
+        // PRIMARY can outlive the selection, and the same selected string may
+        // occur at several offsets. Only the original IC's complete surrounding
+        // snapshot proves that this exact range is still the intended target.
+        // Without surrounding-text support, preview/read remains possible but
+        // destructive replacement must fail safely.
+        if (!captured.surroundingValid || !surrounding.isValid() ||
+            captured.surroundingText != surrounding.text() ||
+            captured.cursor != surrounding.cursor() ||
+            captured.anchor != surrounding.anchor() ||
+            surrounding.selectedText() != source) {
+            return false;
+        }
+        ic->commitString(replacement);
+        found->second.replacement = replacement;
+        return true;
+    }
+
+    bool revertSelectionTarget(const std::string &ticket) {
+        auto found = selectionTargets_.find(ticket);
+        if (found == selectionTargets_.end() || found->second.replacement.empty()) {
+            return false;
+        }
+        auto *ic = found->second.inputContext;
+        const auto &replacement = found->second.replacement;
+        const auto &surrounding = ic->surroundingText();
+        if (!surrounding.isValid()) {
+            FCITX_LOGC(openless, Warn)
+                << "RevertSelectionTarget: surrounding text is unavailable";
+            return false;
+        }
+        const auto replacementChars = utf8::lengthValidated(replacement);
+        const auto textChars = utf8::lengthValidated(surrounding.text());
+        if (replacementChars == utf8::INVALID_LENGTH ||
+            textChars == utf8::INVALID_LENGTH ||
+            surrounding.cursor() > textChars ||
+            surrounding.cursor() < replacementChars) {
+            return false;
+        }
+        const auto &captured = found->second;
+        if (surrounding.cursor() != std::min(captured.cursor, captured.anchor) + replacementChars ||
+            surrounding.anchor() != surrounding.cursor()) {
+            return false;
+        }
+        auto end = utf8::nextNChar(
+            surrounding.text().begin(), surrounding.cursor());
+        auto begin = utf8::nextNChar(
+            surrounding.text().begin(), surrounding.cursor() - replacementChars);
+        if (std::string(begin, end) != replacement) {
+            FCITX_LOGC(openless, Warn)
+                << "RevertSelectionTarget: text changed after replacement";
+            return false;
+        }
+        ic->deleteSurroundingText(-static_cast<int>(replacementChars),
+                                  static_cast<unsigned int>(replacementChars));
+        ic->commitString(found->second.source);
+        selectionTargets_.erase(found);
+        return true;
+    }
+
+    bool cancelSelectionTarget(const std::string &ticket) {
+        return selectionTargets_.erase(ticket) > 0;
+    }
+
+    bool rekeySelectionTarget(const std::string &oldTicket,
+                              const std::string &newTicket) {
+        auto found = selectionTargets_.find(oldTicket);
+        if (found == selectionTargets_.end() || newTicket.empty()) {
+            return false;
+        }
+        auto target = std::move(found->second);
+        selectionTargets_.erase(found);
+        selectionTargets_[newTicket] = std::move(target);
+        return true;
     }
 
     void setAuxDown(const std::string &text) {
@@ -384,6 +570,7 @@ public:
         RawConfig raw;
         raw.setValueByPath("TriggerRawSym", std::to_string(sym));
         raw.setValueByPath("TriggerRawStates", std::to_string(states));
+        raw.setValueByPath("CustomDictationKey", "");
         config_.save(raw);
         safeSaveAsIni(raw, configFile());
         rebuildTriggerKeys();
@@ -412,6 +599,9 @@ public:
             config_.save(raw);
             raw.setValueByPath("TriggerRawSym", "0");
             raw.setValueByPath("TriggerRawStates", "0");
+            // Persist the actual custom binding, not only removal of the old
+            // raw binding, so an independent fcitx5 restart retains the key.
+            raw.setValueByPath("CustomDictationKey", keyString);
             safeSaveAsIni(raw, configFile());
         }
         FCITX_LOGC(openless, Info)
@@ -456,6 +646,18 @@ public:
             << "SetTranslationHotkeyRaw: sym=" << sym << " states=" << states;
     }
 
+    void setLessComputerHotkeyRaw(uint32_t sym, uint32_t states) {
+        lessComputerRawSym_ = sym;
+        lessComputerRawStates_ = states;
+        lessComputerTriggerHeld_ = false;
+        lessComputerTriggerCombined_ = false;
+        RawConfig raw;
+        readAsIni(raw, configFile());
+        raw.setValueByPath("LessComputerRawSym", std::to_string(sym));
+        raw.setValueByPath("LessComputerRawStates", std::to_string(states));
+        safeSaveAsIni(raw, configFile());
+    }
+
     /// 读取当前 PRIMARY 选区文本。空字符串表示无选区或 clipboard addon 不可用。
     std::string getSelectionText() {
         auto *clipboard = instance_->addonManager().addon("clipboard");
@@ -472,7 +674,15 @@ public:
         return text;
     }
 
-    FCITX_OBJECT_VTABLE_METHOD(commitText, "CommitText", "s", "");
+    FCITX_OBJECT_VTABLE_METHOD(commitText, "CommitText", "s", "b");
+    FCITX_OBJECT_VTABLE_METHOD(captureDictationTarget, "CaptureDictationTarget", "s", "b");
+    FCITX_OBJECT_VTABLE_METHOD(commitDictationTarget, "CommitDictationTarget", "ss", "b");
+    FCITX_OBJECT_VTABLE_METHOD(cancelDictationTarget, "CancelDictationTarget", "s", "b");
+    FCITX_OBJECT_VTABLE_METHOD(captureSelectionTarget, "CaptureSelectionTarget", "s", "s");
+    FCITX_OBJECT_VTABLE_METHOD(applySelectionTarget, "ApplySelectionTarget", "sss", "b");
+    FCITX_OBJECT_VTABLE_METHOD(revertSelectionTarget, "RevertSelectionTarget", "s", "b");
+    FCITX_OBJECT_VTABLE_METHOD(rekeySelectionTarget, "RekeySelectionTarget", "ss", "b");
+    FCITX_OBJECT_VTABLE_METHOD(cancelSelectionTarget, "CancelSelectionTarget", "s", "b");
     FCITX_OBJECT_VTABLE_METHOD(setAuxDown, "SetAuxDown", "s", "");
     FCITX_OBJECT_VTABLE_METHOD(clearAuxDown, "ClearAuxDown", "", "");
     FCITX_OBJECT_VTABLE_METHOD(setHotkey, "SetHotkey", "as", "");
@@ -481,9 +691,12 @@ public:
     FCITX_OBJECT_VTABLE_METHOD(setQaHotkeyRaw, "SetQaHotkeyRaw", "uu", "");
     FCITX_OBJECT_VTABLE_METHOD(setSelectionPolishHotkeyRaw, "SetSelectionPolishHotkeyRaw", "uu", "");
     FCITX_OBJECT_VTABLE_METHOD(setTranslationHotkeyRaw, "SetTranslationHotkeyRaw", "uu", "");
+    FCITX_OBJECT_VTABLE_METHOD(setLessComputerHotkeyRaw, "SetLessComputerHotkeyRaw", "uu", "");
     FCITX_OBJECT_VTABLE_METHOD(getSelectionText, "GetSelectionText", "", "s");
     FCITX_OBJECT_VTABLE_SIGNAL(dictationKeyEvent, "DictationKeyEvent", "uub");
     FCITX_OBJECT_VTABLE_SIGNAL(dictationKeyCombined, "DictationKeyCombined", "uub");
+    FCITX_OBJECT_VTABLE_SIGNAL(lessComputerKeyEvent, "LessComputerKeyEvent", "uub");
+    FCITX_OBJECT_VTABLE_SIGNAL(lessComputerKeyCombined, "LessComputerKeyCombined", "uub");
     FCITX_OBJECT_VTABLE_SIGNAL(qaShortcutEvent, "QaShortcutEvent", "uub");
     FCITX_OBJECT_VTABLE_SIGNAL(selectionPolishEvent, "SelectionPolishEvent", "uub");
     FCITX_OBJECT_VTABLE_SIGNAL(translationModifierEvent, "TranslationModifierEvent", "uub");
@@ -528,7 +741,27 @@ public:
             auto *v = raw.valueByPath("TranslationRawStates");
             translationRawStates_ = v ? std::stoul(*v, nullptr, 0) : 0;
         }
+        {
+            auto *v = raw.valueByPath("LessComputerRawSym");
+            lessComputerRawSym_ = v ? std::stoul(*v, nullptr, 0) : 0;
+        }
+        {
+            auto *v = raw.valueByPath("LessComputerRawStates");
+            lessComputerRawStates_ = v ? std::stoul(*v, nullptr, 0) : 0;
+        }
+        lessComputerTriggerHeld_ = false;
+        lessComputerTriggerCombined_ = false;
         rebuildTriggerKeys();
+        hasCustomDictationKey_ = false;
+        if (auto *value = raw.valueByPath("CustomDictationKey"); value && !value->empty()) {
+            Key key(*value);
+            if (key.isValid()) {
+                customDictationKey_ = key;
+                hasCustomDictationKey_ = true;
+                triggerRawSym_ = 0;
+                triggerKeyList_.clear();
+            }
+        }
     }
 
     const Configuration *getConfig() const override {
@@ -542,6 +775,25 @@ public:
     }
 
 private:
+    // The native-boundary contract fixture supplies real in-process IC handles
+    // without synthesizing DBus signals or touching the user's input devices.
+    friend struct OpenLessInputTargetContract;
+    struct SelectionTarget {
+        InputContext *inputContext;
+        std::string source;
+        std::string replacement;
+        // Keep an owned value snapshot, not the live fcitx object: Ubuntu 22.04's
+        // Fcitx 5.0.14 SurroundingText is neither copyable nor movable. Plain
+        // values also keep the captured range unchanged as the client updates
+        // its live context or Core transfers this ticket from QA to a preview.
+        std::string surroundingText;
+        // Fcitx cursor/anchor offsets count Unicode characters, not UTF-8 bytes;
+        // preserve those units for both stale-range checks and undo placement.
+        unsigned int cursor;
+        unsigned int anchor;
+        bool surroundingValid;
+    };
+
     static constexpr const char *configFile() {
         return "conf/openless.conf";
     }
@@ -573,14 +825,25 @@ private:
     uint32_t selectionPolishRawStates_;
     uint32_t translationRawSym_;
     uint32_t translationRawStates_;
+    uint32_t lessComputerRawSym_;
+    uint32_t lessComputerRawStates_;
     Key customDictationKey_;
     bool hasCustomDictationKey_;
     bool dictationTriggerHeld_;
     bool dictationTriggerCombined_;
+    bool lessComputerTriggerHeld_;
+    bool lessComputerTriggerCombined_;
     /// 快捷键按下时保存的输入上下文指针，用于 commitText 在失焦后仍能提交文字。
     /// 事件处理线程和 DBus 处理线程都是 fcitx5 主事件循环，无竞态。
     /// 通过 InputContextDestroyed 事件监听 IC 销毁时自动清空指针。
     InputContext *savedIc_;
+    /// QA/Selection 快捷键按下时的原输入上下文。该指针只能由 fcitx5 主事件循环
+    /// 访问，并在 InputContextDestroyed 中与所有关联 ticket 一起失效。
+    InputContext *selectionIc_;
+    /// Core session UUID -> Host 原生目标。map 只保存 effect 所需的句柄和回滚文本；
+    /// Preview/Apply/Completed/Cancelled 状态仍由 Core 独占。
+    std::unordered_map<std::string, SelectionTarget> selectionTargets_;
+    std::unordered_map<std::string, InputContext *> dictationTargets_;
     /// 上一次 SetAuxDown 的文本；焦点切换时用于自动补到新 IC。
     std::string lastAuxText_;
     std::vector<std::unique_ptr<HandlerTableEntry<EventHandler>>>

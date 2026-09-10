@@ -7,6 +7,7 @@
 // 凭据不走这里：按渠道 id 调 readCredential/setCredential(account, value, id)。
 
 import { invokeOrMock } from "./shared"
+import { mockCredentialValues } from "./mock-data"
 
 export type ChannelKind = "llm" | "asr"
 
@@ -75,11 +76,28 @@ const mockChannels: Record<ChannelKind, Channel[]> = {
             order: 1,
             lastTest: null,
         },
+        {
+            id: "orcarouter-asr",
+            name: "OrcaRouter-ASR",
+            providerType: "orcarouter",
+            enabled: false,
+            order: 2,
+            lastTest: null,
+        },
     ],
 }
 
 export function listChannels(kind: ChannelKind): Promise<Channel[]> {
     return invokeOrMock("list_channels", { kind }, () => mockChannels[kind])
+}
+
+export function invalidateMockChannelTest(id: string): void {
+    const channel = mockChannels.llm.find(channel => channel.id === id)
+    if (channel) channel.lastTest = null
+}
+
+export function invalidateMockChannelTests(kind: ChannelKind): void {
+    for (const channel of mockChannels[kind]) channel.lastTest = null
 }
 
 /** 返回后端分配的渠道 id。 */
@@ -91,7 +109,11 @@ export function createChannel(
     return invokeOrMock(
         "create_channel",
         { kind, providerType, name },
-        () => providerType,
+        () => {
+            const id = `${providerType}-${Date.now()}-${mockChannels[kind].length}`
+            mockChannels[kind].push({ id, name, providerType, enabled: true, order: mockChannels[kind].length, lastTest: null })
+            return id
+        },
     )
 }
 
@@ -104,7 +126,14 @@ export function setChannelProviderType(
     return invokeOrMock(
         "set_channel_provider_type",
         { kind, id, providerType },
-        () => undefined,
+        () => {
+            const channel = mockChannels[kind].find(channel => channel.id === id)
+            if (channel && channel.providerType !== providerType) {
+                channel.providerType = providerType
+                channel.lastTest = null
+                if (kind === 'llm') mockCredentialValues.delete(`${id}:ark.request_format`)
+            }
+        },
     )
 }
 
@@ -113,7 +142,18 @@ export function deleteChannelIfBlank(
     kind: ChannelKind,
     id: string,
 ): Promise<boolean> {
-    return invokeOrMock("delete_channel_if_blank", { kind, id }, () => true)
+    return invokeOrMock("delete_channel_if_blank", { kind, id }, () => {
+        const channel = mockChannels[kind].find(channel => channel.id === id)
+        const prefix = `${id}:`
+        const hasCredentials = [...mockCredentialValues]
+            .some(([key, value]) => key.startsWith(prefix) && value.length > 0)
+        if (!channel || channel.name.trim() || hasCredentials) return false
+        mockChannels[kind] = mockChannels[kind].filter(channel => channel.id !== id)
+        for (const key of mockCredentialValues.keys()) {
+            if (key.startsWith(prefix)) mockCredentialValues.delete(key)
+        }
+        return true
+    })
 }
 
 export function renameChannel(
@@ -121,11 +161,18 @@ export function renameChannel(
     id: string,
     name: string,
 ): Promise<void> {
-    return invokeOrMock("rename_channel", { kind, id, name }, () => undefined)
+    return invokeOrMock("rename_channel", { kind, id, name }, () => {
+        const channel = mockChannels[kind].find(item => item.id === id)
+        if (channel) channel.name = name
+        return undefined
+    })
 }
 
 export function deleteChannel(kind: ChannelKind, id: string): Promise<void> {
-    return invokeOrMock("delete_channel", { kind, id }, () => undefined)
+    return invokeOrMock("delete_channel", { kind, id }, () => {
+        mockChannels[kind] = mockChannels[kind].filter(channel => channel.id !== id)
+        for (const key of mockCredentialValues.keys()) if (key.startsWith(`${id}:`)) mockCredentialValues.delete(key)
+    })
 }
 
 export function setChannelEnabled(
@@ -136,7 +183,11 @@ export function setChannelEnabled(
     return invokeOrMock(
         "set_channel_enabled",
         { kind, id, enabled },
-        () => undefined,
+        () => {
+            const channel = mockChannels[kind].find(item => item.id === id)
+            if (channel) channel.enabled = enabled
+            return undefined
+        },
     )
 }
 
@@ -171,6 +222,9 @@ export function recordChannelTest(
     return invokeOrMock(
         "record_channel_test",
         { kind, id, ok, latencyMs, error },
-        () => undefined,
+        () => {
+            const channel = mockChannels[kind].find(channel => channel.id === id)
+            if (channel) channel.lastTest = { ok, latencyMs, error, at: Math.floor(Date.now() / 1000) }
+        },
     )
 }

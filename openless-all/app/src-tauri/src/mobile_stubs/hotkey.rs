@@ -1,5 +1,6 @@
 //! Mobile stub — global hotkeys are unavailable on Android/iOS.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::Sender;
 use std::time::Instant;
 
@@ -10,12 +11,26 @@ use crate::types::{
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HotkeyEvent {
     Pressed { at: Instant, press_id: u64 },
-    Released { at: Instant },
+    Released { at: Instant, press_id: u64 },
     // 组合键撤销与 Esc 取消在移动端无全局键盘监听，不在此枚举里（见 hotkey.rs 模块注释）。
-
     TranslationModifierPressed,
     QaShortcutPressed,
     // SelectionPolishShortcutPressed 为桌面（Windows-first）选区润色专属，mobile stub 不声明。
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HotkeyCombinedEdge {
+    pub at: Instant,
+    pub press_id: u64,
+}
+
+/// 窗口内开发注入仍需与桌面端使用同一种 press identity。移动端没有全局监听器，
+/// 但生成单调 id 的纯规则不能因此缺席，否则 Android 条件编译会出现另一套事件形状。
+pub fn next_press_id() -> u64 {
+    static NEXT_PRESS_ID: AtomicU64 = AtomicU64::new(0);
+    NEXT_PRESS_ID
+        .fetch_add(1, Ordering::Relaxed)
+        .wrapping_add(1)
 }
 
 /// Mobile 无全局键盘监听，Esc 独占为 no-op。
@@ -28,7 +43,7 @@ impl HotkeyMonitor {
         _binding: HotkeyBinding,
         _tx: Sender<HotkeyEvent>,
         _cancel_tx: Sender<()>,
-        _combo_tx: Sender<u64>,
+        _combo_tx: Sender<HotkeyCombinedEdge>,
     ) -> Result<Self, HotkeyInstallError> {
         Err(HotkeyInstallError {
             code: "unavailable".into(),
@@ -51,12 +66,6 @@ impl HotkeyMonitor {
     }
 
     pub fn reset_held_state(&self) {}
-
-    /// 移动端没有键盘监听器，永远「没看到叠加的普通键」——组合键仲裁窗口在这里
-    /// 恒等于放行（`press_resolves_to_combo` 也拿不到 monitor，双保险）。
-    pub fn trigger_combined_since_press(&self, _press_id: u64) -> bool {
-        false
-    }
 
     pub fn capability() -> HotkeyCapability {
         HotkeyCapability::current()

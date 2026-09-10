@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { ChevronDown } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { formatComboParts, modifiersFromPressedCodes } from '../lib/hotkey';
+import { functionKeyPrimaryFromEvent } from '../lib/hotkeyRecorder';
 import { KbdGroup } from './Kbd';
 import { setShortcutRecordingActive, validateShortcutBinding } from '../lib/ipc';
 import type { ShortcutBinding } from '../lib/types';
@@ -28,6 +29,7 @@ export function ShortcutRecorder({
   resetLabel,
   comboOnly = false,
   sideSpecificModifiers = false,
+  allowMacDictationKey = false,
 }: {
   value: ShortcutBinding | null;
   onSave: (binding: ShortcutBinding) => Promise<void>;
@@ -45,11 +47,15 @@ export function ShortcutRecorder({
   comboOnly?: boolean;
   /** 听写 start/stop 专用：录制 cmd-left / ctrl-right 等侧向修饰键。 */
   sideSpecificModifiers?: boolean;
+  /** macOS dictation only: choose the dedicated key as the single trigger. */
+  allowMacDictationKey?: boolean;
 }) {
   const { t } = useTranslation();
   const [recording, setRecording] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const nativeSelected = allowMacDictationKey && value?.primary === 'MacDictationKey';
+  const nativeError = error && ['Permission', 'Busy', 'Unavailable', 'Changed'].find(kind => error.includes(`macDictationKey${kind}`));
   const pendingModifier = useRef<ShortcutBinding | null>(null);
   const pendingTimer = useRef<number | null>(null);
   const pressedCodes = useRef<Set<string>>(new Set());
@@ -106,8 +112,9 @@ export function ShortcutRecorder({
       resetRecordingState();
       setRecording(false);
       setError(null);
-    } catch {
-      setError(t('settings.recording.comboConflict'));
+    } catch (reason) {
+      const message = String(reason);
+      setError(message.includes('macDictationKey') ? message : t('settings.recording.comboConflict'));
     }
   };
 
@@ -205,10 +212,15 @@ export function ShortcutRecorder({
     }
   };
 
-  const doReset = () => {
+  const doReset = async () => {
     setMenuOpen(false);
     setError(null);
-    if (onReset) void onReset();
+    try {
+      await onReset?.();
+    } catch (reason) {
+      const message = String(reason);
+      setError(message.includes('macDictationKey') ? message : t('settings.recording.comboConflict'));
+    }
   };
 
   const doDisable = () => {
@@ -354,11 +366,26 @@ export function ShortcutRecorder({
                 <motion.div
                   key="menu"
                   initial={{ height: 0, opacity: 0 }}
-                  animate={{ height: MENU_HEIGHT, opacity: 1 }}
+                  animate={{ height: allowMacDictationKey ? MENU_HEIGHT * 2 : MENU_HEIGHT, opacity: 1 }}
                   exit={{ height: 0, opacity: 0 }}
                   transition={{ duration: 0.16, ease: menuEase }}
                   style={{ overflow: 'hidden' }}
                 >
+                  {allowMacDictationKey && <div style={menuRowStyle}>
+                    <button
+                      type="button"
+                      aria-pressed={nativeSelected}
+                      disabled={disabled}
+                      title={t('macDictationKey.description')}
+                      onClick={() => {
+                        setMenuOpen(false);
+                        void finish({ primary: 'MacDictationKey', modifiers: [] });
+                      }}
+                      style={disabled ? disabledMenuButtonStyle : nativeSelected ? menuPrimaryStyle : menuButtonStyle}
+                    >
+                      {t('macDictationKey.label')}
+                    </button>
+                  </div>}
                   <div style={menuRowStyle}>
                     <motion.button
                       initial={{ y: 4, opacity: 0 }}
@@ -403,7 +430,7 @@ export function ShortcutRecorder({
           </motion.div>
         )}
       </AnimatePresence>
-      {error && <div style={{ fontSize: 11, color: 'var(--ol-red, #ef4444)' }}>{error}</div>}
+      {error && <div role="alert" style={{ fontSize: 11, color: 'var(--ol-red, #ef4444)' }}>{nativeError ? t(`macDictationKey.${nativeError}`) : error}</div>}
     </div>
   );
 }
@@ -426,6 +453,8 @@ function modifierPrimaryFromCode(code: string, key: string): string {
 }
 
 function primaryFromKeyboardEvent(e: KeyboardEvent): string {
+  const functionKey = functionKeyPrimaryFromEvent(e);
+  if (functionKey) return functionKey;
   const printable = primaryFromPrintableCode(e.code);
   if (printable) return printable;
   if (e.key.length === 1) return e.key;

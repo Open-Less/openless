@@ -1,18 +1,24 @@
 // 服务 → AI 提供商：LLM 润色模型 + ASR 语音转写两张卡片。
 // 自 Settings.tsx 整体迁出，逻辑零改动；i18n key 全部保持 `settings.providers.*`。
 
-import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Icon } from '../../components/Icon';
 import { detectOS } from '../../components/WindowChrome';
 import {
   listProviderModels,
+  listProviderDescriptors,
   readCredential,
   recordChannelTest,
   setActiveOmniProvider,
   setCredential,
   validateProviderCredentials,
+  type ProviderDescriptor,
 } from '../../lib/ipc';
+import { ModelCatalog } from './modelCatalog';
+import { CredentialDraft } from './credentialDraft';
+import { ProviderFormContext, useProviderForm } from './ProviderForm';
+import { LlmProtocolFields } from './LlmProtocolFields';
 import { emitSaved } from '../../lib/savedEvent';
 import { useLayoutStack, useConservativeLayout } from '../../lib/useMobileLayout';
 import { useHotkeySettings } from '../../state/HotkeySettingsContext';
@@ -24,8 +30,6 @@ import {
   Toggle,
   inputStyle,
   segmentedTrackStyle,
-  ASR_PRESETS,
-  type AsrPresetId,
 } from './shared';
 import {
   parseAdvancedAsrConfig,
@@ -82,121 +86,17 @@ function LlmThinkingToggle({ enabled, onToggle }: { enabled: boolean; onToggle: 
   );
 }
 
-export const LLM_PRESETS = [
-  {
-    id: 'ark',
-    nameKey: 'ark',
-    baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
-    modelPlaceholder: 'deepseek-v3-2',
-  },
-  {
-    id: 'deepseek',
-    nameKey: 'deepseek',
-    baseUrl: 'https://api.deepseek.com/v1',
-    modelPlaceholder: 'deepseek-v4-flash',
-  },
-  {
-    id: 'siliconflow',
-    nameKey: 'siliconflow',
-    baseUrl: 'https://api.siliconflow.cn/v1',
-    modelPlaceholder: 'Qwen/Qwen2.5-7B-Instruct',
-  },
-  {
-    id: 'atlascloud',
-    nameKey: 'atlascloud',
-    baseUrl: 'https://api.atlascloud.ai/v1',
-    modelPlaceholder: 'qwen/qwen3.5-flash',
-  },
-  {
-    id: 'openai',
-    nameKey: 'openai',
-    baseUrl: 'https://api.openai.com/v1',
-    modelPlaceholder: 'gpt-4o',
-  },
-  {
-    // 谷歌官方 Gemini API（原生 generateContent，不走 OpenAI 兼容 shim）。
-    // baseUrl 末尾 /v1beta 是当前 Generally Available 的 path（ai.google.dev/api）。
-    // 后端 llm_gemini.rs 会拼成 `{baseUrl}/models/{model}:generateContent`，
-    // 并按 Gemini 原生通道级 thinkingConfig 关闭或压低思考，不在前端维护模型适配表。
-    // 模型列表用 ProviderTools「拉取模型」按钮取，
-    // 由 commands.rs::fetch_provider_models 识别 generativelanguage 域名后按 Gemini shape 解析。
-    id: 'gemini',
-    nameKey: 'gemini',
-    baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
-    modelPlaceholder: 'gemini-2.5-flash',
-  },
-  {
-    id: 'codex_oauth',
-    nameKey: 'codexOAuth',
-    baseUrl: '',
-    // gpt-5.3-codex-spark 对 ChatGPT 账号的 Codex 通道会被 400 拒绝，
-    // 默认与占位一律用实测可用的 gpt-5.5（见 polish.rs::CODEX_DEFAULT_MODEL）。
-    modelPlaceholder: 'gpt-5.5',
-  },
-  {
-    id: 'mimo',
-    nameKey: 'mimo',
-    baseUrl: 'https://api.xiaomimimo.com/v1',
-    modelPlaceholder: 'xiaomi/mimo-v2-flash',
-  },
-  {
-    id: 'cometapi',
-    nameKey: 'cometapi',
-    baseUrl: 'https://api.cometapi.com/v1',
-    modelPlaceholder: 'gpt-4o',
-  },
-  {
-    id: 'openrouterFree',
-    nameKey: 'openrouterFree',
-    baseUrl: 'https://openrouter.ai/api/v1',
-    modelPlaceholder: 'qwen/qwen3-coder:free',
-  },
-  {
-    id: 'alibabaCoding',
-    nameKey: 'alibabaCoding',
-    baseUrl: 'https://coding-intl.dashscope.aliyuncs.com/v1',
-    modelPlaceholder: 'qwen3-coder-plus',
-  },
-  {
-    id: 'codingPlanX',
-    nameKey: 'codingPlanX',
-    baseUrl: 'https://api.codingplanx.ai/v1',
-    modelPlaceholder: 'gpt-5-mini',
-  },
-  {
-    // MiniMax 国内开放平台（minimaxi.com），OpenAI 兼容 /v1/chat/completions。
-    // M3 默认开启 thinking，可通过 `thinking.type = disabled` 关闭。
-    // provider_id 在后端 polish.rs::openai_compatible_thinking_control 命中
-    // "minimax" → MiniMaxThinking 分支，关闭时下发 disabled、开启时发 adaptive。
-    // 走"自定义"preset 接入时由 base_url 含 "minimax" 兜底识别,见 polish.rs。
-    // 文档: https://platform.minimaxi.com/docs/api-reference/text-chat-openai#thinking-控制
-    id: 'minimax',
-    nameKey: 'minimax',
-    baseUrl: 'https://api.minimaxi.com/v1',
-    modelPlaceholder: 'MiniMax-M3',
-  },
-  {
-    // StepFun（阶跃星辰）OpenAI 兼容 /v1/chat/completions。
-    // 默认模型选 step-1o-turbo-vision：step-3.x-flash 系列是推理模型且思考无法关闭
-    // （reasoning_effort 只能调档，正式内容要等隐藏思考结束，润色场景 TTFT 2s+），
-    // 而 step-1o-turbo-vision 无思考、TTFT ~0.3s，润色忠实度实测更适合听写链路。
-    // provider_id 在后端 polish.rs::openai_compatible_thinking_control 命中
-    // "stepfun" → ReasoningEffort 分支；走"自定义"preset 接入时由 base_url
-    // 含 "stepfun" 兜底识别，见 polish.rs。
-    id: 'stepfun',
-    nameKey: 'stepfun',
-    baseUrl: 'https://api.stepfun.com/v1',
-    modelPlaceholder: 'step-1o-turbo-vision',
-  },
-  {
-    id: 'custom',
-    nameKey: 'custom',
-    baseUrl: '',
-    modelPlaceholder: '',
-  },
-] as const;
-
-type LlmPresetId = typeof LLM_PRESETS[number]['id'];
+// React 只保留本地化标签。endpoint、model、auth 与能力必须来自 Core
+// ProviderDescriptor，避免每个平台各维护一份会漂移的业务真相。
+export const LLM_LABELS = [
+  ['ark', 'ark'], ['deepseek', 'deepseek'], ['siliconflow', 'siliconflow'],
+  ['atlascloud', 'atlascloud'], ['openai', 'openai'], ['gemini', 'gemini'],
+  ['codex_oauth', 'codexOAuth'], ['mimo', 'mimo'], ['cometapi', 'cometapi'],
+  ['openrouterFree', 'openrouterFree'], ['orcarouter', 'orcarouter'], ['alibabaCoding', 'alibabaCoding'],
+  ['codingPlanX', 'codingPlanX'], ['minimax', 'minimax'], ['stepfun', 'stepfun'],
+  ['opencode', 'opencode'], ['tencentTokenHub', 'tencentTokenHub'],
+  ['custom', 'customChatCompletions'], ['custom_responses', 'customResponses'], ['custom_messages', 'customMessages'],
+].map(([id, nameKey]) => ({ id, nameKey })) as readonly { id: string; nameKey: string }[];
 
 // 多模态（Omni）模型预设（issue #902）：一个模型同时接收「提示词 + 音频」一步输出
 // 最终文本。凭据走独立 `omni.*` 命名空间，与上方 LLM/ASR 两套配置完全隔离。
@@ -204,83 +104,57 @@ type LlmPresetId = typeof LLM_PRESETS[number]['id'];
 // - gemini       : Gemini 原生 generateContent（inlineData audio/wav）
 // - dashscope-omni: 阿里云百炼 OpenAI 兼容通道（qwen3-omni-flash 等）
 // - custom       : 任意 OpenAI 兼容多模态网关
-export const OMNI_PRESETS = [
-  {
-    id: 'openai',
-    nameKey: 'omniOpenai',
-    baseUrl: 'https://api.openai.com/v1',
-    modelPlaceholder: 'gpt-4o-audio-preview',
-  },
-  {
-    id: 'gemini',
-    nameKey: 'omniGemini',
-    baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
-    modelPlaceholder: 'gemini-2.5-flash',
-  },
-  {
-    id: 'dashscope-omni',
-    nameKey: 'omniDashscope',
-    baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-    modelPlaceholder: 'qwen3-omni-flash',
-  },
-  {
-    id: 'custom',
-    nameKey: 'custom',
-    baseUrl: '',
-    modelPlaceholder: '',
-  },
-] as const;
-
-type OmniPresetId = typeof OMNI_PRESETS[number]['id'];
-
 const ASR_DEFAULT_RESOURCE_ID = 'volc.seedasr.sauc.duration';
-
-/// 无 key / 无地址的本地引擎：卡片编辑里没有凭据字段，模型下载仍在「高级 → 本地模型」。
-export const LOCAL_ASR_PROVIDER_IDS: string[] = [
-  'local-qwen3',
-  'local-qwen3-mlx',
-  'local-qwen3-c',
-  'local-whisper',
-  'sherpa-onnx-local',
-  'foundry-local-whisper',
-  'apple-speech',
-];
-
-// ASR_PRESETS 已上移到 settings/shared.tsx 作为单一来源（AsrPresetId 由其派生，
-// Overview 的显示名映射也从那里取）。新增厂商的步骤见 shared.tsx 的注释。
-
-// 云端 ASR 模型预设（下拉可选）——千问新发布的 ASR 优先：qwen3-asr-flash 是
-// Qwen-ASR 的 OpenAI 兼容 HTTP 形态，另有实时变体（flash-realtime）；fun-asr
-// 系列是百炼原生推荐，paraformer 为老一代兜底。
-// 注意：qwen3-asr-flash-filetrans 官方只接受公网音频 URL，与本地录音链路不兼容，
-// 后端会显式拒绝（coordinator.rs::resolve_effective_asr_provider），不放预设。
-const BAILIAN_ASR_MODELS: string[] = [
-  'qwen3-asr-flash-realtime',
-  'qwen3-asr-flash',
-  'fun-asr-realtime',
-  'fun-asr',
-  'fun-asr-flash-2026-06-15',
-  'fun-asr-mtl',
-  'paraformer-realtime-v2',
-  'paraformer-v2',
-];
-
-// OpenAI 兼容（/audio/transcriptions）厂商共用的模型预设。
-const OPENAI_COMPAT_ASR_MODELS: string[] = [
-  'whisper-large-v3-turbo',
-  'whisper-large-v3',
-  'whisper-1',
-  'FunAudioLLM/SenseVoiceSmall',
-  'qwen3-asr-flash',
-];
-
-// 走 Whisper 兼容 /audio/transcriptions 协议的厂商（与后端
-// coordinator.rs::is_whisper_compatible_provider 保持一致）。其余非百炼厂商
-// （zhipu / stepfun / mimo / elevenlabs 等）协议不同，不给预设下拉，保持输入框。
-const WHISPER_COMPAT_ASR_PROVIDERS: AsrPresetId[] = ['whisper', 'groq', 'siliconflow', 'openrouter', 'openai-compatible'];
 
 /** 模型预设下拉里的「自定义模型…」哨兵值：选中即切回输入框手输。 */
 const CUSTOM_MODEL_OPTION_VALUE = '__custom_model__';
+
+function useRegisteredCredentialDraft(
+  account: string,
+  provider?: string,
+  onUserMutation?: () => void,
+  onBlockedChange?: (account: string, blocked: boolean) => void,
+  enabled = true,
+) {
+  const { t } = useTranslation();
+  const form = useContext(ProviderFormContext);
+  const draft = useMemo(() => new CredentialDraft(
+    () => readCredential(account, provider), value => setCredential(account, value, provider),
+  ), [account, provider]);
+  const state = useSyncExternalStore(draft.subscribe, draft.snapshot, draft.snapshot);
+  const blocked = !state.loaded || state.dirty || state.status === 'saving'
+    || state.status === 'readError' || state.status === 'saveError';
+
+  useEffect(() => {
+    if (!enabled) return;
+    void draft.load();
+    return () => draft.dispose();
+  }, [draft, enabled]);
+  useEffect(() => {
+    if (!enabled) return;
+    form?.track(account, blocked);
+    onBlockedChange?.(account, blocked);
+  }, [account, blocked, enabled, form?.track, onBlockedChange]);
+  useEffect(() => enabled ? form?.register(account, draft.flush) : undefined,
+    [account, draft, enabled, form?.register]);
+  useEffect(() => {
+    if (!enabled) return;
+    if (state.status === 'saving') emitSaved('saving', t('common.saving'));
+    if (state.status === 'saved') emitSaved('saved', t('common.saved'));
+    if (state.status === 'saveError') emitSaved('failed', t('common.operationFailed'));
+  }, [enabled, state.status, t]);
+
+  const edit = (value: string) => {
+    if (!enabled || !state.loaded) return false;
+    form?.track(account, true);
+    form?.invalidate(account);
+    onUserMutation?.();
+    draft.edit(value);
+    return true;
+  };
+
+  return { ...state, draft, edit, disabled: !enabled || !state.loaded || form?.leaving };
+}
 
 /**
  * 一张渠道卡片的凭据字段区（编辑弹窗的主体）。
@@ -293,12 +167,14 @@ export function ChannelCredentialFields({
   kind,
   providerType,
   channelId,
+  descriptor,
   onTested,
   onUserMutation,
 }: {
   kind: 'llm' | 'asr';
   providerType: string;
   channelId: string;
+  descriptor?: Partial<Pick<ProviderDescriptor, 'authRequirement' | 'defaultEndpoint' | 'defaultModel' | 'staticModels' | 'defaultRequestFormat' | 'supportedRequestFormats'>>;
   /** 测试连通出结果后通知外层刷新卡片上的延迟/标红。 */
   onTested?: () => void;
   /** 新建草稿发生用户交互时同步通知外层，避免关闭流程误删。 */
@@ -309,22 +185,24 @@ export function ChannelCredentialFields({
   const baseLayoutStack = useLayoutStack();
   const conservative = useConservativeLayout();
   const layoutStack = conservative || baseLayoutStack;
-  const [llmModelRevision, setLlmModelRevision] = useState(0);
-  const [asrModelRevision, setAsrModelRevision] = useState(0);
+  const form = useContext(ProviderFormContext);
+  const [configRevision, setConfigRevision] = useState(0);
+
+  const [blockedFields, setBlockedFields] = useState<Record<string, boolean>>({});
+  const trackField = useCallback((account: string, blocked: boolean) => {
+    form?.track(account, blocked);
+    setBlockedFields(previous => previous[account] === blocked ? previous : { ...previous, [account]: blocked });
+  }, [form?.track]);
+  const onLlmMutation = () => { onUserMutation?.(); setConfigRevision(value => value + 1); };
+
+
   const unifiedBailian = providerType === 'bailian';
   const [bailianModel, setBailianModel] = useState('');
-  const [volcengineAuthMode, setVolcengineAuthMode] = useState<'app_id_token' | 'api_key'>('app_id_token');
-
-  useEffect(() => {
-    if (providerType === 'volcengine') {
-      readCredential('volcengine.auth_mode', channelId)
-        .then(v => {
-          if (v === 'api_key') setVolcengineAuthMode('api_key');
-          else setVolcengineAuthMode('app_id_token');
-        })
-        .catch(() => setVolcengineAuthMode('app_id_token'));
-    }
-  }, [providerType, channelId]);
+  const volcengineAuth = useRegisteredCredentialDraft(
+    'volcengine.auth_mode', channelId, onUserMutation, undefined,
+    descriptor?.authRequirement === 'volcengine',
+  );
+  const volcengineAuthMode = volcengineAuth.value === 'api_key' ? 'api_key' : 'app_id_token';
 
   useEffect(() => {
     if (!unifiedBailian) setBailianModel('');
@@ -332,17 +210,34 @@ export function ChannelCredentialFields({
 
   const onLlmThinkingToggle = (enabled: boolean) => {
     if (!prefs) return;
-    void updatePrefs(current => ({ ...current, llmThinkingEnabled: enabled })).catch(error => {
-      console.error('[settings] failed to update LLM thinking mode', error);
-      emitSaved('failed', t('common.operationFailed'));
-    });
+    onLlmMutation();
+    trackField('thinking', true);
+    void updatePrefs(current => ({ ...current, llmThinkingEnabled: enabled }))
+      .then(() => onTested?.())
+      .catch(error => {
+        console.error('[settings] failed to update LLM thinking mode', error);
+        emitSaved('failed', t('common.operationFailed'));
+      })
+      .finally(() => trackField('thinking', false));
   };
 
+  // Provider policy 必须 fail-closed：Core descriptor 尚未返回或加载失败时，
+  // 不短暂渲染一套猜测的凭据字段，避免用户把秘密写进错误槽位。
+  if (!descriptor) {
+    return <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)' }}>{t('common.loading')}</div>;
+  }
+
   if (kind === 'llm') {
-    const preset = LLM_PRESETS.find(p => p.id === providerType) ?? LLM_PRESETS[LLM_PRESETS.length - 1];
-    const codexOAuthSelected = providerType === 'codex_oauth';
+    const defaultEndpoint = descriptor?.defaultEndpoint;
+    const defaultModel = descriptor?.defaultModel;
+    const codexOAuthSelected = descriptor?.authRequirement === 'o_auth';
     return (
       <>
+        {!!descriptor.supportedRequestFormats?.length && descriptor.defaultRequestFormat && (
+          <LlmProtocolFields channelId={channelId} defaultFormat={descriptor.defaultRequestFormat}
+            formats={descriptor.supportedRequestFormats} onUserMutation={() => { form?.invalidate(); onLlmMutation(); }}
+            onBlockedChange={trackField} onSaved={() => onTested?.()} />
+        )}
         {codexOAuthSelected ? (
           <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.6, margin: '2px 0 10px' }}>
             {t('settings.providers.codexOAuthNotice')}
@@ -350,75 +245,66 @@ export function ChannelCredentialFields({
         ) : (
           <>
             <CredentialField key={`${channelId}:api_key`} label={t('settings.providers.apiKeyLabel')}
-              account="ark.api_key" provider={channelId} mono mask onUserMutation={onUserMutation} />
+              account="ark.api_key" provider={channelId} mono mask onUserMutation={onLlmMutation} onBlockedChange={trackField} />
             <CredentialField key={`${channelId}:endpoint`} label={t('settings.providers.baseUrlLabel')}
               account="ark.endpoint" provider={channelId}
-              placeholder={preset.baseUrl || 'https://your-endpoint/v1'}
-              defaultValue={preset.baseUrl || undefined} onUserMutation={onUserMutation} />
-            {providerType === 'custom' && (
+              placeholder={defaultEndpoint || 'https://your-endpoint/v1'}
+              defaultValue={defaultEndpoint || undefined} onUserMutation={onLlmMutation} onBlockedChange={trackField} />
+            {['custom', 'custom_responses', 'custom_messages'].includes(providerType) && (
               <>
                 <CredentialField
                   key={`${channelId}:temperature`}
                   label={t('settings.providers.temperatureLabel')}
-                  account="ark.temperature"
+                  account="ark.temperature" provider={channelId}
                   placeholder={t('settings.providers.temperaturePlaceholder')}
                   mono
-                  onUserMutation={onUserMutation}
+                  onUserMutation={onLlmMutation} onBlockedChange={trackField}
                 />
                 <CredentialField
                   key={`${channelId}:extra_headers`}
                   label={t('settings.providers.extraHeadersLabel')}
-                  account="ark.extra_headers"
+                  account="ark.extra_headers" provider={channelId}
                   placeholder={t('settings.providers.extraHeadersPlaceholder')}
                   mono
                   mask
-                  onUserMutation={onUserMutation}
+                  onUserMutation={onLlmMutation} onBlockedChange={trackField}
                 />
               </>
             )}
           </>
         )}
-        <CredentialField key={`${channelId}:model:${llmModelRevision}`} label={t('settings.providers.modelLabel')}
-          account="ark.model_id" provider={channelId}
-          placeholder={preset.modelPlaceholder || 'model-name'} mono
-          defaultValue={preset.modelPlaceholder || undefined}
-          onUserMutation={onUserMutation}
-          trailing={(
-            <LlmThinkingToggle
-              enabled={prefs?.llmThinkingEnabled ?? false}
-              onToggle={onLlmThinkingToggle}
-            />
-          )}
-        />
-        <ProviderTools kind="llm" modelAccount="ark.model_id" provider={channelId}
-          onModelSelected={() => setLlmModelRevision(v => v + 1)} onTested={onTested}
+        <ModelField kind="llm" providerType={providerType} provider={channelId}
+          staticModels={descriptor.staticModels} defaultValue={defaultModel || undefined}
+          onUserMutation={onLlmMutation} onBlockedChange={trackField}
+          trailing={<LlmThinkingToggle enabled={prefs?.llmThinkingEnabled ?? false} onToggle={onLlmThinkingToggle} />} />
+        <ProviderTools key={`${configRevision}:${form?.revision}`} disabled={Object.values(blockedFields).some(Boolean) || (!!descriptor.supportedRequestFormats?.length && blockedFields.protocol === undefined)} kind="llm" provider={channelId}
+          onTested={onTested}
           onUserMutation={onUserMutation} />
+        {providerType === 'tencentTokenHub' && (
+          <div style={{ marginTop: 2, fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.6 }}>
+            {t('settings.providers.tencentTokenHubNote')}
+          </div>
+        )}
       </>
     );
   }
 
-  const asrPreset = ASR_PRESETS.find(p => p.id === providerType);
+  const defaultEndpoint = descriptor?.defaultEndpoint;
+  const defaultModel = descriptor?.defaultModel;
 
-  if (providerType === 'volcengine') {
+  if (descriptor?.authRequirement === 'volcengine') {
     return (
       <>
         <SettingRow label={t('settings.providers.volcengineAuthModeLabel')}>
           <SelectLite
             value={volcengineAuthMode}
-            onChange={async (v) => {
-              onUserMutation?.();
-              const mode = v as 'app_id_token' | 'api_key';
-              const prev = volcengineAuthMode;
-              setVolcengineAuthMode(mode);
-              try {
-                await setCredential('volcengine.auth_mode', mode, channelId);
-              } catch (error) {
-                // 写入失败必须回滚 UI 并提示：否则模式看着已切换、重启后却静默回退，
-                // 配合独立 API Key 槽会造成「Key 存在但模式不对」的混乱。
-                console.error('[settings] failed to save volcengine auth mode', error);
-                setVolcengineAuthMode(prev);
-                emitSaved('failed', t('common.operationFailed'));
-              }
+            disabled={volcengineAuth.disabled}
+            onChange={v => {
+              const save = async () => {
+                if (volcengineAuth.edit(v)) await volcengineAuth.draft.flush();
+              };
+              if (form) void form.finish(save);
+              else void save();
             }}
             options={[
               { value: 'app_id_token', label: t('settings.providers.volcengineAuthModeAppIdToken') },
@@ -427,6 +313,12 @@ export function ChannelCredentialFields({
             ariaLabel={t('settings.providers.volcengineAuthModeLabel')}
             style={{ ...inputStyle, width: '100%', maxWidth: layoutStack ? '100%' : 260 }}
           />
+          {volcengineAuth.status === 'readError' && (
+            <span style={{ fontSize: 11, color: 'var(--ol-warn)' }}>{t('settings.providers.readFailed')}</span>
+          )}
+          {volcengineAuth.status === 'saveError' && (
+            <button onClick={() => void volcengineAuth.draft.flush()} style={miniBtnStyle}>{t('common.retry')}</button>
+          )}
         </SettingRow>
         {/* 两种模式使用各自独立的凭据槽位：旧版 Access Token（volcengine.access_key）
             与方舟 API Key（volcengine.api_key）互不预填，切换模式不会残留混淆。 */}
@@ -454,14 +346,14 @@ export function ChannelCredentialFields({
             ? t('settings.providers.volcengineApiKeyNote')
             : t('settings.providers.volcengineMappingNote')}
         </div>
-        <ProviderTools kind="asr" modelAccount="asr.model" provider={channelId}
-          showFetchModels={false} onModelSelected={() => setAsrModelRevision(v => v + 1)} onTested={onTested}
+        <ProviderTools key={form?.revision} disabled={Object.values(form?.blocked ?? {}).some(Boolean)} kind="asr" provider={channelId}
+          onTested={onTested}
           onUserMutation={onUserMutation} />
       </>
     );
   }
 
-  if (providerType === 'iflytek') {
+  if (descriptor?.authRequirement === 'xfyun') {
     return (
       <>
         <CredentialField key={`${channelId}:app_id`} label={t('settings.providers.xfyunAppIdLabel')}
@@ -471,8 +363,31 @@ export function ChannelCredentialFields({
         <div style={{ marginTop: 2, fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.6 }}>
           {t('settings.providers.xfyunNote')}
         </div>
-        <ProviderTools kind="asr" modelAccount="asr.model" provider={channelId}
-          showFetchModels={false} onModelSelected={() => setAsrModelRevision(v => v + 1)} onTested={onTested}
+        <ProviderTools key={form?.revision} disabled={Object.values(form?.blocked ?? {}).some(Boolean)} kind="asr" provider={channelId}
+          onTested={onTested}
+          onUserMutation={onUserMutation} />
+      </>
+    );
+  }
+
+  if (descriptor?.authRequirement === 'tencent_cloud') {
+    return (
+      <>
+        <CredentialField key={`${channelId}:app_id`} label={t('settings.providers.tencentCloudAppIdLabel')}
+          account="tencent_cloud.app_id" provider={channelId} mono onUserMutation={onUserMutation} />
+        <CredentialField key={`${channelId}:secret_id`} label={t('settings.providers.tencentCloudSecretIdLabel')}
+          account="tencent_cloud.secret_id" provider={channelId} mono mask onUserMutation={onUserMutation} />
+        <CredentialField key={`${channelId}:secret_key`} label={t('settings.providers.tencentCloudSecretKeyLabel')}
+          account="tencent_cloud.secret_key" provider={channelId} mono mask onUserMutation={onUserMutation} />
+        <CredentialField key={`${channelId}:model`} label={t('settings.providers.modelLabel')}
+          account="asr.model" provider={channelId} mono
+          placeholder={descriptor?.defaultModel || 'Hy-ASR-3.0-preview'}
+          defaultValue={descriptor?.defaultModel || 'Hy-ASR-3.0-preview'} onUserMutation={onUserMutation} />
+        <div style={{ marginTop: 2, fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.6 }}>
+          {t('settings.providers.tencentCloudNote')}
+        </div>
+        <ProviderTools key={form?.revision} disabled={Object.values(form?.blocked ?? {}).some(Boolean)} kind="asr" provider={channelId}
+          onTested={onTested}
           onUserMutation={onUserMutation} />
       </>
     );
@@ -480,7 +395,7 @@ export function ChannelCredentialFields({
 
   // 本地引擎（qwen3 / sherpa / foundry / Apple 语音）没有 key 与地址；模型的下载与
   // 切换仍由「高级 → 本地模型」里的 <LocalAsr embedded /> 负责，这里只说明一句。
-  if (LOCAL_ASR_PROVIDER_IDS.includes(providerType)) {
+  if (descriptor?.authRequirement === 'none') {
     return (
       <div style={{ fontSize: 11.5, color: 'var(--ol-ink-4)', lineHeight: 1.6 }}>
         {t('settings.providers.localEngineNoCredentials')}
@@ -495,21 +410,14 @@ export function ChannelCredentialFields({
       {/* 统一百炼保留 endpoint 供用户选择区域或工作空间域名；后端按模型转换协议与路径。 */}
       <CredentialField key={`${channelId}:endpoint`} label={t('settings.providers.baseUrlLabel')}
         account="asr.endpoint" provider={channelId}
-        placeholder={asrPreset?.baseUrl || 'https://api.openai.com/v1'}
-        defaultValue={asrPreset?.baseUrl || undefined} onUserMutation={onUserMutation} />
-      <CredentialField key={`${channelId}:model:${asrModelRevision}`} label={t('settings.providers.modelLabel')}
-        account="asr.model" provider={channelId}
-        placeholder={unifiedBailian ? 'fun-asr-realtime' : (asrPreset?.model || 'whisper-1')}
-        defaultValue={asrPreset?.model || undefined}
+        placeholder={defaultEndpoint || 'https://your-endpoint/v1'}
+        defaultValue={defaultEndpoint || undefined} onUserMutation={onUserMutation} />
+      <ModelField kind="asr" providerType={providerType} provider={channelId}
+        staticModels={descriptor.staticModels} defaultValue={defaultModel || undefined}
         onUserMutation={onUserMutation}
-        onValueChange={unifiedBailian ? setBailianModel : undefined}
-        options={unifiedBailian
-          ? BAILIAN_ASR_MODELS.map(m => ({ value: m, label: m }))
-          : WHISPER_COMPAT_ASR_PROVIDERS.includes(providerType as AsrPresetId)
-            ? OPENAI_COMPAT_ASR_MODELS.map(m => ({ value: m, label: m }))
-            : undefined} />
+        onValueChange={unifiedBailian ? setBailianModel : undefined} />
       {unifiedBailian && (
-        <BailianProtocolHint key={`${channelId}:proto:${asrModelRevision}`} currentModel={bailianModel} />
+        <BailianProtocolHint currentModel={bailianModel} />
       )}
       {unifiedBailian && bailianModelSupportsVocabulary(bailianModel) && (
         <>
@@ -537,12 +445,12 @@ export function ChannelCredentialFields({
           {t('settings.providers.zenmuxVocabularyNote')}
         </div>
       )}
-      {/* 统一百炼「拉取模型」只写 model，不覆盖用户选择的区域或工作空间 endpoint。 */}
-      <ProviderTools kind="asr" modelAccount="asr.model" provider={channelId}
-        onModelSelected={() => setAsrModelRevision(v => v + 1)} onTested={onTested}
+      {/* 连通性测试与目录拉取分开，不回填模型或 endpoint。 */}
+      <ProviderTools key={form?.revision} disabled={Object.values(form?.blocked ?? {}).some(Boolean)} kind="asr" provider={channelId}
+        onTested={onTested}
         onUserMutation={onUserMutation} />
       {(providerType === 'openai-compatible' || providerType === 'zenmux') && (
-        <AsrAdvancedOptions provider={channelId} onUserMutation={onUserMutation} />
+        <AsrAdvancedOptions provider={channelId} providerType={providerType} onUserMutation={onUserMutation} />
       )}
     </>
   );
@@ -553,41 +461,25 @@ export function ChannelCredentialFields({
 // zenmux 暴露 enable_itn（数字归一化）开关，verbose_json / 分片对其无意义。
 function AsrAdvancedOptions({
   provider,
+  providerType,
   onUserMutation,
 }: {
   provider: string;
+  providerType: 'openai-compatible' | 'zenmux';
   onUserMutation?: () => void;
 }) {
   const { t } = useTranslation();
-  const [verboseJson, setVerboseJson] = useState(false);
+  const advanced = useRegisteredCredentialDraft('asr.advanced_config', provider, onUserMutation);
+  const config = useMemo(() => parseAdvancedAsrConfig(advanced.loaded ? advanced.value : null),
+    [advanced.loaded, advanced.value]);
   const [chunkDraft, setChunkDraft] = useState('');
-  const [enableItn, setEnableItn] = useState(true);
-  const [status, setStatus] = useState<'idle' | 'saving' | 'error'>('idle');
-  const [error, setError] = useState('');
+  const chunkInitialized = useRef(false);
 
   useEffect(() => {
-    let cancelled = false;
-    setStatus('idle');
-    setError('');
-    void (async () => {
-      try {
-        const raw = await readCredential('asr.advanced_config', provider);
-        if (cancelled) return;
-        const config = parseAdvancedAsrConfig(raw);
-        setVerboseJson(config.verboseJson);
-        setChunkDraft(config.chunkDurationMs ? String(config.chunkDurationMs) : '');
-        setEnableItn(config.enableItn);
-      } catch (err) {
-        if (!cancelled) {
-          setStatus('error');
-          setError(err instanceof Error ? err.message : String(err));
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [provider]);
+    if (!advanced.loaded || (chunkInitialized.current && advanced.status !== 'saved')) return;
+    chunkInitialized.current = true;
+    setChunkDraft(config.chunkDurationMs ? String(config.chunkDurationMs) : '');
+  }, [advanced.loaded, advanced.status, config.chunkDurationMs]);
 
   const parseChunkDraft = (draft: string): number | null => {
     const value = Number(draft);
@@ -595,32 +487,20 @@ function AsrAdvancedOptions({
     return Math.floor(value);
   };
 
-  const save = async (partial: {
+  const edit = (partial: {
     verboseJson?: boolean
     chunkDurationMs?: number | null
     enableItn?: boolean
   }) => {
-    onUserMutation?.();
-    setStatus('saving');
-    setError('');
     const next: AdvancedAsrConfig = {
-      verboseJson: partial.verboseJson ?? verboseJson,
+      verboseJson: partial.verboseJson ?? config.verboseJson,
       chunkDurationMs:
         partial.chunkDurationMs !== undefined
           ? partial.chunkDurationMs
           : parseChunkDraft(chunkDraft),
-      enableItn: partial.enableItn ?? enableItn,
+      enableItn: partial.enableItn ?? config.enableItn,
     };
-    try {
-      await setCredential('asr.advanced_config', serializeAdvancedAsrConfig(next), provider);
-      setVerboseJson(next.verboseJson);
-      setChunkDraft(next.chunkDurationMs ? String(next.chunkDurationMs) : '');
-      setEnableItn(next.enableItn);
-      setStatus('idle');
-    } catch (err) {
-      setStatus('error');
-      setError(err instanceof Error ? err.message : String(err));
-    }
+    return advanced.edit(serializeAdvancedAsrConfig(next));
   };
 
   return (
@@ -636,12 +516,15 @@ function AsrAdvancedOptions({
       >
         {t('settings.providers.asrAdvancedNote')}
       </div>
-      {provider === 'zenmux' ? (
+      <fieldset disabled={advanced.disabled} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
+      {providerType === 'zenmux' ? (
         <SettingRow
           label={t('settings.providers.asrAdvancedEnableItnLabel')}
           desc={t('settings.providers.asrAdvancedEnableItnHint')}
         >
-          <Toggle on={enableItn} onToggle={(next) => void save({ enableItn: next })} />
+          <Toggle on={config.enableItn} onToggle={(next) => {
+            if (edit({ enableItn: next })) void advanced.draft.flush();
+          }} />
         </SettingRow>
       ) : (
         <>
@@ -649,7 +532,9 @@ function AsrAdvancedOptions({
             label={t('settings.providers.asrAdvancedVerboseJsonLabel')}
             desc={t('settings.providers.asrAdvancedVerboseJsonHint')}
           >
-            <Toggle on={verboseJson} onToggle={(next) => void save({ verboseJson: next })} />
+            <Toggle on={config.verboseJson} onToggle={(next) => {
+              if (edit({ verboseJson: next })) void advanced.draft.flush();
+            }} />
           </SettingRow>
           <SettingRow
             label={t('settings.providers.asrAdvancedChunkLabel')}
@@ -661,9 +546,13 @@ function AsrAdvancedOptions({
               step={1000}
               value={chunkDraft}
               placeholder="0"
-              disabled={status === 'saving'}
-              onChange={(e) => setChunkDraft(e.target.value)}
-              onBlur={() => void save({ chunkDurationMs: parseChunkDraft(chunkDraft) })}
+              disabled={advanced.disabled}
+              onChange={(event) => {
+                const value = event.target.value;
+                setChunkDraft(value);
+                if (edit({ chunkDurationMs: parseChunkDraft(value) })) advanced.draft.schedule();
+              }}
+              onBlur={() => void advanced.draft.flush()}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
               }}
@@ -672,10 +561,14 @@ function AsrAdvancedOptions({
           </SettingRow>
         </>
       )}
-      {status === 'error' && (
+      </fieldset>
+      {advanced.status === 'readError' && (
         <div style={{ fontSize: 11, color: 'var(--ol-warn)', lineHeight: 1.4 }}>
-          {t('common.operationFailed')}: {error}
+          {t('settings.providers.readFailed')}
         </div>
+      )}
+      {advanced.status === 'saveError' && (
+        <button onClick={() => void advanced.draft.flush()} style={miniBtnStyle}>{t('common.retry')}</button>
       )}
     </>
   );
@@ -708,22 +601,10 @@ function bailianModelSupportsVocabulary(model: string): boolean {
 }
 
 // 模型框下的一行协议提示,解决「三种模型看不出区别」——告诉用户当前模型是实时还是
-// 录音文件、行为差异如何。随 asrModelRevision(拉取/选择模型时)与挂载时重读 asr.model。
+// 录音文件、行为差异如何。只使用当前渠道模型字段的值。
 function BailianProtocolHint({ currentModel }: { currentModel: string }) {
   const { t } = useTranslation();
-  const [model, setModel] = useState('');
-
-  useEffect(() => {
-    let cancelled = false;
-    readCredential('asr.model')
-      .then(v => { if (!cancelled) setModel(v || 'fun-asr-realtime'); })
-      .catch(() => { /* 读失败按默认实时提示 */ });
-    return () => { cancelled = true; };
-  }, []);
-
-  useEffect(() => {
-    setModel(currentModel || 'fun-asr-realtime');
-  }, [currentModel]);
+  const model = currentModel || 'fun-asr-realtime';
 
   const protocol = bailianModelProtocol(model);
   const hint = protocol === 'realtime'
@@ -741,17 +622,48 @@ function BailianProtocolHint({ currentModel }: { currentModel: string }) {
 
 type ProviderToolStatus = 'idle' | 'loading' | 'success' | 'empty' | 'error';
 
-function ProviderTools({ kind, modelAccount, provider, onModelSelected, onTested, onUserMutation, showFetchModels = true }: { kind: 'llm' | 'asr' | 'omni'; modelAccount: string; provider?: string; onModelSelected: () => void; onTested?: () => void; onUserMutation?: () => void; showFetchModels?: boolean }) {
+/** 目录只提供候选；CredentialField 是选择与手填唯一的写入入口。 */
+function ModelField({ kind, providerType, staticModels = [], ...field }: Omit<CredentialFieldProps, 'account' | 'label' | 'options'> & {
+  kind: 'llm' | 'asr' | 'omni'; providerType: string; staticModels?: string[];
+}) {
+  const { t } = useTranslation();
+  const form = useContext(ProviderFormContext);
+  const loader = useMemo(() => new ModelCatalog(), [kind, field.provider, providerType]);
+  const catalog = useSyncExternalStore(loader.subscribe, loader.snapshot, loader.snapshot);
+  const version = form?.version.current ?? 0;
+  useEffect(() => () => loader.invalidate(), [loader]);
+  const loadModels = async () => {
+    if (form?.leaving || Object.values(form?.blocked ?? {}).some(Boolean)) return;
+    await loader.load(version, () => listProviderModels(kind, field.provider, providerType),
+      () => form?.version.current ?? 0);
+  };
+  const active = catalog?.version === version ? catalog : null;
+  const models = [...new Set([...staticModels, ...(active?.models ?? [])])].sort((a, b) => a.localeCompare(b));
+  const message = !active ? '' : active.status === 'loading' ? t('settings.providers.loadingModels')
+    : active.status === 'error' ? providerErrorMessage(active.error, t)
+    : active.models.length ? t('settings.providers.modelsLoaded', { count: active.models.length }) : t('settings.providers.modelsEmpty');
+  return <CredentialField {...field} label={t('settings.providers.modelLabel')}
+    account={kind === 'llm' ? 'ark.model_id' : `${kind}.model`} mono
+    placeholder={field.defaultValue || 'model-name'} options={models.map(value => ({ value, label: value }))}
+    below={<>
+      <button onClick={() => void loadModels()} style={miniBtnStyle}
+        disabled={form?.leaving || Object.values(form?.blocked ?? {}).some(Boolean)}>{t('settings.providers.fetchModels')}</button>
+      {message && <span role="status" style={{ fontSize: 11, overflowWrap: 'anywhere', color: active?.status === 'error' ? 'var(--ol-warn)' : 'var(--ol-ink-4)' }}>{message}</span>}
+    </>} />;
+}
+
+function ProviderTools({ kind, provider, onTested, onUserMutation, disabled = false }: { disabled?: boolean; kind: 'llm' | 'asr' | 'omni'; provider?: string; onTested?: () => void; onUserMutation?: () => void }) {
   const { t } = useTranslation();
   const baseLayoutStack = useLayoutStack();
   const conservative = useConservativeLayout();
   const layoutStack = conservative || baseLayoutStack;
-  const [models, setModels] = useState<string[]>([]);
-  const [selectedModel, setSelectedModel] = useState('');
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const [status, setStatus] = useState<ProviderToolStatus>('idle');
   const [message, setMessage] = useState('');
 
   const setResult = (next: ProviderToolStatus, nextMessage: string) => {
+    if (!mounted.current) return;
     setStatus(next);
     setMessage(nextMessage);
   };
@@ -760,7 +672,7 @@ function ProviderTools({ kind, modelAccount, provider, onModelSelected, onTested
   // 测试本身已经在按钮旁给出结论，记录不上只是卡片少一行历史。
   const persistTest = async (ok: boolean, latencyMs: number | null, message: string | null) => {
     // Omni 不走渠道化（独立命名空间），没有可落测试结果的渠道卡片。
-    if (!provider || kind === 'omni') return;
+    if (!mounted.current || !provider || kind === 'omni') return;
     try {
       await recordChannelTest(kind, provider, ok, latencyMs, message);
       onTested?.();
@@ -770,9 +682,8 @@ function ProviderTools({ kind, modelAccount, provider, onModelSelected, onTested
   };
 
   const validate = async () => {
+    if (disabled) return;
     onUserMutation?.();
-    setModels([]);
-    setSelectedModel('');
     setResult('loading', t('settings.providers.validating'));
     const started = performance.now();
     try {
@@ -800,56 +711,11 @@ function ProviderTools({ kind, modelAccount, provider, onModelSelected, onTested
     }
   };
 
-  const loadModels = async () => {
-    onUserMutation?.();
-    setResult('loading', t('settings.providers.loadingModels'));
-    try {
-      const result = await listProviderModels(kind, provider);
-      setModels(result.models);
-      if (result.models.length === 0) {
-        setResult('empty', t('settings.providers.modelsEmpty'));
-      } else {
-        setSelectedModel('');
-        setResult('success', t('settings.providers.modelsLoaded', { count: result.models.length }));
-      }
-    } catch (error) {
-      setModels([]);
-      setResult('error', providerErrorMessage(error, t));
-    }
-  };
-
-  const applyModel = async (model: string) => {
-    onUserMutation?.();
-    setResult('loading', t('common.saving'));
-    try {
-      await setCredential(modelAccount, model, provider);
-      setSelectedModel(model);
-      onModelSelected();
-      setResult('success', t('settings.providers.modelSaved', { model }));
-    } catch (error) {
-      setResult('error', providerErrorMessage(error, t));
-    }
-  };
-
   return (
     <SettingRow label={t('settings.providers.toolsLabel')}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8, width: '100%', maxWidth: layoutStack ? '100%' : 420 }}>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', width: '100%' }}>
-          <button onClick={validate} style={miniBtnStyle} disabled={status === 'loading'}>{t('settings.providers.validate')}</button>
-          {showFetchModels && (
-            <button onClick={loadModels} style={miniBtnStyle} disabled={status === 'loading'}>{t('settings.providers.fetchModels')}</button>
-          )}
-          {showFetchModels && models.length > 0 && (
-            <SelectLite
-              value={selectedModel}
-              onChange={applyModel}
-              disabled={status === 'loading'}
-              options={models.map(model => ({ value: model, label: model }))}
-              placeholder={t('settings.providers.selectModel')}
-              ariaLabel={t('settings.providers.selectModel')}
-              style={{ flex: layoutStack ? '1 1 100%' : '1 1 180px', maxWidth: layoutStack ? '100%' : 220, minWidth: 0 }}
-            />
-          )}
+          <button onClick={validate} style={miniBtnStyle} disabled={disabled || status === 'loading'}>{t('settings.providers.validate')}</button>
         </div>
         {message && (
           <span style={{ fontSize: 11, color: status === 'error' ? 'var(--ol-warn)' : status === 'empty' ? 'var(--ol-ink-4)' : 'var(--ol-ok)', lineHeight: 1.4 }}>
@@ -863,6 +729,9 @@ function ProviderTools({ kind, modelAccount, provider, onModelSelected, onTested
 
 function providerErrorMessage(error: unknown, t: ReturnType<typeof useTranslation>['t']): string {
   const message = error instanceof Error ? error.message : String(error);
+  for (const code of ['llmRequestFormatInvalid', 'llmThinkingModeInvalid', 'llmTokenLimitInvalid', 'llmThinkingBudgetInvalid', 'llmResponseIncomplete', 'llmStreamError', 'llmProtocolHeaderConflict']) {
+    if (message.includes(code)) return t(`settings.providers.${code}`);
+  }
   if (message.startsWith('providerHttpStatus:')) {
     return t('settings.providers.providerHttpStatus', { status: message.split(':')[1] || '?' });
   }
@@ -890,9 +759,8 @@ function providerErrorMessage(error: unknown, t: ReturnType<typeof useTranslatio
   return t('common.operationFailed');
 }
 
-type CredentialFieldStatus = 'idle' | 'saving' | 'saved' | 'readError' | 'saveError' | 'copied' | 'copyError';
-
 interface CredentialFieldProps {
+  onBlockedChange?: (account: string, blocked: boolean) => void;
   label: string;
   account: string;
   provider?: string;
@@ -906,145 +774,36 @@ interface CredentialFieldProps {
   onUserMutation?: () => void;
   /** 提供则渲染为下拉（预设选择）代替输入框；当前值不在预设里时附加为自定义项。 */
   options?: SelectOption[];
+  below?: ReactNode;
 }
 
-function CredentialField({ label, account, provider, placeholder, mono, mask, defaultValue, trailing, onValueChange, onUserMutation, options }: CredentialFieldProps) {
+function CredentialField({ label, account, provider, placeholder, mono, mask, defaultValue, trailing, onValueChange, onUserMutation, options, onBlockedChange, below }: CredentialFieldProps) {
   const { t } = useTranslation();
   const baseLayoutStack = useLayoutStack();
   const conservative = useConservativeLayout();
   const layoutStack = conservative || baseLayoutStack;
-  const [value, setValue] = useState('');
+  const credential = useRegisteredCredentialDraft(account, provider, onUserMutation, onBlockedChange);
+  const { draft, value, loaded, status, disabled } = credential;
   const [revealed, setRevealed] = useState(false);
-  const [loaded, setLoaded] = useState(false);
-  const [dirty, setDirty] = useState(false);
-  const [status, setStatus] = useState<CredentialFieldStatus>('idle');
-  // 预设下拉的「自定义模型…」逃生口：选中后切回输入框，保证后端支持的任意模型名都能手输。
   const [customModelMode, setCustomModelMode] = useState(false);
-  const debounceRef = useRef<number | null>(null);
-  const statusRef = useRef<number | null>(null);
-  const mountedRef = useRef(true);
+  const composing = useRef(false);
+  useEffect(() => { if (loaded) onValueChange?.(value); }, [loaded, value, onValueChange]);
 
-  useEffect(() => {
-    let cancelled = false;
-    setLoaded(false);
-    setDirty(false);
-    setStatus('idle');
-    setValue('');
-    onValueChange?.('');
-    if (debounceRef.current) {
-      clearTimeout(debounceRef.current);
-      debounceRef.current = null;
-    }
-    readCredential(account, provider)
-      .then(v => {
-        if (cancelled) return;
-        setValue(v ?? '');
-        onValueChange?.(v ?? '');
-        setLoaded(true);
-      })
-      .catch(error => {
-        if (cancelled) return;
-        console.error('[settings] failed to read credential', account, error);
-        onValueChange?.('');
-        setLoaded(true);
-        setStatus('readError');
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [account, provider, onValueChange]);
-
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-      if (debounceRef.current) clearTimeout(debounceRef.current);
-      if (statusRef.current) clearTimeout(statusRef.current);
-    };
-  }, []);
-
-  // 改造：除 readError（持续错误，留在输入旁标识字段不可用）外，所有 saving / saved /
-  //   saveError / copied / copyError 一律发到右上角 SavedToast。原内联文案太挤、跟其它
-  //   页面 toast 风格不统一。
-  const showTemporaryStatus = (next: CredentialFieldStatus) => {
-    if (next === 'saving') {
-      emitSaved('saving', t('common.saving'));
-    } else if (next === 'saved') {
-      emitSaved('saved', t('common.saved'));
-    } else if (next === 'saveError') {
-      emitSaved('failed', t('common.operationFailed'));
-    } else if (next === 'copied') {
-      emitSaved('saved', t('common.copied'));
-    } else if (next === 'copyError') {
-      emitSaved('failed', t('common.operationFailed'));
-    }
-    setStatus(next);
-    if (statusRef.current) clearTimeout(statusRef.current);
-    statusRef.current = window.setTimeout(() => setStatus('idle'), 1600);
+  const change = (next: string, immediate = false) => {
+    if (!credential.edit(next)) return;
+    if (immediate) void draft.flush();
+    else if (!composing.current) draft.schedule();
   };
-
-  const save = async (v: string, force = false) => {
-    if (!loaded || (!dirty && !force)) return;
-    if (!mountedRef.current) return;
-    setStatus('saving');
-    emitSaved('saving', t('common.saving'));
-    try {
-      await setCredential(account, v, provider);
-      if (!mountedRef.current) return;
-      setDirty(false);
-      showTemporaryStatus('saved');
-    } catch (error) {
-      if (!mountedRef.current) return;
-      console.error('[settings] failed to save credential', account, error);
-      showTemporaryStatus('saveError');
-    }
-  };
-
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    onUserMutation?.();
-    const v = e.target.value;
-    setValue(v);
-    onValueChange?.(v);
-    if (!loaded) return;
-    setDirty(true);
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = window.setTimeout(() => save(v, true), 300);
-  };
-
-  const onBlur = () => {
-    if (!loaded || !dirty) return;
-    if (debounceRef.current) {
-      clearTimeout(debounceRef.current);
-      debounceRef.current = null;
-    }
-    void save(value, true);
-  };
-
-  const fillDefault = async () => {
-    if (!loaded || !defaultValue) return;
-    onUserMutation?.();
-    setValue(defaultValue);
-    onValueChange?.(defaultValue);
-    setDirty(true);
-    await save(defaultValue, true);
-  };
-
+  const onBlur = () => { if (!composing.current) void draft.flush(); };
   const onCopy = async () => {
     if (!value || !loaded) return;
     try {
-      if (!navigator.clipboard?.writeText) {
-        throw new Error('Clipboard API unavailable');
-      }
       await navigator.clipboard.writeText(value);
-      showTemporaryStatus('copied');
-    } catch (error) {
-      console.error('[settings] failed to copy credential', account, error);
-      showTemporaryStatus('copyError');
-    }
+      emitSaved('saved', t('common.copied'));
+    } catch { emitSaved('failed', t('common.operationFailed')); }
   };
 
   const inputType = mask && !revealed ? 'password' : 'text';
-  const disabled = !loaded;
   const showInsecureEndpointWarning = (account === 'ark.endpoint' || account === 'asr.endpoint' || account === 'omni.endpoint')
     && value.trim().toLowerCase().startsWith('http://');
 
@@ -1052,7 +811,7 @@ function CredentialField({ label, account, provider, placeholder, mono, mask, de
     <SettingRow label={label}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 5, width: '100%', maxWidth: layoutStack ? '100%' : 420 }}>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center', width: '100%', flexWrap: layoutStack ? 'wrap' : 'nowrap' }}>
-          {options && !customModelMode ? (
+          {!!options?.length && !customModelMode ? (
             <SelectLite
               value={value}
               onChange={(v) => {
@@ -1061,18 +820,16 @@ function CredentialField({ label, account, provider, placeholder, mono, mask, de
                   setCustomModelMode(true);
                   return;
                 }
-                onUserMutation?.();
-                setValue(v);
-                onValueChange?.(v);
-                if (!loaded) return;
-                setDirty(true);
-                void save(v, true);
+                change(v, true);
               }}
               options={[
                 ...(value && !options.some(o => o.value === value) ? [{ value, label: value }] : []),
                 ...options,
-                { value: CUSTOM_MODEL_OPTION_VALUE, label: t('settings.providers.customModelLabel', 'Custom model…') },
+                { value: CUSTOM_MODEL_OPTION_VALUE, label: t('settings.providers.customModelLabel'), alwaysVisible: true },
               ]}
+              searchable
+              searchPlaceholder={t('settings.providers.searchModels')}
+              emptyMessage={t('settings.providers.noMatchingModels')}
               placeholder={loaded ? placeholder : t('common.loading')}
               disabled={disabled}
               ariaLabel={label}
@@ -1083,13 +840,16 @@ function CredentialField({ label, account, provider, placeholder, mono, mask, de
               type={inputType}
               value={value}
               placeholder={loaded ? placeholder : t('common.loading')}
-              onChange={handleChange}
+              aria-label={label}
+              onChange={event => { if (options) setCustomModelMode(true); change(event.target.value); }}
+              onCompositionStart={() => { composing.current = true; draft.pause(); }}
+              onCompositionEnd={() => { composing.current = false; draft.schedule(); }}
               onBlur={onBlur}
               disabled={disabled}
               style={{ ...inputStyle, flex: layoutStack ? '1 1 180px' : 1, minWidth: 0, maxWidth: '100%', fontFamily: mono ? 'var(--ol-font-mono)' : 'inherit' }}
             />
           )}
-          {options && customModelMode && (
+          {!!options?.length && customModelMode && (
             <button
               onClick={() => setCustomModelMode(false)}
               title={t('settings.providers.presetListLabel', 'Back to presets')}
@@ -1100,7 +860,7 @@ function CredentialField({ label, account, provider, placeholder, mono, mask, de
             </button>
           )}
           {defaultValue && !value && loaded && (
-            <button onClick={fillDefault} title={t('settings.providers.fillDefault')} style={iconBtnStyle} disabled={!loaded}>
+            <button onClick={() => change(defaultValue, true)} title={t('settings.providers.fillDefault')} style={iconBtnStyle} disabled={!loaded}>
               <Icon name="check" size={13} />
             </button>
           )}
@@ -1138,6 +898,8 @@ function CredentialField({ label, account, provider, placeholder, mono, mask, de
             </span>
           )}
         </div>
+        {below && <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>{below}</div>}
+        {status === 'saveError' && <button onClick={() => void draft.flush()} style={miniBtnStyle}>{t('common.retry')}</button>}
         {showInsecureEndpointWarning && (
           <span style={{ fontSize: 11, color: 'var(--ol-warn)', lineHeight: 1.45 }}>
             {t('settings.providers.endpointHttpWarning')}
@@ -1181,22 +943,37 @@ export function OmniChannelSection() {
   const conservative = useConservativeLayout();
   const layoutStack = conservative || baseLayoutStack;
   const { prefs, updatePrefs } = useHotkeySettings();
-  const [omniProvider, setOmniProvider] = useState<OmniPresetId>('custom');
-  const [committedOmniProvider, setCommittedOmniProvider] = useState<OmniPresetId>('custom');
+  const [descriptors, setDescriptors] = useState<ProviderDescriptor[]>([]);
+  const [omniProvider, setOmniProvider] = useState('custom');
+  const [committedOmniProvider, setCommittedOmniProvider] = useState('custom');
   const omniSwitchSeqRef = useRef(0);
-  const [omniModelRevision, setOmniModelRevision] = useState(0);
+  const form = useProviderForm();
 
   useEffect(() => {
-    if (!prefs) return;
-    const knownOmni = OMNI_PRESETS.find(x => x.id === prefs.activeOmniProvider);
+    void listProviderDescriptors('omni')
+      .then(setDescriptors)
+      .catch(error => console.error('[settings] failed to load omni provider descriptors', error));
+  }, []);
+
+  const omniPresets = useMemo(() => descriptors.map(descriptor => ({
+      id: descriptor.providerType,
+      nameKey: descriptor.labelKey,
+      baseUrl: descriptor.defaultEndpoint ?? '',
+      modelPlaceholder: descriptor.defaultModel ?? '',
+      staticModels: descriptor.staticModels,
+    })), [descriptors]);
+
+  useEffect(() => {
+    if (!prefs || form.leaving) return;
+    const knownOmni = omniPresets.find(x => x.id === prefs.activeOmniProvider);
     const omniId = knownOmni ? knownOmni.id : 'custom';
     setOmniProvider(omniId);
     setCommittedOmniProvider(omniId);
-  }, [prefs]);
+  }, [prefs?.activeOmniProvider, omniPresets, form.leaving]);
 
   // 与 LLM 卡同语义：受控下拉立即反馈 + committed 控制 CredentialField remount
   // + seq 守卫防 stale 覆盖，只是凭据落到 omni.* 槽。
-  const onOmniProviderChange = async (id: OmniPresetId) => {
+  const onOmniProviderChange = async (id: string) => {
     setOmniProvider(id);
     const seq = ++omniSwitchSeqRef.current;
     emitSaved('saving', t('common.saving'));
@@ -1210,7 +987,7 @@ export function OmniChannelSection() {
         await updatePrefs(next);
         if (seq !== omniSwitchSeqRef.current) return;
       }
-      const preset = OMNI_PRESETS.find(p => p.id === id);
+      const preset = omniPresets.find(p => p.id === id);
       // 切到非 custom 预设强制覆盖 endpoint/model 默认值（与 LLM 卡同语义），
       // 保证「切换」真切到位，不残留旧厂商的槽值。
       if (preset && preset.id !== 'custom') {
@@ -1247,10 +1024,10 @@ export function OmniChannelSection() {
 
   if (prefs?.multimodalPipelineEnabled !== true) return null;
   const multimodalMode = prefs?.pipelineMode === 'multimodal';
-  const omniPreset = OMNI_PRESETS.find(p => p.id === committedOmniProvider);
+  const omniPreset = omniPresets.find(p => p.id === committedOmniProvider);
 
   return (
-    <>
+    <ProviderFormContext.Provider value={form}>
       <div style={{ marginBottom: 12 }}>
         <SettingRow
           label={t('settings.providers.pipelineModeLabel')}
@@ -1261,7 +1038,7 @@ export function OmniChannelSection() {
               {(['traditional', 'multimodal'] as const).map(mode => (
                 <button
                   key={mode}
-                  onClick={() => onPipelineModeChange(mode)}
+                  disabled={form.leaving} onClick={() => void form.finish(() => onPipelineModeChange(mode))}
                   style={{
                     padding: '5px 12px', fontSize: 12, fontWeight: 500, border: 0, borderRadius: 6,
                     fontFamily: 'inherit',
@@ -1291,8 +1068,8 @@ export function OmniChannelSection() {
           <SettingRow label={t('settings.providers.providerLabel')}>
             <SelectLite
               value={omniProvider}
-              onChange={next => onOmniProviderChange(next as OmniPresetId)}
-              options={OMNI_PRESETS.map(p => ({
+              disabled={form.leaving} onChange={next => void form.finish(() => onOmniProviderChange(next))}
+              options={omniPresets.map(p => ({
                 value: p.id,
                 label: t(`settings.providers.presets.${p.nameKey}`),
               }))}
@@ -1300,6 +1077,7 @@ export function OmniChannelSection() {
               style={{ ...inputStyle, width: '100%', maxWidth: layoutStack ? '100%' : 200 }}
             />
           </SettingRow>
+          <fieldset disabled={form.leaving} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
           <CredentialField
             key={`${committedOmniProvider}:api_key`}
             label={t('settings.providers.apiKeyLabel')}
@@ -1332,21 +1110,13 @@ export function OmniChannelSection() {
               />
             </>
           )}
-          <CredentialField
-            key={`${committedOmniProvider}:model:${omniModelRevision}`}
-            label={t('settings.providers.modelLabel')}
-            account="omni.model"
-            placeholder={omniPreset?.modelPlaceholder || 'model-name'}
-            mono
-          />
-          <ProviderTools
-            key={`omni:${committedOmniProvider}`}
-            kind="omni"
-            modelAccount="omni.model"
-            onModelSelected={() => setOmniModelRevision(v => v + 1)}
-          />
+          <ModelField key={committedOmniProvider} kind="omni" providerType={committedOmniProvider}
+            staticModels={omniPreset?.staticModels} defaultValue={omniPreset?.modelPlaceholder || undefined} />
+          <ProviderTools key={`omni:${committedOmniProvider}:${form.revision}`} kind="omni"
+            disabled={Object.values(form.blocked).some(Boolean) || form.leaving} />
+          </fieldset>
         </Card>
       )}
-    </>
+    </ProviderFormContext.Provider>
   );
 }

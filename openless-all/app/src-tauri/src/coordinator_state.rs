@@ -79,26 +79,23 @@ pub(crate) fn begin_session_state(
         focus_target,
         front_app,
         new_session_id(),
-        std::time::Duration::ZERO,
     )
 }
 
-/// 从一条被 Esc 打断的录音恢复会话。沿用原 session id，才能让 history 与
-/// `recordings/<id>.wav` 始终一一对应；`recorded_before` 让胶囊计时继续累计。
+/// 与 [`begin_session_state`] 相同，但允许宿主在进入 Coordinator 状态机前生成
+/// session id。Less Computer 需要把这个 id 同时交给 Core capture lease 和宿主录音
+/// 资源，避免两套状态各自生成 UUID 后无法可靠取消同一轮会话。
 pub(crate) fn begin_session_state_with_id(
     state: &mut SessionState,
     focus_target: Option<usize>,
     front_app: Option<String>,
     session_id: SessionId,
-    recorded_before: std::time::Duration,
 ) -> Option<SessionId> {
     if state.phase != SessionPhase::Idle {
         return None;
     }
     state.phase = SessionPhase::Starting;
-    state.started_at = Instant::now()
-        .checked_sub(recorded_before)
-        .unwrap_or_else(Instant::now);
+    state.started_at = Instant::now();
     state.pending_stop = false;
     state.cancelled = false;
     state.focus_target = focus_target;
@@ -296,24 +293,6 @@ mod tests {
     }
 
     #[test]
-    fn resumed_session_reuses_id_and_accumulates_recorded_time() {
-        let mut state = SessionState::default();
-        let id = session_id(42);
-        let resumed = begin_session_state_with_id(
-            &mut state,
-            None,
-            Some("Notes".into()),
-            id,
-            std::time::Duration::from_millis(2_400),
-        );
-
-        assert_eq!(resumed, Some(id));
-        assert_eq!(state.session_id, id);
-        assert!(state.started_at.elapsed() >= std::time::Duration::from_millis(2_400));
-        assert_eq!(state.front_app.as_deref(), Some("Notes"));
-    }
-
-    #[test]
     fn begin_session_resets_voice_agent_flag() {
         // 安全护栏：上一会话残留的 voice_agent=true 绝不能让下一次普通听写被误判成
         // Cloud Agent（否则听写内容会被发去跑 Claude 而不是插入光标）。
@@ -323,6 +302,18 @@ mod tests {
         };
         begin_session_state(&mut state, None, None).unwrap();
         assert!(!state.voice_agent, "新会话必须从普通听写开始");
+    }
+
+    #[test]
+    fn begin_session_with_id_preserves_host_core_session_identity() {
+        let mut state = SessionState::default();
+        let expected = session_id(42);
+
+        let actual = begin_session_state_with_id(&mut state, None, None, expected).unwrap();
+
+        assert_eq!(actual, expected);
+        assert_eq!(state.session_id, expected);
+        assert_eq!(state.phase, SessionPhase::Starting);
     }
 
     #[test]

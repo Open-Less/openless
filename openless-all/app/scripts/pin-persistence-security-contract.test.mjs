@@ -3,14 +3,15 @@ import { readFile } from "node:fs/promises"
 
 const read = (path) => readFile(new URL(`../${path}`, import.meta.url), "utf8")
 
-const [pinModule, coordinator, command, appCargo, backendCargo, backendTests, ci] =
+const [pinModule, coreRemote, coreContract, tauriAdapter, coordinator, command, appCargo, ci] =
     await Promise.all([
         read("src-tauri/src/remote_server/pin_persistence.rs"),
+        read("crates/openless-core/src/remote_input_service.rs"),
+        read("crates/openless-core/tests/remote_input_contract.rs"),
+        read("src-tauri/src/core_adapters.rs"),
         read("src-tauri/src/coordinator.rs"),
         read("src-tauri/src/commands/remote_input.rs"),
         read("src-tauri/Cargo.toml"),
-        read("src-tauri/backend-tests/Cargo.toml"),
-        read("src-tauri/backend-tests/tests/backend_rust.rs"),
         read("../../.github/workflows/ci.yml"),
     ])
 
@@ -39,36 +40,51 @@ assert.doesNotMatch(
 )
 assert.match(pinModule, /backup_path/, "Windows replacement must retain a rollback path")
 
-for (const cargo of [appCargo, backendCargo]) {
-    assert.match(cargo, /"Win32_Storage_FileSystem"/, "Windows file APIs must be enabled")
-}
+assert.match(appCargo, /"Win32_Storage_FileSystem"/, "Windows file APIs must be enabled")
 assert.match(
-    backendTests,
-    /src\/remote_server\/pin_persistence\.rs/,
-    "the Rust-only Windows harness must execute PIN persistence tests",
+    pinModule,
+    /#\[cfg\(test\)\][\s\S]*mod tests[\s\S]*hard_link_pin_path_is_rejected/,
+    "PIN persistence security tests must remain in the owning Tauri module",
 )
 assert.match(
     ci,
-    /if: runner\.os == 'Windows'[\s\S]*cargo test --manifest-path src-tauri\/backend-tests\/Cargo\.toml/,
-    "Windows CI must execute the Rust-only PIN tests",
+    /if: runner\.os != 'Windows'[\s\S]*cargo test --locked --manifest-path src-tauri\/Cargo\.toml --lib/,
+    "non-Windows CI must execute the owning Tauri module tests",
+)
+assert.match(
+    ci,
+    /if: runner\.os == 'Windows'[\s\S]*cargo test --locked --manifest-path src-tauri\/Cargo\.toml --lib --no-run/,
+    "Windows CI must at least compile the owning Tauri module tests when native runtime DLLs prevent execution",
 )
 
-const assertCoordinatorContract = (source) => {
-    const regenerate = source.match(
-        /pub fn regenerate_remote_pin[\s\S]*?\r?\n    }\r?\n\r?\n    #\[cfg\(not\(mobile\)\)\]/,
-    )?.[0]
-    assert.ok(regenerate, "Coordinator regenerate implementation must be present")
-    assert.match(regenerate, /-> Result<String, String>/, "reset must surface persistence errors")
-    assert.match(regenerate, /persist_and_commit_remote_pin[\s\S]*save_pin[\s\S]*refresh_remote_server/, "reset must delegate persistence and state commit as one transaction")
-    const transaction = source.match(
-        /fn persist_and_commit_remote_pin[\s\S]*?\r?\n}\r?\n\r?\nimpl Coordinator/,
-    )?.[0]
-    assert.ok(transaction, "PIN reset transaction helper must be present")
-    assert.match(transaction, /persist\(&pin\)\?;[\s\S]*\*slot\.lock\(\) = Some\(pin\.clone\(\)\);[\s\S]*refresh\(\)/, "persist must succeed before memory commit and server refresh")
-}
-
-assertCoordinatorContract(coordinator)
-assertCoordinatorContract(coordinator.replace(/\r?\n/g, "\r\n"))
-assert.match(command, /regenerate_remote_pin[\s\S]*-> Result<String, String>/, "Tauri command must reject on reset failure")
+const regenerate = coreRemote.match(
+    /async fn regenerate_pairing_pin_inner[\s\S]*?async fn authenticate_inner/,
+)?.[0]
+assert.ok(regenerate, "Core pairing PIN transaction must be present")
+assert.match(
+    regenerate,
+    /persist_pairing_pin\(pin\.clone\(\)\)[\s\S]*?\.await[\s\S]*?state\.pairing_pin = Some\(pin\);[\s\S]*?if restart[\s\S]*?stop_server_and_sessions\(\)\.await\?;[\s\S]*?start_server\(port\)\.await\?;/,
+    "Core must persist the new PIN before committing memory and restarting the transport",
+)
+assert.match(
+    coreContract,
+    /failed_pin_persistence_keeps_the_committed_pin_and_server_state[\s\S]*?reject_persist\.store\(true[\s\S]*?regenerate_pairing_pin\(\)\.await\.unwrap_err\(\)[\s\S]*?old_pin[\s\S]*?status\(\)\.unwrap\(\)\.running[\s\S]*?start_count\.load\(Ordering::Acquire\), 1/,
+    "Core contract tests must prove persistence failure preserves the committed PIN and running server",
+)
+assert.match(
+    tauriAdapter,
+    /impl openless_core::RemoteInputRuntimeAdapter for TauriRemoteInputRuntimeAdapter[\s\S]*?fn persist_pairing_pin[\s\S]*?crate::remote_server::save_pin/,
+    "Tauri adapter must delegate pairing PIN persistence to the hardened atomic file implementation",
+)
+assert.doesNotMatch(
+    coordinator,
+    /regenerate_remote_pin|persist_and_commit_remote_pin|remote_server_handle|pairing_pin/,
+    "Coordinator must not regain remote input PIN or transport ownership",
+)
+assert.match(
+    command,
+    /pub async fn regenerate_remote_pin[\s\S]*?-> Result<String, String>[\s\S]*?regenerate_pairing_pin\(\)[\s\S]*?\.await[\s\S]*?read_pairing_pin\(\)/,
+    "Tauri command must surface Core reset failures before returning the committed PIN",
+)
 
 console.log("PIN persistence security contract passed")

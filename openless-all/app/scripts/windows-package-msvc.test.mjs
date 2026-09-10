@@ -11,6 +11,7 @@ const launcherPath = join(scriptsDir, "windows-package-msvc.cmd");
 const ciWorkflowPath = join(repoRoot, ".github", "workflows", "release-tauri.yml");
 const imeBuildPath = join(scriptsDir, "windows-ime-build.ps1");
 const imeInstallSmokePath = join(scriptsDir, "windows-ime-install-smoke.ps1");
+const realAsrInsertionSmokePath = join(scriptsDir, "windows-real-asr-insertion-smoke.ps1");
 const imeRegisterPath = join(scriptsDir, "windows-ime-register.ps1");
 const imeUnregisterPath = join(scriptsDir, "windows-ime-unregister.ps1");
 const imeSolutionPath = join(appRoot, "windows-ime", "OpenLessIme.sln");
@@ -26,6 +27,7 @@ const launcher = readFileSync(launcherPath, "utf8");
 const ciWorkflow = readFileSync(ciWorkflowPath, "utf8");
 const imeBuild = readFileSync(imeBuildPath, "utf8");
 const imeInstallSmoke = readFileSync(imeInstallSmokePath, "utf8");
+const realAsrInsertionSmoke = readFileSync(realAsrInsertionSmokePath, "utf8");
 const imeRegister = readFileSync(imeRegisterPath, "utf8");
 const imeUnregister = readFileSync(imeUnregisterPath, "utf8");
 const imeSolution = readFileSync(imeSolutionPath, "utf8");
@@ -67,6 +69,9 @@ assert.match(script, /\[switch\]\$SkipNpmCi/, "script should support reusing exi
 assert.match(script, /\[switch\]\$CleanArtifacts/, "script should support cleaning the output directory");
 assert.doesNotMatch(script, /WixTools314/, "MSVC packaging must not hard-code a single Tauri WiX tools version");
 assert.doesNotMatch(ciWorkflow, /WixTools314/, "CI MSI repair must not hard-code a single Tauri WiX tools version");
+assert.match(script, /cmd\.exe \/V:ON \/d \/c/, "MSVC packaging must preserve the VsDevCmd environment with delayed expansion");
+assert.match(script, /PATH=\$CargoBin;!PATH!/, "MSVC packaging must expand PATH after VsDevCmd runs");
+assert.doesNotMatch(script, /PATH=\$CargoBin;%PATH%/, "MSVC packaging must not eagerly expand PATH before VsDevCmd");
 assert.match(script, /-Filter "WixTools\*"/, "MSVC packaging should discover Tauri WiX tools by WixTools* glob");
 assert.match(ciWorkflow, /WixTools\*\\light\.exe/, "CI MSI repair should discover Tauri WiX tools by WixTools* glob");
 
@@ -100,6 +105,7 @@ assert.equal(tauriConfig.bundle.windows.nsis.installerHooks, "nsis/openless-ime-
 
 assert.match(imeSolution, /Release\|Win32/, "IME solution should include a Win32 Release configuration");
 assert.match(imeProject, /Release\|Win32/, "IME project should include a Win32 Release configuration");
+assert.match(imeProject, /<AdditionalOptions>\/utf-8 %\(AdditionalOptions\)<\/AdditionalOptions>/, "IME project must decode UTF-8 source independently of the runner code page");
 assert.match(imeTextService, /TF_E_SYNCHRONOUS/, "IME should detect hosts like Word that reject synchronous edit sessions");
 assert.match(imeTextService, /TF_ES_ASYNC \| TF_ES_READWRITE/, "IME should retry Word-hosted commits with an async edit session");
 assert.match(imeTextService, /WaitForSingleObject/, "IME pipe submit should wait for async edit-session completion");
@@ -107,6 +113,9 @@ assert.match(imeEditSession, /SetEvent/, "IME edit session should signal async c
 assert.match(imeEditSession, /Collapse\(edit_cookie, TF_ANCHOR_END\)/, "IME should collapse the committed range to its end after insertion");
 assert.match(imeEditSession, /SetSelection\(edit_cookie, 1, &selection\)/, "IME should move the caret to the end of inserted text");
 assert.match(imeEditSession, /TF_AE_END/, "IME should make the end of the committed text the active selection end");
+const insertAtSelectionCalls = imeEditSession.match(/\bInsertTextAtSelection\s*\(/g) ?? [];
+assert.equal(insertAtSelectionCalls.length, 1, "IME should submit the dictated text to the host exactly once");
+assert.doesNotMatch(imeEditSession, /TF_IAS_QUERYONLY/, "IME should not preflight the full text through host text stores before committing it");
 
 assert.match(wixFragment, /DirectoryRef Id="INSTALLDIR"/, "WiX fragment should install into the app directory");
 assert.match(wixFragment, /Component Id="OpenLessImeDllX64Component"/, "WiX fragment should define the x64 TSF DLL component");
@@ -145,6 +154,7 @@ assert.match(imeInstallSmoke, /Join-ProcessArguments/, "install smoke should quo
 assert.match(imeInstallSmoke, /\$commandLine = Join-ProcessArguments \$ArgumentList/, "install smoke should build a single quoted command line");
 assert.match(imeInstallSmoke, /Start-Process -FilePath \$FilePath -ArgumentList \$commandLine/, "install smoke should pass a single quoted command line to Start-Process");
 assert.match(imeInstallSmoke, /OpenLessImeSubmit/, "install smoke should preserve TSF backend context");
+assert.match(realAsrInsertionSmoke, /\$targetTextForComparison -cne \$finalTextForComparison/, "real insertion smoke should reject duplicate or partial text in initially empty targets");
 assert.match(imeInstallSmoke, /Software\\Classes\\CLSID\\\{6B9F3F4F-5EE7-42D6-9C61-9F80B03A5D7D\}\\InprocServer32/, "install smoke should check x64 COM registration");
 assert.match(imeInstallSmoke, /Software\\WOW6432Node\\Classes\\CLSID\\\{6B9F3F4F-5EE7-42D6-9C61-9F80B03A5D7D\}\\InprocServer32/, "install smoke should check x86 COM registration");
 assert.match(imeInstallSmoke, /LanguageProfile\\0x00000804\\\{9B5F5E04-23F6-47DA-9A26-D221F6C3F02E\}/, "install smoke should check the TSF language profile");

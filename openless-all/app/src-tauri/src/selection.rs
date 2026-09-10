@@ -106,6 +106,65 @@ struct PrefetchedSelectionWorkspace {
     insertion_target: SelectionInsertionTarget,
 }
 
+/// 选区抓取失败 / 命中原因，写入用户可导出的 openless.log，便于区分
+/// 「真的没选区」vs「模拟复制未覆盖剪贴板」vs「剪贴板 API 失败」。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SelectionCaptureMissReason {
+    Ok,
+    PrefetchHit,
+    PrefetchMissLiveOk,
+    ClipboardInitFailed,
+    ClipboardSentinelWriteFailed,
+    CopyShortcutFailed,
+    ClipboardUnchangedSentinel,
+    ClipboardEmptyAfterCopy,
+    ClipboardReadFailed,
+    EmptyTrimmed,
+    NoCapturePath,
+}
+
+impl SelectionCaptureMissReason {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Ok => "ok",
+            Self::PrefetchHit => "prefetch_hit",
+            Self::PrefetchMissLiveOk => "prefetch_miss_live_ok",
+            Self::ClipboardInitFailed => "clipboard_init_failed",
+            Self::ClipboardSentinelWriteFailed => "clipboard_sentinel_write_failed",
+            Self::CopyShortcutFailed => "copy_shortcut_failed",
+            Self::ClipboardUnchangedSentinel => "clipboard_unchanged_sentinel",
+            Self::ClipboardEmptyAfterCopy => "clipboard_empty_after_copy",
+            Self::ClipboardReadFailed => "clipboard_read_failed",
+            Self::EmptyTrimmed => "empty_trimmed",
+            Self::NoCapturePath => "no_capture_path",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct SelectionCaptureDiag {
+    pub reason: SelectionCaptureMissReason,
+    pub front_app: Option<String>,
+    pub used_prefetch: bool,
+    pub target_captured: bool,
+    pub char_count: Option<usize>,
+}
+
+impl SelectionCaptureDiag {
+    pub(crate) fn summary(&self) -> String {
+        format!(
+            "reason={} used_prefetch={} target_captured={} chars={} front_app={}",
+            self.reason.as_str(),
+            self.used_prefetch,
+            self.target_captured,
+            self.char_count
+                .map(|n| n.to_string())
+                .unwrap_or_else(|| "-".into()),
+            self.front_app.as_deref().unwrap_or("-")
+        )
+    }
+}
+
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 static PREFETCHED_SELECTION_WORKSPACE: std::sync::Mutex<Option<PrefetchedSelectionWorkspace>> =
     std::sync::Mutex::new(None);
@@ -114,7 +173,7 @@ static PREFETCHED_SELECTION_WORKSPACE: std::sync::Mutex<Option<PrefetchedSelecti
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 pub(crate) fn prefetch_selection_workspace_capture() {
     let insertion_target = capture_selection_insertion_target();
-    let capture = capture_selection_with_status();
+    let (capture, reason) = capture_selection_with_status_diag();
     let mut guard = PREFETCHED_SELECTION_WORKSPACE
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -122,8 +181,10 @@ pub(crate) fn prefetch_selection_workspace_capture() {
         Some(selection) => {
             let chars = selection.text.chars().count();
             log::info!(
-                "[selection] prefetched workspace selection ({} chars)",
-                chars
+                "[selection] prefetched workspace selection ({} chars) reason={} front_app={}",
+                chars,
+                reason.as_str(),
+                selection.source_app.as_deref().unwrap_or("-")
             );
             *guard = Some(PrefetchedSelectionWorkspace {
                 selection,
@@ -131,7 +192,12 @@ pub(crate) fn prefetch_selection_workspace_capture() {
             });
         }
         None => {
-            log::info!("[selection] prefetch missed (no selection at hotkey edge)");
+            log::info!(
+                "[selection] prefetch missed (no selection at hotkey edge) reason={} front_app={} target_captured={}",
+                reason.as_str(),
+                capture_selection_source_app_hint().as_deref().unwrap_or("-"),
+                selection_insertion_target_is_captured(&insertion_target)
+            );
             guard.take();
         }
     }
@@ -160,20 +226,92 @@ pub(crate) fn take_prefetched_selection_workspace(
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 pub(crate) fn resolve_selection_workspace_capture(
 ) -> (Option<SelectionContext>, SelectionInsertionTarget) {
+    let (selection, target, _) = resolve_selection_workspace_capture_with_diag();
+    (selection, target)
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+pub(crate) fn resolve_selection_workspace_capture_with_diag() -> (
+    Option<SelectionContext>,
+    SelectionInsertionTarget,
+    SelectionCaptureDiag,
+) {
     if let Some((selection, insertion_target)) = take_prefetched_selection_workspace() {
-        return (Some(selection), insertion_target);
+        let char_count = selection.text.chars().count();
+        let front_app = selection.source_app.clone();
+        let target_captured = selection_insertion_target_is_captured(&insertion_target);
+        let diag = SelectionCaptureDiag {
+            reason: SelectionCaptureMissReason::PrefetchHit,
+            front_app,
+            used_prefetch: true,
+            target_captured,
+            char_count: Some(char_count),
+        };
+        log::info!("[selection] resolve used prefetch {}", diag.summary());
+        return (Some(selection), insertion_target, diag);
     }
     let insertion_target = capture_selection_insertion_target();
-    let capture = capture_selection_with_status();
-    (capture.selection, insertion_target)
+    let (capture, reason) = capture_selection_with_status_diag();
+    let target_captured = selection_insertion_target_is_captured(&insertion_target);
+    let (front_app, char_count) = match &capture.selection {
+        Some(selection) => (
+            selection.source_app.clone(),
+            Some(selection.text.chars().count()),
+        ),
+        None => (capture_selection_source_app_hint(), None),
+    };
+    let reason = if capture.selection.is_some() && reason == SelectionCaptureMissReason::Ok {
+        SelectionCaptureMissReason::PrefetchMissLiveOk
+    } else {
+        reason
+    };
+    let diag = SelectionCaptureDiag {
+        reason,
+        front_app,
+        used_prefetch: false,
+        target_captured,
+        char_count,
+    };
+    log::info!("[selection] resolve live capture {}", diag.summary());
+    (capture.selection, insertion_target, diag)
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub(crate) fn resolve_selection_workspace_capture(
 ) -> (Option<SelectionContext>, SelectionInsertionTarget) {
+    let (selection, target, _) = resolve_selection_workspace_capture_with_diag();
+    (selection, target)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+pub(crate) fn resolve_selection_workspace_capture_with_diag() -> (
+    Option<SelectionContext>,
+    SelectionInsertionTarget,
+    SelectionCaptureDiag,
+) {
     let insertion_target = capture_selection_insertion_target();
-    let capture = capture_selection_with_status();
-    (capture.selection, insertion_target)
+    let (capture, reason) = capture_selection_with_status_diag();
+    let target_captured = selection_insertion_target_is_captured(&insertion_target);
+    let (front_app, char_count) = match &capture.selection {
+        Some(selection) => (
+            selection.source_app.clone(),
+            Some(selection.text.chars().count()),
+        ),
+        None => (capture_selection_source_app_hint(), None),
+    };
+    let diag = SelectionCaptureDiag {
+        reason,
+        front_app,
+        used_prefetch: false,
+        target_captured,
+        char_count,
+    };
+    log::info!("[selection] resolve live capture {}", diag.summary());
+    (capture.selection, insertion_target, diag)
+}
+
+fn capture_selection_source_app_hint() -> Option<String> {
+    current_front_app()
 }
 
 /// Snapshot the insertion target before starting an asynchronous Selection
@@ -339,18 +477,25 @@ pub(crate) fn reactivate_selection_insertion_target(target: &SelectionInsertionT
     #[cfg(target_os = "windows")]
     {
         use windows::Win32::Foundation::HWND;
-        use windows::Win32::UI::WindowsAndMessaging::{BringWindowToTop, SetForegroundWindow};
+        use windows::Win32::UI::WindowsAndMessaging::{
+            BringWindowToTop, IsIconic, SetForegroundWindow, ShowWindow, SW_RESTORE,
+        };
 
         let Some(captured) = target.windows else {
             return false;
         };
         unsafe {
             let foreground = HWND(captured.foreground_window as *mut _);
+            if IsIconic(foreground).as_bool() {
+                let _ = ShowWindow(foreground, SW_RESTORE);
+            }
             let _ = BringWindowToTop(foreground);
             let _ = SetForegroundWindow(foreground);
         }
         std::thread::sleep(Duration::from_millis(80));
-        return true;
+        // Windows 的防抢焦点规则可能拒绝 SetForegroundWindow。只有重新捕获到完全一致的
+        // 窗口/控件指纹才算恢复成功；不能因为激活调用返回了就向当前应用盲目粘贴。
+        return capture_windows_selection_target().as_ref() == Some(&captured);
     }
 
     #[cfg(target_os = "macos")]
@@ -364,7 +509,9 @@ pub(crate) fn reactivate_selection_insertion_target(target: &SelectionInsertionT
         // 预览窗是 OpenLess 自己的窗口，确认后需要把焦点交还原应用再粘贴。
         activate_app_by_pid(pid);
         std::thread::sleep(Duration::from_millis(120));
-        return true;
+        // NSRunningApplication 激活也是 best-effort；必须复核 pid，失败就明确走
+        // copied/error，不能向此刻偶然持有焦点的应用盲写。
+        return current_front_app_pid() == Some(pid);
     }
 
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
@@ -396,6 +543,10 @@ fn activate_app_by_pid(pid: i32) {
 
 /// 捕获选区。Linux 只通过 fcitx5 DBus 读取 PRIMARY 选区，失败统一视为无选区。
 pub fn capture_selection_with_status() -> SelectionCaptureOutcome {
+    capture_selection_with_status_diag().0
+}
+
+fn capture_selection_with_status_diag() -> (SelectionCaptureOutcome, SelectionCaptureMissReason) {
     let source_app = current_front_app();
 
     // 1. macOS AX 直读
@@ -411,34 +562,73 @@ pub fn capture_selection_with_status() -> SelectionCaptureOutcome {
                     .map(|a| format!(" front_app={a}"))
                     .unwrap_or_default()
             );
-            return SelectionCaptureOutcome {
-                selection: Some(SelectionContext {
-                    text: truncate_selection(trimmed),
-                    source_app,
-                }),
-            };
+            return (
+                SelectionCaptureOutcome {
+                    selection: Some(SelectionContext {
+                        text: truncate_selection(trimmed),
+                        source_app,
+                    }),
+                },
+                SelectionCaptureMissReason::Ok,
+            );
         }
+        log::info!(
+            "[selection] AX read returned empty/whitespace{}",
+            source_app
+                .as_deref()
+                .map(|a| format!(" front_app={a}"))
+                .unwrap_or_default()
+        );
     }
 
     // 2. 模拟复制 fallback（macOS / Windows）
     #[cfg(any(target_os = "macos", target_os = "windows"))]
-    if let Some(text) = simulate_copy_and_read() {
-        let trimmed = text.trim();
-        if !trimmed.is_empty() {
-            log::info!(
-                "[selection] simulate-copy fallback OK ({} chars){}",
-                trimmed.chars().count(),
-                source_app
-                    .as_deref()
-                    .map(|a| format!(" front_app={a}"))
-                    .unwrap_or_default()
-            );
-            return SelectionCaptureOutcome {
-                selection: Some(SelectionContext {
-                    text: truncate_selection(trimmed),
-                    source_app,
-                }),
-            };
+    {
+        match simulate_copy_and_read_diag() {
+            Ok(text) => {
+                let trimmed = text.trim();
+                if !trimmed.is_empty() {
+                    log::info!(
+                        "[selection] simulate-copy fallback OK ({} chars){}",
+                        trimmed.chars().count(),
+                        source_app
+                            .as_deref()
+                            .map(|a| format!(" front_app={a}"))
+                            .unwrap_or_default()
+                    );
+                    return (
+                        SelectionCaptureOutcome {
+                            selection: Some(SelectionContext {
+                                text: truncate_selection(trimmed),
+                                source_app,
+                            }),
+                        },
+                        SelectionCaptureMissReason::Ok,
+                    );
+                }
+                log::info!(
+                    "[selection] simulate-copy returned whitespace-only{}",
+                    source_app
+                        .as_deref()
+                        .map(|a| format!(" front_app={a}"))
+                        .unwrap_or_default()
+                );
+                return (
+                    SelectionCaptureOutcome { selection: None },
+                    SelectionCaptureMissReason::EmptyTrimmed,
+                );
+            }
+            Err(reason) => {
+                log::info!(
+                    "[selection] simulate-copy miss reason={}{}",
+                    reason.as_str(),
+                    source_app
+                        .as_deref()
+                        .map(|a| format!(" front_app={a}"))
+                        .unwrap_or_default()
+                );
+                return (SelectionCaptureOutcome { selection: None }, reason);
+            }
         }
     }
 
@@ -455,17 +645,29 @@ pub fn capture_selection_with_status() -> SelectionCaptureOutcome {
                     .map(|a| format!(" front_app={a}"))
                     .unwrap_or_default()
             );
-            return SelectionCaptureOutcome {
-                selection: Some(SelectionContext {
-                    text: truncate_selection(trimmed),
-                    source_app,
-                }),
-            };
+            return (
+                SelectionCaptureOutcome {
+                    selection: Some(SelectionContext {
+                        text: truncate_selection(trimmed),
+                        source_app,
+                    }),
+                },
+                SelectionCaptureMissReason::Ok,
+            );
         }
-        linux_selection::LinuxSelectionRead::NoSelection => {}
+        linux_selection::LinuxSelectionRead::NoSelection => {
+            return (
+                SelectionCaptureOutcome { selection: None },
+                SelectionCaptureMissReason::EmptyTrimmed,
+            );
+        }
     }
 
-    SelectionCaptureOutcome { selection: None }
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    (
+        SelectionCaptureOutcome { selection: None },
+        SelectionCaptureMissReason::NoCapturePath,
+    )
 }
 
 /// 长度截断到首 + 尾 + 标记。
@@ -484,12 +686,17 @@ fn truncate_selection(text: &str) -> String {
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 fn simulate_copy_and_read() -> Option<String> {
+    simulate_copy_and_read_diag().ok()
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn simulate_copy_and_read_diag() -> Result<String, SelectionCaptureMissReason> {
     // a) snapshot 当前剪贴板（用作还原原状态的备份）
     let mut clipboard = match arboard::Clipboard::new() {
         Ok(c) => c,
         Err(e) => {
             log::warn!("[selection] clipboard init failed: {e}");
-            return None;
+            return Err(SelectionCaptureMissReason::ClipboardInitFailed);
         }
     };
     let original = match clipboard.get_text() {
@@ -505,24 +712,40 @@ fn simulate_copy_and_read() -> Option<String> {
     let sentinel = format!("__openless_qa_sentinel_{}__", uuid_like_token());
     if let Err(e) = clipboard.set_text(sentinel.clone()) {
         log::warn!("[selection] clipboard set_text(sentinel) failed: {e}");
-        // 即使设置 sentinel 失败，也尝试发 Cmd+C 看能不能直接拿到东西
+        return Err(SelectionCaptureMissReason::ClipboardSentinelWriteFailed);
     }
 
+    // Windows + Clipboard History: writing the sentinel wakes an async listener that may
+    // briefly own/open the clipboard. Target-app Ctrl+C then fails silently and leaves
+    // the sentinel in place (user A/B: history OFF → OK, history ON → fail). Settle first.
+    #[cfg(target_os = "windows")]
+    windows_wait_clipboard_settle_after_write();
+
     // c) 模拟 Cmd+C / Ctrl+C
-    let post_ok = post_copy_shortcut();
+    let mut post_ok = post_copy_shortcut();
+    log::info!(
+        "[selection] post_copy: post_ok={} original_was_some={}",
+        post_ok,
+        original.is_some()
+    );
     if !post_ok {
         log::warn!("[selection] post_copy_shortcut failed");
         // 不立刻 return：剪贴板可能已经被某些路径污染，按下方还原流程恢复。
     }
 
-    // d) 等剪贴板更新（macOS / Windows 都需要少量时间让目标 app 把数据 put 进去）
-    std::thread::sleep(Duration::from_millis(80));
+    // d) 等剪贴板更新；Windows 在开启剪贴板历史时需要轮询 + 必要时重发 Ctrl+C。
+    #[cfg(not(target_os = "windows"))]
+    {
+        std::thread::sleep(Duration::from_millis(80));
+    }
 
-    // e) 读新值
+    #[cfg(target_os = "windows")]
+    let captured = windows_poll_clipboard_after_copy(&mut clipboard, &sentinel, &mut post_ok);
+    #[cfg(not(target_os = "windows"))]
     let captured = clipboard.get_text().ok();
 
     // f) 还原原剪贴板
-    if let Some(prev) = original {
+    if let Some(ref prev) = original {
         if let Err(e) = clipboard.set_text(prev) {
             log::warn!("[selection] clipboard restore failed: {e}");
         }
@@ -533,11 +756,25 @@ fn simulate_copy_and_read() -> Option<String> {
         }
     }
 
-    let captured = captured?;
-    if captured == sentinel || captured.is_empty() {
-        return None;
+    classify_simulated_copy_result(post_ok, captured, &sentinel)
+}
+
+fn classify_simulated_copy_result(
+    post_ok: bool,
+    captured: Option<String>,
+    sentinel: &str,
+) -> Result<String, SelectionCaptureMissReason> {
+    if !post_ok {
+        return Err(SelectionCaptureMissReason::CopyShortcutFailed);
     }
-    Some(captured)
+    let captured = captured.ok_or(SelectionCaptureMissReason::ClipboardReadFailed)?;
+    if captured == sentinel {
+        return Err(SelectionCaptureMissReason::ClipboardUnchangedSentinel);
+    }
+    if captured.is_empty() {
+        return Err(SelectionCaptureMissReason::ClipboardEmptyAfterCopy);
+    }
+    Ok(captured)
 }
 
 /// Read the current selection in the same normalized/truncated form stored by
@@ -899,6 +1136,110 @@ mod macos_paste {
 
 // ─────────────────────────── Windows Ctrl+C send ───────────────────────────
 
+/// After we write a sentinel, Clipboard History (and other listeners) may briefly open
+/// the clipboard. Wait until nobody holds it and the sequence number stops moving.
+#[cfg(target_os = "windows")]
+fn windows_wait_clipboard_settle_after_write() {
+    use windows::Win32::System::DataExchange::{
+        GetClipboardSequenceNumber, GetOpenClipboardWindow,
+    };
+
+    const MAX_MS: u64 = 250;
+    const STEP_MS: u64 = 10;
+    let start = std::time::Instant::now();
+    let mut last_seq = unsafe { GetClipboardSequenceNumber() };
+    let mut stable_rounds = 0u32;
+    let mut open_cleared = false;
+    let mut seq_stable = false;
+
+    while (start.elapsed().as_millis() as u64) < MAX_MS {
+        let open_is_free = match unsafe { GetOpenClipboardWindow() } {
+            Ok(hwnd) => hwnd.0.is_null(),
+            Err(_) => true,
+        };
+        let seq = unsafe { GetClipboardSequenceNumber() };
+        if open_is_free {
+            open_cleared = true;
+            if seq == last_seq {
+                stable_rounds += 1;
+                // ~30ms of unchanged seq with clipboard free → history likely caught up.
+                if stable_rounds >= 3 {
+                    seq_stable = true;
+                    break;
+                }
+            } else {
+                stable_rounds = 0;
+                last_seq = seq;
+            }
+        } else {
+            open_cleared = false;
+            stable_rounds = 0;
+            last_seq = seq;
+        }
+        std::thread::sleep(Duration::from_millis(STEP_MS));
+    }
+
+    let waited_ms = start.elapsed().as_millis() as u64;
+    log::info!(
+        "[selection] clipboard_settle: waited_ms={} open_cleared={} seq_stable={}",
+        waited_ms,
+        open_cleared,
+        seq_stable
+    );
+}
+
+/// Poll until clipboard leaves the sentinel (selection copy landed). One Ctrl+C resend
+/// mid-window covers the case where the first chord hit a still-busy clipboard.
+#[cfg(target_os = "windows")]
+fn windows_poll_clipboard_after_copy(
+    clipboard: &mut arboard::Clipboard,
+    sentinel: &str,
+    post_ok: &mut bool,
+) -> Option<String> {
+    const MAX_MS: u64 = 450;
+    const STEP_MS: u64 = 25;
+    let start = std::time::Instant::now();
+    let mut attempts = 0u32;
+    let mut resent_ctrl_c = false;
+    let mut captured = None;
+
+    while (start.elapsed().as_millis() as u64) < MAX_MS {
+        attempts += 1;
+        match clipboard.get_text() {
+            Ok(text) if text != sentinel => {
+                captured = Some(text);
+                break;
+            }
+            Ok(text) => {
+                captured = Some(text);
+            }
+            Err(_) => {
+                captured = None;
+            }
+        }
+
+        // Halfway through: if still on sentinel, resend Ctrl+C once.
+        if !resent_ctrl_c && (start.elapsed().as_millis() as u64) >= 150 {
+            if post_copy_shortcut() {
+                *post_ok = true;
+                resent_ctrl_c = true;
+                log::info!("[selection] clipboard_poll: resent Ctrl+C after settle miss");
+            }
+        }
+        std::thread::sleep(Duration::from_millis(STEP_MS));
+    }
+
+    let waited_ms = start.elapsed().as_millis() as u64;
+    log::info!(
+        "[selection] clipboard_poll: waited_ms={} attempts={} resent={} still_sentinel={}",
+        waited_ms,
+        attempts,
+        resent_ctrl_c,
+        captured.as_deref() == Some(sentinel)
+    );
+    captured
+}
+
 #[cfg(target_os = "windows")]
 mod windows_paste {
     use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -1131,6 +1472,71 @@ mod tests {
             SelectionInsertionTargetValidation::SelectionChanged.error_code(),
             Some("selectionPolishSelectionChanged")
         );
+    }
+
+    #[test]
+    fn simulated_copy_result_classifies_failures_and_multibyte_text() {
+        let sentinel = "__openless_test_sentinel__";
+        for (post_ok, captured, expected) in [
+            (
+                false,
+                Some("stale clipboard".to_string()),
+                Err(SelectionCaptureMissReason::CopyShortcutFailed),
+            ),
+            (
+                true,
+                None,
+                Err(SelectionCaptureMissReason::ClipboardReadFailed),
+            ),
+            (
+                true,
+                Some(sentinel.to_string()),
+                Err(SelectionCaptureMissReason::ClipboardUnchangedSentinel),
+            ),
+            (
+                true,
+                Some(String::new()),
+                Err(SelectionCaptureMissReason::ClipboardEmptyAfterCopy),
+            ),
+            (
+                true,
+                Some("selected".to_string()),
+                Ok("selected".to_string()),
+            ),
+            (
+                true,
+                Some("中文选区".to_string()),
+                Ok("中文选区".to_string()),
+            ),
+        ] {
+            assert_eq!(
+                classify_simulated_copy_result(post_ok, captured, sentinel),
+                expected
+            );
+        }
+        assert_eq!(
+            SelectionCaptureMissReason::ClipboardSentinelWriteFailed.as_str(),
+            "clipboard_sentinel_write_failed"
+        );
+    }
+
+    #[test]
+    fn capture_diag_summary_contains_metadata_only() {
+        let selected_text = "不得写入日志的中文选区";
+        let summary = SelectionCaptureDiag {
+            reason: SelectionCaptureMissReason::PrefetchHit,
+            front_app: Some("Editor".to_string()),
+            used_prefetch: true,
+            target_captured: true,
+            char_count: Some(selected_text.chars().count()),
+        }
+        .summary();
+
+        assert_eq!(
+            summary,
+            "reason=prefetch_hit used_prefetch=true target_captured=true chars=11 front_app=Editor"
+        );
+        assert!(!summary.contains(selected_text));
     }
 
     #[cfg(target_os = "windows")]

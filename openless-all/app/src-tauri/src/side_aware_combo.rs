@@ -186,28 +186,61 @@ impl SideAwareComboMonitor {
 
         #[cfg(not(target_os = "linux"))]
         {
-        if binding.modifiers.is_empty()
-            || binding
-                .modifiers
-                .iter()
-                .any(|tag| !is_side_specific_modifier_tag(tag))
-        {
-            return Err(crate::combo_hotkey::ComboHotkeyError::UnsupportedModifier(
-                "binding is not side-specific".into(),
-            ));
-        }
-        crate::shortcut_binding::parse_primary(&binding.primary).map_err(|e| {
-            crate::combo_hotkey::ComboHotkeyError::UnsupportedKey(e.to_string())
-        })?;
+            validate_side_binding(&binding)?;
 
-        let slot = ACTIVE_MONITOR.get_or_init(|| RwLock::new(None));
-        let mut guard = slot.write().expect("side combo monitor lock poisoned");
-        *guard = Some(ActiveSideCombo {
-            tx,
-            state: Mutex::new(SideAwareComboState::new(binding)),
-        });
-        Ok(Self)
+            let slot = ACTIVE_MONITOR.get_or_init(|| RwLock::new(None));
+            let mut guard = slot.write().expect("side combo monitor lock poisoned");
+            *guard = Some(ActiveSideCombo {
+                tx,
+                state: Mutex::new(SideAwareComboState::new(binding)),
+            });
+            Ok(Self)
         }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn validate_side_binding(
+    binding: &ShortcutBinding,
+) -> Result<(), crate::combo_hotkey::ComboHotkeyError> {
+    if binding.modifiers.is_empty()
+        || binding
+            .modifiers
+            .iter()
+            .any(|tag| !is_side_specific_modifier_tag(tag))
+    {
+        return Err(crate::combo_hotkey::ComboHotkeyError::UnsupportedModifier(
+            "binding is not side-specific".into(),
+        ));
+    }
+    crate::shortcut_binding::parse_primary(&binding.primary)
+        .map_err(|e| crate::combo_hotkey::ComboHotkeyError::UnsupportedKey(e.to_string()))?;
+
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+impl SideAwareComboMonitor {
+    /// Update the existing route without replacing its handle or event sender.
+    /// Used when a failed native-key switch restores an already-live shortcut.
+    pub(crate) fn update_binding(
+        &self,
+        binding: ShortcutBinding,
+    ) -> Result<(), crate::combo_hotkey::ComboHotkeyError> {
+        validate_side_binding(&binding)?;
+        let slot = ACTIVE_MONITOR.get().ok_or_else(|| {
+            crate::combo_hotkey::ComboHotkeyError::RegisterFailed(
+                "side-aware listener is unavailable".into(),
+            )
+        })?;
+        let active = slot.read().expect("side combo monitor lock poisoned");
+        let active = active.as_ref().ok_or_else(|| {
+            crate::combo_hotkey::ComboHotkeyError::RegisterFailed(
+                "side-aware listener is unavailable".into(),
+            )
+        })?;
+        *active.state.lock() = SideAwareComboState::new(binding);
+        Ok(())
     }
 }
 
@@ -270,11 +303,12 @@ pub mod platform {
     use super::*;
 
     use windows::Win32::UI::Input::KeyboardAndMouse::{
-        VK_BACK, VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE, VK_F1, VK_F10, VK_F11, VK_F12, VK_F2,
-        VK_F3, VK_F4, VK_F5, VK_F6, VK_F7, VK_F8, VK_F9, VK_HOME, VK_INSERT, VK_LCONTROL,
-        VK_LEFT, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_OEM_1, VK_OEM_2, VK_OEM_3, VK_OEM_4, VK_OEM_5,
-        VK_OEM_6, VK_OEM_7, VK_OEM_COMMA, VK_OEM_MINUS, VK_OEM_PERIOD, VK_OEM_PLUS, VK_RETURN,
-        VK_RIGHT, VK_RCONTROL, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SPACE, VK_TAB, VK_UP,
+        VK_BACK, VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE, VK_F1, VK_F10, VK_F11, VK_F12, VK_F13,
+        VK_F14, VK_F15, VK_F16, VK_F17, VK_F18, VK_F19, VK_F2, VK_F20, VK_F3, VK_F4, VK_F5, VK_F6,
+        VK_F7, VK_F8, VK_F9, VK_HOME, VK_INSERT, VK_LCONTROL, VK_LEFT, VK_LMENU, VK_LSHIFT,
+        VK_LWIN, VK_OEM_1, VK_OEM_2, VK_OEM_3, VK_OEM_4, VK_OEM_5, VK_OEM_6, VK_OEM_7,
+        VK_OEM_COMMA, VK_OEM_MINUS, VK_OEM_PERIOD, VK_OEM_PLUS, VK_RCONTROL, VK_RETURN, VK_RIGHT,
+        VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SPACE, VK_TAB, VK_UP,
     };
 
     pub fn dispatch_vk(vk_code: u32, pressed: bool) {
@@ -334,6 +368,14 @@ pub mod platform {
             x if x == VK_F10.0 as u32 => "F10",
             x if x == VK_F11.0 as u32 => "F11",
             x if x == VK_F12.0 as u32 => "F12",
+            x if x == VK_F13.0 as u32 => "F13",
+            x if x == VK_F14.0 as u32 => "F14",
+            x if x == VK_F15.0 as u32 => "F15",
+            x if x == VK_F16.0 as u32 => "F16",
+            x if x == VK_F17.0 as u32 => "F17",
+            x if x == VK_F18.0 as u32 => "F18",
+            x if x == VK_F19.0 as u32 => "F19",
+            x if x == VK_F20.0 as u32 => "F20",
             x if x == VK_OEM_1.0 as u32 => ";",
             x if x == VK_OEM_PLUS.0 as u32 => "=",
             x if x == VK_OEM_COMMA.0 as u32 => ",",
@@ -428,6 +470,14 @@ fn macos_keycode_to_primary(keycode: i64) -> Option<&'static str> {
         109 => Some("F10"),
         103 => Some("F11"),
         111 => Some("F12"),
+        105 => Some("F13"),
+        107 => Some("F14"),
+        113 => Some("F15"),
+        106 => Some("F16"),
+        64 => Some("F17"),
+        79 => Some("F18"),
+        80 => Some("F19"),
+        90 => Some("F20"),
         _ => None,
     }
 }
@@ -480,10 +530,10 @@ pub mod platform {
     /// is not a known side modifier.
     fn class_mask_for_keycode(keycode: i64) -> Option<u64> {
         match keycode {
-            55 | 54 => Some(FLAG_MASK_COMMAND),     // Cmd left / right
-            59 | 62 => Some(FLAG_MASK_CONTROL),     // Ctrl left / right
-            58 | 61 => Some(FLAG_MASK_ALTERNATE),   // Alt/Option left / right
-            56 | 60 => Some(FLAG_MASK_SHIFT),       // Shift left / right
+            55 | 54 => Some(FLAG_MASK_COMMAND),   // Cmd left / right
+            59 | 62 => Some(FLAG_MASK_CONTROL),   // Ctrl left / right
+            58 | 61 => Some(FLAG_MASK_ALTERNATE), // Alt/Option left / right
+            56 | 60 => Some(FLAG_MASK_SHIFT),     // Shift left / right
             _ => None,
         }
     }
@@ -535,6 +585,74 @@ pub mod platform {
 mod tests {
     use super::*;
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn restoring_live_side_binding_preserves_its_event_route() {
+        use std::sync::mpsc;
+        let binding = ShortcutBinding {
+            primary: "D".into(),
+            modifiers: vec!["ctrl-right".into()],
+        };
+        let (tx, rx) = mpsc::channel();
+        let monitor = SideAwareComboMonitor::start(binding.clone(), tx).unwrap();
+        let press_and_release = |primary: &str| {
+            handle_side_modifier(SideModifier::CtrlRight, true);
+            handle_primary_key(primary, true);
+            handle_primary_key(primary, false);
+            handle_side_modifier(SideModifier::CtrlRight, false);
+            assert!(matches!(
+                rx.try_recv(),
+                Ok(ComboHotkeyEvent::Pressed { .. })
+            ));
+            assert!(matches!(
+                rx.try_recv(),
+                Ok(ComboHotkeyEvent::Released { .. })
+            ));
+            assert!(rx.try_recv().is_err());
+        };
+        press_and_release("D");
+        // Native registration failed before removing this monitor. The reverse
+        // transaction must reuse the live route, even on repeated restoration.
+        monitor.update_binding(binding.clone()).unwrap();
+        monitor.update_binding(binding).unwrap();
+        press_and_release("D");
+        assert!(monitor
+            .update_binding(ShortcutBinding {
+                primary: "F21".into(),
+                modifiers: vec!["ctrl-right".into()]
+            })
+            .is_err());
+        press_and_release("D");
+        monitor
+            .update_binding(ShortcutBinding {
+                primary: "F20".into(),
+                modifiers: vec!["ctrl-right".into()],
+            })
+            .unwrap();
+        press_and_release("F20");
+        drop(monitor);
+        assert!(matches!(
+            rx.try_recv(),
+            Err(mpsc::TryRecvError::Disconnected)
+        ));
+    }
+
+    #[test]
+    fn extended_macos_function_keys_use_carbon_keycodes() {
+        for (keycode, primary) in [
+            (105, "F13"),
+            (107, "F14"),
+            (113, "F15"),
+            (106, "F16"),
+            (64, "F17"),
+            (79, "F18"),
+            (80, "F19"),
+            (90, "F20"),
+        ] {
+            assert_eq!(macos_keycode_to_primary(keycode), Some(primary));
+        }
+    }
+
     #[test]
     fn macos_keycode_2_is_d() {
         assert_eq!(macos_keycode_to_primary(2), Some("D"));
@@ -582,7 +700,10 @@ mod tests {
         state.set_side(SideModifier::ShiftLeft, false);
         state.set_side(SideModifier::ShiftRight, true);
         assert!(state.modifiers_match());
-        assert!(matches!(state.on_primary("D", true), Some(ComboHotkeyEvent::Pressed { .. })));
+        assert!(matches!(
+            state.on_primary("D", true),
+            Some(ComboHotkeyEvent::Pressed { .. })
+        ));
     }
 
     #[test]
@@ -618,7 +739,10 @@ mod tests {
         });
         state.set_side(SideModifier::CmdLeft, true);
         assert!(state.modifiers_match());
-        assert!(matches!(state.on_primary("D", true), Some(ComboHotkeyEvent::Pressed { .. })));
+        assert!(matches!(
+            state.on_primary("D", true),
+            Some(ComboHotkeyEvent::Pressed { .. })
+        ));
     }
 
     #[test]
@@ -656,9 +780,15 @@ mod tests {
     fn normal_press_then_release_is_paired() {
         let mut state = cmd_left_d_state();
         state.set_side(SideModifier::CmdLeft, true);
-        assert!(matches!(state.on_primary("D", true), Some(ComboHotkeyEvent::Pressed { .. })));
+        assert!(matches!(
+            state.on_primary("D", true),
+            Some(ComboHotkeyEvent::Pressed { .. })
+        ));
         // Primary key up terminates the combo with exactly one Released.
-        assert!(matches!(state.on_primary("D", false), Some(ComboHotkeyEvent::Released { .. })));
+        assert!(matches!(
+            state.on_primary("D", false),
+            Some(ComboHotkeyEvent::Released { .. })
+        ));
         // No trailing events; a second key-up must not emit anything.
         assert_eq!(state.on_primary("D", false), None);
         assert!(!state.combo_active);
@@ -668,9 +798,15 @@ mod tests {
     fn modifier_release_after_press_emits_paired_released() {
         let mut state = cmd_left_d_state();
         state.set_side(SideModifier::CmdLeft, true);
-        assert!(matches!(state.on_primary("D", true), Some(ComboHotkeyEvent::Pressed { .. })));
+        assert!(matches!(
+            state.on_primary("D", true),
+            Some(ComboHotkeyEvent::Pressed { .. })
+        ));
         // Modifier lifts while primary is still down -> combo terminates once.
-        assert!(matches!(state.on_modifier_release(SideModifier::CmdLeft), Some(ComboHotkeyEvent::Released { .. })));
+        assert!(matches!(
+            state.on_modifier_release(SideModifier::CmdLeft),
+            Some(ComboHotkeyEvent::Released { .. })
+        ));
         assert!(!state.combo_active);
         // A now-orphaned primary key-up must NOT emit a second Released.
         assert_eq!(state.on_primary("D", false), None);
@@ -683,10 +819,16 @@ mod tests {
         // key-up (absolute termination) must still emit the paired Released.
         let mut state = cmd_left_d_state();
         state.set_side(SideModifier::CmdLeft, true);
-        assert!(matches!(state.on_primary("D", true), Some(ComboHotkeyEvent::Pressed { .. })));
+        assert!(matches!(
+            state.on_primary("D", true),
+            Some(ComboHotkeyEvent::Pressed { .. })
+        ));
         // Modifier physically released but the release event never arrived, so the
         // side flag is still set here. Primary up is the fallback terminator.
-        assert!(matches!(state.on_primary("D", false), Some(ComboHotkeyEvent::Released { .. })));
+        assert!(matches!(
+            state.on_primary("D", false),
+            Some(ComboHotkeyEvent::Released { .. })
+        ));
         assert!(!state.combo_active);
     }
 
@@ -715,13 +857,22 @@ mod tests {
         // Releasing the required side-modifier breaks the match, so the stale latch
         // self-heals by emitting the terminal Released here (pairing the Pressed whose
         // Released was dropped). Either way combo_active must end up cleared.
-        assert!(matches!(state.on_modifier_release(SideModifier::CmdLeft), Some(ComboHotkeyEvent::Released { .. })));
+        assert!(matches!(
+            state.on_modifier_release(SideModifier::CmdLeft),
+            Some(ComboHotkeyEvent::Released { .. })
+        ));
         assert!(!state.combo_active);
 
         // Fresh, clean press cycle now behaves normally.
         state.set_side(SideModifier::CmdLeft, true);
-        assert!(matches!(state.on_primary("D", true), Some(ComboHotkeyEvent::Pressed { .. })));
-        assert!(matches!(state.on_primary("D", false), Some(ComboHotkeyEvent::Released { .. })));
+        assert!(matches!(
+            state.on_primary("D", true),
+            Some(ComboHotkeyEvent::Pressed { .. })
+        ));
+        assert!(matches!(
+            state.on_primary("D", false),
+            Some(ComboHotkeyEvent::Released { .. })
+        ));
     }
 
     #[test]
@@ -735,7 +886,10 @@ mod tests {
         assert!(state.modifiers_match());
         assert_eq!(state.on_primary("D", true), None);
         // The real terminator (primary up) still yields exactly one Released.
-        assert!(matches!(state.on_primary("D", false), Some(ComboHotkeyEvent::Released { .. })));
+        assert!(matches!(
+            state.on_primary("D", false),
+            Some(ComboHotkeyEvent::Released { .. })
+        ));
     }
 
     // ---- Fix 2: macOS race-free FLAGS_CHANGED side classification ----

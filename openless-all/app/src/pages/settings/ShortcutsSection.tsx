@@ -30,7 +30,7 @@ import { detectOS } from '../../components/WindowChrome';
 export function ShortcutsSection() {
   const { t } = useTranslation();
   const os = detectOS();
-  const { prefs, hotkey, updatePrefs: savePrefs } = useHotkeySettings();
+  const { prefs, hotkey, refresh, updatePrefs: savePrefs } = useHotkeySettings();
   const [platformCaps, setPlatformCaps] = useState<PlatformCapabilities | null>(null);
   const [stylePacks, setStylePacks] = useState<StylePack[]>([]);
   // 新增行的草稿状态：先选风格包、再录快捷键，两者齐了才真正落库。
@@ -101,12 +101,13 @@ export function ShortcutsSection() {
           <ShortcutRecorder
             value={prefs.dictationHotkey}
             sideSpecificModifiers
+            allowMacDictationKey={os === 'mac'}
             // 与「录音与输入」页一致：核心热键不可停用，置灰并提示。
             disableDisabled
             disableHint={t('settings.recording.comboDisableHint')}
             onSave={async binding => {
               await setDictationHotkey(binding);
-              await savePrefs({ ...prefs, dictationHotkey: binding });
+              await refresh();
             }}
           />
           <div style={{ fontSize: 11, color: 'var(--ol-ink-4)' }}>
@@ -293,7 +294,7 @@ export function ShortcutsSection() {
           }}
         />
       </SettingRow>
-      {os === 'mac' && (
+      {(os === 'mac' || os === 'win') && (
         <SettingRow label={t('settings.codingAgent.title')} desc={t('settings.codingAgent.voiceHotkeyDesc')}>
           <ShortcutRecorder
             value={prefs.codingAgentVoiceHotkey}

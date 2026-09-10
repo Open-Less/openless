@@ -1,5 +1,6 @@
 import {
   createHotkeyRecorderState,
+  functionKeyPrimaryFromEvent,
   orderHotkeyCodes,
   updateHotkeyRecorderState,
 } from './hotkeyRecorder';
@@ -83,3 +84,11 @@ function apply(
 }
 
 assertDeepEqual(orderHotkeyCodes(['Mouse4', 'ControlLeft']), ['ControlLeft', 'Mouse4'], 'orders mouse after modifiers');
+
+for (let i = 1; i <= 20; i++) {
+  assertEqual(functionKeyPrimaryFromEvent({ code: `F${i}`, key: `F${i}` }), `F${i}`, 'function key');
+}
+assertEqual(functionKeyPrimaryFromEvent({ code: 'F20', key: '\uF717' }), 'F20', 'WebKit private-use key');
+assertEqual(functionKeyPrimaryFromEvent({ code: 'F20', key: 'Unidentified' }), 'F20', 'physical F20');
+assertEqual(functionKeyPrimaryFromEvent({ code: '', key: 'F20' }), 'F20', 'named F20 fallback');
+assertEqual(functionKeyPrimaryFromEvent({ code: 'KeyA', key: 'a' }), null, 'printable key preserved');
