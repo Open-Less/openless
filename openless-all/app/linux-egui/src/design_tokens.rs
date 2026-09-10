@@ -7,20 +7,21 @@
 //! 另一侧并通过本模块的对照测试。CSS 十六进制按 `0xRRGGBB` 转录，
 //! 省略 alpha 的透明色按实际叠加效果取实色近似并在字段注释里标明。
 
-/// 圆角阶梯（tokens.css `--ol-r-*`）。egui 的 `Rounding::same` 直接使用。
+/// 圆角阶梯（tokens.css `--ol-r-*`）。egui 0.31 的 `CornerRadius` 以 u8 计，
+/// 这里直接存 u8；需要 f32 的场合由使用方转换。
 pub mod radius {
     /// `--ol-r-sm: 6px`（控件内小组件）
-    pub const SM: f32 = 6.0;
+    pub const SM: u8 = 6;
     /// `--ol-control-radius: 8px`（按钮、导航项）
-    pub const CONTROL: f32 = 8.0;
+    pub const CONTROL: u8 = 8;
     /// `--ol-r-md: 10px`
-    pub const MD: f32 = 10.0;
+    pub const MD: u8 = 10;
     /// `--ol-r-lg` / `--ol-card-radius: 14px`（卡片、设置弹窗）
-    pub const CARD: f32 = 14.0;
+    pub const CARD: u8 = 14;
     /// `--ol-panel-radius` / `--ol-r-xl: 18px`（浮层面板）
-    pub const PANEL: f32 = 18.0;
+    pub const PANEL: u8 = 18;
     /// `--ol-shell-radius: 32px`（窗口外壳；Linux 由 WM 裁剪，这里供自定义绘制参考）
-    pub const SHELL: f32 = 32.0;
+    pub const SHELL: u8 = 32;
 }
 
 /// 侧栏宽度：FloatingShell `SIDEBAR_WIDTH = 226`。
@@ -219,11 +220,11 @@ mod tests {
 
     #[test]
     fn radii_match_tokens_css_scale() {
-        assert_eq!(radius::SM, 6.0);
-        assert_eq!(radius::CONTROL, 8.0);
-        assert_eq!(radius::CARD, 14.0);
-        assert_eq!(radius::PANEL, 18.0);
-        assert_eq!(radius::SHELL, 32.0);
+        assert_eq!(radius::SM, 6);
+        assert_eq!(radius::CONTROL, 8);
+        assert_eq!(radius::CARD, 14);
+        assert_eq!(radius::PANEL, 18);
+        assert_eq!(radius::SHELL, 32);
         assert_eq!(SIDEBAR_WIDTH, 226.0);
     }
 }

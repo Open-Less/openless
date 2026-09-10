@@ -68,6 +68,10 @@ impl Palette {
     pub fn ink_4(&self) -> egui::Color32 {
         Self::c(self.tokens.ink_4)
     }
+    /// `--ol-ink-5`（分隔线级弱色，兼作开关关闭轨道）
+    pub fn ink_5(&self) -> egui::Color32 {
+        Self::c(self.tokens.ink_5)
+    }
     /// `--ol-blue`
     pub fn blue(&self) -> egui::Color32 {
         Self::c(self.tokens.blue)
@@ -134,7 +138,7 @@ impl Palette {
     }
     /// `--ol-overlay-bg`（alpha 固定 0.32/0.64，见 tokens.css）
     pub fn overlay(&self) -> egui::Color32 {
-        let alpha = if self.dark { 0.64 } else { 0.32 };
+        let alpha: f32 = if self.dark { 0.64 } else { 0.32 };
         egui::Color32::from_rgba_premultiplied(
             ((self.tokens.overlay_rgb >> 16) & 0xFF) as u8,
             ((self.tokens.overlay_rgb >> 8) & 0xFF) as u8,
@@ -177,12 +181,13 @@ pub fn apply_theme(ctx: &egui::Context, dark: bool) {
     visuals.extreme_bg_color = if dark { p.canvas() } else { p.surface() };
     visuals.code_bg_color = p.surface_2();
     visuals.hyperlink_color = p.blue();
-    visuals.warn_text_color = p.warn();
-    visuals.error_text_color = p.err();
-    visuals.selection.bg_fill = if dark { p.blue_soft() } else { p.blue_soft() };
+    // egui 0.31 起 warn/error 文字色字段更名 *_fg_color。
+    visuals.warn_fg_color = p.warn();
+    visuals.error_fg_color = p.err();
+    visuals.selection.bg_fill = p.blue_soft();
     visuals.selection.stroke = egui::Stroke::new(1.0, p.ink());
 
-    let control_rounding = egui::Rounding::same(tokens::radius::CONTROL);
+    let control_rounding = egui::CornerRadius::same(tokens::radius::CONTROL);
     // 控件观感对齐 React：默认按钮 = surface 底 + 0.5px line 边 + ink-2 文字；
     // 悬停 = surface-2；激活（按下）= blue 实底白字；危险文字直接用 err 色。
     visuals.widgets.noninteractive = widget_visuals(
@@ -234,9 +239,10 @@ pub fn apply_theme(ctx: &egui::Context, dark: bool) {
     .collect();
 
     // 间距：横向 10px（React gap:10）、按钮内边距 12x6（padding: 6px 12px 的镜像）。
+    // egui 0.31 的 Margin 以 i8 计。
     style.spacing.item_spacing = egui::vec2(10.0, 8.0);
     style.spacing.button_padding = egui::vec2(12.0, 6.0);
-    style.spacing.window_margin = egui::Margin::same(16.0);
+    style.spacing.window_margin = egui::Margin::same(16);
     style.spacing.menu_spacing = 4.0;
 
     ctx.set_style(style);
@@ -247,9 +253,9 @@ fn widget_visuals(
     weak_bg_fill: egui::Color32,
     bg_stroke: egui::Stroke,
     ink: egui::Color32,
-    rounding: egui::Rounding,
-) -> egui::WidgetVisuals {
-    egui::WidgetVisuals {
+    rounding: egui::CornerRadius,
+) -> egui::style::WidgetVisuals {
+    egui::style::WidgetVisuals {
         bg_fill,
         weak_bg_fill,
         bg_stroke,

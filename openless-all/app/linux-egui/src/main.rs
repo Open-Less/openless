@@ -922,10 +922,10 @@ mod linux_app {
                 let p = ui20::current(ui.ctx());
                 egui::Frame::default()
                     .fill(p.warn_soft())
-                    .rounding(egui::Rounding::same(
+                    .rounding(egui::CornerRadius::same(
                         openless_linux_egui::design_tokens::radius::CARD,
                     ))
-                    .inner_margin(egui::Margin::same(16.0))
+                    .inner_margin(egui::Margin::same(16))
                     .show(ui, |ui| {
                         ui20::widgets::section_title(ui, "等待审批");
                         self.agent_approval_ui(ui);
@@ -1172,10 +1172,10 @@ mod linux_app {
                 let max_width = ui.available_width() * 0.78;
                 egui::Frame::default()
                     .fill(if user { p.blue_soft() } else { p.surface_2() })
-                    .rounding(egui::Rounding::same(
+                    .rounding(egui::CornerRadius::same(
                         openless_linux_egui::design_tokens::radius::MD,
                     ))
-                    .inner_margin(egui::Margin::symmetric(12.0, 8.0))
+                    .inner_margin(egui::Margin::symmetric(12, 8))
                     .show(ui, |ui| {
                         ui.set_max_width(max_width);
                         ui.add(
@@ -2330,10 +2330,10 @@ mod linux_app {
                         .fill(p.sidebar_bg())
                         .stroke(egui::Stroke::new(0.5, p.line()))
                         .inner_margin(egui::Margin {
-                            left: 10.0,
-                            right: 10.0,
-                            top: 14.0,
-                            bottom: 12.0,
+                            left: 10,
+                            right: 10,
+                            top: 14,
+                            bottom: 12,
                         }),
                 )
                 .show(ctx, |ui| {
@@ -2396,8 +2396,8 @@ mod linux_app {
                 );
                 egui::Frame::default()
                     .stroke(egui::Stroke::new(0.5, p.blue()))
-                    .rounding(egui::Rounding::same(5.0))
-                    .inner_margin(egui::Margin::symmetric(6.0, 1.0))
+                    .rounding(egui::CornerRadius::same(5))
+                    .inner_margin(egui::Margin::symmetric(6, 1))
                     .show(ui, |ui| {
                         ui.label(
                             egui::RichText::new("BETA")
@@ -2426,7 +2426,7 @@ mod linux_app {
                 } else {
                     egui::Color32::TRANSPARENT
                 })
-                .rounding(egui::Rounding::same(8.0))
+                .rounding(egui::CornerRadius::same(8))
                 .inner_margin(egui::Margin {
                     left: if indent { 30.0 } else { 10.0 },
                     right: 10.0,
@@ -2475,12 +2475,12 @@ mod linux_app {
                 } else {
                     egui::Color32::TRANSPARENT
                 })
-                .rounding(egui::Rounding::same(8.0))
+                .rounding(egui::CornerRadius::same(8))
                 .inner_margin(egui::Margin {
-                    left: 10.0,
-                    right: 10.0,
-                    top: 8.0,
-                    bottom: 8.0,
+                    left: 10,
+                    right: 10,
+                    top: 8,
+                    bottom: 8,
                 });
             let response = frame
                 .show(ui, |ui| {
@@ -2513,7 +2513,7 @@ mod linux_app {
                     egui::Frame::default()
                         .fill(p.surface())
                         .stroke(egui::Stroke::new(0.5, p.line()))
-                        .inner_margin(egui::Margin::symmetric(10.0, 8.0)),
+                        .inner_margin(egui::Margin::symmetric(10, 8)),
                 )
                 .show(ctx, |ui| {
                     ui.horizontal_wrapped(|ui| {
@@ -2580,7 +2580,7 @@ mod linux_app {
                 egui::LayerId::new(egui::Order::Middle, egui::Id::new("settings-overlay"));
             ctx.layer_painter(overlay_layer).rect_filled(
                 screen,
-                egui::Rounding::same(0.0),
+                egui::CornerRadius::same(0),
                 p.overlay(),
             );
 
@@ -2604,11 +2604,11 @@ mod linux_app {
                 .frame(
                     egui::Frame::default()
                         .fill(p.settings_content_bg())
-                        .rounding(egui::Rounding::same(
+                        .rounding(egui::CornerRadius::same(
                             openless_linux_egui::design_tokens::radius::CARD,
                         ))
                         .stroke(egui::Stroke::new(0.5, p.line()))
-                        .inner_margin(egui::Margin::same(0.0)),
+                        .inner_margin(egui::Margin::same(0)),
                 )
                 .show(ctx, |ui| {
                     egui::TopBottomPanel::top("settings-header")
@@ -2617,10 +2617,10 @@ mod linux_app {
                                 .fill(p.surface())
                                 .stroke(egui::Stroke::new(0.5, p.line()))
                                 .inner_margin(egui::Margin {
-                                    left: 18.0,
-                                    right: 14.0,
-                                    top: 12.0,
-                                    bottom: 12.0,
+                                    left: 18,
+                                    right: 14,
+                                    top: 12,
+                                    bottom: 12,
                                 }),
                         )
                         .show_inside(ui, |ui| {
@@ -2651,10 +2651,10 @@ mod linux_app {
                                 .fill(p.settings_rail_bg())
                                 .stroke(egui::Stroke::new(0.5, p.line()))
                                 .inner_margin(egui::Margin {
-                                    left: 10.0,
-                                    right: 10.0,
-                                    top: 14.0,
-                                    bottom: 10.0,
+                                    left: 10,
+                                    right: 10,
+                                    top: 14,
+                                    bottom: 10,
                                 }),
                         )
                         .show_inside(ui, |ui| {
@@ -2672,7 +2672,7 @@ mod linux_app {
                         .frame(
                             egui::Frame::default()
                                 .fill(p.settings_content_bg())
-                                .inner_margin(egui::Margin::same(20.0)),
+                                .inner_margin(egui::Margin::same(20)),
                         )
                         .show_inside(ui, |ui| {
                             egui::ScrollArea::vertical()
@@ -2713,12 +2713,12 @@ mod linux_app {
                 } else {
                     egui::Color32::TRANSPARENT
                 })
-                .rounding(egui::Rounding::same(8.0))
+                .rounding(egui::CornerRadius::same(8))
                 .inner_margin(egui::Margin {
-                    left: 10.0,
-                    right: 10.0,
-                    top: 8.0,
-                    bottom: 8.0,
+                    left: 10,
+                    right: 10,
+                    top: 8,
+                    bottom: 8,
                 });
             let response = frame
                 .show(ui, |ui| {
@@ -2892,10 +2892,10 @@ mod linux_app {
                     egui::Frame::default()
                         .fill(ui20::current(ctx).surface())
                         .inner_margin(egui::Margin {
-                            left: 20.0,
-                            right: 20.0,
-                            top: 14.0,
-                            bottom: 14.0,
+                            left: 20,
+                            right: 20,
+                            top: 14,
+                            bottom: 14,
                         }),
                 )
                 .show(ctx, |ui| {

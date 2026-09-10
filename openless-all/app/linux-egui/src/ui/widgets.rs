@@ -2,7 +2,7 @@
 //!
 //! 视觉规格对应 React 侧组件：`--ol-card-*`（卡片）、`--ol-pill-*`（胶囊）、
 //! `--ol-primary/accent/danger-solid-*`（按钮）、`--ol-segmented-*`（分段）、
-//! `--ol-toggle-*`（开关）。
+//! `--ol-toggle-*`（开关）。egui 0.31 的 `CornerRadius` 以 u8、`Margin` 以 i8 计。
 
 use crate::design_tokens::{self as tokens};
 use crate::ui::theme::{current, Palette};
@@ -45,8 +45,8 @@ pub fn card<R>(
     egui::Frame::default()
         .fill(p.surface())
         .stroke(egui::Stroke::new(0.5, p.line()))
-        .rounding(egui::Rounding::same(tokens::radius::CARD))
-        .inner_margin(egui::Margin::same(16.0))
+        .rounding(egui::CornerRadius::same(tokens::radius::CARD))
+        .inner_margin(egui::Margin::same(16))
         .show(ui, add_contents)
 }
 
@@ -58,8 +58,8 @@ pub fn subtle_card<R>(
     let p = current(ui.ctx());
     egui::Frame::default()
         .fill(p.surface_2())
-        .rounding(egui::Rounding::same(tokens::radius::CARD))
-        .inner_margin(egui::Margin::same(14.0))
+        .rounding(egui::CornerRadius::same(tokens::radius::CARD))
+        .inner_margin(egui::Margin::same(14))
         .show(ui, add_contents)
 }
 
@@ -71,8 +71,8 @@ pub fn info_panel<R>(
     let p = current(ui.ctx());
     egui::Frame::default()
         .fill(p.blue_soft())
-        .rounding(egui::Rounding::same(tokens::radius::CARD))
-        .inner_margin(egui::Margin::same(14.0))
+        .rounding(egui::CornerRadius::same(tokens::radius::CARD))
+        .inner_margin(egui::Margin::same(14))
         .show(ui, add_contents)
 }
 
@@ -90,7 +90,7 @@ impl Status {
         match self {
             Self::Ok => (p.ok_soft(), p.ok()),
             Self::Warn => (p.warn_soft(), p.warn()),
-            Self::Err => (p.err, egui::Color32::WHITE),
+            Self::Err => (p.err(), egui::Color32::WHITE),
             Self::Info => (p.blue_soft(), p.blue()),
         }
     }
@@ -107,8 +107,8 @@ pub fn status_pill(ui: &mut egui::Ui, text: &str, status: Status) -> egui::Respo
 pub fn pill(ui: &mut egui::Ui, text: &str, bg: egui::Color32, fg: egui::Color32) -> egui::Response {
     egui::Frame::default()
         .fill(bg)
-        .rounding(egui::Rounding::same(12.0))
-        .inner_margin(egui::Margin::symmetric(8.0, 3.0))
+        .rounding(egui::CornerRadius::same(12))
+        .inner_margin(egui::Margin::symmetric(8, 3))
         .show(ui, |ui| {
             ui.label(egui::RichText::new(text).size(12.0).strong().color(fg));
         })
@@ -127,7 +127,7 @@ pub fn primary_button(ui: &mut egui::Ui, label: &str, enabled: bool) -> egui::Re
     )
     .fill(p.primary_bg())
     .stroke(egui::Stroke::NONE)
-    .rounding(egui::Rounding::same(tokens::radius::CONTROL));
+    .rounding(egui::CornerRadius::same(tokens::radius::CONTROL));
     add_maybe_enabled(ui, button, enabled)
 }
 
@@ -142,7 +142,7 @@ pub fn blue_button(ui: &mut egui::Ui, label: &str, enabled: bool) -> egui::Respo
     )
     .fill(p.blue())
     .stroke(egui::Stroke::NONE)
-    .rounding(egui::Rounding::same(tokens::radius::CONTROL));
+    .rounding(egui::CornerRadius::same(tokens::radius::CONTROL));
     add_maybe_enabled(ui, button, enabled)
 }
 
@@ -157,7 +157,7 @@ pub fn danger_button(ui: &mut egui::Ui, label: &str, enabled: bool) -> egui::Res
     )
     .fill(p.err())
     .stroke(egui::Stroke::NONE)
-    .rounding(egui::Rounding::same(tokens::radius::CONTROL));
+    .rounding(egui::CornerRadius::same(tokens::radius::CONTROL));
     add_maybe_enabled(ui, button, enabled)
 }
 
@@ -193,14 +193,14 @@ pub fn kv_row(ui: &mut egui::Ui, key: &str, value: &str) {
     });
 }
 
-/// 0.5px 分隔线（`--ol-line`）。
+/// 1px 分隔线（`--ol-line`）。
 pub fn divider(ui: &mut egui::Ui) {
     let p = current(ui.ctx());
     ui.add_space(4.0);
     let width = ui.available_width();
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 1.0), egui::Sense::hover());
     ui.painter()
-        .rect_filled(rect, egui::Rounding::same(0.5), p.line());
+        .rect_filled(rect, egui::CornerRadius::same(1), p.line());
     ui.add_space(4.0);
 }
 
@@ -208,7 +208,7 @@ pub fn divider(ui: &mut egui::Ui) {
 /// 返回被点中的选项下标。
 pub fn segmented(
     ui: &mut egui::Ui,
-    id_salt: &str,
+    _id_salt: &str,
     options: &[&str],
     selected: usize,
 ) -> Option<usize> {
@@ -216,8 +216,8 @@ pub fn segmented(
     let mut picked = None;
     egui::Frame::default()
         .fill(p.segmented_bg())
-        .rounding(egui::Rounding::same(tokens::radius::CONTROL))
-        .inner_margin(egui::Margin::same(2.0))
+        .rounding(egui::CornerRadius::same(tokens::radius::CONTROL))
+        .inner_margin(egui::Margin::same(2))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.style_mut().interaction.selectable_labels = false;
@@ -226,8 +226,8 @@ pub fn segmented(
                     let response = if active {
                         egui::Frame::default()
                             .fill(p.segmented_active_bg())
-                            .rounding(egui::Rounding::same(tokens::radius::SM))
-                            .inner_margin(egui::Margin::symmetric(12.0, 5.0))
+                            .rounding(egui::CornerRadius::same(tokens::radius::SM))
+                            .inner_margin(egui::Margin::symmetric(12, 5))
                             .show(ui, |ui| {
                                 ui.label(
                                     egui::RichText::new(*option)
@@ -244,7 +244,7 @@ pub fn segmented(
                             )
                             .fill(egui::Color32::TRANSPARENT)
                             .stroke(egui::Stroke::NONE)
-                            .rounding(egui::Rounding::same(tokens::radius::SM)),
+                            .rounding(egui::CornerRadius::same(tokens::radius::SM)),
                         )
                     };
                     if response.clicked() && !active {
@@ -253,19 +253,29 @@ pub fn segmented(
                 }
             });
         });
-    let _ = id_salt;
     picked
 }
 
-/// 开关（React 的 toggle switch）：36x20 轨道 + 白色圆钮，点按切换。
-/// 返回是否发生了切换；`on` 由调用方持有。
+/// 开关（React 的 toggle switch）：34x20 轨道 + 白色圆钮，点按切换。
+/// 返回是否发生了切换；`on` 由调用方持有。关闭轨道色取 `--ol-toggle-off-bg`
+/// 的近似（浅色 ink-5 / 深色 ink-3，保证暗底可见）。
 pub fn switch(ui: &mut egui::Ui, on: bool) -> egui::Response {
     let p = current(ui.ctx());
     let size = egui::vec2(34.0, 20.0);
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
     let painter = ui.painter_at(rect);
-    let track = if on { p.blue() } else { p.ink_5() };
-    painter.rect_filled(rect, egui::Rounding::same(rect.height() / 2.0), track);
+    let track = if on {
+        p.blue()
+    } else if p.is_dark() {
+        p.ink_3()
+    } else {
+        p.ink_5()
+    };
+    painter.rect_filled(
+        rect,
+        egui::CornerRadius::same((rect.height() / 2.0) as u8),
+        track,
+    );
     let knob_d = 14.0;
     let knob_y = rect.center().y;
     let knob_center_x = if on {
@@ -284,19 +294,19 @@ pub fn switch(ui: &mut egui::Ui, on: bool) -> egui::Response {
 /// 带标签的开关行：左标签右开关（React 设置行的排布）。
 pub fn toggle_row(ui: &mut egui::Ui, on: &mut bool, label: &str, hint_text: Option<&str>) {
     let p = current(ui.ctx());
-    ui.horizontal(|ui| {
-        ui.add(egui::Label::new(
-            egui::RichText::new(label).size(14.0).color(p.ink_2()),
-        ));
-        if let Some(hint_text) = hint_text {
-            ui.label(egui::RichText::new(hint_text).size(12.0).color(p.ink_4()));
-        }
-    });
     let mut changed = false;
-    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        if switch(ui, *on).clicked() {
-            changed = true;
-        }
+    ui.horizontal(|ui| {
+        ui.vertical(|ui| {
+            ui.label(egui::RichText::new(label).size(14.0).color(p.ink_2()));
+            if let Some(hint_text) = hint_text {
+                ui.label(egui::RichText::new(hint_text).size(12.0).color(p.ink_4()));
+            }
+        });
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if switch(ui, *on).clicked() {
+                changed = true;
+            }
+        });
     });
     if changed {
         *on = !*on;
