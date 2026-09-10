@@ -854,6 +854,9 @@ mod linux_app {
                 DictationPhase::Transcribing => ("转写中", ui20::widgets::Status::Info),
                 DictationPhase::Polishing => ("润色中", ui20::widgets::Status::Info),
                 DictationPhase::Inserting => ("落字中", ui20::widgets::Status::Info),
+                DictationPhase::Completed => ("已完成", ui20::widgets::Status::Ok),
+                DictationPhase::Cancelled => ("已取消", ui20::widgets::Status::Warn),
+                DictationPhase::Failed => ("失败", ui20::widgets::Status::Err),
             };
             ui20::widgets::card(ui, |ui| {
                 ui.horizontal(|ui| {
@@ -922,7 +925,7 @@ mod linux_app {
                 let p = ui20::current(ui.ctx());
                 egui::Frame::default()
                     .fill(p.warn_soft())
-                    .rounding(egui::CornerRadius::same(
+                    .corner_radius(egui::CornerRadius::same(
                         openless_linux_egui::design_tokens::radius::CARD,
                     ))
                     .inner_margin(egui::Margin::same(16))
@@ -1172,7 +1175,7 @@ mod linux_app {
                 let max_width = ui.available_width() * 0.78;
                 egui::Frame::default()
                     .fill(if user { p.blue_soft() } else { p.surface_2() })
-                    .rounding(egui::CornerRadius::same(
+                    .corner_radius(egui::CornerRadius::same(
                         openless_linux_egui::design_tokens::radius::MD,
                     ))
                     .inner_margin(egui::Margin::symmetric(12, 8))
@@ -1997,7 +2000,11 @@ mod linux_app {
                                     ui.ctx().copy_text(display);
                                 }
                             }
-                            None => ui.label("完整指纹不可用。请勿安装或信任下载的证书。"),
+                            // 两臂统一为 ()：None 臂不能返回 Response（match 臂类型
+                            // 必须一致；这是 #1048 移植后未被编译验证过的潜伏错误）。
+                            None => {
+                                ui.label("完整指纹不可用。请勿安装或信任下载的证书。");
+                            }
                         }
                         ui.label("安装或开启完全信任前，在手机系统的证书详情中核对全部 SHA-256 字符，必须与此处一致。网页、描述文件名称和标识不能证明证书身份。若不一致或无法查看，请停止并移除已下载或安装的描述文件。");
                         ui.label("描述文件应只包含一张根证书。若有其他证书、VPN 或设备管理配置，请勿安装。首次下载仍可能被局域网攻击者替换；核验后再信任。根证书可签发其他证书，不再使用时请移除。");
@@ -2396,7 +2403,7 @@ mod linux_app {
                 );
                 egui::Frame::default()
                     .stroke(egui::Stroke::new(0.5_f32, p.blue()))
-                    .rounding(egui::CornerRadius::same(5))
+                    .corner_radius(egui::CornerRadius::same(5))
                     .inner_margin(egui::Margin::symmetric(6, 1))
                     .show(ui, |ui| {
                         ui.label(
@@ -2426,7 +2433,7 @@ mod linux_app {
                 } else {
                     egui::Color32::TRANSPARENT
                 })
-                .rounding(egui::CornerRadius::same(8))
+                .corner_radius(egui::CornerRadius::same(8))
                 .inner_margin(egui::Margin {
                     left: if indent { 30 } else { 10 },
                     right: 10,
@@ -2475,7 +2482,7 @@ mod linux_app {
                 } else {
                     egui::Color32::TRANSPARENT
                 })
-                .rounding(egui::CornerRadius::same(8))
+                .corner_radius(egui::CornerRadius::same(8))
                 .inner_margin(egui::Margin {
                     left: 10,
                     right: 10,
@@ -2604,7 +2611,7 @@ mod linux_app {
                 .frame(
                     egui::Frame::default()
                         .fill(p.settings_content_bg())
-                        .rounding(egui::CornerRadius::same(
+                        .corner_radius(egui::CornerRadius::same(
                             openless_linux_egui::design_tokens::radius::CARD,
                         ))
                         .stroke(egui::Stroke::new(0.5_f32, p.line()))
@@ -2713,7 +2720,7 @@ mod linux_app {
                 } else {
                     egui::Color32::TRANSPARENT
                 })
-                .rounding(egui::CornerRadius::same(8))
+                .corner_radius(egui::CornerRadius::same(8))
                 .inner_margin(egui::Margin {
                     left: 10,
                     right: 10,
@@ -3883,6 +3890,7 @@ mod linux_app {
                         urls: vec!["https://old.example.invalid".into()],
                         urls_stale,
                         locale: "en".into(),
+                        ca_fingerprint_sha256: None,
                         connection_count: 0,
                         active_session_id: None,
                     },

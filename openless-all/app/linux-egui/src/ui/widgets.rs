@@ -45,7 +45,7 @@ pub fn card<R>(
     egui::Frame::default()
         .fill(p.surface())
         .stroke(egui::Stroke::new(0.5_f32, p.line()))
-        .rounding(egui::CornerRadius::same(tokens::radius::CARD))
+        .corner_radius(egui::CornerRadius::same(tokens::radius::CARD))
         .inner_margin(egui::Margin::same(16))
         .show(ui, add_contents)
 }
@@ -58,7 +58,7 @@ pub fn subtle_card<R>(
     let p = current(ui.ctx());
     egui::Frame::default()
         .fill(p.surface_2())
-        .rounding(egui::CornerRadius::same(tokens::radius::CARD))
+        .corner_radius(egui::CornerRadius::same(tokens::radius::CARD))
         .inner_margin(egui::Margin::same(14))
         .show(ui, add_contents)
 }
@@ -71,7 +71,7 @@ pub fn info_panel<R>(
     let p = current(ui.ctx());
     egui::Frame::default()
         .fill(p.blue_soft())
-        .rounding(egui::CornerRadius::same(tokens::radius::CARD))
+        .corner_radius(egui::CornerRadius::same(tokens::radius::CARD))
         .inner_margin(egui::Margin::same(14))
         .show(ui, add_contents)
 }
@@ -107,7 +107,7 @@ pub fn status_pill(ui: &mut egui::Ui, text: &str, status: Status) -> egui::Respo
 pub fn pill(ui: &mut egui::Ui, text: &str, bg: egui::Color32, fg: egui::Color32) -> egui::Response {
     egui::Frame::default()
         .fill(bg)
-        .rounding(egui::CornerRadius::same(12))
+        .corner_radius(egui::CornerRadius::same(12))
         .inner_margin(egui::Margin::symmetric(8, 3))
         .show(ui, |ui| {
             ui.label(egui::RichText::new(text).size(12.0).strong().color(fg));
@@ -127,7 +127,7 @@ pub fn primary_button(ui: &mut egui::Ui, label: &str, enabled: bool) -> egui::Re
     )
     .fill(p.primary_bg())
     .stroke(egui::Stroke::NONE)
-    .rounding(egui::CornerRadius::same(tokens::radius::CONTROL));
+    .corner_radius(egui::CornerRadius::same(tokens::radius::CONTROL));
     add_maybe_enabled(ui, button, enabled)
 }
 
@@ -142,7 +142,7 @@ pub fn blue_button(ui: &mut egui::Ui, label: &str, enabled: bool) -> egui::Respo
     )
     .fill(p.blue())
     .stroke(egui::Stroke::NONE)
-    .rounding(egui::CornerRadius::same(tokens::radius::CONTROL));
+    .corner_radius(egui::CornerRadius::same(tokens::radius::CONTROL));
     add_maybe_enabled(ui, button, enabled)
 }
 
@@ -157,7 +157,7 @@ pub fn danger_button(ui: &mut egui::Ui, label: &str, enabled: bool) -> egui::Res
     )
     .fill(p.err())
     .stroke(egui::Stroke::NONE)
-    .rounding(egui::CornerRadius::same(tokens::radius::CONTROL));
+    .corner_radius(egui::CornerRadius::same(tokens::radius::CONTROL));
     add_maybe_enabled(ui, button, enabled)
 }
 
@@ -216,7 +216,7 @@ pub fn segmented(
     let mut picked = None;
     egui::Frame::default()
         .fill(p.segmented_bg())
-        .rounding(egui::CornerRadius::same(tokens::radius::CONTROL))
+        .corner_radius(egui::CornerRadius::same(tokens::radius::CONTROL))
         .inner_margin(egui::Margin::same(2))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
@@ -226,7 +226,7 @@ pub fn segmented(
                     let response = if active {
                         egui::Frame::default()
                             .fill(p.segmented_active_bg())
-                            .rounding(egui::CornerRadius::same(tokens::radius::SM))
+                            .corner_radius(egui::CornerRadius::same(tokens::radius::SM))
                             .inner_margin(egui::Margin::symmetric(12, 5))
                             .show(ui, |ui| {
                                 ui.label(
@@ -244,7 +244,7 @@ pub fn segmented(
                             )
                             .fill(egui::Color32::TRANSPARENT)
                             .stroke(egui::Stroke::NONE)
-                            .rounding(egui::CornerRadius::same(tokens::radius::SM)),
+                            .corner_radius(egui::CornerRadius::same(tokens::radius::SM)),
                         )
                     };
                     if response.clicked() && !active {
