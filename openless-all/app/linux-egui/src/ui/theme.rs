@@ -229,14 +229,14 @@ pub fn apply_theme(ctx: &egui::Context, dark: bool) {
     style.visuals = visuals;
 
     // 排版：正文 15px（导航/正文），页标题 22px，小字 12.5px，等宽 13px。
-    style.text_styles = [
-        (egui::TextStyle::Heading, egui::FontId::proportional(22.0)),
-        (egui::TextStyle::Body, egui::FontId::proportional(15.0)),
-        (egui::TextStyle::Small, egui::FontId::proportional(12.5)),
-        (egui::TextStyle::Monospace, egui::FontId::monospace(13.0)),
-    ]
-    .into_iter()
-    .collect();
+    // 必须从默认表起步只覆盖这四项：egui 的 Button/Caption 等控件会查
+    // `Style::text_styles` 里自己的 TextStyle，整表替换会让它们 panic。
+    let mut text_styles = egui::Style::default().text_styles;
+    text_styles.insert(egui::TextStyle::Heading, egui::FontId::proportional(22.0));
+    text_styles.insert(egui::TextStyle::Body, egui::FontId::proportional(15.0));
+    text_styles.insert(egui::TextStyle::Small, egui::FontId::proportional(12.5));
+    text_styles.insert(egui::TextStyle::Monospace, egui::FontId::monospace(13.0));
+    style.text_styles = text_styles;
 
     // 间距：横向 10px（React gap:10）、按钮内边距 12x6（padding: 6px 12px 的镜像）。
     // egui 0.31 的 Margin 以 i8 计。
