@@ -40,9 +40,18 @@ int main() {
         instance.initialize();
         fcitx::OpenLess plugin(&instance);
         RecordingInputContext first(instance.inputContextManager());
+        first.focusIn();
         fcitx::OpenLessInputTargetContract::select(plugin, first);
         first.surroundingText().setText("foo foo", 3, 0);
         assert(plugin.captureSelectionTarget("selection") == "foo");
+        const auto metadata=plugin.contextSnapshot("selection",false);
+        assert(metadata.find("openless-contract")!=std::string::npos);
+        assert(metadata.find("\"text\"")==std::string::npos);
+        assert(plugin.contextSnapshot("selection",true).find("foo foo")!=std::string::npos);
+        first.setCapabilityFlags(fcitx::CapabilityFlag::Password);
+        assert(plugin.captureSelectionTarget("password").empty());
+        assert(plugin.contextSnapshot("selection",true).find("\"text\"")==std::string::npos);
+        first.setCapabilityFlags({});
         // Identical text at a different position is a different selection.
         // Comparing only the selected string would corrupt the wrong range.
         first.surroundingText().setCursor(7, 4);
@@ -73,7 +82,12 @@ int main() {
         RecordingInputContext second(instance.inputContextManager());
         fcitx::OpenLessInputTargetContract::type(plugin, first);
         assert(plugin.captureDictationTarget("dictation"));
+        first.focusOut();
+        second.focusIn();
         fcitx::OpenLessInputTargetContract::type(plugin, second);
+        assert(!plugin.commitDictationTarget("dictation", "focus changed"));
+        second.focusOut();
+        first.focusIn();
         assert(plugin.commitDictationTarget("dictation", "original target"));
         assert(first.committed.back() == "original target");
         assert(second.committed.empty());
@@ -82,6 +96,8 @@ int main() {
 
         {
             RecordingInputContext destroyed(instance.inputContextManager());
+            first.focusOut();
+            destroyed.focusIn();
             destroyed.surroundingText().setText("original", 8, 0);
             fcitx::OpenLessInputTargetContract::type(plugin, destroyed);
             fcitx::OpenLessInputTargetContract::select(plugin, destroyed);

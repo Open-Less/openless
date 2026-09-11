@@ -17,6 +17,13 @@ pub trait LinuxSettingsEffects: Send + Sync {
     fn apply_hotkeys(&self, target: &HotkeyRuntimeTarget) -> Result<(), BackendError>;
 
     fn set_active_asr_provider(&self, provider_id: &str) -> Result<(), BackendError>;
+
+    fn set_launch_at_login(&self, _enabled: bool) -> Result<(), BackendError> {
+        Err(BackendError::new(
+            BackendErrorCode::Unsupported,
+            "launch-at-login is unavailable",
+        ))
+    }
 }
 
 /// Linux implementation of the shared settings transaction runtime.
@@ -29,6 +36,7 @@ impl LinuxSettingsRuntime {
     pub fn new(credentials: LinuxCredentialStore) -> Self {
         Self::with_effects(Arc::new(Fcitx5SettingsEffects {
             credentials: Some(credentials),
+            autostart: production_autostart(),
         }))
     }
 
@@ -38,45 +46,14 @@ impl LinuxSettingsRuntime {
     /// also injecting a matching `SettingsRuntime`. Active-provider changes then
     /// fail explicitly with `Unsupported` instead of silently diverging.
     pub fn hotkeys_only() -> Self {
-        Self::with_effects(Arc::new(Fcitx5SettingsEffects { credentials: None }))
+        Self::with_effects(Arc::new(Fcitx5SettingsEffects {
+            credentials: None,
+            autostart: production_autostart(),
+        }))
     }
 
     pub fn with_effects(effects: Arc<dyn LinuxSettingsEffects>) -> Self {
         Self { effects }
-    }
-
-    fn reject_unsupported_hotkey_changes(plan: &SettingsEffectPlan) -> Result<(), BackendError> {
-        let Some(change) = &plan.hotkeys else {
-            return Ok(());
-        };
-        let previous = &change.previous;
-        let next = &change.next;
-        let unsupported = [
-            (
-                previous.switch_style != next.switch_style,
-                "switch-style hotkey",
-            ),
-            (previous.open_app != next.open_app, "open-app hotkey"),
-            (
-                previous.style_packs != next.style_packs,
-                "style-pack hotkeys",
-            ),
-        ];
-        let names = unsupported
-            .into_iter()
-            .filter_map(|(changed, name)| changed.then_some(name))
-            .collect::<Vec<_>>();
-        if names.is_empty() {
-            Ok(())
-        } else {
-            Err(BackendError::new(
-                BackendErrorCode::Unsupported,
-                format!(
-                    "Linux fcitx5 settings adapter does not support changing {}",
-                    names.join(", ")
-                ),
-            ))
-        }
     }
 }
 
@@ -95,6 +72,12 @@ impl SettingsRuntime for LinuxSettingsRuntime {
         }
 
         let mut receipt = SettingsEffectReceipt::default();
+        if let Some(change) = &plan.launch_at_login {
+            if let Err(error) = self.effects.set_launch_at_login(change.next) {
+                return Err(SettingsEffectFailure::after_side_effect(error, receipt));
+            }
+            receipt.applied.push(SettingsEffectKind::LaunchAtLogin);
+        }
         if let Some(change) = &plan.active_asr_provider {
             if let Err(error) = self.effects.set_active_asr_provider(&change.next) {
                 return Err(SettingsEffectFailure::after_side_effect(error, receipt));
@@ -109,8 +92,6 @@ impl SettingsRuntime for LinuxSettingsRuntime {
         plan: &SettingsEffectPlan,
         receipt: &mut SettingsEffectReceipt,
     ) -> Result<(), SettingsEffectFailure> {
-        Self::reject_unsupported_hotkey_changes(plan)
-            .map_err(SettingsEffectFailure::before_side_effect)?;
         let Some(change) = &plan.hotkeys else {
             return Ok(());
         };
@@ -130,6 +111,11 @@ impl SettingsRuntime for LinuxSettingsRuntime {
         let mut failures = Vec::new();
         for effect in receipt.applied.iter().rev() {
             let result = match effect {
+                SettingsEffectKind::LaunchAtLogin => plan
+                    .launch_at_login
+                    .as_ref()
+                    .map(|change| self.effects.set_launch_at_login(change.previous))
+                    .unwrap_or(Ok(())),
                 SettingsEffectKind::Hotkeys => plan
                     .hotkeys
                     .as_ref()
@@ -162,10 +148,21 @@ impl SettingsRuntime for LinuxSettingsRuntime {
 
 struct Fcitx5SettingsEffects {
     credentials: Option<LinuxCredentialStore>,
+    autostart: Result<crate::AutostartManager, String>,
+}
+
+fn production_autostart() -> Result<crate::AutostartManager, String> {
+    std::env::current_exe()
+        .map_err(|error| format!("resolve current executable for autostart: {error}"))
+        .and_then(|executable| {
+            crate::AutostartManager::detect(executable)
+                .map_err(|error| format!("initialize XDG autostart manager: {error}"))
+        })
 }
 
 impl LinuxSettingsEffects for Fcitx5SettingsEffects {
     fn apply_hotkeys(&self, target: &HotkeyRuntimeTarget) -> Result<(), BackendError> {
+        crate::desktop_bridge::bind_target(target)?;
         apply_dictation_hotkey(&target.dictation)?;
         apply_action_hotkey("SetQaHotkeyRaw", target.qa.as_ref())?;
         apply_action_hotkey(
@@ -173,6 +170,35 @@ impl LinuxSettingsEffects for Fcitx5SettingsEffects {
             target.selection_polish.as_ref(),
         )?;
         apply_action_hotkey("SetTranslationHotkeyRaw", Some(&target.translation))?;
+        tolerate_optional_fcitx_method(apply_action_hotkey(
+            "SetSwitchStyleHotkeyRaw",
+            target.switch_style.as_ref(),
+        ))?;
+        tolerate_optional_fcitx_method(apply_action_hotkey(
+            "SetOpenAppHotkeyRaw",
+            target.open_app.as_ref(),
+        ))?;
+        let style_pack_hotkeys = target
+            .style_packs
+            .iter()
+            .map(|hotkey| {
+                shortcut_to_raw(&hotkey.binding)
+                    .map(|(symbol, states)| (hotkey.pack_id.clone(), symbol, states))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        tolerate_optional_fcitx_method(crate::fcitx5::set_style_pack_hotkeys(style_pack_hotkeys))?;
+        for (method, binding) in [
+            (
+                "SetLessComputerPanelHotkeyRaw",
+                target.coding_agent_panel.as_ref(),
+            ),
+            (
+                "SetLessComputerQuickHotkeyRaw",
+                target.coding_agent_quick.as_ref(),
+            ),
+        ] {
+            apply_action_hotkey(method, binding.filter(|_| target.coding_agent_enabled))?;
+        }
         let (symbol, states) = target
             .coding_agent_voice
             .as_ref()
@@ -182,7 +208,7 @@ impl LinuxSettingsEffects for Fcitx5SettingsEffects {
             .map(shortcut_to_raw)
             .transpose()?
             .unwrap_or((0, 0));
-        crate::fcitx5::set_less_computer_hotkey_raw(symbol, states)
+        tolerate_optional_fcitx_method(crate::fcitx5::set_less_computer_hotkey_raw(symbol, states))
     }
 
     fn set_active_asr_provider(&self, provider_id: &str) -> Result<(), BackendError> {
@@ -193,6 +219,35 @@ impl LinuxSettingsEffects for Fcitx5SettingsEffects {
             ));
         };
         credentials.set_active_provider_immediate(ProviderSlot::Asr, provider_id)
+    }
+
+    fn set_launch_at_login(&self, enabled: bool) -> Result<(), BackendError> {
+        let manager = self
+            .autostart
+            .as_ref()
+            .map_err(|message| BackendError::new(BackendErrorCode::Platform, message.clone()))?;
+        manager.set_enabled(enabled).map_err(|error| {
+            BackendError::new(
+                BackendErrorCode::Platform,
+                format!("update XDG launch-at-login entry: {error}"),
+            )
+        })
+    }
+}
+
+fn tolerate_optional_fcitx_method(result: Result<(), BackendError>) -> Result<(), BackendError> {
+    match result {
+        Err(error)
+            if error.message.contains("Unknown method")
+                || error.message.contains("UnknownMethod") =>
+        {
+            log::warn!(
+                "[fcitx] running addon lacks an optional extended hotkey method; continuing with the legacy interface: {}",
+                error.message
+            );
+            Ok(())
+        }
+        result => result,
     }
 }
 
@@ -239,7 +294,7 @@ fn normalize_fcitx_primary(primary: &str) -> String {
     }
 }
 
-fn shortcut_to_raw(binding: &ShortcutBinding) -> Result<(u32, u32), BackendError> {
+pub(crate) fn shortcut_to_raw(binding: &ShortcutBinding) -> Result<(u32, u32), BackendError> {
     if let Some(trigger) = legacy_modifier_trigger(binding) {
         return Ok((modifier_trigger_keysym(trigger)?, 0));
     }
@@ -380,5 +435,28 @@ mod tests {
             modifiers: vec!["ctrl".into()],
         };
         assert_eq!(shortcut_to_raw(&shortcut).unwrap(), (b'/' as u32, 5));
+    }
+
+    #[test]
+    fn legacy_addon_may_omit_optional_extended_hotkey_methods() {
+        for message in [
+            "Unknown method SetSwitchStyleHotkeyRaw",
+            "org.freedesktop.DBus.Error.UnknownMethod",
+        ] {
+            assert!(tolerate_optional_fcitx_method(Err(BackendError::new(
+                BackendErrorCode::Platform,
+                message,
+            )))
+            .is_ok());
+        }
+    }
+
+    #[test]
+    fn optional_hotkey_compatibility_does_not_hide_other_failures() {
+        let error = BackendError::new(BackendErrorCode::Platform, "session bus unavailable");
+        assert_eq!(
+            tolerate_optional_fcitx_method(Err(error.clone())).unwrap_err(),
+            error
+        );
     }
 }

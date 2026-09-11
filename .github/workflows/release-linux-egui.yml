@@ -40,6 +40,7 @@ jobs:
             appstream \
             build-essential \
             cmake \
+            clang \
             desktop-file-utils \
             extra-cmake-modules \
             fcitx5-modules-dev \
@@ -51,6 +52,11 @@ jobs:
             libfcitx5core-dev \
             libfcitx5utils-dev \
             libopenblas-dev \
+            libkf5globalaccel-dev \
+            qtbase5-dev \
+            libatspi2.0-dev \
+            pulseaudio-utils \
+            fonts-noto-cjk \
             libssl-dev \
             libwayland-dev \
             libx11-dev \
@@ -76,7 +82,27 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: '1.94.0'
           components: clippy
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: openless-all/app/package-lock.json
+
+      - name: Build React baseline and generate native locale catalog
+        working-directory: openless-all/app
+        run: |
+          npm ci
+          npm run build
+          node ../scripts/sync-egui-locales.mjs
+
+      - name: Build GNOME and KDE desktop integration
+        run: |
+          node openless-all/scripts/linux-desktop/gnome/build.mjs
+          cmake -S openless-all/scripts/linux-desktop/kde -B openless-all/scripts/linux-desktop/kde/build -DCMAKE_BUILD_TYPE=Release
+          cmake --build openless-all/scripts/linux-desktop/kde/build --parallel
 
       - name: Cache Cargo
         uses: swatinem/rust-cache@v2
@@ -104,18 +130,19 @@ jobs:
 
       - name: Verify framework-independent Linux contract
         working-directory: openless-all/app
-        shell: pwsh
+        shell: bash
         run: |
+          set -euo pipefail
           cargo test --locked -p openless-core
           cargo clippy --locked -p openless-core --all-targets -- -D warnings
-          cargo test --locked -p openless-linux-egui --all-targets
+          cargo test --locked -p openless-linux-egui --lib --test host_contract
           cargo check --locked -p openless-linux-egui --all-targets
-          ./scripts/check-core-deps.ps1
-          ./scripts/check-core-deps.ps1 openless-linux-egui
-          ./scripts/check-core-secret-surface.ps1
-          ./scripts/check-core-test-isolation.ps1
-          ./scripts/check-core-runtime-seam.ps1
-          ./scripts/check-linux-public-surface.ps1
+          pwsh -NoProfile -File ./scripts/check-core-deps.ps1
+          pwsh -NoProfile -File ./scripts/check-core-deps.ps1 openless-linux-egui
+          pwsh -NoProfile -File ./scripts/check-core-secret-surface.ps1
+          pwsh -NoProfile -File ./scripts/check-core-test-isolation.ps1
+          pwsh -NoProfile -File ./scripts/check-core-runtime-seam.ps1
+          pwsh -NoProfile -File ./scripts/check-linux-public-surface.ps1
 
       - name: Validate release target and UI gate
         shell: bash
@@ -172,27 +199,7 @@ jobs:
 
       - name: Verify package contents and ELF dependencies
         working-directory: openless-all/app
-        run: |
-          OUTPUT=target/linux-egui-packages
-          test "$(find "$OUTPUT" -maxdepth 1 -name '*.deb' | wc -l)" -eq 1
-          test "$(find "$OUTPUT" -maxdepth 1 -name '*.rpm' | wc -l)" -eq 1
-          test "$(find "$OUTPUT" -maxdepth 1 -name '*.AppImage' | wc -l)" -eq 1
-          ! ldd target/release/openless-linux-egui | grep -q 'not found'
-          ! ldd target/release/openless-linux-egui | grep -Eqi 'webkit|wry|tauri'
-          ! ldd src-tauri/vendor/qwen-asr/qwen_asr | grep -q 'not found'
-          dpkg-deb -c "$OUTPUT"/*.deb | grep -q 'usr/bin/openless'
-          dpkg-deb -c "$OUTPUT"/*.deb | grep -q 'fcitx5/libopenless.so'
-          dpkg-deb -c "$OUTPUT"/*.deb | grep -q 'usr/lib/openless/resources/qwen-asr/qwen_asr'
-          rpm -qlp "$OUTPUT"/*.rpm | grep -q '/usr/bin/openless'
-          rpm -qlp "$OUTPUT"/*.rpm | grep -q '/usr/lib64/fcitx5/libopenless.so'
-          rpm -qlp "$OUTPUT"/*.rpm | grep -q '/usr/lib/openless/resources/qwen-asr/qwen_asr'
-          "$OUTPUT"/*.AppImage --appimage-extract >/dev/null
-          test -x squashfs-root/usr/bin/openless
-          test -s squashfs-root/usr/lib/openless/resources/linux-fcitx5-plugin/libopenless.so
-          test -x squashfs-root/usr/lib/openless/resources/qwen-asr/qwen_asr
-          ! ldd squashfs-root/usr/lib/openless/resources/qwen-asr/qwen_asr | grep -q 'not found'
-          squashfs-root/usr/lib/openless/resources/qwen-asr/qwen_asr --help >/dev/null 2>&1
-          rm -rf squashfs-root
+        run: bash scripts/verify-linux-egui-packages.sh
 
       - name: Sign AppImage and write independent updater manifest
         working-directory: openless-all/app

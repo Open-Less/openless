@@ -756,6 +756,9 @@ impl LinuxBackendBuilder {
         ));
 
         let mut services = BackendServices::unsupported();
+        let context = Arc::new(crate::context::LinuxContextAdapter::default());
+        services.host_context = context.clone();
+        services.edit_observation = context;
         if let Ok(model_config) = ModelStoreConfig::new(
             linux_local_runtime
                 .root
@@ -876,9 +879,12 @@ impl LinuxBackendBuilder {
             None => Arc::new(LinuxTaskSpawner::capture_current()?),
         };
         let repositories = BackendRepositories::open(&self.config.data_dir)?;
-        let recorder = self
-            .recorder
-            .unwrap_or_else(|| Arc::new(LinuxCpalRecorder::new(None)) as Arc<dyn AudioRecorder>);
+        let recorder = self.recorder.unwrap_or_else(|| {
+            Arc::new(LinuxCpalRecorder::with_recordings_dir(
+                None,
+                self.config.data_dir.join("recordings"),
+            )) as Arc<dyn AudioRecorder>
+        });
         let recorder: Arc<dyn AudioRecorder> = Arc::new(openless_core::AudioRecorderRouter::new(
             recorder,
             openless_core::ExternalAudioRecorder::with_recordings_directory(
@@ -902,7 +908,13 @@ impl LinuxBackendBuilder {
             }
         };
         let settings_runtime = self.settings_runtime.unwrap_or(default_settings_runtime);
-        let mut services = self.services.unwrap_or_else(BackendServices::unsupported);
+        let mut services = self.services.unwrap_or_else(|| {
+            let mut services = BackendServices::unsupported();
+            let context = Arc::new(crate::context::LinuxContextAdapter::default());
+            services.host_context = context.clone();
+            services.edit_observation = context;
+            services
+        });
         services.platform = Arc::new(LinuxPlatformApi::new(self.config.platform.clone()));
         let host_actions = self
             .host_actions
@@ -1449,7 +1461,7 @@ mod tests {
             ],
             None,
             Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            std::time::Duration::from_millis(100),
+            std::time::Duration::from_secs(2),
         )
         .await
         .unwrap_err();

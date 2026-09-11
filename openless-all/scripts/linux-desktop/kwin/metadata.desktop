@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=OpenLess Desktop Bridge
+Type=Service
+X-KDE-ServiceTypes=KWin/Script
+X-KDE-PluginInfo-Name=openless-desktop
+X-KDE-PluginInfo-Version=1.0
+X-KDE-PluginInfo-License=AGPL-3.0-only
+X-Plasma-API=javascript
+X-Plasma-MainScript=code/main.js

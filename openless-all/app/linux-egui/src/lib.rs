@@ -4,45 +4,101 @@
 //! credentials, input, settings and resource adapters, then forwards commands
 //! and semantic events between that backend and the UI.
 
+#[cfg(target_os = "linux")]
+mod atspi;
 mod audio;
+mod audio_cue;
+mod audio_mute;
 mod backend;
 mod capabilities;
 mod coding_agent;
+pub mod context;
 mod credentials;
+pub mod design_tokens;
+mod desktop;
+pub mod desktop_bridge;
 mod fcitx5;
 mod host_actions;
 mod hotkeys;
+mod i18n;
+mod logging;
 mod marketplace;
+mod popup;
+mod preference_patch;
 mod qa;
+mod recordings;
 mod remote_input;
 mod resources;
 mod runtime;
 mod selection;
+mod selection_voice;
 mod settings;
 mod single_instance;
+mod tray;
+pub mod ui_catalog;
+mod ui_state;
+mod updater;
+#[cfg(target_os = "linux")]
+mod x11_desktop;
 
 pub use audio::LinuxCpalRecorder;
+pub use audio_cue::{play_cue_start, play_cue_stop, CueTone};
+pub use audio_mute::AudioMuteGuard;
 pub use backend::{LinuxBackendBuilder, LinuxBackendRuntime};
 pub use capabilities::{LinuxCapabilitySnapshot, LinuxDesktopSession, LinuxPlatformApi};
 pub use credentials::LinuxCredentialStore;
+pub use desktop::{
+    atomic_save, notify, open_external, open_local_file, validate_save_path, AutostartManager,
+    DesktopError, Notification,
+};
 pub use fcitx5::{
     available as fcitx5_available, commit_text as fcitx5_commit_text,
-    ensure_plugin_installed as ensure_fcitx5_plugin_installed,
+    copy_to_clipboard as fcitx5_copy_to_clipboard,
+    ensure_plugin_installed as ensure_fcitx5_plugin_installed, reload_running_fcitx5,
     selection_text as fcitx5_selection_text, set_hotkeys as set_fcitx5_hotkeys,
     set_less_computer_hotkey_raw as set_fcitx5_less_computer_hotkey_raw, Fcitx5TextInserter,
     FcitxPluginInstallPlan, FcitxPluginStatus,
 };
 pub use host_actions::LinuxHostActions;
 pub use hotkeys::{Fcitx5HotkeyListener, LinuxHotkeyEvent};
+pub use i18n::{fmt_catalog as fmt_l10n, tr_catalog as tr_l10n, Lang, LocalePref, LANGS};
+pub use logging::{export_error_log, init_file_logger, log_path};
+pub use popup::{
+    read_jsonl, run_popup, write_jsonl, ApplyOutcome as PopupApplyOutcome, CapsulePopupState,
+    HostToPopup, PopupActionGuard, PopupChatMessage, PopupKind, PopupSendError, PopupState,
+    PopupSupervisor, PopupSupervisorEvent, PopupToHost, PreviewPopupState,
+    ProtocolError as PopupProtocolError, ProtocolErrorKind as PopupProtocolErrorKind, QaPopupState,
+    MAX_JSONL_LINE_BYTES, POPUP_PROTOCOL_VERSION,
+};
+pub use preference_patch::patch_preferences;
+pub use recordings::{
+    read_recording_wav, recording_path, recording_pcm, remove_recording, RecordingError,
+    RecordingPlayback,
+};
 pub use resources::{
     LinuxPackageKind, LinuxResourceLayout, LinuxResourceResolver, FCITX_PLUGIN_CONFIG,
     FCITX_PLUGIN_LIBRARY,
 };
 pub use runtime::{LinuxNativeRuntime, LinuxRuntimePumpResult};
 pub use selection::LinuxSelectionRuntime;
+pub use selection_voice::LinuxSelectionVoice;
 pub use settings::{LinuxSettingsEffects, LinuxSettingsRuntime};
 pub use single_instance::{
     LinuxLaunchIntent, SingleInstanceBroker, SingleInstanceGuard, SingleInstanceRole,
+};
+pub use tray::{LinuxTray, TrayCommand, TrayError, TrayMicrophone};
+pub use ui_state::{
+    load_locale_pref, load_ui_value, save_locale_pref, save_ui_value, ui_state_dir, ui_state_path,
+    UiStateError,
+};
+pub use updater::{
+    install_verified_appimage, install_verified_appimage_with_limit, manifest_urls, AppImageTarget,
+    AppImageUpdater, CheckReason, DownloadProgress, InstalledUpdate, LinuxUpdateSupport,
+    PinnedMinisignVerifier, SignatureVerifier, UnavailableSignatureVerifier, UpdateCancellation,
+    UpdateChannel, UpdateError, UpdateManifest, UpdateSchedule, BETA_RELEASES_API,
+    DEFAULT_MAX_APPIMAGE_BYTES, DEFAULT_MAX_MANIFEST_BYTES, DIRECT_RELEASE_BASE, MANIFEST_HOST,
+    MANIFEST_SCHEMA_VERSION, PERIODIC_CHECK_INTERVAL, PINNED_MINISIGN_PUBLIC_KEY, RELEASES_URL,
+    STARTUP_CHECK_DELAY,
 };
 
 pub use openless_core::contract::*;
@@ -52,6 +108,7 @@ pub use openless_core::contract::*;
 /// Capture state binds recorder callbacks to their owning Core session. Window
 /// objects and egui widgets stay in the frontend.
 pub struct LinuxHost {
+    selection_voice: LinuxSelectionVoice,
     backend: std::sync::Arc<OpenLessBackend>,
     settings_runtime: std::sync::Arc<dyn SettingsRuntime>,
     translation_pending: std::sync::atomic::AtomicBool,
@@ -220,6 +277,7 @@ impl LinuxHost {
         settings_runtime: std::sync::Arc<dyn SettingsRuntime>,
     ) -> Self {
         Self {
+            selection_voice: LinuxSelectionVoice::new(backend.clone()),
             backend,
             settings_runtime,
             translation_pending: std::sync::atomic::AtomicBool::new(false),
@@ -231,6 +289,9 @@ impl LinuxHost {
 
     pub fn backend(&self) -> &std::sync::Arc<OpenLessBackend> {
         &self.backend
+    }
+    pub fn selection_voice(&self) -> LinuxSelectionVoice {
+        self.selection_voice.clone()
     }
 
     /// Create an independent subscription for the egui view model.
@@ -301,6 +362,28 @@ impl LinuxHost {
         event: LinuxHotkeyEvent,
     ) -> Result<Option<CliDispatchOutcome>, BackendError> {
         match event {
+            LinuxHotkeyEvent::DesktopDisconnected => {
+                if let Some(id) = self
+                    .backend
+                    .services()
+                    .selection_voice
+                    .snapshot()
+                    .await?
+                    .session_id
+                {
+                    let _ = self.selection_voice.cancel(id).await;
+                }
+                self.backend.cancel_active_voice_session(None).await?;
+                Ok(None)
+            }
+            LinuxHotkeyEvent::LessComputerPanelPressed
+            | LinuxHotkeyEvent::LessComputerQuickPressed => {
+                if self.backend.get_preferences().coding_agent_enabled {
+                    self.backend
+                        .request_host_action(HostAction::ShowLessComputer)?;
+                }
+                Ok(None)
+            }
             LinuxHotkeyEvent::LessComputerPressed { press_id, at, .. } => {
                 self.dispatch_less_computer_edge(DictationHotkeyEdge::Pressed { press_id, at })
                     .await
@@ -314,6 +397,9 @@ impl LinuxHost {
                     .await
             }
             LinuxHotkeyEvent::DictationPressed { press_id, at, .. } => {
+                if self.selection_voice.edge(true, at).await? {
+                    return Ok(Some(CliDispatchOutcome::Noop));
+                }
                 let translation_requested = self
                     .translation_pending
                     .swap(false, std::sync::atomic::Ordering::AcqRel);
@@ -329,16 +415,31 @@ impl LinuxHost {
                     .await
                     .map(Some)
             }
-            LinuxHotkeyEvent::DictationReleased { press_id, at, .. } => self
-                .backend
-                .dispatch_dictation_hotkey_edge(DictationHotkeyEdge::Released { press_id, at })
-                .await
-                .map(Some),
-            LinuxHotkeyEvent::DictationCombined { press_id, at, .. } => self
-                .backend
-                .dispatch_dictation_hotkey_edge(DictationHotkeyEdge::Combined { press_id, at })
-                .await
-                .map(Some),
+            LinuxHotkeyEvent::DictationReleased { press_id, at, .. } => {
+                if self.selection_voice.edge(false, at).await? {
+                    return Ok(Some(CliDispatchOutcome::Noop));
+                }
+                self.backend
+                    .dispatch_dictation_hotkey_edge(DictationHotkeyEdge::Released { press_id, at })
+                    .await
+                    .map(Some)
+            }
+            LinuxHotkeyEvent::DictationCombined { press_id, at, .. } => {
+                if let Some(id) = self
+                    .backend
+                    .services()
+                    .selection_voice
+                    .snapshot()
+                    .await?
+                    .session_id
+                {
+                    self.selection_voice.cancel(id).await?;
+                }
+                self.backend
+                    .dispatch_dictation_hotkey_edge(DictationHotkeyEdge::Combined { press_id, at })
+                    .await
+                    .map(Some)
+            }
             LinuxHotkeyEvent::QaPressed => self
                 .backend
                 .dispatch_cli_intent(CliIntent::ToggleQa)
@@ -365,6 +466,35 @@ impl LinuxHost {
                     self.translation_pending
                         .store(true, std::sync::atomic::Ordering::Release);
                 }
+                Ok(None)
+            }
+            LinuxHotkeyEvent::SwitchStylePressed => {
+                self.backend.activate_previous_style_pack()?;
+                Ok(None)
+            }
+            LinuxHotkeyEvent::OpenAppPressed => {
+                self.backend.request_host_action(HostAction::ShowMain)?;
+                self.backend.request_host_action(HostAction::FocusMain)?;
+                Ok(None)
+            }
+            LinuxHotkeyEvent::StylePackPressed { symbol, states } => {
+                let preferences = self.backend.get_preferences();
+                let pack_id = preferences
+                    .style_pack_hotkeys
+                    .iter()
+                    .find_map(|hotkey| {
+                        crate::settings::shortcut_to_raw(&hotkey.binding)
+                            .ok()
+                            .filter(|raw| *raw == (symbol, states))
+                            .map(|_| hotkey.pack_id.clone())
+                    })
+                    .ok_or_else(|| {
+                        BackendError::new(
+                            BackendErrorCode::Cancelled,
+                            "style-pack hotkey no longer matches current settings",
+                        )
+                    })?;
+                self.backend.activate_style_pack(&pack_id)?;
                 Ok(None)
             }
         }

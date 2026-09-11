@@ -16,6 +16,7 @@ use tokio::net::{lookup_host, TcpStream};
 use tokio::sync::{mpsc, oneshot, Mutex as AsyncMutex, Notify};
 use tokio_tungstenite::client_async_tls;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::error::UrlError;
 use tokio_tungstenite::tungstenite::http::header::HeaderValue;
 use tokio_tungstenite::tungstenite::Error as WsError;
 use tokio_tungstenite::tungstenite::Message;
@@ -46,15 +47,11 @@ const PER_ADDR_TCP_TIMEOUT: Duration = Duration::from_millis(1500);
 
 fn default_port_for_request(
     request: &tokio_tungstenite::tungstenite::handshake::client::Request,
-) -> Result<u16, WsError> {
+) -> Result<u16, UrlError> {
     let default_port = match request.uri().scheme_str() {
         Some("ws") => 80,
         Some("wss") => 443,
-        _ => {
-            return Err(WsError::Url(
-                tokio_tungstenite::tungstenite::error::UrlError::UnsupportedUrlScheme,
-            ))
-        }
+        _ => return Err(UrlError::UnsupportedUrlScheme),
     };
     Ok(request.uri().port_u16().unwrap_or(default_port))
 }
@@ -118,7 +115,7 @@ async fn connect_ws_prefer_ipv4(
     ),
     WsError,
 > {
-    let port = default_port_for_request(&request)?;
+    let port = default_port_for_request(&request).map_err(WsError::Url)?;
     let host = request.uri().host().unwrap_or("").to_string();
     let addrs = lookup_host((host.as_str(), port))
         .await
@@ -870,15 +867,11 @@ mod tests {
         let explicit_port = "https://localhost:443/path".into_client_request().unwrap();
         assert!(matches!(
             default_port_for_request(&request),
-            Err(WsError::Url(
-                tokio_tungstenite::tungstenite::error::UrlError::UnsupportedUrlScheme
-            ))
+            Err(UrlError::UnsupportedUrlScheme)
         ));
         assert!(matches!(
             default_port_for_request(&explicit_port),
-            Err(WsError::Url(
-                tokio_tungstenite::tungstenite::error::UrlError::UnsupportedUrlScheme
-            ))
+            Err(UrlError::UnsupportedUrlScheme)
         ));
     }
 

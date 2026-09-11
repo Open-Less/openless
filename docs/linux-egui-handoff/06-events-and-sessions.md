@@ -1,5 +1,7 @@
 # 06：事件、会话与取消
 
+> 2026-09-11 更新：下文保留 2026-09-07 原始合同及缺口背景。Linux-egui 分支当前实现和验证状态见 [02 状态表](02-gap-register.md) 与 [08 交付记录](08-linux-egui-2.0.md)；本文旧缺口不作为现状结论。
+
 状态：canonical（2026-09-07 以源码为准重写）；更新：2026-09-07。
 
 入口：Core `events.rs` / `types.rs`、`linux-egui/src/lib.rs`（`LinuxHost`）、`linux-egui/src/main.rs`（主循环）。

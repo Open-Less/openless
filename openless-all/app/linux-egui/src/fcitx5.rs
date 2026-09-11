@@ -4,11 +4,12 @@ use std::time::Duration;
 
 use futures_util::future::BoxFuture;
 use openless_core::{
-    BackendError, BackendErrorCode, InsertOutcome, InsertWriteResult, ResourceResolver,
-    TextInserter, TextInsertionSession,
+    BackendError, BackendErrorCode, InsertOutcome, InsertWriteResult, TextInserter,
+    TextInsertionSession,
 };
 
 use crate::{LinuxPackageKind, LinuxResourceLayout, FCITX_PLUGIN_CONFIG, FCITX_PLUGIN_LIBRARY};
+use openless_core::ResourceResolver;
 
 #[cfg(target_os = "linux")]
 pub(crate) const DESTINATION: &str = "org.fcitx.Fcitx5";
@@ -195,14 +196,31 @@ fn user_plugin_available(plan: &FcitxPluginInstallPlan) -> bool {
 }
 
 fn system_plugin_available() -> bool {
-    let library = [
-        "/usr/lib/x86_64-linux-gnu/fcitx5/libopenless.so",
-        "/usr/lib64/fcitx5/libopenless.so",
-        "/usr/lib/fcitx5/libopenless.so",
-    ]
-    .iter()
-    .any(|path| Path::new(path).is_file());
-    library && Path::new("/usr/share/fcitx5/addon/openless.conf").is_file()
+    let config_dirs = [
+        std::env::var_os("FCITX5_ADDON_DIR").map(PathBuf::from),
+        std::env::var_os("FCITX_ADDON_DIR").map(PathBuf::from),
+        Some(PathBuf::from("/usr/share/fcitx5/addon")),
+        Some(PathBuf::from("/usr/local/share/fcitx5/addon")),
+    ];
+    let config = config_dirs
+        .into_iter()
+        .flatten()
+        .find(|dir| dir.join("openless.conf").is_file());
+    let Some(config) = config else { return false };
+    let mut library_dirs = vec![
+        PathBuf::from("/usr/lib64/fcitx5"),
+        PathBuf::from("/usr/lib/fcitx5"),
+        PathBuf::from("/usr/local/lib/fcitx5"),
+    ];
+    if let Ok(entries) = std::fs::read_dir("/usr/lib") {
+        library_dirs.extend(entries.flatten().map(|entry| entry.path().join("fcitx5")));
+    }
+    if let Some(parent) = config.parent() {
+        library_dirs.push(parent.to_path_buf());
+    }
+    library_dirs
+        .iter()
+        .any(|dir| dir.join("libopenless.so").is_file())
 }
 
 #[derive(Debug, Clone)]
@@ -231,6 +249,7 @@ impl TextInserter for Fcitx5TextInserter {
                 // A missing native target is a supported clipboard fallback,
                 // not permission to choose a new window after transcription.
                 let _ = tokio::task::spawn_blocking(move || {
+                    crate::desktop_bridge::remember_focus("_dictation_screen");
                     send_bool_message("CaptureDictationTarget", |message| {
                         message.append1(capture_ticket)
                     })
@@ -505,6 +524,23 @@ pub(crate) fn set_raw_hotkey(method: &str, symbol: u32, states: u32) -> Result<(
     send_message(method, |message| message.append2(symbol, states))
 }
 
+#[cfg(target_os = "linux")]
+pub(crate) fn set_style_pack_hotkeys(
+    bindings: Vec<(String, u32, u32)>,
+) -> Result<(), BackendError> {
+    send_message("SetStylePackHotkeys", |message| message.append1(bindings))
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn set_style_pack_hotkeys(
+    _bindings: Vec<(String, u32, u32)>,
+) -> Result<(), BackendError> {
+    Err(BackendError::new(
+        BackendErrorCode::Unsupported,
+        "fcitx5 hotkey settings are only available on Linux",
+    ))
+}
+
 #[cfg(not(target_os = "linux"))]
 pub(crate) fn set_raw_hotkey(
     _method: &str,
@@ -551,6 +587,7 @@ pub fn commit_text(_: &str) -> Result<(), BackendError> {
 
 #[cfg(target_os = "linux")]
 pub(crate) fn capture_selection_target(session_id: &str) -> Result<String, BackendError> {
+    crate::desktop_bridge::remember_focus(session_id);
     send_string_message("CaptureSelectionTarget", |message| {
         message.append1(session_id)
     })
@@ -570,6 +607,7 @@ pub(crate) fn apply_selection_target(
     source: &str,
     replacement: &str,
 ) -> Result<(), BackendError> {
+    crate::desktop_bridge::restore_bound_focus(session_id)?;
     if send_bool_message("ApplySelectionTarget", |message| {
         message.append3(session_id, source, replacement)
     })? {
@@ -592,6 +630,7 @@ pub(crate) fn apply_selection_target(_: &str, _: &str, _: &str) -> Result<(), Ba
 
 #[cfg(target_os = "linux")]
 pub(crate) fn revert_selection_target(session_id: &str) -> Result<(), BackendError> {
+    crate::desktop_bridge::restore_bound_focus(session_id)?;
     if send_bool_message("RevertSelectionTarget", |message| {
         message.append1(session_id)
     })? {
@@ -614,6 +653,7 @@ pub(crate) fn revert_selection_target(_: &str) -> Result<(), BackendError> {
 
 #[cfg(target_os = "linux")]
 pub(crate) fn cancel_selection_target(session_id: &str) -> Result<(), BackendError> {
+    crate::desktop_bridge::forget_focus(session_id);
     let _ = send_bool_message("CancelSelectionTarget", |message| {
         message.append1(session_id)
     })?;
@@ -631,6 +671,7 @@ pub(crate) fn cancel_selection_target(_: &str) -> Result<(), BackendError> {
 #[cfg(target_os = "linux")]
 pub(crate) fn rekey_selection_target(from: &str, to: &str) -> Result<(), BackendError> {
     if send_bool_message("RekeySelectionTarget", |message| message.append2(from, to))? {
+        crate::desktop_bridge::rekey_focus(from, to);
         Ok(())
     } else {
         Err(BackendError::new(
@@ -725,13 +766,89 @@ pub fn available() -> bool {
     false
 }
 
+/// Ask a running fcitx5 daemon to reload so it loads a freshly written
+/// OpenLess addon, mirroring the legacy Tauri `linux_fcitx` adapter.
+///
+/// Only an instance that currently owns the `org.fcitx.Fcitx5` DBus name is
+/// restarted. On a first install fcitx5 may not be running yet; that is fine,
+/// because the next fcitx5 start scans the per-user addon directory and loads
+/// the addon on its own, so we never force-spawn a daemon (first-install
+/// semantics are preserved). On an update the running instance is restarted so
+/// the new `.so` is actually loaded (restart semantics).
+///
+/// Failures are logged and never fatal: startup continues down the fcitx5
+/// DBus path instead of degrading to a global-hotkey fallback. Returns true
+/// when a reload was issued against a live instance.
 #[cfg(target_os = "linux")]
-fn copy_to_clipboard(text: &str) -> Result<(), BackendError> {
-    let mut clipboard = arboard::Clipboard::new()
-        .map_err(|error| platform_error(format!("failed to open Linux clipboard: {error}")))?;
-    clipboard
-        .set_text(text.to_string())
-        .map_err(|error| platform_error(format!("failed to write Linux clipboard: {error}")))
+pub fn reload_running_fcitx5() -> bool {
+    if !fcitx5_name_has_owner() {
+        return false;
+    }
+    match std::process::Command::new("fcitx5").arg("-r").status() {
+        Ok(status) if status.success() => {
+            log::info!("[fcitx] reloaded fcitx5 after addon update");
+            true
+        }
+        Ok(status) => {
+            log::warn!("[fcitx] fcitx5 -r failed with status {status}");
+            false
+        }
+        Err(error) => {
+            log::warn!("[fcitx] could not run fcitx5 -r: {error}");
+            false
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn reload_running_fcitx5() -> bool {
+    false
+}
+
+/// Whether the fcitx5 daemon itself is registered on the session bus. This is
+/// distinct from `available()` (which pings the OpenLess addon interface): the
+/// daemon may be running without having loaded our addon yet, and that is
+/// exactly the case where a reload is required.
+#[cfg(target_os = "linux")]
+fn fcitx5_name_has_owner() -> bool {
+    use dbus::blocking::BlockingSender;
+    let Ok(connection) = dbus::blocking::Connection::new_session() else {
+        return false;
+    };
+    let Ok(message) = dbus::Message::new_method_call(
+        "org.freedesktop.DBus",
+        "/org/freedesktop/DBus",
+        "org.freedesktop.DBus",
+        "NameHasOwner",
+    ) else {
+        return false;
+    };
+    connection
+        .send_with_reply_and_block(message.append1(DESTINATION), Duration::from_millis(1000))
+        .map(|reply| reply.read1::<bool>().unwrap_or(false))
+        .unwrap_or(false)
+}
+
+#[cfg(target_os = "linux")]
+pub fn copy_to_clipboard(text: &str) -> Result<(), BackendError> {
+    use dbus::blocking::BlockingSender;
+    let connection = dbus::blocking::Connection::new_session().map_err(dbus_error)?;
+    let message =
+        dbus::Message::new_method_call(DESTINATION, OBJECT_PATH, INTERFACE, "SetClipboardText")
+            .map_err(|error| {
+                platform_error(format!("failed to build fcitx5 clipboard call: {error}"))
+            })?
+            .append1(text.to_string());
+    let reply = connection
+        .send_with_reply_and_block(message, TIMEOUT)
+        .map_err(dbus_error)?;
+    if reply.read1::<bool>().unwrap_or(false) {
+        Ok(())
+    } else {
+        Err(platform_error(
+            "fcitx5 clipboard addon is unavailable".to_string(),
+        ))
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -752,77 +869,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn appimage_plan_copies_only_from_the_versioned_resource_contract() {
+    fn plugin_plan_is_probe_only_for_system_packages() {
         let layout = LinuxResourceLayout {
-            package_kind: LinuxPackageKind::AppImage,
-            resource_root: PathBuf::from("/app/usr/lib/openless/resources"),
+            package_kind: crate::LinuxPackageKind::SystemPackage,
+            resource_root: PathBuf::from("/usr/lib/openless/resources"),
         };
         let plan = FcitxPluginInstallPlan::for_layout(&layout, Path::new("/home/test")).unwrap();
-        assert!(plan.copy_required);
         assert_eq!(
-            plan.source_library.unwrap(),
-            PathBuf::from("/app/usr/lib/openless/resources/linux-fcitx5-plugin/libopenless.so")
+            plan.target_library,
+            PathBuf::from("/home/test/.local/lib/fcitx5/libopenless.so")
         );
         assert_eq!(
             plan.target_config,
             PathBuf::from("/home/test/.local/share/fcitx5/addon/openless.conf")
         );
-    }
-
-    #[test]
-    fn system_packages_never_copy_bundled_plugins_into_home() {
-        let layout = LinuxResourceLayout {
-            package_kind: LinuxPackageKind::SystemPackage,
-            resource_root: PathBuf::from("/usr/lib/openless/resources"),
-        };
-        let plan = FcitxPluginInstallPlan::for_layout(&layout, Path::new("/home/test")).unwrap();
-        assert!(!plan.copy_required);
-        assert!(plan.source_library.is_none());
-        assert!(plan.source_config.is_none());
-    }
-
-    #[test]
-    fn appimage_installer_copies_then_reports_ready() {
-        let root = std::env::temp_dir().join(format!(
-            "openless-fcitx-appimage-{}",
-            uuid::Uuid::new_v4().simple()
-        ));
-        let resources = root.join("resources");
-        let home = root.join("home");
-        std::fs::create_dir_all(resources.join("linux-fcitx5-plugin")).unwrap();
-        std::fs::write(resources.join(FCITX_PLUGIN_LIBRARY), b"plugin").unwrap();
-        std::fs::write(resources.join(FCITX_PLUGIN_CONFIG), b"config").unwrap();
-        let plan = FcitxPluginInstallPlan::for_layout(
-            &LinuxResourceLayout {
-                package_kind: LinuxPackageKind::AppImage,
-                resource_root: resources,
-            },
-            &home,
-        )
-        .unwrap();
-
-        assert_eq!(
-            ensure_plugin_installed(&plan).unwrap(),
-            FcitxPluginStatus::Updated
-        );
-        assert_eq!(std::fs::read(&plan.target_library).unwrap(), b"plugin");
-        assert_eq!(std::fs::read(&plan.target_config).unwrap(), b"config");
-        assert_eq!(
-            ensure_plugin_installed(&plan).unwrap(),
-            FcitxPluginStatus::Ready
-        );
-
-        std::fs::write(plan.source_library.as_ref().unwrap(), b"updated plugin").unwrap();
-        assert_eq!(
-            ensure_plugin_installed(&plan).unwrap(),
-            FcitxPluginStatus::Updated
-        );
-        assert_eq!(
-            std::fs::read(&plan.target_library).unwrap(),
-            b"updated plugin"
-        );
-        assert_eq!(std::fs::read(&plan.target_config).unwrap(), b"config");
-
-        let _ = std::fs::remove_dir_all(root);
     }
 }

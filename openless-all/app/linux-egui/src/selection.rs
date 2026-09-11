@@ -7,6 +7,9 @@ use openless_core::{
 };
 
 trait LinuxSelectionBridge: Send + Sync + 'static {
+    fn source_app(&self, _session_id: SessionId) -> Option<String> {
+        None
+    }
     fn capture_target(&self, session_id: SessionId) -> Result<String, BackendError>;
     fn apply_target(
         &self,
@@ -21,6 +24,14 @@ trait LinuxSelectionBridge: Send + Sync + 'static {
 struct Fcitx5SelectionBridge;
 
 impl LinuxSelectionBridge for Fcitx5SelectionBridge {
+    fn source_app(&self, session_id: SessionId) -> Option<String> {
+        use crate::context::ContextReader;
+        crate::context::NativeContextReader
+            .read(Some(&session_id.to_string()), false)
+            .ok()
+            .map(|s| s.application)
+            .filter(|s| !s.is_empty())
+    }
     fn capture_target(&self, session_id: SessionId) -> Result<String, BackendError> {
         crate::fcitx5::capture_selection_target(&session_id.to_string())
     }
@@ -119,7 +130,7 @@ impl SelectionRuntimeAdapter for LinuxSelectionRuntime {
                 });
                 Ok(SelectionCapture {
                     text,
-                    source_app: None,
+                    source_app: bridge.source_app(session_id),
                 })
             })
             .await

@@ -110,12 +110,6 @@ pub(crate) fn isolate_process_group(command: &mut tokio::process::Command) {
     let _ = command;
 }
 
-pub(crate) fn kill_process_group(
-    child: &mut tokio::process::Child,
-) -> Result<(), openless_core::BackendError> {
-    kill_process_group_with_id(child, child.id())
-}
-
 fn kill_process_group_with_id(
     child: &mut tokio::process::Child,
     _process_id: Option<u32>,
@@ -128,6 +122,13 @@ fn kill_process_group_with_id(
         return Ok(());
     }
     child.start_kill().map_err(platform_error)
+}
+
+pub(crate) fn kill_process_group(
+    child: &mut tokio::process::Child,
+) -> Result<(), openless_core::BackendError> {
+    let id = child.id();
+    kill_process_group_with_id(child, id)
 }
 
 impl CodingAgentProcessAdapter for LinuxCodingAgentProcessAdapter {
@@ -336,14 +337,22 @@ mod tests {
         let _ = std::fs::remove_file(&ready);
         let mut running = Vec::new();
         for pid in pids.split_whitespace() {
-            if std::fs::read_to_string(format!("/proc/{pid}/stat"))
-                .ok()
-                .and_then(|stat| {
-                    stat.rsplit_once(") ")
-                        .map(|(_, rest)| !rest.starts_with('Z'))
-                })
-                .unwrap_or(false)
-            {
+            let alive = || {
+                std::fs::read_to_string(format!("/proc/{pid}/stat"))
+                    .ok()
+                    .and_then(|stat| {
+                        stat.rsplit_once(") ")
+                            .map(|(_, rest)| !rest.starts_with('Z'))
+                    })
+                    .unwrap_or(false)
+            };
+            // SIGKILL delivery to grandchildren can finish after wait() reaps
+            // the group leader. Wait for that kernel transition, boundedly.
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(1);
+            while alive() && tokio::time::Instant::now() < deadline {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+            if alive() {
                 running.push(pid.to_owned());
                 // Only fixture PIDs read from our private ready file are killed.
                 unsafe {

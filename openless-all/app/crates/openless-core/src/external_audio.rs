@@ -299,8 +299,10 @@ mod tests {
             std::env::temp_dir().join(format!("openless-remote-archive-{}", uuid::Uuid::new_v4()));
         let recorder = ExternalAudioRecorder::with_recordings_directory(directory.clone());
         let id = SessionId::new();
-        let mut context = DictationContext::default();
-        context.audio_source = DictationAudioSource::External;
+        let mut context = DictationContext {
+            audio_source: DictationAudioSource::External,
+            ..DictationContext::default()
+        };
         context.recording.archive_enabled = true;
         let consumer = Arc::new(RecordingConsumer::default());
         let recording = recorder
@@ -356,8 +358,10 @@ mod tests {
             }
             let recorder = ExternalAudioRecorder::with_recordings_directory(directory.clone());
             let id = SessionId::new();
-            let mut context = DictationContext::default();
-            context.audio_source = DictationAudioSource::External;
+            let mut context = DictationContext {
+                audio_source: DictationAudioSource::External,
+                ..DictationContext::default()
+            };
             context.recording.archive_enabled = enabled;
             let consumer = Arc::new(RecordingConsumer::default());
             let recording = recorder
@@ -389,8 +393,10 @@ mod tests {
         std::fs::create_dir_all(&directory).unwrap();
         std::fs::write(directory.join("user.wav"), b"keep").unwrap();
         let recorder = ExternalAudioRecorder::with_recordings_directory(directory.clone());
-        let mut context = DictationContext::default();
-        context.audio_source = DictationAudioSource::External;
+        let mut context = DictationContext {
+            audio_source: DictationAudioSource::External,
+            ..DictationContext::default()
+        };
         context.recording.archive_enabled = true;
         context.recording.max_entries = Some(2);
         for _ in 0..4 {

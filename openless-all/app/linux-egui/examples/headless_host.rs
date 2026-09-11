@@ -168,7 +168,10 @@ async fn main() -> Result<(), BackendError> {
     backend
         .cancel_less_computer(Some(less_computer_session))
         .await?;
-    assert!(backend.less_computer_capture_cancelled(less_computer_session));
+    // Core 2.0 cancellation is terminal and releases the capture lease. A host
+    // that observes the cancellation after the await must not expect the old
+    // lease's flag to remain queryable.
+    assert_eq!(backend.less_computer_active_session(), None);
     backend.abort_less_computer_capture(less_computer_session)?;
     assert_eq!(backend.less_computer_active_session(), None);
 
