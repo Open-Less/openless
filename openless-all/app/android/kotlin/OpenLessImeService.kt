@@ -291,52 +291,70 @@ class OpenLessImeService : InputMethodService(), OpenLessOverlayBridge.OverlaySt
             orientation = LinearLayout.VERTICAL
             layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(300))
             minimumHeight = dp(300)
-            setPadding(dp(8), dp(8), dp(8), dp(8))
+            setPadding(dp(4), dp(3), dp(4), dp(3))
             setBackgroundColor(Color.rgb(48, 48, 48))
         }
-        val header = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER_VERTICAL }
-        val brand = TextView(this).apply {
-            text = "◔  OpenLess"
-            textSize = 18f
-            setTypeface(typeface, android.graphics.Typeface.BOLD)
-            setTextColor(Color.WHITE)
-            gravity = android.view.Gravity.CENTER_VERTICAL
-            contentDescription = ui("打开 OpenLess 设置", "Open OpenLess settings")
-            setOnClickListener { openSettings() }
-        }
-        header.addView(brand, LinearLayout.LayoutParams(0, dp(38), 1f))
-        header.addView(buildModeToggle(), LinearLayout.LayoutParams(dp(150), dp(38)))
-        root.addView(header, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(38)))
-
+        // Stroke mode follows the reference layout: a compact candidate strip,
+        // punctuation column, 3-column stroke grid, and a separate action rail.
+        val top = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER_VERTICAL }
         strokePreview = TextView(this).apply {
-            text = ui("笔画：请选择", "Strokes: choose strokes")
-            textSize = 14f
-            setTextColor(Color.rgb(190, 190, 190))
-            gravity = android.view.Gravity.CENTER_VERTICAL
-            setPadding(dp(8), 0, dp(8), 0)
+            text = ui("—", "—")
+            textSize = 16f
+            setTextColor(Color.rgb(210, 210, 210))
+            gravity = android.view.Gravity.CENTER
         }
-        root.addView(strokePreview, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(30)))
-
+        top.addView(strokePreview, LinearLayout.LayoutParams(dp(58), dp(38)))
         val candidatesScroll = android.widget.HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
             strokeCandidates = LinearLayout(context).apply { gravity = android.view.Gravity.CENTER_VERTICAL }
             addView(strokeCandidates, ViewGroup.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT))
         }
-        root.addView(candidatesScroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(38)))
+        top.addView(candidatesScroll, LinearLayout.LayoutParams(0, dp(38), 1f))
+        top.addView(keyboardKey("⌄", .5f) { clearStrokes() }, LinearLayout.LayoutParams(dp(38), dp(38)))
+        root.addView(top, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(38)))
 
-        val strokeKeys = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER }
-        listOf("一" to "h", "丨" to "s", "丿" to "p", "丶" to "n", "乛" to "z", "＊" to "*").forEach { (label, code) ->
-            strokeKeys.addView(keyboardKey(label, 1f) { appendStroke(code) })
+        val body = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER }
+        val punctuation = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = android.view.Gravity.CENTER }
+        listOf(",", "°", "?", "!", "~").forEach { mark ->
+            punctuation.addView(keyboardKey(mark, 1f) { currentInputConnection?.commitText(mark, 1) })
         }
-        root.addView(strokeKeys, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        body.addView(punctuation, LinearLayout.LayoutParams(dp(42), ViewGroup.LayoutParams.MATCH_PARENT))
 
-        val actions = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER_VERTICAL }
-        actions.addView(keyboardKey("⌫", 1f) { deleteStroke() })
-        actions.addView(keyboardKey(ui("清空", "Clear"), 1.25f) { clearStrokes() })
-        actions.addView(keyboardKey(ui("空格", "Space"), 1.35f) { currentInputConnection?.commitText(" ", 1) })
-        actions.addView(keyboardKey("return", 1.25f) { sendEnterKey() })
-        actions.addView(keyboardKey("⌨", .8f) { (getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager)?.showInputMethodPicker() })
-        root.addView(actions, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(56)))
+        val grid = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = android.view.Gravity.CENTER }
+        val strokeRows = listOf(
+            listOf("1" to "h", "2" to "s", "3" to "p"),
+            listOf("4" to "n", "5" to "z", "6" to "*"),
+            listOf(ui("分词", "Word") to " ", ":" to ":", ";" to ";"),
+            listOf(ui("中", "中") to "中", "⌨" to "voice", ui("符号", "Symbols") to "symbols"),
+        )
+        strokeRows.forEach { rowItems ->
+            val row = LinearLayout(this).apply { gravity = android.view.Gravity.CENTER }
+            rowItems.forEach { (label, code) ->
+                row.addView(keyboardKey(label, 1f) {
+                    when (code) {
+                        "voice" -> {
+                            inputMode = InputMode.VOICE
+                            clearStrokes()
+                            refreshInputView()
+                        }
+                        "symbols" -> currentInputConnection?.commitText("#", 1)
+                        " " -> currentInputConnection?.commitText(" ", 1)
+                        else -> if (code.length == 1 && code in listOf("h", "s", "p", "n", "z", "*")) appendStroke(code) else currentInputConnection?.commitText(code, 1)
+                    }
+                })
+            }
+            grid.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        }
+        body.addView(grid, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
+
+        val actions = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = android.view.Gravity.CENTER }
+        listOf("⌫" to { deleteStroke() }, "↵" to { sendEnterKey() }, ui("清空", "Clear") to { clearStrokes() }, "123" to { inputMode = InputMode.ENGLISH; clearStrokes(); refreshInputView() }).forEach { (label, action) ->
+            actions.addView(keyboardKey(label, 1f, action).apply {
+                background = roundedButton(Color.rgb(92, 28, 48), dp(7))
+            })
+        }
+        body.addView(actions, LinearLayout.LayoutParams(dp(58), ViewGroup.LayoutParams.MATCH_PARENT))
+        root.addView(body, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         return root
     }
 
