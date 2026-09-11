@@ -2,9 +2,11 @@ package com.openless.app
 
 import android.content.Context
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicReference
 
 /** Offline five-stroke lookup. The query work never runs on the IME main thread. */
 internal class StrokeInputRepository(context: Context) {
+    private val appContext = context.applicationContext
     private val executor = Executors.newSingleThreadExecutor { task ->
         Thread(task, "openless-stroke-query").apply { isDaemon = true }
     }
@@ -24,7 +26,8 @@ internal class StrokeInputRepository(context: Context) {
         "六" to "n", "七" to "h", "八" to "p", "九" to "p", "零" to "n",
     ).distinctBy { it.first }
 
-    private val entries: List<Pair<String, String>> = loadEntries(context)
+    private val index = AtomicReference<Map<String, List<Pair<String, String>>>>(emptyMap())
+    private val loading = Any()
 
     private fun loadEntries(context: Context): List<Pair<String, String>> {
         val table = runCatching {
@@ -51,9 +54,15 @@ internal class StrokeInputRepository(context: Context) {
 
     fun searchAsync(pattern: String, callback: (List<String>) -> Unit) {
         executor.execute {
-            val result = if (pattern.isEmpty()) emptyList() else entries.asSequence()
+            ensureLoaded()
+            val lookupKey = pattern.takeWhile { it != '*' }.take(PREFIX_INDEX_LENGTH)
+            val result = if (pattern.isEmpty()) emptyList() else index.get()
+                .getOrDefault(lookupKey, emptyList())
+                .asSequence()
                 .filter { (_, code) -> matches(pattern, code) }
                 .map { it.first }
+                .distinct()
+                .take(MAX_CANDIDATES)
                 .toList()
             android.os.Handler(android.os.Looper.getMainLooper()).post { callback(result) }
         }
@@ -61,8 +70,30 @@ internal class StrokeInputRepository(context: Context) {
 
     fun shutdown() = executor.shutdownNow()
 
+    private fun ensureLoaded() {
+        if (index.get().isNotEmpty()) return
+        synchronized(loading) {
+            if (index.get().isNotEmpty()) return
+            val entries = loadEntries(appContext)
+            val buckets = HashMap<String, MutableList<Pair<String, String>>>()
+            buckets[""] = entries.toMutableList()
+            entries.forEach { entry ->
+                val code = entry.second
+                (1..minOf(PREFIX_INDEX_LENGTH, code.length)).forEach { length ->
+                    buckets.getOrPut(code.substring(0, length)) { ArrayList() }.add(entry)
+                }
+            }
+            index.set(buckets)
+        }
+    }
+
     private fun matches(pattern: String, code: String): Boolean {
         if (pattern.length > code.length) return false
         return pattern.indices.all { index -> pattern[index] == '*' || pattern[index] == code[index] }
+    }
+
+    private companion object {
+        const val PREFIX_INDEX_LENGTH = 4
+        const val MAX_CANDIDATES = 36
     }
 }
